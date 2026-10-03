@@ -42,19 +42,23 @@ export class SourceClass {
 }
 
 export class SourceExport {
-  constructor(name, local, reference = null) {
+  constructor(name, local, reference = null, token = null) {
     this.name = name;
     this.local = local;
     this.reference = reference;
+    this.token = token;
   }
 }
 
 export class SourceInvocation {
-  constructor(name, token, arguments_) {
-    if (!name || !token || !Array.isArray(arguments_)) throw new TypeError("invalid source invocation");
+  constructor(name, token, arguments_, endToken = token, constructed = false) {
+    if (!name || !(token instanceof SourceToken) || !Array.isArray(arguments_)
+      || !(endToken instanceof SourceToken) || typeof constructed !== "boolean") throw new TypeError("invalid source invocation");
     this.name = name;
     this.token = token;
     this.arguments = arguments_;
+    this.endToken = endToken;
+    this.constructed = constructed;
   }
   identifiers() {
     return new Set(this.arguments.flat().filter((token) => token.kind === "identifier").map((token) => token.value));
@@ -64,15 +68,47 @@ export class SourceInvocation {
   }
 }
 
+/** A module binding's identity without interpreting its initializer or body. */
+export class SourceDeclarationHeader {
+  constructor(name, token, prefix = []) {
+    if (typeof name !== "string" || !name || !(token instanceof SourceToken)
+      || token.kind !== "identifier" || !["class", "function", "const", "let", "var"].includes(token.value)
+      || !Array.isArray(prefix) || prefix.some((entry) => !(entry instanceof SourceToken))) {
+      throw new TypeError("invalid source declaration header");
+    }
+    this.name = name;
+    this.token = token;
+    this.prefix = prefix;
+  }
+}
+
 export class SourceDeclaration {
-  constructor(name, tokens) {
+  constructor(name, tokens, prefix = []) {
     if (!name || !Array.isArray(tokens) || tokens.length === 0) throw new TypeError("invalid source declaration");
     this.name = name;
     this.tokens = tokens;
     this.token = tokens[0];
+    this.prefix = prefix;
   }
+  get exported() { return this.prefix.some((token) => token.value === "export"); }
+  get defaultExport() { return this.exported && this.prefix.some((token) => token.value === "default"); }
   uses(name) { return this.tokens.some((token) => token.kind === "identifier" && token.value === name); }
   matchesDeclaration(source) { return sameTokens(this.tokens, readTokens(source)); }
+  matchesFunction(parameters, body) {
+    return !this.prefix.some((token) => token.value === "async")
+      && this.matchesDeclaration(`function ${this.name}(${parameters}) { ${body} }`);
+  }
+  get callable() {
+    if (["function", "class"].includes(this.tokens[0].value)) return true;
+    if (!["const", "let"].includes(this.tokens[0].value) || this.tokens[2]?.value !== "=") return false;
+    const initializer = unwrapCondition(this.tokens.slice(3, -1));
+    return initializer[0]?.value === "class" || isDeferredCallable(initializer);
+  }
+  referenceInitializer() {
+    if (!["const", "let"].includes(this.tokens[0].value) || this.tokens[2]?.value !== "=") return null;
+    const initializer = unwrapCondition(this.tokens.slice(3, -1));
+    return initializer.length === 1 && initializer[0].kind === "identifier" ? initializer[0].value : null;
+  }
   bodyTokens() {
     const open = this.tokens.findIndex((token) => token.value === "(");
     if (open < 0) return null;
@@ -295,19 +331,25 @@ function matching(tokens, open, left = "{", right = "}") {
   throw new SourceReadError("<source>", tokens[open].offset, `unclosed ${left}`);
 }
 
-/** Account for every reference to a capability; unclassified uses remain errors. */
+/** Account for every reference to a capability; unclassified uses remain errors.
+ * Callers that inspect every binding can disable automatic binding acceptance
+ * while retaining the same alias provenance and explicitly accepting checked uses.
+ */
 export class SourceOriginUsage {
-  constructor(declaration, origins) {
+  constructor(declaration, origins, { acceptBindings = true, bindings = null, mutableAliases = false } = {}) {
     if (!(declaration instanceof SourceDeclaration)) throw new TypeError("source declaration required");
     this.tokens = declaration.tokens;
     this.origins = new Set(origins);
+    this.bindings = bindings;
+    this.originBindings = bindings === null ? null : new Set([...this.origins]
+      .map((name) => bindings.moduleBinding(name)).filter(Boolean));
     this.accepted = new Set();
     const transfers = [];
     for (let index = 0; index < this.tokens.length; index++) {
       const tokens = this.tokens;
       let target;
       let start;
-      if (tokens[index].value === "const" && tokens[index + 1]?.kind === "identifier"
+      if ((tokens[index].value === "const" || mutableAliases && tokens[index].value === "let") && tokens[index - 1]?.value !== "export" && tokens[index + 1]?.kind === "identifier"
         && tokens[index + 2]?.value === "=") {
         target = tokens[index + 1]; start = index + 3;
       } else if (tokens[index].value === "this" && tokens[index + 1]?.value === "."
@@ -325,13 +367,20 @@ export class SourceOriginUsage {
       changed = false;
       for (const [target, source] of transfers) {
         const origin = source.at(-1);
-        if (!this.origins.has(target.value) && !this.origins.has(origin.value)) continue;
-        for (const token of [target, origin]) if (!this.origins.has(token.value)) {
-          this.origins.add(token.value); changed = true;
+        if (!this.isOrigin(target) && !this.isOrigin(origin)) continue;
+        for (const token of [target, origin]) {
+          const binding = this.bindings?.bindingAt(token);
+          if (this.bindings !== null && !binding) continue;
+          const known = this.bindings === null ? this.origins.has(token.value) : this.originBindings.has(binding);
+          if (known) continue;
+          this.origins.add(token.value);
+          this.originBindings?.add(binding);
+          changed = true;
         }
-        this.accept([target, ...source]);
+        if (acceptBindings) this.accept([target, ...source]);
       }
     } while (changed);
+    if (!acceptBindings) return;
     // Only binding positions are declarations. Defaults and destructured values
     // are not silently accepted as uses of the capability.
     const constructor = this.tokens.findIndex((token) => token.value === "constructor");
@@ -357,9 +406,13 @@ export class SourceOriginUsage {
   }
   static isReference(tokens) {
     return tokens.length > 0 && tokens.length % 2 === 1
-      && tokens.every((token, index) => index % 2 === 0 ? token.kind === "identifier" : token.value === ".");
+      && tokens.every((token, index) => index % 2 === 0 ? token.kind === "identifier"
+        : token.kind === "punctuation" && token.value === ".");
   }
-  isOrigin(token) { return token.kind === "identifier" && this.origins.has(token.value); }
+  isOrigin(token) {
+    return token.kind === "identifier" && (this.bindings === null ? this.origins.has(token.value)
+      : this.originBindings.has(this.bindings.bindingAt(token)));
+  }
   isReference(tokens) { return SourceOriginUsage.isReference(tokens) && this.isOrigin(tokens.at(-1)); }
   accept(tokens) { for (const token of tokens) this.accepted.add(token.offset); }
   unresolved() { return this.tokens.filter((token) => this.isOrigin(token) && !this.accepted.has(token.offset)); }
@@ -373,10 +426,141 @@ export function readParameters(tokens) {
   return readCommaSeparated(tokens, open + 1, close);
 }
 
+export class SourceTypeInvariant {
+  constructor(parameter, typeName, token, typeToken) {
+    this.parameter = parameter;
+    this.typeName = typeName;
+    this.token = token;
+    this.typeToken = typeToken;
+    Object.freeze(this);
+  }
+}
+
+function unwrapCondition(tokens) {
+  while (tokens[0]?.value === "(" && tokens[0].kind === "punctuation"
+    && matching(tokens, 0, "(", ")") === tokens.length - 1) tokens = tokens.slice(1, -1);
+  return tokens;
+}
+
+function isDeferredCallable(tokens) {
+  const initializer = unwrapCondition(tokens);
+  let start = initializer[0]?.value === "async" ? 1 : 0;
+  if (initializer[start]?.value === "function") return true;
+  if (initializer[start]?.value === "(") start = matching(initializer, start, "(", ")");
+  return initializer[start + 1]?.value === "=>";
+}
+
+function isGuardLiteral(token) {
+  return token?.kind === "string" || token?.kind === "number"
+    || token?.kind === "identifier" && ["true", "false", "null"].includes(token.value);
+}
+
+/** Every branch must belong to the supported condition grammar. Matching only
+ * an instanceof fragment cannot prove that the enclosing condition rejects it.
+ * Member predicates preserve the additional checks used by production Services,
+ * but only a direct parameter check establishes its declared argument type.
+ */
+function readInvariantCondition(tokens, names) {
+  tokens = unwrapCondition(tokens);
+  if (tokens.length === 0) return null;
+  const invariants = [];
+  let start = 0;
+  for (let index = 0; index < tokens.length; index++) {
+    if (tokens[index].kind !== "punctuation") continue;
+    if (tokens[index].value === "(") { index = matching(tokens, index, "(", ")"); continue; }
+    if (tokens[index].value !== "|" || tokens[index + 1]?.kind !== "punctuation" || tokens[index + 1].value !== "|") continue;
+    const term = readInvariantCondition(tokens.slice(start, index), names);
+    if (term === null) return null;
+    invariants.push(...term);
+    start = index + 2;
+    index++;
+  }
+  if (start > 0) {
+    const term = readInvariantCondition(tokens.slice(start), names);
+    if (term === null) return null;
+    invariants.push(...term);
+    return invariants;
+  }
+  const parameterReference = (reference) => SourceOriginUsage.isReference(reference) && names.has(reference[0].value);
+  if (tokens[0].kind === "punctuation" && tokens[0].value === "!"
+    && tokens[1]?.kind === "punctuation" && tokens[1].value === "("
+    && matching(tokens, 1, "(", ")") === tokens.length - 1) {
+    const operand = unwrapCondition(tokens.slice(2, -1));
+    const reference = operand.slice(0, -2);
+    const type = operand.at(-1);
+    if (operand.at(-2)?.value !== "instanceof" || operand.at(-2)?.kind !== "identifier"
+      || type?.kind !== "identifier" || names.has(type.value) || !parameterReference(reference)) return null;
+    return reference.length === 1 ? [new SourceTypeInvariant(reference[0].value, type.value, tokens[0], type)] : [];
+  }
+  if (tokens.length === 1 && isGuardLiteral(tokens[0])) return [];
+  const reference = tokens.slice(0, -4);
+  const comparison = tokens.slice(-4, -1);
+  if (parameterReference(reference) && isGuardLiteral(tokens.at(-1))
+    && comparison.every((token) => token.kind === "punctuation")
+    && ["===", "!=="].includes(comparison.map((token) => token.value).join(""))) return [];
+  return null;
+}
+
+/** The guard consequent is one immediate throw, with no intervening control or
+ * binding changes. Restrict its expression too: an arbitrary call could mutate
+ * operands or never reach the throw. Literal error arguments cover current guards.
+ */
+function readInvariantRejection(tokens, start) {
+  const block = tokens[start]?.kind === "punctuation" && tokens[start].value === "{";
+  let index = block ? start + 1 : start;
+  if (tokens[index]?.kind !== "identifier" || tokens[index].value !== "throw"
+    || tokens[index + 1]?.kind !== "identifier" || tokens[index + 1].value !== "new"
+    || tokens[index + 2]?.kind !== "identifier"
+    || tokens[index + 3]?.kind !== "punctuation" || tokens[index + 3].value !== "(") return null;
+  const close = matching(tokens, index + 3, "(", ")");
+  const arguments_ = readCommaSeparated(tokens, index + 4, close);
+  if (arguments_.some((argument) => argument.length !== 1 || !isGuardLiteral(argument[0]))) return null;
+  index = close + 1;
+  if (tokens[index]?.kind === "punctuation" && tokens[index].value === ";") index++;
+  else if (!block) return null;
+  if (block) {
+    if (tokens[index]?.kind !== "punctuation" || tokens[index].value !== "}") return null;
+    index++;
+  }
+  return tokens[index]?.kind === "identifier" && tokens[index].value === "else" ? null : index;
+}
+
+/** Prove only leading unconditional rejection guards over original parameters.
+ * Unknown prefixes stop inspection; guards after a binding change, early exit,
+ * nested branch or caught throw cannot establish constructor input invariants.
+ */
+export function readTypeInvariants(declaration) {
+  const body = declaration?.bodyTokens() ?? [];
+  const result = [];
+  const parameters = readParameters(declaration?.tokens ?? []);
+  if (parameters.some((parameter) => parameter.length !== 1 || parameter[0].kind !== "identifier")) return result;
+  const names = new Set(parameters.map((parameter) => parameter[0].value));
+  let index = 0;
+  while (index < body.length) {
+    if (body[index].kind === "punctuation" && body[index].value === ";") { index++; continue; }
+    if (body[index].kind !== "identifier" || body[index].value !== "if"
+      || body[index + 1]?.kind !== "punctuation" || body[index + 1].value !== "(") break;
+    const close = matching(body, index + 1, "(", ")");
+    const invariants = readInvariantCondition(body.slice(index + 2, close), names);
+    const next = readInvariantRejection(body, close + 1);
+    if (invariants === null || next === null) break;
+    result.push(...invariants);
+    index = next;
+  }
+  if (result.length === 0) return result;
+  // Resolve all guard types together against the entire constructor scope.
+  // Outer imports are unbound in this isolated declaration; local bindings,
+  // including hoisted declarations after the guards, must not stand in for them.
+  const outerTypeOffsets = new Set(unboundGlobals(declaration.tokens, [], declaration.name,
+    new Set(result.map((invariant) => invariant.typeName))).map((token) => token.offset));
+  return result.filter((invariant) => outerTypeOffsets.has(invariant.typeToken.offset));
+}
+
 function readCommaSeparated(tokens, start, end) {
   const parts = [];
   let depth = 0;
   for (let index = start; index < end; index++) {
+    if (tokens[index].kind !== "punctuation") continue;
     if (["(", "[", "{"].includes(tokens[index].value)) depth++;
     else if ([")", "]", "}"].includes(tokens[index].value)) depth--;
     else if (tokens[index].value === "," && depth === 0) {
@@ -403,8 +587,8 @@ export class SourceMemberAccess {
  * Computed members deliberately remain unresolved, even for literal keys.
  * Parentheses wrapping the receiver are transparent, unlike a surrounding call.
  */
-export function readMemberAccess(tokens, receiverIndex) {
-  let start = receiverIndex;
+export function readMemberAccess(tokens, receiverIndex, receiverStart = receiverIndex) {
+  let start = receiverStart;
   while (start >= 2 && tokens[start - 1].value === ".") {
     const receiver = tokens[start - 2].value === "?" ? start - 3 : start - 2;
     if (tokens[receiver]?.kind !== "identifier") break;
@@ -443,47 +627,146 @@ export function readInvocations(module) {
     const close = matching(tokens, index + 1, "(", ")");
     if (tokens[close + 1]?.value === "{" && tokens[index - 1]?.value !== "new") continue;
     const arguments_ = readCommaSeparated(tokens, index + 2, close);
-    result.push(new SourceInvocation(token.value, token, arguments_));
+    result.push(new SourceInvocation(token.value, token, arguments_, tokens[close], tokens[index - 1]?.value === "new"));
   }
   return result;
 }
 
-/** Resolve a static local class, function, or value declaration by name. */
-export function readDeclaration(module, name) {
+/** Index module declaration headers once; this also serves lexical-only callers. */
+function readDeclarationHeaders(module) {
   const tokens = module.tokens;
+  const headers = new Map();
   let depth = 0;
   for (let index = 0; index < tokens.length - 1; index++) {
-    if (tokens[index].value === "{") depth++;
-    if (tokens[index].value === "}") depth--;
-    if (depth !== 0) continue;
-    if (!["class", "function", "const", "let"].includes(tokens[index].value) || tokens[index + 1]?.value !== name) continue;
-    if (tokens[index].value === "class" || tokens[index].value === "function") {
-      let open = index + 2;
-      if (tokens[index].value === "function") {
-        while (open < tokens.length && tokens[open].value !== "(") open++;
-        if (open === tokens.length) throw new SourceReadError(module.file, tokens[index].offset, `unsupported ${name} declaration`);
-        open = matching(tokens, open, "(", ")") + 1;
-      }
-      while (open < tokens.length && tokens[open].value !== "{") open++;
-      if (open === tokens.length) throw new SourceReadError(module.file, tokens[index].offset, `unclosed ${name} declaration`);
-      const close = matching(tokens, open);
-      return new SourceDeclaration(name, tokens.slice(index, close + 1));
+    if (tokens[index].kind === "punctuation") {
+      if (tokens[index].value === "{") depth++;
+      if (tokens[index].value === "}") depth--;
     }
-    let end = index + 2;
-    const stack = [];
-    for (; end < tokens.length; end++) {
-      const value = tokens[end].value;
-      if (value === ";" && stack.length === 0) break;
-      if (["(", "[", "{"].includes(value)) stack.push(value);
-      else if ([")", "]", "}"].includes(value)) stack.pop();
-    }
-    if (end === tokens.length) throw new SourceReadError(module.file, tokens[index].offset, `unterminated ${name} declaration`);
-    return new SourceDeclaration(name, tokens.slice(index, end + 1));
+    if (depth !== 0 || tokens[index].kind !== "identifier"
+      || !["class", "function", "const", "let", "var"].includes(tokens[index].value)
+      || tokens[index + 1]?.kind !== "identifier") continue;
+    const name = tokens[index + 1].value;
+    if (headers.has(name)) continue;
+    let prefixStart = index;
+    while (["export", "default", "async"].includes(tokens[prefixStart - 1]?.value)) prefixStart--;
+    headers.set(name, new SourceDeclarationHeader(name, tokens[index], tokens.slice(prefixStart, index)));
   }
-  return null;
+  return headers;
 }
 
-export function readClassMember(module, className, memberName) {
+/** Read the full supported declaration only after its binding has been selected. */
+export function readDeclaration(module, name) {
+  const header = module.declarationHeader(name);
+  if (!header || header.token.value === "var") return null;
+  const tokens = module.tokens;
+  const index = tokens.findIndex((token) => token.offset === header.token.offset);
+  if (header.token.value === "class" || header.token.value === "function") {
+    let open = index + 2;
+    if (header.token.value === "function") {
+      while (open < tokens.length && tokens[open].value !== "(") open++;
+      if (open === tokens.length) throw new SourceReadError(module.file, tokens[index].offset, `unsupported ${name} declaration`);
+      open = matching(tokens, open, "(", ")") + 1;
+    }
+    while (open < tokens.length && tokens[open].value !== "{") open++;
+    if (open === tokens.length) throw new SourceReadError(module.file, tokens[index].offset, `unclosed ${name} declaration`);
+    const close = matching(tokens, open);
+    return new SourceDeclaration(name, tokens.slice(index, close + 1), header.prefix);
+  }
+  let end = index + 2;
+  const stack = [];
+  for (; end < tokens.length; end++) {
+    const value = tokens[end].value;
+    if (value === ";" && stack.length === 0) break;
+    if (["(", "[", "{"].includes(value)) stack.push(value);
+    else if ([")", "]", "}"].includes(value)) stack.pop();
+  }
+  if (end === tokens.length) throw new SourceReadError(module.file, tokens[index].offset, `unterminated ${name} declaration`);
+  return new SourceDeclaration(name, tokens.slice(index, end + 1), header.prefix);
+}
+
+/** Members and eager class expressions share one balanced extraction pass. */
+export class SourceClassMembers {
+  constructor(declaration) {
+    if (!(declaration instanceof SourceDeclaration) || declaration.token.value !== "class") throw new TypeError("class declaration required");
+    this.instanceMembers = new Map();
+    this.staticMembers = new Map();
+    this.instanceInitializers = [];
+    this.moduleInitializers = [];
+    this.unresolvedInstanceMembers = [];
+    this.unresolvedStaticMembers = [];
+    const tokens = declaration.tokens;
+    const open = tokens.findIndex((token) => token.kind === "punctuation" && token.value === "{");
+    let index = open + 1;
+    while (index < tokens.length - 1) {
+      if (tokens[index].value === ";") { index++; continue; }
+      let isStatic = tokens[index].value === "static" && !["(", "=", ";", "}"].includes(tokens[index + 1]?.value);
+      const members = isStatic ? this.staticMembers : this.instanceMembers;
+      if (isStatic) index++;
+      if (isStatic && tokens[index]?.value === "{") {
+        const end = matching(tokens, index);
+        this.moduleInitializers.push(new SourceDeclaration(`${declaration.name}.<static:${tokens[index].offset}>`, tokens.slice(index, end + 1)));
+        index = end + 1;
+        continue;
+      }
+      if (["get", "set", "async"].includes(tokens[index]?.value)
+        && (tokens[index + 1]?.kind === "identifier" || ["*", "["].includes(tokens[index + 1]?.value))) index++;
+      if (tokens[index]?.value === "*") index++;
+      const start = index;
+      let name = tokens[index]?.value;
+      if (name === "[") {
+        const end = matching(tokens, index, "[", "]");
+        const expression = tokens.slice(index + 1, end);
+        const key = unwrapCondition(expression);
+        name = key.length === 1 && isGuardLiteral(key[0]) ? key[0].value : null;
+        if (name !== null && key[0].kind === "number") {
+          const number = Number(name.replaceAll("_", ""));
+          name = Number.isNaN(number) ? null : String(number);
+        }
+        if (name === null) (isStatic ? this.unresolvedStaticMembers : this.unresolvedInstanceMembers).push(tokens[index]);
+        this.moduleInitializers.push(new SourceDeclaration(`${declaration.name}.<key:${tokens[index].offset}>`, expression));
+        index = end;
+      }
+      index++;
+      if (tokens[index]?.value === "(") {
+        const close = matching(tokens, index, "(", ")");
+        if (tokens[close + 1]?.value !== "{") throw new SourceReadError(declaration.name, tokens[start].offset, "unsupported class member");
+        const end = matching(tokens, close + 1);
+        if (name !== null && !members.has(name)) members.set(name,
+          new SourceDeclaration(`${declaration.name}.${name}`, tokens.slice(start, end + 1)));
+        index = end + 1;
+        continue;
+      }
+      if (tokens[index]?.value !== "=") continue;
+      const valueStart = ++index;
+      while (index < tokens.length - 1 && tokens[index].value !== ";") {
+        if (index > valueStart && tokens[index].line > tokens[index - 1].line
+          && tokens[index].kind === "identifier" && ["=", "(", ";"].includes(tokens[index + 1]?.value)
+          && !["=", ".", "+", "-", "*", "/", "?", ":", "&", "|", ","].includes(tokens[index - 1].value)) break;
+        if (["(", "[", "{"].includes(tokens[index].value) && tokens[index].kind === "punctuation") {
+          index = matching(tokens, index, tokens[index].value, { "(": ")", "[": "]", "{": "}" }[tokens[index].value]);
+        }
+        index++;
+      }
+      const value = tokens.slice(valueStart, index);
+      if (value.length === 0) throw new SourceReadError(declaration.name, tokens[start].offset, "missing field initializer");
+      if (isDeferredCallable(value)) {
+        if (name !== null && !members.has(name)) members.set(name,
+          new SourceDeclaration(`${declaration.name}.${name}`, tokens.slice(start, index)));
+      } else (isStatic ? this.moduleInitializers : this.instanceInitializers).push(
+        new SourceDeclaration(`${declaration.name}.${name ?? "[computed]"}`, value));
+    }
+  }
+  member(name, { isStatic = null } = {}) {
+    if (isStatic !== null) return (isStatic ? this.staticMembers : this.instanceMembers).get(name) ?? null;
+    const candidates = [this.instanceMembers.get(name), this.staticMembers.get(name)].filter(Boolean);
+    return candidates.sort((left, right) => left.token.offset - right.token.offset)[0] ?? null;
+  }
+  unresolvedMember(isStatic) {
+    return (isStatic ? this.unresolvedStaticMembers : this.unresolvedInstanceMembers)[0] ?? null;
+  }
+}
+
+function readClassMembers(module, className) {
   let parent = module.declaration(className);
   if (!parent) {
     const classEntry = module.classes.find((entry) => entry.name === className);
@@ -497,19 +780,11 @@ export function readClassMember(module, className, memberName) {
       }
     }
   }
-  if (!parent) return null;
-  const tokens = parent.tokens;
-  let depth = 0;
-  for (let index = 0; index < tokens.length - 1; index++) {
-    if (tokens[index].value === "{") depth++;
-    if (tokens[index].value === "}") depth--;
-    if (depth !== 1 || tokens[index].value !== memberName || tokens[index + 1]?.value !== "(") continue;
-    const close = matching(tokens, index + 1, "(", ")");
-    if (tokens[close + 1]?.value !== "{") continue;
-    const end = matching(tokens, close + 1);
-    return new SourceDeclaration(`${className}.${memberName}`, tokens.slice(index, end + 1));
-  }
-  return null;
+  return parent ? new SourceClassMembers(parent) : null;
+}
+
+export function readClassMember(module, className, memberName, options = {}) {
+  return module.classMembers(className)?.member(memberName, options) ?? null;
 }
 
 function bindingsOf(tokens, start, end) {
@@ -533,19 +808,155 @@ function bindingsOf(tokens, start, end) {
   return bindings;
 }
 
+class SourceLexicalBinding {
+  constructor(name) {
+    if (typeof name !== "string" || name.length === 0) throw new TypeError("lexical binding name required");
+    this.name = name;
+    Object.freeze(this);
+  }
+}
+
 class SourceLexicalScope {
   constructor(parent, start, end) {
     this.parent = parent;
     this.start = start;
     this.end = end;
-    this.bindings = new Set();
+    this.bindings = new Map();
   }
-  has(name) { return this.bindings.has(name) || Boolean(this.parent?.has(name)); }
+  bind(name) {
+    if (!this.bindings.has(name)) this.bindings.set(name, new SourceLexicalBinding(name));
+    return this.bindings.get(name);
+  }
+  resolve(name) { return this.bindings.get(name) ?? this.parent?.resolve(name) ?? null; }
+}
+
+/** A write to one lexically resolved binding, never to an object member. */
+export class SourceBindingWrite {
+  constructor(token, binding) {
+    if (!(token instanceof SourceToken) || !(binding instanceof SourceLexicalBinding)) throw new TypeError("resolved binding write required");
+    this.token = token;
+    this.binding = binding;
+    Object.freeze(this);
+  }
+}
+
+/** One lexical index serves global reads and opt-in module binding accounting. */
+class SourceLexicalBindings {
+  constructor(root, tokens, scopes, declarationBindings, references, globalReferences, exports) {
+    this.root = root;
+    this.tokens = tokens;
+    this.declarations = declarationBindings;
+    this.references = new Map();
+    for (const index of references) this.references.set(tokens[index].offset, scopes[index].resolve(tokens[index].value));
+    this.exports = exports;
+    this.globalReferences = globalReferences;
+    this.writes = null;
+  }
+  moduleBinding(name) { return this.root.bindings.get(name) ?? null; }
+  bindingAt(token) {
+    return this.declarations.get(token.offset) ?? this.references.get(token.offset) ?? this.exports.get(token.offset) ?? null;
+  }
+  bindingWrites(names) {
+    if (this.writes === null) this.writes = this.#readWrites();
+    const selected = new Set([...names].map((name) => this.moduleBinding(name)).filter(Boolean));
+    return this.writes.filter((write) => selected.has(write.binding));
+  }
+  #readWrites() {
+    const tokens = this.tokens;
+    const pairs = new Map();
+    const stack = [];
+    for (let index = 0; index < tokens.length; index++) {
+      if (tokens[index].kind !== "punctuation") continue;
+      if (["(", "[", "{"].includes(tokens[index].value)) stack.push(index);
+      else if ([")", "]", "}"].includes(tokens[index].value)) {
+        const start = stack.pop();
+        pairs.set(index, start);
+        pairs.set(start, index);
+      }
+    }
+    const offsets = new Set();
+    const add = (token) => {
+      if (token && this.references.has(token.offset) && this.references.get(token.offset)) offsets.add(token.offset);
+    };
+    // Assignment patterns share the reader's balanced/comma grammar. Member
+    // targets mutate an object, so they must not be mistaken for binding writes.
+    const targets = (part) => {
+      part = unwrapCondition(part);
+      while (part[0]?.value === ".") part = part.slice(1);
+      let end = part.length;
+      for (let index = 0; index < part.length; index++) {
+        if (["(", "[", "{"].includes(part[index].value)) {
+          index = matching(part, index, part[index].value, { "(": ")", "[": "]", "{": "}" }[part[index].value]);
+        } else if (part[index].value === "=") { end = index; break; }
+      }
+      part = part.slice(0, end);
+      if (part.length === 1 && part[0].kind === "identifier") { add(part[0]); return; }
+      if (!["[", "{"].includes(part[0]?.value)) return;
+      const object = part[0].value === "{";
+      for (let item of readCommaSeparated(part, 1, part.length - 1)) {
+        if (object) for (let index = 0; index < item.length; index++) {
+          if (["(", "[", "{"].includes(item[index].value)) {
+            index = matching(item, index, item[index].value, { "(": ")", "[": "]", "{": "}" }[item[index].value]);
+          } else if (item[index].value === ":") { item = item.slice(index + 1); break; }
+        }
+        targets(item);
+      }
+    };
+    const assignmentAt = (index) => {
+      let operator = "";
+      while (index < tokens.length && tokens[index].kind === "punctuation" && "=+-*/%&|^<>?".includes(tokens[index].value)) {
+        const value = tokens[index++].value;
+        operator += value;
+        if (value === "=") {
+          if (tokens[index]?.value === "=") return false;
+          break;
+        }
+        if (["++", "--"].includes(operator)) break;
+      }
+      return ["=", "+=", "-=", "*=", "/=", "%=", "**=", "<<=", ">>=", ">>>=", "&=", "|=", "^=", "&&=", "||=", "??=", "++", "--"].includes(operator);
+    };
+    for (let index = 0; index < tokens.length; index++) {
+      const token = tokens[index];
+      if (this.references.has(token.offset)) {
+        let start = index;
+        let end = index;
+        while (tokens[start - 1]?.value === "(" && pairs.get(start - 1) === end + 1) { start--; end++; }
+        if (assignmentAt(end + 1) || ![".", "[", "?"].includes(tokens[end + 1]?.value)
+          && ["++", "--"].includes(tokens.slice(start - 2, start).map((entry) => entry.value).join(""))) add(token);
+      }
+      if (token.value === "=" ? token.kind !== "punctuation" : token.kind !== "identifier" || !["of", "in"].includes(token.value)) continue;
+      if (token.value === "=" && (tokens[index + 1]?.value === "=" || ["=", "!", "<", ">"].includes(tokens[index - 1]?.value))) continue;
+      if (token.value !== "=") {
+        let open = index - 1;
+        while (open >= 0 && !["(", ";"].includes(tokens[open].value)) {
+          if ([")", "]", "}"].includes(tokens[open].value)) open = pairs.get(open);
+          open--;
+        }
+        if (tokens[open - 1]?.value !== "for" && !(tokens[open - 1]?.value === "await" && tokens[open - 2]?.value === "for")) continue;
+      }
+      const end = index - 1;
+      const start = pairs.get(end) ?? end;
+      if (start > end) continue;
+      const previous = tokens[start - 1];
+      if (previous?.kind === "identifier" && !["return", "yield", "await"].includes(previous.value)
+        || [")", "]", "."].includes(previous?.value)) continue;
+      targets(tokens.slice(start, end + 1));
+    }
+    return tokens.filter((token) => offsets.has(token.offset)).map((token) => new SourceBindingWrite(token, this.references.get(token.offset)));
+  }
+  unbound(watched) {
+    return this.tokens.filter((token) => watched.has(token.value) && this.globalReferences.has(token.offset)
+      && this.references.get(token.offset) === null);
+  }
 }
 
 const watchedGlobals = new Set(["require", "createRequire", "eval", "Function", "fetch", "process", "globalThis", "global"]);
 
 function unboundGlobals(tokens, references, file, watched = watchedGlobals) {
+  return readLexicalBindings(tokens, references, file).unbound(watched);
+}
+
+function readLexicalBindings(tokens, references, file) {
   const root = new SourceLexicalScope(null, 0, tokens.length);
   const scopes = Array(tokens.length).fill(root);
   const stack = [root];
@@ -559,10 +970,34 @@ function unboundGlobals(tokens, references, file, watched = watchedGlobals) {
     scopes[i] = stack.at(-1);
     if (tokens[i].kind === "punctuation" && tokens[i].value === "}") stack.pop();
   }
+  // A lexical for binding belongs to its header and body, not the enclosing
+  // module. Reparent existing brace scopes so nested captures resolve through it.
+  for (let index = 0; index < tokens.length; index++) {
+    if (tokens[index].value !== "for") continue;
+    const open = index + (tokens[index + 1]?.value === "await" ? 2 : 1);
+    if (tokens[open]?.value !== "(") continue;
+    const close = matching(tokens, open, "(", ")");
+    if (!["let", "const"].includes(tokens[open + 1]?.value)) continue;
+    let end = close + 1;
+    if (tokens[end]?.value === "{") end = matching(tokens, end);
+    else while (end < tokens.length && tokens[end].value !== ";") {
+      if (["(", "[", "{"].includes(tokens[end].value)) end = matching(tokens, end, tokens[end].value,
+        { "(": ")", "[": "]", "{": "}" }[tokens[end].value]);
+      end++;
+    }
+    const parent = scopes[index];
+    const loop = new SourceLexicalScope(parent, open, end);
+    for (let cursor = open; cursor <= end && cursor < tokens.length; cursor++) {
+      if (scopes[cursor] === parent) scopes[cursor] = loop;
+      const nested = braceScopes.get(cursor);
+      if (nested?.parent === parent) nested.parent = loop;
+    }
+  }
   for (const reference of references.filter((entry) => entry.kind === "import")) {
-    for (const local of reference.bindings.keys()) root.bindings.add(local);
+    for (const local of reference.bindings.keys()) root.bind(local);
   }
   const declarations = new Set();
+  const declarationBindings = new Map();
   const bindingIndexes = (start, end) => {
     const indexes = [];
     for (let j = start; j < end; j++) {
@@ -582,7 +1017,7 @@ function unboundGlobals(tokens, references, file, watched = watchedGlobals) {
   };
   const bindParameters = (open, close, scope) => {
     for (const j of bindingIndexes(open + 1, close)) {
-      scope.bindings.add(tokens[j].value);
+      declarationBindings.set(tokens[j].offset, scope.bind(tokens[j].value));
       declarations.add(j);
     }
   };
@@ -603,7 +1038,7 @@ function unboundGlobals(tokens, references, file, watched = watchedGlobals) {
           cursor = close + 1;
         } else break;
         for (const j of bindings) {
-          scopes[i].bindings.add(tokens[j].value);
+          declarationBindings.set(tokens[j].offset, scopes[i].bind(tokens[j].value));
           declarations.add(j);
         }
         if (tokens[cursor]?.value === "=") {
@@ -622,8 +1057,9 @@ function unboundGlobals(tokens, references, file, watched = watchedGlobals) {
       declarations.add(i + 1);
       let body = i + 2;
       while (body < tokens.length && tokens[body].value !== "{" && tokens[body].value !== ";") body++;
-      braceScopes.get(body)?.bindings.add(name);
-      if (!["=", "(", ",", ":", "return"].includes(tokens[i - 1]?.value)) scopes[i].bindings.add(name);
+      const local = braceScopes.get(body)?.bind(name);
+      const binding = !["=", "(", ",", ":", "return"].includes(tokens[i - 1]?.value) ? scopes[i].bind(name) : local;
+      declarationBindings.set(tokens[i + 1].offset, binding);
     }
     if (token.value === "catch" && tokens[i + 1]?.value === "(") {
       const close = matching(tokens, i + 1, "(", ")");
@@ -637,12 +1073,13 @@ function unboundGlobals(tokens, references, file, watched = watchedGlobals) {
       if (tokens[open]?.value !== "(") continue;
       const close = matching(tokens, open, "(", ")");
       const body = braceScopes.get(close + 1);
+      const declared = name && !["=", "(", ",", ":", "return"].includes(tokens[i - 1]?.value);
       if (body) {
         bindParameters(open, close, body);
-        if (name) body.bindings.add(name);
+        if (name && !declared) declarationBindings.set(tokens[open - 1].offset, body.bind(name));
       }
-      if (name && !["=", "(", ",", ":", "return"].includes(tokens[i - 1]?.value)) {
-        scopes[i].bindings.add(name);
+      if (declared) {
+        declarationBindings.set(tokens[open - 1].offset, scopes[i].bind(name));
         declarations.add(open - 1);
       }
     }
@@ -682,22 +1119,39 @@ function unboundGlobals(tokens, references, file, watched = watchedGlobals) {
       }
     }
   }
-  const globals = [];
+  const referenceIndexes = [];
+  const globalReferences = new Set();
+  const exportedBindings = new Map();
   let declarationEnd = -1;
   for (let i = 0; i < tokens.length; i++) {
     const token = tokens[i];
     if (token.kind === "identifier" && ["import", "export"].includes(token.value) && tokens[i + 1]?.value === "{") {
       declarationEnd = matching(tokens, i + 1);
+      // Local exports transfer the binding even without a call. Re-exported
+      // names belong to their source module, not an identically named local.
+      if (token.value === "export" && tokens[declarationEnd + 1]?.value !== "from") {
+        for (let j = i + 2; j < declarationEnd; j++) {
+          if (tokens[j].value === ",") continue;
+          exportedBindings.set(tokens[j].offset, root.resolve(tokens[j].value));
+          if (tokens[j + 1]?.value === "as") j += 2;
+        }
+      }
     }
     if (i <= declarationEnd) continue;
-    if (token.kind !== "identifier" || !watched.has(token.value) || declarations.has(i)) continue;
+    if (token.kind !== "identifier" || declarations.has(i)) continue;
     const previous = tokens[i - 1]?.value;
-    if (previous === "." || previous === "#" || tokens[i + 1]?.value === ":") continue;
+    const spread = previous === "." && tokens[i - 2]?.value === "." && tokens[i - 3]?.value === ".";
+    if (previous === "." && !spread || previous === "#") continue;
+    const beforeColon = tokens[i + 1]?.value === ":";
+    if (beforeColon && ["{", ","].includes(previous)) continue;
     const call = tokens[i + 1]?.value === "(";
     if (call && tokens[matching(tokens, i + 1, "(", ")") + 1]?.value === "{") continue;
-    if (!scopes[i].has(token.value)) globals.push(token);
+    referenceIndexes.push(i);
+    // Preserve the existing global-read contract; module binding accounting
+    // additionally recognizes the reference in a conditional's middle arm.
+    if (!beforeColon && !spread) globalReferences.add(token.offset);
   }
-  return globals;
+  return new SourceLexicalBindings(root, tokens, scopes, declarationBindings, referenceIndexes, globalReferences, exportedBindings);
 }
 
 export class SourceModule {
@@ -711,6 +1165,9 @@ export class SourceModule {
     this.globals = [];
     this.unboundNames = new Map();
     this.declarations = new Map();
+    this.declarationHeaders = null;
+    this.classMemberIndex = new Map();
+    this.lexicalBindings = null;
     try { this.#read(lexicalOnly); }
     catch (error) {
       if (error instanceof SourceReadError) {
@@ -724,15 +1181,52 @@ export class SourceModule {
 
   isUnbound(name, token) {
     if (!this.unboundNames.has(name)) {
-      this.unboundNames.set(name, new Set(unboundGlobals(this.tokens, this.references, this.file, new Set([name]))
+      this.unboundNames.set(name, new Set(this.#bindings().unbound(new Set([name]))
         .map((entry) => entry.offset)));
     }
     return this.unboundNames.get(name).has(token.offset);
   }
 
+  classMembers(name) {
+    if (!this.classMemberIndex.has(name)) this.classMemberIndex.set(name, readClassMembers(this, name));
+    return this.classMemberIndex.get(name);
+  }
+
+  declarationHeader(name) {
+    if (this.declarationHeaders === null) this.declarationHeaders = readDeclarationHeaders(this);
+    return this.declarationHeaders.get(name) ?? null;
+  }
+
   declaration(name) {
     if (!this.declarations.has(name)) this.declarations.set(name, readDeclaration(this, name));
     return this.declarations.get(name);
+  }
+
+  #bindings() {
+    if (this.lexicalBindings === null) {
+      try { this.lexicalBindings = readLexicalBindings(this.tokens, this.references, this.file); }
+      catch (error) {
+        if (error instanceof SourceReadError) {
+          const token = this.tokens.find((entry) => entry.offset === error.offset);
+          if (token) { error.line = token.line; error.column = token.column; }
+        }
+        throw error;
+      }
+    }
+    return this.lexicalBindings;
+  }
+
+  bindingWrites(names) { return this.#bindings().bindingWrites(names); }
+
+  originUsage(origins, { moduleBindings = false, ...options } = {}) {
+    return new SourceOriginUsage(new SourceDeclaration(this.file, this.tokens), origins,
+      { ...options, bindings: moduleBindings ? this.#bindings() : null });
+  }
+
+  referenceTokens(reference) {
+    const start = this.tokens.findIndex((token) => token.offset === reference.token.offset);
+    const specifier = this.tokens.findIndex((token, index) => index > start && token.kind === "string" && token.value === reference.specifier);
+    return start >= 0 && specifier > start ? this.tokens.slice(start, specifier + 1) : [];
   }
 
   #read(lexicalOnly) {
@@ -775,8 +1269,29 @@ export class SourceModule {
             if (t[j].kind !== "identifier") throw new SourceReadError(this.file, t[j].offset, "unsupported export binding");
             const local = t[j].value;
             const alias = t[j + 1]?.value === "as" ? t[j + 2]?.value : local;
-            this.exports.push(new SourceExport(alias, local, reference));
-            j += alias === local ? 0 : 2;
+            this.exports.push(new SourceExport(alias, local, reference, t[j]));
+            j += t[j + 1]?.value === "as" ? 2 : 0;
+          }
+        }
+      }
+      if (token.kind === "identifier" && token.value === "export" && previous !== ".") {
+        let start = i + 1;
+        const isDefault = t[start]?.value === "default";
+        if (isDefault) start++;
+        if (t[start]?.value === "async") start++;
+        if (["class", "function"].includes(t[start]?.value)) {
+          const nameToken = t[start + (t[start + 1]?.value === "*" ? 2 : 1)];
+          if (nameToken?.kind === "identifier") this.exports.push(new SourceExport(isDefault ? "default" : nameToken.value,
+            nameToken.value, null, nameToken));
+        } else if (["const", "let", "var"].includes(t[start]?.value) && t[start + 1]?.kind === "identifier") {
+          let end = start + 1;
+          while (end < t.length && t[end].value !== ";") {
+            if (["(", "[", "{"].includes(t[end].value)) end = matching(t, end, t[end].value,
+              { "(": ")", "[": "]", "{": "}" }[t[end].value]);
+            end++;
+          }
+          for (const part of readCommaSeparated(t, start + 1, end)) if (part[0]?.kind === "identifier") {
+            this.exports.push(new SourceExport(part[0].value, part[0].value, null, part[0]));
           }
         }
       }
@@ -809,9 +1324,8 @@ export class SourceModule {
         }
         const exported = t[i - 1]?.value === "export" || (t[i - 2]?.value === "export" && t[i - 1]?.value === "default");
         this.classes.push(new SourceClass(name, parent, hasParent ? t[cursor + 1] : null, token, dependencies, argumentTypes, exported));
-        if (exported) this.exports.push(new SourceExport(t[i - 1]?.value === "default" ? "default" : name, name));
       }
     }
-    if (!lexicalOnly) this.globals = unboundGlobals(t, this.references, this.file);
+    if (!lexicalOnly) this.globals = this.#bindings().unbound(watchedGlobals);
   }
 }

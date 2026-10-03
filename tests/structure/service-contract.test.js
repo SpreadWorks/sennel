@@ -48,8 +48,22 @@ class ServiceFixture {
 }
 
 function has(report, rule, file) {
-  assert.ok(report.diagnostics.some((entry) => entry.rule === rule && entry.file === file && entry.line > 0),
+  const diagnostic = report.diagnostics.find((entry) => entry.rule === rule && entry.file === file && entry.line > 0);
+  assert.ok(diagnostic,
     report.diagnostics.map((entry) => entry.toString()).join("\n"));
+  return diagnostic;
+}
+
+function serviceSuccess(report) {
+  assert.equal(report.ok, true, report.diagnostics.map((entry) => entry.toString()).join("\n"));
+}
+
+function serviceClosureViolation(report, file) {
+  const diagnostic = has(report, "A08", file);
+  assert.equal(diagnostic.column > 0, true);
+  assert.equal(diagnostic.trace.includes("src/flow/services/service.js"), true);
+  assert.equal(diagnostic.trace.includes(file), true);
+  return diagnostic;
 }
 
 test("registered Service and its imported input closure reject IO and broad dependencies", () => {
@@ -399,5 +413,337 @@ test("manager delegation must inspect the callee even behind a Store filename", 
     sample.put(helper, 'export function obtain(source) { return source.commitSpecStepResult({}); }');
     const report = sample.check();
     assert.equal(report.ok, true, report.diagnostics.map((entry) => entry.toString()).join("\n"));
+  }
+});
+
+for (const [form, body, member] of [
+  ["ordinary method", "const observer = new Observer(); return observer.value();", "value() { return 1; }"],
+  ["optional method", "const observer = new Observer(); return observer?.value();", "value() { return 1; }"],
+  ["optional getter", "const observer = new Observer(); return observer?.value;", "get value() { return 1; }"],
+  ["optional static method", "return Observer?.value();", "static value() { return 1; }"],
+  ["optional constructed method", "return new Observer()?.value();", "value() { return 1; }"],
+  ["optional instance alias", "const observer = new Observer(); const alias = observer; return alias?.value();", "value() { return 1; }"],
+]) {
+  test(`reaudit Service member follows ${form} into IO and accepts a pure restoration`, () => {
+    const sample = new ServiceFixture();
+    const file = "src/flow/lib/observe.js";
+    const pure = `export class Observer { constructor() {} ${member} }\n`;
+    sample.service(`inspect() { ${body} }`, "import { Observer } from '../lib/observe.js';");
+    sample.put(file, pure);
+    serviceSuccess(sample.check());
+    sample.put(file, "import fs from 'node:fs';\n" + pure.replace("return 1;", "return fs.existsSync('x');"));
+    const diagnostic = serviceClosureViolation(sample.check(), file);
+    assert.equal(diagnostic.line, 1);
+    assert.equal(diagnostic.column, 1);
+    sample.put(file, pure);
+    serviceSuccess(sample.check());
+  });
+}
+
+test("reaudit Service member refuses an unresolved optional computed member and accepts a named pure member", () => {
+  const sample = new ServiceFixture();
+  const file = "src/flow/services/service.js";
+  sample.put("src/flow/lib/observe.js", "export class Observer { constructor() {} value() { return 1; } }");
+  const pureBody = "inspect(operation) { const observer = new Observer(); return observer?.value(); }";
+  sample.service(pureBody, "import { Observer } from '../lib/observe.js';");
+  serviceSuccess(sample.check());
+  const clean = sample.files.get(file);
+  const invalid = clean.replace("observer?.value()", "observer?.[operation]()");
+  sample.put(file, invalid);
+  const diagnostic = serviceClosureViolation(sample.check(), file);
+  assert.equal(diagnostic.message.includes("unresolved"), true);
+  assert.equal(diagnostic.line, invalid.split("\n").findIndex((line) => line.includes("[operation]")) + 1);
+  assert.equal(diagnostic.column, invalid.split("\n")[diagnostic.line - 1].indexOf("[operation]") + 1);
+  sample.put(file, clean);
+  serviceSuccess(sample.check());
+});
+
+for (const [form, imported, pureTail, assignment, beforeTail] of [
+  ["direct function", "observe", "", "observe = function observe() { return fs.existsSync('x'); };", false],
+  ["alias captured after replacement", "alias", "export const alias = observe;", "observe = function observe() { return fs.existsSync('x'); };", true],
+  ["live delegation after replacement", "delegated", "export function delegated() { return observe(); }", "observe = function observe() { return fs.existsSync('x'); };", false],
+  ["replacement of the alias binding", "delegated", "let alias = observe; export function delegated() { return alias(); }", "alias = function replacement() { return fs.existsSync('x'); };", false],
+]) {
+  test(`reaudit Service binding rejects ${form} reaching a replaced IO function and accepts restoration`, () => {
+    const sample = new ServiceFixture();
+    const file = "src/flow/lib/observe.js";
+    const original = "import fs from 'node:fs';\nexport function observe() { return 1; }\n";
+    const pure = original + pureTail;
+    const invalid = beforeTail ? original + assignment + "\n" + pureTail : pure + "\n" + assignment;
+    sample.service(`inspect() { return ${imported}(); }`, `import { ${imported} } from '../lib/observe.js';`);
+    sample.put(file, pure);
+    serviceSuccess(sample.check());
+    sample.put(file, invalid);
+    const diagnostic = serviceClosureViolation(sample.check(), file);
+    assert.equal(diagnostic.line, invalid.split("\n").indexOf(assignment) + 1);
+    assert.equal(diagnostic.column, 1);
+    sample.put(file, pure);
+    serviceSuccess(sample.check());
+  });
+}
+
+test("reaudit Service binding accepts pure helpers with unrelated reassignment and distinct local shadows", () => {
+  const sample = new ServiceFixture();
+  sample.service("inspect() { return observe(); }", "import { observe } from '../lib/observe.js';");
+  sample.put("src/flow/lib/observe.js", `import fs from 'node:fs';
+    export function observe() {
+      function independent(observe) { observe = () => 1; return observe(); }
+      return independent(() => 1);
+    }
+    function unrelated() { return 1; }
+    unrelated = function unrelated() { return fs.existsSync('x'); };`);
+  sample.put("src/flow/lib/unrelated.js", `export function observe() { return 1; }
+    observe = () => 2;`);
+  serviceSuccess(sample.check());
+});
+
+test("reaudit Service binding destructuring rejects a reached IO replacement and accepts restoration", () => {
+  const sample = new ServiceFixture();
+  const file = "src/flow/lib/observe.js";
+  const pure = "import fs from 'node:fs';\nexport function observe() { return 1; }\n";
+  const assignment = "({ observe } = { observe: () => fs.existsSync('x') });";
+  sample.service("inspect() { return observe(); }", "import { observe } from '../lib/observe.js';");
+  sample.put(file, pure);
+  serviceSuccess(sample.check());
+  sample.put(file, pure + assignment);
+  const diagnostic = serviceClosureViolation(sample.check(), file);
+  assert.equal(diagnostic.message, "Service dependency binding observe may be replaced after its declaration");
+  assert.equal(diagnostic.line, 3);
+  assert.equal(diagnostic.column, assignment.indexOf("observe") + 1);
+  sample.put(file, pure);
+  serviceSuccess(sample.check());
+});
+
+test("reaudit Service reexport follows the public helper instead of a private same-name declaration", () => {
+  const sample = new ServiceFixture();
+  const barrel = "src/flow/lib/observe.js";
+  const file = "src/flow/lib/actual.js";
+  const pure = "export function actual() { return 1; }\n";
+  sample.service("inspect() { return observe(); }", "import { observe } from '../lib/observe.js';");
+  sample.put(barrel, "function observe() { return 1; }\nexport { actual as observe } from './actual.js';\n");
+  sample.put(file, pure);
+  serviceSuccess(sample.check());
+  sample.put(file, "import fs from 'node:fs';\n" + pure.replace("return 1;", "return fs.existsSync('x');"));
+  const diagnostic = serviceClosureViolation(sample.check(), file);
+  assert.equal(diagnostic.line, 1);
+  assert.equal(diagnostic.column, 1);
+  assert.equal(diagnostic.trace.includes(barrel), true);
+  sample.put(file, pure);
+  serviceSuccess(sample.check());
+});
+
+test("reaudit Service member delegation refuses computed this access and restores named pure calls", () => {
+  const sample = new ServiceFixture();
+  const file = "src/flow/lib/observe.js";
+  const pure = "export class Observer { constructor() {} value() { return this?.inner(); } inner() { return 1; } }\n";
+  sample.service("inspect() { return new Observer().value(); }", "import { Observer } from '../lib/observe.js';");
+  sample.put(file, pure);
+  serviceSuccess(sample.check());
+  const invalid = "import fs from 'node:fs';\n" + pure
+    .replace("this?.inner()", "this?.['inner']()")
+    .replace("return 1;", "return fs.existsSync('x');");
+  sample.put(file, invalid);
+  const diagnostic = serviceClosureViolation(sample.check(), file);
+  assert.equal(diagnostic.message.includes("unresolved"), true);
+  assert.equal(diagnostic.line, 2);
+  assert.equal(diagnostic.column, invalid.split("\n")[1].indexOf("['inner']") + 1);
+  sample.put(file, pure);
+  serviceSuccess(sample.check());
+  sample.put(file, pure.replace("this?.inner()", "this.inner()"));
+  serviceSuccess(sample.check());
+});
+
+test("reaudit Service inherited members follow parent IO and preserve own override priority", () => {
+  for (const [body, member] of [
+    ["return new Observer()?.value();", "value() { return 1; }"],
+    ["return new Observer().value();", "value() { return 1; }"],
+    ["return new Observer()?.value;", "get value() { return 1; }"],
+  ]) {
+    const sample = new ServiceFixture();
+    const file = "src/flow/lib/observe.js";
+    const pure = `import fs from 'node:fs';\nclass Parent { constructor() {} ${member} }\nexport class Observer extends Parent {}\n`;
+    sample.service(`inspect() { ${body} }`, "import { Observer } from '../lib/observe.js';");
+    sample.put(file, pure);
+    serviceSuccess(sample.check());
+    const invalid = pure.replace("return 1;", "return fs.existsSync('x');");
+    sample.put(file, invalid);
+    const diagnostic = serviceClosureViolation(sample.check(), file);
+    assert.equal(diagnostic.line, 1);
+    assert.equal(diagnostic.column, 1);
+    sample.put(file, pure);
+    serviceSuccess(sample.check());
+    sample.put(file, invalid.replace("extends Parent {}", `extends Parent { ${member} }`));
+    serviceSuccess(sample.check());
+  }
+});
+
+test("reaudit Service inherited constructor follows implicit parent initialization and accepts pure restoration", () => {
+  const sample = new ServiceFixture();
+  const file = "src/flow/lib/observe.js";
+  const pure = "import fs from 'node:fs';\nclass Parent { constructor() {} }\nexport class Observer extends Parent {}\n";
+  sample.service("inspect() { return new Observer(); }", "import { Observer } from '../lib/observe.js';");
+  sample.put(file, pure);
+  serviceSuccess(sample.check());
+  sample.put(file, pure.replace("constructor() {}", "constructor() { fs.existsSync('x'); }"));
+  const diagnostic = serviceClosureViolation(sample.check(), file);
+  assert.equal(diagnostic.line, 1);
+  assert.equal(diagnostic.column, 1);
+  sample.put(file, pure);
+  serviceSuccess(sample.check());
+});
+
+test("reaudit Service ancestor binding rejects replacement reached through an inherited member", () => {
+  const sample = new ServiceFixture();
+  const file = "src/flow/lib/observe.js";
+  const parent = "import fs from 'node:fs';\nclass Parent { value() { return 1; } }\n";
+  const child = "export class Observer extends Parent {}\n";
+  const replacement = "Parent = class Replacement { value() { return fs.existsSync('x'); } };\n";
+  const pure = parent + child;
+  sample.service("inspect() { return new Observer()?.value(); }", "import { Observer } from '../lib/observe.js';");
+  sample.put(file, pure);
+  serviceSuccess(sample.check());
+  sample.put(file, parent + replacement + child);
+  const diagnostic = serviceClosureViolation(sample.check(), file);
+  assert.equal(diagnostic.message, "Service dependency binding Parent may be replaced after its declaration");
+  assert.equal(diagnostic.line, 3);
+  assert.equal(diagnostic.column, 1);
+  sample.put(file, pure);
+  serviceSuccess(sample.check());
+});
+
+test("reaudit Service initialization inspects instance fields while leaving uncalled methods outside the closure", () => {
+  const sample = new ServiceFixture();
+  const file = "src/flow/lib/observe.js";
+  const pure = "import fs from 'node:fs';\nexport class Observer { #value = 1; value() { return this.#value; } unused() { return fs.existsSync('unused'); } }\n";
+  sample.service("inspect() { return new Observer()?.value(); }", "import { Observer } from '../lib/observe.js';");
+  sample.put(file, pure);
+  serviceSuccess(sample.check());
+  sample.put(file, pure.replace("#value = 1;", "#value = fs.existsSync('field');"));
+  const diagnostic = serviceClosureViolation(sample.check(), file);
+  assert.equal(diagnostic.line, 1);
+  assert.equal(diagnostic.column, 1);
+  sample.put(file, pure);
+  serviceSuccess(sample.check());
+});
+
+test("reaudit Service initialization follows explicit super calls while leaving uncalled parent methods outside the closure", () => {
+  const sample = new ServiceFixture();
+  const file = "src/flow/lib/observe.js";
+  const pure = "import fs from 'node:fs';\nclass Parent { constructor() {} unused() { return fs.existsSync('unused'); } }\nexport class Observer extends Parent { constructor() { super(); } value() { return 1; } }\n";
+  sample.service("inspect() { return new Observer()?.value(); }", "import { Observer } from '../lib/observe.js';");
+  sample.put(file, pure);
+  serviceSuccess(sample.check());
+  sample.put(file, pure.replace("constructor() {}", "constructor() { fs.existsSync('parent'); }"));
+  const diagnostic = serviceClosureViolation(sample.check(), file);
+  assert.equal(diagnostic.line, 1);
+  assert.equal(diagnostic.column, 1);
+  sample.put(file, pure);
+  serviceSuccess(sample.check());
+});
+
+test("reaudit Service initialization inspects class evaluation fragments while preserving uncalled methods", () => {
+  for (const [initializer, invalidInitializer] of [
+    ["static marker = 1;", "static marker = fs.existsSync('static');"],
+    ["static { void 1; }", "static { fs.existsSync('block'); }"],
+    ["[1] = 1;", "[fs.existsSync('key')] = 1;"],
+  ]) {
+    const sample = new ServiceFixture();
+    const file = "src/flow/lib/observe.js";
+    const pure = `import fs from 'node:fs';\nexport class Observer { ${initializer} value() { return 1; } unused() { return fs.existsSync('unused'); } }\n`;
+    sample.service("inspect() { return new Observer()?.value(); }", "import { Observer } from '../lib/observe.js';");
+    sample.put(file, pure);
+    serviceSuccess(sample.check());
+    sample.put(file, pure.replace(initializer, invalidInitializer));
+    const diagnostic = serviceClosureViolation(sample.check(), file);
+    assert.equal(diagnostic.line, 1);
+    assert.equal(diagnostic.column, 1);
+    sample.put(file, pure);
+    serviceSuccess(sample.check());
+  }
+});
+
+test("reaudit Service initialization keeps function field bodies deferred until the field is called", () => {
+  for (const initializer of [
+    "() => fs.existsSync('arrow')",
+    "function observe() { return fs.existsSync('function'); }",
+  ]) {
+    const sample = new ServiceFixture();
+    const file = "src/flow/lib/observe.js";
+    sample.put(file, `import fs from 'node:fs';\nexport class Observer { observe = ${initializer}; }\n`);
+    sample.service("inspect() { return new Observer(); }", "import { Observer } from '../lib/observe.js';");
+    serviceSuccess(sample.check());
+    const serviceFile = "src/flow/services/service.js";
+    const pure = sample.files.get(serviceFile);
+    sample.put(serviceFile, pure.replace("new Observer()", "new Observer().observe()"));
+    const diagnostic = serviceClosureViolation(sample.check(), file);
+    assert.equal(diagnostic.line, 1);
+    assert.equal(diagnostic.column, 1);
+    sample.put(serviceFile, pure);
+    serviceSuccess(sample.check());
+  }
+});
+
+test("reaudit Service member kind rejects static IO after inspecting an instance member in either declaration order", () => {
+  for (const staticFirst of [false, true]) {
+    const sample = new ServiceFixture();
+    const file = "src/flow/lib/observe.js";
+    const instance = "\n  value() { return 1; }";
+    const member = "\n  static value() { return 1; }";
+    const pure = `import fs from 'node:fs';\nexport class Observer {${staticFirst ? member + instance : instance + member}\n}\n`;
+    sample.service("inspect() { return [new Observer().value(), Observer.value()]; }", "import { Observer } from '../lib/observe.js';");
+    sample.put(file, pure);
+    serviceSuccess(sample.check());
+    sample.put(file, pure.replace(member, "\n  static value() { return fs.existsSync('static'); }"));
+    const diagnostic = serviceClosureViolation(sample.check(), file);
+    assert.equal(diagnostic.line, 1);
+    assert.equal(diagnostic.column, 1);
+    sample.put(file, pure);
+    serviceSuccess(sample.check());
+    sample.service("inspect() { return Observer.value(); }", "import { Observer } from '../lib/observe.js';");
+    sample.put(file, pure.replace(instance, "\n  value() { return fs.existsSync('instance'); }"));
+    serviceSuccess(sample.check());
+  }
+});
+
+test("reaudit Service member kind keeps uncalled static IO outside an instance call in either declaration order", () => {
+  for (const staticFirst of [true, false]) {
+    const sample = new ServiceFixture();
+    const file = "src/flow/lib/observe.js";
+    const instance = "value() { return 1; }";
+    const member = "static value() { return fs.existsSync('static'); }";
+    const pure = `import fs from 'node:fs';\nexport class Observer { ${staticFirst ? `${member} ${instance}` : `${instance} ${member}`} }\n`;
+    sample.service("inspect() { return new Observer().value(); }", "import { Observer } from '../lib/observe.js';");
+    sample.put(file, pure);
+    serviceSuccess(sample.check());
+    sample.put(file, pure.replace(instance, "value() { return fs.existsSync('instance'); }"));
+    const diagnostic = serviceClosureViolation(sample.check(), file);
+    assert.equal(diagnostic.line, 1);
+    assert.equal(diagnostic.column, 1);
+    sample.put(file, pure);
+    serviceSuccess(sample.check());
+  }
+});
+
+test("reaudit Service member kind preserves receiver kind through inherited super and this delegation", () => {
+  for (const isStatic of [true, false]) {
+    const sample = new ServiceFixture();
+    const file = "src/flow/lib/observe.js";
+    const instance = "inner() { return 1; }";
+    const member = "static inner() { return 1; }";
+    const pure = `import fs from 'node:fs';\nclass Parent { ${instance} ${member} value() { return this.inner(); } static value() { return this.inner(); } }\nexport class Observer extends Parent { entry() { return super.value(); } static entry() { return super.value(); } }\n`;
+    sample.service(`inspect() { return ${isStatic ? "Observer" : "new Observer()"}.entry(); }`, "import { Observer } from '../lib/observe.js';");
+    sample.put(file, pure);
+    serviceSuccess(sample.check());
+    const selected = isStatic ? member : instance;
+    const invalid = pure.replace(selected, `${isStatic ? "static " : ""}inner() { return fs.existsSync('selected'); }`);
+    sample.put(file, invalid);
+    const diagnostic = serviceClosureViolation(sample.check(), file);
+    assert.equal(diagnostic.line, 1);
+    assert.equal(diagnostic.column, 1);
+    sample.put(file, pure);
+    serviceSuccess(sample.check());
+    sample.put(file, pure.replace(isStatic ? instance : member,
+      `${isStatic ? "" : "static "}inner() { return fs.existsSync('uncalled'); }`));
+    serviceSuccess(sample.check());
   }
 });

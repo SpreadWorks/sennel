@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { SourceModule, SourceReadError, SourceOriginUsage, readMemberAccess, readTokens } from "../support/structure/source-reader.js";
+import { SourceModule, SourceReadError, SourceOriginUsage, SourceToken, readMemberAccess, readTokens } from "../support/structure/source-reader.js";
+import * as sourceReader from "../support/structure/source-reader.js";
 
 test("route initializers must be unconditional declarations in the enclosing function", () => {
   const direct = new SourceModule("route.js", "function route(input = {}) { const registration = lookup(input.stepId); return registration; }");
@@ -172,4 +173,169 @@ test("origin accounting never treats destructuring, captures, or defaults as che
   }
   const declaration = new SourceModule("writer.js", 'function settle(value = manager) {}').declaration("settle");
   assert.deepEqual(new SourceOriginUsage(declaration, ["manager"]).unresolved().map((token) => token.value), ["manager"]);
+});
+
+test("explicit origin binding acceptance retains private-field and chained alias provenance", () => {
+  const declaration = new SourceModule("writer.js", `class Writer {
+    #capability;
+    constructor(capability) { this.#capability = capability; }
+    settle() { const first = this.#capability; const alias = first; return alias; }
+  }`).declaration("Writer");
+  const automatic = new SourceOriginUsage(declaration, ["#capability"]);
+  const explicit = new SourceOriginUsage(declaration, ["#capability"], { acceptBindings: false });
+  assert.deepEqual(explicit.origins, new Set(["#capability", "capability", "first", "alias"]));
+  assert.deepEqual(explicit.origins, automatic.origins);
+  assert.deepEqual(automatic.unresolved().map((token) => token.value), ["alias"]);
+  assert.deepEqual(explicit.unresolved().map((token) => token.value), [
+    "#capability", "capability", "#capability", "capability", "first", "#capability", "alias", "first", "alias",
+  ]);
+  const returnedAlias = declaration.tokens[declaration.tokens.findIndex((token) => token.value === "return") + 1];
+  explicit.accept([returnedAlias]);
+  assert.deepEqual(explicit.unresolved().map((token) => token.value), [
+    "#capability", "capability", "#capability", "capability", "first", "#capability", "alias", "first",
+  ]);
+});
+
+test("explicit origin binding acceptance leaves destructured parameter bindings unchecked", () => {
+  const declaration = new SourceModule("consumer.js", "function consume({ capability }) { return capability; }")
+    .declaration("consume");
+  const automatic = new SourceOriginUsage(declaration, ["capability"]);
+  const explicit = new SourceOriginUsage(declaration, ["capability"], { acceptBindings: false });
+  assert.deepEqual(automatic.unresolved().map((token) => token.value), ["capability"]);
+  assert.deepEqual(explicit.unresolved().map((token) => token.value), ["capability", "capability"]);
+});
+
+test("explicit origin binding acceptance is forwarded by the module reader", () => {
+  const module = new SourceModule("consumer.js", `function consume(selection) { return selection; }
+    const alias = consume; alias = replacement;`);
+  const automatic = module.originUsage(["consume"]);
+  const explicit = module.originUsage(["consume"], { acceptBindings: false });
+  assert.deepEqual(explicit.origins, new Set(["consume", "alias"]));
+  assert.deepEqual(automatic.unresolved().map((token) => token.value), ["consume", "alias"]);
+  assert.deepEqual(explicit.unresolved().map((token) => token.value), ["consume", "alias", "consume", "alias"]);
+  explicit.accept(module.declaration("consume").tokens);
+  assert.deepEqual(explicit.unresolved().map((token) => token.value), ["alias", "consume", "alias"]);
+});
+
+test("module binding origin accounting distinguishes lexical identity while preserving default behavior", () => {
+  const module = new SourceModule("capability.js", [
+    "const capability = {};",
+    "const metadata = { capability: 'label' };",
+    "function independent(capability) { return capability; }",
+    "function capture() { return capability; }",
+    "const alias = capability;",
+    "function independentAlias(alias) { return alias; }",
+    "external(alias);",
+  ].join("\n"));
+  const references = (usage) => usage.unresolved().map((token) => [token.value, token.line]);
+  const scoped = module.originUsage(["capability"], { acceptBindings: false, moduleBindings: true });
+  assert.deepEqual(scoped.origins, new Set(["capability", "alias"]));
+  assert.deepEqual(references(scoped), [["capability", 1], ["capability", 4], ["alias", 5], ["capability", 5], ["alias", 7]]);
+  assert.deepEqual(references(module.originUsage(["capability"], { acceptBindings: false })), [
+    ["capability", 1], ["capability", 2], ["capability", 3], ["capability", 3], ["capability", 4],
+    ["alias", 5], ["capability", 5], ["alias", 6], ["alias", 6], ["alias", 7],
+  ]);
+  assert.deepEqual(references(module.originUsage(["capability"])), [
+    ["capability", 1], ["capability", 2], ["capability", 3], ["capability", 4], ["alias", 6], ["alias", 6], ["alias", 7],
+  ]);
+});
+
+test("declared route reader distinguishes complete function shapes and declaration prefixes", () => {
+  for (const [prefix, tokens, exported, defaultExport, matches] of [
+    ["", [], false, false, true],
+    ["export", ["export"], true, false, true],
+    ["export default", ["export", "default"], true, true, true],
+    ["async", ["async"], false, false, false],
+    ["export async", ["export", "async"], true, false, false],
+  ]) {
+    const declaration = new SourceModule("route.js", `${prefix} function route(input) { return input; }`).declaration("route");
+    assert.deepEqual(declaration.prefix.map((token) => token.value), tokens);
+    assert.equal(declaration.exported, exported);
+    assert.equal(declaration.defaultExport, defaultExport);
+    assert.equal(declaration.matchesFunction("input", "return input;"), matches);
+    assert.equal(declaration.matchesBody("return input;"), true);
+  }
+  for (const parameters of ["input = external()", "input, extra"]) {
+    const declaration = new SourceModule("route.js", `function route(${parameters}) { return input; }`).declaration("route");
+    assert.equal(declaration.matchesFunction("input", "return input;"), false);
+    assert.equal(declaration.matchesBody("return input;"), true);
+  }
+  assert.equal(new SourceModule("route.js", "function* route(input) { return input; }").declaration("route"), null);
+});
+
+test("declared route reader keeps local export tokens distinct from aliases and reexports", () => {
+  const module = new SourceModule("exports.js", [
+    "const first = 1; const second = 2;",
+    "export { first, second as renamed };",
+    "export { Remote as Forwarded } from './remote.js';",
+  ].join("\n"));
+  for (const entry of module.exports) assert.equal(entry.token instanceof SourceToken, true);
+  assert.deepEqual(module.exports.map((entry) => [entry.name, entry.local, entry.token.value,
+    entry.token.line, entry.token.column, entry.reference?.specifier ?? null]), [
+    ["first", "first", "first", 2, 10, null],
+    ["renamed", "second", "second", 2, 17, null],
+    ["Forwarded", "Remote", "Remote", 3, 10, "./remote.js"],
+  ]);
+  const usage = module.originUsage(["Remote"], { acceptBindings: false, moduleBindings: true });
+  assert.deepEqual(usage.unresolved(), []);
+});
+
+test("reaudit reader identifies binding assignments and updates without treating RHS reads as writes", () => {
+  const module = new SourceModule("writes.js", [
+    "let observed = 1; let replacement = 2;",
+    "observed = -replacement;",
+    "observed += +replacement;",
+    "observed **= replacement;",
+    "observed ??= replacement;",
+    "++observed; observed--;",
+    "const read = observed === replacement;",
+  ].join("\n"));
+  const writes = module.bindingWrites(["observed", "replacement"]);
+  assert.equal(writes.every((write) => write instanceof sourceReader.SourceBindingWrite), true);
+  assert.deepEqual(writes.map((write) => [write.binding.name, write.token.line, write.token.column]), [
+    ["observed", 2, 1], ["observed", 3, 1], ["observed", 4, 1], ["observed", 5, 1],
+    ["observed", 6, 3], ["observed", 6, 13],
+  ]);
+  assert.deepEqual(module.bindingWrites(["replacement", "missing"]), []);
+});
+
+test("reaudit reader resolves pattern and loop writes by lexical identity and preserves its cached index", () => {
+  const module = new SourceModule("patterns.js", [
+    "let observed; let rest; let object = {};",
+    "({ nested: { value: observed = fallback }, ...rest } = source);",
+    "[observed, ...rest] = source;",
+    "for (observed of source) {}",
+    "for ({ value: observed } of source) {}",
+    "for (rest in source) {}",
+    "object.observed = 1; object[observed] = 2; observed.value = 3;",
+    "function independent(observed) { observed = 4; ++observed; }",
+    "{ let rest; rest = 5; }",
+    "for (let observed of source) { observed = 6; }",
+  ].join("\n"));
+  const writes = module.bindingWrites(["observed", "rest", "object"]);
+  assert.deepEqual(writes.map((write) => [write.binding.name, write.token.line, write.token.column]), [
+    ["observed", 2, 21], ["rest", 2, 47], ["observed", 3, 2], ["rest", 3, 15],
+    ["observed", 4, 6], ["observed", 5, 15], ["rest", 6, 6],
+  ]);
+  const firstBinding = writes[0].binding;
+  module.originUsage(["observed"], { acceptBindings: false, moduleBindings: true });
+  assert.equal(module.bindingWrites(["observed"])[0], writes[0]);
+  assert.equal(module.bindingWrites(["observed"]).every((write) => write.binding === firstBinding), true);
+  assert.deepEqual(module.globals, []);
+});
+
+test("reaudit reader exposes inline public bindings without changing lexical-only reference parsing", () => {
+  const module = new SourceModule("exports.js", [
+    "export function lookup(input) { return input; }",
+    "export const selection = 1;",
+    "export class Value {}",
+  ].join("\n"));
+  assert.deepEqual(module.exports.map((entry) => [entry.name, entry.local, entry.token.value,
+    entry.token.line, entry.token.column, entry.reference]), [
+    ["lookup", "lookup", "lookup", 1, 17, null],
+    ["selection", "selection", "selection", 2, 14, null],
+    ["Value", "Value", "Value", 3, 14, null],
+  ]);
+  const indexed = new SourceModule("outside.js", "var outside = 1; export const value = outside; export * from './values.js';", { lexicalOnly: true });
+  assert.deepEqual(indexed.references.map((reference) => reference.specifier), ["./values.js"]);
 });

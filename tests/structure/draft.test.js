@@ -4,11 +4,14 @@ import path from "node:path";
 import { test } from "node:test";
 import { draftStepRegistrations } from "../../src/flow/engine/composition/draft.js";
 import { checkStructure } from "../support/structure/checker.js";
+import { draftStructureManifest } from "../support/structure/phase-manifest.js";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 
 test("Draft source obeys shared Flow structure rules", (context) => {
-  const report = checkStructure({ root, entry: "src/flow/steps/draft", registrations: draftStepRegistrations });
+  const scope = draftStructureManifest.entries[0];
+  const report = checkStructure({ root, entry: scope.entry, registrations: draftStepRegistrations,
+    registrationModule: scope.composition, contract: scope.contract(draftStepRegistrations) });
   context.diagnostic(report.describe());
   assert.equal(report.ok, true, `${report.describe()}\n${report.diagnostics.map((entry) => entry.toString()).join("\n")}`);
   assert.ok(report.visited.size > 0);

@@ -25,6 +25,22 @@ class RegistrationFixture {
   source() { return new ProductionRegistrations(pathToFileURL(this.modulePath), "specStepRegistrations"); }
 }
 
+function validRegistrationSource() {
+  const stepUrl = new URL("../../src/flow/engine/step.js", import.meta.url);
+  const registrationUrl = new URL("../../src/flow/engine/composition/step-registration.js", import.meta.url);
+  const executionUrl = new URL("../fixtures/structure/execution.js", import.meta.url);
+  return [
+    `import { Step } from ${JSON.stringify(stepUrl.href)};`,
+    `import { StepRegistration } from ${JSON.stringify(registrationUrl.href)};`,
+    `import { workerStepExecutionContract } from ${JSON.stringify(executionUrl.href)};`,
+    "class Input {} class Writer {} class ServiceClass { static argumentTypes = [Input, Writer]; }",
+    "class FixtureStep extends Step { static dependencies = [ServiceClass]; constructor(service) { super(); this.service = service; } }",
+    "function prepareServiceArguments() { return [new Input(), new Writer()]; }",
+    "const registration = new StepRegistration({ stepId: 'spec', StepClass: FixtureStep, ServiceClass, prepareServiceArguments, executionContract: workerStepExecutionContract });",
+    "export const specStepRegistrations = [registration];",
+  ].join("\n");
+}
+
 test("production registration source rejects missing, unreadable, and invalid exports", async (t) => {
   const missing = new RegistrationFixture(t);
   await assert.rejects(missing.source().load(), /Cannot load production registrations/);
@@ -50,18 +66,7 @@ test("production registration source rejects missing, unreadable, and invalid ex
 
 test("valid loaded registration reaches the shared checker and rejects a violation", async (t) => {
   const fixture = new RegistrationFixture(t);
-  const stepUrl = new URL("../../src/flow/engine/step.js", import.meta.url);
-  const registrationUrl = new URL("../../src/flow/engine/composition/step-registration.js", import.meta.url);
-  const executionUrl = new URL("../fixtures/structure/execution.js", import.meta.url);
-  fixture.write([
-    `import { Step } from ${JSON.stringify(stepUrl.href)};`,
-    `import { StepRegistration } from ${JSON.stringify(registrationUrl.href)};`,
-    `import { workerStepExecutionContract } from ${JSON.stringify(executionUrl.href)};`,
-    "class Input {} class Writer {} class ServiceClass { static argumentTypes = [Input, Writer]; }",
-    "class FixtureStep extends Step { static dependencies = [ServiceClass]; constructor(service) { super(); this.service = service; } }",
-    "function prepareServiceArguments() { return [new Input(), new Writer()]; }",
-    "export const specStepRegistrations = [new StepRegistration({ stepId: 'spec', StepClass: FixtureStep, ServiceClass, prepareServiceArguments, executionContract: workerStepExecutionContract })];",
-  ].join("\n"));
+  fixture.write(validRegistrationSource());
   const registrations = await fixture.source().load();
   const scope = { root: fixture.root, entry: "src/flow/steps/spec", registrations };
   const clean = checkStructure(scope);
@@ -73,4 +78,20 @@ test("valid loaded registration reaches the shared checker and rejects a violati
   assert.equal(broken.ok, false);
   assert.ok(broken.diagnostics.some((entry) => entry.rule === "A03" && entry.file === "src/flow/steps/spec/value.js"),
     broken.diagnostics.map((entry) => entry.toString()).join("\n"));
+});
+
+test("production registration loading rejects duplicate identity, duplicate class and dependency mismatch", async (t) => {
+  for (const [source, reason] of [
+    [validRegistrationSource().replace("[registration];", "[registration, registration];"), /duplicate registration identity spec/],
+    [validRegistrationSource().replace("[registration];", "[registration, new StepRegistration({ ...registration, stepId: 'other' })];"), /duplicate registration identity other/],
+    [validRegistrationSource() + "\nFixtureStep.dependencies = [];", /inconsistent registration dependency spec/],
+  ]) {
+    const invalid = new RegistrationFixture(t);
+    invalid.write(source);
+    await assert.rejects(invalid.source().load(), reason);
+  }
+  const corrected = new RegistrationFixture(t);
+  corrected.write(validRegistrationSource());
+  const registrations = await corrected.source().load();
+  assert.deepEqual(registrations.map((registration) => registration.stepId), ["spec"]);
 });

@@ -39,6 +39,7 @@
     "validate:skills": "node scripts/validate-skills.js",
     "test": "node tests/run.js",
     "test:unit": "node tests/run.js --scope unit",
+    "test:contract:result": "node tests/run.js --file tests/unit/structured-step-result.contract.js",
     "test:integration": "node tests/run.js --scope integration",
     "test:e2e": "node tests/run.js --scope e2e",
     "test:acceptance": "node tests/run.js --scope acceptance",
