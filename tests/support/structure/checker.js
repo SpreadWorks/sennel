@@ -101,6 +101,17 @@ class ResolvedSourceBinding {
   }
 }
 
+class ResolvedSourceNamespace {
+  constructor(file, route = [file]) {
+    if (typeof file !== "string" || !file || !Array.isArray(route)) throw new TypeError("source namespace required");
+    this.file = file;
+    this.route = route;
+    this.name = "*";
+  }
+  get key() { return `${this.file}#*`; }
+  through(file) { return this.route[0] === file ? this : new ResolvedSourceNamespace(this.file, [file, ...this.route]); }
+}
+
 class ResolvedDependency {
   constructor(reference, target, sourceClass) {
     this.reference = reference;
@@ -256,7 +267,7 @@ export class StructureChecker {
 
   #declaredExecutionRoutes() {
     const contract = this.scope.contract;
-    this.#declaredLookups();
+    const selectedCapabilities = this.#declaredLookups();
     const entryModules = new Set(contract.executionShapes.flatMap((shape) =>
       [...shape.callers, ...shape.loaders].map((entry) => entry.module)));
     const entries = new Map([...entryModules].map((file) => [file, new ExecutionEntryBindings(file)]));
@@ -334,14 +345,13 @@ export class StructureChecker {
     }
     for (const shape of contract.executionShapes) {
       const file = shape.adapterModule;
-      const lookupNames = new Set(shape.callers.map((caller) => caller.lookupName));
+      const lookupNames = new Set(contract.executionShapes.flatMap((entry) => entry.callers.map((caller) => caller.lookupName)));
       const commandModules = new Set(shape.callers.map((caller) => caller.module));
       for (const sourceFile of this.allFiles) {
         if (sourceFile === this.scope.registrationModule) continue;
         const source = this.#module(sourceFile, [sourceFile], "A11", true);
         const aliases = new Set();
         const namespaces = new Set();
-        let consumesSelectedBoundary = false;
         const routes = new Map();
         const adapterNames = new Set([shape.contractName, shape.selectorName, shape.projectorName, shape.executorName]);
         for (const reference of source?.references ?? []) {
@@ -359,33 +369,49 @@ export class StructureChecker {
                 ? this.#resolveExportBinding(sourceFile, local === "*" ? exported : local, new Set(), "A11")
                 : this.#resolveExportBinding(target, exported, new Set(), "A11");
               if (!binding) continue;
-              const lookup = binding.file === this.scope.registrationModule && lookupNames.has(binding.name);
-              const adapter = binding.file === file && adapterNames.has(binding.name);
-              if (!lookup && !adapter) continue;
-              consumesSelectedBoundary = true;
-              const trace = [sourceFile, ...binding.route.filter((entry) => entry !== sourceFile)];
-              if (adapter && !this.rules.isComposition(sourceFile)) {
-                this.#diagnose("A11", sourceFile, reference.token, trace,
-                  "shared execution adapter imported outside production registration");
-              }
-              if (!lookup) continue;
-              if (reference.kind === "reexport") {
-                this.#diagnose("A11", sourceFile, reference.token, trace,
-                  "unregistered execution lookup caller or capability escape through re-export");
-              } else {
-                (imported === "*" ? namespaces : aliases).add(local);
-                routes.set(local, trace);
+              for (const exposedBinding of this.#namespaceBindings(binding)) {
+                const lookup = exposedBinding.file === this.scope.registrationModule && lookupNames.has(exposedBinding.name);
+                const collection = exposedBinding.file === this.scope.registrationModule
+                  && selectedCapabilities.has(exposedBinding.name) && !lookup;
+                const adapter = exposedBinding.file === file && adapterNames.has(exposedBinding.name);
+                if (!lookup && !collection && !adapter) continue;
+                const trace = [sourceFile, ...exposedBinding.route.filter((entry) => entry !== sourceFile)];
+                if (adapter && !this.rules.isComposition(sourceFile)) {
+                  this.#diagnose("A11", sourceFile, reference.token, trace,
+                    "shared execution adapter imported outside production registration");
+                }
+                if (!lookup && !collection) continue;
+                // Public registration selections may be forwarded without consumption.
+                // Their actual consumers remain accountable through provenance.
+                if (reference.kind === "reexport" && collection) continue;
+                if (reference.kind === "reexport") {
+                  this.#diagnose("A11", sourceFile, reference.token, trace,
+                    "unregistered execution lookup caller or capability escape through re-export");
+                } else {
+                  if (imported === "*" || binding instanceof ResolvedSourceNamespace) {
+                    namespaces.add(local);
+                  } else aliases.add(local);
+                  routes.set(local, trace);
+                }
               }
             }
           }
         }
-        if (source?.tokens.length) {
-          const usage = source.originUsage([...aliases, ...namespaces]);
-          for (const reference of source.references) if (reference.kind === "import") usage.accept(source.referenceTokens(reference));
-          for (const token of source.tokens) if (allowed.get(sourceFile)?.has(token.offset)) usage.accept([token]);
-          for (const token of usage.unresolved()) {
-            this.#diagnose("A11", sourceFile, token, routes.get(token.value) ?? [sourceFile, this.scope.registrationModule],
-              `unregistered execution lookup caller or capability escape ${token.value}`);
+        if (source?.tokens.length && aliases.size + namespaces.size > 0) {
+          let usage;
+          try { usage = source.originUsage([...aliases, ...namespaces], { moduleBindings: true }); }
+          catch (error) {
+            if (!(error instanceof SourceReadError)) throw error;
+            this.#diagnose("A11", sourceFile, error, [sourceFile, this.scope.registrationModule],
+              `cannot inspect execution capability bindings: ${error.message}`);
+          }
+          if (usage) {
+            for (const reference of source.references) if (reference.kind === "import") usage.accept(source.referenceTokens(reference));
+            for (const token of source.tokens) if (allowed.get(sourceFile)?.has(token.offset)) usage.accept([token]);
+            for (const token of usage.unresolved()) {
+              this.#diagnose("A11", sourceFile, token, routes.get(token.value) ?? [sourceFile, this.scope.registrationModule],
+                `unregistered execution lookup caller or capability escape ${token.value}`);
+            }
           }
         }
         for (const reference of source?.references ?? []) {
@@ -395,13 +421,28 @@ export class StructureChecker {
             this.#diagnose("A11", sourceFile, reference.token, [sourceFile, target.file], "unregistered execution command loader");
           }
         }
-        for (const token of source?.tokens ?? []) {
-          if (token.value !== "executionContract" || sourceFile === file || this.rules.isComposition(sourceFile)
-            || !consumesSelectedBoundary || allowed.get(sourceFile)?.has(token.offset)) continue;
-          this.#diagnose("A11", sourceFile, token, [sourceFile, this.scope.registrationModule], "execution contract consumed outside declared callers");
-        }
+        // Lookup provenance above determines which registration is targeted.
+        // A field name alone cannot distinguish another phase's legitimate
+        // contract consumption in the same command module.
       }
     }
+  }
+
+  #namespaceBindings(binding, seen = new Set()) {
+    if (!(binding instanceof ResolvedSourceNamespace)) return [binding];
+    if (seen.has(binding.key)) return [];
+    seen.add(binding.key);
+    const values = [];
+    for (const name of this.#exportedNames(binding.file)) {
+      const exported = this.#resolveExportBinding(binding.file, name, new Set(), "A11");
+      if (!exported) continue;
+      for (let value of this.#namespaceBindings(exported, seen)) {
+        for (const hop of [...binding.route].reverse()) value = value.through(hop);
+        values.push(value);
+      }
+    }
+    seen.delete(binding.key);
+    return values;
   }
 
   // Named adapters currently support selection forwarding, immutable aliases,
@@ -519,7 +560,7 @@ export class StructureChecker {
   #declaredLookups() {
     const file = this.scope.registrationModule;
     const module = this.#module(file, [file], "A10", true);
-    if (!module) return;
+    if (!module) return new Set();
     // Callers and execution forms can share one lookup and selection. Inspect
     // each lookup once, then account for all composition bindings in one pass.
     const names = new Set(this.scope.contract.executionShapes.flatMap((shape) => shape.callers.map((caller) => caller.lookupName)));
@@ -528,6 +569,7 @@ export class StructureChecker {
     const accepted = new Map();
     for (const name of names) this.#declaredLookup(module, name, origins, accepted, publicNames);
     this.#declaredBindings(module, origins, accepted.values(), "execution lookup", publicNames);
+    return origins;
   }
 
   #declaredLookup(module, name, origins, accepted, publicNames) {
@@ -663,7 +705,7 @@ export class StructureChecker {
     const key = `${file}#${name}`;
     if (this.exports.has(key)) return this.exports.get(key);
     const binding = this.#resolveExportBinding(file, name, seen, rule);
-    if (!binding || binding.header.token.value !== "class") return null;
+    if (!(binding instanceof ResolvedSourceBinding) || binding.header.token.value !== "class") return null;
     const module = this.#module(binding.file, [file, binding.file], rule);
     const entry = module?.classes.find((candidate) => candidate.name === binding.name
       && candidate.token.offset === binding.header.token.offset);
@@ -684,6 +726,7 @@ export class StructureChecker {
 
   #resolveExportBinding(file, name, seen, rule) {
     const key = `${file}#${name}`;
+    if (name === "*") return new ResolvedSourceNamespace(file);
     if (seen.has(key)) return null;
     if (this.bindingExports.has(key)) return this.bindingExports.get(key);
     const root = seen.size === 0;
@@ -701,6 +744,8 @@ export class StructureChecker {
         if (target?.file && binding.local !== "*") {
           const resolved = this.#resolveExportBinding(target.file, binding.local, seen, rule);
           if (resolved) matches.push(resolved);
+        } else if (target?.file && binding.name !== "*") {
+          matches.push(new ResolvedSourceNamespace(target.file));
         } else if (target?.file && binding.name === "*") {
           const resolved = this.#resolveExportBinding(target.file, name, seen, rule);
           if (resolved) matches.push(resolved);

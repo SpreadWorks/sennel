@@ -21,6 +21,7 @@ import { CanonicalFlowFixture, canonicalDraftDocument } from "../../support/infr
 import { removeTmpDir } from "../../support/builders/tmp-dir.js";
 import { workerArtifactJson } from "../../support/infrastructure/worker-artifact.js";
 import { dispatchContainer, fixtureRepository, installGateProviderFake, requestInput, requestPayloadPath } from "../../support/infrastructure/flow-dispatch-scenario.js";
+import { assertCanonicalStepResult } from "../../support/infrastructure/canonical-step-result.js";
 
 function assertArtifactIntegrity(artifact) {
   assert.equal(crypto.createHash("sha256").update(artifact.bytes).digest("hex"), artifact.descriptor.hash);
@@ -324,7 +325,7 @@ it("produces Draft through registered Review/Gate commands and reloads its exact
       ["draft-gate", "draft-gate-carry-forward", "spec", 2],
     ]) {
       const stepResult = canonical.findNode(stepId).result;
-      assert.equal(stepResult.stepResult.kind, expectedKind);
+      assertCanonicalStepResult(stepResult, { stepId, kind: expectedKind, type: "completed" });
       assert.equal(stepResult.draftSettlementReceipt.targetStepId, expectedTarget);
       assert.equal(stepResult.draftSettlementReceipt.binding.stepId, stepId);
       assert.equal(stepResult.draftSettlementReceipt.binding.attemptSequence, attempt);
