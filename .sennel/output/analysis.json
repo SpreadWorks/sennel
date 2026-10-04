@@ -1,5 +1,5 @@
 {
-  "analyzedAt": "2026-10-03T13:25:43.815Z",
+  "analyzedAt": "2026-10-04T04:51:28.093Z",
   "package": {
     "entries": [
       {
@@ -3617,9 +3617,9 @@
       },
       {
         "file": "src/flow/definition.js",
-        "hash": "e99a9305062a588e3b7a2039a60ce9e7",
+        "hash": "c1c3e7718d487668751b5e0af5ef96b2",
         "lines": 6644,
-        "mtime": "2026-10-02T13:06:17.820Z",
+        "mtime": "2026-10-04T04:47:56.868Z",
         "className": "definition",
         "methods": [
           "RetryRecoveryBasis",
@@ -4203,6 +4203,7 @@
           "SpecGateRepairSealedReplay",
           "SpecGateRepairPublicationReplay",
           "SpecGateRepairExecutionStop",
+          "SpecGateRepairExecutionFormatUnavailable",
           "REQUIREMENT_TEST_SEMANTIC_LIMIT",
           "REQUIREMENT_TEST_TOOLING_LIMIT",
           "FINAL_REGRESSION_STEP_DEFINITION",
@@ -4217,22 +4218,24 @@
           "src/flow/registry.js"
         ],
         "id": "2cb27b93",
-        "summary": "Central flow-definition controller for graph construction, typed transitions, lifecycle decisions, recovery planning, execution settlement, routing, and final assembly.",
-        "detail": "Constructs FlowNode-based flow and task graphs, including leaf ordering, phases, prerequisites, branches, active nodes, initial step state, dispatch actions, retry limits, side effects, and lifecycle ownership. Defines validated facts, dispositions, plans, actions, receipts, identities, and immutable transitions for retry recovery, requirement-test lifecycle, source handoff, review and Gate transitions, non-Gate transitions, finalization recovery, nonblocking eligibility, approval routes, and lifecycle actions. Models draft and specification step settlement, execution claims and bindings, persisted settlement receipts, conditional worker handling, review-route expectations, and reconciliation decisions. Enforces allowed transitions, plan inputs, statuses, evidence consistency, route validity, identity freshness, supported operations, retry limits, failure ownership, and resolver-controlled object construction before producing the assembled flow definition.",
+        "summary": "Central flow-definition controller for typed workflow decisions, node catalogs, lifecycle updates, recovery, and step routing.",
+        "detail": "Defines immutable flow and task catalogs for draft, specification, review, triage, repair, gate, finalization, acceptance, reporting, and test-chain stages. Provides queries for leaves, branches, nodes, phases, prerequisites, initial state, and active steps. Validates typed facts and identities, applies phase policies, attempt limits, failure ownership, and source-quality recovery routes, and resolves retry, repair, blocking, approval, nonblocking, recovery, reconciliation, and publication decisions. Converts step results into lifecycle actions, transition plans, connector routes, settlements, receipts, dispatch actions, and persisted execution state.",
         "chapter": "internal_design",
         "role": "controller",
         "enrich": {
-          "processedAt": "2026-10-02T13:33:44.447Z",
+          "processedAt": "2026-10-04T04:53:09.177Z",
           "attempts": 1
         },
+        "app": "senti",
         "keywords": [
+          "workflow orchestration",
           "flow definition",
-          "task graph",
-          "transition resolution",
+          "task routing",
+          "phase policies",
+          "state transitions",
           "recovery planning",
-          "lifecycle decisions",
-          "step settlement",
-          "review routing",
+          "lifecycle actions",
+          "typed facts",
           "execution receipts"
         ]
       },
@@ -4372,9 +4375,9 @@
       },
       {
         "file": "src/flow/engine/composition/spec-gate-repair.js",
-        "hash": "04fad5ee8379818b58a1890dfdfad77d",
-        "lines": 300,
-        "mtime": "2026-10-02T13:06:17.821Z",
+        "hash": "38302d050ffac3be1fd1268739db4168",
+        "lines": 330,
+        "mtime": "2026-10-04T04:47:56.869Z",
         "className": "spec-gate-repair",
         "methods": [
           "preparePublishedSpecGateRepairArguments",
@@ -4400,7 +4403,8 @@
           "../../lib/spec-gate-repair-call-plan.js",
           "../../lib/definition-lifecycle-failure.js",
           "../../services/spec-gate-repair-service.js",
-          "../../services/spec-gate-repair-settlement-writer.js"
+          "../../services/spec-gate-repair-settlement-writer.js",
+          "../../../lib/prompt-batching.js"
         ],
         "exports": [
           "preparePublishedSpecGateRepairArguments",
@@ -4412,22 +4416,21 @@
           "src/flow/engine/composition/spec.js"
         ],
         "id": "3d73a5fe",
-        "summary": "Composes Spec Gate repair worker calls, context, service arguments, and result settlement.",
-        "detail": "Prepares published and new Spec Gate repair requests from canonical state, evidence, bindings, bundles, call plans, and handoff coordination. It validates revisions, selected units, response limits, worker claims, replay consistency, context expansion, and repair proposals before constructing service arguments and settlement handling.",
-        "chapter": "project_structure",
+        "summary": "Composes Spec Gate repair worker execution from validated state, context, handoff, and settlement inputs.",
+        "detail": "Prepares replay or service arguments, reserves worker calls, builds settlement writers, and checks canonical worker claims and artifacts. It rejects stale plans or evidence, changed locations, invalid context expansion, unsupported responses, oversized output, and inconsistent durable responses.",
+        "chapter": "internal_design",
         "role": "controller",
         "enrich": {
-          "processedAt": "2026-10-02T13:33:44.447Z",
+          "processedAt": "2026-10-04T04:53:09.177Z",
           "attempts": 1
         },
         "keywords": [
-          "Spec Gate repair",
-          "worker composition",
-          "service arguments",
-          "context expansion",
-          "worker handoff",
+          "spec-gate-repair",
+          "worker-handoff",
           "settlement",
-          "replay"
+          "context-validation",
+          "stale-evidence",
+          "artifact-claims"
         ]
       },
       {
@@ -9851,7 +9854,8 @@
           "src/flow/lib/spec-gate-repair-progress.js",
           "src/flow/lib/spec-gate-repair-review.js",
           "src/flow/lib/spec-repair-operations.js",
-          "src/flow/lib/spec-gate-repair-selection.js"
+          "src/flow/lib/spec-gate-repair-selection.js",
+          "src/flow/lib/spec-gate-repair-input-unavailable.js"
         ],
         "id": "c4e0eabe",
         "summary": "Normalizes source identities and constructs canonical source findings.",
@@ -10297,9 +10301,9 @@
       },
       {
         "file": "src/flow/lib/gate-prompt-plan.js",
-        "hash": "9756c0a44d12cfe7ecf9607865568fa5",
-        "lines": 435,
-        "mtime": "2026-09-30T16:20:18.457Z",
+        "hash": "44a631f156804481389d2ab1be3ce11b",
+        "lines": 431,
+        "mtime": "2026-10-04T04:47:56.869Z",
         "className": "gate-prompt-plan",
         "methods": [
           "planObservationBatches",
@@ -10319,7 +10323,6 @@
           "requirementReductionElements",
           "renderRequirementReduction",
           "reduceRequirementEvidence",
-          "gatePromptFits",
           "executeGatePlan",
           "digest",
           "observationResponseFootprint",
@@ -10329,6 +10332,7 @@
         "imports": [
           "node:crypto",
           "../../lib/prompt-builder.js",
+          "../../lib/prompt-input-delivery.js",
           "../../lib/prompt-batching.js"
         ],
         "exports": [
@@ -10349,31 +10353,29 @@
           "requirementReductionElements",
           "renderRequirementReduction",
           "reduceRequirementEvidence",
-          "gatePromptFits",
-          "executeGatePlan"
+          "executeGatePlan",
+          "gatePromptFits"
         ],
         "extends": "PromptBatchReducer",
         "usedBy": [
-          "src/flow/lib/run-gate.js",
-          "src/flow/lib/spec-gate-repair-evidence.js",
-          "src/flow/lib/review-text-prompt-plan.js"
+          "src/flow/lib/run-gate.js"
         ],
         "id": "a824bced",
-        "summary": "Plans and executes prompt batches for gate observations, evidence reduction, and guardrail judgments.",
-        "detail": "Calculates prompt footprints and SHA-256 coverage digests, partitions observation ranges within execution limits, and raises typed failures when structures exceed budgets. It defines typed collections, reducers, evidence inputs, judgment plans, request envelopes, exact source-reference coverage checks, and execution paths for initial and reduced gate evidence.",
+        "summary": "Plans and executes batched gate prompts with typed observation, evidence, judgment, and reduction protocols.",
+        "detail": "Computes response footprints and batch limits, creates prompt envelopes and elements, validates exact source coverage, and reduces typed requirement observations. It also provides guardrail judgment inputs and plans plus execution helpers that enforce prompt and response budgets.",
         "chapter": "internal_design",
         "role": "lib",
         "enrich": {
-          "processedAt": "2026-09-30T16:29:29.037Z",
+          "processedAt": "2026-10-04T04:53:09.177Z",
           "attempts": 1
         },
-        "app": "sennel",
         "keywords": [
-          "prompt batching",
-          "gate observations",
-          "evidence reduction",
-          "guardrail judgments",
-          "execution limits"
+          "prompt-batching",
+          "gate-plan",
+          "source-coverage",
+          "guardrail-judgment",
+          "evidence-reduction",
+          "response-budget"
         ]
       },
       {
@@ -12601,9 +12603,9 @@
       },
       {
         "file": "src/flow/lib/regression-file-snapshot.js",
-        "hash": "52ec2affce54d7a3e1c082b099acb1d1",
-        "lines": 240,
-        "mtime": "2026-07-12T10:40:07.456Z",
+        "hash": "541fc0c468cf6c7ba429ee9a49266b8b",
+        "lines": 236,
+        "mtime": "2026-10-04T04:47:56.869Z",
         "className": "regression-file-snapshot",
         "methods": [
           "RegressionFileSnapshot",
@@ -12615,7 +12617,6 @@
           "normalizeFingerprint",
           "resolveSnapshotFile",
           "fingerprintFile",
-          "compareText",
           "compareSnapshots",
           "assertSnapshotCount"
         ],
@@ -12623,7 +12624,8 @@
           "crypto",
           "fs",
           "path",
-          "../../lib/git-helpers.js"
+          "../../lib/git-helpers.js",
+          "./text-order.js"
         ],
         "exports": [
           "RegressionFileSnapshot",
@@ -12636,22 +12638,21 @@
           "src/flow/lib/test-regression.js"
         ],
         "id": "e6ed79d6",
-        "summary": "Validation and serialization layer for regression file snapshots. It ensures changed-file artifacts are safe, normalized, and reproducible.",
-        "detail": "The module enforces a strict schema for snapshot records, accepted statuses, and optional rename metadata, rejecting unknown keys and invalid combinations. Repository-relative paths are normalized to POSIX form and blocked if they are absolute or escape the repository root. File fingerprints are computed with buffered SHA-256 reads, and deleted entries are handled with status-aware null fingerprint rules. Snapshot lists are sorted deterministically, checked for duplicates, capped by a global entry limit, and exposed through JSON helpers and equality checks.",
-        "chapter": "internal_design",
+        "summary": "Provides validated regression file snapshot value objects with repository-relative paths, statuses, and content fingerprints.",
+        "detail": "Normalizes snapshot and changed-file metadata, enforces rename and deletion rules, fingerprints files with SHA-256, compares entries deterministically, and rejects duplicates or excessive lists. Snapshot and list classes support construction, equality, and JSON serialization.",
+        "chapter": "development",
         "role": "model",
         "enrich": {
-          "processedAt": "2026-07-12T19:39:06.051Z",
+          "processedAt": "2026-10-04T04:53:09.177Z",
           "attempts": 1
         },
         "keywords": [
-          "regression snapshot",
-          "file fingerprint",
-          "SHA-256 hash",
-          "changed files",
-          "path normalization",
-          "artifact validation",
-          "serialized metadata"
+          "regression-snapshot",
+          "file-fingerprint",
+          "path-normalization",
+          "rename-status",
+          "sha256",
+          "snapshot-list"
         ]
       },
       {
@@ -12793,9 +12794,9 @@
       },
       {
         "file": "src/flow/lib/repair-state-identity.js",
-        "hash": "2d91428ef0951ec63cc82739eb5e4fc6",
-        "lines": 832,
-        "mtime": "2026-09-08T05:19:00.457Z",
+        "hash": "f4504f35bc9073cc21bc701f76758253",
+        "lines": 829,
+        "mtime": "2026-10-04T04:47:56.869Z",
         "className": "repair-state-identity",
         "methods": [
           "RepairStateError",
@@ -12809,7 +12810,6 @@
           "captureRepairBaseline",
           "deleteRepairBaselineForFlow",
           "buildRepairStateManifest",
-          "compareCanonicalText",
           "requireString",
           "requireHash",
           "canonicalHash",
@@ -12845,7 +12845,8 @@
           "../../lib/flow-workspace.js",
           "../../lib/flow-artifact-contract.js",
           "../../lib/product.js",
-          "./flow-repository-runtime-artifacts.js"
+          "./flow-repository-runtime-artifacts.js",
+          "./text-order.js"
         ],
         "exports": [
           "RepairStateError",
@@ -12878,22 +12879,21 @@
           "src/flow/lib/run-gate.js"
         ],
         "id": "12c0ba47",
-        "summary": "Builds canonical repair-state fingerprints from Git baselines, index state, filesystem contents, and configured path boundaries.",
-        "detail": "The module defines versioned repair identity, immutable Git baselines, canonical entries, fingerprint manifests, and artifact registries. It normalizes repository paths, validates Git object formats and object IDs, and computes deterministic hashes over baseline and entry state. Changed-path collection combines Git status, index metadata, explicit trees, symlinks, regular files, gitlinks, and configured inclusion limits while checking for concurrent input changes. Baselines can be captured, pinned, and removed per flow, enabling repair and finalization operations to verify checkout identity and reproducibility.",
-        "chapter": "internal_design",
+        "summary": "Captures and validates immutable repair baselines and canonical repair-state fingerprints.",
+        "detail": "Normalizes paths, hashes, Git object identifiers, baseline references, changed paths, index and worktree content, symlinks, and gitlinks. It builds versioned manifests and artifact registries while enforcing repository boundaries, configured limits, supported Git state, and race checks during hashing.",
+        "chapter": "development",
         "role": "lib",
         "enrich": {
-          "processedAt": "2026-09-09T05:48:45.879Z",
+          "processedAt": "2026-10-04T04:53:09.177Z",
           "attempts": 1
         },
         "keywords": [
-          "repair state identity",
-          "Git baseline",
-          "fingerprint manifest",
-          "changed paths",
-          "canonical hash",
-          "artifact registry",
-          "filesystem integrity"
+          "repair-baseline",
+          "fingerprint-manifest",
+          "git-state",
+          "artifact-registry",
+          "content-hash",
+          "path-safety"
         ]
       },
       {
@@ -14250,9 +14250,9 @@
       },
       {
         "file": "src/flow/lib/review-text-prompt-plan.js",
-        "hash": "d3d341e0bcc3cfedd4c0ec54d073ceeb",
-        "lines": 152,
-        "mtime": "2026-10-01T06:04:01.724Z",
+        "hash": "d69fbdec7bacb8d8740c21aa33085d28",
+        "lines": 155,
+        "mtime": "2026-10-04T04:47:56.869Z",
         "className": "review-text-prompt-plan",
         "methods": [
           "SpecSectionPromptElement",
@@ -14265,7 +14265,7 @@
           "../../lib/agent-file-reference.js",
           "../../lib/product.js",
           "../../lib/agent-response-protocol.js",
-          "./gate-prompt-plan.js",
+          "../../lib/prompt-input-delivery.js",
           "../../lib/prompt-batching.js"
         ],
         "exports": [
@@ -14276,23 +14276,21 @@
         "extends": "AtomicPromptElement",
         "usedBy": null,
         "id": "4678e8ac",
-        "summary": "Review text prompt planning and file response validation",
-        "detail": "Defines the prompt elements, envelope, and plan used for review text requests, including specification and draft sections, prompt batching, agent runtime files, and project runtime roots. It also provides a file-response policy that parses structured JSON when available, preserves Markdown-compatible responses, requires exactly reviewResponse and evaluationUnavailable fields, enforces one evaluation outcome, and delegates evaluation-unavailable handling to the response protocol.",
+        "summary": "Builds prompt plans for specification and draft text reviews, including file-backed review responses.",
+        "detail": "Defines atomic section prompt elements and an envelope, executes the review prompt plan, and validates the response contract. File review responses may be JSON or Markdown but must produce exactly one review response and one evaluation-unavailable outcome.",
         "chapter": "internal_design",
         "role": "lib",
         "enrich": {
-          "processedAt": "2026-10-01T12:50:38.142Z",
+          "processedAt": "2026-10-04T04:53:09.177Z",
           "attempts": 1
         },
-        "app": "senti",
         "keywords": [
-          "review prompts",
-          "prompt plan",
-          "prompt envelope",
-          "file response",
-          "JSON validation",
-          "Markdown response",
-          "evaluation unavailable"
+          "review-prompt",
+          "spec-section",
+          "draft-section",
+          "file-review",
+          "response-policy",
+          "evaluation-unavailable"
         ]
       },
       {
@@ -14857,9 +14855,9 @@
       },
       {
         "file": "src/flow/lib/run-dispatch.js",
-        "hash": "81d9d69705b071dadae9b2a69a0b9b54",
-        "lines": 3011,
-        "mtime": "2026-10-02T13:06:17.821Z",
+        "hash": "5b461529fb711581ef65b53c90f70845",
+        "lines": 3031,
+        "mtime": "2026-10-04T04:47:56.870Z",
         "className": "run-dispatch",
         "methods": [
           "DispatcherOwnedFlowCommand",
@@ -14921,6 +14919,7 @@
           "./worker-execution-admission.js",
           "../engine/composition/registered-step-execution.js",
           "../engine/composition/spec-gate-repair.js",
+          "./spec-gate-repair-progress.js",
           "./spec-gate-repair-execution.js",
           "../../lib/flow-schema-revision.js",
           "node:fs",
@@ -14980,22 +14979,21 @@
         "extends": "Error",
         "usedBy": null,
         "id": "6c7fd82a",
-        "summary": "Implements the flow dispatch command and its authorization, execution, recovery, and retry boundaries.",
-        "detail": "Coordinates dispatcher-owned commands, worker and Draft execution, Spec Gate repair, approvals, leases, repository fingerprints, receipt persistence, handoff diagnostics, nonblocking decisions, continuations, deferred metrics, and final failure settlement. It guards action identity and state freshness while routing recoverable, stale, blocked, and terminal outcomes.",
+        "summary": "Implements flow dispatch orchestration across approvals, worker handoffs, retries, continuations, and dispatcher-owned commands.",
+        "detail": "Validates selected actions and repository fingerprints, persists approval receipts, acquires dispatch leases, admits worker calls, and runs registered flow commands. It records failures and diagnostics, enforces canonical schemas and attempt identities, handles stale or non-replayable handoffs, and returns blocked, failed, or progressed dispatch boundaries.",
         "chapter": "project_structure",
         "role": "controller",
         "enrich": {
-          "processedAt": "2026-10-02T13:33:44.447Z",
+          "processedAt": "2026-10-04T04:53:09.177Z",
           "attempts": 1
         },
         "keywords": [
-          "flow dispatch",
-          "dispatcher",
-          "worker execution",
-          "approval receipt",
-          "repository fingerprint",
-          "retry",
-          "handoff"
+          "flow-dispatch",
+          "worker-handoff",
+          "approval-receipt",
+          "dispatch-lease",
+          "retry-feedback",
+          "continuation"
         ]
       },
       {
@@ -18205,9 +18203,9 @@
       },
       {
         "file": "src/flow/lib/spec-gate-repair-bundle.js",
-        "hash": "4e2935497bba84943a3a07b03364c2ee",
-        "lines": 205,
-        "mtime": "2026-10-02T13:06:17.822Z",
+        "hash": "79883a668d3685f04af10ccdcca061e2",
+        "lines": 224,
+        "mtime": "2026-10-04T04:47:56.870Z",
         "className": "spec-gate-repair-bundle",
         "methods": [
           "SpecGateRepairBundle",
@@ -18219,7 +18217,8 @@
           "./spec-gate-repair-values.js",
           "./spec-gate-repair-selection.js",
           "./spec-repair-operations.js",
-          "./worker-artifact-input-format.js"
+          "./worker-artifact-input-format.js",
+          "./text-order.js"
         ],
         "exports": [
           "SpecGateRepairBundle"
@@ -18228,31 +18227,32 @@
         "usedBy": [
           "src/flow/lib/spec-gate-repair-call-plan.js",
           "src/flow/lib/spec-gate-repair-context.js",
+          "src/flow/lib/spec-gate-repair-input-unavailable.js",
           "src/flow/lib/worker-artifact-handoff.js"
         ],
         "id": "2eccdf30",
-        "summary": "Defines the validated immutable bundle used to communicate Spec Gate repair selections.",
-        "detail": "Creates and restores repair bundles containing a shared base revision, selected units, canonical source ranges, writable permissions, guardrails, and rationale identities. Its tables reject conflicting identities, foreign entries, duplicate references, permission escalation, and inconsistent source ranges while preserving canonical serialized representations.",
+        "summary": "Defines a canonical Spec Gate repair bundle that binds selected units, source ranges, guardrails, permissions, revisions, and digests.",
+        "detail": "Serializes and restores typed selections with stable identity checks, canonical ordering, and source and index manifests. It rejects foreign, duplicate, conflicting, missing, or unauthorized entries and prevents shared guardrails from granting write permission.",
         "chapter": "internal_design",
         "role": "model",
         "enrich": {
-          "processedAt": "2026-10-02T13:33:44.447Z",
+          "processedAt": "2026-10-04T04:53:09.177Z",
           "attempts": 1
         },
         "keywords": [
-          "repair bundle",
-          "source range",
-          "writable permission",
-          "guardrail",
-          "base revision",
-          "canonical serialization"
+          "repair-bundle",
+          "source-range",
+          "guardrail-permission",
+          "selection-identity",
+          "manifest-digest",
+          "canonical-serialization"
         ]
       },
       {
         "file": "src/flow/lib/spec-gate-repair-call-plan.js",
-        "hash": "fad1692616ca6e42460b25ad4e5743a2",
-        "lines": 133,
-        "mtime": "2026-10-02T13:06:17.822Z",
+        "hash": "a23fea68a78b8ff67485bceff5527b38",
+        "lines": 155,
+        "mtime": "2026-10-04T04:47:56.870Z",
         "className": "spec-gate-repair-call-plan",
         "methods": [
           "specGateRepairCallFootprint",
@@ -18282,37 +18282,40 @@
         ],
         "extends": null,
         "usedBy": [
+          "src/flow/lib/spec-gate-repair-progress-reader.js",
           "src/flow/lib/spec-gate-repair-progress.js",
           "src/flow/lib/worker-artifact-handoff.js"
         ],
         "id": "d5f76026",
-        "summary": "Plans Spec Gate repair calls and validates their execution cost and saved progress.",
-        "detail": "Computes prompt call footprints, response allowances, and response costs, then models saved and current call plans using request and batch identities. It detects unsupported modes, repeated requests, changed input or budget frontiers, and other progress mismatches through typed handoff errors.",
+        "summary": "Models the admitted call plan and response budget for Spec Gate repair worker execution.",
+        "detail": "Calculates prompt footprints and response allowances or costs, validates saved request and batch identities, and restores immutable plans. It detects repeated requests, unsupported context modes, oversized prompts, and progress changes, converting plan mismatches into typed recovery or stale handoff errors.",
         "chapter": "internal_design",
-        "role": "lib",
+        "role": "model",
         "enrich": {
-          "processedAt": "2026-10-02T13:33:44.447Z",
+          "processedAt": "2026-10-04T04:53:09.177Z",
           "attempts": 1
         },
         "keywords": [
-          "call plan",
-          "prompt footprint",
-          "response allowance",
-          "execution budget",
-          "batch identity",
-          "progress mismatch"
+          "call-plan",
+          "prompt-footprint",
+          "response-allowance",
+          "request-identity",
+          "progress-mismatch",
+          "stale-plan"
         ]
       },
       {
         "file": "src/flow/lib/spec-gate-repair-context-expansion.js",
-        "hash": "34456afcf0c87be028d7e5cde9446a57",
-        "lines": 18,
-        "mtime": "2026-10-02T13:06:17.822Z",
+        "hash": "377620e9206e85cc1f563a407e2d1dfa",
+        "lines": 30,
+        "mtime": "2026-10-04T04:47:56.870Z",
         "className": "spec-gate-repair-context-expansion",
         "methods": [
           "SpecGateRepairContextExpansion"
         ],
-        "imports": [],
+        "imports": [
+          "./spec-gate-repair-values.js"
+        ],
         "exports": [
           "SpecGateRepairContextExpansion"
         ],
@@ -18321,26 +18324,27 @@
           "src/flow/lib/spec-gate-repair-progress.js"
         ],
         "id": "11137031",
-        "summary": "Represents additional context requested during Spec Gate repair.",
-        "detail": "Defines a context-expansion value object and rejects expansion requests that do not add progress, preventing repeated or ineffective requests for additional repair evidence.",
+        "summary": "Tracks incremental Spec Gate repair context expansion and rejects requests that add no new coverage.",
+        "detail": "Compares newly requested source ranges with prior ranges using coverage semantics and throws when every addition is already covered. The class provides a focused guard for progress-sensitive context growth.",
         "chapter": "internal_design",
-        "role": "model",
+        "role": "lib",
         "enrich": {
-          "processedAt": "2026-10-02T13:33:44.447Z",
+          "processedAt": "2026-10-04T04:53:09.177Z",
           "attempts": 1
         },
         "keywords": [
-          "context expansion",
-          "repair context",
-          "progress validation",
-          "Spec Gate repair"
+          "context-expansion",
+          "source-range",
+          "coverage-check",
+          "progress-validation",
+          "repair-context"
         ]
       },
       {
         "file": "src/flow/lib/spec-gate-repair-context.js",
-        "hash": "33187ef9721aae019a434862330f3b52",
-        "lines": 360,
-        "mtime": "2026-10-02T13:06:17.822Z",
+        "hash": "e76c8ffeda0c6b5f9330bfed86006688",
+        "lines": 428,
+        "mtime": "2026-10-04T04:47:56.870Z",
         "className": "spec-gate-repair-context",
         "methods": [
           "SpecGateRepairContext",
@@ -18357,7 +18361,8 @@
           "./worker-artifact-handoff-error.js",
           "./worker-artifact-input-format.js",
           "./spec-gate-repair-selection.js",
-          "./spec-gate-repair-bundle.js"
+          "./spec-gate-repair-bundle.js",
+          "./text-order.js"
         ],
         "exports": [
           "SpecGateRepairContext",
@@ -18374,33 +18379,33 @@
           "src/flow/lib/spec-gate-repair-input.js"
         ],
         "id": "46f160bf",
-        "summary": "Builds canonical Spec Gate repair context, prompt envelopes, and location batches.",
-        "detail": "Assembles typed read-only repair evidence into findings, ranges, units, selections, prompt envelopes, and bounded batches. It hashes canonical context, validates finding revisions and range identities, preserves selected permissions, enforces input-size limits, and resolves location responses against the selected finding and allowed ranges.",
+        "summary": "Builds canonical Spec Gate repair context, selections, and prompt batches from typed findings and source ranges.",
+        "detail": "Validates read-only source evidence, groups findings into repair units, tracks canonical ranges and revisions, and derives writable selections from unit membership and permissions. It renders bounded prompt envelopes and location batches, enforces artifact-size limits, and rejects missing, duplicated, foreign, stale, or identity-changing ranges.",
         "chapter": "internal_design",
         "role": "lib",
         "enrich": {
-          "processedAt": "2026-10-02T13:33:44.447Z",
+          "processedAt": "2026-10-04T04:53:09.177Z",
           "attempts": 1
         },
         "keywords": [
-          "repair context",
-          "prompt batching",
-          "repair finding",
-          "canonical range",
-          "location batch",
-          "input limit",
-          "repair selection"
+          "repair-context",
+          "repair-unit",
+          "source-range",
+          "writable-selection",
+          "prompt-batch",
+          "location-resolution"
         ]
       },
       {
         "file": "src/flow/lib/spec-gate-repair-execution-decision.js",
-        "hash": "03098f5db49726d0df0664e1c28d538a",
-        "lines": 46,
-        "mtime": "2026-10-02T13:06:17.822Z",
+        "hash": "7b15f00975f8026313610795b3a72030",
+        "lines": 59,
+        "mtime": "2026-10-04T04:47:56.870Z",
         "className": "spec-gate-repair-execution-decision",
         "methods": [
           "SpecGateRepairExecutionFacts",
           "SpecGateRepairNewWorker",
+          "SpecGateRepairExecutionFormatUnavailable",
           "SpecGateRepairCheckpointResume",
           "SpecGateRepairSealedReplay",
           "SpecGateRepairPublicationReplay",
@@ -18411,6 +18416,7 @@
         "exports": [
           "SpecGateRepairExecutionFacts",
           "SpecGateRepairNewWorker",
+          "SpecGateRepairExecutionFormatUnavailable",
           "SpecGateRepairCheckpointResume",
           "SpecGateRepairSealedReplay",
           "SpecGateRepairPublicationReplay",
@@ -18420,28 +18426,27 @@
         "extends": null,
         "usedBy": null,
         "id": "4bca475d",
-        "summary": "Selects the execution mode for a Spec Gate repair attempt from canonical facts.",
-        "detail": "Validates execution facts and resolves them to one of the defined outcomes: a new worker, checkpoint resume, sealed replay, publication replay, or execution stop. The decision classes provide explicit control over whether repair work starts, resumes, replays, or terminates.",
+        "summary": "Defines decision facts and outcome types for Spec Gate repair execution.",
+        "detail": "Validates canonical execution facts and resolves repair execution outcomes such as publication replay, sealed replay, checkpoint resume, a new worker, unavailable format, and execution stop based on phase and response state.",
         "chapter": "internal_design",
         "role": "model",
         "enrich": {
-          "processedAt": "2026-10-02T13:33:44.447Z",
+          "processedAt": "2026-10-04T04:53:09.177Z",
           "attempts": 1
         },
         "keywords": [
+          "Spec Gate repair",
           "execution decision",
-          "checkpoint resume",
-          "sealed replay",
+          "canonical facts",
           "publication replay",
-          "worker execution",
-          "execution stop"
+          "checkpoint resume"
         ]
       },
       {
         "file": "src/flow/lib/spec-gate-repair-execution.js",
-        "hash": "455f443086dd9e0a828c3b3486edcee4",
-        "lines": 104,
-        "mtime": "2026-10-02T13:06:17.823Z",
+        "hash": "8289acaf0c535718e33535937c4bbde3",
+        "lines": 117,
+        "mtime": "2026-10-04T04:47:56.870Z",
         "className": "spec-gate-repair-execution",
         "methods": [
           "readSpecGateRepairExecutionFacts",
@@ -18466,28 +18471,121 @@
           "src/flow/lib/worker-execution-admission.js"
         ],
         "id": "75d3dcb1",
-        "summary": "Plans Spec Gate repair worker execution from persisted progress and durable response sources.",
-        "detail": "Reads canonical execution facts and selects a worker execution path. It supports publication replay, sealed-response replay, checkpoint resume, and creation of a new handoff request, while requiring a durable response source and converting invalid decisions into recovery-required handoff errors.",
+        "summary": "Coordinates Spec Gate repair execution planning from progress and execution facts.",
+        "detail": "Reads progress-bound input and execution progress, derives a typed execution selection, and plans worker execution for canonical replay, sealed replay, checkpoint resume, or a new handoff request. It raises handoff errors when durable response sources are missing or recovery is required.",
         "chapter": "internal_design",
         "role": "controller",
         "enrich": {
-          "processedAt": "2026-10-02T13:33:44.447Z",
+          "processedAt": "2026-10-04T04:53:09.177Z",
           "attempts": 1
         },
         "keywords": [
-          "worker execution",
-          "execution selection",
-          "checkpoint resume",
-          "sealed response",
-          "publication replay",
-          "handoff coordinator"
+          "repair execution",
+          "worker planning",
+          "progress restoration",
+          "canonical replay",
+          "artifact handoff"
+        ]
+      },
+      {
+        "file": "src/flow/lib/spec-gate-repair-input-descriptor.js",
+        "hash": "a615c00f5828a0bfb91eaf2ac79ed4eb",
+        "lines": 130,
+        "mtime": "2026-10-04T04:47:56.870Z",
+        "className": "spec-gate-repair-input-descriptor",
+        "methods": [
+          "SpecGateRepairInputSnapshotLocator",
+          "SpecGateRepairInputDescriptor",
+          "exactKeys"
+        ],
+        "imports": [
+          "node:path",
+          "node:util",
+          "node:crypto",
+          "../../lib/agent-file-reference.js",
+          "../../lib/regular-file-snapshot.js",
+          "./worker-artifact-input-format.js",
+          "./worker-artifact-handoff-error.js",
+          "./spec-gate-repair-input-unavailable.js",
+          "./spec-gate-repair-progress-reader.js"
+        ],
+        "exports": [
+          "SpecGateRepairInputSnapshotLocator",
+          "SpecGateRepairInputDescriptor",
+          "specGateRepairInputFormatUnavailable",
+          "SPEC_GATE_REPAIR_INPUT_NAME"
+        ],
+        "extends": null,
+        "usedBy": [
+          "src/flow/lib/worker-artifact-handoff.js"
+        ],
+        "id": "549c49ee",
+        "summary": "Validates and materializes Spec Gate repair input delivery descriptors and snapshots.",
+        "detail": "Defines the repair context filename, validates descriptor shapes and project-relative delivery paths, resolves delivery locations, creates agent file references from snapshots, parses JSON content, and detects stale or mismatched delivery data against canonical snapshots.",
+        "chapter": "internal_design",
+        "role": "model",
+        "enrich": {
+          "processedAt": "2026-10-04T04:53:09.177Z",
+          "attempts": 1
+        },
+        "keywords": [
+          "input descriptor",
+          "file snapshot",
+          "delivery reference",
+          "stale detection",
+          "canonical content"
+        ]
+      },
+      {
+        "file": "src/flow/lib/spec-gate-repair-input-unavailable.js",
+        "hash": "87b28d20dcfc36d9276d16b6103020dd",
+        "lines": 137,
+        "mtime": "2026-10-04T04:47:56.870Z",
+        "className": "spec-gate-repair-input-unavailable",
+        "methods": [
+          "SpecGateRepairSelectedInputIdentity",
+          "SpecGateRepairSelectedContentIdentity",
+          "SpecGateRepairInputUnavailable",
+          "exactKeys"
+        ],
+        "imports": [
+          "node:util",
+          "./flow-finding-source.js",
+          "./spec-gate-repair-bundle.js"
+        ],
+        "exports": [
+          "SpecGateRepairSelectedInputIdentity",
+          "SpecGateRepairSelectedContentIdentity",
+          "SpecGateRepairInputUnavailable"
+        ],
+        "extends": null,
+        "usedBy": [
+          "src/flow/lib/spec-gate-repair-input-descriptor.js",
+          "src/flow/lib/spec-gate-repair-worker-facts.js",
+          "src/flow/lib/worker-artifact-handoff.js"
+        ],
+        "id": "19e2bb75",
+        "summary": "Models unavailable Spec Gate repair input and its exact selected content identity.",
+        "detail": "Defines allowed unavailability reasons, binding fields, selected input and content identities, and the unavailable response. It validates bindings, base revisions, selection digests, and finding uniqueness, and ensures a response matches the exact selected request.",
+        "chapter": "internal_design",
+        "role": "model",
+        "enrich": {
+          "processedAt": "2026-10-04T04:53:09.177Z",
+          "attempts": 1
+        },
+        "keywords": [
+          "input unavailable",
+          "content identity",
+          "selection digest",
+          "binding fields",
+          "finding identity"
         ]
       },
       {
         "file": "src/flow/lib/spec-gate-repair-input.js",
-        "hash": "fb0fb02b125070df19644138b14617bf",
-        "lines": 107,
-        "mtime": "2026-09-29T02:11:17.329Z",
+        "hash": "4f427c276de1de91a6639f856af26640",
+        "lines": 111,
+        "mtime": "2026-10-04T04:47:56.870Z",
         "className": "spec-gate-repair-input",
         "methods": [
           "SpecGateRepairRuleSet",
@@ -18517,27 +18615,73 @@
           "src/flow/lib/spec-gate-repair-progress.js"
         ],
         "id": "1150bb98",
-        "summary": "Reads and validates the complete Spec Gate repair input.",
-        "detail": "Loads the specification, phase-filtered guardrails, canonical findings, repair plan, targets, sources, and repair context; verifies source publication, observation, revision, and target authority before producing a typed repair input.",
+        "summary": "Builds canonical Spec Gate repair input from specifications, guardrails, attempts, and source snapshots.",
+        "detail": "Loads the active specification and phase-filtered guardrails, restores typed repair sources, derives canonical findings and target observations, and constructs a Spec Gate repair input. It verifies source publication, observations, target revision, and target authority before returning the typed result.",
         "chapter": "internal_design",
         "role": "lib",
         "enrich": {
-          "processedAt": "2026-09-29T14:15:03.829Z",
+          "processedAt": "2026-10-04T04:53:09.177Z",
           "attempts": 1
         },
         "keywords": [
           "repair input",
           "guardrails",
-          "canonical findings",
-          "target authority",
-          "source validation"
+          "source snapshots",
+          "target selection",
+          "canonical findings"
+        ]
+      },
+      {
+        "file": "src/flow/lib/spec-gate-repair-progress-reader.js",
+        "hash": "a61d0e5de51ba8ea03df33e9c03d347b",
+        "lines": 144,
+        "mtime": "2026-10-04T04:47:56.870Z",
+        "className": "spec-gate-repair-progress-reader",
+        "methods": [
+          "SpecGateRepairProgressReader"
+        ],
+        "imports": [
+          "../../lib/prompt-batching.js",
+          "node:util",
+          "../definition.js",
+          "./spec-gate-repair-call-plan.js",
+          "./spec-gate-repair-selection.js",
+          "./worker-artifact-handoff-error.js",
+          "./spec-gate-repair-values.js",
+          "./worker-artifact-input-format.js"
+        ],
+        "exports": [
+          "SpecGateRepairProgressReader",
+          "SPEC_GATE_REPAIR_PROGRESS_VERSION",
+          "REPAIR_BUDGET_LIMIT"
+        ],
+        "extends": null,
+        "usedBy": [
+          "src/flow/lib/spec-gate-repair-input-descriptor.js",
+          "src/flow/lib/spec-gate-repair-progress.js"
+        ],
+        "id": "41f7c8f6",
+        "summary": "Restores and validates durable Spec Gate repair progress and execution budgets.",
+        "detail": "Defines the progress version and repair budget limits, parses saved artifacts, and validates immutable input descriptors, canonical receipts, execution locators, limits, call plans, response allowances, consumed costs, and checkpoint contracts before returning progress.",
+        "chapter": "internal_design",
+        "role": "model",
+        "enrich": {
+          "processedAt": "2026-10-04T04:53:09.177Z",
+          "attempts": 1
+        },
+        "keywords": [
+          "progress reader",
+          "execution budget",
+          "checkpoint contract",
+          "call plan",
+          "durable artifact"
         ]
       },
       {
         "file": "src/flow/lib/spec-gate-repair-progress.js",
-        "hash": "b8b47ebb6459acb794f4001f47f1203e",
-        "lines": 402,
-        "mtime": "2026-10-02T13:06:17.823Z",
+        "hash": "2817559835af0d0c7903bf05b0d45910",
+        "lines": 293,
+        "mtime": "2026-10-04T04:47:56.871Z",
         "className": "spec-gate-repair-progress",
         "methods": [
           "readSpecGateRepairExecutionProgress",
@@ -18551,42 +18695,40 @@
           "./flow-finding-source.js",
           "./spec-gate-repair-context-expansion.js",
           "../../lib/prompt-batching.js",
-          "node:util",
-          "../definition.js",
           "./spec-gate-repair-call-plan.js",
-          "./spec-gate-repair-selection.js",
-          "./worker-artifact-handoff-error.js"
+          "./worker-artifact-handoff-error.js",
+          "./spec-gate-repair-progress-reader.js"
         ],
         "exports": [
           "readSpecGateRepairExecutionProgress",
           "latestRepairBudget",
           "readProgressBoundSpecGateRepairInput",
           "SpecGateRepairProgressLedger",
+          "SPEC_GATE_REPAIR_PROGRESS_VERSION",
           "SPEC_GATE_REPAIR_REQUEST_LIMIT"
         ],
         "extends": null,
         "usedBy": [
+          "src/flow/lib/run-dispatch.js",
           "src/flow/lib/spec-gate-repair-execution.js",
           "src/flow/lib/worker-artifact-handoff.js",
           "src/lib/presets.js"
         ],
         "id": "c09cc559",
-        "summary": "Reads and records durable Spec Gate repair progress, budgets, batches, and publication receipts.",
-        "detail": "Restores progress artifacts and verifies their exact canonical contracts against the active Attempt, revision, execution locator, limits, call plan, consumed costs, response allowance, and immutable checkpoints. It also reads progress-bound input, tracks completed batches, validates publication and Step receipts, and models completion publication state.",
+        "summary": "Reads Spec Gate repair progress, budgets, publications, and completed batch records.",
+        "detail": "Provides execution progress and latest budget lookup, enforces request limits, restores completed publications with exact Step receipts, binds progress to repair input and evidence, and maintains a ledger that validates publication, batch completion, finding identities, and canonical execution claims.",
         "chapter": "internal_design",
         "role": "lib",
         "enrich": {
-          "processedAt": "2026-10-02T13:33:44.447Z",
+          "processedAt": "2026-10-04T04:53:09.177Z",
           "attempts": 1
         },
         "keywords": [
           "repair progress",
-          "progress ledger",
-          "execution budget",
-          "checkpoint",
-          "completed batches",
+          "budget ledger",
           "publication receipt",
-          "Attempt"
+          "completed batches",
+          "execution claim"
         ]
       },
       {
@@ -18635,9 +18777,9 @@
       },
       {
         "file": "src/flow/lib/spec-gate-repair-selection.js",
-        "hash": "354fdcec77f3ff848925fe9bc0598a50",
-        "lines": 79,
-        "mtime": "2026-10-02T13:06:17.823Z",
+        "hash": "c4a2b0e34db6efc3e9ecfd23c26a4b63",
+        "lines": 102,
+        "mtime": "2026-10-04T04:47:56.871Z",
         "className": "spec-gate-repair-selection",
         "methods": [
           "specGateRepairValueDigest",
@@ -18646,11 +18788,13 @@
           "SpecGateRepairRange",
           "SpecGateRepairFinding",
           "SpecGateRepairUnit",
-          "SpecGateRepairSelection"
+          "SpecGateRepairSelection",
+          "SpecGateRepairIndexManifest"
         ],
         "imports": [
           "node:crypto",
-          "./flow-finding-source.js"
+          "./flow-finding-source.js",
+          "./text-order.js"
         ],
         "exports": [
           "specGateRepairValueDigest",
@@ -18659,39 +18803,40 @@
           "SpecGateRepairRange",
           "SpecGateRepairFinding",
           "SpecGateRepairUnit",
-          "SpecGateRepairSelection"
+          "SpecGateRepairSelection",
+          "SpecGateRepairIndexManifest",
+          "SPEC_GATE_REPAIR_INDEX_PAGE_SIZE"
         ],
         "extends": null,
         "usedBy": [
           "src/flow/lib/spec-gate-repair-bundle.js",
           "src/flow/lib/spec-gate-repair-call-plan.js",
           "src/flow/lib/spec-gate-repair-context.js",
-          "src/flow/lib/spec-gate-repair-progress.js"
+          "src/flow/lib/spec-gate-repair-progress-reader.js",
+          "src/flow/lib/worker-artifact-handoff.js"
         ],
         "id": "054bd950",
-        "summary": "Provides typed value objects for Spec Gate repair findings, ranges, units, and selections.",
-        "detail": "Defines digest and freezing helpers plus serializable classes for repair ranges, findings, units, and selections. These objects normalize finding identities, retain requirements and permissions, and represent the base revision with selected canonical ranges for downstream repair planning.",
+        "summary": "Defines immutable value objects for Spec Gate repair selections and index manifests.",
+        "detail": "Provides stable value digests, frozen repair values, finding identities, ranges, findings, units, selections, and paged index manifests. The models serialize canonical repair structure and validate required finding and rule information.",
         "chapter": "internal_design",
         "role": "model",
         "enrich": {
-          "processedAt": "2026-10-02T13:33:44.447Z",
+          "processedAt": "2026-10-04T04:53:09.177Z",
           "attempts": 1
         },
         "keywords": [
-          "repair finding",
-          "repair range",
-          "repair unit",
           "repair selection",
-          "value object",
-          "digest",
-          "base revision"
+          "finding range",
+          "value digest",
+          "index manifest",
+          "immutable values"
         ]
       },
       {
         "file": "src/flow/lib/spec-gate-repair-sources.js",
-        "hash": "3e58e3985a3281a4d39db72aa3efcb91",
-        "lines": 51,
-        "mtime": "2026-09-29T02:11:17.329Z",
+        "hash": "6776df07d97a0dabc0e1575f915398e9",
+        "lines": 77,
+        "mtime": "2026-10-04T04:47:56.871Z",
         "className": "spec-gate-repair-sources",
         "methods": [
           "readSpecGateRepairSources"
@@ -18702,7 +18847,8 @@
           "node:crypto",
           "../../lib/git-helpers.js",
           "../../lib/regular-file-snapshot.js",
-          "./spec-gate-repair-values.js"
+          "./spec-gate-repair-values.js",
+          "./text-order.js"
         ],
         "exports": [
           "readSpecGateRepairSources"
@@ -18712,70 +18858,78 @@
           "src/flow/lib/spec-gate-repair-input.js"
         ],
         "id": "594bbcfc",
-        "summary": "Collects trusted source files for Spec Gate repair.",
-        "detail": "Reads AGENTS.md and referenced files under the execution root, captures regular-file snapshots, hashes the specification and source contents, and rejects absolute paths or paths that escape the execution root.",
+        "summary": "Collects canonical Spec Gate repair sources and applicable project rules.",
+        "detail": "Resolves source paths within the execution root, rejects path escapes and missing files, captures project-level and directory-level AGENTS.md rules, and records source snapshots using tracked Git paths and source metadata.",
         "chapter": "internal_design",
         "role": "lib",
         "enrich": {
-          "processedAt": "2026-09-29T14:15:03.829Z",
+          "processedAt": "2026-10-04T04:53:09.177Z",
           "attempts": 1
         },
         "keywords": [
           "repair sources",
+          "path confinement",
           "AGENTS.md",
-          "file snapshots",
-          "execution root",
-          "path containment"
+          "Git tracking",
+          "source snapshots"
         ]
       },
       {
         "file": "src/flow/lib/spec-gate-repair-values.js",
-        "hash": "d22810ae2d936e59bde0dcc46b02fa44",
-        "lines": 39,
-        "mtime": "2026-09-29T02:11:17.329Z",
+        "hash": "9e62f72215a201ce7828d6d671eb01e9",
+        "lines": 167,
+        "mtime": "2026-10-04T04:47:56.871Z",
         "className": "spec-gate-repair-values",
         "methods": [
           "SpecGateRepairSource",
+          "SpecGateRepairSourceSnapshots",
+          "SpecGateRepairSourceRange",
           "SpecGateRepairInput"
         ],
         "imports": [
           "node:crypto",
-          "../../lib/spec-json-validator.js"
+          "./worker-artifact-handoff-error.js",
+          "../../lib/spec-json-validator.js",
+          "./text-order.js"
         ],
         "exports": [
           "SpecGateRepairSource",
+          "SpecGateRepairSourceSnapshots",
+          "SpecGateRepairSourceRange",
           "SpecGateRepairInput"
         ],
         "extends": null,
         "usedBy": [
+          "src/flow/lib/spec-gate-repair-bundle.js",
+          "src/flow/lib/spec-gate-repair-context-expansion.js",
           "src/flow/lib/spec-gate-repair-context.js",
           "src/flow/lib/spec-gate-repair-input.js",
+          "src/flow/lib/spec-gate-repair-progress-reader.js",
           "src/flow/lib/spec-gate-repair-sources.js",
-          "src/flow/lib/spec-gate-repair-worker-facts.js",
-          "src/flow/lib/spec-gate-repair-bundle.js"
+          "src/flow/lib/spec-gate-repair-worker-facts.js"
         ],
         "id": "8b2ba443",
-        "summary": "Defines typed Spec Gate repair source and input values.",
-        "detail": "Requires repair sources to carry identity, origin, revision, and text, computes a digest for their serialized representation, and provides a typed repair input validated with the specification JSON validator.",
+        "summary": "Defines typed Spec Gate repair sources, snapshots, ranges, and input values.",
+        "detail": "Validates source identity, origin, revision, content, and applicability scopes; models unique typed snapshots and source ranges; detects conflicting digests or byte ranges; and represents repair input while reporting context-unavailable handoff failures.",
         "chapter": "internal_design",
-        "role": "lib",
+        "role": "model",
         "enrich": {
-          "processedAt": "2026-09-29T14:15:03.829Z",
+          "processedAt": "2026-10-04T04:53:09.177Z",
           "attempts": 1
         },
         "keywords": [
           "repair source",
-          "repair input",
-          "typed values",
-          "source digest",
-          "JSON validation"
+          "source snapshot",
+          "byte range",
+          "context unavailable",
+          "typed input"
         ]
       },
       {
         "file": "src/flow/lib/spec-gate-repair-worker-facts.js",
-        "hash": "91ed4603cb52a3b2adbfa28b93aaa2ab",
-        "lines": 74,
-        "mtime": "2026-10-02T13:06:17.823Z",
+        "hash": "c497c004d30fde85d997e742b49f6a19",
+        "lines": 78,
+        "mtime": "2026-10-04T04:47:56.871Z",
         "className": "spec-gate-repair-worker-facts",
         "methods": [
           "SpecGateRepairContinuationFacts",
@@ -18786,6 +18940,7 @@
         "imports": [
           "./spec-gate-repair-values.js",
           "node:crypto",
+          "./spec-gate-repair-input-unavailable.js",
           "../engine/step-result.js"
         ],
         "exports": [
@@ -18800,21 +18955,20 @@
           "src/flow/lib/worker-artifact-handoff.js"
         ],
         "id": "75057f50",
-        "summary": "Defines canonical worker facts, continuation facts, candidates, and published repair selections.",
-        "detail": "Validates the typed input and proposal required by a Spec Gate repair worker, preserves canonical continuation progress, and checks that candidate specifications match their audit revision. The selection object binds a typed Result to its publication for later execution and settlement decisions.",
+        "summary": "Defines canonical facts and candidates used by the Spec Gate repair worker.",
+        "detail": "Models continuation facts, worker facts, repair candidates, and final selections. It requires canonical input and proposals, verifies candidates against the specification audit revision, and requires typed result and publication data for worker selection.",
         "chapter": "internal_design",
         "role": "model",
         "enrich": {
-          "processedAt": "2026-10-02T13:33:44.447Z",
+          "processedAt": "2026-10-04T04:53:09.177Z",
           "attempts": 1
         },
         "keywords": [
           "worker facts",
-          "continuation facts",
           "repair candidate",
-          "typed Result",
-          "publication",
-          "audit revision"
+          "audit revision",
+          "continuation facts",
+          "publication selection"
         ]
       },
       {
@@ -21423,6 +21577,44 @@
         ]
       },
       {
+        "file": "src/flow/lib/text-order.js",
+        "hash": "12c86b587bf039b5489c9f9a33dc3952",
+        "lines": 6,
+        "mtime": "2026-10-04T04:47:56.871Z",
+        "className": "text-order",
+        "methods": [
+          "compareText"
+        ],
+        "imports": [],
+        "exports": [
+          "compareText"
+        ],
+        "extends": null,
+        "usedBy": [
+          "src/flow/lib/regression-file-snapshot.js",
+          "src/flow/lib/repair-state-identity.js",
+          "src/flow/lib/spec-gate-repair-bundle.js",
+          "src/flow/lib/spec-gate-repair-context.js",
+          "src/flow/lib/spec-gate-repair-selection.js",
+          "src/flow/lib/spec-gate-repair-sources.js",
+          "src/flow/lib/spec-gate-repair-values.js"
+        ],
+        "id": "a256ead3",
+        "summary": "Provides a deterministic lexical comparator for text values.",
+        "detail": "Returns -1 when the left text value sorts before the right value and returns 1 otherwise, enabling simple stable ordering of text.",
+        "chapter": "internal_design",
+        "role": "lib",
+        "enrich": {
+          "processedAt": "2026-10-04T04:53:09.177Z",
+          "attempts": 1
+        },
+        "keywords": [
+          "text comparison",
+          "lexical ordering",
+          "sort comparator"
+        ]
+      },
+      {
         "file": "src/flow/lib/upgrade-evidence-paths.js",
         "hash": "61300e9e4356e63d70bafedcff644782",
         "lines": 2,
@@ -21659,7 +21851,11 @@
           "src/flow/lib/worker-artifact-handoff.js",
           "src/flow/lib/worker-execution-admission.js",
           "src/flow/lib/spec-gate-repair-context.js",
-          "src/flow/lib/spec-gate-repair-call-plan.js"
+          "src/flow/lib/spec-gate-repair-call-plan.js",
+          "src/flow/lib/spec-gate-repair-input-descriptor.js",
+          "src/flow/lib/spec-gate-repair-progress-reader.js",
+          "src/flow/lib/spec-gate-repair-values.js",
+          "src/flow/lib/worker-artifact-input-format.js"
         ],
         "id": "303425c4",
         "summary": "Defines errors for invalid, stale, or conflicting worker artifact handoffs.",
@@ -21680,9 +21876,9 @@
       },
       {
         "file": "src/flow/lib/worker-artifact-handoff.js",
-        "hash": "6582f703e8159a16b7fa124c0fea9134",
-        "lines": 10666,
-        "mtime": "2026-10-03T04:56:40.451Z",
+        "hash": "319c23264535434ff800e6c21ff05285",
+        "lines": 10825,
+        "mtime": "2026-10-04T04:47:56.873Z",
         "className": "worker-artifact-handoff",
         "methods": [
           "RequirementTestStructuralHandoffResult",
@@ -21751,6 +21947,8 @@
           "normalizedRelativePath",
           "isWithin",
           "ensureRealDirectory",
+          "readSpecGateRepairUnavailablePayload",
+          "workerExecutionHandoffDirectory",
           "assertRepairRecurrenceResolutions",
           "rethrowRepairContractViolation",
           "assertSourceEffectShape",
@@ -21899,6 +22097,9 @@
           "node:path",
           "../steps/draft/draft-gate-repair-selection.js",
           "../../lib/atomic-file.js",
+          "./spec-gate-repair-input-descriptor.js",
+          "./spec-gate-repair-input-unavailable.js",
+          "./spec-gate-repair-selection.js",
           "../../lib/flow-handoff-authority-lease.js",
           "../../lib/product.js",
           "../../lib/spec-json.js",
@@ -21921,10 +22122,12 @@
           "./spec-worker-completion-facts.js",
           "./spec-review-worker-facts.js",
           "./spec-gate-repair-worker-facts.js",
+          "./spec-gate-repair-input-unavailable.js",
           "./spec-gate-repair-progress.js",
           "./spec-gate-repair-bundle.js",
           "./spec-gate-repair-call-plan.js",
           "../../lib/prompt-batching.js",
+          "../../lib/prompt-input-delivery.js",
           "./flow-findings.js",
           "./task-step-identity.js",
           "./step-tree.js",
@@ -22043,63 +22246,68 @@
           "src/upgrade.js"
         ],
         "id": "58154956",
-        "summary": "Coordinates secure worker artifact handoff, publication, recovery, rollback, cleanup, and replay across Flow execution steps.",
-        "detail": "Implements typed handoff policies, canonical input snapshots, source-effect reports, repository authority snapshots, mutation manifests, rollback checkpoints, retry handling, request assembly, payload validation, and generated acceptance normalization. It coordinates source and artifact workers for draft, specification, test, gate-repair, implementation, and test-review workflows while enforcing bounded payloads, immutable bindings, repository ownership, and canonical publications. The module validates stored handoff paths, versions, identities, step policies, payload contracts, source authority bindings, manifests, and publications; stages and seals worker outputs; records receipts and journals; reconciles committed or replayed results; quarantines failures; performs guarded cleanup; and supports source rollback and recovery.",
+        "summary": "Implements secure, versioned worker artifact handoff, publication, recovery, and cleanup for Flow workers.",
+        "detail": "Defines handoff policies, guarded runtime identities, typed payload and input contracts, canonical input snapshots and paths, repository authority snapshots, mutation baselines, source-effect reports, rollback checkpoints, retry instructions, repair bindings, and validation errors. Stages, materializes, seals, and validates worker submissions; verifies manifests and digests; records publication journals and receipts; enforces repository and path boundaries; detects unauthorized, stale, or uncertain source execution and source changes; supports quarantine, rollback, canonical request restoration, and recovery; and coordinates specialized draft, specification, test, gate-repair, triage, and implementation-repair handoffs while safely cleaning completed and transient handoff directories.",
         "chapter": "internal_design",
         "role": "lib",
         "enrich": {
-          "processedAt": "2026-10-03T05:01:26.686Z",
+          "processedAt": "2026-10-04T04:53:09.177Z",
           "attempts": 1
         },
-        "app": "flow",
         "keywords": [
           "worker artifact handoff",
           "artifact publication",
+          "payload validation",
+          "canonical input snapshot",
           "source mutation manifest",
           "repository authority snapshot",
-          "payload validation",
-          "rollback checkpoint",
-          "reconciliation",
-          "quarantine",
-          "Flow workers"
+          "rollback recovery",
+          "quarantine cleanup"
         ]
       },
       {
         "file": "src/flow/lib/worker-artifact-input-format.js",
-        "hash": "a351522521cbd2ff9c817884ace9c27c",
-        "lines": 13,
-        "mtime": "2026-10-01T06:04:01.727Z",
+        "hash": "038a8f61a3f366c7c4a28ba2127d9c31",
+        "lines": 20,
+        "mtime": "2026-10-04T04:47:56.873Z",
         "className": "worker-artifact-input-format",
         "methods": [
+          "specGateRepairInputFormatUnavailable",
           "workerArtifactStableStringify"
         ],
-        "imports": [],
+        "imports": [
+          "./worker-artifact-handoff-error.js"
+        ],
         "exports": [
+          "specGateRepairInputFormatUnavailable",
           "workerArtifactStableStringify",
           "MAX_WORKER_ARTIFACT_INPUT_BYTES"
         ],
         "extends": null,
         "usedBy": [
-          "src/flow/lib/spec-gate-repair-context.js",
-          "src/flow/lib/worker-artifact-handoff.js",
           "src/flow/lib/spec-gate-repair-bundle.js",
-          "src/flow/lib/spec-gate-repair-call-plan.js"
+          "src/flow/lib/spec-gate-repair-call-plan.js",
+          "src/flow/lib/spec-gate-repair-context.js",
+          "src/flow/lib/spec-gate-repair-input-descriptor.js",
+          "src/flow/lib/spec-gate-repair-progress-reader.js",
+          "src/flow/lib/worker-artifact-handoff.js"
         ],
         "id": "02297d2c",
-        "summary": "Defines the worker artifact input size limit and deterministic object serialization helper.",
-        "detail": "The module exports a 2 MiB maximum input size constant and a stable stringifier. Objects are serialized with lexicographically sorted keys and recursively serialized values, while non-object values use standard JSON serialization.",
+        "summary": "Provides deterministic formatting and size-limit handling for worker artifact inputs.",
+        "detail": "Defines a two-megabyte maximum input size, creates a typed recovery-required error when the versioned Spec Gate repair input descriptor is unavailable, and serializes values deterministically by recursively sorting object keys before JSON encoding.",
         "chapter": "internal_design",
         "role": "lib",
         "enrich": {
-          "processedAt": "2026-10-01T12:50:38.142Z",
+          "processedAt": "2026-10-04T04:53:09.177Z",
           "attempts": 1
         },
         "keywords": [
-          "artifact input",
-          "size limit",
+          "worker artifacts",
+          "input format",
           "stable stringify",
           "deterministic serialization",
-          "JSON"
+          "Spec Gate repair",
+          "input size limit"
         ]
       },
       {
@@ -22208,9 +22416,9 @@
       },
       {
         "file": "src/flow/lib/worker-execution-admission.js",
-        "hash": "528c2ac52d176792358be28a1d4dd615",
-        "lines": 190,
-        "mtime": "2026-09-29T09:32:03.540Z",
+        "hash": "58520debf003d865e387da581366f074",
+        "lines": 196,
+        "mtime": "2026-10-04T04:47:56.873Z",
         "className": "worker-execution-admission",
         "methods": [
           "selectWorkerExecutionAdmission",
@@ -22248,20 +22456,22 @@
           "src/flow/lib/run-review.js"
         ],
         "id": "c26b78ee",
-        "summary": "Controls admission to worker step execution.",
-        "detail": "Selects execution from canonical flow state, resolves draft correction and recovery directives, projects blocked or executable actions, verifies selection consistency, and exposes the worker execution contract.",
+        "summary": "Admits worker execution only when the selected workflow action is valid and current.",
+        "detail": "Builds an admission selection from flow context and the selected step, projects blocked, question, or executable directives, validates that the selection has not changed, and delegates execution to the selected worker command. It also handles conditional Draft worker states and persisted Draft refinement decisions through the step execution contract.",
         "chapter": "internal_design",
-        "role": "middleware",
+        "role": "lib",
         "enrich": {
-          "processedAt": "2026-09-29T14:15:03.829Z",
+          "processedAt": "2026-10-04T04:53:09.177Z",
           "attempts": 1
         },
         "keywords": [
           "worker admission",
-          "execution selection",
-          "draft recovery",
+          "step execution",
           "action directives",
-          "step contract"
+          "Draft worker",
+          "selection validation",
+          "flow state",
+          "execution contract"
         ]
       },
       {
@@ -23837,9 +24047,9 @@
       },
       {
         "file": "src/flow/steps/spec/spec-gate-repair.js",
-        "hash": "52e2ab6b42dacaf851c12d716908e3fc",
-        "lines": 103,
-        "mtime": "2026-09-29T02:11:17.334Z",
+        "hash": "ccb103ed1c9582268d9b28091022fa98",
+        "lines": 104,
+        "mtime": "2026-10-04T04:47:56.873Z",
         "className": "spec-gate-repair",
         "methods": [
           "selectSpecGateRepair",
@@ -23864,20 +24074,22 @@
           "src/flow/engine/composition/spec.js"
         ],
         "id": "fe2aac94",
-        "summary": "Implements the Spec Gate repair step and repair selection.",
-        "detail": "The module selects typed gate-repair candidates, applies repair operations, detects no accepted progress, computes observation convergence, and persists the resulting Step outcome through SpecGateRepairService.",
+        "summary": "Implements the Spec Gate repair workflow step and persists its result.",
+        "detail": "Selects a repair outcome using repair authority, repair operations, worker facts, candidate data, review facts, and gate-observation convergence. The step delegates persistence to the Spec Gate repair service and returns the persisted result; it also represents the no-progress case when no accepted repair change is produced.",
         "chapter": "internal_design",
         "role": "controller",
         "enrich": {
-          "processedAt": "2026-09-29T14:15:03.829Z",
+          "processedAt": "2026-10-04T04:53:09.177Z",
           "attempts": 1
         },
         "keywords": [
-          "spec gate",
-          "repair step",
+          "Spec Gate repair",
           "repair operations",
+          "worker facts",
+          "repair candidate",
+          "review facts",
           "observation convergence",
-          "candidate selection"
+          "workflow step"
         ]
       },
       {
@@ -29097,7 +29309,8 @@
           "src/lib/agent.js",
           "src/lib/config.js",
           "src/lib/guardrail.js",
-          "src/lib/spec-json-validator.js"
+          "src/lib/spec-json-validator.js",
+          "src/lib/prompt-input-delivery.js"
         ],
         "id": "92459e32",
         "summary": "Provides bounded prompt batching with partitioning, coverage validation, execution budgets, and response reduction.",
@@ -29147,6 +29360,43 @@
           "sections",
           "AI",
           "guardrail prompt"
+        ]
+      },
+      {
+        "file": "src/lib/prompt-input-delivery.js",
+        "hash": "5a15b0575b64aa20dc552cbe65b069cc",
+        "lines": 31,
+        "mtime": "2026-10-04T04:47:56.873Z",
+        "className": "prompt-input-delivery",
+        "methods": [
+          "gatePromptFits",
+          "PromptInputDeliveryDecision"
+        ],
+        "imports": [
+          "./prompt-batching.js"
+        ],
+        "exports": [
+          "gatePromptFits",
+          "PromptInputDeliveryDecision"
+        ],
+        "extends": null,
+        "usedBy": null,
+        "id": "7b0e9f81",
+        "summary": "Decides whether prompt input can be delivered within the configured request limit.",
+        "detail": "Measures a prompt request through its logical footprint and checks it against a PromptRequestLimit. When the complete prompt input reference is too large, it raises a fixed-context-size failure with associated context; otherwise it creates a delivery decision containing the selected mode and the corresponding inline request when inline delivery is chosen.",
+        "chapter": "internal_design",
+        "role": "lib",
+        "enrich": {
+          "processedAt": "2026-10-04T04:53:09.177Z",
+          "attempts": 1
+        },
+        "keywords": [
+          "prompt delivery",
+          "request limits",
+          "logical footprint",
+          "inline input",
+          "context size",
+          "delivery decision"
         ]
       },
       {
@@ -31196,10 +31446,10 @@
       }
     ],
     "summary": {
-      "total": 560,
-      "totalMethods": 5351
+      "total": 565,
+      "totalMethods": 5366
     },
     "dataSourceHash": "5ed9d88bcfcf9f1a97396b9d44f6f0c0"
   },
-  "enrichedAt": "2026-10-03T13:25:59.665Z"
+  "enrichedAt": "2026-10-04T04:53:09.177Z"
 }
