@@ -6639,5 +6639,5 @@ export function resolveTaskReviewReconciliation(facts) {
 
 export { resolveSpecGateRepairExecution, SpecGateRepairExecutionFacts,
   SpecGateRepairNewWorker, SpecGateRepairCheckpointResume, SpecGateRepairSealedReplay,
-  SpecGateRepairPublicationReplay, SpecGateRepairExecutionStop,
+  SpecGateRepairPublicationReplay, SpecGateRepairExecutionStop, SpecGateRepairExecutionFormatUnavailable,
 } from "./lib/spec-gate-repair-execution-decision.js";

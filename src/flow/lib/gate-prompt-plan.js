@@ -1,5 +1,7 @@
 import { createHash } from "node:crypto";
 import { PromptBuilder } from "../../lib/prompt-builder.js";
+import { gatePromptFits } from "../../lib/prompt-input-delivery.js";
+export { gatePromptFits } from "../../lib/prompt-input-delivery.js";
 import {
   RangedTextPromptElement,
   PromptBatchCompletion,
@@ -9,7 +11,6 @@ import {
   PromptBatchPlan,
   PromptBatchExecutor,
   PromptBatchReducer,
-  PromptLogicalFootprint,
   PromptBatchingError,
   PromptExecutionLimit,
   PromptResponseTooLargeFailure,
@@ -419,11 +420,6 @@ export async function reduceRequirementEvidence({ evidence, requirement, limit, 
       return buildFinalRequest(renderRequirementReduction(elements, coverageDigest));
     },
   });
-}
-
-export function gatePromptFits(request, limit = new PromptRequestLimit(), projectInvocation = null) {
-  return PromptLogicalFootprint.measure(request).fits(limit)
-    && (!projectInvocation || projectInvocation(request).fits(limit.maxCharacters));
 }
 
 export async function executeGatePlan({ plan, callAgent, parseResponse, projectInvocation, protocolPolicy, executionBudget, protocolRetryLimit, providerAttemptLimit }) {

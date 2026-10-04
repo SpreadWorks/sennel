@@ -4,6 +4,9 @@ import path from "node:path";
 import { createHash } from "node:crypto";
 import { test } from "node:test";
 import { Agent } from "../../../src/lib/agent.js";
+import { PromptLogicalFootprint } from "../../../src/lib/prompt-batching.js";
+import { workerArtifactStableStringify } from "../../../src/flow/lib/worker-artifact-input-format.js";
+import { SpecGateRepairSourceSnapshots } from "../../../src/flow/lib/spec-gate-repair-values.js";
 import { ProviderRegistry } from "../../../src/lib/provider.js";
 import { Logger } from "../../../src/lib/log.js";
 import { FlowManager } from "../../../src/lib/flow-manager.js";
@@ -21,7 +24,7 @@ import { removeTmpDir } from "../../support/builders/tmp-dir.js";
 
 const hash = (value) => createHash("sha256").update(value).digest("hex");
 
-test("repairs seven findings in six units with shared complete ASCII evidence within the durable aggregate budget", async () => {
+test("repairs seven findings in six units with durable ASCII evidence outside the initial selected input", async () => {
   const specRecord = validWorkerHandoffSpec();
   specRecord.requirements = Array.from({ length: 6 }, (_, index) => ({
     ...specRecord.requirements[0], id: `R${index + 1}`, task_ids: [`T${index + 1}`],
@@ -75,28 +78,35 @@ test("repairs seven findings in six units with shared complete ASCII evidence wi
         const { SpecGateRepairBundle } = await import("../../../src/flow/lib/spec-gate-repair-bundle.js");
         const requestPath = options.executionEnvironment.SENNEL_FLOW_HANDOFF_REQUEST;
         const request = JSON.parse(fs.readFileSync(requestPath, "utf8"));
-        context = requestInput(request, "spec-gate-repair-context.json").document;
+        const input = requestInput(request, "spec-gate-repair-context.json");
+        context = input.document;
         const bundle = SpecGateRepairBundle.fromJSON(context.bundle);
         const selections = bundle.selections();
         assert.equal(context.mode, "repair");
         assert.equal(context.batchCount, 1);
         assert.equal(selections.length, 6);
         assert.equal(selections.flatMap((selection) => selection.unit.findings).length, 7);
-        assert.equal(context.bundle.sources.length, 23);
+        assert.equal(context.bundle.sources.length, 4, "Only required canonical evidence bodies are selected initially");
         assert.equal(sources.reduce((total, source) => total + source.content.length, 0), 602722);
+        const checkpoint = JSON.parse(value.flowManager.readArtifact({ specId: value.specId,
+          logicalKey: "spec.gate.repair.progress", consumerNodeId: "spec-gate-repair",
+          parameters: { attemptId, generation: "0", phase: "checkpoint" } }).bytes.toString("utf8"));
+        const snapshots = SpecGateRepairSourceSnapshots.fromJSON(checkpoint.sourceSnapshots).sources();
+        assert.equal(snapshots.length, 23);
         for (const source of sources) {
-          const shared = context.bundle.sources.filter((entry) => entry.id === `evidence:source:${source.relative}`);
-          assert.equal(shared.length, 1);
-          assert.equal(shared[0].content, source.content);
-          assert.equal(shared[0].revision, hash(source.content));
-          assert.equal(JSON.stringify(context).split(JSON.stringify(source.content)).length - 1, 1,
-            "Each complete source body must occur once in the provider input");
+          const savedSource = snapshots.find((entry) => entry.id === `evidence:source:${source.relative}`);
+          assert.equal(savedSource.content, source.content);
+          assert.equal(savedSource.revision, hash(source.content));
+          assert.equal(workerArtifactStableStringify(context).includes(JSON.stringify(source.content)), false,
+            "A captured source body requires explicit source selection before worker delivery");
           for (const selection of selections) {
-            const range = selection.ranges.find((entry) => entry.id === shared[0].id);
-            assert.equal(range.value.content, source.content);
-            assert.equal(range.digest, shared[0].digest);
-            assert.equal(range.writable, false);
-            assert.equal(range.target, null);
+            assert.equal(selection.ranges.some((entry) => entry.value?.snapshotId === savedSource.id), false);
+            const index = selection.ranges.find((entry) => entry.id.startsWith("repair-index:"));
+            assert.ok(index);
+            assert.equal(index.writable, false);
+            assert.equal(index.target, null);
+            assert.equal(index.value.descriptors.some((entry) => entry.source?.id === savedSource.id), true,
+              "The first bounded page exposes the source descriptor without its body");
           }
         }
         const groups = selections.map((selection) => {
@@ -111,9 +121,14 @@ test("repairs seven findings in six units with shared complete ASCII evidence wi
                 replacement: `Precisely validate ${writable[0].target.id}.` }], reason: "Correct this exact independent unit." }] };
         });
         const proposal = { version: 1, stage: "spec-gate-repair", baseRevision: context.baseRevision, groups };
-        chargedCharacters = prompt.length + request.inputs.reduce((sum, entry) =>
-          sum + JSON.stringify(requestInput(request, entry.name).document).length, 0) + JSON.stringify(proposal).length;
-        chargedItems = request.inputs.length + 1 + groups.length;
+        const physical = PromptLogicalFootprint.measure({ systemPrompt: options.systemPrompt,
+          userPrompt: prompt, jsonSchema: options.jsonSchema, fmtFallback: options.fmtFallback });
+        const action = JSON.parse(fs.readFileSync(path.join(path.dirname(requestPath), "action.json"), "utf8"));
+        chargedCharacters = physical.total
+          + (input.descriptor.deliveryMode === "file" ? workerArtifactStableStringify(context).length : 0)
+          + workerArtifactStableStringify(request).length + workerArtifactStableStringify(action).length
+          + JSON.stringify(proposal).length;
+        chargedItems = 4 + groups.length;
         fs.writeFileSync(requestPayloadPath(request, "spec-gate-repair.json"), workerArtifactJson(proposal));
         sealWorkerArtifactHandoff({ requestPath,
           invocationId: options.executionEnvironment.SENNEL_FLOW_DISPATCH_INVOCATION_ID });
@@ -147,7 +162,7 @@ test("repairs seven findings in six units with shared complete ASCII evidence wi
     const checkpoint = JSON.parse(reloaded.readArtifact({ specId: value.specId,
       logicalKey: "spec.gate.repair.progress", consumerNodeId: "spec-gate-repair",
       parameters: { attemptId, generation: "0", phase: "checkpoint" } }).bytes.toString("utf8"));
-    assert.equal(checkpoint.version, 2);
+    assert.equal(checkpoint.version, 3);
     assert.equal(checkpoint.plan.version, 1);
     assert.equal(checkpoint.plan.calls.length, 1);
     assert.ok(checkpoint.plan.calls[0].callCost.characters

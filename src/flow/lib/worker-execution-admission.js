@@ -1,6 +1,7 @@
 import { StepExecutionContract } from "../engine/composition/step-execution-contract.js";
 import { deriveNextAction, resolveDraftWorkerCorrection, resolveDraftWorkerRecovery,
-  DraftWorkerRecoveryRefusal, SpecGateRepairExecutionStop } from "../definition.js";
+  DraftWorkerRecoveryRefusal, SpecGateRepairExecutionStop,
+  SpecGateRepairExecutionFormatUnavailable } from "../definition.js";
 import { selectSpecGateRepairExecution } from "./spec-gate-repair-execution.js";
 import { DraftLifecycle } from "./draft-lifecycle.js";
 import { isConditionalDraftWorkerStep } from "./draft-conditional-worker.js";
@@ -71,6 +72,11 @@ export function projectWorkerExecutionAdmission(selection, { binding = null,
     return new BlockedDirective({ code: selection.repair.decision.code,
       reason: selection.repair.decision.reason,
       resumeInstruction: "Restore the exact sealed response for the retained claim before resuming. Do not start a new worker or reset its budget." });
+  }
+  if (selection.repair?.decision instanceof SpecGateRepairExecutionFormatUnavailable) {
+    return new BlockedDirective({ code: selection.repair.decision.code,
+      reason: selection.repair.decision.reason,
+      resumeInstruction: "The retained repair input format is unavailable. Do not regenerate its request, change the claim or reset its budget." });
   }
   return draftQuestionDirective(selection.conditionalDisposition)
     ?? conditionalWorkerDirective(selection.conditionalDisposition, { state, binding })

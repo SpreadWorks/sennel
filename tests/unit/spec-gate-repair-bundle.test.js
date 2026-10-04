@@ -8,14 +8,14 @@ import { workerArtifactStableStringify, MAX_WORKER_ARTIFACT_INPUT_BYTES } from "
 const revision = `sha256:${"a".repeat(64)}`;
 const rule = { id: "planned", body: "Specify a planned check. Exceptions require a canonical exception clause." };
 const rationale = "The prior acknowledgment preserves the requirement to state planned checks.";
-function context({ count = 2, content = "Full read-only source. 漢🧭\"\n", findings = null, spec = null } = {}) {
+function context({ count = 2, content = "Full read-only source. 漢🧭\"\n", findings = null, spec = null, sources = null } = {}) {
   const requirements = Array.from({ length: count }, (_, index) => ({
     id: `R${index}`, desc: `Complete planned check ${index}`, task_ids: [], testable: false,
   }));
   return new SpecGateRepairContext({ spec: spec ?? {
     goal: "Bounded repair", background: "Shared background",
     requirements, tasks: [], overview: { decisions: [{ text: "Shared canonical decision" }] },
-  }, baseRevision: revision, sources: [new SpecGateRepairSource({
+  }, baseRevision: revision, sources: sources ?? [new SpecGateRepairSource({
     id: "request", origin: "approved-request.md", revision: "request-revision", content,
   })], guardrails: [rule], acknowledgedRationale: rationale,
   findings: findings ?? requirements.map((requirement, index) => ({
@@ -82,8 +82,9 @@ test("bundle preserves structured canonical acknowledged rationale across immuta
 
 test("shared range conflicts and source origin conflicts fail before serialization", () => {
   const selected = selections(context());
-  const conflictingRange = selected[1].ranges.map((range) => range.id === "overview.decisions[0]"
-    ? { ...range, value: { text: "Conflicting canonical decision" } } : range);
+  // Entity-local selection no longer includes every decision. The deterministic first index page is shared.
+  const conflictingRange = selected[1].ranges.map((range) => range.id === selected[1].indexManifest.firstPageId
+    ? { ...range, value: { ...range.value, pageCount: 999 } } : range);
   assert.throws(() => SpecGateRepairBundle.fromSelections([selected[0], rewrite(selected[1], { ranges: conflictingRange })]),
     /Conflicting repair bundle range identity/);
   const conflictingSource = selected[1].ranges.map((range) => range.id === "evidence:request"
@@ -166,4 +167,38 @@ test("full distinct UTF-8 unit union splits only when its file limit is exceeded
     return SpecGateRepairBundle.fromJSON(value.bundle).selections();
   });
   assert.deepEqual(restored, selections(ctx).map((selection) => selection.toJSON()));
+});
+
+
+test("bundle rejects changed index pages, foreign manifest navigation and retired bundle versions", () => {
+  const page = document();
+  page.ranges.find((range) => range.id.startsWith("repair-index:")).value.descriptors[0].digest = "f".repeat(64);
+  assert.throws(() => SpecGateRepairBundle.fromJSON(page), /index page digest/);
+  const manifest = document(); manifest.units[0].indexManifest.firstPageId = "repair-index:foreign:0";
+  assert.throws(() => SpecGateRepairBundle.fromJSON(manifest), /index manifest/);
+  const extraManifest = document(); extraManifest.units[0].indexManifest.foreign = "unregistered";
+  assert.throws(() => SpecGateRepairBundle.fromJSON(extraManifest), /index manifest/);
+  const retired = document(); retired.version = 1;
+  assert.throws(() => SpecGateRepairBundle.fromJSON(retired), /version/);
+});
+
+
+test("selected source fragments restore exact UTF-8 coverage without embedding the unselected snapshot body", () => {
+  const source = new SpecGateRepairSource({ id: "source:large.js", origin: "large.js", revision: "source-r1",
+    content: "漢🧭 planned source\r\n".repeat(18000) });
+  const ctx = context({ count: 1, sources: [source] });
+  const descriptor = ctx.tableOfContents().find((range) => range.source?.id === source.id && range.byteEnd < source.byteLength);
+  const selected = ctx.select(ctx.units()[0].id, { additionalRangeIds: [descriptor.id] });
+  const bundle = SpecGateRepairBundle.fromSelections([selected]);
+  const wire = workerArtifactStableStringify(bundle.toJSON());
+  assert(wire.length < source.content.length);
+  assert.deepEqual(SpecGateRepairBundle.fromJSON(JSON.parse(wire)).selections(), [selected.toJSON()]);
+  const sourceEntry = bundle.toJSON().sources[0];
+  assert.equal(sourceEntry.snapshotDigest, source.digest);
+  assert.equal(sourceEntry.snapshotByteLength, source.byteLength);
+  assert.equal(sourceEntry.byteEnd - sourceEntry.byteStart, Buffer.byteLength(sourceEntry.content, "utf8"));
+  const alteredBoundary = structuredClone(bundle.toJSON()); alteredBoundary.sources[0].byteStart++;
+  assert.throws(() => SpecGateRepairBundle.fromJSON(alteredBoundary), /source digest or byte range/);
+  const alteredSnapshot = structuredClone(bundle.toJSON()); alteredSnapshot.sources[0].snapshotByteLength = 1;
+  assert.throws(() => SpecGateRepairBundle.fromJSON(alteredSnapshot), /source digest or byte range/);
 });

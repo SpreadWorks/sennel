@@ -2,9 +2,10 @@ import { PreparedStepReplay } from "./step-registration.js";
 import { CurrentFlowStateConflictError } from "../../lib/current-flow-state-conflict-error.js";
 import { SpecWorkerStepBinding } from "../connectors/spec/spec-step-binding.js";
 import { DraftWorkerExecutionClaim, settleSpecStepResult as selectSettlement } from "../../definition.js";
-import { SpecGateRepairContextRequiredResult } from "../step-result.js";
+import { SpecGateRepairContextRequiredResult, StepErrorResult } from "../step-result.js";
 import { SpecGateRepairWorkerFacts, SpecGateRepairContinuationFacts } from "../../lib/spec-gate-repair-worker-facts.js";
-import { readProgressBoundSpecGateRepairInput, latestRepairBudget, readSpecGateRepairExecutionProgress } from "../../lib/spec-gate-repair-progress.js";
+import { readProgressBoundSpecGateRepairInput, latestRepairBudget, readSpecGateRepairExecutionProgress,
+  SPEC_GATE_REPAIR_PROGRESS_VERSION } from "../../lib/spec-gate-repair-progress.js";
 import { readSpecGateRepairInput } from "../../lib/spec-gate-repair-input.js";
 import { SpecGateRepairContextExpansion } from "../../lib/spec-gate-repair-context-expansion.js";
 import { canonicalWorkerExecutionClaimForStored, WorkerArtifactHandoffError } from "../../lib/worker-artifact-handoff.js";
@@ -14,6 +15,7 @@ import { specGateRepairCallFootprint, specGateRepairResponseCost } from "../../l
 import { rethrowStepSettlementFailure } from "../../lib/definition-lifecycle-failure.js";
 import { SpecGateRepairServiceInput } from "../../services/spec-gate-repair-service.js";
 import { SpecGateRepairSettlementWriter } from "../../services/spec-gate-repair-settlement-writer.js";
+import { PromptLogicalFootprint } from "../../../lib/prompt-batching.js";
 
 function progressWrite(binding, generation, phase, document) {
   return { logicalKey: "spec.gate.repair.progress",
@@ -35,6 +37,12 @@ function changedLocationPlanError({ stepId, attemptId, context, locationPlan }) 
 
 class SpecGateRepairPublishedDecision {
   constructor({ source, ledger, refreshed, proposal }) {
+    if (proposal.stage === "spec-gate-repair-input-unavailable") {
+      this.facts = new SpecGateRepairWorkerFacts({ input: source, proposal });
+      this.continuation = null;
+      Object.freeze(this);
+      return;
+    }
     const continuation = new SpecGateRepairContinuationFacts({ input: refreshed.source,
       ledger: refreshed.ledger, locationPlan: refreshed.locationPlan, proposal });
     const intermediate = continuation.unresolvedLocationCount > 0
@@ -63,6 +71,12 @@ export async function preparePublishedSpecGateRepairArguments({ ctx, state: requ
   const execution = ctx.flowManager.draftStepExecutionState({ binding: {
     runId: state.runId, specId: state.specId, stepId: "spec-gate-repair", attempt: state.attempt,
   } });
+  const completed = ctx.flowManager.readCurrentStepSettlement({ specId: state.specId,
+    stepId: "spec-gate-repair" });
+  if (completed?.result instanceof StepErrorResult && completed.receipt.settlementKind === "failure") {
+    return new PreparedStepReplay({ completed: true, replayed: true, stepId: "spec-gate-repair",
+      stepResult: completed.result, receipt: completed.receipt, settlementReceipt: completed.receipt });
+  }
   if (execution.lifecycle?.phase !== "publication") throw new Error("Gate repair has no published response to resume");
   const { source, ledger } = readProgressBoundSpecGateRepairInput({ flowManager: ctx.flowManager,
     state, executionRoot: ctx.executionRoot || ctx.root, executionLifecycle: execution.lifecycle });
@@ -87,7 +101,8 @@ export async function preparePublishedSpecGateRepairArguments({ ctx, state: requ
 }
 
 /** The claimed budget is committed before a provider-visible call. */
-export function reserveSpecGateRepairWorkerCall({ ctx, request, prompt, callPlan = null }) {
+export function reserveSpecGateRepairWorkerCall({ ctx, request, prompt, physicalRequest = prompt,
+  instructionPrompt = prompt, callPlan = null }) {
   const binding = new SpecWorkerStepBinding({ request });
   const flowManager = ctx.flowManager;
   binding.assertCurrent();
@@ -108,7 +123,8 @@ export function reserveSpecGateRepairWorkerCall({ ctx, request, prompt, callPlan
     if (request.inputDigest !== saved.document.inputDigest
       || request.inputRevision !== saved.document.inputRevision
       || request.requestDigest !== saved.document.requestDigest
-      || !isDeepStrictEqual(specGateRepairCallFootprint(request, prompt).toJSON(), call.callCost.toJSON())
+      || !isDeepStrictEqual(PromptLogicalFootprint.measure(physicalRequest).toJSON(), saved.document.physicalPromptFootprint)
+      || !isDeepStrictEqual(specGateRepairCallFootprint(request, instructionPrompt).toJSON(), call.callCost.toJSON())
       || !isDeepStrictEqual(context, saved.document.context)) {
       throw new WorkerArtifactHandoffError("stale", "FLOW_SPEC_GATE_REPAIR_PLAN_CHANGED",
         "Spec Gate repair checkpoint does not match its exact request and measured cost",
@@ -123,20 +139,32 @@ export function reserveSpecGateRepairWorkerCall({ ctx, request, prompt, callPlan
     if (callPlan === null) throw new WorkerArtifactHandoffError("invalid", "FLOW_SPEC_GATE_REPAIR_PLAN_REQUIRED",
       "Spec Gate repair execution requires its measured remaining call plan",
       { data: { failureKind: "step-admission" } });
-    const call = callPlan.assertCurrent({ request, prompt, budget });
+    const call = callPlan.assertCurrent({ request, physicalRequest, instructionPrompt, budget });
     executionBinding = execution.workerBinding({ inputDigest: request.inputDigest, inputRevision: request.inputRevision });
     budget.consumeAggregate(call.callCost);
     if (call.synthesisCallCount > 0) budget.consumeSynthesisCalls(call.synthesisCallCount);
     const executionLocator = new DraftWorkerExecutionClaim({ dispatchInvocationId: request.dispatchInvocationId,
       generatedAt: request.generatedAt, actionDigest: request.actionDigest, requestDigest: request.requestDigest });
-    base = { version: 2, runId: request.runId, specId: request.specId,
+    const source = readSpecGateRepairInput({ flowManager, state: flowManager.canonicalState(binding.specId),
+      executionRoot: request.executionRoot });
+    if (source.context.evidenceDigest !== context.evidenceDigest) {
+      throw new WorkerArtifactHandoffError("stale", "FLOW_SPEC_GATE_REPAIR_EVIDENCE_CHANGED",
+        "Spec Gate repair evidence changed before checkpoint", { retryable: false, recoveryPossible: false,
+          data: { failureKind: "step-admission" } });
+    }
+    const sourceSnapshots = source.context.sourceSnapshots();
+    for (const entry of sourceSnapshots.sources()) if (entry.required) entry.assertAvailable();
+    base = { version: SPEC_GATE_REPAIR_PROGRESS_VERSION, runId: request.runId, specId: request.specId,
       attemptId: binding.attempt.id, attemptSequence: binding.attempt.sequence,
       inputDigest: request.inputDigest, inputRevision: request.inputRevision,
       requestDigest: request.requestDigest, actionFileDigest: request.actionRequestDigest, limit: { ...limit },
       actionRepositoryFingerprint: request.invocation.action.repositoryFingerprint ?? null,
-      generation: executionBinding.executionGeneration, context,
+      generation: executionBinding.executionGeneration, context, sourceSnapshots: sourceSnapshots.toJSON(),
+      inputDescriptors: request.inputs.map((input) => input.toJSON()),
       executionLocator: executionLocator.toJSON(), plan: callPlan.toJSON(),
       callCost: call.callCost.toJSON(), responseAllowance: call.responseAllowance.toJSON() };
+    base.physicalPromptFootprint = call.physicalPromptFootprint.toJSON();
+    base.deliveryMode = call.deliveryMode;
   }
   try {
     if (!checkpoint) {
@@ -201,7 +229,9 @@ export async function prepareSpecGateRepairServiceArguments({ ctx, request, hand
       { retryable: false, recoveryPossible: false });
   }
   const alreadyPublished = lifecycle.phase === "publication";
-  if (context.mode === "locate") {
+  if (preparation.facts.inputUnavailable !== null) {
+    preparation.facts.inputUnavailable.assertRequest(request);
+  } else if (context.mode === "locate") {
     const planError = changedLocationPlanError({ stepId: binding.stepId,
       attemptId: binding.attempt.id, context, locationPlan });
     if (planError) throw planError;

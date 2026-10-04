@@ -3,21 +3,22 @@ import { PromptBuilder } from "../../lib/prompt-builder.js";
 import {
   AtomicPromptElement, PromptReferenceElement, PromptRequestEnvelope,
   PromptInputBuilder, PromptBatchPlan, PromptRequestLimit,
-  PromptBatchGroup, GroupedPromptBatchTopology,
+  PromptBatchGroup, GroupedPromptBatchTopology, RangedTextPromptElement, GLOBAL_PROMPT_ELEMENT_HARD_MAX,
 } from "../../lib/prompt-batching.js";
 import { SpecRepairTarget, specRepairTargetEntries } from "./spec-repair-operations.js";
 import { SpecGateDocumentTarget } from "./spec-gate-targets.js";
-import { SpecGateRepairSource } from "./spec-gate-repair-values.js";
+import { SpecGateRepairSource, SpecGateRepairSourceSnapshots, SpecGateRepairSourceRange } from "./spec-gate-repair-values.js";
 import { WorkerArtifactHandoffError } from "./worker-artifact-handoff-error.js";
 import { MAX_WORKER_ARTIFACT_INPUT_BYTES,
   workerArtifactStableStringify } from "./worker-artifact-input-format.js";
 
 import {
-  SpecGateRepairRange, SpecGateRepairFinding, SpecGateRepairUnit, SpecGateRepairSelection,
+  SpecGateRepairRange, SpecGateRepairFinding, SpecGateRepairUnit, SpecGateRepairSelection, SpecGateRepairIndexManifest, SPEC_GATE_REPAIR_INDEX_PAGE_SIZE,
   specGateRepairValueDigest as hash, freezeSpecGateRepairValue as freeze,
   specGateRepairFindingIdentity as identity,
 } from "./spec-gate-repair-selection.js";
 import { SpecGateRepairBundle } from "./spec-gate-repair-bundle.js";
+import { compareText } from "./text-order.js";
 export { SpecGateRepairRange, SpecGateRepairFinding, SpecGateRepairUnit, SpecGateRepairSelection }
   from "./spec-gate-repair-selection.js";
 
@@ -76,7 +77,7 @@ export class SpecGateRepairContext {
     }
     if (!Array.isArray(guardrails)) throw new TypeError("Repair evidence requires canonical guardrails");
     return createHash("sha256").update(JSON.stringify({
-      sources: sources.map((source) => [source.id, source.digest]), guardrails,
+      sources: sources.map((source) => source.descriptor()).sort((a, b) => compareText(a.id, b.id)), guardrails,
     }, (_, value) => value instanceof RegExp
       ? { source: value.source, flags: value.flags } : value)).digest("hex");
   }
@@ -89,6 +90,9 @@ export class SpecGateRepairContext {
   #guardrails;
   #rationale;
   #sources;
+  #sourcesById;
+  #index;
+  #indexPages = new Map();
 
   constructor({ spec, baseRevision, findings, guardrails, acknowledgedRationale = "", sources = [] }) {
     if (!/^sha256:[a-f0-9]{64}$/.test(baseRevision)) throw new TypeError("Repair context requires a canonical base revision");
@@ -98,7 +102,8 @@ export class SpecGateRepairContext {
     this.#guardrails = freeze(structuredClone(guardrails));
     this.#rationale = acknowledgedRationale;
     const evidenceDigest = SpecGateRepairContext.evidenceDigestFor({ sources, guardrails: this.#guardrails });
-    this.#sources = Object.freeze([...sources]);
+    this.#sources = Object.freeze(new SpecGateRepairSourceSnapshots(sources).sources());
+    this.#sourcesById = new Map(this.#sources.map((source) => [source.id, source]));
     this.evidenceDigest = evidenceDigest;
     const editable = specRepairTargetEntries(spec);
     const byPath = new Map();
@@ -160,9 +165,38 @@ export class SpecGateRepairContext {
       if (!guardrails.some((rule) => rule.id === finding.requirementRef)) throw new Error("Canonical guardrail body is missing for a repair finding");
     }
     for (const source of this.#sources) {
-      if (this.#ranges.has(source.id)) throw new Error("Duplicate repair evidence source");
-      this.#ranges.set(source.id, new SpecGateRepairRange({ id: source.id, path: source.id,
-        value: source.toJSON(), digest: source.digest }));
+      if (source.availability === "available" && !source.required && !source.isProjectRule) {
+        const element = new RangedTextPromptElement({ id: source.id, sourceRevision: source.revision,
+          sequence: 0, text: source.content });
+        const addSourceRange = (fragment) => {
+          const range = new SpecGateRepairSourceRange({ source, element: fragment });
+          this.#ranges.set(range.id, new SpecGateRepairRange({ id: range.id, path: source.origin,
+            value: range.value, digest: range.digest }));
+        };
+        addSourceRange(element);
+        // The shared ranged element owns Unicode boundaries and newline partitioning.
+        if (source.content.length >= GLOBAL_PROMPT_ELEMENT_HARD_MAX) {
+          for (const fragment of element.partitionFor(GLOBAL_PROMPT_ELEMENT_HARD_MAX - 1).children) addSourceRange(fragment);
+        }
+      } else {
+        if (this.#ranges.has(source.id)) throw new Error("Duplicate repair evidence source");
+        this.#ranges.set(source.id, new SpecGateRepairRange({ id: source.id, path: source.id,
+          value: source.toJSON(), digest: source.digest }));
+      }
+    }
+    const descriptors = this.tableOfContents().sort((a, b) => compareText(a.id, b.id));
+    const revision = `sha256:${hash(workerArtifactStableStringify(descriptors))}`;
+    const pageSize = SPEC_GATE_REPAIR_INDEX_PAGE_SIZE;
+    const pageCount = Math.ceil(descriptors.length / pageSize);
+    this.#index = new SpecGateRepairIndexManifest({ version: 1, revision, descriptorCount: descriptors.length,
+      pageCount, firstPageId: `repair-index:${revision}:0` });
+    for (let page = 0; page < pageCount; page++) {
+      const id = `repair-index:${revision}:${page}`;
+      const value = { version: 1, revision, page, pageCount,
+        nextPageId: page + 1 < pageCount ? `repair-index:${revision}:${page + 1}` : null,
+        descriptors: descriptors.slice(page * pageSize, (page + 1) * pageSize) };
+      this.#indexPages.set(id, new SpecGateRepairRange({ id, path: id, value,
+        digest: hash(workerArtifactStableStringify(value)) }));
     }
   }
 
@@ -184,11 +218,21 @@ export class SpecGateRepairContext {
     return id;
   }
   #assertRanges(ids) {
-    if (!Array.isArray(ids) || new Set(ids).size !== ids.length || ids.some((id) => !this.#ranges.has(id))) {
+    if (!Array.isArray(ids) || new Set(ids).size !== ids.length || ids.some((id) => !this.#ranges.has(id) && !this.#indexPages.has(id))) {
       throw new Error("Repair context has a missing, duplicated or foreign canonical range");
     }
   }
-  tableOfContents() { return [...this.#ranges.values()].map((range) => range.descriptor()); }
+  sourceSnapshots() { return new SpecGateRepairSourceSnapshots(this.#sources); }
+  indexManifest() { return this.#index; }
+  tableOfContents() {
+    return [...this.#ranges.values()].map((range) => {
+      const source = range.id.startsWith("evidence:") ? this.#sourcesById.get(range.value.snapshotId) : null;
+      return { ...range.descriptor(), contentOmitted: true,
+        ...(source ? { source: source.descriptor(), byteStart: range.value.byteStart, byteEnd: range.value.byteEnd,
+          sliceDigest: range.value.sliceDigest, bodyStatus: source.availability === "available" ? "available-not-selected" : source.availability } :
+          { bodyStatus: range.exists ? "available-not-selected" : "missing" }) };
+    });
+  }
   unresolvedFindings() { return this.#findings.filter((finding) => finding.rangeIds.length === 0); }
   resolveLocations({ baseRevision, locations }) {
     if (baseRevision !== this.baseRevision) throw new Error("Stale repair location response");
@@ -198,7 +242,7 @@ export class SpecGateRepairContext {
       const key = identity(location.identity).toString();
       if (!unresolved.has(key) || resolved.has(key)) throw new Error("Foreign or duplicate repair location identity");
       this.#assertRanges(location.rangeIds);
-      if (location.rangeIds.some((id) => id.startsWith("evidence:"))) throw new Error("Read-only evidence is not a Spec finding location");
+      if (location.rangeIds.some((id) => id.startsWith("evidence:") || id.startsWith("repair-index:"))) throw new Error("Read-only evidence is not a Spec finding location");
       resolved.set(key, location.rangeIds);
     }
     if (resolved.size !== unresolved.size) throw new Error("Location response omitted a Gate finding");
@@ -220,36 +264,60 @@ export class SpecGateRepairContext {
       connected.forEach((group) => groups.splice(groups.indexOf(group), 1));
       groups.push(merged);
     }
-    return groups.map((group) => new SpecGateRepairUnit(group)).sort((a, b) => a.id.localeCompare(b.id));
+    return groups.map((group) => new SpecGateRepairUnit(group)).sort((a, b) => compareText(a.id, b.id));
   }
   select(unitId, { additionalRangeIds = [] } = {}) {
     this.#assertRanges(additionalRangeIds);
     const unit = this.units().find((entry) => entry.id === unitId);
     if (!unit) throw new Error("Unknown Spec Gate repair unit");
-    const selected = new Set([...unit.rangeIds, ...additionalRangeIds, ...this.#sources.map((source) => source.id)]);
-    const entities = new Set([...selected].map((id) => this.#ranges.get(id).entity).filter(Boolean));
-    let previousSize;
-    do {
-      previousSize = entities.size;
-      for (const requirement of this.#spec.requirements) {
-        if (entities.has(`requirements:${requirement.id}`)
-          || requirement.task_ids.some((id) => entities.has(`tasks:${id}`))) {
-          entities.add(`requirements:${requirement.id}`);
-          requirement.task_ids.forEach((id) => entities.add(`tasks:${id}`));
-        }
-      }
-    } while (entities.size !== previousSize);
-    for (const range of this.#ranges.values()) {
-      if (entities.has(range.entity) || range.path.startsWith("overview.decisions[")) selected.add(range.id);
+    const selected = new Set(unit.rangeIds);
+    // Only the target entities supply automatic structural context. Explicit reads do not start another closure.
+    const entities = new Set(unit.rangeIds.map((id) => this.#ranges.get(id).entity).filter(Boolean));
+    for (const range of this.#ranges.values()) if (range.exists && entities.has(range.entity)) selected.add(range.id);
+    for (const source of this.#sources) if (source.required) selected.add(source.id);
+    additionalRangeIds.forEach((id) => selected.add(id));
+    const guardrails = this.#guardrails.filter((rule) => unit.findings.some((finding) => finding.requirementRef === rule.id));
+    // Index descriptors are navigation, not evidence. Explicit file reads apply
+    // rules by origin; their contents never start another reference closure.
+    const references = { findings: unit.findings.map((finding) => finding.toJSON()),
+      guardrails, acknowledgedRationale: this.#rationale,
+      values: [...selected].flatMap((id) => {
+        const range = this.#ranges.get(id);
+        if (!range) return [];
+        if (!range.value?.snapshotId) return [range.value];
+        const source = this.#sourcesById.get(range.value.snapshotId);
+        return source.required && !source.isProjectRule ? [source.content] : [];
+      }) };
+    const origins = SpecGateRepairSource.referencedOrigins(references, this.#sources.map((source) => source.origin));
+    for (const id of selected) {
+      const value = this.#ranges.get(id)?.value;
+      if (value?.snapshotId) origins.add(value.origin);
+    }
+    const selectedOrigins = [...origins];
+    for (const source of this.#sources) {
+      if (source.isProjectRule && selectedOrigins.some((origin) => source.appliesToOrigin(origin))) selected.add(source.id);
+    }
+    for (const id of selected) {
+      const snapshotId = this.#ranges.get(id)?.value?.snapshotId;
+      if (snapshotId) this.#sourcesById.get(snapshotId).assertAvailable();
+    }
+    selected.add(this.#index.firstPageId);
+    // Registered fragments are disjoint; a full read subsumes every fragment from that snapshot.
+    for (const id of [...selected]) {
+      const range = this.#ranges.get(id);
+      if (range?.value?.snapshotId && [...selected].some((otherId) => {
+        const other = this.#ranges.get(otherId)?.value;
+        return otherId !== id && SpecGateRepairSourceRange.covers(other, range.value);
+      })) selected.delete(id);
     }
     const permissions = new Set(unit.findings.flatMap((finding) => finding.allowedTargets.map((permission) => targetKey(permission.target))));
     return new SpecGateRepairSelection({ baseRevision: this.baseRevision, unit,
       ranges: [...selected].sort().map((id) => {
-        const range = this.#ranges.get(id);
+        const range = this.#ranges.get(id) ?? this.#indexPages.get(id);
         return range.toJSON({ writable: unit.rangeIds.includes(id) && range.target !== null && permissions.has(targetKey(range.target)) });
       }),
-      guardrails: this.#guardrails.filter((rule) => unit.findings.some((finding) => finding.requirementRef === rule.id)),
-      acknowledgedRationale: this.#rationale });
+      guardrails,
+      acknowledgedRationale: this.#rationale, indexManifest: this.#index });
   }
   #selectedUnits(unitIds) {
     const units = this.units();

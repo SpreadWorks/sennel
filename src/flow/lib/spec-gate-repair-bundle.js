@@ -1,11 +1,12 @@
 import { createHash } from "node:crypto";
-import { SpecGateRepairSource } from "./spec-gate-repair-values.js";
+import { SpecGateRepairSourceRange } from "./spec-gate-repair-values.js";
 import {
   SpecGateRepairRange, SpecGateRepairFinding, SpecGateRepairUnit, SpecGateRepairSelection,
-  freezeSpecGateRepairValue,
+  freezeSpecGateRepairValue, specGateRepairValueDigest,
 } from "./spec-gate-repair-selection.js";
 import { SpecRepairTarget, parseSpecGateRepairPermissions } from "./spec-repair-operations.js";
 import { workerArtifactStableStringify } from "./worker-artifact-input-format.js";
+import { compareText } from "./text-order.js";
 
 function digest(value) {
   return createHash("sha256").update(workerArtifactStableStringify(value)).digest("hex");
@@ -33,7 +34,7 @@ class SpecGateRepairTable {
     if (!this.#entries.has(id)) throw new Error(`Missing or foreign repair bundle ${this.label} reference: ${id}`);
     return this.#entries.get(id);
   }
-  values() { return [...this.#entries].sort(([left], [right]) => left.localeCompare(right)).map(([, value]) => value); }
+  values() { return [...this.#entries].sort(([left], [right]) => compareText(left, right)).map(([, value]) => value); }
   assertUsed(ids) {
     if (ids.size !== this.#entries.size || [...this.#entries.keys()].some((id) => !ids.has(id))) {
       throw new Error(`Foreign unreferenced repair bundle ${this.label} entry`);
@@ -70,18 +71,18 @@ export class SpecGateRepairBundle {
       const rationaleId = `rationale:${digest(selection.acknowledgedRationale)}`;
       rationales.add(rationaleId, { id: rationaleId, value: selection.acknowledgedRationale });
       return { unit: selection.unit.toJSON(), ranges: rangeReferences,
-        guardrailIds: selection.guardrails.map((rule) => rule.id), rationaleId };
+        guardrailIds: selection.guardrails.map((rule) => rule.id), rationaleId, indexManifest: selection.indexManifest.toJSON() };
     });
-    return new SpecGateRepairBundle({ version: 1, baseRevision: selections[0].baseRevision,
+    return new SpecGateRepairBundle({ version: 2, baseRevision: selections[0].baseRevision,
       ranges: ranges.values(), sources: sources.values(), guardrails: guardrails.values(),
-      rationales: rationales.values(), units: units.sort((left, right) => left.unit.id.localeCompare(right.unit.id)) });
+      rationales: rationales.values(), units: units.sort((left, right) => compareText(left.unit.id, right.unit.id)) });
   }
 
   static fromJSON(value) { return new SpecGateRepairBundle(value); }
 
   constructor(value) {
     exactKeys(value, ["version", "baseRevision", "ranges", "sources", "guardrails", "rationales", "units"], "document");
-    if (value.version !== 1 || !/^sha256:[a-f0-9]{64}$/.test(value.baseRevision)
+    if (value.version !== 2 || !/^sha256:[a-f0-9]{64}$/.test(value.baseRevision)
       || !Array.isArray(value.units) || value.units.length === 0) throw new TypeError("Invalid repair bundle version, revision or units");
     const readTable = (label, values, validate) => {
       if (!Array.isArray(values)) throw new TypeError(`Invalid repair bundle ${label} table`);
@@ -96,10 +97,15 @@ export class SpecGateRepairBundle {
       return table;
     };
     const sources = readTable("source", value.sources, (entry) => {
-      exactKeys(entry, ["id", "origin", "revision", "content", "digest"], "source");
-      if (!entry.id.startsWith("evidence:")) throw new Error("Foreign repair bundle source identity");
-      const source = new SpecGateRepairSource({ ...entry, id: entry.id.slice("evidence:".length) });
-      if (source.digest !== entry.digest) throw new Error("Conflicting repair bundle source digest");
+      const { id, digest: sourceDigest, ...source } = entry;
+      if (!id?.startsWith("evidence:")) throw new Error("Foreign repair bundle source identity");
+      SpecGateRepairSourceRange.validate(source, sourceDigest);
+      if (id !== source.snapshotId && id !== `${source.snapshotId}@bytes:${source.byteStart}:${source.byteEnd}:${source.snapshotDigest}`) {
+        throw new Error("Conflicting repair bundle source range identity");
+      }
+      if (id === source.snapshotId && (source.byteStart !== 0 || source.byteEnd !== source.snapshotByteLength || sourceDigest !== source.snapshotDigest)) {
+        throw new Error("Conflicting repair bundle source digest");
+      }
     });
     const usedSources = new Set();
     const ranges = readTable("range", value.ranges, (entry) => {
@@ -107,10 +113,19 @@ export class SpecGateRepairBundle {
       exactKeys(entry, ["id", "path", "entity", "digest", "target", "collectionAnchor", "exists", evidence ? "sourceId" : "value"], "range");
       if (typeof entry.path !== "string" || typeof entry.collectionAnchor !== "boolean" || typeof entry.exists !== "boolean"
         || (entry.digest !== null && !/^[a-f0-9]{64}$/.test(entry.digest))) throw new TypeError("Invalid repair bundle range descriptor");
+      if (entry.id.startsWith("repair-index:") && (entry.digest !== specGateRepairValueDigest(workerArtifactStableStringify(entry.value))
+        || entry.id !== `repair-index:${entry.value?.revision}:${entry.value?.page}`
+        || entry.target !== null || entry.entity !== null || entry.collectionAnchor || !entry.exists
+        || entry.value.version !== 1 || !Number.isSafeInteger(entry.value.page) || entry.value.page < 0
+        || entry.value.page >= entry.value.pageCount || !Array.isArray(entry.value.descriptors)
+        || entry.value.nextPageId !== (entry.value.page + 1 < entry.value.pageCount
+          ? `repair-index:${entry.value.revision}:${entry.value.page + 1}` : null))) {
+        throw new Error("Conflicting repair index page digest");
+      }
       if (entry.target !== null) SpecRepairTarget.fromJSON(entry.target, "repair bundle range target");
       if (evidence) {
         const source = sources.get(entry.sourceId);
-        if (entry.id !== entry.sourceId || entry.path !== entry.id || entry.target !== null || entry.entity !== null
+        if (entry.id !== entry.sourceId || entry.target !== null || entry.entity !== null
           || entry.collectionAnchor || !entry.exists || entry.digest !== source.digest) {
           throw new Error("Conflicting repair bundle source range");
         }
@@ -131,7 +146,7 @@ export class SpecGateRepairBundle {
     const usedRanges = new Set(); const usedGuardrails = new Set(); const usedRationales = new Set();
     const seenUnits = new Set(); const seenFindings = new Set();
     const selections = value.units.map((entry) => {
-      exactKeys(entry, ["unit", "ranges", "guardrailIds", "rationaleId"], "unit references");
+      exactKeys(entry, ["unit", "ranges", "guardrailIds", "rationaleId", "indexManifest"], "unit references");
       exactKeys(entry.unit, ["id", "rangeIds", "findings"], "unit");
       if (!Array.isArray(entry.unit.findings) || !entry.unit.findings.length) throw new TypeError("Repair bundle unit requires findings");
       const findings = entry.unit.findings.map((finding) => {
@@ -167,6 +182,10 @@ export class SpecGateRepairBundle {
         if (reference.writable !== writable) throw new Error("Repair bundle unit range permission leakage");
         return range.toJSON({ writable });
       });
+      if (!seenRanges.has(entry.indexManifest?.firstPageId) || selected.some((range) => range.id.startsWith("repair-index:")
+        && (range.value.revision !== entry.indexManifest.revision || range.value.pageCount !== entry.indexManifest.pageCount))) {
+        throw new Error("Missing or conflicting repair index manifest");
+      }
       if (unit.rangeIds.some((id) => !seenRanges.has(id)) || permissions.some((permission) => !selected.some((range) => (
         unit.rangeIds.includes(range.id) && workerArtifactStableStringify(range.target) === workerArtifactStableStringify(permission.target.toJSON())
       )))) throw new Error("Missing or foreign repair bundle unit target reference");
@@ -180,15 +199,15 @@ export class SpecGateRepairBundle {
       }
       usedRationales.add(entry.rationaleId);
       return new SpecGateRepairSelection({ baseRevision: value.baseRevision, unit, ranges: selected,
-        guardrails: rules, acknowledgedRationale: rationales.get(entry.rationaleId).value });
-    }).sort((left, right) => left.unit.id.localeCompare(right.unit.id));
+        guardrails: rules, acknowledgedRationale: rationales.get(entry.rationaleId).value, indexManifest: entry.indexManifest });
+    }).sort((left, right) => compareText(left.unit.id, right.unit.id));
     sources.assertUsed(usedSources); ranges.assertUsed(usedRanges);
     guardrails.assertUsed(usedGuardrails); rationales.assertUsed(usedRationales);
     this.baseRevision = value.baseRevision;
     this.#selections = Object.freeze(selections);
-    this.#document = freezeSpecGateRepairValue({ version: 1, baseRevision: value.baseRevision,
+    this.#document = freezeSpecGateRepairValue({ version: 2, baseRevision: value.baseRevision,
       ranges: ranges.values(), sources: sources.values(), guardrails: guardrails.values(), rationales: rationales.values(),
-      units: [...value.units].sort((left, right) => left.unit.id.localeCompare(right.unit.id)).map((entry) => structuredClone(entry)) });
+      units: [...value.units].sort((left, right) => compareText(left.unit.id, right.unit.id)).map((entry) => structuredClone(entry)) });
     this.digest = digest(this.#document);
     this.byteLength = Buffer.byteLength(workerArtifactStableStringify(this.#document), "utf8");
     Object.freeze(this);

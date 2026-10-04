@@ -1,14 +1,19 @@
 import { createHash } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
-import { PromptCallFootprint, PromptCallPlanFootprint, PromptResponseAllowance, PromptExecutionBudget } from "../../lib/prompt-batching.js";
+import { PromptCallFootprint, PromptCallPlanFootprint, PromptResponseAllowance, PromptExecutionBudget,
+  PromptLogicalFootprint } from "../../lib/prompt-batching.js";
 import { workerArtifactStableStringify } from "./worker-artifact-input-format.js";
 import { SpecGateRepairBundle } from "./spec-gate-repair-bundle.js";
 import { freezeSpecGateRepairValue } from "./spec-gate-repair-selection.js";
 import { WorkerArtifactHandoffError } from "./worker-artifact-handoff-error.js";
 
-export function specGateRepairCallFootprint(request, prompt) {
-  return new PromptCallFootprint({ instructions: prompt,
-    documentTexts: request.inputs.map((input) => workerArtifactStableStringify(input.document)) });
+export function specGateRepairCallFootprint(request, instructionPrompt) {
+  return new PromptCallFootprint({ instructions: instructionPrompt,
+    documentTexts: [
+      ...request.inputs.map((input) => workerArtifactStableStringify(input.document)),
+      workerArtifactStableStringify(request.toJSON()),
+      workerArtifactStableStringify(JSON.parse(JSON.stringify(request.invocation.action.nextAction))),
+    ] });
 }
 
 export function specGateRepairResponseAllowance(context, limit) {
@@ -22,7 +27,8 @@ export function specGateRepairResponseAllowance(context, limit) {
 
 export function specGateRepairResponseCost(context, proposal) {
   return new PromptResponseAllowance({ characters: JSON.stringify(proposal).length,
-    items: context.mode === "locate" ? proposal.locations.length
+    items: proposal.stage === "spec-gate-repair-input-unavailable" ? 1
+      : context.mode === "locate" ? proposal.locations.length
       : proposal.stage === "spec-gate-repair" ? proposal.groups.length : 1 });
 }
 
@@ -51,15 +57,22 @@ export class SpecGateRepairSavedCallPlan {
     }
     this.calls = Object.freeze(plan.calls.map((call) => {
       exactKeys(call, ["inputDigest", "inputRevision", "requestDigest", "batchDigest", "batchIndex",
-        "batchCount", "callCost", "responseAllowance", "synthesisCallCount"], "planned call");
+        "batchCount", "callCost", "responseAllowance", "synthesisCallCount", "physicalPromptFootprint", "deliveryMode"], "planned call");
       if ([call.inputDigest, call.inputRevision, call.requestDigest, call.batchDigest]
         .some((value) => typeof value !== "string" || !/^[a-f0-9]{64}$/.test(value))
         || !Number.isSafeInteger(call.batchIndex) || call.batchIndex < 0
         || !Number.isSafeInteger(call.batchCount) || call.batchCount <= call.batchIndex
-        || !Number.isSafeInteger(call.synthesisCallCount) || call.synthesisCallCount < 0) {
+        || !Number.isSafeInteger(call.synthesisCallCount) || call.synthesisCallCount < 0
+        || !["inline", "file"].includes(call.deliveryMode)) {
         throw specGateRepairProgressMismatch("Gate repair planned call has invalid request or batch identity");
       }
+      exactKeys(call.physicalPromptFootprint, ["systemPrompt", "userPrompt", "jsonSchema", "fmtFallback", "separators", "total"], "physical prompt footprint");
+      const physical = new PromptLogicalFootprint(call.physicalPromptFootprint);
+      if (physical.total !== call.physicalPromptFootprint.total || !physical.fits(limit.requestLimit())) {
+        throw specGateRepairProgressMismatch("Gate repair planned physical prompt exceeds its request limit");
+      }
       return Object.freeze({ ...call, callCost: PromptCallFootprint.fromJSON(call.callCost),
+        physicalPromptFootprint: physical,
         responseAllowance: PromptResponseAllowance.fromJSON(call.responseAllowance) });
     }));
     if (new Set(this.calls.map((call) => call.requestDigest)).size !== this.calls.length) {
@@ -81,6 +94,8 @@ export class SpecGateRepairSavedCallPlan {
       && call.batchCount === saved.context?.batchCount);
     if (matched.length !== 1 || matched[0] !== this.calls[0]
       || !isDeepStrictEqual(matched[0].callCost.toJSON(), saved.callCost)
+      || !isDeepStrictEqual(matched[0].physicalPromptFootprint.toJSON(), saved.physicalPromptFootprint)
+      || matched[0].deliveryMode !== saved.deliveryMode
       || !isDeepStrictEqual(matched[0].responseAllowance.toJSON(), saved.responseAllowance)
       || !isDeepStrictEqual(saved.responseAllowance,
         specGateRepairResponseAllowance(saved.context, this.budgetFrontier.limit).toJSON())
@@ -93,17 +108,22 @@ export class SpecGateRepairSavedCallPlan {
 
 /** A measured immutable plan, bound to the request capture and durable budget frontier. */
 export class SpecGateRepairCallPlan {
-  constructor({ requests, invocation, dispatchWorkClass, limit, budget }) {
+  constructor({ requests, invocation, dispatchWorkClass, limit, budget, promptOptions = {} }) {
     const calls = requests.map((request) => {
       const work = dispatchWorkClass.forAdmission(invocation, request);
       const context = request.inputs.find((input) => input.name === "spec-gate-repair-context.json").document;
-      const callCost = specGateRepairCallFootprint(request, work.prompt(work.workerInvocation()));
+      const workerInvocation = work.workerInvocation();
+      const callCost = specGateRepairCallFootprint(request,
+        { ...promptOptions, userPrompt: work.instructionPrompt(workerInvocation) });
+      const physicalPromptFootprint = PromptLogicalFootprint.measure({ ...promptOptions,
+        userPrompt: work.prompt(workerInvocation) });
       const responseAllowance = specGateRepairResponseAllowance(context, limit);
       return Object.freeze({ inputDigest: request.inputDigest, inputRevision: request.inputRevision,
         requestDigest: request.requestDigest, batchDigest: context.batchDigest,
         batchIndex: context.batchIndex, batchCount: context.batchCount,
         callCost: callCost.toJSON(), responseAllowance: responseAllowance.toJSON(),
-        synthesisCallCount: 0 });
+        synthesisCallCount: 0, physicalPromptFootprint: physicalPromptFootprint.toJSON(),
+        deliveryMode: request.inputs[0].descriptor.deliveryMode });
     });
     const value = { version: 1, budgetFrontier: budget.snapshot(), calls };
     this.document = Object.freeze({ ...value, digest: createHash("sha256")
@@ -115,11 +135,13 @@ export class SpecGateRepairCallPlan {
 
   toJSON() { return this.document; }
 
-  assertCurrent({ request, prompt, budget }) {
+  assertCurrent({ request, instructionPrompt, physicalRequest, budget }) {
     const context = request.inputs.find((input) => input.name === "spec-gate-repair-context.json").document;
     this.saved.currentCall({ inputDigest: request.inputDigest, inputRevision: request.inputRevision,
       requestDigest: request.requestDigest, context,
-      callCost: specGateRepairCallFootprint(request, prompt).toJSON(),
+      callCost: specGateRepairCallFootprint(request, instructionPrompt).toJSON(),
+      physicalPromptFootprint: PromptLogicalFootprint.measure(physicalRequest).toJSON(),
+      deliveryMode: request.inputs[0].descriptor.deliveryMode,
       responseAllowance: specGateRepairResponseAllowance(context, budget.limit).toJSON() });
     if (!isDeepStrictEqual(budget.snapshot(), this.document.budgetFrontier)) {
       throw new WorkerArtifactHandoffError("stale", "FLOW_SPEC_GATE_REPAIR_PLAN_CHANGED",

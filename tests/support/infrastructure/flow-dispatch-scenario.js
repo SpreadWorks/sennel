@@ -6,6 +6,7 @@ import { mock } from "node:test";
 import { Container, container } from "../../../src/lib/container.js";
 import { createTmpDir, removeTmpDir } from "../builders/tmp-dir.js";
 import { commitAll, initGitRepo } from "./git-repo.js";
+import { WorkerArtifactHandoffRequest } from "../../../src/flow/lib/worker-artifact-handoff.js";
 
 /** Bind a canonical manager and external worker to the production dispatcher. */
 export function dispatchContainer({ root, flowManager, agent }) {
@@ -37,6 +38,12 @@ export function fixtureRepository(prefix) {
 export function requestInput(request, name) {
   const input = request.inputs.find((entry) => entry.name === name);
   assert.notEqual(input, undefined, `${request.stepId} request must contain ${name}`);
+  if (request.stepId === "spec-gate-repair") {
+    const payloadPath = requestPayloadPath(request, "spec-gate-repair.json");
+    return WorkerArtifactHandoffRequest.readInput({
+      requestPath: path.join(path.dirname(path.dirname(payloadPath)), "request.json"), name,
+    });
+  }
   return input;
 }
 

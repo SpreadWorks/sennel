@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { FlowFindingSourceIdentity } from "./flow-finding-source.js";
+import { compareText } from "./text-order.js";
 
 export function specGateRepairValueDigest(value) { return createHash("sha256").update(JSON.stringify(value)).digest("hex"); }
 export function freezeSpecGateRepairValue(value) {
@@ -54,7 +55,7 @@ export class SpecGateRepairFinding {
 /** Connected findings form one indivisible proposal, even across several fields. */
 export class SpecGateRepairUnit {
   constructor(findings) {
-    this.findings = Object.freeze([...findings].sort((a, b) => a.identity.toString().localeCompare(b.identity.toString())));
+    this.findings = Object.freeze([...findings].sort((a, b) => compareText(a.identity.toString(), b.identity.toString())));
     this.rangeIds = Object.freeze([...new Set(findings.flatMap((item) => item.rangeIds))].sort());
     this.id = `repair-unit:${specGateRepairValueDigest(this.findings.map((item) => item.identity.toJSON()))}`;
     Object.freeze(this);
@@ -63,9 +64,10 @@ export class SpecGateRepairUnit {
 }
 
 export class SpecGateRepairSelection {
-  constructor({ baseRevision, unit, ranges, guardrails, acknowledgedRationale }) {
+  constructor({ baseRevision, unit, ranges, guardrails, acknowledgedRationale, indexManifest }) {
     this.baseRevision = baseRevision;
     this.unit = unit;
+    this.indexManifest = indexManifest instanceof SpecGateRepairIndexManifest ? indexManifest : new SpecGateRepairIndexManifest(indexManifest);
     this.ranges = freezeSpecGateRepairValue(ranges);
     this.guardrails = freezeSpecGateRepairValue(structuredClone(guardrails));
     this.acknowledgedRationale = acknowledgedRationale;
@@ -73,6 +75,27 @@ export class SpecGateRepairSelection {
   }
   toJSON() {
     return { baseRevision: this.baseRevision, unit: this.unit.toJSON(), ranges: this.ranges,
-      guardrails: this.guardrails, acknowledgedRationale: this.acknowledgedRationale };
+      guardrails: this.guardrails, acknowledgedRationale: this.acknowledgedRationale, indexManifest: this.indexManifest.toJSON() };
   }
+}
+
+export const SPEC_GATE_REPAIR_INDEX_PAGE_SIZE = 32;
+
+/** Deterministic navigation of the complete registered descriptor inventory. */
+export class SpecGateRepairIndexManifest {
+  constructor(value) {
+    if (!value || Object.keys(value).sort().join(",") !== "descriptorCount,firstPageId,pageCount,revision,version") {
+      throw new TypeError("Invalid repair index manifest");
+    }
+    const { version, revision, descriptorCount, pageCount, firstPageId } = value;
+    if (version !== 1 || !/^sha256:[a-f0-9]{64}$/.test(revision)
+      || !Number.isSafeInteger(descriptorCount) || descriptorCount < 1
+      || !Number.isSafeInteger(pageCount) || pageCount !== Math.ceil(descriptorCount / SPEC_GATE_REPAIR_INDEX_PAGE_SIZE)
+      || firstPageId !== `repair-index:${revision}:0`) throw new TypeError("Invalid repair index manifest");
+    this.version = version; this.revision = revision; this.descriptorCount = descriptorCount;
+    this.pageCount = pageCount; this.firstPageId = firstPageId;
+    Object.freeze(this);
+  }
+  toJSON() { return { version: this.version, revision: this.revision, descriptorCount: this.descriptorCount,
+    pageCount: this.pageCount, firstPageId: this.firstPageId }; }
 }

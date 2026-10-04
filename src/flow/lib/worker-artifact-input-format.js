@@ -1,5 +1,12 @@
 /** The immutable worker input format shared by planning and handoff storage. */
+import { WorkerArtifactHandoffError } from "./worker-artifact-handoff-error.js";
+
 export const MAX_WORKER_ARTIFACT_INPUT_BYTES = 2 * 1024 * 1024;
+
+export function specGateRepairInputFormatUnavailable(message = "Spec Gate repair requires its versioned selected-input descriptor") {
+  return new WorkerArtifactHandoffError("recovery-required", "FLOW_SPEC_GATE_REPAIR_INPUT_FORMAT_UNAVAILABLE",
+    message, { retryable: false, recoveryPossible: false, data: { failureKind: "step-admission" } });
+}
 
 export function workerArtifactStableStringify(value) {
   if (Array.isArray(value)) return `[${value.map(workerArtifactStableStringify).join(",")}]`;

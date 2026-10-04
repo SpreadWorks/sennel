@@ -14,6 +14,7 @@ import { specGateRepairObservationResult } from "../../lib/gate-observation-conv
 
 export function selectSpecGateRepair(facts) {
   if (!(facts instanceof SpecGateRepairWorkerFacts)) throw new TypeError("Spec Gate repair requires its canonical worker facts");
+  if (facts.inputUnavailable !== null) return new StepErrorResult("spec-gate-repair", facts.inputUnavailable.toError());
   const authority = new SpecGateRepairAuthority({
     spec: facts.input.spec,
     baseRevision: facts.input.baseRevision,

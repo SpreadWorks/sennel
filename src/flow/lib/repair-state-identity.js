@@ -7,6 +7,7 @@ import { flowStateSpecLocation } from "../../lib/flow-workspace.js";
 import { FLOW_ARTIFACT_CONTRACTS } from "../../lib/flow-artifact-contract.js";
 import { PRODUCT } from "../../lib/product.js";
 import { FlowRepositoryRuntimeArtifactRegistry } from "./flow-repository-runtime-artifacts.js";
+import { compareText } from "./text-order.js";
 
 export const REPAIR_STATE_VERSION = 3;
 export const DEFAULT_REPAIR_CHANGED_PATH_LIMIT = 20_000;
@@ -22,10 +23,6 @@ const REPAIR_REF_PATTERN = new RegExp(`^refs/${PRODUCT.machineName}/flows/([A-Za
 const ENTRY_MODE_PATTERN = /^(?:100644|100755|120000|160000|missing)$/;
 const ENTRY_STATUS_PATTERN = /^(?:(?:committed|index|worktree):(?:[ACDMTUXBR]|untracked)|explicit:(?:input|missing)|filesystem:input)$/;
 const ENTRY_OID_PATTERN = /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/i;
-
-function compareCanonicalText(left, right) {
-  return left < right ? -1 : left > right ? 1 : 0;
-}
 
 export class RepairStateError extends Error {
   constructor(code, message, details = {}) {
@@ -205,7 +202,7 @@ class RepairFingerprintManifestBase {
     if (!Array.isArray(input.entries)) throw new Error("repair fingerprint entries must be an array");
     this.entries = Object.freeze(input.entries.map((entry) => (
       entry instanceof CanonicalRepairEntry ? entry : new CanonicalRepairEntry(entry)
-    )).sort((a, b) => compareCanonicalText(a.path, b.path)));
+    )).sort((a, b) => compareText(a.path, b.path)));
     if (new Set(this.entries.map((entry) => entry.path)).size !== this.entries.length) {
       throw new Error("repair fingerprint entries must not contain duplicate paths");
     }
@@ -572,7 +569,7 @@ function assertSupportedIndexFlags(root) {
     }
     if (tag === "S") skipWorktreePaths.push(relPath);
   });
-  return Object.freeze(skipWorktreePaths.sort(compareCanonicalText));
+  return Object.freeze(skipWorktreePaths.sort(compareText));
 }
 
 function environmentHash(root, skipWorktreePaths) {

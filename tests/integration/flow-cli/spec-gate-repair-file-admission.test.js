@@ -4,11 +4,13 @@ import path from "node:path";
 import { test } from "node:test";
 
 import { Agent, MAX_AGENT_ARGUMENT_BYTES } from "../../../src/lib/agent.js";
+import { PromptLogicalFootprint } from "../../../src/lib/prompt-batching.js";
+import { workerArtifactStableStringify } from "../../../src/flow/lib/worker-artifact-input-format.js";
 import { ProviderRegistry } from "../../../src/lib/provider.js";
 import { Logger } from "../../../src/lib/log.js";
 import { FlowManager } from "../../../src/lib/flow-manager.js";
 import { FlowTargetBinding } from "../../../src/lib/flow-target-guard.js";
-import { latestRepairBudget, SpecGateRepairProgressLedger } from "../../../src/flow/lib/spec-gate-repair-progress.js";
+import { latestRepairBudget } from "../../../src/flow/lib/spec-gate-repair-progress.js";
 import { SpecGateRepairBundle } from "../../../src/flow/lib/spec-gate-repair-bundle.js";
 import { readSpecJsonValidator } from "../../../src/lib/spec-json.js";
 import RunDispatchCommand from "../../../src/flow/lib/run-dispatch.js";
@@ -54,7 +56,7 @@ function independentRepairSpec({ uniqueCharacters = 88_000 } = {}) {
     ...spec.requirements[0], id: `R${index + 2}`, task_ids: [`T${index + 2}`],
     desc: `Unique requirement ${index + 2}: ${"条".repeat(uniqueCharacters)}`,
   }))];
-  // Unique range bodies force two files even after common decisions are shared.
+  // The independent selected bodies force two files; unrelated decisions remain preserved in the Spec.
   spec.overview.decisions = Array.from({ length: 1 }, (_, index) => ({
     text: `Decision ${index}: ${"決".repeat(400)}`,
     evidence: "拠".repeat(400), consideredAlternatives: "案".repeat(400),
@@ -74,8 +76,10 @@ function independentRepairScenario(specRecord) {
     locator: "requirements[R2].desc", target: { entity: "requirement", id: "R2", field: "desc" } });
 }
 
-test("packs complete Unicode units into bounded files and atomically applies all generations after reload", async () => {
-  const specRecord = independentRepairSpec();
+test("packs complete Unicode units into a bounded file and reloads their atomic publication", async () => {
+  // Required manifest/action reads make the former 88k-by-eight two-file fixture
+  // exceed the unchanged aggregate cap. The known-plan refusal below retains that boundary.
+  const specRecord = independentRepairSpec({ uniqueCharacters: 70_000 });
   const value = await independentRepairScenario(specRecord);
   try {
     const initialBytes = value.flowManager.readArtifact({ specId: value.specId,
@@ -100,18 +104,21 @@ test("packs complete Unicode units into bounded files and atomically applies all
         const input = requestInput(request, "spec-gate-repair-context.json");
         const context = input.document;
         contexts.push(context);
-        chargedCharacters += prompt.length + request.inputs.reduce((sum, entry) =>
-          sum + JSON.stringify(requestInput(request, entry.name).document).length, 0);
-        chargedItems += request.inputs.length + 1;
+        const physical = PromptLogicalFootprint.measure({ systemPrompt: options.systemPrompt,
+          userPrompt: prompt, jsonSchema: options.jsonSchema, fmtFallback: options.fmtFallback });
+        const action = JSON.parse(fs.readFileSync(path.join(path.dirname(requestPath), "action.json"), "utf8"));
+        chargedCharacters += physical.total
+          + (input.descriptor.deliveryMode === "file" ? workerArtifactStableStringify(context).length : 0)
+          + workerArtifactStableStringify(request).length + workerArtifactStableStringify(action).length;
+        chargedItems += 4;
         assert.ok(input.byteLength <= 2 * 1024 * 1024);
         assert.equal(context.mode, "repair");
-        assert.equal(context.batchCount, contexts.length === 1 ? 2 : 1);
+        assert.equal(context.batchCount, 1);
         const groups = SpecGateRepairBundle.fromJSON(context.bundle).selections().map((selection) => {
           assert.equal(unitIds.has(selection.unit.id), false, "A completed unit must never be sent again");
           unitIds.add(selection.unit.id);
-          assert.deepEqual(selection.ranges.filter((range) => range.id.startsWith("overview.decisions["))
-            .map((range) => range.value).sort((a, b) => a.text.localeCompare(b.text)),
-          [...specRecord.overview.decisions].sort((a, b) => a.text.localeCompare(b.text)));
+          assert.equal(selection.ranges.some((range) => range.id.startsWith("overview.decisions[")), false,
+            "Unrelated decisions are indexed rather than selected as mandatory repair input");
           const range = selection.ranges.find((entry) => entry.writable);
           return { findingIdentities: selection.unit.findings.map((finding) => finding.identity),
             operations: [{ kind: "edit-text-field", target: range.target, expectedDigest: range.digest,
@@ -127,7 +134,7 @@ test("packs complete Unicode units into bounded files and atomically applies all
         return JSON.stringify({ sealed: true, requestDigest: request.requestDigest });
       },
     };
-    for (let generation = 0; generation < 2; generation += 1) {
+    for (let generation = 0; generation < 1; generation += 1) {
       const result = await dispatchOnce(value, agent);
       assert.equal(contexts.length, generation + 1, JSON.stringify(result));
       value.flowManager = new FlowManager({ root: value.root, mainRoot: value.root,
@@ -152,19 +159,7 @@ test("packs complete Unicode units into bounded files and atomically applies all
       assert.equal(progress[1].budget.providerCallCount, generation + 1);
       assert.equal(progress[1].budget.aggregateCharacters, progress[0].budget.aggregateCharacters);
       assert.deepEqual(progress[2].budget, budget);
-      if (generation === 0) {
-        assert.equal(result.data?.nextAction?.step, "spec-gate-repair", JSON.stringify(result));
-        assert.deepEqual(value.flowManager.readArtifact({ specId: value.specId,
-          logicalKey: "spec.record", consumerNodeId: "spec-gate-repair" }).bytes, initialBytes);
-        const ledger = new SpecGateRepairProgressLedger({ flowManager: value.flowManager,
-          specId: value.specId, attemptId, baseRevision: contexts[0].baseRevision });
-        assert.equal(ledger.entries.length, 1);
-        assert.deepEqual(ledger.entries[0].context, contexts[0]);
-        const completed = JSON.parse(value.flowManager.readArtifact({ specId: value.specId,
-          logicalKey: "spec.gate.repair.progress", consumerNodeId: "spec-gate-repair",
-          parameters: { attemptId, generation: "0", phase: "completed" } }).bytes.toString("utf8"));
-        assert.equal(completed.resultKind, "spec-gate-repair-context-required");
-      } else assert.equal(result.data?.nextAction?.step, "spec-review", JSON.stringify(result));
+      assert.equal(result.data?.nextAction?.step, "spec-review", JSON.stringify(result));
     }
     assert.equal(unitIds.size, 8);
     const saved = JSON.parse(value.flowManager.readArtifact({ specId: value.specId,
@@ -196,6 +191,10 @@ test("refuses all known unique-input calls and response allowances before any ca
     });
     assert.equal(result.ok, false);
     assert.equal(result.errors[0].code, "PROMPT_RESPONSE_TOO_LARGE", JSON.stringify(result));
+    assert.ok(result.data.additionalCharacters > 1_000_000);
+    assert.equal(result.data.maxAggregateCharacters, 1_000_000);
+    assert.equal(result.data.additionalItems, 2 * 4 + 8,
+      "Both four-item file calls and all eight response groups must be admitted together");
     assert.equal(calls, 0);
     assert.deepEqual(canonicalSnapshot(new FlowManager({ root: value.root, mainRoot: value.root,
       inWorktree: false, specId: value.specId }), value.specId), before);
@@ -204,9 +203,8 @@ test("refuses all known unique-input calls and response allowances before any ca
 
 test("refuses an indivisible file overflow before provider, claim, retry or canonical mutation", async () => {
   const specRecord = validWorkerHandoffSpec();
-  specRecord.overview.decisions = Array.from({ length: 60 }, () => ({
-    text: "決".repeat(4000), evidence: "拠".repeat(4000), consideredAlternatives: "案".repeat(4000),
-  }));
+  // The allowed entity field is indivisible mandatory input; unrelated overview bodies are not.
+  specRecord.requirements[0].desc = "決".repeat(710_000);
   const value = await createSpecGateRepairScenario({ specRecord });
   try {
     initGitRepo(value.root);
@@ -230,8 +228,9 @@ test("refuses an indivisible file overflow before provider, claim, retry or cano
 
 test("dispatches a complete Unicode repair input larger than the prompt limit and reloads its atomic publication", async () => {
   const specRecord = validWorkerHandoffSpec();
-  const head = "Read the original decision from its beginning.";
-  const tail = "Keep the original decision through its end.";
+  const head = "Read the original selected field from its beginning.";
+  const tail = "Keep the original selected field through its end.";
+  specRecord.requirements[0].desc = head + "承認済みの判断を維持する。\"根拠\"\n🧭".repeat(4000) + tail;
   specRecord.overview.decisions = Array.from({ length: 60 }, (_, index) => ({
     text: `${head} ${index}: ` + "承認済みの判断を維持する。\"根拠\"\n🧭".repeat(14) + tail,
     evidence: "The complete decision is authoritative read-only context. ".repeat(15),
@@ -267,13 +266,12 @@ test("dispatches a complete Unicode repair input larger than the prompt limit an
         assert.equal(prompt.includes(head), false);
         assert.equal(prompt.includes(tail), false);
         const selection = selections[0];
-        for (const expected of specRecord.overview.decisions) {
-          const decision = selection.ranges.find((range) => range.value?.text === expected.text);
-          assert.deepEqual(decision?.value, expected, "Every complete selected decision must survive request serialization");
-          assert.equal(decision.writable, false);
-        }
+        assert.equal(input.descriptor.deliveryMode, "file");
+        assert.equal(selection.ranges.some((range) => range.id.startsWith("overview.decisions[")), false);
         const writable = selection.ranges.find((range) => range.id === "requirements[R1].desc" && range.writable);
         assert.ok(writable);
+        assert.equal(writable.value, specRecord.requirements[0].desc,
+          "The complete selected field must survive delivery from beginning through end");
         fs.writeFileSync(requestPayloadPath(request, "spec-gate-repair.json"), workerArtifactJson({
           version: 1, stage: "spec-gate-repair", baseRevision: input.document.baseRevision,
           groups: [{ findingIdentities: selection.unit.findings.map((finding) => finding.identity),

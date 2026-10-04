@@ -8,7 +8,7 @@ import { canonicalPlanGateRepairForTarget, PlanGateRepairObservation } from "./p
 import { SpecGateRepairContext } from "./spec-gate-repair-context.js";
 import { SpecGateTargetSelection } from "./spec-gate-targets.js";
 import { readSpecGateRepairSources } from "./spec-gate-repair-sources.js";
-import { SpecGateRepairInput } from "./spec-gate-repair-values.js";
+import { SpecGateRepairInput, SpecGateRepairSourceSnapshots } from "./spec-gate-repair-values.js";
 
 function digest(bytes) { return createHash("sha256").update(bytes).digest("hex"); }
 function key(value) { return JSON.stringify(value); }
@@ -28,7 +28,10 @@ export class SpecGateRepairRuleSet {
 }
 
 /** Match Gate cycle observations to the existing four-part source finding identity. */
-export function readSpecGateRepairInput({ flowManager, state, executionRoot, locations = null }) {
+export function readSpecGateRepairInput({ flowManager, state, executionRoot, locations = null, sourceSnapshots = null }) {
+  if (sourceSnapshots !== null && !(sourceSnapshots instanceof SpecGateRepairSourceSnapshots)) {
+    throw new TypeError("Gate repair source restoration requires its typed canonical snapshot");
+  }
   if (state.current?.at(-1) !== "spec-gate-repair" || state.attempt === null) {
     throw new Error("Spec Gate repair input requires its active Attempt");
   }
@@ -91,7 +94,8 @@ export function readSpecGateRepairInput({ flowManager, state, executionRoot, loc
     };
   });
   const ruleSet = new SpecGateRepairRuleSet({ executionRoot, spec });
-  const sources = readSpecGateRepairSources({ flowManager, state, executionRoot, spec });
+  const sources = sourceSnapshots === null ? readSpecGateRepairSources({ flowManager, state, executionRoot, spec })
+    : sourceSnapshots.sources();
   let context = new SpecGateRepairContext({
     spec, baseRevision, findings, guardrails: ruleSet.guardrails, sources,
     acknowledgedRationale: ruleSet.acknowledgedRationale,

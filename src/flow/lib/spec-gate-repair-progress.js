@@ -2,139 +2,11 @@
 import { readSpecGateRepairInput } from "./spec-gate-repair-input.js";
 import { FlowFindingSourceIdentity } from "./flow-finding-source.js";
 import { SpecGateRepairContextExpansion } from "./spec-gate-repair-context-expansion.js";
-import { PromptRequestLimit, PromptExecutionLimit, PromptExecutionBudget,
-  PromptResponseAllowance, PromptBatchingError } from "../../lib/prompt-batching.js";
-import { isDeepStrictEqual } from "node:util";
-import { DraftWorkerExecutionClaim } from "../definition.js";
-import { SpecGateRepairSavedCallPlan, specGateRepairResponseCost,
-  specGateRepairProgressMismatch as progressMismatch } from "./spec-gate-repair-call-plan.js";
-import { freezeSpecGateRepairValue } from "./spec-gate-repair-selection.js";
+import { PromptRequestLimit, PromptExecutionLimit, PromptExecutionBudget } from "../../lib/prompt-batching.js";
+import { specGateRepairProgressMismatch as progressMismatch } from "./spec-gate-repair-call-plan.js";
 import { WorkerArtifactHandoffError } from "./worker-artifact-handoff-error.js";
-
-const REPAIR_BUDGET_LIMIT = Object.freeze({ maxBatchCount: 16, maxProviderCallCount: 16,
-  maxSynthesisCallCount: 16, maxAggregateCharacters: 1_000_000, maxAggregateItemCount: 100_000 });
-
-/** One read boundary shares canonical observations; no cache survives the caller. */
-class SpecGateRepairProgressReader {
-  #flowManager;
-  #specId;
-  #attemptId;
-  #consumerNodeId;
-  #activities;
-  #entries = new Map();
-
-  constructor({ flowManager, specId, attemptId, consumerNodeId }) {
-    this.#flowManager = flowManager;
-    this.#specId = specId;
-    this.#attemptId = attemptId;
-    this.#consumerNodeId = consumerNodeId;
-    this.#activities = new Map(flowManager.activityLedger(specId).map((activity) => [activity.id, activity]));
-  }
-
-  activities() { return [...this.#activities.values()]; }
-
-  read(generation, phase) {
-    const key = `${generation}:${phase}`;
-    if (this.#entries.has(key)) return this.#entries.get(key);
-    const flowManager = this.#flowManager;
-    const specId = this.#specId;
-    const attemptId = this.#attemptId;
-    const consumerNodeId = this.#consumerNodeId;
-    const artifact = flowManager.readArtifact({ specId, logicalKey: "spec.gate.repair.progress",
-      consumerNodeId, parameters: { attemptId, generation: String(generation), phase } });
-    try {
-      return this.#restore(artifact, generation, phase, key);
-    } catch (error) {
-      if (error instanceof WorkerArtifactHandoffError) throw error;
-      if (error instanceof TypeError || error instanceof RangeError || error instanceof SyntaxError
-        || error instanceof PromptBatchingError) {
-        throw progressMismatch("Gate repair saved progress contains an invalid serialized contract");
-      }
-      throw error;
-    }
-  }
-
-  #restore(artifact, generation, phase, key) {
-    const specId = this.#specId;
-    const attemptId = this.#attemptId;
-    const saved = JSON.parse(artifact.bytes.toString("utf8"));
-    const activity = this.#activities.get(artifact.descriptor.activityId);
-    const receipt = activity?.result?.draftSettlementReceipt;
-    const lifecycle = receipt?.executionLifecycle;
-    if (saved.version !== 2 || saved.phase !== phase || saved.specId !== specId
-      || saved.attemptId !== attemptId || saved.generation !== Number(generation)
-      || receipt?.binding?.runId !== saved.runId || receipt.binding.specId !== specId
-      || receipt.binding.stepId !== "spec-gate-repair" || receipt.binding.attemptId !== attemptId
-      || receipt.binding.attemptSequence !== saved.attemptSequence || lifecycle?.phase !== phase
-      || lifecycle.binding.executionGeneration !== saved.generation
-      || lifecycle.binding.inputDigest !== saved.inputDigest || lifecycle.binding.inputRevision !== saved.inputRevision
-      || typeof saved.actionFileDigest !== "string" || !/^[a-f0-9]{64}$/.test(saved.actionFileDigest)
-      || !Object.hasOwn(saved, "actionRepositoryFingerprint")
-      || saved.actionRepositoryFingerprint !== null
-        && (typeof saved.actionRepositoryFingerprint !== "string" || saved.actionRepositoryFingerprint.trim() === "")) {
-      throw progressMismatch("Gate repair progress differs from its exact canonical receipt");
-    }
-    if (saved.executionLocator === null || typeof saved.executionLocator !== "object"
-      || Object.keys(saved.executionLocator).sort().join(",") !== "actionDigest,dispatchInvocationId,generatedAt,kind,requestDigest") {
-      throw progressMismatch("Gate repair execution locator has an invalid shape");
-    }
-    const executionLocator = new DraftWorkerExecutionClaim(saved.executionLocator);
-    if (!isDeepStrictEqual(saved.executionLocator, executionLocator.toJSON())
-      || executionLocator.requestDigest !== saved.requestDigest
-      || (phase !== "checkpoint" && !isDeepStrictEqual(lifecycle.claim, executionLocator.toJSON()))) {
-      throw progressMismatch("Gate repair progress locator differs from its canonical claim");
-    }
-    const ceiling = new PromptExecutionLimit(REPAIR_BUDGET_LIMIT);
-    if (saved.limit === null || typeof saved.limit !== "object" || Array.isArray(saved.limit)
-      || Object.keys(saved.limit).sort().join(",") !== Object.keys(ceiling).sort().join(",")) {
-      throw progressMismatch("Gate repair progress execution limits have an invalid shape");
-    }
-    const limit = new PromptExecutionLimit(saved.limit);
-    if (Object.keys(ceiling).some((field) => typeof limit[field] !== "number" || limit[field] > ceiling[field])) {
-      throw progressMismatch("Gate repair progress relaxed its execution limits");
-    }
-    const callPlan = new SpecGateRepairSavedCallPlan({ plan: saved.plan, limit });
-    const call = callPlan.currentCall(saved);
-    if (phase === "checkpoint") {
-      const previous = saved.generation === 0 ? null
-        : this.read(saved.generation - 1, "publication");
-      if (previous !== null && Object.keys(ceiling).some((field) => limit[field] > previous.limit[field])) {
-        throw progressMismatch("Gate repair checkpoint expanded its durable execution limits");
-      }
-      const frontier = previous?.budget ?? new PromptExecutionBudget(limit);
-      if (!isDeepStrictEqual(frontier.snapshot(), saved.plan.budgetFrontier)) {
-        throw progressMismatch("Gate repair call plan changed its canonical budget frontier");
-      }
-    }
-    const expected = PromptExecutionBudget.fromSnapshot(limit, saved.plan.budgetFrontier);
-    expected.consumeAggregate(call.callCost);
-    if (call.synthesisCallCount > 0) expected.consumeSynthesisCalls(call.synthesisCallCount);
-    if (phase !== "checkpoint") expected.consumeProviderCall();
-    if (phase === "publication") {
-      const responseCost = PromptResponseAllowance.fromJSON(saved.responseCost);
-      if (!isDeepStrictEqual(responseCost.toJSON(), specGateRepairResponseCost(saved.context, saved.proposal).toJSON())
-        || responseCost.characters > call.responseAllowance.characters || responseCost.items > call.responseAllowance.items) {
-        throw progressMismatch("Gate repair publication exceeds its saved response allowance");
-      }
-      expected.consumeAggregate(responseCost);
-    }
-    const budget = PromptExecutionBudget.fromSnapshot(limit, saved.budget);
-    if (!isDeepStrictEqual(budget.snapshot(), expected.snapshot())) {
-      throw progressMismatch("Gate repair progress budget differs from its exact consumed costs");
-    }
-    if (phase !== "checkpoint") {
-      const previous = this.read(generation, phase === "claimed" ? "checkpoint" : "claimed");
-      const common = ["runId", "specId", "attemptId", "attemptSequence", "generation", "inputDigest", "inputRevision",
-        "requestDigest", "executionLocator", "actionFileDigest", "actionRepositoryFingerprint", "limit", "context", "plan", "callCost", "responseAllowance"];
-      if (common.some((field) => !isDeepStrictEqual(saved[field], previous.document[field]))) {
-        throw progressMismatch("Gate repair progress changed an immutable checkpoint contract");
-      }
-    }
-    const result = Object.freeze({ document: freezeSpecGateRepairValue(saved), executionLocator, limit, budget, callPlan });
-    this.#entries.set(key, result);
-    return result;
-  }
-}
+import { SpecGateRepairProgressReader, SPEC_GATE_REPAIR_PROGRESS_VERSION, REPAIR_BUDGET_LIMIT } from "./spec-gate-repair-progress-reader.js";
+export { SPEC_GATE_REPAIR_PROGRESS_VERSION } from "./spec-gate-repair-progress-reader.js";
 
 /** Read only the progress artifact belonging to the active canonical lifecycle. */
 export function readSpecGateRepairExecutionProgress({ flowManager, state, lifecycle }) {
@@ -227,6 +99,11 @@ function completedRepairPublication({ flowManager, specId, attemptId, attemptSeq
 export function readProgressBoundSpecGateRepairInput({ flowManager, state, executionRoot,
   executionLifecycle = null, acceptedPublication = false }) {
   let source = readSpecGateRepairInput({ flowManager, state, executionRoot });
+  const lifecycle = executionLifecycle ?? flowManager.draftStepExecutionState({ binding: {
+    runId: state.runId, specId: state.specId, stepId: "spec-gate-repair", attempt: state.attempt,
+  } }).lifecycle;
+  const restoredProgress = ["checkpoint", "claimed", "publication"].includes(lifecycle?.phase)
+    ? readSpecGateRepairExecutionProgress({ flowManager, state, lifecycle }) : null;
   const ledger = new SpecGateRepairProgressLedger({ flowManager, specId: state.specId,
     attemptId: state.attempt.id, baseRevision: source.baseRevision, executionLifecycle });
   const activeDraftReturn = ledger.publication?.proposal.stage === "spec-gate-repair-draft-return"
@@ -243,6 +120,17 @@ export function readProgressBoundSpecGateRepairInput({ flowManager, state, execu
       "published Spec Gate repair evidence changed before further work",
       { retryable: false, recoveryPossible: false });
   }
+  if (restoredProgress !== null) {
+    const restored = readSpecGateRepairInput({ flowManager, state, executionRoot,
+      sourceSnapshots: restoredProgress.sourceSnapshots });
+    if (restored.context.evidenceDigest !== source.context.evidenceDigest
+      || restored.context.evidenceDigest !== restoredProgress.document.context.evidenceDigest) {
+      throw new WorkerArtifactHandoffError("stale", "FLOW_SPEC_GATE_REPAIR_EVIDENCE_CHANGED",
+        "Saved Spec Gate repair snapshot differs from current canonical evidence",
+        { retryable: false, recoveryPossible: false });
+    }
+    source = restored;
+  }
   const locationPlan = source.context.unresolvedFindings().length > 0
     ? source.context.locationPlan({ limit: SPEC_GATE_REPAIR_REQUEST_LIMIT }) : null;
   const completedLocations = locationPlan === null ? [] : acceptedPublication
@@ -256,6 +144,7 @@ export function readProgressBoundSpecGateRepairInput({ flowManager, state, execu
       })) });
     if (resolved.unresolvedFindings().length === 0) {
       source = readSpecGateRepairInput({ flowManager, state, executionRoot,
+        sourceSnapshots: restoredProgress?.sourceSnapshots ?? null,
         locations: resolved.units().flatMap((unit) => unit.findings
           .filter((finding) => unresolved.has(finding.identity.toString()))
           .map((finding) => ({ identity: finding.identity.toJSON(), rangeIds: finding.rangeIds }))) });
@@ -281,7 +170,7 @@ export class SpecGateRepairProgressLedger {
       const match = entry.relativePath.slice(prefix.length).match(/^(\d+)-publication\.json$/);
       if (match === null) throw new Error("Gate repair publication has an invalid generation path");
       const { document } = reader.read(match[1], "publication");
-      if (document.version !== 2 || document.phase !== "publication"
+      if (document.version !== SPEC_GATE_REPAIR_PROGRESS_VERSION || document.phase !== "publication"
         || document.attemptId !== attemptId
         || document.generation !== Number(match[1]) || document.context?.baseRevision !== baseRevision) {
         throw new Error("Gate repair publication differs from its canonical Attempt and revision");
@@ -311,7 +200,8 @@ export class SpecGateRepairProgressLedger {
     const completed = (entry) => completedRepairPublication({ flowManager, specId, attemptId,
       attemptSequence: state.attempt.sequence, runId: state.runId, entry, activities });
     this.completedLocations = Object.freeze(this.entries.filter((entry) => (
-      entry.context.mode === "locate" && completed(entry) !== null
+      entry.context.mode === "locate" && entry.proposal.stage === "spec-gate-repair-locate"
+      && completed(entry) !== null
     )));
     const current = flowManager.readCurrentStepSettlement({ specId, stepId: "spec-gate-repair" });
     const activeLifecycle = current?.receipt.executionLifecycle;
@@ -358,7 +248,8 @@ export class SpecGateRepairProgressLedger {
     const completed = this.completedLocationBatches(plan);
     if (plan === null) return completed;
     const active = this.entries.find((entry) => entry.generation === this.activePublicationGeneration
-      && entry.context.mode === "locate" && plan.batches[entry.context.batchIndex]?.digest === entry.context.batchDigest
+      && entry.context.mode === "locate" && entry.proposal.stage === "spec-gate-repair-locate"
+      && plan.batches[entry.context.batchIndex]?.digest === entry.context.batchDigest
       && entry.context.batchCount === plan.batches.length);
     return active === undefined || completed.includes(active) ? completed
       : Object.freeze([...completed, active].sort((a, b) => a.context.batchIndex - b.context.batchIndex));

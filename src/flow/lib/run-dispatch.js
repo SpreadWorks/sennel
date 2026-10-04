@@ -1,6 +1,7 @@
 import { assertCurrentWorkerExecutionSelection } from "./worker-execution-admission.js";
 import { workerStepExecutionRegistration } from "../engine/composition/registered-step-execution.js";
 import { reserveSpecGateRepairWorkerCall } from "../engine/composition/spec-gate-repair.js";
+import { SPEC_GATE_REPAIR_REQUEST_LIMIT } from "./spec-gate-repair-progress.js";
 import { planSpecGateRepairWorkerExecution } from "./spec-gate-repair-execution.js";
 import { CURRENT_FLOW_SCHEMA_REVISION } from "../../lib/flow-schema-revision.js";
 /**
@@ -1058,7 +1059,9 @@ export class FlowDispatchWork {
     };
   }
 
-  prompt(workerInvocation) {
+  instructionPrompt(workerInvocation) { return this.prompt(workerInvocation, { includeInput: false }); }
+
+  prompt(workerInvocation, { includeInput = true } = {}) {
     const { action, authorization, target } = this.invocation;
     const nextAction = workerFacingNextAction(action.nextAction);
     const authorizationInstruction = authorization.workerInstruction();
@@ -1093,7 +1096,9 @@ export class FlowDispatchWork {
           "",
           "This action uses the worker artifact handoff contract in request.json.",
           "Treat its input snapshots as the immutable source for this action.",
-          "Read requestPath from the dispatch invocation contract in full before acting; it contains the input documents, context, selected repair capability, output authority, spec-test topology when applicable, and the seal command.",
+          this.handoffRequest.stepId === "spec-gate-repair"
+            ? "Read requestPath from the dispatch invocation contract in full before acting; it is the bounded manifest of selected input descriptors, capability, binding, output authority and seal command. Follow its delivery instructions for the selected immutable context."
+            : "Read requestPath from the dispatch invocation contract in full before acting; it contains the input documents, context, selected repair capability, output authority, spec-test topology when applicable, and the seal command.",
           "Write every declared payload only to its exact payloadPath. Existing",
           "instructions naming canonical artifact paths are overridden for outputs.",
           "Do not mark the Flow step done. After writing all payloads, run the exact",
@@ -1149,6 +1154,9 @@ export class FlowDispatchWork {
       "signal and independently verifies the refreshed Flow and repository state.",
       handoffInstruction,
       specTestTopologyInstruction,
+      this.handoffRequest.specGateRepairInstructionPrompt(),
+      ...(this.handoffRequest.stepId === "spec-gate-repair"
+        ? [includeInput ? this.handoffRequest.specGateRepairInputPrompt() : ""] : []),
     ].join("\n");
   }
 }
@@ -1934,6 +1942,15 @@ export default class RunDispatchCommand extends FlowCommand {
             repairExecution = planSpecGateRepairWorkerExecution({
               ctx, state, invocation, workerInstructions, handoffCoordinator: this.handoffCoordinator,
               dispatchWorkClass: FlowDispatchWork,
+              promptOptions: agentOptions,
+              requestLimit: new PromptRequestLimit({ maxCharacters: Math.min(SPEC_GATE_REPAIR_REQUEST_LIMIT.maxCharacters,
+                (agent.promptCharacterLimit ?? new PromptRequestLimit()).maxCharacters) }),
+              projectInvocation: typeof agent.projectInvocation === "function" ? (prompt, request) => {
+                const plannedWork = FlowDispatchWork.forAdmission(invocation, request);
+                return agent.projectInvocation(prompt, plannedWork.callOptions({
+                  ctx, agentOptions, deferredMetric, supervisorEvents,
+                }, plannedWork.workerInvocation()));
+              } : null,
             });
             if (repairExecution.canonicalReplay) {
               const prepared = await specDefinition.create({
@@ -2041,7 +2058,10 @@ export default class RunDispatchCommand extends FlowCommand {
             try {
               await assertWorkerAgentAdmission(agent, prompt, callOptions, action.nextAction.step);
               if (handoffRequest?.stepId === "spec-gate-repair") {
-                reserveSpecGateRepairWorkerCall({ ctx, request: handoffRequest, prompt, callPlan: repairExecution.callPlan });
+                reserveSpecGateRepairWorkerCall({ ctx, request: handoffRequest, prompt,
+                  physicalRequest: { ...agentOptions, userPrompt: prompt },
+                  instructionPrompt: { ...agentOptions, userPrompt: work.instructionPrompt(workerInvocation) },
+                  callPlan: repairExecution.callPlan });
               }
             } catch (error) {
               if (!(isStepAdmissionRefusal(error) || isStepPersistenceFailure(error)

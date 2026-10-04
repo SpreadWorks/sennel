@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { SpecGateRepairContext } from "../../src/flow/lib/spec-gate-repair-context.js";
 import { PromptRequestLimit, PromptReferenceElement } from "../../src/lib/prompt-batching.js";
-import { SpecGateRepairSource } from "../../src/flow/lib/spec-gate-repair-values.js";
+import { SpecGateRepairSource, SpecGateRepairSourceSnapshots } from "../../src/flow/lib/spec-gate-repair-values.js";
+import { specGateRepairInflationFixture } from "./spec-gate-repair-inflation-fixture.js";
 import { SpecGateRepairBundle } from "../../src/flow/lib/spec-gate-repair-bundle.js";
 
 const revision = `sha256:${"a".repeat(64)}`;
@@ -69,15 +70,17 @@ test("repair evidence binds merged rule content and regular expression semantics
   assert.equal(resolved.evidenceDigest, original.evidenceDigest);
 });
 
-test("repair selection includes linked task and decisions but excludes unrelated body", () => {
+// Retired contract: linked task closure and every decision were automatically selected.
+test("repair selection stays entity-local and preserves related IDs without unrelated bodies", () => {
   const ctx = context([finding("F1")]);
   const selection = ctx.select(ctx.units()[0].id).toJSON();
   assert.equal(selection.baseRevision, revision);
   assert.deepEqual(selection.guardrails, [rule]);
   assert.deepEqual(selection.unit.findings[0].identity, finding("F1").identity);
-  assert(selection.ranges.some((range) => range.id === "tasks[T1].goal" && range.writable === false));
+  assert(!selection.ranges.some((range) => range.id === "tasks[T1].goal"));
+  assert.equal(selection.ranges.find((range) => range.id === "requirements[R1].task_ids[0]").value, "T1");
   assert(selection.ranges.some((range) => range.id === "requirements[R1].desc" && range.writable === true));
-  assert(selection.ranges.some((range) => range.id === "overview.decisions[0]"));
+  assert(!selection.ranges.some((range) => range.id === "overview.decisions[0]"));
   assert(!JSON.stringify(selection).includes("UNRELATED_BACKGROUND"));
   assert(!JSON.stringify(selection).includes("UNRELATED_TASK"));
 });
@@ -278,4 +281,52 @@ test("large location indexes have exact bounded coverage before resolving a find
   const unresolved = ctx.resolveLocationBatches({ plan, responses: responses.map((response) => ({ ...response,
     locations: [{ identity: source.identity, rangeIds: [] }] })) });
   assert.equal(unresolved.unresolvedFindings().length, 1);
+});
+
+
+test("six findings and twenty-four sources retain canonical bodies while code stays in parent snapshots", (t) => {
+  const input = specGateRepairInflationFixture();
+  const document = input.spec;
+  const findings = input.findings;
+  const canonical = input.sources.filter((source) => !source.id.startsWith("evidence:source:"));
+  const ctx = new SpecGateRepairContext(input);
+  assert.equal(ctx.units().length, 4);
+  // This assertion uses the original selection API so baseline failure detects the original all-source contract violation.
+  for (const unit of ctx.units()) {
+    assert(!JSON.stringify(ctx.select(unit.id).toJSON()).includes("UNSELECTED_CODE_"));
+  }
+  const snapshot = ctx.sourceSnapshots().toJSON();
+  const storedSnapshotBytes = Buffer.byteLength(JSON.stringify(snapshot), "utf8");
+  const selectedBundle = SpecGateRepairBundle.fromSelections(ctx.units().map((unit) => ctx.select(unit.id)));
+  const requiredReadCharacters = JSON.stringify(selectedBundle.toJSON()).length;
+  assert(requiredReadCharacters < storedSnapshotBytes / 5);
+  t.diagnostic(`storedSnapshotBytes=${storedSnapshotBytes}; requiredReadCharacters=${requiredReadCharacters}; selectedBundleBytes=${selectedBundle.byteLength}`);
+  const restoredSources = SpecGateRepairSourceSnapshots.fromJSON(structuredClone(snapshot));
+  assert.deepEqual(restoredSources.toJSON(), snapshot);
+  for (const unit of ctx.units()) {
+    const selected = ctx.select(unit.id);
+    assert(!JSON.stringify(selected.toJSON()).includes("UNSELECTED_CODE_"));
+    for (const source of canonical) assert.equal(selected.ranges.find((range) => range.id === source.id).value.content, source.content);
+    assert.equal(selected.guardrails[0].body, rule.body);
+    assert.equal(selected.acknowledgedRationale, "Existing exception rationale");
+    assert.equal(selected.ranges.find((range) => range.writable).digest.length, 64);
+    assert.equal(selected.indexManifest.descriptorCount, ctx.tableOfContents().length);
+    assert(selected.ranges.some((range) => range.id === selected.indexManifest.firstPageId));
+  }
+  const restored = new SpecGateRepairContext({ spec: document, baseRevision: revision, findings,
+    sources: restoredSources.sources(), guardrails: [rule], acknowledgedRationale: "Existing exception rationale" });
+  assert.equal(restored.evidenceDigest, ctx.evidenceDigest);
+  assert.deepEqual(restored.units().map((unit) => restored.select(unit.id).toJSON()), ctx.units().map((unit) => ctx.select(unit.id).toJSON()));
+  const tampered = structuredClone(snapshot); tampered.sources[0].content += "changed";
+  assert.throws(() => SpecGateRepairSourceSnapshots.fromJSON(tampered), /digest mismatch/);
+  const absent = structuredClone(snapshot); delete absent.sources[0].digest;
+  assert.throws(() => SpecGateRepairSourceSnapshots.fromJSON(absent), /descriptor/);
+});
+
+test("an explicit Spec read adds the requested range without its entity or linked task closure", () => {
+  const ctx = context([finding("F1")]);
+  const selected = ctx.select(ctx.units()[0].id, { additionalRangeIds: ["requirements[R2].desc"] });
+  assert(selected.ranges.some((range) => range.id === "requirements[R2].desc" && !range.writable));
+  assert(!selected.ranges.some((range) => range.id === "requirements[R2].testable"));
+  assert(!selected.ranges.some((range) => range.id === "tasks[T2].goal"));
 });

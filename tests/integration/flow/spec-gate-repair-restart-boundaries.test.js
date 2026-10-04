@@ -67,11 +67,9 @@ function assertOneTerminalPublication(manager, specId, before) {
 
 function oversizedSpec() {
   const specRecord = validWorkerHandoffSpec();
-  specRecord.overview.decisions = Array.from({ length: 60 }, (_, index) => ({
-    text: `Decision ${index}: ${"Preserve interface. ".repeat(24)}`,
-    evidence: "The planned contract remains explicit. ".repeat(25),
-    consideredAlternatives: "A different boundary was considered. ".repeat(25),
-  }));
+  // The finding selects R1 itself. Unrelated overview decisions are optional
+  // evidence and cannot make the initial selection oversized.
+  specRecord.requirements[0].desc = "Preserve the complete selected obligation. 漢字🙂 ".repeat(3_000);
   return specRecord;
 }
 
@@ -747,19 +745,39 @@ describe("Spec Gate repair restart boundaries", () => {
 
   it("refuses a sealed response without its durable claim", async () => {
     const value = await createSpecGateRepairScenario();
+    const interruptedClaim = mock.method(value.flowManager, "claimDraftStepExecution", () => {
+      throw new Error("interrupted before worker claim");
+    });
     try {
       const request = nextRequest(value, "unclaimed-seal");
       const context = request.inputs.find((entry) => entry.name === "spec-gate-repair-context.json").document;
+      // Persist the exact selected snapshot through the real producer, then
+      // interrupt before claim. A request with no checkpoint is rejected by
+      // the descriptor codec before reaching the durable-claim contract.
+      assert.throws(() => reserveSpecGateRepairWorkerCall({ ctx: value.ctx, request,
+        prompt: JSON.stringify(request.toPromptReference()) }), /interrupted before worker claim/);
+      interruptedClaim.mock.restore();
       fs.writeFileSync(request.payloadPath("spec-gate-repair.json"), workerArtifactJson(
         draftReturnProposal(context, "Which target is intended?")));
       sealWorkerArtifactHandoff({ requestPath: request.requestPath,
         invocationId: request.dispatchInvocationId });
-      const before = durableSnapshot(value.flowManager, value.specId);
-      await assert.rejects(prepareSpecGateRepairService({ ctx: value.ctx, request,
+      const restarted = new FlowManager({ root: value.root, mainRoot: value.root,
+        inWorktree: false, specId: value.specId });
+      const state = restarted.canonicalState(value.specId);
+      const lifecycle = restarted.draftStepExecutionState({ binding: {
+        runId: state.runId, specId: value.specId, stepId: "spec-gate-repair", attempt: state.attempt,
+      } }).lifecycle;
+      assert.equal(lifecycle.phase, "checkpoint");
+      assert.equal(lifecycle.claim, null);
+      assert.equal(latestRepairBudget({ flowManager: restarted, specId: value.specId,
+        attemptId: state.attempt.id, baseRevision: context.baseRevision,
+        consumerNodeId: "spec-gate-repair" }).budget.providerCallCount, 0);
+      const before = durableSnapshot(restarted, value.specId);
+      await assert.rejects(prepareSpecGateRepairService({ ctx: { ...value.ctx, flowManager: restarted }, request,
         Connector: SpecEntryConnector, handoffCoordinator: value.coordinator }),
       /exact durable worker claim/);
-      assert.deepEqual(durableSnapshot(value.flowManager, value.specId), before);
-    } finally { removeTmpDir(value.root); }
+      assert.deepEqual(durableSnapshot(restarted, value.specId), before);
+    } finally { interruptedClaim.mock.restore(); removeTmpDir(value.root); }
   });
 
   it("refuses a changed sealed response without publishing its proposal", async () => {
@@ -967,12 +985,11 @@ describe("Spec Gate repair restart boundaries", () => {
       assert.equal(context.mode, "repair");
       assert.equal(context.batchCount, 1);
       const selection = repairSelections(context)[0];
-      const decisionRanges = selection.ranges.filter((range) => range.id.startsWith("overview.decisions["));
-      assert.equal(decisionRanges.length, specRecord.overview.decisions.length);
-      for (const range of decisionRanges) {
-        assert.deepEqual(range.value, specRecord.overview.decisions[Number(range.id.match(/\[(\d+)\]/)[1])]);
-      }
       const writable = selection.ranges.find((range) => range.writable);
+      assert.equal(writable.id, "requirements[R1].desc");
+      assert.equal(writable.value, specRecord.requirements[0].desc);
+      assert.equal(writable.digest, createHash("sha256").update(workerArtifactStableStringify(writable.value)).digest("hex"));
+      assert.ok(workerArtifactStableStringify(context).length > 100_000);
       const proposal = { version: 1, stage: "spec-gate-repair", baseRevision: context.baseRevision,
         groups: [{ findingIdentities: selection.unit.findings.map((finding) => finding.identity),
           operations: [{ kind: "edit-text-field", target: writable.target, expectedDigest: writable.digest,
@@ -988,6 +1005,7 @@ describe("Spec Gate repair restart boundaries", () => {
         state: restarted.canonicalState(value.specId), lifecycle: restarted.draftStepExecutionState({ binding: {
           runId: request.runId, specId: value.specId, stepId: "spec-gate-repair",
           attempt: restarted.canonicalState(value.specId).attempt } }).lifecycle });
+      assert.deepEqual(restored.inputs.find((entry) => entry.name === "spec-gate-repair-context.json").document, context);
       const service = await prepareSpecGateRepairService({ ctx: value.ctx, request: restored,
         Connector: SpecEntryConnector, handoffCoordinator: value.coordinator });
       const result = await new SpecGateRepairStep(service).execute();

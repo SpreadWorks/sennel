@@ -1,5 +1,6 @@
 import { SpecGateRepairInput } from "./spec-gate-repair-values.js";
 import { createHash } from "node:crypto";
+import { SpecGateRepairInputUnavailable } from "./spec-gate-repair-input-unavailable.js";
 import {
   SpecGateRepairReviewRequiredResult, SpecGateRepairReadyForGateResult,
 } from "../engine/step-result.js";
@@ -27,11 +28,14 @@ export class SpecGateRepairWorkerFacts {
   constructor({ input, proposal }) {
     if (!(input instanceof SpecGateRepairInput)
       || !["spec-gate-repair", "spec-gate-repair-locate",
-        "spec-gate-repair-context-request", "spec-gate-repair-draft-return"].includes(proposal?.stage)) {
+        "spec-gate-repair-context-request", "spec-gate-repair-draft-return",
+        "spec-gate-repair-input-unavailable"].includes(proposal?.stage)) {
       throw new TypeError("Spec Gate repair worker facts require canonical input and proposal");
     }
     this.input = input;
     this.proposal = Object.freeze(structuredClone(proposal));
+    this.inputUnavailable = proposal.stage === "spec-gate-repair-input-unavailable"
+      ? SpecGateRepairInputUnavailable.fromJSON(proposal) : null;
     Object.freeze(this);
   }
 }

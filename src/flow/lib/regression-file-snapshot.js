@@ -2,6 +2,7 @@ import crypto from "crypto";
 import fs from "fs";
 import path from "path";
 import { DEFAULT_MAX_CHANGED_FILE_ENTRIES } from "../../lib/git-helpers.js";
+import { compareText } from "./text-order.js";
 
 const REGRESSION_FILE_STATUSES = Object.freeze(new Set([
   "modified",
@@ -129,11 +130,6 @@ function fingerprintFile(root, relativePath) {
     fs.closeSync(fd);
   }
   return hash.digest("hex");
-}
-
-function compareText(left, right) {
-  if (left === right) return 0;
-  return left < right ? -1 : 1;
 }
 
 function compareSnapshots(left, right) {

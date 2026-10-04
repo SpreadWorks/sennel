@@ -5,6 +5,7 @@ import {
   SpecGateRepairPublicationReplay,
   SpecGateRepairSealedReplay,
   SpecGateRepairCheckpointResume,
+  SpecGateRepairExecutionFormatUnavailable,
 } from "../definition.js";
 import { readProgressBoundSpecGateRepairInput, readSpecGateRepairExecutionProgress } from "./spec-gate-repair-progress.js";
 import { WorkerArtifactHandoffCoordinator, WorkerArtifactHandoffError } from "./worker-artifact-handoff.js";
@@ -31,8 +32,19 @@ export function readSpecGateRepairExecutionFacts({ ctx, state,
   let request = null;
   let checkpointActionRepositoryFingerprint = null;
   if (["checkpoint", "claimed", "publication"].includes(lifecycle?.phase)) {
-    const saved = readSpecGateRepairExecutionProgress({ flowManager: ctx.flowManager,
-      state: canonical, lifecycle });
+    let saved;
+    try {
+      saved = readSpecGateRepairExecutionProgress({ flowManager: ctx.flowManager,
+        state: canonical, lifecycle });
+    } catch (error) {
+      if (!(error instanceof WorkerArtifactHandoffError)
+        || error.code !== "FLOW_SPEC_GATE_REPAIR_INPUT_FORMAT_UNAVAILABLE") throw error;
+      const present = lifecycle.claim !== null && lifecycle.claim !== undefined
+        && handoffCoordinator.hasSavedWorkerSubmission({ ctx, state: canonical, executionClaim: lifecycle.claim });
+      return new SpecGateRepairExecutionObservation(new SpecGateRepairExecutionFacts({
+        phase: lifecycle.phase, response: present ? "present" : "absent", formatAvailable: false,
+      }), null, null);
+    }
     if (lifecycle.phase === "checkpoint") {
       checkpointActionRepositoryFingerprint = saved.document.actionRepositoryFingerprint;
     }
@@ -85,7 +97,8 @@ export class SpecGateRepairWorkerExecution {
 /** Execution re-reads the same observations used by next-action before effects. */
 export function planSpecGateRepairWorkerExecution(input) {
   const selected = selectSpecGateRepairExecution(input);
-  if (selected.decision instanceof SpecGateRepairExecutionStop) {
+  if (selected.decision instanceof SpecGateRepairExecutionStop
+    || selected.decision instanceof SpecGateRepairExecutionFormatUnavailable) {
     throw new WorkerArtifactHandoffError("recovery-required", selected.decision.code,
       selected.decision.reason, { retryable: false, recoveryPossible: false });
   }

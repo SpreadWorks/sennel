@@ -6,6 +6,7 @@ class FixtureSpecGateRepairWork {
   constructor(request) { this.request = request; }
   static forAdmission(invocation, request) { return new FixtureSpecGateRepairWork(request); }
   workerInvocation() { return null; }
+  instructionPrompt() { return this.prompt(); }
   prompt() { return JSON.stringify(new WorkerArtifactHandoffReference(this.request)); }
 }
 
@@ -24,5 +25,5 @@ export function reserveFixtureSpecGateRepairWorkerCall({ ctx, request, prompt })
   } }).lifecycle;
   const callPlan = lifecycle?.phase === "checkpoint" ? null
     : createFixtureSpecGateRepairCallPlan({ ctx, request });
-  return reserveSpecGateRepairWorkerCall({ ctx, request, prompt, callPlan });
+  return reserveSpecGateRepairWorkerCall({ ctx, request, prompt, instructionPrompt: prompt, callPlan });
 }
