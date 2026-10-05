@@ -1,6 +1,7 @@
 import { draftStepRegistration, draftWorkerStepRegistration } from "../engine/composition/draft.js";
 import { specStepRegistration, specWorkerStepRegistration } from "../engine/composition/spec.js";
 import { gateStepExecutionRegistration } from "../engine/composition/registered-step-execution.js";
+import { prepareStepRegistration } from "../engine/composition/prepare.js";
 import { NextActionPlanError } from "./next-action-plan-error.js";
 import { CURRENT_FLOW_SCHEMA_REVISION } from "../../lib/flow-schema-revision.js";
 /**
@@ -103,6 +104,13 @@ import {
 // validation → Action projection contract. Existing Step migrations retain
 // their scoped boundaries until they are explicitly moved.
 export { resolveNonGateNextAction } from "./non-gate-transition-application.js";
+
+function projectPrepareStepExecution(input) {
+  const registration = prepareStepRegistration(input.stepId);
+  if (registration === null) throw new TypeError("Preparation projection requires a registered Step");
+  const selection = registration.executionContract.select({ ...input, registration });
+  return registration.executionContract.project(selection, { ...input, registration });
+}
 
 const TEST_CHAIN_NEXT_ACTION_DEFINITIONS = Object.freeze({
   "test-execute": testExecuteTransitionDefinition,
@@ -768,6 +776,8 @@ export function projectApprovalRequirements({
  */
 function buildCanonicalNextActionResult(ctx, state, typedState, descriptor, binding, missingProducerArtifactRoute = null, selectedFinalRegressionAction = null, interruptedRuntimeLog = null) {
   const target = new CanonicalNextActionTarget({ state: typedState, descriptor });
+  const preparationDirective = target.scope === "flow" && prepareStepRegistration(target.stepId) !== null
+    ? projectPrepareStepExecution({ ctx, stepId: target.stepId }) : null;
   // First select a disposition from bounded result facts and accounting.  The
   // repair revision is an execution precondition, not a competing policy:
   // exhausted persisted evidence must therefore converge to defer/blocked
@@ -845,7 +855,9 @@ function buildCanonicalNextActionResult(ctx, state, typedState, descriptor, bind
     );
   }
   const outputSchema = derived.outputSchemaRef ? loadSchema(derived.outputSchemaRef) : {};
-  const instruction = canonicalInstruction(derived, target, state);
+  const instruction = preparationDirective === null
+    ? canonicalInstruction(derived, target, state)
+    : "Resume the preparation protocol with this run's original inputs.";
   const outboxRecovery = target.scope === "flow"
     ? resolveFinalizationOutboxRecovery(ctx, state, target, null, interruptedRuntimeLog)
     : null;
@@ -906,11 +918,11 @@ function buildCanonicalNextActionResult(ctx, state, typedState, descriptor, bind
         binding, recoveryCommand, retryRecoveryPlan: recoveryPlan,
         missingProducerArtifactRoute: missingRoute,
       });
-  let selectedDirective = specPostFailure === null ? null : new BlockedDirective({
+  let selectedDirective = preparationDirective ?? (specPostFailure === null ? null : new BlockedDirective({
     code: specPostFailure.code,
     reason: specPostFailure.reason,
     resumeInstruction: specPostFailure.resumeInstruction,
-  });
+  }));
   selectedDirective ??= userDecisionDirective ?? (workerDirective instanceof ExecuteStepDirective ? null : workerDirective) ?? approvalDirective ?? activationDirective
     ?? outboxRecovery?.directive ?? gateDirective ?? lifecycleDirective;
   if (target.scope === "task" && target.stepId === "task-triage" && typedState.attempt?.failure === null) {

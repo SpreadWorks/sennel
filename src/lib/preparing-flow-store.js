@@ -139,7 +139,8 @@ export class PreparingFlowStore {
 
   /**
    * Resolve { issue, request } from CLI args and a preparing-flow file.
-   * CLI values take precedence; empty CLI values fall back to preparing values.
+   * An explicit run binds the inputs saved by init. CLI values may confirm
+   * that identity, but cannot replace it during preparation.
    *
    * @param {string} runId - runId from --run-id, or empty when absent
    * @param {string} cliIssue
@@ -155,8 +156,14 @@ export class PreparingFlowStore {
     if (!preparing) {
       throw new Error(`preparing flow not found for runId: ${runId}`);
     }
-    if (!issue && preparing.issue != null) issue = String(preparing.issue);
-    if (!request && preparing.request) request = preparing.request;
+    if (issue && Number(issue) !== preparing.issue) {
+      throw new Error("preparing flow Issue does not match this exact preparation target");
+    }
+    if (request && request !== preparing.request) {
+      throw new Error("preparing flow request does not match this exact preparation target");
+    }
+    issue = preparing.issue == null ? "" : String(preparing.issue);
+    request = preparing.request;
     return { issue, request };
   }
 

@@ -17,6 +17,156 @@ function violation(report, rule, file, message) {
   return diagnostic;
 }
 
+function adoptionFiles(seed) {
+  const files = seed.files();
+  files.set(seed.adapter, `import { BlockedDirective } from './next-action-directive.js';
+    class AdmissionSelection {
+      constructor({ state, stepId, registration, binding, preparation, receipt }) {
+        if (registration?.stepId !== stepId || registration.executionContract !== commandStepExecutionContract) {
+          throw new StepAdmissionRefusal('registration identity');
+        }
+        this.runId = state.runId; this.specId = state.specId; this.stepId = stepId;
+        this.registration = registration; this.binding = binding;
+        this.preparation = preparation; this.receipt = receipt; Object.freeze(this);
+      }
+    }
+    export function selectCommand(input) { return new AdmissionSelection(input); }
+    export function projectCommand(selection) {
+      if (!(selection instanceof AdmissionSelection)) { throw new TypeError('selection'); }
+      return new BlockedDirective({ code: 'PREPARATION_REQUIRED', reason: 'external evidence required', resumeInstruction: 'resume', });
+    }
+    export async function executeCommand(selection, input) {
+      if (!(selection instanceof AdmissionSelection) || selection.registration !== input.registration
+        || selection.stepId !== input.registration.stepId) { throw new StepAdmissionRefusal('registration'); }
+      if (selection.receipt !== null) return selection.receipt;
+      if (selection.binding === null || selection.preparation === null) { throw new StepAdmissionRefusal('evidence'); }
+      selection.binding.assertCurrent();
+      const prepared = await input.registration.create({ flowManager: input.flowManager, binding: selection.binding,
+        preparation: selection.preparation, commandResult: input.commandResult, });
+      await prepared.step.execute();
+      return prepared.dependency(input.registration.ServiceClass).settledOutcome;
+    }
+    export const commandStepExecutionContract = new StepExecutionContract({
+      select: selectCommand, project: projectCommand, execute: executeCommand, });`);
+  files.set("src/flow/lib/next-action-directive.js", "export class BlockedDirective {}");
+  const serviceFile = "src/flow/services/service.js";
+  files.set(serviceFile, files.get(serviceFile).replace("throw new TypeError(); } }",
+    "throw new TypeError(); } get settledOutcome() { return null; } }"));
+  for (const caller of seed.callers) {
+    const selection = caller.selectionMode === "select"
+      ? "const selection = registration.executionContract.select({ ...input, registration });"
+      : "const selection = input.selection;";
+    const replay = caller.receiptReplayName === null ? ""
+      : `if (selection.registration !== registration) throw new TypeError('registration');
+         if (selection.receipt !== null) return ${caller.receiptReplayName}(selection.receipt);`;
+    files.set(caller.module, `import { commandRegistration } from '../engine/composition/${seed.phase}.js';
+      ${caller.receiptReplayName === null ? "" : "function replayReceipt(receipt) { return receipt; }"}
+      export function ${caller.declarationName}(input) {
+        const registration = commandRegistration(input.stepId);
+        if (registration === null) throw new TypeError('registration'); ${selection} ${replay}
+        return registration.executionContract.${caller.operation}(selection, { ...input, registration });
+      }`);
+  }
+  return files;
+}
+
+test("registered adoption preserves exact registration, executes its prepared Step, and returns the declared Service outcome", () => {
+  const seed = new StagedExecutionSeed("renamed-adoption", ["first", "second"], null, "prepare-adoption");
+  success(inspect(seed, adoptionFiles(seed)));
+});
+
+for (const [name, before, after] of [
+  ["missing registration identity", "selection.registration !== input.registration", "selection.stepId !== input.registration.stepId"],
+  ["early execution", "if (!(selection instanceof AdmissionSelection) || selection.registration", "if (input.fast) return input.command.execute(input); if (!(selection instanceof AdmissionSelection) || selection.registration"],
+  ["selection overwrite", "selection.binding.assertCurrent();", "selection = input.selection; selection.binding.assertCurrent();"],
+  ["unselected binding", "binding: selection.binding", "binding: input.binding"],
+  ["unselected evidence", "preparation: selection.preparation", "preparation: input.preparation"],
+  ["different registration execution", "await prepared.step.execute();", "await input.otherStep.execute();"],
+  ["execution omission", "await prepared.step.execute();", ""],
+  ["fabricated completion", ".settledOutcome;", ".fabricatedOutcome;"],
+  ["single Step exclusion", "if (selection.receipt !== null)", "if (selection.stepId === 'second') return null; if (selection.receipt !== null)"],
+]) {
+  test(`registered adoption rejects ${name} and accepts restoration`, () => {
+    const seed = new StagedExecutionSeed("renamed-adoption", ["first", "second"], null, "prepare-adoption");
+    const files = adoptionFiles(seed);
+    const original = files.get(seed.adapter);
+    assert.equal(original.includes(before), true);
+    files.set(seed.adapter, original.replace(before, after));
+    violation(inspect(seed, files), "A10", seed.adapter, "named adapter executeCommand does not preserve its supplied selection");
+    files.set(seed.adapter, original);
+    success(inspect(seed, files));
+  });
+}
+
+test("a registered post acknowledges its exact saved receipt without executing the Step again", () => {
+  const seed = new StagedExecutionSeed();
+  const files = adoptionFiles(seed);
+  const caller = seed.callers.find((entry) => entry.declarationName === "post");
+  const original = files.get(caller.module).replace("const selection = input.selection;",
+    `const selection = input.selection;
+     if (selection.registration !== registration) throw new TypeError('registration');
+     if (selection.receipt !== null) return selection.receipt;`);
+  files.set(caller.module, original);
+  success(inspect(seed, files));
+  files.set(caller.module, original.replace("selection.registration !== registration", "input.finished"));
+  violation(inspect(seed, files), "A10", caller.module, "does not preserve registered lookup and selection");
+  files.set(caller.module, original);
+  success(inspect(seed, files));
+});
+
+test("registered adoption callers cannot reuse or escape their acquired capabilities after consumption", () => {
+  const seed = new StagedExecutionSeed("renamed-adoption", ["first", "second"], null, "prepare-adoption");
+  const files = adoptionFiles(seed);
+  const caller = seed.callers.find((entry) => entry.declarationName === "post");
+  const base = files.get(caller.module);
+  const owner = (terminal) => `${base}
+    export async function owner(input) {
+      const registration = commandRegistration(input.stepId);
+      const selection = registration.executionContract.select({ ...input, registration });
+      await post({ ...input, selection });
+      ${terminal}
+    }`;
+  files.set(caller.module, owner("return true;"));
+  success(inspect(seed, files));
+  for (const terminal of [
+    "return registration.executionContract.execute(null, { ...input, registration });",
+    "return registration;",
+    "selection = null; return true;",
+    "return otherHelper(selection);",
+    "const escaped = registration; return escaped;",
+  ]) {
+    files.set(caller.module, owner(terminal));
+    violation(inspect(seed, files), "A11", caller.module,
+      "unregistered execution lookup caller or capability escape");
+    files.set(caller.module, owner("return true;"));
+    success(inspect(seed, files));
+  }
+});
+
+test("registered adoption fragments must call their checked module consumer rather than a lexical shadow", () => {
+  const seed = new StagedExecutionSeed("renamed-adoption", ["first", "second"], null, "prepare-adoption");
+  const files = adoptionFiles(seed);
+  const caller = seed.callers.find((entry) => entry.declarationName === "post");
+  const base = files.get(caller.module);
+  const owner = (parameters, prefix) => `${base}
+    export async function owner(${parameters}) {
+      ${prefix}
+      const registration = commandRegistration(input.stepId);
+      const selection = registration.executionContract.select({ ...input, registration });
+      await post({ ...input, selection });
+      return true;
+    }`;
+  files.set(caller.module, owner("input", ""));
+  success(inspect(seed, files));
+  for (const [parameters, prefix] of [["input, post", ""], ["input", "const post = input.callback;"]]) {
+    files.set(caller.module, owner(parameters, prefix));
+    violation(inspect(seed, files), "A11", caller.module,
+      "unregistered execution lookup caller or capability escape");
+    files.set(caller.module, owner("input", ""));
+    success(inspect(seed, files));
+  }
+});
+
 test("all declared execution forms use named adapters rather than Step suffix inference", () => {
   for (const form of ["worker", "command", "user-decision", "prepare-adoption", "host-one-shot", "deterministic", "aggregate"]) {
     const seed = new StagedExecutionSeed("without-role-suffix", ["first", "second"], null, form);

@@ -42,6 +42,32 @@ function canonicalBytes(scenario) {
   ));
 }
 
+function adoptedExecutionAheadOfBase(scenario, existingWorktree = false) {
+  const executionRoot = existingWorktree ? path.join(scenario.root, ".sennel", "worktree", "existing") : scenario.root;
+  if (existingWorktree) {
+    scenario.git(["worktree", "add", "-b", "existing-feature", executionRoot, "main"]);
+  } else {
+    scenario.git(["checkout", "-b", "existing-feature"]);
+  }
+  scenario.git(["commit", "--allow-empty", "-m", "Advance existing execution branch"], executionRoot);
+  const executionOid = scenario.git(["rev-parse", "HEAD"], executionRoot).trim();
+  assert.notEqual(executionOid, scenario.baseOid);
+  return { executionRoot, executionOid };
+}
+
+function advancedBaseRevision(scenario, { config = null, checkoutBase = true } = {}) {
+  scenario.git(["checkout", "-b", "advance-base"]);
+  if (config !== null) {
+    fs.writeFileSync(path.join(scenario.root, ".sennel", "config.json"), JSON.stringify(config));
+    scenario.git(["add", ".sennel/config.json"]);
+  }
+  scenario.git(["commit", "--allow-empty", "-m", "Advance base concurrently"]);
+  const advancedOid = scenario.git(["rev-parse", "HEAD"]).trim();
+  assert.notEqual(advancedOid, scenario.baseOid);
+  if (checkoutBase) scenario.git(["checkout", "main"]);
+  return advancedOid;
+}
+
 /** Fault only the real publication and acknowledgement of one Prepare Result. */
 class PreparePublicationFault {
   #scenario;
@@ -107,7 +133,7 @@ class PreparePublicationFault {
       || input.activity?.result?.stepResult?.kind !== this.#kind
       || (this.#once && this.#commits > 0)) return this.#apply.call(store, input);
     this.#reached = true;
-    this.#scenario.specId = store.location.specId;
+    this.#scenario.specId = store.location.specId.toString();
     if (this.#scenario.mode === "worktree") {
       this.#journalAtPublication = journalRecord(this.#scenario);
       if (this.#journalAtPublication !== null) {
@@ -1034,4 +1060,220 @@ it("P22 branch publication stops before mandatory work and resumes without anoth
   assertNoWorker(scenario);
   const { requests } = await startDraft(scenario);
   assertPreparedDraftInput(scenario, requests, preparationReceipt);
+});
+
+for (const existingWorktree of [false, true]) {
+  it(`P23 adopted ${existingWorktree ? "existing worktree" : "no-branch"} HEAD ahead of explicit base ${existingWorktree ? "preserves preparation and the existing Draft binding refusal" : "reaches Draft and replays without publication"}`, async (t) => {
+    const scenario = PrepareArtifactScenario.create(t, { mode: existingWorktree ? "branch" : "no-branch" });
+    const { executionRoot, executionOid } = adoptedExecutionAheadOfBase(scenario, existingWorktree);
+    const worktrees = scenario.git(["worktree", "list", "--porcelain"]);
+    await scenario.initialize();
+    assert.equal((await scenario.prepare({ executionRoot })).result, "ok");
+    assert.equal(scenario.executionRoot, executionRoot);
+    const state = scenario.reload().canonicalState(scenario.specId);
+    assert.equal(state.execution.mode, "direct");
+    assert.deepEqual(state.context.toJSON(), {
+      baseOid: scenario.baseOid, gitSnapshot: { available: true, commit: executionOid },
+    });
+    savedPreparation(scenario, "branch", "branch-not-required", "prepare-spec");
+    const receipt = savedPreparation(scenario, "prepare-spec", "prepare-spec-ready", "draft");
+    const before = canonicalBytes(scenario);
+    scenario.reload();
+    assert.equal((await scenario.prepare({ executionRoot })).result, "ok");
+    assert.deepEqual(canonicalBytes(scenario), before);
+    assert.equal(scenario.git(["worktree", "list", "--porcelain"]), worktrees);
+    assertNoWorker(scenario);
+    if (existingWorktree) {
+      await assert.rejects(startDraft(scenario), {
+        name: "Error", message: `worktree flow binding not found: ${path.join(executionRoot, ".sennel", "flow-identity.json")}`,
+      });
+      assert.deepEqual(canonicalBytes(scenario), before);
+      assert.equal(scenario.reload().canonicalState(scenario.specId).findNode("draft").attemptSequence, 0);
+      assertNoWorker(scenario);
+      return;
+    }
+    const { requests } = await startDraft(scenario);
+    assertPreparedDraftInput(scenario, requests, receipt);
+    assert.equal(scenario.reload().canonicalState(scenario.specId).findNode("draft").status, "done");
+    assert.deepEqual(scenario.flowManager.canonicalState(scenario.specId).context.toJSON(), state.context.toJSON(),
+      "Draft settlement must preserve both creation-time Git identities");
+  });
+}
+
+for (const changedBase of [false, true]) {
+  it(`P24 adopted HEAD ahead of base after root publication ${changedBase ? "refuses a changed base OID" : "resumes into Draft"}`, async (t) => {
+    const scenario = PrepareArtifactScenario.create(t);
+    const { executionRoot, executionOid } = adoptedExecutionAheadOfBase(scenario);
+    await scenario.initialize();
+    const failure = new Error("Stop before branch Result publication");
+    const fault = new PreparePublicationFault(t, { scenario, stepId: "branch", kind: "branch-not-required",
+      fault: "before-commit", failure });
+    await assert.rejects(scenario.prepare({ executionRoot }), (error) => error.cause === failure);
+    fault.restore();
+    assert.equal(fault.reached, true);
+    assert.equal(fault.commits, 0);
+    const state = scenario.reload().canonicalState(scenario.specId);
+    assert.equal(state.findNode("branch").status, "in_progress");
+    assert.equal(state.findNode("branch").result, null);
+    assert.equal(state.findNode("prepare-spec").attemptSequence, 0);
+    assert.equal(state.findNode("draft").attemptSequence, 0);
+    assertNoWorker(scenario);
+    if (changedBase) {
+      scenario.git(["update-ref", "refs/heads/main", executionOid, scenario.baseOid]);
+      const before = canonicalBytes(scenario);
+      const preparing = scenario.flowManager.loadPreparingFlow(scenario.runId);
+      const worktrees = scenario.git(["worktree", "list", "--porcelain"]);
+      scenario.reload();
+      await assert.rejects(scenario.prepare({ executionRoot }), /saved preparation mode or base revision/);
+      assert.deepEqual(canonicalBytes(scenario), before);
+      assert.deepEqual(scenario.flowManager.loadPreparingFlow(scenario.runId), preparing);
+      assert.equal(scenario.git(["worktree", "list", "--porcelain"]), worktrees);
+      assert.equal(scenario.git(["rev-parse", "main"]).trim(), executionOid);
+      assert.equal(scenario.git(["rev-parse", "HEAD"]).trim(), executionOid);
+      assertNoWorker(scenario);
+      return;
+    }
+    scenario.reload();
+    assert.equal((await scenario.prepare({ executionRoot })).result, "ok");
+    assert.deepEqual(scenario.reload().canonicalState(scenario.specId).context.toJSON(), {
+      baseOid: scenario.baseOid, gitSnapshot: { available: true, commit: executionOid },
+    });
+    savedPreparation(scenario, "branch", "branch-not-required", "prepare-spec");
+    const receipt = savedPreparation(scenario, "prepare-spec", "prepare-spec-ready", "draft");
+    assertNoWorker(scenario);
+    const { requests } = await startDraft(scenario);
+    assertPreparedDraftInput(scenario, requests, receipt);
+    assert.equal(scenario.reload().canonicalState(scenario.specId).findNode("draft").status, "done");
+  });
+}
+
+for (const mode of ["branch", "worktree"]) {
+  it(`P25 ${mode} creation uses the selected base after its ref advances before Git publication and feeds Draft`, async (t) => {
+    const scenario = PrepareArtifactScenario.create(t, { mode });
+    const advancedOid = advancedBaseRevision(scenario);
+    await scenario.initialize();
+    const acquire = RepositoryFlowOperationLock.prototype.acquire;
+    let updated = false;
+    const observer = t.mock.method(RepositoryFlowOperationLock.prototype, "acquire", function (...args) {
+      const token = acquire.apply(this, args);
+      if (!updated) {
+        scenario.git(["update-ref", "refs/heads/main", advancedOid, scenario.baseOid]);
+        updated = true;
+      }
+      return token;
+    });
+    t.after(() => observer.mock.restore());
+    assert.equal((await scenario.prepare()).result, "ok");
+    observer.mock.restore();
+    assert.equal(updated, true);
+    const state = scenario.reload().canonicalState(scenario.specId);
+    const branch = savedPreparation(scenario, "branch", "branch-prepared", "prepare-spec");
+    const ready = savedPreparation(scenario, "prepare-spec", "prepare-spec-ready", "draft");
+    assert.equal(scenario.git(["rev-parse", branch.preparation.branch]).trim(), scenario.baseOid,
+      "the published feature branch must originate at the base identified by its receipt");
+    assert.equal(state.context.toJSON().gitSnapshot.commit, scenario.baseOid);
+    assert.equal(state.context.toJSON().baseOid, scenario.baseOid);
+    assert.equal(scenario.git(["rev-parse", "main"]).trim(), advancedOid);
+    assertNoWorker(scenario);
+    const { requests } = await startDraft(scenario);
+    assertPreparedDraftInput(scenario, requests, ready);
+    assert.equal(scenario.reload().canonicalState(scenario.specId).findNode("draft").status, "done");
+  });
+}
+
+it("P26 journal-bound worktree creation survives a base ref advance and resumes the same branch receipt into Draft", async (t) => {
+  const scenario = PrepareArtifactScenario.create(t, { mode: "worktree" });
+  const advancedOid = advancedBaseRevision(scenario);
+  await scenario.initialize();
+  let startFingerprint = "100";
+  const identities = new ProcessIdentitySource({ platform: "linux",
+    readBootIdentity: () => "prepare-race-fixture-boot", readProcessStartFingerprint: () => startFingerprint });
+  scenario.flowManager = new FlowManager({ root: scenario.root, mainRoot: scenario.root,
+    inWorktree: false, processIdentitySource: identities });
+  const failure = new Error("Stop after journal-bound branch publication");
+  const fault = new PreparePublicationFault(t, { scenario, stepId: "branch", kind: "branch-prepared",
+    fault: "receipt-read-failure", failure });
+  let publishedJournal = null;
+  const stopped = await scenario.prepare({ worktreePrepareProcessIdentitySource: identities,
+    worktreePrepareFaultInjector(event) {
+      if (event.phase !== "after-journal-publication") return;
+      publishedJournal = journalRecord(scenario);
+      scenario.git(["update-ref", "refs/heads/main", advancedOid, scenario.baseOid]);
+    },
+  }).then((value) => ({ value, error: null }), (error) => ({ value: null, error }));
+  fault.restore();
+  assert.notEqual(publishedJournal, null);
+  assert.equal(publishedJournal.expectedOid, scenario.baseOid);
+  assert.equal(scenario.git(["rev-parse", publishedJournal.branchName]).trim(), scenario.baseOid,
+    "Git publication after journal creation must retain the journal's selected seed");
+  assert.equal(fault.commits, 1);
+  assert.notEqual(stopped.error, null);
+  const journal = journalRecord(scenario);
+  assert.equal(journal.attemptId, publishedJournal.attemptId);
+  scenario.specId = journal.specId;
+  scenario.executionRoot = journal.worktreePath;
+  const branch = savedBranchBeforeMandatory(scenario, "branch-prepared");
+  assert.equal(branch.preparation.baseOid, journal.expectedOid);
+  assert.deepEqual(canonicalBytes(scenario), fault.committed);
+  assert.equal(fs.existsSync(path.join(scenario.executionRoot, ".sennel", "output", "analysis.json")), false);
+  assertNoWorker(scenario);
+  scenario.git(["update-ref", "refs/heads/main", scenario.baseOid, advancedOid]);
+  const gitPublication = scenario.git(["worktree", "list", "--porcelain"]);
+  // Only the external process-start fingerprint changes. This proves persisted
+  // recovery composition; actual process-exit recovery is owned by P21.
+  startFingerprint = "101";
+  assert.equal(identities.assess(journal.processIdentity).status, "stale");
+  scenario.flowManager = new FlowManager({ root: scenario.root, mainRoot: scenario.root,
+    inWorktree: false, processIdentitySource: identities });
+  assert.equal((await scenario.prepare({ worktreePrepareProcessIdentitySource: identities })).result, "ok");
+  assert.equal(scenario.git(["worktree", "list", "--porcelain"]), gitPublication);
+  assert.equal(journalRecord(scenario), null);
+  assert.deepEqual(savedPreparation(scenario, "branch", "branch-prepared", "prepare-spec"), branch);
+  const ready = savedPreparation(scenario, "prepare-spec", "prepare-spec-ready", "draft");
+  assertNoWorker(scenario);
+  const { requests } = await startDraft(scenario);
+  assertPreparedDraftInput(scenario, requests, ready);
+  assert.equal(scenario.reload().canonicalState(scenario.specId).findNode("draft").status, "done");
+});
+
+it("P27 required config preflight checks the selected base tree after its ref moves to the caller's different config", async (t) => {
+  const scenario = PrepareArtifactScenario.create(t, { mode: "worktree" });
+  const advancedOid = advancedBaseRevision(scenario, { config: { ...scenario.config, lang: "ja" }, checkoutBase: false });
+  await scenario.initialize();
+  const realGit = process.env.PATH.split(path.delimiter).map((directory) => path.join(directory, "git"))
+    .find((file) => fs.existsSync(file));
+  assert.equal(typeof realGit, "string");
+  const marker = path.join(scenario.root, ".tmp", "base-ref-updated-after-capture");
+  const gitWrapper = path.join(scenario.root, ".fixture-bin", "git");
+  fs.writeFileSync(gitWrapper, [
+    `#!${process.execPath}`,
+    'import fs from "node:fs";',
+    'import { spawnSync } from "node:child_process";',
+    "const args = process.argv.slice(2);",
+    `const result = spawnSync(${JSON.stringify(realGit)}, args, { encoding: "utf8" });`,
+    `if (result.status === 0 && JSON.stringify(args) === ${JSON.stringify(JSON.stringify(["-C", scenario.root, "rev-parse", "main"]))} && !fs.existsSync(${JSON.stringify(marker)})) {`,
+    `const update = spawnSync(${JSON.stringify(realGit)}, ${JSON.stringify(["-C", scenario.root, "update-ref", "refs/heads/main", advancedOid, scenario.baseOid])}, { encoding: "utf8" });`,
+    'if (update.status !== 0) throw new Error(update.stderr);',
+    `fs.writeFileSync(${JSON.stringify(marker)}, result.stdout);`,
+    "}",
+    'process.stdout.write(result.stdout ?? ""); process.stderr.write(result.stderr ?? "");',
+    "process.exit(result.status ?? 1);",
+  ].join("\n"), { mode: 0o755 });
+  const preparing = scenario.flowManager.loadPreparingFlow(scenario.runId);
+  // Caller HEAD/config are B, while the selected base was A. Advancing main
+  // during the real initial Git response must not replace the inspected tree.
+  const result = await scenario.prepare();
+  assert.equal(fs.readFileSync(marker, "utf8").trim(), scenario.baseOid);
+  assert.equal(scenario.git(["rev-parse", "main"]).trim(), advancedOid);
+  assert.equal(result.ok, false);
+  assert.deepEqual(result.errors.map((entry) => entry.code), ["REQUIRED_WORKTREE_FILES_UNREFLECTED"]);
+  assert.equal(result.data.requiredFiles.length, 1);
+  assert.equal(result.data.requiredFiles[0].path, ".sennel/config.json");
+  assert.equal(result.data.requiredFiles[0].status, "base-mismatch");
+  assert.deepEqual(scenario.reload().loadPreparingFlow(scenario.runId), preparing);
+  assert.equal(fs.existsSync(path.join(scenario.root, "specs")), false);
+  assert.equal(journalRecord(scenario), null);
+  assert.equal(scenario.git(["branch", "--list", "feature/*"]), "");
+  assert.equal(scenario.git(["worktree", "list", "--porcelain"]).match(/^worktree /gm).length, 1);
+  assertNoWorker(scenario);
 });

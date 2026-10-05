@@ -7,7 +7,10 @@ import { StructureScope } from "../../support/structure/checker.js";
 
 class Input {}
 class Writer {}
-class ServiceClass { static argumentTypes = [Input, Writer]; }
+class ServiceClass {
+  static argumentTypes = [Input, Writer];
+  get settledOutcome() { return null; }
+}
 function prepareServiceArguments() { return [new Input(), new Writer()]; }
 function selectCommand(input) { return input; }
 function projectCommand(selection) { return selection; }

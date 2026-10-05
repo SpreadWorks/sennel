@@ -460,13 +460,13 @@ export class CanonicalFlowRuntime {
     });
   }
 
-  confirmAttempt({ specId, activityId, result, status = "done", timing = null, provider = null, model = null, effort = null, usage = null, references, specRecord, artifactWrites, artifactRemovals, artifactBaselines, testSourceBaseline, sourceWorkerUpgrade = undefined, admission = undefined, gateTaskLifecycle = null } = {}) {
+  confirmAttempt({ specId, activityId, result, status = "done", timing = null, provider = null, model = null, effort = null, usage = null, references, specRecord, artifactWrites, artifactRemovals, artifactBaselines, testSourceBaseline, sourceWorkerUpgrade = undefined, admission = undefined, gateTaskLifecycle = null, targetAttempt = null } = {}) {
     const state = this.#state(specId);
     return this.#applyAttemptTransition(specId, state, {
       id: activityId,
       nodeId: this.#currentNodeId(state),
       operation: "confirm_attempt",
-      attempt: null,
+      attempt: targetAttempt,
       result,
       status,
       timing,
@@ -935,7 +935,7 @@ export class CanonicalFlowRuntime {
     }), { artifactWrites: [artifactWrite] });
   }
 
-  publishPluginArtifacts({ specId, activityId, artifactWrites } = {}) {
+  publishPluginArtifacts({ specId, activityId, artifactWrites, admission = undefined } = {}) {
     const state = this.#state(specId);
     if (!Array.isArray(artifactWrites) || artifactWrites.length === 0) {
       throw new CurrentFlowStateInvariantError("plugin artifact publication requires one or more artifact writes");
@@ -954,7 +954,7 @@ export class CanonicalFlowRuntime {
         status: null,
         nonblocking: null,
       },
-    }), { artifactWrites });
+    }), { artifactWrites, admission });
   }
 
   /**
@@ -1299,7 +1299,7 @@ export class CanonicalFlowRuntime {
     const target = requiredText(nodeId, "transition nodeId");
     const node = state.findNode(target);
     if (node === null) throw new CurrentFlowStateInvariantError(`transition node is not part of this Flow: ${target}`);
-    const transitionAttempt = ["start_attempt", "rewind", "rewind_test_evidence", "repair_implementation", "triage_implementation_for_repair", "triage_implementation_no_repair", "repair_acceptance_review", "reopen_draft_preimplementation", "reopen_draft_task_addition", "reopen_draft_spec_correction", "plan_gate_repair", "recover_attempt", "recover_missing_producer_artifact", "recover_task_execution_overrun", "retry_attempt", "retry_gate_attempt", "settle_spec_gate_retry", "settle_spec_gate_recovered", "retry_recovery_attempt", "update_attempt", TASK_GATE_CLASSIFICATION_RECOVERY_OPERATION, DRAFT_WORKER_RECOVERY_OPERATION, "accept_final_regression_failure", "defer_failed_review", "defer_failed_gate", "continue_nonblocking", "advance_task_review_stage", "initialize_requirement_test_lifecycle", "advance_requirement_test_lifecycle"].includes(operation)
+    const transitionAttempt = ["confirm_attempt", "start_attempt", "rewind", "rewind_test_evidence", "repair_implementation", "triage_implementation_for_repair", "triage_implementation_no_repair", "repair_acceptance_review", "reopen_draft_preimplementation", "reopen_draft_task_addition", "reopen_draft_spec_correction", "plan_gate_repair", "recover_attempt", "recover_missing_producer_artifact", "recover_task_execution_overrun", "retry_attempt", "retry_gate_attempt", "settle_spec_gate_retry", "settle_spec_gate_recovered", "retry_recovery_attempt", "update_attempt", TASK_GATE_CLASSIFICATION_RECOVERY_OPERATION, DRAFT_WORKER_RECOVERY_OPERATION, "accept_final_regression_failure", "defer_failed_review", "defer_failed_gate", "continue_nonblocking", "advance_task_review_stage", "initialize_requirement_test_lifecycle", "advance_requirement_test_lifecycle"].includes(operation)
       ? attempt
       : null;
     const activityAttempt = operation === "complete_draft_completion"

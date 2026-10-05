@@ -14,8 +14,6 @@ import { managedDir, managedOutputDir } from "../../lib/config.js";
 import { PRODUCT } from "../../lib/product.js";
 import { assertOk, runCmd } from "../../lib/process.js";
 import { iterateAnalysisCategories } from "../../docs/lib/analysis-entry.js";
-import { buildInitialSteps } from "../../lib/flow-helpers.js";
-import { findStepById } from "./step-tree.js";
 import { GIT_OBJECT_ID, captureGitSnapshot, getWorktreeStatus, runGit } from "../../lib/git-helpers.js";
 import { emptySpecStub } from "../../lib/spec-json.js";
 import { onHook } from "../../lib/hooks.js";
@@ -35,6 +33,10 @@ import { CanonicalFlowArtifactWrite, CurrentFlowSpecRecord } from "./current-flo
 import { AtomicFile } from "../../lib/atomic-file.js";
 import { RepositoryFlowOperationLock } from "../../lib/repository-maintenance-lock.js";
 import { ProcessIdentity, ProcessIdentitySource } from "../../lib/process-identity.js";
+import { PrepareStepBinding, prepareStepRegistration } from "../engine/composition/prepare.js";
+import { PreparationEvidence } from "./preparation-evidence.js";
+import { isStepPersistenceFailure } from "./definition-lifecycle-failure.js";
+import { isStepAdmissionRefusal } from "./step-admission-refusal.js";
 import {
   WorktreeFlowBindingStore,
   WorktreeFlowIdentity,
@@ -114,32 +116,31 @@ function isSpecDirectory(directory) {
   }
 }
 
-function generateSpecIdentity(runId, slug, specsDir) {
+function generateSpecIdentity(runId, slug, specsDir, flowManager) {
   const source = specTagSource(runId);
+  let available = null;
   for (let offset = 0; offset + SPEC_TAG_LENGTH <= source.length; offset += SPEC_TAG_LENGTH) {
     const tag = source.slice(offset, offset + SPEC_TAG_LENGTH);
     const specId = FlowSpecId.from(`${tag}-${slug}`).toString();
-    if (!isSpecDirectory(path.join(specsDir, specId))) {
-      return {
+    if (isSpecDirectory(path.join(specsDir, specId))) {
+      const state = flowManager.canonicalState(specId);
+      if (state?.runId === runId) return { specId,
+        branchName: state.execution.featureBranch ?? `feature/${specId}`, state };
+    } else if (available === null) {
+      available = {
         specId,
         branchName: `feature/${specId}`,
+        state: null,
       };
     }
   }
+  if (available !== null) return available;
   throw new Error(`runId-derived spec ID candidates are exhausted for ${runId}`);
 }
 
 function titleFromSpecId(specId) {
   const separator = specId.indexOf("-");
   return separator < 0 ? specId : specId.slice(separator + 1);
-}
-
-function ensureBaseBranch(root, base) {
-  try {
-    runGitTrim(root, ["rev-parse", "--verify", base]);
-  } catch (e) {
-    throw new Error(`base branch not found: ${base}: ${e.message}`);
-  }
 }
 
 function detectBaseBranch(root) {
@@ -203,6 +204,42 @@ function runDocsScanAndValidate(root) {
 
 async function hookSnapshotFor(root) {
   return discoverFlowCommandHooks(root);
+}
+
+function executePrepareStepExecution(input) {
+  const registration = prepareStepRegistration(input.stepId);
+  if (registration === null) throw new TypeError("Preparation requires a registered Step");
+  const selection = registration.executionContract.select({ ...input, registration });
+  return registration.executionContract.execute(selection, { ...input, registration });
+}
+
+function replayPrepareStepReceipt(receipt) { return receipt; }
+
+function recoverPrepareStepExecution(input) {
+  const registration = prepareStepRegistration(input.stepId);
+  if (registration === null) throw new TypeError("Preparation recovery requires a registered Step");
+  const selection = input.selection;
+  if (selection.registration !== registration) throw new TypeError("Preparation recovery requires its selected registration");
+  if (selection.receipt !== null) return replayPrepareStepReceipt(selection.receipt);
+  return registration.executionContract.execute(selection, { ...input, registration });
+}
+
+function acquiredPreparationEvidence({ flowManager, specId, baseOid, worktreePath,
+  issueSnapshot, mandatory = null, bindingIdentity = null }) {
+  return flowManager.readCanonicalTransitionView({ specId, read: ({ state, activities, catalog }) => (
+    new PreparationEvidence({ mode: state.execution.mode, baseOid,
+      branch: state.execution.featureBranch, worktree: worktreePath,
+      creationActivityId: activities[0].id,
+      catalog: catalog.artifacts.filter((entry) => (
+        ["spec.record", "spec.snapshot", "issue.snapshot"].includes(entry.logicalKey)
+          && entry.activityId === activities[0].id
+      )).map((entry) => entry.toJSON()),
+      request: state.request, issueSnapshot, mandatory: mandatory === null ? null : {
+        plugins: catalog.artifacts.filter((entry) => entry.logicalKey === "plugin.lifecycle.artifact")
+          .map((entry) => entry.toJSON()), analysis: mandatory,
+      }, bindingIdentity,
+    })
+  ) });
 }
 
 function copyPluginRuntimeDirectory(src, dest, counter = { files: 0 }) {
@@ -608,14 +645,58 @@ class WorktreePrepareAttemptJournal {
     return record;
   }
 
-  recoverStale(flowManager, operationOwnerToken) {
+  recoverStale(flowManager, operationLock, confirmedReceipt = null, branchReceipt = null) {
     const snapshot = this.load();
-    if (!snapshot) return;
+    if (!snapshot) return null;
+    const operationOwnerToken = operationLock.assertOwned();
     const assessment = this.processIdentitySource.assess(snapshot.record.processIdentity);
     if (assessment.status !== "stale") {
       throw new Error(`worktree prepare attempt owner is ${assessment.status}: ${assessment.reason}`);
     }
+    if (confirmedReceipt !== null) {
+      const record = snapshot.record;
+      if (confirmedReceipt.binding.runId !== record.runId
+        || confirmedReceipt.binding.specId !== record.specId
+        || confirmedReceipt.binding.stepId !== "prepare-spec"
+        || confirmedReceipt.preparation.worktree !== record.worktreePath
+        || confirmedReceipt.preparation.baseOid !== record.expectedOid) {
+        throw new Error("confirmed preparation does not match the journal owner");
+      }
+      this.#validateRollback(record, flowManager);
+      this.complete(record);
+      return null;
+    }
+    if (branchReceipt !== null) {
+      const record = snapshot.record;
+      const evidence = branchReceipt.preparation;
+      if (branchReceipt.binding.runId !== record.runId || branchReceipt.binding.specId !== record.specId
+        || branchReceipt.binding.stepId !== "branch" || branchReceipt.targetStepId !== "prepare-spec"
+        || evidence.mode !== "worktree" || evidence.branch !== record.branchName
+        || evidence.worktree !== record.worktreePath || evidence.baseOid !== record.expectedOid
+        || evidence.request !== record.request || (evidence.issueSnapshot?.number ?? null) !== record.issue) {
+        throw new Error("confirmed branch preparation does not match the journal owner");
+      }
+      this.#validateRollback(record, flowManager);
+      this.assertGitCreated(record);
+      const adopted = new WorktreePrepareAttemptRecord({
+        ...record.toJSON(), processIdentity: this.processIdentitySource.createOwner(record.attemptId),
+      });
+      new AtomicFile(this.path, { commitGuard: () => {
+        operationLock.assertOwned();
+        const current = this.load();
+        if (current === null || current.stat.dev !== snapshot.stat.dev || current.stat.ino !== snapshot.stat.ino
+          || JSON.stringify(current.record.toJSON()) !== JSON.stringify(record.toJSON())) {
+          throw new Error("worktree prepare journal owner changed before branch recovery");
+        }
+      } }).write(`${JSON.stringify(adopted.toJSON(), null, 2)}\n`);
+      const published = this.load();
+      if (JSON.stringify(published?.record.toJSON()) !== JSON.stringify(adopted.toJSON())) {
+        throw new Error("worktree prepare branch recovery ownership readback mismatch");
+      }
+      return adopted;
+    }
     this.rollback(snapshot.record, flowManager, operationOwnerToken);
+    return null;
   }
 
   assertGitCreated(record) {
@@ -810,6 +891,9 @@ export class RunPrepareSpecCommand extends FlowCommand {
     const dryRun = ctx.dryRun || false;
 
     const mainRoot = fs.realpathSync(ctx.mainRoot || flowManager._mainRoot || root);
+    const priorIdentity = runIdArg && title ? generateSpecIdentity(runIdArg, slugify(title) || "feature",
+      (ctx.specRoot ?? flowManager.specRoot).resolve(mainRoot), flowManager) : null;
+    const priorState = priorIdentity?.state ?? null;
     const retryJournal = !dryRun && runIdArg && useWorktreeFlag
       ? new WorktreePrepareAttemptJournal({
           mainRoot,
@@ -831,6 +915,15 @@ export class RunPrepareSpecCommand extends FlowCommand {
       }
       issue = retryAttempt.issue;
       request = retryAttempt.request;
+    } else if (priorState !== null) {
+      if (ctx.issue != null && Number(ctx.issue) !== priorState.identity.issue) {
+        throw new Error("completed preparation Issue does not match this exact retry target");
+      }
+      if (ctx.request != null && ctx.request !== priorState.request) {
+        throw new Error("completed preparation request does not match this exact retry target");
+      }
+      issue = priorState.identity.issue;
+      request = priorState.request;
     } else {
       ({ issue, request } = flowManager.resolvePreparingInputs(runIdArg, ctx.issue, ctx.request));
     }
@@ -878,7 +971,10 @@ export class RunPrepareSpecCommand extends FlowCommand {
 
     let resolvedIssueSnapshot = null;
     if (!dryRun && issue) {
-      const cached = preparingState?.issueBody;
+      const completedBranch = priorState === null ? null : flowManager.readCurrentStepSettlement({
+        specId: priorState.specId, stepId: "branch", completed: true,
+      });
+      const cached = completedBranch?.receipt.preparation.issueSnapshot?.body ?? preparingState?.issueBody;
       if (typeof cached === "string") {
         resolvedIssueSnapshot = new IssueSnapshot({ number: Number(issue), body: cached });
       } else {
@@ -903,13 +999,12 @@ export class RunPrepareSpecCommand extends FlowCommand {
       throw new Error("config.json not found");
     }
     const resolvedBase = base || detectBaseBranch(currentExecutionRoot);
+    const baseOid = runGitTrim(currentExecutionRoot, ["rev-parse", resolvedBase]);
 
     // Determine branching strategy
     const inWorktree = isInsideWorktree(currentExecutionRoot);
     const skipBranch = noBranch || inWorktree;
     const useWorktree = !skipBranch && useWorktreeFlag;
-
-    if (!skipBranch) ensureBaseBranch(currentExecutionRoot, resolvedBase);
 
     const slug = slugify(title) || "feature";
     const attemptJournal = !dryRun && useWorktree
@@ -924,16 +1019,17 @@ export class RunPrepareSpecCommand extends FlowCommand {
     )) {
       throw new Error("stale worktree prepare attempt does not match this exact retry target");
     }
-    if (pendingAttempt && runGitTrim(mainRoot, ["rev-parse", resolvedBase]) !== pendingAttempt.expectedOid) {
+    if (pendingAttempt && baseOid !== pendingAttempt.expectedOid) {
       throw new Error("stale worktree prepare attempt base revision does not match this exact retry target");
     }
     const flowRunId = runIdArg || pendingAttempt?.runId || flowManager.generateRunId();
     const identity = pendingAttempt
       ? { specId: pendingAttempt.specId, branchName: pendingAttempt.branchName }
-      : generateSpecIdentity(
+      : priorIdentity ?? generateSpecIdentity(
           flowRunId,
           slug,
           (ctx.specRoot ?? flowManager.specRoot).resolve(mainRoot),
+          flowManager,
         );
     const { branchName, specId } = identity;
 
@@ -944,9 +1040,14 @@ export class RunPrepareSpecCommand extends FlowCommand {
     const executionRoot = useWorktree ? worktreePath : currentExecutionRoot;
     const specLocation = flowManager.specLocation(specId);
     const specDir = specLocation.directory;
+    const mode = useWorktree ? "worktree" : skipBranch ? "direct" : "branch";
+    if (priorState !== null && (priorState.execution.mode !== mode
+      || priorState.context.toJSON()?.baseOid !== baseOid)) {
+      throw new Error("saved preparation mode or base revision does not match this exact retry target");
+    }
 
     if (!dryRun && useWorktree) {
-      const requiredFileIssues = checkRequiredWorktreeBranchFiles(currentExecutionRoot, resolvedBase);
+      const requiredFileIssues = checkRequiredWorktreeBranchFiles(currentExecutionRoot, baseOid);
       if (requiredFileIssues.length > 0) {
         return requiredWorktreeFilesEnvelope(requiredFileIssues);
       }
@@ -996,7 +1097,14 @@ export class RunPrepareSpecCommand extends FlowCommand {
         throw new Error(`dirty worktree: ${blockingDirtyFiles.join(", ")}. commit/stash before spec, or use --worktree to isolate.`);
       }
     }
-    if (attemptJournal) attemptJournal.recoverStale(flowManager, operationOwnerToken);
+    const completedPreparation = priorState === null ? null : flowManager.readCurrentStepSettlement({
+      specId, stepId: "prepare-spec", completed: true,
+    });
+    const completedBranch = priorState === null ? null : flowManager.readCurrentStepSettlement({
+      specId, stepId: "branch", completed: true,
+    });
+    const resumedWorktreeAttempt = attemptJournal?.recoverStale(flowManager, operationLock,
+      completedPreparation?.receipt ?? null, completedBranch?.receipt ?? null) ?? null;
 
     // The Version Store atomically creates spec.json, flow.json, the ledger,
     // catalog, and an optional Issue snapshot together.  No root-level
@@ -1009,99 +1117,73 @@ export class RunPrepareSpecCommand extends FlowCommand {
       }, { specId });
     }
 
-    async function writeFlowState(extra) {
-      // At prepare time a fresh flow has no tasks. Integration steps
-      // initialize as `skipped` (spec 198 REQ-P4-1); tasks added later
-      // during the flow do not retroactively un-skip them — the skip
-      // state reflects "no tasks declared up-front".
-      const steps = buildInitialSteps();
-      for (const id of ["branch", "prepare-spec"]) {
-        const step = findStepById(steps, id);
-        if (step) {
-          step.status = "done";
-          step.finishedAt = new Date().toISOString();
+    let canonicalManager = null;
+    function preparationManager() {
+      return canonicalManager ??= flowManager.forRoot(executionRoot, { specId });
+    }
+    const issueEvidence = resolvedIssueSnapshot;
+    let preparationConfirmed = false;
+
+    async function adoptPreparation(stepId, mandatory = null, bindingIdentity = null) {
+      const preparation = acquiredPreparationEvidence({ flowManager: preparationManager(), specId,
+        baseOid, worktreePath, issueSnapshot: issueEvidence, mandatory, bindingIdentity });
+      const saved = preparationManager().readCurrentStepSettlement({ specId, stepId, completed: true });
+      if (saved !== null) {
+        if (JSON.stringify(saved.receipt.preparation.toJSON()) !== JSON.stringify(preparation.toJSON())) {
+          throw new Error("saved preparation evidence differs from this exact retry target");
         }
+        const input = { flowManager: preparationManager(), specId, stepId, receipt: saved.receipt };
+        const registration = prepareStepRegistration(stepId);
+        const selection = registration.executionContract.select({ ...input, registration });
+        return recoverPrepareStepExecution({ ...input, selection });
       }
-      const draftStep = findStepById(steps, "draft");
-      if (draftStep) {
-        draftStep.status = "in_progress";
-        draftStep.startedAt = new Date().toISOString();
+      preparationManager().beginNextAction(specId);
+      const binding = new PrepareStepBinding({ flowManager: preparationManager(), specId, stepId });
+      const outcome = await executePrepareStepExecution({ flowManager: preparationManager(),
+        specId, stepId, binding, preparation,
+        commandResult: { runId: flowRunId, specId, stepId, preparation: preparation.toJSON() } });
+      return outcome.receipt;
+    }
+
+    async function writeFlowState() {
+      if (!fs.existsSync(preparationManager().pathFor(specId))) {
+        preparationManager().createFresh(new CanonicalFlowCreateRequest({
+          specId, runId: flowRunId, request: request ?? "",
+          execution: { mode, baseBranch: resolvedBase, featureBranch: skipBranch ? null : branchName },
+          policy: { autoApprove: preparingState?.autoApprove === true, nonblocking: null },
+          issue: issue ? Number(issue) : null,
+          flowId: `flow-${flowRunId}`, flowVersionId: `flow-v1-${flowRunId}`,
+          context: { baseOid, gitSnapshot: captureGitSnapshot(executionRoot) },
+          specRecord: freshSpecRecord(), issueSnapshot: resolvedIssueSnapshot?.body ?? null,
+        }));
       }
-      const state = {
-        specId,
-        baseBranch: resolvedBase,
-        featureBranch: branchName,
-        runId: flowRunId,
-        steps,
-        requirements: [],
-        tasks: [],
-        currentTaskId: null,
-        outbox: [],
-        ...(issue ? { issue: Number(issue) } : {}),
-        ...(request ? { request } : {}),
-        ...(preparingState?.autoApprove ? { autoApprove: true } : {}),
-        ...(preparingState?.autoCheck ? { autoCheck: preparingState.autoCheck } : {}),
-        ...(preparingState?.autoDesired != null ? { autoDesired: preparingState.autoDesired } : {}),
-        ...(preparingState?.notes?.length ? { notes: preparingState.notes } : {}),
-        ...extra,
-      };
-      try {
-        state.plugins = { flowCommandHooks: await hookSnapshotFor(executionRoot) };
-        const lifecycle = await runFlowCommandWithPluginLifecycle(executionRoot, state.plugins.flowCommandHooks, {
-          command: "prepare",
-          // This is command input only.  Its shape remains unchanged while
-          // persistence is owned by the V1 Store below.
-          flow: { ...state, specRoot: specLocation.specRoot },
-          artifactRepositoryRoot: mainRoot,
-          main: async () => {
-            flowManager.forRoot(executionRoot, { specId }).createFresh(new CanonicalFlowCreateRequest({
-              specId,
-              runId: flowRunId,
-              request: request ?? "",
-              execution: {
-                mode: extra.worktree === true ? "worktree" : skipBranch ? "direct" : "branch",
-                baseBranch: resolvedBase,
-                featureBranch: skipBranch ? null : branchName,
-              },
-              policy: { autoApprove: preparingState?.autoApprove === true, nonblocking: null },
-              issue: issue ? Number(issue) : null,
-              flowId: `flow-${flowRunId}`,
-              flowVersionId: `flow-v1-${flowRunId}`,
-              context: { gitSnapshot: captureGitSnapshot(executionRoot) },
-              specRecord: freshSpecRecord(),
-              issueSnapshot: resolvedIssueSnapshot?.body ?? null,
-            }));
-            // The atomic fresh root intentionally materializes every known
-            // leaf as pending.  The prepare command has already completed the
-            // branch and preparation actions, so record those facts through
-            // the same Activity Store before exposing the Flow to its first
-            // worker.  Do not synthesize an active draft Attempt here: its
-            // command-context claim belongs to `get next-action`.
-            const canonicalManager = flowManager.forRoot(executionRoot, { specId });
-            for (const stepId of ["branch", "prepare-spec"]) {
-              canonicalManager.updateStepStatus({ stepId, requestedStatus: "in_progress" }, { specId });
-              canonicalManager.updateStepStatus({ stepId, requestedStatus: "done" }, { specId });
-            }
-            return { ok: true, data: { issue: state.issue, specId: state.specId, runId: state.runId } };
-          },
-        });
-        const pluginArtifactWrites = lifecycle.data?.pluginArtifactWrites || [];
-        if (pluginArtifactWrites.length > 0) {
-          flowManager.forRoot(executionRoot, { specId }).publishPluginArtifacts({
-            specId,
-            artifactWrites: pluginArtifactWrites.map((write) => new CanonicalFlowArtifactWrite(write)),
-          });
-        }
-        if (!lifecycle.ok) {
-          rollbackRequiredPrepareHookFailure(specDir);
-          const error = new Error(lifecycle.outcome?.failure?.message || "required prepare hook failed");
-          error.code = "PLUGIN_HOOK_REQUIRED_FAILED";
-          error.pluginLifecycle = lifecycle;
-          throw error;
-        }
-      } catch (error) {
+      const preparationReceipt = await adoptPreparation("branch");
+      const hooks = await hookSnapshotFor(executionRoot);
+      const state = flowManager.forRoot(mainRoot, { specId }).loadReadOnly(specId);
+      state.plugins = { flowCommandHooks: hooks };
+      const lifecycle = await runFlowCommandWithPluginLifecycle(executionRoot, hooks, {
+        command: "prepare", flow: { ...state, specRoot: specLocation.specRoot },
+        artifactRepositoryRoot: mainRoot,
+        main: async () => ({ ok: true, data: { issue: state.issue, specId, runId: flowRunId } }),
+      });
+      const pluginArtifactWrites = lifecycle.data?.pluginArtifactWrites || [];
+      preparationManager().publishPluginArtifacts({ specId, preparationReceipt,
+        artifactWrites: pluginArtifactWrites.map((write) => new CanonicalFlowArtifactWrite(write)) });
+      if (!lifecycle.ok) {
+        rollbackRequiredPrepareHookFailure(specDir);
+        const error = new Error(lifecycle.outcome?.failure?.message || "required prepare hook failed");
+        error.code = "PLUGIN_HOOK_REQUIRED_FAILED";
+        error.pluginLifecycle = lifecycle;
         throw error;
       }
+    }
+
+    async function completePreparation(bindingIdentity = null) {
+      const bytes = fs.readFileSync(path.join(managedOutputDir(executionRoot), "analysis.json"));
+      await adoptPreparation("prepare-spec", {
+        hash: crypto.createHash("sha256").update(bytes).digest("hex"), size: bytes.length,
+      }, bindingIdentity);
+      preparationConfirmed = true;
     }
 
     const changed = [
@@ -1122,33 +1204,42 @@ export class RunPrepareSpecCommand extends FlowCommand {
     ];
     const lines = [];
 
-    if (useWorktree) {
-      let worktreeAttempt = null;
-      let attemptPublished = false;
+    if (completedPreparation !== null) {
+      const saved = completedPreparation.receipt.preparation;
+      await adoptPreparation("prepare-spec", saved.mandatory.analysis, saved.bindingIdentity);
+      preparationConfirmed = true;
+      lines.push("reused canonical preparation receipt", ...createdFileLines);
+      if (runIdArg && flowManager.loadPreparingFlow(runIdArg) !== null) {
+        flowManager.deletePreparingFlow(runIdArg, { operationOwnerToken });
+      }
+    } else if (useWorktree) {
+      let worktreeAttempt = resumedWorktreeAttempt;
+      let attemptPublished = resumedWorktreeAttempt !== null;
       try {
-        const expectedWorktreeOid = runGitTrim(currentExecutionRoot, ["rev-parse", resolvedBase]);
-        worktreeAttempt = WorktreePrepareAttemptRecord.create({
-          mainRoot,
-          runId: flowRunId,
-          issue: issue ? Number(issue) : null,
-          request,
-          branchName,
-          worktreePath,
-          specId,
-          expectedOid: expectedWorktreeOid,
-          processIdentitySource: attemptJournal.processIdentitySource,
-        });
-        attemptJournal.begin(worktreeAttempt, flowManager);
-        attemptPublished = true;
-        reportWorktreePrepareCheckpoint(ctx, "after-journal-publication", worktreeAttempt);
-        runGitTrim(mainRoot, ["worktree", "add", worktreePath, "-b", branchName, resolvedBase]);
-        attemptJournal.assertGitCreated(worktreeAttempt);
-        reportWorktreePrepareCheckpoint(ctx, "after-worktree-add", worktreeAttempt);
-        ensureWorktreeFlowIdentityIgnored(worktreePath, attemptJournal, worktreeAttempt);
-        reportWorktreePrepareCheckpoint(ctx, "after-exclusion-registration", worktreeAttempt);
-        syncPluginRuntimeToWorktree(currentExecutionRoot, worktreePath);
-        await onHook("PostWorktree", { CWD: worktreePath });
-        await writeFlowState({ worktree: true });
+        if (worktreeAttempt === null) {
+          worktreeAttempt = WorktreePrepareAttemptRecord.create({
+            mainRoot,
+            runId: flowRunId,
+            issue: issue ? Number(issue) : null,
+            request,
+            branchName,
+            worktreePath,
+            specId,
+            expectedOid: baseOid,
+            processIdentitySource: attemptJournal.processIdentitySource,
+          });
+          attemptJournal.begin(worktreeAttempt, flowManager);
+          attemptPublished = true;
+          reportWorktreePrepareCheckpoint(ctx, "after-journal-publication", worktreeAttempt);
+          runGitTrim(mainRoot, ["worktree", "add", worktreePath, "-b", branchName, baseOid]);
+          attemptJournal.assertGitCreated(worktreeAttempt);
+          reportWorktreePrepareCheckpoint(ctx, "after-worktree-add", worktreeAttempt);
+          ensureWorktreeFlowIdentityIgnored(worktreePath, attemptJournal, worktreeAttempt);
+          reportWorktreePrepareCheckpoint(ctx, "after-exclusion-registration", worktreeAttempt);
+          syncPluginRuntimeToWorktree(currentExecutionRoot, worktreePath);
+          await onHook("PostWorktree", { CWD: worktreePath });
+        }
+        await writeFlowState();
         reportWorktreePrepareCheckpoint(ctx, "after-planning-state-publication", worktreeAttempt);
         runDocsScanAndValidate(executionRoot);
         const identity = new WorktreeFlowIdentity({
@@ -1173,13 +1264,28 @@ export class RunPrepareSpecCommand extends FlowCommand {
         flowManager.cleanStaleFlows({ operationOwnerToken });
         flowManager.addActiveFlow(specId, "worktree", { operationOwnerToken });
         reportWorktreePrepareCheckpoint(ctx, "after-registry-publication", worktreeAttempt);
+        await completePreparation(identity.toJSON());
         if (runIdArg) flowManager.deletePreparingFlow(runIdArg, { operationOwnerToken });
         reportWorktreePrepareCheckpoint(ctx, "after-preparing-flow-removal", worktreeAttempt);
         attemptJournal.complete(worktreeAttempt);
         reportWorktreePrepareCheckpoint(ctx, "after-journal-completion", worktreeAttempt);
         attemptPublished = false;
       } catch (publicationError) {
-        if (attemptPublished) {
+        let preservePublication = preparationConfirmed
+          || (resumedWorktreeAttempt !== null && isStepAdmissionRefusal(publicationError));
+        if (!preservePublication && isStepPersistenceFailure(publicationError)) {
+          try {
+            const state = preparationManager().canonicalState(specId);
+            preservePublication = ["branch", "prepare-spec"].some((stepId) => (
+              state?.findNode(stepId).result?.draftSettlementReceipt != null
+            ));
+          } catch {
+            // An uncertain durable publication must remain available to its
+            // journal owner; rollback cannot prove it is uncommitted.
+            preservePublication = true;
+          }
+        }
+        if (attemptPublished && !preservePublication) {
           try {
             attemptJournal.rollback(worktreeAttempt, flowManager, operationOwnerToken);
           } catch (rollbackError) {
@@ -1203,9 +1309,10 @@ export class RunPrepareSpecCommand extends FlowCommand {
       );
     } else if (skipBranch) {
       flowManager.cleanStaleFlows({ operationOwnerToken });
-      await writeFlowState({});
+      await writeFlowState();
       runDocsScanAndValidate(executionRoot);
       flowManager.addActiveFlow(specId, "direct", { operationOwnerToken });
+      await completePreparation();
       lines.push(
         ...createdFileLines,
         "",
@@ -1213,10 +1320,15 @@ export class RunPrepareSpecCommand extends FlowCommand {
         ...fillAndGateNext.map((l, i) => `${i + 1}) ${l}`),
       );
     } else {
-      runGitTrim(currentExecutionRoot, ["checkout", "-b", branchName, resolvedBase]);
-      await writeFlowState({});
+      if (priorState === null) runGitTrim(currentExecutionRoot, ["checkout", "-b", branchName, baseOid]);
+      else if (runGitTrim(currentExecutionRoot, ["rev-parse", "HEAD"]) !== baseOid
+        || runGitTrim(currentExecutionRoot, ["symbolic-ref", "--short", "HEAD"]) !== branchName) {
+        throw new Error("saved branch preparation Git authority differs from this retry target");
+      }
+      await writeFlowState();
       runDocsScanAndValidate(executionRoot);
       flowManager.addActiveFlow(specId, "branch", { operationOwnerToken });
+      await completePreparation();
       lines.push(
         `created branch: ${branchName} (from ${resolvedBase})`,
         ...createdFileLines,
@@ -1226,7 +1338,7 @@ export class RunPrepareSpecCommand extends FlowCommand {
       );
     }
 
-    if (runIdArg && !useWorktree) {
+    if (runIdArg && !useWorktree && flowManager.loadPreparingFlow(runIdArg) !== null) {
       flowManager.deletePreparingFlow(runIdArg, { operationOwnerToken });
     }
 

@@ -738,6 +738,7 @@ export class WorkerArtifactInputContract {
     testReviewRepairInputs = [],
     acceptanceRepairInputs = [],
     virtualInputs = [],
+    optionalVirtualInputs = [],
   }) {
     this.stepId = requiredString(stepId, "worker artifact input contract stepId");
     this.inputs = Object.freeze(
@@ -763,18 +764,26 @@ export class WorkerArtifactInputContract {
     this.acceptanceRepairInputs = Object.freeze(acceptanceRepairInputs.map((entry) => (
       normalizedRelativePath(entry, `${this.stepId}.acceptanceRepair.input`)
     )));
-    this.virtualInputs = Object.freeze(virtualInputs.map((entry) => (
-      normalizedRelativePath(entry, `${this.stepId}.virtualInput`)
+    this.optionalVirtualInputs = Object.freeze(optionalVirtualInputs.map((entry) => (
+      normalizedRelativePath(entry, `${this.stepId}.optionalVirtualInput`)
     )));
+    const requiredVirtualInputs = virtualInputs.map((entry) => (
+      normalizedRelativePath(entry, `${this.stepId}.virtualInput`)
+    ));
+    this.virtualInputs = Object.freeze([...requiredVirtualInputs, ...this.optionalVirtualInputs]);
     if (this.acceptanceRepairInputs.length > 0 && this.stepId !== "impl-triage") {
       throw new Error("acceptance repair inputs may only belong to the implementation triage handoff");
     }
-    this.allowedSignatures = Object.freeze([
+    let signatures = [
       this.inputs,
       ...Object.values(variants),
       ...(this.testReviewRepairInputs.length > 0 ? [this.testReviewRepairInputs] : []),
       ...(this.acceptanceRepairInputs.length > 0 ? [this.acceptanceRepairInputs] : []),
-    ].map((paths) => [...paths, ...this.virtualInputs].join("\u0000")));
+    ].map((paths) => [...paths, ...requiredVirtualInputs].join("\u0000"));
+    for (const optional of this.optionalVirtualInputs) {
+      signatures = [...signatures, ...signatures.map((signature) => [signature, optional].filter(Boolean).join("\u0000"))];
+    }
+    this.allowedSignatures = Object.freeze(signatures);
     if (new Set(this.allowedSignatures).size !== this.allowedSignatures.length) {
       throw new Error(`duplicate worker artifact input contract for ${this.stepId}`);
     }
@@ -790,7 +799,8 @@ export class WorkerArtifactInputContract {
   resolve(options = {}) {
     return Object.freeze([
       ...this.resolveCanonical(options),
-      ...this.virtualInputs,
+      ...this.virtualInputs.filter((relativePath) => !this.optionalVirtualInputs.includes(relativePath)
+        || options.virtualInputs?.includes(relativePath)),
     ]);
   }
 
@@ -832,6 +842,7 @@ export class WorkerArtifactHandoffPolicy {
     testReviewRepairInputs = [],
     acceptanceRepairInputs = [],
     virtualInputs = [],
+    optionalVirtualInputs = [],
     payloads,
     revisionKind = null,
     kind = "artifact",
@@ -857,6 +868,7 @@ export class WorkerArtifactHandoffPolicy {
       repairInputs,
       testReviewRepairInputs,
       acceptanceRepairInputs,
+      optionalVirtualInputs,
       virtualInputs: [
         ...virtualInputs,
         ...(["spec", "spec-gate-repair"].includes(this.stepId)
@@ -885,6 +897,7 @@ const POLICIES = Object.freeze([
   new WorkerArtifactHandoffPolicy({
     stepId: "draft",
     inputs: [],
+    optionalVirtualInputs: ["prepare-spec-receipt.json"],
     payloads: [{ logicalName: "draft.json", targetRelativePath: "draft.json" }],
     revisionKind: "draft",
   }),
@@ -2290,8 +2303,61 @@ function specGateRepairContextHandoffInput({ flowManager, state, policy, executi
   return [specGateRepairContextSnapshot(document)];
 }
 
+/** Read the producer's saved receipt; Draft does not repeat preparation work. */
+function preparationReceiptHandoffInput({ flowManager, state, policy }) {
+  if (policy.stepId !== "draft") return [];
+  const document = flowManager.readCanonicalTransitionView({
+    specId: state.specId,
+    read: (view) => {
+      const canonical = view.state;
+      if (canonical.runId !== state.runId || canonical.specId !== state.specId
+        || canonical.issue !== state.issue || canonical.request !== state.request
+        || canonical.current?.at(-1) !== policy.stepId) {
+        throw new WorkerArtifactHandoffError("stale", "FLOW_ARTIFACT_HANDOFF_STALE",
+          "preparation receipt no longer belongs to the current Draft input");
+      }
+      const producers = ["branch", "prepare-spec"].map((stepId) => canonical.findNode(stepId));
+      // A canonical Flow may start Draft through ordinary Step activation.
+      // Only typed preparation producers establish this additional input contract.
+      if (producers.every((node) => node.result?.stepResult == null
+        && node.result?.draftSettlementReceipt == null)) return null;
+      const receipts = producers.map((node) => {
+        const saved = flowManager.readCurrentStepSettlement({
+          specId: canonical.specId, stepId: node.id, completed: true, view,
+        });
+        if (saved === null) {
+          throw new WorkerArtifactHandoffError("missing", "FLOW_ARTIFACT_HANDOFF_INPUT_MISSING",
+            "Draft requires both completed preparation publications");
+        }
+        const receipt = saved.receipt.toJSON();
+        if (receipt.preparation.request !== canonical.request
+          || (receipt.preparation.issueSnapshot?.number ?? null) !== (canonical.issue ?? null)
+          || receipt.preparation.mode !== canonical.execution.mode
+          || receipt.preparation.branch !== canonical.execution.featureBranch
+          || receipt.preparation.creationActivityId !== view.activities[0]?.id) {
+          throw new WorkerArtifactHandoffError("stale", "FLOW_ARTIFACT_HANDOFF_STALE",
+            "preparation receipt differs from its canonical source lineage");
+        }
+        return receipt;
+      });
+      if (receipts[0].binding.attemptId === receipts[1].binding.attemptId) {
+        throw new WorkerArtifactHandoffError("stale", "FLOW_ARTIFACT_HANDOFF_STALE",
+          "preparation publications must have distinct source Attempts");
+      }
+      return receipts[1];
+    },
+  });
+  if (document === null) return [];
+  const name = "prepare-spec-receipt.json";
+  const bytes = Buffer.from(stableStringify(document));
+  return [new WorkerArtifactInputSnapshot({
+    name, targetRelativePath: name, snapshot: { digest: digest(bytes), byteLength: bytes.length }, document,
+  })];
+}
+
 function workerVirtualHandoffInputs({ flowManager, state, policy, contextSnapshot = null, executionRoot, request = null, specGateRepairDocument = null }) {
   const available = new Map([
+    ...preparationReceiptHandoffInput({ flowManager, state, policy }),
     ...taskReviewStageHandoffInputs({ flowManager, state, policy, contextSnapshot }),
     ...approvedFindingExceptionHandoffInputs({ flowManager, state, policy, executionRoot }),
     ...reviewRecurrenceHandoffInput({ flowManager, state, policy }),
@@ -2300,7 +2366,8 @@ function workerVirtualHandoffInputs({ flowManager, state, policy, contextSnapsho
     ...specGateRepairContextHandoffInput({ flowManager, state, policy, executionRoot, request, document: specGateRepairDocument }),
     ...deferredFindingsHandoffInput({ flowManager, state, policy }),
   ].map((input) => [input.targetRelativePath, input]));
-  return policy.inputContract.virtualInputs.map((relativePath) => {
+  return policy.inputContract.virtualInputs.filter((relativePath) => available.has(relativePath)
+    || !policy.inputContract.optionalVirtualInputs.includes(relativePath)).map((relativePath) => {
     const input = available.get(relativePath) ?? null;
     if (input === null) throw new Error(`worker virtual handoff input is unavailable: ${relativePath}`);
     return input;
@@ -5828,11 +5895,20 @@ export class WorkerArtifactHandoffRequest {
       state,
       stepId: this.stepId,
     });
+    const virtualInputs = new Map(workerVirtualHandoffInputs({
+      flowManager: this.flowManager,
+      state,
+      policy: this.policy,
+      contextSnapshot: this.contextSnapshot,
+      executionRoot: this.executionRoot,
+      request: this,
+    }).map((input) => [input.targetRelativePath, input]));
     const expectedInputPaths = this.policy.inputContract.resolve({
       planGateRepair,
       testReviewRepair,
       requirementTestBinding: requirementTestContext?.binding ?? null,
       acceptanceRepairRoute,
+      virtualInputs: [...virtualInputs.keys()],
     });
     if (
       expectedInputPaths.length !== this.inputs.length
@@ -5844,14 +5920,6 @@ export class WorkerArtifactHandoffRequest {
         "worker artifact handoff input contract changed before publication",
       );
     }
-    const virtualInputs = new Map(workerVirtualHandoffInputs({
-      flowManager: this.flowManager,
-      state,
-      policy: this.policy,
-      contextSnapshot: this.contextSnapshot,
-      executionRoot: this.executionRoot,
-      request: this,
-    }).map((input) => [input.targetRelativePath, input]));
     const current = this.inputs.map(({ targetRelativePath: relativePath }) => {
       const virtual = virtualInputs.get(relativePath) ?? null;
       if (virtual !== null) return {

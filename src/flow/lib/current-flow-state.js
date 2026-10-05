@@ -1,3 +1,4 @@
+import { PreparationEvidence } from "./preparation-evidence.js";
 /**
  * The next-generation Flow state foundation.
  *
@@ -22,7 +23,7 @@ import {
 } from "../../lib/agent-failure.js";
 import { AtomicFile } from "../../lib/atomic-file.js";
 import { AgentResponseProtocolEvidence } from "../../lib/agent-response-protocol.js";
-import { GitSnapshot } from "../../lib/git-snapshot.js";
+import { GitSnapshot, isGitObjectId } from "../../lib/git-snapshot.js";
 import { FileLock } from "../../lib/file-lock.js";
 import { RealDirectoryAuthority } from "../../lib/real-directory-authority.js";
 import { AuthoritativeSpecRecord, FlowActivityId, FlowArtifactCatalog, FlowArtifactCatalogStore, FlowArtifactDescriptor, FlowId, FlowRunId, FlowSpecIdentity, FlowVersionId, FlowVersionLocation, FlowVersionMigrationOutput, FlowVersionMigrationOutputBuilder, FlowVersionMigrationOutputSet, FlowVersionRuntimeLockLocation, FlowVersionSemanticValidator } from "../../lib/flow-version.js";
@@ -145,7 +146,7 @@ const CONDITIONAL_WORKER_SETTLEMENT_OPERATION = "settle_conditional_worker";
 const TASK_REVIEW_STAGE_TRANSITION_OPERATION = "complete_task_review_stage";
 const REQUIREMENT_TEST_INITIALIZATION_OPERATION = "initialize_requirement_test_lifecycle";
 const REQUIREMENT_TEST_TRANSITION_OPERATION = "advance_requirement_test_lifecycle";
-const REPLACEMENT_ATTEMPT_OPERATIONS = new Set(["repair_implementation", "triage_implementation_for_repair", "triage_implementation_no_repair", "repair_acceptance_review", "reopen_draft_preimplementation", "plan_gate_repair", "recover_missing_producer_artifact", "defer_failed_review", "defer_failed_gate", "advance_task_review_stage", REQUIREMENT_TEST_INITIALIZATION_OPERATION, REQUIREMENT_TEST_TRANSITION_OPERATION]);
+const REPLACEMENT_ATTEMPT_OPERATIONS = new Set(["confirm_attempt", "repair_implementation", "triage_implementation_for_repair", "triage_implementation_no_repair", "repair_acceptance_review", "reopen_draft_preimplementation", "plan_gate_repair", "recover_missing_producer_artifact", "defer_failed_review", "defer_failed_gate", "advance_task_review_stage", REQUIREMENT_TEST_INITIALIZATION_OPERATION, REQUIREMENT_TEST_TRANSITION_OPERATION]);
 const SOURCE_WORKER_COMPLETION_OPERATIONS = new Set([
   "confirm_attempt",
   "repair_implementation",
@@ -178,7 +179,7 @@ const INTERRUPTED_FINALIZE_SYNC_OPERATION = "recover_interrupted_finalize_sync";
 const ATTEMPT_INTRODUCTION_OPERATIONS = new Set(["start_attempt", "retry_attempt", "retry_gate_attempt", "settle_spec_gate_retry", "settle_spec_gate_recovered", "retry_recovery_attempt", "rewind", "rewind_test_evidence", "repair_implementation", "triage_implementation_for_repair", "triage_implementation_no_repair", "repair_acceptance_review", "reopen_draft_preimplementation", "reopen_draft_task_addition", "reopen_draft_spec_correction", "plan_gate_repair", "recover_attempt", "accept_final_regression_failure", "defer_failed_review", "defer_failed_gate", "advance_task_review_stage", REQUIREMENT_TEST_INITIALIZATION_OPERATION, REQUIREMENT_TEST_TRANSITION_OPERATION, INTERRUPTED_FINALIZE_SYNC_OPERATION]);
 function transitionIntroducesAttempt(transition) {
   return ATTEMPT_INTRODUCTION_OPERATIONS.has(transition.operation)
-    || (transition.operation === "continue_nonblocking" && transition.attempt !== null);
+    || (["continue_nonblocking", "confirm_attempt"].includes(transition.operation) && transition.attempt !== null);
 }
 // Explicit dispatch approval is a durable authorization fact, not a mutable
 // field on flow.json.  Its append-only Activity can be replayed and checked
@@ -1514,13 +1515,15 @@ export class ActivityDispatchApproval {
 
 /**
  * Context is intentionally bounded to resumable command authority and the
- * creation-time Git snapshot. It is nullable when neither fact is available.
+ * creation-time Git identities. baseOid identifies the selected preparation
+ * base; gitSnapshot records the execution HEAD, which may differ for adoption.
+ * Context is nullable when neither fact is available.
  */
 export class CurrentFlowContext {
   constructor(value) {
     let gitSnapshot = null;
     if (value !== null) {
-      const fields = new Set(["operation", "resumeToken", "gitSnapshot"]);
+      const fields = new Set(["operation", "resumeToken", "gitSnapshot", "baseOid"]);
       if (!isPlainObject(value)) throw new CurrentFlowStateInvariantError("context must be an object");
       const hasResumeContext = Object.hasOwn(value, "operation") || Object.hasOwn(value, "resumeToken");
       if (hasResumeContext && (!Object.hasOwn(value, "operation") || !Object.hasOwn(value, "resumeToken"))) {
@@ -1536,6 +1539,9 @@ export class CurrentFlowContext {
         requireString(value.operation, "context.operation");
         requireString(value.resumeToken, "context.resumeToken");
       }
+      if (Object.hasOwn(value, "baseOid") && !isGitObjectId(value.baseOid)) {
+        throw new CurrentFlowStateInvariantError("context.baseOid must contain a valid Git object id");
+      }
       if (Object.hasOwn(value, "gitSnapshot")) {
         try {
           gitSnapshot = GitSnapshot.from(value.gitSnapshot);
@@ -1547,6 +1553,7 @@ export class CurrentFlowContext {
     this.value = value === null ? null : Object.freeze({
       ...(Object.hasOwn(value, "operation") ? { operation: value.operation, resumeToken: value.resumeToken } : {}),
       ...(gitSnapshot === null ? {} : { gitSnapshot: Object.freeze(gitSnapshot.toJSON()) }),
+      ...(Object.hasOwn(value, "baseOid") ? { baseOid: value.baseOid } : {}),
     });
     Object.freeze(this);
   }
@@ -2157,6 +2164,8 @@ class PersistedDraftSettlementReceipt extends DraftStepSettlementReceiptValue {
     requireExactFields(value, new Set([
       "id", "binding", "resultKind", "resultType", "resultDigest", "settlementKind",
       "targetStepId", "effects", "connector", "publicationDigest", "executionLifecycle", "awaitQuestion",
+      ...(["branch", "prepare-spec"].includes(value.binding?.stepId) && value.resultType !== STEP_RESULT_TYPE.ERROR
+        ? ["preparation"] : []),
       ...(value.binding?.stepId === "draft-gate-repair" && value.executionLifecycle?.phase === "publication" ? ["draftGateRepairSelection"] : []),
     ]), "result.draftSettlementReceipt");
     if (!/^[a-f0-9]{64}$/.test(value.id)) {
@@ -2256,6 +2265,7 @@ class PersistedDraftSettlementReceipt extends DraftStepSettlementReceiptValue {
     this.draftGateRepairSelection = value.draftGateRepairSelection === undefined
       ? null : DraftGateRepairSelection.fromJSON(value.draftGateRepairSelection);
     this.draftGateRepairSelection?.assertBinding(this.binding, this.executionLifecycle);
+    this.preparation = value.preparation === undefined ? null : new PreparationEvidence(value.preparation).assertStep(this.binding.stepId);
     const identity = {
       binding: this.binding,
       resultKind: this.resultKind,
@@ -2268,6 +2278,7 @@ class PersistedDraftSettlementReceipt extends DraftStepSettlementReceiptValue {
       publicationDigest: this.publicationDigest,
       executionLifecycle: this.executionLifecycle?.toJSON() ?? null,
       awaitQuestion: this.awaitQuestion,
+      ...(this.preparation === null ? {} : { preparation: this.preparation.toJSON() }),
       ...(this.draftGateRepairSelection === null ? {} : { draftGateRepairSelection: this.draftGateRepairSelection.toJSON() }),
     };
     const expectedId = crypto.createHash("sha256").update(JSON.stringify(identity)).digest("hex");
@@ -2291,6 +2302,7 @@ class PersistedDraftSettlementReceipt extends DraftStepSettlementReceiptValue {
       publicationDigest: this.publicationDigest,
       executionLifecycle: this.executionLifecycle?.toJSON() ?? null,
       awaitQuestion: this.awaitQuestion,
+      ...(this.preparation === null ? {} : { preparation: this.preparation.toJSON() }),
       ...(this.draftGateRepairSelection === null ? {} : { draftGateRepairSelection: this.draftGateRepairSelection.toJSON() }),
     };
   }
@@ -5231,7 +5243,7 @@ export class CurrentFlowState {
     return this;
   }
 
-  confirmCurrentAttempt({ result, status = "done", gateTaskLifecycle = null }) {
+  confirmCurrentAttempt({ result, status = "done", gateTaskLifecycle = null, targetAttempt = null }) {
     this.assertAttemptConfirmable();
     if (!NODE_STATUSES.has(status) || !["done", "skipped"].includes(status)) {
       throw new CurrentFlowStateInvariantError("confirmed current Attempt status must be done or skipped");
@@ -5262,7 +5274,14 @@ export class CurrentFlowState {
       : this.#applyDraftStepRoute(root, leafId, confirmed);
     const next = this.#replaceRoot(routedRoot, null, null);
     this.#assertTaskGateSuccessor(next, lifecycle);
-    return next;
+    if (targetAttempt === null) return next;
+    if (confirmed.draftSettlementReceipt?.settlementKind !== "target-connection"
+      || confirmed.draftSettlementReceipt.targetStepId !== targetAttempt.nodeId) {
+      throw new CurrentFlowStateInvariantError("Confirmation target Attempt requires its selected connection receipt");
+    }
+    return next.startAttempt({
+      path: next.definition.pathFor(next.root, targetAttempt.nodeId), attempt: targetAttempt,
+    });
   }
 
   #applyDraftStepRoute(root, sourceStepId, result) {
@@ -7163,7 +7182,8 @@ export class ActivityTransition {
     }
     this.gateTaskLifecycle = lifecycle;
     const attemptRequired = TRANSITION_ATTEMPT_OPERATIONS.has(operation);
-    const attemptOptional = operation === "continue_nonblocking";
+    const attemptOptional = operation === "continue_nonblocking"
+      || (operation === "confirm_attempt" && this.attempt?.nodeId !== this.nodeId && status === "done");
     if (!attemptOptional && attemptRequired !== (this.attempt !== null)) {
       throw new CurrentFlowStateInvariantError(
         attemptRequired
@@ -7611,6 +7631,7 @@ export class ActivityTransition {
       result: activity.result,
       status: this.status,
       gateTaskLifecycle: this.gateTaskLifecycle?.toJSON() ?? null,
+      targetAttempt: this.attempt,
     });
   }
 
@@ -9162,7 +9183,7 @@ export class CurrentFlowStateAdoptionBoundary {
  * only be used inside the callback that received this instance: the enclosing
  * catalog publication lock defines the lifetime of the coherent view.
  */
-class CanonicalTransitionView {
+export class CanonicalTransitionView {
   constructor({ location, snapshot, catalog } = {}) {
     if (!(location instanceof FlowVersionLocation)) {
       throw new CurrentFlowStateInvariantError("canonical transition view requires a Version location");

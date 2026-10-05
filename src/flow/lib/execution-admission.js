@@ -6,6 +6,9 @@ import { projectGateTransitionDecision } from "./gate-transition-application.js"
 import { StepAdmissionRefusal } from "./step-admission-refusal.js";
 import { StepExecutionContract } from "../engine/composition/step-execution-contract.js";
 import { isDeepStrictEqual } from "node:util";
+import { PreparationEvidence } from "./preparation-evidence.js";
+import { StepBinding } from "../engine/step-binding.js";
+import { BlockedDirective } from "./next-action-directive.js";
 
 export class GateExecutionAdmissionSelection {
   constructor({ admission, action, state }) {
@@ -158,4 +161,86 @@ export const reviewStepExecutionContract = new StepExecutionContract({
   select: selectReviewExecutionAdmission,
   project: projectReviewExecutionAdmission,
   execute: executeReviewSelection,
+});
+
+/** One canonical preparation adoption, or an acquired completed receipt. */
+export class PrepareExecutionAdmissionSelection {
+  constructor({ state, stepId, registration, binding, preparation, receipt }) {
+    if (registration?.stepId !== stepId
+      || registration.executionContract !== prepareStepExecutionContract) {
+      throw new StepAdmissionRefusal("Preparation admission requires the selected registration");
+    }
+    this.runId = state.runId;
+    this.specId = state.specId;
+    this.stepId = stepId;
+    this.registration = registration;
+    this.binding = binding;
+    this.preparation = preparation;
+    this.receipt = receipt;
+    Object.freeze(this);
+  }
+}
+
+export function selectPrepareExecutionAdmission(input) {
+  const flowManager = input.flowManager ?? input.ctx.flowManager;
+  const specId = input.specId ?? input.ctx?.specId ?? input.ctx?.flowState?.specId;
+  const state = flowManager.canonicalState(specId);
+  if (!["branch", "prepare-spec"].includes(input.stepId)) {
+    throw new StepAdmissionRefusal("Preparation admission requires its registered leaf");
+  }
+  const binding = input.binding ?? null;
+  const preparation = input.preparation ?? null;
+  const receipt = input.receipt ?? null;
+  if (receipt !== null) {
+    const saved = flowManager.readCurrentStepSettlement({ specId, stepId: input.stepId, completed: true });
+    if (saved === null || !isDeepStrictEqual(saved.receipt.toJSON(), receipt.toJSON())) {
+      throw new StepAdmissionRefusal("Preparation replay requires its current authenticated receipt");
+    }
+  }
+  if (binding !== null) {
+    if (!(binding instanceof StepBinding) || binding.stepId !== input.stepId
+      || !(preparation instanceof PreparationEvidence)) {
+      throw new StepAdmissionRefusal("Preparation adoption requires its acquired evidence and Attempt");
+    }
+    binding.assertCurrent();
+    preparation.assertStep(input.stepId);
+  }
+  return new PrepareExecutionAdmissionSelection({ state, stepId: input.stepId, registration: input.registration,
+    binding, preparation, receipt });
+}
+
+export function projectPrepareExecutionAdmission(selection) {
+  if (!(selection instanceof PrepareExecutionAdmissionSelection)) {
+    throw new TypeError("Preparation projection requires its registered selection");
+  }
+  return new BlockedDirective({
+    code: "FLOW_PREPARATION_REQUIRED",
+    reason: "The preparation protocol must complete before a Flow worker can start.",
+    resumeInstruction: "Resume the exact flow prepare operation with its original run ID and inputs.",
+  });
+}
+
+export async function executePrepareSelection(selection, input) {
+  if (!(selection instanceof PrepareExecutionAdmissionSelection)
+    || selection.registration !== input.registration
+    || selection.stepId !== input.registration.stepId) {
+    throw new StepAdmissionRefusal("Preparation execution requires the selected registration");
+  }
+  if (selection.receipt !== null) return selection.receipt;
+  if (selection.binding === null || selection.preparation === null) {
+    throw new StepAdmissionRefusal("Preparation evidence cannot be produced by a Flow worker");
+  }
+  selection.binding.assertCurrent();
+  const prepared = await input.registration.create({
+    flowManager: input.flowManager, binding: selection.binding,
+    preparation: selection.preparation, commandResult: input.commandResult,
+  });
+  await prepared.step.execute();
+  return prepared.dependency(input.registration.ServiceClass).preparationOutcome;
+}
+
+export const prepareStepExecutionContract = new StepExecutionContract({
+  select: selectPrepareExecutionAdmission,
+  project: projectPrepareExecutionAdmission,
+  execute: executePrepareSelection,
 });

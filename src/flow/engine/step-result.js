@@ -151,6 +151,15 @@ function errorResultClass(className, definition) {
 export const DraftCreatedResult = resultClass("DraftCreatedResult", {
   stepId: "draft", kind: "draft-created", type: STEP_RESULT_TYPE.COMPLETED,
 });
+export const BranchPreparedResult = resultClass("BranchPreparedResult", {
+  stepId: "branch", kind: "branch-prepared", type: STEP_RESULT_TYPE.COMPLETED,
+});
+export const BranchNotRequiredResult = resultClass("BranchNotRequiredResult", {
+  stepId: "branch", kind: "branch-not-required", type: STEP_RESULT_TYPE.COMPLETED,
+});
+export const PrepareSpecReadyResult = resultClass("PrepareSpecReadyResult", {
+  stepId: "prepare-spec", kind: "prepare-spec-ready", type: STEP_RESULT_TYPE.COMPLETED,
+});
 export const SpecCreatedResult = resultClass("SpecCreatedResult", {
   stepId: "spec", kind: "spec-created", type: STEP_RESULT_TYPE.COMPLETED,
 });

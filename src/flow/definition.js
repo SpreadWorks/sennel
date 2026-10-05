@@ -54,6 +54,9 @@ import {
 } from "./lib/current-flow-state.js";
 import { draftReviewRouteForKey, draftReviewRouteForRetryPhase, draftReviewRouteForStepId } from "./lib/draft-review-routes.js";
 import {
+  BranchPreparedResult,
+  BranchNotRequiredResult,
+  PrepareSpecReadyResult,
   DraftCoverageRepairChangedResult,
   DraftCoverageRepairUnchangedResult,
   DraftCoverageReviewExecutionRequiredResult,
@@ -118,6 +121,9 @@ import { SpecReviewConnector } from "./engine/connectors/spec/spec-review-connec
 import { SpecTriageConnector } from "./engine/connectors/spec/spec-triage-connector.js";
 import { SpecRepairConnector } from "./engine/connectors/spec/spec-repair-connector.js";
 import { SpecGateConnector } from "./engine/connectors/spec/spec-gate-connector.js";
+import { PlanPreparationConnector } from "./engine/connectors/prepare/plan-preparation-connector.js";
+import { PrepareDraftConnector } from "./engine/connectors/prepare/prepare-draft-connector.js";
+import { PreparationEvidence } from "./lib/preparation-evidence.js";
 import {
   flattenSteps,
   findFirstPendingLeaf,
@@ -4907,7 +4913,7 @@ export class DraftStepExecutionState {
 
 /** Durable identity of one Result and its already-selected settlement. */
 export class DraftStepSettlementReceipt extends DraftStepSettlementReceiptValue {
-  constructor({ binding, result, settlement, publication, executionLifecycle = null, awaitQuestion = null, draftGateRepairSelection = null } = {}) {
+  constructor({ binding, result, settlement, publication, executionLifecycle = null, awaitQuestion = null, draftGateRepairSelection = null, preparation = null } = {}) {
     super();
     if (!(result instanceof StepResult) || !(settlement instanceof StepSettlement)) {
       throw new TypeError("Step settlement receipt requires a Result and Settlement");
@@ -4915,6 +4921,11 @@ export class DraftStepSettlementReceipt extends DraftStepSettlementReceiptValue 
     if (!(publication instanceof DraftStepSettlementPublication)) {
       throw new TypeError("Draft settlement receipt requires its publication identity");
     }
+    if (["branch", "prepare-spec"].includes(result.stepId) && result.type !== STEP_RESULT_TYPE.ERROR
+      ? !(preparation instanceof PreparationEvidence) : preparation !== null) {
+      throw new TypeError("Preparation settlement receipt requires its typed evidence");
+    }
+    if (preparation !== null) preparation.assertStep(result.stepId);
     if (binding?.runId === undefined || binding?.specId === undefined
       || binding?.stepId !== result.stepId || settlement.sourceStepId !== result.stepId
       || settlement.resultKind !== result.kind || settlement.resultType !== result.type
@@ -4977,6 +4988,7 @@ export class DraftStepSettlementReceipt extends DraftStepSettlementReceiptValue 
     }
     if (gatePublication) draftGateRepairSelection.assertBinding(this.binding, executionLifecycle);
     this.draftGateRepairSelection = draftGateRepairSelection;
+    this.preparation = preparation;
     const identity = DraftStepSettlementReceipt.identity(this);
     this.id = createHash("sha256").update(JSON.stringify(identity)).digest("hex");
     Object.freeze(this);
@@ -4998,6 +5010,9 @@ export class DraftStepSettlementReceipt extends DraftStepSettlementReceiptValue 
       ...(value.draftGateRepairSelection == null ? {} : {
         draftGateRepairSelection: value.draftGateRepairSelection.toJSON?.() ?? value.draftGateRepairSelection,
       }),
+      ...(value.preparation == null ? {} : {
+        preparation: value.preparation.toJSON?.() ?? value.preparation,
+      }),
     };
   }
 
@@ -5007,6 +5022,11 @@ export class DraftStepSettlementReceipt extends DraftStepSettlementReceiptValue 
       || !SHA256_DIGEST.test(value?.resultDigest ?? "")
       || value.id !== createHash("sha256").update(JSON.stringify(this.identity(value))).digest("hex")) {
       throw new TypeError("stored Step settlement receipt identity is invalid");
+    }
+    if (["branch", "prepare-spec"].includes(value.binding?.stepId) && value.resultType !== STEP_RESULT_TYPE.ERROR) {
+      new PreparationEvidence(value.preparation).assertStep(value.binding.stepId);
+    } else if (value.preparation != null) {
+      throw new TypeError("stored Step settlement receipt preparation is invalid");
     }
     if (binding !== null && (value.binding?.runId !== binding.runId
       || value.binding?.specId !== binding.specId
@@ -5050,6 +5070,7 @@ export class DraftStepSettlementReceipt extends DraftStepSettlementReceiptValue 
       executionLifecycle: this.executionLifecycle?.toJSON() ?? null,
       awaitQuestion: this.awaitQuestion?.toJSON() ?? null,
       ...(this.draftGateRepairSelection === null ? {} : { draftGateRepairSelection: this.draftGateRepairSelection.toJSON() }),
+      ...(this.preparation === null ? {} : { preparation: this.preparation.toJSON() }),
     };
   }
 }
@@ -5321,6 +5342,30 @@ export function settleDraftStepResult(stepId, result) {
   }
   if (result instanceof DraftGateRepairAppliedResult || result instanceof DraftGateRepairCarryForwardResult) {
     return route(DraftNextRoute, "draft-coverage-review", DraftReviewConnector);
+  }
+  throw new TypeError(`${stepId} has no settlement for ${result.kind}`);
+}
+
+/** Select the next preparation leaf solely from its saved semantic Result. */
+export function settlePrepareStepResult(stepId, result) {
+  if (!["branch", "prepare-spec"].includes(stepId)
+    || !(result instanceof StepResult) || result.stepId !== stepId) {
+    throw new TypeError("preparation settlement requires the Step's concrete Result");
+  }
+  if (result instanceof StepErrorResult) {
+    return new StepErrorDecision(STEP_SETTLEMENT_TOKEN, result);
+  }
+  if (result instanceof BranchPreparedResult || result instanceof BranchNotRequiredResult) {
+    return new StepRoute(STEP_SETTLEMENT_TOKEN, {
+      result, targetStepId: "prepare-spec", connector: PlanPreparationConnector,
+      effects: new StepRouteEffects(),
+    });
+  }
+  if (result instanceof PrepareSpecReadyResult) {
+    return new StepRoute(STEP_SETTLEMENT_TOKEN, {
+      result, targetStepId: "draft", connector: PrepareDraftConnector,
+      effects: new StepRouteEffects(),
+    });
   }
   throw new TypeError(`${stepId} has no settlement for ${result.kind}`);
 }

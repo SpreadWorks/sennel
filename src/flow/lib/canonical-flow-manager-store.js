@@ -1,3 +1,5 @@
+import { PreparationEvidence } from "./preparation-evidence.js";
+import { StepAdmissionRefusal } from "./step-admission-refusal.js";
 import { projectAdvisorySummary } from "./advisory-summary.js";
 import { DraftQuestionResumeReceipt, DraftQuestionResolutionIdentity } from "./draft-question-resume-receipt.js";
 import { DraftWorkerExecutionStepBinding } from "../engine/connectors/draft/draft-step-binding.js";
@@ -62,11 +64,14 @@ import {
   DraftReviewExecutionClaim,
   DraftWorkerExecutionClaim,
   SpecNextRoute,
+  settlePrepareStepResult,
   settleSpecStepResult,
   specGateNonblockingEligibilityForResult,
   STEP_RESULT_ERROR_CATEGORY,
 } from "../definition.js";
 import {
+  BranchPreparedResult,
+  BranchNotRequiredResult,
   DraftCoverageReviewPassedResult,
   DraftRefineAwaitingAnswerResult,
   DraftGateCarryForwardResult,
@@ -134,6 +139,7 @@ import {
   CurrentFlowState,
   CurrentFlowStateInvariantError,
   CurrentFlowTransitionSnapshot,
+  CanonicalTransitionView,
   assertDraftSettlementReceiptTransition,
   ApprovalTaskAdmission,
   FlowActivity,
@@ -357,6 +363,17 @@ function activityId(prefix) {
 function stableActivityId(prefix, facts) {
   const digest = crypto.createHash("sha256").update(JSON.stringify(facts)).digest("hex");
   return `${prefix}-${digest}`;
+}
+
+function canonicalArtifactWriteIdentity(value) {
+  const write = CanonicalFlowArtifactWrite.from(value);
+  return {
+    logicalKey: write.artifact.logicalKey,
+    relativePath: write.artifact.relativePath,
+    mediaType: write.mediaType,
+    digest: crypto.createHash("sha256").update(write.bytes).digest("hex"),
+    byteLength: write.bytes.length,
+  };
 }
 
 function timestampAfter(value) {
@@ -1009,6 +1026,127 @@ class DraftWorkerRecoveryAdmission {
 class CombinedAdmission {
   constructor(...admissions) { this.admissions = admissions.filter(Boolean); Object.freeze(this.admissions); Object.freeze(this); }
   assert(view) { for (const admission of this.admissions) admission.assert(view); }
+}
+
+/** Exact plugin artifact replay; publication never substitutes for successful hook execution. */
+class PreparationPluginPublication {
+  constructor({ store, specId, receipt, artifactWrites }) {
+    const document = receipt instanceof DraftStepSettlementReceiptValue ? receipt.toJSON() : receipt;
+    try {
+      DraftStepSettlementReceipt.assertStored(document);
+    } catch (error) {
+      throw new StepAdmissionRefusal(`Preparation plugin publication requires an authenticated receipt: ${error.message}`);
+    }
+    if (document.binding?.stepId !== "branch") {
+      throw new StepAdmissionRefusal("Preparation plugin publication requires its branch receipt");
+    }
+    this.store = store;
+    this.specId = specId;
+    this.receiptJSON = JSON.stringify(document);
+    this.targetStepId = document.targetStepId;
+    this.activityId = stableActivityId("prepare-plugin-artifacts-published", { receiptId: document.id });
+    this.writes = artifactWrites.map(canonicalArtifactWriteIdentity);
+    if (this.writes.some((write) => write.logicalKey !== "plugin.lifecycle.artifact")
+      || new Set(this.writes.map((write) => write.relativePath)).size !== this.writes.length) {
+      throw new StepAdmissionRefusal("Preparation plugin publication requires distinct plugin artifact writes");
+    }
+    Object.freeze(this.writes);
+    Object.freeze(this);
+  }
+
+  replay(view) {
+    const source = this.store.readCurrentStepSettlement({ specId: this.specId,
+      stepId: "branch", completed: true, view });
+    if (source === null || JSON.stringify(source.receipt.toJSON()) !== this.receiptJSON) {
+      throw new StepAdmissionRefusal("Preparation plugin publication branch receipt changed");
+    }
+    const target = view.activities.find((activity) => activity.id === source.activityId).transition.attempt;
+    if (view.state.current?.at(-1) !== this.targetStepId
+      || target === null || view.state.attempt?.nodeId !== target.nodeId
+      || view.state.attempt.id !== target.id || view.state.attempt.sequence !== target.sequence) {
+      throw new StepAdmissionRefusal("Preparation plugin publication requires its activated preparation Attempt");
+    }
+    const publication = view.activities.find((activity) => activity.id === this.activityId) ?? null;
+    const descriptors = view.catalog.artifacts.filter((entry) => (
+      entry.activityId === this.activityId && entry.logicalKey === "plugin.lifecycle.artifact"
+    ));
+    if (publication === null) {
+      if (descriptors.length !== 0 || this.writes.some((write) => view.catalog.artifacts.some((entry) =>
+        entry.relativePath === write.relativePath))) {
+        throw new StepAdmissionRefusal("Preparation plugin artifact already has a different publication owner");
+      }
+      return this.writes.length === 0 ? view.state : null;
+    }
+    if (publication.nodeId !== "flow" || publication.transition.operation !== "publish_plugin_artifacts"
+      || descriptors.length !== this.writes.length || this.writes.some((write) => !descriptors.some((entry) => (
+        entry.logicalKey === write.logicalKey && entry.relativePath === write.relativePath
+        && entry.mediaType === write.mediaType && entry.hash === write.digest && entry.size === write.byteLength
+      )))) {
+      throw new StepAdmissionRefusal("Preparation plugin replay differs from its saved publication");
+    }
+    for (const descriptor of descriptors) view.readCatalogedArtifact(descriptor);
+    return view.state;
+  }
+
+  assert(view) {
+    if (this.replay(view) !== null) {
+      throw new StepAdmissionRefusal("Preparation plugin publication was committed concurrently; retry its exact replay");
+    }
+  }
+}
+
+/** Revalidate the acquired preparation publication under the canonical catalog lock. */
+class PreparationSettlementAdmission {
+  constructor({ binding, preparation }) {
+    this.binding = binding;
+    this.preparation = preparation;
+    Object.freeze(this);
+  }
+
+  assert(view) {
+    const { state, activities, catalog } = view;
+    const { binding, preparation } = this;
+    const same = (left, right) => JSON.stringify(left) === JSON.stringify(right);
+    if (state.runId !== binding.runId || state.specId !== binding.specId
+      || state.current?.at(-1) !== binding.stepId
+      || state.attempt?.id !== binding.attempt.id || state.attempt?.sequence !== binding.attempt.sequence
+      || state.execution.mode !== preparation.mode || state.execution.featureBranch !== preparation.branch
+      || state.request !== preparation.request
+      || state.identity.issue !== (preparation.issueSnapshot?.number ?? null)
+      || state.context.toJSON()?.baseOid !== preparation.baseOid
+      || activities[0]?.id !== preparation.creationActivityId) {
+      throw new CurrentFlowStateConflictError("Preparation evidence no longer matches its canonical owner");
+    }
+    const creation = catalog.artifacts.filter((entry) => (
+      ["spec.record", "spec.snapshot", "issue.snapshot"].includes(entry.logicalKey)
+      && entry.activityId === preparation.creationActivityId
+    )).map((entry) => entry.toJSON());
+    if (!same(creation, preparation.catalog)) {
+      throw new CurrentFlowStateConflictError("Preparation creation publication changed before settlement");
+    }
+    for (const descriptor of creation) {
+      const bytes = view.readCatalogedArtifact(descriptor);
+      if (descriptor.logicalKey === "issue.snapshot") {
+        const body = preparation.issueSnapshot.body;
+        if (bytes.toString("utf8") !== (body.endsWith("\n") ? body : `${body}\n`)) {
+          throw new CurrentFlowStateConflictError("Preparation Issue snapshot differs from its creation publication");
+        }
+      }
+    }
+    if (preparation.mandatory !== null) {
+      const plugins = catalog.artifacts.filter((entry) => entry.logicalKey === "plugin.lifecycle.artifact")
+        .map((entry) => entry.toJSON());
+      if (!same(plugins, preparation.mandatory.plugins)) {
+        throw new CurrentFlowStateConflictError("Preparation plugin publication changed before settlement");
+      }
+      for (const descriptor of plugins) view.readCatalogedArtifact(descriptor);
+      const identity = preparation.bindingIdentity;
+      if (identity !== null && (identity.runId !== state.runId || identity.specId !== state.specId
+        || identity.issue !== state.identity.issue || identity.worktreePath !== preparation.worktree)) {
+        throw new CurrentFlowStateConflictError("Preparation worktree binding differs from its canonical owner");
+      }
+    }
+  }
 }
 
 class ConditionalWorkerSettlementAdmission {
@@ -3299,13 +3437,21 @@ export class CanonicalFlowManagerStore {
     });
   }
 
-  publishPluginArtifacts({ specId = null, artifactWrites } = {}) {
+  publishPluginArtifacts({ specId = null, artifactWrites, preparationReceipt = null } = {}) {
     const resolved = this.#resolveSpecId(specId);
     if (resolved === null) throw new CurrentFlowStateInvariantError("no canonical active Flow");
+    const publication = preparationReceipt === null ? null : new PreparationPluginPublication({
+      store: this, specId: resolved, receipt: preparationReceipt, artifactWrites,
+    });
+    if (publication !== null) {
+      const replay = this.runtime.readCanonicalTransitionView(resolved, (view) => publication.replay(view));
+      if (replay !== null) return replay;
+    }
     return this.runtime.publishPluginArtifacts({
       specId: resolved,
-      activityId: activityId("plugin-artifacts-published"),
+      activityId: publication?.activityId ?? activityId("plugin-artifacts-published"),
       artifactWrites,
+      admission: publication,
     });
   }
 
@@ -3769,7 +3915,7 @@ export class CanonicalFlowManagerStore {
    * and replaces the catalog descriptors.  It deliberately accepts no
    * mutable flow-state callback.
    */
-  confirmCurrentAttempt({ specId = null, status = "done", result = null, stepResult = null, settlementReceipt = null, commandResult = undefined, references = undefined, specRecord = undefined, artifactWrites = [], artifactRemovals = undefined, artifactBaselines = undefined, testSourceBaseline = undefined, gateTransitionDecision = null, gateTaskLifecycle = undefined, planGateRepairOutcome = null, admission = undefined, specWorkerSettlement = null, specSelection = null } = {}) {
+  confirmCurrentAttempt({ specId = null, status = "done", result = null, stepResult = null, settlementReceipt = null, commandResult = undefined, references = undefined, specRecord = undefined, artifactWrites = [], artifactRemovals = undefined, artifactBaselines = undefined, testSourceBaseline = undefined, gateTransitionDecision = null, gateTaskLifecycle = undefined, planGateRepairOutcome = null, admission = undefined, specWorkerSettlement = null, specSelection = null, targetAttempt = null } = {}) {
     const resolved = this.#resolveSpecId(specId);
     if (resolved === null) throw new CurrentFlowStateInvariantError("no canonical active Flow");
     const state = this.runtime.load(resolved);
@@ -3840,6 +3986,7 @@ export class CanonicalFlowManagerStore {
       specId: resolved,
       activityId: confirmationActivityId,
       status,
+      targetAttempt,
       result: confirmation,
       references,
       specRecord,
@@ -3908,6 +4055,7 @@ export class CanonicalFlowManagerStore {
     executionLifecycle = null,
     awaitQuestion = null,
     draftGateRepairSelection = null,
+    preparation = null,
   } = {}) {
     return new DraftStepSettlementReceipt({
       binding,
@@ -3927,10 +4075,12 @@ export class CanonicalFlowManagerStore {
         references,
         specRecord,
         planGateRepairOutcome,
+        preparation,
       }),
       executionLifecycle,
       awaitQuestion,
       draftGateRepairSelection,
+      preparation,
     });
   }
 
@@ -4345,6 +4495,7 @@ export class CanonicalFlowManagerStore {
     executionLifecycle = undefined,
     awaitQuestion = null,
     draftGateRepairSelection = null,
+    preparation = null,
     draftReturn = null,
   } = {}) {
     const resolved = this.#resolveSpecId(specId ?? binding?.specId);
@@ -4382,16 +4533,32 @@ export class CanonicalFlowManagerStore {
       executionLifecycle: selectedExecutionLifecycle,
       awaitQuestion,
       draftGateRepairSelection,
+      preparation,
     });
     return this.activityLedger(resolved).find((entry) => (
       entry.result?.draftSettlementReceipt?.id === receipt.id
     ))?.result.draftSettlementReceipt ?? null;
   }
 
-  /** Read the exact Result and Settlement receipt on the current Attempt. */
-  readCurrentStepSettlement({ specId = null, stepId } = {}) {
+  /** Read the current Attempt, or explicitly recover a completed preparation publication. */
+  readCurrentStepSettlement({ specId = null, stepId, completed = false, view = null } = {}) {
     const resolved = this.#resolveSpecId(specId);
     if (resolved === null) throw new CurrentFlowStateInvariantError("no canonical active Flow");
+    const preparationStep = ["branch", "prepare-spec"].includes(stepId);
+    if (completed && !preparationStep) {
+      throw new CurrentFlowStateInvariantError("Completed settlement recovery requires a preparation Step");
+    }
+    if (preparationStep) {
+      if (view !== null) {
+        if (!(view instanceof CanonicalTransitionView) || view.state.specId !== resolved) {
+          throw new CurrentFlowStateInvariantError("Settlement read requires its acquired canonical view");
+        }
+        return this.#readPreparationStepSettlement(view, stepId, completed);
+      }
+      return this.runtime.readCanonicalTransitionView(resolved,
+        (current) => this.#readPreparationStepSettlement(current, stepId, completed));
+    }
+    if (view !== null) throw new CurrentFlowStateInvariantError("Acquired settlement view requires a preparation Step");
     const state = this.runtime.load(resolved);
     if (state.current?.at(-1) !== stepId || state.attempt?.nodeId !== stepId) return null;
     const activities = this.activityLedger(resolved).filter((entry) => (
@@ -4438,10 +4605,44 @@ export class CanonicalFlowManagerStore {
         receipt = DraftStepSettlementReceipt.assertStored(activity.result.draftSettlementReceipt, {
           binding: { runId: state.runId, specId: state.specId, stepId, attempt: state.attempt },
           result,
+          settlement,
         });
       } catch (error) {
         throw new CurrentFlowStateInvariantError(`current Step settlement receipt is invalid: ${error.message}`);
       }
+    }
+    return Object.freeze({ result, settlement, receipt, activityId: activity.id });
+  }
+
+  #readPreparationStepSettlement(view, stepId, completed) {
+    const state = view.state;
+    const node = state.findNode(stepId);
+    const terminal = completed && node?.status === "done";
+    if (!terminal && (state.current?.at(-1) !== stepId || state.attempt?.nodeId !== stepId)) return null;
+    const publications = view.activities.filter((entry) => entry.nodeId === stepId
+      && entry.sequence === (terminal ? node.attemptSequence : state.attempt.sequence)
+      && (terminal || entry.attemptId === state.attempt.id)
+      && entry.result?.draftSettlementReceipt != null);
+    const activity = publications.at(-1) ?? null;
+    if (activity === null) {
+      if (terminal) throw new CurrentFlowStateInvariantError("Completed preparation has no settlement Activity");
+      return null;
+    }
+    if (terminal && (publications.length !== 1
+      || JSON.stringify(node.result?.toJSON()) !== JSON.stringify(activity.result.toJSON()))) {
+      throw new CurrentFlowStateInvariantError("Completed preparation Result differs from its source Activity");
+    }
+    const result = activity.result.stepResult;
+    const settlement = settlePrepareStepResult(stepId, result);
+    const sourceAttempt = terminal ? { id: activity.attemptId, sequence: activity.sequence } : state.attempt;
+    let receipt;
+    try {
+      receipt = DraftStepSettlementReceipt.assertStored(node.result.draftSettlementReceipt, {
+        binding: { runId: state.runId, specId: state.specId, stepId, attempt: sourceAttempt },
+        result, settlement,
+      });
+    } catch (error) {
+      throw new CurrentFlowStateInvariantError(`current Step settlement receipt is invalid: ${error.message}`);
     }
     return Object.freeze({ result, settlement, receipt, activityId: activity.id });
   }
@@ -4666,12 +4867,27 @@ export class CanonicalFlowManagerStore {
     executionLifecycle = undefined,
     awaitQuestion = null,
     draftGateRepairSelection = null,
+    preparation = null,
     draftReturn = null,
   } = {}) {
     const resolved = this.#resolveSpecId(specId ?? binding?.specId);
     if (resolved === null) throw new CurrentFlowStateInvariantError("no canonical active Flow");
     if (!(stepResult instanceof StepResult) || !(settlement instanceof StepSettlement)) {
       throw new CurrentFlowStateInvariantError("Draft settlement requires typed Result and Settlement");
+    }
+    if (["branch", "prepare-spec"].includes(binding?.stepId)
+      && !(settlement instanceof StepErrorDecision)) {
+      if (!(preparation instanceof PreparationEvidence)) {
+        throw new CurrentFlowStateInvariantError("Preparation settlement requires typed acquired evidence");
+      }
+      preparation.assertStep(binding.stepId);
+      if (binding.stepId === "branch"
+        && (preparation.branch === null ? !(stepResult instanceof BranchNotRequiredResult)
+          : !(stepResult instanceof BranchPreparedResult))) {
+        throw new CurrentFlowStateConflictError("Branch Result differs from its acquired preparation evidence");
+      }
+    } else if (preparation !== null) {
+      throw new CurrentFlowStateInvariantError("Only preparation completion carries preparation evidence");
     }
     this.#assertDraftReturnPublicationInput({ stepResult, commandResult, gatePublication,
       lifecycleResult, specRecord, planGateRepairOutcome, draftCompletionApplication,
@@ -4769,6 +4985,7 @@ export class CanonicalFlowManagerStore {
       executionLifecycle: selectedExecutionLifecycle,
       awaitQuestion,
       draftGateRepairSelection,
+      preparation,
     });
     const state = this.runtime.load(resolved);
     const replay = this.#admitStepSettlement({
@@ -5107,6 +5324,9 @@ export class CanonicalFlowManagerStore {
       artifactBaselines,
       testSourceBaseline,
       planGateRepairOutcome,
+      admission: preparation === null ? undefined : new PreparationSettlementAdmission({ binding, preparation }),
+      targetAttempt: settlement.connector.activateTarget === true
+        ? commandContextAttempt(state, settlement.targetStepId) : null,
     });
     return Object.freeze({ state: next, receipt });
   }
@@ -8173,17 +8393,8 @@ export class CanonicalFlowManagerStore {
     references,
     specRecord,
     planGateRepairOutcome,
+    preparation,
   }) {
-    const writeIdentity = (value) => {
-      const write = CanonicalFlowArtifactWrite.from(value);
-      return {
-        logicalKey: write.artifact.logicalKey,
-        relativePath: write.artifact.relativePath,
-        mediaType: write.mediaType,
-        digest: crypto.createHash("sha256").update(write.bytes).digest("hex"),
-        byteLength: write.bytes.length,
-      };
-    };
     const removalIdentity = (value) => {
       const removal = CanonicalFlowArtifactRemoval.from(value);
       return {
@@ -8209,6 +8420,8 @@ export class CanonicalFlowManagerStore {
           parameters: target.parameters,
           payload: commandResultPayload(commandResult, binding.stepId, target.logicalKey),
         },
+        ...(["branch", "prepare-spec"].includes(binding.stepId)
+          ? { preparationCommand: commandResult } : {}),
         publications: attachedCanonicalCommandResultPublications(commandResult)
           .map((publication) => publication.toJSON()),
       };
@@ -8233,7 +8446,7 @@ export class CanonicalFlowManagerStore {
       // Error settlements delegate their only publication to failCurrentAttempt,
       // so raw artifact arguments cannot affect that durable transaction.
       artifactWrites: settlement instanceof StepErrorDecision
-        ? [] : artifactWrites.map(writeIdentity),
+        ? [] : artifactWrites.map(canonicalArtifactWriteIdentity),
       artifactRemovals: settlement instanceof StepErrorDecision
         ? [] : (artifactRemovals ?? []).map(removalIdentity),
       artifactBaselines: settlement instanceof StepErrorDecision
@@ -8249,6 +8462,7 @@ export class CanonicalFlowManagerStore {
       references: settlement instanceof StepErrorDecision ? null : jsonIdentity(references, "references"),
       specRecord: settlement instanceof StepErrorDecision ? null : jsonIdentity(specRecord, "Spec record"),
       planGateRepairOutcome: settlement instanceof StepErrorDecision ? null : planGateRepair,
+      ...(preparation === null ? {} : { preparation: preparation.toJSON() }),
     });
   }
 

@@ -2554,4 +2554,19 @@ describe("Current Flow state foundation", () => {
       assert.throws(() => new CurrentFlowContext(context), CurrentFlowStateInvariantError);
     }
   });
+
+  it("preserves a selected preparation base OID independently of the creation-time execution HEAD", () => {
+    for (const length of [40, 64]) {
+      const baseOid = "b".repeat(length);
+      const context = { baseOid, gitSnapshot: { available: true, commit: "a".repeat(length) } };
+      const restored = new CurrentFlowContext(new CurrentFlowContext(context).toJSON());
+      assert.deepEqual(restored.toJSON(), context);
+      assert.notEqual(restored.toJSON().baseOid, restored.toJSON().gitSnapshot.commit);
+    }
+    for (const baseOid of [null, 42, "", "invalid", "b".repeat(39), "b".repeat(65)]) {
+      assert.throws(() => new CurrentFlowContext({
+        baseOid, gitSnapshot: { available: true, commit: "a".repeat(40) },
+      }), CurrentFlowStateInvariantError);
+    }
+  });
 });

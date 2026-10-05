@@ -101,7 +101,8 @@ test("copied production Gate display rejects discarding only its registered proj
   assertClean(checkPhase(root, "draft"));
   const file = "src/flow/lib/get-next-action.js";
   const selectionLine = lineOfUnique(root, file,
-    "const selection = registration.executionContract.select({");
+    "const selection = registration.executionContract.select({\n"
+      + "      flowManager: ctx.flowManager, flowState: state, phase,");
   const restore = replaceOnce(root, file,
     "return registration.executionContract.project(selection);",
     "return selection.action;");

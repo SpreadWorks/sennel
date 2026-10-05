@@ -210,7 +210,7 @@ function requestContext(state) {
   if (typeof state.request !== "string" || state.request.trim() === "") {
     return new WorkerContextOmission({ kind: "request", reason: "no-flow-request" });
   }
-  return new WorkerContextDocument({ kind: "request", document: state.request.trim() });
+  return new WorkerContextDocument({ kind: "request", document: state.request });
 }
 
 function guardrailContext(executionRoot) {

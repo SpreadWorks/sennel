@@ -1,8 +1,9 @@
 import { flowLeafIdsBetween } from "../../definition.js";
 import { draftStepRegistration, draftWorkerStepRegistration } from "./draft.js";
 import { specStepRegistration, specWorkerStepRegistration } from "./spec.js";
+import { prepareStepRegistration } from "./prepare.js";
 
-const registeredPhaseSteps = new Set(flowLeafIdsBetween("draft", "spec-gate-repair"));
+const registeredPhaseSteps = new Set(flowLeafIdsBetween("branch", "spec-gate-repair"));
 
 /** A targeted Definition leaf may never fall through to another phase's executor. */
 export function workerStepExecutionRegistration(stepId) {
@@ -14,7 +15,7 @@ export function workerStepExecutionRegistration(stepId) {
 }
 
 export function flowStepExecutionRegistration(stepId) {
-  const registration = draftStepRegistration(stepId) ?? specStepRegistration(stepId);
+  const registration = prepareStepRegistration(stepId) ?? draftStepRegistration(stepId) ?? specStepRegistration(stepId);
   if (registration === null && registeredPhaseSteps.has(stepId)) {
     throw new Error(`Definition leaf ${stepId} has no registered execution contract`);
   }

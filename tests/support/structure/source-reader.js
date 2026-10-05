@@ -334,15 +334,18 @@ function matching(tokens, open, left = "{", right = "}") {
 /** Account for every reference to a capability; unclassified uses remain errors.
  * Callers that inspect every binding can disable automatic binding acceptance
  * while retaining the same alias provenance and explicitly accepting checked uses.
+ * Token origins seed acquired local capabilities in their exact lexical scope.
  */
 export class SourceOriginUsage {
-  constructor(declaration, origins, { acceptBindings = true, bindings = null, mutableAliases = false } = {}) {
+  constructor(declaration, origins, { acceptBindings = true, bindings = null, mutableAliases = false, originTokens = [] } = {}) {
     if (!(declaration instanceof SourceDeclaration)) throw new TypeError("source declaration required");
     this.tokens = declaration.tokens;
-    this.origins = new Set(origins);
+    this.origins = new Set([...origins, ...originTokens.map((token) => token.value)]);
     this.bindings = bindings;
-    this.originBindings = bindings === null ? null : new Set([...this.origins]
-      .map((name) => bindings.moduleBinding(name)).filter(Boolean));
+    this.originBindings = bindings === null ? null : new Set([
+      ...[...origins].map((name) => bindings.moduleBinding(name)),
+      ...originTokens.map((token) => bindings.bindingAt(token)),
+    ].filter(Boolean));
     this.accepted = new Set();
     const transfers = [];
     for (let index = 0; index < this.tokens.length; index++) {

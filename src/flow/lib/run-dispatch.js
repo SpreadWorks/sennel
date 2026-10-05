@@ -1,5 +1,6 @@
 import { assertCurrentWorkerExecutionSelection } from "./worker-execution-admission.js";
-import { workerStepExecutionRegistration } from "../engine/composition/registered-step-execution.js";
+import { workerStepExecutionRegistration, flowStepExecutionRegistration } from "../engine/composition/registered-step-execution.js";
+import { prepareStepRegistration } from "../engine/composition/prepare.js";
 import { reserveSpecGateRepairWorkerCall } from "../engine/composition/spec-gate-repair.js";
 import { SPEC_GATE_REPAIR_REQUEST_LIMIT } from "./spec-gate-repair-progress.js";
 import { planSpecGateRepairWorkerExecution } from "./spec-gate-repair-execution.js";
@@ -108,6 +109,13 @@ import {
   DraftWorkerStepBinding,
 } from "../engine/connectors/draft/draft-step-binding.js";
 import { isConditionalDraftWorkerStep } from "./draft-conditional-worker.js";
+
+function executeSelectedPrepareStepExecution(input) {
+  const registration = prepareStepRegistration(input.stepId);
+  if (registration === null) throw new TypeError("Preparation execution requires a registered Step");
+  const selection = input.selection;
+  return registration.executionContract.execute(selection, { ...input, registration });
+}
 
 const DEFAULT_MAX_DISPATCHES = 256;
 const DEFAULT_MAX_STALLED_DISPATCHES = 3;
@@ -1841,6 +1849,11 @@ export default class RunDispatchCommand extends FlowCommand {
 
   async runWorkerAttempt(ctx, invocation, retryFeedback = null, agentOverride = null) {
     const stepId = invocation.action.nextAction.step;
+    const selectedRegistration = flowStepExecutionRegistration(stepId);
+    if (selectedRegistration?.executionContract.selectorName === "selectPrepareExecutionAdmission") {
+      const selection = selectedRegistration.executionContract.select({ ctx, stepId, registration: selectedRegistration });
+      return executeSelectedPrepareStepExecution({ ctx, stepId, selection });
+    }
     const registration = workerStepExecutionRegistration(stepId);
     if (registration === null) return this.#executeSelectedWorker(ctx, invocation, retryFeedback, agentOverride);
     const selection = registration.executionContract.select({ ctx, stepId });

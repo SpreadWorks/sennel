@@ -81,6 +81,7 @@ import {
 } from "./engine/step-result.js";
 import { draftStepRegistration, prepareDraftReviewBinding } from "./engine/composition/draft.js";
 import { specStepRegistration } from "./engine/composition/spec.js";
+import { prepareStepRegistration } from "./engine/composition/prepare.js";
 import { gateStepExecutionRegistration } from "./engine/composition/registered-step-execution.js";
 import { isStepPersistenceFailure } from "./lib/definition-lifecycle-failure.js";
 import { StepAdmissionRefusal, isStepAdmissionRefusal } from "./lib/step-admission-refusal.js";
@@ -1138,6 +1139,16 @@ function pluginCommandName(command) {
 
 function loadGetNextActionCommand() { return import("./lib/get-next-action.js"); }
 function loadDispatchCommand() { return import("./lib/run-dispatch.js"); }
+function loadPrepareCommand() { return import("./lib/run-prepare-spec.js"); }
+
+function executePublishedPrepareStep(input) {
+  const registration = prepareStepRegistration(input.stepId);
+  if (registration === null) throw new TypeError("Preparation publication requires a registered Step");
+  const selection = input.selection;
+  if (selection.registration !== registration) throw new TypeError("Preparation acknowledgement requires its selected registration");
+  if (selection.receipt !== null) return selection.receipt;
+  return registration.executionContract.execute(selection, { ...input, registration });
+}
 function loadGateCommand() { return import("./lib/run-gate.js"); }
 function loadReviewCommand() { return import("./lib/run-review.js"); }
 
@@ -1180,7 +1191,7 @@ export const FLOW_COMMANDS = {
     requiresFlow: false,
     requiresConfig: true,
     runtimeLog: { stepId: "prepare-spec" },
-    command: () => import("./lib/run-prepare-spec.js"),
+    command: loadPrepareCommand,
     args: {
       flags: withTargetGuardFlags(["--no-branch", "--worktree", "--dry-run"]),
       options: withTargetGuardOptions(["--title", "--base", "--issue", "--request", "--run-id"]),
@@ -1202,6 +1213,17 @@ export const FLOW_COMMANDS = {
       "  --dry-run          Show what would happen without executing",
     ].join("\n"),
     async post(ctx, result) {
+      if (result?.result === "ok") {
+        const flowManager = ctx.flowManager.forRoot(result.worktreePath ?? ctx.executionRoot ?? ctx.root,
+          { specId: result.specId });
+        const saved = flowManager.readCurrentStepSettlement({
+          specId: result.specId, stepId: "prepare-spec", completed: true,
+        });
+        const input = { flowManager, specId: result.specId, stepId: "prepare-spec", receipt: saved.receipt };
+        const registration = prepareStepRegistration(input.stepId);
+        const selection = registration.executionContract.select({ ...input, registration });
+        await executePublishedPrepareStep({ ...input, selection });
+      }
       await applyLifecycleActionsFromRegistry(ctx, {
         event: "prepare:post",
         command: "prepare",
