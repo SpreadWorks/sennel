@@ -27,16 +27,16 @@ const GENERATION_CONTRACTS = Object.freeze([
   Object.freeze({ name: "TestGenerateStructuralRejectedResult", stepId: "test-generate", kind: "test-generate-structural-rejected", type: "branch-required" }),
 ]);
 
-function requiredExport(name) {
+export function requiredExport(name) {
   assert.equal(typeof engine[name], "function", `unmet 02 typed Result contract: engine must export ${name}`);
   return engine[name];
 }
 
-function revision() {
+export function revision() {
   return new SpecRevisionIdentity({ specId: "result-contract", revision: 2, digest: "a".repeat(64), byteLength: 512 });
 }
 
-function candidate({ requirementId = "R1", sequence = 2, bytes = Buffer.from("// spec: R1\n") } = {}) {
+export function candidate({ requirementId = "R1", sequence = 2, bytes = Buffer.from("// spec: R1\n") } = {}) {
   const source = RequirementTestCandidateSource.fromBytes({ testPath: `tests/${requirementId.toLowerCase()}.test.js`, bytes });
   const lineage = new RequirementTestBundleLineage({
     requirementId, specRevision: revision(), bundleRevision: 1, predecessorRevision: null,
@@ -49,11 +49,11 @@ function candidate({ requirementId = "R1", sequence = 2, bytes = Buffer.from("//
   });
 }
 
-function pending(requirementId) {
+export function pending(requirementId) {
   return RequirementTestWorkItem.pending({ requirementId, specRevision: revision(), expectation: "fail" });
 }
 
-function operands({ candidateBundle = candidate(), pendingIds = ["R2", "R3"], budget = new RequirementTestBudget({ autoSemantic: 1, manualSemantic: 2, tooling: 3 }), autoApprove = true, findings = [new RequirementTestSemanticFinding({ requirementId: "R1", bundleRevision: 1, fingerprint: "b".repeat(64) })] } = {}) {
+export function operands({ candidateBundle = candidate(), pendingIds = ["R2", "R3"], budget = new RequirementTestBudget({ autoSemantic: 1, manualSemantic: 2, tooling: 3 }), autoApprove = true, findings = [new RequirementTestSemanticFinding({ requirementId: "R1", bundleRevision: 1, fingerprint: "b".repeat(64) })] } = {}) {
   const Binding = requiredExport("RequirementTestResultBinding");
   const Frontier = requiredExport("RequirementTestResultFrontier");
   const RetryState = requiredExport("RequirementTestRetryState");
@@ -70,12 +70,12 @@ function operands({ candidateBundle = candidate(), pendingIds = ["R2", "R3"], bu
   };
 }
 
-function makeResult(contract, values) {
+export function makeResult(contract, values) {
   const ResultClass = requiredExport(contract.name);
   return new ResultClass(values);
 }
 
-function assertRoundtrip(contract, result, values) {
+export function assertRoundtrip(contract, result, values) {
   const ResultClass = requiredExport(contract.name);
   assert.ok(result instanceof engine.StepResult);
   assert.equal(result.constructor, ResultClass);
