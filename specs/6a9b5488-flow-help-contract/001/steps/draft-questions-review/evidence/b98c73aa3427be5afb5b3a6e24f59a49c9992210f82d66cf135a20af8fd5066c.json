@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "phase": "draft-questions",
+  "taskId": null,
+  "treeSha": "a99bf936593469ce29532c2e8f96fcbf0d42f933",
+  "targetStateDigest": "a8cc13ee649372f62e296e790f594447f238ca8c087b7b5d86fc9eeba817f73d",
+  "provenance": {
+    "provider": "sennel-review",
+    "invocationId": "f3b362724b746592fc48c02ad7eeafb85c3ab4d1818c753c14674a054f41c2b7",
+    "capturedAt": "2026-10-04T23:13:05.299Z"
+  },
+  "disposition": "PASS",
+  "blockingFindings": [],
+  "advisoryFindings": []
+}

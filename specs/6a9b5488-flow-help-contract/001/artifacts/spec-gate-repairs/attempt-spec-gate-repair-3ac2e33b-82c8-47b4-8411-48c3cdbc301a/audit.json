@@ -1,0 +1,1289 @@
+{
+  "version": 1,
+  "phase": "spec-gate-repair",
+  "baseRevision": "sha256:90fcccf9f2453d3df088b28293f5c0376914a03e3d48fe7ea4903d8fe326f749",
+  "acceptedGroups": [
+    {
+      "index": 0,
+      "findingIdentities": [
+        {
+          "sourceArtifact": "steps/spec-gate/result.json",
+          "sourceStep": "spec-gate",
+          "sourceFindingId": "spec-gate:10",
+          "fingerprint": "f98bc218fd8dfc054eef764564a68e651c222863ce6a9687a74d6772db58db22"
+        }
+      ],
+      "operations": [
+        {
+          "kind": "replace-entity-field",
+          "target": {
+            "entity": "requirement",
+            "id": "R4",
+            "field": "desc"
+          },
+          "expectedDigest": "4bb9d703fa4aee5faaa4aa985ff65e91b9f543735fbca25adbe7448b79f1edb9",
+          "replacement": "flow get、set、run、report/show の group help の Options を、全直接 child leaf の完全な option contract の共通部分だけから導出すること。--agent-work-dir は run と run group help にだけ現れ、get、set、report/show では受理・表示しないこと。また、run の option 受理は sennel flow run <leaf> ... のような直接 child leaf invocation に限り、sennel flow run --agent-work-dir <path> という group-level execution は追加しないこと。互換性・移行計画: 既存の run leaf における --agent-work-dir の両形式と既存 resolver の挙動は保持し、get、set、report/show に誤表示されていた group option だけを削除する。したがって有効な run 利用者の入力互換性は失われず、他 group の help を利用する利用者には誤った入力を案内しない。各 group の旧表示と新しい parser/help parity を回帰テストで比較すること。",
+          "reason": "Add the migration plan, user impact, and compatibility expectation for the corrected group option projection."
+        }
+      ]
+    },
+    {
+      "index": 1,
+      "findingIdentities": [
+        {
+          "sourceArtifact": "steps/spec-gate/result.json",
+          "sourceStep": "spec-gate",
+          "sourceFindingId": "spec-gate:14",
+          "fingerprint": "df86c258468220c842772287de4f63230004219df0efc1ca06797ecdb01a9a5b"
+        }
+      ],
+      "operations": [
+        {
+          "kind": "replace-entity-field",
+          "target": {
+            "entity": "requirement",
+            "id": "R2",
+            "field": "desc"
+          },
+          "expectedDigest": "68301d441aca2f48f0c9f492af2f63c6c08a710be92773cbc9ca4cd1de8f8cf3",
+          "replacement": "共有 option authority を既存 parser に投影し、全 routed leaf の positionals、rest、arity、型、domain、空値、サイズ、条件、path owner と target applicability を保持すること。query の custom parser は matrix に含めないこと。型、domain、path、arity の semantic validation は各 leaf の既存 command-owned validator への明示的な参照を通じて委譲し、shared model は parser/help の syntax projection と validator delegation boundary を所有すること。初期 Spec の per-leaf inventory は各 leaf の flags/options/optionalOptions と implicit -h/--help を列挙し、各値の required/optional、cardinality、type、format、allowed domain、empty behavior、既存 size limit（または未設定と所有者）、conditional combination、path の file/directory・existence・absolute/relative・resolution root を記録する。set step status、set auto value、set broad action は positional、get status の runId は optional、set files は少なくとも一つの rest path とする。resume --spec は FlowSpecId、run gate --spec は filesystem path、prepare --base と run lint --base は Git branch name とし、--run-id、--expect-run-id、task/finding/attempt ID、commit reference は各既存 owner の規則を使う。get check target、get prompt kind、logicalKey、step id/status、note text、draft questionId、requirement reqId、--format、--mode、--phase、--sequence、--category、--record-category、--step、--task-id、--normalized-finding-id、--repair-ref-commit、--expect-attempt-id、--approve、--choice の domain/combination も個別に記録し、共通の新 validator や任意の tighter limit は追加しないこと。",
+          "reason": "Enumerate per-leaf validation dimensions and named existing owners required by the input contract."
+        }
+      ]
+    },
+    {
+      "index": 2,
+      "findingIdentities": [
+        {
+          "sourceArtifact": "steps/spec-gate/result.json",
+          "sourceStep": "spec-gate",
+          "sourceFindingId": "spec-gate:16",
+          "fingerprint": "6aacf37266375cdbabdefd5945b45236e87ecc1eef9c3a2cd37e1d5e234073f3"
+        }
+      ],
+      "operations": [
+        {
+          "kind": "replace-entity-field",
+          "target": {
+            "entity": "requirement",
+            "id": "R8",
+            "field": "desc"
+          },
+          "expectedDigest": "3184c976edf87eb28220501f897b734d82df83aa5189cd1b8a9cff77fc63585f",
+          "replacement": "--agent-work-dir <path> と --agent-work-dir=<path>、invocation/config/default の precedence、config.logs.dir と fallback、runtime initialization、ログ書込み、finalize-cleanup の main repository durable root を既存 policy のまま維持すること。両形式は initContainer() 前の pre-scan で同じ agentWorkDir 値に正規化し、同じ resolver に渡すこと。入力 inventory では --agent-work-dir を non-empty、NUL-free path とし、絶対/相対の許容、file/directory 種別、存在必須か、解決 root、既存サイズ制限の有無と owner を明記する。gate --spec、--file、context path、rest path も per-leaf に file/directory、existence、absolute/relative、resolution root を記録し、出力 directory の事前存在を要求しないこと。",
+          "reason": "Define path format, existence, scope, and resolution-root validation without changing the existing resolver policy."
+        }
+      ]
+    },
+    {
+      "index": 3,
+      "findingIdentities": [
+        {
+          "sourceArtifact": "steps/spec-gate/result.json",
+          "sourceStep": "spec-gate",
+          "sourceFindingId": "spec-gate:5",
+          "fingerprint": "9dd7462b8357312901a09cd6126d808712cc7007a16b2a382629f4bfb311021c"
+        }
+      ],
+      "operations": [
+        {
+          "kind": "replace-array-element",
+          "target": {
+            "collection": "overview.modules",
+            "position": 6
+          },
+          "expectedDigest": "1226df882e1144f989029a5d6f46ae65d43220850d308ca49f94c40364127a5a",
+          "replacement": {
+            "added_by_task": "T-8",
+            "text": "bootstrapFlowQueryCli、src/flow/query.js、src/flow/query-contract.js は共有 routed registry と別に stdin/request-file を読み、query 固有 schema、bounded read、help、error を提供する。既存 bounds は request/stdin または --request-file 1,048,576 bytes 以下、公開 collection/object 10,000 items 以下、canonical JSON depth 32 以下、response 2,097,152 bytes 以下、page limit 1..100、public string 4,096 bytes 以下とし、同 owner の他の record/catalog bounds も保持する。"
+          },
+          "reason": "Replace the unbounded query module statement with the existing size, count, depth, and response limits."
+        }
+      ]
+    },
+    {
+      "index": 4,
+      "findingIdentities": [
+        {
+          "sourceArtifact": "steps/spec-gate/result.json",
+          "sourceStep": "spec-gate",
+          "sourceFindingId": "spec-gate:15",
+          "fingerprint": "318b2305405a6fa264e6de07560225837d2acb49552f62d5d0f69bf528951d91"
+        }
+      ],
+      "operations": [
+        {
+          "kind": "replace-entity-field",
+          "target": {
+            "entity": "requirement",
+            "id": "R7",
+            "field": "desc"
+          },
+          "expectedDigest": "d6d6ee3e613ab198c7c1e5c04eab8c2af93a63226d8c6cbfa5d1963a0072f0fd",
+          "replacement": "既存の parser failure、unknown/missing selector、missing value、extra positional、option domain failure、--expect-issue と --expect-no-issue の相互排他、五つの target mismatch を、既存診断・終了コード 1・拒否順序のまま command-owned mutation より前に停止させること。各 shared routed leaf の input inventory は --expect-binding <token> を serialized FlowTargetBinding（base64url JSON、non-empty、32 KiB 以下）とし、--expect-issue <number> を positive safe integer、--expect-no-issue を valueless flag、--expect-spec <spec> を既存 FlowSpecId、--expect-run-id <runId> を既存 non-empty token（300 characters 以下）として記録する。binding 内の runId/issue/spec/authority identity と明示 guard の一致も validator owner で検証し、適用可能 leaf 集合は registry から導出する。各 guard の match、mismatch、invalid combination、unspecified behavior を command-owned mutation 前の既存 FlowTargetExpectation/buildFlowCommandHookContext path で確認し、blanket validator や新しい ID limit を導入しない。",
+          "reason": "List the five guard arguments with their concrete validation contracts and preserve their existing owner and rejection order."
+        }
+      ]
+    },
+    {
+      "index": 5,
+      "findingIdentities": [
+        {
+          "sourceArtifact": "steps/spec-gate/result.json",
+          "sourceStep": "spec-gate",
+          "sourceFindingId": "spec-gate:9",
+          "fingerprint": "cc48c1395ce6d5986d520621378db014145a74a915a79137ae2d4b9d0fee7ba4"
+        }
+      ],
+      "operations": [
+        {
+          "kind": "replace-entity-field",
+          "target": {
+            "entity": "task",
+            "id": "T-8",
+            "field": "acceptance"
+          },
+          "expectedDigest": "987945e67aa3a6c388449f95eb2513b2b959f276677737cc05dc6a4816f2f303",
+          "replacement": [
+            "query remains an explicit custom-parser exception owned by bootstrapFlowQueryCli, src/flow/query.js, and src/flow/query-contract.js; it is excluded from shared option/help/admission matrices while stdin, --request-file, help, and error behavior remain covered separately.",
+            "query request/stdin and --request-file input is limited to 1,048,576 bytes; page limit is 1..100; public collections and object fields are at most 10,000 items; public strings are at most 4,096 bytes; canonical JSON depth is at most 32; canonical response is at most 2,097,152 bytes.",
+            "canonical query reads retain existing owner limits: available Flow versions 10,000, confirmed activities 100,000, state/spec/catalog records 16,777,216 bytes, confirmed ledger 33,554,432 bytes, artifacts 10,000, artifact IDs per artifact 1,000, managed entries 10,000, total artifact bytes 67,108,864, and snapshot attempts 3; no new generic limit is added.",
+            "integration tests exercise these bounds through bootstrapFlowQueryCli and verify that the shared routed migration neither changes query ownership nor its stdin/request-file/help/error behavior."
+          ],
+          "reason": "Make the retained query bounds and their verification an explicit acceptance contract."
+        }
+      ]
+    },
+    {
+      "index": 6,
+      "findingIdentities": [
+        {
+          "sourceArtifact": "steps/spec-gate/result.json",
+          "sourceStep": "spec-gate",
+          "sourceFindingId": "spec-gate:7",
+          "fingerprint": "bb718aea9ecdb3575730a27e907b55854701aedc271044e8432e2d3c58fd2061"
+        }
+      ],
+      "operations": [
+        {
+          "kind": "replace-array-element",
+          "target": {
+            "collection": "overview.decisions",
+            "position": 7
+          },
+          "expectedDigest": "ac92c79c27d1948d43ce192e4f075a7f4c6bbc6c447b6e59269bbf50fda42ce8",
+          "replacement": {
+            "added_by_task": "T-8",
+            "evidence": "src/flow/query-contract.js owns request, page, public collection, string, JSON depth, response, artifact, and canonical record limits.",
+            "text": "[VERIFY] query remains outside the shared routed migration. Preserve bounded input and canonical reads: request/stdin or --request-file <= 1,048,576 bytes; page limit <= 100; public collections/objects <= 10,000 items; public strings <= 4,096 bytes; canonical JSON depth <= 32; response <= 2,097,152 bytes. Preserve the existing query-contract limits for records, artifacts, IDs, ledger, and total artifact bytes; do not add a new blanket limit."
+          },
+          "reason": "Record the exact retained query bounds and their existing owner in the decision evidence."
+        }
+      ]
+    },
+    {
+      "index": 7,
+      "findingIdentities": [
+        {
+          "sourceArtifact": "steps/spec-gate/result.json",
+          "sourceStep": "spec-gate",
+          "sourceFindingId": "spec-gate:1",
+          "fingerprint": "c8e5ff58e7ca465e1c7c73c549484805a715a3acb34d3d0f1522b5ed34abdd14"
+        },
+        {
+          "sourceArtifact": "steps/spec-gate/result.json",
+          "sourceStep": "spec-gate",
+          "sourceFindingId": "spec-gate:2",
+          "fingerprint": "8e4d5ac9c470acdad9c1c00f8d5f604c6151ec6b8d2dccd502cb468669d856d8"
+        }
+      ],
+      "operations": [
+        {
+          "kind": "replace-entity-field",
+          "target": {
+            "entity": "task",
+            "id": "T-3",
+            "field": "goal"
+          },
+          "expectedDigest": "ed6a046330c0230ee8ef1523b5444505a910aa02b3174fb7c3ff54862a0924e2",
+          "replacement": "leaf の Usage/Options help を共有 option contract と row renderer から生成し、query を除く各 FLOW_COMMANDS leaf の registry entry に定義された command-specific prose、examples、locale text をその同じ leaf に残す。registry から全対象 leaf を列挙し、各 leaf の生成 help と保持対象を検証する。",
+          "reason": "Replace the subjective leaf placement with a registry-defined, measurable ownership rule."
+        }
+      ]
+    },
+    {
+      "index": 8,
+      "findingIdentities": [
+        {
+          "sourceArtifact": "steps/spec-gate/result.json",
+          "sourceStep": "spec-gate",
+          "sourceFindingId": "spec-gate:8",
+          "fingerprint": "44a6bfe378b3f31f9db9abd5d53542f5734c9879873953902a5774ef0c5f5dc0"
+        }
+      ],
+      "operations": [
+        {
+          "kind": "replace-array-element",
+          "target": {
+            "collection": "alternatives_considered",
+            "position": 3
+          },
+          "expectedDigest": "3c59a1d5d35f3d741a7fe845727d2b5a9098dae2dc22e9aed1ea3aa92eb1ba37",
+          "replacement": {
+            "option": "query を shared routed option matrix に移行する",
+            "reason": "採用しない。query は bootstrapFlowQueryCli と query-contract が stdin、request-file、bounded read、schema/error を独立所有する custom-parser exception である。既存 bounds は request 1,048,576 bytes、public collections 10,000 items、canonical depth 32、response 2,097,152 bytes（page limit 100、public string 4,096 bytes）であり、shared migration はこれらの owner/input/output 契約を変更しない。"
+          },
+          "reason": "Document the bounded query alternative with its concrete existing limits and ownership."
+        }
+      ]
+    },
+    {
+      "index": 9,
+      "findingIdentities": [
+        {
+          "sourceArtifact": "steps/spec-gate/result.json",
+          "sourceStep": "spec-gate",
+          "sourceFindingId": "spec-gate:6",
+          "fingerprint": "7b5ec5c16e8c242f2aa672edd085f9f6b148ade594000efcd3dbe8e47768bd2e"
+        }
+      ],
+      "operations": [
+        {
+          "kind": "replace-array-element",
+          "target": {
+            "collection": "overview.data_flow",
+            "position": 7
+          },
+          "expectedDigest": "4fe6f9da86de3b15f6131f3ff6668c904b3e5267322ae8f513f8f79d34bb4785",
+          "replacement": {
+            "added_by_task": "T-8",
+            "text": "query は bootstrapFlowQueryCli から独自の bounded input、canonical record reader、schema validation、response serialization を通り、shared routed help/contract matrix の変更を受けない。request/stdin または --request-file は 1,048,576 bytes 以下、公開 collection/object は 10,000 items 以下、canonical JSON depth は 32 以下、response は 2,097,152 bytes 以下、page limit は 1..100 とし、既存 query-contract の record/catalog bounds を保持する。"
+          },
+          "reason": "State the concrete bounded input and output contract for the independent query path."
+        }
+      ]
+    },
+    {
+      "index": 10,
+      "findingIdentities": [
+        {
+          "sourceArtifact": "steps/spec-gate/result.json",
+          "sourceStep": "spec-gate",
+          "sourceFindingId": "spec-gate:13",
+          "fingerprint": "e4bc1aad2ca53451e44d27e5c9db0e95a74e5284551f2f0d230fa7c32c0ac81b"
+        }
+      ],
+      "operations": [
+        {
+          "kind": "replace-entity-field",
+          "target": {
+            "entity": "requirement",
+            "id": "R1",
+            "field": "desc"
+          },
+          "expectedDigest": "3a77f41098000459585853f060b16cf1056cc408a43ffd3f009dae3c2701abbb",
+          "replacement": "query を除く全共有 routed leaf を registry から再列挙でき、各 leaf の option authority が canonical name、alias、flag/required-value/optional-value の kind、placeholder、description、parser 投影を一対一に表すこと。各 leaf には implicit -h, --help を含めること。さらに、初期 Spec の per-leaf input inventory は各 user-facing positional、rest、flag、required/optional option を漏れなく列挙し、required/optional、cardinality、type、format、allowed domain、range、empty behavior、existing size limit（または未設定）、conditional combination、path owner（file/directory、existence、absolute/relative、resolution root）を個別に記載すること。具体的な --agent-work-dir、gate --spec、--file、context/rest path と、--format、--mode、--phase、--sequence、--category、--record-category、--step、--task-id、--normalized-finding-id、--repair-ref-commit、--expect-attempt-id、--approve、--choice を含め、各値の検証 owner を既存 command/registry validator に参照させること。shared model は syntax/help projection と delegation boundary を所有し、query custom parser や新しい blanket validator/任意の tighter limit は含めないこと。",
+          "reason": "Require a complete per-leaf argument inventory with concrete type, format, range, and validation-owner fields."
+        }
+      ]
+    },
+    {
+      "index": 11,
+      "findingIdentities": [
+        {
+          "sourceArtifact": "steps/spec-gate/result.json",
+          "sourceStep": "spec-gate",
+          "sourceFindingId": "spec-gate:11",
+          "fingerprint": "caca5a8dc936e3a9c9ba9f4ee26a6d650038be32910bbd16400aa97cb7755ae9"
+        },
+        {
+          "sourceArtifact": "steps/spec-gate/result.json",
+          "sourceStep": "spec-gate",
+          "sourceFindingId": "spec-gate:12",
+          "fingerprint": "26fd25621de72156bf7f22caed58c75bc0603a0ba23f6de49cd0554914903d2c"
+        },
+        {
+          "sourceArtifact": "steps/spec-gate/result.json",
+          "sourceStep": "spec-gate",
+          "sourceFindingId": "spec-gate:3",
+          "fingerprint": "c8ec810d740e26eaaaa0ad27f867c407ecea81b29872bcfbb882aa76a561ea67"
+        },
+        {
+          "sourceArtifact": "steps/spec-gate/result.json",
+          "sourceStep": "spec-gate",
+          "sourceFindingId": "spec-gate:4",
+          "fingerprint": "0029b7afa704cd1b54e2d749554deb654dfb10a3f9dc20c87499b09ebf955f40"
+        }
+      ],
+      "operations": [
+        {
+          "kind": "add-array-element",
+          "target": {
+            "collection": "acceptance_criteria"
+          },
+          "expectedDigest": null,
+          "replacement": "For every current registry-derived shared routed leaf—resume 1, prepare 1, get 11, set 17, run 34, report/show 1, query excluded—a valid command invocation and explicit --help return exit code 0; each leaf's normal-success fixture names its success condition and preserves the existing handler and hook lifecycle.",
+          "reason": "Define the normal success condition and exit code for every changed command family."
+        },
+        {
+          "kind": "add-array-element",
+          "target": {
+            "collection": "acceptance_criteria"
+          },
+          "expectedDigest": null,
+          "replacement": "For each applicable leaf in that same 65-leaf set, the input inventory names the parser, target, and command-owned failure conditions; each selected failure returns exit code 1 and preserves the existing diagnostic and rejection order before command-owned mutation. Missing/unknown selector, missing required value, extra positional, invalid domain, target mismatch, and --expect-issue/--expect-no-issue conflict are covered only where the owner declares them applicable.",
+          "reason": "Specify per-command failure conditions and their non-zero exit contract without adding universal rejection rules."
+        },
+        {
+          "kind": "add-array-element",
+          "target": {
+            "collection": "acceptance_criteria"
+          },
+          "expectedDigest": null,
+          "replacement": "The representative failure matrix is deterministic: its row set is exactly the registry entries applicable to each category, with one fixed argv/fixture per row (including the same parser, target, and command-failure predicates for every review); it records the command path, input, expected diagnostic owner, and exit code. Reviewers do not choose examples ad hoc.",
+          "reason": "Make the representative parser, target, and command failure set reproducible for independent reviewers."
+        },
+        {
+          "kind": "add-array-element",
+          "target": {
+            "collection": "acceptance_criteria"
+          },
+          "expectedDigest": null,
+          "replacement": "The matrix explicitly covers normal success and failure for every changed command family (resume, prepare, get, set, run, report/show), including the existing target guards and command-owned failures, while query is tested separately through bootstrapFlowQueryCli and is not included in the shared routed matrix.",
+          "reason": "Bind the acceptance matrix to the exact changed command families and the explicit query exception."
+        }
+      ]
+    }
+  ],
+  "discardedGroups": [],
+  "operationDigest": "67db90052dabb131d50043d7207fc04a61f4531352922c831bfda79c85e1c5a4",
+  "resultRevision": {
+    "digest": "52cf1e771072f44139679a11a8f5272c8e71755dcc0194799ebd6cdde8786138",
+    "byteLength": 42208
+  },
+  "sourceReviewIdentity": {
+    "specId": "6a9b5488-flow-help-contract",
+    "revision": 4,
+    "digest": "cb670c0602807b1305d65ab4d0dfbbe4bfcba44366eda79d98d0b4b841d0857f",
+    "byteLength": 35625
+  },
+  "sourceEvidenceIdentity": {
+    "sourceAttempt": {
+      "id": "attempt-spec-gate-39badb78-ff3c-42b5-9367-1a3e57c68d7b",
+      "sequence": 2
+    },
+    "resultLogicalKey": "spec.gate",
+    "publicationActivityId": "plan-gate-repaired-bd9d7f81-0b52-422a-8b5d-fa6c8741bdd7",
+    "catalogFingerprint": "25cdb0f7c9d27bc30a345bc40beef724bbad7c358fc23899e9edf97f223f524d",
+    "transitionLineage": {
+      "sourceAttempt": {
+        "id": "attempt-spec-gate-39badb78-ff3c-42b5-9367-1a3e57c68d7b",
+        "sequence": 2
+      },
+      "canonicalAttempt": {
+        "id": "attempt-spec-gate-39badb78-ff3c-42b5-9367-1a3e57c68d7b",
+        "sequence": 2
+      },
+      "sourceFingerprint": "ad510e6dc3e07681cf06ae37b3711f7d13c3d9aa5e524a52128d7ba07a74600a",
+      "canonicalFingerprint": "25cdb0f7c9d27bc30a345bc40beef724bbad7c358fc23899e9edf97f223f524d",
+      "sourceRevisionFingerprint": "9680de83cbc4536513dac0b1a296443cc903e56f6148cf2ec7661cde003148f1",
+      "canonicalRevisionFingerprint": "9680de83cbc4536513dac0b1a296443cc903e56f6148cf2ec7661cde003148f1"
+    }
+  },
+  "sourceFindingIdentities": [
+    {
+      "sourceArtifact": "steps/spec-gate/result.json",
+      "sourceStep": "spec-gate",
+      "sourceFindingId": "spec-gate:10",
+      "fingerprint": "f98bc218fd8dfc054eef764564a68e651c222863ce6a9687a74d6772db58db22"
+    },
+    {
+      "sourceArtifact": "steps/spec-gate/result.json",
+      "sourceStep": "spec-gate",
+      "sourceFindingId": "spec-gate:14",
+      "fingerprint": "df86c258468220c842772287de4f63230004219df0efc1ca06797ecdb01a9a5b"
+    },
+    {
+      "sourceArtifact": "steps/spec-gate/result.json",
+      "sourceStep": "spec-gate",
+      "sourceFindingId": "spec-gate:16",
+      "fingerprint": "6aacf37266375cdbabdefd5945b45236e87ecc1eef9c3a2cd37e1d5e234073f3"
+    },
+    {
+      "sourceArtifact": "steps/spec-gate/result.json",
+      "sourceStep": "spec-gate",
+      "sourceFindingId": "spec-gate:5",
+      "fingerprint": "9dd7462b8357312901a09cd6126d808712cc7007a16b2a382629f4bfb311021c"
+    },
+    {
+      "sourceArtifact": "steps/spec-gate/result.json",
+      "sourceStep": "spec-gate",
+      "sourceFindingId": "spec-gate:15",
+      "fingerprint": "318b2305405a6fa264e6de07560225837d2acb49552f62d5d0f69bf528951d91"
+    },
+    {
+      "sourceArtifact": "steps/spec-gate/result.json",
+      "sourceStep": "spec-gate",
+      "sourceFindingId": "spec-gate:9",
+      "fingerprint": "cc48c1395ce6d5986d520621378db014145a74a915a79137ae2d4b9d0fee7ba4"
+    },
+    {
+      "sourceArtifact": "steps/spec-gate/result.json",
+      "sourceStep": "spec-gate",
+      "sourceFindingId": "spec-gate:7",
+      "fingerprint": "bb718aea9ecdb3575730a27e907b55854701aedc271044e8432e2d3c58fd2061"
+    },
+    {
+      "sourceArtifact": "steps/spec-gate/result.json",
+      "sourceStep": "spec-gate",
+      "sourceFindingId": "spec-gate:1",
+      "fingerprint": "c8e5ff58e7ca465e1c7c73c549484805a715a3acb34d3d0f1522b5ed34abdd14"
+    },
+    {
+      "sourceArtifact": "steps/spec-gate/result.json",
+      "sourceStep": "spec-gate",
+      "sourceFindingId": "spec-gate:2",
+      "fingerprint": "8e4d5ac9c470acdad9c1c00f8d5f604c6151ec6b8d2dccd502cb468669d856d8"
+    },
+    {
+      "sourceArtifact": "steps/spec-gate/result.json",
+      "sourceStep": "spec-gate",
+      "sourceFindingId": "spec-gate:8",
+      "fingerprint": "44a6bfe378b3f31f9db9abd5d53542f5734c9879873953902a5774ef0c5f5dc0"
+    },
+    {
+      "sourceArtifact": "steps/spec-gate/result.json",
+      "sourceStep": "spec-gate",
+      "sourceFindingId": "spec-gate:6",
+      "fingerprint": "7b5ec5c16e8c242f2aa672edd085f9f6b148ade594000efcd3dbe8e47768bd2e"
+    },
+    {
+      "sourceArtifact": "steps/spec-gate/result.json",
+      "sourceStep": "spec-gate",
+      "sourceFindingId": "spec-gate:13",
+      "fingerprint": "e4bc1aad2ca53451e44d27e5c9db0e95a74e5284551f2f0d230fa7c32c0ac81b"
+    },
+    {
+      "sourceArtifact": "steps/spec-gate/result.json",
+      "sourceStep": "spec-gate",
+      "sourceFindingId": "spec-gate:11",
+      "fingerprint": "caca5a8dc936e3a9c9ba9f4ee26a6d650038be32910bbd16400aa97cb7755ae9"
+    },
+    {
+      "sourceArtifact": "steps/spec-gate/result.json",
+      "sourceStep": "spec-gate",
+      "sourceFindingId": "spec-gate:12",
+      "fingerprint": "26fd25621de72156bf7f22caed58c75bc0603a0ba23f6de49cd0554914903d2c"
+    },
+    {
+      "sourceArtifact": "steps/spec-gate/result.json",
+      "sourceStep": "spec-gate",
+      "sourceFindingId": "spec-gate:3",
+      "fingerprint": "c8ec810d740e26eaaaa0ad27f867c407ecea81b29872bcfbb882aa76a561ea67"
+    },
+    {
+      "sourceArtifact": "steps/spec-gate/result.json",
+      "sourceStep": "spec-gate",
+      "sourceFindingId": "spec-gate:4",
+      "fingerprint": "0029b7afa704cd1b54e2d749554deb654dfb10a3f9dc20c87499b09ebf955f40"
+    }
+  ],
+  "observationIdentities": [
+    {
+      "sourceArtifact": "steps/spec-gate/result.json",
+      "sourceStep": "spec-gate",
+      "sourceFindingId": "spec-gate:1",
+      "fingerprint": "c8e5ff58e7ca465e1c7c73c549484805a715a3acb34d3d0f1522b5ed34abdd14"
+    },
+    {
+      "sourceArtifact": "steps/spec-gate/result.json",
+      "sourceStep": "spec-gate",
+      "sourceFindingId": "spec-gate:2",
+      "fingerprint": "8e4d5ac9c470acdad9c1c00f8d5f604c6151ec6b8d2dccd502cb468669d856d8"
+    },
+    {
+      "sourceArtifact": "steps/spec-gate/result.json",
+      "sourceStep": "spec-gate",
+      "sourceFindingId": "spec-gate:3",
+      "fingerprint": "c8ec810d740e26eaaaa0ad27f867c407ecea81b29872bcfbb882aa76a561ea67"
+    },
+    {
+      "sourceArtifact": "steps/spec-gate/result.json",
+      "sourceStep": "spec-gate",
+      "sourceFindingId": "spec-gate:4",
+      "fingerprint": "0029b7afa704cd1b54e2d749554deb654dfb10a3f9dc20c87499b09ebf955f40"
+    },
+    {
+      "sourceArtifact": "steps/spec-gate/result.json",
+      "sourceStep": "spec-gate",
+      "sourceFindingId": "spec-gate:5",
+      "fingerprint": "9dd7462b8357312901a09cd6126d808712cc7007a16b2a382629f4bfb311021c"
+    },
+    {
+      "sourceArtifact": "steps/spec-gate/result.json",
+      "sourceStep": "spec-gate",
+      "sourceFindingId": "spec-gate:6",
+      "fingerprint": "7b5ec5c16e8c242f2aa672edd085f9f6b148ade594000efcd3dbe8e47768bd2e"
+    },
+    {
+      "sourceArtifact": "steps/spec-gate/result.json",
+      "sourceStep": "spec-gate",
+      "sourceFindingId": "spec-gate:7",
+      "fingerprint": "bb718aea9ecdb3575730a27e907b55854701aedc271044e8432e2d3c58fd2061"
+    },
+    {
+      "sourceArtifact": "steps/spec-gate/result.json",
+      "sourceStep": "spec-gate",
+      "sourceFindingId": "spec-gate:8",
+      "fingerprint": "44a6bfe378b3f31f9db9abd5d53542f5734c9879873953902a5774ef0c5f5dc0"
+    },
+    {
+      "sourceArtifact": "steps/spec-gate/result.json",
+      "sourceStep": "spec-gate",
+      "sourceFindingId": "spec-gate:9",
+      "fingerprint": "cc48c1395ce6d5986d520621378db014145a74a915a79137ae2d4b9d0fee7ba4"
+    },
+    {
+      "sourceArtifact": "steps/spec-gate/result.json",
+      "sourceStep": "spec-gate",
+      "sourceFindingId": "spec-gate:10",
+      "fingerprint": "f98bc218fd8dfc054eef764564a68e651c222863ce6a9687a74d6772db58db22"
+    },
+    {
+      "sourceArtifact": "steps/spec-gate/result.json",
+      "sourceStep": "spec-gate",
+      "sourceFindingId": "spec-gate:11",
+      "fingerprint": "caca5a8dc936e3a9c9ba9f4ee26a6d650038be32910bbd16400aa97cb7755ae9"
+    },
+    {
+      "sourceArtifact": "steps/spec-gate/result.json",
+      "sourceStep": "spec-gate",
+      "sourceFindingId": "spec-gate:12",
+      "fingerprint": "26fd25621de72156bf7f22caed58c75bc0603a0ba23f6de49cd0554914903d2c"
+    },
+    {
+      "sourceArtifact": "steps/spec-gate/result.json",
+      "sourceStep": "spec-gate",
+      "sourceFindingId": "spec-gate:13",
+      "fingerprint": "e4bc1aad2ca53451e44d27e5c9db0e95a74e5284551f2f0d230fa7c32c0ac81b"
+    },
+    {
+      "sourceArtifact": "steps/spec-gate/result.json",
+      "sourceStep": "spec-gate",
+      "sourceFindingId": "spec-gate:14",
+      "fingerprint": "df86c258468220c842772287de4f63230004219df0efc1ca06797ecdb01a9a5b"
+    },
+    {
+      "sourceArtifact": "steps/spec-gate/result.json",
+      "sourceStep": "spec-gate",
+      "sourceFindingId": "spec-gate:15",
+      "fingerprint": "318b2305405a6fa264e6de07560225837d2acb49552f62d5d0f69bf528951d91"
+    },
+    {
+      "sourceArtifact": "steps/spec-gate/result.json",
+      "sourceStep": "spec-gate",
+      "sourceFindingId": "spec-gate:16",
+      "fingerprint": "6aacf37266375cdbabdefd5945b45236e87ecc1eef9c3a2cd37e1d5e234073f3"
+    }
+  ],
+  "repairId": "plan-gate-repair-e1306ae463195cba73f736a23eb0befa6e845e1aae57fd00cc06fbeaea1a0dba",
+  "repairRecordFingerprint": "e1306ae463195cba73f736a23eb0befa6e845e1aae57fd00cc06fbeaea1a0dba",
+  "targetAttempt": {
+    "id": "attempt-spec-gate-repair-3ac2e33b-82c8-47b4-8411-48c3cdbc301a",
+    "sequence": 2
+  },
+  "observationResults": [
+    {
+      "fingerprint": "b5b3e75c7922644d23773bce6f92890fc0cc821dc39d8e686c096d91f3c6cc83",
+      "strategy": "sha256:c3c456d4cba65d030ba205c9f33aea69f5cb966d02df2585243ee9f94fc9db4e",
+      "summary": "Replace the subjective leaf placement with a registry-defined, measurable ownership rule.",
+      "priorRepairInsufficiency": null,
+      "groupIndices": [
+        7
+      ]
+    },
+    {
+      "fingerprint": "09170eb8c56e3658e7d64a7ad5453e4c0d8f4b70aed896c038bfbdf1cc7717b3",
+      "strategy": "sha256:c3c456d4cba65d030ba205c9f33aea69f5cb966d02df2585243ee9f94fc9db4e",
+      "summary": "Replace the subjective leaf placement with a registry-defined, measurable ownership rule.",
+      "priorRepairInsufficiency": null,
+      "groupIndices": [
+        7
+      ]
+    },
+    {
+      "fingerprint": "8630fa278a5092fcfe7a25ddceddd5c099bac7829cc8cb7bbcf1c462f2b7ad5b",
+      "strategy": "sha256:e5b6ab84cc6b7b5b11999ae23ae39aef6cc6fdefcf28cab17ab731ca9ed5d1ff",
+      "summary": "Define the normal success condition and exit code for every changed command family. Specify per-command failure conditions and their non-zero exit contract without adding universal rejection rules. Make the representative parser, target, and command failure set reproducible for independent reviewers. Bind the acceptance matrix to the exact changed command families and the explicit query exception.",
+      "priorRepairInsufficiency": null,
+      "groupIndices": [
+        11
+      ]
+    },
+    {
+      "fingerprint": "ecae80df6fd66a1be44eea26602db06a8c761ce5f3c3e62fb205866a14024582",
+      "strategy": "sha256:e5b6ab84cc6b7b5b11999ae23ae39aef6cc6fdefcf28cab17ab731ca9ed5d1ff",
+      "summary": "Define the normal success condition and exit code for every changed command family. Specify per-command failure conditions and their non-zero exit contract without adding universal rejection rules. Make the representative parser, target, and command failure set reproducible for independent reviewers. Bind the acceptance matrix to the exact changed command families and the explicit query exception.",
+      "priorRepairInsufficiency": null,
+      "groupIndices": [
+        11
+      ]
+    },
+    {
+      "fingerprint": "aad7e6241c4205e38d1af129177d34a839b8f4b4bcc94da48e7faf3c21a7f7f2",
+      "strategy": "sha256:d56ae10f48038753f4391bbcecc8289ede8feb7249d17a26e8609c5fce861282",
+      "summary": "Replace the unbounded query module statement with the existing size, count, depth, and response limits.",
+      "priorRepairInsufficiency": null,
+      "groupIndices": [
+        3
+      ]
+    },
+    {
+      "fingerprint": "33c5b71c8342a1e5e6cef67f2bf998502b7ebc7c551df93a5093107a1d11a241",
+      "strategy": "sha256:39c88bd12e8765ae50c3945b527559d7fe7d08d11e6d3a3e8061cee9639d7665",
+      "summary": "State the concrete bounded input and output contract for the independent query path.",
+      "priorRepairInsufficiency": null,
+      "groupIndices": [
+        9
+      ]
+    },
+    {
+      "fingerprint": "cac1eb56274ad5b75e74766c2260107aca8af7d195bfa338f7eebdb648084135",
+      "strategy": "sha256:a9a7eeaa2f6e42854dd552a5539948f832d10de32d50c0b3e6882d7dae855197",
+      "summary": "Record the exact retained query bounds and their existing owner in the decision evidence.",
+      "priorRepairInsufficiency": null,
+      "groupIndices": [
+        6
+      ]
+    },
+    {
+      "fingerprint": "c74d3d0ce4fcf3c6f4521737ebba0ca7c4fd47afcc274bd72b723d156cff03b9",
+      "strategy": "sha256:37e888674244ad28a927d608bf2aca5853e6210a4723aa873ad0f71fe2c50504",
+      "summary": "Document the bounded query alternative with its concrete existing limits and ownership.",
+      "priorRepairInsufficiency": null,
+      "groupIndices": [
+        8
+      ]
+    },
+    {
+      "fingerprint": "62cd385fa4f130fe51b960f052e2e89940bb78711f78d942d498a34c40c13279",
+      "strategy": "sha256:c77573e2a377c40ed71a2735cfad0966a833f3898a6d117f1bce9a5bb6e3f039",
+      "summary": "Make the retained query bounds and their verification an explicit acceptance contract.",
+      "priorRepairInsufficiency": null,
+      "groupIndices": [
+        5
+      ]
+    },
+    {
+      "fingerprint": "4a18c63ec9a51f5fc5e7dca76df87f738e8ea0dd9dbea04bb310e84b7dcdbf83",
+      "strategy": "sha256:99e8218833bd2b562fe487330e0ae5f7fc19f49db04eb93cf25c5d4b43bf4d0b",
+      "summary": "Add the migration plan, user impact, and compatibility expectation for the corrected group option projection.",
+      "priorRepairInsufficiency": null,
+      "groupIndices": [
+        0
+      ]
+    },
+    {
+      "fingerprint": "f5c49565d1f22d88488c543a94ca6aebdf83de759d024afc86836b9bc67e0200",
+      "strategy": "sha256:e5b6ab84cc6b7b5b11999ae23ae39aef6cc6fdefcf28cab17ab731ca9ed5d1ff",
+      "summary": "Define the normal success condition and exit code for every changed command family. Specify per-command failure conditions and their non-zero exit contract without adding universal rejection rules. Make the representative parser, target, and command failure set reproducible for independent reviewers. Bind the acceptance matrix to the exact changed command families and the explicit query exception.",
+      "priorRepairInsufficiency": null,
+      "groupIndices": [
+        11
+      ]
+    },
+    {
+      "fingerprint": "a7148b0c501a8a2cd821722a64516ef6e5ef25918a239518bb3920fb596e7cee",
+      "strategy": "sha256:e5b6ab84cc6b7b5b11999ae23ae39aef6cc6fdefcf28cab17ab731ca9ed5d1ff",
+      "summary": "Define the normal success condition and exit code for every changed command family. Specify per-command failure conditions and their non-zero exit contract without adding universal rejection rules. Make the representative parser, target, and command failure set reproducible for independent reviewers. Bind the acceptance matrix to the exact changed command families and the explicit query exception.",
+      "priorRepairInsufficiency": null,
+      "groupIndices": [
+        11
+      ]
+    },
+    {
+      "fingerprint": "55b9c303a0ab6af967f04c9e2b43fa25eb11f5d80954dee0b064124f9a6c7651",
+      "strategy": "sha256:7d6afd40ea415dd6fe230f76375666f4def255eb9a7534485c2d0ed79c21a469",
+      "summary": "Require a complete per-leaf argument inventory with concrete type, format, range, and validation-owner fields.",
+      "priorRepairInsufficiency": null,
+      "groupIndices": [
+        10
+      ]
+    },
+    {
+      "fingerprint": "40de9cca9915d08f9a59714c452eca18737fcc0ea16883ea2a44977903e25ea7",
+      "strategy": "sha256:0383ae7e6b19a825949e58f1e00e724201343e76bbac3d390f0f953cf2aad1ad",
+      "summary": "Enumerate per-leaf validation dimensions and named existing owners required by the input contract.",
+      "priorRepairInsufficiency": null,
+      "groupIndices": [
+        1
+      ]
+    },
+    {
+      "fingerprint": "eabde39c4e226a8a673d6329f0472d75141d542f7c84b271f55cba8cae891548",
+      "strategy": "sha256:57eacca47f2ef5f39a3cb3b997d6de1759205bb307d9c5411cfd7ecda19b2280",
+      "summary": "List the five guard arguments with their concrete validation contracts and preserve their existing owner and rejection order.",
+      "priorRepairInsufficiency": null,
+      "groupIndices": [
+        4
+      ]
+    },
+    {
+      "fingerprint": "679d6ddd8e3f03243635ced2084537ce35857936a865d0039ff16b5711065c6b",
+      "strategy": "sha256:27b52089a2c6d7aaa380ed42167bffa714a047f789639a16a05c3a75af32c156",
+      "summary": "Define path format, existence, scope, and resolution-root validation without changing the existing resolver policy.",
+      "priorRepairInsufficiency": null,
+      "groupIndices": [
+        2
+      ]
+    }
+  ],
+  "reviewFacts": {
+    "version": 1,
+    "baseRevision": "sha256:90fcccf9f2453d3df088b28293f5c0376914a03e3d48fe7ea4903d8fe326f749",
+    "resultRevision": {
+      "digest": "52cf1e771072f44139679a11a8f5272c8e71755dcc0194799ebd6cdde8786138",
+      "byteLength": 42208
+    },
+    "sourceReviewIdentity": {
+      "specId": "6a9b5488-flow-help-contract",
+      "revision": 4,
+      "digest": "cb670c0602807b1305d65ab4d0dfbbe4bfcba44366eda79d98d0b4b841d0857f",
+      "byteLength": 35625
+    },
+    "sourceReviewDigest": "fd7c7d54e638fbbe997bc10abe2732bdb5286f67f1ad6c2e795c942f54fa7fc1",
+    "sourceReviewArtifact": "revisions/004/review.json",
+    "sourceSpecDigest": "c1997748ae814fcacbb4141fa06d5263fed9ad8864ccc4fb988d625250c78767",
+    "resultSpecDigest": "528b38f11d8e90bbd644086f306775f815fd0bf0e7a4584a6005afd292135cf0",
+    "findings": [
+      {
+        "identity": {
+          "sourceArtifact": "revisions/004/review.json",
+          "sourceStep": "spec-review",
+          "sourceFindingId": "spec-review-97290fe883b7cf25c693d2deaa073a1f",
+          "fingerprint": "765536b75d4a831fe6f3c59a3a06381ee8651fefff2c2bc927df995a67a4f9ee"
+        },
+        "finding": {
+          "allowedTargets": [
+            {
+              "operationKinds": [
+                "edit-text-field"
+              ],
+              "target": {
+                "entity": "requirement",
+                "field": "desc",
+                "id": "R8"
+              }
+            },
+            {
+              "operationKinds": [
+                "edit-text-field"
+              ],
+              "target": {
+                "entity": "task",
+                "field": "goal",
+                "id": "T-6"
+              }
+            },
+            {
+              "operationKinds": [
+                "edit-text-field"
+              ],
+              "target": {
+                "entity": "task",
+                "field": "implementation_notes",
+                "id": "T-6"
+              }
+            }
+          ],
+          "body": "**Target:** R8, T-6; src/sennel.js, src/lib/dispatcher.js, src/lib/container.js\n**Issue:** The dispatcher accepts `--agent-work-dir=<path>`, but the early scanner in `src/sennel.js` recognizes only the separated form before `initContainer()`. Since container paths and log paths are computed during initialization, the two forms currently select different work/log directories, contradicting the stated parity and runtime-policy preservation.\n**Required change:** Explicitly decide whether equals-form input is intentionally normalized before `initContainer()`; if so, name that scanner change and its log/finalize implications as the intended compatibility behavior, otherwise remove the equals-form parity requirement.\n**Why blocking:** Implementers cannot simultaneously preserve verified current behavior and satisfy the required same-resolver behavior, and path/log/finalize tests would have different valid expected outcomes.",
+          "disposition": "apply",
+          "evidence": "The immutable Spec requires identical separated and equals-form runtime behavior but does not define whether early scanning normalizes the equals form or the parity requirement is removed; the cited R8 and T-6 text targets need an explicit boundary before implementation.",
+          "findingId": "spec-review-97290fe883b7cf25c693d2deaa073a1f",
+          "issue": "The dispatcher accepts `--agent-work-dir=<path>`, but the early scanner in `src/sennel.js` recognizes only the separated form before `initContainer()`. Since container paths and log paths are computed during initialization, the two forms currently select different work/log directories, contradicting the stated parity and runtime-policy preservation.",
+          "kind": "blocking",
+          "requiredChange": "Explicitly decide whether equals-form input is intentionally normalized before `initContainer()`; if so, name that scanner change and its log/finalize implications as the intended compatibility behavior, otherwise remove the equals-form parity requirement.",
+          "target": "R8, T-6; src/sennel.js, src/lib/dispatcher.js, src/lib/container.js",
+          "title": "`--agent-work-dir=` has different runtime semantics",
+          "whyBlocking": "Implementers cannot simultaneously preserve verified current behavior and satisfy the required same-resolver behavior, and path/log/finalize tests would have different valid expected outcomes."
+        },
+        "relatedChanges": [
+          {
+            "groupIndex": 2,
+            "operationIndex": 0,
+            "target": {
+              "entity": "requirement",
+              "id": "R8",
+              "field": "desc"
+            },
+            "gateFindingIdentities": [
+              {
+                "sourceArtifact": "steps/spec-gate/result.json",
+                "sourceStep": "spec-gate",
+                "sourceFindingId": "spec-gate:16",
+                "fingerprint": "6aacf37266375cdbabdefd5945b45236e87ecc1eef9c3a2cd37e1d5e234073f3"
+              }
+            ]
+          }
+        ],
+        "unresolvedBlocking": true
+      },
+      {
+        "identity": {
+          "sourceArtifact": "revisions/004/review.json",
+          "sourceStep": "spec-review",
+          "sourceFindingId": "spec-review-69821926d93349cd5a06ff5c92c3cd40",
+          "fingerprint": "729c192d09d23a81ec8e641bcb9b1eee3caa468e5e6f93cfea6d521169925423"
+        },
+        "finding": {
+          "allowedTargets": [
+            {
+              "operationKinds": [
+                "edit-text-field"
+              ],
+              "target": {
+                "entity": "requirement",
+                "field": "desc",
+                "id": "R9"
+              }
+            },
+            {
+              "operationKinds": [
+                "edit-text-field"
+              ],
+              "target": {
+                "entity": "task",
+                "field": "goal",
+                "id": "T-7"
+              }
+            },
+            {
+              "operationKinds": [
+                "replace-entity-field"
+              ],
+              "target": {
+                "entity": "task",
+                "field": "acceptance",
+                "id": "T-7"
+              }
+            },
+            {
+              "operationKinds": [
+                "replace-array-element"
+              ],
+              "target": {
+                "collection": "acceptance_criteria",
+                "position": 5
+              }
+            }
+          ],
+          "body": "**Target:** R9, T-7; src/lib/dispatcher.js, src/lib/plugin-registry.js\n**Issue:** The dispatcher invokes registry `pre`, `post`, and `onError` hooks, but has no `entry.finally` invocation. Although plugin hook validation mentions `finally`, `runFlowCommandWithPluginLifecycle()` executes only `pre` and `post`. The spec nevertheless requires preserving and testing an existing `pre/post/onError/finally` order.\n**Required change:** Remove `finally` from the existing-parity requirements, or define the concrete owner, invocation point, failure behavior, and intended addition of a `finally` lifecycle before requiring its tests.\n**Why blocking:** There is no verified behavior or integration point against which a finally-order regression test can be designed; adding one would introduce new lifecycle semantics contrary to the stated no-semantic-change constraint.",
+          "disposition": "apply",
+          "evidence": "The immutable Spec requires a pre/post/onError/finally parity contract while the cited dispatcher path has no verified finally invocation; the R9, T-7, and top-level acceptance wording must define the existing lifecycle boundary before implementation.",
+          "findingId": "spec-review-69821926d93349cd5a06ff5c92c3cd40",
+          "issue": "The dispatcher invokes registry `pre`, `post`, and `onError` hooks, but has no `entry.finally` invocation. Although plugin hook validation mentions `finally`, `runFlowCommandWithPluginLifecycle()` executes only `pre` and `post`. The spec nevertheless requires preserving and testing an existing `pre/post/onError/finally` order.",
+          "kind": "blocking",
+          "requiredChange": "Remove `finally` from the existing-parity requirements, or define the concrete owner, invocation point, failure behavior, and intended addition of a `finally` lifecycle before requiring its tests.",
+          "target": "R9, T-7; src/lib/dispatcher.js, src/lib/plugin-registry.js",
+          "title": "The specified `finally` lifecycle is not an existing dispatcher contract",
+          "whyBlocking": "There is no verified behavior or integration point against which a finally-order regression test can be designed; adding one would introduce new lifecycle semantics contrary to the stated no-semantic-change constraint."
+        },
+        "relatedChanges": [
+          {
+            "groupIndex": 11,
+            "operationIndex": 0,
+            "target": {
+              "collection": "acceptance_criteria"
+            },
+            "gateFindingIdentities": [
+              {
+                "sourceArtifact": "steps/spec-gate/result.json",
+                "sourceStep": "spec-gate",
+                "sourceFindingId": "spec-gate:11",
+                "fingerprint": "caca5a8dc936e3a9c9ba9f4ee26a6d650038be32910bbd16400aa97cb7755ae9"
+              },
+              {
+                "sourceArtifact": "steps/spec-gate/result.json",
+                "sourceStep": "spec-gate",
+                "sourceFindingId": "spec-gate:12",
+                "fingerprint": "26fd25621de72156bf7f22caed58c75bc0603a0ba23f6de49cd0554914903d2c"
+              },
+              {
+                "sourceArtifact": "steps/spec-gate/result.json",
+                "sourceStep": "spec-gate",
+                "sourceFindingId": "spec-gate:3",
+                "fingerprint": "c8ec810d740e26eaaaa0ad27f867c407ecea81b29872bcfbb882aa76a561ea67"
+              },
+              {
+                "sourceArtifact": "steps/spec-gate/result.json",
+                "sourceStep": "spec-gate",
+                "sourceFindingId": "spec-gate:4",
+                "fingerprint": "0029b7afa704cd1b54e2d749554deb654dfb10a3f9dc20c87499b09ebf955f40"
+              }
+            ]
+          },
+          {
+            "groupIndex": 11,
+            "operationIndex": 1,
+            "target": {
+              "collection": "acceptance_criteria"
+            },
+            "gateFindingIdentities": [
+              {
+                "sourceArtifact": "steps/spec-gate/result.json",
+                "sourceStep": "spec-gate",
+                "sourceFindingId": "spec-gate:11",
+                "fingerprint": "caca5a8dc936e3a9c9ba9f4ee26a6d650038be32910bbd16400aa97cb7755ae9"
+              },
+              {
+                "sourceArtifact": "steps/spec-gate/result.json",
+                "sourceStep": "spec-gate",
+                "sourceFindingId": "spec-gate:12",
+                "fingerprint": "26fd25621de72156bf7f22caed58c75bc0603a0ba23f6de49cd0554914903d2c"
+              },
+              {
+                "sourceArtifact": "steps/spec-gate/result.json",
+                "sourceStep": "spec-gate",
+                "sourceFindingId": "spec-gate:3",
+                "fingerprint": "c8ec810d740e26eaaaa0ad27f867c407ecea81b29872bcfbb882aa76a561ea67"
+              },
+              {
+                "sourceArtifact": "steps/spec-gate/result.json",
+                "sourceStep": "spec-gate",
+                "sourceFindingId": "spec-gate:4",
+                "fingerprint": "0029b7afa704cd1b54e2d749554deb654dfb10a3f9dc20c87499b09ebf955f40"
+              }
+            ]
+          },
+          {
+            "groupIndex": 11,
+            "operationIndex": 2,
+            "target": {
+              "collection": "acceptance_criteria"
+            },
+            "gateFindingIdentities": [
+              {
+                "sourceArtifact": "steps/spec-gate/result.json",
+                "sourceStep": "spec-gate",
+                "sourceFindingId": "spec-gate:11",
+                "fingerprint": "caca5a8dc936e3a9c9ba9f4ee26a6d650038be32910bbd16400aa97cb7755ae9"
+              },
+              {
+                "sourceArtifact": "steps/spec-gate/result.json",
+                "sourceStep": "spec-gate",
+                "sourceFindingId": "spec-gate:12",
+                "fingerprint": "26fd25621de72156bf7f22caed58c75bc0603a0ba23f6de49cd0554914903d2c"
+              },
+              {
+                "sourceArtifact": "steps/spec-gate/result.json",
+                "sourceStep": "spec-gate",
+                "sourceFindingId": "spec-gate:3",
+                "fingerprint": "c8ec810d740e26eaaaa0ad27f867c407ecea81b29872bcfbb882aa76a561ea67"
+              },
+              {
+                "sourceArtifact": "steps/spec-gate/result.json",
+                "sourceStep": "spec-gate",
+                "sourceFindingId": "spec-gate:4",
+                "fingerprint": "0029b7afa704cd1b54e2d749554deb654dfb10a3f9dc20c87499b09ebf955f40"
+              }
+            ]
+          },
+          {
+            "groupIndex": 11,
+            "operationIndex": 3,
+            "target": {
+              "collection": "acceptance_criteria"
+            },
+            "gateFindingIdentities": [
+              {
+                "sourceArtifact": "steps/spec-gate/result.json",
+                "sourceStep": "spec-gate",
+                "sourceFindingId": "spec-gate:11",
+                "fingerprint": "caca5a8dc936e3a9c9ba9f4ee26a6d650038be32910bbd16400aa97cb7755ae9"
+              },
+              {
+                "sourceArtifact": "steps/spec-gate/result.json",
+                "sourceStep": "spec-gate",
+                "sourceFindingId": "spec-gate:12",
+                "fingerprint": "26fd25621de72156bf7f22caed58c75bc0603a0ba23f6de49cd0554914903d2c"
+              },
+              {
+                "sourceArtifact": "steps/spec-gate/result.json",
+                "sourceStep": "spec-gate",
+                "sourceFindingId": "spec-gate:3",
+                "fingerprint": "c8ec810d740e26eaaaa0ad27f867c407ecea81b29872bcfbb882aa76a561ea67"
+              },
+              {
+                "sourceArtifact": "steps/spec-gate/result.json",
+                "sourceStep": "spec-gate",
+                "sourceFindingId": "spec-gate:4",
+                "fingerprint": "0029b7afa704cd1b54e2d749554deb654dfb10a3f9dc20c87499b09ebf955f40"
+              }
+            ]
+          }
+        ],
+        "unresolvedBlocking": true
+      },
+      {
+        "identity": {
+          "sourceArtifact": "revisions/004/review.json",
+          "sourceStep": "spec-review",
+          "sourceFindingId": "spec-review-f9d617e72b1d71af8c52f5b93ebcb391",
+          "fingerprint": "7c47c9f5f94480291cdb8e58303979ce1b09eb8cc678d954268084c995445fc0"
+        },
+        "finding": {
+          "allowedTargets": [
+            {
+              "operationKinds": [
+                "edit-text-field"
+              ],
+              "target": {
+                "entity": "requirement",
+                "field": "desc",
+                "id": "R1"
+              }
+            },
+            {
+              "operationKinds": [
+                "edit-text-field"
+              ],
+              "target": {
+                "entity": "requirement",
+                "field": "desc",
+                "id": "R2"
+              }
+            },
+            {
+              "operationKinds": [
+                "edit-text-field"
+              ],
+              "target": {
+                "entity": "task",
+                "field": "implementation_notes",
+                "id": "T-1"
+              }
+            },
+            {
+              "operationKinds": [
+                "edit-text-field"
+              ],
+              "target": {
+                "entity": "task",
+                "field": "implementation_notes",
+                "id": "T-2"
+              }
+            }
+          ],
+          "body": "**Target:** R1/R2, T-1/T-2, registry contract acceptance\n**Issue:** `FLOW_COMMANDS[*].args` contains only syntactic arrays (`flags`, `options`, `optionalOptions`, `positional`, and `rest`). `parseEntryInput()` and `parseArgs()` do not carry option descriptions, placeholders, aliases, or domain/path validators. Arity and semantic validation remain in individual `src/flow/lib` command classes, with no registry-level owner/reference linking them to the proposed typed option model.\n**Required change:** Specify that the shared model carries an explicit reference to each existing command-owned semantic validator while owning only syntax/help projection, and require the contract test to verify that delegation; alternatively remove semantic ownership from the one-to-one authority requirement.\n**Why blocking:** Without this boundary, implementation must either duplicate or move domain/path/arity validation and risk changing rejection order, or omit the required semantics; the acceptance test has no authoritative mapping to verify.",
+          "disposition": "apply",
+          "evidence": "The immutable Spec promises semantic parity but the registry only carries syntax/help metadata and does not identify the existing command-owned validators; R1, R2, T-1, and T-2 need an explicit delegation boundary without duplicating validation.",
+          "findingId": "spec-review-f9d617e72b1d71af8c52f5b93ebcb391",
+          "issue": "`FLOW_COMMANDS[*].args` contains only syntactic arrays (`flags`, `options`, `optionalOptions`, `positional`, and `rest`). `parseEntryInput()` and `parseArgs()` do not carry option descriptions, placeholders, aliases, or domain/path validators. Arity and semantic validation remain in individual `src/flow/lib` command classes, with no registry-level owner/reference linking them to the proposed typed option model.",
+          "kind": "blocking",
+          "requiredChange": "Specify that the shared model carries an explicit reference to each existing command-owned semantic validator while owning only syntax/help projection, and require the contract test to verify that delegation; alternatively remove semantic ownership from the one-to-one authority requirement.",
+          "target": "R1/R2, T-1/T-2, registry contract acceptance",
+          "title": "Semantic validation ownership is not represented by the proposed shared contract",
+          "whyBlocking": "Without this boundary, implementation must either duplicate or move domain/path/arity validation and risk changing rejection order, or omit the required semantics; the acceptance test has no authoritative mapping to verify."
+        },
+        "relatedChanges": [
+          {
+            "groupIndex": 1,
+            "operationIndex": 0,
+            "target": {
+              "entity": "requirement",
+              "id": "R2",
+              "field": "desc"
+            },
+            "gateFindingIdentities": [
+              {
+                "sourceArtifact": "steps/spec-gate/result.json",
+                "sourceStep": "spec-gate",
+                "sourceFindingId": "spec-gate:14",
+                "fingerprint": "df86c258468220c842772287de4f63230004219df0efc1ca06797ecdb01a9a5b"
+              }
+            ]
+          },
+          {
+            "groupIndex": 10,
+            "operationIndex": 0,
+            "target": {
+              "entity": "requirement",
+              "id": "R1",
+              "field": "desc"
+            },
+            "gateFindingIdentities": [
+              {
+                "sourceArtifact": "steps/spec-gate/result.json",
+                "sourceStep": "spec-gate",
+                "sourceFindingId": "spec-gate:13",
+                "fingerprint": "e4bc1aad2ca53451e44d27e5c9db0e95a74e5284551f2f0d230fa7c32c0ac81b"
+              }
+            ]
+          }
+        ],
+        "unresolvedBlocking": true
+      },
+      {
+        "identity": {
+          "sourceArtifact": "revisions/004/review.json",
+          "sourceStep": "spec-review",
+          "sourceFindingId": "spec-review-0d48c07bff2d5a7f3824c76de05d47ae",
+          "fingerprint": "128ea6226fb123162c98549452a56335b51f9ad5374599161b6e031ecf2c69de"
+        },
+        "finding": {
+          "allowedTargets": [
+            {
+              "operationKinds": [
+                "edit-text-field"
+              ],
+              "target": {
+                "entity": "requirement",
+                "field": "desc",
+                "id": "R4"
+              }
+            },
+            {
+              "operationKinds": [
+                "edit-text-field"
+              ],
+              "target": {
+                "entity": "task",
+                "field": "goal",
+                "id": "T-4"
+              }
+            },
+            {
+              "operationKinds": [
+                "replace-entity-field"
+              ],
+              "target": {
+                "entity": "task",
+                "field": "acceptance",
+                "id": "T-4"
+              }
+            },
+            {
+              "operationKinds": [
+                "edit-text-field"
+              ],
+              "target": {
+                "entity": "task",
+                "field": "implementation_notes",
+                "id": "T-4"
+              }
+            }
+          ],
+          "body": "**Target:** R4/R5 and group-contract acceptance; src/flow.js:dispatchFlow\n**Issue:** `dispatchFlow()` treats the first token after `flow <group>` as a child selector and recognizes only `-h/--help` specially. Thus `sennel flow run --agent-work-dir <path>` is currently an unknown child, while `sennel flow run <leaf> --agent-work-dir <path>` is parsed by the leaf dispatcher. The spec says `--agent-work-dir` is displayed and accepted for the run group without stating which invocation is meant.\n**Required change:** Qualify acceptance as direct-child leaf invocations, or define a group-level parser/dispatch behavior and its exit/help semantics.\n**Why blocking:** The implementation target and expected CLI result differ materially: one choice changes only help/intersection metadata, while the other requires new routing behavior in `src/flow.js`.",
+          "disposition": "apply",
+          "evidence": "The immutable Spec says run-group help and acceptance expose and accept --agent-work-dir, while the cited router treats the first post-group token as a child selector; R4 and T-4 need to identify the direct-child leaf invocation boundary.",
+          "findingId": "spec-review-0d48c07bff2d5a7f3824c76de05d47ae",
+          "issue": "`dispatchFlow()` treats the first token after `flow <group>` as a child selector and recognizes only `-h/--help` specially. Thus `sennel flow run --agent-work-dir <path>` is currently an unknown child, while `sennel flow run <leaf> --agent-work-dir <path>` is parsed by the leaf dispatcher. The spec says `--agent-work-dir` is displayed and accepted for the run group without stating which invocation is meant.",
+          "kind": "blocking",
+          "requiredChange": "Qualify acceptance as direct-child leaf invocations, or define a group-level parser/dispatch behavior and its exit/help semantics.",
+          "target": "R4/R5 and group-contract acceptance; src/flow.js:dispatchFlow",
+          "title": "Group-level option acceptance has no routing target",
+          "whyBlocking": "The implementation target and expected CLI result differ materially: one choice changes only help/intersection metadata, while the other requires new routing behavior in `src/flow.js`."
+        },
+        "relatedChanges": [
+          {
+            "groupIndex": 0,
+            "operationIndex": 0,
+            "target": {
+              "entity": "requirement",
+              "id": "R4",
+              "field": "desc"
+            },
+            "gateFindingIdentities": [
+              {
+                "sourceArtifact": "steps/spec-gate/result.json",
+                "sourceStep": "spec-gate",
+                "sourceFindingId": "spec-gate:10",
+                "fingerprint": "f98bc218fd8dfc054eef764564a68e651c222863ce6a9687a74d6772db58db22"
+              }
+            ]
+          }
+        ],
+        "unresolvedBlocking": true
+      },
+      {
+        "identity": {
+          "sourceArtifact": "revisions/004/review.json",
+          "sourceStep": "spec-review",
+          "sourceFindingId": "spec-review-2d825546ad5bc6d14f3ef5e6dda67145",
+          "fingerprint": "7f7b288252a42432953f36708bf643efa433c4955e479b4360e24b12f0df9db2"
+        },
+        "finding": {
+          "allowedTargets": [
+            {
+              "operationKinds": [
+                "edit-text-field"
+              ],
+              "target": {
+                "entity": "requirement",
+                "field": "desc",
+                "id": "R10"
+              }
+            },
+            {
+              "operationKinds": [
+                "edit-text-field"
+              ],
+              "target": {
+                "entity": "task",
+                "field": "goal",
+                "id": "T-8"
+              }
+            },
+            {
+              "operationKinds": [
+                "edit-text-field"
+              ],
+              "target": {
+                "entity": "task",
+                "field": "implementation_notes",
+                "id": "T-8"
+              }
+            }
+          ],
+          "body": "**Target:** R10, Scope Out, query acceptance; src/sennel.js, src/flow.js, src/lib/command-registry.js, src/help.js\n**Issue:** `flow query` execution bypasses the registry in `src/flow.js`, but `FLOW_COMMANDS.query` is still converted into `CommandDefinition` and exposed through the shared metadata registry, so `sennel help flow query` is rendered by `src/help.js`. The spec excludes query from the shared matrix but does not state how both existing public help paths remain owned and unchanged.\n**Required change:** Name the exclusion point and preserve both `sennel flow query --help` bootstrap behavior and `sennel help flow query` output/exit behavior, or explicitly retire one path.\n**Why blocking:** A generic registry/model migration can either accidentally apply the routed renderer to query or remove the metadata needed by its existing help route, changing the mandatory query compatibility contract.",
+          "disposition": "apply",
+          "evidence": "The immutable Spec excludes query from the shared routed matrix, but the cited sources show separate bootstrap execution and metadata help ownership; R10 and T-8 need to name preservation of both public help paths and their exclusion boundary.",
+          "findingId": "spec-review-2d825546ad5bc6d14f3ef5e6dda67145",
+          "issue": "`flow query` execution bypasses the registry in `src/flow.js`, but `FLOW_COMMANDS.query` is still converted into `CommandDefinition` and exposed through the shared metadata registry, so `sennel help flow query` is rendered by `src/help.js`. The spec excludes query from the shared matrix but does not state how both existing public help paths remain owned and unchanged.",
+          "kind": "blocking",
+          "requiredChange": "Name the exclusion point and preserve both `sennel flow query --help` bootstrap behavior and `sennel help flow query` output/exit behavior, or explicitly retire one path.",
+          "target": "R10, Scope Out, query acceptance; src/sennel.js, src/flow.js, src/lib/command-registry.js, src/help.js",
+          "title": "Query has two public help owners but no explicit migration boundary",
+          "whyBlocking": "A generic registry/model migration can either accidentally apply the routed renderer to query or remove the metadata needed by its existing help route, changing the mandatory query compatibility contract."
+        },
+        "relatedChanges": [],
+        "unresolvedBlocking": true
+      },
+      {
+        "identity": {
+          "sourceArtifact": "revisions/004/review.json",
+          "sourceStep": "spec-review",
+          "sourceFindingId": "spec-review-2526bffd182b72ff24e4aec503908c65",
+          "fingerprint": "85468857fc1ff0948139d9414e51a281f5e6b06345535fe3e93b3e382d72e6c9"
+        },
+        "finding": {
+          "body": "**Target:** R6/T-1 examples and existing inventory fixture\n**Improvement:** Avoid a hard-coded count of 65 and explicitly include current leaves `run recover-draft-execution` and `run filter-task-review` in any human-readable inventory.\n**Why non-blocking:** The normative requirement already mandates dynamic enumeration from `FLOW_COMMANDS`, so a correct contract test can still cover these leaves.",
+          "disposition": "downgraded_to_non_blocking",
+          "evidence": "The immutable Spec normatively requires dynamic enumeration from FLOW_COMMANDS and does not depend on a hard-coded route count; the requested inventory wording is useful context but does not block implementation or acceptance.",
+          "findingId": "spec-review-2526bffd182b72ff24e4aec503908c65",
+          "improvement": "Avoid a hard-coded count of 65 and explicitly include current leaves `run recover-draft-execution` and `run filter-task-review` in any human-readable inventory.",
+          "kind": "improvement",
+          "target": "R6/T-1 examples and existing inventory fixture",
+          "title": "The stated route inventory is already stale",
+          "whyNonBlocking": "The normative requirement already mandates dynamic enumeration from `FLOW_COMMANDS`, so a correct contract test can still cover these leaves."
+        },
+        "relatedChanges": [],
+        "unresolvedBlocking": false
+      }
+    ],
+    "reviewInputPreserved": false,
+    "unresolvedBlocking": true,
+    "requiresReview": true,
+    "reason": "unresolved-blocking-review"
+  }
+}

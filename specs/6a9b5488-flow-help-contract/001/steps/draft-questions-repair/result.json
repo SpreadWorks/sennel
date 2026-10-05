@@ -1,0 +1,33 @@
+{
+  "version": 2,
+  "phase": "draft-questions-repair",
+  "sourceTriage": "draft-questions-triage.json",
+  "baseRevision": "sha256:62be7359daa55968bee498e7c1937dae4a058e1eac5a02ce848f822c28e18eff",
+  "acceptedOperations": [
+    {
+      "title": "1. Remove embedded instruction from q1",
+      "target": "q1",
+      "kind": "replace-value",
+      "path": "questionLedger.questions[0].question",
+      "expectedDigest": "ef5396ce10583550484a914696a328c373637ba160d71ae2a0f275231b53f437",
+      "replacement": "config.lang=ja の parity check で、ja 版と比較する対象 locale をどれに固定しますか。選択肢は en（英語版を比較対象にする）または、別の利用可能 locale を明示することです。",
+      "reason": "bounded repair"
+    }
+  ],
+  "discardedOperations": [],
+  "appliedFindingKeys": [
+    "1. Remove embedded instruction from q1\u0000q1"
+  ],
+  "operationDigest": "ef05f54a4e3f7b30c8cec497220e485272909350e8c6b498d3b4e50b20da63a5",
+  "audit": {
+    "envelopeErrors": [],
+    "baseRevisionMatches": true,
+    "missingRequiredTargets": [],
+    "lifecycleIssues": [
+      "questionLedger.questions[0]: state CandidateQuestion blocks spec generation"
+    ],
+    "duplicatePaths": [],
+    "overlappingPaths": [],
+    "outputByteLength": 11995
+  }
+}

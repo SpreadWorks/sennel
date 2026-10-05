@@ -1,0 +1,144 @@
+{
+  "audit": [
+    {
+      "acceptedOperations": [],
+      "appliedFindings": [],
+      "discardedOperations": [],
+      "inputDigest": "b95d1688beafbf4211a9fe0d17f2c20473fe401faa4a44d9c6fcad7dfb72563d",
+      "operationDigest": "790e561a26120cd5aba8824e99283158498cb669998f0f509e9b6e3ad4013369",
+      "outcome": "replaced",
+      "relation": "revision-scoped-canonical-review",
+      "stage": "spec-review"
+    },
+    {
+      "acceptedOperations": [],
+      "appliedFindings": [],
+      "discardedOperations": [],
+      "inputDigest": "ec8b423252901cbdcd825685571e216d8e1d21dfe871c472c1fa33d8a9bcc08e",
+      "operationDigest": "790e561a26120cd5aba8824e99283158498cb669998f0f509e9b6e3ad4013369",
+      "outcome": "merged",
+      "relation": "revision-scoped-canonical-review",
+      "stage": "spec-triage"
+    },
+    {
+      "acceptedOperations": [
+        {
+          "expectedDigest": "68ed843b6a6ba531520309fdfd68c0c7c2728e09e67ef95fe271143ed9cff444",
+          "findingIds": [
+            "spec-review-5a0546e9be4d0ffac8e5179baa65a6a5"
+          ],
+          "kind": "replace-array-element",
+          "reason": "Logger と Flow runtime log の既存保存先を区別する。",
+          "replacement": {
+            "text": "設定 agent.workDir・logs.dir と run --agent-work-dir は container の path 解決へ流れ、Logger は paths.logDir を使う。Flow runtime log は src/lib/runtime-log.js の RuntimeLogFile が <root>/.tmp/logs/<flowId>.log に保存し、agent-work-dir や logs.dir に追従しない。finalize-cleanup は main repository を durable root とし、設定ログ、Flow runtime log、canonical state の保存先を既存経路で解決する。"
+          },
+          "target": {
+            "collection": "overview.data_flow",
+            "position": 2
+          }
+        },
+        {
+          "edits": [
+            {
+              "endByte": 450,
+              "replacement": " Logger は container の paths.logDir を使う。Flow runtime log は RuntimeLogFile が <root>/.tmp/logs/<flowId>.log に保存し、agent-work-dir と logs.dir に追従しない。現行の読み戻し経路を保持する。",
+              "startByte": 450
+            }
+          ],
+          "expectedDigest": "f0d55d123c6852ec2d473b2888311dcea61a5fd6b3c5d7077c760690b3dd283c",
+          "findingIds": [
+            "spec-review-5a0546e9be4d0ffac8e5179baa65a6a5"
+          ],
+          "kind": "edit-text-field",
+          "reason": "既存の設定ログと Flow runtime log の経路を明記する。",
+          "target": {
+            "entity": "requirement",
+            "field": "desc",
+            "id": "R7"
+          }
+        },
+        {
+          "edits": [
+            {
+              "endByte": 100,
+              "replacement": " Logger の paths.logDir と RuntimeLogFile の <root>/.tmp/logs/<flowId>.log を区別し、override・logs.dir と Flow runtime log の読み戻しを既存経路で検証する。",
+              "startByte": 100
+            }
+          ],
+          "expectedDigest": "aafa9f2d25e153a5a58caeddd1ea2386752139346a1d214f9fd23bd454fc535a",
+          "findingIds": [
+            "spec-review-5a0546e9be4d0ffac8e5179baa65a6a5"
+          ],
+          "kind": "edit-text-field",
+          "reason": "T-4 の検証対象に二つの既存ログ経路を明記する。",
+          "target": {
+            "entity": "task",
+            "field": "implementation_notes",
+            "id": "T-4"
+          }
+        }
+      ],
+      "appliedFindings": [
+        "spec-review-5a0546e9be4d0ffac8e5179baa65a6a5"
+      ],
+      "discardedOperations": [],
+      "inputDigest": "760b47fc3e812a8a345182a9a182b56a6d6da3c5ec5a54229705d2e2cd5aecdd",
+      "operationDigest": "fd0d9b16e791193dcc63cfe32801c3c099b5c04bd0eb59fd584e1dfc49a8a127",
+      "outcome": "merged",
+      "relation": "revision-scoped-canonical-review",
+      "stage": "spec-repair"
+    }
+  ],
+  "findings": [
+    {
+      "allowedTargets": [
+        {
+          "operationKinds": [
+            "replace-array-element"
+          ],
+          "target": {
+            "collection": "overview.data_flow",
+            "position": 2
+          }
+        },
+        {
+          "operationKinds": [
+            "edit-text-field"
+          ],
+          "target": {
+            "entity": "requirement",
+            "field": "desc",
+            "id": "R7"
+          }
+        },
+        {
+          "operationKinds": [
+            "edit-text-field"
+          ],
+          "target": {
+            "entity": "task",
+            "field": "implementation_notes",
+            "id": "T-4"
+          }
+        }
+      ],
+      "body": "**Target:** Overview / Data Flow、R7、T-4\n**Improvement:** container の paths.logDir を使う Logger と、src/lib/runtime-log.js の RuntimeLogFile が使う <root>/.tmp/logs/<flowId>.log を区別して記載すると、override・logs.dir・runtime log 読み戻しの検証対象が明確になる。現行の Flow runtime log は agent-work-dir や logs.dir に追従しない。\n**Why non-blocking:** R7 は既存の保存経路と副作用の保持を要求しているため、現行コードを基準に実装・テストできる。保存先の変更を要求する明示的な矛盾はない。",
+      "disposition": "apply",
+      "evidence": "Immutable Spec revision 15 has overview.data_flow[2] grouping config.logs.dir and Flow runtime log under one path description; R7 describes logDir without distinguishing RuntimeLogFile, and T-4 implementation_notes omits the separate runtime-log readback path. The finding requests clarification of existing behavior only. Limit the repair to the named data-flow entry, R7 desc, and T-4 implementation_notes; preserve existing path behavior and acceptance scope.",
+      "findingId": "spec-review-5a0546e9be4d0ffac8e5179baa65a6a5",
+      "improvement": "container の paths.logDir を使う Logger と、src/lib/runtime-log.js の RuntimeLogFile が使う <root>/.tmp/logs/<flowId>.log を区別して記載すると、override・logs.dir・runtime log 読み戻しの検証対象が明確になる。現行の Flow runtime log は agent-work-dir や logs.dir に追従しない。",
+      "kind": "improvement",
+      "target": "Overview / Data Flow、R7、T-4",
+      "title": "設定ログと Flow runtime log の保存先を区別する",
+      "whyNonBlocking": "R7 は既存の保存経路と副作用の保持を要求しているため、現行コードを基準に実装・テストできる。保存先の変更を要求する明示的な矛盾はない。"
+    }
+  ],
+  "generation": 3,
+  "identity": {
+    "byteLength": 37317,
+    "digest": "5f7be7875f5c8a6daa5dfeb8163ba7318e796d56a3d3114538a4c336a1b12fd8",
+    "revision": 16,
+    "specId": "6a9b5488-flow-help-contract"
+  },
+  "version": 2
+}

@@ -1,0 +1,91 @@
+{
+  "devType": "bugfix",
+  "goal": "must: sennel flow の実際に受理される公開引数と表示されるヘルプを一致させ、すべての共通経路の leaf と group で安定した表示を保証する。",
+  "analysis": {
+    "problem": "FLOW_COMMANDS の引数契約と手書きヘルプが別々に管理され、受理する option が表示から欠ける。group の option 表示には子 leaf が受理しないものが含まれ、長い subcommand 名の列が連結し、表示順も定義順に依存する。",
+    "proposedApproach": "既存の CommandDefinition と FLOW_COMMANDS を公開 option の単一の定義元として拡張し、leaf と direct child 全体の group ヘルプへ投影する。3 種の公開 group ヘルプ経路の行表示をそろえ、既存の入力検証、target guard、runtime path、query の独立契約を維持する。",
+    "validation": "現行 registry と実ソースから対象 leaf と各入力の契約を再列挙し、共有経路の parser と help の一致、3 種の group 表示、正常・拒否・停止の実 CLI 挙動、独立した query 回帰を検証する。未実行の結果や過去の Gate 成功は主張しない。"
+  },
+  "decisionMap": {
+    "knownFacts": [
+      "must: Issue 521 の 2026-09-24 Restart contract を初期 Draft/Spec の優先契約とし、過去の監査件数や未承認の revision 008 を仕様として転記しない。",
+      "must: 基準 commit の 66 leaf 中、共通 routed path は query を除く 65 leaf（resume 1、prepare 1、get 11、set 17、run 34、report/show 1）である。現在の集合は registry から再列挙する。",
+      "must: query は独立 parser の例外であり、共通 option 投影と網羅行列から除外する一方、stdin、--request-file、help、error の現行動作を回帰確認する。",
+      "must: option は名前・alias・値なし／必須値／任意値の区別・placeholder・説明を持ち、暗黙の -h, --help を含む canonical Options 行を option ごとに一度だけ表示する。Usage や例の再掲は許容する。",
+      "must: group option は当該 group の全 direct child leaf に共通する完全な契約から決まり、run の --agent-work-dir を get/set/report に誤表示しない。",
+      "must: flow <group> --help、help flow <group>、leaf なしの flow <group> は同じ group の subcommand と option 行で順序・空白を一致させる。各行の名前と説明の間は ASCII 空白を 2 個以上とする。",
+      "must: subcommand は原則として locale 非依存の名前昇順であり、option の順序も一意に定める。13/14/15 文字、最長登録 leaf、合成 64/65 文字名を確認し、新しい名前長制限は導入しない。",
+      "must: 公開引数の受理、target guard、runtime directory、失敗時の副作用と exit code、query の動作は既存契約に従い、新しい一律の入力制限や admission 境界を加えない。",
+      "must: 有効な明示 help と成功コマンドは exit 0、selector・parser・target・command の実際の失敗は exit 1、leaf なしの group help は表示して exit 1 とする。"
+    ],
+    "decisionPoints": [
+      "must: option の単一定義元と 3 経路の表示結果を揃えつつ、command 固有の説明・例・翻訳を保持する。",
+      "must: 各 leaf の positional、rest、flag、必須値 option、任意値 option の実際の入力条件と既存の検証責任者を Spec で特定し、ヘルプ改善に伴う動作変更を避ける。",
+      "must: target guard 5 種の適用集合、runtime の指定形式と優先順位、help／parse 拒否／target 拒否／実行／command 失敗の lifecycle を Spec と検証へ結び付ける。",
+      "must: 再開理由の R1/R5、R6、R10 について、公開引数ごとの必須性・型・形式・範囲、許容値・パス条件・反復上限、query の --request-file 条件を実ソースで具体化する。"
+    ],
+    "resolvedByProjectRules": [
+      "must: Node.js 組み込みモジュールのみを使い、agent host 固有の callback や API を Sennel の正しさの前提にしない。",
+      "must: 既存の共通 API と各 domain validator を再利用し、同一責務の判断を caller や別 helper に重複実装しない。意味のある option と表示行は invariant を持つ専用 class で表す。",
+      "must: alpha 版として旧形式の互換経路を増やさず、実際の既存動作を維持する。受理条件や資源上限の追加は本 Issue の対象外とする。",
+      "must: Draft は要求境界を記録し、入力ごとの最終的な型・値域・検証経路とテスト設計は Spec が実ソースから確定する。"
+    ],
+    "requiresUserJudgment": [],
+    "deferredToSpec": [
+      {
+        "boundary": "must: 現行 FLOW_COMMANDS と CommandDefinition 利用箇所から共通経路 leaf の全件、各 group の direct child と完全一致する option 契約を列挙する。",
+        "relevance": "must: 過去の件数を固定せず、parser、leaf help、group help の公開集合を同一基準で検証するため。",
+        "owner": "spec"
+      },
+      {
+        "boundary": "must: 各 leaf の positional、rest、flags、options、optionalOptions、暗黙 help について必須性、個数、型・形式・値域、空値、条件組合せ、長さ・数量制限または上限なし、既存 validator を実ソースで記録する。",
+        "relevance": "must: R1/R5/R6 の未解決 Gate 指摘を具体化し、引数名から一律の型や必須性を推測しないため。",
+        "owner": "spec"
+      },
+      {
+        "boundary": "must: selector と argv、target guard、実行前の work directory、domain validation、query のそれぞれの現行責任者と保持すべき拒否条件を特定する。",
+        "relevance": "must: 共通ヘルプの整合性を直しながら既存の検証・状態変更順序を維持するため。",
+        "owner": "spec"
+      },
+      {
+        "boundary": "must: 実際の path ごとに file／directory、存在要否、絶対・相対指定、解決 root を、text／JSON／file／context／review evidence の既存サイズ・深さ・件数制限と retry／attempt 条件に対応付ける。query の --request-file も独立して扱う。",
+        "relevance": "must: R6/R10 の未解決項目を実ソースで明確にし、出力先の存在要件や新しい一律制限を作らないため。",
+        "owner": "spec"
+      },
+      {
+        "boundary": "must: group 表示順の metadata を使う場合は field、伝播、未指定・同値の順序を確定し、option と subcommand の順序・空白を 3 公開経路で検証する。",
+        "relevance": "must: 登録順や locale に左右されない再現可能なヘルプ契約を得るため。",
+        "owner": "spec"
+      },
+      {
+        "boundary": "must: parser 受理、leaf help、3 group help 経路、実行、guard/binding、runtime path、query の各保持面を現行／変更後の owner とテストに対応付ける。",
+        "relevance": "must: 共有定義の利用先と副作用の影響を追跡し、registry の静的 snapshot だけで完了扱いにしないため。",
+        "owner": "spec"
+      }
+    ]
+  },
+  "scopeVerification": {
+    "in": [
+      "must: FLOW_COMMANDS の共通 routed leaf 全件と CommandDefinition の option 権威、leaf/group help、3 公開 group 経路の行レイアウト。",
+      "must: 現行入力契約、target guard、runtime path、lifecycle、exit code の保持を確認する統合・CLI 回帰テストと query の独立回帰。",
+      "must: 現行 source と関係する共有 consumer、生成物、設定、副作用の影響一覧を Spec で確定する。"
+    ],
+    "out": [
+      "must: query を共通 parser・option モデル・網羅行列へ移すこと、公開コマンドの意味や target 判定を変更すること。",
+      "must: 一律 admission validator、任意の新しい長さ・資源制限、retry policy 変更、未承認 revision 008 の採用、停止済み flow の復旧。"
+    ]
+  },
+  "impactOnExisting": [
+    "must: src/flow/registry.js、src/lib/command-registry.js、src/lib/dispatcher.js、src/help.js、src/flow.js、src/sennel.js の公開表示・引数経路と既存の command 固有説明・例・翻訳を照合する。",
+    "must: src/lib/container.js、src/lib/flow-target-guard.js、src/flow/lib/flow-context.js、query modules を回帰対象に含め、既存 owner の判断を重複させない。",
+    "must: docs/core/plugin の共有 CommandDefinition consumer、runtime log と設定済み logs directory、finalize-cleanup の durable path、生成された help/skill などの影響有無を明記する。",
+    "must: 工程専用シナリオで Draft の保存・読み戻し・後続利用を確認し、共通経路は exhaustive な parser 統合テストと focused な実 CLI E2E に役割分担する。"
+  ],
+  "questionLedger": {
+    "revision": 0,
+    "publication": "draft-worker-publication",
+    "evidenceDigest": "6443375a5b99258635088695cdefa410f2f160a795b8c59322674b4b740532a3",
+    "questions": []
+  },
+  "openQuestions": []
+}

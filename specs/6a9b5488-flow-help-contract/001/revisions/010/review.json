@@ -1,0 +1,188 @@
+{
+  "audit": [
+    {
+      "acceptedOperations": [],
+      "appliedFindings": [],
+      "discardedOperations": [],
+      "inputDigest": "dac9a631436a442c9764309c65df119f42d23a5cc90b59ff2ece3f62c95d3908",
+      "operationDigest": "790e561a26120cd5aba8824e99283158498cb669998f0f509e9b6e3ad4013369",
+      "outcome": "replaced",
+      "relation": "revision-scoped-canonical-review",
+      "stage": "spec-review"
+    },
+    {
+      "acceptedOperations": [],
+      "appliedFindings": [],
+      "discardedOperations": [],
+      "inputDigest": "cb2da2efb8e67b9738cd2f4692a3dc2a20d9590e5e9d55c57db47bfbefcf5422",
+      "operationDigest": "790e561a26120cd5aba8824e99283158498cb669998f0f509e9b6e3ad4013369",
+      "outcome": "merged",
+      "relation": "revision-scoped-canonical-review",
+      "stage": "spec-triage"
+    },
+    {
+      "acceptedOperations": [
+        {
+          "edits": [
+            {
+              "endByte": 5295,
+              "replacement": "G is the accepted guard spelling; G5 means all five registry guards: --expect-binding, --expect-issue, --expect-no-issue, --expect-spec, and --expect-run-id. H is implicit -h/--help on every row.",
+              "startByte": 5224
+            },
+            {
+              "endByte": 12619,
+              "replacement": "| Leaf | P | R | F | O | G | V/T |\n| --- | --- | --- | --- | --- | --- | --- |\n| resume | ∅ | ∅ | ∅ | --spec | G5 | leaf / T-1,T-9 |\n| prepare | ∅ | ∅ | --no-branch,--worktree,--dry-run | --title,--base,--issue,--request,--run-id | G5 | leaf / T-1,T-9 |\n| get status | runId | ∅ | --details | ∅ | G5 | leaf / T-1,T-9 |\n| get resolve-context | ∅ | ∅ | ∅ | ∅ | G5 | leaf / T-1,T-9 |\n| get check | target | ∅ | ∅ | ∅ | ∅ | leaf / T-1,T-9 |\n| get prompt | kind | ∅ | ∅ | ∅ | G5 | leaf / T-1,T-9 |\n| get artifact | logicalKey | ∅ | ∅ | --mode,--spec-id,--version | G5 | leaf / T-1,T-9 |\n| get qa-count | ∅ | ∅ | ∅ | ∅ | G5 | leaf / T-1,T-9 |\n| get guardrail | phase | ∅ | ∅ | --format | ∅ | leaf / T-1,T-9 |\n| get issue | number | ∅ | ∅ | ∅ | ∅ | leaf / T-1,T-9 |\n| get next-action | ∅ | ∅ | ∅ | ∅ | G5 | leaf / T-1,T-9 |\n| get context | path | ∅ | --raw | --search | G5 | leaf / T-1,T-9 |\n| get runtime-log | ∅ | ∅ | ∅ | --format,--sequence,--run-id | G5 | leaf / T-1,T-9 |\n| set step | id,status | ∅ | ∅ | ∅ | G5 | leaf / T-1,T-9 |\n| set request | text | ∅ | ∅ | --run-id | G5 | leaf / T-1,T-9 |\n| set issue | number | ∅ | ∅ | ∅ | G5 | leaf / T-1,T-9 |\n| set note | text | ∅ | ∅ | --task-id,--run-id | G5 | leaf / T-1,T-9 |\n| set draft-answer | questionId | ∅ | --drop | --question-revision,--answer,--why,--considered,--dropped-reason | G5 | leaf / T-1,T-9 |\n| set files | reqId | paths | ∅ | ∅ | G5 | leaf / T-1,T-9 |\n| set review-evidence | ∅ | ∅ | ∅ | --file | G5 | leaf / T-1,T-9 |\n| set broad | action | ∅ | ∅ | --step,--reason | G5 | leaf / T-1,T-9 |\n| set policy | value | ∅ | ∅ | --reason | G5 | leaf / T-1,T-9 |\n| set nonblocking-decision | ∅ | ∅ | ∅ | --choice,--reason,--expect-evidence-digest,--remaining-risk | G5 | leaf / T-1,T-9 |\n| set metric | phase,counter | ∅ | ∅ | --task-id | G5 | leaf / T-1,T-9 |\n| set approval | ∅ | ∅ | --approved | --notes,--confirmed-at | G5 | leaf / T-1,T-9 |\n| set issue-log | ∅ | ∅ | ∅ | --step,--reason,--trigger,--resolution,--guardrail-candidate,--normalized-finding-id,--repair-ref-commit,--repair-ref-file,--task-id | G5 | leaf / T-1,T-9 |\n| set init | ∅ | ∅ | ∅ | --issue,--request | ∅ | leaf / T-1,T-9 |\n| set retry | action,kind,phase | ∅ | --yes | --reason | G5 | leaf / T-1,T-9 |\n| set acceptance-decision | ∅ | ∅ | ∅ | --choice | G5 | leaf / T-1,T-9 |\n| set auto | value | ∅ | ∅ | --run-id | G5 | leaf / T-1,T-9 |\n| run seal-handoff | ∅ | ∅ | ∅ | --agent-work-dir | ∅ | leaf / T-1,T-9 |\n| run dispatch | ∅ | ∅ | ∅ | --approve,--agent-work-dir | G5 | leaf / T-1,T-9 |\n| run recover-review-pass | ∅ | ∅ | ∅ | --agent-work-dir,--phase | G5 | leaf / T-1,T-9 |\n| run gate | ∅ | ∅ | ∅ | --spec,--phase,--agent-work-dir | G5 | leaf / T-1,T-9 |\n| run review | ∅ | ∅ | --dry-run,--skip-confirm | --phase,--agent-work-dir | G5 | leaf / T-1,T-9 |\n| run auto-check | ∅ | ∅ | ∅ | --run-id,--agent-work-dir | G5 | leaf / T-1,T-9 |\n| run finalize-commit | ∅ | ∅ | ∅ | --message,--agent-work-dir | G5 | leaf / T-1,T-9 |\n| run finalize-merge | ∅ | ∅ | ∅ | --agent-work-dir | G5 | leaf / T-1,T-9 |\n| run finalize-sync | ∅ | ∅ | ∅ | --agent-work-dir | G5 | leaf / T-1,T-9 |\n| run finalize-cleanup | ∅ | ∅ | --auto-rescue,--force | --agent-work-dir | G5 | leaf / T-1,T-9 |\n| run abort | ∅ | ∅ | --force | --agent-work-dir | G5 | leaf / T-1,T-9 |\n| run sync | ∅ | ∅ | --dry-run | --agent-work-dir | G5 | leaf / T-1,T-9 |\n| run reopen-draft | ∅ | ∅ | ∅ | --reason,--category,--agent-work-dir | G5 | leaf / T-1,T-9 |\n| run repair-plan-gate | ∅ | ∅ | ∅ | --agent-work-dir | G5 | leaf / T-1,T-9 |\n| run settle-failure | ∅ | ∅ | ∅ | --agent-work-dir | G5 | leaf / T-1,T-9 |\n| run settle-review-transition | ∅ | ∅ | ∅ | --agent-work-dir | G5 | leaf / T-1,T-9 |\n| run recover-missing-producer-artifact | ∅ | ∅ | ∅ | --agent-work-dir | G5 | leaf / T-1,T-9 |\n| run recover-draft-execution | ∅ | ∅ | ∅ | --agent-work-dir | G5 | leaf / T-1,T-9 |\n| run reconcile-task-review | ∅ | ∅ | --dry-run,--yes | --agent-work-dir,--expect-digest,--reason | G5 | leaf / T-1,T-9 |\n| run filter-task-review | ∅ | ∅ | ∅ | --agent-work-dir,--exclusions,--expect-attempt-id,--expect-review-digest,--expect-source-fingerprint,--expect-catalog-fingerprint | G5 | leaf / T-1,T-9 |\n| run recover-finalization | ∅ | ∅ | ∅ | --agent-work-dir | G5 | leaf / T-1,T-9 |\n| run recover-task-execution-overrun | ∅ | ∅ | ∅ | --agent-work-dir | G5 | leaf / T-1,T-9 |\n| run claim-next-action | ∅ | ∅ | ∅ | --agent-work-dir | G5 | leaf / T-1,T-9 |\n| run settle-gate-transition | ∅ | ∅ | ∅ | --agent-work-dir | G5 | leaf / T-1,T-9 |\n| run start-task | ∅ | ∅ | ∅ | --task-id,--agent-work-dir | G5 | leaf / T-1,T-9 |\n| run complete-task | ∅ | ∅ | ∅ | --task-id,--agent-work-dir | G5 | leaf / T-1,T-9 |\n| run update-overview | ∅ | ∅ | ∅ | --json,--agent-work-dir | G5 | leaf / T-1,T-9 |\n| run lint | ∅ | ∅ | ∅ | --base,--agent-work-dir | G5 | leaf / T-1,T-9 |\n| run test-execute | ∅ | ∅ | ∅ | --agent-work-dir | G5 | leaf / T-1,T-9 |\n| run requirement-test-gate | ∅ | ∅ | ∅ | --agent-work-dir | G5 | leaf / T-1,T-9 |\n| run test-result-review | ∅ | ∅ | ∅ | --agent-work-dir | G5 | leaf / T-1,T-9 |\n| run retro | ∅ | ∅ | --dry-run | --agent-work-dir | G5 | leaf / T-1,T-9 |\n| run final-regression | ∅ | ∅ | --record-and-proceed | --record-category,--record-evidence,--remaining-risk,--agent-work-dir | G5 | leaf / T-1,T-9 |\n| run acceptance-review | ∅ | ∅ | ∅ | --agent-work-dir | G5 | leaf / T-1,T-9 |\n| run report | ∅ | ∅ | --dry-run | --agent-work-dir | G5 | leaf / T-1,T-9 |\n| report show | ∅ | ∅ | ∅ | ∅ | ∅ | leaf / T-1,T-9 |\n\n",
+              "startByte": 5839
+            },
+            {
+              "endByte": 17846,
+              "replacement": "| --expect-binding, --expect-spec, --expect-run-id, --expect-issue, --expect-no-issue | Only on rows whose G column admits them. FlowTargetBinding.deserialize validates the non-empty serialized --expect-binding token with its existing 32 KiB byte limit and structural/authority checks; FlowTargetExpectation validates applicable spec/run ID tokens with its existing 300-character rule and the positive issue number. buildFlowCommandHookContext checks the selected target before handler mutation; --expect-issue and --expect-no-issue conflict. |",
+              "startByte": 17492
+            }
+          ],
+          "expectedDigest": "8640fd3cd10d7af11dd3a48f9b81137923babb7603365dcde9565ff0a2546baf",
+          "findingIds": [
+            "spec-review-0e6b7dbf3824499da766d7cffd7a093b",
+            "spec-review-48646b759ec3acb09f8d5c32a94c9496"
+          ],
+          "kind": "edit-text-field",
+          "reason": "Expand every guarded inventory cell to the five accepted spellings and apply the binding decoder byte bound.",
+          "target": {
+            "entity": "requirement",
+            "field": "desc",
+            "id": "R1"
+          }
+        },
+        {
+          "edits": [
+            {
+              "endByte": 1248,
+              "replacement": "run gate --spec is the exact existing Spec file path accepted by the gate owner, without directory normalization",
+              "startByte": 1184
+            },
+            {
+              "endByte": 1564,
+              "replacement": "applicable target spec/run ID tokens use FlowTargetExpectation and its existing 300-character rule; --expect-binding instead uses FlowTargetBinding.deserialize and its existing 32 KiB serialized byte limit, not a generic ID rule",
+              "startByte": 1460
+            }
+          ],
+          "expectedDigest": "1ca63984863d2c1102089bfad6ded386a6efc0448e2d20ab3ff17b5848cef735",
+          "findingIds": [
+            "spec-review-48646b759ec3acb09f8d5c32a94c9496",
+            "spec-review-752e0493928d7aa5891942c54534158b"
+          ],
+          "kind": "edit-text-field",
+          "reason": "Align target binding and gate Spec path descriptions with their existing owners.",
+          "target": {
+            "entity": "requirement",
+            "field": "desc",
+            "id": "R2"
+          }
+        }
+      ],
+      "appliedFindings": [
+        "spec-review-0e6b7dbf3824499da766d7cffd7a093b",
+        "spec-review-48646b759ec3acb09f8d5c32a94c9496",
+        "spec-review-752e0493928d7aa5891942c54534158b"
+      ],
+      "discardedOperations": [],
+      "inputDigest": "3034089e6ec072b09cbf2901e9b2cda74c290cc350d58785c7fb5c9c768aa427",
+      "operationDigest": "541f418245e3eb93b70881a7a0e7f94e5444fd1404712e1175ff68b3220904f4",
+      "outcome": "merged",
+      "relation": "revision-scoped-canonical-review",
+      "stage": "spec-repair"
+    }
+  ],
+  "findings": [
+    {
+      "allowedTargets": [
+        {
+          "operationKinds": [
+            "edit-text-field"
+          ],
+          "target": {
+            "entity": "requirement",
+            "field": "desc",
+            "id": "R1"
+          }
+        }
+      ],
+      "body": "**Target:** R1 normative registry snapshot and input-validation key\n**Issue:** Every guarded row lists only --expect-no-issue in G, while O explicitly excludes guards and the validation key admits guards only when listed in G. Existing src/flow/registry.js:195-213 also supplies --expect-binding, --expect-issue, --expect-spec, and --expect-run-id to these entries. The table therefore contradicts both the registry and R7.\n**Required change:** Include all five accepted guard spellings in each applicable G cell, directly or through an explicitly defined five-option shorthand.\n**Why blocking:** Implementing or asserting the normative table would remove accepted guarded invocations or fail the required registry-projection tests against unchanged behavior.",
+      "disposition": "apply",
+      "evidence": "R1 table G cells list only --expect-no-issue for guarded leaves, while src/flow/registry.js defines --expect-binding, --expect-issue, --expect-spec and --expect-run-id in FLOW_TARGET_GUARD_OPTIONS and adds them with withTargetGuardOptions. R7 already records the five spellings; R1 requires local correction to its G table/key.",
+      "findingId": "spec-review-0e6b7dbf3824499da766d7cffd7a093b",
+      "issue": "Every guarded row lists only --expect-no-issue in G, while O explicitly excludes guards and the validation key admits guards only when listed in G. Existing src/flow/registry.js:195-213 also supplies --expect-binding, --expect-issue, --expect-spec, and --expect-run-id to these entries. The table therefore contradicts both the registry and R7.",
+      "kind": "blocking",
+      "requiredChange": "Include all five accepted guard spellings in each applicable G cell, directly or through an explicitly defined five-option shorthand.",
+      "target": "R1 normative registry snapshot and input-validation key",
+      "title": "Normative inventory omits four accepted target guards",
+      "whyBlocking": "Implementing or asserting the normative table would remove accepted guarded invocations or fail the required registry-projection tests against unchanged behavior."
+    },
+    {
+      "allowedTargets": [
+        {
+          "operationKinds": [
+            "edit-text-field"
+          ],
+          "target": {
+            "entity": "requirement",
+            "field": "desc",
+            "id": "R1"
+          }
+        },
+        {
+          "operationKinds": [
+            "edit-text-field"
+          ],
+          "target": {
+            "entity": "requirement",
+            "field": "desc",
+            "id": "R2"
+          }
+        }
+      ],
+      "body": "**Target:** R1 input-validation key; R2 target-token rule; R7\n**Issue:** R1 and R2 apply a 300-character target-token rule without excluding --expect-binding, whereas R7 correctly specifies its separate 32 KiB contract. FlowTargetBinding.deserialize in src/lib/flow-target-guard.js:301 checks serialized byte length; the 300-character normalizedToken rule applies to spec/run identifiers, not the serialized binding.\n**Required change:** Explicitly exclude --expect-binding from the generic 300-character statements and use R7's decoder-owned 32 KiB bound consistently.\n**Why blocking:** The conflicting bounds yield incompatible acceptance tests and could cause the shared contract to reject valid CLI-generated bindings that the existing decoder accepts.",
+      "disposition": "apply",
+      "evidence": "R1 validation key and R2 target-token sentence assign a 300-character limit to --expect-binding, conflicting with R7 and FlowTargetBinding.deserialize, which owns the serialized binding 32 KiB byte limit. Narrow the 300-character text to applicable run-id tokens and state the binding exception; R7 is already consistent.",
+      "findingId": "spec-review-48646b759ec3acb09f8d5c32a94c9496",
+      "issue": "R1 and R2 apply a 300-character target-token rule without excluding --expect-binding, whereas R7 correctly specifies its separate 32 KiB contract. FlowTargetBinding.deserialize in src/lib/flow-target-guard.js:301 checks serialized byte length; the 300-character normalizedToken rule applies to spec/run identifiers, not the serialized binding.",
+      "kind": "blocking",
+      "requiredChange": "Explicitly exclude --expect-binding from the generic 300-character statements and use R7's decoder-owned 32 KiB bound consistently.",
+      "target": "R1 input-validation key; R2 target-token rule; R7",
+      "title": "Binding length contract conflicts with its existing decoder",
+      "whyBlocking": "The conflicting bounds yield incompatible acceptance tests and could cause the shared contract to reject valid CLI-generated bindings that the existing decoder accepts."
+    },
+    {
+      "allowedTargets": [
+        {
+          "operationKinds": [
+            "edit-text-field"
+          ],
+          "target": {
+            "entity": "requirement",
+            "field": "desc",
+            "id": "R2"
+          }
+        }
+      ],
+      "body": "**Target:** R2 run gate --spec distinction versus R8\n**Issue:** R2 admits a Spec directory or spec.json path, but R8 requires an exact existing file and prohibits directory normalization. Existing src/flow/lib/run-gate.js:4107-4115 resolves the supplied path and reads it directly with readFileSync; it does not resolve directories to spec.json.\n**Required change:** Replace R2's directory-or-spec.json description with the existing exact-file contract specified in R8.\n**Why blocking:** Following R2 requires adding directory acceptance that changes preserved behavior; following R8 requires rejecting the same input. Implementation and acceptance tests cannot satisfy both.",
+      "disposition": "apply",
+      "evidence": "R2 calls run gate --spec a directory or spec.json path, but R1 and R8 specify an exact existing Spec file. The run-gate owner resolves the supplied path and reads it directly, so directory normalization would change existing behavior. Correct only R2 wording.",
+      "findingId": "spec-review-752e0493928d7aa5891942c54534158b",
+      "issue": "R2 admits a Spec directory or spec.json path, but R8 requires an exact existing file and prohibits directory normalization. Existing src/flow/lib/run-gate.js:4107-4115 resolves the supplied path and reads it directly with readFileSync; it does not resolve directories to spec.json.",
+      "kind": "blocking",
+      "requiredChange": "Replace R2's directory-or-spec.json description with the existing exact-file contract specified in R8.",
+      "target": "R2 run gate --spec distinction versus R8",
+      "title": "Gate spec path has conflicting file and directory contracts",
+      "whyBlocking": "Following R2 requires adding directory acceptance that changes preserved behavior; following R8 requires rejecting the same input. Implementation and acceptance tests cannot satisfy both."
+    }
+  ],
+  "generation": 3,
+  "identity": {
+    "byteLength": 70589,
+    "digest": "2abda8c2c1dcd14e0d3b204f659f5d35890fe68991dd178c230f0564655dbcb2",
+    "revision": 10,
+    "specId": "6a9b5488-flow-help-contract"
+  },
+  "version": 2
+}

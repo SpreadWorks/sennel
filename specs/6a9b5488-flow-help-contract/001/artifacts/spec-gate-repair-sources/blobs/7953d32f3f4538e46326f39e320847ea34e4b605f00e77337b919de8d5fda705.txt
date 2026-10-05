@@ -1,0 +1,74 @@
+import { SpecGateRepairSourceOriginInventory } from "./spec-gate-repair-selection.js";
+import { SpecGateRepairSelectedInputIdentity } from "./spec-gate-repair-input-unavailable.js";
+import { SpecGateRepairSourceRange } from "./spec-gate-repair-values.js";
+
+/** One exclusive read request; actual authority and progress belong to expansion. */
+export class SpecGateRepairContextRequest {
+  constructor(value) {
+    if (!value || Object.keys(value).sort().join(",") !== "additionalRangeIds,baseRevision,sourceOrigins,stage,unitId,version"
+      || value.version !== 1 || value.stage !== "spec-gate-repair-context-request"
+      || !/^sha256:[a-f0-9]{64}$/.test(value.baseRevision)
+      || typeof value.unitId !== "string" || !value.unitId
+      || !Array.isArray(value.additionalRangeIds) || !Array.isArray(value.sourceOrigins)
+      || value.additionalRangeIds.length + value.sourceOrigins.length === 0
+      || value.additionalRangeIds.some((id) => typeof id !== "string" || !id)
+      || new Set(value.additionalRangeIds).size !== value.additionalRangeIds.length
+      || value.sourceOrigins.some((origin) => typeof origin !== "string" || !origin)
+      || new Set(value.sourceOrigins).size !== value.sourceOrigins.length) {
+      throw new TypeError("Invalid exclusive Spec Gate repair context request");
+    }
+    this.version = 1; this.stage = value.stage; this.baseRevision = value.baseRevision; this.unitId = value.unitId;
+    this.additionalRangeIds = Object.freeze([...value.additionalRangeIds]);
+    this.sourceOrigins = Object.freeze([...value.sourceOrigins]);
+    Object.freeze(this);
+  }
+  assertSourceOrigins(inventory) {
+    if (!(inventory instanceof SpecGateRepairSourceOriginInventory)) throw new TypeError("Context request requires the captured origin inventory");
+    inventory.assertAvailableOrigins(this.sourceOrigins);
+    return this;
+  }
+  rangeIds(context) {
+    return [...new Set([...this.additionalRangeIds, ...context.sourceRangeIdsForOrigins(this.sourceOrigins)])];
+  }
+  expand(context, previousRangeIds = []) {
+    return new SpecGateRepairContextExpansion({ context, unitId: this.unitId, baseRevision: this.baseRevision,
+      requestedRangeIds: this.rangeIds(context), previousRangeIds });
+  }
+  assertSelectedIdentity(identity) {
+    if (!(identity instanceof SpecGateRepairSelectedInputIdentity) || identity.mode === "locate"
+      || this.baseRevision !== identity.baseRevision || !identity.unitIds.includes(this.unitId)) {
+      throw new TypeError("Spec Gate repair context request differs from its selected input unit or revision");
+    }
+    return this;
+  }
+  toJSON() { return { version: this.version, stage: this.stage, baseRevision: this.baseRevision,
+    unitId: this.unitId, additionalRangeIds: this.additionalRangeIds, sourceOrigins: this.sourceOrigins }; }
+}
+
+/** Coverage of source bytes and index pages have distinct progress semantics. */
+export class SpecGateRepairContextExpansion {
+  constructor({ context, unitId, baseRevision, requestedRangeIds, previousRangeIds = [] }) {
+    if (baseRevision !== context.baseRevision) throw new Error("Additional repair context has a stale revision");
+    const before = context.select(unitId, { additionalRangeIds: previousRangeIds });
+    const requested = context.select(unitId, { additionalRangeIds: requestedRangeIds });
+    const available = new Set(before.ranges.map((range) => range.id));
+    const covered = (range) => {
+      const value = range.value;
+      if (!value?.snapshotId) return available.has(range.id);
+      return before.ranges.some(({ value: prior }) => SpecGateRepairSourceRange.covers(prior, value));
+    };
+    const newRanges = requested.ranges.filter((range) => !covered(range));
+    if (!newRanges.length) throw new Error("Additional repair context request made no progress");
+    this.baseRevision = baseRevision;
+    this.unitId = unitId;
+    this.additionalRangeIds = Object.freeze([...new Set([...previousRangeIds, ...requestedRangeIds])].sort());
+    this.selection = context.select(unitId, { additionalRangeIds: this.additionalRangeIds });
+    this.indexPageProgress = Object.freeze(newRanges.filter((range) => range.id.startsWith("repair-index:")).map((range) => range.id));
+    this.sourceByteProgress = newRanges.filter((range) => range.value?.snapshotId).reduce((total, range) =>
+      total + SpecGateRepairSourceRange.uncoveredBytes(range.value, before.ranges.map((entry) => entry.value)), 0);
+    if (this.sourceByteProgress === 0 && !newRanges.some((range) => !range.value?.snapshotId)) {
+      throw new Error("Additional repair context request made no progress");
+    }
+    Object.freeze(this);
+  }
+}

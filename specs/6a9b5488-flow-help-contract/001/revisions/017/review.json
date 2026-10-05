@@ -1,0 +1,55 @@
+{
+  "audit": [
+    {
+      "acceptedOperations": [],
+      "appliedFindings": [],
+      "discardedOperations": [],
+      "inputDigest": "02fb5698fc63d497a6d01ef41ede913afa49f6f8a00c0b7b34d806d5533c7b9d",
+      "operationDigest": "790e561a26120cd5aba8824e99283158498cb669998f0f509e9b6e3ad4013369",
+      "outcome": "replaced",
+      "relation": "revision-scoped-canonical-review",
+      "stage": "spec-review"
+    },
+    {
+      "acceptedOperations": [],
+      "appliedFindings": [],
+      "discardedOperations": [],
+      "inputDigest": "0713b777c685838f9ed00d2e438dee06d1d08e3f6428688369cf20625cc0364e",
+      "operationDigest": "790e561a26120cd5aba8824e99283158498cb669998f0f509e9b6e3ad4013369",
+      "outcome": "merged",
+      "relation": "revision-scoped-canonical-review",
+      "stage": "spec-triage"
+    },
+    {
+      "acceptedOperations": [],
+      "appliedFindings": [],
+      "discardedOperations": [],
+      "inputDigest": "e654cdf145b0ba084afe271b1d9c473c5345e3df3bcc8bf1fff0fc219ada7d07",
+      "operationDigest": "790e561a26120cd5aba8824e99283158498cb669998f0f509e9b6e3ad4013369",
+      "outcome": "no-op",
+      "relation": "revision-scoped-canonical-review",
+      "stage": "spec-repair"
+    }
+  ],
+  "findings": [
+    {
+      "body": "**Target:** R2・R3・T-2・T-3\n**Improvement:** 英語・日本語それぞれで canonical Options と group 3経路の一致を確認すると明記するとよい。src/sennel.js は通常の --help を共有 help に先行ルーティングし、src/help.js の resolveLocalizedText は翻訳済み help を優先する一方、leaf なし group は src/flow.js から CommandDefinition.renderHelp を使用する。\n**Why non-blocking:** 翻訳保持・Options の完全一致・3経路統一は既に要求され、変更対象にも既存 owner が含まれている。追加は既存要件を検証する際の取りこぼし防止であり、実装やテスト設計を阻む欠落ではない。",
+      "disposition": "downgraded_to_non_blocking",
+      "evidence": "R2 already requires preserving translations and exact correspondence between accepted options and canonical Options rows; R3 already requires identical group rows across all three routes. T-2 keeps locale ownership, and T-3 tests all three routes. Explicit English/Japanese assertions would strengthen test coverage but do not resolve a missing behavioral requirement or block implementation.",
+      "findingId": "spec-review-64e2fdc30039a6ff0f01e9b16f09043b",
+      "improvement": "英語・日本語それぞれで canonical Options と group 3経路の一致を確認すると明記するとよい。src/sennel.js は通常の --help を共有 help に先行ルーティングし、src/help.js の resolveLocalizedText は翻訳済み help を優先する一方、leaf なし group は src/flow.js から CommandDefinition.renderHelp を使用する。",
+      "kind": "improvement",
+      "target": "R2・R3・T-2・T-3",
+      "title": "翻訳を適用した help 経路の検証を明示する",
+      "whyNonBlocking": "翻訳保持・Options の完全一致・3経路統一は既に要求され、変更対象にも既存 owner が含まれている。追加は既存要件を検証する際の取りこぼし防止であり、実装やテスト設計を阻む欠落ではない。"
+    }
+  ],
+  "generation": 3,
+  "identity": {
+    "byteLength": 33080,
+    "digest": "902b3460c800bc919b193a2da70052d01cefba9270916c68995f226478a8e6e4",
+    "revision": 17,
+    "specId": "6a9b5488-flow-help-contract"
+  },
+  "version": 2
+}

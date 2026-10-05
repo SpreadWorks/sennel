@@ -1,0 +1,92 @@
+{
+  "version": 2,
+  "phase": "draft-gate-repair",
+  "sourceAuthority": {
+    "kind": "plan-gate-repair",
+    "repairId": "plan-gate-repair-f71da58608d9984ba8c05099c0c4f131078a62e963d6eb66ddce229dd010707f",
+    "recordFingerprint": "f71da58608d9984ba8c05099c0c4f131078a62e963d6eb66ddce229dd010707f"
+  },
+  "baseRevision": "sha256:ccc74f0ab994a4bd3426840502e8d48b45990e7f126b1d3e1d3dd0e42ecffd1b",
+  "acceptedOperations": [
+    {
+      "kind": "replace-value",
+      "path": "impactOnExisting",
+      "replacement": "must: 影響を受けるのは共有 routed leaf の Usage/Options help、group の subcommand/option rows、help の表示順・間隔・終了コードであり、既存の parser acceptance/rejection、実行意味、target identity、拒否順序、runtime policy、query contract は retained である。移行 inventory は、(1) FLOW_COMMANDS、parseEntryInput、registry validator の parser owner、(2) CommandDefinition、dispatcher、src/help.js、src/flow.js の leaf/group/three-path help owner、(3) registry handler と dispatcher の pre/post/onError/finally execution/hook owner、(4) FlowTargetExpectation と buildFlowCommandHookContext の五つの target guard/binding owner、(5) src/sennel.js pre-scan、既存 work-directory resolver、container の agentWorkDir、logDir、runtime initialization、finalize-cleanup owner、(6) bootstrapFlowQueryCli、src/flow/query.js、src/flow/query-contract.js の独立 query owner を個別に含む。生成 artifacts は、docs pipeline の .sennel/output/analysis.json、docs/*.md、README.md、AGENTS.md、Flow manager/step の specs/<NNN>/flow.json、step result/artifact catalog を対象・内容・順序とも retained とし、help 実行では command-owned output や Flow state を変更しない。side effects は handler/hook の valid help 非実行、guard mismatch/相互排他違反の mutation 前拒否、通常成功・失敗時の既存 hook 順序、runtime directory/log の既存 precedence と durable root を retained とする。command-specific prose、examples、localization は一括で保持するのではなく、CommandDefinition/registry の structured Usage/Options authority、dispatcher/src/help.js の shared row renderer、既存 locale resource と各 command handler の owner にそれぞれ対応づける。command-specific prose は各該当 leaf/group の三つの公開 help 経路で旧文面が個別に保持されることを behavior-level assertion で比較し、examples は各既存 example block の内容が該当 leaf の実際の help 出力に個別に保持されることを検証し、localization/locale text は既存 locale resource の各文言が設定 locale ごとの実際の help 出力で個別に保持されることを検証する。parser contract tests は全 routed leaf の flags/options/optionalOptions、implicit help、positionals/rest、value kind、arity/domain/path rules と query exclusion を registry から再列挙し、dispatcher/CLI E2E は abort、get/set/run の guards、各 group option intersection、longest names、ordering、spacing、exit code、runtime syntax を実際の経路で検証する。guard/runtime/hook regressions は owner の既存 validator/resolver/context を再利用し、query regression は stdin、request-file、help、error を別途検証する。これにより変更後の各 retained surface は少なくとも一つの behavior-level acceptance evidence を持ち、生成 artifact と副作用の内容・対象・順序、設定 entries、retry/attempt policy、docs、README、AGENTS、canonical Flow artifact、spec gate history はこの worker が変更しない。",
+      "reason": "保持対象の command-specific prose、examples、localization/locale text それぞれについて、既存 owner と実際の三つの公開 help 経路における個別の behavior-level verification を impact inventory に明記する。",
+      "observedDigest": "17b34db67a073046f7121585185f3745d5a65b38438ea2af96164e581d59df75"
+    }
+  ],
+  "discardedOperations": [],
+  "appliedFindingKeys": [],
+  "operationDigest": "e81076ecf5fabf525b2413ebb7c61e11760a74034c9867c467502d00a0a6cfd7",
+  "audit": {
+    "envelopeErrors": [],
+    "baseRevisionMatches": true,
+    "missingRequiredTargets": [],
+    "lifecycleIssues": [],
+    "duplicatePaths": [],
+    "overlappingPaths": [],
+    "outputByteLength": 20122
+  },
+  "sourceIssueLogId": "draft-gate-result-21569c06e34a06c057f9dbcda7389d8c7ae4fe81d8c78e63950236f5ce0d9b51",
+  "sourceEntryDigest": "3ae67c46cdddde58b65a0f2a0cb028575d87ce818ce233ade0b56c902ec74754",
+  "resultLogicalKey": "draft.gate",
+  "catalogFingerprint": "e6502c7d79acfce5136847cc5b62e95ae70d9a61293b2004af99a1379b700b36",
+  "report": {
+    "beforeEvidenceDigest": "e28ee6959aa2916c884424dc6dab023ce615c0f0a8f0fbed8cb75d2ee3eca9ca",
+    "outputEvidenceDigest": "ee370eb66baed181bd3b075633931d06c982eb3de4b411e9804e76473ea7b292",
+    "summary": "既存の migration parity inventory に、保持対象の command-specific prose、examples、localization/locale text を個別に検証する実経路の behavior-level assertion を追加した。",
+    "requests": [
+      {
+        "fingerprint": "4225ce943d5501e642a70cd76c1f8da98bd7c28bb92e515414de371c08ada3db",
+        "recurrenceCount": 0,
+        "priorStrategy": null
+      },
+      {
+        "fingerprint": "fb15472568adcd8747864a30946b719c950c4fbf78929b01dbdec34618f8aeda",
+        "recurrenceCount": 0,
+        "priorStrategy": null
+      },
+      {
+        "fingerprint": "fd3c3a598ab2d2e82892810cf1af907c6680485bb243f8c8724783312e86aecc",
+        "recurrenceCount": 0,
+        "priorStrategy": null
+      }
+    ],
+    "results": [
+      {
+        "fingerprint": "4225ce943d5501e642a70cd76c1f8da98bd7c28bb92e515414de371c08ada3db",
+        "strategy": "add-individual-help-prose-verification",
+        "summary": "command-specific prose の owner を保持したまま、各該当 leaf/group の三つの公開 help 経路で旧文面を個別比較する behavior-level assertion を impactOnExisting に追加した。",
+        "priorRepairInsufficiency": null,
+        "deltaIds": [
+          "ee370eb66baed181bd3b075633931d06c982eb3de4b411e9804e76473ea7b292"
+        ]
+      },
+      {
+        "fingerprint": "fb15472568adcd8747864a30946b719c950c4fbf78929b01dbdec34618f8aeda",
+        "strategy": "add-individual-help-example-verification",
+        "summary": "examples の owner を保持したまま、各既存 example block の内容を該当 leaf の実際の help 出力で個別確認する behavior-level assertion を impactOnExisting に追加した。",
+        "priorRepairInsufficiency": null,
+        "deltaIds": [
+          "ee370eb66baed181bd3b075633931d06c982eb3de4b411e9804e76473ea7b292"
+        ]
+      },
+      {
+        "fingerprint": "fd3c3a598ab2d2e82892810cf1af907c6680485bb243f8c8724783312e86aecc",
+        "strategy": "add-individual-locale-text-verification",
+        "summary": "既存 locale resource の owner を保持したまま、設定 locale ごとの実際の help 出力で各 localization/locale text を個別確認する behavior-level assertion を impactOnExisting に追加した。",
+        "priorRepairInsufficiency": null,
+        "deltaIds": [
+          "ee370eb66baed181bd3b075633931d06c982eb3de4b411e9804e76473ea7b292"
+        ]
+      }
+    ],
+    "lineage": {
+      "kind": "artifact",
+      "deltaIds": [
+        "ee370eb66baed181bd3b075633931d06c982eb3de4b411e9804e76473ea7b292"
+      ]
+    }
+  }
+}

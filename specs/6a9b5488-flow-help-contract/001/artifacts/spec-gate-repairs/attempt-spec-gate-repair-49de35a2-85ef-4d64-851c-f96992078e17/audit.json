@@ -1,0 +1,1126 @@
+{
+  "version": 1,
+  "phase": "spec-gate-repair",
+  "baseRevision": "sha256:76cb3d9d0e5c737a75960884ace2586bfd900f512efddeeb4b843e0bd9dcec5d",
+  "acceptedGroups": [
+    {
+      "index": 0,
+      "findingIdentities": [
+        {
+          "sourceArtifact": "steps/spec-gate/result.json",
+          "sourceStep": "spec-gate",
+          "sourceFindingId": "spec-gate:1",
+          "fingerprint": "468c00face101e107725f9a5506a8f985add1a9f6f4e534ebe7a3d729f55f1e3"
+        },
+        {
+          "sourceArtifact": "steps/spec-gate/result.json",
+          "sourceStep": "spec-gate",
+          "sourceFindingId": "spec-gate:2",
+          "fingerprint": "88ec79a2a8be646bfc39e631f425425fbe2877e43b30ef8e4d770783dd3c5f57"
+        },
+        {
+          "sourceArtifact": "steps/spec-gate/result.json",
+          "sourceStep": "spec-gate",
+          "sourceFindingId": "spec-gate:3",
+          "fingerprint": "d5dd1dc4a71beea9a4fd7a97e28cb9765ef7f591c1591307b564c326db39170a"
+        }
+      ],
+      "operations": [
+        {
+          "kind": "edit-text-field",
+          "target": {
+            "entity": "requirement",
+            "id": "R1",
+            "field": "desc"
+          },
+          "expectedDigest": "f071cb6f0d6c1ccc282eab64248bb4cb4534692396c626e9314c022c0d01e76f",
+          "reason": "Align the normative contract with the selected registry evidence and name the existing validation owner for each value.",
+          "edits": [
+            {
+              "startByte": 219,
+              "endByte": 225,
+              "replacement": "run 35"
+            },
+            {
+              "startByte": 12617,
+              "endByte": 12617,
+              "replacement": "\n\nNormative input-validation key for the table above (applies to every occurrence of each named argument; P/R/O are single UTF-8 argv tokens unless the row says rest, flags are booleans with no value). The parser rejects missing required option values, unknown options and extra positionals; a bare option value is not silently synthesized. Optional positionals may be absent; rest paths have cardinality 1..N. Empty strings are rejected where the named owner requires non-empty input; otherwise preserve the owner's current behavior. No global 100-character ID rule or new blanket size limit is introduced. The domain/format below is enforced by the named existing command or value class, after parseEntryInput syntax; state-dependent conditions stay with that owner.\n\n| Input and applicable leaf rows | Type, format, domain/range and owner |\n| --- | --- |\n| get check target | Required string enum dirty, gh, impl, finalize; VALID_CHECK_TARGETS and GetCheckCommand reject absent/other values. |\n| get prompt kind | Required string key in the configured-language prompt registry, including the existing plan.* and impl.* entries; GetPromptCommand owns unknown-key handling. |\n| get guardrail phase; run gate/review/recover-review-pass --phase; set metric phase; set retry phase | Required non-empty phase token for the positional forms, optional single token for options; each named guardrail/gate/review/metric/retry command owns its applicable phase registry and state combination. |\n| get issue number; set issue number; prepare/set init --issue; target --expect-issue | Required decimal issue number for positionals, single decimal value for options; issue commands and FlowTargetExpectation own positivity/identity checks and conflict with --expect-no-issue. |\n| get artifact logicalKey; --mode/--spec-id/--version | Required non-empty artifact key; optional single mode, FlowSpecId, and version token. GetArtifactCommand owns mode/version domains and catalog resolution; FlowSpecId owns spec ID format, with no generic length cap. |\n| get status runId; set request/note/auto --run-id; prepare --run-id; get runtime-log --run-id | get status is optional one token; prepare uses PreparingFlowId (non-empty, no colon, at most 200 characters); runtime-log accepts its existing run ID/sequence form; other commands use their own active-flow ID and state checks. |\n| set step id,status | Both required non-empty tokens. id resolves through the active definition/step tree; status belongs to VALID_STEP_STATUSES and NormalStepTransition, which reject unknown or forbidden lifecycle transitions. |\n| set auto value; set broad action; set policy value; set retry action,kind; set acceptance-decision/nonblocking-decision --choice | Required non-empty positional tokens or one option token as shown; each command's existing domain/decision registry and active state own allowable values and combinations. No new option spelling is created for positional values. |\n| set request text; set note text; set draft-answer questionId and --answer/--why/--considered/--dropped-reason | Required non-empty positional text/ID where declared, optional single text values; each command and its question ledger own format, existing size limits and --drop/answer combinations. |\n| set files reqId, paths | Required non-empty requirement ID plus at least one rest token; CanonicalFileMapUpdate checks the requirement and normalizes each non-empty repository-relative path, while FlowManager.updateFileMap checks active attempt/state. It maps paths; it does not read the referenced file contents. |\n| get context path/--search/--raw; set review-evidence --file; run gate --spec; run --agent-work-dir | Context path optional existing file in file mode (absolute or project-root-relative); search single query; review evidence existing non-symlink regular JSON file under its existing byte limit; gate spec exact existing Spec file path for task-spec phase; agent work directory non-empty NUL-free absolute or repository-root-relative directory path and need not pre-exist. Existing get-context, ReviewEvidenceInput, gate command and src/sennel.js/resolver own these respectively. |\n| resume --spec; prepare --base; run lint --base | FlowSpecId for resume; Git branch name for each base; respective resume, prepare and lint owners validate their different formats. |\n| --format, --mode, --sequence, --category, --record-category, --step, --task-id, --normalized-finding-id, --repair-ref-commit, --repair-ref-file, --expect-attempt-id, --approve, --exclusions | Each is one value token, optional unless its leaf state requires it. The named get/run/set owner validates its existing enum, positive integer sequence, canonical ID, commit reference, path reference, approval choice or serialized exclusions JSON and existing size/entry bounds. No spelling-wide validator substitutes for the owner. |\n| --expect-binding, --expect-spec, --expect-run-id, --expect-issue, --expect-no-issue | Only on rows whose G column admits them. FlowTargetExpectation validates the non-empty token (maximum 300 characters) or issue number and buildFlowCommandHookContext checks the selected target before handler mutation; --expect-issue and --expect-no-issue conflict. |\n| all other row-local F/O names | A flag has cardinality 0..1 and boolean value; each option has cardinality 0..1 and one required token unless the registry declares optionalOptions. The row's leaf command owns non-empty, path, domain and state checks; no shared semantic admission rule is added. |\n"
+            }
+          ]
+        },
+        {
+          "kind": "edit-text-field",
+          "target": {
+            "entity": "requirement",
+            "id": "R2",
+            "field": "desc"
+          },
+          "expectedDigest": "a44b59771232f09c0f978638b4331dc7cd8c9d354252c51b0c44fdb70a657139",
+          "reason": "Align the normative contract with the selected registry evidence and name the existing validation owner for each value.",
+          "edits": [
+            {
+              "startByte": 2028,
+              "endByte": 2157,
+              "replacement": "set-files path count and aggregate argv path-string bytes (neither has a Sennel-specific cap under CanonicalFileMapUpdate and FlowManager.updateFileMap; the command maps supplied path tokens and does not bulk-read referenced file contents)"
+            },
+            {
+              "startByte": 2467,
+              "endByte": 2467,
+              "replacement": "\n\nFor every inventory row, the P/R/F/O/G spelling above and the normative input-validation key in R1 jointly define arity, type, format, domain/range, empty behavior and existing owner. In particular, get check target is the four-value VALID_CHECK_TARGETS enum; set step status uses VALID_STEP_STATUSES plus NormalStepTransition. Preserve the command-owned limits already present for review evidence, query, context, retry and exclusions. set files performs a finite argv-to-path-map operation; its path count and total argv path-string bytes are constrained by the host process argv capacity, while the application adds no new arbitrary cap and reads no file content in this operation.\n"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "index": 1,
+      "findingIdentities": [
+        {
+          "sourceArtifact": "steps/spec-gate/result.json",
+          "sourceStep": "spec-gate",
+          "sourceFindingId": "spec-gate:5",
+          "fingerprint": "28fbf61ec8644a798c2280651cd4a19fa60ae1f1f0325e50fdc5c2a5b41b829b"
+        }
+      ],
+      "operations": [
+        {
+          "kind": "replace-array-element",
+          "target": {
+            "collection": "acceptance_criteria",
+            "position": 8
+          },
+          "expectedDigest": "bfa90bd5411e3b7f7eb67667dd6cdd177649caaba99d8890a61413fc0187abe8",
+          "replacement": "For every current registry-derived shared routed leaf—resume 1, prepare 1, get 11, set 17, run 35, report/show 1, query excluded—a valid command invocation and explicit --help return exit code 0. Each leaf fixture names its valid input and success condition; the assertion preserves the existing handler and pre/post/onError/finally lifecycle, while valid help invokes none of those handlers or execution hooks. The contract test re-enumerates the registry and fails on count or membership drift instead of relying on historical totals.",
+          "reason": "Use the selected 66-row, 35-run registry projection consistently."
+        }
+      ]
+    },
+    {
+      "index": 2,
+      "findingIdentities": [
+        {
+          "sourceArtifact": "steps/spec-gate/result.json",
+          "sourceStep": "spec-gate",
+          "sourceFindingId": "spec-gate:4",
+          "fingerprint": "9f14ff3e58f805264868b5af9b7a6b1c46bf1d0d067c365b9b86e37ee62b64b2"
+        }
+      ],
+      "operations": [
+        {
+          "kind": "edit-text-field",
+          "target": {
+            "entity": "requirement",
+            "id": "R8",
+            "field": "desc"
+          },
+          "expectedDigest": "da650ca74a16de163a8cf1456fd85e33aab6095b6e566438a21b4a142ec7f110",
+          "reason": "Align the normative contract with the selected registry evidence and name the existing validation owner for each value.",
+          "edits": [
+            {
+              "startByte": 1630,
+              "endByte": 1747,
+              "replacement": "these owners map only the finite argv path tokens, do not load referenced file contents, and impose no Sennel-specific path-count or aggregate argv-byte cap beyond the host process argv capacity; no existence check is invented"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "index": 3,
+      "findingIdentities": [
+        {
+          "sourceArtifact": "steps/spec-gate/result.json",
+          "sourceStep": "spec-gate",
+          "sourceFindingId": "spec-gate:7",
+          "fingerprint": "26a3bc5a8503f27f79f3aca223327e815af213de1a797d95e3f3ccb6e95f45fa"
+        }
+      ],
+      "operations": [
+        {
+          "kind": "replace-array-element",
+          "target": {
+            "collection": "acceptance_criteria",
+            "position": 12
+          },
+          "expectedDigest": "56293a6cabda255dce02ccfc33091bfbfae5a1c14f28da27e2885346f5cf54ee",
+          "replacement": "The registry-derived shared routed matrix has exactly 66 rows at the Issue 521 restart baseline: resume 1, prepare 1, get 11, set 17, run 35, and report/show 1. Query is excluded from the shared matrix and is tested separately through bootstrapFlowQueryCli, src/flow/query.js, and src/flow/query-contract.js. The registry contract test re-enumerates the set and treats any count or membership change as a failed baseline update, not as permission to copy a historical count.",
+          "reason": "Use the selected 66-row, 35-run registry projection consistently."
+        }
+      ]
+    },
+    {
+      "index": 4,
+      "findingIdentities": [
+        {
+          "sourceArtifact": "steps/spec-gate/result.json",
+          "sourceStep": "spec-gate",
+          "sourceFindingId": "spec-gate:6",
+          "fingerprint": "f9e5af7e4ce1c1efe8123d4c9336353ec6f8b692592d845ea2c836a8c7806294"
+        }
+      ],
+      "operations": [
+        {
+          "kind": "replace-array-element",
+          "target": {
+            "collection": "acceptance_criteria",
+            "position": 9
+          },
+          "expectedDigest": "269eb31260b617c93f8895b85b0caa37cf7f963867efc99a68ab39e8fcd4ea73",
+          "replacement": "For each applicable leaf in the same 66-row registry-derived set, the input inventory names the parser, target, and command-owned failure conditions and supplies a check input and observable result. Each selected failure returns exit code 1, preserves the existing diagnostic and rejection order, and stops before command-owned mutation. Cover missing or unknown selector, missing required value, extra positional, invalid domain, target mismatch, and --expect-issue/--expect-no-issue conflict only where that leaf's existing owner declares the condition applicable; do not add universal rejection rules.",
+          "reason": "Use the selected 66-row, 35-run registry projection consistently."
+        }
+      ]
+    },
+    {
+      "index": 5,
+      "findingIdentities": [
+        {
+          "sourceArtifact": "steps/spec-gate/result.json",
+          "sourceStep": "spec-gate",
+          "sourceFindingId": "spec-gate:8",
+          "fingerprint": "ad8ad6544f9677fab2d706b1648be602083c3c9f503d7f1c1062bf5875ff3346"
+        }
+      ],
+      "operations": [
+        {
+          "kind": "edit-text-field",
+          "target": {
+            "entity": "task",
+            "id": "T-9",
+            "field": "implementation_notes"
+          },
+          "expectedDigest": "6d5dc9fc43c814dea20897495f0c09a67b5ccd3fd8deb2b079ace5d65a12422d",
+          "reason": "Align the normative contract with the selected registry evidence and name the existing validation owner for each value.",
+          "edits": [
+            {
+              "startByte": 320,
+              "endByte": 337,
+              "replacement": "run has 35 leaves"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "discardedGroups": [],
+  "operationDigest": "675b2134b80e1f1875438d598a383ed60ee309a2290685d7dc459575cd20a70c",
+  "resultRevision": {
+    "digest": "3fa244a6b968f4672dd70b51b5f638427afdc5fc44f5c75e2b8823afbe2f1d45",
+    "byteLength": 67211
+  },
+  "sourceReviewIdentity": {
+    "specId": "6a9b5488-flow-help-contract",
+    "revision": 8,
+    "digest": "efab44e0df91b5addd869912ec55f2d3700ab7806a2b145a3be6c1ea8949c081",
+    "byteLength": 54556
+  },
+  "sourceEvidenceIdentity": {
+    "sourceAttempt": {
+      "id": "attempt-spec-gate-938672cf-beaf-4028-a63e-adc8141ac316",
+      "sequence": 4
+    },
+    "resultLogicalKey": "spec.gate",
+    "publicationActivityId": "plan-gate-repaired-92456011-9f1d-47c8-bfd2-afb4d44dc542",
+    "catalogFingerprint": "737c919fa2504ee524400110c617e56e89f0259d81422e1732bae83b7256ae74",
+    "transitionLineage": {
+      "sourceAttempt": {
+        "id": "attempt-spec-gate-938672cf-beaf-4028-a63e-adc8141ac316",
+        "sequence": 4
+      },
+      "canonicalAttempt": {
+        "id": "attempt-spec-gate-938672cf-beaf-4028-a63e-adc8141ac316",
+        "sequence": 4
+      },
+      "sourceFingerprint": "3bacd8e34c04c9aacd49963ea120c71ac346e3040e6dc5cb8944a040cd8546ad",
+      "canonicalFingerprint": "737c919fa2504ee524400110c617e56e89f0259d81422e1732bae83b7256ae74",
+      "sourceRevisionFingerprint": "bcc6f9d96402a4108c221546f9d728ba98e96b6fb167eb7dfdd6031d4e42d2d6",
+      "canonicalRevisionFingerprint": "bcc6f9d96402a4108c221546f9d728ba98e96b6fb167eb7dfdd6031d4e42d2d6"
+    }
+  },
+  "sourceFindingIdentities": [
+    {
+      "sourceArtifact": "steps/spec-gate/result.json",
+      "sourceStep": "spec-gate",
+      "sourceFindingId": "spec-gate:1",
+      "fingerprint": "468c00face101e107725f9a5506a8f985add1a9f6f4e534ebe7a3d729f55f1e3"
+    },
+    {
+      "sourceArtifact": "steps/spec-gate/result.json",
+      "sourceStep": "spec-gate",
+      "sourceFindingId": "spec-gate:2",
+      "fingerprint": "88ec79a2a8be646bfc39e631f425425fbe2877e43b30ef8e4d770783dd3c5f57"
+    },
+    {
+      "sourceArtifact": "steps/spec-gate/result.json",
+      "sourceStep": "spec-gate",
+      "sourceFindingId": "spec-gate:3",
+      "fingerprint": "d5dd1dc4a71beea9a4fd7a97e28cb9765ef7f591c1591307b564c326db39170a"
+    },
+    {
+      "sourceArtifact": "steps/spec-gate/result.json",
+      "sourceStep": "spec-gate",
+      "sourceFindingId": "spec-gate:5",
+      "fingerprint": "28fbf61ec8644a798c2280651cd4a19fa60ae1f1f0325e50fdc5c2a5b41b829b"
+    },
+    {
+      "sourceArtifact": "steps/spec-gate/result.json",
+      "sourceStep": "spec-gate",
+      "sourceFindingId": "spec-gate:4",
+      "fingerprint": "9f14ff3e58f805264868b5af9b7a6b1c46bf1d0d067c365b9b86e37ee62b64b2"
+    },
+    {
+      "sourceArtifact": "steps/spec-gate/result.json",
+      "sourceStep": "spec-gate",
+      "sourceFindingId": "spec-gate:7",
+      "fingerprint": "26a3bc5a8503f27f79f3aca223327e815af213de1a797d95e3f3ccb6e95f45fa"
+    },
+    {
+      "sourceArtifact": "steps/spec-gate/result.json",
+      "sourceStep": "spec-gate",
+      "sourceFindingId": "spec-gate:6",
+      "fingerprint": "f9e5af7e4ce1c1efe8123d4c9336353ec6f8b692592d845ea2c836a8c7806294"
+    },
+    {
+      "sourceArtifact": "steps/spec-gate/result.json",
+      "sourceStep": "spec-gate",
+      "sourceFindingId": "spec-gate:8",
+      "fingerprint": "ad8ad6544f9677fab2d706b1648be602083c3c9f503d7f1c1062bf5875ff3346"
+    }
+  ],
+  "observationIdentities": [
+    {
+      "sourceArtifact": "steps/spec-gate/result.json",
+      "sourceStep": "spec-gate",
+      "sourceFindingId": "spec-gate:1",
+      "fingerprint": "468c00face101e107725f9a5506a8f985add1a9f6f4e534ebe7a3d729f55f1e3"
+    },
+    {
+      "sourceArtifact": "steps/spec-gate/result.json",
+      "sourceStep": "spec-gate",
+      "sourceFindingId": "spec-gate:2",
+      "fingerprint": "88ec79a2a8be646bfc39e631f425425fbe2877e43b30ef8e4d770783dd3c5f57"
+    },
+    {
+      "sourceArtifact": "steps/spec-gate/result.json",
+      "sourceStep": "spec-gate",
+      "sourceFindingId": "spec-gate:3",
+      "fingerprint": "d5dd1dc4a71beea9a4fd7a97e28cb9765ef7f591c1591307b564c326db39170a"
+    },
+    {
+      "sourceArtifact": "steps/spec-gate/result.json",
+      "sourceStep": "spec-gate",
+      "sourceFindingId": "spec-gate:4",
+      "fingerprint": "9f14ff3e58f805264868b5af9b7a6b1c46bf1d0d067c365b9b86e37ee62b64b2"
+    },
+    {
+      "sourceArtifact": "steps/spec-gate/result.json",
+      "sourceStep": "spec-gate",
+      "sourceFindingId": "spec-gate:5",
+      "fingerprint": "28fbf61ec8644a798c2280651cd4a19fa60ae1f1f0325e50fdc5c2a5b41b829b"
+    },
+    {
+      "sourceArtifact": "steps/spec-gate/result.json",
+      "sourceStep": "spec-gate",
+      "sourceFindingId": "spec-gate:6",
+      "fingerprint": "f9e5af7e4ce1c1efe8123d4c9336353ec6f8b692592d845ea2c836a8c7806294"
+    },
+    {
+      "sourceArtifact": "steps/spec-gate/result.json",
+      "sourceStep": "spec-gate",
+      "sourceFindingId": "spec-gate:7",
+      "fingerprint": "26a3bc5a8503f27f79f3aca223327e815af213de1a797d95e3f3ccb6e95f45fa"
+    },
+    {
+      "sourceArtifact": "steps/spec-gate/result.json",
+      "sourceStep": "spec-gate",
+      "sourceFindingId": "spec-gate:8",
+      "fingerprint": "ad8ad6544f9677fab2d706b1648be602083c3c9f503d7f1c1062bf5875ff3346"
+    }
+  ],
+  "repairId": "plan-gate-repair-884624eb691e031c306ac09fd67989107d55a6e7a3e3c44b5af53366ddb91455",
+  "repairRecordFingerprint": "884624eb691e031c306ac09fd67989107d55a6e7a3e3c44b5af53366ddb91455",
+  "targetAttempt": {
+    "id": "attempt-spec-gate-repair-49de35a2-85ef-4d64-851c-f96992078e17",
+    "sequence": 4
+  },
+  "observationResults": [
+    {
+      "fingerprint": "dc665ba97e5a7c57ff8220074e45e357a6131ea437fd5a9b1522aade7f7f0084",
+      "strategy": "sha256:126a003aba0bfd35933259fe9c8d0d4b4c8ab4d7ab6f6a952fefe6145ca9f62c",
+      "summary": "Align the normative contract with the selected registry evidence and name the existing validation owner for each value.",
+      "priorRepairInsufficiency": null,
+      "groupIndices": [
+        0
+      ]
+    },
+    {
+      "fingerprint": "3f35ab1d4ce48909f5ac001890ef2101935138e7fc7042543a7d8130e495fc92",
+      "strategy": "sha256:126a003aba0bfd35933259fe9c8d0d4b4c8ab4d7ab6f6a952fefe6145ca9f62c",
+      "summary": "Align the normative contract with the selected registry evidence and name the existing validation owner for each value.",
+      "priorRepairInsufficiency": null,
+      "groupIndices": [
+        0
+      ]
+    },
+    {
+      "fingerprint": "ae978283737683a88d565714a97f593d323acaf7aa340b6ae571d10c456ed3ab",
+      "strategy": "sha256:126a003aba0bfd35933259fe9c8d0d4b4c8ab4d7ab6f6a952fefe6145ca9f62c",
+      "summary": "Align the normative contract with the selected registry evidence and name the existing validation owner for each value.",
+      "priorRepairInsufficiency": null,
+      "groupIndices": [
+        0
+      ]
+    },
+    {
+      "fingerprint": "ffd29378902d08dfa4cd28a1c27b779a214e53067a41c22d6221fd051f70a7b5",
+      "strategy": "sha256:5d30d5132c4a0394e8107fff3be4d04e3cee40575135f5a87d7f959580256274",
+      "summary": "Align the normative contract with the selected registry evidence and name the existing validation owner for each value.",
+      "priorRepairInsufficiency": null,
+      "groupIndices": [
+        2
+      ]
+    },
+    {
+      "fingerprint": "0236a135038f218ff2bcd3138b4a9db7c64fbec8e9c5a91a9035c1fb683df731",
+      "strategy": "sha256:a78bfd141e734e40cd692d6037483eb4b1b243728ec5cabc0b37bdb41beba7cb",
+      "summary": "Use the selected 66-row, 35-run registry projection consistently.",
+      "priorRepairInsufficiency": null,
+      "groupIndices": [
+        1
+      ]
+    },
+    {
+      "fingerprint": "3f908267bd458500d01639e364807c336d35efdc7c774215e231d79404f1252e",
+      "strategy": "sha256:2468794589a8c73762dfb15ec9bd6b1dd6ad10f28c9d6d356ad1c2cd9c1dac0a",
+      "summary": "Use the selected 66-row, 35-run registry projection consistently.",
+      "priorRepairInsufficiency": null,
+      "groupIndices": [
+        4
+      ]
+    },
+    {
+      "fingerprint": "6cd856ebd6922267acf10ccc0fa8a46020a782cc91cb4b0cb5459b0f1113144d",
+      "strategy": "sha256:2e46dbccb87f57d949bc49c157090c42cf72367bc0d49383c260d078fac833f0",
+      "summary": "Use the selected 66-row, 35-run registry projection consistently.",
+      "priorRepairInsufficiency": null,
+      "groupIndices": [
+        3
+      ]
+    },
+    {
+      "fingerprint": "955abf953e837c1af2e2beea74c5c48b38a11aaea9451bba8fa3112ff31d964b",
+      "strategy": "sha256:81be810e05e07729826bb998a1a8c243d8d9d4e0be13c552c757b6ddff615cff",
+      "summary": "Align the normative contract with the selected registry evidence and name the existing validation owner for each value.",
+      "priorRepairInsufficiency": null,
+      "groupIndices": [
+        5
+      ]
+    }
+  ],
+  "reviewFacts": {
+    "version": 1,
+    "baseRevision": "sha256:76cb3d9d0e5c737a75960884ace2586bfd900f512efddeeb4b843e0bd9dcec5d",
+    "resultRevision": {
+      "digest": "3fa244a6b968f4672dd70b51b5f638427afdc5fc44f5c75e2b8823afbe2f1d45",
+      "byteLength": 67211
+    },
+    "sourceReviewIdentity": {
+      "specId": "6a9b5488-flow-help-contract",
+      "revision": 8,
+      "digest": "efab44e0df91b5addd869912ec55f2d3700ab7806a2b145a3be6c1ea8949c081",
+      "byteLength": 54556
+    },
+    "sourceReviewDigest": "c40d99c1077aae6b8e5093640dfa35dfb05d03cec93d78771ab4560ea2ce8be5",
+    "sourceReviewArtifact": "revisions/008/review.json",
+    "sourceSpecDigest": "1b483d236667ef40c7dc6386aabfb779a088f499c97edb866c8680da73c61c8f",
+    "resultSpecDigest": "8d4e8244d833964f3d18dc1fdfea4716de0b2c3cde9e10193fab6aef85961c81",
+    "findings": [
+      {
+        "identity": {
+          "sourceArtifact": "revisions/008/review.json",
+          "sourceStep": "spec-review",
+          "sourceFindingId": "spec-review-c1243733baca5080aae6e174f95c31c6",
+          "fingerprint": "1e01c5551efd1f1dd0f04ba727879754f943aeeab2fd7b82c64e8517b75e73fa"
+        },
+        "finding": {
+          "allowedTargets": [
+            {
+              "operationKinds": [
+                "edit-text-field"
+              ],
+              "target": {
+                "entity": "requirement",
+                "field": "desc",
+                "id": "R1"
+              }
+            },
+            {
+              "operationKinds": [
+                "edit-text-field"
+              ],
+              "target": {
+                "entity": "task",
+                "field": "implementation_notes",
+                "id": "T-9"
+              }
+            }
+          ],
+          "body": "**Target:** R1 normative leaf map; Acceptance Criteria baseline counts\n**Issue:** Current FLOW_COMMANDS contains 66 non-query leaves: resume 1, prepare 1, get 11, set 17, run 35, and report/show 1. The normative map omits run final-regression and run report, while the spec also claims both 65 and 66 rows.\n**Required change:** Reconcile the baseline to the current registry, include run final-regression and run report with their contracts, and use one consistent count everywhere.\n**Why blocking:** A registry-derived implementation or contract test will either omit live commands or assert conflicting membership/counts, leaving parser, help, lifecycle, and success-fixture coverage incomplete.",
+          "disposition": "apply",
+          "evidence": "R1 and three acceptance criteria state 65 non-query leaves and run 34, while the same Spec also requires 66 success rows and T-9 explicitly calls for a 66-row matrix including run report. The canonical review identifies the live registry count as 66 and run 35. Reconcile the inventory and all count assertions from the registry.",
+          "findingId": "spec-review-c1243733baca5080aae6e174f95c31c6",
+          "issue": "Current FLOW_COMMANDS contains 66 non-query leaves: resume 1, prepare 1, get 11, set 17, run 35, and report/show 1. The normative map omits run final-regression and run report, while the spec also claims both 65 and 66 rows.",
+          "kind": "blocking",
+          "requiredChange": "Reconcile the baseline to the current registry, include run final-regression and run report with their contracts, and use one consistent count everywhere.",
+          "target": "R1 normative leaf map; Acceptance Criteria baseline counts",
+          "title": "Registry baseline omits live routed leaves",
+          "whyBlocking": "A registry-derived implementation or contract test will either omit live commands or assert conflicting membership/counts, leaving parser, help, lifecycle, and success-fixture coverage incomplete."
+        },
+        "relatedChanges": [
+          {
+            "groupIndex": 0,
+            "operationIndex": 0,
+            "target": {
+              "entity": "requirement",
+              "id": "R1",
+              "field": "desc"
+            },
+            "gateFindingIdentities": [
+              {
+                "sourceArtifact": "steps/spec-gate/result.json",
+                "sourceStep": "spec-gate",
+                "sourceFindingId": "spec-gate:1",
+                "fingerprint": "468c00face101e107725f9a5506a8f985add1a9f6f4e534ebe7a3d729f55f1e3"
+              },
+              {
+                "sourceArtifact": "steps/spec-gate/result.json",
+                "sourceStep": "spec-gate",
+                "sourceFindingId": "spec-gate:2",
+                "fingerprint": "88ec79a2a8be646bfc39e631f425425fbe2877e43b30ef8e4d770783dd3c5f57"
+              },
+              {
+                "sourceArtifact": "steps/spec-gate/result.json",
+                "sourceStep": "spec-gate",
+                "sourceFindingId": "spec-gate:3",
+                "fingerprint": "d5dd1dc4a71beea9a4fd7a97e28cb9765ef7f591c1591307b564c326db39170a"
+              }
+            ]
+          },
+          {
+            "groupIndex": 5,
+            "operationIndex": 0,
+            "target": {
+              "entity": "task",
+              "id": "T-9",
+              "field": "implementation_notes"
+            },
+            "gateFindingIdentities": [
+              {
+                "sourceArtifact": "steps/spec-gate/result.json",
+                "sourceStep": "spec-gate",
+                "sourceFindingId": "spec-gate:8",
+                "fingerprint": "ad8ad6544f9677fab2d706b1648be602083c3c9f503d7f1c1062bf5875ff3346"
+              }
+            ]
+          }
+        ],
+        "unresolvedBlocking": true
+      },
+      {
+        "identity": {
+          "sourceArtifact": "revisions/008/review.json",
+          "sourceStep": "spec-review",
+          "sourceFindingId": "spec-review-0c7a706eb7636d1f95954f9c4e5c9f1e",
+          "fingerprint": "0aa078fae8e67ee9add3bb8187c4fa2318f08de42b2ef048385adf05d4ce81d5"
+        },
+        "finding": {
+          "allowedTargets": [
+            {
+              "operationKinds": [
+                "edit-text-field"
+              ],
+              "target": {
+                "entity": "requirement",
+                "field": "desc",
+                "id": "R7"
+              }
+            },
+            {
+              "operationKinds": [
+                "edit-text-field"
+              ],
+              "target": {
+                "entity": "requirement",
+                "field": "desc",
+                "id": "R1"
+              }
+            },
+            {
+              "operationKinds": [
+                "edit-text-field"
+              ],
+              "target": {
+                "entity": "requirement",
+                "field": "desc",
+                "id": "R2"
+              }
+            }
+          ],
+          "body": "**Target:** R7 target matrix; R1/R2 artifact and status guard applicability\n**Issue:** get status and get artifact have targetGuard:false at the dispatcher registry boundary but perform command-owned guard checks. get artifact additionally bypasses ambient Flow resolution for explicit spec-id/version and rejects active guards on historical views.\n**Required change:** Add an explicit ownership/mode matrix for these entries, preserving dispatcher selection, command-level validation, and the historical artifact bypass/rejection behavior.\n**Why blocking:** Treating buildFlowCommandHookContext as the sole guard owner can remove positional-status validation or break historical artifact reads by resolving or applying active guards in the wrong phase.",
+          "disposition": "apply",
+          "evidence": "R7 assigns target checks to FlowTargetExpectation/buildFlowCommandHookContext generally, while R1 lists get status and get artifact among guarded inputs. The canonical review identifies targetGuard:false on both entries and command-owned checks, plus artifact historical-view bypass and active-guard rejection. The ownership/mode exception needs to be explicit.",
+          "findingId": "spec-review-0c7a706eb7636d1f95954f9c4e5c9f1e",
+          "issue": "get status and get artifact have targetGuard:false at the dispatcher registry boundary but perform command-owned guard checks. get artifact additionally bypasses ambient Flow resolution for explicit spec-id/version and rejects active guards on historical views.",
+          "kind": "blocking",
+          "requiredChange": "Add an explicit ownership/mode matrix for these entries, preserving dispatcher selection, command-level validation, and the historical artifact bypass/rejection behavior.",
+          "target": "R7 target matrix; R1/R2 artifact and status guard applicability",
+          "title": "Target-guard ownership exceptions are unspecified",
+          "whyBlocking": "Treating buildFlowCommandHookContext as the sole guard owner can remove positional-status validation or break historical artifact reads by resolving or applying active guards in the wrong phase."
+        },
+        "relatedChanges": [
+          {
+            "groupIndex": 0,
+            "operationIndex": 0,
+            "target": {
+              "entity": "requirement",
+              "id": "R1",
+              "field": "desc"
+            },
+            "gateFindingIdentities": [
+              {
+                "sourceArtifact": "steps/spec-gate/result.json",
+                "sourceStep": "spec-gate",
+                "sourceFindingId": "spec-gate:1",
+                "fingerprint": "468c00face101e107725f9a5506a8f985add1a9f6f4e534ebe7a3d729f55f1e3"
+              },
+              {
+                "sourceArtifact": "steps/spec-gate/result.json",
+                "sourceStep": "spec-gate",
+                "sourceFindingId": "spec-gate:2",
+                "fingerprint": "88ec79a2a8be646bfc39e631f425425fbe2877e43b30ef8e4d770783dd3c5f57"
+              },
+              {
+                "sourceArtifact": "steps/spec-gate/result.json",
+                "sourceStep": "spec-gate",
+                "sourceFindingId": "spec-gate:3",
+                "fingerprint": "d5dd1dc4a71beea9a4fd7a97e28cb9765ef7f591c1591307b564c326db39170a"
+              }
+            ]
+          },
+          {
+            "groupIndex": 0,
+            "operationIndex": 1,
+            "target": {
+              "entity": "requirement",
+              "id": "R2",
+              "field": "desc"
+            },
+            "gateFindingIdentities": [
+              {
+                "sourceArtifact": "steps/spec-gate/result.json",
+                "sourceStep": "spec-gate",
+                "sourceFindingId": "spec-gate:1",
+                "fingerprint": "468c00face101e107725f9a5506a8f985add1a9f6f4e534ebe7a3d729f55f1e3"
+              },
+              {
+                "sourceArtifact": "steps/spec-gate/result.json",
+                "sourceStep": "spec-gate",
+                "sourceFindingId": "spec-gate:2",
+                "fingerprint": "88ec79a2a8be646bfc39e631f425425fbe2877e43b30ef8e4d770783dd3c5f57"
+              },
+              {
+                "sourceArtifact": "steps/spec-gate/result.json",
+                "sourceStep": "spec-gate",
+                "sourceFindingId": "spec-gate:3",
+                "fingerprint": "d5dd1dc4a71beea9a4fd7a97e28cb9765ef7f591c1591307b564c326db39170a"
+              }
+            ]
+          }
+        ],
+        "unresolvedBlocking": true
+      },
+      {
+        "identity": {
+          "sourceArtifact": "revisions/008/review.json",
+          "sourceStep": "spec-review",
+          "sourceFindingId": "spec-review-b762cf3314e7ca5314151ab77d1683c7",
+          "fingerprint": "3533f9d0f9d1cfaf288a0f87dfaeb19211019a0040a9e6eb26adcbeac49b79ae"
+        },
+        "finding": {
+          "allowedTargets": [
+            {
+              "operationKinds": [
+                "edit-text-field"
+              ],
+              "target": {
+                "entity": "requirement",
+                "field": "desc",
+                "id": "R8"
+              }
+            }
+          ],
+          "body": "**Target:** R8 set review-evidence path row\n**Issue:** SetReviewEvidenceCommand passes executionRoot as specDir to ReviewEvidenceInput.fromFile. The existing owner therefore bounds evidence input to the execution checkout, while the spec requires it to be inside the active canonical spec directory.\n**Required change:** Change the requirement to the existing execution-root path contract and name ReviewEvidenceInput.fromFile as the owner, unless an intentional compatibility-changing relocation is in scope.\n**Why blocking:** In worktree execution, valid worker-produced evidence under the execution checkout would be rejected, so implementation and integration tests would disagree about accepted inputs.",
+          "disposition": "apply",
+          "evidence": "R8 says set review-evidence --file is inside the active spec directory. The canonical review identifies SetReviewEvidenceCommand passing executionRoot as specDir to ReviewEvidenceInput.fromFile, making the execution checkout the existing boundary. Correct the path root and owner.",
+          "findingId": "spec-review-b762cf3314e7ca5314151ab77d1683c7",
+          "issue": "SetReviewEvidenceCommand passes executionRoot as specDir to ReviewEvidenceInput.fromFile. The existing owner therefore bounds evidence input to the execution checkout, while the spec requires it to be inside the active canonical spec directory.",
+          "kind": "blocking",
+          "requiredChange": "Change the requirement to the existing execution-root path contract and name ReviewEvidenceInput.fromFile as the owner, unless an intentional compatibility-changing relocation is in scope.",
+          "target": "R8 set review-evidence path row",
+          "title": "Review-evidence path root contradicts existing behavior",
+          "whyBlocking": "In worktree execution, valid worker-produced evidence under the execution checkout would be rejected, so implementation and integration tests would disagree about accepted inputs."
+        },
+        "relatedChanges": [
+          {
+            "groupIndex": 2,
+            "operationIndex": 0,
+            "target": {
+              "entity": "requirement",
+              "id": "R8",
+              "field": "desc"
+            },
+            "gateFindingIdentities": [
+              {
+                "sourceArtifact": "steps/spec-gate/result.json",
+                "sourceStep": "spec-gate",
+                "sourceFindingId": "spec-gate:4",
+                "fingerprint": "9f14ff3e58f805264868b5af9b7a6b1c46bf1d0d067c365b9b86e37ee62b64b2"
+              }
+            ]
+          }
+        ],
+        "unresolvedBlocking": true
+      },
+      {
+        "identity": {
+          "sourceArtifact": "revisions/008/review.json",
+          "sourceStep": "spec-review",
+          "sourceFindingId": "spec-review-6cc796f8eff140060a342271a01dd629",
+          "fingerprint": "1a34296df756bd8c322324b65277893c4a6d1d15d22a15e04938ef97e3fd9464"
+        },
+        "finding": {
+          "allowedTargets": [
+            {
+              "operationKinds": [
+                "edit-text-field"
+              ],
+              "target": {
+                "entity": "requirement",
+                "field": "desc",
+                "id": "R8"
+              }
+            },
+            {
+              "operationKinds": [
+                "edit-text-field"
+              ],
+              "target": {
+                "entity": "requirement",
+                "field": "desc",
+                "id": "R2"
+              }
+            }
+          ],
+          "body": "**Target:** R8 get context path row; R2 path inventory\n**Issue:** get-context.js resolves the supplied path with path.resolve(root, filePath) and does not reject absolute paths or enforce a project-relative boundary. The spec describes the path as project-root-relative without recording the current absolute-path acceptance.\n**Required change:** Record that both absolute and root-relative paths are currently accepted, with get-context.js owning resolution and file errors, or explicitly scope a path-boundary behavior change.\n**Why blocking:** Tests cannot determine whether an absolute existing path should succeed or fail; enforcing the stated relative-only wording would change existing command behavior.",
+          "disposition": "apply",
+          "evidence": "R8 calls get context path project-root-relative, but the canonical review identifies get-context.js path.resolve(root, filePath) without an absolute-path rejection. Record accepted absolute and relative forms and the existing resolution/error owner.",
+          "findingId": "spec-review-6cc796f8eff140060a342271a01dd629",
+          "issue": "get-context.js resolves the supplied path with path.resolve(root, filePath) and does not reject absolute paths or enforce a project-relative boundary. The spec describes the path as project-root-relative without recording the current absolute-path acceptance.",
+          "kind": "blocking",
+          "requiredChange": "Record that both absolute and root-relative paths are currently accepted, with get-context.js owning resolution and file errors, or explicitly scope a path-boundary behavior change.",
+          "target": "R8 get context path row; R2 path inventory",
+          "title": "get context path support contradicts existing behavior",
+          "whyBlocking": "Tests cannot determine whether an absolute existing path should succeed or fail; enforcing the stated relative-only wording would change existing command behavior."
+        },
+        "relatedChanges": [
+          {
+            "groupIndex": 0,
+            "operationIndex": 1,
+            "target": {
+              "entity": "requirement",
+              "id": "R2",
+              "field": "desc"
+            },
+            "gateFindingIdentities": [
+              {
+                "sourceArtifact": "steps/spec-gate/result.json",
+                "sourceStep": "spec-gate",
+                "sourceFindingId": "spec-gate:1",
+                "fingerprint": "468c00face101e107725f9a5506a8f985add1a9f6f4e534ebe7a3d729f55f1e3"
+              },
+              {
+                "sourceArtifact": "steps/spec-gate/result.json",
+                "sourceStep": "spec-gate",
+                "sourceFindingId": "spec-gate:2",
+                "fingerprint": "88ec79a2a8be646bfc39e631f425425fbe2877e43b30ef8e4d770783dd3c5f57"
+              },
+              {
+                "sourceArtifact": "steps/spec-gate/result.json",
+                "sourceStep": "spec-gate",
+                "sourceFindingId": "spec-gate:3",
+                "fingerprint": "d5dd1dc4a71beea9a4fd7a97e28cb9765ef7f591c1591307b564c326db39170a"
+              }
+            ]
+          },
+          {
+            "groupIndex": 2,
+            "operationIndex": 0,
+            "target": {
+              "entity": "requirement",
+              "id": "R8",
+              "field": "desc"
+            },
+            "gateFindingIdentities": [
+              {
+                "sourceArtifact": "steps/spec-gate/result.json",
+                "sourceStep": "spec-gate",
+                "sourceFindingId": "spec-gate:4",
+                "fingerprint": "9f14ff3e58f805264868b5af9b7a6b1c46bf1d0d067c365b9b86e37ee62b64b2"
+              }
+            ]
+          }
+        ],
+        "unresolvedBlocking": true
+      },
+      {
+        "identity": {
+          "sourceArtifact": "revisions/008/review.json",
+          "sourceStep": "spec-review",
+          "sourceFindingId": "spec-review-ff4b72a37063f1191ada72aefe006397",
+          "fingerprint": "2f6ab2595e8bd3979337d91c43960d1d521526abeb31ca0ef5e21a71423c57bc"
+        },
+        "finding": {
+          "allowedTargets": [
+            {
+              "operationKinds": [
+                "edit-text-field"
+              ],
+              "target": {
+                "entity": "requirement",
+                "field": "desc",
+                "id": "R8"
+              }
+            },
+            {
+              "operationKinds": [
+                "edit-text-field"
+              ],
+              "target": {
+                "entity": "requirement",
+                "field": "desc",
+                "id": "R2"
+              }
+            }
+          ],
+          "body": "**Target:** R2/R8 run gate --spec contract\n**Issue:** RunGateCommand consumes ctx.spec only in the task-spec branch. For canonical draft/spec phases it reads the Flow-owned Spec record and ignores --spec; in task-spec it reads the exact resolved path and does not normalize a directory to spec.json.\n**Required change:** State the task-spec-only combination and current exact-file behavior, or explicitly define directory normalization and phase behavior as an intentional scope change.\n**Why blocking:** A test using a directory, or --spec during another gate phase, has no deterministic expected result and a generic path validator could alter target selection and gate behavior.",
+          "disposition": "apply",
+          "evidence": "R8 says run gate --spec accepts a Spec directory or spec.json path. The canonical review identifies task-spec-only consumption of ctx.spec as an exact file path and canonical draft/spec phases using the Flow-owned Spec record. Record that phase-dependent behavior instead of introducing directory normalization.",
+          "findingId": "spec-review-ff4b72a37063f1191ada72aefe006397",
+          "issue": "RunGateCommand consumes ctx.spec only in the task-spec branch. For canonical draft/spec phases it reads the Flow-owned Spec record and ignores --spec; in task-spec it reads the exact resolved path and does not normalize a directory to spec.json.",
+          "kind": "blocking",
+          "requiredChange": "State the task-spec-only combination and current exact-file behavior, or explicitly define directory normalization and phase behavior as an intentional scope change.",
+          "target": "R2/R8 run gate --spec contract",
+          "title": "run gate --spec lacks its existing phase and file semantics",
+          "whyBlocking": "A test using a directory, or --spec during another gate phase, has no deterministic expected result and a generic path validator could alter target selection and gate behavior."
+        },
+        "relatedChanges": [
+          {
+            "groupIndex": 0,
+            "operationIndex": 1,
+            "target": {
+              "entity": "requirement",
+              "id": "R2",
+              "field": "desc"
+            },
+            "gateFindingIdentities": [
+              {
+                "sourceArtifact": "steps/spec-gate/result.json",
+                "sourceStep": "spec-gate",
+                "sourceFindingId": "spec-gate:1",
+                "fingerprint": "468c00face101e107725f9a5506a8f985add1a9f6f4e534ebe7a3d729f55f1e3"
+              },
+              {
+                "sourceArtifact": "steps/spec-gate/result.json",
+                "sourceStep": "spec-gate",
+                "sourceFindingId": "spec-gate:2",
+                "fingerprint": "88ec79a2a8be646bfc39e631f425425fbe2877e43b30ef8e4d770783dd3c5f57"
+              },
+              {
+                "sourceArtifact": "steps/spec-gate/result.json",
+                "sourceStep": "spec-gate",
+                "sourceFindingId": "spec-gate:3",
+                "fingerprint": "d5dd1dc4a71beea9a4fd7a97e28cb9765ef7f591c1591307b564c326db39170a"
+              }
+            ]
+          },
+          {
+            "groupIndex": 2,
+            "operationIndex": 0,
+            "target": {
+              "entity": "requirement",
+              "id": "R8",
+              "field": "desc"
+            },
+            "gateFindingIdentities": [
+              {
+                "sourceArtifact": "steps/spec-gate/result.json",
+                "sourceStep": "spec-gate",
+                "sourceFindingId": "spec-gate:4",
+                "fingerprint": "9f14ff3e58f805264868b5af9b7a6b1c46bf1d0d067c365b9b86e37ee62b64b2"
+              }
+            ]
+          }
+        ],
+        "unresolvedBlocking": true
+      },
+      {
+        "identity": {
+          "sourceArtifact": "revisions/008/review.json",
+          "sourceStep": "spec-review",
+          "sourceFindingId": "spec-review-268ea71c02642daad5b276567ca8852b",
+          "fingerprint": "757d013063d70989c7fdf365c2dd6731f514a28bb977e8b5e0c0ec4effdc2a01"
+        },
+        "finding": {
+          "body": "**Target:** R9/T7 lifecycle acceptance\n**Issue:** dispatcher.js has distinct paths for thrown command errors, returned Envelope failures, post-hook failures, and entry.nonblockingPost. nonblockingPost is used by gate, review, retro, final-regression, and acceptance-review to record durable evidence, and its invocation is conditional on outbox state.\n**Required change:** Extend the lifecycle contract and tests to cover nonblockingPost ordering/skip conditions, Envelope-failure versus thrown-error handling, and existing failure ownership alongside pre/post/onError.\n**Why blocking:** A parser or registry refactor could preserve exit codes while dropping durable review evidence or changing hook invocation and Flow-state mutation, which the current acceptance criteria would not detect.",
+          "findingId": "spec-review-268ea71c02642daad5b276567ca8852b",
+          "issue": "dispatcher.js has distinct paths for thrown command errors, returned Envelope failures, post-hook failures, and entry.nonblockingPost. nonblockingPost is used by gate, review, retro, final-regression, and acceptance-review to record durable evidence, and its invocation is conditional on outbox state.",
+          "kind": "blocking",
+          "requiredChange": "Extend the lifecycle contract and tests to cover nonblockingPost ordering/skip conditions, Envelope-failure versus thrown-error handling, and existing failure ownership alongside pre/post/onError.",
+          "target": "R9/T7 lifecycle acceptance",
+          "title": "Lifecycle parity omits durable nonblockingPost and failure branches",
+          "whyBlocking": "A parser or registry refactor could preserve exit codes while dropping durable review evidence or changing hook invocation and Flow-state mutation, which the current acceptance criteria would not detect."
+        },
+        "relatedChanges": [],
+        "unresolvedBlocking": true
+      },
+      {
+        "identity": {
+          "sourceArtifact": "revisions/008/review.json",
+          "sourceStep": "spec-review",
+          "sourceFindingId": "spec-review-26a31af04a8c49ff5e7b2fb6c236fc54",
+          "fingerprint": "e2c10f3a47803bf29408e591bbf21bac4af8816a88a9d1da185f265a59a86a38"
+        },
+        "finding": {
+          "body": "**Target:** T2/T9 dispatcher integration boundary\n**Issue:** parseEntryInput is shared by flow, docs, check, metrics, and spec commands; non-flow entries also rely on passthroughArgs, optionalOptions, and _rawArgs. The scope and tests define only flow coverage while proposing changes to the shared dispatcher.\n**Required change:** Specify that the typed projection is flow-entry-only and require preservation tests for non-flow CommandDefinition entries, passthrough parsing, optional options, and raw argv forwarding.\n**Why blocking:** A global parser change can break existing non-flow commands without any flow matrix failure, violating the existing CLI compatibility contract.",
+          "findingId": "spec-review-26a31af04a8c49ff5e7b2fb6c236fc54",
+          "issue": "parseEntryInput is shared by flow, docs, check, metrics, and spec commands; non-flow entries also rely on passthroughArgs, optionalOptions, and _rawArgs. The scope and tests define only flow coverage while proposing changes to the shared dispatcher.",
+          "kind": "blocking",
+          "requiredChange": "Specify that the typed projection is flow-entry-only and require preservation tests for non-flow CommandDefinition entries, passthrough parsing, optional options, and raw argv forwarding.",
+          "target": "T2/T9 dispatcher integration boundary",
+          "title": "The shared dispatcher boundary does not cover non-flow consumers",
+          "whyBlocking": "A global parser change can break existing non-flow commands without any flow matrix failure, violating the existing CLI compatibility contract."
+        },
+        "relatedChanges": [],
+        "unresolvedBlocking": true
+      },
+      {
+        "identity": {
+          "sourceArtifact": "revisions/008/review.json",
+          "sourceStep": "spec-review",
+          "sourceFindingId": "spec-review-b95c42d37a8069de859816ab6da095cf",
+          "fingerprint": "51e89328c2dcf6069b98deac7fa3171bef5d3edb88a08723bdc81fb50277d540"
+        },
+        "finding": {
+          "allowedTargets": [
+            {
+              "operationKinds": [
+                "edit-text-field"
+              ],
+              "target": {
+                "entity": "requirement",
+                "field": "desc",
+                "id": "R1"
+              }
+            },
+            {
+              "operationKinds": [
+                "edit-text-field"
+              ],
+              "target": {
+                "entity": "requirement",
+                "field": "desc",
+                "id": "R2"
+              }
+            },
+            {
+              "operationKinds": [
+                "edit-text-field"
+              ],
+              "target": {
+                "entity": "task",
+                "field": "implementation_notes",
+                "id": "T-1"
+              }
+            }
+          ],
+          "body": "**Target:** R1/R2 normative inventory; first Acceptance Criterion\n**Issue:** The spec requires a concrete one-row-per-leaf table but provides only grouped prose and partial option lists. FLOW_COMMANDS.args contains option names without descriptions or placeholders, and several live help strings omit an Options section entirely.\n**Required change:** Add a concrete registry-derived 66-row inventory, excluding query, with the required arity, domain, conditional, path, owner, description, and test-boundary fields for every current leaf.\n**Why blocking:** Implementers and tests must otherwise invent descriptions, placeholders, conditional acceptance, and semantic owners for same-named options, so parser/help parity and deterministic failure fixtures cannot be established.",
+          "disposition": "apply",
+          "evidence": "R1 and R2 demand a concrete one-row-per-leaf inventory, but their current text contains grouped prose and no table; the canonical review identifies missing descriptions/placeholders in live args/help and a 66-leaf registry. This is a substantive missing artifact, so permit local text additions in the inventory-owning requirement/task fields.",
+          "findingId": "spec-review-b95c42d37a8069de859816ab6da095cf",
+          "issue": "The spec requires a concrete one-row-per-leaf table but provides only grouped prose and partial option lists. FLOW_COMMANDS.args contains option names without descriptions or placeholders, and several live help strings omit an Options section entirely.",
+          "kind": "blocking",
+          "requiredChange": "Add a concrete registry-derived 66-row inventory, excluding query, with the required arity, domain, conditional, path, owner, description, and test-boundary fields for every current leaf.",
+          "target": "R1/R2 normative inventory; first Acceptance Criterion",
+          "title": "The normative per-leaf contract table is absent",
+          "whyBlocking": "Implementers and tests must otherwise invent descriptions, placeholders, conditional acceptance, and semantic owners for same-named options, so parser/help parity and deterministic failure fixtures cannot be established."
+        },
+        "relatedChanges": [
+          {
+            "groupIndex": 0,
+            "operationIndex": 0,
+            "target": {
+              "entity": "requirement",
+              "id": "R1",
+              "field": "desc"
+            },
+            "gateFindingIdentities": [
+              {
+                "sourceArtifact": "steps/spec-gate/result.json",
+                "sourceStep": "spec-gate",
+                "sourceFindingId": "spec-gate:1",
+                "fingerprint": "468c00face101e107725f9a5506a8f985add1a9f6f4e534ebe7a3d729f55f1e3"
+              },
+              {
+                "sourceArtifact": "steps/spec-gate/result.json",
+                "sourceStep": "spec-gate",
+                "sourceFindingId": "spec-gate:2",
+                "fingerprint": "88ec79a2a8be646bfc39e631f425425fbe2877e43b30ef8e4d770783dd3c5f57"
+              },
+              {
+                "sourceArtifact": "steps/spec-gate/result.json",
+                "sourceStep": "spec-gate",
+                "sourceFindingId": "spec-gate:3",
+                "fingerprint": "d5dd1dc4a71beea9a4fd7a97e28cb9765ef7f591c1591307b564c326db39170a"
+              }
+            ]
+          },
+          {
+            "groupIndex": 0,
+            "operationIndex": 1,
+            "target": {
+              "entity": "requirement",
+              "id": "R2",
+              "field": "desc"
+            },
+            "gateFindingIdentities": [
+              {
+                "sourceArtifact": "steps/spec-gate/result.json",
+                "sourceStep": "spec-gate",
+                "sourceFindingId": "spec-gate:1",
+                "fingerprint": "468c00face101e107725f9a5506a8f985add1a9f6f4e534ebe7a3d729f55f1e3"
+              },
+              {
+                "sourceArtifact": "steps/spec-gate/result.json",
+                "sourceStep": "spec-gate",
+                "sourceFindingId": "spec-gate:2",
+                "fingerprint": "88ec79a2a8be646bfc39e631f425425fbe2877e43b30ef8e4d770783dd3c5f57"
+              },
+              {
+                "sourceArtifact": "steps/spec-gate/result.json",
+                "sourceStep": "spec-gate",
+                "sourceFindingId": "spec-gate:3",
+                "fingerprint": "d5dd1dc4a71beea9a4fd7a97e28cb9765ef7f591c1591307b564c326db39170a"
+              }
+            ]
+          }
+        ],
+        "unresolvedBlocking": true
+      },
+      {
+        "identity": {
+          "sourceArtifact": "revisions/008/review.json",
+          "sourceStep": "spec-review",
+          "sourceFindingId": "spec-review-05cd0e623935f96dc0b6ad9bc5810758",
+          "fingerprint": "024695e655d0b0b2c8fa37cb855272e84aef288fb89ab1b9d7e14d34cf127566"
+        },
+        "finding": {
+          "allowedTargets": [
+            {
+              "operationKinds": [
+                "edit-text-field"
+              ],
+              "target": {
+                "entity": "requirement",
+                "field": "desc",
+                "id": "R2"
+              }
+            },
+            {
+              "operationKinds": [
+                "edit-text-field"
+              ],
+              "target": {
+                "entity": "requirement",
+                "field": "desc",
+                "id": "R8"
+              }
+            }
+          ],
+          "body": "**Target:** R2/R8 set files limits\n**Issue:** CanonicalFileMapUpdate and FlowManager.updateFileMap enforce normalized non-empty repository-relative paths and active-attempt/requirement checks, but no explicit set-files count or aggregate-size limit is present. The query and snapshot limits are separate read-side contracts.\n**Required change:** Record set-files count and aggregate input limits as explicitly unbounded under the existing file-map/publication owners, or identify a verified existing limit and owner.\n**Why blocking:** Adding the claimed limits would introduce an arbitrary compatibility restriction; omitting them leaves over-limit behavior and its tests undefined.",
+          "disposition": "apply",
+          "evidence": "R2 asks for set-files count and aggregate limits and R8 delegates count/aggregate rules to FlowManager.updateFileMap. The canonical review identifies no explicit bound in CanonicalFileMapUpdate or FlowManager.updateFileMap; record explicit absence and those existing owners without importing query/read-side limits.",
+          "findingId": "spec-review-05cd0e623935f96dc0b6ad9bc5810758",
+          "issue": "CanonicalFileMapUpdate and FlowManager.updateFileMap enforce normalized non-empty repository-relative paths and active-attempt/requirement checks, but no explicit set-files count or aggregate-size limit is present. The query and snapshot limits are separate read-side contracts.",
+          "kind": "blocking",
+          "requiredChange": "Record set-files count and aggregate input limits as explicitly unbounded under the existing file-map/publication owners, or identify a verified existing limit and owner.",
+          "target": "R2/R8 set files limits",
+          "title": "set-files limits are attributed to an owner that has none",
+          "whyBlocking": "Adding the claimed limits would introduce an arbitrary compatibility restriction; omitting them leaves over-limit behavior and its tests undefined."
+        },
+        "relatedChanges": [
+          {
+            "groupIndex": 0,
+            "operationIndex": 1,
+            "target": {
+              "entity": "requirement",
+              "id": "R2",
+              "field": "desc"
+            },
+            "gateFindingIdentities": [
+              {
+                "sourceArtifact": "steps/spec-gate/result.json",
+                "sourceStep": "spec-gate",
+                "sourceFindingId": "spec-gate:1",
+                "fingerprint": "468c00face101e107725f9a5506a8f985add1a9f6f4e534ebe7a3d729f55f1e3"
+              },
+              {
+                "sourceArtifact": "steps/spec-gate/result.json",
+                "sourceStep": "spec-gate",
+                "sourceFindingId": "spec-gate:2",
+                "fingerprint": "88ec79a2a8be646bfc39e631f425425fbe2877e43b30ef8e4d770783dd3c5f57"
+              },
+              {
+                "sourceArtifact": "steps/spec-gate/result.json",
+                "sourceStep": "spec-gate",
+                "sourceFindingId": "spec-gate:3",
+                "fingerprint": "d5dd1dc4a71beea9a4fd7a97e28cb9765ef7f591c1591307b564c326db39170a"
+              }
+            ]
+          },
+          {
+            "groupIndex": 2,
+            "operationIndex": 0,
+            "target": {
+              "entity": "requirement",
+              "id": "R8",
+              "field": "desc"
+            },
+            "gateFindingIdentities": [
+              {
+                "sourceArtifact": "steps/spec-gate/result.json",
+                "sourceStep": "spec-gate",
+                "sourceFindingId": "spec-gate:4",
+                "fingerprint": "9f14ff3e58f805264868b5af9b7a6b1c46bf1d0d067c365b9b86e37ee62b64b2"
+              }
+            ]
+          }
+        ],
+        "unresolvedBlocking": true
+      }
+    ],
+    "reviewInputPreserved": false,
+    "unresolvedBlocking": true,
+    "requiresReview": true,
+    "reason": "unresolved-blocking-review"
+  }
+}

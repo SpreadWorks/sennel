@@ -1,0 +1,166 @@
+import { PromptExecutionLimit, PromptExecutionBudget, PromptResponseAllowance, PromptBatchingError } from "../../lib/prompt-batching.js";
+import { isDeepStrictEqual } from "node:util";
+import { DraftWorkerExecutionClaim } from "../definition.js";
+import { SpecGateRepairSavedCallPlan, specGateRepairResponseCost,
+  specGateRepairProgressMismatch as progressMismatch } from "./spec-gate-repair-call-plan.js";
+import { freezeSpecGateRepairValue } from "./spec-gate-repair-selection.js";
+import { WorkerArtifactHandoffError } from "./worker-artifact-handoff-error.js";
+import { SpecGateRepairSourceSnapshotReader } from "./spec-gate-repair-sources.js";
+import { specGateRepairInputFormatUnavailable, assertSpecGateRepairContextFormat } from "./worker-artifact-input-format.js";
+import { FLOW_ARTIFACT_CONTRACTS } from "../../lib/flow-artifact-contract.js";
+
+export const SPEC_GATE_REPAIR_PROGRESS_VERSION = 4;
+
+export const REPAIR_BUDGET_LIMIT = Object.freeze({ maxBatchCount: 16, maxProviderCallCount: 16,
+  maxSynthesisCallCount: 16, maxAggregateCharacters: 1_000_000, maxAggregateItemCount: 100_000 });
+
+/** One read boundary shares canonical observations; no cache survives the caller. */
+export class SpecGateRepairProgressReader {
+  #specId;
+  #attemptId;
+  #activities;
+  #entries = new Map();
+  #artifacts = new Map();
+  #sourceSnapshots = new Map();
+  #restoreErrors = new Map();
+
+  constructor({ flowManager, specId, attemptId, consumerNodeId }) {
+    this.#specId = specId;
+    this.#attemptId = attemptId;
+    if (!FLOW_ARTIFACT_CONTRACTS.require("spec.gate.repair.progress").ownership.consumers.includes(consumerNodeId)) {
+      throw new TypeError("Gate repair progress reader requires an authorized consumer");
+    }
+    flowManager.readCanonicalTransitionView({ specId, read: (view) => {
+      this.#activities = new Map(view.activities.map((activity) => [activity.id, activity.toJSON()]));
+      const sourceReader = new SpecGateRepairSourceSnapshotReader(view);
+      const sample = FLOW_ARTIFACT_CONTRACTS.resolve("spec.gate.repair.progress", {
+        attemptId, generation: "0", phase: "checkpoint",
+      }).relativePath;
+      const prefix = sample.slice(0, sample.lastIndexOf("/") + 1);
+      for (const descriptor of view.catalog.artifacts) {
+        if (descriptor.logicalKey !== "spec.gate.repair.progress" || !descriptor.relativePath.startsWith(prefix)) continue;
+        const artifact = { descriptor, bytes: view.readCatalogedArtifact(descriptor) };
+        this.#artifacts.set(descriptor.relativePath, artifact);
+        try {
+          const saved = JSON.parse(artifact.bytes.toString("utf8"));
+          if (saved.version === SPEC_GATE_REPAIR_PROGRESS_VERSION && saved.sourceSnapshotReference !== undefined) {
+            this.#sourceSnapshots.set(descriptor.relativePath, sourceReader.restore(saved.sourceSnapshotReference));
+          }
+        } catch (error) { this.#restoreErrors.set(descriptor.relativePath, error); }
+      }
+    } });
+  }
+
+  activities() { return [...this.#activities.values()]; }
+
+  read(generation, phase) {
+    const key = `${generation}:${phase}`;
+    if (this.#entries.has(key)) return this.#entries.get(key);
+    const attemptId = this.#attemptId;
+    const relativePath = FLOW_ARTIFACT_CONTRACTS.resolve("spec.gate.repair.progress", {
+      attemptId, generation: String(generation), phase,
+    }).relativePath;
+    const artifact = this.#artifacts.get(relativePath);
+    if (artifact === undefined) throw progressMismatch("Gate repair saved progress is absent from its canonical catalog");
+    try {
+      if (this.#restoreErrors.has(relativePath)) throw this.#restoreErrors.get(relativePath);
+      return this.#restore(artifact, generation, phase, key);
+    } catch (error) {
+      if (error instanceof WorkerArtifactHandoffError) throw error;
+      if (error instanceof TypeError || error instanceof RangeError || error instanceof SyntaxError
+        || error instanceof PromptBatchingError) {
+        throw progressMismatch("Gate repair saved progress contains an invalid serialized contract");
+      }
+      throw error;
+    }
+  }
+
+  #restore(artifact, generation, phase, key) {
+    const specId = this.#specId;
+    const attemptId = this.#attemptId;
+    const saved = JSON.parse(artifact.bytes.toString("utf8"));
+    if (saved.version !== SPEC_GATE_REPAIR_PROGRESS_VERSION || saved.sourceSnapshotReference === undefined
+      || !Array.isArray(saved.inputDescriptors)
+      || saved.inputDescriptors.some((input) => input.descriptor === undefined)) {
+      throw specGateRepairInputFormatUnavailable("Saved unfinished Gate repair has no current immutable input descriptor");
+    }
+    assertSpecGateRepairContextFormat(saved.context);
+    const sourceSnapshots = this.#sourceSnapshots.get(artifact.descriptor.relativePath);
+    const activity = this.#activities.get(artifact.descriptor.activityId);
+    const receipt = activity?.result?.draftSettlementReceipt;
+    const lifecycle = receipt?.executionLifecycle;
+    if (saved.phase !== phase || saved.specId !== specId
+      || saved.attemptId !== attemptId || saved.generation !== Number(generation)
+      || receipt?.binding?.runId !== saved.runId || receipt.binding.specId !== specId
+      || receipt.binding.stepId !== "spec-gate-repair" || receipt.binding.attemptId !== attemptId
+      || receipt.binding.attemptSequence !== saved.attemptSequence || lifecycle?.phase !== phase
+      || lifecycle.binding.executionGeneration !== saved.generation
+      || lifecycle.binding.inputDigest !== saved.inputDigest || lifecycle.binding.inputRevision !== saved.inputRevision
+      || typeof saved.actionFileDigest !== "string" || !/^[a-f0-9]{64}$/.test(saved.actionFileDigest)
+      || !Object.hasOwn(saved, "actionRepositoryFingerprint")
+      || saved.actionRepositoryFingerprint !== null
+        && (typeof saved.actionRepositoryFingerprint !== "string" || saved.actionRepositoryFingerprint.trim() === "")) {
+      throw progressMismatch("Gate repair progress differs from its exact canonical receipt");
+    }
+    if (saved.executionLocator === null || typeof saved.executionLocator !== "object"
+      || Object.keys(saved.executionLocator).sort().join(",") !== "actionDigest,dispatchInvocationId,generatedAt,kind,requestDigest") {
+      throw progressMismatch("Gate repair execution locator has an invalid shape");
+    }
+    const executionLocator = new DraftWorkerExecutionClaim(saved.executionLocator);
+    if (!isDeepStrictEqual(saved.executionLocator, executionLocator.toJSON())
+      || executionLocator.requestDigest !== saved.requestDigest
+      || (phase !== "checkpoint" && !isDeepStrictEqual(lifecycle.claim, executionLocator.toJSON()))) {
+      throw progressMismatch("Gate repair progress locator differs from its canonical claim");
+    }
+    const ceiling = new PromptExecutionLimit(REPAIR_BUDGET_LIMIT);
+    if (saved.limit === null || typeof saved.limit !== "object" || Array.isArray(saved.limit)
+      || Object.keys(saved.limit).sort().join(",") !== Object.keys(ceiling).sort().join(",")) {
+      throw progressMismatch("Gate repair progress execution limits have an invalid shape");
+    }
+    const limit = new PromptExecutionLimit(saved.limit);
+    if (Object.keys(ceiling).some((field) => typeof limit[field] !== "number" || limit[field] > ceiling[field])) {
+      throw progressMismatch("Gate repair progress relaxed its execution limits");
+    }
+    const callPlan = new SpecGateRepairSavedCallPlan({ plan: saved.plan, limit });
+    const call = callPlan.currentCall(saved);
+    if (phase === "checkpoint") {
+      const previous = saved.generation === 0 ? null
+        : this.read(saved.generation - 1, "publication");
+      if (previous !== null && Object.keys(ceiling).some((field) => limit[field] > previous.limit[field])) {
+        throw progressMismatch("Gate repair checkpoint expanded its durable execution limits");
+      }
+      const frontier = previous?.budget ?? new PromptExecutionBudget(limit);
+      if (!isDeepStrictEqual(frontier.snapshot(), saved.plan.budgetFrontier)) {
+        throw progressMismatch("Gate repair call plan changed its canonical budget frontier");
+      }
+    }
+    const expected = PromptExecutionBudget.fromSnapshot(limit, saved.plan.budgetFrontier);
+    expected.consumeAggregate(call.callCost);
+    if (call.synthesisCallCount > 0) expected.consumeSynthesisCalls(call.synthesisCallCount);
+    if (phase !== "checkpoint") expected.consumeProviderCall();
+    if (phase === "publication") {
+      const responseCost = PromptResponseAllowance.fromJSON(saved.responseCost);
+      if (!isDeepStrictEqual(responseCost.toJSON(), specGateRepairResponseCost(saved.context, saved.proposal).toJSON())
+        || responseCost.characters > call.responseAllowance.characters || responseCost.items > call.responseAllowance.items) {
+        throw progressMismatch("Gate repair publication exceeds its saved response allowance");
+      }
+      expected.consumeAggregate(responseCost);
+    }
+    const budget = PromptExecutionBudget.fromSnapshot(limit, saved.budget);
+    if (!isDeepStrictEqual(budget.snapshot(), expected.snapshot())) {
+      throw progressMismatch("Gate repair progress budget differs from its exact consumed costs");
+    }
+    if (phase !== "checkpoint") {
+      const previous = this.read(generation, phase === "claimed" ? "checkpoint" : "claimed");
+      const common = ["runId", "specId", "attemptId", "attemptSequence", "generation", "inputDigest", "inputRevision",
+        "requestDigest", "executionLocator", "actionFileDigest", "actionRepositoryFingerprint", "limit", "context", "sourceSnapshotReference", "inputDescriptors", "plan", "callCost", "responseAllowance", "physicalPromptFootprint", "deliveryMode"];
+      if (common.some((field) => !isDeepStrictEqual(saved[field], previous.document[field]))) {
+        throw progressMismatch("Gate repair progress changed an immutable checkpoint contract");
+      }
+    }
+    const result = Object.freeze({ document: freezeSpecGateRepairValue(saved), executionLocator,
+      sourceSnapshots, limit, budget, callPlan });
+    this.#entries.set(key, result);
+    return result;
+  }
+}

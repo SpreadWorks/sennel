@@ -1,0 +1,94 @@
+import { Envelope } from "../../lib/flow-envelope.js";
+import { FlowCommand } from "./base-command.js";
+import { CanonicalTestArtifactStore } from "./canonical-test-artifacts.js";
+import {
+  captureFinalRegressionChangedSnapshotDigest,
+  resolveCanonicalFinalRegressionTransition,
+} from "./final-regression-transition-facts.js";
+import { beginFinalRegressionRepairTransition } from "./final-regression-transition-application.js";
+import GetNextActionCommand from "./get-next-action.js";
+import {
+  resolveGateTransition,
+} from "../definition.js";
+import { readCurrentGateTransitionFacts } from "./gate-transition-facts.js";
+import { TaskStepIdentity } from "./task-step-identity.js";
+
+/**
+ * The only generic claim boundary for an ordinary Definition-selected worker
+ * action.  Queries project this command but never invoke it; direct callers
+ * re-read the Version Store here, before any worker or lifecycle hook can
+ * create an Activity.
+ */
+export default class RunClaimNextActionCommand extends FlowCommand {
+  constructor() {
+    super({ explicitTargetResolution: true });
+  }
+
+  async execute(ctx) {
+    try {
+      ctx.flowState = ctx.flowManager.loadReadOnly(ctx.specId);
+      const typed = ctx.flowManager.canonicalState(ctx.specId);
+      if (typed?.lifecycle.state !== "active") {
+        throw new Error("Definition does not select a claimable action for an inactive Flow");
+      }
+      const next = typed?.nextAction() ?? null;
+      const projection = await new GetNextActionCommand().execute(ctx);
+      const activeTaskStep = TaskStepIdentity.fromStateNode(ctx.flowState, typed?.current?.at(-1));
+      const gatePhase = typed?.current?.at(-1) === "impl-gate"
+        ? "integration"
+        : activeTaskStep?.definitionId === "task-gate" ? "task-impl" : null;
+      if (gatePhase !== null && projection?.directive?.actionId === "CLAIM_GATE_RETRY") {
+        const facts = readCurrentGateTransitionFacts({ flowManager: ctx.flowManager, flowState: ctx.flowState, phase: gatePhase });
+        if (facts === null) throw new Error("current Gate retry observation is unavailable");
+        const decision = resolveGateTransition(facts);
+        const claimed = ctx.flowManager.retryGateTransition({ specId: ctx.specId, decision });
+        return Envelope.ok("run", "claim-next-action", {
+          step: claimed.current?.at(-1) ?? null,
+          attemptId: claimed.attempt?.id ?? null,
+          attempt: claimed.attempt?.sequence ?? null,
+        });
+      }
+      if (typed?.current?.at(-1) === "final-regression" && typed.attempt?.failure !== null) {
+        if (projection?.directive?.actionId !== "FINAL_REGRESSION_REPAIR") {
+          throw new Error("Definition does not project a claimable final-regression repair");
+        }
+        const store = new CanonicalTestArtifactStore({ flowManager: ctx.flowManager, state: typed });
+        const decision = resolveCanonicalFinalRegressionTransition({
+          flowManager: ctx.flowManager,
+          specId: ctx.specId,
+          changedFileSnapshotDigest: () => captureFinalRegressionChangedSnapshotDigest({
+            root: ctx.executionRoot || ctx.root,
+            relativeSpecFile: store.location.relativeSpecFile,
+          }),
+        });
+        if (decision.disposition.operation !== "repair") {
+          throw new Error(`Definition does not select a claimable final-regression repair: ${decision.disposition.operation}`);
+        }
+        const claimed = beginFinalRegressionRepairTransition({
+          flowManager: ctx.flowManager,
+          specId: ctx.specId,
+          decision,
+        });
+        return Envelope.ok("run", "claim-next-action", {
+          step: claimed.current?.at(-1) ?? null,
+          attemptId: claimed.attempt?.id ?? null,
+          attempt: claimed.attempt?.sequence ?? null,
+        });
+      }
+      if (next === null || !["start", "recover", "retry"].includes(next.operation)) {
+        throw new Error("Definition does not select a claimable ordinary next action");
+      }
+      if (projection?.directive?.actionId !== "CLAIM_NEXT_ACTION") {
+        throw new Error("Definition does not project an ordinary claim command");
+      }
+      const claimed = ctx.flowManager.beginNextAction(ctx.specId);
+      return Envelope.ok("run", "claim-next-action", {
+        step: claimed.current?.at(-1) ?? null,
+        attemptId: claimed.attempt?.id ?? null,
+        attempt: claimed.attempt?.sequence ?? null,
+      });
+    } catch (error) {
+      return Envelope.fail("run", "claim-next-action", error.code || "NEXT_ACTION_CLAIM_NOT_ADMITTED", error.message);
+    }
+  }
+}

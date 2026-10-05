@@ -1,0 +1,448 @@
+{
+  "goal": "parser が受理する契約と公開ヘルプの契約を同じ Flow registry 定義から導出し、query を除く公開 Flow CLI の group help と leaf help を三つの非 query 入口で決定的かつ読みやすく一致させる。既存の実行、入力検証、target guard、runtime directory、lifecycle、side effect、diagnostic、exit code は保持する。",
+  "scope": {
+    "in": [
+      "Flow command-definition と registry metadata のうち、共有 parser/help 契約を権威的に表現する範囲。",
+      "query を除く公開 Flow leaf と group help。対象入口は `sennel flow <group> --help`、`sennel help flow <group>`、leaf なしの `sennel flow <group>` で、`resume`、`prepare`、`get`、`set`、`run`、`report show` を含む。",
+      "既存の parser、target guard、runtime directory、lifecycle、configuration、validator、rejection、exit-code、registry、integration、end-to-end test のうち、契約保持を証明するために必要な範囲。",
+      "restart baseline における 65 個の公開 non-query shared leaf の help/parser parity、group の direct-child projection、locale-independent な順序、summary 列の alignment、および query の独立した回帰検証。"
+    ],
+    "out": [
+      "query を shared Flow option、admission、help contract へ移行すること。query は独立した owner として保持する。",
+      "新しい universal input limit、option の rename/retype、retry/attempt policy、既存 validation または rejection side effect の変更。",
+      "Flow 以外の command semantics、無関係な documentation、破壊的な production operation、および agent-host 固有の lifecycle 機能。"
+    ]
+  },
+  "constraints": [
+    "Node.js 組み込み module のみを使用し、外部依存を追加しない。alpha policy に従い、旧 registry、旧 parser、旧 help の互換 shim は残さない。",
+    "既存の `FLOW_COMMANDS` と `CommandDefinition` の責務を再利用し、parallel command registry、second parser、呼び出し側の独自 option 判断を導入しない。",
+    "parser、target guard、path/identifier validator、domain-state validator、runtime/lifecycle handler が現在所有する判断をその owner に残し、新しい blanket admission layer に複製しない。",
+    "query と worker 内部の `flow run seal-handoff` は公開 65 leaf の shared contract から除外する。ただしそれらの既存 route、validation、output、side effect は変更せず、query は独立した回帰として扱う。",
+    "help の human-readable prose は `config.lang` に従い、この project では日本語とする。command name、option、path、schema field、module symbol などの technical identifier は原文を保持し、`keywords` だけ英語とする。",
+    "既存の command execution semantics、target selection、runtime/log directory precedence、cleanup、diagnostic、exit code、JSON envelope を保持する。",
+    "docs は source-generated である。変更された Flow help contract が生成 artifact の更新を必要とすると repository の established check/build が判断した場合だけ、所有 source と該当 output を限定して更新する。"
+  ],
+  "design_principles": [
+    "Single contract source: parser metadata と help projection は `FLOW_COMMANDS`、`CommandDefinition`、および既存 command metadata の registry-owned contract から同じ情報を利用する。",
+    "Deep module: 呼び出し側が help text の再解析、option の再列挙、group の再 sort をせず、registry と renderer が十分な契約を隠蔽する。",
+    "Deterministic projection: public group の direct child set は明示された registry tree から得て、registration order や locale に依存しない command name の昇順で表示する。",
+    "Validation ownership: help parity を追加しても入力の parse、target guard、domain validation、lifecycle、side effect の決定権を移動しない。",
+    "Behavior-first verification: metadata の単体判断、renderer の境界、CLI の接続、実行と拒否の end-to-end を、それぞれ固有の契約に対応付ける。"
+  ],
+  "overview": {
+    "modules": [
+      {
+        "text": "`src/flow/registry.js` の `FLOW_COMMANDS` は Flow leaf ごとの `args`、help、target guard、requiresFlow、runtime/lifecycle metadata、hook を保持する。ここを parser/help 契約の canonical owner とする。"
+      },
+      {
+        "text": "`src/lib/command-registry.js` の `CommandDefinition` は Flow registry を executable dispatch と import-safe metadata tree に変換し、leaf metadata と public group projection の共有境界を提供する。"
+      },
+      {
+        "text": "`src/flow.js` は query を先に独立 dispatch し、通常の Flow では registry の `CommandDefinition` を使って top-level、group、leaf なし help と command routing を行う。"
+      },
+      {
+        "text": "`src/help.js` は同じ metadata tree を `HelpModel` として解決し、`sennel help flow <group>` を renderer へ渡す。flow help と同じ child set、summary、order を共有する。"
+      },
+      {
+        "text": "`src/lib/dispatcher.js` と `src/lib/cli.js` は positional/rest、flag、required option、optional option、implicit `-h`/`--help`、unknown/missing value を処理する。command modules と既存 validators は domain-specific input を処理する。"
+      },
+      {
+        "text": "`src/flow/lib/flow-context.js`、`src/flow/lib/base-command.js`、`src/lib/flow-target-guard.js` は target resolution と mismatch を所有し、dispatcher と registry metadata は runtime log、work/log directory、lifecycle hook の既存接続を保持する。"
+      }
+    ],
+    "data_flow": [
+      {
+        "text": "`FLOW_COMMANDS` の leaf contract が `CommandDefinition` と dispatcher に渡り、同じ accepted option/value kind/alias/placeholder/help description が parse と leaf help の両方へ投影される。"
+      },
+      {
+        "text": "group help は public direct-child projection を一度解決し、`sennel flow <group> --help`、`sennel help flow <group>`、leaf なし `sennel flow <group>` の三入口が同じ rows を deterministic renderer に渡す。"
+      },
+      {
+        "text": "実行時は既存の target resolution と guard が command-owned validation より先に動き、成功時の runtime directory、lifecycle、cleanup、side effect、失敗時の diagnostic と exit code は従来の owner が決める。"
+      },
+      {
+        "text": "`flow query` は `bootstrapFlowQueryCli` と `query-contract` の独立経路を通り、stdin、request-file、help、error の回帰は shared Flow help contract の判定から分離する。"
+      },
+      {
+        "text": "検証は registry/definition metadata、renderer boundary、CLI integration、実行 wiring の end-to-end、query contract の各層で所有境界を保ったまま行う。"
+      }
+    ],
+    "decisions": [
+      {
+        "text": "[VERIFY] `FLOW_COMMANDS` と `CommandDefinition` が dispatch と help metadata tree の既存共有境界であることを確認した。",
+        "evidence": "`src/flow/registry.js` は `args`、help、target metadata、hook を定義し、`src/lib/command-registry.js` の `flowDefinition()` がそれを `CommandDefinition` と `CommandHelpMetadata` に変換する。"
+      },
+      {
+        "text": "[VERIFY] 三つの non-query group help 入口と query の独立入口が source に存在することを確認した。",
+        "evidence": "`src/flow.js` は query を先に dispatch し、group または leaf なしでは `renderHelp()` を呼ぶ。`src/help.js` は同じ core metadata registry から `flow` の help tree を構築する。"
+      },
+      {
+        "text": "[VERIFY] parser の共通 owner と target guard の実行順を確認した。",
+        "evidence": "`src/lib/dispatcher.js` の `parseEntryInput()` は `src/lib/cli.js` の parser を利用し、target resolution/mismatch を command module load と command-owned validation より前に処理する。"
+      },
+      {
+        "text": "[VERIFY] 現在の source inventory は Flow tree の構造上 67 leaf を持つが、query と `internal: true` の `flow run seal-handoff` を除く公開 shared leaf は 65 である。",
+        "evidence": "`coreCommandRegistry` の leaf traversal で `flow query`、`flow run seal-handoff` を含む 67 route を確認し、`src/flow/registry.js` は `seal-handoff` を `internal: true` として定義している。"
+      },
+      {
+        "text": "[VERIFY] 現在の group renderer は registration order と固定幅に依存するため、決定的な shared projection が必要である。",
+        "evidence": "`CommandDefinition.renderHelp()` は `subcommands.values()` をそのまま反復し、summary 列を固定 `padEnd(14)` で整形する。`flowDefinition()` の leaf options は help text から再抽出される。"
+      },
+      {
+        "text": "[CORRECTION] help metadata の単純な text 再抽出だけでは parser parity を保証できないため、accepted option/value contract を registry-owned metadata として parser と renderer が共有する形に限定する。",
+        "evidence": "`src/lib/command-registry.js` の `flowOptions()` は `Options:` 行を help text から抽出する一方、parser は `entry.args` を `src/lib/dispatcher.js` 経由で利用する。二つの宣言が一致する共有境界が必要である。"
+      },
+      {
+        "text": "query、stdin、request-file、error は shared Flow help migration の対象外として別回帰にする。",
+        "evidence": "`src/flow.js` は query を通常の container/Flow dispatch より前に分岐し、`src/flow/query-contract.js` が query 固有の request/response schema を所有する。"
+      }
+    ]
+  },
+  "background": "Flow CLI は parser の accepted options と help renderer の表示内容が別の authority に分かれている。現在の source では `FLOW_COMMANDS` が args と help を保持し、`CommandDefinition` が command tree を作る一方、group help は registration order と固定幅に依存し、leaf options は help text の再抽出で補っている。そのため parser が受け付ける flag、required/optional value、alias、placeholder、implicit help、description が leaf help から漏れたり、group help が rejected option を広告したり、三つの public entry path の rows/order/alignment が一致しなかったりする。既存 command の validation と execution semantics を移動せず、registry-owned contract から deterministic projection を作ることが必要である。",
+  "requirements": [
+    {
+      "id": "R1",
+      "priority": "must",
+      "desc": "`FLOW_COMMANDS` と `CommandDefinition` を canonical owner として、query と internal `flow run seal-handoff` を除く 65 個の公開 shared leaf ごとに、positional/rest arity、boolean flag、required-value option、optional-value option、alias、placeholder、implicit `-h`/`--help`、summary/description、target guard、requiresFlow、runtime metadata を一つの registry-owned contract として表現すること。dispatcher の parser と leaf help は同じ contract から生成し、parser が受理する option/value kind/alias/placeholder/description を leaf help から欠落させず、parser が拒否する option を help に表示してはならない。",
+      "testable": true,
+      "preimplementation_test_expectation": "fail",
+      "task_ids": [
+        "T-1",
+        "T-4"
+      ]
+    },
+    {
+      "id": "R2",
+      "priority": "must",
+      "desc": "public group projection は registry tree の direct child だけを表示し、`get` は `artifact`、`check`、`context`、`guardrail`、`issue`、`next-action`、`prompt`、`qa-count`、`resolve-context`、`runtime-log`、`status`、`set` は `acceptance-decision`、`approval`、`auto`、`broad`、`draft-answer`、`files`、`init`、`issue`、`issue-log`、`metric`、`nonblocking-decision`、`note`、`policy`、`request`、`retry`、`review-evidence`、`step`、`run` は internal entry を除く公開 child を投影すること。各 row は command name の locale-independent ascending order とし、summary を command name の後ろに少なくとも二つの ASCII space で置き、最長 name に基づく同一 summary column に揃えること。registration order、locale sort、leaf 固有の追加 child を使用してはならない。",
+      "testable": true,
+      "preimplementation_test_expectation": "fail",
+      "task_ids": [
+        "T-2",
+        "T-4"
+      ]
+    },
+    {
+      "id": "R3",
+      "priority": "must",
+      "desc": "`sennel flow <group> --help`、`sennel help flow <group>`、leaf なしの `sennel flow <group>` は、各 group の同じ direct-child set、同じ summary text、同じ ascending order、同じ二つ以上の ASCII space separator、同じ summary-column alignment を返すこと。leaf help も三入口で registry-owned description と parser-accepted option contract を一致させ、query の help はこの projection へ混在させないこと。",
+      "testable": true,
+      "preimplementation_test_expectation": "fail",
+      "task_ids": [
+        "T-2",
+        "T-4",
+        "T-6"
+      ]
+    },
+    {
+      "id": "R4",
+      "priority": "must",
+      "desc": "既存の入力・検証・target・path・identifier・state-dependent contract を保持すること。positional/rest の不足・超過と unknown option、required value の不足/形式不正、optional value の不正は `src/lib/dispatcher.js` と `src/lib/cli.js` の parser owner が従来順序で拒否し、target mismatch は `src/flow/lib/flow-context.js`、`src/flow/lib/base-command.js`、`src/lib/flow-target-guard.js` が拒否し、path/identifier/domain-state validation は各既存 command/validator が拒否する。help contract の共通化はこの順序、diagnostic、JSON envelope、exit code、runtime directory、work/log precedence、lifecycle、cleanup、side effect を変更してはならない。",
+      "testable": true,
+      "preimplementation_test_expectation": "pass",
+      "task_ids": [
+        "T-3",
+        "T-5"
+      ]
+    },
+    {
+      "id": "R5",
+      "priority": "must",
+      "desc": "65 個の公開 shared leaf を対象に、各 leaf の通常有効入力を少なくとも一つ実行し、適用可能な missing positional、extra positional/rest、missing or malformed required value、invalid optional value、unknown option、target mismatch、invalid path/identifier、state-dependent rejection を既存 owner 経由で検証すること。各 case は既存の diagnostic、guard、runtime-directory、side-effect、lifecycle、cleanup、exit-code の結果を assert し、入力を事前に構築した最終 artifact や command-owned validation の mock で置換してはならない。",
+      "testable": true,
+      "preimplementation_test_expectation": "pass",
+      "task_ids": [
+        "T-3",
+        "T-5"
+      ]
+    },
+    {
+      "id": "R6",
+      "priority": "must",
+      "desc": "metadata/registry test は全 leaf の parser/help parity と direct-child projection を検証し、renderer boundary test は synthetic な長い command name、locale-independent ordering、二つの ASCII space、summary alignment を検証し、CLI integration は三つの non-query group-help route と 65 leaf を実際の CLI wiring で検証すること。test topology は一つの層へ同じ matrix を複製せず、各層固有の接続と所有境界だけを検証すること。",
+      "testable": true,
+      "preimplementation_test_expectation": "fail",
+      "task_ids": [
+        "T-4"
+      ]
+    },
+    {
+      "id": "R7",
+      "priority": "must",
+      "desc": "query の `help`、stdin input、`--request-file`、valid response、invalid request、error/exit behavior は `src/flow/query.js` と `src/flow/query-contract.js` の独立 owner として回帰検証し、shared option/help migration の結果から影響を受けないこと。Flow の通常 command に対する変更でも query の request/response schema、read-only behavior、canonical error path、runtime behavior を変更してはならない。",
+      "testable": true,
+      "preimplementation_test_expectation": "pass",
+      "task_ids": [
+        "T-6"
+      ]
+    },
+    {
+      "id": "R8",
+      "priority": "must",
+      "desc": "対象を registry、command definition、parser、target guard、runtime-directory/work-log precedence、lifecycle/cleanup、configuration、help renderer、generated docs、registry/integration/end-to-end tests に owner-map し、各項目について preserved、shared help projection only、または excluded のいずれかを spec-local evidence に残すこと。inventory に含まれない command、API、hook、configuration、artifact、side effect は unrelated behavior と定義し、移動・変更してはならない。",
+      "testable": true,
+      "preimplementation_test_expectation": "fail",
+      "task_ids": [
+        "T-1",
+        "T-3",
+        "T-4",
+        "T-5",
+        "T-6"
+      ]
+    },
+    {
+      "id": "R9",
+      "priority": "should",
+      "desc": "source が権威であり generated docs と矛盾した場合は source を正とする。Flow help contract の変更により repository の freshness/build/test contract が生成 output の更新を必要とした場合だけ、該当する owning source と generated artifact を限定して更新し、無関係な docs や behavior は変更しないこと。",
+      "testable": false,
+      "task_ids": [
+        "T-7"
+      ]
+    }
+  ],
+  "acceptance_criteria": [
+    "65 個の公開 non-query shared leaf が registry-owned contract に列挙され、各 leaf の parser accepted options、required/optional value kind、alias、placeholder、implicit help、description が leaf help と一致する。",
+    "`get`、`set`、`run` の public direct-child projection が internal entry を除いて正確に一致し、三つの non-query group-help 入口が同じ child set と summary text を返す。",
+    "group rows は locale に依存しない command name 昇順で並び、name と summary の間に二つ以上の ASCII space があり、summary column が全 row で揃う。",
+    "synthetic な長い name の renderer boundary test が通り、固定幅 truncation や registration order 依存を示さない。",
+    "65 leaf の各 retained public route に少なくとも一つの valid invocation と適用可能な rejected invocation があり、既存 diagnostic、guard、runtime directory、side effect、exit code が維持される。",
+    "query の help、stdin、request-file、valid response、invalid request、error が shared migration と独立した回帰として通る。",
+    "`FLOW_COMMANDS`/`CommandDefinition`、dispatcher/parser、target guard、validators、runtime/lifecycle、configuration、renderer、generated docs、test surface の owner-map と unrelated behavior の境界が spec-local evidence に残る。",
+    "生成 docs は freshness/build/test の所有契約が要求した場合だけ変更され、要求がなければ既存 output を変更しない。"
+  ],
+  "clarifications": [
+    {
+      "q": "65 個の leaf の数え方は何か？",
+      "a": "source registry の構造上の 67 leaf から、独立 owner の `flow query` と `internal: true` の worker route `flow run seal-handoff` を除いた 65 個を公開 shared leaf とする。`seal-handoff` 自体の既存契約は保持する。"
+    },
+    {
+      "q": "group の registration order や metadata 上の表示順を残すか？",
+      "a": "初期契約では表示順 metadata を導入せず、常に locale-independent な command name 昇順を使用する。将来 display-order metadata を導入する場合も registry-owned とし、未指定時の sort 契約を上書きするには完全で明示的な順序を必要とする。"
+    },
+    {
+      "q": "parser と help の option declaration を別々に保つか？",
+      "a": "保たない。`args` と help projection が同じ registry-owned contract を共有し、help text の再解析や呼び出し側の option 再列挙を canonical source にしない。"
+    },
+    {
+      "q": "query を shared contract に含めるか？",
+      "a": "含めない。`src/flow.js` の先行分岐と `query-contract` の request/response owner を維持し、query の help、stdin、request-file、error は独立 regression とする。"
+    }
+  ],
+  "alternatives_considered": [
+    {
+      "option": "parser 用 registry と help 用 registry を別々に維持する",
+      "reason": "却下。今回の問題である accepted option の欠落、rejected option の広告、description/order の drift を再生産するため。既存 `FLOW_COMMANDS`、`CommandDefinition` の共有境界を拡張する。"
+    },
+    {
+      "option": "help text を再解析して parser args を推測し続ける",
+      "reason": "却下。`flowOptions()` と `entry.args` が異なる authority になるため、required/optional value、alias、placeholder、implicit help の parity を証明できない。"
+    },
+    {
+      "option": "subcommand の registration order または locale sort を表示順に使う",
+      "reason": "却下。import/登録順や locale によって public output が変わり、三入口の deterministic order と境界テストを保証できない。"
+    },
+    {
+      "option": "query も shared Flow parser/help contract に移行する",
+      "reason": "却下。query は `bootstrapFlowQueryCli` と `query-contract` が独立した request/response、stdin、read-only、error semantics を所有しており、今回の help concern の範囲外である。"
+    },
+    {
+      "option": "すべての input/domain validation を新しい universal admission layer に移す",
+      "reason": "却下。既存 owner の validation order、diagnostic、guard、state-dependent behavior、side effect を変える危険があり、project rules の責務境界に反する。"
+    }
+  ],
+  "open_questions": [],
+  "keywords": [
+    "FLOW_COMMANDS",
+    "CommandDefinition",
+    "parseEntryInput",
+    "parseArgs",
+    "targetGuard",
+    "group help",
+    "help renderer",
+    "query contract",
+    "runtime log",
+    "deterministic ordering",
+    "Flow CLI",
+    "direct-child projection"
+  ],
+  "implementationTargets": [
+    "sennel flow resume",
+    "sennel flow prepare",
+    "sennel flow get status",
+    "sennel flow get resolve-context",
+    "sennel flow get check",
+    "sennel flow get prompt",
+    "sennel flow get artifact",
+    "sennel flow get qa-count",
+    "sennel flow get guardrail",
+    "sennel flow get issue",
+    "sennel flow get next-action",
+    "sennel flow get context",
+    "sennel flow get runtime-log",
+    "sennel flow set step",
+    "sennel flow set request",
+    "sennel flow set issue",
+    "sennel flow set note",
+    "sennel flow set draft-answer",
+    "sennel flow set files",
+    "sennel flow set review-evidence",
+    "sennel flow set broad",
+    "sennel flow set policy",
+    "sennel flow set nonblocking-decision",
+    "sennel flow set metric",
+    "sennel flow set approval",
+    "sennel flow set issue-log",
+    "sennel flow set init",
+    "sennel flow set retry",
+    "sennel flow set acceptance-decision",
+    "sennel flow set auto",
+    "sennel flow run dispatch",
+    "sennel flow run recover-review-pass",
+    "sennel flow run gate",
+    "sennel flow run review",
+    "sennel flow run auto-check",
+    "sennel flow run finalize-commit",
+    "sennel flow run finalize-merge",
+    "sennel flow run finalize-sync",
+    "sennel flow run finalize-cleanup",
+    "sennel flow run abort",
+    "sennel flow run sync",
+    "sennel flow run reopen-draft",
+    "sennel flow run repair-plan-gate",
+    "sennel flow run settle-failure",
+    "sennel flow run settle-review-transition",
+    "sennel flow run recover-missing-producer-artifact",
+    "sennel flow run recover-draft-execution",
+    "sennel flow run reconcile-task-review",
+    "sennel flow run filter-task-review",
+    "sennel flow run recover-finalization",
+    "sennel flow run recover-task-execution-overrun",
+    "sennel flow run claim-next-action",
+    "sennel flow run settle-gate-transition",
+    "sennel flow run start-task",
+    "sennel flow run complete-task",
+    "sennel flow run update-overview",
+    "sennel flow run lint",
+    "sennel flow run test-execute",
+    "sennel flow run requirement-test-gate",
+    "sennel flow run test-result-review",
+    "sennel flow run retro",
+    "sennel flow run final-regression",
+    "sennel flow run acceptance-review",
+    "sennel flow run report",
+    "sennel flow report show"
+  ],
+  "tasks": [
+    {
+      "id": "T-1",
+      "title": "Centralize Flow command contracts",
+      "goal": "65 個の公開 shared leaf の parser と leaf help が同じ registry-owned metadata を使う契約を定義する。query と internal worker route は独立 owner のまま扱う。",
+      "acceptance": [
+        "`FLOW_COMMANDS` と `CommandDefinition` が leaf の positional/rest、flag、required/optional option、alias、placeholder、implicit help、description を canonical contract として公開する。",
+        "dispatcher が使う accepted input contract と leaf help の表示が同じ metadata projection から得られ、help text の再解析を canonical source としない。",
+        "65 個の `implementationTargets` が registry metadata と一致し、query と `flow run seal-handoff` が shared public leaf contract から除外される。"
+      ],
+      "implementation_notes": "`src/flow/registry.js`、`src/lib/command-registry.js`、`src/lib/dispatcher.js`、`src/lib/cli.js` の既存責務を比較して拡張する。parallel registry、second parser、agent-host 固有 lifecycle は導入しない。",
+      "test_strategy": "registry/definition の unit test と代表的な dispatcher boundary test で metadata parity、value kind、alias、placeholder、implicit help、query/internal exclusion を検証する。",
+      "parent": null,
+      "origin": "plan",
+      "added_round": 0,
+      "status": "pending"
+    },
+    {
+      "id": "T-2",
+      "title": "Unify group help projection",
+      "goal": "`get`、`set`、`run` の public direct-child projection と deterministic row renderer を共有し、三つの group-help 入口の表示契約を一致させる。",
+      "acceptance": [
+        "public projection は `get`、`set`、`run` の直接の child だけを返し、`internal: true` の entry を公開 rows に含めない。",
+        "rows は locale-independent な command name 昇順で並び、summary の前に二つ以上の ASCII space を置き、最長 name に基づく summary column に揃う。",
+        "`sennel flow <group> --help`、`sennel help flow <group>`、leaf なしの `sennel flow <group>` が同じ projection、summary、order、alignment を使う。"
+      ],
+      "implementation_notes": "`CommandDefinition.renderHelp()`、`HelpModel`、`flow.js` の no-leaf route を既存 metadata tree に接続する。registration order、locale sort、固定 `padEnd(14)` に依存する projection を残さない。",
+      "test_strategy": "renderer boundary test で synthetic な長い command name、同名 prefix、empty/long summary、ASCII separator、order、alignment を検証し、入口ごとの snapshot-equivalent rows を CLI integration で確認する。",
+      "parent": null,
+      "origin": "plan",
+      "added_round": 0,
+      "status": "pending"
+    },
+    {
+      "id": "T-3",
+      "title": "Preserve validation ownership",
+      "goal": "shared help contract の変更を既存 parser、target guard、path/identifier validator、state validator、runtime/lifecycle owner の境界内に限定し、通常実行と拒否の semantics を維持する。",
+      "acceptance": [
+        "positional/rest、unknown option、required/optional value の parse error は `src/lib/dispatcher.js` と `src/lib/cli.js` の既存 order、diagnostic、exit behavior を維持する。",
+        "target mismatch、invalid path/identifier、state-dependent rejection は `flow-context.js`、`base-command.js`、`flow-target-guard.js`、各 command/validator の owner を越えて再実装しない。",
+        "runtime directory、work/log precedence、lifecycle、cleanup、JSON envelope、side effect は help projection から独立し、既存 registry/dispatcher/command owner の behavior を維持する。"
+      ],
+      "implementation_notes": "help metadata を validation の代替にしない。parser contract の不足は既存責務内で補い、command-specific domain decision を新しい共通 admission layer に移動しない。",
+      "test_strategy": "valid invocation と applicable rejection category を既存 owner の実 wiring で実行し、diagnostic、guard、runtime directory、side effect、lifecycle、cleanup、exit code を outcome から逆算して検証する。",
+      "parent": null,
+      "origin": "plan",
+      "added_round": 0,
+      "status": "pending"
+    },
+    {
+      "id": "T-4",
+      "title": "Verify parser help parity",
+      "goal": "65 個の公開 shared leaf と三つの non-query group-help route を、実際の registry、dispatcher、help renderer の接続を通して検証する。",
+      "acceptance": [
+        "各 retained leaf について parser accepted option/value kind/alias/placeholder/implicit help/description と leaf help の一致を検証する。",
+        "各 group について direct-child set、summary、ascending order、二つ以上の ASCII space、summary alignment を三入口で一致比較する。",
+        "registry unit、renderer boundary、CLI integration の各 test が重複した全 matrix を持たず、各層固有の契約を検証する。"
+      ],
+      "implementation_notes": "public 65 leaf は `implementationTargets` の固定 inventory を使う。synthetic renderer fixture は production registry に混入させず、locale-independent ordering の境界だけを表現する。",
+      "test_strategy": "registry/definition test、renderer boundary test、CLI integration を接続し、三つの group-help entry path と全 65 leaf の help/parser parity を検証する。",
+      "parent": null,
+      "origin": "plan",
+      "added_round": 0,
+      "status": "pending"
+    },
+    {
+      "id": "T-5",
+      "title": "Verify preserved Flow execution",
+      "goal": "help contract の変更後も、各 retained leaf の正常実行と適用可能な拒否が従来の validation、guard、runtime、lifecycle、side effect、exit contract を保つことを end-to-end で証明する。",
+      "acceptance": [
+        "各 retained public leaf に少なくとも一つの normal valid invocation があり、command-owned output、runtime directory、lifecycle、cleanup、exit code を検証する。",
+        "missing positional、extra positional/rest、missing or malformed required value、invalid optional value、unknown option、target mismatch、invalid path/identifier、state-dependent rejection を適用可能な leaf で検証する。",
+        "失敗時に canonical state、guard、runtime directory、side effect、diagnostic、exit code が不正に変化しないことを確認する。"
+      ],
+      "implementation_notes": "テストを通すために既存 test の期待値や証跡を弱めない。internal `seal-handoff` の worker contract は別 owner として保持し、public leaf count に混ぜない。",
+      "test_strategy": "既存の unit/integration decision test を再利用し、接続と永続化境界だけを scenario/e2e で追加する。Flow state、runtime/log root、side effect の readback を確認する。",
+      "parent": null,
+      "origin": "plan",
+      "added_round": 0,
+      "status": "pending"
+    },
+    {
+      "id": "T-6",
+      "title": "Retain query isolation",
+      "goal": "query の独立した help、stdin、request-file、valid/error contract を保持し、通常 Flow の shared help projection の変更で query behavior が変わらないことを回帰検証する。",
+      "acceptance": [
+        "`sennel flow query --help` と query の invalid/valid request が `query-contract` の既存 schema、diagnostic、exit behavior を保持する。",
+        "stdin と `--request-file` の read-only input path、canonical response、error path が通常 Flow group help の metadata projection から独立している。",
+        "query regression は shared Flow leaf matrix とは別の test surface として記録される。"
+      ],
+      "implementation_notes": "`src/flow.js` の query 先行分岐、`src/flow/query.js`、`src/flow/query-contract.js` の owner 境界を維持する。",
+      "test_strategy": "既存 query integration tests を再利用し、help、stdin、request-file、invalid request、error/exit の独立回帰を実行する。",
+      "parent": null,
+      "origin": "plan",
+      "added_round": 0,
+      "status": "pending"
+    },
+    {
+      "id": "T-7",
+      "title": "Reconcile owned documentation",
+      "goal": "Flow help contract の変更が generated docs を必要とする場合に限り、repository の freshness/build contract に従って owning source と output を限定的に同期する。",
+      "acceptance": [
+        "source と generated docs の不一致は source を正として判定し、help contract の所有 output だけを対象にする。",
+        "freshness/build/test が更新を要求しない場合、無関係な docs、generated artifact、project behavior を変更しない。"
+      ],
+      "implementation_notes": "docs の手動自由記述や無関係な再生成を行わない。生成が必要と判定された場合だけ established build command と owning source の関係を記録する。",
+      "test_strategy": "docs freshness/build の結果と変更 output の ownership を確認する。help contract と無関係な docs 差分がないことを検証する。",
+      "parent": null,
+      "origin": "plan",
+      "added_round": 0,
+      "status": "pending"
+    }
+  ]
+}

@@ -1,0 +1,628 @@
+{
+  "audit": [
+    {
+      "acceptedOperations": [],
+      "appliedFindings": [],
+      "discardedOperations": [],
+      "inputDigest": "baaeb8488857384d052c8c5c9ea8e6634ab446f05a8aab3311dfe0b9880b0d9b",
+      "operationDigest": "790e561a26120cd5aba8824e99283158498cb669998f0f509e9b6e3ad4013369",
+      "outcome": "replaced",
+      "relation": "revision-scoped-canonical-review",
+      "stage": "spec-review"
+    },
+    {
+      "acceptedOperations": [],
+      "appliedFindings": [],
+      "discardedOperations": [],
+      "inputDigest": "5221dfbe5de4739e9035f5d12f572a59ee111466ee2aecc4b6f31a762af33519",
+      "operationDigest": "790e561a26120cd5aba8824e99283158498cb669998f0f509e9b6e3ad4013369",
+      "outcome": "merged",
+      "relation": "revision-scoped-canonical-review",
+      "stage": "spec-triage"
+    },
+    {
+      "acceptedOperations": [
+        {
+          "edits": [
+            {
+              "endByte": 268,
+              "replacement": "--agent-work-dir <path> と --agent-work-dir=<path>、invocation/config/default の precedence、config.logs.dir と fallback、runtime initialization、ログ書込み、finalize-cleanup の main repository durable root を既存 policy のまま維持すること。 両形式は initContainer() 前の pre-scan で同じ agentWorkDir 値に正規化し、同じ resolver に渡すこと。",
+              "startByte": 0
+            }
+          ],
+          "expectedDigest": "3092948ce4d9ed402ec91b3351d47948a4caf8ee95de3ff49020e2bfa0ba7ce6",
+          "findingIds": [
+            "spec-review-97290fe883b7cf25c693d2deaa073a1f"
+          ],
+          "kind": "edit-text-field",
+          "reason": "equals 形式を初期化前に separated 形式と同じ runtime path に正規化する契約を明記する。",
+          "target": {
+            "entity": "requirement",
+            "field": "desc",
+            "id": "R8"
+          }
+        },
+        {
+          "edits": [
+            {
+              "endByte": 223,
+              "replacement": "src/sennel.js の pre-scan、src/lib/config.js の resolveWorkDir、src/lib/container.js の buildPaths、runtime-log、finalize-cleanup-paths を owner とする。help で container/runtime logger を初期化しない。 pre-scan は separated/equals の両形式を同じ agentWorkDir 値へ正規化して initContainer() に渡し、そこから config、log、finalize の既存 resolver/path owner を再利用する。",
+              "startByte": 0
+            }
+          ],
+          "expectedDigest": "b5c9f317071b0bccb0f32f9f4d358ad16800db8ce21dca14317aa9c80c5da33a",
+          "findingIds": [
+            "spec-review-97290fe883b7cf25c693d2deaa073a1f"
+          ],
+          "kind": "edit-text-field",
+          "reason": "初期化前の形式正規化と既存 path owner の再利用を実装境界に固定する。",
+          "target": {
+            "entity": "task",
+            "field": "implementation_notes",
+            "id": "T-6"
+          }
+        },
+        {
+          "edits": [
+            {
+              "endByte": 259,
+              "replacement": "通常の成功では既存 handler と pre/post hook の順序、失敗では onError の挙動、help では command-owned output、Flow state、生成 artifact を変更しないことを behavior-level test で証明すること。finally lifecycle は既存 parity 契約に含めず、新規 invocation semantics を追加しないこと。",
+              "startByte": 0
+            }
+          ],
+          "expectedDigest": "bf227a8d9e1cea7022d9c49a5bc4a36221d1aab878ac30b22fca8aa1c310c2f2",
+          "findingIds": [
+            "spec-review-69821926d93349cd5a06ff5c92c3cd40"
+          ],
+          "kind": "edit-text-field",
+          "reason": "実在する pre/post/onError の parity だけを要求し、未実装の finally lifecycle を追加しない。",
+          "target": {
+            "entity": "requirement",
+            "field": "desc",
+            "id": "R9"
+          }
+        },
+        {
+          "edits": [
+            {
+              "endByte": 191,
+              "replacement": "通常実行の handler と pre/post/onError hook の順序、失敗時の記録、help 時の command-owned output と Flow state の不変性を既存 owner のまま検証する。finally lifecycle は新規追加せず、既存 hook 契約だけを検証する。",
+              "startByte": 0
+            }
+          ],
+          "expectedDigest": "81dc77105f4e6dc4ba5ba7dd6b8eae7e12d43c38be9e4aa6f0373c8e2ad3b14b",
+          "findingIds": [
+            "spec-review-69821926d93349cd5a06ff5c92c3cd40"
+          ],
+          "kind": "edit-text-field",
+          "reason": "既存 dispatcher hook の検証範囲から未実装の finally lifecycle を除外する。",
+          "target": {
+            "entity": "task",
+            "field": "goal",
+            "id": "T-7"
+          }
+        },
+        {
+          "expectedDigest": "aca6ad2da137556739d5a93d78f47790a737c97a8f794a19248b7b8f1914a3eb",
+          "findingIds": [
+            "spec-review-69821926d93349cd5a06ff5c92c3cd40"
+          ],
+          "kind": "replace-entity-field",
+          "reason": "未実装の finally を除き、既存の成功・失敗・help の observable contract を受入条件にする。",
+          "replacement": [
+            "成功時に handler、pre、post の既存順序が保持される。",
+            "失敗時に onError の既存挙動と終了コードが保持される。",
+            "help で生成 artifact、Flow state、handler-owned output が変化しない。"
+          ],
+          "target": {
+            "entity": "task",
+            "field": "acceptance",
+            "id": "T-7"
+          }
+        },
+        {
+          "edits": [
+            {
+              "endByte": 307,
+              "replacement": "query を除く全共有 routed leaf を registry から再列挙でき、各 leaf の option authority が canonical name、alias、flag/required-value/optional-value の kind、placeholder、description、parser 投影を一対一に表すこと。各 leaf には implicit -h, --help を含めること。 さらに、option authority は syntax/help projection を所有し、各 option の型・domain・path などの semantic validation は既存 command-owned validator への明示的な参照で委譲し、検証ロジックを複製しないこと。",
+              "startByte": 0
+            }
+          ],
+          "expectedDigest": "e986ab9cfb1bce0b9ca4f2496b81265f66fbb35330527221617ae76277d11b46",
+          "findingIds": [
+            "spec-review-f9d617e72b1d71af8c52f5b93ebcb391"
+          ],
+          "kind": "edit-text-field",
+          "reason": "shared option authority の semantic validation delegation 境界を明記する。",
+          "target": {
+            "entity": "requirement",
+            "field": "desc",
+            "id": "R1"
+          }
+        },
+        {
+          "edits": [
+            {
+              "endByte": 269,
+              "replacement": "共有 option authority を既存 parser に投影し、全 routed leaf の positionals、rest、arity、型、domain、空値、サイズ、条件、path owner と target applicability を保持すること。query の custom parser は matrix に含めないこと。 型、domain、path、arity の semantic validation は各 leaf の既存 command-owned validator への明示的な参照を通じて委譲し、shared model は parser/help の syntax projection と validator delegation boundary を所有すること。",
+              "startByte": 0
+            }
+          ],
+          "expectedDigest": "3d43b484ae3eaba8bf8cea3e485b9e92f354efe90338bcc23c7547342d486209",
+          "findingIds": [
+            "spec-review-f9d617e72b1d71af8c52f5b93ebcb391"
+          ],
+          "kind": "edit-text-field",
+          "reason": "既存 leaf validator の owner と shared model の委譲責務を明記する。",
+          "target": {
+            "entity": "requirement",
+            "field": "desc",
+            "id": "R2"
+          }
+        },
+        {
+          "edits": [
+            {
+              "endByte": 323,
+              "replacement": "src/flow/registry.js と src/lib/command-registry.js の既存責務を拡張する。新しい並列 registry、help 逆解析器、discriminated union 形式の値表現は追加しない。CommandDefinition が既存の import-safe help metadata と dispatch metadata を同じ model から投影できる形にする。 さらに、option contract には syntax/help projection と既存 command-owned semantic validator への明示的な参照を持たせ、その参照を使った委譲を contract test で検証する。validator の判断を model や呼び出し側に複製しない。",
+              "startByte": 0
+            }
+          ],
+          "expectedDigest": "d0a192af0e5132991234f025cb3a152ae59b4bbe4172e2e7694ca5170e736ac7",
+          "findingIds": [
+            "spec-review-f9d617e72b1d71af8c52f5b93ebcb391"
+          ],
+          "kind": "edit-text-field",
+          "reason": "option contract の validator delegation と重複禁止を実装・テスト境界に固定する。",
+          "target": {
+            "entity": "task",
+            "field": "implementation_notes",
+            "id": "T-1"
+          }
+        },
+        {
+          "edits": [
+            {
+              "endByte": 245,
+              "replacement": "src/lib/dispatcher.js の splitArgsBySpec、parseEntryInput、cli parser を再利用し、呼び出し側に別 parser や tighter limit を作らない。explicit help の早期 return と target resolution より前の順序を維持する。 shared option contract は semantic validation の owner ではなく既存 leaf validator への明示的な参照を提供し、contract test でその委譲と拒否順序を検証する。",
+              "startByte": 0
+            }
+          ],
+          "expectedDigest": "19d8b90d01c91e2b4c490d5944c2b1b517cfea74530777fbb5525e5c7fff8cfb",
+          "findingIds": [
+            "spec-review-f9d617e72b1d71af8c52f5b93ebcb391"
+          ],
+          "kind": "edit-text-field",
+          "reason": "parser projection と既存 semantic validator の責務分離を明記する。",
+          "target": {
+            "entity": "task",
+            "field": "implementation_notes",
+            "id": "T-2"
+          }
+        },
+        {
+          "edits": [
+            {
+              "endByte": 291,
+              "replacement": "flow get、set、run、report/show の group help の Options を、全直接 child leaf の完全な option contract の共通部分だけから導出すること。--agent-work-dir は run と run group help にだけ現れ、get、set、report/show では受理・表示しないこと。 また、run の option 受理は sennel flow run <leaf> ... のような直接 child leaf invocation に限り、sennel flow run --agent-work-dir <path> という group-level execution は追加しないこと。",
+              "startByte": 0
+            }
+          ],
+          "expectedDigest": "1673fa7754b6bff89b65ca7040708dbda5c965afeb8288a9ce50a0c839bb32b8",
+          "findingIds": [
+            "spec-review-0d48c07bff2d5a7f3824c76de05d47ae"
+          ],
+          "kind": "edit-text-field",
+          "reason": "run group の表示と direct child leaf の受理を分離する契約を明記する。",
+          "target": {
+            "entity": "requirement",
+            "field": "desc",
+            "id": "R4"
+          }
+        },
+        {
+          "edits": [
+            {
+              "endByte": 197,
+              "replacement": "get、set、run、report/show の全直接 child leaf を registry から収集し、完全な option contract の共通部分と決定的な subcommand/option row を group help に投影する。 run group の --agent-work-dir は共通 option の表示対象であり、受理経路は flow run <leaf> ... の direct child leaf dispatch に限定する。",
+              "startByte": 0
+            }
+          ],
+          "expectedDigest": "330742d49f3be616dc4c2e0f166fc4a3d1a23ac518e7e6e26861ebeec3bbdf33",
+          "findingIds": [
+            "spec-review-0d48c07bff2d5a7f3824c76de05d47ae"
+          ],
+          "kind": "edit-text-field",
+          "reason": "group help の表示と leaf dispatch の受理境界を実装目標に追加する。",
+          "target": {
+            "entity": "task",
+            "field": "goal",
+            "id": "T-4"
+          }
+        },
+        {
+          "expectedDigest": "f001a5d7b9c370e7c64a2d933e16b02af9428a2d88d98e265f5d6eb9fbdb14ca",
+          "findingIds": [
+            "spec-review-0d48c07bff2d5a7f3824c76de05d47ae"
+          ],
+          "kind": "replace-entity-field",
+          "reason": "group option の表示と direct child leaf invocation の受理を区別する。",
+          "replacement": [
+            "group option が直接 child 全件の intersection と一致する。",
+            "--agent-work-dir が run group help に表示され、run 配下の直接 child leaf invocation（sennel flow run <leaf> ...）だけで表示・受理される。sennel flow run --agent-work-dir <path> の group-level execution は追加しない。",
+            "child と option の rows が name 昇順で 2 個以上の ASCII 空白と非空 summary を持つ。",
+            "13/14/15、recover-missing-producer-artifact、64/65 文字の fixture が名前全文・空白・summary の機械条件を満たす。"
+          ],
+          "target": {
+            "entity": "task",
+            "field": "acceptance",
+            "id": "T-4"
+          }
+        },
+        {
+          "edits": [
+            {
+              "endByte": 246,
+              "replacement": "共有 row renderer は name を一度だけ出力し、名前長に依存する padEnd 固定値や truncation を使わない。合成 64/65 文字は renderer fixture に限定し、production command の新しい長さ制限を作らない。 group help の option 行は intersection の表示であり group-level execution parser を追加しない。leaf acceptance は既存 dispatch の direct child selector 後に検証する。",
+              "startByte": 0
+            }
+          ],
+          "expectedDigest": "10eb8bb8dddaec037454055d64d6ca24d4a871c98b00833b257bf25d6fef9e23",
+          "findingIds": [
+            "spec-review-0d48c07bff2d5a7f3824c76de05d47ae"
+          ],
+          "kind": "edit-text-field",
+          "reason": "新規 group-level routing を導入せず既存 leaf parser を使う境界を明記する。",
+          "target": {
+            "entity": "task",
+            "field": "implementation_notes",
+            "id": "T-4"
+          }
+        },
+        {
+          "edits": [
+            {
+              "endByte": 254,
+              "replacement": "bootstrapFlowQueryCli、src/flow/query.js、src/flow/query-contract.js の stdin、request-file、help、error、response schema の独立契約を保持し、shared routed option matrix の registry contract test に query を混入させないこと。 shared routed option matrix からの query 除外点を registry の routed leaf enumeration に固定し、sennel flow query --help は bootstrap owner、sennel help flow query は既存 metadata/help owner のまま、両経路の text と exit behavior を保持すること。",
+              "startByte": 0
+            }
+          ],
+          "expectedDigest": "6486e487011b8015277370f5a1ee3fec0b39c7ba9b2051efa2e909f0de7e5036",
+          "findingIds": [
+            "spec-review-2d825546ad5bc6d14f3ef5e6dda67145"
+          ],
+          "kind": "edit-text-field",
+          "reason": "query の二つの公開 help 経路と shared matrix の除外境界を明記する。",
+          "target": {
+            "entity": "requirement",
+            "field": "desc",
+            "id": "R10"
+          }
+        },
+        {
+          "edits": [
+            {
+              "endByte": 174,
+              "replacement": "bootstrapFlowQueryCli と query modules の独立した stdin、request-file、help、error、response schema 契約を shared routed migration の影響から隔離する。 また、sennel flow query --help と sennel help flow query の既存公開 help 経路をそれぞれの owner のまま保持する。",
+              "startByte": 0
+            }
+          ],
+          "expectedDigest": "afa1ac646f54b271d8f10870798a92b609ab87aa1f5b19c7450bd442682b9d0c",
+          "findingIds": [
+            "spec-review-2d825546ad5bc6d14f3ef5e6dda67145"
+          ],
+          "kind": "edit-text-field",
+          "reason": "query の二つの公開 help 経路を migration isolation の受入対象に追加する。",
+          "target": {
+            "entity": "task",
+            "field": "goal",
+            "id": "T-8"
+          }
+        },
+        {
+          "edits": [
+            {
+              "endByte": 189,
+              "replacement": "src/sennel.js と src/flow.js の bootstrap 分岐、src/flow/query.js の input/read/serialize、src/flow/query-contract.js の schema を変更対象の shared renderer と混ぜない。 shared routed leaf enumeration では query を除外する。ただし FLOW_COMMANDS.query の help metadata は sennel help flow query のために保持し、flow query --help は bootstrap owner のまま検証する。",
+              "startByte": 0
+            }
+          ],
+          "expectedDigest": "6bdc0d4ee302962a5d20ff368155a4bb7beef9b565ed309c0c75cdade4b2ca43",
+          "findingIds": [
+            "spec-review-2d825546ad5bc6d14f3ef5e6dda67145"
+          ],
+          "kind": "edit-text-field",
+          "reason": "query の shared matrix 除外点と二つの help owner を実装境界に固定する。",
+          "target": {
+            "entity": "task",
+            "field": "implementation_notes",
+            "id": "T-8"
+          }
+        }
+      ],
+      "appliedFindings": [
+        "spec-review-0d48c07bff2d5a7f3824c76de05d47ae",
+        "spec-review-2d825546ad5bc6d14f3ef5e6dda67145",
+        "spec-review-69821926d93349cd5a06ff5c92c3cd40",
+        "spec-review-97290fe883b7cf25c693d2deaa073a1f",
+        "spec-review-f9d617e72b1d71af8c52f5b93ebcb391"
+      ],
+      "discardedOperations": [],
+      "inputDigest": "c9b21a2743baa308073106bf8561e1269c5ac8bafa02fd7ec0f85c2fc3367725",
+      "operationDigest": "43083c9b264db76bba971fb34f1c11532b4bb4763d3ee7b4d938d29d8f66036a",
+      "outcome": "merged",
+      "relation": "revision-scoped-canonical-review",
+      "stage": "spec-repair"
+    }
+  ],
+  "findings": [
+    {
+      "allowedTargets": [
+        {
+          "operationKinds": [
+            "edit-text-field"
+          ],
+          "target": {
+            "entity": "requirement",
+            "field": "desc",
+            "id": "R8"
+          }
+        },
+        {
+          "operationKinds": [
+            "edit-text-field"
+          ],
+          "target": {
+            "entity": "task",
+            "field": "goal",
+            "id": "T-6"
+          }
+        },
+        {
+          "operationKinds": [
+            "edit-text-field"
+          ],
+          "target": {
+            "entity": "task",
+            "field": "implementation_notes",
+            "id": "T-6"
+          }
+        }
+      ],
+      "body": "**Target:** R8, T-6; src/sennel.js, src/lib/dispatcher.js, src/lib/container.js\n**Issue:** The dispatcher accepts `--agent-work-dir=<path>`, but the early scanner in `src/sennel.js` recognizes only the separated form before `initContainer()`. Since container paths and log paths are computed during initialization, the two forms currently select different work/log directories, contradicting the stated parity and runtime-policy preservation.\n**Required change:** Explicitly decide whether equals-form input is intentionally normalized before `initContainer()`; if so, name that scanner change and its log/finalize implications as the intended compatibility behavior, otherwise remove the equals-form parity requirement.\n**Why blocking:** Implementers cannot simultaneously preserve verified current behavior and satisfy the required same-resolver behavior, and path/log/finalize tests would have different valid expected outcomes.",
+      "disposition": "apply",
+      "evidence": "The immutable Spec requires identical separated and equals-form runtime behavior but does not define whether early scanning normalizes the equals form or the parity requirement is removed; the cited R8 and T-6 text targets need an explicit boundary before implementation.",
+      "findingId": "spec-review-97290fe883b7cf25c693d2deaa073a1f",
+      "issue": "The dispatcher accepts `--agent-work-dir=<path>`, but the early scanner in `src/sennel.js` recognizes only the separated form before `initContainer()`. Since container paths and log paths are computed during initialization, the two forms currently select different work/log directories, contradicting the stated parity and runtime-policy preservation.",
+      "kind": "blocking",
+      "requiredChange": "Explicitly decide whether equals-form input is intentionally normalized before `initContainer()`; if so, name that scanner change and its log/finalize implications as the intended compatibility behavior, otherwise remove the equals-form parity requirement.",
+      "target": "R8, T-6; src/sennel.js, src/lib/dispatcher.js, src/lib/container.js",
+      "title": "`--agent-work-dir=` has different runtime semantics",
+      "whyBlocking": "Implementers cannot simultaneously preserve verified current behavior and satisfy the required same-resolver behavior, and path/log/finalize tests would have different valid expected outcomes."
+    },
+    {
+      "allowedTargets": [
+        {
+          "operationKinds": [
+            "edit-text-field"
+          ],
+          "target": {
+            "entity": "requirement",
+            "field": "desc",
+            "id": "R9"
+          }
+        },
+        {
+          "operationKinds": [
+            "edit-text-field"
+          ],
+          "target": {
+            "entity": "task",
+            "field": "goal",
+            "id": "T-7"
+          }
+        },
+        {
+          "operationKinds": [
+            "replace-entity-field"
+          ],
+          "target": {
+            "entity": "task",
+            "field": "acceptance",
+            "id": "T-7"
+          }
+        },
+        {
+          "operationKinds": [
+            "replace-array-element"
+          ],
+          "target": {
+            "collection": "acceptance_criteria",
+            "position": 5
+          }
+        }
+      ],
+      "body": "**Target:** R9, T-7; src/lib/dispatcher.js, src/lib/plugin-registry.js\n**Issue:** The dispatcher invokes registry `pre`, `post`, and `onError` hooks, but has no `entry.finally` invocation. Although plugin hook validation mentions `finally`, `runFlowCommandWithPluginLifecycle()` executes only `pre` and `post`. The spec nevertheless requires preserving and testing an existing `pre/post/onError/finally` order.\n**Required change:** Remove `finally` from the existing-parity requirements, or define the concrete owner, invocation point, failure behavior, and intended addition of a `finally` lifecycle before requiring its tests.\n**Why blocking:** There is no verified behavior or integration point against which a finally-order regression test can be designed; adding one would introduce new lifecycle semantics contrary to the stated no-semantic-change constraint.",
+      "disposition": "apply",
+      "evidence": "The immutable Spec requires a pre/post/onError/finally parity contract while the cited dispatcher path has no verified finally invocation; the R9, T-7, and top-level acceptance wording must define the existing lifecycle boundary before implementation.",
+      "findingId": "spec-review-69821926d93349cd5a06ff5c92c3cd40",
+      "issue": "The dispatcher invokes registry `pre`, `post`, and `onError` hooks, but has no `entry.finally` invocation. Although plugin hook validation mentions `finally`, `runFlowCommandWithPluginLifecycle()` executes only `pre` and `post`. The spec nevertheless requires preserving and testing an existing `pre/post/onError/finally` order.",
+      "kind": "blocking",
+      "requiredChange": "Remove `finally` from the existing-parity requirements, or define the concrete owner, invocation point, failure behavior, and intended addition of a `finally` lifecycle before requiring its tests.",
+      "target": "R9, T-7; src/lib/dispatcher.js, src/lib/plugin-registry.js",
+      "title": "The specified `finally` lifecycle is not an existing dispatcher contract",
+      "whyBlocking": "There is no verified behavior or integration point against which a finally-order regression test can be designed; adding one would introduce new lifecycle semantics contrary to the stated no-semantic-change constraint."
+    },
+    {
+      "allowedTargets": [
+        {
+          "operationKinds": [
+            "edit-text-field"
+          ],
+          "target": {
+            "entity": "requirement",
+            "field": "desc",
+            "id": "R1"
+          }
+        },
+        {
+          "operationKinds": [
+            "edit-text-field"
+          ],
+          "target": {
+            "entity": "requirement",
+            "field": "desc",
+            "id": "R2"
+          }
+        },
+        {
+          "operationKinds": [
+            "edit-text-field"
+          ],
+          "target": {
+            "entity": "task",
+            "field": "implementation_notes",
+            "id": "T-1"
+          }
+        },
+        {
+          "operationKinds": [
+            "edit-text-field"
+          ],
+          "target": {
+            "entity": "task",
+            "field": "implementation_notes",
+            "id": "T-2"
+          }
+        }
+      ],
+      "body": "**Target:** R1/R2, T-1/T-2, registry contract acceptance\n**Issue:** `FLOW_COMMANDS[*].args` contains only syntactic arrays (`flags`, `options`, `optionalOptions`, `positional`, and `rest`). `parseEntryInput()` and `parseArgs()` do not carry option descriptions, placeholders, aliases, or domain/path validators. Arity and semantic validation remain in individual `src/flow/lib` command classes, with no registry-level owner/reference linking them to the proposed typed option model.\n**Required change:** Specify that the shared model carries an explicit reference to each existing command-owned semantic validator while owning only syntax/help projection, and require the contract test to verify that delegation; alternatively remove semantic ownership from the one-to-one authority requirement.\n**Why blocking:** Without this boundary, implementation must either duplicate or move domain/path/arity validation and risk changing rejection order, or omit the required semantics; the acceptance test has no authoritative mapping to verify.",
+      "disposition": "apply",
+      "evidence": "The immutable Spec promises semantic parity but the registry only carries syntax/help metadata and does not identify the existing command-owned validators; R1, R2, T-1, and T-2 need an explicit delegation boundary without duplicating validation.",
+      "findingId": "spec-review-f9d617e72b1d71af8c52f5b93ebcb391",
+      "issue": "`FLOW_COMMANDS[*].args` contains only syntactic arrays (`flags`, `options`, `optionalOptions`, `positional`, and `rest`). `parseEntryInput()` and `parseArgs()` do not carry option descriptions, placeholders, aliases, or domain/path validators. Arity and semantic validation remain in individual `src/flow/lib` command classes, with no registry-level owner/reference linking them to the proposed typed option model.",
+      "kind": "blocking",
+      "requiredChange": "Specify that the shared model carries an explicit reference to each existing command-owned semantic validator while owning only syntax/help projection, and require the contract test to verify that delegation; alternatively remove semantic ownership from the one-to-one authority requirement.",
+      "target": "R1/R2, T-1/T-2, registry contract acceptance",
+      "title": "Semantic validation ownership is not represented by the proposed shared contract",
+      "whyBlocking": "Without this boundary, implementation must either duplicate or move domain/path/arity validation and risk changing rejection order, or omit the required semantics; the acceptance test has no authoritative mapping to verify."
+    },
+    {
+      "allowedTargets": [
+        {
+          "operationKinds": [
+            "edit-text-field"
+          ],
+          "target": {
+            "entity": "requirement",
+            "field": "desc",
+            "id": "R4"
+          }
+        },
+        {
+          "operationKinds": [
+            "edit-text-field"
+          ],
+          "target": {
+            "entity": "task",
+            "field": "goal",
+            "id": "T-4"
+          }
+        },
+        {
+          "operationKinds": [
+            "replace-entity-field"
+          ],
+          "target": {
+            "entity": "task",
+            "field": "acceptance",
+            "id": "T-4"
+          }
+        },
+        {
+          "operationKinds": [
+            "edit-text-field"
+          ],
+          "target": {
+            "entity": "task",
+            "field": "implementation_notes",
+            "id": "T-4"
+          }
+        }
+      ],
+      "body": "**Target:** R4/R5 and group-contract acceptance; src/flow.js:dispatchFlow\n**Issue:** `dispatchFlow()` treats the first token after `flow <group>` as a child selector and recognizes only `-h/--help` specially. Thus `sennel flow run --agent-work-dir <path>` is currently an unknown child, while `sennel flow run <leaf> --agent-work-dir <path>` is parsed by the leaf dispatcher. The spec says `--agent-work-dir` is displayed and accepted for the run group without stating which invocation is meant.\n**Required change:** Qualify acceptance as direct-child leaf invocations, or define a group-level parser/dispatch behavior and its exit/help semantics.\n**Why blocking:** The implementation target and expected CLI result differ materially: one choice changes only help/intersection metadata, while the other requires new routing behavior in `src/flow.js`.",
+      "disposition": "apply",
+      "evidence": "The immutable Spec says run-group help and acceptance expose and accept --agent-work-dir, while the cited router treats the first post-group token as a child selector; R4 and T-4 need to identify the direct-child leaf invocation boundary.",
+      "findingId": "spec-review-0d48c07bff2d5a7f3824c76de05d47ae",
+      "issue": "`dispatchFlow()` treats the first token after `flow <group>` as a child selector and recognizes only `-h/--help` specially. Thus `sennel flow run --agent-work-dir <path>` is currently an unknown child, while `sennel flow run <leaf> --agent-work-dir <path>` is parsed by the leaf dispatcher. The spec says `--agent-work-dir` is displayed and accepted for the run group without stating which invocation is meant.",
+      "kind": "blocking",
+      "requiredChange": "Qualify acceptance as direct-child leaf invocations, or define a group-level parser/dispatch behavior and its exit/help semantics.",
+      "target": "R4/R5 and group-contract acceptance; src/flow.js:dispatchFlow",
+      "title": "Group-level option acceptance has no routing target",
+      "whyBlocking": "The implementation target and expected CLI result differ materially: one choice changes only help/intersection metadata, while the other requires new routing behavior in `src/flow.js`."
+    },
+    {
+      "allowedTargets": [
+        {
+          "operationKinds": [
+            "edit-text-field"
+          ],
+          "target": {
+            "entity": "requirement",
+            "field": "desc",
+            "id": "R10"
+          }
+        },
+        {
+          "operationKinds": [
+            "edit-text-field"
+          ],
+          "target": {
+            "entity": "task",
+            "field": "goal",
+            "id": "T-8"
+          }
+        },
+        {
+          "operationKinds": [
+            "edit-text-field"
+          ],
+          "target": {
+            "entity": "task",
+            "field": "implementation_notes",
+            "id": "T-8"
+          }
+        }
+      ],
+      "body": "**Target:** R10, Scope Out, query acceptance; src/sennel.js, src/flow.js, src/lib/command-registry.js, src/help.js\n**Issue:** `flow query` execution bypasses the registry in `src/flow.js`, but `FLOW_COMMANDS.query` is still converted into `CommandDefinition` and exposed through the shared metadata registry, so `sennel help flow query` is rendered by `src/help.js`. The spec excludes query from the shared matrix but does not state how both existing public help paths remain owned and unchanged.\n**Required change:** Name the exclusion point and preserve both `sennel flow query --help` bootstrap behavior and `sennel help flow query` output/exit behavior, or explicitly retire one path.\n**Why blocking:** A generic registry/model migration can either accidentally apply the routed renderer to query or remove the metadata needed by its existing help route, changing the mandatory query compatibility contract.",
+      "disposition": "apply",
+      "evidence": "The immutable Spec excludes query from the shared routed matrix, but the cited sources show separate bootstrap execution and metadata help ownership; R10 and T-8 need to name preservation of both public help paths and their exclusion boundary.",
+      "findingId": "spec-review-2d825546ad5bc6d14f3ef5e6dda67145",
+      "issue": "`flow query` execution bypasses the registry in `src/flow.js`, but `FLOW_COMMANDS.query` is still converted into `CommandDefinition` and exposed through the shared metadata registry, so `sennel help flow query` is rendered by `src/help.js`. The spec excludes query from the shared matrix but does not state how both existing public help paths remain owned and unchanged.",
+      "kind": "blocking",
+      "requiredChange": "Name the exclusion point and preserve both `sennel flow query --help` bootstrap behavior and `sennel help flow query` output/exit behavior, or explicitly retire one path.",
+      "target": "R10, Scope Out, query acceptance; src/sennel.js, src/flow.js, src/lib/command-registry.js, src/help.js",
+      "title": "Query has two public help owners but no explicit migration boundary",
+      "whyBlocking": "A generic registry/model migration can either accidentally apply the routed renderer to query or remove the metadata needed by its existing help route, changing the mandatory query compatibility contract."
+    },
+    {
+      "body": "**Target:** R6/T-1 examples and existing inventory fixture\n**Improvement:** Avoid a hard-coded count of 65 and explicitly include current leaves `run recover-draft-execution` and `run filter-task-review` in any human-readable inventory.\n**Why non-blocking:** The normative requirement already mandates dynamic enumeration from `FLOW_COMMANDS`, so a correct contract test can still cover these leaves.",
+      "disposition": "downgraded_to_non_blocking",
+      "evidence": "The immutable Spec normatively requires dynamic enumeration from FLOW_COMMANDS and does not depend on a hard-coded route count; the requested inventory wording is useful context but does not block implementation or acceptance.",
+      "findingId": "spec-review-2526bffd182b72ff24e4aec503908c65",
+      "improvement": "Avoid a hard-coded count of 65 and explicitly include current leaves `run recover-draft-execution` and `run filter-task-review` in any human-readable inventory.",
+      "kind": "improvement",
+      "target": "R6/T-1 examples and existing inventory fixture",
+      "title": "The stated route inventory is already stale",
+      "whyNonBlocking": "The normative requirement already mandates dynamic enumeration from `FLOW_COMMANDS`, so a correct contract test can still cover these leaves."
+    }
+  ],
+  "generation": 3,
+  "identity": {
+    "byteLength": 35625,
+    "digest": "cb670c0602807b1305d65ab4d0dfbbe4bfcba44366eda79d98d0b4b841d0857f",
+    "revision": 4,
+    "specId": "6a9b5488-flow-help-contract"
+  },
+  "version": 2
+}

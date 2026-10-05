@@ -1,0 +1,366 @@
+{
+  "goal": "sennel flow の共有経路で受理される入力と表示されるヘルプを一致させ、各グループの直接の子コマンドに共通する選択肢、安定した表示順、読みやすい行間隔を三つの公開ヘルプ経路で保証する。既存の実行・検証・query の契約は維持する。",
+  "background": "Issue 521 の 2026-09-24 restart contract を基準にする。既存 Flow は parser args と手書き help を別管理し、leaf option 欠落、group の不正 option、14 文字境界での行連結、登録順依存がある。旧 revision 008 は未解決 finding を持ち承認済み仕様ではない。現行 registry は 67 leaf（共有 66、query 1）。Draft gate の DF-27/28 は移行前の公開動作 inventory と新 owner の対応、DF-29/30 は非 Flow 表示の具体的な検証対象を求める。",
+  "scope": {
+    "in": [
+      "Flow の共有 routed leaf とその group の option 受理・help 表示の一致、三経路の group 表示、行順・間隔の一貫性を扱う。",
+      "既存の guard、入力 validation、runtime directory、lifecycle、query の振る舞いを保持し、変更が公開面に及ぼす影響を検証する。",
+      "現行 registry から対象集合と検証 matrix を再構成し、Issue 521 の再開始契約を初期 Spec へ引き継ぐ。"
+    ],
+    "out": [
+      "query の共有 parser への移行、command semantics や target guard の変更、runtime directory の優先順位変更を範囲外とする。",
+      "一律の admission validation、新規の ID・path・資源制限、retry 方針変更、拒否順序の変更を範囲外とする。",
+      "未解決の旧 Spec revision 008 を承認済み仕様として採用せず、合成名を本番 CLI の新 leaf や長さ制限としない。"
+    ]
+  },
+  "constraints": [
+    "外部依存を追加せず Node.js 組み込み機能を使い、agent host 固有 hook/API に依存しない。",
+    "既存 CommandDefinition、FLOW_COMMANDS、parseEntryInput、FlowTargetExpectation、container を責務の owner として再利用する。別 command registry や help prose からの逆解析を作らない。",
+    "alpha 版として不要な後方互換経路を増やさない。query の独立 parser は現在の明示的な例外として維持する。",
+    "bounded-resource-usage: 入力の上限なし部分には今回一律の新上限を設けない。各既存 validator の資源規則と出力側上限を保持し、変更対象で新たな無制限再帰・bulk loading を導入しない。",
+    "backward-compatible-cli-interface: 本件は既存 CLI の受理・実行 semantics を維持する。表示訂正以外の削除や option 意味変更はしない。",
+    "生成済み docs/preset、config schema、Flow 状態の移行は行わず、表示・path の回帰確認のみ行う。"
+  ],
+  "design_principles": [
+    "入力の権威を既存 command model に集め、表示をそこから投影する。",
+    "一つの行 renderer を二つの既存表示経路で共有し、group の直接の子だけを集約する。",
+    "値の検証と状態判断は既存 domain owner に残し、help 作業から一律 admission を増やさない。"
+  ],
+  "overview": {
+    "modules": [
+      {
+        "text": "src/flow/registry.js: 共有 66 leaf の args、help、target guard、runtime metadata。query は別経路。"
+      },
+      {
+        "text": "src/lib/command-registry.js: CommandDefinition と metadata、group 投影、共有 option/row model の owner。"
+      },
+      {
+        "text": "src/lib/dispatcher.js: parseEntryInput、help shortcut、target guard、handler lifecycle と exit の owner。"
+      },
+      {
+        "text": "src/help.js と src/flow.js: それぞれ help topic と leaf なし group の公開表示経路。"
+      },
+      {
+        "text": "src/sennel.js と src/lib/container.js: 起動前 work-directory override と log directory の owner。"
+      },
+      {
+        "text": "src/flow/query.js、query-contract.js: query 独立 parser/help/error の owner。"
+      }
+    ],
+    "data_flow": [
+      {
+        "text": "FLOW_COMMANDS の option instance → CommandDefinition.args と leaf Options → parseEntryInput/dispatcher および help 表示。"
+      },
+      {
+        "text": "group metadata → direct child 全件の完全契約積集合 → 一つの row renderer → flow --help、help flow、leaf なし flow group。"
+      },
+      {
+        "text": "argv の --agent-work-dir → sennel.js pre-scan → container path resolver → handler/runtime log。"
+      },
+      {
+        "text": "argv の target guard → flow-context/FlowTargetExpectation → handler 前の match/reject。"
+      }
+    ],
+    "decisions": [
+      {
+        "text": "[CORRECTION] Draft の基準 65 共有 leaf は現行 registry では 66。追加された run seal-handoff を含む run 35 として再列挙する。",
+        "evidence": "src/flow/registry.js FLOW_COMMANDS を再帰列挙: resume 1、prepare 1、get 11、set 17、run 35、report/show 1、query 1。src/flow.js は query を bootstrapFlowQueryCli へ分岐。"
+      },
+      {
+        "text": "[VERIFY] parser/help の二重管理と二つの固定幅 renderer が既存不一致の原因。",
+        "evidence": "src/flow/registry.js args/help、src/lib/command-registry.js flowOptions/help と renderHelp、src/help.js renderCommand、src/lib/dispatcher.js parseEntryInput/help shortcut。"
+      },
+      {
+        "text": "[VERIFY] FlowSpecId と target token の上限は共通 100 文字ではない。",
+        "evidence": "src/lib/flow-spec-id.js に 100 文字上限なし。src/lib/preparing-flow-store.js に PreparingFlowId の 200 文字上限。src/lib/flow-target-guard.js に MAX_TARGET_TOKEN_LENGTH=300。"
+      },
+      {
+        "text": "[CORRECTION] Draft が「既存の二形式を保持」とした --agent-work-dir の等号形式は、起動前 pre-scan では現状拾われない。要件として両形式を整合させる。",
+        "evidence": "src/sennel.js 39-51 は argv 要素が --agent-work-dir と完全一致する場合だけ次要素を読む。src/lib/container.js 97-107 は受領済み override と logs.dir の優先を定義。"
+      },
+      {
+        "text": "[VERIFY] help shortcut は target guard/handler より前、guard は handler load と pre hook より前にある。",
+        "evidence": "src/lib/dispatcher.js 436-507、578 以降。help で handler を呼ばず、target mismatch は command 固有実行前に返す。"
+      },
+      {
+        "text": "DF-27/28: 受理・表示・実行・config・生成物・状態副作用の移行 inventory と owner を R12 に固定する。",
+        "evidence": "input flow-findings.json DF-27、DF-28。Issue 521 restart contract の migration parity 表と Draft impactOnExisting。"
+      },
+      {
+        "text": "DF-29/30: docs scan、core help、plugin help を非 Flow 共通 renderer の具体的な回帰例にする。",
+        "evidence": "input flow-findings.json DF-29、DF-30。src/help.js は core と plugin metadata を共通表示し、tests/e2e/help.test.js が公開経路を扱う。"
+      }
+    ]
+  },
+  "requirements": [
+    {
+      "id": "R1",
+      "desc": "CommandDefinition/FLOW_COMMANDS が共有経路の option authority を保持する。専用クラスの constructor が name/aliases、flag・必須値・任意値の kind、placeholder、説明の invariant を強制し、args.flags/options/optionalOptions、leaf Options を同じ instance から投影する。検証: registry integration で全 66 leaf の argv 受理と option 行を比較し、不一致がゼロ。",
+      "task_ids": [
+        "T-1",
+        "T-2"
+      ],
+      "priority": "must",
+      "preimplementation_test_expectation": "fail"
+    },
+    {
+      "id": "R2",
+      "desc": "各共有 leaf の Options に受理する明示 option と暗黙の -h, --help を canonical 行で各一回表示する。alias は同じ行、必須値と任意値は区別できる表記とし、Usage/例の再掲は重複数に含めない。command 固有 prose・例・翻訳は維持する。検証: 現行 registry 由来の全 leaf matrix と実 CLI の resume/prepare/run abort を照合する。",
+      "task_ids": [
+        "T-2",
+        "T-5"
+      ],
+      "priority": "must",
+      "preimplementation_test_expectation": "fail"
+    },
+    {
+      "id": "R3",
+      "desc": "group options はその group の全 direct child leaf の完全な option 契約（aliases、value kind を含む）の積集合とする。get 11、set 17、run 35、report/show 1 を現行 registry から導出し、--agent-work-dir は run のみ表示する。検証: 四 group の全子を再列挙し、表示集合と期待積集合を一致させる。",
+      "task_ids": [
+        "T-2",
+        "T-3",
+        "T-5"
+      ],
+      "priority": "must",
+      "preimplementation_test_expectation": "fail"
+    },
+    {
+      "id": "R4",
+      "desc": "共有経路 66 leaf の入力 inventory を以下に固定する。各行の positional/rest は名前と Usage による個数、flag は値なし、value は必須値、optionalValue は任意値、help は値なしで、argv syntax は parseEntryInput と cli.parseArgs、値の requiredness・型・空値・上限・条件付き組合せは行末 handler と後続 R5/R6 の既存 domain owner が判定する。内部 _rawArgs、resolved target、injected runtime state は公開 option に含めない。検証: registry 再帰走査と各 handler/公開 CLI の入力境界を照合する。\nresume: positional=なし; rest=なし; flags=なし; value=--spec; optionalValue=なし; guard=--expect-no-issue,--expect-issue,--expect-spec,--expect-run-id,--expect-binding; help=-h,--help; usage=Usage: sennel flow resume [--spec <specId>] [--expect-binding <token> | [--expect-issue <number> | --expect-no-issue] [--expect-spec <spec>] [--expect-run-id <runId>]]; owner=./lib/run-resume.js\nprepare: positional=なし; rest=なし; flags=--no-branch,--worktree,--dry-run; value=--title,--base,--issue,--request,--run-id; optionalValue=なし; guard=--expect-no-issue,--expect-issue,--expect-spec,--expect-run-id,--expect-binding; help=-h,--help; usage=Usage: sennel flow prepare [options] [--expect-binding <token> | [--expect-issue <number> | --expect-no-issue] [--expect-spec <spec>] [--expect-run-id <runId>]]; owner=./lib/run-prepare-spec.js\nget status: positional=runId; rest=なし; flags=--details; value=なし; optionalValue=なし; guard=--expect-no-issue,--expect-issue,--expect-spec,--expect-run-id,--expect-binding; help=-h,--help; usage=Usage: sennel flow get status [runId] [--details] [--expect-issue <number> | --expect-no-issue] [--expect-spec <spec>] [--expect-run-id <runId>]; owner=./lib/get-status.js\nget resolve-context: positional=なし; rest=なし; flags=なし; value=なし; optionalValue=なし; guard=--expect-no-issue,--expect-issue,--expect-spec,--expect-run-id,--expect-binding; help=-h,--help; usage=Usage: sennel flow get resolve-context [--expect-binding <token> | [--expect-issue <number> | --expect-no-issue] [--expect-spec <spec>] [--expect-run-id <runId>]]; owner=./lib/get-resolve-context.js\nget check: positional=target; rest=なし; flags=なし; value=なし; optionalValue=なし; guard=なし; help=-h,--help; usage=Usage: sennel flow get check <target>; owner=./lib/get-check.js\nget prompt: positional=kind; rest=なし; flags=なし; value=なし; optionalValue=なし; guard=--expect-no-issue,--expect-issue,--expect-spec,--expect-run-id,--expect-binding; help=-h,--help; usage=Usage: sennel flow get prompt <kind> [--expect-issue <number> | --expect-no-issue] [--expect-spec <spec>] [--expect-run-id <runId>]; owner=./lib/get-prompt.js\nget artifact: positional=logicalKey; rest=なし; flags=なし; value=--mode,--spec-id,--version; optionalValue=なし; guard=--expect-no-issue,--expect-issue,--expect-spec,--expect-run-id,--expect-binding; help=-h,--help; usage=Usage: sennel flow get artifact <spec.record|acceptance.review> --mode <full|summary> [--spec-id <specId> --version <number>]; owner=./lib/get-artifact.js\nget qa-count: positional=なし; rest=なし; flags=なし; value=なし; optionalValue=なし; guard=--expect-no-issue,--expect-issue,--expect-spec,--expect-run-id,--expect-binding; help=-h,--help; usage=Usage: sennel flow get qa-count; owner=./lib/get-qa-count.js\nget guardrail: positional=phase; rest=なし; flags=なし; value=--format; optionalValue=なし; guard=なし; help=-h,--help; usage=Usage: sennel flow get guardrail <phase> [--format json]; owner=./lib/get-guardrail.js\nget issue: positional=number; rest=なし; flags=なし; value=なし; optionalValue=なし; guard=なし; help=-h,--help; usage=Usage: sennel flow get issue <number>; owner=./lib/get-issue.js\nget next-action: positional=なし; rest=なし; flags=なし; value=なし; optionalValue=なし; guard=--expect-no-issue,--expect-issue,--expect-spec,--expect-run-id,--expect-binding; help=-h,--help; usage=Usage: sennel flow get next-action [--expect-issue <number> | --expect-no-issue] [--expect-spec <spec>] [--expect-run-id <runId>]; owner=./lib/get-next-action.js\nget context: positional=path; rest=なし; flags=--raw; value=--search; optionalValue=なし; guard=--expect-no-issue,--expect-issue,--expect-spec,--expect-run-id,--expect-binding; help=-h,--help; usage=Usage: sennel flow get context [path] [--raw] [--search <query>]; owner=./lib/get-context.js\nget runtime-log: positional=なし; rest=なし; flags=なし; value=--format,--sequence,--run-id; optionalValue=なし; guard=--expect-no-issue,--expect-issue,--expect-spec,--expect-run-id,--expect-binding; help=-h,--help; usage=Usage: sennel flow get runtime-log [--format json] [--sequence <n>] [--run-id <runId[#sequence]>] [--expect-binding <token> | [--expect-issue <number> | --expect-no-issue] [--expect-spec <spec>] [--expect-run-id <runId>]]; owner=./lib/get-runtime-log.js\nset step: positional=id,status; rest=なし; flags=なし; value=なし; optionalValue=なし; guard=--expect-no-issue,--expect-issue,--expect-spec,--expect-run-id,--expect-binding; help=-h,--help; usage=Usage: sennel flow set step <id> <status>; owner=./lib/set-step.js\nset request: positional=text; rest=なし; flags=なし; value=--run-id; optionalValue=なし; guard=--expect-no-issue,--expect-issue,--expect-spec,--expect-run-id,--expect-binding; help=-h,--help; usage=Usage: sennel flow set request \"<text>\" [--run-id <id>] [--expect-binding <token> | [--expect-issue <number> | --expect-no-issue] [--expect-spec <spec>] [--expect-run-id <runId>]]; owner=./lib/set-request.js\nset issue: positional=number; rest=なし; flags=なし; value=なし; optionalValue=なし; guard=--expect-no-issue,--expect-issue,--expect-spec,--expect-run-id,--expect-binding; help=-h,--help; usage=Usage: sennel flow set issue <number>; owner=./lib/set-issue.js\nset note: positional=text; rest=なし; flags=なし; value=--task-id,--run-id; optionalValue=なし; guard=--expect-no-issue,--expect-issue,--expect-spec,--expect-run-id,--expect-binding; help=-h,--help; usage=Usage: sennel flow set note \"<text>\" [--task-id <id>] [--run-id <id>] [--expect-binding <token> | [--expect-issue <number> | --expect-no-issue] [--expect-spec <spec>] [--expect-run-id <runId>]]; owner=./lib/set-note.js\nset draft-answer: positional=questionId; rest=なし; flags=--drop; value=--question-revision,--answer,--why,--considered,--dropped-reason; optionalValue=なし; guard=--expect-no-issue,--expect-issue,--expect-spec,--expect-run-id,--expect-binding; help=-h,--help; usage=Usage: sennel flow set draft-answer <questionId> --question-revision <revision> (--answer <text> --why <text> [--considered <text>] | --drop --dropped-reason <text>) [--expect-binding <token> | [--expect-issue <number> | --expect-no-issue] [--expect-spec <spec>] [--expect-run-id <runId>]]; owner=./lib/set-draft-answer.js\nset files: positional=reqId; rest=paths; flags=なし; value=なし; optionalValue=なし; guard=--expect-no-issue,--expect-issue,--expect-spec,--expect-run-id,--expect-binding; help=-h,--help; usage=Usage: sennel flow set files <reqId> <path...>; owner=./lib/set-files.js\nset review-evidence: positional=なし; rest=なし; flags=なし; value=--file; optionalValue=なし; guard=--expect-no-issue,--expect-issue,--expect-spec,--expect-run-id,--expect-binding; help=-h,--help; usage=Usage: sennel flow set review-evidence --file <path> [--expect-binding <token> | [--expect-issue <number> | --expect-no-issue] [--expect-spec <spec>] [--expect-run-id <runId>]]; owner=./lib/set-review-evidence.js\nset broad: positional=action; rest=なし; flags=なし; value=--step,--reason; optionalValue=なし; guard=--expect-no-issue,--expect-issue,--expect-spec,--expect-run-id,--expect-binding; help=-h,--help; usage=Usage: sennel flow set broad on --step <implement|impl-review|impl-gate> --reason <text>; owner=./lib/set-broad.js\nset policy: positional=value; rest=なし; flags=なし; value=--reason; optionalValue=なし; guard=--expect-no-issue,--expect-issue,--expect-spec,--expect-run-id,--expect-binding; help=-h,--help; usage=Usage: sennel flow set policy nonblocking --reason <text>; owner=./lib/set-policy.js\nset nonblocking-decision: positional=なし; rest=なし; flags=なし; value=--choice,--reason,--expect-evidence-digest,--remaining-risk; optionalValue=なし; guard=--expect-no-issue,--expect-issue,--expect-spec,--expect-run-id,--expect-binding; help=-h,--help; usage=Usage: sennel flow set nonblocking-decision --choice <repair|retry|continue> --reason <text> --expect-evidence-digest <sha256> [--remaining-risk <text>]; owner=./lib/set-nonblocking-decision.js\nset metric: positional=phase,counter; rest=なし; flags=なし; value=--task-id; optionalValue=なし; guard=--expect-no-issue,--expect-issue,--expect-spec,--expect-run-id,--expect-binding; help=-h,--help; usage=Usage: sennel flow set metric <phase> <counter> [--task-id <id>]; owner=./lib/set-metric.js\nset approval: positional=なし; rest=なし; flags=--approved; value=--notes,--confirmed-at; optionalValue=なし; guard=--expect-no-issue,--expect-issue,--expect-spec,--expect-run-id,--expect-binding; help=-h,--help; usage=Usage: sennel flow set approval --approved [--notes <text>] [--confirmed-at <iso>]; owner=./lib/set-approval.js\nset issue-log: positional=なし; rest=なし; flags=なし; value=--step,--reason,--trigger,--resolution,--guardrail-candidate,--normalized-finding-id,--repair-ref-commit,--repair-ref-file,--task-id; optionalValue=なし; guard=--expect-no-issue,--expect-issue,--expect-spec,--expect-run-id,--expect-binding; help=-h,--help; usage=Usage: sennel flow set issue-log --step <id> --reason <text> [--trigger <text>] [--resolution <text>] [--guardrail-candidate <text>] [--normalized-finding-id <id>] [--repair-ref-commit <sha>] [--repair-ref-file <path>] [--task-id <id>] [--expect-issue <number> | --expect-no-issue] [--expect-spec <spec>] [--expect-run-id <runId>]; owner=./lib/set-issue-log.js\nset init: positional=なし; rest=なし; flags=なし; value=--issue,--request; optionalValue=なし; guard=なし; help=-h,--help; usage=Usage: sennel flow set init [--issue N] [--request \"<text>\"]; owner=./lib/set-init.js\nset retry: positional=action,kind,phase; rest=なし; flags=--yes; value=--reason; optionalValue=なし; guard=--expect-no-issue,--expect-issue,--expect-spec,--expect-run-id,--expect-binding; help=-h,--help; usage=Usage: sennel flow set retry reset <gate|review> <phase> --reason <text> --yes; owner=./lib/set-retry.js\nset acceptance-decision: positional=なし; rest=なし; flags=なし; value=--choice; optionalValue=なし; guard=--expect-no-issue,--expect-issue,--expect-spec,--expect-run-id,--expect-binding; help=-h,--help; usage=Usage: sennel flow set acceptance-decision --choice <choice>; owner=./lib/set-acceptance-decision.js\nset auto: positional=value; rest=なし; flags=なし; value=--run-id; optionalValue=なし; guard=--expect-no-issue,--expect-issue,--expect-spec,--expect-run-id,--expect-binding; help=-h,--help; usage=Usage: sennel flow set auto on|off [--run-id <id>] [--expect-binding <token> | [--expect-issue <number> | --expect-no-issue] [--expect-spec <spec>] [--expect-run-id <runId>]]; owner=./lib/set-auto.js\nrun seal-handoff: positional=なし; rest=なし; flags=なし; value=--agent-work-dir; optionalValue=なし; guard=なし; help=-h,--help; usage=Usage: sennel flow run seal-handoff [--agent-work-dir <path>]; owner=./lib/run-seal-handoff.js\nrun dispatch: positional=なし; rest=なし; flags=なし; value=--approve,--agent-work-dir; optionalValue=なし; guard=--expect-no-issue,--expect-issue,--expect-spec,--expect-run-id,--expect-binding; help=-h,--help; usage=Usage: sennel flow run dispatch [--expect-binding <token> | [--expect-issue <number> | --expect-no-issue] [--expect-spec <spec>] [--expect-run-id <runId>]] [--approve <token>] [--agent-work-dir <path>]; owner=./lib/run-dispatch.js\nrun recover-review-pass: positional=なし; rest=なし; flags=なし; value=--agent-work-dir,--phase; optionalValue=なし; guard=--expect-no-issue,--expect-issue,--expect-spec,--expect-run-id,--expect-binding; help=-h,--help; usage=Usage: sennel flow run recover-review-pass --phase <draft-questions|draft-coverage|spec|test|impl> [--expect-binding <token> | [--expect-issue <number> | --expect-no-issue] [--expect-spec <spec>] [--expect-run-id <runId>]]; owner=./lib/run-recover-review-pass.js\nrun gate: positional=なし; rest=なし; flags=なし; value=--spec,--phase,--agent-work-dir; optionalValue=なし; guard=--expect-no-issue,--expect-issue,--expect-spec,--expect-run-id,--expect-binding; help=-h,--help; usage=Usage: sennel flow run gate [options]; owner=./lib/run-gate.js\nrun review: positional=なし; rest=なし; flags=--dry-run,--skip-confirm; value=--phase,--agent-work-dir; optionalValue=なし; guard=--expect-no-issue,--expect-issue,--expect-spec,--expect-run-id,--expect-binding; help=-h,--help; usage=Usage: sennel flow run review [options] [--expect-binding <token> | [--expect-issue <number> | --expect-no-issue] [--expect-spec <spec>] [--expect-run-id <runId>]]; owner=./lib/run-review.js\nrun auto-check: positional=なし; rest=なし; flags=なし; value=--run-id,--agent-work-dir; optionalValue=なし; guard=--expect-no-issue,--expect-issue,--expect-spec,--expect-run-id,--expect-binding; help=-h,--help; usage=Usage: sennel flow run auto-check [--run-id <id>] [--expect-binding <token> | [--expect-issue <number> | --expect-no-issue] [--expect-spec <spec>] [--expect-run-id <runId>]]; owner=./lib/run-auto-check.js\nrun finalize-commit: positional=なし; rest=なし; flags=なし; value=--message,--agent-work-dir; optionalValue=なし; guard=--expect-no-issue,--expect-issue,--expect-spec,--expect-run-id,--expect-binding; help=-h,--help; usage=Usage: sennel flow run finalize-commit [options]; owner=./lib/run-finalize-commit.js\nrun finalize-merge: positional=なし; rest=なし; flags=なし; value=--agent-work-dir; optionalValue=なし; guard=--expect-no-issue,--expect-issue,--expect-spec,--expect-run-id,--expect-binding; help=-h,--help; usage=Usage: sennel flow run finalize-merge; owner=./lib/run-finalize-merge.js\nrun finalize-sync: positional=なし; rest=なし; flags=なし; value=--agent-work-dir; optionalValue=なし; guard=--expect-no-issue,--expect-issue,--expect-spec,--expect-run-id,--expect-binding; help=-h,--help; usage=Usage: sennel flow run finalize-sync; owner=./lib/run-finalize-sync.js\nrun finalize-cleanup: positional=なし; rest=なし; flags=--auto-rescue,--force; value=--agent-work-dir; optionalValue=なし; guard=--expect-no-issue,--expect-issue,--expect-spec,--expect-run-id,--expect-binding; help=-h,--help; usage=Usage: sennel flow run finalize-cleanup [--auto-rescue | --force]; owner=./lib/run-finalize-cleanup.js\nrun abort: positional=なし; rest=なし; flags=--force; value=--agent-work-dir; optionalValue=なし; guard=--expect-no-issue,--expect-issue,--expect-spec,--expect-run-id,--expect-binding; help=-h,--help; usage=Usage: sennel flow run abort [--force]; owner=./lib/run-abort.js\nrun sync: positional=なし; rest=なし; flags=--dry-run; value=--agent-work-dir; optionalValue=なし; guard=--expect-no-issue,--expect-issue,--expect-spec,--expect-run-id,--expect-binding; help=-h,--help; usage=Usage: sennel flow run sync [options]; owner=./lib/run-sync.js\nrun reopen-draft: positional=なし; rest=なし; flags=なし; value=--reason,--category,--agent-work-dir; optionalValue=なし; guard=--expect-no-issue,--expect-issue,--expect-spec,--expect-run-id,--expect-binding; help=-h,--help; usage=Usage: sennel flow run reopen-draft [--reason <text>] [--category <category>] [--expect-binding <token> | [--expect-issue <number> | --expect-no-issue] [--expect-spec <spec>] [--expect-run-id <runId>]]; owner=./lib/run-reopen-draft.js\nrun repair-plan-gate: positional=なし; rest=なし; flags=なし; value=--agent-work-dir; optionalValue=なし; guard=--expect-no-issue,--expect-issue,--expect-spec,--expect-run-id,--expect-binding; help=-h,--help; usage=Usage: sennel flow run repair-plan-gate [--expect-binding <token> | [--expect-issue <number> | --expect-no-issue] [--expect-spec <spec>] [--expect-run-id <runId>]]; owner=./lib/run-repair-plan-gate.js\nrun settle-failure: positional=なし; rest=なし; flags=なし; value=--agent-work-dir; optionalValue=なし; guard=--expect-no-issue,--expect-issue,--expect-spec,--expect-run-id,--expect-binding; help=-h,--help; usage=Usage: sennel flow run settle-failure [--expect-binding <token> | [--expect-issue <number> | --expect-no-issue] [--expect-spec <spec>] [--expect-run-id <runId>]]; owner=./lib/run-settle-failure.js\nrun settle-review-transition: positional=なし; rest=なし; flags=なし; value=--agent-work-dir; optionalValue=なし; guard=--expect-no-issue,--expect-issue,--expect-spec,--expect-run-id,--expect-binding; help=-h,--help; usage=Usage: sennel flow run settle-review-transition [--expect-binding <token> | [--expect-issue <number> | --expect-no-issue] [--expect-spec <spec>] [--expect-run-id <runId>]]; owner=./lib/run-settle-review-transition.js\nrun recover-missing-producer-artifact: positional=なし; rest=なし; flags=なし; value=--agent-work-dir; optionalValue=なし; guard=--expect-no-issue,--expect-issue,--expect-spec,--expect-run-id,--expect-binding; help=-h,--help; usage=Usage: sennel flow run recover-missing-producer-artifact [--expect-binding <token> | [--expect-issue <number> | --expect-no-issue] [--expect-spec <spec>] [--expect-run-id <runId>]]; owner=./lib/run-recover-missing-producer-artifact.js\nrun recover-draft-execution: positional=なし; rest=なし; flags=なし; value=--agent-work-dir; optionalValue=なし; guard=--expect-no-issue,--expect-issue,--expect-spec,--expect-run-id,--expect-binding; help=-h,--help; usage=Usage: sennel flow run recover-draft-execution [--expect-binding <token> | [--expect-issue <number> | --expect-no-issue] [--expect-spec <spec>] [--expect-run-id <runId>]]; owner=./lib/run-recover-draft-execution.js\nrun reconcile-task-review: positional=なし; rest=なし; flags=--dry-run,--yes; value=--agent-work-dir,--expect-digest,--reason; optionalValue=なし; guard=--expect-no-issue,--expect-issue,--expect-spec,--expect-run-id,--expect-binding; help=-h,--help; usage=Usage: sennel flow run reconcile-task-review --expect-run-id <runId> --expect-spec <specId> [--expect-issue <number> | --expect-no-issue] --dry-run; owner=./lib/run-reconcile-task-review.js\nrun filter-task-review: positional=なし; rest=なし; flags=なし; value=--agent-work-dir,--exclusions,--expect-attempt-id,--expect-review-digest,--expect-source-fingerprint,--expect-catalog-fingerprint; optionalValue=なし; guard=--expect-no-issue,--expect-issue,--expect-spec,--expect-run-id,--expect-binding; help=-h,--help; usage=Usage: sennel flow run filter-task-review --exclusions <json-array> --expect-attempt-id <id> --expect-review-digest <sha256> --expect-source-fingerprint <sha256> --expect-catalog-fingerprint <sha256> [--expect-binding <token> | [--expect-issue <number> | --expect-no-issue] [--expect-spec <spec>] [--expect-run-id <runId>]]; owner=./lib/run-filter-task-review.js\nrun recover-finalization: positional=なし; rest=なし; flags=なし; value=--agent-work-dir; optionalValue=なし; guard=--expect-no-issue,--expect-issue,--expect-spec,--expect-run-id,--expect-binding; help=-h,--help; usage=Usage: sennel flow run recover-finalization [--expect-binding <token> | [--expect-issue <number> | --expect-no-issue] [--expect-spec <spec>] [--expect-run-id <runId>]]; owner=./lib/run-recover-finalization.js\nrun recover-task-execution-overrun: positional=なし; rest=なし; flags=なし; value=--agent-work-dir; optionalValue=なし; guard=--expect-no-issue,--expect-issue,--expect-spec,--expect-run-id,--expect-binding; help=-h,--help; usage=Usage: sennel flow run recover-task-execution-overrun [--expect-binding <token> | [--expect-issue <number> | --expect-no-issue] [--expect-spec <spec>] [--expect-run-id <runId>]]; owner=./lib/run-recover-task-execution-overrun.js\nrun claim-next-action: positional=なし; rest=なし; flags=なし; value=--agent-work-dir; optionalValue=なし; guard=--expect-no-issue,--expect-issue,--expect-spec,--expect-run-id,--expect-binding; help=-h,--help; usage=Usage: sennel flow run claim-next-action [--expect-binding <token> | [--expect-issue <number> | --expect-no-issue] [--expect-spec <spec>] [--expect-run-id <runId>]]; owner=./lib/run-claim-next-action.js\nrun settle-gate-transition: positional=なし; rest=なし; flags=なし; value=--agent-work-dir; optionalValue=なし; guard=--expect-no-issue,--expect-issue,--expect-spec,--expect-run-id,--expect-binding; help=-h,--help; usage=Persist the Definition-selected exhausted integration or Task Gate finding and settle its current Attempt.; owner=./lib/run-settle-gate-transition.js\nrun start-task: positional=なし; rest=なし; flags=なし; value=--task-id,--agent-work-dir; optionalValue=なし; guard=--expect-no-issue,--expect-issue,--expect-spec,--expect-run-id,--expect-binding; help=-h,--help; usage=Usage: sennel flow run start-task --task-id <id>; owner=./lib/run-start-task.js\nrun complete-task: positional=なし; rest=なし; flags=なし; value=--task-id,--agent-work-dir; optionalValue=なし; guard=--expect-no-issue,--expect-issue,--expect-spec,--expect-run-id,--expect-binding; help=-h,--help; usage=Usage: sennel flow run complete-task [--task-id <id>]; owner=./lib/run-complete-task.js\nrun update-overview: positional=なし; rest=なし; flags=なし; value=--json,--agent-work-dir; optionalValue=なし; guard=--expect-no-issue,--expect-issue,--expect-spec,--expect-run-id,--expect-binding; help=-h,--help; usage=Usage: sennel flow run update-overview --json '<additions>'; owner=./lib/run-update-overview.js\nrun lint: positional=なし; rest=なし; flags=なし; value=--base,--agent-work-dir; optionalValue=なし; guard=--expect-no-issue,--expect-issue,--expect-spec,--expect-run-id,--expect-binding; help=-h,--help; usage=Usage: sennel flow run lint [options]; owner=./lib/run-lint.js\nrun test-execute: positional=なし; rest=なし; flags=なし; value=--agent-work-dir; optionalValue=なし; guard=--expect-no-issue,--expect-issue,--expect-spec,--expect-run-id,--expect-binding; help=-h,--help; usage=Usage: sennel flow run test-execute; owner=./lib/run-test-execute.js\nrun requirement-test-gate: positional=なし; rest=なし; flags=なし; value=--agent-work-dir; optionalValue=なし; guard=--expect-no-issue,--expect-issue,--expect-spec,--expect-run-id,--expect-binding; help=-h,--help; usage=Usage: sennel flow run requirement-test-gate; owner=./lib/run-requirement-test-gate.js\nrun test-result-review: positional=なし; rest=なし; flags=なし; value=--agent-work-dir; optionalValue=なし; guard=--expect-no-issue,--expect-issue,--expect-spec,--expect-run-id,--expect-binding; help=-h,--help; usage=Usage: sennel flow run test-result-review; owner=./lib/run-test-result-review.js\nrun retro: positional=なし; rest=なし; flags=--dry-run; value=--agent-work-dir; optionalValue=なし; guard=--expect-no-issue,--expect-issue,--expect-spec,--expect-run-id,--expect-binding; help=-h,--help; usage=Usage: sennel flow run retro [options]; owner=./lib/run-retro.js\nrun final-regression: positional=なし; rest=なし; flags=--record-and-proceed; value=--record-category,--record-evidence,--remaining-risk,--agent-work-dir; optionalValue=なし; guard=--expect-no-issue,--expect-issue,--expect-spec,--expect-run-id,--expect-binding; help=-h,--help; usage=Usage: sennel flow run final-regression [--record-and-proceed --record-category <category> --record-evidence <text> --remaining-risk <text>]; owner=./lib/run-final-regression.js\nrun acceptance-review: positional=なし; rest=なし; flags=なし; value=--agent-work-dir; optionalValue=なし; guard=--expect-no-issue,--expect-issue,--expect-spec,--expect-run-id,--expect-binding; help=-h,--help; usage=Usage: sennel flow run acceptance-review; owner=./lib/run-acceptance-review.js\nrun report: positional=なし; rest=なし; flags=--dry-run; value=--agent-work-dir; optionalValue=なし; guard=--expect-no-issue,--expect-issue,--expect-spec,--expect-run-id,--expect-binding; help=-h,--help; usage=Usage: sennel flow run report [options]; owner=./lib/run-report.js\nreport show: positional=なし; rest=なし; flags=なし; value=なし; optionalValue=なし; guard=なし; help=-h,--help; usage=Usage: sennel flow report show; owner=./lib/run-report-show.js",
+      "task_ids": [
+        "T-2",
+        "T-5"
+      ],
+      "priority": "must",
+      "preimplementation_test_expectation": "pass"
+    },
+    {
+      "id": "R5",
+      "desc": "入力の意味と検証主体を leaf ごとに保持する。set step の id/status、set auto value、set broad action は positional、get status runId は任意、set files は reqId と 1 個以上の rest paths。resume --spec は FlowSpecId、run gate --spec は file path、prepare --base と run lint --base は Git branch、get runtime-log --run-id は identifier/sequence も許す。get check target、get prompt kind、artifact logicalKey、note text、draft questionId、requirement reqId、format/mode/phase/sequence/category/record-category/step/task-id/normalized-finding-id/repair-ref-commit/expect-attempt-id/approve/choice の値・空値・条件付き組合せは既存 handler/domain validator に従う。検証: 各該当 leaf の valid/invalid 境界を integration matrix と実 CLI 代表ケースで照合する。",
+      "task_ids": [
+        "T-2",
+        "T-5"
+      ],
+      "priority": "must",
+      "preimplementation_test_expectation": "pass"
+    },
+    {
+      "id": "R6",
+      "desc": "ID/path/resource 契約を既存 owner から維持する。FlowSpecId に 100 文字制限を足さず、PreparingFlowId/PreparingFlowStore の runId は最大 200 文字で colon 不可、FlowTargetExpectation の token は最大 300 文字。各 --run-id、--expect-run-id、task/finding/attempt ID、commit は個別 owner に従う。--agent-work-dir は directory、gate --spec と --file と query --request-file は file、context path と set files rest path は各 command の root 解決・存在条件に従い、出力先へ一律の事前存在を求めない。text/JSON/path/set files 件数・総量/exclusions/retry・attempt/query request/context traversal/review evidence の既存上限または上限なしを各 owner と同じ値で検証し、新制限を加えない。検証: 既存 validator の境界テストと対象 leaf CLI の成功/拒否を照合する。",
+      "task_ids": [
+        "T-2",
+        "T-5"
+      ],
+      "priority": "must",
+      "preimplementation_test_expectation": "pass"
+    },
+    {
+      "id": "R7",
+      "desc": "共有 target guard 五種の適用集合を registry の実宣言から導出する。一致は従来のコマンド実行へ進み、不一致・無効な組合せは command 固有の変更前に失敗し、省略時の挙動を保つ。FlowTargetExpectation と buildFlowCommandHookContext を owner とし、同じ綴りの option を別 leaf で再解釈しない。検証: guard を持つ get/set/run で match/mismatch/invalid/omitted を実 CLI で確認する。",
+      "task_ids": [
+        "T-2",
+        "T-5"
+      ],
+      "priority": "must",
+      "preimplementation_test_expectation": "pass"
+    },
+    {
+      "id": "R8",
+      "desc": "三経路 sennel flow <group> --help、sennel help flow <group>、leaf なしの sennel flow <group> で、同一 group の subcommand/option 行の順序と空白を一致させる。行は name + ASCII 空白 2 個以上 + summary とし、切り詰め・連結をしない。subcommand は locale 非依存の名前昇順、明示 displayOrder は未指定・同値で名前昇順、option は canonical name 昇順（暗黙 help を含む）。検証: 四 group、13/14/15 文字、最長登録名、合成 64/65 文字を renderer/registry integration と実 CLI E2E で照合する。",
+      "task_ids": [
+        "T-1",
+        "T-3",
+        "T-5"
+      ],
+      "priority": "must",
+      "preimplementation_test_expectation": "fail"
+    },
+    {
+      "id": "R9",
+      "desc": "--agent-work-dir の空白区切り形式と等号形式を run entry point で同値に受け、起動前 path 初期化へ渡す。container の override > config.agent.workDir > .tmp、設定済み logs.dir の優先、finalize-cleanup durable root を維持し、agentWorkDir と logDir を同一視しない。検証: 2 形式と config 組合せを実 CLI と resolver test で比較する。",
+      "task_ids": [
+        "T-4",
+        "T-5"
+      ],
+      "priority": "must",
+      "preimplementation_test_expectation": "fail"
+    },
+    {
+      "id": "R10",
+      "desc": "help は handler・実行 hook を起動せず exit 0、正常実行は exit 0、selector 欠落・不明と実際の失敗は exit 1、leaf なし group help は表示して exit 1 とする。parse failure、target rejection、command failure の既存 lifecycle と状態/runtime log 副作用を保持し、追加の一律 admission・拒否順序・無 log 保証を設けない。検証: 実 dispatcher/CLI で各出口の exit、handler 呼出し、保存状態・log を確認する。",
+      "task_ids": [
+        "T-5"
+      ],
+      "priority": "must",
+      "preimplementation_test_expectation": "pass"
+    },
+    {
+      "id": "R11",
+      "desc": "query は bootstrapFlowQueryCli、src/flow/query.js、query-contract.js の独立 parser とし、共有 option/admission/help 投影・66 leaf matrix から除外する。stdin、--request-file、help、error の実経路を保持する。検証: tests/integration/flow/query.test.js と CLI E2E で四経路を確認する。",
+      "task_ids": [
+        "T-6"
+      ],
+      "priority": "must",
+      "preimplementation_test_expectation": "pass"
+    },
+    {
+      "id": "R12",
+      "desc": "移行 parity: ユーザー向け flow resume/prepare/get/set/run/report の受理・Usage/Options・group 表示は CommandDefinition/FLOW_COMMANDS と共有 renderer が所有し、実行・validation は既存 handler、target guard は FlowTargetExpectation/flow-context、runtime path は sennel.js/container、query は独立 owner が保持する。config.agent.workDir/logs.dir、Flow 状態/runtime log、生成済み docs/preset は既存 owner に残し、変更しない。検証: 共有 leaf parser matrix、四 group 三経路、get/set/run 実 CLI、query 四経路、docs scan/core help/plugin help の実表示をそれぞれ確認する。",
+      "task_ids": [
+        "T-2",
+        "T-3",
+        "T-4",
+        "T-5",
+        "T-6"
+      ],
+      "priority": "must",
+      "preimplementation_test_expectation": "pass"
+    }
+  ],
+  "acceptance_criteria": [
+    "共有 66 leaf を registry から再列挙し、全受理 option と暗黙 help が各 Options に一度ずつ出る。",
+    "四 group の全 direct child の完全契約積集合と三表示経路の行順・空白が一致する。run のみ --agent-work-dir を表示する。",
+    "13/14/15 文字、最長登録名 recover-missing-producer-artifact、合成 64/65 文字名で名前と summary の間に ASCII 空白が二つ以上ある。",
+    "実 CLI で resume/prepare、abort、guard 付き get/set/run、runtime path、parse/target/handler の失敗と exit を確認する。",
+    "query の stdin、request-file、help、error と docs scan/core help/plugin help を各実表示経路で確認する。",
+    "spec-local tests に // spec: R<N> ヘッダーを置き、工程専用シナリオは成果物の保存・読み戻し・利用を通して確認する。フル回帰は final-regression が所有する。"
+  ],
+  "clarifications": [
+    {
+      "q": "旧監査の 67 leaf を現在の分母とするか",
+      "a": "しない。現在の registry を再列挙し、共有 66 leaf と query 1 leaf を別に扱う。"
+    },
+    {
+      "q": "一律の入力上限・拒否順序を追加するか",
+      "a": "追加しない。各 leaf の既存 owner と既存値を保持し、境界ごとに検証する。"
+    }
+  ],
+  "alternatives_considered": [
+    {
+      "option": "help prose を逆解析して parser 契約を再構築する",
+      "reason": "定義が分散し、翻訳文面に入力権威が左右されるため採らない。"
+    },
+    {
+      "option": "query を共有 parser へ移す",
+      "reason": "独立 contract と stdin/request-file 経路の意味を変えるため今回の範囲から外す。"
+    },
+    {
+      "option": "全 leaf へ共通 admission validator または新しい一律上限を追加する",
+      "reason": "既存の leaf 別 validator と拒否順序を変更するため採らない。"
+    }
+  ],
+  "open_questions": [],
+  "keywords": [
+    "FLOW_COMMANDS",
+    "CommandDefinition",
+    "parseEntryInput",
+    "flowOptions",
+    "renderHelp",
+    "FlowTargetExpectation",
+    "agentWorkDir",
+    "group help",
+    "option authority",
+    "query parser",
+    "runtime log",
+    "subcommand rows"
+  ],
+  "implementationTargets": [
+    "src/flow/registry.js",
+    "src/lib/command-registry.js",
+    "src/lib/dispatcher.js",
+    "src/help.js",
+    "src/flow.js",
+    "src/sennel.js",
+    "src/lib/container.js",
+    "tests/integration/lib/command-registry.test.js",
+    "tests/e2e/help.test.js",
+    "tests/integration/flow/query.test.js",
+    "specs/6a9b5488-flow-help-contract/tests/"
+  ],
+  "tasks": [
+    {
+      "id": "T-1",
+      "title": "選択肢契約モデルを定義する",
+      "goal": "既存 CommandDefinition に option と subcommand 行の意味・不変条件を持たせる。",
+      "acceptance": [
+        "flag、必須値、任意値、alias、placeholder、説明、displayOrder が型で表現される。"
+      ],
+      "implementation_notes": "src/lib/command-registry.js の既存定義を拡張する。表示用 prose を parse して権威を再構成しない。",
+      "test_strategy": "specs/6a9b5488-flow-help-contract/tests/ に model/registry contract を置き、constructor invariant と既存 parser 投影を検証する。",
+      "parent": null,
+      "origin": "plan",
+      "added_round": 0,
+      "status": "pending"
+    },
+    {
+      "id": "T-2",
+      "title": "Flow の選択肢定義を移す",
+      "goal": "共有経路の全 leaf の入力定義と help 行を一つの option 契約から投影する。",
+      "acceptance": [
+        "現行 registry の共有 66 leaf 全件で parser の受理集合と Options 行が一致する。"
+      ],
+      "implementation_notes": "src/flow/registry.js と src/lib/command-registry.js。既存 guard、runtime option の共通定義を再利用し、query は独立させる。",
+      "test_strategy": "現行 registry を再帰列挙した integration matrix と個別 validator の既存テストを使う。",
+      "parent": null,
+      "origin": "plan",
+      "added_round": 0,
+      "status": "pending"
+    },
+    {
+      "id": "T-3",
+      "title": "グループ表示を共通化する",
+      "goal": "全 direct child の共通選択肢、並び順、行間隔を三つの公開 help 経路で揃える。",
+      "acceptance": [
+        "get/set/run/report の三経路で subcommand/option 行が一致し、最長名と合成 64/65 名でも区切られる。"
+      ],
+      "implementation_notes": "CommandDefinition.renderHelp と src/help.js の共通行 renderer を用いる。help prose と locale は保持する。",
+      "test_strategy": "renderer integration と実 CLI E2E を組み合わせる。",
+      "parent": null,
+      "origin": "plan",
+      "added_round": 0,
+      "status": "pending"
+    },
+    {
+      "id": "T-4",
+      "title": "作業ディレクトリ指定を整合させる",
+      "goal": "run の二つの --agent-work-dir 形式を起動前の path 初期化と共有 parser に一致させる。",
+      "acceptance": [
+        "空白区切りと等号形式が同じ override を渡し、logs.dir と finalize-cleanup の既存優先順位を保持する。"
+      ],
+      "implementation_notes": "src/sennel.js の pre-scan と src/lib/container.js の既存 resolver を使う。",
+      "test_strategy": "worktree の実 CLI と container path の既存テストを拡張する。",
+      "parent": null,
+      "origin": "plan",
+      "added_round": 0,
+      "status": "pending"
+    },
+    {
+      "id": "T-5",
+      "title": "共有経路の契約を検証する",
+      "goal": "全 leaf の入力と三表示経路、および実行・拒否・副作用の保存契約を確認する。",
+      "acceptance": [
+        "spec-local の全共有 leaf matrix と焦点を絞った E2E が parser/help/exit/guard/runtime を検証する。"
+      ],
+      "implementation_notes": "tests/integration/lib/command-registry.test.js、tests/e2e/help.test.js と工程専用シナリオを再利用する。",
+      "test_strategy": "正常、help、parse failure、target mismatch、command failure を実 CLI で確認する。",
+      "parent": null,
+      "origin": "plan",
+      "added_round": 0,
+      "status": "pending"
+    },
+    {
+      "id": "T-6",
+      "title": "独立表示経路を回帰確認する",
+      "goal": "query と非 Flow の共通 renderer 利用箇所の挙動を保持する。",
+      "acceptance": [
+        "query の stdin/request-file/help/error と docs/core/plugin の指定例が実経路で成立する。"
+      ],
+      "implementation_notes": "query parser を共有 option モデルに移行しない。",
+      "test_strategy": "tests/integration/flow/query.test.js と tests/e2e/help.test.js の実表示を確認する。",
+      "parent": null,
+      "origin": "plan",
+      "added_round": 0,
+      "status": "pending"
+    }
+  ]
+}

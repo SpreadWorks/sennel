@@ -1,5 +1,5 @@
 {
-  "analyzedAt": "2026-10-04T04:51:28.093Z",
+  "analyzedAt": "2026-10-05T05:20:59.376Z",
   "package": {
     "entries": [
       {
@@ -3617,9 +3617,9 @@
       },
       {
         "file": "src/flow/definition.js",
-        "hash": "c1c3e7718d487668751b5e0af5ef96b2",
-        "lines": 6644,
-        "mtime": "2026-10-04T04:47:56.868Z",
+        "hash": "c04866893dcd64c1a434727a76509bb5",
+        "lines": 6689,
+        "mtime": "2026-10-05T02:15:11.604Z",
         "className": "definition",
         "methods": [
           "RetryRecoveryBasis",
@@ -3787,6 +3787,7 @@
           "DraftStepExecutionIdentity",
           "DraftRefineStepState",
           "settleDraftStepResult",
+          "settlePrepareStepResult",
           "settleSpecStepResult",
           "collectGatePhaseEntries",
           "collectFlowLeafIds",
@@ -3915,6 +3916,9 @@
           "./engine/connectors/spec/spec-triage-connector.js",
           "./engine/connectors/spec/spec-repair-connector.js",
           "./engine/connectors/spec/spec-gate-connector.js",
+          "./engine/connectors/prepare/plan-preparation-connector.js",
+          "./engine/connectors/prepare/prepare-draft-connector.js",
+          "./lib/preparation-evidence.js",
           "./lib/step-tree.js",
           "./lib/nonblocking-route.js",
           "./lib/task-step-identity.js",
@@ -4099,6 +4103,7 @@
           "DraftStepExecutionIdentity",
           "DraftRefineStepState",
           "settleDraftStepResult",
+          "settlePrepareStepResult",
           "settleSpecStepResult",
           "collectGatePhaseEntries",
           "collectFlowLeafIds",
@@ -4218,25 +4223,23 @@
           "src/flow/registry.js"
         ],
         "id": "2cb27b93",
-        "summary": "Central flow-definition controller for typed workflow decisions, node catalogs, lifecycle updates, recovery, and step routing.",
-        "detail": "Defines immutable flow and task catalogs for draft, specification, review, triage, repair, gate, finalization, acceptance, reporting, and test-chain stages. Provides queries for leaves, branches, nodes, phases, prerequisites, initial state, and active steps. Validates typed facts and identities, applies phase policies, attempt limits, failure ownership, and source-quality recovery routes, and resolves retry, repair, blocking, approval, nonblocking, recovery, reconciliation, and publication decisions. Converts step results into lifecycle actions, transition plans, connector routes, settlements, receipts, dispatch actions, and persisted execution state.",
+        "summary": "Flow-definition engine that models immutable workflow graphs and resolves typed state into guarded routes, recovery decisions, lifecycle actions, and step settlements.",
+        "detail": "Coordinates workflow execution across draft, preparation, specification, testing, review, gate, acceptance, and finalization phases. Defines typed facts, dispositions, decisions, transition plans, recovery strategies, nonblocking eligibility, lifecycle actions, execution receipts, and route settlements. Builds flow and task definitions with ordering, branching, prerequisites, leaf and phase mappings, initial and active-step discovery, skippable steps, attempt limits, side effects, and dispatcher ownership. Resolver helpers enforce invariants, retry limits, evidence bindings, source-quality and publication recovery, task lifecycle updates, Task Review completion, reconciliation decisions, and deterministic routing for successful, failed, deferred, blocked, and user-input outcomes.",
         "chapter": "internal_design",
         "role": "controller",
         "enrich": {
-          "processedAt": "2026-10-04T04:53:09.177Z",
+          "processedAt": "2026-10-05T05:23:06.645Z",
           "attempts": 1
         },
-        "app": "senti",
         "keywords": [
           "workflow orchestration",
           "flow definition",
-          "task routing",
-          "phase policies",
           "state transitions",
           "recovery planning",
-          "lifecycle actions",
-          "typed facts",
-          "execution receipts"
+          "task lifecycle",
+          "prerequisites",
+          "gate handling",
+          "step settlement"
         ]
       },
       {
@@ -4330,10 +4333,59 @@
         ]
       },
       {
+        "file": "src/flow/engine/composition/prepare.js",
+        "hash": "c6183aeed67c5d9b6455bff6f6321617",
+        "lines": 48,
+        "mtime": "2026-10-05T02:15:11.604Z",
+        "className": "prepare",
+        "methods": [
+          "PrepareStepBinding",
+          "preparePlanPreparationServiceArguments",
+          "prepareStepRegistration"
+        ],
+        "imports": [
+          "./step-registration.js",
+          "../step-binding.js",
+          "../../steps/prepare/branch.js",
+          "../../steps/prepare/prepare-spec.js",
+          "../../services/plan-preparation-input.js",
+          "../../services/plan-preparation-service.js",
+          "../../services/plan-preparation-settlement-writer.js",
+          "../../lib/execution-admission.js"
+        ],
+        "exports": [
+          "PrepareStepBinding",
+          "preparePlanPreparationServiceArguments",
+          "prepareStepRegistration",
+          "prepareStepRegistrations"
+        ],
+        "extends": "StepBinding",
+        "usedBy": [
+          "src/flow/engine/composition/registered-step-execution.js",
+          "src/flow/registry.js"
+        ],
+        "id": "18782185",
+        "summary": "Composes preparation steps by binding registered leaves to services, inputs, settlement writing, and execution contracts.",
+        "detail": "Defines PrepareStepBinding, validates preparation leaves and registered bindings, constructs PlanPreparationInput and PlanPreparationSettlementWriter arguments, and declares preparation step registrations with lookup by step ID.",
+        "chapter": "project_structure",
+        "role": "lib",
+        "enrich": {
+          "processedAt": "2026-10-05T05:23:06.645Z",
+          "attempts": 1
+        },
+        "keywords": [
+          "preparation binding",
+          "step registration",
+          "service composition",
+          "settlement writer",
+          "execution contract"
+        ]
+      },
+      {
         "file": "src/flow/engine/composition/registered-step-execution.js",
-        "hash": "ed76c11fe9f10b994b3e5cd5c23ee707",
-        "lines": 36,
-        "mtime": "2026-09-29T09:32:03.536Z",
+        "hash": "0439e70e4bd841aadaf01d3432804d0c",
+        "lines": 37,
+        "mtime": "2026-10-05T02:15:11.604Z",
         "className": "registered-step-execution",
         "methods": [
           "workerStepExecutionRegistration",
@@ -4344,7 +4396,8 @@
         "imports": [
           "../../definition.js",
           "./draft.js",
-          "./spec.js"
+          "./spec.js",
+          "./prepare.js"
         ],
         "exports": [
           "workerStepExecutionRegistration",
@@ -4357,20 +4410,22 @@
           "src/flow/registry.js"
         ],
         "id": "4f206f28",
-        "summary": "Resolves registered execution contracts for flow workers, regular steps, gates, and reviews.",
-        "detail": "Uses definition leaf ranges and Draft or Spec registration lookups to select worker and flow execution registrations. Missing worker or flow contracts raise errors, while gate and review registration lookups return null when no registration exists.",
+        "summary": "Resolves worker and flow execution registrations for definition leaves and exposes phase-specific lookup helpers.",
+        "detail": "Combines flow leaf ranges with draft, specification, and preparation registration modules. It returns matching worker or flow execution contracts and throws when a definition leaf lacks a required registration; gate and review registration lookups currently return null.",
         "chapter": "project_structure",
-        "role": "controller",
+        "role": "config",
         "enrich": {
-          "processedAt": "2026-09-29T14:15:03.829Z",
+          "processedAt": "2026-10-05T05:23:06.645Z",
           "attempts": 1
         },
         "keywords": [
           "execution registration",
-          "flow dispatch",
-          "worker contract",
-          "gate registration",
-          "review registration"
+          "worker steps",
+          "flow steps",
+          "step dispatch",
+          "registration lookup",
+          "gate execution",
+          "review execution"
         ]
       },
       {
@@ -4573,7 +4628,8 @@
         "usedBy": [
           "src/flow/engine/composition/draft.js",
           "src/flow/engine/composition/spec-gate-repair.js",
-          "src/flow/engine/composition/spec.js"
+          "src/flow/engine/composition/spec.js",
+          "src/flow/engine/composition/prepare.js"
         ],
         "id": "15eb41ec",
         "summary": "Defines prepared step handoffs and registrations for constructing executable flow steps.",
@@ -4860,6 +4916,78 @@
           "review routing",
           "worker request",
           "step connector"
+        ]
+      },
+      {
+        "file": "src/flow/engine/connectors/prepare/plan-preparation-connector.js",
+        "hash": "9e617937d295b9d8910d9345a69f3dbc",
+        "lines": 17,
+        "mtime": "2026-10-05T02:15:11.605Z",
+        "className": "plan-preparation-connector",
+        "methods": [
+          "PlanPreparationConnector"
+        ],
+        "imports": [
+          "../../step-connector.js",
+          "../../../lib/preparation-evidence.js"
+        ],
+        "exports": [
+          "PlanPreparationConnector"
+        ],
+        "extends": "StepConnector",
+        "usedBy": [
+          "src/flow/definition.js"
+        ],
+        "id": "285f070d",
+        "summary": "Provides the connector class for plan-preparation step execution.",
+        "detail": "Defines PlanPreparationConnector as a StepConnector and imports PreparationEvidence for preparation-related connector behavior.",
+        "chapter": "internal_design",
+        "role": "other",
+        "enrich": {
+          "processedAt": "2026-10-05T05:23:06.645Z",
+          "attempts": 1
+        },
+        "keywords": [
+          "plan preparation",
+          "step connector",
+          "preparation evidence",
+          "connector integration"
+        ]
+      },
+      {
+        "file": "src/flow/engine/connectors/prepare/prepare-draft-connector.js",
+        "hash": "1c30fb7478a83d83ad939e68e3595fd0",
+        "lines": 16,
+        "mtime": "2026-10-05T02:15:11.605Z",
+        "className": "prepare-draft-connector",
+        "methods": [
+          "PrepareDraftConnector"
+        ],
+        "imports": [
+          "../../step-connector.js",
+          "../../../lib/preparation-evidence.js"
+        ],
+        "exports": [
+          "PrepareDraftConnector"
+        ],
+        "extends": "StepConnector",
+        "usedBy": [
+          "src/flow/definition.js"
+        ],
+        "id": "6d8795c5",
+        "summary": "Provides the connector class for prepare-draft step execution.",
+        "detail": "Defines PrepareDraftConnector as a StepConnector and imports PreparationEvidence for prepare-draft connector behavior.",
+        "chapter": "internal_design",
+        "role": "other",
+        "enrich": {
+          "processedAt": "2026-10-05T05:23:06.645Z",
+          "attempts": 1
+        },
+        "keywords": [
+          "prepare draft",
+          "step connector",
+          "preparation evidence",
+          "draft preparation"
         ]
       },
       {
@@ -5270,9 +5398,9 @@
       },
       {
         "file": "src/flow/engine/step-result.js",
-        "hash": "baa5106f5148e5c6f6736c81b09a03c9",
-        "lines": 340,
-        "mtime": "2026-09-27T02:33:49.109Z",
+        "hash": "bf3d8314f1961c163ce43980c3f9cf5f",
+        "lines": 349,
+        "mtime": "2026-10-05T02:15:11.606Z",
         "className": "step-result",
         "methods": [
           "StepResult",
@@ -5300,6 +5428,9 @@
           "stepResultKinds",
           "STEP_RESULT_TYPE",
           "DraftCreatedResult",
+          "BranchPreparedResult",
+          "BranchNotRequiredResult",
+          "PrepareSpecReadyResult",
           "SpecCreatedResult",
           "SpecGateRepairReadyForGateResult",
           "SpecGateRepairReviewRequiredResult",
@@ -5357,23 +5488,23 @@
           "src/flow/registry.js"
         ],
         "id": "886fac8d",
-        "summary": "Implements typed StepResult values, error handling, persistence, hashing, rehydration, and result registration.",
-        "detail": "The module defines immutable StepResult data with fixed type validation, serialized error handling, service-backed persistence, SHA-256 digests, and registry-based rehydration. It declares numerous flow-specific result classes, a StepErrorResult subclass, a frozen result registry, and helpers for retrieving result kinds by step.",
+        "summary": "Implements typed, immutable step results with persistence, rehydration, digesting, and registry-based outcome lookup.",
+        "detail": "Defines StepResult and StepErrorResult, validates registered step IDs and stored fields, serializes results to JSON, computes SHA-256 digests, rehydrates persisted errors and results, declares result classes for draft, preparation, specification, review, gate, and repair outcomes, and exposes registries and per-step kind lookup.",
         "chapter": "internal_design",
         "role": "model",
         "enrich": {
-          "processedAt": "2026-09-27T02:37:34.845Z",
+          "processedAt": "2026-10-05T05:23:06.645Z",
           "attempts": 1
         },
         "keywords": [
-          "StepResult",
+          "step result",
           "result registry",
-          "error rehydration",
-          "persistence",
+          "JSON persistence",
+          "rehydration",
           "SHA-256 digest",
-          "typed results",
-          "serialization",
-          "flow outcomes"
+          "error result",
+          "result validation",
+          "execution outcomes"
         ]
       },
       {
@@ -5697,7 +5828,8 @@
           "src/flow/lib/artifact-view-cache.js",
           "src/flow/lib/artifact-view-reader.js",
           "src/flow/lib/artifact-view-renderer.js",
-          "src/flow/lib/artifact-view-summary.js"
+          "src/flow/lib/artifact-view-summary.js",
+          "src/flow/lib/preparation-evidence.js"
         ],
         "id": "4a92576c",
         "summary": "Provides deterministic serialization and SHA-256 fingerprinting for artifact-view inputs. It also creates immutable, clone-safe fingerprint payloads.",
@@ -6466,9 +6598,9 @@
       },
       {
         "file": "src/flow/lib/canonical-flow-manager-store.js",
-        "hash": "93680d20a131ec567a5197d247f2411d",
-        "lines": 8330,
-        "mtime": "2026-09-30T16:20:18.453Z",
+        "hash": "6cb2fad0787098b61eaa305cba212369",
+        "lines": 8544,
+        "mtime": "2026-10-05T02:15:11.607Z",
         "className": "canonical-flow-manager-store",
         "methods": [
           "CanonicalRawActivityReplayOnlyError",
@@ -6485,6 +6617,7 @@
           "executionMode",
           "activityId",
           "stableActivityId",
+          "canonicalArtifactWriteIdentity",
           "timestampAfter",
           "testChainPlanDigest",
           "testChainPlanActivityId",
@@ -6533,6 +6666,8 @@
           "specRecordAt"
         ],
         "imports": [
+          "./preparation-evidence.js",
+          "./step-admission-refusal.js",
           "./advisory-summary.js",
           "./draft-question-resume-receipt.js",
           "../engine/connectors/draft/draft-step-binding.js",
@@ -6628,30 +6763,32 @@
           "src/flow/lib/run-prepare-spec.js"
         ],
         "id": "041f2538",
-        "summary": "Canonical Flow manager store orchestrating validated state transitions, execution attempts, recovery, lifecycle settlement, and artifact publication.",
-        "detail": "This central controller validates requests, domain identities, typed outcomes, active-attempt bindings, stale sources, producer ownership, artifact catalog contracts, Definition-plan selections, replay identity, lineage, receipts, baselines, and publication consistency. It projects runtime state; manages executable Tasks, Steps, Attempts, and Activities; coordinates Definition-owned Gate decisions; and persists results through the runtime. It orchestrates Draft, Spec, Task Review, Requirement Test, source handoff, repair, retry, failure, recovery, nonblocking execution, issue-log, file-map, metric, outbox, notes, policy-update, runtime-metadata, flow-version-resolution, and artifact-publication workflows, including draft lifecycle data, lineage records, canonical runtime artifacts, and durable execution results, while rejecting invalid or conflicting state.",
+        "summary": "Canonical flow manager store validating state transitions, persisting artifacts, and coordinating recovery-safe workflow settlement.",
+        "detail": "This module is the canonical management boundary for Spec, Task, Gate, Draft, review, test, handoff, outbox, and preparation workflows. It validates typed decisions, outcomes, admissions, identities, bindings, artifact ownership, and catalog paths; projects runtime state; enforces active-attempt and catalog-baseline consistency; rejects stale or conflicting mutations; coordinates task review, source-worker handoffs, failures, deferrals, test-chain settlements, and nonblocking decisions; records canonical activities, issue logs, receipts, and lineage; supports exact replay and recovery admission; serializes JSON artifacts; delegates durable effects to canonical runtime and artifact stores; and resolves the canonical Flow Version 1 location.",
         "chapter": "internal_design",
-        "role": "controller",
+        "role": "lib",
         "enrich": {
-          "processedAt": "2026-09-30T16:29:29.037Z",
+          "processedAt": "2026-10-05T05:23:06.645Z",
           "attempts": 1
         },
+        "app": "flow",
         "keywords": [
           "canonical flow state",
-          "lifecycle orchestration",
           "attempt settlement",
-          "task execution",
-          "gate recovery",
           "artifact publication",
-          "state validation",
-          "producer ownership"
+          "state projection",
+          "conflict detection",
+          "recovery admission",
+          "replay safety",
+          "artifact persistence",
+          "task review"
         ]
       },
       {
         "file": "src/flow/lib/canonical-flow-runtime.js",
-        "hash": "674d6f648894c73fb5d48133beb65e98",
+        "hash": "bcbb4d1a7867ed1db61793c17f30661b",
         "lines": 1430,
-        "mtime": "2026-09-27T08:18:43.531Z",
+        "mtime": "2026-10-05T02:15:11.608Z",
         "className": "canonical-flow-runtime",
         "methods": [
           "CanonicalFlowRuntime",
@@ -6677,21 +6814,23 @@
           "src/flow/lib/issue-log-store.js"
         ],
         "id": "8d606675",
-        "summary": "Canonical flow runtime facade for applying activities and managing execution state.",
-        "detail": "Defines the CanonicalFlowRuntime class, which exposes the runtime API for loading stores, creating flows, reading snapshots and reviews, publishing artifacts, recording observations, transitioning attempts, handling outboxes, approving dispatch, and settling deferred findings. It validates typed inputs and operation-specific invariants while delegating durable state changes to the canonical manager store.",
+        "summary": "Canonical flow runtime orchestrates validated state transitions through the flow manager store.",
+        "detail": "CanonicalFlowRuntime validates specifications, Attempts, and numeric inputs, resolves versioned stores, and delegates state changes through typed activities and attempt transitions. It supports draft and review workflows, artifact and plugin publication, outbox lifecycle operations, dispatch approval, metrics and notes, deferred findings, Gate settlement, and current-Attempt checks while rejecting invalid runtime states and unsupported operations.",
         "chapter": "internal_design",
         "role": "lib",
         "enrich": {
-          "processedAt": "2026-09-27T08:57:33.759Z",
+          "processedAt": "2026-10-05T05:23:06.645Z",
           "attempts": 1
         },
+        "app": "senti",
         "keywords": [
-          "flow runtime",
-          "activity dispatch",
-          "attempt transitions",
-          "outbox processing",
+          "canonical flow runtime",
+          "state transitions",
+          "attempt validation",
           "artifact publication",
-          "state management"
+          "outbox lifecycle",
+          "deferred findings",
+          "flow manager"
         ]
       },
       {
@@ -7361,9 +7500,9 @@
       },
       {
         "file": "src/flow/lib/current-flow-state.js",
-        "hash": "19deedd679b3ca8a7837ec399a636532",
-        "lines": 10293,
-        "mtime": "2026-09-30T16:20:18.455Z",
+        "hash": "fcc96d2364f6bd3e8511ab02b8db9f56",
+        "lines": 10314,
+        "mtime": "2026-10-05T02:15:11.610Z",
         "className": "current-flow-state",
         "methods": [
           "CanonicalFlowArtifactWrite",
@@ -7462,6 +7601,7 @@
           "CurrentFlowStateSnapshot",
           "CurrentFlowStateStore",
           "CurrentFlowStateAdoptionBoundary",
+          "CanonicalTransitionView",
           "CurrentFlowVersionStore",
           "CurrentFlowVersionSemanticValidator",
           "CurrentFlowVersionMigrationOutputBuilder",
@@ -7513,6 +7653,7 @@
           "assertJournalAttemptIdentities"
         ],
         "imports": [
+          "./preparation-evidence.js",
           "node:crypto",
           "./draft-worker-rejection.js",
           "node:fs",
@@ -7644,6 +7785,7 @@
           "CurrentFlowStateSnapshot",
           "CurrentFlowStateStore",
           "CurrentFlowStateAdoptionBoundary",
+          "CanonicalTransitionView",
           "CurrentFlowVersionStore",
           "CurrentFlowVersionSemanticValidator",
           "CurrentFlowVersionMigrationOutputBuilder",
@@ -7687,23 +7829,23 @@
           "src/flow/registry.js"
         ],
         "id": "42607a0e",
-        "summary": "Defines the durable current-flow state model, lifecycle transitions, execution recovery, artifact and Spec revision authority, journaling, persistence, and migration validation.",
-        "detail": "This typed CurrentFlowState aggregate and its value objects govern flow identity, policies, nodes, Tasks, Attempts, Gates, Reviews, requirement tests, results, failures, artifacts, approvals, outbox operations, draft execution, and historical continuation. Constructors and transitions enforce lifecycle, retry, recovery, confirmation, execution-frontier, artifact-baseline, removal, review-publication, and source-worker-upgrade invariants. The module provides typed Activities and transition payloads, canonical transition views, dynamic Task admission, canonical artifact and catalog authority checks, root and immutable Spec revision snapshots, append-only integrity-checked activity journals, SHA-256 identity validation, typed receipts, conflict detection, locked state snapshots, filesystem-atomic writes, atomic Version-store creation, and evidence-validated migration from compatible legacy state.",
+        "summary": "Defines the canonical flow-state model, invariants, validation rules, artifact handling, activity journaling, persistence, and transition machinery for flow execution.",
+        "detail": "Implements typed representations for flow identity, lifecycle and policy, artifacts, outbox entries, nodes, attempts, failures, execution cursors, migration checkpoints, draft settlements, worker proposals, activities, and evidence records. It enforces structural and lifecycle invariants across attempts, task gates, reviews, requirement tests, retries, recovery routes, and lifecycle transitions; validates canonical artifact and test-source operations, Spec revision authority, catalog descriptors, immutable snapshots, review publication, artifact baselines and removals, source-worker upgrade evidence, typed task admission, semantic validity, and atomic Spec persistence. The module maintains append-only activity journals with authority checks, serializes and validates flow state, persists snapshots through CurrentFlowStateStore, provides Version-level canonical views for specifications, artifacts, task admission, and review publication, constructs migration outputs, and applies transitions for parking, resuming, finalizing, task insertion, attempt replacement, failure recording, retry and recovery, historical continuation, schema migration, and outbox recovery.",
         "chapter": "internal_design",
         "role": "model",
         "enrich": {
-          "processedAt": "2026-09-30T16:29:29.037Z",
+          "processedAt": "2026-10-05T05:23:06.645Z",
           "attempts": 1
         },
-        "app": "sennel",
+        "app": "senti",
         "keywords": [
-          "current flow state",
-          "lifecycle transitions",
-          "attempt recovery",
+          "flow state",
+          "state invariants",
+          "transition validation",
+          "artifact authority",
           "activity journal",
-          "artifact integrity",
-          "Spec revision authority",
-          "atomic persistence",
+          "retry recovery",
+          "Spec revision",
           "schema migration"
         ]
       },
@@ -7800,7 +7942,8 @@
           "src/flow/lib/run-review.js",
           "src/flow/lib/spec-review-operations.js",
           "src/flow/lib/worker-artifact-handoff.js",
-          "src/flow/registry.js"
+          "src/flow/registry.js",
+          "src/flow/lib/run-prepare-spec.js"
         ],
         "id": "604504fc",
         "summary": "Defines failure and settlement handling for definition lifecycle attempts and step-result persistence.",
@@ -8889,9 +9032,9 @@
       },
       {
         "file": "src/flow/lib/execution-admission.js",
-        "hash": "a1b8fba182fe31dac527c7956b7a132d",
-        "lines": 162,
-        "mtime": "2026-09-29T09:32:03.537Z",
+        "hash": "560118c291ea98f79ad23e978bba2de5",
+        "lines": 247,
+        "mtime": "2026-10-05T02:15:11.610Z",
         "className": "execution-admission",
         "methods": [
           "GateExecutionAdmissionSelection",
@@ -8904,7 +9047,11 @@
           "selectReviewExecutionAdmission",
           "assertCurrentReviewExecutionSelection",
           "projectReviewExecutionAdmission",
-          "executeReviewSelection"
+          "executeReviewSelection",
+          "PrepareExecutionAdmissionSelection",
+          "selectPrepareExecutionAdmission",
+          "projectPrepareExecutionAdmission",
+          "executePrepareSelection"
         ],
         "imports": [
           "../definition.js",
@@ -8913,7 +9060,10 @@
           "./gate-transition-application.js",
           "./step-admission-refusal.js",
           "../engine/composition/step-execution-contract.js",
-          "node:util"
+          "node:util",
+          "./preparation-evidence.js",
+          "../engine/step-binding.js",
+          "./next-action-directive.js"
         ],
         "exports": [
           "GateExecutionAdmissionSelection",
@@ -8927,8 +9077,13 @@
           "assertCurrentReviewExecutionSelection",
           "projectReviewExecutionAdmission",
           "executeReviewSelection",
+          "PrepareExecutionAdmissionSelection",
+          "selectPrepareExecutionAdmission",
+          "projectPrepareExecutionAdmission",
+          "executePrepareSelection",
           "gateStepExecutionContract",
-          "reviewStepExecutionContract"
+          "reviewStepExecutionContract",
+          "prepareStepExecutionContract"
         ],
         "extends": null,
         "usedBy": [
@@ -8937,20 +9092,22 @@
           "src/flow/registry.js"
         ],
         "id": "5bbf2741",
-        "summary": "Selects, validates, projects, and executes registered Gate and Review admissions.",
-        "detail": "Provides admission selection objects for Gate and Review execution, checks that selections remain current, rejects changed selections, projects decisions or dispositions, and delegates execution through registered step contracts.",
+        "summary": "Selects, validates, projects, and executes gate, review, and preparation admissions.",
+        "detail": "Defines registered admission selections for gate, review, and preparation execution. It rejects missing or changed selections, projects gate decisions and review dispositions, validates preparation registration and evidence requirements, supports blocked directives, and delegates execution through StepExecutionContract instances.",
         "chapter": "internal_design",
-        "role": "controller",
+        "role": "lib",
         "enrich": {
-          "processedAt": "2026-09-29T14:15:03.829Z",
+          "processedAt": "2026-10-05T05:23:06.645Z",
           "attempts": 1
         },
         "keywords": [
           "execution admission",
-          "Gate selection",
-          "Review selection",
-          "step contract",
-          "admission refusal"
+          "gate selection",
+          "review selection",
+          "preparation admission",
+          "state validation",
+          "step execution contract",
+          "blocked directive"
         ]
       },
       {
@@ -10971,12 +11128,13 @@
       },
       {
         "file": "src/flow/lib/get-next-action.js",
-        "hash": "a2f10826ea9b6c893bb200a282246e2a",
-        "lines": 1095,
-        "mtime": "2026-09-29T09:32:03.538Z",
+        "hash": "3c85c4a059e338f8231d274c55d2caeb",
+        "lines": 1107,
+        "mtime": "2026-10-05T02:15:11.610Z",
         "className": "get-next-action",
         "methods": [
           "projectApprovalRequirements",
+          "projectPrepareStepExecution",
           "blockedTestChainProjection",
           "resolveSchemaDir",
           "loadSchema",
@@ -11009,6 +11167,7 @@
           "../engine/composition/draft.js",
           "../engine/composition/spec.js",
           "../engine/composition/registered-step-execution.js",
+          "../engine/composition/prepare.js",
           "./next-action-plan-error.js",
           "../../lib/flow-schema-revision.js",
           "fs",
@@ -11059,20 +11218,23 @@
           "src/flow/lib/run-dispatch.js"
         ],
         "id": "c68afd69",
-        "summary": "Builds guarded canonical next-action plans for the current flow state.",
-        "detail": "Loads action schemas and persistent rules, derives task context and targets, routes Gate, review, recovery, approval, regression, and interruption cases, and emits commands, directives, blocked states, or completion results through GetNextActionCommand.",
+        "summary": "Builds canonical next-action plans from current flow state and recovery conditions.",
+        "detail": "Loads schemas and persistent rules, derives task context, captures target bindings, and routes gate, approval, acceptance, final-regression, retry, recovery, and blocked states into canonical next-action results. The command also validates target identity, produces user decisions or execution directives, and represents completed or aborted flow states.",
         "chapter": "cli_commands",
         "role": "cli",
         "enrich": {
-          "processedAt": "2026-09-29T14:15:03.829Z",
+          "processedAt": "2026-10-05T05:23:06.645Z",
           "attempts": 1
         },
         "keywords": [
           "next action",
-          "action plan",
-          "guarded command",
-          "flow recovery",
-          "CLI directive"
+          "flow command",
+          "canonical target",
+          "approval routing",
+          "final regression",
+          "retry recovery",
+          "blocked state",
+          "task context"
         ]
       },
       {
@@ -11690,7 +11852,8 @@
           "src/flow/lib/finalization-outbox-recovery.js",
           "src/flow/lib/get-next-action.js",
           "src/flow/lib/run-dispatch.js",
-          "src/flow/lib/worker-execution-admission.js"
+          "src/flow/lib/worker-execution-admission.js",
+          "src/flow/lib/execution-admission.js"
         ],
         "id": "8ab50868",
         "summary": "Defines and resolves validated next-action directives.",
@@ -12470,6 +12633,49 @@
           "gate phases",
           "path normalization",
           "request limits"
+        ]
+      },
+      {
+        "file": "src/flow/lib/preparation-evidence.js",
+        "hash": "b0d0c9c090acdb59f516e74ae9528aa4",
+        "lines": 56,
+        "mtime": "2026-10-05T02:15:11.610Z",
+        "className": "preparation-evidence",
+        "methods": [
+          "PreparationEvidence"
+        ],
+        "imports": [
+          "../../lib/git-snapshot.js",
+          "./artifact-view-fingerprint.js"
+        ],
+        "exports": [
+          "PreparationEvidence"
+        ],
+        "extends": null,
+        "usedBy": [
+          "src/flow/definition.js",
+          "src/flow/lib/canonical-flow-manager-store.js",
+          "src/flow/lib/current-flow-state.js",
+          "src/flow/lib/execution-admission.js",
+          "src/flow/lib/run-prepare-spec.js"
+        ],
+        "id": "28951ef7",
+        "summary": "Models and validates immutable preparation evidence for a Step.",
+        "detail": "Requires exact serialized fields, creation and execution identity, and an optional captured Issue snapshot. It enforces mandatory plugin and analysis evidence for ready preparation, requires worktree binding identity when applicable, verifies Step ownership, and provides structured cloning of the evidence payload.",
+        "chapter": "internal_design",
+        "role": "model",
+        "enrich": {
+          "processedAt": "2026-10-05T05:23:06.645Z",
+          "attempts": 1
+        },
+        "keywords": [
+          "preparation evidence",
+          "serialized fields",
+          "execution identity",
+          "Issue snapshot",
+          "plugin evidence",
+          "analysis evidence",
+          "worktree binding"
         ]
       },
       {
@@ -14855,9 +15061,9 @@
       },
       {
         "file": "src/flow/lib/run-dispatch.js",
-        "hash": "5b461529fb711581ef65b53c90f70845",
-        "lines": 3031,
-        "mtime": "2026-10-04T04:47:56.870Z",
+        "hash": "58eb1867dd50ce137576830b4329db9c",
+        "lines": 3044,
+        "mtime": "2026-10-05T02:15:11.611Z",
         "className": "run-dispatch",
         "methods": [
           "DispatcherOwnedFlowCommand",
@@ -14869,6 +15075,7 @@
           "FlowDispatchBoundary",
           "workerFacingNextAction",
           "FlowDispatchWork",
+          "executeSelectedPrepareStepExecution",
           "conditionalDraftAdmissionError",
           "agentFailuresFor",
           "isUnclassifiedWorkerError",
@@ -14918,6 +15125,7 @@
         "imports": [
           "./worker-execution-admission.js",
           "../engine/composition/registered-step-execution.js",
+          "../engine/composition/prepare.js",
           "../engine/composition/spec-gate-repair.js",
           "./spec-gate-repair-progress.js",
           "./spec-gate-repair-execution.js",
@@ -14979,21 +15187,23 @@
         "extends": "Error",
         "usedBy": null,
         "id": "6c7fd82a",
-        "summary": "Implements flow dispatch orchestration across approvals, worker handoffs, retries, continuations, and dispatcher-owned commands.",
-        "detail": "Validates selected actions and repository fingerprints, persists approval receipts, acquires dispatch leases, admits worker calls, and runs registered flow commands. It records failures and diagnostics, enforces canonical schemas and attempt identities, handles stale or non-replayable handoffs, and returns blocked, failed, or progressed dispatch boundaries.",
+        "summary": "Coordinates guarded flow dispatch, worker handoffs, approvals, retries, and failure recovery.",
+        "detail": "Implements the dispatch command and its supporting boundaries, leases, locks, repository fingerprints, approval receipts, worker admissions, agent invocations, and registered command execution. It classifies worker failures, persists diagnostics, validates handoff artifacts, supports retry and quarantine paths, flushes deferred metrics, and returns structured success, failure, or blocked boundaries.",
         "chapter": "project_structure",
         "role": "controller",
         "enrich": {
-          "processedAt": "2026-10-04T04:53:09.177Z",
+          "processedAt": "2026-10-05T05:23:06.645Z",
           "attempts": 1
         },
         "keywords": [
-          "flow-dispatch",
-          "worker-handoff",
-          "approval-receipt",
-          "dispatch-lease",
-          "retry-feedback",
-          "continuation"
+          "flow dispatch",
+          "worker handoff",
+          "approval receipt",
+          "repository fingerprint",
+          "dispatch lease",
+          "worker retry",
+          "failure recovery",
+          "blocked boundary"
         ]
       },
       {
@@ -15830,9 +16040,9 @@
       },
       {
         "file": "src/flow/lib/run-prepare-spec.js",
-        "hash": "f8c48fa07f1b01adf700385a02296ea8",
-        "lines": 1267,
-        "mtime": "2026-09-24T16:04:26.253Z",
+        "hash": "b89e254aa00f2fb29e09b61f23f2fb67",
+        "lines": 1379,
+        "mtime": "2026-10-05T02:15:11.611Z",
         "className": "run-prepare-spec",
         "methods": [
           "buildDraftTemplate",
@@ -15844,10 +16054,13 @@
           "isSpecDirectory",
           "generateSpecIdentity",
           "titleFromSpecId",
-          "ensureBaseBranch",
           "detectBaseBranch",
           "runDocsScanAndValidate",
           "hookSnapshotFor",
+          "executePrepareStepExecution",
+          "replayPrepareStepReceipt",
+          "recoverPrepareStepExecution",
+          "acquiredPreparationEvidence",
           "copyPluginRuntimeDirectory",
           "syncPluginRuntimeToWorktree",
           "gitPathspecStatus",
@@ -15877,8 +16090,6 @@
           "../../lib/product.js",
           "../../lib/process.js",
           "../../docs/lib/analysis-entry.js",
-          "../../lib/flow-helpers.js",
-          "./step-tree.js",
           "../../lib/git-helpers.js",
           "../../lib/spec-json.js",
           "../../lib/hooks.js",
@@ -15894,6 +16105,10 @@
           "../../lib/atomic-file.js",
           "../../lib/repository-maintenance-lock.js",
           "../../lib/process-identity.js",
+          "../engine/composition/prepare.js",
+          "./preparation-evidence.js",
+          "./definition-lifecycle-failure.js",
+          "./step-admission-refusal.js",
           "../../lib/worktree-flow-binding.js"
         ],
         "exports": [
@@ -15906,22 +16121,22 @@
           "src/flow/engine/composition/registered-step-execution.js"
         ],
         "id": "59eeacc6",
-        "summary": "Prepares a specification flow and optionally creates an isolated Git worktree.",
-        "detail": "Builds draft specifications, detects repository state, validates required branch files, synchronizes plugin runtime data, records an atomic preparation journal, runs lifecycle hooks, and supports guarded rollback of failed preparation attempts.",
+        "summary": "Orchestrates flow specification preparation with Git, worktree, plugin, hook, and recovery support.",
+        "detail": "Defines the RunPrepareSpecCommand workflow for creating and preparing flow specifications. It validates run and worktree preparation state, derives spec identities, detects the base branch, runs documentation analysis, validates configuration, synchronizes plugin runtime files, checks required branch files, and records preparation evidence. Atomic journals, operation locks, Git object checks, ownership validation, retry recovery, rollback handling, flow bindings, lifecycle hooks, and canonical flow state updates protect preparation from stale or partial operations.",
         "chapter": "cli_commands",
         "role": "controller",
         "enrich": {
-          "processedAt": "2026-09-24T16:07:53.231Z",
+          "processedAt": "2026-10-05T05:23:06.645Z",
           "attempts": 1
         },
-        "app": "sennel",
         "keywords": [
           "prepare spec",
           "worktree",
-          "Git branch",
-          "plugin sync",
-          "rollback journal",
-          "flow hooks"
+          "Git recovery",
+          "plugin synchronization",
+          "preparation journal",
+          "flow state",
+          "rollback"
         ]
       },
       {
@@ -19716,7 +19931,9 @@
           "src/flow/lib/run-dispatch.js",
           "src/flow/lib/execution-admission.js",
           "src/flow/lib/run-gate.js",
-          "src/flow/lib/spec-review-operations.js"
+          "src/flow/lib/spec-review-operations.js",
+          "src/flow/lib/canonical-flow-manager-store.js",
+          "src/flow/lib/run-prepare-spec.js"
         ],
         "id": "40b46fc7",
         "summary": "Defines the typed error used when a flow step cannot be admitted.",
@@ -21876,9 +22093,9 @@
       },
       {
         "file": "src/flow/lib/worker-artifact-handoff.js",
-        "hash": "319c23264535434ff800e6c21ff05285",
-        "lines": 10825,
-        "mtime": "2026-10-04T04:47:56.873Z",
+        "hash": "cc7cededc0fbdeba7549bed171821dc3",
+        "lines": 10893,
+        "mtime": "2026-10-05T02:15:11.614Z",
         "className": "worker-artifact-handoff",
         "methods": [
           "RequirementTestStructuralHandoffResult",
@@ -21974,6 +22191,7 @@
           "specGateRepairContextDocuments",
           "specGateRepairContextSnapshot",
           "specGateRepairContextHandoffInput",
+          "preparationReceiptHandoffInput",
           "workerVirtualHandoffInputs",
           "canonicalIssueSnapshotText",
           "canonicalDraftReopenContext",
@@ -22246,23 +22464,24 @@
           "src/upgrade.js"
         ],
         "id": "58154956",
-        "summary": "Implements secure, versioned worker artifact handoff, publication, recovery, and cleanup for Flow workers.",
-        "detail": "Defines handoff policies, guarded runtime identities, typed payload and input contracts, canonical input snapshots and paths, repository authority snapshots, mutation baselines, source-effect reports, rollback checkpoints, retry instructions, repair bindings, and validation errors. Stages, materializes, seals, and validates worker submissions; verifies manifests and digests; records publication journals and receipts; enforces repository and path boundaries; detects unauthorized, stale, or uncertain source execution and source changes; supports quarantine, rollback, canonical request restoration, and recovery; and coordinates specialized draft, specification, test, gate-repair, triage, and implementation-repair handoffs while safely cleaning completed and transient handoff directories.",
+        "summary": "Defines and implements the Flow worker-artifact handoff protocol, validation, publication, recovery, rollback, and cleanup safeguards.",
+        "detail": "This module coordinates typed handoff requests and persisted submissions between Flow workers and the parent process across Draft, Spec, test-review, and source-worker workflows. It defines request and submission models, bounded payload policies, canonical input snapshots, semantic revisions, source effects, repair reports, triage outcomes, repository authority snapshots, mutation manifests, rollback checkpoints, retry instructions, and worker guidance. It validates JSON schemas, guarded identities, digests, paths, file ownership, repository state, canonical observations, step-specific contracts, sealed manifests, publication baselines, receipts, and quarantine records before materializing or sealing artifacts. It supports requirement-test publication, draft and plan-gate repair flows, replay reconciliation, restoration of canonical requests, source-worker recovery, immutable source rollback, and cleanup of completed or transient handoff directories within verified filesystem boundaries, protecting against stale, malformed, oversized, or unauthorized worker output.",
         "chapter": "internal_design",
         "role": "lib",
         "enrich": {
-          "processedAt": "2026-10-04T04:53:09.177Z",
+          "processedAt": "2026-10-05T05:23:06.645Z",
           "attempts": 1
         },
+        "app": "senti",
         "keywords": [
           "worker artifact handoff",
+          "artifact validation",
+          "source mutation",
+          "repository authority",
           "artifact publication",
-          "payload validation",
-          "canonical input snapshot",
-          "source mutation manifest",
-          "repository authority snapshot",
-          "rollback recovery",
-          "quarantine cleanup"
+          "handoff recovery",
+          "rollback",
+          "filesystem security"
         ]
       },
       {
@@ -22349,9 +22568,9 @@
       },
       {
         "file": "src/flow/lib/worker-context-snapshot.js",
-        "hash": "d122926bc54997d208c438cec6fe8788",
+        "hash": "4a37ff3121c1ab0ee30ede7c78238651",
         "lines": 418,
-        "mtime": "2026-09-27T08:06:43.001Z",
+        "mtime": "2026-10-05T02:15:11.614Z",
         "className": "worker-context-snapshot",
         "methods": [
           "WorkerContextBinding",
@@ -22397,21 +22616,23 @@
           "src/flow/lib/worker-artifact-handoff.js"
         ],
         "id": "4fb38cfd",
-        "summary": "Builds immutable, digest-bound context snapshots for workers.",
-        "detail": "This module captures issue, request, guardrail, project overview, and reopen context as bounded immutable documents or explicit omissions. It defines worker context bindings, typed entries, Draft input authority, and Draft or Task snapshot materialization with schema and digest validation.",
+        "summary": "Creates immutable, digest-bound context snapshots for Draft and Task workers.",
+        "detail": "This module defines worker context bindings, typed context entries, omissions, and immutable documents for issue, request, guardrail, project overview, and reopen data. It validates snapshot schemas, enforces context size limits, computes stable SHA-256 digests, and reconstructs snapshots from stored values. Draft snapshots also require a matching DraftInputAuthority, while Task snapshots materialize canonical task context and Spec data.",
         "chapter": "internal_design",
         "role": "lib",
         "enrich": {
-          "processedAt": "2026-09-27T08:57:33.759Z",
+          "processedAt": "2026-10-05T05:23:06.645Z",
           "attempts": 1
         },
+        "app": "senti",
         "keywords": [
-          "context snapshot",
-          "worker binding",
-          "immutable context",
+          "worker context snapshot",
+          "context binding",
+          "immutable document",
           "digest validation",
-          "guardrails",
-          "Draft input"
+          "DraftInputAuthority",
+          "Task context",
+          "guardrail context"
         ]
       },
       {
@@ -22643,9 +22864,9 @@
       },
       {
         "file": "src/flow/registry.js",
-        "hash": "0a8b799c79f45300fb89aff004fd0755",
-        "lines": 2909,
-        "mtime": "2026-09-30T16:20:18.459Z",
+        "hash": "bcbd0ab6c92c1e31f38f226941a0a716",
+        "lines": 2931,
+        "mtime": "2026-10-05T02:15:11.614Z",
         "className": "registry",
         "methods": [
           "assertDraftReviewRegistryHookBoundary",
@@ -22684,6 +22905,8 @@
           "pluginCommandName",
           "loadGetNextActionCommand",
           "loadDispatchCommand",
+          "loadPrepareCommand",
+          "executePublishedPrepareStep",
           "loadGateCommand",
           "loadReviewCommand"
         ],
@@ -22723,6 +22946,7 @@
           "./engine/step-result.js",
           "./engine/composition/draft.js",
           "./engine/composition/spec.js",
+          "./engine/composition/prepare.js",
           "./engine/composition/registered-step-execution.js",
           "./lib/definition-lifecycle-failure.js",
           "./lib/step-admission-refusal.js"
@@ -22736,22 +22960,23 @@
         "extends": null,
         "usedBy": null,
         "id": "d64f4095",
-        "summary": "Central flow registry for command dispatch, step execution, lifecycle hooks, persistence, gates, reviews, and test-chain transitions.",
-        "detail": "This module coordinates the active Flow lifecycle across draft review, specification, implementation, gate, test, and acceptance phases. It defines command loaders and flow commands, validates target guards and hook boundaries, manages canonical state and finalization ownership, persists review and gate results, applies lifecycle actions, handles retries and recovery, and converts failures into typed fatal or envelope responses.",
-        "chapter": "internal_design",
+        "summary": "Registers Flow commands and coordinates lifecycle execution, gate transitions, reviews, and persistence.",
+        "detail": "This registry connects Flow CLI commands with dispatch, preparation, gate, and review execution modules. It manages target guards and help options, active phase resolution, step runtime identities, lifecycle hooks, canonical state finalization, plugin hooks, Draft review publication, Spec and test gate settlement, retry handling, and persisted Step Results. It also translates failures into typed fatal or envelope responses and applies registry lifecycle actions around command execution.",
+        "chapter": "cli_commands",
         "role": "controller",
         "enrich": {
-          "processedAt": "2026-09-30T16:29:29.037Z",
+          "processedAt": "2026-10-05T05:23:06.645Z",
           "attempts": 1
         },
+        "app": "senti",
         "keywords": [
-          "flow registry",
+          "Flow command registry",
           "lifecycle hooks",
-          "gate execution",
-          "draft review",
-          "state persistence",
-          "command dispatch",
-          "step transitions",
+          "gate transition",
+          "review publication",
+          "step persistence",
+          "CLI dispatch",
+          "plugin hooks",
           "retry handling"
         ]
       },
@@ -23020,6 +23245,119 @@
           "repair binding",
           "execution binding",
           "typed observations"
+        ]
+      },
+      {
+        "file": "src/flow/services/plan-preparation-input.js",
+        "hash": "c394531d56f2c0bcb9506b2aac9a6a34",
+        "lines": 14,
+        "mtime": "2026-10-05T02:15:11.615Z",
+        "className": "plan-preparation-input",
+        "methods": [
+          "PlanPreparationInput"
+        ],
+        "imports": [
+          "../lib/preparation-evidence.js"
+        ],
+        "exports": [
+          "PlanPreparationInput"
+        ],
+        "extends": null,
+        "usedBy": [
+          "src/flow/services/plan-preparation-service.js"
+        ],
+        "id": "344da620",
+        "summary": "Defines the typed input contract for plan preparation.",
+        "detail": "PlanPreparationInput is a small service-boundary model that imports PreparationEvidence and rejects construction unless both a leaf and typed evidence are supplied. It ensures plan preparation services receive the required structural inputs before execution or settlement.",
+        "chapter": "internal_design",
+        "role": "model",
+        "enrich": {
+          "processedAt": "2026-10-05T05:23:06.645Z",
+          "attempts": 1
+        },
+        "app": "senti",
+        "keywords": [
+          "plan preparation input",
+          "PreparationEvidence",
+          "typed input",
+          "service boundary",
+          "leaf validation"
+        ]
+      },
+      {
+        "file": "src/flow/services/plan-preparation-service.js",
+        "hash": "feffd4278ca5a46e6d4f7d2f8823913f",
+        "lines": 36,
+        "mtime": "2026-10-05T02:15:11.615Z",
+        "className": "plan-preparation-service",
+        "methods": [
+          "PlanPreparationService"
+        ],
+        "imports": [
+          "../engine/step-result.js",
+          "../definition.js",
+          "./plan-preparation-input.js",
+          "./plan-preparation-settlement-writer.js"
+        ],
+        "exports": [
+          "PlanPreparationService"
+        ],
+        "extends": null,
+        "usedBy": null,
+        "id": "8dc0d942",
+        "summary": "Coordinates plan preparation execution and Step Result settlement.",
+        "detail": "PlanPreparationService depends on a typed PlanPreparationInput and a PlanPreparationSettlementWriter. It validates those dependencies, requires a bound StepResult before settlement, delegates preparation result settlement through the imported definition helper, and exposes the resulting receipt through its outcome state.",
+        "chapter": "internal_design",
+        "role": "controller",
+        "enrich": {
+          "processedAt": "2026-10-05T05:23:06.645Z",
+          "attempts": 1
+        },
+        "app": "senti",
+        "keywords": [
+          "plan preparation service",
+          "StepResult settlement",
+          "settlement writer",
+          "typed dependencies",
+          "preparation receipt",
+          "flow service"
+        ]
+      },
+      {
+        "file": "src/flow/services/plan-preparation-settlement-writer.js",
+        "hash": "04043d3de8e0a8e0da292ffbc3cad831",
+        "lines": 24,
+        "mtime": "2026-10-05T02:15:11.615Z",
+        "className": "plan-preparation-settlement-writer",
+        "methods": [
+          "PlanPreparationSettlementWriter"
+        ],
+        "imports": [
+          "../definition.js"
+        ],
+        "exports": [
+          "PlanPreparationSettlementWriter"
+        ],
+        "extends": null,
+        "usedBy": [
+          "src/flow/services/plan-preparation-service.js"
+        ],
+        "id": "f8701b8e",
+        "summary": "Persists plan preparation results through the FlowManager draft-step commit path.",
+        "detail": "PlanPreparationSettlementWriter imports StepRoute and provides the persistence boundary used by PlanPreparationService. Its commit operation delegates the result to FlowManager.commitDraftStepResult, connecting preparation settlement with the Flow step route and draft-step persistence mechanism.",
+        "chapter": "internal_design",
+        "role": "lib",
+        "enrich": {
+          "processedAt": "2026-10-05T05:23:06.645Z",
+          "attempts": 1
+        },
+        "app": "senti",
+        "keywords": [
+          "settlement writer",
+          "FlowManager",
+          "draft step result",
+          "StepRoute",
+          "preparation persistence"
         ]
       },
       {
@@ -24043,6 +24381,82 @@
           "DraftCreatedResult",
           "DraftService",
           "worker completion"
+        ]
+      },
+      {
+        "file": "src/flow/steps/prepare/branch.js",
+        "hash": "d8c20497b332aaef3bb9b6ca5400d858",
+        "lines": 24,
+        "mtime": "2026-10-05T02:15:11.615Z",
+        "className": "branch",
+        "methods": [
+          "BranchStep"
+        ],
+        "imports": [
+          "../../engine/step.js",
+          "../../engine/step-result.js",
+          "../../services/plan-preparation-service.js"
+        ],
+        "exports": [
+          "BranchStep"
+        ],
+        "extends": "Step",
+        "usedBy": null,
+        "id": "09666674",
+        "summary": "Implements the preparation branch step and persists its result through the preparation service.",
+        "detail": "BranchStep extends the generic Step abstraction and works with BranchPreparedResult or BranchNotRequiredResult values. After producing a branch preparation result, it asynchronously persists that result through PlanPreparationService and returns the result to the Flow execution pipeline.",
+        "chapter": "project_structure",
+        "role": "controller",
+        "enrich": {
+          "processedAt": "2026-10-05T05:23:06.645Z",
+          "attempts": 1
+        },
+        "app": "senti",
+        "keywords": [
+          "BranchStep",
+          "branch preparation",
+          "BranchPreparedResult",
+          "BranchNotRequiredResult",
+          "step persistence"
+        ]
+      },
+      {
+        "file": "src/flow/steps/prepare/prepare-spec.js",
+        "hash": "f5a4c6f24291c7ecb14c3f5d0d4daaec",
+        "lines": 22,
+        "mtime": "2026-10-05T02:15:11.615Z",
+        "className": "prepare-spec",
+        "methods": [
+          "PrepareSpecStep"
+        ],
+        "imports": [
+          "../../engine/step.js",
+          "../../engine/step-result.js",
+          "../../services/plan-preparation-service.js"
+        ],
+        "exports": [
+          "PrepareSpecStep"
+        ],
+        "extends": "Step",
+        "usedBy": [
+          "src/flow/engine/composition/registered-step-execution.js"
+        ],
+        "id": "255a81c9",
+        "summary": "Implements the Prepare Spec step and persists its preparation result.",
+        "detail": "PrepareSpecStep extends the generic Step abstraction and uses PrepareSpecReadyResult for its successful preparation outcome. It persists the result asynchronously through PlanPreparationService before returning it, linking Spec preparation execution to the shared settlement workflow.",
+        "chapter": "project_structure",
+        "role": "controller",
+        "enrich": {
+          "processedAt": "2026-10-05T05:23:06.645Z",
+          "attempts": 1
+        },
+        "app": "senti",
+        "keywords": [
+          "PrepareSpecStep",
+          "Spec preparation",
+          "PrepareSpecReadyResult",
+          "step persistence",
+          "plan preparation"
         ]
       },
       {
@@ -28714,9 +29128,9 @@
       },
       {
         "file": "src/lib/preparing-flow-store.js",
-        "hash": "aafcab90a4766ad735b1253f7eb078f2",
-        "lines": 238,
-        "mtime": "2026-09-09T05:40:43.385Z",
+        "hash": "b7de4cfe701ff8f79bf7a2930668d2a5",
+        "lines": 245,
+        "mtime": "2026-10-05T02:15:11.615Z",
         "className": "preparing-flow-store",
         "methods": [
           "PreparingFlowStore"
@@ -28741,22 +29155,23 @@
           "src/lib/flow-manager.js"
         ],
         "id": "14a29a15",
-        "summary": "PreparingFlowStore persists and safely mutates preparing-flow lifecycle state on disk.",
-        "detail": "It validates run identifiers against length and character constraints, derives deterministic lock paths, and serializes state through PreparingFlowState. Creation and mutation operations execute under FileLock protection and use AtomicJsonFile for durable writes. Snapshots detect missing or invalid files and expose normalized state, while cleanup removes stored flows and tolerates absent directories. RealDirectoryAuthority constrains storage to an authorized managed directory.",
+        "summary": "Persists and coordinates preparing-flow state with validation, atomic file updates, locking, and managed-directory cleanup.",
+        "detail": "PreparingFlowStore resolves the main root, generates or validates safe run identifiers, and stores preparing-flow snapshots as JSON files under the managed directory. It uses PreparingFlowState normalization, AtomicJsonFile and AtomicFile for durable writes and removals, and FileLock for exclusive mutations. State updates must preserve the run ID, preparing lifecycle, and null specId; issue and request updates must match the exact preparation target. Snapshot loading detects missing flows and parses stored JSON, while listing and cleanup handle absent directories safely.",
         "chapter": "internal_design",
         "role": "lib",
         "enrich": {
-          "processedAt": "2026-09-09T05:48:46.027Z",
+          "processedAt": "2026-10-05T05:23:06.645Z",
           "attempts": 1
         },
         "keywords": [
           "preparing flow",
-          "state store",
-          "run ID validation",
-          "atomic JSON",
+          "state persistence",
+          "atomic file",
           "file locking",
-          "lifecycle persistence",
-          "managed directory"
+          "run ID",
+          "lifecycle validation",
+          "managed directory",
+          "snapshot loading"
         ]
       },
       {
@@ -31446,10 +31861,10 @@
       }
     ],
     "summary": {
-      "total": 565,
-      "totalMethods": 5366
+      "total": 574,
+      "totalMethods": 5392
     },
     "dataSourceHash": "5ed9d88bcfcf9f1a97396b9d44f6f0c0"
   },
-  "enrichedAt": "2026-10-04T04:53:09.177Z"
+  "enrichedAt": "2026-10-05T05:23:06.645Z"
 }

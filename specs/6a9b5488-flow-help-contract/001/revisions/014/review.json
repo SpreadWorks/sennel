@@ -1,0 +1,43 @@
+{
+  "audit": [
+    {
+      "acceptedOperations": [],
+      "appliedFindings": [],
+      "discardedOperations": [],
+      "inputDigest": "ae026b0f71adb90a93c7549d0d8ac2dab0d4df7413a8635b60da0192a38bc9a9",
+      "operationDigest": "790e561a26120cd5aba8824e99283158498cb669998f0f509e9b6e3ad4013369",
+      "outcome": "no-op",
+      "relation": "revision-scoped-canonical-review",
+      "stage": "spec-review"
+    },
+    {
+      "acceptedOperations": [],
+      "appliedFindings": [],
+      "discardedOperations": [],
+      "inputDigest": "cfb1988dee93cb5c508b065e6c9a240347b85201095f9d1d28af8257aa5456a5",
+      "operationDigest": "790e561a26120cd5aba8824e99283158498cb669998f0f509e9b6e3ad4013369",
+      "outcome": "no-op",
+      "relation": "revision-scoped-canonical-review",
+      "stage": "spec-triage"
+    },
+    {
+      "acceptedOperations": [],
+      "appliedFindings": [],
+      "discardedOperations": [],
+      "inputDigest": "5dedc0ba025d9f4a1bb6ccc4861c0ca8b0a21226c4ac20f594c8324cf8ebf4d2",
+      "operationDigest": "790e561a26120cd5aba8824e99283158498cb669998f0f509e9b6e3ad4013369",
+      "outcome": "no-op",
+      "relation": "revision-scoped-canonical-review",
+      "stage": "spec-repair"
+    }
+  ],
+  "findings": [],
+  "generation": 3,
+  "identity": {
+    "byteLength": 32756,
+    "digest": "18634170c14074e64f26412f9ab4c20751942f8cdc47bca800fee98e444c12c8",
+    "revision": 14,
+    "specId": "6a9b5488-flow-help-contract"
+  },
+  "version": 2
+}

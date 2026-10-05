@@ -1,0 +1,1375 @@
+{
+  "version": 1,
+  "phase": "spec-gate-repair",
+  "baseRevision": "sha256:121fc827f70690d26886d354dde3ae8f7a07a5efaea28155d4d8b85261de4aec",
+  "acceptedGroups": [
+    {
+      "index": 0,
+      "findingIdentities": [
+        {
+          "sourceArtifact": "steps/spec-gate/result.json",
+          "sourceStep": "spec-gate",
+          "sourceFindingId": "spec-gate:10",
+          "fingerprint": "ca4ea08d60bf070b65e47431937223089fa2696c98541e970f905034532319b7"
+        },
+        {
+          "sourceArtifact": "steps/spec-gate/result.json",
+          "sourceStep": "spec-gate",
+          "sourceFindingId": "spec-gate:2",
+          "fingerprint": "c6a98301c33f0fee21569d7cb7313198a00e0e3411b10c9d922f777aeb5e913f"
+        }
+      ],
+      "operations": [
+        {
+          "kind": "edit-text-field",
+          "target": {
+            "entity": "requirement",
+            "id": "R1",
+            "field": "desc"
+          },
+          "expectedDigest": "4b1867f96a8e10bb78fd6974d9c5b94dd8d8dbb5843e4e4c9299e1997e56a746",
+          "reason": "Make the inventory one-row-per-leaf, enumerate the complete P/R/F/O contract and owners, correct the Issue 521 restart baseline to 65 shared leaves, and explicitly exclude the custom query parser without adding validation authority.",
+          "edits": [
+            {
+              "startByte": 0,
+              "endByte": 4634,
+              "replacement": "At the Issue 521 restart baseline, re-enumerate FLOW_COMMANDS and exclude flow query, whose custom parser and help are independently owned. The shared routed inventory is 65 leaves: resume 1, prepare 1, get 11, set 17, run 34, and report/show 1. The Spec must contain a normative one-row-per-leaf inventory generated from the exact registry args; grouped prose is not a substitute and the contract test must fail if the registry-derived set or count changes. Each row records P positional arguments, R rest arguments, F flags, O value options, G applicable shared target guards, V the existing syntax/semantic validator owner, and T the owning registry, integration, or E2E test boundary. Each P/R/F/O entry records required or optional status, cardinality, type, format, allowed domain or range, empty behavior, existing size limit or an explicit no-bound marker with its owner, conditional combinations, and path kind, existence, absolute/relative support, and resolution root where applicable. Every row also includes implicit -h and --help. The normative leaf map is: resume P=none, F=--expect-no-issue, O=--spec and applicable G; prepare P=none, F=--no-branch/--worktree/--dry-run/--expect-no-issue, O=--title/--base/--issue/--request/--run-id and applicable G; get status P=runId F=--details and applicable G, resolve-context applicable G, check P=target, prompt P=kind and applicable G, artifact P=logicalKey F=--expect-no-issue O=--mode/--spec-id/--version and applicable G, qa-count applicable G, guardrail P=phase O=--format, issue P=number, next-action applicable G, context P=path F=--raw and applicable G O=--search, and runtime-log F=--expect-no-issue and applicable G O=--format/--sequence/--run-id; set step P=id,status and applicable G, request P=text O=--run-id and applicable G, issue P=number and applicable G, note P=text O=--task-id/--run-id and applicable G, draft-answer P=questionId F=--drop and applicable G O=--question-revision/--answer/--why/--considered/--dropped-reason, files P=reqId R=paths and applicable G, review-evidence applicable G O=--file, broad P=action and applicable G O=--step/--reason, policy P=value and applicable G O=--reason, nonblocking-decision applicable G O=--choice/--reason/--expect-evidence-digest/--remaining-risk, metric P=phase,counter and applicable G O=--task-id, approval F=--approved and applicable G O=--notes/--confirmed-at, issue-log applicable G O=--step/--reason/--trigger/--resolution/--guardrail-candidate/--normalized-finding-id/--repair-ref-commit/--repair-ref-file/--task-id, init O=--issue/--request, retry P=action,kind,phase F=--yes and applicable G O=--reason, acceptance-decision applicable G O=--choice, and auto P=value and applicable G O=--run-id; run seal-handoff O=--agent-work-dir, dispatch F=--expect-no-issue O=--approve/--agent-work-dir and applicable G, recover-review-pass applicable G O=--agent-work-dir/--phase, gate applicable G O=--spec/--phase/--agent-work-dir, review F=--dry-run/--skip-confirm/--expect-no-issue O=--phase/--agent-work-dir and applicable G, auto-check applicable G O=--run-id/--agent-work-dir, finalize-commit applicable G O=--message/--agent-work-dir, finalize-merge and finalize-sync applicable G O=--agent-work-dir, finalize-cleanup F=--auto-rescue/--force/--expect-no-issue O=--agent-work-dir and applicable G, abort F=--force/--expect-no-issue O=--agent-work-dir and applicable G, sync F=--dry-run/--expect-no-issue O=--agent-work-dir and applicable G, reopen-draft applicable G O=--reason/--category/--agent-work-dir, repair-plan-gate/settle-failure/settle-review-transition/recover-missing-producer-artifact/recover-draft-execution/recover-finalization/recover-task-execution-overrun/claim-next-action/settle-gate-transition/test-execute/requirement-test-gate/test-result-review/acceptance-review applicable G O=--agent-work-dir, reconcile-task-review F=--dry-run/--yes/--expect-no-issue O=--expect-digest/--reason/--agent-work-dir and applicable G, filter-task-review applicable G O=--exclusions/--expect-attempt-id/--expect-review-digest/--expect-source-fingerprint/--expect-catalog-fingerprint/--agent-work-dir, start-task and complete-task applicable G O=--task-id/--agent-work-dir, update-overview applicable G O=--json/--agent-work-dir, lint applicable G O=--base/--agent-work-dir, and retro F=--dry-run/--expect-no-issue O=--agent-work-dir and applicable G; report/show has no user argument. The five G options are --expect-binding, --expect-issue, --expect-no-issue, --expect-spec, and --expect-run-id, only where the registry marks them applicable. The shared model owns syntax and help projection and delegates semantic validation to the named existing leaf or registry owner; it does not include query, a blanket validator, or an arbitrary tighter limit."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "index": 1,
+      "findingIdentities": [
+        {
+          "sourceArtifact": "steps/spec-gate/result.json",
+          "sourceStep": "spec-gate",
+          "sourceFindingId": "spec-gate:12",
+          "fingerprint": "e5d69e869f797676bfa9d899f93e9c268796ba2661c5fd458ec343750afabf7e"
+        }
+      ],
+      "operations": [
+        {
+          "kind": "edit-text-field",
+          "target": {
+            "entity": "requirement",
+            "id": "R8",
+            "field": "desc"
+          },
+          "expectedDigest": "d8631116bfffeb49ca2a2a4ddc059d40b481e8128981b2edac65155456c2cccb",
+          "reason": "Specify each user-facing path contract, resolution root, existence rule, and existing owner while preserving both agent-work-dir syntaxes, precedence, log fallback, and durable cleanup behavior.",
+          "edits": [
+            {
+              "startByte": 0,
+              "endByte": 1035,
+              "replacement": "Preserve --agent-work-dir <path> and --agent-work-dir=<path>. The pre-init scan must normalize both forms to one non-empty, NUL-free path value before initContainer(), then pass that value through the existing resolver. The inventory records this as a required value option accepting absolute or repository-root-relative paths, naming a directory, with no pre-existence requirement and no new size bound; src/sennel.js, resolveWorkDir, and container initialization own parsing, resolution, creation/use, and errors. Preserve precedence invocation override > config.agent.workDir > .tmp, explicit config.logs.dir resolved against the repository root (or the durable root for finalize-cleanup) > agentWorkDir/logs fallback, and the durable main-repository root used by finalize-cleanup. The per-leaf path inventory is concrete: run gate --spec accepts the existing canonical Spec directory or its spec.json path, absolute or execution-root-relative, and requires the existing target resolved by the gate owner; set review-evidence --file accepts an existing non-symlink regular JSON file, bounded by the existing review-evidence limit, inside the active spec directory resolved from the execution root; get context path is an optional project-root-relative file path whose existing file is read in file mode, while omission selects list mode and --search is a query value; set files reqId paths requires at least one non-empty rest path and delegates path mapping, count, and aggregate-size rules to FlowManager.updateFileMap without inventing existence checks; and set issue-log --repair-ref-file is a non-empty path string whose commit/file reference validation remains with the issue-log owner. For every path row, record file versus directory, existence, absolute/relative support, resolution root, and the existing size or no-bound owner. Output directories need not pre-exist. Runtime initialization, log writing, cleanup, and all command-specific path/domain validation remain owned by their existing modules; this requirement adds no blanket path validator or unrelated restriction."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "index": 2,
+      "findingIdentities": [
+        {
+          "sourceArtifact": "steps/spec-gate/result.json",
+          "sourceStep": "spec-gate",
+          "sourceFindingId": "spec-gate:11",
+          "fingerprint": "5cd20c4060d5bdff6fca70f9d5bcaa5221e5e3acf0edc0ab43a6c13e7787d24e"
+        },
+        {
+          "sourceArtifact": "steps/spec-gate/result.json",
+          "sourceStep": "spec-gate",
+          "sourceFindingId": "spec-gate:3",
+          "fingerprint": "a68d4e1de0c39dea7bf39f942183caa38fd699e406d8215c5202af28c16d9d5d"
+        }
+      ],
+      "operations": [
+        {
+          "kind": "edit-text-field",
+          "target": {
+            "entity": "requirement",
+            "id": "R2",
+            "field": "desc"
+          },
+          "expectedDigest": "cd048ab1d26ee3c843263a92749650caec8cf60f9dfd339b2caa692decb6b35a",
+          "reason": "Replace grouped owner references with a per-leaf validation inventory, explicit positional/type/path distinctions, and named existing size and validator owners without creating a parallel validator.",
+          "edits": [
+            {
+              "startByte": 0,
+              "endByte": 2702,
+              "replacement": "The shared option authority is projected into the existing parser and help for every shared routed leaf, while flow query remains an independent custom-parser exception. The Spec inventory is a concrete table with one row for every registry leaf and columns for exact positionals, rest values, flags, required-value options, optional-value options, implicit help, arity, required/optional cardinality, type, format, domain/range, empty behavior, existing size bound or explicit absence with owner, conditional combinations, path kind, existence, absolute/relative support, resolution root, applicable target guards, parser owner, semantic validator owner, and test owner. The shared model owns only syntax/help projection and the delegation boundary; parseEntryInput owns argv syntax, FlowTargetExpectation and buildFlowCommandHookContext own the five target guards, and each existing command/registry validator owns semantic values and state-dependent combinations. Record these concrete distinctions: set step status, set auto value, and set broad action are positional values; get status runId is optional; set files requires at least one rest path; resume --spec is a FlowSpecId; run gate --spec is a filesystem Spec directory or spec.json path; prepare --base and run lint --base are Git branch names; prepare --run-id is a PreparingFlowId with its existing 200-character/no-colon owner; runtime-log --run-id is its runId plus optional sequence form; and target guard tokens use FlowTargetExpectation and its existing 300-character rule, not a generic ID rule. The table must name the existing owner for get check target, get prompt kind, artifact logicalKey, step id/status, note text, draft questionId, requirement reqId, --format, --mode, --phase, --sequence, --category, --record-category, --step, --task-id, --normalized-finding-id, --repair-ref-commit, --repair-ref-file, --expect-attempt-id, --approve, and --choice, including each value's applicable combinations. It must also record existing text/JSON/path sizes, set-files count and aggregate limits, exclusions serialized size, retry/attempt limits, query request-file limits, context traversal/read limits, and review-evidence limits, or state that no explicit bound exists and identify the owner. No shared validator, copied command decision, arbitrary tighter limit, or query admission rule is introduced."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "index": 3,
+      "findingIdentities": [
+        {
+          "sourceArtifact": "steps/spec-gate/result.json",
+          "sourceStep": "spec-gate",
+          "sourceFindingId": "spec-gate:1",
+          "fingerprint": "7909f9a20377c7d76709285ac6f65d5d5ea4a07a7a1cc05a1ade1e3e29c6522c"
+        },
+        {
+          "sourceArtifact": "steps/spec-gate/result.json",
+          "sourceStep": "spec-gate",
+          "sourceFindingId": "spec-gate:4",
+          "fingerprint": "a040cf17a4f84081bc953fb093472d1f1e8fe84f97f420869d412e7466f4b881"
+        },
+        {
+          "sourceArtifact": "steps/spec-gate/result.json",
+          "sourceStep": "spec-gate",
+          "sourceFindingId": "spec-gate:5",
+          "fingerprint": "1ee6f14516c20b785db14259b3d48cd0750078faa5c71455d0a5c34565c22d9b"
+        },
+        {
+          "sourceArtifact": "steps/spec-gate/result.json",
+          "sourceStep": "spec-gate",
+          "sourceFindingId": "spec-gate:6",
+          "fingerprint": "0f8e48db086dd27e348c989b9ec3ed951a2ba05056ef08407b40514d9a42f4f8"
+        },
+        {
+          "sourceArtifact": "steps/spec-gate/result.json",
+          "sourceStep": "spec-gate",
+          "sourceFindingId": "spec-gate:7",
+          "fingerprint": "515c753c85e1c30ae4ae5c4d75d8d995f12e198aef01c4da1a48d5c8185105c0"
+        },
+        {
+          "sourceArtifact": "steps/spec-gate/result.json",
+          "sourceStep": "spec-gate",
+          "sourceFindingId": "spec-gate:8",
+          "fingerprint": "617591fba0403d0c1603f581b210f1d23dce353e1205b9d7b0baabcc32b74b33"
+        },
+        {
+          "sourceArtifact": "steps/spec-gate/result.json",
+          "sourceStep": "spec-gate",
+          "sourceFindingId": "spec-gate:9",
+          "fingerprint": "fd038a59726773d7766d32b702af960ee5ba1251ac6f1f6beb49eade1baab621"
+        }
+      ],
+      "operations": [
+        {
+          "kind": "edit-text-field",
+          "target": {
+            "entity": "requirement",
+            "id": "R7",
+            "field": "desc"
+          },
+          "expectedDigest": "bbe3e97219bf7e5996ef0631c3dc3b9f175da42aebddf2e3e664b606290a2c67",
+          "reason": "Define the previously unspecified guard branch as the existing no-guard behavior and give every guard a concrete input, owner, match/mismatch outcome, and mutation boundary.",
+          "edits": [
+            {
+              "startByte": 0,
+              "endByte": 1128,
+              "replacement": "For every applicable shared routed leaf, existing parser failures, unknown or missing selectors, missing values, extra positionals, option-domain failures, the --expect-issue/--expect-no-issue mutual exclusion, and the five target mismatches stop before command-owned mutation with the existing diagnostic, exit code 1, and rejection order. The input inventory records --expect-binding <token> as a non-empty base64url JSON FlowTargetBinding decoded by FlowTargetBinding.deserialize, with the existing 32 KiB byte limit and structural/authority validation; --expect-issue <number> as a positive safe integer; --expect-no-issue as a valueless flag; --expect-spec <spec> as a FlowSpecId; and --expect-run-id <runId> as the existing non-empty FlowTargetExpectation token up to 300 characters. Binding runId, issue, spec, and authority identity must match through the existing FlowTargetBinding/FlowTargetExpectation owner, and the applicable leaf set is derived from the registry. Test a valid match, a mismatch for each guard, invalid syntax/value, and the issue/no-issue conflict through FlowTargetExpectation and buildFlowCommandHookContext before handler mutation. Omission of all guards is the defined retained unguarded behavior: the command follows its existing leaf validation and lifecycle, and the Spec test records that case separately. No blanket validator, new ID limit, or new target decision is introduced."
+            }
+          ]
+        },
+        {
+          "kind": "replace-array-element",
+          "target": {
+            "collection": "acceptance_criteria",
+            "position": 8
+          },
+          "expectedDigest": "a4d92268aaf10ae9f20ba8a12850672a0de45a7a8ac609b838c41c414e0e6b52",
+          "replacement": "For every current registry-derived shared routed leaf—resume 1, prepare 1, get 11, set 17, run 34, report/show 1, query excluded—a valid command invocation and explicit --help return exit code 0. Each leaf fixture names its valid input and success condition; the assertion preserves the existing handler and pre/post/onError/finally lifecycle, while valid help invokes none of those handlers or execution hooks. The contract test re-enumerates the registry and fails on count or membership drift instead of relying on historical totals.",
+          "reason": "Resolve the 65 versus 66 scope conflict using the Issue 521 restart baseline and state the valid-input, help, and lifecycle outcomes that are checked."
+        },
+        {
+          "kind": "replace-array-element",
+          "target": {
+            "collection": "acceptance_criteria",
+            "position": 12
+          },
+          "expectedDigest": "3f32d67cb0d2242e0a97afc5a378c6511101d2f029998a818f9e6de5f482837a",
+          "replacement": "The registry-derived shared routed matrix has exactly 65 rows at the Issue 521 restart baseline: resume 1, prepare 1, get 11, set 17, run 34, and report/show 1. Query is excluded from the shared matrix and is tested separately through bootstrapFlowQueryCli, src/flow/query.js, and src/flow/query-contract.js. The registry contract test re-enumerates the set and treats any count or membership change as a failed baseline update, not as permission to copy a historical count.",
+          "reason": "Make the matrix count, category breakdown, query exception, and registry re-enumeration rule agree with the authoritative restart contract."
+        },
+        {
+          "kind": "replace-array-element",
+          "target": {
+            "collection": "acceptance_criteria",
+            "position": 9
+          },
+          "expectedDigest": "12ffaf0cffc0de46072e0f3d057258a8acde8ec896f83a4efdf659c092a8be9a",
+          "replacement": "For each applicable leaf in the same 65-row registry-derived set, the input inventory names the parser, target, and command-owned failure conditions and supplies a check input and observable result. Each selected failure returns exit code 1, preserves the existing diagnostic and rejection order, and stops before command-owned mutation. Cover missing or unknown selector, missing required value, extra positional, invalid domain, target mismatch, and --expect-issue/--expect-no-issue conflict only where that leaf's existing owner declares the condition applicable; do not add universal rejection rules.",
+          "reason": "Tie every failure condition to an input, owner, exit result, and mutation boundary while keeping applicability leaf-specific and resolving the shared 65-row scope."
+        }
+      ]
+    }
+  ],
+  "discardedGroups": [],
+  "operationDigest": "d7ee5df4327c299991492c1a37aa22af7e2a29603eb6b909c4c2b2d684c6be82",
+  "resultRevision": {
+    "digest": "9d174f5de7a8a819d33875f960feed27f1fbb59a4c5795563b437bfa79d29df7",
+    "byteLength": 51178
+  },
+  "sourceReviewIdentity": {
+    "specId": "6a9b5488-flow-help-contract",
+    "revision": 6,
+    "digest": "a2e127d6440e2df4964a28c9ec02f2025fefc11d8e7f68c3959a8362ec2688a5",
+    "byteLength": 45571
+  },
+  "sourceEvidenceIdentity": {
+    "sourceAttempt": {
+      "id": "attempt-spec-gate-1f2537ce-d08b-408d-b073-8e934388eac2",
+      "sequence": 3
+    },
+    "resultLogicalKey": "spec.gate",
+    "publicationActivityId": "plan-gate-repaired-25f8a8b2-5424-43de-b014-4e15df87f2fc",
+    "catalogFingerprint": "e48604c198a5912d2d6e0b38d0b00c935e67b9787409ec00b4b972cf0cb62beb",
+    "transitionLineage": {
+      "sourceAttempt": {
+        "id": "attempt-spec-gate-1f2537ce-d08b-408d-b073-8e934388eac2",
+        "sequence": 3
+      },
+      "canonicalAttempt": {
+        "id": "attempt-spec-gate-1f2537ce-d08b-408d-b073-8e934388eac2",
+        "sequence": 3
+      },
+      "sourceFingerprint": "d0596c8c565d38176f0d4d912ea5469f69ebeb954c66ad0a4cad521b7d4f930f",
+      "canonicalFingerprint": "e48604c198a5912d2d6e0b38d0b00c935e67b9787409ec00b4b972cf0cb62beb",
+      "sourceRevisionFingerprint": "fedcc44917a4b81f241c50a1020201f5cc975af5291285003f009c72fb17fad4",
+      "canonicalRevisionFingerprint": "fedcc44917a4b81f241c50a1020201f5cc975af5291285003f009c72fb17fad4"
+    }
+  },
+  "sourceFindingIdentities": [
+    {
+      "sourceArtifact": "steps/spec-gate/result.json",
+      "sourceStep": "spec-gate",
+      "sourceFindingId": "spec-gate:10",
+      "fingerprint": "ca4ea08d60bf070b65e47431937223089fa2696c98541e970f905034532319b7"
+    },
+    {
+      "sourceArtifact": "steps/spec-gate/result.json",
+      "sourceStep": "spec-gate",
+      "sourceFindingId": "spec-gate:2",
+      "fingerprint": "c6a98301c33f0fee21569d7cb7313198a00e0e3411b10c9d922f777aeb5e913f"
+    },
+    {
+      "sourceArtifact": "steps/spec-gate/result.json",
+      "sourceStep": "spec-gate",
+      "sourceFindingId": "spec-gate:12",
+      "fingerprint": "e5d69e869f797676bfa9d899f93e9c268796ba2661c5fd458ec343750afabf7e"
+    },
+    {
+      "sourceArtifact": "steps/spec-gate/result.json",
+      "sourceStep": "spec-gate",
+      "sourceFindingId": "spec-gate:11",
+      "fingerprint": "5cd20c4060d5bdff6fca70f9d5bcaa5221e5e3acf0edc0ab43a6c13e7787d24e"
+    },
+    {
+      "sourceArtifact": "steps/spec-gate/result.json",
+      "sourceStep": "spec-gate",
+      "sourceFindingId": "spec-gate:3",
+      "fingerprint": "a68d4e1de0c39dea7bf39f942183caa38fd699e406d8215c5202af28c16d9d5d"
+    },
+    {
+      "sourceArtifact": "steps/spec-gate/result.json",
+      "sourceStep": "spec-gate",
+      "sourceFindingId": "spec-gate:1",
+      "fingerprint": "7909f9a20377c7d76709285ac6f65d5d5ea4a07a7a1cc05a1ade1e3e29c6522c"
+    },
+    {
+      "sourceArtifact": "steps/spec-gate/result.json",
+      "sourceStep": "spec-gate",
+      "sourceFindingId": "spec-gate:4",
+      "fingerprint": "a040cf17a4f84081bc953fb093472d1f1e8fe84f97f420869d412e7466f4b881"
+    },
+    {
+      "sourceArtifact": "steps/spec-gate/result.json",
+      "sourceStep": "spec-gate",
+      "sourceFindingId": "spec-gate:5",
+      "fingerprint": "1ee6f14516c20b785db14259b3d48cd0750078faa5c71455d0a5c34565c22d9b"
+    },
+    {
+      "sourceArtifact": "steps/spec-gate/result.json",
+      "sourceStep": "spec-gate",
+      "sourceFindingId": "spec-gate:6",
+      "fingerprint": "0f8e48db086dd27e348c989b9ec3ed951a2ba05056ef08407b40514d9a42f4f8"
+    },
+    {
+      "sourceArtifact": "steps/spec-gate/result.json",
+      "sourceStep": "spec-gate",
+      "sourceFindingId": "spec-gate:7",
+      "fingerprint": "515c753c85e1c30ae4ae5c4d75d8d995f12e198aef01c4da1a48d5c8185105c0"
+    },
+    {
+      "sourceArtifact": "steps/spec-gate/result.json",
+      "sourceStep": "spec-gate",
+      "sourceFindingId": "spec-gate:8",
+      "fingerprint": "617591fba0403d0c1603f581b210f1d23dce353e1205b9d7b0baabcc32b74b33"
+    },
+    {
+      "sourceArtifact": "steps/spec-gate/result.json",
+      "sourceStep": "spec-gate",
+      "sourceFindingId": "spec-gate:9",
+      "fingerprint": "fd038a59726773d7766d32b702af960ee5ba1251ac6f1f6beb49eade1baab621"
+    }
+  ],
+  "observationIdentities": [
+    {
+      "sourceArtifact": "steps/spec-gate/result.json",
+      "sourceStep": "spec-gate",
+      "sourceFindingId": "spec-gate:1",
+      "fingerprint": "7909f9a20377c7d76709285ac6f65d5d5ea4a07a7a1cc05a1ade1e3e29c6522c"
+    },
+    {
+      "sourceArtifact": "steps/spec-gate/result.json",
+      "sourceStep": "spec-gate",
+      "sourceFindingId": "spec-gate:2",
+      "fingerprint": "c6a98301c33f0fee21569d7cb7313198a00e0e3411b10c9d922f777aeb5e913f"
+    },
+    {
+      "sourceArtifact": "steps/spec-gate/result.json",
+      "sourceStep": "spec-gate",
+      "sourceFindingId": "spec-gate:3",
+      "fingerprint": "a68d4e1de0c39dea7bf39f942183caa38fd699e406d8215c5202af28c16d9d5d"
+    },
+    {
+      "sourceArtifact": "steps/spec-gate/result.json",
+      "sourceStep": "spec-gate",
+      "sourceFindingId": "spec-gate:4",
+      "fingerprint": "a040cf17a4f84081bc953fb093472d1f1e8fe84f97f420869d412e7466f4b881"
+    },
+    {
+      "sourceArtifact": "steps/spec-gate/result.json",
+      "sourceStep": "spec-gate",
+      "sourceFindingId": "spec-gate:5",
+      "fingerprint": "1ee6f14516c20b785db14259b3d48cd0750078faa5c71455d0a5c34565c22d9b"
+    },
+    {
+      "sourceArtifact": "steps/spec-gate/result.json",
+      "sourceStep": "spec-gate",
+      "sourceFindingId": "spec-gate:6",
+      "fingerprint": "0f8e48db086dd27e348c989b9ec3ed951a2ba05056ef08407b40514d9a42f4f8"
+    },
+    {
+      "sourceArtifact": "steps/spec-gate/result.json",
+      "sourceStep": "spec-gate",
+      "sourceFindingId": "spec-gate:7",
+      "fingerprint": "515c753c85e1c30ae4ae5c4d75d8d995f12e198aef01c4da1a48d5c8185105c0"
+    },
+    {
+      "sourceArtifact": "steps/spec-gate/result.json",
+      "sourceStep": "spec-gate",
+      "sourceFindingId": "spec-gate:8",
+      "fingerprint": "617591fba0403d0c1603f581b210f1d23dce353e1205b9d7b0baabcc32b74b33"
+    },
+    {
+      "sourceArtifact": "steps/spec-gate/result.json",
+      "sourceStep": "spec-gate",
+      "sourceFindingId": "spec-gate:9",
+      "fingerprint": "fd038a59726773d7766d32b702af960ee5ba1251ac6f1f6beb49eade1baab621"
+    },
+    {
+      "sourceArtifact": "steps/spec-gate/result.json",
+      "sourceStep": "spec-gate",
+      "sourceFindingId": "spec-gate:10",
+      "fingerprint": "ca4ea08d60bf070b65e47431937223089fa2696c98541e970f905034532319b7"
+    },
+    {
+      "sourceArtifact": "steps/spec-gate/result.json",
+      "sourceStep": "spec-gate",
+      "sourceFindingId": "spec-gate:11",
+      "fingerprint": "5cd20c4060d5bdff6fca70f9d5bcaa5221e5e3acf0edc0ab43a6c13e7787d24e"
+    },
+    {
+      "sourceArtifact": "steps/spec-gate/result.json",
+      "sourceStep": "spec-gate",
+      "sourceFindingId": "spec-gate:12",
+      "fingerprint": "e5d69e869f797676bfa9d899f93e9c268796ba2661c5fd458ec343750afabf7e"
+    }
+  ],
+  "repairId": "plan-gate-repair-1aacea2b87d7d2fd01d3e1eef7ee2af35d5433819958e31337251f2a904143af",
+  "repairRecordFingerprint": "1aacea2b87d7d2fd01d3e1eef7ee2af35d5433819958e31337251f2a904143af",
+  "targetAttempt": {
+    "id": "attempt-spec-gate-repair-8324ac84-e330-4323-9304-21287ed9bd54",
+    "sequence": 3
+  },
+  "observationResults": [
+    {
+      "fingerprint": "47e1cc1eff82ee9535cdef1b0d459b872ad45f2f16faded7d25ab570096a9ee0",
+      "strategy": "sha256:1c6803299a829fb276c62e43b98df6c1a302b4db5fce75bf8a659f944f6876f2",
+      "summary": "Define the previously unspecified guard branch as the existing no-guard behavior and give every guard a concrete input, owner, match/mismatch outcome, and mutation boundary. Resolve the 65 versus 66 scope conflict using the Issue 521 restart baseline and state the valid-input, help, and lifecycle outcomes that are checked. Make the matrix count, category breakdown, query exception, and registry re-enumeration rule agree with the authoritative restart contract. Tie every failure condition to an input, owner, exit result, and mutation boundary while keeping applicability leaf-specific and resolving the shared 65-row scope.",
+      "priorRepairInsufficiency": null,
+      "groupIndices": [
+        3
+      ]
+    },
+    {
+      "fingerprint": "449c9f8b0c8b0fc129e4c2d055f20b8528c4c2a1dc315fb97ddbe06c7a8f260f",
+      "strategy": "sha256:e50cd409446d83365578f39a70d734cb8b2316015fb1ad20784522c54b398d8e",
+      "summary": "Make the inventory one-row-per-leaf, enumerate the complete P/R/F/O contract and owners, correct the Issue 521 restart baseline to 65 shared leaves, and explicitly exclude the custom query parser without adding validation authority.",
+      "priorRepairInsufficiency": null,
+      "groupIndices": [
+        0
+      ]
+    },
+    {
+      "fingerprint": "6f8eee1d1d7773a09dba08af502385b212ff6ca4d313564519b8baf9011fa5c0",
+      "strategy": "sha256:1c363c57980769f2e998a3b0166ae4556f44026cff3cdab9fc00e23d0e3ab418",
+      "summary": "Replace grouped owner references with a per-leaf validation inventory, explicit positional/type/path distinctions, and named existing size and validator owners without creating a parallel validator.",
+      "priorRepairInsufficiency": null,
+      "groupIndices": [
+        2
+      ]
+    },
+    {
+      "fingerprint": "0048ca2575d4d633387a4bb121249fe8505309cbe6a6140c58cbbf373504cf51",
+      "strategy": "sha256:1c6803299a829fb276c62e43b98df6c1a302b4db5fce75bf8a659f944f6876f2",
+      "summary": "Define the previously unspecified guard branch as the existing no-guard behavior and give every guard a concrete input, owner, match/mismatch outcome, and mutation boundary. Resolve the 65 versus 66 scope conflict using the Issue 521 restart baseline and state the valid-input, help, and lifecycle outcomes that are checked. Make the matrix count, category breakdown, query exception, and registry re-enumeration rule agree with the authoritative restart contract. Tie every failure condition to an input, owner, exit result, and mutation boundary while keeping applicability leaf-specific and resolving the shared 65-row scope.",
+      "priorRepairInsufficiency": null,
+      "groupIndices": [
+        3
+      ]
+    },
+    {
+      "fingerprint": "de389c526048467bae105c6f5f5b3509ce13bed337a4f49c27dcacad8042205d",
+      "strategy": "sha256:1c6803299a829fb276c62e43b98df6c1a302b4db5fce75bf8a659f944f6876f2",
+      "summary": "Define the previously unspecified guard branch as the existing no-guard behavior and give every guard a concrete input, owner, match/mismatch outcome, and mutation boundary. Resolve the 65 versus 66 scope conflict using the Issue 521 restart baseline and state the valid-input, help, and lifecycle outcomes that are checked. Make the matrix count, category breakdown, query exception, and registry re-enumeration rule agree with the authoritative restart contract. Tie every failure condition to an input, owner, exit result, and mutation boundary while keeping applicability leaf-specific and resolving the shared 65-row scope.",
+      "priorRepairInsufficiency": null,
+      "groupIndices": [
+        3
+      ]
+    },
+    {
+      "fingerprint": "6b4be13fbd2169f9056b8b52f64685c549c1d3f089e991fcfba1cfa652f8b8a5",
+      "strategy": "sha256:1c6803299a829fb276c62e43b98df6c1a302b4db5fce75bf8a659f944f6876f2",
+      "summary": "Define the previously unspecified guard branch as the existing no-guard behavior and give every guard a concrete input, owner, match/mismatch outcome, and mutation boundary. Resolve the 65 versus 66 scope conflict using the Issue 521 restart baseline and state the valid-input, help, and lifecycle outcomes that are checked. Make the matrix count, category breakdown, query exception, and registry re-enumeration rule agree with the authoritative restart contract. Tie every failure condition to an input, owner, exit result, and mutation boundary while keeping applicability leaf-specific and resolving the shared 65-row scope.",
+      "priorRepairInsufficiency": null,
+      "groupIndices": [
+        3
+      ]
+    },
+    {
+      "fingerprint": "69eeb8b11f9debb6207ed871f480a3702e1792fde972646934a66fb1fd4ae282",
+      "strategy": "sha256:1c6803299a829fb276c62e43b98df6c1a302b4db5fce75bf8a659f944f6876f2",
+      "summary": "Define the previously unspecified guard branch as the existing no-guard behavior and give every guard a concrete input, owner, match/mismatch outcome, and mutation boundary. Resolve the 65 versus 66 scope conflict using the Issue 521 restart baseline and state the valid-input, help, and lifecycle outcomes that are checked. Make the matrix count, category breakdown, query exception, and registry re-enumeration rule agree with the authoritative restart contract. Tie every failure condition to an input, owner, exit result, and mutation boundary while keeping applicability leaf-specific and resolving the shared 65-row scope.",
+      "priorRepairInsufficiency": null,
+      "groupIndices": [
+        3
+      ]
+    },
+    {
+      "fingerprint": "4c38c10d724b69a7432cfe10cbf547004e1220b7f496ec0b0690ef123036382a",
+      "strategy": "sha256:1c6803299a829fb276c62e43b98df6c1a302b4db5fce75bf8a659f944f6876f2",
+      "summary": "Define the previously unspecified guard branch as the existing no-guard behavior and give every guard a concrete input, owner, match/mismatch outcome, and mutation boundary. Resolve the 65 versus 66 scope conflict using the Issue 521 restart baseline and state the valid-input, help, and lifecycle outcomes that are checked. Make the matrix count, category breakdown, query exception, and registry re-enumeration rule agree with the authoritative restart contract. Tie every failure condition to an input, owner, exit result, and mutation boundary while keeping applicability leaf-specific and resolving the shared 65-row scope.",
+      "priorRepairInsufficiency": null,
+      "groupIndices": [
+        3
+      ]
+    },
+    {
+      "fingerprint": "0604779605c2610edb8a6e58ca364e4d807a103062839ee6793bb744208967a5",
+      "strategy": "sha256:1c6803299a829fb276c62e43b98df6c1a302b4db5fce75bf8a659f944f6876f2",
+      "summary": "Define the previously unspecified guard branch as the existing no-guard behavior and give every guard a concrete input, owner, match/mismatch outcome, and mutation boundary. Resolve the 65 versus 66 scope conflict using the Issue 521 restart baseline and state the valid-input, help, and lifecycle outcomes that are checked. Make the matrix count, category breakdown, query exception, and registry re-enumeration rule agree with the authoritative restart contract. Tie every failure condition to an input, owner, exit result, and mutation boundary while keeping applicability leaf-specific and resolving the shared 65-row scope.",
+      "priorRepairInsufficiency": null,
+      "groupIndices": [
+        3
+      ]
+    },
+    {
+      "fingerprint": "7a24bb874c346605d101852f42f82ef0c917568a5d834de45c05aa144711d8c9",
+      "strategy": "sha256:e50cd409446d83365578f39a70d734cb8b2316015fb1ad20784522c54b398d8e",
+      "summary": "Make the inventory one-row-per-leaf, enumerate the complete P/R/F/O contract and owners, correct the Issue 521 restart baseline to 65 shared leaves, and explicitly exclude the custom query parser without adding validation authority.",
+      "priorRepairInsufficiency": null,
+      "groupIndices": [
+        0
+      ]
+    },
+    {
+      "fingerprint": "fbc4ddcaf300390964ba277b2d058f9f6ed53f26951e57c781e0309d45220873",
+      "strategy": "sha256:1c363c57980769f2e998a3b0166ae4556f44026cff3cdab9fc00e23d0e3ab418",
+      "summary": "Replace grouped owner references with a per-leaf validation inventory, explicit positional/type/path distinctions, and named existing size and validator owners without creating a parallel validator.",
+      "priorRepairInsufficiency": null,
+      "groupIndices": [
+        2
+      ]
+    },
+    {
+      "fingerprint": "b3f22d859d4e84805469b78a1e677817ac48a0028e9966d7625d2689e063e0f2",
+      "strategy": "sha256:08ed4d649df793f9df4ee766e1317a80831e020b0bd5df5323fc421096d9cfab",
+      "summary": "Specify each user-facing path contract, resolution root, existence rule, and existing owner while preserving both agent-work-dir syntaxes, precedence, log fallback, and durable cleanup behavior.",
+      "priorRepairInsufficiency": null,
+      "groupIndices": [
+        1
+      ]
+    }
+  ],
+  "reviewFacts": {
+    "version": 1,
+    "baseRevision": "sha256:121fc827f70690d26886d354dde3ae8f7a07a5efaea28155d4d8b85261de4aec",
+    "resultRevision": {
+      "digest": "9d174f5de7a8a819d33875f960feed27f1fbb59a4c5795563b437bfa79d29df7",
+      "byteLength": 51178
+    },
+    "sourceReviewIdentity": {
+      "specId": "6a9b5488-flow-help-contract",
+      "revision": 6,
+      "digest": "a2e127d6440e2df4964a28c9ec02f2025fefc11d8e7f68c3959a8362ec2688a5",
+      "byteLength": 45571
+    },
+    "sourceReviewDigest": "07aeefe6ec3a25188727adf2cb1ca5ee7b2007990d762c579f70f1da5ae6595a",
+    "sourceReviewArtifact": "revisions/006/review.json",
+    "sourceSpecDigest": "528b38f11d8e90bbd644086f306775f815fd0bf0e7a4584a6005afd292135cf0",
+    "resultSpecDigest": "1b483d236667ef40c7dc6386aabfb779a088f499c97edb866c8680da73c61c8f",
+    "findings": [
+      {
+        "identity": {
+          "sourceArtifact": "revisions/006/review.json",
+          "sourceStep": "spec-review",
+          "sourceFindingId": "spec-review-9c3317612d042cdee290f7d8d226ece6",
+          "fingerprint": "976c6155a4ada0ee4be8fb13eee8eb7df59b5b20c0a9932b14b188def851bfa5"
+        },
+        "finding": {
+          "allowedTargets": [
+            {
+              "operationKinds": [
+                "add-array-element",
+                "replace-array-element"
+              ],
+              "target": {
+                "collection": "acceptance_criteria"
+              }
+            },
+            {
+              "operationKinds": [
+                "edit-text-field"
+              ],
+              "target": {
+                "entity": "requirement",
+                "field": "desc",
+                "id": "R1"
+              }
+            },
+            {
+              "operationKinds": [
+                "edit-text-field"
+              ],
+              "target": {
+                "entity": "requirement",
+                "field": "desc",
+                "id": "R2"
+              }
+            },
+            {
+              "operationKinds": [
+                "edit-text-field"
+              ],
+              "target": {
+                "entity": "task",
+                "field": "implementation_notes",
+                "id": "T-9"
+              }
+            }
+          ],
+          "body": "**Target:** Acceptance Criteria; R1/R2; T-9\n**Issue:** FLOW_COMMANDS currently contains 35 run leaves, including flow run report, plus report show. The non-query routed set is therefore 66 leaves, not the specified 65.\n**Required change:** Update the leaf counts and matrix to include flow run report, or explicitly exclude it with an equivalent lifecycle-preservation acceptance.\n**Why blocking:** The required registry and behavior matrices can omit flow run report, whose registry entry has pre/post/onError hooks, leaving existing behavior untested and the implementation target undefined.",
+          "disposition": "apply",
+          "evidence": "The immutable Spec's acceptance criteria still describe a 65-leaf shared set while the review identifies flow run report as an additional non-query leaf. R1/R2 and T-9 need the count and deterministic matrix ownership reconciled together.",
+          "findingId": "spec-review-9c3317612d042cdee290f7d8d226ece6",
+          "issue": "FLOW_COMMANDS currently contains 35 run leaves, including flow run report, plus report show. The non-query routed set is therefore 66 leaves, not the specified 65.",
+          "kind": "blocking",
+          "requiredChange": "Update the leaf counts and matrix to include flow run report, or explicitly exclude it with an equivalent lifecycle-preservation acceptance.",
+          "target": "Acceptance Criteria; R1/R2; T-9",
+          "title": "Registry leaf count is inconsistent with the current codebase",
+          "whyBlocking": "The required registry and behavior matrices can omit flow run report, whose registry entry has pre/post/onError hooks, leaving existing behavior untested and the implementation target undefined."
+        },
+        "relatedChanges": [
+          {
+            "groupIndex": 0,
+            "operationIndex": 0,
+            "target": {
+              "entity": "requirement",
+              "id": "R1",
+              "field": "desc"
+            },
+            "gateFindingIdentities": [
+              {
+                "sourceArtifact": "steps/spec-gate/result.json",
+                "sourceStep": "spec-gate",
+                "sourceFindingId": "spec-gate:10",
+                "fingerprint": "ca4ea08d60bf070b65e47431937223089fa2696c98541e970f905034532319b7"
+              },
+              {
+                "sourceArtifact": "steps/spec-gate/result.json",
+                "sourceStep": "spec-gate",
+                "sourceFindingId": "spec-gate:2",
+                "fingerprint": "c6a98301c33f0fee21569d7cb7313198a00e0e3411b10c9d922f777aeb5e913f"
+              }
+            ]
+          },
+          {
+            "groupIndex": 2,
+            "operationIndex": 0,
+            "target": {
+              "entity": "requirement",
+              "id": "R2",
+              "field": "desc"
+            },
+            "gateFindingIdentities": [
+              {
+                "sourceArtifact": "steps/spec-gate/result.json",
+                "sourceStep": "spec-gate",
+                "sourceFindingId": "spec-gate:11",
+                "fingerprint": "5cd20c4060d5bdff6fca70f9d5bcaa5221e5e3acf0edc0ab43a6c13e7787d24e"
+              },
+              {
+                "sourceArtifact": "steps/spec-gate/result.json",
+                "sourceStep": "spec-gate",
+                "sourceFindingId": "spec-gate:3",
+                "fingerprint": "a68d4e1de0c39dea7bf39f942183caa38fd699e406d8215c5202af28c16d9d5d"
+              }
+            ]
+          },
+          {
+            "groupIndex": 3,
+            "operationIndex": 1,
+            "target": {
+              "collection": "acceptance_criteria",
+              "position": 8
+            },
+            "gateFindingIdentities": [
+              {
+                "sourceArtifact": "steps/spec-gate/result.json",
+                "sourceStep": "spec-gate",
+                "sourceFindingId": "spec-gate:1",
+                "fingerprint": "7909f9a20377c7d76709285ac6f65d5d5ea4a07a7a1cc05a1ade1e3e29c6522c"
+              },
+              {
+                "sourceArtifact": "steps/spec-gate/result.json",
+                "sourceStep": "spec-gate",
+                "sourceFindingId": "spec-gate:4",
+                "fingerprint": "a040cf17a4f84081bc953fb093472d1f1e8fe84f97f420869d412e7466f4b881"
+              },
+              {
+                "sourceArtifact": "steps/spec-gate/result.json",
+                "sourceStep": "spec-gate",
+                "sourceFindingId": "spec-gate:5",
+                "fingerprint": "1ee6f14516c20b785db14259b3d48cd0750078faa5c71455d0a5c34565c22d9b"
+              },
+              {
+                "sourceArtifact": "steps/spec-gate/result.json",
+                "sourceStep": "spec-gate",
+                "sourceFindingId": "spec-gate:6",
+                "fingerprint": "0f8e48db086dd27e348c989b9ec3ed951a2ba05056ef08407b40514d9a42f4f8"
+              },
+              {
+                "sourceArtifact": "steps/spec-gate/result.json",
+                "sourceStep": "spec-gate",
+                "sourceFindingId": "spec-gate:7",
+                "fingerprint": "515c753c85e1c30ae4ae5c4d75d8d995f12e198aef01c4da1a48d5c8185105c0"
+              },
+              {
+                "sourceArtifact": "steps/spec-gate/result.json",
+                "sourceStep": "spec-gate",
+                "sourceFindingId": "spec-gate:8",
+                "fingerprint": "617591fba0403d0c1603f581b210f1d23dce353e1205b9d7b0baabcc32b74b33"
+              },
+              {
+                "sourceArtifact": "steps/spec-gate/result.json",
+                "sourceStep": "spec-gate",
+                "sourceFindingId": "spec-gate:9",
+                "fingerprint": "fd038a59726773d7766d32b702af960ee5ba1251ac6f1f6beb49eade1baab621"
+              }
+            ]
+          },
+          {
+            "groupIndex": 3,
+            "operationIndex": 2,
+            "target": {
+              "collection": "acceptance_criteria",
+              "position": 12
+            },
+            "gateFindingIdentities": [
+              {
+                "sourceArtifact": "steps/spec-gate/result.json",
+                "sourceStep": "spec-gate",
+                "sourceFindingId": "spec-gate:1",
+                "fingerprint": "7909f9a20377c7d76709285ac6f65d5d5ea4a07a7a1cc05a1ade1e3e29c6522c"
+              },
+              {
+                "sourceArtifact": "steps/spec-gate/result.json",
+                "sourceStep": "spec-gate",
+                "sourceFindingId": "spec-gate:4",
+                "fingerprint": "a040cf17a4f84081bc953fb093472d1f1e8fe84f97f420869d412e7466f4b881"
+              },
+              {
+                "sourceArtifact": "steps/spec-gate/result.json",
+                "sourceStep": "spec-gate",
+                "sourceFindingId": "spec-gate:5",
+                "fingerprint": "1ee6f14516c20b785db14259b3d48cd0750078faa5c71455d0a5c34565c22d9b"
+              },
+              {
+                "sourceArtifact": "steps/spec-gate/result.json",
+                "sourceStep": "spec-gate",
+                "sourceFindingId": "spec-gate:6",
+                "fingerprint": "0f8e48db086dd27e348c989b9ec3ed951a2ba05056ef08407b40514d9a42f4f8"
+              },
+              {
+                "sourceArtifact": "steps/spec-gate/result.json",
+                "sourceStep": "spec-gate",
+                "sourceFindingId": "spec-gate:7",
+                "fingerprint": "515c753c85e1c30ae4ae5c4d75d8d995f12e198aef01c4da1a48d5c8185105c0"
+              },
+              {
+                "sourceArtifact": "steps/spec-gate/result.json",
+                "sourceStep": "spec-gate",
+                "sourceFindingId": "spec-gate:8",
+                "fingerprint": "617591fba0403d0c1603f581b210f1d23dce353e1205b9d7b0baabcc32b74b33"
+              },
+              {
+                "sourceArtifact": "steps/spec-gate/result.json",
+                "sourceStep": "spec-gate",
+                "sourceFindingId": "spec-gate:9",
+                "fingerprint": "fd038a59726773d7766d32b702af960ee5ba1251ac6f1f6beb49eade1baab621"
+              }
+            ]
+          },
+          {
+            "groupIndex": 3,
+            "operationIndex": 3,
+            "target": {
+              "collection": "acceptance_criteria",
+              "position": 9
+            },
+            "gateFindingIdentities": [
+              {
+                "sourceArtifact": "steps/spec-gate/result.json",
+                "sourceStep": "spec-gate",
+                "sourceFindingId": "spec-gate:1",
+                "fingerprint": "7909f9a20377c7d76709285ac6f65d5d5ea4a07a7a1cc05a1ade1e3e29c6522c"
+              },
+              {
+                "sourceArtifact": "steps/spec-gate/result.json",
+                "sourceStep": "spec-gate",
+                "sourceFindingId": "spec-gate:4",
+                "fingerprint": "a040cf17a4f84081bc953fb093472d1f1e8fe84f97f420869d412e7466f4b881"
+              },
+              {
+                "sourceArtifact": "steps/spec-gate/result.json",
+                "sourceStep": "spec-gate",
+                "sourceFindingId": "spec-gate:5",
+                "fingerprint": "1ee6f14516c20b785db14259b3d48cd0750078faa5c71455d0a5c34565c22d9b"
+              },
+              {
+                "sourceArtifact": "steps/spec-gate/result.json",
+                "sourceStep": "spec-gate",
+                "sourceFindingId": "spec-gate:6",
+                "fingerprint": "0f8e48db086dd27e348c989b9ec3ed951a2ba05056ef08407b40514d9a42f4f8"
+              },
+              {
+                "sourceArtifact": "steps/spec-gate/result.json",
+                "sourceStep": "spec-gate",
+                "sourceFindingId": "spec-gate:7",
+                "fingerprint": "515c753c85e1c30ae4ae5c4d75d8d995f12e198aef01c4da1a48d5c8185105c0"
+              },
+              {
+                "sourceArtifact": "steps/spec-gate/result.json",
+                "sourceStep": "spec-gate",
+                "sourceFindingId": "spec-gate:8",
+                "fingerprint": "617591fba0403d0c1603f581b210f1d23dce353e1205b9d7b0baabcc32b74b33"
+              },
+              {
+                "sourceArtifact": "steps/spec-gate/result.json",
+                "sourceStep": "spec-gate",
+                "sourceFindingId": "spec-gate:9",
+                "fingerprint": "fd038a59726773d7766d32b702af960ee5ba1251ac6f1f6beb49eade1baab621"
+              }
+            ]
+          }
+        ],
+        "unresolvedBlocking": true
+      },
+      {
+        "identity": {
+          "sourceArtifact": "revisions/006/review.json",
+          "sourceStep": "spec-review",
+          "sourceFindingId": "spec-review-b13ec7eb78dc581d53c5b4614df861b8",
+          "fingerprint": "b332a9d8c4d111800318f849623dd67a4d9e427a8b81545d6c48e4e96be12f97"
+        },
+        "finding": {
+          "allowedTargets": [
+            {
+              "operationKinds": [
+                "edit-text-field"
+              ],
+              "target": {
+                "entity": "requirement",
+                "field": "desc",
+                "id": "R4"
+              }
+            },
+            {
+              "operationKinds": [
+                "edit-text-field"
+              ],
+              "target": {
+                "entity": "requirement",
+                "field": "desc",
+                "id": "R8"
+              }
+            }
+          ],
+          "body": "**Target:** R4/R8; src/sennel.js\n**Issue:** The dispatcher accepts --agent-work-dir=<path>, but src/sennel.js pre-scans only the separate-token form before initContainer(). Consequently, equals-form invocations currently use config/default paths while separate-form invocations use the invocation override.\n**Required change:** State explicitly that equals-form pre-init parity is the intended compatibility correction, and change the R4 wording that currently claims both existing forms already preserve the same resolver behavior.\n**Why blocking:** Without resolving this contradiction, runtime and log tests cannot determine whether to preserve the current divergent paths or normalize both forms; the wrong choice can send agent files and logs to a different work directory.",
+          "disposition": "apply",
+          "evidence": "The immutable Spec's R4 wording says both agent-work-dir forms preserve existing resolver behavior, while R8 requires pre-init normalization. The review's source observation identifies the equals-form pre-scan gap, so the compatibility correction must be stated explicitly in the Spec wording.",
+          "findingId": "spec-review-b13ec7eb78dc581d53c5b4614df861b8",
+          "issue": "The dispatcher accepts --agent-work-dir=<path>, but src/sennel.js pre-scans only the separate-token form before initContainer(). Consequently, equals-form invocations currently use config/default paths while separate-form invocations use the invocation override.",
+          "kind": "blocking",
+          "requiredChange": "State explicitly that equals-form pre-init parity is the intended compatibility correction, and change the R4 wording that currently claims both existing forms already preserve the same resolver behavior.",
+          "target": "R4/R8; src/sennel.js",
+          "title": "agent-work-dir compatibility claims contradict existing pre-scan behavior",
+          "whyBlocking": "Without resolving this contradiction, runtime and log tests cannot determine whether to preserve the current divergent paths or normalize both forms; the wrong choice can send agent files and logs to a different work directory."
+        },
+        "relatedChanges": [
+          {
+            "groupIndex": 1,
+            "operationIndex": 0,
+            "target": {
+              "entity": "requirement",
+              "id": "R8",
+              "field": "desc"
+            },
+            "gateFindingIdentities": [
+              {
+                "sourceArtifact": "steps/spec-gate/result.json",
+                "sourceStep": "spec-gate",
+                "sourceFindingId": "spec-gate:12",
+                "fingerprint": "e5d69e869f797676bfa9d899f93e9c268796ba2661c5fd458ec343750afabf7e"
+              }
+            ]
+          }
+        ],
+        "unresolvedBlocking": true
+      },
+      {
+        "identity": {
+          "sourceArtifact": "revisions/006/review.json",
+          "sourceStep": "spec-review",
+          "sourceFindingId": "spec-review-45518eabd3f5971d4d283ddf93be29f8",
+          "fingerprint": "0bd2f9a01a292f6fbc8e729fde52b5d90ed10a09295627f5b8ec979430a33b5a"
+        },
+        "finding": {
+          "allowedTargets": [
+            {
+              "operationKinds": [
+                "add-array-element",
+                "replace-array-element"
+              ],
+              "target": {
+                "collection": "acceptance_criteria"
+              }
+            },
+            {
+              "operationKinds": [
+                "edit-text-field"
+              ],
+              "target": {
+                "entity": "requirement",
+                "field": "desc",
+                "id": "R1"
+              }
+            },
+            {
+              "operationKinds": [
+                "edit-text-field"
+              ],
+              "target": {
+                "entity": "requirement",
+                "field": "desc",
+                "id": "R2"
+              }
+            },
+            {
+              "operationKinds": [
+                "edit-text-field"
+              ],
+              "target": {
+                "entity": "task",
+                "field": "implementation_notes",
+                "id": "T-1"
+              }
+            },
+            {
+              "operationKinds": [
+                "edit-text-field"
+              ],
+              "target": {
+                "entity": "task",
+                "field": "implementation_notes",
+                "id": "T-2"
+              }
+            }
+          ],
+          "body": "**Target:** R1/R2; T-1/T-2; Acceptance Criteria\n**Issue:** The current registry args contain mostly positional/flag/option name arrays, while semantic validation is distributed across command modules, FlowTargetExpectation, and path/Git helpers. The spec requires an individual inventory but does not provide one or map every leaf input to its existing owner. This matters for same-named inputs with different contracts, such as --spec on resume versus run gate, --run-id on preparing-flow commands versus runtime-log, and --base on prepare versus lint.\n**Required change:** Add a concrete inventory for every current routed leaf that maps each input to its kind, value/domain/path contract, conditional combination, existing validator owner, and test owner, including distinctions for same-named inputs.\n**Why blocking:** An implementer can otherwise centralize or tighten a command-owned rule accidentally, and tests cannot derive the expected valid/invalid argv, diagnostic owner, or rejection order.",
+          "disposition": "apply",
+          "evidence": "The immutable Spec requires per-leaf inventory and validator ownership in R1/R2, but its requirements, tasks, and acceptance criteria provide only aggregate examples and no concrete inventory for every routed leaf. The missing detail spans the two requirement descriptions, T-1/T-2 implementation notes, and their acceptance evidence.",
+          "findingId": "spec-review-45518eabd3f5971d4d283ddf93be29f8",
+          "issue": "The current registry args contain mostly positional/flag/option name arrays, while semantic validation is distributed across command modules, FlowTargetExpectation, and path/Git helpers. The spec requires an individual inventory but does not provide one or map every leaf input to its existing owner. This matters for same-named inputs with different contracts, such as --spec on resume versus run gate, --run-id on preparing-flow commands versus runtime-log, and --base on prepare versus lint.",
+          "kind": "blocking",
+          "requiredChange": "Add a concrete inventory for every current routed leaf that maps each input to its kind, value/domain/path contract, conditional combination, existing validator owner, and test owner, including distinctions for same-named inputs.",
+          "target": "R1/R2; T-1/T-2; Acceptance Criteria",
+          "title": "Per-leaf semantic input inventory and validator ownership are not actually specified",
+          "whyBlocking": "An implementer can otherwise centralize or tighten a command-owned rule accidentally, and tests cannot derive the expected valid/invalid argv, diagnostic owner, or rejection order."
+        },
+        "relatedChanges": [
+          {
+            "groupIndex": 0,
+            "operationIndex": 0,
+            "target": {
+              "entity": "requirement",
+              "id": "R1",
+              "field": "desc"
+            },
+            "gateFindingIdentities": [
+              {
+                "sourceArtifact": "steps/spec-gate/result.json",
+                "sourceStep": "spec-gate",
+                "sourceFindingId": "spec-gate:10",
+                "fingerprint": "ca4ea08d60bf070b65e47431937223089fa2696c98541e970f905034532319b7"
+              },
+              {
+                "sourceArtifact": "steps/spec-gate/result.json",
+                "sourceStep": "spec-gate",
+                "sourceFindingId": "spec-gate:2",
+                "fingerprint": "c6a98301c33f0fee21569d7cb7313198a00e0e3411b10c9d922f777aeb5e913f"
+              }
+            ]
+          },
+          {
+            "groupIndex": 2,
+            "operationIndex": 0,
+            "target": {
+              "entity": "requirement",
+              "id": "R2",
+              "field": "desc"
+            },
+            "gateFindingIdentities": [
+              {
+                "sourceArtifact": "steps/spec-gate/result.json",
+                "sourceStep": "spec-gate",
+                "sourceFindingId": "spec-gate:11",
+                "fingerprint": "5cd20c4060d5bdff6fca70f9d5bcaa5221e5e3acf0edc0ab43a6c13e7787d24e"
+              },
+              {
+                "sourceArtifact": "steps/spec-gate/result.json",
+                "sourceStep": "spec-gate",
+                "sourceFindingId": "spec-gate:3",
+                "fingerprint": "a68d4e1de0c39dea7bf39f942183caa38fd699e406d8215c5202af28c16d9d5d"
+              }
+            ]
+          },
+          {
+            "groupIndex": 3,
+            "operationIndex": 1,
+            "target": {
+              "collection": "acceptance_criteria",
+              "position": 8
+            },
+            "gateFindingIdentities": [
+              {
+                "sourceArtifact": "steps/spec-gate/result.json",
+                "sourceStep": "spec-gate",
+                "sourceFindingId": "spec-gate:1",
+                "fingerprint": "7909f9a20377c7d76709285ac6f65d5d5ea4a07a7a1cc05a1ade1e3e29c6522c"
+              },
+              {
+                "sourceArtifact": "steps/spec-gate/result.json",
+                "sourceStep": "spec-gate",
+                "sourceFindingId": "spec-gate:4",
+                "fingerprint": "a040cf17a4f84081bc953fb093472d1f1e8fe84f97f420869d412e7466f4b881"
+              },
+              {
+                "sourceArtifact": "steps/spec-gate/result.json",
+                "sourceStep": "spec-gate",
+                "sourceFindingId": "spec-gate:5",
+                "fingerprint": "1ee6f14516c20b785db14259b3d48cd0750078faa5c71455d0a5c34565c22d9b"
+              },
+              {
+                "sourceArtifact": "steps/spec-gate/result.json",
+                "sourceStep": "spec-gate",
+                "sourceFindingId": "spec-gate:6",
+                "fingerprint": "0f8e48db086dd27e348c989b9ec3ed951a2ba05056ef08407b40514d9a42f4f8"
+              },
+              {
+                "sourceArtifact": "steps/spec-gate/result.json",
+                "sourceStep": "spec-gate",
+                "sourceFindingId": "spec-gate:7",
+                "fingerprint": "515c753c85e1c30ae4ae5c4d75d8d995f12e198aef01c4da1a48d5c8185105c0"
+              },
+              {
+                "sourceArtifact": "steps/spec-gate/result.json",
+                "sourceStep": "spec-gate",
+                "sourceFindingId": "spec-gate:8",
+                "fingerprint": "617591fba0403d0c1603f581b210f1d23dce353e1205b9d7b0baabcc32b74b33"
+              },
+              {
+                "sourceArtifact": "steps/spec-gate/result.json",
+                "sourceStep": "spec-gate",
+                "sourceFindingId": "spec-gate:9",
+                "fingerprint": "fd038a59726773d7766d32b702af960ee5ba1251ac6f1f6beb49eade1baab621"
+              }
+            ]
+          },
+          {
+            "groupIndex": 3,
+            "operationIndex": 2,
+            "target": {
+              "collection": "acceptance_criteria",
+              "position": 12
+            },
+            "gateFindingIdentities": [
+              {
+                "sourceArtifact": "steps/spec-gate/result.json",
+                "sourceStep": "spec-gate",
+                "sourceFindingId": "spec-gate:1",
+                "fingerprint": "7909f9a20377c7d76709285ac6f65d5d5ea4a07a7a1cc05a1ade1e3e29c6522c"
+              },
+              {
+                "sourceArtifact": "steps/spec-gate/result.json",
+                "sourceStep": "spec-gate",
+                "sourceFindingId": "spec-gate:4",
+                "fingerprint": "a040cf17a4f84081bc953fb093472d1f1e8fe84f97f420869d412e7466f4b881"
+              },
+              {
+                "sourceArtifact": "steps/spec-gate/result.json",
+                "sourceStep": "spec-gate",
+                "sourceFindingId": "spec-gate:5",
+                "fingerprint": "1ee6f14516c20b785db14259b3d48cd0750078faa5c71455d0a5c34565c22d9b"
+              },
+              {
+                "sourceArtifact": "steps/spec-gate/result.json",
+                "sourceStep": "spec-gate",
+                "sourceFindingId": "spec-gate:6",
+                "fingerprint": "0f8e48db086dd27e348c989b9ec3ed951a2ba05056ef08407b40514d9a42f4f8"
+              },
+              {
+                "sourceArtifact": "steps/spec-gate/result.json",
+                "sourceStep": "spec-gate",
+                "sourceFindingId": "spec-gate:7",
+                "fingerprint": "515c753c85e1c30ae4ae5c4d75d8d995f12e198aef01c4da1a48d5c8185105c0"
+              },
+              {
+                "sourceArtifact": "steps/spec-gate/result.json",
+                "sourceStep": "spec-gate",
+                "sourceFindingId": "spec-gate:8",
+                "fingerprint": "617591fba0403d0c1603f581b210f1d23dce353e1205b9d7b0baabcc32b74b33"
+              },
+              {
+                "sourceArtifact": "steps/spec-gate/result.json",
+                "sourceStep": "spec-gate",
+                "sourceFindingId": "spec-gate:9",
+                "fingerprint": "fd038a59726773d7766d32b702af960ee5ba1251ac6f1f6beb49eade1baab621"
+              }
+            ]
+          },
+          {
+            "groupIndex": 3,
+            "operationIndex": 3,
+            "target": {
+              "collection": "acceptance_criteria",
+              "position": 9
+            },
+            "gateFindingIdentities": [
+              {
+                "sourceArtifact": "steps/spec-gate/result.json",
+                "sourceStep": "spec-gate",
+                "sourceFindingId": "spec-gate:1",
+                "fingerprint": "7909f9a20377c7d76709285ac6f65d5d5ea4a07a7a1cc05a1ade1e3e29c6522c"
+              },
+              {
+                "sourceArtifact": "steps/spec-gate/result.json",
+                "sourceStep": "spec-gate",
+                "sourceFindingId": "spec-gate:4",
+                "fingerprint": "a040cf17a4f84081bc953fb093472d1f1e8fe84f97f420869d412e7466f4b881"
+              },
+              {
+                "sourceArtifact": "steps/spec-gate/result.json",
+                "sourceStep": "spec-gate",
+                "sourceFindingId": "spec-gate:5",
+                "fingerprint": "1ee6f14516c20b785db14259b3d48cd0750078faa5c71455d0a5c34565c22d9b"
+              },
+              {
+                "sourceArtifact": "steps/spec-gate/result.json",
+                "sourceStep": "spec-gate",
+                "sourceFindingId": "spec-gate:6",
+                "fingerprint": "0f8e48db086dd27e348c989b9ec3ed951a2ba05056ef08407b40514d9a42f4f8"
+              },
+              {
+                "sourceArtifact": "steps/spec-gate/result.json",
+                "sourceStep": "spec-gate",
+                "sourceFindingId": "spec-gate:7",
+                "fingerprint": "515c753c85e1c30ae4ae5c4d75d8d995f12e198aef01c4da1a48d5c8185105c0"
+              },
+              {
+                "sourceArtifact": "steps/spec-gate/result.json",
+                "sourceStep": "spec-gate",
+                "sourceFindingId": "spec-gate:8",
+                "fingerprint": "617591fba0403d0c1603f581b210f1d23dce353e1205b9d7b0baabcc32b74b33"
+              },
+              {
+                "sourceArtifact": "steps/spec-gate/result.json",
+                "sourceStep": "spec-gate",
+                "sourceFindingId": "spec-gate:9",
+                "fingerprint": "fd038a59726773d7766d32b702af960ee5ba1251ac6f1f6beb49eade1baab621"
+              }
+            ]
+          }
+        ],
+        "unresolvedBlocking": true
+      },
+      {
+        "identity": {
+          "sourceArtifact": "revisions/006/review.json",
+          "sourceStep": "spec-review",
+          "sourceFindingId": "spec-review-d0d7f19a7c48282f3c3701fb3ae7afa5",
+          "fingerprint": "82bfd684b504c8cf89f63a7f0da8f466c101efce5737753c31d375621c636dd0"
+        },
+        "finding": {
+          "allowedTargets": [
+            {
+              "operationKinds": [
+                "add-array-element",
+                "replace-array-element"
+              ],
+              "target": {
+                "collection": "acceptance_criteria"
+              }
+            },
+            {
+              "operationKinds": [
+                "edit-text-field"
+              ],
+              "target": {
+                "entity": "task",
+                "field": "implementation_notes",
+                "id": "T-9"
+              }
+            }
+          ],
+          "body": "**Target:** Acceptance Criteria (65-leaf success matrix); T-9\n**Issue:** The acceptance criteria require a valid normal-success invocation for every leaf, but the registry includes AI-driven, finalization, recovery, and state-transition commands with incompatible prerequisites. The tasks only name representative suites and provide no per-leaf production fixture, state setup, agent boundary, or mutation assertion.\n**Required change:** Add a deterministic legal success fixture and owning test boundary for each registry leaf, including its required Flow state and external-agent handling, and reconcile T-9's representative-only wording with that universal criterion.\n**Why blocking:** Tests would either invoke unsafe state mutations/agent execution ad hoc or omit leaves while still appearing representative, so the required all-leaf behavior cannot be implemented and verified deterministically.",
+          "disposition": "apply",
+          "evidence": "The immutable Spec has a universal per-leaf success criterion for 65 leaves but T-9 still assigns only representative suites and does not provide deterministic legal fixtures, state setup, or agent-boundary ownership for every leaf. The acceptance matrix and T-9 implementation notes must be reconciled.",
+          "findingId": "spec-review-d0d7f19a7c48282f3c3701fb3ae7afa5",
+          "issue": "The acceptance criteria require a valid normal-success invocation for every leaf, but the registry includes AI-driven, finalization, recovery, and state-transition commands with incompatible prerequisites. The tasks only name representative suites and provide no per-leaf production fixture, state setup, agent boundary, or mutation assertion.",
+          "kind": "blocking",
+          "requiredChange": "Add a deterministic legal success fixture and owning test boundary for each registry leaf, including its required Flow state and external-agent handling, and reconcile T-9's representative-only wording with that universal criterion.",
+          "target": "Acceptance Criteria (65-leaf success matrix); T-9",
+          "title": "Universal success coverage has no legal per-leaf fixture basis",
+          "whyBlocking": "Tests would either invoke unsafe state mutations/agent execution ad hoc or omit leaves while still appearing representative, so the required all-leaf behavior cannot be implemented and verified deterministically."
+        },
+        "relatedChanges": [
+          {
+            "groupIndex": 3,
+            "operationIndex": 1,
+            "target": {
+              "collection": "acceptance_criteria",
+              "position": 8
+            },
+            "gateFindingIdentities": [
+              {
+                "sourceArtifact": "steps/spec-gate/result.json",
+                "sourceStep": "spec-gate",
+                "sourceFindingId": "spec-gate:1",
+                "fingerprint": "7909f9a20377c7d76709285ac6f65d5d5ea4a07a7a1cc05a1ade1e3e29c6522c"
+              },
+              {
+                "sourceArtifact": "steps/spec-gate/result.json",
+                "sourceStep": "spec-gate",
+                "sourceFindingId": "spec-gate:4",
+                "fingerprint": "a040cf17a4f84081bc953fb093472d1f1e8fe84f97f420869d412e7466f4b881"
+              },
+              {
+                "sourceArtifact": "steps/spec-gate/result.json",
+                "sourceStep": "spec-gate",
+                "sourceFindingId": "spec-gate:5",
+                "fingerprint": "1ee6f14516c20b785db14259b3d48cd0750078faa5c71455d0a5c34565c22d9b"
+              },
+              {
+                "sourceArtifact": "steps/spec-gate/result.json",
+                "sourceStep": "spec-gate",
+                "sourceFindingId": "spec-gate:6",
+                "fingerprint": "0f8e48db086dd27e348c989b9ec3ed951a2ba05056ef08407b40514d9a42f4f8"
+              },
+              {
+                "sourceArtifact": "steps/spec-gate/result.json",
+                "sourceStep": "spec-gate",
+                "sourceFindingId": "spec-gate:7",
+                "fingerprint": "515c753c85e1c30ae4ae5c4d75d8d995f12e198aef01c4da1a48d5c8185105c0"
+              },
+              {
+                "sourceArtifact": "steps/spec-gate/result.json",
+                "sourceStep": "spec-gate",
+                "sourceFindingId": "spec-gate:8",
+                "fingerprint": "617591fba0403d0c1603f581b210f1d23dce353e1205b9d7b0baabcc32b74b33"
+              },
+              {
+                "sourceArtifact": "steps/spec-gate/result.json",
+                "sourceStep": "spec-gate",
+                "sourceFindingId": "spec-gate:9",
+                "fingerprint": "fd038a59726773d7766d32b702af960ee5ba1251ac6f1f6beb49eade1baab621"
+              }
+            ]
+          },
+          {
+            "groupIndex": 3,
+            "operationIndex": 2,
+            "target": {
+              "collection": "acceptance_criteria",
+              "position": 12
+            },
+            "gateFindingIdentities": [
+              {
+                "sourceArtifact": "steps/spec-gate/result.json",
+                "sourceStep": "spec-gate",
+                "sourceFindingId": "spec-gate:1",
+                "fingerprint": "7909f9a20377c7d76709285ac6f65d5d5ea4a07a7a1cc05a1ade1e3e29c6522c"
+              },
+              {
+                "sourceArtifact": "steps/spec-gate/result.json",
+                "sourceStep": "spec-gate",
+                "sourceFindingId": "spec-gate:4",
+                "fingerprint": "a040cf17a4f84081bc953fb093472d1f1e8fe84f97f420869d412e7466f4b881"
+              },
+              {
+                "sourceArtifact": "steps/spec-gate/result.json",
+                "sourceStep": "spec-gate",
+                "sourceFindingId": "spec-gate:5",
+                "fingerprint": "1ee6f14516c20b785db14259b3d48cd0750078faa5c71455d0a5c34565c22d9b"
+              },
+              {
+                "sourceArtifact": "steps/spec-gate/result.json",
+                "sourceStep": "spec-gate",
+                "sourceFindingId": "spec-gate:6",
+                "fingerprint": "0f8e48db086dd27e348c989b9ec3ed951a2ba05056ef08407b40514d9a42f4f8"
+              },
+              {
+                "sourceArtifact": "steps/spec-gate/result.json",
+                "sourceStep": "spec-gate",
+                "sourceFindingId": "spec-gate:7",
+                "fingerprint": "515c753c85e1c30ae4ae5c4d75d8d995f12e198aef01c4da1a48d5c8185105c0"
+              },
+              {
+                "sourceArtifact": "steps/spec-gate/result.json",
+                "sourceStep": "spec-gate",
+                "sourceFindingId": "spec-gate:8",
+                "fingerprint": "617591fba0403d0c1603f581b210f1d23dce353e1205b9d7b0baabcc32b74b33"
+              },
+              {
+                "sourceArtifact": "steps/spec-gate/result.json",
+                "sourceStep": "spec-gate",
+                "sourceFindingId": "spec-gate:9",
+                "fingerprint": "fd038a59726773d7766d32b702af960ee5ba1251ac6f1f6beb49eade1baab621"
+              }
+            ]
+          },
+          {
+            "groupIndex": 3,
+            "operationIndex": 3,
+            "target": {
+              "collection": "acceptance_criteria",
+              "position": 9
+            },
+            "gateFindingIdentities": [
+              {
+                "sourceArtifact": "steps/spec-gate/result.json",
+                "sourceStep": "spec-gate",
+                "sourceFindingId": "spec-gate:1",
+                "fingerprint": "7909f9a20377c7d76709285ac6f65d5d5ea4a07a7a1cc05a1ade1e3e29c6522c"
+              },
+              {
+                "sourceArtifact": "steps/spec-gate/result.json",
+                "sourceStep": "spec-gate",
+                "sourceFindingId": "spec-gate:4",
+                "fingerprint": "a040cf17a4f84081bc953fb093472d1f1e8fe84f97f420869d412e7466f4b881"
+              },
+              {
+                "sourceArtifact": "steps/spec-gate/result.json",
+                "sourceStep": "spec-gate",
+                "sourceFindingId": "spec-gate:5",
+                "fingerprint": "1ee6f14516c20b785db14259b3d48cd0750078faa5c71455d0a5c34565c22d9b"
+              },
+              {
+                "sourceArtifact": "steps/spec-gate/result.json",
+                "sourceStep": "spec-gate",
+                "sourceFindingId": "spec-gate:6",
+                "fingerprint": "0f8e48db086dd27e348c989b9ec3ed951a2ba05056ef08407b40514d9a42f4f8"
+              },
+              {
+                "sourceArtifact": "steps/spec-gate/result.json",
+                "sourceStep": "spec-gate",
+                "sourceFindingId": "spec-gate:7",
+                "fingerprint": "515c753c85e1c30ae4ae5c4d75d8d995f12e198aef01c4da1a48d5c8185105c0"
+              },
+              {
+                "sourceArtifact": "steps/spec-gate/result.json",
+                "sourceStep": "spec-gate",
+                "sourceFindingId": "spec-gate:8",
+                "fingerprint": "617591fba0403d0c1603f581b210f1d23dce353e1205b9d7b0baabcc32b74b33"
+              },
+              {
+                "sourceArtifact": "steps/spec-gate/result.json",
+                "sourceStep": "spec-gate",
+                "sourceFindingId": "spec-gate:9",
+                "fingerprint": "fd038a59726773d7766d32b702af960ee5ba1251ac6f1f6beb49eade1baab621"
+              }
+            ]
+          }
+        ],
+        "unresolvedBlocking": true
+      },
+      {
+        "identity": {
+          "sourceArtifact": "revisions/006/review.json",
+          "sourceStep": "spec-review",
+          "sourceFindingId": "spec-review-50c84f093e4a04eef5cad340df7c1709",
+          "fingerprint": "369dbf38718473e2aac7ef79f893d590b6992cbcb3e39d6001ace590a9e9c280"
+        },
+        "finding": {
+          "allowedTargets": [
+            {
+              "operationKinds": [
+                "edit-text-field"
+              ],
+              "target": {
+                "entity": "requirement",
+                "field": "desc",
+                "id": "R6"
+              }
+            },
+            {
+              "operationKinds": [
+                "edit-text-field"
+              ],
+              "target": {
+                "entity": "task",
+                "field": "implementation_notes",
+                "id": "T-4"
+              }
+            }
+          ],
+          "body": "**Target:** R6; T-4\n**Improvement:** Specify that the 64/65-character and other synthetic names are constructed through the shared CommandDefinition/help renderer test seam, rather than production FLOW_COMMANDS entries.\n**Why non-blocking:** The existing command-name invariant permits these synthetic names, so the fixture can be added without changing production command behavior.",
+          "disposition": "apply",
+          "evidence": "The immutable Spec names synthetic 64/65-character renderer fixtures in R6 and T-4 but does not identify the shared CommandDefinition/help renderer test seam that must construct them without adding production registry entries.",
+          "findingId": "spec-review-50c84f093e4a04eef5cad340df7c1709",
+          "improvement": "Specify that the 64/65-character and other synthetic names are constructed through the shared CommandDefinition/help renderer test seam, rather than production FLOW_COMMANDS entries.",
+          "kind": "improvement",
+          "target": "R6; T-4",
+          "title": "Name the renderer seam for synthetic boundary fixtures",
+          "whyNonBlocking": "The existing command-name invariant permits these synthetic names, so the fixture can be added without changing production command behavior."
+        },
+        "relatedChanges": [],
+        "unresolvedBlocking": false
+      }
+    ],
+    "reviewInputPreserved": false,
+    "unresolvedBlocking": true,
+    "requiresReview": true,
+    "reason": "unresolved-blocking-review"
+  }
+}

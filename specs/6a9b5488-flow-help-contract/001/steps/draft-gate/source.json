@@ -1,0 +1,191 @@
+{
+  "version": 1,
+  "phase": "draft",
+  "generatedAt": "2026-10-05T00:48:17.531Z",
+  "result": "fail",
+  "evaluations": [
+    {
+      "guardrail_id": "migration-parity",
+      "result": "fail",
+      "reason": "既存の help 定義をコマンド定義へ移す方針だが、移される既存の公開動作の棚卸しを Spec に委ねており、この draft では定義していない。影響を受けるコマンド、API、設定、生成物、副作用ごとに既存動作を列挙する必要がある。",
+      "category": "process",
+      "title": "Migration Parity",
+      "observations": [
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "migration-parity",
+          "where": {
+            "file": "draft.json",
+            "locator": "decisionMap.deferredToSpec[0]"
+          },
+          "observed": "既存の help 定義をコマンド定義へ移す方針だが、移される既存の公開動作の棚卸しを Spec に委ねており、この draft では定義していない。影響を受けるコマンド、API、設定、生成物、副作用ごとに既存動作を列挙する必要がある。",
+          "severity": "blocking",
+          "refs": [
+            "migration-parity"
+          ]
+        }
+      ]
+    },
+    {
+      "guardrail_id": "migration-parity",
+      "result": "fail",
+      "reason": "公開面の所有箇所を Spec で具体化するとしているが、保持する各動作を移行後の所有箇所へ対応付けていない。各動作の新しい所有箇所、または明示的な削除判断を記載する必要がある。",
+      "category": "process",
+      "title": "Migration Parity",
+      "observations": [
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "migration-parity",
+          "where": {
+            "file": "draft.json",
+            "locator": "decisionMap.deferredToSpec[1]"
+          },
+          "observed": "公開面の所有箇所を Spec で具体化するとしているが、保持する各動作を移行後の所有箇所へ対応付けていない。各動作の新しい所有箇所、または明示的な削除判断を記載する必要がある。",
+          "severity": "blocking",
+          "refs": [
+            "migration-parity"
+          ]
+        }
+      ]
+    },
+    {
+      "guardrail_id": "unambiguous-requirements",
+      "result": "fail",
+      "reason": "「代表的な回帰確認」は対象ケースが特定されておらず、充足を客観的に判定できない。docs/core/plugin のどの表示を確認するか明記する必要がある。",
+      "category": "code-quality",
+      "title": "Unambiguous Requirements",
+      "observations": [
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "unambiguous-requirements",
+          "where": {
+            "file": "draft.json",
+            "locator": "decisionMap.knownFacts[19]"
+          },
+          "observed": "「代表的な回帰確認」は対象ケースが特定されておらず、充足を客観的に判定できない。docs/core/plugin のどの表示を確認するか明記する必要がある。",
+          "severity": "blocking",
+          "refs": [
+            "unambiguous-requirements"
+          ]
+        }
+      ]
+    },
+    {
+      "guardrail_id": "unambiguous-requirements",
+      "result": "fail",
+      "reason": "「代表例で確認する」では確認対象が定まらない。docs/core/plugin それぞれで確認する表示例を指定する必要がある。",
+      "category": "code-quality",
+      "title": "Unambiguous Requirements",
+      "observations": [
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "unambiguous-requirements",
+          "where": {
+            "file": "draft.json",
+            "locator": "impactOnExisting[3]"
+          },
+          "observed": "「代表例で確認する」では確認対象が定まらない。docs/core/plugin それぞれで確認する表示例を指定する必要がある。",
+          "severity": "blocking",
+          "refs": [
+            "unambiguous-requirements"
+          ]
+        }
+      ]
+    }
+  ],
+  "observations": [
+    {
+      "kind": "violation",
+      "failureMode": "guardrail-violation",
+      "requirementRef": "migration-parity",
+      "where": {
+        "file": "draft.json",
+        "locator": "decisionMap.deferredToSpec[0]"
+      },
+      "observed": "既存の help 定義をコマンド定義へ移す方針だが、移される既存の公開動作の棚卸しを Spec に委ねており、この draft では定義していない。影響を受けるコマンド、API、設定、生成物、副作用ごとに既存動作を列挙する必要がある。",
+      "severity": "blocking",
+      "refs": [
+        "migration-parity"
+      ]
+    },
+    {
+      "kind": "violation",
+      "failureMode": "guardrail-violation",
+      "requirementRef": "migration-parity",
+      "where": {
+        "file": "draft.json",
+        "locator": "decisionMap.deferredToSpec[1]"
+      },
+      "observed": "公開面の所有箇所を Spec で具体化するとしているが、保持する各動作を移行後の所有箇所へ対応付けていない。各動作の新しい所有箇所、または明示的な削除判断を記載する必要がある。",
+      "severity": "blocking",
+      "refs": [
+        "migration-parity"
+      ]
+    },
+    {
+      "kind": "violation",
+      "failureMode": "guardrail-violation",
+      "requirementRef": "unambiguous-requirements",
+      "where": {
+        "file": "draft.json",
+        "locator": "decisionMap.knownFacts[19]"
+      },
+      "observed": "「代表的な回帰確認」は対象ケースが特定されておらず、充足を客観的に判定できない。docs/core/plugin のどの表示を確認するか明記する必要がある。",
+      "severity": "blocking",
+      "refs": [
+        "unambiguous-requirements"
+      ]
+    },
+    {
+      "kind": "violation",
+      "failureMode": "guardrail-violation",
+      "requirementRef": "unambiguous-requirements",
+      "where": {
+        "file": "draft.json",
+        "locator": "impactOnExisting[3]"
+      },
+      "observed": "「代表例で確認する」では確認対象が定まらない。docs/core/plugin それぞれで確認する表示例を指定する必要がある。",
+      "severity": "blocking",
+      "refs": [
+        "unambiguous-requirements"
+      ]
+    }
+  ],
+  "issues": [],
+  "reasons": [
+    {
+      "verdict": "FAIL",
+      "detail": "Migration Parity — 既存の help 定義をコマンド定義へ移す方針だが、移される既存の公開動作の棚卸しを Spec に委ねており、この draft では定義していない。影響を受けるコマンド、API、設定、生成物、副作用ごとに既存動作を列挙する必要がある。",
+      "guardrail_id": "migration-parity",
+      "category": "process"
+    },
+    {
+      "verdict": "FAIL",
+      "detail": "Migration Parity — 公開面の所有箇所を Spec で具体化するとしているが、保持する各動作を移行後の所有箇所へ対応付けていない。各動作の新しい所有箇所、または明示的な削除判断を記載する必要がある。",
+      "guardrail_id": "migration-parity",
+      "category": "process"
+    },
+    {
+      "verdict": "FAIL",
+      "detail": "Unambiguous Requirements — 「代表的な回帰確認」は対象ケースが特定されておらず、充足を客観的に判定できない。docs/core/plugin のどの表示を確認するか明記する必要がある。",
+      "guardrail_id": "unambiguous-requirements",
+      "category": "code-quality"
+    },
+    {
+      "verdict": "FAIL",
+      "detail": "Unambiguous Requirements — 「代表例で確認する」では確認対象が定まらない。docs/core/plugin それぞれで確認する表示例を指定する必要がある。",
+      "guardrail_id": "unambiguous-requirements",
+      "category": "code-quality"
+    }
+  ],
+  "failureKind": "ai_semantic_fail",
+  "failureCategory": {
+    "category": "semantic",
+    "code": "ai_semantic_fail"
+  },
+  "lineage": "0bbee49be0498f66fcc5d28e89f93dc89e2c5c807164b0e4ce4dc9852fd6d47b"
+}

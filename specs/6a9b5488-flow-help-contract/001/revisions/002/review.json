@@ -1,0 +1,530 @@
+{
+  "audit": [
+    {
+      "acceptedOperations": [],
+      "appliedFindings": [],
+      "discardedOperations": [],
+      "inputDigest": "98dc01b68f1c22f54d0c8e76f21be7cfe197d80f5f594f9b5aa0d8b76ce13cb2",
+      "operationDigest": "790e561a26120cd5aba8824e99283158498cb669998f0f509e9b6e3ad4013369",
+      "outcome": "replaced",
+      "relation": "revision-scoped-canonical-review",
+      "stage": "spec-review"
+    },
+    {
+      "acceptedOperations": [],
+      "appliedFindings": [],
+      "discardedOperations": [],
+      "inputDigest": "f85e8cfb3c0ccdfb6066c9b24460f4b3ff1e4e007b03d6474a42f2d5a609854b",
+      "operationDigest": "790e561a26120cd5aba8824e99283158498cb669998f0f509e9b6e3ad4013369",
+      "outcome": "merged",
+      "relation": "revision-scoped-canonical-review",
+      "stage": "spec-triage"
+    },
+    {
+      "acceptedOperations": [
+        {
+          "edits": [
+            {
+              "endByte": 735,
+              "replacement": "既存の入力・検証・target・path・identifier・state-dependent contract を保持すること。positional/rest の超過と unknown option、required value の不足/形式不正、optional value の不正は `src/lib/dispatcher.js` と `src/lib/cli.js` の parser owner が従来順序で拒否し、positional/rest の不足は parser が値を保持したまま command-owned validation に委ね、target mismatch は `src/flow/lib/flow-context.js`、`src/flow/lib/base-command.js`、`src/lib/flow-target-guard.js` が拒否し、path/identifier/domain-state validation は各既存 command/validator が拒否する。help contract の共通化はこの順序、diagnostic、JSON envelope、exit code、runtime directory、work/log precedence、lifecycle、cleanup、side effect を変更してはならない。leaf なしの `sennel flow <group>` は既存の non-zero exit code を保持してよく、出力される help rows は明示的な help route と一致しなければならない。",
+              "startByte": 0
+            }
+          ],
+          "expectedDigest": "476c778b60587fcca14ccfe5eec4414347ea39520a1506346c702ee579636809",
+          "findingIds": [
+            "spec-review-1c9033cbdbbc37bf7d0d3fda47e9be7a",
+            "spec-review-ed18f226748dfc5468cf5d00dc5256e5"
+          ],
+          "kind": "edit-text-field",
+          "reason": "Keep missing positional values under command-owned validation and make leafless-group output and status preservation explicit.",
+          "target": {
+            "entity": "requirement",
+            "field": "desc",
+            "id": "R4"
+          }
+        },
+        {
+          "edits": [
+            {
+              "endByte": 618,
+              "replacement": "65 個の公開 shared leaf を対象に、各 leaf の通常有効入力を少なくとも一つ実行し、適用可能な missing positional、extra positional/rest、missing or malformed required value、invalid optional value、unknown option、target mismatch、invalid path/identifier、state-dependent rejection を既存 owner 経由で検証すること。missing positional は dispatcher が保持した値を command-owned validation が拒否する経路を含め、parser が担当する unknown option、option value、extra positional/rest と command-owned validation の境界を owner map と rejection tests で明示すること。各 case は既存の diagnostic、guard、runtime-directory、side-effect、lifecycle、cleanup、exit-code の結果を assert し、runtime-log、lifecycle、cleanup、side-effect の assertion は適用可能な route で必須とし、read-only または intentionally isolated な route は文書化された不在を assert すること。入力を事前に構築した最終 artifact や command-owned validation の mock で置換してはならない。",
+              "startByte": 0
+            }
+          ],
+          "expectedDigest": "db7d03365ed03dd266666aff763086f38cf0e6709448f96f3da410a8a3e51fd0",
+          "findingIds": [
+            "spec-review-a3ef843e43b9a55cc0e7ec2495790ebc",
+            "spec-review-ed18f226748dfc5468cf5d00dc5256e5"
+          ],
+          "kind": "edit-text-field",
+          "reason": "Record parser and command-owned rejection boundaries and qualify outcome assertions by route applicability.",
+          "target": {
+            "entity": "requirement",
+            "field": "desc",
+            "id": "R5"
+          }
+        },
+        {
+          "edits": [
+            {
+              "endByte": 458,
+              "replacement": "`sennel flow <group> --help`、`sennel help flow <group>`、leaf なしの `sennel flow <group>` は、各 group の同じ direct-child set、同じ summary text、同じ ascending order、同じ二つ以上の ASCII space separator、同じ summary-column alignment を返すこと。`report` group と top-level の `resume`/`prepare` leaf も同じ三入口の help parity guarantee に含めること。leaf なし route は既存の non-zero exit code を保持してよく、help rows の出力は明示的な help route と一致しなければならない。leaf help も三入口で registry-owned description と parser-accepted option contract を一致させ、human-readable prose は `config.lang` に従い、technical identifier は原文のまま保持し、`keywords` は英語だけにすること。query の help はこの projection へ混在させないこと。",
+              "startByte": 0
+            }
+          ],
+          "expectedDigest": "3dadf0963a4a1003710218343180001647a3c001b4ac7fae9bf3111a25418b0e",
+          "findingIds": [
+            "spec-review-1c9033cbdbbc37bf7d0d3fda47e9be7a",
+            "spec-review-80c400418db35353ebfbf7a9fb4c7a67",
+            "spec-review-a83c90b55e7aeaa589ec813ea7a83470"
+          ],
+          "kind": "edit-text-field",
+          "reason": "Extend the three-route parity contract to all named public routes, preserve leafless-group status, and make locale behavior observable.",
+          "target": {
+            "entity": "requirement",
+            "field": "desc",
+            "id": "R3"
+          }
+        },
+        {
+          "edits": [
+            {
+              "endByte": 496,
+              "replacement": "metadata/registry test は全 leaf の parser/help parity と direct-child projection を検証し、renderer boundary test は synthetic な長い command name、locale-independent ordering、二つの ASCII space、summary alignment を検証し、CLI integration は三つの non-query group-help route、`report` group、top-level の `resume`/`prepare` leaf、および 65 leaf を実際の CLI wiring で検証すること。`config.lang` を `ja` にした実行と、利用可能な対照 locale の実行で、human-readable prose の言語、原文の technical identifier、英語だけの `keywords` を検証すること。test topology は一つの層へ同じ matrix を複製せず、各層固有の接続と所有境界だけを検証すること。",
+              "startByte": 0
+            }
+          ],
+          "expectedDigest": "c5daf22986f25298f3d9352b5bdd3601452af3045c3ebdf67fd1d255526cd52d",
+          "findingIds": [
+            "spec-review-80c400418db35353ebfbf7a9fb4c7a67",
+            "spec-review-a83c90b55e7aeaa589ec813ea7a83470"
+          ],
+          "kind": "edit-text-field",
+          "reason": "Cover report and top-level routes and test configured-language prose with preserved identifiers and English keywords.",
+          "target": {
+            "entity": "requirement",
+            "field": "desc",
+            "id": "R6"
+          }
+        },
+        {
+          "expectedDigest": null,
+          "findingIds": [
+            "spec-review-a83c90b55e7aeaa589ec813ea7a83470"
+          ],
+          "kind": "add-array-element",
+          "reason": "Make the named report group and top-level leaves explicit members of the help-contract scope.",
+          "replacement": "`report` group と top-level の `resume`/`prepare` leaf も、対象 group help と同じ三入口の direct-child、summary、order、alignment、および leaf help parity の契約に含める。",
+          "target": {
+            "collection": "scope.in"
+          }
+        },
+        {
+          "edits": [
+            {
+              "endByte": 861,
+              "replacement": "public group projection は registry tree の direct child だけを表示し、`get` は `artifact`、`check`、`context`、`guardrail`、`issue`、`next-action`、`prompt`、`qa-count`、`resolve-context`、`runtime-log`、`status`、`set` は `acceptance-decision`、`approval`、`auto`、`broad`、`draft-answer`、`files`、`init`、`issue`、`issue-log`、`metric`、`nonblocking-decision`、`note`、`policy`、`request`、`retry`、`review-evidence`、`step`、`run` は internal entry を除く公開 child を投影し、`report` group と top-level の `resume`/`prepare` leaf にも同じ三入口の help parity guarantee を適用すること。各 row は command name の locale-independent ascending order とし、summary を command name の後ろに少なくとも二つの ASCII space で置き、最長 name に基づく同一 summary column に揃えること。registration order、locale sort、leaf 固有の追加 child を使用してはならない。",
+              "startByte": 0
+            }
+          ],
+          "expectedDigest": "306dff77ff99e4d5af60f2f567c9444b97ef949f75a6db828b9ed5314476076a",
+          "findingIds": [
+            "spec-review-a83c90b55e7aeaa589ec813ea7a83470"
+          ],
+          "kind": "edit-text-field",
+          "reason": "Include the report group and top-level leaves in the shared help projection guarantee.",
+          "target": {
+            "entity": "requirement",
+            "field": "desc",
+            "id": "R2"
+          }
+        },
+        {
+          "edits": [
+            {
+              "endByte": 166,
+              "replacement": "`get`、`set`、`run` の public direct-child projection と `report` group の projection、および top-level の `resume`/`prepare` leaf の三入口 help parity を deterministic row renderer で共有し、三つの group-help 入口の表示契約を一致させる。",
+              "startByte": 0
+            }
+          ],
+          "expectedDigest": "2fed2218a703f04b96c7cdbccb2ec87859697b1dfdc7e20f0fbe35cc9c058feb",
+          "findingIds": [
+            "spec-review-a83c90b55e7aeaa589ec813ea7a83470"
+          ],
+          "kind": "edit-text-field",
+          "reason": "Extend the shared group projection work to report and the top-level leaf help parity routes.",
+          "target": {
+            "entity": "task",
+            "field": "goal",
+            "id": "T-2"
+          }
+        },
+        {
+          "edits": [
+            {
+              "endByte": 197,
+              "replacement": "help metadata を validation の代替にしない。parser contract の不足は既存責務内で補い、dispatcher は missing positional を保持して command-owned validation に渡し、unknown option、option value、excess positional/rest の parser rejection semantics を変えず、command-specific domain decision を新しい共通 admission layer に移動しない。",
+              "startByte": 0
+            }
+          ],
+          "expectedDigest": "806e69e4ba88d234dd1c27631a975b37f34b9fd9bc1dd9c7798ec686d412d567",
+          "findingIds": [
+            "spec-review-ed18f226748dfc5468cf5d00dc5256e5"
+          ],
+          "kind": "edit-text-field",
+          "reason": "Document that missing positional values remain available to command-owned validation while parser rejection ownership is preserved.",
+          "target": {
+            "entity": "task",
+            "field": "implementation_notes",
+            "id": "T-3"
+          }
+        },
+        {
+          "edits": [
+            {
+              "endByte": 158,
+              "replacement": "65 個の公開 shared leaf、`report` group、および top-level の `resume`/`prepare` leaf と三つの non-query group-help route を、実際の registry、dispatcher、help renderer の接続を通して検証し、leaf なし group の既存 non-zero exit code を保ったまま help rows の一致を確認する。",
+              "startByte": 0
+            }
+          ],
+          "expectedDigest": "39608215ea5736f7fc49c867761697ca56ed7d23cea0bfef3e2821d71cf3907b",
+          "findingIds": [
+            "spec-review-1c9033cbdbbc37bf7d0d3fda47e9be7a",
+            "spec-review-a83c90b55e7aeaa589ec813ea7a83470"
+          ],
+          "kind": "edit-text-field",
+          "reason": "Verify the additional public routes and preserve the existing leafless-group process status while comparing help rows.",
+          "target": {
+            "entity": "task",
+            "field": "goal",
+            "id": "T-4"
+          }
+        },
+        {
+          "edits": [
+            {
+              "endByte": 221,
+              "replacement": "help contract の変更後も、各 retained leaf の正常実行と適用可能な拒否が従来の validation、guard、runtime、lifecycle、side effect、exit contract を保つことを end-to-end で証明し、runtime-log、lifecycle、cleanup、side-effect は適用可能な route で検証し、read-only または intentionally isolated な route は文書化された不在を検証する。",
+              "startByte": 0
+            }
+          ],
+          "expectedDigest": "dc3bac93111fae98710844e0968e12f416325196d1084cede72a15c7ee867155",
+          "findingIds": [
+            "spec-review-a3ef843e43b9a55cc0e7ec2495790ebc"
+          ],
+          "kind": "edit-text-field",
+          "reason": "Qualify runtime, lifecycle, cleanup, and side-effect assertions according to route applicability.",
+          "target": {
+            "entity": "task",
+            "field": "goal",
+            "id": "T-5"
+          }
+        },
+        {
+          "expectedDigest": null,
+          "findingIds": [
+            "spec-review-80c400418db35353ebfbf7a9fb4c7a67"
+          ],
+          "kind": "add-array-element",
+          "reason": "Add an observable acceptance condition for configured-language prose, preserved technical identifiers, and English-only keywords.",
+          "replacement": "`config.lang` を `ja` にした CLI と、利用可能な対照 locale の CLI で、三つの non-query group-help 入口と代表 leaf の human-readable prose が設定言語に従い、command name、option、path、schema field、module symbol が不変で、`keywords` が英語のみであることを検証する。",
+          "target": {
+            "collection": "acceptance_criteria"
+          }
+        }
+      ],
+      "appliedFindings": [
+        "spec-review-1c9033cbdbbc37bf7d0d3fda47e9be7a",
+        "spec-review-80c400418db35353ebfbf7a9fb4c7a67",
+        "spec-review-a3ef843e43b9a55cc0e7ec2495790ebc",
+        "spec-review-a83c90b55e7aeaa589ec813ea7a83470",
+        "spec-review-ed18f226748dfc5468cf5d00dc5256e5"
+      ],
+      "discardedOperations": [
+        {
+          "attempt": 1,
+          "findingIds": [
+            "spec-review-1c9033cbdbbc37bf7d0d3fda47e9be7a",
+            "spec-review-ed18f226748dfc5468cf5d00dc5256e5"
+          ],
+          "kind": "edit-text-field",
+          "operationDigest": "b4cfce16d8902e2af90045686012046c0a8009d5abe53fe8815d3f3956ed2560",
+          "reason": "unauthorized operation",
+          "target": {
+            "entity": "task",
+            "field": "goal",
+            "id": "T-3"
+          }
+        }
+      ],
+      "inputDigest": "3db4deb6ce33c6f83a3db4d30634fa3ee696ceb4b03893ff40ec846b64732e9c",
+      "operationDigest": "b3cf2be2399ece197944811907b794308dd154e8e5a06634a9bad307f23b51d2",
+      "outcome": "merged",
+      "relation": "revision-scoped-canonical-review",
+      "stage": "spec-repair"
+    }
+  ],
+  "findings": [
+    {
+      "body": "**Target:** R1 / R2 / Clarifications / T-1\n**Issue:** The registry contains 67 leaves, but `internal: true` is on `flow run requirement-test-gate`; `flow run seal-handoff` has no internal marker. Excluding query and seal-handoff therefore leaves the internal requirement-test-gate in the claimed 65-leaf public set.\n**Required change:** Define the exact excluded routes and resulting count from the registry: either exclude query plus requirement-test-gate (65, including seal-handoff), or exclude query plus both worker/internal routes (64). Apply that choice consistently throughout the spec.\n**Why blocking:** Implementation and tests cannot determine which run routes belong to the public shared contract; either filtering by existing metadata or honoring the stated seal-handoff exclusion violates another requirement.",
+      "findingId": "spec-review-447fb4d3ec56ebe5d3903753a1b6faed",
+      "issue": "The registry contains 67 leaves, but `internal: true` is on `flow run requirement-test-gate`; `flow run seal-handoff` has no internal marker. Excluding query and seal-handoff therefore leaves the internal requirement-test-gate in the claimed 65-leaf public set.",
+      "kind": "blocking",
+      "requiredChange": "Define the exact excluded routes and resulting count from the registry: either exclude query plus requirement-test-gate (65, including seal-handoff), or exclude query plus both worker/internal routes (64). Apply that choice consistently throughout the spec.",
+      "target": "R1 / R2 / Clarifications / T-1",
+      "title": "Public leaf inventory disagrees with registry metadata",
+      "whyBlocking": "Implementation and tests cannot determine which run routes belong to the public shared contract; either filtering by existing metadata or honoring the stated seal-handoff exclusion violates another requirement."
+    },
+    {
+      "allowedTargets": [
+        {
+          "operationKinds": [
+            "edit-text-field"
+          ],
+          "target": {
+            "entity": "requirement",
+            "field": "desc",
+            "id": "R4"
+          }
+        },
+        {
+          "operationKinds": [
+            "edit-text-field"
+          ],
+          "target": {
+            "entity": "requirement",
+            "field": "desc",
+            "id": "R5"
+          }
+        },
+        {
+          "operationKinds": [
+            "edit-text-field"
+          ],
+          "target": {
+            "entity": "task",
+            "field": "goal",
+            "id": "T-3"
+          }
+        },
+        {
+          "operationKinds": [
+            "edit-text-field"
+          ],
+          "target": {
+            "entity": "task",
+            "field": "implementation_notes",
+            "id": "T-3"
+          }
+        }
+      ],
+      "body": "**Target:** R4 / R5 / T-3\n**Issue:** `src/lib/dispatcher.js` assigns only supplied positional values and rejects only excess values; it does not reject missing positional arguments. Existing command modules such as `get-check.js` and `set-step.js` own missing-argument diagnostics.\n**Required change:** State that dispatcher parsing preserves missing positional values for command-owned validation, and update the owner map and rejection tests accordingly; reserve parser ownership for unknown options, missing option values, and excess positional values.\n**Why blocking:** Implementing the stated parser ownership would move validation and change diagnostics, ordering, and exit behavior that the spec simultaneously requires to preserve.",
+      "disposition": "apply",
+      "evidence": "The review evidence matches the current dispatcher and command ownership: missing positional values remain available to command-owned validation, so the spec should state that boundary explicitly.",
+      "findingId": "spec-review-ed18f226748dfc5468cf5d00dc5256e5",
+      "issue": "`src/lib/dispatcher.js` assigns only supplied positional values and rejects only excess values; it does not reject missing positional arguments. Existing command modules such as `get-check.js` and `set-step.js` own missing-argument diagnostics.",
+      "kind": "blocking",
+      "requiredChange": "State that dispatcher parsing preserves missing positional values for command-owned validation, and update the owner map and rejection tests accordingly; reserve parser ownership for unknown options, missing option values, and excess positional values.",
+      "target": "R4 / R5 / T-3",
+      "title": "Missing positional arguments are assigned, not parser-rejected",
+      "whyBlocking": "Implementing the stated parser ownership would move validation and change diagnostics, ordering, and exit behavior that the spec simultaneously requires to preserve."
+    },
+    {
+      "allowedTargets": [
+        {
+          "operationKinds": [
+            "edit-text-field"
+          ],
+          "target": {
+            "entity": "requirement",
+            "field": "desc",
+            "id": "R3"
+          }
+        },
+        {
+          "operationKinds": [
+            "edit-text-field"
+          ],
+          "target": {
+            "entity": "requirement",
+            "field": "desc",
+            "id": "R6"
+          }
+        },
+        {
+          "operationKinds": [
+            "add-array-element"
+          ],
+          "target": {
+            "collection": "acceptance_criteria"
+          }
+        }
+      ],
+      "body": "**Target:** Constraints (language) / R3 / R6 / Acceptance Criteria\n**Issue:** The spec requires `config.lang`-dependent Japanese prose with technical identifiers preserved, but all parity criteria only compare the three outputs with each other. Three identical English outputs would satisfy the stated tests while violating the language contract; current leaf Flow help also falls back to English because corresponding leaf locale entries are absent.\n**Required change:** Add an explicit acceptance/test condition using configured `lang: ja` (and a contrasting locale where applicable) that verifies localized human prose, unchanged technical identifiers, and English-only keywords.\n**Why blocking:** The implementation can pass the proposed parity, ordering, and alignment tests without implementing the required localization behavior, so the gate cannot detect a materially incorrect help contract.",
+      "disposition": "apply",
+      "evidence": "The review identifies a real observable-acceptance gap: parity alone cannot prove configured-language prose, preserved technical identifiers, and English-only keywords.",
+      "findingId": "spec-review-80c400418db35353ebfbf7a9fb4c7a67",
+      "issue": "The spec requires `config.lang`-dependent Japanese prose with technical identifiers preserved, but all parity criteria only compare the three outputs with each other. Three identical English outputs would satisfy the stated tests while violating the language contract; current leaf Flow help also falls back to English because corresponding leaf locale entries are absent.",
+      "kind": "blocking",
+      "requiredChange": "Add an explicit acceptance/test condition using configured `lang: ja` (and a contrasting locale where applicable) that verifies localized human prose, unchanged technical identifiers, and English-only keywords.",
+      "target": "Constraints (language) / R3 / R6 / Acceptance Criteria",
+      "title": "Language contract has no observable acceptance basis",
+      "whyBlocking": "The implementation can pass the proposed parity, ordering, and alignment tests without implementing the required localization behavior, so the gate cannot detect a materially incorrect help contract."
+    },
+    {
+      "allowedTargets": [
+        {
+          "operationKinds": [
+            "add-array-element"
+          ],
+          "target": {
+            "collection": "scope.in"
+          }
+        },
+        {
+          "operationKinds": [
+            "edit-text-field"
+          ],
+          "target": {
+            "entity": "requirement",
+            "field": "desc",
+            "id": "R2"
+          }
+        },
+        {
+          "operationKinds": [
+            "edit-text-field"
+          ],
+          "target": {
+            "entity": "requirement",
+            "field": "desc",
+            "id": "R3"
+          }
+        },
+        {
+          "operationKinds": [
+            "edit-text-field"
+          ],
+          "target": {
+            "entity": "requirement",
+            "field": "desc",
+            "id": "R6"
+          }
+        },
+        {
+          "operationKinds": [
+            "edit-text-field"
+          ],
+          "target": {
+            "entity": "task",
+            "field": "goal",
+            "id": "T-2"
+          }
+        },
+        {
+          "operationKinds": [
+            "edit-text-field"
+          ],
+          "target": {
+            "entity": "task",
+            "field": "goal",
+            "id": "T-4"
+          }
+        }
+      ],
+      "body": "**Target:** Scope / R2 / R3 / R6 / T-2 / T-4\n**Improvement:** State whether the actual `report` group and the top-level `resume`/`prepare` leaves receive the same three-route help guarantees, since the requirements enumerate only get, set, and run while including `report show` in scope.\n**Why non-blocking:** The registry tree and shared renderer provide an implementation path, so this omission does not prevent implementation.",
+      "disposition": "apply",
+      "evidence": "The improvement is valid and bounded: the spec should explicitly cover the report group and top-level resume/prepare routes already included by the stated scope.",
+      "findingId": "spec-review-a83c90b55e7aeaa589ec813ea7a83470",
+      "improvement": "State whether the actual `report` group and the top-level `resume`/`prepare` leaves receive the same three-route help guarantees, since the requirements enumerate only get, set, and run while including `report show` in scope.",
+      "kind": "improvement",
+      "target": "Scope / R2 / R3 / R6 / T-2 / T-4",
+      "title": "Clarify coverage of the report group and top-level leaves",
+      "whyNonBlocking": "The registry tree and shared renderer provide an implementation path, so this omission does not prevent implementation."
+    },
+    {
+      "allowedTargets": [
+        {
+          "operationKinds": [
+            "edit-text-field"
+          ],
+          "target": {
+            "entity": "requirement",
+            "field": "desc",
+            "id": "R3"
+          }
+        },
+        {
+          "operationKinds": [
+            "edit-text-field"
+          ],
+          "target": {
+            "entity": "requirement",
+            "field": "desc",
+            "id": "R4"
+          }
+        },
+        {
+          "operationKinds": [
+            "edit-text-field"
+          ],
+          "target": {
+            "entity": "task",
+            "field": "goal",
+            "id": "T-4"
+          }
+        }
+      ],
+      "body": "**Target:** R3 / R4 / T-4\n**Improvement:** Specify that `sennel flow <group>` may retain its existing non-zero exit code while its emitted help rows must match explicit help routes.\n**Why non-blocking:** R4 already requires exit-code preservation; this only prevents tests from conflating output parity with process-status parity.",
+      "disposition": "apply",
+      "evidence": "The improvement is consistent with the preserved exit-code contract and clarifies that output parity does not change the existing leafless-group status.",
+      "findingId": "spec-review-1c9033cbdbbc37bf7d0d3fda47e9be7a",
+      "improvement": "Specify that `sennel flow <group>` may retain its existing non-zero exit code while its emitted help rows must match explicit help routes.",
+      "kind": "improvement",
+      "target": "R3 / R4 / T-4",
+      "title": "Make leafless-group exit behavior explicit",
+      "whyNonBlocking": "R4 already requires exit-code preservation; this only prevents tests from conflating output parity with process-status parity."
+    },
+    {
+      "allowedTargets": [
+        {
+          "operationKinds": [
+            "edit-text-field"
+          ],
+          "target": {
+            "entity": "requirement",
+            "field": "desc",
+            "id": "R5"
+          }
+        },
+        {
+          "operationKinds": [
+            "edit-text-field"
+          ],
+          "target": {
+            "entity": "task",
+            "field": "goal",
+            "id": "T-5"
+          }
+        }
+      ],
+      "body": "**Target:** R5 / T-5\n**Improvement:** State that runtime-log, lifecycle, cleanup, and side-effect assertions are required when applicable, while read-only or intentionally isolated routes assert their documented absence.\n**Why non-blocking:** Existing route metadata and dispatcher behavior make the applicable outcome decidable during implementation.",
+      "disposition": "apply",
+      "evidence": "The improvement accurately qualifies outcome assertions by route applicability while preserving required assertions for routes that own runtime, lifecycle, cleanup, or side effects.",
+      "findingId": "spec-review-a3ef843e43b9a55cc0e7ec2495790ebc",
+      "improvement": "State that runtime-log, lifecycle, cleanup, and side-effect assertions are required when applicable, while read-only or intentionally isolated routes assert their documented absence.",
+      "kind": "improvement",
+      "target": "R5 / T-5",
+      "title": "Qualify outcome assertions by applicability",
+      "whyNonBlocking": "Existing route metadata and dispatcher behavior make the applicable outcome decidable during implementation."
+    }
+  ],
+  "generation": 3,
+  "identity": {
+    "byteLength": 34722,
+    "digest": "ca6d89a0b0d643a75ee03e37be498596fe2382745f44971471d86c7c4f2c9b05",
+    "revision": 2,
+    "specId": "6a9b5488-flow-help-contract"
+  },
+  "version": 2
+}

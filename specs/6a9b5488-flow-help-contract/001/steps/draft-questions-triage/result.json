@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "phase": "draft-questions-triage",
+  "sourceReview": "draft-review-questions.json",
+  "summary": "Apply the bounded q1 question-text cleanup while preserving the user decision for the comparison locale.",
+  "items": [
+    {
+      "title": "1. Remove embedded instruction from q1",
+      "target": "q1",
+      "decision": "apply",
+      "rationale": "The finding identifies an embedded downstream instruction in q1; removing that instruction is a bounded Draft repair and does not answer the underlying locale choice.",
+      "evidence": "draft.json questionLedger.questions[0].question contains the comparison-locale choices followed by instructions about applying the choice to the Spec, acceptance criteria, and tests.",
+      "allowedFieldPaths": [
+        "questionLedger.questions[0].question"
+      ],
+      "requiredFieldPaths": [
+        "questionLedger.questions[0].question"
+      ]
+    }
+  ]
+}

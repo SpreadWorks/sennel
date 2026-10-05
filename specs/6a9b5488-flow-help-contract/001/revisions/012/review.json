@@ -1,0 +1,129 @@
+{
+  "audit": [
+    {
+      "acceptedOperations": [],
+      "appliedFindings": [],
+      "discardedOperations": [],
+      "inputDigest": "9d27fa0b5ad1a644b81216d1e48af2cdabd82bad61482cd9aac2762af827322d",
+      "operationDigest": "790e561a26120cd5aba8824e99283158498cb669998f0f509e9b6e3ad4013369",
+      "outcome": "replaced",
+      "relation": "revision-scoped-canonical-review",
+      "stage": "spec-review"
+    },
+    {
+      "acceptedOperations": [],
+      "appliedFindings": [],
+      "discardedOperations": [],
+      "inputDigest": "02295d6d560ef649153b8d3a3d93722fc60088e19f72bd6902da1e5a6eb758b5",
+      "operationDigest": "790e561a26120cd5aba8824e99283158498cb669998f0f509e9b6e3ad4013369",
+      "outcome": "merged",
+      "relation": "revision-scoped-canonical-review",
+      "stage": "spec-triage"
+    },
+    {
+      "acceptedOperations": [
+        {
+          "edits": [
+            {
+              "endByte": 15602,
+              "replacement": "Usage: sennel flow run reconcile-task-review --expect-run-id <runId> --expect-spec <specId> [--expect-issue <number> | --expect-no-issue] (--dry-run | --yes --expect-digest <digest> --reason <text>)",
+              "startByte": 15455
+            }
+          ],
+          "expectedDigest": "c4e30f5ddcd9447f287d1b875072507d341a6d0767fd5bd0785f7fe379ce032a",
+          "findingIds": [
+            "spec-review-1d4ac4ecf57fd04ddc848e5337b7f23f"
+          ],
+          "kind": "edit-text-field",
+          "reason": "Show both preview and apply command modes in the public Usage.",
+          "target": {
+            "entity": "requirement",
+            "field": "desc",
+            "id": "R2"
+          }
+        },
+        {
+          "expectedDigest": "4e418a1a8090be2d8111d1dc9feb6f083227995f9a953110a7e231e5d6efcb09",
+          "findingIds": [
+            "spec-review-e600b91d0dd3cb556b229a6cb8893de6"
+          ],
+          "kind": "replace-array-element",
+          "reason": "Correct the routed leaf count to match the enumerated groups and R2.",
+          "replacement": {
+            "evidence": "src/flow/registry.js FLOW_COMMANDS を実際に再帰列挙。Issue 521 restart contract と一致。",
+            "text": "[VERIFY] 現行 registry の共有 routed leaf は 66、query は独立 1。get 11、set 17、run 35、report/show 1、resume/prepare 各 1。"
+          },
+          "target": {
+            "collection": "overview.decisions",
+            "position": 0
+          }
+        }
+      ],
+      "appliedFindings": [
+        "spec-review-1d4ac4ecf57fd04ddc848e5337b7f23f",
+        "spec-review-e600b91d0dd3cb556b229a6cb8893de6"
+      ],
+      "discardedOperations": [],
+      "inputDigest": "27020e2828bdb6ab0395724eb5b73b1e8fd95e28304e5a664037f71685007f8c",
+      "operationDigest": "35c5d5580e08be62c455d7c7e80bc61ff8d414c07d5c0b15873fb0110ab53115",
+      "outcome": "merged",
+      "relation": "revision-scoped-canonical-review",
+      "stage": "spec-repair"
+    }
+  ],
+  "findings": [
+    {
+      "allowedTargets": [
+        {
+          "operationKinds": [
+            "replace-array-element"
+          ],
+          "target": {
+            "collection": "overview.decisions",
+            "position": 0
+          }
+        }
+      ],
+      "body": "**Target:** Overview / Decisions\n**Improvement:** 共有 routed leaf の「65」を「66」に訂正する。現行 registry は get 11、set 17、run 35、report 1、resume/prepare 各 1 で、R2 の一覧と一致する。\n**Why non-blocking:** R2、R14、Tasks は 66 件を指定し、受入条件も registry の再列挙を要求しているため、実装・検証対象は確定できる。",
+      "disposition": "apply",
+      "evidence": "Immutable Spec overview.decisions[0] says 65 while its own group counts 11+17+35+1+1+1=66 and R2 names 66 routed leaves; correct this one decision entry.",
+      "findingId": "spec-review-e600b91d0dd3cb556b229a6cb8893de6",
+      "improvement": "共有 routed leaf の「65」を「66」に訂正する。現行 registry は get 11、set 17、run 35、report 1、resume/prepare 各 1 で、R2 の一覧と一致する。",
+      "kind": "improvement",
+      "target": "Overview / Decisions",
+      "title": "Decisions の leaf 件数を現行 registry に合わせる",
+      "whyNonBlocking": "R2、R14、Tasks は 66 件を指定し、受入条件も registry の再列挙を要求しているため、実装・検証対象は確定できる。"
+    },
+    {
+      "allowedTargets": [
+        {
+          "operationKinds": [
+            "edit-text-field"
+          ],
+          "target": {
+            "entity": "requirement",
+            "field": "desc",
+            "id": "R2"
+          }
+        }
+      ],
+      "body": "**Target:** R2 / run reconcile-task-review\n**Improvement:** 現行 Usage の preview 用 --dry-run に加え、適用用の --yes --expect-digest <digest> --reason <text> の組合せを示す。src/flow/lib/run-reconcile-task-review.js と task-review-reconciliation.js は両モードを実装している。\n**Why non-blocking:** 必要な option は inventory に含まれ、既存 help の説明にも適用手順がある。既存 semantics の保持要求から実装・テストは可能だが、Usage に両モードを示すと公開契約が読み取りやすくなる。",
+      "disposition": "apply",
+      "evidence": "Immutable R2 reconcile-task-review line lists --yes, --expect-digest and --reason as accepted inputs, but its Usage shows only --dry-run; add the apply-mode syntax within R2.desc.",
+      "findingId": "spec-review-1d4ac4ecf57fd04ddc848e5337b7f23f",
+      "improvement": "現行 Usage の preview 用 --dry-run に加え、適用用の --yes --expect-digest <digest> --reason <text> の組合せを示す。src/flow/lib/run-reconcile-task-review.js と task-review-reconciliation.js は両モードを実装している。",
+      "kind": "improvement",
+      "target": "R2 / run reconcile-task-review",
+      "title": "reconcile-task-review の適用モードも Usage に示す",
+      "whyNonBlocking": "必要な option は inventory に含まれ、既存 help の説明にも適用手順がある。既存 semantics の保持要求から実装・テストは可能だが、Usage に両モードを示すと公開契約が読み取りやすくなる。"
+    }
+  ],
+  "generation": 3,
+  "identity": {
+    "byteLength": 45072,
+    "digest": "df2bd1ac004f1f4af82be2b909b94b0aaadbfe2ad0d2e1bda176050cebf7e2e8",
+    "revision": 12,
+    "specId": "6a9b5488-flow-help-contract"
+  },
+  "version": 2
+}

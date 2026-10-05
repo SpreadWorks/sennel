@@ -1,0 +1,278 @@
+{
+  "version": 1,
+  "repairId": "plan-gate-repair-90aef50f7fc6a5e51f2ad9b81e2a53d929c79ea218685af494dfd31957c44755",
+  "repairRecordFingerprint": "90aef50f7fc6a5e51f2ad9b81e2a53d929c79ea218685af494dfd31957c44755",
+  "sourceEvidence": {
+    "sourceAttempt": {
+      "id": "attempt-draft-gate-d6b1cc9a-f0c0-48fc-aa6b-f5a3897d90af",
+      "sequence": 1
+    },
+    "resultLogicalKey": "draft.gate",
+    "publicationActivityId": "plan-gate-repaired-cb91fbce-9bdd-49a2-8563-c64d8af35d10",
+    "catalogFingerprint": "c0d155a4baf7d7cfa692fc250ccd206cb6727bc8cccf3d6d28798ed28015a5e0",
+    "transitionLineage": {
+      "sourceAttempt": {
+        "id": "attempt-draft-gate-d6b1cc9a-f0c0-48fc-aa6b-f5a3897d90af",
+        "sequence": 1
+      },
+      "canonicalAttempt": {
+        "id": "attempt-draft-gate-d6b1cc9a-f0c0-48fc-aa6b-f5a3897d90af",
+        "sequence": 1
+      },
+      "sourceFingerprint": "35188689dd48ff29ff943732d38f08856f62197ced4daf545af3172c321dac35",
+      "canonicalFingerprint": "c0d155a4baf7d7cfa692fc250ccd206cb6727bc8cccf3d6d28798ed28015a5e0",
+      "sourceRevisionFingerprint": "1442c6b405ff302ab290caa56dfd13c6f4f6612a901682ed338d0f1f93fc59ea",
+      "canonicalRevisionFingerprint": "1442c6b405ff302ab290caa56dfd13c6f4f6612a901682ed338d0f1f93fc59ea"
+    }
+  },
+  "sourceAttempt": {
+    "id": "attempt-draft-gate-d6b1cc9a-f0c0-48fc-aa6b-f5a3897d90af",
+    "sequence": 1
+  },
+  "targetAttempt": {
+    "id": "attempt-draft-gate-repair-5782a3d0-8785-49f1-89b0-77bd456d4276",
+    "sequence": 2
+  },
+  "publicationActivityId": "attempt-confirmed-972dac05-5448-445c-a6ca-ce0733c036a6",
+  "handoffRevision": "f7270cbed4ab0eed2c9b46839107929b893b24682ba65dc7521429dc70214237",
+  "disposition": "applied",
+  "report": {
+    "beforeEvidenceDigest": "ed229e3c6af6f39ef774569149a2c87a6bd4eac967c781a6f899faf0853a3a3c",
+    "outputEvidenceDigest": "cb2a22319f6640e4572b3daae09254a3494b3662881b54f4b2eea644bd3d92c3",
+    "summary": "Make the Flow help contract measurable, fully inventoried, and owner-mapped while preserving query and existing validation behavior.",
+    "requests": [
+      {
+        "fingerprint": "d7d6c1a44c30b213d73c2d164e3cc4bfde74c185002a070931e03f85ebfa92ac",
+        "recurrenceCount": 0,
+        "priorStrategy": null
+      },
+      {
+        "fingerprint": "8304d20fe31de29268397f0b0333f2f4758b9b1ec9a74b9928e074c7dc7a7e4e",
+        "recurrenceCount": 0,
+        "priorStrategy": null
+      },
+      {
+        "fingerprint": "5eb933a8636c3f5dbae787e2e9e2dc989e53bd9df2b10ecc9633fa52cf90e1ce",
+        "recurrenceCount": 0,
+        "priorStrategy": null
+      },
+      {
+        "fingerprint": "600e3684fbfa55e3dc68f6128ffb8ec72d3e924e157f0c2518038fa42d00c69f",
+        "recurrenceCount": 0,
+        "priorStrategy": null
+      },
+      {
+        "fingerprint": "6dcc7b4d9baddbc3a1af6b47c846c2e0d841db3f875443e8f62072a26ddadc16",
+        "recurrenceCount": 0,
+        "priorStrategy": null
+      },
+      {
+        "fingerprint": "4c0260822d3d6523e58e1c56c0e2f2b8c17ae5a8415ee7cb1c1ba96895d7d9a4",
+        "recurrenceCount": 0,
+        "priorStrategy": null
+      },
+      {
+        "fingerprint": "89dcd2e1475b1bdb1b2e5ea34d1911b718079f2dd589750007b33eed27ae41fb",
+        "recurrenceCount": 0,
+        "priorStrategy": null
+      },
+      {
+        "fingerprint": "a924982eebbae62a5ac24a115713326054cff5698b7b493d86639a954c2d56b5",
+        "recurrenceCount": 0,
+        "priorStrategy": null
+      },
+      {
+        "fingerprint": "4e14fa0b7d8e43eab21509d3a47f19d85324d9235c1a03d27bf5457030b6b8f6",
+        "recurrenceCount": 0,
+        "priorStrategy": null
+      },
+      {
+        "fingerprint": "26076617e099b421c675f1ef356bc1954f06d395684086767188fed390a52112",
+        "recurrenceCount": 0,
+        "priorStrategy": null
+      },
+      {
+        "fingerprint": "3ef9741da55a45ba6a1e9df7910c75003854461c1db59c968c598a1eea78c59e",
+        "recurrenceCount": 0,
+        "priorStrategy": null
+      },
+      {
+        "fingerprint": "8d64aa5a8247f614f0b9cd12be02d88a8cd026a30fe3d6869f52939648da064c",
+        "recurrenceCount": 0,
+        "priorStrategy": null
+      },
+      {
+        "fingerprint": "eff5362b923d727adc947edf0bb23ed4b0353b031d12b384793d8ca1d04e73fc",
+        "recurrenceCount": 0,
+        "priorStrategy": null
+      },
+      {
+        "fingerprint": "9e3f755f46c813bcd2c6cb0985ce21a7b7d0ec6be1375ee382093074ff9eb546",
+        "recurrenceCount": 0,
+        "priorStrategy": null
+      },
+      {
+        "fingerprint": "aa0c92447169e295dd14551c968c39dd47746a15b4750ce92d514d9573e23baa",
+        "recurrenceCount": 0,
+        "priorStrategy": null
+      },
+      {
+        "fingerprint": "b20f22ea2afa4723fc1868dc598c2d279b7b932e319c97e518dc6752f7365adf",
+        "recurrenceCount": 0,
+        "priorStrategy": null
+      }
+    ],
+    "results": [
+      {
+        "fingerprint": "d7d6c1a44c30b213d73c2d164e3cc4bfde74c185002a070931e03f85ebfa92ac",
+        "strategy": "Make the Draft's contract measurable and owner-mapped",
+        "summary": "The goal now defines readable group help by exact children, ordering, spacing, summaries, and parser parity.",
+        "priorRepairInsufficiency": null,
+        "deltaIds": [
+          "cb2a22319f6640e4572b3daae09254a3494b3662881b54f4b2eea644bd3d92c3"
+        ]
+      },
+      {
+        "fingerprint": "8304d20fe31de29268397f0b0333f2f4758b9b1ec9a74b9928e074c7dc7a7e4e",
+        "strategy": "Make the Draft's contract measurable and owner-mapped",
+        "summary": "The goal now states all conditions that make group help readable and comparable across routes.",
+        "priorRepairInsufficiency": null,
+        "deltaIds": [
+          "cb2a22319f6640e4572b3daae09254a3494b3662881b54f4b2eea644bd3d92c3"
+        ]
+      },
+      {
+        "fingerprint": "5eb933a8636c3f5dbae787e2e9e2dc989e53bd9df2b10ecc9633fa52cf90e1ce",
+        "strategy": "Make the Draft's contract measurable and owner-mapped",
+        "summary": "Validation now names the exact shared leaf inventory and valid and rejected invocation classes.",
+        "priorRepairInsufficiency": null,
+        "deltaIds": [
+          "cb2a22319f6640e4572b3daae09254a3494b3662881b54f4b2eea644bd3d92c3"
+        ]
+      },
+      {
+        "fingerprint": "600e3684fbfa55e3dc68f6128ffb8ec72d3e924e157f0c2518038fa42d00c69f",
+        "strategy": "Make the Draft's contract measurable and owner-mapped",
+        "summary": "Validation coverage is defined by every leaf and every applicable validation category rather than an undefined representative set.",
+        "priorRepairInsufficiency": null,
+        "deltaIds": [
+          "cb2a22319f6640e4572b3daae09254a3494b3662881b54f4b2eea644bd3d92c3"
+        ]
+      },
+      {
+        "fingerprint": "6dcc7b4d9baddbc3a1af6b47c846c2e0d841db3f875443e8f62072a26ddadc16",
+        "strategy": "Make the Draft's contract measurable and owner-mapped",
+        "summary": "The migration boundary now defines unrelated behavior as outside the explicit command, lifecycle, configuration, artifact, and test inventory.",
+        "priorRepairInsufficiency": null,
+        "deltaIds": [
+          "cb2a22319f6640e4572b3daae09254a3494b3662881b54f4b2eea644bd3d92c3"
+        ]
+      },
+      {
+        "fingerprint": "4c0260822d3d6523e58e1c56c0e2f2b8c17ae5a8415ee7cb1c1ba96895d7d9a4",
+        "strategy": "Make the Draft's contract measurable and owner-mapped",
+        "summary": "The owner map now identifies the retained behavior and boundaries that the Spec must preserve.",
+        "priorRepairInsufficiency": null,
+        "deltaIds": [
+          "cb2a22319f6640e4572b3daae09254a3494b3662881b54f4b2eea644bd3d92c3"
+        ]
+      },
+      {
+        "fingerprint": "89dcd2e1475b1bdb1b2e5ea34d1911b718079f2dd589750007b33eed27ae41fb",
+        "strategy": "Make the Draft's contract measurable and owner-mapped",
+        "summary": "The deferred verification requirement now assigns each behavior to a named integration, end-to-end, renderer, or regression surface.",
+        "priorRepairInsufficiency": null,
+        "deltaIds": [
+          "cb2a22319f6640e4572b3daae09254a3494b3662881b54f4b2eea644bd3d92c3"
+        ]
+      },
+      {
+        "fingerprint": "a924982eebbae62a5ac24a115713326054cff5698b7b493d86639a954c2d56b5",
+        "strategy": "Make the Draft's contract measurable and owner-mapped",
+        "summary": "Verification surfaces and their required valid and rejected cases are explicit.",
+        "priorRepairInsufficiency": null,
+        "deltaIds": [
+          "cb2a22319f6640e4572b3daae09254a3494b3662881b54f4b2eea644bd3d92c3"
+        ]
+      },
+      {
+        "fingerprint": "4e14fa0b7d8e43eab21509d3a47f19d85324d9235c1a03d27bf5457030b6b8f6",
+        "strategy": "Make the Draft's contract measurable and owner-mapped",
+        "summary": "Focused CLI coverage now names all routes, leaves, renderer assertions, and separate query regressions.",
+        "priorRepairInsufficiency": null,
+        "deltaIds": [
+          "cb2a22319f6640e4572b3daae09254a3494b3662881b54f4b2eea644bd3d92c3"
+        ]
+      },
+      {
+        "fingerprint": "26076617e099b421c675f1ef356bc1954f06d395684086767188fed390a52112",
+        "strategy": "Make the Draft's contract measurable and owner-mapped",
+        "summary": "The focused CLI definition supplies objective criteria for deciding whether coverage is sufficient.",
+        "priorRepairInsufficiency": null,
+        "deltaIds": [
+          "cb2a22319f6640e4572b3daae09254a3494b3662881b54f4b2eea644bd3d92c3"
+        ]
+      },
+      {
+        "fingerprint": "3ef9741da55a45ba6a1e9df7910c75003854461c1db59c968c598a1eea78c59e",
+        "strategy": "Make the Draft's contract measurable and owner-mapped",
+        "summary": "Rendering consistency now means identical direct-child rows, summaries, ordering, spacing, alignment, and parser parity.",
+        "priorRepairInsufficiency": null,
+        "deltaIds": [
+          "cb2a22319f6640e4572b3daae09254a3494b3662881b54f4b2eea644bd3d92c3"
+        ]
+      },
+      {
+        "fingerprint": "8d64aa5a8247f614f0b9cd12be02d88a8cd026a30fe3d6869f52939648da064c",
+        "strategy": "Make the Draft's contract measurable and owner-mapped",
+        "summary": "Independent reviewers can verify help consistency from the stated row and option properties.",
+        "priorRepairInsufficiency": null,
+        "deltaIds": [
+          "cb2a22319f6640e4572b3daae09254a3494b3662881b54f4b2eea644bd3d92c3"
+        ]
+      },
+      {
+        "fingerprint": "eff5362b923d727adc947edf0bb23ed4b0353b031d12b384793d8ca1d04e73fc",
+        "strategy": "Make the Draft's contract measurable and owner-mapped",
+        "summary": "Generated-artifact updates are now tied to established repository ownership checks and limited to identified outputs.",
+        "priorRepairInsufficiency": null,
+        "deltaIds": [
+          "cb2a22319f6640e4572b3daae09254a3494b3662881b54f4b2eea644bd3d92c3"
+        ]
+      },
+      {
+        "fingerprint": "9e3f755f46c813bcd2c6cb0985ce21a7b7d0ec6be1375ee382093074ff9eb546",
+        "strategy": "Make the Draft's contract measurable and owner-mapped",
+        "summary": "The condition for updating generated artifacts is explicit and excludes unrelated documentation.",
+        "priorRepairInsufficiency": null,
+        "deltaIds": [
+          "cb2a22319f6640e4572b3daae09254a3494b3662881b54f4b2eea644bd3d92c3"
+        ]
+      },
+      {
+        "fingerprint": "aa0c92447169e295dd14551c968c39dd47746a15b4750ce92d514d9573e23baa",
+        "strategy": "Make the Draft's contract measurable and owner-mapped",
+        "summary": "The migration inventory now maps affected surfaces, owners, artifacts, side effects, and preservation status.",
+        "priorRepairInsufficiency": null,
+        "deltaIds": [
+          "cb2a22319f6640e4572b3daae09254a3494b3662881b54f4b2eea644bd3d92c3"
+        ]
+      },
+      {
+        "fingerprint": "b20f22ea2afa4723fc1868dc598c2d279b7b932e319c97e518dc6752f7365adf",
+        "strategy": "Make the Draft's contract measurable and owner-mapped",
+        "summary": "The validation matrix requires behavior-level verification for every retained public leaf and surface.",
+        "priorRepairInsufficiency": null,
+        "deltaIds": [
+          "cb2a22319f6640e4572b3daae09254a3494b3662881b54f4b2eea644bd3d92c3"
+        ]
+      }
+    ],
+    "lineage": {
+      "kind": "artifact",
+      "deltaIds": [
+        "cb2a22319f6640e4572b3daae09254a3494b3662881b54f4b2eea644bd3d92c3"
+      ]
+    }
+  }
+}

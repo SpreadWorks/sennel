@@ -1,0 +1,96 @@
+{
+  "version": 1,
+  "repairId": "plan-gate-repair-f71da58608d9984ba8c05099c0c4f131078a62e963d6eb66ddce229dd010707f",
+  "repairRecordFingerprint": "f71da58608d9984ba8c05099c0c4f131078a62e963d6eb66ddce229dd010707f",
+  "sourceEvidence": {
+    "sourceAttempt": {
+      "id": "attempt-draft-gate-535ee98a-6aab-437f-967f-9f7b04b47f6a",
+      "sequence": 6
+    },
+    "resultLogicalKey": "draft.gate",
+    "publicationActivityId": "plan-gate-repaired-36b5da73-421a-4954-9a20-5780332c4a0e",
+    "catalogFingerprint": "e6502c7d79acfce5136847cc5b62e95ae70d9a61293b2004af99a1379b700b36",
+    "transitionLineage": {
+      "sourceAttempt": {
+        "id": "attempt-draft-gate-535ee98a-6aab-437f-967f-9f7b04b47f6a",
+        "sequence": 6
+      },
+      "canonicalAttempt": {
+        "id": "attempt-draft-gate-535ee98a-6aab-437f-967f-9f7b04b47f6a",
+        "sequence": 6
+      },
+      "sourceFingerprint": "1b86b6dbcd02db92e7086cbcaa1b4b15248054ccafc523d4064ca0e368d609d1",
+      "canonicalFingerprint": "e6502c7d79acfce5136847cc5b62e95ae70d9a61293b2004af99a1379b700b36",
+      "sourceRevisionFingerprint": "bc4032bceaa947d2ea5e7f995d2a74f77b68486996dbbc2de6872a01099f2b27",
+      "canonicalRevisionFingerprint": "bc4032bceaa947d2ea5e7f995d2a74f77b68486996dbbc2de6872a01099f2b27"
+    }
+  },
+  "sourceAttempt": {
+    "id": "attempt-draft-gate-535ee98a-6aab-437f-967f-9f7b04b47f6a",
+    "sequence": 6
+  },
+  "targetAttempt": {
+    "id": "attempt-draft-gate-repair-c0807a45-d47c-409d-9817-589262410f53",
+    "sequence": 7
+  },
+  "publicationActivityId": "attempt-confirmed-cfa72f45-482f-41d4-8750-fff8e3bbd4cd",
+  "handoffRevision": "ccc74f0ab994a4bd3426840502e8d48b45990e7f126b1d3e1d3dd0e42ecffd1b",
+  "disposition": "applied",
+  "report": {
+    "beforeEvidenceDigest": "e28ee6959aa2916c884424dc6dab023ce615c0f0a8f0fbed8cb75d2ee3eca9ca",
+    "outputEvidenceDigest": "ee370eb66baed181bd3b075633931d06c982eb3de4b411e9804e76473ea7b292",
+    "summary": "既存の migration parity inventory に、保持対象の command-specific prose、examples、localization/locale text を個別に検証する実経路の behavior-level assertion を追加した。",
+    "requests": [
+      {
+        "fingerprint": "4225ce943d5501e642a70cd76c1f8da98bd7c28bb92e515414de371c08ada3db",
+        "recurrenceCount": 0,
+        "priorStrategy": null
+      },
+      {
+        "fingerprint": "fb15472568adcd8747864a30946b719c950c4fbf78929b01dbdec34618f8aeda",
+        "recurrenceCount": 0,
+        "priorStrategy": null
+      },
+      {
+        "fingerprint": "fd3c3a598ab2d2e82892810cf1af907c6680485bb243f8c8724783312e86aecc",
+        "recurrenceCount": 0,
+        "priorStrategy": null
+      }
+    ],
+    "results": [
+      {
+        "fingerprint": "4225ce943d5501e642a70cd76c1f8da98bd7c28bb92e515414de371c08ada3db",
+        "strategy": "add-individual-help-prose-verification",
+        "summary": "command-specific prose の owner を保持したまま、各該当 leaf/group の三つの公開 help 経路で旧文面を個別比較する behavior-level assertion を impactOnExisting に追加した。",
+        "priorRepairInsufficiency": null,
+        "deltaIds": [
+          "ee370eb66baed181bd3b075633931d06c982eb3de4b411e9804e76473ea7b292"
+        ]
+      },
+      {
+        "fingerprint": "fb15472568adcd8747864a30946b719c950c4fbf78929b01dbdec34618f8aeda",
+        "strategy": "add-individual-help-example-verification",
+        "summary": "examples の owner を保持したまま、各既存 example block の内容を該当 leaf の実際の help 出力で個別確認する behavior-level assertion を impactOnExisting に追加した。",
+        "priorRepairInsufficiency": null,
+        "deltaIds": [
+          "ee370eb66baed181bd3b075633931d06c982eb3de4b411e9804e76473ea7b292"
+        ]
+      },
+      {
+        "fingerprint": "fd3c3a598ab2d2e82892810cf1af907c6680485bb243f8c8724783312e86aecc",
+        "strategy": "add-individual-locale-text-verification",
+        "summary": "既存 locale resource の owner を保持したまま、設定 locale ごとの実際の help 出力で各 localization/locale text を個別確認する behavior-level assertion を impactOnExisting に追加した。",
+        "priorRepairInsufficiency": null,
+        "deltaIds": [
+          "ee370eb66baed181bd3b075633931d06c982eb3de4b411e9804e76473ea7b292"
+        ]
+      }
+    ],
+    "lineage": {
+      "kind": "artifact",
+      "deltaIds": [
+        "ee370eb66baed181bd3b075633931d06c982eb3de4b411e9804e76473ea7b292"
+      ]
+    }
+  }
+}

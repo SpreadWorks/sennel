@@ -1,0 +1,101 @@
+{
+  "devType": "bugfix",
+  "goal": "sennel flow の共有経路で受理される入力と表示されるヘルプを一致させ、各グループの直接の子コマンドに共通する選択肢、安定した表示順、読みやすい行間隔を三つの公開ヘルプ経路で保証する。既存の実行・検証・query の契約は維持する。",
+  "analysis": {
+    "problem": "Flow の入力定義とヘルプ表示が別々に管理されているため、受理可能な選択肢が leaf ヘルプから欠け、group ヘルプには受理されない選択肢が載る。二つの表示経路では登録順と固定幅により並びと区切りが不安定で、leaf なしの第三経路も一貫した契約で検証されていない。以前の Spec revision 008 には未解決の阻害事項が残り、reopen は予算停止後の再生成を求めている。",
+    "proposedApproach": "Issue 521 の 2026-09-24 再開始契約を今回の要件の基準にする。共有経路の入力とヘルプの権威を既存のコマンド定義に揃え、全 direct child に共通する group 表示と三経路の行表示を一致させる。各 leaf の実際の入力・検証主体・状態やファイルの境界を Spec で棚卸しし、query を独立した経路として保持する。",
+    "validation": "これにより根本原因である入力定義と表示定義の二重管理、および表示経路間の差を直接解消できる。共有経路全 leaf の契約確認と実 CLI の振る舞い、三つの group 表示、境界名、guard、作業ディレクトリ、query の回帰確認を組み合わせ、表示の正しさと既存実行契約の維持を確認する。新たな一律入力制限や拒否順序は要件に含めない。"
+  },
+  "decisionMap": {
+    "knownFacts": [
+      "must: Issue 521 の『Restart contract from flow review (2026-09-24)』を今回の初期 Draft と Spec の権威とし、旧監査の件数や未承認の revision 008 を承認済み仕様として扱わない。",
+      "must: 現行 registry から対象 leaf を再列挙する。基準 commit では全 66 leaf のうち共有経路が 65 leaf（resume 1、prepare 1、get 11、set 17、run 34、report/show 1）で、query は共有契約の例外である。",
+      "must: 各共有 leaf の受理する選択肢と暗黙の -h, --help を leaf ヘルプの Options に canonical 行として一度ずつ表示し、値なし・必須値・任意値、別名、placeholder、説明の差を保持する。Usage と例の再掲は重複と見なさない。",
+      "must: group の選択肢はその group の全 direct child leaf が共有する完全な選択肢契約に限定する。--agent-work-dir は run の group 表示に含め、get、set、report の group 表示から除く。",
+      "must: sennel flow <group> --help、sennel help flow <group>、leaf なしの sennel flow <group> の三経路で、同一 group の subcommand 行と option 行の順序および空白を揃える。各行の名前と要約の間に ASCII 空白を二個以上置き、省略や連結を生じさせない。",
+      "must: 既定の subcommand 表示順を locale 非依存の名前昇順とし、明示的な表示順を採用する場合も未指定値と同値の場合の名前順を保証する。option の順序も決定的にし、暗黙の help を含める。",
+      "must: 実在する最長名に加え 13/14/15 文字境界と合成 64/65 文字名の表示を検証する。合成名は renderer・registry の integration 範囲であり、本番 CLI の追加や名前長制限を意味しない。",
+      "must: 各共有 leaf の positional、rest、flag、必須値 option、任意値 option と暗黙の help について、必須性、個数、形式・許容値、空値、既存の上限または上限なし、条件付き組合せ、既存の検証主体を Spec に記載する。内部 context は公開 option に含めない。",
+      "must: set step status、set auto value、set broad action の値は positional として扱い、get status runId の任意性と set files の一つ以上の rest path を保持する。各 leaf の実際の引数個数を確認する。",
+      "must: 同じ綴りの option でも leaf ごとの意味と既存の検証主体を保持する。特に resume --spec は FlowSpecId、run gate --spec はファイルパス、prepare --base と run lint --base は Git branch 名であり、get runtime-log --run-id は identifier/sequence 形式も受ける。",
+      "must: ID、commit、選択値、状態、カテゴリ、形式、mode、phase、sequence、choice の許容範囲を個別の既存主体から確定する。FlowSpecId に一律 100 文字制限を加えず、PreparingFlowId と target token の異なる上限を保持する。",
+      "must: 各 path のファイル・ディレクトリ区分、存在条件、絶対・相対形式、解決基準を leaf ごとに記録する。--agent-work-dir、gate --spec、--file、context path、rest path を含め、すべての出力先に事前存在を要求しない。",
+      "must: テキスト、JSON、path、set files の件数と総サイズ、--exclusions、retry/attempt、query request-file、context traversal、review evidence の既存上限と上限なしを記録し、新たな資源制限や retry 方針を追加しない。",
+      "must: 五つの共有 target guard の適用 leaf 集合を現行の共有 registry から確認し、一致は既存経路で成功、不一致と無効な組合せはコマンド固有の変更前に失敗、省略時は既存動作を維持する。",
+      "must: --agent-work-dir の空白区切り形式と等号形式の双方を保持し、既存の作業ディレクトリ優先順位、設定済み logs.dir の優先、finalize-cleanup の durable root を維持する。agentWorkDir と logDir が同じであるとは仮定しない。",
+      "must: help、parse 失敗、target 拒否、正常実行、コマンド失敗の既存 lifecycle と副作用を記録し、正常な help では handler や実行 hook を呼ばない。新たな admission 境界、拒否順序、log を書かない保証を追加しない。",
+      "must: 明示的な正しい help と成功は exit 0、selector 欠落・不明および実際の失敗は exit 1、leaf なしの group help は表示して exit 1 を保持する。入力不足と余分な positional は leaf 固有の既存契約で確認する。",
+      "must: query は bootstrapFlowQueryCli、query 本体、query contract が所有する独立 parser 例外とし、共有 option・admission・help 投影・網羅 matrix から一貫して除外する。stdin、--request-file、help、error は別に回帰確認する。",
+      "must: parser 受理、leaf help、三つの group help、実行、guard/binding、runtime path、query の公開面を owner と検証に結び付ける。共有経路全 leaf の契約検証に加え、実 dispatcher/CLI で各公開面の振る舞いを少なくとも一度確認する。",
+      "must: 網羅的な parser matrix は integration に置き、公開 CLI E2E は entry point、abort、guard 付き get/set/run、group 共通集合、最長名、表示順・間隔、exit、runtime path に絞る。破壊的な本番操作を行わず、共通 renderer を使う docs/core/plugin 表示にも代表的な回帰確認を行う。",
+      "must: 今回の reopen は Runtime186 の予算停止後に通常経路で Draft/Spec を新 Attempt として再生成するためであり、以前の失敗・費用・証跡を保持する。前 Draft の questionLedger は空であり、reopen 理由は新しいユーザー選択を要求していない。"
+    ],
+    "decisionPoints": [
+      "must: option authority の一致、group 表示対象集合、三経路の表示契約を、既存の受理契約を変えずに満たす。",
+      "must: leaf ごとの異なる入力形式・検証主体・上限と、既存の拒否・副作用・終了コードを Spec で区別する。",
+      "must: 共通経路と query の境界、および現行 registry の実数と過去の監査件数の違いを明示する。"
+    ],
+    "resolvedByProjectRules": [
+      "must: 外部依存を増やさず Node.js 組み込み機能を使い、特定 agent の hook や lifecycle API に依存しない。",
+      "must: 既存の同責務 API と利用箇所・テストを先に調べ、利用できる権威を共有し、同じ判断を呼出側で再実装しない。",
+      "must: 値の意味と invariant はクラスで表現し、src 配布コードへ特定プロジェクトの値を持ち込まない。",
+      "must: alpha 版として旧形式の互換経路を追加せず、既存の妥当なテスト失敗は product 側で解消する。",
+      "must: Draft と Spec の成果物が後続工程で利用される場合は工程専用シナリオで保存・読み戻し・利用まで検証する。"
+    ],
+    "requiresUserJudgment": [],
+    "deferredToSpec": [
+      {
+        "boundary": "must: 現行の共有 routed leaf と query の境界、および各 leaf の入力 inventory を確定する。",
+        "relevance": "基準 commit の件数は今回の実装時の集合を保証せず、各 leaf の arity・型・上限は実際の registry と所有者に依存する。",
+        "owner": "spec"
+      },
+      {
+        "boundary": "must: 各公開表示・受理・実行面の所有箇所、共通 option 契約、並び順と表示順 metadata を使う場合の規則を具体化する。",
+        "relevance": "三経路の表示一致と全 direct child の選択肢共通集合を検証可能な仕様にするため。",
+        "owner": "spec"
+      },
+      {
+        "boundary": "must: target guard、runtime directory、parse/command lifecycle、exit と副作用の既存経路を leaf と境界ごとに記述する。",
+        "relevance": "表示修正に伴って既存の拒否条件やログの振る舞いを変えないため。",
+        "owner": "spec"
+      },
+      {
+        "boundary": "must: path、ID、domain value、テキスト・JSON・ファイル量、retry/attempt の既存規則または上限なしを対応する所有者から確認する。",
+        "relevance": "過去の Spec gate 指摘で残った入力の差と資源制限を憶測で補わないため。",
+        "owner": "spec"
+      },
+      {
+        "boundary": "must: 全共有 leaf の integration 契約 matrix、焦点を絞った実 CLI E2E、query と非 Flow 共通 renderer の回帰範囲を具体化する。",
+        "relevance": "metadata 比較だけでなく公開された振る舞いと保持すべき契約を検証するため。",
+        "owner": "spec"
+      }
+    ]
+  },
+  "scopeVerification": {
+    "in": [
+      "must: Flow の共有 routed leaf とその group の option 受理・help 表示の一致、三経路の group 表示、行順・間隔の一貫性を扱う。",
+      "must: 既存の guard、入力 validation、runtime directory、lifecycle、query の振る舞いを保持し、変更が公開面に及ぼす影響を検証する。",
+      "must: 現行 registry から対象集合と検証 matrix を再構成し、Issue 521 の再開始契約を初期 Spec へ引き継ぐ。"
+    ],
+    "out": [
+      "must: query の共有 parser への移行、command semantics や target guard の変更、runtime directory の優先順位変更を範囲外とする。",
+      "must: 一律の admission validation、新規の ID・path・資源制限、retry 方針変更、拒否順序の変更を範囲外とする。",
+      "must: 未解決の旧 Spec revision 008 を承認済み仕様として採用せず、合成名を本番 CLI の新 leaf や長さ制限としない。"
+    ]
+  },
+  "impactOnExisting": [
+    "must: Flow registry、共有 command 定義と dispatcher、flow/help entry point が利用者向け help と受理契約の対象になる。",
+    "must: src/flow.js の leaf なし group 経路と src/sennel.js の起動前 work-directory 処理を影響調査に含める。",
+    "must: container、target guard、flow context、query の既存主体は振る舞いを維持する回帰確認の対象とする。",
+    "must: docs/core/plugin の共通 help 利用箇所に対する表示影響を代表例で確認する。",
+    "must: 設定の agentWorkDir と logs.dir、Flow 状態と runtime log の副作用、生成済み docs/preset の扱いを Spec に記録し、変更しない分類も明示する。",
+    "must: 既存テスト helper を利用し、共有 leaf 全体の integration 契約検証と公開 CLI E2E、工程専用シナリオを対応付ける。"
+  ],
+  "questionLedger": {
+    "revision": 0,
+    "publication": "draft-worker-publication",
+    "evidenceDigest": "6443375a5b99258635088695cdefa410f2f160a795b8c59322674b4b740532a3",
+    "questions": []
+  },
+  "openQuestions": []
+}

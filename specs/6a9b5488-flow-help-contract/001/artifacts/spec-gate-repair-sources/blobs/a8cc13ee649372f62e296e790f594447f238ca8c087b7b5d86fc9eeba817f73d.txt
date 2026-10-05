@@ -1,0 +1,83 @@
+{
+  "devType": "bugfix",
+  "goal": "Make the public sennel flow help and accepted input contracts agree across every shared routed leaf and all three group-help entry points, while preserving established execution, validation, runtime, and query behavior.",
+  "analysis": {
+    "problem": "Flow argument declarations and help text have separate authorities. Accepted options can disappear from leaf help; group help can advertise options unavailable to its children; subcommand rows can run into summaries and change order with registry declaration order. The historical audit counts are superseded by Issue 521's restart contract and must be rechecked against the current registry.",
+    "proposedApproach": "Use the existing command registry as the shared authority for accepted options and help, including dedicated option and subcommand-row models; derive group help from direct children; share deterministic row presentation across public entry points. Keep existing domain validation, target guards, runtime directory rules, lifecycle, and the independent query command's contract. Verify the migration through real routed behavior and focused public CLI checks.",
+    "validation": "This addresses the root drift between declarations and displayed help, as well as the duplicated group layout, without turning a help repair into a change in command admission. Issue 521 supplies observable acceptance conditions, explicit owner boundaries, and a separate query exception. The preserved reopen context concerns recovery of the Flow process and does not add a new product decision."
+  },
+  "decisionMap": {
+    "knownFacts": [
+      "must: Treat Issue 521's 2026-09-24 restart contract as authoritative over its historical audit counts, older wording, and unresolved revision 008; re-enumerate shared routed leaves from the current FLOW_COMMANDS registry rather than encoding 67 or a fixed run-group count.",
+      "must: Include resume, prepare, get, set, run, and report/show shared routed leaves; keep flow query on its independent parser, help, stdin, request-file, and error contract, with separate regression coverage.",
+      "must: For each routed leaf, every accepted flag or value option and implicit -h, --help has one canonical Options row; Usage and examples may repeat names; required and optional option values are visibly different; preserve command-specific prose, examples, and translations.",
+      "must: Group options reflect the complete option contracts shared by every direct child leaf, including aliases and value kind. Get, set, and report help must not advertise --agent-work-dir; run group help must show it when shared by its children.",
+      "must: The three public group-help paths—flow <group> --help, help flow <group>, and flow <group> with no leaf—show matching subcommand and option rows for the same group. Rows have at least two ASCII spaces between full name and summary, no truncation, deterministic name order by default, and deterministic option order.",
+      "must: Preserve actual parser syntax, per-leaf arity, domain validation, target expectation guards, command execution hooks, rejection order, logging, runtime directory precedence, and observable exit codes. Do not add blanket admission checks, generic ID lengths, arbitrary resource limits, or a new retry policy.",
+      "must: Verify both --agent-work-dir /path and --agent-work-dir=/path through the existing resolution boundary. Invocation override, configured work directory, default, explicit log directory, and durable finalize-cleanup rules retain their existing precedence.",
+      "must: Map each retained public surface—parsing, leaf and group help, execution, guards and binding, runtime paths, and query—to its responsible existing or extended owner and to behavior-level verification. Include affected APIs, lifecycle hooks, configuration, generated artifacts, and side effects, including unchanged categories.",
+      "must: Preserve the existing empty question ledger on this Draft reopen. The reopen reason concerns bounded inspection of immutable source during earlier Spec Gate repair, retirement of unfinished inputs, preserved historical costs and failures, and normal Draft/Spec regeneration under the same approval and budget policies."
+    ],
+    "decisionPoints": [
+      "must: Specify the public help contract for every shared routed leaf and each of the three group entry points, including exact direct-child group scope and the query exception.",
+      "must: Specify input and validation ownership per leaf so help parity does not accidentally change selector syntax, positional or rest cardinality, type and path rules, empty-value behavior, limits, or conditional combinations.",
+      "must: Specify retained runtime and failure behavior, including no-leaf group help's exit 1, successful explicit help's exit 0, invalid selectors' exit 1, and existing context/log side effects on failures.",
+      "must: Specify migration parity and tests across registry/parser integration and focused real CLI E2E, including common CommandDefinition consumers outside Flow."
+    ],
+    "resolvedByProjectRules": [
+      "must: Reuse and extend the existing CommandDefinition and FLOW_COMMANDS responsibilities. The project forbids duplicating shared decisions in callers, parallel registries, agent-host-specific lifecycle dependencies, external packages, and project-specific values in distributed src/ code.",
+      "must: Keep the user-defined Issue as one scope. Draft describes requirements; Spec determines implementation detail and task decomposition. No autonomous user choice or extra Flow transition is authorized by this worker action.",
+      "must: Existing parser, target-guard, domain, work-directory, container, and query owners retain their decisions. The issue explicitly chooses parity over changing command semantics or introducing new universal validation.",
+      "must: Preserve the previous valid ledger's empty question set and issue evidence digest. The authoritative request, Issue, guardrails, and reopen context resolve the Draft-level decisions, so no CandidateQuestion is justified."
+    ],
+    "requiresUserJudgment": [],
+    "deferredToSpec": [
+      {
+        "boundary": "must: Inventory every current shared routed leaf and its public inputs from positionals, rest, flags, required and optional value options, and implicit help; record per-field cardinality, type or domain, empty values, conditional rules, concrete validator, paths and resolution roots, existing limits or explicit absence of a limit. Keep query in a separate regression inventory.",
+        "relevance": "The current registry is the measurable denominator; per-leaf distinctions such as positional status/auto/action, optional status runId, set-files rest paths, spec IDs versus filesystem paths, branch names, and identifier and size limits decide whether help migration preserves accepted behavior.",
+        "owner": "spec"
+      },
+      {
+        "boundary": "must: Map parser acceptance, leaf help, three group-help routes, execution, five target expectation guards and binding, runtime directory and log paths, query, hooks, configuration, generated artifacts, and side effects to existing or extended owners, marking unchanged categories explicitly.",
+        "relevance": "A migration of help authority needs a checkable path for every retained public behavior and must keep guard and runtime decisions with their existing owners.",
+        "owner": "spec"
+      },
+      {
+        "boundary": "must: Define observable row and option ordering, spacing, aliases, placeholder presentation, and group intersections; if display-order metadata is used, define its field, propagation, absent/equal ordering, and name tie-breaker.",
+        "relevance": "These details make the three group-help routes and long-name boundaries testable without adding a new production command-name limit.",
+        "owner": "spec"
+      },
+      {
+        "boundary": "must: Specify integration and CLI E2E checks that enumerate all routed leaves and direct child groups, exercise real dispatcher behavior with isolated fixtures or stub handlers, and cover valid and meaningful rejected inputs, guards, query, runtime path syntax and precedence, exits, and spacing boundaries.",
+        "relevance": "Metadata snapshots alone cannot prove accepted input, rejection timing, or preserved command execution; the exhaustive parser matrix belongs in integration tests and focused entry-point checks belong in E2E.",
+        "owner": "spec"
+      }
+    ]
+  },
+  "scopeVerification": {
+    "in": [
+      "must: Align shared routed Flow leaf Options and Usage with the same accepted option contracts, including implicit help, aliases, value kind, placeholders, and descriptions, while retaining prose and localization.",
+      "must: Derive group option intersections from all direct children and present stable, readable subcommand and option rows through all three public group-help entry points.",
+      "must: Preserve and verify the parser, target, runtime, failure, exit, and independent query contracts during migration; cover the existing shared command renderer's non-Flow consumers.",
+      "must: Re-enumerate current routed commands and test parser/help parity and behavior-level retention, including long registered and synthetic names, option-value syntax, and meaningful rejection paths."
+    ],
+    "out": [
+      "must: Do not migrate flow query into the shared registry option/help projection or change its stdin, request-file, help, or error behavior.",
+      "must: Do not change command semantics, target expectation decisions, runtime directory precedence, lifecycle ordering, retry and attempt policies, or existing input and resource limits.",
+      "must: Do not treat unresolved historical Spec revision 008 as approved, hard-code superseded audit counts, add agent-specific lifecycle requirements, or regenerate docs as part of this single Draft handoff."
+    ]
+  },
+  "impactOnExisting": [
+    "must: Existing Flow users gain accurate leaf and group help; already accepted forms and command results remain available, including no-leaf help's exit status and query's separate path.",
+    "must: Existing CommandDefinition help consumers in docs, core, and plugins may receive shared row rendering, so representative non-Flow group help must retain its command behavior and readable output.",
+    "must: Existing CLI parsing, dispatcher hooks, target binding, work-directory and log configuration, generated help and docs surfaces, and error diagnostics are migration-parity surfaces; the Spec must identify changed ownership and explicitly mark unchanged behavior.",
+    "must: Existing tests gain exhaustive routed parser/help contract coverage plus focused CLI behavior checks. Test fixtures must isolate handlers from destructive production operations and preserve valid prior scenarios."
+  ],
+  "questionLedger": {
+    "revision": 0,
+    "publication": "draft-worker-publication",
+    "evidenceDigest": "6443375a5b99258635088695cdefa410f2f160a795b8c59322674b4b740532a3",
+    "questions": []
+  },
+  "openQuestions": []
+}

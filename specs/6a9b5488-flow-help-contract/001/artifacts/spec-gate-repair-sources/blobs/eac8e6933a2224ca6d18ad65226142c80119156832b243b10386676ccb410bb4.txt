@@ -1,0 +1,93 @@
+{
+  "devType": "bugfix",
+  "goal": "must: sennel flow の共有経路で、実際に受け付ける入力と Usage・Options・グループ help の表示を一致させ、全公開経路で安定した順序と読みやすい間隔を保証する。",
+  "analysis": {
+    "problem": "flow の入力契約と help が別々に保守され、受け付ける option の欠落、グループで受け付けない option の表示、長い subcommand 名の表示崩れ、登録順依存が発生している。直近の Spec Gate は入力値の境界、対象選択、実行時の副作用順序、query の観測可能な結果が不明確として失敗した。",
+    "proposedApproach": "既存の CommandDefinition と FLOW_COMMANDS を共有経路の option authority として拡張し、leaf と direct-child group の help を同じ契約から得る。入力値と既存の検証責務、実行時の観測結果を leaf ごとに特定し、query は独立契約として扱う。",
+    "validation": "表示の不一致は定義元の二重化とレンダリング経路の分岐から生じているため、共通の権威と表示契約を揃えることで根本原因に対応する。既存の validator、target guard、runtime directory、query の判断を保持し、実際の CLI 経路で受理・拒否・help・終了コードを確認する。"
+  },
+  "decisionMap": {
+    "knownFacts": [
+      "must: Issue #521 の 2026-09-24 Restart contract が旧監査件数と未承認の revision 008 より優先する。停止した旧 Flow の復旧はこの Issue の対象外である。",
+      "must: 基準 commit では FLOW_COMMANDS が 66 leaf、うち共有 routed 経路が 65 leaf、query が独立経路である。現在の対象集合は registry から再確認し、旧件数を固定した合格条件にしない。",
+      "must: 共有経路の parser、leaf help、group help、実行、target guard と binding、runtime path に同一の公開契約を適用し、flow query の stdin、request-file、help、error は独立した回帰対象にする。",
+      "must: 対象の group help は `sennel flow <group> --help`、`sennel help flow <group>`、leaf を省いた `sennel flow <group>` の三経路で同じ subcommand 行と option 行の順序・間隔を示す。",
+      "must: 既存の入力検証、対象 identity、設定された作業・ログディレクトリ、実行時の診断と lifecycle、終了コードを保持し、新たな一律の拒否規則や資源上限を導入しない。",
+      "must: Reopen は Spec Gate の修復回数の不整合を直して Draft と Spec を再生成するためのもので、Activity 322 / Gate 127 の失敗五件を消したり未実行処理を完了扱いにしたりしない。"
+    ],
+    "decisionPoints": [
+      "must: option と subcommand 行の明示的な契約を既存の CommandDefinition / FLOW_COMMANDS に持たせ、共有 routed leaf の parser と help の不一致を解消する。",
+      "must: group option は各 group の全 direct-child leaf に共通する完全な option 契約だけを表示する。run の `--agent-work-dir` と get / set / report の非表示を含む。",
+      "must: 既存の command 固有の説明・例・翻訳を保持し、Usage / Options の構造化された定義と矛盾させない。option の canonical Options 行は各 option につき一行とする。",
+      "must: 値なし flag、必須値 option、任意値 option を区別し、表示上も必須値と任意値を識別できるようにする。",
+      "must: subcommand 行は名前と説明の間に二つ以上の ASCII 空白を置き、短い名前、13/14/15 文字の境界、最長登録 leaf、64/65 文字の合成名でも連結・切り捨てを起こさない。",
+      "must: 標準の subcommand 表示順は locale に依存しない名前昇順とし、option と暗黙の help も決定的な順序で表示する。表示順を明示する場合の同順位・未指定時の契約は Spec で記述する。",
+      "must: public input と internal context を区別し、各共有 routed leaf の値の必須性、個数、型・書式・許容範囲、空値、組合せ、既存の上限と validator を明示する。query はこの一覧から除外する。",
+      "must: 五つの共有 target guard の適用 leaf を registry から特定し、一致時の実行、不一致・不正な組合せの command mutation 前の拒否、省略時の現行動作を保持する。",
+      "must: `--agent-work-dir /path` と `--agent-work-dir=/path` の両形式を同じ既存の解決規則で扱い、configured log dir と durable cleanup の優先順位を保持する。",
+      "must: help、parse failure、target rejection、valid execution、command failure の診断・hook・runtime・status の順序と比較基準を Spec に明示し、実際の副作用や終了コードを現行契約から変更しない。",
+      "must: 共有 routed leaf 全件の契約検証と、各公開経路の実動作を通す focused CLI 検証を追加し、破壊的な本番操作を行わずに成功・意味のある拒否を確認する。"
+    ],
+    "resolvedByProjectRules": [
+      "must: Node.js 組み込みモジュールのみ使用し、TypeScript と外部依存を追加しない。意味のある option・行は invariant を持つ専用 class とし、既存の共通 API を優先して再利用する。",
+      "must: agent host 固有 hook や lifecycle API に依存せず、Sennel CLI の agent 非依存な仕組みで成立させる。",
+      "must: alpha 版方針に従い、旧形式向けの互換経路を増やさない。`src/` には特定プロジェクト固有の値を埋め込まない。",
+      "must: 既存 validator と domain authority の判断を呼出側へ複製せず、現行の公開入力と拒否条件を保持する。",
+      "must: テストは既存の正当なシナリオを弱めず、状態遷移・永続化・再読込・後続判断を必要な範囲で確認する。"
+    ],
+    "requiresUserJudgment": [],
+    "deferredToSpec": [
+      {
+        "boundary": "must: 現在の共有 routed leaf と query 例外、各 leaf の positional・rest・flag・required / optional option・暗黙 help の全入力一覧を確定する。",
+        "relevance": "must: 出力表示と parser 受理の一致、および前回 Gate で不足した値の型・書式・範囲・組合せ・上限の検証基準になる。",
+        "owner": "spec"
+      },
+      {
+        "boundary": "must: 各入力の既存 validator、target guard、target identity、path 解決、resource limit と retry / attempt policy の所有者を対応付ける。",
+        "relevance": "must: 新規の一律 admission や恣意的な制限を避け、unguarded な対象選択も現行動作に照らして検証する。",
+        "owner": "spec"
+      },
+      {
+        "boundary": "must: 三つの group help 経路、leaf help、query help、表示順・行間隔・option 交差の観測可能な期待値を定める。",
+        "relevance": "must: 表示経路ごとの欠落やレイアウトの相違を回帰検出できるようにする。",
+        "owner": "spec"
+      },
+      {
+        "boundary": "must: help、parse failure、target rejection、valid execution、command failure ごとの hook・診断・runtime・status の順序、比較基準、exit code を記述する。",
+        "relevance": "must: 前回 Gate が指摘した副作用順序の曖昧さを解消し、未実行の処理を実行済みと誤認しない。",
+        "owner": "spec"
+      },
+      {
+        "boundary": "must: routed leaf の exhaustive parser / registry 契約、公開 CLI の focused E2E、query の各 stdin・request-file・help・error ケースの出力と終了コードを配置する。",
+        "relevance": "must: metadata の一致だけでなく、実際の入力受理・安全な拒否・表示・終了状態を検証する。",
+        "owner": "spec"
+      }
+    ]
+  },
+  "scopeVerification": {
+    "in": [
+      "must: flow の共有 routed leaf の option authority と parser / help 契約、三つの group help 経路、表示順と行間隔を揃える。",
+      "must: 共有 routed leaf ごとの既存入力契約、target guards、runtime directory と logs、診断・hook・exit status の保持を明文化する。",
+      "must: query の独立 parser / help / error 契約を保持し、別の実動作テストで確認する。",
+      "must: 既存の CommandDefinition 利用者への影響を確認し、docs / core / plugin の代表的な group help の意味を保持する。"
+    ],
+    "out": [
+      "must: 旧 Flow の復旧、未承認 revision 008 の丸ごとの採用、未実行処理の完了扱いをしない。",
+      "must: command の意味、target guard の判断、query の動作、runtime directory の優先順位、retry policy や既存 size limit を変更しない。",
+      "must: 新しい blanket admission validator、恣意的な入力制限、agent 固有 lifecycle 前提を追加しない。"
+    ]
+  },
+  "impactOnExisting": [
+    "must: FLOW_COMMANDS、CommandDefinition、dispatcher、src/flow.js と src/help.js の公開 help 経路、および共通 renderer 利用者に影響する。",
+    "must: src/sennel.js の初期化前 work directory 処理と container、target guard、flow context の既存契約を回帰確認する。",
+    "must: query の独立 module と contract は共通 option 対象から除外し、独立の入力・出力・exit code を回帰確認する。",
+    "must: integration tests で routed leaf 全件と合成名境界を検証し、CLI E2E で代表的な help・受理・拒否・runtime path を確認する。"
+  ],
+  "questionLedger": {
+    "revision": 0,
+    "publication": "draft-worker-publication",
+    "evidenceDigest": "6443375a5b99258635088695cdefa410f2f160a795b8c59322674b4b740532a3",
+    "questions": []
+  },
+  "openQuestions": []
+}

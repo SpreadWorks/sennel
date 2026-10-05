@@ -1,0 +1,179 @@
+/**
+ * JS/TS language handler.
+ * Provides parse, minify, extractImports, extractExports, extractEssential.
+ */
+
+import path from "node:path";
+import { hasSlashPrefix } from "./comments.js";
+
+// ---------------------------------------------------------------------------
+// Minify
+// ---------------------------------------------------------------------------
+
+const LINE_COMMENT_PATTERN = /(?<!:)\/\/.*/;
+
+function removeBlockComments(code) {
+  return code.replace(/\/\*[\s\S]*?\*\//g, "");
+}
+
+function removeLineComments(code, pattern) {
+  return code
+    .split("\n")
+    .map((line) => {
+      if (hasSlashPrefix(line)) return line;
+      return line.replace(pattern, "").trimEnd();
+    })
+    .filter((line) => line.trim() !== "")
+    .join("\n");
+}
+
+function normalizeIndent(code, from, to) {
+  return code
+    .split("\n")
+    .map((line) => {
+      const match = line.match(/^( +)/);
+      if (!match) return line;
+      const spaces = match[1].length;
+      const level = Math.floor(spaces / from);
+      const remainder = spaces % from;
+      return " ".repeat(level * to + remainder) + line.slice(spaces);
+    })
+    .join("\n");
+}
+
+export function minify(code) {
+  let result = removeBlockComments(code);
+  result = removeLineComments(result, LINE_COMMENT_PATTERN);
+  result = normalizeIndent(result, 4, 2);
+  return result;
+}
+
+// ---------------------------------------------------------------------------
+// Parse
+// ---------------------------------------------------------------------------
+
+export function parse(content, filePath) {
+  const className = path.basename(filePath).replace(/\.[^.]+$/, "");
+
+  // export function / export class
+  const funcRegex = /export\s+(?:async\s+)?(?:function|class)\s+(\w+)/g;
+  const methods = [];
+  let m;
+  while ((m = funcRegex.exec(content)) !== null) {
+    methods.push(m[1]);
+  }
+
+  // function xxx (non-export)
+  const localFuncRegex = /^(?:async\s+)?function\s+(\w+)/gm;
+  while ((m = localFuncRegex.exec(content)) !== null) {
+    if (!methods.includes(m[1])) {
+      methods.push(m[1]);
+    }
+  }
+
+  // extends
+  const extendsMatch = content.match(/class\s+\w+\s+extends\s+(\w+)/);
+  const parentClass = extendsMatch ? extendsMatch[1] : "";
+
+  return { className, parentClass, methods, properties: {}, relations: {}, content };
+}
+
+// ---------------------------------------------------------------------------
+// Extract imports
+// ---------------------------------------------------------------------------
+
+export function extractImports(content) {
+  const imports = [];
+
+  // ESM: import ... from "..."
+  const esmRegex = /\bimport(?!\s*\()\s+(?:["']([^"']+)["']|[\s\S]*?\s+from\s+["']([^"']+)["'])/g;
+  let m;
+  while ((m = esmRegex.exec(content)) !== null) {
+    imports.push(m[1] ?? m[2]);
+  }
+
+  // CJS: require("...")
+  const cjsRegex = /require\s*\(\s*["']([^"']+)["']\s*\)/g;
+  while ((m = cjsRegex.exec(content)) !== null) {
+    if (!imports.includes(m[1])) {
+      imports.push(m[1]);
+    }
+  }
+
+  // Literal dynamic imports, including calls with import attributes.
+  const dynamicRegex = /(?<![.\w$])import\s*\(\s*(["'])([^"'\\]+)\1(?=\s*[,\)])/g;
+  while ((m = dynamicRegex.exec(content)) !== null) {
+    if (!imports.includes(m[2])) imports.push(m[2]);
+  }
+
+  // Re-exports also bind the exporting module to their source.
+  const reExportRegex = /\bexport\s+(?:type\s+)?(?:\*\s*(?:as\s+[\w$]+\s*)?|\{[^}]*\})\s+from\s+(["'])([^"'\\]+)\1/g;
+  while ((m = reExportRegex.exec(content)) !== null) {
+    if (!imports.includes(m[2])) imports.push(m[2]);
+  }
+
+  return imports;
+}
+
+// ---------------------------------------------------------------------------
+// Extract exports
+// ---------------------------------------------------------------------------
+
+export function extractExports(content) {
+  const exports = [];
+
+  // export function / export async function / export class
+  const namedRegex = /export\s+(?:async\s+)?(?:function|class)\s+(\w+)/g;
+  let m;
+  while ((m = namedRegex.exec(content)) !== null) {
+    exports.push(m[1]);
+  }
+
+  // export default
+  if (/export\s+default\b/.test(content)) {
+    exports.push("default");
+  }
+
+  // export { foo, bar }
+  const reExportRegex = /export\s*\{([^}]+)\}/g;
+  while ((m = reExportRegex.exec(content)) !== null) {
+    const names = m[1].split(",").map((n) => n.trim().split(/\s+as\s+/).pop().trim()).filter(Boolean);
+    for (const name of names) {
+      if (!exports.includes(name)) {
+        exports.push(name);
+      }
+    }
+  }
+
+  // export const / export let / export var
+  const constRegex = /export\s+(?:const|let|var)\s+(\w+)/g;
+  while ((m = constRegex.exec(content)) !== null) {
+    if (!exports.includes(m[1])) {
+      exports.push(m[1]);
+    }
+  }
+
+  return exports;
+}
+
+// ---------------------------------------------------------------------------
+// Essential extraction
+// ---------------------------------------------------------------------------
+
+export function extractEssential(code) {
+  const lines = code.split("\n");
+  const kept = [];
+  for (const line of lines) {
+    const t = line.trim();
+    if (/^import\s/.test(t)) { kept.push(t); continue; }
+    if (/^export\s/.test(t)) { kept.push(t); continue; }
+    if (/^(const|let|var)\s+[A-Z_]+\s*=/.test(t)) { kept.push(t); continue; }
+    if (/^(async\s+)?function\s/.test(t)) { kept.push(t); continue; }
+    if (/^class\s/.test(t)) { kept.push(t); continue; }
+    if (/^\s*return\s/.test(line)) { kept.push(t); continue; }
+    if (/^\s*throw\s/.test(line)) { kept.push(t); continue; }
+    if (/^\s*(await\s|new\s)/.test(line)) { kept.push(t); continue; }
+    if (/\b(fs\.|path\.|JSON\.|process\.|child_process)/.test(t) && !/^\/\//.test(t)) { kept.push(t); continue; }
+  }
+  return kept.join("\n");
+}

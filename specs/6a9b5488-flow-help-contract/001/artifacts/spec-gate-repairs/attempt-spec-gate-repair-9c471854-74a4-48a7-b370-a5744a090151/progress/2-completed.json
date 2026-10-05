@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "phase": "completed",
+  "runId": "6a9b5488-edef-4566-888e-14c37e31418c",
+  "specId": "6a9b5488-flow-help-contract",
+  "attemptId": "attempt-spec-gate-repair-9c471854-74a4-48a7-b370-a5744a090151",
+  "attemptSequence": 5,
+  "generation": 2,
+  "publicationReceiptId": "d420d4a4b26d7a61bc8c359c769d2c287a43a0fcd95d0e1265a320b2ed5f4c97",
+  "requestDigest": "7e8c29dede9163337b71d8b489e5194d335ed90e0834a5fbcd609a546491e627",
+  "resultKind": "spec-gate-repair-context-required"
+}

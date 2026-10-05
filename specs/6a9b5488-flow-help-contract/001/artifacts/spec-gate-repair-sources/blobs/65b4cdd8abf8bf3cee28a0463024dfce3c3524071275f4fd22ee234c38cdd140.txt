@@ -1,0 +1,87 @@
+{
+  "devType": "bugfix",
+  "goal": "Make the public help for every shared routed sennel flow command accurately describe accepted options, keep group help consistent across its three entry points, and retain existing execution, validation, target guard, runtime directory, query, and exit behavior.",
+  "analysis": {
+    "problem": "Flow argument acceptance and displayed help have separate manually maintained sources. Leaf help omits accepted options, group help can advertise unsupported options, and subcommand rows may run together or follow registration order. A prior Spec Gate repair exhausted its budget and the unfinished input was refused; this reopened Draft must use the Issue's current restart contract without treating that failed Spec as approved.",
+    "proposedApproach": "Express a single authoritative public option contract for the shared routed Flow commands, project it consistently to parser and help, and make all group help paths agree on the direct child commands and their common options. Preserve independent query behavior and each existing validation and runtime owner. Define the retained public surfaces and behavior-level evidence before implementation.",
+    "validation": "The approach addresses the root mismatch between accepted arguments and help rather than correcting selected strings. Registry-wide contract checks, real CLI behavior checks, group intersection checks, and existing-owner regressions can establish both display consistency and execution parity. The Spec must derive detailed per-leaf inputs and limits from current source rather than from obsolete audit counts or the failed earlier revision."
+  },
+  "decisionMap": {
+    "knownFacts": [
+      "must: The Issue's 2026-09-24 restart contract supersedes conflicting historical counts and wording. At its cited source commit there were 66 Flow leaves, 65 on the shared routed path: resume 1, prepare 1, get 11, set 17, run 34, and report/show 1; the current registry must be re-enumerated.",
+      "must: flow query remains an independent parser and help exception outside shared option projection, shared admission, group intersections, and exhaustive routed-parser matrices; its stdin, request-file, help, and error behavior still need separate regression evidence.",
+      "must: Accepted options, implicit help, Usage, and canonical Options rows must agree for every routed leaf; aliases and flag, required-value, and optional-value distinctions must remain visible. Command prose, examples, and localization must remain available. An option repeated in Usage or examples is still declared once in Options.",
+      "must: A group's visible options are the full-contract intersection of every direct child leaf in that group. The current run group includes --agent-work-dir; get, set, and report do not. Group subcommand and option rows have the same order and spacing through flow <group> --help, help flow <group>, and flow <group> with no leaf.",
+      "must: Each subcommand row has at least two ASCII spaces between name and summary without truncation. Default order is locale-independent ascending name order; option order is deterministic. Verify short names, 13/14/15-character names, the longest registered leaf, and synthetic 64/65-character names without imposing a command-name length limit.",
+      "must: Existing per-leaf positional, rest, flag, option, optional-option, and implicit-help contracts remain authoritative. The Spec must distinguish required from optional positionals, cardinality, value domains, empty values, combinations, paths, and existing limits or their absence without imposing a blanket validator or new arbitrary bounds.",
+      "must: Existing CLI parsing, Flow target guards, runtime directory resolution, domain validators, and query contract retain their ownership. The five target guards are --expect-binding, --expect-issue, --expect-no-issue, --expect-spec, and --expect-run-id; their applicable leaves must be derived from the registry.",
+      "must: Both --agent-work-dir /path and --agent-work-dir=/path remain accepted and follow existing invocation, configuration, default, log-directory, and finalize-cleanup precedence. Parsing and rejection retain the existing context, logging, hook, and diagnostic lifecycle.",
+      "must: Explicit valid help and successful commands return 0; missing or unknown selectors and actual parser, target, or command failures return 1. Group help without a leaf prints help and retains exit 1. Valid help must not execute a command handler or its execution hooks.",
+      "must: The original file scope includes the Flow registry, dispatcher, shared command registry, help, and related integration/E2E tests; the restart contract adds the no-leaf Flow route, pre-initialization runtime path, container, target guard, Flow context, and query regression touchpoints. Those existing owners need not be rewritten merely to be covered.",
+      "must: The reopened Draft preserves the prior empty question ledger and records the Spec Gate repair budget refusal as failed history. It does not adopt revision 008 of the prior stopped flow as an approved Spec or change approval policy or budgets."
+    ],
+    "decisionPoints": [
+      "must: Specify exact retained help, parsing, execution, guard, runtime path, and query behavior so each public surface has an owner and behavior-level verification.",
+      "must: Distinguish direct-child group option intersection from leaf-specific options, including aliases and value kinds, when defining acceptance criteria.",
+      "must: Preserve failure and exit behavior for missing selectors, malformed values, extra positionals, target rejection, command failure, and no-leaf group help."
+    ],
+    "resolvedByProjectRules": [
+      "must: Reuse existing APIs with the same responsibility before adding another implementation; use dedicated classes with constructor invariants for meaningful values; add no external dependencies.",
+      "must: Keep Sennel functionality independent of agent-host hooks and lifecycle callbacks. Do not add project-specific assumptions under src/.",
+      "must: Treat source as authoritative when generated docs disagree. The current docs freshness result is stale, so source-based inventory and existing-owner checks are required.",
+      "must: Preserve user-defined Issue scope as one concern, and verify retained public behavior through the real path as required by the migration-parity guardrail.",
+      "must: Do not weaken a valid test scenario to make implementation pass; use the relevant integration and E2E suites for the changed behavior."
+    ],
+    "requiresUserJudgment": [],
+    "deferredToSpec": [
+      {
+        "boundary": "must: Enumerate the current shared routed leaves and independently handled query, then give each leaf a per-input contract for arity, value domain, empty behavior, path semantics, combinations, existing limits or no explicit limit, and the existing validation owner.",
+        "relevance": "must: The Issue fixes the required coverage but current-source details and exact owner mapping belong in the Spec; the inventory must include the explicitly named positional values, IDs, paths, formats, categories, retry and resource policies.",
+        "owner": "spec"
+      },
+      {
+        "boundary": "must: Define the exact shared option and subcommand presentation contract, deterministic ordering including any optional display-order metadata, full direct-child group intersection, and unchanged command prose/localization behavior.",
+        "relevance": "must: This is needed to test every help entry point and to avoid a new help source that diverges from accepted options.",
+        "owner": "spec"
+      },
+      {
+        "boundary": "must: Map each retained public surface and affected command, API, hook, configuration, generated artifact, and side effect to its current or new owner and to a behavior-level test, while marking unchanged categories.",
+        "relevance": "must: Migration parity includes parser acceptance, leaf help, all group help paths, valid execution, rejection, guards and binding, runtime paths, and the independent query contract.",
+        "owner": "spec"
+      },
+      {
+        "boundary": "must: Detail a test matrix across all routed leaves with integration parser coverage and focused real CLI checks for entry wiring, guards, runtime directories, row boundaries, exit codes, and representative non-Flow consumers.",
+        "relevance": "must: Fixture or stub handlers should prevent destructive production actions while still verifying a behavior through the dispatcher; synthetic long names belong in integration tests.",
+        "owner": "spec"
+      }
+    ]
+  },
+  "scopeVerification": {
+    "in": [
+      "must: Shared routed Flow help and option acceptance across all direct child leaves, including resume and prepare, with all three group help paths and the no-leaf exit behavior.",
+      "must: Retained parsing, guard, runtime path, error lifecycle, command execution, and query regression contracts where help changes could affect them.",
+      "must: Registry-wide contract and parser integration checks plus focused public CLI E2E checks, with current source as the inventory authority."
+    ],
+    "out": [
+      "must: No new common admission validator, stricter resource or identifier limits, changed retry policy, altered target identity rules, or generalized side-effect ordering promise.",
+      "must: No migration of flow query to the shared routed parser/help model; retain its separate contract.",
+      "must: No new command-name length limit and no assumption that synthetic names are callable production commands.",
+      "must: No change to agent-host integration policy, approval policy, repair budgets, or failed Flow history."
+    ]
+  },
+  "impactOnExisting": [
+    "must: Shared Flow command registration and the leaf parser/help paths need to agree; retained command-specific prose, examples, translated text, command execution, and side effects require parity checks.",
+    "must: The two existing group help renderers and the no-leaf Flow route must show identical subcommand and option rows for a given group; other headings and prose may differ.",
+    "must: The CLI entry and runtime configuration path must accept both agent-work-dir syntaxes while preserving configured logs and durable finalize-cleanup behavior.",
+    "must: Existing target guard and Flow context checks remain the authority for pre-command rejection; tests must cover matching, mismatch, invalid combinations, and absent guards on their applicable leaves.",
+    "must: Query's independent stdin, request-file, help, and error behavior remains available and is verified separately from the shared routed matrix.",
+    "must: Shared CommandDefinition consumers outside Flow, including representative docs, core, and plugin group help, require regressions so a shared renderer change preserves their public behavior."
+  ],
+  "questionLedger": {
+    "revision": 0,
+    "publication": "draft-worker-publication",
+    "evidenceDigest": "6443375a5b99258635088695cdefa410f2f160a795b8c59322674b4b740532a3",
+    "questions": []
+  },
+  "openQuestions": []
+}

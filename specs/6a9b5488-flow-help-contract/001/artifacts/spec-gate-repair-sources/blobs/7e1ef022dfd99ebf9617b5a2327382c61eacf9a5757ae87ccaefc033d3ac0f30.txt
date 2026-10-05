@@ -1,0 +1,268 @@
+import fs from "node:fs";
+import path from "node:path";
+import { createHash } from "node:crypto";
+import { runGit } from "../../lib/git-helpers.js";
+import { captureRegularFile } from "../../lib/regular-file-snapshot.js";
+import { FlowArtifactCatalogSnapshotLimits } from "../../lib/flow-version.js";
+import { getLangHandler } from "../../docs/lib/lang-factory.js";
+import { SpecGateRepairSource, SpecGateRepairSourceSnapshots,
+  SpecGateRepairSourceSnapshotManifest, SpecGateRepairSourceSnapshotReference } from "./spec-gate-repair-values.js";
+import { FLOW_ARTIFACT_CONTRACTS } from "../../lib/flow-artifact-contract.js";
+import { CanonicalFlowArtifactWrite, CanonicalFlowArtifactBaseline } from "./current-flow-state.js";
+import { WorkerArtifactHandoffError } from "./worker-artifact-handoff-error.js";
+import { compareText } from "./text-order.js";
+
+/** Bound regular-file reads and the JSON evidence saved in one progress artifact. */
+export class SpecGateRepairSourceCaptureBudget {
+  #limits;
+  #readBytes = 0;
+  #snapshotBytes;
+  #sourceCount = 0;
+
+  constructor({ limits = new FlowArtifactCatalogSnapshotLimits() } = {}) {
+    if (!(limits instanceof FlowArtifactCatalogSnapshotLimits)) {
+      throw new TypeError("Repair source capture requires typed catalog snapshot limits");
+    }
+    this.#limits = limits;
+    this.#snapshotBytes = this.serialize({
+      sourceSnapshots: new SpecGateRepairSourceSnapshots([]).toJSON(),
+    }).length;
+  }
+
+  get readBytes() { return this.#readBytes; }
+  get snapshotBytes() { return this.#snapshotBytes; }
+  get remainingReadBytes() { return this.#limits.maxArtifactBytes - this.#readBytes; }
+
+  consumeRead(byteLength) {
+    if (!Number.isSafeInteger(byteLength) || byteLength < 0 || byteLength > this.remainingReadBytes) {
+      throw new RangeError("Repair source read exceeds its remaining capture budget");
+    }
+    this.#readBytes += byteLength;
+  }
+
+  admitSource(source) {
+    if (!(source instanceof SpecGateRepairSource)) throw new TypeError("Repair capture requires a typed source");
+    const json = JSON.stringify({ ...source.descriptor(), content: source.content }, null, 2);
+    // Entries sit six spaces inside progress.sourceSnapshots.sources. The
+    // first entry expands [] with a newline and the closing array's indent.
+    const cost = Buffer.byteLength(json, "utf8") + 6 * json.split("\n").length
+      + (this.#sourceCount === 0 ? 6 : 2);
+    if (this.#snapshotBytes + cost > this.#limits.maxArtifactBytes) return false;
+    this.#snapshotBytes += cost;
+    this.#sourceCount++;
+    return true;
+  }
+
+  serialize(document) {
+    const bytes = Buffer.from(`${JSON.stringify(document, null, 2)}\n`, "utf8");
+    if (bytes.length > this.#limits.maxArtifactBytes) {
+      throw new WorkerArtifactHandoffError("invalid", "FLOW_SPEC_GATE_REPAIR_SNAPSHOT_LIMIT_EXCEEDED",
+        "Spec Gate repair progress exceeds the catalog artifact byte limit",
+        { data: { failureKind: "step-admission", byteLength: bytes.length,
+          maxArtifactBytes: this.#limits.maxArtifactBytes } });
+    }
+    return bytes;
+  }
+}
+
+/** One coherent canonical view and a caller-scoped content cache. */
+export class SpecGateRepairSourceSnapshotReader {
+  #view;
+  #descriptors;
+  #contents = new Map();
+  #snapshots = new Map();
+  constructor(view) {
+    this.#view = view;
+    this.#descriptors = new Map(view.catalog.artifacts.map((entry) => [entry.relativePath, entry]));
+  }
+  read(logicalKey, digest, byteLength, optional = false) {
+    const artifact = FLOW_ARTIFACT_CONTRACTS.resolve(logicalKey, { digest });
+    const descriptor = this.#descriptors.get(artifact.relativePath);
+    if (descriptor === undefined && optional) return null;
+    if (descriptor === undefined || descriptor.logicalKey !== logicalKey
+      || descriptor.hash !== digest || descriptor.size !== byteLength) {
+      throw new TypeError("Repair source catalog reference differs from its exact content identity");
+    }
+    if (!this.#contents.has(artifact.relativePath)) {
+      this.#contents.set(artifact.relativePath, this.#view.readCatalogedArtifact(descriptor));
+    }
+    const bytes = this.#contents.get(artifact.relativePath);
+    if (bytes.length !== byteLength || createHash("sha256").update(bytes).digest("hex") !== digest) {
+      throw new TypeError("Repair source bytes differ from their catalog reference");
+    }
+    return bytes;
+  }
+  restore(reference) {
+    const exact = reference instanceof SpecGateRepairSourceSnapshotReference ? reference
+      : new SpecGateRepairSourceSnapshotReference(reference);
+    const key = `${exact.digest}:${exact.byteLength}`;
+    if (this.#snapshots.has(key)) return this.#snapshots.get(key);
+    const bytes = this.read("spec.gate.repair.source.manifest", exact.digest, exact.byteLength);
+    const manifest = SpecGateRepairSourceSnapshotManifest.fromJSON(JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)));
+    const sources = manifest.descriptors().map((entry) => {
+      const content = entry.availability === "available"
+        ? new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(
+          this.read("spec.gate.repair.source.blob", entry.digest, entry.byteLength)) : "";
+      const source = new SpecGateRepairSource({ ...entry, id: entry.id.slice("evidence:".length), content });
+      if (source.digest !== entry.digest || source.byteLength !== entry.byteLength) {
+        throw new TypeError("Repair source body differs from its manifest descriptor");
+      }
+      return source;
+    });
+    const snapshots = new SpecGateRepairSourceSnapshots(sources);
+    this.#snapshots.set(key, snapshots);
+    return snapshots;
+  }
+}
+
+/** Missing content and exact reuse baselines committed with the first checkpoint. */
+export class SpecGateRepairSourceSnapshotPublication {
+  constructor({ reference, artifactWrites, artifactBaselines }) {
+    if (!(reference instanceof SpecGateRepairSourceSnapshotReference)
+      || !Array.isArray(artifactWrites) || artifactWrites.some((write) => !(write instanceof CanonicalFlowArtifactWrite))
+      || !Array.isArray(artifactBaselines) || artifactBaselines.some((baseline) => !(baseline instanceof CanonicalFlowArtifactBaseline))) {
+      throw new TypeError("Repair snapshot publication requires a typed reference, writes and baselines");
+    }
+    this.reference = reference;
+    this.artifactWrites = Object.freeze([...artifactWrites]);
+    this.artifactBaselines = Object.freeze([...artifactBaselines]);
+    Object.freeze(this);
+  }
+}
+
+export function prepareSpecGateRepairSourceSnapshotPublication({ flowManager, state, snapshots }) {
+  const manifest = SpecGateRepairSourceSnapshotManifest.fromSnapshots(snapshots);
+  const reference = manifest.reference();
+  return flowManager.readCanonicalTransitionView({ specId: state.specId, read(view) {
+    const reader = new SpecGateRepairSourceSnapshotReader(view);
+    const writes = [];
+    const baselines = [];
+    const handled = new Set();
+    const capture = (logicalKey, digest, bytes, mediaType) => {
+      const key = `${logicalKey}:${digest}`;
+      if (handled.has(key)) return;
+      handled.add(key);
+      const existing = reader.read(logicalKey, digest, bytes.length, true);
+      if (existing === null) writes.push(new CanonicalFlowArtifactWrite({ logicalKey,
+        parameters: { digest }, bytes, mediaType }));
+      baselines.push(new CanonicalFlowArtifactBaseline({ logicalKey, parameters: { digest },
+        digest: existing === null ? null : digest, byteLength: existing === null ? 0 : bytes.length }));
+    };
+    for (const source of snapshots.sources()) if (source.availability === "available") {
+      capture("spec.gate.repair.source.blob", source.digest, Buffer.from(source.content, "utf8"), "text/plain");
+    }
+    capture("spec.gate.repair.source.manifest", reference.digest, manifest.bytes(), "application/json");
+    return new SpecGateRepairSourceSnapshotPublication({ reference, artifactWrites: writes, artifactBaselines: baselines });
+  } });
+}
+
+/** Use existing catalog and regular-file readers; never execute a research worker. */
+export function readSpecGateRepairSources({ flowManager, state, executionRoot, spec,
+  captureBudget = new SpecGateRepairSourceCaptureBudget() }) {
+  if (!(captureBudget instanceof SpecGateRepairSourceCaptureBudget)) {
+    throw new TypeError("Repair sources require a typed capture budget");
+  }
+  const sources = [];
+  const addText = (id, origin, content, revision = createHash("sha256").update(content).digest("hex"), options = {}) => {
+    let source = new SpecGateRepairSource({ id, origin, content, revision, ...options });
+    if (!captureBudget.admitSource(source)) {
+      source = new SpecGateRepairSource({ id, origin, content: "", revision: "unavailable",
+        ...options, availability: "unavailable" });
+      if (!captureBudget.admitSource(source)) {
+        throw new WorkerArtifactHandoffError("invalid", "FLOW_SPEC_GATE_REPAIR_SNAPSHOT_LIMIT_EXCEEDED",
+          "Spec Gate repair source frontier cannot fit in the catalog artifact byte limit",
+          { data: { failureKind: "step-admission", sourceId: source.id, origin } });
+      }
+    }
+    sources.push(source);
+    return source;
+  };
+  addText("request", "flow.request", state.request ?? "");
+  for (const logicalKey of ["issue.snapshot", "draft"]) {
+    if (logicalKey === "issue.snapshot" && state.issue === null) continue;
+    const artifact = flowManager.readArtifact({ specId: state.specId, logicalKey,
+      consumerNodeId: "spec-gate-repair", optional: logicalKey === "draft" });
+    if (artifact !== null) addText(logicalKey, artifact.relativePath,
+      artifact.bytes.toString("utf8"), artifact.descriptor.hash);
+  }
+  const capture = (id, relative, options = {}) => {
+    const absolute = path.resolve(executionRoot, relative);
+    if (path.relative(executionRoot, absolute).startsWith("..") || path.isAbsolute(relative)) {
+      throw new Error("Repair source path escapes the execution root");
+    }
+    if (!fs.existsSync(absolute)) {
+      return addText(id, relative, "", "missing", { ...options, availability: "missing" });
+    }
+    const maxBytes = Math.min(2 * 1024 * 1024, captureBudget.remainingReadBytes);
+    let snapshot;
+    try {
+      snapshot = captureRegularFile(absolute, { label: "repair captured evidence", maxBytes });
+    } catch {
+      // The reader cannot report bytes when its final identity check fails.
+      // Conservatively charge the bounded attempt instead of rereading freely.
+      captureBudget.consumeRead(maxBytes);
+      return addText(id, relative, "", "unavailable", { ...options, availability: "unavailable" });
+    }
+    captureBudget.consumeRead(snapshot.byteLength);
+    let content;
+    try {
+      content = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(snapshot.bytes);
+    } catch {
+      return addText(id, relative, "", "unavailable", { ...options, availability: "unavailable" });
+    }
+    return addText(id, relative, content, snapshot.digest, options);
+  };
+  if (fs.existsSync(path.join(executionRoot, "AGENTS.md"))) capture("project-rules", "AGENTS.md", { appliesTo: ["."] });
+  // Inventory supplies real paths; do not infer paths from prose or execute its commands.
+  const repository = runGit(["rev-parse", "--is-inside-work-tree"], { cwd: executionRoot });
+  if (!repository.ok) {
+    addText("source-inventory", "repository", "", "unavailable", { availability: "unavailable", required: false });
+    return Object.freeze(sources);
+  }
+  const inventory = runGit(["ls-files", "-z", "--cached"], { cwd: executionRoot });
+  if (!inventory.ok) throw new Error(`Cannot read repair source inventory: ${inventory.stderr}`);
+  const tracked = [...new Set(inventory.stdout.toString().split("\0").filter(Boolean))].sort();
+  const trackedPaths = new Set(tracked);
+  if (trackedPaths.has("AGENTS.md") && !sources.some((source) => source.origin === "AGENTS.md")) {
+    capture("project-rules", "AGENTS.md", { appliesTo: ["."] });
+  }
+  const references = [spec, ...sources.map((entry) => entry.content)];
+  const referencedOrigins = SpecGateRepairSource.referencedOrigins(references, tracked.filter((relative) => relative !== "AGENTS.md"));
+  const referenced = tracked.filter((relative) => referencedOrigins.has(relative));
+  const scopedRules = new Map();
+  const frontier = [...referenced];
+  const visited = new Set(frontier);
+  for (let index = 0; index < frontier.length; index++) {
+    const relative = frontier[index];
+    const source = path.basename(relative) === "AGENTS.md" ? null
+      : capture(`source:${relative}`, relative, { required: false });
+    if (source?.availability === "available") {
+      const imports = getLangHandler(relative)?.extractImports?.(source.content) ?? [];
+      const dependencies = new Set();
+      for (const imported of imports) {
+        if (!imported.startsWith("./") && !imported.startsWith("../")) continue;
+        const dependency = path.posix.normalize(path.posix.join(path.posix.dirname(relative), imported));
+        if (trackedPaths.has(dependency) && !visited.has(dependency)) dependencies.add(dependency);
+      }
+      for (const dependency of [...dependencies].sort(compareText)) {
+        visited.add(dependency);
+        frontier.push(dependency);
+      }
+    }
+    let directory = path.dirname(relative);
+    while (directory !== ".") {
+      const rulePath = path.join(directory, "AGENTS.md");
+      if (trackedPaths.has(rulePath) || fs.existsSync(path.join(executionRoot, rulePath))) {
+        if (!scopedRules.has(rulePath)) scopedRules.set(rulePath, new Set());
+        scopedRules.get(rulePath).add(directory);
+      }
+      directory = path.dirname(directory);
+    }
+  }
+  for (const [relative, scopes] of [...scopedRules].sort(([a], [b]) => compareText(a, b))) {
+    if (!sources.some((source) => source.origin === relative && source.required)) {
+      capture(`project-rules:${relative}`, relative, { required: false, appliesTo: [...scopes] });
+    }
+  }
+  return Object.freeze(sources);
+}

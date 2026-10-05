@@ -1,0 +1,432 @@
+import { createHash } from "node:crypto";
+import { PromptBuilder } from "../../lib/prompt-builder.js";
+import {
+  AtomicPromptElement, PromptReferenceElement, PromptRequestEnvelope,
+  PromptInputBuilder, PromptBatchPlan, PromptRequestLimit,
+  PromptBatchGroup, GroupedPromptBatchTopology, RangedTextPromptElement, GLOBAL_PROMPT_ELEMENT_HARD_MAX,
+} from "../../lib/prompt-batching.js";
+import { SpecRepairTarget, specRepairTargetEntries } from "./spec-repair-operations.js";
+import { SpecGateDocumentTarget } from "./spec-gate-targets.js";
+import { SpecGateRepairSource, SpecGateRepairSourceSnapshots, SpecGateRepairSourceRange } from "./spec-gate-repair-values.js";
+import { WorkerArtifactHandoffError } from "./worker-artifact-handoff-error.js";
+import { MAX_WORKER_ARTIFACT_INPUT_BYTES,
+  workerArtifactStableStringify } from "./worker-artifact-input-format.js";
+
+import {
+  SpecGateRepairRange, SpecGateRepairFinding, SpecGateRepairUnit, SpecGateRepairSelection, SpecGateRepairIndexManifest, SpecGateRepairIndexPageRoute, SPEC_GATE_REPAIR_INDEX_PAGE_SIZE,
+  specGateRepairValueDigest as hash, freezeSpecGateRepairValue as freeze,
+  specGateRepairFindingIdentity as identity,
+} from "./spec-gate-repair-selection.js";
+import { SpecGateRepairBundle } from "./spec-gate-repair-bundle.js";
+import { compareText } from "./text-order.js";
+export { SpecGateRepairRange, SpecGateRepairFinding, SpecGateRepairUnit, SpecGateRepairSelection }
+  from "./spec-gate-repair-selection.js";
+
+function targetKey(value) {
+  const target = value instanceof SpecRepairTarget ? value : SpecRepairTarget.fromJSON(value, "repair context target");
+  return JSON.stringify(target.toJSON());
+}
+
+class SpecGateRepairEnvelope extends PromptRequestEnvelope {
+  constructor({ baseRevision, mode }) { super(); this.baseRevision = baseRevision; this.mode = mode; }
+  build(elements) {
+    return new PromptBuilder()
+      .setRole(this.mode === "locate" ? "Locate Spec Gate findings in the canonical structural index."
+        : "Propose bounded operations for the supplied Spec Gate repair units.")
+      .setRules([
+        "This is the Spec stage. Evaluate the planned verification method and acceptance conditions. Executed evidence belongs to later stages.",
+        "The source is deliberately selected, not the full document. Never infer absence from an omitted range. Request additional range IDs bound to baseRevision when needed.",
+        "Keep each complete finding identity and source citation. An exception needs the canonical rule's exception clause, not acknowledgment alone.",
+        "Read-only ranges are context, not authority to change them. Only the explicit allowedTargets and operationKinds grant mutation authority.",
+        "Never rewrite the full Spec. All proposals share the given baseRevision and original value digests. Do not apply a proposal to another proposal's output.",
+        this.mode === "locate" ? "Return locations with exact finding identity and existing rangeIds only. Do not fabricate a position or declare a free-text location resolved by approximation. The repeated location element is the finding; other elements are one part of the structural index. Return that exact finding once, with only rangeIds present in this part. Return an empty rangeIds array if this part contains no matching location; the parent combines every part before declaring it unresolved."
+          : "Return one atomic group per unit, preserving all findingIdentities. Resolve facts from supplied Issue, request, prior Draft answers, rules and source evidence before proposing any return to Draft. Only a genuinely missing user choice may produce spec-gate-repair-draft-return with unitId, decision, evidence and unresolvedBecause. Missing context, tooling failures or inability to locate text are not user choices. Never ask the user directly.",
+      ].join("\n"))
+      .addUserPrompt("## Canonical revision", this.baseRevision)
+      .addUserPrompt("## Selected input", JSON.stringify(elements.map((entry) => ({
+        id: entry.id, originId: entry.originId, start: entry.start, end: entry.end, content: entry.toPromptText(),
+      }))))
+      .build();
+  }
+}
+
+function planFor(elements, envelope, limit) {
+  const builder = new PromptInputBuilder({ envelope, limit });
+  elements.forEach((element) => builder.add(element));
+  return PromptBatchPlan.create({ collection: builder.build(), envelope, limit });
+}
+
+class SpecGateRepairReference extends PromptReferenceElement {
+  constructor({ selection, sequence }) {
+    const text = workerArtifactStableStringify(selection.toJSON());
+    super({ id: selection.unit.id, sourceRevision: selection.baseRevision, sequence,
+      path: "spec-gate-repair-context.json#bundle",
+      digest: createHash("sha256").update(text).digest("hex"),
+      byteLength: Buffer.byteLength(text, "utf8"),
+      authorization: "Match the selected element ID to bundle.units[].unit.id and resolve all its range, source, guardrail and rationale references by ID. Read the complete immutable selection; only its allowedTargets grant mutation authority." });
+    this.selection = freeze(selection);
+    Object.freeze(this);
+  }
+}
+
+/** Pure canonical context selection; execution composition handles persistence and admission. */
+export class SpecGateRepairContext {
+  static evidenceDigestFor({ sources, guardrails }) {
+    if (!Array.isArray(sources) || sources.some((source) => !(source instanceof SpecGateRepairSource))) {
+      throw new TypeError("Repair evidence requires typed read-only sources");
+    }
+    if (!Array.isArray(guardrails)) throw new TypeError("Repair evidence requires canonical guardrails");
+    return createHash("sha256").update(JSON.stringify({
+      sources: sources.map((source) => source.descriptor()).sort((a, b) => compareText(a.id, b.id)), guardrails,
+    }, (_, value) => value instanceof RegExp
+      ? { source: value.source, flags: value.flags } : value)).digest("hex");
+  }
+  #ranges = new Map();
+  #ordinalRanges = new Map();
+  #explicitAliases = new Map();
+  #targets = new Map();
+  #findings;
+  #spec;
+  #guardrails;
+  #rationale;
+  #sources;
+  #sourcesById;
+  #index;
+  #indexPages = new Map();
+
+  constructor({ spec, baseRevision, findings, guardrails, acknowledgedRationale = "", sources = [] }) {
+    if (!/^sha256:[a-f0-9]{64}$/.test(baseRevision)) throw new TypeError("Repair context requires a canonical base revision");
+    if (!Array.isArray(findings) || !findings.length || !Array.isArray(guardrails)) throw new TypeError("Repair context requires canonical findings and rules");
+    this.baseRevision = baseRevision;
+    this.#spec = freeze(structuredClone(spec));
+    this.#guardrails = freeze(structuredClone(guardrails));
+    this.#rationale = acknowledgedRationale;
+    const evidenceDigest = SpecGateRepairContext.evidenceDigestFor({ sources, guardrails: this.#guardrails });
+    this.#sources = Object.freeze(new SpecGateRepairSourceSnapshots(sources).sources());
+    this.#sourcesById = new Map(this.#sources.map((source) => [source.id, source]));
+    this.evidenceDigest = evidenceDigest;
+    const editable = specRepairTargetEntries(spec);
+    const byPath = new Map();
+    for (const entry of editable) {
+      const target = entry.target;
+      const json = target.toJSON();
+      const path = json.entity === "spec" ? json.field
+        : json.entity ? `${json.entity}s[${json.id}].${json.field}`
+          : json.position == null ? json.collection : `${json.collection}[${json.position}]`;
+      byPath.set(path, entry);
+      if (entry.exists && ["requirement", "task"].includes(json.entity)) {
+        const alias = `${json.entity}s.${json.id}.${json.field}`;
+        this.#explicitAliases.set(alias, this.#explicitAliases.has(alias) ? null : path);
+      }
+    }
+    const add = (path, value, entity = null, collectionAnchor = false, ordinalPath = path) => {
+      const entry = byPath.get(path);
+      const range = new SpecGateRepairRange({ id: path, path, value, entity,
+        target: entry?.target ?? null, collectionAnchor, ...(entry ? { digest: entry.digest, exists: entry.exists } : {}) });
+      this.#ranges.set(range.id, range);
+      this.#ordinalRanges.set(ordinalPath, range.id);
+      if (range.target) this.#targets.set(targetKey(range.target), range.id);
+    };
+    const walk = (value, path = "", entity = null, ordinalPath = path) => {
+      if (Array.isArray(value)) {
+        // Collections themselves are available for explicit additions, not implicit replacements.
+        if (byPath.has(path)) add(path, { itemCount: value.length, contentOmitted: true }, entity, true, ordinalPath);
+        value.forEach((item, index) => {
+          const identified = ["requirements", "tasks"].includes(path) && typeof item?.id === "string";
+          walk(item, `${path}[${identified ? item.id : index}]`, identified ? `${path}:${item.id}` : entity,
+            `${ordinalPath}[${index}]`);
+        });
+      } else if (value && typeof value === "object") {
+        if (byPath.has(path)) add(path, value, entity, false, ordinalPath);
+        else Object.entries(value).forEach(([key, child]) => walk(child, path ? `${path}.${key}` : key, entity,
+          ordinalPath ? `${ordinalPath}.${key}` : key));
+      } else add(path, value, entity, false, ordinalPath);
+    };
+    walk(this.#spec);
+    for (const [path, entry] of byPath) {
+      if (!this.#ranges.has(path) && entry.exists === false) {
+        const target = entry.target.toJSON();
+        add(path, null, target.entity && target.entity !== "spec" ? `${target.entity}s:${target.id}` : null);
+      }
+    }
+    this.#findings = Object.freeze(findings.map((finding) => {
+      if (finding.specRevision != null && finding.specRevision !== baseRevision) {
+        throw new Error("Stale Spec Gate finding target revision");
+      }
+      const ids = [...new Set([...(finding.rangeIds ?? this.#initialRanges(finding)),
+        ...(finding.allowedTargets ?? []).map((permission) => this.#targetRange(permission.target)),
+      ])];
+      this.#assertRanges(ids);
+      return new SpecGateRepairFinding(finding, ids);
+    }));
+    const identities = this.#findings.map((finding) => finding.identity.toString());
+    if (new Set(identities).size !== identities.length) throw new Error("Duplicate canonical Gate finding identity");
+    for (const finding of this.#findings) {
+      if (!guardrails.some((rule) => rule.id === finding.requirementRef)) throw new Error("Canonical guardrail body is missing for a repair finding");
+    }
+    for (const source of this.#sources) {
+      if (source.availability === "available" && !source.required && !source.isProjectRule) {
+        const element = new RangedTextPromptElement({ id: source.id, sourceRevision: source.revision,
+          sequence: 0, text: source.content });
+        const addSourceRange = (fragment) => {
+          const range = new SpecGateRepairSourceRange({ source, element: fragment });
+          this.#ranges.set(range.id, new SpecGateRepairRange({ id: range.id, path: source.origin,
+            value: range.value, digest: range.digest }));
+        };
+        addSourceRange(element);
+        // The shared ranged element owns Unicode boundaries and newline partitioning.
+        if (source.content.length >= GLOBAL_PROMPT_ELEMENT_HARD_MAX) {
+          for (const fragment of element.partitionFor(GLOBAL_PROMPT_ELEMENT_HARD_MAX - 1).children) addSourceRange(fragment);
+        }
+      } else {
+        if (this.#ranges.has(source.id)) throw new Error("Duplicate repair evidence source");
+        this.#ranges.set(source.id, new SpecGateRepairRange({ id: source.id, path: source.id,
+          value: source.toJSON(), digest: source.digest }));
+      }
+    }
+    const descriptors = this.tableOfContents().sort((a, b) => compareText(a.id, b.id));
+    const revision = `sha256:${hash(workerArtifactStableStringify(descriptors))}`;
+    const pageSize = SPEC_GATE_REPAIR_INDEX_PAGE_SIZE;
+    const pageCount = Math.ceil(descriptors.length / pageSize);
+    const pageRoutes = Array.from({ length: pageCount }, (_, page) => {
+      const entries = descriptors.slice(page * pageSize, (page + 1) * pageSize);
+      return new SpecGateRepairIndexPageRoute({ id: `repair-index:${revision}:${page}`,
+        firstDescriptorId: entries[0].id, lastDescriptorId: entries.at(-1).id });
+    });
+    this.#index = new SpecGateRepairIndexManifest({ version: 2, revision, descriptorCount: descriptors.length,
+      pageCount, firstPageId: pageRoutes[0].id, pageRoutes });
+    for (let page = 0; page < pageCount; page++) {
+      const id = this.#index.pageRoutes[page].id;
+      const value = { version: 1, revision, page, pageCount,
+        nextPageId: this.#index.pageRoutes[page + 1]?.id ?? null,
+        descriptors: descriptors.slice(page * pageSize, (page + 1) * pageSize) };
+      this.#indexPages.set(id, new SpecGateRepairRange({ id, path: id, value,
+        digest: hash(workerArtifactStableStringify(value)) }));
+    }
+  }
+
+  #initialRanges(finding) {
+    if (finding.targets?.length) return [...new Set(finding.targets.flatMap((target) =>
+      Object.hasOwn(target, "document")
+        ? (new SpecGateDocumentTarget(target), [...this.#ranges.keys()])
+        : [this.#targetRange(target)]))];
+    const locator = finding.where?.locator;
+    if (typeof locator !== "string") return [];
+    const path = locator.startsWith("$.") ? locator.slice(2) : locator;
+    const id = this.#ordinalRanges.get(path) ?? this.#explicitAliases.get(path)
+      ?? (this.#ranges.has(path) ? path : null);
+    return id === null ? [] : [id];
+  }
+  #targetRange(target) {
+    const id = this.#targets.get(targetKey(target));
+    if (!id) throw new Error("Repair target does not exist in the canonical Spec");
+    return id;
+  }
+  #assertRanges(ids) {
+    if (!Array.isArray(ids) || new Set(ids).size !== ids.length || ids.some((id) => !this.#ranges.has(id) && !this.#indexPages.has(id))) {
+      throw new Error("Repair context has a missing, duplicated or foreign canonical range");
+    }
+  }
+  sourceSnapshots() { return new SpecGateRepairSourceSnapshots(this.#sources); }
+  indexManifest() { return this.#index; }
+  tableOfContents() {
+    return [...this.#ranges.values()].map((range) => {
+      const source = range.id.startsWith("evidence:") ? this.#sourcesById.get(range.value.snapshotId) : null;
+      return { ...range.descriptor(), contentOmitted: true,
+        ...(source ? { source: source.descriptor(), byteStart: range.value.byteStart, byteEnd: range.value.byteEnd,
+          sliceDigest: range.value.sliceDigest, bodyStatus: source.availability === "available" ? "available-not-selected" : source.availability } :
+          { bodyStatus: range.exists ? "available-not-selected" : "missing" }) };
+    });
+  }
+  unresolvedFindings() { return this.#findings.filter((finding) => finding.rangeIds.length === 0); }
+  resolveLocations({ baseRevision, locations }) {
+    if (baseRevision !== this.baseRevision) throw new Error("Stale repair location response");
+    const unresolved = new Map(this.unresolvedFindings().map((finding) => [finding.identity.toString(), finding]));
+    const resolved = new Map();
+    for (const location of locations) {
+      const key = identity(location.identity).toString();
+      if (!unresolved.has(key) || resolved.has(key)) throw new Error("Foreign or duplicate repair location identity");
+      this.#assertRanges(location.rangeIds);
+      if (location.rangeIds.some((id) => id.startsWith("evidence:") || id.startsWith("repair-index:"))) throw new Error("Read-only evidence is not a Spec finding location");
+      resolved.set(key, location.rangeIds);
+    }
+    if (resolved.size !== unresolved.size) throw new Error("Location response omitted a Gate finding");
+    return new SpecGateRepairContext({ spec: this.#spec, baseRevision, guardrails: this.#guardrails,
+      sources: this.#sources,
+      acknowledgedRationale: this.#rationale, findings: this.#findings.map((finding) => ({
+        ...finding.toJSON(), rangeIds: resolved.get(finding.identity.toString()) ?? finding.rangeIds,
+      })) });
+  }
+  units() {
+    if (this.unresolvedFindings().length) throw new Error("Spec Gate repair locations remain unresolved");
+    const groups = [];
+    for (const finding of this.#findings) {
+      const overlaps = (left, right) => left === right
+        || (this.#ranges.get(left).collectionAnchor && right.startsWith(`${left}[`))
+        || (this.#ranges.get(right).collectionAnchor && left.startsWith(`${right}[`));
+      const connected = groups.filter((group) => group.some((other) => other.rangeIds.some((id) => finding.rangeIds.some((otherId) => overlaps(id, otherId)))));
+      const merged = [finding, ...connected.flat()];
+      connected.forEach((group) => groups.splice(groups.indexOf(group), 1));
+      groups.push(merged);
+    }
+    return groups.map((group) => new SpecGateRepairUnit(group)).sort((a, b) => compareText(a.id, b.id));
+  }
+  select(unitId, { additionalRangeIds = [] } = {}) {
+    this.#assertRanges(additionalRangeIds);
+    const unit = this.units().find((entry) => entry.id === unitId);
+    if (!unit) throw new Error("Unknown Spec Gate repair unit");
+    const selected = new Set(unit.rangeIds);
+    // Only the target entities supply automatic structural context. Explicit reads do not start another closure.
+    const entities = new Set(unit.rangeIds.map((id) => this.#ranges.get(id).entity).filter(Boolean));
+    for (const range of this.#ranges.values()) if (range.exists && entities.has(range.entity)) selected.add(range.id);
+    for (const source of this.#sources) if (source.required) selected.add(source.id);
+    additionalRangeIds.forEach((id) => selected.add(id));
+    const guardrails = this.#guardrails.filter((rule) => unit.findings.some((finding) => finding.requirementRef === rule.id));
+    // Index descriptors are navigation, not evidence. Explicit file reads apply
+    // rules by origin; their contents never start another reference closure.
+    const references = { findings: unit.findings.map((finding) => finding.toJSON()),
+      guardrails, acknowledgedRationale: this.#rationale,
+      values: [...selected].flatMap((id) => {
+        const range = this.#ranges.get(id);
+        if (!range) return [];
+        if (!range.value?.snapshotId) return [range.value];
+        const source = this.#sourcesById.get(range.value.snapshotId);
+        return source.required && !source.isProjectRule ? [source.content] : [];
+      }) };
+    const origins = SpecGateRepairSource.referencedOrigins(references, this.#sources.map((source) => source.origin));
+    for (const id of selected) {
+      const value = this.#ranges.get(id)?.value;
+      if (value?.snapshotId) origins.add(value.origin);
+    }
+    const selectedOrigins = [...origins];
+    for (const source of this.#sources) {
+      if (source.isProjectRule && selectedOrigins.some((origin) => source.appliesToOrigin(origin))) selected.add(source.id);
+    }
+    for (const id of selected) {
+      const snapshotId = this.#ranges.get(id)?.value?.snapshotId;
+      if (snapshotId) this.#sourcesById.get(snapshotId).assertAvailable();
+    }
+    selected.add(this.#index.firstPageId);
+    // Registered fragments are disjoint; a full read subsumes every fragment from that snapshot.
+    for (const id of [...selected]) {
+      const range = this.#ranges.get(id);
+      if (range?.value?.snapshotId && [...selected].some((otherId) => {
+        const other = this.#ranges.get(otherId)?.value;
+        return otherId !== id && SpecGateRepairSourceRange.covers(other, range.value);
+      })) selected.delete(id);
+    }
+    const permissions = new Set(unit.findings.flatMap((finding) => finding.allowedTargets.map((permission) => targetKey(permission.target))));
+    return new SpecGateRepairSelection({ baseRevision: this.baseRevision, unit,
+      ranges: [...selected].sort().map((id) => {
+        const range = this.#ranges.get(id) ?? this.#indexPages.get(id);
+        return range.toJSON({ writable: unit.rangeIds.includes(id) && range.target !== null && permissions.has(targetKey(range.target)) });
+      }),
+      guardrails,
+      acknowledgedRationale: this.#rationale, indexManifest: this.#index });
+  }
+  #selectedUnits(unitIds) {
+    const units = this.units();
+    if (unitIds !== null && (!Array.isArray(unitIds) || new Set(unitIds).size !== unitIds.length
+      || unitIds.some((id) => !units.some((unit) => unit.id === id)))) throw new Error("Unknown or duplicate repair unit");
+    return units.filter((unit) => unitIds === null || unitIds.includes(unit.id));
+  }
+  /** Pack semantic units using immutable handoff references, never body fragments. */
+  referencePlan({ limit = new PromptRequestLimit(), additionalRanges = {}, unitIds = null } = {}) {
+    const units = this.#selectedUnits(unitIds);
+    const elements = units.map((unit, sequence) => new SpecGateRepairReference({ sequence,
+      selection: this.select(unit.id, { additionalRangeIds: additionalRanges[unit.id] ?? [] }) }));
+    const envelope = new SpecGateRepairEnvelope({ baseRevision: this.baseRevision, mode: "repair" });
+    const instructionPlan = planFor(elements, envelope, limit);
+    let count = instructionPlan.batches.length;
+    let groups;
+    // File groups only subdivide character-safe reference batches. Measure each
+    // complete union through the bundle contract: shared context costs bytes once.
+    do {
+      const expectedCount = count;
+      groups = [];
+      const bytesFor = (payloadElements) => Buffer.byteLength(workerArtifactStableStringify(this.referenceDocument({
+        index: groups.length, count: expectedCount, digest: "0".repeat(64), payloadElements,
+      })), "utf8");
+      for (const batch of instructionPlan.batches) {
+        let payload = [];
+        const flush = () => {
+          groups.push(new PromptBatchGroup({ id: `repair-file:${groups.length}`, payloadElements: payload }));
+          payload = [];
+        };
+        for (const element of batch.payloadElements) {
+          let bytes = bytesFor([...payload, element]);
+          if (payload.length && bytes > MAX_WORKER_ARTIFACT_INPUT_BYTES) {
+            flush();
+            bytes = bytesFor([element]);
+          }
+          if (bytes > MAX_WORKER_ARTIFACT_INPUT_BYTES) {
+            throw new WorkerArtifactHandoffError("invalid", "FLOW_SPEC_GATE_REPAIR_INPUT_TOO_LARGE",
+              "A complete Spec Gate repair unit exceeds its immutable input file limit",
+              { data: { failureKind: "step-admission", unitId: element.id,
+                actualBytes: bytes, maximumBytes: MAX_WORKER_ARTIFACT_INPUT_BYTES } });
+          }
+          payload.push(element);
+        }
+        flush();
+      }
+      count = groups.length;
+      if (count === expectedCount) break;
+    } while (true);
+    return PromptBatchPlan.create({ collection: instructionPlan.collection, envelope, limit,
+      topology: new GroupedPromptBatchTopology({ groups }) });
+  }
+
+  referenceDocument(batch) {
+    return { version: 2, stage: "spec-gate-repair", mode: "repair",
+      baseRevision: this.baseRevision, unitId: null,
+      batchIndex: batch.index, batchCount: batch.count, batchDigest: batch.digest,
+      bundle: SpecGateRepairBundle.fromSelections(batch.payloadElements.map((entry) => entry.selection)).toJSON(),
+      evidenceDigest: this.evidenceDigest };
+  }
+  locationPlan({ limit = new PromptRequestLimit() } = {}) {
+    const envelope = new SpecGateRepairEnvelope({ baseRevision: this.baseRevision, mode: "locate" });
+    const builder = new PromptInputBuilder({ envelope, limit });
+    let sequence = 0;
+    const groups = this.unresolvedFindings().map((finding) => {
+      const id = `location:${hash(finding.identity.toJSON())}`;
+      const context = new AtomicPromptElement({ id, sourceRevision: this.baseRevision,
+        sequence: sequence++, text: JSON.stringify(finding.toJSON()) });
+      builder.add(context);
+      const payloadElements = this.tableOfContents().filter((range) => !range.id.startsWith("evidence:")).map((range) => {
+        const element = new AtomicPromptElement({ id: `${id}:${range.id}`, sourceRevision: this.baseRevision,
+          sequence: sequence++, text: JSON.stringify(range) });
+        builder.add(element);
+        return element;
+      });
+      return new PromptBatchGroup({ id, contextElements: [context], payloadElements });
+    });
+    return PromptBatchPlan.create({ collection: builder.build(), envelope, limit,
+      topology: new GroupedPromptBatchTopology({ groups }) });
+  }
+  resolveLocationBatches({ plan, responses }) {
+    if (!(plan instanceof PromptBatchPlan) || !Array.isArray(responses)
+      || responses.length !== plan.batches.length) throw new Error("Location responses must cover every planned batch");
+    const expected = new Map(plan.batches.map((batch) => [batch.digest, batch]));
+    const merged = new Map();
+    for (const response of responses) {
+      const batch = expected.get(response.batchDigest);
+      if (!batch || response.baseRevision !== this.baseRevision) throw new Error("Stale, duplicate or foreign location batch");
+      expected.delete(response.batchDigest);
+      const finding = JSON.parse(batch.contextElements[0].toPromptText());
+      const allowed = new Set(batch.payloadElements.map((entry) => JSON.parse(entry.toPromptText()).id));
+      if (!Array.isArray(response.locations) || response.locations.length !== 1
+        || identity(response.locations[0].identity).toString() !== identity(finding.identity).toString()) {
+        throw new Error("Location batch omitted or changed its finding identity");
+      }
+      const location = response.locations[0];
+      this.#assertRanges(location.rangeIds);
+      if (location.rangeIds.some((id) => !allowed.has(id))) throw new Error("Location batch cited an unsearched range");
+      const key = identity(finding.identity).toString();
+      const accumulated = merged.get(key) ?? { identity: finding.identity, rangeIds: new Set() };
+      location.rangeIds.forEach((id) => accumulated.rangeIds.add(id));
+      merged.set(key, accumulated);
+    }
+    return this.resolveLocations({ baseRevision: this.baseRevision,
+      locations: [...merged.values()].map((entry) => ({ identity: entry.identity, rangeIds: [...entry.rangeIds] })) });
+  }
+}

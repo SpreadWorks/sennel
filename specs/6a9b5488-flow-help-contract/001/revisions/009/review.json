@@ -1,0 +1,479 @@
+{
+  "audit": [
+    {
+      "acceptedOperations": [],
+      "appliedFindings": [],
+      "discardedOperations": [],
+      "inputDigest": "faf9d87d98dc13954ecb8c913c69daa47f15b758e6f8acb9c0eca46627015241",
+      "operationDigest": "790e561a26120cd5aba8824e99283158498cb669998f0f509e9b6e3ad4013369",
+      "outcome": "replaced",
+      "relation": "revision-scoped-canonical-review",
+      "stage": "spec-review"
+    },
+    {
+      "acceptedOperations": [],
+      "appliedFindings": [],
+      "discardedOperations": [
+        {
+          "findingId": "spec-review-268ea71c02642daad5b276567ca8852b",
+          "reason": "invalid triage permission: spec-triage apply item spec-review-268ea71c02642daad5b276567ca8852b spec-triage apply item spec-review-268ea71c02642daad5b276567ca8852b.allowedTargets[3].target.field is invalid"
+        },
+        {
+          "findingId": "spec-review-26a31af04a8c49ff5e7b2fb6c236fc54",
+          "reason": "invalid triage permission: spec-triage apply item spec-review-26a31af04a8c49ff5e7b2fb6c236fc54 spec-triage apply item spec-review-26a31af04a8c49ff5e7b2fb6c236fc54.allowedTargets[2].target.field is invalid"
+        }
+      ],
+      "inputDigest": "6586044b46c5d5b228b5d35b8bc5391caa0de33aa3ebe71ee55bd84d1508040b",
+      "operationDigest": "688bce59a22089d78de53c101672f99584f606be639e94e0a90376593e0d48c7",
+      "outcome": "merged",
+      "relation": "revision-scoped-canonical-review",
+      "stage": "spec-triage"
+    },
+    {
+      "acceptedOperations": [
+        {
+          "edits": [
+            {
+              "endByte": 244,
+              "replacement": "66 leaves: resume 1, prepare 1, get 11, set 17, run 36, and report/show 1",
+              "startByte": 171
+            },
+            {
+              "endByte": 4396,
+              "replacement": "retro F=--dry-run/--expect-no-issue O=--agent-work-dir and applicable G, final-regression F=--record-and-proceed/--expect-no-issue O=--record-category/--record-evidence/--remaining-risk/--agent-work-dir and applicable G, and report F=--dry-run/--expect-no-issue O=--agent-work-dir and applicable G; report/show",
+              "startByte": 4308
+            },
+            {
+              "endByte": 4785,
+              "replacement": "The shared model owns syntax and help projection and delegates semantic validation to the named existing leaf or registry owner; it does not include query, a blanket validator, or an arbitrary tighter limit.\n\nNormative registry snapshot (66 non-query routed leaves; this exact set and each args projection are assertion inputs for T-1/T-9). Column P is registry positional order, R is the rest slot, F and O exclude guards, G is the accepted guard spelling; H is implicit -h/--help on every row. V means parseEntryInput for syntax then the named leaf command for semantic/domain validation; T is T-1 registry plus T-9 integration/E2E, with T-2 parser and T-5 guard assertions. A present non-guard option takes one required value unless the existing parser marks it optional; absence is ∅. Positional requiredness and state-dependent combinations stay with V; [runId] for get status is optional and set files rest has minimum 1. The row name is the exact registry path and determines V; no invented global semantic validator is implied.\n\n| Leaf | P | R | F | O | G | V/T |\n| --- | --- | --- | --- | --- | --- | --- |\n| resume | ∅ | ∅ | ∅ | --spec | --expect-no-issue | leaf / T-1,T-9 |\n| prepare | ∅ | ∅ | --no-branch,--worktree,--dry-run | --title,--base,--issue,--request,--run-id | --expect-no-issue | leaf / T-1,T-9 |\n| get status | runId | ∅ | --details | ∅ | --expect-no-issue | leaf / T-1,T-9 |\n| get resolve-context | ∅ | ∅ | ∅ | ∅ | --expect-no-issue | leaf / T-1,T-9 |\n| get check | target | ∅ | ∅ | ∅ | ∅ | leaf / T-1,T-9 |\n| get prompt | kind | ∅ | ∅ | ∅ | --expect-no-issue | leaf / T-1,T-9 |\n| get artifact | logicalKey | ∅ | ∅ | --mode,--spec-id,--version | --expect-no-issue | leaf / T-1,T-9 |\n| get qa-count | ∅ | ∅ | ∅ | ∅ | --expect-no-issue | leaf / T-1,T-9 |\n| get guardrail | phase | ∅ | ∅ | --format | ∅ | leaf / T-1,T-9 |\n| get issue | number | ∅ | ∅ | ∅ | ∅ | leaf / T-1,T-9 |\n| get next-action | ∅ | ∅ | ∅ | ∅ | --expect-no-issue | leaf / T-1,T-9 |\n| get context | path | ∅ | --raw | --search | --expect-no-issue | leaf / T-1,T-9 |\n| get runtime-log | ∅ | ∅ | ∅ | --format,--sequence,--run-id | --expect-no-issue | leaf / T-1,T-9 |\n| set step | id,status | ∅ | ∅ | ∅ | --expect-no-issue | leaf / T-1,T-9 |\n| set request | text | ∅ | ∅ | --run-id | --expect-no-issue | leaf / T-1,T-9 |\n| set issue | number | ∅ | ∅ | ∅ | --expect-no-issue | leaf / T-1,T-9 |\n| set note | text | ∅ | ∅ | --task-id,--run-id | --expect-no-issue | leaf / T-1,T-9 |\n| set draft-answer | questionId | ∅ | --drop | --question-revision,--answer,--why,--considered,--dropped-reason | --expect-no-issue | leaf / T-1,T-9 |\n| set files | reqId | paths | ∅ | ∅ | --expect-no-issue | leaf / T-1,T-9 |\n| set review-evidence | ∅ | ∅ | ∅ | --file | --expect-no-issue | leaf / T-1,T-9 |\n| set broad | action | ∅ | ∅ | --step,--reason | --expect-no-issue | leaf / T-1,T-9 |\n| set policy | value | ∅ | ∅ | --reason | --expect-no-issue | leaf / T-1,T-9 |\n| set nonblocking-decision | ∅ | ∅ | ∅ | --choice,--reason,--expect-evidence-digest,--remaining-risk | --expect-no-issue | leaf / T-1,T-9 |\n| set metric | phase,counter | ∅ | ∅ | --task-id | --expect-no-issue | leaf / T-1,T-9 |\n| set approval | ∅ | ∅ | --approved | --notes,--confirmed-at | --expect-no-issue | leaf / T-1,T-9 |\n| set issue-log | ∅ | ∅ | ∅ | --step,--reason,--trigger,--resolution,--guardrail-candidate,--normalized-finding-id,--repair-ref-commit,--repair-ref-file,--task-id | --expect-no-issue | leaf / T-1,T-9 |\n| set init | ∅ | ∅ | ∅ | --issue,--request | ∅ | leaf / T-1,T-9 |\n| set retry | action,kind,phase | ∅ | --yes | --reason | --expect-no-issue | leaf / T-1,T-9 |\n| set acceptance-decision | ∅ | ∅ | ∅ | --choice | --expect-no-issue | leaf / T-1,T-9 |\n| set auto | value | ∅ | ∅ | --run-id | --expect-no-issue | leaf / T-1,T-9 |\n| run seal-handoff | ∅ | ∅ | ∅ | --agent-work-dir | ∅ | leaf / T-1,T-9 |\n| run dispatch | ∅ | ∅ | ∅ | --approve,--agent-work-dir | --expect-no-issue | leaf / T-1,T-9 |\n| run recover-review-pass | ∅ | ∅ | ∅ | --agent-work-dir,--phase | --expect-no-issue | leaf / T-1,T-9 |\n| run gate | ∅ | ∅ | ∅ | --spec,--phase,--agent-work-dir | --expect-no-issue | leaf / T-1,T-9 |\n| run review | ∅ | ∅ | --dry-run,--skip-confirm | --phase,--agent-work-dir | --expect-no-issue | leaf / T-1,T-9 |\n| run auto-check | ∅ | ∅ | ∅ | --run-id,--agent-work-dir | --expect-no-issue | leaf / T-1,T-9 |\n| run finalize-commit | ∅ | ∅ | ∅ | --message,--agent-work-dir | --expect-no-issue | leaf / T-1,T-9 |\n| run finalize-merge | ∅ | ∅ | ∅ | --agent-work-dir | --expect-no-issue | leaf / T-1,T-9 |\n| run finalize-sync | ∅ | ∅ | ∅ | --agent-work-dir | --expect-no-issue | leaf / T-1,T-9 |\n| run finalize-cleanup | ∅ | ∅ | --auto-rescue,--force | --agent-work-dir | --expect-no-issue | leaf / T-1,T-9 |\n| run abort | ∅ | ∅ | --force | --agent-work-dir | --expect-no-issue | leaf / T-1,T-9 |\n| run sync | ∅ | ∅ | --dry-run | --agent-work-dir | --expect-no-issue | leaf / T-1,T-9 |\n| run reopen-draft | ∅ | ∅ | ∅ | --reason,--category,--agent-work-dir | --expect-no-issue | leaf / T-1,T-9 |\n| run repair-plan-gate | ∅ | ∅ | ∅ | --agent-work-dir | --expect-no-issue | leaf / T-1,T-9 |\n| run settle-failure | ∅ | ∅ | ∅ | --agent-work-dir | --expect-no-issue | leaf / T-1,T-9 |\n| run settle-review-transition | ∅ | ∅ | ∅ | --agent-work-dir | --expect-no-issue | leaf / T-1,T-9 |\n| run recover-missing-producer-artifact | ∅ | ∅ | ∅ | --agent-work-dir | --expect-no-issue | leaf / T-1,T-9 |\n| run recover-draft-execution | ∅ | ∅ | ∅ | --agent-work-dir | --expect-no-issue | leaf / T-1,T-9 |\n| run reconcile-task-review | ∅ | ∅ | --dry-run,--yes | --agent-work-dir,--expect-digest,--reason | --expect-no-issue | leaf / T-1,T-9 |\n| run filter-task-review | ∅ | ∅ | ∅ | --agent-work-dir,--exclusions,--expect-attempt-id,--expect-review-digest,--expect-source-fingerprint,--expect-catalog-fingerprint | --expect-no-issue | leaf / T-1,T-9 |\n| run recover-finalization | ∅ | ∅ | ∅ | --agent-work-dir | --expect-no-issue | leaf / T-1,T-9 |\n| run recover-task-execution-overrun | ∅ | ∅ | ∅ | --agent-work-dir | --expect-no-issue | leaf / T-1,T-9 |\n| run claim-next-action | ∅ | ∅ | ∅ | --agent-work-dir | --expect-no-issue | leaf / T-1,T-9 |\n| run settle-gate-transition | ∅ | ∅ | ∅ | --agent-work-dir | --expect-no-issue | leaf / T-1,T-9 |\n| run start-task | ∅ | ∅ | ∅ | --task-id,--agent-work-dir | --expect-no-issue | leaf / T-1,T-9 |\n| run complete-task | ∅ | ∅ | ∅ | --task-id,--agent-work-dir | --expect-no-issue | leaf / T-1,T-9 |\n| run update-overview | ∅ | ∅ | ∅ | --json,--agent-work-dir | --expect-no-issue | leaf / T-1,T-9 |\n| run lint | ∅ | ∅ | ∅ | --base,--agent-work-dir | --expect-no-issue | leaf / T-1,T-9 |\n| run test-execute | ∅ | ∅ | ∅ | --agent-work-dir | --expect-no-issue | leaf / T-1,T-9 |\n| run requirement-test-gate | ∅ | ∅ | ∅ | --agent-work-dir | --expect-no-issue | leaf / T-1,T-9 |\n| run test-result-review | ∅ | ∅ | ∅ | --agent-work-dir | --expect-no-issue | leaf / T-1,T-9 |\n| run retro | ∅ | ∅ | --dry-run | --agent-work-dir | --expect-no-issue | leaf / T-1,T-9 |\n| run final-regression | ∅ | ∅ | --record-and-proceed | --record-category,--record-evidence,--remaining-risk,--agent-work-dir | --expect-no-issue | leaf / T-1,T-9 |\n| run acceptance-review | ∅ | ∅ | ∅ | --agent-work-dir | --expect-no-issue | leaf / T-1,T-9 |\n| run report | ∅ | ∅ | --dry-run | --agent-work-dir | --expect-no-issue | leaf / T-1,T-9 |\n| report show | ∅ | ∅ | ∅ | ∅ | ∅ | leaf / T-1,T-9 |",
+              "startByte": 4578
+            }
+          ],
+          "expectedDigest": "da7caeafb1feec8bb19f87e05dbd39e9eaf4d239176dabf00c7471a20f3a145c",
+          "findingIds": [
+            "spec-review-b95c42d37a8069de859816ab6da095cf",
+            "spec-review-c1243733baca5080aae6e174f95c31c6"
+          ],
+          "kind": "edit-text-field",
+          "reason": "Correct the live leaf baseline and attach the exact non-query registry inventory.",
+          "target": {
+            "entity": "requirement",
+            "field": "desc",
+            "id": "R1"
+          }
+        },
+        {
+          "edits": [
+            {
+              "endByte": 318,
+              "replacement": "deterministic 66-row registry projection (run has 36 leaves, get 11, set 17, resume/prepare/report-show one each)",
+              "startByte": 278
+            }
+          ],
+          "expectedDigest": "b29f5017cf60cd03a88d146431764a8b4a24bfc123dc0e85de41c19f2299ea23",
+          "findingIds": [
+            "spec-review-c1243733baca5080aae6e174f95c31c6"
+          ],
+          "kind": "edit-text-field",
+          "reason": "Make the live count explicit in test ownership.",
+          "target": {
+            "entity": "task",
+            "field": "implementation_notes",
+            "id": "T-9"
+          }
+        },
+        {
+          "edits": [
+            {
+              "endByte": 824,
+              "replacement": "including same-named options with different contracts. For each of the 66 inventory rows, attach per-argument metadata from the leaf owner: requiredness, cardinality, type/domain, empty behavior, existing bound or explicit absence, conditional pairing, path kind/existence/absolute-relative/root, placeholder/description, semantic owner and test owner. Contract tests compare exact names, arity and count to the registry; undocumented metadata is an implementation gap, not a license to invent validation.",
+              "startByte": 770
+            }
+          ],
+          "expectedDigest": "8dfdf4410388fa5f87246d38c894519c7e547badeb633783ac711100b2248b08",
+          "findingIds": [
+            "spec-review-b95c42d37a8069de859816ab6da095cf"
+          ],
+          "kind": "edit-text-field",
+          "reason": "Require complete metadata for each registry-derived inventory row.",
+          "target": {
+            "entity": "task",
+            "field": "implementation_notes",
+            "id": "T-1"
+          }
+        },
+        {
+          "edits": [
+            {
+              "endByte": 385,
+              "replacement": "Ownership/mode matrix: registry args declare syntactic guards, but dispatcher guard selection is separate. get status declares guard syntax with targetGuard:false and uses positional runId explicit resolution; get artifact declares guard syntax with targetGuard:false and performs active-target validation in get-artifact, while a complete historical --spec-id/--version pair bypasses ambient active-flow inference and rejects active guards there. get check, get guardrail, get issue, set init, run seal-handoff and report show have no guard args; do not project target guards onto them. For entries with targetGuard enabled, dispatcher/buildFlowCommandHookContext owns selection and mismatch; for the two targetGuard:false exceptions the named command owns validation or retained behavior. Assert accepted active and rejected historical artifact cases separately. The input inventory records --expect-binding",
+              "startByte": 341
+            }
+          ],
+          "expectedDigest": "218a27a0ad33c37f725f8b65a5673c897856e4532b57c4062080eba89f895f83",
+          "findingIds": [
+            "spec-review-0c7a706eb7636d1f95954f9c4e5c9f1e"
+          ],
+          "kind": "edit-text-field",
+          "reason": "Preserve dispatcher versus command target-guard ownership and historical artifact mode.",
+          "target": {
+            "entity": "requirement",
+            "field": "desc",
+            "id": "R7"
+          }
+        },
+        {
+          "edits": [
+            {
+              "endByte": 1007,
+              "replacement": "run gate --spec is accepted only in the task-spec phase and denotes the exact existing Spec file path accepted by the gate owner; it is not silently normalized from a directory",
+              "startByte": 826
+            },
+            {
+              "endByte": 1199,
+              "replacement": "set review-evidence --file accepts an existing non-symlink regular JSON file, bounded by the existing review-evidence limit, resolved from the execution root by ReviewEvidenceInput.fromFile",
+              "startByte": 1009
+            },
+            {
+              "endByte": 1305,
+              "replacement": "get context path is an optional absolute or project-root-relative file path resolved by get-context.js; its existing file is read in file mode",
+              "startByte": 1201
+            },
+            {
+              "endByte": 1523,
+              "replacement": "delegates normalized non-empty repository-relative path mapping and active-attempt/requirement checks to CanonicalFileMapUpdate and FlowManager.updateFileMap; these owners impose no explicit set-files path-count or aggregate input-size bound",
+              "startByte": 1439
+            }
+          ],
+          "expectedDigest": "9892dfcb1f56b3994a893a9145db44ea022749ce79fd7e254ffe60ea6ef70ebf",
+          "findingIds": [
+            "spec-review-05cd0e623935f96dc0b6ad9bc5810758",
+            "spec-review-6cc796f8eff140060a342271a01dd629",
+            "spec-review-b762cf3314e7ca5314151ab77d1683c7",
+            "spec-review-ff4b72a37063f1191ada72aefe006397"
+          ],
+          "kind": "edit-text-field",
+          "reason": "Restore existing path, phase, and unbounded set-files contracts.",
+          "target": {
+            "entity": "requirement",
+            "field": "desc",
+            "id": "R8"
+          }
+        },
+        {
+          "edits": [
+            {
+              "endByte": 2064,
+              "replacement": "set-files count and aggregate input size (both have no explicit bound under CanonicalFileMapUpdate and FlowManager.updateFileMap)",
+              "startByte": 2028
+            }
+          ],
+          "expectedDigest": "a39c3200fd8eb6e7410d46d71a916cae7d10719a8f295d80eef748189f1a1257",
+          "findingIds": [
+            "spec-review-05cd0e623935f96dc0b6ad9bc5810758"
+          ],
+          "kind": "edit-text-field",
+          "reason": "State absence of set-files count and aggregate input bounds under the actual owners.",
+          "target": {
+            "entity": "requirement",
+            "field": "desc",
+            "id": "R2"
+          }
+        }
+      ],
+      "appliedFindings": [
+        "spec-review-05cd0e623935f96dc0b6ad9bc5810758",
+        "spec-review-0c7a706eb7636d1f95954f9c4e5c9f1e",
+        "spec-review-6cc796f8eff140060a342271a01dd629",
+        "spec-review-b762cf3314e7ca5314151ab77d1683c7",
+        "spec-review-b95c42d37a8069de859816ab6da095cf",
+        "spec-review-c1243733baca5080aae6e174f95c31c6",
+        "spec-review-ff4b72a37063f1191ada72aefe006397"
+      ],
+      "discardedOperations": [],
+      "inputDigest": "093a12fa550639818e8098d53cd99d281301b94251b2f3f8fdbb59271c9ada0e",
+      "operationDigest": "dd2a35a75d78b7e86ef45c484cf5612b27965f6ced87a351bba7dabe606eda2e",
+      "outcome": "merged",
+      "relation": "revision-scoped-canonical-review",
+      "stage": "spec-repair"
+    }
+  ],
+  "findings": [
+    {
+      "allowedTargets": [
+        {
+          "operationKinds": [
+            "edit-text-field"
+          ],
+          "target": {
+            "entity": "requirement",
+            "field": "desc",
+            "id": "R1"
+          }
+        },
+        {
+          "operationKinds": [
+            "edit-text-field"
+          ],
+          "target": {
+            "entity": "task",
+            "field": "implementation_notes",
+            "id": "T-9"
+          }
+        }
+      ],
+      "body": "**Target:** R1 normative leaf map; Acceptance Criteria baseline counts\n**Issue:** Current FLOW_COMMANDS contains 66 non-query leaves: resume 1, prepare 1, get 11, set 17, run 35, and report/show 1. The normative map omits run final-regression and run report, while the spec also claims both 65 and 66 rows.\n**Required change:** Reconcile the baseline to the current registry, include run final-regression and run report with their contracts, and use one consistent count everywhere.\n**Why blocking:** A registry-derived implementation or contract test will either omit live commands or assert conflicting membership/counts, leaving parser, help, lifecycle, and success-fixture coverage incomplete.",
+      "disposition": "apply",
+      "evidence": "R1 and three acceptance criteria state 65 non-query leaves and run 34, while the same Spec also requires 66 success rows and T-9 explicitly calls for a 66-row matrix including run report. The canonical review identifies the live registry count as 66 and run 35. Reconcile the inventory and all count assertions from the registry.",
+      "findingId": "spec-review-c1243733baca5080aae6e174f95c31c6",
+      "issue": "Current FLOW_COMMANDS contains 66 non-query leaves: resume 1, prepare 1, get 11, set 17, run 35, and report/show 1. The normative map omits run final-regression and run report, while the spec also claims both 65 and 66 rows.",
+      "kind": "blocking",
+      "requiredChange": "Reconcile the baseline to the current registry, include run final-regression and run report with their contracts, and use one consistent count everywhere.",
+      "target": "R1 normative leaf map; Acceptance Criteria baseline counts",
+      "title": "Registry baseline omits live routed leaves",
+      "whyBlocking": "A registry-derived implementation or contract test will either omit live commands or assert conflicting membership/counts, leaving parser, help, lifecycle, and success-fixture coverage incomplete."
+    },
+    {
+      "allowedTargets": [
+        {
+          "operationKinds": [
+            "edit-text-field"
+          ],
+          "target": {
+            "entity": "requirement",
+            "field": "desc",
+            "id": "R7"
+          }
+        },
+        {
+          "operationKinds": [
+            "edit-text-field"
+          ],
+          "target": {
+            "entity": "requirement",
+            "field": "desc",
+            "id": "R1"
+          }
+        },
+        {
+          "operationKinds": [
+            "edit-text-field"
+          ],
+          "target": {
+            "entity": "requirement",
+            "field": "desc",
+            "id": "R2"
+          }
+        }
+      ],
+      "body": "**Target:** R7 target matrix; R1/R2 artifact and status guard applicability\n**Issue:** get status and get artifact have targetGuard:false at the dispatcher registry boundary but perform command-owned guard checks. get artifact additionally bypasses ambient Flow resolution for explicit spec-id/version and rejects active guards on historical views.\n**Required change:** Add an explicit ownership/mode matrix for these entries, preserving dispatcher selection, command-level validation, and the historical artifact bypass/rejection behavior.\n**Why blocking:** Treating buildFlowCommandHookContext as the sole guard owner can remove positional-status validation or break historical artifact reads by resolving or applying active guards in the wrong phase.",
+      "disposition": "apply",
+      "evidence": "R7 assigns target checks to FlowTargetExpectation/buildFlowCommandHookContext generally, while R1 lists get status and get artifact among guarded inputs. The canonical review identifies targetGuard:false on both entries and command-owned checks, plus artifact historical-view bypass and active-guard rejection. The ownership/mode exception needs to be explicit.",
+      "findingId": "spec-review-0c7a706eb7636d1f95954f9c4e5c9f1e",
+      "issue": "get status and get artifact have targetGuard:false at the dispatcher registry boundary but perform command-owned guard checks. get artifact additionally bypasses ambient Flow resolution for explicit spec-id/version and rejects active guards on historical views.",
+      "kind": "blocking",
+      "requiredChange": "Add an explicit ownership/mode matrix for these entries, preserving dispatcher selection, command-level validation, and the historical artifact bypass/rejection behavior.",
+      "target": "R7 target matrix; R1/R2 artifact and status guard applicability",
+      "title": "Target-guard ownership exceptions are unspecified",
+      "whyBlocking": "Treating buildFlowCommandHookContext as the sole guard owner can remove positional-status validation or break historical artifact reads by resolving or applying active guards in the wrong phase."
+    },
+    {
+      "allowedTargets": [
+        {
+          "operationKinds": [
+            "edit-text-field"
+          ],
+          "target": {
+            "entity": "requirement",
+            "field": "desc",
+            "id": "R8"
+          }
+        }
+      ],
+      "body": "**Target:** R8 set review-evidence path row\n**Issue:** SetReviewEvidenceCommand passes executionRoot as specDir to ReviewEvidenceInput.fromFile. The existing owner therefore bounds evidence input to the execution checkout, while the spec requires it to be inside the active canonical spec directory.\n**Required change:** Change the requirement to the existing execution-root path contract and name ReviewEvidenceInput.fromFile as the owner, unless an intentional compatibility-changing relocation is in scope.\n**Why blocking:** In worktree execution, valid worker-produced evidence under the execution checkout would be rejected, so implementation and integration tests would disagree about accepted inputs.",
+      "disposition": "apply",
+      "evidence": "R8 says set review-evidence --file is inside the active spec directory. The canonical review identifies SetReviewEvidenceCommand passing executionRoot as specDir to ReviewEvidenceInput.fromFile, making the execution checkout the existing boundary. Correct the path root and owner.",
+      "findingId": "spec-review-b762cf3314e7ca5314151ab77d1683c7",
+      "issue": "SetReviewEvidenceCommand passes executionRoot as specDir to ReviewEvidenceInput.fromFile. The existing owner therefore bounds evidence input to the execution checkout, while the spec requires it to be inside the active canonical spec directory.",
+      "kind": "blocking",
+      "requiredChange": "Change the requirement to the existing execution-root path contract and name ReviewEvidenceInput.fromFile as the owner, unless an intentional compatibility-changing relocation is in scope.",
+      "target": "R8 set review-evidence path row",
+      "title": "Review-evidence path root contradicts existing behavior",
+      "whyBlocking": "In worktree execution, valid worker-produced evidence under the execution checkout would be rejected, so implementation and integration tests would disagree about accepted inputs."
+    },
+    {
+      "allowedTargets": [
+        {
+          "operationKinds": [
+            "edit-text-field"
+          ],
+          "target": {
+            "entity": "requirement",
+            "field": "desc",
+            "id": "R8"
+          }
+        },
+        {
+          "operationKinds": [
+            "edit-text-field"
+          ],
+          "target": {
+            "entity": "requirement",
+            "field": "desc",
+            "id": "R2"
+          }
+        }
+      ],
+      "body": "**Target:** R8 get context path row; R2 path inventory\n**Issue:** get-context.js resolves the supplied path with path.resolve(root, filePath) and does not reject absolute paths or enforce a project-relative boundary. The spec describes the path as project-root-relative without recording the current absolute-path acceptance.\n**Required change:** Record that both absolute and root-relative paths are currently accepted, with get-context.js owning resolution and file errors, or explicitly scope a path-boundary behavior change.\n**Why blocking:** Tests cannot determine whether an absolute existing path should succeed or fail; enforcing the stated relative-only wording would change existing command behavior.",
+      "disposition": "apply",
+      "evidence": "R8 calls get context path project-root-relative, but the canonical review identifies get-context.js path.resolve(root, filePath) without an absolute-path rejection. Record accepted absolute and relative forms and the existing resolution/error owner.",
+      "findingId": "spec-review-6cc796f8eff140060a342271a01dd629",
+      "issue": "get-context.js resolves the supplied path with path.resolve(root, filePath) and does not reject absolute paths or enforce a project-relative boundary. The spec describes the path as project-root-relative without recording the current absolute-path acceptance.",
+      "kind": "blocking",
+      "requiredChange": "Record that both absolute and root-relative paths are currently accepted, with get-context.js owning resolution and file errors, or explicitly scope a path-boundary behavior change.",
+      "target": "R8 get context path row; R2 path inventory",
+      "title": "get context path support contradicts existing behavior",
+      "whyBlocking": "Tests cannot determine whether an absolute existing path should succeed or fail; enforcing the stated relative-only wording would change existing command behavior."
+    },
+    {
+      "allowedTargets": [
+        {
+          "operationKinds": [
+            "edit-text-field"
+          ],
+          "target": {
+            "entity": "requirement",
+            "field": "desc",
+            "id": "R8"
+          }
+        },
+        {
+          "operationKinds": [
+            "edit-text-field"
+          ],
+          "target": {
+            "entity": "requirement",
+            "field": "desc",
+            "id": "R2"
+          }
+        }
+      ],
+      "body": "**Target:** R2/R8 run gate --spec contract\n**Issue:** RunGateCommand consumes ctx.spec only in the task-spec branch. For canonical draft/spec phases it reads the Flow-owned Spec record and ignores --spec; in task-spec it reads the exact resolved path and does not normalize a directory to spec.json.\n**Required change:** State the task-spec-only combination and current exact-file behavior, or explicitly define directory normalization and phase behavior as an intentional scope change.\n**Why blocking:** A test using a directory, or --spec during another gate phase, has no deterministic expected result and a generic path validator could alter target selection and gate behavior.",
+      "disposition": "apply",
+      "evidence": "R8 says run gate --spec accepts a Spec directory or spec.json path. The canonical review identifies task-spec-only consumption of ctx.spec as an exact file path and canonical draft/spec phases using the Flow-owned Spec record. Record that phase-dependent behavior instead of introducing directory normalization.",
+      "findingId": "spec-review-ff4b72a37063f1191ada72aefe006397",
+      "issue": "RunGateCommand consumes ctx.spec only in the task-spec branch. For canonical draft/spec phases it reads the Flow-owned Spec record and ignores --spec; in task-spec it reads the exact resolved path and does not normalize a directory to spec.json.",
+      "kind": "blocking",
+      "requiredChange": "State the task-spec-only combination and current exact-file behavior, or explicitly define directory normalization and phase behavior as an intentional scope change.",
+      "target": "R2/R8 run gate --spec contract",
+      "title": "run gate --spec lacks its existing phase and file semantics",
+      "whyBlocking": "A test using a directory, or --spec during another gate phase, has no deterministic expected result and a generic path validator could alter target selection and gate behavior."
+    },
+    {
+      "body": "**Target:** R9/T7 lifecycle acceptance\n**Issue:** dispatcher.js has distinct paths for thrown command errors, returned Envelope failures, post-hook failures, and entry.nonblockingPost. nonblockingPost is used by gate, review, retro, final-regression, and acceptance-review to record durable evidence, and its invocation is conditional on outbox state.\n**Required change:** Extend the lifecycle contract and tests to cover nonblockingPost ordering/skip conditions, Envelope-failure versus thrown-error handling, and existing failure ownership alongside pre/post/onError.\n**Why blocking:** A parser or registry refactor could preserve exit codes while dropping durable review evidence or changing hook invocation and Flow-state mutation, which the current acceptance criteria would not detect.",
+      "findingId": "spec-review-268ea71c02642daad5b276567ca8852b",
+      "issue": "dispatcher.js has distinct paths for thrown command errors, returned Envelope failures, post-hook failures, and entry.nonblockingPost. nonblockingPost is used by gate, review, retro, final-regression, and acceptance-review to record durable evidence, and its invocation is conditional on outbox state.",
+      "kind": "blocking",
+      "requiredChange": "Extend the lifecycle contract and tests to cover nonblockingPost ordering/skip conditions, Envelope-failure versus thrown-error handling, and existing failure ownership alongside pre/post/onError.",
+      "target": "R9/T7 lifecycle acceptance",
+      "title": "Lifecycle parity omits durable nonblockingPost and failure branches",
+      "whyBlocking": "A parser or registry refactor could preserve exit codes while dropping durable review evidence or changing hook invocation and Flow-state mutation, which the current acceptance criteria would not detect."
+    },
+    {
+      "body": "**Target:** T2/T9 dispatcher integration boundary\n**Issue:** parseEntryInput is shared by flow, docs, check, metrics, and spec commands; non-flow entries also rely on passthroughArgs, optionalOptions, and _rawArgs. The scope and tests define only flow coverage while proposing changes to the shared dispatcher.\n**Required change:** Specify that the typed projection is flow-entry-only and require preservation tests for non-flow CommandDefinition entries, passthrough parsing, optional options, and raw argv forwarding.\n**Why blocking:** A global parser change can break existing non-flow commands without any flow matrix failure, violating the existing CLI compatibility contract.",
+      "findingId": "spec-review-26a31af04a8c49ff5e7b2fb6c236fc54",
+      "issue": "parseEntryInput is shared by flow, docs, check, metrics, and spec commands; non-flow entries also rely on passthroughArgs, optionalOptions, and _rawArgs. The scope and tests define only flow coverage while proposing changes to the shared dispatcher.",
+      "kind": "blocking",
+      "requiredChange": "Specify that the typed projection is flow-entry-only and require preservation tests for non-flow CommandDefinition entries, passthrough parsing, optional options, and raw argv forwarding.",
+      "target": "T2/T9 dispatcher integration boundary",
+      "title": "The shared dispatcher boundary does not cover non-flow consumers",
+      "whyBlocking": "A global parser change can break existing non-flow commands without any flow matrix failure, violating the existing CLI compatibility contract."
+    },
+    {
+      "allowedTargets": [
+        {
+          "operationKinds": [
+            "edit-text-field"
+          ],
+          "target": {
+            "entity": "requirement",
+            "field": "desc",
+            "id": "R1"
+          }
+        },
+        {
+          "operationKinds": [
+            "edit-text-field"
+          ],
+          "target": {
+            "entity": "requirement",
+            "field": "desc",
+            "id": "R2"
+          }
+        },
+        {
+          "operationKinds": [
+            "edit-text-field"
+          ],
+          "target": {
+            "entity": "task",
+            "field": "implementation_notes",
+            "id": "T-1"
+          }
+        }
+      ],
+      "body": "**Target:** R1/R2 normative inventory; first Acceptance Criterion\n**Issue:** The spec requires a concrete one-row-per-leaf table but provides only grouped prose and partial option lists. FLOW_COMMANDS.args contains option names without descriptions or placeholders, and several live help strings omit an Options section entirely.\n**Required change:** Add a concrete registry-derived 66-row inventory, excluding query, with the required arity, domain, conditional, path, owner, description, and test-boundary fields for every current leaf.\n**Why blocking:** Implementers and tests must otherwise invent descriptions, placeholders, conditional acceptance, and semantic owners for same-named options, so parser/help parity and deterministic failure fixtures cannot be established.",
+      "disposition": "apply",
+      "evidence": "R1 and R2 demand a concrete one-row-per-leaf inventory, but their current text contains grouped prose and no table; the canonical review identifies missing descriptions/placeholders in live args/help and a 66-leaf registry. This is a substantive missing artifact, so permit local text additions in the inventory-owning requirement/task fields.",
+      "findingId": "spec-review-b95c42d37a8069de859816ab6da095cf",
+      "issue": "The spec requires a concrete one-row-per-leaf table but provides only grouped prose and partial option lists. FLOW_COMMANDS.args contains option names without descriptions or placeholders, and several live help strings omit an Options section entirely.",
+      "kind": "blocking",
+      "requiredChange": "Add a concrete registry-derived 66-row inventory, excluding query, with the required arity, domain, conditional, path, owner, description, and test-boundary fields for every current leaf.",
+      "target": "R1/R2 normative inventory; first Acceptance Criterion",
+      "title": "The normative per-leaf contract table is absent",
+      "whyBlocking": "Implementers and tests must otherwise invent descriptions, placeholders, conditional acceptance, and semantic owners for same-named options, so parser/help parity and deterministic failure fixtures cannot be established."
+    },
+    {
+      "allowedTargets": [
+        {
+          "operationKinds": [
+            "edit-text-field"
+          ],
+          "target": {
+            "entity": "requirement",
+            "field": "desc",
+            "id": "R2"
+          }
+        },
+        {
+          "operationKinds": [
+            "edit-text-field"
+          ],
+          "target": {
+            "entity": "requirement",
+            "field": "desc",
+            "id": "R8"
+          }
+        }
+      ],
+      "body": "**Target:** R2/R8 set files limits\n**Issue:** CanonicalFileMapUpdate and FlowManager.updateFileMap enforce normalized non-empty repository-relative paths and active-attempt/requirement checks, but no explicit set-files count or aggregate-size limit is present. The query and snapshot limits are separate read-side contracts.\n**Required change:** Record set-files count and aggregate input limits as explicitly unbounded under the existing file-map/publication owners, or identify a verified existing limit and owner.\n**Why blocking:** Adding the claimed limits would introduce an arbitrary compatibility restriction; omitting them leaves over-limit behavior and its tests undefined.",
+      "disposition": "apply",
+      "evidence": "R2 asks for set-files count and aggregate limits and R8 delegates count/aggregate rules to FlowManager.updateFileMap. The canonical review identifies no explicit bound in CanonicalFileMapUpdate or FlowManager.updateFileMap; record explicit absence and those existing owners without importing query/read-side limits.",
+      "findingId": "spec-review-05cd0e623935f96dc0b6ad9bc5810758",
+      "issue": "CanonicalFileMapUpdate and FlowManager.updateFileMap enforce normalized non-empty repository-relative paths and active-attempt/requirement checks, but no explicit set-files count or aggregate-size limit is present. The query and snapshot limits are separate read-side contracts.",
+      "kind": "blocking",
+      "requiredChange": "Record set-files count and aggregate input limits as explicitly unbounded under the existing file-map/publication owners, or identify a verified existing limit and owner.",
+      "target": "R2/R8 set files limits",
+      "title": "set-files limits are attributed to an owner that has none",
+      "whyBlocking": "Adding the claimed limits would introduce an arbitrary compatibility restriction; omitting them leaves over-limit behavior and its tests undefined."
+    }
+  ],
+  "generation": 3,
+  "identity": {
+    "byteLength": 64130,
+    "digest": "76cb3d9d0e5c737a75960884ace2586bfd900f512efddeeb4b843e0bd9dcec5d",
+    "revision": 9,
+    "specId": "6a9b5488-flow-help-contract"
+  },
+  "version": 2
+}

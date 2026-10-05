@@ -1,0 +1,24 @@
+{
+  "version": 1,
+  "phase": "draft-questions",
+  "taskId": null,
+  "treeSha": "622711f1b2ceb421708a433ebf9a5f8ed0863910",
+  "targetStateDigest": "23709a7bd38e79d8918f5b4e52d23f9faccbc9856e9a9ec8d287b7eaf934d2b1",
+  "provenance": {
+    "provider": "sennel-review",
+    "invocationId": "b02f52014b201efc4b706f26feec3036e10989c4a73ba344658bf9d6e9fc1d4f",
+    "capturedAt": "2026-10-04T07:14:16.496Z"
+  },
+  "disposition": "ADVISORY",
+  "blockingFindings": [],
+  "advisoryFindings": [
+    {
+      "findingId": "draft-questions-advisory-001",
+      "summary": "1. Remove embedded instruction from q1",
+      "fingerprint": "13670ce300037fdba197e7c5671d8b0ef309c84e9031219d69df3f396411159b",
+      "evidenceRefs": [
+        "draft-review-questions.json#draft-questions-advisory-001"
+      ]
+    }
+  ]
+}

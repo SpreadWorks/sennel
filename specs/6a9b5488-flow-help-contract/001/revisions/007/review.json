@@ -1,0 +1,486 @@
+{
+  "audit": [
+    {
+      "acceptedOperations": [],
+      "appliedFindings": [],
+      "discardedOperations": [],
+      "inputDigest": "1a446c41a57e82822244126b0e8358b954a73c0ff6ac30e6247f5de5e6ccd099",
+      "operationDigest": "790e561a26120cd5aba8824e99283158498cb669998f0f509e9b6e3ad4013369",
+      "outcome": "replaced",
+      "relation": "revision-scoped-canonical-review",
+      "stage": "spec-review"
+    },
+    {
+      "acceptedOperations": [],
+      "appliedFindings": [],
+      "discardedOperations": [],
+      "inputDigest": "e5419dc2c5725024418552c3d5d96f633679cca8101ec38ed5d4e70d29c37530",
+      "operationDigest": "790e561a26120cd5aba8824e99283158498cb669998f0f509e9b6e3ad4013369",
+      "outcome": "merged",
+      "relation": "revision-scoped-canonical-review",
+      "stage": "spec-triage"
+    },
+    {
+      "acceptedOperations": [
+        {
+          "edits": [
+            {
+              "endByte": 1278,
+              "replacement": " Concrete inventory and matrix scope: query is excluded and the non-query routed set is exactly 66 leaves = resume(1), prepare(1), get(11), set(17), run(35, including run report), and report/show(1). Each FLOW_COMMANDS leaf has one inventory row with P (positional), R (rest), F (flag), O (value option), G (shared target guard), V (existing validator owner), and T (owning test boundary): resume(P=none,F=--expect-no-issue,O=--spec,G); prepare(P=none,F=--no-branch/--worktree/--dry-run/--expect-no-issue,O=--title/--base/--issue/--request/--run-id,G); get/status(P=runId,F=--details,G), resolve-context(G), check(P=target), prompt(P=kind,G), artifact(P=logicalKey,G,O=--mode/--spec-id/--version), qa-count(G), guardrail(P=phase,O=--format), issue(P=number), next-action(G), context(P=path,F=--raw,G,O=--search), runtime-log(F=--expect-no-issue,G,O=--format/--sequence/--run-id); set/step(P=id,status,G), request(P=text,G,O=--run-id), issue(P=number,G), note(P=text,G,O=--task-id/--run-id), draft-answer(P=questionId,F=--drop,G,O=--question-revision/--answer/--why/--considered/--dropped-reason), files(P=reqId,R=paths,G), review-evidence(G,O=--file), broad(P=action,G,O=--step/--reason), policy(P=value,G,O=--reason), nonblocking-decision(G,O=--choice/--reason/--expect-evidence-digest/--remaining-risk), metric(P=phase,counter,G,O=--task-id), approval(F=--approved,G,O=--notes/--confirmed-at), issue-log(G,O=--step/--reason/--trigger/--resolution/--guardrail-candidate/--normalized-finding-id/--repair-ref-commit/--repair-ref-file/--task-id), init(O=--issue/--request), retry(P=action,kind,phase,F=--yes,G,O=--reason), acceptance-decision(G,O=--choice), auto(P=value,G,O=--run-id); run/seal-handoff(O=--agent-work-dir), dispatch(G,O=--approve/--agent-work-dir), recover-review-pass(G,O=--agent-work-dir/--phase), gate(O=--spec/--phase/--agent-work-dir,G), review(F=--dry-run/--skip-confirm,G,O=--phase/--agent-work-dir), auto-check(G,O=--run-id/--agent-work-dir), finalize-commit(G,O=--message/--agent-work-dir), finalize-merge/finalize-sync/finalize-cleanup/abort/sync/recover-finalization/recover-task-execution-overrun/claim-next-action/settle-gate-transition/test-execute/requirement-test-gate/test-result-review/acceptance-review(G,O=--agent-work-dir), reopen-draft(G,O=--reason/--category/--agent-work-dir), repair-plan-gate/settle-failure/settle-review-transition/recover-missing-producer-artifact/recover-draft-execution(G,O=--agent-work-dir), reconcile-task-review(G,F=--dry-run/--yes,O=--expect-digest/--reason/--agent-work-dir), filter-task-review(G,O=--exclusions/--expect-attempt-id/--expect-review-digest/--expect-source-fingerprint/--expect-catalog-fingerprint/--agent-work-dir), start-task/complete-task(G,O=--task-id/--agent-work-dir), update-overview(G,O=--json/--agent-work-dir), lint(G,O=--base/--agent-work-dir), retro(G,F=--dry-run,O=--agent-work-dir), final-regression(G,F=--record-and-proceed,O=--record-category/--record-evidence/--remaining-risk/--agent-work-dir), report(G,F=--dry-run,O=--agent-work-dir); report/show(F=none). Every row includes implicit -h/--help. G expands to the five target guard options owned by FlowTargetExpectation/flow-target-guard; syntax is owned by dispatcher.parseEntryInput, semantic V is the existing leaf command/registry validator, and T is the corresponding registry/integration/E2E boundary.",
+              "startByte": 1278
+            }
+          ],
+          "expectedDigest": "a40ce9744e6033898076a687a69e8c15f9c5d4fd0a58da60706281ec80cf5d6c",
+          "findingIds": [
+            "spec-review-45518eabd3f5971d4d283ddf93be29f8",
+            "spec-review-9c3317612d042cdee290f7d8d226ece6"
+          ],
+          "kind": "edit-text-field",
+          "reason": "Registry-derived inventory and the complete non-query leaf count must be explicit.",
+          "target": {
+            "entity": "requirement",
+            "field": "desc",
+            "id": "R1"
+          }
+        },
+        {
+          "edits": [
+            {
+              "endByte": 1751,
+              "replacement": " The inventory is concrete and leaf-specific: resume --spec is a FlowSpecId, while run gate --spec is a filesystem path; prepare --base and run lint --base are Git branch values; prepare --run-id is an optional preparing-flow RUNID, while runtime-log --run-id is paired with its sequence contract; --file, context path, set-files rest paths, gate spec, and repair-ref-file are path values whose file/directory, existence, absolute/relative, and resolution-root owners remain their existing command modules. --format, --mode, --phase, --sequence, --category, --record-category, --step, --task-id, --normalized-finding-id, --repair-ref-commit, --expect-attempt-id, --approve, and --choice retain their existing domain owners. Every row records required/optional cardinality, empty behavior, existing size limit or its absence, conditional combinations, and the parser, target, command, and test owner; no shared validator or tighter limit is introduced.",
+              "startByte": 1751
+            }
+          ],
+          "expectedDigest": "42d79d08524a58883d45ab07a82ab07b4e9eb55fcc9d2039312ed1f3ff85dbbc",
+          "findingIds": [
+            "spec-review-45518eabd3f5971d4d283ddf93be29f8",
+            "spec-review-9c3317612d042cdee290f7d8d226ece6"
+          ],
+          "kind": "edit-text-field",
+          "reason": "The inventory must preserve leaf-specific semantic owners and distinguish same-named inputs.",
+          "target": {
+            "entity": "requirement",
+            "field": "desc",
+            "id": "R2"
+          }
+        },
+        {
+          "edits": [
+            {
+              "endByte": 261,
+              "replacement": " The matrix is a deterministic 66-row registry projection, not a representative sample: it includes run report, recover-draft-execution, filter-task-review, and every other non-query leaf. Each row fixes argv, required Flow state, immutable input setup, agent boundary or stub, expected success condition, handler/hook assertion, and mutation/evidence assertion; unsafe state transitions use an isolated legal fixture and agent actions use the existing test boundary. Query remains a separate bootstrap suite.",
+              "startByte": 261
+            }
+          ],
+          "expectedDigest": "ead28824fe16e5cc44f09f4b4bbcf1826bbd6f64239a0b7bba19b599c09ac47e",
+          "findingIds": [
+            "spec-review-9c3317612d042cdee290f7d8d226ece6",
+            "spec-review-d0d7f19a7c48282f3c3701fb3ae7afa5"
+          ],
+          "kind": "edit-text-field",
+          "reason": "The registry-derived matrix must include every non-query leaf with a legal deterministic fixture.",
+          "target": {
+            "entity": "task",
+            "field": "implementation_notes",
+            "id": "T-9"
+          }
+        },
+        {
+          "edits": [
+            {
+              "endByte": 978,
+              "replacement": " The compatibility correction is explicit: --agent-work-dir=<path> must be normalized by the same pre-init scan as the separated --agent-work-dir <path> form, so both forms reach the existing resolver with the same value; preserving the resolver does not preserve the current equals-form pre-scan defect.",
+              "startByte": 978
+            }
+          ],
+          "expectedDigest": "22cf8edd9c52c2f67e2994940a765e6367415713235af12340b2e2685341dcea",
+          "findingIds": [
+            "spec-review-b13ec7eb78dc581d53c5b4614df861b8"
+          ],
+          "kind": "edit-text-field",
+          "reason": "The equals-form pre-init parity correction is part of the intended compatibility contract.",
+          "target": {
+            "entity": "requirement",
+            "field": "desc",
+            "id": "R4"
+          }
+        },
+        {
+          "edits": [
+            {
+              "endByte": 814,
+              "replacement": " The pre-init scan is required to normalize both separated and equals forms before initContainer(), correcting their current divergence while preserving the existing resolver, precedence, log fallback, and cleanup owners.",
+              "startByte": 814
+            }
+          ],
+          "expectedDigest": "739aa545828ce730aef8bdfe20aa4ada583af9c242089c5543adbe423b194db3",
+          "findingIds": [
+            "spec-review-b13ec7eb78dc581d53c5b4614df861b8"
+          ],
+          "kind": "edit-text-field",
+          "reason": "Runtime path acceptance must test the normalized equals and separated forms explicitly.",
+          "target": {
+            "entity": "requirement",
+            "field": "desc",
+            "id": "R8"
+          }
+        },
+        {
+          "edits": [
+            {
+              "endByte": 598,
+              "replacement": " The same registry projection publishes the per-leaf P/R/F/O inventory and names the existing parser, target, semantic validator, path owner, and test owner for every row, including same-named options with different contracts.",
+              "startByte": 598
+            }
+          ],
+          "expectedDigest": "3ad0e1e2f6eaeab63dd557e29766814ecb4539883a79c3b0255be60ce95d23c0",
+          "findingIds": [
+            "spec-review-45518eabd3f5971d4d283ddf93be29f8"
+          ],
+          "kind": "edit-text-field",
+          "reason": "The shared model needs an explicit registry-derived inventory projection without owning semantic validation.",
+          "target": {
+            "entity": "task",
+            "field": "implementation_notes",
+            "id": "T-1"
+          }
+        },
+        {
+          "edits": [
+            {
+              "endByte": 438,
+              "replacement": " Contract tests consume the concrete inventory row for each leaf, including positional/rest cardinality, value kind, domain, path owner, conditional combination, and the existing diagnostic owner, then verify delegation rather than duplicating the rule.",
+              "startByte": 438
+            }
+          ],
+          "expectedDigest": "2d4036a2f4add43815b57c74c98a7766f28225cda67d82f52d4f18b9338909fa",
+          "findingIds": [
+            "spec-review-45518eabd3f5971d4d283ddf93be29f8"
+          ],
+          "kind": "edit-text-field",
+          "reason": "Parser delegation must be checked against the concrete per-leaf inventory.",
+          "target": {
+            "entity": "task",
+            "field": "implementation_notes",
+            "id": "T-2"
+          }
+        },
+        {
+          "edits": [
+            {
+              "endByte": 328,
+              "replacement": " Construct the synthetic 64/65-character and other boundary names through the shared CommandDefinition/help renderer test seam, not through production FLOW_COMMANDS entries.",
+              "startByte": 328
+            }
+          ],
+          "expectedDigest": "ff5da576cc101c2f50a543ba2719056cf539cce90fc6131e90c7837af2e234c8",
+          "findingIds": [
+            "spec-review-50c84f093e4a04eef5cad340df7c1709"
+          ],
+          "kind": "edit-text-field",
+          "reason": "Boundary names are renderer fixtures and must not become production registry entries or limits.",
+          "target": {
+            "entity": "requirement",
+            "field": "desc",
+            "id": "R6"
+          }
+        },
+        {
+          "edits": [
+            {
+              "endByte": 440,
+              "replacement": " Synthetic 64/65-character and other boundary names are constructed through the shared CommandDefinition/help renderer test seam, so production FLOW_COMMANDS and command-name limits remain unchanged.",
+              "startByte": 440
+            }
+          ],
+          "expectedDigest": "c19c02d75525e947579b140d3ce5f8e82ade97e1e8a4283eb79fb8b7c1432b75",
+          "findingIds": [
+            "spec-review-50c84f093e4a04eef5cad340df7c1709"
+          ],
+          "kind": "edit-text-field",
+          "reason": "Synthetic renderer boundary fixtures must use the shared test seam.",
+          "target": {
+            "entity": "task",
+            "field": "implementation_notes",
+            "id": "T-4"
+          }
+        },
+        {
+          "expectedDigest": null,
+          "findingIds": [
+            "spec-review-9c3317612d042cdee290f7d8d226ece6"
+          ],
+          "kind": "add-array-element",
+          "reason": "Reconcile the acceptance count with every current non-query FLOW_COMMANDS leaf.",
+          "replacement": "The registry-derived shared routed matrix has exactly 66 non-query rows: resume 1, prepare 1, get 11, set 17, run 35 including run report, and report/show 1; query is excluded from this matrix and tested separately through bootstrapFlowQueryCli.",
+          "target": {
+            "collection": "acceptance_criteria"
+          }
+        },
+        {
+          "expectedDigest": null,
+          "findingIds": [
+            "spec-review-45518eabd3f5971d4d283ddf93be29f8"
+          ],
+          "kind": "add-array-element",
+          "reason": "Make the required inventory and validator ownership observable and testable.",
+          "replacement": "The per-leaf input inventory is checked from the registry projection with one deterministic row for every current non-query leaf; each row records positional/rest cardinality, flag and option kind, placeholder/alias, domain and format, empty and size behavior, conditional combinations, path owner, parser/target/command validator owner, and test owner, including the distinct contracts for same-named inputs.",
+          "target": {
+            "collection": "acceptance_criteria"
+          }
+        },
+        {
+          "expectedDigest": null,
+          "findingIds": [
+            "spec-review-d0d7f19a7c48282f3c3701fb3ae7afa5"
+          ],
+          "kind": "add-array-element",
+          "reason": "Provide a legal, deterministic success basis for universal leaf coverage.",
+          "replacement": "For every one of the 66 non-query registry rows, the owning suite supplies a deterministic legal success fixture with required Flow state, immutable inputs, agent boundary, expected success condition, handler/hook lifecycle assertion, and mutation/evidence assertion; mutating and AI-driven commands use isolated legal fixtures rather than ad hoc production state.",
+          "target": {
+            "collection": "acceptance_criteria"
+          }
+        }
+      ],
+      "appliedFindings": [
+        "spec-review-45518eabd3f5971d4d283ddf93be29f8",
+        "spec-review-50c84f093e4a04eef5cad340df7c1709",
+        "spec-review-9c3317612d042cdee290f7d8d226ece6",
+        "spec-review-b13ec7eb78dc581d53c5b4614df861b8",
+        "spec-review-d0d7f19a7c48282f3c3701fb3ae7afa5"
+      ],
+      "discardedOperations": [],
+      "inputDigest": "099b07c544f3b527a4c5fd35d5a424f8a65384e278ec3501d1851299cb803aee",
+      "operationDigest": "bdbd49b23cbee97754f4990f108ff7cc843344f2f0f106168fdf256114bbb229",
+      "outcome": "merged",
+      "relation": "revision-scoped-canonical-review",
+      "stage": "spec-repair"
+    }
+  ],
+  "findings": [
+    {
+      "allowedTargets": [
+        {
+          "operationKinds": [
+            "add-array-element",
+            "replace-array-element"
+          ],
+          "target": {
+            "collection": "acceptance_criteria"
+          }
+        },
+        {
+          "operationKinds": [
+            "edit-text-field"
+          ],
+          "target": {
+            "entity": "requirement",
+            "field": "desc",
+            "id": "R1"
+          }
+        },
+        {
+          "operationKinds": [
+            "edit-text-field"
+          ],
+          "target": {
+            "entity": "requirement",
+            "field": "desc",
+            "id": "R2"
+          }
+        },
+        {
+          "operationKinds": [
+            "edit-text-field"
+          ],
+          "target": {
+            "entity": "task",
+            "field": "implementation_notes",
+            "id": "T-9"
+          }
+        }
+      ],
+      "body": "**Target:** Acceptance Criteria; R1/R2; T-9\n**Issue:** FLOW_COMMANDS currently contains 35 run leaves, including flow run report, plus report show. The non-query routed set is therefore 66 leaves, not the specified 65.\n**Required change:** Update the leaf counts and matrix to include flow run report, or explicitly exclude it with an equivalent lifecycle-preservation acceptance.\n**Why blocking:** The required registry and behavior matrices can omit flow run report, whose registry entry has pre/post/onError hooks, leaving existing behavior untested and the implementation target undefined.",
+      "disposition": "apply",
+      "evidence": "The immutable Spec's acceptance criteria still describe a 65-leaf shared set while the review identifies flow run report as an additional non-query leaf. R1/R2 and T-9 need the count and deterministic matrix ownership reconciled together.",
+      "findingId": "spec-review-9c3317612d042cdee290f7d8d226ece6",
+      "issue": "FLOW_COMMANDS currently contains 35 run leaves, including flow run report, plus report show. The non-query routed set is therefore 66 leaves, not the specified 65.",
+      "kind": "blocking",
+      "requiredChange": "Update the leaf counts and matrix to include flow run report, or explicitly exclude it with an equivalent lifecycle-preservation acceptance.",
+      "target": "Acceptance Criteria; R1/R2; T-9",
+      "title": "Registry leaf count is inconsistent with the current codebase",
+      "whyBlocking": "The required registry and behavior matrices can omit flow run report, whose registry entry has pre/post/onError hooks, leaving existing behavior untested and the implementation target undefined."
+    },
+    {
+      "allowedTargets": [
+        {
+          "operationKinds": [
+            "edit-text-field"
+          ],
+          "target": {
+            "entity": "requirement",
+            "field": "desc",
+            "id": "R4"
+          }
+        },
+        {
+          "operationKinds": [
+            "edit-text-field"
+          ],
+          "target": {
+            "entity": "requirement",
+            "field": "desc",
+            "id": "R8"
+          }
+        }
+      ],
+      "body": "**Target:** R4/R8; src/sennel.js\n**Issue:** The dispatcher accepts --agent-work-dir=<path>, but src/sennel.js pre-scans only the separate-token form before initContainer(). Consequently, equals-form invocations currently use config/default paths while separate-form invocations use the invocation override.\n**Required change:** State explicitly that equals-form pre-init parity is the intended compatibility correction, and change the R4 wording that currently claims both existing forms already preserve the same resolver behavior.\n**Why blocking:** Without resolving this contradiction, runtime and log tests cannot determine whether to preserve the current divergent paths or normalize both forms; the wrong choice can send agent files and logs to a different work directory.",
+      "disposition": "apply",
+      "evidence": "The immutable Spec's R4 wording says both agent-work-dir forms preserve existing resolver behavior, while R8 requires pre-init normalization. The review's source observation identifies the equals-form pre-scan gap, so the compatibility correction must be stated explicitly in the Spec wording.",
+      "findingId": "spec-review-b13ec7eb78dc581d53c5b4614df861b8",
+      "issue": "The dispatcher accepts --agent-work-dir=<path>, but src/sennel.js pre-scans only the separate-token form before initContainer(). Consequently, equals-form invocations currently use config/default paths while separate-form invocations use the invocation override.",
+      "kind": "blocking",
+      "requiredChange": "State explicitly that equals-form pre-init parity is the intended compatibility correction, and change the R4 wording that currently claims both existing forms already preserve the same resolver behavior.",
+      "target": "R4/R8; src/sennel.js",
+      "title": "agent-work-dir compatibility claims contradict existing pre-scan behavior",
+      "whyBlocking": "Without resolving this contradiction, runtime and log tests cannot determine whether to preserve the current divergent paths or normalize both forms; the wrong choice can send agent files and logs to a different work directory."
+    },
+    {
+      "allowedTargets": [
+        {
+          "operationKinds": [
+            "add-array-element",
+            "replace-array-element"
+          ],
+          "target": {
+            "collection": "acceptance_criteria"
+          }
+        },
+        {
+          "operationKinds": [
+            "edit-text-field"
+          ],
+          "target": {
+            "entity": "requirement",
+            "field": "desc",
+            "id": "R1"
+          }
+        },
+        {
+          "operationKinds": [
+            "edit-text-field"
+          ],
+          "target": {
+            "entity": "requirement",
+            "field": "desc",
+            "id": "R2"
+          }
+        },
+        {
+          "operationKinds": [
+            "edit-text-field"
+          ],
+          "target": {
+            "entity": "task",
+            "field": "implementation_notes",
+            "id": "T-1"
+          }
+        },
+        {
+          "operationKinds": [
+            "edit-text-field"
+          ],
+          "target": {
+            "entity": "task",
+            "field": "implementation_notes",
+            "id": "T-2"
+          }
+        }
+      ],
+      "body": "**Target:** R1/R2; T-1/T-2; Acceptance Criteria\n**Issue:** The current registry args contain mostly positional/flag/option name arrays, while semantic validation is distributed across command modules, FlowTargetExpectation, and path/Git helpers. The spec requires an individual inventory but does not provide one or map every leaf input to its existing owner. This matters for same-named inputs with different contracts, such as --spec on resume versus run gate, --run-id on preparing-flow commands versus runtime-log, and --base on prepare versus lint.\n**Required change:** Add a concrete inventory for every current routed leaf that maps each input to its kind, value/domain/path contract, conditional combination, existing validator owner, and test owner, including distinctions for same-named inputs.\n**Why blocking:** An implementer can otherwise centralize or tighten a command-owned rule accidentally, and tests cannot derive the expected valid/invalid argv, diagnostic owner, or rejection order.",
+      "disposition": "apply",
+      "evidence": "The immutable Spec requires per-leaf inventory and validator ownership in R1/R2, but its requirements, tasks, and acceptance criteria provide only aggregate examples and no concrete inventory for every routed leaf. The missing detail spans the two requirement descriptions, T-1/T-2 implementation notes, and their acceptance evidence.",
+      "findingId": "spec-review-45518eabd3f5971d4d283ddf93be29f8",
+      "issue": "The current registry args contain mostly positional/flag/option name arrays, while semantic validation is distributed across command modules, FlowTargetExpectation, and path/Git helpers. The spec requires an individual inventory but does not provide one or map every leaf input to its existing owner. This matters for same-named inputs with different contracts, such as --spec on resume versus run gate, --run-id on preparing-flow commands versus runtime-log, and --base on prepare versus lint.",
+      "kind": "blocking",
+      "requiredChange": "Add a concrete inventory for every current routed leaf that maps each input to its kind, value/domain/path contract, conditional combination, existing validator owner, and test owner, including distinctions for same-named inputs.",
+      "target": "R1/R2; T-1/T-2; Acceptance Criteria",
+      "title": "Per-leaf semantic input inventory and validator ownership are not actually specified",
+      "whyBlocking": "An implementer can otherwise centralize or tighten a command-owned rule accidentally, and tests cannot derive the expected valid/invalid argv, diagnostic owner, or rejection order."
+    },
+    {
+      "allowedTargets": [
+        {
+          "operationKinds": [
+            "add-array-element",
+            "replace-array-element"
+          ],
+          "target": {
+            "collection": "acceptance_criteria"
+          }
+        },
+        {
+          "operationKinds": [
+            "edit-text-field"
+          ],
+          "target": {
+            "entity": "task",
+            "field": "implementation_notes",
+            "id": "T-9"
+          }
+        }
+      ],
+      "body": "**Target:** Acceptance Criteria (65-leaf success matrix); T-9\n**Issue:** The acceptance criteria require a valid normal-success invocation for every leaf, but the registry includes AI-driven, finalization, recovery, and state-transition commands with incompatible prerequisites. The tasks only name representative suites and provide no per-leaf production fixture, state setup, agent boundary, or mutation assertion.\n**Required change:** Add a deterministic legal success fixture and owning test boundary for each registry leaf, including its required Flow state and external-agent handling, and reconcile T-9's representative-only wording with that universal criterion.\n**Why blocking:** Tests would either invoke unsafe state mutations/agent execution ad hoc or omit leaves while still appearing representative, so the required all-leaf behavior cannot be implemented and verified deterministically.",
+      "disposition": "apply",
+      "evidence": "The immutable Spec has a universal per-leaf success criterion for 65 leaves but T-9 still assigns only representative suites and does not provide deterministic legal fixtures, state setup, or agent-boundary ownership for every leaf. The acceptance matrix and T-9 implementation notes must be reconciled.",
+      "findingId": "spec-review-d0d7f19a7c48282f3c3701fb3ae7afa5",
+      "issue": "The acceptance criteria require a valid normal-success invocation for every leaf, but the registry includes AI-driven, finalization, recovery, and state-transition commands with incompatible prerequisites. The tasks only name representative suites and provide no per-leaf production fixture, state setup, agent boundary, or mutation assertion.",
+      "kind": "blocking",
+      "requiredChange": "Add a deterministic legal success fixture and owning test boundary for each registry leaf, including its required Flow state and external-agent handling, and reconcile T-9's representative-only wording with that universal criterion.",
+      "target": "Acceptance Criteria (65-leaf success matrix); T-9",
+      "title": "Universal success coverage has no legal per-leaf fixture basis",
+      "whyBlocking": "Tests would either invoke unsafe state mutations/agent execution ad hoc or omit leaves while still appearing representative, so the required all-leaf behavior cannot be implemented and verified deterministically."
+    },
+    {
+      "allowedTargets": [
+        {
+          "operationKinds": [
+            "edit-text-field"
+          ],
+          "target": {
+            "entity": "requirement",
+            "field": "desc",
+            "id": "R6"
+          }
+        },
+        {
+          "operationKinds": [
+            "edit-text-field"
+          ],
+          "target": {
+            "entity": "task",
+            "field": "implementation_notes",
+            "id": "T-4"
+          }
+        }
+      ],
+      "body": "**Target:** R6; T-4\n**Improvement:** Specify that the 64/65-character and other synthetic names are constructed through the shared CommandDefinition/help renderer test seam, rather than production FLOW_COMMANDS entries.\n**Why non-blocking:** The existing command-name invariant permits these synthetic names, so the fixture can be added without changing production command behavior.",
+      "disposition": "apply",
+      "evidence": "The immutable Spec names synthetic 64/65-character renderer fixtures in R6 and T-4 but does not identify the shared CommandDefinition/help renderer test seam that must construct them without adding production registry entries.",
+      "findingId": "spec-review-50c84f093e4a04eef5cad340df7c1709",
+      "improvement": "Specify that the 64/65-character and other synthetic names are constructed through the shared CommandDefinition/help renderer test seam, rather than production FLOW_COMMANDS entries.",
+      "kind": "improvement",
+      "target": "R6; T-4",
+      "title": "Name the renderer seam for synthetic boundary fixtures",
+      "whyNonBlocking": "The existing command-name invariant permits these synthetic names, so the fixture can be added without changing production command behavior."
+    }
+  ],
+  "generation": 3,
+  "identity": {
+    "byteLength": 52805,
+    "digest": "121fc827f70690d26886d354dde3ae8f7a07a5efaea28155d4d8b85261de4aec",
+    "revision": 7,
+    "specId": "6a9b5488-flow-help-contract"
+  },
+  "version": 2
+}

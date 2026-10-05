@@ -1,0 +1,388 @@
+{
+  "goal": "Issue 521 の現行共有 routed Flow parser と公開 help を同一 option 契約にそろえ、全 group 表示を安定させ、入力・guard・runtime・query・終了コードの既存挙動を保持する。",
+  "background": "FLOW_COMMANDS の parser 宣言と手書き leaf help、group help 固定配列、二つの行描画は別々に保守され、受理入力の欠落表示、受理されない group option、長名の連結と順序差を生んでいる。2026-09-24 の Issue 521 restart contract を優先し、旧 Flow revision 008 の未解決指摘は承認済み仕様と見なさない。現行 registry は共有 routed 66 leaf と独立 query 1 leaf。draft Gate finding DF-3/DF-4 は公開入力 inventory と移行 owner 表の欠落を指摘したため、本 Spec の R2 と R13、および全公開経路の behavior test に対応付ける。",
+  "scope": {
+    "in": [
+      "共有 routed leaf の option metadata、parser、Usage/Options を registry と CommandDefinition の同じ authority に統合する",
+      "get/set/run/report の直接子共通 option と三公開 group help 経路を統一する",
+      "現行公開入力表、validator/guard/runtime/lifecycle/query の owner と回帰検証を定義する"
+    ],
+    "out": [
+      "command semantics、guard 判断、runtime precedence、query custom parser、既存 failure ordering の変更",
+      "blanket validator、推測による上限、並列 registry、production command 名長さ制限の追加",
+      "停止した旧 Flow の復旧と未承認 revision 008 の採用"
+    ]
+  },
+  "constraints": [
+    "Node.js 組み込み module のみを使用し、agent host 固有 hook/API に依存しない。",
+    "既存 API と validator を優先し、同じ判断を caller 側へ複製しない。値と表示行は constructor invariant を持つ class で表す。",
+    "src/ にこの project 固有の値を埋め込まない。",
+    "bounded-resource-usage: 既存公開 text/path/ID に明示上限がない箇所は互換性維持のため無制限のままにし、help 修復に伴う一律の新上限を導入しない。上限が存在する owner はその上限を維持する。",
+    "DF-3/DF-4 の migration-parity 指摘に対し、R2 の全 leaf 表、R3-R13 の owner/behavior mapping、acceptance の公開経路検証を実装前の parity 定義とする。"
+  ],
+  "design_principles": [
+    "公開 option の情報は宣言時に一度だけ定義し、表示文字列の逆解析をやめる。",
+    "解析、検証、target 拘束、runtime 初期化、query の既存 owner を維持する。",
+    "全件 parser matrix は integration、接続と process 可視結果は focused CLI E2E で確認する。"
+  ],
+  "overview": {
+    "modules": [
+      {
+        "text": "FLOW_COMMANDS/CommandDefinition: 公開 command、option 型、leaf/group help の authority。"
+      },
+      {
+        "text": "parseEntryInput と各 command validator: argv 構文、位置引数、domain と state dependent combination。"
+      },
+      {
+        "text": "FlowTargetExpectation/flow-context: target identity と 5 guard。"
+      },
+      {
+        "text": "sennel.js/work-dir resolver/container: 初期化前 override と agentWorkDir/logDir。"
+      },
+      {
+        "text": "flow.js/help.js: 三つの group help entrypoint と共有行 renderer。"
+      },
+      {
+        "text": "query.js/query-contract.js: 独立 JSON query contract。"
+      }
+    ],
+    "data_flow": [
+      {
+        "text": "FLOW_COMMANDS の option class → CommandDefinition → parser 用 flags/options/optionalOptions と leaf Usage/Options。"
+      },
+      {
+        "text": "group の全直接子の option 契約共通部分 → 共通 option 行、子名と summary → 共通 subcommand 行 → 三公開 entrypoint。"
+      },
+      {
+        "text": "CLI argv → parseEntryInput → target context/guard → command validator/handler/hooks → output/runtime log。parse failure でも context/log 経路があり得る。"
+      },
+      {
+        "text": "query argv → bootstrapFlowQueryCli → stdin/request-file JSON → query-contract → query response。shared route を通さない。"
+      }
+    ],
+    "decisions": [
+      {
+        "text": "[VERIFY] 現行 registry の共有 routed leaf は 66、query は独立 1。get 11、set 17、run 35、report/show 1、resume/prepare 各 1。",
+        "evidence": "src/flow/registry.js FLOW_COMMANDS を実際に再帰列挙。Issue 521 restart contract と一致。"
+      },
+      {
+        "text": "[VERIFY] option 構文は parseEntryInput が区別し、required value の別 token/= を受ける。",
+        "evidence": "src/lib/dispatcher.js:54-145、src/lib/cli.js:61-96。"
+      },
+      {
+        "text": "[VERIFY] 現行 group option 固定配列と二 renderer の行処理は不一致原因。",
+        "evidence": "src/lib/command-registry.js flowOptions/flowDefinition/CommandDefinition.renderHelp、src/help.js renderCommand、src/flow.js。"
+      },
+      {
+        "text": "[VERIFY] target guard は FlowTargetExpectation と flow-context が担当し、parse failure で runtime log を開き得る。",
+        "evidence": "src/lib/flow-target-guard.js、src/flow/lib/flow-context.js、src/lib/dispatcher.js:407-445。"
+      },
+      {
+        "text": "[VERIFY] work dir の既存優先順位と logDir 優先順位は container が所有する。",
+        "evidence": "src/sennel.js:40-59、src/lib/container.js:94-114。"
+      },
+      {
+        "text": "[CORRECTION] sennel.js の pre-scan は現在 --agent-work-dir=path を拾わない。仕様は Issue の二形式受理に合わせ、pre-scan owner 内で修正する。",
+        "evidence": "src/sennel.js:44-53 と src/lib/dispatcher.js:76-84 を比較。parser は = を受理するが初期化時 override が欠落。"
+      },
+      {
+        "text": "DF-3/DF-4: draft で延期された inventory と parity owner を R2 の全 leaf 表および R3-R13 の検証層へ明示した。",
+        "evidence": "immutable flow-findings.json の DF-3/DF-4、draft.json decisionMap.deferredToSpec。"
+      }
+    ]
+  },
+  "requirements": [
+    {
+      "id": "R1",
+      "desc": "既存の CommandDefinition/FLOW_COMMANDS が公開 option の唯一の authority となる。専用 class の constructor は canonical 名、aliases、flag/required-value/optional-value、placeholder、説明を検証する。parser は class から flags/options/optionalOptions を取得し、Usage/Options は同じ class から生成する。各共有 leaf の Options は受理 option ごとに一行、-h, --help は結合一行とする。Usage と例の再掲は許す。検証: registry 全件から各 parse 契約と Options 行を照合し、欠落・重複・余剰ゼロ。",
+      "priority": "must",
+      "task_ids": [
+        "T-1"
+      ],
+      "preimplementation_test_expectation": "fail"
+    },
+    {
+      "id": "R2",
+      "desc": "現行共有 routed leaf の公開入力表（現行ソースから再列挙、query 除外、66 件）。各行の Usage が leaf 固有の必須/任意位置と組合せを表し、parser 宣言に現れる option は指定時に値が必須。暗黙の -h/--help は全行共通。内部 _rawArgs、target 解決値、runtime 注入値は公開入力ではない。\nresume: positional=なし; rest=なし; flags=--expect-no-issue; required-value=--spec,--expect-issue,--expect-spec,--expect-run-id,--expect-binding; optional-value=なし; Usage: sennel flow resume [--spec <specId>] [--expect-binding <token> | [--expect-issue <number> | --expect-no-issue] [--expect-spec <spec>] [--expect-run-id <runId>]]\nprepare: positional=なし; rest=なし; flags=--no-branch,--worktree,--dry-run,--expect-no-issue; required-value=--title,--base,--issue,--request,--run-id,--expect-issue,--expect-spec,--expect-run-id,--expect-binding; optional-value=なし; Usage: sennel flow prepare [options] [--expect-binding <token> | [--expect-issue <number> | --expect-no-issue] [--expect-spec <spec>] [--expect-run-id <runId>]]\nget status: positional=runId; rest=なし; flags=--details,--expect-no-issue; required-value=--expect-issue,--expect-spec,--expect-run-id,--expect-binding; optional-value=なし; Usage: sennel flow get status [runId] [--details] [--expect-issue <number> | --expect-no-issue] [--expect-spec <spec>] [--expect-run-id <runId>]\nget resolve-context: positional=なし; rest=なし; flags=--expect-no-issue; required-value=--expect-issue,--expect-spec,--expect-run-id,--expect-binding; optional-value=なし; Usage: sennel flow get resolve-context [--expect-binding <token> | [--expect-issue <number> | --expect-no-issue] [--expect-spec <spec>] [--expect-run-id <runId>]]\nget check: positional=target; rest=なし; flags=なし; required-value=なし; optional-value=なし; Usage: sennel flow get check <target>\nget prompt: positional=kind; rest=なし; flags=--expect-no-issue; required-value=--expect-issue,--expect-spec,--expect-run-id,--expect-binding; optional-value=なし; Usage: sennel flow get prompt <kind> [--expect-issue <number> | --expect-no-issue] [--expect-spec <spec>] [--expect-run-id <runId>]\nget artifact: positional=logicalKey; rest=なし; flags=--expect-no-issue; required-value=--mode,--spec-id,--version,--expect-issue,--expect-spec,--expect-run-id,--expect-binding; optional-value=なし; Usage: sennel flow get artifact <spec.record|acceptance.review> --mode <full|summary> [--spec-id <specId> --version <number>]\nget qa-count: positional=なし; rest=なし; flags=--expect-no-issue; required-value=--expect-issue,--expect-spec,--expect-run-id,--expect-binding; optional-value=なし; Usage: sennel flow get qa-count\nget guardrail: positional=phase; rest=なし; flags=なし; required-value=--format; optional-value=なし; Usage: sennel flow get guardrail <phase> [--format json]\nget issue: positional=number; rest=なし; flags=なし; required-value=なし; optional-value=なし; Usage: sennel flow get issue <number>\nget next-action: positional=なし; rest=なし; flags=--expect-no-issue; required-value=--expect-issue,--expect-spec,--expect-run-id,--expect-binding; optional-value=なし; Usage: sennel flow get next-action [--expect-issue <number> | --expect-no-issue] [--expect-spec <spec>] [--expect-run-id <runId>]\nget context: positional=path; rest=なし; flags=--raw,--expect-no-issue; required-value=--search,--expect-issue,--expect-spec,--expect-run-id,--expect-binding; optional-value=なし; Usage: sennel flow get context [path] [--raw] [--search <query>]\nget runtime-log: positional=なし; rest=なし; flags=--expect-no-issue; required-value=--format,--sequence,--run-id,--expect-issue,--expect-spec,--expect-run-id,--expect-binding; optional-value=なし; Usage: sennel flow get runtime-log [--format json] [--sequence <n>] [--run-id <runId[#sequence]>] [--expect-binding <token> | [--expect-issue <number> | --expect-no-issue] [--expect-spec <spec>] [--expect-run-id <runId>]]\nset step: positional=id,status; rest=なし; flags=--expect-no-issue; required-value=--expect-issue,--expect-spec,--expect-run-id,--expect-binding; optional-value=なし; Usage: sennel flow set step <id> <status>\nset request: positional=text; rest=なし; flags=--expect-no-issue; required-value=--run-id,--expect-issue,--expect-spec,--expect-run-id,--expect-binding; optional-value=なし; Usage: sennel flow set request \"<text>\" [--run-id <id>] [--expect-binding <token> | [--expect-issue <number> | --expect-no-issue] [--expect-spec <spec>] [--expect-run-id <runId>]]\nset issue: positional=number; rest=なし; flags=--expect-no-issue; required-value=--expect-issue,--expect-spec,--expect-run-id,--expect-binding; optional-value=なし; Usage: sennel flow set issue <number>\nset note: positional=text; rest=なし; flags=--expect-no-issue; required-value=--task-id,--run-id,--expect-issue,--expect-spec,--expect-run-id,--expect-binding; optional-value=なし; Usage: sennel flow set note \"<text>\" [--task-id <id>] [--run-id <id>] [--expect-binding <token> | [--expect-issue <number> | --expect-no-issue] [--expect-spec <spec>] [--expect-run-id <runId>]]\nset draft-answer: positional=questionId; rest=なし; flags=--drop,--expect-no-issue; required-value=--question-revision,--answer,--why,--considered,--dropped-reason,--expect-issue,--expect-spec,--expect-run-id,--expect-binding; optional-value=なし; Usage: sennel flow set draft-answer <questionId> --question-revision <revision> (--answer <text> --why <text> [--considered <text>] | --drop --dropped-reason <text>) [--expect-binding <token> | [--expect-issue <number> | --expect-no-issue] [--expect-spec <spec>] [--expect-run-id <runId>]]\nset files: positional=reqId; rest=paths; flags=--expect-no-issue; required-value=--expect-issue,--expect-spec,--expect-run-id,--expect-binding; optional-value=なし; Usage: sennel flow set files <reqId> <path...>\nset review-evidence: positional=なし; rest=なし; flags=--expect-no-issue; required-value=--file,--expect-issue,--expect-spec,--expect-run-id,--expect-binding; optional-value=なし; Usage: sennel flow set review-evidence --file <path> [--expect-binding <token> | [--expect-issue <number> | --expect-no-issue] [--expect-spec <spec>] [--expect-run-id <runId>]]\nset broad: positional=action; rest=なし; flags=--expect-no-issue; required-value=--step,--reason,--expect-issue,--expect-spec,--expect-run-id,--expect-binding; optional-value=なし; Usage: sennel flow set broad on --step <implement|impl-review|impl-gate> --reason <text>\nset policy: positional=value; rest=なし; flags=--expect-no-issue; required-value=--reason,--expect-issue,--expect-spec,--expect-run-id,--expect-binding; optional-value=なし; Usage: sennel flow set policy nonblocking --reason <text>\nset nonblocking-decision: positional=なし; rest=なし; flags=--expect-no-issue; required-value=--choice,--reason,--expect-evidence-digest,--remaining-risk,--expect-issue,--expect-spec,--expect-run-id,--expect-binding; optional-value=なし; Usage: sennel flow set nonblocking-decision --choice <repair|retry|continue> --reason <text> --expect-evidence-digest <sha256> [--remaining-risk <text>]\nset metric: positional=phase,counter; rest=なし; flags=--expect-no-issue; required-value=--task-id,--expect-issue,--expect-spec,--expect-run-id,--expect-binding; optional-value=なし; Usage: sennel flow set metric <phase> <counter> [--task-id <id>]\nset approval: positional=なし; rest=なし; flags=--approved,--expect-no-issue; required-value=--notes,--confirmed-at,--expect-issue,--expect-spec,--expect-run-id,--expect-binding; optional-value=なし; Usage: sennel flow set approval --approved [--notes <text>] [--confirmed-at <iso>]\nset issue-log: positional=なし; rest=なし; flags=--expect-no-issue; required-value=--step,--reason,--trigger,--resolution,--guardrail-candidate,--normalized-finding-id,--repair-ref-commit,--repair-ref-file,--task-id,--expect-issue,--expect-spec,--expect-run-id,--expect-binding; optional-value=なし; Usage: sennel flow set issue-log --step <id> --reason <text> [--trigger <text>] [--resolution <text>] [--guardrail-candidate <text>] [--normalized-finding-id <id>] [--repair-ref-commit <sha>] [--repair-ref-file <path>] [--task-id <id>] [--expect-issue <number> | --expect-no-issue] [--expect-spec <spec>] [--expect-run-id <runId>]\nset init: positional=なし; rest=なし; flags=なし; required-value=--issue,--request; optional-value=なし; Usage: sennel flow set init [--issue N] [--request \"<text>\"]\nset retry: positional=action,kind,phase; rest=なし; flags=--yes,--expect-no-issue; required-value=--reason,--expect-issue,--expect-spec,--expect-run-id,--expect-binding; optional-value=なし; Usage: sennel flow set retry reset <gate|review> <phase> --reason <text> --yes\nset acceptance-decision: positional=なし; rest=なし; flags=--expect-no-issue; required-value=--choice,--expect-issue,--expect-spec,--expect-run-id,--expect-binding; optional-value=なし; Usage: sennel flow set acceptance-decision --choice <choice>\nset auto: positional=value; rest=なし; flags=--expect-no-issue; required-value=--run-id,--expect-issue,--expect-spec,--expect-run-id,--expect-binding; optional-value=なし; Usage: sennel flow set auto on|off [--run-id <id>] [--expect-binding <token> | [--expect-issue <number> | --expect-no-issue] [--expect-spec <spec>] [--expect-run-id <runId>]]\nrun seal-handoff: positional=なし; rest=なし; flags=なし; required-value=--agent-work-dir; optional-value=なし; Usage: sennel flow run seal-handoff [--agent-work-dir <path>]\nrun dispatch: positional=なし; rest=なし; flags=--expect-no-issue; required-value=--approve,--agent-work-dir,--expect-issue,--expect-spec,--expect-run-id,--expect-binding; optional-value=なし; Usage: sennel flow run dispatch [--expect-binding <token> | [--expect-issue <number> | --expect-no-issue] [--expect-spec <spec>] [--expect-run-id <runId>]] [--approve <token>] [--agent-work-dir <path>]\nrun recover-review-pass: positional=なし; rest=なし; flags=--expect-no-issue; required-value=--agent-work-dir,--expect-issue,--expect-spec,--expect-run-id,--expect-binding,--phase; optional-value=なし; Usage: sennel flow run recover-review-pass --phase <draft-questions|draft-coverage|spec|test|impl> [--expect-binding <token> | [--expect-issue <number> | --expect-no-issue] [--expect-spec <spec>] [--expect-run-id <runId>]]\nrun gate: positional=なし; rest=なし; flags=--expect-no-issue; required-value=--spec,--phase,--agent-work-dir,--expect-issue,--expect-spec,--expect-run-id,--expect-binding; optional-value=なし; Usage: sennel flow run gate [options]\nrun review: positional=なし; rest=なし; flags=--dry-run,--skip-confirm,--expect-no-issue; required-value=--phase,--agent-work-dir,--expect-issue,--expect-spec,--expect-run-id,--expect-binding; optional-value=なし; Usage: sennel flow run review [options] [--expect-binding <token> | [--expect-issue <number> | --expect-no-issue] [--expect-spec <spec>] [--expect-run-id <runId>]]\nrun auto-check: positional=なし; rest=なし; flags=--expect-no-issue; required-value=--run-id,--agent-work-dir,--expect-issue,--expect-spec,--expect-run-id,--expect-binding; optional-value=なし; Usage: sennel flow run auto-check [--run-id <id>] [--expect-binding <token> | [--expect-issue <number> | --expect-no-issue] [--expect-spec <spec>] [--expect-run-id <runId>]]\nrun finalize-commit: positional=なし; rest=なし; flags=--expect-no-issue; required-value=--message,--agent-work-dir,--expect-issue,--expect-spec,--expect-run-id,--expect-binding; optional-value=なし; Usage: sennel flow run finalize-commit [options]\nrun finalize-merge: positional=なし; rest=なし; flags=--expect-no-issue; required-value=--agent-work-dir,--expect-issue,--expect-spec,--expect-run-id,--expect-binding; optional-value=なし; Usage: sennel flow run finalize-merge\nrun finalize-sync: positional=なし; rest=なし; flags=--expect-no-issue; required-value=--agent-work-dir,--expect-issue,--expect-spec,--expect-run-id,--expect-binding; optional-value=なし; Usage: sennel flow run finalize-sync\nrun finalize-cleanup: positional=なし; rest=なし; flags=--auto-rescue,--force,--expect-no-issue; required-value=--agent-work-dir,--expect-issue,--expect-spec,--expect-run-id,--expect-binding; optional-value=なし; Usage: sennel flow run finalize-cleanup [--auto-rescue | --force]\nrun abort: positional=なし; rest=なし; flags=--force,--expect-no-issue; required-value=--agent-work-dir,--expect-issue,--expect-spec,--expect-run-id,--expect-binding; optional-value=なし; Usage: sennel flow run abort [--force]\nrun sync: positional=なし; rest=なし; flags=--dry-run,--expect-no-issue; required-value=--agent-work-dir,--expect-issue,--expect-spec,--expect-run-id,--expect-binding; optional-value=なし; Usage: sennel flow run sync [options]\nrun reopen-draft: positional=なし; rest=なし; flags=--expect-no-issue; required-value=--reason,--category,--agent-work-dir,--expect-issue,--expect-spec,--expect-run-id,--expect-binding; optional-value=なし; Usage: sennel flow run reopen-draft [--reason <text>] [--category <category>] [--expect-binding <token> | [--expect-issue <number> | --expect-no-issue] [--expect-spec <spec>] [--expect-run-id <runId>]]\nrun repair-plan-gate: positional=なし; rest=なし; flags=--expect-no-issue; required-value=--agent-work-dir,--expect-issue,--expect-spec,--expect-run-id,--expect-binding; optional-value=なし; Usage: sennel flow run repair-plan-gate [--expect-binding <token> | [--expect-issue <number> | --expect-no-issue] [--expect-spec <spec>] [--expect-run-id <runId>]]\nrun settle-failure: positional=なし; rest=なし; flags=--expect-no-issue; required-value=--agent-work-dir,--expect-issue,--expect-spec,--expect-run-id,--expect-binding; optional-value=なし; Usage: sennel flow run settle-failure [--expect-binding <token> | [--expect-issue <number> | --expect-no-issue] [--expect-spec <spec>] [--expect-run-id <runId>]]\nrun settle-review-transition: positional=なし; rest=なし; flags=--expect-no-issue; required-value=--agent-work-dir,--expect-issue,--expect-spec,--expect-run-id,--expect-binding; optional-value=なし; Usage: sennel flow run settle-review-transition [--expect-binding <token> | [--expect-issue <number> | --expect-no-issue] [--expect-spec <spec>] [--expect-run-id <runId>]]\nrun recover-missing-producer-artifact: positional=なし; rest=なし; flags=--expect-no-issue; required-value=--agent-work-dir,--expect-issue,--expect-spec,--expect-run-id,--expect-binding; optional-value=なし; Usage: sennel flow run recover-missing-producer-artifact [--expect-binding <token> | [--expect-issue <number> | --expect-no-issue] [--expect-spec <spec>] [--expect-run-id <runId>]]\nrun recover-draft-execution: positional=なし; rest=なし; flags=--expect-no-issue; required-value=--agent-work-dir,--expect-issue,--expect-spec,--expect-run-id,--expect-binding; optional-value=なし; Usage: sennel flow run recover-draft-execution [--expect-binding <token> | [--expect-issue <number> | --expect-no-issue] [--expect-spec <spec>] [--expect-run-id <runId>]]\nrun reconcile-task-review: positional=なし; rest=なし; flags=--expect-no-issue,--dry-run,--yes; required-value=--agent-work-dir,--expect-issue,--expect-spec,--expect-run-id,--expect-binding,--expect-digest,--reason; optional-value=なし; Usage: sennel flow run reconcile-task-review --expect-run-id <runId> --expect-spec <specId> [--expect-issue <number> | --expect-no-issue] (--dry-run | --yes --expect-digest <digest> --reason <text>)\nrun filter-task-review: positional=なし; rest=なし; flags=--expect-no-issue; required-value=--agent-work-dir,--expect-issue,--expect-spec,--expect-run-id,--expect-binding,--exclusions,--expect-attempt-id,--expect-review-digest,--expect-source-fingerprint,--expect-catalog-fingerprint; optional-value=なし; Usage: sennel flow run filter-task-review --exclusions <json-array> --expect-attempt-id <id> --expect-review-digest <sha256> --expect-source-fingerprint <sha256> --expect-catalog-fingerprint <sha256> [--expect-binding <token> | [--expect-issue <number> | --expect-no-issue] [--expect-spec <spec>] [--expect-run-id <runId>]]\nrun recover-finalization: positional=なし; rest=なし; flags=--expect-no-issue; required-value=--agent-work-dir,--expect-issue,--expect-spec,--expect-run-id,--expect-binding; optional-value=なし; Usage: sennel flow run recover-finalization [--expect-binding <token> | [--expect-issue <number> | --expect-no-issue] [--expect-spec <spec>] [--expect-run-id <runId>]]\nrun recover-task-execution-overrun: positional=なし; rest=なし; flags=--expect-no-issue; required-value=--agent-work-dir,--expect-issue,--expect-spec,--expect-run-id,--expect-binding; optional-value=なし; Usage: sennel flow run recover-task-execution-overrun [--expect-binding <token> | [--expect-issue <number> | --expect-no-issue] [--expect-spec <spec>] [--expect-run-id <runId>]]\nrun claim-next-action: positional=なし; rest=なし; flags=--expect-no-issue; required-value=--agent-work-dir,--expect-issue,--expect-spec,--expect-run-id,--expect-binding; optional-value=なし; Usage: sennel flow run claim-next-action [--expect-binding <token> | [--expect-issue <number> | --expect-no-issue] [--expect-spec <spec>] [--expect-run-id <runId>]]\nrun settle-gate-transition: positional=なし; rest=なし; flags=--expect-no-issue; required-value=--agent-work-dir,--expect-issue,--expect-spec,--expect-run-id,--expect-binding; optional-value=なし; Persist the Definition-selected exhausted integration or Task Gate finding and settle its current Attempt.\nrun start-task: positional=なし; rest=なし; flags=--expect-no-issue; required-value=--task-id,--agent-work-dir,--expect-issue,--expect-spec,--expect-run-id,--expect-binding; optional-value=なし; Usage: sennel flow run start-task --task-id <id>\nrun complete-task: positional=なし; rest=なし; flags=--expect-no-issue; required-value=--task-id,--agent-work-dir,--expect-issue,--expect-spec,--expect-run-id,--expect-binding; optional-value=なし; Usage: sennel flow run complete-task [--task-id <id>]\nrun update-overview: positional=なし; rest=なし; flags=--expect-no-issue; required-value=--json,--agent-work-dir,--expect-issue,--expect-spec,--expect-run-id,--expect-binding; optional-value=なし; Usage: sennel flow run update-overview --json '<additions>'\nrun lint: positional=なし; rest=なし; flags=--expect-no-issue; required-value=--base,--agent-work-dir,--expect-issue,--expect-spec,--expect-run-id,--expect-binding; optional-value=なし; Usage: sennel flow run lint [options]\nrun test-execute: positional=なし; rest=なし; flags=--expect-no-issue; required-value=--agent-work-dir,--expect-issue,--expect-spec,--expect-run-id,--expect-binding; optional-value=なし; Usage: sennel flow run test-execute\nrun requirement-test-gate: positional=なし; rest=なし; flags=--expect-no-issue; required-value=--agent-work-dir,--expect-issue,--expect-spec,--expect-run-id,--expect-binding; optional-value=なし; Usage: sennel flow run requirement-test-gate\nrun test-result-review: positional=なし; rest=なし; flags=--expect-no-issue; required-value=--agent-work-dir,--expect-issue,--expect-spec,--expect-run-id,--expect-binding; optional-value=なし; Usage: sennel flow run test-result-review\nrun retro: positional=なし; rest=なし; flags=--dry-run,--expect-no-issue; required-value=--agent-work-dir,--expect-issue,--expect-spec,--expect-run-id,--expect-binding; optional-value=なし; Usage: sennel flow run retro [options]\nrun final-regression: positional=なし; rest=なし; flags=--record-and-proceed,--expect-no-issue; required-value=--record-category,--record-evidence,--remaining-risk,--agent-work-dir,--expect-issue,--expect-spec,--expect-run-id,--expect-binding; optional-value=なし; Usage: sennel flow run final-regression [--record-and-proceed --record-category <category> --record-evidence <text> --remaining-risk <text>]\nrun acceptance-review: positional=なし; rest=なし; flags=--expect-no-issue; required-value=--agent-work-dir,--expect-issue,--expect-spec,--expect-run-id,--expect-binding; optional-value=なし; Usage: sennel flow run acceptance-review\nrun report: positional=なし; rest=なし; flags=--dry-run,--expect-no-issue; required-value=--agent-work-dir,--expect-issue,--expect-spec,--expect-run-id,--expect-binding; optional-value=なし; Usage: sennel flow run report [options]\nreport show: positional=なし; rest=なし; flags=なし; required-value=なし; optional-value=なし; Usage: sennel flow report show",
+      "priority": "must",
+      "task_ids": [
+        "T-1",
+        "T-3"
+      ],
+      "preimplementation_test_expectation": "pass"
+    },
+    {
+      "id": "R3",
+      "desc": "公開 argv の共通構文は parseEntryInput と cli.parseArgs が所有する。selector は完全一致、未知 option・余剰位置入力は拒否、required-value は別 token または = 値を受け付け、欠落・空・次の dash 開始値を拒否する。optional-value と flag は各宣言どおり、位置入力は leaf validator が必要数と内容を判断する。get status runId は 0..1、set files は reqId と 1 件以上の rest path、set step status・set auto value・set broad action は positional であり同名 option を追加しない。検証: 全 leaf の有効/無効 argv を実 dispatcher へ与える integration。",
+      "priority": "must",
+      "task_ids": [
+        "T-1",
+        "T-3"
+      ],
+      "preimplementation_test_expectation": "pass"
+    },
+    {
+      "id": "R4",
+      "desc": "値の意味と拒否は既存 owner を維持する。resume --spec は FlowSpecId（英数字開始、英数字/._-、..・末尾 .・.lock 禁止、100 字上限なし）、run gate --spec は file path、prepare --base と run lint --base は Git branch 名。prepare/set init の runId は PreparingFlowId/PreparingFlowStore（最大 200 文字、コロン不可）、target guard の token は FlowTargetExpectation（最大 300 文字、binding は 32 KiB）。get runtime-log --run-id は identifier/sequence 形式も受け付ける。--run-id、--expect-run-id、task/finding/attempt ID、commit ref は各 owner の検証に従い全体一律長制限を追加しない。検証: 各区別の境界値を実 parser と owner validator で確認する。",
+      "priority": "must",
+      "task_ids": [
+        "T-3"
+      ],
+      "preimplementation_test_expectation": "pass"
+    },
+    {
+      "id": "R5",
+      "desc": "既存 domain validator を保持する。get check target、get prompt kind、artifact logicalKey と --mode/--version/--spec-id、set step id/status、set note text、draft-answer questionId/revision と answer/why/considered または drop/dropped-reason、set files reqId/path、set metric phase/counter、get guardrail phase/--format、get runtime-log --format/--sequence、run gate/review/recover-review-pass --phase、reopen-draft --category、final-regression --record-category、issue-log --step/--task-id/--normalized-finding-id/--repair-ref-commit、filter-task-review --expect-attempt-id、dispatch --approve、set acceptance-decision/nonblocking-decision --choice を個別の domain/state owner で検証する。選択肢・組合せ・空値・不正値は当該 command の現行挙動を保つ。検証: 有効値、domain 外、必須組合せ欠落を各 owner の integration に接続する。",
+      "priority": "must",
+      "task_ids": [
+        "T-3"
+      ],
+      "preimplementation_test_expectation": "pass"
+    },
+    {
+      "id": "R6",
+      "desc": "入力の resource policy は既存 owner が定める。文字列、JSON、file、context traversal、exclusions、retry、attempt について明示的な上限があるものだけを維持し、未定義の新上限を設けない。query は query-contract の request 1 MiB、response 2 MiB、page 100、depth 32、snapshot attempts 3 など既存上限を維持する。update-overview の各 entry 500 文字、spec repair の edits 64、agent retry 5、final-regression attempt 10000 など既存 owner の境界を保持する。bounded-resource-usage に対する意図的例外: 現行 validator に上限がない text/path/ID を help 修復で一律制限すると既存入力契約を破るため、その不在を仕様として維持する。検証: 既存境界と上限なしの代表値を owner テストで確認する。",
+      "priority": "must",
+      "task_ids": [
+        "T-3",
+        "T-5"
+      ],
+      "preimplementation_test_expectation": "pass"
+    },
+    {
+      "id": "R7",
+      "desc": "group option は get 11、set 17、run 35、report/show 1 の各直接子全件の完全 option 契約（canonical 名、aliases、value kind、placeholder）に共通するものだけを投影する。query、孫、代表子だけを混ぜない。run のみ --agent-work-dir を含み、get/set/report は含まない。canonical 名の昇順と implicit help を含む確定順を使う。検証: registry から動的に共通部分を再計算し group 四種と照合する。",
+      "priority": "must",
+      "task_ids": [
+        "T-2"
+      ],
+      "preimplementation_test_expectation": "fail"
+    },
+    {
+      "id": "R8",
+      "desc": "flow <group> --help、help flow <group>、flow <group>（leaf なし）の subcommand/option 行は共通行 class/renderer を使用し、名前の locale 非依存昇順、同一 option 順、full name と summary の間に ASCII 空白 2 個以上を保証し、名前を切り詰めない。短名、13/14/15 文字、最長登録 recover-missing-producer-artifact、合成 64/65 文字を renderer/registry で検証する。合成名は production command と長さ制限ではない。三経路の見出し・prose は byte 一致不要。leaf なし経路は exit 1。",
+      "priority": "must",
+      "task_ids": [
+        "T-2"
+      ],
+      "preimplementation_test_expectation": "fail"
+    },
+    {
+      "id": "R9",
+      "desc": "FlowTargetExpectation と buildFlowCommandHookContext が 5 種の --expect-binding/--expect-issue/--expect-no-issue/--expect-spec/--expect-run-id を既存 eligible leaf に適用する。組合せ不正と identity 不一致は command-owned mutation 前に拒否し、未指定時は現行の選択挙動を保つ。parse 失敗は現行どおり context 解決と runtime log 作成を伴い得るため、副作用ゼロとは規定しない。検証: registry から eligible leaf を導出し一致、不一致、不正組合せ、未指定を隔離 fixture で実行、後続状態と log を観測する。",
+      "priority": "must",
+      "task_ids": [
+        "T-3"
+      ],
+      "preimplementation_test_expectation": "pass"
+    },
+    {
+      "id": "R10",
+      "desc": "run --agent-work-dir は separate と equals の両記法を container 初期化前に同一 override として受け付ける。通常の agentWorkDir は invocation override > config.agent.workDir > default .tmp、logDir は config.logs.dir 優先、未設定時 agentWorkDir/logs。finalize-cleanup は durable root とその root に対する logs.dir 解決を保持し、二 directory が同一とは要求しない。検証: 隔離 config の実 CLI で二記法と各優先経路を比較する。",
+      "priority": "must",
+      "task_ids": [
+        "T-4"
+      ],
+      "preimplementation_test_expectation": "fail"
+    },
+    {
+      "id": "R11",
+      "desc": "明示 help と正常 command は exit 0、missing/unknown selector、parser/target/command failure、leaf なし group は exit 1。help shortcut、parse failure、guard rejection、command success/failure の既存 hook、診断、runtime log、状態変更順序を保持する。新しい admission 境界や副作用ゼロ規則を加えない。検証: 非破壊 handler/fixture を通す CLI E2E で status、stderr/stdout、log、状態を確認する。",
+      "priority": "must",
+      "task_ids": [
+        "T-3"
+      ],
+      "preimplementation_test_expectation": "pass"
+    },
+    {
+      "id": "R12",
+      "desc": "flow query は bootstrapFlowQueryCli/query.js/query-contract.js の stdin または --request-file による JSON request、help、error、独立上限と exit code を維持し、shared routed option/help/guard matrix から除く。検証: stdin と file の正常/異常、同時指定拒否、help を query 専用 CLI E2E で確認する。",
+      "priority": "must",
+      "task_ids": [
+        "T-5"
+      ],
+      "preimplementation_test_expectation": "pass"
+    },
+    {
+      "id": "R13",
+      "desc": "CommandDefinition を利用する docs/core/plugin の既存 command metadata、i18n、plugin help 正規化、routing に影響を与えない。影響対象は src/lib/command-registry.js、src/help.js、src/flow.js、src/sennel.js、src/lib/dispatcher.js の公開 entrypoint、および generated help text。config の agent.workDir/logs.dir、Flow state、runtime logs と command side effects の意味を変えない。検証: 代表 consumer の help と実 dispatcher、設定別 runtime path を regression で確認する。",
+      "priority": "must",
+      "task_ids": [
+        "T-1",
+        "T-2",
+        "T-4",
+        "T-6"
+      ],
+      "preimplementation_test_expectation": "pass"
+    },
+    {
+      "id": "R14",
+      "desc": "新規 Spec 固有の振る舞いテストは specs/<specId>/tests/ に // spec: R<N> header を付ける。shared regression は tests/integration と focused tests/e2e に置き、全 66 leaf の parser matrix を E2E で重複実行しない。state を扱う test は生成、保存、再読込、後続判断、拒否・再開を owner に沿って検証する。現行 Gate の証拠は test-execute/test-result-review、full regression は後続 final-regression が所有する。検証: test diff、header と test result を各工程で確認する。",
+      "priority": "must",
+      "task_ids": [
+        "T-1",
+        "T-2",
+        "T-3",
+        "T-4",
+        "T-5",
+        "T-6"
+      ],
+      "preimplementation_test_expectation": "pass"
+    }
+  ],
+  "acceptance_criteria": [
+    "registry の現行共有 routed leaf を再列挙した integration が全 leaf の parser 受理と canonical help 行を比較し、query を除外する。",
+    "四 group の全直接子共通 option、三公開経路の同順・間隔・無切詰め・exit を確認する。",
+    "入力 domain、target guard、runtime path、hook/log、終了コード、query を非破壊 fixture と focused CLI E2E で検証する。",
+    "docs/core/plugin の代表的な CommandDefinition consumer と generated help の回帰を確認する。",
+    "Spec 固有 test は specs/<specId>/tests/ の requirement header を持ち、現行 integration の証拠と後続 full regression の責務を区別する。"
+  ],
+  "clarifications": [
+    {
+      "q": "query を共有 routed inventory に含めるか",
+      "a": "含めない。bootstrapFlowQueryCli と query-contract の独立 contract として専用回帰を行う。"
+    },
+    {
+      "q": "group の option 共通部分をどう決めるか",
+      "a": "各 group の直接子全件で aliases/value kind/placeholder を含む契約一致を比較し、canonical 名順で表示する。"
+    },
+    {
+      "q": "現行 parse failure は副作用ゼロか",
+      "a": "保証しない。dispatcher は parse error で hook context を作成し runtime log を開始し得る。command-owned mutation より前の guard 拒否とは区別する。"
+    }
+  ],
+  "alternatives_considered": [
+    {
+      "option": "手書き help から option を逆解析する",
+      "reason": "parser authority と乖離する現行原因を残すため採用しない。"
+    },
+    {
+      "option": "別 command registry を追加する",
+      "reason": "既存 CommandDefinition/FLOW_COMMANDS と責務が重複するため採用しない。"
+    },
+    {
+      "option": "全入力へ一律の ID 長さと resource limit を導入する",
+      "reason": "FlowSpecId など既存 owner の異なる contract を壊すため採用しない。bounded-resource-usage は上限なしを意図的例外として明示する。"
+    }
+  ],
+  "open_questions": [],
+  "keywords": [
+    "FLOW_COMMANDS",
+    "CommandDefinition",
+    "parseEntryInput",
+    "FlowTargetExpectation",
+    "flow group help",
+    "option metadata",
+    "runtime log",
+    "agent work dir",
+    "bootstrapFlowQueryCli",
+    "query contract"
+  ],
+  "implementationTargets": [
+    "src/flow/registry.js",
+    "src/lib/command-registry.js",
+    "src/lib/dispatcher.js",
+    "src/help.js",
+    "src/flow.js",
+    "src/sennel.js",
+    "src/lib/container.js",
+    "src/lib/flow-target-guard.js",
+    "src/flow/lib/flow-context.js",
+    "src/flow/query.js",
+    "src/flow/query-contract.js",
+    "specs/<specId>/tests/",
+    "tests/integration/",
+    "tests/e2e/"
+  ],
+  "tasks": [
+    {
+      "id": "T-1",
+      "title": "公開入力の単一モデルを導入する",
+      "goal": "既存の CommandDefinition と FLOW_COMMANDS に値種別、別名、説明を持つ option 型を加え、parser と leaf help の契約を一致させる。",
+      "acceptance": [
+        "全共有 routed leaf の flags/options/optionalOptions と implicit help が各 leaf の Options に一度ずつ現れる",
+        "必須値と任意値の表記、Usage、翻訳済み説明、例が両立する"
+      ],
+      "implementation_notes": "src/lib/command-registry.js、src/flow/registry.js、src/lib/dispatcher.js の既存責務内で拡張する。独立 registry と help 文字列の逆解析を廃止する。",
+      "test_strategy": "registry 派生の全 66 leaf に対する parser/help integration と spec-local test。",
+      "parent": null,
+      "origin": "plan",
+      "added_round": 0,
+      "status": "pending"
+    },
+    {
+      "id": "T-2",
+      "title": "group help の投影を統一する",
+      "goal": "各 group の直接子 leaf の option 契約共通部分を算出し、共通行 renderer で三つの公開経路へ表示する。",
+      "acceptance": [
+        "get/set/report は --agent-work-dir を示さず run だけが示す",
+        "三経路で subcommand と option の順序、2 文字以上の ASCII 空白が一致する"
+      ],
+      "implementation_notes": "src/help.js、src/flow.js と CommandDefinition.renderHelp を同じ行型・描画 API に寄せる。名前昇順と canonical option 名昇順を規定する。",
+      "test_strategy": "短い名前、13/14/15 文字、最長登録名、合成 64/65 文字の integration、group CLI E2E。",
+      "parent": null,
+      "origin": "plan",
+      "added_round": 0,
+      "status": "pending"
+    },
+    {
+      "id": "T-3",
+      "title": "既存入力境界を回帰検証する",
+      "goal": "shared parser と各 command の既存 validator、target guard、実行 lifecycle の保持を契約テストで確かめる。",
+      "acceptance": [
+        "全 routed leaf の受理・拒否を registry から列挙する",
+        "guard 不一致は command 所有の変更前に拒否し、成功・失敗・help の終了コードを維持する"
+      ],
+      "implementation_notes": "src/lib/dispatcher.js、src/flow/lib/flow-context.js、src/lib/flow-target-guard.js と command validator を再利用。破壊的 handler は隔離 fixture/stub に置換する。",
+      "test_strategy": "parser 全件は integration、実 CLI は guard と lifecycle の代表ケースに限定。",
+      "parent": null,
+      "origin": "plan",
+      "added_round": 0,
+      "status": "pending"
+    },
+    {
+      "id": "T-4",
+      "title": "runtime 経路を回帰検証する",
+      "goal": "run option の二つの値記法を初期化前に同じ work-directory override として扱い、既存優先順位と cleanup policy を守る。",
+      "acceptance": [
+        "--agent-work-dir /path と --agent-work-dir=/path で同じ paths を得る",
+        "logs.dir と finalize-cleanup の durable root が従来どおり優先する"
+      ],
+      "implementation_notes": "src/sennel.js の pre-scan、既存 work-dir resolver、src/lib/container.js を検証し不足分だけ owner 内で補う。",
+      "test_strategy": "隔離 config による CLI E2E と path 解決 unit/integration。",
+      "parent": null,
+      "origin": "plan",
+      "added_round": 0,
+      "status": "pending"
+    },
+    {
+      "id": "T-5",
+      "title": "独立 query 契約を回帰検証する",
+      "goal": "flow query を custom bootstrap のまま維持し shared option 投影から除外する。",
+      "acceptance": [
+        "stdin と --request-file の成功・失敗、help と終了コードが保持される",
+        "query は shared routed inventory に混入しない"
+      ],
+      "implementation_notes": "src/flow/query.js と query-contract.js に所有権を保持する。",
+      "test_strategy": "独立した query CLI E2E。",
+      "parent": null,
+      "origin": "plan",
+      "added_round": 0,
+      "status": "pending"
+    },
+    {
+      "id": "T-6",
+      "title": "共有 help 消費者を回帰検証する",
+      "goal": "CommandDefinition の Flow 以外の消費者で docs/core/plugin の表示と routing が保持されることを確認する。",
+      "acceptance": [
+        "代表的な docs/core/plugin の help と実 dispatcher が既存どおり動く"
+      ],
+      "implementation_notes": "src/lib/command-registry.js のメタデータ利用者、src/help.js の i18n、plugin 正規化を確認する。",
+      "test_strategy": "代表的な共有 renderer integration と CLI E2E。",
+      "parent": null,
+      "origin": "plan",
+      "added_round": 0,
+      "status": "pending"
+    }
+  ]
+}

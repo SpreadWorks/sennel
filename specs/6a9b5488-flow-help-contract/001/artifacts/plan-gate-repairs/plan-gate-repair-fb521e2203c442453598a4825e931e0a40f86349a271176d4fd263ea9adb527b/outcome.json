@@ -1,0 +1,138 @@
+{
+  "version": 1,
+  "repairId": "plan-gate-repair-fb521e2203c442453598a4825e931e0a40f86349a271176d4fd263ea9adb527b",
+  "repairRecordFingerprint": "fb521e2203c442453598a4825e931e0a40f86349a271176d4fd263ea9adb527b",
+  "sourceEvidence": {
+    "sourceAttempt": {
+      "id": "attempt-draft-gate-de187928-af93-4a9f-892a-a2289022f38b",
+      "sequence": 5
+    },
+    "resultLogicalKey": "draft.gate",
+    "publicationActivityId": "plan-gate-repaired-56088f64-d0f9-4dfd-ba87-3d1799963bc4",
+    "catalogFingerprint": "f63ab893bd26078a3a4c2cce3817c4925e9d21dc087c453a14b22090cae2b7ee",
+    "transitionLineage": {
+      "sourceAttempt": {
+        "id": "attempt-draft-gate-de187928-af93-4a9f-892a-a2289022f38b",
+        "sequence": 5
+      },
+      "canonicalAttempt": {
+        "id": "attempt-draft-gate-de187928-af93-4a9f-892a-a2289022f38b",
+        "sequence": 5
+      },
+      "sourceFingerprint": "d3b8a414bb72c17dfd8bb37efc952d3755ec8f0cc8da8e81e3c752a5c1ddb7d1",
+      "canonicalFingerprint": "f63ab893bd26078a3a4c2cce3817c4925e9d21dc087c453a14b22090cae2b7ee",
+      "sourceRevisionFingerprint": "ab4c4aaa7087f887c13bc6ac1174d2a0e53574bbc521b36adb7de0a9e3980770",
+      "canonicalRevisionFingerprint": "ab4c4aaa7087f887c13bc6ac1174d2a0e53574bbc521b36adb7de0a9e3980770"
+    }
+  },
+  "sourceAttempt": {
+    "id": "attempt-draft-gate-de187928-af93-4a9f-892a-a2289022f38b",
+    "sequence": 5
+  },
+  "targetAttempt": {
+    "id": "attempt-draft-gate-repair-f94c5ff0-c52b-4ffa-9750-9e39fb6e10fd",
+    "sequence": 6
+  },
+  "publicationActivityId": "attempt-confirmed-4febac1a-64c3-4cf4-86e2-4b2808167f25",
+  "handoffRevision": "ed1603e5b6a7120e1b3cf078d984ca8899e5adc2abce8a79a59aad9b416899f3",
+  "disposition": "applied",
+  "report": {
+    "beforeEvidenceDigest": "238da18f5d8d4395b2b96cee8d8dd2fcc8db721afd231101cd2f608ef552db5b",
+    "outputEvidenceDigest": "e28ee6959aa2916c884424dc6dab023ce615c0f0a8f0fbed8cb75d2ee3eca9ca",
+    "summary": "Enumerated the invalid-combination contract and completed the migration-parity inventory for retained artifacts, side effects, owners, and behavior-level verification.",
+    "requests": [
+      {
+        "fingerprint": "28aeac74054dd0adbb45b57276684af9ba1bc043d8acfc83597b99c06e9d4887",
+        "recurrenceCount": 0,
+        "priorStrategy": null
+      },
+      {
+        "fingerprint": "5cc409392107b55a58ea1103a3052fe0f9143984902fdbe68ccc4b9a88e7bb0d",
+        "recurrenceCount": 0,
+        "priorStrategy": null
+      },
+      {
+        "fingerprint": "d52b391b060f6dedd8cab2f3439a3a9a1376dddedc55fe9cd15e63ee1856d498",
+        "recurrenceCount": 0,
+        "priorStrategy": null
+      },
+      {
+        "fingerprint": "7d9f5202187b829eb3e13ebd097888f5378f66cb2782ef0eb5ffa159d74d9364",
+        "recurrenceCount": 0,
+        "priorStrategy": null
+      },
+      {
+        "fingerprint": "dca735bc1acf43dc0b550fb19a3995fadabac2f98b8559a21147a8906b6d6b36",
+        "recurrenceCount": 0,
+        "priorStrategy": null
+      },
+      {
+        "fingerprint": "f292d073f3d5517105e5c887265fa48eec8e3705701cab6fd723b63adabd48b8",
+        "recurrenceCount": 0,
+        "priorStrategy": null
+      }
+    ],
+    "results": [
+      {
+        "fingerprint": "28aeac74054dd0adbb45b57276684af9ba1bc043d8acfc83597b99c06e9d4887",
+        "strategy": "Enumerate guard combinations and preserve existing rejection precedence",
+        "summary": "The scope requirement now names parser, domain, mutual-exclusion, and target-mismatch cases with their existing precedence before command mutation.",
+        "priorRepairInsufficiency": null,
+        "deltaIds": [
+          "e28ee6959aa2916c884424dc6dab023ce615c0f0a8f0fbed8cb75d2ee3eca9ca"
+        ]
+      },
+      {
+        "fingerprint": "5cc409392107b55a58ea1103a3052fe0f9143984902fdbe68ccc4b9a88e7bb0d",
+        "strategy": "Inventory generated surfaces and retained side effects in the approach",
+        "summary": "The approach now lists generated artifacts, runtime and hook effects, query outputs, and the help-only surface that changes.",
+        "priorRepairInsufficiency": null,
+        "deltaIds": [
+          "e28ee6959aa2916c884424dc6dab023ce615c0f0a8f0fbed8cb75d2ee3eca9ca"
+        ]
+      },
+      {
+        "fingerprint": "d52b391b060f6dedd8cab2f3439a3a9a1376dddedc55fe9cd15e63ee1856d498",
+        "strategy": "Map each retained surface to behavior-level validation",
+        "summary": "Validation now assigns concrete registry, CLI, guard, runtime, hook, artifact, side-effect, and query assertions to named owners.",
+        "priorRepairInsufficiency": null,
+        "deltaIds": [
+          "e28ee6959aa2916c884424dc6dab023ce615c0f0a8f0fbed8cb75d2ee3eca9ca"
+        ]
+      },
+      {
+        "fingerprint": "7d9f5202187b829eb3e13ebd097888f5378f66cb2782ef0eb5ffa159d74d9364",
+        "strategy": "Assign generated artifacts and side effects to existing owners",
+        "summary": "The deferred mapping now explicitly retains generated outputs and side effects, names their existing owners, and records no-removal decisions.",
+        "priorRepairInsufficiency": null,
+        "deltaIds": [
+          "e28ee6959aa2916c884424dc6dab023ce615c0f0a8f0fbed8cb75d2ee3eca9ca"
+        ]
+      },
+      {
+        "fingerprint": "dca735bc1acf43dc0b550fb19a3995fadabac2f98b8559a21147a8906b6d6b36",
+        "strategy": "Inventory retained artifacts and acceptance evidence",
+        "summary": "The impact inventory now lists generated artifacts, Flow state, runtime effects, and per-surface behavior-level evidence rather than a generic unchanged claim.",
+        "priorRepairInsufficiency": null,
+        "deltaIds": [
+          "e28ee6959aa2916c884424dc6dab023ce615c0f0a8f0fbed8cb75d2ee3eca9ca"
+        ]
+      },
+      {
+        "fingerprint": "f292d073f3d5517105e5c887265fa48eec8e3705701cab6fd723b63adabd48b8",
+        "strategy": "Map prose, examples, and localization separately",
+        "summary": "Command-specific prose, examples, and localization now have distinct retained owners and explicit help-path verification.",
+        "priorRepairInsufficiency": null,
+        "deltaIds": [
+          "e28ee6959aa2916c884424dc6dab023ce615c0f0a8f0fbed8cb75d2ee3eca9ca"
+        ]
+      }
+    ],
+    "lineage": {
+      "kind": "artifact",
+      "deltaIds": [
+        "e28ee6959aa2916c884424dc6dab023ce615c0f0a8f0fbed8cb75d2ee3eca9ca"
+      ]
+    }
+  }
+}

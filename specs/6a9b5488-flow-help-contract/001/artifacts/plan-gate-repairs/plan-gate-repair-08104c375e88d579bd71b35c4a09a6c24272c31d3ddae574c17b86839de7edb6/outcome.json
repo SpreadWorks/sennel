@@ -1,0 +1,222 @@
+{
+  "version": 1,
+  "repairId": "plan-gate-repair-08104c375e88d579bd71b35c4a09a6c24272c31d3ddae574c17b86839de7edb6",
+  "repairRecordFingerprint": "08104c375e88d579bd71b35c4a09a6c24272c31d3ddae574c17b86839de7edb6",
+  "sourceEvidence": {
+    "sourceAttempt": {
+      "id": "attempt-draft-gate-b88c98fe-9c3c-4ec9-8189-b3d35f321766",
+      "sequence": 4
+    },
+    "resultLogicalKey": "draft.gate",
+    "publicationActivityId": "plan-gate-repaired-4ef1d4d0-6b7c-42c1-a608-9e0fe5d0dc8f",
+    "catalogFingerprint": "1b042ee9f33d07b85500fe3c9a227daff6e5c593ea907f25ec74599606d5889e",
+    "transitionLineage": {
+      "sourceAttempt": {
+        "id": "attempt-draft-gate-b88c98fe-9c3c-4ec9-8189-b3d35f321766",
+        "sequence": 4
+      },
+      "canonicalAttempt": {
+        "id": "attempt-draft-gate-b88c98fe-9c3c-4ec9-8189-b3d35f321766",
+        "sequence": 4
+      },
+      "sourceFingerprint": "4d4e5bff29f422e3ce9fce4ee5b6ddfabf0ee4529199522b9e2abca63a7cbc34",
+      "canonicalFingerprint": "1b042ee9f33d07b85500fe3c9a227daff6e5c593ea907f25ec74599606d5889e",
+      "sourceRevisionFingerprint": "34eb02449e8fd05f9d2556f80181bce16def0ac3ce0d408bb8b196461a87edd9",
+      "canonicalRevisionFingerprint": "34eb02449e8fd05f9d2556f80181bce16def0ac3ce0d408bb8b196461a87edd9"
+    }
+  },
+  "sourceAttempt": {
+    "id": "attempt-draft-gate-b88c98fe-9c3c-4ec9-8189-b3d35f321766",
+    "sequence": 4
+  },
+  "targetAttempt": {
+    "id": "attempt-draft-gate-repair-4a4e86d3-09a8-4a1f-ad88-c111a68e2c61",
+    "sequence": 5
+  },
+  "publicationActivityId": "attempt-confirmed-d330a837-3227-4402-82f9-e6197ba694e0",
+  "handoffRevision": "d83d7560affc9fe1e671f973af3b64b3d163655d57d7f069d5415655ce791d80",
+  "disposition": "applied",
+  "report": {
+    "beforeEvidenceDigest": "47cb2b64122e5d27a7a6321e2fd0f0cc997556bc2b96e8dbab3170925fa62b19",
+    "outputEvidenceDigest": "238da18f5d8d4395b2b96cee8d8dd2fcc8db721afd231101cd2f608ef552db5b",
+    "summary": "既存の Draft authoring scope 内の6つの値だけを置換し、同等性、長い名前、guard と group option set、三つの help path、設定影響、retained public surface の owner と behavior-level verification を明示した。12件の blocking fingerprint を各1件ずつ対応づけた。",
+    "requests": [
+      {
+        "fingerprint": "799646605bf5f4bfddfe0499dce1972c1ecc0e4d918cdd33baf6b7b15a1ed0b5",
+        "recurrenceCount": 0,
+        "priorStrategy": null
+      },
+      {
+        "fingerprint": "b893abd290aa96738c4b98ce962193fcd52376dea2cf263132d4b828870f154a",
+        "recurrenceCount": 0,
+        "priorStrategy": null
+      },
+      {
+        "fingerprint": "6ec9052bf80eff2cf686809f9e6e50fd54737d95830af1d345b034a5de0578c3",
+        "recurrenceCount": 0,
+        "priorStrategy": null
+      },
+      {
+        "fingerprint": "1a47eedd03f12c4dc7d9d906ea81fd8fab9d7b36f6cf50d0cc0881652d5ec7cf",
+        "recurrenceCount": 0,
+        "priorStrategy": null
+      },
+      {
+        "fingerprint": "6d59ecd7d77116d5824b2c2fba0d29997b37f5335906b811d8cc49334cd8ab5e",
+        "recurrenceCount": 0,
+        "priorStrategy": null
+      },
+      {
+        "fingerprint": "7a93016d4f2796b4bb13785291d6a0e152a2fce2adaeea0f2cfae50a578e8381",
+        "recurrenceCount": 0,
+        "priorStrategy": null
+      },
+      {
+        "fingerprint": "7612fb33a77aa953851e8a804d6d9018a15a0141c356f32ee96ad65db99dff60",
+        "recurrenceCount": 0,
+        "priorStrategy": null
+      },
+      {
+        "fingerprint": "b3613ffe307cfa8e917e18724849285c01e3c24840f5be14f69a1bd4dcc33f65",
+        "recurrenceCount": 0,
+        "priorStrategy": null
+      },
+      {
+        "fingerprint": "cb19e7a62151558075a7136b7ce30b1b6e9941fa2f49e891e3b5735efe295077",
+        "recurrenceCount": 0,
+        "priorStrategy": null
+      },
+      {
+        "fingerprint": "69b3f9fabc036d0c50dc570a95ce2f33add44f9f68e8fccd3e0c054fd19fcdd5",
+        "recurrenceCount": 0,
+        "priorStrategy": null
+      },
+      {
+        "fingerprint": "46022defec19b4b8b2a8b7e9898011589912a7ebbd72a0ded499c3ea2927f757",
+        "recurrenceCount": 0,
+        "priorStrategy": null
+      },
+      {
+        "fingerprint": "0f5902231f71194ae3f55a944ff1b2ec8045e0bfb1279b00125eaedde01f48ac",
+        "recurrenceCount": 0,
+        "priorStrategy": null
+      }
+    ],
+    "results": [
+      {
+        "fingerprint": "799646605bf5f4bfddfe0499dce1972c1ecc0e4d918cdd33baf6b7b15a1ed0b5",
+        "strategy": "observable-parity-contract",
+        "summary": "analysis.proposedApproach に parser、help、guard、runtime、終了コード、hook、query の保持結果と検証経路を追加した。",
+        "priorRepairInsufficiency": null,
+        "deltaIds": [
+          "238da18f5d8d4395b2b96cee8d8dd2fcc8db721afd231101cd2f608ef552db5b"
+        ]
+      },
+      {
+        "fingerprint": "b893abd290aa96738c4b98ce962193fcd52376dea2cf263132d4b828870f154a",
+        "strategy": "measurable-layout-fixtures",
+        "summary": "analysis.validation に 13/14/15 文字境界、最長登録名、合成64/65文字 fixture と2 ASCII spaces以上の期待結果を追加した。",
+        "priorRepairInsufficiency": null,
+        "deltaIds": [
+          "238da18f5d8d4395b2b96cee8d8dd2fcc8db721afd231101cd2f608ef552db5b"
+        ]
+      },
+      {
+        "fingerprint": "6ec9052bf80eff2cf686809f9e6e50fd54737d95830af1d345b034a5de0578c3",
+        "strategy": "explicit-option-outcomes",
+        "summary": "scopeVerification.in[1] に五つの target guard、agent-work-dir、group ごとの表示・受理・拒否結果を明記した。",
+        "priorRepairInsufficiency": null,
+        "deltaIds": [
+          "238da18f5d8d4395b2b96cee8d8dd2fcc8db721afd231101cd2f608ef552db5b"
+        ]
+      },
+      {
+        "fingerprint": "1a47eedd03f12c4dc7d9d906ea81fd8fab9d7b36f6cf50d0cc0881652d5ec7cf",
+        "strategy": "measurable-layout-fixtures",
+        "summary": "scopeVerification.in[2] に長い名前の具体的な文字数境界、対象 fixture、境界表示の期待結果を追加した。",
+        "priorRepairInsufficiency": null,
+        "deltaIds": [
+          "238da18f5d8d4395b2b96cee8d8dd2fcc8db721afd231101cd2f608ef552db5b"
+        ]
+      },
+      {
+        "fingerprint": "6d59ecd7d77116d5824b2c2fba0d29997b37f5335906b811d8cc49334cd8ab5e",
+        "strategy": "observable-parity-contract",
+        "summary": "移行後の同等性を、各 retained behavior の観測結果と既存 owner の behavior-level test に分解した。",
+        "priorRepairInsufficiency": null,
+        "deltaIds": [
+          "238da18f5d8d4395b2b96cee8d8dd2fcc8db721afd231101cd2f608ef552db5b"
+        ]
+      },
+      {
+        "fingerprint": "7a93016d4f2796b4bb13785291d6a0e152a2fce2adaeea0f2cfae50a578e8381",
+        "strategy": "measurable-layout-fixtures",
+        "summary": "長い名前検証に測定可能な境界、最長実名、合成 fixture、出力と終了コードを追加した。",
+        "priorRepairInsufficiency": null,
+        "deltaIds": [
+          "238da18f5d8d4395b2b96cee8d8dd2fcc8db721afd231101cd2f608ef552db5b"
+        ]
+      },
+      {
+        "fingerprint": "7612fb33a77aa953851e8a804d6d9018a15a0141c356f32ee96ad65db99dff60",
+        "strategy": "explicit-option-outcomes",
+        "summary": "五つの shared target guard を名前、値種別、適用範囲、成功・拒否結果とともに列挙した。",
+        "priorRepairInsufficiency": null,
+        "deltaIds": [
+          "238da18f5d8d4395b2b96cee8d8dd2fcc8db721afd231101cd2f608ef552db5b"
+        ]
+      },
+      {
+        "fingerprint": "b3613ffe307cfa8e917e18724849285c01e3c24840f5be14f69a1bd4dcc33f65",
+        "strategy": "measurable-layout-fixtures",
+        "summary": "長い名前の具体的境界と、三つの help 経路での同一 spacing/order という期待出力を固定した。",
+        "priorRepairInsufficiency": null,
+        "deltaIds": [
+          "238da18f5d8d4395b2b96cee8d8dd2fcc8db721afd231101cd2f608ef552db5b"
+        ]
+      },
+      {
+        "fingerprint": "cb19e7a62151558075a7136b7ce30b1b6e9941fa2f49e891e3b5735efe295077",
+        "strategy": "configuration-inventory",
+        "summary": "impactOnExisting に影響を受ける設定エントリがないことを明記し、config.lang と agent/log 設定を無変更として位置づけた。",
+        "priorRepairInsufficiency": null,
+        "deltaIds": [
+          "238da18f5d8d4395b2b96cee8d8dd2fcc8db721afd231101cd2f608ef552db5b"
+        ]
+      },
+      {
+        "fingerprint": "69b3f9fabc036d0c50dc570a95ce2f33add44f9f68e8fccd3e0c054fd19fcdd5",
+        "strategy": "surface-owner-mapping",
+        "summary": "各 retained public surface を旧 owner、移行後 owner、保存する結果へ対応づけた。",
+        "priorRepairInsufficiency": null,
+        "deltaIds": [
+          "238da18f5d8d4395b2b96cee8d8dd2fcc8db721afd231101cd2f608ef552db5b"
+        ]
+      },
+      {
+        "fingerprint": "46022defec19b4b8b2a8b7e9898011589912a7ebbd72a0ded499c3ea2927f757",
+        "strategy": "surface-owner-mapping",
+        "summary": "parser、leaf/group help、execution、guard、runtime、query の各 surface に per-surface acceptance criteria と検証経路を割り当てた。",
+        "priorRepairInsufficiency": null,
+        "deltaIds": [
+          "238da18f5d8d4395b2b96cee8d8dd2fcc8db721afd231101cd2f608ef552db5b"
+        ]
+      },
+      {
+        "fingerprint": "0f5902231f71194ae3f55a944ff1b2ec8045e0bfb1279b00125eaedde01f48ac",
+        "strategy": "surface-owner-mapping",
+        "summary": "全 retained public surface に少なくとも一つの behavior-level integration/E2E または既存 owner 回帰を明示的に割り当てた。",
+        "priorRepairInsufficiency": null,
+        "deltaIds": [
+          "238da18f5d8d4395b2b96cee8d8dd2fcc8db721afd231101cd2f608ef552db5b"
+        ]
+      }
+    ],
+    "lineage": {
+      "kind": "artifact",
+      "deltaIds": [
+        "238da18f5d8d4395b2b96cee8d8dd2fcc8db721afd231101cd2f608ef552db5b"
+      ]
+    }
+  }
+}

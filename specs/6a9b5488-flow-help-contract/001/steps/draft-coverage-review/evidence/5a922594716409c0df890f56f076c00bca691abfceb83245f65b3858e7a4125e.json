@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "phase": "draft-coverage",
+  "taskId": null,
+  "treeSha": "2ab1ca7a3f8236532cbeba3b30cb4f8c3baee0c1",
+  "targetStateDigest": "2f9fea7c4bcf574f4ab1380ec1b134dcbcb5494f66b02e4dc9c39298a8ee9448",
+  "provenance": {
+    "provider": "sennel-review",
+    "invocationId": "258d8027519efb6963cddcf69a45473499e5a233f0c4f0118fc796abf501f46f",
+    "capturedAt": "2026-10-05T00:46:46.855Z"
+  },
+  "disposition": "PASS",
+  "blockingFindings": [],
+  "advisoryFindings": []
+}

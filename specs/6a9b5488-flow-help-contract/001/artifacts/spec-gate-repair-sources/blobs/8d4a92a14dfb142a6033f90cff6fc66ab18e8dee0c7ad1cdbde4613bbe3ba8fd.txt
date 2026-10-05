@@ -1,0 +1,3030 @@
+import { assertCurrentWorkerExecutionSelection } from "./worker-execution-admission.js";
+import { workerStepExecutionRegistration } from "../engine/composition/registered-step-execution.js";
+import { reserveSpecGateRepairWorkerCall } from "../engine/composition/spec-gate-repair.js";
+import { SPEC_GATE_REPAIR_REQUEST_LIMIT } from "./spec-gate-repair-progress.js";
+import { planSpecGateRepairWorkerExecution } from "./spec-gate-repair-execution.js";
+import { CURRENT_FLOW_SCHEMA_REVISION } from "../../lib/flow-schema-revision.js";
+/**
+ * Agent-independent Flow continuation dispatcher.
+ *
+ * The CLI cannot observe an interactive agent host emitting its final
+ * response.  Instead of depending on a host lifecycle callback, this command
+ * owns the non-terminal portion of the Flow: it asks for the guarded next
+ * action, delegates one action to the configured provider-neutral Agent
+ * service, verifies durable progress, and repeats until the Flow reaches a
+ * user or terminal boundary.
+ */
+
+import fs from "node:fs";
+import { DraftWorkerRejection } from "./draft-worker-rejection.js";
+import { isStepPersistenceFailure } from "./definition-lifecycle-failure.js";
+import { CurrentAttemptIdentity } from "./current-flow-state.js";
+import { CurrentFlowStateConflictError } from "./current-flow-state-conflict-error.js";
+import path from "node:path";
+import { loadSpecJsonSchema } from "../../lib/spec-json.js";
+import { FlowCommand } from "./base-command.js";
+import { Envelope } from "../../lib/flow-envelope.js";
+import { AgentFailure } from "../../lib/agent-failure.js";
+import { PromptBatchingError, PromptRequestLimit } from "../../lib/prompt-batching.js";
+import { Agent } from "../../lib/agent.js";
+import { DeferredAgentInvocationMetric } from "../../lib/agent-invocation-metric.js";
+import { flowCommands } from "../../lib/command-registry.js";
+import { dispatch } from "../../lib/dispatcher.js";
+import { FlowHandoffAuthorityLease } from "../../lib/flow-handoff-authority-lease.js";
+import { ProcessLock } from "../../lib/process-lock.js";
+import { RealDirectoryAuthority } from "../../lib/real-directory-authority.js";
+import {
+  AbortedDirective,
+  AwaitDraftQuestionDirective,
+  AwaitUserDecisionDirective,
+  AwaitTaskReviewFilterDirective,
+  BlockedDirective,
+  CompletedDirective,
+  ExecuteCommandDirective,
+  ExecuteStepDirective,
+  IdleDirective,
+  NextActionDirective,
+  RepairEvidenceDirective,
+} from "./next-action-directive.js";
+import { finalRegressionWorktreeFingerprint } from "./test-artifacts.js";
+import GetNextActionCommand from "./get-next-action.js";
+import { PRODUCT } from "../../lib/product.js";
+import {
+  WorkerArtifactHandoffCoordinator,
+  WorkerArtifactHandoffError,
+  WorkerArtifactRetryExhaustedError,
+  RequirementTestStructuralHandoffError,
+  WorkerArtifactHandoffRequest,
+  WorkerArtifactHandoffReference,
+  WorkerArtifactWorkerInstructions,
+  materializeSourceWorkerEffect,
+  sealParentMaterializedSourceWorkerEffect,
+  workerArtifactHandoffPolicy,
+} from "./worker-artifact-handoff.js";
+import { TaskSourceFailureObservation } from "./task-source-failure.js";
+import { isStepAdmissionRefusal } from "./step-admission-refusal.js";
+import { SourceHandoffFailureFacts } from "./source-handoff-failure.js";
+import { sourceWorkerEffectJsonSchema } from "./source-worker-effect-schema.js";
+import {
+  AutoApprovedFlowDispatchAuthorization,
+  ExplicitFlowDispatchAuthorization,
+  FlowDispatchInvocation,
+  FlowDispatchWorkerInvocation,
+  FlowDispatchSession,
+  FlowDispatchTarget,
+  UnapprovedFlowDispatchAuthorization,
+  flowDispatchDigest,
+  FLOW_DISPATCH_INVOCATION_ENV,
+} from "./dispatch-invocation.js";
+import { buildFlowCommandHookContext } from "./flow-context.js";
+import {
+  ConfirmAndAdvance,
+  DraftConditionalWorkerExecutionBinding,
+  DraftWorkerExecutionBinding,
+  DraftWorkerExecutionClaim,
+  resolveDefinitionRoute,
+  resolveDraftWorkerCorrection,
+  resolveDispatcherOwnedFlowAction,
+  resolveSourceHandoffTransitionPlan,
+} from "../definition.js";
+import { CanonicalSpecApproval } from "./canonical-spec-approval.js";
+import { reconcileCompletedReviewWorkUnits } from "./review-work-unit.js";
+import { approvalRouteFacts } from "./definition-route-facts.js";
+import {
+  specRepairDeltaPayloadSchema,
+  specTriageDeltaPayloadSchema,
+} from "./spec-review-artifacts.js";
+import {
+  NonBlockingDecisionContext,
+  decisionEvidenceForActiveFlow,
+  recordNonBlockingDecision,
+} from "./nonblocking.js";
+import { DraftService } from "../services/draft-service.js";
+import { draftWorkerStepRegistration } from "../engine/composition/draft.js";
+import { PreparedStep } from "../engine/composition/step-registration.js";
+import { specWorkerStepRegistration } from "../engine/composition/spec.js";
+import {
+  DraftWorkerExecutionStepBinding,
+  DraftWorkerStepBinding,
+} from "../engine/connectors/draft/draft-step-binding.js";
+import { isConditionalDraftWorkerStep } from "./draft-conditional-worker.js";
+
+const DEFAULT_MAX_DISPATCHES = 256;
+const DEFAULT_MAX_STALLED_DISPATCHES = 3;
+const DISPATCH_LOCK_KIND = "flow-dispatch";
+const RESUMABLE_DISPATCH_BOUNDARIES = new Set([
+  "approval_required",
+  "auto_upgrade_decision",
+  "await_user_decision",
+  "host_action",
+  "blocked",
+]);
+const DISPATCHER_OWNED_REPAIR_COMMANDS = new Set([
+  "repair-plan-gate",
+]);
+const DISPATCHER_OWNED_RECOVERY_COMMANDS = new Set([
+  "claim-next-action",
+  "recover-finalization",
+  "recover-missing-producer-artifact",
+  "recover-task-execution-overrun",
+  "settle-gate-transition",
+  "settle-review-transition",
+  "gate",
+]);
+const NON_REPLAYABLE_HANDOFF_ERROR_CODES = new Set([
+  "FLOW_ARTIFACT_HANDOFF_AUTHORITY_VIOLATION",
+  "FLOW_SOURCE_HANDOFF_FINALIZE_AUTHORITY_VIOLATION",
+  "FLOW_SOURCE_HANDOFF_CANONICAL_PATH_VIOLATION",
+]);
+const REQUIREMENT_TEST_WORKER_LEAVES = new Set(["test-generate", "test-repair"]);
+
+function conditionalDraftAdmissionError(classification, code, message, resumeInstruction = null) {
+  return new WorkerArtifactHandoffError(classification, code, message, {
+    retryable: false,
+    data: {
+      failureKind: "step-admission",
+      ...(resumeInstruction === null ? {} : { resumeInstruction }),
+    },
+  });
+}
+
+function agentFailuresFor(error, agentError = null) {
+  return Object.freeze([
+    ...(agentError instanceof AgentFailure ? [agentError] : []),
+    ...(Array.isArray(error?.agentFailures) ? error.agentFailures.filter((failure) => failure instanceof AgentFailure) : []),
+  ]);
+}
+
+function isUnclassifiedWorkerError(error) {
+  return error != null
+    && !(error instanceof AgentFailure)
+    && !(error instanceof WorkerArtifactHandoffError);
+}
+
+function isToolingAgentFailure(failure) {
+  return failure instanceof AgentFailure
+    && failure.retryable === true;
+}
+
+function isRequirementTestExternalAgentFailure(failure) {
+  return failure instanceof AgentFailure
+    && failure.requiresExternalIntervention;
+}
+
+function isExternalAgentFailure(error, agentError = null) {
+  return agentFailuresFor(error, agentError).some(isRequirementTestExternalAgentFailure);
+}
+
+function isExplicitWorkerToolingFailure(error, agentError = null) {
+  if (!(error instanceof WorkerArtifactHandoffError)) return false;
+  // A missing sealed submission after the provider never authenticated or
+  // acquired permission is not a handoff transport failure. Preserve that
+  // external boundary instead of letting the absence consume R tooling budget.
+  if (isExternalAgentFailure(error, agentError)) return false;
+  const handoffClass = (value) => value?.transport != null || value?.payloadFormat != null;
+  if (error instanceof WorkerArtifactRetryExhaustedError) {
+    return handoffClass(error.data?.first) && handoffClass(error.data?.second);
+  }
+  if (handoffClass(error.data)) return true;
+  return agentFailuresFor(error, agentError).some(isToolingAgentFailure);
+}
+
+function settleRequirementTestToolingFailure(ctx, attempt, error) {
+  const stepId = attempt?.handoffRequest?.stepId ?? null;
+  if (!REQUIREMENT_TEST_WORKER_LEAVES.has(stepId)
+    || !isExplicitWorkerToolingFailure(error, attempt.agentError)) return false;
+  ctx.flowManager.completeRequirementTestToolingFailure({
+    specId: attempt.handoffRequest.specId,
+    message: error?.message || String(error),
+  });
+  ctx.flowState = ctx.flowManager.loadReadOnly(attempt.handoffRequest.specId);
+  return true;
+}
+
+function settleRequirementTestExternalFailure(ctx, attempt, error) {
+  const stepId = attempt?.handoffRequest?.stepId ?? null;
+  const failure = agentFailuresFor(error, attempt?.agentError)
+    .find(isRequirementTestExternalAgentFailure) ?? null;
+  if (!REQUIREMENT_TEST_WORKER_LEAVES.has(stepId) || failure === null) return false;
+  ctx.flowManager.completeRequirementTestExternalFailure({
+    specId: attempt.handoffRequest.specId,
+    failure,
+  });
+  ctx.flowState = ctx.flowManager.loadReadOnly(attempt.handoffRequest.specId);
+  return true;
+}
+
+/**
+ * A sealed Requirement-test candidate can be structurally unusable while its
+ * authority, identity, digests, and paths are all valid.  That is a semantic
+ * rejection, not a worker/tooling failure: the FlowManager is the only owner
+ * of publishing the candidate, recording its R-bound finding, and selecting
+ * the Definition route in one transaction.
+ */
+function settleRequirementTestStructuralHandoff(ctx, attempt, error) {
+  if (!(error instanceof RequirementTestStructuralHandoffError)
+    || !REQUIREMENT_TEST_WORKER_LEAVES.has(attempt?.handoffRequest?.stepId)) return false;
+  ctx.flowManager.completeRequirementTestStructuralHandoff({
+    specId: attempt.handoffRequest.specId,
+    structuralResult: error.result,
+  });
+  ctx.flowState = ctx.flowManager.loadReadOnly(attempt.handoffRequest.specId);
+  return true;
+}
+
+function draftWorkerCorrection(ctx) {
+  const state = ctx.flowManager.canonicalState(ctx.specId);
+  return resolveDraftWorkerCorrection({ state, activities: ctx.flowManager.activityLedger(state.specId) });
+}
+
+/** Persist a pre-Step worker or handoff failure without inventing StepResult. */
+function settleDraftWorkerFailure(ctx, attempt, error, stepId = attempt?.handoffRequest?.stepId ?? null) {
+  if (!stepId?.startsWith("draft")) return null;
+  if (isStepAdmissionRefusal(error)) return null;
+  const request = attempt?.handoffRequest ?? null;
+  if (isConditionalDraftWorkerStep(stepId) && request !== null) {
+    const state = ctx.flowManager.canonicalState(request.specId);
+    const binding = {
+      runId: state.runId,
+      specId: state.specId,
+      stepId,
+      attempt: state.attempt,
+    };
+    const execution = ctx.flowManager.draftStepExecutionState({ binding });
+    const publicationRecoveryPending = error instanceof WorkerArtifactHandoffError
+      && error.classification === "recovery-required"
+      && error.code === "FLOW_ARTIFACT_HANDOFF_RECOVERY_REQUIRED";
+    let correction = null;
+    if (execution.lifecycle?.phase === "claimed" && !publicationRecoveryPending) {
+      const executionIdentity = execution.executionIdentity();
+      if (executionIdentity === null) {
+        throw new Error("conditional Draft worker failure has no persisted execution identity");
+      }
+      const { stepResult, settlement } = executionIdentity;
+      const rejection = stepId === "draft-gate-repair" ? DraftWorkerRejection.fromFailure(error) : null;
+      ctx.flowManager.checkpointDraftStepExecution({
+        binding,
+        stepResult,
+        settlement,
+        rejection,
+        executionBinding: new DraftConditionalWorkerExecutionBinding({
+          executionGeneration: execution.lifecycle.executionGeneration + 1,
+          inputDigest: execution.lifecycle.binding.inputDigest,
+          inputRevision: execution.lifecycle.binding.inputRevision,
+          contentDigest: execution.lifecycle.binding.contentDigest,
+        }),
+      });
+      if (rejection !== null) correction = draftWorkerCorrection(ctx);
+    }
+    ctx.flowState = ctx.flowManager.loadReadOnly(request.specId);
+    return correction;
+  }
+  ctx.flowManager.failCurrentAttempt({
+    specId: request?.specId ?? ctx.specId,
+    failure: {
+      category: "tooling",
+      code: error?.code || "FLOW_DRAFT_WORKER_FAILURE",
+      message: error?.message || String(error),
+      retryable: false,
+      retryKind: null,
+    },
+  });
+  ctx.flowState = ctx.flowManager.loadReadOnly(request?.specId ?? ctx.specId);
+  return null;
+}
+
+function isSpecArtifactWorkerStep(stepId) {
+  return stepId !== "spec-gate-repair" && specWorkerStepRegistration(stepId) !== null;
+}
+
+/** A pre-Step Spec failure belongs to the invocation's original Attempt. */
+function settleSpecWorkerFailure(ctx, attempt, error, expectedState, invocation) {
+  const request = attempt?.handoffRequest;
+  const stepId = invocation.action.nextAction.step;
+  const agentFailure = agentFailuresFor(error, attempt.agentError).find(isRequirementTestExternalAgentFailure);
+  if (!isSpecArtifactWorkerStep(stepId)
+    || expectedState.attempt?.nodeId !== stepId
+    || expectedState.current?.at(-1) !== stepId
+    || expectedState.runId !== invocation.target.runId
+    || (invocation.target.specId !== null && expectedState.specId !== invocation.target.specId)
+    || (request && (request.runId !== expectedState.runId
+      || request.specId !== expectedState.specId
+      || request.stepId !== stepId
+      || request.dispatchInvocationId !== invocation.id
+      || request.actionDigest !== invocation.action.digest))
+    || !(error instanceof WorkerArtifactHandoffError)
+    || isUnclassifiedWorkerError(attempt.agentError)
+    || (error.retryable === true && agentFailure === undefined)
+    || error.classification === "stale" || error.classification === "conflict"
+    || error.classification === "recovery-required" || error.recoveryPossible === true
+    || isStepAdmissionRefusal(error) || isStepPersistenceFailure(error)) return false;
+  const cause = agentFailure ?? error;
+  const recorded = ctx.flowManager.failCurrentAttemptIfCurrent({
+    specId: expectedState.specId,
+    expectedRunId: expectedState.runId,
+    expectedAttempt: expectedState.attempt,
+    failure: {
+      category: "tooling",
+      code: cause.code,
+      message: cause.message,
+      retryable: false,
+      retryKind: null,
+      ...(agentFailure && {
+        agentFailureKind: agentFailure.kind,
+        recoveryHint: agentFailure.recoveryHint,
+        attemptCount: agentFailure.attemptCount,
+        maxAttempts: agentFailure.maxAttempts,
+        ...(agentFailure.providerCompletionEvidence && {
+          agentProviderCompletionEvidence: agentFailure.providerCompletionEvidence.toJSON(),
+        }),
+      }),
+    },
+  });
+  ctx.flowState = ctx.flowManager.loadReadOnly(expectedState.specId);
+  return recorded;
+}
+
+/**
+ * Definition-backed command invocation owned by the dispatcher.  This keeps
+ * command selection as typed definition data, rather than asking a sandboxed
+ * worker to re-parse and execute an instruction string against the canonical
+ * Version Store.
+ */
+export class DispatcherOwnedFlowCommand {
+  constructor(nextAction) {
+    if (!nextAction || typeof nextAction !== "object" || Array.isArray(nextAction)) {
+      throw new Error("dispatcher-owned command requires a next-action object");
+    }
+    const scope = nextAction.taskId == null ? "flow" : "task";
+    const definition = resolveDispatcherOwnedFlowAction({ scope, stepId: nextAction.step });
+    if (definition === null) {
+      throw new Error(`no dispatcher-owned command is declared for ${scope}.${nextAction.step}`);
+    }
+    if (nextAction.action !== definition.action) {
+      throw new Error(`dispatcher-owned command action mismatch for ${scope}.${nextAction.step}`);
+    }
+    this.command = definition.executionCommand;
+    this.commandName = this.command.subcommand;
+    Object.freeze(this);
+  }
+
+  static forAction(action) {
+    if (!(action?.directive instanceof ExecuteStepDirective)) return null;
+    const scope = action.nextAction.taskId == null ? "flow" : "task";
+    return resolveDispatcherOwnedFlowAction({ scope, stepId: action.nextAction.step }) === null
+      ? null
+      : new DispatcherOwnedFlowCommand(action.nextAction);
+  }
+
+  argv(target, agentWorkDir = null) {
+    return [
+      ...this.command.runArguments().slice(1),
+      ...(agentWorkDir ? ["--agent-work-dir", agentWorkDir] : []),
+      ...targetGuardArguments(target),
+    ];
+  }
+
+  get removesExecutionRoot() {
+    return this.commandName === "finalize-cleanup";
+  }
+}
+
+function targetGuardArguments(target) {
+  const input = target.guardInput();
+  const args = [];
+  if (input.expectBinding) return ["--expect-binding", input.expectBinding];
+  if (input.expectRunId) args.push("--expect-run-id", input.expectRunId);
+  if (input.expectSpec) args.push("--expect-spec", input.expectSpec);
+  if (input.expectIssue != null) args.push("--expect-issue", String(input.expectIssue));
+  if (input.expectNoIssue === true) args.push("--expect-no-issue");
+  return args;
+}
+
+function commandEnvelope(output, commandName, exitCode) {
+  let envelope;
+  try {
+    envelope = JSON.parse(output);
+  } catch (cause) {
+    const error = new Error(`dispatcher-owned command ${commandName} did not emit a JSON envelope`, { cause });
+    error.code = "FLOW_DISPATCH_COMMAND_ENVELOPE_INVALID";
+    throw error;
+  }
+  if (exitCode !== 0 && envelope?.ok !== false) {
+    const error = new Error(`dispatcher-owned command ${commandName} exited with status ${exitCode}`);
+    error.code = envelope?.errors?.find((entry) => typeof entry?.code === "string")?.code
+      || "FLOW_DISPATCH_COMMAND_FAILED";
+    throw error;
+  }
+  return envelope;
+}
+
+function commandFailed(result) {
+  return (result instanceof Envelope && result.ok === false)
+    || (result?.ok === false);
+}
+
+function finalizeCleanupCompletion(result) {
+  if (result?.data?.status !== "done" || result?.data?.assurance == null) {
+    const error = new Error("finalize cleanup did not return its canonical completion assurance");
+    error.code = "FLOW_DISPATCH_FINALIZE_CLEANUP_UNCONFIRMED";
+    throw error;
+  }
+}
+
+function workerArtifactAgentOptions(stepId, outputSchema) {
+  if (workerArtifactHandoffPolicy(stepId)?.kind === "source") {
+    const sourceSchema = sourceWorkerEffectJsonSchema(stepId);
+    if (JSON.stringify(outputSchema) !== JSON.stringify(sourceSchema)) {
+      throw new Error(`guarded source worker output schema is not the canonical effect schema: ${stepId}`);
+    }
+    return {
+      jsonSchema: sourceSchema,
+    };
+  }
+  let payloadName;
+  let schema;
+  let label;
+  if (stepId === "spec") {
+    payloadName = "spec.json";
+    schema = loadSpecJsonSchema();
+    label = "Spec artifact";
+  } else if (stepId === "spec-triage") {
+    payloadName = "review.delta.json";
+    schema = specTriageDeltaPayloadSchema();
+    label = "Spec triage review delta";
+  } else if (stepId === "spec-repair") {
+    payloadName = "review.delta.json";
+    schema = specRepairDeltaPayloadSchema();
+    label = "Spec repair review delta";
+  } else {
+    return {};
+  }
+  const schemaGuidance = [
+    `The handoff file named ${payloadName} is the canonical ${label.toLowerCase()} payload.`,
+    "Write valid JSON that matches this schema exactly; do not add properties outside the schema.",
+    "The CLI validates the payload before it can be sealed or published.",
+    `${label} schema:`,
+    JSON.stringify(schema, null, 2),
+  ].join("\n");
+  return {
+    // The provider response is still the sealed-handoff report. The complete
+    // payload schema stays in request.json for the file the worker must write.
+    jsonSchema: outputSchema,
+    fmtFallback: "Return only the sealed handoff report as valid JSON matching output_schema in action.json.",
+    workerRequestGuidance: schemaGuidance,
+  };
+}
+
+function reboundWorkerAuthorization(invocation, action) {
+  if (invocation.authorization instanceof ExplicitFlowDispatchAuthorization) {
+    return new ExplicitFlowDispatchAuthorization({
+      action,
+      runId: invocation.target.runId,
+      approvalToken: action.approvalToken(),
+      approvedAt: invocation.authorization.approvedAt,
+    });
+  }
+  if (invocation.authorization instanceof AutoApprovedFlowDispatchAuthorization) {
+    return new AutoApprovedFlowDispatchAuthorization({
+      action,
+      choiceId: invocation.authorization.choiceId,
+    });
+  }
+  return new UnapprovedFlowDispatchAuthorization(action);
+}
+
+function reboundWorkerInvocation(invocation, nextAction, id = undefined, {
+  repositoryFingerprint = invocation.action.repositoryFingerprint,
+  expectedDigest = invocation.action.digest,
+} = {}) {
+  const session = new FlowDispatchSession({ ...(id === undefined ? {} : { id }), target: invocation.target });
+  const action = session.captureAction(
+    workerFacingNextAction(nextAction),
+    repositoryFingerprint,
+  );
+  if (action.digest !== expectedDigest) {
+    throw new Error("fresh worker handoff action changed before retry");
+  }
+  return new FlowDispatchInvocation({
+    session,
+    action,
+    authorization: reboundWorkerAuthorization(invocation, action),
+  });
+}
+
+function freshWorkerInvocation(invocation, nextAction) {
+  return reboundWorkerInvocation(invocation, nextAction);
+}
+
+/**
+ * Non-authoritative feedback for the one fresh retry of a rejected
+ * handoff. It intentionally contains no Action, approval, or state data: the
+ * retried worker keeps the same guarded action and only receives the parent
+ * validator's exact correction signal.
+ */
+export class WorkerArtifactRetryFeedback {
+  constructor(error, { remainingCalls = null } = {}) {
+    if (!(error instanceof WorkerArtifactHandoffError) || error.retryable !== true) {
+      throw new Error("worker artifact retry feedback requires a retryable handoff error");
+    }
+    this.code = error.code;
+    this.classification = error.classification;
+    this.message = error.message;
+    this.remainingCalls = remainingCalls;
+    Object.freeze(this);
+  }
+
+  toJSON() {
+    return {
+      code: this.code,
+      classification: this.classification,
+      message: this.message,
+      ...(this.remainingCalls !== null ? { remainingCalls: this.remainingCalls } : {}),
+    };
+  }
+}
+
+/** Parent-owned cumulative correction evidence; never read from worker JSON. */
+function errorMessages(envelope) {
+  return (envelope?.errors || [])
+    .flatMap((entry) => entry?.messages || [])
+    .map(String);
+}
+
+function errorCode(envelope) {
+  return envelope?.errors?.find((entry) => entry?.level === "fatal")?.code
+    || envelope?.errors?.[0]?.code
+    || "FLOW_DISPATCH_NEXT_ACTION_FAILED";
+}
+
+function targetGuardInput(target) {
+  return {
+    ...target.guardInput(),
+    _envelopeType: "get",
+    _envelopeKey: "next-action",
+  };
+}
+
+async function flushDeferredMetrics(metrics) {
+  for (const metric of metrics) await metric.flush();
+}
+
+function discardDeferredMetrics(metrics) {
+  for (const metric of metrics) metric.discard();
+}
+
+function readFlowState(ctx) {
+  try {
+    return ctx.flowManager.loadReadOnly(ctx.specId);
+  } catch (error) {
+    if (error?.code === "ERR_MISSING_FILE" || error?.message === "no active flow (flow.json not found)") {
+      return null;
+    }
+    throw error;
+  }
+}
+
+function optionalApprovalReceiptLocation(ctx) {
+  const specId = ctx.specId ?? ctx.flowState?.specId;
+  const location = ctx.specLocation ?? ctx.flowManager?.specLocation?.(specId);
+  if (!location?.relativeFlowStateFile || !location?.relativeActivitiesFile || !location?.relativeCatalogFile) {
+    return null;
+  }
+  return location;
+}
+
+function approvalReceiptLocation(ctx) {
+  const location = optionalApprovalReceiptLocation(ctx);
+  if (location === null) {
+    throw new Error("flow dispatch approval receipt requires a canonical Version location");
+  }
+  return location;
+}
+
+function receiptControlPaths(location) {
+  return Object.freeze([
+    location.relativeFlowStateFile,
+    location.relativeActivitiesFile,
+    location.relativeCatalogFile,
+  ]);
+}
+
+function receiptControlPathspecExcludes(location) {
+  return receiptControlPaths(location).map((relativePath) => `:(exclude,top,literal)${relativePath}`);
+}
+
+function runtimeViewPathspecExcludes(location) {
+  return [`:(exclude,top,glob)${location.relativeDirectory}/.runtime/views/**`];
+}
+
+/**
+ * Canonical Flow control records and ephemeral artifact views are owned by
+ * the dispatcher/reader rather than product work. Their exact Version paths
+ * are normalized in both direct and worktree execution because a
+ * FlowVersionLocation is repository-relative in either mode. Keeping this
+ * list narrow deliberately leaves spec.record, source, tests, and every
+ * other cataloged artifact in the approval fingerprint.
+ */
+function dispatchFingerprintPathspecExcludes(ctx) {
+  const location = optionalApprovalReceiptLocation(ctx);
+  return [
+    ...(location === null
+      ? []
+      : [...receiptControlPathspecExcludes(location), ...runtimeViewPathspecExcludes(location)]),
+    ...(ctx.dispatchFingerprintPathspecExcludes ?? []),
+  ];
+}
+
+function receiptControlBytes(location) {
+  const files = [
+    [location.relativeFlowStateFile, location.flowStateFile],
+    [location.relativeActivitiesFile, location.activitiesFile],
+    [location.relativeCatalogFile, location.catalogFile],
+  ];
+  return Object.freeze(files.map(([relativePath, absolutePath]) => ({
+    relativePath,
+    bytes: fs.readFileSync(absolutePath).toString("base64"),
+  })));
+}
+
+function sameReceiptControlBytes(left, right) {
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
+function sameDispatchActionMeaning(left, right) {
+  return left.target.digest === right.target.digest
+    && JSON.stringify(left.nextAction) === JSON.stringify(right.nextAction);
+}
+
+class DispatchApprovalReceiptMutationError extends Error {
+  constructor({ invocation, activeAction, message }) {
+    super(message);
+    this.name = "DispatchApprovalReceiptMutationError";
+    this.code = "FLOW_DISPATCH_AUTHORIZATION_STALE";
+    this.data = Object.freeze({
+      expectedActionDigest: invocation.action.digest,
+      activeActionDigest: activeAction.digest,
+      authorization: invocation.authorization.toJSON(),
+    });
+  }
+}
+
+/**
+ * The explicit approval record is the one dispatcher-owned mutation permitted
+ * between token validation and worker handoff.  This value object freezes its
+ * exact Version bytes and independently fingerprints every other repository
+ * path, so no user or worker edit can be mistaken for the receipt write.
+ */
+class DispatchApprovalReceiptMutation {
+  constructor({ location, invocation, controlBytes, outsideFingerprint }) {
+    this.location = location;
+    this.invocation = invocation;
+    this.controlBytes = controlBytes;
+    this.outsideFingerprint = outsideFingerprint;
+    Object.freeze(this);
+  }
+
+  static record({ ctx, invocation, fingerprint, record }) {
+    const location = approvalReceiptLocation(ctx);
+    const fingerprintOutsideReceipt = () => fingerprint({
+      ...ctx,
+      dispatchFingerprintPathspecExcludes: receiptControlPathspecExcludes(location),
+    });
+    const before = receiptControlBytes(location);
+    const outsideFingerprint = fingerprintOutsideReceipt();
+    record();
+    const after = receiptControlBytes(location);
+    if (sameReceiptControlBytes(before, after)) {
+      throw new Error("flow dispatch approval receipt did not persist its canonical Version mutation");
+    }
+    if (fingerprintOutsideReceipt() !== outsideFingerprint) {
+      throw new Error("flow dispatch approval receipt changed repository content outside its control files");
+    }
+    const state = readFlowState(ctx);
+    const persisted = ExplicitFlowDispatchAuthorization.matching(state, invocation.action);
+    if (persisted == null || persisted.approvalToken !== invocation.authorization.approvalToken) {
+      throw new Error("flow dispatch approval receipt was not durably recorded for the validated action");
+    }
+    return new DispatchApprovalReceiptMutation({
+      location,
+      invocation,
+      controlBytes: after,
+      outsideFingerprint,
+    });
+  }
+
+  assertCurrent({ ctx, fingerprint, activeAction, flowState }) {
+    const currentOutsideFingerprint = fingerprint({
+      ...ctx,
+      dispatchFingerprintPathspecExcludes: receiptControlPathspecExcludes(this.location),
+    });
+    if (currentOutsideFingerprint !== this.outsideFingerprint) {
+      throw new DispatchApprovalReceiptMutationError({
+        invocation: this.invocation,
+        activeAction,
+        message: "repository content changed outside the dispatcher-owned approval receipt before worker handoff",
+      });
+    }
+    if (!sameReceiptControlBytes(receiptControlBytes(this.location), this.controlBytes)) {
+      throw new DispatchApprovalReceiptMutationError({
+        invocation: this.invocation,
+        activeAction,
+        message: "the dispatcher-owned approval receipt changed before worker handoff",
+      });
+    }
+    if (!sameDispatchActionMeaning(this.invocation.action, activeAction)) {
+      throw new DispatchApprovalReceiptMutationError({
+        invocation: this.invocation,
+        activeAction,
+        message: "the approved Flow target or semantic action changed before worker handoff",
+      });
+    }
+    if (
+      !this.invocation.authorization.matches(this.invocation.action)
+      || !this.invocation.authorization.isGrantedBy(flowState)
+    ) {
+      throw new DispatchApprovalReceiptMutationError({
+        invocation: this.invocation,
+        activeAction,
+        message: "the dispatcher-owned approval receipt no longer grants the validated action",
+      });
+    }
+  }
+}
+
+export function dispatchRepositoryFingerprint(ctx) {
+  return finalRegressionWorktreeFingerprint(ctx.executionRoot || ctx.root, {
+    pathspecExcludes: dispatchFingerprintPathspecExcludes(ctx),
+  });
+}
+
+function dispatchLockError(status, message, { lockPath, owner = null, cause } = {}) {
+  const error = new Error(message, { cause });
+  error.name = "FlowDispatchLockError";
+  error.code = status === "live"
+    ? "FLOW_DISPATCH_BUSY"
+    : `FLOW_DISPATCH_LOCK_${status.replace(/-/g, "_").toUpperCase()}`;
+  error.lockStatus = status;
+  error.lockPath = lockPath;
+  error.owner = owner;
+  return error;
+}
+
+export class FlowDispatchLease {
+  constructor(session) {
+    if (!(session instanceof FlowDispatchSession)) {
+      throw new Error("FlowDispatchLease requires a FlowDispatchSession");
+    }
+    this.session = session;
+    const { target } = session;
+    const mainRoot = target.dispatchLockRoot;
+    if (!mainRoot) {
+      throw new Error("FlowDispatchLease target requires captured authority");
+    }
+    const { runId } = target;
+    const root = new RealDirectoryAuthority(mainRoot, {
+      errorFactory: dispatchLockError,
+    });
+    const directory = new RealDirectoryAuthority(path.join(mainRoot, PRODUCT.managedDirName), {
+      create: true,
+      parentAuthority: root,
+      errorFactory: dispatchLockError,
+    });
+    this.lock = new ProcessLock({
+      directoryAuthority: directory,
+      fileName: `.flow-dispatch-${flowDispatchDigest(runId).slice(0, 24)}.lock`,
+      kind: DISPATCH_LOCK_KIND,
+      authority: {
+        runId,
+        targetDigest: target.digest,
+      },
+      errorFactory: dispatchLockError,
+    });
+  }
+
+  acquire() {
+    return this.lock.acquire();
+  }
+
+  release() {
+    this.lock.release();
+  }
+}
+
+function persistDispatchApproval(ctx, invocation, fingerprint) {
+  if (
+    !(invocation instanceof FlowDispatchInvocation)
+    || !(invocation.authorization instanceof ExplicitFlowDispatchAuthorization)
+  ) {
+    throw new Error("flow dispatch approval persistence requires an explicitly authorized invocation");
+  }
+  const { action, authorization } = invocation;
+  const state = readFlowState(ctx);
+  const existing = ExplicitFlowDispatchAuthorization.matching(state, action);
+  if (existing) return { authorization: existing, receiptMutation: null };
+  if (state?.schemaRevision !== CURRENT_FLOW_SCHEMA_REVISION || typeof ctx.flowManager?.recordDispatchApproval !== "function") {
+    throw new Error("flow dispatch approval requires the canonical Version Store receipt API");
+  }
+  if (state.runId !== action.target.runId) {
+    throw new Error("flow dispatch approval target changed before persistence");
+  }
+  const receiptMutation = DispatchApprovalReceiptMutation.record({
+    ctx,
+    invocation,
+    fingerprint,
+    record: () => ctx.flowManager.recordDispatchApproval({
+      specId: state.specId,
+      receipt: authorization.toReceiptJSON(),
+    }),
+  });
+  return { authorization, receiptMutation };
+}
+
+export class FlowDispatchRepositoryFingerprintError extends Error {
+  constructor({ cause, nextAction, dispatchCount, phase }) {
+    if (!["action-capture", "pre-handoff-validation", "post-handoff-progress"].includes(phase)) {
+      throw new Error(`invalid Flow dispatch repository fingerprint phase: ${phase}`);
+    }
+    super(`failed to capture the Flow dispatch repository fingerprint: ${cause?.message || cause}`, {
+      cause,
+    });
+    this.name = "FlowDispatchRepositoryFingerprintError";
+    this.code = "FLOW_DISPATCH_REPOSITORY_FINGERPRINT_FAILED";
+    this.nextAction = nextAction;
+    this.dispatchCount = dispatchCount;
+    this.phase = phase;
+  }
+}
+
+export class FlowDispatchAction {
+  constructor(nextAction) {
+    if (!nextAction || typeof nextAction !== "object" || Array.isArray(nextAction)) {
+      throw new Error("Flow dispatch requires a next-action object");
+    }
+    this.nextAction = nextAction;
+    this.directive = NextActionDirective.fromStored(nextAction.directive);
+    Object.freeze(this);
+  }
+
+  get requiresApproval() {
+    return this.nextAction.requires_approval === true;
+  }
+
+  get autoApproveChoiceId() {
+    return this.nextAction.auto_approval_choice_id ?? null;
+  }
+
+  get isAutoApproveEligible() {
+    return this.requiresApproval && this.autoApproveChoiceId === "1";
+  }
+
+  get isContinuation() {
+    return this.directive instanceof ExecuteStepDirective
+      || this.directive instanceof ExecuteCommandDirective
+      || this.directive instanceof RepairEvidenceDirective;
+  }
+
+  get isTerminal() {
+    return this.directive instanceof BlockedDirective
+      || this.directive instanceof CompletedDirective
+      || this.directive instanceof AbortedDirective
+      || this.directive instanceof IdleDirective;
+  }
+
+  get awaitsUserDecision() {
+    return this.directive instanceof AwaitUserDecisionDirective
+      || this.directive instanceof AwaitDraftQuestionDirective;
+  }
+
+  get awaitsHostAction() { return this.directive instanceof AwaitTaskReviewFilterDirective; }
+
+  get nonblockingDecision() {
+    return this.nextAction.nonblockingDecision == null
+      ? null
+      : NonBlockingDecisionContext.fromStored(this.nextAction.nonblockingDecision);
+  }
+}
+
+class NonBlockingAgentDecision {
+  constructor({ choice, reason, remainingRisk = null } = {}, context) {
+    if (!(context instanceof NonBlockingDecisionContext)) {
+      throw new Error("nonblocking agent decision requires its canonical context");
+    }
+    if (!context.allowedActions.includes(choice)) {
+      throw new Error(`nonblocking agent choice ${choice} is not allowed for ${context.resultKind} evidence`);
+    }
+    if (typeof reason !== "string" || reason.trim() === "") {
+      throw new Error("nonblocking agent decision reason is required");
+    }
+    if (remainingRisk !== null && (typeof remainingRisk !== "string" || remainingRisk.trim() === "")) {
+      throw new Error("nonblocking agent decision remainingRisk must be a non-empty string or null");
+    }
+    if (choice === "continue" && remainingRisk === null) {
+      throw new Error("nonblocking agent continue requires a concrete remainingRisk");
+    }
+    this.choice = choice;
+    this.reason = reason.trim();
+    this.remainingRisk = remainingRisk?.trim() ?? null;
+    Object.freeze(this);
+  }
+
+  static parse(response, context) {
+    if (typeof response !== "string" || response.trim() === "") {
+      throw new Error("nonblocking agent returned an empty decision");
+    }
+    let value;
+    try {
+      value = JSON.parse(response);
+    } catch (cause) {
+      throw new Error("nonblocking agent decision must be valid JSON", { cause });
+    }
+    return new NonBlockingAgentDecision(value, context);
+  }
+}
+
+function nonblockingDecisionSchema(context) {
+  return {
+    type: "object",
+    additionalProperties: false,
+    required: ["choice", "reason", "remainingRisk"],
+    properties: {
+      choice: { type: "string", enum: [...context.allowedActions] },
+      reason: { type: "string", minLength: 1, maxLength: 2000 },
+      remainingRisk: { anyOf: [{ type: "string", minLength: 1, maxLength: 2000 }, { type: "null" }] },
+    },
+  };
+}
+
+export class FlowDispatchBoundary {
+  constructor({ kind, nextAction, dispatchCount, target = null, approvalToken = null, message = null }) {
+    if (target != null && !(target instanceof FlowDispatchTarget)) {
+      throw new Error("FlowDispatchBoundary target must be a FlowDispatchTarget");
+    }
+    this.kind = kind;
+    this.nextAction = nextAction;
+    this.dispatchCount = dispatchCount;
+    this.binding = RESUMABLE_DISPATCH_BOUNDARIES.has(kind) ? target?.bindingToken ?? null : null;
+    this.approvalToken = approvalToken;
+    this.message = message;
+    Object.freeze(this);
+  }
+
+  toJSON() {
+    return {
+      dispatch: {
+        boundary: this.kind,
+        dispatchCount: this.dispatchCount,
+        ...(this.binding && { binding: this.binding }),
+        ...(this.approvalToken && { approvalToken: this.approvalToken }),
+        ...(this.message && { message: this.message }),
+      },
+      nextAction: this.nextAction,
+    };
+  }
+}
+
+/**
+ * A user-action prompt belongs to the dispatcher boundary, not to the worker
+ * that runs after the selected approval has been durably authorized. The
+ * boundary retains the prompt, while worker serialization and dispatch
+ * identity both use the pre-prompt continuation contract.
+ */
+export function workerFacingNextAction(nextAction) {
+  const directive = NextActionDirective.fromStored(nextAction.directive);
+  if (
+    nextAction.requires_approval !== true
+    || !(directive instanceof ExecuteStepDirective)
+    || directive.prompt == null
+  ) {
+    return nextAction;
+  }
+  return {
+    ...nextAction,
+    directive: new ExecuteStepDirective({
+      action: directive.action,
+      ...(directive.nextAction != null && { nextAction: directive.nextAction }),
+    }).toJSON(),
+  };
+}
+
+export class FlowDispatchWork {
+  constructor(invocation, handoffRequest, handoffReference = handoffRequest.toPromptReference()) {
+    if (!(invocation instanceof FlowDispatchInvocation)) {
+      throw new Error("FlowDispatchWork requires a FlowDispatchInvocation");
+    }
+    if (!(handoffRequest instanceof WorkerArtifactHandoffRequest)) {
+      throw new Error("FlowDispatchWork handoff requires a WorkerArtifactHandoffRequest");
+    }
+    if (!(handoffReference instanceof WorkerArtifactHandoffReference)) {
+      throw new TypeError("FlowDispatchWork requires a typed handoff reference");
+    }
+    this.invocation = invocation;
+    this.handoffRequest = handoffRequest;
+    this.handoffReference = handoffReference;
+    Object.freeze(this);
+  }
+
+  /** Pure transport projection before a conditional Step persists its checkpoint. */
+  static forAdmission(invocation, request) {
+    return new FlowDispatchWork(invocation, request, new WorkerArtifactHandoffReference(request));
+  }
+
+  callOptions({ ctx, agentOptions, deferredMetric, supervisorEvents }, workerInvocation) {
+    return {
+      commandId: this.handoffRequest.policy.preservesRejectedSource ? `flow.dispatch.${this.handoffRequest.stepId}` : "flow.dispatch",
+      executionWorkDir: ctx.executionRoot || ctx.root,
+      cacheMode: "bypass", retryCount: 0, waitForProcessTree: true,
+      executionEnvironment: this.executionEnvironment(workerInvocation), deferredMetric,
+      onSupervisorEvent(event) {
+        supervisorEvents.push(Object.freeze({ at: new Date().toISOString(), ...event }));
+      },
+      ...agentOptions,
+    };
+  }
+
+  workerInvocation() {
+    return new FlowDispatchWorkerInvocation({
+      invocation: this.invocation,
+      handoffReference: this.handoffReference,
+    });
+  }
+
+  executionEnvironment(workerInvocation) {
+    if (!(workerInvocation instanceof FlowDispatchWorkerInvocation)) {
+      throw new Error("handoff execution environment requires its verified worker invocation");
+    }
+    return {
+      ...workerInvocation.executionEnvironment(),
+      ...this.handoffRequest.executionEnvironment(),
+    };
+  }
+
+  instructionPrompt(workerInvocation) { return this.prompt(workerInvocation, { includeInput: false }); }
+
+  prompt(workerInvocation, { includeInput = true } = {}) {
+    const { action, authorization, target } = this.invocation;
+    const nextAction = workerFacingNextAction(action.nextAction);
+    const authorizationInstruction = authorization.workerInstruction();
+    if (!(workerInvocation instanceof FlowDispatchWorkerInvocation)) {
+      throw new Error("handoff prompt requires its verified worker invocation");
+    }
+    const nonblockingRule = nextAction.nonblockingDecision
+      ? [
+          "",
+          "A nonblockingDecision is present. Resolve and record exactly that",
+          "digest-guarded decision before the ordinary directive, then let the",
+          "parent dispatcher refresh authority. Do not ask the user.",
+        ].join("\n")
+      : "";
+    const handoffInstruction = this.handoffRequest.policy.kind === "source"
+        ? [
+          "",
+          "This action uses the source-worker handoff contract in request.json.",
+          "Treat its input snapshots as the immutable source for this action.",
+          "Read requestPath from the dispatch invocation contract in full before acting; it contains the input documents, context, selected repair capability, and source authority.",
+          this.handoffRequest.policy.sourceMutation.mode === "forbidden"
+            ? "Read the supplied source without editing any project files."
+            : this.handoffRequest.policy.preservesRejectedSource
+              ? "Edit only paths in this Task action's supplied source allow-list and only for its confirmed apply findings."
+              : "Edit only project source and formal project tests that this action requires.",
+          "Do not classify or report changed files; the parent derives their canonical Requirement bindings from the observed Attempt manifest.",
+          "Do not write effects.json, do not write a handoff submission, and do not run a seal command.",
+          "Return only the structured source effect required by the guarded action output_schema.",
+          "The parent dispatcher validates, materializes, seals, publishes, and completes the step.",
+        ].join("\n")
+        : [
+          "",
+          "This action uses the worker artifact handoff contract in request.json.",
+          "Treat its input snapshots as the immutable source for this action.",
+          this.handoffRequest.stepId === "spec-gate-repair"
+            ? "Read requestPath from the dispatch invocation contract in full before acting; it is the bounded manifest of selected input descriptors, capability, binding, output authority and seal command. Follow its delivery instructions for the selected immutable context."
+            : "Read requestPath from the dispatch invocation contract in full before acting; it contains the input documents, context, selected repair capability, output authority, spec-test topology when applicable, and the seal command.",
+          "Write every declared payload only to its exact payloadPath. Existing",
+          "instructions naming canonical artifact paths are overridden for outputs.",
+          "Do not mark the Flow step done. After writing all payloads, run the exact",
+          "sealCommand from request.json. If validation rejects it, follow workerInstructions for correction before sealing. Never modify a successfully sealed payload. The parent dispatcher alone performs final validation, publishes, records",
+          "revisions, and completes the step under canonical repository authority.",
+          "Return the successful seal command data object as the worker report; it must",
+          "match the guarded action output_schema but is never a completion signal.",
+        ].join("\n");
+    const specTestTopologyInstruction = this.handoffRequest.stepId === "test"
+      ? [
+          "",
+          "Spec-test topology:",
+          "The logical `tests` payload is published below the canonical test root shown",
+          "in request.json; it is not a repository-root test directory.",
+          "Resolve every static relative import from each final canonical test file, not",
+          "from the transient payload directory or an assumed ordinary `tests/` layout.",
+          "Use a caught dynamic import for a module that implementation must create later.",
+      ].join("\n")
+      : "";
+    const sourceHandoff = this.handoffRequest.policy.kind === "source";
+    return [
+      "You are a worker owned by the sennel Flow CLI dispatcher.",
+      "Execute exactly one supplied non-terminal Flow action in the current repository.",
+      "Do not invoke a sennel.flow skill and do not run `sennel flow run dispatch`.",
+      "Do not merely describe the work. Perform the edits and commands required by",
+      sourceHandoff
+        ? "the action, but do not perform a durable Flow transition; your structured source effect is only a parent completion input."
+        : "the action through its handoff payloads and seal command; do not perform a separate Flow transition.",
+      "Run every command in the foreground and wait for it to finish. Never start",
+      "a review, gate, test, or other Flow command in parallel or in the background.",
+      "Never choose a user decision. If a genuine user decision appears unexpectedly,",
+      "leave it unchanged and report that fact.",
+      ...(authorizationInstruction ? [
+        authorizationInstruction,
+        "This is an already-selected authorization, not permission to infer another choice.",
+      ] : []),
+      ...(target.binding ? [
+        "Target-sensitive sennel commands inherit the CLI-captured Flow binding.",
+        "Do not construct or append target identity arguments.",
+      ] : []),
+      "When the directive includes nextAction, execute that exact CLI-generated",
+      "command; do not infer completion from pre-existing artifacts.",
+      nonblockingRule,
+      "",
+      "Machine-readable dispatch invocation contract:",
+      `Read the bounded JSON in environment variable ${FLOW_DISPATCH_INVOCATION_ENV}. It contains only action identity, immutable request/action file references, authorization, and target binding. Verify both file digests before using their full contents.`,
+      "Follow workerInstructions in request.json, including any payload schema guidance or retry correction.",
+      "",
+      "Guarded next action:",
+      "Read and execute the full guarded action from actionFilePath in the dispatch invocation contract. Its canonical JSON digest must equal actionFileDigest and its identity must equal actionDigest.",
+      "",
+      "Your response is only a worker report. The CLI ignores it as a completion",
+      "signal and independently verifies the refreshed Flow and repository state.",
+      handoffInstruction,
+      specTestTopologyInstruction,
+      this.handoffRequest.specGateRepairInstructionPrompt(),
+      ...(this.handoffRequest.stepId === "spec-gate-repair"
+        ? [includeInput ? this.handoffRequest.specGateRepairInputPrompt() : ""] : []),
+    ].join("\n");
+  }
+}
+
+async function assertWorkerAgentAdmission(agent, prompt, options, stepId) {
+  if (typeof agent?.projectInvocation !== "function") return;
+  try {
+    const projection = await agent.projectInvocation(prompt, options);
+    projection.assertWithinLimit(agent.promptCharacterLimit ?? new PromptRequestLimit());
+  } catch (error) {
+    if (!(error instanceof AgentFailure || error instanceof PromptBatchingError)) throw error;
+    throw new WorkerArtifactHandoffError("recovery-required", error.code,
+      error.message, { cause: error, recoveryPossible: false,
+        data: { ...error.details, stepId, failureKind: "step-admission" } });
+  }
+}
+
+class WorkerHandoffFailedAttemptAdmission {
+  constructor(state) {
+    this.runId = state.runId;
+    this.specId = state.specId;
+    this.attempt = CurrentAttemptIdentity.from(state.attempt);
+    Object.freeze(this);
+  }
+
+  assert({ state }) {
+    if (state.runId !== this.runId || state.specId !== this.specId
+      || !this.attempt.matchesFailed(state)) {
+      throw new CurrentFlowStateConflictError("worker handoff diagnostic targets a changed failed Attempt");
+    }
+  }
+}
+
+function appendWorkerHandoffDiagnostic(ctx, error, request, { stepId: invocationStepId = null,
+  failedState = null, agentError = null } = {}) {
+  const state = readFlowState(ctx);
+  const stepId = invocationStepId || request?.stepId || error.data?.stepId || state?.currentStep || "flow-dispatch";
+  const actionDigest = request?.actionDigest || error.data?.actionDigest || null;
+  const dispatchInvocationId = request?.dispatchInvocationId || error.data?.dispatchInvocationId || null;
+  const externalFailure = agentFailuresFor(error, agentError).find(isRequirementTestExternalAgentFailure);
+  // A recovery-required handoff must leave the canonical Version byte-for-byte
+  // untouched so replay can inspect and recover the publication journal. The
+  // diagnostic issue-log append is itself a Flow Activity/catalog mutation;
+  // defer it until a non-recoverable boundary instead of partially publishing
+  // alongside the interrupted handoff.
+  // Source failures have their own checkpoint-bound canonical facts. An
+  // unrelated diagnostic write would invalidate an unsettled checkpoint.
+  if (state?.specId && (!isSpecArtifactWorkerStep(stepId) || failedState !== null)
+    && error.classification !== "recovery-required"
+    && error.recoveryPossible !== true
+    && !isStepAdmissionRefusal(error)
+    && (request?.policy ?? workerArtifactHandoffPolicy(stepId))?.kind !== "source") {
+    try {
+      const entry = {
+        step: stepId,
+        reason: `Worker artifact handoff ${error.classification || "invalid"}: ${error.message}`,
+        trigger: "Parent dispatcher rejected or could not complete a worker artifact handoff.",
+        resolution: externalFailure?.recoveryHint ?? (failedState !== null
+          ? "This Attempt has a saved terminal failure. Correct the artifact producer and check sennel flow get next-action for the current Flow decision."
+          : error instanceof WorkerArtifactRetryExhaustedError
+          ? "One fresh worker handoff retry was consumed; correct the artifact producer before dispatching this step again."
+          : error.recoveryPossible
+          ? "Resume the guarded dispatcher to replay the pending publication journal."
+          : "Correct the worker artifact payload and dispatch the current action again."),
+        ...(error instanceof WorkerArtifactRetryExhaustedError && {
+          diagnostic: {
+            code: error.code,
+            classification: error.classification,
+            attempts: error.data.attempts,
+            first: error.data.first,
+            second: error.data.second,
+          },
+        }),
+        taskId: null,
+        timestamp: new Date().toISOString(),
+      };
+      const idempotencyKey = `worker-handoff-${dispatchInvocationId || "unknown"}-${actionDigest || "unknown"}-${error.classification || "invalid"}`;
+      if (state.schemaRevision !== CURRENT_FLOW_SCHEMA_REVISION || typeof ctx.flowManager?.appendIssueLog !== "function") {
+        throw new Error("worker handoff diagnostics require canonical FlowManager.appendIssueLog");
+      }
+      ctx.flowManager.appendIssueLog({
+        specId: failedState?.specId ?? state.specId,
+        entry,
+        idempotencyKey,
+        ...(failedState === null ? {} : { admission: new WorkerHandoffFailedAttemptAdmission(failedState) }),
+      });
+    } catch (logError) {
+      return logError.message || String(logError);
+    }
+  }
+  return null;
+}
+
+function workerHandoffFailureData(ctx, target, error, request, dispatchCount, agentError = null,
+  issueLogError = null, externalFailure = null) {
+  const state = readFlowState(ctx);
+  const stepId = request?.stepId || error.data?.stepId || state?.currentStep || "flow-dispatch";
+  const actionDigest = request?.actionDigest || error.data?.actionDigest || null;
+  const dispatchInvocationId = request?.dispatchInvocationId || error.data?.dispatchInvocationId || null;
+  return {
+    ...blockedBoundary({
+      target,
+      nextAction: null,
+      dispatchCount,
+      message: externalFailure?.message ?? (error.recoveryPossible
+        ? "Canonical publication is journaled and requires deterministic dispatcher recovery."
+        : "The parent dispatcher rejected the worker artifact before completing the Flow step."),
+    }),
+    classification: error.classification || "invalid",
+    retryBudgetConsumed: false,
+    recoveryPossible: error.recoveryPossible === true,
+    retryable: error.retryable === true,
+    ...(error instanceof WorkerArtifactRetryExhaustedError && { retryExhausted: true }),
+    actionDigest,
+    dispatchInvocationId,
+    ...(error.data || {}),
+    // Handoff observations remain available, but do not override the stopping cause.
+    ...(externalFailure && {
+      classification: externalFailure.kind,
+      retryable: externalFailure.retryable,
+      retryExhausted: false,
+      recoveryPossible: false,
+      recoveryHint: externalFailure.recoveryHint,
+    }),
+    ...(request && {
+      payload: {
+        directory: request.payloadDirectory,
+        requestPath: request.requestPath,
+        submissionPath: request.submissionPath,
+        sealed: fs.existsSync(request.submissionPath),
+      },
+    }),
+    ...(agentError instanceof AgentFailure && {
+      lastProgress: {
+        dispatchCount,
+        stepId,
+        handoffDirectory: request?.directory ?? null,
+        supervisorEvent: agentError.supervisorEvents?.at(-1) ?? null,
+      },
+    }),
+    ...(agentError instanceof AgentFailure ? { agentFailure: agentError.toJSON() } : {}),
+    ...(Array.isArray(error.agentFailures) && { agentFailures: error.agentFailures.map((failure, index) => ({
+      attempt: index + 1,
+      ...(failure instanceof AgentFailure ? failure.toJSON() : { unavailable: "agent failure was not capturable" }),
+    })) }),
+    ...(issueLogError ? { issueLogError } : {}),
+  };
+}
+
+function quarantineRejectedWorkerHandoff(coordinator, request, error, sourcePlan = null) {
+  if (request.policy.kind === "source"
+    ? sourcePlan?.disposition !== "quarantine"
+    : !NON_REPLAYABLE_HANDOFF_ERROR_CODES.has(error.code)) return error;
+  try {
+    coordinator.quarantine({ request, error, plan: sourcePlan });
+    return error;
+  } catch (cause) {
+    return new WorkerArtifactHandoffError(
+      "invalid",
+      "FLOW_ARTIFACT_HANDOFF_QUARANTINE_REQUIRED",
+      `sealed worker artifact handoff could not be quarantined: ${cause.message}`,
+      {
+        cause,
+        retryable: false,
+        recoveryPossible: false,
+        data: { stepId: request.stepId, handoffDirectory: request.directory },
+      },
+    );
+  }
+}
+
+function blockedBoundary({ target, nextAction, dispatchCount, message }) {
+  if (!(target instanceof FlowDispatchTarget)) {
+    throw new Error("blocked Flow dispatch boundary requires its captured target");
+  }
+  return new FlowDispatchBoundary({
+    kind: "blocked",
+    target,
+    nextAction,
+    dispatchCount,
+    message,
+  }).toJSON();
+}
+
+export default class RunDispatchCommand extends FlowCommand {
+  constructor({
+    nextAction = new GetNextActionCommand(),
+    agent = null,
+    repositoryFingerprint = dispatchRepositoryFingerprint,
+    maxDispatches = DEFAULT_MAX_DISPATCHES,
+    maxStalledDispatches = DEFAULT_MAX_STALLED_DISPATCHES,
+    leaseFactory = (session) => new FlowDispatchLease(session),
+    handoffCoordinator = new WorkerArtifactHandoffCoordinator(),
+    repairCommandRunner = null,
+    commandRunner = null,
+  } = {}) {
+    super({ explicitTargetResolution: true });
+    this.nextAction = nextAction;
+    this.agent = agent;
+    this.repositoryFingerprint = repositoryFingerprint;
+    this.maxDispatches = maxDispatches;
+    this.maxStalledDispatches = maxStalledDispatches;
+    this.leaseFactory = leaseFactory;
+    this.handoffCoordinator = handoffCoordinator;
+    this.repairCommandRunner = repairCommandRunner;
+    this.commandRunner = commandRunner;
+  }
+
+  async fetchNextAction(target) {
+    let result;
+    try {
+      result = await this.nextAction.run(this.container, targetGuardInput(target));
+    } catch (error) {
+      return Envelope.fail(
+        "get",
+        "next-action",
+        error.code || "FLOW_NEXT_ACTION_FAILED",
+        error.message || String(error),
+        error.data,
+      );
+    }
+    if (result instanceof Envelope) return result;
+    try {
+      return target.assertNextActionBinding(result);
+    } catch (error) {
+      return Envelope.fail(
+        "get",
+        "next-action",
+        error.code || "FLOW_NEXT_ACTION_BINDING_INVALID",
+        error.message || String(error),
+      );
+    }
+  }
+
+  captureAction(ctx, session, nextAction, dispatchCount, phase) {
+    try {
+      return session.captureAction(
+        workerFacingNextAction(nextAction),
+        this.repositoryFingerprint(ctx),
+      );
+    } catch (cause) {
+      throw new FlowDispatchRepositoryFingerprintError({
+        cause,
+        nextAction,
+        dispatchCount,
+        phase,
+      });
+    }
+  }
+
+  failure(ctx, code, messages, data) {
+    return Envelope.fail(
+      ctx._envelopeType || "run",
+      ctx._envelopeKey || "dispatch",
+      code,
+      messages,
+      data,
+    );
+  }
+
+  finalWorkerFailure(ctx, target, attempt, error, invocation, workerState, dispatchCount) {
+    const stepId = invocation.action.nextAction.step;
+    const recorded = settleSpecWorkerFailure(ctx, attempt, error, workerState, invocation);
+    const external = isSpecArtifactWorkerStep(stepId)
+      ? agentFailuresFor(error, attempt.agentError).find(isRequirementTestExternalAgentFailure) : null;
+    return this.failure(
+      ctx,
+      external?.code ?? error.code,
+      external?.message ?? error.message,
+      workerHandoffFailureData(
+        ctx, target, error, attempt.handoffRequest, dispatchCount, attempt.agentError,
+        appendWorkerHandoffDiagnostic(ctx, error, attempt.handoffRequest, {
+          stepId,
+          failedState: recorded ? workerState : null,
+          agentError: attempt.agentError,
+        }),
+        external,
+      ),
+    );
+  }
+
+  async runDispatcherOwnedRepair(ctx, target, action) {
+    if (!(action.directive instanceof RepairEvidenceDirective)) return null;
+    const match = /^sennel flow run ([a-z][a-z0-9-]*)(?:\s|$)/.exec(action.directive.nextAction);
+    const commandName = match?.[1] || null;
+    if (!DISPATCHER_OWNED_REPAIR_COMMANDS.has(commandName)) return null;
+
+    if (this.repairCommandRunner) {
+      return this.repairCommandRunner({ ctx, target, action, commandName });
+    }
+
+    return this.runRegisteredFlowCommand(ctx, target, commandName, []);
+  }
+
+  /**
+   * Historical state reconciliation is a Store-owned transition, never a
+   * worker instruction. Keep this deliberately small: unlike repair commands,
+   * only no-input typed Store transitions are safe to run automatically.
+   */
+  async runDispatcherOwnedRecovery(ctx, target, action) {
+    if (!(action.directive instanceof ExecuteCommandDirective)) return null;
+    const match = /^sennel flow run ([a-z][a-z0-9-]*)(?:\s|$)/.exec(action.directive.nextAction);
+    const commandName = match?.[1] || null;
+    if (!DISPATCHER_OWNED_RECOVERY_COMMANDS.has(commandName)) return null;
+    // `gate` is normally a worker-producing command and must never become a
+    // broad dispatcher-owned capability.  Definition projects this command
+    // here only for the catalog-bound publication reconciliation action; the
+    // Gate command independently verifies that exact condition before it can
+    // rehydrate anything.
+    if (commandName === "gate" && action.directive.actionId !== "RECONCILE_GATE_PUBLICATION") return null;
+    return this.runRegisteredFlowCommand(ctx, target, commandName, []);
+  }
+
+  async runRegisteredFlowCommand(ctx, target, commandName, args) {
+    const entry = flowCommands.run?.[commandName];
+    if (!entry?.command) {
+      throw new Error(`dispatcher-owned command is not registered: ${commandName}`);
+    }
+    let stdout = "";
+    let exitCode = 0;
+    await dispatch({
+      container: this.container,
+      entry,
+      argv: [
+        ...args,
+        ...(ctx.agentWorkDir ? ["--agent-work-dir", ctx.agentWorkDir] : []),
+        ...targetGuardArguments(target),
+      ],
+      envelopeType: "run",
+      envelopeKey: commandName,
+      runtimeLog: true,
+      stdout: (text) => { stdout += text; },
+      stderr: () => {},
+      setExitCode: (code) => { exitCode = code; },
+      buildHookCtx: (container, input) => buildFlowCommandHookContext(container, entry, input),
+    });
+    return commandEnvelope(stdout.trim(), commandName, exitCode);
+  }
+
+  /**
+   * Ask the configured provider for only the evidence disposition. The agent
+   * cannot execute the ordinary directive in this invocation; the parent
+   * records the guarded result and reloads canonical authority first.
+   */
+  async runNonblockingAgentDecision(ctx, action) {
+    const context = action.nonblockingDecision;
+    if (context === null) return null;
+    const state = readFlowState(ctx);
+    const evidence = decisionEvidenceForActiveFlow(
+      ctx.root,
+      state,
+      ctx.flowManager,
+      context,
+    );
+    const schema = nonblockingDecisionSchema(context);
+    const prompt = [
+      "You are making one bounded advisory disposition for a canonical Flow check.",
+      "Do not edit files, run commands, ask the user, or execute the ordinary Flow directive.",
+      "Choose only an allowed action. Use repair for quality evidence, retry for tooling/unavailable evidence,",
+      "or continue only when you can state a concrete bounded remaining risk for acceptance.",
+      "Return only JSON matching the supplied schema.",
+      "",
+      "Canonical decision context:",
+      JSON.stringify(context.toJSON(), null, 2),
+      "",
+      "Digest-bound canonical evidence:",
+      evidence,
+    ].join("\n");
+    const agent = this.agent || (this.agent = this.container.get("agent"));
+    const response = await agent.call(prompt, {
+      commandId: "flow.dispatch.nonblocking-decision",
+      executionWorkDir: ctx.executionRoot || ctx.root,
+      cacheMode: "bypass",
+      retryCount: 0,
+      waitForProcessTree: true,
+      jsonSchema: schema,
+      fmtFallback: `Return only JSON matching this schema:\n${JSON.stringify(schema, null, 2)}`,
+    });
+    return NonBlockingAgentDecision.parse(response, context);
+  }
+
+  async runDispatcherOwnedCommand(ctx, target, action) {
+    const command = DispatcherOwnedFlowCommand.forAction(action);
+    if (command === null) return null;
+    if (this.commandRunner) {
+      return { command, result: await this.commandRunner({ ctx, target, action, command }) };
+    }
+    return {
+      command,
+      result: await this.runRegisteredFlowCommand(
+        ctx,
+        target,
+        command.commandName,
+        command.command.runArguments().slice(1),
+      ),
+    };
+  }
+
+  async parentCommandProgress({
+    ctx,
+    session,
+    target,
+    invocation,
+    dispatchCount,
+    stalledDispatches,
+    owner,
+    requiresCanonicalActionProgress = false,
+  }) {
+    const refreshed = await this.fetchNextAction(target);
+    if (refreshed instanceof Envelope) {
+      return { current: refreshed, stalledDispatches, failure: null, progressed: false };
+    }
+    const refreshedIdentity = requiresCanonicalActionProgress
+      ? session.captureCanonicalAction(refreshed, invocation.action)
+      : this.captureAction(
+        ctx,
+        session,
+        refreshed,
+        dispatchCount,
+        "post-handoff-progress",
+      );
+    const hasProgressed = requiresCanonicalActionProgress
+      ? invocation.hasCanonicalActionProgressedTo(refreshedIdentity)
+      : invocation.hasProgressedTo(refreshedIdentity);
+    const nextStalledDispatches = hasProgressed
+      ? 0
+      : stalledDispatches + 1;
+    if (requiresCanonicalActionProgress && nextStalledDispatches > 0) {
+      return {
+        current: refreshed,
+        stalledDispatches: nextStalledDispatches,
+        failure: null,
+        progressed: false,
+      };
+    }
+    if (nextStalledDispatches >= this.maxStalledDispatches) {
+      return {
+        current: refreshed,
+        stalledDispatches: nextStalledDispatches,
+        failure: this.failure(
+          ctx,
+          "FLOW_DISPATCH_STALLED",
+          `the dispatcher-owned ${owner} returned ${nextStalledDispatches} time(s) without durable progress`,
+          blockedBoundary({
+            target,
+            nextAction: refreshed,
+            dispatchCount,
+            message: `The dispatcher-owned ${owner} returned successfully, but the guarded Flow and repository state did not change.`,
+          }),
+        ),
+      };
+    }
+    return {
+      current: refreshed,
+      stalledDispatches: nextStalledDispatches,
+      failure: null,
+      progressed: nextStalledDispatches === 0,
+    };
+  }
+
+  runApprovalContinuation(ctx, invocation) {
+    if (invocation.action.nextAction.step !== "approval") return null;
+    if (typeof ctx.flowManager?.approveSpecContinuation !== "function") {
+      throw new Error("approval continuation requires the canonical parent Store operation");
+    }
+    const state = ctx.flowManager.canonicalState(ctx.specId);
+    // A pending approval projection is dispatcher-owned claim work, not a
+    // semantic approval boundary. Do not create route facts until the Store
+    // has materialized the active Attempt that those facts are bound to.
+    if (state.current?.at(-1) !== "approval" || state.attempt === null) return null;
+    const spec = ctx.flowManager.readArtifact({
+      specId: ctx.specId,
+      logicalKey: "spec.record",
+      consumerNodeId: "approval",
+    });
+    const plan = resolveDefinitionRoute(approvalRouteFacts({
+      state,
+      specDescriptor: spec.descriptor,
+      spec: JSON.parse(spec.bytes.toString("utf8")),
+      requestedApproval: invocation.approved === true,
+    }));
+    const confirmedAt = invocation.authorization instanceof ExplicitFlowDispatchAuthorization
+      ? invocation.authorization.approvedAt
+      : new Date().toISOString();
+    return plan.apply({
+      awaitApproval() { return null; },
+      confirmAndAdvance(selected) {
+        if (!(selected instanceof ConfirmAndAdvance)) throw new Error("Definition selected an invalid approval continuation plan");
+        const recorded = selected.facts.approvalRecord;
+        return ctx.flowManager.approveSpecContinuation({
+          specId: ctx.specId,
+          approval: new CanonicalSpecApproval(recorded === null
+            ? { confirmedAt }
+            : { confirmedAt: recorded.confirmed_at, notes: recorded.notes ?? null }),
+          expectedSpecDigest: selected.facts.specPublicationDigest,
+        });
+      },
+      blocked(selected) {
+        throw new Error(`approval continuation is blocked: ${selected.reason}`);
+      },
+    });
+  }
+
+  async prepareConditionalDraftWorker({ ctx, state, invocation, workerInstructions, definition, retrying,
+    agent, agentOptions, deferredMetric, supervisorEvents }) {
+    const stepId = invocation.action.nextAction.step;
+    let selectedStepResult = null;
+    let selectedSettlement = null;
+    const stepBinding = new DraftWorkerExecutionStepBinding({
+      flowManager: ctx.flowManager,
+      specId: state.specId,
+      stepId,
+    });
+    const correction = draftWorkerCorrection(ctx);
+    if (correction.exhausted) {
+      throw conditionalDraftAdmissionError("invalid", "FLOW_DRAFT_WORKER_CORRECTION_EXHAUSTED",
+        "Draft producer correction budget is exhausted; inspect the retained rejection diagnostics.");
+    }
+    const executionState = ctx.flowManager.draftStepExecutionState({ binding: stepBinding });
+    const prior = executionState.lifecycle;
+    if (prior?.binding instanceof DraftWorkerExecutionBinding
+      && !(prior.binding instanceof DraftConditionalWorkerExecutionBinding)) {
+      throw conditionalDraftAdmissionError(
+        "recovery-required",
+        "FLOW_DRAFT_EXECUTION_MIGRATION_REQUIRED",
+        "conditional Draft worker execution requires explicit migration of its prior binding",
+        "Preserve the Attempt and its ledger, then use recover-draft-execution if an exact unpublished legacy checkpoint and unchanged inputs can be proven.",
+      );
+    }
+    const refineProjection = stepId === "draft-refine"
+      ? ctx.flowManager.draftRefineStepState({ binding: stepBinding })
+      : null;
+    const stepFirst = stepId === "draft-refine"
+      && refineProjection.requiresStepSelection;
+    if (prior?.phase === "terminal") {
+      throw conditionalDraftAdmissionError(
+        "stale",
+        "FLOW_DRAFT_EXECUTION_TERMINAL",
+        "conditional Draft worker execution is already terminal",
+      );
+    }
+    if (retrying && prior?.phase !== "claimed") {
+      throw conditionalDraftAdmissionError(
+        "conflict",
+        "FLOW_DRAFT_EXECUTION_RETRY_STALE",
+        "conditional Draft worker retry requires the prior claimed generation",
+      );
+    }
+    const reusePrior = !stepFirst && !retrying && ["checkpoint", "claimed", "publication"].includes(prior?.phase);
+    if (reusePrior) {
+      const recoveredIdentity = executionState.executionIdentity();
+      selectedStepResult = recoveredIdentity?.stepResult ?? null;
+      selectedSettlement = recoveredIdentity?.settlement ?? null;
+    }
+    const executionGeneration = reusePrior
+      ? prior.executionGeneration
+      : prior === null ? 0 : prior.executionGeneration + 1;
+    const claimed = reusePrior && ["claimed", "publication"].includes(prior.phase)
+      ? prior.claim : null;
+    const workerInvocation = claimed === null
+      ? (prior?.phase === "checkpoint" ? freshWorkerInvocation(invocation, invocation.action.nextAction) : invocation)
+      : reboundWorkerInvocation(invocation, invocation.action.nextAction, claimed.dispatchInvocationId);
+    if (claimed !== null && workerInvocation.action.digest !== claimed.actionDigest) {
+      throw conditionalDraftAdmissionError(
+        "stale",
+        "FLOW_DRAFT_EXECUTION_ACTION_STALE",
+        "conditional Draft worker action no longer matches its canonical claim",
+      );
+    }
+    const persistedRequest = claimed === null ? null : this.handoffCoordinator.restoreClaimedDraftRequest({
+      ctx,
+      state,
+      lifecycle: prior,
+    });
+    if (reusePrior && prior?.phase === "publication" && persistedRequest === null) {
+      throw new WorkerArtifactHandoffError(
+        "recovery-required",
+        "FLOW_DRAFT_EXECUTION_REQUEST_MISSING",
+        "published Draft worker execution is missing its sealed request",
+        { retryable: false, recoveryPossible: false },
+      );
+    }
+    const request = reusePrior && prior?.phase === "publication"
+      ? persistedRequest
+      : this.handoffCoordinator.createRequest({
+          ctx,
+          state,
+          invocation: workerInvocation,
+          workerInstructions,
+          generatedAt: claimed?.generatedAt ?? null,
+          deferPreparation: true,
+          // The request identity supplies the execution binding digests. The
+          // Step persists that exact selection before the request is admitted
+          // or materialized below.
+          deferConditionalAdmission: !reusePrior,
+        });
+    if (!(reusePrior && prior?.phase === "publication") && persistedRequest !== null
+      && persistedRequest.requestDigest !== request.requestDigest) {
+      throw new WorkerArtifactHandoffError(
+        "recovery-required",
+        "FLOW_DRAFT_EXECUTION_REQUEST_MISMATCH",
+        "persisted Draft worker request cannot reproduce its canonical claim",
+        { retryable: false, recoveryPossible: false },
+      );
+    }
+    const executionBinding = new DraftConditionalWorkerExecutionBinding({
+      executionGeneration,
+      inputDigest: request.inputDigest,
+      inputRevision: request.inputRevision,
+      contentDigest: claimed === null ? request.checkpointContentDigest() : prior.binding.contentDigest,
+    });
+    const sameExecution = prior?.phase === "checkpoint"
+      && executionBinding instanceof DraftConditionalWorkerExecutionBinding
+      && executionBinding.continuesCheckpoint(prior.binding);
+    if (reusePrior && !sameExecution && !executionBinding.equals(prior.binding)) {
+      throw conditionalDraftAdmissionError(
+        "stale",
+        "FLOW_DRAFT_EXECUTION_INPUT_STALE",
+        "conditional Draft worker inputs no longer match their canonical execution generation",
+      );
+    }
+    let admittedCallOptions = null;
+    let preparedStep = null;
+    if (!reusePrior) {
+      preparedStep = await definition.create({
+        flowManager: ctx.flowManager, binding: stepBinding, executionBinding,
+      });
+      selectedStepResult = preparedStep.step.prepareResult();
+      if (selectedStepResult.stepId !== stepId) {
+        throw new Error("conditional Draft pre-execution Step selected a different Step");
+      }
+      if (selectedStepResult.type !== "loop-required") {
+        const result = await preparedStep.step.execute();
+        return { request: null, invocation: workerInvocation, publicationRecovery: false, stepResult: result };
+      }
+    }
+    if (claimed === null && typeof agent?.projectInvocation === "function") {
+      const plannedWork = FlowDispatchWork.forAdmission(workerInvocation, request);
+      const plannedInvocation = plannedWork.workerInvocation();
+      admittedCallOptions = plannedWork.callOptions({ ctx, agentOptions, deferredMetric, supervisorEvents }, plannedInvocation);
+      await assertWorkerAgentAdmission(agent, plannedWork.prompt(plannedInvocation), admittedCallOptions, stepId);
+    }
+    if (preparedStep !== null) {
+      await preparedStep.step.execute();
+      selectedSettlement = preparedStep.dependency(DraftService).executionSelection;
+      this.handoffCoordinator.admitConditionalDraftRequest({ ctx, state, request });
+    }
+    if (selectedStepResult === null || selectedSettlement === null) {
+      throw new Error("conditional Draft execution lacks its Step-selected identity");
+    }
+    if (claimed === null) {
+      const executionClaim = new DraftWorkerExecutionClaim({
+        dispatchInvocationId: request.dispatchInvocationId,
+        generatedAt: request.generatedAt,
+        actionDigest: request.actionDigest,
+        requestDigest: request.requestDigest,
+      });
+      ctx.flowManager.claimDraftStepExecution({
+        binding: stepBinding,
+        stepResult: selectedStepResult,
+        settlement: selectedSettlement,
+        executionBinding,
+        executionClaim,
+      });
+    }
+    if (claimed !== null && request.requestDigest !== claimed.requestDigest) {
+      throw new WorkerArtifactHandoffError(
+        "recovery-required",
+        "FLOW_DRAFT_EXECUTION_REQUEST_MISMATCH",
+        "conditional Draft worker request cannot reproduce its canonical claim",
+        { retryable: false, recoveryPossible: false },
+      );
+    }
+    if (!(reusePrior && prior?.phase === "publication")) request.prepare();
+    return {
+      request,
+      invocation: workerInvocation,
+      publicationRecovery: prior?.phase === "publication",
+      admittedCallOptions,
+    };
+  }
+
+  async runWorkerAttempt(ctx, invocation, retryFeedback = null, agentOverride = null) {
+    const stepId = invocation.action.nextAction.step;
+    const registration = workerStepExecutionRegistration(stepId);
+    if (registration === null) return this.#executeSelectedWorker(ctx, invocation, retryFeedback, agentOverride);
+    const selection = registration.executionContract.select({ ctx, stepId });
+    return registration.executionContract.execute(selection, {
+      command: this, ctx, invocation, retryFeedback, agentOverride,
+    });
+  }
+
+  async executeSelectedWorker(selection, input) {
+    const { ctx, invocation, retryFeedback = null, agentOverride = null } = input;
+    const stepId = invocation.action.nextAction.step;
+    const registration = workerStepExecutionRegistration(stepId);
+    if (registration === null) throw new TypeError("selected worker requires its production registration");
+    const current = registration.executionContract.select({ ctx, stepId });
+    assertCurrentWorkerExecutionSelection(selection, current);
+    return this.#executeSelectedWorker(ctx, invocation, retryFeedback, agentOverride);
+  }
+
+  async #executeSelectedWorker(ctx, invocation, retryFeedback = null, agentOverride = null) {
+    const action = new FlowDispatchAction(invocation.action.nextAction);
+    let handoffRequest = null;
+    let handoffAuthority = null;
+    let handoffPolicy = null;
+    let handoffAuthorityAcquired = false;
+    let work = null;
+    let resumeSealedDraftExecution = false;
+    let publicationRecovery = false;
+    let repairExecution = null;
+    let agentOptions = {};
+    let draftDefinition = null;
+    let specDefinition = null;
+    let admittedCallOptions = null;
+    let deferredMetric = new DeferredAgentInvocationMetric({ flowManager: ctx.flowManager });
+    const supervisorEvents = [];
+    const agent = agentOverride || this.agent || (this.agent = this.container.get("agent"));
+    try {
+      try {
+        handoffPolicy = workerArtifactHandoffPolicy(action.nextAction.step);
+        if (handoffPolicy === null) {
+          throw new WorkerArtifactHandoffError(
+            "invalid",
+            "FLOW_ARTIFACT_HANDOFF_REQUIRED",
+            `dispatcher worker action requires a handoff policy: ${action.nextAction.step}`,
+            { retryable: false, data: { stepId: action.nextAction.step } },
+          );
+        }
+        const workerOptions = workerArtifactAgentOptions(
+          action.nextAction.step,
+          action.nextAction.output_schema,
+        );
+        const { workerRequestGuidance = null, ...providerOptions } = workerOptions;
+        agentOptions = providerOptions;
+        draftDefinition = draftWorkerStepRegistration(action.nextAction.step);
+        specDefinition = specWorkerStepRegistration(action.nextAction.step);
+        const conditionalDraftExecution = isConditionalDraftWorkerStep(action.nextAction.step);
+        const workerInstructions = new WorkerArtifactWorkerInstructions({
+          // Reconstruct producer feedback from the canonical checkpoint, including
+          // when reproducing a claimed request after process interruption.
+          retryFeedback: conditionalDraftExecution ? draftWorkerCorrection(ctx).feedback : retryFeedback?.toJSON() ?? null,
+          schemaGuidance: workerRequestGuidance,
+        });
+        handoffAuthority = new FlowHandoffAuthorityLease({
+          mainRoot: ctx.mainRoot || ctx.root,
+          executionRoot: ctx.executionRoot || ctx.root,
+        });
+        // The authority is acquired before parent input capture. External
+        // upgrades therefore cannot alter immutable handoff inputs between
+        // request construction and its mutation snapshot.
+        handoffAuthority.acquire();
+        handoffAuthorityAcquired = true;
+        const state = readFlowState(ctx);
+        let workerInvocation = invocation;
+        if (conditionalDraftExecution) {
+          const prepared = await this.prepareConditionalDraftWorker({
+            ctx,
+            state,
+            invocation,
+            workerInstructions,
+            definition: draftDefinition,
+            retrying: retryFeedback !== null,
+            agent, agentOptions, deferredMetric, supervisorEvents,
+          });
+          if (prepared.request === null) {
+            return {
+              error: null,
+              handoffRequest: null,
+              agentError: null,
+              stepResult: prepared.stepResult,
+              supervisorEvents: [],
+              deferredMetric: null,
+            };
+          }
+          admittedCallOptions = prepared.admittedCallOptions;
+          handoffRequest = prepared.request;
+          workerInvocation = prepared.invocation;
+          publicationRecovery = prepared.publicationRecovery;
+        } else {
+          if (action.nextAction.step === "spec-gate-repair") {
+            repairExecution = planSpecGateRepairWorkerExecution({
+              ctx, state, invocation, workerInstructions, handoffCoordinator: this.handoffCoordinator,
+              dispatchWorkClass: FlowDispatchWork,
+              promptOptions: agentOptions,
+              requestLimit: new PromptRequestLimit({ maxCharacters: Math.min(SPEC_GATE_REPAIR_REQUEST_LIMIT.maxCharacters,
+                agent.promptCharacterLimit ?? SPEC_GATE_REPAIR_REQUEST_LIMIT.maxCharacters) }),
+              projectInvocation: typeof agent.projectInvocation === "function" ? (prompt, request) => {
+                const plannedWork = FlowDispatchWork.forAdmission(invocation, request);
+                return agent.projectInvocation(prompt, plannedWork.callOptions({
+                  ctx, agentOptions, deferredMetric, supervisorEvents,
+                }, plannedWork.workerInvocation()));
+              } : null,
+            });
+            if (repairExecution.canonicalReplay) {
+              const prepared = await specDefinition.create({
+                ctx, state, handoffCoordinator: this.handoffCoordinator,
+              });
+              const service = prepared.dependency(specDefinition.ServiceClass);
+              const result = await this.runSpecWorkerStep(prepared);
+              return { error: null, handoffRequest: null, agentError: null,
+                partialProgressReceipt: service.partialProgressReceipt,
+                stepResult: result.stepResult, supervisorEvents: [], deferredMetric: null };
+            }
+            handoffRequest = repairExecution.request;
+            if (repairExecution.checkpointResume) {
+              if (repairExecution.checkpointActionRepositoryFingerprint === null) {
+                throw new WorkerArtifactHandoffError("stale", "FLOW_SPEC_GATE_REPAIR_PLAN_CHANGED",
+                  "checkpoint worker action lacks its original repository fingerprint", { data: { failureKind: "step-admission" } });
+              }
+              try {
+                workerInvocation = reboundWorkerInvocation(invocation, handoffRequest.invocation.action.nextAction,
+                  handoffRequest.dispatchInvocationId, {
+                    repositoryFingerprint: repairExecution.checkpointActionRepositoryFingerprint,
+                    expectedDigest: handoffRequest.actionDigest,
+                  });
+              } catch (cause) {
+                throw new WorkerArtifactHandoffError("stale", "FLOW_SPEC_GATE_REPAIR_PLAN_CHANGED",
+                  "checkpoint worker action differs from its saved request",
+                  { cause, data: { failureKind: "step-admission" }, recoveryPossible: false });
+              }
+            }
+          } else {
+            handoffRequest = this.handoffCoordinator.createRequest({
+              ctx, state, invocation, workerInstructions,
+            });
+          }
+        }
+        resumeSealedDraftExecution = (conditionalDraftExecution
+          && fs.existsSync(handoffRequest.submissionPath))
+          || repairExecution?.sealedReplay === true;
+        if (!resumeSealedDraftExecution) {
+          work = new FlowDispatchWork(workerInvocation, handoffRequest);
+        }
+        if (handoffRequest.policy.kind === "source") {
+          // The Definition-owned action schema remains the canonical base. A
+          // source request may refine only response values it owns immutably
+          // (for example, Task repair keys and source authority paths) before
+          // the existing Agent/provider projection adapts it for the CLI.
+          agentOptions = {
+            ...agentOptions,
+            jsonSchema: handoffRequest.sourceResponseSchema(),
+          };
+        }
+      } catch (error) {
+        if (handoffPolicy !== null && !handoffAuthorityAcquired && !(error instanceof WorkerArtifactHandoffError)) {
+          return {
+            error: new WorkerArtifactHandoffError(
+              "recovery-required",
+              "FLOW_ARTIFACT_HANDOFF_AUTHORITY_LOCK_REQUIRED",
+              `worker artifact handoff authority cannot be acquired: ${error.message}`,
+              {
+                cause: error,
+                retryable: false,
+                recoveryPossible: false,
+                data: { stepId: action.nextAction.step },
+              },
+            ),
+            handoffRequest: null,
+            agentError: null,
+          };
+        }
+        if (!(error instanceof WorkerArtifactHandoffError)) throw error;
+        if (isStepAdmissionRefusal(error)) deferredMetric?.discard();
+        return { error, handoffRequest, agentError: null };
+      }
+
+      let workerArtifactAuthority = null;
+      try {
+        workerArtifactAuthority = handoffRequest?.policy.kind !== "source"
+          ? null
+          : this.handoffCoordinator.sourceMutationAuthority({ ctx, request: handoffRequest });
+      } catch (error) {
+        if (!(error instanceof WorkerArtifactHandoffError)) throw error;
+        return { error, handoffRequest, agentError: null };
+      }
+
+      const holdsSpecRepairMetric = action.nextAction.step === "spec-repair";
+      if (!handoffRequest || resumeSealedDraftExecution) {
+        deferredMetric.discard();
+        deferredMetric = null;
+      }
+      let agentError = null;
+      let sourceResponseError = null;
+      let sourceWorkerStopped = false;
+      try {
+        let responseText;
+        let processError = null;
+        let sourceWorkerStarted = false;
+        try {
+          if (!resumeSealedDraftExecution) {
+            // Verify both immutable worker files before source start intent or
+            // any provider-visible effect is recorded.
+            const workerInvocation = work.workerInvocation();
+            const prompt = work.prompt(workerInvocation);
+            const callOptions = admittedCallOptions
+              ?? work.callOptions({ ctx, agentOptions, deferredMetric, supervisorEvents }, workerInvocation);
+            try {
+              await assertWorkerAgentAdmission(agent, prompt, callOptions, action.nextAction.step);
+              if (handoffRequest?.stepId === "spec-gate-repair") {
+                reserveSpecGateRepairWorkerCall({ ctx, request: handoffRequest, prompt,
+                  physicalRequest: { ...agentOptions, userPrompt: prompt },
+                  instructionPrompt: { ...agentOptions, userPrompt: work.instructionPrompt(workerInvocation) },
+                  callPlan: repairExecution.callPlan });
+              }
+            } catch (error) {
+              if (!(isStepAdmissionRefusal(error) || isStepPersistenceFailure(error)
+                || error instanceof PromptBatchingError)) throw error;
+              deferredMetric?.discard();
+              return { error: isStepAdmissionRefusal(error) || isStepPersistenceFailure(error) ? error : new WorkerArtifactHandoffError("recovery-required", error.code,
+                error.message, { cause: error, recoveryPossible: false,
+                  data: { ...error.details, stepId: action.nextAction.step, failureKind: "step-admission" } }),
+                handoffRequest, agentError: null, deferredMetric: null };
+            }
+            if (handoffRequest?.policy.kind === "source") {
+              this.handoffCoordinator.startSourceWorker({ ctx, request: handoffRequest, invocation });
+              sourceWorkerStarted = true;
+            }
+            responseText = await agent.call(prompt, callOptions);
+          }
+        } catch (error) {
+          if (handoffRequest?.stepId === "spec-gate-repair" && error instanceof PromptBatchingError) {
+            return { error: new WorkerArtifactHandoffError("recovery-required", error.code,
+              error.message, { cause: error, recoveryPossible: false,
+                data: { ...error.details, stepId: handoffRequest.stepId } }),
+            handoffRequest, agentError: null };
+          }
+          processError = error;
+          throw error;
+        } finally {
+          if (handoffRequest?.policy.kind === "source" && sourceWorkerStarted) {
+            if (processError?.unterminatedMembers?.length > 0) {
+              throw new WorkerArtifactHandoffError(
+                "recovery-required", "FLOW_SOURCE_HANDOFF_START_UNCERTAIN",
+                "source worker process tree did not terminate; source authority remains uncertain",
+                { cause: processError, retryable: false, recoveryPossible: false },
+              );
+            }
+            this.handoffCoordinator.finishSourceWorker({ ctx, request: handoffRequest });
+            sourceWorkerStopped = true;
+            workerArtifactAuthority = this.handoffCoordinator.sourceMutationAuthority({ ctx, request: handoffRequest });
+          }
+        }
+        if (handoffRequest?.policy.kind === "source") {
+          materializeSourceWorkerEffect({ request: handoffRequest, responseText });
+          sealParentMaterializedSourceWorkerEffect({ request: handoffRequest });
+        }
+      } catch (error) {
+        agentError = error;
+        if (agentError instanceof AgentFailure) agentError.supervisorEvents = Object.freeze(supervisorEvents);
+        if (handoffRequest?.policy.kind === "source") {
+          sourceResponseError = error instanceof WorkerArtifactHandoffError
+            ? error
+            : new WorkerArtifactHandoffError(
+                "invalid",
+                "FLOW_SOURCE_HANDOFF_RESPONSE_UNAVAILABLE",
+                `source worker did not produce a parent-materializable structured effect: ${error.message || String(error)}`,
+                // Preserve the existing one-fresh-invocation transport retry
+                // for provider failures. Parse and schema failures are thrown
+                // above as typed handoff errors and remain terminal.
+                {
+                  cause: error,
+                  retryable: error instanceof AgentFailure,
+                  data: {
+                    stepId: handoffRequest.stepId,
+                    ...(error instanceof AgentFailure ? { transport: "source-worker-response" } : {}),
+                  },
+                },
+              );
+        }
+      }
+
+      let reconciliation = null;
+      const sourceState = handoffRequest?.policy.kind === "source"
+        ? ctx.flowManager.canonicalState(handoffRequest.specId) : null;
+      const sourceNode = sourceState?.findNode(handoffRequest?.stepId) ?? null;
+      const toolingRetryLimit = sourceNode === null
+        ? 0 : sourceState.definition.contractForNode(sourceNode).toolingRetryLimit ?? 0;
+      const toolingRecoveryAvailable = sourceState?.attempt !== null
+        && sourceState?.attempt !== undefined
+        && sourceState.attempt.consumption.tooling < toolingRetryLimit;
+      try {
+        const responseFailurePlan = sourceResponseError === null ? null : resolveSourceHandoffTransitionPlan({
+          facts: SourceHandoffFailureFacts.fromError(sourceResponseError, {
+            request: handoffRequest,
+            ownershipProven: workerArtifactAuthority !== null,
+            workerStopped: sourceWorkerStopped,
+            agentError,
+            toolingRecoveryAvailable,
+          }),
+          policy: handoffRequest.policy,
+        });
+        if (responseFailurePlan?.disposition === "converge-no-change") {
+          materializeSourceWorkerEffect({
+            request: handoffRequest,
+            responseText: JSON.stringify(handoffRequest.sourceResponseContract.failureNoChangeResponse(responseFailurePlan)),
+          });
+          sealParentMaterializedSourceWorkerEffect({ request: handoffRequest });
+          sourceResponseError = null;
+        }
+        if (sourceResponseError !== null) throw sourceResponseError;
+        if (draftDefinition !== null) {
+          const prepared = this.handoffCoordinator.prepareDraftWorker({
+            ctx,
+            request: handoffRequest,
+            publicationRecovery,
+          });
+          reconciliation = prepared.completed
+            ? { error: null, ...prepared }
+            : await this.runDraftWorkerStep(ctx, handoffRequest, draftDefinition, prepared);
+        } else if (specDefinition !== null) {
+          const prepared = await specDefinition.create({
+            ctx, request: handoffRequest, handoffCoordinator: this.handoffCoordinator,
+          });
+          reconciliation = prepared instanceof PreparedStep
+            ? await this.runSpecWorkerStep(prepared)
+            : { error: null, ...prepared };
+        } else {
+          reconciliation = this.handoffCoordinator.reconcile({
+            ctx,
+            request: handoffRequest,
+            mutationAuthority: workerArtifactAuthority,
+          });
+        }
+        agentError = null;
+      } catch (error) {
+        const sourcePlan = error instanceof WorkerArtifactHandoffError && handoffRequest.policy.kind === "source"
+          ? resolveSourceHandoffTransitionPlan({
+              facts: SourceHandoffFailureFacts.fromError(error, {
+                request: handoffRequest,
+                ownershipProven: workerArtifactAuthority !== null,
+                workerStopped: sourceWorkerStopped,
+                agentError,
+                toolingRecoveryAvailable,
+              }),
+              policy: handoffRequest.policy,
+            })
+          : null;
+        if (sourcePlan !== null) {
+          const failureEvent = this.handoffCoordinator.recordSourceFailure({ ctx, request: handoffRequest, plan: sourcePlan });
+          if (failureEvent !== null) {
+            workerArtifactAuthority = this.handoffCoordinator.sourceMutationAuthority({ ctx, request: handoffRequest });
+          }
+        }
+        if (sourcePlan?.disposition === "rollback") {
+          try {
+            this.handoffCoordinator.rollbackRejectedSourceHandoff({
+              ctx,
+              request: handoffRequest,
+              mutationAuthority: workerArtifactAuthority,
+              plan: sourcePlan,
+            });
+          } catch (rollbackError) {
+            await deferredMetric?.flush();
+            return {
+              error: new WorkerArtifactHandoffError(
+                "recovery-required",
+                "FLOW_SOURCE_HANDOFF_ROLLBACK_REQUIRED",
+                `rejected source handoff could not be safely restored: ${rollbackError.message}`,
+                {
+                  cause: rollbackError,
+                  retryable: false,
+                  recoveryPossible: false,
+                  data: {
+                    stepId: handoffRequest.stepId,
+                    handoffDirectory: handoffRequest.directory,
+                  },
+                },
+              ),
+              handoffRequest,
+              agentError,
+            };
+          }
+        }
+        if (sourcePlan?.disposition === "preserve" && error.recoveryPossible !== true) {
+          new TaskSourceFailureObservation({ request: handoffRequest, error, mutationAuthority: workerArtifactAuthority, agentError }).record(ctx.flowManager, {
+            sourceHandoffSettlement: this.handoffCoordinator.createSourceFailureSettlement({ ctx, request: handoffRequest, plan: sourcePlan }),
+          });
+        }
+        if (!holdsSpecRepairMetric) await deferredMetric?.flush();
+        if (!(error instanceof WorkerArtifactHandoffError)) throw error;
+        const rejected = quarantineRejectedWorkerHandoff(this.handoffCoordinator, handoffRequest, error, sourcePlan);
+        const reported = agentError && rejected instanceof WorkerArtifactHandoffError
+          ? new WorkerArtifactHandoffError(
+              rejected.classification,
+              rejected.code,
+              rejected.message,
+              {
+                cause: new AggregateError([rejected, agentError], "worker handoff and provider failure"),
+                data: rejected.data,
+                retryable: rejected.retryable,
+                recoveryPossible: rejected.recoveryPossible,
+              },
+            )
+          : rejected;
+        return {
+          error: reported,
+          sourceRetryAllowed: sourcePlan?.retryAfterSettlement === true,
+          handoffRequest,
+          agentError,
+          supervisorEvents,
+          deferredMetric: holdsSpecRepairMetric ? deferredMetric : null,
+        };
+      }
+      if (!holdsSpecRepairMetric) await deferredMetric?.flush();
+      return {
+        error: null,
+        handoffRequest,
+        agentError,
+        partialRepair: reconciliation?.partial === true,
+        partialProgressReceipt: reconciliation?.partialProgressReceipt ?? null,
+        stepResult: reconciliation?.stepResult ?? null,
+        supervisorEvents,
+        deferredMetric: holdsSpecRepairMetric ? deferredMetric : null,
+      };
+    } finally {
+      handoffAuthority?.release();
+    }
+  }
+
+  /** Execute a Draft worker through its Definition-selected Connector and Step. */
+  async runDraftWorkerStep(ctx, request, definition, prepared) {
+    if (definition === null) throw new Error(`no Draft Step is declared for ${request.stepId}`);
+    if (prepared?.facts === null || prepared?.facts === undefined) {
+      throw new Error("Draft Step requires prepared worker facts");
+    }
+    const preparedStep = await definition.create({
+      ctx, request, preparation: prepared, handoffCoordinator: this.handoffCoordinator,
+    });
+    const draftService = preparedStep.dependency(DraftService);
+    const output = await preparedStep.step.execute();
+    const attempt = draftService.workerOutcome;
+    if (attempt === null) throw new Error("Draft Step did not execute its bound worker handoff");
+    if ((attempt.error === null && attempt.stepResult !== output)
+      || (attempt.error !== null && output.type !== "error")) {
+      throw new Error("Draft Step Result does not match its bound worker attempt");
+    }
+    return { ...attempt, stepResult: output };
+  }
+
+  /** Execute the initial Spec worker through its Step and selected connection. */
+  async runSpecWorkerStep(prepared) {
+    if (!(prepared instanceof PreparedStep)) throw new Error("Spec Step preparation is missing");
+    const [Service] = prepared.step.constructor.dependencies;
+    const service = prepared.dependency(Service);
+    const stepResult = await prepared.step.execute();
+    return { ...service.workerOutcome, stepResult };
+  }
+
+  async execute(ctx) {
+    let target;
+    try {
+      target = FlowDispatchTarget.captureContext(ctx);
+    } catch (error) {
+      return this.failure(
+        ctx,
+        "FLOW_DISPATCH_TARGET_REQUIRED",
+        "flow dispatch requires an exact --expect-binding or --expect-run-id target",
+        { cause: error.message || String(error) },
+      );
+    }
+
+    const session = new FlowDispatchSession({ target });
+    const lease = this.leaseFactory(session);
+    try {
+      lease.acquire();
+    } catch (error) {
+      return this.failure(
+        ctx,
+        error.code || "FLOW_DISPATCH_LOCK_FAILED",
+        error.message || String(error),
+        blockedBoundary({
+          target,
+          nextAction: null,
+          dispatchCount: 0,
+          message: error.code === "FLOW_DISPATCH_BUSY"
+            ? "Another live dispatcher owns this exact Flow. Wait for it to finish; do not start a duplicate review."
+            : error.code === "FLOW_DISPATCH_LOCK_STALE"
+              ? "The prior dispatcher owner is gone, but its worker may still be running. Verify that process tree has ended before recovering the lease; do not start a duplicate review."
+              : "The Flow dispatcher lease could not be acquired safely.",
+        }),
+      );
+    }
+    try {
+      try {
+        return await this.dispatchContinuation(ctx, session);
+      } catch (error) {
+        if (!(error instanceof FlowDispatchRepositoryFingerprintError)) throw error;
+        const boundaryMessage = error.phase === "action-capture"
+          ? "The repository fingerprint could not be captured. No authorization was issued and no worker was started for this action."
+          : error.phase === "pre-handoff-validation"
+            ? "The repository fingerprint could not be recaptured before handoff. No worker was started for this action."
+            : "The worker ran, but its result was not accepted because repository progress could not be verified.";
+        return this.failure(
+          ctx,
+          error.code,
+          error.message,
+          {
+            ...blockedBoundary({
+              target,
+              nextAction: error.nextAction,
+              dispatchCount: error.dispatchCount,
+              message: boundaryMessage,
+            }),
+            cause: error.cause?.message || String(error.cause),
+            fingerprintPhase: error.phase,
+          },
+        );
+      }
+    } finally {
+      lease.release();
+    }
+  }
+
+  async dispatchContinuation(ctx, session) {
+    const { target } = session;
+    let dispatchCount = 0;
+    let stalledDispatches = 0;
+    let suppliedApproval = ctx.approve || null;
+    try {
+      this.handoffCoordinator.recoverPending({ ctx });
+      reconcileCompletedReviewWorkUnits({
+        flowManager: ctx.flowManager,
+        specId: ctx.specId ?? ctx.flowState?.specId,
+        executionRoot: ctx.executionRoot || ctx.root,
+      });
+    } catch (error) {
+      if (!(error instanceof WorkerArtifactHandoffError)) throw error;
+      return this.failure(
+        ctx,
+        error.code,
+        error.message,
+        workerHandoffFailureData(ctx, target, error, null, dispatchCount, null,
+          appendWorkerHandoffDiagnostic(ctx, error, null)),
+      );
+    }
+    let current = await this.fetchNextAction(target);
+
+    while (dispatchCount < this.maxDispatches) {
+      if (current instanceof Envelope) {
+        const code = errorCode(current);
+        if (code === "ACTIVE_FLOW_MISMATCH" || code === "FLOW_TARGET_NOT_FOUND") {
+          return new FlowDispatchBoundary({
+            kind: "target_mismatch",
+            nextAction: null,
+            dispatchCount,
+            message: errorMessages(current).join(" "),
+          }).toJSON();
+        }
+        return this.failure(
+          ctx,
+          code,
+          errorMessages(current),
+          blockedBoundary({
+            target,
+            nextAction: null,
+            dispatchCount,
+            message: "The guarded next action could not be resolved.",
+          }),
+        );
+      }
+
+      const action = new FlowDispatchAction(current);
+
+      if (action.nonblockingDecision !== null) {
+        let decision;
+        try {
+          decision = await this.runNonblockingAgentDecision(ctx, action);
+          recordNonBlockingDecision({
+            root: ctx.root,
+            flowManager: ctx.flowManager,
+            choice: decision.choice,
+            reason: decision.reason,
+            remainingRisk: decision.remainingRisk,
+            expectEvidenceDigest: action.nonblockingDecision.evidenceDigest,
+            expectIdentity: action.nonblockingDecision.identity().toJSON(),
+          });
+        } catch (error) {
+          return this.failure(
+            ctx,
+            error.code || "FLOW_DISPATCH_NONBLOCKING_DECISION_FAILED",
+            error.message || String(error),
+            blockedBoundary({
+              target,
+              nextAction: current,
+              dispatchCount,
+              message: "The dedicated advisory decision was not durably recorded; the original check evidence is unchanged.",
+            }),
+          );
+        }
+        dispatchCount += 1;
+        current = await this.fetchNextAction(target);
+        continue;
+      }
+
+      if (action.awaitsHostAction) {
+        return new FlowDispatchBoundary({
+          kind: "host_action",
+          target,
+          nextAction: current,
+          dispatchCount,
+        }).toJSON();
+      }
+
+      if (action.awaitsUserDecision) {
+        if (suppliedApproval) {
+          return this.failure(
+            ctx,
+            "FLOW_DISPATCH_APPROVAL_STALE",
+            "the supplied approval token no longer targets an approval boundary",
+            new FlowDispatchBoundary({
+              kind: "await_user_decision",
+              target,
+              nextAction: current,
+              dispatchCount,
+            }).toJSON(),
+          );
+        }
+        return new FlowDispatchBoundary({
+          kind: "await_user_decision",
+          target,
+          nextAction: current,
+          dispatchCount,
+        }).toJSON();
+      }
+
+      if (action.isTerminal) {
+        if (suppliedApproval) {
+          return this.failure(
+            ctx,
+            "FLOW_DISPATCH_APPROVAL_STALE",
+            "the supplied approval token no longer targets an active approval boundary",
+            new FlowDispatchBoundary({
+              kind: action.directive.kind,
+              target,
+              nextAction: current,
+              dispatchCount,
+            }).toJSON(),
+          );
+        }
+        return new FlowDispatchBoundary({
+          kind: action.directive.kind,
+          target,
+          nextAction: current,
+          dispatchCount,
+        }).toJSON();
+      }
+
+      if (!action.isContinuation) {
+        return this.failure(
+          ctx,
+          "FLOW_DISPATCH_DIRECTIVE_INVALID",
+          `flow dispatch cannot execute directive kind ${action.directive.kind}`,
+          blockedBoundary({
+            target,
+            nextAction: current,
+            dispatchCount,
+            message: "The next-action directive is not dispatchable.",
+          }),
+        );
+      }
+
+      const actionIdentity = this.captureAction(
+        ctx,
+        session,
+        current,
+        dispatchCount,
+        "action-capture",
+      );
+      let flowState = readFlowState(ctx);
+      const storedAuthorization = action.requiresApproval
+        ? ExplicitFlowDispatchAuthorization.matching(flowState, actionIdentity)
+        : null;
+      let invocation = new FlowDispatchInvocation({
+        session,
+        action: actionIdentity,
+        authorization: storedAuthorization
+          ?? new UnapprovedFlowDispatchAuthorization(actionIdentity),
+      });
+      let receiptMutation = null;
+      if (action.requiresApproval) {
+        const expectedApproval = invocation.approvalToken();
+        if (suppliedApproval && suppliedApproval !== expectedApproval) {
+          return this.failure(
+            ctx,
+            "FLOW_DISPATCH_APPROVAL_STALE",
+            "the supplied approval token does not match the current guarded next action",
+            new FlowDispatchBoundary({
+              kind: "approval_required",
+              target,
+              nextAction: current,
+              dispatchCount,
+              approvalToken: expectedApproval,
+            }).toJSON(),
+          );
+        }
+        if (suppliedApproval === expectedApproval) {
+          const explicitAuthorization = storedAuthorization
+            ?? new ExplicitFlowDispatchAuthorization({
+              action: actionIdentity,
+              runId: target.runId,
+              approvalToken: expectedApproval,
+          });
+          invocation = invocation.withAuthorization(explicitAuthorization);
+          const persisted = persistDispatchApproval(ctx, invocation, this.repositoryFingerprint);
+          invocation = invocation.withAuthorization(persisted.authorization);
+          receiptMutation = persisted.receiptMutation;
+          flowState = readFlowState(ctx);
+          suppliedApproval = null;
+        } else if (!invocation.approved && flowState?.autoApprove === true && action.isAutoApproveEligible) {
+          invocation = invocation.withAuthorization(
+            new AutoApprovedFlowDispatchAuthorization({
+              action: actionIdentity,
+              choiceId: action.autoApproveChoiceId,
+            }),
+          );
+        }
+        if (!invocation.approved) {
+          return new FlowDispatchBoundary({
+            kind: "approval_required",
+            target,
+            nextAction: current,
+            dispatchCount,
+            approvalToken: expectedApproval,
+          }).toJSON();
+        }
+      } else if (suppliedApproval) {
+        return this.failure(
+          ctx,
+          "FLOW_DISPATCH_APPROVAL_STALE",
+          "the supplied approval token targets a different Flow action",
+          blockedBoundary({
+            target,
+            nextAction: current,
+            dispatchCount,
+            message: "Refresh the approval boundary before continuing.",
+          }),
+        );
+      }
+
+      const validated = await this.fetchNextAction(target);
+      if (validated instanceof Envelope) {
+        current = validated;
+        continue;
+      }
+      const activeAction = this.captureAction(
+        ctx,
+        session,
+        validated,
+        dispatchCount,
+        "pre-handoff-validation",
+      );
+      try {
+        const currentState = readFlowState(ctx);
+        if (receiptMutation) {
+          receiptMutation.assertCurrent({
+            ctx,
+            fingerprint: this.repositoryFingerprint,
+            activeAction,
+            flowState: currentState,
+          });
+        } else {
+          invocation.assertCurrent(activeAction, currentState);
+        }
+      } catch (error) {
+        return this.failure(
+          ctx,
+          error.code || "FLOW_DISPATCH_INVOCATION_STALE",
+          error.message || String(error),
+          {
+            ...blockedBoundary({
+              target,
+              nextAction: validated,
+              dispatchCount,
+              message: "The action or repository changed before worker handoff. Refresh the guarded invocation before continuing.",
+            }),
+            invocation: error.data ?? invocation.toJSON(),
+          },
+        );
+      }
+
+      let approvalContinuation;
+      try {
+        approvalContinuation = this.runApprovalContinuation(ctx, invocation);
+      } catch (error) {
+        return this.failure(
+          ctx,
+          error.code || "FLOW_DISPATCH_APPROVAL_CONTINUATION_FAILED",
+          error.message || String(error),
+          blockedBoundary({ target, nextAction: validated, dispatchCount, message: "The parent could not commit the approved Spec continuation." }),
+        );
+      }
+      if (approvalContinuation !== null) {
+        dispatchCount += 1;
+        const progressed = await this.parentCommandProgress({
+          ctx, session, target, invocation, dispatchCount, stalledDispatches, owner: "approval continuation",
+        });
+        if (progressed.failure) return progressed.failure;
+        stalledDispatches = progressed.stalledDispatches;
+        current = progressed.current;
+        continue;
+      }
+
+      let dispatcherOwnedRepair;
+      try {
+        dispatcherOwnedRepair = await this.runDispatcherOwnedRepair(ctx, target, action);
+      } catch (error) {
+        return this.failure(
+          ctx,
+          error.code || "FLOW_DISPATCH_REPAIR_COMMAND_FAILED",
+          error.message || String(error),
+          blockedBoundary({
+            target,
+            nextAction: validated,
+            dispatchCount,
+            message: "The dispatcher-owned repair command failed before the worker handoff could begin.",
+          }),
+        );
+      }
+      if (dispatcherOwnedRepair != null) {
+        dispatchCount += 1;
+        if (commandFailed(dispatcherOwnedRepair)) {
+          return this.failure(
+            ctx,
+            errorCode(dispatcherOwnedRepair),
+            errorMessages(dispatcherOwnedRepair),
+            blockedBoundary({
+              target,
+              nextAction: validated,
+              dispatchCount,
+              message: "The dispatcher-owned repair command did not complete the guarded Flow transition.",
+            }),
+          );
+        }
+        const progressed = await this.parentCommandProgress({
+          ctx,
+          session,
+          target,
+          invocation,
+          dispatchCount,
+          stalledDispatches,
+          owner: "repair command",
+        });
+        if (progressed.failure) return progressed.failure;
+        stalledDispatches = progressed.stalledDispatches;
+        current = progressed.current;
+        continue;
+      }
+
+      let dispatcherOwnedRecovery;
+      try {
+        dispatcherOwnedRecovery = await this.runDispatcherOwnedRecovery(ctx, target, action);
+      } catch (error) {
+        return this.failure(
+          ctx,
+          error.code || "FLOW_DISPATCH_RECOVERY_COMMAND_FAILED",
+          error.message || String(error),
+          blockedBoundary({
+            target,
+            nextAction: validated,
+            dispatchCount,
+            message: "The dispatcher-owned missing producer artifact recovery failed before worker handoff could begin.",
+          }),
+        );
+      }
+      if (dispatcherOwnedRecovery != null) {
+        dispatchCount += 1;
+        if (commandFailed(dispatcherOwnedRecovery)) {
+          return this.failure(
+            ctx,
+            errorCode(dispatcherOwnedRecovery),
+            errorMessages(dispatcherOwnedRecovery),
+            blockedBoundary({
+              target,
+              nextAction: validated,
+              dispatchCount,
+              message: "The dispatcher-owned missing producer artifact recovery did not complete its guarded Flow transition.",
+            }),
+          );
+        }
+        const progressed = await this.parentCommandProgress({
+          ctx,
+          session,
+          target,
+          invocation,
+          dispatchCount,
+          stalledDispatches,
+          owner: "missing producer artifact recovery",
+        });
+        if (progressed.failure) return progressed.failure;
+        stalledDispatches = progressed.stalledDispatches;
+        current = progressed.current;
+        continue;
+      }
+
+      let dispatcherOwnedCommand;
+      try {
+        dispatcherOwnedCommand = await this.runDispatcherOwnedCommand(ctx, target, action);
+      } catch (error) {
+        return this.failure(
+          ctx,
+          error.code || "FLOW_DISPATCH_COMMAND_FAILED",
+          error.message || String(error),
+          blockedBoundary({
+            target,
+            nextAction: validated,
+            dispatchCount,
+            message: "The dispatcher-owned Flow command failed before it could complete the canonical transition.",
+          }),
+        );
+      }
+      if (dispatcherOwnedCommand != null) {
+        dispatchCount += 1;
+        if (commandFailed(dispatcherOwnedCommand.result)) {
+          // A command can return operational failure after its Store-owned
+          // transaction commits. Do not trust a command-side marker: reload
+          // canonical authority and continue only when the guarded Action has
+          // durably progressed. Otherwise preserve the command failure.
+          const progressed = await this.parentCommandProgress({
+            ctx,
+            session,
+            target,
+            invocation,
+            dispatchCount,
+            stalledDispatches,
+            owner: "failed Flow command",
+            requiresCanonicalActionProgress: true,
+          });
+          if (progressed.failure) return progressed.failure;
+          if (!progressed.progressed) {
+            return this.failure(
+              ctx,
+              errorCode(dispatcherOwnedCommand.result),
+              errorMessages(dispatcherOwnedCommand.result),
+              blockedBoundary({
+                target,
+                nextAction: progressed.current instanceof Envelope ? validated : progressed.current,
+                dispatchCount,
+                message: "The dispatcher-owned Flow command failed without a durable canonical transition.",
+              }),
+            );
+          }
+          stalledDispatches = progressed.stalledDispatches;
+          current = progressed.current;
+          continue;
+        }
+        if (dispatcherOwnedCommand.command.removesExecutionRoot) {
+          try {
+            finalizeCleanupCompletion(dispatcherOwnedCommand.result);
+          } catch (error) {
+            return this.failure(
+              ctx,
+              error.code,
+              error.message,
+              blockedBoundary({
+                target,
+                nextAction: validated,
+                dispatchCount,
+                message: "Finalize cleanup returned without durable canonical completion evidence.",
+              }),
+            );
+          }
+          return new FlowDispatchBoundary({
+            kind: "completed",
+            nextAction: null,
+            dispatchCount,
+          }).toJSON();
+        }
+        const progressed = await this.parentCommandProgress({
+          ctx,
+          session,
+          target,
+          invocation,
+          dispatchCount,
+          stalledDispatches,
+          owner: "Flow command",
+        });
+        if (progressed.failure) return progressed.failure;
+        stalledDispatches = progressed.stalledDispatches;
+        current = progressed.current;
+        continue;
+      }
+      const workerState = ctx.flowManager.canonicalState(ctx.specId);
+      let attempt = await this.runWorkerAttempt(ctx, invocation);
+      dispatchCount += 1;
+      const deferredMetrics = attempt.deferredMetric ? [attempt.deferredMetric] : [];
+      if (attempt.error) {
+        if (settleRequirementTestStructuralHandoff(ctx, attempt, attempt.error)) {
+          await flushDeferredMetrics(deferredMetrics);
+          current = await this.fetchNextAction(target);
+          continue;
+        }
+        if (
+          attempt.error.retryable !== true
+          || !isExplicitWorkerToolingFailure(attempt.error, attempt.agentError)
+          || (isSpecArtifactWorkerStep(invocation.action.nextAction.step)
+            && isUnclassifiedWorkerError(attempt.agentError))
+          || !attempt.handoffRequest
+          || (attempt.handoffRequest.policy.kind === "source" && attempt.sourceRetryAllowed !== true)
+        ) {
+          if (settleRequirementTestExternalFailure(ctx, attempt, attempt.error)) {
+            await flushDeferredMetrics(deferredMetrics);
+            current = await this.fetchNextAction(target);
+            continue;
+          }
+          if (settleRequirementTestToolingFailure(ctx, attempt, attempt.error)) {
+            await flushDeferredMetrics(deferredMetrics);
+            current = await this.fetchNextAction(target);
+            continue;
+          }
+          const correction = settleDraftWorkerFailure(ctx, attempt, attempt.error, invocation.action.nextAction.step);
+          discardDeferredMetrics(deferredMetrics);
+          if (correction?.continue) {
+            current = await this.fetchNextAction(target);
+            continue;
+          }
+          return this.finalWorkerFailure(ctx, target, attempt, attempt.error, invocation, workerState, dispatchCount);
+        }
+
+        // Only malformed JSON, a missing or unreadable handoff transport, or
+        // an explicitly retryable producer payload-format failure is retried
+        // once with a new dispatch invocation and handoff directory. Parsed
+        // semantic, identity, authority, and publication failures are terminal.
+        const retryCurrent = await this.fetchNextAction(target);
+        const retryState = ctx.flowManager.canonicalState(ctx.specId);
+        if (
+          retryCurrent instanceof Envelope
+          || retryCurrent.step !== invocation.action.nextAction.step
+          || retryCurrent.action !== invocation.action.nextAction.action
+          || retryState.runId !== workerState.runId
+          || retryState.attempt?.id !== workerState.attempt?.id
+          || retryState.attempt?.sequence !== workerState.attempt?.sequence
+          || session.captureCanonicalAction(workerFacingNextAction(retryCurrent), invocation.action).digest !== invocation.action.digest
+        ) {
+          discardDeferredMetrics(deferredMetrics);
+          return this.failure(
+            ctx,
+            attempt.error.code,
+            attempt.error.message,
+            workerHandoffFailureData(
+              ctx,
+              target,
+              attempt.error,
+              attempt.handoffRequest,
+              dispatchCount,
+              attempt.agentError,
+              appendWorkerHandoffDiagnostic(ctx, attempt.error, attempt.handoffRequest, {
+                stepId: invocation.action.nextAction.step,
+                agentError: attempt.agentError,
+              }),
+            ),
+          );
+        }
+        const retryInvocation = freshWorkerInvocation(invocation, retryCurrent);
+        const firstError = attempt.error;
+        const firstRequest = attempt.handoffRequest;
+        const firstAgentError = attempt.agentError;
+        attempt = await this.runWorkerAttempt(
+          ctx,
+          retryInvocation,
+          new WorkerArtifactRetryFeedback(firstError),
+        );
+        if (attempt.deferredMetric) deferredMetrics.push(attempt.deferredMetric);
+        dispatchCount += 1;
+        if (attempt.error) {
+          discardDeferredMetrics(deferredMetrics);
+          const exhausted = attempt.error.retryable === true
+            ? new WorkerArtifactRetryExhaustedError({
+                firstError,
+                secondError: attempt.error,
+                firstRequest,
+                secondRequest: attempt.handoffRequest,
+            })
+            : attempt.error;
+          if (exhausted instanceof WorkerArtifactHandoffError) {
+            exhausted.agentFailures = Object.freeze([firstAgentError, attempt.agentError].filter(Boolean));
+          }
+          if (settleRequirementTestExternalFailure(ctx, attempt, exhausted)) {
+            await flushDeferredMetrics(deferredMetrics);
+            current = await this.fetchNextAction(target);
+            continue;
+          }
+          if (settleRequirementTestToolingFailure(ctx, attempt, exhausted)) {
+            await flushDeferredMetrics(deferredMetrics);
+            current = await this.fetchNextAction(target);
+            continue;
+          }
+          if (settleRequirementTestStructuralHandoff(ctx, attempt, exhausted)) {
+            await flushDeferredMetrics(deferredMetrics);
+            current = await this.fetchNextAction(target);
+            continue;
+          }
+          const correction = settleDraftWorkerFailure(ctx, attempt, exhausted, invocation.action.nextAction.step);
+          if (correction?.continue) {
+            current = await this.fetchNextAction(target);
+            continue;
+          }
+          return this.finalWorkerFailure(ctx, target, attempt, exhausted, retryInvocation, workerState, dispatchCount);
+        }
+        invocation = retryInvocation;
+      }
+      await flushDeferredMetrics(deferredMetrics);
+      const agentError = attempt.agentError;
+
+      const refreshed = await this.fetchNextAction(target);
+      if (refreshed instanceof Envelope) {
+        current = refreshed;
+        continue;
+      }
+      if (agentError) {
+        const refreshedAction = new FlowDispatchAction(refreshed);
+        if (refreshedAction.isTerminal || refreshedAction.awaitsUserDecision || refreshedAction.awaitsHostAction) {
+          current = refreshed;
+          continue;
+        }
+        const boundary = blockedBoundary({
+          target,
+          nextAction: refreshed,
+          dispatchCount,
+          message: "The worker process ended and guarded authority was refreshed. Resolve the provider failure before resuming this non-terminal action.",
+        });
+        return this.failure(
+          ctx,
+          agentError instanceof AgentFailure ? agentError.code : "FLOW_DISPATCH_AGENT_FAILED",
+          `the configured Flow worker failed: ${agentError.message || agentError}`,
+          agentError instanceof AgentFailure
+            ? { ...boundary, agentFailure: agentError.toJSON() }
+            : boundary,
+        );
+      }
+      const refreshedIdentity = this.captureAction(
+        ctx,
+        session,
+        refreshed,
+        dispatchCount,
+        "post-handoff-progress",
+      );
+      stalledDispatches = invocation.hasProgressedTo(refreshedIdentity)
+        || attempt.partialRepair === true || attempt.partialProgressReceipt != null
+        ? 0
+        : stalledDispatches + 1;
+      if (stalledDispatches >= this.maxStalledDispatches) {
+        return this.failure(
+          ctx,
+          "FLOW_DISPATCH_STALLED",
+          `the configured Flow worker returned ${stalledDispatches} time(s) without durable progress`,
+          blockedBoundary({
+            target,
+            nextAction: refreshed,
+            dispatchCount,
+            message: "The worker response was not accepted as completion because the guarded Flow and repository state did not change.",
+          }),
+        );
+      }
+      current = refreshed;
+    }
+
+    return this.failure(
+      ctx,
+      "FLOW_DISPATCH_LIMIT_REACHED",
+      `flow dispatch exceeded its ${this.maxDispatches}-action safety limit`,
+      blockedBoundary({
+        target,
+        nextAction: current instanceof Envelope ? null : current,
+        dispatchCount,
+        message: "Resume after inspecting why the finite Flow exceeded the dispatcher safety limit.",
+      }),
+    );
+  }
+}

@@ -1,0 +1,116 @@
+{
+  "audit": [
+    {
+      "acceptedOperations": [],
+      "appliedFindings": [],
+      "discardedOperations": [],
+      "inputDigest": "3106ca5294947a47e9fe261be4b3bff780dc2e43c9cadfea085dcaaf873580a2",
+      "operationDigest": "790e561a26120cd5aba8824e99283158498cb669998f0f509e9b6e3ad4013369",
+      "outcome": "replaced",
+      "relation": "revision-scoped-canonical-review",
+      "stage": "spec-review"
+    },
+    {
+      "acceptedOperations": [],
+      "appliedFindings": [],
+      "discardedOperations": [],
+      "inputDigest": "e65df5be378b9a0b28c4ea80c88affbb4b4294ed8663be3b7f069c8f898dc182",
+      "operationDigest": "790e561a26120cd5aba8824e99283158498cb669998f0f509e9b6e3ad4013369",
+      "outcome": "merged",
+      "relation": "revision-scoped-canonical-review",
+      "stage": "spec-triage"
+    },
+    {
+      "acceptedOperations": [
+        {
+          "edits": [
+            {
+              "endByte": 245,
+              "replacement": "FlowTargetExpectation の --expect-spec と --expect-run-id の token は最大 300 文字、--expect-binding の serialized token は最大 32768 バイト。",
+              "startByte": 190
+            }
+          ],
+          "expectedDigest": "58f9e73686ab3d6b628fb293111d0182554396c2d7e0abdc9004ac898f679b2e",
+          "findingIds": [
+            "spec-review-4915932cc0b079bd0887877520555203"
+          ],
+          "kind": "edit-text-field",
+          "reason": "Limit the 300-character guard to spec and run ID tokens while retaining the binding byte limit.",
+          "target": {
+            "entity": "requirement",
+            "field": "desc",
+            "id": "R6"
+          }
+        },
+        {
+          "expectedDigest": "70752185f2bad40f4addb9f7227c3a74d058997406e0944a82478381de2e10a2",
+          "findingIds": [
+            "spec-review-4915932cc0b079bd0887877520555203"
+          ],
+          "kind": "replace-array-element",
+          "reason": "Correct the decision evidence to distinguish guard tokens from serialized bindings.",
+          "replacement": {
+            "evidence": "src/lib/flow-spec-id.js に 100 文字上限なし。src/lib/preparing-flow-store.js に PreparingFlowId の 200 文字上限。src/lib/flow-target-guard.js の normalizedToken は --expect-spec/--expect-run-id に MAX_TARGET_TOKEN_LENGTH=300 を適用し、FlowTargetBinding.deserialize は --expect-binding に MAX_FLOW_TARGET_BINDING_TOKEN_BYTES=32768 を適用する。",
+            "text": "[VERIFY] FlowSpecId と target token の上限は共通 100 文字ではない。--expect-spec と --expect-run-id は最大 300 文字、--expect-binding は最大 32768 バイト。"
+          },
+          "target": {
+            "collection": "overview.decisions",
+            "position": 2
+          }
+        }
+      ],
+      "appliedFindings": [
+        "spec-review-4915932cc0b079bd0887877520555203"
+      ],
+      "discardedOperations": [],
+      "inputDigest": "77cb416eca5872a5079967fba3a57997b096377d58bb73414ba936cf7320eb3b",
+      "operationDigest": "1a7c43a96e687f4ca7c68bd912ac995025425c5d2dc065e6ecb79b7efa032e72",
+      "outcome": "merged",
+      "relation": "revision-scoped-canonical-review",
+      "stage": "spec-repair"
+    }
+  ],
+  "findings": [
+    {
+      "allowedTargets": [
+        {
+          "operationKinds": [
+            "edit-text-field"
+          ],
+          "target": {
+            "entity": "requirement",
+            "field": "desc",
+            "id": "R6"
+          }
+        },
+        {
+          "operationKinds": [
+            "replace-array-element"
+          ],
+          "target": {
+            "collection": "overview.decisions",
+            "position": 2
+          }
+        }
+      ],
+      "body": "**Target:** R6 / Overview.Decisions\n**Issue:** FlowTargetExpectation が受ける文字列すべてに300文字上限があるわけではない。src/lib/flow-target-guard.js では --expect-spec/--expect-run-id は最大300文字だが、--expect-binding は FlowTargetBinding.deserialize が最大32768バイトで検証する。現行コードで435文字の正規 binding を生成し、FlowTargetExpectation が受理することも確認した。\n**Required change:** 300文字上限の対象を --expect-spec/--expect-run-id に限定し、--expect-binding は既存の32768バイト上限を維持すると明記する。\n**Why blocking:** R6 の境界テストを記載どおり設計すると、既存コードが生成・受理する正当な binding の拒否を要求してしまう。上限を実装に反映すれば既存の guarded command が失敗し、受理契約維持の要件にも違反する。",
+      "disposition": "apply",
+      "evidence": "src/lib/flow-target-guard.js の normalizedToken は --expect-spec/--expect-run-id に 300 文字上限を適用する一方、FlowTargetExpectation は --expect-binding を FlowTargetBinding.deserialize に渡し、そこでは Buffer.byteLength(token) <= 32768 を検証する。R6 の一律 300 文字という記述は正規 binding を誤って拒否させるため、R6 と overview.decisions[2] の上限説明を局所的に訂正する。",
+      "findingId": "spec-review-4915932cc0b079bd0887877520555203",
+      "issue": "FlowTargetExpectation が受ける文字列すべてに300文字上限があるわけではない。src/lib/flow-target-guard.js では --expect-spec/--expect-run-id は最大300文字だが、--expect-binding は FlowTargetBinding.deserialize が最大32768バイトで検証する。現行コードで435文字の正規 binding を生成し、FlowTargetExpectation が受理することも確認した。",
+      "kind": "blocking",
+      "requiredChange": "300文字上限の対象を --expect-spec/--expect-run-id に限定し、--expect-binding は既存の32768バイト上限を維持すると明記する。",
+      "target": "R6 / Overview.Decisions",
+      "title": "target token の300文字上限が --expect-binding の既存契約と矛盾する",
+      "whyBlocking": "R6 の境界テストを記載どおり設計すると、既存コードが生成・受理する正当な binding の拒否を要求してしまう。上限を実装に反映すれば既存の guarded command が失敗し、受理契約維持の要件にも違反する。"
+    }
+  ],
+  "generation": 3,
+  "identity": {
+    "byteLength": 47308,
+    "digest": "474c8cc2bcb84eea8ec1d102fb525723ca8fa2fda8d86cfcea19495ddcbc5586",
+    "revision": 19,
+    "specId": "6a9b5488-flow-help-contract"
+  },
+  "version": 2
+}

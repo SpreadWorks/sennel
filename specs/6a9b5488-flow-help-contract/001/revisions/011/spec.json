@@ -1,0 +1,470 @@
+{
+  "goal": "既存の FLOW_COMMANDS と CommandDefinition から parser と help の共通入力契約を導出し、query を除く全 routed leaf と各 group のヘルプを、受理可能な入力・決定的な順序・検証可能な行境界に一致させる。実行、拒否、target guard、runtime、hook、生成物の既存契約は保持する。",
+  "scope": {
+    "in": [
+      "FLOW_COMMANDS の query 以外の共有 routed leaf における option authority、implicit -h/--help、parser 投影、Usage/Options help 投影",
+      "CommandDefinition、src/lib/command-registry.js、src/lib/dispatcher.js、src/help.js、src/flow.js の共有 help model と row renderer",
+      "flow get、set、run、report/show の直接 child leaf から導出する group option intersection と三つの公開 help 経路",
+      "五つの target guard、run 限定の --agent-work-dir、既存の parser/domain/target rejection、runtime path、logging、hook lifecycle の parity 検証",
+      "13/14/15 文字、recover-missing-producer-artifact、64/65 文字の renderer 境界 fixture と registry/integration/E2E の behavior-level 検証"
+    ],
+    "out": [
+      "bootstrapFlowQueryCli、src/flow/query.js、src/flow/query-contract.js が所有する stdin、request-file、query help、query error の共有 migration",
+      "新しい command registry、help 逆解析器、blanket validator、target guard evaluator、runtime resolver、agent-host lifecycle callback",
+      ".sennel/output/analysis.json、docs/*.md、README.md、AGENTS.md、specs/<NNN>/flow.json、step result、artifact catalog の内容・対象・順序変更",
+      "既存 command-specific prose、examples、locale text、実行 semantics、拒否順序、終了コード、runtime directory policy の目的外変更"
+    ]
+  },
+  "constraints": [
+    "Node.js 組み込みモジュールだけを使用し、外部依存を追加しない。",
+    "既存の CommandDefinition と FLOW_COMMANDS を単一 authority とし、並列 registry や help の逆解析による別実装を作らない。",
+    "値の構造的制約と振る舞いは専用クラスに所属させ、既存 API の判断・parser・target guard・runtime resolver を呼び出し側で複製しない。",
+    "query は独立 parser のまま共有 routed matrix から除外し、共有 option authority に query の stdin、request-file、help、error を混入させない。",
+    "valid explicit help は command module、handler、execution hook、command-owned mutation、Flow state mutation を実行しない。",
+    "parser rejection、値の型・domain・arity/path validation、target mismatch、相互排他の所有者と拒否順序を変更しない。",
+    "fixture の境界合格条件は、名前全体が一度だけ出現し、その直後に ASCII 空白が 2 個以上あり、空白後に非空の summary が続くこととする。64/65 文字にも同じ条件を適用し、切り詰め・連結・新しい長さ制限を認めない。",
+    "Issue 521 の一つの concern を複数 Spec に分割せず、要件には優先度 marker を付け、全 task は既存 owner とテスト境界に対応させる。"
+  ],
+  "design_principles": [
+    "parser と help は同じ typed option contract の投影として実装し、表示文字列から parser 契約を再構成しない。",
+    "leaf の完全な option contract と group の直接 child 全件の共通部分を別の専用モデルで表し、option の kind、alias、placeholder、description を保持する。",
+    "subcommand row と option row は同じ共有 renderer を使用し、locale 非依存の name 昇順と name 後の 2 個以上の ASCII 空白を共通 invariant にする。",
+    "既存の dispatcher の parse、help shortcut、target guard、hook、runtime、Flow persistence の所有境界を深い module で再利用する。",
+    "query exception、生成 artifact、副作用、終了コードを migration parity の検証対象として明示し、表示契約以外の意味を変更しない。"
+  ],
+  "overview": {
+    "modules": [
+      {
+        "text": "FLOW_COMMANDS は flow の leaf を登録し、args と help、lazy command、lifecycle hook、target/runtime 属性を同じ registry entry に持つ。query entry は targetGuard:false と --request-file を持つ独立 exception である。",
+        "added_by_task": "T-1"
+      },
+      {
+        "text": "CommandDefinition は FLOW_COMMANDS を executable dispatch と import-safe help metadata に投影する既存の共通境界である。新しい option authority はこの投影を置き換えず、parser と表示が共有する typed model を追加する。",
+        "added_by_task": "T-1"
+      },
+      {
+        "text": "src/lib/dispatcher.js は entry.args の parser、help の早期出力、target resolution/mismatch、Command load、pre/post/onError、runtime log を順序づける。help はこの順序の前段で完結させる。",
+        "added_by_task": "T-2"
+      },
+      {
+        "text": "src/help.js と CommandDefinition.renderHelp は leaf/group の人間向け表示を担う。両者の重複した pad・option 列挙を共有 row renderer と option model の投影に集約する。",
+        "added_by_task": "T-3"
+      },
+      {
+        "text": "src/lib/flow-target-guard.js と src/flow/lib/flow-context.js は五つの target expectation、binding、active Flow の選択、authority mismatch を所有する。help migration はこれらを再実装しない。",
+        "added_by_task": "T-5"
+      },
+      {
+        "text": "src/sennel.js、src/lib/config.js、src/lib/container.js、runtime-log と finalize-cleanup path は agentWorkDir、logDir、durable root と runtime 初期化を所有する。表示変更はこの path policy を変更しない。",
+        "added_by_task": "T-6"
+      },
+      {
+        "added_by_task": "T-8",
+        "text": "bootstrapFlowQueryCli、src/flow/query.js、src/flow/query-contract.js は共有 routed registry と別に stdin/request-file を読み、query 固有 schema、bounded read、help、error を提供する。既存 bounds は request/stdin または --request-file 1,048,576 bytes 以下、公開 collection/object 10,000 items 以下、canonical JSON depth 32 以下、response 2,097,152 bytes 以下、page limit 1..100、public string 4,096 bytes 以下とし、同 owner の他の record/catalog bounds も保持する。"
+      }
+    ],
+    "data_flow": [
+      {
+        "text": "FLOW_COMMANDS の各 routed leaf が option contract、positionals/rest、target/runtime metadata を持ち、CommandDefinition が同一 model を dispatcher と help model に渡す。query はこの flow から分岐する。",
+        "added_by_task": "T-1"
+      },
+      {
+        "text": "dispatcher は共有 contract から flag、required-value、optional-value、alias、placeholder を parser に投影し、未知 option、missing value、extra positional を既存の診断と終了コードで拒否する。",
+        "added_by_task": "T-2"
+      },
+      {
+        "text": "leaf help は contract の canonical name、alias、kind、placeholder、description と既存の Usage/prose/examples/locale を共有 renderer へ渡し、explicit help を handler 前に終了する。",
+        "added_by_task": "T-3"
+      },
+      {
+        "text": "group help はその group の全直接 child leaf を registry から再列挙し、完全な option contract の共通部分だけを投影する。run だけに宣言された --agent-work-dir は他 group に漏らさない。",
+        "added_by_task": "T-4"
+      },
+      {
+        "text": "共有 renderer は child name と option row を name 昇順で並べ、名前の後に 2 個以上の ASCII 空白と非空 summary を出す。13/14/15、最長既存名、64/65 文字 fixture を同じ判定で検証する。",
+        "added_by_task": "T-4"
+      },
+      {
+        "text": "help 以外では dispatcher が既存の FlowTargetExpectation、context resolver、handler、registry hook、runtime log、Flow Store の順序を使い、guard mismatch と相互排他違反を command-owned mutation より前に返す。",
+        "added_by_task": "T-5"
+      },
+      {
+        "text": "CLI の --agent-work-dir または config.agent.workDir または .tmp が既存 precedence で paths を作り、config.logs.dir と fallback、finalize-cleanup の main repository durable root を維持する。",
+        "added_by_task": "T-6"
+      },
+      {
+        "added_by_task": "T-8",
+        "text": "query は bootstrapFlowQueryCli から独自の bounded input、canonical record reader、schema validation、response serialization を通り、shared routed help/contract matrix の変更を受けない。request/stdin または --request-file は 1,048,576 bytes 以下、公開 collection/object は 10,000 items 以下、canonical JSON depth は 32 以下、response は 2,097,152 bytes 以下、page limit は 1..100 とし、既存 query-contract の record/catalog bounds を保持する。"
+      }
+    ],
+    "decisions": [
+      {
+        "text": "[VERIFY] FLOW_COMMANDS を parser/help authority とする方針は source と一致する。registry.js は全 flow entry に args、help、command を登録し、query だけを --request-file の独立 entry としている。",
+        "evidence": "src/flow/registry.js:5-9, 195-209, 1145-1168。FLOW_COMMANDS、FLOW_TARGET_GUARD_OPTIONS、FLOW_RUN_RUNTIME_OPTIONS が同じ registry module に定義される。結果=match。",
+        "added_by_task": "T-1"
+      },
+      {
+        "text": "[VERIFY] 現在の help 契約は parser 契約から分離している。flowDefinition は help 行を解析して options を作り、group は固定 option を持つため、共有 typed authority を追加する理由が source 上確認できる。",
+        "evidence": "src/lib/command-registry.js:318-364。flowOptions() は help の Options: 行を再解析し、flowDefinition() の group は -h, --help と --agent-work-dir を固定する。CommandDefinition.renderHelp() は padEnd(14) を直接使う。結果=match。",
+        "added_by_task": "T-1"
+      },
+      {
+        "text": "[VERIFY] help の早期終了と通常実行の拒否順序は dispatcher が所有するため、表示変更はこの境界を保つ。",
+        "evidence": "src/lib/dispatcher.js:380-447 は parse 後に entry.help を出力して戻り、続いて context/target resolution と target mismatch を処理してから command module、hooks、handler を実行する。結果=match。",
+        "added_by_task": "T-2"
+      },
+      {
+        "text": "[VERIFY] 五つの target guard と相互排他は既存 FlowTargetExpectation の契約であり、shared option model はこの owner を呼び出すだけにする。",
+        "evidence": "src/flow/registry.js:196-204 は --expect-binding、--expect-issue、--expect-no-issue、--expect-spec、--expect-run-id を定義する。src/lib/flow-target-guard.js:379-450 は --expect-issue/--expect-no-issue の conflict と mismatch envelope を実装する。結果=match。",
+        "added_by_task": "T-5"
+      },
+      {
+        "text": "[VERIFY] worktree、active target、preparing runId の解決は flow context の既存 resolver が所有する。新しい target resolver を作らず、help では context を構築しない。",
+        "evidence": "src/flow/lib/flow-context.js:20-230 は FlowTargetExpectation、worktree binding、explicit target、preparing runId、ambient Flow を順序づける。結果=match。",
+        "added_by_task": "T-5"
+      },
+      {
+        "text": "[VERIFY] runtime directory と log の precedence は draft の記述と一致する。--agent-work-dir、config.agent.workDir、.tmp の順で work dir を選び、config.logs.dir または work dir/logs を使い、finalize-cleanup は main root を durable root とする。",
+        "evidence": "src/lib/config.js:101-117 の resolveWorkDir、src/lib/container.js:97-116 と 179-205 の paths/logger 組立、src/sennel.js:39-50 と 93-97 の pre-scan/初期化、src/lib/finalize-cleanup-paths.js:28-30 の判定。結果=match。",
+        "added_by_task": "T-6"
+      },
+      {
+        "text": "[VERIFY] 成功・失敗時の hook lifecycle は registry と dispatcher の既存経路で保持する。help shortcut は hook 前に return し、通常経路は pre、command、post または onError、runtime/finalization の順序を維持する。",
+        "evidence": "src/lib/dispatcher.js:376-447, 560-810 は help、pre、command、post/onError、runtime metadata の境界を示す。src/flow/registry.js:1070-1139 は plugin hook の pre/post/onError/finally 選択と publication を既存 owner として示す。結果=match。",
+        "added_by_task": "T-7"
+      },
+      {
+        "added_by_task": "T-8",
+        "evidence": "src/flow/query-contract.js owns request, page, public collection, string, JSON depth, response, artifact, and canonical record limits.",
+        "text": "[VERIFY] query remains outside the shared routed migration. Preserve bounded input and canonical reads: request/stdin or --request-file <= 1,048,576 bytes; page limit <= 100; public collections/objects <= 10,000 items; public strings <= 4,096 bytes; canonical JSON depth <= 32; response <= 2,097,152 bytes. Preserve the existing query-contract limits for records, artifacts, IDs, ledger, and total artifact bytes; do not add a new blanket limit."
+      },
+      {
+        "text": "[CLARIFY] draft Gate の DF-1 と DF-2 が指摘した曖昧さは、renderer の観測可能な文字列条件に固定する。名前の全文、2 個以上の ASCII 空白、非空 summary の連続を各 fixture で検証し、合格を機械判定する。",
+        "evidence": "immutable flow-findings.json の DF-1/DF-2 は 13/14/15、recover-missing-producer-artifact、64/65 文字 fixture における「境界が見える」の判定基準不足を blocking とした。Spec では出力 regex/文字列 assertion を受入条件に追加する。",
+        "added_by_task": "T-4"
+      }
+    ]
+  },
+  "background": "現状の FLOW_COMMANDS は parser が利用する args と、CommandDefinition、src/help.js が表示する help の option 行を別々に保持している。flowOptions() による help 逆解析と group の固定 option 集合は、受理可能な option の欠落、実際には受理しない option の表示、長い名前の連結、登録順依存を生む。Issue 521 はこの差分を一つの既存 registry authority から解消し、全 routed leaf と group help の検証可能な契約を定めることを求める。一方、query、既存の実行・拒否・target・runtime・hook・artifact 契約は変更対象ではない。",
+  "requirements": [
+    {
+      "id": "R1",
+      "desc": "At the Issue 521 restart baseline, re-enumerate FLOW_COMMANDS and exclude flow query, whose custom parser and help are independently owned. The shared routed inventory is 66 leaves: resume 1, prepare 1, get 11, set 17, run 35, and report/show 1. The Spec must contain a normative one-row-per-leaf inventory generated from the exact registry args; grouped prose is not a substitute and the contract test must fail if the registry-derived set or count changes. Each row records P positional arguments, R rest arguments, F flags, O value options, G applicable shared target guards, V the existing syntax/semantic validator owner, and T the owning registry, integration, or E2E test boundary. Each P/R/F/O entry records required or optional status, cardinality, type, format, allowed domain or range, empty behavior, existing size limit or an explicit no-bound marker with its owner, conditional combinations, and path kind, existence, absolute/relative support, and resolution root where applicable. Every row also includes implicit -h and --help. The normative leaf map is: resume P=none, F=--expect-no-issue, O=--spec and applicable G; prepare P=none, F=--no-branch/--worktree/--dry-run/--expect-no-issue, O=--title/--base/--issue/--request/--run-id and applicable G; get status P=runId F=--details and applicable G, resolve-context applicable G, check P=target, prompt P=kind and applicable G, artifact P=logicalKey F=--expect-no-issue O=--mode/--spec-id/--version and applicable G, qa-count applicable G, guardrail P=phase O=--format, issue P=number, next-action applicable G, context P=path F=--raw and applicable G O=--search, and runtime-log F=--expect-no-issue and applicable G O=--format/--sequence/--run-id; set step P=id,status and applicable G, request P=text O=--run-id and applicable G, issue P=number and applicable G, note P=text O=--task-id/--run-id and applicable G, draft-answer P=questionId F=--drop and applicable G O=--question-revision/--answer/--why/--considered/--dropped-reason, files P=reqId R=paths and applicable G, review-evidence applicable G O=--file, broad P=action and applicable G O=--step/--reason, policy P=value and applicable G O=--reason, nonblocking-decision applicable G O=--choice/--reason/--expect-evidence-digest/--remaining-risk, metric P=phase,counter and applicable G O=--task-id, approval F=--approved and applicable G O=--notes/--confirmed-at, issue-log applicable G O=--step/--reason/--trigger/--resolution/--guardrail-candidate/--normalized-finding-id/--repair-ref-commit/--repair-ref-file/--task-id, init O=--issue/--request, retry P=action,kind,phase F=--yes and applicable G O=--reason, acceptance-decision applicable G O=--choice, and auto P=value and applicable G O=--run-id; run seal-handoff O=--agent-work-dir, dispatch F=--expect-no-issue O=--approve/--agent-work-dir and applicable G, recover-review-pass applicable G O=--agent-work-dir/--phase, gate applicable G O=--spec/--phase/--agent-work-dir, review F=--dry-run/--skip-confirm/--expect-no-issue O=--phase/--agent-work-dir and applicable G, auto-check applicable G O=--run-id/--agent-work-dir, finalize-commit applicable G O=--message/--agent-work-dir, finalize-merge and finalize-sync applicable G O=--agent-work-dir, finalize-cleanup F=--auto-rescue/--force/--expect-no-issue O=--agent-work-dir and applicable G, abort F=--force/--expect-no-issue O=--agent-work-dir and applicable G, sync F=--dry-run/--expect-no-issue O=--agent-work-dir and applicable G, reopen-draft applicable G O=--reason/--category/--agent-work-dir, repair-plan-gate/settle-failure/settle-review-transition/recover-missing-producer-artifact/recover-draft-execution/recover-finalization/recover-task-execution-overrun/claim-next-action/settle-gate-transition/test-execute/requirement-test-gate/test-result-review/acceptance-review applicable G O=--agent-work-dir, reconcile-task-review F=--dry-run/--yes/--expect-no-issue O=--expect-digest/--reason/--agent-work-dir and applicable G, filter-task-review applicable G O=--exclusions/--expect-attempt-id/--expect-review-digest/--expect-source-fingerprint/--expect-catalog-fingerprint/--agent-work-dir, start-task and complete-task applicable G O=--task-id/--agent-work-dir, update-overview applicable G O=--json/--agent-work-dir, lint applicable G O=--base/--agent-work-dir, retro F=--dry-run/--expect-no-issue O=--agent-work-dir and applicable G, final-regression F=--record-and-proceed/--expect-no-issue O=--record-category/--record-evidence/--remaining-risk/--agent-work-dir and applicable G, and report F=--dry-run/--expect-no-issue O=--agent-work-dir and applicable G; report/show has no user argument. The five G options are --expect-binding, --expect-issue, --expect-no-issue, --expect-spec, and --expect-run-id, only where the registry marks them applicable. The shared model owns syntax and help projection and delegates semantic validation to the named existing leaf or registry owner; it does not include query, a blanket validator, or an arbitrary tighter limit.\n\nNormative registry snapshot (66 non-query routed leaves; this exact set and each args projection are assertion inputs for T-1/T-9). Column P is registry positional order, R is the rest slot, F and O exclude guards, G is the accepted guard spelling; G5 means all five registry guards: --expect-binding, --expect-issue, --expect-no-issue, --expect-spec, and --expect-run-id. H is implicit -h/--help on every row. V means parseEntryInput for syntax then the named leaf command for semantic/domain validation; T is T-1 registry plus T-9 integration/E2E, with T-2 parser and T-5 guard assertions. A present non-guard option takes one required value unless the existing parser marks it optional; absence is ∅. Positional requiredness and state-dependent combinations stay with V; [runId] for get status is optional and set files rest has minimum 1. The row name is the exact registry path and determines V; no invented global semantic validator is implied.\n\n| Leaf | P | R | F | O | G | V/T |\n| --- | --- | --- | --- | --- | --- | --- |\n| resume | ∅ | ∅ | ∅ | --spec | G5 | leaf / T-1,T-9 |\n| prepare | ∅ | ∅ | --no-branch,--worktree,--dry-run | --title,--base,--issue,--request,--run-id | G5 | leaf / T-1,T-9 |\n| get status | runId | ∅ | --details | ∅ | G5 | leaf / T-1,T-9 |\n| get resolve-context | ∅ | ∅ | ∅ | ∅ | G5 | leaf / T-1,T-9 |\n| get check | target | ∅ | ∅ | ∅ | ∅ | leaf / T-1,T-9 |\n| get prompt | kind | ∅ | ∅ | ∅ | G5 | leaf / T-1,T-9 |\n| get artifact | logicalKey | ∅ | ∅ | --mode,--spec-id,--version | G5 | leaf / T-1,T-9 |\n| get qa-count | ∅ | ∅ | ∅ | ∅ | G5 | leaf / T-1,T-9 |\n| get guardrail | phase | ∅ | ∅ | --format | ∅ | leaf / T-1,T-9 |\n| get issue | number | ∅ | ∅ | ∅ | ∅ | leaf / T-1,T-9 |\n| get next-action | ∅ | ∅ | ∅ | ∅ | G5 | leaf / T-1,T-9 |\n| get context | path | ∅ | --raw | --search | G5 | leaf / T-1,T-9 |\n| get runtime-log | ∅ | ∅ | ∅ | --format,--sequence,--run-id | G5 | leaf / T-1,T-9 |\n| set step | id,status | ∅ | ∅ | ∅ | G5 | leaf / T-1,T-9 |\n| set request | text | ∅ | ∅ | --run-id | G5 | leaf / T-1,T-9 |\n| set issue | number | ∅ | ∅ | ∅ | G5 | leaf / T-1,T-9 |\n| set note | text | ∅ | ∅ | --task-id,--run-id | G5 | leaf / T-1,T-9 |\n| set draft-answer | questionId | ∅ | --drop | --question-revision,--answer,--why,--considered,--dropped-reason | G5 | leaf / T-1,T-9 |\n| set files | reqId | paths | ∅ | ∅ | G5 | leaf / T-1,T-9 |\n| set review-evidence | ∅ | ∅ | ∅ | --file | G5 | leaf / T-1,T-9 |\n| set broad | action | ∅ | ∅ | --step,--reason | G5 | leaf / T-1,T-9 |\n| set policy | value | ∅ | ∅ | --reason | G5 | leaf / T-1,T-9 |\n| set nonblocking-decision | ∅ | ∅ | ∅ | --choice,--reason,--expect-evidence-digest,--remaining-risk | G5 | leaf / T-1,T-9 |\n| set metric | phase,counter | ∅ | ∅ | --task-id | G5 | leaf / T-1,T-9 |\n| set approval | ∅ | ∅ | --approved | --notes,--confirmed-at | G5 | leaf / T-1,T-9 |\n| set issue-log | ∅ | ∅ | ∅ | --step,--reason,--trigger,--resolution,--guardrail-candidate,--normalized-finding-id,--repair-ref-commit,--repair-ref-file,--task-id | G5 | leaf / T-1,T-9 |\n| set init | ∅ | ∅ | ∅ | --issue,--request | ∅ | leaf / T-1,T-9 |\n| set retry | action,kind,phase | ∅ | --yes | --reason | G5 | leaf / T-1,T-9 |\n| set acceptance-decision | ∅ | ∅ | ∅ | --choice | G5 | leaf / T-1,T-9 |\n| set auto | value | ∅ | ∅ | --run-id | G5 | leaf / T-1,T-9 |\n| run seal-handoff | ∅ | ∅ | ∅ | --agent-work-dir | ∅ | leaf / T-1,T-9 |\n| run dispatch | ∅ | ∅ | ∅ | --approve,--agent-work-dir | G5 | leaf / T-1,T-9 |\n| run recover-review-pass | ∅ | ∅ | ∅ | --agent-work-dir,--phase | G5 | leaf / T-1,T-9 |\n| run gate | ∅ | ∅ | ∅ | --spec,--phase,--agent-work-dir | G5 | leaf / T-1,T-9 |\n| run review | ∅ | ∅ | --dry-run,--skip-confirm | --phase,--agent-work-dir | G5 | leaf / T-1,T-9 |\n| run auto-check | ∅ | ∅ | ∅ | --run-id,--agent-work-dir | G5 | leaf / T-1,T-9 |\n| run finalize-commit | ∅ | ∅ | ∅ | --message,--agent-work-dir | G5 | leaf / T-1,T-9 |\n| run finalize-merge | ∅ | ∅ | ∅ | --agent-work-dir | G5 | leaf / T-1,T-9 |\n| run finalize-sync | ∅ | ∅ | ∅ | --agent-work-dir | G5 | leaf / T-1,T-9 |\n| run finalize-cleanup | ∅ | ∅ | --auto-rescue,--force | --agent-work-dir | G5 | leaf / T-1,T-9 |\n| run abort | ∅ | ∅ | --force | --agent-work-dir | G5 | leaf / T-1,T-9 |\n| run sync | ∅ | ∅ | --dry-run | --agent-work-dir | G5 | leaf / T-1,T-9 |\n| run reopen-draft | ∅ | ∅ | ∅ | --reason,--category,--agent-work-dir | G5 | leaf / T-1,T-9 |\n| run repair-plan-gate | ∅ | ∅ | ∅ | --agent-work-dir | G5 | leaf / T-1,T-9 |\n| run settle-failure | ∅ | ∅ | ∅ | --agent-work-dir | G5 | leaf / T-1,T-9 |\n| run settle-review-transition | ∅ | ∅ | ∅ | --agent-work-dir | G5 | leaf / T-1,T-9 |\n| run recover-missing-producer-artifact | ∅ | ∅ | ∅ | --agent-work-dir | G5 | leaf / T-1,T-9 |\n| run recover-draft-execution | ∅ | ∅ | ∅ | --agent-work-dir | G5 | leaf / T-1,T-9 |\n| run reconcile-task-review | ∅ | ∅ | --dry-run,--yes | --agent-work-dir,--expect-digest,--reason | G5 | leaf / T-1,T-9 |\n| run filter-task-review | ∅ | ∅ | ∅ | --agent-work-dir,--exclusions,--expect-attempt-id,--expect-review-digest,--expect-source-fingerprint,--expect-catalog-fingerprint | G5 | leaf / T-1,T-9 |\n| run recover-finalization | ∅ | ∅ | ∅ | --agent-work-dir | G5 | leaf / T-1,T-9 |\n| run recover-task-execution-overrun | ∅ | ∅ | ∅ | --agent-work-dir | G5 | leaf / T-1,T-9 |\n| run claim-next-action | ∅ | ∅ | ∅ | --agent-work-dir | G5 | leaf / T-1,T-9 |\n| run settle-gate-transition | ∅ | ∅ | ∅ | --agent-work-dir | G5 | leaf / T-1,T-9 |\n| run start-task | ∅ | ∅ | ∅ | --task-id,--agent-work-dir | G5 | leaf / T-1,T-9 |\n| run complete-task | ∅ | ∅ | ∅ | --task-id,--agent-work-dir | G5 | leaf / T-1,T-9 |\n| run update-overview | ∅ | ∅ | ∅ | --json,--agent-work-dir | G5 | leaf / T-1,T-9 |\n| run lint | ∅ | ∅ | ∅ | --base,--agent-work-dir | G5 | leaf / T-1,T-9 |\n| run test-execute | ∅ | ∅ | ∅ | --agent-work-dir | G5 | leaf / T-1,T-9 |\n| run requirement-test-gate | ∅ | ∅ | ∅ | --agent-work-dir | G5 | leaf / T-1,T-9 |\n| run test-result-review | ∅ | ∅ | ∅ | --agent-work-dir | G5 | leaf / T-1,T-9 |\n| run retro | ∅ | ∅ | --dry-run | --agent-work-dir | G5 | leaf / T-1,T-9 |\n| run final-regression | ∅ | ∅ | --record-and-proceed | --record-category,--record-evidence,--remaining-risk,--agent-work-dir | G5 | leaf / T-1,T-9 |\n| run acceptance-review | ∅ | ∅ | ∅ | --agent-work-dir | G5 | leaf / T-1,T-9 |\n| run report | ∅ | ∅ | --dry-run | --agent-work-dir | G5 | leaf / T-1,T-9 |\n| report show | ∅ | ∅ | ∅ | ∅ | ∅ | leaf / T-1,T-9 |\n\nNormative input-validation key for the table above (applies to every occurrence of each named argument; P/R/O are single UTF-8 argv tokens unless the row says rest, flags are booleans with no value). The parser rejects missing required option values, unknown options and extra positionals; a bare option value is not silently synthesized. Optional positionals may be absent; rest paths have cardinality 1..N. Empty strings are rejected where the named owner requires non-empty input; otherwise preserve the owner's current behavior. No global 100-character ID rule or new blanket size limit is introduced. The domain/format below is enforced by the named existing command or value class, after parseEntryInput syntax; state-dependent conditions stay with that owner.\n\n| Input and applicable leaf rows | Type, format, domain/range and owner |\n| --- | --- |\n| get check target | Required string enum dirty, gh, impl, finalize; VALID_CHECK_TARGETS and GetCheckCommand reject absent/other values. |\n| get prompt kind | Required string key in the configured-language prompt registry, including the existing plan.* and impl.* entries; GetPromptCommand owns unknown-key handling. |\n| get guardrail phase; run gate/review/recover-review-pass --phase; set metric phase; set retry phase | Required non-empty phase token for the positional forms, optional single token for options; each named guardrail/gate/review/metric/retry command owns its applicable phase registry and state combination. |\n| get issue number; set issue number; prepare/set init --issue; target --expect-issue | Required decimal issue number for positionals, single decimal value for options; issue commands and FlowTargetExpectation own positivity/identity checks and conflict with --expect-no-issue. |\n| get artifact logicalKey; --mode/--spec-id/--version | Required non-empty artifact key; optional single mode, FlowSpecId, and version token. GetArtifactCommand owns mode/version domains and catalog resolution; FlowSpecId owns spec ID format, with no generic length cap. |\n| get status runId; set request/note/auto --run-id; prepare --run-id; get runtime-log --run-id | get status is optional one token; prepare uses PreparingFlowId (non-empty, no colon, at most 200 characters); runtime-log accepts its existing run ID/sequence form; other commands use their own active-flow ID and state checks. |\n| set step id,status | Both required non-empty tokens. id resolves through the active definition/step tree; status belongs to VALID_STEP_STATUSES and NormalStepTransition, which reject unknown or forbidden lifecycle transitions. |\n| set auto value; set broad action; set policy value; set retry action,kind; set acceptance-decision/nonblocking-decision --choice | Required non-empty positional tokens or one option token as shown; each command's existing domain/decision registry and active state own allowable values and combinations. No new option spelling is created for positional values. |\n| set request text; set note text; set draft-answer questionId and --answer/--why/--considered/--dropped-reason | Required non-empty positional text/ID where declared, optional single text values; each command and its question ledger own format, existing size limits and --drop/answer combinations. |\n| set files reqId, paths | Required non-empty requirement ID plus at least one rest token; CanonicalFileMapUpdate checks the requirement and normalizes each non-empty repository-relative path, while FlowManager.updateFileMap checks active attempt/state. It maps paths; it does not read the referenced file contents. |\n| get context path/--search/--raw; set review-evidence --file; run gate --spec; run --agent-work-dir | Context path optional existing file in file mode (absolute or project-root-relative); search single query; review evidence existing non-symlink regular JSON file under its existing byte limit; gate spec exact existing Spec file path for task-spec phase; agent work directory non-empty NUL-free absolute or repository-root-relative directory path and need not pre-exist. Existing get-context, ReviewEvidenceInput, gate command and src/sennel.js/resolver own these respectively. |\n| resume --spec; prepare --base; run lint --base | FlowSpecId for resume; Git branch name for each base; respective resume, prepare and lint owners validate their different formats. |\n| --format, --mode, --sequence, --category, --record-category, --step, --task-id, --normalized-finding-id, --repair-ref-commit, --repair-ref-file, --expect-attempt-id, --approve, --exclusions | Each is one value token, optional unless its leaf state requires it. The named get/run/set owner validates its existing enum, positive integer sequence, canonical ID, commit reference, path reference, approval choice or serialized exclusions JSON and existing size/entry bounds. No spelling-wide validator substitutes for the owner. |\n| --expect-binding, --expect-spec, --expect-run-id, --expect-issue, --expect-no-issue | Only on rows whose G column admits them. FlowTargetBinding.deserialize validates the non-empty serialized --expect-binding token with its existing 32 KiB byte limit and structural/authority checks; FlowTargetExpectation validates applicable spec/run ID tokens with its existing 300-character rule and the positive issue number. buildFlowCommandHookContext checks the selected target before handler mutation; --expect-issue and --expect-no-issue conflict. |\n| all other row-local F/O names | A flag has cardinality 0..1 and boolean value; each option has cardinality 0..1 and one required token unless the registry declares optionalOptions. The row's leaf command owns non-empty, path, domain and state checks; no shared semantic admission rule is added. |\n",
+      "priority": "must",
+      "preimplementation_test_expectation": "fail",
+      "task_ids": [
+        "T-1"
+      ]
+    },
+    {
+      "id": "R2",
+      "desc": "The shared option authority is projected into the existing parser and help for every shared routed leaf, while flow query remains an independent custom-parser exception. The Spec inventory is a concrete table with one row for every registry leaf and columns for exact positionals, rest values, flags, required-value options, optional-value options, implicit help, arity, required/optional cardinality, type, format, domain/range, empty behavior, existing size bound or explicit absence with owner, conditional combinations, path kind, existence, absolute/relative support, resolution root, applicable target guards, parser owner, semantic validator owner, and test owner. The shared model owns only syntax/help projection and the delegation boundary; parseEntryInput owns argv syntax, FlowTargetExpectation and buildFlowCommandHookContext own the five target guards, and each existing command/registry validator owns semantic values and state-dependent combinations. Record these concrete distinctions: set step status, set auto value, and set broad action are positional values; get status runId is optional; set files requires at least one rest path; resume --spec is a FlowSpecId; run gate --spec is the exact existing Spec file path accepted by the gate owner, without directory normalization; prepare --base and run lint --base are Git branch names; prepare --run-id is a PreparingFlowId with its existing 200-character/no-colon owner; runtime-log --run-id is its runId plus optional sequence form; and applicable target spec/run ID tokens use FlowTargetExpectation and its existing 300-character rule; --expect-binding instead uses FlowTargetBinding.deserialize and its existing 32 KiB serialized byte limit, not a generic ID rule. The table must name the existing owner for get check target, get prompt kind, artifact logicalKey, step id/status, note text, draft questionId, requirement reqId, --format, --mode, --phase, --sequence, --category, --record-category, --step, --task-id, --normalized-finding-id, --repair-ref-commit, --repair-ref-file, --expect-attempt-id, --approve, and --choice, including each value's applicable combinations. It must also record existing text/JSON/path sizes, set-files path count and aggregate argv path-string bytes (neither has a Sennel-specific cap under CanonicalFileMapUpdate and FlowManager.updateFileMap; the command maps supplied path tokens and does not bulk-read referenced file contents), exclusions serialized size, retry/attempt limits, query request-file limits, context traversal/read limits, and review-evidence limits, or state that no explicit bound exists and identify the owner. No shared validator, copied command decision, arbitrary tighter limit, or query admission rule is introduced.\n\nFor every inventory row, the P/R/F/O/G spelling above and the normative input-validation key in R1 jointly define arity, type, format, domain/range, empty behavior and existing owner. In particular, get check target is the four-value VALID_CHECK_TARGETS enum; set step status uses VALID_STEP_STATUSES plus NormalStepTransition. Preserve the command-owned limits already present for review evidence, query, context, retry and exclusions. set files performs a finite argv-to-path-map operation; its path count and total argv path-string bytes are constrained by the host process argv capacity, while the application adds no new arbitrary cap and reads no file content in this operation.\n",
+      "priority": "must",
+      "preimplementation_test_expectation": "fail",
+      "task_ids": [
+        "T-2",
+        "T-8"
+      ]
+    },
+    {
+      "id": "R3",
+      "desc": "leaf help の Usage/Options 行を option authority と共有 row renderer から生成し、既存 command-specific prose、examples、locale text を保持すること。explicit -h/--help は終了コード 0 で表示だけを行い、handler、hook、runtime state mutation を起こさないこと。",
+      "priority": "must",
+      "preimplementation_test_expectation": "fail",
+      "task_ids": [
+        "T-3",
+        "T-7"
+      ]
+    },
+    {
+      "id": "R4",
+      "desc": "flow get、set、run、report/show の group help の Options を、全直接 child leaf の完全な option contract の共通部分だけから導出すること。--agent-work-dir は run と run group help にだけ現れ、get、set、report/show では受理・表示しないこと。また、run の option 受理は sennel flow run <leaf> ... のような直接 child leaf invocation に限り、sennel flow run --agent-work-dir <path> という group-level execution は追加しないこと。互換性・移行計画: 既存の run leaf における --agent-work-dir の両形式と既存 resolver の挙動は保持し、get、set、report/show に誤表示されていた group option だけを削除する。したがって有効な run 利用者の入力互換性は失われず、他 group の help を利用する利用者には誤った入力を案内しない。各 group の旧表示と新しい parser/help parity を回帰テストで比較すること。 The compatibility correction is explicit: --agent-work-dir=<path> must be normalized by the same pre-init scan as the separated --agent-work-dir <path> form, so both forms reach the existing resolver with the same value; preserving the resolver does not preserve the current equals-form pre-scan defect.",
+      "priority": "must",
+      "preimplementation_test_expectation": "fail",
+      "task_ids": [
+        "T-4"
+      ]
+    },
+    {
+      "id": "R5",
+      "desc": "sennel flow <group> --help、sennel help flow <group>、leaf なしの sennel flow <group> の三経路で、直接 child row と option row を同じ renderer で name 昇順に表示し、名前の直後に ASCII 空白を 2 個以上置いて非空 summary を続けること。",
+      "priority": "must",
+      "preimplementation_test_expectation": "fail",
+      "task_ids": [
+        "T-4"
+      ]
+    },
+    {
+      "id": "R6",
+      "desc": "13/14/15 文字、recover-missing-producer-artifact、64/65 文字の名前 fixture について、出力が名前全文を一度だけ保持し、直後に ASCII 空白を 2 個以上置き、その後に非空 summary を置くことを機械的に検証すること。合成名に新しい長さ制限を設けないこと。 Construct the synthetic 64/65-character and other boundary names through the shared CommandDefinition/help renderer test seam, not through production FLOW_COMMANDS entries.",
+      "priority": "must",
+      "preimplementation_test_expectation": "fail",
+      "task_ids": [
+        "T-4",
+        "T-9"
+      ]
+    },
+    {
+      "id": "R7",
+      "desc": "For every applicable shared routed leaf, existing parser failures, unknown or missing selectors, missing values, extra positionals, option-domain failures, the --expect-issue/--expect-no-issue mutual exclusion, and the five target mismatches stop before command-owned mutation with the existing diagnostic, exit code 1, and rejection order. Ownership/mode matrix: registry args declare syntactic guards, but dispatcher guard selection is separate. get status declares guard syntax with targetGuard:false and uses positional runId explicit resolution; get artifact declares guard syntax with targetGuard:false and performs active-target validation in get-artifact, while a complete historical --spec-id/--version pair bypasses ambient active-flow inference and rejects active guards there. get check, get guardrail, get issue, set init, run seal-handoff and report show have no guard args; do not project target guards onto them. For entries with targetGuard enabled, dispatcher/buildFlowCommandHookContext owns selection and mismatch; for the two targetGuard:false exceptions the named command owns validation or retained behavior. Assert accepted active and rejected historical artifact cases separately. The input inventory records --expect-binding <token> as a non-empty base64url JSON FlowTargetBinding decoded by FlowTargetBinding.deserialize, with the existing 32 KiB byte limit and structural/authority validation; --expect-issue <number> as a positive safe integer; --expect-no-issue as a valueless flag; --expect-spec <spec> as a FlowSpecId; and --expect-run-id <runId> as the existing non-empty FlowTargetExpectation token up to 300 characters. Binding runId, issue, spec, and authority identity must match through the existing FlowTargetBinding/FlowTargetExpectation owner, and the applicable leaf set is derived from the registry. Test a valid match, a mismatch for each guard, invalid syntax/value, and the issue/no-issue conflict through FlowTargetExpectation and buildFlowCommandHookContext before handler mutation. Omission of all guards is the defined retained unguarded behavior: the command follows its existing leaf validation and lifecycle, and the Spec test records that case separately. No blanket validator, new ID limit, or new target decision is introduced.",
+      "priority": "must",
+      "preimplementation_test_expectation": "pass",
+      "task_ids": [
+        "T-5"
+      ]
+    },
+    {
+      "id": "R8",
+      "desc": "Preserve --agent-work-dir <path> and --agent-work-dir=<path>. The pre-init scan must normalize both forms to one non-empty, NUL-free path value before initContainer(), then pass that value through the existing resolver. The inventory records this as a required value option accepting absolute or repository-root-relative paths, naming a directory, with no pre-existence requirement and no new size bound; src/sennel.js, resolveWorkDir, and container initialization own parsing, resolution, creation/use, and errors. Preserve precedence invocation override > config.agent.workDir > .tmp, explicit config.logs.dir resolved against the repository root (or the durable root for finalize-cleanup) > agentWorkDir/logs fallback, and the durable main-repository root used by finalize-cleanup. The per-leaf path inventory is concrete: run gate --spec is accepted only in the task-spec phase and denotes the exact existing Spec file path accepted by the gate owner; it is not silently normalized from a directory; set review-evidence --file accepts an existing non-symlink regular JSON file, bounded by the existing review-evidence limit, resolved from the execution root by ReviewEvidenceInput.fromFile; get context path is an optional absolute or project-root-relative file path resolved by get-context.js; its existing file is read in file mode, while omission selects list mode and --search is a query value; set files reqId paths requires at least one non-empty rest path and delegates normalized non-empty repository-relative path mapping and active-attempt/requirement checks to CanonicalFileMapUpdate and FlowManager.updateFileMap; these owners map only the finite argv path tokens, do not load referenced file contents, and impose no Sennel-specific path-count or aggregate argv-byte cap beyond the host process argv capacity; no existence check is invented; and set issue-log --repair-ref-file is a non-empty path string whose commit/file reference validation remains with the issue-log owner. For every path row, record file versus directory, existence, absolute/relative support, resolution root, and the existing size or no-bound owner. Output directories need not pre-exist. Runtime initialization, log writing, cleanup, and all command-specific path/domain validation remain owned by their existing modules; this requirement adds no blanket path validator or unrelated restriction.",
+      "priority": "must",
+      "preimplementation_test_expectation": "pass",
+      "task_ids": [
+        "T-6"
+      ]
+    },
+    {
+      "id": "R9",
+      "desc": "通常の成功では既存 handler と pre/post hook の順序、失敗では onError の挙動、help では command-owned output、Flow state、生成 artifact を変更しないことを behavior-level test で証明すること。finally lifecycle は既存 parity 契約に含めず、新規 invocation semantics を追加しないこと。",
+      "priority": "must",
+      "preimplementation_test_expectation": "pass",
+      "task_ids": [
+        "T-7"
+      ]
+    },
+    {
+      "id": "R10",
+      "desc": "bootstrapFlowQueryCli、src/flow/query.js、src/flow/query-contract.js の stdin、request-file、help、error、response schema の独立契約を保持し、shared routed option matrix の registry contract test に query を混入させないこと。 shared routed option matrix からの query 除外点を registry の routed leaf enumeration に固定し、sennel flow query --help は bootstrap owner、sennel help flow query は既存 metadata/help owner のまま、両経路の text と exit behavior を保持すること。",
+      "priority": "must",
+      "preimplementation_test_expectation": "pass",
+      "task_ids": [
+        "T-8"
+      ]
+    }
+  ],
+  "acceptance_criteria": [
+    "registry contract test が FLOW_COMMANDS から query 以外の全 routed leaf（resume、prepare、get、set、run、report/show を含む）を再列挙し、args と option authority、implicit -h/--help、flag/required-value/optional-value、placeholder、description、alias、leaf 固有の arity/domain/path owner を一対一に照合する。",
+    "group contract test が全直接 child leaf の完全な option contract の共通部分だけを get、set、run、report/show に投影し、--agent-work-dir が run のみで表示・受理され、他 group では未知 option になることを確認する。",
+    "sennel flow <group> --help、sennel help flow <group>、leaf なしの sennel flow <group> が同じ row renderer を通り、child name と option name が locale 非依存の name 昇順、2 個以上の ASCII 空白、非空 summary で出力される。explicit help は 0、leaf なし group help は 1、missing/unknown selector は 1 で終了する。",
+    "13/14/15 文字、recover-missing-producer-artifact、専用 fixture の 64/65 文字 segment について、各 row を名前全文の一回の出現、名前終端から summary 開始まで 2 個以上の ASCII 空白、summary 非空として正規表現または index assertion で判定し、切り詰め・連結を検出する。",
+    "flow run abort --help に --force、--agent-work-dir <path>、五つの target guard、-h, --help がそれぞれ一行で現れ、valid help が handler、execution hook、runtime/Flow mutation を実行しない。",
+    "parser/target/command failure の代表ケースで unknown option、missing value、extra positional、値 domain、相互排他、target mismatch が既存診断・終了コード 1 と mutation 前拒否を保つ。通常成功では handler と hook の順序を保つ。",
+    "--agent-work-dir <path> と --agent-work-dir=<path>、invocation/config/default、config.logs.dir/fallback、finalize-cleanup durable root の integration regression が既存 paths、log location、initialization、cleanup policy を維持する。",
+    "query の stdin、request-file、help、invalid input/error、response schema を独立 regression で確認し、.sennel/output/analysis.json、docs/*.md、README.md、AGENTS.md、specs/<NNN>/flow.json、step result、artifact catalog の対象・内容・順序に差分がないことを behavior-level assertion で確認する。",
+    "For every current registry-derived shared routed leaf—resume 1, prepare 1, get 11, set 17, run 35, report/show 1, query excluded—a valid command invocation and explicit --help return exit code 0. Each leaf fixture names its valid input and success condition; the assertion preserves the existing handler and pre/post/onError/finally lifecycle, while valid help invokes none of those handlers or execution hooks. The contract test re-enumerates the registry and fails on count or membership drift instead of relying on historical totals.",
+    "For each applicable leaf in the same 66-row registry-derived set, the input inventory names the parser, target, and command-owned failure conditions and supplies a check input and observable result. Each selected failure returns exit code 1, preserves the existing diagnostic and rejection order, and stops before command-owned mutation. Cover missing or unknown selector, missing required value, extra positional, invalid domain, target mismatch, and --expect-issue/--expect-no-issue conflict only where that leaf's existing owner declares the condition applicable; do not add universal rejection rules.",
+    "The representative failure matrix is deterministic: its row set is exactly the registry entries applicable to each category, with one fixed argv/fixture per row (including the same parser, target, and command-failure predicates for every review); it records the command path, input, expected diagnostic owner, and exit code. Reviewers do not choose examples ad hoc.",
+    "The matrix explicitly covers normal success and failure for every changed command family (resume, prepare, get, set, run, report/show), including the existing target guards and command-owned failures, while query is tested separately through bootstrapFlowQueryCli and is not included in the shared routed matrix.",
+    "The registry-derived shared routed matrix has exactly 66 rows at the Issue 521 restart baseline: resume 1, prepare 1, get 11, set 17, run 35, and report/show 1. Query is excluded from the shared matrix and is tested separately through bootstrapFlowQueryCli, src/flow/query.js, and src/flow/query-contract.js. The registry contract test re-enumerates the set and treats any count or membership change as a failed baseline update, not as permission to copy a historical count.",
+    "The per-leaf input inventory is checked from the registry projection with one deterministic row for every current non-query leaf; each row records positional/rest cardinality, flag and option kind, placeholder/alias, domain and format, empty and size behavior, conditional combinations, path owner, parser/target/command validator owner, and test owner, including the distinct contracts for same-named inputs.",
+    "For every one of the 66 non-query registry rows, the owning suite supplies a deterministic legal success fixture with required Flow state, immutable inputs, agent boundary, expected success condition, handler/hook lifecycle assertion, and mutation/evidence assertion; mutating and AI-driven commands use isolated legal fixtures rather than ad hoc production state."
+  ],
+  "clarifications": [
+    {
+      "q": "renderer の「境界が見える」を何で合格と判定するか。",
+      "a": "各 fixture の出力に対象 name が完全一致で一度だけ現れ、name の終端直後に ASCII 空白が 2 個以上連続し、その後に空でない summary が続くことを機械的に判定する。summary が name に連結する、name が切り詰められる、空欄になる場合は不合格とする。64/65 文字にも同じ判定を適用する。"
+    },
+    {
+      "q": "64/65 文字の合成 name は production command として受理するか。",
+      "a": "受理可能な production command の名前制限は新設しない。64/65 文字は shared renderer/integration fixture として表示行の非切り詰め・非連結を検証し、parser や registry に新しい arbitrary length limit を追加しない。"
+    },
+    {
+      "q": "draft Gate の DF-1/DF-2 を Spec でどう扱うか。",
+      "a": "flow-findings.json に記録された blocking finding を再質問せず、上記の文字列条件、対象 fixture、正規表現または index assertion、失敗時に示す expected name/space/summary の観測値を acceptance と test task に固定して解消を検証する。"
+    }
+  ],
+  "alternatives_considered": [
+    {
+      "option": "help だけを生成する新しい並列 command registry を追加する",
+      "reason": "parser と help の二重 authority を増やし、FLOW_COMMANDS との drift と登録順依存を残すため採用しない。既存 CommandDefinition と FLOW_COMMANDS の責務内で typed option contract を共有する。"
+    },
+    {
+      "option": "既存 help 行を逆解析して parser の option contract を作る",
+      "reason": "表示文の locale、prose、description、placeholder と parser の kind/alias/domain を同じ情報として扱えず、今回の根本原因を温存するため採用しない。"
+    },
+    {
+      "option": "全 flow group に共通の blanket option validator と target evaluator を追加する",
+      "reason": "既存 leaf owner の parser、domain、target guard、拒否順序を呼び出し側で重複し、対象外 leaf まで意味を変えるため採用しない。"
+    },
+    {
+      "option": "query を shared routed option matrix に移行する",
+      "reason": "採用しない。query は bootstrapFlowQueryCli と query-contract が stdin、request-file、bounded read、schema/error を独立所有する custom-parser exception である。既存 bounds は request 1,048,576 bytes、public collections 10,000 items、canonical depth 32、response 2,097,152 bytes（page limit 100、public string 4,096 bytes）であり、shared migration はこれらの owner/input/output 契約を変更しない。"
+    }
+  ],
+  "open_questions": [],
+  "keywords": [
+    "FLOW_COMMANDS",
+    "CommandDefinition",
+    "parseEntryInput",
+    "option authority",
+    "group help",
+    "target guard",
+    "agent-work-dir",
+    "row renderer",
+    "FlowTargetExpectation",
+    "bootstrapFlowQueryCli"
+  ],
+  "implementationTargets": [
+    "src/flow/registry.js",
+    "src/lib/command-registry.js",
+    "src/lib/dispatcher.js",
+    "src/help.js",
+    "src/flow.js",
+    "src/sennel.js",
+    "src/lib/config.js",
+    "src/lib/container.js",
+    "src/lib/flow-target-guard.js",
+    "src/flow/lib/flow-context.js",
+    "src/flow/query.js",
+    "src/flow/query-contract.js",
+    "tests/integration/",
+    "tests/e2e/"
+  ],
+  "tasks": [
+    {
+      "id": "T-1",
+      "title": "option authority を定義する",
+      "goal": "既存の FLOW_COMMANDS と CommandDefinition に、parser と help が共有する typed option contract と routed leaf の対象情報を追加する。query の独立 contract は除外したまま、既存の command-specific help 情報を保持する。",
+      "acceptance": [
+        "全 routed leaf を registry から列挙できる。",
+        "各 option が canonical name、alias、kind、placeholder、description を一意に持つ。",
+        "query が shared option authority に含まれない。"
+      ],
+      "implementation_notes": "src/flow/registry.js と src/lib/command-registry.js の既存責務を拡張する。新しい並列 registry、help 逆解析器、discriminated union 形式の値表現は追加しない。CommandDefinition が既存の import-safe help metadata と dispatch metadata を同じ model から投影できる形にする。 さらに、option contract には syntax/help projection と既存 command-owned semantic validator への明示的な参照を持たせ、その参照を使った委譲を contract test で検証する。validator の判断を model や呼び出し側に複製しない。 The same registry projection publishes the per-leaf P/R/F/O inventory and names the existing parser, target, semantic validator, path owner, and test owner for every row, including same-named options with different contracts. For each of the 66 inventory rows, attach per-argument metadata from the leaf owner: requiredness, cardinality, type/domain, empty behavior, existing bound or explicit absence, conditional pairing, path kind/existence/absolute-relative/root, placeholder/description, semantic owner and test owner. Contract tests compare exact names, arity and count to the registry; undocumented metadata is an implementation gap, not a license to invent validation.",
+      "test_strategy": "registry source contract の integration/unit 境界で全 routed leaf、query exclusion、option kind、alias、placeholder、description、implicit help の一対一対応を検証する。",
+      "parent": null,
+      "origin": "plan",
+      "added_round": 0,
+      "status": "pending"
+    },
+    {
+      "id": "T-2",
+      "title": "parser を authority に接続する",
+      "goal": "dispatcher の既存 parseEntryInput と各 leaf validator が、共有 option contract から同じ acceptance/rejection を得るようにする。positionals、rest、alias、required/optional value と leaf 固有の domain/path owner を保持する。",
+      "acceptance": [
+        "未知 option、missing value、extra positional が従来の診断と終了コード 1 で拒否される。",
+        "全 routed leaf の parser acceptance と help option 行が同じ contract から検証できる。",
+        "query の stdin/request-file parser が変更されない。"
+      ],
+      "implementation_notes": "src/lib/dispatcher.js の splitArgsBySpec、parseEntryInput、cli parser を再利用し、呼び出し側に別 parser や tighter limit を作らない。explicit help の早期 return と target resolution より前の順序を維持する。 shared option contract は semantic validation の owner ではなく既存 leaf validator への明示的な参照を提供し、contract test でその委譲と拒否順序を検証する。 Contract tests consume the concrete inventory row for each leaf, including positional/rest cardinality, value kind, domain, path owner, conditional combination, and the existing diagnostic owner, then verify delegation rather than duplicating the rule.",
+      "test_strategy": "registry/integration の table-driven contract test と代表的な CLI E2E で parser acceptance、rejection、help の handler 非実行を検証する。",
+      "parent": null,
+      "origin": "plan",
+      "added_round": 0,
+      "status": "pending"
+    },
+    {
+      "id": "T-3",
+      "title": "leaf help を投影する",
+      "goal": "leaf の Usage/Options help を共有 option contract と row renderer から生成し、query を除く各 FLOW_COMMANDS leaf の registry entry に定義された command-specific prose、examples、locale text をその同じ leaf に残す。registry から全対象 leaf を列挙し、各 leaf の生成 help と保持対象を検証する。",
+      "acceptance": [
+        "sennel flow <leaf> --help と sennel help flow <leaf> が同じ option contract を表示する。",
+        "explicit -h/--help が終了コード 0 で handler、hook、Flow state mutation を起こさない。",
+        "flow run abort --help の全 target guard と --agent-work-dir が一行ずつ表示される。"
+      ],
+      "implementation_notes": "src/lib/command-registry.js、src/help.js、src/flow.js の既存 renderer entrypoint を共有 row renderer に寄せる。help 文面を再解析せず、import-safe metadata read を維持する。",
+      "test_strategy": "tests/e2e の代表的な public help path と tests/integration の hook/mutation snapshot で出力、exit code、handler 非実行を確認する。",
+      "parent": null,
+      "origin": "plan",
+      "added_round": 0,
+      "status": "pending"
+    },
+    {
+      "id": "T-4",
+      "title": "group help を導出する",
+      "goal": "get、set、run、report/show の全直接 child leaf を registry から収集し、完全な option contract の共通部分と決定的な subcommand/option row を group help に投影する。 run group の --agent-work-dir は共通 option の表示対象であり、受理経路は flow run <leaf> ... の direct child leaf dispatch に限定する。",
+      "acceptance": [
+        "group option が直接 child 全件の intersection と一致する。",
+        "--agent-work-dir が run group help に表示され、run 配下の直接 child leaf invocation（sennel flow run <leaf> ...）だけで表示・受理される。sennel flow run --agent-work-dir <path> の group-level execution は追加しない。",
+        "child と option の rows が name 昇順で 2 個以上の ASCII 空白と非空 summary を持つ。",
+        "13/14/15、recover-missing-producer-artifact、64/65 文字の fixture が名前全文・空白・summary の機械条件を満たす。"
+      ],
+      "implementation_notes": "共有 row renderer は name を一度だけ出力し、名前長に依存する padEnd 固定値や truncation を使わない。合成 64/65 文字は renderer fixture に限定し、production command の新しい長さ制限を作らない。 group help の option 行は intersection の表示であり group-level execution parser を追加しない。leaf acceptance は既存 dispatch の direct child selector 後に検証する。 Synthetic 64/65-character and other boundary names are constructed through the shared CommandDefinition/help renderer test seam, so production FLOW_COMMANDS and command-name limits remain unchanged.",
+      "test_strategy": "tests/integration の group contract と tests/e2e の sennel flow/help 三経路で、直接 child 再列挙、intersection、ordering、spacing、boundary regex/index assertion、exit code を検証する。",
+      "parent": null,
+      "origin": "plan",
+      "added_round": 0,
+      "status": "pending"
+    },
+    {
+      "id": "T-5",
+      "title": "target rejection を保持する",
+      "goal": "共有 option authority の導入後も、FlowTargetExpectation、flow context、既存 parser/domain validator が所有する target guard の binding、mismatch、相互排他、拒否順序を維持する。",
+      "acceptance": [
+        "五つの target guard の一致と mismatch が既存 Envelope、診断、終了コード 1 を保つ。",
+        "--expect-issue と --expect-no-issue の conflict が mutation 前に拒否される。",
+        "missing/unknown selector、parser failure、target mismatch が handler 前で停止する。"
+      ],
+      "implementation_notes": "src/lib/flow-target-guard.js と src/flow/lib/flow-context.js を再利用し、target evaluator や resolver を新設しない。help 経路は context/target resolution を起動しない。",
+      "test_strategy": "既存 target guard unit/integration を再利用し、dispatcher/CLI E2E で mismatch と相互排他の command-owned mutation 不在を確認する。",
+      "parent": null,
+      "origin": "plan",
+      "added_round": 0,
+      "status": "pending"
+    },
+    {
+      "id": "T-6",
+      "title": "runtime path を保持する",
+      "goal": "help と option contract の変更が agentWorkDir、logDir、runtime initialization、ログ保存、finalize-cleanup の durable root の既存 policy に影響しないことを保証する。",
+      "acceptance": [
+        "--agent-work-dir <path> と --agent-work-dir=<path> が同じ resolver を使う。",
+        "invocation/config/default の precedence と config.logs.dir/fallback が保持される。",
+        "finalize-cleanup の log が main repository durable root に残る。"
+      ],
+      "implementation_notes": "src/sennel.js の pre-scan、src/lib/config.js の resolveWorkDir、src/lib/container.js の buildPaths、runtime-log、finalize-cleanup-paths を owner とする。help で container/runtime logger を初期化しない。 pre-scan は separated/equals の両形式を同じ agentWorkDir 値へ正規化して initContainer() に渡し、そこから config、log、finalize の既存 resolver/path owner を再利用する。",
+      "test_strategy": "tests/integration の isolated temporary root で path precedence、log location、runtime initialization、durable cleanup を behavior-level assertion する。",
+      "parent": null,
+      "origin": "plan",
+      "added_round": 0,
+      "status": "pending"
+    },
+    {
+      "id": "T-7",
+      "title": "lifecycle side effect を保持する",
+      "goal": "通常実行の handler と pre/post/onError hook の順序、失敗時の記録、help 時の command-owned output と Flow state の不変性を既存 owner のまま検証する。finally lifecycle は新規追加せず、既存 hook 契約だけを検証する。",
+      "acceptance": [
+        "成功時に handler、pre、post の既存順序が保持される。",
+        "失敗時に onError の既存挙動と終了コードが保持される。",
+        "help で生成 artifact、Flow state、handler-owned output が変化しない。"
+      ],
+      "implementation_notes": "src/lib/dispatcher.js と src/flow/registry.js の hook dispatch、plugin-registry の hook plan、既存 Store publication を呼び出し側で再実装しない。対象外の docs/Flow artifact を生成・更新しない。",
+      "test_strategy": "tests/integration の hook/runtime regression と既存 spec-artifact-scenario を使い、成功・失敗・help の observable order、state、artifact、side effect を確認する。",
+      "parent": null,
+      "origin": "plan",
+      "added_round": 0,
+      "status": "pending"
+    },
+    {
+      "id": "T-8",
+      "title": "query exception を保護する",
+      "goal": "bootstrapFlowQueryCli と query modules の独立した stdin、request-file、help、error、response schema 契約を shared routed migration の影響から隔離する。 また、sennel flow query --help と sennel help flow query の既存公開 help 経路をそれぞれの owner のまま保持する。",
+      "acceptance": [
+        "query remains an explicit custom-parser exception owned by bootstrapFlowQueryCli, src/flow/query.js, and src/flow/query-contract.js; it is excluded from shared option/help/admission matrices while stdin, --request-file, help, and error behavior remain covered separately.",
+        "query request/stdin and --request-file input is limited to 1,048,576 bytes; page limit is 1..100; public collections and object fields are at most 10,000 items; public strings are at most 4,096 bytes; canonical JSON depth is at most 32; canonical response is at most 2,097,152 bytes.",
+        "canonical query reads retain existing owner limits: available Flow versions 10,000, confirmed activities 100,000, state/spec/catalog records 16,777,216 bytes, confirmed ledger 33,554,432 bytes, artifacts 10,000, artifact IDs per artifact 1,000, managed entries 10,000, total artifact bytes 67,108,864, and snapshot attempts 3; no new generic limit is added.",
+        "integration tests exercise these bounds through bootstrapFlowQueryCli and verify that the shared routed migration neither changes query ownership nor its stdin/request-file/help/error behavior."
+      ],
+      "implementation_notes": "src/sennel.js と src/flow.js の bootstrap 分岐、src/flow/query.js の input/read/serialize、src/flow/query-contract.js の schema を変更対象の shared renderer と混ぜない。 shared routed leaf enumeration では query を除外する。ただし FLOW_COMMANDS.query の help metadata は sennel help flow query のために保持し、flow query --help は bootstrap owner のまま検証する。",
+      "test_strategy": "query の既存 regression に stdin、request-file、help、invalid JSON/schema、missing canonical record を追加または再利用し、shared matrix とは別 suite として実行する。",
+      "parent": null,
+      "origin": "plan",
+      "added_round": 0,
+      "status": "pending"
+    },
+    {
+      "id": "T-9",
+      "title": "契約回帰を検証する",
+      "goal": "registry、group、dispatcher、CLI、runtime、hook、query の acceptance evidence を、各 observable outcome と所有者へ対応づけて回帰検証する。",
+      "acceptance": [
+        "各 requirement に少なくとも一つの behavior-level evidence が対応する。",
+        "正常完了だけでなく安全な拒否、help の無副作用、query exception、runtime/hook parity を検証する。",
+        "Draft/Spec の production scenario は保存・再読込み・後続利用まで確認する。"
+      ],
+      "implementation_notes": "tests/AGENTS.md の backward causal scenario と suite ownership に従い、unit は isolated decision、integration は Flow/filesystem、E2E は代表的な public CLI に限定する。テストを通すために既存テストや期待値を弱めない。 The matrix is a deterministic 66-row registry projection (run has 35 leaves, get 11, set 17, resume/prepare/report-show one each), not a representative sample: it includes run report, recover-draft-execution, filter-task-review, and every other non-query leaf. Each row fixes argv, required Flow state, immutable input setup, agent boundary or stub, expected success condition, handler/hook assertion, and mutation/evidence assertion; unsafe state transitions use an isolated legal fixture and agent actions use the existing test boundary. Query remains a separate bootstrap suite.",
+      "test_strategy": "tests/integration/flow-cli/spec-artifact-scenario.test.js、対象 registry/dispatcher integration、tests/e2e の代表ケースを実行し、長時間結果はログファイルへ保存して確認する。",
+      "parent": null,
+      "origin": "plan",
+      "added_round": 0,
+      "status": "pending"
+    }
+  ]
+}

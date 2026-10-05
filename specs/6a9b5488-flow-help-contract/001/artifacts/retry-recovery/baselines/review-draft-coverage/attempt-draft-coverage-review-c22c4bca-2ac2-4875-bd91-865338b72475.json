@@ -1,0 +1,15 @@
+{
+  "route": {
+    "kind": "review",
+    "phase": "draft-coverage",
+    "taskId": null
+  },
+  "attemptId": "attempt-draft-coverage-review-c22c4bca-2ac2-4875-bd91-865338b72475",
+  "attempt": 10,
+  "runId": "6a9b5488-edef-4566-888e-14c37e31418c",
+  "specId": "6a9b5488-flow-help-contract",
+  "issue": 521,
+  "projectDigest": "4567b7c7cc294b9fce90acd7be56db23909ad793e0d2491840d26467fd58ab72",
+  "runtimeDigest": "c2e394e50cc1fee450026d786d1bec843d620e522f9657cc9ce62a0754615119",
+  "targetDigest": "4567b7c7cc294b9fce90acd7be56db23909ad793e0d2491840d26467fd58ab72"
+}

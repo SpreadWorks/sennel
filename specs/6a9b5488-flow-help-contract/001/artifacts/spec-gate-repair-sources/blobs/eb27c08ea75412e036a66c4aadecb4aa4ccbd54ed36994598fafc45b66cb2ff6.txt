@@ -1,0 +1,294 @@
+import { createHash } from "node:crypto";
+import { FlowFindingSourceIdentity } from "./flow-finding-source.js";
+import { compareText } from "./text-order.js";
+import { SpecRepairTarget } from "./spec-repair-operations.js";
+import { workerArtifactStableStringify } from "./worker-artifact-input-format.js";
+import { SpecGateRepairSource, SpecGateRepairSourceRange } from "./spec-gate-repair-values.js";
+
+export function specGateRepairValueDigest(value) { return createHash("sha256").update(JSON.stringify(value)).digest("hex"); }
+export function freezeSpecGateRepairValue(value) {
+  if (value && typeof value === "object") { Object.values(value).forEach(freezeSpecGateRepairValue); Object.freeze(value); }
+  return value;
+}
+export function specGateRepairFindingIdentity(value) { return value instanceof FlowFindingSourceIdentity ? value : new FlowFindingSourceIdentity(value); }
+/** A canonical field, with stable entity identity rather than an array ordinal. */
+export class SpecGateRepairRange {
+  constructor({ id, path, value, entity = null, target = null, digest = specGateRepairValueDigest(value), collectionAnchor = false, exists = true }) {
+    this.id = id;
+    this.path = path;
+    this.value = freezeSpecGateRepairValue(structuredClone(value));
+    this.entity = entity;
+    this.target = target;
+    this.digest = digest;
+    this.collectionAnchor = collectionAnchor;
+    this.exists = exists;
+    Object.freeze(this);
+  }
+  descriptor() {
+    return { id: this.id, path: this.path, entity: this.entity, digest: this.digest,
+      target: this.target?.toJSON() ?? null, collectionAnchor: this.collectionAnchor, exists: this.exists };
+  }
+  toJSON({ writable = false } = {}) { return { ...this.descriptor(), writable, value: this.value }; }
+}
+
+export class SpecGateRepairFinding {
+  constructor(value, rangeIds = []) {
+    this.identity = specGateRepairFindingIdentity(value.identity);
+    if (typeof value.requirementRef !== "string" || !value.requirementRef
+      || typeof value.observed !== "string" || !value.observed) {
+      throw new TypeError("Gate repair finding requires its rule and complete reason");
+    }
+    this.requirementRef = value.requirementRef;
+    this.observed = value.observed;
+    this.where = freezeSpecGateRepairValue(structuredClone(value.where ?? null));
+    this.targets = freezeSpecGateRepairValue(structuredClone(value.targets ?? []));
+    this.allowedTargets = freezeSpecGateRepairValue(structuredClone(value.allowedTargets ?? []));
+    this.specRevision = value.specRevision ?? null;
+    this.rangeIds = Object.freeze([...rangeIds].sort());
+    Object.freeze(this);
+  }
+  toJSON() {
+    return { identity: this.identity.toJSON(), requirementRef: this.requirementRef,
+      observed: this.observed, where: this.where, targets: this.targets,
+      allowedTargets: this.allowedTargets, ...(this.specRevision === null ? {} : { specRevision: this.specRevision }),
+      rangeIds: this.rangeIds };
+  }
+}
+
+/** Connected findings form one indivisible proposal, even across several fields. */
+export class SpecGateRepairUnit {
+  constructor(findings) {
+    this.findings = Object.freeze([...findings].sort((a, b) => compareText(a.identity.toString(), b.identity.toString())));
+    this.rangeIds = Object.freeze([...new Set(findings.flatMap((item) => item.rangeIds))].sort());
+    this.id = `repair-unit:${specGateRepairValueDigest(this.findings.map((item) => item.identity.toJSON()))}`;
+    Object.freeze(this);
+  }
+  toJSON() { return { id: this.id, rangeIds: this.rangeIds, findings: this.findings.map((item) => item.toJSON()) }; }
+}
+
+/** Captured code origins are discovery metadata; only canonical range resolution supplies bytes. */
+export class SpecGateRepairSourceOriginInventory {
+  static fromSources(sources) {
+    const groups = { version: 1, available: [], missing: [], unavailable: [] };
+    for (const source of sources) {
+      if (!(source instanceof SpecGateRepairSource)) throw new TypeError("Source discovery requires typed captured sources");
+      if (!source.required && !source.isProjectRule) groups[source.availability].push(source.origin);
+    }
+    return new this(groups);
+  }
+  constructor(value) {
+    if (!value || Object.keys(value).sort().join(",") !== "available,missing,unavailable,version" || value.version !== 1) {
+      throw new TypeError("Invalid captured source origin inventory");
+    }
+    const seen = new Set();
+    this.version = 1;
+    for (const status of ["available", "missing", "unavailable"]) {
+      if (!Array.isArray(value[status]) || value[status].some((origin) => typeof origin !== "string" || !origin || seen.has(origin))) {
+        throw new TypeError("Source origin inventory requires unique exact captured origins");
+      }
+      for (const origin of value[status]) {
+        if (seen.has(origin)) throw new TypeError("Duplicate captured source origin");
+        seen.add(origin);
+      }
+      this[status] = Object.freeze([...value[status]].sort(compareText));
+    }
+    Object.freeze(this);
+  }
+  static fromDocument(document) {
+    return new this(document.mode === "repair" ? document.bundle.sourceOrigins : document.navigation.sourceOrigins);
+  }
+  assertAvailableOrigins(origins) {
+    for (const origin of origins) {
+      const availability = ["available", "missing", "unavailable"].find((status) => this[status].includes(origin));
+      SpecGateRepairSource.assertAvailability(origin, availability);
+    }
+    return this;
+  }
+  toJSON() { return { version: this.version, available: this.available, missing: this.missing, unavailable: this.unavailable }; }
+}
+
+export class SpecGateRepairSelection {
+  constructor({ baseRevision, unit, ranges, guardrails, acknowledgedRationale, indexManifest, sourceOrigins }) {
+    this.sourceOrigins = sourceOrigins instanceof SpecGateRepairSourceOriginInventory ? sourceOrigins : new SpecGateRepairSourceOriginInventory(sourceOrigins);
+    this.baseRevision = baseRevision;
+    this.unit = unit;
+    this.indexManifest = indexManifest instanceof SpecGateRepairIndexManifest ? indexManifest : new SpecGateRepairIndexManifest(indexManifest);
+    this.ranges = freezeSpecGateRepairValue(ranges);
+    this.guardrails = freezeSpecGateRepairValue(structuredClone(guardrails));
+    this.acknowledgedRationale = acknowledgedRationale;
+    Object.freeze(this);
+  }
+  toJSON() {
+    return { baseRevision: this.baseRevision, unit: this.unit.toJSON(), ranges: this.ranges,
+      guardrails: this.guardrails, acknowledgedRationale: this.acknowledgedRationale, indexManifest: this.indexManifest.toJSON(), sourceOrigins: this.sourceOrigins.toJSON() };
+  }
+}
+
+/** Navigation keeps exact source capability and provenance without repeating snapshot metadata. */
+export class SpecGateRepairIndexDescriptor {
+  #value;
+  constructor(value) {
+    if (typeof value?.id !== "string" || !value.id
+      || !["available-not-selected", "missing", "unavailable"].includes(value.bodyStatus)) {
+      throw new TypeError("Invalid repair navigation descriptor");
+    }
+    if (value.source) {
+      if (typeof value.source.id !== "string" || !value.source.id
+        || typeof value.source.origin !== "string" || !value.source.origin
+        || !/^[a-f0-9]{64}$/.test(value.source.digest)
+        || !Number.isSafeInteger(value.byteStart) || !Number.isSafeInteger(value.byteEnd)
+        || value.byteStart < 0 || value.byteEnd < value.byteStart) {
+        throw new TypeError("Invalid repair source navigation descriptor");
+      }
+      if (value.bodyStatus !== (value.source.availability === "available" ? "available-not-selected" : value.source.availability)
+        || value.byteEnd > value.source.byteLength) throw new TypeError("Conflicting repair source navigation availability or bounds");
+      this.#value = { id: value.id, source: { id: value.source.id, origin: value.source.origin, digest: value.source.digest },
+        byteStart: value.byteStart, byteEnd: value.byteEnd, bodyStatus: value.bodyStatus };
+    } else this.#value = structuredClone(value);
+    freezeSpecGateRepairValue(this.#value);
+    Object.freeze(this);
+  }
+  toJSON() { return this.#value; }
+}
+
+/** Finding permissions remain citations; this mode grants only immutable context reads. */
+export class SpecGateRepairNavigationSelection {
+  constructor({ baseRevision, unit, ranges, guardrails, acknowledgedRationale, indexManifest, readRangeIds, sourceOrigins }) {
+    if (!/^sha256:[a-f0-9]{64}$/.test(baseRevision) || !(unit instanceof SpecGateRepairUnit)
+      || !(indexManifest instanceof SpecGateRepairIndexManifest) || !Array.isArray(ranges)
+      || ranges.length === 0 || ranges.some((range) => !(range instanceof SpecGateRepairRange))
+      || new Set(ranges.map((range) => range.id)).size !== ranges.length
+      || !ranges.some((range) => range.id === indexManifest.firstPageId)) {
+      throw new TypeError("Navigation requires one complete unit and exact read-only index pages");
+    }
+    if (unit.findings.some((finding) => finding.specRevision !== null && finding.specRevision !== baseRevision)) {
+      throw new TypeError("Stale repair navigation finding revision");
+    }
+    for (const range of ranges) {
+      if (indexManifest.hasPage(range.id)) indexManifest.assertRange(range);
+      else if (range.id.startsWith("evidence:") || range.value?.snapshotId
+        || range.target !== null && !(range.target instanceof SpecRepairTarget)) {
+        throw new TypeError("Navigation requires read-only canonical Spec ranges without source bodies");
+      }
+    }
+    if (!Array.isArray(readRangeIds) || readRangeIds.some((id) => typeof id !== "string" || !id)
+      || new Set(readRangeIds).size !== readRangeIds.length || ranges.some((range) => !readRangeIds.includes(range.id))) {
+      throw new TypeError("Navigation requires exact previously selected range identities");
+    }
+    this.sourceOrigins = sourceOrigins instanceof SpecGateRepairSourceOriginInventory ? sourceOrigins : new SpecGateRepairSourceOriginInventory(sourceOrigins);
+    this.readRangeIds = Object.freeze([...readRangeIds].sort(compareText));
+    if (!Array.isArray(guardrails) || new Set(guardrails.map((rule) => rule.id)).size !== guardrails.length
+      || unit.findings.some((finding) => !guardrails.some((rule) => rule.id === finding.requirementRef))
+      || guardrails.some((rule) => !unit.findings.some((finding) => finding.requirementRef === rule.id))) {
+      throw new TypeError("Navigation requires the unit's complete canonical rules");
+    }
+    this.baseRevision = baseRevision; this.unit = unit; this.indexManifest = indexManifest;
+    this.ranges = Object.freeze([...ranges].sort((left, right) => compareText(left.id, right.id)));
+    this.guardrails = freezeSpecGateRepairValue(structuredClone(guardrails));
+    this.acknowledgedRationale = freezeSpecGateRepairValue(structuredClone(acknowledgedRationale));
+    Object.freeze(this);
+  }
+  static fromJSON(value) {
+    if (!value || Object.keys(value).sort().join(",") !== "acknowledgedRationale,baseRevision,guardrails,indexManifest,ranges,readRangeIds,sourceOrigins,unit"
+      || !value.unit || Object.keys(value.unit).sort().join(",") !== "findings,id,rangeIds") {
+      throw new TypeError("Invalid repair navigation selection");
+    }
+    const unit = new SpecGateRepairUnit(value.unit.findings.map((finding) => new SpecGateRepairFinding(finding, finding.rangeIds)));
+    if (workerArtifactStableStringify(unit.toJSON()) !== workerArtifactStableStringify(value.unit)) {
+      throw new TypeError("Conflicting repair navigation unit");
+    }
+    const ranges = value.ranges.map((range) => {
+      if (range.writable !== false || Object.keys(range).sort().join(",") !== "collectionAnchor,digest,entity,exists,id,path,target,value,writable") {
+        throw new TypeError("Navigation cannot grant mutation authority");
+      }
+      return new SpecGateRepairRange({ ...range, target: range.target === null ? null
+        : SpecRepairTarget.fromJSON(range.target, "repair navigation target") });
+    });
+    return new this({ ...value, unit, ranges, indexManifest: new SpecGateRepairIndexManifest(value.indexManifest) });
+  }
+  pageRangeIds() { return this.ranges.filter((range) => this.indexManifest.hasPage(range.id)).map((range) => range.id); }
+  toJSON() { return { baseRevision: this.baseRevision, unit: this.unit.toJSON(),
+    ranges: this.ranges.map((range) => range.toJSON({ writable: false })), guardrails: this.guardrails,
+    acknowledgedRationale: this.acknowledgedRationale, indexManifest: this.indexManifest.toJSON(),
+    readRangeIds: this.readRangeIds, sourceOrigins: this.sourceOrigins.toJSON() }; }
+}
+
+export const SPEC_GATE_REPAIR_INDEX_PAGE_SIZE = 32;
+
+/** Bounds identify an existing immutable page without granting range access. */
+export class SpecGateRepairIndexPageRoute {
+  constructor(value) {
+    if (!value || Object.keys(value).sort().join(",") !== "firstDescriptorId,id,lastDescriptorId"
+      || ![value.id, value.firstDescriptorId, value.lastDescriptorId].every((entry) => typeof entry === "string" && entry)
+      || compareText(value.firstDescriptorId, value.lastDescriptorId) > 0) {
+      throw new TypeError("Invalid repair index page route");
+    }
+    this.id = value.id;
+    this.firstDescriptorId = value.firstDescriptorId;
+    this.lastDescriptorId = value.lastDescriptorId;
+    Object.freeze(this);
+  }
+  toJSON() { return { id: this.id, firstDescriptorId: this.firstDescriptorId, lastDescriptorId: this.lastDescriptorId }; }
+}
+
+/** Deterministic navigation of the complete registered descriptor inventory. */
+export class SpecGateRepairIndexManifest {
+  constructor(value) {
+    if (!value || Object.keys(value).sort().join(",") !== "descriptorCount,firstPageId,pageCount,pageRoutes,revision,version") {
+      throw new TypeError("Invalid repair index manifest");
+    }
+    const { version, revision, descriptorCount, pageCount, firstPageId, pageRoutes } = value;
+    if (version !== 2 || !/^sha256:[a-f0-9]{64}$/.test(revision)
+      || !Number.isSafeInteger(descriptorCount) || descriptorCount < 1
+      || !Number.isSafeInteger(pageCount) || pageCount !== Math.ceil(descriptorCount / SPEC_GATE_REPAIR_INDEX_PAGE_SIZE)
+      || firstPageId !== `repair-index:${revision}:0`
+      || !Array.isArray(pageRoutes) || pageRoutes.length !== pageCount) throw new TypeError("Invalid repair index manifest");
+    const routes = pageRoutes.map((entry) => entry instanceof SpecGateRepairIndexPageRoute
+      ? entry : new SpecGateRepairIndexPageRoute(entry));
+    if (routes.some((route, page) => route.id !== `repair-index:${revision}:${page}`
+      || page > 0 && compareText(routes[page - 1].lastDescriptorId, route.firstDescriptorId) >= 0)) {
+      throw new TypeError("Invalid repair index page route ordering or revision");
+    }
+    this.version = version; this.revision = revision; this.descriptorCount = descriptorCount;
+    this.pageCount = pageCount; this.firstPageId = firstPageId;
+    this.pageRoutes = Object.freeze(routes);
+    Object.freeze(this);
+  }
+  hasPage(id) { return this.pageRoutes.some((route) => route.id === id); }
+  assertRange(range) {
+    if (!this.hasPage(range.id) || range.target !== null || range.entity !== null
+      || range.collectionAnchor || !range.exists
+      || range.digest !== specGateRepairValueDigest(workerArtifactStableStringify(range.value))) {
+      throw new Error("Conflicting repair index page digest or read-only range");
+    }
+    return this.assertPage(range.value, range.id);
+  }
+  routesForPrefix(prefix) {
+    if (typeof prefix !== "string" || !prefix) throw new TypeError("Repair index lookup requires a descriptor prefix");
+    return this.pageRoutes.filter((route) => compareText(route.lastDescriptorId, prefix) >= 0
+      && (compareText(route.firstDescriptorId, prefix) <= 0 || route.firstDescriptorId.startsWith(prefix)));
+  }
+  pagesForSource(origin) { return this.routesForPrefix(SpecGateRepairSourceRange.prefixForOrigin(origin)); }
+  assertPage(value, pageId = null) {
+    if (!value || Object.keys(value).sort().join(",") !== "descriptors,nextPageId,page,pageCount,revision,version"
+      || value.version !== 1 || value.revision !== this.revision || value.pageCount !== this.pageCount
+      || !Number.isSafeInteger(value.page) || value.page < 0 || value.page >= this.pageCount
+      || value.nextPageId !== (value.page + 1 < this.pageCount ? this.pageRoutes[value.page + 1].id : null)
+      || !Array.isArray(value.descriptors)
+      || value.descriptors.length !== Math.min(SPEC_GATE_REPAIR_INDEX_PAGE_SIZE,
+        this.descriptorCount - value.page * SPEC_GATE_REPAIR_INDEX_PAGE_SIZE)) {
+      throw new Error("Missing or conflicting repair index page");
+    }
+    const route = this.pageRoutes[value.page];
+    if (pageId !== null && pageId !== route.id) throw new Error("Conflicting repair index page identity");
+    const ids = value.descriptors.map((entry) => entry?.id);
+    if (ids.some((id, position) => typeof id !== "string" || !id
+      || position > 0 && compareText(ids[position - 1], id) >= 0)
+      || ids[0] !== route.firstDescriptorId || ids.at(-1) !== route.lastDescriptorId) {
+      throw new Error("Conflicting repair index page route bounds");
+    }
+    return route;
+  }
+  toJSON() { return { version: this.version, revision: this.revision, descriptorCount: this.descriptorCount,
+    pageCount: this.pageCount, firstPageId: this.firstPageId, pageRoutes: this.pageRoutes.map((route) => route.toJSON()) }; }
+}
