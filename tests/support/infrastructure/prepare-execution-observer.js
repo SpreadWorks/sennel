@@ -17,11 +17,13 @@ export class PrepareExecutionObserver {
   #observations = [];
   #mocks = [];
   #registrations;
+  #stepIds;
 
-  constructor(t, { registrations = ["branch", "prepare-spec"]
+  constructor(t, { stepIds = ["branch", "prepare-spec"], registrations = stepIds
     .map((stepId) => flowStepExecutionRegistration(stepId)).filter((value) => value !== null) } = {}) {
     assert.ok(registrations.every((value) => value instanceof StepRegistration));
     this.#registrations = Object.freeze([...registrations]);
+    this.#stepIds = new Set([...stepIds, ...registrations.map((registration) => registration.stepId)]);
     t.after(() => this.restore());
     const observations = this.#observations;
     const create = StepRegistration.prototype.create;
@@ -65,7 +67,7 @@ export class PrepareExecutionObserver {
       if (entry.operation === "create") continue;
       const stepId = entry.stepId;
       const knownContract = this.#registrations.some((registration) => registration.executionContract === entry.receiver);
-      if (!knownContract && !["branch", "prepare-spec"].includes(stepId)) continue;
+      if (!knownContract && !this.#stepIds.has(stepId)) continue;
       const registration = this.#registrations.find((candidate) => candidate.stepId === stepId);
       assert.ok(registration instanceof StepRegistration,
         `A10 ${stepId}: caller requires its production registration and selected Step identity`);
@@ -83,12 +85,20 @@ export class PrepareExecutionObserver {
   }
 
   assertExecuted(stepIds) {
+    this.assertConsumed(stepIds);
+    for (const stepId of stepIds) {
+      assert.equal(this.#calls(stepId, "execute").length, 1,
+        `A10 ${stepId}: prepare must consume its production selection exactly once`);
+    }
+  }
+
+  assertConsumed(stepIds) {
     this.assertCoherent();
     for (const stepId of stepIds) {
       assert.ok(this.#calls(stepId, "select").length > 0,
-        `A10 ${stepId}: prepare must select through its production execution contract`);
-      assert.equal(this.#calls(stepId, "execute").length, 1,
-        `A10 ${stepId}: prepare must consume its production selection exactly once`);
+        `A10 ${stepId}: caller must select through its production execution contract`);
+      assert.ok(this.#calls(stepId, "execute").length > 0,
+        `A10 ${stepId}: caller must consume its production selection`);
     }
   }
 
