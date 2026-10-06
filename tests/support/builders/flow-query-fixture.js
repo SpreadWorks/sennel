@@ -263,6 +263,8 @@ export function createFlowQueryFixture({
   storage = "fresh",
   lifecycle = "active",
   git = false,
+  execution = { mode: "direct" },
+  autoApprove = false,
   specId = "001-query-fixture",
   selectedVersion = storage === "migrated" ? 2 : 1,
 } = {}) {
@@ -304,6 +306,8 @@ export function createFlowQueryFixture({
     flowManager,
     specId,
     runId: `run-${specId}`,
+    execution,
+    autoApprove,
     context: git ? { gitSnapshot: captureGitSnapshot(root) } : null,
     specRecord: {
       goal: "Exercise the canonical Flow query contract.",

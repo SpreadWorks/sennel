@@ -588,6 +588,7 @@ export default class GetStatusCommand extends FlowCommand {
       key: "status",
       input: ctx,
       flowState: ctx.flowState,
+      context: ctx,
     }) || status;
   }
 }
