@@ -52,6 +52,7 @@ import {
   makeFlowManager,
 } from "../../support/infrastructure/flow-setup.js";
 import { createTmpDir, removeTmpDir } from "../../support/builders/tmp-dir.js";
+import { requirementTestReviewResult } from "../../support/requirement-test-review-result.js";
 
 const roots = [];
 const CONFIRMED_AT = "2026-09-13T01:00:00.000Z";
@@ -247,48 +248,15 @@ function sealRequirementTestHandoff(request) {
 }
 
 function reviewResult(manager, specId, { verdict = "PASS", tooling = false, permissionRelated = false, findings = null } = {}) {
-  const state = manager.canonicalState(specId);
-  const store = new RequirementTestArtifactStore({ flowManager: manager, state });
-  const item = store.readPlan("test-review").artifact.plan.activeWorkItem();
-  const candidate = store.readCandidate({ bundle: item.bundleRevision, consumerNodeId: "test-review" }).candidate;
-  const finding = {
-    findingId: `${item.requirementId}-review-blocker`,
-    fingerprint: "e".repeat(64),
-    requirementId: item.requirementId,
-    category: tooling ? "tooling_failure" : "semantic_rejection",
-    reason: tooling ? "review provider unavailable" : "assertion does not prove the Requirement",
-  };
-  const blockingFindings = verdict === "REJECTED" || tooling ? (findings ?? [finding]) : [];
-  const payload = {
-    version: 1,
-    phase: "test",
-    requirementId: item.requirementId,
-    specRevision: item.specRevision.toJSON(),
-    bundleRevision: item.bundleRevision.revision,
-    candidateDigest: candidate.digest,
-    sourceAttempt: item.bundleRevision.lineage.sourceAttempt.toJSON(),
-    ...(tooling ? {
-      toolingOutcome: {
-        kind: "TOOLING_ERROR", stage: "provider", attempt: 1, maxAttempts: 3, remainingAttempts: 2,
-        reason: finding.reason, permissionRelated,
-      },
-    } : { verdict }),
-    blockingFindings,
-    advisoryFindings: verdict === "ADVISORY" ? [{ ...finding, category: "advisory" }] : [],
-    ...(verdict === "REJECTED" ? {
-      canonicalEvidence: {
-        disposition: "REJECTED",
-        blockingFindings: blockingFindings.map(({ findingId, fingerprint }) => ({ findingId, fingerprint })),
-        identity: { evidenceDigest: "f".repeat(64) },
-      },
-    } : {}),
-  };
-  const result = {
-    result: tooling ? "tooling-error" : "ok",
-    artifacts: { phase: "test", ...(tooling ? { toolingOutcome: payload.toolingOutcome } : { verdict }) },
-  };
-  attachCanonicalCommandResultArtifact(result, { logicalKey: "test.requirement.review", payload });
-  return result;
+  return requirementTestReviewResult({
+    flowManager: manager,
+    specId,
+    executionRoot: manager.executionRoot(),
+    verdict,
+    tooling,
+    permissionRelated,
+    findings,
+  });
 }
 
 async function postReview(value, options) {

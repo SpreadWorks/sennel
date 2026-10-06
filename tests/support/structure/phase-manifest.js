@@ -17,8 +17,16 @@ export class PhaseStructureEntry {
     Object.freeze(this);
   }
 
-  contract(registry, executionShapes = []) {
-    return new StructureScopeContract(this.definition, executionShapes, registry);
+  contract(registry, executionShapes = [], executionForms = {}) {
+    const forms = executionForms ?? {};
+    const definition = Object.keys(forms).length === 0 ? this.definition
+      : new DefinitionLeafScope(this.definition.module, this.definition.declarationName,
+        this.definition.leaves.map((leaf) => new StructureLeaf(leaf.stepId, leaf.scope, leaf.nodeId,
+          forms[leaf.stepId] ?? leaf.executionForm, leaf.taskIdentity)));
+    if (Object.keys(forms).some((stepId) => !this.definition.leaves.some((leaf) => leaf.stepId === stepId))) {
+      throw new TypeError("phase execution forms must identify declared leaves");
+    }
+    return new StructureScopeContract(definition, executionShapes, registry);
   }
 }
 

@@ -18,9 +18,9 @@ import { validateSchema } from "../../lib/schema-validate.js";
 import {
   SpecRenderContext,
   SpecRenderOutputLocation,
-  TaskCollection,
   TaskRenderPlan,
 } from "../lib/render-contract.js";
+import { TaskCollection } from "../lib/task-values.js";
 
 const SCHEMA_PATH = path.join(
   path.dirname(fileURLToPath(import.meta.url)),

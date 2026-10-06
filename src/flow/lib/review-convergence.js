@@ -1,11 +1,16 @@
 import crypto from "node:crypto";
 import { resolveMaxAttempts, resolveToolingMaxAttempts } from "../definition.js";
 import { FLOW_ARTIFACT_CONTRACTS } from "../../lib/flow-artifact-contract.js";
+import {
+  ReviewProvenance, ReviewEvidenceIdentity, MAX_REVIEW_AUTHORED_STRING_CHARS,
+  requireObject, requireString, requireNullableTaskId, requireTreeSha, requireSha256,
+} from "./review-evidence-values.js";
+export { ReviewProvenance, ReviewEvidenceIdentity, MAX_REVIEW_AUTHORED_STRING_CHARS } from "./review-evidence-values.js";
+
 
 export const REVIEW_EVIDENCE_VERSION = 1;
 export const MAX_REVIEW_EVIDENCE_BYTES = 1024 * 1024;
 export const MAX_REVIEW_FINDINGS = 100;
-export const MAX_REVIEW_AUTHORED_STRING_CHARS = 4000;
 
 const REVIEW_DISPOSITIONS = new Set(["PASS", "ADVISORY", "REJECTED"]);
 const REVIEW_FINDING_DISPOSITIONS = new Set(["must-fix", "informational", "deferred"]);
@@ -33,21 +38,6 @@ export function artifactPhaseMatchesReviewTarget(artifactPhase, phase) {
     || (artifactPhase === "draft-coverage-review" && phase === "draft-coverage");
 }
 
-function requireObject(value, field) {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error(`${field} must be an object`);
-  }
-  return value;
-}
-
-function requireString(value, field, { max = MAX_REVIEW_AUTHORED_STRING_CHARS } = {}) {
-  if (typeof value !== "string" || value.trim() === "") {
-    throw new Error(`${field} must be a non-empty string`);
-  }
-  if (value.length > max) throw new Error(`${field} exceeds ${max} characters`);
-  return value.trim();
-}
-
 function requireFindingText(value, field) {
   const normalized = requireString(value, field);
   if (
@@ -57,24 +47,6 @@ function requireFindingText(value, field) {
     throw new Error(`${field} must contain concrete review evidence, not a template placeholder`);
   }
   return normalized;
-}
-
-function requireNullableTaskId(value) {
-  return value == null ? null : requireString(value, "taskId");
-}
-
-function requireTreeSha(value) {
-  const treeSha = requireString(value, "treeSha").toLowerCase();
-  if (!/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(treeSha)) {
-    throw new Error("treeSha must be a lowercase SHA-1 or SHA-256 Git object id");
-  }
-  return treeSha;
-}
-
-function requireSha256(value, field) {
-  const digest = requireString(value, field).toLowerCase();
-  if (!/^[a-f0-9]{64}$/.test(digest)) throw new Error(`${field} must be a lowercase SHA-256 string`);
-  return digest;
 }
 
 function requireInteger(value, field, { min = 0 } = {}) {
@@ -202,54 +174,6 @@ export class ReviewDisposition {
       value: this.value,
       blockingFindings: this.blockingFindings.map((finding) => finding.toJSON()),
       advisoryFindings: this.advisoryFindings.map((finding) => finding.toJSON()),
-    };
-  }
-}
-
-export class ReviewProvenance {
-  constructor(input = {}) {
-    requireObject(input, "review provenance");
-    this.provider = requireString(input.provider, "provenance.provider");
-    this.invocationId = requireString(input.invocationId, "provenance.invocationId");
-    this.capturedAt = requireString(input.capturedAt, "provenance.capturedAt");
-    const capturedAtMs = Date.parse(this.capturedAt);
-    if (!Number.isFinite(capturedAtMs)) throw new Error("provenance.capturedAt must be an ISO date-time");
-    this.capturedAt = new Date(capturedAtMs).toISOString();
-    Object.freeze(this);
-  }
-
-  toJSON() {
-    return {
-      provider: this.provider,
-      invocationId: this.invocationId,
-      capturedAt: this.capturedAt,
-    };
-  }
-}
-
-export class ReviewEvidenceIdentity {
-  constructor({ phase, taskId = null, treeSha, provenance, evidenceDigest } = {}) {
-    this.phase = requireString(phase, "phase");
-    this.taskId = requireNullableTaskId(taskId);
-    this.treeSha = requireTreeSha(treeSha);
-    this.provenance = provenance instanceof ReviewProvenance
-      ? provenance
-      : new ReviewProvenance(provenance);
-    this.evidenceDigest = requireSha256(evidenceDigest, "evidenceDigest");
-    Object.freeze(this);
-  }
-
-  get duplicateKey() {
-    return [this.phase, this.taskId ?? "", this.treeSha, this.evidenceDigest].join(":");
-  }
-
-  toJSON() {
-    return {
-      phase: this.phase,
-      taskId: this.taskId,
-      treeSha: this.treeSha,
-      provenance: this.provenance.toJSON(),
-      evidenceDigest: this.evidenceDigest,
     };
   }
 }

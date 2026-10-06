@@ -219,11 +219,13 @@ export function assertRequirementTestResultRoundtrip(stepId, storedResult, expec
     assert.throws(() => engine.rehydrateStepResult(stepId, { ...saved, [field]: { ...saved[field], payload: {} } }), Error, `undeclared ${field} payload`);
   }
 
-  if (stepId === "approval" && entry.ResultClass !== engine.StepErrorResult) {
+  if (stepId === "approval") {
     assert.ok(operandFields.length > 0, "approval requires saved source/approval evidence");
+    assert.ok(restored.evidence instanceof engine.ApprovalResultEvidence,
+      "approval Result and common Error require the canonical source Attempt evidence");
   }
 
-  if (TEST_LEAVES.has(stepId) && entry.ResultClass !== engine.StepErrorResult) {
+  if (TEST_LEAVES.has(stepId)) {
     for (const [field, name] of [
       ["binding", "RequirementTestResultBinding"],
       ["frontier", "RequirementTestResultFrontier"],

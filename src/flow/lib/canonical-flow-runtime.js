@@ -559,7 +559,7 @@ export class CanonicalFlowRuntime {
   }
 
   /** Publish the initial Requirement plan, confirm approval, and claim the selected first target. */
-  initializeRequirementTestLifecycle({ specId, activityId, result, decision, targetAttempt, specRecord, artifactWrites, artifactBaselines, admission = undefined } = {}) {
+  initializeRequirementTestLifecycle({ specId, activityId, result, decision, targetAttempt, specRecord, artifactWrites, artifactBaselines, approvalTasks = [], admission = undefined } = {}) {
     const state = this.#state(specId);
     return this.#applyAttemptTransition(specId, state, {
       id: activityId,
@@ -572,6 +572,7 @@ export class CanonicalFlowRuntime {
       artifactBaselines,
       admission,
       requirementTestInitialization: decision?.toJSON?.() ?? decision,
+      approvalTasks,
     });
   }
 
@@ -1295,6 +1296,7 @@ export class CanonicalFlowRuntime {
     taskReviewStagePlan = null,
     requirementTestInitialization = null,
     requirementTestLifecycle = null,
+    approvalTasks = [],
   }) {
     const target = requiredText(nodeId, "transition nodeId");
     const node = state.findNode(target);
@@ -1342,6 +1344,7 @@ export class CanonicalFlowRuntime {
         taskReviewStagePlan,
         requirementTestInitialization,
         requirementTestLifecycle,
+        approvalTasks,
       },
     });
     const resolvedArtifactWrites = retryRecoveryPublication == null

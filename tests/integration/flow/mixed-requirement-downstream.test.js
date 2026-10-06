@@ -12,14 +12,13 @@ import RunTestResultReviewCommand from "../../../src/flow/lib/run-test-result-re
 import { FLOW_COMMANDS } from "../../../src/flow/registry.js";
 import { container } from "../../../src/lib/container.js";
 import { attachedCanonicalCommandResultArtifact } from "../../../src/flow/lib/canonical-command-result.js";
-import { attachCanonicalCommandResultArtifact } from "../../../src/flow/lib/canonical-command-result.js";
-import { RequirementTestArtifactStore } from "../../../src/flow/lib/requirement-test-store.js";
 import {
   FlowAtStepFixture,
   makeFlowManager,
   removeCatalogedArtifactForCorruptionFixture,
   promoteCanonicalRequirementTest,
 } from "../../support/infrastructure/flow-setup.js";
+import { requirementTestReviewResult } from "../../support/requirement-test-review-result.js";
 
 const roots = [];
 
@@ -71,32 +70,12 @@ class AcceptanceFixtureResponse extends AcceptanceReviewResponseSource {
 }
 
 function toolingReviewResult(flowManager, specId) {
-  const state = flowManager.canonicalState(specId);
-  const store = new RequirementTestArtifactStore({ flowManager, state });
-  const item = store.readPlan("test-review").artifact.plan.activeWorkItem();
-  const candidate = store.readCandidate({ bundle: item.bundleRevision, consumerNodeId: "test-review" }).candidate;
-  const finding = {
-    findingId: `${item.requirementId}-tooling-review`,
-    fingerprint: "e".repeat(64),
-    requirementId: item.requirementId,
-    category: "tooling_failure",
-    reason: "fixture review provider unavailable",
-  };
-  const payload = {
-    version: 1,
-    phase: "test",
-    requirementId: item.requirementId,
-    specRevision: item.specRevision.toJSON(),
-    bundleRevision: item.bundleRevision.revision,
-    candidateDigest: candidate.digest,
-    sourceAttempt: item.bundleRevision.lineage.sourceAttempt.toJSON(),
-    toolingOutcome: { reason: finding.reason },
-    blockingFindings: [finding],
-    advisoryFindings: [],
-  };
-  const result = { result: "tooling-error", artifacts: { phase: "test", toolingOutcome: payload.toolingOutcome } };
-  attachCanonicalCommandResultArtifact(result, { logicalKey: "test.requirement.review", payload });
-  return result;
+  return requirementTestReviewResult({
+    flowManager,
+    specId,
+    executionRoot: flowManager.executionRoot(),
+    tooling: true,
+  });
 }
 
 async function buildMixedFlow() {

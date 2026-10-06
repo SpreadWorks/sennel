@@ -55,8 +55,13 @@ import {
   readDraftCompletionCatalogDigest,
 } from "./draft-completion-connector.js";
 import { DraftTransitionFacts } from "./draft-transition-facts.js";
-import { STEP_RESULT_TYPE, StepResult } from "../engine/step-result.js";
+import { STEP_RESULT_TYPE, StepResult, RequirementTestResultPublication } from "../engine/step-result.js";
 import { DraftWorkerExecutionStepBinding } from "../engine/connectors/draft/draft-step-binding.js";
+import {
+  acquireRequirementTestInput, requirementTestRepairProgressIdentity,
+  requirementTestWorkerStepRegistration,
+} from "../engine/composition/test.js";
+import { RequirementTestService } from "../services/requirement-test-service.js";
 import { StepPersistenceFailure } from "./definition-lifecycle-failure.js";
 import { SpecWorkerCompletionFacts } from "./spec-worker-completion-facts.js";
 import { SpecReviewWorkerFacts } from "./spec-review-worker-facts.js";
@@ -115,6 +120,7 @@ import {
   RequirementTestBundleLineage,
   RequirementTestBundleRevision,
   RequirementTestLifecycleAuthority,
+  RequirementTestPlanPublication,
   RequirementTestSourceAttempt,
 } from "./requirement-test-lifecycle.js";
 import { RequirementTestArtifactStore } from "./requirement-test-store.js";
@@ -552,6 +558,8 @@ export class RequirementTestStructuralHandoffResult {
 
     this.requirementId = binding.requirementId;
     this.stepId = request.stepId;
+    this.requestDigest = request.requestDigest;
+    this.handoffDigest = submission.handoffDigest;
     this.binding = binding;
     this.candidate = candidate;
     this.candidateSources = Object.freeze(sources);
@@ -687,7 +695,8 @@ export class WorkerArtifactPayloadRule {
 
 /** Immutable Requirement/candidate identity carried through one worker session. */
 export class RequirementTestWorkerHandoffBinding {
-  constructor({ requirementId, specRevision, bundleRevision, sourceAttempt, candidateBaseline = null } = {}) {
+  constructor({ requirementId, specRevision, bundleRevision, sourceAttempt, specRecordPublication,
+    planPublication, candidateBaseline = null } = {}) {
     this.requirementId = requiredString(requirementId, "Requirement test handoff requirementId");
     this.specRevision = specRevision instanceof SpecRevisionIdentity
       ? specRevision
@@ -699,6 +708,13 @@ export class RequirementTestWorkerHandoffBinding {
     this.sourceAttempt = sourceAttempt instanceof RequirementTestSourceAttempt
       ? sourceAttempt
       : RequirementTestSourceAttempt.fromJSON(sourceAttempt);
+    this.specRecordPublication = specRecordPublication instanceof RequirementTestResultPublication
+      ? specRecordPublication
+      : RequirementTestResultPublication.fromDescriptor(specRecordPublication);
+    if (this.specRecordPublication.logicalKey !== "spec.record") {
+      throw new Error("Requirement test handoff must bind the canonical spec.record publication");
+    }
+    this.planPublication = RequirementTestPlanPublication.fromDescriptor(planPublication);
     this.candidateBaseline = candidateBaseline === null
       ? null
       : candidateBaseline instanceof RequirementTestCandidateBundle
@@ -714,7 +730,8 @@ export class RequirementTestWorkerHandoffBinding {
 
   static fromJSON(value) {
     exactObjectKeys(value, [
-      "requirementId", "specRevision", "bundleRevision", "sourceAttempt", "candidateBaseline",
+      "requirementId", "specRevision", "bundleRevision", "sourceAttempt", "specRecordPublication",
+      "planPublication", "candidateBaseline",
     ], "Requirement test handoff binding");
     return new RequirementTestWorkerHandoffBinding(value);
   }
@@ -725,6 +742,8 @@ export class RequirementTestWorkerHandoffBinding {
       specRevision: this.specRevision.toJSON(),
       bundleRevision: this.bundleRevision,
       sourceAttempt: this.sourceAttempt.toJSON(),
+      specRecordPublication: this.specRecordPublication.toJSON(),
+      planPublication: this.planPublication.toJSON(),
       candidateBaseline: this.candidateBaseline?.toJSON() ?? null,
     };
   }
@@ -2096,7 +2115,10 @@ function canonicalHandoffInputSnapshot({ flowManager, state, workerPath, consume
 function requirementTestHandoffContext({ flowManager, state, policy, semanticIdentity }) {
   if (!REQUIREMENT_TEST_WORKER_STEPS.has(policy.stepId)) return null;
   const store = new RequirementTestArtifactStore({ flowManager, state });
-  const workItem = store.readPlan(policy.stepId).artifact.plan.activeWorkItem();
+  const planRead = store.readPlan(policy.stepId);
+  const specRecord = flowManager.readArtifact({ specId: state.specId,
+    logicalKey: "spec.record", consumerNodeId: policy.stepId });
+  const workItem = planRead.artifact.plan.activeWorkItem();
   if (!workItem) throw new WorkerArtifactHandoffError(
     "invalid", "FLOW_REQUIREMENT_TEST_HANDOFF_INVALID", "Requirement test handoff has no active work item",
   );
@@ -2118,6 +2140,8 @@ function requirementTestHandoffContext({ flowManager, state, policy, semanticIde
       specRevision: workItem.specRevision,
       bundleRevision: repairing ? workItem.bundleRevision.revision + 1 : 1,
       sourceAttempt: { id: semanticIdentity.attempt.id, sequence: semanticIdentity.attempt.sequence },
+      specRecordPublication: specRecord.descriptor,
+      planPublication: planRead.descriptor,
       candidateBaseline: candidateRead?.candidate ?? null,
     }),
   });
@@ -8860,7 +8884,7 @@ function canonicalHandoffReceiptForRequest(state, request, flowManager = null) {
       });
       if (progress !== null) {
         const handoffDigest = testReviewRepairProgressReceiptForSelectedContract({
-          state,
+          state: flowManager.canonicalState(request.specId),
           progressDocument: JSON.parse(progress.bytes.toString("utf8")),
           selectedContract: selectedRepair,
           requestDigest: request.requestDigest,
@@ -8884,6 +8908,9 @@ function canonicalHandoffReceiptForRequest(state, request, flowManager = null) {
         activity?.nodeId === request.stepId
         && [
           "record_draft_step_settlement",
+          "initialize_requirement_test_lifecycle",
+          "advance_requirement_test_lifecycle",
+          "fail_attempt",
           "repair_implementation",
           "triage_implementation_for_repair",
           "triage_implementation_no_repair",
@@ -10659,7 +10686,8 @@ export class WorkerArtifactHandoffCoordinator {
             },
           });
           persistedSettlementReceipt = committed.receipt;
-        } else if (repairCheckpoint !== null && !repairCheckpoint.progress.complete) {
+        } else if (repairCheckpoint !== null && !repairCheckpoint.progress.complete
+          && !REQUIREMENT_TEST_WORKER_STEPS.has(request.stepId)) {
           ctx.flowManager.publishArtifacts({
             specId: request.specId,
             nodeId: request.stepId,
@@ -10700,20 +10728,23 @@ export class WorkerArtifactHandoffCoordinator {
             ...(selectedDraftStepResult === null ? {} : { stepResult: selectedDraftStepResult }),
           };
           if (REQUIREMENT_TEST_WORKER_STEPS.has(request.stepId)) {
-            // A repair-progress publication may have refreshed the runtime
-            // object while preserving the same Attempt. Re-read the canonical
-            // state for Definition authority rather than retaining that stale
-            // in-memory object across the publication boundary.
-            const lifecycleState = ctx.flowManager.loadReadOnly(request.specId);
-            const planRead = new RequirementTestArtifactStore({ flowManager: ctx.flowManager, state: lifecycleState })
-              .readPlan(request.stepId);
-            const decision = resolveRequirementTestLifecycle(new RequirementTestLifecycleFacts({
-              authority: RequirementTestLifecycleAuthority.capture({ state: lifecycleState, planDescriptor: planRead.descriptor }),
-              plan: planRead.artifact.plan,
-              leaf: request.stepId,
-              observation: publications.requirementTestCandidate,
-            }));
-            ctx.flowManager.completeRequirementTestLifecycle({ ...confirmation, decision });
+            return this.#settleRequirementTestWorker({
+              ctx, request, submission, publications, repairCheckpoint, confirmation,
+            }).catch((cause) => {
+              if (cause?.code === "CURRENT_FLOW_STATE_CONFLICT") {
+                throw new WorkerArtifactHandoffError(
+                  "conflict", "FLOW_ARTIFACT_HANDOFF_CONFLICT",
+                  `canonical worker artifact handoff lost its Version Store precondition: ${cause.message}`,
+                  { cause, data: { stepId: request.stepId, handoffDirectory: request.directory } },
+                );
+              }
+              if (cause instanceof WorkerArtifactHandoffError && cause.classification === "stale") throw cause;
+              throw new WorkerArtifactHandoffError(
+                "recovery-required", "FLOW_ARTIFACT_HANDOFF_RECOVERY_REQUIRED",
+                `canonical worker artifact handoff could not commit: ${cause.message}`,
+                { cause, data: { stepId: request.stepId, handoffDirectory: request.directory } },
+              );
+            });
           } else if (selectedDraftStepResult !== null) {
             const committed = ctx.flowManager.settleDraftStepResult({
               binding: draftWorkerBinding,
@@ -10775,6 +10806,69 @@ export class WorkerArtifactHandoffCoordinator {
       stepResult: selectedDraftStepResult,
       settlementReceipt: persistedSettlementReceipt,
       receipt: persistedSettlementReceipt,
+    };
+  }
+
+  async #settleRequirementTestWorker({ ctx, request, submission, publications, repairCheckpoint, confirmation }) {
+    const state = ctx.flowManager.canonicalState(request.specId);
+    const specRecord = ctx.flowManager.readArtifact({ specId: request.specId,
+      logicalKey: "spec.record", consumerNodeId: request.stepId });
+    const planRead = new RequirementTestArtifactStore({ flowManager: ctx.flowManager, state })
+      .readPlan(request.stepId);
+    const handoffBinding = request.requirementTestBinding;
+    const activeWorkItem = planRead.artifact.plan.activeWorkItem();
+    if (stableStringify(handoffBinding.specRecordPublication.toJSON())
+        !== stableStringify(RequirementTestResultPublication.fromDescriptor(specRecord.descriptor).toJSON())
+      || !handoffBinding.planPublication.matches(planRead.descriptor)
+      || activeWorkItem?.requirementId !== handoffBinding.requirementId
+      || !activeWorkItem.specRevision.equals(handoffBinding.specRevision)
+      || state.attempt?.id !== handoffBinding.sourceAttempt.id
+      || state.attempt?.sequence !== handoffBinding.sourceAttempt.sequence) {
+      throw new WorkerArtifactHandoffError("stale", "FLOW_ARTIFACT_HANDOFF_STALE",
+        "Requirement test spec.record or plan publication or source Attempt changed during worker handoff");
+    }
+    const partial = repairCheckpoint !== null && !repairCheckpoint.progress.complete;
+    const observed = acquireRequirementTestInput({
+      state,
+      stepId: request.stepId,
+      planRead,
+      specRecordPublication: specRecord.descriptor,
+      candidateBundle: partial ? null : publications.requirementTestCandidate,
+      progressIdentity: partial ? requirementTestRepairProgressIdentity(repairCheckpoint.progress) : null,
+    });
+    const selectedActivityId = `requirement-test-${request.stepId}-${crypto.randomUUID()}`;
+    const registration = requirementTestWorkerStepRegistration(request.stepId);
+    if (registration === null) throw new Error(`Requirement worker Step registration is missing: ${request.stepId}`);
+    const prepared = await registration.create({
+      ctx,
+      observed,
+      flowManager: ctx.flowManager,
+      commandResult: null,
+      result: confirmation.result,
+      references: confirmation.references,
+      artifactWrites: publications.artifactWrites,
+      artifactRemovals: publications.artifactRemovals,
+      artifactBaselines: publications.artifactBaselines,
+      activityId: selectedActivityId,
+    });
+    const stepResult = await prepared.step.execute();
+    const settlementOutcome = prepared.dependency(RequirementTestService).settlementOutcome;
+    if (settlementOutcome?.receipt == null) throw new Error("Requirement worker Step did not persist its selected Result");
+    const handoffReceipt = canonicalHandoffReceipt(request, submission, this.now);
+    cleanupCompletedHandoff(request.handoffRoot, handoffReceipt, this.faultInjector);
+    return {
+      completed: true,
+      ...(partial ? { partial: true } : {}),
+      replayed: false,
+      stepId: request.stepId,
+      handoffDigest: handoffReceipt.handoffDigest,
+      payloadDigest: handoffReceipt.payloadDigest,
+      ...(partial ? {
+        remainingFindings: repairCheckpoint.progress.entries.filter((entry) => entry.status === "pending").length,
+      } : {}),
+      stepResult,
+      settlementReceipt: settlementOutcome.receipt,
+      receipt: settlementOutcome.receipt,
     };
   }
 

@@ -174,11 +174,9 @@ export class StructureChecker {
     }
     this.#reverseIndex(stepFiles);
     this.#reverseServiceIndex();
+    this.#sharedExecutionSelections(this.scope.contract?.executionShapes ?? []);
     if (this.scope.contract?.executionShapes.length) this.#declaredExecutionRoutes();
-    else {
-      this.#sharedExecutionSelections();
-      this.#registeredExecutionRoute();
-    }
+    else this.#registeredExecutionRoute();
     return this.report;
   }
 
@@ -274,6 +272,7 @@ export class StructureChecker {
     const allowed = new Map();
     const loaderTokens = new Map();
     for (const leaf of contract.definition.leaves) {
+      if (leaf.executionForm === null) continue;
       const registration = this.scope.registrations.find((entry) => entry.stepId === leaf.stepId);
       if (!registration) continue;
       const shape = contract.executionShapes.find((entry) => entry.form === leaf.executionForm);
@@ -293,6 +292,10 @@ export class StructureChecker {
       }
       for (const name of [shape.selectorName, shape.projectorName, shape.executorName]) if (!module?.declaration(name)?.bodyTokens()) {
         this.#diagnose("A10", file, declaration?.token, [this.scope.registrationModule, file], `named adapter ${name} cannot be resolved`);
+      }
+      if (module && shape.form === "approval" && !this.#declaredApprovalSelector(module, shape)) {
+        this.#diagnose("A10", file, module.declaration(shape.selectorName)?.token,
+          [this.scope.registrationModule, file], "Approval selection does not bind the registered leaf and acquired input");
       }
       const consumers = new Map();
       for (const name of [shape.projectorName, shape.executorName]) {
@@ -317,9 +320,12 @@ export class StructureChecker {
           }
           entries.get(caller.module).add(caller.receiptReplayName, matchedReplay ? replay : null);
         }
-        const lookup = source?.references.find((reference) => reference.bindings.get(caller.lookupName) === caller.lookupName);
+        const localLookup = caller.module === this.scope.registrationModule
+          && source?.declaration(caller.lookupName) !== null;
+        const lookup = localLookup ? null
+          : source?.references.find((reference) => reference.bindings.get(caller.lookupName) === caller.lookupName);
         const target = lookup && this.#resolve(caller.module, lookup, [caller.module], "A11", true);
-        if (target?.file !== this.scope.registrationModule) this.#diagnose("A11", caller.module, lookup?.token ?? body?.token,
+        if (!localLookup && target?.file !== this.scope.registrationModule) this.#diagnose("A11", caller.module, lookup?.token ?? body?.token,
           [caller.module, this.scope.registrationModule], `${caller.lookupName} is not the selected production lookup`);
         if (!allowed.has(caller.module)) allowed.set(caller.module, new Set());
         if (matched) for (const token of body.tokens) allowed.get(caller.module).add(token.offset);
@@ -455,6 +461,13 @@ export class StructureChecker {
     if (visited.has(name)) return false;
     const declaration = module.declaration(name);
     if (declaration?.tokens[0]?.value !== "function") return false;
+    if (shape.form === "approval") {
+      const matched = name === shape.projectorName
+        ? this.#declaredApprovalProjector(module, declaration, shape)
+        : name === shape.executorName ? this.#declaredApprovalExecutor(module, declaration, shape) : false;
+      if (matched) consumers.set(name, declaration);
+      return matched;
+    }
     const parameters = readParameters(declaration.tokens);
     if (parameters.length < 1 || parameters.length > 2
       || parameters.some((parameter) => parameter.length !== 1 || parameter[0].kind !== "identifier")) return false;
@@ -501,6 +514,56 @@ export class StructureChecker {
     if (!this.#declaredSelectionConsumer(module, call.name, shape, consumers, new Set([...visited, name]))) return false;
     consumers.set(name, declaration);
     return true;
+  }
+
+  #declaredApprovalSelector(module, shape) {
+    const selector = module.declaration(shape.selectorName);
+    return selector?.matchesFunction("input", `
+      if (input.stepId !== "approval" || !(input.registration instanceof StepRegistration)
+        || input.registration.stepId !== input.stepId) throw new TypeError($STRING_LITERAL);
+      if (input.observed instanceof ApprovalInput) {
+        return new ApprovalExecutionSelection({ observed: input.observed, registration: input.registration, stepId: input.stepId });
+      }
+      if (input.action === undefined || input.action === null) {
+        throw new TypeError($STRING_LITERAL);
+      }
+      return new ApprovalExecutionSelection({ registration: input.registration, stepId: input.stepId, action: input.action });
+    `) === true;
+  }
+
+  #declaredApprovalProjector(module, declaration, shape) {
+    const parameters = readParameters(declaration.tokens);
+    return parameters.length === 2 && parameters[0].length === 1 && parameters[0][0].value === "selection"
+      && parameters[1].length === 1 && parameters[1][0].value === "input"
+      && declaration.matchesBody(`
+      if (!(selection instanceof ApprovalExecutionSelection) || selection.stepId !== input.stepId
+        || selection.registration !== input.registration
+        || !(input.directive instanceof NextActionDirective)) throw new TypeError($STRING_LITERAL);
+      return input.directive;
+    `);
+  }
+
+  #declaredApprovalExecutor(module, declaration, shape) {
+    const parameters = readParameters(declaration.tokens);
+    const serviceNames = new Set(this.scope.registrations.filter((registration) => shape.matches(registration.executionContract))
+      .map((registration) => registration.ServiceClass?.name).filter(Boolean));
+    if (parameters.length !== 2 || parameters[0].length !== 1 || parameters[0][0].value !== "selection"
+      || parameters[1].length !== 1 || parameters[1][0].value !== "input" || serviceNames.size !== 1) return false;
+    const [serviceName] = serviceNames;
+    return declaration.matchesBody(`
+      if (!(selection instanceof ApprovalExecutionSelection) || !(selection.observed instanceof ApprovalInput)
+        || selection.stepId !== input.stepId || selection.registration !== input.registration
+        || input.registration?.stepId !== selection.stepId) {
+        throw new TypeError($STRING_LITERAL);
+      }
+      const execute = (prepared) => {
+        const execution = prepared.step.execute();
+        const service = prepared.dependency(${serviceName});
+        return service.settlementOutcome ?? execution.then(() => service.settlementOutcome);
+      };
+      const prepared = input.registration.create({ ...input, observed: selection.observed });
+      return prepared instanceof Promise ? prepared.then(execute) : execute(prepared);
+    `);
   }
 
   /** A closed adoption terminal must execute the Step built by the selected registration. */
@@ -810,6 +873,12 @@ export class StructureChecker {
     // A transfer into a field or exported alias is not a trusted binding here.
     const accepted = [contract?.tokens ?? []];
     for (const declaration of consumers.values()) accepted.push(declaration.tokens);
+    const lookup = module.declaration(shape.callers[0].lookupName);
+    const mapName = lookup?.returns()[0]?.tokens[0]?.value;
+    const map = mapName && module.declaration(mapName);
+    const collectionName = map?.tokens[6]?.value;
+    const collection = collectionName && module.declaration(collectionName);
+    if (collection) accepted.push(collection.tokens);
     const classes = module.tokens.filter((token, index) => token.value === "class"
       && module.tokens[index + 1]?.kind === "identifier");
     for (const entry of classes) {
@@ -895,6 +964,20 @@ export class StructureChecker {
     const publicNames = new Set(names);
     const accepted = new Map();
     for (const name of names) this.#declaredLookup(module, name, origins, accepted, publicNames);
+    for (const shape of this.scope.contract.executionShapes) for (const caller of shape.callers) {
+      if (caller.module !== file) continue;
+      const declaration = module.declaration(caller.declarationName);
+      if (declaration && this.#declaredCaller(declaration, caller)) accepted.set(declaration.token.offset, declaration.tokens);
+    }
+    const workerIds = this.scope.registrations.filter((registration) =>
+      registration.executionContract?.selectorName === "selectWorkerExecutionAdmission").map((registration) => registration.stepId);
+    if (workerIds.length > 0) for (const [name] of module.declarationHeaders) {
+      const route = module.declaration(name);
+      const call = readInvocations({ tokens: route?.bodyTokens() ?? [] }).find((entry) => names.has(entry.name));
+      if (call && route.matchesFunction("stepId", `return [${workerIds.map((id) => `"${id}"`).join(",")}].includes(stepId) ? ${call.name}(stepId) : null;`)) {
+        accepted.set(route.token.offset, route.tokens);
+      }
+    }
     this.#declaredBindings(module, origins, accepted.values(), "execution lookup", publicNames);
     return origins;
   }
@@ -926,8 +1009,11 @@ export class StructureChecker {
       if (argument[0]?.value !== "{" || argument.at(-1)?.value !== "}") return null;
       return `new StepRegistration(${source.slice(argument[0].offset, argument.at(-1).offset + 1)})`;
     });
-    const directSelection = constructors.every((entry) => entry !== null) && ["", ","].some((trailing) =>
-      array?.matchesDeclaration(`const ${arrayName} = [${constructors.join(",")}${trailing}];`));
+    const values = `[${constructors.join(",")}]`;
+    const directSelection = constructors.every((entry) => entry !== null) && (["", ","].some((trailing) =>
+      array?.matchesDeclaration(`const ${arrayName} = ${values.slice(0, -1)}${trailing}];`))
+      || ["", ","].some((trailing) =>
+        array?.matchesDeclaration(`const ${arrayName} = Object.freeze(${values.slice(0, -1)}${trailing}]);`)));
     const connected = lookup?.matchesFunction("stepId", `return ${mapName}.get(stepId) ?? null;`)
       && map?.matchesDeclaration(`const ${mapName} = new Map(${arrayName}.map((registration) => [registration.stepId, registration]));`)
       && directSelection && completeSelection;
@@ -1221,7 +1307,8 @@ export class StructureChecker {
     const contractSource = shape?.adapterModule ?? adapter?.module;
     const contractReference = module.references.find((reference) => reference.bindings.get(contractName) === contractName);
     const contractTarget = contractReference && this.#resolve(file, contractReference, [file], "A10");
-    if (contractTarget?.file !== contractSource) {
+    const localContract = contractSource === file && module.declaration(contractName) !== null;
+    if (!localContract && contractTarget?.file !== contractSource) {
       this.#diagnose("A10", file, matching[0]?.token, [file], `registration must import named ${contractName}`);
     }
     const contractDeclaration = module.declaration(matching[0]?.name ?? "");
@@ -1989,11 +2076,12 @@ export class StructureChecker {
     }
   }
 
-  #sharedExecutionSelections() {
+  #sharedExecutionSelections(coveredShapes = []) {
     const contracts = sharedExecutionAdapters;
     const required = new Set();
     for (const registration of this.scope.registrations) {
       if (!registration.ServiceClass) continue;
+      if (coveredShapes.some((shape) => shape.matches(registration.executionContract))) continue;
       const kind = this.#executionKind(registration);
       const { selector, projector, executor } = contracts.get(kind) ?? {};
       const contract = registration.executionContract;
@@ -2029,11 +2117,18 @@ export class StructureChecker {
       if (!executed) this.#diagnose("A10", adapterFile, execution?.token, [adapterFile],
         `${executor} does not pass the selected judgment to ${selectedMethod}`);
     }
-    this.#registeredDisplayRoutes(required);
-    this.#canonicalDisplayCommandRoute(required);
-    this.#registeredGateReviewExecutionRoutes(required);
-    if (required.has("worker")) this.#registeredWorkerExecutionRoutes();
-    if (required.has("worker") && this.allFiles.includes("src/flow/lib/worker-execution-admission.js")) {
+    const productRoutesAvailable = this.allFiles.includes("src/flow/lib/get-next-action.js")
+      && this.allFiles.includes("src/flow/engine/composition/registered-step-execution.js")
+      && this.allFiles.includes("src/flow/lib/run-review.js")
+      && this.allFiles.includes("src/flow/lib/run-dispatch.js");
+    if (required.size > 0 && productRoutesAvailable) {
+      this.#registeredDisplayRoutes(required);
+      this.#canonicalDisplayCommandRoute(required);
+      this.#registeredGateReviewExecutionRoutes(required);
+    }
+    if (required.has("worker") && productRoutesAvailable) this.#registeredWorkerExecutionRoutes();
+    if (required.has("worker") && productRoutesAvailable
+      && this.allFiles.includes("src/flow/lib/worker-execution-admission.js")) {
       const file = "src/flow/lib/run-dispatch.js";
       const module = this.#module(file, [file], "A10");
       if (module && module.classes.some((entry) => entry.name === "RunDispatchCommand")) {
@@ -2063,7 +2158,7 @@ export class StructureChecker {
       if (!delegates || !admissionGuard) this.#diagnose("A11", file, body?.token, [file],
         `${className}.executeCanonical bypasses registered admission`);
     }
-    this.#restrictedExecutionMethods();
+    if (required.size > 0) this.#restrictedExecutionMethods();
   }
 
   #registeredDisplayRoutes(required) {
@@ -2084,12 +2179,12 @@ export class StructureChecker {
     };
     if (required.has("worker")) {
       requireInitializer("workerRegistration",
-        'target.scope === "flow" ? draftWorkerStepRegistration(target.stepId) ?? specWorkerStepRegistration(target.stepId) : null',
+        'registeredFlowStep?.executionContract.selectorName === "selectWorkerExecutionAdmission" ? registeredFlowStep : target.scope === "flow" ? draftWorkerStepRegistration(target.stepId) ?? specWorkerStepRegistration(target.stepId) : null',
         "worker");
       const selected = requireInitializer("workerSelection",
         'workerRegistration?.executionContract.select({ ctx, stepId: target.stepId })', "worker");
       const workerDirective = requireInitializer("workerDirective",
-        'workerSelection === undefined ? null : workerRegistration.executionContract.project(workerSelection, { binding, recoveryCommand, retryRecoveryPlan: recoveryPlan, missingProducerArtifactRoute: missingRoute, })',
+        'workerSelection === undefined ? null : workerRegistration.executionContract.project(workerSelection, { stepId: workerRegistration.stepId, binding, recoveryCommand, retryRecoveryPlan: recoveryPlan, missingProducerArtifactRoute: missingRoute, })',
         "worker");
       if (selected && tokens.slice(0, selected.index).some((token) => token.value === "return")) {
         this.#diagnose("A10", file, build?.token, [file],
@@ -2173,13 +2268,13 @@ export class StructureChecker {
           "registered Review Step is absent from display routing");
       }
       requireInitializer("reviewRegistration",
-        'target.scope === "flow" ? draftStepRegistration(target.stepId) ?? specStepRegistration(target.stepId) : null',
+        'target.scope === "flow" ? target.stepId === "test-review" ? reviewStepExecutionRegistration("test") : draftStepRegistration(target.stepId) ?? specStepRegistration(target.stepId) : null',
         "review");
       requireInitializer("reviewSelection",
         'reviewStep && ["resume", "retry", "record", "blocked"].includes(descriptor.operation) ? reviewRegistration === null ? resolveCurrentReviewTransition(reviewInput) : reviewRegistration.executionContract.select(reviewInput) : { facts: null, disposition: null }',
         "review");
       const projected = requireInitializer("reviewDisposition",
-        'reviewStep && reviewRegistration !== null && ["resume", "retry", "record", "blocked"].includes(descriptor.operation) ? reviewRegistration.executionContract.project(reviewSelection) : reviewSelection.disposition',
+        'reviewStep && reviewRegistration !== null && ["resume", "retry", "record", "blocked"].includes(descriptor.operation) ? reviewRegistration.executionContract.project(reviewSelection, { ctx, scope: "flow", stepId: reviewRegistration.stepId, }) : reviewSelection.disposition',
         "review");
       if (projected && tokens.slice(0, projected.index).some((token) => token.value === "return")) {
         this.#diagnose("A10", file, build?.token, [file],
@@ -2210,7 +2305,6 @@ export class StructureChecker {
           "registered Gate selection is not consumed by canonical display routing");
       }
       const gate = module.declaration("definitionOwnedGateSelection");
-      const gateTokens = gate?.bodyTokens() ?? null;
       const phase = gate?.topLevelInitializer("phase");
       const registration = gate?.topLevelInitializer("registration");
       for (const candidate of this.scope.registrations.filter((entry) => this.#executionKind(entry) === "gate")) {
@@ -2226,30 +2320,26 @@ export class StructureChecker {
         this.#diagnose("A10", file, registration?.token ?? gate?.token, [file],
           "Gate display bypasses registered routing");
       }
-      const gateBody = `
-        const phase = target.stepId === "draft-gate" ? "draft" : target.stepId === "spec-gate"
-          ? "spec" : target.scope === "task" && target.stepId === "task-gate"
-            ? "task-impl" : target.scope === "flow" && target.stepId === "impl-gate"
-              ? "integration" : null;
-        if (phase === null) return null;
-        if (phase === "spec") {
-          const saved = ctx.flowManager.readCurrentStepSettlement({ specId: state.specId, stepId: "spec-gate", });
-          if (saved !== null) return new SavedSpecGateSelection(saved);
-        }
-        const registration = gateStepExecutionRegistration(phase);
-        if (registration !== null) {
-          const selection = registration.executionContract.select({
-            flowManager: ctx.flowManager, flowState: state, phase,
-            typedState: ctx.flowManager.canonicalState(state.specId),
-          });
-          if (phase === "spec" && selection.admission.facts !== null) {
-            throw new Error("Spec Gate publication lacks its atomic Step Result and Settlement");
-          }
-          return registration.executionContract.project(selection);
-        }
-        return resolveGateNextAction({ flowManager: ctx.flowManager, flowState: state, phase, });
-      `;
-      if (!gate?.matchesBody(gateBody)) {
+      const phaseRoute = phase?.matches(`target.stepId === "draft-gate" ? "draft" : target.stepId === "spec-gate"
+        ? "spec" : target.stepId === "test-gate" ? "test" : target.scope === "task" && target.stepId === "task-gate"
+          ? "task-impl" : target.scope === "flow" && target.stepId === "impl-gate" ? "integration" : null`);
+      const returns = gate?.returns() ?? [];
+      const selectedInput = `const selection = registration.executionContract.select({
+        flowManager: ctx.flowManager, flowState: state, phase,
+        scope: target.scope, stepId: registration.stepId,
+        typedState: ctx.flowManager.canonicalState(state.specId),
+      });`;
+      const selectedProjection = "return registration.executionContract.project(selection, { scope: target.scope, stepId: registration.stepId });";
+      const canonicalGateRoutes = registration?.matches("gateStepExecutionRegistration(phase)")
+        && gate?.containsBodySequence(selectedInput)
+        && gate?.containsBodySequence(selectedProjection)
+        && gate?.containsBodySequence('if (phase === "spec" && selection.admission.facts !== null) {')
+        && gate?.containsBodySequence('if (saved !== null) return new SavedSpecGateSelection(saved);')
+        && returns.length === 4 && returns[0]?.matches("null")
+        && returns[1]?.matches("new SavedSpecGateSelection(saved)")
+        && returns[2]?.matches("registration.executionContract.project(selection, { scope: target.scope, stepId: registration.stepId })")
+        && returns[3]?.matches("resolveGateNextAction({ flowManager: ctx.flowManager, flowState: state, phase, })");
+      if (!phaseRoute || !canonicalGateRoutes) {
         this.#diagnose("A10", file, gate?.token, [file],
           "Gate display has an unrecognized route before registered selection and projection");
       }
@@ -2261,7 +2351,8 @@ export class StructureChecker {
     const module = this.#module(file, [file], "A10", true);
     const declaration = module?.declaration("workerStepExecutionRegistration");
     if (!declaration?.matchesBody(`
-      const registration = draftWorkerStepRegistration(stepId) ?? specWorkerStepRegistration(stepId);
+      const registration = requirementTestWorkerStepRegistration(stepId) ?? draftWorkerStepRegistration(stepId)
+        ?? specWorkerStepRegistration(stepId);
       if (registration === null && registeredPhaseSteps.has(stepId)) {
         throw new Error(\`Definition leaf \${stepId} has no registered worker execution contract\`);
       }
@@ -2278,17 +2369,36 @@ export class StructureChecker {
     const dispatch = this.#module(dispatchFile, [dispatchFile], "A10");
     if (!dispatch?.classes.some((entry) => entry.name === "RunDispatchCommand")) return;
     const run = readClassMember(dispatch, "RunDispatchCommand", "runWorkerAttempt");
-    const additionalPhase = this.#registeredPhaseDispatchPrefix(dispatch, run);
-    if (additionalPhase === null || !run?.matchesBody(`
-      const stepId = invocation.action.nextAction.step;
-      ${additionalPhase ?? ""}
-      const registration = workerStepExecutionRegistration(stepId);
-      if (registration === null) return this.#executeSelectedWorker(ctx, invocation, retryFeedback, agentOverride);
-      const selection = registration.executionContract.select({ ctx, stepId });
-      return registration.executionContract.execute(selection, {
-        command: this, ctx, invocation, retryFeedback, agentOverride,
-      });
-    `)) {
+    const prepareCall = readInvocations({ tokens: run?.bodyTokens() ?? [] }).find((call) => {
+      if (call.arguments.length !== 1) return false;
+      const argument = call.arguments[0];
+      if (!new SourceInitializer(argument[0], 0, argument).matches("{ ctx, stepId, selection }")) return false;
+      if (readParameters(run.tokens).some((parameter) => parameter.some((token) => token.value === call.name))) return false;
+      return dispatch.declaration(call.name)?.matchesFunction("input", `
+        const registration = prepareStepRegistration(input.stepId);
+        if (registration === null) throw new TypeError($STRING_LITERAL);
+        const selection = input.selection;
+        return registration.executionContract.execute(selection, { ...input, registration });
+      `) === true;
+    });
+    const workerSelection = run?.topLevelInitializer("registration");
+    const prepareSelection = run?.topLevelInitializer("selectedRegistration");
+    const body = run?.bodyTokens() ?? [];
+    const selectionOverwrite = body.some((token, index) => token.value === "selection"
+      && ["=", "+=", "-=", "*=", "/=", "??="].includes(body[index + 1]?.value)
+      && body[index - 1]?.value !== "const");
+    const selectedPrepare = prepareSelection?.matches("flowStepExecutionRegistration(stepId)")
+      && run.containsBodySequence('if (selectedRegistration?.executionContract.selectorName === "selectPrepareExecutionAdmission") {')
+      && prepareCall !== undefined
+      && run.containsBodySequence(`return ${prepareCall.name}({ ctx, stepId, selection });`)
+      && !selectionOverwrite;
+    const workerExecution = workerSelection?.matches("workerStepExecutionRegistration(stepId)")
+      && run.containsBodySequence("if (registration === null) return this.#executeSelectedWorker(ctx, invocation, retryFeedback, agentOverride);")
+      && run.containsBodySequence("const selection = registration.executionContract.select({ ctx, stepId });")
+      && run.containsBodySequence(`return registration.executionContract.execute(selection, {
+        command: this, ctx, stepId, invocation, retryFeedback, agentOverride,
+      });`);
+    if (!selectedPrepare || !workerExecution || run.returns().length !== 3) {
       this.#diagnose("A10", dispatchFile, run?.token, [dispatchFile],
         "worker execution entry bypasses registered selection");
     }
@@ -2359,7 +2469,7 @@ export class StructureChecker {
     const file = "src/flow/engine/composition/registered-step-execution.js";
     const module = this.#module(file, [file], "A10", true);
     const flow = module?.declaration("flowStepExecutionRegistration");
-    if (!this.#closedRegistrationResolver(module, flow, ["draftStepRegistration", "specStepRegistration", ...this.#publicPhaseLookupNames(module)],
+    if (!this.#closedRegistrationResolver(module, flow, ["prepareStepRegistration", "draftStepRegistration", "specStepRegistration", ...this.#publicPhaseLookupNames(module)],
       "`Definition leaf ${stepId} has no registered execution contract`")) this.#diagnose("A10", file, flow?.token, [file],
       "Gate/Review registration resolver can bypass a registered Step");
     this.#closedRegistrationLookups([
@@ -2370,6 +2480,7 @@ export class StructureChecker {
       const resolver = module?.declaration("gateStepExecutionRegistration");
       if (!resolver?.matchesBody(`
         if (phase === "draft") return flowStepExecutionRegistration("draft-gate");
+        if (phase === "test") return flowStepExecutionRegistration("test-gate");
         if (phase === "spec" || phase === "task-spec") return flowStepExecutionRegistration("spec-gate");
         return null;
       `)) this.#diagnose("A10", file, resolver?.token, [file],
@@ -2425,6 +2536,7 @@ export class StructureChecker {
     if (required.has("review")) {
       const resolver = module?.declaration("reviewStepExecutionRegistration");
       if (!resolver?.matchesBody(`
+        if (phase === "test") return flowStepExecutionRegistration("test-review");
         if (phase === "draft-questions") return flowStepExecutionRegistration("draft-questions-review");
         if (phase === "draft-coverage") return flowStepExecutionRegistration("draft-coverage-review");
         if (phase === "spec") return flowStepExecutionRegistration("spec-review");
@@ -2438,7 +2550,7 @@ export class StructureChecker {
         const phase = ctx.phase || null;
         const persistedPhase = reviewPhaseKeyForCtx(ctx, phase);
         const registration = reviewStepExecutionRegistration(persistedPhase);
-        if (["draft-questions", "draft-coverage", "spec"].includes(persistedPhase)
+        if (["draft-questions", "draft-coverage", "spec", "test"].includes(persistedPhase)
           && registration?.executionContract == null) {
           throw new Error(\`Review execution contract is missing for \${persistedPhase}\`);
         }
@@ -2450,7 +2562,8 @@ export class StructureChecker {
           flowManager: ctx.flowManager, flowState: ctx.flowState, typedState,
           scope: "flow", stepId: registration.stepId,
         });
-        return registration.executionContract.execute(selection, { command: this, ctx });
+        return registration.executionContract.execute(selection, { command: this, ctx,
+          scope: "flow", stepId: registration.stepId });
       `)) this.#diagnose("A10", commandFile, entry?.token, [commandFile],
         "Review command can bypass registered selection and execution");
     }

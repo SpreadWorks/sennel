@@ -57,6 +57,7 @@ import { TaskStepIdentity } from "./task-step-identity.js";
 import { STEP_RESULT_TYPE, StepResult, stepResultDigest } from "../engine/step-result.js";
 import { DraftQuestionResumeReceipt } from "./draft-question-resume-receipt.js";
 import { DraftStepSettlementReceiptValue } from "./draft-step-settlement-receipt.js";
+import { RequirementTestSettlementReceipt } from "./requirement-test-settlement-receipt.js";
 import {
   REQUIREMENT_TEST_LEAF_IDS,
   RequirementTestInitializationEffect,
@@ -2320,20 +2321,28 @@ export class NodeResult {
     this.confirmedAt = requireIso(confirmedAt, "result.confirmedAt");
     if (!Array.isArray(artifactRefs)) throw new CurrentFlowStateInvariantError("result.artifactRefs must be an array");
     this.artifactRefs = Object.freeze(artifactRefs.map((ref) => ref instanceof ArtifactReference ? ref : new ArtifactReference(ref)));
-    this.draftSettlementReceipt = draftSettlementReceipt === undefined
-      ? null : new PersistedDraftSettlementReceipt(draftSettlementReceipt);
+    const receiptStepId = draftSettlementReceipt?.binding?.stepId ?? null;
     this.stepResult = stepResult === undefined
       ? null
       : stepResult instanceof StepResult
         ? stepResult
-        : StepResult.fromStored(this.draftSettlementReceipt?.binding.stepId, stepResult);
-    if ((this.stepResult === null) !== (this.draftSettlementReceipt === null)
+        : StepResult.fromStored(receiptStepId, stepResult);
+    this.draftSettlementReceipt = draftSettlementReceipt === undefined
+      ? null
+      : REQUIREMENT_TEST_LEAF_IDS.includes(receiptStepId) || receiptStepId === "approval"
+        ? RequirementTestSettlementReceipt.fromJSON(
+          draftSettlementReceipt instanceof RequirementTestSettlementReceipt
+            ? draftSettlementReceipt.toJSON() : draftSettlementReceipt,
+          { result: this.stepResult },
+        )
+        : new PersistedDraftSettlementReceipt(draftSettlementReceipt);
+    const receipt = this.draftSettlementReceipt;
+    if ((this.stepResult === null) !== (receipt === null)
       || (this.stepResult !== null
-        && (this.stepResult.stepId !== this.draftSettlementReceipt.binding.stepId
-          || this.stepResult.kind !== this.draftSettlementReceipt.resultKind
-          || this.stepResult.type !== this.draftSettlementReceipt.resultType
-          || stepResultDigest(this.stepResult)
-            !== this.draftSettlementReceipt.resultDigest))) {
+        && (this.stepResult.stepId !== receipt.binding.stepId
+          || this.stepResult.kind !== receipt.resultKind
+          || this.stepResult.type !== receipt.resultType
+          || stepResultDigest(this.stepResult) !== receipt.resultDigest))) {
       throw new CurrentFlowStateInvariantError("Draft StepResult and Settlement receipt are inconsistent");
     }
     if (new Set(this.artifactRefs.map((ref) => ref.kind)).size !== this.artifactRefs.length) {
@@ -4116,7 +4125,10 @@ export class CurrentArtifactAuthority {
   }
 }
 
-function assertLeafLifecycle(node, { allowsUnexecutedHistoricalSkip = () => false } = {}) {
+function assertLeafLifecycle(node, {
+  allowsUnexecutedHistoricalSkip = () => false,
+  allowsUnexecutedRequirementTestSkip = () => false,
+} = {}) {
   if (node.status === "pending" && node.attemptSequence !== 0) {
     throw new CurrentFlowStateInvariantError(`pending leaf must have a zero Attempt sequence cursor: ${node.id}`);
   }
@@ -4126,6 +4138,14 @@ function assertLeafLifecycle(node, { allowsUnexecutedHistoricalSkip = () => fals
     throw new CurrentFlowStateInvariantError(`historical unexecuted skip must be skipped with no Attempt or result: ${node.id}`);
   }
   if (unexecutedHistoricalSkip) return;
+  const unexecutedRequirementTestSkip = allowsUnexecutedRequirementTestSkip(node);
+  if (unexecutedRequirementTestSkip
+    && (node.status !== "skipped" || node.attemptSequence !== 0
+      || node.result?.outcome !== "skipped"
+      || node.result.summary !== "approved Spec has no testable Requirements")) {
+    throw new CurrentFlowStateInvariantError(`unexecuted Requirement test skip is invalid: ${node.id}`);
+  }
+  if (unexecutedRequirementTestSkip) return;
   if (TERMINAL_NODE_STATUSES.has(node.status) && node.attemptSequence === 0 && !unexecutedHistoricalSkip) {
     throw new CurrentFlowStateInvariantError(`terminal leaf requires an Attempt sequence cursor: ${node.id}`);
   }
@@ -4511,7 +4531,16 @@ export class CurrentFlowState {
   /** Shared current-state invariants for fresh and resumed historical Flows. */
   #assertDefinitionCurrent() {
     this.#assertDefinitionStateShapeAndStatuses();
-    assertNodeLifecycle(this.root);
+    const noTestableRequirementSkips = REQUIREMENT_TEST_LEAF_IDS.every((stepId) => {
+      const leaf = findNodeInRoot(this.root, stepId);
+      return leaf?.status === "skipped" && leaf.attemptSequence === 0
+        && leaf.result?.outcome === "skipped"
+        && leaf.result.summary === "approved Spec has no testable Requirements";
+    });
+    assertNodeLifecycle(this.root, {
+      allowsUnexecutedRequirementTestSkip: (leaf) => noTestableRequirementSkips
+        && REQUIREMENT_TEST_LEAF_IDS.includes(leaf.id),
+    });
     this.#assertDefinitionExecutionCurrent();
   }
 
@@ -5444,7 +5473,7 @@ export class CurrentFlowState {
   }
 
   /** Confirm approval, skip an empty test lifecycle when needed, and claim its selected target. */
-  initializeRequirementTestLifecycle({ result, decision, targetAttempt }) {
+  initializeRequirementTestLifecycle({ result, decision, targetAttempt, approvalTasks = [], priorActivities = [] }) {
     this.assertAttemptConfirmable();
     if (this.current?.at(-1) !== "approval" || this.attempt === null) {
       throw new CurrentFlowStateInvariantError("Requirement test initialization requires the active approval Attempt");
@@ -5456,10 +5485,14 @@ export class CurrentFlowState {
     if (completed.outcome !== "passed") {
       throw new CurrentFlowStateInvariantError("Requirement test initialization requires a passed approval result");
     }
+    let source = this;
+    for (const task of approvalTasks) {
+      source = source.admitApprovalTask(task, { priorActivities });
+    }
     let root = replaceNode(
-      this.root,
+      source.root,
       "approval",
-      transitionNode(this.findNode("approval"), "done", this.definition, { result: completed }),
+      transitionNode(source.findNode("approval"), "done", source.definition, { result: completed }),
     );
     for (const stepId of initialization.skippedLeafIds) {
       const node = findNodeInRoot(root, stepId);
@@ -5468,7 +5501,7 @@ export class CurrentFlowState {
       }
       root = replaceNode(root, stepId, node.with({
         status: "skipped",
-        attemptSequence: node.attemptSequence + 1,
+        attemptSequence: node.attemptSequence,
         result: new NodeResult({
           outcome: "skipped",
           summary: "approved Spec has no testable Requirements",
@@ -5477,8 +5510,8 @@ export class CurrentFlowState {
         }),
       }));
     }
-    root = reconcileCompletedParents(root, this.definition);
-    const next = this.#replaceRoot(root, null, null);
+    root = reconcileCompletedParents(root, source.definition);
+    const next = source.#replaceRoot(root, null, null);
     const selected = next.definition.nextExecutableLeaf(next.root);
     if (selected?.id !== initialization.target) {
       throw new CurrentFlowStateInvariantError("Requirement test initialization did not expose its selected target");
@@ -7023,16 +7056,16 @@ export class ActivityGateTaskLifecycle {
 const ACTIVITY_TRANSITION_FIELDS = new Set([
   "operation", "nodeId", "task", "attempt", "status", "policy", "outbox", "approval",
   "nonblocking", "finalizeSteps", "gateTaskLifecycle", "stepConnectionReceipt", "taskReviewStagePlan",
-  "requirementTestInitialization", "requirementTestLifecycle", "draftResumeReceipt",
+  "requirementTestInitialization", "requirementTestLifecycle", "draftResumeReceipt", "approvalTasks",
 ]);
 
 export class ActivityTransition {
   constructor(value) {
-    const normalized = isPlainObject(value) && (!Object.hasOwn(value, "finalizeSteps") || !Object.hasOwn(value, "gateTaskLifecycle") || !Object.hasOwn(value, "stepConnectionReceipt") || !Object.hasOwn(value, "taskReviewStagePlan") || !Object.hasOwn(value, "requirementTestInitialization") || !Object.hasOwn(value, "requirementTestLifecycle") || !Object.hasOwn(value, "draftResumeReceipt"))
-      ? { ...value, finalizeSteps: value.finalizeSteps ?? null, gateTaskLifecycle: value.gateTaskLifecycle ?? null, stepConnectionReceipt: value.stepConnectionReceipt ?? null, taskReviewStagePlan: value.taskReviewStagePlan ?? null, requirementTestInitialization: value.requirementTestInitialization ?? null, requirementTestLifecycle: value.requirementTestLifecycle ?? null, draftResumeReceipt: value.draftResumeReceipt ?? null }
+    const normalized = isPlainObject(value) && (!Object.hasOwn(value, "finalizeSteps") || !Object.hasOwn(value, "gateTaskLifecycle") || !Object.hasOwn(value, "stepConnectionReceipt") || !Object.hasOwn(value, "taskReviewStagePlan") || !Object.hasOwn(value, "requirementTestInitialization") || !Object.hasOwn(value, "requirementTestLifecycle") || !Object.hasOwn(value, "draftResumeReceipt") || !Object.hasOwn(value, "approvalTasks"))
+      ? { ...value, finalizeSteps: value.finalizeSteps ?? null, gateTaskLifecycle: value.gateTaskLifecycle ?? null, stepConnectionReceipt: value.stepConnectionReceipt ?? null, taskReviewStagePlan: value.taskReviewStagePlan ?? null, requirementTestInitialization: value.requirementTestInitialization ?? null, requirementTestLifecycle: value.requirementTestLifecycle ?? null, draftResumeReceipt: value.draftResumeReceipt ?? null, approvalTasks: value.approvalTasks ?? [] }
       : value;
     requireExactFields(normalized, ACTIVITY_TRANSITION_FIELDS, "activity.transition");
-    const { operation, nodeId, task, attempt, status, policy, outbox, approval, nonblocking, finalizeSteps, gateTaskLifecycle, stepConnectionReceipt, taskReviewStagePlan, requirementTestInitialization, requirementTestLifecycle, draftResumeReceipt } = normalized;
+    const { operation, nodeId, task, attempt, status, policy, outbox, approval, nonblocking, finalizeSteps, gateTaskLifecycle, stepConnectionReceipt, taskReviewStagePlan, requirementTestInitialization, requirementTestLifecycle, draftResumeReceipt, approvalTasks } = normalized;
     if (![FLOW_CREATION_TRANSITION_OPERATION, DRAFT_COMPLETION_TRANSITION_OPERATION, DRAFT_STEP_SETTLEMENT_TRANSITION_OPERATION, CONDITIONAL_WORKER_SETTLEMENT_OPERATION, TASK_REVIEW_STAGE_TRANSITION_OPERATION, REQUIREMENT_TEST_INITIALIZATION_OPERATION, REQUIREMENT_TEST_TRANSITION_OPERATION, "advance_task_review_stage", "add_task", "add_approval_task", "start_attempt", "retry_attempt", "retry_gate_attempt", "settle_spec_gate_retry", "settle_spec_gate_recovered", "retry_recovery_attempt", "update_attempt", TASK_GATE_CLASSIFICATION_RECOVERY_OPERATION, DRAFT_WORKER_RECOVERY_OPERATION, "fail_attempt", "record_failure", "confirm_attempt", "complete_acceptance_decision_noop", "rewind", "rewind_test_evidence", "repair_implementation", "triage_implementation_for_repair", "triage_implementation_no_repair", "repair_acceptance_review", "reopen_draft_preimplementation", "reopen_draft_task_addition", "reopen_draft_spec_correction", "plan_gate_repair", "recover_attempt", "recover_missing_producer_artifact", "recover_task_execution_overrun", "accept_final_regression_failure", "defer_failed_review", "defer_failed_gate", INTERRUPTED_FINALIZE_SYNC_OPERATION, ...LIFECYCLE_TRANSITION_OPERATIONS, ...POLICY_TRANSITION_OPERATIONS, ...OUTBOX_TRANSITION_OPERATIONS, ...ARTIFACT_PUBLICATION_TRANSITION_OPERATIONS, ...DISPATCH_APPROVAL_TRANSITION_OPERATIONS, ...OBSERVATION_TRANSITION_OPERATIONS, ...NONBLOCKING_TRANSITION_OPERATIONS, ...FINALIZE_DOWNSTREAM_TRANSITION_OPERATIONS].includes(operation)) {
       throw new CurrentFlowStateInvariantError(`activity.transition.operation is invalid: ${operation}`);
     }
@@ -7072,6 +7105,13 @@ export class ActivityTransition {
     if (this.draftResumeReceipt !== null
       && (operation !== "publish_artifacts" || nodeId !== "draft-refine")) {
       throw new CurrentFlowStateInvariantError("Draft resume receipts belong only to draft-refine artifact publication");
+    }
+    if (!Array.isArray(approvalTasks)) throw new CurrentFlowStateInvariantError("approval Tasks must be an array");
+    this.approvalTasks = Object.freeze(approvalTasks.map((entry) => entry instanceof ActivityTask ? entry : new ActivityTask(entry)));
+    if ((operation !== REQUIREMENT_TEST_INITIALIZATION_OPERATION && this.approvalTasks.length !== 0)
+      || this.approvalTasks.some((entry) => entry.approvalSource === null)
+      || new Set(this.approvalTasks.map((entry) => entry.id)).size !== this.approvalTasks.length) {
+      throw new CurrentFlowStateInvariantError("only approval initialization may carry unique source-bound approval Tasks");
     }
     const taskRequired = ["add_task", "add_approval_task"].includes(operation);
     if (taskRequired !== (this.task !== null)) {
@@ -7237,10 +7277,16 @@ export class ActivityTransition {
         && receipt.binding.attemptId === draftReceipt.binding.attemptId
         && receipt.binding.attemptSequence === draftReceipt.binding.attemptSequence
       ));
-      const resumeReceipts = priorActivities.map((entry) => entry.transition?.draftResumeReceipt)
-        .filter((receipt) => receipt?.binding.attemptId === draftReceipt.binding.attemptId
-          && receipt.binding.attemptSequence === draftReceipt.binding.attemptSequence);
-      assertDraftSettlementReceiptTransition(priorReceipts, draftReceipt, { resumeReceipts });
+      if (draftReceipt instanceof RequirementTestSettlementReceipt) {
+        if (priorReceipts.some((entry) => entry.id === draftReceipt.id)) {
+          throw new CurrentFlowStateConflictError("Requirement test settlement receipt was already recorded");
+        }
+      } else {
+        const resumeReceipts = priorActivities.map((entry) => entry.transition?.draftResumeReceipt)
+          .filter((receipt) => receipt?.binding.attemptId === draftReceipt.binding.attemptId
+            && receipt.binding.attemptSequence === draftReceipt.binding.attemptSequence);
+        assertDraftSettlementReceiptTransition(priorReceipts, draftReceipt, { resumeReceipts });
+      }
     }
     const resumeReceipt = this.draftResumeReceipt;
     if (resumeReceipt !== null) {
@@ -7554,9 +7600,13 @@ export class ActivityTransition {
     }
     if (this.operation === DRAFT_STEP_SETTLEMENT_TRANSITION_OPERATION) {
       const receipt = activity.result?.draftSettlementReceipt;
-      if (receipt === null || receipt === undefined
+      const requirementTest = receipt instanceof RequirementTestSettlementReceipt
+        && (receipt.binding.stepId === "approval" || REQUIREMENT_TEST_LEAF_IDS.includes(receipt.binding.stepId));
+      const draft = receipt instanceof PersistedDraftSettlementReceipt;
+      if ((!requirementTest && !draft)
         || !["execution", "await"].includes(receipt.settlementKind)
         || state.current?.at(-1) !== targetId
+        || receipt.binding.stepId !== targetId
         || activity.attemptId !== state.attempt?.id
         || activity.sequence !== state.attempt?.sequence
         || receipt.binding.attemptId !== state.attempt.id
@@ -7598,6 +7648,8 @@ export class ActivityTransition {
         result: activity.result,
         decision: this.requirementTestInitialization,
         targetAttempt: this.attempt,
+        approvalTasks: this.approvalTasks,
+        priorActivities,
       });
     }
     if (this.operation === REQUIREMENT_TEST_TRANSITION_OPERATION) {
@@ -7661,6 +7713,7 @@ export class ActivityTransition {
       requirementTestInitialization: this.requirementTestInitialization?.toJSON() ?? null,
       requirementTestLifecycle: this.requirementTestLifecycle?.toJSON() ?? null,
       draftResumeReceipt: this.draftResumeReceipt?.toJSON() ?? null,
+      approvalTasks: this.approvalTasks.map((entry) => entry.toJSON()),
     };
   }
 }
@@ -9603,6 +9656,10 @@ export class CurrentFlowVersionStore {
     if (approvalTaskAddition) {
       admission.assertTask({ task: activity.transition.task, taskSpec: input?.taskSpec });
     }
+    if (activity.transition.operation === REQUIREMENT_TEST_INITIALIZATION_OPERATION
+      && activity.transition.approvalTasks.length > 0 && admission === null) {
+      throw new CurrentFlowStateInvariantError("atomic approval Task initialization requires typed admission");
+    }
     const taskAddition = ["add_task", "add_approval_task"].includes(activity.transition.operation);
     if (taskAddition) this.#assertPersistedIdentity(this.#store().load());
     const taskSpec = taskAddition
@@ -9707,6 +9764,7 @@ export class CurrentFlowVersionStore {
       },
       write: () => {
         if (taskSpec !== null) this.#materializeTaskWorkspace(activity.transition.task);
+        for (const task of activity.transition.approvalTasks) this.#materializeTaskWorkspace(task);
         const result = this.#store().apply({
           ...input,
           activity,

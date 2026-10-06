@@ -7,5 +7,7 @@ export class StepAdmissionRefusal extends Error {
 }
 
 export function isStepAdmissionRefusal(error) {
-  return error instanceof StepAdmissionRefusal || error?.data?.failureKind === "step-admission";
+  return error instanceof StepAdmissionRefusal
+    || error?.data?.failureKind === "step-admission"
+    || error?.isAdmissionRejection === true;
 }

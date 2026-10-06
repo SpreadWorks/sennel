@@ -48,8 +48,19 @@ export class StepRegistration {
     Object.freeze(this);
   }
 
-  async create(input) {
-    const args = await this.prepareServiceArguments(input, this.ConnectorClass, this.stepId);
+  create(input) {
+    const args = this.#prepare(input);
+    if (args !== null && typeof args?.then === "function") {
+      return Promise.resolve(args).then((prepared) => this.#create(prepared));
+    }
+    return this.#create(args);
+  }
+
+  #prepare(input) {
+    return this.prepareServiceArguments(input, this.ConnectorClass, this.stepId);
+  }
+
+  #create(args) {
     if (args instanceof PreparedStepReplay) return args.outcome;
     const types = this.ServiceClass.argumentTypes;
     if (!Array.isArray(args) || !Array.isArray(types) || args.length !== types.length

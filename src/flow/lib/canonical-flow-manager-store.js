@@ -16,6 +16,7 @@ import { DraftWorkerExecutionStepBinding } from "../engine/connectors/draft/draf
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import { DraftGateRepairSelection } from "../steps/draft/draft-gate-repair-selection.js";
 import {
   buildCurrentFlowDefinition,
@@ -40,12 +41,14 @@ import {
   resolveTaskReviewStageCompletion,
   TaskNoChangeContinuationFacts, selectTaskNoChangeContinuation,
   initializeRequirementTestLifecycle,
+  RequirementTestInitializationEffect,
   RequirementTestLifecycleFacts,
   RequirementTestStructuralRejectionObservation,
   RequirementTestStepObservation,
   resolveRequirementTestLifecycle,
   StepErrorDecision,
   DraftAwaitUserDecision,
+  RequirementTestAwaitDecision,
   SpecGateAwaitDecision,
   StepRoute,
   DraftExecutionSettlement,
@@ -66,9 +69,11 @@ import {
   SpecNextRoute,
   settlePrepareStepResult,
   settleSpecStepResult,
+  settleRequirementTestStepResult,
   specGateNonblockingEligibilityForResult,
   STEP_RESULT_ERROR_CATEGORY,
 } from "../definition.js";
+import { RequirementTestSettlementReceipt } from "./requirement-test-settlement-receipt.js";
 import {
   BranchPreparedResult,
   BranchNotRequiredResult,
@@ -98,7 +103,19 @@ import {
   TaskSpecGateAwaitingDecisionResult,
   TaskSpecGateRecoveredResult,
   STEP_RESULT_TYPE,
+  RequirementTestResultBinding,
+  RequirementTestResultFrontier,
+  ApprovalConfirmedWithTestsResult,
+  ApprovalConfirmedWithoutTestsResult,
+  ApprovalAwaitingUserResult,
+  ApprovalResultEvidence,
+  RequirementTestResultPublication,
+  RequirementTestRetryState,
+  RequirementTestReviewEvidence,
+  RequirementTestGateEvidence,
+  RequirementTestExternalBlockedError,
   StepResult,
+  StepErrorResult,
   stepResultDigest,
 } from "../engine/step-result.js";
 import { SpecReviewSettlementApplication } from "./spec-step-connection.js";
@@ -106,6 +123,7 @@ import { DraftReopenContext } from "./draft-reopen-context.js";
 import { AtomicFile } from "../../lib/atomic-file.js";
 import { normalizeAgentMetricDimension } from "../../lib/agent-metrics.js";
 import { managedDir } from "../../lib/config.js";
+import { validateSpecJsonObject } from "../../lib/spec-json.js";
 import {
   FLOW_ARTIFACT_CONTRACTS,
   FlowArtifactAttemptHistory,
@@ -142,6 +160,7 @@ import {
   CanonicalTransitionView,
   assertDraftSettlementReceiptTransition,
   ApprovalTaskAdmission,
+  ActivityTask,
   FlowActivity,
   TaskNode,
 } from "./current-flow-state.js";
@@ -183,6 +202,8 @@ import { sameNonGateTransitionDecision } from "./non-gate-transition-application
 import { readTestChainTransitionFactsFromSnapshot, TestChainTransitionSnapshot } from "./test-chain-transition-facts.js";
 import { CanonicalOverviewUpdate } from "./canonical-overview-update.js";
 import { CanonicalSpecApproval } from "./canonical-spec-approval.js";
+import { RequirementTestPlan, RequirementTestPlanPublication, RequirementTestSourceAttempt } from "./requirement-test-lifecycle.js";
+import { SpecRevisionIdentity } from "./spec-revision-identity.js";
 import {
   RequirementTestCandidateBundle,
   RequirementTestDeferredReceipt,
@@ -224,7 +245,7 @@ import { SpecGateRepairSelection } from "./spec-gate-repair-worker-facts.js";
 import { SpecReviewWorkerSelection } from "./spec-review-worker-facts.js";
 import { ExternalBlockedOutcome, StepAttempt } from "./step-outcome.js";
 import { CanonicalSpecReview } from "./spec-review-artifacts.js";
-import { TaskCollection } from "../../spec/lib/render-contract.js";
+import { TaskCollection } from "../../spec/lib/task-values.js";
 import { SourceMutationPublicationAdmission } from "./source-mutation-publication-admission.js";
 import {
   CanonicalSourceHandoffCheckpoint,
@@ -376,6 +397,73 @@ function canonicalArtifactWriteIdentity(value) {
   };
 }
 
+function requirementSettlementRequestDigest({ binding, stepResult, settlement, approval = null,
+  plan = null, specRecordPublication = null, expectedSpecDigest = null, commandResult = null,
+  selectedActivityId = null, result = null, references = undefined, artifactWrites = [],
+  artifactRemovals = [], artifactBaselines = [], deferredReceipt = null,
+  findingsPublication = null } = {}) {
+  const valueJSON = (value) => {
+    if (value === undefined) return { undefined: true };
+    if (value === null || typeof value !== "object") return value;
+    try { return JSON.parse(JSON.stringify(value.toJSON?.() ?? value)); }
+    catch (error) { throw new CurrentFlowStateInvariantError(`Requirement settlement request must be JSON-serializable: ${error.message}`); }
+  };
+  const command = (() => {
+    if (commandResult === null || commandResult === undefined) return null;
+    const target = attemptHistoryTargetForNode(binding.stepId);
+    return {
+      attemptHistory: target === null ? null : {
+        logicalKey: target.logicalKey,
+        parameters: target.parameters,
+        payload: commandResultPayload(commandResult, binding.stepId, target.logicalKey),
+      },
+      publications: attachedCanonicalCommandResultPublications(commandResult)
+        .map((publication) => publication.toJSON()),
+    };
+  })();
+  const common = {
+    binding: {
+      runId: binding.runId,
+      specId: binding.specId,
+      stepId: binding.stepId,
+      attemptId: binding.attempt.id,
+      attemptSequence: binding.attempt.sequence,
+    },
+    resultDigest: stepResultDigest(stepResult),
+    settlement: valueJSON(settlement),
+  };
+  const identity = binding.stepId === "approval"
+    ? { kind: "approval", ...common, approval: valueJSON(approval),
+      plan: valueJSON(plan), specRecordPublication: valueJSON(specRecordPublication),
+      expectedSpecDigest }
+    : {
+      kind: "requirement-test",
+      ...common,
+      command,
+      selectedActivityId,
+      result: valueJSON(result),
+      references: valueJSON(references),
+      artifactWrites: artifactWrites.map(canonicalArtifactWriteIdentity),
+      artifactRemovals: artifactRemovals.map((value) => {
+        const removal = CanonicalFlowArtifactRemoval.from(value);
+        return { logicalKey: removal.artifact.logicalKey, relativePath: removal.artifact.relativePath };
+      }),
+      artifactBaselines: artifactBaselines.map((value) => {
+        const baseline = CanonicalFlowArtifactBaseline.from(value);
+        return { logicalKey: baseline.artifact.logicalKey, relativePath: baseline.artifact.relativePath,
+          digest: baseline.digest, byteLength: baseline.byteLength };
+      }),
+      deferredReceipt: valueJSON(deferredReceipt),
+      findingsPublication: findingsPublication === null ? null : {
+        artifact: valueJSON(findingsPublication.artifact),
+        deferred: findingsPublication.deferred.map(valueJSON),
+        changed: findingsPublication.changed,
+        baseline: valueJSON(findingsPublication.baseline),
+      },
+    };
+  return crypto.createHash("sha256").update(JSON.stringify(identity)).digest("hex");
+}
+
 function timestampAfter(value) {
   const timestamp = Date.parse(value);
   if (!Number.isFinite(timestamp)) throw new CurrentFlowStateInvariantError("recovery timestamp source is invalid");
@@ -495,6 +583,30 @@ class TestChainPlanAdmission {
 
 /** One catalog slot observed before a Requirement lifecycle publication. */
 class RequirementTestPublicationIdentity {
+  static fromCandidateRead(candidateRead) {
+    if (candidateRead === null) return [];
+    const bundle = candidateRead.candidate.bundle;
+    return [
+      new RequirementTestPublicationIdentity({
+        logicalKey: "test.requirement.candidate.bundle",
+        parameters: { requirementId: bundle.requirementId, bundleRevision: String(bundle.revision) },
+        descriptor: candidateRead.descriptor,
+      }),
+      ...candidateRead.sources.map((source) => new RequirementTestPublicationIdentity({
+        logicalKey: "test.requirement.candidate.source",
+        parameters: { requirementId: bundle.requirementId, bundleRevision: String(bundle.revision),
+          testPath: source.targetRelativePath.slice("tests/".length) },
+        descriptor: source.descriptor,
+      })),
+      ...candidateRead.support.map((source) => new RequirementTestPublicationIdentity({
+        logicalKey: "test.requirement.support",
+        parameters: { ownerRequirementId: source.support.ownerRequirementId,
+          supportPath: source.support.supportPath.slice("tests/".length), supportDigest: source.support.digest },
+        descriptor: source.descriptor,
+      })),
+    ];
+  }
+
   constructor({ logicalKey, parameters = {}, descriptor = null, pendingBytes = null } = {}) {
     this.artifact = FLOW_ARTIFACT_CONTRACTS.resolve(logicalKey, parameters);
     if (descriptor !== null && (descriptor.logicalKey !== this.artifact.logicalKey
@@ -583,6 +695,37 @@ function exactRequirementTestWrite(artifactWrites, logicalKey, parameters = {}) 
   return matches[0];
 }
 
+function assertRequirementTestEvidencePublication({ artifactWrites, publication, logicalKey, activityId: selectedActivityId, parameters = {} } = {}) {
+  if (!(publication instanceof RequirementTestResultPublication)
+    || typeof selectedActivityId !== "string" || selectedActivityId.trim() === "") {
+    throw new CurrentFlowStateInvariantError("Requirement test evidence publication requires its selected Activity identity");
+  }
+  const expectedArtifact = logicalKey === "review.evidence"
+    ? FLOW_ARTIFACT_CONTRACTS.reviewEvidence(parameters)
+    : FLOW_ARTIFACT_CONTRACTS.resolve(logicalKey, parameters);
+  const writes = artifactWrites.filter((write) => {
+    if (write.logicalKey !== logicalKey || !Buffer.isBuffer(write.bytes)) return false;
+    const artifact = logicalKey === "review.evidence"
+      ? FLOW_ARTIFACT_CONTRACTS.reviewEvidence({ reviewStep: write.reviewStep, digest: write.digest })
+      : FLOW_ARTIFACT_CONTRACTS.resolve(write.logicalKey, write.parameters ?? {});
+    return artifact.relativePath === expectedArtifact.relativePath;
+  });
+  if (writes.length !== 1) {
+    throw new CurrentFlowStateInvariantError(`Requirement test Result requires one exact ${expectedArtifact.relativePath} publication`);
+  }
+  const write = writes[0];
+  const expected = new RequirementTestResultPublication({
+    logicalKey,
+    relativePath: expectedArtifact.relativePath,
+    hash: crypto.createHash("sha256").update(write.bytes).digest("hex"),
+    size: write.bytes.length,
+    activityId: selectedActivityId,
+  });
+  if (JSON.stringify(publication.toJSON()) !== JSON.stringify(expected.toJSON())) {
+    throw new CurrentFlowStateInvariantError(`Requirement test Result ${logicalKey} identity does not match its exact publication`);
+  }
+}
+
 function sameRequirementTestObservation(left, right) {
   const normalized = (value) => {
     if (value instanceof RequirementTestCandidateBundle) return value.toJSON();
@@ -600,7 +743,7 @@ function sameRequirementTestObservation(left, right) {
   return JSON.stringify(normalized(left)) === JSON.stringify(normalized(right));
 }
 
-function requirementTestToolingFailureFinding({ nodeId, workItem, candidate, attempt, reason } = {}) {
+export function requirementTestToolingFailureFinding({ nodeId, workItem, candidate, attempt, reason } = {}) {
   const content = {
     findingId: `${nodeId}:${workItem.requirementId}:tooling:${attempt.sequence}`,
     requirementId: workItem.requirementId,
@@ -664,39 +807,7 @@ class RequirementTestLifecycleAdmission {
       throw new CurrentFlowStateConflictError("Requirement test plan changed after Definition selected its decision");
     }
     const catalog = manager.artifactCatalog(state.specId);
-    const candidateIdentities = [];
-    if (currentCandidateRead !== null) {
-      candidateIdentities.push(new RequirementTestPublicationIdentity({
-        logicalKey: "test.requirement.candidate.bundle",
-        parameters: {
-          requirementId: currentCandidateRead.candidate.bundle.requirementId,
-          bundleRevision: String(currentCandidateRead.candidate.bundle.revision),
-        },
-        descriptor: currentCandidateRead.descriptor,
-      }));
-      for (const source of currentCandidateRead.sources) {
-        candidateIdentities.push(new RequirementTestPublicationIdentity({
-          logicalKey: "test.requirement.candidate.source",
-          parameters: {
-            requirementId: currentCandidateRead.candidate.bundle.requirementId,
-            bundleRevision: String(currentCandidateRead.candidate.bundle.revision),
-            testPath: source.targetRelativePath.slice("tests/".length),
-          },
-          descriptor: source.descriptor,
-        }));
-      }
-      for (const source of currentCandidateRead.support) {
-        candidateIdentities.push(new RequirementTestPublicationIdentity({
-          logicalKey: "test.requirement.support",
-          parameters: {
-            ownerRequirementId: source.support.ownerRequirementId,
-            supportPath: source.support.supportPath.slice("tests/".length),
-            supportDigest: source.support.digest,
-          },
-          descriptor: source.descriptor,
-        }));
-      }
-    }
+    const candidateIdentities = RequirementTestPublicationIdentity.fromCandidateRead(currentCandidateRead);
     let observation = facts.observation;
     if (new Set(["test-generate", "test-repair"]).has(authority.leaf)
       && (observation instanceof RequirementTestCandidateBundle
@@ -850,6 +961,298 @@ class RequirementTestLifecycleAdmission {
       throw new CurrentFlowStateConflictError("Requirement test Definition decision changed before settlement");
     }
   }
+}
+
+/** Recheck every Approval Result against its acquired Spec, Review and active Attempt. */
+class ApprovalResultAdmission {
+  constructor({ manager, state, evidence, sourcePublication, stepResult, settlement } = {}) {
+    if (!(evidence instanceof ApprovalResultEvidence)
+      || !(sourcePublication instanceof RequirementTestResultPublication)
+      || sourcePublication.logicalKey !== "spec.record"
+      || !(stepResult instanceof StepResult) || stepResult.stepId !== "approval"
+      || stepResult.evidence !== evidence || settlement?.sourceStepId !== "approval"
+      || settlement.resultKind !== stepResult.kind || settlement.resultType !== stepResult.type) {
+      throw new CurrentFlowStateInvariantError("Approval admission requires its exact typed Result, Settlement and Spec publication");
+    }
+    this.runId = state.runId;
+    this.specId = state.specId;
+    this.attemptId = state.attempt?.id ?? null;
+    this.attemptSequence = state.attempt?.sequence ?? null;
+    this.evidence = evidence;
+    this.sourcePublication = sourcePublication;
+    this.stepResult = stepResult;
+    this.settlement = settlement;
+    this.reviewIdentity = new RequirementTestPublicationIdentity({
+      logicalKey: "spec.review", parameters: { revision: evidence.specRevision.revision.toString() },
+      descriptor: catalogDescriptor(manager, state.specId, "spec.review", {
+        revision: evidence.specRevision.revision.toString(),
+      }),
+    });
+    Object.freeze(this);
+  }
+
+  assert(view) {
+    const { state, catalog } = view;
+    if (state.runId !== this.runId || state.specId !== this.specId
+      || state.current?.at(-1) !== "approval" || state.attempt?.id !== this.attemptId
+      || state.attempt?.sequence !== this.attemptSequence
+      || this.evidence.runId !== this.runId || this.evidence.specId !== this.specId
+      || this.evidence.attempt.id !== this.attemptId || this.evidence.attempt.sequence !== this.attemptSequence
+      || this.stepResult.evidence !== this.evidence
+      || this.settlement.sourceStepId !== "approval") {
+      throw new CurrentFlowStateConflictError("Approval Result no longer matches its source Attempt");
+    }
+    const descriptors = Array.isArray(catalog) ? catalog : catalog.artifacts;
+    const source = descriptors.find((entry) => entry.relativePath === this.sourcePublication.relativePath) ?? null;
+    if (source === null || !isDeepStrictEqual(RequirementTestResultPublication.fromDescriptor(source).toJSON(), this.sourcePublication.toJSON())) {
+      throw new CurrentFlowStateConflictError("canonical Spec publication changed after Approval selection");
+    }
+    const sourceDocument = JSON.parse(view.readCatalogedArtifact(source).toString("utf8"));
+    if (this.stepResult instanceof ApprovalAwaitingUserResult
+      && (this.evidence.approved || sourceDocument.user_approval?.approved === true)) {
+      throw new CurrentFlowStateConflictError("Approval wait cannot remain selected after the Spec is approved");
+    }
+    const reviewRevision = this.evidence.specRevision;
+    const revision = reviewRevision.revision.toString();
+    const snapshotPath = FLOW_ARTIFACT_CONTRACTS.resolve("spec.snapshot", { revision }).relativePath;
+    const reviewPath = FLOW_ARTIFACT_CONTRACTS.resolve("spec.review", { revision }).relativePath;
+    const snapshot = descriptors.find((entry) => entry.relativePath === snapshotPath) ?? null;
+    const review = descriptors.find((entry) => entry.relativePath === reviewPath) ?? null;
+    this.reviewIdentity.assert(catalog);
+    if (snapshot === null || snapshot.hash !== reviewRevision.digest || snapshot.size !== reviewRevision.byteLength
+      || review === null || !new CanonicalSpecReview(JSON.parse(view.readCatalogedArtifact(review).toString("utf8")))
+        .identity.equals(reviewRevision)) {
+      throw new CurrentFlowStateConflictError("canonical Spec Review revision changed after Approval selection");
+    }
+    view.readCatalogedArtifact(snapshot);
+    return sourceDocument;
+  }
+}
+
+/** Recheck atomic Approval, Task admission, and initial-plan inputs under the publication lock. */
+class ApprovalInitializationAdmission {
+  constructor({ manager, state, sourcePublication, approval, evidence, plan, effect, specRecord, taskAdmissions, approvalTasks, result, settlement, artifactWrites } = {}) {
+    if (!(sourcePublication instanceof RequirementTestResultPublication)
+      || !(approval instanceof CanonicalSpecApproval)
+      || !(evidence instanceof ApprovalResultEvidence)
+      || !(plan instanceof RequirementTestPlan)
+      || !(effect instanceof RequirementTestInitializationEffect)
+      || !(specRecord instanceof CurrentFlowSpecRecord)
+      || !Array.isArray(taskAdmissions) || !Array.isArray(approvalTasks)
+      || !(result instanceof StepResult) || !(settlement instanceof StepSettlement)) {
+      throw new CurrentFlowStateInvariantError("Approval admission requires its acquired typed evidence and publications");
+    }
+    this.approval = approval;
+    this.evidence = evidence;
+    this.plan = plan;
+    this.effect = effect;
+    this.specRecord = specRecord;
+    this.taskAdmissions = Object.freeze([...taskAdmissions]);
+    this.approvalTasks = Object.freeze(approvalTasks.map((task) => task instanceof ActivityTask ? task : new ActivityTask(task)));
+    this.result = result;
+    this.settlement = settlement;
+    this.artifactWrites = Object.freeze([...artifactWrites]);
+    this.sourceAdmission = new ApprovalResultAdmission({ manager, state, evidence,
+      sourcePublication, stepResult: result, settlement });
+    Object.freeze(this);
+  }
+
+  assert(view) {
+    const { state } = view;
+    const sourceDocument = this.sourceAdmission.assert(view);
+    if (!this.evidence.approved || !(this.result instanceof ApprovalConfirmedWithTestsResult
+        || this.result instanceof ApprovalConfirmedWithoutTestsResult)) {
+      throw new CurrentFlowStateConflictError("Approval Result no longer matches its source Attempt");
+    }
+    const approvedDocument = sourceDocument.user_approval?.approved === true
+      ? sourceDocument : this.approval.apply(sourceDocument);
+    validateSpecJsonObject(approvedDocument);
+    if (!isDeepStrictEqual(approvedDocument, this.specRecord.document)) {
+      throw new CurrentFlowStateConflictError("canonical Spec approval changed after Result selection");
+    }
+    const reviewRevision = this.evidence.specRevision;
+    const expectedInitialization = initializeRequirementTestLifecycle({ spec: approvedDocument, specRevision: reviewRevision });
+    if (!expectedInitialization.plan.specRevision.equals(this.plan.specRevision)
+      || !isDeepStrictEqual(expectedInitialization.plan.toJSON(), this.plan.toJSON())
+      || !isDeepStrictEqual(expectedInitialization.effect.toJSON(), this.effect.toJSON())
+      || this.evidence.testsRequired !== (expectedInitialization.plan.workItems.length > 0)
+      || this.effect.target !== this.settlement.targetStepId) {
+      throw new CurrentFlowStateConflictError("initial Requirement test plan differs from the selected Approval Result");
+    }
+    if (this.artifactWrites.length !== 1 || this.artifactWrites[0].logicalKey !== "test.requirement.plan"
+      || !this.artifactWrites[0].bytes.equals(new RequirementTestPlanArtifact({ plan: this.plan }).toBytes())) {
+      throw new CurrentFlowStateInvariantError("Approval must publish exactly its selected initial Requirement plan");
+    }
+    const currentTasks = state.findNode(state.definition.dynamicTaskContainerId)?.steps ?? [];
+    const currentTaskIds = new Set(currentTasks.map((task) => task.id));
+    const expectedTasks = new TaskCollection(sourceDocument.tasks ?? []).admissionOrder()
+      .filter((task) => !currentTaskIds.has(task.id.value));
+    if (expectedTasks.length !== this.approvalTasks.length || expectedTasks.length !== this.taskAdmissions.length) {
+      throw new CurrentFlowStateConflictError("Approval Task set changed after selection");
+    }
+    for (let index = 0; index < expectedTasks.length; index++) {
+      const expected = expectedTasks[index];
+      const task = this.approvalTasks[index];
+      const taskSpec = sourceDocument.tasks.find((entry) => entry.id === expected.id.value) ?? null;
+      if (taskSpec === null) throw new CurrentFlowStateConflictError("Approval source Task disappeared");
+      this.taskAdmissions[index].assertTask({ task, taskSpec });
+      this.taskAdmissions[index].assert(view);
+    }
+    return true;
+  }
+}
+
+/** Recheck the saved Result's source identity under the publication lock without selecting policy again. */
+class RequirementTestResultAdmission {
+  constructor({ manager, state, stepResult, settlement, decision = null, planRead, nextPlan,
+    artifactWrites = [], selectedActivityId = null } = {}) {
+    if (!(stepResult instanceof StepResult) || !(stepResult.binding instanceof RequirementTestResultBinding)
+      || settlement?.sourceStepId !== stepResult.stepId || !(planRead?.artifact?.plan)) {
+      throw new CurrentFlowStateInvariantError("Requirement test Result admission requires its selected typed Result and source plan");
+    }
+    this.binding = stepResult.binding;
+    this.stepResultEvidence = stepResult.evidence ?? null;
+    this.settlement = settlement;
+    this.decision = decision;
+    this.nextPlan = nextPlan;
+    this.planIdentity = new RequirementTestPublicationIdentity({
+      logicalKey: "test.requirement.plan", descriptor: planRead.descriptor,
+    });
+    this.planPublication = this.binding.planPublication;
+    this.expectedPlan = planRead.artifact.plan;
+    this.candidate = stepResult.candidateBundle ?? null;
+    this.resultFrontier = stepResult.frontier;
+    this.retryState = stepResult.retryState;
+    this.artifactWrites = Object.freeze([...artifactWrites]);
+    this.selectedActivityId = selectedActivityId;
+    const active = this.expectedPlan.activeWorkItem();
+    const currentCandidateRead = active?.bundleRevision == null ? null
+      : new RequirementTestArtifactStore({ flowManager: manager, state })
+        .readCandidate({ bundle: active.bundleRevision, consumerNodeId: this.binding.leaf });
+    this.currentCandidateIdentities = Object.freeze(RequirementTestPublicationIdentity.fromCandidateRead(currentCandidateRead));
+    this.candidateIdentities = Object.freeze(artifactWrites
+      .filter((write) => ["test.requirement.candidate.bundle", "test.requirement.candidate.source", "test.requirement.support"].includes(write.logicalKey))
+      .map((write) => new RequirementTestPublicationIdentity({
+        logicalKey: write.logicalKey,
+        parameters: write.parameters ?? {},
+        descriptor: catalogDescriptor(manager, state.specId, write.logicalKey, write.parameters ?? {}),
+        pendingBytes: write.bytes,
+      })));
+    this.runId = state.runId;
+    this.specId = state.specId;
+    this.attemptId = state.attempt?.id ?? null;
+    this.attemptSequence = state.attempt?.sequence ?? null;
+    Object.freeze(this);
+  }
+
+  assert(view) {
+    const { state, catalog } = view;
+    if (state.runId !== this.runId || state.specId !== this.specId
+      || state.current?.at(-1) !== this.binding.leaf
+      || state.attempt?.id !== this.attemptId || state.attempt?.sequence !== this.attemptSequence
+      || this.binding.runId !== this.runId || this.binding.specId !== this.specId
+      || this.binding.leaf !== this.settlement.sourceStepId
+      || this.binding.attempt.id !== this.attemptId || this.binding.attempt.sequence !== this.attemptSequence) {
+      throw new CurrentFlowStateConflictError("Requirement test Result Attempt changed before settlement");
+    }
+    this.planIdentity.assert(catalog);
+    for (const identity of this.currentCandidateIdentities) identity.assert(catalog);
+    for (const identity of this.candidateIdentities) identity.assert(catalog);
+    const reader = new LockedRequirementTestArtifactReader(view);
+    const specRecord = reader.readArtifact({ specId: state.specId,
+      logicalKey: "spec.record", consumerNodeId: this.binding.leaf });
+    if (specRecord === null
+      || JSON.stringify(RequirementTestResultPublication.fromDescriptor(specRecord.descriptor).toJSON())
+        !== JSON.stringify(this.binding.specRecordPublication.toJSON())) {
+      throw new CurrentFlowStateConflictError("Requirement test spec.record publication changed after the Result was selected");
+    }
+    const planRead = new RequirementTestArtifactStore({ flowManager: reader, state }).readPlan(this.binding.leaf);
+    if (!this.planPublication.matches(planRead.descriptor)) {
+      throw new CurrentFlowStateConflictError("Requirement test plan changed after the Result was selected");
+    }
+    const workItem = planRead.artifact.plan.activeWorkItem();
+    if (workItem?.requirementId !== this.binding.requirementId
+      || workItem.status !== this.binding.status
+      || !workItem.specRevision.equals(this.binding.specRevision)
+      || JSON.stringify(workItem.bundleRevision?.lineage?.toJSON() ?? null)
+        !== JSON.stringify(this.binding.candidate?.toJSON() ?? null)) {
+      throw new CurrentFlowStateConflictError("Requirement test active work item changed after the Result was selected");
+    }
+    if (workItem.bundleRevision !== null) {
+      const candidateRead = new RequirementTestArtifactStore({ flowManager: reader, state })
+        .readCandidate({ bundle: workItem.bundleRevision, consumerNodeId: this.binding.leaf });
+      if (!isDeepStrictEqual(candidateRead.candidate.bundle.lineage.toJSON(), this.binding.candidate.toJSON())) {
+        throw new CurrentFlowStateConflictError("Requirement test candidate lineage changed after the Result was selected");
+      }
+    }
+    const frontier = RequirementTestResultFrontier.fromPlan(planRead.artifact.plan, workItem.requirementId);
+    const retryState = new RequirementTestRetryState({
+      budget: workItem.budget, autoApprove: state.policy.autoApprove, findings: workItem.semanticFindings,
+    });
+    if (!(this.resultFrontier instanceof RequirementTestResultFrontier)
+      || JSON.stringify(frontier.toJSON()) !== JSON.stringify(this.resultFrontier.toJSON())) {
+      throw new CurrentFlowStateConflictError("Requirement test Result frontier changed after selection");
+    }
+    if (!(this.retryState instanceof RequirementTestRetryState)
+      || JSON.stringify(retryState.toJSON()) !== JSON.stringify(this.retryState.toJSON())) {
+      throw new CurrentFlowStateConflictError("Requirement test retry authority changed after selection");
+    }
+    if (this.stepResultEvidence instanceof RequirementTestReviewEvidence) {
+      assertRequirementTestEvidencePublication({
+        artifactWrites: this.artifactWrites,
+        publication: this.stepResultEvidence.publication,
+        logicalKey: "test.requirement.review",
+        activityId: this.selectedActivityId,
+      });
+      assertRequirementTestEvidencePublication({
+        artifactWrites: this.artifactWrites,
+        publication: this.stepResultEvidence.evidencePublication,
+        logicalKey: "review.evidence",
+        parameters: { reviewStep: "test-review", digest: this.stepResultEvidence.identity.evidenceDigest },
+        activityId: this.selectedActivityId,
+      });
+    } else if (this.stepResultEvidence instanceof RequirementTestGateEvidence) {
+      assertRequirementTestEvidencePublication({
+        artifactWrites: this.artifactWrites,
+        publication: this.stepResultEvidence.publication,
+        logicalKey: "test.requirement.gate",
+        activityId: this.selectedActivityId,
+      });
+    }
+    const selectedNextPlan = this.decision === null ? planRead.artifact.plan : this.decision.apply(planRead.artifact.plan);
+    if (JSON.stringify(selectedNextPlan.toJSON()) !== JSON.stringify(this.nextPlan.toJSON())) {
+      throw new CurrentFlowStateConflictError("Requirement test selected transition no longer applies to its source plan");
+    }
+    const planWrites = this.artifactWrites.filter((write) => write.logicalKey === "test.requirement.plan");
+    if (this.decision === null) {
+      if (planWrites.length !== 0) throw new CurrentFlowStateInvariantError("Requirement test execution checkpoint cannot publish a plan transition");
+    } else {
+      const planWrite = exactRequirementTestWrite(this.artifactWrites, "test.requirement.plan");
+      if (!planWrite.bytes.equals(new RequirementTestPlanArtifact({ plan: selectedNextPlan }).toBytes())) {
+        throw new CurrentFlowStateInvariantError("Requirement test plan publication does not match the saved Result settlement");
+      }
+    }
+    if (this.candidate !== null) {
+      const parameters = { requirementId: this.candidate.bundle.requirementId,
+        bundleRevision: String(this.candidate.bundle.revision) };
+      const manifest = exactRequirementTestWrite(this.artifactWrites, "test.requirement.candidate.bundle", parameters);
+      const published = RequirementTestCandidateBundle.fromJSON(JSON.parse(manifest.bytes.toString("utf8")));
+      if (!sameRequirementTestObservation(this.candidate, published)) {
+        throw new CurrentFlowStateInvariantError("Requirement test candidate publication does not match its saved Result");
+      }
+      for (const source of this.candidate.sources) {
+        const write = exactRequirementTestWrite(this.artifactWrites, "test.requirement.candidate.source", {
+          ...parameters, testPath: source.testPath.slice("tests/".length),
+        });
+        if (write.bytes.length !== source.byteLength
+          || crypto.createHash("sha256").update(write.bytes).digest("hex") !== source.digest) {
+          throw new CurrentFlowStateInvariantError(`Requirement test candidate source changed: ${source.testPath}`);
+        }
+      }
+    }
+    return true;
+  }
+
 }
 
 /** Reject dispatcher fallback if its Task Gate producer has published a result. */
@@ -1469,7 +1872,7 @@ function resultWithDraftStepResult(result, nodeId, stepResult, receipt) {
   if (!(stepResult instanceof StepResult) || stepResult.stepId !== nodeId) {
     throw new CurrentFlowStateInvariantError("Draft completion requires a typed StepResult");
   }
-  if (!(receipt instanceof DraftStepSettlementReceipt)
+  if (!(receipt instanceof DraftStepSettlementReceipt || receipt instanceof RequirementTestSettlementReceipt)
     || receipt.binding.stepId !== nodeId || receipt.resultKind !== stepResult.kind
     || receipt.resultType !== stepResult.type) {
     throw new CurrentFlowStateInvariantError("Draft completion requires its selected Settlement receipt");
@@ -3521,15 +3924,26 @@ export class CanonicalFlowManagerStore {
    * approval Attempt remains active; a crash can therefore only replay the
    * missing additions before the one confirmation that writes approval.
    */
-  approveSpecContinuation({ specId = null, approval, expectedSpecDigest = null } = {}) {
+  approveSpecContinuation({ specId = null, approval, expectedSpecDigest = null, binding: sourceBinding = null, stepResult = null,
+    settlement = null, plan = null, specRecordPublication = null, selectedActivityId = null } = {}) {
     const resolved = this.#resolveSpecId(specId);
     if (resolved === null) throw new CurrentFlowStateInvariantError("no canonical active Flow");
-    const update = approval instanceof CanonicalSpecApproval
+    const awaitingUser = stepResult instanceof ApprovalAwaitingUserResult;
+    const stepError = stepResult instanceof StepErrorResult && stepResult.stepId === "approval";
+    const update = awaitingUser || stepError ? null : approval instanceof CanonicalSpecApproval
       ? approval
       : new CanonicalSpecApproval(approval);
     let state = this.runtime.load(resolved);
     if (state.current?.at(-1) !== "approval") {
       throw new CurrentFlowStateInvariantError("canonical Spec approval requires the active approval Attempt");
+    }
+    if (sourceBinding !== null && (sourceBinding.runId !== state.runId || sourceBinding.specId !== resolved
+      || sourceBinding.stepId !== "approval" || sourceBinding.attempt?.id !== state.attempt?.id
+      || sourceBinding.attempt?.sequence !== state.attempt?.sequence)) {
+      throw new CurrentFlowStateConflictError("Approval writer binding does not match the active Attempt");
+    }
+    if (stepResult === null) {
+      throw new CurrentFlowStateInvariantError("canonical Spec approval requires its registered Step Result");
     }
     const source = this.readArtifact({
       specId: resolved,
@@ -3538,6 +3952,143 @@ export class CanonicalFlowManagerStore {
     });
     if (expectedSpecDigest !== null && source.descriptor.hash !== expectedSpecDigest) {
       throw new CurrentFlowStateConflictError("canonical spec.record changed before approval confirmation");
+    }
+    if (stepError) {
+      const evidence = stepResult.evidence;
+      if (!(settlement instanceof StepErrorDecision) || settlement.sourceStepId !== "approval"
+        || !(specRecordPublication instanceof RequirementTestResultPublication)
+        || !isDeepStrictEqual(RequirementTestResultPublication.fromDescriptor(source.descriptor).toJSON(), specRecordPublication.toJSON())
+        || !(evidence instanceof ApprovalResultEvidence)
+        || evidence.runId !== state.runId || evidence.specId !== resolved
+        || evidence.attempt.id !== state.attempt.id || evidence.attempt.sequence !== state.attempt.sequence) {
+        throw new CurrentFlowStateInvariantError("Approval Error Result requires its exact selected Failure, Attempt, and Spec publication");
+      }
+      const review = this.readCurrentSpecReview({ specId: resolved, consumerNodeId: "approval" });
+      if (review === null || !review.review.identity.equals(evidence.specRevision)) {
+        throw new CurrentFlowStateConflictError("canonical Spec Review revision changed before Approval failure persistence");
+      }
+      const binding = { runId: evidence.runId, specId: evidence.specId,
+        stepId: "approval", attempt: evidence.attempt };
+      const requestDigest = requirementSettlementRequestDigest({ binding, stepResult, settlement,
+        specRecordPublication, expectedSpecDigest });
+      const receipt = this.#stepSettlementReceipt({ binding, stepResult, settlement,
+        specRecordPublication, expectedSpecDigest, artifactWrites: [], requestDigest });
+      const replay = this.#admitStepSettlement({ resolved, state, binding, stepResult, settlement, receipt });
+      if (replay !== null) return Object.freeze({ state, receipt: replay, added: Object.freeze([]) });
+      const admission = new ApprovalResultAdmission({ manager: this, state, evidence,
+        sourcePublication: specRecordPublication, stepResult, settlement });
+      return this.#settleStepErrorResult({ resolved, binding, stepResult, settlement, receipt, admission });
+    }
+    if (awaitingUser) {
+      const evidence = stepResult.evidence;
+      if (!(settlement instanceof RequirementTestAwaitDecision)
+        || approval !== null || plan !== null
+        || !(specRecordPublication instanceof RequirementTestResultPublication)
+        || !isDeepStrictEqual(RequirementTestResultPublication.fromDescriptor(source.descriptor).toJSON(), specRecordPublication.toJSON())
+        || !(evidence instanceof ApprovalResultEvidence) || evidence.approved
+        || evidence.runId !== state.runId || evidence.specId !== resolved
+        || evidence.attempt.id !== state.attempt.id || evidence.attempt.sequence !== state.attempt.sequence) {
+        throw new CurrentFlowStateInvariantError("Approval wait requires its exact unapproved Result, Attempt, and Spec publication");
+      }
+      const review = this.readCurrentSpecReview({ specId: resolved, consumerNodeId: "approval" });
+      if (review === null || !review.review.identity.equals(evidence.specRevision)) {
+        throw new CurrentFlowStateConflictError("canonical Spec Review revision changed before Approval wait persistence");
+      }
+      const binding = { runId: evidence.runId, specId: evidence.specId,
+        stepId: "approval", attempt: evidence.attempt };
+      const requestDigest = requirementSettlementRequestDigest({ binding, stepResult, settlement,
+        specRecordPublication, expectedSpecDigest });
+      const receipt = this.#stepSettlementReceipt({ binding, stepResult, settlement,
+        specRecordPublication, expectedSpecDigest, artifactWrites: [], requestDigest });
+      const replay = this.#admitStepSettlement({ resolved, state, binding, stepResult, settlement, receipt });
+      if (replay !== null) return Object.freeze({ state, receipt: replay, added: Object.freeze([]) });
+      const admission = new ApprovalResultAdmission({ manager: this, state, evidence, sourcePublication: specRecordPublication,
+        stepResult, settlement });
+      const next = this.runtime.recordDraftStepSettlement({
+        specId: resolved,
+        activityId: selectedActivityId ?? activityId("spec-approval-awaiting-user"),
+        result: resultWithDraftStepResult({ outcome: "incomplete",
+          summary: "explicit Spec approval is still required", confirmedAt: new Date().toISOString(), artifactRefs: [] },
+        "approval", stepResult, receipt),
+        artifactWrites: [],
+        admission,
+      });
+      return Object.freeze({ state: next, receipt, added: Object.freeze([]) });
+    }
+    if (stepResult !== null) {
+      if (!(stepResult instanceof ApprovalConfirmedWithTestsResult
+        || stepResult instanceof ApprovalConfirmedWithoutTestsResult)
+        || settlement?.kind !== "target-connection"
+        || !(settlement.initializationEffect instanceof RequirementTestInitializationEffect)
+        || !(plan instanceof RequirementTestPlan)
+        || !(specRecordPublication instanceof RequirementTestResultPublication)
+        || !isDeepStrictEqual(RequirementTestResultPublication.fromDescriptor(source.descriptor).toJSON(), specRecordPublication.toJSON())) {
+        throw new CurrentFlowStateInvariantError("Approval Step requires its exact selected Result, initialization, plan, and Spec publication");
+      }
+      const evidence = stepResult.evidence;
+      if (!(evidence instanceof ApprovalResultEvidence)
+        || evidence.runId !== state.runId || evidence.specId !== resolved
+        || evidence.attempt.id !== state.attempt.id || evidence.attempt.sequence !== state.attempt.sequence) {
+        throw new CurrentFlowStateConflictError("Approval Result source does not match the active Attempt");
+      }
+      const document = JSON.parse(source.bytes.toString("utf8"));
+      const existingApproval = document.user_approval?.approved === true ? document.user_approval : null;
+      const approvedDocument = existingApproval === null ? update.apply(document) : document;
+      const review = this.readCurrentSpecReview({ specId: resolved, consumerNodeId: "approval" });
+      if (review === null || !review.review.identity.equals(evidence.specRevision)) {
+        throw new CurrentFlowStateConflictError("canonical Spec Review revision changed before Approval confirmation");
+      }
+      const initialization = initializeRequirementTestLifecycle({ spec: approvedDocument,
+        specRevision: review.review.identity });
+      if (!isDeepStrictEqual(initialization.plan.toJSON(), plan.toJSON())
+        || !isDeepStrictEqual(initialization.effect.toJSON(), settlement.initializationEffect.toJSON())
+        || evidence.testsRequired !== (plan.workItems.length > 0)) {
+        throw new CurrentFlowStateConflictError("Approval Result does not select the acquired initial Requirement plan");
+      }
+      const confirmedAt = existingApproval?.confirmed_at ?? update.confirmedAt;
+      const currentTasks = state.findNode(state.definition.dynamicTaskContainerId)?.steps ?? [];
+      const existingTaskIds = new Set(currentTasks.map((task) => task.id));
+      const pendingTasks = new TaskCollection(document.tasks ?? []).admissionOrder()
+        .filter((task) => !existingTaskIds.has(task.id.value));
+      const taskAdmissions = pendingTasks.map((task) => {
+        const sourceTask = document.tasks.find((candidate) => candidate.id === task.id.value) ?? null;
+        if (sourceTask === null) throw new CurrentFlowStateConflictError(`canonical Spec lost approval Task: ${task.id.value}`);
+        return new ApprovalTaskAdmission({ sourceDescriptor: source.descriptor, sourceTask });
+      });
+      const approvalTasks = taskAdmissions.map((admission) => ({
+        id: admission.taskId,
+        key: admission.taskKey,
+        approvalSource: admission.activitySource.toJSON(),
+      }));
+      const specRecord = new CurrentFlowSpecRecord(approvedDocument, { specId: resolved });
+      const artifactWrites = [{ logicalKey: "test.requirement.plan", mediaType: "application/json",
+        bytes: new RequirementTestPlanArtifact({ plan }).toBytes() }];
+      const binding = { runId: state.runId, specId: resolved, stepId: "approval", attempt: state.attempt };
+      const requestDigest = requirementSettlementRequestDigest({ binding, stepResult, settlement,
+        approval: update, plan, specRecordPublication, expectedSpecDigest });
+      const receipt = this.#stepSettlementReceipt({ binding, stepResult, settlement,
+        artifactWrites, specRecord, requestDigest });
+      const replay = this.#admitStepSettlement({ resolved, state, binding, stepResult, settlement, receipt });
+      if (replay !== null) return Object.freeze({ state, receipt: replay, added: Object.freeze([]) });
+      const approvalAdmission = new ApprovalInitializationAdmission({ manager: this, state,
+        sourcePublication: specRecordPublication, approval: update, evidence, plan,
+        effect: settlement.initializationEffect, specRecord, taskAdmissions, approvalTasks,
+        result: stepResult, settlement, artifactWrites });
+      const savedResult = resultWithDraftStepResult({ outcome: "passed",
+        summary: "explicit Spec approval confirmed", confirmedAt, artifactRefs: [] },
+      "approval", stepResult, receipt);
+      const next = this.runtime.initializeRequirementTestLifecycle({
+        specId: resolved,
+        activityId: selectedActivityId ?? activityId("spec-approval-confirmed"),
+        result: savedResult,
+        specRecord,
+        artifactWrites,
+        decision: settlement.initializationEffect,
+        targetAttempt: commandContextAttempt(state, initialization.target),
+        approvalTasks,
+        admission: new CombinedAdmission(approvalAdmission),
+      });
+      return Object.freeze({ state: next, receipt, added: Object.freeze(approvalTasks.map((task) => task.id)) });
     }
     const document = JSON.parse(source.bytes.toString("utf8"));
     const sourceHash = source.descriptor.hash;
@@ -4056,27 +4607,36 @@ export class CanonicalFlowManagerStore {
     awaitQuestion = null,
     draftGateRepairSelection = null,
     preparation = null,
+    requestDigest = null,
   } = {}) {
+    const requirementTestResult = ["approval", "test-generate", "test-review", "test-repair", "test-gate"]
+      .includes(binding?.stepId);
+    const publication = this.#stepSettlementPublicationIdentity({
+      binding,
+      settlement,
+      draftCompletionApplication,
+      artifactWrites,
+      artifactRemovals,
+      artifactBaselines,
+      testSourceBaseline,
+      commandResult,
+      gatePublication,
+      lifecycleResult: requirementTestResult ? null : lifecycleResult,
+      references,
+      specRecord,
+      planGateRepairOutcome,
+      preparation,
+    });
+    if (["approval", "test-generate", "test-review", "test-repair", "test-gate"].includes(binding?.stepId)) {
+      return new RequirementTestSettlementReceipt({
+        binding, result: stepResult, settlement, publicationDigest: publication.digest, requestDigest,
+      });
+    }
     return new DraftStepSettlementReceipt({
       binding,
       result: stepResult,
       settlement,
-      publication: this.#stepSettlementPublicationIdentity({
-        binding,
-        settlement,
-        draftCompletionApplication,
-        artifactWrites,
-        artifactRemovals,
-        artifactBaselines,
-        testSourceBaseline,
-        commandResult,
-        gatePublication,
-        lifecycleResult,
-        references,
-        specRecord,
-        planGateRepairOutcome,
-        preparation,
-      }),
+      publication,
       executionLifecycle,
       awaitQuestion,
       draftGateRepairSelection,
@@ -4187,15 +4747,23 @@ export class CanonicalFlowManagerStore {
       && binding?.stepId === state.current?.at(-1) && binding.stepId === stepResult.stepId
       && binding.stepId === settlement.sourceStepId && binding?.attempt?.id === state.attempt?.id
       && binding?.attempt?.sequence === state.attempt?.sequence;
-    const resumeReceipts = this.activityLedger(resolved)
-      .map((entry) => entry.transition?.draftResumeReceipt ?? null)
-      .filter((entry) => entry?.binding.attemptId === receipt.binding.attemptId
-        && entry.binding.attemptSequence === receipt.binding.attemptSequence);
-    assertDraftSettlementReceiptTransition(
-      bindingActivities.map((entry) => entry.result.draftSettlementReceipt),
-      receipt,
-      { resumeReceipts },
-    );
+    if (receipt instanceof RequirementTestSettlementReceipt) {
+      const latestReceipt = bindingActivities.at(-1)?.result?.draftSettlementReceipt ?? null;
+      if (latestReceipt?.settlementKind === "failure" && latestReceipt.id !== receipt.id) {
+        throw new CurrentFlowStateConflictError("Step settlement conflicts with the saved failure receipt for this Attempt");
+      }
+      receipt.assertMatches({ binding, result: stepResult, settlement });
+    } else {
+      const resumeReceipts = this.activityLedger(resolved)
+        .map((entry) => entry.transition?.draftResumeReceipt ?? null)
+        .filter((entry) => entry?.binding.attemptId === receipt.binding.attemptId
+          && entry.binding.attemptSequence === receipt.binding.attemptSequence);
+      assertDraftSettlementReceiptTransition(
+        bindingActivities.map((entry) => entry.result.draftSettlementReceipt),
+        receipt,
+        { resumeReceipts },
+      );
+    }
     if (!currentBinding) throw new CurrentFlowStateConflictError("Step settlement binding is stale");
     return null;
   }
@@ -4222,6 +4790,7 @@ export class CanonicalFlowManagerStore {
     receipt,
     lifecycleResult = null,
     commandResult = undefined,
+    admission = undefined,
     planGateRepairOutcome = null,
     gatePublication = null,
     specSelection = null,
@@ -4269,7 +4838,8 @@ export class CanonicalFlowManagerStore {
     const next = this.failCurrentAttempt({
       specId: resolved,
       failure: {
-        category: gatePublication?.facts.failureCategory ?? STEP_RESULT_ERROR_CATEGORY,
+        category: gatePublication?.facts.failureCategory
+          ?? (stepResult.error instanceof RequirementTestExternalBlockedError ? "external" : STEP_RESULT_ERROR_CATEGORY),
         code: gatePublication?.facts.failureCode ?? stepResult.error?.code ?? "STEP_RESULT_ERROR",
         message: stepResult.error.message,
         retryable: false,
@@ -4284,7 +4854,7 @@ export class CanonicalFlowManagerStore {
       commandResult,
       artifactWrites: [...repairOutcomeWrite, ...(issueWrite === null ? [] : [issueWrite])],
       failureActivityId,
-      admission: gatePublication ?? undefined,
+      admission: gatePublication ?? admission ?? undefined,
       nonblocking: gatePublication === null ? null : this.#specGateNonblockingObservation({
         state: this.runtime.load(resolved), binding, stepResult, commandResult,
       }),
@@ -4481,6 +5051,10 @@ export class CanonicalFlowManagerStore {
     binding,
     stepResult,
     settlement,
+    approval = null,
+    plan = null,
+    specRecordPublication = null,
+    expectedSpecDigest = null,
     draftCompletionApplication = null,
     commandResult = undefined,
     gatePublication = null,
@@ -4488,8 +5062,12 @@ export class CanonicalFlowManagerStore {
     artifactRemovals = undefined,
     artifactBaselines = undefined,
     testSourceBaseline = undefined,
+    selectedActivityId = null,
+    result = null,
     lifecycleResult = null,
     references = undefined,
+    deferredReceipt = null,
+    findingsPublication = null,
     specRecord = undefined,
     planGateRepairOutcome = null,
     executionLifecycle = undefined,
@@ -4501,6 +5079,35 @@ export class CanonicalFlowManagerStore {
     const resolved = this.#resolveSpecId(specId ?? binding?.specId);
     if (resolved === null || !(stepResult instanceof StepResult) || !(settlement instanceof StepSettlement)) {
       return null;
+    }
+    if (["approval", "test-generate", "test-review", "test-repair", "test-gate"].includes(binding?.stepId)) {
+      const matching = this.activityLedger(resolved).filter((entry) => {
+        const saved = entry.result?.draftSettlementReceipt;
+        return saved?.binding?.runId === binding.runId
+          && saved.binding.specId === binding.specId
+          && saved.binding.stepId === binding.stepId
+          && saved.binding.attemptId === binding.attempt?.id
+          && saved.binding.attemptSequence === binding.attempt?.sequence
+          && entry.attemptId === binding.attempt.id
+          && entry.sequence === binding.attempt.sequence
+          && entry.result?.stepResult?.kind === stepResult.kind
+          && entry.result.stepResult?.type === stepResult.type;
+      });
+      const activity = matching.at(-1) ?? null;
+      if (activity === null) return null;
+      const operation = activity.transition?.operation;
+      if (!["initialize_requirement_test_lifecycle", "advance_requirement_test_lifecycle",
+        "record_draft_step_settlement", "fail_attempt"].includes(operation)) return null;
+      const savedResult = StepResult.fromStored(binding.stepId, activity.result.stepResult);
+      if (stepResultDigest(savedResult) !== stepResultDigest(stepResult)) return null;
+      const requestDigest = requirementSettlementRequestDigest({ binding, stepResult: savedResult, settlement,
+        approval, plan, specRecordPublication, expectedSpecDigest, commandResult,
+        selectedActivityId, result, references, artifactWrites,
+        artifactRemovals: artifactRemovals ?? [], artifactBaselines: artifactBaselines ?? [],
+        deferredReceipt, findingsPublication });
+      return RequirementTestSettlementReceipt.fromJSON(activity.result.draftSettlementReceipt, {
+        binding, result: savedResult, settlement, requestDigest,
+      });
     }
     this.#assertDraftReturnPublicationInput({ stepResult, commandResult, gatePublication,
       lifecycleResult, specRecord, planGateRepairOutcome, draftCompletionApplication,
@@ -4598,6 +5205,18 @@ export class CanonicalFlowManagerStore {
       if (descriptor.length !== 1
         || (settlement.kind === "await" && activity.transition?.operation !== "record_draft_step_settlement")) {
         throw new CurrentFlowStateInvariantError("current Spec Gate Result lacks its matching publication");
+      }
+    } else if (["approval", "test-generate", "test-review", "test-repair", "test-gate"].includes(stepId)) {
+      result = StepResult.fromStored(stepId, activity.result.stepResult);
+      settlement = settleRequirementTestStepResult(stepId, result);
+      try {
+        receipt = RequirementTestSettlementReceipt.fromJSON(activity.result.draftSettlementReceipt, {
+          binding: { runId: state.runId, specId: state.specId, stepId, attempt: state.attempt },
+          result,
+          settlement,
+        });
+      } catch (error) {
+        throw new CurrentFlowStateInvariantError(`current Requirement test Result and receipt are invalid: ${error.message}`);
       }
     } else {
       result = StepResult.fromStored(stepId, activity.result.stepResult);
@@ -5564,7 +6183,11 @@ export class CanonicalFlowManagerStore {
   /** Apply a Definition-selected Requirement test connector and its publications atomically. */
   completeRequirementTestLifecycle({
     specId = null,
+    binding: sourceBinding = null,
     decision,
+    stepResult = null,
+    settlement = null,
+    selectedActivityId = null,
     commandResult = null,
     result = null,
     references = undefined,
@@ -5580,9 +6203,113 @@ export class CanonicalFlowManagerStore {
     const state = this.runtime.load(resolved);
     const nodeId = state.current?.at(-1) ?? null;
     if (nodeId === null) throw new CurrentFlowStateInvariantError("Requirement test completion requires an active Attempt");
-    const selected = decision instanceof RequirementTestLifecycleDecision
-      ? decision
-      : RequirementTestLifecycleDecision.fromJSON(decision);
+    let selected;
+    let resultBinding = null;
+    let requestDigest = null;
+    if (stepResult !== null) {
+      if (!(stepResult instanceof StepResult) || stepResult.stepId !== nodeId
+        || settlement?.sourceStepId !== nodeId || settlement.resultKind !== stepResult.kind
+        || settlement.resultType !== stepResult.type) {
+        throw new CurrentFlowStateInvariantError("Requirement test persistence requires its exact selected Result and Settlement");
+      }
+      if (!(stepResult.binding instanceof RequirementTestResultBinding)) {
+        throw new CurrentFlowStateInvariantError("Requirement test Step Result requires its typed source binding");
+      }
+      resultBinding = {
+        runId: stepResult.binding.runId,
+        specId: stepResult.binding.specId,
+        stepId: nodeId,
+        attempt: { id: stepResult.binding.attempt.id, sequence: stepResult.binding.attempt.sequence },
+      };
+      if (sourceBinding !== null && (sourceBinding.runId !== resultBinding.runId
+        || sourceBinding.specId !== resultBinding.specId || sourceBinding.stepId !== resultBinding.stepId
+        || sourceBinding.attempt?.id !== resultBinding.attempt.id
+        || sourceBinding.attempt?.sequence !== resultBinding.attempt.sequence)) {
+        throw new CurrentFlowStateConflictError("Requirement writer binding does not match its selected Result Attempt");
+      }
+      requestDigest = requirementSettlementRequestDigest({ binding: resultBinding, stepResult, settlement,
+        commandResult, selectedActivityId, result, references, artifactWrites,
+        artifactRemovals, artifactBaselines, deferredReceipt, findingsPublication });
+      if (settlement.kind === "failure") {
+        const receipt = this.#stepSettlementReceipt({ binding: resultBinding, stepResult, settlement,
+          commandResult, artifactWrites, artifactRemovals, artifactBaselines, requestDigest });
+        const replay = this.#admitStepSettlement({ resolved, state, binding: resultBinding,
+          stepResult, settlement, receipt });
+        if (replay !== null) return Object.freeze({ state, receipt: replay });
+        const store = new RequirementTestArtifactStore({ flowManager: this, state });
+        const planRead = store.readPlan(nodeId);
+        const resultAdmission = new RequirementTestResultAdmission({ manager: this, state, stepResult,
+          settlement, planRead, nextPlan: planRead.artifact.plan });
+        let errorAdmission;
+        if (stepResult.error instanceof RequirementTestExternalBlockedError) {
+          const workItem = planRead.artifact.plan.activeWorkItem();
+          const candidateRead = workItem?.bundleRevision === null || workItem?.bundleRevision === undefined
+            ? null : store.readCandidate({ bundle: workItem.bundleRevision, consumerNodeId: nodeId });
+          const facts = new RequirementTestLifecycleFacts({
+            authority: RequirementTestLifecycleAuthority.capture({ state, planDescriptor: planRead.descriptor }),
+            plan: planRead.artifact.plan,
+            leaf: nodeId,
+            observation: new RequirementTestStepObservation({
+              requirementId: workItem.requirementId,
+              specRevision: workItem.specRevision,
+              bundleRevision: workItem.bundleRevision?.revision ?? null,
+              candidateDigest: candidateRead?.candidate.digest ?? null,
+              sourceAttempt: candidateRead?.candidate.bundle.lineage.sourceAttempt ?? null,
+              kind: "external_blocked",
+            }),
+            candidateBundle: candidateRead?.candidate ?? null,
+          });
+          const decision = resolveRequirementTestLifecycle(facts);
+          if (decision.disposition !== "external_blocked") {
+            throw new CurrentFlowStateInvariantError("Requirement test external Result no longer selects an external block");
+          }
+          errorAdmission = new RequirementTestLifecycleAdmission({
+            manager: this, state, decision, artifactWrites: [], commandResult,
+            currentCandidateRead: candidateRead, externalBlock: true,
+          });
+        }
+        return this.#settleStepErrorResult({ resolved, binding: resultBinding, stepResult, settlement,
+          receipt, commandResult, admission: new CombinedAdmission(resultAdmission, errorAdmission, admission) });
+      }
+      selected = settlement.requirementTestDecision ?? null;
+      if (settlement.kind === "execution" && selected === null) {
+        const store = new RequirementTestArtifactStore({ flowManager: this, state });
+        const currentPlan = store.readPlan(nodeId);
+        const active = currentPlan.artifact.plan.activeWorkItem();
+        if (active?.requirementId !== stepResult.binding.requirementId
+          || !stepResult.binding.planPublication.matches(currentPlan.descriptor)) {
+          throw new CurrentFlowStateConflictError("Requirement test execution Result source changed before persistence");
+        }
+        const receipt = this.#stepSettlementReceipt({ binding: resultBinding, stepResult, settlement,
+          commandResult, artifactWrites, artifactRemovals, artifactBaselines, requestDigest });
+        const replay = this.#admitStepSettlement({ resolved, state, binding: resultBinding,
+          stepResult, settlement, receipt });
+        if (replay !== null) return Object.freeze({ state, receipt: replay });
+        const selectedPlan = currentPlan.artifact.plan;
+        const resultAdmission = new RequirementTestResultAdmission({ manager: this, state, stepResult,
+          settlement, decision: null, planRead: currentPlan, nextPlan: selectedPlan, artifactWrites,
+          selectedActivityId });
+        const savedResult = resultWithDraftStepResult(result ?? resultFor("done", nodeId), nodeId,
+          stepResult, receipt);
+        const next = this.runtime.recordDraftStepSettlement({
+          specId: resolved,
+          activityId: selectedActivityId ?? activityId("requirement-test-execution"),
+          result: savedResult,
+          artifactWrites,
+          artifactRemovals,
+          artifactBaselines,
+          admission: new CombinedAdmission(resultAdmission, admission),
+        });
+        return Object.freeze({ state: next, receipt });
+      }
+      if (!(selected instanceof RequirementTestLifecycleDecision)) {
+        throw new CurrentFlowStateInvariantError("Requirement test target Settlement has no selected lifecycle decision");
+      }
+    } else {
+      selected = decision instanceof RequirementTestLifecycleDecision
+        ? decision
+        : RequirementTestLifecycleDecision.fromJSON(decision);
+    }
     const store = new RequirementTestArtifactStore({ flowManager: this, state });
     const currentPlan = store.readPlan(nodeId);
     const activeBefore = currentPlan.artifact.plan.activeWorkItem();
@@ -5663,20 +6390,39 @@ export class CanonicalFlowManagerStore {
       confirmedAt: new Date().toISOString(),
       artifactRefs: [],
     };
-    const lifecycleAdmission = new RequirementTestLifecycleAdmission({
-      manager: this,
-      state,
-      decision: selected,
-      artifactWrites: writes,
-      artifactBaselines: baselines,
-      commandResult,
-      currentCandidateRead,
-    });
+    const binding = resultBinding ?? null;
+    let receipt = null;
+    if (stepResult !== null) {
+      receipt = this.#stepSettlementReceipt({ binding, stepResult, settlement, commandResult,
+        artifactWrites: writes, artifactRemovals: removals, artifactBaselines: baselines,
+        testSourceBaseline, lifecycleResult: result, references, requestDigest });
+      const replay = this.#admitStepSettlement({ resolved, state, binding, stepResult, settlement, receipt });
+      if (replay !== null) return Object.freeze({ state, receipt: replay });
+    }
+    const lifecycleAdmission = stepResult === null
+      ? new RequirementTestLifecycleAdmission({ manager: this, state, decision: selected,
+        artifactWrites: writes, artifactBaselines: baselines, commandResult, currentCandidateRead })
+      : new RequirementTestResultAdmission({ manager: this, state, stepResult, settlement,
+        decision: selected, planRead: currentPlan, nextPlan, artifactWrites: writes, selectedActivityId });
     // A non-final generated candidate advances only the plan frontier.  It
     // must not confirm (or recreate) the still-live generator Attempt: each
     // Requirement is a typed publication/progress Activity in that one
     // Attempt, and only the final candidate settles it into test-review.
     if (selected.continuesSourceAttempt) {
+      if (stepResult !== null) {
+        const savedResult = resultWithDraftStepResult(result ?? resultFor("done", nodeId), nodeId,
+          stepResult, receipt);
+        const next = this.runtime.recordDraftStepSettlement({
+          specId: resolved,
+          activityId: selectedActivityId ?? activityId("requirement-test-frontier-advanced"),
+          result: savedResult,
+          artifactWrites: writes,
+          artifactRemovals: removals,
+          artifactBaselines: baselines,
+          admission: new CombinedAdmission(lifecycleAdmission, admission),
+        });
+        return Object.freeze({ state: next, receipt });
+      }
       return this.publishArtifacts({
         specId: resolved,
         nodeId,
@@ -5686,10 +6432,12 @@ export class CanonicalFlowManagerStore {
         admission: lifecycleAdmission,
       });
     }
-    return this.runtime.completeRequirementTestLifecycle({
+    const savedResult = stepResult === null ? confirmation
+      : resultWithDraftStepResult(confirmation, nodeId, stepResult, receipt);
+    const next = this.runtime.completeRequirementTestLifecycle({
       specId: resolved,
-      activityId: activityId("requirement-test-lifecycle-completed"),
-      result: confirmation,
+      activityId: selectedActivityId ?? activityId("requirement-test-lifecycle-completed"),
+      result: savedResult,
       references,
       decision: selected,
       targetAttempt: commandContextAttempt(state, selected.target),
@@ -5702,264 +6450,34 @@ export class CanonicalFlowManagerStore {
         admission ?? this.#producerCompletionAdmission(nodeId, writes),
       ),
     });
+    return stepResult === null ? next : Object.freeze({ state: next, receipt });
   }
 
-  /**
-   * Persist one sealed, recoverable candidate-structure failure and let the
-   * Definition select its normal semantic repair/defer route.  The caller
-   * supplies only the handoff result; it cannot choose a lifecycle target.
-   */
-  completeRequirementTestStructuralHandoff({ specId = null, structuralResult } = {}) {
-    const resolved = this.#resolveSpecId(specId);
-    if (resolved === null) throw new CurrentFlowStateInvariantError("no canonical active Flow");
-    const input = structuralResult?.connectorInput instanceof Function
-      ? structuralResult.connectorInput()
-      : structuralResult;
-    if (input === null || typeof input !== "object" || Array.isArray(input)) {
-      throw new CurrentFlowStateInvariantError("Requirement test structural handoff requires typed connector input");
-    }
-    const state = this.runtime.load(resolved);
-    const nodeId = state.current?.at(-1) ?? null;
-    const store = new RequirementTestArtifactStore({ flowManager: this, state });
-    const planRead = store.readPlan(nodeId);
-    const observation = new RequirementTestStructuralRejectionObservation({
-      stepId: input.stepId,
-      binding: input.binding,
-      candidate: input.candidate,
-      finding: input.finding,
-    });
-    const facts = new RequirementTestLifecycleFacts({
-      authority: RequirementTestLifecycleAuthority.capture({ state, planDescriptor: planRead.descriptor }),
-      plan: planRead.artifact.plan,
-      leaf: nodeId,
-      observation,
-    });
-    const decision = resolveRequirementTestLifecycle(facts);
-    const failureArtifact = new RequirementTestFailureArtifact({
-      requirementId: observation.requirementId,
-      bundleRevision: observation.bundleRevision,
-      fingerprint: observation.finding.fingerprint,
-    });
-    const failureWrite = {
-      ...failureArtifact.artifactWrite({ sourceStepId: nodeId, blockingFindings: [observation.finding.toJSON()] }),
-    };
-    let deferredReceipt = null;
-    let findingsPublication = null;
-    if (decision.disposition === "defer") {
-      const sourceArtifact = failureArtifact.relativePath;
-      findingsPublication = buildDeferredSemanticFindingsPublication({
-        flowManager: this,
-        flowState: this.loadReadOnly(resolved),
-        nodeId,
-        sourceStep: nodeId,
-        sourceArtifact,
-        sourcePayload: { blockingFindings: [observation.finding.toJSON()] },
-        sourceRelativePath: sourceArtifact,
-        attempts: facts.workItem.budget.autoSemantic + facts.workItem.budget.manualSemantic + facts.workItem.budget.tooling + 1,
-      });
-      deferredReceipt = new RequirementTestDeferredReceipt({
-        requirementId: facts.workItem.requirementId,
-        specRevision: facts.workItem.specRevision,
-        bundleRevision: observation.candidate.bundle.revision,
-        candidateDigest: observation.candidate.digest,
-        expectation: facts.workItem.expectation,
-        budget: facts.workItem.budget,
-        sourceAttempt: { id: state.attempt.id, sequence: state.attempt.sequence },
-        sourceArtifact,
-        sourceFindingFingerprints: findingsPublication.deferred.map((finding) => finding.fingerprint),
-      });
-    }
-    return this.completeRequirementTestLifecycle({
-      specId: resolved,
-      decision,
-      result: {
-        outcome: "passed",
-        summary: `Requirement test structural finding recorded for ${observation.requirementId}`,
-        confirmedAt: new Date().toISOString(),
-        artifactRefs: [],
-      },
-      artifactWrites: [...input.publications.artifactWrites, failureWrite],
-      artifactRemovals: input.publications.artifactRemovals,
-      artifactBaselines: input.publications.artifactBaselines,
-      deferredReceipt,
-      findingsPublication,
-    });
-  }
-
-  /**
-   * Stop a Requirement-test worker that cannot be authorized to proceed.
-   * This is a Definition-selected external block, deliberately separate from
-   * retryable tooling so unavailable credentials never consume an R budget.
-   */
-  completeRequirementTestExternalFailure({ specId = null, failure, commandResult = undefined } = {}) {
+  /** Project command-owned publications with the exact Store writers used by settlement. */
+  previewStepResultPublications({ specId = null, nodeId, commandResult, activityId: selectedActivityId } = {}) {
     const resolved = this.#resolveSpecId(specId);
     if (resolved === null) throw new CurrentFlowStateInvariantError("no canonical active Flow");
     const state = this.runtime.load(resolved);
-    const nodeId = state.current?.at(-1) ?? null;
-    if (!new Set(["test-generate", "test-review", "test-repair"]).has(nodeId) || state.attempt === null) {
-      throw new CurrentFlowStateInvariantError("Requirement test external failure requires an active generate, review, or repair Attempt");
+    if (state.current?.at(-1) !== nodeId || state.attempt === null
+      || typeof selectedActivityId !== "string" || selectedActivityId.trim() === "") {
+      throw new CurrentFlowStateInvariantError("publication preview requires its active Attempt and selected Activity identity");
     }
-    const message = requiredText(failure?.message, "Requirement test external failure message");
-    const store = new RequirementTestArtifactStore({ flowManager: this, state });
-    const planRead = store.readPlan(nodeId);
-    const workItem = planRead.artifact.plan.activeWorkItem();
-    const candidateRead = workItem.bundleRevision === null
-      ? null
-      : store.readCandidate({ bundle: workItem.bundleRevision, consumerNodeId: nodeId });
-    const facts = new RequirementTestLifecycleFacts({
-      authority: RequirementTestLifecycleAuthority.capture({ state, planDescriptor: planRead.descriptor }),
-      plan: planRead.artifact.plan,
-      leaf: nodeId,
-      observation: new RequirementTestStepObservation({
-        requirementId: workItem.requirementId,
-        specRevision: workItem.specRevision,
-        bundleRevision: workItem.bundleRevision?.revision ?? null,
-        candidateDigest: candidateRead?.candidate.digest ?? null,
-        sourceAttempt: candidateRead?.candidate.bundle.lineage.sourceAttempt ?? null,
-        kind: "external_blocked",
-      }),
-      candidateBundle: candidateRead?.candidate ?? null,
-    });
-    const decision = resolveRequirementTestLifecycle(facts);
-    if (decision.disposition !== "external_blocked") {
-      throw new CurrentFlowStateInvariantError("Requirement test external failure Definition route changed");
-    }
-    const admission = new RequirementTestLifecycleAdmission({
-      manager: this,
-      state,
-      decision,
-      artifactWrites: [],
-      currentCandidateRead: candidateRead,
-      externalBlock: true,
-    });
-    return this.failCurrentAttempt({
-      specId: resolved,
-      failure: {
-        category: "external",
-        code: requiredText(failure?.code ?? "REQUIREMENT_TEST_EXTERNAL_BLOCKED", "Requirement test external failure code"),
-        message,
-        retryable: false,
-        retryKind: null,
-      },
-      result: {
-        outcome: "failed",
-        summary: message,
-        confirmedAt: new Date().toISOString(),
-        artifactRefs: [],
-      },
-      commandResult,
-      admission,
-    });
-  }
-
-  /** Convert a generate/repair tooling failure into the bounded Definition-owned lifecycle. */
-  completeRequirementTestToolingFailure({ specId = null, message, commandResult = null } = {}) {
-    const resolved = this.#resolveSpecId(specId);
-    if (resolved === null) throw new CurrentFlowStateInvariantError("no canonical active Flow");
-    const state = this.runtime.load(resolved);
-    const nodeId = state.current?.at(-1) ?? null;
-    if (!new Set(["test-generate", "test-review", "test-repair"]).has(nodeId) || state.attempt === null) {
-      throw new CurrentFlowStateInvariantError("Requirement test tooling failure requires an active generate, review, or repair Attempt");
-    }
-    const reason = requiredText(message, "Requirement test tooling failure message");
-    const store = new RequirementTestArtifactStore({ flowManager: this, state });
-    const planRead = store.readPlan(nodeId);
-    const plan = planRead.artifact.plan;
-    const workItem = plan.activeWorkItem();
-    const candidateRead = workItem.bundleRevision === null
-      ? null
-      : store.readCandidate({ bundle: workItem.bundleRevision, consumerNodeId: nodeId });
-    const facts = new RequirementTestLifecycleFacts({
-      authority: RequirementTestLifecycleAuthority.capture({ state, planDescriptor: planRead.descriptor }),
-      plan,
-      leaf: nodeId,
-      observation: new RequirementTestStepObservation({
-        requirementId: workItem.requirementId,
-        specRevision: workItem.specRevision,
-        bundleRevision: workItem.bundleRevision?.revision ?? null,
-        candidateDigest: candidateRead?.candidate.digest ?? null,
-        sourceAttempt: candidateRead?.candidate.bundle.lineage.sourceAttempt ?? null,
-        kind: "tooling_failure",
-      }),
-      candidateBundle: candidateRead?.candidate ?? null,
-    });
-    const decision = resolveRequirementTestLifecycle(facts);
-    let deferredReceipt = null;
-    let findingsPublication = null;
-    const artifactWrites = [];
-    const artifactRemovals = [];
-    const artifactBaselines = [];
-    if (nodeId === "test-repair") {
-      const parameters = { requirementId: workItem.requirementId };
-      const progress = this.readArtifact({
-        specId: resolved,
-        logicalKey: "test.requirement.repair.progress",
-        parameters,
-        consumerNodeId: nodeId,
-        optional: true,
+    const writes = [
+      ...this.#attemptHistoryWrites({ specId: resolved, state, nodeId, commandResult }),
+      ...this.#commandPublicationWrites(commandResult),
+    ];
+    return Object.freeze(writes.map((write) => {
+      const artifact = write.logicalKey === "review.evidence"
+        ? FLOW_ARTIFACT_CONTRACTS.reviewEvidence({ reviewStep: write.reviewStep, digest: write.digest })
+        : FLOW_ARTIFACT_CONTRACTS.resolve(write.logicalKey, write.parameters ?? {});
+      return new RequirementTestResultPublication({
+        logicalKey: write.logicalKey,
+        relativePath: artifact.relativePath,
+        hash: crypto.createHash("sha256").update(write.bytes).digest("hex"),
+        size: write.bytes.length,
+        activityId: selectedActivityId,
       });
-      if (progress !== null) {
-        artifactRemovals.push({ logicalKey: "test.requirement.repair.progress", parameters });
-        artifactBaselines.push(new CanonicalFlowArtifactBaseline({
-          logicalKey: "test.requirement.repair.progress",
-          parameters,
-          digest: progress.descriptor.hash,
-          byteLength: progress.descriptor.size,
-        }));
-      }
-    }
-    if (decision.disposition === "defer") {
-      const finding = requirementTestToolingFailureFinding({
-        nodeId, workItem, candidate: candidateRead?.candidate ?? null, attempt: state.attempt, reason,
-      });
-      const candidateRevision = candidateRead?.candidate.bundle.revision ?? 1;
-      const failureArtifact = new RequirementTestFailureArtifact({
-        requirementId: workItem.requirementId,
-        bundleRevision: candidateRevision,
-        fingerprint: finding.fingerprint,
-      });
-      const sourceArtifact = failureArtifact.relativePath;
-      const sourcePayload = { sourceStepId: nodeId, blockingFindings: [finding] };
-      artifactWrites.push(failureArtifact.artifactWrite(sourcePayload));
-      findingsPublication = buildDeferredSemanticFindingsPublication({
-        flowManager: this,
-        flowState: this.loadReadOnly(resolved),
-        nodeId,
-        sourceStep: nodeId,
-        sourceArtifact,
-        sourcePayload,
-        sourceRelativePath: sourceArtifact,
-        attempts: workItem.budget.autoSemantic + workItem.budget.manualSemantic + workItem.budget.tooling + 1,
-      });
-      deferredReceipt = new RequirementTestDeferredReceipt({
-        requirementId: workItem.requirementId,
-        specRevision: workItem.specRevision,
-        bundleRevision: workItem.bundleRevision?.revision ?? null,
-        candidateDigest: candidateRead?.candidate.digest ?? null,
-        expectation: workItem.expectation,
-        budget: workItem.budget,
-        sourceAttempt: { id: state.attempt.id, sequence: state.attempt.sequence },
-        sourceArtifact,
-        sourceFindingFingerprints: findingsPublication.deferred.map((finding) => finding.fingerprint),
-      });
-    }
-    const completion = this.completeRequirementTestLifecycle({
-      specId: resolved,
-      decision,
-      commandResult,
-      result: {
-        outcome: "passed",
-        summary: `Requirement test tooling failure handled: ${reason}`,
-        confirmedAt: new Date().toISOString(),
-        artifactRefs: [],
-      },
-      deferredReceipt,
-      findingsPublication,
-      artifactWrites,
-      artifactRemovals,
-      artifactBaselines,
-    });
-    return Object.freeze({ decision, completion });
+    }));
   }
 
   /**
@@ -6755,12 +7273,20 @@ export class CanonicalFlowManagerStore {
         throw new CurrentFlowStateInvariantError("Draft failure requires a typed StepResult");
       }
       if (stepResult.type === STEP_RESULT_TYPE.ERROR) {
-        if (!(settlementReceipt instanceof DraftStepSettlementReceipt)
+        if (!(settlementReceipt instanceof DraftStepSettlementReceipt || settlementReceipt instanceof RequirementTestSettlementReceipt)
           || settlementReceipt.settlementKind !== "failure") {
           throw new CurrentFlowStateInvariantError("Draft Error Result requires its Failure settlement receipt");
         }
+        const requirementExternalBlock = ["approval", "test-generate", "test-review", "test-repair", "test-gate"].includes(nodeId)
+          && stepResult.error instanceof RequirementTestExternalBlockedError
+          && failure.category === "external"
+          && failure.code === stepResult.error.code
+          && failure.message === stepResult.error.message
+          && failure.retryable === false
+          && failure.retryKind === null;
         if (failure.category !== STEP_RESULT_ERROR_CATEGORY
-          && !(nodeId === "spec-gate" && ["semantic", "local"].includes(failure.category))) {
+          && !(nodeId === "spec-gate" && ["semantic", "local"].includes(failure.category))
+          && !requirementExternalBlock) {
           throw new CurrentFlowStateInvariantError(
             "Error StepResult requires step-result-error failure facts",
           );
@@ -8149,6 +8675,30 @@ export class CanonicalFlowManagerStore {
       relativePath: requestedPath,
       bytes: Buffer.from(fs.readFileSync(location.resolve(requestedPath))),
     });
+  }
+
+  #retireRequirementTestRepairProgress({ specId, nodeId, requirementId }) {
+    if (nodeId !== "test-repair") {
+      return { artifactRemovals: [], artifactBaselines: [] };
+    }
+    const parameters = { requirementId };
+    const progress = this.readArtifact({
+      specId,
+      logicalKey: "test.requirement.repair.progress",
+      parameters,
+      consumerNodeId: nodeId,
+      optional: true,
+    });
+    if (progress === null) return { artifactRemovals: [], artifactBaselines: [] };
+    return {
+      artifactRemovals: [{ logicalKey: "test.requirement.repair.progress", parameters }],
+      artifactBaselines: [new CanonicalFlowArtifactBaseline({
+        logicalKey: "test.requirement.repair.progress",
+        parameters,
+        digest: progress.descriptor.hash,
+        byteLength: progress.descriptor.size,
+      })],
+    };
   }
 
   #resolveSpecId(specId) {

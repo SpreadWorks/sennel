@@ -3,6 +3,8 @@ import { StepRegistration } from "../../../src/flow/engine/composition/step-regi
 import { StepExecutionContract } from "../../../src/flow/engine/composition/step-execution-contract.js";
 import { flowStepExecutionRegistration } from "../../../src/flow/engine/composition/registered-step-execution.js";
 
+const PREPARATION_OPERATIONS = new Set(["create"]);
+
 class ExecutionObservation {
   constructor(operation, receiver, input, value) {
     this.operation = operation;
@@ -27,10 +29,13 @@ export class PrepareExecutionObserver {
     t.after(() => this.restore());
     const observations = this.#observations;
     const create = StepRegistration.prototype.create;
-    this.#mocks.push(t.mock.method(StepRegistration.prototype, "create", async function (input) {
-      const prepared = await create.call(this, input);
-      observations.push(new ExecutionObservation("create", this, input, prepared));
-      return prepared;
+    this.#mocks.push(t.mock.method(StepRegistration.prototype, "create", function (input) {
+      const record = (prepared) => {
+        observations.push(new ExecutionObservation("create", this, input, prepared));
+        return prepared;
+      };
+      const prepared = create.call(this, input);
+      return prepared instanceof Promise ? prepared.then(record) : record(prepared);
     }));
     for (const operation of ["select", "project", "execute"]) {
       const implementation = StepExecutionContract.prototype[operation];
@@ -52,7 +57,7 @@ export class PrepareExecutionObserver {
   }
 
   prepared(registration) {
-    return this.#observations.filter((entry) => entry.operation === "create"
+    return this.#observations.filter((entry) => PREPARATION_OPERATIONS.has(entry.operation)
       && entry.receiver === registration).map((entry) => entry.value);
   }
 
@@ -64,7 +69,7 @@ export class PrepareExecutionObserver {
   assertCoherent() {
     const selections = new Map(this.#registrations.map((registration) => [registration, new Set()]));
     for (const entry of this.#observations) {
-      if (entry.operation === "create") continue;
+      if (PREPARATION_OPERATIONS.has(entry.operation)) continue;
       const stepId = entry.stepId;
       const knownContract = this.#registrations.some((registration) => registration.executionContract === entry.receiver);
       if (!knownContract && !this.#stepIds.has(stepId)) continue;

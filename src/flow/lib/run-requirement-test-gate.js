@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 
 import { runCmdAsync } from "../../lib/process.js";
-import { FlowArtifactAttemptHistory } from "../../lib/flow-artifact-contract.js";
+import { FLOW_ARTIFACT_CONTRACTS, FlowArtifactAttemptHistory } from "../../lib/flow-artifact-contract.js";
 import { FlowCommand } from "./base-command.js";
 import { attachCanonicalCommandResultArtifact } from "./canonical-command-result.js";
 import { CanonicalTestArtifactStore, isCanonicalFlowState } from "./canonical-test-artifacts.js";
@@ -257,8 +257,46 @@ export default class RunRequirementTestGateCommand extends FlowCommand {
   }
 
   async execute(ctx) {
-    const state = ctx.flowState;
-    if (!isCanonicalFlowState(state) || state.currentNodeId !== "test-gate" || state.attempt == null) {
+    const { gateStepExecutionRegistration } = await import("../engine/composition/registered-step-execution.js");
+    const state = ctx.flowManager.canonicalState(ctx.specId ?? ctx.flowState?.specId);
+    if (!isCanonicalFlowState(state) || state.current?.at(-1) !== "test-gate" || state.attempt == null) {
+      throw new Error("Requirement test Gate requires the active Version-1 test-gate Attempt");
+    }
+    const registration = gateStepExecutionRegistration("test");
+    if (registration?.stepId !== "test-gate") {
+      throw new Error("Requirement test Gate has no registered execution contract");
+    }
+    const flowState = ctx.flowManager.loadReadOnly(state.specId);
+    const selection = registration.executionContract.select({
+      flowManager: ctx.flowManager, flowState, phase: "test", typedState: state,
+      scope: "flow", stepId: registration.stepId,
+    });
+    return registration.executionContract.execute(selection, {
+      command: this, ctx, phase: "test", stepId: registration.stepId,
+    });
+  }
+
+  async executeSelectedGate(selection, { ctx }) {
+    const [{ assertCurrentGateExecutionSelection }, { gateStepExecutionRegistration }] = await Promise.all([
+      import("./execution-admission.js"),
+      import("../engine/composition/registered-step-execution.js"),
+    ]);
+    const state = ctx.flowManager.canonicalState(ctx.specId ?? ctx.flowState?.specId);
+    const registration = gateStepExecutionRegistration("test");
+    if (registration?.stepId !== "test-gate") {
+      throw new Error("Requirement test Gate has no registered execution contract");
+    }
+    const flowState = ctx.flowManager.loadReadOnly(state.specId);
+    const current = registration.executionContract.select({
+      flowManager: ctx.flowManager, flowState, phase: "test", typedState: state,
+      scope: "flow", stepId: registration.stepId,
+    });
+    assertCurrentGateExecutionSelection(selection, current);
+    return this.#executeRequirementTestGate(ctx, state);
+  }
+
+  async #executeRequirementTestGate(ctx, state) {
+    if (!isCanonicalFlowState(state) || state.current?.at(-1) !== "test-gate" || state.attempt == null) {
       throw new Error("Requirement test Gate requires the active Version-1 test-gate Attempt");
     }
     assertDirectGateExecution(ctx.flowManager, state);
@@ -279,7 +317,7 @@ export default class RunRequirementTestGateCommand extends FlowCommand {
       sourceBytes: new Map([...candidate.sources, ...candidate.support]
         .map((source) => [source.targetRelativePath, source.bytes])),
     });
-    const rawOutputPath = testArtifacts.location.relativeArtifact("test.requirement.gate.raw-log");
+    const rawOutputPath = FLOW_ARTIFACT_CONTRACTS.resolve("test.requirement.gate.raw-log").relativePath;
     testArtifacts.writeRaw({
       nodeId: "test-gate",
       logicalKey: "test.requirement.gate.raw-log",
@@ -305,7 +343,7 @@ export default class RunRequirementTestGateCommand extends FlowCommand {
       changed: [rawOutputPath],
       artifacts: {
         completed: true,
-        result_path: testArtifacts.location.relativeArtifact("test.requirement.gate"),
+        result_path: FLOW_ARTIFACT_CONTRACTS.resolve("test.requirement.gate").relativePath,
         raw_output_path: rawOutputPath,
         artifact_version: "1",
         result: execution.observation.kind,

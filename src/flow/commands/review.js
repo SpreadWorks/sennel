@@ -3199,10 +3199,17 @@ class TestReviewFinding {
     }
     this.disposition = kind === "blocking" ? "must-fix" : "informational";
     this.rationale = kind === "blocking" ? this.whyBlocking : this.whyNonBlocking;
+    const findingKey = crypto.createHash("sha256").update(JSON.stringify([
+      this.kind,
+      this.title,
+      this.target,
+      kind === "blocking" ? this.issue : this.improvement,
+    ])).digest("hex");
     this.fingerprint = ReviewFindingFingerprint.fromFinding({
       category: this.failureKind || kind,
       requirementId: this.target,
       file: this.target.includes("/") ? this.target : null,
+      findingKey,
       title: this.title,
       issue: kind === "blocking" ? this.issue : this.improvement,
     }).value;

@@ -2,6 +2,8 @@ import { assertCurrentWorkerExecutionSelection } from "./worker-execution-admiss
 import { workerStepExecutionRegistration, flowStepExecutionRegistration } from "../engine/composition/registered-step-execution.js";
 import { prepareStepRegistration } from "../engine/composition/prepare.js";
 import { reserveSpecGateRepairWorkerCall } from "../engine/composition/spec-gate-repair.js";
+import { acquireApprovalInput, executeApprovalInput } from "../engine/composition/test.js";
+import { settleRequirementTestFailure } from "../services/requirement-test-failure-settlement.js";
 import { SPEC_GATE_REPAIR_REQUEST_LIMIT } from "./spec-gate-repair-progress.js";
 import { planSpecGateRepairWorkerExecution } from "./spec-gate-repair-execution.js";
 import { CURRENT_FLOW_SCHEMA_REVISION } from "../../lib/flow-schema-revision.js";
@@ -201,7 +203,9 @@ function settleRequirementTestToolingFailure(ctx, attempt, error) {
   const stepId = attempt?.handoffRequest?.stepId ?? null;
   if (!REQUIREMENT_TEST_WORKER_LEAVES.has(stepId)
     || !isExplicitWorkerToolingFailure(error, attempt.agentError)) return false;
-  ctx.flowManager.completeRequirementTestToolingFailure({
+  settleRequirementTestFailure({
+    flowManager: ctx.flowManager,
+    kind: "tooling",
     specId: attempt.handoffRequest.specId,
     message: error?.message || String(error),
   });
@@ -214,7 +218,9 @@ function settleRequirementTestExternalFailure(ctx, attempt, error) {
   const failure = agentFailuresFor(error, attempt?.agentError)
     .find(isRequirementTestExternalAgentFailure) ?? null;
   if (!REQUIREMENT_TEST_WORKER_LEAVES.has(stepId) || failure === null) return false;
-  ctx.flowManager.completeRequirementTestExternalFailure({
+  settleRequirementTestFailure({
+    flowManager: ctx.flowManager,
+    kind: "external",
     specId: attempt.handoffRequest.specId,
     failure,
   });
@@ -225,19 +231,46 @@ function settleRequirementTestExternalFailure(ctx, attempt, error) {
 /**
  * A sealed Requirement-test candidate can be structurally unusable while its
  * authority, identity, digests, and paths are all valid.  That is a semantic
- * rejection, not a worker/tooling failure: the FlowManager is the only owner
- * of publishing the candidate, recording its R-bound finding, and selecting
- * the Definition route in one transaction.
+ * rejection. The shared settlement path selects its registered Step Result
+ * and Definition route, then publishes the candidate and finding together.
  */
 function settleRequirementTestStructuralHandoff(ctx, attempt, error) {
   if (!(error instanceof RequirementTestStructuralHandoffError)
     || !REQUIREMENT_TEST_WORKER_LEAVES.has(attempt?.handoffRequest?.stepId)) return false;
-  ctx.flowManager.completeRequirementTestStructuralHandoff({
+  settleRequirementTestFailure({
+    flowManager: ctx.flowManager,
+    kind: "structural",
     specId: attempt.handoffRequest.specId,
     structuralResult: error.result,
   });
   ctx.flowState = ctx.flowManager.loadReadOnly(attempt.handoffRequest.specId);
   return true;
+}
+
+async function persistApprovalAwaitResult(ctx) {
+  const state = ctx.flowManager.canonicalState(ctx.specId);
+  if (state.current?.at(-1) !== "approval" || state.attempt === null) return;
+  const publication = ctx.flowManager.readArtifact({ specId: state.specId,
+    logicalKey: "spec.record", consumerNodeId: "approval" });
+  const review = ctx.flowManager.readCurrentSpecReview({ specId: state.specId,
+    consumerNodeId: "approval" });
+  if (review === null) throw new Error("approval wait requires the canonical Spec Review revision");
+  const observed = acquireApprovalInput({
+    state,
+    specDescriptor: publication.descriptor,
+    spec: JSON.parse(publication.bytes.toString("utf8")),
+    review: review.review,
+    approved: false,
+  });
+  const outcome = await executeApprovalInput({
+    stepId: "approval",
+    observed,
+    ctx,
+    flowManager: ctx.flowManager,
+    expectedSpecDigest: publication.descriptor.hash,
+  });
+  if (outcome?.receipt == null) throw new Error("Approval awaiting-user Result was not persisted");
+  ctx.flowState = ctx.flowManager.loadReadOnly(state.specId);
 }
 
 function draftWorkerCorrection(ctx) {
@@ -418,9 +451,15 @@ function commandEnvelope(output, commandName, exitCode) {
     throw error;
   }
   if (exitCode !== 0 && envelope?.ok !== false) {
-    const error = new Error(`dispatcher-owned command ${commandName} exited with status ${exitCode}`);
+    const details = Array.isArray(envelope?.errors)
+      ? envelope.errors.flatMap((entry) => Array.isArray(entry?.messages) ? entry.messages : [])
+        .filter((message) => typeof message === "string" && message.trim() !== "")
+      : [];
+    const detail = details.length > 0 ? `: ${details.join("; ")}` : "";
+    const error = new Error(`dispatcher-owned command ${commandName} exited with status ${exitCode}${detail}`);
     error.code = envelope?.errors?.find((entry) => typeof entry?.code === "string")?.code
       || "FLOW_DISPATCH_COMMAND_FAILED";
+    error.data = envelope?.data;
     throw error;
   }
   return envelope;
@@ -1625,7 +1664,7 @@ export default class RunDispatchCommand extends FlowCommand {
     };
   }
 
-  runApprovalContinuation(ctx, invocation) {
+  async runApprovalContinuation(ctx, invocation) {
     if (invocation.action.nextAction.step !== "approval") return null;
     if (typeof ctx.flowManager?.approveSpecContinuation !== "function") {
       throw new Error("approval continuation requires the canonical parent Store operation");
@@ -1654,11 +1693,26 @@ export default class RunDispatchCommand extends FlowCommand {
       confirmAndAdvance(selected) {
         if (!(selected instanceof ConfirmAndAdvance)) throw new Error("Definition selected an invalid approval continuation plan");
         const recorded = selected.facts.approvalRecord;
-        return ctx.flowManager.approveSpecContinuation({
+        const approval = new CanonicalSpecApproval(recorded === null
+          ? { confirmedAt }
+          : { confirmedAt: recorded.confirmed_at, notes: recorded.notes ?? null });
+        const review = ctx.flowManager.readCurrentSpecReview({
           specId: ctx.specId,
-          approval: new CanonicalSpecApproval(recorded === null
-            ? { confirmedAt }
-            : { confirmedAt: recorded.confirmed_at, notes: recorded.notes ?? null }),
+          consumerNodeId: "approval",
+        });
+        if (review === null) throw new Error("approval requires the canonical Spec Review revision");
+        const observed = acquireApprovalInput({
+          state,
+          specDescriptor: spec.descriptor,
+          spec: JSON.parse(spec.bytes.toString("utf8")),
+          review: review.review,
+          approval,
+        });
+        return executeApprovalInput({
+          stepId: "approval",
+          observed,
+          ctx,
+          flowManager: ctx.flowManager,
           expectedSpecDigest: selected.facts.specPublicationDigest,
         });
       },
@@ -1858,7 +1912,7 @@ export default class RunDispatchCommand extends FlowCommand {
     if (registration === null) return this.#executeSelectedWorker(ctx, invocation, retryFeedback, agentOverride);
     const selection = registration.executionContract.select({ ctx, stepId });
     return registration.executionContract.execute(selection, {
-      command: this, ctx, invocation, retryFeedback, agentOverride,
+      command: this, ctx, stepId, invocation, retryFeedback, agentOverride,
     });
   }
 
@@ -2189,7 +2243,7 @@ export default class RunDispatchCommand extends FlowCommand {
             ? await this.runSpecWorkerStep(prepared)
             : { error: null, ...prepared };
         } else {
-          reconciliation = this.handoffCoordinator.reconcile({
+          reconciliation = await this.handoffCoordinator.reconcile({
             ctx,
             request: handoffRequest,
             mutationAuthority: workerArtifactAuthority,
@@ -2589,6 +2643,7 @@ export default class RunDispatchCommand extends FlowCommand {
           );
         }
         if (!invocation.approved) {
+          if (current.step === "approval") await persistApprovalAwaitResult(ctx);
           return new FlowDispatchBoundary({
             kind: "approval_required",
             target,
@@ -2654,7 +2709,7 @@ export default class RunDispatchCommand extends FlowCommand {
 
       let approvalContinuation;
       try {
-        approvalContinuation = this.runApprovalContinuation(ctx, invocation);
+        approvalContinuation = await this.runApprovalContinuation(ctx, invocation);
       } catch (error) {
         return this.failure(
           ctx,

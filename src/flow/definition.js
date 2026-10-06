@@ -35,10 +35,12 @@ import { TestReviewRepairFinding } from "./lib/test-review-repair.js";
 import { SpecRevisionIdentity } from "./lib/spec-revision-identity.js";
 import {
   REQUIREMENT_TEST_LEAF_IDS,
+  RequirementTestInitializationEffect,
   RequirementTestInitializationDecision,
   RequirementTestLifecycleDecision,
 } from "./lib/requirement-test-transition.js";
 export {
+  RequirementTestInitializationEffect,
   RequirementTestInitializationDecision,
   RequirementTestLifecycleDecision,
 } from "./lib/requirement-test-transition.js";
@@ -109,6 +111,28 @@ import {
   StepResult,
   STEP_RESULT_TYPE,
   stepResultDigest,
+  ApprovalAwaitingUserResult,
+  ApprovalConfirmedWithTestsResult,
+  ApprovalConfirmedWithoutTestsResult,
+  TestGenerateCandidateSavedResult,
+  TestGenerateStructuralRejectedResult,
+  TestGenerateToolingUnavailableResult,
+  TestGenerateExternalBlockedResult,
+  TestReviewExecutionRequiredResult,
+  TestReviewPassedResult,
+  TestReviewAdvisoryResult,
+  TestReviewRejectedResult,
+  TestReviewToolingUnavailableResult,
+  TestReviewExternalBlockedResult,
+  TestRepairCandidateSavedResult,
+  TestRepairStructuralRejectedResult,
+  TestRepairProgressSavedResult,
+  TestRepairToolingUnavailableResult,
+  TestRepairExternalBlockedResult,
+  TestGateCompatibleResult,
+  TestGateIncompatibleResult,
+  TestGateToolingUnavailableResult,
+  RequirementTestResultFrontier,
 } from "./engine/step-result.js";
 import { DraftReviewConnector } from "./engine/connectors/draft/draft-review-connector.js";
 import { SpecGateRepairConnector, SpecGateApprovalConnector, SpecGateRepairReviewConnector,
@@ -123,6 +147,7 @@ import { SpecRepairConnector } from "./engine/connectors/spec/spec-repair-connec
 import { SpecGateConnector } from "./engine/connectors/spec/spec-gate-connector.js";
 import { PlanPreparationConnector } from "./engine/connectors/prepare/plan-preparation-connector.js";
 import { PrepareDraftConnector } from "./engine/connectors/prepare/prepare-draft-connector.js";
+import { RequirementTestConnector } from "./engine/connectors/test/requirement-test-connector.js";
 import { PreparationEvidence } from "./lib/preparation-evidence.js";
 import {
   flattenSteps,
@@ -747,7 +772,7 @@ export class RequirementTestLifecycleFacts {
     if (permitted.get(leaf).get(observationKind) !== workItem.status) {
       throw new Error("Requirement test lifecycle leaf, observation, and status do not match");
     }
-    if (leaf !== "test-generate" && !isCandidate) {
+    if (leaf !== "test-generate" && !isCandidate && !isStructural) {
       if (!(boundCandidate instanceof RequirementTestCandidateBundle)
         || JSON.stringify(boundCandidate.bundle.toJSON()) !== JSON.stringify(workItem.bundleRevision.toJSON())) {
         throw new Error("Requirement test lifecycle candidate bundle is not current");
@@ -793,19 +818,27 @@ export function initializeRequirementTestLifecycle({ spec, specRevision } = {}) 
   return new RequirementTestInitializationDecision({ plan, target: "test-generate" });
 }
 
-function requirementTestDecision(facts, input) {
-  return new RequirementTestLifecycleDecision({ requirementId: facts.workItem.requirementId, ...input, facts });
+function selectedRequirementTestDecision(selection, input) {
+  return new RequirementTestLifecycleDecision({
+    requirementId: selection.requirementId,
+    facts: selection.facts,
+    ...input,
+  });
 }
 
-function requirementTestTerminalDecision(facts, disposition, candidateBundle = null) {
+function requirementTestTerminalDecision(selection, disposition, candidateBundle = null) {
   const nextStatus = disposition === "promote" ? "promoted" : "deferred";
-  const afterSettlement = facts.plan.withWorkItem(facts.workItem.withState({ status: nextStatus }));
-  // Generate may have staged later Requirements in the same Attempt.  Those
-  // candidates are the next review frontier; only when none remain may a
-  // still-pending Requirement claim a fresh generator Attempt.
-  const staged = afterSettlement.activeWorkItem();
-  const pending = afterSettlement.nextPendingWorkItem();
-  return requirementTestDecision(facts, {
+  const staged = selection.facts === null
+    ? selection.frontier.staged[0] ?? null
+    : selection.facts.plan.withWorkItem(selection.facts.workItem.withState({
+      status: nextStatus, bundleRevision: candidateBundle?.bundle ?? selection.facts.workItem.bundleRevision,
+    })).activeWorkItem();
+  const pending = selection.facts === null
+    ? selection.frontier.pending[0] ?? null
+    : selection.facts.plan.withWorkItem(selection.facts.workItem.withState({
+      status: nextStatus, bundleRevision: candidateBundle?.bundle ?? selection.facts.workItem.bundleRevision,
+    })).nextPendingWorkItem();
+  return selectedRequirementTestDecision(selection, {
     disposition,
     target: staged ? "test-review" : pending ? "test-generate" : "implement",
     nextStatus,
@@ -815,34 +848,67 @@ function requirementTestTerminalDecision(facts, disposition, candidateBundle = n
   });
 }
 
-function requirementTestSemanticRetry(facts) {
-  const budget = facts.workItem.budget;
-  if (!(budget instanceof RequirementTestBudget)) throw new Error("Requirement test lifecycle budget must be typed");
-  // A structural rejection can be the first generated candidate, before the
-  // plan has recorded a bundle revision.  Its sealed candidate is the only
-  // authority for the semantic finding's revision in that case.
-  const bundleRevision = facts.candidateBundle?.bundle.revision
-    ?? facts.workItem.bundleRevision?.revision;
-  if (!Number.isSafeInteger(bundleRevision) || bundleRevision < 1) {
-    throw new Error("Requirement test semantic retry requires a candidate bundle revision");
-  }
-  const finding = new RequirementTestSemanticFinding({
-    requirementId: facts.workItem.requirementId,
-    bundleRevision,
-    fingerprint: facts.observation.semanticFindingFingerprint,
-  });
-  const duplicate = facts.workItem.hasSemanticFinding(finding);
-  const candidateBundle = facts.observationKind === "structural_rejection" ? facts.candidateBundle : null;
-  const budgetIncrement = facts.authority.autoApprove ? "autoSemantic" : "manualSemantic";
-  const selectedAttempts = budget[budgetIncrement];
-  if (duplicate || selectedAttempts < REQUIREMENT_TEST_SEMANTIC_LIMIT) {
-    return requirementTestDecision(facts, {
-      disposition: "semantic_retry", target: "test-repair", nextStatus: "reviewed",
-      budgetIncrement: duplicate ? null : budgetIncrement, semanticFinding: duplicate ? null : finding,
-      repairRequired: true, candidateBundle,
+/** The sole Definition policy for live Facts and saved Result-only selection. */
+function resolveRequirementTestSelection(selection) {
+  const { facts, leaf, observation, requirementId, status, budget, autoApprove, findings,
+    candidateBundle, semanticFinding, frontier, expectation } = selection;
+  if (observation === "external_blocked") {
+    return selectedRequirementTestDecision(selection, {
+      disposition: "external_blocked", target: leaf, nextStatus: status,
+      repairRequired: leaf === "test-repair" ? true : null,
     });
   }
-  return requirementTestTerminalDecision(facts, "defer", candidateBundle);
+  if (observation === "candidate_saved") {
+    const next = leaf === "test-generate" ? frontier.pending[0] ?? null : null;
+    return selectedRequirementTestDecision(selection, {
+      disposition: "advance", target: next === null ? "test-review" : "test-generate",
+      nextStatus: "candidate_saved", nextRequirementId: next?.requirementId ?? null,
+      candidateBundle,
+    });
+  }
+  if (observation === "review_pass" || observation === "review_advisory") {
+    return selectedRequirementTestDecision(selection, {
+      disposition: "advance", target: "test-gate", nextStatus: "reviewed", repairRequired: false,
+    });
+  }
+  if (observation === "tooling_failure") {
+    if (!(budget instanceof RequirementTestBudget)) throw new TypeError("Requirement test selection requires its typed budget");
+    if (budget.tooling < REQUIREMENT_TEST_TOOLING_LIMIT) {
+      return selectedRequirementTestDecision(selection, {
+        disposition: "tooling_retry", target: leaf, nextStatus: status,
+        budgetIncrement: "tooling", repairRequired: leaf === "test-repair" ? true : null,
+      });
+    }
+    return requirementTestTerminalDecision(selection, "defer");
+  }
+  if (observation === "structural_rejection" || observation === "semantic_rejection") {
+    if (observation === "semantic_rejection" && !(semanticFinding instanceof RequirementTestSemanticFinding)) {
+      throw new TypeError("Requirement test semantic selection requires its canonical finding");
+    }
+    const duplicate = semanticFinding instanceof RequirementTestSemanticFinding
+      && findings.some((finding) => finding.equals(semanticFinding));
+    const budgetIncrement = autoApprove ? "autoSemantic" : "manualSemantic";
+    const selectedAttempts = budget[budgetIncrement];
+    const retainedCandidate = observation === "structural_rejection" ? candidateBundle : null;
+    if (duplicate || selectedAttempts < REQUIREMENT_TEST_SEMANTIC_LIMIT) {
+      return selectedRequirementTestDecision(selection, {
+        disposition: "semantic_retry", target: "test-repair", nextStatus: "reviewed",
+        budgetIncrement: duplicate ? null : budgetIncrement,
+        semanticFinding: duplicate ? null : semanticFinding,
+        repairRequired: true, candidateBundle: retainedCandidate,
+      });
+    }
+    return requirementTestTerminalDecision(selection, "defer", retainedCandidate);
+  }
+  if (leaf === "test-gate") {
+    const expected = expectation === "fail" ? "assertion_failed" : "assertion_passed";
+    if (observation === expected) return requirementTestTerminalDecision(selection, "promote");
+    // Gate mismatches reopen the exact candidate for Review without charging a semantic attempt.
+    return selectedRequirementTestDecision(selection, {
+      disposition: "advance", target: "test-review", nextStatus: "candidate_saved",
+    });
+  }
+  throw new TypeError(`Requirement test lifecycle has no selection for ${leaf}/${observation}`);
 }
 
 /** Sole Requirement-test route, compatibility, and retry-budget policy. */
@@ -850,54 +916,21 @@ export function resolveRequirementTestLifecycle(input) {
   const facts = input instanceof RequirementTestLifecycleFacts
     ? input
     : new RequirementTestLifecycleFacts(input);
-  const observation = facts.observationKind;
-  if (observation === "external_blocked") {
-    return requirementTestDecision(facts, {
-      disposition: "external_blocked",
-      target: facts.leaf,
-      nextStatus: facts.workItem.status,
-      repairRequired: facts.leaf === "test-repair" ? true : null,
+  const finding = facts.observation.semanticFindingFingerprint === undefined
+    || facts.observation.semanticFindingFingerprint === null ? null : new RequirementTestSemanticFinding({
+      requirementId: facts.workItem.requirementId,
+      bundleRevision: facts.candidateBundle?.bundle.revision ?? facts.workItem.bundleRevision?.revision,
+      fingerprint: facts.observation.semanticFindingFingerprint,
     });
-  }
-  if (observation === "candidate_saved") {
-    const next = facts.leaf === "test-generate" ? facts.plan.nextPendingWorkItem() : null;
-    if (next !== null) {
-      return requirementTestDecision(facts, {
-        disposition: "advance", target: "test-generate", nextStatus: "candidate_saved",
-        nextRequirementId: next.requirementId, candidateBundle: facts.candidateBundle,
-      });
-    }
-    return requirementTestDecision(facts, {
-      disposition: "advance", target: "test-review", nextStatus: "candidate_saved",
-      candidateBundle: facts.candidateBundle,
-    });
-  }
-  if (observation === "review_pass" || observation === "review_advisory") {
-    return requirementTestDecision(facts, {
-      disposition: "advance", target: "test-gate", nextStatus: "reviewed", repairRequired: false,
-    });
-  }
-  if (observation === "tooling_failure") {
-    if (facts.workItem.budget.tooling < REQUIREMENT_TEST_TOOLING_LIMIT) {
-      return requirementTestDecision(facts, {
-        disposition: "tooling_retry", target: facts.leaf, nextStatus: facts.workItem.status,
-        budgetIncrement: "tooling", repairRequired: facts.leaf === "test-repair" ? true : null,
-      });
-    }
-    return requirementTestTerminalDecision(facts, "defer");
-  }
-  if (observation === "structural_rejection") return requirementTestSemanticRetry(facts);
-  if (facts.leaf === "test-gate") {
-    const expected = facts.workItem.expectation.value === "fail" ? "assertion_failed" : "assertion_passed";
-    if (observation === expected) return requirementTestTerminalDecision(facts, "promote");
-    // Gate records executable evidence only. Review owns canonical semantic
-    // classification, so an incompatible observation reopens this exact
-    // staged candidate rather than consuming a repair budget directly.
-    return requirementTestDecision(facts, {
-      disposition: "advance", target: "test-review", nextStatus: "candidate_saved",
-    });
-  }
-  return requirementTestSemanticRetry(facts);
+  return resolveRequirementTestSelection({
+    facts, leaf: facts.leaf, observation: facts.observationKind,
+    requirementId: facts.workItem.requirementId, status: facts.workItem.status,
+    budget: facts.workItem.budget, autoApprove: facts.authority.autoApprove,
+    findings: facts.workItem.semanticFindings, candidateBundle: facts.candidateBundle,
+    semanticFinding: finding,
+    frontier: RequirementTestResultFrontier.fromPlan(facts.plan, facts.workItem.requirementId),
+    expectation: facts.workItem.expectation.value,
+  });
 }
 
 /** Definition-owned response to verified source handoff failure facts. */
@@ -4403,12 +4436,27 @@ export class StepSettlement {
 
 /** A Definition-selected target connection; only this settlement owns a Connector. */
 export class StepRoute extends StepSettlement {
-  constructor(token, { result, targetStepId, connector, effects }) {
+  constructor(token, { result, targetStepId, connector, effects, requirementTestDecision = null, initializationEffect = null }) {
     super(token, result, "target-connection");
     this.targetStepId = requireString(targetStepId, "step route target");
     if (typeof connector !== "function") throw new TypeError("step route requires a Connector");
     this.connector = connector;
     this.effects = effects instanceof StepRouteEffects ? effects : new StepRouteEffects(effects);
+    if (requirementTestDecision !== null && !(requirementTestDecision instanceof RequirementTestLifecycleDecision)) {
+      throw new TypeError("Requirement test route requires its selected lifecycle decision");
+    }
+    if (initializationEffect !== null && !(initializationEffect instanceof RequirementTestInitializationEffect)) {
+      throw new TypeError("Requirement test approval route requires its selected initialization effect");
+    }
+    if (requirementTestDecision !== null && (requirementTestDecision.target !== targetStepId
+      || !REQUIREMENT_TEST_LEAF_IDS.includes(result.stepId))) {
+      throw new TypeError("Requirement test route does not match its selected lifecycle decision");
+    }
+    if (initializationEffect !== null && (result.stepId !== "approval" || initializationEffect.target !== targetStepId)) {
+      throw new TypeError("Requirement test initialization effect does not match its Approval route");
+    }
+    this.requirementTestDecision = requirementTestDecision;
+    this.initializationEffect = initializationEffect;
     Object.freeze(this);
   }
 
@@ -4418,6 +4466,8 @@ export class StepRoute extends StepSettlement {
       sourceStepId: this.sourceStepId,
       targetStepId: this.targetStepId,
       effects: this.effects.toJSON(),
+      ...(this.requirementTestDecision === null ? {} : { requirementTestDecision: this.requirementTestDecision.toJSON() }),
+      ...(this.initializationEffect === null ? {} : { initializationEffect: this.initializationEffect.toJSON() }),
     };
   }
 
@@ -4429,12 +4479,18 @@ export class DraftLoopRoute extends StepRoute {}
 export class SpecNextRoute extends StepRoute {}
 
 export class DraftExecutionSettlement extends StepSettlement {
-  constructor(token, result) {
+  constructor(token, result, requirementTestDecision = null) {
     super(token, result, "execution");
+    if (requirementTestDecision !== null && (!(requirementTestDecision instanceof RequirementTestLifecycleDecision)
+      || result.stepId !== "test-generate" || !requirementTestDecision.continuesSourceAttempt)) {
+      throw new TypeError("Requirement test execution checkpoint requires its selected generator continuation");
+    }
+    this.requirementTestDecision = requirementTestDecision;
     Object.freeze(this);
   }
 
-  toJSON() { return { kind: this.kind, sourceStepId: this.sourceStepId }; }
+  toJSON() { return { kind: this.kind, sourceStepId: this.sourceStepId,
+    ...(this.requirementTestDecision === null ? {} : { requirementTestDecision: this.requirementTestDecision.toJSON() }) }; }
 }
 
 export class SpecGateAwaitDecision extends StepSettlement {
@@ -4457,6 +4513,18 @@ export class DraftAwaitUserDecision extends StepSettlement {
     }
     super(token, result, "await");
     this.stepId = result.stepId;
+    Object.freeze(this);
+  }
+
+  toJSON() { return { kind: this.kind, sourceStepId: this.sourceStepId }; }
+}
+
+export class RequirementTestAwaitDecision extends StepSettlement {
+  constructor(token, result) {
+    if (!(result instanceof ApprovalAwaitingUserResult)) {
+      throw new TypeError("Requirement test await requires the Approval awaiting-user Result");
+    }
+    super(token, result, "await");
     Object.freeze(this);
   }
 
@@ -5468,6 +5536,88 @@ export function settleSpecStepResult(stepId, result) {
     });
   }
   throw new TypeError(`${stepId} has no settlement for ${result.kind}`);
+}
+
+function requirementTestResultSelection(result) {
+  const leaf = result.stepId;
+  const { binding, frontier, retryState } = result;
+  let observation;
+  let semanticFinding = null;
+  let candidateBundle = result.candidateBundle ?? null;
+  let expectation = null;
+  if (result instanceof TestGenerateCandidateSavedResult || result instanceof TestRepairCandidateSavedResult) {
+    observation = "candidate_saved";
+  } else if (result instanceof TestGenerateStructuralRejectedResult || result instanceof TestRepairStructuralRejectedResult) {
+    observation = "structural_rejection";
+    semanticFinding = result.semanticFinding;
+  } else if (result instanceof TestReviewPassedResult) {
+    observation = "review_pass";
+  } else if (result instanceof TestReviewAdvisoryResult) {
+    observation = "review_advisory";
+  } else if (result instanceof TestReviewRejectedResult) {
+    observation = "semantic_rejection";
+    semanticFinding = result.evidence.semanticFinding;
+  } else if (result instanceof TestGateCompatibleResult || result instanceof TestGateIncompatibleResult) {
+    observation = result.evidence.observation.kind;
+    expectation = result.evidence.expectation.toJSON();
+  } else if (result instanceof TestGenerateToolingUnavailableResult
+    || result instanceof TestReviewToolingUnavailableResult
+    || result instanceof TestRepairToolingUnavailableResult
+    || result instanceof TestGateToolingUnavailableResult) {
+    observation = "tooling_failure";
+    if (result instanceof TestGateToolingUnavailableResult) expectation = result.evidence.expectation.toJSON();
+  } else {
+    throw new TypeError(`${leaf} has no Requirement test lifecycle selection for ${result.kind}`);
+  }
+  if (binding.leaf !== leaf || !(frontier instanceof RequirementTestResultFrontier)
+    || retryState === null || typeof retryState !== "object") {
+    throw new TypeError("Requirement test Result does not contain its exact lifecycle selection operands");
+  }
+  return {
+    facts: null, leaf, observation, requirementId: binding.requirementId,
+    status: binding.status, budget: retryState.budget,
+    autoApprove: retryState.autoApprove, findings: retryState.findings,
+    candidateBundle, semanticFinding, frontier, expectation,
+  };
+}
+
+function selectRequirementTestRoute(result, targetStepId, { requirementTestDecision = null, initializationEffect = null } = {}) {
+  const leaves = collectFlowLeafIds();
+  return new StepRoute(STEP_SETTLEMENT_TOKEN, {
+    result, targetStepId, connector: RequirementTestConnector,
+    effects: new StepRouteEffects(contiguousLeafRouteEffects(leaves, result.stepId, targetStepId)),
+    requirementTestDecision,
+    initializationEffect,
+  });
+}
+
+/** Select the persisted Requirement-test settlement from its immutable Result only. */
+export function settleRequirementTestStepResult(stepId, result) {
+  if (!(result instanceof StepResult) || result.stepId !== stepId
+    || !["approval", "test-generate", "test-review", "test-repair", "test-gate"].includes(stepId)) {
+    throw new TypeError("Requirement test settlement requires the Step's concrete Result");
+  }
+  if (result.type === STEP_RESULT_TYPE.ERROR) return new StepErrorDecision(STEP_SETTLEMENT_TOKEN, result);
+  if (result instanceof ApprovalAwaitingUserResult) {
+    return new RequirementTestAwaitDecision(STEP_SETTLEMENT_TOKEN, result);
+  }
+  if (result instanceof ApprovalConfirmedWithTestsResult) return selectRequirementTestRoute(result, "test-generate", {
+    initializationEffect: new RequirementTestInitializationEffect({ target: "test-generate" }),
+  });
+  if (result instanceof ApprovalConfirmedWithoutTestsResult) return selectRequirementTestRoute(result, "implement", {
+    initializationEffect: new RequirementTestInitializationEffect({ target: "implement",
+      skippedLeafIds: [...REQUIREMENT_TEST_LEAF_IDS] }),
+  });
+  if (result instanceof TestReviewExecutionRequiredResult || result instanceof TestRepairProgressSavedResult) {
+    return new DraftExecutionSettlement(STEP_SETTLEMENT_TOKEN, result);
+  }
+  const selection = requirementTestResultSelection(result);
+  if (result instanceof TestGenerateCandidateSavedResult && result.frontier.pending.length > 0) {
+    const decision = resolveRequirementTestSelection(selection);
+    return new DraftExecutionSettlement(STEP_SETTLEMENT_TOKEN, result, decision);
+  }
+  const decision = resolveRequirementTestSelection(selection);
+  return selectRequirementTestRoute(result, decision.target, { requirementTestDecision: decision });
 }
 
 const DRAFT_REVIEW_ROUTE_EXPECTATIONS = Object.freeze([

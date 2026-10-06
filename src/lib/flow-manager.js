@@ -37,6 +37,7 @@ import {
   FlowTargetRecoveryError,
 } from "./flow-target-identity-authority.js";
 import { FlowRecoveryTarget } from "./flow-recovery-target.js";
+import { settleRequirementTestFailure } from "../flow/services/requirement-test-failure-settlement.js";
 
 const ACTIVE_FLOW_MODES = new Set(["worktree", "branch", "direct"]);
 
@@ -489,6 +490,12 @@ export class FlowManager {
     return this.#commitStepSettlement(this.settleDraftStepResult, input);
   }
   commitSpecStepResult(input) {
+    if (input?.stepResult?.stepId === "approval") {
+      return this.#commitStepSettlement(this.approveSpecContinuation, input);
+    }
+    if (["test-generate", "test-review", "test-repair", "test-gate"].includes(input?.stepResult?.stepId)) {
+      return this.#commitStepSettlement(this.completeRequirementTestLifecycle, input);
+    }
     return this.#commitStepSettlement(this.settleSpecStepResult, input);
   }
   commitDraftStepCheckpoint(input) {
@@ -659,6 +666,12 @@ export class FlowManager {
       specId: input.specId ?? this._boundSpecId,
     });
   }
+  previewStepResultPublications(input = {}) {
+    return this._store.previewStepResultPublications({
+      ...input,
+      specId: input.specId ?? this._boundSpecId,
+    });
+  }
   publishSourceHandoffCheckpoint(input = {}) {
     return this._store.publishSourceHandoffCheckpoint({
       ...input,
@@ -751,20 +764,26 @@ export class FlowManager {
     });
   }
   completeRequirementTestStructuralHandoff(input = {}) {
-    return this._store.completeRequirementTestStructuralHandoff({
+    return settleRequirementTestFailure({
+      flowManager: this,
       ...input,
+      kind: "structural",
       specId: input.specId ?? this._boundSpecId,
     });
   }
   completeRequirementTestExternalFailure(input = {}) {
-    return this._store.completeRequirementTestExternalFailure({
+    return settleRequirementTestFailure({
+      flowManager: this,
       ...input,
+      kind: "external",
       specId: input.specId ?? this._boundSpecId,
     });
   }
   completeRequirementTestToolingFailure(input = {}) {
-    return this._store.completeRequirementTestToolingFailure({
+    return settleRequirementTestFailure({
+      flowManager: this,
       ...input,
+      kind: "tooling",
       specId: input.specId ?? this._boundSpecId,
     });
   }

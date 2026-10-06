@@ -10,6 +10,7 @@ import { MemorySourceRepository, SourceRepository } from "../support/structure/s
 import { SourceModule } from "../support/structure/source-reader.js";
 import { RequirementTestProductionRegistrations, requirementTestManifest, requirementTestScope }
   from "../support/structure/requirement-test-scope.js";
+import { requirementTestStructureContract } from "../support/structure/requirement-test-scope.js";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const source = new RequirementTestProductionRegistrations(root);
@@ -55,7 +56,7 @@ test("shared checker fixture accepts all five fixed leaves and detects each miss
 test("RequirementTest production obeys A01-A12 across fixed leaves and every present phase registration", async (t) => {
   const { selected, registry } = await source.registry();
   const report = checkStructure({ root, entry: requirementTestScope.entry, registrations: selected,
-    registrationModule: requirementTestScope.composition, contract: requirementTestScope.contract(registry) });
+    registrationModule: requirementTestScope.composition, contract: requirementTestStructureContract(registry) });
   t.diagnostic(report.describe());
   assert.equal(report.ok, true, report.diagnostics.map((entry) => entry.toString()).join("\n"));
   assert.ok(report.visited.size > 0);

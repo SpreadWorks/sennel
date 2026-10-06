@@ -3,6 +3,13 @@ import path from "path";
 import { Container } from "../../../src/lib/container.js";
 import { FlowManager } from "../../../src/lib/flow-manager.js";
 import { emptySpecStub } from "../../../src/lib/spec-json.js";
+import { settleRequirementTestStepResult } from "../../../src/flow/definition.js";
+import {
+  ApprovalConfirmedWithTestsResult,
+  ApprovalConfirmedWithoutTestsResult,
+} from "../../../src/flow/engine/step-result.js";
+import { acquireApprovalInput } from "../../../src/flow/engine/composition/test.js";
+import { CanonicalSpecApproval } from "../../../src/flow/lib/canonical-spec-approval.js";
 import { CanonicalFlowCreateRequest } from "../../../src/flow/lib/canonical-flow-manager-store.js";
 import { CurrentFlowSpecRecord, FlowExecution } from "../../../src/flow/lib/current-flow-state.js";
 import { findStepById, flattenSteps } from "../../../src/flow/lib/step-tree.js";
@@ -166,9 +173,36 @@ export function confirmCanonicalFixtureStep(flowManager, specId, nodeId, status 
     candidate.steps.some((step) => step.id === nodeId)
   )) ?? null;
   if (nodeId === "approval" && status === "done") {
+    const typedState = flowManager.canonicalState(resolvedSpecId);
+    const publication = flowManager.readArtifact({
+      specId: resolvedSpecId,
+      logicalKey: "spec.record",
+      consumerNodeId: "approval",
+    });
+    const review = flowManager.readCurrentSpecReview({
+      specId: resolvedSpecId,
+      consumerNodeId: "approval",
+    });
+    if (review === null) throw new Error("canonical fixture Approval requires the current Spec Review");
+    const approval = new CanonicalSpecApproval({ confirmedAt: "2026-01-02T03:04:05.000Z" });
+    const input = acquireApprovalInput({
+      state: typedState,
+      specDescriptor: publication.descriptor,
+      spec: JSON.parse(publication.bytes.toString("utf8")),
+      review: review.review,
+      approval,
+    });
+    const stepResult = input.evidence.testsRequired
+      ? new ApprovalConfirmedWithTestsResult({ evidence: input.evidence })
+      : new ApprovalConfirmedWithoutTestsResult({ evidence: input.evidence });
     flowManager.approveSpecContinuation({
       specId: resolvedSpecId,
-      approval: { confirmedAt: "2026-01-02T03:04:05.000Z" },
+      approval,
+      stepResult,
+      settlement: settleRequirementTestStepResult("approval", stepResult),
+      plan: input.plan,
+      specRecordPublication: input.specRecordPublication,
+      expectedSpecDigest: publication.descriptor.hash,
     });
     return flowManager.loadReadOnly(resolvedSpecId);
   }

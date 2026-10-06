@@ -1,7 +1,8 @@
 import "./requirement-test-save-recovery.contract.js";
 import "./requirement-test-stale-admission.contract.js";
+import "./requirement-test-error-admission.contract.js";
 import assert from "node:assert/strict";
-import { describe, it } from "node:test";
+import { describe, it, mock } from "node:test";
 import path from "node:path";
 import RunRetroCommand from "../../../src/flow/lib/run-retro.js";
 import RunAcceptanceReviewCommand, { AcceptanceReviewResponseSource } from "../../../src/flow/lib/run-acceptance-review.js";
@@ -13,9 +14,15 @@ import SetAutoCommand from "../../../src/flow/lib/set-auto.js";
 import GetStatusCommand from "../../../src/flow/lib/get-status.js";
 import RunClaimNextActionCommand from "../../../src/flow/lib/run-claim-next-action.js";
 import { CanonicalAcceptanceArtifactStore } from "../../../src/flow/lib/canonical-acceptance-artifacts.js";
+import { RequirementTestArtifactStore } from "../../../src/flow/lib/requirement-test-store.js";
+import { prepareCommonRequirementTestError } from "../../support/requirement-test-save-boundary.js";
 import { RequirementTestPhaseScenario, requirementTestSource, rejectFirstRequirementReview, rejectFirstRequirementReviewBatches } from "../../support/requirement-test-phase-scenario.js";
 import { assertRequirementTestResultRoundtrip } from "../../support/assertions/requirement-test-result.js";
 import { TEST_REVIEW_REPAIR_BATCH_LIMITS, canonicalTestReviewRepairForTarget, canonicalTestReviewRepairProgress } from "../../../src/flow/lib/test-review-repair.js";
+import { FlowDispatchSession, FlowDispatchTarget } from "../../../src/flow/lib/dispatch-invocation.js";
+import { CanonicalSpecApproval } from "../../../src/flow/lib/canonical-spec-approval.js";
+import { acquireApprovalInput } from "../../../src/flow/engine/composition/test.js";
+import SetAcceptanceDecisionCommand from "../../../src/flow/lib/set-acceptance-decision.js";
 
 function requirement(id, expectation = "fail") {
   return { id, desc: `Observe ${id} behavior.`, task_ids: ["T1"], preimplementation_test_expectation: expectation };
@@ -33,7 +40,7 @@ async function approved(t, options = {}) {
   } else {
     const awaiting = await scenario.dispatch(8);
     assert.equal(awaiting.dispatch?.boundary, "approval_required", JSON.stringify(awaiting));
-    scenario.approve();
+    await scenario.approve();
   }
   return scenario;
 }
@@ -59,6 +66,12 @@ function assertSavedResult(scenario, stepId, kind, expectedSettlement = null) {
     assert.ok(activity.sequence > 0);
     return { activity, ...checked };
   });
+}
+
+async function persistCommonStepError(scenario, stepId) {
+  const { prepared, service } = await prepareCommonRequirementTestError(scenario, stepId);
+  const result = await prepared.step.execute();
+  return { result, outcome: service.settlementOutcome };
 }
 
 function publishedCommand(scenario, logicalKey) {
@@ -144,13 +157,109 @@ async function consumeMixedDownstream(scenario) {
   await FLOW_COMMANDS.run["acceptance-review"].post(acceptanceContext, acceptance);
   scenario.reload();
   assert.notEqual(scenario.current(), "finalize-commit", "auto approval never grants Acceptance authority");
+
+  const decisionContext = scenario.context();
+  new SetAcceptanceDecisionCommand().execute({ ...decisionContext, choice: "accept_risk_and_continue" });
+  const reportArtifactInput = { specId: scenario.specId, logicalKey: "report", consumerNodeId: "report", optional: true };
+  let reportArtifact = scenario.manager.readArtifact(reportArtifactInput);
+  const reportDispatches = [];
+  for (let index = 0; reportArtifact === null && index < 8; index += 1) {
+    const dispatch = await scenario.dispatch();
+    reportDispatches.push(dispatch);
+    scenario.reload();
+    assert.equal(dispatch.errors?.some((entry) => entry.code !== "FLOW_DISPATCH_LIMIT_REACHED") ?? false, false,
+      JSON.stringify(dispatch.errors));
+    reportArtifact = scenario.manager.readArtifact(reportArtifactInput);
+  }
+  const pendingReportAction = reportArtifact === null ? await scenario.next() : null;
+  const finalRegression = reportArtifact === null
+    ? new CanonicalTestArtifactStore({ flowManager: scenario.manager, state: scenario.manager.canonicalState(scenario.specId) })
+      .readCurrentAttempt({ logicalKey: "final.regression", consumerNodeId: "final-regression", optional: true })?.payload ?? null
+    : null;
+  assert.ok(reportArtifact !== null,
+    `the registered report consumer must publish its canonical artifact after the explicit Acceptance decision: ${JSON.stringify({ currentAction: scenario.current(), nextAction: { step: pendingReportAction?.step, directive: pendingReportAction?.directive?.kind }, finalRegression: finalRegression === null ? null : { result: finalRegression.result, failureKind: finalRegression.failureKind, failureCategory: finalRegression.failureCategory, failureSummary: finalRegression.failureSummary, command: finalRegression.command, exitCode: finalRegression.process?.exitCode, skipKind: finalRegression.skipKind }, dispatchCount: reportDispatches.length })}`);
+  const report = JSON.parse(reportArtifact.bytes.toString("utf8"));
+  assert.deepEqual({ total: report.data.tests.total, passed: report.data.tests.passed, failed: report.data.tests.failed },
+    { total: 2, passed: 1, failed: 0 }, "report counts only the promoted Requirement as a passing test");
+  assert.equal(report.data.retro.deferred_count, 1, "report retains the deferred Requirement obligation");
 }
 
 /** Outcome-to-condition graph is in requirement-test-phase-scenario-coverage.md.
- * All assertions below use production producers; a generation failure intentionally blocks
- * dependent Review/Gate assertions and is reported as a gap, never replaced by fixtures.
+ * Scenarios follow production producers through Review, Gate, and downstream consumers;
+ * failure cases stop only at their documented boundary and never use fixture settlements.
  */
 describe("Requirement Test phase production scenarios", { concurrency: false }, () => {
+  it("keeps the Approval Action digest stable across canonical reread and clock advance", async (t) => {
+    const scenario = RequirementTestPhaseScenario.create(t);
+    await scenario.advanceTo("approval");
+    const target = FlowDispatchTarget.captureContext({ ...scenario.context(), expectRunId: "run-requirement-phase" });
+    const session = new FlowDispatchSession({ target });
+    const action = await scenario.next();
+    const original = session.captureAction(action, "stable-repository-fingerprint");
+    scenario.reload();
+    const now = Date.now();
+    const clock = mock.method(Date, "now", () => now + 60_000);
+    try {
+      assert.equal(Date.now(), now + 60_000);
+      const reread = await scenario.next();
+      const restored = session.captureCanonicalAction(reread, original);
+      assert.equal(restored.digest, original.digest);
+      assert.equal(restored.hasCanonicalActionProgressedTo(original), false);
+    } finally {
+      clock.mock.restore();
+    }
+  });
+
+  it("validates the approved Spec at the outer Approval acquisition boundary", async (t) => {
+    const scenario = RequirementTestPhaseScenario.create(t);
+    await scenario.advanceTo("approval");
+    const state = scenario.manager.canonicalState(scenario.specId);
+    const specRecord = scenario.manager.readArtifact({ specId: scenario.specId,
+      logicalKey: "spec.record", consumerNodeId: "approval" });
+    const review = scenario.manager.readCurrentSpecReview({ specId: scenario.specId,
+      consumerNodeId: "approval" });
+    const invalidSpec = JSON.parse(specRecord.bytes.toString("utf8"));
+    invalidSpec.requirements[0].preimplementation_test_expectation = "maybe";
+    const approval = new CanonicalSpecApproval({ confirmedAt: "2026-10-05T00:00:00.000Z" });
+    assert.throws(() => acquireApprovalInput({ state, specDescriptor: specRecord.descriptor,
+      spec: invalidSpec, review: review.review, approval }));
+  });
+
+  for (const stepId of ["approval", "test-generate", "test-review", "test-repair", "test-gate"]) {
+    it(`persists the shared ${stepId} Error Result with its source binding and Failure receipt`, async (t) => {
+      const scenario = stepId === "approval"
+        ? RequirementTestPhaseScenario.create(t)
+        : await approved(t, { ...(stepId === "test-repair" ? { reviewResponse: rejectFirstRequirementReview } : {}) });
+      if (stepId === "approval") await scenario.advanceTo("approval");
+      else if (scenario.current() !== stepId) await scenario.advanceTo(stepId);
+      const priorState = scenario.manager.canonicalState(scenario.specId);
+      const priorPlan = stepId === "approval" ? null : scenario.plan().toJSON();
+      const { result, outcome } = await persistCommonStepError(scenario, stepId);
+      scenario.reload();
+      const failed = scenario.manager.canonicalState(scenario.specId);
+      assert.equal(result.kind, `${stepId}-error`);
+      assert.equal(result.type, "error");
+      assert.equal(outcome.receipt.binding.attemptId, priorState.attempt.id);
+      assert.equal(outcome.receipt.binding.attemptSequence, priorState.attempt.sequence);
+      assert.equal(failed.attempt.id, priorState.attempt.id);
+      assert.equal(failed.attempt.failure.code, "SEMANTIC_STEP_FAILURE");
+      const activity = scenario.manager.activityLedger(scenario.specId).findLast((entry) => (
+        entry.nodeId === stepId && entry.result?.stepResult?.kind === `${stepId}-error`));
+      assert.ok(activity);
+      assert.equal(activity.transition.operation, "fail_attempt");
+      const [saved] = assertSavedResult(scenario, stepId, `${stepId}-error`, { kind: "failure" });
+      assert.equal(saved.result.error.code, "SEMANTIC_STEP_FAILURE");
+      if (stepId === "approval") {
+        assert.equal(saved.result.evidence.attempt.id, priorState.attempt.id);
+        assert.equal(saved.result.evidence.attempt.sequence, priorState.attempt.sequence);
+      } else {
+        assert.equal(saved.result.binding.attempt.id, priorState.attempt.id);
+        assert.equal(saved.result.binding.leaf, stepId);
+        assert.deepEqual(scenario.plan().toJSON(), priorPlan, "Failure does not advance the Requirement plan or budget");
+      }
+    });
+  }
+
   it("reads the saved Review execution-required checkpoint before provider output and continues to Gate", async (t) => {
     let checkpoint = null;
     const scenario = await approved(t, { beforeReview(work, current) {
@@ -325,8 +434,8 @@ describe("Requirement Test phase production scenarios", { concurrency: false }, 
       const scenario = await approved(t, { autoApprove,
         requirements: [requirement("R1"), { id: "R2", desc: "Manual review.", task_ids: ["T1"], testable: false }, requirement("R3", "pass")],
         reviewResponse: () => ({ verdict, blockingFindings: [], advisoryFindings: verdict === "ADVISORY" ? [{
-          title: "Clarify assertion wording", target: "R1", issue: "The assertion text could be more descriptive.",
-          requiredChange: "Use a clearer assertion message.", whyBlocking: "Advisory only.",
+          title: "Clarify assertion wording", target: "R1", improvement: "Use a clearer assertion message.",
+          whyNonBlocking: "Advisory only.",
         }] : [] }),
       });
       const initialPlan = scenario.plan();
@@ -351,7 +460,7 @@ describe("Requirement Test phase production scenarios", { concurrency: false }, 
       await assertImplementationConsumer(scenario);
       assertSavedResult(scenario, "approval", "approval-confirmed-with-tests");
       assertSavedResult(scenario, "test-generate", "test-generate-candidate-saved");
-      assertSavedResult(scenario, "test-review", `test-review-${verdict.toLowerCase()}`);
+      assertSavedResult(scenario, "test-review", verdict === "PASS" ? "test-review-passed" : "test-review-advisory");
       assertSavedResult(scenario, "test-gate", "test-gate-compatible");
     });
   }
@@ -528,7 +637,7 @@ describe("Requirement Test phase production scenarios", { concurrency: false }, 
     const policy = scenario.manager.loadReadOnly(scenario.specId).policy.nonblocking;
     assert.equal(policy.enabled, true);
     await scenario.advanceTo("approval");
-    scenario.approve();
+    await scenario.approve();
     await scenario.advanceTo("test-repair");
     const budget = scenario.plan().workItem("R1").budget.toJSON();
     assert.deepEqual(budget, { autoSemantic: 0, manualSemantic: 1, tooling: 0 });
@@ -556,10 +665,11 @@ describe("Requirement Test phase production scenarios", { concurrency: false }, 
           assert.equal(scenario.plan().workItem("R2").budget[field], 0);
         }
         for (let consumption = 2; consumption <= 5; consumption += 1) {
-          await scenario.dispatch();
+          const result = await scenario.dispatch();
           scenario.reload();
           assert.equal(scenario.current(), "test-repair");
-          assert.equal(scenario.plan().workItem(requirementId).budget[field], consumption);
+          const item = scenario.plan().workItem(requirementId);
+          assert.equal(item.budget[field], consumption);
           assert.notEqual(scenario.plan().workItem(requirementId).status, "promoted");
         }
         await scenario.dispatch();

@@ -1,6 +1,8 @@
 import { draftStepRegistration, draftWorkerStepRegistration } from "../engine/composition/draft.js";
 import { specStepRegistration, specWorkerStepRegistration } from "../engine/composition/spec.js";
-import { gateStepExecutionRegistration } from "../engine/composition/registered-step-execution.js";
+import { flowStepExecutionRegistration, gateStepExecutionRegistration, reviewStepExecutionRegistration }
+  from "../engine/composition/registered-step-execution.js";
+import { requirementTestStepRegistration } from "../engine/composition/test.js";
 import { prepareStepRegistration } from "../engine/composition/prepare.js";
 import { NextActionPlanError } from "./next-action-plan-error.js";
 import { CURRENT_FLOW_SCHEMA_REVISION } from "../../lib/flow-schema-revision.js";
@@ -58,6 +60,7 @@ import {
 import { FlowTargetBinding } from "../../lib/flow-target-guard.js";
 import { guardedCommand } from "./guarded-command.js";
 import { CanonicalTestArtifactStore } from "./canonical-test-artifacts.js";
+import { RequirementTestArtifactStore } from "./requirement-test-store.js";
 import {
   captureFinalRegressionChangedSnapshotDigest,
   resolveCanonicalFinalRegressionTransition,
@@ -302,28 +305,31 @@ class SavedSpecGateSelection {
 function definitionOwnedGateSelection(ctx, state, target) {
   const phase = target.stepId === "draft-gate" ? "draft" : target.stepId === "spec-gate"
       ? "spec"
+      : target.stepId === "test-gate"
+        ? "test"
       : target.scope === "task" && target.stepId === "task-gate"
         ? "task-impl"
       : target.scope === "flow" && target.stepId === "impl-gate"
         ? "integration"
       : null;
   if (phase === null) return null;
+  const registration = gateStepExecutionRegistration(phase);
   if (phase === "spec") {
     const saved = ctx.flowManager.readCurrentStepSettlement({
       specId: state.specId, stepId: "spec-gate",
     });
     if (saved !== null) return new SavedSpecGateSelection(saved);
   }
-  const registration = gateStepExecutionRegistration(phase);
   if (registration !== null) {
     const selection = registration.executionContract.select({
       flowManager: ctx.flowManager, flowState: state, phase,
+      scope: target.scope, stepId: registration.stepId,
       typedState: ctx.flowManager.canonicalState(state.specId),
     });
     if (phase === "spec" && selection.admission.facts !== null) {
       throw new Error("Spec Gate publication lacks its atomic Step Result and Settlement");
     }
-    return registration.executionContract.project(selection);
+    return registration.executionContract.project(selection, { scope: target.scope, stepId: registration.stepId });
   }
   return resolveGateNextAction({
     flowManager: ctx.flowManager,
@@ -601,11 +607,13 @@ function canonicalWorkerContext(ctx, derived, target, state, typedState) {
     targetStepId: target.stepId,
   });
   if (testReviewRepair) {
+    const testSources = new RequirementTestArtifactStore({ flowManager: ctx.flowManager, state })
+      .readCandidate({ bundle: testReviewRepair.sourceCandidate.bundle, consumerNodeId: target.stepId })
+      .sources.map((source) => ({ testPath: source.targetRelativePath.slice("tests/".length), bytes: source.bytes }));
     const progress = canonicalTestReviewRepairProgress({
       flowManager: ctx.flowManager, state, repair: testReviewRepair, consumerNodeId: target.stepId,
+      stagedSources: testSources,
     });
-    const testSources = new CanonicalTestArtifactStore({ flowManager: ctx.flowManager, state })
-      .testSources(target.stepId);
     const batch = progress.nextBatch(testReviewRepair, testSources);
     if (batch === null) throw new Error("canonical test-review repair has no pending batch");
     extensions.testReviewRepair = testReviewRepair.forBatch(batch);
@@ -674,11 +682,19 @@ function acceptanceDecisionMessages({ root, config }) {
  */
 function approvalDecisionDirective({ root, state, binding, target, config, action, plan }) {
   if (target.scope !== "flow" || target.stepId !== "approval" || !(plan instanceof AwaitApproval)) return null;
-  return new ExecuteStepDirective({
+  const directive = new ExecuteStepDirective({
     action,
     actionPrompt: new ApprovalDecisionPrompt({ root, config })
       .toUserActionPrompt({ state, binding }),
   });
+  return projectApprovalExecutionDirective({ stepId: target.stepId, action, directive });
+}
+
+function projectApprovalExecutionDirective(input) {
+  const registration = requirementTestStepRegistration(input.stepId);
+  if (registration === null) throw new TypeError("Approval display requires its production registration");
+  const selection = registration.executionContract.select({ ...input, registration });
+  return registration.executionContract.project(selection, { ...input, registration });
 }
 
 /**
@@ -794,7 +810,8 @@ function buildCanonicalNextActionResult(ctx, state, typedState, descriptor, bind
     ? { ...state, policy: { ...state.policy, nonblocking: null } }
     : state;
   const reviewRegistration = target.scope === "flow"
-    ? draftStepRegistration(target.stepId) ?? specStepRegistration(target.stepId) : null;
+    ? target.stepId === "test-review" ? reviewStepExecutionRegistration("test")
+      : draftStepRegistration(target.stepId) ?? specStepRegistration(target.stepId) : null;
   const reviewInput = { flowManager: ctx.flowManager, flowState: strictReviewState,
     typedState, scope: target.scope, stepId: target.stepId };
   const reviewSelection = reviewStep && ["resume", "retry", "record", "blocked"].includes(descriptor.operation)
@@ -803,9 +820,13 @@ function buildCanonicalNextActionResult(ctx, state, typedState, descriptor, bind
     : { facts: null, disposition: null };
   const reviewDisposition = reviewStep && reviewRegistration !== null
     && ["resume", "retry", "record", "blocked"].includes(descriptor.operation)
-    ? reviewRegistration.executionContract.project(reviewSelection) : reviewSelection.disposition;
-  const workerRegistration = target.scope === "flow"
-    ? draftWorkerStepRegistration(target.stepId) ?? specWorkerStepRegistration(target.stepId) : null;
+    ? reviewRegistration.executionContract.project(reviewSelection, {
+      ctx, scope: "flow", stepId: reviewRegistration.stepId,
+    }) : reviewSelection.disposition;
+  const registeredFlowStep = target.scope === "flow" ? flowStepExecutionRegistration(target.stepId) : null;
+  const workerRegistration = registeredFlowStep?.executionContract.selectorName === "selectWorkerExecutionAdmission"
+    ? registeredFlowStep
+    : target.scope === "flow" ? draftWorkerStepRegistration(target.stepId) ?? specWorkerStepRegistration(target.stepId) : null;
   const workerSelection = workerRegistration?.executionContract.select({ ctx, stepId: target.stepId });
   const conditionalWorkerDisposition = workerSelection?.conditionalDisposition ?? null;
   const definitionDescriptor = descriptor
@@ -915,7 +936,7 @@ function buildCanonicalNextActionResult(ctx, state, typedState, descriptor, bind
   const workerContext = canonicalWorkerContext(ctx, derived, target, state, typedState);
   const workerDirective = workerSelection === undefined ? null
     : workerRegistration.executionContract.project(workerSelection, {
-        binding, recoveryCommand, retryRecoveryPlan: recoveryPlan,
+        stepId: workerRegistration.stepId, binding, recoveryCommand, retryRecoveryPlan: recoveryPlan,
         missingProducerArtifactRoute: missingRoute,
       });
   let selectedDirective = preparationDirective ?? (specPostFailure === null ? null : new BlockedDirective({

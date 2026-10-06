@@ -60,6 +60,25 @@ const FORBIDDEN = Object.freeze([
   "target", "targetStepId", "effect", "effects", "connector", "wholePlan", "plan",
   "payload", "facts", "rawFacts", "bytes", "flowState", "ctx", "manager",
 ]);
+
+function errorOperands(stepId) {
+  if (stepId === "approval") return {
+    evidence: new engine.ApprovalResultEvidence({
+      runId: "run-result-contract", specId: "result-contract",
+      attempt: new RequirementTestSourceAttempt({ id: "attempt-approval", sequence: 2 }),
+      specRevision: revision(), approved: true, testsRequired: false,
+    }),
+  };
+  const source = operands({ findings: [] });
+  return {
+    binding: engine.RequirementTestResultBinding.fromJSON({
+      ...source.binding.toJSON(), leaf: stepId,
+      attempt: new RequirementTestSourceAttempt({ id: `attempt-${stepId}`, sequence: 3 }).toJSON(),
+    }),
+    frontier: source.frontier,
+    retryState: source.retryState,
+  };
+}
 const json = (value) => JSON.parse(JSON.stringify(value));
 const hash = (value) => createHash("sha256").update(value).digest("hex");
 
@@ -103,9 +122,9 @@ test("02 registry is closed for all five leaves and reuses StepErrorResult only 
   assert.deepEqual(actual.map(({ stepId, kind, type }) => [stepId, kind, type]).sort(), [...CLOSED_RESULTS].sort());
   const semanticClasses = new Set();
   for (const [leaf, kind, type] of CLOSED_RESULTS) {
-    const ResultClass = registered(leaf, kind, type);
-    if (kind === `${leaf}-error`) assert.equal(ResultClass, engine.StepErrorResult);
-    else {
+      const ResultClass = registered(leaf, kind, type);
+      if (kind === `${leaf}-error`) assert.equal(ResultClass, engine.StepErrorResult);
+      else {
       assert.notEqual(ResultClass, engine.StepErrorResult, `${kind} is a dedicated classification`);
       assert.equal(semanticClasses.has(ResultClass), false, `${kind} cannot alias another kind's class`);
       semanticClasses.add(ResultClass);
@@ -133,7 +152,8 @@ for (const leaf of LEAVES) {
   test(`02 ${leaf}: common Error codec retains class/code/data and selects connector-free Failure`, () => {
     registered(leaf, `${leaf}-error`, "error");
     const data = { requirementId: "R1", attempt: { id: "failed-attempt", sequence: 2 } };
-    const original = new engine.StepErrorResult(leaf, Object.assign(new Error("semantic failure"), { code: "SEMANTIC_FAILED", data }));
+    const original = new engine.StepErrorResult(leaf,
+      Object.assign(new Error("semantic failure"), { code: "SEMANTIC_FAILED", data }), errorOperands(leaf));
     const stored = json(original);
     const restored = engine.rehydrateStepResult(leaf, stored);
     assert.equal(restored.constructor, engine.StepErrorResult);
@@ -148,6 +168,12 @@ for (const leaf of LEAVES) {
     assert.equal(selected.kind, "failure");
     assert.equal(selected.error.code, "SEMANTIC_FAILED");
     assert.deepEqual(selected.error.data, data);
+    if (leaf === "approval") assert.ok(restored.evidence instanceof engine.ApprovalResultEvidence);
+    else {
+      assert.equal(restored.binding.leaf, leaf);
+      assert.ok(restored.frontier instanceof engine.RequirementTestResultFrontier);
+      assert.ok(restored.retryState instanceof engine.RequirementTestRetryState);
+    }
   });
 }
 
@@ -173,6 +199,11 @@ for (const name of ["TestGenerateCandidateSavedResult", "TestGenerateStructuralR
 test(`02 ${name} rejects whole plan/bytes and nested publication or manifest additions`, () => {
   const ResultClass = requiredExport(name);
   const values = operands();
+  if (name === "TestGenerateStructuralRejectedResult") values.semanticFinding = new RequirementTestSemanticFinding({
+    requirementId: values.binding.requirementId,
+    bundleRevision: values.candidateBundle.bundle.revision,
+    fingerprint: values.candidateBundle.digest,
+  });
   const original = new ResultClass(values);
   const stored = json(original);
   for (const field of FORBIDDEN) {
@@ -249,12 +280,20 @@ for (const autoApprove of [true, false]) {
   test(`02 structural rejection uses saved ${autoApprove ? "automatic" : "manual"} budget/finding to select repair or defer`, () => {
     const ResultClass = requiredExport("TestGenerateStructuralRejectedResult");
     const counted = [];
-    const fresh = new ResultClass(operands({ autoApprove, findings: counted, budget: new RequirementTestBudget() }));
+    const source = operands({ autoApprove, findings: counted, budget: new RequirementTestBudget() });
+    source.semanticFinding = new RequirementTestSemanticFinding({
+      requirementId: source.binding.requirementId,
+      bundleRevision: source.candidateBundle.bundle.revision,
+      fingerprint: source.candidateBundle.digest,
+    });
+    const fresh = new ResultClass(source);
     const repair = settle(fresh);
     assert.equal(repair.kind, "target-connection");
     assert.equal(repair.targetStepId, "test-repair");
-    const exhausted = new ResultClass(operands({ autoApprove, pendingIds: [], findings: counted,
-      budget: new RequirementTestBudget({ autoSemantic: autoApprove ? 5 : 0, manualSemantic: autoApprove ? 0 : 5 }) }));
+    const exhaustedOperands = operands({ autoApprove, pendingIds: [], findings: counted,
+      budget: new RequirementTestBudget({ autoSemantic: autoApprove ? 5 : 0, manualSemantic: autoApprove ? 0 : 5 }) });
+    exhaustedOperands.semanticFinding = source.semanticFinding;
+    const exhausted = new ResultClass(exhaustedOperands);
     const deferred = settle(exhausted);
     assert.equal(deferred.kind, "target-connection");
     assert.equal(deferred.targetStepId, "implement");

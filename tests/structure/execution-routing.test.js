@@ -21,7 +21,7 @@ test("registered Gate, Review, and display routes reject Step-specific bypasses"
       'if (phase === "spec" || phase === "task-spec")',
       'if (phase === "spec" && phase === "task-spec")'],
     ["src/flow/lib/run-review.js",
-      '["draft-questions", "draft-coverage", "spec"].includes(persistedPhase)',
+      '["draft-questions", "draft-coverage", "spec", "test"].includes(persistedPhase)',
       '["draft-questions", "draft-coverage"].includes(persistedPhase)'],
     ["src/flow/lib/get-next-action.js",
       'const claimDirective = claimRequired',
@@ -75,9 +75,10 @@ test("display prose can change without changing registered delegation", () => {
 test("additional registered phases retain complete lookup, immutable selection, and displayed projection", () => {
   const mutations = [
     ["src/flow/engine/composition/registered-step-execution.js",
-      "prepareStepRegistration(stepId) ?? draftStepRegistration(stepId)", "draftStepRegistration(stepId)", "A10"],
+      "requirementTestStepRegistration(stepId) ?? prepareStepRegistration(stepId)",
+      "requirementTestStepRegistration(stepId)", "A10"],
     ["src/flow/engine/composition/registered-step-execution.js",
-      'flowLeafIdsBetween("branch", "spec-gate-repair")', 'flowLeafIdsBetween("draft", "spec-gate-repair")', "A11"],
+      'flowLeafIdsBetween("branch", "test-gate")', 'flowLeafIdsBetween("draft", "test-gate")', "A11"],
     ["src/flow/lib/run-dispatch.js",
       'selectedRegistration?.executionContract.selectorName === "selectPrepareExecutionAdmission"',
       'stepId !== "branch" && selectedRegistration?.executionContract.selectorName === "selectPrepareExecutionAdmission"', "A10"],

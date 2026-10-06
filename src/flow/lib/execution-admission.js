@@ -26,6 +26,16 @@ export class GateExecutionAdmissionSelection {
 }
 
 export function selectGateExecutionAdmission({ flowManager, flowState, phase, typedState, root = undefined }) {
+  if (phase === "test") {
+    if (typedState?.current?.at(-1) !== "test-gate" || typedState.attempt === null) {
+      throw new StepAdmissionRefusal("Requirement Test Gate admission requires its active Definition Attempt");
+    }
+    return new GateExecutionAdmissionSelection({
+      admission: resolveGateEvaluationAdmission(null),
+      action: typedState.nextAction(),
+      state: typedState,
+    });
+  }
   const facts = readCurrentGateTransitionFacts({ flowManager, flowState, phase, root });
   return new GateExecutionAdmissionSelection({
     admission: resolveGateEvaluationAdmission(facts),

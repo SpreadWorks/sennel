@@ -39,6 +39,7 @@ import {
 import {
   DraftCoverageReviewExecutionRequiredResult,
   DraftQuestionsReviewExecutionRequiredResult,
+  RequirementTestReviewExecutionEvidence,
 } from "../engine/step-result.js";
 import { flattenSteps } from "./step-tree.js";
 import path from "path";
@@ -84,6 +85,11 @@ import {
   isStepPersistenceFailure,
 } from "./definition-lifecycle-failure.js";
 import { StepAdmissionRefusal, isStepAdmissionRefusal } from "./step-admission-refusal.js";
+import { isDeepStrictEqual } from "node:util";
+import { acquireRequirementTestInput } from "../engine/composition/test.js";
+import { RequirementTestService } from "../services/requirement-test-service.js";
+import { ReviewWorkUnitManifest } from "./review-work-unit-values.js";
+import { RequirementTestArtifactStore } from "./requirement-test-store.js";
 import { ReviewExecutionLease } from "./review-execution-lease.js";
 import { assertReconciledTaskReviewInput, readTaskReviewReconciliations, isReconciledTaskReviewWorkUnit } from "./task-review-reconciliation.js";
 import { assertCurrentReviewExecutionSelection, ReviewExecutionAdmissionSelection,
@@ -229,6 +235,43 @@ function staleReviewExecutionIdentity(identity, state, message) {
       },
     },
   );
+}
+
+/** Persist the current test Review's exact work-unit input before provider output exists. */
+async function checkpointRequirementTestReviewExecution({ flowManager, workUnit }) {
+  const state = flowManager.canonicalState(workUnit.state.specId);
+  const manifest = new ReviewWorkUnitManifest(workUnit.workUnit.manifest());
+  const evidence = new RequirementTestReviewExecutionEvidence({
+    manifest,
+    source: workUnit.requirementTestReviewSource,
+  });
+  const planRead = new RequirementTestArtifactStore({ flowManager, state }).readPlan("test-review");
+  const observed = acquireRequirementTestInput({
+    state, stepId: "test-review", planRead, evidence,
+    specRecordPublication: workUnit.specRecordDescriptor,
+  });
+  const registration = reviewStepExecutionRegistration("test");
+  const activityId = `requirement-test-review-execution-${manifest.digest}`;
+  const prepared = await registration.create({ flowManager, observed, activityId });
+  const stepResult = prepared.step.selectResult();
+  const service = prepared.dependency(RequirementTestService);
+  const settlement = service.selectSettlement(stepResult);
+  const saved = flowManager.readCurrentStepSettlement({ specId: state.specId, stepId: "test-review" });
+  if (saved !== null) {
+    if (!isDeepStrictEqual(saved.result.toJSON(), stepResult.toJSON())
+      || !isDeepStrictEqual(saved.settlement.toJSON(), settlement.toJSON())) {
+      throw new StepAdmissionRefusal("Requirement test Review checkpoint no longer matches its work-unit input");
+    }
+    return saved;
+  }
+  await prepared.step.execute();
+  const persisted = flowManager.readCurrentStepSettlement({ specId: state.specId, stepId: "test-review" });
+  if (persisted === null || !isDeepStrictEqual(persisted.result.toJSON(), stepResult.toJSON())
+    || !isDeepStrictEqual(persisted.settlement.toJSON(), settlement.toJSON())
+    || !(service.settlementOutcome?.receipt)) {
+    throw new Error("Requirement test Review execution checkpoint was not persisted");
+  }
+  return persisted;
 }
 
 /**
@@ -1844,6 +1887,12 @@ export class RunReviewCommand extends FlowCommand {
         workUnit.workUnit.declareInput(taskRecoveryBaselineInput);
         workUnit.workUnit.declareInput(taskCanonicalObservationInput);
       }
+      if (persistedPhase === "test") {
+        await checkpointRequirementTestReviewExecution({
+          flowManager: ctx.flowManager,
+          workUnit,
+        });
+      }
       if (draftReviewExecutionRequiredResult(persistedPhase) !== null) {
         const executionAdmission = await claimDraftReviewExecution({
           flowManager: ctx.flowManager,
@@ -2271,7 +2320,7 @@ export class RunReviewCommand extends FlowCommand {
     const phase = ctx.phase || null;
     const persistedPhase = reviewPhaseKeyForCtx(ctx, phase);
     const registration = reviewStepExecutionRegistration(persistedPhase);
-    if (["draft-questions", "draft-coverage", "spec"].includes(persistedPhase)
+    if (["draft-questions", "draft-coverage", "spec", "test"].includes(persistedPhase)
       && registration?.executionContract == null) {
       throw new Error(`Review execution contract is missing for ${persistedPhase}`);
     }
@@ -2286,7 +2335,8 @@ export class RunReviewCommand extends FlowCommand {
       scope: "flow",
       stepId: registration.stepId,
     });
-    return registration.executionContract.execute(selection, { command: this, ctx });
+    return registration.executionContract.execute(selection, { command: this, ctx,
+      scope: "flow", stepId: registration.stepId });
   }
 
   async executeSelectedReview(selection, { ctx }) {

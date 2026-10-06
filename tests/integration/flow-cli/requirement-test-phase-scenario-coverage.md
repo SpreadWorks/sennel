@@ -23,10 +23,21 @@ responses and the Spec AI provider are deterministic fakes.
 | R budget survives restart | Real Review rejection charges one R; public SetAuto changes policy; reload retains counters | Plan Budget and semantic finding identity | Repair continuation; `per-R semantic consumption` |
 | Tooling exhaustion does not contaminate promoted R | Actual Review sealed tooling observations consume only active R; up to three retries, then deferred receipt | Plan, tooling finding, failure/deferred publication; manager discarded each retry | Next frontier and canonical Acceptance context; `tooling exhaustion` |
 | Permission does not retry | Actual Review sealed permission observation | External-blocked failure; zero budget; replay leaves state/provider calls unchanged | Next-action blocked and dispatch replay; `external permission` |
-| Mixed deferred obligation survives downstream | Promoted-only test source selection; current implement/Task source workers and real Task Review protocol precede actual test-execute, test-result-review, retro and Acceptance commands | `tests.source`, test execution/history, deferred receipts/findings, retro, Acceptance evidence; reload at each consumer | `tooling exhaustion` case calls `consumeMixedDownstream`; external provider declares deferred R notVerifiable and leaves its exact source finding still open |
+| Mixed deferred obligation survives downstream | Promoted-only test source selection; current implement/Task source workers and real Task Review protocol precede actual test-execute, test-result-review, retro, Acceptance, explicit decision and report commands | `tests.source`, execution/history, deferred receipts/findings, retro, Acceptance evidence and canonical report; reload at each consumer | `tooling exhaustion` case calls `consumeMixedDownstream`; external provider declares deferred R notVerifiable and leaves its exact source finding still open; report counts only the promoted R as passed and retains the deferred count |
 | Atomic/recoverable publication | Production fault injectors at real persistence and worker handoff boundaries | Version Store, Activity, receipt, canonical reload | Root-owned `requirement-test-save-recovery.contract.js`, imported by phase test |
+| Common Error refuses stale or altered source | Registered Error Step acquires its current Attempt and Spec; Requirement leaves also acquire the active plan/frontier/budget; Review/Repair/Gate bind the existing immutable candidate; Approval binds Spec Review | Catalog-lock admission rechecks publication Activity and verified bytes; source replacement uses the genuine producer bytes; hostile byte changes leave state, catalog and ledger untouched | `requirement-test-error-admission.contract.js`: same-byte Spec/plan replacement, Spec/plan/Review/snapshot tamper, candidate bundle/source tamper at settlement and after manager reconstruction |
+| Common Error is atomic and replayable | The registered Step and Service select the existing Failure settlement; catalog JSON rename fails after actual state/Activity writes | Physical publication audit verifies complete rollback; a reconstructed manager resumes; restored Result and exact receipt identify one saved failure; different Error payload is refused | `requirement-test-error-admission.contract.js`: catalog-commit rollback, resume, exact replay and conflicting replay for Approval and all four Requirement Test leaves |
 
-## Focused test-contract corrections
+## Historical evidence: initial red baseline
+
+The statements in this section describe the pre-implementation baseline only.
+They are retained to show the actual red contract that this phase started from;
+they do not describe the final implementation status. The baseline runs are
+`.tmp/8e30/initial-structure.log` (6/8, with the Requirement Test structure and
+Gate-loader checks failing) and `.tmp/8e30/acceptance-phase.log` (113/144, with
+31 production-contract failures).
+
+## Focused test-contract corrections (baseline investigation)
 
 The follow-up closes two gaps in the **test contract**. Gate publication now
 checks physical rollback and exact catalog membership around two distinct
@@ -78,7 +89,7 @@ semantic 5/manual and auto, tooling 3, duplicate finding identity, nonblocking,
 ownership, replay and stale matrices without copying the same matrix into every layer.
 Their fixture shortcuts do **not** establish the production phase causal links.
 
-## Initial measured limits
+## Initial measured limits (pre-implementation baseline)
 
 Normal dispatcher generation currently returns
 `FLOW_ARTIFACT_HANDOFF_RECOVERY_REQUIRED` with
@@ -134,3 +145,22 @@ Requirement leaves have Attempt sequence 1, violating the board's no-invented-At
 contract. Static import and wrong ownership structural rejection reach repair and
 retain candidate isolation, but no typed `test-generate-structural-rejected` Result
 is saved. These are assertions on production behavior, not new implementation.
+
+## Final measured result for 8e30
+
+The fixed production groups now pass: acceptance group 1 is 8/8, group 2 is
+186/186, and group 3 is 45/45. The Result-registry add-on is 30/30 and the
+Draft/Spec/Review/Task boundary add-on is 79/79. Exact commands and logs are
+listed in `.tmp/8e30/final-acceptance.md`.
+
+The final mixed downstream scenario reloads the canonical manager at each
+consumer, reaches the explicit Acceptance decision through its command, and runs
+the registered report path. The stored report has two Requirement executions,
+one pass and zero failures; the deferred Requirement remains in `retro` with a
+deferred count of one. It does not count the deferred Requirement as a pass.
+
+The final focused evidence also covers a stable Approval Action digest across a
+canonical reread after the clock advances, approved-Spec schema validation at
+the outer Approval acquisition boundary, and synchronous/asynchronous
+`StepRegistration.create()` behavior. These additions close the baseline gaps
+without changing scenario premises or weakening assertions.

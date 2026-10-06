@@ -73,10 +73,19 @@ function hasCompletedDelivery(report, idempotencyKey) {
     && (delivery.idempotencyKey == null || delivery.idempotencyKey === idempotencyKey);
 }
 
+class CanonicalReportRetroResult {
+  constructor(artifact) {
+    this.status = "done";
+    this.summary = artifact.summary;
+    this.requirements = artifact.requirements;
+    Object.freeze(this);
+  }
+}
+
 function canonicalReportResults(store) {
   const results = {};
   const retro = store.readDocument({ logicalKey: "retro", optional: true });
-  if (retro !== null) results.retro = retro.value;
+  if (retro !== null) results.retro = new CanonicalReportRetroResult(retro.value);
 
   const testExecute = store.readCurrentAttempt({ logicalKey: "test.execute", optional: true });
   const testResultReview = store.readCurrentAttempt({ logicalKey: "test.result.review", optional: true });

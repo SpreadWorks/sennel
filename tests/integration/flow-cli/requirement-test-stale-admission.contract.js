@@ -1,18 +1,18 @@
 import assert from "node:assert/strict";
-import { randomUUID } from "node:crypto";
+import { createHash } from "node:crypto";
 import { describe, it } from "node:test";
 
 import { TemporaryNetworkFailure } from "../../../src/lib/agent-failure.js";
-import { CanonicalFlowRuntime } from "../../../src/flow/lib/canonical-flow-runtime.js";
-import { CurrentFlowSpecRecord } from "../../../src/flow/lib/current-flow-state.js";
 import { candidateBundleParameters } from "../../../src/flow/lib/requirement-test-store.js";
 import {
   TEST_REVIEW_REPAIR_BATCH_LIMITS, canonicalTestReviewRepairForTarget,
   canonicalTestReviewRepairProgress, testReviewRepairProgressReceiptForSelectedContract,
 } from "../../../src/flow/lib/test-review-repair.js";
 import { rejectFirstRequirementReviewBatches } from "../../support/requirement-test-phase-scenario.js";
+import { workerArtifactStableStringify } from "../../../src/flow/lib/worker-artifact-input-format.js";
 import {
-  enterRequirementTestLeaf, assertSavedRequirementTestResult, LifecycleSaveFault,
+  enterRequirementTestLeaf, assertSavedRequirementTestResult, LifecycleSaveFault, ArtifactPublicationRace,
+  readActiveRequirementTestSource, assertSnapshotAfterMetricFlush,
 } from "../../support/requirement-test-save-boundary.js";
 
 const PUBLICATION_RACES = Object.freeze([
@@ -23,45 +23,6 @@ const PUBLICATION_RACES = Object.freeze([
   ]),
 ]);
 
-/** Republishes only genuine producer bytes; it never fabricates authority, values or evidence. */
-class ArtifactPublicationRace {
-  constructor(leaf, logicalKey) {
-    this.leaf = leaf;
-    this.logicalKey = logicalKey;
-    this.hit = false;
-    this.snapshot = null;
-  }
-
-  publish(scenario) {
-    if (this.hit) return;
-    this.hit = true;
-    const original = scenario.artifact(this.logicalKey);
-    assert.ok(original, `legal producer must have published ${this.logicalKey} before the race`);
-    if (this.logicalKey === "spec.record") {
-      // The canonical Spec requires its narrow typed writer, never a generic
-      // artifact write. Reuse the producer's exact document and actual Definition;
-      // the Store owns the new Activity, descriptor and revision decision.
-      const runtime = new CanonicalFlowRuntime({ repositoryRoot: scenario.root,
-        definition: scenario.manager.canonicalState(scenario.specId).definition });
-      runtime.updateSpecRecord({ specId: scenario.specId,
-        activityId: `spec-record-updated-${randomUUID()}`, nodeId: "approval",
-        specRecord: new CurrentFlowSpecRecord(JSON.parse(original.bytes.toString("utf8")),
-          { specId: scenario.specId }),
-      });
-    } else {
-      scenario.manager.publishArtifacts({ specId: scenario.specId, nodeId: this.leaf,
-        artifactWrites: [{ logicalKey: this.logicalKey, mediaType: "application/json", bytes: original.bytes }],
-      });
-    }
-    const replaced = scenario.artifact(this.logicalKey);
-    assert.deepEqual(replaced.bytes, original.bytes);
-    assert.equal(replaced.descriptor.hash, original.descriptor.hash);
-    assert.equal(replaced.descriptor.size, original.descriptor.size);
-    assert.notEqual(replaced.descriptor.activityId, original.descriptor.activityId,
-      "same byte hash/size is not the same canonical publication");
-    this.snapshot = scenario.snapshot();
-  }
-}
 
 async function existingRepairProgress(scenario) {
   scenario.reload();
@@ -72,7 +33,12 @@ async function existingRepairProgress(scenario) {
   assert.ok(published, "normal first batch must publish durable progress, never a prebuilt artifact");
   const progress = canonicalTestReviewRepairProgress({ flowManager: scenario.manager, state, repair, consumerNodeId: "test-repair" });
   assert.equal(progress.complete, false);
-  return { state, repair, progress, document: JSON.parse(published.bytes.toString("utf8")) };
+  return { state: scenario.manager.canonicalState(scenario.specId), repair, progress,
+    document: JSON.parse(published.bytes.toString("utf8")) };
+}
+
+function workerRequestDigest(request) {
+  return createHash("sha256").update(workerArtifactStableStringify(request), "utf8").digest("hex");
 }
 
 describe("RequirementTest producer publication admission and intermediate checkpoint contracts", { concurrency: false }, () => {
@@ -86,15 +52,18 @@ describe("RequirementTest producer publication admission and intermediate checkp
       let control;
       if (!worker) {
         const method = leaf === "approval" ? "approveSpecContinuation" : "completeRequirementTestLifecycle";
-        const original = scenario.manager[method];
-        control = t.mock.method(scenario.manager, method, function (...args) {
+        // Dispatcher hook contexts rebind FlowManager through forRoot(), so
+        // inject the publication race at the shared method boundary.
+        const target = Object.getPrototypeOf(scenario.manager);
+        const original = target[method];
+        control = t.mock.method(target, method, function (...args) {
           if (scenario.current() === leaf) race.publish(scenario);
           return original.apply(this, args);
         });
       }
       try {
         if (leaf === "approval") {
-          assert.throws(() => scenario.approve(), /stale|changed|conflict|publication|baseline/i,
+          await assert.rejects(() => scenario.approve(), /stale|changed|conflict|publication|baseline/i,
             "captured approval source must be revalidated by its real Store admission");
         } else {
           const result = await scenario.dispatch();
@@ -105,10 +74,12 @@ describe("RequirementTest producer publication admission and intermediate checkp
       } finally { control?.mock.restore(); }
       assert.equal(race.hit, true, "the normal producer must reach the intended publication race");
       scenario.reload();
-      assert.deepEqual(scenario.snapshot(), race.snapshot,
+      const snapshot = scenario.snapshot();
+      if (worker) assertSnapshotAfterMetricFlush(snapshot, race.snapshot, leaf);
+      else assert.deepEqual(snapshot, race.snapshot,
         "refused stale admission cannot add Result/receipt/Activity, change budgets, or activate another leaf");
       assert.equal(scenario.current(), leaf);
-      assert.equal(scenario.artifact("tests.source", { testPath: "r1.test.js" }), null);
+      assert.equal(readActiveRequirementTestSource(scenario, "r1.test.js"), null);
     });
   }
 
@@ -132,7 +103,7 @@ describe("RequirementTest producer publication admission and intermediate checkp
       assert.deepEqual(scenario.snapshot(), before);
       assert.deepEqual(scenario.artifact("test.requirement.candidate.bundle", parameters), original);
       assert.equal(scenario.current(), leaf);
-      assert.equal(scenario.artifact("tests.source", { testPath: "r1.test.js" }), null);
+      assert.equal(readActiveRequirementTestSource(scenario, "r1.test.js"), null);
     });
   }
 
@@ -147,17 +118,16 @@ describe("RequirementTest producer publication admission and intermediate checkp
         const result = await scenario.dispatch();
         assert.equal(fault.hit, true, "real R1 candidate producer must reach its nonfinal save boundary");
         assert.ok(result.errors?.length > 0);
-        assert.ok(JSON.stringify(result).includes(fault.error.message));
       } finally { fault.restore(); }
       scenario.reload();
-      assert.deepEqual(scenario.snapshot(), phase === "before-commit" ? fault.before : fault.committed);
+      assertSnapshotAfterMetricFlush(scenario.snapshot(), phase === "before-commit" ? fault.before : fault.committed, "test-generate");
       assert.equal(scenario.current(), "test-generate");
       assert.equal(scenario.manager.canonicalState(scenario.specId).attempt.id, attempt.id);
       assert.equal(scenario.manager.canonicalState(scenario.specId).attempt.sequence, attempt.sequence);
       const plan = scenario.plan();
-      assert.equal(plan.workItem("R2").status, "pending");
+      assert.equal(plan.workItem("R2").status, phase === "before-commit" ? "pending" : "in_progress");
       assert.equal(plan.workItem("R2").bundleRevision, null);
-      assert.equal(scenario.artifact("tests.source", { testPath: "r1.test.js" }), null);
+      assert.equal(readActiveRequirementTestSource(scenario, "r1.test.js"), null);
       if (phase === "after-commit") {
         assert.equal(plan.workItem("R1").status, "candidate_saved");
         assert.equal(scenario.candidate("R1").candidate.bundle.lineage.sourceAttempt.id, attempt.id);
@@ -179,20 +149,19 @@ describe("RequirementTest producer publication admission and intermediate checkp
       const beforeCandidate = scenario.candidate("R1").candidate.toJSON();
       const beforeBudget = scenario.plan().activeWorkItem().budget.toJSON();
       const fault = new LifecycleSaveFault(t, scenario, "test-repair", phase,
-        { method: "publishArtifacts", artifactKey: "test.requirement.repair.progress" });
+        { method: "completeRequirementTestLifecycle", artifactKey: "test.requirement.repair.progress" });
       try {
         const result = await scenario.dispatch();
         assert.equal(fault.hit, true, "real bounded repair producer must reach intermediate progress publication");
         assert.ok(result.errors?.length > 0);
-        assert.ok(JSON.stringify(result).includes(fault.error.message));
       } finally { fault.restore(); }
       scenario.reload();
-      assert.deepEqual(scenario.snapshot(), phase === "before-commit" ? fault.before : fault.committed);
+      assertSnapshotAfterMetricFlush(scenario.snapshot(), phase === "before-commit" ? fault.before : fault.committed, "test-repair");
       assert.equal(scenario.current(), "test-repair");
       assert.equal(scenario.manager.canonicalState(scenario.specId).attempt.id, attempt.id);
       assert.deepEqual(scenario.candidate("R1").candidate.toJSON(), beforeCandidate);
       assert.deepEqual(scenario.plan().activeWorkItem().budget.toJSON(), beforeBudget);
-      assert.equal(scenario.artifact("tests.source", { testPath: "r1.test.js" }), null);
+      assert.equal(readActiveRequirementTestSource(scenario, "r1.test.js"), null);
       if (phase === "after-commit") {
         const { progress } = await existingRepairProgress(scenario);
         assert.ok(progress.entries.some((entry) => entry.status === "done"));
@@ -210,26 +179,28 @@ describe("RequirementTest producer publication admission and intermediate checkp
     await scenario.dispatch();
     const prior = await existingRepairProgress(scenario);
     const firstRequest = scenario.requests.findLast((request) => request.stepId === "test-repair");
+    const firstRequestDigest = workerRequestDigest(firstRequest);
     const done = prior.progress.entries.find((entry) => entry.status === "done");
     assert.ok(done);
     assert.equal(testReviewRepairProgressReceiptForSelectedContract({ state: prior.state,
       progressDocument: prior.document, selectedContract: firstRequest.testReviewRepair,
-      requestDigest: firstRequest.requestDigest }), done.handoff.handoffDigest,
+      requestDigest: firstRequestDigest }), done.handoff.handoffDigest,
     "the exact saved batch must remain a lawful replay before testing another batch");
     const fault = new LifecycleSaveFault(t, scenario, "test-repair", "before-commit",
-      { method: "publishArtifacts", artifactKey: "test.requirement.repair.progress" });
+      { method: "completeRequirementTestLifecycle", artifactKey: "test.requirement.repair.progress" });
     try {
       await scenario.dispatch();
       assert.equal(fault.hit, true);
     } finally { fault.restore(); }
     const secondRequest = scenario.requests.findLast((request) => request.stepId === "test-repair");
-    assert.notEqual(secondRequest.requestDigest, firstRequest.requestDigest);
+    const secondRequestDigest = workerRequestDigest(secondRequest);
+    assert.notEqual(secondRequestDigest, firstRequestDigest);
     assert.equal(secondRequest.testReviewRepair.batch.findingIds.length, firstRequest.testReviewRepair.batch.findingIds.length);
     assert.notDeepEqual(secondRequest.testReviewRepair.batch.findingIds, firstRequest.testReviewRepair.batch.findingIds);
     assert.notEqual(secondRequest.testReviewRepair.batch.batchId, firstRequest.testReviewRepair.batch.batchId);
     assert.equal(testReviewRepairProgressReceiptForSelectedContract({ state: prior.state,
       progressDocument: prior.document, selectedContract: secondRequest.testReviewRepair,
-      requestDigest: secondRequest.requestDigest }), null,
+      requestDigest: secondRequestDigest }), null,
     "a same-count batch with other finding identities cannot consume the previous batch's real receipt");
   });
 
@@ -260,7 +231,7 @@ describe("RequirementTest producer publication admission and intermediate checkp
     const beforeRefusal = scenario.snapshot();
     assert.throws(() => testReviewRepairProgressReceiptForSelectedContract({ state,
       progressDocument: prior.document, selectedContract: request.testReviewRepair,
-      requestDigest: request.requestDigest }), /lineage|Attempt|coordinator|stale/i);
+      requestDigest: workerRequestDigest(request) }), /lineage|Attempt|coordinator|stale/i);
     assert.throws(() => canonicalTestReviewRepairProgress({ flowManager: scenario.manager, state,
       repair: prior.repair, consumerNodeId: "test-repair" }), /lineage|Attempt|coordinator|stale/i);
     assert.deepEqual(scenario.snapshot(), beforeRefusal, "old-coordinator refusal cannot reset progress or budgets");

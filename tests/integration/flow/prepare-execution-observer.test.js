@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { StepRegistration } from "../../../src/flow/engine/composition/step-registration.js";
+import { PreparedStep, StepRegistration } from "../../../src/flow/engine/composition/step-registration.js";
 import { StepExecutionContract } from "../../../src/flow/engine/composition/step-execution-contract.js";
 import { StagedExecutionSeed } from "../../fixtures/structure/staged-execution.js";
 import { PrepareExecutionObserver } from "../../support/infrastructure/prepare-execution-observer.js";
@@ -17,7 +17,10 @@ test("Prepare observation keeps two registrations sharing one contract and their
       const selection = registration.executionContract.select(input);
       assert.equal(registration.executionContract.project(selection, input), selection);
       assert.equal(registration.executionContract.execute(selection, input), selection);
-      const prepared = await registration.create(input);
+      const creation = registration.create(input);
+      assert.equal(creation instanceof Promise, false, "synchronous registration preparation returns its PreparedStep directly");
+      const prepared = await creation;
+      assert.equal(prepared instanceof PreparedStep, true);
       assert.deepEqual(observer.prepared(registration), [prepared]);
       observer.assertProjected(registration.stepId);
     }
@@ -25,6 +28,29 @@ test("Prepare observation keeps two registrations sharing one contract and their
   } finally { observer.restore(); }
   assert.equal(StepRegistration.prototype.create, originalCreate);
   assert.deepEqual(["select", "project", "execute"].map((name) => StepExecutionContract.prototype[name]), originalMethods);
+});
+
+test("StepRegistration.create keeps one API for synchronous, asynchronous, and rejected preparation", async () => {
+  const seed = new StagedExecutionSeed("prepare", ["branch", "prepare-spec"], null, "prepare-adoption");
+  const registration = seed.registrations[0];
+  const input = Object.freeze({ stepId: registration.stepId });
+  const synchronous = registration.create(input);
+  assert.equal(synchronous instanceof PreparedStep, true);
+  assert.equal(synchronous instanceof Promise, false);
+
+  const asynchronousRegistration = new StepRegistration({
+    ...registration,
+    prepareServiceArguments: async (...args) => registration.prepareServiceArguments(...args),
+  });
+  const asynchronous = asynchronousRegistration.create(input);
+  assert.equal(asynchronous instanceof Promise, true);
+  assert.equal(await asynchronous instanceof PreparedStep, true);
+
+  const invalidRegistration = new StepRegistration({
+    ...registration,
+    prepareServiceArguments: () => [],
+  });
+  assert.throws(() => invalidRegistration.create(input), TypeError);
 });
 
 for (const operation of ["project", "execute"]) {

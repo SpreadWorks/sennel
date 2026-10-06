@@ -5,9 +5,12 @@ import { CanonicalTestArtifactStore } from "./canonical-test-artifacts.js";
 import { RequirementTestCandidateBundle } from "./requirement-test-artifacts.js";
 import { RequirementTestSourceAttempt } from "./requirement-test-lifecycle.js";
 import { RequirementTestArtifactStore } from "./requirement-test-store.js";
+import {
+  TestReviewRepairError, TestReviewRepairProgressHandoff, TestReviewRepairProgressEntry,
+  requiredString, requiredDigest, exactObject, SHA256, MAX_TEXT_LENGTH,
+} from "./test-review-repair-values.js";
+export { TestReviewRepairError, TestReviewRepairProgressHandoff, TestReviewRepairProgressEntry } from "./test-review-repair-values.js";
 
-const SHA256 = /^[a-f0-9]{64}$/;
-const MAX_TEXT_LENGTH = 4000;
 
 /** Bounded, deterministic limits for one repair-worker capability. */
 export const TEST_REVIEW_REPAIR_BATCH_LIMITS = Object.freeze({
@@ -17,41 +20,11 @@ export const TEST_REVIEW_REPAIR_BATCH_LIMITS = Object.freeze({
   targetFileBytes: 256 * 1024,
 });
 
-function requiredString(value, field, maxLength = MAX_TEXT_LENGTH) {
-  if (typeof value !== "string" || value.trim() === "") {
-    throw new TestReviewRepairError("TEST_REVIEW_REPAIR_INVALID", `${field} must be a non-empty string`);
-  }
-  const normalized = value.trim();
-  if (normalized.length > maxLength) {
-    throw new TestReviewRepairError("TEST_REVIEW_REPAIR_INVALID", `${field} exceeds ${maxLength} characters`);
-  }
-  return normalized;
-}
-
-function requiredDigest(value, field) {
-  const digest = requiredString(value, field, 64);
-  if (!SHA256.test(digest)) {
-    throw new TestReviewRepairError("TEST_REVIEW_REPAIR_INVALID", `${field} must be a SHA-256 digest`);
-  }
-  return digest;
-}
-
 function frozenDocument(value, field) {
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
     throw new TestReviewRepairError("TEST_REVIEW_REPAIR_INVALID", `${field} must be an object`);
   }
   return Object.freeze(structuredClone(value));
-}
-
-function exactObject(value, keys, field) {
-  if (value === null || typeof value !== "object" || Array.isArray(value)) {
-    throw new TestReviewRepairError("TEST_REVIEW_REPAIR_INVALID", `${field} must be an object`);
-  }
-  const actual = Object.keys(value).sort();
-  const expected = [...keys].sort();
-  if (actual.length !== expected.length || actual.some((key, index) => key !== expected[index])) {
-    throw new TestReviewRepairError("TEST_REVIEW_REPAIR_INVALID", `${field} has an invalid schema`);
-  }
 }
 
 export class TestReviewRepairStagedSource {
@@ -79,14 +52,6 @@ export class TestReviewRepairStagedSource {
 
   toJSON() {
     return { testPath: this.testPath, digest: this.digest, byteLength: this.bytes.length, bytes: this.bytes.toString("base64") };
-  }
-}
-
-export class TestReviewRepairError extends Error {
-  constructor(code, message) {
-    super(message);
-    this.name = "TestReviewRepairError";
-    this.code = code;
   }
 }
 
@@ -343,75 +308,6 @@ export function parseWorkerVisibleTestReviewRepair(value) {
   return value instanceof WorkerVisibleTestReviewRepair ? value : new WorkerVisibleTestReviewRepair(value);
 }
 
-/** A sealed receipt shared by every finding published from one repair batch. */
-class TestReviewRepairProgressHandoff {
-  constructor(value = {}) {
-    exactObject(value, ["batchId", "findingIds", "beforeTreeDigest", "afterTreeDigest", "changedPaths", "sourceCandidate", "handoffDigest", "requestDigest", "payloadDigest"], "test review repair progress handoff");
-    this.batchId = requiredDigest(value.batchId, "test review repair batchId");
-    if (!Array.isArray(value.findingIds) || value.findingIds.length === 0) throw new TestReviewRepairError("TEST_REVIEW_REPAIR_INVALID", "test review repair receipt requires findingIds");
-    this.findingIds = Object.freeze(value.findingIds.map((id) => requiredString(id, "test review repair receipt findingId", 500)));
-    if (new Set(this.findingIds).size !== this.findingIds.length) throw new TestReviewRepairError("TEST_REVIEW_REPAIR_INVALID", "test review repair receipt duplicates findingIds");
-    this.beforeTreeDigest = requiredDigest(value.beforeTreeDigest, "test review repair receipt beforeTreeDigest");
-    this.afterTreeDigest = requiredDigest(value.afterTreeDigest, "test review repair receipt afterTreeDigest");
-    if (this.beforeTreeDigest === this.afterTreeDigest) throw new TestReviewRepairError("TEST_REVIEW_REPAIR_INVALID", "test review repair receipt has no tree change");
-    if (!Array.isArray(value.changedPaths) || value.changedPaths.length === 0) throw new TestReviewRepairError("TEST_REVIEW_REPAIR_INVALID", "test review repair receipt requires changed paths");
-    this.changedPaths = Object.freeze(value.changedPaths.map((entry) => {
-      exactObject(entry, ["path", "beforeDigest", "afterDigest"], "test review repair receipt changed path");
-      const beforeDigest = entry.beforeDigest === null ? null : requiredDigest(entry.beforeDigest, "test review repair receipt before digest");
-      const afterDigest = requiredDigest(entry.afterDigest, "test review repair receipt after digest");
-      if (beforeDigest === afterDigest) throw new TestReviewRepairError("TEST_REVIEW_REPAIR_INVALID", "test review repair receipt changed path has no digest change");
-      return Object.freeze({ path: requiredString(entry.path, "test review repair receipt path"), beforeDigest, afterDigest });
-    }));
-    this.sourceCandidate = value.sourceCandidate instanceof RequirementTestCandidateBundle
-      ? value.sourceCandidate
-      : RequirementTestCandidateBundle.fromJSON(value.sourceCandidate);
-    this.handoffDigest = requiredDigest(value.handoffDigest, "test review repair progress handoffDigest");
-    this.requestDigest = requiredDigest(value.requestDigest, "test review repair progress requestDigest");
-    this.payloadDigest = requiredDigest(value.payloadDigest, "test review repair progress payloadDigest");
-    Object.freeze(this);
-  }
-
-  toJSON() {
-    return {
-      batchId: this.batchId, findingIds: [...this.findingIds], beforeTreeDigest: this.beforeTreeDigest,
-      afterTreeDigest: this.afterTreeDigest, changedPaths: this.changedPaths.map((entry) => ({ ...entry })),
-      sourceCandidate: this.sourceCandidate.toJSON(),
-      handoffDigest: this.handoffDigest,
-      requestDigest: this.requestDigest,
-      payloadDigest: this.payloadDigest,
-    };
-  }
-}
-
-class TestReviewRepairProgressEntry {
-  constructor(value = {}) {
-    exactObject(value, ["findingId", "fingerprint", "status", "handoff"], "test review repair progress entry");
-    const { findingId, fingerprint, status = "pending", handoff = null } = value;
-    this.findingId = requiredString(findingId, "test review repair progress findingId", 500);
-    this.fingerprint = requiredDigest(fingerprint, "test review repair progress fingerprint");
-    if (!["pending", "done"].includes(status)) {
-      throw new TestReviewRepairError("TEST_REVIEW_REPAIR_INVALID", "test review repair progress status is invalid");
-    }
-    this.status = status;
-    this.handoff = handoff === null ? null : handoff instanceof TestReviewRepairProgressHandoff
-      ? handoff
-      : new TestReviewRepairProgressHandoff(handoff);
-    if ((this.status === "done") !== (this.handoff !== null)) {
-      throw new TestReviewRepairError("TEST_REVIEW_REPAIR_INVALID", "test review repair progress completion receipt is invalid");
-    }
-    Object.freeze(this);
-  }
-
-  toJSON() {
-    return {
-      findingId: this.findingId,
-      fingerprint: this.fingerprint,
-      status: this.status,
-      handoff: this.handoff?.toJSON() ?? null,
-    };
-  }
-}
-
 /**
  * Binds compact canonical evidence to the rich, sealed test-review artifact.
  * Review evidence intentionally records only stable review identities.  Repair
@@ -427,19 +323,46 @@ class CanonicalTestReviewRepairFindingBinding {
         "canonical test-review evidence must bind every original blocking finding",
       );
     }
-    this.findings = Object.freeze(artifactFindings.map((artifactFinding, index) => {
-      const evidenceFinding = evidenceFindings[index];
-      const finding = new TestReviewRepairFinding(artifactFinding);
+    const byId = new Map();
+    for (const evidenceFinding of evidenceFindings) {
       if (evidenceFinding === null || typeof evidenceFinding !== "object" || Array.isArray(evidenceFinding)
-        || finding.findingId !== evidenceFinding.findingId || finding.fingerprint !== evidenceFinding.fingerprint) {
+        || typeof evidenceFinding.findingId !== "string" || byId.has(evidenceFinding.findingId)) {
+        throw new TestReviewRepairError(
+          "TEST_REVIEW_REPAIR_EVIDENCE_INVALID",
+          "canonical test-review evidence contains a missing or duplicate finding identity",
+        );
+      }
+      byId.set(evidenceFinding.findingId, evidenceFinding);
+    }
+    const consumed = new Set();
+    this.findings = Object.freeze(artifactFindings.map((artifactFinding) => {
+      const finding = new TestReviewRepairFinding(artifactFinding);
+      const evidenceFinding = byId.get(finding.findingId);
+      if (evidenceFinding === undefined || finding.fingerprint !== evidenceFinding.fingerprint) {
         throw new TestReviewRepairError(
           "TEST_REVIEW_REPAIR_EVIDENCE_INVALID",
           "canonical test-review evidence does not match its original blocking finding",
         );
       }
+      consumed.add(finding.findingId);
       return finding;
     }));
+    if (consumed.size !== byId.size) {
+      throw new TestReviewRepairError(
+        "TEST_REVIEW_REPAIR_EVIDENCE_INVALID",
+        "canonical test-review evidence contains a finding absent from the original blocking artifact",
+      );
+    }
     Object.freeze(this);
+  }
+}
+
+function assertTestReviewRepairProgressLineage(state, sourceCandidate, coordinatorAttempt) {
+  if (state?.schemaRevision !== CURRENT_FLOW_SCHEMA_REVISION
+    || sourceCandidate.bundle.specRevision.specId !== state.specId
+    || state.attempt?.id !== coordinatorAttempt.id
+    || state.attempt?.sequence !== coordinatorAttempt.sequence) {
+    throw new TestReviewRepairError("TEST_REVIEW_REPAIR_INVALID", "test review repair progress lineage is invalid");
   }
 }
 
@@ -481,12 +404,7 @@ class TestReviewRepairProgressEpisode {
   static fromJSON(value) { return new TestReviewRepairProgressEpisode(value); }
 
   assertFlow(state) {
-    if (state?.schemaRevision !== CURRENT_FLOW_SCHEMA_REVISION
-      || this.sourceCandidate.bundle.specRevision.specId !== state.specId
-      || state.attempt?.id !== this.coordinatorAttempt.id
-      || state.attempt?.sequence !== this.coordinatorAttempt.sequence) {
-      throw new TestReviewRepairError("TEST_REVIEW_REPAIR_INVALID", "test review repair progress lineage is invalid");
-    }
+    assertTestReviewRepairProgressLineage(state, this.sourceCandidate, this.coordinatorAttempt);
     return this;
   }
 
@@ -659,8 +577,10 @@ export function testReviewRepairProgressReceiptForSelectedContract({
 
 /** Resolve only the progress record owned by this immutable review episode. */
 export function canonicalTestReviewRepairProgress({ flowManager, state, repair, consumerNodeId, stagedSources } = {}) {
+  const typedState = canonicalTestReviewRepairState(flowManager, state);
+  assertTestReviewRepairProgressLineage(typedState, repair.sourceCandidate, repair.coordinatorAttempt);
   const artifact = flowManager.readArtifact({
-    specId: state.specId,
+    specId: typedState.specId,
     logicalKey: "test.requirement.repair.progress",
     parameters: { requirementId: repair.sourceCandidate.bundle.requirementId },
     consumerNodeId,
@@ -676,9 +596,15 @@ export function canonicalTestReviewRepairProgress({ flowManager, state, repair, 
   // Validate the complete persisted episode before deciding whether it belongs
   // to current evidence. A digest mismatch is ordinary immutable history;
   // malformed or unbound history is never a reason to silently reset state.
-  const episode = TestReviewRepairProgressEpisode.fromJSON(value).assertFlow(state);
+  const episode = TestReviewRepairProgressEpisode.fromJSON(value).assertFlow(typedState);
   if (!episode.matchesArtifact(repair)) return TestReviewRepairProgress.start(repair, stagedSources);
   return episode.materialize(repair);
+}
+
+function canonicalTestReviewRepairState(flowManager, state) {
+  return typeof flowManager.canonicalState === "function"
+    ? flowManager.canonicalState(state.specId)
+    : state;
 }
 
 /**
@@ -928,9 +854,7 @@ function repairFromCatalog({ flowManager, state, consumerNodeId, reviewAttemptSe
 
 export function canonicalTestReviewRepairForTarget({ flowManager, state, targetStepId } = {}) {
   if (state?.schemaRevision !== CURRENT_FLOW_SCHEMA_REVISION || targetStepId !== "test-repair" || state.currentNodeId !== "test-repair") return null;
-  const typedState = typeof flowManager.canonicalState === "function"
-    ? flowManager.canonicalState(state.specId)
-    : state;
+  const typedState = canonicalTestReviewRepairState(flowManager, state);
   return repairFromCatalog({ flowManager, state: typedState, consumerNodeId: "test-repair" });
 }
 

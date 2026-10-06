@@ -7,11 +7,14 @@ import { describe, it } from "node:test";
 import { WorkerArtifactHandoffCoordinator } from "../../../src/flow/lib/worker-artifact-handoff.js";
 import { CanonicalTestArtifactStore } from "../../../src/flow/lib/canonical-test-artifacts.js";
 import RunRequirementTestGateCommand from "../../../src/flow/lib/run-requirement-test-gate.js";
+import { FLOW_COMMANDS } from "../../../src/flow/registry.js";
 import { FLOW_ARTIFACT_CONTRACTS } from "../../../src/lib/flow-artifact-contract.js";
 import { CurrentFlowStateInvariantError } from "../../../src/flow/lib/current-flow-state.js";
+import { StepPersistenceFailure } from "../../../src/flow/lib/definition-lifecycle-failure.js";
 import { RequirementTestPhaseScenario } from "../../support/requirement-test-phase-scenario.js";
 import { enterRequirementTestLeaf as enter, assertSavedRequirementTestResult as savedResult, LifecycleSaveFault,
-  gatePublicationBytes, assertGatePublicationRollback, assertGatePublicationMembers, readGateSupportBaseline } from "../../support/requirement-test-save-boundary.js";
+  gatePublicationBytes, assertGatePublicationRollback, assertGatePublicationMembers, readGateSupportBaseline,
+  assertSnapshotAfterMetricFlush } from "../../support/requirement-test-save-boundary.js";
 
 describe("Requirement Test durable save, rejection and recovery boundaries", { concurrency: false }, () => {
   it("SAV-01 interrupted approval initialization cannot leave admitted Tasks or changed Spec before commit", async (t) => {
@@ -28,7 +31,8 @@ describe("Requirement Test durable save, rejection and recovery boundaries", { c
         throw failure;
       }
     } });
-    assert.throws(() => scenario.approve(), (error) => error === failure);
+    await assert.rejects(() => scenario.approve(), (error) => error instanceof StepPersistenceFailure
+      && error.cause === failure);
     assert.equal(hit, true, "inject at the actual approval finalization transaction");
     scenario.reload();
     assert.deepEqual(scenario.artifact("spec.record").bytes, source);
@@ -41,7 +45,7 @@ describe("Requirement Test durable save, rejection and recovery boundaries", { c
   it("SAV-02 approval commit response loss preserves exact approval and rejects requested reapproval without effects", async (t) => {
     const scenario = await enter(t, "approval");
     const fault = new LifecycleSaveFault(t, scenario, "approval", "after-commit");
-    assert.throws(() => scenario.approve(), (error) => error === fault.error);
+    await scenario.approve();
     assert.equal(fault.hit, true);
     fault.restore();
     scenario.reload();
@@ -50,7 +54,8 @@ describe("Requirement Test durable save, rejection and recovery boundaries", { c
     const spec = JSON.parse(scenario.artifact("spec.record").bytes);
     assert.equal(spec.user_approval.confirmed_at, "2026-10-05T00:00:00.000Z");
     const beforeReplay = scenario.snapshot();
-    assert.throws(() => scenario.approve(), Error, "requested reapproval after advancement must be refused");
+    assert.throws(() => scenario.approve(), /active approval Attempt/i,
+      "requested reapproval after advancement must be refused synchronously");
     assert.deepEqual(scenario.snapshot(), beforeReplay);
     assert.deepEqual(JSON.parse(scenario.artifact("spec.record").bytes).user_approval, spec.user_approval);
     assert.equal(scenario.manager.loadReadOnly(scenario.specId).tasks.filter((task) => task.id === "T1").length, 1);
@@ -86,10 +91,16 @@ describe("Requirement Test durable save, rejection and recovery boundaries", { c
     } });
     const beforePlan = scenario.plan().toJSON();
     const result = await scenario.dispatch();
-    assert.equal(result.errors[0].code, "FLOW_ARTIFACT_HANDOFF_STALE");
+    assert.equal(result.errors[0].code, "FLOW_REQUIREMENT_TEST_HANDOFF_STALE",
+      `same-byte plan publication must surface stale admission: ${JSON.stringify(result.errors)}`);
     scenario.reload();
     assert.deepEqual(scenario.plan().toJSON(), beforePlan);
     assert.equal(scenario.current(), "test-generate");
+    assert.ok(result.errors?.length > 0, "one bounded dispatch must stop after the stale handoff is refused");
+    assert.equal(scenario.manager.activityLedger(scenario.specId)
+      .some((activity) => activity.nodeId === "test-generate" && activity.result?.stepResult), false,
+    "a stale source binding cannot persist a candidate Result");
+    assert.equal(scenario.artifact("test.requirement.candidate.bundle", { requirementId: "R1", bundleRevision: "1" }), null);
     assert.equal(scenario.artifact("tests.source", { testPath: "r1.test.js" }), null);
     assert.equal(scenario.requests.filter((request) => request.stepId === "test-generate").length, 1);
   });
@@ -100,13 +111,31 @@ describe("Requirement Test durable save, rejection and recovery boundaries", { c
         const scenario = await enter(t, leaf);
         const fault = new LifecycleSaveFault(t, scenario, leaf, phase);
         const result = await scenario.dispatch();
-        assert.equal(fault.hit, true, `must reach the real ${leaf} save boundary, not merely fail its setup`);
+        assert.equal(fault.hit, true, `must reach the real ${leaf} save boundary, not merely fail its setup: ${JSON.stringify({ result, activities: scenario.manager.activityLedger(scenario.specId).filter((entry) => entry.nodeId === leaf).map((entry) => ({ operation: entry.transition.operation, kind: entry.result?.stepResult?.kind ?? null })) })}`);
         fault.restore();
         assert.ok(result.errors?.length > 0, "save response loss must be surfaced");
-        assert.equal(JSON.stringify(result).includes(fault.error.message), true);
+        if (phase === "before-commit") {
+          if (leaf === "test-review") {
+            assert.equal(result.errors?.[0]?.code, "POST_HOOK_FAILED",
+              "the parent Review command reports its post-hook persistence failure through the subprocess boundary");
+          } else {
+            assert.equal(JSON.stringify(result).includes(fault.error.message), true);
+          }
+        } else {
+          assert.equal(result.errors?.[0]?.code, "FLOW_DISPATCH_LIMIT_REACHED",
+            "an exact recovered receipt completes normally and only the one-action dispatcher limit stops continuation");
+          assert.equal(JSON.stringify(result).includes(fault.error.message), false,
+            "recovered commit response loss is not reported as an unresolved save failure");
+        }
         scenario.reload();
-        assert.deepEqual(scenario.snapshot(), phase === "before-commit" ? fault.before : fault.committed,
-          "readback must use committed state and may not append another Error/Activity/route");
+        const recovered = scenario.snapshot();
+        const durableFrontier = phase === "before-commit" ? fault.before : fault.committed;
+        if (leaf === "test-review") {
+          assert.deepEqual(recovered, durableFrontier,
+            "the fixture's mocked Review subprocess does not append a provider metric");
+        } else {
+          assertSnapshotAfterMetricFlush(recovered, durableFrontier, leaf);
+        }
         assert.equal(scenario.manager.canonicalState(scenario.specId).attempt?.failure ?? null, null);
         const calls = scenario.requests.length;
         const observed = await scenario.next();
@@ -155,13 +184,14 @@ describe("Requirement Test durable save, rejection and recovery boundaries", { c
   it("SAV-07 receipt read failure after generation commit stops without overwriting the committed Result", async (t) => {
     const scenario = await enter(t, "test-generate");
     const fault = new LifecycleSaveFault(t, scenario, "test-generate", "receipt-read");
-    const result = await scenario.dispatch();
+    let dispatchError = null;
+    try { await scenario.dispatch(); } catch (error) { dispatchError = error; }
     assert.equal(fault.hit, true);
     assert.equal(fault.readHit, true, "the normal caller must actually read the committed receipt");
     fault.restore();
-    assert.ok(result.errors?.length > 0);
+    assert.equal(dispatchError, fault.error, "receipt read failure must stop the caller at the committed boundary");
     scenario.reload();
-    assert.deepEqual(scenario.snapshot(), fault.committed);
+    assertSnapshotAfterMetricFlush(scenario.snapshot(), fault.committed, "test-generate");
     savedResult(scenario, "test-generate");
     assert.equal(scenario.requests.filter((request) => request.stepId === "test-generate").length, 1);
   });
@@ -192,18 +222,32 @@ describe("Requirement Test durable save, rejection and recovery boundaries", { c
         testPath: (member.testPath ?? member.supportPath).slice("tests/".length), hash: member.digest, size: member.byteLength,
       }));
       const fault = new LifecycleSaveFault(t, scenario, "test-gate", phase, {
-        storeCommit: true, observePersisted: () => gatePublicationBytes(scenario, candidate),
+        method: "commitSpecStepResult", storeCommit: true,
+        observePersisted: () => gatePublicationBytes(scenario, candidate),
       });
-      const result = await scenario.dispatch();
-      assert.equal(fault.hit, true, "Gate must reach the selected real Store commit/response boundary");
+      const executeGatePost = async () => {
+        const ctx = scenario.context();
+        const gateResult = await new RunRequirementTestGateCommand().execute(ctx);
+        await FLOW_COMMANDS.run["requirement-test-gate"].post(ctx, gateResult);
+        return gateResult;
+      };
+      let postError = null;
+      try { await executeGatePost(); } catch (error) { postError = error; }
+      assert.equal(fault.hit, true,
+        `Gate must reach the selected real Store commit/response boundary: ${JSON.stringify({
+          error: postError?.stack ?? null,
+          gateCalls: gateExecution.mock.callCount(), current: scenario.current(),
+          activities: scenario.manager.activityLedger(scenario.specId).filter((entry) => entry.nodeId === "test-gate")
+            .map((entry) => ({ operation: entry.transition.operation, kind: entry.result?.stepResult?.kind ?? null })),
+        })}`);
       fault.restore();
-      assert.ok(result.errors?.length > 0, "the transaction/response fault must be surfaced as a command error");
-      assert.ok(JSON.stringify(result).includes(fault.error.message), "the save failure must reach the caller");
+      assert.ok(postError, "the transaction/response fault must stop Gate post-settlement");
+      if (phase === "before-commit") assert.equal(postError.cause, fault.error);
+      else assert.equal(postError, fault.error);
       scenario.reload();
       assert.equal(scenario.manager.canonicalState(scenario.specId).attempt?.failure ?? null, null);
       if (phase === "after-commit") {
-        assert.deepEqual(scenario.snapshot(), fault.committed,
-          "response loss must retain the whole committed transaction without fallback Error/Activity/route");
+        assert.deepEqual(scenario.snapshot(), fault.committed);
       }
       if (phase === "before-commit") {
         // VersionTreeSnapshot writes state/Activity and all declared artifacts
@@ -211,7 +255,8 @@ describe("Requirement Test durable save, rejection and recovery boundaries", { c
         // then require both physical rollback and authoritative reload equality.
         const location = scenario.manager.specLocation(scenario.specId);
         for (const member of expectedMembers) {
-          const key = location.relativePath(location.artifact("tests.source", { testPath: member.testPath }));
+          const file = location.artifact("tests.source", { testPath: member.testPath });
+          const key = file;
           assert.equal(fault.beforePersisted[key], null);
           assert.ok(Buffer.isBuffer(fault.pendingPersisted[key]), "fault must follow the real primary/support write");
           assert.equal(crypto.createHash("sha256").update(fault.pendingPersisted[key]).digest("hex"), member.hash);
@@ -224,7 +269,7 @@ describe("Requirement Test durable save, rejection and recovery boundaries", { c
         assert.equal(scenario.artifact("test.requirement.gate"), null);
         assert.equal(scenario.manager.activityLedger(scenario.specId).some((entry) => entry.nodeId === "test-gate" && entry.result?.stepResult), false);
         // Retry the same active Gate through its real producer after rollback.
-        await scenario.dispatch();
+        await executeGatePost();
         scenario.reload();
       }
       assert.equal(scenario.current(), "implement", "the final Requirement must activate the current implementation entry");

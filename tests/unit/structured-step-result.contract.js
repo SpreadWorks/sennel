@@ -53,14 +53,15 @@ export function pending(requirementId) {
   return RequirementTestWorkItem.pending({ requirementId, specRevision: revision(), expectation: "fail" });
 }
 
-export function operands({ candidateBundle = candidate(), pendingIds = ["R2", "R3"], budget = new RequirementTestBudget({ autoSemantic: 1, manualSemantic: 2, tooling: 3 }), autoApprove = true, findings = [new RequirementTestSemanticFinding({ requirementId: "R1", bundleRevision: 1, fingerprint: "b".repeat(64) })] } = {}) {
+export function operands({ candidateBundle = candidate(), pendingIds = ["R2", "R3"], budget = new RequirementTestBudget({ autoSemantic: 1, manualSemantic: 2, tooling: 3 }), autoApprove = true, findings = [new RequirementTestSemanticFinding({ requirementId: "R1", bundleRevision: 1, fingerprint: "b".repeat(64) })], structural = false } = {}) {
   const Binding = requiredExport("RequirementTestResultBinding");
   const Frontier = requiredExport("RequirementTestResultFrontier");
   const RetryState = requiredExport("RequirementTestRetryState");
-  return {
+  const values = {
     binding: new Binding({
       runId: "run-result-contract", specId: "result-contract", leaf: "test-generate",
       attempt: candidateBundle.bundle.lineage.sourceAttempt,
+      specRecordPublication: new engine.RequirementTestResultPublication({ logicalKey: "spec.record", relativePath: "spec.json", hash: "d".repeat(64), size: 512, activityId: "activity-spec-record" }),
       planPublication: new RequirementTestPlanPublication({ logicalKey: "test.requirement.plan", relativePath: "steps/test-generate/plan.json", hash: "c".repeat(64), size: 256, activityId: "activity-plan" }),
       requirementId: candidateBundle.bundle.requirementId, specRevision: revision(), status: "in_progress", candidate: candidateBundle.bundle.lineage,
     }),
@@ -68,6 +69,12 @@ export function operands({ candidateBundle = candidate(), pendingIds = ["R2", "R
     retryState: new RetryState({ budget, autoApprove, findings }),
     candidateBundle,
   };
+  if (structural) values.semanticFinding = new RequirementTestSemanticFinding({
+    requirementId: candidateBundle.bundle.requirementId,
+    bundleRevision: candidateBundle.bundle.revision,
+    fingerprint: candidateBundle.digest,
+  });
+  return values;
 }
 
 export function makeResult(contract, values) {
@@ -120,6 +127,7 @@ test("02 operands project only source binding, remaining R identities/statuses a
   assert.deepEqual(values.binding.toJSON(), {
     runId: "run-result-contract", specId: "result-contract", leaf: "test-generate",
     attempt: source.bundle.lineage.sourceAttempt.toJSON(),
+    specRecordPublication: { logicalKey: "spec.record", relativePath: "spec.json", hash: "d".repeat(64), size: 512, activityId: "activity-spec-record" },
     planPublication: { logicalKey: "test.requirement.plan", relativePath: "steps/test-generate/plan.json", hash: "c".repeat(64), size: 256, activityId: "activity-plan" },
     requirementId: "R1", specRevision: revision().toJSON(), status: "in_progress", candidate: source.bundle.lineage.toJSON(),
   });
@@ -170,13 +178,13 @@ for (const contract of GENERATION_CONTRACTS) {
 
   test(`${contract.name}: roundtrip retains next R frontier, adopted lineage and retry state`, () => {
     requiredExport(contract.name);
-    const values = operands();
+    const values = operands({ structural: contract.kind.endsWith("structural-rejected") });
     assertRoundtrip(contract, makeResult(contract, values), values);
   });
 
   test(`${contract.name}: constructor refuses missing, untyped and undeclared operands`, () => {
     const ResultClass = requiredExport(contract.name);
-    const values = operands();
+    const values = operands({ structural: contract.kind.endsWith("structural-rejected") });
     assert.throws(() => new ResultClass(), TypeError);
     for (const [field, value] of Object.entries(values)) {
       const missing = { ...values };
@@ -190,7 +198,7 @@ for (const contract of GENERATION_CONTRACTS) {
 
   test(`${contract.name}: readback refuses identity, schema and forbidden payload tampering`, () => {
     requiredExport(contract.name);
-    const values = operands();
+    const values = operands({ structural: contract.kind.endsWith("structural-rejected") });
     const result = makeResult(contract, values);
     const stored = assertRoundtrip(contract, result, values);
     for (const malformed of [

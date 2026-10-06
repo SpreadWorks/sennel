@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import { createTmpDir, removeTmpDir } from "../../support/builders/tmp-dir.js";
 import { CanonicalFlowFixture, makeFlowManager } from "../../support/infrastructure/flow-setup.js";
 import { CanonicalSpecTaskSynchronizer, syncSpecTasksToFlow } from "../../../src/flow/lib/sync-spec-tasks.js";
-import { TaskCollection } from "../../../src/spec/lib/render-contract.js";
+import { TaskCollection } from "../../../src/spec/lib/task-values.js";
 
 function taskDocument(id, addedRound = 0) {
   return { id, title: `Task ${id}`, goal: `Complete ${id}.`, parent: null, origin: "plan", added_round: addedRound, status: "pending" };
@@ -69,6 +69,25 @@ describe("approval Task admission (REQ-2, REQ-6)", () => {
       { ...taskDocument("T-parent"), parent: null },
     ]);
     assert.deepEqual(tasks.admissionOrder().map((task) => task.id.value), ["T-parent", "T-child"]);
+  });
+
+  it("validates Task collection identity and parent references", () => {
+    assert.throws(() => new TaskCollection([taskDocument("T-1"), taskDocument("T-1")]), /duplicate TaskId/);
+    assert.throws(() => new TaskCollection([{ ...taskDocument("T-1"), parent: "T-missing" }]), /missing parent/);
+    assert.throws(() => new TaskCollection(Array.from({ length: 201 }, (_, index) => taskDocument(`T-${index}`))), /exceeds 200/);
+  });
+
+  it("syncs parent Tasks before child Tasks from a child-first Spec proposal", () => {
+    const state = { schemaRevision: CURRENT_FLOW_SCHEMA_REVISION, specId: "215-flow-task-decomposition", currentNodeId: "approval", tasks: [] };
+    const flowManager = {
+      readArtifact: () => ({ bytes: Buffer.from(JSON.stringify({ tasks: [
+        { ...taskDocument("T-child"), parent: "T-parent" },
+        taskDocument("T-parent"),
+      ] })) }),
+      addTask: () => {},
+    };
+    const sync = new CanonicalSpecTaskSynchronizer({ flowManager, state });
+    assert.deepEqual(sync.pending().map((task) => task.id), ["T-parent", "T-child"]);
   });
 
   it("rejects cyclic Task proposals before approval admission", () => {

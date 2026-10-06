@@ -18,6 +18,9 @@ import { Step } from "../../src/flow/engine/step.js";
 test("StepResult is abstract and every concrete Result has one unique fixed contract", () => {
   const expected = [
     ["DraftCreatedResult", "draft", "draft-created", "completed"],
+    ["BranchPreparedResult", "branch", "branch-prepared", "completed"],
+    ["BranchNotRequiredResult", "branch", "branch-not-required", "completed"],
+    ["PrepareSpecReadyResult", "prepare-spec", "prepare-spec-ready", "completed"],
     ["SpecCreatedResult", "spec", "spec-created", "completed"],
     ["SpecGateRepairReadyForGateResult", "spec-gate-repair", "spec-gate-repair-ready-for-gate", "completed"],
     ["SpecGateRepairReviewRequiredResult", "spec-gate-repair", "spec-gate-repair-review-required", "completed"],
@@ -66,9 +69,30 @@ test("StepResult is abstract and every concrete Result has one unique fixed cont
     ["DraftGateRepairWorkerRequiredResult", "draft-gate-repair", "draft-gate-repair-worker-required", "loop-required"],
     ["DraftGateRepairAppliedResult", "draft-gate-repair", "draft-gate-repair-applied", "completed"],
     ["DraftGateRepairCarryForwardResult", "draft-gate-repair", "draft-gate-repair-carry-forward", "completed"],
+    ["ApprovalAwaitingUserResult", "approval", "approval-awaiting-user", "user-input-required"],
+    ["ApprovalConfirmedWithTestsResult", "approval", "approval-confirmed-with-tests", "completed"],
+    ["ApprovalConfirmedWithoutTestsResult", "approval", "approval-confirmed-without-tests", "completed"],
+    ["TestGenerateCandidateSavedResult", "test-generate", "test-generate-candidate-saved", "completed"],
+    ["TestGenerateStructuralRejectedResult", "test-generate", "test-generate-structural-rejected", "branch-required"],
+    ["TestRepairProgressSavedResult", "test-repair", "test-repair-progress-saved", "loop-required"],
+    ["TestRepairCandidateSavedResult", "test-repair", "test-repair-candidate-saved", "completed"],
+    ["TestRepairStructuralRejectedResult", "test-repair", "test-repair-structural-rejected", "branch-required"],
+    ["TestReviewExecutionRequiredResult", "test-review", "test-review-execution-required", "loop-required"],
+    ["TestReviewPassedResult", "test-review", "test-review-passed", "completed"],
+    ["TestReviewAdvisoryResult", "test-review", "test-review-advisory", "completed"],
+    ["TestReviewRejectedResult", "test-review", "test-review-rejected", "branch-required"],
+    ["TestGateCompatibleResult", "test-gate", "test-gate-compatible", "completed"],
+    ["TestGateIncompatibleResult", "test-gate", "test-gate-incompatible", "branch-required"],
+    ["TestGenerateToolingUnavailableResult", "test-generate", "test-generate-tooling-unavailable", "loop-required"],
+    ["TestReviewToolingUnavailableResult", "test-review", "test-review-tooling-unavailable", "loop-required"],
+    ["TestRepairToolingUnavailableResult", "test-repair", "test-repair-tooling-unavailable", "loop-required"],
+    ["TestGateToolingUnavailableResult", "test-gate", "test-gate-tooling-unavailable", "loop-required"],
+    ["TestGenerateExternalBlockedResult", "test-generate", "test-generate-external-blocked", "error"],
+    ["TestReviewExternalBlockedResult", "test-review", "test-review-external-blocked", "error"],
+    ["TestRepairExternalBlockedResult", "test-repair", "test-repair-external-blocked", "error"],
     ...[
-      "draft", "spec", "spec-gate-repair", "spec-triage", "spec-repair", "spec-gate", "spec-review", "draft-questions-review", "draft-questions-triage", "draft-questions-repair", "draft-refine",
-      "draft-coverage-review", "draft-coverage-triage", "draft-coverage-repair", "draft-gate", "draft-gate-repair",
+      "draft", "branch", "prepare-spec", "spec", "spec-gate-repair", "spec-triage", "spec-repair", "spec-gate", "spec-review", "draft-questions-review", "draft-questions-triage", "draft-questions-repair", "draft-refine",
+      "draft-coverage-review", "draft-coverage-triage", "draft-coverage-repair", "draft-gate", "draft-gate-repair", "approval", "test-generate", "test-repair", "test-review", "test-gate",
     ].map((stepId) => ["StepErrorResult", stepId, `${stepId}-error`, "error"]),
   ];
   assert.throws(() => new StepResult(), /abstract/);
@@ -76,8 +100,9 @@ test("StepResult is abstract and every concrete Result has one unique fixed cont
     [ResultClass.name, stepId, kind, type]
   )), expected);
   assert.equal(new Set(STEP_RESULT_REGISTRY.map(({ kind }) => kind)).size, STEP_RESULT_REGISTRY.length);
-  for (const { ResultClass, stepId, kind, type } of STEP_RESULT_REGISTRY) {
+  for (const { ResultClass, stepId, kind, type, operands } of STEP_RESULT_REGISTRY) {
     if (ResultClass === StepErrorResult) continue;
+    if (operands !== undefined) continue;
     const result = type === "error" ? new ResultClass(new Error("test")) : new ResultClass();
     assert.equal(result.stepId, stepId);
     assert.equal(result.kind, kind);

@@ -1,7 +1,7 @@
 import { CURRENT_FLOW_SCHEMA_REVISION } from "../../lib/flow-schema-revision.js";
 /** Version-1 append-only Spec Task admission through the catalog and Store. */
 import { FlowManager } from "../../lib/flow-manager.js";
-import { TaskCollection } from "../../spec/lib/render-contract.js";
+import { TaskCollection } from "../../spec/lib/task-values.js";
 
 function canonicalState(state) {
   if (state?.schemaRevision !== CURRENT_FLOW_SCHEMA_REVISION || typeof state.specId !== "string" || state.specId === "") {
@@ -38,7 +38,7 @@ export class CanonicalSpecTaskSynchronizer {
     });
     const document = JSON.parse(source.bytes.toString("utf8"));
     const existing = new Set(this.state.tasks.map((task) => task.id));
-    return Object.freeze([...new TaskCollection(document.tasks ?? [])]
+    return Object.freeze([...new TaskCollection(document.tasks ?? []).admissionOrder()]
       .filter((task) => !existing.has(task.id.value))
       .map(taskDocument));
   }

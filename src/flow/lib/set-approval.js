@@ -16,6 +16,7 @@ import { Envelope } from "../../lib/flow-envelope.js";
 import { CanonicalSpecApproval, MAX_APPROVAL_NOTES_LENGTH } from "./canonical-spec-approval.js";
 import { resolveDefinitionRoute } from "../definition.js";
 import { approvalRouteFacts } from "./definition-route-facts.js";
+import { acquireApprovalInput, executeApprovalInput } from "../engine/composition/test.js";
 
 function isValidIso8601(value) {
   if (typeof value !== "string" || value.length === 0) return false;
@@ -78,9 +79,23 @@ export default class SetApprovalCommand extends FlowCommand {
     }));
     return plan.apply({
       confirmAndAdvance() {
-        return ctx.flowManager.approveSpecContinuation({
+        const review = ctx.flowManager.readCurrentSpecReview({
           specId: state.specId,
+          consumerNodeId: "approval",
+        });
+        if (review === null) throw new Error("approval requires the canonical Spec Review revision");
+        const observed = acquireApprovalInput({
+          state: typedState,
+          specDescriptor: spec.descriptor,
+          spec: JSON.parse(spec.bytes.toString("utf8")),
+          review: review.review,
           approval,
+        });
+        return executeApprovalInput({
+          stepId: "approval",
+          observed,
+          ctx,
+          flowManager: ctx.flowManager,
           expectedSpecDigest: plan.facts.specPublicationDigest,
         });
       },

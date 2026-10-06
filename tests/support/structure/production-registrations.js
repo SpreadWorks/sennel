@@ -41,25 +41,28 @@ export class DefinitionLeafScope {
 
 /** One named route, with a closed selection/consumption shape and optional receipt replay. */
 export class ExecutionCaller {
-  constructor(module, declarationName, lookupName, operation, receiptReplayName = null, selectionMode = "select") {
+  constructor(module, declarationName, lookupName, operation, receiptReplayName = null, selectionMode = "select", registrationAware = false) {
     if ([module, declarationName, lookupName].some((value) => typeof value !== "string" || !value)
       || !["project", "execute"].includes(operation) || !["select", "consume"].includes(selectionMode)
+      || typeof registrationAware !== "boolean"
       || receiptReplayName !== null && (typeof receiptReplayName !== "string" || !receiptReplayName)) {
       throw new TypeError("ExecutionCaller requires a named lookup and selection consumer");
     }
-    Object.assign(this, { module, declarationName, lookupName, operation, receiptReplayName, selectionMode });
+    Object.assign(this, { module, declarationName, lookupName, operation, receiptReplayName, selectionMode, registrationAware });
     Object.freeze(this);
   }
 
   body() {
     const replay = this.receiptReplayName === null ? ""
       : `if (input.receiptReplay !== null) return ${this.receiptReplayName}(input.receiptReplay);`;
+    const suppliedInput = this.registrationAware ? "{ ...input, registration }" : "input";
     const selection = this.selectionMode === "select"
-      ? "const selection = registration.executionContract.select(input);"
+      ? `const selection = registration.executionContract.select(${suppliedInput});`
       : "const selection = input.selection;";
+    const executedInput = this.registrationAware ? "{ ...input, registration }" : "input";
     return `${replay} const registration = ${this.lookupName}(input.stepId);
       if (registration === null) throw new TypeError($STRING_LITERAL);
-      ${selection} return registration.executionContract.${this.operation}(selection, input);`;
+      ${selection} return registration.executionContract.${this.operation}(selection, ${executedInput});`;
   }
 }
 

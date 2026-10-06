@@ -59,7 +59,7 @@ export class RequirementTestPhaseScenario {
     if (this.options.continueImplementation) {
       fs.mkdirSync(path.join(this.root, ".sennel", "output"), { recursive: true });
       fs.writeFileSync(path.join(this.root, ".sennel", "output", "analysis.json"), "{}\n");
-      fs.writeFileSync(path.join(this.root, "package.json"), workerArtifactJson({ type: "module", scripts: { test: "node --test project-tests" } }));
+      fs.writeFileSync(path.join(this.root, "package.json"), workerArtifactJson({ type: "module", scripts: { test: "node --test project-tests/smoke.test.js" } }));
       fs.mkdirSync(path.join(this.root, "project-tests"), { recursive: true });
       fs.writeFileSync(path.join(this.root, "project-tests", "smoke.test.js"), "import test from 'node:test'; test('project starts', () => {});\n");
     }
@@ -68,8 +68,18 @@ export class RequirementTestPhaseScenario {
       autoApprove: this.options.autoApprove ?? false,
       execution: { mode: "direct", baseBranch: "main", featureBranch: null },
     }).create().registerActive().activate("spec");
-    this.gateProvider = installGateProviderFake((prompt, options) => this.options.gateResponse?.(prompt, options, this)
-      ?? JSON.stringify({ observations: [], ...(options.jsonSchema?.required?.includes("evaluationUnavailable") ? { evaluationUnavailable: null } : {}) }));
+    this.gateProvider = installGateProviderFake((prompt, options) => {
+      const selected = this.options.gateResponse?.(prompt, options, this);
+      if (selected !== null && selected !== undefined) return selected;
+      const required = options.jsonSchema?.required ?? [];
+      if (required.includes("evaluations")) {
+        const ids = options.jsonSchema?.properties?.evaluations?.items?.properties?.guardrail_id?.enum ?? [];
+        return JSON.stringify({ evaluations: ids.map((guardrail_id) => ({
+          guardrail_id, result: "pass", reason: "Scenario accepts the configured guardrail.",
+        })) });
+      }
+      return JSON.stringify({ observations: [], ...(required.includes("evaluationUnavailable") ? { evaluationUnavailable: null } : {}) });
+    });
     const original = childProcess.spawnSync;
     this.reviewProcess = mock.method(childProcess, "spawnSync", (command, args, options) => {
       if (command !== "node" || !String(args[0]).endsWith("/flow/commands/review.js")) return original(command, args, options);
@@ -239,7 +249,9 @@ export class RequirementTestPhaseScenario {
       const read = (logicalKey, parameters) => this.manager.readArtifact({ specId: this.specId,
         logicalKey, parameters, consumerNodeId: activity.nodeId, optional: true });
       const evidence = { activity };
-      if (activity.nodeId === "test-review") {
+      if (activity.nodeId === "test-review" && [
+        "test-review-execution-required", "test-review-passed", "test-review-advisory", "test-review-rejected",
+      ].includes(activity.result.stepResult.kind)) {
         const workUnit = this.reviewWorkUnits.get(activity.attemptId) ?? null;
         const artifact = read("test.requirement.review");
         let reviewEvidence = null;
@@ -259,7 +271,11 @@ export class RequirementTestPhaseScenario {
         }
         evidence.review = Object.freeze({ workUnit, artifact, evidence: reviewEvidence });
       }
-      if (activity.nodeId === "test-gate") evidence.gate = Object.freeze({ artifact: read("test.requirement.gate") });
+      if (activity.nodeId === "test-gate" && [
+        "test-gate-compatible", "test-gate-incompatible", "test-gate-tooling-unavailable",
+      ].includes(activity.result.stepResult.kind)) {
+        evidence.gate = Object.freeze({ artifact: read("test.requirement.gate") });
+      }
       this.resultEvidence.set(activity.id, Object.freeze(evidence));
     }
   }

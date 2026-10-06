@@ -78,11 +78,12 @@ function requiredFlowManager(value) {
   return value;
 }
 
-function currentRequirementTestGateEvidence({ flowManager, state, workItem, candidate }) {
+export function currentRequirementTestGateEvidence({ flowManager, state, workItem, candidate }) {
   const prior = flowManager.activityLedger(state.specId).at(-1) ?? null;
   const reopenedByGate = prior?.nodeId === "test-gate"
     && prior.transition?.operation === "advance_requirement_test_lifecycle"
-    && prior.transition?.requirementTestLifecycle?.target === "test-review";
+    && prior.transition?.requirementTestLifecycle?.target === "test-review"
+    && prior.transition?.requirementTestLifecycle?.requirementId === workItem.requirementId;
   const resolved = flowManager.readArtifact({
     specId: state.specId,
     logicalKey: "test.requirement.gate",
@@ -568,6 +569,7 @@ export class CanonicalReviewWorkUnit {
     this.phase = phase(reviewPhase);
     this.taskId = taskId == null ? null : requiredText(taskId, "canonical review taskId");
     this.nodeId = nodeIdFor({ phase: this.phase, taskId: this.taskId });
+    this.specRecordDescriptor = null;
     const typed = flowManager.canonicalState(state.specId);
     if (typed?.attempt?.nodeId !== this.nodeId) {
       throw new Error(`canonical review requires active Attempt for ${this.nodeId}`);
@@ -635,6 +637,7 @@ export class CanonicalReviewWorkUnit {
       optional,
     });
     if (resolved === null) return null;
+    if (logicalKey === "spec.record") this.specRecordDescriptor = resolved.descriptor;
     const input = {
       logicalKey,
       logicalPath,
@@ -1111,7 +1114,7 @@ export class CanonicalReviewPromotion {
     result.artifacts.targetStateDigest = this.targetStateDigest;
     if (this.taskId !== null) result.artifacts.taskId = this.taskId;
     attachCanonicalCommandResultArtifact(result, artifactAttachment);
-    attachCanonicalCommandResultPublications(result, publications);
+    if (publications.length > 0) attachCanonicalCommandResultPublications(result, publications);
     Object.defineProperty(result, ATTACHED_REVIEW_WORK_UNIT, {
       value: this.workUnit,
       enumerable: false,

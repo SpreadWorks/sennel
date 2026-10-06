@@ -41,7 +41,7 @@ export const FLOW_REVIEW_ROUTES = Object.freeze([
   new FlowReviewRoute({
     phase: "test",
     reviewStepId: "test-review",
-    logicalKey: "test.review",
+    logicalKey: "test.requirement.review",
     projectionFile: "test-review.json",
   }),
   new FlowReviewRoute({

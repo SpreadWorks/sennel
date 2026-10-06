@@ -1,7 +1,6 @@
 /** Immutable Requirement-scoped preimplementation test lifecycle values. */
 
 import path from "node:path";
-import { validateSpecJsonObject } from "../../lib/spec-json.js";
 import { SpecRevisionIdentity } from "./spec-revision-identity.js";
 
 const EXPECTATIONS = new Set(["fail", "pass"]);
@@ -416,7 +415,18 @@ export class RequirementTestPlan {
   }
 
   static fromApprovedSpec({ spec, specRevision: revision } = {}) {
-    validateSpecJsonObject(spec);
+    if (spec === null || typeof spec !== "object" || Array.isArray(spec)
+      || !Array.isArray(spec.requirements)) {
+      throw new Error("Requirement test plan requires a validated approved Spec with Requirements");
+    }
+    for (const [index, requirement] of spec.requirements.entries()) {
+      if (requirement === null || typeof requirement !== "object" || Array.isArray(requirement)
+        || typeof requirement.id !== "string" || requirement.id.trim() === ""
+        || (requirement.testable !== undefined && typeof requirement.testable !== "boolean")) {
+        throw new Error(`Requirement test plan Requirement ${index} has invalid identity or testability`);
+      }
+      if (requirement.testable !== false) RequirementTestExpectation.from(requirement.preimplementation_test_expectation);
+    }
     const identity = specRevision(revision);
     return new RequirementTestPlan({
       specRevision: identity,

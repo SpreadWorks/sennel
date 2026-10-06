@@ -14,6 +14,7 @@ import { Envelope } from "../lib/flow-envelope.js";
 import { hasExplicitOption } from "../lib/flow-options.js";
 import { FatalPostHookError } from "../lib/post-hook-error.js";
 import { FLOW_QUERY_HELP } from "./query-contract.js";
+import crypto from "node:crypto";
 import fs from "fs";
 import path from "path";
 import {
@@ -37,9 +38,6 @@ import {
   testResultReviewTransitionDefinition,
   SetStepStatus,
   taskIdForResolvedStep,
-  RequirementTestLifecycleFacts,
-  RequirementTestStepObservation,
-  resolveRequirementTestLifecycle,
 } from "./definition.js";
 import { readCurrentGateTransitionFacts } from "./lib/gate-transition-facts.js";
 import { selectGateExecutionAdmission } from "./lib/execution-admission.js";
@@ -73,7 +71,6 @@ import { RepositoryFlowOperationLock } from "../lib/repository-maintenance-lock.
 import { readCurrentNonGateTransitionFacts } from "./lib/non-gate-transition-facts.js";
 import { readCurrentTestChainTransitionFacts } from "./lib/test-chain-transition-facts.js";
 import { CurrentTaskSourceSnapshot, TaskMutationLineageSet } from "./lib/task-mutation-lineage.js";
-import { RequirementTestLifecycleAuthority } from "./lib/requirement-test-lifecycle.js";
 import {
   DraftCoverageReviewExecutionRequiredResult,
   DraftQuestionsReviewExecutionRequiredResult,
@@ -82,7 +79,7 @@ import {
 import { draftStepRegistration, prepareDraftReviewBinding } from "./engine/composition/draft.js";
 import { specStepRegistration } from "./engine/composition/spec.js";
 import { prepareStepRegistration } from "./engine/composition/prepare.js";
-import { gateStepExecutionRegistration } from "./engine/composition/registered-step-execution.js";
+import { flowStepExecutionRegistration, gateStepExecutionRegistration } from "./engine/composition/registered-step-execution.js";
 import { isStepPersistenceFailure } from "./lib/definition-lifecycle-failure.js";
 import { StepAdmissionRefusal, isStepAdmissionRefusal } from "./lib/step-admission-refusal.js";
 
@@ -111,6 +108,30 @@ function fatalDraftReviewFailure(error) {
     });
   }
   return error;
+}
+
+async function prepareRequirementTestSettlement(ctx, {
+  state, planRead, stepId, evidence = null, error = null, specRecordPublication = null,
+  commandResult, activityId: selectedActivityId,
+}) {
+  const [{ acquireRequirementTestInput }, { RequirementTestService }] = await Promise.all([
+    loadRequirementTestComposition(),
+    import("./services/requirement-test-service.js"),
+  ]);
+  const specRecord = specRecordPublication === null
+    ? ctx.flowManager.readArtifact({ specId: state.specId, logicalKey: "spec.record", consumerNodeId: stepId }).descriptor
+    : specRecordPublication;
+  const observed = acquireRequirementTestInput({ state, stepId, planRead,
+    specRecordPublication: specRecord, evidence, error });
+  const registration = flowStepExecutionRegistration(stepId);
+  if (registration === null) throw new Error(`Requirement test Step registration is missing: ${stepId}`);
+  const prepared = await registration.create({
+    ctx, observed, flowManager: ctx.flowManager, commandResult, activityId: selectedActivityId,
+  });
+  const service = prepared.dependency(RequirementTestService);
+  const stepResult = prepared.step.selectResult();
+  const settlement = service.selectSettlement(stepResult);
+  return Object.freeze({ prepared, service, stepResult, settlement });
 }
 
 async function executePublishedDraftReviewStep(ctx, result) {
@@ -340,45 +361,20 @@ function canonicalResultProducerStep(provenance, result) {
 }
 
 /**
- * Persist non-terminal review results before their sealed work unit is
- * cleaned up.  A flow-scoped rejected test review remains active so the
- * definition-owned repair transition can consume its cataloged evidence.
- * Task-scoped implementation reviews use the dedicated review-funnel
- * publication connector before this helper is reached.
+ * Persist tooling review output before its sealed work unit is cleaned up.
+ * Requirement test Review and Task implementation Review use their dedicated
+ * settlement paths before this helper is reached.
  */
 async function persistNonTerminalReviewResult(ctx, result) {
   const artifacts = result?.artifacts;
-  const rejectedTestReview = artifacts?.phase === "test"
-    && artifacts?.taskId == null
-    && artifacts?.verdict === "REJECTED";
   const toolingReview = artifacts?.toolingOutcome != null;
-  if (!rejectedTestReview && !toolingReview) return;
+  if (!toolingReview) return;
 
   const { attachedCanonicalCommandResultArtifact } = await import("./lib/canonical-command-result.js");
   if (attachedCanonicalCommandResultArtifact(result) === null) return;
 
   const specId = ctx.specId ?? ctx.flowState.specId;
-  if (rejectedTestReview || toolingReview || ctx.flowState?.policy?.nonblocking?.enabled === true) {
-    ctx.flowManager.publishCurrentAttemptResult({ specId, commandResult: result });
-  } else {
-    ctx.flowManager.failCurrentAttempt({
-      specId,
-      failure: {
-        category: "semantic",
-        code: "REVIEW_REJECTED",
-        message: "Task review rejected the current implementation Attempt.",
-        retryable: true,
-        retryKind: "semantic",
-      },
-      result: {
-        outcome: "failed",
-        summary: "Task review rejected the current implementation Attempt.",
-        confirmedAt: new Date().toISOString(),
-        artifactRefs: [],
-      },
-      commandResult: result,
-    });
-  }
+  ctx.flowManager.publishCurrentAttemptResult({ specId, commandResult: result });
   ctx.flowState = ctx.flowManager.loadReadOnly(specId);
 }
 
@@ -1140,6 +1136,7 @@ function pluginCommandName(command) {
 function loadGetNextActionCommand() { return import("./lib/get-next-action.js"); }
 function loadDispatchCommand() { return import("./lib/run-dispatch.js"); }
 function loadPrepareCommand() { return import("./lib/run-prepare-spec.js"); }
+function loadRequirementTestComposition() { return import("./engine/composition/test.js"); }
 
 function executePublishedPrepareStep(input) {
   const registration = prepareStepRegistration(input.stepId);
@@ -1151,6 +1148,7 @@ function executePublishedPrepareStep(input) {
 }
 function loadGateCommand() { return import("./lib/run-gate.js"); }
 function loadReviewCommand() { return import("./lib/run-review.js"); }
+function loadRequirementTestGateCommand() { return import('./lib/run-requirement-test-gate.js'); }
 
 
 export const FLOW_COMMANDS = {
@@ -1905,6 +1903,20 @@ export const FLOW_COMMANDS = {
         if (result?.artifacts?.phase === "test" && result?.artifacts?.taskId == null) {
           const { attachedCanonicalCommandResultArtifact } = await import("./lib/canonical-command-result.js");
           const { RequirementTestArtifactStore } = await import("./lib/requirement-test-store.js");
+          const { attachedCanonicalReviewWorkUnit, currentRequirementTestGateEvidence } = await import("./lib/canonical-review-artifacts.js");
+          const {
+            RequirementTestDeferredReceipt, RequirementTestFailureArtifact,
+            RequirementTestReviewSource,
+          } = await import("./lib/requirement-test-artifacts.js");
+          const { RequirementTestSemanticFinding } = await import("./lib/requirement-test-lifecycle.js");
+          const {
+            RequirementTestExternalBlockedError, RequirementTestToolingEvidence,
+            RequirementTestReviewEvidence,
+          } = await import("./engine/step-result.js");
+          const { ReviewEvidenceIdentity } = await import("./lib/review-evidence-values.js");
+          const { ReviewWorkUnitOutputReceipt } = await import("./lib/review-work-unit-values.js");
+          const { RequirementTestSettlementPublication } = await import("./services/requirement-test-settlement-writer.js");
+          const { buildDeferredSemanticFindingsPublication } = await import("./lib/flow-findings.js");
           const attached = attachedCanonicalCommandResultArtifact(result);
           if (attached?.logicalKey !== "test.requirement.review") {
             throw new Error("Requirement test review canonical result artifact is missing");
@@ -1924,71 +1936,89 @@ export const FLOW_COMMANDS = {
             || payload.sourceAttempt?.sequence !== workItem.bundleRevision.lineage.sourceAttempt.sequence) {
             throw new Error("Requirement test review result does not match the active candidate");
           }
-          // ReviewToolingOutcome is the process-boundary classification. A
-          // permission/authentication denial is not a retryable provider
-          // outage: hand the exact fact to the Definition-owned lifecycle
-          // settlement so it records an external block without charging R.
-          if (payload.toolingOutcome?.permissionRelated === true) {
-            ctx.flowManager.completeRequirementTestExternalFailure({
-              specId,
-              failure: {
+          const selectedActivityId = `requirement-test-test-review-${crypto.randomUUID()}`;
+          const reviewWorkUnit = attachedCanonicalReviewWorkUnit(result);
+          if (reviewWorkUnit === null) throw new Error("Requirement test review work unit is missing");
+          let evidence;
+          let error = null;
+          if (payload.toolingOutcome != null) {
+            evidence = new RequirementTestToolingEvidence({
+              reason: String(payload.toolingOutcome.reason || "Requirement test review tooling failure"),
+              stage: payload.toolingOutcome.stage,
+            });
+            if (payload.toolingOutcome.permissionRelated === true) {
+              error = new RequirementTestExternalBlockedError({
                 code: "REQUIREMENT_TEST_REVIEW_PERMISSION_DENIED",
                 message: String(payload.toolingOutcome.reason || "Requirement test review permission denied"),
-              },
-              commandResult: result,
+                runId: state.runId,
+                stepId: "test-review",
+                attemptId: state.attempt.id,
+              });
+            }
+          } else {
+            const kind = payload.verdict === "PASS" ? "review_pass"
+              : payload.verdict === "ADVISORY" ? "review_advisory"
+                : payload.verdict === "REJECTED" ? "semantic_rejection" : null;
+            if (kind === null) throw new Error("Requirement test review verdict is invalid");
+            const sealed = reviewWorkUnit.readSealedOutput();
+            const gateEvidence = currentRequirementTestGateEvidence({
+              flowManager: ctx.flowManager, state, workItem, candidate: candidateRead.candidate,
             });
-            ctx.flowState = ctx.flowManager.loadReadOnly(specId);
-            const { attachedCanonicalReviewWorkUnit } = await import("./lib/canonical-review-artifacts.js");
-            attachedCanonicalReviewWorkUnit(result)?.cleanup();
-            return { disposition: "external_blocked", target: "test-review" };
-          }
-          if (payload.toolingOutcome != null) {
-            const settlement = ctx.flowManager.completeRequirementTestToolingFailure({
-              specId,
-              message: String(payload.toolingOutcome.reason || "Requirement test review tooling failure"),
-              commandResult: result,
+            const source = new RequirementTestReviewSource({
+              runId: state.runId,
+              requirementId: workItem.requirementId,
+              specRevision: workItem.specRevision,
+              bundleRevision: workItem.bundleRevision.revision,
+              candidateDigest: candidateRead.candidate.digest,
+              sourceAttempt: workItem.bundleRevision.lineage.sourceAttempt,
+              candidatePaths: candidateRead.candidate.bundle.paths,
+              gateEvidence,
             });
-            ctx.flowState = ctx.flowManager.loadReadOnly(specId);
-            const { attachedCanonicalReviewWorkUnit } = await import("./lib/canonical-review-artifacts.js");
-            attachedCanonicalReviewWorkUnit(result)?.cleanup();
-            return settlement.decision;
+            const publications = ctx.flowManager.previewStepResultPublications({
+              specId, nodeId: "test-review", commandResult: result, activityId: selectedActivityId,
+            });
+            const publication = publications.find((entry) => entry.logicalKey === "test.requirement.review");
+            const evidencePublication = publications.find((entry) => entry.logicalKey === "review.evidence");
+            if (publication === undefined || evidencePublication === undefined) {
+              throw new Error("Requirement test review evidence publications are incomplete");
+            }
+            evidence = new RequirementTestReviewEvidence({
+              manifest: reviewWorkUnit.manifestDocument,
+              seal: sealed.seal,
+              source,
+              identity: new ReviewEvidenceIdentity(payload.canonicalEvidence.identity),
+              workerOutput: new ReviewWorkUnitOutputReceipt(payload.workerOutput),
+              publication,
+              evidencePublication,
+              verdict: payload.verdict,
+              semanticFinding: kind === "semantic_rejection"
+                ? new RequirementTestSemanticFinding({
+                  requirementId: workItem.requirementId,
+                  bundleRevision: workItem.bundleRevision.revision,
+                  fingerprint: payload.canonicalEvidence?.blockingFindings?.[0]?.fingerprint,
+                })
+                : null,
+            });
           }
-          const kind = payload.verdict === "PASS" ? "review_pass"
-            : payload.verdict === "ADVISORY" ? "review_advisory"
-              : payload.verdict === "REJECTED" ? "semantic_rejection" : null;
-          if (kind === null) throw new Error("Requirement test review verdict is invalid");
-          const observation = new RequirementTestStepObservation({
-            requirementId: workItem.requirementId,
-            specRevision: workItem.specRevision,
-            bundleRevision: workItem.bundleRevision.revision,
-            candidateDigest: candidateRead.candidate.digest,
-            sourceAttempt: workItem.bundleRevision.lineage.sourceAttempt,
-            semanticFindingFingerprint: kind === "semantic_rejection"
-              ? payload.canonicalEvidence?.blockingFindings?.[0]?.fingerprint ?? null
-              : null,
-            kind,
+          const selected = await prepareRequirementTestSettlement(ctx, {
+            state, planRead, stepId: "test-review", evidence, error,
+            specRecordPublication: reviewWorkUnit.specRecordDescriptor,
+            commandResult: result, activityId: selectedActivityId,
           });
-          const facts = new RequirementTestLifecycleFacts({
-            authority: RequirementTestLifecycleAuthority.capture({ state, planDescriptor: planRead.descriptor }),
-            plan: planRead.artifact.plan,
-            leaf: "test-review",
-            observation,
-            candidateBundle: candidateRead.candidate,
-          });
-          const decision = resolveRequirementTestLifecycle(facts);
+          const { prepared, service, stepResult, settlement } = selected;
           let deferredReceipt = null;
           let findingsPublication = null;
           let failureArtifact = null;
-          if (decision.disposition === "defer") {
-            const {
-              RequirementTestDeferredReceipt,
-              RequirementTestFailureArtifact,
-            } = await import("./lib/requirement-test-artifacts.js");
-            const { buildDeferredSemanticFindingsPublication } = await import("./lib/flow-findings.js");
+          if (settlement.requirementTestDecision?.disposition === "defer") {
+            const failureFingerprint = stepResult.evidence.semanticFinding?.fingerprint
+              ?? payload.blockingFindings?.find((finding) => /^[a-f0-9]{64}$/.test(finding?.fingerprint || ""))?.fingerprint;
+            if (failureFingerprint === undefined) {
+              throw new Error("Deferred Requirement test Review has no canonical finding fingerprint");
+            }
             failureArtifact = new RequirementTestFailureArtifact({
               requirementId: workItem.requirementId,
               bundleRevision: workItem.bundleRevision.revision,
-              fingerprint: observation.semanticFindingFingerprint,
+              fingerprint: failureFingerprint,
             });
             const sourceArtifact = failureArtifact.relativePath;
             findingsPublication = buildDeferredSemanticFindingsPublication({
@@ -2014,18 +2044,17 @@ export const FLOW_COMMANDS = {
               sourceFindingFingerprints: fingerprints,
             });
           }
-          ctx.flowManager.completeRequirementTestLifecycle({
-            specId,
-            decision,
-            commandResult: result,
+          if (deferredReceipt !== null) service.selectSettlementPublication(new RequirementTestSettlementPublication({
             deferredReceipt,
             findingsPublication,
-            artifactWrites: deferredReceipt === null ? [] : [failureArtifact.artifactWrite(payload)],
-          });
+            artifactWrites: [failureArtifact.artifactWrite(payload)],
+          }));
+          await prepared.step.execute();
+          if (service.settlementOutcome?.receipt == null) throw new Error("Requirement test Review Step did not persist its selected Result");
           ctx.flowState = ctx.flowManager.loadReadOnly(specId);
-          const { attachedCanonicalReviewWorkUnit } = await import("./lib/canonical-review-artifacts.js");
           attachedCanonicalReviewWorkUnit(result)?.cleanup();
-          return decision;
+          if (stepResult.kind === "test-review-external-blocked") return { disposition: "external_blocked", target: "test-review" };
+          return settlement.requirementTestDecision;
         }
         if (result?.artifacts?.phase === "impl"
           && result?.artifacts?.taskId != null
@@ -2625,7 +2654,7 @@ export const FLOW_COMMANDS = {
       runtimeLog: { stepId: "test-gate" },
       internal: true,
       requiresFlow: true,
-      command: () => import("./lib/run-requirement-test-gate.js"),
+      command: loadRequirementTestGateCommand,
       args: { flags: FLOW_TARGET_GUARD_FLAGS, options: [...FLOW_RUN_OPTIONS] },
       help: [
         "Usage: sennel flow run requirement-test-gate",
@@ -2644,6 +2673,8 @@ export const FLOW_COMMANDS = {
         } = await import("./lib/requirement-test-artifacts.js");
         const { RequirementTestArtifactStore } = await import("./lib/requirement-test-store.js");
         const { buildDeferredSemanticFindingsPublication } = await import("./lib/flow-findings.js");
+        const { RequirementTestGateEvidence } = await import("./engine/step-result.js");
+        const { RequirementTestSettlementPublication } = await import("./services/requirement-test-settlement-writer.js");
         const attached = attachedCanonicalCommandResultArtifact(result);
         if (attached?.logicalKey !== "test.requirement.gate") {
           throw new Error("Requirement test Gate canonical result artifact is missing");
@@ -2655,18 +2686,26 @@ export const FLOW_COMMANDS = {
         const planRead = store.readPlan("test-gate");
         const workItem = planRead.artifact.plan.activeWorkItem();
         const candidateRead = store.readCandidate({ bundle: workItem.bundleRevision, consumerNodeId: "test-gate" });
-        const facts = new RequirementTestLifecycleFacts({
-          authority: RequirementTestLifecycleAuthority.capture({ state, planDescriptor: planRead.descriptor }),
-          plan: planRead.artifact.plan,
-          leaf: "test-gate",
-          observation: gateResult.observation,
-          candidateBundle: candidateRead.candidate,
+        const selectedActivityId = `requirement-test-test-gate-${crypto.randomUUID()}`;
+        const publications = ctx.flowManager.previewStepResultPublications({
+          specId, nodeId: "test-gate", commandResult: result, activityId: selectedActivityId,
         });
-        const decision = resolveRequirementTestLifecycle(facts);
+        const publication = publications.find((entry) => entry.logicalKey === "test.requirement.gate");
+        if (publication === undefined) throw new Error("Requirement test Gate result publication is missing");
+        const evidence = new RequirementTestGateEvidence({
+          observation: gateResult.observation,
+          publication,
+          expectation: workItem.expectation,
+        });
+        const selected = await prepareRequirementTestSettlement(ctx, {
+          state, planRead, stepId: "test-gate", evidence,
+          commandResult: result, activityId: selectedActivityId,
+        });
+        const { prepared, service, stepResult, settlement } = selected;
         let deferredReceipt = null;
         let findingsPublication = null;
         let failureArtifact = null;
-        if (decision.disposition === "defer") {
+        if (settlement.requirementTestDecision?.disposition === "defer") {
           const fingerprints = new Set(gateResult.findings.map((finding) => finding.fingerprint));
           failureArtifact = new RequirementTestFailureArtifact({
             requirementId: workItem.requirementId,
@@ -2697,16 +2736,15 @@ export const FLOW_COMMANDS = {
             sourceFindingFingerprints: [...fingerprints],
           });
         }
-        ctx.flowManager.completeRequirementTestLifecycle({
-          specId,
-          decision,
-          commandResult: result,
+        if (deferredReceipt !== null) service.selectSettlementPublication(new RequirementTestSettlementPublication({
           deferredReceipt,
           findingsPublication,
-          artifactWrites: failureArtifact === null ? [] : [failureArtifact.artifactWrite(gateResult.toJSON())],
-        });
+          artifactWrites: [failureArtifact.artifactWrite(gateResult.toJSON())],
+        }));
+        await prepared.step.execute();
+        if (service.settlementOutcome?.receipt == null) throw new Error("Requirement test Gate Step did not persist its selected Result");
         ctx.flowState = ctx.flowManager.loadReadOnly(specId);
-        return decision;
+        return settlement.requirementTestDecision;
       },
     },
     "test-result-review": {
