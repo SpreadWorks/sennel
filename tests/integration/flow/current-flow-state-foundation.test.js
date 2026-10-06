@@ -2408,6 +2408,172 @@ describe("Current Flow state foundation", () => {
     assert.equal(store.journal.read().length, 2);
   });
 
+  it("rejects an unsupported Attempt ordinal gap before append and during journal replay", () => {
+    tmp = createTmpDir("current-flow-unsupported-ordinal-");
+    const store = new CurrentFlowStateStore({ directory: tmp, definition: definition() });
+    let state = store.create(CurrentFlowState.create({ definition: definition() }));
+    const currentPath = ["flow", "plan", "branch"];
+    state = store.apply({ activity: flowActivity({ id: "first-attempt", state, currentPath,
+      confirmationOrder: state.confirmationOrder + 1, operation: "start_attempt",
+      attempt: attemptFor(state, currentPath, "branch-first"),
+    }) });
+    state = store.apply({ activity: flowActivity({ id: "first-confirmed", state, currentPath,
+      confirmationOrder: state.confirmationOrder + 1, operation: "confirm_attempt",
+      status: "done", result: passedResult(),
+    }) });
+    const unsupported = flowActivity({ id: "unsupported-gap", state, currentPath,
+      confirmationOrder: state.confirmationOrder + 1, operation: "rewind",
+      attempt: attemptFor(state, currentPath, "branch-gap", 3, { semantic: 0 }),
+    });
+    const beforeState = fs.readFileSync(store.statePath);
+    const beforeJournal = fs.readFileSync(store.journal.filePath);
+    assert.throws(() => store.apply({ activity: unsupported }), CurrentFlowStateInvariantError);
+    assert.deepEqual(fs.readFileSync(store.statePath), beforeState);
+    assert.deepEqual(fs.readFileSync(store.journal.filePath), beforeJournal);
+
+    // Corrupt only this isolated boundary fixture: a greater ordinal alone
+    // cannot authorize replay without its Definition-selected lifecycle slot.
+    fs.appendFileSync(store.journal.filePath, `${JSON.stringify(unsupported.toJSON())}\n`);
+    const corruptedJournal = fs.readFileSync(store.journal.filePath);
+    const reloaded = new CurrentFlowStateStore({ directory: tmp, definition: definition() });
+    assert.throws(() => reloaded.load(), (error) => error instanceof CurrentFlowStateInvariantError
+      || error instanceof CurrentFlowStateConflictError);
+    assert.deepEqual(fs.readFileSync(store.statePath), beforeState);
+    assert.deepEqual(fs.readFileSync(store.journal.filePath), corruptedJournal);
+  });
+
+  it("rejects non-increasing Attempt identities in the journal independently of state replay", () => {
+    tmp = createTmpDir("current-flow-nonincreasing-ordinal-");
+    const store = new CurrentFlowStateStore({ directory: tmp, definition: definition() });
+    let state = store.create(CurrentFlowState.create({ definition: definition() }));
+    const currentPath = ["flow", "plan", "branch"];
+    for (const sequence of [1, 2]) {
+      state = store.apply({ activity: flowActivity({ id: `attempt-${sequence}`, state, currentPath,
+        confirmationOrder: state.confirmationOrder + 1, operation: sequence === 1 ? "start_attempt" : "rewind",
+        attempt: attemptFor(state, currentPath, `branch-${sequence}`, sequence, { semantic: 0 }),
+      }) });
+      state = store.apply({ activity: flowActivity({ id: `confirmed-${sequence}`, state, currentPath,
+        confirmationOrder: state.confirmationOrder + 1, operation: "confirm_attempt",
+        status: "done", result: passedResult(),
+      }) });
+    }
+    for (const sequence of [1, 2]) {
+      const invalid = flowActivity({ id: `nonincreasing-${sequence}`, state, currentPath,
+        confirmationOrder: state.confirmationOrder + 1, operation: "rewind",
+        attempt: attemptFor(state, currentPath, `new-id-${sequence}`, sequence, { semantic: 0 }),
+      });
+      const corruptPath = path.join(tmp, `nonincreasing-${sequence}.jsonl`);
+      fs.writeFileSync(corruptPath, Buffer.concat([fs.readFileSync(store.journal.filePath),
+        Buffer.from(`${JSON.stringify(invalid.toJSON())}\n`)]));
+      assert.throws(() => new FlowActivityJournal(corruptPath).read(), CurrentFlowStateInvariantError);
+    }
+    assert.equal(store.journal.read().length, 5);
+  });
+
+  it("rejects reversed and duplicate Attempt ordinals before append without changing canonical bytes", () => {
+    tmp = createTmpDir("current-flow-nonincreasing-append-");
+    const store = new CurrentFlowStateStore({ directory: tmp, definition: definition() });
+    let state = store.create(CurrentFlowState.create({ definition: definition() }));
+    const currentPath = ["flow", "plan", "branch"];
+    for (const sequence of [1, 2]) {
+      state = store.apply({ activity: flowActivity({ id: `started-${sequence}`, state, currentPath,
+        confirmationOrder: state.confirmationOrder + 1, operation: sequence === 1 ? "start_attempt" : "rewind",
+        attempt: attemptFor(state, currentPath, `branch-attempt-${sequence}`, sequence, { semantic: 0 }),
+      }) });
+      state = store.apply({ activity: flowActivity({ id: `completed-${sequence}`, state, currentPath,
+        confirmationOrder: state.confirmationOrder + 1, operation: "confirm_attempt",
+        status: "done", result: passedResult(),
+      }) });
+    }
+    const beforeState = fs.readFileSync(store.statePath);
+    const beforeJournal = fs.readFileSync(store.journal.filePath);
+    for (const sequence of [1, 2]) {
+      const invalid = flowActivity({ id: `invalid-ordinal-${sequence}`, state, currentPath,
+        confirmationOrder: state.confirmationOrder + 1, operation: "rewind",
+        attempt: attemptFor(state, currentPath, `replacement-${sequence}`, sequence, { semantic: 0 }),
+      });
+      assert.throws(() => store.apply({ activity: invalid }), CurrentFlowStateInvariantError);
+      assert.deepEqual(fs.readFileSync(store.statePath), beforeState);
+      assert.deepEqual(fs.readFileSync(store.journal.filePath), beforeJournal);
+    }
+    assert.deepEqual(new CurrentFlowStateStore({ directory: tmp, definition: definition() }).load().toJSON(), state.toJSON());
+  });
+
+  it("rejects an unsupported confirmed Attempt ordinal gap after historical continuation without changing bytes", () => {
+    tmp = createTmpDir("current-flow-historical-ordinal-");
+    const fixedDefinition = definition();
+    const store = new CurrentFlowStateStore({ directory: tmp, definition: fixedDefinition });
+    let state = store.create(CurrentFlowState.create({ definition: fixedDefinition }));
+    state = historicalStateWithCreationAuthority(state, store.journal.read()[0]);
+    fs.writeFileSync(store.statePath, `${JSON.stringify(state.toJSON())}\n`);
+    const currentPath = ["flow", "plan", "branch"];
+    for (const sequence of [1, 2]) {
+      state = store.apply({ activity: flowActivity({ id: `historical-started-${sequence}`, state, currentPath,
+        confirmationOrder: state.confirmationOrder + 1, operation: sequence === 1 ? "start_attempt" : "rewind",
+        attempt: attemptFor(state, currentPath, `historical-branch-${sequence}`, sequence, { semantic: 0 }),
+      }) });
+      state = store.apply({ activity: flowActivity({ id: `historical-confirmed-${sequence}`, state, currentPath,
+        confirmationOrder: state.confirmationOrder + 1, operation: "confirm_attempt",
+        status: "done", result: passedResult(),
+      }) });
+    }
+    assert.equal(state.history.execution, "resumed");
+    assert.equal(state.history.continuation.attemptSequence, 1);
+    assert.equal(state.findNode("branch").attemptSequence, 2);
+    assert.deepEqual(new CurrentFlowStateStore({ directory: tmp, definition: fixedDefinition }).load().toJSON(), state.toJSON());
+    const entries = store.journal.read().map((entry) => entry.toJSON());
+    assert.deepEqual(entries.filter((entry) => entry.transition.attempt !== null)
+      .map((entry) => entry.transition.attempt.sequence), [1, 2]);
+    // Only malformed boundary input is written manually; the admitted episodes
+    // above were generated and saved through the normal Store transition API.
+    for (const entry of entries) {
+      if (entry.attemptId === "historical-branch-2") entry.sequence = 4;
+      if (entry.transition.attempt?.id === "historical-branch-2") entry.transition.attempt.sequence = 4;
+    }
+    fs.writeFileSync(store.journal.filePath, entries.map((entry) => `${JSON.stringify(entry)}\n`).join(""));
+    const stateBytes = fs.readFileSync(store.statePath);
+    const journalBytes = fs.readFileSync(store.journal.filePath);
+    assert.throws(() => new CurrentFlowStateStore({ directory: tmp, definition: fixedDefinition }).load(),
+      (error) => error instanceof CurrentFlowStateInvariantError || error instanceof CurrentFlowStateConflictError);
+    assert.deepEqual(fs.readFileSync(store.statePath), stateBytes);
+    assert.deepEqual(fs.readFileSync(store.journal.filePath), journalBytes);
+  });
+
+  it("rejects an unproved historical Attempt gap before append even when the persisted cursor permits it", () => {
+    tmp = createTmpDir("current-flow-historical-ordinal-append-");
+    const fixedDefinition = definition();
+    const store = new CurrentFlowStateStore({ directory: tmp, definition: fixedDefinition });
+    let state = store.create(CurrentFlowState.create({ definition: fixedDefinition }));
+    state = historicalStateWithCreationAuthority(state, store.journal.read()[0]);
+    fs.writeFileSync(store.statePath, `${JSON.stringify(state.toJSON())}\n`);
+    const currentPath = ["flow", "plan", "branch"];
+    state = store.apply({ activity: flowActivity({ id: "historical-start", state, currentPath,
+      confirmationOrder: state.confirmationOrder + 1, operation: "start_attempt",
+      attempt: attemptFor(state, currentPath, "historical-first"),
+    }) });
+    state = store.apply({ activity: flowActivity({ id: "historical-confirmed", state, currentPath,
+      confirmationOrder: state.confirmationOrder + 1, operation: "confirm_attempt",
+      status: "done", result: passedResult(),
+    }) });
+    // Corrupt only the imported boundary cursor: no Activity proves ordinal 2.
+    const corrupted = state.toJSON();
+    corrupted.steps.find((phase) => phase.id === "plan").steps.find((node) => node.id === "branch").attemptSequence = 2;
+    state = new CurrentFlowState(corrupted, { definition: fixedDefinition });
+    fs.writeFileSync(store.statePath, `${JSON.stringify(state.toJSON())}\n`);
+    const attempt = attemptFor(state, currentPath, "historical-unproved-next");
+    assert.equal(attempt.sequence, 3);
+    assert.equal(state.rewind({ path: currentPath, attempt }).attempt.sequence, 3,
+      "the canonical cursor check alone cannot authorize a partial-history gap");
+    const activity = flowActivity({ id: "historical-unproved-gap", state, currentPath,
+      confirmationOrder: state.confirmationOrder + 1, operation: "rewind", attempt,
+    });
+    const stateBytes = fs.readFileSync(store.statePath);
+    const journalBytes = fs.readFileSync(store.journal.filePath);
+    assert.throws(() => store.apply({ activity }), CurrentFlowStateInvariantError);
+    assert.deepEqual(fs.readFileSync(store.statePath), stateBytes);
+    assert.deepEqual(fs.readFileSync(store.journal.filePath), journalBytes);
+  });
+
   it("creates only fresh state and recovers only a sole flow_created Activity journal", () => {
     tmp = createTmpDir("current-flow-fresh-create-");
     const initial = CurrentFlowState.create({ definition: definition() });

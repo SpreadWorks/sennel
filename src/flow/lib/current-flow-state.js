@@ -8267,7 +8267,7 @@ export class CurrentFlowActivitySummary {
   }
 }
 
-function assertJournalAttemptIdentities(entries) {
+function assertJournalAttemptIdentities(entries, { requireContiguous = false } = {}) {
   const identities = new Map();
   const lastSequenceByNode = new Map();
   const lastActivityByAttempt = new Map();
@@ -8276,7 +8276,23 @@ function assertJournalAttemptIdentities(entries) {
     if (previous && (previous.sequence !== sequence || previous.nodeId !== nodeId)) {
       throw new CurrentFlowStateInvariantError(`Attempt id ${attemptId} is reused for a different node or sequence`);
     }
-    identities.set(attemptId, { sequence, nodeId });
+    identities.set(attemptId, new CurrentAttemptIdentity({ id: attemptId, sequence, nodeId }));
+  };
+  const introduceIdentity = (attemptId, sequence, nodeId) => {
+    registerIdentity(attemptId, sequence, nodeId);
+    const previousSequence = lastSequenceByNode.get(nodeId);
+    if (previousSequence !== undefined && sequence <= previousSequence) {
+      throw new CurrentFlowStateInvariantError(`Attempt sequence must increase for node ${nodeId}`);
+    }
+    if (requireContiguous && previousSequence !== undefined && sequence !== previousSequence + 1) {
+      throw new CurrentFlowStateInvariantError(`Attempt sequence must be contiguous without canonical replay for node ${nodeId}`);
+    }
+    // A node's lifecycle cursor includes Definition-selected skips without
+    // worker Attempts. Native canonical replay checks each ordinal against
+    // State's exact cursor before append and during readback. Partial
+    // historical ledgers lack a replay baseline and retain contiguous
+    // worker introductions instead of granting unproved gap authority.
+    lastSequenceByNode.set(nodeId, sequence);
   };
   for (const entry of entries) {
     if (entry.transition.operation === DRAFT_COMPLETION_TRANSITION_OPERATION) {
@@ -8287,12 +8303,7 @@ function assertJournalAttemptIdentities(entries) {
           registerIdentity(attempt.id, attempt.sequence, nodeId);
           continue;
         }
-        const previousSequence = lastSequenceByNode.get(nodeId);
-        if (previousSequence !== undefined && attempt.sequence !== previousSequence + 1) {
-          throw new CurrentFlowStateInvariantError(`Attempt sequence must be contiguous for node ${nodeId}`);
-        }
-        registerIdentity(attempt.id, attempt.sequence, nodeId);
-        lastSequenceByNode.set(nodeId, attempt.sequence);
+        introduceIdentity(attempt.id, attempt.sequence, nodeId);
       }
     }
     if (entry.transition.operation === "record_failure") {
@@ -8328,16 +8339,7 @@ function assertJournalAttemptIdentities(entries) {
       if (introduced.nodeId !== entry.nodeId && !replacement) {
         throw new CurrentFlowStateInvariantError("introduced Attempt nodeId must match its Activity nodeId");
       }
-      const previousSequence = lastSequenceByNode.get(introduced.nodeId);
-      // A journal's first visible Attempt need not be a Flow's first Attempt:
-      // historical state can retain a direct, pre-journal cursor. The state
-      // transition remains the authority for that first visible sequence;
-      // subsequent journal introductions must still be contiguous here.
-      if (previousSequence !== undefined && introduced.sequence !== previousSequence + 1) {
-        throw new CurrentFlowStateInvariantError(`Attempt sequence must be contiguous for node ${introduced.nodeId}`);
-      }
-      registerIdentity(introduced.id, introduced.sequence, introduced.nodeId);
-      lastSequenceByNode.set(introduced.nodeId, introduced.sequence);
+      introduceIdentity(introduced.id, introduced.sequence, introduced.nodeId);
     }
     if (entry.attemptId !== null) {
       const known = identities.get(entry.attemptId);
@@ -9001,6 +9003,9 @@ export class CurrentFlowStateStore {
       // journal-first crash recovery: a replay cannot silently substitute a
       // different callback for a persisted Activity id/order.
       const next = this.#applyActivity(original, proposed, entries.slice(0, original.confirmationOrder));
+      if (original.history !== null && existing === undefined) {
+        assertJournalAttemptIdentities([...entries, proposed], { requireContiguous: true });
+      }
       this.faultInjector({ phase: "activity-ready-to-append", activity: proposed, state: original });
       this.journal.append(proposed, JOURNAL_WRITER_AUTHORITY, journalSnapshot);
       this.faultInjector({ phase: "activity-appended", activity: proposed, state: original });
@@ -9037,6 +9042,7 @@ export class CurrentFlowStateStore {
       if (entries.length === state.confirmationOrder) return;
     }
     if (state.history !== null) {
+      assertJournalAttemptIdentities(entries, { requireContiguous: true });
       const orders = entries.map((entry) => entry.confirmationOrder);
       const expected = Array.from({ length: entries.length }, (_, index) => index + 1);
       if (JSON.stringify(orders) !== JSON.stringify(expected)) {

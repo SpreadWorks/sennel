@@ -12,6 +12,7 @@ import { FlowDispatchInvocation, FlowDispatchSession, FlowDispatchTarget, Unappr
 import GetNextActionCommand from "../../../src/flow/lib/get-next-action.js";
 import RunDispatchCommand from "../../../src/flow/lib/run-dispatch.js";
 import RunReviewCommand from "../../../src/flow/lib/run-review.js";
+import RunReopenDraftCommand from "../../../src/flow/lib/run-reopen-draft.js";
 import { FLOW_COMMANDS } from "../../../src/flow/registry.js";
 import { AgentAuthenticationFailure } from "../../../src/lib/agent-failure.js";
 import { CanonicalAcceptanceArtifactStore } from "../../../src/flow/lib/canonical-acceptance-artifacts.js";
@@ -27,6 +28,142 @@ function assertArtifactIntegrity(artifact) {
   assert.equal(crypto.createHash("sha256").update(artifact.bytes).digest("hex"), artifact.descriptor.hash);
   assert.equal(artifact.bytes.length, artifact.descriptor.size);
 }
+
+it("reopens Draft and preserves repair Attempt ordinals across an intervening Definition skip", async () => {
+  const root = fixtureRepository("draft-reopen-repair-ordinal-");
+  let gateProvider;
+  let reviewProcess;
+  try {
+    const specId = "806-draft-reopen-repair-ordinal";
+    let manager = new FlowManager({ root, mainRoot: root, inWorktree: false, specId });
+    new CanonicalFlowFixture({ flowManager: manager, specId, runId: "run-draft-reopen-repair-ordinal",
+      request: "State how the requested behavior will be verified.",
+      execution: { mode: "direct", baseBranch: "main", featureBranch: null },
+    }).create().registerActive().activate("draft");
+    const guardrailId = "DRAFT-VALIDATION";
+    fs.writeFileSync(path.join(root, ".sennel", "guardrail.json"), workerArtifactJson({ guardrails: [{
+      id: guardrailId, title: "Explicit validation", body: "State the required validation.",
+      meta: { phase: ["draft"], category: "requirements" },
+    }] }));
+    const initialDraft = canonicalDraftDocument({ goal: "Verify the requested behavior." });
+    const repairedValidations = [
+      "Run the documented behavioral regression and inspect its result.",
+      "For every requested behavior, record representative input and exact expected output and exit status; execute each case and compare all three with the recorded expectation.",
+    ];
+    const repairs = [];
+    const skippedOrdinals = [];
+    const workerFailures = [];
+    gateProvider = installGateProviderFake((_prompt, options) => {
+      const draft = JSON.parse(manager.readArtifact({ specId, logicalKey: "draft", consumerNodeId: "draft-gate" }).bytes);
+      const known = options.jsonSchema.properties.observations.items.properties.requirementRef.enum;
+      return JSON.stringify({ observations: known.includes(guardrailId) && !repairedValidations.includes(draft.analysis.validation) ? [{
+        failureMode: "missing-validation", requirementRef: guardrailId,
+        where: { file: "draft.json", locator: "analysis.validation" },
+        observed: "The Draft does not state the behavioral regression check.",
+      }] : [], evaluationUnavailable: null });
+    });
+    const originalSpawnSync = childProcess.spawnSync;
+    reviewProcess = mock.method(childProcess, "spawnSync", (command, args, options) => {
+      if (command !== "node" || !String(args[0]).endsWith("/flow/commands/review.js")) {
+        return originalSpawnSync(command, args, options);
+      }
+      const state = manager.canonicalState(specId);
+      const step = state.current.at(-1);
+      const repair = state.findNode("draft-gate-repair");
+      if (step === "draft-coverage-review" && repair.status === "skipped") skippedOrdinals.push(repair.attemptSequence);
+      const work = ReviewWorkUnit.fromEnvironment(options.env);
+      const source = JSON.parse(options.env.SENNEL_REVIEW_DRAFT_SOURCE);
+      fs.writeFileSync(path.join(work.root, work.manifestDocument.output.basename), workerArtifactJson({
+        version: 2, phase: step === "draft-questions-review" ? "draft-questions" : "draft-coverage",
+        sourceDraft: "draft.json", sourceDraftRevision: source.revision,
+        generatedAt: "2026-09-23T00:00:00.000Z", verdict: "PASS", summary: "No review findings.",
+        blockingFindings: [], advisoryFindings: [], repairTargets: [],
+      }));
+      work.seal();
+      return { status: 0, signal: null, stdout: "", stderr: "" };
+    });
+    syncBuiltinESMExports();
+    const agent = { async call(_prompt, options) { try {
+      const requestPath = options.executionEnvironment.SENNEL_FLOW_HANDOFF_REQUEST;
+      const request = JSON.parse(fs.readFileSync(requestPath, "utf8"));
+      if (request.stepId === "draft") {
+        fs.writeFileSync(requestPayloadPath(request, "draft.json"), workerArtifactJson(initialDraft));
+      } else if (request.stepId === "draft-gate-repair") {
+        // Reconstruct the manager before consuming the newly published Gate.
+        manager = new FlowManager({ root, mainRoot: root, inWorktree: false, specId });
+        const state = manager.canonicalState(specId);
+        repairs.push({ id: state.attempt.id, sequence: state.attempt.sequence });
+        assert.equal(state.current.at(-1), "draft-gate-repair");
+        const source = manager.readArtifact({ specId, logicalKey: "draft", consumerNodeId: "draft-gate-repair" });
+        assertArtifactIntegrity(source);
+        assert.equal(requestInput(request, "draft.json").digest, source.descriptor.hash);
+        assert.deepEqual(requestInput(request, "draft.json").document, initialDraft);
+        const recurrence = requestInput(request, "gate-observation-recurrence.json").document;
+        assert.equal(recurrence.entries.length, 1);
+        const recurring = recurrence.entries[0].recurrenceCount > 0;
+        assert.equal(recurring, repairs.length === 2, "The second repair consumes the persisted recurrence of the first observation");
+        const replacement = repairedValidations[recurring ? 1 : 0];
+        fs.writeFileSync(requestPayloadPath(request, "draft-gate-repair.json"), workerArtifactJson({
+          version: 1, baseRevision: `sha256:${request.inputRevision}`,
+          operations: [{ kind: "replace-value", path: "analysis.validation", replacement,
+            reason: "State the required regression check." }],
+          report: { version: 1, summary: "Made validation explicit.", results: recurrence.entries.map((entry) => ({
+            fingerprint: entry.fingerprint,
+            strategy: recurring ? "Replace the generic regression reference with an explicit per-behavior input/output/exit-status matrix." : "State the existing regression check.",
+            summary: recurring ? "Validation now defines cases and exact assertions for every behavior." : "Validation names the existing regression check.",
+            priorRepairInsufficiency: recurring ? "The generic regression reference did not state concrete cases or expected results, and the reopened Draft omitted it." : null,
+          })) },
+        }));
+      } else {
+        assert.equal(request.stepId, "spec");
+        throw new AgentAuthenticationFailure({ message: "Stop at the Spec provider boundary." });
+      }
+      sealWorkerArtifactHandoff({ requestPath, invocationId: options.executionEnvironment.SENNEL_FLOW_DISPATCH_INVOCATION_ID });
+      return JSON.stringify({ sealed: true, requestDigest: request.requestDigest });
+    } catch (error) {
+      if (!(error instanceof AgentAuthenticationFailure)) workerFailures.push(error);
+      throw error;
+    } } };
+    for (let episode = 0; episode < 2; episode += 1) {
+      const dispatcher = new RunDispatchCommand({ agent });
+      dispatcher.container = dispatchContainer({ root, flowManager: manager, agent });
+      const flowState = manager.loadReadOnly(specId);
+      const result = await dispatcher.execute({ root, mainRoot: root, executionRoot: root, specId,
+        flowManager: manager, flowState,
+        expectBinding: FlowTargetBinding.capture({ flowState, mainRoot: root, authorityRoot: root }).serialize(),
+        _envelopeType: "run", _envelopeKey: "dispatch",
+      });
+      assert.deepEqual(workerFailures, [], workerFailures.map((error) => error.stack).join("\n"));
+      assert.deepEqual(result.errors.map((entry) => entry.code), ["AGENT_AUTHENTICATION_FAILED"], JSON.stringify({
+        errors: result.errors, failure: manager.canonicalState(specId).attempt?.failure,
+      }));
+      manager = new FlowManager({ root, mainRoot: root, inWorktree: false, specId });
+      assert.equal(manager.canonicalState(specId).current.at(-1), "spec");
+      assert.equal(manager.canonicalState(specId).findNode("draft-gate-repair").status, "done");
+      const saved = manager.readArtifact({ specId, logicalKey: "draft", consumerNodeId: "spec" });
+      assert.equal(JSON.parse(saved.bytes).analysis.validation, repairedValidations[episode]);
+      assertArtifactIntegrity(manager.readArtifact({ specId, logicalKey: "draft.gate", consumerNodeId: "spec" }));
+      if (episode === 0) {
+        const reopened = await new RunReopenDraftCommand().execute({ root, flowManager: manager,
+          flowState: manager.loadReadOnly(specId), reason: "Regenerate the Draft after revisiting the request." });
+        assert.equal(reopened.ok, true, JSON.stringify(reopened));
+        manager = new FlowManager({ root, mainRoot: root, inWorktree: false, specId });
+        assert.equal(manager.canonicalState(specId).current.at(-1), "draft");
+        assert.equal(manager.canonicalState(specId).findNode("draft-gate-repair").status, "invalidated");
+      }
+    }
+    assert.deepEqual(skippedOrdinals, [1, 3]);
+    assert.deepEqual(repairs.map((attempt) => attempt.sequence), [2, 4]);
+    assert.notEqual(repairs[0].id, repairs[1].id);
+    const introduced = manager.activityLedger(specId).filter((entry) => entry.transition.attempt?.nodeId === "draft-gate-repair");
+    assert.deepEqual(introduced.map((entry) => entry.transition.attempt.sequence), [2, 4], "Skipped lifecycle slots have no fabricated worker Attempt");
+  } finally {
+    gateProvider?.mock.restore();
+    reviewProcess?.mock.restore();
+    syncBuiltinESMExports();
+    removeTmpDir(root);
+  }
+});
 
 for (const phase of ["questions", "coverage"]) {
   for (const size of ["inline", "whole-file"]) {
