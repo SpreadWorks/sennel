@@ -2,10 +2,14 @@ import { CURRENT_FLOW_SCHEMA_REVISION } from "../../lib/flow-schema-revision.js"
 import fs from "fs";
 import path from "path";
 import crypto from "crypto";
+import os from "node:os";
+import { StringDecoder } from "node:string_decoder";
 import { fileURLToPath } from "node:url";
 import { execFileSync } from "child_process";
 import { globToRegex } from "../../lib/glob.js";
-import { listChangedFilesDetailed } from "../../lib/git-helpers.js";
+import { listChangedFilesDetailed, runGitToFile } from "../../lib/git-helpers.js";
+import { PRODUCT } from "../../lib/product.js";
+import { assertOk } from "../../lib/process.js";
 import { validateSchema } from "../../lib/schema-validate.js";
 import { RegressionFileSnapshotList } from "./regression-file-snapshot.js";
 import { RequirementTestDeferredReceipt } from "./requirement-test-artifacts.js";
@@ -791,41 +795,95 @@ export function finalRegressionTestCount(stdout) {
   return FinalRegressionTestSummary.parse(stdout).testCount;
 }
 
+function createFinalRegressionGitDirectory(root) {
+  const repository = fs.realpathSync(root);
+  let base = fs.realpathSync(os.tmpdir());
+  const relative = path.relative(repository, base);
+  if (relative === "" || (!path.isAbsolute(relative)
+    && relative !== ".." && !relative.startsWith(`..${path.sep}`))) {
+    // A repository-owned TMPDIR would make Git's own output appear untracked.
+    // Use a sibling directory without changing the caller's environment.
+    base = path.dirname(repository);
+    if (base === repository) throw new Error("final-regression Git output requires a temporary directory outside the repository");
+  }
+  return fs.mkdtempSync(path.join(base, PRODUCT.temporaryPrefix("final-regression-git")));
+}
+
+function forEachFingerprintFileChunk(filePath, visit) {
+  const descriptor = fs.openSync(filePath, "r");
+  try {
+    const buffer = Buffer.allocUnsafe(64 * 1024);
+    for (;;) {
+      const bytes = fs.readSync(descriptor, buffer, 0, buffer.length, null);
+      if (bytes === 0) break;
+      visit(buffer.subarray(0, bytes));
+    }
+  } finally {
+    fs.closeSync(descriptor);
+  }
+}
+
+function forEachFingerprintUtf8Chunk(filePath, visit) {
+  // Match decoding the complete stdout Buffer as UTF-8, including characters
+  // (and replacement characters for invalid bytes) spanning read boundaries.
+  const decoder = new StringDecoder("utf8");
+  forEachFingerprintFileChunk(filePath, (chunk) => visit(decoder.write(chunk)));
+  visit(decoder.end());
+}
+
+function readFingerprintUntrackedPaths(filePath) {
+  const paths = [];
+  let pending = "";
+  forEachFingerprintUtf8Chunk(filePath, (chunk) => {
+    const fields = (pending + chunk).split("\0");
+    pending = fields.pop();
+    for (const field of fields) if (field) paths.push(field);
+  });
+  if (pending) paths.push(pending);
+  return paths.sort();
+}
+
 // This covers staged, unstaged, and untracked content. Callers that own
 // generated state can exclude it with Git pathspecs so telemetry does not
 // masquerade as a product mutation.
 export function finalRegressionWorktreeFingerprint(root, { pathspecExcludes = [] } = {}) {
   const pathspec = ["--", ".", ...pathspecExcludes];
-  const staged = execFileSync("git", [
-    "diff", "--cached", "--no-ext-diff", "--binary", "HEAD", ...pathspec,
-  ], {
-    cwd: root,
-    encoding: "utf8",
-  });
-  const unstaged = execFileSync("git", [
-    "diff", "--no-ext-diff", "--binary", ...pathspec,
-  ], {
-    cwd: root,
-    encoding: "utf8",
-  });
-  const untracked = execFileSync("git", [
-    "ls-files", "--others", "--exclude-standard", "-z", ...pathspec,
-  ], {
-    cwd: root,
-    encoding: "utf8",
-  }).split("\0").filter(Boolean).sort();
-  const hash = crypto.createHash("sha256")
-    .update("staged\0")
-    .update(staged)
-    .update("\0unstaged\0")
-    .update(unstaged);
-  for (const relativePath of untracked) {
-    const absolutePath = path.join(root, relativePath);
-    const stat = fs.lstatSync(absolutePath);
-    if (!stat.isFile() || stat.isSymbolicLink()) continue;
-    hash.update("\0").update(relativePath).update("\0").update(fs.readFileSync(absolutePath));
+  const directory = createFinalRegressionGitDirectory(root);
+  try {
+    const output = (name, args) => {
+      const outputPath = path.join(directory, name);
+      const result = runGitToFile(args, { cwd: root, outputPath, log: false });
+      assertOk(result, `final-regression git ${args[0]} failed`);
+      return outputPath;
+    };
+    const hash = crypto.createHash("sha256").update("staged\0");
+    const staged = output("staged.bin", [
+      "diff", "--cached", "--no-ext-diff", "--binary", "HEAD", ...pathspec,
+    ]);
+    forEachFingerprintUtf8Chunk(staged, (chunk) => hash.update(chunk));
+    fs.unlinkSync(staged);
+    hash.update("\0unstaged\0");
+    const unstaged = output("unstaged.bin", [
+      "diff", "--no-ext-diff", "--binary", ...pathspec,
+    ]);
+    forEachFingerprintUtf8Chunk(unstaged, (chunk) => hash.update(chunk));
+    fs.unlinkSync(unstaged);
+    const untrackedOutput = output("untracked.bin", [
+      "ls-files", "--others", "--exclude-standard", "-z", ...pathspec,
+    ]);
+    const untracked = readFingerprintUntrackedPaths(untrackedOutput);
+    fs.unlinkSync(untrackedOutput);
+    for (const relativePath of untracked) {
+      const absolutePath = path.join(root, relativePath);
+      const stat = fs.lstatSync(absolutePath);
+      if (!stat.isFile() || stat.isSymbolicLink()) continue;
+      hash.update("\0").update(relativePath).update("\0");
+      forEachFingerprintFileChunk(absolutePath, (chunk) => hash.update(chunk));
+    }
+    return hash.digest("hex");
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
   }
-  return hash.digest("hex");
 }
 
 // The three values must always describe the same repository instant.

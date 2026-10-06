@@ -378,8 +378,9 @@ export function getPorcelainV2Status(cwd) {
  * Run Git with stdout directed to an exclusive caller-owned file. This keeps
  * large machine-readable listings off the process heap while preserving the
  * same logging authority as runGit().
+ * Set log to false when recording Git execution would mutate the input being read.
  */
-export function runGitToFile(args, { cwd, outputPath, timeout } = {}) {
+export function runGitToFile(args, { cwd, outputPath, timeout, log = true } = {}) {
   const descriptor = fs.openSync(outputPath, "wx", 0o600);
   let result;
   try {
@@ -401,7 +402,7 @@ export function runGitToFile(args, { cwd, outputPath, timeout } = {}) {
   } finally {
     fs.closeSync(descriptor);
   }
-  if (container.has("logger")) {
+  if (log === true && container.has("logger")) {
     container.get("logger").git({ cmd: ["git", ...args], exitCode: result.status, stderr: result.stderr });
   }
   return result;
