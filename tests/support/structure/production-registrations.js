@@ -88,6 +88,32 @@ export class NamedExecutionShape {
   }
 }
 
+const emptyExecutionEntries = Object.freeze([]);
+
+/** Existing shared contracts retain their dedicated source-routing judgments. */
+export class SharedExecutionShape {
+  constructor(kind, form = kind) {
+    if (!["worker", "review", "gate"].includes(kind) || typeof form !== "string" || !form) {
+      throw new TypeError("SharedExecutionShape requires an existing shared execution kind");
+    }
+    Object.assign(this, { kind, form });
+    Object.freeze(this);
+  }
+  get title() { return this.kind[0].toUpperCase() + this.kind.slice(1); }
+  get selectorName() { return `select${this.title}ExecutionAdmission`; }
+  get projectorName() { return `project${this.title}ExecutionAdmission`; }
+  get executorName() { return this.kind === "worker" ? "executeWorkerExecutionAdmission" : `execute${this.title}Selection`; }
+  get contractName() { return `${this.kind}StepExecutionContract`; }
+  get adapterModule() { return this.kind === "worker" ? "src/flow/lib/worker-execution-admission.js" : "src/flow/lib/execution-admission.js"; }
+  get command() { return `src/flow/lib/run-${this.kind === "worker" ? "dispatch" : this.kind}.js`; }
+  get callers() { return emptyExecutionEntries; }
+  get loaders() { return emptyExecutionEntries; }
+  matches(contract) {
+    return contract?.selectorName === this.selectorName && contract?.projectorName === this.projectorName
+      && contract?.executorName === this.executorName;
+  }
+}
+
 export class ExecutionLoader {
   constructor(module, declarationName, commandModule) {
     if ([module, declarationName, commandModule].some((value) => typeof value !== "string" || !value)) {
@@ -101,7 +127,7 @@ export class ExecutionLoader {
 export class StructureScopeContract {
   constructor(definition, executionShapes = [], registry = null) {
     if (!(definition instanceof DefinitionLeafScope) || !Array.isArray(executionShapes)
-      || executionShapes.some((shape) => !(shape instanceof NamedExecutionShape))
+      || executionShapes.some((shape) => !(shape instanceof NamedExecutionShape || shape instanceof SharedExecutionShape))
       || new Set(executionShapes.map((shape) => shape.form)).size !== executionShapes.length
       || registry !== null && !Array.isArray(registry)) throw new TypeError("invalid StructureScopeContract");
     this.definition = definition;
