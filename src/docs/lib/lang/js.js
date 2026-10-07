@@ -85,18 +85,36 @@ export function parse(content, filePath) {
 export function extractImports(content) {
   const imports = [];
 
-  // ESM: import ... from "..."
-  const esmRegex = /import\s+(?:[\s\S]*?\s+from\s+)?["']([^"']+)["']/g;
+  // ESM declarations. Keep every static occurrence, including duplicates.
+  // Match comments as token separators without rewriting quoted source text.
+  const comment = String.raw`(?:/\*[\s\S]*?\*/|//[^\r\n\u2028\u2029]*)`;
+  const trivia = String.raw`(?:\s|${comment})`;
+  const gap = `${trivia}+`;
+  const padding = `${trivia}*`;
+  const identifier = String.raw`(?:[\p{ID_Continue}$]|\\u(?:[\da-fA-F]{4}|\{[\da-fA-F]{1,6}\}))+`;
+  const namespaceBinding = String.raw`\*${gap}as${gap}${identifier}`;
+  const namedBindings = String.raw`\{(?:${comment}|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^}])*\}`;
+  const defaultBinding = `${identifier}(?:${padding},${padding}(?:${namespaceBinding}|${namedBindings}))?`;
+  const binding = `(?:type${gap})?(?:${defaultBinding}|${namespaceBinding}|${namedBindings})`;
+  const esmRegex = new RegExp(
+    String.raw`(?<![\p{ID_Continue}$.])import${gap}(?:${binding}${gap}from${padding})?(["'])([^"']+)\1`,
+    "gu",
+  );
   let m;
   while ((m = esmRegex.exec(content)) !== null) {
-    imports.push(m[1]);
+    imports.push(m[2]);
   }
 
-  // CJS: require("...")
-  const cjsRegex = /require\s*\(\s*["']([^"']+)["']\s*\)/g;
-  while ((m = cjsRegex.exec(content)) !== null) {
-    if (!imports.includes(m[1])) {
-      imports.push(m[1]);
+  // Add CommonJS, literal dynamic imports, and re-exports only once.
+  const additionalPatterns = [
+    /require\s*\(\s*(["'])([^"']+)\1\s*\)/gu,
+    /(?<![\p{ID_Continue}$]|\.\s*)import\s*\(\s*(["'])([^"']+)\1(?=\s*(?:,|\)))/gu,
+    /(?<![\p{ID_Continue}$])export\s+(?:type\s+)?(?:\*\s+(?:as\s+[\p{ID_Continue}$]+\s+)?|\{[^}]*\}\s+)from\s*(["'])([^"']+)\1/gu,
+  ];
+  for (const pattern of additionalPatterns) {
+    while ((m = pattern.exec(content)) !== null) {
+      const specifier = m[2];
+      if (!imports.includes(specifier)) imports.push(specifier);
     }
   }
 
