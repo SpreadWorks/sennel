@@ -5,10 +5,13 @@ import { SpecGateRepairSavedCallPlan, specGateRepairResponseCost,
   specGateRepairProgressMismatch as progressMismatch } from "./spec-gate-repair-call-plan.js";
 import { freezeSpecGateRepairValue } from "./spec-gate-repair-selection.js";
 import { WorkerArtifactHandoffError } from "./worker-artifact-handoff-error.js";
-import { SpecGateRepairSourceSnapshots } from "./spec-gate-repair-values.js";
+import { readSpecGateRepairSourceSnapshots, assertSpecGateRepairSelectedSources } from "./spec-gate-repair-source-storage.js";
+import { SpecGateRepairInputDescriptor } from "./spec-gate-repair-input-descriptor.js";
+import { SpecGateRepairSelectedInputIdentity } from "./spec-gate-repair-input-unavailable.js";
+import { workerArtifactStableStringify } from "./worker-artifact-input-format.js";
 import { specGateRepairInputFormatUnavailable } from "./worker-artifact-input-format.js";
 
-export const SPEC_GATE_REPAIR_PROGRESS_VERSION = 3;
+export const SPEC_GATE_REPAIR_PROGRESS_VERSION = 4;
 
 export const REPAIR_BUDGET_LIMIT = Object.freeze({ maxBatchCount: 16, maxProviderCallCount: 16,
   maxSynthesisCallCount: 16, maxAggregateCharacters: 1_000_000, maxAggregateItemCount: 100_000 });
@@ -19,7 +22,8 @@ export class SpecGateRepairProgressReader {
   #specId;
   #attemptId;
   #consumerNodeId;
-  #activities;
+  #activities = new Map();
+  #view = null;
   #entries = new Map();
 
   constructor({ flowManager, specId, attemptId, consumerNodeId }) {
@@ -27,12 +31,30 @@ export class SpecGateRepairProgressReader {
     this.#specId = specId;
     this.#attemptId = attemptId;
     this.#consumerNodeId = consumerNodeId;
-    this.#activities = new Map(flowManager.activityLedger(specId).map((activity) => [activity.id, activity]));
   }
 
-  activities() { return [...this.#activities.values()]; }
+  activities() {
+    if (this.#activities.size === 0) this.#flowManager.readCanonicalTransitionView({ specId: this.#specId,
+      read: (view) => this.#setActivities(view) });
+    return [...this.#activities.values()];
+  }
+
+  #setActivities(view) {
+    this.#activities = new Map(view.activities.map((activity) => {
+      const value = activity.toJSON();
+      return [value.id, value];
+    }));
+  }
 
   read(generation, phase) {
+    if (this.#view === null) {
+      return this.#flowManager.readCanonicalTransitionView({ specId: this.#specId, read: (view) => {
+        this.#view = view;
+        this.#setActivities(view);
+        this.#entries.clear();
+        try { return this.read(generation, phase); } finally { this.#view = null; }
+      } });
+    }
     const key = `${generation}:${phase}`;
     if (this.#entries.has(key)) return this.#entries.get(key);
     const flowManager = this.#flowManager;
@@ -40,7 +62,7 @@ export class SpecGateRepairProgressReader {
     const attemptId = this.#attemptId;
     const consumerNodeId = this.#consumerNodeId;
     const artifact = flowManager.readArtifact({ specId, logicalKey: "spec.gate.repair.progress",
-      consumerNodeId, parameters: { attemptId, generation: String(generation), phase } });
+      consumerNodeId, parameters: { attemptId, generation: String(generation), phase }, view: this.#view });
     try {
       return this.#restore(artifact, generation, phase, key);
     } catch (error) {
@@ -57,12 +79,36 @@ export class SpecGateRepairProgressReader {
     const specId = this.#specId;
     const attemptId = this.#attemptId;
     const saved = JSON.parse(artifact.bytes.toString("utf8"));
-    if (saved.version !== SPEC_GATE_REPAIR_PROGRESS_VERSION || saved.sourceSnapshots === undefined
+    if (saved.version !== SPEC_GATE_REPAIR_PROGRESS_VERSION || saved.sourceSnapshotReference === undefined || Object.hasOwn(saved, "sourceSnapshots")
       || !Array.isArray(saved.inputDescriptors)
       || saved.inputDescriptors.some((input) => input.descriptor === undefined)) {
       throw specGateRepairInputFormatUnavailable("Saved unfinished Gate repair has no current immutable input descriptor");
     }
-    const sourceSnapshots = SpecGateRepairSourceSnapshots.fromJSON(saved.sourceSnapshots);
+    let sourceSnapshots;
+    try {
+      if (!isDeepStrictEqual(saved.sourceSnapshotReference, saved.context?.sourceSnapshotReference)) {
+        throw new TypeError("Repair source reference differs from its immutable selected input");
+      }
+      sourceSnapshots = readSpecGateRepairSourceSnapshots({ flowManager: this.#flowManager,
+        specId, consumerNodeId: this.#consumerNodeId, reference: saved.sourceSnapshotReference,
+        progressActivityId: artifact.descriptor.activityId, view: this.#view, activities: this.#activities });
+      assertSpecGateRepairSelectedSources(saved.context, sourceSnapshots);
+    } catch (error) {
+      throw progressMismatch(`Gate repair saved source publication is invalid: ${error.message}`);
+    }
+    if (saved.inputDescriptors.length !== 1) throw specGateRepairInputFormatUnavailable("Saved Gate repair requires one exact input descriptor");
+    const descriptor = SpecGateRepairInputDescriptor.fromJSON(saved.inputDescriptors[0].descriptor);
+    descriptor.assertInput(saved.inputDescriptors[0]);
+    const locator = descriptor.canonicalLocator;
+    if (locator.attemptId !== attemptId || locator.attemptSequence !== saved.attemptSequence
+      || locator.generation !== saved.generation || descriptor.selectedIdentity.baseRevision !== saved.context.baseRevision) {
+      throw specGateRepairInputFormatUnavailable("Saved Gate repair input descriptor has a foreign revision or Attempt");
+    }
+    const selectedIdentity = SpecGateRepairSelectedInputIdentity.selectionFromDocument(saved.context, descriptor.selectionDigest);
+    if (!isDeepStrictEqual(descriptor.selectedIdentity.toJSON(), selectedIdentity.toJSON())) {
+      throw specGateRepairInputFormatUnavailable("Saved Gate repair input descriptor has foreign units or finding identities");
+    }
+    descriptor.assertBytes(Buffer.from(workerArtifactStableStringify(saved.context), "utf8"));
     const activity = this.#activities.get(artifact.descriptor.activityId);
     const receipt = activity?.result?.draftSettlementReceipt;
     const lifecycle = receipt?.executionLifecycle;
@@ -130,7 +176,7 @@ export class SpecGateRepairProgressReader {
     if (phase !== "checkpoint") {
       const previous = this.read(generation, phase === "claimed" ? "checkpoint" : "claimed");
       const common = ["runId", "specId", "attemptId", "attemptSequence", "generation", "inputDigest", "inputRevision",
-        "requestDigest", "executionLocator", "actionFileDigest", "actionRepositoryFingerprint", "limit", "context", "sourceSnapshots", "inputDescriptors", "plan", "callCost", "responseAllowance", "physicalPromptFootprint", "deliveryMode"];
+        "requestDigest", "executionLocator", "actionFileDigest", "actionRepositoryFingerprint", "limit", "context", "sourceSnapshotReference", "inputDescriptors", "plan", "callCost", "responseAllowance", "physicalPromptFootprint", "deliveryMode"];
       if (common.some((field) => !isDeepStrictEqual(saved[field], previous.document[field]))) {
         throw progressMismatch("Gate repair progress changed an immutable checkpoint contract");
       }

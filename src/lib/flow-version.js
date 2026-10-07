@@ -7,6 +7,7 @@ import { AtomicFile } from "./atomic-file.js";
 import { FileLock, FileLockWaitPolicy } from "./file-lock.js";
 import { ProcessLock } from "./process-lock.js";
 import { RealDirectoryAuthority } from "./real-directory-authority.js";
+import { captureRegularFile } from "./regular-file-snapshot.js";
 import { ArtifactAuthority, ArtifactAuthoritySlot, ArtifactCardinality } from "./artifact-authority.js";
 import {
   ArtifactPublicationClaim,
@@ -1007,6 +1008,17 @@ export class FlowArtifactDescriptor {
     }
     return this;
   }
+  readBytes(location, { maxBytes = this.size, onRead = undefined } = {}) {
+    requireBoundedLimit(maxBytes, "canonical artifact maxBytes", { allowInfinity: false });
+    if (this.size > maxBytes) throw new Error(`canonical artifact bytes exceed the read limit: ${this.relativePath}`);
+    location.assertAuthority(this.relativePath, { mustExist: true });
+    const bytes = captureRegularFile(location.resolve(this.relativePath), {
+      label: `canonical artifact ${this.relativePath}`, maxBytes, requireSingleLink: true, onRead,
+    }).bytes;
+    this.verifyBytes(bytes);
+    if (this.logicalKey !== null) FLOW_ARTIFACT_CONTRACTS.require(this.logicalKey).assertContentPublication(null, bytes);
+    return bytes;
+  }
   authorityKey() { return this.slot.claimKey(); }
   toJSON() {
     return {
@@ -1342,7 +1354,7 @@ export class FlowArtifactCatalogCommittedSnapshot {
   }
 }
 
-/** Bounded work budget for a lock-free catalog snapshot. */
+/** Shared bounds for catalog publication and lock-free snapshot reads. */
 export class FlowArtifactCatalogSnapshotLimits {
   constructor(value = {}) {
     if (!isPlainObject(value)) throw new Error("catalog snapshot limits must be an object");
@@ -1357,6 +1369,29 @@ export class FlowArtifactCatalogSnapshotLimits {
     this.maxConfirmedLedgerBytes = requireBoundedLimit(resolved.maxConfirmedLedgerBytes, "catalog snapshot maxConfirmedLedgerBytes", { allowInfinity: false });
     this.maxTotalArtifactBytes = requireBoundedLimit(resolved.maxTotalArtifactBytes, "catalog snapshot maxTotalArtifactBytes", { allowInfinity: false });
     Object.freeze(this);
+  }
+  assertProspectiveCatalog(catalog) {
+    if (!(catalog instanceof FlowArtifactCatalog)) throw new Error("prospective publication requires a FlowArtifactCatalog");
+    if (catalog.artifacts.length > this.maxArtifacts) throw new Error("catalog publication artifact count exceeds the limit");
+    const entries = new Set([ARTIFACT_CATALOG_RELATIVE_PATH, ".runtime"]);
+    let totalBytes = 0;
+    for (const artifact of catalog.artifacts) {
+      const maximumBytes = artifact.relativePath === FLOW_ACTIVITIES_RELATIVE_PATH
+        ? this.maxConfirmedLedgerBytes : this.maxArtifactBytes;
+      if (artifact.size > maximumBytes) throw new Error(`catalog publication artifact bytes exceed the limit: ${artifact.relativePath}`);
+      totalBytes += artifact.size;
+      let entry = artifact.relativePath;
+      while (entry !== ".") {
+        entries.add(entry);
+        entry = path.posix.dirname(entry);
+      }
+    }
+    if (totalBytes > this.maxTotalArtifactBytes) throw new Error("catalog publication aggregate artifact bytes exceed the limit");
+    if (entries.size > this.maxManagedEntries) throw new Error("catalog publication managed entries exceed the limit");
+    if (Buffer.byteLength(`${JSON.stringify(catalog.toJSON(), null, 2)}\n`, "utf8") > this.maxCatalogBytes) {
+      throw new Error("catalog publication bytes exceed the limit");
+    }
+    return catalog;
   }
 }
 
@@ -1541,9 +1576,9 @@ export class FlowArtifactCatalogStore {
       read: (catalog) => catalog.relatedActivity(artifactPath, this.location, this.#activityIndexFile),
     });
   }
-  publish({ logicalKey = null, relativePath: file, authoritySlot, publicationClaim, mediaType, retention, activityId = null, precondition = null, write } = {}) {
+  publish({ logicalKey = null, relativePath: file, authoritySlot, publicationClaim, mediaType, retention, activityId = null, precondition = null, publicationLimits = null, write } = {}) {
     return this.publishMany({
-      artifacts: [{ logicalKey, relativePath: file, authoritySlot, mediaType, retention, activityId }], publicationClaim, precondition, write,
+      artifacts: [{ logicalKey, relativePath: file, authoritySlot, mediaType, retention, activityId }], publicationClaim, precondition, publicationLimits, write,
     });
   }
   publishSystem(options = {}) {
@@ -1557,8 +1592,8 @@ export class FlowArtifactCatalogStore {
   publishManySystem(options = {}) {
     return this.#publishMany(options, true);
   }
-  publishMany({ artifacts, removals = [], publicationClaim, precondition = null, write } = {}) {
-    return this.#publishMany({ artifacts, removals, publicationClaim, precondition, write }, false);
+  publishMany({ artifacts, removals = [], publicationClaim, precondition = null, publicationLimits = null, write } = {}) {
+    return this.#publishMany({ artifacts, removals, publicationClaim, precondition, publicationLimits, write }, false);
   }
   writeIssueSnapshot(text, publicationContext = null) {
     if (typeof text !== "string") throw new Error("issue snapshot text must be a string");
@@ -1586,8 +1621,11 @@ export class FlowArtifactCatalogStore {
   readIssueSnapshot() {
     return this.read({ relativePaths: [FLOW_ARTIFACT_CONTRACTS.resolve("issue.snapshot").relativePath], read: () => fs.readFileSync(this.location.issueSnapshotFile, "utf8") });
   }
-  #publishMany({ artifacts, removals = [], publicationClaim = null, precondition = null, write } = {}, system) {
+  #publishMany({ artifacts, removals = [], publicationClaim = null, precondition = null, publicationLimits = null, write } = {}, system) {
     if (typeof write !== "function") throw new Error("catalog publication requires a write function");
+    if (publicationLimits !== null && !(publicationLimits instanceof FlowArtifactCatalogSnapshotLimits)) {
+      throw new Error("catalog publication requires typed snapshot limits");
+    }
     if (!Array.isArray(artifacts) || artifacts.length === 0) throw new Error("catalog publication requires artifacts");
     if (!Array.isArray(removals)) throw new Error("catalog publication removals must be an array");
     for (const artifact of artifacts) {
@@ -1681,18 +1719,20 @@ export class FlowArtifactCatalogStore {
           const activityId = artifact.activityId ?? (
             prior?.activityId == null ? null : new FlowActivityId(prior.activityId)
           );
-          return FlowArtifactDescriptor.fromFile({
+          const descriptor = FlowArtifactDescriptor.fromFile({
             location: this.location,
             ...artifact,
             activityId,
             migrationMaterialization: prior?.migrationMaterialization === true,
           });
+          const contract = descriptor.logicalKey === null ? null : FLOW_ARTIFACT_CONTRACTS.require(descriptor.logicalKey);
+          contract?.mutationPolicy.assertPublication(prior, descriptor);
+          return contract?.publicationIdentityPolicy.selectPublication(prior, descriptor) ?? descriptor;
         });
         for (const descriptor of descriptors) {
           if (descriptor.logicalKey === null) continue;
           const contract = FLOW_ARTIFACT_CONTRACTS.require(descriptor.logicalKey);
           const prior = previous.artifacts.find((entry) => entry.relativePath === descriptor.relativePath);
-          contract.mutationPolicy.assertPublication(prior, descriptor);
           const changed = prior !== undefined && (prior.hash !== descriptor.hash || prior.size !== descriptor.size);
           if (contract.cataloged && changed && descriptor.activityId === null) {
             throw new Error(`artifact content update requires its updater Activity: ${descriptor.relativePath}`);
@@ -1718,6 +1758,10 @@ export class FlowArtifactCatalogStore {
         const catalog = new FlowArtifactCatalog({
           artifacts: [...previous.artifacts.filter((artifact) => !paths.has(artifact.relativePath)), ...descriptors],
         });
+        if (publicationLimits !== null) {
+          publicationLimits.assertProspectiveCatalog(catalog);
+          FlowArtifactCatalog.managedFiles(this.location, { maxEntries: publicationLimits.maxManagedEntries });
+        }
         return catalog;
       });
     });

@@ -73,6 +73,8 @@ describe("Flow artifact contract registry", () => {
     assert.equal(paths.get("task.mutation.lineage"), "steps/impl/:{taskId}/impl/mutation-lineage/:{attemptId}.json");
     assert.equal(paths.get("activity.evidence"), "steps/:{ownerPath}/activity-evidence/:{digest}.json");
     assert.equal(paths.get("plan.gate.repair.outcome"), "artifacts/plan-gate-repairs/:{repairId}/outcome.json");
+    assert.equal(paths.get("spec.gate.repair.source.blob"), "artifacts/spec-gate-repair-sources/blobs/:{digest}.txt");
+    assert.equal(paths.get("spec.gate.repair.source.manifest"), "artifacts/spec-gate-repair-sources/manifests/:{digest}.json");
     assert.equal(paths.get("gate.observation.recurrence"), ".runtime/gate-observation-recurrence.json");
     assert.deepEqual(
       FLOW_ARTIFACT_SWITCH_TARGETS.filter((entry) => entry.action === "new").map((entry) => entry.logicalKey),
@@ -82,7 +84,8 @@ describe("Flow artifact contract registry", () => {
         "test.requirement.candidate.source", "test.requirement.support", "test.requirement.review", "test.requirement.repair.progress",
         "test.requirement.gate", "test.requirement.deferred", "acceptance.decision",
         "retry.recovery.baseline", "retry.recovery.receipt", "plan.gate.repair.outcome",
-        "spec.gate.repair.migration", "spec.gate.repair.progress", "spec.gate.repair.audit",
+        "spec.gate.repair.migration", "spec.gate.repair.progress",
+        "spec.gate.repair.source.blob", "spec.gate.repair.source.manifest", "spec.gate.repair.audit",
         "source.handoff.rollback-blob", "source.handoff.checkpoint", "source.handoff.event", "source.handoff.settlement",
         "task.review.unsealed.checkpoint", "task.review.recovery.authorization", "task.review.reconciliation", "task.review.aborted.work-unit",
         "task.triage", "task.repair",

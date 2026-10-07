@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { SpecGateRepairContext } from "../../src/flow/lib/spec-gate-repair-context.js";
 import { PromptRequestLimit, PromptReferenceElement } from "../../src/lib/prompt-batching.js";
-import { SpecGateRepairSource, SpecGateRepairSourceSnapshots } from "../../src/flow/lib/spec-gate-repair-values.js";
+import { SpecGateRepairSource, SpecGateRepairSourceSnapshotManifest } from "../../src/flow/lib/spec-gate-repair-values.js";
 import { specGateRepairInflationFixture } from "./spec-gate-repair-inflation-fixture.js";
 import { SpecGateRepairBundle } from "../../src/flow/lib/spec-gate-repair-bundle.js";
 
@@ -295,14 +295,18 @@ test("six findings and twenty-four sources retain canonical bodies while code st
   for (const unit of ctx.units()) {
     assert(!JSON.stringify(ctx.select(unit.id).toJSON()).includes("UNSELECTED_CODE_"));
   }
-  const snapshot = ctx.sourceSnapshots().toJSON();
-  const storedSnapshotBytes = Buffer.byteLength(JSON.stringify(snapshot), "utf8");
+  const snapshots = ctx.sourceSnapshots();
+  const manifest = SpecGateRepairSourceSnapshotManifest.fromSnapshots(snapshots);
+  const snapshot = manifest.toJSON();
+  const bodies = new Map(snapshots.sources().filter((source) => source.availability === "available")
+    .map((source) => [source.digest, Buffer.from(source.content, "utf8")]));
+  const storedSnapshotBytes = manifest.bytes().length + [...bodies.values()].reduce((sum, bytes) => sum + bytes.length, 0);
   const selectedBundle = SpecGateRepairBundle.fromSelections(ctx.units().map((unit) => ctx.select(unit.id)));
   const requiredReadCharacters = JSON.stringify(selectedBundle.toJSON()).length;
   assert(requiredReadCharacters < storedSnapshotBytes / 5);
   t.diagnostic(`storedSnapshotBytes=${storedSnapshotBytes}; requiredReadCharacters=${requiredReadCharacters}; selectedBundleBytes=${selectedBundle.byteLength}`);
-  const restoredSources = SpecGateRepairSourceSnapshots.fromJSON(structuredClone(snapshot));
-  assert.deepEqual(restoredSources.toJSON(), snapshot);
+  const restoredSources = SpecGateRepairSourceSnapshotManifest.fromJSON(structuredClone(snapshot)).restore((digest) => bodies.get(digest));
+  assert.deepEqual(restoredSources.sources(), snapshots.sources());
   for (const unit of ctx.units()) {
     const selected = ctx.select(unit.id);
     assert(!JSON.stringify(selected.toJSON()).includes("UNSELECTED_CODE_"));
@@ -317,10 +321,11 @@ test("six findings and twenty-four sources retain canonical bodies while code st
     sources: restoredSources.sources(), guardrails: [rule], acknowledgedRationale: "Existing exception rationale" });
   assert.equal(restored.evidenceDigest, ctx.evidenceDigest);
   assert.deepEqual(restored.units().map((unit) => restored.select(unit.id).toJSON()), ctx.units().map((unit) => ctx.select(unit.id).toJSON()));
-  const tampered = structuredClone(snapshot); tampered.sources[0].content += "changed";
-  assert.throws(() => SpecGateRepairSourceSnapshots.fromJSON(tampered), /digest mismatch/);
+  const tampered = new Map(bodies);
+  tampered.set(snapshot.sources[0].digest, Buffer.concat([bodies.get(snapshot.sources[0].digest), Buffer.from("changed")]));
+  assert.throws(() => manifest.restore((digest) => tampered.get(digest)), /digest mismatch/);
   const absent = structuredClone(snapshot); delete absent.sources[0].digest;
-  assert.throws(() => SpecGateRepairSourceSnapshots.fromJSON(absent), /descriptor/);
+  assert.throws(() => SpecGateRepairSourceSnapshotManifest.fromJSON(absent), /descriptor/);
 });
 
 test("an explicit Spec read adds the requested range without its entity or linked task closure", () => {

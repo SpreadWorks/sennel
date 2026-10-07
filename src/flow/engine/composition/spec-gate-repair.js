@@ -16,6 +16,8 @@ import { rethrowStepSettlementFailure } from "../../lib/definition-lifecycle-fai
 import { SpecGateRepairServiceInput } from "../../services/spec-gate-repair-service.js";
 import { SpecGateRepairSettlementWriter } from "../../services/spec-gate-repair-settlement-writer.js";
 import { PromptLogicalFootprint } from "../../../lib/prompt-batching.js";
+import { FlowArtifactCatalogSnapshotLimits } from "../../../lib/flow-version.js";
+import { SpecGateRepairSourcePublication } from "../../lib/spec-gate-repair-source-storage.js";
 
 function progressWrite(binding, generation, phase, document) {
   return { logicalKey: "spec.gate.repair.progress",
@@ -102,7 +104,7 @@ export async function preparePublishedSpecGateRepairArguments({ ctx, state: requ
 
 /** The claimed budget is committed before a provider-visible call. */
 export function reserveSpecGateRepairWorkerCall({ ctx, request, prompt, physicalRequest = prompt,
-  instructionPrompt = prompt, callPlan = null }) {
+  instructionPrompt = prompt, callPlan = null, publicationLimits = new FlowArtifactCatalogSnapshotLimits() }) {
   const binding = new SpecWorkerStepBinding({ request });
   const flowManager = ctx.flowManager;
   binding.assertCurrent();
@@ -113,6 +115,7 @@ export function reserveSpecGateRepairWorkerCall({ ctx, request, prompt, physical
   const execution = flowManager.draftStepExecutionState({ binding });
   const checkpoint = execution.lifecycle?.phase === "checkpoint";
   let base;
+  let sourceWrites = [];
   let executionBinding;
   const stepResult = new SpecGateRepairContextRequiredResult();
   const settlement = selectSettlement(binding.stepId, stepResult);
@@ -154,12 +157,21 @@ export function reserveSpecGateRepairWorkerCall({ ctx, request, prompt, physical
     }
     const sourceSnapshots = source.context.sourceSnapshots();
     for (const entry of sourceSnapshots.sources()) if (entry.required) entry.assertAvailable();
+    const sourcePublication = new SpecGateRepairSourcePublication({ snapshots: sourceSnapshots });
+    if (!isDeepStrictEqual(context.sourceSnapshotReference, sourcePublication.reference().toJSON())) {
+      throw new WorkerArtifactHandoffError("stale", "FLOW_SPEC_GATE_REPAIR_EVIDENCE_CHANGED",
+        "Spec Gate repair source manifest differs from its selected input", {
+          retryable: false, recoveryPossible: false, data: { failureKind: "step-admission" },
+        });
+    }
+    sourceWrites = sourcePublication.artifactWrites();
     base = { version: SPEC_GATE_REPAIR_PROGRESS_VERSION, runId: request.runId, specId: request.specId,
       attemptId: binding.attempt.id, attemptSequence: binding.attempt.sequence,
       inputDigest: request.inputDigest, inputRevision: request.inputRevision,
       requestDigest: request.requestDigest, actionFileDigest: request.actionRequestDigest, limit: { ...limit },
       actionRepositoryFingerprint: request.invocation.action.repositoryFingerprint ?? null,
-      generation: executionBinding.executionGeneration, context, sourceSnapshots: sourceSnapshots.toJSON(),
+      generation: executionBinding.executionGeneration, context,
+      sourceSnapshotReference: sourcePublication.reference().toJSON(),
       inputDescriptors: request.inputs.map((input) => input.toJSON()),
       executionLocator: executionLocator.toJSON(), plan: callPlan.toJSON(),
       callCost: call.callCost.toJSON(), responseAllowance: call.responseAllowance.toJSON() };
@@ -169,11 +181,13 @@ export function reserveSpecGateRepairWorkerCall({ ctx, request, prompt, physical
   try {
     if (!checkpoint) {
       flowManager.checkpointDraftStepExecution({ binding, stepResult, settlement, executionBinding,
-        artifactWrites: [progressWrite(binding, executionBinding.executionGeneration, "checkpoint",
+        publicationLimits,
+        artifactWrites: [...sourceWrites, progressWrite(binding, executionBinding.executionGeneration, "checkpoint",
           { ...base, phase: "checkpoint", budget: budget.snapshot() })] });
     }
     budget.consumeProviderCall();
     flowManager.claimDraftStepExecution({ binding, stepResult, settlement, executionBinding,
+      publicationLimits,
       executionClaim: new DraftWorkerExecutionClaim(base.executionLocator),
       artifactWrites: [progressWrite(binding, executionBinding.executionGeneration, "claimed",
         { ...base, phase: "claimed", budget: budget.snapshot() })] });
@@ -294,6 +308,7 @@ export async function prepareSpecGateRepairServiceArguments({ ctx, request, hand
     try {
       publicationReceipt = ctx.flowManager.settleSpecStepResult({
         binding, stepResult, settlement: selectSettlement(binding.stepId, stepResult),
+        publicationLimits: new FlowArtifactCatalogSnapshotLimits(),
         artifactWrites: [progressWrite(binding, lifecycle.executionGeneration, "publication", {
           ...saved.document, phase: "publication", budget: budget.snapshot(),
           responseCost: responseCost.toJSON(), context, proposal,

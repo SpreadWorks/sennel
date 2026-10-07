@@ -5,11 +5,33 @@ import { test } from "node:test";
 import { specStepRegistration } from "../../../src/flow/engine/composition/spec.js";
 import { FlowManager } from "../../../src/lib/flow-manager.js";
 import { latestRepairBudget } from "../../../src/flow/lib/spec-gate-repair-progress.js";
-import { WorkerArtifactHandoffCoordinator, sealWorkerArtifactHandoff } from "../../../src/flow/lib/worker-artifact-handoff.js";
+import RunSealHandoffCommand from "../../../src/flow/lib/run-seal-handoff.js";
+import { Container } from "../../../src/lib/container.js";
+import { WorkerArtifactHandoffCoordinator } from "../../../src/flow/lib/worker-artifact-handoff.js";
 import { createSpecGateRepairScenario } from "../../support/infrastructure/spec-gate-repair-scenario.js";
 import { reserveFixtureSpecGateRepairWorkerCall } from "../../support/infrastructure/spec-gate-repair-admission.js";
 import { removeTmpDir } from "../../support/builders/tmp-dir.js";
 import { workerArtifactJson } from "../../support/infrastructure/worker-artifact.js";
+
+// Exercise the actual worker command with no canonical publication authority.
+function sealAsWorker(request, mainRoot) {
+  const previousRequest = process.env.SENNEL_FLOW_HANDOFF_REQUEST;
+  const previousInvocation = process.env.SENNEL_FLOW_DISPATCH_INVOCATION_ID;
+  const container = new Container();
+  container.register("mainRoot", mainRoot);
+  container.register("flowManager", {
+    canonicalState() { throw new Error("worker seal cannot acquire canonical publication authority"); },
+  });
+  process.env.SENNEL_FLOW_HANDOFF_REQUEST = request.requestPath;
+  process.env.SENNEL_FLOW_DISPATCH_INVOCATION_ID = request.dispatchInvocationId;
+  try { return new RunSealHandoffCommand().execute({ container }); }
+  finally {
+    if (previousRequest === undefined) delete process.env.SENNEL_FLOW_HANDOFF_REQUEST;
+    else process.env.SENNEL_FLOW_HANDOFF_REQUEST = previousRequest;
+    if (previousInvocation === undefined) delete process.env.SENNEL_FLOW_DISPATCH_INVOCATION_ID;
+    else process.env.SENNEL_FLOW_DISPATCH_INVOCATION_ID = previousInvocation;
+  }
+}
 
 function durable(manager, specId) {
   return { state: manager.canonicalState(specId).toJSON(),
@@ -60,9 +82,13 @@ for (const [mode, reason] of [["repair", "context-limit"], ["repair", "file-read
       if (reason === "file-read-failed") {
         fs.unlinkSync(request.inputs[0].descriptor.deliveryPath(request.executionRoot));
       }
-      sealWorkerArtifactHandoff({ requestPath: request.requestPath,
-        invocationId: request.dispatchInvocationId, mainRoot: value.root,
-        flowManager: value.flowManager });
+      const beforeSeal = durable(value.flowManager, value.specId);
+      const sealed = sealAsWorker(request, value.root);
+      assert.equal(sealed.ok, true, JSON.stringify(sealed));
+      assert.equal(sealed.data.handoffPath, request.submissionPath);
+      assert.equal(sealed.data.payloadCount, 1);
+      assert.equal(request.hasSealedSubmission(), true);
+      assert.deepEqual(durable(value.flowManager, value.specId), beforeSeal);
 
       // Reconstruct after seal: the parent must restore canonical input and
       // publish the typed disposition despite a missing delivery copy.
@@ -137,9 +163,9 @@ test("a mixed or foreign input-unavailable response cannot seal or publish its r
       { ...payload, binding: { ...payload.binding, attemptId: "foreign-attempt" } },
       { ...payload, selectionDigest: "f".repeat(64) }]) {
       fs.writeFileSync(request.payloadPath("spec-gate-repair.json"), workerArtifactJson(malformed));
-      assert.throws(() => sealWorkerArtifactHandoff({ requestPath: request.requestPath,
-        invocationId: request.dispatchInvocationId, mainRoot: value.root,
-        flowManager: value.flowManager }), /invalid shape|differs from its exact selected request/);
+      const refused = sealAsWorker(request, value.root);
+      assert.equal(refused.ok, false);
+      assert.match(refused.errors[0].messages.join(" "), /invalid shape|differs from its exact selected request/);
       assert.equal(request.hasSealedSubmission(), false);
       assert.deepEqual(durable(value.flowManager, value.specId), before);
     }

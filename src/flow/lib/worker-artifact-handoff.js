@@ -831,24 +831,24 @@ export class WorkerArtifactInputContract {
     return this.allowedSignatures.includes(signature);
   }
 
-  decodeInput(input, { executionRoot, flowManager, binding, deliveryDirectory = null, allowUnavailableDelivery = false }) {
+  decodeInput(input, { executionRoot, flowManager, binding, deliveryDirectory = null, unavailable = null }) {
     if (this.stepId !== "spec-gate-repair") {
       exactObjectKeys(input, ["name", "targetRelativePath", "digest", "byteLength", "document"], "worker document input");
       return new WorkerArtifactInputSnapshot({ ...input, snapshot: input });
     }
     if (!input?.descriptor || Object.hasOwn(input, "document")) throw specGateRepairInputFormatUnavailable();
-    exactObjectKeys(input, ["name", "targetRelativePath", "digest", "byteLength", "descriptor"], "repair descriptor input");
     const descriptor = SpecGateRepairInputDescriptor.fromJSON(input.descriptor, { executionRoot });
-    if (input.name !== SPEC_GATE_REPAIR_INPUT_NAME || input.targetRelativePath !== input.name
-      || input.digest !== descriptor.selectionDigest || input.byteLength !== descriptor.selectionBytes) {
-      throw specGateRepairInputFormatUnavailable("Repair input identity differs from its descriptor");
-    }
+    descriptor.assertInput(input);
     if (deliveryDirectory !== null && descriptor.deliveryPath(executionRoot)
       !== path.join(deliveryDirectory, SPEC_GATE_REPAIR_INPUT_NAME)) {
       throw specGateRepairInputFormatUnavailable("Repair delivery copy has a foreign handoff directory");
     }
+    if (flowManager === null && unavailable !== null) {
+      unavailable.assertDescriptor(descriptor, binding);
+      return new SpecGateRepairUnavailableInputSnapshot(input, descriptor);
+    }
     const document = descriptor.restoreDocument({ flowManager, executionRoot, binding, inputDescriptor: input,
-      allowUnavailableDelivery });
+      unavailable });
     return new WorkerArtifactInputSnapshot({ ...input, snapshot: input, document, descriptor });
   }
 }
@@ -1082,6 +1082,23 @@ export class WorkerArtifactInputSnapshot {
       ...(this.descriptor === null ? { document: structuredClone(this.document) }
         : { descriptor: this.descriptor.toJSON() }),
     };
+  }
+}
+
+/** Worker-side identity for an unread input; the parent alone restores its body. */
+class SpecGateRepairUnavailableInputSnapshot {
+  constructor(input, descriptor) {
+    descriptor.assertInput(input);
+    this.name = input.name;
+    this.targetRelativePath = input.targetRelativePath;
+    this.digest = input.digest;
+    this.byteLength = input.byteLength;
+    this.descriptor = descriptor;
+    Object.freeze(this);
+  }
+  toJSON() {
+    return { name: this.name, targetRelativePath: this.targetRelativePath,
+      digest: this.digest, byteLength: this.byteLength, descriptor: this.descriptor.toJSON() };
   }
 }
 
@@ -2304,8 +2321,9 @@ function specGateRepairContextDocuments({ source, ledger, locationPlan, request 
       }
     }
   }
+  const sourceSnapshotReference = source.context.sourceSnapshotReference().toJSON();
   return (documents ?? [document]).map((entry) => Object.freeze({ ...entry,
-    evidenceDigest: source.context.evidenceDigest }));
+    evidenceDigest: source.context.evidenceDigest, sourceSnapshotReference }));
 }
 
 function specGateRepairContextSnapshot(document) {
@@ -5990,7 +6008,7 @@ export class WorkerArtifactHandoffRequest {
       if (unavailable !== null) {
         unavailable.assertRequest(this);
         input.descriptor.restoreDocument({ flowManager: this.flowManager, executionRoot: this.executionRoot,
-          binding: this, inputDescriptor: input.toJSON(), allowUnavailableDelivery: true });
+          binding: this, inputDescriptor: input.toJSON(), unavailable });
       } else {
         input.descriptor.expectedReference(this.executionRoot, Buffer.from(stableStringify(input.document), "utf8"))
           .assertUnchanged({ label: "Spec Gate repair selected delivery", maxBytes: input.byteLength });
@@ -6672,11 +6690,10 @@ function requestFromStored(filePath, { mainRoot: trustedMainRoot = null, flowMan
     }
   }
   const payloadDirectory = path.join(actionDirectory, "payload");
-  const unavailable = flowManager === null ? null
-    : readSpecGateRepairUnavailablePayload({ stepId: document.stepId, payloadDirectory });
+  const unavailable = readSpecGateRepairUnavailablePayload({ stepId: document.stepId, payloadDirectory });
   const inputSnapshots = (Array.isArray(document.inputs) ? document.inputs : []).map((input) => (
     policy.inputContract.decodeInput(input, { executionRoot, flowManager, deliveryDirectory: path.join(actionDirectory, "input"),
-      allowUnavailableDelivery: unavailable !== null,
+      unavailable,
       binding: { runId, specId, inputDigest: document.inputDigest, inputRevision: document.inputRevision,
         requestDigest: digest(stableStringify(document)) } })
   ));

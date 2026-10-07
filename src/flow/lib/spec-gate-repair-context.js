@@ -7,7 +7,7 @@ import {
 } from "../../lib/prompt-batching.js";
 import { SpecRepairTarget, specRepairTargetEntries } from "./spec-repair-operations.js";
 import { SpecGateDocumentTarget } from "./spec-gate-targets.js";
-import { SpecGateRepairSource, SpecGateRepairSourceSnapshots, SpecGateRepairSourceRange } from "./spec-gate-repair-values.js";
+import { SpecGateRepairSource, SpecGateRepairSourceSnapshots, SpecGateRepairSourceSnapshotManifest, SpecGateRepairSourceRange } from "./spec-gate-repair-values.js";
 import { WorkerArtifactHandoffError } from "./worker-artifact-handoff-error.js";
 import { MAX_WORKER_ARTIFACT_INPUT_BYTES,
   workerArtifactStableStringify } from "./worker-artifact-input-format.js";
@@ -90,6 +90,7 @@ export class SpecGateRepairContext {
   #guardrails;
   #rationale;
   #sources;
+  #sourceSnapshotReference;
   #sourcesById;
   #index;
   #indexPages = new Map();
@@ -103,6 +104,7 @@ export class SpecGateRepairContext {
     this.#rationale = acknowledgedRationale;
     const evidenceDigest = SpecGateRepairContext.evidenceDigestFor({ sources, guardrails: this.#guardrails });
     this.#sources = Object.freeze(new SpecGateRepairSourceSnapshots(sources).sources());
+    this.#sourceSnapshotReference = SpecGateRepairSourceSnapshotManifest.fromSnapshots(this.sourceSnapshots()).reference();
     this.#sourcesById = new Map(this.#sources.map((source) => [source.id, source]));
     this.evidenceDigest = evidenceDigest;
     const editable = specRepairTargetEntries(spec);
@@ -223,6 +225,7 @@ export class SpecGateRepairContext {
     }
   }
   sourceSnapshots() { return new SpecGateRepairSourceSnapshots(this.#sources); }
+  sourceSnapshotReference() { return this.#sourceSnapshotReference; }
   indexManifest() { return this.#index; }
   tableOfContents() {
     return [...this.#ranges.values()].map((range) => {
@@ -376,7 +379,8 @@ export class SpecGateRepairContext {
       baseRevision: this.baseRevision, unitId: null,
       batchIndex: batch.index, batchCount: batch.count, batchDigest: batch.digest,
       bundle: SpecGateRepairBundle.fromSelections(batch.payloadElements.map((entry) => entry.selection)).toJSON(),
-      evidenceDigest: this.evidenceDigest };
+      evidenceDigest: this.evidenceDigest,
+      sourceSnapshotReference: this.sourceSnapshotReference().toJSON() };
   }
   locationPlan({ limit = new PromptRequestLimit() } = {}) {
     const envelope = new SpecGateRepairEnvelope({ baseRevision: this.baseRevision, mode: "locate" });

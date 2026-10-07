@@ -22,6 +22,8 @@ import { validWorkerHandoffSpec, workerArtifactJson } from "../../support/infras
 import { reserveFixtureSpecGateRepairWorkerCall } from "../../support/infrastructure/spec-gate-repair-admission.js";
 import { latestRepairBudget } from "../../../src/flow/lib/spec-gate-repair-progress.js";
 import { createTmpDir, removeTmpDir } from "../../support/builders/tmp-dir.js";
+import { saveFixtureSpecGateRepairSources } from "../../support/infrastructure/spec-gate-repair-source-snapshots.js";
+import { SpecGateRepairProgressReader } from "../../../src/flow/lib/spec-gate-repair-progress-reader.js";
 
 const rootRule = "AGENTS.md";
 const aRules = [rootRule, "src/AGENTS.md", "src/a/AGENTS.md", "src/a/deep/AGENTS.md"];
@@ -111,10 +113,11 @@ test("scoped rules follow selected evidence and persisted fragment expansion int
     const checkpoint = JSON.parse(value.flowManager.readArtifact({ specId: value.specId,
       logicalKey: "spec.gate.repair.progress", consumerNodeId: "spec-gate-repair",
       parameters: { attemptId, generation: String(calls), phase: "checkpoint" } }).bytes.toString("utf8"));
-    const sources = SpecGateRepairSourceSnapshots.fromJSON(checkpoint.sourceSnapshots);
+    const sources = new SpecGateRepairProgressReader({ flowManager: value.flowManager, specId: value.specId,
+          attemptId, consumerNodeId: "spec-gate-repair" }).read(calls, "checkpoint").sourceSnapshots;
     let proposal;
     if (calls === 0) {
-      initialSnapshots = sources.toJSON();
+      initialSnapshots = sources.sources();
       t.diagnostic(`initialSelectedBytes=${Buffer.byteLength(JSON.stringify(document))}; capturedSourceBytes=${sources.sources().reduce((sum, source) => sum + source.byteLength, 0)}`);
       assert.deepEqual(selectedRules(selection), [...aRules].sort());
       const index = selection.ranges.find((range) => range.id.startsWith("repair-index:")).value;
@@ -127,7 +130,7 @@ test("scoped rules follow selected evidence and persisted fragment expansion int
       proposal = { version: 1, stage: "spec-gate-repair-context-request", baseRevision: selection.baseRevision,
         unitId: selection.unit.id, additionalRangeIds: [fragment.id] };
     } else {
-      assert.deepEqual(sources.toJSON(), initialSnapshots, "next generation reads the immutable source inventory");
+      assert.deepEqual(sources.sources(), initialSnapshots, "next generation reads the immutable source inventory");
       assert.deepEqual(selectedRules(selection), [...aRules, ...bRules].sort());
       const selected = selection.ranges.find((range) => range.id === fragment.id);
       const bytes = Buffer.from(sources.sources().find((source) => source.origin === fragment.source.origin).content);
@@ -173,9 +176,8 @@ test("direct rule, full source, fragment and document reads retain applicable pa
   spec.overview.decisions.push({ text: "Consider vendor/src/b/deep/file.js.", evidence: "Existing consumer", consideredAlternatives: "Keep the contract" });
   const sources = readSpecGateRepairSources({ flowManager: { readArtifact: () => null },
     state: { issue: null, request: '対象quoted/file"name.jsを確認する。' }, executionRoot: root, spec });
-  const savedPath = path.join(root, "snapshots.json");
-  fs.writeFileSync(savedPath, JSON.stringify(new SpecGateRepairSourceSnapshots(sources).toJSON()));
-  const restored = SpecGateRepairSourceSnapshots.fromJSON(JSON.parse(fs.readFileSync(savedPath, "utf8")));
+  const stored = saveFixtureSpecGateRepairSources({ root, snapshots: new SpecGateRepairSourceSnapshots(sources) });
+  const restored = stored.restore();
   const target = { entity: "requirement", id: "R1", field: "desc" };
   const contextFor = ({ document = false, direct = false, suffix = false, observed = "Repair the check", rationale = "", rule = "Preserve behavior" } = {}) => {
     const inputSpec = structuredClone(spec);
@@ -234,7 +236,8 @@ for (const availability of ["missing", "unavailable"]) {
         const attemptId = value.flowManager.canonicalState(value.specId).attempt.id;
         const checkpoint = JSON.parse(value.flowManager.readArtifact({ specId: value.specId, logicalKey: "spec.gate.repair.progress",
           consumerNodeId: "spec-gate-repair", parameters: { attemptId, generation: "0", phase: "checkpoint" } }).bytes.toString("utf8"));
-        const sources = SpecGateRepairSourceSnapshots.fromJSON(checkpoint.sourceSnapshots);
+        const sources = new SpecGateRepairProgressReader({ flowManager: value.flowManager, specId: value.specId,
+          attemptId, consumerNodeId: "spec-gate-repair" }).read(0, "checkpoint").sourceSnapshots;
         assert.equal(sources.sources().find((source) => source.origin === badRule).availability, availability);
         const input = readSpecGateRepairInput({ flowManager: value.flowManager,
           state: value.flowManager.canonicalState(value.specId), executionRoot: value.root, sourceSnapshots: sources });

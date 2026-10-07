@@ -18,12 +18,12 @@ export function createFixtureSpecGateRepairCallPlan({ ctx, request }) {
   }).callPlan;
 }
 
-export function reserveFixtureSpecGateRepairWorkerCall({ ctx, request, prompt }) {
+export function reserveFixtureSpecGateRepairWorkerCall({ ctx, request, prompt, publicationLimits }) {
   const state = ctx.flowManager.canonicalState(request.specId);
   const lifecycle = ctx.flowManager.draftStepExecutionState({ binding: {
     runId: state.runId, specId: state.specId, stepId: "spec-gate-repair", attempt: state.attempt,
   } }).lifecycle;
   const callPlan = lifecycle?.phase === "checkpoint" ? null
     : createFixtureSpecGateRepairCallPlan({ ctx, request });
-  return reserveSpecGateRepairWorkerCall({ ctx, request, prompt, instructionPrompt: prompt, callPlan });
+  return reserveSpecGateRepairWorkerCall({ ctx, request, prompt, instructionPrompt: prompt, callPlan, publicationLimits });
 }

@@ -5,7 +5,7 @@ import { test } from "node:test";
 import { FlowManager } from "../../../src/lib/flow-manager.js";
 import { runGit } from "../../../src/lib/git-helpers.js";
 import { attachCanonicalCommandResultPublications } from "../../../src/flow/lib/canonical-command-result.js";
-import { SpecGateRepairSourceSnapshots } from "../../../src/flow/lib/spec-gate-repair-values.js";
+import { SpecGateRepairSourceSnapshots, SpecGateRepairSourceSnapshotManifest } from "../../../src/flow/lib/spec-gate-repair-values.js";
 import { readSpecGateRepairInput } from "../../../src/flow/lib/spec-gate-repair-input.js";
 import { canonicalDraftDocument } from "../../support/infrastructure/flow-setup.js";
 import { prepareSpecGateRepairService, createSpecGateRepairScenario, completeSpecGateRepairHandoff } from "../../support/infrastructure/spec-gate-repair-scenario.js";
@@ -21,6 +21,8 @@ import { SpecGateRepairStep } from "../../../src/flow/steps/spec/spec-gate-repai
 import { StepFactory } from "../../../src/flow/engine/step-factory.js";
 import { readSpecGateRepairSources } from "../../../src/flow/lib/spec-gate-repair-sources.js";
 import { createTmpDir, removeTmpDir } from "../../support/builders/tmp-dir.js";
+import { saveFixtureSpecGateRepairSources } from "../../support/infrastructure/spec-gate-repair-source-snapshots.js";
+import { SpecGateRepairProgressReader } from "../../../src/flow/lib/spec-gate-repair-progress-reader.js";
 
 test("repair handoff reads the linked Issue, prior Draft and referenced working-tree source after reload", async () => {
   const value = await createSpecGateRepairScenario({ issue: 42,
@@ -79,7 +81,8 @@ test("repair handoff reads the linked Issue, prior Draft and referenced working-
     const saved = reloaded.readArtifact({ specId: value.specId, logicalKey: "spec.gate.repair.progress",
       consumerNodeId: "spec-gate-repair", parameters: { attemptId: locator.attemptId,
         generation: String(locator.generation), phase: "checkpoint" } });
-    const snapshots = SpecGateRepairSourceSnapshots.fromJSON(JSON.parse(saved.bytes.toString("utf8")).sourceSnapshots);
+    const snapshots = new SpecGateRepairProgressReader({ flowManager: reloaded, specId: value.specId,
+      attemptId: locator.attemptId, consumerNodeId: "spec-gate-repair" }).read(locator.generation, "checkpoint").sourceSnapshots;
     assert.match(snapshots.sources().find((source) => source.origin === "src/help.js").content, /updated help/);
     assert.deepEqual(outcome.request.inputs[0].document, JSON.parse(saved.bytes.toString("utf8")).context);
     assert(["spec-gate-repair-review-required", "spec-gate-repair-ready-for-gate"].includes(outcome.result.kind));
@@ -163,12 +166,11 @@ test("captured source statuses and hierarchical rules survive exact UTF-8 snapsh
     assert.deepEqual(byOrigin.get("src/AGENTS.md").appliesTo, ["src"]);
     assert.deepEqual(byOrigin.get("src/nested/AGENTS.md").appliesTo, ["src/nested"]);
     const snapshots = new SpecGateRepairSourceSnapshots(sources);
-    const savedPath = path.join(root, "snapshots.json");
-    fs.writeFileSync(savedPath, JSON.stringify(snapshots.toJSON()));
-    const restored = SpecGateRepairSourceSnapshots.fromJSON(JSON.parse(fs.readFileSync(savedPath, "utf8")));
-    assert.deepEqual(restored.toJSON(), snapshots.toJSON());
-    const changedBytes = restored.toJSON(); changedBytes.sources.find((source) => source.origin === text.origin).byteLength++;
-    assert.throws(() => SpecGateRepairSourceSnapshots.fromJSON(changedBytes), /digest mismatch/);
+    const stored = saveFixtureSpecGateRepairSources({ root, snapshots });
+    const restored = stored.restore();
+    assert.deepEqual(restored.sources(), snapshots.sources());
+    const changedBytes = stored.readManifest(); changedBytes.sources.find((source) => source.origin === text.origin).byteLength++;
+    assert.throws(() => SpecGateRepairSourceSnapshotManifest.fromJSON(changedBytes).restore(stored.readBlob), /digest mismatch/);
   } finally { removeTmpDir(root); }
 });
 
@@ -229,12 +231,14 @@ test("source and index requests survive publication replay and reach the next wo
     reserveFixtureSpecGateRepairWorkerCall({ ctx: value.ctx, request: first,
       prompt: JSON.stringify(first.toPromptReference()) });
     const initialCheckpoint = readProgress(attemptId, 0, "checkpoint");
-    const initialSnapshots = initialCheckpoint.sourceSnapshots;
+    const initialSnapshots = initialCheckpoint.sourceSnapshotReference;
+    assert.match(initialSnapshots.digest, /^[a-f0-9]{64}$/);
+    assert(initialSnapshots.byteLength > 0);
     sealWorkerArtifactHandoff({ requestPath: first.requestPath, invocationId: first.dispatchInvocationId });
     await prepareSpecGateRepairService({ ctx: value.ctx, request: first,
       Connector: SpecEntryConnector, handoffCoordinator: value.coordinator });
     const firstPublication = readProgress(attemptId, 0, "publication");
-    assert.deepEqual(firstPublication.sourceSnapshots, initialSnapshots);
+    assert.deepEqual(firstPublication.sourceSnapshotReference, initialSnapshots);
     assert.deepEqual(firstPublication.proposal.additionalRangeIds, proposal.additionalRangeIds);
     assert.equal(firstPublication.budget.providerCallCount, 1);
     assert.equal(firstPublication.budget.aggregateCharacters,
@@ -301,7 +305,7 @@ test("source and index requests survive publication replay and reach the next wo
       prompt: JSON.stringify(next.toPromptReference()) });
     const nextCheckpoint = readProgress(attemptId, 1, "checkpoint");
     assert.equal(nextCheckpoint.generation, 1);
-    assert.deepEqual(nextCheckpoint.sourceSnapshots, initialSnapshots);
+    assert.deepEqual(nextCheckpoint.sourceSnapshotReference, initialSnapshots);
     assert.deepEqual(nextCheckpoint.plan.budgetFrontier, firstPublication.budget);
     assert.equal(nextCheckpoint.budget.aggregateCharacters, firstPublication.budget.aggregateCharacters + nextCheckpoint.callCost.characters);
     assert(nextCheckpoint.callCost.characters > firstPublication.callCost.characters);
@@ -311,7 +315,7 @@ test("source and index requests survive publication replay and reach the next wo
     const nextResult = await new StepFactory().provide(SpecGateRepairService, nextService).create(SpecGateRepairStep).execute();
     assert(["spec-gate-repair-review-required", "spec-gate-repair-ready-for-gate"].includes(nextResult.kind));
     const nextPublication = readProgress(attemptId, 1, "publication");
-    assert.deepEqual(nextPublication.sourceSnapshots, initialSnapshots);
+    assert.deepEqual(nextPublication.sourceSnapshotReference, initialSnapshots);
     assert.equal(nextPublication.budget.providerCallCount, 2);
     assert.equal(nextPublication.budget.aggregateCharacters,
       firstPublication.budget.aggregateCharacters + nextPublication.callCost.characters + nextPublication.responseCost.characters);

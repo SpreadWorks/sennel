@@ -56,6 +56,7 @@ test("a pure locate context's unavailable response preserves identity through Er
   assert.deepEqual(restored.identity.unitIds, []);
   assert.deepEqual(restored.identity.findingIdentities.map((identity) => identity.toJSON()), [finding.identity]);
   assert.throws(() => restored.assertRequest({ ...request, requestDigest: "d".repeat(64) }), /exact selected request/);
+  assert.throws(() => restored.assertRequest({ ...request, stepId: "spec" }), /selected input identity is invalid/);
   for (const otherStage of [{ groups: [] }, { locations: [] }, { additionalRangeIds: [] }, { decision: "user choice" }]) {
     assert.throws(() => SpecGateRepairInputUnavailable.fromJSON({ ...restored.toJSON(), ...otherStage }), /invalid shape/);
   }

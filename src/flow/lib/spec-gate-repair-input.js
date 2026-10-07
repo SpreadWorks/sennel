@@ -28,7 +28,7 @@ export class SpecGateRepairRuleSet {
 }
 
 /** Match Gate cycle observations to the existing four-part source finding identity. */
-export function readSpecGateRepairInput({ flowManager, state, executionRoot, locations = null, sourceSnapshots = null }) {
+export function readSpecGateRepairInput({ flowManager, state, executionRoot, locations = null, sourceSnapshots = null, captureBudget }) {
   if (sourceSnapshots !== null && !(sourceSnapshots instanceof SpecGateRepairSourceSnapshots)) {
     throw new TypeError("Gate repair source restoration requires its typed canonical snapshot");
   }
@@ -94,7 +94,7 @@ export function readSpecGateRepairInput({ flowManager, state, executionRoot, loc
     };
   });
   const ruleSet = new SpecGateRepairRuleSet({ executionRoot, spec });
-  const sources = sourceSnapshots === null ? readSpecGateRepairSources({ flowManager, state, executionRoot, spec })
+  const sources = sourceSnapshots === null ? readSpecGateRepairSources({ flowManager, state, executionRoot, spec, captureBudget })
     : sourceSnapshots.sources();
   let context = new SpecGateRepairContext({
     spec, baseRevision, findings, guardrails: ruleSet.guardrails, sources,

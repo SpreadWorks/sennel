@@ -6,6 +6,7 @@ import { FlowManager } from "../../../src/lib/flow-manager.js";
 import { PromptLogicalFootprint } from "../../../src/lib/prompt-batching.js";
 import { WorkerArtifactHandoffCoordinator, workerArtifactHandoffPolicy } from "../../../src/flow/lib/worker-artifact-handoff.js";
 import { SpecGateRepairCallPlan, specGateRepairCallFootprint } from "../../../src/flow/lib/spec-gate-repair-call-plan.js";
+import { SpecGateRepairInputUnavailable } from "../../../src/flow/lib/spec-gate-repair-input-unavailable.js";
 import { latestRepairBudget } from "../../../src/flow/lib/spec-gate-repair-progress.js";
 import { reserveSpecGateRepairWorkerCall } from "../../../src/flow/engine/composition/spec-gate-repair.js";
 import { workerArtifactStableStringify } from "../../../src/flow/lib/worker-artifact-input-format.js";
@@ -84,7 +85,10 @@ describe("Spec Gate repair selected input descriptor", () => {
       assert.deepEqual(manager.canonicalState(value.specId).toJSON(), before);
       fs.rmSync(deliveryPath);
       assert.throws(() => decode(), { code: "ENOENT" });
-      assert.equal(workerArtifactStableStringify(decode({ allowUnavailableDelivery: true }).document), text);
+      const unavailable = SpecGateRepairInputUnavailable.fromRequest(request, {
+        reason: "file-read-failed", explanation: "The delivery file was removed after its canonical checkpoint." });
+      unavailable.assertRequest(request);
+      assert.equal(workerArtifactStableStringify(decode({ unavailable }).document), text);
       assert.deepEqual(manager.canonicalState(value.specId).toJSON(), before);
       assert.equal(plan.saved.calls[0].deliveryMode, mode);
       const claimed = JSON.parse(manager.readArtifact({ specId: value.specId,

@@ -1400,6 +1400,7 @@ class DraftWorkerRecoveryReader {
   canonicalState() { return this.view.state; }
   activityLedger() { return this.view.activities.map((activity) => activity.toJSON()); }
   artifactCatalog() { return this.view.catalog; }
+  readCanonicalTransitionView({ read }) { return read(this.view); }
   specLocation() { return this.view.location; }
   readArtifact(input) { return this.store.readArtifact({ ...input, view: this.view }); }
 }
@@ -3295,7 +3296,7 @@ export class CanonicalFlowManagerStore {
 
   /** Reopen draft through one of the three definition-owned recovery routes. */
   reopenDraft({ specId = null, route, reason = "", source = null, result = null,
-    draftReturn = null, artifactBaselines = null } = {}) {
+    draftReturn = null, artifactBaselines = null, publicationLimits = undefined } = {}) {
     const resolved = this.#resolveSpecId(specId);
     if (resolved === null) throw new CurrentFlowStateInvariantError("no canonical active Flow");
     if (!new Set(["preimplementation", "task-addition", "spec-correction"]).has(route)) {
@@ -3354,6 +3355,7 @@ export class CanonicalFlowManagerStore {
       owned.artifact.logicalKey === value.artifact.logicalKey
     )));
     return this.runtime.reopenDraft({
+      publicationLimits,
       specId: resolved,
       activityId: activityId(`draft-reopened-${route}`),
       route,
@@ -4466,7 +4468,7 @@ export class CanonicalFlowManagerStore {
    * and replaces the catalog descriptors.  It deliberately accepts no
    * mutable flow-state callback.
    */
-  confirmCurrentAttempt({ specId = null, status = "done", result = null, stepResult = null, settlementReceipt = null, commandResult = undefined, references = undefined, specRecord = undefined, artifactWrites = [], artifactRemovals = undefined, artifactBaselines = undefined, testSourceBaseline = undefined, gateTransitionDecision = null, gateTaskLifecycle = undefined, planGateRepairOutcome = null, admission = undefined, specWorkerSettlement = null, specSelection = null, targetAttempt = null } = {}) {
+  confirmCurrentAttempt({ specId = null, status = "done", result = null, stepResult = null, settlementReceipt = null, commandResult = undefined, references = undefined, specRecord = undefined, artifactWrites = [], artifactRemovals = undefined, artifactBaselines = undefined, testSourceBaseline = undefined, gateTransitionDecision = null, gateTaskLifecycle = undefined, planGateRepairOutcome = null, admission = undefined, specWorkerSettlement = null, specSelection = null, targetAttempt = null, publicationLimits = undefined } = {}) {
     const resolved = this.#resolveSpecId(specId);
     if (resolved === null) throw new CurrentFlowStateInvariantError("no canonical active Flow");
     const state = this.runtime.load(resolved);
@@ -4534,6 +4536,7 @@ export class CanonicalFlowManagerStore {
       decision: gateTransitionDecision,
     });
     return this.runtime.confirmAttempt({
+      publicationLimits,
       specId: resolved,
       activityId: confirmationActivityId,
       status,
@@ -4794,6 +4797,7 @@ export class CanonicalFlowManagerStore {
     planGateRepairOutcome = null,
     gatePublication = null,
     specSelection = null,
+    publicationLimits = undefined,
   }) {
     const base = lifecycleResult ?? {
       outcome: "failed",
@@ -4836,6 +4840,7 @@ export class CanonicalFlowManagerStore {
       }];
     })();
     const next = this.failCurrentAttempt({
+      publicationLimits,
       specId: resolved,
       failure: {
         category: gatePublication?.facts.failureCategory
@@ -4878,7 +4883,7 @@ export class CanonicalFlowManagerStore {
     });
   }
 
-  #recordDraftExecutionLifecycle({ resolved, binding, stepResult, settlement, executionLifecycle, artifactWrites = [] }) {
+  #recordDraftExecutionLifecycle({ resolved, binding, stepResult, settlement, executionLifecycle, artifactWrites = [], publicationLimits = undefined }) {
     if (!(stepResult instanceof StepResult) || !(settlement instanceof DraftExecutionSettlement)
       || settlement.sourceStepId !== stepResult.stepId
       || !(executionLifecycle instanceof DraftStepExecutionLifecycle)
@@ -4909,6 +4914,7 @@ export class CanonicalFlowManagerStore {
       receipt,
     );
     const next = this.runtime.recordDraftStepSettlement({
+      publicationLimits,
       specId: resolved,
       activityId: activityId(`draft-execution-${executionLifecycle.phase}`),
       result,
@@ -4918,7 +4924,7 @@ export class CanonicalFlowManagerStore {
   }
 
   /** Atomically reserve one execution generation before request materialization. */
-  checkpointDraftStepExecution({ specId = null, binding, stepResult, settlement, executionBinding, rejection = null, artifactWrites = [] } = {}) {
+  checkpointDraftStepExecution({ specId = null, binding, stepResult, settlement, executionBinding, rejection = null, artifactWrites = [], publicationLimits = undefined } = {}) {
     const resolved = this.#resolveSpecId(specId ?? binding?.specId);
     if (resolved === null) throw new CurrentFlowStateInvariantError("no canonical active Flow");
     if (!(executionBinding instanceof DraftReviewExecutionBinding)
@@ -4926,6 +4932,7 @@ export class CanonicalFlowManagerStore {
       throw new CurrentFlowStateInvariantError("Draft execution checkpoint requires a typed execution binding");
     }
     return this.#recordDraftExecutionLifecycle({
+      publicationLimits,
       resolved,
       binding,
       stepResult,
@@ -4944,6 +4951,7 @@ export class CanonicalFlowManagerStore {
     executionBinding,
     executionClaim,
     artifactWrites = [],
+    publicationLimits = undefined,
   } = {}) {
     const resolved = this.#resolveSpecId(specId ?? binding?.specId);
     if (resolved === null) throw new CurrentFlowStateInvariantError("no canonical active Flow");
@@ -4956,6 +4964,7 @@ export class CanonicalFlowManagerStore {
       throw new CurrentFlowStateInvariantError("Draft execution claim requires a typed claim");
     }
     return this.#recordDraftExecutionLifecycle({
+      publicationLimits,
       resolved,
       binding,
       stepResult,
@@ -5267,7 +5276,7 @@ export class CanonicalFlowManagerStore {
   }
 
   /** Complete a published intermediate Gate repair response in the same Attempt. */
-  completeSpecGateRepairProgress({ binding, stepResult, settlement, publicationReceipt }) {
+  completeSpecGateRepairProgress({ binding, stepResult, settlement, publicationReceipt, publicationLimits = undefined }) {
     const resolved = this.#resolveSpecId(binding?.specId);
     const current = this.readCurrentStepSettlement({ specId: resolved, stepId: "spec-gate-repair" });
     const generation = current?.receipt.executionLifecycle?.binding.executionGeneration;
@@ -5303,7 +5312,7 @@ export class CanonicalFlowManagerStore {
       requestDigest: current.receipt.executionLifecycle.claim.requestDigest,
       resultKind: stepResult.kind,
     };
-    const committed = this.settleSpecStepResult({ binding, stepResult, settlement,
+    const committed = this.settleSpecStepResult({ publicationLimits, binding, stepResult, settlement,
       artifactWrites: [{ logicalKey: "spec.gate.repair.progress",
         parameters: { attemptId: binding.attempt.id, generation: String(generation), phase: "completed" },
         mediaType: "application/json",
@@ -5488,6 +5497,7 @@ export class CanonicalFlowManagerStore {
     draftGateRepairSelection = null,
     preparation = null,
     draftReturn = null,
+    publicationLimits = undefined,
   } = {}) {
     const resolved = this.#resolveSpecId(specId ?? binding?.specId);
     if (resolved === null) throw new CurrentFlowStateInvariantError("no canonical active Flow");
@@ -5628,6 +5638,7 @@ export class CanonicalFlowManagerStore {
     }
     if (settlement instanceof StepErrorDecision) {
       return this.#settleStepErrorResult({
+        publicationLimits,
         resolved, binding, stepResult, settlement, receipt, lifecycleResult, commandResult,
         gatePublication,
       });
@@ -5655,7 +5666,7 @@ export class CanonicalFlowManagerStore {
         || settlement.targetStepId !== "draft") {
         throw new CurrentFlowStateConflictError("Spec Gate repair Draft return differs from its selected Attempt");
       }
-      const next = this.reopenDraft({ specId: resolved, route: draftReturn.route,
+      const next = this.reopenDraft({ publicationLimits, specId: resolved, route: draftReturn.route,
         draftReturn, result: baseResult, artifactBaselines });
       return Object.freeze({ state: next, receipt });
     }
@@ -5663,6 +5674,7 @@ export class CanonicalFlowManagerStore {
       const issueWrite = this.#specGateIssueWrite({ resolved, binding, issue: gatePublication.issue });
       if (stepResult instanceof SpecGatePassedResult || stepResult instanceof TaskSpecGatePassedResult) {
         const next = this.confirmCurrentAttempt({
+          publicationLimits,
           specId: resolved, stepResult, settlementReceipt: receipt, commandResult,
           admission: gatePublication,
         });
@@ -5675,6 +5687,7 @@ export class CanonicalFlowManagerStore {
           confirmedAt: new Date().toISOString(), artifactRefs: [],
         }, binding.stepId, stepResult, receipt);
         const next = this.runtime.settleSpecGateRetry({
+          publicationLimits,
           specId: resolved, activityId: activityId("spec-gate-retry"),
           attempt: gateRetryAttempt(state),
           failure: {
@@ -5705,6 +5718,7 @@ export class CanonicalFlowManagerStore {
         });
         const nextIssueLog = repair.appendToIssueLog(issueLog);
         const next = this.runtime.planGateRepair({
+          publicationLimits,
           specId: resolved, activityId: settlementActivityId,
           nodeId: binding.stepId,
           attempt: commandContextAttempt(state, repair.targetStepId),
@@ -5730,6 +5744,7 @@ export class CanonicalFlowManagerStore {
         });
         const publication = findings.settlementArtifacts();
         const next = this.confirmCurrentAttempt({
+          publicationLimits,
           specId: resolved, stepResult, settlementReceipt: receipt, commandResult,
           artifactWrites: [...publication.artifactWrites, ...(issueWrite === null ? [] : [issueWrite])],
           artifactBaselines: publication.artifactBaselines,
@@ -5744,6 +5759,7 @@ export class CanonicalFlowManagerStore {
           state, binding, stepResult, commandResult,
         });
         const next = this.runtime.recordDraftStepSettlement({
+          publicationLimits,
           specId: resolved, activityId: activityId("spec-gate-settled"), result: baseResult,
           artifactWrites: [...writes, ...(issueWrite === null ? [] : [issueWrite])],
           nonblocking: observation?.toJSON() ?? null,
@@ -5753,6 +5769,7 @@ export class CanonicalFlowManagerStore {
       }
       if (stepResult instanceof SpecGateRecoveredResult || stepResult instanceof TaskSpecGateRecoveredResult) {
         const next = this.runtime.settleSpecGateRecovered({
+          publicationLimits,
           specId: resolved, activityId: activityId("spec-gate-recovered"),
           attempt: gateRecoveredAttempt(state), result: baseResult,
           artifactWrites: writes,
@@ -5764,6 +5781,7 @@ export class CanonicalFlowManagerStore {
     }
     if (!(settlement instanceof StepRoute)) {
       const next = this.runtime.recordDraftStepSettlement({
+        publicationLimits,
         specId: resolved,
         activityId: activityId("draft-step-settled"),
         result: baseResult,
@@ -5789,6 +5807,7 @@ export class CanonicalFlowManagerStore {
         throw new CurrentFlowStateInvariantError("coverage PASS settlement requires its Review history publication");
       }
       const next = this.#applyDraftCompletionApplication({
+        publicationLimits,
         specId: resolved,
         application: draftCompletionApplication,
         result: lifecycleResult,
@@ -5861,6 +5880,7 @@ export class CanonicalFlowManagerStore {
         const nextIssueLog = repair.appendToIssueLog(sourceIssue.document);
         const target = repair.targetStepId;
         const next = this.runtime.planGateRepair({
+          publicationLimits,
           specId: resolved,
           activityId: settlementActivityId,
           nodeId: binding.stepId,
@@ -5903,6 +5923,7 @@ export class CanonicalFlowManagerStore {
         }
         const publication = findings.settlementArtifacts();
         const next = this.confirmCurrentAttempt({
+          publicationLimits,
           specId: resolved,
           stepResult,
           settlementReceipt: receipt,
@@ -5914,6 +5935,7 @@ export class CanonicalFlowManagerStore {
       }
       if (stepResult instanceof DraftGatePassedResult) {
         const next = this.confirmCurrentAttempt({
+          publicationLimits,
           specId: resolved,
           stepResult,
           settlementReceipt: receipt,
@@ -5931,6 +5953,7 @@ export class CanonicalFlowManagerStore {
       throw new CurrentFlowStateInvariantError("Draft Gate settlement Result is unsupported");
     }
     const next = this.confirmCurrentAttempt({
+      publicationLimits,
       specId: resolved,
       result: lifecycleResult,
       stepResult,
@@ -5971,9 +5994,11 @@ export class CanonicalFlowManagerStore {
     specReviewWorkerSelection = null,
     executionLifecycle = undefined,
     draftReturn = null,
+    publicationLimits = undefined,
   } = {}) {
     if (binding?.stepId === "spec-gate") {
       return this.settleDraftStepResult({
+        publicationLimits,
         specId, binding, stepResult, settlement, commandResult, gatePublication,
         lifecycleResult, references, artifactWrites, artifactRemovals, artifactBaselines,
       });
@@ -5986,6 +6011,7 @@ export class CanonicalFlowManagerStore {
         throw new CurrentFlowStateInvariantError("Spec Review settlement requires its typed Result and route");
       }
       return this.settleDraftStepResult({
+        publicationLimits,
         specId, binding, stepResult, settlement, commandResult,
         lifecycleResult, references, artifactWrites, artifactRemovals, artifactBaselines,
       });
@@ -6018,6 +6044,7 @@ export class CanonicalFlowManagerStore {
         throw new CurrentFlowStateInvariantError("Spec Gate repair requires a concrete selected Result");
       }
       return this.settleDraftStepResult({
+        publicationLimits,
         specId, binding, stepResult, settlement,
         specRecord, lifecycleResult, references,
         artifactWrites, artifactRemovals, artifactBaselines,
@@ -6128,11 +6155,13 @@ export class CanonicalFlowManagerStore {
     }
     if (errorSettlement) {
       return this.#settleStepErrorResult({
+        publicationLimits,
         resolved, binding, stepResult, settlement, receipt, lifecycleResult,
         planGateRepairOutcome, specSelection,
       });
     }
     const next = this.confirmCurrentAttempt({
+      publicationLimits,
       specId: resolved,
       result: lifecycleResult,
       stepResult,
@@ -6516,6 +6545,7 @@ export class CanonicalFlowManagerStore {
     artifactBaselines = [],
     settlementReceipt = null,
     prospectiveReview = null,
+    publicationLimits = undefined,
   } = {}) {
     if (stepResult !== null && (!(stepResult instanceof StepResult) || stepResult.type !== STEP_RESULT_TYPE.COMPLETED)) {
       throw new CurrentFlowStateInvariantError("draft coverage completion requires completed StepResult");
@@ -6786,6 +6816,7 @@ export class CanonicalFlowManagerStore {
       }],
     };
     return this.runtime.completeDraftCompletion({
+      publicationLimits,
       specId: resolved,
       activityId: completionActivityId,
       result: confirmation,
@@ -7250,7 +7281,7 @@ export class CanonicalFlowManagerStore {
    * error counterpart to `confirmCurrentAttempt`; callers never mutate a
    * status blob or write a retry artifact beside flow.json.
    */
-  failCurrentAttempt({ specId = null, failure, result, stepResult = null, settlementReceipt = null, commandResult = undefined, artifactWrites: extraArtifactWrites = [], failureActivityId = null, taskReviewUnsealedCheckpoint = null, taskReviewAbortedWorkUnit = null, admission = undefined, nonblocking = null } = {}) {
+  failCurrentAttempt({ specId = null, failure, result, stepResult = null, settlementReceipt = null, commandResult = undefined, artifactWrites: extraArtifactWrites = [], failureActivityId = null, taskReviewUnsealedCheckpoint = null, taskReviewAbortedWorkUnit = null, admission = undefined, nonblocking = null, publicationLimits = undefined } = {}) {
     const resolved = this.#resolveSpecId(specId);
     if (resolved === null) throw new CurrentFlowStateInvariantError("no canonical active Flow");
     const state = this.runtime.load(resolved);
@@ -7319,6 +7350,7 @@ export class CanonicalFlowManagerStore {
     if (taskReviewUnsealedCheckpoint !== null) artifactWrites.push(taskReviewCheckpointArtifact(taskReviewUnsealedCheckpoint));
     if (taskReviewAbortedWorkUnit !== null) artifactWrites.push(taskReviewAbortedWorkUnit.artifactWrite);
     return this.runtime.failAttempt({
+      publicationLimits,
       specId: resolved,
       activityId: failureActivityId ?? activityId("attempt-failed"),
       failure,
@@ -8518,11 +8550,14 @@ export class CanonicalFlowManagerStore {
    * Resolve one cataloged input through the same Version Store that wrote it.
    * Command code never infers a Version directory or trusts a raw path.
    */
-  readArtifact({ specId = null, logicalKey, parameters = {}, consumerNodeId, optional = false, view = null } = {}) {
+  readArtifact({ specId = null, logicalKey, parameters = {}, consumerNodeId, optional = false, view = null, maxBytes = undefined, onRead = undefined } = {}) {
     const resolved = this.#resolveSpecId(specId);
     if (resolved === null) throw new CurrentFlowStateInvariantError("no canonical active Flow");
     if (optional !== true && optional !== false) {
       throw new CurrentFlowStateInvariantError("canonical artifact optional must be boolean");
+    }
+    if (maxBytes !== undefined && (!Number.isSafeInteger(maxBytes) || maxBytes < 0)) {
+      throw new CurrentFlowStateInvariantError("canonical artifact maxBytes must be a non-negative safe integer");
     }
     const artifact = FLOW_ARTIFACT_CONTRACTS.resolve(requiredText(logicalKey, "canonical artifact logicalKey"), parameters);
     const consumer = FlowArtifactUpdater.fromActivityNodeId(
@@ -8546,13 +8581,12 @@ export class CanonicalFlowManagerStore {
       throw new CurrentFlowStateInvariantError("canonical artifact catalog logical key conflicts with its resolved contract");
     }
     const location = view?.location ?? this.location(resolved);
-    location.assertAuthority(artifact.relativePath, { mustExist: true });
     return Object.freeze({
       descriptor: Object.freeze(descriptor.toJSON()),
       relativePath: artifact.relativePath,
       bytes: view === null
-        ? Buffer.from(fs.readFileSync(location.resolve(artifact.relativePath)))
-        : view.readCatalogedArtifact(descriptor),
+        ? descriptor.readBytes(location, { maxBytes, onRead })
+        : view.readCatalogedArtifact(descriptor, { maxBytes, onRead }),
     });
   }
 

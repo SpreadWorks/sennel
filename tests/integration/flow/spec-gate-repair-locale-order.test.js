@@ -13,7 +13,8 @@ const imports = `
   import assert from "node:assert/strict";
   import { createHash } from "node:crypto";
   import { SpecGateRepairContext } from ${moduleUrl("../../../src/flow/lib/spec-gate-repair-context.js")};
-  import { SpecGateRepairSourceSnapshots } from ${moduleUrl("../../../src/flow/lib/spec-gate-repair-values.js")};
+  import { SpecGateRepairSourceSnapshotManifest, SpecGateRepairSourceSnapshotReference } from ${moduleUrl("../../../src/flow/lib/spec-gate-repair-values.js")};
+  import { SpecGateRepairSourcePublication } from ${moduleUrl("../../../src/flow/lib/spec-gate-repair-source-storage.js")};
   import { SpecGateRepairBundle } from ${moduleUrl("../../../src/flow/lib/spec-gate-repair-bundle.js")};
   import { readSpecGateRepairSources } from ${moduleUrl("../../../src/flow/lib/spec-gate-repair-sources.js")};
   import { FlowManager } from ${moduleUrl("../../../src/lib/flow-manager.js")};
@@ -23,6 +24,19 @@ const imports = `
   import { reserveFixtureSpecGateRepairWorkerCall } from ${moduleUrl("../../support/infrastructure/spec-gate-repair-admission.js")};
   import { validWorkerHandoffSpec } from ${moduleUrl("../../support/infrastructure/worker-artifact.js")};
   import { runGit } from ${moduleUrl("../../../src/lib/git-helpers.js")};
+  const snapshotIdentity = (snapshots) => {
+    const publication = new SpecGateRepairSourcePublication({ snapshots });
+    const writes = publication.artifactWrites();
+    return { reference: publication.reference().toJSON(),
+      manifest: JSON.parse(writes.find((write) => write.artifact.logicalKey === "spec.gate.repair.source.manifest").bytes),
+      blobs: Object.fromEntries(writes.filter((write) => write.artifact.logicalKey === "spec.gate.repair.source.blob")
+        .map((write) => [createHash("sha256").update(write.bytes).digest("hex"), write.bytes.toString("base64")])) };
+  };
+  const restoreSnapshots = (value) => {
+    const manifest = SpecGateRepairSourceSnapshotManifest.fromJSON(value.manifest);
+    new SpecGateRepairSourceSnapshotReference(value.reference).assertBytes(manifest.bytes());
+    return manifest.restore((digest) => Buffer.from(value.blobs[digest], "base64"));
+  };
   const locale = new Intl.Collator().resolvedOptions().locale;
   const output = (value) => console.log(JSON.stringify({ locale, collation: "ä".localeCompare("z"), ...value }));
 `;
@@ -76,7 +90,7 @@ test("repair evidence, index, selection and persisted bundle identities survive 
     }));
     const bundle = SpecGateRepairBundle.fromSelections(selections);
     output({ evidenceDigest: context.evidenceDigest, indexManifest: context.indexManifest().toJSON(),
-      snapshots: context.sourceSnapshots().toJSON(), bundle: bundle.toJSON(), bundleDigest: bundle.digest,
+      snapshots: snapshotIdentity(context.sourceSnapshots()), bundle: bundle.toJSON(), bundleDigest: bundle.digest,
       selections: bundle.selections() });
   `;
   const first = inLocale("en_US", root, script);
@@ -84,14 +98,14 @@ test("repair evidence, index, selection and persisted bundle identities survive 
   const { locale: firstLocale, collation: firstCollation, ...firstIdentity } = first;
   const { locale: secondLocale, collation: secondCollation, ...secondIdentity } = second;
   assert.deepEqual(secondIdentity, firstIdentity);
-  assert.equal(first.snapshots.sources.filter((source) => source.origin.startsWith("src/")).length, 6);
+  assert.equal(first.snapshots.manifest.sources.filter((source) => source.origin.startsWith("src/")).length, 6);
   const persisted = path.join(root, "saved-context.json");
   fs.writeFileSync(persisted, JSON.stringify(firstIdentity));
   const restored = inLocale("sv_SE", root, `
     const saved = JSON.parse(fs.readFileSync(${JSON.stringify(persisted)}, "utf8"));
-    const snapshots = SpecGateRepairSourceSnapshots.fromJSON(saved.snapshots);
+    const snapshots = restoreSnapshots(saved.snapshots);
     const bundle = SpecGateRepairBundle.fromJSON(saved.bundle);
-    output({ snapshots: snapshots.toJSON(), bundle: bundle.toJSON(),
+    output({ snapshots: snapshotIdentity(snapshots), bundle: bundle.toJSON(),
       bundleDigest: bundle.digest, selections: bundle.selections() });
   `);
   assert.deepEqual(restored.snapshots, first.snapshots);
@@ -124,7 +138,7 @@ test("claimed repair checkpoint resumes under another locale and refuses only ch
     assert.equal(lifecycle.phase, "claimed");
     const progress = readSpecGateRepairExecutionProgress({ flowManager: value.flowManager, state, lifecycle });
     output({ root: value.root, specId: value.specId, savedContext: progress.document.context,
-      snapshots: progress.sourceSnapshots.toJSON(), inputDigest: request.inputDigest, inputRevision: request.inputRevision });
+      snapshots: snapshotIdentity(progress.sourceSnapshots), inputDigest: request.inputDigest, inputRevision: request.inputRevision });
   `);
   const restart = `
     const root = ${JSON.stringify(created.root)};
@@ -139,7 +153,7 @@ test("claimed repair checkpoint resumes under another locale and refuses only ch
       const bundle = SpecGateRepairBundle.fromJSON(${JSON.stringify(created.savedContext.bundle)});
       assert.deepEqual(durable(), before);
       output({ evidenceDigest: source.context.evidenceDigest, indexManifest: source.context.indexManifest().toJSON(),
-        snapshots: source.context.sourceSnapshots().toJSON(), bundleDigest: bundle.digest,
+        snapshots: snapshotIdentity(source.context.sourceSnapshots()), bundleDigest: bundle.digest,
         binding: flowManager.draftStepExecutionState({ binding: {
           runId: state.runId, specId, stepId: "spec-gate-repair", attempt: state.attempt,
         } }).lifecycle.binding.toJSON() });

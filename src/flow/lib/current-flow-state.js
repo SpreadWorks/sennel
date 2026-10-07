@@ -9269,7 +9269,7 @@ export class CanonicalTransitionView {
     Object.freeze(this);
   }
 
-  readCatalogedArtifact(descriptor) {
+  readCatalogedArtifact(descriptor, { maxBytes = undefined, onRead = undefined } = {}) {
     if (descriptor === null || typeof descriptor !== "object" || typeof descriptor.relativePath !== "string") {
       throw new CurrentFlowStateInvariantError("canonical transition view requires an artifact descriptor");
     }
@@ -9277,8 +9277,7 @@ export class CanonicalTransitionView {
     if (current.hash !== descriptor.hash || current.activityId !== descriptor.activityId) {
       throw new CurrentFlowStateInvariantError("canonical transition view artifact descriptor changed");
     }
-    current.verify(this.location);
-    return Buffer.from(fs.readFileSync(this.location.resolve(current.relativePath)));
+    return current.readBytes(this.location, { maxBytes, onRead });
   }
 
   readRuntimeArtifact({ logicalKey } = {}) {
@@ -9724,6 +9723,7 @@ export class CurrentFlowVersionStore {
     }
     const options = {
       artifacts,
+      publicationLimits: input?.publicationLimits,
       precondition: (catalog) => {
         const taskReviewStagePlan = activity.transition.taskReviewStagePlan;
         if (taskReviewStagePlan !== null) {

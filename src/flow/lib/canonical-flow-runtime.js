@@ -223,6 +223,7 @@ export class CanonicalFlowRuntime {
     testSourceBaseline,
     sourceWorkerUpgrade,
     admission,
+    publicationLimits,
     retryRecoveryPublication = undefined,
   } = {}) {
     const canonicalActivity = FlowActivity.canonical(activity);
@@ -254,6 +255,7 @@ export class CanonicalFlowRuntime {
       ...(testSourceBaseline !== undefined && { testSourceBaseline }),
       ...(sourceWorkerUpgrade !== undefined && { sourceWorkerUpgrade }),
       ...(admission !== undefined && { admission }),
+      ...(publicationLimits !== undefined && { publicationLimits }),
     });
   }
 
@@ -345,22 +347,22 @@ export class CanonicalFlowRuntime {
 
   /** Persist the accepted Spec Gate retry and its replacement Attempt together. */
   settleSpecGateRetry({ specId, activityId, attempt, failure, result, artifactWrites, metric = null,
-    references, admission = undefined } = {}) {
+    references, admission = undefined, publicationLimits = undefined } = {}) {
     const state = this.#state(specId);
     return this.#applyAttemptTransition(specId, state, {
       id: activityId, nodeId: "spec-gate", operation: "settle_spec_gate_retry",
       attempt: requiredAttempt(attempt, "settleSpecGateRetry"), failure, result,
-      artifactWrites, metric, references, admission,
+      artifactWrites, metric, references, admission, publicationLimits,
     });
   }
 
   settleSpecGateRecovered({ specId, activityId, attempt, result, artifactWrites,
-    references, admission = undefined } = {}) {
+    references, admission = undefined, publicationLimits = undefined } = {}) {
     const state = this.#state(specId);
     return this.#applyAttemptTransition(specId, state, {
       id: activityId, nodeId: "spec-gate", operation: "settle_spec_gate_recovered",
       attempt: requiredAttempt(attempt, "settleSpecGateRecovered"), result,
-      artifactWrites, references, admission,
+      artifactWrites, references, admission, publicationLimits,
     });
   }
 
@@ -416,7 +418,7 @@ export class CanonicalFlowRuntime {
     });
   }
 
-  failAttempt({ specId, activityId, failure, result, timing = null, provider = null, model = null, effort = null, usage = null, references, artifactWrites = undefined, artifactRemovals = undefined, expectedAttempt = null, admission = undefined, nonblocking = null } = {}) {
+  failAttempt({ specId, activityId, failure, result, timing = null, provider = null, model = null, effort = null, usage = null, references, artifactWrites = undefined, artifactRemovals = undefined, expectedAttempt = null, admission = undefined, nonblocking = null, publicationLimits = undefined } = {}) {
     const state = this.#state(specId);
     const expected = expectedAttempt === null ? null : CurrentAttemptIdentity.from(expectedAttempt);
     if (expected !== null && !expected.matches(state)) return null;
@@ -436,6 +438,7 @@ export class CanonicalFlowRuntime {
       artifactWrites,
       artifactRemovals,
       admission,
+      publicationLimits,
       nonblocking,
     });
   }
@@ -460,7 +463,7 @@ export class CanonicalFlowRuntime {
     });
   }
 
-  confirmAttempt({ specId, activityId, result, status = "done", timing = null, provider = null, model = null, effort = null, usage = null, references, specRecord, artifactWrites, artifactRemovals, artifactBaselines, testSourceBaseline, sourceWorkerUpgrade = undefined, admission = undefined, gateTaskLifecycle = null, targetAttempt = null } = {}) {
+  confirmAttempt({ specId, activityId, result, status = "done", timing = null, provider = null, model = null, effort = null, usage = null, references, specRecord, artifactWrites, artifactRemovals, artifactBaselines, testSourceBaseline, sourceWorkerUpgrade = undefined, admission = undefined, gateTaskLifecycle = null, targetAttempt = null, publicationLimits = undefined } = {}) {
     const state = this.#state(specId);
     return this.#applyAttemptTransition(specId, state, {
       id: activityId,
@@ -482,6 +485,7 @@ export class CanonicalFlowRuntime {
       testSourceBaseline,
       sourceWorkerUpgrade,
       admission,
+      publicationLimits,
       gateTaskLifecycle,
     });
   }
@@ -499,6 +503,7 @@ export class CanonicalFlowRuntime {
     testSourceBaseline = undefined,
     nonblocking = null,
     admission = undefined,
+    publicationLimits = undefined,
   } = {}) {
     const state = this.#state(specId);
     return this.#applyAttemptTransition(specId, state, {
@@ -516,6 +521,7 @@ export class CanonicalFlowRuntime {
       testSourceBaseline,
       nonblocking,
       admission,
+      publicationLimits,
     });
   }
 
@@ -595,7 +601,7 @@ export class CanonicalFlowRuntime {
   }
 
   /** One journal entry: publish connector output, confirm source, and expose the target. */
-  completeDraftCompletion({ specId, activityId, result, receipt, references, artifactWrites, artifactRemovals, artifactBaselines, admission } = {}) {
+  completeDraftCompletion({ specId, activityId, result, receipt, references, artifactWrites, artifactRemovals, artifactBaselines, admission, publicationLimits = undefined } = {}) {
     const state = this.#state(specId);
     return this.#applyAttemptTransition(specId, state, {
       id: activityId,
@@ -605,6 +611,7 @@ export class CanonicalFlowRuntime {
       status: "done",
       references,
       artifactWrites,
+      publicationLimits,
       artifactRemovals,
       artifactBaselines,
       admission,
@@ -730,7 +737,7 @@ export class CanonicalFlowRuntime {
 
   /** Apply one fixed draft-reopen route; route selection remains Store-owned. */
   reopenDraft({ specId, activityId, route, attempt, timing = null, provider = null, model = null, effort = null, usage = null, references,
-    result = null, artifactWrites = undefined, artifactBaselines = undefined } = {}) {
+    result = null, artifactWrites = undefined, artifactBaselines = undefined, publicationLimits = undefined } = {}) {
     const state = this.#state(specId);
     if (!new Set(["preimplementation", "task-addition", "spec-correction"]).has(route)) {
       throw new CurrentFlowStateInvariantError("canonical draft reopen route is invalid");
@@ -748,6 +755,7 @@ export class CanonicalFlowRuntime {
       result,
       artifactWrites,
       artifactBaselines,
+      publicationLimits,
       timing: timing ?? { startedAt: now, finishedAt: now, durationMs: 0 },
       provider,
       model,
@@ -758,7 +766,7 @@ export class CanonicalFlowRuntime {
   }
 
   /** Atomically record guarded evidence and replace an active gate Attempt. */
-  planGateRepair({ specId, activityId, nodeId, attempt, result = null, timing = null, provider = null, model = null, effort = null, usage = null, references, artifactWrites = undefined, artifactBaselines = undefined, admission = undefined, gateTaskLifecycle = null, nonblocking = null } = {}) {
+  planGateRepair({ specId, activityId, nodeId, attempt, result = null, timing = null, provider = null, model = null, effort = null, usage = null, references, artifactWrites = undefined, artifactBaselines = undefined, admission = undefined, gateTaskLifecycle = null, nonblocking = null, publicationLimits = undefined } = {}) {
     const state = this.#state(specId);
     return this.#applyAttemptTransition(specId, state, {
       id: activityId,
@@ -773,6 +781,7 @@ export class CanonicalFlowRuntime {
       usage,
       references,
       artifactWrites,
+      publicationLimits,
       artifactBaselines,
       admission,
       gateTaskLifecycle,
@@ -1290,6 +1299,7 @@ export class CanonicalFlowRuntime {
     sourceWorkerUpgrade = undefined,
     nonblocking = null,
     admission = undefined,
+    publicationLimits = undefined,
     retryRecoveryPublication = undefined,
     gateTaskLifecycle = null,
     stepConnectionReceipt = null,
@@ -1358,6 +1368,7 @@ export class CanonicalFlowRuntime {
       testSourceBaseline,
       sourceWorkerUpgrade,
       admission,
+      publicationLimits,
       retryRecoveryPublication,
     });
   }

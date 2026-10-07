@@ -16,6 +16,7 @@ const ROOT_ARTIFACT_KEYS = new Set([
 const RETENTIONS = new Set(["permanent", "transient"]);
 const PLACEMENT_CATEGORIES = new Set(["root-authority", "revision-authority", "step-owner", "step-shared", "independent-deliverable", "transient"]);
 const MUTATION_POLICIES = new Set(["replaceable", "immutable"]);
+const PUBLICATION_IDENTITY_POLICIES = new Set(["current", "first"]);
 const SWITCH_TARGET_ACTIONS = new Set(["switch", "new", "remove"]);
 const INVENTORY_EXCLUSION_CATEGORIES = new Set(["user-deliverable", "historical-temporary"]);
 const AUTHORITY_ACTORS = new Set(["system", ...FLOW_ARTIFACT_AUTHORITY_MATRIX.map((entry) => entry.stepId)]);
@@ -127,6 +128,22 @@ export class FlowArtifactMutationPolicy {
       && (previous.hash !== next.hash || previous.size !== next.size)) {
       throw new Error("immutable artifact publication cannot replace existing bytes");
     }
+  }
+  toString() { return this.value; }
+}
+
+/** Separates equal-content publication identity from permission to change bytes. */
+export class FlowArtifactPublicationIdentityPolicy {
+  constructor(value) {
+    this.value = identifier(value, "artifact publication identity policy");
+    if (!PUBLICATION_IDENTITY_POLICIES.has(this.value)) {
+      throw new Error(`unknown artifact publication identity policy: ${this.value}`);
+    }
+    Object.freeze(this);
+  }
+  selectPublication(previous, next) {
+    return this.value === "first" && previous != null
+      && previous.hash === next.hash && previous.size === next.size ? previous : next;
   }
   toString() { return this.value; }
 }
@@ -800,7 +817,7 @@ export class FlowArtifactAuthoritySlot {
 }
 
 export class FlowArtifactContract {
-  constructor({ logicalKey, canonicalPath, placement, stepOwner = null, mutationPolicy = "replaceable", contentContract = null, retention, ownership, authoritySlot, cataloged = true } = {}) {
+  constructor({ logicalKey, canonicalPath, placement, stepOwner = null, mutationPolicy = "replaceable", publicationIdentityPolicy = "current", contentContract = null, retention, ownership, authoritySlot, cataloged = true } = {}) {
     this.logicalKey = logicalKey instanceof FlowArtifactLogicalKey ? logicalKey : new FlowArtifactLogicalKey(logicalKey);
     this.canonicalPath = canonicalPath instanceof FlowArtifactCanonicalPath ? canonicalPath : new FlowArtifactCanonicalPath(canonicalPath);
     this.retention = retention instanceof FlowArtifactRetention ? retention : new FlowArtifactRetention(retention);
@@ -810,6 +827,8 @@ export class FlowArtifactContract {
     }
     this.stepOwner = stepOwner;
     this.mutationPolicy = mutationPolicy instanceof FlowArtifactMutationPolicy ? mutationPolicy : new FlowArtifactMutationPolicy(mutationPolicy);
+    this.publicationIdentityPolicy = publicationIdentityPolicy instanceof FlowArtifactPublicationIdentityPolicy
+      ? publicationIdentityPolicy : new FlowArtifactPublicationIdentityPolicy(publicationIdentityPolicy);
     if (contentContract !== null && !(contentContract instanceof FlowArtifactContentContract)) {
       throw new Error("artifact content contract must be a typed content contract");
     }
@@ -1534,7 +1553,7 @@ export class FlowArtifactRegistry {
 const FLOW_ARTIFACT_PLACEMENTS = new Map([
   ...["flow.state", "flow.activities", "spec.record", "issue.log", "artifact.catalog", "issue.snapshot"].map((key) => [key, new FlowArtifactPlacement("root-authority")]),
   ...["spec.snapshot", "spec.review"].map((key) => [key, new FlowArtifactPlacement("revision-authority")]),
-  ...["report", "ideas", "tests.source", "test.requirement.failure", "test.requirement.candidate.bundle", "test.requirement.candidate.source", "test.requirement.support", "plugin.lifecycle.artifact", "retry.recovery.baseline", "retry.recovery.receipt", "plan.gate.repair.outcome", "spec.gate.repair.migration", "spec.gate.repair.progress", "spec.gate.repair.audit", "source.handoff.rollback-blob", "source.handoff.checkpoint", "source.handoff.event", "source.handoff.settlement"].map((key) => [key, new FlowArtifactPlacement("independent-deliverable")]),
+  ...["report", "ideas", "tests.source", "test.requirement.failure", "test.requirement.candidate.bundle", "test.requirement.candidate.source", "test.requirement.support", "plugin.lifecycle.artifact", "retry.recovery.baseline", "retry.recovery.receipt", "plan.gate.repair.outcome", "spec.gate.repair.migration", "spec.gate.repair.progress", "spec.gate.repair.audit", "spec.gate.repair.source.blob", "spec.gate.repair.source.manifest", "source.handoff.rollback-blob", "source.handoff.checkpoint", "source.handoff.event", "source.handoff.settlement"].map((key) => [key, new FlowArtifactPlacement("independent-deliverable")]),
   ...["upgrade.result", "completion.overrides", "retry.recovery", "flow.findings", "nonblocking.handoffs"].map((key) => [key, new FlowArtifactPlacement("step-shared")]),
   ...[
     "test.requirement.gate.raw-log", "test.execute.raw-log", "final.regression.raw-log",
@@ -1565,6 +1584,8 @@ const FLOW_ARTIFACT_MUTATION_POLICIES = new Map([
   ["spec.gate.repair.migration", new FlowArtifactMutationPolicy("immutable")],
   ["spec.gate.repair.progress", new FlowArtifactMutationPolicy("immutable")],
   ["spec.gate.repair.audit", new FlowArtifactMutationPolicy("immutable")],
+  ["spec.gate.repair.source.blob", new FlowArtifactMutationPolicy("immutable")],
+  ["spec.gate.repair.source.manifest", new FlowArtifactMutationPolicy("immutable")],
   ["source.handoff.checkpoint", new FlowArtifactMutationPolicy("immutable")],
   ["source.handoff.event", new FlowArtifactMutationPolicy("immutable")],
   ["source.handoff.settlement", new FlowArtifactMutationPolicy("immutable")],
@@ -1574,6 +1595,11 @@ const FLOW_ARTIFACT_MUTATION_POLICIES = new Map([
   ["test.requirement.support", new FlowArtifactMutationPolicy("immutable")],
   ["test.requirement.failure", new FlowArtifactMutationPolicy("immutable")],
   ["test.requirement.deferred", new FlowArtifactMutationPolicy("immutable")],
+]);
+
+const FLOW_ARTIFACT_PUBLICATION_IDENTITY_POLICIES = new Map([
+  ...["spec.gate.repair.source.blob", "spec.gate.repair.source.manifest"]
+    .map((key) => [key, new FlowArtifactPublicationIdentityPolicy("first")]),
 ]);
 
 const FLOW_ARTIFACT_ATTEMPT_HISTORY_KEYS = new Set([
@@ -1665,6 +1691,7 @@ function stepOwnerFor(logicalKey) {
 function contract(logicalKey, canonicalPath, kind, authority, publicationStep, ownership, retention = "permanent", cardinality = "singleton", cataloged = true) {
   return new FlowArtifactContract({
     logicalKey, canonicalPath, placement: placementFor(logicalKey), mutationPolicy: mutationPolicyFor(logicalKey),
+    publicationIdentityPolicy: FLOW_ARTIFACT_PUBLICATION_IDENTITY_POLICIES.get(logicalKey),
     stepOwner: stepOwnerFor(logicalKey),
     contentContract: FLOW_ARTIFACT_CONTENT_BY_KEY.get(logicalKey)
       ?? (FLOW_ARTIFACT_ATTEMPT_HISTORY_KEYS.has(logicalKey)
@@ -1860,6 +1887,12 @@ const FLOW_ARTIFACT_CONTRACT_LIST = Object.freeze([
   contract("spec.gate.repair.audit", "artifacts/spec-gate-repairs/:{attemptId}/audit.json", "spec-gate-repair-audit", "canonical-flow-artifacts", "spec-gate-repair", own(
     "spec-gate-repair", ["spec-gate-repair"], ["spec-gate-repair", "spec-review", "spec-gate"],
   ), "permanent", "collection"),
+  contract("spec.gate.repair.source.blob", "artifacts/spec-gate-repair-sources/blobs/:{digest}.txt", "spec-gate-repair-source-blob", "canonical-flow-artifacts", "spec-gate-repair", own(
+    "spec-gate-repair", ["spec-gate-repair"], ["spec-gate-repair"],
+  ), "permanent", "collection"),
+  contract("spec.gate.repair.source.manifest", "artifacts/spec-gate-repair-sources/manifests/:{digest}.json", "spec-gate-repair-source-manifest", "canonical-flow-artifacts", "spec-gate-repair", own(
+    "spec-gate-repair", ["spec-gate-repair"], ["spec-gate-repair"],
+  ), "permanent", "collection"),
   contract("source.handoff.rollback-blob", "artifacts/source-handoffs/:{handoffId}/rollback/:{blobDigest}.json", "source-handoff-rollback-blob", "canonical-flow-artifacts", "implement", own(SOURCE_HANDOFF_ACTORS, SOURCE_HANDOFF_ACTORS, SOURCE_HANDOFF_ACTORS), "permanent", "collection"),
   contract("source.handoff.checkpoint", "artifacts/source-handoffs/:{handoffId}/checkpoint.json", "source-handoff-checkpoint", "canonical-flow-artifacts", "implement", own(SOURCE_HANDOFF_ACTORS, SOURCE_HANDOFF_ACTORS, SOURCE_HANDOFF_ACTORS), "permanent", "collection"),
   contract("source.handoff.event", "artifacts/source-handoffs/:{handoffId}/events/:{eventSequence}-:{eventDigest}.json", "source-handoff-event", "canonical-flow-artifacts", "implement", own(SOURCE_HANDOFF_ACTORS, SOURCE_HANDOFF_ACTORS, SOURCE_HANDOFF_ACTORS), "permanent", "collection"),
@@ -2022,6 +2055,8 @@ export const FLOW_ARTIFACT_SWITCH_TARGETS = Object.freeze([
   newTarget("plan.gate.repair.outcome", "artifacts/plan-gate-repairs/:{repairId}/outcome.json", "system", "system"),
   newTarget("spec.gate.repair.migration", "artifacts/spec-gate-repairs/migration.json", "system", "spec-gate"),
   newTarget("spec.gate.repair.progress", "artifacts/spec-gate-repairs/:{attemptId}/progress/:{generation}-:{phase}.json", "spec-gate-repair", "spec-gate-repair"),
+  newTarget("spec.gate.repair.source.blob", "artifacts/spec-gate-repair-sources/blobs/:{digest}.txt", "spec-gate-repair", "spec-gate-repair"),
+  newTarget("spec.gate.repair.source.manifest", "artifacts/spec-gate-repair-sources/manifests/:{digest}.json", "spec-gate-repair", "spec-gate-repair"),
   newTarget("spec.gate.repair.audit", "artifacts/spec-gate-repairs/:{attemptId}/audit.json", "spec-gate-repair", "spec-gate"),
   newTarget("source.handoff.rollback-blob", "artifacts/source-handoffs/:{handoffId}/rollback/:{blobDigest}.json", "implement", "implement"),
   newTarget("source.handoff.checkpoint", "artifacts/source-handoffs/:{handoffId}/checkpoint.json", "implement", "implement"),
@@ -2102,6 +2137,8 @@ export const FLOW_ARTIFACT_NORMAL_FLOW_FILES = Object.freeze([
   known("acceptance.review", "switch", "acceptance-review.json"), known("acceptance.review.evidence", "switch", "acceptance-review-evidence.json"), knownNew("acceptance.decision", "steps/acceptance-decision/result.json"), known("final.regression", "switch", "final-regression-result.json"), known("report", "switch", "report.json"), known("ideas", "switch", "ideas.json"), known("ideas", "switch", "plugin-artifacts/workflow/ideas.json"), knownPattern("plugin.lifecycle.artifact", "switch", new FlowArtifactLegacyPattern("plugin-artifacts/:{pluginArtifactPath}", { excludedPrefixes: ["plugin-artifacts/workflow/ideas.json"] })), known("file.map", "switch", "file-map.json"),
   known("upgrade.result", "switch", "upgrade-result.json"), known("placeholder.permission", "switch", "placeholder-permission.json"), known("completion.overrides", "switch", "completion-overrides.json"), known("retry.recovery", "switch", "retry-recovery.json"), knownNew("retry.recovery.baseline", "artifacts/retry-recovery/baselines/:{routeId}/:{attemptId}.json"), knownNew("retry.recovery.receipt", "artifacts/retry-recovery/receipts/:{routeId}/:{attemptId}.json"), knownNew("plan.gate.repair.outcome", "artifacts/plan-gate-repairs/:{repairId}/outcome.json"), knownNew("source.handoff.rollback-blob", "artifacts/source-handoffs/:{handoffId}/rollback/:{blobDigest}.json"), knownNew("source.handoff.checkpoint", "artifacts/source-handoffs/:{handoffId}/checkpoint.json"), knownNew("source.handoff.event", "artifacts/source-handoffs/:{handoffId}/events/:{eventSequence}-:{eventDigest}.json"), knownNew("source.handoff.settlement", "artifacts/source-handoffs/:{handoffId}/settlement.json"), knownNew("task.review.unsealed.checkpoint", "steps/impl/:{taskId}/review/recovery/unsealed/:{attemptId}.json"), knownNew("task.review.recovery.authorization", "steps/impl/:{taskId}/review/recovery/authorizations/:{attemptId}.json"), known("gate.memory", "switch", "gate-impl-memory.json"),
   knownNew("spec.gate.repair.progress", "artifacts/spec-gate-repairs/:{attemptId}/progress/:{generation}-:{phase}.json"),
+  knownNew("spec.gate.repair.source.blob", "artifacts/spec-gate-repair-sources/blobs/:{digest}.txt"),
+  knownNew("spec.gate.repair.source.manifest", "artifacts/spec-gate-repair-sources/manifests/:{digest}.json"),
   knownNew("spec.gate.repair.migration", "artifacts/spec-gate-repairs/migration.json"),
   knownNew("spec.gate.repair.audit", "artifacts/spec-gate-repairs/:{attemptId}/audit.json"),
   known("repair.fingerprint", "switch", "repair-fingerprint.json"), knownPattern("repair.delta", "switch", "repair-deltas/:{deltaId}.json"), known("repair.migration", "switch", "repair-state-migration.json"), known("impl.repair.transaction", "switch", "impl-repair-transaction.json"), knownNew("task.review", "steps/impl/:{taskId}/review/result.json"), knownNew("task.triage", "steps/impl/:{taskId}/triage/result.json"), knownNew("task.repair", "steps/impl/:{taskId}/repair/result.json"),

@@ -44,14 +44,19 @@ export class SpecGateRepairSelectedInputIdentity {
   }
 
   static fromRequest(request) {
+    if (request.stepId !== "spec-gate-repair") throw new TypeError("Gate repair selected input identity is invalid");
     const input = request.inputs.find((entry) => entry.name === "spec-gate-repair-context.json");
     if (input === undefined) throw new TypeError("Gate repair request has no selected input");
-    const locator = input.descriptor.canonicalLocator;
-    const content = input.descriptor.selectedIdentity;
+    return this.fromDescriptor(input.descriptor, request);
+  }
+
+  static fromDescriptor(descriptor, binding) {
+    const locator = descriptor.canonicalLocator;
+    const content = descriptor.selectedIdentity;
     return new SpecGateRepairSelectedInputIdentity({
-      binding: { runId: request.runId, specId: request.specId, stepId: request.stepId,
+      binding: { runId: binding.runId, specId: binding.specId, stepId: "spec-gate-repair",
         attemptId: locator.attemptId, attemptSequence: locator.attemptSequence,
-        inputDigest: request.inputDigest, inputRevision: request.inputRevision, requestDigest: request.requestDigest },
+        inputDigest: binding.inputDigest, inputRevision: binding.inputRevision, requestDigest: binding.requestDigest },
       ...content.toJSON(),
     });
   }
@@ -118,7 +123,15 @@ export class SpecGateRepairInputUnavailable {
   }
 
   assertRequest(request) {
-    if (!isDeepStrictEqual(this.identity.toJSON(), SpecGateRepairSelectedInputIdentity.fromRequest(request).toJSON())) {
+    return this.#assertIdentity(SpecGateRepairSelectedInputIdentity.fromRequest(request));
+  }
+
+  assertDescriptor(descriptor, binding) {
+    return this.#assertIdentity(SpecGateRepairSelectedInputIdentity.fromDescriptor(descriptor, binding));
+  }
+
+  #assertIdentity(identity) {
+    if (!isDeepStrictEqual(this.identity.toJSON(), identity.toJSON())) {
       throw new TypeError("Gate repair input unavailable response differs from its exact selected request");
     }
     return this;

@@ -22,7 +22,6 @@ export default class RunSealHandoffCommand extends FlowCommand {
         requestPath: process.env[WORKER_ARTIFACT_HANDOFF_REQUEST_ENV],
         invocationId: process.env[FLOW_DISPATCH_INVOCATION_ID_ENV],
         mainRoot: ctx.container?.has?.("mainRoot") ? ctx.container.get("mainRoot") : null,
-        flowManager: ctx.container?.has?.("flowManager") ? ctx.container.get("flowManager") : null,
       });
       return Envelope.ok("run", "seal-handoff", result);
     } catch (error) {

@@ -1,4 +1,5 @@
 import { rethrowStepSettlementFailure } from "../lib/definition-lifecycle-failure.js";
+import { FlowArtifactCatalogSnapshotLimits } from "../../lib/flow-version.js";
 
 /** Exact handoff save capability; exposes no state or artifact reader. */
 export class SpecGateRepairSettlementWriter {
@@ -21,7 +22,8 @@ export class SpecGateRepairSettlementWriter {
   }
 
   settle(input, replayed = false) {
-    const selected = { ...this.#publication, ...input, binding: this.#binding };
+    const selected = { ...this.#publication, ...input, binding: this.#binding,
+      publicationLimits: new FlowArtifactCatalogSnapshotLimits() };
     try {
       if (!replayed) this.#handoffCoordinator.faultInjector({
         phase: "before-worker-handoff-publication", stepId: "spec-gate-repair",
@@ -31,11 +33,13 @@ export class SpecGateRepairSettlementWriter {
   }
 
   settleDraftReturn(input) {
-    return this.#ctx.flowManager.commitSpecStepResult({ ...input, binding: this.#binding });
+    return this.#ctx.flowManager.commitSpecStepResult({ ...input, binding: this.#binding,
+      publicationLimits: new FlowArtifactCatalogSnapshotLimits() });
   }
 
   completeProgress(input) {
     return this.#ctx.flowManager.completeSpecGateRepairProgress({ ...input, binding: this.#binding,
+      publicationLimits: new FlowArtifactCatalogSnapshotLimits(),
       publicationReceipt: this.#publicationReceipt });
   }
 

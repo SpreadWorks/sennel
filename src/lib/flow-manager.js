@@ -513,7 +513,7 @@ export class FlowManager {
     }
   }
   completeSpecGateRepairProgress(input = {}) {
-    return this._store.completeSpecGateRepairProgress(input);
+    return this.#commitStepSettlement((selected) => this._store.completeSpecGateRepairProgress(selected), input);
   }
   readCurrentStepSettlement(input = {}) {
     return this._store.readCurrentStepSettlement({

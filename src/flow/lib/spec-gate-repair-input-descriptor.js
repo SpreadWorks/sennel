@@ -7,7 +7,7 @@ import { workerArtifactStableStringify, MAX_WORKER_ARTIFACT_INPUT_BYTES,
   specGateRepairInputFormatUnavailable } from "./worker-artifact-input-format.js";
 export { specGateRepairInputFormatUnavailable } from "./worker-artifact-input-format.js";
 import { WorkerArtifactHandoffError } from "./worker-artifact-handoff-error.js";
-import { SpecGateRepairSelectedContentIdentity } from "./spec-gate-repair-input-unavailable.js";
+import { SpecGateRepairSelectedContentIdentity, SpecGateRepairInputUnavailable } from "./spec-gate-repair-input-unavailable.js";
 import { SpecGateRepairProgressReader } from "./spec-gate-repair-progress-reader.js";
 
 export const SPEC_GATE_REPAIR_INPUT_NAME = "spec-gate-repair-context.json";
@@ -81,6 +81,14 @@ export class SpecGateRepairInputDescriptor {
     selectionDigest: this.selectionDigest, selectionBytes: this.selectionBytes,
     canonicalLocator: this.canonicalLocator.toJSON(), deliveryMode: this.deliveryMode,
     deliveryReference: { ...this.deliveryReference }, selectedIdentity: this.selectedIdentity.toJSON() }; }
+  assertInput(input) {
+    exactKeys(input, ["name", "targetRelativePath", "digest", "byteLength", "descriptor"], "repair descriptor input");
+    if (input.name !== this.logicalName || input.targetRelativePath !== input.name
+      || input.digest !== this.selectionDigest || input.byteLength !== this.selectionBytes
+      || !isDeepStrictEqual(input.descriptor, this.toJSON())) {
+      throw specGateRepairInputFormatUnavailable("Repair input identity differs from its descriptor");
+    }
+  }
   deliveryPath(executionRoot) { return path.resolve(executionRoot, this.deliveryReference.projectRelativePath); }
   expectedReference(executionRoot, bytes) {
     const snapshot = new RegularFileSnapshot({ filePath: this.deliveryPath(executionRoot), bytes });
@@ -93,7 +101,11 @@ export class SpecGateRepairInputDescriptor {
         "Spec Gate repair selected snapshot bytes differ from the descriptor", { retryable: false, recoveryPossible: false });
     }
   }
-  restoreDocument({ flowManager, executionRoot, binding, inputDescriptor, allowUnavailableDelivery = false }) {
+  restoreDocument({ flowManager, executionRoot, binding, inputDescriptor, unavailable = null }) {
+    if (unavailable !== null) {
+      if (!(unavailable instanceof SpecGateRepairInputUnavailable)) throw new TypeError("Repair delivery restoration requires a typed unavailable response");
+      unavailable.assertDescriptor(this, binding);
+    }
     let bytes;
     if (flowManager) {
       const locator = this.canonicalLocator;
@@ -115,7 +127,7 @@ export class SpecGateRepairInputDescriptor {
       delivery = captureRegularFile(this.deliveryPath(executionRoot),
         { label: "Spec Gate repair selected delivery", maxBytes: this.selectionBytes });
     } catch (error) {
-      if (bytes === undefined || !allowUnavailableDelivery
+      if (bytes === undefined || unavailable === null
         || !["ENOENT", "EACCES", "EPERM", "EIO"].includes(error.code)) throw error;
       return JSON.parse(bytes.toString("utf8"));
     }

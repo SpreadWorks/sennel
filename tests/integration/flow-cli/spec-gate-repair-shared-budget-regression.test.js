@@ -6,7 +6,7 @@ import { test } from "node:test";
 import { Agent } from "../../../src/lib/agent.js";
 import { PromptLogicalFootprint } from "../../../src/lib/prompt-batching.js";
 import { workerArtifactStableStringify } from "../../../src/flow/lib/worker-artifact-input-format.js";
-import { SpecGateRepairSourceSnapshots } from "../../../src/flow/lib/spec-gate-repair-values.js";
+import { SpecGateRepairProgressReader } from "../../../src/flow/lib/spec-gate-repair-progress-reader.js";
 import { ProviderRegistry } from "../../../src/lib/provider.js";
 import { Logger } from "../../../src/lib/log.js";
 import { FlowManager } from "../../../src/lib/flow-manager.js";
@@ -88,10 +88,9 @@ test("repairs seven findings in six units with durable ASCII evidence outside th
         assert.equal(selections.flatMap((selection) => selection.unit.findings).length, 7);
         assert.equal(context.bundle.sources.length, 4, "Only required canonical evidence bodies are selected initially");
         assert.equal(sources.reduce((total, source) => total + source.content.length, 0), 602722);
-        const checkpoint = JSON.parse(value.flowManager.readArtifact({ specId: value.specId,
-          logicalKey: "spec.gate.repair.progress", consumerNodeId: "spec-gate-repair",
-          parameters: { attemptId, generation: "0", phase: "checkpoint" } }).bytes.toString("utf8"));
-        const snapshots = SpecGateRepairSourceSnapshots.fromJSON(checkpoint.sourceSnapshots).sources();
+        const snapshots = new SpecGateRepairProgressReader({ flowManager: value.flowManager,
+          specId: value.specId, attemptId, consumerNodeId: "spec-gate-repair" })
+          .read(0, "checkpoint").sourceSnapshots.sources();
         assert.equal(snapshots.length, 23);
         for (const source of sources) {
           const savedSource = snapshots.find((entry) => entry.id === `evidence:source:${source.relative}`);
@@ -162,7 +161,9 @@ test("repairs seven findings in six units with durable ASCII evidence outside th
     const checkpoint = JSON.parse(reloaded.readArtifact({ specId: value.specId,
       logicalKey: "spec.gate.repair.progress", consumerNodeId: "spec-gate-repair",
       parameters: { attemptId, generation: "0", phase: "checkpoint" } }).bytes.toString("utf8"));
-    assert.equal(checkpoint.version, 3);
+    assert.equal(checkpoint.version, 4);
+    assert.equal(Object.hasOwn(checkpoint, "sourceSnapshots"), false);
+    assert.deepEqual(checkpoint.sourceSnapshotReference, context.sourceSnapshotReference);
     assert.equal(checkpoint.plan.version, 1);
     assert.equal(checkpoint.plan.calls.length, 1);
     assert.ok(checkpoint.plan.calls[0].callCost.characters

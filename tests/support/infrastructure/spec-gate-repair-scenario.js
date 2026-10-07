@@ -20,6 +20,45 @@ import { StepFactory } from "../../../src/flow/engine/step-factory.js";
 import { workerArtifactJson } from "./worker-artifact.js";
 import { parseGuardrailArticleEvaluation } from "../../../src/flow/lib/run-gate.js";
 
+/** Reuse the same real Gate producer for an initial or recurring repair Attempt. */
+export async function enterSpecGateRepairScenario({ flowManager, flow, specId,
+  locator = "requirements[R1].desc", requirementRef = "R1",
+  target = { entity: "requirement", id: "R1", field: "desc" },
+  operationKinds = ["edit-text-field"], mutateGateObservations = (observations) => observations,
+  additionalObservations = [],
+} = {}) {
+  if (flowManager.canonicalState(specId).current?.at(-1) !== "spec-gate") flow.activate("spec-gate");
+  const binding = new SpecGateEvaluationBinding({ flowManager, specId });
+  const record = flowManager.readArtifact({ specId, logicalKey: "spec.record", consumerNodeId: "spec-gate" });
+  const spec = JSON.parse(record.bytes.toString("utf8"));
+  const specRevision = `sha256:${createHash("sha256").update(record.bytes).digest("hex")}`;
+  const rawObservations = [{ failureMode: "guardrail-violation",
+    requirementRef, where: { file: "spec.json", locator },
+    observed: "The selected Spec field needs a bounded correction.",
+    targets: [target], allowedTargets: [{ target, operationKinds }] },
+  ...additionalObservations];
+  const observations = mutateGateObservations(parseGuardrailArticleEvaluation(JSON.stringify({ observations: rawObservations }),
+    [...new Set(rawObservations.map((observation) => observation.requirementRef))],
+    { spec, specRevision }));
+  const commandResult = new CanonicalGatePromotion({
+    state: flowManager.canonicalState(specId), phase: "spec", nodeId: "spec-gate",
+  }).promote({ result: "fail", artifacts: { phase: "spec", failureKind: "ai_semantic_fail",
+    failureCode: "GATE_REJECTED", nextAction: { diagnosis: { observations } } } });
+  const issuePublication = new SpecGateIssuePublication({ binding,
+    entry: { step: "spec-gate", phase: "spec", observations,
+      reason: "The selected Spec field needs a correction.", trigger: "gate post hook (auto)",
+      timestamp: binding.assertCurrent().attempt.startedAt } });
+  const preparedGate = await specStepRegistration("spec-gate").create({
+    flowManager, binding, commandResult, issuePublication,
+  });
+  const gate = await preparedGate.step.execute();
+  if (gate.kind !== "spec-gate-repair-required"
+    || flowManager.canonicalState(specId).current?.at(-1) !== "spec-gate-repair") {
+    throw new Error("Spec Gate scenario did not enter its repair Attempt");
+  }
+  return gate;
+}
+
 /** A real failed Gate route, leaving one active bounded repair Attempt. */
 export async function createSpecGateRepairScenario({
   specId = "500-spec-gate-repair-scenario", specRecord = validWorkerHandoffSpec(),
@@ -45,35 +84,8 @@ export async function createSpecGateRepairScenario({
         ...(taskTestStrategy === null ? {} : { test_strategy: taskTestStrategy }) });
     }
     if (beforeGate) await beforeGate({ root, specId, flowManager, flow });
-    if (flowManager.canonicalState(specId).current?.at(-1) !== "spec-gate") flow.activate("spec-gate");
-    const binding = new SpecGateEvaluationBinding({ flowManager, specId });
-    const record = flowManager.readArtifact({ specId, logicalKey: "spec.record", consumerNodeId: "spec-gate" });
-    const spec = JSON.parse(record.bytes.toString("utf8"));
-    const specRevision = `sha256:${createHash("sha256").update(record.bytes).digest("hex")}`;
-    const rawObservations = [{ failureMode: "guardrail-violation",
-      requirementRef, where: { file: "spec.json", locator },
-      observed: "The selected Spec field needs a bounded correction.",
-      targets: [target], allowedTargets: [{ target, operationKinds }] },
-    ...additionalObservations];
-    const observations = mutateGateObservations(parseGuardrailArticleEvaluation(JSON.stringify({ observations: rawObservations }),
-      [...new Set(rawObservations.map((observation) => observation.requirementRef))],
-      { spec, specRevision }));
-    const commandResult = new CanonicalGatePromotion({
-      state: flowManager.canonicalState(specId), phase: "spec", nodeId: "spec-gate",
-    }).promote({ result: "fail", artifacts: { phase: "spec", failureKind: "ai_semantic_fail",
-      failureCode: "GATE_REJECTED", nextAction: { diagnosis: { observations } } } });
-    const issuePublication = new SpecGateIssuePublication({ binding,
-      entry: { step: "spec-gate", phase: "spec", observations,
-        reason: "The selected Spec field needs a correction.", trigger: "gate post hook (auto)",
-        timestamp: binding.assertCurrent().attempt.startedAt } });
-    const preparedGate = await specStepRegistration("spec-gate").create({
-      flowManager, binding, commandResult, issuePublication,
-    });
-    const gate = await preparedGate.step.execute();
-    if (gate.kind !== "spec-gate-repair-required"
-      || flowManager.canonicalState(specId).current?.at(-1) !== "spec-gate-repair") {
-      throw new Error("Spec Gate scenario did not enter its repair Attempt");
-    }
+    await enterSpecGateRepairScenario({ flowManager, flow, specId, locator, requirementRef,
+      target, operationKinds, mutateGateObservations, additionalObservations });
     const ctx = { root, mainRoot: root, executionRoot: root, specId, flowManager };
     const invocation = { id: "dispatch-spec-gate-repair", target: { digest: "b".repeat(64) },
       action: { digest: "a".repeat(64), nextAction: { step: "spec-gate-repair" } } };

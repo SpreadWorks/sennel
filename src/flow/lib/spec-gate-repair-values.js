@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { WorkerArtifactHandoffError } from "./worker-artifact-handoff-error.js";
 import { SpecJsonValidator } from "../../lib/spec-json-validator.js";
 import { compareText } from "./text-order.js";
+import { workerArtifactStableStringify } from "./worker-artifact-input-format.js";
 
 const sourceDigest = (content) => createHash("sha256").update(content, "utf8").digest("hex");
 
@@ -16,6 +17,9 @@ export class SpecGateRepairSource {
       throw new TypeError("Repair source requires an identity, origin, revision and text");
     }
     if (availability !== "available" && content !== "") throw new TypeError("Unavailable repair source cannot contain captured text");
+    // Captured text represents its exact UTF-8 bytes, including request strings.
+    // Normalize ill-formed JS surrogate text once so restore and selection agree.
+    content = Buffer.from(content, "utf8").toString("utf8");
     this.id = `evidence:${id}`;
     this.origin = origin;
     this.revision = revision;
@@ -86,20 +90,79 @@ export class SpecGateRepairSourceSnapshots {
     this.#sources = Object.freeze([...sources].sort((a, b) => compareText(a.id, b.id)));
     Object.freeze(this);
   }
-  toJSON() { return { version: 1, sources: this.#sources.map((source) => ({ ...source.descriptor(), content: source.content })) }; }
   sources() { return [...this.#sources]; }
-  static fromJSON(value) {
-    if (!value || value.version !== 1 || Object.keys(value).sort().join(",") !== "sources,version"
-      || !Array.isArray(value.sources)) throw new TypeError("Repair source snapshot format unavailable");
-    return new SpecGateRepairSourceSnapshots(value.sources.map((entry) => {
-      if (!entry.id?.startsWith("evidence:") || Object.keys(entry).sort().join(",")
-        !== "appliesTo,availability,byteLength,content,digest,id,origin,required,revision") {
-        throw new TypeError("Invalid repair source snapshot descriptor");
-      }
-      const source = new SpecGateRepairSource({ ...entry, id: entry.id.slice("evidence:".length) });
-      if (source.digest !== entry.digest || source.byteLength !== entry.byteLength) throw new Error("Repair source snapshot digest mismatch");
-      return source;
-    }));
+}
+
+/** An exact content identity, never a caller-selected path or Activity. */
+export class SpecGateRepairSourceSnapshotReference {
+  constructor(value) {
+    if (!value || Object.keys(value).sort().join(",") !== "byteLength,digest"
+      || typeof value.digest !== "string" || !/^[a-f0-9]{64}$/.test(value.digest)
+      || !Number.isSafeInteger(value.byteLength) || value.byteLength < 0) {
+      throw new TypeError("Repair source reference requires its exact digest and byte length");
+    }
+    this.digest = value.digest;
+    this.byteLength = value.byteLength;
+    Object.freeze(this);
+  }
+  toJSON() { return { digest: this.digest, byteLength: this.byteLength }; }
+  assertBytes(bytes) {
+    if (!Buffer.isBuffer(bytes) || bytes.length !== this.byteLength
+      || sourceDigest(bytes) !== this.digest) throw new Error("Repair source snapshot digest mismatch");
+  }
+}
+
+/** Metadata for a captured source; available bodies live in separate immutable blobs. */
+class SpecGateRepairSourceDescriptor {
+  constructor(value) {
+    if (!value || Object.keys(value).sort().join(",") !== "appliesTo,availability,byteLength,digest,id,origin,required,revision"
+      || typeof value.id !== "string" || !value.id.startsWith("evidence:") || value.id === "evidence:"
+      || typeof value.origin !== "string" || !value.origin || typeof value.revision !== "string" || !value.revision
+      || typeof value.digest !== "string" || !/^[a-f0-9]{64}$/.test(value.digest)
+      || !Number.isSafeInteger(value.byteLength) || value.byteLength < 0
+      || !["available", "missing", "unavailable"].includes(value.availability)
+      || typeof value.required !== "boolean" || !Array.isArray(value.appliesTo)
+      || value.appliesTo.some((scope) => typeof scope !== "string")
+      || value.appliesTo.some((scope, index) => index > 0 && compareText(value.appliesTo[index - 1], scope) >= 0)
+      || value.availability !== "available" && (value.byteLength !== 0 || value.digest !== sourceDigest(""))) {
+      throw new TypeError("Invalid repair source manifest descriptor");
+    }
+    Object.assign(this, value, { appliesTo: Object.freeze([...value.appliesTo]) });
+    Object.freeze(this);
+  }
+  toJSON() { return { ...this, appliesTo: [...this.appliesTo] }; }
+  restore(bytes) {
+    new SpecGateRepairSourceSnapshotReference({ digest: this.digest, byteLength: this.byteLength }).assertBytes(bytes);
+    const content = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes);
+    const source = new SpecGateRepairSource({ ...this, id: this.id.slice("evidence:".length), content });
+    if (source.digest !== this.digest || source.byteLength !== this.byteLength) throw new Error("Repair source snapshot digest mismatch");
+    return source;
+  }
+}
+
+/** Deterministically ordered bodyless manifest shared by all equal source captures. */
+export class SpecGateRepairSourceSnapshotManifest {
+  #descriptors;
+  constructor(value) {
+    if (!value || Object.keys(value).sort().join(",") !== "sources,version"
+      || value.version !== 1 || !Array.isArray(value.sources)) throw new TypeError("Invalid repair source manifest format");
+    this.#descriptors = Object.freeze(value.sources.map((entry) => new SpecGateRepairSourceDescriptor(entry)));
+    if (this.#descriptors.some((entry, index) => index > 0 && compareText(this.#descriptors[index - 1].id, entry.id) >= 0)) {
+      throw new TypeError("Repair source manifest identities must be unique and sorted");
+    }
+    Object.freeze(this);
+  }
+  static fromSnapshots(snapshots) {
+    if (!(snapshots instanceof SpecGateRepairSourceSnapshots)) throw new TypeError("Repair source manifest requires typed snapshots");
+    return new this({ version: 1, sources: snapshots.sources().map((source) => source.descriptor()) });
+  }
+  static fromJSON(value) { return new this(value); }
+  toJSON() { return { version: 1, sources: this.#descriptors.map((entry) => entry.toJSON()) }; }
+  bytes() { return Buffer.from(workerArtifactStableStringify(this.toJSON()), "utf8"); }
+  reference() { const bytes = this.bytes(); return new SpecGateRepairSourceSnapshotReference({ digest: sourceDigest(bytes), byteLength: bytes.length }); }
+  restore(readBlob) {
+    return new SpecGateRepairSourceSnapshots(this.#descriptors.map((entry) => entry.restore(
+      entry.availability === "available" ? readBlob(entry.digest, entry.byteLength) : Buffer.alloc(0))));
   }
 }
 

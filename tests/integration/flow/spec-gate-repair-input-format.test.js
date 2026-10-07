@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { describe, it } from "node:test";
+import { createHash } from "node:crypto";
+import { CanonicalFlowArtifactWrite } from "../../../src/flow/lib/current-flow-state.js";
 
 import { FlowManager } from "../../../src/lib/flow-manager.js";
 import { SpecGateRepairExecutionFormatUnavailable, SpecGateRepairExecutionStop } from "../../../src/flow/definition.js";
@@ -49,7 +51,7 @@ function durableSnapshot(manager, specId, request) {
 
 function changedProgressWrites(input, change) {
   return input.artifactWrites.map((write) => {
-    assert.equal(write.logicalKey, "spec.gate.repair.progress");
+    if ((write.logicalKey ?? write.artifact?.logicalKey) !== "spec.gate.repair.progress") return write;
     const document = JSON.parse(write.bytes.toString("utf8"));
     // Inject the historical format at the normal Store publication boundary.
     // The Store still owns catalog hashes, receipts and the legal lifecycle;
@@ -59,14 +61,29 @@ function changedProgressWrites(input, change) {
   });
 }
 
-function oldProgressWrites(input) {
+function oldProgressWrites(input, version = 2) {
   return changedProgressWrites(input, (document) => {
-    document.version = 2;
+    document.version = version;
     delete document.inputDescriptors;
     delete document.sourceSnapshots;
+    delete document.sourceSnapshotReference;
     delete document.physicalPromptFootprint;
     delete document.deliveryMode;
   });
+}
+
+function changeFirstSourceBlob(input, missing) {
+  let changed = false;
+  const writes = input.artifactWrites.flatMap((write) => {
+    if (changed || write.artifact?.logicalKey !== "spec.gate.repair.source.blob") return [write];
+    changed = true;
+    if (missing) return [];
+    const digest = createHash("sha256").update(write.bytes).digest("hex");
+    return [new CanonicalFlowArtifactWrite({ logicalKey: write.artifact.logicalKey, parameters: { digest },
+      mediaType: write.mediaType, bytes: Buffer.concat([write.bytes, Buffer.from("tampered")]) })];
+  });
+  assert(changed, "normal capture must produce a source blob at the checkpoint boundary");
+  return writes;
 }
 
 function writeRepairPayload(request) {
@@ -85,6 +102,8 @@ function writeRepairPayload(request) {
 
 describe("unfinished Spec Gate repair input format admission", () => {
   for (const scenario of [
+    { name: "v3 checkpoint", phase: "checkpoint", sealed: false, version: 3,
+      expectedCode: "FLOW_SPEC_GATE_REPAIR_INPUT_FORMAT_UNAVAILABLE" },
     { name: "checkpoint", phase: "checkpoint", sealed: false,
       expectedCode: "FLOW_SPEC_GATE_REPAIR_INPUT_FORMAT_UNAVAILABLE" },
     { name: "claimed with sealed response", phase: "claimed", sealed: true,
@@ -100,7 +119,7 @@ describe("unfinished Spec Gate repair input format admission", () => {
       const method = scenario.phase === "checkpoint" ? "checkpointDraftStepExecution" : "claimDraftStepExecution";
       const save = value.flowManager[method].bind(value.flowManager);
       value.flowManager[method] = (input) => {
-        const result = save({ ...input, artifactWrites: oldProgressWrites(input) });
+        const result = save({ ...input, artifactWrites: oldProgressWrites(input, scenario.version ?? 2) });
         if (scenario.phase === "checkpoint") throw new Error("interrupted after old-format checkpoint publication");
         return result;
       };
@@ -134,7 +153,7 @@ describe("unfinished Spec Gate repair input format admission", () => {
         logicalKey: "spec.gate.repair.progress", consumerNodeId: "spec-gate-repair",
         parameters: { attemptId: state.attempt.id, generation: "0", phase: scenario.phase } });
       const saved = JSON.parse(savedArtifact.bytes.toString("utf8"));
-      assert.equal(saved.version, 2);
+      assert.equal(saved.version, scenario.version ?? 2);
       assert.equal(Object.hasOwn(saved, "inputDescriptors"), false);
       assert.equal(saved.budget.providerCallCount, scenario.phase === "claimed" ? 1 : 0);
       assert.equal(fs.existsSync(request.submissionPath), scenario.sealed);
@@ -185,10 +204,16 @@ describe("unfinished Spec Gate repair input format admission", () => {
   }
 
   for (const scenario of [
-    { name: "missing source snapshots", change: (saved) => { delete saved.sourceSnapshots; },
+    { name: "missing source blob", changeWrites: (input) => changeFirstSourceBlob(input, true),
+      expectedCode: "FLOW_SPEC_GATE_REPAIR_PROGRESS_MISMATCH" },
+    { name: "tampered source content", changeWrites: (input) => changeFirstSourceBlob(input, false),
+      expectedCode: "FLOW_SPEC_GATE_REPAIR_PROGRESS_MISMATCH" },
+    { name: "missing source snapshot reference", change: (saved) => { delete saved.sourceSnapshotReference; },
       expectedCode: "FLOW_SPEC_GATE_REPAIR_INPUT_FORMAT_UNAVAILABLE" },
-    { name: "tampered source content", change: (saved) => { saved.sourceSnapshots.sources[0].content += "changed"; },
-      expectedMessage: "Repair source snapshot digest mismatch" },
+    { name: "missing source manifest", change: (saved) => { saved.sourceSnapshotReference.digest = "0".repeat(64); },
+      expectedCode: "FLOW_SPEC_GATE_REPAIR_PROGRESS_MISMATCH" },
+    { name: "tampered manifest byte length", change: (saved) => { saved.sourceSnapshotReference.byteLength += 1; },
+      expectedCode: "FLOW_SPEC_GATE_REPAIR_PROGRESS_MISMATCH" },
     { name: "missing input descriptors", change: (saved) => { delete saved.inputDescriptors; },
       expectedCode: "FLOW_SPEC_GATE_REPAIR_INPUT_FORMAT_UNAVAILABLE" },
     { name: "tampered descriptor selection digest", change: (saved) => {
@@ -202,7 +227,7 @@ describe("unfinished Spec Gate repair input format admission", () => {
         state: value.flowManager.loadReadOnly(value.specId), invocation: value.invocation });
       const checkpoint = value.flowManager.checkpointDraftStepExecution.bind(value.flowManager);
       value.flowManager.checkpointDraftStepExecution = (input) => {
-        checkpoint({ ...input, artifactWrites: changedProgressWrites(input, scenario.change) });
+        checkpoint({ ...input, artifactWrites: scenario.changeWrites ? scenario.changeWrites(input) : changedProgressWrites(input, scenario.change) });
         throw new Error("interrupted after malformed current checkpoint publication");
       };
       try {
@@ -226,7 +251,7 @@ describe("unfinished Spec Gate repair input format admission", () => {
         logicalKey: "spec.gate.repair.progress", consumerNodeId: "spec-gate-repair",
         parameters: { attemptId: state.attempt.id, generation: "0", phase: "checkpoint" } });
       const saved = JSON.parse(artifact.bytes.toString("utf8"));
-      assert.equal(saved.version, 3);
+      assert.equal(saved.version, 4);
       assert.equal(saved.budget.providerCallCount, 0);
       const before = durableSnapshot(manager, value.specId, request);
       assert.equal(before.execution.phase, "checkpoint");
