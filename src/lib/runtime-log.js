@@ -61,19 +61,77 @@ export class RuntimeLogMetadata {
   }
 }
 
+class RuntimeLogMarker {
+  constructor(match) {
+    this.kind = match[1];
+    this.offset = match.index;
+    this.limit = match.index + match[0].length;
+    this.runId = match[2];
+    this.sequence = Number(match[3]);
+    this.attempt = Number(match[4]);
+    this.command = match[5];
+    this.startedAt = match[6];
+    this.exitCode = match[7] === '""' ? null : Number(match[7]);
+    this.endedAt = match[8] || null;
+    this.binding = JSON.stringify([
+      this.runId, this.sequence, this.attempt, this.command, this.startedAt,
+    ]);
+  }
+}
+
+class RuntimeLogInterval {
+  constructor(source, start) {
+    this.source = source;
+    this.start = start;
+    this.end = null;
+  }
+
+  toText() {
+    // This is an observed interval, including nested or overlapping writes;
+    // stdout/stderr lines do not carry enough information to assign ownership.
+    return this.source.slice(this.start.offset, this.end?.limit ?? this.source.length).trimEnd();
+  }
+}
+
+function parseRuntimeLogIntervals(text) {
+  const markers = [...text.matchAll(/^===== (start|end) runId=([^ \r\n\u2028\u2029]+) sequence=([1-9]\d*) attempt=([1-9]\d*) command="([^"\r\n\u2028\u2029]+)" startedAt="([^"\r\n\u2028\u2029]+)" exitCode=(""|-?\d+) endedAt="([^"\r\n\u2028\u2029]*)" =====\r?$/gm)]
+    .map((match) => new RuntimeLogMarker(match));
+  const intervals = [];
+  const byBinding = new Map();
+  for (const marker of markers) {
+    if (marker.kind !== "start" || marker.exitCode !== null || marker.endedAt !== null) continue;
+    const interval = new RuntimeLogInterval(text, marker);
+    intervals.push(interval);
+    const group = byBinding.get(marker.binding) || [];
+    group.push(interval);
+    byBinding.set(marker.binding, group);
+  }
+  for (const marker of markers) {
+    if (marker.kind !== "end" || marker.exitCode == null || marker.endedAt == null) continue;
+    const group = byBinding.get(marker.binding);
+    // Even a later duplicate start makes the invocation indistinguishable.
+    // Do not choose a start by nesting, order, or the apparent end of a slice.
+    if (group?.length !== 1) continue;
+    const interval = group[0];
+    if (marker.offset > interval.start.offset && interval.end == null) interval.end = marker;
+  }
+  return intervals;
+}
+
 export class RuntimeLogBlock {
   constructor(text) {
-    this.text = String(text || "");
-    const start = this.text.split("\n")[0] || "";
-    this.runId = start.match(/\brunId=([^ ]+)/)?.[1] || null;
-    this.sequence = Number(start.match(/\bsequence=(\d+)/)?.[1] || 0);
-    this.attempt = Number(start.match(/\battempt=(\d+)/)?.[1] || 0);
-    this.command = start.match(/\bcommand="([^"]*)"/)?.[1] || "";
-    this.startedAt = start.match(/\bstartedAt="([^"]*)"/)?.[1] || null;
-    const end = this.text.trimEnd().split("\n").at(-1) || "";
-    this.complete = /^===== end /.test(end);
-    this.endedAt = end.match(/\bendedAt="([^"]*)"/)?.[1] || null;
-    this.exitCode = this.complete ? Number(end.match(/\bexitCode=(\d+)/)?.[1] || 0) : null;
+    const interval = text instanceof RuntimeLogInterval
+      ? text
+      : parseRuntimeLogIntervals(String(text || ""))[0];
+    this.text = interval ? interval.toText() : String(text || "");
+    this.runId = interval?.start.runId ?? null;
+    this.sequence = interval?.start.sequence ?? 0;
+    this.attempt = interval?.start.attempt ?? 0;
+    this.command = interval?.start.command ?? "";
+    this.startedAt = interval?.start.startedAt ?? null;
+    this.complete = interval?.end != null;
+    this.endedAt = interval?.end?.endedAt ?? null;
+    this.exitCode = interval?.end?.exitCode ?? null;
   }
 
   toJSON() {
@@ -147,13 +205,7 @@ export class RuntimeLogFile {
   }
 
   blocks() {
-    const text = this.read();
-    const starts = [...text.matchAll(/^===== start [^\n]*$/gm)];
-    return starts.map((match, index) => {
-      const start = match.index;
-      const end = starts[index + 1]?.index ?? text.length;
-      return new RuntimeLogBlock(text.slice(start, end).trimEnd());
-    });
+    return parseRuntimeLogIntervals(this.read()).map((interval) => new RuntimeLogBlock(interval));
   }
 
   select(input = {}) {

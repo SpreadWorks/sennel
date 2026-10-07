@@ -18,7 +18,7 @@ import {
   resolveFinalizationRecovery,
 } from "../../../src/flow/definition.js";
 import { FlowOutboxStore, finalizationOutboxIdentity } from "../../../src/flow/lib/flow-outbox.js";
-import { runtimeLogFileForContext } from "../../../src/lib/runtime-log.js";
+import { RuntimeLogBlockWriter, runtimeLogFileForContext } from "../../../src/lib/runtime-log.js";
 import { RepositoryFlowOperationLock } from "../../../src/lib/repository-maintenance-lock.js";
 import { FLOW_COMMANDS } from "../../../src/flow/registry.js";
 import { CanonicalNextActionScenario, makeFlowManager } from "../../support/infrastructure/flow-setup.js";
@@ -240,6 +240,29 @@ describe("finalization recovery next-action projection", () => {
     const replay = await new RunRecoverFinalizationCommand().execute(context(root, manager));
     assert.equal(replay.ok, false);
     assertSameFiles(settled, files(root));
+  });
+
+  it("retains interrupted-sync advice after a nested diagnostic closes without changing saved state", async () => {
+    root = createTmpDir("runtime-log-nested-sync-");
+    const manager = makeFlowManager(root);
+    setupInterruptedRecovery(root, manager);
+    const child = new RuntimeLogBlockWriter({
+      root,
+      flowId: SPEC_ID,
+      runId: RUN_ID,
+      command: "flow get status",
+    });
+    child.capture("stdout", "nested diagnostic finished\n");
+    child.close(0);
+    const reloaded = makeFlowManager(root);
+    const before = files(root);
+
+    const result = await new GetNextActionCommand().execute(context(root, reloaded));
+
+    assert.equal(result.directive.kind, "execute_command");
+    assert.equal(result.directive.actionId, "RECOVER_INTERRUPTED_FINALIZE_SYNC");
+    assert.match(result.directive.nextAction, /flow run recover-finalization/);
+    assertSameFiles(before, files(root));
   });
 
   it("projects a busy recovery lock as Definition-owned blocked state without changing files", async () => {
