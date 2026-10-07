@@ -5,23 +5,12 @@ import { TaskStepIdentity } from "../../../src/flow/lib/task-step-identity.js";
 import { SourceModule, SourceDeclarationHeader, SourceInitializer, SourceReadError, SourceOriginUsage, readParameters, readTypeInvariants, readClassMember, readInvocations, readMemberAccess, readTokens } from "./source-reader.js";
 import { FlowStructureRules } from "./flow-rules.js";
 import { SourceRepository } from "./source-repository.js";
-import { ExecutionCaller, ProductionRegistrations, StructureScopeContract } from "./production-registrations.js";
+import { ExecutionCaller, NamedExecutionShape, ProductionRegistrations, SharedExecutionShape, StructureScopeContract } from "./production-registrations.js";
 
 const nativeClassBases = new Set(["Error", "TypeError", "RangeError", "SyntaxError", "ReferenceError", "AggregateError", "Array", "Map", "Set"]);
 
-class SharedExecutionAdapter {
-  constructor(kind, selector, projector, executor, command) {
-    Object.assign(this, { kind, selector, projector, executor, command });
-    Object.freeze(this);
-  }
-  get contractName() { return `${this.kind}StepExecutionContract`; }
-  get module() { return this.kind === "worker" ? "src/flow/lib/worker-execution-admission.js" : "src/flow/lib/execution-admission.js"; }
-}
-
 const sharedExecutionAdapters = new Map([
-  new SharedExecutionAdapter("gate", "selectGateExecutionAdmission", "projectGateExecutionAdmission", "executeGateSelection", "src/flow/lib/run-gate.js"),
-  new SharedExecutionAdapter("review", "selectReviewExecutionAdmission", "projectReviewExecutionAdmission", "executeReviewSelection", "src/flow/lib/run-review.js"),
-  new SharedExecutionAdapter("worker", "selectWorkerExecutionAdmission", "projectWorkerExecutionAdmission", "executeWorkerExecutionAdmission", "src/flow/lib/run-dispatch.js"),
+  new SharedExecutionShape("gate"), new SharedExecutionShape("review"), new SharedExecutionShape("worker"),
 ].map((adapter) => [adapter.kind, adapter]));
 
 export class StructureScope {
@@ -174,9 +163,13 @@ export class StructureChecker {
     }
     this.#reverseIndex(stepFiles);
     this.#reverseServiceIndex();
-    this.#sharedExecutionSelections(this.scope.contract?.executionShapes ?? []);
-    if (this.scope.contract?.executionShapes.length) this.#declaredExecutionRoutes();
-    else this.#registeredExecutionRoute();
+    this.#sharedExecutionSelections((this.scope.contract?.executionShapes ?? []).filter((shape) => shape instanceof NamedExecutionShape));
+    if (this.scope.contract?.executionShapes.length) {
+      this.#declaredExecutionRoutes();
+      if (this.scope.contract.executionShapes.some((shape) => shape.loaders.some((loader) => loader.module === "src/flow/registry.js"))) {
+        this.#registryRoutes();
+      }
+    } else this.#registeredExecutionRoute();
     return this.report;
   }
 
@@ -186,7 +179,7 @@ export class StructureChecker {
 
   #executionKind(registration) {
     const selector = registration.executionContract?.selectorName;
-    return [...sharedExecutionAdapters.values()].find((adapter) => adapter.selector === selector)?.kind ?? "unknown";
+    return [...sharedExecutionAdapters.values()].find((adapter) => adapter.selectorName === selector)?.kind ?? "unknown";
   }
 
   #fixedScopeContract() {
@@ -265,8 +258,8 @@ export class StructureChecker {
 
   #declaredExecutionRoutes() {
     const contract = this.scope.contract;
-    const selectedCapabilities = this.#declaredLookups();
-    const entryModules = new Set(contract.executionShapes.flatMap((shape) =>
+    const namedShapes = contract.executionShapes.filter((shape) => shape instanceof NamedExecutionShape);
+    const entryModules = new Set(namedShapes.flatMap((shape) =>
       [...shape.callers, ...shape.loaders].map((entry) => entry.module)));
     const entries = new Map([...entryModules].map((file) => [file, new ExecutionEntryBindings(file)]));
     const allowed = new Map();
@@ -281,7 +274,9 @@ export class StructureChecker {
           `registration ${leaf.stepId} lacks named execution form ${leaf.executionForm}`);
       }
     }
-    for (const shape of contract.executionShapes) {
+    if (namedShapes.length === 0) return;
+    const selectedCapabilities = this.#declaredLookups();
+    for (const shape of namedShapes) {
       const file = shape.adapterModule;
       const module = this.#module(file, [this.scope.registrationModule, file], "A10", true);
       const declaration = module?.declaration(shape.contractName);
@@ -349,7 +344,7 @@ export class StructureChecker {
       const module = this.reverseModules.get(bindings.module);
       if (module) this.#declaredBindings(module, bindings.origins, bindings.accepted.values(), "execution entry", bindings.publicNames, true);
     }
-    for (const shape of contract.executionShapes) {
+    for (const shape of namedShapes) {
       const file = shape.adapterModule;
       const lookupNames = new Set(contract.executionShapes.flatMap((entry) => entry.callers.map((caller) => caller.lookupName)));
       const commandModules = new Set(shape.callers.map((caller) => caller.module));
@@ -1304,7 +1299,7 @@ export class StructureChecker {
     const kind = this.#executionKind(registration);
     const adapter = sharedExecutionAdapters.get(kind);
     const contractName = shape?.contractName ?? adapter?.contractName;
-    const contractSource = shape?.adapterModule ?? adapter?.module;
+    const contractSource = shape?.adapterModule ?? adapter?.adapterModule;
     const contractReference = module.references.find((reference) => reference.bindings.get(contractName) === contractName);
     const contractTarget = contractReference && this.#resolve(file, contractReference, [file], "A10");
     const localContract = contractSource === file && module.declaration(contractName) !== null;
@@ -2083,7 +2078,7 @@ export class StructureChecker {
       if (!registration.ServiceClass) continue;
       if (coveredShapes.some((shape) => shape.matches(registration.executionContract))) continue;
       const kind = this.#executionKind(registration);
-      const { selector, projector, executor } = contracts.get(kind) ?? {};
+      const { selectorName: selector, projectorName: projector, executorName: executor } = contracts.get(kind) ?? {};
       const contract = registration.executionContract;
       if (!(contract instanceof StepExecutionContract)
         || contract.selectorName !== selector || contract.projectorName !== projector
@@ -2094,7 +2089,7 @@ export class StructureChecker {
       if (contracts.has(kind)) required.add(kind);
     }
     for (const kind of required) {
-      const { selector, projector, executor, command, module: adapterFile, contractName } = contracts.get(kind);
+      const { selectorName: selector, projectorName: projector, executorName: executor, command, adapterModule: adapterFile, contractName } = contracts.get(kind);
       this.#contractEntry("src/flow/lib/get-next-action.js", "project", kind);
       this.#contractEntry(command, "execute", kind);
       const adapter = this.#module(adapterFile, [adapterFile], "A10", true);

@@ -19,14 +19,16 @@ import { RequirementTestArtifactStore } from "../../src/flow/lib/requirement-tes
 import { ReviewWorkUnit } from "../../src/flow/lib/review-work-unit.js";
 import { sealWorkerArtifactHandoff } from "../../src/flow/lib/worker-artifact-handoff.js";
 import { parseTestReviewFindings } from "../../src/flow/commands/review.js";
-import { CanonicalFlowFixture } from "./infrastructure/flow-setup.js";
+import { CanonicalFlowFixture, canonicalDraftDocument } from "./infrastructure/flow-setup.js";
+import { PrepareArtifactScenario } from "./prepare-artifact-scenario.js";
 import { removeTmpDir } from "./builders/tmp-dir.js";
 import { validWorkerHandoffTaskSpec, workerArtifactJson } from "./infrastructure/worker-artifact.js";
 import { dispatchContainer, fixtureRepository, installGateProviderFake, requestInput, requestPayloadPath } from "./infrastructure/flow-dispatch-scenario.js";
 
 /** Real phase composition. Only the external worker, Review process and AI Gate provider are fake.
  * No lifecycle resolver, canonical publication, receipt, promotion or transition is fabricated.
- * Upstream Draft is immutable fixture setup; Spec itself is produced by its registered dispatcher.
+ * Upstream Draft is an immutable seed unless the caller supplies a normally prepared
+ * Flow; that path also produces Draft through the registered dispatcher.
  */
 export class RequirementTestPhaseScenario {
   static create(t, options = {}) {
@@ -38,14 +40,17 @@ export class RequirementTestPhaseScenario {
 
   constructor(options) {
     this.options = options;
-    this.specId = "904-requirement-phase";
+    if (options.prepared && !(options.prepared instanceof PrepareArtifactScenario)) {
+      throw new TypeError("prepared phase scenarios require the real PrepareArtifactScenario");
+    }
+    this.specId = options.prepared?.specId ?? "904-requirement-phase";
     this.requests = [];
     this.downstreamReviews = [];
     this.reviews = [];
     this.dispatches = [];
     this.reviewWorkUnits = new Map();
     this.resultEvidence = new Map();
-    this.root = fixtureRepository("requirement-test-phase-");
+    this.root = options.prepared?.executionRoot ?? fixtureRepository("requirement-test-phase-");
     this.agent = { call: (prompt, options) => this.worker(prompt, options) };
   }
 
@@ -63,7 +68,7 @@ export class RequirementTestPhaseScenario {
       fs.mkdirSync(path.join(this.root, "project-tests"), { recursive: true });
       fs.writeFileSync(path.join(this.root, "project-tests", "smoke.test.js"), "import test from 'node:test'; test('project starts', () => {});\n");
     }
-    new CanonicalFlowFixture({ flowManager: this.manager, specId: this.specId,
+    if (!this.options.prepared) new CanonicalFlowFixture({ flowManager: this.manager, specId: this.specId,
       runId: "run-requirement-phase", request: "Preserve Requirement tests through approval, Gate and implementation.",
       autoApprove: this.options.autoApprove ?? false,
       execution: { mode: "direct", baseBranch: "main", featureBranch: null },
@@ -93,7 +98,15 @@ export class RequirementTestPhaseScenario {
         this.reviewWorkUnits.set(work.manifest().attemptId, Object.freeze({ manifest: work.manifest(), seal: null }));
         this.options.beforeReview?.(work, this);
       }
-      if (nodeId === "spec-review") {
+      if (["draft-questions-review", "draft-coverage-review"].includes(nodeId)) {
+        const source = JSON.parse(options.env.SENNEL_REVIEW_DRAFT_SOURCE);
+        fs.writeFileSync(path.join(work.root, work.manifestDocument.output.basename), workerArtifactJson({
+          version: 2, phase: nodeId === "draft-questions-review" ? "draft-questions" : "draft-coverage",
+          sourceDraft: "draft.json", sourceDraftRevision: source.revision,
+          generatedAt: "2026-10-06T00:00:00.000Z", verdict: "PASS", summary: "No review findings.",
+          blockingFindings: [], advisoryFindings: [], repairTargets: [],
+        }));
+      } else if (nodeId === "spec-review") {
         const source = JSON.parse(options.env.SENNEL_REVIEW_SPEC_REVIEW_SOURCE);
         const review = new CanonicalSpecReview(JSON.parse(fs.readFileSync(source.sourcePath, "utf8")));
         fs.writeFileSync(path.join(options.env.SENNEL_REVIEW_OUTPUT_DIR, "review.delta.json"), workerArtifactJson(new SpecReviewDelta({
@@ -135,7 +148,11 @@ export class RequirementTestPhaseScenario {
     const invocationId = options.executionEnvironment.SENNEL_FLOW_DISPATCH_INVOCATION_ID;
     const request = JSON.parse(fs.readFileSync(requestPath, "utf8"));
     this.requests.push(request);
-    if (request.stepId === "spec") {
+    if (request.stepId === "draft") {
+      fs.writeFileSync(requestPayloadPath(request, "draft.json"), workerArtifactJson(canonicalDraftDocument({
+        goal: this.options.prepared.request,
+      })));
+    } else if (request.stepId === "spec") {
       fs.writeFileSync(requestPayloadPath(request, "spec.json"), workerArtifactJson(this.spec()));
     } else if (["spec-triage", "spec-repair"].includes(request.stepId)) {
       const review = new CanonicalSpecReview(requestInput(request, "review.json").document);
@@ -306,7 +323,7 @@ export class RequirementTestPhaseScenario {
     this.reviewProcess?.mock.restore();
     syncBuiltinESMExports();
     this.gateProvider?.mock.restore();
-    removeTmpDir(this.root);
+    if (!this.options.prepared) removeTmpDir(this.root);
   }
 }
 
