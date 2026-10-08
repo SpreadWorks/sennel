@@ -7,6 +7,7 @@ import { readSpecGateRepairSources, SpecGateRepairSourceCaptureBudget } from "..
 import { captureRegularFile } from "../../../src/lib/regular-file-snapshot.js";
 import { runGit } from "../../../src/lib/git-helpers.js";
 import { createTmpDir, removeTmpDir } from "../../support/builders/tmp-dir.js";
+import { SpecGateRepairSource, SpecGateRepairSourceSnapshots } from "../../../src/flow/lib/spec-gate-repair-values.js";
 
 function ruleFixture(t) {
   const root = createTmpDir("repair-rule-read-accounting-");
@@ -57,6 +58,9 @@ for (const unmeasurable of [false, true]) {
       limits: new FlowArtifactCatalogSnapshotLimits({ maxArtifactBytes: cap, maxTotalArtifactBytes: cap }),
       maxReadBytes: cap,
     });
+    const ruleSnapshots = new SpecGateRepairSourceSnapshots([new SpecGateRepairSource({
+      id: "project-rules:src/AGENTS.md", origin: "src/AGENTS.md", revision: "saved-rule-identity",
+      content: fs.readFileSync(path.join(root, "src/AGENTS.md"), "utf8"), required: false, appliesTo: ["src"] })]);
     const reader = observeFileReads(root, (file) => {
       if (file !== path.join(root, "AGENTS.md")) return;
       if (unmeasurable) throw Object.assign(new Error("injected read failure after consuming bytes"), { code: "EIO" });
@@ -65,7 +69,7 @@ for (const unmeasurable of [false, true]) {
     let sources;
     try {
       sources = readSpecGateRepairSources({ flowManager: { readArtifact: () => null },
-        state: { request: "Read src/AGENTS.md.", issue: null }, executionRoot: root, spec: {}, captureBudget });
+        state: { request: "Read src/AGENTS.md.", issue: null }, executionRoot: root, ruleSnapshots, captureBudget });
     } finally { reader.restore(); }
     t.diagnostic(JSON.stringify({ cap, physicalReadBytes: reader.events.reduce((total, event) => total + event.byteLength, 0),
       accountedReadBytes: captureBudget.readBytes, remainingReadBytes: captureBudget.remainingReadBytes,

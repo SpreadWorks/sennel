@@ -2,29 +2,16 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { test } from "node:test";
-import { Agent } from "../../../src/lib/agent.js";
-import { ProviderRegistry } from "../../../src/lib/provider.js";
-import { Logger } from "../../../src/lib/log.js";
-import { FlowManager } from "../../../src/lib/flow-manager.js";
-import { FlowTargetBinding } from "../../../src/lib/flow-target-guard.js";
-import RunDispatchCommand from "../../../src/flow/lib/run-dispatch.js";
 import { initGitRepo, commitAll } from "../../support/infrastructure/git-repo.js";
 import { SpecGateRepairContext } from "../../../src/flow/lib/spec-gate-repair-context.js";
 import { SpecGateRepairContextExpansion } from "../../../src/flow/lib/spec-gate-repair-context-expansion.js";
-import { SpecGateRepairSourceSnapshots } from "../../../src/flow/lib/spec-gate-repair-values.js";
-import { SpecGateRepairBundle } from "../../../src/flow/lib/spec-gate-repair-bundle.js";
+import { SpecGateRepairSource, SpecGateRepairSourceSnapshots } from "../../../src/flow/lib/spec-gate-repair-values.js";
 import { readSpecGateRepairSources } from "../../../src/flow/lib/spec-gate-repair-sources.js";
-import { readSpecGateRepairInput } from "../../../src/flow/lib/spec-gate-repair-input.js";
-import { WorkerArtifactHandoffCoordinator, sealWorkerArtifactHandoff } from "../../../src/flow/lib/worker-artifact-handoff.js";
-import { prepareSpecGateRepairService, createSpecGateRepairScenario } from "../../support/infrastructure/spec-gate-repair-scenario.js";
-import { dispatchContainer, requestInput, requestPayloadPath } from "../../support/infrastructure/flow-dispatch-scenario.js";
-import { validWorkerHandoffSpec, workerArtifactJson } from "../../support/infrastructure/worker-artifact.js";
-import { reserveFixtureSpecGateRepairWorkerCall } from "../../support/infrastructure/spec-gate-repair-admission.js";
-import { latestRepairBudget } from "../../../src/flow/lib/spec-gate-repair-progress.js";
+import { validWorkerHandoffSpec } from "../../support/infrastructure/worker-artifact.js";
 import { createTmpDir, removeTmpDir } from "../../support/builders/tmp-dir.js";
 import { saveFixtureSpecGateRepairSources } from "../../support/infrastructure/spec-gate-repair-source-snapshots.js";
-import { SpecGateRepairProgressReader } from "../../../src/flow/lib/spec-gate-repair-progress-reader.js";
-
+import { createSpecGateRepairScenario } from "../../support/infrastructure/spec-gate-repair-scenario.js";
+import { SpecGateRepairBundle } from "../../../src/flow/lib/spec-gate-repair-bundle.js";
 const rootRule = "AGENTS.md";
 const aRules = [rootRule, "src/AGENTS.md", "src/a/AGENTS.md", "src/a/deep/AGENTS.md"];
 const bRules = ["src/b/AGENTS.md", "src/b/deep/AGENTS.md"];
@@ -55,111 +42,26 @@ function repository(root, { unavailable = null, missing = null, noRoot = false }
   if (missing) fs.unlinkSync(path.join(root, missing));
   if (unavailable) fs.writeFileSync(path.join(root, unavailable), Buffer.from([0xff, 0xfe]));
 }
+
+// Historical inventories still replay exact identities and scopes. This fixture
+// supplies the saved inventory explicitly, without invoking retired host discovery.
+function historicalSources(root, request = "Review the contract") {
+  const sources = [...readSpecGateRepairSources({ flowManager: { readArtifact: () => null },
+    state: { issue: null, request }, executionRoot: root })];
+  const origins = [...aRules.slice(1), ...bRules, "src/c/AGENTS.md",
+    ...["a", "b", "c"].map((name) => `src/${name}/deep/file.js`),
+    "vendor/AGENTS.md", "vendor/src/b/deep/file.js", "quoted/AGENTS.md", 'quoted/file"name.js'];
+  for (const origin of origins.filter((origin) => fs.existsSync(path.join(root, origin)))) {
+    const isRule = path.posix.basename(origin) === "AGENTS.md";
+    sources.push(new SpecGateRepairSource({ id: `${isRule ? "project-rule" : "source"}:${origin}`,
+      origin, required: false, revision: "saved-identity", content: fs.readFileSync(path.join(root, origin), "utf8"),
+      ...(isRule ? { appliesTo: [path.posix.dirname(origin)] } : {}) }));
+  }
+  return sources;
+}
 function selectedRules(selection) {
   return selection.ranges.filter((range) => range.value?.appliesTo?.length).map((range) => range.value.origin).sort();
 }
-function reload(value) {
-  value.flowManager = new FlowManager({ root: value.root, mainRoot: value.root, inWorktree: false, specId: value.specId });
-  value.ctx = { ...value.ctx, flowManager: value.flowManager };
-}
-function snapshot(value) {
-  return { state: value.flowManager.canonicalState(value.specId).toJSON(),
-    catalog: value.flowManager.artifactCatalog(value.specId).toJSON(),
-    activities: value.flowManager.activityLedger(value.specId) };
-}
-function agentFor(root, call) {
-  const config = { agent: { default: "fixture/worker", providers: {
-    "fixture/worker": { command: "fixture-worker", args: ["{{PROMPT}}"] },
-  } } };
-  const transport = new Agent({ config, paths: { root, agentWorkDir: path.join(root, ".tmp") },
-    registry: new ProviderRegistry(config.agent.providers), logger: new Logger({ logDir: root, enabled: false }) });
-  return { projectInvocation: (prompt, options) => transport.projectInvocation(prompt, options), call };
-}
-async function dispatch(value, agent) {
-  const flowState = value.flowManager.loadReadOnly(value.specId);
-  const command = new RunDispatchCommand({ agent, maxDispatches: 1 });
-  command.container = dispatchContainer({ root: value.root, flowManager: value.flowManager, agent });
-  return command.execute({ ...value.ctx, flowState,
-    expectBinding: FlowTargetBinding.capture({ flowState, mainRoot: value.root, authorityRoot: value.root }).serialize(),
-    _envelopeType: "run", _envelopeKey: "dispatch" });
-}
-function repairProposal(selection) {
-  const range = selection.ranges.find((entry) => entry.writable);
-  return { version: 1, stage: "spec-gate-repair", baseRevision: selection.baseRevision,
-    groups: [{ findingIdentities: selection.unit.findings.map((finding) => finding.identity), operations: [{
-      kind: "edit-text-field", target: range.target, expectedDigest: range.digest,
-      edits: [{ startByte: 0, endByte: Buffer.byteLength(range.value), replacement: "Preserve the validated source contract." }],
-      reason: "Use the selected source rules.",
-    }] }] };
-}
-
-// Outcomes -> producers/storage/consumers: selected R1 and explicit B fragment ->
-// real Git capture -> checkpoint snapshots -> fresh FlowManager -> next provider
-// bundle and accepted Spec. Inventory/index discovery alone must add no scope.
-test("scoped rules follow selected evidence and persisted fragment expansion into the next provider", async (t) => {
-  const value = await createSpecGateRepairScenario({ specRecord: specFixture(), beforeGate: ({ root }) => repository(root) });
-  t.after(() => removeTmpDir(value.root));
-  let calls = 0;
-  let initialSnapshots;
-  let fragment;
-  const documents = [];
-  const attemptId = value.flowManager.canonicalState(value.specId).attempt.id;
-  const agent = agentFor(value.root, async (prompt, options) => {
-    const requestPath = options.executionEnvironment.SENNEL_FLOW_HANDOFF_REQUEST;
-    const request = JSON.parse(fs.readFileSync(requestPath, "utf8"));
-    const document = requestInput(request, "spec-gate-repair-context.json").document;
-    documents.push(document);
-    const selection = SpecGateRepairBundle.fromJSON(document.bundle).selections()[0];
-    const checkpoint = JSON.parse(value.flowManager.readArtifact({ specId: value.specId,
-      logicalKey: "spec.gate.repair.progress", consumerNodeId: "spec-gate-repair",
-      parameters: { attemptId, generation: String(calls), phase: "checkpoint" } }).bytes.toString("utf8"));
-    const sources = new SpecGateRepairProgressReader({ flowManager: value.flowManager, specId: value.specId,
-          attemptId, consumerNodeId: "spec-gate-repair" }).read(calls, "checkpoint").sourceSnapshots;
-    let proposal;
-    if (calls === 0) {
-      initialSnapshots = sources.sources();
-      t.diagnostic(`initialSelectedBytes=${Buffer.byteLength(JSON.stringify(document))}; capturedSourceBytes=${sources.sources().reduce((sum, source) => sum + source.byteLength, 0)}`);
-      assert.deepEqual(selectedRules(selection), [...aRules].sort());
-      const index = selection.ranges.find((range) => range.id.startsWith("repair-index:")).value;
-      assert(index.descriptors.some((entry) => entry.source?.origin === bRules[0]), "B is discoverable without reading its rule body");
-      const input = readSpecGateRepairInput({ flowManager: value.flowManager,
-        state: value.flowManager.canonicalState(value.specId), executionRoot: value.root, sourceSnapshots: sources });
-      fragment = input.context.tableOfContents().find((entry) => entry.source?.origin === "src/b/deep/file.js"
-        && entry.byteEnd - entry.byteStart < entry.source.byteLength);
-      assert(fragment, "an actual registered UTF-8 fragment is requested");
-      proposal = { version: 1, stage: "spec-gate-repair-context-request", baseRevision: selection.baseRevision,
-        unitId: selection.unit.id, additionalRangeIds: [fragment.id] };
-    } else {
-      assert.deepEqual(sources.sources(), initialSnapshots, "next generation reads the immutable source inventory");
-      assert.deepEqual(selectedRules(selection), [...aRules, ...bRules].sort());
-      const selected = selection.ranges.find((range) => range.id === fragment.id);
-      const bytes = Buffer.from(sources.sources().find((source) => source.origin === fragment.source.origin).content);
-      assert.equal(selected.value.content, bytes.subarray(fragment.byteStart, fragment.byteEnd).toString("utf8"));
-      assert.equal(selected.writable, false);
-      assert.equal(selectedRules(selection).includes("src/c/AGENTS.md"), false);
-      proposal = repairProposal(selection);
-    }
-    assert.deepEqual(checkpoint.context, document);
-    calls += 1;
-    fs.writeFileSync(requestPayloadPath(request, "spec-gate-repair.json"), workerArtifactJson(proposal));
-    sealWorkerArtifactHandoff({ requestPath, invocationId: options.executionEnvironment.SENNEL_FLOW_DISPATCH_INVOCATION_ID });
-    return JSON.stringify({ sealed: true, requestDigest: request.requestDigest });
-  });
-  const first = await dispatch(value, agent);
-  assert.equal(calls, 1, JSON.stringify(first));
-  reload(value);
-  assert.equal(value.flowManager.canonicalState(value.specId).current.at(-1), "spec-gate-repair");
-  const second = await dispatch(value, agent);
-  assert.equal(calls, 2, JSON.stringify(second));
-  assert.equal(second.data?.nextAction?.step, "spec-review", JSON.stringify(second));
-  reload(value);
-  const saved = JSON.parse(value.flowManager.readArtifact({ specId: value.specId,
-    logicalKey: "spec.record", consumerNodeId: "spec-review" }).bytes.toString("utf8"));
-  assert.equal(saved.requirements[0].desc, "Preserve the validated source contract.");
-  assert.equal(saved.requirements[1].desc, specFixture().requirements[1].desc);
-  assert(documents[1].bundle.sources.length > documents[0].bundle.sources.length);
-});
-
 test("direct rule, full source, fragment and document reads retain applicable parents without sibling closure after snapshot reload", (t) => {
   const root = createTmpDir("repair-scoped-rules-");
   t.after(() => removeTmpDir(root));
@@ -174,8 +76,7 @@ test("direct rule, full source, fragment and document reads retain applicable pa
   commitAll(root, "Capture an origin with a literal quotation mark");
   const spec = specFixture();
   spec.overview.decisions.push({ text: "Consider vendor/src/b/deep/file.js.", evidence: "Existing consumer", consideredAlternatives: "Keep the contract" });
-  const sources = readSpecGateRepairSources({ flowManager: { readArtifact: () => null },
-    state: { issue: null, request: '対象quoted/file"name.jsを確認する。' }, executionRoot: root, spec });
+  const sources = historicalSources(root, '対象quoted/file"name.jsを確認する。');
   const stored = saveFixtureSpecGateRepairSources({ root, snapshots: new SpecGateRepairSourceSnapshots(sources) });
   const restored = stored.restore();
   const target = { entity: "requirement", id: "R1", field: "desc" };
@@ -199,9 +100,12 @@ test("direct rule, full source, fragment and document reads retain applicable pa
   const descriptors = context.tableOfContents();
   const source = descriptors.find((entry) => entry.source?.origin === "src/b/deep/file.js"
     && entry.byteEnd === entry.source.byteLength && entry.byteStart === 0);
+  const fragment = descriptors.find((entry) => entry.source?.origin === "src/b/deep/file.js"
+    && entry.byteEnd - entry.byteStart < entry.source.byteLength);
+  assert(fragment, "the saved UTF-8 source has an actual registered fragment");
   const directRule = descriptors.find((entry) => entry.source?.origin === bRules[1]);
   assert.equal(descriptors.filter((entry) => entry.source?.origin === bRules[1]).length, 1, "rules are complete atomic sources");
-  for (const id of [source.id, directRule.id, "requirements[R2].desc"]) {
+  for (const id of [source.id, fragment.id, directRule.id, "requirements[R2].desc"]) {
     const expanded = new SpecGateRepairContextExpansion({ context, unitId, baseRevision: context.baseRevision, requestedRangeIds: [id] });
     assert.deepEqual(selectedRules(expanded.selection), [...aRules, ...bRules, expectedCanonicalRule].sort());
     assert.deepEqual(expanded.selection.ranges.filter((range) => range.writable), initial.ranges.filter((range) => range.writable));
@@ -218,49 +122,37 @@ test("direct rule, full source, fragment and document reads retain applicable pa
   assert.deepEqual(selectedRules(document.select(document.units()[0].id)), [...aRules, ...bRules, "src/c/AGENTS.md", "vendor/AGENTS.md", expectedCanonicalRule].sort());
 });
 
-for (const availability of ["missing", "unavailable"]) {
-  for (const selected of [false, true]) {
-    test(`${availability} scoped rules ${selected ? "refuse selected input before provider and durable mutation" : "stay inventoried without blocking unrelated repair"}`, async (t) => {
-      const badRule = selected ? "src/a/deep/AGENTS.md" : bRules[1];
-      const value = await createSpecGateRepairScenario({ specRecord: specFixture(),
-        beforeGate: ({ root }) => repository(root, { [availability]: badRule }) });
-      t.after(() => removeTmpDir(value.root));
-      const before = snapshot(value);
-      let calls = 0;
-      const agent = agentFor(value.root, async (prompt, options) => {
-        calls += 1;
-        const requestPath = options.executionEnvironment.SENNEL_FLOW_HANDOFF_REQUEST;
-        const request = JSON.parse(fs.readFileSync(requestPath, "utf8"));
-        const selection = SpecGateRepairBundle.fromJSON(requestInput(request, "spec-gate-repair-context.json").document.bundle).selections()[0];
-        assert.deepEqual(selectedRules(selection), [...aRules].sort());
-        const attemptId = value.flowManager.canonicalState(value.specId).attempt.id;
-        const checkpoint = JSON.parse(value.flowManager.readArtifact({ specId: value.specId, logicalKey: "spec.gate.repair.progress",
-          consumerNodeId: "spec-gate-repair", parameters: { attemptId, generation: "0", phase: "checkpoint" } }).bytes.toString("utf8"));
-        const sources = new SpecGateRepairProgressReader({ flowManager: value.flowManager, specId: value.specId,
-          attemptId, consumerNodeId: "spec-gate-repair" }).read(0, "checkpoint").sourceSnapshots;
-        assert.equal(sources.sources().find((source) => source.origin === badRule).availability, availability);
-        const input = readSpecGateRepairInput({ flowManager: value.flowManager,
-          state: value.flowManager.canonicalState(value.specId), executionRoot: value.root, sourceSnapshots: sources });
-        const descriptor = input.context.tableOfContents().find((entry) => entry.source?.origin === "src/b/deep/file.js");
-        assert.throws(() => input.context.select(selection.unit.id, { additionalRangeIds: [descriptor.id] }),
-          { code: "FLOW_SPEC_GATE_REPAIR_CONTEXT_UNAVAILABLE" }, "explicit evidence cannot bypass its unavailable rules");
-        fs.writeFileSync(requestPayloadPath(request, "spec-gate-repair.json"), workerArtifactJson(repairProposal(selection)));
-        sealWorkerArtifactHandoff({ requestPath, invocationId: options.executionEnvironment.SENNEL_FLOW_DISPATCH_INVOCATION_ID });
-        return JSON.stringify({ sealed: true, requestDigest: request.requestDigest });
-      });
-      const result = await dispatch(value, agent);
-      reload(value);
-      if (selected) {
-        assert.equal(result.ok, false, JSON.stringify(result));
-        assert.equal(result.errors[0].code, "FLOW_SPEC_GATE_REPAIR_CONTEXT_UNAVAILABLE", JSON.stringify(result));
-        assert.equal(calls, 0);
-        assert.deepEqual(snapshot(value), before);
-      } else {
-        assert.equal(calls, 1, JSON.stringify(result));
-        assert.equal(result.data?.nextAction?.step, "spec-review", JSON.stringify(result));
-      }
-    });
-  }
+for (const availability of ["available", "missing", "unavailable"]) {
+  test(`saved scoped-rule ${availability} identity is revalidated without discovering sibling sources`, (t) => {
+    const root = createTmpDir("repair-saved-scoped-rules-");
+    t.after(() => removeTmpDir(root));
+    repository(root);
+    const saved = new SpecGateRepairSourceSnapshots(historicalSources(root));
+    const origin = "src/a/deep/AGENTS.md";
+    const previousRule = saved.sources().find((source) => source.origin === origin);
+    const currentText = "\ufeffUpdated scoped contract 漢🧭\r\n";
+    if (availability === "available") fs.writeFileSync(path.join(root, origin), currentText);
+    if (availability === "missing") fs.unlinkSync(path.join(root, origin));
+    if (availability === "unavailable") fs.writeFileSync(path.join(root, origin), Buffer.from([0xff, 0xfe]));
+    fs.writeFileSync(path.join(root, "src/new.js"), "export const unrelated = 999;");
+    fs.mkdirSync(path.join(root, "src/new"));
+    fs.writeFileSync(path.join(root, "src/new/AGENTS.md"), "Newly created unrelated rules.\n");
+    const sources = readSpecGateRepairSources({ flowManager: { readArtifact: () => null },
+      state: { request: "Review the contract", issue: null }, executionRoot: root, ruleSnapshots: saved });
+    const stored = saveFixtureSpecGateRepairSources({ root, snapshots: new SpecGateRepairSourceSnapshots(sources) });
+    const restored = stored.restore();
+    const rule = restored.sources().find((source) => source.origin === origin);
+    assert.equal(rule.id, previousRule.id);
+    assert.equal(rule.availability, availability);
+    assert.deepEqual(rule.appliesTo, ["src/a/deep"]);
+    assert.equal(rule.required, false);
+    assert.equal(rule.content, availability === "available" ? currentText : "");
+    if (availability !== "available") assert.throws(() => rule.assertAvailable(), { code: "FLOW_SPEC_GATE_REPAIR_CONTEXT_UNAVAILABLE" });
+    assert.equal(restored.sources().some((source) => source.origin.endsWith(".js")), false);
+    assert.equal(restored.sources().some((source) => source.origin === "src/new/AGENTS.md"), false);
+    assert.equal(previousRule.availability, "available");
+    assert.notEqual(previousRule.content, currentText);
+  });
 }
 
 test("tracked missing root rules refuse admission while an unregistered absent root stays optional", async (t) => {
@@ -268,56 +160,16 @@ test("tracked missing root rules refuse admission while an unregistered absent r
     const value = await createSpecGateRepairScenario({ specRecord: specFixture(),
       beforeGate: ({ root }) => repository(root, noRoot ? { noRoot } : { missing: rootRule }) });
     t.after(() => removeTmpDir(value.root));
-    const before = snapshot(value);
+    const durable = () => ({ state: value.flowManager.canonicalState(value.specId).toJSON(),
+      catalog: value.flowManager.artifactCatalog(value.specId).toJSON(), activities: value.flowManager.activityLedger(value.specId) });
+    const before = durable();
     const create = () => value.coordinator.createRequest({ ctx: value.ctx,
       state: value.flowManager.loadReadOnly(value.specId), invocation: value.invocation });
     if (noRoot) {
       const request = create();
       const selection = SpecGateRepairBundle.fromJSON(request.inputs[0].document.bundle).selections()[0];
-      assert.deepEqual(selectedRules(selection), aRules.filter((origin) => origin !== rootRule).sort());
+      assert.deepEqual(selectedRules(selection), []);
     } else assert.throws(create, { code: "FLOW_SPEC_GATE_REPAIR_CONTEXT_UNAVAILABLE" });
-    assert.deepEqual(snapshot(value), before);
-  }
-});
-
-// A successful initial admission must not let a subsequent source request bypass
-// the newly applicable rules. Publication owns this rejection before new reads.
-test("a sealed source expansion with unavailable rules refuses publication and restart without another provider claim", async (t) => {
-  const value = await createSpecGateRepairScenario({ specRecord: specFixture(),
-    beforeGate: ({ root }) => repository(root, { unavailable: bRules[1] }) });
-  t.after(() => removeTmpDir(value.root));
-  const input = readSpecGateRepairInput({ flowManager: value.flowManager,
-    state: value.flowManager.canonicalState(value.specId), executionRoot: value.root });
-  const descriptor = input.context.tableOfContents().find((entry) => entry.source?.origin === "src/b/deep/file.js");
-  const request = value.coordinator.createRequest({ ctx: value.ctx,
-    state: value.flowManager.loadReadOnly(value.specId), invocation: value.invocation });
-  const selection = SpecGateRepairBundle.fromJSON(request.inputs[0].document.bundle).selections()[0];
-  assert.deepEqual(selectedRules(selection), [...aRules].sort());
-  reserveFixtureSpecGateRepairWorkerCall({ ctx: value.ctx, request, prompt: JSON.stringify(request.toPromptReference()) });
-  fs.writeFileSync(request.payloadPath("spec-gate-repair.json"), workerArtifactJson({
-    version: 1, stage: "spec-gate-repair-context-request", baseRevision: selection.baseRevision,
-    unitId: selection.unit.id, additionalRangeIds: [descriptor.id],
-  }));
-  sealWorkerArtifactHandoff({ requestPath: request.requestPath, invocationId: request.dispatchInvocationId });
-  const before = snapshot(value);
-  const attemptId = value.flowManager.canonicalState(value.specId).attempt.id;
-  const budget = () => latestRepairBudget({ flowManager: value.flowManager, specId: value.specId,
-    attemptId, baseRevision: selection.baseRevision, consumerNodeId: "spec-gate-repair" }).budget.snapshot();
-  const beforeBudget = budget();
-  assert.equal(beforeBudget.providerCallCount, 1);
-  for (let readback = 0; readback < 2; readback += 1) {
-    reload(value);
-    const coordinator = new WorkerArtifactHandoffCoordinator();
-    const state = value.flowManager.canonicalState(value.specId);
-    const lifecycle = value.flowManager.draftStepExecutionState({ binding: {
-      runId: state.runId, specId: value.specId, stepId: "spec-gate-repair", attempt: state.attempt,
-    } }).lifecycle;
-    assert.equal(lifecycle.phase, "claimed");
-    const restored = coordinator.restoreClaimedDraftRequest({ ctx: value.ctx,
-      state: value.flowManager.loadReadOnly(value.specId), lifecycle });
-    await assert.rejects(() => prepareSpecGateRepairService({ ctx: value.ctx, request: restored,
-      handoffCoordinator: coordinator }), { code: "FLOW_SPEC_GATE_REPAIR_CONTEXT_UNAVAILABLE" });
-    assert.deepEqual(snapshot(value), before);
-    assert.deepEqual(budget(), beforeBudget);
+    assert.deepEqual(durable(), before);
   }
 });

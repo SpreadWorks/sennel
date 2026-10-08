@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
-import { createHash } from "node:crypto";
 import { test } from "node:test";
 import { Agent } from "../../../src/lib/agent.js";
 import { PromptLogicalFootprint } from "../../../src/lib/prompt-batching.js";
@@ -22,9 +21,7 @@ import { initGitRepo, commitAll } from "../../support/infrastructure/git-repo.js
 import { validWorkerHandoffSpec, workerArtifactJson } from "../../support/infrastructure/worker-artifact.js";
 import { removeTmpDir } from "../../support/builders/tmp-dir.js";
 
-const hash = (value) => createHash("sha256").update(value).digest("hex");
-
-test("repairs seven findings in six units with durable ASCII evidence outside the initial selected input", async () => {
+test("repairs seven findings in six units while large checkout research stays outside canonical evidence and provider budget", async () => {
   const specRecord = validWorkerHandoffSpec();
   specRecord.requirements = Array.from({ length: 6 }, (_, index) => ({
     ...specRecord.requirements[0], id: `R${index + 1}`, task_ids: [`T${index + 1}`],
@@ -91,21 +88,20 @@ test("repairs seven findings in six units with durable ASCII evidence outside th
         const snapshots = new SpecGateRepairProgressReader({ flowManager: value.flowManager,
           specId: value.specId, attemptId, consumerNodeId: "spec-gate-repair" })
           .read(0, "checkpoint").sourceSnapshots.sources();
-        assert.equal(snapshots.length, 23);
+        assert.equal(snapshots.length, 4);
         for (const source of sources) {
-          const savedSource = snapshots.find((entry) => entry.id === `evidence:source:${source.relative}`);
-          assert.equal(savedSource.content, source.content);
-          assert.equal(savedSource.revision, hash(source.content));
+          assert.equal(snapshots.some((entry) => entry.origin === source.relative), false);
+          assert.equal(fs.readFileSync(path.join(options.executionWorkDir, source.relative), "utf8"), source.content);
           assert.equal(workerArtifactStableStringify(context).includes(JSON.stringify(source.content)), false,
-            "A captured source body requires explicit source selection before worker delivery");
+            "Checkout research is read by the worker without becoming canonical selected evidence");
           for (const selection of selections) {
-            assert.equal(selection.ranges.some((entry) => entry.value?.snapshotId === savedSource.id), false);
+            assert.equal(selection.ranges.some((entry) => entry.value?.origin === source.relative), false);
             const index = selection.ranges.find((entry) => entry.id.startsWith("repair-index:"));
             assert.ok(index);
             assert.equal(index.writable, false);
             assert.equal(index.target, null);
-            assert.equal(index.value.descriptors.some((entry) => entry.source?.id === savedSource.id), true,
-              "The first bounded page exposes the source descriptor without its body");
+            assert.equal(index.value.descriptors.some((entry) => entry.source?.origin === source.relative), false,
+              "The canonical index does not advertise a host-selected checkout inventory");
           }
         }
         const groups = selections.map((selection) => {

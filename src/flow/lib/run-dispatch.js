@@ -2030,7 +2030,7 @@ export default class RunDispatchCommand extends FlowCommand {
               dispatchWorkClass: FlowDispatchWork,
               promptOptions: agentOptions,
               requestLimit: new PromptRequestLimit({ maxCharacters: Math.min(SPEC_GATE_REPAIR_REQUEST_LIMIT.maxCharacters,
-                (agent.promptCharacterLimit ?? new PromptRequestLimit()).maxCharacters) }),
+                agent.promptCharacterLimit ?? new PromptRequestLimit().maxCharacters) }),
               projectInvocation: typeof agent.projectInvocation === "function" ? (prompt, request) => {
                 const plannedWork = FlowDispatchWork.forAdmission(invocation, request);
                 return agent.projectInvocation(prompt, plannedWork.callOptions({

@@ -921,7 +921,7 @@ function specRepairSnapshot(value) {
 }
 
 describe("worker artifact handoff", () => {
-  it("settles a bounded Spec Gate correction with one audit, receipt and exact replay", async () => {
+  it("settles a bounded Spec Gate correction once and rejects reuse of its completed prepared Service", async () => {
     const value = await createSpecGateRepairScenario();
     try {
       const { result, service } = await completeSpecGateRepairHandoff({
@@ -945,7 +945,19 @@ describe("worker artifact handoff", () => {
         root: value.root, mainRoot: value.root, inWorktree: false, specId: value.specId,
       });
       assert.equal(restored.canonicalState(value.specId).nextAction().nodeId, "spec-review");
-      await assert.rejects(() => new SpecGateRepairStep(service).execute(), /stale/);
+      const readback = { ...value, flowManager: restored };
+      const beforeReuse = specRepairSnapshot(readback);
+      const revision = restored.readCurrentSpecReviewInput({ specId: value.specId,
+        consumerNodeId: "spec-review" }).revision;
+      const outcome = service.workerOutcome;
+      await assert.rejects(() => new SpecGateRepairStep(service).execute(),
+        /prepared Spec Gate repair adoption is stale after its completed settlement/);
+      assert.equal(service.workerOutcome, outcome);
+      assert.equal(service.workerOutcome.receipt.id, receipt.id);
+      assert.deepEqual(specRepairSnapshot(readback), beforeReuse);
+      assert.equal(restored.readCurrentSpecReviewInput({ specId: value.specId,
+        consumerNodeId: "spec-review" }).revision, revision);
+      assert.equal(restored.canonicalState(value.specId).nextAction().nodeId, "spec-review");
     } finally {
       removeTmpDir(value.root);
     }

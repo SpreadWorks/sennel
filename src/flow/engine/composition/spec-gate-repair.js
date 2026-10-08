@@ -7,7 +7,7 @@ import { SpecGateRepairWorkerFacts, SpecGateRepairContinuationFacts } from "../.
 import { readProgressBoundSpecGateRepairInput, latestRepairBudget, readSpecGateRepairExecutionProgress,
   SPEC_GATE_REPAIR_PROGRESS_VERSION } from "../../lib/spec-gate-repair-progress.js";
 import { readSpecGateRepairInput } from "../../lib/spec-gate-repair-input.js";
-import { SpecGateRepairContextExpansion } from "../../lib/spec-gate-repair-context-expansion.js";
+import { SpecGateRepairContextRequest } from "../../lib/spec-gate-repair-context-expansion.js";
 import { canonicalWorkerExecutionClaimForStored, WorkerArtifactHandoffError } from "../../lib/worker-artifact-handoff.js";
 import { isDeepStrictEqual } from "node:util";
 import { SpecGateRepairBundle } from "../../lib/spec-gate-repair-bundle.js";
@@ -149,8 +149,8 @@ export function reserveSpecGateRepairWorkerCall({ ctx, request, prompt, physical
     if (call.synthesisCallCount > 0) budget.consumeSynthesisCalls(call.synthesisCallCount);
     const executionLocator = new DraftWorkerExecutionClaim({ dispatchInvocationId: request.dispatchInvocationId,
       generatedAt: request.generatedAt, actionDigest: request.actionDigest, requestDigest: request.requestDigest });
-    const source = readSpecGateRepairInput({ flowManager, state: flowManager.canonicalState(binding.specId),
-      executionRoot: request.executionRoot });
+    const { source } = readProgressBoundSpecGateRepairInput({ flowManager,
+      state: flowManager.canonicalState(binding.specId), executionRoot: request.executionRoot });
     if (source.context.evidenceDigest !== context.evidenceDigest) {
       throw new WorkerArtifactHandoffError("stale", "FLOW_SPEC_GATE_REPAIR_EVIDENCE_CHANGED",
         "Spec Gate repair evidence changed before checkpoint", { retryable: false, recoveryPossible: false,
@@ -269,13 +269,11 @@ export async function prepareSpecGateRepairServiceArguments({ ctx, request, hand
       throw new Error("Spec Gate repair response changed its base revision");
     }
     if (proposal.stage === "spec-gate-repair-context-request") {
-      if (!selections.some((selection) => selection.unit.id === proposal.unitId)) {
+      const contextRequest = SpecGateRepairContextRequest.fromJSON(proposal);
+      if (!selections.some((selection) => selection.unit.id === contextRequest.unitId)) {
         throw new Error("Spec Gate repair requested context for an unselected atomic unit");
       }
-      new SpecGateRepairContextExpansion({ context: source.context,
-        unitId: proposal.unitId, baseRevision: proposal.baseRevision,
-        requestedRangeIds: proposal.additionalRangeIds,
-        previousRangeIds: ledger.additionalRangeIds(source.context, proposal.unitId) });
+      contextRequest.expand(source.context, ledger.additionalRangeIds(source.context, contextRequest.unitId));
     } else if (proposal.stage === "spec-gate-repair-draft-return") {
       if (![proposal.decision, proposal.evidence, proposal.unresolvedBecause].every((value) => (
         typeof value === "string" && value.trim() !== ""

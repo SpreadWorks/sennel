@@ -1,4 +1,5 @@
    - Read the immutable `spec.json` snapshot and the one canonical `review.json` only from `inputs[].document`.
+   - Follow the checkout research guidance in `request.json.workerInstructions.schemaGuidance` when implementation facts are missing from the supplied evidence.
    - Write only `review.delta.json`, one immutable-input-bound delta, to the exact handoff `payloadPath`. Never edit `spec.json`, `review.json`, or any canonical Flow file.
    - The parent CLI validates each proposed operation independently, merges accepted changes into the canonical review audit, and alone publishes a changed spec revision.
    - A delta has exactly `version: 2`, `stage: "spec-repair"`, the exact immutable `identity` copied from `review.json`, `baseReviewDigest` copied from the `digest` of the handoff `inputs[]` entry named `review.json`, `findings: []`, and `operations[]`. `scopeExpansions[]` is optional. Do not add other top-level properties.

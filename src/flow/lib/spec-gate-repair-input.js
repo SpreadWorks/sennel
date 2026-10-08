@@ -94,8 +94,10 @@ export function readSpecGateRepairInput({ flowManager, state, executionRoot, loc
     };
   });
   const ruleSet = new SpecGateRepairRuleSet({ executionRoot, spec });
-  const sources = sourceSnapshots === null ? readSpecGateRepairSources({ flowManager, state, executionRoot, spec, captureBudget })
-    : sourceSnapshots.sources();
+  const currentSnapshots = new SpecGateRepairSourceSnapshots(readSpecGateRepairSources({ flowManager, state,
+    executionRoot, captureBudget, ruleSnapshots: sourceSnapshots }));
+  if (sourceSnapshots !== null) sourceSnapshots.assertCurrentEvidence(currentSnapshots);
+  const sources = (sourceSnapshots ?? currentSnapshots).sources();
   let context = new SpecGateRepairContext({
     spec, baseRevision, findings, guardrails: ruleSet.guardrails, sources,
     acknowledgedRationale: ruleSet.acknowledgedRationale,

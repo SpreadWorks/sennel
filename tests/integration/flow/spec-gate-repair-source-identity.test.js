@@ -3,18 +3,19 @@ import fs from "node:fs";
 import path from "node:path";
 import { test } from "node:test";
 import { FlowManager } from "../../../src/lib/flow-manager.js";
-import { runGit } from "../../../src/lib/git-helpers.js";
 import { CanonicalFlowArtifactWrite } from "../../../src/flow/lib/current-flow-state.js";
 import { StepPersistenceFailure } from "../../../src/flow/lib/definition-lifecycle-failure.js";
 import { SpecGateRepairProgressReader } from "../../../src/flow/lib/spec-gate-repair-progress-reader.js";
 import { readProgressBoundSpecGateRepairInput } from "../../../src/flow/lib/spec-gate-repair-progress.js";
-import { readSpecGateRepairSourceSnapshots } from "../../../src/flow/lib/spec-gate-repair-source-storage.js";
+import { readSpecGateRepairSourceSnapshots, SpecGateRepairSourcePublication,
+  assertSpecGateRepairSelectedSources } from "../../../src/flow/lib/spec-gate-repair-source-storage.js";
+import { readSpecGateRepairInput } from "../../../src/flow/lib/spec-gate-repair-input.js";
+import { SpecGateRepairSource, SpecGateRepairSourceSnapshots } from "../../../src/flow/lib/spec-gate-repair-values.js";
 import { WorkerArtifactHandoffError } from "../../../src/flow/lib/worker-artifact-handoff-error.js";
 import { createSpecGateRepairScenario, enterSpecGateRepairScenario,
   completeSpecGateRepairHandoff } from "../../support/infrastructure/spec-gate-repair-scenario.js";
 import { reserveFixtureSpecGateRepairWorkerCall } from "../../support/infrastructure/spec-gate-repair-admission.js";
 import { removeTmpDir } from "../../support/builders/tmp-dir.js";
-import { initGitRepo } from "../../support/infrastructure/git-repo.js";
 
 const manifestKey = "spec.gate.repair.source.manifest";
 const blobKey = "spec.gate.repair.source.blob";
@@ -81,7 +82,7 @@ async function recurringSources(t, changed, { request } = {}) {
   return { ...result, second: progress(value, secondAttempt) };
 }
 
-function publishMalformedCheckpoint(value, request, change, interruption) {
+function publishMalformedCheckpoint(value, request, change, interruption, additionalWrites = []) {
   const manager = value.ctx.flowManager;
   const checkpoint = manager.checkpointDraftStepExecution.bind(manager);
   let corrupted = 0;
@@ -95,7 +96,12 @@ function publishMalformedCheckpoint(value, request, change, interruption) {
         parameters: { attemptId: document.attemptId, generation: String(document.generation), phase: document.phase },
         mediaType: "application/json", bytes: `${JSON.stringify(document, null, 2)}\n` });
     });
-    checkpoint({ ...input, artifactWrites });
+    const writes = new Map(artifactWrites.map((write) => [write.artifact.relativePath, write]));
+    for (const write of additionalWrites) {
+      if (writes.has(write.artifact.relativePath)) assert.deepEqual(writes.get(write.artifact.relativePath).bytes, write.bytes);
+      else writes.set(write.artifact.relativePath, write);
+    }
+    checkpoint({ ...input, artifactWrites: [...writes.values()] });
     throw new Error(interruption);
   };
   try {
@@ -194,58 +200,80 @@ test("saved selection metadata cannot name a foreign unit while retaining valid 
   assert.deepEqual(durable(value), before);
 });
 
-test("an older manifest differing only in unselected source bytes cannot replace the selected checkpoint identity", async (t) => {
+test("an older manifest differing only in unselected saved source bytes cannot replace the selected checkpoint identity", async (t) => {
   const firstEntry = "export const mode = 'first';\n";
   const secondEntry = "export const mode = 'second';\n";
-  const { value, first, secondAttempt } = await createRecurringSourceAttempt(t, {
-    request: "Preserve src/entry.js.",
-    beforeGate: ({ root }) => {
-      fs.mkdirSync(path.join(root, "src"));
-      fs.writeFileSync(path.join(root, "src/entry.js"), firstEntry);
-      initGitRepo(root);
-      assert.equal(runGit(["add", "src"], { cwd: root }).ok, true);
-    },
-    changeSource: ({ root }) => fs.writeFileSync(path.join(root, "src/entry.js"), secondEntry),
-  });
-  const firstSource = first.sourceSnapshots.sources().find((source) => source.origin === "src/entry.js");
+  const value = await createSpecGateRepairScenario({ request: "Preserve the exact project rules.",
+    beforeGate: ({ root }) => fs.writeFileSync(path.join(root, "AGENTS.md"), rules) });
+  t.after(() => removeTmpDir(value.root));
+  const manager = value.ctx.flowManager;
+  const state = manager.canonicalState(value.specId);
+  const canonical = readSpecGateRepairInput({ flowManager: manager, state, executionRoot: value.root });
+  const snapshotsFor = (content) => new SpecGateRepairSourceSnapshots([
+    ...canonical.context.sourceSnapshots().sources(),
+    new SpecGateRepairSource({ id: "source:src/optional.js", origin: "src/optional.js", required: false,
+      revision: "saved-source-identity", content }),
+  ]);
+  const firstSnapshots = snapshotsFor(firstEntry);
+  const currentSnapshots = snapshotsFor(secondEntry);
+  const firstPublication = new SpecGateRepairSourcePublication({ snapshots: firstSnapshots });
+  const currentPublication = new SpecGateRepairSourcePublication({ snapshots: currentSnapshots });
+  const documentFor = (sourceSnapshots) => {
+    const input = readSpecGateRepairInput({ flowManager: manager, state, executionRoot: value.root, sourceSnapshots });
+    return input.context.referenceDocument(input.context.referencePlan().batches[0]);
+  };
+  const firstDocument = documentFor(firstSnapshots);
+  const selected = documentFor(currentSnapshots);
+  const selectedContent = (bundle) => ({ sources: bundle.sources,
+    ranges: bundle.ranges.filter((range) => !range.id.startsWith("repair-index:")),
+    findings: bundle.units.map((entry) => entry.unit), guardrails: bundle.guardrails, rationales: bundle.rationales });
+  assert.deepEqual(selectedContent(selected.bundle), selectedContent(firstDocument.bundle),
+    "only unselected saved bytes change, not selected evidence or authority");
+  assertSpecGateRepairSelectedSources(selected, firstSnapshots);
+  assertSpecGateRepairSelectedSources(selected, currentSnapshots);
+  const firstSource = firstSnapshots.sources().find((source) => source.origin === "src/optional.js");
   assert.equal(firstSource.content, firstEntry);
   assert.equal(firstSource.required, false);
-  assert.equal(first.document.context.bundle.sources.some((source) => source.snapshotId === firstSource.id), false);
+  assert.equal(firstDocument.bundle.sources.some((source) => source.snapshotId === firstSource.id), false);
   const request = value.coordinator.createRequest({ ctx: value.ctx,
     state: value.ctx.flowManager.loadReadOnly(value.specId),
     invocation: { ...value.invocation, id: "foreign-unselected-source-manifest" } });
-  const selected = request.inputs[0].document;
   assert.equal(selected.bundle.sources.some((source) => source.snapshotId === firstSource.id), false);
-  assert.notEqual(selected.sourceSnapshotReference.digest, first.document.sourceSnapshotReference.digest);
+  assert.notEqual(selected.sourceSnapshotReference.digest, firstDocument.sourceSnapshotReference.digest);
   const originalInput = request.inputs[0].toJSON();
   publishMalformedCheckpoint(value, request, (document) => {
-    assert.deepEqual(document.context, selected);
+    assert.deepEqual(selectedContent(document.context.bundle), selectedContent(selected.bundle));
     assert.deepEqual(document.inputDescriptors[0], originalInput);
-    document.sourceSnapshotReference = first.document.sourceSnapshotReference;
-  }, "interrupted after foreign source manifest checkpoint publication");
-  const manager = reload(value);
-  const saved = JSON.parse(manager.readArtifact({ specId: value.specId,
+    // Explicit saved evidence is produced by the typed input/manifest APIs.
+    // This boundary fixture then corrupts only its outer snapshot reference.
+    document.context = selected;
+    document.sourceSnapshotReference = firstPublication.reference().toJSON();
+  }, "interrupted after foreign source manifest checkpoint publication",
+  [...firstPublication.artifactWrites(), ...currentPublication.artifactWrites()]);
+  const reloaded = reload(value);
+  const saved = JSON.parse(reloaded.readArtifact({ specId: value.specId,
     logicalKey: "spec.gate.repair.progress", consumerNodeId: "spec-gate-repair",
-    parameters: { attemptId: secondAttempt, generation: "0", phase: "checkpoint" } }).bytes);
-  assert.deepEqual(saved.sourceSnapshotReference, first.document.sourceSnapshotReference);
+    parameters: { attemptId: state.attempt.id, generation: "0", phase: "checkpoint" } }).bytes);
+  assert.deepEqual(saved.sourceSnapshotReference, firstDocument.sourceSnapshotReference);
   assert.deepEqual(saved.context, selected);
   assert.deepEqual(saved.inputDescriptors[0], originalInput);
   assert.equal(saved.budget.providerCallCount, 0);
-  const currentManifest = JSON.parse(manager.readArtifact({ specId: value.specId,
+  const currentManifest = JSON.parse(reloaded.readArtifact({ specId: value.specId,
     logicalKey: manifestKey, consumerNodeId: "spec-gate-repair",
     parameters: { digest: selected.sourceSnapshotReference.digest } }).bytes);
   assert.deepEqual(currentManifest.sources.filter((source) => source.id !== firstSource.id),
-    first.sourceSnapshots.sources().filter((source) => source.id !== firstSource.id)
+    firstSnapshots.sources().filter((source) => source.id !== firstSource.id)
       .map((source) => source.descriptor()));
   const currentSource = currentManifest.sources.find((source) => source.id === firstSource.id);
   assert.notEqual(currentSource.digest, firstSource.digest);
-  assert.deepEqual(manager.readArtifact({ specId: value.specId, logicalKey: blobKey,
+  assert.deepEqual(reloaded.readArtifact({ specId: value.specId, logicalKey: blobKey,
     consumerNodeId: "spec-gate-repair", parameters: { digest: currentSource.digest } }).bytes,
   Buffer.from(secondEntry, "utf8"));
   const before = durable(value);
-  assert.throws(() => progress(value, secondAttempt), (error) => {
+  assert.throws(() => progress(value, state.attempt.id), (error) => {
     assert(error instanceof WorkerArtifactHandoffError);
     assert.equal(error.code, "FLOW_SPEC_GATE_REPAIR_PROGRESS_MISMATCH");
+    assert.equal(error.message, "Gate repair saved source publication is invalid: Repair source reference differs from its immutable selected input");
     assert.equal(error.retryable, false);
     return true;
   });

@@ -74,6 +74,7 @@ import { StepPersistenceFailure } from "./definition-lifecycle-failure.js";
 import { SpecWorkerCompletionFacts } from "./spec-worker-completion-facts.js";
 import { SpecReviewWorkerFacts } from "./spec-review-worker-facts.js";
 import { SpecGateRepairWorkerFacts } from "./spec-gate-repair-worker-facts.js";
+import { SpecGateRepairContextRequest } from "./spec-gate-repair-context-expansion.js";
 import { SpecGateRepairInputUnavailable } from "./spec-gate-repair-input-unavailable.js";
 import { readProgressBoundSpecGateRepairInput, readSpecGateRepairExecutionProgress, SPEC_GATE_REPAIR_REQUEST_LIMIT,
   latestRepairBudget } from "./spec-gate-repair-progress.js";
@@ -4540,9 +4541,24 @@ export class WorkerArtifactWorkerInstructions {
       schemaGuidance: [this.schemaGuidance, guidance].filter(Boolean).join("\n"),
     });
   }
+
+  bindRequest(stepId, inputs, sourceResponseContract = null) {
+    const researchGuidance = ["spec", "spec-repair", "spec-gate-repair"].includes(stepId)
+      ? SPEC_WORKER_SOURCE_RESEARCH_GUIDANCE : null;
+    return this.appendSchemaGuidance(
+      [researchGuidance, requestBoundWorkerResponseGuidance(stepId, inputs, sourceResponseContract)]
+        .filter(Boolean).join("\n") || null,
+    );
+  }
 }
 
-function requestBoundWorkerGuidance(stepId, inputs, sourceResponseContract) {
+const SPEC_WORKER_SOURCE_RESEARCH_GUIDANCE = [
+  "Research missing source facts directly in the execution checkout. Read its root and applicable scoped AGENTS.md rules before investigating source files and their imports.",
+  "Use the actual working-tree files, including uncommitted changes. Missing or unreadable files are unavailable implementation evidence, not an unresolved user choice. Do not infer facts from omitted source or ask the host to select origins, queries, line ranges or compressed code.",
+  "Checkout research is read-only. It never grants mutation authority, extends allowedTargets or changes the selected canonical Spec ranges. Write only the declared handoff payloads.",
+].join("\n");
+
+function requestBoundWorkerResponseGuidance(stepId, inputs, sourceResponseContract) {
   const draftReviewRoute = draftReviewRouteForStepId(stepId);
   if (draftReviewRoute?.triageStepId === stepId) return DraftTriageDecision.triageGuidance(draftReviewRoute);
   if (stepId === "spec-gate-repair") return [
@@ -4776,9 +4792,7 @@ export class WorkerArtifactHandoffRequest {
     if (!(workerInstructions instanceof WorkerArtifactWorkerInstructions)) {
       throw new Error("worker handoff requires typed worker instructions");
     }
-    this.workerInstructions = workerInstructions.appendSchemaGuidance(
-      requestBoundWorkerGuidance(this.stepId, this.inputs, this.sourceResponseContract),
-    );
+    this.workerInstructions = workerInstructions.bindRequest(this.stepId, this.inputs, this.sourceResponseContract);
     this.generatedAt = requiredString(generatedAt, "handoff generatedAt");
     this.handoffRoot = executionHandoffRoot(this.executionRoot, this.specId);
     if (typeof canonicalLocation?.runtimeLock !== "function") {
@@ -5964,6 +5978,7 @@ function validateFilePayloadAtCliBoundary(request, rule, source, { persistGenera
         acceptanceTruncationLog = appendGeneratedAcceptanceTruncationLog(request, normalization.truncations);
       }
       document = normalization.document;
+      validateSpecGateRepairWorkerPayload(request, document);
     }
     if (rule.logicalName === "review.delta.json") {
       if (request.stepId === "spec-triage") validateSpecTriagePayloadAtProducerBoundary(request, document);
@@ -7123,9 +7138,7 @@ function validateSpecGateRepairWorkerPayload(request, proposal) {
       new SpecGateRepairOperationBatch(proposal, readSpecJsonValidator().taskAcceptanceContract());
     }
     else if (proposal?.stage === "spec-gate-repair-context-request") {
-      if (typeof proposal.unitId !== "string" || !Array.isArray(proposal.additionalRangeIds)) {
-        throw new Error("Spec Gate repair additional context request is invalid");
-      }
+      SpecGateRepairContextRequest.fromJSON(proposal);
     } else if (proposal?.stage === "spec-gate-repair-draft-return") {
       if (proposal.version !== 1 || typeof proposal.unitId !== "string" || proposal.unitId === ""
         || ![proposal.decision, proposal.evidence, proposal.unresolvedBecause].every((value) => (

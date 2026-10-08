@@ -162,7 +162,7 @@ for (const mode of ["context", "repair", "draft-return", "input-unavailable"]) {
       const selected = SpecGateRepairBundle.fromJSON(context.bundle).selections()[0];
       let proposal;
       if (mode === "context") {
-        proposal = { version: 3, intent: "repair", sourceQueries: [], stage: "spec-gate-repair-context-request", sourceOrigins: [], baseRevision: context.baseRevision,
+        proposal = { version: 1, stage: "spec-gate-repair-context-request", baseRevision: context.baseRevision,
           unitId: selected.unit.id, additionalRangeIds: ["goal"] };
       } else if (mode === "draft-return") {
         proposal = { version: 1, stage: "spec-gate-repair-draft-return", baseRevision: context.baseRevision,

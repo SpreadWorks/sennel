@@ -3,8 +3,7 @@ import path from "node:path";
 import { createHash } from "node:crypto";
 import { runGit } from "../../lib/git-helpers.js";
 import { captureRegularFile } from "../../lib/regular-file-snapshot.js";
-import { SpecGateRepairSource } from "./spec-gate-repair-values.js";
-import { compareText } from "./text-order.js";
+import { SpecGateRepairSource, SpecGateRepairSourceSnapshots } from "./spec-gate-repair-values.js";
 import { FlowArtifactCatalogSnapshotLimits } from "../../lib/flow-version.js";
 import { WorkerArtifactHandoffError } from "./worker-artifact-handoff-error.js";
 
@@ -67,8 +66,13 @@ export class SpecGateRepairSourceCaptureBudget {
   }
 }
 
-/** Use existing catalog and regular-file readers; never execute a research worker. */
-export function readSpecGateRepairSources({ flowManager, state, executionRoot, spec, captureBudget = new SpecGateRepairSourceCaptureBudget() }) {
+/** Capture canonical inputs and explicitly saved rules; checkout research belongs to the worker. */
+export function readSpecGateRepairSources({ flowManager, state, executionRoot, ruleSnapshots = null,
+  captureBudget = new SpecGateRepairSourceCaptureBudget() }) {
+  if (ruleSnapshots !== null && !(ruleSnapshots instanceof SpecGateRepairSourceSnapshots)) {
+    throw new TypeError("Repair rule capture requires its typed canonical snapshot");
+  }
+  const savedRules = ruleSnapshots === null ? [] : ruleSnapshots.sources().filter((source) => source.isProjectRule);
   const sources = [];
   const addText = (id, origin, content, revision = createHash("sha256").update(content).digest("hex"), options = {}) => {
     const source = new SpecGateRepairSource({ id, origin, content, revision, ...options });
@@ -122,40 +126,16 @@ export function readSpecGateRepairSources({ flowManager, state, executionRoot, s
     }
     addText(id, relative, content, snapshot.digest, options);
   };
-  if (fs.existsSync(path.join(executionRoot, "AGENTS.md"))) capture("project-rules", "AGENTS.md", { appliesTo: ["."] });
-  // Inventory supplies real paths; do not infer paths from prose or execute its commands.
-  const repository = runGit(["rev-parse", "--is-inside-work-tree"], { cwd: executionRoot });
-  if (!repository.ok) {
-    addText("source-inventory", "repository", "", "unavailable", { availability: "unavailable", required: false });
-    return Object.freeze(sources);
+  // Root rules are an explicit project input. Saved scoped-rule identities can
+  // be revalidated, but no prose, inventory or code path discovers new sources.
+  if (!savedRules.some((source) => source.origin === "AGENTS.md")) {
+    const hasRootRule = fs.existsSync(path.join(executionRoot, "AGENTS.md"))
+      || runGit(["ls-files", "--error-unmatch", "--", "AGENTS.md"], { cwd: executionRoot }).ok;
+    if (hasRootRule) capture("project-rules", "AGENTS.md", { appliesTo: ["."] });
   }
-  const inventory = runGit(["ls-files", "-z", "--cached"], { cwd: executionRoot });
-  if (!inventory.ok) throw new Error(`Cannot read repair source inventory: ${inventory.stderr}`);
-  const tracked = [...new Set(inventory.stdout.toString().split("\0").filter(Boolean))].sort();
-  const trackedPaths = new Set(tracked);
-  if (trackedPaths.has("AGENTS.md") && !sources.some((source) => source.origin === "AGENTS.md")) {
-    capture("project-rules", "AGENTS.md", { appliesTo: ["."] });
-  }
-  const references = [spec, ...sources.map((entry) => entry.content)];
-  const referencedOrigins = SpecGateRepairSource.referencedOrigins(references, tracked.filter((relative) => relative !== "AGENTS.md"));
-  const referenced = tracked.filter((relative) => referencedOrigins.has(relative));
-  const scopedRules = new Map();
-  for (const relative of referenced) {
-    if (path.basename(relative) !== "AGENTS.md") capture(`source:${relative}`, relative, { required: false });
-    let directory = path.dirname(relative);
-    while (directory !== ".") {
-      const rulePath = path.join(directory, "AGENTS.md");
-      if (trackedPaths.has(rulePath) || fs.existsSync(path.join(executionRoot, rulePath))) {
-        if (!scopedRules.has(rulePath)) scopedRules.set(rulePath, new Set());
-        scopedRules.get(rulePath).add(directory);
-      }
-      directory = path.dirname(directory);
-    }
-  }
-  for (const [relative, scopes] of [...scopedRules].sort(([a], [b]) => compareText(a, b))) {
-    if (!sources.some((source) => source.origin === relative && source.required)) {
-      capture(`project-rules:${relative}`, relative, { required: false, appliesTo: [...scopes] });
-    }
+  for (const source of savedRules) {
+    capture(source.id.slice("evidence:".length), source.origin,
+      { required: source.required, appliesTo: source.appliesTo });
   }
   return Object.freeze(sources);
 }

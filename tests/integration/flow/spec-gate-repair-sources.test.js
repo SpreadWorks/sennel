@@ -5,7 +5,8 @@ import { test } from "node:test";
 import { FlowManager } from "../../../src/lib/flow-manager.js";
 import { runGit } from "../../../src/lib/git-helpers.js";
 import { attachCanonicalCommandResultPublications } from "../../../src/flow/lib/canonical-command-result.js";
-import { SpecGateRepairSourceSnapshots, SpecGateRepairSourceSnapshotManifest } from "../../../src/flow/lib/spec-gate-repair-values.js";
+import { SpecGateRepairProgressReader } from "../../../src/flow/lib/spec-gate-repair-progress-reader.js";
+import { SpecGateRepairSource, SpecGateRepairSourceSnapshots, SpecGateRepairSourceSnapshotManifest } from "../../../src/flow/lib/spec-gate-repair-values.js";
 import { readSpecGateRepairInput } from "../../../src/flow/lib/spec-gate-repair-input.js";
 import { canonicalDraftDocument } from "../../support/infrastructure/flow-setup.js";
 import { prepareSpecGateRepairService, createSpecGateRepairScenario, completeSpecGateRepairHandoff } from "../../support/infrastructure/spec-gate-repair-scenario.js";
@@ -22,9 +23,8 @@ import { StepFactory } from "../../../src/flow/engine/step-factory.js";
 import { readSpecGateRepairSources } from "../../../src/flow/lib/spec-gate-repair-sources.js";
 import { createTmpDir, removeTmpDir } from "../../support/builders/tmp-dir.js";
 import { saveFixtureSpecGateRepairSources } from "../../support/infrastructure/spec-gate-repair-source-snapshots.js";
-import { SpecGateRepairProgressReader } from "../../../src/flow/lib/spec-gate-repair-progress-reader.js";
 
-test("repair handoff reads the linked Issue, prior Draft and referenced working-tree source after reload", async () => {
+test("repair handoff preserves canonical inputs after reload and leaves working-tree research to the worker", async () => {
   const value = await createSpecGateRepairScenario({ issue: 42,
     issueSnapshot: "# Requirement\nInclude regression checks for consumers of src/help.js.\n",
     request: "Preserve the shared help contract.",
@@ -52,26 +52,22 @@ test("repair handoff reads the linked Issue, prior Draft and referenced working-
     const selected = first.context.select(first.context.units()[0].id);
     const evidence = new Map(selected.ranges.filter((range) => range.id.startsWith("evidence:"))
       .map((range) => [range.id, range]));
-    for (const id of ["evidence:issue.snapshot", "evidence:draft", "evidence:project-rules", "evidence:project-rules:src/AGENTS.md"]) {
+    for (const id of ["evidence:issue.snapshot", "evidence:draft", "evidence:project-rules"]) {
       assert(evidence.has(id), `canonical repair input must include ${id}`);
     }
     assert.match(evidence.get("evidence:issue.snapshot").value.content, /Include regression checks/);
     assert.match(evidence.get("evidence:draft").value.content, /Preserve existing shared consumers/);
     assert.match(evidence.get("evidence:project-rules").value.content, /Reuse the existing renderer/);
-    assert.deepEqual(evidence.get("evidence:project-rules:src/AGENTS.md").value.appliesTo, ["src"]);
-    // Optional code bodies now require a registered digest-bound source range; initial input supplies descriptors.
-    assert(!selected.ranges.some((range) => range.value?.snapshotId === "evidence:source:src/help.js"));
-    const descriptor = first.context.tableOfContents().find((range) => range.source?.origin === "src/help.js");
-    assert.equal(descriptor.bodyStatus, "available-not-selected");
-    const expanded = first.context.select(selected.unit.id, { additionalRangeIds: [descriptor.id] });
-    assert.match(expanded.ranges.find((range) => range.id === descriptor.id).value.content, /export const render/);
+    assert.equal(evidence.has("evidence:project-rules:src/AGENTS.md"), false);
+    assert.equal(first.context.tableOfContents().some((range) => range.source?.origin === "src/help.js"), false);
     for (const range of evidence.values()) {
       assert.equal(range.writable, false);
       assert.equal(range.target, null);
       assert.match(range.value.revision, /^[a-f0-9]{64}$/);
     }
     fs.writeFileSync(path.join(value.root, "src/help.js"), "export const render = () => 'updated help';\n");
-    assert.notEqual(input().context.evidenceDigest, first.context.evidenceDigest);
+    assert.equal(input().context.evidenceDigest, first.context.evidenceDigest,
+      "live code is outside the canonical handoff evidence and remains available in the checkout");
     const outcome = await completeSpecGateRepairHandoff({ ...value,
       replacement: "Publish a precisely validated artifact." });
     const requestContext = outcome.request.inputs.find((entry) => entry.name === "spec-gate-repair-context.json").document;
@@ -83,7 +79,7 @@ test("repair handoff reads the linked Issue, prior Draft and referenced working-
         generation: String(locator.generation), phase: "checkpoint" } });
     const snapshots = new SpecGateRepairProgressReader({ flowManager: reloaded, specId: value.specId,
       attemptId: locator.attemptId, consumerNodeId: "spec-gate-repair" }).read(locator.generation, "checkpoint").sourceSnapshots;
-    assert.match(snapshots.sources().find((source) => source.origin === "src/help.js").content, /updated help/);
+    assert.equal(snapshots.sources().some((source) => source.origin === "src/help.js"), false);
     assert.deepEqual(outcome.request.inputs[0].document, JSON.parse(saved.bytes.toString("utf8")).context);
     assert(["spec-gate-repair-review-required", "spec-gate-repair-ready-for-gate"].includes(outcome.result.kind));
     assert(["spec-review", "spec-gate"].includes(outcome.service.workerOutcome.receipt.targetStepId));
@@ -137,7 +133,7 @@ for (const { name, scenario, expectedError } of [
 }
 
 
-test("captured source statuses and hierarchical rules survive exact UTF-8 snapshot readback", () => {
+test("explicit saved source statuses and hierarchical rules survive exact UTF-8 snapshot readback", () => {
   const root = createTmpDir("repair-source-snapshots-");
   try {
     fs.mkdirSync(path.join(root, "src/nested"), { recursive: true });
@@ -150,9 +146,16 @@ test("captured source statuses and hierarchical rules survive exact UTF-8 snapsh
     assert.equal(runGit(["init", "-q"], { cwd: root }).ok, true);
     assert.equal(runGit(["add", "."], { cwd: root }).ok, true);
     fs.unlinkSync(path.join(root, "src/nested/missing.js"));
-    const sources = readSpecGateRepairSources({ flowManager: { readArtifact: () => null },
-      state: { request: "Inspect src/nested/text.js, src/nested/missing.js and src/nested/binary.js", issue: null },
-      executionRoot: root, spec: {} });
+    // Saved historical evidence remains a typed immutable snapshot; new capture no longer inventories code.
+    const sources = [
+      ...readSpecGateRepairSources({ flowManager: { readArtifact: () => null },
+        state: { request: "Inspect the checkout", issue: null }, executionRoot: root }),
+      new SpecGateRepairSource({ revision: "saved-identity", id: "source:src/nested/text.js", origin: "src/nested/text.js", content: fs.readFileSync(path.join(root, "src/nested/text.js"), "utf8") }),
+      new SpecGateRepairSource({ revision: "missing", id: "source:src/nested/missing.js", origin: "src/nested/missing.js", content: "", availability: "missing" }),
+      new SpecGateRepairSource({ revision: "unavailable", id: "source:src/nested/binary.js", origin: "src/nested/binary.js", content: "", availability: "unavailable" }),
+      ...["src/AGENTS.md", "src/nested/AGENTS.md"].map((origin) => new SpecGateRepairSource({
+        revision: "saved-identity", id: `project-rule:${origin}`, origin, content: fs.readFileSync(path.join(root, origin), "utf8"), appliesTo: [path.posix.dirname(origin)] })),
+    ];
     const byOrigin = new Map(sources.map((source) => [source.origin, source]));
     assert.equal(byOrigin.get("src/nested/missing.js").availability, "missing");
     assert.equal(byOrigin.get("src/nested/binary.js").availability, "unavailable");
@@ -160,7 +163,7 @@ test("captured source statuses and hierarchical rules survive exact UTF-8 snapsh
     const text = byOrigin.get("src/nested/text.js");
     assert.equal(text.availability, "available");
     assert.equal(text.content, "\ufeff漢🧭\r\nexport const value = 1;\n");
-    assert.equal(text.revision, text.digest);
+    assert.equal(text.revision, "saved-identity");
     assert.equal(text.byteLength, fs.statSync(path.join(root, text.origin)).size);
     assert.equal(byOrigin.get("AGENTS.md").required, true);
     assert.deepEqual(byOrigin.get("src/AGENTS.md").appliesTo, ["src"]);
@@ -175,23 +178,12 @@ test("captured source statuses and hierarchical rules survive exact UTF-8 snapsh
 });
 
 
-test("source and index requests survive publication replay and reach the next worker generation exactly", async () => {
+test("canonical index requests survive publication replay and reach the next worker generation exactly", async () => {
   const specRecord = validWorkerHandoffSpec();
   specRecord.requirements.push(...Array.from({ length: 40 }, (_, index) => ({
     id: `R${index + 2}`, desc: `Unselected requirement ${index + 2}`, testable: false, task_ids: ["T1"],
   })));
-  const sourceText = "export const renderer = '漢🧭';\r\n// Full immutable source evidence.\n";
-  const value = await createSpecGateRepairScenario({ specRecord,
-    request: "Preserve src/renderer.js and its existing exports.",
-    beforeGate: ({ root }) => {
-      fs.mkdirSync(path.join(root, "src"));
-      fs.writeFileSync(path.join(root, "src/renderer.js"), sourceText);
-      fs.writeFileSync(path.join(root, "AGENTS.md"), "Keep the canonical export contract.\n");
-      fs.writeFileSync(path.join(root, "src/AGENTS.md"), "Scope source rules to src.\n");
-      assert.equal(runGit(["init", "-q"], { cwd: root }).ok, true);
-      assert.equal(runGit(["add", "src/renderer.js", "AGENTS.md", "src/AGENTS.md"], { cwd: root }).ok, true);
-    },
-  });
+  const value = await createSpecGateRepairScenario({ specRecord, request: "Preserve the canonical requirements." });
   const reload = () => {
     value.ctx.flowManager = new FlowManager({ root: value.root, mainRoot: value.root,
       inWorktree: false, specId: value.specId });
@@ -214,11 +206,8 @@ test("source and index requests survive publication replay and reach the next wo
       state: value.ctx.flowManager.load(value.specId), invocation: value.invocation });
     const selected = selectionFor(first);
     const firstIndex = selected.ranges.find((range) => range.id === selected.indexManifest.firstPageId).value;
-    const sourceDescriptor = firstIndex.descriptors.find((entry) => entry.source?.origin === "src/renderer.js");
-    assert(sourceDescriptor, "the real Git source descriptor is discoverable in the supplied index page");
     assert(selected.indexManifest.pageCount > 1);
     assert(firstIndex.nextPageId, "the structural index has an actual registered next page");
-    assert(!selected.ranges.some((range) => range.value?.snapshotId === sourceDescriptor.source.id));
     assert(!selected.ranges.some((range) => range.id === "requirements[R2].desc"));
     const attemptId = value.ctx.flowManager.canonicalState(value.specId).attempt.id;
     const budgetInput = { specId: value.specId, attemptId, baseRevision: selected.baseRevision,
@@ -226,12 +215,13 @@ test("source and index requests survive publication replay and reach the next wo
     const budget = () => latestRepairBudget({ ...budgetInput, flowManager: value.ctx.flowManager }).budget.snapshot();
     const proposal = { version: 1, stage: "spec-gate-repair-context-request",
       baseRevision: selected.baseRevision, unitId: selected.unit.id,
-      additionalRangeIds: [sourceDescriptor.id, firstIndex.nextPageId, "requirements[R2].desc"] };
+      additionalRangeIds: [firstIndex.nextPageId, "requirements[R2].desc"] };
     fs.writeFileSync(first.payloadPath("spec-gate-repair.json"), workerArtifactJson(proposal));
     reserveFixtureSpecGateRepairWorkerCall({ ctx: value.ctx, request: first,
       prompt: JSON.stringify(first.toPromptReference()) });
     const initialCheckpoint = readProgress(attemptId, 0, "checkpoint");
     const initialSnapshots = initialCheckpoint.sourceSnapshotReference;
+    assert.equal(Object.hasOwn(initialCheckpoint, "sourceSnapshots"), false);
     assert.match(initialSnapshots.digest, /^[a-f0-9]{64}$/);
     assert(initialSnapshots.byteLength > 0);
     sealWorkerArtifactHandoff({ requestPath: first.requestPath, invocationId: first.dispatchInvocationId });
@@ -277,12 +267,6 @@ test("source and index requests survive publication replay and reach the next wo
       invocation: { ...value.invocation, id: "source-index-next-generation" } });
     const nextSelection = selectionFor(next);
     assert.deepEqual(nextSelection.unit.findings, selected.unit.findings);
-    const selectedSource = nextSelection.ranges.find((range) => range.id === sourceDescriptor.id);
-    assert.equal(selectedSource.value.content, sourceText);
-    assert.equal(selectedSource.value.snapshotDigest, sourceDescriptor.source.digest);
-    assert.equal(selectedSource.value.byteStart, 0);
-    assert.equal(selectedSource.value.byteEnd, Buffer.byteLength(sourceText, "utf8"));
-    assert.equal(selectedSource.writable, false);
     const nextIndex = nextSelection.ranges.find((range) => range.id === firstIndex.nextPageId);
     assert.equal(nextIndex.value.page, 1);
     assert.equal(nextIndex.value.revision, selected.indexManifest.revision);
@@ -293,11 +277,12 @@ test("source and index requests survive publication replay and reach the next wo
     assert.deepEqual(nextSelection.ranges.filter((range) => range.writable), selected.ranges.filter((range) => range.writable));
     assert.notEqual(next.requestDigest, first.requestDigest);
     const range = nextSelection.ranges.find((entry) => entry.writable);
+    const replacement = "Publish a precisely validated artifact.";
     fs.writeFileSync(next.payloadPath("spec-gate-repair.json"), workerArtifactJson({
       version: 1, stage: "spec-gate-repair", baseRevision: nextSelection.baseRevision,
       groups: [{ findingIdentities: nextSelection.unit.findings.map((finding) => finding.identity), operations: [{
         kind: "edit-text-field", target: range.target, expectedDigest: range.digest,
-        edits: [{ startByte: 0, endByte: Buffer.byteLength(range.value, "utf8"), replacement: "Publish a precisely validated artifact." }],
+        edits: [{ startByte: 0, endByte: Buffer.byteLength(range.value, "utf8"), replacement }],
         reason: "Use the canonical source and page evidence to correct the selected finding.",
       }] }],
     }));
@@ -323,6 +308,6 @@ test("source and index requests survive publication replay and reach the next wo
     assert.equal(ledger.entries.length, 2);
     assert.deepEqual(ledger.entries.map((entry) => entry.generation), [0, 1]);
     const accepted = value.ctx.flowManager.readArtifact({ specId: value.specId, logicalKey: "spec.record", consumerNodeId: "spec-gate-repair" });
-    assert.equal(JSON.parse(accepted.bytes.toString("utf8")).requirements[0].desc, "Publish a precisely validated artifact.");
+    assert.equal(JSON.parse(accepted.bytes.toString("utf8")).requirements[0].desc, replacement);
   } finally { removeTmpDir(value.root); }
 });

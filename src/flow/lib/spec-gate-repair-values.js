@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import { WorkerArtifactHandoffError } from "./worker-artifact-handoff-error.js";
 import { SpecJsonValidator } from "../../lib/spec-json-validator.js";
 import { compareText } from "./text-order.js";
@@ -91,6 +92,22 @@ export class SpecGateRepairSourceSnapshots {
     Object.freeze(this);
   }
   sources() { return [...this.#sources]; }
+  assertCurrentEvidence(current) {
+    if (!(current instanceof SpecGateRepairSourceSnapshots)) {
+      throw new TypeError("Repair evidence comparison requires typed current snapshots");
+    }
+    // Required canonical inputs and every declared rule remain live evidence.
+    // Optional research bodies retain their immutable publication identity and
+    // do not authorize another checkout read during restoration.
+    const descriptors = (snapshots) => snapshots.sources()
+      .filter((source) => source.required || source.isProjectRule)
+      .map((source) => source.descriptor());
+    if (!isDeepStrictEqual(descriptors(this), descriptors(current))) {
+      throw new WorkerArtifactHandoffError("stale", "FLOW_SPEC_GATE_REPAIR_EVIDENCE_CHANGED",
+        "Saved Spec Gate repair canonical inputs or project rules changed",
+        { retryable: false, recoveryPossible: false });
+    }
+  }
 }
 
 /** An exact content identity, never a caller-selected path or Activity. */
@@ -225,5 +242,9 @@ export class SpecGateRepairInput {
     this.observationIdentities = Object.freeze(observationIdentities.map((identity) => Object.freeze(identity)));
     this.validator = validator;
     Object.freeze(this);
+  }
+  withLocations(locations) {
+    return new SpecGateRepairInput({ ...this,
+      context: this.context.resolveLocations({ baseRevision: this.baseRevision, locations }) });
   }
 }

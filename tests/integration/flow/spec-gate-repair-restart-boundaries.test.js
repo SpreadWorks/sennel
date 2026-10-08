@@ -167,7 +167,7 @@ describe("Spec Gate repair restart boundaries", () => {
         const selectedIds = new Set(repairSelections(selected)[0].ranges.map((range) => range.id));
         const extra = source.context.tableOfContents().find((range) => !selectedIds.has(range.id));
         assert(extra, "each provider response must request new canonical context");
-        return { request, selected, proposal: { version: 3, intent: "repair", sourceQueries: [], stage: "spec-gate-repair-context-request", sourceOrigins: [],
+        return { request, selected, proposal: { version: 1, stage: "spec-gate-repair-context-request",
           baseRevision: selected.baseRevision, unitId: repairSelections(selected)[0].unit.id,
           additionalRangeIds: [extra.id] } };
       };
@@ -278,7 +278,7 @@ describe("Spec Gate repair restart boundaries", () => {
             const selectedIds = new Set(repairSelections(selected)[0].ranges.map((range) => range.id));
             const extra = source.context.tableOfContents().find((range) => !selectedIds.has(range.id));
             assert(extra, "four distinct additional ranges are available");
-            return { version: 3, intent: "repair", sourceQueries: [], stage: "spec-gate-repair-context-request", sourceOrigins: [],
+            return { version: 1, stage: "spec-gate-repair-context-request",
               baseRevision: selected.baseRevision, unitId: repairSelections(selected)[0].unit.id,
               additionalRangeIds: [extra.id] };
           })() : draftReturnProposal(selected, "Which exact acceptance condition is intended?");
@@ -344,7 +344,7 @@ describe("Spec Gate repair restart boundaries", () => {
         const request = JSON.parse(fs.readFileSync(requestPath, "utf8"));
         context = requestInput(request, "spec-gate-repair-context.json").document;
         fs.writeFileSync(requestPayloadPath(request, "spec-gate-repair.json"), workerArtifactJson({
-          version: 3, intent: "repair", sourceQueries: [], stage: "spec-gate-repair-context-request", sourceOrigins: [],
+          version: 1, stage: "spec-gate-repair-context-request",
           baseRevision: context.baseRevision, unitId: repairSelections(context)[0].unit.id,
           additionalRangeIds: ["background"],
         }));
@@ -409,7 +409,7 @@ describe("Spec Gate repair restart boundaries", () => {
       const context = request.inputs.find((entry) => entry.name === "spec-gate-repair-context.json").document;
       const original = durableSnapshot(value.flowManager, value.specId);
       fs.writeFileSync(request.payloadPath("spec-gate-repair.json"), workerArtifactJson({
-        version: 3, intent: "repair", sourceQueries: [], stage: "spec-gate-repair-context-request", sourceOrigins: [],
+        version: 1, stage: "spec-gate-repair-context-request",
         baseRevision: context.baseRevision, unitId: repairSelections(context)[0].unit.id,
         additionalRangeIds: ["background"],
       }));
@@ -682,7 +682,7 @@ describe("Spec Gate repair restart boundaries", () => {
       const requestBytes = fs.readFileSync(request.requestPath);
       const context = request.inputs.find((entry) => entry.name === "spec-gate-repair-context.json").document;
       const completed = await completeWorkerResponse(value, request, {
-        version: 3, intent: "repair", sourceQueries: [], stage: "spec-gate-repair-context-request", sourceOrigins: [],
+        version: 1, stage: "spec-gate-repair-context-request",
         baseRevision: context.baseRevision, unitId: repairSelections(context)[0].unit.id,
         additionalRangeIds: ["background"],
       });
@@ -808,7 +808,7 @@ describe("Spec Gate repair restart boundaries", () => {
       const request = nextRequest(value, "direct-settlement-bypass");
       const context = request.inputs.find((entry) => entry.name === "spec-gate-repair-context.json").document;
       fs.writeFileSync(request.payloadPath("spec-gate-repair.json"), workerArtifactJson({
-        version: 3, intent: "repair", sourceQueries: [], stage: "spec-gate-repair-context-request", sourceOrigins: [],
+        version: 1, stage: "spec-gate-repair-context-request",
         baseRevision: context.baseRevision, unitId: repairSelections(context)[0].unit.id,
         additionalRangeIds: ["background"],
       }));
@@ -854,7 +854,7 @@ describe("Spec Gate repair restart boundaries", () => {
       const context = request.inputs.find((entry) => entry.name === "spec-gate-repair-context.json").document;
       const binding = await new SpecEntryConnector(request).connect();
       const completed = await completeWorkerResponse(value, request, {
-        version: 3, intent: "repair", sourceQueries: [], stage: "spec-gate-repair-context-request", sourceOrigins: [],
+        version: 1, stage: "spec-gate-repair-context-request",
         baseRevision: context.baseRevision, unitId: repairSelections(context)[0].unit.id,
         additionalRangeIds: ["background"],
       });
@@ -920,7 +920,7 @@ describe("Spec Gate repair restart boundaries", () => {
       ));
       const initial = durableSnapshot(value.flowManager, value.specId);
       const completed = await completeWorkerResponse(value, first, {
-        version: 3, intent: "repair", sourceQueries: [], stage: "spec-gate-repair-context-request", sourceOrigins: [],
+        version: 1, stage: "spec-gate-repair-context-request",
         baseRevision: context.baseRevision, unitId: firstUnit.unit.id,
         additionalRangeIds: ["background"],
       });
@@ -1027,8 +1027,8 @@ describe("Spec Gate repair restart boundaries", () => {
       assert.equal(initial.mode, "repair");
       const unitId = repairSelections(initial)[0].unit.id;
       assert.equal(repairSelections(initial)[0].ranges.some((range) => range.id === "background"), false);
-      const extra = await completeWorkerResponse(value, first, { version: 3, intent: "repair", sourceQueries: [],
-        stage: "spec-gate-repair-context-request", sourceOrigins: [], baseRevision: initial.baseRevision,
+      const extra = await completeWorkerResponse(value, first, { version: 1,
+        stage: "spec-gate-repair-context-request", baseRevision: initial.baseRevision,
         unitId, additionalRangeIds: ["background"] });
       assert.equal(extra.result.kind, "spec-gate-repair-context-required");
       const restarted = new FlowManager({ root: value.root, mainRoot: value.root,
@@ -1076,7 +1076,7 @@ describe("Spec Gate repair restart boundaries", () => {
         assert.equal(context.mode, "repair");
         const selection = repairSelections(context)[0];
         const range = selection.ranges.find((entry) => entry.writable);
-        const proposal = mode === "context" ? { version: 3, intent: "repair", sourceQueries: [], stage: "spec-gate-repair-context-request", sourceOrigins: [],
+        const proposal = mode === "context" ? { version: 1, stage: "spec-gate-repair-context-request",
           baseRevision: context.baseRevision, unitId: selection.unit.id, additionalRangeIds: ["background"] }
           : mode === "draft-return"
             ? draftReturnProposal(context, "Which validation target is intended?")

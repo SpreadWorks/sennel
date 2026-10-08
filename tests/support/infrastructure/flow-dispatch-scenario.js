@@ -6,6 +6,8 @@ import { mock } from "node:test";
 import { Container, container } from "../../../src/lib/container.js";
 import { createTmpDir, removeTmpDir } from "../builders/tmp-dir.js";
 import { commitAll, initGitRepo } from "./git-repo.js";
+import { FLOW_DISPATCH_INVOCATION_ENV } from "../../../src/flow/lib/dispatch-invocation.js";
+import { SpecGateRepairSelectedInputIdentity } from "../../../src/flow/lib/spec-gate-repair-input-unavailable.js";
 import { WorkerArtifactHandoffRequest } from "../../../src/flow/lib/worker-artifact-handoff.js";
 
 /** Bind a canonical manager and external worker to the production dispatcher. */
@@ -45,6 +47,14 @@ export function requestInput(request, name) {
     });
   }
   return input;
+}
+
+/** Read the identity supplied to the external worker, including its non-self-referential request digest. */
+export function requestSpecGateRepairIdentity(request, executionEnvironment) {
+  const reference = JSON.parse(executionEnvironment[FLOW_DISPATCH_INVOCATION_ENV]);
+  return SpecGateRepairSelectedInputIdentity.fromRequest({ ...request,
+    requestDigest: reference.requestDigest,
+    inputs: [requestInput(request, "spec-gate-repair-context.json")] });
 }
 
 export function requestPayloadPath(request, logicalName) {

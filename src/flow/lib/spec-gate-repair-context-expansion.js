@@ -1,4 +1,45 @@
 import { SpecGateRepairSourceRange } from "./spec-gate-repair-values.js";
+import { WorkerArtifactHandoffError } from "./worker-artifact-handoff-error.js";
+
+/** Worker requests may extend registered canonical ranges, never select checkout sources. */
+export class SpecGateRepairContextRequest {
+  constructor(value) {
+    if (value !== null && typeof value === "object") {
+      for (const field of ["sourceOrigins", "sourceQueries"]) {
+        if (Object.hasOwn(value, field) && (!Array.isArray(value[field]) || value[field].length !== 0)) {
+          throw new WorkerArtifactHandoffError("invalid", "FLOW_SPEC_GATE_REPAIR_CONTEXT_UNAVAILABLE",
+            "Research missing source facts directly in the execution checkout",
+            { data: { failureKind: "step-admission" } });
+        }
+      }
+    }
+    if (value === null || typeof value !== "object" || Array.isArray(value)
+      || Object.keys(value).sort().join(",") !== "additionalRangeIds,baseRevision,stage,unitId,version"
+      || value.version !== 1 || value.stage !== "spec-gate-repair-context-request"
+      || typeof value.baseRevision !== "string" || !/^sha256:[a-f0-9]{64}$/.test(value.baseRevision)
+      || typeof value.unitId !== "string" || value.unitId.trim() === ""
+      || !Array.isArray(value.additionalRangeIds) || value.additionalRangeIds.length === 0
+      || value.additionalRangeIds.some((id) => typeof id !== "string" || id.trim() === "")
+      || new Set(value.additionalRangeIds).size !== value.additionalRangeIds.length) {
+      throw new TypeError("Spec Gate repair context request requires exact canonical range identities");
+    }
+    this.version = value.version;
+    this.stage = value.stage;
+    this.baseRevision = value.baseRevision;
+    this.unitId = value.unitId;
+    this.additionalRangeIds = Object.freeze([...value.additionalRangeIds]);
+    Object.freeze(this);
+  }
+  static fromJSON(value) { return new this(value); }
+  toJSON() {
+    return { version: this.version, stage: this.stage, baseRevision: this.baseRevision,
+      unitId: this.unitId, additionalRangeIds: [...this.additionalRangeIds] };
+  }
+  expand(context, previousRangeIds = []) {
+    return new SpecGateRepairContextExpansion({ context, unitId: this.unitId, baseRevision: this.baseRevision,
+      requestedRangeIds: this.additionalRangeIds, previousRangeIds });
+  }
+}
 
 /** Coverage of source bytes and index pages have distinct progress semantics. */
 export class SpecGateRepairContextExpansion {

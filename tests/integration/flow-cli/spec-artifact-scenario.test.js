@@ -167,6 +167,13 @@ describe("Spec artifact lifecycle and downstream consumption", { concurrency: fa
           const requestPath = options.executionEnvironment.SENNEL_FLOW_HANDOFF_REQUEST;
           const invocationId = options.executionEnvironment.SENNEL_FLOW_DISPATCH_INVOCATION_ID;
           const request = JSON.parse(fs.readFileSync(requestPath, "utf8"));
+          if (["spec", "spec-repair", "spec-gate-repair"].includes(request.stepId)) {
+            assert.match(request.workerInstructions.schemaGuidance,
+              /Research missing source facts directly in the execution checkout/);
+            assert.equal(fs.realpathSync(options.executionWorkDir), fs.realpathSync(root));
+            assert.equal(fs.readFileSync(path.join(options.executionWorkDir, "README.md"), "utf8"),
+              "flow dispatcher fixture\n");
+          }
           requests.push(request);
           writeWorkerPayload(request);
           let sealed;

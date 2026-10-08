@@ -1,7 +1,7 @@
 /** Canonical publication history for bounded Gate repair worker batches. */
 import { readSpecGateRepairInput } from "./spec-gate-repair-input.js";
 import { FlowFindingSourceIdentity } from "./flow-finding-source.js";
-import { SpecGateRepairContextExpansion } from "./spec-gate-repair-context-expansion.js";
+import { SpecGateRepairContextRequest } from "./spec-gate-repair-context-expansion.js";
 import { PromptRequestLimit, PromptExecutionLimit, PromptExecutionBudget } from "../../lib/prompt-batching.js";
 import { specGateRepairProgressMismatch as progressMismatch } from "./spec-gate-repair-call-plan.js";
 import { WorkerArtifactHandoffError } from "./worker-artifact-handoff-error.js";
@@ -98,12 +98,19 @@ function completedRepairPublication({ flowManager, specId, attemptId, attemptSeq
 
 export function readProgressBoundSpecGateRepairInput({ flowManager, state, executionRoot,
   executionLifecycle = null, acceptedPublication = false }) {
-  let source = readSpecGateRepairInput({ flowManager, state, executionRoot });
   const lifecycle = executionLifecycle ?? flowManager.draftStepExecutionState({ binding: {
     runId: state.runId, specId: state.specId, stepId: "spec-gate-repair", attempt: state.attempt,
   } }).lifecycle;
   const restoredProgress = ["checkpoint", "claimed", "publication"].includes(lifecycle?.phase)
     ? readSpecGateRepairExecutionProgress({ flowManager, state, lifecycle }) : null;
+  let source = readSpecGateRepairInput({ flowManager, state, executionRoot,
+    sourceSnapshots: restoredProgress?.sourceSnapshots ?? null });
+  if (restoredProgress !== null
+    && source.context.evidenceDigest !== restoredProgress.document.context.evidenceDigest) {
+    throw new WorkerArtifactHandoffError("stale", "FLOW_SPEC_GATE_REPAIR_EVIDENCE_CHANGED",
+      "Saved Spec Gate repair snapshot differs from current canonical evidence",
+      { retryable: false, recoveryPossible: false });
+  }
   const ledger = new SpecGateRepairProgressLedger({ flowManager, specId: state.specId,
     attemptId: state.attempt.id, baseRevision: source.baseRevision, executionLifecycle });
   const activeDraftReturn = ledger.publication?.proposal.stage === "spec-gate-repair-draft-return"
@@ -120,17 +127,6 @@ export function readProgressBoundSpecGateRepairInput({ flowManager, state, execu
       "published Spec Gate repair evidence changed before further work",
       { retryable: false, recoveryPossible: false });
   }
-  if (restoredProgress !== null) {
-    const restored = readSpecGateRepairInput({ flowManager, state, executionRoot,
-      sourceSnapshots: restoredProgress.sourceSnapshots });
-    if (restored.context.evidenceDigest !== source.context.evidenceDigest
-      || restored.context.evidenceDigest !== restoredProgress.document.context.evidenceDigest) {
-      throw new WorkerArtifactHandoffError("stale", "FLOW_SPEC_GATE_REPAIR_EVIDENCE_CHANGED",
-        "Saved Spec Gate repair snapshot differs from current canonical evidence",
-        { retryable: false, recoveryPossible: false });
-    }
-    source = restored;
-  }
   const locationPlan = source.context.unresolvedFindings().length > 0
     ? source.context.locationPlan({ limit: SPEC_GATE_REPAIR_REQUEST_LIMIT }) : null;
   const completedLocations = locationPlan === null ? [] : acceptedPublication
@@ -143,11 +139,9 @@ export function readProgressBoundSpecGateRepairInput({ flowManager, state, execu
         locations: entry.proposal.locations,
       })) });
     if (resolved.unresolvedFindings().length === 0) {
-      source = readSpecGateRepairInput({ flowManager, state, executionRoot,
-        sourceSnapshots: restoredProgress?.sourceSnapshots ?? null,
-        locations: resolved.units().flatMap((unit) => unit.findings
-          .filter((finding) => unresolved.has(finding.identity.toString()))
-          .map((finding) => ({ identity: finding.identity.toJSON(), rangeIds: finding.rangeIds }))) });
+      source = source.withLocations(resolved.units().flatMap((unit) => unit.findings
+        .filter((finding) => unresolved.has(finding.identity.toString()))
+        .map((finding) => ({ identity: finding.identity.toJSON(), rangeIds: finding.rangeIds }))));
     }
   }
   return Object.freeze({ source, ledger, locationPlan });
@@ -263,12 +257,10 @@ export class SpecGateRepairProgressLedger {
     let ids = [];
     for (const entry of this.entries) {
       if (entry.generation >= beforeGeneration
-        || entry.proposal.stage !== "spec-gate-repair-context-request"
-        || entry.proposal.unitId !== unitId) continue;
-      ids = new SpecGateRepairContextExpansion({ context, unitId,
-        baseRevision: entry.proposal.baseRevision,
-        requestedRangeIds: entry.proposal.additionalRangeIds,
-        previousRangeIds: ids }).additionalRangeIds;
+        || entry.proposal.stage !== "spec-gate-repair-context-request") continue;
+      const contextRequest = SpecGateRepairContextRequest.fromJSON(entry.proposal);
+      if (contextRequest.unitId !== unitId) continue;
+      ids = contextRequest.expand(context, ids).additionalRangeIds;
     }
     return ids;
   }
