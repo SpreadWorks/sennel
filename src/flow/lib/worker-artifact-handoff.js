@@ -15,7 +15,7 @@ import { AtomicFile } from "../../lib/atomic-file.js";
 import { SpecGateRepairInputDescriptor, SpecGateRepairInputSnapshotLocator,
   SPEC_GATE_REPAIR_INPUT_NAME, specGateRepairInputFormatUnavailable } from "./spec-gate-repair-input-descriptor.js";
 import { SpecGateRepairSelectedInputIdentity } from "./spec-gate-repair-input-unavailable.js";
-import { freezeSpecGateRepairValue } from "./spec-gate-repair-selection.js";
+import { SpecGateRepairNavigationSelection, freezeSpecGateRepairValue } from "./spec-gate-repair-selection.js";
 import { FlowHandoffAuthorityLease } from "../../lib/flow-handoff-authority-lease.js";
 import { PRODUCT } from "../../lib/product.js";
 import {
@@ -1649,7 +1649,11 @@ function specGateRepairContextDocuments({ source, ledger, locationPlan, request 
         unit.id, ledger.additionalRangeIds(source.context, unit.id),
       ]));
       const savedContext = request?.inputs.find((entry) => entry.name === "spec-gate-repair-context.json")?.document;
-      if (savedContext?.mode === "repair") {
+      if (["navigate", "inspect"].includes(savedContext?.mode)) {
+        document = source.context.restoreContinuation(savedContext, {
+          additionalRangeIds: additionalRanges[savedContext.unitId],
+        });
+      } else if (savedContext?.mode === "repair") {
         // A durable claim owns its immutable selection and batch identity. Re-read
         // every complete selection from the canonical source before exact replay.
         const selections = SpecGateRepairBundle.fromJSON(savedContext.bundle).selections().map((selection) => {
@@ -1661,9 +1665,12 @@ function specGateRepairContextDocuments({ source, ledger, locationPlan, request 
         });
         document = { ...savedContext, bundle: SpecGateRepairBundle.fromSelections(selections).toJSON() };
       } else {
-        const plan = source.context.referencePlan({ limit: SPEC_GATE_REPAIR_REQUEST_LIMIT,
-          unitIds: remaining.map((unit) => unit.id), additionalRanges });
-        documents = plan.batches.map((batch) => source.context.referenceDocument(batch));
+        const continuation = remaining.map((unit) => ledger.continuationDocument(source.context, unit.id))
+          .find((entry) => entry !== null);
+        const plan = continuation === undefined ? source.context.referencePlan({ limit: SPEC_GATE_REPAIR_REQUEST_LIMIT,
+          unitIds: remaining.map((unit) => unit.id), additionalRanges }) : null;
+        documents = plan === null ? [continuation]
+          : plan.batches.map((batch) => source.context.referenceDocument(batch));
         document = documents[0];
       }
     }
@@ -4562,10 +4569,14 @@ function requestBoundWorkerResponseGuidance(stepId, inputs, sourceResponseContra
   const draftReviewRoute = draftReviewRouteForStepId(stepId);
   if (draftReviewRoute?.triageStepId === stepId) return DraftTriageDecision.triageGuidance(draftReviewRoute);
   if (stepId === "spec-gate-repair") return [
+    "Locate, navigate and inspect modes are read-only. Locate returns exact finding locations from the supplied canonical inventory. Navigate and inspect return only a version 1 spec-gate-repair-context-request for the selected unit and registered canonical range IDs, optionally intent inspect. Omit intent when requesting repair. They grant no edit permission and never permit repair groups, operations or Draft return.",
+    "Index-only requests produce bounded navigation pages; inspection reads canonical ranges. A context request without inspect intent returns complete repair evidence and its original allowedTargets once its request selects canonical content rather than index pages. Host source discovery is unavailable; sourceOrigins and sourceQueries are not request fields.",
     "Use the complete selected immutable Spec Gate repair context through its declared inline or file delivery. Repair mode uses a versioned bundle with shared ranges, guardrails and rationales, and ordered unit references.",
     "Resolve every unit reference against its shared table before evaluating the unit. Preserve each full finding identity and source citation; shared tables supply context, not edit permission.",
     "Only the current unit's findings allowedTargets and operationKinds grant mutation authority. Its writable range references must match those permissions; never borrow another unit's authority.",
-    "Return one complete atomic group per ordered bundle unit, using original digests and UTF-8 edit offsets. Read-only evidence and related ranges must remain unchanged.",
+    inputs.find((input) => input.name === "spec-gate-repair-context.json")?.document?.mode === "repair"
+      ? "Return one complete atomic group per ordered bundle unit, using original digests and UTF-8 edit offsets. Read-only evidence and related ranges must remain unchanged."
+      : "Return only the disposition permitted by the selected read-only mode. Preserve its complete finding identity and original revision; do not emit repair operations.",
     "If the supplied input cannot be read or exceeds your context, emit only version 1, stage spec-gate-repair-input-unavailable, binding, baseRevision, selectionDigest, mode, unitIds, findingIdentities, reason and explanation. Copy the exact binding and selected identity from the small manifest. reason is file-read-failed, context-limit or context-unavailable; explanation must describe the actual failure. Include no groups, locations, additional requests or Draft return. Never declare repair success with unread input.",
   ].join("\n");
   const gateRecurrence = inputs.find((input) => (
@@ -7132,15 +7143,31 @@ function validateSpecGateRepairWorkerPayload(request, proposal) {
     SpecGateRepairInputUnavailable.fromJSON(proposal).assertRequest(request);
     return;
   }
-  const mode = request.inputs.find((entry) => entry.name === "spec-gate-repair-context.json")?.document?.mode;
+  const input = request.inputs.find((entry) => entry.name === "spec-gate-repair-context.json");
+  const context = input?.document;
+  const mode = context?.mode;
+  if (proposal?.stage === "spec-gate-repair-context-request"
+    && ["repair", "navigate", "inspect"].includes(mode)) {
+    const contextRequest = SpecGateRepairContextRequest.fromJSON(proposal);
+    const selectedIdentity = SpecGateRepairSelectedInputIdentity.selectionFromDocument(context, input.digest);
+    contextRequest.assertSelectedIdentity(selectedIdentity);
+    if (request.flowManager != null) {
+      const { source, ledger } = readProgressBoundSpecGateRepairInput({ flowManager: request.flowManager,
+        state: request.flowManager.canonicalState(request.specId), executionRoot: request.executionRoot,
+        executionLifecycle: canonicalWorkerExecutionClaimForStored({ flowManager: request.flowManager, stored: request }),
+      });
+      contextRequest.expand(source.context, ledger.additionalRangeIds(source.context, contextRequest.unitId),
+        { selectedIdentity });
+    }
+    return;
+  }
   if (mode === "repair") {
     if (proposal?.stage === "spec-gate-repair") {
       new SpecGateRepairOperationBatch(proposal, readSpecJsonValidator().taskAcceptanceContract());
-    }
-    else if (proposal?.stage === "spec-gate-repair-context-request") {
-      SpecGateRepairContextRequest.fromJSON(proposal);
     } else if (proposal?.stage === "spec-gate-repair-draft-return") {
-      if (proposal.version !== 1 || typeof proposal.unitId !== "string" || proposal.unitId === ""
+      if (Object.keys(proposal).sort().join(",") !== "baseRevision,decision,evidence,stage,unitId,unresolvedBecause,version"
+        || proposal.version !== 1 || proposal.baseRevision !== context.baseRevision
+        || typeof proposal.unitId !== "string" || proposal.unitId === ""
         || ![proposal.decision, proposal.evidence, proposal.unresolvedBecause].every((value) => (
           typeof value === "string" && value.trim() !== ""
         ))) {
@@ -7148,9 +7175,24 @@ function validateSpecGateRepairWorkerPayload(request, proposal) {
       }
     } else throw new Error("Spec Gate repair response has no typed repair disposition");
   } else if (mode === "locate") {
-    if (proposal?.stage !== "spec-gate-repair-locate" || !Array.isArray(proposal.locations)) {
+    if (proposal?.stage !== "spec-gate-repair-locate"
+      || Object.keys(proposal).sort().join(",") !== "baseRevision,locations,stage,version"
+      || proposal.version !== 1 || proposal.baseRevision !== context.baseRevision
+      || !Array.isArray(proposal.locations) || proposal.locations.length !== 1) {
       throw new Error("Spec Gate repair location response must contain typed locations");
     }
+    const location = proposal.locations[0];
+    exactObjectKeys(location, ["identity", "rangeIds"], "Spec Gate repair location");
+    const allowed = new Set(context.tableOfContents.map((entry) => entry.id));
+    if (stableStringify(location.identity) !== stableStringify(context.finding.identity)
+      || !Array.isArray(location.rangeIds)
+      || new Set(location.rangeIds).size !== location.rangeIds.length
+      || location.rangeIds.some((id) => !allowed.has(id))) {
+      throw new Error("Spec Gate repair location response exceeds its selected canonical table of contents");
+    }
+  } else if (["navigate", "inspect"].includes(mode)) {
+    SpecGateRepairNavigationSelection.fromJSON(context.navigation);
+    throw new Error("Read-only Spec Gate repair context permits only canonical context requests or input-unavailable responses");
   } else throw new Error("Spec Gate repair worker context mode is invalid");
 }
 

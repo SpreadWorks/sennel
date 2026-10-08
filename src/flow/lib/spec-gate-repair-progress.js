@@ -1,6 +1,7 @@
 /** Canonical publication history for bounded Gate repair worker batches. */
 import { readSpecGateRepairInput } from "./spec-gate-repair-input.js";
 import { FlowFindingSourceIdentity } from "./flow-finding-source.js";
+import { SpecGateRepairSelectedInputIdentity } from "./spec-gate-repair-input-unavailable.js";
 import { SpecGateRepairContextRequest } from "./spec-gate-repair-context-expansion.js";
 import { PromptRequestLimit, PromptExecutionLimit, PromptExecutionBudget } from "../../lib/prompt-batching.js";
 import { specGateRepairProgressMismatch as progressMismatch } from "./spec-gate-repair-call-plan.js";
@@ -260,9 +261,23 @@ export class SpecGateRepairProgressLedger {
         || entry.proposal.stage !== "spec-gate-repair-context-request") continue;
       const contextRequest = SpecGateRepairContextRequest.fromJSON(entry.proposal);
       if (contextRequest.unitId !== unitId) continue;
-      ids = contextRequest.expand(context, ids).additionalRangeIds;
+      const selectedIdentity = SpecGateRepairSelectedInputIdentity.selectionFromDocument(
+        entry.context, entry.inputDescriptors.find((input) => input.name === "spec-gate-repair-context.json").digest);
+      contextRequest.assertSelectedIdentity(selectedIdentity);
+      ids = contextRequest.expand(context, ids, { selectedIdentity }).additionalRangeIds;
     }
     return ids;
+  }
+
+  continuationDocument(context, unitId) {
+    const entry = [...this.entries].reverse().find((entry) => (
+      entry.proposal.stage === "spec-gate-repair-context-request" && entry.proposal.unitId === unitId
+    ));
+    if (entry === undefined) return null;
+    const request = SpecGateRepairContextRequest.fromJSON(entry.proposal);
+    return context.continuationDocument({ unitId,
+      requestedRangeIds: request.additionalRangeIds,
+      additionalRangeIds: this.additionalRangeIds(context, unitId), intent: request.intent });
   }
 
   completedUnitIds(context) {

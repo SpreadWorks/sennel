@@ -7,7 +7,6 @@ import { SpecGateRepairWorkerFacts, SpecGateRepairContinuationFacts } from "../.
 import { readProgressBoundSpecGateRepairInput, latestRepairBudget, readSpecGateRepairExecutionProgress,
   SPEC_GATE_REPAIR_PROGRESS_VERSION } from "../../lib/spec-gate-repair-progress.js";
 import { readSpecGateRepairInput } from "../../lib/spec-gate-repair-input.js";
-import { SpecGateRepairContextRequest } from "../../lib/spec-gate-repair-context-expansion.js";
 import { canonicalWorkerExecutionClaimForStored, WorkerArtifactHandoffError } from "../../lib/worker-artifact-handoff.js";
 import { isDeepStrictEqual } from "node:util";
 import { SpecGateRepairBundle } from "../../lib/spec-gate-repair-bundle.js";
@@ -252,42 +251,28 @@ export async function prepareSpecGateRepairServiceArguments({ ctx, request, hand
     const planError = changedLocationPlanError({ stepId: binding.stepId,
       attemptId: binding.attempt.id, context, locationPlan });
     if (planError) throw planError;
-    const allowed = new Set(context.tableOfContents.map((entry) => entry.id));
-    const exactIdentity = context.finding.identity;
-    const proposal = preparation.facts.proposal;
-    if (proposal.baseRevision !== context.baseRevision
-      || proposal.locations.length !== 1
-      || !isDeepStrictEqual(proposal.locations[0].identity, exactIdentity)
-      || !Array.isArray(proposal.locations[0].rangeIds)
-      || proposal.locations[0].rangeIds.some((id) => !allowed.has(id))) {
-      throw new Error("Spec Gate repair location response exceeds its selected canonical table of contents");
-    }
   } else if (context.mode === "repair") {
     const selections = SpecGateRepairBundle.fromJSON(context.bundle).selections();
     const proposal = preparation.facts.proposal;
     if (proposal.baseRevision !== context.baseRevision) {
       throw new Error("Spec Gate repair response changed its base revision");
     }
-    if (proposal.stage === "spec-gate-repair-context-request") {
-      const contextRequest = SpecGateRepairContextRequest.fromJSON(proposal);
-      if (!selections.some((selection) => selection.unit.id === contextRequest.unitId)) {
-        throw new Error("Spec Gate repair requested context for an unselected atomic unit");
-      }
-      contextRequest.expand(source.context, ledger.additionalRangeIds(source.context, contextRequest.unitId));
-    } else if (proposal.stage === "spec-gate-repair-draft-return") {
+    if (proposal.stage === "spec-gate-repair-draft-return") {
       if (![proposal.decision, proposal.evidence, proposal.unresolvedBecause].every((value) => (
         typeof value === "string" && value.trim() !== ""
       )) || !selections.some((selection) => selection.unit.id === proposal.unitId)) {
         throw new Error("Spec Gate repair Draft return requires a selected unit and cited decision gap");
       }
-    } else if (proposal.groups.length !== selections.length
+    } else if (proposal.stage !== "spec-gate-repair-context-request"
+      && (proposal.groups.length !== selections.length
       || proposal.groups.some((group, index) => !isDeepStrictEqual(
         group.findingIdentities,
         selections[index].unit.findings.map((finding) => finding.identity),
-      ))) {
+      )))) {
       throw new Error("Spec Gate repair proposal does not cover its selected atomic units");
     }
-  } else {
+  } else if (!["navigate", "inspect"].includes(context.mode)
+    || preparation.facts.proposal.stage !== "spec-gate-repair-context-request") {
     throw new Error("Spec Gate repair worker context mode is invalid");
   }
   let publicationReceipt = null;

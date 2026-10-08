@@ -1,0 +1,287 @@
+{
+  "board": "7526",
+  "title": "Canonical Gate repair index and range read authority",
+  "branch": "codex/7526",
+  "worktree": "/home/nakano/workspace/sennel/.sennel/worktree/7526",
+  "baseBranch": "main",
+  "baseCommit": "f7264f38e79714c4e85fdbb778aa83df10ecc5d0",
+  "status": "complete",
+  "decisions": [
+    "Reuse Context/Selection/Bundle/ContextRequest and existing publication/receipt/ledger paths.",
+    "Index manifest v2 commits every canonical page route, descriptor bounds and page digest; Bundle v2 remains the existing shared-table contract.",
+    "ContextRequest v1 preserves canonical range IDs. Optional intent inspect requests read-only inspection; omitted intent returns full repair. Redundant intent repair and host source selectors remain rejected.",
+    "Immutable snapshot query is pure and never reads or discovers checkout sources. Additional reads never grant writable targets.",
+    "Canonical source byte assertions apply to repair and inspection through the same source-storage boundary.",
+    "The generic source-effect exactKeys uses a different Error contract; repair exact-field validation is shared within the existing selection module to preserve TypeError contracts."
+  ],
+  "requirements": [
+    {
+      "outcome": "Revision-bound complete canonical inventory and page identity",
+      "evidence": [
+        "tests/unit/spec-gate-repair-index-authority-7526.test.js",
+        "tests/unit/spec-gate-repair-readonly-selection-7526.test.js",
+        ".tmp/7526/index-authority-before.log",
+        ".tmp/7526/index-bundle-after.log"
+      ],
+      "status": "achieved"
+    },
+    {
+      "outcome": "Read-only locate/navigation/inspection refuse operations, foreign units, stale identities and duplicates",
+      "evidence": [
+        "tests/integration/flow-cli/spec-gate-repair-readonly-continuation.test.js",
+        "tests/unit/spec-gate-repair-range-request-7526.test.js",
+        "tests/unit/spec-gate-repair-readonly-selection-7526.test.js"
+      ],
+      "status": "achieved"
+    },
+    {
+      "outcome": "Saved inquiries reconstruct exact findings, sources, pages and target digests; full repair restores canonical evidence, all pending units and original allowedTargets",
+      "evidence": [
+        ".tmp/7526/readonly-continuation-r6.log",
+        "tests/integration/flow-cli/spec-gate-repair-readonly-continuation.test.js"
+      ],
+      "status": "achieved"
+    },
+    {
+      "outcome": "Captured-source query cursors bind source, complete unit identity, revision and parameters; exact union byte coverage controls progress",
+      "evidence": [
+        "tests/unit/spec-gate-repair-snapshot-query-7526.test.js",
+        "tests/unit/spec-gate-repair-range-request-7526.test.js",
+        ".tmp/7526/snapshot-range-before.log",
+        ".tmp/7526/snapshot-request-after-6.log"
+      ],
+      "status": "achieved"
+    },
+    {
+      "outcome": "Inspection byte/provenance readback rejects tampered evidence against the immutable snapshot",
+      "evidence": [
+        "tests/unit/spec-gate-repair-inspection-source-7526.test.js",
+        ".tmp/7526/inspection-source-seed.json",
+        ".tmp/7526/inspection-source-probe.mjs",
+        ".tmp/7526/inspection-source-before.log",
+        ".tmp/7526/inspection-source-probe-after.log"
+      ],
+      "status": "achieved"
+    },
+    {
+      "outcome": "No new checkout source ability or additional edit authority",
+      "evidence": [
+        "tests/unit/spec-gate-repair-context-request.test.js",
+        "tests/integration/flow-cli/spec-gate-repair-checkout-evidence.test.js",
+        "tests/integration/flow-cli/spec-gate-repair-readonly-continuation.test.js"
+      ],
+      "status": "achieved"
+    }
+  ],
+  "regressions": [
+    {
+      "fault": "Recomputed page digest admits descriptor tampering and reordering",
+      "before": "2 missing expected exceptions",
+      "after": "same tests pass",
+      "logs": [
+        ".tmp/7526/index-authority-before.log",
+        ".tmp/7526/index-bundle-after.log",
+        ".tmp/7526/detached-regressions-before.log"
+      ]
+    },
+    {
+      "fault": "Overlapping available ranges erase unread bytes",
+      "before": "uncoveredBytes returned 0 for expected 2",
+      "after": "same overlap case passes",
+      "logs": [
+        ".tmp/7526/snapshot-range-before.log",
+        ".tmp/7526/snapshot-request-after-6.log",
+        ".tmp/7526/detached-regressions-before.log"
+      ]
+    },
+    {
+      "fault": "Inspection source assertion skips captured byte comparison",
+      "before": "same valid inspection seed with tampered content accepted",
+      "after": "same input rejected",
+      "logs": [
+        ".tmp/7526/inspection-source-before.log",
+        ".tmp/7526/inspection-source-probe-after.log",
+        ".tmp/7526/detached-inspection-source-before.log"
+      ]
+    }
+  ],
+  "frozenTestBranch": "test/flow-remediation-contracts",
+  "frozenSourceHead": "2ba144ef64c3e3cf02367895e3da91e5a41791d6",
+  "frozenTests": [
+    {
+      "path": "tests/unit/spec-gate-repair-index-routes.test.js",
+      "bytes": 6027,
+      "sha256": "04d9dee4ea23a308883c89ca930d8c02d307cedd65a58e414b598b8b1a1a5f7b"
+    },
+    {
+      "path": "tests/unit/spec-gate-repair-navigation.test.js",
+      "bytes": 14646,
+      "sha256": "df6462e9218ee6f754ee70e4702fc228b3768c1cf29ae8497cd3ec16c096756b"
+    },
+    {
+      "path": "tests/unit/spec-gate-repair-source-query.test.js",
+      "bytes": 9775,
+      "sha256": "24624bc068a0a9d85b7578d0de45c052b3fdba934e39873c3fdc51c5c47be847"
+    },
+    {
+      "path": "tests/unit/spec-gate-repair-source-discovery.test.js",
+      "bytes": 15248,
+      "sha256": "ab6e2166f8d445de162ee37451172947b008421ba7adde2254c2a80a872b93df"
+    },
+    {
+      "path": "tests/unit/spec-gate-repair-bundle.test.js",
+      "bytes": 13670,
+      "sha256": "5ee9d2601c599e784bb0d465c63de550204d44b2691b4a93dab3d0978a71fab1"
+    },
+    {
+      "path": "tests/unit/spec-gate-repair-input-unavailable.test.js",
+      "bytes": 4834,
+      "sha256": "f643fd286fe7e23ad45b0d83652ca79d01a95b4bee7cb0096d6017b53f712bbc"
+    },
+    {
+      "path": "tests/integration/flow-cli/spec-gate-repair-navigation.test.js",
+      "bytes": 14395,
+      "sha256": "167da2017a44c4282c11aef26030c730d30e0be312d0d46192ee79a7b2b3fd8f"
+    },
+    {
+      "path": "tests/integration/flow/spec-gate-repair-input-format.test.js",
+      "bytes": 22407,
+      "sha256": "e2b667466b529bde48de4c15d54c600dea8e75df76f75b4c3fcdff6f849f9920"
+    },
+    {
+      "path": "tests/integration/flow/spec-gate-repair-replay.test.js",
+      "bytes": 15014,
+      "sha256": "7bee668fb941e60e61f1c0def9b959ec30453bd45c71bc1438126c50b2324324"
+    }
+  ],
+  "frozenResults": {
+    "before": {
+      "pass": 20,
+      "fail": 10,
+      "log": ".tmp/7526/fixed-before.log"
+    },
+    "after": {
+      "pass": 31,
+      "fail": 12,
+      "log": ".tmp/7526/fixed-after.log"
+    },
+    "note": "Counts differ because absent exports prevent entire files from loading before the fix; setup/import failures do not count as contract regression detection.",
+    "remaining": [
+      "Retired Bundle3 root-index/sourceOrigins format and v3 discovery request expectations were reviewed against main Bundle2 and canonical range Request1; no legacy adapter or host discovery path was restored.",
+      "Frozen replay imports readSpecGateCycleProgress from joint C, absent in the main base; this is an import/setup failure, not a 7526 regression.",
+      "Frozen source query stale cursor rejection succeeds but /stale/ mismatches the capitalized error text; behavioral rejection is covered by current tests."
+    ]
+  },
+  "baselineFailures": [
+    {
+      "tests": "tests/integration/flow/spec-gate-repair-locale-order.test.js",
+      "before": {
+        "pass": 0,
+        "fail": 2,
+        "log": ".tmp/7526/locale-before.log"
+      },
+      "after": {
+        "pass": 0,
+        "fail": 2,
+        "log": ".tmp/7526/adjacent-contracts-after.log"
+      },
+      "reason": "Existing test expects automatic checkout source inventory/evidence invalidation; new host source capability is deliberately empty. Not changed or skipped."
+    },
+    {
+      "tests": "tests/integration/flow/spec-gate-repair-restart-boundaries.test.js (three archived locator-only cases)",
+      "before": {
+        "pass": 0,
+        "fail": 3,
+        "log": ".tmp/7526/archived-restart-before.log"
+      },
+      "after": {
+        "pass": 0,
+        "fail": 3,
+        "log": ".tmp/7526/integration-phase-after.log"
+      },
+      "reason": "Archived activity rows lack transition.approvalTasks required by the unchanged current store. Failure precedes Gate repair logic; not a contract regression or a PASS. No historical compatibility or fixture repair added."
+    }
+  ],
+  "verification": {
+    "localTargeted": "passed",
+    "productionContinuation": {
+      "pass": 1,
+      "fail": 0,
+      "log": ".tmp/7526/readonly-continuation-r6.log"
+    },
+    "specPhase": {
+      "pass": 5,
+      "fail": 0,
+      "log": ".tmp/7526/integration-phase-after.log"
+    },
+    "agentSuite": {
+      "command": "npm run test:agent",
+      "exitCode": 0,
+      "pass": 12,
+      "fail": 0,
+      "skipped": 1,
+      "skipReason": "Pre-existing historical #521 comparison requires explicit SENNEL_HISTORICAL_521_MODE; unrelated to 7526 acceptance.",
+      "log": ".tmp/7526/agent-after.log"
+    },
+    "sharedBoundary": {
+      "pass": 17,
+      "fail": 0,
+      "log": ".tmp/7526/shared-field-validation-after.log"
+    },
+    "integration": {
+      "exitCode": 1,
+      "pass": 64,
+      "fail": 3,
+      "skipped": 0,
+      "log": ".tmp/7526/integration-phase-after.log",
+      "note": "All 7526 current-format cases pass; three pre-existing archived-fixture setup failures reproduce unchanged at the base commit."
+    }
+  },
+  "usage": {
+    "inspectRequest": {
+      "version": 1,
+      "stage": "spec-gate-repair-context-request",
+      "baseRevision": "<current sha256 revision>",
+      "unitId": "<selected unit ID>",
+      "additionalRangeIds": [
+        "<registered canonical range ID>"
+      ],
+      "intent": "inspect"
+    },
+    "repairReturn": "Omit intent and request a non-index canonical range of the same selected unit. A read-only-to-repair transition restores full evidence once; repeated repair requests with no new information are rejected.",
+    "sourceDiscovery": "New sourceOrigins/sourceQueries requests are rejected; worker research uses the existing execution checkout route."
+  },
+  "externalWrites": {
+    "commit": false,
+    "merge": false,
+    "push": false,
+    "flowStarted": false,
+    "boardChanged": false
+  },
+  "docsFreshness": "stale; docs build proposed, not run",
+  "frozenTestCommit": "55d97f30809547c05e95040dc6fbba7b47b714a8",
+  "detachedBaseline": {
+    "commit": "f7264f38e79714c4e85fdbb778aa83df10ecc5d0",
+    "path": ".tmp/7526/base-comparison",
+    "cleanup": "removed after clean status verification",
+    "result": "The same page tampering/order cases and overlapping coverage fail as contract violations; the same inspection seed tamper is accepted.",
+    "logs": [
+      ".tmp/7526/detached-regressions-before.log",
+      ".tmp/7526/detached-inspection-source-before.log"
+    ]
+  },
+  "review": {
+    "implementationAgents": 2,
+    "independentReviewer": 1,
+    "sourceInspectionFound": "Inspection snapshot byte assertion omitted readonly navigation bodies",
+    "resolution": "Extended the existing shared source-storage assertion; exact seed before/after probe rejects the previously accepted tamper.",
+    "diffCheck": "passed",
+    "remainingAcceptanceUnknowns": []
+  },
+  "cleanup": {
+    "temporaryDetachedWorktree": "removed after checks",
+    "temporaryCopies": "baseline and fixed-before removed after logs were retained",
+    "evidence": "Immutable fixed tests, accepted seed/probe, regression logs and final test logs retained under .tmp/7526",
+    "candidateWorktree": "retained for review"
+  }
+}

@@ -1219,6 +1219,9 @@ export class FlowDispatchWork {
       "signal and independently verifies the refreshed Flow and repository state.",
       handoffInstruction,
       specTestTopologyInstruction,
+      ...(this.handoffRequest.stepId === "spec-gate-repair" ? [
+        "Use the selected input mode exactly. Locate, navigate and inspect permit read-only canonical evidence requests; they grant no mutation authority. Preserve the complete finding identities in the bounded manifest when requesting continuation.",
+      ] : []),
       this.handoffRequest.specGateRepairInstructionPrompt(),
       ...(this.handoffRequest.stepId === "spec-gate-repair"
         ? [includeInput ? this.handoffRequest.specGateRepairInputPrompt() : ""] : []),

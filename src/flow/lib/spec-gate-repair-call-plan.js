@@ -17,10 +17,10 @@ export function specGateRepairCallFootprint(request, instructionPrompt) {
 }
 
 export function specGateRepairResponseAllowance(context, limit) {
-  if (!["locate", "repair"].includes(context.mode)) {
+  if (!["locate", "navigate", "inspect", "repair"].includes(context.mode)) {
     throw specGateRepairProgressMismatch("Gate repair call has an unsupported context mode");
   }
-  const items = context.mode === "locate" ? 1
+  const items = context.mode !== "repair" ? 1
     : Math.max(SpecGateRepairBundle.fromJSON(context.bundle).selections().length, 1);
   return new PromptResponseAllowance({ characters: limit.maxResponseCharacters, items });
 }

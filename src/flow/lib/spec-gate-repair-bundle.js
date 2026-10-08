@@ -1,8 +1,8 @@
 import { createHash } from "node:crypto";
 import { SpecGateRepairSourceRange } from "./spec-gate-repair-values.js";
 import {
-  SpecGateRepairRange, SpecGateRepairFinding, SpecGateRepairUnit, SpecGateRepairSelection,
-  freezeSpecGateRepairValue, specGateRepairValueDigest,
+  SpecGateRepairRange, SpecGateRepairFinding, SpecGateRepairUnit, SpecGateRepairSelection, SpecGateRepairIndexManifest,
+  freezeSpecGateRepairValue, specGateRepairValueDigest, assertSpecGateRepairFields,
 } from "./spec-gate-repair-selection.js";
 import { SpecRepairTarget, parseSpecGateRepairPermissions } from "./spec-repair-operations.js";
 import { workerArtifactStableStringify } from "./worker-artifact-input-format.js";
@@ -11,13 +11,6 @@ import { compareText } from "./text-order.js";
 function digest(value) {
   return createHash("sha256").update(workerArtifactStableStringify(value)).digest("hex");
 }
-function exactKeys(value, keys, label) {
-  if (!value || typeof value !== "object" || Array.isArray(value)
-    || Object.keys(value).length !== keys.length || keys.some((key) => !Object.hasOwn(value, key))) {
-    throw new TypeError(`Invalid repair bundle ${label}`);
-  }
-}
-
 /** A shared table owns identity conflicts and reference resolution, never permissions. */
 class SpecGateRepairTable {
   #entries = new Map();
@@ -81,7 +74,7 @@ export class SpecGateRepairBundle {
   static fromJSON(value) { return new SpecGateRepairBundle(value); }
 
   constructor(value) {
-    exactKeys(value, ["version", "baseRevision", "ranges", "sources", "guardrails", "rationales", "units"], "document");
+    assertSpecGateRepairFields(value, ["version", "baseRevision", "ranges", "sources", "guardrails", "rationales", "units"], "Invalid repair bundle document");
     if (value.version !== 2 || !/^sha256:[a-f0-9]{64}$/.test(value.baseRevision)
       || !Array.isArray(value.units) || value.units.length === 0) throw new TypeError("Invalid repair bundle version, revision or units");
     const readTable = (label, values, validate) => {
@@ -110,7 +103,7 @@ export class SpecGateRepairBundle {
     const usedSources = new Set();
     const ranges = readTable("range", value.ranges, (entry) => {
       const evidence = entry.id?.startsWith("evidence:");
-      exactKeys(entry, ["id", "path", "entity", "digest", "target", "collectionAnchor", "exists", evidence ? "sourceId" : "value"], "range");
+      assertSpecGateRepairFields(entry, ["id", "path", "entity", "digest", "target", "collectionAnchor", "exists", evidence ? "sourceId" : "value"], "Invalid repair bundle range");
       if (typeof entry.path !== "string" || typeof entry.collectionAnchor !== "boolean" || typeof entry.exists !== "boolean"
         || (entry.digest !== null && !/^[a-f0-9]{64}$/.test(entry.digest))) throw new TypeError("Invalid repair bundle range descriptor");
       if (entry.id.startsWith("repair-index:") && (entry.digest !== specGateRepairValueDigest(workerArtifactStableStringify(entry.value))
@@ -138,7 +131,7 @@ export class SpecGateRepairBundle {
       }
     });
     const rationales = readTable("rationale", value.rationales, (entry) => {
-      exactKeys(entry, ["id", "value"], "rationale");
+      assertSpecGateRepairFields(entry, ["id", "value"], "Invalid repair bundle rationale");
       if (entry.id !== `rationale:${digest(entry.value)}`) {
         throw new Error("Conflicting repair bundle rationale identity");
       }
@@ -146,8 +139,11 @@ export class SpecGateRepairBundle {
     const usedRanges = new Set(); const usedGuardrails = new Set(); const usedRationales = new Set();
     const seenUnits = new Set(); const seenFindings = new Set();
     const selections = value.units.map((entry) => {
-      exactKeys(entry, ["unit", "ranges", "guardrailIds", "rationaleId", "indexManifest"], "unit references");
-      exactKeys(entry.unit, ["id", "rangeIds", "findings"], "unit");
+      assertSpecGateRepairFields(entry, ["unit", "ranges", "guardrailIds", "rationaleId", "indexManifest"], "Invalid repair bundle unit references");
+      assertSpecGateRepairFields(entry.unit, ["id", "rangeIds", "findings"], "Invalid repair bundle unit");
+      if (workerArtifactStableStringify(entry.indexManifest) !== workerArtifactStableStringify(value.units[0].indexManifest)) {
+        throw new Error("Conflicting repair bundle canonical index identity");
+      }
       if (!Array.isArray(entry.unit.findings) || !entry.unit.findings.length) throw new TypeError("Repair bundle unit requires findings");
       const findings = entry.unit.findings.map((finding) => {
         const restored = new SpecGateRepairFinding(finding, finding.rangeIds);
@@ -167,7 +163,7 @@ export class SpecGateRepairBundle {
       if (!Array.isArray(entry.ranges)) throw new TypeError("Repair bundle unit requires range references");
       const seenRanges = new Set();
       const selected = entry.ranges.map((reference) => {
-        exactKeys(reference, ["id", "writable"], "range reference");
+        assertSpecGateRepairFields(reference, ["id", "writable"], "Invalid repair bundle range reference");
         if (typeof reference.writable !== "boolean" || seenRanges.has(reference.id)) throw new Error("Invalid or duplicate repair bundle range reference");
         seenRanges.add(reference.id); usedRanges.add(reference.id);
         const shared = ranges.get(reference.id);
@@ -185,6 +181,10 @@ export class SpecGateRepairBundle {
       if (!seenRanges.has(entry.indexManifest?.firstPageId) || selected.some((range) => range.id.startsWith("repair-index:")
         && (range.value.revision !== entry.indexManifest.revision || range.value.pageCount !== entry.indexManifest.pageCount))) {
         throw new Error("Missing or conflicting repair index manifest");
+      }
+      const index = new SpecGateRepairIndexManifest(entry.indexManifest);
+      for (const range of selected.filter((range) => range.id.startsWith("repair-index:"))) {
+        if (index.assertPage(range.value).id !== range.id) throw new Error("Conflicting repair index page identity");
       }
       if (unit.rangeIds.some((id) => !seenRanges.has(id)) || permissions.some((permission) => !selected.some((range) => (
         unit.rangeIds.includes(range.id) && workerArtifactStableStringify(range.target) === workerArtifactStableStringify(permission.target.toJSON())

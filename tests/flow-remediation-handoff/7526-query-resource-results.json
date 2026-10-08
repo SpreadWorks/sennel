@@ -1,0 +1,274 @@
+{
+  "task": "7526 query generation resource correction",
+  "branch": "codex/7526",
+  "worktree": "/home/nakano/workspace/sennel/.sennel/worktree/7526",
+  "status": "complete",
+  "review": "/home/nakano/workspace/sennel/.tmp/review-7526-XymlLs/review.md",
+  "comparison": {
+    "original": "Saved original Flow implementation from the review, not main base",
+    "before": "Pre-correction 7526 source snapshot including uncommitted initial implementation",
+    "after": "Current correction; only spec-gate-repair-values.js changed among all previous source/tests/evidence files"
+  },
+  "decisions": [
+    "Use compact Uint32Array offsets (4 bytes per UTF16 offset); retain surrogate-interior rejection with a sentinel. This adopts original Flow storage rather than per-character Map while preserving current strict source descriptor binding.",
+    "Build one source-bound index and ranged element per query, replay all linked ancestors iteratively against captured bytes and compare complete reconstructed receipt JSON. No received digest is trusted as sufficient proof.",
+    "Exact incremental serialized output admission counts immutable metadata, source text escaping, complete/cursor/interval fields, range wrappers/references, match entries and separators before retaining each candidate. Unique windows are counted once and reused.",
+    "Keep current JSON layout/sourceRevision/receipt identities, 2MiB limit, typed error and final serialization check. Preserve index/routes/bounds/digest, read-only authority and canonical snapshot storage.",
+    "The existing SourceCaptureBudget owns captured files/manifests and read bytes; the query output collector owns one generated query receipt and its dynamic window/match arrays. It is a separate contract within the existing values module."
+  ],
+  "cursor": {
+    "sourceBytes": 131213,
+    "pages": 16,
+    "inputDigest": "c6ad5652761df878f3ee5b3d08678ddca54970c0e87fabda58f82a0f899b6c4e",
+    "rawReceiptJSONEqualityBeforeAfter": true,
+    "semanticMatchesAndWindowsEqualOriginal": true,
+    "cleanSamples": {
+      "original": {
+        "totalMs": 163.72036500000004,
+        "maxRSSMiB": 56.31640625,
+        "heapBytesLast": 4994144,
+        "receiptDigest": "6056159cb5d631c8816eb453e118d68f30daa63cbeead5bb072910757760e4d9",
+        "error": null
+      },
+      "before": {
+        "totalMs": 7269.905325,
+        "maxRSSMiB": 243.44140625,
+        "heapBytesLast": 127032320,
+        "receiptDigest": "9d50af3ba08fd5ca39262ee6e81805e735da7a2a5b60960bca0c7bfd1f84a5f6",
+        "error": null
+      },
+      "after": {
+        "totalMs": 247.4181459999999,
+        "maxRSSMiB": 59.7421875,
+        "heapBytesLast": 6753592,
+        "receiptDigest": "9d50af3ba08fd5ca39262ee6e81805e735da7a2a5b60960bca0c7bfd1f84a5f6",
+        "error": null
+      }
+    },
+    "indexInstancesPerQueryBefore": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      13,
+      14,
+      15,
+      16
+    ],
+    "indexInstancesPerQueryAfter": [
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1
+    ]
+  },
+  "overflow": {
+    "sourceBytes": 40000,
+    "totalPotentialMatches": 20000,
+    "inputDigest": "62939d39ed3edce74adfc3a1c925ec7e09b0ebef02093c394cfb4b152120ed82",
+    "maximumBytes": 2097152,
+    "cleanSamples": {
+      "original": {
+        "totalMs": 257.734725,
+        "maxRSSMiB": 64.87890625,
+        "heapBytesLast": 10825128,
+        "receiptDigest": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+        "error": {
+          "name": "WorkerArtifactHandoffError",
+          "code": "FLOW_SPEC_GATE_REPAIR_INPUT_TOO_LARGE",
+          "data": {
+            "failureKind": "step-admission",
+            "actualBytes": 2097446,
+            "maximumBytes": 2097152
+          }
+        }
+      },
+      "before": {
+        "totalMs": 1504.330262,
+        "maxRSSMiB": 209.78515625,
+        "heapBytesLast": 127024752,
+        "receiptDigest": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+        "error": {
+          "name": "WorkerArtifactHandoffError",
+          "code": "FLOW_SPEC_GATE_REPAIR_INPUT_TOO_LARGE",
+          "data": {
+            "failureKind": "step-admission",
+            "actualBytes": 14196208,
+            "maximumBytes": 2097152
+          }
+        }
+      },
+      "after": {
+        "totalMs": 279.218049,
+        "maxRSSMiB": 66,
+        "heapBytesLast": 7749120,
+        "receiptDigest": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+        "error": {
+          "name": "WorkerArtifactHandoffError",
+          "code": "FLOW_SPEC_GATE_REPAIR_INPUT_TOO_LARGE",
+          "data": {
+            "failureKind": "step-admission",
+            "actualBytes": 2097719,
+            "maximumBytes": 2097152
+          }
+        }
+      }
+    },
+    "countsBefore": {
+      "indexInstances": 1,
+      "examinedWindows": 20000,
+      "constructedRanges": 20000,
+      "retainedRanges": 20000,
+      "retainedMatches": 20000
+    },
+    "countsAfter": {
+      "indexInstances": 1,
+      "examinedWindows": 2985,
+      "constructedRanges": 2985,
+      "retainedRanges": 2984,
+      "retainedMatches": 2984
+    },
+    "errorBefore": {
+      "name": "WorkerArtifactHandoffError",
+      "code": "FLOW_SPEC_GATE_REPAIR_INPUT_TOO_LARGE",
+      "data": {
+        "failureKind": "step-admission",
+        "actualBytes": 14196208,
+        "maximumBytes": 2097152
+      }
+    },
+    "errorAfter": {
+      "name": "WorkerArtifactHandoffError",
+      "code": "FLOW_SPEC_GATE_REPAIR_INPUT_TOO_LARGE",
+      "data": {
+        "failureKind": "step-admission",
+        "actualBytes": 2097719,
+        "maximumBytes": 2097152
+      }
+    },
+    "firstOversizedCandidateNotRetained": true,
+    "enumerationAfterOverflowStopped": true
+  },
+  "measurementNotes": [
+    "Clean time/RSS probes run without enumeration/index instrumentation; counters are recorded in separate processes. Times and process high-water RSS are environment-dependent observations, not pass/fail thresholds.",
+    "Original Flow receipt layout and its receipt validation differ; semantic matches/windows agree. The current full receipt content/auth is preserved and exact receipt JSON is compared before and after this correction.",
+    "Old original output charges a smaller receipt representation; its 4151-range threshold is not imposed on the current complete receipt layout. Current format reaches its exact serialized limit at candidate2985."
+  ],
+  "tests": {
+    "sameNewTestsBefore": {
+      "pass": 3,
+      "fail": 3,
+      "log": ".tmp/7526-query-resource/resource-tests-before.log",
+      "faults": [
+        "Page2 needs2 indexes instead of1 (later full16-page probe confirms16).",
+        "Enumeration retains every20000 matches/ranges before refusal.",
+        "Shared window is reconstructed twice instead of once."
+      ]
+    },
+    "sameNewTestsAfter": {
+      "pass": 6,
+      "fail": 0,
+      "log": ".tmp/7526-query-resource/resource-tests-after.log"
+    },
+    "existingSnapshotQuery": {
+      "pass": 5,
+      "fail": 0,
+      "log": ".tmp/7526-query-resource/query-focused-agent.log"
+    },
+    "relatedUnit": {
+      "pass": 39,
+      "fail": 0,
+      "log": ".tmp/7526-query-resource/related-unit.log"
+    },
+    "phaseScenarios": {
+      "status": "passed",
+      "files": [
+        "tests/integration/flow-cli/spec-gate-repair-readonly-continuation.test.js",
+        "tests/integration/flow/spec-gate-repair-snapshot-readback.test.js",
+        "tests/integration/flow-cli/spec-artifact-scenario.test.js"
+      ],
+      "log": ".tmp/7526-query-resource/phase-scenarios.log",
+      "pass": 14,
+      "fail": 0,
+      "skipped": 0,
+      "exitCode": 0
+    },
+    "totalRelatedUniqueCases": {
+      "unit": 50,
+      "integration": 14,
+      "failed": 0
+    }
+  },
+  "callers": {
+    "sourceQuery": "No production Source.query caller; standalone API and tests use fromSource. This correction does not claim to remedy an actual Issue Flow stop.",
+    "textIndex": "Only fromSource and typed source ranges/tests use the index. Context source-range construction without an injected index remains unchanged.",
+    "byteCoverage": "Existing union coverage and sourceRevision identity remain unchanged."
+  },
+  "jointB": {
+    "status": "No new full jointB acceptance claim",
+    "remaining": "Previous Bundle3/Request3 forbidden-discovery expectations, jointC API/setup and old archived/locale fixture limitations remain separately recorded in the unchanged 7526-acceptance.json and author review.",
+    "thisCorrection": "Two query resource defects fixed; measured against the saved original Flow and same valid pre/post inputs."
+  },
+  "evidence": {
+    "beforeHashManifest": ".tmp/7526-query-resource/before-hashes.json",
+    "previousFileCount": 2236,
+    "previousChangedFiles": [
+      "src/flow/lib/spec-gate-repair-values.js"
+    ],
+    "sourceBeforeSHA": "c58b29a5ccc4197518764dac16abfa29a147e729e7a3e92044587d45a487ed77",
+    "sourceAfterSHA": "b2ce1190fa152053b7af979a298d86c4998af1b69730a6862e66d5af1e38584f",
+    "probe": "tests/flow-remediation-handoff/7526-query-resource-probe.mjs",
+    "fixture": "tests/support/builders/spec-gate-repair-query-resource.js",
+    "previousHashesVerified": true,
+    "previousUnchangedFiles": 2235
+  },
+  "independentReview": {
+    "status": "No concrete defect found",
+    "checked": [
+      "all ancestor replay auth",
+      "exact output counting and complete-cursor reduction",
+      "Unicode sentinel/string bounds",
+      "no host capability expansion"
+    ]
+  },
+  "externalWrites": {
+    "realFlowStartedOrResumed": false,
+    "flowStateOrGateEdited": false,
+    "commit": false,
+    "merge": false,
+    "push": false,
+    "boardChanged": false
+  },
+  "docsFreshness": "stale; build proposed but not run",
+  "verification": {
+    "diffCheck": "passed",
+    "receivedDigestTrustOnly": false,
+    "receiptAuthenticationPreserved": true,
+    "UnicodeBoundaryRefusalPreserved": true,
+    "outputTruncated": false,
+    "outputLimitRaised": false,
+    "unknowns": [],
+    "protection": "All earlier files/old evidence hashes remain unchanged except the authorized values.js correction.",
+    "cleanup": "All verification sessions finished; source snapshots/probes/results retained as review evidence. No transient worktrees created."
+  }
+}

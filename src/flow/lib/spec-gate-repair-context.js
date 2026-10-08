@@ -13,7 +13,7 @@ import { MAX_WORKER_ARTIFACT_INPUT_BYTES,
   workerArtifactStableStringify } from "./worker-artifact-input-format.js";
 
 import {
-  SpecGateRepairRange, SpecGateRepairFinding, SpecGateRepairUnit, SpecGateRepairSelection, SpecGateRepairIndexManifest, SPEC_GATE_REPAIR_INDEX_PAGE_SIZE,
+  SpecGateRepairRange, SpecGateRepairFinding, SpecGateRepairUnit, SpecGateRepairSelection, SpecGateRepairIndexManifest, SpecGateRepairIndexPageRoute, SpecGateRepairNavigationSelection, SPEC_GATE_REPAIR_INDEX_PAGE_SIZE,
   specGateRepairValueDigest as hash, freezeSpecGateRepairValue as freeze,
   specGateRepairFindingIdentity as identity,
 } from "./spec-gate-repair-selection.js";
@@ -190,8 +190,7 @@ export class SpecGateRepairContext {
     const revision = `sha256:${hash(workerArtifactStableStringify(descriptors))}`;
     const pageSize = SPEC_GATE_REPAIR_INDEX_PAGE_SIZE;
     const pageCount = Math.ceil(descriptors.length / pageSize);
-    this.#index = new SpecGateRepairIndexManifest({ version: 1, revision, descriptorCount: descriptors.length,
-      pageCount, firstPageId: `repair-index:${revision}:0` });
+    const pageRoutes = [];
     for (let page = 0; page < pageCount; page++) {
       const id = `repair-index:${revision}:${page}`;
       const value = { version: 1, revision, page, pageCount,
@@ -199,7 +198,10 @@ export class SpecGateRepairContext {
         descriptors: descriptors.slice(page * pageSize, (page + 1) * pageSize) };
       this.#indexPages.set(id, new SpecGateRepairRange({ id, path: id, value,
         digest: hash(workerArtifactStableStringify(value)) }));
+      pageRoutes.push(SpecGateRepairIndexPageRoute.fromPage(value).toJSON());
     }
+    this.#index = new SpecGateRepairIndexManifest({ version: 2, revision, descriptorCount: descriptors.length,
+      pageCount, firstPageId: `repair-index:${revision}:0`, pageRoutes });
   }
 
   #initialRanges(finding) {
@@ -321,6 +323,40 @@ export class SpecGateRepairContext {
       }),
       guardrails,
       acknowledgedRationale: this.#rationale, indexManifest: this.#index });
+  }
+  /** Index-only inquiry and explicit inspection never grant operation authority. */
+  continuationDocument({ unitId, requestedRangeIds, additionalRangeIds = [], intent = "repair" }) {
+    this.#assertRanges(requestedRangeIds);
+    this.#assertRanges(additionalRangeIds);
+    if (!["repair", "inspect"].includes(intent)) throw new TypeError("Invalid repair context inquiry intent");
+    const mode = requestedRangeIds.length > 0 && requestedRangeIds.every((id) => this.#index.hasPage(id)) ? "navigate"
+      : intent === "inspect" ? "inspect" : null;
+    if (mode === null) return null;
+    const selection = this.select(unitId, { additionalRangeIds });
+    const navigation = new SpecGateRepairNavigationSelection({ version: 1, mode, baseRevision: this.baseRevision,
+      unit: selection.unit.toJSON(), readRangeIds: selection.ranges.map((range) => range.id),
+      ranges: selection.ranges.filter((range) => !range.id.startsWith("evidence:")
+        || mode === "inspect" && additionalRangeIds.includes(range.id)).map((range) => ({ ...range, writable: false })),
+      guardrails: selection.guardrails, acknowledgedRationale: selection.acknowledgedRationale,
+      indexManifest: this.#index.toJSON() });
+    const body = { version: 2, stage: "spec-gate-repair", mode, baseRevision: this.baseRevision,
+      unitId, navigation: navigation.toJSON() };
+    return { ...body, batchIndex: 0, batchCount: 1,
+      batchDigest: createHash("sha256").update(workerArtifactStableStringify(body)).digest("hex"),
+      evidenceDigest: this.evidenceDigest, sourceSnapshotReference: this.sourceSnapshotReference().toJSON() };
+  }
+  /** Saved inquiries are compared against canonical content, including target digests. */
+  restoreContinuation(document, { additionalRangeIds = [] } = {}) {
+    const navigation = SpecGateRepairNavigationSelection.fromJSON(document.navigation);
+    if (navigation.baseRevision !== this.baseRevision || document.baseRevision !== this.baseRevision
+      || document.unitId !== navigation.unit.id || document.mode !== navigation.mode) throw new Error("Stale or foreign repair navigation identity");
+    const expected = this.continuationDocument({ unitId: navigation.unit.id,
+      requestedRangeIds: navigation.mode === "inspect" ? navigation.readRangeIds.filter((id) => !this.#index.hasPage(id)) : navigation.pageRangeIds(), additionalRangeIds,
+      intent: navigation.mode === "inspect" ? "inspect" : "repair" });
+    if (workerArtifactStableStringify(expected) !== workerArtifactStableStringify(document)) {
+      throw new Error("Saved repair navigation differs from its canonical selection");
+    }
+    return expected;
   }
   #selectedUnits(unitIds) {
     const units = this.units();

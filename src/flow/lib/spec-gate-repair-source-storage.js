@@ -3,6 +3,7 @@ import { CanonicalFlowArtifactWrite } from "./current-flow-state.js";
 import { SpecGateRepairSourceSnapshots, SpecGateRepairSourceSnapshotManifest,
   SpecGateRepairSourceSnapshotReference } from "./spec-gate-repair-values.js";
 import { SpecGateRepairSourceCaptureBudget } from "./spec-gate-repair-sources.js";
+import { SpecGateRepairNavigationSelection } from "./spec-gate-repair-selection.js";
 
 const BLOB_KEY = "spec.gate.repair.source.blob";
 const MANIFEST_KEY = "spec.gate.repair.source.manifest";
@@ -68,7 +69,11 @@ export function readSpecGateRepairSourceSnapshots({ flowManager, specId, consume
 /** A selected UTF-8 slice must retain its full source identity after readback. */
 export function assertSpecGateRepairSelectedSources(context, snapshots) {
   const sources = new Map(snapshots.sources().map((source) => [source.id, source]));
-  for (const selected of context.bundle?.sources ?? []) {
+  const selectedSources = context.mode === "inspect"
+    ? SpecGateRepairNavigationSelection.fromJSON(context.navigation).ranges
+      .filter((range) => range.id.startsWith("evidence:")).map((range) => range.value)
+    : context.bundle?.sources ?? [];
+  for (const selected of selectedSources) {
     const source = sources.get(selected.snapshotId);
     if (source === undefined || selected.origin !== source.origin || selected.revision !== source.revision
       || selected.snapshotDigest !== source.digest || selected.snapshotByteLength !== source.byteLength

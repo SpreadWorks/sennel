@@ -1,23 +1,23 @@
 import { isDeepStrictEqual } from "node:util";
 import { FlowFindingSourceIdentity } from "./flow-finding-source.js";
 import { SpecGateRepairBundle } from "./spec-gate-repair-bundle.js";
+import { SpecGateRepairNavigationSelection, assertSpecGateRepairFields } from "./spec-gate-repair-selection.js";
 
 const STAGE = "spec-gate-repair-input-unavailable";
 const REASONS = Object.freeze(["file-read-failed", "context-limit", "context-unavailable"]);
 const BINDING_FIELDS = Object.freeze(["runId", "specId", "stepId", "attemptId", "attemptSequence",
   "inputDigest", "inputRevision", "requestDigest"]);
 
-function exactKeys(value, keys, label) {
-  if (value === null || typeof value !== "object" || Array.isArray(value)
-    || !isDeepStrictEqual(Object.keys(value).sort(), [...keys].sort())) {
-    throw new TypeError(`${label} has an invalid shape`);
-  }
-}
-
 /** The immutable input identity is readable even when the selected body is unavailable. */
 export class SpecGateRepairSelectedInputIdentity {
   static selectionFromDocument(document, selectionDigest) {
-    const selections = document.mode === "repair" ? SpecGateRepairBundle.fromJSON(document.bundle).selections() : [];
+    const selections = document.mode === "repair" ? SpecGateRepairBundle.fromJSON(document.bundle).selections()
+      : ["navigate", "inspect"].includes(document.mode) ? [SpecGateRepairNavigationSelection.fromJSON(document.navigation)] : [];
+    if (selections.some((selection) => selection.baseRevision !== document.baseRevision
+      || selection instanceof SpecGateRepairNavigationSelection
+        && (selection.mode !== document.mode || selection.unit.id !== document.unitId))) {
+      throw new TypeError("Gate repair document differs from its exact selected mode, unit or revision");
+    }
     return new SpecGateRepairSelectedContentIdentity({ baseRevision: document.baseRevision, selectionDigest,
       mode: document.mode, unitIds: selections.map((selection) => selection.unit.id),
       findingIdentities: document.mode === "locate" ? [document.finding.identity]
@@ -25,7 +25,7 @@ export class SpecGateRepairSelectedInputIdentity {
   }
 
   constructor({ binding, baseRevision, selectionDigest, mode, unitIds, findingIdentities }) {
-    exactKeys(binding, BINDING_FIELDS, "Gate repair input binding");
+    assertSpecGateRepairFields(binding, BINDING_FIELDS, "Gate repair input binding has an invalid shape");
     if (binding.stepId !== "spec-gate-repair"
       || !BINDING_FIELDS.filter((key) => key !== "attemptSequence").every((key) => (
         typeof binding[key] === "string" && binding[key].length > 0
@@ -72,11 +72,12 @@ export class SpecGateRepairSelectedInputIdentity {
 export class SpecGateRepairSelectedContentIdentity {
   constructor({ baseRevision, selectionDigest, mode, unitIds, findingIdentities }) {
     if (!/^sha256:[a-f0-9]{64}$/.test(baseRevision) || !/^[a-f0-9]{64}$/.test(selectionDigest)
-      || !["repair", "locate"].includes(mode)
+      || !["repair", "locate", "navigate", "inspect"].includes(mode)
       || !Array.isArray(unitIds) || unitIds.some((id) => typeof id !== "string" || !id)
       || new Set(unitIds).size !== unitIds.length
       || !Array.isArray(findingIdentities) || findingIdentities.length === 0
-      || mode === "locate" && unitIds.length !== 0 || mode === "repair" && unitIds.length === 0) {
+      || mode === "locate" && unitIds.length !== 0 || mode === "repair" && unitIds.length === 0
+      || ["navigate", "inspect"].includes(mode) && unitIds.length !== 1) {
       throw new TypeError("Gate repair selected content identity is invalid");
     }
     const identities = findingIdentities.map((value) => new FlowFindingSourceIdentity(value));
@@ -111,9 +112,9 @@ export class SpecGateRepairInputUnavailable {
   }
 
   static fromJSON(value) {
-    exactKeys(value, ["version", "stage", "binding", "baseRevision",
+    assertSpecGateRepairFields(value, ["version", "stage", "binding", "baseRevision",
       "selectionDigest", "mode", "unitIds", "findingIdentities", "reason", "explanation"],
-    "Gate repair input unavailable response");
+    "Gate repair input unavailable response has an invalid shape");
     return new SpecGateRepairInputUnavailable(value);
   }
 
