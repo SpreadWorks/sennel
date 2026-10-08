@@ -1,12 +1,6 @@
-import assert from "node:assert/strict";
-import fs from "node:fs";
-import path from "node:path";
-import { pathToFileURL } from "node:url";
-
-import { StepRegistration } from "../../../src/flow/engine/composition/step-registration.js";
 import { flowStepExecutionRegistration } from "../../../src/flow/engine/composition/registered-step-execution.js";
 import { draftStructureManifest, specStructureManifest, futurePhaseManifests } from "./phase-manifest.js";
-import { ExecutionCaller, ExecutionLoader, NamedExecutionShape, ProductionRegistrations, SharedExecutionShape } from "./production-registrations.js";
+import { ExecutionCaller, ExecutionLoader, NamedExecutionShape, PhaseProductionRegistrations, SharedExecutionShape } from "./production-registrations.js";
 
 /** Board 37e4 fixes tests for the existing 03 production responsibility manifest. */
 export const implPhaseManifest = futurePhaseManifests.find((manifest) => manifest.id === "03");
@@ -73,48 +67,11 @@ export function implPhaseStructureContract(entry, registry) {
   return entry.contract(registry, implPhaseExecutionShapes(entry), forms);
 }
 
-/** Admit the fixed production export before imports can obscure an absent contract. */
-export class ImplPhaseProductionRegistrations extends ProductionRegistrations {
-  #root;
-  #entry;
-
+/** Inspect only introduced earlier scopes and this phase; 04/05 remain separate. */
+export class ImplPhaseProductionRegistrations extends PhaseProductionRegistrations {
   constructor(root, entry) {
-    super(pathToFileURL(path.join(root, entry.composition)), entry.exportName);
-    this.#root = root;
-    this.#entry = entry;
-  }
-
-  async load() {
-    const entry = this.#entry;
-    const ids = entry.definition.leaves.map((leaf) => leaf.stepId);
-    const contract = `A01/A11 ${entry.composition}: production ${entry.exportName} must register fixed leaves ${ids.join(", ")}`;
-    assert.equal(fs.existsSync(path.join(this.#root, entry.composition)), true, `${contract}; missing composition`);
-    let registrations;
-    try { registrations = await super.load(); }
-    catch (error) {
-      if (!(error instanceof TypeError)) throw error;
-      assert.fail(`${contract}; ${error.message}`);
-    }
-    assert.deepEqual(registrations.map((registration) => registration.stepId).sort(), [...ids].sort(), contract);
-    for (const registration of registrations) {
-      const selected = flowStepExecutionRegistration(registration.stepId);
-      assert.equal(selected instanceof StepRegistration, true, `A11 ${registration.stepId}: missing single production execution lookup`);
-      assert.equal(selected, registration, `A10/A11 ${registration.stepId}: lookup must consume the actual production registration`);
-    }
-    return registrations;
-  }
-
-  async registry() {
-    const selected = await this.load();
-    // Snapshot only existing earlier scopes and this implementation phase.
-    // Future 04/05 contracts never participate in board 37e4 acceptance.
-    const entries = [draftStructureManifest, specStructureManifest,
+    super(root, entry, [draftStructureManifest, specStructureManifest,
       ...futurePhaseManifests.filter((manifest) => ["01", "02", "03"].includes(manifest.id))]
-      .flatMap((manifest) => manifest.entries)
-      .filter((entry) => entry.composition !== this.#entry.composition
-        && fs.existsSync(path.join(this.#root, entry.composition)));
-    const others = await Promise.all(entries.map((entry) => new ProductionRegistrations(
-      pathToFileURL(path.join(this.#root, entry.composition)), entry.exportName).load()));
-    return { selected, registry: [...selected, ...others.flat()] };
+      .flatMap((manifest) => manifest.entries), flowStepExecutionRegistration);
   }
 }

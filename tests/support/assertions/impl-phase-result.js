@@ -1,8 +1,7 @@
 import assert from "node:assert/strict";
-import { STEP_RESULT_REGISTRY, STEP_RESULT_TYPE, StepResult, rehydrateStepResult, stepResultDigest } from "../../../src/flow/engine/step-result.js";
-import * as definition from "../../../src/flow/definition.js";
-import { StepConnector } from "../../../src/flow/engine/step-connector.js";
+import { STEP_RESULT_REGISTRY, STEP_RESULT_TYPE, StepResult, rehydrateStepResult } from "../../../src/flow/engine/step-result.js";
 import { futurePhaseManifests } from "../structure/phase-manifest.js";
+import { assertPhaseSettlementRoundtrip } from "./phase-settlement.js";
 
 /** Expected semantic contracts from the board's frozen leaf designs.
  * These values inspect the single production registry; they never register or
@@ -127,28 +126,5 @@ export function assertImplPhaseSettlementRoundtrip(result) {
     .find((entry) => entry.stepId === result.stepId);
   assert.ok(leaf, "a Result settlement must belong to the fixed implementation phase");
   const name = leaf.scope === "task" ? "settleTaskStepResult" : "settleImplStepResult";
-  assert.equal(typeof definition[name], "function", `IMPL_PHASE_SETTLEMENT_API_MISSING: ${name}`);
-  const stored = result.toJSON();
-  const restored = rehydrateStepResult(result.stepId, stored);
-  const digest = stepResultDigest(restored);
-  const selected = definition[name](result.stepId, restored);
-  assert.ok(selected instanceof definition.StepSettlement);
-  assert.equal(selected.sourceStepId, result.stepId);
-  assert.equal(selected.resultKind, result.kind);
-  assert.equal(selected.resultType, result.type);
-  assert.equal(Object.hasOwn(selected, "facts"), false, "Result-only selection must not retain arbitrary facts");
-  const repeated = definition[name](result.stepId, rehydrateStepResult(result.stepId, stored));
-  assert.equal(repeated.constructor, selected.constructor);
-  assert.deepEqual(repeated.toJSON(), selected.toJSON());
-  assert.equal(stepResultDigest(restored), digest, "settlement selection cannot mutate its persisted Result");
-  if (selected.kind === "target-connection") {
-    assert.ok(selected instanceof definition.StepRoute);
-    assert.ok(selected.connector.prototype instanceof StepConnector);
-    assert.equal(repeated.connector, selected.connector, "restored Result must select the exact same Connector class");
-  } else {
-    assert.ok(["execution", "await", "failure"].includes(selected.kind));
-    assert.equal("connector" in selected, false);
-    assert.equal("targetStepId" in selected, false);
-  }
-  return selected;
+  return assertPhaseSettlementRoundtrip(result, { name, missingCode: "IMPL_PHASE_SETTLEMENT_API_MISSING" });
 }

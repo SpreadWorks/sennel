@@ -146,12 +146,13 @@ function assertPhaseResults(scenario, nodeIds, terminal) {
  * external source workers and Review child processes. All publication, decisions,
  * filtering, dispatch, source manifests and downstream reads remain production. */
 export class ImplPhaseScenario extends RequirementTestPhaseScenario {
+  static publicationObserverOptions = {};
   static create(t, options = {}) {
-    const scenario = new ImplPhaseScenario({ autoApprove: true, continueImplementation: true,
+    const scenario = new this({ autoApprove: true, continueImplementation: true,
       testSource: (id) => `// spec: ${id}\nimport test from 'node:test';\nimport assert from 'node:assert/strict';\nimport fs from 'node:fs';\nimport path from 'node:path';\ntest('${id}: required behavior', () => { assert.equal(fs.existsSync(path.join(process.cwd(), 'src/implementation.js')), true); });\n`,
       ...options });
     t.after(() => scenario.close());
-    scenario.publicationObserver = new ImplPhasePublicationObserver(t);
+    scenario.publicationObserver = new ImplPhasePublicationObserver(t, this.publicationObserverOptions);
     scenario.initialize();
     return scenario;
   }
@@ -173,7 +174,7 @@ export class ImplPhaseScenario extends RequirementTestPhaseScenario {
         ?? { blockingFindings: this.options.forceRepairs && ordinal === 1 ? [implementationFinding({ taskId: task?.taskId })] : [], nonBlockingImprovements: [] };
       this.phaseReviews.push({ stage, taskId: task?.taskId ?? null, ordinal, environment: structuredClone(options.env), response });
       this.options.beforeImplReview?.(options.env, this);
-      if (this.options.reviewProcessResult) return this.options.reviewProcessResult(stage, ordinal, options, this);
+      if (this.options.reviewProcessResult) return this.options.reviewProcessResult(stage, ordinal, options, this, { command, args });
       const processResult = parentSpawn(process.execPath, [fileURLToPath(new URL("./impl-phase-review-worker.js", import.meta.url))], {
         ...options, env: { ...options.env, SENNEL_IMPL_SCENARIO_RESPONSE: JSON.stringify(response) },
       });

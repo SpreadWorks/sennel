@@ -12,7 +12,7 @@ import { PrepareExecutionObserver } from "../../support/infrastructure/prepare-e
 import { validWorkerHandoffTaskSpec } from "../../support/infrastructure/worker-artifact.js";
 import { implPhaseManifest, implPhaseScopes, ImplPhaseProductionRegistrations }
   from "../../support/structure/impl-phase-scope.js";
-import { ServiceBoundaryCoverage, ServiceBoundaryViolation }
+import { ServiceBoundaryCoverage, assertPreparedServiceBoundary as assertPrepared, assertFixturePublicPropertyDetection }
   from "../../support/structure/service-boundary.js";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
@@ -27,48 +27,6 @@ function createScenario(t, Scenario) {
       ...requirement, task_ids: ["T17"], preimplementation_test_expectation: "fail",
     })),
   });
-}
-
-function assertPrepared(registration, prepared, coverage) {
-  assert.ok(prepared instanceof PreparedStep,
-    `A07 ${registration.stepId}: receipt replay cannot replace first production Service preparation`);
-  const service = coverage.inspectPrepared(registration, prepared);
-  assert.equal(prepared.step.constructor, registration.StepClass);
-  assert.deepEqual(registration.StepClass.dependencies, [registration.ServiceClass]);
-  assert.equal(prepared.dependencies.size, registration.StepClass.dependencies.length);
-  const types = registration.ServiceClass.argumentTypes;
-  assert.ok(types.length > 0, `A12 ${registration.stepId}: preparation requires acquired typed constructor inputs`);
-  assert.equal(prepared.serviceArguments.length, types.length);
-  for (const [index, Type] of types.entries()) {
-    assert.ok(prepared.serviceArguments[index] instanceof Type,
-      `A12 ${registration.stepId}: actual constructor argument ${index} must be ${Type.name}`);
-  }
-  for (const Dependency of registration.StepClass.dependencies) {
-    assert.ok(prepared.dependency(Dependency) instanceof Dependency,
-      `A07 ${registration.stepId}: actual prepared ${Dependency.name} must be inspected`);
-  }
-  return service;
-}
-
-/** Mutation probes belong only to the deliberately extensible isolated fixture. */
-function assertFixturePublicPropertyDetection(registration, prepared) {
-  const service = prepared.dependency(registration.ServiceClass);
-  for (const property of ["boundaryProbe", Symbol(`${registration.stepId}-boundaryProbe`)]) {
-    const coverage = new ServiceBoundaryCoverage([registration]);
-    Object.defineProperty(service, property, { value: true, enumerable: false, configurable: true });
-    try {
-      assert.throws(() => coverage.inspectPrepared(registration, prepared), (error) =>
-        error instanceof ServiceBoundaryViolation && error.rule === "A07"
-          && error.registration === registration && error.service === service && error.property === property);
-      assert.throws(() => coverage.assertComplete(), (error) => error.rule === "A07"
-        && error.registrations.includes(registration));
-    } finally {
-      delete service[property];
-    }
-    coverage.inspectPrepared(registration, prepared);
-    assert.equal(coverage.assertComplete(), 1,
-      `A07 ${registration.stepId}: removing the public property restores the same actual Service boundary`);
-  }
 }
 
 for (const leaf of leaves) {

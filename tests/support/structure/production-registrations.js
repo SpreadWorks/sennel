@@ -1,3 +1,7 @@
+import assert from "node:assert/strict";
+import fs from "node:fs";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { StepRegistration } from "../../../src/flow/engine/composition/step-registration.js";
 import { TaskStepIdentity } from "../../../src/flow/lib/task-step-identity.js";
 
@@ -216,5 +220,50 @@ export class ProductionRegistrations {
     const issue = ProductionRegistrations.inspect(registrations)[0];
     if (issue) throw issue.toLoadError(this.moduleUrl, this.exportName);
     return registrations;
+  }
+}
+
+/** Fixed phase admission and snapshot loading share the same production contract. */
+export class PhaseProductionRegistrations extends ProductionRegistrations {
+  #root;
+  #entry;
+  #entries;
+  #lookup;
+
+  constructor(root, entry, entries, lookup) {
+    super(pathToFileURL(path.join(root, entry.composition)), entry.exportName);
+    this.#root = root;
+    this.#entry = entry;
+    this.#entries = entries;
+    this.#lookup = lookup;
+  }
+
+  async load() {
+    const entry = this.#entry;
+    const ids = entry.definition.leaves.map((leaf) => leaf.stepId);
+    const contract = `A01/A11 ${entry.composition}: production ${entry.exportName} must register fixed leaves ${ids.join(", ")}`;
+    assert.equal(fs.existsSync(path.join(this.#root, entry.composition)), true, `${contract}; missing composition`);
+    let registrations;
+    try { registrations = await super.load(); }
+    catch (error) {
+      if (!(error instanceof TypeError)) throw error;
+      assert.fail(`${contract}; ${error.message}`);
+    }
+    assert.deepEqual(registrations.map((registration) => registration.stepId).sort(), [...ids].sort(), contract);
+    for (const registration of registrations) {
+      const selected = this.#lookup(registration.stepId);
+      assert.equal(selected instanceof StepRegistration, true, `A11 ${registration.stepId}: missing single production execution lookup`);
+      assert.equal(selected, registration, `A10/A11 ${registration.stepId}: lookup must consume the actual production registration`);
+    }
+    return registrations;
+  }
+
+  async registry() {
+    const selected = await this.load();
+    const entries = this.#entries.filter((entry) => entry.composition !== this.#entry.composition
+      && fs.existsSync(path.join(this.#root, entry.composition)));
+    const others = await Promise.all(entries.map((entry) => new ProductionRegistrations(
+      pathToFileURL(path.join(this.#root, entry.composition)), entry.exportName).load()));
+    return { selected, registry: [...selected, ...others.flat()] };
   }
 }

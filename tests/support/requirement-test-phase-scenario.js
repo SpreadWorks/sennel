@@ -22,6 +22,7 @@ import { parseTestReviewFindings } from "../../src/flow/commands/review.js";
 import { CanonicalFlowFixture, canonicalDraftDocument } from "./infrastructure/flow-setup.js";
 import { PrepareArtifactScenario } from "./prepare-artifact-scenario.js";
 import { removeTmpDir } from "./builders/tmp-dir.js";
+import { SeedWorkRoot } from "./builders/seed-work-root.js";
 import { validWorkerHandoffTaskSpec, workerArtifactJson } from "./infrastructure/worker-artifact.js";
 import { dispatchContainer, fixtureRepository, installGateProviderFake, requestInput, requestPayloadPath } from "./infrastructure/flow-dispatch-scenario.js";
 
@@ -43,20 +44,23 @@ export class RequirementTestPhaseScenario {
     if (options.prepared && !(options.prepared instanceof PrepareArtifactScenario)) {
       throw new TypeError("prepared phase scenarios require the real PrepareArtifactScenario");
     }
-    this.specId = options.prepared?.specId ?? "904-requirement-phase";
+    this.specId = options.seedSpecId ?? options.prepared?.specId ?? "904-requirement-phase";
     this.requests = [];
     this.downstreamReviews = [];
     this.reviews = [];
     this.dispatches = [];
     this.reviewWorkUnits = new Map();
     this.resultEvidence = new Map();
-    this.root = options.prepared?.executionRoot ?? fixtureRepository("requirement-test-phase-");
+    this.seedClone = options.seedRoot ? new SeedWorkRoot(options.seedRoot, { prefix: "sennel-acceptance-phase-" }) : null;
+    this.root = this.seedClone?.root ?? options.prepared?.executionRoot ?? fixtureRepository("requirement-test-phase-");
     this.agent = { call: (prompt, options) => this.worker(prompt, options) };
   }
 
   initialize() {
     this.reload();
     fs.mkdirSync(path.join(this.root, ".sennel"), { recursive: true });
+    if (this.options.config && !this.seedClone) fs.writeFileSync(path.join(this.root, ".sennel", "config.json"),
+      workerArtifactJson(this.options.config));
     fs.writeFileSync(path.join(this.root, ".sennel", "guardrail.json"), workerArtifactJson({ guardrails: [{
       id: "PHASE-SPEC", title: "Executable requirement", body: "Each requirement states the behavior and its verification.",
       meta: { phase: ["spec"], category: "requirements" },
@@ -68,11 +72,13 @@ export class RequirementTestPhaseScenario {
       fs.mkdirSync(path.join(this.root, "project-tests"), { recursive: true });
       fs.writeFileSync(path.join(this.root, "project-tests", "smoke.test.js"), "import test from 'node:test'; test('project starts', () => {});\n");
     }
-    if (!this.options.prepared) new CanonicalFlowFixture({ flowManager: this.manager, specId: this.specId,
+    if (!this.options.prepared && !this.seedClone) new CanonicalFlowFixture({ flowManager: this.manager, specId: this.specId,
       runId: "run-requirement-phase", request: "Preserve Requirement tests through approval, Gate and implementation.",
       autoApprove: this.options.autoApprove ?? false,
-      execution: { mode: "direct", baseBranch: "main", featureBranch: null },
-    }).create().registerActive().activate("spec");
+      execution: this.options.execution ?? { mode: "direct", baseBranch: "main", featureBranch: null },
+      issue: this.options.issue ?? null,
+      issueSnapshot: this.options.issueSnapshot ?? null,
+    }).create().registerActive().activate(this.options.entryStep ?? "spec");
     this.gateProvider = installGateProviderFake((prompt, options) => {
       const selected = this.options.gateResponse?.(prompt, options, this);
       if (selected !== null && selected !== undefined) return selected;
@@ -83,8 +89,16 @@ export class RequirementTestPhaseScenario {
           guardrail_id, result: "pass", reason: "Scenario accepts the configured guardrail.",
         })) });
       }
+      const observation = options.jsonSchema?.properties?.observations?.items;
+      const requirementIds = observation?.properties?.requirementId?.enum ?? [];
+      const sourceRefs = observation?.properties?.sourceRef?.enum ?? [];
+      if (requirementIds.length && sourceRefs.length) return JSON.stringify({
+        observations: requirementIds.flatMap((requirementId) => sourceRefs.map((sourceRef) => ({
+          requirementId, sourceRef, support: [], contradictions: [], unresolved: [],
+        }))),
+      });
       return JSON.stringify({ observations: [], ...(required.includes("evaluationUnavailable") ? { evaluationUnavailable: null } : {}) });
-    });
+    }, this.options.providerOptions);
     const original = childProcess.spawnSync;
     this.reviewProcess = mock.method(childProcess, "spawnSync", (command, args, options) => {
       if (command !== "node" || !String(args[0]).endsWith("/flow/commands/review.js")) return original(command, args, options);
@@ -150,8 +164,11 @@ export class RequirementTestPhaseScenario {
     this.requests.push(request);
     if (request.stepId === "draft") {
       fs.writeFileSync(requestPayloadPath(request, "draft.json"), workerArtifactJson(canonicalDraftDocument({
-        goal: this.options.prepared.request,
+        goal: this.options.prepared?.request ?? this.manager.loadReadOnly(this.specId).request,
       })));
+    } else if (request.stepId === "draft-refine") {
+      fs.writeFileSync(requestPayloadPath(request, "draft.json"),
+        workerArtifactJson(requestInput(request, "draft.json").document));
     } else if (request.stepId === "spec") {
       fs.writeFileSync(requestPayloadPath(request, "spec.json"), workerArtifactJson(this.spec()));
     } else if (["spec-triage", "spec-repair"].includes(request.stepId)) {
@@ -302,8 +319,8 @@ export class RequirementTestPhaseScenario {
     assert.ok(evidence, `saved ${activity.nodeId} Activity must have an observed publication snapshot`);
     return evidence;
   }
-  artifact(logicalKey, parameters = undefined) {
-    return this.manager.readArtifact({ specId: this.specId, logicalKey, parameters, consumerNodeId: this.current(), optional: true });
+  artifact(logicalKey, parameters = undefined, consumerNodeId = this.current()) {
+    return this.manager.readArtifact({ specId: this.specId, logicalKey, parameters, consumerNodeId, optional: true });
   }
   candidate(requirementId) {
     const state = this.manager.canonicalState(this.specId);
@@ -323,7 +340,8 @@ export class RequirementTestPhaseScenario {
     this.reviewProcess?.mock.restore();
     syncBuiltinESMExports();
     this.gateProvider?.mock.restore();
-    if (!this.options.prepared) removeTmpDir(this.root);
+    if (this.seedClone) this.seedClone.cleanup();
+    else if (!this.options.prepared) removeTmpDir(this.root);
   }
 }
 
