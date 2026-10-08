@@ -29,14 +29,30 @@ export class TaskStepIdentity {
 
   matchesNode(nodeId) { return nodeId === this.nodeId; }
 
+  /** Decode syntax only; canonical membership remains fromTaskNode's job. */
+  static fromNodeId(nodeId) {
+    if (typeof nodeId !== "string") return null;
+    for (const role of TASK_STEP_ROLES) {
+      const suffix = `-${role}`;
+      if (!nodeId.endsWith(suffix)) continue;
+      const taskId = nodeId.slice(0, -suffix.length);
+      return taskId === "" ? null : new TaskStepIdentity({ taskId, role });
+    }
+    return null;
+  }
+
+  /** Resolve an exact fixed Task alias; this does not assert canonical membership. */
+  static fromDefinitionId({ taskId, definitionId } = {}) {
+    if (typeof definitionId !== "string") return null;
+    const role = TASK_STEP_ROLES.find((candidate) => definitionId === `task-${candidate}`);
+    return role === undefined ? null : new TaskStepIdentity({ taskId, role });
+  }
+
   static fromTaskNode(task, nodeId) {
     if (!task || !Array.isArray(task.steps)) return null;
     if (!task.steps.some((step) => step.id === nodeId)) return null;
-    for (const role of TASK_STEP_ROLES) {
-      const identity = new TaskStepIdentity({ taskId: task.id, role });
-      if (identity.matchesNode(nodeId)) return identity;
-    }
-    return null;
+    const identity = TaskStepIdentity.fromNodeId(nodeId);
+    return identity?.taskId === task.id ? identity : null;
   }
 
   static fromStateNode(state, nodeId) {
@@ -50,6 +66,7 @@ export class TaskStepIdentity {
     }
     if (typeof state?.findNode !== "function" || state.root === undefined || state.definition === undefined) return null;
     const node = state.findNode(nodeId);
+    if (node === null) return null;
     const definition = node === null ? null : state.definition.definitionNodeFor(node);
     const role = typeof definition?.id === "string" && definition.id.startsWith("task-")
       ? definition.id.slice("task-".length)

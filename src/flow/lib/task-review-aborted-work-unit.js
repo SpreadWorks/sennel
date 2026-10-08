@@ -1,15 +1,17 @@
+import { TaskStepIdentity } from "./task-step-identity.js";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 
 import { FLOW_ARTIFACT_CONTRACTS } from "../../lib/flow-artifact-contract.js";
-import { CanonicalFlowArtifactWrite, CurrentAttemptIdentity } from "./current-flow-state.js";
+import { CanonicalFlowArtifactWrite, CurrentAttemptIdentity, NodeResult } from "./current-flow-state.js";
 import {
   REVIEW_WORK_UNIT_MANIFEST_ENV,
   ReviewWorkUnit,
   assertReviewWorkUnitInputSnapshot,
   reviewWorkUnitNamespace,
 } from "./review-work-unit.js";
+import { DraftStepExecutionState, DraftReviewExecutionBinding, DraftReviewExecutionTargetIdentity } from "../definition.js";
 import { ReviewWorkUnitManifest, ReviewWorkUnitSeal } from "./review-work-unit-values.js";
 
 export const TASK_REVIEW_ABORTED_WORK_UNIT_KEY = "task.review.aborted.work-unit";
@@ -50,6 +52,42 @@ function exactToolingFailure(activities, manifest) {
     throw new Error("sealed Task Review work unit has no exact tooling failure Activity");
   }
   return matched[0];
+}
+
+/** A parent checkpoint/claim is execution authority, never a semantic producer.
+ * Reuse the common stored execution codec; archive eligibility additionally
+ * requires the exact immutable work unit whose unpublished bytes are retained.
+ */
+function isUnpublishedTaskReviewExecutionActivity(activity, manifest) {
+  const identity = TaskStepIdentity.fromNodeId(activity.nodeId);
+  if (identity?.definitionId !== "task-review" || identity.taskId !== manifest.taskId
+    || activity.transition?.operation !== "record_draft_step_settlement") return false;
+  const result = activity.result instanceof NodeResult ? activity.result : new NodeResult(activity.result);
+  const receipt = result.draftSettlementReceipt;
+  if (result.stepResult?.kind !== "task-review-execution-required"
+    || receipt?.settlementKind !== "execution"
+    || !["checkpoint", "claimed"].includes(receipt.executionLifecycle?.phase)) return false;
+  const execution = new DraftStepExecutionState({
+    binding: { runId: manifest.runId, specId: manifest.specId, stepId: identity.definitionId,
+      attempt: new CurrentAttemptIdentity({ id: activity.attemptId, nodeId: activity.nodeId, sequence: activity.sequence }) },
+    result: result.stepResult, receipt,
+  });
+  const expected = new DraftReviewExecutionBinding({ executionGeneration: execution.lifecycle.executionGeneration,
+    manifestDigest: manifest.digest, inputDigest: manifest.inputDigest,
+    target: new DraftReviewExecutionTargetIdentity(manifest.target.toJSON()) });
+  return execution.lifecycle.binding.equals(expected);
+}
+
+/** Budget accounting reads semantic history; archival needs the earlier producer boundary too. */
+function hasPublishedTaskReviewProducer({ activities, catalog, manifest, attemptSequence = null }) {
+  const matches = (activity) => activity.nodeId === manifest.nodeId && activity.attemptId === manifest.attemptId
+    && (attemptSequence === null || activity.sequence === attemptSequence);
+  if (activities.some((activity) => matches(activity) && activity.type === "result_confirmed"
+    && !isUnpublishedTaskReviewExecutionActivity(activity, manifest))) return true;
+  const producerPath = FLOW_ARTIFACT_CONTRACTS.resolve("task.review", { taskId: manifest.taskId }).relativePath;
+  return catalog.artifacts.some((descriptor) => descriptor.logicalKey === "task.review"
+    && descriptor.relativePath === producerPath
+    && activities.some((activity) => activity.id === descriptor.activityId && matches(activity)));
 }
 
 /** Durable archive of a sealed, unpublished Task Review worker result.
@@ -95,7 +133,7 @@ export class TaskReviewAbortedWorkUnit {
       || bytes.length !== this.output.byteLength || crypto.createHash("sha256").update(bytes).digest("hex") !== this.output.digest) {
       throw new Error("Task Review aborted work unit output receipt is invalid");
     }
-    if (this.nodeId !== `${this.taskId}-review` || this.attempt.nodeId !== this.nodeId
+    if (!new TaskStepIdentity({ taskId: this.taskId, role: "review" }).matchesNode(this.nodeId) || this.attempt.nodeId !== this.nodeId
       || this.manifest.runId !== this.runId || this.manifest.specId !== this.specId
       || this.manifest.taskId !== this.taskId || this.manifest.nodeId !== this.nodeId
       || this.manifest.attemptId !== this.attempt.id || this.manifest.phase !== "impl"
@@ -118,7 +156,7 @@ export class TaskReviewAbortedWorkUnit {
     if (!(worker instanceof ReviewWorkUnit)) throw new Error("Task Review aborted work unit requires a sealed worker");
     const sealed = worker.readSealedOutput();
     const manifest = worker.manifestDocument;
-    if (manifest.phase !== "impl" || manifest.taskId === null || manifest.nodeId !== `${manifest.taskId}-review`) {
+    if (manifest.phase !== "impl" || manifest.taskId === null || !new TaskStepIdentity({ taskId: manifest.taskId, role: "review" }).matchesNode(manifest.nodeId)) {
       throw new Error("Task Review aborted work unit requires a Task Review worker");
     }
     const unsigned = {
@@ -208,12 +246,8 @@ export class TaskReviewAbortedWorkUnitRetryAdmission {
         && activity.sequence === archive.attempt.sequence
       ));
       if (failures.length !== 1 || failures[0].failure?.category !== "tooling"
-        || activities.some((activity) => (
-          activity.type === "result_confirmed"
-          && activity.nodeId === archive.nodeId
-          && activity.attemptId === archive.attempt.id
-          && activity.sequence === archive.attempt.sequence
-        ))
+        || hasPublishedTaskReviewProducer({ activities, catalog, manifest: archive.manifest,
+          attemptSequence: archive.attempt.sequence })
         || catalog.artifacts.some((descriptor) => (
           descriptor.logicalKey === TASK_REVIEW_ABORTED_WORK_UNIT_KEY
           && descriptor.relativePath === archive.artifactWrite.artifact.relativePath
@@ -233,15 +267,17 @@ export class TaskReviewAbortedWorkUnitRetryAdmission {
  * closed boundary, because an archive must never authorize source effects.
  */
 export function captureTaskReviewAbortedWorkUnits({ executionRoot, state, activities, flowManager, catalog = null } = {}) {
-  const taskId = state?.current?.at(-2) ?? null;
-  const nodeId = state?.current?.at(-1) ?? null;
-  if (typeof taskId !== "string" || nodeId !== `${taskId}-review` || !Array.isArray(activities)) return [];
+  const identity = TaskStepIdentity.fromStateNode(state, state?.current?.at(-1));
+  if (identity?.role !== "review" || !Array.isArray(activities)) return [];
+  const taskId = identity.taskId;
+  const nodeId = identity.nodeId;
   const namespace = reviewWorkUnitNamespace({ executionRoot, specId: state.specId, runId: state.runId });
   if (!fs.existsSync(namespace)) return [];
   const namespaceStat = fs.lstatSync(namespace);
   if (!namespaceStat.isDirectory() || namespaceStat.isSymbolicLink() || fs.realpathSync(namespace) !== path.resolve(namespace)) {
     throw new Error("Task Review aborted work unit namespace is not a real directory");
   }
+  const resolvedCatalog = catalog ?? flowManager.artifactCatalog(state.specId);
   const archives = [];
   for (const entry of fs.readdirSync(namespace, { withFileTypes: true })) {
     if (!entry.isDirectory() || entry.isSymbolicLink()) {
@@ -260,17 +296,13 @@ export function captureTaskReviewAbortedWorkUnits({ executionRoot, state, activi
       throw new Error("Task Review aborted work unit namespace contains a foreign identity");
     }
     if (manifest.phase !== "impl" || manifest.taskId !== taskId || manifest.nodeId !== nodeId) continue;
-    if (activities.some((activity) => (
-      activity.type === "result_confirmed"
-      && activity.nodeId === manifest.nodeId
-      && activity.attemptId === manifest.attemptId
-    ))) continue;
+    if (hasPublishedTaskReviewProducer({ activities, catalog: resolvedCatalog, manifest })) continue;
     if (flowManager !== undefined && flowManager !== null) {
       const archived = readTaskReviewAbortedWorkUnit({
         flowManager,
         state,
         worker,
-        catalog,
+        catalog: resolvedCatalog,
         activities,
       });
       if (archived !== null) continue;
@@ -330,12 +362,8 @@ export function readTaskReviewAbortedWorkUnit({ flowManager, state, worker, cata
     || (!publicationMatchesFailure && !publicationMatchesSuccessor)) {
     throw new Error("Task Review aborted work unit has no matching tooling failure publication");
   }
-  if (resolvedActivities.some((candidate) => (
-    candidate.type === "result_confirmed"
-    && candidate.nodeId === archive.nodeId
-    && candidate.attemptId === archive.attempt.id
-    && candidate.sequence === archive.attempt.sequence
-  ))) {
+  if (hasPublishedTaskReviewProducer({ activities: resolvedActivities, catalog: resolvedCatalog,
+    manifest: archive.manifest, attemptSequence: archive.attempt.sequence })) {
     throw new Error("Task Review aborted work unit cannot replace a published producer result");
   }
   const sealed = worker.readSealedOutput();

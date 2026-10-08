@@ -1,14 +1,21 @@
 import { CURRENT_FLOW_SCHEMA_REVISION } from "../../../src/lib/flow-schema-revision.js";
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import path from "node:path";
+import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import { describe, it } from "node:test";
 
 import { FlowManager } from "../../../src/lib/flow-manager.js";
 import { FlowArtifactAttemptHistory, FlowArtifactAttemptRecord } from "../../../src/lib/flow-artifact-contract.js";
-import { CurrentFlowPolicy, CurrentFlowNonBlockingPolicy, ActivityTransition, ActivityNonBlockingRecord } from "../../../src/flow/lib/current-flow-state.js";
+import { CurrentFlowPolicy, CurrentFlowNonBlockingPolicy, ActivityTransition, ActivityNonBlockingRecord, CurrentFlowStateInvariantError } from "../../../src/flow/lib/current-flow-state.js";
+import { CurrentFlowStateConflictError } from "../../../src/flow/lib/current-flow-state-conflict-error.js";
+import { StepAdmissionRefusal } from "../../../src/flow/lib/step-admission-refusal.js";
 import { CanonicalFlowRuntime } from "../../../src/flow/lib/canonical-flow-runtime.js";
 import { CanonicalFlowManagerStore } from "../../../src/flow/lib/canonical-flow-manager-store.js";
 import {
   NonBlockingPolicy,
+  NonBlockingEvidenceError,
   advisorySummary,
   activateNonBlockingPolicy,
   definitionNonblockingEligibilityForActiveFlow,
@@ -16,144 +23,221 @@ import {
   decisionEvidenceForActiveFlow,
   recordNonBlockingDecision,
 } from "../../../src/flow/lib/nonblocking.js";
-import { CanonicalFlowFixture } from "../../support/infrastructure/flow-setup.js";
-import { createTmpDir, removeTmpDir } from "../../support/builders/tmp-dir.js";
+import { removeTmpDir } from "../../support/builders/tmp-dir.js";
 import { fromAcceptanceResult, fromFinalRegressionResult, fromGateResult, fromReviewResult, fromVerificationResult } from "../../../src/flow/lib/nonblocking-evidence.js";
-import { CanonicalGatePromotion } from "../../../src/flow/lib/canonical-gate-artifacts.js";
 import { CanonicalAcceptanceArtifactStore } from "../../../src/flow/lib/canonical-acceptance-artifacts.js";
-import { captureCurrentTaskSource } from "../../../src/flow/lib/task-mutation-lineage.js";
-import { readCurrentGateTransitionFacts } from "../../../src/flow/lib/gate-transition-facts.js";
-import { resolveGateTransition } from "../../../src/flow/definition.js";
-import { appendIssueLogFromGateResult } from "../../../src/flow/lib/run-gate.js";
 import GetNextActionCommand from "../../../src/flow/lib/get-next-action.js";
 import RunDispatchCommand, { FlowDispatchAction } from "../../../src/flow/lib/run-dispatch.js";
+import { ImplPhaseScenario } from "../../support/impl-phase-scenario.js";
+import { TaskReviewScenario } from "../../support/builders/task-review-scenario.js";
+import { ImplementationReviewProducer } from "../../support/infrastructure/implementation-review-producer.js";
+import RunGateCommand from "../../../src/flow/lib/run-gate.js";
+import { FLOW_COMMANDS } from "../../../src/flow/registry.js";
+import { container } from "../../../src/lib/container.js";
+import { CanonicalCommandAttemptArtifactHistory } from "../../../src/flow/lib/canonical-command-result.js";
+import { canonicalSourceFindings } from "../../../src/flow/lib/flow-finding-source.js";
+import RunRetroCommand from "../../../src/flow/lib/run-retro.js";
+import RunAcceptanceReviewCommand, { AcceptanceReviewResponseSource } from "../../../src/flow/lib/run-acceptance-review.js";
 
-function attemptHistory(nodeId, logicalKey, payload) {
-  return Buffer.from(`${JSON.stringify(new FlowArtifactAttemptHistory([
-    new FlowArtifactAttemptRecord({
-      attempt: 1,
-      payload: { nodeId, outcome: "completed", result: { result: "block" }, artifact: { logicalKey, payload } },
-    }),
-  ]).toJSON(), null, 2)}\n`, "utf8");
+async function scenario(t, { step = "impl-gate", payload = null, mixedGateFindings = false, passOnly = false } = {}) {
+  if (payload !== null && !["retro", "acceptance-review"].includes(step)) return malformedReviewScenario(t, payload);
+  const phase = ImplPhaseScenario.create(t, {
+    ...(mixedGateFindings ? { requirements: [
+      { id: "R1", desc: "Implement the required behavior.", task_ids: ["T1"], preimplementation_test_expectation: "fail" },
+      { id: "R2", desc: "Preserve the independent behavior.", task_ids: ["T1"], preimplementation_test_expectation: "fail" },
+    ] } : {}),
+    ...(step === "retro" ? { testSource: (id) => `// spec: ${id}\nimport test from 'node:test';\nimport assert from 'node:assert/strict';\ntest('${id}: unresolved requirement', () => assert.fail('The required behavior remains unproved.'));\n` } : {}),
+    gateResponse(_prompt, options, current) {
+    if (current.current() !== "impl-gate" || step !== "impl-gate") return null;
+    if (!(options.jsonSchema?.required ?? []).includes("evaluations")) return null;
+    const ids = options.jsonSchema.properties.evaluations.items.properties.guardrail_id.enum;
+    return JSON.stringify({ evaluations: ids.map((guardrail_id) => ({ guardrail_id,
+      result: mixedGateFindings && guardrail_id === "R2" ? "pass" : "fail",
+      reason: mixedGateFindings && guardrail_id === "R2" ? "This independently mapped requirement is satisfied."
+        : `[REQ:${guardrail_id}] Evaluation ${current.state().attempt.sequence} identifies an omitted behavior branch.` })) });
+  } });
+  if (step === "impl-gate") {
+    const config = path.join(phase.root, ".sennel/guardrail.json");
+    const document = JSON.parse(fs.readFileSync(config, "utf8"));
+    document.guardrails.push({ id: "R1", title: "Current implementation behavior", body: "The mapped behavior must be implemented.",
+      meta: { phase: ["integration"], category: "requirements" } });
+    fs.writeFileSync(config, JSON.stringify(document));
+  }
+  await phase.advanceTo(step);
+  const { root, manager, specId } = phase;
+  const fixture = { specId, runId: phase.state().runId };
+  if (step === "impl-gate" && !passOnly) {
+    const limit = phase.state().definition.contractForNode(phase.state().findNode("impl-gate")).semanticRetryLimit + 2;
+    let stop = null;
+    for (let index = 0; index < limit; index += 1) {
+      const ctx = { ...phase.context(), phase: "integration" };
+      await FLOW_COMMANDS.run.gate.pre(ctx);
+      const outcome = await new RunGateCommand().execute(ctx);
+      await FLOW_COMMANDS.run.gate.post(ctx, outcome);
+      phase.reload();
+      assert.equal(outcome.result, "fail", JSON.stringify(outcome));
+      if (ctx.gateTransitionDecision.disposition.operation === "defer") {
+        stop = phase.manager.readCurrentStepSettlement({ specId, stepId: "impl-gate" });
+        break;
+      }
+      assert.equal(ctx.gateTransitionDecision.disposition.operation, "retry");
+      assert.equal(phase.state().attempt.nodeId, "impl-gate");
+    }
+    assert.ok(stop, "actual registered Gate evaluations must exhaust the semantic retry budget");
+    assert.equal(stop.result.kind, "impl-gate-semantic-failure");
+    assert.equal(stop.settlement.application.decision.disposition.operation, "defer");
+  } else if (step === "retro") {
+    const outcome = await new RunRetroCommand().execute(phase.context());
+    assert.ok(outcome.artifacts.summary.not_done > 0, JSON.stringify(outcome));
+    manager.publishCurrentAttemptResult({ specId, commandResult: outcome });
+  } else if (step === "acceptance-review") {
+    const outcome = await new RunAcceptanceReviewCommand({ responseSource: new InconclusiveAcceptanceResponse() })
+      .execute(phase.context());
+    assert.equal(outcome.verdict, "user_decision_required", JSON.stringify(outcome));
+    manager.publishCurrentAttemptResult({ specId, commandResult: outcome });
+  }
+  return { root, manager, fixture, phase };
 }
 
-const EVIDENCE_KEY = {
-  "spec-gate": "spec.gate",
-  "test-result-review": "test.result.review",
-  "impl-review": "impl.review", "impl-gate": "impl.gate", "acceptance-review": "acceptance.review",
-  "final-regression": "final.regression", retro: "retro",
-};
+class InconclusiveAcceptanceResponse extends AcceptanceReviewResponseSource {
+  load(context) {
+    return { requirementJudgments: context.requirementIds.map((requirementId) => ({ requirementId,
+      status: "notVerifiable", requestRefs: ["flow.request"], requirementRefs: [`spec.json#${requirementId}`],
+      diffRefs: [], repairRefs: [context.evidence.repairEvidence.ref], testRefs: [],
+      missingEvidence: ["Independent acceptance cannot certify the requested behavior from this evidence."] })),
+      deferredFindingDispositions: [] };
+  }
+}
 
-function scenario({ step = "impl-review", payload = null } = {}) {
-  const root = createTmpDir("canonical-nonblocking-");
-  const manager = new FlowManager({ root, mainRoot: root, inWorktree: false });
-  const fixture = new CanonicalFlowFixture({ flowManager: manager, specId: "477-nonblocking", runId: "run-477" })
-    .create()
-    .registerActive()
-    .activate(step);
-  const logicalKey = EVIDENCE_KEY[step];
-  const finding = {
-    fingerprint: "a".repeat(64),
-    disposition: "deferred",
-    rationale: "Acceptance must retain this canonical semantic finding.",
-  };
-  const evidence = payload ?? {
-    version: 1, phase: "impl", verdict: "REJECTED", summary: "Canonical review rejected this evidence.",
-    blockingFindings: [finding], nonBlockingImprovements: [],
-    canonicalEvidence: {
-      phase: "impl", disposition: "REJECTED",
-      identity: { evidenceDigest: "b".repeat(64) },
-      blockingFindings: [finding], advisoryFindings: [],
+async function malformedReviewScenario(t, payload) {
+  const phase = ImplPhaseScenario.create(t);
+  await phase.advanceTo("impl-review");
+  const { root, manager, specId } = phase;
+  const candidate = new FlowArtifactAttemptHistory([new FlowArtifactAttemptRecord({
+    attempt: phase.state().attempt.sequence, payload: { artifact: { logicalKey: "impl.review", payload } },
+  })]);
+  manager.publishArtifacts({ specId, nodeId: "impl-review", artifactWrites: [{ logicalKey: "impl.review",
+    mediaType: "application/json", bytes: Buffer.from(`${JSON.stringify(candidate.toJSON())}\n`) }] });
+  return { root, manager, fixture: { specId, runId: phase.state().runId }, phase };
+}
+
+async function taskScenario(t, step = "review", { failureKind = "mechanical", nextTask = false, reviewTooling = false, rejectPublication = false } = {}) {
+  if (reviewTooling) return toolingReviewScenario(t);
+  const phase = nextTask ? await mappedTaskScenario(t, failureKind) : new TaskReviewScenario(t,
+    step === "gate" && failureKind === "mechanical" ? { implementationContent: "x".repeat(1024 * 1024 + 64) } : {});
+  const { root, manager, specId } = phase;
+  const fixture = { specId, runId: phase.state().runId };
+  if (step === "review") {
+    const outcome = await phase.review(() => { const error = new Error("external Review invocation failed before provider start");
+      error.code = "EIO"; throw error; }).execute(phase.context());
+    assert.equal(outcome.ok, false);
+    assert.ok(phase.state().attempt.failure, JSON.stringify(outcome));
+    return { root, manager, fixture, phase };
+  }
+  assert.notEqual((await new ImplementationReviewProducer().publish(phase.context())).ok, false);
+  const originalGet = container.get.bind(container);
+  container.get = (key) => key !== "agent" ? originalGet(key) : {
+    resolve: () => failureKind !== "provider",
+    call: async (_prompt, options) => {
+      if (!(options.jsonSchema?.required ?? []).includes("evaluations")) return JSON.stringify({ observations: [] });
+      const ids = options.jsonSchema.properties.evaluations.items.properties.guardrail_id.enum;
+      return JSON.stringify({ evaluations: ids.map((guardrail_id) => ({ guardrail_id, result: "fail",
+        reason: `[REQ:${guardrail_id}] The mapped behavior contradicts the current source.` })) });
     },
   };
-  manager.publishArtifacts({
-    specId: fixture.specId,
-    nodeId: step,
-    artifactWrites: [{
-      logicalKey,
-      mediaType: "application/json",
-      bytes: attemptHistory(step, logicalKey, evidence),
-    }],
-  });
-  if (step === "impl-review") {
-    for (let attempt = 0; attempt < 5; attempt += 1) {
-      manager.appendMetric({ phase: "impl", counter: "reviewRetry", delta: 1 }, { taskId: null });
-    }
+  let publicationSnapshot = null;
+  try {
+    const ctx = { ...phase.context(), phase: "task-impl", skipGuardrail: failureKind !== "mechanical" };
+    await FLOW_COMMANDS.run.gate.pre(ctx);
+    const outcome = await new RunGateCommand().execute(ctx);
+    if (rejectPublication) {
+      publicationSnapshot = phase.snapshot();
+      const catalogFile = manager.specLocation(specId).catalogFile;
+      let injected = false;
+      const rejected = new FlowManager({ root, mainRoot: root, inWorktree: false,
+        versionStoreFaultInjector({ phase: point, filePath }) {
+          if (!injected && point === "before-json-rename" && filePath === catalogFile) {
+            injected = true;
+            throw new Error("Task Gate publication refused before catalog rename");
+          }
+        } });
+      await assert.rejects(() => FLOW_COMMANDS.run.gate.post({ ...ctx, flowManager: rejected }, outcome), /before catalog rename/);
+      assert.equal(injected, true);
+      assert.equal(phase.reload().snapshot(), publicationSnapshot);
+    } else await FLOW_COMMANDS.run.gate.post(ctx, outcome);
+    assert.equal(outcome.result, "fail", JSON.stringify(outcome));
+  } finally { container.get = originalGet; }
+  phase.reload();
+  const saved = manager.readCurrentStepSettlement({ specId, stepId: "task-gate" });
+  assert.ok(saved);
+  if (!rejectPublication && failureKind === "mechanical") {
+    assert.equal(saved.result.type, "error");
+    assert.equal(saved.result.error.data.evidence.failure.category, "local");
+    assert.equal(saved.result.error.data.evidence.failure.code, "GATE_LOCAL_INPUT_INVALID");
+    assert.equal(saved.receipt.binding.attemptId, phase.state().attempt.id);
+    assert.equal(saved.receipt.binding.attemptSequence, phase.state().attempt.sequence);
   }
-  return { root, manager, fixture };
+  return { root, manager, fixture, phase, publicationSnapshot };
 }
 
-function taskScenario(step = "review", {
-  failureKind = "mechanical",
-  settleIssueLog = true,
-  nextTask = false,
-  reviewTooling = false,
-} = {}) {
-  const root = createTmpDir("canonical-nonblocking-task-");
-  const manager = new FlowManager({ root, mainRoot: root, inWorktree: false });
-  const fixture = new CanonicalFlowFixture({
-    flowManager: manager,
-    specId: "477-nonblocking-task",
-    runId: "run-477-task",
-    specRecord: { requirements: [{ id: "R-T-1", desc: "Exercise Task nonblocking.", task_ids: nextTask ? ["T-1", "T-2"] : ["T-1"] }] },
-  })
-    .create()
-    .addTask({ id: "T-1", title: "Task", goal: "Exercise task nonblocking.", parent: null, origin: "plan", added_round: 0, status: "pending" });
-  if (nextTask) fixture.addTask({ id: "T-2", title: "Next Task", goal: "Continue after task nonblocking.", parent: null, origin: "plan", added_round: 0, status: "pending" });
-  fixture.registerActive()
-    .prepareTaskFrontier()
-    .activateTask("T-1");
-  fixture.settle("T-1-impl");
-  if (step === "gate") {
-    fixture.settle("T-1-review");
-    fixture.settle("T-1-triage", "skipped");
-    fixture.settle("T-1-repair", "skipped");
+async function mappedTaskScenario(t, failureKind) {
+  const ids = ["T-1", "T-2"];
+  const phase = ImplPhaseScenario.create(t, {
+    tasks: ids.map((id) => ({ id, title: `Implement ${id}`, goal: "Implement R1", origin: "plan", added_round: 0, status: "pending" })),
+    requirements: [{ id: "R1", desc: "Implement observable behavior.", task_ids: ids, preimplementation_test_expectation: "fail" }],
+    sourceEffect(effect, request, current) {
+      if (failureKind === "mechanical" && request.stepId === "task-impl" && request.taskId === "T-1") {
+        fs.writeFileSync(path.join(current.root, "src/task-T-1.js"), "x".repeat(1024 * 1024 + 64));
+      }
+      return effect;
+    },
+  });
+  await phase.advanceTo("T-1-review");
+  return phase;
+}
+
+async function toolingReviewScenario(t) {
+  const phase = ImplPhaseScenario.create(t, { reviewProcessResult(stage, _ordinal, options) {
+    const child = spawnSync(process.execPath, [fileURLToPath(new URL(stage === "impl-review"
+      ? "../../support/infrastructure/impl-tooling-review-worker.js" : "../../support/impl-phase-review-worker.js", import.meta.url))],
+      stage === "impl-review" ? options : { ...options, env: { ...options.env,
+        SENNEL_IMPL_SCENARIO_RESPONSE: JSON.stringify({ blockingFindings: [], nonBlockingImprovements: [] }) } });
+    return { ...child, ok: child.status === 0 };
+  } });
+  fs.writeFileSync(path.join(phase.root, ".sennel/config.json"), JSON.stringify({ lang: "en", type: "base",
+    docs: { languages: ["en"], defaultLanguage: "en" } }));
+  await phase.advanceTo("impl-review");
+  await phase.executeCurrent();
+  phase.reload();
+  assert.equal(phase.manager.readCurrentStepSettlement({ specId: phase.specId, stepId: "impl-review" }).result.kind, "impl-review-tooling");
+  return { root: phase.root, manager: phase.manager, fixture: { specId: phase.specId, runId: phase.state().runId }, phase };
+}
+
+function raceCanonicalNonblockingCommit({ manager, fixture, invoke, method, registeredContinuation = false }) {
+  const original = CanonicalFlowRuntime.prototype[method];
+  let injected = false;
+  CanonicalFlowRuntime.prototype[method] = function (...args) {
+    if (!injected) {
+      injected = true;
+      new FlowManager({
+        root: manager.executionRoot(), mainRoot: manager.executionRoot(), inWorktree: false,
+      })
+        .appendMetric({ phase: "impl", counter: "reviewRetries", delta: 1 }, { specId: fixture.specId });
+    }
+    return original.apply(this, args);
+  };
+  try {
+    assert.throws(invoke, (error) => registeredContinuation
+      ? error instanceof StepAdmissionRefusal && error.cause instanceof CurrentFlowStateConflictError
+        && error.cause.code === "CURRENT_FLOW_STATE_CONFLICT"
+        && error.message === "saved Gate continuation source changed before publication"
+        && error.cause.message === "saved Gate continuation source changed before publication"
+      : error instanceof CurrentFlowStateConflictError && error.code === "CURRENT_FLOW_STATE_CONFLICT"
+        && error.message === "nonblocking Definition selection changed before commit");
+  } finally {
+    CanonicalFlowRuntime.prototype[method] = original;
   }
-  manager.updateStepStatus({ stepId: `T-1-${step}`, requestedStatus: "in_progress" }, { specId: fixture.specId });
-  const logicalKey = step === "review" ? "task.review" : "task.gate";
-  if (step === "gate") {
-    const failure = failureKind === "ai_semantic_fail"
-      ? { category: "semantic", code: "TASK_GATE_REJECTED", message: "semantic Gate rejection", retryable: true, retryKind: "semantic" }
-      : ["schema", "provider"].includes(failureKind)
-        ? { category: "tooling", code: failureKind === "schema" ? "GATE_SCHEMA_INVALID" : "GATE_PROVIDER_UNAVAILABLE", message: "Gate tooling unavailable", retryable: false, retryKind: null }
-        : { category: "local", code: "GATE_LOCAL_INPUT_INVALID", message: "local input invalid", retryable: false, retryKind: null };
-    const commandResult = new CanonicalGatePromotion({
-      state: manager.canonicalState(fixture.specId), phase: "task-impl", nodeId: "T-1-gate", activeTaskId: "T-1",
-    }).promote({
-      result: "fail",
-      artifacts: {
-        failureKind,
-        failureCode: failure.code,
-        sourceFingerprint: captureCurrentTaskSource({
-          root, flowManager: manager, state: manager.load(fixture.specId), taskId: "T-1",
-        }).fingerprint,
-      },
-    });
-    manager.failCurrentAttempt({
-      specId: fixture.specId,
-      failure,
-      commandResult,
-    });
-    const gateTransitionDecision = resolveGateTransition(readCurrentGateTransitionFacts({
-      flowManager: manager, flowState: manager.load(fixture.specId), phase: "task-impl",
-    }));
-    if (settleIssueLog) appendIssueLogFromGateResult({
-      root, mainRoot: root, executionRoot: root, specId: fixture.specId,
-      flowManager: manager, flowState: manager.load(fixture.specId), phase: "task-impl",
-      gateTransitionDecision,
-      gitState: { headSha: "a".repeat(40), worktreeHash: "b".repeat(64) },
-    }, commandResult);
-  } else {
-    manager.publishArtifacts({
-    specId: fixture.specId, nodeId: `T-1-${step}`,
-    artifactWrites: [{ logicalKey, parameters: { taskId: "T-1" }, mediaType: "application/json", bytes: attemptHistory(`T-1-${step}`, logicalKey, {
-      ...(reviewTooling
-        ? { toolingOutcome: { code: "PROVIDER_UNAVAILABLE", reason: "review provider unavailable" } }
-        : { verdict: "REJECTED" }),
-    }) }],
-    });
-  }
-  return { root, manager, fixture };
+  assert.equal(injected, true);
 }
 
 describe("canonical nonblocking policy", () => {
@@ -161,8 +245,8 @@ describe("canonical nonblocking policy", () => {
     ["retro", { summary: { not_done: 1 } }],
     ["acceptance-review", { verdict: "blocked" }],
   ]) {
-    it(`uses Definition-owned acceptance boundary eligibility for ${step}`, () => {
-      const { root, manager, fixture } = scenario({ step, payload });
+    it(`uses Definition-owned acceptance boundary eligibility for ${step}`, async (t) => {
+      const { root, manager, fixture } = await scenario(t, { step, payload });
       try {
         const policy = activateNonBlockingPolicy({
           root, flowManager: manager, reason: `${step} requires explicit acceptance disposition.`,
@@ -173,8 +257,8 @@ describe("canonical nonblocking policy", () => {
     });
   }
 
-  it("keeps activation, evidence identity, and decision in the V1 policy and Activity ledger", async () => {
-    const { root, manager, fixture } = scenario();
+  it("keeps activation, evidence identity, and decision in the V1 policy and Activity ledger", async (t) => {
+    const { root, manager, fixture } = await scenario(t);
     try {
       const commandContext = () => ({
         root, mainRoot: root, executionRoot: root, specId: fixture.specId,
@@ -188,10 +272,10 @@ describe("canonical nonblocking policy", () => {
       const policy = activateNonBlockingPolicy({
         root,
         flowManager: manager,
-        reason: "The canonical review requires an explicit acceptance decision.",
+        reason: "The canonical Gate requires an explicit acceptance decision.",
       });
       assert.equal(policy.enabled, true);
-      assert.equal(policy.activatedStep, "impl-review");
+      assert.equal(policy.activatedStep, "impl-gate");
       const context = decisionContextForActiveFlow(root, manager.load(fixture.specId), manager);
       const enabled = await new GetNextActionCommand().execute(commandContext());
       assert.deepEqual(enabled.nonblockingDecision, context.toJSON());
@@ -200,14 +284,14 @@ describe("canonical nonblocking policy", () => {
         root,
         flowManager: manager,
         choice: "continue",
-        reason: "The requested behavior is complete despite the review result.",
-        remainingRisk: "Acceptance retains the rejected review as durable evidence.",
+        reason: "The requested behavior is complete despite the Gate result.",
+        remainingRisk: "Acceptance retains the rejected Gate as durable evidence.",
         expectEvidenceDigest: context.evidenceDigest,
       });
       assert.equal(recorded.action, "continue");
       const state = manager.load(fixture.specId);
       const activities = manager.activityLedger(fixture.specId);
-      assert.equal(state.policy.nonblocking.activatedStep, "impl-review");
+      assert.equal(state.policy.nonblocking.activatedStep, "impl-gate");
       const activation = activities.find((activity) => activity.transition.operation === "activate_nonblocking");
       assert.equal(activation.type, "policy_updated");
       assert.equal(activation.transition.nonblocking.kind, "observation");
@@ -218,8 +302,8 @@ describe("canonical nonblocking policy", () => {
     }
   });
 
-  it("recovers atomic activation and repair after a journal-first restart", () => {
-    const { root, manager, fixture } = scenario();
+  it("recovers atomic activation and repair after a journal-first restart", async (t) => {
+    const { root, manager, fixture } = await scenario(t);
     try {
       let crash = true;
       const crashingManager = new FlowManager({
@@ -231,14 +315,14 @@ describe("canonical nonblocking policy", () => {
       assert.throws(() => activateNonBlockingPolicy({
         root,
         flowManager: crashingManager,
-        reason: "The review remains acceptance-backed.",
+        reason: "The Gate remains acceptance-backed.",
       }), /simulated journal-first crash/);
       crash = false;
       const restartedManager = new FlowManager({ root, mainRoot: root, inWorktree: false });
       const policy = activateNonBlockingPolicy({
         root,
         flowManager: restartedManager,
-        reason: "The review remains acceptance-backed.",
+        reason: "The Gate remains acceptance-backed.",
       });
       assert.equal(policy.enabled, true);
       assert.equal(restartedManager.activityLedger(fixture.specId)
@@ -246,16 +330,17 @@ describe("canonical nonblocking policy", () => {
 
       const context = decisionContextForActiveFlow(root, restartedManager.load(fixture.specId), restartedManager);
       crash = true;
+      const resumedManagerCatalog = restartedManager.specLocation(fixture.specId).catalogFile;
       const crashingDecisionManager = new FlowManager({
         root, mainRoot: root, inWorktree: false,
-        versionStoreFaultInjector({ phase }) {
-          if (crash && phase === "activity-appended") throw new Error("simulated decision crash");
+        versionStoreFaultInjector({ phase, filePath }) {
+          if (crash && phase === "before-json-rename" && filePath === resumedManagerCatalog) throw new Error("simulated decision crash");
         },
       });
       const input = {
         root,
         choice: "repair",
-        reason: "Repair the rejected implementation review.",
+        reason: "Repair the rejected integration Gate.",
         expectEvidenceDigest: context.evidenceDigest,
         expectIdentity: context.identity().toJSON(),
       };
@@ -266,23 +351,23 @@ describe("canonical nonblocking policy", () => {
       const replay = recordNonBlockingDecision({ ...input, flowManager: resumedManager });
       assert.equal(replay.action, "repair");
       const state = resumedManager.load(fixture.specId);
-      assert.equal(state.currentNodeId, "impl-review");
-      assert.equal(resumedManager.canonicalState(fixture.specId).attempt.sequence, 2);
+      assert.equal(state.currentNodeId, "impl-gate");
+      assert.equal(resumedManager.canonicalState(fixture.specId).attempt.sequence, context.sourceAttempt + 1);
       assert.equal(resumedManager.canonicalState(fixture.specId).attempt.failure, null);
       assert.equal(resumedManager.activityLedger(fixture.specId)
         .filter((activity) => activity.transition.nonblocking?.kind === "decision").length, 1);
       assert.equal(new FlowManager({ root, mainRoot: root, inWorktree: false })
-        .canonicalState(fixture.specId).attempt.sequence, 2);
+        .canonicalState(fixture.specId).attempt.sequence, context.sourceAttempt + 1);
     } finally {
       removeTmpDir(root);
     }
   });
 
-  it("rejects direct Store mutations whose full evidence identity is not current", () => {
-    const { root, manager, fixture } = scenario();
+  it("rejects direct Store mutations whose full evidence identity is not current", async (t) => {
+    const { root, manager, fixture } = await scenario(t);
     try {
       activateNonBlockingPolicy({
-        root, flowManager: manager, reason: "The review remains acceptance-backed.",
+        root, flowManager: manager, reason: "The Gate remains acceptance-backed.",
       });
       const state = manager.load(fixture.specId);
       const context = decisionContextForActiveFlow(root, state, manager);
@@ -291,6 +376,8 @@ describe("canonical nonblocking policy", () => {
         .find((activity) => activity.transition.operation === "activate_nonblocking")
         .transition.nonblocking;
       const policy = state.policy.nonblocking;
+      const before = JSON.stringify({ state: manager.canonicalState(fixture.specId),
+        activities: manager.activityLedger(fixture.specId), catalog: manager.artifactCatalog(fixture.specId) });
       for (const mutation of [
         { sourceStep: "spec-gate" },
         { sourceAttempt: context.sourceAttempt + 1 },
@@ -308,7 +395,10 @@ describe("canonical nonblocking policy", () => {
           policy,
           observation: mismatchedObservation,
           eligibility,
-        }), /current Definition-selected evidence identity|Definition-selected observation/);
+        }), (error) => error instanceof CurrentFlowStateInvariantError
+          && error.code === "CURRENT_FLOW_STATE_INVARIANT_INVALID");
+        assert.equal(JSON.stringify({ state: manager.canonicalState(fixture.specId),
+          activities: manager.activityLedger(fixture.specId), catalog: manager.artifactCatalog(fixture.specId) }), before);
         const mismatchedDecision = new ActivityNonBlockingRecord({
           kind: "decision",
           sourceStep: context.sourceStep,
@@ -324,40 +414,32 @@ describe("canonical nonblocking policy", () => {
         });
         assert.throws(() => manager.applyNonblockingDecision({
           specId: fixture.specId,
-          nodeId: "impl-review",
+          nodeId: "impl-gate",
           record: mismatchedDecision,
           eligibility,
-        }), /current Definition-selected evidence identity|does not match its Definition plan/);
+        }), (error) => mutation.sourceStep === "spec-gate"
+          ? error instanceof CurrentFlowStateInvariantError && error.code === "CURRENT_FLOW_STATE_INVARIANT_INVALID"
+          : Object.keys(mutation).some((key) => ["sourceAttempt", "evidenceRef", "evidenceDigest"].includes(key))
+            ? error instanceof NonBlockingEvidenceError && error.code === "NONBLOCKING_STALE_EVIDENCE"
+              && error.message === "nonblocking mutation does not match the current Definition-selected evidence identity"
+            : error instanceof CurrentFlowStateConflictError && error.code === "CURRENT_FLOW_STATE_CONFLICT");
+        assert.equal(JSON.stringify({ state: manager.canonicalState(fixture.specId),
+          activities: manager.activityLedger(fixture.specId), catalog: manager.artifactCatalog(fixture.specId) }), before);
+        for (const logicalKey of ["nonblocking.handoffs", "flow.findings"]) {
+          assert.equal(manager.readArtifact({ specId: fixture.specId, logicalKey,
+            consumerNodeId: "acceptance-review", optional: true }), null);
+        }
       }
     } finally { removeTmpDir(root); }
   });
 
-  it("revalidates activation and every advisory effect inside the Version transaction", () => {
-    const race = ({ manager, fixture, invoke, method }) => {
-      const original = CanonicalFlowRuntime.prototype[method];
-      let injected = false;
-      CanonicalFlowRuntime.prototype[method] = function (...args) {
-        if (!injected) {
-          injected = true;
-          new FlowManager({
-            root: manager.executionRoot(), mainRoot: manager.executionRoot(), inWorktree: false,
-          })
-            .appendMetric({ phase: "impl", counter: "reviewRetries", delta: 1 }, { specId: fixture.specId });
-        }
-        return original.apply(this, args);
-      };
-      try {
-        assert.throws(invoke, /Definition selection changed before commit/);
-      } finally {
-        CanonicalFlowRuntime.prototype[method] = original;
-      }
-      assert.equal(injected, true);
-    };
+  it("revalidates activation and every advisory effect inside the Version transaction", async (t) => {
+
 
     {
-      const { root, manager, fixture } = scenario();
+      const { root, manager, fixture } = await scenario(t);
       try {
-        race({
+        raceCanonicalNonblockingCommit({
           manager,
           fixture,
           method: "activateNonblockingPolicy",
@@ -372,18 +454,19 @@ describe("canonical nonblocking policy", () => {
     }
 
     for (const choice of ["repair", "continue"]) {
-      const { root, manager, fixture } = scenario();
+      const { root, manager, fixture } = await scenario(t);
       try {
-        activateNonBlockingPolicy({ root, flowManager: manager, reason: "Review evidence is bounded." });
+        activateNonBlockingPolicy({ root, flowManager: manager, reason: "Gate evidence is bounded." });
         const context = decisionContextForActiveFlow(root, manager.load(fixture.specId), manager);
-        race({
+        raceCanonicalNonblockingCommit({
           manager,
           fixture,
           method: "continueNonblocking",
+          registeredContinuation: choice === "continue",
           invoke: () => recordNonBlockingDecision({
             root, flowManager: manager, choice,
             reason: `${choice} must retain its exact selection.`,
-            remainingRisk: choice === "continue" ? "The review evidence remains unresolved." : null,
+            remainingRisk: choice === "continue" ? "The Gate evidence remains unresolved." : null,
             expectEvidenceDigest: context.evidenceDigest,
             expectIdentity: context.identity().toJSON(),
           }),
@@ -394,11 +477,11 @@ describe("canonical nonblocking policy", () => {
     }
 
     {
-      const { root, manager, fixture } = taskScenario("review", { reviewTooling: true });
+      const { root, manager, fixture } = await taskScenario(t, "review", { reviewTooling: true });
       try {
         activateNonBlockingPolicy({ root, flowManager: manager, reason: "Task Review tooling is unavailable." });
         const context = decisionContextForActiveFlow(root, manager.load(fixture.specId), manager);
-        race({
+        raceCanonicalNonblockingCommit({
           manager,
           fixture,
           method: "continueNonblocking",
@@ -415,8 +498,9 @@ describe("canonical nonblocking policy", () => {
     }
   });
 
-  it("derives activation policy and admission from one canonical transition snapshot", () => {
-    const { root, manager, fixture } = scenario();
+  it("derives activation policy and admission from one canonical transition snapshot", async (t) => {
+    const { root, manager, fixture } = await scenario(t);
+    manager.setAutoApprove(false, { specId: fixture.specId });
     const original = CanonicalFlowManagerStore.prototype.readCanonicalTransitionSnapshot;
     let injected = false;
     CanonicalFlowManagerStore.prototype.readCanonicalTransitionSnapshot = function (specId) {
@@ -445,10 +529,10 @@ describe("canonical nonblocking policy", () => {
     } finally { removeTmpDir(root); }
   });
 
-  it("derives a decision effect and replacement Attempt from one canonical transition snapshot", () => {
-    const { root, manager, fixture } = scenario();
+  it("derives a decision effect and replacement Attempt from one canonical transition snapshot", async (t) => {
+    const { root, manager, fixture } = await scenario(t);
     try {
-      activateNonBlockingPolicy({ root, flowManager: manager, reason: "Review evidence is bounded." });
+      activateNonBlockingPolicy({ root, flowManager: manager, reason: "Gate evidence is bounded." });
       const state = manager.load(fixture.specId);
       const context = decisionContextForActiveFlow(root, state, manager);
       const eligibility = definitionNonblockingEligibilityForActiveFlow(root, state, manager);
@@ -461,7 +545,7 @@ describe("canonical nonblocking policy", () => {
         definitionDigest: context.definitionDigest,
         resultKind: context.resultKind,
         action: "repair",
-        rationale: "Repair the exact rejected review Attempt.",
+        rationale: "Repair the exact rejected Gate Attempt.",
         remainingRisk: null,
       });
       const originalLoad = CanonicalFlowRuntime.prototype.load;
@@ -478,7 +562,7 @@ describe("canonical nonblocking policy", () => {
           competingDecisionInjected = true;
           new FlowManager({ root, mainRoot: root, inWorktree: false }).applyNonblockingDecision({
             specId: fixture.specId,
-            nodeId: "impl-review",
+            nodeId: "impl-gate",
             record,
             eligibility,
           });
@@ -488,7 +572,7 @@ describe("canonical nonblocking policy", () => {
       try {
         manager.applyNonblockingDecision({
           specId: fixture.specId,
-          nodeId: "impl-review",
+          nodeId: "impl-gate",
           record,
           eligibility,
         });
@@ -499,8 +583,8 @@ describe("canonical nonblocking policy", () => {
       assert.equal(competingDecisionInjected, false,
         "decision settlement must not read mutable state before its canonical transition snapshot");
       const settled = manager.canonicalState(fixture.specId);
-      assert.equal(settled.current.at(-1), "impl-review");
-      assert.equal(settled.attempt.sequence, 2);
+      assert.equal(settled.current.at(-1), "impl-gate");
+      assert.equal(settled.attempt.sequence, context.sourceAttempt + 1);
       assert.equal(settled.attempt.failure, null);
       assert.equal(manager.activityLedger(fixture.specId)
         .filter((activity) => activity.transition.nonblocking?.kind === "decision").length, 1);
@@ -566,25 +650,25 @@ describe("canonical nonblocking policy", () => {
     }), (error) => error.code === "NONBLOCKING_AMBIGUOUS_REPLAY");
   });
 
-  it("rejects pass evidence and stale decisions without manufacturing an observation", () => {
-    const { root, manager, fixture } = scenario();
+  it("rejects pass evidence and stale decisions without manufacturing an observation", async (t) => {
+    const { root, manager, fixture } = await scenario(t);
     try {
       const state = manager.load(fixture.specId);
       // The fixture publication is rejected, so first prove the digest guard
       // against the immutable catalog value rather than a path-derived file.
-      activateNonBlockingPolicy({ root, flowManager: manager, reason: "Bounded review recovery is exhausted." });
+      activateNonBlockingPolicy({ root, flowManager: manager, reason: "Bounded Gate recovery is exhausted." });
       const context = decisionContextForActiveFlow(root, manager.load(fixture.specId), manager);
       assert.throws(() => recordNonBlockingDecision({
-        root, flowManager: manager, choice: "continue", reason: "The review is retained.",
+        root, flowManager: manager, choice: "continue", reason: "The Gate is retained.",
         remainingRisk: "The evidence remains visible.", expectEvidenceDigest: "b".repeat(64),
       }), /evidence changed/);
       assert.equal(manager.activityLedger(fixture.specId).filter((entry) => entry.transition.nonblocking?.kind === "decision").length, 0);
-      assert.equal(context.sourceAttempt, 1);
+      assert.equal(context.sourceAttempt, manager.canonicalState(fixture.specId).attempt.sequence);
       assert.equal(state.policy.nonblocking, null);
     } finally { removeTmpDir(root); }
   });
 
-  it("does not offer review continuation without valid acceptance-backed semantic findings", async () => {
+  it("does not offer review continuation without valid acceptance-backed semantic findings", async (t) => {
     const malformedFinding = {
       fingerprint: "c".repeat(64), disposition: "deferred",
       rationale: "Mechanical evidence cannot be deferred as a semantic finding.",
@@ -603,8 +687,10 @@ describe("canonical nonblocking policy", () => {
         },
       },
     ]) {
-      const { root, manager, fixture } = scenario({ payload });
+      const { root, manager, fixture } = await scenario(t, { payload });
       try {
+        const before = JSON.stringify({ state: manager.canonicalState(fixture.specId),
+          activities: manager.activityLedger(fixture.specId), catalog: manager.artifactCatalog(fixture.specId) });
         const next = await new GetNextActionCommand().execute({
           root, mainRoot: root, executionRoot: root, specId: fixture.specId,
           flowManager: manager, flowState: manager.load(fixture.specId),
@@ -615,40 +701,47 @@ describe("canonical nonblocking policy", () => {
           root, flowManager: manager,
           reason: "Invalid review evidence cannot enter acceptance.",
         }), /not selected by the current Definition strict stop/);
+        assert.equal(JSON.stringify({ state: manager.canonicalState(fixture.specId),
+          activities: manager.activityLedger(fixture.specId), catalog: manager.artifactCatalog(fixture.specId) }), before);
       } finally { removeTmpDir(root); }
     }
   });
 
-  it("rejects a projected decision when ordinary recovery facts change without changing evidence bytes", () => {
-    const { root, manager, fixture } = scenario();
+  it("retains saved Result meaning after metrics change and rejects a stale canonical decision transaction", async (t) => {
+    const { root, manager, fixture } = await scenario(t);
     try {
-      activateNonBlockingPolicy({ root, flowManager: manager, reason: "Review recovery was exhausted." });
+      activateNonBlockingPolicy({ root, flowManager: manager, reason: "Gate recovery was exhausted." });
       const context = decisionContextForActiveFlow(root, manager.load(fixture.specId), manager);
-      manager.appendMetric({ phase: "impl", counter: "reviewRetry", delta: 1 }, { taskId: null });
-      assert.throws(() => decisionEvidenceForActiveFlow(root, manager.load(fixture.specId), manager, context),
-        (error) => error.code === "NONBLOCKING_STALE_DEFINITION");
-      assert.throws(() => recordNonBlockingDecision({
-        root,
-        flowManager: manager,
-        choice: "repair",
-        reason: "This stale decision must not run.",
-        expectEvidenceDigest: context.evidenceDigest,
-        expectIdentity: context.identity().toJSON(),
-      }), (error) => error.code === "NONBLOCKING_STALE_DEFINITION");
+      const beforeSource = decisionEvidenceForActiveFlow(root, manager.load(fixture.specId), manager, context);
+      const beforeResult = manager.readCurrentStepSettlement({ specId: fixture.specId, stepId: "impl-gate" });
+      // Saved Result meaning replaces the retired raw-artifact/metric rejudgment.
+      manager.appendMetric({ phase: "impl", counter: "reviewRetry", delta: 1 }, { specId: fixture.specId });
+      assert.equal(decisionEvidenceForActiveFlow(root, manager.load(fixture.specId), manager, context), beforeSource);
+      assert.deepEqual(decisionContextForActiveFlow(root, manager.load(fixture.specId), manager).toJSON(), context.toJSON());
+      assert.deepEqual(manager.readCurrentStepSettlement({ specId: fixture.specId, stepId: "impl-gate" }).result.toJSON(), beforeResult.result.toJSON());
+      const originalAttempt = manager.canonicalState(fixture.specId).attempt;
+      raceCanonicalNonblockingCommit({ manager, fixture, method: "continueNonblocking",
+        invoke: () => recordNonBlockingDecision({ root, flowManager: manager, choice: "repair",
+          reason: "This stale transaction must not run.", expectEvidenceDigest: context.evidenceDigest,
+          expectIdentity: context.identity().toJSON() }) });
+      assert.equal(manager.activityLedger(fixture.specId).some((entry) => entry.transition.nonblocking?.kind === "decision"), false);
+      assert.equal(manager.canonicalState(fixture.specId).attempt.id, originalAttempt.id);
+      assert.deepEqual(manager.canonicalState(fixture.specId).attempt.failure, originalAttempt.failure);
+      for (const logicalKey of ["nonblocking.handoffs", "flow.findings"]) {
+        assert.equal(manager.readArtifact({ specId: fixture.specId, logicalKey, consumerNodeId: "acceptance-review", optional: true }), null);
+      }
     } finally { removeTmpDir(root); }
   });
 
-  it("publishes only the semantic finding fingerprints selected by Definition", () => {
-    const selected = { fingerprint: "d".repeat(64), disposition: "deferred", rationale: "Accepted residual risk." };
-    const unselected = { fingerprint: "e".repeat(64), disposition: "must-fix", rationale: "Not accepted for deferral." };
-    const { root, manager, fixture } = scenario({ payload: {
-      version: 1, phase: "impl", verdict: "REJECTED", summary: "Mixed review findings.",
-      blockingFindings: [selected, unselected], nonBlockingImprovements: [],
-      canonicalEvidence: {
-        phase: "impl", disposition: "REJECTED", identity: { evidenceDigest: "f".repeat(64) },
-        blockingFindings: [selected], advisoryFindings: [],
-      },
-    } });
+  it("defers every current failed Gate finding and excludes a passing Requirement", async (t) => {
+    const { root, manager, fixture } = await scenario(t, { mixedGateFindings: true });
+    const source = manager.readActiveProducerArtifact({ specId: fixture.specId, nodeId: "impl-gate", logicalKey: "impl.gate" });
+    const payload = CanonicalCommandAttemptArtifactHistory.fromBytes({ logicalKey: "impl.gate", bytes: source.bytes }).current.payload;
+    assert.ok(payload.artifacts.evaluations.some((entry) => entry.guardrail_id === "R2" && entry.result === "pass"));
+    assert.ok(payload.artifacts.evaluations.some((entry) => entry.guardrail_id === "R1" && entry.result === "fail"));
+    const selected = canonicalSourceFindings({ artifact: payload, sourceStep: "impl-gate", sourceArtifact: source.relativePath })
+      .map((entry) => entry.identity.fingerprint);
+    assert.equal(selected.length, 1, "the passed rule must not create a deferred semantic finding");
     try {
       activateNonBlockingPolicy({ root, flowManager: manager, reason: "Only accepted findings may be deferred." });
       const context = decisionContextForActiveFlow(root, manager.load(fixture.specId), manager);
@@ -662,43 +755,43 @@ describe("canonical nonblocking policy", () => {
       const findings = JSON.parse(manager.readArtifact({
         specId: fixture.specId, logicalKey: "flow.findings", consumerNodeId: "acceptance-review",
       }).bytes.toString("utf8"));
-      assert.deepEqual(findings.entries.map((entry) => entry.fingerprint), [selected.fingerprint]);
+      assert.deepEqual(findings.entries.map((entry) => entry.fingerprint), [...selected]);
     } finally { removeTmpDir(root); }
   });
 
-  it("is idempotent for an exact continue decision and projects advisory completion from Activities", () => {
-    const { root, manager, fixture } = scenario();
+  it("is idempotent for an exact continue decision and projects advisory completion from Activities", async (t) => {
+    const { root, manager, fixture } = await scenario(t);
     try {
-      activateNonBlockingPolicy({ root, flowManager: manager, reason: "The review needs acceptance disposition." });
+      activateNonBlockingPolicy({ root, flowManager: manager, reason: "The Gate needs acceptance disposition." });
       const context = decisionContextForActiveFlow(root, manager.load(fixture.specId), manager);
       const input = {
         root, flowManager: manager, choice: "continue", reason: "The requested behavior is complete.",
-        remainingRisk: "The rejected review remains durable.", expectEvidenceDigest: context.evidenceDigest,
+        remainingRisk: "The rejected Gate remains durable.", expectEvidenceDigest: context.evidenceDigest,
       };
       const first = recordNonBlockingDecision(input);
       const second = recordNonBlockingDecision(input);
       assert.deepEqual(second, first);
       const state = manager.load(fixture.specId);
-      assert.equal(state.steps.flatMap((entry) => entry.children || [entry]).find((entry) => entry.id === "impl-review").status, "done");
+      assert.equal(state.steps.flatMap((entry) => entry.children || [entry]).find((entry) => entry.id === "impl-gate").status, "done");
       assert.equal(state.steps.flatMap((entry) => entry.children || [entry]).find((entry) => entry.id === "impl-triage").status, "skipped");
       assert.deepEqual(advisorySummary(state), [{
-        stepId: "impl-review", evidenceRef: context.evidenceRef,
+        stepId: "impl-gate", evidenceRef: context.evidenceRef,
         rationale: input.reason, remainingRisk: input.remainingRisk,
       }]);
       assert.equal(manager.activityLedger(fixture.specId).filter((entry) => entry.transition.nonblocking?.kind === "decision").length, 1);
     } finally { removeTmpDir(root); }
   });
 
-  it("uses repair as a new typed Attempt and rejects a conflicting decision identity", () => {
-    const { root, manager, fixture } = scenario();
+  it("uses repair as a new typed Attempt and rejects a conflicting decision identity", async (t) => {
+    const { root, manager, fixture } = await scenario(t);
     try {
       activateNonBlockingPolicy({ root, flowManager: manager, reason: "Repair is explicitly selected." });
       const context = decisionContextForActiveFlow(root, manager.load(fixture.specId), manager);
       recordNonBlockingDecision({
-        root, flowManager: manager, choice: "repair", reason: "Repair the reviewed behavior.",
+        root, flowManager: manager, choice: "repair", reason: "Repair the Gate-reviewed behavior.",
         expectEvidenceDigest: context.evidenceDigest,
       });
-      assert.equal(manager.load(fixture.specId).currentNodeId, "impl-review");
+      assert.equal(manager.load(fixture.specId).currentNodeId, "impl-gate");
       assert.throws(() => recordNonBlockingDecision({
         root, flowManager: manager, choice: "continue", reason: "A second disposition conflicts.",
         remainingRisk: "Not applicable.", expectEvidenceDigest: context.evidenceDigest,
@@ -706,8 +799,8 @@ describe("canonical nonblocking policy", () => {
     } finally { removeTmpDir(root); }
   });
 
-  it("does not bypass the Definition-owned Task Review recovery connector", () => {
-    const { root, manager, fixture } = taskScenario("review");
+  it("does not bypass the Definition-owned Task Review recovery connector", async (t) => {
+    const { root, manager, fixture } = await taskScenario(t, "review");
     try {
       assert.throws(() => activateNonBlockingPolicy({ root, flowManager: manager, reason: "Task review is bounded." }),
         /not selected by the current Definition strict stop/);
@@ -715,9 +808,9 @@ describe("canonical nonblocking policy", () => {
     } finally { removeTmpDir(root); }
   });
 
-  it("materializes Definition-owned Task Review tooling retry and continuation targets", async () => {
+  it("materializes Definition-owned bounded Flow Review tooling retry and continuation targets", async (t) => {
     for (const choice of ["retry", "continue"]) {
-      const { root, manager, fixture } = taskScenario("review", { reviewTooling: true });
+      const { root, manager, fixture } = await taskScenario(t, "review", { reviewTooling: true });
       try {
         const strict = await new GetNextActionCommand().execute({
           root, mainRoot: root, executionRoot: root, specId: fixture.specId,
@@ -726,11 +819,11 @@ describe("canonical nonblocking policy", () => {
         assert.deepEqual(strict.directive.actionPrompt.choices.map((entry) => entry.actionId), [
           "KEEP_STRICT_FLOW", "ENABLE_NONBLOCKING",
         ]);
-        activateNonBlockingPolicy({ root, flowManager: manager, reason: "Task Review tooling is unavailable." });
+        activateNonBlockingPolicy({ root, flowManager: manager, reason: "bounded Flow Review tooling is unavailable." });
         const reloaded = new FlowManager({ root, mainRoot: root, inWorktree: false });
         const context = decisionContextForActiveFlow(root, reloaded.load(fixture.specId), reloaded);
-        assert.equal(context.sourceStep, "task-review");
-        assert.equal(context.continueTargetStepId, "task-gate");
+        assert.equal(context.sourceStep, "impl-review");
+        assert.equal(context.continueTargetStepId, "impl-gate");
         recordNonBlockingDecision({
           root, flowManager: reloaded, choice,
           reason: `${choice} the unavailable Task Review producer.`,
@@ -741,19 +834,19 @@ describe("canonical nonblocking policy", () => {
         const persisted = new FlowManager({ root, mainRoot: root, inWorktree: false });
         const canonical = persisted.canonicalState(fixture.specId);
         assert.equal(choice === "retry" ? canonical.current.at(-1) : canonical.nextAction().nodeId,
-          choice === "retry" ? "T-1-review" : "T-1-gate");
+          choice === "retry" ? "impl-review" : "impl-gate");
         if (choice === "continue") {
-          assert.equal(canonical.findNode("T-1-review").status, "done");
-          assert.equal(canonical.findNode("T-1-triage").status, "skipped");
-          assert.equal(canonical.findNode("T-1-repair").status, "skipped");
-          assert.equal(canonical.findNode("T-1-gate").status, "pending");
+          assert.equal(canonical.findNode("impl-review").status, "done");
+          assert.equal(canonical.findNode("impl-triage").status, "skipped");
+          assert.equal(canonical.findNode("impl-repair").status, "skipped");
+          assert.equal(canonical.findNode("impl-gate").status, "pending");
         }
       } finally { removeTmpDir(root); }
     }
   });
 
-  it("publishes unavailable Task Gate evidence and acceptance risk in one continuation Activity", async () => {
-    const { root, manager, fixture } = taskScenario("gate");
+  it("publishes unavailable Task Gate evidence and acceptance risk in one continuation Activity", async (t) => {
+    const { root, manager, fixture } = await taskScenario(t, "gate");
     try {
       const originalGate = manager.readProducerArtifact({
         specId: fixture.specId, nodeId: "T-1-gate", logicalKey: "task.gate", parameters: { taskId: "T-1" },
@@ -869,8 +962,8 @@ describe("canonical nonblocking policy", () => {
     } finally { removeTmpDir(root); }
   });
 
-  it("retries a provider-unavailable Task Gate atomically without advancing the next Task", () => {
-    const { root, manager, fixture } = taskScenario("gate", { failureKind: "provider", nextTask: true });
+  it("retries a provider-unavailable Task Gate atomically without advancing the next Task", async (t) => {
+    const { root, manager, fixture } = await taskScenario(t, "gate", { failureKind: "provider", nextTask: true });
     try {
       const original = manager.readProducerArtifact({
         specId: fixture.specId,
@@ -896,7 +989,7 @@ describe("canonical nonblocking policy", () => {
       assert.equal(state.currentNodeId, "T-1-gate");
       assert.equal(state.tasks.find((task) => task.id === "T-1").status, "in_progress");
       assert.equal(state.tasks.find((task) => task.id === "T-2").status, "pending");
-      assert.equal(manager.canonicalState(fixture.specId).attempt.sequence, 2);
+      assert.equal(manager.canonicalState(fixture.specId).attempt.sequence, context.sourceAttempt + 1);
       assert.equal(manager.readProducerArtifact({
         specId: fixture.specId,
         nodeId: "T-1-gate",
@@ -906,8 +999,8 @@ describe("canonical nonblocking policy", () => {
     } finally { removeTmpDir(root); }
   });
 
-  it("retries unavailable Task Gate evidence in one decision Activity", () => {
-    const { root, manager, fixture } = taskScenario("gate");
+  it("retries unavailable Task Gate evidence in one decision Activity", async (t) => {
+    const { root, manager, fixture } = await taskScenario(t, "gate");
     try {
       activateNonBlockingPolicy({ root, flowManager: manager, reason: "Retry the unavailable local Gate." });
       const context = decisionContextForActiveFlow(root, manager.load(fixture.specId), manager);
@@ -921,7 +1014,7 @@ describe("canonical nonblocking policy", () => {
       assert.equal(first.action, "retry");
       const canonical = manager.canonicalState(fixture.specId);
       assert.equal(canonical.current.at(-1), "T-1-gate");
-      assert.equal(canonical.attempt.sequence, 2);
+      assert.equal(canonical.attempt.sequence, context.sourceAttempt + 1);
       assert.equal(manager.load(fixture.specId).tasks[0].status, "in_progress");
       assert.deepEqual(recordNonBlockingDecision(input), first);
       assert.equal(manager.activityLedger(fixture.specId)
@@ -929,8 +1022,8 @@ describe("canonical nonblocking policy", () => {
     } finally { removeTmpDir(root); }
   });
 
-  it("continues a local-invalid Task Gate through the Definition-selected next Task lifecycle", () => {
-    const { root, manager, fixture } = taskScenario("gate", { failureKind: "mechanical", nextTask: true });
+  it("continues a local-invalid Task Gate through the Definition-selected next Task lifecycle", async (t) => {
+    const { root, manager, fixture } = await taskScenario(t, "gate", { failureKind: "mechanical", nextTask: true });
     try {
       activateNonBlockingPolicy({ root, flowManager: manager, reason: "The local Gate input is unavailable." });
       const context = decisionContextForActiveFlow(root, manager.load(fixture.specId), manager);
@@ -953,10 +1046,9 @@ describe("canonical nonblocking policy", () => {
     } finally { removeTmpDir(root); }
   });
 
-  it("rejects direct activation while Definition still selects ordinary Task Gate recovery", async () => {
-    const { root, manager, fixture } = taskScenario("gate", {
+  it("rejects direct activation while Definition still selects ordinary Task Gate recovery", async (t) => {
+    const { root, manager, fixture } = await taskScenario(t, "gate", {
       failureKind: "ai_semantic_fail",
-      settleIssueLog: false,
     });
     try {
       const next = await new GetNextActionCommand().execute({
@@ -972,18 +1064,20 @@ describe("canonical nonblocking policy", () => {
     } finally { removeTmpDir(root); }
   });
 
-  it("does not mask incomplete local or tooling Task Gate settlement recovery", async () => {
+  it("does not mask an actual precommit local or tooling Task Gate publication refusal", async (t) => {
     for (const failureKind of ["mechanical", "provider"]) {
-      const { root, manager, fixture } = taskScenario("gate", {
+      const { root, manager, fixture } = await taskScenario(t, "gate", {
         failureKind,
-        settleIssueLog: false,
+        rejectPublication: true,
       });
       try {
         const next = await new GetNextActionCommand().execute({
           root, mainRoot: root, executionRoot: root, specId: fixture.specId,
           flowManager: manager, flowState: manager.load(fixture.specId),
         });
-        assert.equal(next.directive.actionId, "RECONCILE_GATE_PUBLICATION");
+        assert.equal(next.directive.kind, "execute_step");
+        assert.equal(manager.readProducerArtifact({ specId: fixture.specId, nodeId: "T-1-gate",
+          logicalKey: "task.gate", parameters: { taskId: "T-1" }, optional: true }), null);
         assert.equal(next.directive.actionPrompt, undefined);
         assert.equal(next.nonblockingDecision, undefined);
         assert.throws(() => activateNonBlockingPolicy({
@@ -995,8 +1089,8 @@ describe("canonical nonblocking policy", () => {
     }
   });
 
-  it("has the dispatcher record one dedicated decision and reload canonical next-action", async () => {
-    const { root, manager, fixture } = taskScenario("gate");
+  it("has the dispatcher record one dedicated decision and reload canonical next-action", async (t) => {
+    const { root, manager, fixture } = await taskScenario(t, "gate");
     try {
       activateNonBlockingPolicy({ root, flowManager: manager, reason: "The local Gate is unavailable." });
       let nextActionReads = 0;
@@ -1098,14 +1192,18 @@ describe("canonical nonblocking policy", () => {
   it("classifies final-regression infrastructure failure as tooling evidence", () => {
     assert.equal(fromFinalRegressionResult({ ref: "regression", source: '{"result":"fail","failureKind":"infra_failure"}' }).resultKind, "tooling");
   });
-  it("does not activate an advisory policy from pass evidence", () => {
-    const { root, manager } = scenario({ payload: { verdict: "PASS" } });
+  it("does not activate an advisory policy from pass evidence", async (t) => {
+    const { root, manager } = await scenario(t, { passOnly: true });
     try {
-      assert.throws(() => activateNonBlockingPolicy({ root, flowManager: manager, reason: "Pass evidence has no advisory route." }), /eligible non-pass evidence/);
+      const before = JSON.stringify({ state: manager.canonicalState(), activities: manager.activityLedger(), catalog: manager.artifactCatalog() });
+      assert.equal(fromReviewResult({ ref: "review", source: '{"verdict":"PASS"}' }), null);
+      assert.throws(() => activateNonBlockingPolicy({ root, flowManager: manager, reason: "Pass evidence has no advisory route." }),
+        (error) => error.code === "NONBLOCKING_NOT_DEFINITION_ELIGIBLE");
+      assert.equal(JSON.stringify({ state: manager.canonicalState(), activities: manager.activityLedger(), catalog: manager.artifactCatalog() }), before);
     } finally { removeTmpDir(root); }
   });
-  it("requires the catalog digest to identify a decision before it can be replayed", () => {
-    const { root, manager, fixture } = scenario();
+  it("requires the catalog digest to identify a decision before it can be replayed", async (t) => {
+    const { root, manager, fixture } = await scenario(t);
     try {
       activateNonBlockingPolicy({ root, flowManager: manager, reason: "Identity must remain immutable." });
       const context = decisionContextForActiveFlow(root, manager.load(fixture.specId), manager);

@@ -193,6 +193,28 @@ export class CurrentTaskSourceSnapshot {
     return new CurrentTaskSourceSnapshot({ lineageSet, entries });
   }
 
+  /** Compare only this Task's certified paths, after its last accepted mutation of each path. */
+  assertMatchesLineages(lineageSet) {
+    if (!(lineageSet instanceof TaskMutationLineageSet)
+      || this.runId !== lineageSet.runId || this.specId !== lineageSet.specId || this.taskId !== lineageSet.taskId
+      || JSON.stringify(this.lineageFingerprints) !== JSON.stringify(lineageSet.lineages.map((lineage) => lineage.fingerprint))) {
+      throw new Error("Task source snapshot does not own its certified mutation lineages");
+    }
+    const expected = new Map();
+    for (const lineage of lineageSet.lineages) {
+      for (const mutation of lineage.manifest.mutations) expected.set(mutation.path, mutation);
+    }
+    for (const entry of this.entries) {
+      const mutation = expected.get(entry.path);
+      const kind = entry instanceof CurrentTaskSourceDeletion ? "missing" : "file";
+      const contentDigest = kind === "missing" ? null : crypto.createHash("sha256").update(entry.content).digest("hex");
+      if (mutation.afterKind !== kind || mutation.afterDigest !== contentDigest) {
+        throw new TaskReviewSourceEffectRejection("Task Gate source no longer matches its certified Task Review repair lineage");
+      }
+    }
+    return this;
+  }
+
   unsignedJSON() {
     return {
       runId: this.runId,

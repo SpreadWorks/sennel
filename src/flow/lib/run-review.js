@@ -62,6 +62,7 @@ import {
   ReviewToolingOutcome,
 } from "./review-convergence.js";
 import { FLOW_REVIEW_ROUTES } from "./review-route.js";
+import { TaskStepIdentity } from "./task-step-identity.js";
 import { ReviewTargetAuthority } from "./review-target-authority.js";
 import {
   CanonicalDraftReviewSource,
@@ -72,6 +73,9 @@ import {
 import { SpecReviewOperations } from "./spec-review-operations.js";
 import { claimDraftReviewExecution as persistDraftReviewExecutionClaim } from "./draft-review-execution-claim.js";
 import { claimSpecReviewExecution, completeSpecReviewPublication } from "../engine/composition/spec.js";
+import { claimTaskReviewExecution, completeTaskReviewPublication } from "../engine/composition/task.js";
+import { claimImplReviewExecution } from "../engine/composition/impl.js";
+import { TaskReviewOperations, completeReviewStepFailure } from "./task-review-operations.js";
 import { draftStepRegistration, prepareDraftReviewBinding } from "../engine/composition/draft.js";
 import { reviewStepExecutionRegistration } from "../engine/composition/registered-step-execution.js";
 import {
@@ -966,7 +970,7 @@ function taskReviewSpecDigest(flowManager, state, taskId) {
   const source = flowManager.readArtifact({
     specId: state.specId,
     logicalKey: "spec.record",
-    consumerNodeId: `${taskId}-review`,
+    consumerNodeId: new TaskStepIdentity({ taskId, role: "review" }).nodeId,
   });
   return crypto.createHash("sha256").update(source.bytes).digest("hex");
 }
@@ -1814,7 +1818,7 @@ export class RunReviewCommand extends FlowCommand {
     let taskRecoveryBaselineInput = null;
     let taskCanonicalObservationInput = null;
     let sealedWorkUnit;
-    let specReviewProviderRequest = null;
+    let reviewProviderRequest = null;
     try {
       // Reconstruct the parent-owned input contract before inspecting any
       // worker state. A recovered manifest must match this exact declaration.
@@ -1904,7 +1908,7 @@ export class RunReviewCommand extends FlowCommand {
       }
       if (persistedPhase === "spec" && !dryRun) {
         try {
-          specReviewProviderRequest = await claimSpecReviewExecution({
+          reviewProviderRequest = await claimSpecReviewExecution({
             flowManager: ctx.flowManager,
             state,
             manifest: workUnit.workUnit.manifest(),
@@ -1917,6 +1921,29 @@ export class RunReviewCommand extends FlowCommand {
           throw error;
         }
       }
+      if (persistedPhase === "impl" && !dryRun) {
+        try {
+          const manifest = workUnit.workUnit.manifest();
+          reviewProviderRequest = await (taskId === null ? claimImplReviewExecution : claimTaskReviewExecution)({
+            flowManager: ctx.flowManager, state, manifest, skipConfirm: ctx.skipConfirm === true,
+          });
+          if (taskId !== null) {
+            taskCanonicalObservation = TaskReviewOperations.authorizeExecutionObservation({
+              flowManager: ctx.flowManager, state, manifest, observation: taskCanonicalObservation,
+            });
+            if (taskCanonicalObservationBoundary !== null) {
+              taskCanonicalObservationBoundary = new TaskReviewCanonicalObservationBoundary({
+                flowManager: ctx.flowManager, specId: state.specId,
+                observationAdvance: taskCanonicalObservation,
+                canonicalSnapshot: taskCanonicalObservationBoundary.canonicalSnapshot,
+              });
+            }
+          }
+        } catch (error) {
+          if (error instanceof CurrentFlowStateConflictError) throw new StepAdmissionRefusal(error.message, error);
+          throw error;
+        }
+      }
       try {
         sealedWorkUnit = workUnit.workUnit.recoverSealed();
       } catch (error) {
@@ -1926,10 +1953,10 @@ export class RunReviewCommand extends FlowCommand {
         throw error;
       }
     } catch (error) {
-      return this.#canonicalFailure(ctx, persistedPhase, error);
+      return await this.#canonicalFailure(ctx, persistedPhase, error);
     }
-    if (persistedPhase === "spec" && sealedWorkUnit === null && specReviewProviderRequest.recoveredClaim) {
-      return this.#canonicalFailure(ctx, persistedPhase,
+    if (["spec", "impl"].includes(persistedPhase) && !dryRun && sealedWorkUnit === null && reviewProviderRequest.recoveredClaim) {
+      return await this.#canonicalFailure(ctx, persistedPhase,
         new Error("the claimed Spec Review provider request has no sealed output for recovery"));
     }
     if (sealedWorkUnit === null) {
@@ -1950,8 +1977,8 @@ export class RunReviewCommand extends FlowCommand {
       const args = [];
       if (phase && phase !== IMPL_REVIEW_PHASE) args.push("--phase", phase);
       if (taskSpec !== null) args.push("--task-spec", taskSpec.logicalPath);
-      if (persistedPhase === "spec"
-        ? specReviewProviderRequest.request.skipConfirm : ctx.skipConfirm) args.push("--skip-confirm");
+      if (reviewProviderRequest !== null
+        ? reviewProviderRequest.request.skipConfirm : ctx.skipConfirm) args.push("--skip-confirm");
       const env = {
         ...process.env,
         [PRODUCT.env("REVIEW_OUTPUT_DIR")]: surface.directory,
@@ -1998,10 +2025,10 @@ export class RunReviewCommand extends FlowCommand {
         try {
           taskCanonicalObservationBoundary?.assertMetricSettlementOnly();
         } catch (observationError) {
-          return this.#canonicalFailure(ctx, persistedPhase, observationError);
+          return await this.#canonicalFailure(ctx, persistedPhase, observationError);
         }
         const stoppedFailure = stoppedTaskReviewFailure({ error, state, taskId, workUnit, baseline: taskRecoveryBaseline });
-        return this.#canonicalFailure(ctx, persistedPhase, stoppedFailure.error, {
+        return await this.#canonicalFailure(ctx, persistedPhase, stoppedFailure.error, {
           taskReviewUnsealedCheckpoint: stoppedFailure.checkpoint,
           taskReviewWorkUnit: workUnit.workUnit,
         });
@@ -2009,7 +2036,7 @@ export class RunReviewCommand extends FlowCommand {
       try {
         taskCanonicalObservationBoundary?.assertMetricSettlementOnly();
       } catch (error) {
-        return this.#canonicalFailure(ctx, persistedPhase, error);
+        return await this.#canonicalFailure(ctx, persistedPhase, error);
       }
       if (!res.ok) {
         const failure = ReviewFailure.fromSubprocessResult({ phase: persistedPhase, result: res });
@@ -2018,7 +2045,7 @@ export class RunReviewCommand extends FlowCommand {
         if (draftReviewExecutionRequiredResult(persistedPhase) !== null) {
           try { workUnit.workUnit.cleanup(); } catch { /* next recovery reconciles retained runtime */ }
         }
-        return this.#canonicalFailure(ctx, persistedPhase, stoppedFailure.error, {
+        return await this.#canonicalFailure(ctx, persistedPhase, stoppedFailure.error, {
           taskReviewUnsealedCheckpoint: stoppedFailure.checkpoint,
           taskReviewWorkUnit: workUnit.workUnit,
         });
@@ -2039,7 +2066,7 @@ export class RunReviewCommand extends FlowCommand {
         if (draftReviewExecutionRequiredResult(persistedPhase) !== null) {
           try { workUnit.workUnit.cleanup(); } catch { /* next recovery reconciles retained runtime */ }
         }
-        return this.#canonicalFailure(ctx, persistedPhase, stoppedFailure.error, {
+        return await this.#canonicalFailure(ctx, persistedPhase, stoppedFailure.error, {
           taskReviewUnsealedCheckpoint: stoppedFailure.checkpoint,
           taskReviewWorkUnit: workUnit.workUnit,
         });
@@ -2048,7 +2075,10 @@ export class RunReviewCommand extends FlowCommand {
     let promotion;
     let taskSourceManifest = null;
     const taskSpecDigest = taskReviewSpecDigest(ctx.flowManager, state, taskId);
-    const taskReviewCycle = taskId === null ? null : ReviewFindingCycle.fromActivityLedger({ runId: state.runId, activities: ctx.flowManager.activityLedger(state.specId) });
+    const reviewFindingCycle = persistedPhase === IMPL_REVIEW_PHASE
+      ? ReviewFindingCycle.fromActivityLedger({ runId: state.runId, activities: ctx.flowManager.activityLedger(state.specId) }) : null;
+    const taskReviewCycle = taskId === null ? null : reviewFindingCycle;
+    const implementationReviewCycle = taskId === null ? reviewFindingCycle : null;
     try {
       promotion = new CanonicalReviewPromotion({
         workUnit: sealedWorkUnit,
@@ -2062,6 +2092,7 @@ export class RunReviewCommand extends FlowCommand {
         taskContext: workUnit.taskContext,
         taskSpecDigest,
         taskReviewCycle,
+        implementationReviewCycle,
       });
       if (taskId !== null) {
         taskSourceManifest = SourceMutationManifest.capture({ baseline: taskRecoveryBaseline });
@@ -2075,7 +2106,7 @@ export class RunReviewCommand extends FlowCommand {
       if (draftReviewExecutionRequiredResult(persistedPhase) !== null) {
         try { sealedWorkUnit.cleanup(); } catch { /* next recovery reconciles retained runtime */ }
       }
-      return this.#canonicalFailure(ctx, persistedPhase, error);
+      return await this.#canonicalFailure(ctx, persistedPhase, error);
     }
     const currentTreeSha = this.resolveTreeSha(ctx);
     const currentTargetStateDigest = this.resolveTargetStateDigest(ctx, persistedPhase);
@@ -2125,6 +2156,7 @@ export class RunReviewCommand extends FlowCommand {
         taskContext: workUnit.taskContext,
         taskSpecDigest,
         taskReviewCycle,
+        implementationReviewCycle,
         taskReviewPublicationBinding,
       });
       const result = promotion.resultFromSealedArtifact();
@@ -2167,7 +2199,7 @@ export class RunReviewCommand extends FlowCommand {
         if (!publicationStarted && draftReviewExecutionRequiredResult(persistedPhase) !== null) {
           try { sealedWorkUnit.cleanup(); } catch { /* next recovery reconciles retained runtime */ }
         }
-        return this.#canonicalFailure(ctx, persistedPhase, error, {
+        return await this.#canonicalFailure(ctx, persistedPhase, error, {
           advanceDraftExecution: !publicationStarted,
         });
       }
@@ -2181,16 +2213,16 @@ export class RunReviewCommand extends FlowCommand {
           baseline: taskRecoveryBaseline,
         });
       } catch (_) {
-        return this.#canonicalFailure(ctx, persistedPhase, error);
+        return await this.#canonicalFailure(ctx, persistedPhase, error);
       }
-      return this.#canonicalFailure(ctx, persistedPhase, failure.toExecutionError(error), {
+      return await this.#canonicalFailure(ctx, persistedPhase, failure.toExecutionError(error), {
         taskReviewUnsealedCheckpoint: checkpoint,
         taskReviewWorkUnit: sealedWorkUnit,
       });
     }
   }
 
-  #canonicalFailure(ctx, phase, error, {
+  async #canonicalFailure(ctx, phase, error, {
     taskReviewUnsealedCheckpoint = null,
     taskReviewWorkUnit = null,
     advanceDraftExecution = true,
@@ -2225,7 +2257,9 @@ export class RunReviewCommand extends FlowCommand {
         "the canonical Review identity changed before its failure could be recorded",
       );
     }
-    const activeNode = canonicalState.findNode(`${taskReviewUnsealedCheckpoint?.taskId ?? ""}-review`);
+    const activeNode = taskReviewUnsealedCheckpoint === null ? null : canonicalState.findNode(
+      new TaskStepIdentity({ taskId: taskReviewUnsealedCheckpoint.taskId, role: "review" }).nodeId,
+    );
     const toolingRetryLimit = activeNode === null
       ? 0
       : canonicalState.definition.contractForNode(activeNode).toolingRetryLimit ?? 0;
@@ -2255,11 +2289,14 @@ export class RunReviewCommand extends FlowCommand {
         }
       }
       if (canConvergeTaskReview) {
-        ctx.flowManager.confirmTaskReviewUnavailable({
+        await completeTaskReviewPublication({ ctx, flowManager: ctx.flowManager,
           specId: ctx.specId ?? ctx.flowState.specId,
           checkpoint: taskReviewUnsealedCheckpoint,
           decision: failureDecision,
         });
+      } else if (phase === IMPL_REVIEW_PHASE) {
+        await completeReviewStepFailure({ flowManager: ctx.flowManager, state: canonicalState,
+          error, failure: canonicalFailure, checkpoint: taskReviewUnsealedCheckpoint, workUnit: taskReviewWorkUnit });
       } else if (leaseIdentity !== null && taskReviewUnsealedCheckpoint === null) {
         const recorded = ctx.flowManager.failCurrentAttemptIfCurrent({
           specId: ctx.specId ?? ctx.flowState.specId,
@@ -2319,8 +2356,9 @@ export class RunReviewCommand extends FlowCommand {
   async execute(ctx) {
     const phase = ctx.phase || null;
     const persistedPhase = reviewPhaseKeyForCtx(ctx, phase);
-    const registration = reviewStepExecutionRegistration(persistedPhase);
-    if (["draft-questions", "draft-coverage", "spec", "test"].includes(persistedPhase)
+    const scope = persistedPhase === "impl" && ctx.flowState?.currentTaskId != null ? "task" : "flow";
+    const registration = reviewStepExecutionRegistration(persistedPhase, scope);
+    if (["draft-questions", "draft-coverage", "spec", "test", "impl"].includes(persistedPhase)
       && registration?.executionContract == null) {
       throw new Error(`Review execution contract is missing for ${persistedPhase}`);
     }
@@ -2332,11 +2370,11 @@ export class RunReviewCommand extends FlowCommand {
       flowManager: ctx.flowManager,
       flowState: ctx.flowState,
       typedState,
-      scope: "flow",
+      scope,
       stepId: registration.stepId,
     });
     return registration.executionContract.execute(selection, { command: this, ctx,
-      scope: "flow", stepId: registration.stepId });
+      scope, stepId: registration.stepId });
   }
 
   async executeSelectedReview(selection, { ctx }) {
@@ -2346,16 +2384,17 @@ export class RunReviewCommand extends FlowCommand {
     const phase = reviewPhaseKeyForCtx(ctx, ctx.phase || null);
     const flowState = ctx.flowManager.loadReadOnly(ctx.specId ?? ctx.flowState.specId);
     const state = ctx.flowManager.canonicalState(flowState.specId);
-    const registration = reviewStepExecutionRegistration(phase);
+    const scope = phase === "impl" && flowState.currentTaskId != null ? "task" : "flow";
+    const registration = reviewStepExecutionRegistration(phase, scope);
     if (registration?.executionContract == null) {
       throw new StepAdmissionRefusal(`Review execution contract is missing for ${phase}`);
     }
     const current = registration.executionContract.select({
       flowManager: ctx.flowManager, flowState, typedState: state,
-      scope: "flow", stepId: registration.stepId,
+      scope, stepId: registration.stepId,
     });
     assertCurrentReviewExecutionSelection(selection, current);
-    const expected = canonicalReviewNodeId({ phase, taskId: null });
+    const expected = canonicalReviewNodeId({ phase, taskId: scope === "task" ? flowState.currentTaskId : null });
     if (state.current?.at(-1) === expected && state.attempt?.failure === null) {
       const refusal = reviewExecutionRefusal(current, phase);
       if (refusal !== null) return refusal;

@@ -1,3 +1,7 @@
+import { AcceptedGateDeferral } from "./accepted-gate-deferral.js";
+import { AcceptedNonblockingDecision } from "./accepted-nonblocking-decision.js";
+import { UnexecutedStepCompletionSet, UnexecutedStepCompletionAuthority, RetainedRouteSourceAuthority,
+  UNEXECUTED_STEP_COMPLETION_REFERENCE_KIND } from "./unexecuted-step-completion.js";
 import { PreparationEvidence } from "./preparation-evidence.js";
 /**
  * The next-generation Flow state foundation.
@@ -9,6 +13,7 @@ import { PreparationEvidence } from "./preparation-evidence.js";
  */
 
 import crypto from "node:crypto";
+import { CANONICAL_NODE_STATUSES } from "./canonical-node-status.js";
 import { DraftWorkerRejection, DraftWorkerCorrectionBudget } from "./draft-worker-rejection.js";
 import fs from "node:fs";
 import path from "node:path";
@@ -54,7 +59,7 @@ import {
   taskReviewStagePlanFromJSON,
 } from "./task-review-stage-transition.js";
 import { TaskStepIdentity } from "./task-step-identity.js";
-import { STEP_RESULT_TYPE, StepResult, stepResultDigest } from "../engine/step-result.js";
+import { STEP_RESULT_TYPE, StepResult, stepResultDigest, hasImplementationStepContract } from "../engine/step-result.js";
 import { DraftQuestionResumeReceipt } from "./draft-question-resume-receipt.js";
 import { DraftStepSettlementReceiptValue } from "./draft-step-settlement-receipt.js";
 import { RequirementTestSettlementReceipt } from "./requirement-test-settlement-receipt.js";
@@ -75,7 +80,7 @@ export { CURRENT_FLOW_SCHEMA_REVISION };
 export const CURRENT_FLOW_RESULT_VERSION = 1;
 
 const NODE_KINDS = new Set(["flow", "step", "task"]);
-const NODE_STATUSES = new Set(["pending", "in_progress", "done", "skipped", "failed", "invalidated", "archived"]);
+const NODE_STATUSES = new Set(CANONICAL_NODE_STATUSES);
 const EXECUTION_MODES = new Set(["direct", "branch", "worktree"]);
 const LIFECYCLE_STATES = new Set(["active", "parked", "finalized"]);
 const RESULT_OUTCOMES = new Set(["passed", "failed", "skipped", "incomplete"]);
@@ -1895,7 +1900,7 @@ class PersistedDraftRouteEffects {
   constructor(value) {
     if (value === null || typeof value !== "object" || Array.isArray(value)
       || !Array.isArray(value.skipStepIds) || !Array.isArray(value.resetStepIds)
-      || Object.keys(value).length !== 2) {
+      || Object.keys(value).length !== (Object.hasOwn(value, "unexecutedStepCompletions") ? 3 : 2)) {
       throw new CurrentFlowStateInvariantError("result.draftRouteEffects is invalid");
     }
     const stepIds = [...value.skipStepIds, ...value.resetStepIds];
@@ -1905,11 +1910,18 @@ class PersistedDraftRouteEffects {
     }
     this.skipStepIds = Object.freeze([...value.skipStepIds]);
     this.resetStepIds = Object.freeze([...value.resetStepIds]);
+    const completions = new UnexecutedStepCompletionSet(value.unexecutedStepCompletions ?? [])
+      .assertDisjoint(stepIds);
+    if (Object.hasOwn(value, "unexecutedStepCompletions") && completions.entries.length === 0) {
+      throw new CurrentFlowStateInvariantError("empty unexecuted completions must be omitted");
+    }
+    this.unexecutedStepCompletions = completions.entries;
     Object.freeze(this);
   }
 
   toJSON() {
-    return { skipStepIds: [...this.skipStepIds], resetStepIds: [...this.resetStepIds] };
+    return { skipStepIds: [...this.skipStepIds], resetStepIds: [...this.resetStepIds],
+      ...(this.unexecutedStepCompletions.length === 0 ? {} : { unexecutedStepCompletions: this.unexecutedStepCompletions.map((entry) => entry.toJSON()) }) };
   }
 }
 
@@ -2102,7 +2114,11 @@ export function assertDraftSettlementReceiptTransition(priorReceipts, receipt, {
         && resume?.awaitReceiptId === previous.id
         && resume?.binding?.attemptId === receipt?.binding?.attemptId
         && resume?.binding?.attemptSequence === receipt?.binding?.attemptSequence;
-      if (!resumedAwait) {
+      const implementationProgress = hasImplementationStepContract(receipt.binding.stepId)
+        && ["execution", "await"].includes(previous?.settlementKind)
+        && previous?.binding?.attemptId === receipt.binding.attemptId
+        && previous?.binding?.attemptSequence === receipt.binding.attemptSequence;
+      if (!resumedAwait && !implementationProgress) {
         throw new CurrentFlowStateConflictError("Draft settlement binding already has a different Result, Settlement, or Publication");
       }
     }
@@ -2145,7 +2161,7 @@ export function assertDraftSettlementReceiptTransition(priorReceipts, receipt, {
   const expectedPhases = lifecycle.phase === "claimed"
     ? ["checkpoint"] : lifecycle.phase === "publication"
       ? (publicationAwaitContinuation || gateRepairCompletion ? ["publication"] : ["claimed"])
-      : ["publication"];
+      : (hasImplementationStepContract(receipt.binding.stepId) ? ["claimed", "publication"] : ["publication"]);
   const previousGeneration = previous?.executionGeneration ?? previous?.binding?.executionGeneration;
   if (previous === null || !expectedPhases.includes(previous.phase)
     || lifecycle.executionGeneration !== previousGeneration
@@ -2195,7 +2211,7 @@ class PersistedDraftSettlementReceipt extends DraftStepSettlementReceiptValue {
     this.publicationDigest = value.publicationDigest;
     this.executionLifecycle = value.executionLifecycle === null
       ? null : new PersistedDraftExecutionLifecycle(value.executionLifecycle);
-    if ((value.settlementKind === "await" && !["spec-gate", "spec-gate-repair"].includes(this.binding.stepId))
+    if ((value.settlementKind === "await" && this.binding.stepId === "draft-refine")
       !== (value.awaitQuestion !== null)) {
       throw new CurrentFlowStateInvariantError("Draft Await receipt must carry its question identity");
     }
@@ -2221,6 +2237,8 @@ class PersistedDraftSettlementReceipt extends DraftStepSettlementReceiptValue {
       "draft-questions-review-execution-required",
       "draft-coverage-review-execution-required",
       "spec-review-execution-required",
+      "task-review-execution-required",
+      "impl-review-execution-required",
     ]);
     const workerExecutionKinds = new Set([
       "draft-refine-worker-required",
@@ -2258,7 +2276,7 @@ class PersistedDraftSettlementReceipt extends DraftStepSettlementReceiptValue {
     const phase = this.executionLifecycle?.phase ?? null;
     if ((["checkpoint", "claimed"].includes(phase) && this.settlementKind !== "execution")
       || (this.settlementKind === "execution" && !["checkpoint", "claimed", "publication"].includes(phase)
-        && !(this.binding.stepId === "spec-gate" && phase === null))
+        && !((this.binding.stepId === "spec-gate" || hasImplementationStepContract(this.binding.stepId)) && phase === null))
       || (phase === "publication" && !["execution", "await"].includes(this.settlementKind))
       || (phase === "terminal" && ["execution", "await"].includes(this.settlementKind))) {
       throw new CurrentFlowStateInvariantError("Draft execution lifecycle phase does not match its Settlement");
@@ -3149,7 +3167,7 @@ export class ArtifactAuthorityPolicy {
 }
 
 export class NodeContract {
-  constructor({ semanticRetryLimit = 0, toolingRetryLimit = null, transitions = ["pending:in_progress", "in_progress:done", "done:in_progress", "skipped:in_progress", "invalidated:in_progress", "pending:invalidated", "in_progress:invalidated", "done:invalidated", "skipped:invalidated"], resourceContract = {}, completion = "all_children_terminal" } = {}) {
+  constructor({ semanticRetryLimit = 0, toolingRetryLimit = null, transitions = ["pending:in_progress", "in_progress:done", "done:in_progress", "skipped:in_progress", "invalidated:in_progress", "pending:invalidated", "in_progress:invalidated", "done:invalidated", "skipped:invalidated"], resourceContract = {}, completion = "all_children_terminal", unexecutedCompletionAuthorities = [], routeSkipAuthorities = [], retainedRouteSourceAuthorities = [] } = {}) {
     // These are retry budgets, not total-attempt limits.  `null` means no
     // tooling retries are defined (equivalent to a fixed budget of zero), not
     // an unbounded fallback. Attempt sequence is a separate per-node cursor;
@@ -3174,6 +3192,20 @@ export class NodeContract {
       throw new CurrentFlowStateInvariantError("contract.completion is invalid");
     }
     this.completion = completion;
+    if (!Array.isArray(unexecutedCompletionAuthorities)
+      || unexecutedCompletionAuthorities.some((authority) => !(authority instanceof UnexecutedStepCompletionAuthority))) {
+      throw new CurrentFlowStateInvariantError("node contract requires nominal unexecuted completion authorities");
+    }
+    this.unexecutedCompletionAuthorities = Object.freeze([...unexecutedCompletionAuthorities]);
+    if (!Array.isArray(routeSkipAuthorities) || routeSkipAuthorities.some((authority) => !(authority instanceof UnexecutedStepCompletionAuthority))) {
+      throw new CurrentFlowStateInvariantError("node contract requires nominal route skip authorities");
+    }
+    this.routeSkipAuthorities = Object.freeze([...routeSkipAuthorities]);
+    if (!Array.isArray(retainedRouteSourceAuthorities)
+      || retainedRouteSourceAuthorities.some((authority) => !(authority instanceof RetainedRouteSourceAuthority))) {
+      throw new CurrentFlowStateInvariantError("node contract requires nominal retained source authorities");
+    }
+    this.retainedRouteSourceAuthorities = Object.freeze([...retainedRouteSourceAuthorities]);
     Object.freeze(this);
   }
 
@@ -3181,8 +3213,25 @@ export class NodeContract {
     return this.transitions.includes(`${from}:${to}`);
   }
 
+  authorizesUnexecutedCompletion(result) {
+    return this.unexecutedCompletionAuthorities.some((authority) => authority.permits(result));
+  }
+
+  authorizesRouteSkip(result) { return this.routeSkipAuthorities.some((authority) => authority.permits(result)); }
+
+  authorizesRetainedRouteSource(result, receipt) {
+    return this.retainedRouteSourceAuthorities.some((authority) => authority.permits(result, receipt));
+  }
+
+  requiresSourceSkipProof() { return this.unexecutedCompletionAuthorities.length > 0 || this.routeSkipAuthorities.length > 0; }
+
+  permitsUnexecutedCompletion(result, fromStatus) {
+    return ["pending", "invalidated"].includes(fromStatus) && this.authorizesUnexecutedCompletion(result);
+  }
+
   permitsStatus(status) {
     if (!NODE_STATUSES.has(status)) return false;
+    if (status === "skipped" && this.unexecutedCompletionAuthorities.length > 0) return true;
     if (status === "pending") return true;
     return this.transitions.some((transition) => transition.endsWith(`:${status}`));
   }
@@ -3488,8 +3537,7 @@ function assertStaticShape(definition, state, dynamicContainerId, taskTemplate, 
 }
 
 function materializedTaskStepId(parentId, definitionId) {
-  const suffix = definitionId.startsWith("task-") ? definitionId.slice("task-".length) : definitionId;
-  return `${parentId}-${suffix}`;
+  return TaskStepIdentity.fromDefinitionId({ taskId: parentId, definitionId })?.nodeId ?? `${parentId}-${definitionId}`;
 }
 
 function materializeTaskStep(definition, parentId) {
@@ -4125,10 +4173,90 @@ export class CurrentArtifactAuthority {
   }
 }
 
+function acceptedGateDeferral(result) {
+  const continuation = result?.stepResult?.evidence?.continuation;
+  return continuation instanceof AcceptedGateDeferral ? continuation : null;
+}
+
+function acceptedStepDecision(result) {
+  const continuation = result?.stepResult?.evidence?.acceptedDecision;
+  return continuation instanceof AcceptedNonblockingDecision ? continuation : acceptedGateDeferral(result);
+}
+
+function assertAcceptedStepDecisionSource(state, leaf, settlementAttempt, settled, priorActivities, nonblocking = null) {
+  const continuation = acceptedStepDecision(settled);
+  if (continuation === null) return;
+  const result = settled.stepResult;
+  const receipt = settled.draftSettlementReceipt;
+  const evidence = result.evidence;
+  const identity = evidence.identity;
+  const sourceActivity = priorActivities.filter((entry) => entry.result?.draftSettlementReceipt?.id === continuation.sourceReceiptId).at(-1);
+  const source = sourceActivity?.result;
+  const sourceReceipt = source?.draftSettlementReceipt;
+  const sourceResult = source?.stepResult;
+  const originalEvidence = evidence.toJSON();
+  const advisory = continuation instanceof AcceptedNonblockingDecision;
+  delete originalEvidence[advisory ? "acceptedDecision" : "continuation"];
+  if (advisory) continuation.assertRecord(nonblocking);
+  const latestSource = priorActivities.filter((entry) => {
+    const binding = entry.result?.draftSettlementReceipt?.binding;
+    return binding?.runId === state.runId && binding.specId === state.specId
+      && binding.stepId === result.stepId && binding.attemptId === identity.attempt.id
+      && binding.attemptSequence === identity.attempt.sequence;
+  }).at(-1);
+  if (identity.runId !== state.runId || identity.specId !== state.specId
+    || identity.stepId !== leaf.id || state.attempt?.id !== identity.attempt.id
+    || state.attempt.sequence !== identity.attempt.sequence
+    || (!advisory && state.attempt.failure?.category !== "semantic")
+    || (advisory && state.policy.nonblocking?.enabled !== true)
+    || sourceActivity === undefined || sourceActivity !== latestSource
+    || !(advisory ? ["fail_attempt", "record_failure", DRAFT_STEP_SETTLEMENT_TRANSITION_OPERATION]
+      : ["fail_attempt", "record_failure"]).includes(sourceActivity.transition.operation)
+    || sourceActivity.nodeId !== leaf.id
+    || sourceActivity.attemptId !== identity.attempt.id || sourceActivity.sequence !== identity.attempt.sequence
+    || sourceReceipt.binding.runId !== state.runId || sourceReceipt.binding.specId !== state.specId
+    || sourceReceipt.binding.stepId !== result.stepId || sourceReceipt.binding.attemptId !== identity.attempt.id
+    || sourceReceipt.binding.attemptSequence !== identity.attempt.sequence
+    || sourceResult.stepId !== result.stepId
+    || (result.stepId === "test-result-review" && (sourceResult.kind !== result.kind || sourceResult.type !== result.type))
+    || (!advisory && (sourceResult.kind !== result.kind || sourceResult.type !== result.type))
+    || (!advisory && (sourceReceipt.resultDigest !== continuation.sourceResultDigest
+      || stepResultDigest(sourceResult) !== continuation.sourceResultDigest
+      || !jsonEqual(sourceResult.evidence?.toJSON() ?? sourceResult.error?.data?.evidence, originalEvidence)))
+    || sourceReceipt.id === receipt.id || receipt.settlementKind !== "target-connection"
+    || receipt.binding.runId !== state.runId || receipt.binding.specId !== state.specId
+    || receipt.binding.stepId !== result.stepId || receipt.binding.attemptId !== settlementAttempt.id
+    || receipt.binding.attemptSequence !== settlementAttempt.sequence
+    || continuation.settlementAttempt.id !== settlementAttempt.id
+    || continuation.settlementAttempt.sequence !== settlementAttempt.sequence) {
+    throw new CurrentFlowStateInvariantError("accepted decision lacks its exact original evaluation receipt and next decision Attempt");
+  }
+  if (advisory) {
+    try { continuation.assertOriginalSource({ receipt: sourceReceipt, resultDigest: stepResultDigest(sourceResult),
+      evidence, originalEvidence: sourceResult.evidence?.toJSON() ?? sourceResult.error?.data?.evidence }); }
+    catch { throw new CurrentFlowStateInvariantError("accepted decision lacks its exact original evaluation receipt and next decision Attempt"); }
+  }
+}
+
 function assertLeafLifecycle(node, {
   allowsUnexecutedHistoricalSkip = () => false,
   allowsUnexecutedRequirementTestSkip = () => false,
+  allowsUnexecutedRouteCompletion = () => false,
+  allowsDeclaredRouteSkip = () => false,
+  requiresSourceSkipProof = () => false,
 } = {}) {
+  const gateContinuation = acceptedStepDecision(node.result);
+  if (gateContinuation !== null) {
+    const receipt = node.result.draftSettlementReceipt;
+    if (node.status !== "done" || node.result.outcome !== "passed"
+      || receipt.settlementKind !== "target-connection" || receipt.id === gateContinuation.sourceReceiptId
+      || node.result.stepResult.evidence.identity.stepId !== node.id
+      || node.attemptSequence !== gateContinuation.settlementAttempt.sequence
+      || receipt.binding.attemptId !== gateContinuation.settlementAttempt.id
+      || receipt.binding.attemptSequence !== gateContinuation.settlementAttempt.sequence) {
+      throw new CurrentFlowStateInvariantError(`accepted Gate deferral has an invalid decision cursor or terminal receipt: ${node.id}`);
+    }
+  }
   if (node.status === "pending" && node.attemptSequence !== 0) {
     throw new CurrentFlowStateInvariantError(`pending leaf must have a zero Attempt sequence cursor: ${node.id}`);
   }
@@ -4146,6 +4274,15 @@ function assertLeafLifecycle(node, {
     throw new CurrentFlowStateInvariantError(`unexecuted Requirement test skip is invalid: ${node.id}`);
   }
   if (unexecutedRequirementTestSkip) return;
+  const unexecutedRouteCompletion = allowsUnexecutedRouteCompletion(node);
+  const hasCompletionReference = node.result?.artifactRefs.some((ref) => ref.kind === UNEXECUTED_STEP_COMPLETION_REFERENCE_KIND) === true;
+  if (hasCompletionReference && !unexecutedRouteCompletion) {
+    throw new CurrentFlowStateInvariantError(`unexecuted completion lacks its actual source receipt: ${node.id}`);
+  }
+  if (unexecutedRouteCompletion) return;
+  if (node.status === "skipped" && requiresSourceSkipProof(node) && !allowsDeclaredRouteSkip(node)) {
+    throw new CurrentFlowStateInvariantError(`skipped leaf requires its declared source completion proof: ${node.id}`);
+  }
   if (TERMINAL_NODE_STATUSES.has(node.status) && node.attemptSequence === 0 && !unexecutedHistoricalSkip) {
     throw new CurrentFlowStateInvariantError(`terminal leaf requires an Attempt sequence cursor: ${node.id}`);
   }
@@ -4215,7 +4352,7 @@ function assertNodeLifecycle(node, options = {}) {
   }
 }
 
-function assertExecutionFrontier(leaves, currentPath, nodes) {
+function assertExecutionFrontier(leaves, currentPath, nodes, allowsRetainedSource = () => false) {
   const taskIdByLeafId = new Map();
   const fullyPendingTaskIds = new Set();
   for (const node of nodes) {
@@ -4236,6 +4373,7 @@ function assertExecutionFrontier(leaves, currentPath, nodes) {
           && ["finalize-sync", "finalize-cleanup"].includes(leaf.id)) {
           continue;
         }
+        if (allowsRetainedSource(leaf, leaves[frontier.index])) continue;
         throw new CurrentFlowStateInvariantError(`execution frontier cannot contain terminal ${leaf.id} after unfinished work`);
       }
       continue;
@@ -4529,6 +4667,65 @@ export class CurrentFlowState {
   }
 
   /** Shared current-state invariants for fresh and resumed historical Flows. */
+  #allowsUnexecutedRouteCompletion(leaf) {
+    if (leaf.status !== "skipped" || leaf.result?.outcome !== "skipped"
+      || leaf.result.stepResult !== null || leaf.result.draftSettlementReceipt !== null
+      || leaf.result.artifactRefs.length !== 1) return false;
+    const reference = leaf.result.artifactRefs[0];
+    if (reference.kind !== UNEXECUTED_STEP_COMPLETION_REFERENCE_KIND) return false;
+    const source = this.#nodes.find((node) => node.steps.length === 0 && node.status === "done"
+      && node.result?.draftSettlementReceipt?.id === reference.id);
+    if (source === undefined || source.result.outcome !== "passed"
+      || !this.definition.contractForNode(leaf).authorizesUnexecutedCompletion(source.result.stepResult)) return false;
+    const receipt = source.result.draftSettlementReceipt;
+    const completion = receipt.effects?.unexecutedStepCompletions?.find((entry) => entry.stepId === leaf.id);
+    return receipt.settlementKind === "target-connection" && completion !== undefined
+      && receipt.binding.runId === this.runId && receipt.binding.specId === this.specId
+      && receipt.binding.stepId === source.id && receipt.binding.attemptSequence === source.attemptSequence
+      && (acceptedStepDecision(source.result)?.settlementAttempt ?? source.result.stepResult.evidence?.identity?.attempt)?.id === receipt.binding.attemptId
+      && receipt.resultKind === source.result.stepResult.kind
+      && receipt.resultDigest === stepResultDigest(source.result.stepResult)
+      && leaf.attemptSequence === completion.attemptSequence
+      && leaf.result.summary === completion.reason && leaf.result.confirmedAt === source.result.confirmedAt;
+  }
+
+  #allowsRetainedRouteSourceCompletion(leaf, frontier) {
+    const result = leaf.result;
+    const receipt = result?.draftSettlementReceipt;
+    const evidence = result?.stepResult?.evidence;
+    if (leaf.status !== "done" || result?.outcome !== "passed"
+      || !this.definition.contractForNode(leaf).authorizesRetainedRouteSource(result.stepResult, receipt)) return false;
+    const targetIndex = this.#leaves.findIndex((node) => node.id === receipt.targetStepId);
+    const sourceIndex = this.#leaves.indexOf(leaf);
+    const frontierIndex = this.#leaves.indexOf(frontier);
+    return targetIndex >= 0 && targetIndex <= frontierIndex && frontierIndex < sourceIndex
+      && receipt.effects.resetStepIds.includes(frontier.id) && !receipt.effects.resetStepIds.includes(leaf.id)
+      && receipt.binding.runId === this.runId && receipt.binding.specId === this.specId
+      && receipt.binding.stepId === leaf.id && receipt.binding.attemptSequence === leaf.attemptSequence
+      && evidence?.runId === this.runId && evidence.specId === this.specId && evidence.nodeId === leaf.id
+      && evidence.attemptId === receipt.binding.attemptId && evidence.attemptSequence === leaf.attemptSequence
+      && receipt.resultKind === result.stepResult.kind && receipt.resultDigest === stepResultDigest(result.stepResult);
+  }
+
+  #allowsDeclaredRouteSkip(leaf) {
+    if (leaf.status !== "skipped" || leaf.result?.outcome !== "skipped" || leaf.attemptSequence < 1
+      || leaf.result.stepResult !== null || leaf.result.draftSettlementReceipt !== null
+      || leaf.result.artifactRefs.length !== 0) return false;
+    return this.#nodes.some((source) => {
+      const result = source.result;
+      const receipt = result?.draftSettlementReceipt;
+      return source.steps.length === 0 && source.status === "done" && result?.outcome === "passed"
+        && this.definition.contractForNode(leaf).authorizesRouteSkip(result.stepResult)
+        && receipt?.settlementKind === "target-connection" && receipt.effects.skipStepIds.includes(leaf.id)
+        && receipt.binding.runId === this.runId && receipt.binding.specId === this.specId
+        && receipt.binding.stepId === source.id && receipt.binding.attemptSequence === source.attemptSequence
+        && receipt.resultDigest === stepResultDigest(result.stepResult)
+        && leaf.result.confirmedAt === result.confirmedAt
+        && (leaf.result.summary === "implementation triage rejected every finding"
+          || leaf.result.summary === `Draft route from ${source.id} bypassed ${leaf.id}`);
+    });
+  }
+
   #assertDefinitionCurrent() {
     this.#assertDefinitionStateShapeAndStatuses();
     const noTestableRequirementSkips = REQUIREMENT_TEST_LEAF_IDS.every((stepId) => {
@@ -4540,6 +4737,9 @@ export class CurrentFlowState {
     assertNodeLifecycle(this.root, {
       allowsUnexecutedRequirementTestSkip: (leaf) => noTestableRequirementSkips
         && REQUIREMENT_TEST_LEAF_IDS.includes(leaf.id),
+      allowsUnexecutedRouteCompletion: (leaf) => this.#allowsUnexecutedRouteCompletion(leaf),
+      allowsDeclaredRouteSkip: (leaf) => this.#allowsDeclaredRouteSkip(leaf),
+      requiresSourceSkipProof: (leaf) => this.definition.contractForNode(leaf).requiresSourceSkipProof(),
     });
     this.#assertDefinitionExecutionCurrent();
   }
@@ -4561,7 +4761,7 @@ export class CurrentFlowState {
 
   #assertDefinitionExecutionCurrent() {
     const all = this.#nodes;
-    assertExecutionFrontier(this.#leaves, this.current, this.#nodes);
+    assertExecutionFrontier(this.#leaves, this.current, this.#nodes, (leaf, frontier) => this.#allowsRetainedRouteSourceCompletion(leaf, frontier));
     if (this.lifecycle.state === "finalized") {
       if (this.current !== null || this.attempt !== null) {
         throw new CurrentFlowStateInvariantError("finalized Flow must not retain an active Attempt");
@@ -4654,6 +4854,9 @@ export class CurrentFlowState {
         && leaf.status === "skipped"
         && leaf.attemptSequence === 0
         && leaf.result === null,
+      allowsUnexecutedRouteCompletion: (leaf) => this.#allowsUnexecutedRouteCompletion(leaf),
+      allowsDeclaredRouteSkip: (leaf) => this.#allowsDeclaredRouteSkip(leaf),
+      requiresSourceSkipProof: (leaf) => this.definition.contractForNode(leaf).requiresSourceSkipProof(),
     });
     this.#assertDefinitionExecutionCurrent();
     this.#assertHistoricalCreationAuthority();
@@ -4678,7 +4881,7 @@ export class CurrentFlowState {
       .filter((leaf) => leaf.status === "skipped" && leaf.attemptSequence === 0 && leaf.result === null)
       .map((leaf) => leaf.id));
     assertNodeLifecycle(this.root, { allowsUnexecutedHistoricalSkip: (leaf) => allowed.has(leaf.id) });
-    assertExecutionFrontier(this.#leaves, this.current, this.#nodes);
+    assertExecutionFrontier(this.#leaves, this.current, this.#nodes, (leaf, frontier) => this.#allowsRetainedRouteSourceCompletion(leaf, frontier));
   }
 
   #canResumeHistoricalContinuation() {
@@ -4933,7 +5136,7 @@ export class CurrentFlowState {
     this.#assertExecutionActive();
     const leaf = this.current === null ? null : nodeAtPath(this.root, this.current);
     const task = this.current === null ? null : this.findNode(this.current.at(-2));
-    const taskGate = task instanceof TaskNode && leaf?.id === `${task.id}-gate`;
+    const taskGate = task instanceof TaskNode && leaf?.id === new TaskStepIdentity({ taskId: task.id, role: "gate" }).nodeId;
     if (leaf === null || (!new Set(["draft-gate", "spec-gate", "impl-gate"]).has(leaf.id) && !taskGate)
       || this.attempt?.failure?.category !== "semantic") {
       throw new CurrentFlowStateInvariantError("definition-owned Gate retry requires a failed semantic Gate Attempt");
@@ -4947,7 +5150,8 @@ export class CurrentFlowState {
     const leaf = this.current === null ? null : nodeAtPath(this.root, this.current);
     const previous = this.attempt;
     const next = attempt instanceof CurrentAttempt ? attempt : new CurrentAttempt(attempt);
-    if (leaf?.id !== "spec-gate" || previous === null || previous.failure !== null
+    if ((leaf?.id !== "spec-gate" && leaf?.id !== "impl-gate"
+      && TaskStepIdentity.fromStateNode(this, leaf?.id)?.definitionId !== "task-gate") || previous === null || previous.failure !== null
       || next.nodeId !== leaf.id || next.id === previous.id
       || next.sequence !== previous.sequence + 1 || next.sequence !== leaf.attemptSequence + 1
       || next.failure !== null
@@ -5072,7 +5276,7 @@ export class CurrentFlowState {
     const leaf = nodeAtPath(this.root, this.current);
     const taskId = this.current.at(-2) ?? null;
     const task = taskId === null ? null : this.findNode(taskId);
-    if (task?.kind !== "task" || leaf.id !== `${task.id}-gate`) {
+    if (task?.kind !== "task" || leaf.id !== new TaskStepIdentity({ taskId: task.id, role: "gate" }).nodeId) {
       throw new CurrentFlowStateInvariantError("Task Gate classification recovery requires the active Task Gate");
     }
     const replacement = attempt instanceof CurrentAttempt ? attempt : new CurrentAttempt(attempt);
@@ -5217,7 +5421,7 @@ export class CurrentFlowState {
       return null;
     }
     const task = tasks[taskIndex];
-    const expectedStepIds = ["impl", "review", "triage", "repair", "gate"].map((role) => `${task.id}-${role}`);
+    const expectedStepIds = ["impl", "review", "triage", "repair", "gate"].map((role) => new TaskStepIdentity({ taskId: task.id, role }).nodeId);
     if (leafId !== expectedStepIds[4]) {
       if (gateTaskLifecycle !== null) {
         throw new CurrentFlowStateInvariantError("Task lifecycle effects may target only a materialized Task Gate");
@@ -5308,20 +5512,18 @@ export class CurrentFlowState {
       || confirmed.draftSettlementReceipt.targetStepId !== targetAttempt.nodeId) {
       throw new CurrentFlowStateInvariantError("Confirmation target Attempt requires its selected connection receipt");
     }
-    return next.startAttempt({
-      path: next.definition.pathFor(next.root, targetAttempt.nodeId), attempt: targetAttempt,
-    });
+    return next.executableStepClaim({ nodeId: targetAttempt.nodeId, attempt: targetAttempt }).materialize(next);
   }
 
-  #applyDraftStepRoute(root, sourceStepId, result) {
+  #applyDraftStepRoute(root, sourceStepId, result, decisionAttempt = this.attempt) {
     const receipt = result.draftSettlementReceipt;
-    if (result.outcome !== "passed" || result.stepResult === null
+    if (!["passed", "skipped"].includes(result.outcome) || result.stepResult === null
       || receipt?.settlementKind !== "target-connection" || receipt.effects === null) {
       throw new CurrentFlowStateInvariantError("Draft route requires a passed StepResult result");
     }
     if (this.runId !== receipt.binding.runId || this.specId !== receipt.binding.specId
-      || sourceStepId !== receipt.binding.stepId || this.attempt?.id !== receipt.binding.attemptId
-      || this.attempt?.sequence !== receipt.binding.attemptSequence) {
+      || (TaskStepIdentity.fromStateNode(this, sourceStepId)?.definitionId ?? sourceStepId) !== receipt.binding.stepId || decisionAttempt?.id !== receipt.binding.attemptId
+      || decisionAttempt?.sequence !== receipt.binding.attemptSequence) {
       throw new CurrentFlowStateInvariantError("Draft settlement receipt binding is stale");
     }
     if (this.findNode(receipt.targetStepId) === null) {
@@ -5344,6 +5546,18 @@ export class CurrentFlowState {
               artifactRefs: [],
             }),
           }));
+    }
+    for (const completion of receipt.effects.unexecutedStepCompletions) {
+      const node = findNodeInRoot(root, completion.stepId);
+      if (node === null || node.steps.length !== 0
+        || node.attemptSequence !== completion.attemptSequence
+        || !this.definition.contractForNode(node).permitsUnexecutedCompletion(result.stepResult, node.status)) {
+        throw new CurrentFlowStateInvariantError(`Definition does not authorize unexecuted completion of ${completion.stepId}`);
+      }
+      root = replaceNode(root, node.id, node.with({ status: "skipped", result: new NodeResult({
+        outcome: "skipped", summary: completion.reason, confirmedAt: result.confirmedAt,
+        artifactRefs: [{ kind: UNEXECUTED_STEP_COMPLETION_REFERENCE_KIND, id: receipt.id }],
+      }) }));
     }
     for (const stepId of receipt.effects.resetStepIds) {
       const node = findNodeInRoot(root, stepId);
@@ -5458,6 +5672,10 @@ export class CurrentFlowState {
     }
     if (plan.targetStepId === null) {
       if (targetAttempt !== null) throw new CurrentFlowStateInvariantError("terminal Task Review stage plan forbids a target Attempt");
+      if (completed.draftSettlementReceipt?.settlementKind === "target-connection"
+        && completed.draftSettlementReceipt.targetStepId !== selected) {
+        throw new CurrentFlowStateInvariantError("terminal Task Review stage did not expose its Result-selected target");
+      }
       return next;
     }
     if (targetAttempt === null) throw new CurrentFlowStateInvariantError("advancing Task Review stage plan requires a target Attempt");
@@ -5740,7 +5958,7 @@ export class CurrentFlowState {
   }
 
   /** Settle an exhausted Gate with its finding in the same Store transaction. */
-  deferFailedGate({ attempt, result, gateTaskLifecycle = null }) {
+  deferFailedGate({ attempt, result, gateTaskLifecycle = null, priorActivities = [] }) {
     this.#assertExecutionActive();
     const leaf = this.current === null ? null : nodeAtPath(this.root, this.current);
     const lifecycle = leaf === null ? null : this.#assertTaskGateLifecycle({
@@ -5762,6 +5980,7 @@ export class CurrentFlowState {
     this.#assertAttemptContractForLeaf(leaf, settlementAttempt);
     const settled = result instanceof NodeResult ? result : new NodeResult(result);
     if (settled.outcome !== "passed") throw new CurrentFlowStateInvariantError("Gate deferral requires a passed lifecycle result");
+    assertAcceptedStepDecisionSource(this, leaf, settlementAttempt, settled, priorActivities);
     const root = reconcileCompletedParents(
       replaceNode(this.root, leaf.id, transitionNode(leaf, "done", this.definition, {
         attemptSequence: settlementAttempt.sequence, result: settled,
@@ -5770,7 +5989,7 @@ export class CurrentFlowState {
     const next = this.#replaceRoot(root, null, null);
     this.#assertTaskGateSuccessor(next, lifecycle);
     if (settled.draftSettlementReceipt?.settlementKind === "target-connection"
-      && (leaf.id !== "draft-gate" || settled.stepResult.type !== STEP_RESULT_TYPE.COMPLETED
+      && (acceptedGateDeferral(settled) === null && (leaf.id !== "draft-gate" || settled.stepResult.type !== STEP_RESULT_TYPE.COMPLETED)
         || next.nextAction()?.nodeId !== settled.draftSettlementReceipt.targetStepId)) {
       throw new CurrentFlowStateInvariantError("deferred Draft Gate did not reach its Definition-selected successor");
     }
@@ -5782,14 +6001,14 @@ export class CurrentFlowState {
     this.#assertExecutionActive();
     const currentId = this.current?.at(-1) ?? null;
     const taskId = this.current?.at(-2) ?? null;
-    if (typeof taskId !== "string" || currentId !== `${taskId}-impl` || this.attempt === null) {
+    if (typeof taskId !== "string" || currentId !== new TaskStepIdentity({ taskId, role: "impl" }).nodeId || this.attempt === null) {
       throw new CurrentFlowStateInvariantError("Task execution overrun recovery requires the active Task implementation Attempt");
     }
     if (attempt?.id !== this.attempt.id || attempt?.sequence !== this.attempt.sequence) {
       throw new CurrentFlowStateInvariantError("Task execution overrun recovery Attempt changed before settlement");
     }
     const task = this.findNode(taskId);
-    const stepIds = ["impl", "review", "triage", "repair", "gate"].map((role) => `${taskId}-${role}`);
+    const stepIds = ["impl", "review", "triage", "repair", "gate"].map((role) => new TaskStepIdentity({ taskId, role }).nodeId);
     if (!(task instanceof TaskNode) || !Array.isArray(task.steps) || task.steps.length !== stepIds.length
       || task.steps.some((step, index) => step.id !== stepIds[index])) {
       throw new CurrentFlowStateInvariantError("Task execution overrun recovery requires canonical materialized Task Steps");
@@ -5807,9 +6026,9 @@ export class CurrentFlowState {
       || repair.sequence !== this.attempt.sequence) {
       throw new CurrentFlowStateInvariantError("Task execution overrun recovery requires the untouched preceding plan_gate_repair Activity");
     }
-    const triageId = `${taskId}-triage`;
-    const repairId = `${taskId}-repair`;
-    const gateId = `${taskId}-gate`;
+    const triageId = new TaskStepIdentity({ taskId, role: "triage" }).nodeId;
+    const repairId = new TaskStepIdentity({ taskId, role: "repair" }).nodeId;
+    const gateId = new TaskStepIdentity({ taskId, role: "gate" }).nodeId;
     if (references?.evaluations?.length !== 1) {
       throw new CurrentFlowStateInvariantError("Task execution overrun recovery requires exactly one referenced Gate failure Activity");
     }
@@ -5879,7 +6098,7 @@ export class CurrentFlowState {
   }
 
   /** Apply the route-specific skips authorized by an immutable advisory decision. */
-  continueNonblockingAttempt({ result, skippedNodeIds, gateTaskLifecycle = null, attempt = null }) {
+  continueNonblockingAttempt({ result, skippedNodeIds, gateTaskLifecycle = null, attempt = null, priorActivities = [], nonblocking = null }) {
     const continuationResult = result instanceof NodeResult ? result : new NodeResult(result);
     const leafId = this.current?.at(-1) ?? null;
     const taskGateLifecycle = leafId === null ? null : this.#assertTaskGateLifecycle({
@@ -5887,6 +6106,29 @@ export class CurrentFlowState {
       gateTaskLifecycle,
       operation: "defer-and-advance",
     });
+    if (acceptedStepDecision(continuationResult) instanceof AcceptedNonblockingDecision) {
+      const leaf = this.findNode(leafId);
+      const replacement = attempt instanceof CurrentAttempt ? attempt : new CurrentAttempt(attempt);
+      if (replacement.nodeId !== leaf.id || replacement.sequence !== this.attempt.sequence + 1
+        || replacement.sequence !== leaf.attemptSequence + 1 || replacement.id === this.attempt.id
+        || replacement.failure !== null || replacement.consumption.semantic !== 0
+        || replacement.consumption.tooling !== 0 || continuationResult.outcome !== "passed"
+        || !Array.isArray(skippedNodeIds) || skippedNodeIds.length !== 0) {
+        throw new CurrentFlowStateInvariantError("accepted advisory decision Attempt or selected effects are invalid");
+      }
+      this.#assertAttemptContractForLeaf(leaf, replacement);
+      assertAcceptedStepDecisionSource(this, leaf, replacement, continuationResult, priorActivities, nonblocking);
+      const completedRoot = replaceNode(this.root, leaf.id, transitionNode(leaf, "done", this.definition, {
+        attemptSequence: replacement.sequence, result: continuationResult,
+      }));
+      const root = this.#applyDraftStepRoute(completedRoot, leaf.id, continuationResult, replacement);
+      const continued = this.#replaceRoot(root, null, null);
+      this.#assertTaskGateSuccessor(continued, taskGateLifecycle);
+      return continued;
+    }
+    if (hasImplementationStepContract(TaskStepIdentity.fromStateNode(this, leafId)?.definitionId ?? leafId)) {
+      throw new CurrentFlowStateInvariantError("implementation continuation requires its exact accepted Result and receipt");
+    }
     let confirmed;
     if (this.attempt?.failure === null) {
       if (attempt !== null) {
@@ -6025,9 +6267,22 @@ export class CurrentFlowState {
     const leaves = this.#leaves;
     const targetIndex = leaves.findIndex((node) => node.id === "test-execute");
     if (targetIndex < 0) throw new CurrentFlowStateInvariantError("implementation repair route is absent from the Flow definition");
-    let root = this.root;
-    for (const id of leaves.slice(targetIndex).map((node) => node.id)) {
+    const receipt = result.draftSettlementReceipt;
+    const selected = receipt?.settlementKind === "target-connection";
+    if (selected && (receipt.binding.stepId !== source.id || receipt.targetStepId !== "test-execute"
+      || receipt.binding.attemptId !== this.attempt.id
+      || receipt.binding.attemptSequence !== this.attempt.sequence
+      || receipt.effects.resetStepIds.includes(source.id))) {
+      throw new CurrentFlowStateInvariantError("Implementation repair must retain its exact source result and selected consumer reset");
+    }
+    let root = selected
+      ? replaceNode(this.root, source.id, transitionNode(source, "done", this.definition, { result }))
+      : this.root;
+    const resetIds = selected ? receipt.effects.resetStepIds
+      : leaves.slice(targetIndex).map((node) => node.id);
+    for (const id of resetIds) {
       const node = findNodeInRoot(root, id);
+      if (node === null || node.steps.length !== 0) throw new CurrentFlowStateInvariantError("Implementation repair consumer reset is invalid");
       root = replaceNode(root, id, transitionNode(node, "invalidated", this.definition, { result: null }));
     }
     root = reconcileInvalidatedParents(root, this.definition);
@@ -7035,7 +7290,8 @@ export class ActivityGateTaskLifecycle {
       throw new CurrentFlowStateInvariantError("activity Gate Task lifecycle reset Steps are invalid");
     }
     this.resetStepIds = Object.freeze([...value.resetStepIds]);
-    const expectedReset = [`${this.taskId}-impl`, `${this.taskId}-review`, `${this.taskId}-triage`, `${this.taskId}-repair`, `${this.taskId}-gate`];
+    const expectedReset = ["task-impl", "task-review", "task-triage", "task-repair", "task-gate"]
+      .map((definitionId) => TaskStepIdentity.fromDefinitionId({ taskId: this.taskId, definitionId }).nodeId);
     if ((this.operation === "repair-task-impl" && JSON.stringify(this.resetStepIds) !== JSON.stringify(expectedReset))
       || (this.operation !== "repair-task-impl" && this.resetStepIds.length !== 0)) {
       throw new CurrentFlowStateInvariantError("activity Gate Task lifecycle reset Steps do not match its operation");
@@ -7260,13 +7516,16 @@ export class ActivityTransition {
     }
     const draftReceipt = activity.result?.draftSettlementReceipt ?? null;
     if (draftReceipt !== null) {
+      const taskIdentity = TaskStepIdentity.fromStateNode(state, targetId);
       const receiptSource = this.operation === "reopen_draft_preimplementation"
         && activity.result.stepResult?.kind === "spec-gate-repair-draft-return-required"
-        ? "spec-gate-repair" : targetId;
+        ? "spec-gate-repair" : taskIdentity?.definitionId ?? targetId;
+      const continuation = ["defer_failed_gate", "continue_nonblocking"].includes(this.operation) ? acceptedStepDecision(activity.result) : null;
+      const receiptAttempt = continuation?.settlementAttempt ?? state.attempt;
       if (draftReceipt.binding.runId !== state.runId || draftReceipt.binding.specId !== state.specId
-        || draftReceipt.binding.stepId !== receiptSource || state.current?.at(-1) !== receiptSource
-        || draftReceipt.binding.attemptId !== state.attempt?.id
-        || draftReceipt.binding.attemptSequence !== state.attempt?.sequence) {
+        || draftReceipt.binding.stepId !== receiptSource || state.current?.at(-1) !== (taskIdentity?.nodeId ?? receiptSource)
+        || draftReceipt.binding.attemptId !== receiptAttempt?.id
+        || draftReceipt.binding.attemptSequence !== receiptAttempt?.sequence) {
         throw new CurrentFlowStateConflictError("Draft settlement receipt binding is stale");
       }
       const priorReceipts = priorActivities.map((entry) => entry.result?.draftSettlementReceipt).filter((receipt) => (
@@ -7397,6 +7656,8 @@ export class ActivityTransition {
           skippedNodeIds: activity.references.repairs.map((reference) => reference.id),
           gateTaskLifecycle: this.gateTaskLifecycle,
           attempt: this.attempt,
+          priorActivities,
+          nonblocking: this.nonblocking,
         });
       }
       if (this.gateTaskLifecycle !== null || activity.references.repairs.length !== 0 || this.attempt === null) {
@@ -7427,6 +7688,7 @@ export class ActivityTransition {
         attempt: this.attempt,
         result: activity.result,
         gateTaskLifecycle: this.gateTaskLifecycle,
+        priorActivities,
       });
     }
     if (this.operation === "recover_task_execution_overrun") {
@@ -7527,7 +7789,7 @@ export class ActivityTransition {
       return state.retryGateAttempt({ attempt: this.attempt });
     }
     if (this.operation === "settle_spec_gate_retry") {
-      if (targetId !== "spec-gate" || activity.result === null || activity.failure === null
+      if ((targetId !== "spec-gate" && !hasImplementationStepContract(activity.result?.stepResult?.stepId)) || activity.result === null || activity.failure === null
         || activity.attemptId !== state.attempt?.id || activity.sequence !== state.attempt?.sequence) {
         throw new CurrentFlowStateInvariantError("Spec Gate atomic retry requires its current Result and failure");
       }
@@ -7535,7 +7797,7 @@ export class ActivityTransition {
         .retryGateAttempt({ attempt: this.attempt });
     }
     if (this.operation === "settle_spec_gate_recovered") {
-      if (targetId !== "spec-gate" || activity.result === null || activity.failure !== null
+      if ((targetId !== "spec-gate" && !hasImplementationStepContract(activity.result?.stepResult?.stepId)) || activity.result === null || activity.failure !== null
         || activity.attemptId !== state.attempt?.id || activity.sequence !== state.attempt?.sequence) {
         throw new CurrentFlowStateInvariantError("Spec Gate recovered Result requires its current Attempt");
       }
@@ -7606,7 +7868,7 @@ export class ActivityTransition {
       if ((!requirementTest && !draft)
         || !["execution", "await"].includes(receipt.settlementKind)
         || state.current?.at(-1) !== targetId
-        || receipt.binding.stepId !== targetId
+        || receipt.binding.stepId !== (TaskStepIdentity.fromStateNode(state, targetId)?.definitionId ?? targetId)
         || activity.attemptId !== state.attempt?.id
         || activity.sequence !== state.attempt?.sequence
         || receipt.binding.attemptId !== state.attempt.id
@@ -7877,6 +8139,14 @@ export class FlowActivity {
       if (this.transition.attempt.nodeId !== this.nodeId) {
         throw new CurrentFlowStateInvariantError("replacement Attempt nodeId must match the Activity nodeId");
       }
+    }
+    const gateContinuation = acceptedStepDecision(this.result);
+    if (gateContinuation !== null && (this.transition.operation !== (gateContinuation instanceof AcceptedNonblockingDecision ? "continue_nonblocking" : "defer_failed_gate")
+      || this.attemptId !== gateContinuation.settlementAttempt.id
+      || this.sequence !== gateContinuation.settlementAttempt.sequence
+      || this.transition.attempt.id !== this.attemptId || this.transition.attempt.sequence !== this.sequence
+      || this.transition.attempt.nodeId !== this.nodeId)) {
+      throw new CurrentFlowStateInvariantError("accepted Gate deferral Activity must own its new decision Attempt");
     }
     this.timing = timing == null ? null : new ActivityTiming(timing);
     this.failure = failure == null ? null : new ActivityFailure(failure);
@@ -9881,7 +10151,7 @@ export class CurrentFlowVersionStore {
     const task = nodePath
       .map((id) => state.findNode(id))
       .find((node) => node instanceof TaskNode) ?? null;
-    return task !== null && activity.nodeId === `${task.id}-impl`;
+    return task !== null && activity.nodeId === new TaskStepIdentity({ taskId: task.id, role: "impl" }).nodeId;
   }
   #admittedTaskIds(specRecord) {
     if (!(specRecord instanceof CurrentFlowSpecRecord)) {

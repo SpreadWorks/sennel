@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { FlowSpecRevision } from "./flow-spec-revision.js";
-import { AtomicJsonFile } from "./atomic-json-file.js";
+import { AtomicJsonFile, AtomicJsonWriteError } from "./atomic-json-file.js";
 import { AtomicFile } from "./atomic-file.js";
 import { FileLock, FileLockWaitPolicy } from "./file-lock.js";
 import { ProcessLock } from "./process-lock.js";
@@ -1814,8 +1814,15 @@ export class FlowArtifactCatalogStore {
       const result = write();
       const catalog = validateAndBuildCatalog();
       transaction.prepare(catalog.hash);
-      this.#saveUnlocked(catalog);
-      catalogCommitted = true;
+      try {
+        this.#saveUnlocked(catalog);
+        catalogCommitted = true;
+      } catch (error) {
+        // Only the catalog write can commit this transaction. An earlier
+        // artifact's visible rename still belongs to the rollback branch.
+        if (error instanceof AtomicJsonWriteError && error.committedToVisibleName) catalogCommitted = true;
+        throw error;
+      }
       transaction.finish();
       return Object.freeze({ result, catalog });
     } catch (error) {

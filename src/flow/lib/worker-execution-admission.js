@@ -1,4 +1,5 @@
-import { StepExecutionContract } from "../engine/composition/step-execution-contract.js";
+export { workerStepExecutionContract } from "./worker-step-execution-contract.js";
+import { TaskStepIdentity } from "./task-step-identity.js";
 import { deriveNextAction, resolveDraftWorkerCorrection, resolveDraftWorkerRecovery,
   DraftWorkerRecoveryRefusal, SpecGateRepairExecutionStop,
   SpecGateRepairExecutionFormatUnavailable } from "../definition.js";
@@ -30,7 +31,8 @@ export function selectWorkerExecutionAdmission({ ctx, stepId }) {
   const state = ctx.flowManager.canonicalState(ctx.specId ?? ctx.flowState.specId);
   const flowState = ctx.flowManager.loadReadOnly(state.specId);
   const descriptor = state.nextAction();
-  if (descriptor === null || descriptor.nodeId !== stepId) {
+  const taskIdentity = TaskStepIdentity.fromStateNode(state, descriptor?.nodeId);
+  if (descriptor === null || (taskIdentity?.definitionId ?? descriptor.nodeId) !== stepId) {
     throw new NextActionPlanError("NEXT_ACTION_TARGET_MISMATCH", `worker admission requires selected ${stepId}`);
   }
   const conditionalDisposition = stepId === "draft-refine"
@@ -47,7 +49,7 @@ export function selectWorkerExecutionAdmission({ ctx, stepId }) {
   const repair = stepId === "spec-gate-repair" && state.attempt?.nodeId === stepId
     && ["start", "recover", "resume", "retry"].includes(descriptor.operation)
     ? selectSpecGateRepairExecution({ ctx, state }) : null;
-  const derived = deriveNextAction({ scope: "flow", stepId, context: flowState });
+  const derived = deriveNextAction({ scope: taskIdentity === null ? "flow" : "task", stepId, context: flowState });
   return new WorkerExecutionAdmissionSelection({ state, flowState, descriptor,
     action: derived.action, conditionalDisposition, repair, correction, recovery });
 }
@@ -105,7 +107,7 @@ export function assertCurrentWorkerExecutionSelection(selection, current) {
     || selection.state.attempt.id !== current.state.attempt.id
     || selection.state.attempt.sequence !== current.state.attempt.sequence
     || selection.descriptor.nodeId !== current.descriptor.nodeId
-    || selection.action.action !== current.action.action) {
+    || selection.action !== current.action) {
     throw new WorkerArtifactHandoffError("recovery-required", "FLOW_WORKER_EXECUTION_SELECTION_CHANGED",
       "worker execution selection changed before use", { retryable: false, recoveryPossible: false });
   }
@@ -116,11 +118,7 @@ export function executeWorkerExecutionAdmission(selection, input) {
   return input.command.executeSelectedWorker(selection, input);
 }
 
-export const workerStepExecutionContract = new StepExecutionContract({
-  select: selectWorkerExecutionAdmission,
-  project: projectWorkerExecutionAdmission,
-  execute: executeWorkerExecutionAdmission,
-});
+
 function draftQuestionDirective(disposition) {
   if (disposition?.operation !== "await-user-answer") return null;
   return new AwaitDraftQuestionDirective({

@@ -19,7 +19,8 @@ import {
 const GUARDRAIL_FILENAME = "guardrail.json";
 
 const DEFAULT_PHASE = Object.freeze(["spec"]);
-export const ACKNOWLEDGED_EXCEPTION_MARKER = "acknowledged-exception";
+import { ACKNOWLEDGED_EXCEPTION_MARKER, guardrailAllowsAcknowledgedException } from "./guardrail-values.js";
+export { ACKNOWLEDGED_EXCEPTION_MARKER, guardrailAllowsAcknowledgedException } from "./guardrail-values.js";
 const ACKNOWLEDGED_EXCEPTION_TARGET_IDS = Object.freeze([
   "backward-compatible-cli-interface",
   "exit-code-contract",
@@ -228,11 +229,6 @@ function preserveAcknowledgedExceptionClauses(guardrails) {
       body: `${String(guardrail.body || "").trim()}\n\n${ACKNOWLEDGED_EXCEPTION_CLAUSE}`,
     }, "acknowledged-exception augmentation");
   });
-}
-
-/** Whether canonical guardrail policy permits a spec-acknowledged exception. */
-export function guardrailAllowsAcknowledgedException(guardrail) {
-  return String(guardrail?.body || "").toLowerCase().includes(ACKNOWLEDGED_EXCEPTION_MARKER);
 }
 
 /**

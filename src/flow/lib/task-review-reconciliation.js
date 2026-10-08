@@ -1,3 +1,4 @@
+import { TaskStepIdentity } from "./task-step-identity.js";
 import path from "node:path";
 import crypto from "node:crypto";
 import { resolveTaskReviewReconciliation } from "../definition.js";
@@ -95,7 +96,7 @@ export function readTaskReviewReconciliations({ flowManager, state, taskId }) {
     && a.relativePath.startsWith(`steps/impl/${taskId}/review/recovery/reconciliations/`))) {
     const attemptId = path.basename(descriptor.relativePath, ".json");
     const source = flowManager.readArtifact({ specId: state.specId, logicalKey: TASK_REVIEW_RECONCILIATION_KEY,
-      parameters: { taskId, attemptId }, consumerNodeId: `${taskId}-review` });
+      parameters: { taskId, attemptId }, consumerNodeId: new TaskStepIdentity({ taskId, role: "review" }).nodeId });
     if (crypto.createHash("sha256").update(source.bytes).digest("hex") !== descriptor.hash) throw new Error("Task Review reconciliation catalog hash mismatch");
     const record = new TaskReviewReconciliationRecord(JSON.parse(source.bytes));
     const activity = activities.find(a => a.id === descriptor.activityId);

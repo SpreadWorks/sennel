@@ -9,6 +9,7 @@ import { CURRENT_FLOW_SCHEMA_REVISION } from "../../lib/flow-schema-revision.js"
 
 import crypto from "node:crypto";
 import { GateFailureCategory, GateTransitionFacts } from "./gate-transition.js";
+import { TaskStepIdentity } from "./task-step-identity.js";
 import {
   CanonicalCommandAttemptArtifactHistory,
   CanonicalCommandResultArtifact,
@@ -53,7 +54,7 @@ function gateNodeId(phase, activeTaskId = null) {
   if (phase === "draft") return "draft-gate";
   if (phase === "spec" || phase === "task-spec") return "spec-gate";
   if (phase === "integration") return "impl-gate";
-  return activeTaskId === null ? "impl-gate" : `${activeTaskId}-gate`;
+  return activeTaskId === null ? "impl-gate" : new TaskStepIdentity({ taskId: activeTaskId, role: "gate" }).nodeId;
 }
 
 export function canonicalGateLogicalKeys(phase, activeTaskId) {
@@ -103,22 +104,6 @@ export function canonicalGateRevision(state, nodeId) {
       sequence: attempt.sequence,
     }))
     .digest("hex");
-}
-
-/** Stable issue-log id for one published Task Gate result. */
-export function taskGateSettlementIssueLogId({ runId, nodeId, attempt, publicationActivityId, catalogFingerprint } = {}) {
-  const attemptId = requiredText(attempt?.id, "Task Gate issue-log Attempt id");
-  const sequence = Number.isSafeInteger(attempt?.sequence) && attempt.sequence > 0
-    ? attempt.sequence
-    : (() => { throw new Error("Task Gate issue-log Attempt sequence is invalid"); })();
-  return `task-gate-${crypto.createHash("sha256").update(JSON.stringify({
-    runId: requiredText(runId, "Task Gate issue-log runId"),
-    nodeId: requiredText(nodeId, "Task Gate issue-log nodeId"),
-    attemptId,
-    sequence,
-    publicationActivityId: requiredText(publicationActivityId, "Task Gate issue-log publication Activity id"),
-    catalogFingerprint: requiredText(catalogFingerprint, "Task Gate issue-log catalog fingerprint"),
-  })).digest("hex")}`;
 }
 
 /** Stable publisher Activity id for the one issue-log effect of a Task Gate result. */

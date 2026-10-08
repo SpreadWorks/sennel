@@ -1,6 +1,7 @@
 import { assertCurrentWorkerExecutionSelection } from "./worker-execution-admission.js";
 import { workerStepExecutionRegistration, flowStepExecutionRegistration } from "../engine/composition/registered-step-execution.js";
 import { prepareStepRegistration } from "../engine/composition/prepare.js";
+import { executeHostFilterInput } from "./run-filter-task-review.js";
 import { reserveSpecGateRepairWorkerCall } from "../engine/composition/spec-gate-repair.js";
 import { acquireApprovalInput, executeApprovalInput } from "../engine/composition/test.js";
 import { settleRequirementTestFailure } from "../services/requirement-test-failure-settlement.js";
@@ -60,6 +61,7 @@ import {
   WorkerArtifactHandoffRequest,
   WorkerArtifactHandoffReference,
   WorkerArtifactWorkerInstructions,
+  canonicalWorkerExecutionClaimForStored,
   materializeSourceWorkerEffect,
   sealParentMaterializedSourceWorkerEffect,
   workerArtifactHandoffPolicy,
@@ -278,11 +280,44 @@ function draftWorkerCorrection(ctx) {
   return resolveDraftWorkerCorrection({ state, activities: ctx.flowManager.activityLedger(state.specId) });
 }
 
+/** Reauthenticate producer failure authority before any terminal save or diagnostic. */
+function admitTerminalWorkerFailure(ctx, attempt, error, expectedState, invocation) {
+  const request = attempt?.handoffRequest;
+  if (!(request instanceof WorkerArtifactHandoffRequest) || request.policy.kind === "source"
+    || !(error instanceof WorkerArtifactHandoffError) || isStepPersistenceFailure(error)
+    || isUnclassifiedWorkerError(attempt.agentError)
+    || error.recoveryPossible || error.data.failureKind === "step-admission"
+    || !["missing", "invalid"].includes(error.classification)
+    || !(error.isProducerFailure || DraftWorkerRejection.fromFailure(error) !== null)
+    || (error.retryable && !isExternalAgentFailure(error, attempt.agentError))) return false;
+  if (request.runId !== expectedState.runId || request.specId !== expectedState.specId
+    || expectedState.attempt?.nodeId !== request.stepId
+    || expectedState.current?.at(-1) !== request.stepId
+    || expectedState.runId !== invocation.target.runId
+    || (invocation.target.specId !== null && expectedState.specId !== invocation.target.specId)
+    || request.stepId !== invocation.action.nextAction.step
+    || request.dispatchInvocationId !== invocation.id || request.actionDigest !== invocation.action.digest) return false;
+  // A failed authority read is a refusal, never proof that the producer failed.
+  // Store exceptions remain outside this read-only boundary and propagate unchanged.
+  try {
+    const current = ctx.flowManager.canonicalState(request.specId);
+    if (!new CurrentAttemptIdentity(expectedState.attempt).matches(current)) return false;
+    request.toPromptReference();
+    request.assertCurrent(ctx.flowManager.loadReadOnly(request.specId));
+    if ((isConditionalDraftWorkerStep(request.stepId) || request.stepId === "spec-gate-repair")
+      && canonicalWorkerExecutionClaimForStored({ flowManager: ctx.flowManager, stored: request }) === null) return false;
+  } catch { return false; }
+  return true;
+}
+
 /** Persist a pre-Step worker or handoff failure without inventing StepResult. */
-function settleDraftWorkerFailure(ctx, attempt, error, stepId = attempt?.handoffRequest?.stepId ?? null) {
+function settleDraftWorkerFailure(ctx, attempt, error, stepId = attempt?.handoffRequest?.stepId ?? null,
+  producerFailureAdmitted = false) {
   if (!stepId?.startsWith("draft")) return null;
-  if (isStepAdmissionRefusal(error)) return null;
   const request = attempt?.handoffRequest ?? null;
+  const rejection = stepId === "draft-gate-repair" && request !== null
+    ? DraftWorkerRejection.fromFailure(error) : null;
+  if (!producerFailureAdmitted) return null;
   if (isConditionalDraftWorkerStep(stepId) && request !== null) {
     const state = ctx.flowManager.canonicalState(request.specId);
     const binding = {
@@ -302,7 +337,6 @@ function settleDraftWorkerFailure(ctx, attempt, error, stepId = attempt?.handoff
         throw new Error("conditional Draft worker failure has no persisted execution identity");
       }
       const { stepResult, settlement } = executionIdentity;
-      const rejection = stepId === "draft-gate-repair" ? DraftWorkerRejection.fromFailure(error) : null;
       ctx.flowManager.checkpointDraftStepExecution({
         binding,
         stepResult,
@@ -339,26 +373,10 @@ function isSpecArtifactWorkerStep(stepId) {
 }
 
 /** A pre-Step Spec failure belongs to the invocation's original Attempt. */
-function settleSpecWorkerFailure(ctx, attempt, error, expectedState, invocation) {
-  const request = attempt?.handoffRequest;
+function settleSpecWorkerFailure(ctx, attempt, error, expectedState, invocation, producerFailureAdmitted) {
   const stepId = invocation.action.nextAction.step;
   const agentFailure = agentFailuresFor(error, attempt.agentError).find(isRequirementTestExternalAgentFailure);
-  if (!isSpecArtifactWorkerStep(stepId)
-    || expectedState.attempt?.nodeId !== stepId
-    || expectedState.current?.at(-1) !== stepId
-    || expectedState.runId !== invocation.target.runId
-    || (invocation.target.specId !== null && expectedState.specId !== invocation.target.specId)
-    || (request && (request.runId !== expectedState.runId
-      || request.specId !== expectedState.specId
-      || request.stepId !== stepId
-      || request.dispatchInvocationId !== invocation.id
-      || request.actionDigest !== invocation.action.digest))
-    || !(error instanceof WorkerArtifactHandoffError)
-    || isUnclassifiedWorkerError(attempt.agentError)
-    || (error.retryable === true && agentFailure === undefined)
-    || error.classification === "stale" || error.classification === "conflict"
-    || error.classification === "recovery-required" || error.recoveryPossible === true
-    || isStepAdmissionRefusal(error) || isStepPersistenceFailure(error)) return false;
+  if (!isSpecArtifactWorkerStep(stepId) || !producerFailureAdmitted) return false;
   const cause = agentFailure ?? error;
   const recorded = ctx.flowManager.failCurrentAttemptIfCurrent({
     specId: expectedState.specId,
@@ -1238,7 +1256,7 @@ class WorkerHandoffFailedAttemptAdmission {
 }
 
 function appendWorkerHandoffDiagnostic(ctx, error, request, { stepId: invocationStepId = null,
-  failedState = null, agentError = null } = {}) {
+  failedState = null, agentError = null, producerFailureAdmitted = false } = {}) {
   const state = readFlowState(ctx);
   const stepId = invocationStepId || request?.stepId || error.data?.stepId || state?.currentStep || "flow-dispatch";
   const actionDigest = request?.actionDigest || error.data?.actionDigest || null;
@@ -1254,7 +1272,7 @@ function appendWorkerHandoffDiagnostic(ctx, error, request, { stepId: invocation
   if (state?.specId && (!isSpecArtifactWorkerStep(stepId) || failedState !== null)
     && error.classification !== "recovery-required"
     && error.recoveryPossible !== true
-    && !isStepAdmissionRefusal(error)
+    && (!isStepAdmissionRefusal(error) || producerFailureAdmitted)
     && (request?.policy ?? workerArtifactHandoffPolicy(stepId))?.kind !== "source") {
     try {
       const entry = {
@@ -1464,9 +1482,9 @@ export default class RunDispatchCommand extends FlowCommand {
     );
   }
 
-  finalWorkerFailure(ctx, target, attempt, error, invocation, workerState, dispatchCount) {
+  finalWorkerFailure(ctx, target, attempt, error, invocation, workerState, dispatchCount, producerFailureAdmitted) {
     const stepId = invocation.action.nextAction.step;
-    const recorded = settleSpecWorkerFailure(ctx, attempt, error, workerState, invocation);
+    const recorded = settleSpecWorkerFailure(ctx, attempt, error, workerState, invocation, producerFailureAdmitted);
     const external = isSpecArtifactWorkerStep(stepId)
       ? agentFailuresFor(error, attempt.agentError).find(isRequirementTestExternalAgentFailure) : null;
     return this.failure(
@@ -1479,6 +1497,7 @@ export default class RunDispatchCommand extends FlowCommand {
           stepId,
           failedState: recorded ? workerState : null,
           agentError: attempt.agentError,
+          producerFailureAdmitted,
         }),
         external,
       ),
@@ -2521,6 +2540,15 @@ export default class RunDispatchCommand extends FlowCommand {
       }
 
       if (action.awaitsHostAction) {
+        try {
+          executeHostFilterInput({ ctx, flowManager: ctx.flowManager,
+            specId: ctx.specId ?? ctx.flowState.specId, stepId: action.nextAction.step });
+          current = await this.fetchNextAction(target);
+        } catch (error) {
+          return this.failure(ctx, error.code || "FLOW_HOST_FILTER_CHECKPOINT_FAILED", error.message,
+            blockedBoundary({ target, nextAction: current, dispatchCount,
+              message: "The host filter request did not receive its canonical waiting receipt." }));
+        }
         return new FlowDispatchBoundary({
           kind: "host_action",
           target,
@@ -2936,13 +2964,14 @@ export default class RunDispatchCommand extends FlowCommand {
             current = await this.fetchNextAction(target);
             continue;
           }
-          const correction = settleDraftWorkerFailure(ctx, attempt, attempt.error, invocation.action.nextAction.step);
+          const producerFailureAdmitted = admitTerminalWorkerFailure(ctx, attempt, attempt.error, workerState, invocation);
+          const correction = settleDraftWorkerFailure(ctx, attempt, attempt.error, invocation.action.nextAction.step, producerFailureAdmitted);
           discardDeferredMetrics(deferredMetrics);
           if (correction?.continue) {
             current = await this.fetchNextAction(target);
             continue;
           }
-          return this.finalWorkerFailure(ctx, target, attempt, attempt.error, invocation, workerState, dispatchCount);
+          return this.finalWorkerFailure(ctx, target, attempt, attempt.error, invocation, workerState, dispatchCount, producerFailureAdmitted);
         }
 
         // Only malformed JSON, a missing or unreadable handoff transport, or
@@ -3018,12 +3047,13 @@ export default class RunDispatchCommand extends FlowCommand {
             current = await this.fetchNextAction(target);
             continue;
           }
-          const correction = settleDraftWorkerFailure(ctx, attempt, exhausted, invocation.action.nextAction.step);
+          const producerFailureAdmitted = admitTerminalWorkerFailure(ctx, attempt, exhausted, workerState, retryInvocation);
+          const correction = settleDraftWorkerFailure(ctx, attempt, exhausted, invocation.action.nextAction.step, producerFailureAdmitted);
           if (correction?.continue) {
             current = await this.fetchNextAction(target);
             continue;
           }
-          return this.finalWorkerFailure(ctx, target, attempt, exhausted, retryInvocation, workerState, dispatchCount);
+          return this.finalWorkerFailure(ctx, target, attempt, exhausted, retryInvocation, workerState, dispatchCount, producerFailureAdmitted);
         }
         invocation = retryInvocation;
       }

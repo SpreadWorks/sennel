@@ -26,6 +26,7 @@ import { container } from "../../lib/container.js";
 import { managedOutputDir } from "../../lib/config.js";
 import { listChangedFilesDetailed } from "../../lib/git-helpers.js";
 import { FlowCommand } from "./base-command.js";
+import { Envelope } from "../../lib/flow-envelope.js";
 import {
   readJsonStrict,
   validateSummaryEvidence,
@@ -49,9 +50,12 @@ import {
   canonicalRawEvidenceFingerprint,
   isCanonicalFlowState,
 } from "./canonical-test-artifacts.js";
-import { attachCanonicalCommandResultArtifact } from "./canonical-command-result.js";
+import { attachCanonicalCommandResultArtifact, attachedCanonicalCommandResultArtifact } from "./canonical-command-result.js";
 import { buildRepairFingerprint } from "./repair-fingerprint.js";
 import { admitTestChainDirectExecution } from "./test-chain-transition-facts.js";
+import { implStepRegistration } from "../engine/composition/impl.js";
+import { prepareTestChainPublication, prepareTestExecutionRequest } from "../engine/composition/test-chain.js";
+import { StepErrorResult } from "../engine/step-result.js";
 import { RequirementTestArtifactStore } from "./requirement-test-store.js";
 import { scanFileHeader } from "./test-headers.js";
 
@@ -306,8 +310,8 @@ function buildRequiredRegression({ root, classification, rootCommand, command, r
 
 /**
  * The normal command owns only process execution and the transient raw log.
- * Its durable result is attached to the public result object and is published
- * by the registry's current-Attempt confirmation transaction.
+ * Its durable result is attached to the command output for the registered
+ * Step's atomic observation and settlement transaction.
  */
 async function executeCanonicalTestExecution(ctx, config, { runSpecLocal = runSpecLocalTests } = {}) {
   const state = ctx.flowState;
@@ -464,6 +468,13 @@ async function executeCanonicalTestExecution(ctx, config, { runSpecLocal = runSp
   });
 }
 
+export function executeTestChainInput(input) {
+  const registration = implStepRegistration(input.stepId);
+  if (registration === null) throw new TypeError("Test-chain execution requires its production registration");
+  const selection = registration.executionContract.select({ ...input, registration });
+  return registration.executionContract.execute(selection, { ...input, registration });
+}
+
 export default class RunTestExecuteCommand extends FlowCommand {
   constructor({ runSpecLocal = runSpecLocalTests } = {}) {
     super();
@@ -475,12 +486,19 @@ export default class RunTestExecuteCommand extends FlowCommand {
     const { root } = ctx;
     const executionRoot = ctx.executionRoot || root;
     if (isCanonicalFlowState(ctx.flowState)) {
-      admitTestChainDirectExecution({ flowManager: ctx.flowManager, specId: ctx.flowState.specId, stepId: "test-execute" });
+      const admitted = admitTestChainDirectExecution({ flowManager: ctx.flowManager, specId: ctx.flowState.specId, stepId: "test-execute" });
+      const request = prepareTestExecutionRequest({ flowManager: ctx.flowManager,
+        state: ctx.flowManager.canonicalState(ctx.flowState.specId) });
+      await executeTestChainInput({ flowManager: ctx.flowManager, specId: request.binding.specId,
+        stepId: "test-execute", binding: request.binding, preparation: request });
+      request.binding.assertCurrent();
+      const executionContext = { ...ctx, flowState: ctx.flowManager.loadReadOnly(request.binding.specId) };
       const config = this.container?.has?.("config")
         ? this.container.get("config") || {}
         : container.get("config") || {};
+      let commandResult;
       try {
-        return await executeCanonicalTestExecution(ctx, config, { runSpecLocal: this.runSpecLocal });
+        commandResult = await executeCanonicalTestExecution(executionContext, config, { runSpecLocal: this.runSpecLocal });
       } catch (err) {
         ctx.flowManager.appendIssueLog({
           specId: ctx.flowState.specId,
@@ -489,6 +507,21 @@ export default class RunTestExecuteCommand extends FlowCommand {
         });
         throw err;
       }
+      const state = ctx.flowManager.canonicalState(ctx.flowState.specId);
+      if (state.attempt?.id !== admitted.snapshot.attempt.id || state.attempt?.sequence !== admitted.snapshot.attempt.sequence) {
+        throw new Error("Test execution Attempt changed before observation adoption");
+      }
+      const preparation = prepareTestChainPublication({ flowManager: ctx.flowManager, state,
+        binding: request.binding, commandResult });
+      const outcome = await executeTestChainInput({ flowManager: ctx.flowManager, specId: state.specId,
+        stepId: "test-execute", binding: preparation.binding, preparation, commandResult });
+      if (outcome.stepResult instanceof StepErrorResult) {
+        const error = outcome.stepResult.error;
+        return attachCanonicalCommandResultArtifact(
+          Envelope.fail("run", "test-execute", error.code, error.message, error.data),
+          attachedCanonicalCommandResultArtifact(commandResult));
+      }
+      return commandResult;
     }
     throw new Error("test-execute requires a Version-1 Flow");
   }

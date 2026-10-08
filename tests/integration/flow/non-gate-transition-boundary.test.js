@@ -1,6 +1,9 @@
 import { CURRENT_FLOW_SCHEMA_REVISION } from "../../../src/lib/flow-schema-revision.js";
 import { afterEach, describe, it } from "node:test";
 import assert from "node:assert/strict";
+import childProcess from "node:child_process";
+import { syncBuiltinESMExports } from "node:module";
+import { StepAdmissionRefusal } from "../../../src/flow/lib/step-admission-refusal.js";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 
@@ -510,19 +513,15 @@ describe("definition-owned non-Gate transition boundary", () => {
       activities: [{ id: "published", attemptId: "attempt-9", sequence: 9, nodeId: stepId }],
       catalog: [{ logicalKey: "test.execute", activityId: "published" }],
     };
-    const blockedFacts = facts({
-      stepId,
-      producer: new NonGateProducerOwnership({ runId: "run-9", specId: snapshot.specId, activityId: "published", stepId, attempt: snapshot.attempt }),
-      target: new NonGateTargetBinding({ runId: "run-9", specId: snapshot.specId, stepId, attempt: snapshot.attempt }),
-      catalogPublication: new NonGateCatalogPublication({ runId: "run-9", specId: snapshot.specId, stepId, attemptId: "attempt-9", sequence: 9, producerActivityId: "published", artifactId: "result", fingerprint: "f".repeat(64) }),
-      sourcePublication: new NonGateSourcePublication({ runId: "run-9", specId: snapshot.specId, stepId, attemptId: "attempt-9", sequence: 9, producerActivityId: "published", artifactId: "result", fingerprint: "f".repeat(64) }),
-      completion: new NonGateCompletionFacts({ partial: true }),
-      stepFacts: new TestExecuteStepFacts({ rawAvailable: false }),
-    });
-    assert.throws(() => admitTestChainDirectExecution({
-      flowManager: { ...manager, readCanonicalTransitionSnapshot: () => published }, specId: snapshot.specId, stepId,
-      readFacts: () => blockedFacts,
-    }), /Definition-selected blocked/);
+    // Publication without its atomic selected Result/receipt is a malformed boundary,
+    // not authority for admission to reinterpret raw observations (board 03).
+    assert.throws(() => {
+      admitTestChainDirectExecution({ flowManager: { ...manager,
+        readCanonicalTransitionSnapshot: () => published, readCurrentStepSettlement: () => null },
+        specId: snapshot.specId, stepId });
+      workerStarts += 1;
+    }, (error) => error instanceof StepAdmissionRefusal
+      && /observed publication without its settlement receipt/.test(error.message));
     assert.equal(workerStarts, 0);
   });
 
@@ -580,11 +579,21 @@ describe("definition-owned non-Gate transition boundary", () => {
     assert.match(finalRunner, /selectedNonGateUserAction/, "direct final-regression admission must require the selected typed user Action");
   });
 
-  it("rejects actual test-chain commands before their worker/process boundary", async () => {
+  it("rejects actual test-chain commands before their worker/process boundary", async (t) => {
     const attempts = [];
-    for (const [stepId, Command, command] of [
-      ["test-execute", RunTestExecuteCommand, new RunTestExecuteCommand()],
-      ["test-result-review", RunTestResultReviewCommand, new RunTestResultReviewCommand()],
+    const mocks = [];
+    const restore = () => { for (const entry of mocks) entry.mock.restore(); syncBuiltinESMExports(); };
+    t.after(restore);
+    for (const name of ["spawn", "spawnSync", "exec", "execSync", "execFile", "execFileSync", "fork"]) {
+      mocks.push(t.mock.method(childProcess, name, (...args) => {
+        attempts.push({ name, command: args[0] });
+        assert.fail("a missing settlement receipt must refuse before any worker/process starts");
+      }));
+    }
+    syncBuiltinESMExports();
+    for (const [stepId, command] of [
+      ["test-execute", new RunTestExecuteCommand()],
+      ["test-result-review", new RunTestResultReviewCommand()],
     ]) {
       const snapshot = {
         runId: "run-9", specId: "009-non-gate-transition", stepId, revision: "state-revision-9",
@@ -594,14 +603,18 @@ describe("definition-owned non-Gate transition boundary", () => {
       };
       const flowManager = {
         readCanonicalTransitionSnapshot: () => snapshot,
+        readCurrentStepSettlement: () => null,
         canonicalState: () => ({ nextAction: () => ({ nodeId: stepId, operation: "resume" }) }),
       };
       await assert.rejects(
         command.execute({ flowState: { schemaRevision: CURRENT_FLOW_SCHEMA_REVISION, specId: snapshot.specId }, flowManager, root: process.cwd() }),
-        /test-chain direct admission rejected/,
+        (error) => error instanceof StepAdmissionRefusal
+          && /test-chain direct admission rejected/.test(error.message)
+          && /observed publication without its settlement receipt/.test(error.message),
       );
     }
     assert.deepEqual(attempts, []);
+    restore();
   });
 
   it("rejects malformed test-chain post artifacts before any publication or Activity settlement", async () => {

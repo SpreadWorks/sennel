@@ -8,7 +8,9 @@
 import {
   NonGateTransitionDecision,
   resolveNonGateTransition,
+  StepSettlement, StepRoute, DraftStepSettlementReceipt,
 } from "../definition.js";
+import { StepResult } from "../engine/step-result.js";
 import { NonGateTransitionFacts } from "./non-gate-transition.js";
 import { readCurrentNonGateTransitionFacts } from "./non-gate-transition-facts.js";
 
@@ -60,9 +62,30 @@ export function applyNonGateTransitionDecision(adapter, decision) {
   for (const action of decision.plan.actions) action.apply(adapter, decision.plan);
 }
 
-/** Project a definition-selected plan without inspecting observed outcome facts. */
-export function projectNonGateTransitionDecision(decision) {
-  return new NonGateTransitionActionProjection(PROJECTION_TOKEN, requireDecision(decision));
+/** A saved Result selects the action; its receipt supplies the stable projection identity. */
+export class SavedStepSettlementActionProjection {
+  constructor(token, { result, settlement, receipt }) {
+    if (token !== PROJECTION_TOKEN || !(result instanceof StepResult)
+      || !(settlement instanceof StepSettlement)) throw new TypeError("Saved action requires its typed Result and settlement");
+    DraftStepSettlementReceipt.assertStored(receipt.toJSON(), { result, settlement });
+    this.receiptId = receipt.id;
+    this.binding = Object.freeze({ ...receipt.binding });
+    this.stepId = result.stepId;
+    this.operation = settlement.kind;
+    this.targetStepId = settlement instanceof StepRoute ? settlement.targetStepId : null;
+    Object.freeze(this);
+  }
+  toJSON() {
+    return { receiptId: this.receiptId, binding: { ...this.binding }, stepId: this.stepId,
+      operation: this.operation, targetStepId: this.targetStepId };
+  }
+}
+
+/** Project an already selected Definition plan or authenticated saved settlement. */
+export function projectNonGateTransitionDecision(selected) {
+  return selected instanceof NonGateTransitionDecision
+    ? new NonGateTransitionActionProjection(PROJECTION_TOKEN, selected)
+    : new SavedStepSettlementActionProjection(PROJECTION_TOKEN, selected);
 }
 
 function selectedActionIdentity(selectedAction) {

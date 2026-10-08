@@ -1,3 +1,9 @@
+import { ImplementationSourceEvidence } from "../lib/source-effect-values.js";
+import { TaskStageResultEvidence } from "../lib/task-stage-result-values.js";
+import { TaskHostFilterAuthority } from "../lib/task-review-host-filter-values.js";
+import { TestChainResultEvidence } from "../lib/test-chain-values.js";
+import { ImplReviewResultEvidence } from "../lib/impl-review-values.js";
+import { ImplementationGateResultEvidence } from "../lib/gate-observation-values.js";
 import { createHash } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { FlowExecutionError } from "./flow-execution-error.js";
@@ -111,7 +117,7 @@ export class StepResult {
   get type() { return this.#type; }
   get error() { return this.#error; }
 
-  async persist(service) {
+  persist(service) {
     if (service === null || typeof service !== "object" || typeof service.persistStepResult !== "function") {
       throw new TypeError("StepResult persistence requires a Step service");
     }
@@ -139,10 +145,10 @@ export function stepResultDigest(result) {
     .digest("hex");
 }
 
-function declareResult(ResultClass, { stepId, kind, type }, operands = null) {
+function declareResult(ResultClass, { stepId, kind, type, implementation = false }, operands = null) {
   if (typeof stepId !== "string" || stepId === "") throw new TypeError("StepResult Step is required");
   if (registryByKind.has(kind)) throw new Error(`duplicate Step Result kind: ${kind}`);
-  const entry = Object.freeze({ ResultClass, stepId, kind, type, ...(operands === null ? {} : { operands: Object.freeze({ ...operands }) }) });
+  const entry = Object.freeze({ ResultClass, stepId, kind, type, ...(implementation ? { implementation: true } : {}), ...(operands === null ? {} : { operands: Object.freeze({ ...operands }) }) });
   registryByKind.set(kind, entry);
   const entries = registryByStep.get(stepId) ?? [];
   entries.push(entry);
@@ -689,7 +695,7 @@ function validateRequirementResult(definition, values) {
   }
 }
 
-function operandResultClass(className, definition, codecs, ErrorClass = null) {
+function operandResultClass(className, definition, codecs, ErrorClass = null, validate = validateRequirementResult) {
   const fields = Object.keys(codecs);
   const ResultClass = { [className]: class extends StepResult {
     #values;
@@ -700,7 +706,7 @@ function operandResultClass(className, definition, codecs, ErrorClass = null) {
         typedOperand(values.error, ErrorClass, `${className}.error`);
         if (values.error.runId !== values.binding.runId || values.error.stepId !== definition.stepId || values.error.attemptId !== values.binding.attempt.id) throw new TypeError("external blocking error does not match Result source binding");
       }
-      validateRequirementResult(definition, values);
+      validate(definition, values);
       super(DEFINITION_TOKEN, { ...definition, ...(ErrorClass === null ? {} : { error: values.error }) });
       this.#values = Object.freeze(Object.fromEntries(fields.map((field) => [field, values[field]])));
     }
@@ -736,6 +742,63 @@ export const TestGenerateExternalBlockedResult = testResultClass("TestGenerateEx
 export const TestReviewExternalBlockedResult = testResultClass("TestReviewExternalBlockedResult", "test-review", "external-blocked", STEP_RESULT_TYPE.ERROR, "evidence", RequirementTestToolingEvidence, RequirementTestExternalBlockedError);
 export const TestRepairExternalBlockedResult = testResultClass("TestRepairExternalBlockedResult", "test-repair", "external-blocked", STEP_RESULT_TYPE.ERROR, "evidence", RequirementTestToolingEvidence, RequirementTestExternalBlockedError);
 
+function validateImplementationResult(definition, values) {
+  const evidence = values.evidence;
+  const stepId = evidence instanceof TaskStageResultEvidence
+    ? evidence.taskIdentity.definitionId : evidence.stepId;
+  if (stepId !== definition.stepId) throw new TypeError("Implementation Result evidence does not match its responsibility");
+  evidence.assertResultKind(definition.kind);
+}
+
+export const ImplementWorkerRequiredResult = resultClass("ImplementWorkerRequiredResult", { stepId: "implement", kind: "implement-worker-required", type: "loop-required", implementation: true });
+export const ImplementAppliedResult = operandResultClass("ImplementAppliedResult", { stepId: "implement", kind: "implement-applied", type: "completed", implementation: true }, { evidence: ImplementationSourceEvidence }, null, validateImplementationResult);
+export const ImplementExistingCompletionResult = operandResultClass("ImplementExistingCompletionResult", { stepId: "implement", kind: "implement-existing-completion", type: "completed", implementation: true }, { evidence: ImplementationSourceEvidence }, null, validateImplementationResult);
+export const ImplementQualityIssueResult = operandResultClass("ImplementQualityIssueResult", { stepId: "implement", kind: "implement-quality-issue", type: "completed", implementation: true }, { evidence: ImplementationSourceEvidence }, null, validateImplementationResult);
+export const TaskImplementationWorkerRequiredResult = resultClass("TaskImplementationWorkerRequiredResult", { stepId: "task-impl", kind: "task-impl-worker-required", type: "loop-required", implementation: true });
+export const TaskImplementationAppliedResult = operandResultClass("TaskImplementationAppliedResult", { stepId: "task-impl", kind: "task-impl-applied", type: "completed", implementation: true }, { evidence: ImplementationSourceEvidence }, null, validateImplementationResult);
+export const TaskImplementationNoChangeResult = operandResultClass("TaskImplementationNoChangeResult", { stepId: "task-impl", kind: "task-impl-no-change", type: "completed", implementation: true }, { evidence: ImplementationSourceEvidence }, null, validateImplementationResult);
+export const TaskImplementationQualityIssueResult = operandResultClass("TaskImplementationQualityIssueResult", { stepId: "task-impl", kind: "task-impl-quality-issue", type: "completed", implementation: true }, { evidence: ImplementationSourceEvidence }, null, validateImplementationResult);
+export const TaskReviewExecutionRequiredResult = resultClass("TaskReviewExecutionRequiredResult", { stepId: "task-review", kind: "task-review-execution-required", type: "loop-required", implementation: true });
+export const TaskReviewFindingsResult = operandResultClass("TaskReviewFindingsResult", { stepId: "task-review", kind: "task-review-findings", type: "branch-required", implementation: true }, { evidence: TaskStageResultEvidence }, null, validateImplementationResult);
+export const TaskReviewGateRequiredResult = operandResultClass("TaskReviewGateRequiredResult", { stepId: "task-review", kind: "task-review-gate-required", type: "completed", implementation: true }, { evidence: TaskStageResultEvidence }, null, validateImplementationResult);
+export const TaskReviewNoChangeCompletedResult = operandResultClass("TaskReviewNoChangeCompletedResult", { stepId: "task-review", kind: "task-review-no-change-completed", type: "completed", implementation: true }, { evidence: TaskStageResultEvidence }, null, validateImplementationResult);
+export const TaskReviewUnavailableResult = operandResultClass("TaskReviewUnavailableResult", { stepId: "task-review", kind: "task-review-unavailable", type: "completed", implementation: true }, { evidence: TaskStageResultEvidence }, null, validateImplementationResult);
+export const TaskTriageFilterRequiredResult = operandResultClass("TaskTriageFilterRequiredResult", { stepId: "task-triage", kind: "task-triage-filter-required", type: "user-input-required", implementation: true }, { evidence: TaskHostFilterAuthority }, null, validateImplementationResult);
+export const TaskTriageRepairRequiredResult = operandResultClass("TaskTriageRepairRequiredResult", { stepId: "task-triage", kind: "task-triage-repair-required", type: "branch-required", implementation: true }, { evidence: TaskStageResultEvidence }, null, validateImplementationResult);
+export const TaskTriageGateRequiredResult = operandResultClass("TaskTriageGateRequiredResult", { stepId: "task-triage", kind: "task-triage-gate-required", type: "completed", implementation: true }, { evidence: TaskStageResultEvidence }, null, validateImplementationResult);
+export const TaskTriageNoChangeCompletedResult = operandResultClass("TaskTriageNoChangeCompletedResult", { stepId: "task-triage", kind: "task-triage-no-change-completed", type: "completed", implementation: true }, { evidence: TaskStageResultEvidence }, null, validateImplementationResult);
+export const TaskTriageCorrectionRequiredResult = operandResultClass("TaskTriageCorrectionRequiredResult", { stepId: "task-triage", kind: "task-triage-correction-required", type: "loop-required", implementation: true }, { evidence: TaskStageResultEvidence }, null, validateImplementationResult);
+export const TaskTriageUnreviewedGateResult = operandResultClass("TaskTriageUnreviewedGateResult", { stepId: "task-triage", kind: "task-triage-unreviewed-gate", type: "branch-required", implementation: true }, { evidence: TaskStageResultEvidence }, null, validateImplementationResult);
+export const TaskRepairWorkerRequiredResult = resultClass("TaskRepairWorkerRequiredResult", { stepId: "task-repair", kind: "task-repair-worker-required", type: "loop-required", implementation: true });
+export const TaskRepairReviewRequiredResult = operandResultClass("TaskRepairReviewRequiredResult", { stepId: "task-repair", kind: "task-repair-review-required", type: "loop-required", implementation: true }, { evidence: ImplementationSourceEvidence }, null, validateImplementationResult);
+export const TaskRepairUnreviewedGateResult = operandResultClass("TaskRepairUnreviewedGateResult", { stepId: "task-repair", kind: "task-repair-unreviewed-gate", type: "branch-required", implementation: true }, { evidence: ImplementationSourceEvidence }, null, validateImplementationResult);
+export const TaskGateExecutionRequiredResult = operandResultClass("TaskGateExecutionRequiredResult", { stepId: "task-gate", kind: "task-gate-execution-required", type: "loop-required", implementation: true }, { evidence: ImplementationGateResultEvidence }, null, validateImplementationResult);
+export const TaskGatePassedResult = operandResultClass("TaskGatePassedResult", { stepId: "task-gate", kind: "task-gate-passed", type: "completed", implementation: true }, { evidence: ImplementationGateResultEvidence }, null, validateImplementationResult);
+export const TaskGateRepairRequiredResult = operandResultClass("TaskGateRepairRequiredResult", { stepId: "task-gate", kind: "task-gate-repair-required", type: "loop-required", implementation: true }, { evidence: ImplementationGateResultEvidence }, null, validateImplementationResult);
+export const TaskGateRetryRequiredResult = operandResultClass("TaskGateRetryRequiredResult", { stepId: "task-gate", kind: "task-gate-retry-required", type: "loop-required", implementation: true }, { evidence: ImplementationGateResultEvidence }, null, validateImplementationResult);
+export const TaskGateDeferredResult = operandResultClass("TaskGateDeferredResult", { stepId: "task-gate", kind: "task-gate-deferred", type: "branch-required", implementation: true }, { evidence: ImplementationGateResultEvidence }, null, validateImplementationResult);
+export const TaskGateAwaitingDecisionResult = operandResultClass("TaskGateAwaitingDecisionResult", { stepId: "task-gate", kind: "task-gate-awaiting-decision", type: "user-input-required", implementation: true }, { evidence: ImplementationGateResultEvidence }, null, validateImplementationResult);
+export const TestExecutionRequiredResult = operandResultClass("TestExecutionRequiredResult", { stepId: "test-execute", kind: "test-execute-execution-required", type: "loop-required", implementation: true }, { evidence: TestChainResultEvidence }, null, validateImplementationResult);
+export const TestExecutionObservedResult = operandResultClass("TestExecutionObservedResult", { stepId: "test-execute", kind: "test-execute-observed", type: "completed", implementation: true }, { evidence: TestChainResultEvidence }, null, validateImplementationResult);
+export const TestEvidenceAcceptedResult = operandResultClass("TestEvidenceAcceptedResult", { stepId: "test-result-review", kind: "test-result-review-evidence-accepted", type: "completed", implementation: true }, { evidence: TestChainResultEvidence }, null, validateImplementationResult);
+export const TestEvidenceRejectedResult = operandResultClass("TestEvidenceRejectedResult", { stepId: "test-result-review", kind: "test-result-review-evidence-rejected", type: "loop-required", implementation: true }, { evidence: TestChainResultEvidence }, null, validateImplementationResult);
+export const ImplReviewExecutionRequiredResult = operandResultClass("ImplReviewExecutionRequiredResult", { stepId: "impl-review", kind: "impl-review-execution-required", type: "loop-required", implementation: true }, { evidence: ImplReviewResultEvidence }, null, validateImplementationResult);
+export const ImplReviewPassedResult = operandResultClass("ImplReviewPassedResult", { stepId: "impl-review", kind: "impl-review-passed", type: "completed", implementation: true }, { evidence: ImplReviewResultEvidence }, null, validateImplementationResult);
+export const ImplReviewAdvisoryResult = operandResultClass("ImplReviewAdvisoryResult", { stepId: "impl-review", kind: "impl-review-advisory", type: "completed", implementation: true }, { evidence: ImplReviewResultEvidence }, null, validateImplementationResult);
+export const ImplReviewRejectedResult = operandResultClass("ImplReviewRejectedResult", { stepId: "impl-review", kind: "impl-review-rejected", type: "branch-required", implementation: true }, { evidence: ImplReviewResultEvidence }, null, validateImplementationResult);
+export const ImplReviewToolingResult = operandResultClass("ImplReviewToolingResult", { stepId: "impl-review", kind: "impl-review-tooling", type: "user-input-required", implementation: true }, { evidence: ImplReviewResultEvidence }, null, validateImplementationResult);
+export const ImplTriageWorkerRequiredResult = resultClass("ImplTriageWorkerRequiredResult", { stepId: "impl-triage", kind: "impl-triage-worker-required", type: "loop-required", implementation: true });
+export const ImplTriageRepairRequiredResult = operandResultClass("ImplTriageRepairRequiredResult", { stepId: "impl-triage", kind: "impl-triage-repair-required", type: "branch-required", implementation: true }, { evidence: ImplementationSourceEvidence }, null, validateImplementationResult);
+export const ImplTriageGateRequiredResult = operandResultClass("ImplTriageGateRequiredResult", { stepId: "impl-triage", kind: "impl-triage-gate-required", type: "completed", implementation: true }, { evidence: ImplementationSourceEvidence }, null, validateImplementationResult);
+export const ImplRepairWorkerRequiredResult = resultClass("ImplRepairWorkerRequiredResult", { stepId: "impl-repair", kind: "impl-repair-worker-required", type: "loop-required", implementation: true });
+export const ImplRepairAppliedResult = operandResultClass("ImplRepairAppliedResult", { stepId: "impl-repair", kind: "impl-repair-applied", type: "loop-required", implementation: true }, { evidence: ImplementationSourceEvidence }, null, validateImplementationResult);
+export const ImplRepairQualityIssueResult = operandResultClass("ImplRepairQualityIssueResult", { stepId: "impl-repair", kind: "impl-repair-quality-issue", type: "loop-required", implementation: true }, { evidence: ImplementationSourceEvidence }, null, validateImplementationResult);
+export const ImplGateExecutionRequiredResult = operandResultClass("ImplGateExecutionRequiredResult", { stepId: "impl-gate", kind: "impl-gate-execution-required", type: "loop-required", implementation: true }, { evidence: ImplementationGateResultEvidence }, null, validateImplementationResult);
+export const ImplGatePassedResult = operandResultClass("ImplGatePassedResult", { stepId: "impl-gate", kind: "impl-gate-passed", type: "completed", implementation: true }, { evidence: ImplementationGateResultEvidence }, null, validateImplementationResult);
+export const ImplGateEvidenceRefreshResult = operandResultClass("ImplGateEvidenceRefreshResult", { stepId: "impl-gate", kind: "impl-gate-evidence-refresh", type: "loop-required", implementation: true }, { evidence: ImplementationGateResultEvidence }, null, validateImplementationResult);
+export const ImplGateSemanticFailureResult = operandResultClass("ImplGateSemanticFailureResult", { stepId: "impl-gate", kind: "impl-gate-semantic-failure", type: "branch-required", implementation: true }, { evidence: ImplementationGateResultEvidence }, null, validateImplementationResult);
+export const ImplGateAwaitingDecisionResult = operandResultClass("ImplGateAwaitingDecisionResult", { stepId: "impl-gate", kind: "impl-gate-awaiting-decision", type: "user-input-required", implementation: true }, { evidence: ImplementationGateResultEvidence }, null, validateImplementationResult);
+
 const errorDefinitionByStep = new Map([...registryByStep.keys()].map((stepId) => {
   const operands = stepId === "approval"
     ? { evidence: ApprovalResultEvidence }
@@ -744,6 +807,7 @@ const errorDefinitionByStep = new Map([...registryByStep.keys()].map((stepId) =>
     stepId,
     kind: `${stepId}-error`,
     type: STEP_RESULT_TYPE.ERROR,
+    ...(registryByStep.get(stepId).some((entry) => entry.implementation) ? { implementation: true } : {}),
     ...(operands === null ? {} : { operands: Object.freeze({ ...operands }) }),
   })];
 }));
@@ -813,4 +877,9 @@ export function rehydrateStepResult(stepId, value) {
 export function stepResultKinds(stepId) {
   requireRegisteredStepId(stepId);
   return Object.freeze((registryByStep.get(stepId) ?? []).map(({ kind }) => kind));
+}
+
+/** Recognize the registered implementation contract without a second phase registry. */
+export function hasImplementationStepContract(stepId) {
+  return (registryByStep.get(stepId) ?? []).some((entry) => entry.implementation === true);
 }

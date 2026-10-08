@@ -47,6 +47,7 @@ export class SpecGateRepairService {
   inspectContinuation() { return this.#continuation; }
 
   inspectWorkerCompletion() {
+    if (this.#outcome !== null) throw new Error("prepared Spec Gate repair adoption is stale after its completed settlement");
     return this.#facts;
   }
 

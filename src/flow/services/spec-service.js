@@ -23,7 +23,10 @@ export class SpecService {
     this.#writer = writer;
   }
 
-  inspectWorkerCompletion() { return this.#input.facts; }
+  inspectWorkerCompletion() {
+    if (this.#outcome !== null) throw new Error("prepared Spec adoption is stale after its completed settlement");
+    return this.#input.facts;
+  }
 
   adoptWorkerCandidate(selection) {
     if (!(selection instanceof SpecWorkerResultSelection)

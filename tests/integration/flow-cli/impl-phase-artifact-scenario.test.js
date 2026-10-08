@@ -6,7 +6,8 @@ import path from "node:path";
 import { test } from "node:test";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
+import { createTmpDir, removeTmpDir } from "../../support/builders/tmp-dir.js";
 import RunTestExecuteCommand from "../../../src/flow/lib/run-test-execute.js";
 import { FLOW_COMMANDS } from "../../../src/flow/registry.js";
 import { dispatchContainer, installGateProviderFake } from "../../support/infrastructure/flow-dispatch-scenario.js";
@@ -115,7 +116,8 @@ for (const ids of [["T17", "T23"], []]) {
       assert.equal(retro.ok, false);
       assert.equal(retro.errors[0].code, "NO_REQUIREMENTS", "phase 04 retains its explicit empty-requirements refusal");
       assert.deepEqual(scenario.reload().snapshot(), before);
-      assert.equal(scenario.artifact("retro"), null);
+      assert.equal(scenario.manager.readProducerArtifact({ specId: scenario.specId,
+        nodeId: "retro", logicalKey: "retro", optional: true }), null);
     }
     assert.equal(scenario.commandArtifact("test.execute", "retro").descriptor.activityId, producer.id);
     scenario.assertResults(["implement", ...ids.flatMap((id) => [`${id}-impl`, `${id}-review`, `${id}-gate`]), "test-execute", "test-result-review", "impl-review", "impl-gate"]);
@@ -434,17 +436,29 @@ for (const interruption of ["before-json-rename", "before-json-directory-fsync"]
     fs.appendFileSync(scenario.sourcePath, "interrupted durable correction\n");
     scenario.sealHandoff(work, repairEffect(work, { quality: true }));
     const catalogFile = scenario.manager.specLocation(scenario.specId).catalogFile;
+    const captureRoot = createTmpDir("impl-source-publication-capture-");
+    t.after(() => removeTmpDir(captureRoot));
+    const captureFile = path.join(captureRoot, "original-source-save.json");
+    const captureNonce = randomUUID();
     const child = `
       import { FlowManager } from ${JSON.stringify(new URL("../../../src/lib/flow-manager.js", import.meta.url).href)};
       import { WorkerArtifactHandoffCoordinator } from ${JSON.stringify(new URL("../../../src/flow/lib/worker-artifact-handoff.js", import.meta.url).href)};
+      import { ImplPhasePublicationObserver } from ${JSON.stringify(new URL("../../support/infrastructure/impl-phase-publication-observer.js", import.meta.url).href)};
+      import { mock } from 'node:test';
+      new ImplPhasePublicationObserver({ mock, after() {} }, { sourceCapture: {
+        filePath: process.env.SCENARIO_CAPTURE, nonce: process.env.SCENARIO_CAPTURE_NONCE } });
       const root = process.env.SCENARIO_ROOT;
       const manager = new FlowManager({ root, mainRoot: root, inWorktree: false,
         versionStoreFaultInjector: ({ phase, filePath }) => { if (phase === process.env.SCENARIO_PHASE && filePath === process.env.SCENARIO_CATALOG) process.kill(process.pid, 'SIGKILL'); } });
       new WorkerArtifactHandoffCoordinator().recoverPending({ ctx: { root, executionRoot: root, mainRoot: root, specId: process.env.SCENARIO_SPEC, flowManager: manager } });
     `;
     const stopped = spawnSync(process.execPath, ["--input-type=module", "--eval", child], { encoding: "utf8", env: { ...process.env,
-      SCENARIO_ROOT: scenario.root, SCENARIO_SPEC: scenario.specId, SCENARIO_PHASE: interruption, SCENARIO_CATALOG: catalogFile } });
+      SCENARIO_ROOT: scenario.root, SCENARIO_SPEC: scenario.specId, SCENARIO_PHASE: interruption, SCENARIO_CATALOG: catalogFile,
+      SCENARIO_CAPTURE: captureFile, SCENARIO_CAPTURE_NONCE: captureNonce } });
     assert.equal(stopped.signal, "SIGKILL", stopped.stderr);
+    const captureDigest = scenario.publicationObserver.importSourceCapture({ filePath: captureFile,
+      nonce: captureNonce, processId: stopped.pid, executionRoot: scenario.root });
+    assert.match(captureDigest, /^[a-f0-9]{64}$/);
     scenario.reload();
     const authority = scenario.manager.readSourceHandoffAuthority({ specId: scenario.specId, identity: work.request.sourceHandoffIdentity });
     assert.equal(authority.settlement?.kind ?? null, interruption === "before-json-rename" ? null : "accepted");

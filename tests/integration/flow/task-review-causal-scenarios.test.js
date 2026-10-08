@@ -4,8 +4,12 @@ import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { test } from "node:test";
 
-import { confirmCanonicalFixtureStep } from "../../support/infrastructure/flow-setup.js";
 import { TaskReviewScenario } from "../../support/builders/task-review-scenario.js";
+import { installGateProviderFake } from "../../support/infrastructure/flow-dispatch-scenario.js";
+import { RunGateCommand } from "../../../src/flow/lib/run-gate.js";
+import { taskReviewReadiness } from "../../../src/flow/lib/gate-transition-facts.js";
+import { GateReviewFindingReadiness } from "../../../src/flow/lib/gate-transition.js";
+import { TaskMutationLineage, TaskExecutionBudget } from "../../../src/flow/lib/task-mutation-lineage.js";
 import { readRetryBaseline, RetryRecoveryReceipt, retryEvidenceRouteForNode } from "../../../src/flow/lib/retry-recovery.js";
 import { ReviewTransitionFacts } from "../../../src/flow/lib/review-transition-facts.js";
 import { TaskReviewExecutionIdentity } from "../../../src/flow/lib/task-review-execution-identity.js";
@@ -108,13 +112,34 @@ async function publishPassingTaskReview(scenario) {
   return result;
 }
 
+async function completeTaskGate(scenario) {
+  const provider = installGateProviderFake((_prompt, options) => {
+    const required = options.jsonSchema?.required ?? [];
+    if (required.includes("evaluations")) {
+      const ids = options.jsonSchema.properties.evaluations.items.properties.guardrail_id.enum ?? [];
+      return JSON.stringify({ evaluations: ids.map((guardrail_id) => ({
+        guardrail_id, result: "pass", reason: "The source satisfies the mapped scenario requirement.",
+      })) });
+    }
+    return JSON.stringify({ observations: [], ...(required.includes("evaluationUnavailable") ? { evaluationUnavailable: null } : {}) });
+  });
+  try {
+    const ctx = { ...scenario.context(), phase: "task-impl" };
+    const result = await new RunGateCommand().execute(ctx);
+    assert.equal(result.result, "pass", JSON.stringify(result));
+    await FLOW_COMMANDS.run.gate.post(ctx, result);
+  } finally {
+    provider.mock.restore();
+  }
+}
+
 // A published PASS now prepares Gate atomically. Complete that active Gate
 // before exercising rewind from a terminal Task, preserving the recovery scenario.
 async function completePassingTask(scenario) {
   await publishPassingTaskReview(scenario);
   scenario.reload();
   assert.equal(scenario.state().attempt.nodeId, "T-1-gate");
-  confirmCanonicalFixtureStep(scenario.manager, scenario.specId, "T-1-gate");
+  await completeTaskGate(scenario);
   scenario.reload();
   assert.equal(scenario.state().current, null);
 }
@@ -340,7 +365,53 @@ test("a later semantic Review in the same cycle supersedes unavailable Acceptanc
   fs.mkdirSync(path.dirname(interruptedManifestPath), { recursive: true });
   fs.writeFileSync(interruptedManifestPath, interruptedManifest);
   scenario.reload();
-  confirmCanonicalFixtureStep(scenario.manager, scenario.specId, "T-1-gate");
+  const untouched = scenario.snapshot();
+  const readiness = new GateReviewFindingReadiness(taskReviewReadiness({
+    flowManager: scenario.manager, state: scenario.state(), taskId: scenario.taskId,
+  }));
+  assert.equal(readiness.status, "unavailable");
+  assert.equal(readiness.allowsPass, false, "unavailable evidence cannot claim a successful semantic Review");
+  assert.equal(readiness.allowsGatePass, true, "the authenticated unavailable branch still permits the actual Gate");
+  assert.equal(readiness.unavailable.semanticReviewCount, 0);
+  assert.equal(scenario.snapshot(), untouched);
+  const actualLedger = scenario.manager.activityLedger(scenario.specId);
+  const sourceRow = actualLedger.findLast((entry) => entry.result?.stepResult?.kind === "task-review-unavailable");
+  const alteredReader = (overrides) => new Proxy(scenario.manager, {
+    get(target, name) {
+      if (overrides[name]) return overrides[name];
+      const value = Reflect.get(target, name, target);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+  for (const alter of [
+    (rows) => rows.filter((entry) => entry.id !== sourceRow.id),
+    (rows) => rows.map((entry) => {
+      if (entry.id === sourceRow.id) entry.result.draftSettlementReceipt.resultDigest = "0".repeat(64);
+      return entry;
+    }),
+    (rows) => rows.map((entry) => {
+      if (entry.id === sourceRow.id) entry.sequence += 1;
+      return entry;
+    }),
+  ]) {
+    const reader = alteredReader({ activityLedger: () => alter(structuredClone(actualLedger)) });
+    assert.throws(() => taskReviewReadiness({ flowManager: reader, state: scenario.state(), taskId: scenario.taskId }));
+    assert.equal(scenario.snapshot(), untouched, "altered unavailable provenance must produce zero effects");
+  }
+  const oldRound = alteredReader({ taskMutationLineages: (input) => scenario.manager.taskMutationLineages(input)
+    .map((lineage) => new TaskMutationLineage({ ...lineage.toJSON(),
+      budget: new TaskExecutionBudget({ ...lineage.budget.toJSON(), round: 2 }) })) });
+  assert.throws(() => taskReviewReadiness({ flowManager: oldRound, state: scenario.state(), taskId: scenario.taskId }));
+  assert.equal(scenario.snapshot(), untouched);
+  const sourceBytes = fs.readFileSync(scenario.sourcePath);
+  try {
+    fs.appendFileSync(scenario.sourcePath, "unreviewed source alteration\n");
+    assert.throws(() => taskReviewReadiness({ flowManager: scenario.manager, state: scenario.state(), taskId: scenario.taskId }));
+    assert.equal(scenario.snapshot(), untouched);
+  } finally {
+    fs.writeFileSync(scenario.sourcePath, sourceBytes);
+  }
+  await completeTaskGate(scenario);
   scenario.reload();
   assert.equal(reconcileCompletedReviewWorkUnits({
     flowManager: scenario.manager, specId: scenario.specId, executionRoot: scenario.root,
@@ -544,4 +615,56 @@ test("completed Task Gate rewinds without fabricating PASS retry evidence", asyn
   assert.equal(scenario.manager.activityLedger(scenario.specId).at(-1).transition.operation, "rewind");
   assert.equal(scenario.state().attempt.nodeId, "T-1-gate");
   assert.equal(baseline(scenario), null, "a passed Gate has no semantic failure source to turn into retry evidence");
+});
+
+test("second-round unavailable Review retains first-round must-fix obligations and blocks a nominal Gate PASS", async (t) => {
+  const scenario = new TaskReviewScenario(t, { noChange: true });
+  useScenarioContainer(t, scenario);
+  const finding = {
+    findingKey: "retained-requirement", title: "Required behavior remains unresolved",
+    failureMode: "spec_behavior_contradiction", file: "README.md", requirementId: "R-1",
+    issue: "The mapped behavior requires a source correction.", suggestion: "Implement the required behavior.",
+    disposition: "must-fix", rationale: "The mapped requirement is mandatory.",
+  };
+  assert.notEqual((await scenario.publishReview([finding])).ok, false);
+  const initial = new TaskReviewConvergenceEvidence({ flowManager: scenario.manager, state: scenario.state(),
+    cycle: ReviewFindingCycle.fromActivityLedger({ runId: scenario.state().runId,
+      activities: scenario.manager.activityLedger(scenario.specId) }) });
+  const fingerprint = initial.record(scenario.taskId).review.document.blockingFindings[0].fingerprint;
+  assert.equal((await scenario.filter([])).ok, true);
+  scenario.reload();
+  assert.equal(scenario.state().attempt.nodeId, "T-1-impl");
+  scenario.confirmImplementation("second round source correction\n").reload();
+  assert.equal(scenario.manager.taskMutationLineages({ specId: scenario.specId, taskId: scenario.taskId }).at(-1).budget.round, 2);
+  const unavailable = await scenario.review(() => ({
+    ok: true, status: 0, stdout: "", stderr: "", signal: null, killed: false,
+  })).execute(scenario.context());
+  assert.equal(unavailable.ok, false);
+  scenario.reload();
+  assert.equal(scenario.state().attempt.nodeId, "T-1-gate");
+  const facts = new GateReviewFindingReadiness(taskReviewReadiness({
+    flowManager: scenario.manager, state: scenario.state(), taskId: scenario.taskId,
+  }));
+  assert.equal(facts.status, "blocking");
+  assert.equal(facts.allowsPass, false);
+  assert.equal(facts.allowsGatePass, false);
+  assert.equal(facts.unavailable.taskRound, 2);
+  assert.equal(facts.unavailable.semanticReviewCount, 0);
+  assert.deepEqual(facts.findingFingerprints, [fingerprint]);
+  await completeTaskGate(scenario);
+  scenario.reload();
+  assert.equal(scenario.state().attempt.nodeId, "T-1-gate");
+  assert.ok(scenario.state().attempt.failure);
+  const saved = scenario.manager.readCurrentStepSettlement({ specId: scenario.specId, stepId: "task-gate" });
+  assert.equal(saved.result.type, "error");
+  assert.equal(saved.receipt.settlementKind, "failure");
+  const convergence = new TaskReviewConvergenceEvidence({ flowManager: scenario.manager, state: scenario.state(),
+    cycle: ReviewFindingCycle.fromActivityLedger({ runId: scenario.state().runId,
+      activities: scenario.manager.activityLedger(scenario.specId) }) });
+  assert.ok(convergence.record(scenario.taskId));
+  const risk = convergence.handoffs().find((entry) => entry.unavailable === true).toJSON();
+  assert.equal(risk.semanticReviewCount, 0);
+  assert.equal(risk.binding.taskId, scenario.taskId);
+  assert.equal(risk.unavailable, true);
+  assert.equal(convergence.record(scenario.taskId).history.attempts.length, 1);
 });

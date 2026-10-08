@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { FlowActivity } from "./current-flow-state.js";
+import { ReviewEvidence } from "./review-observation-values.js";
 import {
   CanonicalFindingFingerprint,
   CanonicalFindingIdentity,
@@ -645,7 +646,7 @@ class ExplicitFindingDecision {
 }
 
 export class ReviewFindingGateArtifact {
-  constructor(input = {}, { source = "impl-review.json" } = {}) {
+  constructor(input = {}, { source = "impl-review.json" } = {}, canonicalTaskEvidence = null) {
     const artifact = requireRecord(input, source);
     if (artifact.version !== 1) throw new Error(`${source}.version must be 1`);
     if (artifact.phase !== "impl") throw new Error(`${source}.phase must be impl`);
@@ -662,7 +663,21 @@ export class ReviewFindingGateArtifact {
     if (!Array.isArray(artifact.blockingFindings) || !Array.isArray(artifact.nonBlockingImprovements)) {
       throw new Error(`${source} finding buckets must be arrays`);
     }
-    const typedFinding = (finding) => {
+    if (canonicalTaskEvidence !== null && (!(canonicalTaskEvidence instanceof ReviewEvidence)
+      || this.taskId === null || canonicalTaskEvidence.phase !== "impl" || canonicalTaskEvidence.taskId !== this.taskId
+      || canonicalTaskEvidence.treeSha !== artifact.canonicalTarget?.treeSha
+      || canonicalTaskEvidence.targetStateDigest !== artifact.canonicalTarget?.targetStateDigest
+      || canonicalTaskEvidence.disposition.value !== artifact.verdict)) {
+      throw new Error(`${source} canonical Task Review evidence does not own its scope or target`);
+    }
+    const typedFinding = (finding, expectedBucket = null) => {
+      if (canonicalTaskEvidence !== null) {
+        const expected = expectedBucket.find((entry) => entry.findingId === finding?.findingId);
+        if (expected === undefined || expected.fingerprint !== finding.fingerprint || expected.disposition !== finding.disposition) {
+          throw new Error(`${source} finding does not match its exact parent canonical identity and disposition`);
+        }
+        return new GateFinding({ ...finding, reportedAt: this.generatedAt });
+      }
       const identity = {
         ...finding,
         scope: this.taskId === null ? "flow" : "task",
@@ -679,11 +694,15 @@ export class ReviewFindingGateArtifact {
       }
       return new GateFinding({ ...finding, reportedAt: this.generatedAt });
     };
+    if (canonicalTaskEvidence !== null && (artifact.blockingFindings.length !== canonicalTaskEvidence.disposition.blockingFindings.length
+      || artifact.nonBlockingImprovements.length !== canonicalTaskEvidence.disposition.advisoryFindings.length)) {
+      throw new Error(`${source} finding buckets differ from their parent canonical evidence`);
+    }
     this.blockingFindings = Object.freeze(artifact.blockingFindings.map((finding) => (
-      typedFinding(finding)
+      typedFinding(finding, canonicalTaskEvidence?.disposition.blockingFindings ?? null)
     )));
     this.nonBlockingImprovements = Object.freeze(artifact.nonBlockingImprovements.map((finding) => (
-      typedFinding(finding)
+      typedFinding(finding, canonicalTaskEvidence?.disposition.advisoryFindings ?? null)
     )));
     const expectedVerdict = this.blockingFindings.length > 0
       ? "REJECTED"
@@ -745,6 +764,15 @@ export class FindingGateDecision {
       blocks: this.blocks.map((block) => block.toJSON()),
       evidence: this.evidence.map((entry) => entry.toJSON()),
     };
+  }
+}
+
+/** Parent-published Task Review identities remain those of the sealed producer. */
+export class CanonicalTaskReviewFindingGateArtifact extends ReviewFindingGateArtifact {
+  constructor(input, { source = "catalog:task.review" } = {}) {
+    const artifact = requireRecord(input, source);
+    const evidence = ReviewEvidence.fromJSON(artifact.canonicalEvidence);
+    super(artifact, { source }, evidence);
   }
 }
 

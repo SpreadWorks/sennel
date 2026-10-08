@@ -1,7 +1,6 @@
 import { Envelope } from "../../lib/flow-envelope.js";
-import { resolveGateTransition } from "../definition.js";
 import { FlowCommand } from "./base-command.js";
-import { readCurrentGateTransitionFacts } from "./gate-transition-facts.js";
+import { resolveGateNextAction } from "./gate-transition-application.js";
 import { TaskStepIdentity } from "./task-step-identity.js";
 
 /** Persist only the already Definition-selected exhausted Gate settlement. */
@@ -16,15 +15,16 @@ export default class RunSettleGateTransitionCommand extends FlowCommand {
       const phase = stepId === "impl-gate" ? "integration"
         : taskStep?.definitionId === "task-gate" ? "task-impl" : null;
       if (phase === null) throw new Error("Definition does not select a settleable Gate");
-      const facts = readCurrentGateTransitionFacts({
-        flowManager: ctx.flowManager, flowState: ctx.flowManager.loadReadOnly(state.specId), phase,
+      const selection = resolveGateNextAction({
+        flowManager: ctx.flowManager, flowState: ctx.flowManager.loadReadOnly(state.specId), phase, root: ctx.root,
       });
-      if (facts === null) throw new Error("current canonical Gate observation is unavailable");
-      const decision = resolveGateTransition(facts);
+      const decision = selection?.decision;
+      if (decision == null) throw new Error("current canonical Gate observation is unavailable");
       if (decision.disposition.operation !== "defer") {
         throw new Error(`Definition does not select Gate defer: ${decision.disposition.operation}`);
       }
-      ctx.flowManager.settleGateTransition({ specId: state.specId, decision });
+      ctx.flowManager.settleGateTransition({ specId: state.specId, decision, stepResult: selection.result,
+        settlement: selection.settlement, settlementReceipt: selection.receipt });
       return Envelope.ok("run", "settle-gate-transition", { phase, settled: true });
     } catch (error) {
       return Envelope.fail("run", "settle-gate-transition", error.code || "GATE_SETTLEMENT_NOT_ADMITTED", error.message);

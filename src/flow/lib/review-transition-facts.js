@@ -1,3 +1,4 @@
+import { TaskStepIdentity } from "./task-step-identity.js";
 /**
  * Read-only, current-Attempt facts used by definition-owned Review routing.
  * Facts describe evidence; definition.js alone chooses a transition.
@@ -209,7 +210,7 @@ export class ReviewRepairEvidence {
 
 function taskReviewNodeId(state) {
   if (typeof state?.currentTaskId !== "string" || state.currentTaskId.trim() === "") return null;
-  return `${state.currentTaskId}-review`;
+  return new TaskStepIdentity({ taskId: state.currentTaskId, role: "review" }).nodeId;
 }
 
 function taskReviewBudget(state, flowManager) {

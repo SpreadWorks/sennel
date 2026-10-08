@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
@@ -10,7 +11,9 @@ import { FLOW_COMMANDS } from "../../../src/flow/registry.js";
 import { TaskReviewExecutionIdentity } from "../../../src/flow/lib/task-review-execution-identity.js";
 import { ReviewWorkUnit, reconcileCompletedReviewWorkUnits } from "../../../src/flow/lib/review-work-unit.js";
 import { DefinitionLifecycleAttemptBinding } from "../../../src/flow/lib/definition-lifecycle-failure.js";
-import { TASK_REVIEW_ABORTED_WORK_UNIT_KEY } from "../../../src/flow/lib/task-review-aborted-work-unit.js";
+import { DraftStepSettlementReceipt } from "../../../src/flow/definition.js";
+import { attachedCanonicalReviewWorkUnit } from "../../../src/flow/lib/canonical-review-artifacts.js";
+import { readTaskReviewAbortedWorkUnit, TASK_REVIEW_ABORTED_WORK_UNIT_KEY } from "../../../src/flow/lib/task-review-aborted-work-unit.js";
 import {
   formatImplReviewJson,
   parseImplReviewFindings,
@@ -130,6 +133,27 @@ test("an unpublished sealed Task Review is archived with its tooling failure and
     consumerNodeId: "T-1-review",
   });
   assert.ok(archive, "the failed Attempt publishes immutable worker evidence in its failure transaction");
+  const before = scenario.snapshot();
+  const worker = attachedCanonicalReviewWorkUnit(result);
+  const sealedBefore = worker.readSealedOutput();
+  const sourceBefore = fs.readFileSync(scenario.sourcePath);
+  const activities = scenario.manager.activityLedger(scenario.specId).map((activity) => structuredClone(activity));
+  const claim = activities.find((activity) => activity.attemptId === state.attempt.id
+    && activity.result?.draftSettlementReceipt?.executionLifecycle?.phase === "claimed");
+  assert.ok(claim, "the real provider has its original authenticated nonterminal claim");
+  const receipt = claim.result.draftSettlementReceipt;
+  receipt.executionLifecycle.binding.manifestDigest = receipt.executionLifecycle.binding.manifestDigest === "f".repeat(64)
+    ? "0".repeat(64) : "f".repeat(64);
+  receipt.id = createHash("sha256").update(JSON.stringify(DraftStepSettlementReceipt.identity(receipt))).digest("hex");
+  assert.throws(() => readTaskReviewAbortedWorkUnit({ flowManager: scenario.manager,
+    state: scenario.state(), worker,
+    catalog: scenario.manager.artifactCatalog(scenario.specId), activities }), /published producer/,
+  "a correctly encoded claim receipt for a different work unit must not authorize archive cleanup");
+  assert.equal(scenario.snapshot(), before, "rejected claim proof must leave canonical state intact");
+  assert.deepEqual(worker.readSealedOutput().bytes, sealedBefore.bytes);
+  assert.deepEqual(worker.readSealedOutput().seal.toJSON(), sealedBefore.seal.toJSON());
+  assert.deepEqual(fs.readFileSync(scenario.sourcePath), sourceBefore);
+
   scenario.reload();
   scenario.manager.retryCurrentAttempt({ specId: scenario.specId });
   assert.equal(reconcileCompletedReviewWorkUnits({

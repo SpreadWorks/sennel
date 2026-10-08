@@ -25,20 +25,22 @@ import {
   NonblockingFailureClassification,
 } from "./nonblocking-evidence.js";
 import { nonblockingRouteFor } from "./nonblocking-route.js";
-import { CanonicalCommandAttemptArtifactHistory } from "./canonical-command-result.js";
 import { ActivityNonBlockingRecord } from "./current-flow-state.js";
 import {
   DefinitionNonblockingEligibility,
   resolveActiveNonblockingEligibility,
   specGateNonblockingEligibilityForResult,
+  implementationNonblockingEligibilityForResult,
 } from "../definition.js";
 import { readCurrentGateTransitionFacts } from "./gate-transition-facts.js";
+import { resolveGateNextAction } from "./gate-transition-application.js";
 import { readCurrentTestChainTransitionFacts } from "./test-chain-transition-facts.js";
 import {
   captureFinalRegressionChangedSnapshotDigest,
   readFinalRegressionTransitionFacts,
 } from "./final-regression-transition-facts.js";
 import { ReviewTransitionFacts } from "./review-transition-facts.js";
+import { TaskStepIdentity } from "./task-step-identity.js";
 import { CanonicalTestArtifactStore } from "./canonical-test-artifacts.js";
 
 const MAX_TEXT = 2_000;
@@ -77,11 +79,8 @@ function activeNodeId(state) { return state?.currentNodeId ?? null; }
 function activeStep(state) {
   const nodeId = activeNodeId(state);
   if (typeof nodeId !== "string") return null;
-  if (state?.currentTaskId !== null && state?.currentTaskId !== undefined) {
-    if (nodeId === `${state.currentTaskId}-review`) return "task-review";
-    if (nodeId === `${state.currentTaskId}-gate`) return "task-gate";
-  }
-  return nodeId;
+  const identity = TaskStepIdentity.fromStateNode(state, nodeId);
+  return identity?.definitionId ?? nodeId;
 }
 
 function activeNodeForStep(state, step) {
@@ -119,13 +118,12 @@ function evidenceFor(ctx, state, step, resultKind = null) {
       ? { taskId: state.currentTaskId }
       : {},
   });
-  const current = CanonicalCommandAttemptArtifactHistory.fromBytes({ logicalKey, bytes: resolved.bytes }).current;
-  const source = `${JSON.stringify(current.payload, null, 2)}\n`;
+  const source = `${JSON.stringify(resolved.observation.payload, null, 2)}\n`;
   const classification = resultKind === null ? null : new NonblockingFailureClassification({ resultKind });
   const found = routeEvidence(step, { ref: resolved.relativePath, source }, classification);
   return found === null ? null : Object.freeze({
     ...found,
-    sourceAttempt: current.attempt,
+    sourceAttempt: resolved.observation.sourceAttempt,
     evidenceDigest: sha256(source),
   });
 }
@@ -189,9 +187,17 @@ export function definitionNonblockingEligibilityForActiveFlow(root, state, flowM
   assertCanonical(state, flowManager);
   const step = activeStep(state);
   if (step === null || nonblockingRouteFor(step) === null) return null;
-  if (step === "spec-gate") {
+  if (step === "task-gate" || step === "impl-gate") {
+    const selected = resolveGateNextAction({ flowManager, flowState: state,
+      phase: nonblockingRouteFor(step).phase, root });
+    return selected === null ? null : implementationNonblockingEligibilityForResult(selected.result);
+  }
+  if (step === "impl-review" || step === "task-review" || step === "test-result-review" || step === "spec-gate") {
     const saved = flowManager.readCurrentStepSettlement({ specId: state.specId, stepId: step });
-    if (saved !== null) return specGateNonblockingEligibilityForResult(saved.result);
+    if (saved === null) return null;
+    return step === "spec-gate"
+      ? specGateNonblockingEligibilityForResult(saved.result)
+      : implementationNonblockingEligibilityForResult(saved.result);
   }
   let evidence;
   try {
@@ -530,8 +536,6 @@ export function activateNonBlockingPolicy({ root, flowManager, reason } = {}) {
   assertCanonical(state, flowManager);
   if (state.policy.nonblocking !== null) return state.policy.nonblocking;
   const step = assertStep(activeStep(state));
-  const observedEvidence = evidenceFor({ root, flowManager }, state, step);
-  if (observedEvidence === null) throw new Error(`nonblocking requires eligible non-pass evidence for ${step}`);
   const eligibility = definitionNonblockingEligibilityForActiveFlow(root, state, flowManager);
   if (eligibility === null) {
     const error = new Error("nonblocking activation is not selected by the current Definition strict stop");

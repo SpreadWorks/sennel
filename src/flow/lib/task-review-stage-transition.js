@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { TaskStepIdentity } from "./task-step-identity.js";
 
 const SHA256 = /^[a-f0-9]{64}$/;
 const STAGES = new Set(["review", "triage", "repair"]);
@@ -57,7 +58,7 @@ export class TaskReviewStageBinding {
     Object.freeze(this);
   }
 
-  get sourceStepId() { return `${this.taskId}-${this.stage}`; }
+  get sourceStepId() { return new TaskStepIdentity({ taskId: this.taskId, role: this.stage }).nodeId; }
 
   matches(other) {
     return other instanceof TaskReviewStageBinding
@@ -479,7 +480,7 @@ export function resolveTaskReviewFailure(facts) {
 
 function effects(taskId, entries) {
   return entries.map(([role, status, reason = null]) => new TaskReviewStageStepEffect({
-    stepId: `${taskId}-${role}`, status, reason,
+    stepId: new TaskStepIdentity({ taskId, role }).nodeId, status, reason,
   }));
 }
 
@@ -503,4 +504,121 @@ export function taskReviewStagePlanFromJSON(value) {
   });
   if (value.identity !== plan.identity) throw new Error("Task Review stage plan identity is invalid");
   return plan;
+}
+
+/** One semantic operation/result-kind relation, shared by Step and Result invariants. */
+class TaskReviewStageMeaningDefinition {
+  constructor(stage, operation, resultKind) {
+    if (!STAGES.has(stage) || !OPERATIONS.has(operation) || typeof resultKind !== "string" || resultKind === "") {
+      throw new TypeError("Task stage meaning requires a declared stage, operation and Result kind");
+    }
+    this.stage = stage;
+    this.operation = operation;
+    this.resultKind = resultKind;
+    Object.freeze(this);
+  }
+}
+
+const taskReviewStageMeaningDefinitions = Object.freeze([
+  new TaskReviewStageMeaningDefinition("review", "review-to-triage", "task-review-findings"),
+  new TaskReviewStageMeaningDefinition("review", "review-to-gate", "task-review-gate-required"),
+  new TaskReviewStageMeaningDefinition("review", "review-no-change-complete", "task-review-no-change-completed"),
+  new TaskReviewStageMeaningDefinition("review", "review-unavailable-to-gate", "task-review-unavailable"),
+  new TaskReviewStageMeaningDefinition("triage", "triage-to-repair", "task-triage-repair-required"),
+  new TaskReviewStageMeaningDefinition("triage", "triage-all-reject-to-gate", "task-triage-gate-required"),
+  new TaskReviewStageMeaningDefinition("triage", "triage-no-change-complete", "task-triage-no-change-completed"),
+  new TaskReviewStageMeaningDefinition("triage", "triage-no-change-correction", "task-triage-correction-required"),
+  new TaskReviewStageMeaningDefinition("triage", "triage-no-change-to-gate", "task-triage-unreviewed-gate"),
+  new TaskReviewStageMeaningDefinition("repair", "repair-to-review", "task-repair-review-required"),
+  new TaskReviewStageMeaningDefinition("repair", "repair-unreviewed-to-gate", "task-repair-unreviewed-gate"),
+]);
+
+/** A Task stage's semantic meaning; it contains no target, effects or transition. */
+export class TaskReviewStageMeaning {
+  constructor(facts) {
+    if (!(facts instanceof TaskReviewStageFacts)) throw new TypeError("Task stage meaning requires canonical facts");
+    const operation = taskReviewStageOperation(facts);
+    const definition = taskReviewStageMeaningDefinitions.find((entry) => entry.operation === operation);
+    if (definition.stage !== facts.binding.stage) throw new TypeError("Task stage meaning belongs to another responsibility");
+    this.stage = definition.stage;
+    this.operation = definition.operation;
+    this.resultKind = definition.resultKind;
+    Object.freeze(this);
+  }
+
+  assertResultKind(kind) {
+    if (kind !== this.resultKind) throw new TypeError("Task stage Result kind contradicts its canonical semantic evidence");
+    return this;
+  }
+}
+
+export function taskReviewStageOperationForResultKind(kind) {
+  const definition = taskReviewStageMeaningDefinitions.find((entry) => entry.resultKind === kind);
+  if (definition === undefined) throw new TypeError("Task stage Result kind has no declared semantic relation");
+  return definition.operation;
+}
+
+export function selectTaskReviewStageMeaning(facts) { return new TaskReviewStageMeaning(facts).operation; }
+
+/** Interpret the stage observation once; the caller selects its concrete Result. */
+function taskReviewStageOperation(facts) {
+  if (!(facts instanceof TaskReviewStageFacts)) throw new TypeError("Task stage meaning requires canonical facts");
+  if (facts.binding.stage === "review") {
+    if (facts.verdict === "UNAVAILABLE") return "review-unavailable-to-gate";
+    if (facts.findingCount > 0) return "review-to-triage";
+    if (facts.sourceNoChange) {
+      if (!facts.noChangeContinuation?.eligible) throw new Error("Task no-change completion requires canonical continuation evidence");
+      return "review-no-change-complete";
+    }
+    return "review-to-gate";
+  }
+  if (facts.binding.stage === "triage") {
+    if (facts.triageDisposition === "all-reject") {
+      if (facts.sourceNoChange) {
+        if (!facts.noChangeContinuation?.eligible) throw new Error("Task no-change completion requires canonical continuation evidence");
+        return "triage-no-change-complete";
+      }
+      return "triage-all-reject-to-gate";
+    }
+    if (facts.sourceNoChange) return facts.taskRound === 2 ? "triage-no-change-to-gate" : "triage-no-change-correction";
+    return "triage-to-repair";
+  }
+  if (facts.repairChanged === false && facts.reviewResultCount === 4 && !facts.acceptanceCarryForwardReady) {
+    throw new Error("fourth Task repair no-change requires the unreviewed Acceptance handoff");
+  }
+  if (facts.reviewResultCount < 4) return "repair-to-review";
+  if (!facts.acceptanceCarryForwardReady) throw new Error("fourth Task repair requires the unreviewed Acceptance handoff");
+  return "repair-unreviewed-to-gate";
+}
+
+/** Materialize effects for the Result-selected operation without rejudging observations. */
+export function buildTaskReviewStagePlanForResult(facts, operation) {
+  if (!(facts instanceof TaskReviewStageFacts)) throw new TypeError("Task stage plan requires canonical facts");
+  const taskId = facts.binding.taskId;
+  const reviewBudgetConsumed = facts.binding.stage === "review" && facts.verdict !== "UNAVAILABLE" ? 1 : 0;
+  const plan = (entries, targetRole = null, options = {}) => createTaskReviewStageTransitionPlan(facts, {
+    operation, effects: taskReviewStageEffects(taskId, entries),
+    targetStepId: targetRole === null ? null : new TaskStepIdentity({ taskId, role: targetRole }).nodeId,
+    reviewBudgetConsumed, ...options,
+  });
+  switch (operation) {
+    case "review-unavailable-to-gate": return plan([["review", "done"], ["triage", "skipped", facts.reason], ["repair", "skipped", facts.reason]], "gate", { acceptanceUnreviewed: true });
+    case "review-to-triage": return plan([["review", "done"]], "triage");
+    case "review-no-change-complete": {
+      const reason = facts.noChangeContinuation.reason;
+      return plan([["review", "done"], ["triage", "skipped", reason], ["repair", "skipped", reason], ["gate", "skipped", reason]]);
+    }
+    case "review-to-gate": return plan([["review", "done"], ["triage", "skipped", "Task Review has no findings."], ["repair", "skipped", "Task Review has no findings."]], "gate");
+    case "triage-no-change-complete": {
+      const reason = facts.noChangeContinuation.reason;
+      return plan([["triage", "done"], ["repair", "skipped", reason], ["gate", "skipped", reason]]);
+    }
+    case "triage-all-reject-to-gate": return plan([["triage", "done"], ["repair", "skipped", facts.reason]], "gate");
+    case "triage-no-change-to-gate": return plan([["triage", "done"], ["repair", "skipped", "The final implementation round made no source change; selected findings are carried to Task Gate."]], "gate", { acceptanceUnreviewed: true });
+    case "triage-no-change-correction": return plan([["impl", "invalidated"], ["review", "invalidated"], ["triage", "invalidated"], ["repair", "invalidated"], ["gate", "invalidated"]], "impl");
+    case "triage-to-repair": return plan([["triage", "done"]], "repair");
+    case "repair-to-review": return plan([["review", "invalidated"], ["triage", "invalidated"], ["repair", "invalidated"], ["gate", "invalidated"]], "review");
+    case "repair-unreviewed-to-gate": return plan([["repair", "done"]], "gate", { acceptanceUnreviewed: true });
+    default: throw new TypeError("Task stage Result selected an unsupported operation");
+  }
 }

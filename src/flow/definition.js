@@ -1,3 +1,10 @@
+import { UnexecutedStepCompletion, UnexecutedStepCompletionSet, UnexecutedStepCompletionAuthority, RetainedRouteSourceAuthority } from "./lib/unexecuted-step-completion.js";
+import { testChainObservationMeaning } from "./lib/test-chain-values.js";
+import { hasImplementationStepContract } from "./engine/step-result.js";
+import * as ImplementationResults from "./engine/step-result.js";
+import { ImplementationGateResultEvidence } from "./lib/gate-observation-values.js";
+import { buildTaskReviewStagePlanForResult, selectTaskReviewStageMeaning, taskReviewStageOperationForResultKind } from "./lib/task-review-stage-transition.js";
+import { ImplPhaseConnector, ImplSourceRepairConnector, TaskStageConnector } from "./engine/connectors/impl/impl-target-connectors.js";
 /**
  * src/flow/definition.js
  *
@@ -12,6 +19,8 @@
  */
 
 import { createHash } from "node:crypto";
+import { TestChainProcessFacts, TestExecuteStepFacts, TestResultReviewStepFacts } from "./lib/test-chain-observation-values.js";
+export { TestChainProcessFacts, TestExecuteStepFacts, TestResultReviewStepFacts } from "./lib/test-chain-observation-values.js";
 import { SPEC_GATE_MAXIMUM_CYCLE } from "./lib/spec-gate-policy.js";
 import { DraftWorkerRejection } from "./lib/draft-worker-rejection.js";
 export { resolveDraftWorkerCorrection } from "./lib/draft-worker-rejection.js";
@@ -993,87 +1002,7 @@ export function resolveSourceHandoffTransitionPlan({ facts, policy }) {
 
 /** Resolve the Task-local review funnel from canonical, binding-checked facts. */
 export function resolveTaskReviewStageTransition(facts) {
-  if (!(facts instanceof TaskReviewStageFacts)) {
-    throw new Error("resolveTaskReviewStageTransition requires TaskReviewStageFacts");
-  }
-  const taskId = facts.binding.taskId;
-  const reviewBudgetConsumed = facts.binding.stage === "review" && facts.verdict !== "UNAVAILABLE" ? 1 : 0;
-  const plan = (operation, entries, targetRole = null, options = {}) => createTaskReviewStageTransitionPlan(facts, {
-    operation,
-    effects: taskReviewStageEffects(taskId, entries),
-    targetStepId: targetRole === null ? null : `${taskId}-${targetRole}`,
-    reviewBudgetConsumed,
-    ...options,
-  });
-  if (facts.binding.stage === "review") {
-    if (facts.verdict === "UNAVAILABLE") {
-      return plan("review-unavailable-to-gate", [
-        ["review", "done"],
-        ["triage", "skipped", facts.reason],
-        ["repair", "skipped", facts.reason],
-      ], "gate", { acceptanceUnreviewed: true });
-    }
-    if (facts.findingCount > 0) {
-      return plan("review-to-triage", [["review", "done"]], "triage");
-    }
-    if (facts.sourceNoChange) {
-      if (!facts.noChangeContinuation?.eligible) {
-        throw new Error("Task no-change completion requires canonical continuation evidence");
-      }
-      const reason = facts.noChangeContinuation.reason;
-      return plan("review-no-change-complete", [
-        ["review", "done"], ["triage", "skipped", reason], ["repair", "skipped", reason], ["gate", "skipped", reason],
-      ]);
-    }
-    return plan("review-to-gate", [
-      ["review", "done"],
-      ["triage", "skipped", "Task Review has no findings."],
-      ["repair", "skipped", "Task Review has no findings."],
-    ], "gate");
-  }
-  if (facts.binding.stage === "triage") {
-    if (facts.triageDisposition === "all-reject") {
-      if (facts.sourceNoChange) {
-        if (!facts.noChangeContinuation?.eligible) {
-          throw new Error("Task no-change completion requires canonical continuation evidence");
-        }
-        const reason = facts.noChangeContinuation.reason;
-        return plan("triage-no-change-complete", [
-          ["triage", "done"], ["repair", "skipped", reason], ["gate", "skipped", reason],
-        ]);
-      }
-      return plan("triage-all-reject-to-gate", [
-        ["triage", "done"], ["repair", "skipped", facts.reason],
-      ], "gate");
-    }
-    if (facts.sourceNoChange) {
-      if (facts.taskRound === 2) {
-        return plan("triage-no-change-to-gate", [
-          ["triage", "done"],
-          ["repair", "skipped", "The final implementation round made no source change; selected findings are carried to Task Gate."],
-        ], "gate", { acceptanceUnreviewed: true });
-      }
-      return plan("triage-no-change-correction", [
-        ["impl", "invalidated"], ["review", "invalidated"], ["triage", "invalidated"],
-        ["repair", "invalidated"], ["gate", "invalidated"],
-      ], "impl");
-    }
-    return plan("triage-to-repair", [["triage", "done"]], "repair");
-  }
-  if (facts.repairChanged === false && facts.reviewResultCount === 4 && !facts.acceptanceCarryForwardReady) {
-    throw new Error("fourth Task repair no-change requires the unreviewed Acceptance handoff");
-  }
-  if (facts.reviewResultCount < 4) {
-    return plan("repair-to-review", [
-      ["review", "invalidated"], ["triage", "invalidated"], ["repair", "invalidated"], ["gate", "invalidated"],
-    ], "review");
-  }
-  if (!facts.acceptanceCarryForwardReady) {
-    throw new Error("fourth Task repair requires the unreviewed Acceptance handoff");
-  }
-  return plan("repair-unreviewed-to-gate", [["repair", "done"]], "gate", {
-    acceptanceUnreviewed: true,
-  });
+  return buildTaskReviewStagePlanForResult(facts, selectTaskReviewStageMeaning(facts));
 }
 
 const MAX_DEPTH = 3;
@@ -1301,9 +1230,14 @@ export class GateTaskLifecycleEffect {
       throw new Error("gate Task lifecycle reset Step ids are invalid");
     }
     this.resetStepIds = Object.freeze([...resetStepIds]);
-    if (this.operation === "repair-task-impl" && JSON.stringify(this.resetStepIds) !== JSON.stringify([
-      `${this.taskId}-impl`, `${this.taskId}-review`, `${this.taskId}-triage`, `${this.taskId}-repair`, `${this.taskId}-gate`,
-    ])) throw new Error("gate Task repair lifecycle must reset only its materialized Task Steps");
+    if (this.operation === "repair-task-impl") {
+      const expectedStepIds = collectTaskLeafIds().map((definitionId) => (
+        TaskStepIdentity.fromDefinitionId({ taskId: this.taskId, definitionId }).nodeId
+      ));
+      if (JSON.stringify(this.resetStepIds) !== JSON.stringify(expectedStepIds)) {
+        throw new Error("gate Task repair lifecycle must reset only its materialized Task Steps");
+      }
+    }
     if (this.operation !== "repair-task-impl" && this.resetStepIds.length !== 0) {
       throw new Error("non-repair Task lifecycle must not reset Task Steps");
     }
@@ -3007,13 +2941,19 @@ export function resolveNonGateTransition(facts, stepDefinition) {
   if (!(stepDefinition instanceof NonGateStepDefinition)) {
     throw new Error("resolveNonGateTransition requires a typed Step Definition");
   }
+  return resolveSelectedNonGateTransition(facts, () => stepDefinition.selectionFor(facts));
+}
+
+/** Apply the common retry/completion policy to one already classified selection. */
+function resolveSelectedNonGateTransition(facts, select) {
   if (facts.integrityFailure !== null) {
     return nonGateDecision(facts, new NonGateBlockedDisposition(NON_GATE_TRANSITION_TOKEN, facts.integrityFailure), { noEffects: true });
   }
-  if (facts.completion.partial) {
-    return nonGateDecision(facts, new NonGateBlockedDisposition(NON_GATE_TRANSITION_TOKEN, "partial_completion"), { noEffects: true });
+  const completionRefusal = facts.completion.refusalReason;
+  if (completionRefusal === "partial_completion") {
+    return nonGateDecision(facts, new NonGateBlockedDisposition(NON_GATE_TRANSITION_TOKEN, completionRefusal), { noEffects: true });
   }
-  const selection = stepDefinition.selectionFor(facts);
+  const selection = select();
   const selectedDecision = (disposition, options = {}) => {
     const strictDecision = nonGateDecision(facts, disposition, {
       ...options,
@@ -3021,8 +2961,9 @@ export function resolveNonGateTransition(facts, stepDefinition) {
       stepActions: options.stepActions ?? selection.actions,
       userActions: options.userActions ?? selection.userActions,
     });
+    if (!facts.nonblocking) return strictDecision;
     const eligibility = nonGateNonblockingEligibilityForDecision(strictDecision);
-    if (!facts.nonblocking || eligibility === null) return strictDecision;
+    if (eligibility === null) return strictDecision;
     return nonGateDecision(facts, new NonGateAwaitUserInputDisposition(
       NON_GATE_TRANSITION_TOKEN,
       eligibility.blocker,
@@ -3031,7 +2972,7 @@ export function resolveNonGateTransition(facts, stepDefinition) {
     });
   };
   if (selection.operation === "advance") {
-    if (!facts.completion.completed) return selectedDecision(new NonGateBlockedDisposition(NON_GATE_TRANSITION_TOKEN, "completion_unconfirmed"));
+    if (completionRefusal !== null) return selectedDecision(new NonGateBlockedDisposition(NON_GATE_TRANSITION_TOKEN, completionRefusal));
     return selectedDecision(new NonGateAdvanceDisposition(NON_GATE_TRANSITION_TOKEN), { status: "done" });
   }
   if (selection.operation === "keep-in-progress") return selectedDecision(new NonGateKeepInProgressDisposition(NON_GATE_TRANSITION_TOKEN));
@@ -3405,79 +3346,6 @@ export function resolveDefinitionRoute(facts) {
  * is deliberately kept beside the common reducer so a registry hook cannot
  * reinterpret a result after it has been cataloged.
  */
-export class TestChainProcessFacts {
-  constructor({ started, exitCode, signal, timedOut, spawnError } = {}) {
-    if (typeof started !== "boolean") throw new Error("test-chain process.started must be boolean");
-    if (exitCode !== null && (!Number.isSafeInteger(exitCode) || exitCode < 0)) {
-      throw new Error("test-chain process.exitCode must be a non-negative integer or null");
-    }
-    if (signal !== null && (typeof signal !== "string" || signal === "")) throw new Error("test-chain process.signal must be a non-empty string or null");
-    if (typeof timedOut !== "boolean") throw new Error("test-chain process.timedOut must be boolean");
-    if (spawnError !== null && (typeof spawnError !== "string" || spawnError === "")) throw new Error("test-chain process.spawnError must be a non-empty string or null");
-    this.started = started;
-    this.exitCode = exitCode;
-    this.signal = signal;
-    this.timedOut = timedOut;
-    this.spawnError = spawnError;
-    Object.freeze(this);
-  }
-
-  static from(value) {
-    if (value instanceof TestChainProcessFacts) return value;
-    return new TestChainProcessFacts(value ?? { started: true, exitCode: 0, signal: null, timedOut: false, spawnError: null });
-  }
-
-  // A cataloged process record is an external observation. Incomplete
-  // combinations cannot prove a semantic test outcome, so keep the Flow
-  // externally blocked rather than allowing a producer to advance.
-  get toolingFailure() {
-    return !this.started
-      || this.spawnError !== null
-      || this.signal !== null
-      || this.timedOut
-      || this.exitCode === null;
-  }
-  toJSON() { return { started: this.started, exitCode: this.exitCode, signal: this.signal, timedOut: this.timedOut, spawnError: this.spawnError }; }
-}
-
-export class TestExecuteStepFacts extends NonGateStepFacts {
-  constructor({ summary = [], regression = {}, rawAvailable = false, testSourceRevision = "unavailable", repairFingerprint = "unavailable", rawEvidenceFingerprint = "unavailable", catalogDigest = "unavailable", process = null } = {}) {
-    if (!Array.isArray(summary) || regression === null || typeof regression !== "object" || Array.isArray(regression)) throw new Error("test-execute observations are invalid");
-    if (typeof rawAvailable !== "boolean" || typeof testSourceRevision !== "string" || testSourceRevision === "" || typeof repairFingerprint !== "string" || repairFingerprint === "" || typeof rawEvidenceFingerprint !== "string" || rawEvidenceFingerprint === "" || typeof catalogDigest !== "string" || catalogDigest === "") {
-      throw new Error("test-execute immutable evidence is required");
-    }
-    const processFacts = TestChainProcessFacts.from(process);
-    const regressionProcess = regression.process == null ? null : TestChainProcessFacts.from(regression.process);
-    super({ kind: "test-execute", values: { summary, regression, rawAvailable, testSourceRevision, repairFingerprint, rawEvidenceFingerprint, catalogDigest, process: processFacts.toJSON(), regressionProcess: regressionProcess?.toJSON() ?? null, toolingFailure: processFacts.toolingFailure || regressionProcess?.toolingFailure === true } });
-  }
-
-  get toolingFailure() { return this.value("toolingFailure"); }
-  get rawAvailable() { return this.value("rawAvailable"); }
-  get process() { return TestChainProcessFacts.from(this.value("process")); }
-  get regressionProcess() { return this.value("regressionProcess") === null ? null : TestChainProcessFacts.from(this.value("regressionProcess")); }
-}
-
-export class TestResultReviewStepFacts extends NonGateStepFacts {
-  constructor({ verdict, checkedItems = [], rawAvailable = false, testSourceRevision = "unavailable", sourceRepairFingerprint = "unavailable", sourceRawEvidenceFingerprint = "unavailable", repairFingerprint = "unavailable", rawEvidenceFingerprint = "unavailable", catalogDigest = "unavailable", toolingFailure = false } = {}) {
-    if (!["pass", "fail"].includes(verdict)) throw new Error("test-result-review verdict is invalid");
-    if (typeof toolingFailure !== "boolean") throw new Error("test-result-review toolingFailure must be boolean");
-    if (!Array.isArray(checkedItems) || typeof rawAvailable !== "boolean") throw new Error("test-result-review observations are invalid");
-    if (checkedItems.length === 0 || checkedItems.some((item) => item?.result !== "pass" && item?.result !== "fail")) {
-      throw new Error("test-result-review requires pass/fail checked observations");
-    }
-    if ((verdict === "fail") !== checkedItems.some((item) => item.result === "fail")) {
-      throw new Error("test-result-review verdict must match its checked observations");
-    }
-    for (const [value, field] of [[testSourceRevision, "test source revision"], [sourceRepairFingerprint, "source repair fingerprint"], [sourceRawEvidenceFingerprint, "source raw evidence fingerprint"], [repairFingerprint, "repair fingerprint"], [rawEvidenceFingerprint, "raw evidence fingerprint"], [catalogDigest, "catalog digest"]]) {
-      if (typeof value !== "string" || value === "") throw new Error(`test-result-review ${field} is required`);
-    }
-    super({ kind: "test-result-review", values: { verdict, checkedItems, rawAvailable, testSourceRevision, sourceRepairFingerprint, sourceRawEvidenceFingerprint, repairFingerprint, rawEvidenceFingerprint, catalogDigest, toolingFailure } });
-  }
-
-  get verdict() { return this.value("verdict"); }
-  get toolingFailure() { return this.value("toolingFailure"); }
-  get rawAvailable() { return this.value("rawAvailable"); }
-}
 
 function failureAction({ category, code, retryable, retryKind = null, message }) {
   return new NonGateFailCurrentAttemptAction(NON_GATE_TRANSITION_TOKEN, { category, code, retryable, retryKind, message });
@@ -3511,7 +3379,8 @@ export const testExecuteTransitionDefinition = new NonGateStepDefinition({
     // A completed execution always hands its immutable observation to the
     // result reviewer. Regression semantics are owned by that reviewer and
     // later gates, not by the executor.
-    return testChainSelection({ stepId: "test-execute", failed: false, toolingFailure: stepFacts.toolingFailure, nonblocking: false });
+    return testChainSelection({ stepId: "test-execute", failed: false,
+      toolingFailure: testChainObservationMeaning(stepFacts).value === "error", nonblocking: false });
   },
 });
 
@@ -3521,8 +3390,8 @@ export const testResultReviewTransitionDefinition = new NonGateStepDefinition({
   select(stepFacts, facts) {
     return testChainSelection({
       stepId: "test-result-review",
-      failed: stepFacts.verdict === "fail",
-      toolingFailure: stepFacts.toolingFailure,
+      failed: testChainObservationMeaning(stepFacts).value === "rejected",
+      toolingFailure: testChainObservationMeaning(stepFacts).value === "error",
       nonblocking: false,
     });
   },
@@ -4235,11 +4104,11 @@ export function resolveLifecycle(input = {}) {
     currentStepId: definitionStepId,
   });
   if (taskStep === null) return actions;
-  return actions.map((action) => (
-    action instanceof SetStepStatus && new Set(["task-impl", "task-review", "task-triage", "task-repair", "task-gate"]).has(action.step)
-      ? action.forStep(`${taskStep.taskId}-${action.step.slice("task-".length)}`)
-      : action
-  ));
+  return actions.map((action) => {
+    if (!(action instanceof SetStepStatus)) return action;
+    const identity = TaskStepIdentity.fromDefinitionId({ taskId: taskStep.taskId, definitionId: action.step });
+    return identity === null ? action : action.forStep(identity.nodeId);
+  });
 }
 
 export function resolveLifecyclePlan(input = {}) {
@@ -4391,7 +4260,7 @@ const DRAFT_COVERAGE_ROUTE = draftReviewRouteForKey("coverage");
  * the state machine.  State never infers a skip or reset range from topology.
  */
 export class StepRouteEffects {
-  constructor({ skipStepIds = [], resetStepIds = [] } = {}) {
+  constructor({ skipStepIds = [], resetStepIds = [], unexecutedStepCompletions = [] } = {}) {
     for (const [field, stepIds] of Object.entries({ skipStepIds, resetStepIds })) {
       if (!Array.isArray(stepIds) || stepIds.some((stepId) => typeof stepId !== "string" || stepId === "")) {
         throw new TypeError(`Step route ${field} must contain Step IDs`);
@@ -4403,11 +4272,14 @@ export class StepRouteEffects {
     }
     this.skipStepIds = Object.freeze([...skipStepIds]);
     this.resetStepIds = Object.freeze([...resetStepIds]);
+    this.unexecutedStepCompletions = new UnexecutedStepCompletionSet(unexecutedStepCompletions)
+      .assertDisjoint([...skipStepIds, ...resetStepIds]).entries;
     Object.freeze(this);
   }
 
   toJSON() {
-    return { skipStepIds: [...this.skipStepIds], resetStepIds: [...this.resetStepIds] };
+    return { skipStepIds: [...this.skipStepIds], resetStepIds: [...this.resetStepIds],
+      ...(this.unexecutedStepCompletions.length === 0 ? {} : { unexecutedStepCompletions: this.unexecutedStepCompletions.map((entry) => entry.toJSON()) }) };
   }
 }
 
@@ -4436,7 +4308,7 @@ export class StepSettlement {
 
 /** A Definition-selected target connection; only this settlement owns a Connector. */
 export class StepRoute extends StepSettlement {
-  constructor(token, { result, targetStepId, connector, effects, requirementTestDecision = null, initializationEffect = null }) {
+  constructor(token, { result, targetStepId, connector, effects, requirementTestDecision = null, initializationEffect = null, application = null }) {
     super(token, result, "target-connection");
     this.targetStepId = requireString(targetStepId, "step route target");
     if (typeof connector !== "function") throw new TypeError("step route requires a Connector");
@@ -4455,6 +4327,8 @@ export class StepRoute extends StepSettlement {
     if (initializationEffect !== null && (result.stepId !== "approval" || initializationEffect.target !== targetStepId)) {
       throw new TypeError("Requirement test initialization effect does not match its Approval route");
     }
+    if (application !== null && !(application instanceof ImplementationStepApplication)) throw new TypeError("Implementation route requires its selected typed application");
+    if (application !== null) this.application = application;
     this.requirementTestDecision = requirementTestDecision;
     this.initializationEffect = initializationEffect;
     Object.freeze(this);
@@ -4468,9 +4342,56 @@ export class StepRoute extends StepSettlement {
       effects: this.effects.toJSON(),
       ...(this.requirementTestDecision === null ? {} : { requirementTestDecision: this.requirementTestDecision.toJSON() }),
       ...(this.initializationEffect === null ? {} : { initializationEffect: this.initializationEffect.toJSON() }),
+      ...(this.application ? { application: this.application.toJSON() } : {}),
     };
   }
 
+}
+
+/** Definition-selected application carried by a Step settlement, never its Result. */
+export class ImplementationStepApplication {
+  constructor(token) {
+    if (new.target === ImplementationStepApplication || token !== STEP_SETTLEMENT_TOKEN) throw new TypeError("Implementation applications are selected by Definition");
+  }
+}
+export class SourceStepApplication extends ImplementationStepApplication {
+  constructor(token, { qualityRecovery = null } = {}) {
+    super(token);
+    if (qualityRecovery !== null && !(qualityRecovery instanceof SourceQualityIssueRecoveryPlan)) throw new TypeError("Source application requires its selected recovery checkpoint");
+    this.qualityRecovery = qualityRecovery;
+    Object.freeze(this);
+  }
+  toJSON() { return { qualityRecovery: this.qualityRecovery?.toJSON() ?? null }; }
+}
+export class TaskStageApplication extends ImplementationStepApplication {
+  constructor(token, { transition, qualityRecovery = null }) {
+    super(token);
+    if (!(transition instanceof TaskReviewStageTransitionPlan) || qualityRecovery !== null && !(qualityRecovery instanceof SourceQualityIssueRecoveryPlan)) throw new TypeError("Task application requires a selected stage transition");
+    this.transition = transition;
+    this.qualityRecovery = qualityRecovery;
+    Object.freeze(this);
+  }
+  toJSON() { return { transition: this.transition.toJSON(), qualityRecovery: this.qualityRecovery?.toJSON() ?? null }; }
+}
+export class GateResultApplication extends ImplementationStepApplication {
+  constructor(token, decision, eligibility = null) { super(token); if (!(decision instanceof GateTransitionDecision) || eligibility !== null && !(eligibility instanceof DefinitionNonblockingEligibility)) throw new TypeError("Gate application requires its selected decision and eligibility"); this.decision = decision; this.eligibility = eligibility; Object.freeze(this); }
+  toJSON() { return { decision: this.decision.toJSON(), ...(this.eligibility === null ? {} : { eligibility: this.eligibility.toJSON() }) }; }
+}
+export class TestChainApplication extends ImplementationStepApplication {
+  constructor(token, decision, eligibility = null) { super(token); if (!(decision instanceof NonGateTransitionDecision) || eligibility !== null && !(eligibility instanceof DefinitionNonblockingEligibility)) throw new TypeError("Test-chain application requires its selected decision and eligibility"); this.decision = decision; this.eligibility = eligibility; Object.freeze(this); }
+  toJSON() { return { decision: this.decision.toJSON(), ...(this.eligibility === null ? {} : { eligibility: this.eligibility.toJSON() }) }; }
+}
+export class ImplReviewApplication extends ImplementationStepApplication {
+  constructor(token, lifecycle) { super(token); if (!(lifecycle instanceof DefinitionLifecyclePlan)) throw new TypeError("Review application requires its selected lifecycle"); this.lifecycle = lifecycle; Object.freeze(this); }
+  toJSON() { return { lifecycle: this.lifecycle.toJSON() }; }
+}
+export class ImplementationExecutionSettlement extends StepSettlement {
+  constructor(token, result, application = null) { super(token, result, "execution"); if (application !== null && !(application instanceof ImplementationStepApplication)) throw new TypeError("Implementation execution requires a selected application"); this.application = application; Object.freeze(this); }
+  toJSON() { return { kind: this.kind, sourceStepId: this.sourceStepId, ...(this.application === null ? {} : { application: this.application.toJSON() }) }; }
+}
+export class ImplementationAwaitDecision extends StepSettlement {
+  constructor(token, result, application = null) { super(token, result, "await"); if (application !== null && !(application instanceof ImplementationStepApplication)) throw new TypeError("Implementation await requires a selected application"); this.application = application; Object.freeze(this); }
+  toJSON() { return { kind: this.kind, sourceStepId: this.sourceStepId, ...(this.application === null ? {} : { application: this.application.toJSON() }) }; }
 }
 
 export class DraftNextRoute extends StepRoute {}
@@ -4888,7 +4809,7 @@ export class DraftStepExecutionLifecycle {
 export class DraftStepExecutionState {
   #executionIdentity;
 
-  constructor({ binding, receipt = null } = {}) {
+  constructor({ binding, receipt = null, result = null } = {}) {
     if (binding?.runId === undefined || binding?.specId === undefined
       || typeof binding?.stepId !== "string" || typeof binding?.attempt?.id !== "string"
       || !Number.isSafeInteger(binding?.attempt?.sequence)) {
@@ -4933,7 +4854,7 @@ export class DraftStepExecutionState {
     this.receiptId = selectedReceiptId;
     this.lifecycle = selectedLifecycle;
     this.#executionIdentity = receipt?.settlementKind === "execution"
-      ? draftStepExecutionIdentity(binding, receipt)
+      ? draftStepExecutionIdentity(binding, receipt, result)
       : null;
     Object.freeze(this);
   }
@@ -5005,7 +4926,9 @@ export class DraftStepSettlementReceipt extends DraftStepSettlementReceiptValue 
     }
     const reviewExecution = result instanceof DraftQuestionsReviewExecutionRequiredResult
       || result instanceof DraftCoverageReviewExecutionRequiredResult
-      || result instanceof SpecReviewExecutionRequiredResult;
+      || result instanceof SpecReviewExecutionRequiredResult
+      || result instanceof ImplementationResults.TaskReviewExecutionRequiredResult
+      || result instanceof ImplementationResults.ImplReviewExecutionRequiredResult;
     const workerExecution = result instanceof DraftRefineWorkerRequiredResult
       || result instanceof DraftGateRepairWorkerRequiredResult;
     if (executionLifecycle !== null
@@ -5017,14 +4940,15 @@ export class DraftStepSettlementReceipt extends DraftStepSettlementReceiptValue 
       && executionLifecycle?.claim?.request === null) {
       throw new TypeError("Spec Review execution claim requires its durable provider request identity");
     }
-    const executionSettlement = settlement instanceof DraftExecutionSettlement;
+    const executionSettlement = settlement.kind === "execution";
     const awaitSettlement = settlement instanceof DraftAwaitUserDecision;
     if (awaitSettlement !== (awaitQuestion instanceof DraftAwaitQuestionIdentity)) {
       throw new TypeError("Draft Await settlement receipt requires its exact question identity");
     }
     const executionPhase = executionLifecycle?.phase ?? null;
-    const specGateExecution = binding.stepId === "spec-gate" && executionSettlement;
-    const publicationAwait = awaitSettlement || settlement instanceof SpecGateAwaitDecision;
+    const specGateExecution = (binding.stepId === "spec-gate" || hasImplementationStepContract(binding.stepId)) && executionSettlement;
+    const publicationAwait = awaitSettlement || settlement instanceof SpecGateAwaitDecision
+      || settlement instanceof ImplementationAwaitDecision;
     if ((["checkpoint", "claimed"].includes(executionPhase) && !executionSettlement)
       || (executionSettlement && !specGateExecution && !["checkpoint", "claimed", "publication"].includes(executionPhase))
       || (executionPhase === "publication" && !(executionSettlement || publicationAwait))
@@ -5147,7 +5071,7 @@ const DRAFT_STEP_EXECUTION_IDENTITY_TOKEN = Symbol("draft-step-execution-identit
 
 /** Step-selected execution identity rehydrated from one exact persisted receipt. */
 export class DraftStepExecutionIdentity {
-  constructor(token, { binding, receipt } = {}) {
+  constructor(token, { binding, receipt, result = null } = {}) {
     if (token !== DRAFT_STEP_EXECUTION_IDENTITY_TOKEN
       || !(receipt instanceof DraftStepSettlementReceiptValue)
       || receipt.binding?.runId !== binding?.runId
@@ -5165,16 +5089,21 @@ export class DraftStepExecutionIdentity {
     if (!["checkpoint", "claimed", "publication"].includes(lifecycle.phase)) {
       throw new TypeError("Draft execution identity requires an executable lifecycle phase");
     }
-    const stepResult = StepResult.fromStored(binding.stepId, {
+    const stepResult = result ?? StepResult.fromStored(binding.stepId, {
       kind: receipt.resultKind,
       type: receipt.resultType,
     });
-    if (stepResultDigest(stepResult) !== receipt.resultDigest) {
+    if (stepResult.stepId !== binding.stepId || stepResult.kind !== receipt.resultKind
+      || stepResult.type !== receipt.resultType || stepResultDigest(stepResult) !== receipt.resultDigest) {
       throw new TypeError("Draft execution identity Result digest is invalid");
     }
-    const settlement = ["spec-review", "spec-gate-repair"].includes(binding.stepId)
-      ? settleSpecStepResult(binding.stepId, stepResult)
-      : settleDraftStepResult(binding.stepId, stepResult);
+    const settlement = hasImplementationStepContract(binding.stepId)
+      ? collectTaskLeafIds().includes(binding.stepId)
+        ? settleTaskStepResult(binding.stepId, stepResult)
+        : settleImplStepResult(binding.stepId, stepResult)
+      : ["spec-review", "spec-gate-repair"].includes(binding.stepId)
+        ? settleSpecStepResult(binding.stepId, stepResult)
+        : settleDraftStepResult(binding.stepId, stepResult);
     if (!(settlement instanceof DraftExecutionSettlement)
       || settlement.kind !== receipt.settlementKind
       || settlement.resultKind !== receipt.resultKind
@@ -5199,8 +5128,8 @@ export class DraftStepExecutionIdentity {
   }
 }
 
-function draftStepExecutionIdentity(binding, receipt) {
-  return new DraftStepExecutionIdentity(DRAFT_STEP_EXECUTION_IDENTITY_TOKEN, { binding, receipt });
+function draftStepExecutionIdentity(binding, receipt, result = null) {
+  return new DraftStepExecutionIdentity(DRAFT_STEP_EXECUTION_IDENTITY_TOKEN, { binding, receipt, result });
 }
 
 function draftRefineReceiptMatchesBinding(receipt, binding) {
@@ -6218,9 +6147,9 @@ const ADVISORY_SKIPPABLE_LEAF_IDS = new Set([
   "branch",
   "draft-questions-triage", "draft-questions-repair",
   "draft-coverage-triage", "draft-coverage-repair",
-  "impl-triage", "impl-repair",
   "acceptance-decision",
 ]);
+const IMPL_REVIEW_UNEXECUTED_COMPLETION_LEAF_IDS = new Set(["impl-triage", "impl-repair"]);
 
 function definitionLeafIds(scope) {
   return scope === "task" ? collectTaskLeafIds() : collectFlowLeafIds();
@@ -6291,6 +6220,15 @@ export function buildCurrentFlowDefinition() {
     // Existing maxAttempts counts the initial Attempt.  The next-generation
     // contract keeps only retry budgets, so it subtracts that initial work.
     semanticRetryLimit: node.resolveMaxAttempts({ autoApprove: false }) - 1,
+    unexecutedCompletionAuthorities: scope === "flow" && IMPL_REVIEW_UNEXECUTED_COMPLETION_LEAF_IDS.has(node.id)
+      ? [new UnexecutedStepCompletionAuthority({ sourceStepId: "impl-review",
+        resultKinds: ["impl-review-passed", "impl-review-advisory", "impl-review-tooling"] })] : [],
+    routeSkipAuthorities: scope === "flow" && node.id === "impl-repair"
+      ? [new UnexecutedStepCompletionAuthority({ sourceStepId: "impl-triage",
+        resultKinds: ["impl-triage-gate-required"] })] : [],
+    retainedRouteSourceAuthorities: scope === "flow" && node.id === "impl-repair"
+      ? [new RetainedRouteSourceAuthority({ sourceStepId: "impl-repair", targetStepId: "test-execute",
+        resultKinds: ["impl-repair-applied", "impl-repair-quality-issue"] })] : [],
     // null remains an explicit zero-budget tooling policy in NodeContract.
     toolingRetryLimit: node.resolveToolingMaxAttempts({ autoApprove: false }),
     transitions: transitionsFor({
@@ -6413,7 +6351,9 @@ export class SourceQualityIssueRecoveryPlan {
     if (sourceStep === "task-repair") {
       if (!(taskReviewStagePlan instanceof TaskReviewStageTransitionPlan)
         || taskReviewStagePlan.facts.binding.stage !== "repair"
-        || taskReviewStagePlan.facts.binding.sourceStepId !== `${taskReviewStagePlan.facts.binding.taskId}-repair`
+        || !TaskStepIdentity.fromDefinitionId({
+          taskId: taskReviewStagePlan.facts.binding.taskId, definitionId: sourceStep,
+        }).matchesNode(taskReviewStagePlan.facts.binding.sourceStepId)
         || taskReviewStagePlan.targetStepId !== recoveryStep
         || !new Set(["repair-to-review", "repair-unreviewed-to-gate"]).has(taskReviewStagePlan.operation)) {
         throw new Error("Task repair quality recovery must use its selected Task Review funnel plan");
@@ -6460,7 +6400,9 @@ export function resolveSourceQualityIssueRecoveryPlan({ sourceStep, taskId = nul
   const route = sourceQualityIssueRecoveryForStep(sourceStep);
   if (route === null) return null;
   const recoveryStep = route.scope === "task"
-    ? `${requireString(taskId, "source quality issue Task")}-${route.recoveryStep.slice("task-".length)}`
+    ? TaskStepIdentity.fromDefinitionId({
+      taskId: requireString(taskId, "source quality issue Task"), definitionId: route.recoveryStep,
+    }).nodeId
     : route.recoveryStep;
   return new SourceQualityIssueRecoveryPlan(SOURCE_QUALITY_ISSUE_RECOVERY_PLAN_TOKEN, {
     sourceStep,
@@ -6532,7 +6474,8 @@ export function resolveSideEffects({ scope = "flow", stepId }) {
 
 export function isDefinitionLifecycleOwnedStep({ scope = "flow", stepId }) {
   const node = scope === "task" ? getTaskNode(stepId) : getFlowNode(stepId);
-  return node?.definitionLifecycleOwned === true;
+  return node?.definitionLifecycleOwned === true
+    || scope === "flow" && IMPL_REVIEW_UNEXECUTED_COMPLETION_LEAF_IDS.has(node?.id);
 }
 
 /**
@@ -6812,7 +6755,7 @@ export class TaskReviewReconciliationDecision {
       || state.failureDisposition()?.operation !== "record") {
       throw new Error("Definition does not authorize orphaned Task Review reconciliation");
     }
-    const taskId = nodeId.slice(0, -"-review".length);
+    const taskId = TaskStepIdentity.fromStateNode(state, nodeId).taskId;
     const introduction = activities.find(a => a.nodeId === nodeId && a.transition.attempt?.id === attempt.id);
     const failure = activities.find(a => a.nodeId === nodeId && a.attemptId === attempt.id && a.transition.operation === "fail_attempt");
     if (!introduction || !["recover_attempt", "rewind"].includes(introduction.transition.operation) || !failure
@@ -6836,3 +6779,271 @@ export { resolveSpecGateRepairExecution, SpecGateRepairExecutionFacts,
   SpecGateRepairNewWorker, SpecGateRepairCheckpointResume, SpecGateRepairSealedReplay,
   SpecGateRepairPublicationReplay, SpecGateRepairExecutionStop, SpecGateRepairExecutionFormatUnavailable,
 } from "./lib/spec-gate-repair-execution-decision.js";
+
+function requireImplementationStepResult(stepId, result, scope) {
+  const leaves = scope === "task" ? collectTaskLeafIds() : flowLeafIdsBetween("implement", "impl-gate");
+  if (!(result instanceof StepResult) || result.stepId !== stepId || !leaves.includes(stepId)) {
+    throw new TypeError("Implementation settlement requires its registered concrete Result");
+  }
+}
+
+function implementationTaskSuccessor(frontier, taskId = null) {
+  const entries = frontier.entries;
+  const position = taskId === null ? -1 : entries.findIndex((entry) => entry.taskId.toString() === taskId);
+  if (taskId !== null && position < 0) throw new TypeError("Task Result frontier does not contain its owning Task");
+  const next = entries.slice(position + 1).find((entry) => !["done", "skipped", "deferred"].includes(entry.status));
+  return next === undefined ? null : next.taskId.toString();
+}
+
+function implementationConnection(result, targetStepId, { connector = ImplPhaseConnector,
+  effects = null, application = null } = {}) {
+  const selectedEffects = effects ?? (collectFlowLeafIds().includes(result.stepId)
+    && collectFlowLeafIds().includes(targetStepId)
+    ? draftRouteEffects(result.stepId, targetStepId) : new StepRouteEffects());
+  return new StepRoute(STEP_SETTLEMENT_TOKEN, { result, targetStepId, connector,
+    effects: selectedEffects, application });
+}
+
+function selectedSourceApplication(result, taskStagePlan = null) {
+  const evidence = result.evidence;
+  const qualityRecovery = evidence.qualityIssueCount === 0 ? null
+    : resolveSourceQualityIssueRecoveryPlan({ sourceStep: result.stepId,
+      taskId: evidence.taskId, taskReviewStagePlan: taskStagePlan });
+  return taskStagePlan === null
+    ? new SourceStepApplication(STEP_SETTLEMENT_TOKEN, { qualityRecovery })
+    : new TaskStageApplication(STEP_SETTLEMENT_TOKEN, { transition: taskStagePlan, qualityRecovery });
+}
+
+function selectedTaskStageSettlement(result) {
+  const operation = taskReviewStageOperationForResultKind(result.kind);
+  const source = result.evidence;
+  const facts = result.stepId === "task-repair" ? source.taskStageFacts : source.facts;
+  const transition = buildTaskReviewStagePlanForResult(facts, operation);
+  const taskId = facts.binding.taskId;
+  const nextTaskId = transition.targetStepId === null
+    ? implementationTaskSuccessor(result.stepId === "task-repair" ? source.taskFrontier : source.frontier, taskId)
+    : null;
+  const targetStepId = transition.targetStepId ?? (nextTaskId === null ? "test-execute"
+    : new TaskStepIdentity({ taskId: nextTaskId, role: "impl" }).nodeId);
+  const application = result.stepId === "task-repair" ? selectedSourceApplication(result, transition)
+    : new TaskStageApplication(STEP_SETTLEMENT_TOKEN, { transition });
+  return implementationConnection(result, targetStepId, {
+    connector: transition.targetStepId === null ? ImplPhaseConnector : TaskStageConnector,
+    effects: new StepRouteEffects({
+      skipStepIds: transition.effects.filter((effect) => effect.status === "skipped").map((effect) => effect.stepId),
+      resetStepIds: transition.effects.filter((effect) => effect.status === "invalidated").map((effect) => effect.stepId),
+    }), application,
+  });
+}
+
+function implementationGateEvidence(result) {
+  return result instanceof StepErrorResult
+    ? result.error.data?.evidence == null ? null : ImplementationGateResultEvidence.fromJSON(result.error.data.evidence)
+    : result.evidence;
+}
+
+function implementationGateFacts(result) {
+  const evidence = implementationGateEvidence(result);
+  const taskId = evidence.identity.taskId;
+  const taskLifecycle = taskId === null ? null : new GateTaskLifecycle({ taskId,
+    nextTaskId: implementationTaskSuccessor(evidence.taskFrontier, taskId), integrationStepId: "test-execute" });
+  return new GateTransitionFacts({ phase: taskId === null ? "integration" : "task-impl",
+    scope: taskId === null ? "flow" : "task", snapshotRevision: evidence.snapshotRevision,
+    producer: evidence.producer, currentAttempt: evidence.identity.attempt,
+    target: evidence.identity, catalogPublication: evidence.publication,
+    result: evidence.result, failure: evidence.failure, retry: evidence.retry,
+    lineage: evidence.lineage, recoveryEvidence: evidence.recoveryEvidence,
+    postPublication: evidence.publicationStatus, nonblocking: evidence.nonblocking,
+    reviewReadiness: evidence.reviewReadiness, taskLifecycle, taskBudget: evidence.taskBudget,
+    observationConvergence: evidence.observationConvergence,
+    taskSettlementProgress: evidence.taskProgress });
+}
+
+function implementationGateDecision(result) {
+  const facts = implementationGateFacts(result);
+  let meaning;
+  if (result instanceof ImplementationResults.TaskGatePassedResult
+    || result instanceof ImplementationResults.ImplGatePassedResult) meaning = "pass";
+  else if (result instanceof ImplementationResults.ImplGateEvidenceRefreshResult
+    || result instanceof ImplementationResults.TaskGateRetryRequiredResult && result.evidence.result === "recovered") meaning = "refresh";
+  else if (result instanceof ImplementationResults.TaskGateRepairRequiredResult) meaning = "repair";
+  else if (result instanceof ImplementationResults.TaskGateRetryRequiredResult) meaning = "retry";
+  else if (result instanceof ImplementationResults.TaskGateDeferredResult) meaning = "defer";
+  else if (result instanceof ImplementationResults.TaskGateAwaitingDecisionResult
+    || result instanceof ImplementationResults.ImplGateAwaitingDecisionResult) meaning = "await";
+  else if (result instanceof ImplementationResults.ImplGateSemanticFailureResult) {
+    // This Result has already fixed semantic failure; only bounded retry/repair policy remains.
+    if (result.evidence.repairAvailable) meaning = "repair";
+    else if (result.evidence.observationConvergence?.sameEvidence) meaning = "error";
+    else meaning = result.evidence.retry.exhausted ? "defer" : "retry";
+  } else throw new TypeError("Gate settlement requires its accepted Gate meaning");
+  if (meaning === "pass") return gateDecision(facts, new GatePassDisposition(GATE_TRANSITION_TOKEN), {
+    advance: new GateAdvanceDisposition(GATE_TRANSITION_TOKEN), status: "done",
+    retryMetric: new GateRetryMetricEffect({ operation: "reset", phase: facts.phase }) });
+  if (meaning === "refresh") return gateDecision(facts, new GateRecoveryDisposition(GATE_TRANSITION_TOKEN), {
+    updates: [], recoveryEffect: facts.scope === "flow" ? new GateRecoveryEffect({
+      operation: "rewind-test-evidence", sourceStepId: facts.target.stepId, targetStepId: "test-execute" }) : null });
+  if (meaning === "repair") return gateDecision(facts, new GateRepairDisposition(GATE_TRANSITION_TOKEN));
+  if (meaning === "retry") return gateDecision(facts, new GateRetryDisposition(GATE_TRANSITION_TOKEN), {
+    retryMetric: new GateRetryMetricEffect({ operation: "increment", phase: facts.phase }) });
+  if (meaning === "defer") return gateDecision(facts, new GateDeferDisposition(GATE_TRANSITION_TOKEN));
+  if (meaning === "await") return gateDecision(facts, new GateNonblockingDisposition(GATE_TRANSITION_TOKEN), {
+    nonblockingHandoff: new GateNonblockingHandoff({ sourceStepId: result.stepId,
+      targetStepId: facts.taskLifecycle?.successorStepId ?? "retro", taskId: facts.target.taskId }) });
+  return gateDecision(facts, new GateBlockedDisposition(GATE_TRANSITION_TOKEN,
+    "same_gate_observation_without_changed_repair"));
+}
+
+function selectedImplementationGateSettlement(result) {
+  if (result instanceof ImplementationResults.TaskGateExecutionRequiredResult
+    || result instanceof ImplementationResults.ImplGateExecutionRequiredResult) {
+    return new ImplementationExecutionSettlement(STEP_SETTLEMENT_TOKEN, result);
+  }
+  const decision = implementationGateDecision(result);
+  const application = new GateResultApplication(STEP_SETTLEMENT_TOKEN, decision,
+    result.type === STEP_RESULT_TYPE.USER_INPUT_REQUIRED ? implementationNonblockingEligibilityForResult(result) : null);
+  if (decision.disposition.operation === "pass" || result.evidence.acceptedDecision !== null || (result instanceof ImplementationResults.TaskGateDeferredResult
+      || result instanceof ImplementationResults.ImplGateSemanticFailureResult) && result.evidence.continuation !== null) return implementationConnection(result,
+    decision.facts.taskLifecycle?.successorStepId ?? "retro", { application });
+  if (result instanceof ImplementationResults.ImplGateEvidenceRefreshResult) return implementationConnection(result,
+    "test-execute", { application, connector: ImplSourceRepairConnector });
+  return decision.disposition.operation === "nonblocking"
+    ? new ImplementationAwaitDecision(STEP_SETTLEMENT_TOKEN, result, application)
+    : new ImplementationExecutionSettlement(STEP_SETTLEMENT_TOKEN, result, application);
+}
+
+function selectedTestReviewRejectionApplication(result) {
+  const evidence = result.evidence;
+  const facts = new NonGateTransitionFacts({ runId: evidence.identity.runId, specId: evidence.identity.specId,
+    stepId: result.stepId, snapshotRevision: evidence.snapshotRevision, producer: evidence.producer,
+    target: evidence.identity, currentAttempt: evidence.identity.attempt, catalogPublication: evidence.publication,
+    sourcePublication: evidence.source, lineage: evidence.lineage, retry: evidence.retry,
+    completion: evidence.completion, stepFacts: evidence.observation, integrityFailure: evidence.integrityFailure });
+  return new TestChainApplication(STEP_SETTLEMENT_TOKEN, resolveSelectedNonGateTransition(facts,
+    () => testChainSelection({ stepId: result.stepId, failed: true, toolingFailure: false, nonblocking: false })),
+    implementationNonblockingEligibilityForResult(result));
+}
+
+/** Select Flow policy from its persisted concrete implementation Result only. */
+export function settleImplStepResult(stepId, result) {
+  requireImplementationStepResult(stepId, result, "flow");
+  if (result instanceof ImplementationResults.TestEvidenceRejectedResult && result.evidence.acceptedDecision !== null) {
+    return implementationConnection(result, "impl-review");
+  }
+  if (result instanceof StepErrorResult) return new StepErrorDecision(STEP_SETTLEMENT_TOKEN, result);
+  if (result instanceof ImplementationResults.ImplementWorkerRequiredResult
+    || result instanceof ImplementationResults.ImplTriageWorkerRequiredResult
+    || result instanceof ImplementationResults.ImplRepairWorkerRequiredResult
+    || result instanceof ImplementationResults.TestExecutionRequiredResult) {
+    return new ImplementationExecutionSettlement(STEP_SETTLEMENT_TOKEN, result);
+  }
+  if (result instanceof ImplementationResults.ImplementAppliedResult
+    || result instanceof ImplementationResults.ImplementExistingCompletionResult
+    || result instanceof ImplementationResults.ImplementQualityIssueResult) {
+    const taskId = implementationTaskSuccessor(result.evidence.taskFrontier);
+    return implementationConnection(result, taskId === null ? "test-execute"
+      : new TaskStepIdentity({ taskId, role: "impl" }).nodeId, { application: selectedSourceApplication(result) });
+  }
+  if (result instanceof ImplementationResults.ImplTriageRepairRequiredResult) return implementationConnection(result,
+    "impl-repair", { connector: ImplSourceRepairConnector, application: selectedSourceApplication(result) });
+  if (result instanceof ImplementationResults.ImplTriageGateRequiredResult) return implementationConnection(result,
+    "impl-gate", { connector: ImplSourceRepairConnector, application: selectedSourceApplication(result) });
+  if (result instanceof ImplementationResults.ImplRepairAppliedResult
+    || result instanceof ImplementationResults.ImplRepairQualityIssueResult) return implementationConnection(result,
+    "test-execute", { connector: ImplSourceRepairConnector, application: selectedSourceApplication(result),
+      effects: new StepRouteEffects({ resetStepIds: draftRouteEffects(result.stepId, "test-execute").resetStepIds.filter((id) => id !== result.stepId) }) });
+  if (result instanceof ImplementationResults.TestExecutionObservedResult) return implementationConnection(result, "test-result-review");
+  if (result instanceof ImplementationResults.TestEvidenceAcceptedResult) return implementationConnection(result, "impl-review");
+  if (result instanceof ImplementationResults.TestEvidenceRejectedResult) {
+    const application = selectedTestReviewRejectionApplication(result);
+    return application.decision.disposition.operation === "retry"
+      ? new ImplementationExecutionSettlement(STEP_SETTLEMENT_TOKEN, result, application)
+      : new ImplementationAwaitDecision(STEP_SETTLEMENT_TOKEN, result, application);
+  }
+  if (result instanceof ImplementationResults.ImplReviewExecutionRequiredResult) return new DraftExecutionSettlement(STEP_SETTLEMENT_TOKEN, result);
+  if (result instanceof ImplementationResults.ImplReviewToolingResult) {
+    if (result.evidence.acceptedDecision === null) return new ImplementationAwaitDecision(STEP_SETTLEMENT_TOKEN, result);
+    const frontier = result.evidence.frontier;
+    return implementationConnection(result, "impl-gate", { effects: new StepRouteEffects({
+      unexecutedStepCompletions: [
+        ...(["pending", "invalidated"].includes(frontier.triageStatus) ? [new UnexecutedStepCompletion({
+          stepId: "impl-triage", attemptSequence: frontier.triageAttemptSequence,
+          reason: "The explicit accepted tooling risk contains no semantic findings to triage." })] : []),
+        ...(["pending", "invalidated"].includes(frontier.repairStatus) ? [new UnexecutedStepCompletion({
+          stepId: "impl-repair", attemptSequence: frontier.repairAttemptSequence,
+          reason: "The explicit accepted tooling risk contains no selected finding repair." })] : []),
+      ],
+    }) });
+  }
+  if (result instanceof ImplementationResults.ImplReviewPassedResult
+    || result instanceof ImplementationResults.ImplReviewAdvisoryResult) return implementationConnection(result, "impl-gate", {
+      effects: new StepRouteEffects({ unexecutedStepCompletions: [
+        ...( ["pending", "invalidated"].includes(result.evidence.frontier.triageStatus)
+          ? [new UnexecutedStepCompletion({ stepId: "impl-triage",
+            attemptSequence: result.evidence.frontier.triageAttemptSequence,
+            reason: "The accepted implementation Review requires no finding triage." })] : []),
+        ...( ["pending", "invalidated"].includes(result.evidence.frontier.repairStatus)
+          ? [new UnexecutedStepCompletion({ stepId: "impl-repair",
+            attemptSequence: result.evidence.frontier.repairAttemptSequence,
+            reason: "The accepted implementation Review requires no finding repair." })] : []),
+      ] }) });
+  if (result instanceof ImplementationResults.ImplReviewRejectedResult) return implementationConnection(result, "impl-triage", {
+      effects: new StepRouteEffects({ resetStepIds: collectFlowLeafIds().slice(collectFlowLeafIds().indexOf("impl-triage")) }) });
+  if (stepId === "impl-gate") return selectedImplementationGateSettlement(result);
+  throw new TypeError("Unsupported implementation Result meaning");
+}
+
+/** Select Task policy from a fixed responsibility Result; materialize identity once. */
+export function settleTaskStepResult(stepId, result) {
+  requireImplementationStepResult(stepId, result, "task");
+  if (result instanceof StepErrorResult) return new StepErrorDecision(STEP_SETTLEMENT_TOKEN, result);
+  if (result instanceof ImplementationResults.TaskImplementationWorkerRequiredResult
+    || result instanceof ImplementationResults.TaskRepairWorkerRequiredResult) return new ImplementationExecutionSettlement(STEP_SETTLEMENT_TOKEN, result);
+  if (result instanceof ImplementationResults.TaskReviewExecutionRequiredResult) return new DraftExecutionSettlement(STEP_SETTLEMENT_TOKEN, result);
+  if (result instanceof ImplementationResults.TaskTriageFilterRequiredResult) return new ImplementationAwaitDecision(STEP_SETTLEMENT_TOKEN, result);
+  if (result instanceof ImplementationResults.TaskImplementationAppliedResult
+    || result instanceof ImplementationResults.TaskImplementationNoChangeResult
+    || result instanceof ImplementationResults.TaskImplementationQualityIssueResult) return implementationConnection(result,
+      new TaskStepIdentity({ taskId: result.evidence.taskId, role: "review" }).nodeId,
+      { application: selectedSourceApplication(result) });
+  if (["task-review", "task-triage", "task-repair"].includes(stepId)) return selectedTaskStageSettlement(result);
+  if (stepId === "task-gate") return selectedImplementationGateSettlement(result);
+  throw new TypeError("Unsupported Task Result meaning");
+}
+
+/** Eligibility is selected from the accepted Await Result; persistence does not interpret observations. */
+export function implementationNonblockingEligibilityForResult(result) {
+  if (result?.stepId === "test-result-review") {
+    if (!(result instanceof ImplementationResults.TestEvidenceRejectedResult)) return null;
+    const evidence = result.evidence;
+    if (evidence.acceptedDecision !== null || evidence.executionRequired
+      || evidence.integrityFailure !== null || evidence.completion.partial) return null;
+    if (!evidence.retry.exhausted) return null;
+    return new DefinitionNonblockingEligibility(NONBLOCKING_ELIGIBILITY_TOKEN, {
+      sourceStep: result.stepId, resultKind: "quality",
+      blocker: "The saved test evidence retry budget is exhausted.",
+      strictStopKind: "await-user-decision", selection: result.toJSON(),
+    });
+  }
+  if (result instanceof ImplementationResults.ImplReviewToolingResult) {
+    return new DefinitionNonblockingEligibility(NONBLOCKING_ELIGIBILITY_TOKEN, {
+      sourceStep: result.stepId, resultKind: "tooling", blocker: result.evidence.tooling.reason,
+      strictStopKind: "await-user-decision", selection: result.toJSON(),
+    });
+  }
+  if (!["task-gate", "impl-gate"].includes(result?.stepId)) return null;
+  const evidence = implementationGateEvidence(result);
+  if (!(evidence instanceof ImplementationGateResultEvidence) || evidence.executionRequired
+    || evidence.integrityFailure !== null) return null;
+  // The owning Step has already classified this stop; never evaluate its observation again here.
+  const meaning = evidence.meaning;
+  if (!["defer", "error"].includes(meaning.strictValue)
+    || meaning.strictValue === "error" && !["local", "tooling"].includes(evidence.failure?.category)) return null;
+  if (result instanceof StepErrorResult && result.error.code !== meaning.reason) return null;
+  const observed = implementationGateFacts(result);
+  const strict = new GateTransitionFacts({ ...observed.toJSON(), nonblocking: false });
+  const disposition = meaning.strictValue === "defer" ? new GateDeferDisposition(GATE_TRANSITION_TOKEN)
+    : evidence.failure.category === "tooling" ? new GateExternalBlockedDisposition(GATE_TRANSITION_TOKEN, meaning.reason)
+      : new GateBlockedDisposition(GATE_TRANSITION_TOKEN, meaning.reason);
+  return gateNonblockingEligibilityForDecision(gateDecision(strict, disposition));
+}

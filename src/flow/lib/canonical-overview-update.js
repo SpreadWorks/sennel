@@ -8,6 +8,7 @@
  */
 
 import { applyOverviewAdditions, validateAdditions } from "./overview-merge.js";
+import { TaskStepIdentity } from "./task-step-identity.js";
 
 function requiredText(value, field) {
   if (typeof value !== "string" || value.trim() === "") {
@@ -82,7 +83,7 @@ export class CanonicalOverviewUpdate {
   }
 
   assertActiveNode(nodeId) {
-    const expected = `${this.taskId}-impl`;
+    const expected = new TaskStepIdentity({ taskId: this.taskId, role: "impl" }).nodeId;
     if (nodeId !== expected) {
       throw new Error(`canonical overview update requires active ${expected}`);
     }

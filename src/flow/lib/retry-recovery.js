@@ -352,7 +352,7 @@ export class RetryRecoveryArtifactPublication {
     const primary = this.baseline === null ? retryReceiptArtifact(this.receipt) : retryBaselineArtifact(this.baseline);
     const writes = this.reconciliation !== null ? [primary, this.reconciliation.artifactWrite] : (this.taskReviewAuthorization === null
       ? [primary]
-      : [primary, taskReviewAuthorizationArtifact({ taskId: this.taskReviewAuthorization.currentAttempt.nodeId.slice(0, -"-review".length), authorization: this.taskReviewAuthorization })]);
+      : [primary, taskReviewAuthorizationArtifact({ taskId: TaskStepIdentity.fromNodeId(this.taskReviewAuthorization.currentAttempt.nodeId).taskId, authorization: this.taskReviewAuthorization })]);
     return Object.freeze([...writes, ...this.taskReviewAbortedWorkUnits.map((archive) => archive.artifactWrite)]);
   }
 

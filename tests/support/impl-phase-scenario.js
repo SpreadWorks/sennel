@@ -13,7 +13,7 @@ import { CanonicalTestArtifactStore } from "../../src/flow/lib/canonical-test-ar
 import { StepResult } from "../../src/flow/engine/step-result.js";
 import { TaskStepIdentity } from "../../src/flow/lib/task-step-identity.js";
 import { assertImplPhaseResult, assertImplPhaseSettlementRoundtrip } from "./assertions/impl-phase-result.js";
-import { DraftStepSettlementReceipt } from "../../src/flow/definition.js";
+import { DraftStepSettlementReceipt, TaskStageApplication } from "../../src/flow/definition.js";
 import { ImplPhasePublicationObserver } from "./infrastructure/impl-phase-publication-observer.js";
 
 export function implementationFinding({ taskId = null, key = "missing-behavior" } = {}) {
@@ -50,7 +50,39 @@ function assertPhaseResults(scenario, nodeIds, terminal) {
       runId: state.runId, specId: state.specId, stepId: fixedId,
       attempt: { id: activity.attemptId, sequence: activity.sequence },
     } });
-    if (["done", "skipped"].includes(node.status)) {
+    const completionReference = node.status === "skipped" && node.result?.stepResult === null
+      ? node.result.artifactRefs.find((entry) => entry.kind === "source-step-settlement") : null;
+    if (completionReference) {
+      assert.equal(node.result.outcome, "skipped");
+      assert.equal(node.result.artifactRefs.length, 1);
+      const source = activities.find((entry) => entry.result?.draftSettlementReceipt?.id === completionReference.id);
+      assert.ok(source, "an unexecuted completion must reference its actual source receipt");
+      const sourceFixedId = TaskStepIdentity.fromStateNode(state, source.nodeId)?.definitionId ?? source.nodeId;
+      const sourceStored = source.result.stepResult;
+      const sourceResult = StepResult.fromStored(sourceFixedId,
+        sourceStored instanceof StepResult ? sourceStored.toJSON() : sourceStored);
+      const sourceSettlement = assertImplPhaseSettlementRoundtrip(sourceResult);
+      assert.ok(state.definition.contractForNode(node).authorizesUnexecutedCompletion(sourceResult));
+      const completion = sourceSettlement.effects.unexecutedStepCompletions.find((entry) => entry.stepId === nodeId);
+      assert.ok(completion, "the source's Result-only settlement must select this unexecuted recipient");
+      assert.equal(node.attemptSequence, completion.attemptSequence);
+      assert.equal(node.result.summary, completion.reason);
+      assert.equal(node.result.confirmedAt, source.result.confirmedAt);
+      assert.equal(node.result.draftSettlementReceipt, null);
+      assert.equal(state.findNode(source.nodeId).status, "done");
+      assert.equal(state.findNode(source.nodeId).result.outcome, "passed");
+      assert.equal(state.findNode(source.nodeId).result.draftSettlementReceipt.id, completionReference.id);
+      assert.ok(activity.confirmationOrder < source.confirmationOrder);
+      assert.ok(activities.every((entry) => entry.nodeId !== nodeId || entry.confirmationOrder < source.confirmationOrder),
+        "the source-linked completion must not fabricate a subsequent child Activity or Attempt");
+      const sourceAuthentication = scenario.publicationObserver.authenticate(scenario.manager, source, sourceResult, sourceSettlement);
+      const recipient = sourceAuthentication.afterState.findNode(nodeId);
+      assert.equal(recipient.status, "skipped");
+      assert.equal(recipient.attemptSequence, completion.attemptSequence);
+      assert.equal(recipient.result.stepResult, null);
+      assert.equal(recipient.result.draftSettlementReceipt, null);
+      assert.deepEqual(recipient.result.toJSON(), node.result.toJSON());
+    } else if (["done", "skipped"].includes(node.status)) {
       assert.ok(node.result?.stepResult, "the completed canonical NodeResult must own its terminal Result");
       assert.deepEqual(node.result.stepResult.toJSON(), result.toJSON());
       assert.equal(node.result.draftSettlementReceipt.id, receipt.id);
@@ -61,10 +93,29 @@ function assertPhaseResults(scenario, nodeIds, terminal) {
     assert.equal(authenticated.receipt.id, receipt.id);
     assert.equal(authenticated.receipt.publicationDigest, receipt.publicationDigest);
     if (terminal && settlement.kind === "target-connection") {
-      const saved = authenticated.afterState.findNode(nodeId).result;
-      assert.ok(saved?.stepResult, "the exact completion transition must save its own NodeResult");
-      assert.deepEqual(saved.stepResult.toJSON(), result.toJSON());
-      assert.equal(saved.draftSettlementReceipt.id, receipt.id);
+      const source = authenticated.afterState.findNode(nodeId);
+      if (settlement.effects.resetStepIds.includes(nodeId)) {
+        // A Task repair's selected Review loop invalidates the repair node in
+        // this same transition. Its terminal proof belongs to the Activity;
+        // keeping a completed NodeResult would contradict the declared reset.
+        assert.ok(settlement.application instanceof TaskStageApplication);
+        const plan = settlement.application.transition;
+        assert.ok(plan.effects.some((effect) => effect.stepId === nodeId && effect.status === "invalidated"));
+        assert.ok(plan.matches(authenticated.activity.transition.taskReviewStagePlan));
+        assert.equal(source.status, "invalidated");
+        assert.equal(source.result, null);
+        assert.equal(source.attemptSequence, activity.sequence);
+        assert.equal(authenticated.activity.attemptId, activity.attemptId);
+        assert.equal(authenticated.activity.sequence, activity.sequence);
+        assert.deepEqual(authenticated.activity.result.stepResult.toJSON(), result.toJSON());
+        assert.equal(authenticated.activity.result.draftSettlementReceipt.id, receipt.id);
+        assert.equal(authenticated.afterState.attempt.nodeId, plan.targetStepId);
+        assert.notEqual(authenticated.afterState.attempt.id, activity.attemptId);
+      } else {
+        assert.ok(source.result?.stepResult, "the exact completion transition must save its own NodeResult");
+        assert.deepEqual(source.result.stepResult.toJSON(), result.toJSON());
+        assert.equal(source.result.draftSettlementReceipt.id, receipt.id);
+      }
     } else if (settlement.kind === "failure") {
       assert.equal(authenticated.afterState.attempt.id, activity.attemptId);
       assert.ok(authenticated.afterState.attempt.failure, "the exact Error receipt must preserve its active failed Attempt");
@@ -183,7 +234,9 @@ export class ImplPhaseScenario extends RequirementTestPhaseScenario {
       if (this.state().current?.at(-1) === stepId) return this;
       const next = await this.next();
       assert.ok(!["blocked", "await_user_decision", "await_draft_question"].includes(next.directive?.kind),
-        `IMPL_PHASE_ENTRY_BLOCKED: normal producer cannot reach ${stepId}; current=${this.current()}; ${JSON.stringify(next.directive)}`);
+        `IMPL_PHASE_ENTRY_BLOCKED: normal producer cannot reach ${stepId}; current=${this.current()}; ${JSON.stringify({
+          directive: next.directive, outcome, attempt: this.state().attempt?.toJSON() ?? null,
+        })}`);
       assert.ok(outcome.ok !== false || outcome.errors?.every((entry) => entry.code === "FLOW_DISPATCH_LIMIT_REACHED"),
         `normal producer must reach ${stepId}; current=${this.current()}; errors=${JSON.stringify(outcome.errors)}`);
     }

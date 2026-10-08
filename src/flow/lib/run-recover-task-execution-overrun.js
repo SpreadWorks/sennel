@@ -1,3 +1,4 @@
+import { TaskStepIdentity } from "./task-step-identity.js";
 import { Envelope } from "../../lib/flow-envelope.js";
 import { resolveTaskExecutionOverrun } from "../definition.js";
 import { FlowCommand } from "./base-command.js";
@@ -8,13 +9,15 @@ function replayedRecovery({ flowManager, specId }) {
   const recovery = flowManager.activityLedger(specId).at(-1) ?? null;
   if (state?.current === null || state?.attempt?.failure?.category !== "semantic"
     || recovery?.transition?.operation !== "recover_task_execution_overrun") return null;
-  const taskId = recovery.nodeId?.endsWith("-impl")
-    ? recovery.nodeId.slice(0, -"-impl".length)
-    : null;
-  if (taskId === null || state.current.at(-1) !== `${taskId}-gate`
-    || state.findNode(`${taskId}-impl`)?.status !== "done"
-    || state.findNode(`${taskId}-review`)?.status !== "done"
-    || state.findNode(`${taskId}-gate`)?.status !== "in_progress") return null;
+  const identity = TaskStepIdentity.fromStateNode(state, recovery.nodeId);
+  if (identity?.role !== "impl") return null;
+  const taskId = identity.taskId;
+  const gate = new TaskStepIdentity({ taskId, role: "gate" });
+  const review = new TaskStepIdentity({ taskId, role: "review" });
+  if (!gate.matchesNode(state.current.at(-1))
+    || state.findNode(identity.nodeId)?.status !== "done"
+    || state.findNode(review.nodeId)?.status !== "done"
+    || state.findNode(gate.nodeId)?.status !== "in_progress") return null;
   const completedRounds = flowManager.taskMutationLineages({ specId, taskId })
     .filter((lineage) => lineage.role === "implementation").length;
   return { taskId, completedRounds };

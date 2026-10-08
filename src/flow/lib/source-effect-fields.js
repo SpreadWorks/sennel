@@ -1,3 +1,4 @@
+import path from "node:path";
 /** Shared schema-boundary primitives for source-worker effect value classes. */
 export function requiredText(value, field) {
   if (typeof value !== "string" || value.trim() === "") throw new Error(`${field} is required`);
@@ -13,4 +14,17 @@ export function exactKeys(value, keys, field) {
   if (actual.length !== expected.length || actual.some((key, index) => key !== expected[index])) {
     throw new Error(`${field} has an invalid schema`);
   }
+}
+
+export function normalizedRelativePath(value, field) {
+  const relative = requiredText(value, field).replaceAll("\\", "/");
+  if (
+    Buffer.byteLength(relative) > 500
+    || path.posix.isAbsolute(relative)
+    || path.posix.normalize(relative) !== relative
+    || relative.split("/").some((segment) => segment === "" || segment === "." || segment === "..")
+  ) {
+    throw new Error(`${field} must be a normalized repository-relative path`);
+  }
+  return relative;
 }

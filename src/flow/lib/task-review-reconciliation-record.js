@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import { CurrentAttemptIdentity, CanonicalFlowArtifactWrite } from "./current-flow-state.js";
 import { ReviewWorkUnitManifest } from "./review-work-unit-values.js";
+import { TaskStepIdentity } from "./task-step-identity.js";
 
 export const TASK_REVIEW_RECONCILIATION_KEY = "task.review.reconciliation";
 export function reconciliationDigest(value) {
@@ -19,7 +20,8 @@ export class TaskReviewReconciliationProposal {
       throw new Error("Task Review reconciliation proposal schema or digest is invalid");
     }
     const previous = CurrentAttemptIdentity.from(value.previousAttempt);
-    if (value.nodeId !== `${value.taskId}-review` || previous.nodeId !== value.nodeId
+    if (!new TaskStepIdentity({ taskId: value.taskId, role: "review" }).matchesNode(value.nodeId)
+      || previous.nodeId !== value.nodeId
       || typeof value.runId !== "string" || !value.runId || typeof value.specId !== "string" || !value.specId
       || value.baseline.attemptId !== previous.id || value.baseline.attempt !== previous.sequence
       || value.baseline.runId !== value.runId || value.baseline.specId !== value.specId || value.baseline.issue !== value.issue
@@ -56,7 +58,8 @@ export class TaskReviewReconciliationRecord {
       ? value.proposal : new TaskReviewReconciliationProposal(value.proposal)).toJSON();
     const previous = CurrentAttemptIdentity.from(proposal.previousAttempt);
     const next = CurrentAttemptIdentity.from(currentAttempt);
-    if (proposal.nodeId !== `${proposal.taskId}-review` || previous.nodeId !== proposal.nodeId
+    if (!new TaskStepIdentity({ taskId: proposal.taskId, role: "review" }).matchesNode(proposal.nodeId)
+      || previous.nodeId !== proposal.nodeId
       || next.nodeId !== previous.nodeId || next.sequence !== previous.sequence + 1 || next.id === previous.id
       || typeof reason !== "string" || reason.trim().length < 20 || reason.length > 500
       || typeof proposal.runId !== "string" || typeof proposal.specId !== "string"

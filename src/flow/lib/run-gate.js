@@ -112,8 +112,8 @@ import {
   CanonicalGatePublishedResultRecovery,
   canonicalGateNodeId,
   canonicalGateLogicalKeys,
-  taskGateSettlementIssueLogId,
 } from "./canonical-gate-artifacts.js";
+import { taskGateSettlementIssueLogId } from "./gate-issue-publication.js";
 import {
   attachedCanonicalCommandResultArtifact,
   CanonicalCommandAttemptArtifactHistory,
@@ -128,6 +128,10 @@ import { checkSpecGateReadiness } from "./spec-gate-readiness.js";
 import { CanonicalTaskContext } from "./task-canonical-context.js";
 import { captureCurrentTaskSource } from "./task-mutation-lineage.js";
 import { TaskGateSettlementAdmission } from "./canonical-flow-manager-store.js";
+import { GateTransitionFacts } from "./gate-transition.js";
+import { TaskStepIdentity } from "./task-step-identity.js";
+import { ImplStepBinding } from "../engine/connectors/impl/impl-step-binding.js";
+import { TaskStepBinding } from "../engine/connectors/task/task-step-binding.js";
 
 export { resolveGateStepId };
 
@@ -3164,6 +3168,8 @@ export function planRequirementGateCalls({
 }) {
   const requirementExcerpts = requirements.map(normalizeRequirementPromptInput);
   if (contexts !== null && !(contexts instanceof Map)) throw new Error("contexts must be a Map or null");
+  if (relatedDiffs != null && !(relatedDiffs instanceof Map)) throw new Error("relatedDiffs must be a Map or null");
+  if (requirementExcerpts.length === 0) return new RequirementGatePlan({ calls: [], evaluations: [] });
   if (relatedDiffs == null) {
     if (phase === "integration") throw new Error("file-map trust input is required for integration gate");
     return new RequirementGatePlan({
@@ -3179,7 +3185,6 @@ export function planRequirementGateCalls({
       evaluations: [],
     });
   }
-  if (!(relatedDiffs instanceof Map)) throw new Error("relatedDiffs must be a Map or null");
   const previousSet = previouslyPassed instanceof Set ? previouslyPassed : new Set(previouslyPassed || []);
   const callRequirements = [];
   const evaluations = [];
@@ -3888,11 +3893,12 @@ export class RunGateCommand extends FlowCommand {
     const registration = gateStepExecutionRegistration(phase);
     const contract = registration?.executionContract ?? null;
     if (targeted && contract === null) throw new Error(`Gate execution contract is missing for ${phase}`);
-    const selection = contract === null ? selectGateExecutionAdmission(input) : contract.select(input);
+    const selection = contract === null ? selectGateExecutionAdmission(input)
+      : contract.select({ ...input, registration, stepId: registration.stepId });
     const execution = { command: this, ctx, phase, level, skipGuardrail: input.skipGuardrail, executionRoot };
     const result = await (contract === null
       ? executeGateSelection(selection, execution)
-      : contract.execute(selection, execution));
+      : contract.execute(selection, { ...execution, registration, stepId: registration.stepId }));
     return result;
   }
 
@@ -3909,11 +3915,11 @@ export class RunGateCommand extends FlowCommand {
     const flowState = ctx.flowManager.loadReadOnly(ctx.specId ?? ctx.flowState.specId);
     const typedState = ctx.flowManager.canonicalState(flowState.specId);
     const registration = gateStepExecutionRegistration(phase);
-    if (["draft", "spec", "task-spec"].includes(phase)
+    if (["draft", "spec", "task-spec", "task-impl", "integration"].includes(phase)
       && registration?.executionContract == null) {
       throw new StepAdmissionRefusal(`Gate execution contract is missing for ${phase}`);
     }
-    const input = { flowManager: ctx.flowManager, flowState, typedState, phase };
+    const input = { flowManager: ctx.flowManager, flowState, typedState, phase, stepId: registration?.stepId };
     const current = registration === null
       ? selectGateExecutionAdmission(input) : registration.executionContract.select(input);
     assertCurrentGateExecutionSelection(selection, current);
@@ -4000,6 +4006,20 @@ export class RunGateCommand extends FlowCommand {
         `canonical gate admission rejected evaluation; state selected ${selected?.operation ?? "no action"}`,
       );
     }
+    if (phase === "task-impl" || phase === "integration") {
+      const definitionStepId = phase === "task-impl" ? "task-gate" : "impl-gate";
+      const saved = flowManager.readCurrentStepSettlement({ specId: state.specId,
+        stepId: definitionStepId });
+      if (saved === null) {
+        const binding = phase === "task-impl"
+          ? new TaskStepBinding({ flowManager, specId: state.specId, definitionStepId })
+          : new ImplStepBinding({ flowManager, specId: state.specId, stepId: definitionStepId });
+        const registration = gateStepExecutionRegistration(phase);
+        const prepared = await registration.create({ ctx, flowManager, specId: state.specId, binding });
+        await prepared.step.execute();
+        ctx.flowState = flowManager.loadReadOnly(state.specId);
+      }
+    }
     ctx.promptExecutionBudget = createGateExecutionBudget(phase);
     const inputs = new CanonicalGateInputStore({ flowManager, state: ctx.flowState, nodeId });
     const specPath = flowManager.specLocation(ctx.flowState.specId).relativeSpecFile;
@@ -4032,10 +4052,11 @@ export class RunGateCommand extends FlowCommand {
         root: executionRoot,
       };
       const registration = gateStepExecutionRegistration(phase);
-      if (["draft", "spec", "task-spec"].includes(phase)
+      if (["draft", "spec", "task-spec", "task-impl", "integration"].includes(phase)
         && registration?.executionContract == null) {
         throw new StepAdmissionRefusal(`Gate execution contract is missing for ${phase}`);
       }
+      providerInput.stepId = registration?.stepId;
       const providerAdmission = registration === null
         ? selectGateExecutionAdmission(providerInput)
         : registration.executionContract.select(providerInput);
@@ -4410,7 +4431,7 @@ export class RunGateCommand extends FlowCommand {
     const gitState = computeGitState(executionRoot);
     ctx.gitState = gitState;
     const requirements = enumerateUsableRequirementIds(spec);
-    if (requirements.length === 0) {
+    if (requirements.length === 0 && !(Array.isArray(spec.requirements) && spec.requirements.length === 0)) {
       return gateFail(level, phase, specPath, [], ["spec.json has no requirements with usable ids"]);
     }
     const specification = specJsonToPromptText(spec, { title: getSpecName(state) });
@@ -4528,7 +4549,8 @@ export {
 };
 
 export class GateIssueLogEntry {
-  constructor({ ctx, result, timestamp = new Date().toISOString() }) {
+  constructor({ ctx, result, timestamp = new Date().toISOString(), prospectiveFacts = null,
+    prospectivePublication = null }) {
     if (result?.result !== "pass" && result?.result !== "fail") {
       throw new Error("gate issue-log entry requires a pass or fail result");
     }
@@ -4537,16 +4559,32 @@ export class GateIssueLogEntry {
     const taskDecision = ctx.gateTransitionDecision?.facts?.scope === "task"
       ? ctx.gateTransitionDecision
       : null;
-    if (taskDecision !== null) {
-      taskFacts = readCurrentGateTransitionFacts({
+    if (prospectiveFacts !== null && (!(prospectiveFacts instanceof GateTransitionFacts)
+      || prospectiveFacts.scope !== "task" || prospectivePublication === null)) {
+      throw new TypeError("Prospective Task Gate issue requires its typed facts and publication");
+    }
+    if (taskDecision !== null || prospectiveFacts !== null) {
+      taskFacts = prospectiveFacts ?? readCurrentGateTransitionFacts({
         flowManager: ctx.flowManager,
         flowState: ctx.flowManager.loadReadOnly(ctx.flowState.specId),
         phase: "task-impl",
       });
-      if (taskFacts === null || taskFacts.target.taskId !== taskDecision.facts.target.taskId) {
+      if (taskFacts === null || (taskDecision !== null
+        && taskFacts.target.taskId !== taskDecision.facts.target.taskId)) {
         throw new Error("Task Gate issue-log entry requires current canonical Gate facts");
       }
-      const source = ctx.flowManager.readProducerArtifact({
+      let source;
+      if (prospectivePublication !== null) {
+        const descriptors = prospectivePublication.catalog.artifacts.filter((descriptor) => (
+          descriptor.logicalKey === "task.gate"
+          && descriptor.hash === taskFacts.catalogPublication.fingerprint
+          && descriptor.activityId === prospectivePublication.selectedActivityId
+          && descriptor.activityId === taskFacts.catalogPublication.producerActivityId
+        ));
+        if (descriptors.length !== 1) throw new Error("Prospective Task Gate issue has no exact producer publication");
+        source = { descriptor: descriptors[0],
+          bytes: prospectivePublication.readCatalogedArtifact(descriptors[0]) };
+      } else source = ctx.flowManager.readProducerArtifact({
         specId: taskFacts.target.specId,
         nodeId: taskFacts.target.stepId,
         logicalKey: "task.gate",
@@ -4583,7 +4621,7 @@ export class GateIssueLogEntry {
       : observations.map((observation) => observation.observed).join("; ")
         || (canonicalResult?.artifacts?.reasons || []).map((reason) => reason.detail || reason).join("; ");
     const taskGateStepId = phase === "task-impl" && canonicalResult?.artifacts?.taskId
-      ? `${canonicalResult.artifacts.taskId}-gate`
+      ? new TaskStepIdentity({ taskId: canonicalResult.artifacts.taskId, role: "gate" }).nodeId
       : null;
     const entry = {
       step: taskGateStepId || resolveGateStepId(phase),

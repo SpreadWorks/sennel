@@ -7,7 +7,8 @@ import { PromptBatchExecutor } from "../../src/lib/prompt-batching.js";
 import { FlowManager } from "../../src/lib/flow-manager.js";
 import { ReviewWorkUnit } from "../../src/flow/lib/review-work-unit.js";
 import { TaskReviewExecutionIdentity } from "../../src/flow/lib/task-review-execution-identity.js";
-import { runTaskReviewProtocol, parseImplReviewFindings, formatImplReviewJson, classifyReviewCommandError } from "../../src/flow/commands/review.js";
+import { runTaskReviewProtocol, runImplReview, resolveReviewTarget, resolveMergeBase, parseImplReviewFindings, formatImplReviewJson, classifyReviewCommandError } from "../../src/flow/commands/review.js";
+import { ReviewFindingCycle } from "../../src/flow/lib/finding-disposition-policy.js";
 try {
 const root = process.cwd();
 container.register("root", root);
@@ -34,10 +35,21 @@ if (process.env.SENNEL_REVIEW_TASK_EXECUTION_IDENTITY) {
     agent: { providerRetryPolicy: () => ({ retryCount: 0, retryDelayMs: 1, backoffFactor: 2 }), async call() { return raw; } },
     prompt: "Review complete immutable source.", systemPrompt: "Return findings only.",
   });
+  const parsed = parseImplReviewFindings(raw, { requirementIds });
+  fs.writeFileSync(path.join(process.env.SENNEL_REVIEW_OUTPUT_DIR, "impl-review.json"), formatImplReviewJson({ ...parsed, requirementIds }));
+  work.seal();
+} else {
+  // Flow Review's writer owns scope, disposition, stable finding identity,
+  // recurrence and sealed history. Fake only the external evaluator response.
+  const flowManager = new FlowManager({ root, mainRoot: root, inWorktree: false });
+  const flow = flowManager.load();
+  const cycle = ReviewFindingCycle.fromActivityLedger({ runId: flow.runId,
+    activities: flowManager.activityLedger(flow.specId) });
+  const target = await resolveReviewTarget(root, flow, resolveMergeBase(root, flow.baseBranch), spec);
+  const touchedFiles = new Set([...target.touchedFiles, ...target.untrackedFiles]);
+  await runImplReview({ root, flowManager, flow, spec, cycle, reviewOutput: raw, touchedFiles });
+  work.seal();
 }
-const parsed = parseImplReviewFindings(raw, { requirementIds });
-fs.writeFileSync(path.join(process.env.SENNEL_REVIEW_OUTPUT_DIR, "impl-review.json"), formatImplReviewJson({ ...parsed, requirementIds }));
-work.seal();
 
 } catch (error) {
   const failure = classifyReviewCommandError(error, "impl");

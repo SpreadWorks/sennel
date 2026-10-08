@@ -6,6 +6,14 @@ import { TaskReviewAccounting } from "./task-review-accounting.js";
 import { ReviewFindingCycle } from "./finding-disposition-policy.js";
 import { TaskStageArtifact } from "./task-review-stage-artifacts.js";
 import { taskReviewStagePlanFromJSON } from "./task-review-stage-transition.js";
+import { TaskReviewUnavailableResult } from "../engine/step-result.js";
+import { FlowActivity } from "./current-flow-state.js";
+import { settleTaskStepResult, DraftStepSettlementReceipt } from "../definition.js";
+import { GateTaskReviewUnavailableObservation, GateReviewFindingReadiness } from "./gate-transition.js";
+import { TaskStepIdentity } from "./task-step-identity.js";
+import { captureCurrentTaskSource, TaskMutationLineageSet } from "./task-mutation-lineage.js";
+import { CanonicalTaskContext } from "./task-canonical-context.js";
+import { StepAdmissionRefusal } from "./step-admission-refusal.js";
 
 const SHA256 = /^[a-f0-9]{64}$/;
 
@@ -396,14 +404,16 @@ function taskReviewRecords({ flowManager, state }) {
     .filter((entry) => entry.logicalKey === "task.review")
     .map((entry) => {
       const taskId = taskIdFromCatalogEntry(entry);
+      const review = new TaskStageArtifact({ flowManager, state, taskId, role: "review" });
+      if (review.history === null) return null;
       return new TaskReviewEvidenceRecord({
         taskId,
-        review: new TaskStageArtifact({ flowManager, state, taskId, role: "review" }),
+        review,
         triage: new TaskStageArtifact({ flowManager, state, taskId, role: "triage", optional: true }),
         repair: new TaskStageArtifact({ flowManager, state, taskId, role: "repair", optional: true }),
         lineages: flowManager.taskMutationLineages({ specId: state.specId, taskId }),
       });
-    });
+    }).filter((record) => record !== null);
 }
 
 function taskStagePayloadDigest(payload) {
@@ -432,17 +442,18 @@ function taskRepairEvidence(stage, triage) {
 
 /** Acceptance receives only the parent-published triage and repair evidence. */
 class TaskReviewAcceptanceEvidence {
-  constructor({ stage, triage }) {
+  constructor({ stage, triage, lineageSet }) {
     if (stage?.binding?.reviewOrdinal !== 4 || stage?.unreviewedAfterRepair !== true
       || ((stage?.repair === null || typeof stage?.repair !== "object")
         === (stage?.repairNoChange === null || typeof stage?.repairNoChange !== "object"))
       || stage?.sourceMutationManifest === null || typeof stage?.sourceMutationManifest !== "object"
-      || !Array.isArray(triage?.dispositions)) {
+      || !Array.isArray(triage?.dispositions) || !(lineageSet instanceof TaskMutationLineageSet)) {
       throw new Error("Task Review Acceptance evidence requires the fourth canonical Task repair");
     }
     this.stage = deepFreeze(structuredClone(stage));
     this.triage = deepFreeze(structuredClone(triage));
     this.taskId = stage.taskId;
+    this.lineageSet = lineageSet;
     this.unreviewedAfterRepair = true;
     Object.freeze(this);
   }
@@ -506,10 +517,11 @@ class TaskFinalRoundUnrepairedAcceptanceEvidence {
 
 /** Tooling-unavailable differs from a semantic Review that left findings unrepaired. */
 class TaskReviewUnavailableAcceptanceEvidence {
-  constructor({ activity, plan }) {
+  constructor({ activity, plan, observation }) {
     if (plan.operation !== "review-unavailable-to-gate" || plan.acceptanceUnreviewed !== true
       || plan.reviewBudgetConsumed !== 0 || plan.facts.verdict !== "UNAVAILABLE"
-      || plan.facts.unavailable === null || activity.nodeId !== `${plan.facts.binding.taskId}-review`) {
+      || plan.facts.unavailable === null || activity.nodeId !== plan.facts.binding.sourceStepId
+      || !(observation instanceof GateTaskReviewUnavailableObservation)) {
       throw new Error("Task Review unavailable Acceptance evidence requires its exact Definition route");
     }
     this.activityId = activity.id;
@@ -518,7 +530,16 @@ class TaskReviewUnavailableAcceptanceEvidence {
     this.unavailable = true;
     this.semanticReviewCount = plan.facts.reviewResultCount;
     this.remainingRisk = plan.facts.unavailable.message;
+    this.observation = observation;
     Object.freeze(this);
+  }
+
+  gateReadiness(known = null) {
+    const findings = known?.toJSON() ?? null;
+    return new GateReviewFindingReadiness({ ...(findings ?? {}),
+      status: known?.allowsPass === false ? "blocking" : "unavailable", unavailable: this.observation,
+      decisionFingerprint: stableStringify({ known: findings?.decisionFingerprint ?? null,
+        unavailable: this.observation.toJSON() }) });
   }
 
   toJSON() {
@@ -682,6 +703,137 @@ export class TaskReviewConvergenceEvidence {
     return this.records.find((entry) => entry.taskId === taskId) ?? null;
   }
 
+  /** Gate consumes current source; historical Acceptance readers consume certified producers. */
+  assertGateSource(taskId) {
+    const source = captureCurrentTaskSource({ root: this.flowManager.executionRoot(),
+      flowManager: this.flowManager, state: this.state, taskId });
+    const record = this.record(taskId);
+    if (record === null) return source;
+    if (source.fingerprint === record.review.document.canonicalTaskSource.fingerprint) return source;
+    const carry = this.handoffs().findLast((entry) => entry instanceof TaskReviewAcceptanceEvidence
+      && entry.taskId === taskId
+      && stableStringify(entry.stage.binding.review) === stableStringify(record.review.reference.toJSON())
+      && stableStringify(entry.stage.binding.triage) === stableStringify(record.triage.reference.toJSON()));
+    if (carry === undefined) {
+      throw new StepAdmissionRefusal("Task Gate source no longer matches its certified Task Review");
+    }
+    try { source.assertMatchesLineages(carry.lineageSet); }
+    catch (cause) { throw new StepAdmissionRefusal("Task Gate source no longer matches its certified Task Review repair lineage", cause); }
+    return source;
+  }
+
+  #repairHandoff(stage, triage, activities) {
+    const identity = new TaskStepIdentity({ taskId: stage.taskId, role: "repair" });
+    const raw = activities.findLast((entry) => identity.matchesNode(entry.nodeId)
+      && entry.attemptId === stage.attempt.id && entry.sequence === stage.attempt.sequence
+      && entry.transition?.taskReviewStagePlan?.operation === "repair-unreviewed-to-gate");
+    if (raw === undefined) throw new Error("Task repair carry has no canonical stage Activity");
+    const activity = new FlowActivity(raw);
+    const result = activity.result.stepResult;
+    if (result?.kind !== "task-repair-unreviewed-gate") {
+      throw new Error("Task repair carry has no actual unreviewed repair Result");
+    }
+    const settlement = settleTaskStepResult(identity.definitionId, result);
+    const receipt = DraftStepSettlementReceipt.assertStored(activity.result.draftSettlementReceipt, {
+      result, settlement, binding: { runId: this.state.runId, specId: this.state.specId,
+        stepId: identity.definitionId, attempt: { id: activity.attemptId, sequence: activity.sequence } } });
+    const plan = taskReviewStagePlanFromJSON(raw.transition.taskReviewStagePlan);
+    const evidence = result.evidence;
+    const lineages = new TaskMutationLineageSet({ runId: this.state.runId, specId: this.state.specId,
+      taskId: stage.taskId, lineages: this.flowManager.taskMutationLineages({ specId: this.state.specId, taskId: stage.taskId }) });
+    const lineage = lineages.lineages.at(-1);
+    const authority = this.flowManager.sourceHandoffAuthorities({ specId: this.state.specId }).find((entry) =>
+      entry.identity.runId === this.state.runId && entry.identity.specId === this.state.specId
+      && entry.identity.taskId === stage.taskId && entry.identity.stepId === identity.definitionId
+      && entry.identity.nodeId === identity.nodeId
+      && entry.identity.attempt.id === activity.attemptId && entry.identity.attempt.sequence === activity.sequence);
+    if (receipt.settlementKind !== "target-connection" || activity.result.outcome !== "passed"
+      || !settlement.application.transition.matches(plan) || plan.acceptanceUnreviewed !== true
+      || evidence.reviewResultCount !== 4 || evidence.taskRound !== lineages.currentBudget.round
+      || evidence.handoffDigest !== stage.handoffDigest
+      || evidence.mutationManifestDigest !== stage.sourceMutationManifest.digest
+      || evidence.taskStageFacts.binding.sourceFingerprint !== stage.binding.sourceFingerprint
+      || lineage.role !== "repair" || lineage.attempt.id !== activity.attemptId
+      || lineage.attempt.sequence !== activity.sequence
+      || stableStringify(lineage.manifest) !== stableStringify(stage.sourceMutationManifest)
+      || authority?.settlement?.kind !== "accepted" || authority.settlement.handoffDigest !== stage.handoffDigest
+      || authority.settlementDescriptor.activityId !== activity.id
+      || stableStringify(authority.event.sourceManifest?.toJSON()) !== stableStringify(stage.sourceMutationManifest)) {
+      throw new Error("Task repair carry changed its exact Result, receipt, manifest, lineage or source authority");
+    }
+    return new TaskReviewAcceptanceEvidence({ stage, triage, lineageSet: lineages });
+  }
+
+  unavailable(taskId) {
+    const unavailable = this.handoffs().findLast((entry) => entry instanceof TaskReviewUnavailableAcceptanceEvidence
+      && entry.taskId === taskId) ?? null;
+    if (unavailable !== null) {
+      const state = this.flowManager.canonicalState(this.state.specId);
+      const node = state.findNode(unavailable.observation.binding.sourceStepId);
+      if (node?.status !== "done" || node.attemptSequence !== unavailable.observation.binding.attemptSequence
+        || node.result?.draftSettlementReceipt?.id !== unavailable.observation.receiptId) {
+        throw new Error("Gate unavailable Review observation no longer owns its terminal Attempt");
+      }
+      this.#assertUnavailableGateSource(unavailable.plan.facts);
+    }
+    return unavailable;
+  }
+
+  #unavailableObservation(activity, plan, budget, activities) {
+    const typed = new FlowActivity(activity);
+    const result = typed.result?.stepResult;
+    const identity = new TaskStepIdentity({ taskId: plan.facts.binding.taskId, role: "review" });
+    if (!(result instanceof TaskReviewUnavailableResult)) {
+      throw new Error("Task Review unavailable evidence has no actual unavailable Result");
+    }
+    const settlement = settleTaskStepResult(identity.definitionId, result);
+    const receipt = DraftStepSettlementReceipt.assertStored(typed.result.draftSettlementReceipt, {
+      result, settlement, binding: { runId: this.state.runId, specId: this.state.specId,
+        stepId: identity.definitionId, attempt: { id: typed.attemptId, sequence: typed.sequence } } });
+    const facts = result.evidence.facts;
+    const lifecycle = receipt.executionLifecycle?.toJSON();
+    const claimed = activities.findLast((entry) => entry.nodeId === identity.nodeId
+      && entry.attemptId === typed.attemptId && entry.sequence === typed.sequence
+      && entry.confirmationOrder < typed.confirmationOrder
+      && entry.result?.draftSettlementReceipt?.executionLifecycle?.phase === "claimed"
+      && stableStringify(entry.result.draftSettlementReceipt.executionLifecycle.binding) === stableStringify(lifecycle?.binding));
+    const accounting = new TaskReviewAccounting({ taskId: identity.taskId, budget,
+      history: this.record(identity.taskId)?.history ?? null });
+    if (typed.nodeId !== identity.nodeId || typed.result.outcome !== "passed"
+      || !["complete_task_review_stage", "advance_task_review_stage"].includes(typed.transition.operation)
+      || receipt.settlementKind !== "target-connection" || !settlement.application.transition.matches(plan)
+      || stableStringify(facts.toJSON()) !== stableStringify(plan.facts.toJSON())
+      || facts.binding.attemptId !== typed.attemptId || facts.binding.attemptSequence !== typed.sequence
+      || facts.binding.runId !== this.state.runId || facts.binding.specId !== this.state.specId
+      || facts.taskRound !== budget.round || facts.reviewResultCount !== accounting.completedReviewCount
+      || lifecycle?.phase !== "terminal" || lifecycle.binding.kind !== "review" || claimed === undefined
+      || lifecycle.binding.manifestDigest !== facts.unavailable.workUnitManifestDigest
+      || stableStringify(lifecycle.claim) !== stableStringify(claimed.result.draftSettlementReceipt.executionLifecycle.claim)) {
+      throw new Error("Task Review unavailable evidence changed its exact Result, receipt, budget or claim");
+    }
+    if (stableStringify(facts.unavailable.reviewCycle) !== stableStringify(this.cycle.toJSON())) {
+      throw new Error("Task Review unavailable evidence no longer owns its finding cycle");
+    }
+    return new GateTaskReviewUnavailableObservation({ binding: facts.binding, failure: facts.unavailable,
+      taskRound: facts.taskRound, semanticReviewCount: facts.reviewResultCount, activityId: typed.id,
+      receiptId: receipt.id, resultDigest: receipt.resultDigest });
+  }
+
+  #assertUnavailableGateSource(facts) {
+    const source = captureCurrentTaskSource({ root: this.flowManager.executionRoot(),
+      flowManager: this.flowManager, state: this.state, taskId: facts.binding.taskId });
+    const spec = this.flowManager.readArtifact({ specId: this.state.specId,
+      logicalKey: "spec.record", consumerNodeId: "system" });
+    const context = CanonicalTaskContext.capture({ root: this.flowManager.executionRoot(),
+      flowManager: this.flowManager, state: this.state, taskId: facts.binding.taskId,
+      spec: JSON.parse(spec.bytes.toString("utf8")), source });
+    if (source.fingerprint !== facts.binding.sourceFingerprint
+      || crypto.createHash("sha256").update(spec.bytes).digest("hex") !== facts.unavailable.specDigest
+      || context.fingerprint !== facts.unavailable.contextDigest) {
+      throw new Error("Task Review unavailable evidence no longer owns its current source and finding cycle");
+    }
+  }
+
   recurrenceHistory(taskId) {
     const record = this.record(taskId);
     if (record === null || record.currentBudget === null) {
@@ -730,10 +882,14 @@ export class TaskReviewConvergenceEvidence {
         specId: this.state.specId, taskId: plan.facts.binding.taskId,
       });
       const currentBudget = lineages.at(-1)?.budget ?? null;
+      const semantic = currentBudget === null ? []
+        : this.record(plan.facts.binding.taskId)?.accountingFor(currentBudget).completed ?? [];
+      const identity = new TaskStepIdentity({ taskId: plan.facts.binding.taskId, role: "review" });
       const superseded = activities.some((candidate) => {
         const later = candidate.transition?.taskReviewStagePlan;
         return candidate.confirmationOrder > activity.confirmationOrder
-          && candidate.nodeId === `${plan.facts.binding.taskId}-review`
+          && identity.matchesNode(candidate.nodeId)
+          && semantic.some((entry) => entry.attempt === candidate.sequence && this.cycle.matchesArtifact(entry.payload))
           && later?.facts?.binding?.stage === "review"
           && later?.facts?.taskRound === plan.facts.taskRound
           && later?.facts?.verdict !== "UNAVAILABLE";
@@ -742,7 +898,8 @@ export class TaskReviewConvergenceEvidence {
         || currentBudget?.round !== plan.facts.taskRound
         || stableStringify(plan.facts.unavailable.reviewCycle) !== stableStringify(this.cycle.toJSON())
         || superseded) continue;
-      handoffs.push(new TaskReviewUnavailableAcceptanceEvidence({ activity, plan }));
+      handoffs.push(new TaskReviewUnavailableAcceptanceEvidence({ activity, plan,
+        observation: this.#unavailableObservation(activity, plan, currentBudget, activities) }));
     }
     for (const record of this.records) {
       for (const repair of record.repairHistory?.attempts ?? []) {
@@ -753,13 +910,13 @@ export class TaskReviewConvergenceEvidence {
           || stage.binding?.taskRound !== record.currentBudget?.round
           || stage.binding?.triage?.payloadDigest !== taskStagePayloadDigest(triage.payload)
           || stage.unreviewedAfterRepair !== true) continue;
-        handoffs.push(new TaskReviewAcceptanceEvidence({ stage, triage: triage.payload }));
+        handoffs.push(this.#repairHandoff(stage, triage.payload, activities));
       }
       for (const triage of record.triageHistory?.attempts ?? []) {
         const stage = triage.payload;
         const review = record.reviewFor(stage.binding);
         const activity = activities.find((entry) => (
-          entry.nodeId === `${record.taskId}-triage`
+          new TaskStepIdentity({ taskId: record.taskId, role: "triage" }).matchesNode(entry.nodeId)
           && entry.attemptId === stage.attempt?.id
           && entry.sequence === stage.attempt?.sequence
           && entry.transition?.operation === "advance_task_review_stage"

@@ -128,8 +128,8 @@ test("Task repair quality publication rejects a stale stage binding without part
   const canonicalManager = scenario.manager;
   const staleManager = new Proxy(canonicalManager, {
     get(target, property) {
-      if (property === "confirmSourceWorkerHandoff") {
-        return (input) => target.confirmSourceWorkerHandoff({
+      if (property === "commitSpecStepResult") {
+        return (input) => target.commitSpecStepResult({
           ...input,
           taskStageBinding: new TaskReviewEpisodeBinding({
             ...input.taskStageBinding.toJSON(),

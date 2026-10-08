@@ -13,6 +13,13 @@ import { CURRENT_FLOW_SCHEMA_REVISION } from "../../lib/flow-schema-revision.js"
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { isDeepStrictEqual } from "node:util";
+import { countReviewAttempts, resolveMaxAttempts } from "../definition.js";
+import { ImplReviewResultEvidence, ImplReviewFrontier } from "./impl-review-values.js";
+import { NonGateTargetBinding, NonGateRetryMetrics, NonGateCatalogPublication } from "./non-gate-transition.js";
+import { ReviewToolingOutcome, ImplReviewToolingObservation } from "./review-observation-values.js";
+import { readProspectiveCommandArtifact } from "./prospective-command-artifact.js";
+import { TaskStepIdentity } from "./task-step-identity.js";
 
 import {
   CanonicalCommandResultArtifact,
@@ -20,6 +27,7 @@ import {
   attachCanonicalCommandResultArtifact,
   attachCanonicalCommandResultPublications,
   CanonicalCommandAttemptArtifactHistory,
+  attachedCanonicalCommandResultArtifact,
 } from "./canonical-command-result.js";
 import {
   ReviewDisposition,
@@ -236,7 +244,7 @@ function nodeIdFor({ phase: reviewPhase, taskId = null }) {
         ? "draft-coverage-review"
         : `${reviewPhase}-review`;
   }
-  return taskId === null ? "impl-review" : `${taskId}-review`;
+  return taskId === null ? "impl-review" : new TaskStepIdentity({ taskId, role: "review" }).nodeId;
 }
 
 function logicalKeyFor({ phase: reviewPhase, taskId = null }) {
@@ -878,8 +886,17 @@ export class CanonicalReviewWorkUnit {
 }
 
 /** Turn a child worker's transient JSON artifact into one V1 command result. */
+export function canonicalReviewEvidencePublications({ evidence, nodeId, taskId = null }) {
+  return evidence === null ? [] : [new CanonicalCommandResultPublication({
+    logicalKey: "review.evidence",
+    parameters: taskId === null ? { reviewStep: nodeId, digest: evidence.identity.evidenceDigest }
+      : { taskId, digest: evidence.identity.evidenceDigest },
+    mediaType: "application/json", payload: evidence.toCanonicalJSON(),
+  })];
+}
+
 export class CanonicalReviewPromotion {
-  constructor({ workUnit, phase: reviewPhase, taskId = null, treeSha, targetStateDigest, specReviewSource = null, requirementTestReviewSource = null, taskSource = null, taskContext = null, taskSpecDigest = null, taskReviewCycle = null, taskReviewPublicationBinding = null } = {}) {
+  constructor({ workUnit, phase: reviewPhase, taskId = null, treeSha, targetStateDigest, specReviewSource = null, requirementTestReviewSource = null, taskSource = null, taskContext = null, taskSpecDigest = null, taskReviewCycle = null, taskReviewPublicationBinding = null, implementationReviewCycle = null } = {}) {
     if (!(workUnit instanceof ReviewWorkUnit)) throw new Error("canonical review promotion requires a sealed execution work unit");
     this.workUnit = workUnit;
     this.phase = phase(reviewPhase);
@@ -890,6 +907,12 @@ export class CanonicalReviewPromotion {
     this.taskContext = taskContext;
     this.taskSpecDigest = taskSpecDigest;
     this.taskReviewCycle = taskReviewCycle;
+    if (implementationReviewCycle !== null && (this.phase !== "impl" || this.taskId !== null
+      || !(implementationReviewCycle instanceof ReviewFindingCycle)
+      || implementationReviewCycle.runId !== workUnit.manifestDocument.runId)) {
+      throw new Error("canonical Implementation Review cycle must bind its parent work unit Run");
+    }
+    this.implementationReviewCycle = implementationReviewCycle;
     this.taskReviewPublicationBinding = taskReviewPublicationBinding;
     if ((this.phase === "test") !== (requirementTestReviewSource instanceof RequirementTestReviewSource)) {
       throw new Error("canonical Requirement test review promotion requires exactly one candidate source identity");
@@ -911,7 +934,7 @@ export class CanonicalReviewPromotion {
     Object.freeze(this);
   }
 
-  sealedArtifact() {
+  sealedArtifact({ fallbackCapturedAt = null } = {}) {
     const sealed = this.workUnit.readSealedOutput();
     if (this.phase === "spec") {
       let document;
@@ -940,6 +963,10 @@ export class CanonicalReviewPromotion {
     if (this.phase === "test" && artifact.toolingOutcome != null) {
       return Object.freeze({ sealed, artifact, evidence: null });
     }
+    if (this.phase === "impl" && this.taskId === null && artifact.toolingOutcome != null) {
+      ImplReviewToolingObservation.fromArtifact(artifact, this.workUnit.manifestDocument);
+      return Object.freeze({ sealed, artifact, evidence: null });
+    }
     const evidence = evidenceFor({
       artifact,
       phase: this.phase,
@@ -947,6 +974,7 @@ export class CanonicalReviewPromotion {
       treeSha: this.treeSha,
       targetStateDigest: this.targetStateDigest,
       sourceName: sealed.output.basename,
+      capturedAt: artifact.generatedAt || fallbackCapturedAt,
     });
     return Object.freeze({ sealed, artifact, evidence });
   }
@@ -976,11 +1004,12 @@ export class CanonicalReviewPromotion {
       };
     }
     const { artifact, evidence } = this.sealedArtifact();
-    if (this.phase === "test" && evidence === null) {
+    if (evidence === null) {
       return {
         result: "tooling-error",
         changed: [],
-        artifacts: { phase: "test", toolingOutcome: structuredClone(artifact.toolingOutcome), blockingCount: 0, advisoryCount: 0 },
+        artifacts: { phase: this.phase, toolingOutcome: structuredClone(artifact.toolingOutcome), blockingCount: 0,
+          ...(this.phase === "test" ? { advisoryCount: 0 } : { nonBlockingCount: 0 }) },
       };
     }
     const verdict = normalizedVerdict(artifact.verdict);
@@ -1015,6 +1044,9 @@ export class CanonicalReviewPromotion {
   }
 
   promote(result) {
+    if (this.phase === "impl" && this.taskId === null && this.implementationReviewCycle === null) {
+      throw new Error("canonical Implementation Review publication requires its parent finding cycle");
+    }
     if (this.phase === "spec") {
       const { sealed, delta, next } = this.sealedArtifact();
       // `spec.review` is a revision-scoped authority, not a generic Attempt
@@ -1078,6 +1110,9 @@ export class CanonicalReviewPromotion {
       treeSha: this.treeSha,
       targetStateDigest: this.targetStateDigest,
     };
+    if (this.implementationReviewCycle !== null) {
+      Object.assign(normalizedArtifact, this.implementationReviewCycle.toJSON());
+    }
     if (this.taskId !== null) {
       normalizedArtifact.taskId = this.taskId;
       Object.assign(normalizedArtifact, this.taskReviewCycle.toJSON());
@@ -1095,14 +1130,8 @@ export class CanonicalReviewPromotion {
       logicalKey,
       payload: normalizedArtifact,
     });
-    const publications = evidence === null ? [] : [new CanonicalCommandResultPublication({
-      logicalKey: "review.evidence",
-      parameters: this.taskId === null
-        ? { reviewStep: nodeIdFor({ phase: this.phase, taskId: null }), digest: evidence.identity.evidenceDigest }
-        : { taskId: this.taskId, digest: evidence.identity.evidenceDigest },
-      mediaType: "application/json",
-      payload: evidence.toCanonicalJSON(),
-    })];
+    const publications = canonicalReviewEvidencePublications({ evidence,
+      nodeId: nodeIdFor({ phase: this.phase, taskId: this.taskId }), taskId: this.taskId });
     result.artifacts ||= {};
     result.artifacts.phase = this.phase;
     if (evidence !== null) {
@@ -1143,6 +1172,91 @@ export class CanonicalReviewPromotion {
 export function attachedCanonicalReviewWorkUnit(result) {
   const value = result?.[ATTACHED_REVIEW_WORK_UNIT] ?? null;
   return value instanceof ReviewWorkUnit ? value : null;
+}
+
+function implementationReviewIdentity(state) {
+  return new NonGateTargetBinding({ runId: state.runId, specId: state.specId,
+    stepId: "impl-review", attempt: state.attempt });
+}
+
+function implementationReviewRetry(flowManager, state) {
+  const view = flowManager.loadReadOnly(state.specId);
+  return new NonGateRetryMetrics({ used: countReviewAttempts(view.metrics, "impl"),
+    maximum: resolveMaxAttempts({ scope: "flow", stepId: "impl-review", context: view }) });
+}
+
+function implementationReviewFrontier(state) {
+  return new ImplReviewFrontier({ triageStatus: state.findNode("impl-triage").status,
+    repairStatus: state.findNode("impl-repair").status, gateStatus: state.findNode("impl-gate").status,
+    triageAttemptSequence: state.findNode("impl-triage").attemptSequence,
+    repairAttemptSequence: state.findNode("impl-repair").attemptSequence });
+}
+
+export function readImplReviewRequestEvidence({ flowManager, state, manifest }) {
+  return new ImplReviewResultEvidence({ identity: implementationReviewIdentity(state), manifest,
+    retry: implementationReviewRetry(flowManager, state), frontier: implementationReviewFrontier(state) });
+}
+
+/** Rebuild the publication's evidence from the owning sealed-output parser and exact preview bytes. */
+export function readProspectiveImplReviewEvidence({ flowManager, binding, commandResult, publication }) {
+  const state = publication.state;
+  const attached = attachedCanonicalCommandResultArtifact(commandResult);
+  if (binding.stepId !== "impl-review" || attached?.logicalKey !== "impl.review") {
+    throw new TypeError("Implementation Review requires its canonical artifact");
+  }
+  const published = readProspectiveCommandArtifact(publication, { logicalKey: "impl.review" });
+  const history = CanonicalCommandAttemptArtifactHistory.fromBytes({ logicalKey: "impl.review", bytes: published.bytes });
+  const payload = history.current.payload;
+  // The preview includes its selected future Review producer. Only its
+  // acquired canonical prefix can establish a prior Draft reopening cycle.
+  const cycle = ReviewFindingCycle.fromActivityLedger({ runId: state.runId,
+    activities: publication.activities.filter((activity) => activity.id !== publication.selectedActivityId) });
+  if (!cycle.matchesArtifact(payload)) {
+    throw new TypeError("Implementation Review publication lacks its exact parent finding cycle");
+  }
+  if (history.current.attempt !== binding.attempt.sequence || !isDeepStrictEqual(payload, attached.payload)) {
+    throw new TypeError("Implementation Review command differs from its exact publication");
+  }
+  const workUnit = attachedCanonicalReviewWorkUnit(commandResult);
+  const manifest = workUnit?.manifestDocument ?? null;
+  let review = null;
+  let seal = null;
+  if (payload.canonicalEvidence != null) {
+    if (workUnit === null) throw new TypeError("Implementation Review evidence requires its sealed worker output");
+    const promoted = new CanonicalReviewPromotion({ workUnit, phase: "impl", taskId: null,
+      treeSha: manifest.target.treeSha, targetStateDigest: manifest.target.targetStateDigest }).sealedArtifact({
+        fallbackCapturedAt: payload.canonicalEvidence.provenance?.capturedAt });
+    review = promoted.evidence;
+    seal = promoted.sealed.seal;
+    const output = new ReviewWorkUnitOutputReceipt({ digest: seal.output.digest,
+      byteLength: seal.output.byteLength, mediaType: promoted.sealed.output.mediaType });
+    if (!isDeepStrictEqual(payload.canonicalEvidence, review.toJSON())
+      || !isDeepStrictEqual(payload.workerOutput, output.toJSON())
+      || !isDeepStrictEqual(payload.canonicalTarget, manifest.target.toJSON())) {
+      throw new TypeError("Implementation Review publication differs from its sealed evidence");
+    }
+  } else if (payload.toolingOutcome != null) {
+    if (workUnit === null) throw new TypeError("Bounded Implementation Review tooling requires its sealed worker output");
+    const promoted = new CanonicalReviewPromotion({ workUnit, phase: "impl", taskId: null,
+      treeSha: manifest.target.treeSha, targetStateDigest: manifest.target.targetStateDigest }).sealedArtifact();
+    seal = promoted.sealed.seal;
+    const output = new ReviewWorkUnitOutputReceipt({ digest: seal.output.digest,
+      byteLength: seal.output.byteLength, mediaType: promoted.sealed.output.mediaType });
+    if (promoted.evidence !== null || !isDeepStrictEqual(payload.workerOutput, output.toJSON())
+      || !isDeepStrictEqual(payload.toolingObservation, promoted.artifact.toolingObservation)
+      || !isDeepStrictEqual(payload.canonicalTarget, manifest.target.toJSON())) {
+      throw new TypeError("Bounded Implementation Review tooling differs from its actual sealed output");
+    }
+  } else {
+    throw new TypeError("Implementation Review publication has no sealed observation or tooling outcome");
+  }
+  return new ImplReviewResultEvidence({ identity: implementationReviewIdentity(state), manifest, seal, review,
+    retry: implementationReviewRetry(flowManager, state), frontier: implementationReviewFrontier(state),
+    tooling: payload.toolingOutcome == null ? null : new ReviewToolingOutcome(payload.toolingOutcome),
+    toolingObservation: payload.toolingOutcome == null ? null : ImplReviewToolingObservation.fromArtifact(payload, manifest),
+    publication: new NonGateCatalogPublication({ runId: state.runId, specId: state.specId, stepId: "impl-review",
+      attemptId: binding.attempt.id, sequence: binding.attempt.sequence, producerActivityId: published.descriptor.activityId,
+      artifactId: published.relativePath, fingerprint: published.descriptor.hash }) });
 }
 
 /** The Store consumes this parent-issued binding under its catalog lock. */

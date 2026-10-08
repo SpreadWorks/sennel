@@ -73,11 +73,11 @@ export function attemptHistoryTargetForNode(nodeId) {
   if (route !== undefined) return Object.freeze({ logicalKey: route.logicalKey, parameters: Object.freeze({}) });
   if (FLOW_TRIAGE_REPAIR_NODES.has(normalized)) return null;
   if (flowArtifactAuthorityForStep(normalized) !== null) return null;
-  const task = normalized.match(/^(.+)-(review|triage|repair|gate)$/);
-  if (task === null) return null;
+  const task = TaskStepIdentity.fromNodeId(normalized);
+  if (task === null || task.role === "impl") return null;
   return Object.freeze({
-    logicalKey: `task.${task[2]}`,
-    parameters: Object.freeze({ taskId: task[1] }),
+    logicalKey: `task.${task.role}`,
+    parameters: Object.freeze({ taskId: task.taskId }),
   });
 }
 
@@ -122,13 +122,8 @@ class RevisionScopedSpecReviewReadinessTarget {
 }
 
 function taskNode(nodeId, role) {
-  const match = nodeId.match(/^(.+)-(impl|review|triage|repair|gate)$/);
-  return match?.[2] === role ? match[1] : null;
-}
-
-function taskTargetRole(nodeId) {
-  const match = nodeId.match(/^task-(impl|review|triage|repair|gate)$/);
-  return match?.[1] ?? null;
+  const identity = TaskStepIdentity.fromNodeId(nodeId);
+  return identity?.role === role ? identity.taskId : null;
 }
 
 function targetProducerMatches(target, producerNodeId) {
@@ -142,16 +137,16 @@ function targetConsumerMatches(target, producerNodeId, consumerNodeId) {
   if (target.consumer === consumerNodeId) return true;
   const producerTask = taskNode(producerNodeId, target.producer === "task-review" ? "review" : "gate");
   if (producerTask === null) return false;
-  const consumerRole = taskTargetRole(target.consumer);
-  return consumerRole !== null && taskNode(consumerNodeId, consumerRole) === producerTask;
+  const consumer = TaskStepIdentity.fromNodeId(consumerNodeId);
+  return consumer !== null && consumer.definitionId === target.consumer && consumer.taskId === producerTask;
 }
 
 function consumerNodeForTarget(target, producerNodeId) {
-  const consumerRole = taskTargetRole(target.consumer);
-  if (consumerRole === null) return target.consumer;
+  const consumer = TaskStepIdentity.fromNodeId(target.consumer);
+  if (consumer?.taskId !== "task") return target.consumer;
   const role = target.producer === "task-review" ? "review" : "gate";
   const taskId = taskNode(producerNodeId, role);
-  return taskId === null ? null : `${taskId}-${consumerRole}`;
+  return taskId === null ? null : TaskStepIdentity.fromDefinitionId({ taskId, definitionId: target.consumer })?.nodeId ?? null;
 }
 
 function taskReviewStageRoute({ state, producerNodeId, consumerNodeId, logicalKey }) {

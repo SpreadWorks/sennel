@@ -2,6 +2,7 @@ import {
   CurrentAttemptIdentity,
   CurrentFlowState,
 } from "./current-flow-state.js";
+import { TaskStepIdentity } from "./task-step-identity.js";
 
 function requiredText(value, field) {
   if (typeof value !== "string" || value.trim() === "") {
@@ -33,7 +34,7 @@ export class TaskReviewExecutionIdentity {
   constructor({ taskId, attempt, reviewAttempt } = {}) {
     this.taskId = requiredText(taskId, "Task Review execution taskId");
     this.attempt = CurrentAttemptIdentity.from(attempt);
-    if (this.attempt.nodeId !== `${this.taskId}-review`) {
+    if (!new TaskStepIdentity({ taskId: this.taskId, role: "review" }).matchesNode(this.attempt.nodeId)) {
       throw new Error("Task Review execution Attempt does not match its Task");
     }
     if (!Number.isSafeInteger(reviewAttempt) || reviewAttempt < 1 || reviewAttempt > 4) {

@@ -1,3 +1,4 @@
+import { readProspectiveCommandArtifact } from "./prospective-command-artifact.js";
 import { CURRENT_FLOW_SCHEMA_REVISION } from "../../lib/flow-schema-revision.js";
 import crypto from "node:crypto";
 import { FLOW_ARTIFACT_CONTRACTS } from "../../lib/flow-artifact-contract.js";
@@ -15,6 +16,7 @@ import {
 } from "./gate-observation-convergence.js";
 import { PlanGateRepairObservation, PlanGateRepairRecord } from "./plan-gate-repair.js";
 import { assertGateSettlementPublication } from "./gate-settlement-publication.js";
+import { TaskStepIdentity } from "./task-step-identity.js";
 
 const OUTCOME_PATH = /^artifacts\/plan-gate-repairs\/([A-Za-z0-9][A-Za-z0-9._-]*)\/outcome\.json$/;
 const SPEC_GATE_AUDIT_PATH = /^artifacts\/spec-gate-repairs\/([A-Za-z0-9][A-Za-z0-9._-]*)\/audit\.json$/;
@@ -54,16 +56,16 @@ function exactDescriptor(catalog, resolved, logicalKey) {
 }
 
 function taskIdForGateNode(nodeId) {
-  if (typeof nodeId !== "string" || !nodeId.endsWith("-gate") || nodeId === "impl-gate") return null;
-  const taskId = nodeId.slice(0, -"-gate".length);
-  return ["draft", "spec", "test"].includes(taskId) ? null : taskId;
+  const identity = TaskStepIdentity.fromNodeId(nodeId);
+  return identity?.role === "gate" && !["draft", "spec", "test", "impl"].includes(identity.taskId)
+    ? identity.taskId : null;
 }
 
 function gateNodeFor(phase, taskId) {
   if (phase === "draft") return "draft-gate";
   if (phase === "spec" || phase === "task-spec") return "spec-gate";
   if (phase === "integration") return "impl-gate";
-  return taskId === null ? null : `${taskId}-gate`;
+  return taskId === null ? null : new TaskStepIdentity({ taskId, role: "gate" }).nodeId;
 }
 
 function gateConsumer(logicalKey) {
@@ -95,8 +97,14 @@ function activityAttemptKey(nodeId, attempt) {
   return JSON.stringify([nodeId, attempt?.id, attempt?.sequence]);
 }
 
+function repairPublicationResultKind(record) {
+  if (record.route.phase === "task-impl") return "task-gate-repair-required";
+  if (record.route.phase === "integration") return "impl-gate-semantic-failure";
+  return `${record.route.phase}-gate-repair-required`;
+}
+
 function repairActivityFor(record, activities) {
-  const prospectiveKind = `${record.route.phase}-gate-repair-required`;
+  const prospectiveKind = repairPublicationResultKind(record);
   const matches = activities.filter((activity) => {
     const references = activity?.references?.repairs;
     return activity?.transition?.operation === "plan_gate_repair"
@@ -228,7 +236,9 @@ export class CanonicalGateObservationCycle {
   #gateResultHistory = new Map();
   #activitiesByAttempt;
 
-  constructor({ flowManager, state } = {}) {
+  #prospectivePublication;
+
+  constructor({ flowManager, state, prospectivePublication = null } = {}) {
     if (!flowManager
       || typeof flowManager.artifactCatalog !== "function"
       || typeof flowManager.readArtifact !== "function"
@@ -240,8 +250,10 @@ export class CanonicalGateObservationCycle {
     }
     this.flowManager = flowManager;
     this.state = state;
-    this.catalog = flowManager.artifactCatalog(state.specId);
-    this.activities = Object.freeze([...flowManager.activityLedger(state.specId)]);
+    this.#prospectivePublication = prospectivePublication;
+    this.catalog = prospectivePublication === null ? flowManager.artifactCatalog(state.specId)
+      : Array.isArray(prospectivePublication.catalog) ? { artifacts: prospectivePublication.catalog } : prospectivePublication.catalog;
+    this.activities = Object.freeze([...(prospectivePublication?.activities ?? flowManager.activityLedger(state.specId))]);
     this.#activitiesByAttempt = new Map();
     for (const activity of this.activities) {
       const key = activityAttemptKey(activity.nodeId, {
@@ -259,20 +271,30 @@ export class CanonicalGateObservationCycle {
     Object.freeze(this);
   }
 
+  #readArtifact(input) {
+    return this.#prospectivePublication === null ? this.flowManager.readArtifact(input)
+      : readProspectiveCommandArtifact(this.#prospectivePublication, input);
+  }
+
   #attemptActivities(nodeId, attempt) {
     return this.#activitiesByAttempt.get(activityAttemptKey(nodeId, attempt)) ?? [];
   }
 
   #matchesPublication(activity, { nodeId, attempt, descriptor, historyEntry, publicationBytes } = {}) {
     if (!matchingAttemptActivity(activity, { nodeId, attempt })) return false;
-    if (nodeId === "spec-gate" && (activity.result?.draftSettlementReceipt != null
-      || activity.transition?.operation === "record_draft_step_settlement")) {
+    if (this.#prospectivePublication !== null
+      && activity.id === this.#prospectivePublication.selectedActivityId) {
+      return descriptor.activityId === activity.id && historyEntry.attempt === attempt.sequence
+        && descriptor.hash === crypto.createHash("sha256").update(publicationBytes).digest("hex");
+    }
+    if (activity.result?.draftSettlementReceipt != null
+      || activity.transition?.operation === "record_draft_step_settlement") {
       assertGateSettlementPublication({
         state: this.state, activity, descriptor, historyEntry, attempt, publicationBytes,
       });
     }
     return activity.transition?.operation === "record_draft_step_settlement"
-      ? nodeId === "spec-gate"
+      ? activity.result?.draftSettlementReceipt != null
       : ATTEMPT_ARTIFACT_PUBLICATION_OPERATIONS.has(activity.transition?.operation);
   }
 
@@ -302,7 +324,7 @@ export class CanonicalGateObservationCycle {
   #gateResult(keys) {
     const cacheKey = JSON.stringify([keys.result, keys.parameters]);
     if (this.#gateResultHistory.has(cacheKey)) return this.#gateResultHistory.get(cacheKey);
-    const resolved = this.flowManager.readArtifact({
+    const resolved = this.#readArtifact({
       specId: this.state.specId,
       logicalKey: keys.result,
       parameters: keys.parameters,
@@ -323,7 +345,7 @@ export class CanonicalGateObservationCycle {
   }
 
   #issueLog() {
-    const resolved = this.flowManager.readArtifact({
+    const resolved = this.#readArtifact({
       specId: this.state.specId,
       logicalKey: "issue.log",
       consumerNodeId: "flow",
@@ -340,7 +362,7 @@ export class CanonicalGateObservationCycle {
     if (this.state.migration === null || this.state.migration === undefined) {
       return Object.freeze({ occurrences: Object.freeze([]), repairs: Object.freeze([]), outcomes: Object.freeze([]) });
     }
-    const resolved = this.flowManager.readArtifact({
+    const resolved = this.#readArtifact({
       specId: this.state.specId, logicalKey: "spec.gate.repair.migration",
       consumerNodeId: "spec-gate",
     });
@@ -395,7 +417,7 @@ export class CanonicalGateObservationCycle {
       if (expected.relativePath !== descriptor.relativePath) {
         throw new Error("plan Gate repair outcome path does not match its collection identity");
       }
-      const resolved = this.flowManager.readArtifact({
+      const resolved = this.#readArtifact({
         specId: this.state.specId,
         logicalKey: "plan.gate.repair.outcome",
         parameters: { repairId },
@@ -433,7 +455,7 @@ export class CanonicalGateObservationCycle {
       if (expected.relativePath !== descriptor.relativePath) {
         throw new Error("Spec Gate repair audit path does not match its Attempt");
       }
-      const resolved = this.flowManager.readArtifact({
+      const resolved = this.#readArtifact({
         specId: this.state.specId, logicalKey: "spec.gate.repair.audit",
         parameters: { attemptId }, consumerNodeId: "spec-gate",
       });
@@ -513,7 +535,7 @@ export class CanonicalGateObservationCycle {
         throw new Error("current canonical failed Gate result has no exact failure Activity");
       }
 
-      const source = this.flowManager.readArtifact({
+      const source = this.#readArtifact({
         specId: this.state.specId,
         logicalKey: keys.source,
         parameters: keys.parameters,
@@ -624,7 +646,7 @@ export class CanonicalGateObservationCycle {
       publicationBytes: attemptHistoryPrefixBytes(document, sourceAttempt.sequence),
     })) throw new Error("canonical Gate repair source has no exact publication Activity");
     const atomicGateSettlement = sourcePublications[0].id === repairActivity.id
-      && repairActivity.result?.stepResult?.kind === `${record.route.phase}-gate-repair-required`;
+      && repairActivity.result?.stepResult?.kind === repairPublicationResultKind(record);
     if (!Number.isSafeInteger(sourcePublications[0].confirmationOrder)
       || !Number.isSafeInteger(repairActivity.confirmationOrder)
       || sourcePublications[0].confirmationOrder > repairActivity.confirmationOrder

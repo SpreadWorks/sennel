@@ -5,8 +5,7 @@ import {
   inspectCanonicalPlanGateRepair,
   planGateRepairRouteForGateStep,
 } from "./plan-gate-repair.js";
-import { resolveGateTransition } from "../definition.js";
-import { readCurrentGateTransitionFacts } from "./gate-transition-facts.js";
+import { resolveGateNextAction } from "./gate-transition-application.js";
 import { CanonicalGateObservationCycle } from "./canonical-gate-observation-cycle.js";
 
 export default class RunRepairPlanGateCommand extends FlowCommand {
@@ -74,15 +73,17 @@ export default class RunRepairPlanGateCommand extends FlowCommand {
       );
     }
     const { phase } = evidence.route;
+    let selection = null;
     let decision = null;
     if (phase === "task-impl") {
       try {
-        const facts = readCurrentGateTransitionFacts({
+        selection = resolveGateNextAction({
           flowManager: ctx.flowManager,
           flowState: ctx.flowManager.loadReadOnly(state.specId),
           phase,
+          root: ctx.root,
         });
-        decision = facts === null ? null : resolveGateTransition(facts);
+        decision = selection?.decision ?? null;
       } catch (error) {
         return Envelope.fail("run", "repair-plan-gate", "PLAN_GATE_REPAIR_EVIDENCE_MISSING", error.message);
       }
@@ -106,6 +107,9 @@ export default class RunRepairPlanGateCommand extends FlowCommand {
         record,
         issueLog: evidence.issueLog,
         decision,
+        stepResult: selection.result,
+        settlement: selection.settlement,
+        settlementReceipt: selection.receipt,
       });
     } catch (error) {
       return Envelope.fail(

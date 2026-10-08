@@ -27,4 +27,15 @@ export class WorkerArtifactHandoffError extends Error {
   get isAdmissionRejection() {
     return ["invalid", "stale", "conflict"].includes(this.classification);
   }
+
+  /** Producer observations still require their original request's live authority. */
+  get isProducerFailure() {
+    if (!["missing", "invalid"].includes(this.classification)
+      || this.recoveryPossible || this.data.failureKind === "step-admission") return false;
+    const observed = (value) => value?.transport != null || value?.payloadFormat != null
+      || (typeof value?.logicalName === "string" && typeof value?.payloadPath === "string")
+      || value?.failureKind === "producer-payload" || value?.failureKind === "semantic";
+    return observed(this.data)
+      || (this.data.retryExhausted === true && observed(this.data.first) && observed(this.data.second));
+  }
 }

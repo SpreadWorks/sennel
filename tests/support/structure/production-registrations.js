@@ -115,11 +115,13 @@ export class SharedExecutionShape {
 }
 
 export class ExecutionLoader {
-  constructor(module, declarationName, commandModule) {
-    if ([module, declarationName, commandModule].some((value) => typeof value !== "string" || !value)) {
+  constructor(module, declarationName, commandModule, commandGroup = null, commandName = null) {
+    if ([module, declarationName, commandModule].some((value) => typeof value !== "string" || !value)
+      || (commandGroup === null) !== (commandName === null)
+      || commandGroup !== null && [commandGroup, commandName].some((value) => typeof value !== "string" || !value)) {
       throw new TypeError("ExecutionLoader requires a named command module loader");
     }
-    Object.assign(this, { module, declarationName, commandModule });
+    Object.assign(this, { module, declarationName, commandModule, commandGroup, commandName });
     Object.freeze(this);
   }
 }

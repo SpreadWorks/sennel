@@ -155,6 +155,28 @@ describe("canonical flow finding source identity", () => {
     assert.notEqual(fingerprint({ ...base, specRevision: `sha256:${"b".repeat(64)}` }), original);
   });
 
+  it("publishes only the nonempty fingerprint subset of canonical source identities", () => {
+    const publication = buildDeferredSemanticFindingsPublication({
+      flowManager: manager(),
+      flowState: { schemaRevision: CURRENT_FLOW_SCHEMA_REVISION, specId: "001", runId: "run-1" },
+      nodeId: "draft-gate",
+      sourceStep: "draft-gate",
+      sourceArtifact: SOURCE_PATH,
+      sourcePayload: sourcePayload(),
+      sourceRelativePath: SOURCE_PATH,
+      attempts: 5,
+      fingerprints: new Set([SECOND_FINGERPRINT]),
+    });
+
+    assert.equal(publication.changed, true);
+    assert.deepEqual(publication.artifact.entries.map((entry) => entry.sourceIdentity().toJSON()), [{
+      sourceArtifact: SOURCE_PATH,
+      sourceStep: "draft-gate",
+      sourceFindingId: "shared-observation",
+      fingerprint: SECOND_FINGERPRINT,
+    }]);
+  });
+
   it("publishes observations with one producer id and distinct fingerprints as separate exact identities", () => {
     const publication = buildDeferredSemanticFindingsPublication({
       flowManager: manager(),

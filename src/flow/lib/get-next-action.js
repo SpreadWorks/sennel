@@ -4,6 +4,9 @@ import { flowStepExecutionRegistration, gateStepExecutionRegistration, reviewSte
   from "../engine/composition/registered-step-execution.js";
 import { requirementTestStepRegistration } from "../engine/composition/test.js";
 import { prepareStepRegistration } from "../engine/composition/prepare.js";
+import { taskStepRegistration } from "../engine/composition/task.js";
+import { implStepRegistration } from "../engine/composition/impl.js";
+import { TaskStepIdentity } from "./task-step-identity.js";
 import { NextActionPlanError } from "./next-action-plan-error.js";
 import { CURRENT_FLOW_SCHEMA_REVISION } from "../../lib/flow-schema-revision.js";
 /**
@@ -30,8 +33,6 @@ import {
   SpecGatePostFailureFacts,
   resolveTaskExecutionOverrun,
   selectedNonGateUserAction,
-  testExecuteTransitionDefinition,
-  testResultReviewTransitionDefinition,
 } from "../definition.js";
 import { loadRules, filterRules, renderRuleBlock } from "../../lib/skill-rules.js";
 import { PRODUCT } from "../../lib/product.js";
@@ -87,16 +88,15 @@ import {
 } from "./definition-route-facts.js";
 import { CanonicalCommandAttemptArtifactHistory } from "./canonical-command-result.js";
 import { resolveNonGateNextAction } from "./non-gate-transition-application.js";
-import { hasCurrentTestChainPublication, readCurrentTestChainTransitionFacts } from "./test-chain-transition-facts.js";
 import {
   GateTransitionActionProjection,
+  SavedImplementationGateSelection,
   resolveGateNextAction,
 } from "./gate-transition-application.js";
 import { CanonicalTaskContext, canonicalTaskContextKinds } from "./task-canonical-context.js";
 import { captureCurrentTaskSource } from "./task-mutation-lineage.js";
 import { readTaskExecutionOverrunFacts } from "./task-execution-overrun.js";
 import { assertReconciledTaskReviewInput } from "./task-review-reconciliation.js";
-import { TaskReviewStageInputs } from "./task-review-stage-artifacts.js";
 import {
   decisionContextForActiveFlow,
   definitionNonblockingEligibilityForActiveFlow,
@@ -115,28 +115,18 @@ function projectPrepareStepExecution(input) {
   return registration.executionContract.project(selection, { ...input, registration });
 }
 
-const TEST_CHAIN_NEXT_ACTION_DEFINITIONS = Object.freeze({
-  "test-execute": testExecuteTransitionDefinition,
-  "test-result-review": testResultReviewTransitionDefinition,
-});
-const TEST_CHAIN_RESULT_KEYS = Object.freeze({
-  "test-execute": "test.execute",
-  "test-result-review": "test.result.review",
-});
+export function projectHostFilterExecutionDirective(input) {
+  const registration = taskStepRegistration(input.stepId);
+  if (registration === null) throw new TypeError("Host filter projection requires a registered Task Step");
+  const selection = registration.executionContract.select({ ...input, registration });
+  return registration.executionContract.project(selection, { ...input, registration });
+}
 
-function blockedTestChainProjection(ctx, typedState, descriptor) {
-  const definition = TEST_CHAIN_NEXT_ACTION_DEFINITIONS[descriptor.nodeId] ?? null;
-  const resultKey = TEST_CHAIN_RESULT_KEYS[descriptor.nodeId] ?? null;
-  if (definition === null || resultKey === null || typedState.attempt === null) return null;
-  const snapshot = ctx.flowManager.readCanonicalTransitionSnapshot(typedState.specId);
-  if (snapshot?.stepId !== descriptor.nodeId || !hasCurrentTestChainPublication(snapshot, resultKey)) return null;
-  const selected = resolveNonGateNextAction({
-    flowManager: ctx.flowManager,
-    specId: typedState.specId,
-    readStepFacts: () => readCurrentTestChainTransitionFacts({ flowManager: ctx.flowManager, specId: typedState.specId }),
-    stepDefinition: definition,
-  });
-  return ["blocked", "await-user-input"].includes(selected.decision.disposition.operation) ? selected : null;
+export function projectTestChainExecutionDirective(input) {
+  const registration = implStepRegistration(input.stepId);
+  if (registration === null) throw new TypeError("Test-chain projection requires a registered implementation Step");
+  const selection = registration.executionContract.select({ ...input, registration });
+  return registration.executionContract.project(selection, { ...input, registration });
 }
 
 const DEFAULT_SCHEMA_DIR = fileURLToPath(new URL("../schemas/", import.meta.url));
@@ -282,11 +272,11 @@ function finalRegressionNextAction(ctx, state, typedState, binding) {
   return null;
 }
 
-class SavedSpecGateSelection {
-  constructor(saved) {
-    if (saved?.result?.stepId !== "spec-gate" || saved?.settlement?.sourceStepId !== "spec-gate"
-      || saved?.receipt?.binding?.stepId !== "spec-gate") {
-      throw new Error("saved Spec Gate selection requires one bound Result and Settlement");
+class SavedGateSelection {
+  constructor(saved, stepId) {
+    if (saved?.result?.stepId !== stepId || saved?.settlement?.sourceStepId !== stepId
+      || saved?.receipt?.binding?.stepId !== stepId) {
+      throw new Error("saved Gate selection requires one bound Result and Settlement");
     }
     this.result = saved.result;
     this.settlement = saved.settlement;
@@ -301,7 +291,11 @@ class SavedSpecGateSelection {
   }
 }
 
-/** Definition-owned Gate routing is projected only from its canonical typed facts. */
+class SavedSpecGateSelection extends SavedGateSelection {
+  constructor(saved) { super(saved, "spec-gate"); }
+}
+
+/** Project the registered Gate owner, including authenticated saved implementation Results. */
 function definitionOwnedGateSelection(ctx, state, target) {
   const phase = target.stepId === "draft-gate" ? "draft" : target.stepId === "spec-gate"
       ? "spec"
@@ -319,6 +313,11 @@ function definitionOwnedGateSelection(ctx, state, target) {
       specId: state.specId, stepId: "spec-gate",
     });
     if (saved !== null) return new SavedSpecGateSelection(saved);
+  }
+  if (phase === "task-impl" || phase === "integration") {
+    const saved = ctx.flowManager.readCurrentStepSettlement({ specId: state.specId, stepId: registration.stepId });
+    if (saved?.settlement.kind === "failure") return resolveGateNextAction({
+      flowManager: ctx.flowManager, flowState: state, phase, root: ctx.root });
   }
   if (registration !== null) {
     const selection = registration.executionContract.select({
@@ -340,6 +339,13 @@ function definitionOwnedGateSelection(ctx, state, target) {
 
 function definitionOwnedGateDirective(selection, { state, binding }) {
   if (selection === null) return null;
+  if ((selection instanceof SavedImplementationGateSelection
+    || selection instanceof SavedGateSelection && !(selection instanceof SavedSpecGateSelection))
+    && selection.settlement.kind === "failure") {
+    return new BlockedDirective({ code: selection.result.error?.code || "GATE_BLOCKED",
+      reason: selection.result.error?.message || "Gate is blocked by its saved Result.",
+      resumeInstruction: "Supply changed canonical evidence before another Gate evaluation." });
+  }
   if (selection instanceof SavedSpecGateSelection) {
     const { result, settlement, receipt } = selection;
     if (settlement?.kind === "failure") return new BlockedDirective({
@@ -508,12 +514,8 @@ class CanonicalNextActionTarget {
     if (typeof descriptor.nodeKey !== "string" || descriptor.nodeKey.length === 0) {
       throw new NextActionPlanError("NEXT_ACTION_TARGET_MISMATCH", "canonical next action has no definition key");
     }
-    const taskPrefix = task === null ? null : `${task.id}-`;
-    const definitionStepId = task === null
-      ? descriptor.nodeId
-      : descriptor.nodeId.startsWith(taskPrefix)
-        ? `task-${descriptor.nodeId.slice(taskPrefix.length)}`
-        : null;
+    const identity = TaskStepIdentity.fromStateNode(state, descriptor.nodeId);
+    const definitionStepId = task === null ? descriptor.nodeId : identity?.definitionId ?? null;
     if (typeof definitionStepId !== "string" || definitionStepId.length === 0) {
       throw new NextActionPlanError("NEXT_ACTION_TARGET_MISMATCH", "canonical next action does not match its Task Step identity");
     }
@@ -542,7 +544,7 @@ function canonicalInstruction(derived, target, state) {
   });
 }
 
-function canonicalWorkerContext(ctx, derived, target, state, typedState) {
+function canonicalWorkerContext(ctx, derived, target, state, typedState, hostFilterProjection = null) {
   let context = buildContextDescriptor(derived.contextKinds, target, state);
   const extensions = {};
   if (target.scope === "task") {
@@ -565,18 +567,9 @@ function canonicalWorkerContext(ctx, derived, target, state, typedState) {
         sourceFingerprint: source.fingerprint,
       });
       context = taskContextProjection({ taskContext, derived, target, state, source });
-      if (target.stepId === "task-triage") {
-        const inputs = new TaskReviewStageInputs({
-          flowManager: ctx.flowManager, state: typedState, taskId: target.taskId,
-          context: taskContext, stage: "task-triage",
-        });
-        extensions.taskReviewFilter = Object.freeze({
-          attemptId: typedState.attempt?.id ?? null,
-          reviewDigest: inputs.review.reference.digest,
-          sourceFingerprint: inputs.binding.sourceFingerprint,
-          catalogFingerprint: ctx.flowManager.artifactCatalog(state.specId).hash,
-          findings: inputs.findings.map(({ findingKey: _internalFindingKey, ...finding }) => structuredClone(finding)),
-        });
+      if (hostFilterProjection !== null) {
+        extensions.taskReviewFilter = Object.freeze({ ...hostFilterProjection.directive.binding,
+          findings: hostFilterProjection.directive.findings });
       }
     } catch (cause) {
       throw new NextActionPlanError(
@@ -809,9 +802,7 @@ function buildCanonicalNextActionResult(ctx, state, typedState, descriptor, bind
   const strictReviewState = state.policy?.nonblocking?.enabled === true
     ? { ...state, policy: { ...state.policy, nonblocking: null } }
     : state;
-  const reviewRegistration = target.scope === "flow"
-    ? target.stepId === "test-review" ? reviewStepExecutionRegistration("test")
-      : draftStepRegistration(target.stepId) ?? specStepRegistration(target.stepId) : null;
+  const reviewRegistration = reviewStep ? flowStepExecutionRegistration(target.stepId) : null;
   const reviewInput = { flowManager: ctx.flowManager, flowState: strictReviewState,
     typedState, scope: target.scope, stepId: target.stepId };
   const reviewSelection = reviewStep && ["resume", "retry", "record", "blocked"].includes(descriptor.operation)
@@ -821,9 +812,16 @@ function buildCanonicalNextActionResult(ctx, state, typedState, descriptor, bind
   const reviewDisposition = reviewStep && reviewRegistration !== null
     && ["resume", "retry", "record", "blocked"].includes(descriptor.operation)
     ? reviewRegistration.executionContract.project(reviewSelection, {
-      ctx, scope: "flow", stepId: reviewRegistration.stepId,
+      ctx, scope: target.scope, stepId: reviewRegistration.stepId,
     }) : reviewSelection.disposition;
-  const registeredFlowStep = target.scope === "flow" ? flowStepExecutionRegistration(target.stepId) : null;
+  const registeredFlowStep = flowStepExecutionRegistration(target.stepId);
+  const hostFilterProjection = target.scope === "task"
+    && taskStepRegistration(target.stepId)?.executionContract.selectorName === "selectHostFilterExecution"
+    && typedState.attempt?.failure === null
+    ? projectHostFilterExecutionDirective({ ctx, stepId: target.stepId }) : null;
+  const testChainProjection = target.scope === "flow"
+    && implStepRegistration(target.stepId)?.executionContract.selectorName === "selectTestChainExecution"
+    ? projectTestChainExecutionDirective({ ctx, stepId: target.stepId }) : null;
   const workerRegistration = registeredFlowStep?.executionContract.selectorName === "selectWorkerExecutionAdmission"
     ? registeredFlowStep
     : target.scope === "flow" ? draftWorkerStepRegistration(target.stepId) ?? specWorkerStepRegistration(target.stepId) : null;
@@ -933,7 +931,7 @@ function buildCanonicalNextActionResult(ctx, state, typedState, descriptor, bind
           ? lifecycleDirective.continuation
           : null,
       });
-  const workerContext = canonicalWorkerContext(ctx, derived, target, state, typedState);
+  const workerContext = canonicalWorkerContext(ctx, derived, target, state, typedState, hostFilterProjection);
   const workerDirective = workerSelection === undefined ? null
     : workerRegistration.executionContract.project(workerSelection, {
         stepId: workerRegistration.stepId, binding, recoveryCommand, retryRecoveryPlan: recoveryPlan,
@@ -945,27 +943,8 @@ function buildCanonicalNextActionResult(ctx, state, typedState, descriptor, bind
     resumeInstruction: specPostFailure.resumeInstruction,
   }));
   selectedDirective ??= userDecisionDirective ?? (workerDirective instanceof ExecuteStepDirective ? null : workerDirective) ?? approvalDirective ?? activationDirective
-    ?? outboxRecovery?.directive ?? gateDirective ?? lifecycleDirective;
-  if (target.scope === "task" && target.stepId === "task-triage" && typedState.attempt?.failure === null) {
-    const filter = workerContext.taskReviewFilter;
-    const quoted = (value) => `'${String(value).replaceAll("'", "'\"'\"'")}'`;
-    selectedDirective = new AwaitTaskReviewFilterDirective({
-      command: guardedCommand([
-        "sennel flow run filter-task-review --exclusions '<json-array>'",
-        `--expect-attempt-id ${quoted(filter.attemptId)}`,
-        `--expect-review-digest ${quoted(filter.reviewDigest)}`,
-        `--expect-source-fingerprint ${quoted(filter.sourceFingerprint)}`,
-        `--expect-catalog-fingerprint ${quoted(filter.catalogFingerprint)}`,
-      ].join(" "), state, binding),
-      binding: {
-        attemptId: filter.attemptId,
-        reviewDigest: filter.reviewDigest,
-        sourceFingerprint: filter.sourceFingerprint,
-        catalogFingerprint: filter.catalogFingerprint,
-      },
-      findings: filter.findings,
-    });
-  }
+    ?? outboxRecovery?.directive ?? gateDirective ?? testChainProjection?.directive ?? workerDirective ?? lifecycleDirective;
+  if (hostFilterProjection !== null) selectedDirective = hostFilterProjection.directive;
   if (selectedDirective instanceof ExecuteStepDirective && target.scope === "task" && target.stepId === "task-review" && typedState.attempt?.failure === null) {
     try { assertReconciledTaskReviewInput({ flowManager: ctx.flowManager, state: typedState, taskId: target.taskId, root: ctx.executionRoot || ctx.root }); }
     catch (error) {
@@ -1010,8 +989,9 @@ function buildCanonicalNextActionResult(ctx, state, typedState, descriptor, bind
         ...(selectedFinalRegressionAction.userAction && { userAction: selectedFinalRegressionAction.userAction.toJSON() }),
       },
     }),
+    ...(testChainProjection?.action && { definitionTransition: testChainProjection.action.toJSON() }),
     ...(gateSelection && {
-      definitionTransition: gateSelection instanceof SavedSpecGateSelection
+      definitionTransition: gateSelection instanceof SavedGateSelection || gateSelection instanceof SavedImplementationGateSelection
         ? gateSelection.toJSON() : gateSelection.action.toJSON(),
     }),
   };
@@ -1085,41 +1065,6 @@ export default class GetNextActionCommand extends FlowCommand {
       };
     }
     let result = null;
-    const nonGateBlocked = blockedTestChainProjection(ctx, typedState, descriptor);
-    if (nonGateBlocked !== null) {
-      result ??= buildCanonicalNextActionResult(ctx, ctx.flowState, typedState, descriptor, binding, null);
-      const awaitingNonblockingDecision = nonGateBlocked.decision.disposition.operation === "await-user-input";
-      const eligibility = definitionNonblockingEligibilityForActiveFlow(
-        ctx.root,
-        ctx.flowState,
-        ctx.flowManager,
-      );
-      const activationOffer = nonblockingActivationOfferForStrictStop({
-        state: ctx.flowState,
-        eligibility,
-        binding,
-      });
-      const reason = nonGateBlocked.decision.disposition.reason
-        ?? (awaitingNonblockingDecision
-          ? "the nonblocking observation requires an explicit advisory decision"
-          : "Definition rejected the current canonical test-chain evidence.");
-      return {
-        ...result,
-        definitionTransition: nonGateBlocked.action.toJSON(),
-        ...(awaitingNonblockingDecision && {
-          nonblockingDecision: decisionContextForActiveFlow(ctx.root, ctx.flowState, ctx.flowManager).toJSON(),
-        }),
-        directive: activationOffer !== null
-          ? new AwaitUserDecisionDirective({ prompt: activationOffer.prompt, reason: activationOffer.blocker }).toJSON()
-          : new BlockedDirective({
-          code: awaitingNonblockingDecision ? "TEST_CHAIN_NONBLOCKING_DECISION_REQUIRED" : "TEST_CHAIN_EVIDENCE_BLOCKED",
-          reason: awaitingNonblockingDecision ? `Definition selected an explicit nonblocking decision boundary: ${reason}` : `Definition selected blocked: ${reason}`,
-          resumeInstruction: awaitingNonblockingDecision
-            ? "Record the evidence-bound nonblocking repair, retry, or continue decision; do not rerun the observed producer directly."
-            : "Publish a fresh, complete canonical test-chain observation; do not rerun the blocked producer directly.",
-        }).toJSON(),
-      };
-    }
     const missingRoute = missingProducerArtifactRouteFor({ ctx, typedState });
     const interruptedRuntimeLog = inspectInterruptedFinalizeSync(ctx);
     return buildCanonicalNextActionResult(ctx, ctx.flowState, typedState, descriptor, binding, missingRoute, selectedFinalRegressionAction, interruptedRuntimeLog);

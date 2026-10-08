@@ -74,7 +74,7 @@ test("copied production worker entry rejects discarding its registered selection
     "const selection = registration.executionContract.select({ ctx, stepId });");
   const restore = replaceOnce(root, file,
     "return registration.executionContract.execute(selection, {\n"
-      + "      command: this, ctx, invocation, retryFeedback, agentOverride,\n"
+      + "      command: this, ctx, stepId, invocation, retryFeedback, agentOverride,\n"
       + "    });",
     "return this.#executeSelectedWorker(ctx, invocation, retryFeedback, agentOverride);");
   assertViolation(checkPhase(root, "spec"), "A10", file, selectionLine);
@@ -104,7 +104,7 @@ test("copied production Gate display rejects discarding only its registered proj
     "const selection = registration.executionContract.select({\n"
       + "      flowManager: ctx.flowManager, flowState: state, phase,");
   const restore = replaceOnce(root, file,
-    "return registration.executionContract.project(selection);",
+    "return registration.executionContract.project(selection, { scope: target.scope, stepId: registration.stepId });",
     "return selection.action;");
   assertViolation(checkPhase(root, "draft"), "A10", file, selectionLine);
   restore();
@@ -114,12 +114,13 @@ test("copied production Gate display rejects discarding only its registered proj
 test("copied production rejects excluding one registered worker from shared display judgment", (t) => {
   const root = copyProductionSource(t);
   const file = "src/flow/lib/get-next-action.js";
-  const original = 'const workerRegistration = target.scope === "flow"';
+  const original = 'const workerRegistration = registeredFlowStep?.executionContract.selectorName === "selectWorkerExecutionAdmission"';
   const line = lineOfUnique(root, file, original);
   for (const [phase, stepId] of [["spec", "spec-gate-repair"], ["draft", "draft-refine"]]) {
     assertClean(checkPhase(root, phase));
     const restore = replaceOnce(root, file, original,
-      `${original} && target.stepId !== ${JSON.stringify(stepId)}`);
+      `const workerRegistration = target.stepId === ${JSON.stringify(stepId)} ? null : `
+        + original.slice("const workerRegistration = ".length));
     try {
       assertViolation(checkPhase(root, phase), "A10", file, line);
     } finally {
@@ -195,8 +196,14 @@ test("copied production rejects Service reads through an instantiated helper", (
     'import { StepResult } from "../engine/step-result.js";\n'
       + 'import { InputReader } from "../lib/input-reader.js";');
   const restoreMethod = replaceOnce(root, serviceFile,
-    "inspectWorkerCompletion() { return this.#input.facts; }",
-    "inspectWorkerCompletion() { const reader = new InputReader(); return reader.obtain(); }");
+    'inspectWorkerCompletion() {\n'
+      + '    if (this.#outcome !== null) throw new Error("prepared Spec adoption is stale after its completed settlement");\n'
+      + '    return this.#input.facts;\n'
+      + '  }',
+    'inspectWorkerCompletion() {\n'
+      + '    if (this.#outcome !== null) throw new Error("prepared Spec adoption is stale after its completed settlement");\n'
+      + '    const reader = new InputReader(); return reader.obtain();\n'
+      + '  }');
   try {
     assertViolation(checkPhase(root, "spec"), "A08", helperFile, 1);
   } finally {

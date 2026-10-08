@@ -1,6 +1,8 @@
 /** Read-only typed facts for the definition-owned Gate transition boundary. */
 
 import { TASK_EXECUTION_ROUND_POLICY } from "./task-execution-policy.js";
+import { TaskReviewStageBinding, TaskReviewUnavailableEvidence } from "./task-review-stage-transition.js";
+import { TaskStepIdentity } from "./task-step-identity.js";
 
 const GATE_PHASES = new Set(["draft", "spec", "task-spec", "task-impl", "integration"]);
 const GATE_SCOPES = new Set(["flow", "task"]);
@@ -37,7 +39,7 @@ function requireObject(value, field) {
 }
 
 function taskGateStepId(taskId, role) {
-  return `${requiredText(taskId, "gate Task id")}-${role}`;
+  return new TaskStepIdentity({ taskId: requiredText(taskId, "gate Task id"), role }).nodeId;
 }
 
 function taskGateBindingIsValid(taskId, stepId) {
@@ -211,13 +213,45 @@ export class GatePostPublicationState {
  * Canonical review/triage/repair readiness bound to an integration Gate.
  * The reader supplies it; Definition only consumes its explicit passability.
  */
+export class GateTaskReviewUnavailableObservation {
+  constructor({ binding, failure, taskRound, semanticReviewCount, activityId, receiptId, resultDigest } = {}) {
+    if (!(binding instanceof TaskReviewStageBinding) || binding.stage !== "review"
+      || !(failure instanceof TaskReviewUnavailableEvidence)
+      || binding.sourceFingerprint !== failure.sourceFingerprint || binding.artifactDigest !== failure.digest
+      || !/^[a-f0-9]{64}$/.test(receiptId) || !/^[a-f0-9]{64}$/.test(resultDigest)) {
+      throw new Error("Gate unavailable Review observation requires its exact source and saved receipt");
+    }
+    this.binding = binding;
+    this.failure = failure;
+    this.taskRound = TASK_EXECUTION_ROUND_POLICY.assertRound(taskRound);
+    this.semanticReviewCount = nonNegativeInteger(semanticReviewCount, "Gate unavailable semantic Review count");
+    if (this.semanticReviewCount > 3) throw new Error("Gate unavailable Review count is invalid");
+    this.activityId = requiredText(activityId, "Gate unavailable Review Activity");
+    this.receiptId = receiptId;
+    this.resultDigest = resultDigest;
+    Object.freeze(this);
+  }
+  static fromJSON(value) {
+    if (Object.keys(value).sort().join(",") !== "activityId,binding,failure,receiptId,resultDigest,semanticReviewCount,taskRound") {
+      throw new Error("Gate unavailable Review observation has an invalid schema");
+    }
+    return new this({ ...value, binding: new TaskReviewStageBinding(value.binding),
+      failure: new TaskReviewUnavailableEvidence(value.failure) });
+  }
+  toJSON() {
+    return { binding: this.binding.toJSON(), failure: this.failure.toJSON(), taskRound: this.taskRound,
+      semanticReviewCount: this.semanticReviewCount, activityId: this.activityId,
+      receiptId: this.receiptId, resultDigest: this.resultDigest };
+  }
+}
+
 export class GateReviewFindingReadiness {
   constructor({
     status, findingFingerprints = [], reviewFingerprints = [],
-    triageFingerprint = null, repairFingerprint = null, decisionFingerprint,
+    triageFingerprint = null, repairFingerprint = null, decisionFingerprint, unavailable = null,
   } = {}) {
     this.status = requiredText(status, "gate review finding readiness status");
-    if (!new Set(["ready", "blocking"]).has(this.status)) {
+    if (!new Set(["ready", "blocking", "unavailable"]).has(this.status)) {
       throw new Error("gate review finding readiness status is invalid");
     }
     if (!Array.isArray(findingFingerprints) || findingFingerprints.some((value) => typeof value !== "string" || value === "")) {
@@ -231,13 +265,28 @@ export class GateReviewFindingReadiness {
     this.triageFingerprint = optionalText(triageFingerprint, "gate review finding readiness triage fingerprint");
     this.repairFingerprint = optionalText(repairFingerprint, "gate review finding readiness repair fingerprint");
     this.decisionFingerprint = requiredText(decisionFingerprint, "gate review finding readiness decision fingerprint");
-    if ((this.status === "ready") !== (this.findingFingerprints.length === 0)) {
+    this.unavailable = unavailable === null ? null : unavailable instanceof GateTaskReviewUnavailableObservation
+      ? unavailable : GateTaskReviewUnavailableObservation.fromJSON(unavailable);
+    if ((this.status === "blocking") !== (this.findingFingerprints.length > 0)
+      || this.status === "unavailable" && this.unavailable === null
+      || this.status === "ready" && this.unavailable !== null) {
       throw new Error("gate review finding readiness status does not match unresolved findings");
     }
     Object.freeze(this);
   }
 
   get allowsPass() { return this.status === "ready"; }
+  get allowsGatePass() { return this.status === "ready" || this.status === "unavailable"; }
+
+  assertTarget(target, budget) {
+    if (this.unavailable === null) return;
+    if (!(target instanceof GateTargetBinding) || !(budget instanceof GateTaskBudget)
+      || target.taskId !== this.unavailable.binding.taskId
+      || target.runId !== this.unavailable.binding.runId || target.specId !== this.unavailable.binding.specId
+      || budget.round !== this.unavailable.taskRound) {
+      throw new Error("Gate unavailable Review observation belongs to another Task, source or round");
+    }
+  }
 
   toJSON() {
     return {
@@ -247,6 +296,7 @@ export class GateReviewFindingReadiness {
       triageFingerprint: this.triageFingerprint,
       repairFingerprint: this.repairFingerprint,
       decisionFingerprint: this.decisionFingerprint,
+      ...(this.unavailable === null ? {} : { unavailable: this.unavailable.toJSON() }),
     };
   }
 }
@@ -624,8 +674,9 @@ export class GateTransitionFacts {
     this.reviewReadiness = reviewReadiness === null
       ? null
       : (reviewReadiness instanceof GateReviewFindingReadiness ? reviewReadiness : new GateReviewFindingReadiness(reviewReadiness));
-    if ((this.phase === "integration") !== (this.reviewReadiness !== null)) {
-      throw new Error("integration Gate requires exactly one review finding readiness fact");
+    if (this.phase === "integration" && this.reviewReadiness === null
+      || this.reviewReadiness !== null && !["integration", "task-impl"].includes(this.phase)) {
+      throw new Error("implementation Gate review finding readiness has an invalid scope");
     }
     this.taskLifecycle = taskLifecycle === null
       ? null
@@ -635,6 +686,7 @@ export class GateTransitionFacts {
     }
     this.taskBudget = taskBudget === null ? null : (taskBudget instanceof GateTaskBudget ? taskBudget : new GateTaskBudget(taskBudget));
     if ((this.scope === "task") !== (this.taskBudget !== null)) throw new Error("gate Task budget must exist exactly for task scope");
+    this.reviewReadiness?.assertTarget(this.target, this.taskBudget);
     this.taskSettlementProgress = taskSettlementProgress === null
       ? null
       : (taskSettlementProgress instanceof TaskGateSettlementProgress

@@ -51,7 +51,7 @@ export function implPhaseExecutionShapes(entry) {
         new ExecutionCaller("src/flow/lib/run-filter-task-review.js", "executeHostFilterInput", lookup, "execute", null, "select", true),
         new ExecutionCaller(entry.composition, "consumeHostFilterExecution", lookup, "execute", null, "consume", true),
         new ExecutionCaller(entry.composition, "recoverHostFilterExecution", lookup, "execute", "replayHostFilterReceipt", "consume", true),
-      ], loaders),
+      ], [...loaders, new ExecutionLoader("src/flow/registry.js", "loadFilterTaskReviewCommand", "src/flow/lib/run-filter-task-review.js", "run", "filter-task-review")]),
     ...["external-process", "deterministic-review"].map((form) => new NamedExecutionShape(form,
       "src/flow/lib/test-chain-transition-facts.js", "testChainStepExecutionContract",
       "selectTestChainExecution", "projectTestChainExecution", "executeTestChainSelection", [
@@ -60,7 +60,10 @@ export function implPhaseExecutionShapes(entry) {
           "executeTestChainInput", lookup, "execute", null, "select", true),
         new ExecutionCaller(entry.composition, "consumeTestChainExecution", lookup, "execute", null, "consume", true),
         new ExecutionCaller(entry.composition, "recoverTestChainExecution", lookup, "execute", "replayTestChainReceipt", "consume", true),
-      ], loaders)),
+      ], [...loaders, new ExecutionLoader("src/flow/registry.js",
+        form === "external-process" ? "loadTestExecuteCommand" : "loadTestResultReviewCommand",
+        form === "external-process" ? "src/flow/lib/run-test-execute.js" : "src/flow/lib/run-test-result-review.js", "run",
+        form === "external-process" ? "test-execute" : "test-result-review") ])),
   ];
   return Object.freeze([...shared, ...additional].filter((shape) => forms.has(shape.form)));
 }

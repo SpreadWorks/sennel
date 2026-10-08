@@ -1,3 +1,4 @@
+import { TaskStepIdentity } from "./task-step-identity.js";
 import crypto from "node:crypto";
 
 import { CanonicalFlowArtifactWrite, CurrentAttemptIdentity } from "./current-flow-state.js";
@@ -68,7 +69,8 @@ export class TaskReviewUnsealedCheckpoint {
     this.taskId = text(value.taskId, "Task Review checkpoint taskId");
     this.nodeId = text(value.nodeId, "Task Review checkpoint nodeId");
     this.attempt = CurrentAttemptIdentity.from(value.attempt);
-    if (this.nodeId !== `${this.taskId}-review` || this.attempt.nodeId !== this.nodeId) {
+    if (!new TaskStepIdentity({ taskId: this.taskId, role: "review" }).matchesNode(this.nodeId)
+      || this.attempt.nodeId !== this.nodeId) {
       throw new Error("Task Review checkpoint does not bind its Task Review Attempt");
     }
     this.manifestDigest = digest(value.manifestDigest, "Task Review checkpoint manifestDigest");
@@ -222,7 +224,7 @@ export function taskReviewAuthorizationArtifact({ taskId, authorization } = {}) 
 
 export function readTaskReviewUnsealedCheckpoint({ flowManager, state, taskId, root, attemptId = null } = {}) {
   const requestedAttemptId = attemptId === null ? state.attempt.id : text(attemptId, "Task Review checkpoint requested attemptId");
-  const source = flowManager.readArtifact({ specId: state.specId, logicalKey: "task.review.unsealed.checkpoint", parameters: { taskId, attemptId: requestedAttemptId }, consumerNodeId: `${taskId}-review`, optional: true });
+  const source = flowManager.readArtifact({ specId: state.specId, logicalKey: "task.review.unsealed.checkpoint", parameters: { taskId, attemptId: requestedAttemptId }, consumerNodeId: new TaskStepIdentity({ taskId, role: "review" }).nodeId, optional: true });
   if (source === null) return null;
   const location = flowManager.specLocation(state.specId);
   const runtimeLocks = [
@@ -231,7 +233,7 @@ export function readTaskReviewUnsealedCheckpoint({ flowManager, state, taskId, r
   ];
   const checkpoint = new TaskReviewUnsealedCheckpoint(JSON.parse(source.bytes.toString("utf8")), { root, runtimeLocks });
   if (checkpoint.runId !== state.runId || checkpoint.specId !== state.specId
-    || checkpoint.taskId !== taskId || checkpoint.nodeId !== `${taskId}-review`
+    || checkpoint.taskId !== taskId || checkpoint.nodeId !== new TaskStepIdentity({ taskId, role: "review" }).nodeId
     || checkpoint.attempt.id !== requestedAttemptId) {
     throw new Error("Task Review checkpoint does not match its requested Flow Attempt");
   }
@@ -259,7 +261,7 @@ export function readTaskReviewRecoveryAuthorization({ flowManager, state, taskId
   ];
   const authorization = new TaskReviewRecoveryAuthorization(JSON.parse(source.bytes.toString("utf8")), { root, runtimeLocks });
   if (!authorization.currentAttempt.matches(state)
-    || authorization.currentAttempt.nodeId !== `${taskId}-review`) {
+    || authorization.currentAttempt.nodeId !== new TaskStepIdentity({ taskId, role: "review" }).nodeId) {
     throw new Error("Task Review recovery authorization does not match the active Attempt");
   }
   const activity = publicationActivity({
@@ -283,7 +285,7 @@ export function readTaskReviewRetryBaselinePublication({ flowManager, state, tas
     specId: state.specId,
     logicalKey: "retry.recovery.baseline",
     parameters: { routeId: `review-impl-${taskId}`, attemptId: state.attempt.id },
-    consumerNodeId: `${taskId}-review`,
+    consumerNodeId: new TaskStepIdentity({ taskId, role: "review" }).nodeId,
     optional: true,
   });
   if (source === null) return null;
@@ -291,7 +293,7 @@ export function readTaskReviewRetryBaselinePublication({ flowManager, state, tas
     flowManager, state, source, logicalKey: "retry.recovery.baseline",
   });
   if (activity.transition.operation !== "retry_attempt"
-    || activity.nodeId !== `${taskId}-review`
+    || activity.nodeId !== new TaskStepIdentity({ taskId, role: "review" }).nodeId
     || activity.nodeId !== state.attempt.nodeId
     || activity.transition.nodeId !== activity.nodeId
     || activity.attemptId !== previousAttempt.id

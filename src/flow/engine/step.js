@@ -12,8 +12,22 @@ export class Step {
   }
 
   /** Common execution boundary; subclasses implement _execute(). */
-  async execute() {
+  execute() {
+    if (this.constructor.synchronous !== true) {
+      return this.#executeAsync();
+    }
+    const output = this._execute();
+    return output instanceof Promise
+      ? output.then((result) => this.#validateResult(result))
+      : this.#validateResult(output);
+  }
+
+  async #executeAsync() {
     const output = await this._execute();
+    return this.#validateResult(output);
+  }
+
+  #validateResult(output) {
     if (!(output instanceof StepResult)) {
       throw new TypeError("Step._execute() must return a StepResult");
     }

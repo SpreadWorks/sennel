@@ -1,3 +1,7 @@
+import { normalizedRelativePath } from "./source-effect-fields.js";
+import { ImplementationSourceEvidence, SourceStepFacts } from "./source-effect-values.js";
+import { GateRepairWorkerReport, SourceWorkerEffect, SourceWorkerEffectReport } from "./source-effect-values.js";
+export { SourceFileEffect, SourceIssueEffect, SourceOverviewEffect, SourceRepairRecurrenceResolution, SourceRepairEffect, SourceRepairReport, GateRepairWorkerReport, SourceNoChangeReason, TaskRepairNoChangeEffect, SourceWorkerEffect, SourceWorkerEffectReport } from "./source-effect-values.js";
 import { CURRENT_FLOW_SCHEMA_REVISION } from "../../lib/flow-schema-revision.js";
 import { MAX_WORKER_ARTIFACT_INPUT_BYTES as MAX_INPUT_BYTES,
   workerArtifactStableStringify as stableStringify } from "./worker-artifact-input-format.js";
@@ -42,6 +46,8 @@ import {
   DraftExecutionSettlement,
   DraftConditionalWorkerExecutionBinding,
   DraftWorkerExecutionClaim,
+  DraftStepSettlementReceipt,
+  settleTaskStepResult,
   resolveRequirementTestLifecycle,
   resolveSourceHandoffTransitionPlan,
   SourceHandoffTransitionPlan,
@@ -61,6 +67,8 @@ import {
   acquireRequirementTestInput, requirementTestRepairProgressIdentity,
   requirementTestWorkerStepRegistration,
 } from "../engine/composition/test.js";
+import { sourceStepRegistration } from "../engine/composition/source-step.js";
+import { SourceStepService } from "../services/source-step-service.js";
 import { RequirementTestService } from "../services/requirement-test-service.js";
 import { StepPersistenceFailure } from "./definition-lifecycle-failure.js";
 import { SpecWorkerCompletionFacts } from "./spec-worker-completion-facts.js";
@@ -140,17 +148,13 @@ import {
   CanonicalDraftReviewHandoffEvidence,
 } from "./canonical-review-artifacts.js";
 import { FlowRepositoryRuntimeArtifactRegistry } from "./flow-repository-runtime-artifacts.js";
-import { validateAdditions } from "./overview-merge.js";
 import { AcceptanceRepairFindingSet } from "./acceptance-review-artifacts.js";
 import { validateUpgradeResultArtifact } from "./upgrade-result-artifact.js";
 import { sourceWorkerEffectJsonSchema } from "./source-worker-effect-schema.js";
 import { ImplementationReviewRepairRecurrence } from "./review-recurrence.js";
 import { ReviewFindingCycle } from "./finding-disposition-policy.js";
+import { ReviewWorkUnitManifest } from "./review-work-unit-values.js";
 import { TaskSourceFailureObservation } from "./task-source-failure.js";
-import {
-  RepairFindingMutations,
-  RepairFindingPathClaims,
-} from "./repair-mutation-contract.js";
 import { SourceTriageEffect } from "./source-triage-contract.js";
 export { SourceTriageEffect } from "./source-triage-contract.js";
 import { ApprovedFindingExceptionSet } from "./acknowledged-rationale.js";
@@ -159,15 +163,7 @@ import { WorkerArtifactHandoffError, requiredString } from "./worker-artifact-ha
 export { WorkerArtifactHandoffError } from "./worker-artifact-handoff-error.js";
 import { CanonicalSourceRequirementAuthority } from "./canonical-file-map.js";
 import { getPorcelainV2Status } from "../../lib/git-helpers.js";
-import {
-  ArtifactGateRepairLineage,
-  ArtifactGateRepairObservationResult,
-  GateRepairMutationLineageEntry,
-  GateRepairReport,
-  PlanGateRepairOutcomeDraft,
-  SourceGateRepairLineage,
-  SourceGateRepairObservationResult,
-} from "./gate-observation-convergence.js";
+import { PlanGateRepairOutcomeDraft } from "./gate-observation-convergence.js";
 import {
   CanonicalGateObservationCycle,
   GateObservationRecurrenceHandoff,
@@ -185,7 +181,6 @@ const MAX_PAYLOAD_BYTES = 2 * 1024 * 1024;
 const MAX_TOTAL_PAYLOAD_BYTES = 8 * 1024 * 1024;
 const MAX_PAYLOAD_FILES = 256;
 const MAX_JSON_BYTES = 8 * 1024 * 1024;
-const MAX_RELATIVE_PATH_BYTES = 500;
 const MAX_AUTHORITY_GIT_OUTPUT_BYTES = 64 * 1024 * 1024;
 const MAX_AUTHORITY_DIRTY_PATHS = 20_000;
 const MAX_AUTHORITY_FILE_BYTES = 64 * 1024 * 1024;
@@ -196,31 +191,6 @@ const TEMPORARY_CANONICAL_READ_CODES = new Set(["EAGAIN", "EBUSY", "EIO", "EMFIL
 const SPEC_TEST_FILE = /\.(?:js|mjs|ts|json|md|ya?ml|txt|sh)$/;
 const REQUIREMENT_TEST_SUPPORT_PREFIX = "tests/support/";
 const COMMAND_OWNED_SPEC_TEST_DIRECTORY = ".raw";
-
-const SOURCE_EFFECT_BASE_KEYS = Object.freeze([
-  "version",
-  "stepId",
-  "completionStatus",
-  "files",
-  "issues",
-  "overview",
-  "triage",
-  "repair",
-  "noChangeReason",
-]);
-
-function sourceEffectKeys(stepId, { workerReport = false } = {}) {
-  const keys = SOURCE_EFFECT_BASE_KEYS.filter((key) => !(workerReport && key === "files"));
-  return stepId === "task-impl" ? [...keys, "gateRepair"] : keys;
-}
-
-function assertSourceEffectDocumentKeys(value, stepId, options = {}) {
-  const keys = sourceEffectKeys(stepId, options);
-  const expected = stepId === "task-impl" && !Object.hasOwn(value, "gateRepair")
-    ? keys.filter((key) => key !== "gateRepair")
-    : keys;
-  exactObjectKeys(value, expected, "source worker effect");
-}
 
 function sourceHandoffReadError(cause, message) {
   const temporary = TEMPORARY_CANONICAL_READ_CODES.has(cause?.code ?? cause?.cause?.code);
@@ -257,18 +227,6 @@ function duplicateValues(values) {
     seen.add(value);
   }
   return [...duplicates];
-}
-
-function assertUniqueSourceRequirementClaims(files, label) {
-  const duplicateRequirementIds = duplicateValues(files.map((entry) => entry.requirementId));
-  if (duplicateRequirementIds.length > 0) {
-    throw new WorkerArtifactHandoffError(
-      "invalid",
-      "FLOW_SOURCE_HANDOFF_EFFECT_REQUIREMENT_CLAIM_DUPLICATE",
-      `${label} must contain at most one file claim for each requirement`,
-      { retryable: false, data: { duplicateRequirementIds: duplicateRequirementIds.slice(0, 20) } },
-    );
-  }
 }
 
 function digest(value) {
@@ -324,19 +282,6 @@ function readRegularFile(filePath, label, maxBytes = MAX_PAYLOAD_BYTES, { transp
       },
     );
   }
-}
-
-function normalizedRelativePath(value, field) {
-  const relative = requiredString(value, field).replaceAll("\\", "/");
-  if (
-    Buffer.byteLength(relative) > MAX_RELATIVE_PATH_BYTES
-    || path.posix.isAbsolute(relative)
-    || path.posix.normalize(relative) !== relative
-    || relative.split("/").some((segment) => segment === "" || segment === "." || segment === "..")
-  ) {
-    throw new Error(`${field} must be a normalized repository-relative path`);
-  }
-  return relative;
 }
 
 function isWithin(root, candidate) {
@@ -1058,7 +1003,7 @@ export class WorkerArtifactInputSnapshot {
     this.targetRelativePath = normalizedRelativePath(targetRelativePath, `${this.name}.targetRelativePath`);
     this.digest = requiredDigest(snapshot.digest, `${this.name}.digest`);
     if (!Number.isSafeInteger(snapshot.byteLength) || snapshot.byteLength < 0 || snapshot.byteLength > MAX_INPUT_BYTES) {
-      throw new Error(`${this.name}.byteLength is invalid`);
+      throw new WorkerArtifactHandoffError("invalid", "FLOW_ARTIFACT_HANDOFF_INVALID", `${this.name}.byteLength is invalid`);
     }
     this.byteLength = snapshot.byteLength;
     if (document == null || typeof document !== "object" || Array.isArray(document)) {
@@ -1115,605 +1060,6 @@ function workerExecutionHandoffDirectory({ ctx, state, executionClaim }) {
   if (!(executionClaim instanceof DraftWorkerExecutionClaim)) throw new TypeError("Worker execution location requires its typed claim");
   return handoffActionDirectory(executionHandoffRoot(ctx.executionRoot || ctx.root, state.specId),
     state.runId, executionClaim.dispatchInvocationId, executionClaim.actionDigest);
-}
-
-/**
- * One parent-derived, sealed source effect for a canonical Requirement.
- */
-export class SourceFileEffect {
-  constructor({ requirementId, mutationIds } = {}) {
-    this.requirementId = requiredString(requirementId, "source worker file requirementId");
-    if (!Array.isArray(mutationIds) || mutationIds.length === 0 || mutationIds.length > MAX_PAYLOAD_FILES) {
-      throw new Error("source worker file mutationIds must be a bounded non-empty array");
-    }
-    this.mutationIds = Object.freeze(mutationIds.map((candidate) => requiredDigest(candidate, "source worker file mutationId")));
-    const duplicateMutationIds = duplicateValues(this.mutationIds);
-    if (duplicateMutationIds.length > 0) {
-      throw new WorkerArtifactHandoffError(
-        "invalid",
-        "FLOW_SOURCE_HANDOFF_EFFECT_PATH_CLAIM_DUPLICATE",
-        "source worker file mutationIds must not duplicate within one requirement claim",
-        { retryable: false, data: { duplicateMutationIds: duplicateMutationIds.slice(0, 20) } },
-      );
-    }
-    Object.freeze(this);
-  }
-  resolvePaths(manifest) {
-    if (!(manifest instanceof SourceMutationManifest)) throw new Error("source worker file effect requires a SourceMutationManifest");
-    return this.mutationIds.map((mutationId) => manifest.pathForMutationId(mutationId));
-  }
-  toJSON() { return { requirementId: this.requirementId, mutationIds: [...this.mutationIds] }; }
-}
-
-export class SourceIssueEffect {
-  constructor({ classification, reason, remainingRisk } = {}) {
-    if (classification !== "quality") throw new Error("source worker issue classification must be quality");
-    this.classification = "quality";
-    this.reason = requiredString(reason, "source worker issue reason");
-    if (this.reason.length < 20) throw new Error("source worker issue reason must be at least 20 characters");
-    this.remainingRisk = requiredString(remainingRisk, "source worker issue remainingRisk");
-    if (this.remainingRisk.length < 20) throw new Error("source worker issue remainingRisk must be at least 20 characters");
-    Object.freeze(this);
-  }
-  toJSON() { return { classification: this.classification, reason: this.reason, remainingRisk: this.remainingRisk }; }
-}
-
-export class SourceOverviewEffect {
-  constructor(additions) {
-    const errors = validateAdditions(additions);
-    if (errors.length > 0) throw new Error(`invalid source worker overview additions: ${errors.join("; ")}`);
-    this.additions = Object.freeze({
-      modules: Object.freeze([...additions.modules]),
-      data_flow: Object.freeze([...additions.data_flow]),
-      decisions: Object.freeze([...additions.decisions]),
-    });
-    Object.freeze(this);
-  }
-  toJSON() { return { ...this.additions, modules: [...this.additions.modules], data_flow: [...this.additions.data_flow], decisions: [...this.additions.decisions] }; }
-}
-
-export class SourceRepairRecurrenceResolution {
-  constructor({ findingKey, fingerprint, priorRepairInsufficiency, repairStrategy } = {}) {
-    this.findingKey = requiredString(findingKey, "source repair recurrence findingKey");
-    this.fingerprint = requiredDigest(fingerprint, "source repair recurrence fingerprint");
-    this.priorRepairInsufficiency = requiredString(
-      priorRepairInsufficiency,
-      "source repair recurrence priorRepairInsufficiency",
-    );
-    this.repairStrategy = requiredString(
-      repairStrategy,
-      "source repair recurrence repairStrategy",
-    );
-    Object.freeze(this);
-  }
-
-  toJSON() {
-    return {
-      findingKey: this.findingKey,
-      fingerprint: this.fingerprint,
-      priorRepairInsufficiency: this.priorRepairInsufficiency,
-      repairStrategy: this.repairStrategy,
-    };
-  }
-}
-
-function assertRepairRecurrenceResolutions(appliedFindingKeys, resolutions, recurrence) {
-  const recurring = Array.isArray(recurrence?.entries) ? recurrence.entries : [];
-  const recurrenceByFingerprint = new Map(recurring.map((entry) => (
-    [entry.fingerprint, entry.findingKey]
-  )));
-  const recurrenceFindingKeys = [...recurrenceByFingerprint.values()];
-  if (
-    recurrenceByFingerprint.size !== recurring.length
-    || recurrenceFindingKeys.some((findingKey) => !appliedFindingKeys.includes(findingKey))
-    || recurrenceByFingerprint.size !== resolutions.length
-    || resolutions.some((entry) => (
-      recurrenceByFingerprint.get(entry.fingerprint) !== entry.findingKey
-      || !appliedFindingKeys.includes(entry.findingKey)
-    ))
-  ) {
-    throw new Error("implementation repair recurrence resolutions must exactly match canonical recurrence context");
-  }
-}
-
-function rethrowRepairContractViolation(cause) {
-  if (typeof cause?.code === "string" && cause.code.startsWith("FLOW_REPAIR_")) {
-    throw new WorkerArtifactHandoffError(
-      "invalid",
-      cause.code,
-      cause.message,
-      { cause, retryable: false, data: cause.data ?? {} },
-    );
-  }
-  throw cause;
-}
-
-export class SourceRepairEffect {
-  constructor(value = {}) {
-    const allowedKeys = new Set([
-      "version",
-      "appliedFindingKeys",
-      "findingMutations",
-      "summary",
-      "recurrenceResolutions",
-    ]);
-    if (value === null || typeof value !== "object" || Array.isArray(value)
-      || Object.keys(value).some((key) => !allowedKeys.has(key))) {
-      throw new Error("source repair effect has an invalid schema");
-    }
-    const { version, appliedFindingKeys, findingMutations, summary, recurrenceResolutions = [] } = value;
-    if (version !== 1) throw new Error("source repair effect version must be 1");
-    this.findingMutations = new RepairFindingMutations(findingMutations);
-    this.appliedFindingKeys = this.findingMutations.appliedFindingKeys;
-    if (!Array.isArray(appliedFindingKeys)
-      || appliedFindingKeys.length !== this.appliedFindingKeys.length
-      || appliedFindingKeys.some((findingKey) => !this.appliedFindingKeys.includes(findingKey))) {
-      throw new Error("source repair appliedFindingKeys must match findingMutations");
-    }
-    this.summary = requiredString(summary, "source repair summary");
-    if (this.summary.length < 10) throw new Error("source repair summary must be at least 10 characters");
-    if (!Array.isArray(recurrenceResolutions) || recurrenceResolutions.length > MAX_PAYLOAD_FILES) {
-      throw new Error("source repair recurrence resolutions are invalid");
-    }
-    this.recurrenceResolutions = Object.freeze(recurrenceResolutions.map((entry) => (
-      entry instanceof SourceRepairRecurrenceResolution
-        ? entry
-        : new SourceRepairRecurrenceResolution(entry)
-    )));
-    if (
-      new Set(this.recurrenceResolutions.map((entry) => entry.fingerprint)).size
-      !== this.recurrenceResolutions.length
-    ) {
-      throw new Error("source repair recurrence resolutions must not duplicate fingerprints");
-    }
-    Object.freeze(this);
-  }
-  toJSON() {
-    return {
-      version: 1, appliedFindingKeys: [...this.appliedFindingKeys], summary: this.summary,
-      findingMutations: this.findingMutations.toJSON(),
-      ...(this.recurrenceResolutions.length === 0 ? {} : {
-        recurrenceResolutions: this.recurrenceResolutions.map((entry) => entry.toJSON()),
-      }),
-    };
-  }
-
-  assertManifest(manifest) {
-    try { this.findingMutations.assertManifest(manifest); }
-    catch (cause) { rethrowRepairContractViolation(cause); }
-    return this;
-  }
-
-  assertAppliedFindingKeys(findingKeys) {
-    try { this.findingMutations.assertFindingKeys(findingKeys); }
-    catch (cause) { rethrowRepairContractViolation(cause); }
-    return this;
-  }
-
-  assertRecurrenceResolutions(recurrence) {
-    assertRepairRecurrenceResolutions(this.appliedFindingKeys, this.recurrenceResolutions, recurrence);
-    return this;
-  }
-
-}
-
-/** Worker repair report. Finding paths acquire mutation identity only in the parent. */
-export class SourceRepairReport {
-  constructor(value = {}) {
-    const allowedKeys = new Set(["version", "findings", "summary", "recurrenceResolutions"]);
-    if (value === null || typeof value !== "object" || Array.isArray(value)
-      || Object.keys(value).some((key) => !allowedKeys.has(key))) {
-      throw new Error("source repair report has an invalid schema");
-    }
-    const { version, findings, summary, recurrenceResolutions } = value;
-    if (version !== 1) throw new Error("source repair report version must be 1");
-    this.findings = new RepairFindingPathClaims(findings);
-    this.summary = requiredString(summary, "source repair summary");
-    if (this.summary.length < 10) throw new Error("source repair summary must be at least 10 characters");
-    if (!Array.isArray(recurrenceResolutions) || recurrenceResolutions.length > MAX_PAYLOAD_FILES) {
-      throw new Error("source repair recurrence resolutions are invalid");
-    }
-    this.recurrenceResolutions = Object.freeze(recurrenceResolutions.map((entry) => (
-      entry instanceof SourceRepairRecurrenceResolution ? entry : new SourceRepairRecurrenceResolution(entry)
-    )));
-    if (new Set(this.recurrenceResolutions.map((entry) => entry.fingerprint)).size !== this.recurrenceResolutions.length) {
-      throw new Error("source repair recurrence resolutions must not duplicate fingerprints");
-    }
-    Object.freeze(this);
-  }
-
-  bind(manifest) {
-    let findingMutations;
-    try { findingMutations = this.findings.bind(manifest); }
-    catch (cause) { rethrowRepairContractViolation(cause); }
-    return new SourceRepairEffect({
-      version: 1,
-      appliedFindingKeys: findingMutations.appliedFindingKeys,
-      findingMutations: findingMutations.toJSON(),
-      summary: this.summary,
-      ...(this.recurrenceResolutions.length === 0 ? {} : {
-        recurrenceResolutions: this.recurrenceResolutions.map((entry) => entry.toJSON()),
-      }),
-    });
-  }
-
-  assertRecurrenceResolutions(recurrence) {
-    assertRepairRecurrenceResolutions(this.findings.appliedFindingKeys, this.recurrenceResolutions, recurrence);
-    return this;
-  }
-
-  assertAppliedFindingKeys(findingKeys) {
-    try { this.findings.assertFindingKeys(findingKeys); }
-    catch (cause) { rethrowRepairContractViolation(cause); }
-    return this;
-  }
-
-  toJSON() {
-    return {
-      version: 1,
-      findings: this.findings.toJSON(),
-      summary: this.summary,
-      recurrenceResolutions: this.recurrenceResolutions.map((entry) => entry.toJSON()),
-    };
-  }
-}
-
-class GateRepairWorkerObservationResult {
-  constructor({ fingerprint, strategy, summary, priorRepairInsufficiency = null, paths = null } = {}) {
-    this.fingerprint = requiredDigest(fingerprint, "Gate repair worker observation fingerprint");
-    this.strategy = requiredString(strategy, "Gate repair worker observation strategy");
-    this.summary = requiredString(summary, "Gate repair worker observation summary");
-    this.priorRepairInsufficiency = priorRepairInsufficiency === null
-      ? null
-      : requiredString(priorRepairInsufficiency, "Gate repair worker priorRepairInsufficiency");
-    if (paths !== null && (!Array.isArray(paths) || paths.length > MAX_PAYLOAD_FILES)) {
-      throw new Error("Gate repair worker observation paths must be a bounded array");
-    }
-    this.paths = paths === null ? null : Object.freeze(paths.map((entry) => (
-      normalizedRelativePath(entry, "Gate repair worker observation path")
-    )));
-    if (this.paths !== null && duplicateValues(this.paths).length > 0) {
-      throw new WorkerArtifactHandoffError(
-        "invalid",
-        "FLOW_GATE_REPAIR_OBSERVATION_MUTATION_CLAIM_DUPLICATE",
-        "Gate repair observation paths must not duplicate within one observation",
-        { retryable: false, data: { fingerprint: this.fingerprint } },
-      );
-    }
-    Object.freeze(this);
-  }
-  toJSON() {
-    return {
-      fingerprint: this.fingerprint,
-      strategy: this.strategy,
-      summary: this.summary,
-      priorRepairInsufficiency: this.priorRepairInsufficiency,
-      ...(this.paths === null ? {} : { paths: [...this.paths] }),
-    };
-  }
-}
-
-/** Worker claim only; the parent adds observed artifact/source lineage. */
-export class GateRepairWorkerReport {
-  constructor({ version, summary, results } = {}) {
-    if (version !== 1) throw new Error("Gate repair worker report version must be 1");
-    this.version = 1;
-    this.summary = requiredString(summary, "Gate repair worker report summary");
-    if (!Array.isArray(results) || results.length === 0 || results.length > MAX_PAYLOAD_FILES) {
-      throw new Error("Gate repair worker report requires bounded observation results");
-    }
-    this.results = Object.freeze(results.map((entry) => {
-      const hasPaths = Object.hasOwn(entry ?? {}, "paths");
-      exactObjectKeys(entry, ["fingerprint", "strategy", "summary", "priorRepairInsufficiency", ...(hasPaths ? ["paths"] : [])], "Gate repair worker observation result");
-      return new GateRepairWorkerObservationResult(entry);
-    }));
-    if (new Set(this.results.map((entry) => entry.fingerprint)).size !== this.results.length) {
-      throw new Error("Gate repair worker report must not duplicate observation fingerprints");
-    }
-    Object.freeze(this);
-  }
-
-  static fromDocument(value) {
-    exactObjectKeys(value, ["version", "summary", "results"], "Gate repair worker report");
-    return new GateRepairWorkerReport(value);
-  }
-
-  bindArtifact({ repair, beforeEvidenceDigest, outputEvidenceDigest, deltaIds }) {
-    if (this.results.some((entry) => entry.paths !== null)) {
-      throw new Error("artifact Gate repair report must not claim source mutation paths");
-    }
-    const lineage = new ArtifactGateRepairLineage({ deltaIds });
-    return this.#bind({
-      repair, beforeEvidenceDigest, outputEvidenceDigest, lineage,
-      Result: ArtifactGateRepairObservationResult,
-      changes: { deltaIds: lineage.changeIds() },
-    });
-  }
-
-  bindSource({ repair, beforeEvidenceDigest, outputEvidenceDigest, manifest }) {
-    if (!(manifest instanceof SourceMutationManifest)) {
-      throw new Error("Gate repair source report requires a SourceMutationManifest");
-    }
-    if (this.results.some((entry) => entry.paths === null)) {
-      throw new WorkerArtifactHandoffError(
-        "invalid",
-        "FLOW_REPAIR_FINDING_MUTATION_COVERAGE_INVALID",
-        "source Gate repair report requires a path claim for every observation",
-        { retryable: false, data: {} },
-      );
-    }
-    const duplicatePaths = duplicateValues(this.results.flatMap((entry) => entry.paths));
-    if (duplicatePaths.length > 0) {
-      throw new WorkerArtifactHandoffError(
-        "invalid",
-        "FLOW_GATE_REPAIR_OBSERVATION_MUTATION_CLAIM_DUPLICATE",
-        "Gate repair observations must not claim the same source mutation path",
-        { retryable: false, data: { duplicatePaths: duplicatePaths.slice(0, 20) } },
-      );
-    }
-    const mutationIdsByFingerprint = new Map();
-    if (manifest.mutations.length === 0) {
-      if (this.results.some((entry) => entry.paths.length !== 0)) {
-        throw new WorkerArtifactHandoffError(
-          "invalid",
-          "FLOW_REPAIR_FINDING_MUTATION_COVERAGE_INVALID",
-          "no-progress Gate repair may not claim a source mutation",
-          { retryable: false, data: { unknown: this.results.flatMap((entry) => entry.paths) } },
-        );
-      }
-      for (const entry of this.results) mutationIdsByFingerprint.set(entry.fingerprint, []);
-    } else {
-      const unboundFingerprints = this.results
-        .filter((entry) => entry.paths.length === 0)
-        .map((entry) => entry.fingerprint);
-      if (unboundFingerprints.length > 0) {
-        const claimed = new Set(this.results.flatMap((entry) => entry.paths));
-        throw new WorkerArtifactHandoffError(
-          "invalid",
-          "FLOW_REPAIR_FINDING_MUTATION_COVERAGE_INVALID",
-          "changed source Gate repair requires a mutation claim for every observation",
-          {
-            retryable: false,
-            data: {
-              missing: manifest.paths().filter((relativePath) => !claimed.has(relativePath)).slice(0, 20),
-              unboundFingerprints: unboundFingerprints.slice(0, 20),
-            },
-          },
-        );
-      }
-      let claims;
-      try {
-        claims = new RepairFindingPathClaims(this.results.map((entry) => ({
-          findingKey: entry.fingerprint,
-          paths: entry.paths,
-        }))).bind(manifest);
-      } catch (cause) {
-        rethrowRepairContractViolation(cause);
-      }
-      for (const entry of claims.toJSON()) {
-        mutationIdsByFingerprint.set(entry.findingKey, entry.mutationIds);
-      }
-    }
-    const mutations = manifest.mutations.map((mutation) => new GateRepairMutationLineageEntry({
-      mutationId: mutation.mutationId,
-      path: mutation.path,
-    }));
-    const lineage = new SourceGateRepairLineage({ currentCheckout: true, mutations });
-    return this.#bind({
-      repair, beforeEvidenceDigest, outputEvidenceDigest, lineage,
-      Result: SourceGateRepairObservationResult,
-      changesFor: (entry) => ({ mutationIds: mutationIdsByFingerprint.get(entry.fingerprint) }),
-    });
-  }
-
-  #bind({ repair, beforeEvidenceDigest, outputEvidenceDigest, lineage, Result, changes = null, changesFor = null }) {
-    const requests = repair.requests;
-    const expected = requests.map((entry) => entry.fingerprint.toString());
-    const reported = this.results.map((entry) => entry.fingerprint);
-    if (expected.length !== reported.length || reported.some((fingerprint) => !expected.includes(fingerprint))) {
-      throw new Error("Gate repair worker report must resolve every blocking observation exactly once");
-    }
-    return new GateRepairReport({
-      beforeEvidenceDigest,
-      outputEvidenceDigest,
-      summary: this.summary,
-      requests,
-      lineage,
-      results: this.results.map((entry) => new Result({
-        ...entry.toJSON(),
-        ...(changesFor === null ? changes : changesFor(entry)),
-      })),
-    });
-  }
-
-  toJSON() {
-    return { version: this.version, summary: this.summary, results: this.results.map((entry) => entry.toJSON()) };
-  }
-}
-
-/** Durable explanation for a successful source Attempt with no mutation. */
-export class SourceNoChangeReason {
-  constructor(value) {
-    this.text = requiredString(value, "source worker noChangeReason");
-    Object.freeze(this);
-  }
-  toJSON() { return this.text; }
-}
-
-/** Canonical no-change/unrepairable outcome for every selected Task finding. */
-export class TaskRepairNoChangeEffect {
-  constructor({ classification, findingKeys, reason } = {}) {
-    if (!new Set(["no-change", "unrepairable"]).has(classification)) {
-      throw new Error("Task repair no-change classification is invalid");
-    }
-    this.classification = classification;
-    if (!Array.isArray(findingKeys) || findingKeys.length === 0 || findingKeys.length > MAX_PAYLOAD_FILES) {
-      throw new Error("Task repair no-change requires bounded findingKeys");
-    }
-    this.findingKeys = Object.freeze(findingKeys.map((key) => requiredString(key, "Task repair no-change findingKey")));
-    if (new Set(this.findingKeys).size !== this.findingKeys.length) throw new Error("Task repair no-change findingKeys must be unique");
-    this.reason = requiredString(reason, "Task repair no-change reason");
-    Object.freeze(this);
-  }
-  assertManifest(manifest) {
-    if (!(manifest instanceof SourceMutationManifest) || manifest.paths().length !== 0) {
-      throw new Error("Task repair no-change requires zero observed source mutations");
-    }
-    return this;
-  }
-  toJSON() { return { classification: this.classification, findingKeys: [...this.findingKeys], reason: this.reason }; }
-}
-
-function assertSourceEffectShape({ stepId, completionStatus, files, issues, overview, triage, repair, gateRepair, noChangeReason }) {
-  if (!new Set(["done", "skipped"]).has(completionStatus)) throw new Error("source worker completionStatus is invalid");
-  if (completionStatus === "skipped" && stepId !== "implement") {
-    throw new Error("only implement may report a skipped source completion");
-  }
-  if (stepId === "task-impl" && overview === null) throw new Error("task-impl source effect requires overview additions");
-  if (stepId !== "task-impl" && overview !== null) throw new Error("only task-impl may submit overview additions");
-  if ((stepId === "impl-triage") !== (triage !== null)) throw new Error("source triage effect is required only for impl-triage");
-  const repairStep = stepId === "impl-repair" || stepId === "task-repair";
-  if (repair !== null && !repairStep) throw new Error("source repair effect is allowed only for repair steps");
-  if (stepId === "impl-repair" && repair === null) throw new Error("source repair effect is required for impl-repair");
-  if (stepId !== "task-impl" && gateRepair !== null) {
-    throw new Error("only task-impl may submit a Gate repair report");
-  }
-  if (stepId === "task-repair") {
-    if ((repair === null) === (noChangeReason === null) || (noChangeReason !== null && !(noChangeReason instanceof TaskRepairNoChangeEffect))) {
-      throw new Error("task-repair requires exactly one changed repair or typed no-change outcome");
-    }
-  } else if (stepId !== "task-impl" && noChangeReason !== null) {
-    throw new Error("only task-impl and task-repair may submit a source no-change reason");
-  }
-  if (stepId === "impl-triage" && (files.length > 0 || issues.length > 0 || overview !== null || repair !== null)) {
-    throw new Error("impl-triage source effect may contain only typed triage dispositions");
-  }
-  if (new Set(["impl-repair", "task-repair"]).has(stepId) && (overview !== null || triage !== null)) {
-    throw new Error("impl-repair source effect may contain source files, issues, and one typed repair only");
-  }
-}
-
-export class SourceWorkerEffect {
-  constructor({ version, stepId, completionStatus, files = [], issues = [], overview = null, triage = null, repair = null, gateRepair = null, noChangeReason = null } = {}) {
-    if (version !== 1) throw new Error("source worker effect version must be 1");
-    this.version = 1;
-    this.stepId = requiredString(stepId, "source worker effect stepId");
-    if (!requiresWorkerSourceHandoff(this.stepId)) throw new Error(`source worker effect step is not source-owned: ${this.stepId}`);
-    this.completionStatus = requiredString(completionStatus, "source worker completionStatus");
-    if (!Array.isArray(files) || files.length > MAX_PAYLOAD_FILES || !Array.isArray(issues) || issues.length > MAX_PAYLOAD_FILES) {
-      throw new Error("source worker effect collections must be bounded arrays");
-    }
-    this.files = Object.freeze(files.map((entry) => {
-      exactObjectKeys(entry, ["requirementId", "mutationIds"], "source worker file effect");
-      return new SourceFileEffect(entry);
-    }));
-    assertUniqueSourceRequirementClaims(this.files, "source worker file effects");
-    this.issues = Object.freeze(issues.map((entry) => {
-      exactObjectKeys(entry, ["classification", "reason", "remainingRisk"], "source worker issue effect");
-      return new SourceIssueEffect(entry);
-    }));
-    this.overview = overview === null ? null : new SourceOverviewEffect(overview);
-    this.triage = triage === null ? null : new SourceTriageEffect(triage);
-    this.repair = repair === null ? null : new SourceRepairEffect(repair);
-    this.gateRepair = gateRepair === null ? null : GateRepairReport.fromJSON(gateRepair);
-    this.noChangeReason = noChangeReason === null ? null : this.stepId === "task-repair"
-      ? new TaskRepairNoChangeEffect(noChangeReason)
-      : new SourceNoChangeReason(noChangeReason);
-    assertSourceEffectShape(this);
-    Object.freeze(this);
-  }
-
-  static fromDocument(value, expectedStepId) {
-    assertSourceEffectDocumentKeys(value, expectedStepId);
-    const effect = new SourceWorkerEffect(value);
-    if (effect.stepId !== expectedStepId) throw new Error("source worker effect step does not match the handoff");
-    return effect;
-  }
-
-  toJSON() {
-    return {
-      version: this.version,
-      stepId: this.stepId,
-      completionStatus: this.completionStatus,
-      files: this.files.map((entry) => entry.toJSON()),
-      issues: this.issues.map((entry) => entry.toJSON()),
-      overview: this.overview?.toJSON() ?? null,
-      triage: this.triage?.toJSON() ?? null,
-      repair: this.repair?.toJSON() ?? null,
-      ...(this.stepId === "task-impl" ? { gateRepair: this.gateRepair?.toJSON() ?? null } : {}),
-      noChangeReason: this.noChangeReason?.toJSON() ?? null,
-    };
-  }
-}
-
-/** Worker-facing report bound to observed source mutations only by the parent. */
-export class SourceWorkerEffectReport {
-  constructor({ version, stepId, completionStatus, issues = [], overview = null, triage = null, repair = null, gateRepair = null, noChangeReason = null } = {}) {
-    if (version !== 1) throw new Error("source worker effect report version must be 1");
-    this.version = 1;
-    this.stepId = requiredString(stepId, "source worker effect report stepId");
-    this.completionStatus = requiredString(completionStatus, "source worker effect report completionStatus");
-    if (!Array.isArray(issues) || issues.length > MAX_PAYLOAD_FILES) {
-      throw new Error("source worker effect report issues must be a bounded array");
-    }
-    this.issues = Object.freeze(issues.map((entry) => {
-      exactObjectKeys(entry, ["classification", "reason", "remainingRisk"], "source worker issue claim");
-      return new SourceIssueEffect(entry);
-    }));
-    this.overview = overview === null ? null : new SourceOverviewEffect(overview);
-    this.triage = triage === null ? null : new SourceTriageEffect(triage);
-    this.repair = repair === null ? null : new SourceRepairReport(repair);
-    this.gateRepair = gateRepair === null ? null : GateRepairWorkerReport.fromDocument(gateRepair);
-    this.noChangeReason = noChangeReason === null ? null : this.stepId === "task-repair"
-      ? new TaskRepairNoChangeEffect(noChangeReason)
-      : new SourceNoChangeReason(noChangeReason);
-    assertSourceEffectShape({ ...this, files: [] });
-    Object.freeze(this);
-  }
-  static fromDocument(value, expectedStepId) {
-    assertSourceEffectDocumentKeys(value, expectedStepId, { workerReport: true });
-    const report = new SourceWorkerEffectReport(value);
-    if (report.stepId !== expectedStepId) throw new Error("source worker effect report step does not match the handoff");
-    return report;
-  }
-  bind(manifest, requirementAuthority, gateRepairBinding = null) {
-    if (!(manifest instanceof SourceMutationManifest)) throw new Error("source worker effect report requires a SourceMutationManifest");
-    if (!(requirementAuthority instanceof CanonicalSourceRequirementAuthority)) {
-      throw new Error("source worker effect report requires canonical Requirement authority");
-    }
-    const files = requirementAuthority.bindMutationIds(
-      manifest.mutations.map((mutation) => mutation.mutationId),
-    );
-    if ((this.gateRepair !== null) !== (gateRepairBinding !== null)) {
-      throw new Error("source Gate repair report is required exactly for a selected plan-Gate repair");
-    }
-    const gateRepair = this.gateRepair === null ? null : this.gateRepair.bindSource({
-      repair: gateRepairBinding.repair,
-      beforeEvidenceDigest: gateRepairBinding.beforeEvidenceDigest,
-      outputEvidenceDigest: gateRepairBinding.outputEvidenceDigest,
-      manifest,
-    });
-    this.noChangeReason?.assertManifest?.(manifest);
-    return new SourceWorkerEffect({
-      version: this.version, stepId: this.stepId, completionStatus: this.completionStatus,
-      files: files.map((entry) => entry.toJSON()),
-      issues: this.issues.map((entry) => entry.toJSON()),
-      overview: this.overview?.toJSON() ?? null, triage: this.triage?.toJSON() ?? null,
-      repair: this.repair?.bind(manifest).toJSON() ?? null,
-      ...(this.stepId === "task-impl" ? { gateRepair: gateRepair?.toJSON() ?? null } : {}),
-      noChangeReason: this.noChangeReason?.toJSON() ?? null,
-    });
-  }
-  toJSON() {
-    return {
-      version: this.version, stepId: this.stepId, completionStatus: this.completionStatus,
-      issues: this.issues.map((entry) => entry.toJSON()),
-      overview: this.overview?.toJSON() ?? null, triage: this.triage?.toJSON() ?? null,
-      repair: this.repair?.toJSON() ?? null,
-      ...(this.stepId === "task-impl" ? { gateRepair: this.gateRepair?.toJSON() ?? null } : {}),
-      noChangeReason: this.noChangeReason?.toJSON() ?? null,
-    };
-  }
 }
 
 function sourceRequirementAuthorityForRequest(request) {
@@ -3197,7 +2543,7 @@ function indexedSourceMutationCurrentEntry(root, relativePath, budget) {
  * that the later Version is exactly that prefix plus metric observations.
  */
 export class SourceWorkerCanonicalObservationAdvance {
-  constructor({ activityPrefix, activityBytes, mutablePaths, canonicalSnapshot, addedActivities = [], allowedPublications = [], allowedActivityIds = [] }) {
+  constructor({ activityPrefix, activityBytes, mutablePaths, canonicalSnapshot, addedActivities = [], allowedPublications = [], allowedActivityIds = [], allowedTaskReviewClaims = [] }) {
     if (!Array.isArray(activityPrefix) || !Array.isArray(mutablePaths) || !Array.isArray(addedActivities) || !Array.isArray(allowedPublications) || !Array.isArray(allowedActivityIds)) {
       throw new Error("source worker canonical observation advance requires Activity arrays");
     }
@@ -3226,6 +2572,10 @@ export class SourceWorkerCanonicalObservationAdvance {
       });
     }));
     this.allowedActivityIds = Object.freeze(allowedActivityIds.map((id) => requiredString(id, "source worker allowed Activity id")));
+    this.allowedTaskReviewClaims = Object.freeze(allowedTaskReviewClaims.map((entry) => Object.freeze({
+      activityId: requiredString(entry.activityId, "Task Review claim Activity id"),
+      json: requiredString(entry.json, "Task Review claim Activity bytes"),
+    })));
     Object.freeze(this);
   }
 
@@ -3330,6 +2680,7 @@ export class SourceWorkerCanonicalObservationAdvance {
         digest: publicationDigest,
       }],
       allowedActivityIds: this.allowedActivityIds,
+      allowedTaskReviewClaims: this.allowedTaskReviewClaims,
     });
   }
 
@@ -3342,6 +2693,69 @@ export class SourceWorkerCanonicalObservationAdvance {
       addedActivities: this.addedActivities,
       allowedPublications: this.allowedPublications,
       allowedActivityIds: [...this.allowedActivityIds, activityId],
+      allowedTaskReviewClaims: this.allowedTaskReviewClaims,
+    });
+  }
+
+  /** Admit only the parent's authenticated checkpoint/claim for this immutable Task work unit. */
+  withTaskReviewExecutionClaims({ flowManager, binding, manifest }) {
+    if (!(manifest instanceof ReviewWorkUnitManifest) || binding?.taskIdentity?.definitionId !== "task-review"
+      || manifest.runId !== binding.runId || manifest.specId !== binding.specId
+      || manifest.nodeId !== binding.nodeId || manifest.taskId !== binding.taskIdentity.taskId
+      || manifest.attemptId !== binding.attempt.id) {
+      throw new Error("Task Review claim observation requires its exact immutable work unit");
+    }
+    binding.assertCurrent();
+    const claims = flowManager.readCanonicalTransitionView({ specId: binding.specId, read: (view) => {
+      if (view.state.runId !== binding.runId || view.state.specId !== binding.specId
+        || !binding.attempt.matches(view.state)) {
+        throw new Error("Task Review execution claim changed before observation admission");
+      }
+      const selected = [];
+      for (const activity of view.activities.slice(this.activityPrefix.length)) {
+        const raw = activity.toJSON();
+        const receipt = activity.result?.draftSettlementReceipt;
+        if (receipt?.binding?.stepId !== binding.stepId
+          || receipt.binding.attemptId !== binding.attempt.id
+          || receipt.binding.attemptSequence !== binding.attempt.sequence) continue;
+        const lifecycle = receipt.executionLifecycle;
+        const result = activity.result?.stepResult;
+        if (raw.transition.operation !== "record_draft_step_settlement"
+          || raw.nodeId !== binding.nodeId || raw.attemptId !== binding.attempt.id
+          || raw.sequence !== binding.attempt.sequence
+          || result?.kind !== "task-review-execution-required"
+          || receipt.settlementKind !== "execution"
+          || !["checkpoint", "claimed"].includes(lifecycle?.phase)
+          || lifecycle.binding.manifestDigest !== manifest.digest
+          || lifecycle.binding.inputDigest !== manifest.inputDigest
+          || stableStringify(lifecycle.binding.target.toJSON?.() ?? lifecycle.binding.target)
+            !== stableStringify(manifest.target.toJSON())) {
+          throw new Error("Task Review canonical advance is not its exact parent-owned execution claim");
+        }
+        const typedResult = result instanceof StepResult ? result : StepResult.fromStored(binding.stepId, result);
+        DraftStepSettlementReceipt.assertStored(receipt.toJSON?.() ?? receipt, {
+          binding, result: typedResult, settlement: settleTaskStepResult(binding.stepId, typedResult),
+        });
+        selected.push({ activityId: raw.id, json: stableStringify(raw), phase: lifecycle.phase });
+      }
+      const current = view.activities.findLast((activity) => {
+        const receipt = activity.result?.draftSettlementReceipt;
+        return receipt?.binding?.stepId === binding.stepId
+          && receipt.binding.attemptId === binding.attempt.id
+          && receipt.binding.attemptSequence === binding.attempt.sequence;
+      })?.result?.draftSettlementReceipt;
+      if (current?.executionLifecycle?.phase !== "claimed"
+        || current.executionLifecycle.binding.manifestDigest !== manifest.digest
+        || current.executionLifecycle.binding.inputDigest !== manifest.inputDigest) {
+        throw new Error("Task Review observation lacks its current durable provider claim");
+      }
+      return selected;
+    } });
+    return new SourceWorkerCanonicalObservationAdvance({
+      activityPrefix: this.activityPrefix.map((entry) => JSON.parse(entry)), activityBytes: this.activityBytes,
+      mutablePaths: this.mutablePaths, canonicalSnapshot: this.canonicalSnapshot,
+      addedActivities: this.addedActivities, allowedPublications: this.allowedPublications,
+      allowedActivityIds: this.allowedActivityIds, allowedTaskReviewClaims: claims,
     });
   }
 
@@ -3403,6 +2817,7 @@ export class SourceWorkerCanonicalObservationAdvance {
       currentSnapshot,
       allowedPublications: this.allowedPublications,
       allowedActivityIds: this.allowedActivityIds,
+      allowedTaskReviewClaims: this.allowedTaskReviewClaims,
     });
     if (!advance) return this;
     return new SourceWorkerCanonicalObservationAdvance({
@@ -3429,6 +2844,7 @@ function assertCanonicalObservationAdvance({
   currentSnapshot,
   allowedPublications = [],
   allowedActivityIds = [],
+  allowedTaskReviewClaims = [],
 }) {
   if (current.length < observation.activityPrefix.length) {
     throw new WorkerArtifactHandoffError(
@@ -3454,6 +2870,8 @@ function assertCanonicalObservationAdvance({
     activity.transition?.operation !== "record_metric"
       && !allowedPublications.some((publication) => publication.activityId === activity.id)
       && !allowedActivityIds.includes(activity.id)
+      && !allowedTaskReviewClaims.some((entry) => entry.activityId === activity.id
+        && entry.json === stableStringify(activity))
   ))) {
     throw new WorkerArtifactHandoffError(
       "invalid",
@@ -3502,7 +2920,8 @@ function assertCanonicalObservationAdvance({
 }
 
 export class WorkerArtifactMutationAuthoritySnapshot {
-  constructor({ specId, repositories, sourceMode = false, canonicalObservationAdvance = null, sourceMutationBaseline = null, sourceRollbackCheckpoint = null }) {
+  constructor({ specId, repositories, sourceMode = false, canonicalObservationAdvance = null, sourceMutationBaseline = null,
+    sourceRequirementAuthority = null, sourceRollbackCheckpoint = null }) {
     this.specId = requiredString(specId, "worker artifact mutation authority specId");
     this.repositories = Object.freeze(repositories);
     this.sourceMode = sourceMode === true;
@@ -3514,6 +2933,10 @@ export class WorkerArtifactMutationAuthoritySnapshot {
       throw new Error("source worker mutation authority requires an Attempt source baseline");
     }
     this.sourceMutationBaseline = sourceMutationBaseline;
+    if (this.sourceMode !== (sourceRequirementAuthority instanceof CanonicalSourceRequirementAuthority)) {
+      throw new Error("source worker mutation authority requires its canonical Requirement scope");
+    }
+    this.sourceRequirementAuthority = sourceRequirementAuthority;
     if (sourceRollbackCheckpoint !== null && !(sourceRollbackCheckpoint instanceof WorkerArtifactSourceRollbackCheckpoint)) {
       throw new Error("source worker mutation authority has an invalid rollback checkpoint");
     }
@@ -3575,6 +2998,7 @@ export class WorkerArtifactMutationAuthoritySnapshot {
         specId: request.specId,
         sourceMode: request.policy.kind === "source",
         sourceMutationBaseline: request.sourceMutationBaseline,
+        sourceRequirementAuthority: request.policy.kind === "source" ? sourceRequirementAuthorityForRequest(request) : null,
         canonicalObservationAdvance: request.policy.kind === "source"
           ? SourceWorkerCanonicalObservationAdvance.capture({
               flowManager: request.flowManager,
@@ -3611,6 +3035,7 @@ export class WorkerArtifactMutationAuthoritySnapshot {
       repositories: [canonicalObservationAdvance.canonicalSnapshot],
       sourceMode: request.policy.kind === "source",
       sourceMutationBaseline: request.sourceMutationBaseline,
+      sourceRequirementAuthority: request.policy.kind === "source" ? sourceRequirementAuthorityForRequest(request) : null,
       canonicalObservationAdvance,
       sourceRollbackCheckpoint,
     });
@@ -3785,7 +3210,7 @@ export class WorkerArtifactMutationAuthoritySnapshot {
         { retryable: false, data: { stepId } },
       );
     }
-    const missingEffects = unique.filter((entry) => !declared.has(entry));
+    const missingEffects = this.sourceRequirementAuthority.unattributedPaths(unique, declared);
     if (missingEffects.length > 0) {
       throw new WorkerArtifactHandoffError(
         "invalid",
@@ -3794,6 +3219,8 @@ export class WorkerArtifactMutationAuthoritySnapshot {
         { retryable: false, data: { stepId, paths: missingEffects.slice(0, 20) } },
       );
     }
+    this.sourceRequirementAuthority.assertBindings(effect.files,
+      manifest.mutations.map((mutation) => mutation.mutationId));
     return Object.freeze(unique);
   }
 
@@ -7635,6 +7062,17 @@ class DraftWorkerPreparation {
 }
 
 /** Private in-memory boundary between Spec worker validation and settlement. */
+class SourceStepHandoffPreparation {
+  constructor({ request, submission, facts, publication, canonicalObservationAdvance }) {
+    this.request = request;
+    this.submission = submission;
+    this.facts = facts;
+    this.publication = Object.freeze(publication);
+    this.canonicalObservationAdvance = canonicalObservationAdvance;
+    Object.freeze(this);
+  }
+}
+
 class SpecWorkerPreparation {
   constructor({ request, state, submission, publications, facts } = {}) {
     if (!(request instanceof WorkerArtifactHandoffRequest)
@@ -7810,35 +7248,38 @@ function prepareDraftWorkerCanonical({ request, state, submission }) {
   });
 }
 
-function replayedStepResult({ ctx, request }) {
+function requestSourceNodeId(request) {
+  return request.taskId === null || !request.stepId.startsWith("task-") ? request.stepId
+    : new TaskStepIdentity({ taskId: request.taskId, role: request.stepId.slice(5) }).nodeId;
+}
+
+function replayedStepSettlementRecord({ ctx, request }) {
   const state = ctx.flowManager.canonicalState(request.specId);
-  const terminal = state?.findNode(request.stepId)?.result?.stepResult ?? null;
-  if (terminal !== null) return terminal;
+  const nodeId = requestSourceNodeId(request);
   const expectedAttempt = request.state?.attempt ?? state?.attempt ?? null;
-  const stored = ctx.flowManager.activityLedger(request.specId).findLast((activity) => (
-    activity?.nodeId === request.stepId
-    && activity?.transition?.operation === "record_draft_step_settlement"
+  const matches = (record) => record?.stepResult != null && record?.draftSettlementReceipt != null
+    && record.draftSettlementReceipt.binding.runId === request.runId
+    && record.draftSettlementReceipt.binding.specId === request.specId
+    && record.draftSettlementReceipt.binding.stepId === request.stepId
+    && (expectedAttempt?.id == null || record.draftSettlementReceipt.binding.attemptId === expectedAttempt.id)
+    && (expectedAttempt?.sequence == null || record.draftSettlementReceipt.binding.attemptSequence === expectedAttempt.sequence);
+  const terminal = state?.findNode(nodeId)?.result ?? null;
+  if (matches(terminal)) return terminal;
+  return ctx.flowManager.activityLedger(request.specId).findLast((activity) => (
+    activity?.nodeId === nodeId
     && (expectedAttempt?.id == null || activity.attemptId === expectedAttempt.id)
     && (expectedAttempt?.sequence == null || activity.sequence === expectedAttempt.sequence)
-    && activity.result?.stepResult != null
-  ))?.result.stepResult ?? null;
-  return stored === null || stored instanceof StepResult
-    ? stored
-    : StepResult.fromStored(request.stepId, stored);
+    && matches(activity.result)
+  ))?.result ?? null;
+}
+
+function replayedStepResult({ ctx, request }) {
+  const stored = replayedStepSettlementRecord({ ctx, request })?.stepResult ?? null;
+  return stored === null || stored instanceof StepResult ? stored : StepResult.fromStored(request.stepId, stored);
 }
 
 function replayedStepSettlementReceipt({ ctx, request }) {
-  const state = ctx.flowManager.canonicalState(request.specId);
-  const terminal = state?.findNode(request.stepId)?.result?.draftSettlementReceipt ?? null;
-  if (terminal !== null) return terminal;
-  const expectedAttempt = request.state?.attempt ?? state?.attempt ?? null;
-  return ctx.flowManager.activityLedger(request.specId).findLast((activity) => (
-    activity?.nodeId === request.stepId
-      && activity?.transition?.operation === "record_draft_step_settlement"
-      && (expectedAttempt?.id == null || activity.attemptId === expectedAttempt.id)
-      && (expectedAttempt?.sequence == null || activity.sequence === expectedAttempt.sequence)
-      && activity.result?.draftSettlementReceipt != null
-  ))?.result.draftSettlementReceipt ?? null;
+  return replayedStepSettlementRecord({ ctx, request })?.draftSettlementReceipt ?? null;
 }
 
 function isDraftPromotionReceipt({ ctx, request }) {
@@ -8238,6 +7679,7 @@ function validatePayload(request, submission, state) {
             stepId: request.stepId,
             handoffDirectory: request.directory,
             ...(cause.audit ? { specRepairAudit: cause.audit } : {}),
+            failureKind: "producer-payload",
           },
         },
       );
@@ -8252,6 +7694,7 @@ function validatePayload(request, submission, state) {
         data: {
           stepId: request.stepId,
           handoffDirectory: request.directory,
+          failureKind: "producer-payload",
         },
       },
     );
@@ -8917,7 +8360,7 @@ function canonicalHandoffReceiptForRequest(state, request, flowManager = null) {
   }
   const step = request.taskId === null
     ? findStepById(state?.steps || [], request.stepId)
-    : findStepById(state?.tasks?.find((task) => task.id === request.taskId)?.steps || [], `${request.taskId}-${request.stepId.slice("task-".length)}`);
+    : findStepById(state?.tasks?.find((task) => task.id === request.taskId)?.steps || [], new TaskStepIdentity({ taskId: request.taskId, role: request.stepId.slice("task-".length) }).nodeId);
   const resultReferences = step && new Set(["done", "skipped"]).has(step.status) && Array.isArray(step.result?.artifactRefs)
     ? [step.result.artifactRefs]
     : flowManager?.activityLedger?.(request.specId)
@@ -9101,6 +8544,18 @@ export class WorkerArtifactHandoffCoordinator {
     deferConditionalAdmission = false,
   }) {
     const stepId = invocation?.action?.nextAction?.step;
+    if (requiresWorkerSourceHandoff(stepId)) {
+      const registration = sourceStepRegistration(stepId);
+      if (registration === null) throw new Error(`Source Step registration is missing: ${stepId}`);
+      const prepared = registration.create({ ctx, flowManager: ctx.flowManager });
+      const selected = prepared.step.execute();
+      if (!(selected instanceof StepResult) || selected.kind !== `${stepId}-worker-required`
+        || prepared.dependency(SourceStepService).settlementOutcome?.receipt == null) {
+        throw new WorkerArtifactHandoffError("recovery-required", "FLOW_SOURCE_STEP_EXECUTION_NOT_ADMITTED",
+          "Source Step did not persist its exact worker execution checkpoint", { retryable: false });
+      }
+      state = ctx.flowManager.loadReadOnly(state.specId);
+    }
     const deferAdmissionForPlanning = deferConditionalAdmission
       || (deferPreparation && isConditionalDraftWorkerStep(stepId));
     const request = WorkerArtifactHandoffRequest.create({
@@ -9252,6 +8707,11 @@ export class WorkerArtifactHandoffCoordinator {
     const identity = SourceWorkerHandoffIdentity.fromRequest(request);
     if (invocation?.id !== identity.dispatchInvocationId) {
       throw new WorkerArtifactHandoffError("invalid", "FLOW_SOURCE_HANDOFF_RECOVERY_UNTRUSTED", "source handoff invocation does not bind its checkpoint identity", { retryable: false });
+    }
+    const execution = ctx.flowManager.readCurrentStepSettlement({ specId: request.specId, stepId: request.stepId });
+    if (execution?.result.kind !== `${request.stepId}-worker-required` || execution.receipt == null) {
+      throw new WorkerArtifactHandoffError("recovery-required", "FLOW_SOURCE_STEP_EXECUTION_NOT_ADMITTED",
+        "Source request lacks its exact worker execution checkpoint", { retryable: false });
     }
     const captured = WorkerArtifactMutationAuthoritySnapshot.capture(request);
     const rollbackBlob = captured.sourceRollbackCheckpoint.blobBytes();
@@ -10488,8 +9948,11 @@ export class WorkerArtifactHandoffCoordinator {
     }
     const committed = state === null
       ? null : canonicalHandoffReceiptForRequest(state, request, ctx.flowManager);
+    if (request.policy.kind === "source" && committed !== null) {
+      return this.prepareSourceStepHandoff({ ctx, request, mutationAuthority });
+    }
     if (committed !== null && !fs.existsSync(request.directory)) {
-      const settlementReceipt = isDraftWorkerStep(request.stepId)
+      const settlementReceipt = (isDraftWorkerStep(request.stepId) || request.policy.kind === "source")
         ? replayedStepSettlementReceipt({ ctx, request })
         : null;
       return {
@@ -10498,10 +9961,9 @@ export class WorkerArtifactHandoffCoordinator {
         stepId: request.stepId,
         handoffDigest: committed.id,
         payloadDigest: null,
-        ...(isDraftWorkerStep(request.stepId) ? {
-          stepResult: assertReplayedDraftStepResult({
-            ctx, request, stepResult: replayedStepResult({ ctx, request, state }),
-          }),
+        ...((isDraftWorkerStep(request.stepId) || request.policy.kind === "source") ? {
+          stepResult: request.policy.kind === "source" ? replayedStepResult({ ctx, request })
+            : assertReplayedDraftStepResult({ ctx, request, stepResult: replayedStepResult({ ctx, request, state }) }),
           settlementReceipt,
           receipt: settlementReceipt,
         } : {}),
@@ -10595,8 +10057,11 @@ export class WorkerArtifactHandoffCoordinator {
       }
     }
     if (canonicalHandoffIsCommitted(state, request, submission, ctx.flowManager)) {
+      if (request.policy.kind === "source") {
+        return this.prepareSourceStepHandoff({ ctx, request, submission, mutationAuthority });
+      }
       const committed = canonicalHandoffReceiptForRequest(state, request, ctx.flowManager);
-      const settlementReceipt = isDraftWorkerStep(request.stepId)
+      const settlementReceipt = (isDraftWorkerStep(request.stepId) || request.policy.kind === "source")
         ? replayedStepSettlementReceipt({ ctx, request })
         : null;
       cleanupCompletedHandoff(
@@ -10610,10 +10075,9 @@ export class WorkerArtifactHandoffCoordinator {
         stepId: request.stepId,
         handoffDigest: committed.id,
         payloadDigest: manifestDigest(submission.payloadManifest),
-        ...(isDraftWorkerStep(request.stepId) ? {
-          stepResult: assertReplayedDraftStepResult({
-            ctx, request, stepResult: replayedStepResult({ ctx, request, state }),
-          }),
+        ...((isDraftWorkerStep(request.stepId) || request.policy.kind === "source") ? {
+          stepResult: request.policy.kind === "source" ? replayedStepResult({ ctx, request })
+            : assertReplayedDraftStepResult({ ctx, request, stepResult: replayedStepResult({ ctx, request, state }) }),
           settlementReceipt,
           receipt: settlementReceipt,
         } : {}),
@@ -10889,7 +10353,36 @@ export class WorkerArtifactHandoffCoordinator {
     };
   }
 
-  #reconcileSource({ ctx, request, submission, mutationAuthority = null }) {
+  /** Acquire a sealed source handoff, preserving the parent-held mutation authority. */
+  prepareSourceStepHandoff({ ctx, request, submission = null, mutationAuthority = null }) {
+    if (!(request instanceof WorkerArtifactHandoffRequest) || request.policy.kind !== "source") {
+      throw new TypeError("Source Step preparation requires a source handoff request");
+    }
+    const state = ctx.flowManager.load(request.specId);
+    const committed = canonicalHandoffReceiptForRequest(state, request, ctx.flowManager);
+    if (committed !== null) {
+      const stepResult = replayedStepResult({ ctx, request });
+      const receipt = replayedStepSettlementReceipt({ ctx, request });
+      if (!(stepResult instanceof StepResult) || receipt === null
+        || stepResult.type !== "error" && stepResult.evidence?.handoffDigest !== committed.id) {
+        throw new WorkerArtifactHandoffError("recovery-required", "FLOW_ARTIFACT_HANDOFF_RECOVERY_REQUIRED",
+          "source handoff receipt lacks its exact typed Result or settlement receipt", { retryable: false });
+      }
+      if (fs.existsSync(request.directory)) {
+        const sealed = submission ?? readSubmission(request);
+        validateSubmission(request, sealed);
+        if (!canonicalHandoffIsCommitted(state, request, sealed, ctx.flowManager)) {
+          throw new WorkerArtifactHandoffError("conflict", "FLOW_ARTIFACT_HANDOFF_CONFLICT", "source replay changed its sealed handoff");
+        }
+        cleanupCompletedHandoff(request.handoffRoot, canonicalHandoffReceipt(request, sealed, this.now), this.faultInjector);
+      }
+      return { completed: true, replayed: true, stepId: request.stepId,
+        handoffDigest: committed.id, payloadDigest: null, stepResult, settlementReceipt: receipt, receipt };
+    }
+    submission ??= readSubmission(request);
+    validateSubmission(request, submission);
+    request.assertCurrent(state);
+    validatePayload(request, submission, state);
     const effect = SourceWorkerEffect.fromDocument(
       payloadDocument(request, submission, "effects.json"),
       request.stepId,
@@ -10937,67 +10430,71 @@ export class WorkerArtifactHandoffCoordinator {
       request.state,
       effect,
     );
-    try {
-      if (planGateRepairOutcome?.disposition === "rejected-no-progress") {
-        ctx.flowManager.rejectPlanGateRepairHandoff({
-          specId: request.specId,
-          outcome: planGateRepairOutcome,
-          result: canonicalHandoffResult(request, submission, this.now),
-          sourceHandoffSettlement,
-          mutationManifest: manifest,
-        });
-        const receipt = canonicalHandoffReceipt(request, submission, this.now);
-        cleanupCompletedHandoff(request.handoffRoot, receipt, this.faultInjector);
-        return {
-          completed: true,
-          rejected: true,
-          replayed: false,
-          stepId: receipt.stepId,
-          handoffDigest: receipt.handoffDigest,
-          payloadDigest: receipt.payloadDigest,
-        };
-      }
-      ctx.flowManager.confirmSourceWorkerHandoff({
-        sourceMutationBaseline: request.sourceMutationBaseline,
-        specId: request.specId,
-        effect,
-        mutationManifest: manifest,
-        handoffDigest: submission.handoffDigest,
-        sourceHandoffSettlement,
-        taskStageBinding: request.inputs.some((input) => input.name === "task-review-binding.json")
-          ? new TaskReviewEpisodeBinding(request.inputs.find((input) => input.name === "task-review-binding.json").document)
-          : null,
-        result: canonicalHandoffResult(request, submission, this.now, {
-          status: effect.completionStatus,
-          noChangeReason: effect.noChangeReason?.text ?? effect.noChangeReason?.reason ?? null,
-        }),
-        planGateRepairOutcome,
-        ...(upgradeResult === null ? {} : { upgradeResult }),
-      });
-    } catch (cause) {
-      const conflict = cause?.code === "CURRENT_FLOW_STATE_CONFLICT";
-      throw new WorkerArtifactHandoffError(
-        conflict ? "conflict" : "recovery-required",
-        conflict ? "FLOW_ARTIFACT_HANDOFF_CONFLICT" : "FLOW_ARTIFACT_HANDOFF_RECOVERY_REQUIRED",
-        `canonical source worker handoff could not commit: ${cause.message}`,
-        {
-          cause,
-          recoveryPossible: !conflict
-            && cause?.code !== "CURRENT_FLOW_STATE_INVARIANT_INVALID"
-            && cause?.code !== "FLOW_SOURCE_HANDOFF_MANIFEST_STALE",
-          data: { stepId: request.stepId, handoffDirectory: request.directory },
-        },
-      );
+
+    const typedState = ctx.flowManager.canonicalState(request.specId);
+    const taskIdentity = request.taskId === null ? null : new TaskStepIdentity({ taskId: request.taskId,
+      role: request.stepId.slice(5) });
+    const taskStageBinding = request.inputs.some((input) => input.name === "task-review-binding.json")
+      ? new TaskReviewEpisodeBinding(request.inputs.find((input) => input.name === "task-review-binding.json").document)
+      : null;
+    const lifecycleResult = canonicalHandoffResult(request, submission, this.now, {
+      status: effect.completionStatus, noChangeReason: effect.noChangeReason?.text ?? effect.noChangeReason?.reason ?? null });
+    const prospectiveStage = request.stepId === "task-repair"
+      ? ctx.flowManager.prepareSourceTaskReviewStage({ specId: request.specId, effect,
+        mutationManifest: manifest, handoffDigest: submission.handoffDigest, taskStageBinding, result: lifecycleResult }) : null;
+    const budget = request.stepId === "task-impl"
+      ? ctx.flowManager.readSourceTaskExecutionBudget({ specId: request.specId, taskId: request.taskId }) : null;
+    let taskFrontier = null;
+    if (request.stepId === "implement") {
+      taskFrontier = ctx.flowManager.readImplementationTaskFrontier({ specId: request.specId });
     }
-    const receipt = canonicalHandoffReceipt(request, submission, this.now);
-    cleanupCompletedHandoff(request.handoffRoot, receipt, this.faultInjector);
-    return {
-      completed: true,
-      replayed: false,
-      stepId: receipt.stepId,
-      handoffDigest: receipt.handoffDigest,
-      payloadDigest: receipt.payloadDigest,
-      canonicalObservationAdvance: canonicalObservationAdvance.toJSON(),
-    };
+    const evidence = new ImplementationSourceEvidence({ stepId: request.stepId,
+      runId: typedState.runId, specId: typedState.specId, nodeId: taskIdentity?.nodeId ?? request.stepId,
+      attemptId: manifest.attempt.id, attemptSequence: manifest.attempt.sequence,
+      taskId: taskIdentity?.taskId ?? null, taskRound: budget?.round ?? taskStageBinding?.taskRound ?? null,
+      reviewResultCount: prospectiveStage?.facts.reviewResultCount ?? null,
+      handoffDigest: submission.handoffDigest, mutationManifestDigest: manifest.digest,
+      mutationCount: manifest.mutations.length, completionStatus: effect.completionStatus,
+      qualityIssueCount: effect.issues.length, noChangeReason: effect.noChangeReason?.text ?? effect.noChangeReason?.reason ?? null,
+      appliedFindingKeys: effect.triage?.dispositions.filter((entry) => entry.disposition === "apply")
+        .map((entry) => entry.findingKey) ?? effect.repair?.appliedFindingKeys ?? [],
+      taskFrontier, taskStageFacts: prospectiveStage?.facts ?? null });
+    return new SourceStepHandoffPreparation({ request, submission,
+      facts: new SourceStepFacts({ stepId: request.stepId, effect, evidence,
+        completionFailure: planGateRepairOutcome?.disposition === "rejected-no-progress"
+          ? new WorkerArtifactHandoffError("invalid", "FLOW_GATE_REPAIR_NO_PROGRESS", "source Gate repair made no progress", { retryable: false }) : null }),
+      canonicalObservationAdvance,
+      publication: { specId: request.specId, effect, mutationManifest: manifest,
+        handoffDigest: submission.handoffDigest, sourceHandoffSettlement, taskStageBinding,
+        sourceMutationBaseline: request.sourceMutationBaseline, planGateRepairOutcome,
+        sourceTaskReviewStage: prospectiveStage,
+        result: lifecycleResult,
+        ...(upgradeResult === null ? {} : { upgradeResult }) } });
   }
+
+  completeSourceStepHandoff({ request, preparation, stepResult, receipt, replayed = false }) {
+    if (!(preparation instanceof SourceStepHandoffPreparation) || preparation.request !== request
+      || !(stepResult instanceof StepResult) || receipt?.id === undefined) {
+      throw new TypeError("Source completion requires its prepared handoff and durable Result receipt");
+    }
+    const handoffReceipt = canonicalHandoffReceipt(request, preparation.submission, this.now);
+    cleanupCompletedHandoff(request.handoffRoot, handoffReceipt, this.faultInjector);
+    return { completed: true, replayed, stepId: request.stepId,
+      handoffDigest: handoffReceipt.handoffDigest, payloadDigest: handoffReceipt.payloadDigest,
+      stepResult, settlementReceipt: receipt, receipt,
+      canonicalObservationAdvance: preparation.canonicalObservationAdvance.toJSON() };
+  }
+
+  #reconcileSource({ ctx, request, submission, mutationAuthority = null }) {
+    const preparation = this.prepareSourceStepHandoff({ ctx, request, submission, mutationAuthority });
+    if (preparation.completed) return preparation;
+    const registration = sourceStepRegistration(request.stepId);
+    if (registration === null) throw new Error(`Source Step registration is missing: ${request.stepId}`);
+    const prepared = registration.create({ ctx, request, preparation, handoffCoordinator: this, mutationAuthority });
+    prepared.step.execute();
+    const outcome = prepared.dependency(SourceStepService).settlementOutcome;
+    if (outcome?.receipt == null) throw new Error("Source Step did not persist its selected Result");
+    return outcome;
+  }
+
 }

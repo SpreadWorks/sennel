@@ -2,13 +2,11 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import { TaskReviewScenario } from "../../support/builders/task-review-scenario.js";
-import {
-  CanonicalCommandAttemptArtifactHistory,
-  CanonicalCommandResultArtifact,
-  attachCanonicalCommandResultArtifact,
-} from "../../../src/flow/lib/canonical-command-result.js";
+import { CanonicalCommandAttemptArtifactHistory } from "../../../src/flow/lib/canonical-command-result.js";
 import { TaskReviewAccounting } from "../../../src/flow/lib/task-review-accounting.js";
 import { TaskExecutionBudget } from "../../../src/flow/lib/task-execution-policy.js";
+import { TaskStageArtifact } from "../../../src/flow/lib/task-review-stage-artifacts.js";
+import { container } from "../../../src/lib/container.js";
 
 function reviewHistory(attempts) {
   return new CanonicalCommandAttemptArtifactHistory({
@@ -20,18 +18,11 @@ function reviewHistory(attempts) {
   });
 }
 
-function taskReviewResult() {
-  return attachCanonicalCommandResultArtifact(
-    { result: "ok", artifacts: { verdict: "REJECTED" } },
-    new CanonicalCommandResultArtifact({
-      logicalKey: "task.review",
-      payload: { verdict: "REJECTED", blockingFindings: [] },
-    }),
-  );
-}
-
-test("Task Review accounting counts one cataloged result across tooling retry and reload", (t) => {
+test("Task Review accounting counts one cataloged result across tooling retry and reload", async (t) => {
   const scenario = new TaskReviewScenario(t);
+  container.reset();
+  container.register("root", scenario.root);
+  t.after(() => container.reset());
   const before = TaskReviewAccounting.fromCanonicalState({
     flowManager: scenario.manager, state: scenario.state(), taskId: scenario.taskId,
   });
@@ -49,11 +40,15 @@ test("Task Review accounting counts one cataloged result across tooling retry an
   assert.equal(retried.completedReviewCount, 0);
   assert.equal(retried.requireInflightReviewOrdinal(), 1, "tooling retries do not consume a Review result");
   assert.ok(scenario.state().attempt.sequence > 1, "transport lifecycle advanced independently");
-  scenario.manager.publishCurrentAttemptResult({ specId: scenario.specId, commandResult: taskReviewResult() });
+  assert.notEqual((await scenario.publishReview([])).ok, false);
   scenario.reload();
 
-  const after = TaskReviewAccounting.fromCanonicalState({
-    flowManager: scenario.manager, state: scenario.state(), taskId: scenario.taskId,
+  const review = new TaskStageArtifact({
+    flowManager: scenario.manager, state: scenario.state(), taskId: scenario.taskId, role: "review",
+  });
+  const after = new TaskReviewAccounting({
+    taskId: scenario.taskId, history: review.history,
+    budget: scenario.manager.taskMutationLineages({ specId: scenario.specId, taskId: scenario.taskId }).at(-1).budget,
   });
   assert.equal(after.completedReviewCount, 1, "the published review remains one semantic result");
   assert.equal(after.inflightReviewOrdinal, null, "a publication cannot be counted again as an inflight Review");

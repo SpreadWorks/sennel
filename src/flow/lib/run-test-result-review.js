@@ -21,7 +21,9 @@ import {
   isCanonicalFlowState,
 } from "./canonical-test-artifacts.js";
 import { attachCanonicalCommandResultArtifact } from "./canonical-command-result.js";
-import { admitTestChainDirectExecution } from "./test-chain-transition-facts.js";
+import { admitTestChainDirectExecution, readAuthenticatedTestExecutionCompletion } from "./test-chain-transition-facts.js";
+import { implStepRegistration } from "../engine/composition/impl.js";
+import { prepareTestChainPublication } from "../engine/composition/test-chain.js";
 
 function pass(check, detail) {
   return { check, result: "pass", detail };
@@ -98,7 +100,9 @@ function executeCanonicalTestResultReview(ctx) {
     optional: true,
   });
   const rawOutputText = raw === null ? "" : readRawOutputBytes(raw.bytes);
-  const rawEvidenceFingerprint = canonicalRawEvidenceFingerprint(raw?.bytes ?? Buffer.alloc(0));
+  const completion = raw === null ? readAuthenticatedTestExecutionCompletion({ flowManager: ctx.flowManager, specId: store.specId }) : null;
+  const rawEvidenceFingerprint = raw === null ? completion?.rawEvidenceFingerprint ?? loadedResult.rawEvidenceFingerprint
+    : canonicalRawEvidenceFingerprint(raw.bytes);
   const rawLines = raw === null ? [] : rawOutputText.split(/\r?\n/);
   const requirements = Array.isArray(spec.requirements) ? spec.requirements : [];
   const evidenceContext = {
@@ -167,11 +171,26 @@ function readRawOutputBytes(bytes) {
   return bytes.toString("utf8");
 }
 
+export function executeTestChainInput(input) {
+  const registration = implStepRegistration(input.stepId);
+  if (registration === null) throw new TypeError("Test-chain execution requires its production registration");
+  const selection = registration.executionContract.select({ ...input, registration });
+  return registration.executionContract.execute(selection, { ...input, registration });
+}
+
 export default class RunTestResultReviewCommand extends FlowCommand {
   async execute(ctx) {
     if (isCanonicalFlowState(ctx.flowState)) {
-      admitTestChainDirectExecution({ flowManager: ctx.flowManager, specId: ctx.flowState.specId, stepId: "test-result-review" });
-      return executeCanonicalTestResultReview(ctx);
+      const admitted = admitTestChainDirectExecution({ flowManager: ctx.flowManager, specId: ctx.flowState.specId, stepId: "test-result-review" });
+      const commandResult = executeCanonicalTestResultReview(ctx);
+      const state = ctx.flowManager.canonicalState(ctx.flowState.specId);
+      if (state.attempt?.id !== admitted.snapshot.attempt.id || state.attempt?.sequence !== admitted.snapshot.attempt.sequence) {
+        throw new Error("Test evidence Review Attempt changed before observation adoption");
+      }
+      const preparation = prepareTestChainPublication({ flowManager: ctx.flowManager, state, commandResult });
+      await executeTestChainInput({ flowManager: ctx.flowManager, specId: state.specId,
+        stepId: "test-result-review", binding: preparation.binding, preparation, commandResult });
+      return commandResult;
     }
     throw new Error("test-result-review requires a Version-1 Flow");
   }

@@ -1,3 +1,5 @@
+import { TaskStepIdentity } from "./task-step-identity.js";
+import { hasImplementationStepContract } from "../engine/step-result.js";
 /**
  * Persist Review facts and materialize a transition already selected by
  * definition.js. This module never chooses a route.
@@ -60,9 +62,9 @@ export function settleDefinitionReviewTransition(ctx) {
   const flowState = ctx.flowManager.loadReadOnly(ctx.specId ?? ctx.flowState.specId);
   const taskId = flowState.currentTaskId ?? null;
   const scope = taskId === null ? "flow" : "task";
-  const nodeId = scope === "task" ? `${taskId}-review` : flowState.currentNodeId;
+  const nodeId = scope === "task" ? new TaskStepIdentity({ taskId, role: "review" }).nodeId : flowState.currentNodeId;
   const stepId = scope === "task" ? "task-review" : nodeId;
-  if (draftReviewRouteForStepId(stepId) !== null) return null;
+  if (draftReviewRouteForStepId(stepId) !== null || hasImplementationStepContract(stepId)) return null;
   const selection = resolveCurrentReviewTransition({
     flowManager: ctx.flowManager,
     flowState,

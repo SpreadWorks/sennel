@@ -15,6 +15,10 @@ import {
 } from "../definition.js";
 import { GateTransitionFacts } from "./gate-transition.js";
 import { readCurrentGateTransitionFacts } from "./gate-transition-facts.js";
+import { StepAdmissionRefusal } from "./step-admission-refusal.js";
+import { isDeepStrictEqual } from "node:util";
+import { CanonicalCommandAttemptArtifactHistory } from "./canonical-command-result.js";
+import { assertGateSettlementPublication } from "./gate-settlement-publication.js";
 
 const PROJECTION_TOKEN = Symbol("gate-transition-action-projection");
 
@@ -50,6 +54,31 @@ export class GateTransitionActionProjection {
       advance: this.advance,
       nonblockingHandoff: this.nonblockingHandoff?.toJSON() ?? null,
     };
+  }
+}
+
+/** The selected continuation is recovered from the authenticated saved Result. */
+export class SavedImplementationGateSelection {
+  constructor(saved) {
+    if (!["task-gate", "impl-gate"].includes(saved?.result?.stepId)
+      || saved.settlement.sourceStepId !== saved.result.stepId
+      || saved.receipt.binding.stepId !== saved.result.stepId) {
+      throw new TypeError("Implementation Gate continuation requires its bound Result and receipt");
+    }
+    this.result = saved.result;
+    this.settlement = saved.settlement;
+    this.receipt = saved.receipt;
+    this.activityId = saved.activityId;
+    this.decision = saved.settlement.application?.decision ?? null;
+    if (this.decision !== null && !(this.decision instanceof GateTransitionDecision)) {
+      throw new TypeError("Saved Gate settlement must retain its selected decision");
+    }
+    this.action = this.decision === null ? null : projectGateTransitionDecision(this.decision);
+    Object.freeze(this);
+  }
+  toJSON() {
+    return { result: this.result.toJSON(), settlement: this.settlement.toJSON(),
+      receiptId: this.receipt.id, action: this.action?.toJSON() ?? null };
   }
 }
 
@@ -91,13 +120,16 @@ export function applyGateTransitionDecision(adapter, decision) {
   }
 }
 
-/** Re-read facts before direct execution and reject a stale selected decision. */
-export function admitGateTransition({ facts, decision } = {}) {
+/** Authenticate the selected continuation before direct execution. */
+export function admitGateTransition({ facts, decision, flowManager, flowState, phase, root } = {}) {
   if (!(decision instanceof GateTransitionDecision)) {
     throw new Error("gate admission requires a definition decision");
   }
-  const current = resolveGateTransition(facts);
-  if (!current.plan.action.identity.matches(decision.plan.action.identity)) {
+  const implementation = ["task-impl", "integration"].includes(decision.facts.phase);
+  const current = implementation
+    ? resolveGateNextAction({ flowManager, flowState, phase: phase ?? decision.facts.phase, root })?.decision ?? null
+    : resolveGateTransition(facts);
+  if (current === null || !current.plan.action.identity.matches(decision.plan.action.identity)) {
     throw new Error("gate transition admission rejected a stale or bypassed decision");
   }
   return current;
@@ -120,10 +152,46 @@ export function applyGatePublicOutcomeProjection(commandResult, projection) {
   return commandResult;
 }
 
-/** Shared canonical read → Definition → projection boundary for Gate readers. */
-export function resolveGateNextAction({ flowManager, flowState, phase, validateRoute = () => {} } = {}) {
+/** Restore implementation Results; other phases retain their canonical Gate owner. */
+export function resolveGateNextAction({ flowManager, flowState, phase, root = null, validateRoute = () => {} } = {}) {
   if (typeof validateRoute !== "function") throw new Error("Gate next-action validateRoute must be a function");
-  const facts = readCurrentGateTransitionFacts({ flowManager, flowState, phase });
+  if (["task-impl", "integration"].includes(phase)) {
+    const stepId = phase === "integration" ? "impl-gate" : "task-gate";
+    const saved = flowManager.readCurrentStepSettlement({ specId: flowState.specId, stepId });
+    const facts = readCurrentGateTransitionFacts({ flowManager, flowState, phase, root });
+    if (saved === null || saved.result.evidence?.executionRequired === true) {
+      if (facts !== null) throw new StepAdmissionRefusal("Implementation Gate observation requires its atomic saved Result and receipt");
+      return saved === null ? null : new SavedImplementationGateSelection(saved);
+    }
+    const selected = new SavedImplementationGateSelection(saved);
+    if (selected.result.type === "error") {
+      // File-input failures can stop before the facts reader exposes a Gate
+      // observation. Authenticate any attached publication without judging it.
+      const publication = selected.result.error.data?.evidence?.publication;
+      if (publication != null) {
+        const state = flowManager.canonicalState(flowState.specId);
+        const nodeId = state.current.at(-1);
+        const source = flowManager.readProducerArtifact({ specId: state.specId, nodeId,
+          logicalKey: phase === "integration" ? "impl.gate" : "task.gate",
+          parameters: phase === "integration" ? {} : { taskId: selected.result.error.data.evidence.identity.taskId } });
+        const history = CanonicalCommandAttemptArtifactHistory.fromBytes({ logicalKey: source.descriptor.logicalKey, bytes: source.bytes });
+        const activity = flowManager.activityLedger(state.specId).find((entry) => entry.id === selected.activityId);
+        assertGateSettlementPublication({ state, activity, descriptor: source.descriptor,
+          historyEntry: history.current, attempt: state.attempt, publicationBytes: source.bytes });
+      }
+      return selected;
+    }
+    const original = selected.decision?.facts;
+    if (facts === null || original == null || facts.integrityFailure !== null
+      || !isDeepStrictEqual(facts.target.toJSON(), original.target.toJSON())
+      || !isDeepStrictEqual(facts.catalogPublication.toJSON(), original.catalogPublication.toJSON())
+      || !isDeepStrictEqual(facts.lineage.toJSON(), original.lineage.toJSON())) {
+      throw new StepAdmissionRefusal("Saved implementation Gate observation is stale or no longer canonically bound");
+    }
+    validateRoute(selected.decision.plan, selected.decision);
+    return selected;
+  }
+  const facts = readCurrentGateTransitionFacts({ flowManager, flowState, phase, root });
   if (facts === null) return null;
   if (!(facts instanceof GateTransitionFacts)) throw new Error("Gate next-action facts must be typed");
   const decision = resolveTaskGateSettlementRecovery(facts)

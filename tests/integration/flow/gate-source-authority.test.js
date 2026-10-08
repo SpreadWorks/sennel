@@ -1,23 +1,20 @@
 import { completeCanonicalSourceHandoff } from "../../support/builders/source-handoff-scenario.js";
 import { afterEach, describe, it } from "node:test";
 import assert from "node:assert/strict";
-import fs from "node:fs";
-import path from "node:path";
 
 import RunGateCommand, {
   GateEvaluationScope,
-  appendIssueLogFromGateResult,
   findReusablePassedGuardrails,
   runGateFlow,
 } from "../../../src/flow/lib/run-gate.js";
-import { readCurrentGateTransitionFacts } from "../../../src/flow/lib/gate-transition-facts.js";
-import { resolveGateTransition } from "../../../src/flow/definition.js";
+import { resolveGateNextAction } from "../../../src/flow/lib/gate-transition-application.js";
+import { implementationNonblockingEligibilityForResult } from "../../../src/flow/definition.js";
+import { assertImplPhaseResult } from "../../support/assertions/impl-phase-result.js";
 import GetNextActionCommand from "../../../src/flow/lib/get-next-action.js";
 import GetStatusCommand from "../../../src/flow/lib/get-status.js";
 import RunRepairPlanGateCommand from "../../../src/flow/lib/run-repair-plan-gate.js";
 import { canonicalPlanGateRepairForTarget } from "../../../src/flow/lib/plan-gate-repair.js";
-import RunReviewCommand from "../../../src/flow/lib/run-review.js";
-import { ReviewWorkUnit } from "../../../src/flow/lib/review-work-unit.js";
+import { ImplementationReviewProducer } from "../../support/infrastructure/implementation-review-producer.js";
 import { FLOW_COMMANDS } from "../../../src/flow/registry.js";
 import { container } from "../../../src/lib/container.js";
 import { CanonicalFlowFixture, makeFlowManager } from "../../support/infrastructure/flow-setup.js";
@@ -34,7 +31,7 @@ function canonicalSnapshot(flowManager) {
   }));
 }
 
-function taskGateFixture(root) {
+async function taskGateFixture(root, sourceText = "export const currentTaskBehavior = false;\n") {
   writeJson(root, ".sennel/config.json", {
     lang: "en",
     type: "base",
@@ -75,7 +72,7 @@ function taskGateFixture(root) {
 
   completeCanonicalSourceHandoff({
     root, manager: flowManager, specId: SPEC_ID, stepId: "task-impl", taskId: "T-1",
-    mutate: () => writeFile(root, "src/task-behavior.js", "export const currentTaskBehavior = false;\n"),
+    mutate: () => writeFile(root, "src/task-behavior.js", sourceText),
     effect: {
       version: 1, stepId: "task-impl", completionStatus: "done", issues: [],
       overview: { modules: [], data_flow: [], decisions: [] },
@@ -83,15 +80,15 @@ function taskGateFixture(root) {
     },
   });
   fixture.activate("T-1-review", { settlePredecessors: false });
-  fixture.settle("T-1-review");
-  fixture.settle("T-1-triage", "skipped");
-  fixture.settle("T-1-repair", "skipped");
-  fixture.activate("T-1-gate", { settlePredecessors: false });
+  // Board 03 requires a genuine Review producer and its selected skip effects.
+  const review = await publishPassingTaskReview(root, flowManager);
+  assert.notEqual(review.ok, false, JSON.stringify(review));
+  assert.equal(flowManager.canonicalState(SPEC_ID).current?.at(-1), "T-1-gate");
   return flowManager;
 }
 
 async function executeTaskGate(root, flowManager) {
-  return new RunGateCommand().execute({
+  const ctx = {
     root,
     mainRoot: root,
     executionRoot: root,
@@ -101,53 +98,35 @@ async function executeTaskGate(root, flowManager) {
     flowManager,
     config: {},
     skipGuardrail: true,
-  });
+  };
+  await FLOW_COMMANDS.run.gate.pre(ctx);
+  const result = await new RunGateCommand().execute(ctx);
+  // The registered post publishes Result, artifact, issue, receipt and effects atomically.
+  await FLOW_COMMANDS.run.gate.post(ctx, result);
+  return result;
 }
 
-function settleTaskGateFailure(root, flowManager, result) {
-  const facts = () => readCurrentGateTransitionFacts({
-    flowManager,
-    flowState: flowManager.loadReadOnly(SPEC_ID),
-    phase: "task-impl",
-    root,
-  });
-  let decision = resolveGateTransition(facts());
-  flowManager.recordGateObservationDecision({ specId: SPEC_ID, decision });
-  decision = resolveGateTransition(facts());
-  flowManager.recordTaskGateSettlementMetric({ specId: SPEC_ID, decision });
-  decision = resolveGateTransition(facts());
-  appendIssueLogFromGateResult({
-    root,
-    mainRoot: root,
-    executionRoot: root,
-    specId: SPEC_ID,
-    flowManager,
-    flowState: flowManager.loadReadOnly(SPEC_ID),
-    phase: "task-impl",
-    gateTransitionDecision: decision,
-  }, result);
-  return resolveGateTransition(facts());
+function savedTaskGate(flowManager, { completed = false } = {}) {
+  const saved = flowManager.readCurrentStepSettlement({ specId: SPEC_ID, stepId: "task-gate", taskId: "T-1", completed });
+  assert.ok(saved, "Task Gate must persist its selected Result with the publication");
+  assertImplPhaseResult(saved.result);
+  assert.equal(saved.receipt.binding.stepId, "task-gate");
+  const activity = flowManager.activityLedger(SPEC_ID).find((entry) => entry.id === saved.activityId);
+  assert.equal(activity.attemptId, saved.receipt.binding.attemptId);
+  assert.equal(activity.sequence, saved.receipt.binding.attemptSequence);
+  assert.equal(activity.result.draftSettlementReceipt.id, saved.receipt.id);
+  return saved;
+}
+
+function selectedTaskGateFailure(root, flowManager) {
+  const saved = savedTaskGate(flowManager);
+  const selected = resolveGateNextAction({ flowManager, flowState: flowManager.loadReadOnly(SPEC_ID),
+    phase: "task-impl", root });
+  assert.equal(selected.receipt.id, saved.receipt.id);
+  return selected.decision;
 }
 
 async function publishPassingTaskReview(root, flowManager) {
-  const review = new RunReviewCommand({
-    resolveTreeSha: () => "a".repeat(40),
-    resolveTargetStateDigest: () => "b".repeat(64),
-    runCommand(_command, _args, options) {
-      fs.writeFileSync(path.join(options.env.SENNEL_REVIEW_OUTPUT_DIR, "impl-review.json"), `${JSON.stringify({
-        version: 1,
-        phase: "impl",
-        generatedAt: "2026-09-08T00:00:00.000Z",
-        verdict: "PASS",
-        summary: { blocking: 0, nonBlocking: 0, total: 0 },
-        blockingFindings: [],
-        nonBlockingImprovements: [],
-        excluded: { missingFile: 0, outOfScope: 0 },
-      })}\n`);
-      ReviewWorkUnit.fromEnvironment(options.env).seal();
-      return { ok: true, status: 0, stdout: "", stderr: "", signal: null, killed: false };
-    },
-  });
   const ctx = {
     root,
     mainRoot: root,
@@ -157,9 +136,7 @@ async function publishPassingTaskReview(root, flowManager) {
     flowState: flowManager.loadReadOnly(SPEC_ID),
     config: {},
   };
-  const result = await review.execute(ctx);
-  if (result.ok !== false) await FLOW_COMMANDS.run.review.post(ctx, result);
-  return result;
+  return new ImplementationReviewProducer().publish(ctx);
 }
 
 describe("Task Gate source authority", () => {
@@ -172,7 +149,7 @@ describe("Task Gate source authority", () => {
 
   it("binds a semantic failure before publication, then a fresh reader selects the sealed repair route", async () => {
     root = createTmpDir("gate-source-authority-");
-    const flowManager = taskGateFixture(root);
+    const flowManager = await taskGateFixture(root);
     const originalGet = container.get.bind(container);
     container.get = (key) => key !== "agent" ? originalGet(key) : {
       resolve: () => true,
@@ -192,17 +169,12 @@ describe("Task Gate source authority", () => {
     assert.match(result.artifacts.sourceFingerprint, /^[a-f0-9]{64}$/);
     assert.equal(result.artifacts.evaluationScope.taskId, "T-1");
     assert.equal(result.artifacts.evaluationScope.sourceFingerprint, result.artifacts.sourceFingerprint);
-    flowManager.publishCurrentAttemptResult({ specId: SPEC_ID, commandResult: result });
 
     const reloaded = makeFlowManager(root);
-    const facts = readCurrentGateTransitionFacts({
-      flowManager: reloaded,
-      flowState: reloaded.loadReadOnly(SPEC_ID),
-      phase: "task-impl",
-      root,
-    });
-    assert.equal(facts.failure.category, "semantic");
-    const decision = settleTaskGateFailure(root, reloaded, result);
+    const saved = savedTaskGate(reloaded);
+    assert.equal(saved.result.kind, "task-gate-repair-required");
+    assert.equal(saved.result.evidence.failure.category, "semantic");
+    const decision = selectedTaskGateFailure(root, reloaded);
     assert.equal(reloaded.canonicalState(SPEC_ID).attempt.failure.category, "semantic");
     assert.equal(decision.disposition.operation, "repair");
     const next = await new GetNextActionCommand().execute({
@@ -219,7 +191,7 @@ describe("Task Gate source authority", () => {
 
   it("re-evaluates changed repaired source, publishes PASS, and reconstructs passed convergence after restart", async () => {
     root = createTmpDir("gate-source-repair-pass-");
-    const flowManager = taskGateFixture(root);
+    const flowManager = await taskGateFixture(root);
     let providerCalls = 0;
     const originalGet = container.get.bind(container);
     container.get = (key) => key !== "agent" ? originalGet(key) : {
@@ -237,8 +209,7 @@ describe("Task Gate source authority", () => {
     try {
       const first = await executeTaskGate(root, flowManager);
       assert.equal(first.result, "fail");
-      flowManager.publishCurrentAttemptResult({ specId: SPEC_ID, commandResult: first });
-      const repairDecision = settleTaskGateFailure(root, flowManager, first);
+      const repairDecision = selectedTaskGateFailure(root, flowManager);
       assert.equal(repairDecision.disposition.operation, "repair");
 
       const repaired = new RunRepairPlanGateCommand().execute({
@@ -280,7 +251,6 @@ describe("Task Gate source authority", () => {
       const passed = await executeTaskGate(root, flowManager);
       assert.equal(passed.result, "pass");
       assert.equal(providerCalls, 2, "changed source evidence admits exactly one fresh provider evaluation");
-      flowManager.publishCurrentAttemptResult({ specId: SPEC_ID, commandResult: passed });
 
       const beforeStatus = canonicalSnapshot(flowManager);
       const status = new GetStatusCommand().execute({
@@ -290,9 +260,9 @@ describe("Task Gate source authority", () => {
       assert.equal(status.gateObservationConvergence.entries[0].finalDisposition, "passed");
       assert.deepEqual(canonicalSnapshot(flowManager), beforeStatus, "status read must not mutate canonical records");
 
-      let passDecision = resolveGateTransition(readCurrentGateTransitionFacts({
-        flowManager, flowState: flowManager.loadReadOnly(SPEC_ID), phase: "task-impl", root,
-      }));
+      const completed = savedTaskGate(flowManager, { completed: true });
+      assert.equal(completed.result.kind, "task-gate-passed");
+      const passDecision = completed.settlement.application.decision;
 
       const restarted = makeFlowManager(root);
       const beforeRestartedStatus = canonicalSnapshot(restarted);
@@ -302,28 +272,15 @@ describe("Task Gate source authority", () => {
       });
       assert.deepEqual(restartedStatus.gateObservationConvergence, status.gateObservationConvergence);
       assert.deepEqual(canonicalSnapshot(restarted), beforeRestartedStatus, "reloaded status read must remain read-only");
-      const restartedDecision = resolveGateTransition(readCurrentGateTransitionFacts({
-        flowManager: restarted, flowState: restarted.loadReadOnly(SPEC_ID), phase: "task-impl", root,
-      }));
+      const restartedSaved = savedTaskGate(restarted, { completed: true });
+      const restartedDecision = restartedSaved.settlement.application.decision;
       assert.deepEqual(
         restartedDecision.toJSON(),
         passDecision.toJSON(),
         "status read must not change the Definition-owned disposition",
       );
-      passDecision = restartedDecision;
-
-      restarted.recordTaskGateSettlementMetric({ specId: SPEC_ID, decision: passDecision });
-      passDecision = resolveGateTransition(readCurrentGateTransitionFacts({
-        flowManager: restarted, flowState: restarted.loadReadOnly(SPEC_ID), phase: "task-impl", root,
-      }));
-      appendIssueLogFromGateResult({
-        root, mainRoot: root, executionRoot: root, specId: SPEC_ID, flowManager: restarted,
-        flowState: restarted.loadReadOnly(SPEC_ID), phase: "task-impl", gateTransitionDecision: passDecision,
-      }, passed);
-      passDecision = resolveGateTransition(readCurrentGateTransitionFacts({
-        flowManager: restarted, flowState: restarted.loadReadOnly(SPEC_ID), phase: "task-impl", root,
-      }));
-      restarted.confirmCurrentAttempt({ specId: SPEC_ID, status: "done", gateTransitionDecision: passDecision });
+      assert.equal(restartedSaved.receipt.id, completed.receipt.id);
+      assert.equal(restartedSaved.activityId, completed.activityId);
 
       const settled = makeFlowManager(root);
       const beforeSettledStatus = canonicalSnapshot(settled);
@@ -334,7 +291,9 @@ describe("Task Gate source authority", () => {
       assert.equal(settledStatus.gateObservationConvergence.entries[0].finalDisposition, "passed");
       assert.equal(settled.activityLedger(SPEC_ID).some((activity) => (
         activity.attemptId === passed.artifacts.gateTransitionAttemptId
-        && activity.transition.operation === "confirm_attempt"
+        && activity.id === completed.activityId
+        && activity.result?.stepResult?.kind === "task-gate-passed"
+        && activity.result?.draftSettlementReceipt?.id === completed.receipt.id
       )), true);
       assert.deepEqual(canonicalSnapshot(settled), beforeSettledStatus, "settled status read must remain read-only");
     } finally {
@@ -344,7 +303,7 @@ describe("Task Gate source authority", () => {
 
   it("reuses a prior partial PASS for the exact scope before selecting the sealed repair route", async () => {
     root = createTmpDir("gate-source-reuse-");
-    const flowManager = taskGateFixture(root);
+    const flowManager = await taskGateFixture(root);
     const originalGet = container.get.bind(container);
     container.get = (key) => key !== "agent" ? originalGet(key) : {
       resolve: () => true,
@@ -359,7 +318,6 @@ describe("Task Gate source authority", () => {
     } finally {
       container.get = originalGet;
     }
-    flowManager.publishCurrentAttemptResult({ specId: SPEC_ID, commandResult: result });
 
     const reloaded = makeFlowManager(root);
     const scope = GateEvaluationScope.fromJSON(result.artifacts.evaluationScope);
@@ -398,7 +356,7 @@ describe("Task Gate source authority", () => {
     });
     assert.equal(flipped.result, "pass");
     assert.equal(flipped.artifacts.evaluations[0].result, "pass");
-    const decision = settleTaskGateFailure(root, reloaded, result);
+    const decision = selectedTaskGateFailure(root, reloaded);
     assert.equal(decision.disposition.operation, "repair");
     assert.throws(
       () => reloaded.retryGateTransition({ specId: SPEC_ID, decision }),
@@ -408,7 +366,7 @@ describe("Task Gate source authority", () => {
 
   it("refuses provider-time canonical spec drift without publishing a Task Gate result", async () => {
     root = createTmpDir("gate-source-spec-drift-");
-    const flowManager = taskGateFixture(root);
+    const flowManager = await taskGateFixture(root);
     let driftedSpec = null;
     const freshRead = new Proxy(flowManager, {
       get(target, property) {
@@ -461,7 +419,7 @@ describe("Task Gate source authority", () => {
 
   it("refuses provider-time Task source mutation without publishing a Task Gate result", async () => {
     root = createTmpDir("gate-source-content-drift-");
-    const flowManager = taskGateFixture(root);
+    const flowManager = await taskGateFixture(root);
     const originalGet = container.get.bind(container);
     container.get = (key) => key !== "agent" ? originalGet(key) : {
       resolve: () => true,
@@ -492,7 +450,7 @@ describe("Task Gate source authority", () => {
 
   it("binds a tooling refusal before a fresh reader blocks the Attempt", async () => {
     root = createTmpDir("gate-source-tooling-");
-    const flowManager = taskGateFixture(root);
+    const flowManager = await taskGateFixture(root);
     const originalGet = container.get.bind(container);
     container.get = (key) => key !== "agent" ? originalGet(key) : {
       resolve: () => false,
@@ -505,24 +463,29 @@ describe("Task Gate source authority", () => {
     }
     assert.equal(result.result, "fail");
     assert.match(result.artifacts.sourceFingerprint, /^[a-f0-9]{64}$/);
-    flowManager.publishCurrentAttemptResult({ specId: SPEC_ID, commandResult: result });
     const reloaded = makeFlowManager(root);
-    const facts = readCurrentGateTransitionFacts({
-      flowManager: reloaded,
-      flowState: reloaded.loadReadOnly(SPEC_ID),
-      phase: "task-impl",
-      root,
-    });
-    assert.equal(facts.failure.category, "tooling");
-    assert.equal(resolveGateTransition(facts).disposition.operation, "external-blocked");
+    const saved = savedTaskGate(reloaded);
+    assert.equal(saved.result.type, "error");
+    assert.equal(saved.result.error.data.evidence.failure.category, "tooling");
+    assert.equal(saved.settlement.kind, "failure");
+    assert.equal(implementationNonblockingEligibilityForResult(saved.result).strictDisposition.operation, "external-blocked");
+    const before = canonicalSnapshot(reloaded);
+    const next = await new GetNextActionCommand().execute({ root, mainRoot: root, executionRoot: root,
+      specId: SPEC_ID, phase: "task-impl", flowManager: reloaded, flowState: reloaded.loadReadOnly(SPEC_ID) });
+    assert.equal(next.directive.kind, "await_user_decision");
+    assert.equal(next.directive.requiresUserAction, true);
+    assert.deepEqual(canonicalSnapshot(reloaded), before, "an advisory activation offer must retain the failed Gate");
   });
 
   it("binds the canonical source byte-limit refusal before a fresh reader classifies it", async () => {
     root = createTmpDir("gate-source-oversized-");
-    const flowManager = taskGateFixture(root);
+    const flowManager = await taskGateFixture(root,
+      `export const currentTaskBehavior = "${"x".repeat(1024 * 1024)}";\n`);
+    const review = flowManager.readCurrentStepSettlement({ specId: SPEC_ID,
+      stepId: "task-review", taskId: "T-1", completed: true });
+    assert.equal(review.result.kind, "task-review-gate-required");
     // Prompt-sized source is now partitionable. The independent canonical
     // source admission limit remains 1 MiB and must still refuse before AI.
-    writeFile(root, "src/task-behavior.js", `export const currentTaskBehavior = "${"x".repeat(1024 * 1024)}";\n`);
     let calls = 0;
     const originalGet = container.get.bind(container);
     container.get = (key) => key !== "agent" ? originalGet(key) : {
@@ -539,15 +502,20 @@ describe("Task Gate source authority", () => {
     assert.equal(calls, 0);
     assert.match(result.artifacts.issues.join("\n"), /exceeds limit 1048576/);
     assert.match(result.artifacts.sourceFingerprint, /^[a-f0-9]{64}$/);
-    flowManager.publishCurrentAttemptResult({ specId: SPEC_ID, commandResult: result });
+    assert.equal(result.artifacts.sourceFingerprint, review.result.evidence.sourceFingerprint);
     const reloaded = makeFlowManager(root);
-    const facts = readCurrentGateTransitionFacts({
-      flowManager: reloaded,
-      flowState: reloaded.loadReadOnly(SPEC_ID),
-      phase: "task-impl",
-      root,
-    });
-    assert.equal(facts.failure.category, "local");
-    assert.equal(resolveGateTransition(facts).disposition.operation, "blocked");
+    assert.equal(reloaded.readCurrentStepSettlement({ specId: SPEC_ID,
+      stepId: "task-review", taskId: "T-1", completed: true }).receipt.id, review.receipt.id);
+    const saved = savedTaskGate(reloaded);
+    assert.equal(saved.result.type, "error");
+    assert.equal(saved.result.error.data.evidence.failure.category, "local");
+    assert.equal(saved.settlement.kind, "failure");
+    assert.equal(implementationNonblockingEligibilityForResult(saved.result).strictDisposition.operation, "blocked");
+    const before = canonicalSnapshot(reloaded);
+    const next = await new GetNextActionCommand().execute({ root, mainRoot: root, executionRoot: root,
+      specId: SPEC_ID, phase: "task-impl", flowManager: reloaded, flowState: reloaded.loadReadOnly(SPEC_ID) });
+    assert.equal(next.directive.kind, "await_user_decision");
+    assert.equal(next.directive.requiresUserAction, true);
+    assert.deepEqual(canonicalSnapshot(reloaded), before, "an advisory activation offer must retain the failed Gate");
   });
 });

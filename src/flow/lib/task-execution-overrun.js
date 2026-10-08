@@ -59,7 +59,7 @@ export function readTaskExecutionOverrunFactsFromView({ view, root }) {
   );
   if (active === null || active.role !== "impl" || state.attempt.nodeId !== active.nodeId) return null;
   const task = state.findNode(active.taskId);
-  const expected = ["impl", "review", "triage", "repair", "gate"].map((role) => `${active.taskId}-${role}`);
+  const expected = ["impl", "review", "triage", "repair", "gate"].map((role) => new TaskStepIdentity({ taskId: active.taskId, role }).nodeId);
   if (!Array.isArray(task?.steps) || task.steps.length !== expected.length
     || task.steps.some((step, index) => step.id !== expected[index])
     || task.steps[0].status !== "in_progress"
@@ -125,7 +125,7 @@ export function readTaskExecutionOverrunFactsFromView({ view, root }) {
     });
   } catch { return null; }
   const gateResult = gateHistory.current.payload;
-  const gateNodeId = `${active.taskId}-gate`;
+  const gateNodeId = new TaskStepIdentity({ taskId: active.taskId, role: "gate" }).nodeId;
   const gateAttemptId = gateResult?.artifacts?.gateTransitionAttemptId;
   const gateAttemptSequence = gateResult?.artifacts?.gateTransitionAttemptSequence;
   const gatePublicationActivity = view.activities.find((entry) => entry.id === gatePublication.activityId) ?? null;

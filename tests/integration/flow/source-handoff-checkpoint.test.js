@@ -20,18 +20,14 @@ import {
 import { FlowManager } from "../../../src/lib/flow-manager.js";
 import { FlowArtifactCatalog } from "../../../src/lib/flow-version.js";
 import { container } from "../../../src/lib/container.js";
-import {
-  CanonicalFlowFixture,
-  canonicalImplReviewArtifact,
-} from "../../support/infrastructure/flow-setup.js";
+import { CanonicalFlowFixture } from "../../support/infrastructure/flow-setup.js";
 import { TaskReviewScenario } from "../../support/builders/task-review-scenario.js";
 import { initGitRepo, commitAll } from "../../support/infrastructure/git-repo.js";
 import { createTmpDir, removeTmpDir } from "../../support/builders/tmp-dir.js";
 import {
-  completeCanonicalSourceHandoff,
   withSourceHandoffLease,
 } from "../../support/builders/source-handoff-scenario.js";
-import { attachCanonicalCommandResultArtifact } from "../../../src/flow/lib/canonical-command-result.js";
+import { ImplPhaseScenario, implementationFinding } from "../../support/impl-phase-scenario.js";
 
 const NOW = "2026-09-09T00:00:00.000Z";
 const SOURCE_POLICIES = Object.freeze([
@@ -70,12 +66,12 @@ function sourceEffect(stepId, paths = []) {
   };
   if (stepId === "impl-triage") {
     return { ...base, triage: { version: 1, dispositions: [{
-      findingKey: "F1", disposition: "apply", basis: "repair-required",
+      findingKey: "f1", disposition: "apply", basis: "repair-required",
       rationale: "The cataloged review requires the bounded repair.",
     }] } };
   }
   if (stepId === "impl-repair") {
-    return { ...base, repair: { version: 1, findings: [{ findingKey: "F1", paths }], summary: "Applied the bounded repair.", recurrenceResolutions: [] } };
+    return { ...base, repair: { version: 1, findings: [{ findingKey: "f1", paths }], summary: "Applied the bounded repair.", recurrenceResolutions: [] } };
   }
   if (stepId === "task-impl") {
     return { ...base, overview: { modules: ["Task source"], data_flow: [], decisions: [] } };
@@ -87,7 +83,15 @@ function sourceEffect(stepId, paths = []) {
 }
 
 class SourceCheckpointScenario {
-  constructor(t, stepId, { worktree = false, issue = null } = {}) {
+  constructor(t, stepId, { worktree = false, issue = null, producer = null } = {}) {
+    if (producer !== null) {
+      this.executionRoot = producer.root;
+      this.mainRoot = producer.root;
+      this.specId = producer.specId;
+      this.worktree = false;
+      this.reload();
+      return;
+    }
     this.temporaryRoot = createTmpDir(`source-checkpoint-${stepId}-`);
     t.after(() => removeTmpDir(this.temporaryRoot));
     this.executionRoot = worktree ? path.join(this.temporaryRoot, "execution") : this.temporaryRoot;
@@ -140,86 +144,24 @@ class SourceCheckpointScenario {
   }
 
   prepare(stepId) {
-    if (stepId.startsWith("task-")) {
+    if (stepId === "task-impl") {
       this.flow.settleBefore("T1-impl");
       this.flow.activateTask("T1", { settlePredecessors: false });
-      if (stepId !== "task-impl") this.completeTaskImplementation();
-      if (stepId === "task-repair") this.publishTaskReview();
-      return;
+    } else {
+      this.flow.activate("implement");
     }
-    this.flow.activate("implement");
-    if (stepId === "implement") return;
-    this.completeImplementation();
-    this.flow.settleBefore("impl-review").activate("impl-review", { settlePredecessors: false });
-    this.publishImplementationReview();
-    this.flow.activate("impl-triage", { settlePredecessors: false });
-    if (stepId === "impl-repair") this.completeSourceAttempt("impl-triage", [], sourceEffect("impl-triage"));
   }
 
-  completeImplementation() {
-    const sourcePath = path.join(this.executionRoot, "product.js");
-    completeCanonicalSourceHandoff({
-      root: this.executionRoot, mainRoot: this.mainRoot, manager: this.manager,
-      specId: this.specId, stepId: "implement",
-      mutate: () => fs.writeFileSync(sourcePath, "export const value = 2;\n"),
-      effect: sourceEffect("implement"),
+  static async create(t, stepId, options) {
+    if (!stepId.startsWith("impl-")) return new SourceCheckpointScenario(t, stepId, options);
+    const producer = ImplPhaseScenario.create(t, {
+      implReviewResponse: (stage) => ({
+        blockingFindings: stage === "impl-review" ? [implementationFinding({ key: "f1" })] : [],
+        nonBlockingImprovements: [],
+      }),
     });
-  }
-
-  completeTaskImplementation() {
-    completeCanonicalSourceHandoff({
-      root: this.executionRoot, mainRoot: this.mainRoot, manager: this.manager,
-      specId: this.specId, stepId: "task-impl", taskId: "T1",
-      effect: { ...sourceEffect("task-impl"), noChangeReason: "The flow implementation already provides the Task behavior." },
-    });
-    this.flow.activate("T1-review", { settlePredecessors: false });
-  }
-
-  publishImplementationReview() {
-    const finding = {
-      findingKey: "F1", title: "Repair the implementation", failureMode: "missing_requirement_behavior",
-      file: "product.js", requirementId: "R1", guardrailId: null,
-      issue: "The implementation needs the bounded repair.", suggestion: "Apply the cataloged repair.",
-      disposition: "must-fix", rationale: "R1 requires the repair.",
-    };
-    const commandResult = { result: "Rejected implementation review." };
-    attachCanonicalCommandResultArtifact(commandResult, {
-      logicalKey: "impl.review",
-      payload: canonicalImplReviewArtifact(this.manager.loadReadOnly(this.specId), { blockingFindings: [finding] }),
-    });
-    this.manager.updateStepStatus(
-      { stepId: "impl-review", requestedStatus: "done" },
-      { specId: this.specId, canonicalCommandResult: commandResult },
-    );
-  }
-
-  publishTaskReview() {
-    const commandResult = { result: "Rejected Task review." };
-    attachCanonicalCommandResultArtifact(commandResult, {
-      logicalKey: "task.review", parameters: { taskId: "T1" },
-      payload: {
-        version: 1, phase: "impl", generatedAt: NOW, verdict: "REJECTED",
-        summary: { blocking: 1, nonBlocking: 0, total: 1 },
-        blockingFindings: [{
-          findingKey: "task-F1", title: "Repair the Task source", failureMode: "missing_requirement_behavior",
-          file: "product.js", requirementId: "R1", issue: "The Task source needs repair.",
-          suggestion: "Apply the bounded Task repair.", disposition: "must-fix", rationale: "R1 requires repair.",
-        }], nonBlockingImprovements: [], excluded: { missingFile: 0, outOfScope: 0 },
-      },
-    });
-    this.manager.updateStepStatus(
-      { stepId: "T1-review", requestedStatus: "done" },
-      { specId: this.specId, canonicalCommandResult: commandResult },
-    );
-    this.flow.activate("T1-triage", { settlePredecessors: false });
-  }
-
-  completeSourceAttempt(stepId, paths, effectDocument) {
-    completeCanonicalSourceHandoff({
-      root: this.executionRoot, mainRoot: this.mainRoot, manager: this.manager,
-      specId: this.specId, stepId,
-      effect: { ...effectDocument, ...(paths.length === 0 ? {} : { paths }) },
-    });
+    await producer.advanceTo(stepId);
+    return new SourceCheckpointScenario(t, stepId, { producer });
   }
 
   stageSealed(stepId) {
@@ -356,12 +298,12 @@ it("survives a real parent process stop after source sealing and recovers from d
 describe("durable source handoff checkpoints", () => {
   it("recovers every source policy from a fresh disk-backed manager exactly once", async (t) => {
     for (const stepId of SOURCE_POLICIES) {
-      await t.test(stepId, async () => {
+      await t.test(stepId, async (subtest) => {
         const taskReviewStage = stepId === "task-repair";
         const staged = taskReviewStage
-          ? await taskReviewPolicyScenario(t, stepId)
-          : (() => {
-              const scenario = new SourceCheckpointScenario(t, stepId);
+          ? await taskReviewPolicyScenario(subtest, stepId)
+          : await (async () => {
+              const scenario = await SourceCheckpointScenario.create(subtest, stepId);
               return { scenario, request: scenario.stageSealed(stepId) };
             })();
         const { scenario, request } = staged;
@@ -925,10 +867,12 @@ describe("durable source handoff checkpoints", () => {
     const authority = coordinator.sourceMutationAuthority({ ctx: scenario.context(), request });
     const racingManager = new Proxy(scenario.manager, {
       get(target, property) {
-        if (property === "confirmSourceWorkerHandoff") {
+        if (property === "commitSpecStepResult") {
           return (input) => {
-            fs.appendFileSync(product, "// concurrent settlement writer\n");
-            return target.confirmSourceWorkerHandoff(input);
+            if (input.stepResult.kind === "implement-applied") {
+              fs.appendFileSync(product, "// concurrent settlement writer\n");
+            }
+            return target.commitSpecStepResult(input);
           };
         }
         const value = Reflect.get(target, property, target);

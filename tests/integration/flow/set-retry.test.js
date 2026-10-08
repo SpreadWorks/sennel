@@ -6,6 +6,11 @@ import { afterEach, test } from "node:test";
 import { promisify } from "node:util";
 
 import SetRetryCommand from "../../../src/flow/lib/set-retry.js";
+import RunReviewCommand from "../../../src/flow/lib/run-review.js";
+import { FLOW_COMMANDS } from "../../../src/flow/registry.js";
+import { ImplPhaseScenario, implementationFinding } from "../../support/impl-phase-scenario.js";
+import { ImplementationReviewProducer } from "../../support/infrastructure/implementation-review-producer.js";
+import { attachedCanonicalCommandResultArtifact } from "../../../src/flow/lib/canonical-command-result.js";
 import GetNextActionCommand from "../../../src/flow/lib/get-next-action.js";
 import GetStatusCommand from "../../../src/flow/lib/get-status.js";
 import {
@@ -165,6 +170,23 @@ function immutableRetryPublicationSnapshot(manager, specId) {
     catalog: manager.artifactCatalog(specId).toJSON(),
   });
 }
+
+test("retry reset on a legal pending frontier is unavailable without canonical effects", () => {
+  const root = createTmpDir("set-retry-pending-frontier-");
+  roots.push(root);
+  const manager = makeFlowManager(root);
+  const flow = new CanonicalFlowFixture({ flowManager: manager,
+    specId: "001-retry-pending", runId: "retry-pending-frontier" }).create().registerActive();
+  const state = manager.canonicalState(flow.specId);
+  assert.equal(state.current, null);
+  assert.equal(state.attempt, null);
+  const before = immutableRetryPublicationSnapshot(manager, flow.specId);
+  const result = new SetRetryCommand().execute(commandInput({ manager, flow, root }));
+  assert.equal(result.ok, false);
+  assert.equal(result.errors[0].code, "RETRY_NOT_AVAILABLE", JSON.stringify(result));
+  assert.deepEqual(result.errors[0].messages, ["retry recovery requires a failed active Attempt"]);
+  assert.equal(immutableRetryPublicationSnapshot(manager, flow.specId), before);
+});
 
 function transientProviderCompletionFailure({ processTreeQuiescence = "confirmed" } = {}) {
   return {
@@ -1405,7 +1427,6 @@ test("Store rejects a Task Review admission bound to a different typed authoriza
 for (const { nodeId, phase } of [
   { nodeId: "draft-questions-review", phase: "draft-questions" },
   { nodeId: "draft-coverage-review", phase: "draft-coverage" },
-  { nodeId: "impl-review", phase: "impl" },
 ]) {
   test(`${nodeId} permits a prior artifact but rejects a current Attempt canonical Review artifact`, async () => {
     const fixture = retryFixture({ nodeId, failureKind: null });
@@ -1516,59 +1537,106 @@ test("confirmed timeout recovery fails closed when its producer baseline is miss
   assert.equal(immutableRetryPublicationSnapshot(fixture.manager, fixture.flow.specId), before);
 });
 
-test("Task Review rejects unchanged timeout recovery after its current artifact is published", async (t) => {
-  const scenario = new TaskReviewScenario(t);
-  scenario.manager.failCurrentAttempt({
-    specId: scenario.specId,
-    failure: {
-      category: "tooling",
-      code: "REVIEW_PROVIDER_UNAVAILABLE",
-      message: "The first Task Review provider interruption consumes its ordinary retry.",
-      retryable: true,
-      retryKind: "tooling",
-    },
-  });
-  scenario.manager.retryCurrentAttempt({ specId: scenario.specId });
-  const active = scenario.state();
-  scenario.manager.publishCurrentAttemptResult({
-    specId: scenario.specId,
-    commandResult: canonicalFixtureProducerResult(active, "T-1-review", {
-      flowManager: scenario.manager,
-      specId: scenario.specId,
-    }),
-  });
-  scenario.manager.failCurrentAttempt({
-    specId: scenario.specId,
-    failure: {
-      category: "tooling",
-      code: "AGENT_TIMEOUT",
-      message: "The confirmed provider timeout occurred after publishing the current Task Review artifact.",
-      retryable: true,
-      retryKind: "tooling",
-      agentStopEvidence: AgentProcessStopEvidence.confirmed(),
-    },
-  });
-  const before = scenario.snapshot();
-  const context = {
-    ...scenario.context(),
-    flowState: scenario.manager.loadReadOnly(scenario.specId),
-    action: "reset",
-    kind: "review",
-    phase: "impl",
-    reason: "A published current Task Review result must settle through its normal route.",
-    yes: true,
-  };
+function confirmedReviewTimeoutCommand() {
+  const timeout = ReviewFailure.fromAgentFailure({ phase: "impl", failure: new AgentTimeoutFailure({
+    message: "The external Review provider timed out after its process tree stopped.",
+    stopEvidence: AgentProcessStopEvidence.confirmed(),
+  }) });
+  return new RunReviewCommand({ runCommand: () => ({ ok: false, status: 1, stdout: "",
+    stderr: timeout.toMarkerLine(), signal: null, killed: false }) });
+}
 
-  const status = new GetStatusCommand().execute(context);
-  const next = await new GetNextActionCommand().execute(context);
-  const rejected = new SetRetryCommand().execute(context);
+function actualReviewResetContext(scenario) {
+  return { ...scenario.context(), flowState: scenario.manager.loadReadOnly(scenario.specId),
+    action: "reset", kind: "review", phase: "impl", yes: true,
+    reason: "Recover the exact confirmed provider stop without changing its reviewed input." };
+}
 
-  assert.equal(status.recoveryDiagnostics?.review?.recoveryPossible ?? false, false);
-  assert.equal(next.directive?.code, "RETRY_RECOVERY_CURRENT_ARTIFACT_PRESENT", JSON.stringify(next));
-  assert.match(next.directive?.resumeInstruction, /Settle the exact current Attempt/);
+async function assertAtomicCurrentReviewPublication(scenario, stepId, targetStepId) {
+  const producer = new ImplementationReviewProducer();
+  const result = await producer.produce(scenario.context());
+  assert.notEqual(result.ok, false, JSON.stringify(result));
+  const attached = attachedCanonicalCommandResultArtifact(result);
+  assert.equal(attached.logicalKey, stepId === "impl-review" ? "impl.review" : "task.review");
+  assert.ok(attached.payload.canonicalEvidence);
+  const originalAttempt = scenario.manager.canonicalState(scenario.specId).attempt;
+  const before = immutableRetryPublicationSnapshot(scenario.manager, scenario.specId);
+  assert.throws(() => scenario.manager.publishCurrentAttemptResult({ specId: scenario.specId, commandResult: result }),
+    /Implementation publication requires its atomic selected Result and settlement receipt/);
+  assert.equal(immutableRetryPublicationSnapshot(scenario.manager, scenario.specId), before,
+    "publication-only refusal must retain the exact sealed producer and current Attempt without canonical effects");
+  await FLOW_COMMANDS.run.review.post(scenario.context(), result);
+  scenario.reload();
+  const saved = scenario.manager.readCurrentStepSettlement({ specId: scenario.specId, stepId,
+    ...(stepId === "task-review" ? { taskId: scenario.taskId } : {}), completed: true });
+  assert.ok(saved);
+  assert.equal(saved.receipt.binding.attemptId, originalAttempt.id);
+  assert.equal(saved.receipt.binding.attemptSequence, originalAttempt.sequence);
+  assert.deepEqual(saved.result.evidence.review?.toJSON() ?? saved.result.evidence.facts.binding.sourceFingerprint,
+    stepId === "impl-review" ? attached.payload.canonicalEvidence : attached.payload.canonicalTaskSource.fingerprint);
+  assert.equal(scenario.manager.canonicalState(scenario.specId).current?.at(-1)
+    ?? scenario.manager.canonicalState(scenario.specId).nextAction().nodeId, targetStepId);
+  const settled = immutableRetryPublicationSnapshot(scenario.manager, scenario.specId);
+  const rejected = new SetRetryCommand().execute(actualReviewResetContext(scenario));
   assert.equal(rejected.ok, false);
-  assert.match(rejected.errors[0].messages[0], /current Attempt.*canonical Review artifact/);
-  assert.equal(scenario.snapshot(), before);
+  assert.equal(rejected.errors[0].code, "RETRY_NOT_AVAILABLE", JSON.stringify({ rejected,
+    flowState: actualReviewResetContext(scenario).flowState,
+    current: scenario.manager.canonicalState(scenario.specId).current,
+    attempt: scenario.manager.canonicalState(scenario.specId).attempt }));
+  assert.equal(immutableRetryPublicationSnapshot(scenario.manager, scenario.specId), settled,
+    "an atomically completed Review cannot be retried as the prior failed active producer");
+  await FLOW_COMMANDS.run.review.post(scenario.context(), result);
+  assert.equal(immutableRetryPublicationSnapshot(scenario.manager, scenario.specId), settled,
+    "exact completed post replay must not create a second Review ordinal, Result or Activity");
+}
+
+test("Impl Review retains its certified prior artifact through timeout recovery and refuses publication-only current results", async (t) => {
+  const scenario = ImplPhaseScenario.create(t, { implReviewResponse(stage, ordinal) {
+    return { blockingFindings: stage === "impl-review" && ordinal === 1 ? [implementationFinding()] : [],
+      nonBlockingImprovements: [] };
+  } });
+  await scenario.advanceTo("impl-review");
+  const firstReview = await scenario.executeCurrent();
+  scenario.reload();
+  const prior = scenario.manager.readCurrentStepSettlement({ specId: scenario.specId, stepId: "impl-review", completed: true });
+  assert.ok(prior, JSON.stringify({ firstReview, current: scenario.state().current,
+    attempt: scenario.state().attempt?.toJSON() ?? null,
+    reviews: scenario.phaseReviews.map(({ stage, ordinal, response, process }) => ({ stage, ordinal, response, process })),
+    activities: scenario.manager.activityLedger(scenario.specId).slice(-4) }));
+  assert.equal(prior.result.kind, "impl-review-rejected");
+  const priorArtifact = scenario.manager.readArtifact({ specId: scenario.specId,
+    consumerNodeId: "impl-triage", logicalKey: "impl.review" });
+  await scenario.advanceTo("impl-review");
+  assert.notEqual(scenario.state().attempt.id, prior.receipt.binding.attemptId);
+  const timeout = confirmedReviewTimeoutCommand();
+  assert.equal((await timeout.execute(scenario.context())).ok, false);
+  scenario.reload();
+  assert.equal(new SetRetryCommand().execute(actualReviewResetContext(scenario)).grants[0].operation, "retry_attempt");
+  scenario.reload();
+  assert.equal((await timeout.execute(scenario.context())).ok, false);
+  scenario.reload();
+  const recovered = new SetRetryCommand().execute(actualReviewResetContext(scenario));
+  assert.equal(recovered.grants[0].operation, "retry_recovery_attempt", JSON.stringify(recovered));
+  scenario.reload();
+  const retained = scenario.manager.readCatalogArtifact({ specId: scenario.specId,
+    consumerNodeId: "system", relativePath: priorArtifact.descriptor.relativePath });
+  assert.equal(retained.descriptor.hash, priorArtifact.descriptor.hash);
+  assert.deepEqual(retained.bytes, priorArtifact.bytes);
+  const source = scenario.manager.activityLedger(scenario.specId).find((row) => row.id === prior.activityId);
+  assert.equal(source.result.draftSettlementReceipt.id, prior.receipt.id);
+  assert.equal(source.result.draftSettlementReceipt.resultDigest, prior.receipt.resultDigest);
+  await assertAtomicCurrentReviewPublication(scenario, "impl-review", "impl-gate");
+});
+
+test("Task Review retries its first real timeout then refuses publication-only current results before atomic post", async (t) => {
+  const scenario = new TaskReviewScenario(t);
+  const timeout = confirmedReviewTimeoutCommand();
+  assert.equal((await timeout.execute(scenario.context())).ok, false);
+  scenario.reload();
+  const reset = new SetRetryCommand().execute(actualReviewResetContext(scenario));
+  assert.equal(reset.grants[0].operation, "retry_attempt", JSON.stringify(reset));
+  scenario.reload();
+  await assertAtomicCurrentReviewPublication(scenario, "task-review", "T-1-gate");
 });
 
 test("unavailable current Review observation is not offered as an exhausted timeout recovery", async () => {
@@ -1627,9 +1695,9 @@ test("unavailable current Review observation is not offered as an exhausted time
 
 for (const failure of [
   { code: "AGENT_TEMPORARY_RATE_LIMIT", retryable: true, retryKind: "tooling" },
-  { code: "AGENT_AUTHENTICATION_FAILED", retryable: false, retryKind: null },
-  { code: "AGENT_USAGE_LIMIT_REACHED", retryable: false, retryKind: null },
-  { code: "SUBPROCESS_FAILURE", retryable: false, retryKind: null },
+  { code: "AGENT_AUTHENTICATION_FAILED", retryable: false, retryKind: null, expectedCode: "RETRY_NOT_AVAILABLE" },
+  { code: "AGENT_USAGE_LIMIT_REACHED", retryable: false, retryKind: null, expectedCode: "RETRY_NOT_AVAILABLE" },
+  { code: "SUBPROCESS_FAILURE", retryable: false, retryKind: null, expectedCode: "RETRY_NOT_AVAILABLE" },
   {
     code: "AGENT_TIMEOUT",
     retryable: false,
@@ -1680,8 +1748,10 @@ for (const failure of [
     const rejected = command.execute(commandInput(fixture));
 
     assert.equal(rejected.ok, false);
-    assert.equal(rejected.errors[0].code, "INVALID_RECOVERY_INPUT");
-    assert.match(rejected.errors[0].messages[0], /trusted confirmed timeout|confirmed process-tree quiescence/);
+    assert.equal(rejected.errors[0].code, failure.expectedCode ?? "INVALID_RECOVERY_INPUT");
+    assert.match(rejected.errors[0].messages[0], failure.expectedCode === "RETRY_NOT_AVAILABLE"
+      ? /^the current terminal failure does not authorize unchanged exhausted tooling recovery$/
+      : /trusted confirmed timeout|confirmed process-tree quiescence/);
     assert.equal(immutableRetryPublicationSnapshot(fixture.manager, fixture.flow.specId), before);
   });
 }

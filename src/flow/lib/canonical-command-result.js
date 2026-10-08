@@ -31,6 +31,12 @@ function logicalKey(value) {
   return value;
 }
 
+function artifactJsonFromBytes(bytes, label) {
+  if (!Buffer.isBuffer(bytes)) throw new Error(`${label} bytes must be a Buffer`);
+  try { return JSON.parse(bytes.toString("utf8")); }
+  catch (error) { throw new Error(`${label} must be JSON: ${error.message}`); }
+}
+
 /** One validated payload destined for the active Attempt's result history. */
 export class CanonicalCommandResultArtifact {
   constructor({ logicalKey: key, payload } = {}) {
@@ -43,6 +49,11 @@ export class CanonicalCommandResultArtifact {
     return value instanceof CanonicalCommandResultArtifact
       ? value
       : new CanonicalCommandResultArtifact(value);
+  }
+
+  static fromBytes({ logicalKey: key, bytes }) {
+    return new CanonicalCommandResultArtifact({ logicalKey: key,
+      payload: artifactJsonFromBytes(bytes, "canonical command artifact") });
   }
 
   toJSON() {
@@ -186,17 +197,37 @@ export class CanonicalCommandAttemptArtifactHistory {
   }
 
   static fromBytes({ logicalKey: key, bytes } = {}) {
-    if (!Buffer.isBuffer(bytes)) throw new Error("canonical command attempt history bytes must be a Buffer");
-    let parsed;
-    try {
-      parsed = JSON.parse(bytes.toString("utf8"));
-    } catch (error) {
-      throw new Error(`canonical command attempt history must be JSON: ${error.message}`);
-    }
+    const parsed = artifactJsonFromBytes(bytes, "canonical command attempt history");
     return new CanonicalCommandAttemptArtifactHistory({ logicalKey: key, attempts: parsed?.attempts });
   }
 
   get current() {
     return this.attempts.at(-1);
+  }
+}
+
+/** Payload and Attempt of the exact catalog-owned producer, for either declared format. */
+export class CanonicalCommandArtifactObservation {
+  constructor({ artifact, producerActivityId, attemptId, sequence }) {
+    if (!(artifact instanceof CanonicalCommandResultArtifact)
+      || typeof producerActivityId !== "string" || producerActivityId === ""
+      || typeof attemptId !== "string" || attemptId === ""
+      || !Number.isSafeInteger(sequence) || sequence < 1) {
+      throw new TypeError("Canonical command observation requires its exact producer and Attempt");
+    }
+    Object.assign(this, { artifact, producerActivityId, attemptId, sequence });
+    Object.freeze(this);
+  }
+  get payload() { return this.artifact.payload; }
+  get sourceAttempt() { return this.sequence; }
+  static fromBytes({ logicalKey, bytes, history, producerActivityId, attemptId, sequence }) {
+    if (typeof history !== "boolean") throw new TypeError("Canonical command observation requires its declared artifact format");
+    let artifact;
+    if (history) {
+      const current = CanonicalCommandAttemptArtifactHistory.fromBytes({ logicalKey, bytes }).current;
+      if (current.attempt !== sequence) throw new Error("Canonical command history differs from its exact producer Attempt");
+      artifact = new CanonicalCommandResultArtifact({ logicalKey, payload: current.payload });
+    } else artifact = CanonicalCommandResultArtifact.fromBytes({ logicalKey, bytes });
+    return new CanonicalCommandArtifactObservation({ artifact, producerActivityId, attemptId, sequence });
   }
 }

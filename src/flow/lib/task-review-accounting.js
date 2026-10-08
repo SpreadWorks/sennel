@@ -9,7 +9,13 @@
 import {
   CurrentAttemptIdentity,
   CurrentFlowState,
+  FlowActivity,
 } from "./current-flow-state.js";
+import { createHash } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
+import { FLOW_ARTIFACT_CONTRACTS, FlowArtifactAttemptHistory } from "../../lib/flow-artifact-contract.js";
+import { settleTaskStepResult, DraftStepSettlementReceipt } from "../definition.js";
+import { TaskStepIdentity } from "./task-step-identity.js";
 import { CanonicalCommandAttemptArtifactHistory } from "./canonical-command-result.js";
 import { TaskExecutionBudget } from "./task-execution-policy.js";
 
@@ -23,7 +29,7 @@ function text(value, field) {
 }
 
 function taskReviewDescriptor({ flowManager, state, taskId }) {
-  const expectedPath = `steps/impl/${taskId}/review/result.json`;
+  const expectedPath = FLOW_ARTIFACT_CONTRACTS.resolve("task.review", { taskId }).relativePath;
   const matches = flowManager.artifactCatalog(state.specId).artifacts.filter((entry) => (
     entry.logicalKey === "task.review" && entry.relativePath === expectedPath
   ));
@@ -31,23 +37,24 @@ function taskReviewDescriptor({ flowManager, state, taskId }) {
   return matches[0] ?? null;
 }
 
-function historyFromCatalog({ flowManager, state, taskId }) {
-  const descriptor = taskReviewDescriptor({ flowManager, state, taskId });
+/** Read only semantic history completed by its actual registered Review save. */
+export function canonicalTaskReviewHistory({ flowManager, state, taskId, history = null, descriptor = null, bytes = null }) {
+  descriptor ??= taskReviewDescriptor({ flowManager, state, taskId });
   if (descriptor === null) return null;
-  const history = CanonicalCommandAttemptArtifactHistory.fromBytes({
-    logicalKey: "task.review",
-    bytes: flowManager.readArtifact({
+  bytes ??= flowManager.readArtifact({
       specId: state.specId,
       logicalKey: "task.review",
       parameters: { taskId },
       consumerNodeId: "system",
-    }).bytes,
-  });
-  const publication = flowManager.activityLedger(state.specId)
-    .find((activity) => activity.id === descriptor.activityId) ?? null;
+    }).bytes;
+  history ??= CanonicalCommandAttemptArtifactHistory.fromBytes({ logicalKey: "task.review", bytes });
+  const envelopes = FLOW_ARTIFACT_CONTRACTS.require("task.review").contentContract.parse(bytes);
+  const activities = flowManager.activityLedger(state.specId);
+  const publication = activities.find((activity) => activity.id === descriptor.activityId) ?? null;
+  const identity = new TaskStepIdentity({ taskId, role: "review" });
   const current = history.current;
   if (
-    publication?.nodeId !== `${taskId}-review`
+    publication?.nodeId !== identity.nodeId
     || publication.attemptId === null
     || publication.attemptId === undefined
     || publication.attemptId === ""
@@ -55,7 +62,62 @@ function historyFromCatalog({ flowManager, state, taskId }) {
   ) {
     throw new Error("Task Review canonical result history is not bound to its catalog publication");
   }
-  return history;
+  const budgets = flowManager.taskMutationLineages({ specId: state.specId, taskId })
+    .filter((lineage) => lineage.role === "implementation").map((lineage) => lineage.budget);
+  const completed = [];
+  let prefix = new FlowArtifactAttemptHistory();
+  for (let index = 0; index < history.attempts.length; index += 1) {
+    const entry = history.attempts[index];
+    prefix = prefix.append(envelopes.attempts[index]);
+    const terminal = activities.filter((activity) => activity.nodeId === identity.nodeId
+      && activity.sequence === entry.attempt && activity.result?.draftSettlementReceipt?.settlementKind === "target-connection");
+    if (terminal.length === 0) continue;
+    if (terminal.length !== 1) throw new Error("Task Review semantic history has duplicate terminal producers");
+    const activity = new FlowActivity(terminal[0]);
+    const result = activity.result.stepResult;
+    const facts = result.evidence?.facts;
+    const settlement = settleTaskStepResult(identity.definitionId, result);
+    const receipt = DraftStepSettlementReceipt.assertStored(activity.result.draftSettlementReceipt, {
+      binding: { runId: state.runId, specId: state.specId, stepId: identity.definitionId,
+        attempt: { id: activity.attemptId, sequence: activity.sequence } }, result, settlement });
+    const budget = budgets.find((candidate) => candidate.round === facts?.taskRound);
+    if (budget === undefined) throw new Error("Task Review semantic history has no matching implementation round budget");
+    const next = budgets.find((candidate) => candidate.round === budget.round + 1);
+    const ordinal = completed.filter((candidate) => candidate.attempt > budget.reviewAttemptSequenceAtStart).length + 1;
+    const artifactDigest = createHash("sha256").update(`${JSON.stringify(prefix.toJSON(), null, 2)}\n`).digest("hex");
+    const lifecycle = receipt.executionLifecycle?.toJSON();
+    const claim = activities.findLast((candidate) => candidate.nodeId === identity.nodeId
+      && candidate.attemptId === activity.attemptId && candidate.sequence === entry.attempt
+      && candidate.confirmationOrder < activity.confirmationOrder
+      && candidate.result?.draftSettlementReceipt?.executionLifecycle?.phase === "claimed"
+      && isDeepStrictEqual(candidate.result.draftSettlementReceipt.executionLifecycle.binding, lifecycle?.binding));
+    if (!["complete_task_review_stage", "advance_task_review_stage"].includes(activity.transition.operation)
+      || result.stepId !== identity.definitionId || facts?.binding.stage !== "review" || facts.unavailable !== null
+      || activity.result.outcome !== "passed" || facts.binding.runId !== state.runId || facts.binding.specId !== state.specId
+      || facts.binding.taskId !== taskId || facts.binding.attemptId !== activity.attemptId
+      || facts.binding.attemptSequence !== entry.attempt || facts.binding.sourceStepId !== identity.nodeId
+      || facts.binding.artifactDigest !== artifactDigest || facts.verdict !== entry.payload.verdict
+      || facts.findingCount !== (entry.payload.blockingFindings ?? []).length + (entry.payload.nonBlockingImprovements ?? []).length
+      || facts.mustFixCount !== (entry.payload.blockingFindings ?? []).filter((finding) => finding.disposition === "must-fix").length
+      || entry.payload.taskId !== taskId || entry.payload.canonicalTaskSource?.fingerprint !== facts.binding.sourceFingerprint
+      || entry.attempt <= budget.reviewAttemptSequenceAtStart
+      || next !== undefined && entry.attempt > next.reviewAttemptSequenceAtStart
+      || facts.reviewResultCount !== ordinal
+      || !isDeepStrictEqual(activity.transition.taskReviewStagePlan?.facts.toJSON(), facts.toJSON())
+      || !isDeepStrictEqual(settlement.application?.transition.facts.toJSON(), facts.toJSON())
+      || lifecycle?.phase !== "terminal" || lifecycle.binding.kind !== "review" || claim === undefined
+      || !isDeepStrictEqual(lifecycle.claim, claim.result.draftSettlementReceipt.executionLifecycle.claim)
+      || !isDeepStrictEqual(lifecycle.binding.target, entry.payload.canonicalTarget)) {
+      throw new Error("Task Review semantic history lacks its exact completed Result, source, budget and execution receipt");
+    }
+    if (entry.attempt === current.attempt && descriptor.activityId !== activity.id) {
+      throw new Error("Task Review latest semantic entry is not its canonical terminal producer");
+    }
+    completed.push(entry);
+  }
+  return completed.length === 0 ? null : new CanonicalCommandAttemptArtifactHistory({ logicalKey: "task.review",
+    attempts: completed.map((entry) => ({ attempt: entry.attempt,
+      artifact: { logicalKey: "task.review", payload: entry.payload } })) });
 }
 
 function currentBudget({ flowManager, state, taskId }) {
@@ -88,7 +150,8 @@ export class TaskReviewAccounting {
       throw new Error("Task Review accounting round end is invalid");
     }
     this.roundEndAttemptSequence = roundEndAttemptSequence;
-    if (this.activeAttempt !== null && this.activeAttempt.nodeId !== `${this.taskId}-review`) {
+    if (this.activeAttempt !== null
+      && !new TaskStepIdentity({ taskId: this.taskId, role: "review" }).matchesNode(this.activeAttempt.nodeId)) {
       throw new Error("Task Review accounting active Attempt does not match its Task");
     }
     const entries = (history?.attempts ?? []).filter((entry) => (
@@ -125,7 +188,7 @@ export class TaskReviewAccounting {
     return new TaskReviewAccounting({
       taskId: id,
       budget: currentBudget({ flowManager, state, taskId: id }),
-      history: historyFromCatalog({ flowManager, state, taskId: id }),
+      history: canonicalTaskReviewHistory({ flowManager, state, taskId: id }),
       activeAttempt: state.attempt,
     });
   }

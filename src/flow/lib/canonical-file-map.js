@@ -33,12 +33,12 @@ function specRequirementIds(spec) {
   )).filter(Boolean));
 }
 
-function canonicalRequirementIds(requirements, field) {
+function canonicalRequirementIds(requirements, field, { allowEmpty = false } = {}) {
   if (!Array.isArray(requirements)) throw new Error(`${field} must be an array`);
   const ids = requirements.map((entry, index) => (
     requiredText(entry?.id, `${field}[${index}].id`)
   ));
-  if (ids.length === 0) throw new Error(`${field} must not be empty`);
+  if (!allowEmpty && ids.length === 0) throw new Error(`${field} must not be empty`);
   if (new Set(ids).size !== ids.length) throw new Error(`${field} ids must be unique`);
   return ids;
 }
@@ -114,9 +114,6 @@ export class CanonicalSourceRequirementAuthority {
     this.requirementIds = Object.freeze(requirementIds.map((requirementId, index) => (
       requiredText(requirementId, `canonical source requirement authority[${index}]`)
     )));
-    if (this.requirementIds.length === 0) {
-      throw new Error("canonical source requirement authority must not be empty");
-    }
     if (new Set(this.requirementIds).size !== this.requirementIds.length) {
       throw new Error("canonical source requirement authority must not duplicate Requirement ids");
     }
@@ -133,7 +130,7 @@ export class CanonicalSourceRequirementAuthority {
     return new CanonicalSourceRequirementAuthority(
       canonicalRequirementIds(requirements, taskId === null
         ? "canonical source requirements"
-        : `canonical Task ${taskId} source requirements`),
+        : `canonical Task ${taskId} source requirements`, { allowEmpty: taskId === null }),
     );
   }
 
@@ -163,6 +160,12 @@ export class CanonicalSourceRequirementAuthority {
 
   bindSourceScope(paths) {
     return new CanonicalSourceRequirementScope({ requirementIds: this.requirementIds, paths });
+  }
+
+  unattributedPaths(paths, attributedPaths) {
+    if (this.requirementIds.length === 0) return [];
+    const attributed = new Set(attributedPaths);
+    return paths.filter((entry) => !attributed.has(entry));
   }
 
   assertBindings(bindings, mutationIds) {

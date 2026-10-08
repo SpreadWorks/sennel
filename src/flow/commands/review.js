@@ -105,6 +105,7 @@ import {
 } from "../lib/repair-fingerprint.js";
 import { RepairArtifactRegistry } from "../lib/repair-state-identity.js";
 import { ReviewToolingOutcome } from "../lib/review-convergence.js";
+import { ImplReviewToolingObservation } from "../lib/review-observation-values.js";
 import {
   collectUntrackedDiff,
   MAX_IMPL_REQUIREMENT_BATCH_CHARS,
@@ -1354,7 +1355,7 @@ class ImplReviewFinding {
 }
 
 class ImplReviewArtifact {
-  constructor({ blockingFindings = [], nonBlockingImprovements = [], excluded = {}, generatedAt = new Date().toISOString(), requirementIds = null } = {}) {
+  constructor({ blockingFindings = [], nonBlockingImprovements = [], excluded = {}, generatedAt = new Date().toISOString(), requirementIds = null, toolingObservation = null } = {}) {
     const allowedRequirementIds = requirementIds instanceof Set
       ? requirementIds
       : new Set([...blockingFindings, ...nonBlockingImprovements].map((item) => item.requirementId).filter(Boolean));
@@ -1367,7 +1368,12 @@ class ImplReviewArtifact {
     this.nonBlockingImprovements = nonBlockingImprovements.map((item) =>
       item instanceof ImplReviewFinding ? item : new ImplReviewFinding("improvement", item, allowedRequirementIds),
     );
-    this.verdict = this.blockingFindings.length > 0
+    if (toolingObservation !== null && (!(toolingObservation instanceof ImplReviewToolingObservation)
+      || this.blockingFindings.length !== 0 || this.nonBlockingImprovements.length !== 0)) {
+      throw new TypeError("Bounded implementation Review tooling cannot contain semantic findings");
+    }
+    this.toolingObservation = toolingObservation;
+    if (toolingObservation === null) this.verdict = this.blockingFindings.length > 0
       ? "REJECTED"
       : this.nonBlockingImprovements.length > 0
         ? "ADVISORY"
@@ -1385,7 +1391,8 @@ class ImplReviewArtifact {
 
   toPromptMemory() {
     return {
-      verdict: this.verdict,
+      ...(this.toolingObservation === null ? { verdict: this.verdict }
+        : { toolingOutcome: this.toolingObservation.toolingOutcome.toJSON(), toolingObservation: this.toolingObservation.toJSON() }),
       counts: this.summary,
       previousBlockingFindings: this.blockingFindings
         .map((item) => item.toPromptMemory()),
@@ -1399,7 +1406,8 @@ class ImplReviewArtifact {
       version: this.version,
       phase: this.phase,
       generatedAt: this.generatedAt,
-      verdict: this.verdict,
+      ...(this.toolingObservation === null ? { verdict: this.verdict }
+        : { toolingOutcome: this.toolingObservation.toolingOutcome.toJSON(), toolingObservation: this.toolingObservation.toJSON() }),
       summary: this.summary,
       blockingFindings: this.blockingFindings.map((item) => item.toJSON()),
       nonBlockingImprovements: this.nonBlockingImprovements.map((item) => item.toJSON()),
@@ -1494,6 +1502,8 @@ function formatImplReviewJson(input = {}) {
 function formatImplReviewMd(input = {}) {
   const artifact = input instanceof ImplReviewArtifact ? input : new ImplReviewArtifact(input);
   const lines = ["# Code Review Results", ""];
+  if (artifact.toolingObservation !== null) return [...lines, "## Tooling Outcome", "",
+    artifact.toolingObservation.toolingOutcome.reason, ""].join("\n");
   lines.push(`## Verdict: ${artifact.verdict}`, "");
   lines.push("## Blocking Findings", "");
   if (artifact.blockingFindings.length === 0) {
@@ -2052,15 +2062,17 @@ async function runImplReviewWithPersistence({
   taskSpec = null,
 }, persistenceStrategy) {
   const requirementIds = resolveRequirementIds(spec);
-  const parsed = parseImplReviewFindings(reviewOutput, { requirementIds });
-  const filtered = filterImplReviewFindingsByScope({
+  const toolingObservation = reviewOutput instanceof ImplReviewToolingObservation ? reviewOutput : null;
+  if (toolingObservation !== null && taskSpec !== null) throw new TypeError("Bounded Flow Review tooling does not own Task Review");
+  const parsed = toolingObservation === null ? parseImplReviewFindings(reviewOutput, { requirementIds }) : null;
+  const filtered = toolingObservation === null ? filterImplReviewFindingsByScope({
     parsed,
     touchedFiles,
     requirementIds,
-  });
+  }) : null;
   const specPath = relativeFlowSpecFile(flow);
   const specDir = reviewOutputDirectory();
-  const dispositioned = applyImplReviewDispositionPolicy({
+  const dispositioned = toolingObservation === null ? applyImplReviewDispositionPolicy({
     root,
     flowManager,
     flow,
@@ -2071,8 +2083,8 @@ async function runImplReviewWithPersistence({
     specDir,
     taskSpec,
     persistenceStrategy,
-  });
-  const artifact = new ImplReviewArtifact({ ...dispositioned, requirementIds });
+  }) : {};
+  const artifact = new ImplReviewArtifact({ ...dispositioned, requirementIds, toolingObservation });
   const reviewJsonPath = path.join(specDir, "impl-review.json");
   const fingerprint = buildRepairFingerprint({ root: executionRoot, artifactRoot: root, specPath, state: flow });
   const artifactJson = { ...artifact.toJSON(), repairFingerprint: fingerprint.hash };
@@ -2084,7 +2096,7 @@ async function runImplReviewWithPersistence({
     artifactJson.taskId = taskSpec.task.id;
     artifactJson.target = taskSpec.relPath;
   }
-  artifactJson.contractSummary = contractFromImplReviewArtifact(artifactJson, {
+  if (toolingObservation === null) artifactJson.contractSummary = contractFromImplReviewArtifact(artifactJson, {
     artifactPath: path.relative(root, reviewJsonPath).split(path.sep).join("/"),
   }).summary.toJSON();
   const attemptNumber = reviewHistoryAttemptNumber(specDir, "impl");
@@ -2114,14 +2126,15 @@ async function runImplReviewWithPersistence({
     ...artifactJson.nonBlockingImprovements.map((finding) => ({ ...finding, decision: "reject" })),
   ];
   return {
-    result: "ok",
+    result: toolingObservation === null ? "ok" : "tooling-error",
     changed: [
       path.relative(root, reviewMdWrite.latestPath),
       path.relative(root, reviewJsonWrite.latestPath),
     ],
     artifacts: {
       phase: "impl",
-      verdict: artifact.verdict,
+      ...(toolingObservation === null ? { verdict: artifact.verdict }
+        : { toolingOutcome: toolingObservation.toolingOutcome.toJSON(), toolingObservation: toolingObservation.toJSON() }),
       blockingCount: artifact.summary.blocking,
       nonBlockingCount: artifact.summary.nonBlocking,
       repairFingerprint: fingerprint.hash,
@@ -3693,8 +3706,13 @@ async function runTestReviewWithDependencies({
     : merged;
 }
 
-function classifyReviewCommandError(err, phase) {
+function reviewCommandCause(err) {
   while (err instanceof PromptBatchingError && err.cause) err = err.cause;
+  return err;
+}
+
+function classifyReviewCommandError(err, phase) {
+  err = reviewCommandCause(err);
   if (err instanceof AgentResponseProtocolFailure || err instanceof AgentFileInputFailure) {
     const input = { phase: phase || "impl", reason: err.message,
       recoveryHint: "Restore the complete immutable input and available context before starting new review evidence.",
@@ -5457,7 +5475,9 @@ async function runReview(rawArgs) {
   const requirementIds = taskSpec
     ? new Set(taskSpec.context.requirements.map((requirement) => requirement.id))
     : resolveRequirementIds(spec);
-  const result = await runReviewWithDependencies({
+  const persistenceContext = { root: artifactRoot, executionRoot: root, flowManager, flow, spec, cycle, touchedFiles, taskSpec };
+  let result;
+  try { result = await runReviewWithDependencies({
     touchedFiles,
     shouldUseLoopReview: (fileCount) => (
       reviewArtifactWritePolicy.enabled
@@ -5616,17 +5636,18 @@ async function runReview(rawArgs) {
       });
     },
     persistImplReview: (reviewOutput, persistenceStrategy) => persistenceStrategy.persist({
-      root: artifactRoot,
-      executionRoot: root,
-      flowManager,
-      flow,
-      spec,
-      cycle,
+      ...persistenceContext,
       reviewOutput,
-      touchedFiles,
-      taskSpec,
     }),
-  });
+  }); } catch (error) {
+    const cause = reviewCommandCause(error);
+    if (taskSpec !== null || !ImplReviewToolingObservation.isBoundedFailure(cause)) throw error;
+    const workUnit = canonicalReviewWorkerUnit();
+    if (workUnit === null) throw error;
+    const observation = ImplReviewToolingObservation.fromFailure(cause, workUnit.manifestDocument);
+    observation.assertManifest(workUnit.manifestDocument);
+    result = await runImplReview({ ...persistenceContext, reviewOutput: observation });
+  }
   if (result.artifacts.toolingOutcome) {
     const outcome = result.artifacts.toolingOutcome;
     console.error([
@@ -5637,6 +5658,7 @@ async function runReview(rawArgs) {
       ...(result.artifacts.taskId ? [`taskId=${result.artifacts.taskId}`, `target=${result.artifacts.target}`] : []),
     ].join(" "));
     console.log("Impl review TOOLING_ERROR. Review tooling failed before a disposition was produced.");
+    if (result.artifacts.toolingObservation !== undefined) sealCanonicalReviewWorkerUnit();
     return;
   }
   console.error(`  [review] Results saved to ${result.changed[0]}`);

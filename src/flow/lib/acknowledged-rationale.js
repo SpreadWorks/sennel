@@ -1,4 +1,4 @@
-import { guardrailAllowsAcknowledgedException } from "../../lib/guardrail.js";
+import { guardrailAllowsAcknowledgedException } from "../../lib/guardrail-values.js";
 
 const DEFAULT_HEADING = "Matched Spec Acknowledgment Rationale";
 const UNAVAILABLE_WARNING = "parent spec context unavailable";

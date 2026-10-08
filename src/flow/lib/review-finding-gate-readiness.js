@@ -1,11 +1,11 @@
 /**
- * Canonical implementation-review finding readiness for the integration Gate.
+ * Canonical implementation-review finding readiness for integration and Task Gates.
  *
  * This module deliberately contains no transition selection.  It converts the
- * persisted review/triage/repair evidence into a typed fact consumed only by
- * definition.js.
+ * persisted review/triage/repair evidence into a typed fact consumed by
+ * registered Gate Steps before Definition selects their settlement.
  */
-import { FindingDispositionPolicy, ReviewFindingGateArtifact } from "./finding-disposition-policy.js";
+import { FindingDispositionPolicy, ReviewFindingGateArtifact, CanonicalTaskReviewFindingGateArtifact } from "./finding-disposition-policy.js";
 
 function requiredText(value, field) {
   if (typeof value !== "string" || value.trim() === "") throw new Error(`${field} is required`);
@@ -74,12 +74,17 @@ export function evaluateReviewFindingGateReadiness({
   const latest = artifacts.at(-1) ?? null;
   if (latest === null) throw new Error("cataloged implementation review artifact is missing");
   const obligations = new Map();
-  const latestFingerprint = latest.repairFingerprint ?? null;
+  const sourceFingerprint = (artifact) => expectedTaskId === null
+    ? artifact.repairFingerprint ?? null : artifact.canonicalTaskSource?.fingerprint ?? null;
+  const latestFingerprint = sourceFingerprint(latest);
   for (const raw of artifacts) {
     if (runId !== null && raw.runId != null && raw.runId !== runId) continue;
-    if (supersedesHistory && latestFingerprint !== null && raw.repairFingerprint != null && raw.repairFingerprint !== latestFingerprint) continue;
-    if (Array.isArray(raw.blockingFindings) && raw.blockingFindings.length === 0 && raw.verdict !== "REJECTED") continue;
-    const parsed = new ReviewFindingGateArtifact(raw, { source: "catalog:impl.review" });
+    if (supersedesHistory && latestFingerprint !== null && sourceFingerprint(raw) !== null && sourceFingerprint(raw) !== latestFingerprint) continue;
+    const parsed = expectedTaskId === null
+      ? Array.isArray(raw.blockingFindings) && raw.blockingFindings.length === 0 && raw.verdict !== "REJECTED"
+        ? null : new ReviewFindingGateArtifact(raw, { source: "catalog:impl.review" })
+      : new CanonicalTaskReviewFindingGateArtifact(raw);
+    if (parsed === null) continue;
     for (const finding of parsed.findings) obligations.set(finding.fingerprint, finding);
   }
   if (!Array.isArray(resolvedFindingIds) || resolvedFindingIds.some((value) => typeof value !== "string" || value === "")) {

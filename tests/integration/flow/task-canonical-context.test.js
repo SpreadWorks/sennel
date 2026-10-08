@@ -30,20 +30,32 @@ import {
 import { emptySpecStub, validateSpecJsonObject } from "../../../src/lib/spec-json.js";
 import { FlowManager } from "../../../src/lib/flow-manager.js";
 import GetNextActionCommand from "../../../src/flow/lib/get-next-action.js";
-import { CanonicalGatePromotion } from "../../../src/flow/lib/canonical-gate-artifacts.js";
+import RunGateCommand from "../../../src/flow/lib/run-gate.js";
+import { FLOW_COMMANDS } from "../../../src/flow/registry.js";
+import { ReviewTargetAuthority } from "../../../src/flow/lib/review-target-authority.js";
 import { CanonicalReviewWorkUnit } from "../../../src/flow/lib/canonical-review-artifacts.js";
-import { readCurrentGateTransitionFacts } from "../../../src/flow/lib/gate-transition-facts.js";
-import { resolveGateTransition, resolveSourceHandoffTransitionPlan } from "../../../src/flow/definition.js";
+import { resolveSourceHandoffTransitionPlan } from "../../../src/flow/definition.js";
 import { SourceHandoffFailureFacts } from "../../../src/flow/lib/source-handoff-failure.js";
 import RunRepairPlanGateCommand from "../../../src/flow/lib/run-repair-plan-gate.js";
 import { canonicalPlanGateRepairForTarget } from "../../../src/flow/lib/plan-gate-repair.js";
-import { appendIssueLogFromGateResult } from "../../../src/flow/lib/run-gate.js";
 import { FlowDispatchSession, FlowDispatchTarget } from "../../../src/flow/lib/dispatch-invocation.js";
 import { FlowTargetExpectation } from "../../../src/lib/flow-target-guard.js";
 import { CurrentFlowSpecRecord } from "../../../src/flow/lib/current-flow-state.js";
 import { ExecuteStepDirective } from "../../../src/flow/lib/next-action-directive.js";
 import { completeCanonicalSourceHandoff, withSourceHandoffLease } from "../../support/builders/source-handoff-scenario.js";
-import { TaskLifecycleFixture, confirmCanonicalFixtureStep } from "../../support/infrastructure/flow-setup.js";
+import { TaskLifecycleFixture } from "../../support/infrastructure/flow-setup.js";
+
+import { ImplementationReviewProducer } from "../../support/infrastructure/implementation-review-producer.js";
+import { installGateProviderFake } from "../../support/infrastructure/flow-dispatch-scenario.js";
+import { initGitRepo, commitAll } from "../../support/infrastructure/git-repo.js";
+
+async function executeTaskGate(input) {
+  const ctx = { ...input, phase: "task-impl", config: {}, skipGuardrail: true };
+  await FLOW_COMMANDS.run.gate.pre(ctx);
+  const result = await new RunGateCommand().execute(ctx);
+  await FLOW_COMMANDS.run.gate.post(ctx, result);
+  return result;
+}
 
 const digest = "a".repeat(64);
 const spec = {
@@ -381,7 +393,9 @@ describe("canonical Task context", () => {
         runId: "run-task-scoped-handoff",
         request: "Accept a sealed Task implementation handoff.",
         specRecord: taskSpecRecord,
-        taskDocuments: tasks,
+        // Task order is not this test's subject. Select T-4 first so setup
+        // does not manufacture completion of unrelated earlier Task Reviews.
+        taskDocuments: [tasks.find((task) => task.id === "T-4"), ...tasks.filter((task) => task.id !== "T-4")],
         taskId: "T-4",
         targetStep: "task-impl",
       }).create();
@@ -426,10 +440,12 @@ describe("canonical Task context", () => {
     }
   });
 
-  it("accepts a second Task implementation handoff that updates an existing lineage file", () => {
+  it("accepts a second Task implementation handoff that updates an existing lineage file", async (t) => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "sennel-task-lineage-handoff-"));
     const manager = new FlowManager({ root, mainRoot: root, inWorktree: false });
     const specId = "task-lineage-handoff";
+    initGitRepo(root);
+    commitAll(root, "Task lineage baseline");
     const ctx = () => ({
       root,
       mainRoot: root,
@@ -467,10 +483,9 @@ describe("canonical Task context", () => {
         },
       });
       manager.updateStepStatus({ stepId: "T-1-review", requestedStatus: "in_progress" }, { specId });
-      confirmCanonicalFixtureStep(manager, specId, "T-1-review");
-      confirmCanonicalFixtureStep(manager, specId, "T-1-triage", "skipped");
-      confirmCanonicalFixtureStep(manager, specId, "T-1-repair", "skipped");
-      manager.updateStepStatus({ stepId: "T-1-gate", requestedStatus: "in_progress" }, { specId });
+      const firstReview = await new ImplementationReviewProducer().publish(ctx());
+      assert.notEqual(firstReview.ok, false, JSON.stringify(firstReview));
+      assert.equal(manager.canonicalState(specId).current.at(-1), "T-1-gate");
 
       const observation = {
         kind: "violation",
@@ -481,59 +496,21 @@ describe("canonical Task context", () => {
         severity: "blocking",
         refs: ["R-T-1"],
       };
-      const commandResult = new CanonicalGatePromotion({
-        state: manager.canonicalState(specId),
-        phase: "task-impl",
-        nodeId: "T-1-gate",
-        activeTaskId: "T-1",
-      }).promote({
-        result: "fail",
-        artifacts: {
-          failureKind: "ai_semantic_fail",
-          failureCode: "TASK_GATE_REJECTED",
-          sourceFingerprint: captureCurrentTaskSource({
-            root,
-            flowManager: manager,
-            state: manager.loadReadOnly(specId),
-            taskId: "T-1",
-          }).fingerprint,
-          nextAction: { diagnosis: { observations: [observation] } },
-        },
+      let providerCalls = 0;
+      const provider = installGateProviderFake(() => {
+        providerCalls += 1;
+        return JSON.stringify({ evaluations: [{ guardrail_id: observation.requirementRef,
+          result: providerCalls === 1 ? "fail" : "pass",
+          reason: providerCalls === 1
+            ? `[REQ:${observation.requirementRef}] ${observation.where.file}: ${observation.where.locator}: ${observation.observed}`
+            : `[REQ:${observation.requirementRef}] The repaired source supplies the required revision.` }] });
       });
-      manager.failCurrentAttempt({
-        specId,
-        failure: {
-          category: "semantic",
-          code: "TASK_GATE_REJECTED",
-          message: "Fixture gate rejection requests a bounded Task repair.",
-          retryable: true,
-          retryKind: "semantic",
-        },
-        commandResult,
-      });
-      let decision = resolveGateTransition(readCurrentGateTransitionFacts({
-        flowManager: manager,
-        flowState: manager.loadReadOnly(specId),
-        phase: "task-impl",
-      }));
-      manager.recordTaskGateSettlementMetric({ specId, decision });
-      decision = resolveGateTransition(readCurrentGateTransitionFacts({
-        flowManager: manager,
-        flowState: manager.loadReadOnly(specId),
-        phase: "task-impl",
-      }));
-      appendIssueLogFromGateResult({
-        ...ctx(),
-        phase: "task-impl",
-        gateTransitionDecision: decision,
-        gitState: { headSha: "a".repeat(40), worktreeHash: "b".repeat(64) },
-      }, commandResult);
-      decision = resolveGateTransition(readCurrentGateTransitionFacts({
-        flowManager: manager,
-        flowState: manager.loadReadOnly(specId),
-        phase: "task-impl",
-      }));
-      assert.equal(decision.disposition.operation, "repair");
+      t.after(() => provider.mock.restore());
+      const rejected = await executeTaskGate(ctx());
+      assert.equal(rejected.result, "fail", JSON.stringify(rejected));
+      const failedGate = manager.readCurrentStepSettlement({ specId, stepId: "task-gate", taskId: "T-1" });
+      assert.equal(failedGate.result.kind, "task-gate-repair-required");
+      assert.equal(failedGate.settlement.application.decision.disposition.operation, "repair");
       const repaired = new RunRepairPlanGateCommand().execute(ctx());
       assert.equal(repaired.ok, true, JSON.stringify(repaired));
       assert.equal(manager.canonicalState(specId).current.at(-1), "T-1-impl");
@@ -608,30 +585,15 @@ describe("canonical Task context", () => {
       assert.equal(fs.existsSync(request.directory), false, "parent acceptance consumes the sealed second handoff");
       assert.equal(manager.canonicalState(specId).current, null);
       manager.updateStepStatus({ stepId: "T-1-review", requestedStatus: "in_progress" }, { specId });
-      confirmCanonicalFixtureStep(manager, specId, "T-1-review");
-      confirmCanonicalFixtureStep(manager, specId, "T-1-triage", "skipped");
-      confirmCanonicalFixtureStep(manager, specId, "T-1-repair", "skipped");
-      manager.updateStepStatus({ stepId: "T-1-gate", requestedStatus: "in_progress" }, { specId });
-      const pass = new CanonicalGatePromotion({
-        state: manager.canonicalState(specId), phase: "task-impl", nodeId: "T-1-gate", activeTaskId: "T-1",
-      }).promote({ result: "pass", artifacts: { sourceFingerprint: captureCurrentTaskSource({
-        root, flowManager: manager, state: manager.loadReadOnly(specId), taskId: "T-1",
-      }).fingerprint } });
-      manager.publishCurrentAttemptResult({ specId, commandResult: pass });
-      let gateDecision = resolveGateTransition(readCurrentGateTransitionFacts({
-        flowManager: manager, flowState: manager.loadReadOnly(specId), phase: "task-impl",
-      }));
-      manager.recordTaskGateSettlementMetric({ specId, decision: gateDecision });
-      gateDecision = resolveGateTransition(readCurrentGateTransitionFacts({
-        flowManager: manager, flowState: manager.loadReadOnly(specId), phase: "task-impl",
-      }));
-      appendIssueLogFromGateResult({
-        ...ctx(), phase: "task-impl", gateTransitionDecision: gateDecision,
-      }, pass);
-      gateDecision = resolveGateTransition(readCurrentGateTransitionFacts({
-        flowManager: manager, flowState: manager.loadReadOnly(specId), phase: "task-impl",
-      }));
-      manager.confirmCurrentAttempt({ specId, status: "done", gateTransitionDecision: gateDecision });
+      const secondReview = await new ImplementationReviewProducer().publish(ctx());
+      assert.notEqual(secondReview.ok, false, JSON.stringify(secondReview));
+      assert.equal(manager.canonicalState(specId).current.at(-1), "T-1-gate");
+      const passed = await executeTaskGate(ctx());
+      assert.equal(passed.result, "pass", JSON.stringify(passed));
+      assert.equal(providerCalls, 2, "repaired source must receive its own real Gate evaluation");
+      const completedGate = manager.readCurrentStepSettlement({ specId, stepId: "task-gate", taskId: "T-1", completed: true });
+      assert.equal(completedGate.result.kind, "task-gate-passed");
+      assert.notEqual(completedGate.receipt.binding.attemptId, failedGate.receipt.binding.attemptId);
       assert.equal(manager.canonicalState(specId).findNode("T-1").status, "done");
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
@@ -720,10 +682,13 @@ describe("canonical Task context", () => {
     }), /another Task/);
   });
 
-  it("keeps Task A dirty while Task B executes against only its own current source", async () => {
+  it("keeps Task A dirty while Task B executes against only its own current source", async (t) => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "sennel-task-context-flow-"));
     const manager = new FlowManager({ root, mainRoot: root, inWorktree: false });
     const specId = "001-task-source-isolation";
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    initGitRepo(root);
+    commitAll(root, "Task source isolation baseline");
     const context = () => ({
       root,
       mainRoot: root,
@@ -769,44 +734,17 @@ describe("canonical Task context", () => {
       ["shared.js", "export const taskA = true;\n"],
     ]);
     manager.updateStepStatus({ stepId: "T-A-review", requestedStatus: "in_progress" }, { specId });
-    confirmCanonicalFixtureStep(manager, specId, "T-A-review");
-    confirmCanonicalFixtureStep(manager, specId, "T-A-triage", "skipped");
-    confirmCanonicalFixtureStep(manager, specId, "T-A-repair", "skipped");
-    manager.updateStepStatus({ stepId: "T-A-gate", requestedStatus: "in_progress" }, { specId });
-    const taskAGate = new CanonicalGatePromotion({
-      state: manager.canonicalState(specId),
-      phase: "task-impl",
-      nodeId: "T-A-gate",
-      activeTaskId: "T-A",
-    }).promote({
-      result: "pass",
-      artifacts: {
-        sourceFingerprint: captureCurrentTaskSource({ root, flowManager: manager, state: manager.loadReadOnly(specId), taskId: "T-A" }).fingerprint,
-      },
-    });
-    manager.publishCurrentAttemptResult({ specId, commandResult: taskAGate });
-    let taskAGateDecision = resolveGateTransition(readCurrentGateTransitionFacts({
-      flowManager: manager,
-      flowState: manager.loadReadOnly(specId),
-      phase: "task-impl",
-    }));
-    manager.recordTaskGateSettlementMetric({ specId, decision: taskAGateDecision });
-    taskAGateDecision = resolveGateTransition(readCurrentGateTransitionFacts({
-      flowManager: manager,
-      flowState: manager.loadReadOnly(specId),
-      phase: "task-impl",
-    }));
-    appendIssueLogFromGateResult({
-      ...context(),
-      phase: "task-impl",
-      gateTransitionDecision: taskAGateDecision,
-    }, taskAGate);
-    taskAGateDecision = resolveGateTransition(readCurrentGateTransitionFacts({
-      flowManager: manager,
-      flowState: manager.loadReadOnly(specId),
-      phase: "task-impl",
-    }));
-    manager.confirmCurrentAttempt({ specId, status: "done", gateTransitionDecision: taskAGateDecision });
+    const taskAReview = await new ImplementationReviewProducer().publish(context());
+    assert.notEqual(taskAReview.ok, false, JSON.stringify(taskAReview));
+    assert.equal(manager.canonicalState(specId).current.at(-1), "T-A-gate");
+    const provider = installGateProviderFake(() => JSON.stringify({ evaluations: [{
+      guardrail_id: "R-T-A", result: "pass", reason: "[REQ:R-T-A] Task A source supplies the required behavior.",
+    }] }));
+    t.after(() => provider.mock.restore());
+    const taskAGate = await executeTaskGate(context());
+    assert.equal(taskAGate.result, "pass", JSON.stringify(taskAGate));
+    const completedGate = manager.readCurrentStepSettlement({ specId, stepId: "task-gate", taskId: "T-A", completed: true });
+    assert.equal(completedGate.result.kind, "task-gate-passed");
 
     const taskBAction = await new GetNextActionCommand().execute(context());
     assert.equal(taskBAction.taskId, "T-B");
@@ -841,14 +779,15 @@ describe("canonical Task context", () => {
     assert.doesNotMatch(JSON.stringify(taskBSource.toJSON()), /task-a\.js/);
     assert.equal(fs.existsSync(path.join(root, "task-a.js")), true, "Task A dirty source remains in the repository");
 
+    const target = ReviewTargetAuthority.fromContext(context());
     const reviewWorkUnit = new CanonicalReviewWorkUnit({
       flowManager: manager,
       state: manager.loadReadOnly(specId),
       phase: "impl",
       taskId: "T-B",
       executionRoot: root,
-      treeSha: "a".repeat(40),
-      targetStateDigest: "b".repeat(64),
+      treeSha: target.resolveTreeSha(),
+      targetStateDigest: target.captureTargetStateForPhase("impl").digest,
     });
     reviewWorkUnit.prepare();
     reviewWorkUnit.materializeTaskSpec();

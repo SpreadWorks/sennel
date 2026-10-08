@@ -32,10 +32,6 @@ import {
   resolveGateTransition,
   GateTransitionDecision,
   projectGatePublicOutcome,
-  resolveNonGateTransition,
-  NonGateRecordNonblockingAction,
-  testExecuteTransitionDefinition,
-  testResultReviewTransitionDefinition,
   SetStepStatus,
   taskIdForResolvedStep,
 } from "./definition.js";
@@ -68,8 +64,6 @@ import { CurrentFlowStateConflictError } from "./lib/current-flow-state-conflict
 import { TaskStepIdentity } from "./lib/task-step-identity.js";
 import { DefinitionFailureOwnership } from "./lib/definition-failure-ownership.js";
 import { RepositoryFlowOperationLock } from "../lib/repository-maintenance-lock.js";
-import { readCurrentNonGateTransitionFacts } from "./lib/non-gate-transition-facts.js";
-import { readCurrentTestChainTransitionFacts } from "./lib/test-chain-transition-facts.js";
 import { CurrentTaskSourceSnapshot, TaskMutationLineageSet } from "./lib/task-mutation-lineage.js";
 import {
   DraftCoverageReviewExecutionRequiredResult,
@@ -534,42 +528,6 @@ function tryAppendIssueLog(fn) {
     }
     throw err;
   }
-}
-
-const TEST_CHAIN_DEFINITIONS = Object.freeze({
-  "test-execute": testExecuteTransitionDefinition,
-  "test-result-review": testResultReviewTransitionDefinition,
-});
-
-/**
- * The post hook does not classify test evidence. It first makes the producer
- * observation durable, then asks Definition to select the sealed plan and
- * applies only the typed plan effects. In particular, an integrity decision
- * has an empty plan, so stale/partial observations cannot settle an Attempt.
- */
-async function applyTestChainTransition(ctx, result, stepId) {
-  const specId = ctx.specId ?? ctx.flowState.specId;
-  const definition = TEST_CHAIN_DEFINITIONS[stepId];
-  if (!definition) throw new Error(`unknown test-chain Definition: ${stepId}`);
-  ctx.flowManager.publishCurrentAttemptResult({ specId, commandResult: result });
-  const facts = readCurrentNonGateTransitionFacts({
-    flowManager: ctx.flowManager,
-    specId,
-    readFacts: () => readCurrentTestChainTransitionFacts({ flowManager: ctx.flowManager, specId }),
-  });
-  const decision = resolveNonGateTransition(facts, definition);
-  const recordAction = decision.plan.actions.find((action) => action instanceof NonGateRecordNonblockingAction) ?? null;
-  let nonblockingRecord = null;
-  if (recordAction !== null) {
-    const { deriveEligibleNonblockingObservation } = await import("./lib/nonblocking.js");
-    nonblockingRecord = deriveEligibleNonblockingObservation(
-      { ...ctx, flowState: ctx.flowManager.loadReadOnly(specId) },
-      recordAction.stepId,
-    );
-  }
-  ctx.flowManager.applyTestChainTransitionDecision({ specId, decision, nonblockingRecord });
-  ctx.flowState = ctx.flowManager.loadReadOnly(specId);
-  return decision;
 }
 
 /**
@@ -1148,6 +1106,9 @@ function executePublishedPrepareStep(input) {
 }
 function loadGateCommand() { return import("./lib/run-gate.js"); }
 function loadReviewCommand() { return import("./lib/run-review.js"); }
+function loadFilterTaskReviewCommand() { return import("./lib/run-filter-task-review.js"); }
+function loadTestExecuteCommand() { return import("./lib/run-test-execute.js"); }
+function loadTestResultReviewCommand() { return import("./lib/run-test-result-review.js"); }
 function loadRequirementTestGateCommand() { return import('./lib/run-requirement-test-gate.js'); }
 
 
@@ -1703,7 +1664,7 @@ export const FLOW_COMMANDS = {
         };
         const selection = registration === null
           ? selectGateExecutionAdmission(input)
-          : registration.executionContract.select(input);
+          : registration.executionContract.select({ ...input, registration, stepId: registration.stepId });
         if (selection.admission.facts !== null
           || selection.action?.action?.action !== "run-gate"
           || !["start", "recover", "resume"].includes(selection.action.operation)) return;
@@ -1785,6 +1746,29 @@ export const FLOW_COMMANDS = {
           }
           return;
         }
+        if (phase === "task-impl" || phase === "integration") {
+          const registration = gateStepExecutionRegistration(phase);
+          const { prepareImplementationGatePublication } = await import("./engine/composition/impl-review-gate.js");
+          const { GateIssueLogEntry } = await import("./lib/run-gate.js");
+          const { ImplStepBinding } = await import("./engine/connectors/impl/impl-step-binding.js");
+          const { TaskStepBinding } = await import("./engine/connectors/task/task-step-binding.js");
+          const binding = phase === "task-impl"
+            ? new TaskStepBinding({ flowManager: ctx.flowManager, specId, definitionStepId: "task-gate" })
+            : new ImplStepBinding({ flowManager: ctx.flowManager, specId, stepId: "impl-gate" });
+          const publication = prepareImplementationGatePublication({ ctx, binding,
+            commandResult: result, IssueEntryClass: GateIssueLogEntry });
+          const prepared = await registration.create({ ...publication, ctx, flowManager: ctx.flowManager });
+          const stepResult = await prepared.step.execute();
+          const service = prepared.dependency(registration.ServiceClass);
+          if (service.settlementOutcome?.receipt == null) throw new Error("Implementation Gate did not persist its selected Result");
+          ctx.flowState = ctx.flowManager.loadReadOnly(specId);
+          ctx.gateTransitionDecision = service.selectedSettlement.application?.decision ?? null;
+          if (stepResult.type === STEP_RESULT_TYPE.ERROR) return Envelope.fail("run", "gate",
+            stepResult.error.code || "IMPLEMENTATION_GATE_BLOCKED", stepResult.error.message, { ...result });
+          if (ctx.gateTransitionDecision !== null) applyGatePublicOutcomeProjection(result,
+            projectGatePublicOutcome(ctx.gateTransitionDecision));
+          return;
+        }
         let recoveryEffect = null;
         if (canonicalResult) {
           // Publication precedes classification.  Definition therefore sees
@@ -1842,6 +1826,7 @@ export const FLOW_COMMANDS = {
         }
       },
       async nonblockingPost(ctx, result) {
+        if (["task-impl", "integration"].includes(result?.artifacts?.phase || ctx.phase)) return;
         const handoff = ctx.gateTransitionDecision?.plan.nonblockingHandoff ?? null;
         if (handoff === null) return;
         const { recordEligibleNonblockingAttempt } = await import("./lib/nonblocking.js");
@@ -2060,20 +2045,29 @@ export const FLOW_COMMANDS = {
           && result?.artifacts?.taskId != null
           && result?.artifacts?.toolingOutcome == null) {
           const specId = ctx.specId ?? ctx.flowState.specId;
+          const { completeTaskReviewPublication } = await import("./engine/composition/task.js");
           try {
-            ctx.flowManager.confirmTaskReviewResult({ specId, commandResult: result });
+            await completeTaskReviewPublication({ ctx, flowManager: ctx.flowManager,
+              specId, commandResult: result });
           } catch (error) {
-            const current = ctx.flowManager.loadReadOnly(specId);
-            const taskId = result.artifacts.taskId;
-            const committed = current.currentNodeId !== `${taskId}-review`
-              && ctx.flowManager.artifactCatalog(specId).artifacts.some((entry) => entry.logicalKey === "task.review"
-                && entry.relativePath === `steps/impl/${taskId}/review/result.json`);
-            if (!committed) {
-              if (current.currentNodeId === `${taskId}-review`
-                && !TASK_REVIEW_PUBLICATION_IO_FAILURE_CODES.has(error?.code)) throw error;
-              ctx.flowManager.confirmTaskReviewPublicationUnavailable({ specId, commandResult: result, error });
+            const replay = ctx.flowManager.readReviewPublicationReplay({ specId, commandResult: result });
+            if (replay === null) {
+              const cause = isStepPersistenceFailure(error) ? error.cause : error;
+              if (!TASK_REVIEW_PUBLICATION_IO_FAILURE_CODES.has(cause?.code)) throw error;
+              await completeTaskReviewPublication({ ctx, flowManager: ctx.flowManager,
+                specId, commandResult: result, publicationError: cause });
             }
           }
+          ctx.flowState = ctx.flowManager.loadReadOnly(specId);
+          const { attachedCanonicalReviewWorkUnit } = await import("./lib/canonical-review-artifacts.js");
+          attachedCanonicalReviewWorkUnit(result)?.cleanup();
+          return;
+        }
+        if (result?.artifacts?.phase === "impl" && result?.artifacts?.taskId == null) {
+          const specId = ctx.specId ?? ctx.flowState.specId;
+          const { completeImplReviewPublication } = await import("./engine/composition/impl.js");
+          await completeImplReviewPublication({ ctx, flowManager: ctx.flowManager,
+            state: ctx.flowManager.canonicalState(specId), commandResult: result });
           ctx.flowState = ctx.flowManager.loadReadOnly(specId);
           const { attachedCanonicalReviewWorkUnit } = await import("./lib/canonical-review-artifacts.js");
           attachedCanonicalReviewWorkUnit(result)?.cleanup();
@@ -2486,7 +2480,7 @@ export const FLOW_COMMANDS = {
       helpKey: "flow.run.filter-task-review",
       runtimeLog: { stepMetadata: false },
       explicitTargetResolution: true,
-      command: () => import("./lib/run-filter-task-review.js"),
+      command: loadFilterTaskReviewCommand,
       args: {
         flags: FLOW_TARGET_GUARD_FLAGS,
         options: [
@@ -2630,7 +2624,7 @@ export const FLOW_COMMANDS = {
       helpKey: "flow.run.test-execute",
       failureOwnership: DefinitionFailureOwnership.dispatcherPrimary(),
       runtimeLog: { stepId: "test-execute" },
-      command: () => import("./lib/run-test-execute.js"),
+      command: loadTestExecuteCommand,
       args: { flags: FLOW_TARGET_GUARD_FLAGS, options: [...FLOW_RUN_OPTIONS] },
       help: [
         "Usage: sennel flow run test-execute",
@@ -2645,7 +2639,7 @@ export const FLOW_COMMANDS = {
         const attached = attachedCanonicalCommandResultArtifact(result);
         if (attached?.logicalKey !== "test.execute") throw new Error("test-execute canonical result artifact is missing");
         validateTestExecuteResultV2(attached.payload);
-        await applyTestChainTransition(ctx, result, "test-execute");
+        ctx.flowState = ctx.flowManager.loadReadOnly(ctx.specId ?? ctx.flowState.specId);
       },
     },
     "requirement-test-gate": {
@@ -2751,7 +2745,7 @@ export const FLOW_COMMANDS = {
       helpKey: "flow.run.test-result-review",
       failureOwnership: DefinitionFailureOwnership.dispatcherPrimary(),
       runtimeLog: { stepId: "test-result-review" },
-      command: () => import("./lib/run-test-result-review.js"),
+      command: loadTestResultReviewCommand,
       args: { flags: FLOW_TARGET_GUARD_FLAGS, options: [...FLOW_RUN_OPTIONS] },
       help: [
         "Usage: sennel flow run test-result-review",
@@ -2765,7 +2759,7 @@ export const FLOW_COMMANDS = {
         const attached = attachedCanonicalCommandResultArtifact(result);
         if (attached?.logicalKey !== "test.result.review") throw new Error("test-result-review canonical result artifact is missing");
         validateTestResultReview(attached.payload);
-        await applyTestChainTransition(ctx, result, "test-result-review");
+        ctx.flowState = ctx.flowManager.loadReadOnly(ctx.specId ?? ctx.flowState.specId);
       },
     },
     // retro is a mainline impl-phase step that aggregates test-execute results.

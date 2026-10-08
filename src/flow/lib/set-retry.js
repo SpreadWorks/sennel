@@ -27,10 +27,11 @@ export default class SetRetryCommand extends FlowCommand {
       const nodeId = ctx.flowState?.current?.at(-1) ?? ctx.flowState?.currentNodeId ?? null;
       const activeNodeId = ctx.flowState?.attempt?.nodeId ?? nodeId;
       const canonicalState = activeNodeId === null ? null : ctx.flowManager.canonicalState(ctx.flowState.specId);
-      const exhausted = canonicalState?.attempt?.failure !== null
+      const failure = canonicalState?.attempt?.failure ?? null;
+      const exhausted = failure !== null
         && canonicalState.failureDisposition()?.operation !== "retry"
-        && (canonicalState.attempt.failure.retryKind === "tooling"
-          || ["tooling", "provider"].includes(canonicalState.attempt.failure.category));
+        && (failure.retryKind === "tooling"
+          || ["tooling", "provider"].includes(failure.category));
       if (activeNodeId !== null && exhausted) {
         const derived = deriveCurrentEvidence(ctx, request.kind, request.phase, activeNodeId);
         const previous = readRetryBaseline(ctx.flowManager, canonicalState, derived.baseline.route);

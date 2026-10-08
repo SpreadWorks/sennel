@@ -10,6 +10,8 @@ import {
   GateFailureCategory,
   GateObservationConvergenceFacts,
   GateTaskBudget,
+  GateTargetBinding,
+  GateRetryMetrics,
   GateTaskLifecycle,
   GateTransitionFacts,
   SpecGateCycleProgress,
@@ -23,10 +25,9 @@ import {
   canonicalGateNodeId,
   taskGateSettlementIssueLogActivityId,
   canonicalGateRevision,
-  taskGateSettlementIssueLogId,
   taskGateSettlementMetricActivityId,
 } from "./canonical-gate-artifacts.js";
-import { inspectCanonicalPlanGateRepair } from "./plan-gate-repair.js";
+import { inspectCanonicalPlanGateRepair, inspectProspectivePlanGateRepair } from "./plan-gate-repair.js";
 import { evaluateReviewFindingGateReadiness } from "./review-finding-gate-readiness.js";
 import { captureCurrentTaskSource } from "./task-mutation-lineage.js";
 import {
@@ -37,12 +38,18 @@ import { CanonicalGateObservationCycle } from "./canonical-gate-observation-cycl
 import { assertGateSettlementPublication } from "./gate-settlement-publication.js";
 import { PlanGateRepairObservation } from "./plan-gate-repair.js";
 import { DraftGateProspectiveFacts } from "./draft-gate-prospective.js";
-import { SpecGateIssuePublication } from "./gate-issue-publication.js";
+import { SpecGateIssuePublication, taskGateSettlementIssueLogId } from "./gate-issue-publication.js";
 import { SpecGateProspectiveFacts } from "./spec-gate-prospective-facts.js";
 import { nonblockingRouteFor } from "./nonblocking-route.js";
 import { createHash } from "node:crypto";
 import { StepAdmissionRefusal } from "./step-admission-refusal.js";
 import { STEP_RESULT_ERROR_CATEGORY } from "../definition.js";
+import { readProspectiveCommandArtifact } from "./prospective-command-artifact.js";
+import { ImplementationGateResultEvidence } from "./gate-observation-values.js";
+import { ReviewFindingCycle } from "./finding-disposition-policy.js";
+import { TaskReviewConvergenceEvidence } from "./review-recurrence.js";
+import { TaskReviewEpisodeBinding } from "./task-review-stage-binding.js";
+import { TaskStepIdentity } from "./task-step-identity.js";
 export { DraftGateProspectiveFacts } from "./draft-gate-prospective.js";
 
 const SHA256 = /^[a-f0-9]{64}$/;
@@ -237,7 +244,7 @@ function taskLifecycleFor(state, taskId) {
   const index = tasks.findIndex((task) => task.id === taskId);
   const task = index < 0 ? null : tasks[index];
   if (task === null) throw new Error("canonical Task Gate lifecycle Task is absent");
-  const expected = ["impl", "review", "triage", "repair", "gate"].map((role) => `${taskId}-${role}`);
+  const expected = ["impl", "review", "triage", "repair", "gate"].map((role) => new TaskStepIdentity({ taskId, role }).nodeId);
   if (!Array.isArray(task.steps) || task.steps.length !== expected.length
     || task.steps.some((step, position) => step.id !== expected[position])) {
     throw new Error("canonical Task Gate lifecycle materialized Task Step identity is invalid");
@@ -250,12 +257,12 @@ function taskLifecycleFor(state, taskId) {
   const successor = gateIndex < 0 ? null : leaves.slice(gateIndex + 1)
     .find((leaf) => leaf.status === "pending" || leaf.status === "invalidated") ?? null;
   if (successor === null) throw new Error("canonical Task Gate lifecycle has no executable successor");
-  const finalGateId = `${tasks.at(-1).id}-gate`;
+  const finalGateId = new TaskStepIdentity({ taskId: tasks.at(-1).id, role: "gate" }).nodeId;
   const finalGateIndex = leaves.findIndex((leaf) => leaf.id === finalGateId);
   const integration = finalGateIndex < 0 ? null : leaves.slice(finalGateIndex + 1)
     .find((leaf) => leaf.status === "pending" || leaf.status === "invalidated") ?? null;
   if (integration === null) throw new Error("canonical Task Gate lifecycle has no integration successor");
-  if (nextTask !== null && successor.id !== `${nextTask.id}-impl`) {
+  if (nextTask !== null && successor.id !== new TaskStepIdentity({ taskId: nextTask.id, role: "impl" }).nodeId) {
     throw new Error("canonical Task Gate lifecycle next Task does not own its successor");
   }
   if (nextTask === null && successor.id !== integration.id) {
@@ -308,7 +315,7 @@ function sameMembers(left, right) {
 }
 
 /** Read review, triage and repair lineage once, before Definition classifies integration. */
-function integrationReviewReadiness({ flowManager, state }) {
+export function integrationReviewReadiness({ flowManager, state }) {
   const activities = flowManager.activityLedger(state.specId);
   const reviewSource = flowManager.readArtifact({
     specId: state.specId, logicalKey: "impl.review", consumerNodeId: "impl-gate", optional: true,
@@ -382,6 +389,70 @@ function integrationReviewReadiness({ flowManager, state }) {
     // unchanged fingerprint deliberately retains prior unresolved findings.
     supersedesHistory: true,
   }).toJSON();
+}
+
+/** Reuse canonical Task episodes and the common finding policy for the current round. */
+export function taskReviewReadiness({ flowManager, state, taskId }) {
+  const cycle = ReviewFindingCycle.fromActivityLedger({ runId: state.runId,
+    activities: flowManager.activityLedger(state.specId) });
+  const convergence = new TaskReviewConvergenceEvidence({ flowManager, state, cycle });
+  const record = convergence.record(taskId);
+  if (record === null) {
+    const unavailable = convergence.unavailable(taskId);
+    if (unavailable === null) throw new Error("Task Gate requires canonical Task Review and execution budget");
+    return unavailable.gateReadiness().toJSON();
+  }
+  if (record.currentBudget === null) throw new Error("Task Gate requires canonical Task Review and execution budget");
+  const accounting = record.accountingFor(record.currentBudget);
+  const reviews = accounting.completed.filter((entry) => cycle.matchesArtifact(entry.payload));
+  if (reviews.length === 0) {
+    const unavailable = convergence.unavailable(taskId);
+    if (unavailable !== null) {
+      const previous = record.history.attempts.filter((entry) => cycle.matchesArtifact(entry.payload));
+      const known = previous.length === 0 ? null : evaluateReviewFindingGateReadiness({
+        reviewArtifacts: previous.map((entry) => entry.payload), phase: "task-impl", taskId, runId: state.runId,
+        reviewFingerprints: previous.map((entry) => `${record.review.reference.digest}:${entry.attempt}`),
+      });
+      return unavailable.gateReadiness(known).toJSON();
+    }
+    throw new Error("Task Gate requires its current round and finding cycle Review");
+  }
+  if (reviews.at(-1).attempt !== record.history.current.attempt) {
+    throw new Error("Task Gate requires its current round and finding cycle Review");
+  }
+  convergence.assertGateSource(taskId);
+  const findings = [...(record.review.document.blockingFindings ?? []), ...(record.review.document.nonBlockingImprovements ?? [])];
+  const triage = record.triage;
+  const binding = triage?.document == null ? null : new TaskReviewEpisodeBinding(triage.document.binding);
+  const triageCurrent = binding !== null && binding.runId === state.runId && binding.specId === state.specId
+    && binding.taskId === taskId && binding.taskRound === record.currentBudget.round
+    && binding.reviewOrdinal === accounting.completedReviewCount
+    && JSON.stringify(binding.review.toJSON()) === JSON.stringify(record.review.reference.toJSON());
+  const triageItems = triageCurrent ? triage.document.dispositions
+    .filter((entry) => entry.disposition === "reject")
+    .map((entry) => {
+      const finding = findings.find((finding) => finding.findingKey === entry.findingKey);
+      if (finding === undefined) throw new Error("Task Gate triage does not own its canonical finding");
+      return { findingId: finding.findingId, decision: "reject" };
+    }) : [];
+  const handoff = convergence.handoffs().map((entry) => entry.toJSON()).findLast((entry) => (
+    entry.taskId === taskId && entry.unreviewedAfterRepair === true
+    && entry.binding?.taskRound === record.currentBudget.round
+    && JSON.stringify(entry.binding.review) === JSON.stringify(record.review.reference.toJSON())
+    && JSON.stringify(entry.binding.triage) === JSON.stringify(triage?.reference?.toJSON())
+  )) ?? null;
+  const resolvedFindingIds = handoff?.repair != null && handoff.sourceMutationManifest.mutations.length > 0
+    ? handoff.repair.appliedFindingKeys.map((key) => {
+      const finding = handoff.findings.find((finding) => finding.findingKey === key);
+      if (finding === undefined) throw new Error("Task Gate repair does not own its canonical finding");
+      return finding.findingId;
+    }) : [];
+  return evaluateReviewFindingGateReadiness({ reviewArtifacts: reviews.map((entry) => entry.payload),
+    phase: "task-impl", taskId, runId: state.runId, triage: { items: triageItems }, repairLedger: null,
+    reviewFingerprints: reviews.map((entry) => `${record.review.reference.digest}:${entry.attempt}`),
+    triageFingerprint: triageCurrent ? triage.reference.digest : null,
+    repairFingerprint: handoff?.sourceMutationManifest?.digest ?? null,
+    resolvedFindingIds, supersedesHistory: true }).toJSON();
 }
 
 class GateFailureResolution {
@@ -519,7 +590,8 @@ function taskGateClassificationRecovery({ attempt, publication, producerActiviti
   });
 }
 
-function taskGateSettlementProgress({ flowManager, state, nodeId, taskId, attempt, publication, catalogFingerprint, lineage, activities, producerActivities, failure, classificationRecorded, classificationMismatch }) {
+function taskGateSettlementProgress({ flowManager, state, nodeId, taskId, attempt, publication, catalogFingerprint, lineage, activities, producerActivities, failure, classificationRecorded, classificationMismatch,
+  phase, descriptor, historyEntry, publicationBytes, prospective = false }) {
   const orderedActivities = activities.map((activity) => {
     if (!Number.isSafeInteger(activity.confirmationOrder)) {
       throw new Error("Task Gate settlement Activity ordering is unavailable");
@@ -574,6 +646,20 @@ function taskGateSettlementProgress({ flowManager, state, nodeId, taskId, attemp
   const issueLog = flowManager.readArtifact({
     specId: state.specId, logicalKey: "issue.log", consumerNodeId: nodeId, optional: true,
   });
+  const atomic = phase === "task-impl" && !prospective;
+  const source = atomic ? assertGateSettlementPublication({ state, activity: publication,
+    descriptor, historyEntry, attempt, publicationBytes }) : null;
+  if (atomic && (source === null || source.result.stepId !== "task-gate")) {
+    throw new StepAdmissionRefusal("Task implementation Gate requires its saved Result and settlement receipt");
+  }
+  if (atomic && (source.result.evidence.identity.runId !== state.runId
+    || source.result.evidence.identity.specId !== state.specId || source.result.evidence.identity.taskId !== taskId
+    || source.result.evidence.identity.stepId !== nodeId
+    || source.result.evidence.publication.producerActivityId !== publication.id
+    || source.result.evidence.publication.fingerprint !== catalogFingerprint
+    || JSON.stringify(source.result.evidence.lineage.toJSON()) !== JSON.stringify(lineage))) {
+    throw new StepAdmissionRefusal("Task Gate issue-log source does not match its saved evaluation identity");
+  }
   let issueLogRecorded = false;
   if (issueLog !== null) {
     const document = JSON.parse(issueLog.bytes.toString("utf8"));
@@ -587,7 +673,8 @@ function taskGateSettlementProgress({ flowManager, state, nodeId, taskId, attemp
     if (matching.length > 1) throw new Error("Task Gate settlement has duplicate issue-log effects");
     if (matching.length === 1) {
       const entry = matching[0];
-      const matchingActivities = orderedActivities.filter((candidate) => candidate.id === taskGateSettlementIssueLogActivityId({ issueLogId }));
+      const matchingActivities = orderedActivities.filter((candidate) => candidate.id === (atomic
+        ? issueLog.descriptor.activityId : taskGateSettlementIssueLogActivityId({ issueLogId })));
       if (matchingActivities.length !== 1) {
         throw new Error("Task Gate settlement issue-log Activity is unavailable");
       }
@@ -597,13 +684,16 @@ function taskGateSettlementProgress({ flowManager, state, nodeId, taskId, attemp
           publicationActivityId: publication.id, nodeId, attempt, operation,
         }))?.confirmationOrder
       ));
-      if (activity.transition?.operation !== "publish_artifacts"
+      if ((atomic ? activity.id !== publication.id || source.receipt.id !== activity.result?.draftSettlementReceipt?.id
+        : activity.transition?.operation !== "publish_artifacts")
+        || (atomic && (entry.phase !== phase || entry.trigger !== "gate post hook (auto)"
+          || !Number.isFinite(Date.parse(entry.timestamp))))
         || activity.nodeId !== nodeId
         || activity.attemptId !== attempt.id
         || activity.sequence !== attempt.sequence
-        || activity.confirmationOrder <= publication.confirmationOrder
-        || (classificationOrder !== null && activity.confirmationOrder <= classificationOrder)
-        || metricOrders.some((order) => order === undefined || activity.confirmationOrder <= order)
+        || (!atomic && (activity.confirmationOrder <= publication.confirmationOrder
+          || (classificationOrder !== null && activity.confirmationOrder <= classificationOrder)
+          || metricOrders.some((order) => order === undefined || activity.confirmationOrder <= order)))
         || entry?.taskId !== taskId
         || entry?.step !== nodeId
         || entry?.gateReceipt?.attempt?.id !== attempt.id
@@ -630,7 +720,7 @@ function taskGateSettlementProgress({ flowManager, state, nodeId, taskId, attemp
  * All malformed, stale, or mismatched evidence throws: callers must reject
  * rather than turn an unavailable publication into a guessed transition.
  */
-export function readCurrentGateTransitionFacts({ flowManager, flowState, phase, root = null } = {}) {
+export function readCurrentGateTransitionFacts({ flowManager, flowState, phase, root = null, prospectivePublication = null } = {}) {
   if (!flowManager || typeof flowManager.canonicalState !== "function"
     || typeof flowManager.loadReadOnly !== "function"
     || typeof flowManager.readProducerArtifact !== "function"
@@ -641,12 +731,12 @@ export function readCurrentGateTransitionFacts({ flowManager, flowState, phase, 
   const specId = required(flowState?.specId, "gate Flow specId");
   const currentView = flowManager.loadReadOnly(specId);
   const taskId = currentView.currentTaskId ?? null;
-  const snapshot = taskId === null ? null : flowManager.readCanonicalTransitionSnapshot?.(specId) ?? null;
+  const snapshot = taskId === null ? null : prospectivePublication ?? flowManager.readCanonicalTransitionSnapshot?.(specId) ?? null;
   if (taskId !== null && snapshot === null) {
     throw new Error("Task Gate transition facts require a canonical transition snapshot");
   }
   const state = taskId === null
-    ? flowManager.canonicalState(specId)
+    ? prospectivePublication?.state ?? flowManager.canonicalState(specId)
     : snapshot?.state ?? null;
   if (state === null || state.current === null || state.attempt === null) return null;
   if (currentView?.runId !== state.runId || currentView?.specId !== state.specId) {
@@ -661,7 +751,9 @@ export function readCurrentGateTransitionFacts({ flowManager, flowState, phase, 
   if (attempt.failure?.category === STEP_RESULT_ERROR_CATEGORY
     && attempt.failure.responseProtocolEvidence?.hasFileInput) return null;
   const keys = gateKeys(phase, taskId);
-  const resultSource = flowManager.readProducerArtifact({
+  const readProducer = (input) => prospectivePublication === null
+    ? flowManager.readProducerArtifact(input) : readProspectiveCommandArtifact(prospectivePublication, input);
+  const resultSource = readProducer({
     specId: state.specId, nodeId, logicalKey: keys.result, parameters: keys.parameters, optional: true,
   });
   if (resultSource === null) return null;
@@ -707,7 +799,7 @@ export function readCurrentGateTransitionFacts({ flowManager, flowState, phase, 
       }
     }
   }
-  const activities = flowManager.activityLedger(state.specId);
+  const activities = prospectivePublication?.activities ?? flowManager.activityLedger(state.specId);
   const completedSpecRepairs = activities.filter((activity) => (
     activity.nodeId === "spec"
     && activity.transition?.operation === "plan_gate_repair"
@@ -720,16 +812,23 @@ export function readCurrentGateTransitionFacts({ flowManager, flowState, phase, 
   const producerActivities = currentGateActivity({ activities, nodeId, attempt });
   const publication = producerActivities.find((activity) => activity.id === resultSource.descriptor.activityId) ?? null;
   if (publication === null) throw new Error("gate catalog publication is not owned by the current Attempt");
-  if (nodeId === "spec-gate" && (publication.result?.draftSettlementReceipt != null
+  if (prospectivePublication === null && ["integration", "task-impl"].includes(persistedPhase)
+    && payload.result === "pass" && publication.result?.draftSettlementReceipt == null) {
+    throw new StepAdmissionRefusal("Implementation Gate PASS requires its exact Result and settlement receipt");
+  }
+  if (prospectivePublication === null && (publication.result?.draftSettlementReceipt != null
     || publication.transition?.operation === "record_draft_step_settlement")) {
-    assertGateSettlementPublication({
+    const settled = assertGateSettlementPublication({
       state, activity: publication, descriptor: resultSource.descriptor,
       historyEntry: history.current, attempt, publicationBytes: resultSource.bytes,
     });
+    if (["integration", "task-impl"].includes(persistedPhase) && settled.result.type === "error") return null;
   }
-  if (publication.transition?.operation !== "publish_artifacts"
+  const prospectiveProducer = prospectivePublication !== null
+    && publication.id === prospectivePublication.selectedActivityId;
+  if (!prospectiveProducer && publication.transition?.operation !== "publish_artifacts"
     && publication.transition?.operation !== "fail_attempt"
-    && !(publication.transition?.operation === "record_draft_step_settlement" && nodeId === "spec-gate")
+    && publication.transition?.operation !== "record_draft_step_settlement"
     && publication.transition?.operation !== "confirm_attempt") {
     throw new Error("gate catalog publication has an invalid producer Activity");
   }
@@ -749,7 +848,7 @@ export function readCurrentGateTransitionFacts({ flowManager, flowState, phase, 
   let sourceRevisionFingerprint = null;
   let canonicalRevisionFingerprint = null;
   if (failure?.category === "semantic") {
-    const source = flowManager.readProducerArtifact({
+    const source = readProducer({
       specId: state.specId, nodeId, logicalKey: keys.source, parameters: keys.parameters, optional: true,
     });
     if (source === null && (taskId !== null || persistedPhase === "integration")) {
@@ -794,7 +893,8 @@ export function readCurrentGateTransitionFacts({ flowManager, flowState, phase, 
   // intentionally read from the same current Attempt and catalog lineage as
   // the Gate result; Definition decides whether that evidence can be used.
   const repairEvidence = payload.result === "fail" && failureCategory === "semantic"
-    ? inspectCanonicalPlanGateRepair({ flowManager, state })
+    ? prospectivePublication === null ? inspectCanonicalPlanGateRepair({ flowManager, state })
+      : inspectProspectivePlanGateRepair({ state, publication: prospectivePublication })
     : null;
   const lineage = {
     sourceAttempt: { id: attempt.id, sequence: attempt.sequence },
@@ -816,7 +916,7 @@ export function readCurrentGateTransitionFacts({ flowManager, flowState, phase, 
       publication.id,
       resultSource.descriptor.hash,
     ].join(":");
-    const cycleReader = new CanonicalGateObservationCycle({ flowManager, state });
+    const cycleReader = new CanonicalGateObservationCycle({ flowManager, state, prospectivePublication });
     const cycleTransition = cycleReader.transitionRead();
     const cycleRead = cycleTransition.readModel;
     const cycles = cycleRead.cycles.filter((cycle) => cycle.occurrences.some((occurrence) => (
@@ -876,14 +976,51 @@ export function readCurrentGateTransitionFacts({ flowManager, flowState, phase, 
     nonblocking: state.policy?.nonblocking?.enabled === true,
     reviewReadiness: persistedPhase === "integration"
       ? integrationReviewReadiness({ flowManager, state })
-      : null,
+      : persistedPhase === "task-impl" ? taskReviewReadiness({ flowManager, state, taskId }) : null,
     taskLifecycle: taskLifecycleFor(state, taskId),
     taskSettlementProgress: taskId === null ? null : taskGateSettlementProgress({
       flowManager, state, nodeId, taskId, attempt, publication, activities, producerActivities, failure,
+      phase: persistedPhase, descriptor: resultSource.descriptor, historyEntry: history.current,
+      publicationBytes: resultSource.bytes, prospective: prospectivePublication !== null,
       catalogFingerprint: resultSource.descriptor.hash,
       lineage,
       classificationRecorded,
       classificationMismatch: failureResolution.classificationMismatch,
     }),
+  });
+}
+
+/** Reuse exact canonical Gate observation checks before the selected atomic publication. */
+export function readProspectiveImplementationGateEvidence({ flowManager, binding, commandResult, publication, root = null, taskFrontier = null }) {
+  const state = binding.assertCurrent();
+  const phase = binding.taskId == null && binding.stepId === "impl-gate" ? "integration" : "task-impl";
+  const facts = readCurrentGateTransitionFacts({ flowManager, flowState: flowManager.loadReadOnly(state.specId),
+    phase, root, prospectivePublication: publication });
+  if (facts === null) throw new StepAdmissionRefusal("Implementation Gate has no exact prospective observation");
+  const attached = attachedCanonicalCommandResultArtifact(commandResult);
+  if (attached?.logicalKey !== (phase === "integration" ? "impl.gate" : "task.gate")) {
+    throw new StepAdmissionRefusal("Implementation Gate publication does not match its phase");
+  }
+  return ImplementationGateResultEvidence.fromTransitionFacts(facts,
+    taskFrontier ?? (facts.scope === "task" ? flowManager.readImplementationTaskFrontier(state.specId) : null));
+}
+
+/** Read the active Gate's execution identity and budgets without an evaluator observation. */
+export function readImplementationGateExecutionEvidence({ flowManager, binding }) {
+  const state = binding.assertCurrent();
+  const taskId = binding.taskIdentity?.taskId ?? null;
+  const nodeId = binding.nodeId;
+  const phase = taskId === null ? "integration" : "task-impl";
+  if (taskId !== null) taskReviewReadiness({ flowManager, state, taskId });
+  const retry = gateRetryUsage({ state, activities: flowManager.activityLedger(state.specId),
+    nodeId, attempt: state.attempt, phase, failureCategory: "semantic" });
+  return new ImplementationGateResultEvidence({
+    identity: new GateTargetBinding({ runId: state.runId, specId: state.specId,
+      taskId, stepId: nodeId, attempt: state.attempt }),
+    retry: new GateRetryMetrics(retry), nonblocking: state.policy?.nonblocking?.enabled === true,
+    taskBudget: taskId === null ? null : new GateTaskBudget({
+      round: flowManager.taskMutationLineages({ specId: state.specId, taskId }).at(-1).budget.round,
+    }),
+    taskFrontier: taskId === null ? null : flowManager.readImplementationTaskFrontier(state.specId),
   });
 }

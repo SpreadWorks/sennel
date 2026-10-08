@@ -1,3 +1,4 @@
+import { TaskStepIdentity } from "./task-step-identity.js";
 /**
  * src/flow/lib/run-complete-task.js
  *
@@ -17,7 +18,7 @@ function soleJustCompletedTaskId(flowManager, state) {
   const latest = flowManager.activityLedger(state.specId).at(-1) ?? null;
   if (latest?.transition?.operation !== "confirm_attempt") return null;
   const candidate = (state.tasks || []).find((task) => (
-    task.id && latest.nodeId === `${task.id}-gate`
+    task.id && new TaskStepIdentity({ taskId: task.id, role: "gate" }).matchesNode(latest.nodeId)
       && task.status === "done"
       && (task.steps || []).every((step) => ["done", "skipped"].includes(step.status))
   )) ?? null;

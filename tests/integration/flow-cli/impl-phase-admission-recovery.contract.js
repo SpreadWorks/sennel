@@ -108,11 +108,29 @@ for (const [phase, committed] of [["before-json-rename", false], ["before-json-d
     const catalog = scenario.manager.specLocation(scenario.specId).catalogFile;
     const stop = Object.assign(new Error(`Injected catalog ${phase}`), { code: "EIO" });
     let hits = 0;
-    scenario.reloadWithFault((boundary) => {
-      if (boundary.filePath === catalog && boundary.phase === phase && hits++ === 0) throw stop;
+    let acknowledgementUnavailable = false;
+    let readHits = 0;
+    const open = fs.openSync;
+    const readFault = t.mock.method(fs, "openSync", function (file, ...args) {
+      if (acknowledgementUnavailable && String(file) === catalog) {
+        readHits += 1;
+        throw Object.assign(new Error("committed catalog acknowledgement unavailable"), { code: "EIO" });
+      }
+      return open.call(this, file, ...args);
     });
-    assert.throws(() => scenario.recovery(), WorkerArtifactHandoffError);
+    scenario.reloadWithFault((boundary) => {
+      if (boundary.filePath === catalog && boundary.phase === phase && hits++ === 0) {
+        // Exact receipt recovery acknowledges a readable committed write.
+        // This scenario loses both the write response and that readback until
+        // a fresh manager resumes; it must retain its expected failure.
+        acknowledgementUnavailable = committed;
+        throw stop;
+      }
+    });
+    try { assert.throws(() => scenario.recovery(), WorkerArtifactHandoffError); }
+    finally { readFault.mock.restore(); }
     assert.ok(hits > 0, "the real atomic catalog boundary must be reached");
+    if (committed) assert.ok(readHits > 0, "the actual committed receipt readback must also be unavailable");
     scenario.reload();
     const authority = scenario.authority(work.request);
     assert.equal(authority.settlement?.kind ?? null, committed ? "accepted" : null);

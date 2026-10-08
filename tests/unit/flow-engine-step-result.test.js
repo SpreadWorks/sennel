@@ -90,9 +90,58 @@ test("StepResult is abstract and every concrete Result has one unique fixed cont
     ["TestGenerateExternalBlockedResult", "test-generate", "test-generate-external-blocked", "error"],
     ["TestReviewExternalBlockedResult", "test-review", "test-review-external-blocked", "error"],
     ["TestRepairExternalBlockedResult", "test-repair", "test-repair-external-blocked", "error"],
+    ["ImplementWorkerRequiredResult", "implement", "implement-worker-required", "loop-required"],
+    ["ImplementAppliedResult", "implement", "implement-applied", "completed"],
+    ["ImplementExistingCompletionResult", "implement", "implement-existing-completion", "completed"],
+    ["ImplementQualityIssueResult", "implement", "implement-quality-issue", "completed"],
+    ["TaskImplementationWorkerRequiredResult", "task-impl", "task-impl-worker-required", "loop-required"],
+    ["TaskImplementationAppliedResult", "task-impl", "task-impl-applied", "completed"],
+    ["TaskImplementationNoChangeResult", "task-impl", "task-impl-no-change", "completed"],
+    ["TaskImplementationQualityIssueResult", "task-impl", "task-impl-quality-issue", "completed"],
+    ["TaskReviewExecutionRequiredResult", "task-review", "task-review-execution-required", "loop-required"],
+    ["TaskReviewFindingsResult", "task-review", "task-review-findings", "branch-required"],
+    ["TaskReviewGateRequiredResult", "task-review", "task-review-gate-required", "completed"],
+    ["TaskReviewNoChangeCompletedResult", "task-review", "task-review-no-change-completed", "completed"],
+    ["TaskReviewUnavailableResult", "task-review", "task-review-unavailable", "completed"],
+    ["TaskTriageFilterRequiredResult", "task-triage", "task-triage-filter-required", "user-input-required"],
+    ["TaskTriageRepairRequiredResult", "task-triage", "task-triage-repair-required", "branch-required"],
+    ["TaskTriageGateRequiredResult", "task-triage", "task-triage-gate-required", "completed"],
+    ["TaskTriageNoChangeCompletedResult", "task-triage", "task-triage-no-change-completed", "completed"],
+    ["TaskTriageCorrectionRequiredResult", "task-triage", "task-triage-correction-required", "loop-required"],
+    ["TaskTriageUnreviewedGateResult", "task-triage", "task-triage-unreviewed-gate", "branch-required"],
+    ["TaskRepairWorkerRequiredResult", "task-repair", "task-repair-worker-required", "loop-required"],
+    ["TaskRepairReviewRequiredResult", "task-repair", "task-repair-review-required", "loop-required"],
+    ["TaskRepairUnreviewedGateResult", "task-repair", "task-repair-unreviewed-gate", "branch-required"],
+    ["TaskGateExecutionRequiredResult", "task-gate", "task-gate-execution-required", "loop-required"],
+    ["TaskGatePassedResult", "task-gate", "task-gate-passed", "completed"],
+    ["TaskGateRepairRequiredResult", "task-gate", "task-gate-repair-required", "loop-required"],
+    ["TaskGateRetryRequiredResult", "task-gate", "task-gate-retry-required", "loop-required"],
+    ["TaskGateDeferredResult", "task-gate", "task-gate-deferred", "branch-required"],
+    ["TaskGateAwaitingDecisionResult", "task-gate", "task-gate-awaiting-decision", "user-input-required"],
+    ["TestExecutionRequiredResult", "test-execute", "test-execute-execution-required", "loop-required"],
+    ["TestExecutionObservedResult", "test-execute", "test-execute-observed", "completed"],
+    ["TestEvidenceAcceptedResult", "test-result-review", "test-result-review-evidence-accepted", "completed"],
+    ["TestEvidenceRejectedResult", "test-result-review", "test-result-review-evidence-rejected", "loop-required"],
+    ["ImplReviewExecutionRequiredResult", "impl-review", "impl-review-execution-required", "loop-required"],
+    ["ImplReviewPassedResult", "impl-review", "impl-review-passed", "completed"],
+    ["ImplReviewAdvisoryResult", "impl-review", "impl-review-advisory", "completed"],
+    ["ImplReviewRejectedResult", "impl-review", "impl-review-rejected", "branch-required"],
+    ["ImplReviewToolingResult", "impl-review", "impl-review-tooling", "user-input-required"],
+    ["ImplTriageWorkerRequiredResult", "impl-triage", "impl-triage-worker-required", "loop-required"],
+    ["ImplTriageRepairRequiredResult", "impl-triage", "impl-triage-repair-required", "branch-required"],
+    ["ImplTriageGateRequiredResult", "impl-triage", "impl-triage-gate-required", "completed"],
+    ["ImplRepairWorkerRequiredResult", "impl-repair", "impl-repair-worker-required", "loop-required"],
+    ["ImplRepairAppliedResult", "impl-repair", "impl-repair-applied", "loop-required"],
+    ["ImplRepairQualityIssueResult", "impl-repair", "impl-repair-quality-issue", "loop-required"],
+    ["ImplGateExecutionRequiredResult", "impl-gate", "impl-gate-execution-required", "loop-required"],
+    ["ImplGatePassedResult", "impl-gate", "impl-gate-passed", "completed"],
+    ["ImplGateEvidenceRefreshResult", "impl-gate", "impl-gate-evidence-refresh", "loop-required"],
+    ["ImplGateSemanticFailureResult", "impl-gate", "impl-gate-semantic-failure", "branch-required"],
+    ["ImplGateAwaitingDecisionResult", "impl-gate", "impl-gate-awaiting-decision", "user-input-required"],
     ...[
       "draft", "branch", "prepare-spec", "spec", "spec-gate-repair", "spec-triage", "spec-repair", "spec-gate", "spec-review", "draft-questions-review", "draft-questions-triage", "draft-questions-repair", "draft-refine",
       "draft-coverage-review", "draft-coverage-triage", "draft-coverage-repair", "draft-gate", "draft-gate-repair", "approval", "test-generate", "test-repair", "test-review", "test-gate",
+      "implement", "task-impl", "task-review", "task-triage", "task-repair", "task-gate", "test-execute", "test-result-review", "impl-review", "impl-triage", "impl-repair", "impl-gate",
     ].map((stepId) => ["StepErrorResult", stepId, `${stepId}-error`, "error"]),
   ];
   assert.throws(() => new StepResult(), /abstract/);
@@ -186,4 +235,27 @@ test("Step.execute accepts only a concrete StepResult boundary", async () => {
   class InvalidStep extends Step { async _execute() { return { kind: "draft-created" }; } }
   assert.equal(await new ValidStep().execute() instanceof DraftCreatedResult, true);
   await assert.rejects(() => new InvalidStep().execute(), /must return a StepResult/);
+});
+
+test("Step.execute starts its asynchronous operation immediately and waits for acknowledgement", async (t) => {
+  let started = false;
+  let acknowledged = false;
+  let release;
+  const acknowledgement = new Promise((resolve) => { release = resolve; });
+  t.after(() => release());
+  class AcknowledgedStep extends Step {
+    async _execute() {
+      started = true;
+      await acknowledgement;
+      acknowledged = true;
+      return new DraftCreatedResult();
+    }
+  }
+  const execution = new AcknowledgedStep().execute();
+  assert.equal(started, true, "synchronous callers must observe the operation's immediate prefix");
+  assert.equal(acknowledged, false, "execution must not complete before its acknowledgement");
+  assert.ok(execution instanceof Promise);
+  release();
+  assert.ok(await execution instanceof DraftCreatedResult);
+  assert.equal(acknowledged, true);
 });

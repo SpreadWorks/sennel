@@ -14,6 +14,7 @@ import { AtomicFile } from "../../lib/atomic-file.js";
 import { PRODUCT } from "../../lib/product.js";
 import { captureRegularFile } from "../../lib/regular-file-snapshot.js";
 import { FlowArtifactAttemptHistory } from "../../lib/flow-artifact-contract.js";
+import { TaskStepIdentity } from "./task-step-identity.js";
 import { CanonicalSpecReview, SpecReviewDelta, mergeSpecReviewDelta } from "./spec-review-artifacts.js";
 import { readTaskReviewAbortedWorkUnit } from "./task-review-aborted-work-unit.js";
 import {
@@ -259,7 +260,8 @@ export class ReviewWorkUnit {
 function expectedNodeForManifest(manifest) {
   if (manifest.phase === "draft-questions" || manifest.phase === "draft-coverage") return `${manifest.phase}-review`;
   if (manifest.phase === "spec" || manifest.phase === "test") return `${manifest.phase}-review`;
-  if (manifest.phase === "impl") return manifest.taskId === null ? "impl-review" : `${manifest.taskId}-review`;
+  if (manifest.phase === "impl") return manifest.taskId === null ? "impl-review"
+    : new TaskStepIdentity({ taskId: manifest.taskId, role: "review" }).nodeId;
   throw new Error("review work unit manifest phase is not recognized");
 }
 

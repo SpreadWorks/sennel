@@ -193,6 +193,7 @@ export class NonGateCompletionFacts {
   }
 
   toJSON() { return { completed: this.completed, partial: this.partial }; }
+  get refusalReason() { return this.partial ? "partial_completion" : this.completed ? null : "completion_unconfirmed"; }
 }
 
 /** Retry accounting is read from canonical state; commands never reconstruct it. */

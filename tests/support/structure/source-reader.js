@@ -620,6 +620,43 @@ export function readMemberAccess(tokens, receiverIndex, receiverStart = receiver
   return new SourceMemberAccess(token, token.value, tokens[call]?.value === "(");
 }
 
+/** Read one statically named object property or method, rejecting duplicate slots. */
+export function readObjectProperty(tokens, name) {
+  const open = tokens.findIndex((token) => token.value === "{");
+  if (open < 0) return null;
+  const close = matching(tokens, open);
+  const matches = [];
+  for (let index = open + 1; index < close; index++) {
+    const token = tokens[index];
+    if (token.value === name && ["{", ","].includes(tokens[index - 1]?.value)
+      && tokens[index + 1]?.value === ":") {
+      const start = index + 2;
+      let end = start;
+      for (; end < close; end++) {
+        if (["(", "[", "{"].includes(tokens[end].value)) {
+          end = matching(tokens, end, tokens[end].value, { "(": ")", "[": "]", "{": "}" }[tokens[end].value]);
+        } else if (tokens[end].value === ",") break;
+      }
+      matches.push(new SourceInitializer(token, index, tokens.slice(start, end)));
+      index = end;
+    } else if (token.kind === "identifier" && token.value === name
+      && ["{", ","].includes(tokens[index - 1]?.value)
+      && [",", "}"].includes(tokens[index + 1]?.value)) {
+      matches.push(new SourceInitializer(token, index, [token]));
+    } else if (token.value === name && tokens[index + 1]?.value === "(") {
+      const parametersEnd = matching(tokens, index + 1, "(", ")");
+      if (tokens[parametersEnd + 1]?.value !== "{") return null;
+      const end = matching(tokens, parametersEnd + 1);
+      matches.push(new SourceDeclaration(name, tokens.slice(index, end + 1),
+        tokens[index - 1]?.value === "async" ? [tokens[index - 1]] : []));
+      index = end;
+    } else if (["(", "[", "{"].includes(token.value)) {
+      index = matching(tokens, index, token.value, { "(": ")", "[": "]", "{": "}" }[token.value]);
+    }
+  }
+  return matches.length === 1 ? matches[0] : null;
+}
+
 /** Read named calls without executing the composition module. */
 export function readInvocations(module) {
   const tokens = module.tokens;
@@ -1196,8 +1233,13 @@ export class SourceModule {
   }
 
   declarationHeader(name) {
-    if (this.declarationHeaders === null) this.declarationHeaders = readDeclarationHeaders(this);
+    this.declarationNames();
     return this.declarationHeaders.get(name) ?? null;
+  }
+
+  declarationNames() {
+    if (this.declarationHeaders === null) this.declarationHeaders = readDeclarationHeaders(this);
+    return this.declarationHeaders.keys();
   }
 
   declaration(name) {

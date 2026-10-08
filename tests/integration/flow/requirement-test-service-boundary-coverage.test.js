@@ -45,9 +45,9 @@ for (const [stepId, lookup] of [
 test("A07/A10/A12 real approval, generation, Review, repair and Gate all construct private Services with declared arguments", async (t) => {
   // This assertion gate deliberately precedes scenario creation and dynamic
   // composition loading. Current absence is contract red, never an import error.
-  const registrations = await production.load();
+  const { selected: registrations, registry } = await production.registry();
   const coverage = new ServiceBoundaryCoverage(registrations);
-  const observer = new PrepareExecutionObserver(t, { registrations, stepIds });
+  const observer = new PrepareExecutionObserver(t, { registrations: registry, stepIds });
   const scenario = RequirementTestPhaseScenario.create(t, {
     reviewResponse: rejectFirstRequirementReview,
   });

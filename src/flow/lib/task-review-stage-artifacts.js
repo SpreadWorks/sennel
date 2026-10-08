@@ -1,7 +1,8 @@
 import crypto from "node:crypto";
 import { TaskRepairRecurrence } from "./review-recurrence.js";
 import { CanonicalCommandAttemptArtifactHistory } from "./canonical-command-result.js";
-import { TaskReviewAccounting } from "./task-review-accounting.js";
+import { TaskReviewAccounting, canonicalTaskReviewHistory } from "./task-review-accounting.js";
+import { TaskStepIdentity } from "./task-step-identity.js";
 import { CurrentTaskSourceSnapshot, TaskMutationLineageSet } from "./task-mutation-lineage.js";
 import { SourceTriageEffect } from "./source-triage-contract.js";
 import { ApprovedFindingExceptionSet } from "./acknowledged-rationale.js";
@@ -206,10 +207,11 @@ export class TaskStageArtifact {
       throw new Error(`canonical Task ${role} publication is required`);
     }
     const bytes = flowManager.readArtifact({ specId: state.specId, logicalKey: this.logicalKey, parameters: { taskId }, consumerNodeId: "system" }).bytes;
-    this.history = CanonicalCommandAttemptArtifactHistory.fromBytes({ logicalKey: this.logicalKey, bytes });
+    const history = CanonicalCommandAttemptArtifactHistory.fromBytes({ logicalKey: this.logicalKey, bytes });
     const activity = flowManager.activityLedger(state.specId).find((entry) => entry.id === descriptor.activityId);
-    if (activity?.nodeId !== `${taskId}-${role}` || activity.sequence !== this.history.current.attempt) throw new Error(`canonical Task ${role} producer does not match its history`);
-    this.document = this.history.current.payload;
+    if (activity?.nodeId !== new TaskStepIdentity({ taskId, role }).nodeId || activity.sequence !== history.current.attempt) throw new Error(`canonical Task ${role} producer does not match its history`);
+    this.history = role === "review" ? canonicalTaskReviewHistory({ flowManager, state, taskId, history, descriptor, bytes }) : history;
+    this.document = history.current.payload;
     this.reference = new TaskStageArtifactReference({ logicalKey: this.logicalKey, digest: descriptor.hash, payloadDigest: hash(this.document), activityId: descriptor.activityId, attemptId: activity.attemptId, sequence: activity.sequence });
     Object.freeze(this);
   }
@@ -223,6 +225,9 @@ export class TaskReviewStageInputs {
     this.taskId = taskId;
     this.lineageSet = new TaskMutationLineageSet({ runId: state.runId, specId: state.specId, taskId, lineages: flowManager.taskMutationLineages({ specId: state.specId, taskId }) });
     this.review = new TaskStageArtifact({ flowManager, state, taskId, role: "review" });
+    if (this.review.history?.current.attempt !== this.review.reference.sequence) {
+      throw new Error("Task stage requires its latest Review's completed Result and receipt");
+    }
     this.triage = stage === "task-repair" ? new TaskStageArtifact({ flowManager, state, taskId, role: "triage" }) : null;
     const accounting = new TaskReviewAccounting({ taskId, budget: this.lineageSet.currentBudget, history: this.review.history });
     const spec = flowManager.readArtifact({ specId: state.specId, logicalKey: "spec.record", consumerNodeId: "system" });

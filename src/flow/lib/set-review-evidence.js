@@ -1,3 +1,4 @@
+import { TaskStepIdentity } from "./task-step-identity.js";
 import { FlowCommand } from "./base-command.js";
 import { Envelope } from "../../lib/flow-envelope.js";
 import { findActiveNode, resolveMaxAttempts } from "../definition.js";
@@ -68,7 +69,7 @@ function canonicalReviewNode(ctx, { phase, taskId }) {
   if (
     typeof nodeId !== "string"
     || PHASE_BY_REVIEW_STEP[nodeId] !== phase
-    || (taskId === null ? nodeId === "task-review" : activeNodeId !== `${taskId}-review`)
+    || (taskId === null ? nodeId === "task-review" : !new TaskStepIdentity({ taskId, role: "review" }).matchesNode(activeNodeId))
   ) {
     const error = new Error("review evidence can be registered only for the active review step");
     error.code = "REVIEW_TARGET_NOT_ACTIVE";

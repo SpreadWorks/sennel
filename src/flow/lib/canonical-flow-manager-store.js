@@ -1,3 +1,26 @@
+import { ImplReviewResultEvidence } from "./impl-review-values.js";
+import { AcceptedNonblockingDecision, AcceptedNonblockingPublication } from "./accepted-nonblocking-decision.js";
+import { AcceptedNonblockingBindingContinuation } from "../engine/connectors/impl/accepted-nonblocking-binding.js";
+import { ReviewStepFailureObservation } from "./review-step-failure-values.js";
+import { NonGateAttemptIdentity, NonGateTargetBinding } from "./non-gate-transition.js";
+import { ActivityFailure } from "./current-flow-state.js";
+import { ReviewWorkUnit } from "./review-work-unit.js";
+import { admitGateTransition } from "./gate-transition-application.js";
+import { attachedCanonicalReviewWorkUnit, canonicalReviewEvidencePublications } from "./canonical-review-artifacts.js";
+import { hasImplementationStepContract } from "../engine/step-result.js";
+import { ImplementationGateResultEvidence } from "./gate-observation-values.js";
+import { AcceptedGateDeferral, AcceptedGateFindingsPublication } from "./accepted-gate-deferral.js";
+import { GateAttemptIdentity } from "./gate-transition.js";
+import { AcceptedGateDeferralBindingContinuation } from "../engine/connectors/impl/accepted-gate-deferral-binding.js";
+import { TaskStepBinding } from "../engine/connectors/task/task-step-binding.js";
+import { TestChainResultEvidence } from "./test-chain-values.js";
+import { TaskHostFilterAuthority } from "./task-review-host-filter-values.js";
+import { ImplementationGateIssuePublication, taskGateSettlementIssueLogId } from "./gate-issue-publication.js";
+import { settleImplStepResult, settleTaskStepResult, ImplementationExecutionSettlement,
+  ImplementationAwaitDecision, SourceStepApplication, TaskStageApplication,
+  GateResultApplication, TestChainApplication, ImplReviewApplication } from "../definition.js";
+import { SourceStepSelection } from "./source-effect-values.js";
+import { ImplementationTaskFrontier } from "./source-effect-values.js";
 import { PreparationEvidence } from "./preparation-evidence.js";
 import { StepAdmissionRefusal } from "./step-admission-refusal.js";
 import { projectAdvisorySummary } from "./advisory-summary.js";
@@ -24,17 +47,13 @@ import {
   InterruptedFinalizeSyncRuntimeLogFact,
   NonGateFailCurrentAttemptAction,
   NonGateIncrementRetryAction,
-  NonGateRecordNonblockingAction,
   NonGateSetStepStatusAction,
   NonGateTransitionDecision,
   RetroStaleEvidenceRecoveryDecision,
   GateTransitionDecision,
   TaskExecutionOverrunDecision,
   resolveGateTransition,
-  resolveNonGateTransition,
   resolveTaskExecutionOverrun,
-  testExecuteTransitionDefinition,
-  testResultReviewTransitionDefinition,
   DefinitionNonblockingEligibility,
   resolveSourceQualityIssueRecoveryPlan,
   TaskReviewStageBinding, TaskReviewStageFacts, TaskReviewUnavailableEvidence, TaskReviewFailureFacts, TaskReviewFailurePlan, resolveTaskReviewFailure, resolveTaskReviewStageTransition,
@@ -126,12 +145,13 @@ import { managedDir } from "../../lib/config.js";
 import { validateSpecJsonObject } from "../../lib/spec-json.js";
 import {
   FLOW_ARTIFACT_CONTRACTS,
+  FlowArtifactAttemptHistoryContent,
   FlowArtifactAttemptHistory,
   FlowArtifactAttemptRecord,
   FlowArtifactUpdater,
 } from "../../lib/flow-artifact-contract.js";
 import { FlowSpecId } from "../../lib/flow-spec-id.js";
-import { FlowVersion } from "../../lib/flow-version.js";
+import { FlowVersion, FlowArtifactDescriptor, FlowArtifactCatalog } from "../../lib/flow-version.js";
 import {
   ActivityMetric,
   ActivityNote,
@@ -139,6 +159,7 @@ import {
   ActivityDispatchApproval,
   CurrentAttempt,
   CurrentAttemptIdentity,
+  NodeResult,
   ActivityReferences,
   CanonicalFlowArtifactWrite,
   CanonicalFlowArtifactBaseline,
@@ -171,7 +192,7 @@ import {
   attachCanonicalCommandResultArtifact, CanonicalCommandResultArtifact,
   attachedCanonicalCommandResultPublications,
 } from "./canonical-command-result.js";
-import { attachedTaskReviewPublicationBinding } from "./canonical-review-artifacts.js";
+import { attachedTaskReviewPublicationBinding, readProspectiveImplReviewEvidence } from "./canonical-review-artifacts.js";
 import {
   canonicalPlanGateRepairForTarget,
   createProspectivePlanGateRepairRecord,
@@ -189,7 +210,7 @@ import { CanonicalTaskContext } from "./task-canonical-context.js";
 import { TaskStepIdentity } from "./task-step-identity.js";
 import { TaskReviewReconciliationRecord } from "./task-review-reconciliation-record.js";
 import { TaskReviewReconciliationAdmission } from "./task-review-reconciliation.js";
-import { readCurrentGateTransitionFacts } from "./gate-transition-facts.js";
+import { readCurrentGateTransitionFacts, readProspectiveImplementationGateEvidence } from "./gate-transition-facts.js";
 import { readTaskExecutionOverrunFacts, TaskExecutionOverrunAdmission } from "./task-execution-overrun.js";
 import { CanonicalImplementationRepairRecord } from "./review-recurrence.js";
 import { buildDeferredSemanticFindingsPublication, DeferredFlowFindingsPublication } from "./flow-findings.js";
@@ -198,8 +219,7 @@ import { finalizationOutboxIdentity } from "./flow-outbox.js";
 import { FinalizeSyncInterruptedError } from "./finalize-sync-diagnostics.js";
 import { CanonicalTestSourceRevision } from "./canonical-test-artifacts.js";
 import { buildRepairFingerprint } from "./repair-fingerprint.js";
-import { sameNonGateTransitionDecision } from "./non-gate-transition-application.js";
-import { readTestChainTransitionFactsFromSnapshot, TestChainTransitionSnapshot } from "./test-chain-transition-facts.js";
+import { readTestChainTransitionFactsFromSnapshot, TestChainTransitionSnapshot, readCurrentTestChainSettlement } from "./test-chain-transition-facts.js";
 import { CanonicalOverviewUpdate } from "./canonical-overview-update.js";
 import { CanonicalSpecApproval } from "./canonical-spec-approval.js";
 import { RequirementTestPlan, RequirementTestPlanPublication, RequirementTestSourceAttempt } from "./requirement-test-lifecycle.js";
@@ -218,7 +238,7 @@ import {
 } from "./requirement-test-transition.js";
 import { RequirementTestLifecycleAuthority } from "./requirement-test-lifecycle.js";
 import { CanonicalFileMapUpdate, CanonicalSourceRequirementAuthority } from "./canonical-file-map.js";
-import { CanonicalCommandAttemptArtifactHistory } from "./canonical-command-result.js";
+import { CanonicalCommandAttemptArtifactHistory, CanonicalCommandArtifactObservation } from "./canonical-command-result.js";
 import { CanonicalRequirementDefinitions } from "./canonical-requirement-definitions.js";
 import { buildNonblockingAcceptanceHandoffPublication } from "./nonblocking-handoff.js";
 import { validateNonblockingRecordForActiveFlow } from "./nonblocking.js";
@@ -282,7 +302,6 @@ import { TaskReviewAbortedWorkUnit, TaskReviewAbortedWorkUnitRetryAdmission } fr
 import { validateUpgradeResultArtifact } from "./upgrade-result-artifact.js";
 import {
   taskGateSettlementIssueLogActivityId,
-  taskGateSettlementIssueLogId,
   taskGateSettlementMetricActivityId,
 } from "./canonical-gate-artifacts.js";
 import { TaskGateClassificationRecoveryIdentity } from "./task-gate-classification-recovery.js";
@@ -470,115 +489,10 @@ function timestampAfter(value) {
   return new Date(timestamp + 1).toISOString();
 }
 
-function testChainPlanDigest(decision) {
-  const plan = JSON.stringify(decision.plan.toJSON());
-  return crypto.createHash("sha256").update(plan).digest("hex");
-}
-
-function testChainPlanActivityId(decision) {
-  return `test-chain-plan-${testChainPlanDigest(decision)}`;
-}
-
-function testChainPlanTiming(state) {
-  const timestamp = state.attempt?.startedAt;
-  if (typeof timestamp !== "string" || timestamp === "") {
-    throw new CurrentFlowStateInvariantError("test-chain plan settlement requires the current Attempt timestamp");
-  }
-  return Object.freeze({ startedAt: timestamp, finishedAt: timestamp, durationMs: 0 });
-}
-
-function testChainPlanResult(state, { outcome, summary }) {
-  return Object.freeze({
-    outcome,
-    summary,
-    confirmedAt: testChainPlanTiming(state).finishedAt,
-    artifactRefs: [],
-  });
-}
-
-function testChainReplacementAttempt(state, nodeId, decision) {
-  const node = state.findNode(nodeId);
-  if (node === null || node.steps.length !== 0) {
-    throw new CurrentFlowStateInvariantError("test-chain plan replacement target must be a definition leaf");
-  }
-  const requiredResources = state.definition.contractForNode(node).resourceContract.required;
-  return new CurrentAttempt({
-    id: `attempt-${nodeId}-test-chain-${testChainPlanDigest(decision)}`,
-    nodeId,
-    sequence: node.attemptSequence + 1,
-    startedAt: testChainPlanTiming(state).startedAt,
-    consumption: { semantic: 0, tooling: 0 },
-    failure: null,
-    blocker: null,
-    incomplete: [],
-    operationClaims: requiredResources.length === 0
-      ? []
-      : [{ operation: "resolve-command-context", resources: requiredResources }],
-  }).toJSON();
-}
-
 function hasExactTestChainStatus(actions, { stepId, status }) {
   return actions.length === 1
     && actions[0].update.stepId === stepId
     && actions[0].update.status === status;
-}
-
-/**
- * Rechecks the Definition-selected action against the authoritative catalog
- * while the Version Store holds its publication lock. This is deliberately a
- * verifier, never another route selector.
- */
-class TestChainPlanAdmission {
-  constructor(decision) {
-    if (!(decision instanceof NonGateTransitionDecision)) {
-      throw new CurrentFlowStateInvariantError("test-chain plan admission requires a typed Definition decision");
-    }
-    this.decision = decision;
-    this.facts = decision.facts;
-    Object.freeze(this);
-  }
-
-  assert(view) {
-    const { state, catalog, activities } = view;
-    const descriptors = Array.isArray(catalog) ? catalog : catalog.artifacts;
-    if (state.runId !== this.facts.runId
-      || state.specId !== this.facts.specId
-      || state.current?.at(-1) !== this.facts.stepId
-      || state.attempt?.id !== this.facts.currentAttempt.id
-      || state.attempt?.sequence !== this.facts.currentAttempt.sequence) {
-      throw new CurrentFlowStateConflictError("Definition plan no longer addresses the current test-chain Attempt");
-    }
-    for (const publication of [this.facts.catalogPublication, this.facts.sourcePublication]) {
-      const descriptor = descriptors.find((entry) => entry.relativePath === publication.artifactId) ?? null;
-      const activity = activities.find((entry) => entry.id === publication.producerActivityId) ?? null;
-      if (descriptor === null || descriptor.hash !== publication.fingerprint
-        || descriptor.activityId !== publication.producerActivityId
-        || activity === null || activity.nodeId !== publication.stepId
-        || activity.attemptId !== publication.attempt.id
-        || activity.sequence !== publication.attempt.sequence) {
-        throw new CurrentFlowStateConflictError("Definition plan catalog publication changed before settlement");
-      }
-    }
-    const definition = TEST_CHAIN_TRANSITION_DEFINITIONS[this.facts.stepId] ?? null;
-    if (definition === null) {
-      throw new CurrentFlowStateInvariantError("test-chain plan admission has no Definition");
-    }
-    let current;
-    try {
-      const facts = readTestChainTransitionFactsFromSnapshot({
-        snapshot: new TestChainTransitionSnapshot(view),
-        readCatalogedArtifact: (descriptor) => view.readCatalogedArtifact(descriptor),
-        readRuntimeArtifact: (input) => view.readRuntimeArtifact(input),
-      });
-      current = resolveNonGateTransition(facts, definition);
-    } catch (error) {
-      if (error instanceof CurrentFlowStateConflictError) throw error;
-      throw new CurrentFlowStateConflictError(`Definition plan facts changed before settlement: ${error.message}`);
-    }
-    if (!sameNonGateTransitionDecision(this.decision, current)) {
-      throw new CurrentFlowStateConflictError("Definition plan changed before test-chain settlement");
-    }
-  }
 }
 
 /** One catalog slot observed before a Requirement lifecycle publication. */
@@ -1263,7 +1177,7 @@ class TaskGateFallbackFailureAdmission {
     this.attempt = CurrentAttemptIdentity.from(attempt);
     this.nodeId = requiredText(nodeId, "Task Gate fallback nodeId");
     this.taskId = requiredText(taskId, "Task Gate fallback taskId");
-    if (this.nodeId !== `${this.taskId}-gate`) {
+    if (!new TaskStepIdentity({ taskId: this.taskId, role: "gate" }).matchesNode(this.nodeId)) {
       throw new CurrentFlowStateInvariantError("Task Gate fallback node does not match its Task");
     }
     Object.freeze(this);
@@ -1292,7 +1206,7 @@ class TaskGateFallbackFailureAdmission {
 
 /** Re-admits one Task Gate metric against the exact published producer view. */
 export class TaskGateSettlementAdmission {
-  constructor(decision, effect, issueEntry = null) {
+  constructor(decision, effect, issueEntry = null, sourceAdmission = null, publicationFacts = null) {
     if (!(decision instanceof GateTransitionDecision) || decision.facts.scope !== "task") {
       throw new CurrentFlowStateInvariantError("Task Gate settlement admission requires a Task Gate decision");
     }
@@ -1300,7 +1214,16 @@ export class TaskGateSettlementAdmission {
       throw new CurrentFlowStateInvariantError("Task Gate settlement admission requires a canonical snapshot revision");
     }
     this.decision = decision;
-    this.facts = decision.facts;
+    if (sourceAdmission !== null && (!(sourceAdmission instanceof SavedStepPublicationAdmission)
+      || effect !== "continuation" || publicationFacts?.scope !== "task"
+      || publicationFacts.target.stepId !== decision.facts.target.stepId
+      || publicationFacts.currentAttempt.id !== decision.facts.currentAttempt.id
+      || publicationFacts.currentAttempt.sequence !== decision.facts.currentAttempt.sequence
+      || !sourceAdmission.source.settlement.application?.decision?.plan.action.identity.matches(decision.plan.action.identity))) {
+      throw new CurrentFlowStateInvariantError("Task Gate continuation requires its saved source and current publication proof");
+    }
+    this.sourceAdmission = sourceAdmission;
+    this.facts = publicationFacts ?? decision.facts;
     this.effect = requiredText(effect, "Task Gate settlement effect");
     if (!["classification-recovery", "classification", "metric", "issue-log", "terminal", "continuation"].includes(this.effect)) {
       throw new CurrentFlowStateInvariantError("Task Gate settlement effect is invalid");
@@ -1316,6 +1239,7 @@ export class TaskGateSettlementAdmission {
   }
 
   assert(view) {
+    this.sourceAdmission?.assert(view);
     const { state, catalog, activities } = view;
     if (view.revision !== this.facts.snapshotRevision) {
       throw new CurrentFlowStateConflictError("Task Gate settlement snapshot changed before effect recording");
@@ -1342,7 +1266,8 @@ export class TaskGateSettlementAdmission {
       bytes: view.readCatalogedArtifact(descriptor),
     });
     if (history.current.attempt !== this.facts.currentAttempt.sequence
-      || !resolveGateTransition(this.facts).plan.action.identity.matches(this.decision.plan.action.identity)) {
+      || this.sourceAdmission === null
+        && !resolveGateTransition(this.facts).plan.action.identity.matches(this.decision.plan.action.identity)) {
       throw new CurrentFlowStateConflictError("Task Gate settlement decision changed before effect recording");
     }
     const progress = this.facts.taskSettlementProgress;
@@ -1403,6 +1328,51 @@ class DraftWorkerRecoveryReader {
   readCanonicalTransitionView({ read }) { return read(this.view); }
   specLocation() { return this.view.location; }
   readArtifact(input) { return this.store.readArtifact({ ...input, view: this.view }); }
+}
+
+/** An ordinary Await observes current persisted questions without publishing new work. */
+function isOrdinaryDraftAwaitSettlement(input) {
+  return input.binding?.stepId === "draft-refine"
+    && input.stepResult instanceof DraftRefineAwaitingAnswerResult
+    && input.settlement instanceof DraftAwaitUserDecision
+    && input.awaitQuestion instanceof DraftAwaitQuestionIdentity
+    && [input.artifactWrites, input.artifactRemovals, input.artifactBaselines]
+      .every((entries) => entries === undefined || Array.isArray(entries) && entries.length === 0)
+    && input.commandResult === undefined
+    && input.references === undefined && input.specRecord === undefined && input.testSourceBaseline === undefined
+    && input.executionLifecycle === undefined && input.executionBinding === undefined
+    && (input.lifecycleResult ?? null) === null && (input.draftCompletionApplication ?? null) === null
+    && (input.gatePublication ?? null) === null && (input.planGateRepairOutcome ?? null) === null
+    && (input.draftGateRepairSelection ?? null) === null && (input.preparation ?? null) === null
+    && (input.draftReturn ?? null) === null && (input.selectedActivityId ?? null) === null
+    && (input.result ?? null) === null && (input.deferredReceipt ?? null) === null
+    && (input.findingsPublication ?? null) === null;
+}
+
+/** Verify an already selected question identity against one atomic catalog view. */
+class DraftAwaitQuestionSourceAdmission {
+  constructor({ binding, awaitQuestion }) {
+    if (!(awaitQuestion instanceof DraftAwaitQuestionIdentity)) {
+      throw new CurrentFlowStateInvariantError("Draft Await requires its selected question identity");
+    }
+    this.binding = binding;
+    this.attempt = CurrentAttemptIdentity.from(binding.attempt);
+    this.question = awaitQuestion;
+    Object.freeze(this);
+  }
+  matches(view) {
+    if (view.state.runId !== this.binding.runId || view.state.specId !== this.binding.specId
+      || this.binding.stepId !== "draft-refine" || view.state.current?.at(-1) !== this.binding.stepId
+      || !this.attempt.matches(view.state)) return false;
+    const source = view.catalog.artifacts.find((entry) => entry.logicalKey === "draft");
+    if (source === undefined || source.hash !== this.question.sourceDigest || source.size !== this.question.sourceByteLength) return false;
+    const draft = new DraftLifecycle(JSON.parse(view.readCatalogedArtifact(source).toString("utf8")));
+    const question = draft.questionLedger?.nextAwaiting() ?? null;
+    return question?.id === this.question.questionId && question.revision === this.question.questionRevision;
+  }
+  assert(view) {
+    if (!this.matches(view)) throw new CurrentFlowStateConflictError("Draft Await question or source binding is stale");
+  }
 }
 
 class DraftWorkerRecoveryAdmission {
@@ -1588,6 +1558,13 @@ class ConditionalWorkerSettlementAdmission {
   }
 }
 
+/** The shared nominal selection-to-record admission contract. */
+function nonblockingEligibilityMatchesRecord(eligibility, record) {
+  return eligibility instanceof DefinitionNonblockingEligibility
+    && eligibility.sourceStep === record.sourceStep && eligibility.resultKind === record.resultKind
+    && eligibility.definitionDigest === record.definitionDigest;
+}
+
 /** Optimistic lock for a Definition-selected nonblocking identity. */
 class NonblockingSelectionAdmission {
   constructor({ snapshot, record } = {}) {
@@ -1620,17 +1597,14 @@ class NonblockingSelectionAdmission {
 function materializeNonblockingEffectStep(state, definitionStepId, sourceNodeId) {
   const identity = TaskStepIdentity.fromStateNode(state, sourceNodeId);
   if (identity === null) return definitionStepId;
-  if (identity.definitionId !== definitionStepId && definitionStepId.startsWith("task-")) {
-    return new TaskStepIdentity({ taskId: identity.taskId, role: definitionStepId.slice("task-".length) }).nodeId;
-  }
-  return definitionStepId.startsWith("task-") ? identity.nodeId : definitionStepId;
+  return TaskStepIdentity.fromDefinitionId({ taskId: identity.taskId, definitionId: definitionStepId })?.nodeId ?? definitionStepId;
 }
 
 function nextTaskExecutionBudget({ state, taskId, lineages }) {
   const implementations = lineages.filter((lineage) => lineage.role === "implementation");
   const task = state.findNode(taskId);
-  const review = task?.steps?.find((step) => step.id === `${taskId}-review`);
-  const gate = task?.steps?.find((step) => step.id === `${taskId}-gate`);
+  const review = task?.steps?.find((step) => new TaskStepIdentity({ taskId, role: "review" }).matchesNode(step.id));
+  const gate = task?.steps?.find((step) => new TaskStepIdentity({ taskId, role: "gate" }).matchesNode(step.id));
   return new TaskExecutionBudget({
     round: implementations.length + 1,
     reviewAttemptSequenceAtStart: review?.attemptSequence,
@@ -1659,10 +1633,6 @@ class TaskSourceHandoffPreparationAdmission {
   }
 }
 
-const TEST_CHAIN_TRANSITION_DEFINITIONS = Object.freeze({
-  "test-execute": testExecuteTransitionDefinition,
-  "test-result-review": testResultReviewTransitionDefinition,
-});
 function canonicalOutboxInput(value) {
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
     throw new CurrentFlowStateInvariantError("canonical outbox input must be an object");
@@ -1758,7 +1728,7 @@ function runtimeMetadataNode(state, stepId, location) {
   const activeId = state.current?.at(-1) ?? null;
   const active = activeId === null ? null : state.findNode(activeId);
   const taskId = active === null ? null : taskIdForNode(state, active.id);
-  if (active === null || taskId === null || active.id !== `${taskId}-${requested.slice("task-".length)}`) {
+  if (active === null || taskId === null || TaskStepIdentity.fromStateNode(state, active.id)?.definitionId !== requested) {
     throw new CurrentFlowStateInvariantError(`canonical runtime Task Step is not active: ${requested}`);
   }
   location.taskArtifactLocation(taskId);
@@ -1883,6 +1853,14 @@ function resultWithDraftStepResult(result, nodeId, stepResult, receipt) {
     stepResult: stepResult.toJSON(),
     draftSettlementReceipt: receipt.toJSON(),
   };
+}
+
+function assertGenericPublicationAllowed(state, operation) {
+  const nodeId = state.current.at(-1);
+  const stepId = TaskStepIdentity.fromStateNode(state, nodeId)?.definitionId ?? nodeId;
+  if (hasImplementationStepContract(stepId)) {
+    throw new CurrentFlowStateInvariantError(`Implementation ${operation} requires its atomic selected Result and settlement receipt`);
+  }
 }
 
 /**
@@ -2024,7 +2002,7 @@ function draftCompletionOutputBinding({ logicalKey, bytes, activityId: producing
 function gateRetryAttempt(state) {
   const nodeId = state.current?.at(-1);
   const parent = state.current === null ? null : state.findNode(state.current.at(-2));
-  const taskGate = parent instanceof TaskNode && nodeId === `${parent.id}-gate`;
+  const taskGate = parent instanceof TaskNode && new TaskStepIdentity({ taskId: parent.id, role: "gate" }).matchesNode(nodeId);
   if ((!new Set(["draft-gate", "spec-gate", "impl-gate"]).has(nodeId) && !taskGate) || state.attempt === null) {
     throw new CurrentFlowStateInvariantError("definition-owned Gate retry requires the active Gate Attempt");
   }
@@ -2307,6 +2285,386 @@ export class CanonicalFlowCreateRequest {
  * The manager's only persisted-state gateway.  No root-level flow.json
  * fallback exists here: an absent Version root is simply an absent Flow.
  */
+/** Acquired Task-stage evidence and its original validated publication intent. */
+function implementationCommandIdentity(commandResult) {
+  return commandResult == null ? null : {
+    artifact: attachedCanonicalCommandResultArtifact(commandResult)?.toJSON() ?? null,
+    publications: attachedCanonicalCommandResultPublications(commandResult).map((entry) => entry.toJSON()),
+  };
+}
+
+function savedImplementationSourceEvidence(result) {
+  return result.stepId === "test-result-review" ? TestChainResultEvidence.fromResult(result)
+    : result.evidence ?? ImplementationGateResultEvidence.fromJSON(result.error.data.evidence);
+}
+
+/** Authenticate the same saved Gate producer for explicit repair or deferral. */
+class SavedStepPublicationAdmission {
+  #flowManager;
+  constructor({ binding, source, revision, confirmationOrder, allowLive = false, flowManager = null }) {
+    this.#flowManager = flowManager;
+    this.sourceBinding = binding;
+    this.source = source;
+    this.revision = revision;
+    this.confirmationOrder = confirmationOrder;
+    this.allowLive = allowLive;
+    if (new.target === SavedStepPublicationAdmission) Object.freeze(this);
+  }
+  assert(view) {
+    const { state, activities } = view;
+    const source = this.sourceBinding;
+    const evidence = savedImplementationSourceEvidence(this.source.result);
+    const publication = evidence.publication;
+    const descriptors = Array.isArray(view.catalog) ? view.catalog : view.catalog.artifacts;
+    const descriptor = descriptors.find((entry) => entry.relativePath === publication.artifactId);
+    const latest = activities.findLast((entry) => entry.nodeId === source.nodeId
+      && entry.attemptId === source.attempt.id && entry.sequence === source.attempt.sequence
+      && entry.result?.draftSettlementReceipt != null);
+    if (view.revision !== this.revision || !(source.attempt.matchesFailed(state) || this.allowLive && source.attempt.matches(state))
+      || latest?.result.draftSettlementReceipt.id !== this.source.receipt.id
+      || stepResultDigest(latest.result.stepResult) !== this.source.receipt.resultDigest
+      || descriptor?.hash !== publication.fingerprint || descriptor.activityId !== publication.producerActivityId) {
+      throw new CurrentFlowStateConflictError("saved Gate continuation source changed before publication");
+    }
+    if (source.stepId === "test-result-review") {
+      readCurrentTestChainSettlement({ flowManager: this.#flowManager, specId: source.specId,
+        stepId: source.stepId, view, captured: this.source });
+      return;
+    }
+    const bytes = view.readCatalogedArtifact(descriptor);
+    const history = CanonicalCommandAttemptArtifactHistory.fromBytes({ logicalKey: descriptor.logicalKey, bytes });
+    const producer = activities.find((entry) => entry.id === publication.producerActivityId);
+    if (source.stepId === "impl-review") {
+      DraftStepSettlementReceipt.assertStored(this.source.receipt.toJSON?.() ?? this.source.receipt,
+        { binding: source, result: this.source.result, settlement: this.source.settlement });
+      if (producer?.id !== this.source.activityId || history.current.attempt !== source.attempt.sequence) {
+        throw new CurrentFlowStateConflictError("saved Review continuation lost its original publication receipt");
+      }
+    } else {
+      const verified = assertGateSettlementPublication({ state, activity: producer?.toJSON(), descriptor,
+        historyEntry: history.current, attempt: source.attempt, publicationBytes: bytes });
+      if (verified === null || verified.receipt.id !== this.source.receipt.id
+        || stepResultDigest(verified.result) !== this.source.receipt.resultDigest) {
+        throw new CurrentFlowStateConflictError("saved Gate continuation lost its original publication receipt");
+      }
+    }
+  }
+}
+
+/** Acquired explicit acceptance of one saved semantic Gate failure. */
+class GateDeferralPublication extends SavedStepPublicationAdmission {
+  constructor({ binding, source, evidence, findings, attempt, revision, confirmationOrder, selectedActivityId }) {
+    super({ binding, source, revision, confirmationOrder });
+    this.evidence = evidence;
+    this.findings = findings;
+    this.attempt = new CurrentAttempt(attempt);
+    this.selectedActivityId = selectedActivityId;
+    this.artifactWrites = findings.settlementArtifacts().artifactWrites;
+    Object.freeze(this);
+  }
+  assertEvidence(evidence) {
+    if (JSON.stringify(evidence.toJSON()) !== JSON.stringify(this.evidence.toJSON())) {
+      throw new CurrentFlowStateConflictError("accepted Gate deferral changed its acquired evidence");
+    }
+  }
+  assertBinding(binding) {
+    const continuation = binding?.continuation;
+    if (!(continuation instanceof AcceptedGateDeferralBindingContinuation)
+      || continuation.sourceBinding !== this.sourceBinding
+      || continuation.continuation !== this.evidence.continuation
+      || continuation.confirmationOrder !== this.confirmationOrder
+      || binding.attempt.id !== this.attempt.id || binding.attempt.sequence !== this.attempt.sequence) {
+      throw new CurrentFlowStateConflictError("accepted Gate deferral requires its acquired next Attempt binding");
+    }
+  }
+  toJSON() {
+    return { evidence: this.evidence.toJSON(), attempt: this.attempt.toJSON(),
+      sourceReceiptId: this.source.receipt.id, revision: this.revision,
+      selectedActivityId: this.selectedActivityId };
+  }
+}
+
+/** Exact accepted decision, original publication and acceptance writes acquired before Step execution. */
+class NonblockingContinuationPublication extends SavedStepPublicationAdmission {
+  constructor({ binding, source, evidence, publication, attempt, revision, confirmationOrder, selectedActivityId, record, selectionAdmission, flowManager }) {
+    super({ binding, source, revision, confirmationOrder, allowLive: true, flowManager });
+    Object.assign(this, { evidence, attempt: new CurrentAttempt(attempt), selectedActivityId, record, selectionAdmission });
+    const settlement = publication.settlementArtifacts();
+    this.artifactWrites = settlement.artifactWrites ?? [];
+    this.artifactBaselines = settlement.artifactBaselines ?? [];
+    Object.freeze(this);
+  }
+  assert(view) {
+    super.assert(view);
+    this.selectionAdmission.assert(view);
+    const publications = this.evidence.acceptedDecision.publications;
+    if (publications.length !== this.artifactWrites.length || this.artifactWrites.some((input, index) => {
+      const write = CanonicalFlowArtifactWrite.from(input);
+      return !publications[index].matchesBytes({ logicalKey: write.artifact.logicalKey,
+        relativePath: write.artifact.relativePath, bytes: write.bytes });
+    })) throw new CurrentFlowStateConflictError("Accepted decision changed its acquired acceptance publication bytes");
+  }
+  assertEvidence(evidence) {
+    if (!isDeepStrictEqual(evidence.toJSON(), this.evidence.toJSON())) throw new CurrentFlowStateConflictError("Accepted decision changed its acquired original evidence");
+  }
+  assertBinding(binding) {
+    const continuation = binding.continuation;
+    if (!(continuation instanceof AcceptedNonblockingBindingContinuation)
+      || continuation.sourceBinding !== this.sourceBinding || continuation.continuation !== this.evidence.acceptedDecision
+      || continuation.confirmationOrder !== this.confirmationOrder || binding.attempt.id !== this.attempt.id
+      || binding.attempt.sequence !== this.attempt.sequence) throw new CurrentFlowStateConflictError("Accepted decision binding is stale");
+  }
+  toJSON() { return { evidence: this.evidence.toJSON(), attempt: this.attempt.toJSON(), revision: this.revision,
+    selectedActivityId: this.selectedActivityId, sourceReceiptId: this.source.receipt.id, record: this.record.toJSON() }; }
+}
+
+class ImplCommandPublicationActivity {
+  constructor({ id, binding, confirmationOrder }) {
+    this.id = id;
+    this.nodeId = binding.nodeId ?? binding.stepId;
+    this.attemptId = binding.attempt.id;
+    this.sequence = binding.attempt.sequence;
+    this.confirmationOrder = confirmationOrder;
+    this.transition = null;
+    Object.freeze(this);
+  }
+}
+
+function stepResultPublicationDescriptors(writes, selectedActivityId) {
+  return Object.freeze(writes.map((write) => {
+    const artifact = write.logicalKey === "review.evidence"
+      ? FLOW_ARTIFACT_CONTRACTS.reviewEvidence({ reviewStep: write.reviewStep, digest: write.digest })
+      : FLOW_ARTIFACT_CONTRACTS.resolve(write.logicalKey, write.parameters ?? {});
+    return new RequirementTestResultPublication({
+      logicalKey: write.logicalKey,
+      relativePath: artifact.relativePath,
+      hash: crypto.createHash("sha256").update(write.bytes).digest("hex"),
+      size: write.bytes.length,
+      activityId: selectedActivityId,
+    });
+  }));
+}
+
+const IMPL_COMMAND_PUBLICATION_TOKEN = Symbol("implementation-command-publication");
+
+/** Exact acquired command bytes and future producer identity for one atomic save. */
+class ImplCommandPublication {
+  #bytes;
+  #runtime;
+  #baselineRevision;
+  #baselineCatalog;
+  #expectedEvidence;
+  #issueReady;
+  constructor(token, { binding, view, selectedActivityId, artifactWrites, descriptors, runtime, commandResult }) {
+    if (token !== IMPL_COMMAND_PUBLICATION_TOKEN) throw new TypeError("Implementation publication must be acquired by its Store");
+    this.binding = binding;
+    this.state = view.state;
+    this.revision = view.revision;
+    this.selectedActivityId = selectedActivityId;
+    this.commandFingerprint = crypto.createHash("sha256").update(JSON.stringify(implementationCommandIdentity(commandResult))).digest("hex");
+    this.#baselineRevision = view.revision;
+    this.#baselineCatalog = view.catalog.hash;
+    this.artifactWrites = Object.freeze(artifactWrites.map((write) => Object.freeze({ ...write, bytes: Buffer.from(write.bytes) })));
+    this.#bytes = new Map(view.catalog.artifacts.map((entry) => [entry.relativePath, view.readCatalogedArtifact(entry)]));
+    const updated = new Map(view.catalog.artifacts.map((entry) => [entry.relativePath, entry]));
+    for (let index = 0; index < descriptors.length; index += 1) {
+      const proof = descriptors[index];
+      const write = CanonicalFlowArtifactWrite.from(artifactWrites[index]);
+      const descriptor = new FlowArtifactDescriptor({
+        ...write.artifact.publication({ mediaType: write.mediaType,
+          updater: FlowArtifactUpdater.fromActivityNodeId(binding.nodeId ?? binding.stepId).toString(),
+          activityId: selectedActivityId }),
+        hash: proof.hash, size: proof.size,
+      });
+      updated.set(descriptor.relativePath, descriptor);
+      this.#bytes.set(descriptor.relativePath, Buffer.from(artifactWrites[index].bytes));
+    }
+    this.catalog = new FlowArtifactCatalog({ artifacts: [...updated.values()] });
+    this.activities = Object.freeze([...view.activities, new ImplCommandPublicationActivity({
+      id: selectedActivityId, binding, confirmationOrder: view.state.confirmationOrder + 1 })]);
+    this.#runtime = runtime;
+  }
+  static authenticate(token, candidate, { flowManager, commandResult, issuePublication }) {
+    if (token !== IMPL_COMMAND_PUBLICATION_TOKEN || candidate.#expectedEvidence !== undefined) {
+      throw new TypeError("Implementation publication authentication belongs to its Store acquisition");
+    }
+    candidate.#acquireEvidence({ flowManager, commandResult, issuePublication });
+    return Object.freeze(candidate);
+  }
+  #acquireEvidence({ flowManager, commandResult, issuePublication }) {
+    const binding = this.binding;
+    if (["test-execute", "test-result-review"].includes(binding.stepId)) {
+      this.#expectedEvidence = TestChainResultEvidence.fromTransitionFacts(readTestChainTransitionFactsFromSnapshot({
+        snapshot: new TestChainTransitionSnapshot(this),
+        readCatalogedArtifact: (descriptor) => this.readCatalogedArtifact(descriptor),
+        readRuntimeArtifact: (input) => this.readRuntimeArtifact(input),
+      }));
+    } else if (binding.stepId === "impl-review") {
+      this.#expectedEvidence = readProspectiveImplReviewEvidence({ flowManager, binding, commandResult, publication: this });
+    } else {
+      this.#expectedEvidence = readProspectiveImplementationGateEvidence({ flowManager, binding, commandResult,
+        publication: this, root: flowManager.executionRoot() });
+    }
+    this.#issueReady = !(this.#expectedEvidence instanceof ImplementationGateResultEvidence)
+      || this.#expectedEvidence.result === "recovered"
+      || issuePublication instanceof ImplementationGateIssuePublication && issuePublication.matches(binding);
+  }
+  readCatalogedArtifact(descriptor) {
+    const current = this.catalog.artifacts.find((entry) => entry.relativePath === descriptor.relativePath);
+    if (current?.hash !== descriptor.hash || current?.activityId !== descriptor.activityId) {
+      throw new CurrentFlowStateConflictError("prospective publication descriptor changed");
+    }
+    return Buffer.from(this.#bytes.get(descriptor.relativePath));
+  }
+  readRuntimeArtifact({ logicalKey }) {
+    const read = this.#runtime.get(logicalKey) ?? null;
+    return read === null ? null : { ...read, bytes: Buffer.from(read.bytes) };
+  }
+  assert(view) {
+    if (view.revision !== this.#baselineRevision || view.catalog.hash !== this.#baselineCatalog
+      || !this.binding.attempt.matches(view.state)) {
+      throw new CurrentFlowStateConflictError("implementation command publication changed before settlement");
+    }
+    for (let index = 0; index < this.artifactWrites.length; index += 1) {
+      const write = this.artifactWrites[index];
+      const artifact = CanonicalFlowArtifactWrite.from(write).artifact;
+      const descriptor = this.catalog.artifacts.find((entry) => entry.relativePath === artifact.relativePath);
+      if (crypto.createHash("sha256").update(write.bytes).digest("hex") !== descriptor.hash) {
+        throw new CurrentFlowStateConflictError("implementation command candidate bytes changed");
+      }
+    }
+  }
+  assertCommand(commandResult) {
+    if (crypto.createHash("sha256").update(JSON.stringify(implementationCommandIdentity(commandResult))).digest("hex") !== this.commandFingerprint) {
+      throw new CurrentFlowStateConflictError("implementation command changed after publication acquisition");
+    }
+  }
+  assertEvidence(evidence) {
+    if (!this.#issueReady) throw new CurrentFlowStateConflictError("implementation Gate requires its final issue publication candidate");
+    if (evidence == null || !isDeepStrictEqual(evidence.toJSON(), this.#expectedEvidence.toJSON())) {
+      throw new CurrentFlowStateConflictError("implementation Result evidence differs from its acquired canonical observation");
+    }
+    const publication = evidence.publication;
+    const descriptor = this.catalog.artifacts.find((entry) => entry.relativePath === publication?.artifactId);
+    if (publication?.producerActivityId !== this.selectedActivityId || descriptor?.activityId !== this.selectedActivityId
+      || descriptor.hash !== publication.fingerprint || publication.attempt.id !== this.binding.attempt.id
+      || publication.attempt.sequence !== this.binding.attempt.sequence) {
+      throw new CurrentFlowStateConflictError("implementation Result does not bind its exact candidate publication");
+    }
+  }
+  admitsGateFailure({ state, stepResult, receipt, failure, artifactWrites, activityId }) {
+    if (!(this.#expectedEvidence instanceof ImplementationGateResultEvidence)) return false;
+    const evidence = ImplementationGateResultEvidence.fromJSON(stepResult.error.data?.evidence);
+    this.assertEvidence(evidence);
+    evidence.assertResultKind(stepResult.kind);
+    if (stepResult.error.code !== evidence.meaning.reason
+      || this.binding.runId !== state.runId || this.binding.specId !== state.specId
+      || evidence.identity.stepId !== state.current?.at(-1)
+      || evidence.stepId !== stepResult.stepId || this.binding.stepId !== stepResult.stepId
+      || !this.binding.attempt.matches(state) || activityId !== this.selectedActivityId
+      || !isDeepStrictEqual(artifactWrites.map(canonicalArtifactWriteIdentity),
+        this.artifactWrites.map(canonicalArtifactWriteIdentity))) {
+      throw new CurrentFlowStateConflictError("Gate Error settlement changed its acquired failure publication");
+    }
+    const settlement = evidence.identity.taskId === null
+      ? settleImplStepResult(stepResult.stepId, stepResult) : settleTaskStepResult(stepResult.stepId, stepResult);
+    DraftStepSettlementReceipt.assertStored(receipt.toJSON(), { binding: this.binding, result: stepResult, settlement });
+    const expected = new ActivityFailure({ category: evidence.failure?.category ?? STEP_RESULT_ERROR_CATEGORY,
+      code: evidence.failure?.code ?? stepResult.error.code ?? "STEP_RESULT_ERROR",
+      message: stepResult.error.message, retryable: false, retryKind: null,
+      ...(stepResult.error.data?.responseProtocolEvidence == null ? {} : {
+        responseProtocolEvidence: stepResult.error.data.responseProtocolEvidence,
+      }) });
+    if (!isDeepStrictEqual(expected.toJSON(), new ActivityFailure(failure).toJSON())) {
+      throw new CurrentFlowStateConflictError("Gate Error failure facts differ from their acquired observation");
+    }
+    return true;
+  }
+  toJSON() {
+    return { selectedActivityId: this.selectedActivityId, revision: this.revision,
+      catalogFingerprint: this.#baselineCatalog, commandFingerprint: this.commandFingerprint,
+      artifactWrites: this.artifactWrites.map(canonicalArtifactWriteIdentity) };
+  }
+}
+
+class ReviewFailurePublication {
+  constructor({ binding, observation, artifactWrites, checkpoint = null }) {
+    if (!(observation instanceof ReviewStepFailureObservation) || !Array.isArray(artifactWrites)) {
+      throw new TypeError("Review failure publication requires acquired observation and artifacts");
+    }
+    this.binding = binding;
+    this.observation = observation;
+    this.artifactWrites = Object.freeze([...artifactWrites]);
+    this.checkpoint = checkpoint;
+    Object.freeze(this);
+  }
+  toJSON() { return { observation: this.observation.toJSON(), artifactWrites: this.artifactWrites.map(canonicalArtifactWriteIdentity) }; }
+  assert(view) {
+    if (view.state.runId !== this.binding.runId || view.state.specId !== this.binding.specId
+      || !this.binding.attempt.matches(view.state)) throw new CurrentFlowStateConflictError("Review failure publication Attempt changed");
+    this.checkpoint?.assertActiveState(view.state);
+  }
+  assertObservation(observation) {
+    if (!(observation instanceof ReviewStepFailureObservation)
+      || !isDeepStrictEqual(observation.toJSON(), this.observation.toJSON())) {
+      throw new CurrentFlowStateConflictError("Review failure Result differs from its acquired observation");
+    }
+  }
+}
+
+class ReviewPublicationReplay {
+  constructor({ state, receipt }) { this.state = state; this.receipt = receipt; this.completed = true; Object.freeze(this); }
+}
+
+class TaskReviewPublicationReplayBinding {
+  constructor({ identity, runId, specId }) {
+    this.runId = runId;
+    this.specId = specId;
+    this.stepId = "task-review";
+    this.nodeId = identity.attempt.nodeId;
+    this.attempt = identity.attempt;
+    Object.freeze(this);
+  }
+}
+
+class TaskStagePublication {
+  constructor({ facts, artifactWrites, admission, filter = null, commandResult = null, taskFrontier = null,
+    sourceStageBinding = null }) {
+    if (!(facts instanceof TaskReviewStageFacts) || !Array.isArray(artifactWrites)) {
+      throw new TypeError("Task stage publication requires typed observations and artifact writes");
+    }
+    this.facts = facts;
+    this.artifactWrites = Object.freeze([...artifactWrites]);
+    this.admission = admission;
+    this.filter = filter;
+    this.commandResult = commandResult;
+    this.taskFrontier = taskFrontier;
+    this.sourceStageBinding = sourceStageBinding;
+    Object.freeze(this);
+  }
+  toJSON() {
+    return { facts: this.facts.toJSON(), artifactWrites: this.artifactWrites.map(canonicalArtifactWriteIdentity),
+      taskFrontier: this.taskFrontier?.toJSON() ?? null, filter: this.filter?.toJSON() ?? null,
+      sourceStageBinding: this.sourceStageBinding?.toJSON() ?? null };
+  }
+  assertFacts(facts) {
+    if (!(facts instanceof TaskReviewStageFacts) || JSON.stringify(this.facts.toJSON()) !== JSON.stringify(facts.toJSON())) {
+      throw new CurrentFlowStateConflictError("Task stage publication differs from its selected facts");
+    }
+    const stageWrite = this.artifactWrites.find((write) => write.logicalKey === `task.${facts.binding.stage}`);
+    if (stageWrite !== undefined
+      && crypto.createHash("sha256").update(stageWrite.bytes).digest("hex") !== facts.binding.artifactDigest) {
+      throw new CurrentFlowStateConflictError("Task stage candidate bytes changed after Result selection");
+    }
+  }
+  assertEvidence(evidence) {
+    this.assertFacts(evidence.facts);
+    if (JSON.stringify(evidence.frontier?.toJSON() ?? null) !== JSON.stringify(this.taskFrontier?.toJSON() ?? null)) {
+      throw new CurrentFlowStateConflictError("Task stage publication differs from its acquired Task frontier");
+    }
+  }
+}
+
 export class CanonicalFlowManagerStore {
   constructor({ root, mainRoot, specRoot, activeFlowsProvider = () => [], versionStoreFaultInjector = null } = {}) {
     this.mainRoot = requiredText(mainRoot, "mainRoot");
@@ -2783,11 +3141,8 @@ export class CanonicalFlowManagerStore {
     if (decision.facts.phase === "draft" || decision.facts.phase === "spec" || decision.facts.phase === "task-spec") {
       throw new CurrentFlowStateInvariantError("migrated Gate decisions are persisted only through StepResult settlement");
     }
-    const facts = readCurrentGateTransitionFacts({
-      flowManager: this, flowState: this.loadReadOnly(state.specId), phase: decision.facts.phase,
-    });
-    if (facts === null) throw new CurrentFlowStateInvariantError("definition-owned Gate observation is no longer current");
-    const current = resolveGateTransition(facts);
+    const current = admitGateTransition({ flowManager: this,
+      flowState: this.loadReadOnly(state.specId), phase: decision.facts.phase, decision, root: this.root });
     if (current.disposition.operation !== operation
       || !current.plan.action.identity.matches(decision.plan.action.identity)) {
       throw new CurrentFlowStateInvariantError("definition-owned Gate action is stale or no longer admitted");
@@ -2798,12 +3153,12 @@ export class CanonicalFlowManagerStore {
   /** Task Gate completion has one admission path: the current Definition pass plan. */
   #taskGatePassLifecycle({ state, nodeId, status, decision, suppliedLifecycle, transition = null }) {
     const parent = state.current === null ? null : state.findNode(state.current.at(-2));
-    const taskGate = parent instanceof TaskNode && nodeId === `${parent.id}-gate`;
+    const taskGate = parent instanceof TaskNode && new TaskStepIdentity({ taskId: parent.id, role: "gate" }).matchesNode(nodeId);
     if (!taskGate) return null;
     if (status === "skipped") {
       if (!(transition instanceof DefinitionLifecycleTransition)
         || transition.event !== "review:post"
-        || transition.currentStepId !== `${parent.id}-review`
+        || !new TaskStepIdentity({ taskId: parent.id, role: "review" }).matchesNode(transition.currentStepId)
         || transition.action.step !== nodeId
         || transition.action.status !== "skipped"
         || captureCurrentTaskSource({ root: this.root, flowManager: this, state, taskId: parent.id }).fingerprint !== transition.action.taskSourceFingerprint) {
@@ -2990,6 +3345,10 @@ export class CanonicalFlowManagerStore {
     const resolved = this.#resolveSpecId(specId);
     if (resolved === null) throw new CurrentFlowStateInvariantError("no canonical active Flow");
     const state = this.runtime.load(resolved);
+    if (state.current?.at(-1) === "impl-gate"
+      || TaskStepIdentity.fromStateNode(state, state.current?.at(-1))?.definitionId === "task-gate") {
+      throw new CurrentFlowStateInvariantError("implementation Gate deferral acceptance requires its registered Step settlement");
+    }
     if (state.current?.at(-1) === "draft-gate" || state.current?.at(-1) === "spec-gate") {
       throw new CurrentFlowStateInvariantError("migrated Gate Results must be persisted through StepResult settlement");
     }
@@ -3019,6 +3378,90 @@ export class CanonicalFlowManagerStore {
     });
   }
 
+  /** Acquire an acceptance operand from the latest saved Gate Result, never evaluator output. */
+  prepareGateDeferralPublication({ binding, decision, stepResult, settlement, settlementReceipt } = {}) {
+    const state = binding.assertCurrent();
+    const current = this.#admitGateDecision(state, decision, "defer");
+    const source = this.readCurrentStepSettlement({ specId: binding.specId, stepId: binding.stepId });
+    if (source === null || source.receipt.id !== settlementReceipt?.id
+      || stepResultDigest(source.result) !== stepResultDigest(stepResult)
+      || JSON.stringify(source.settlement.toJSON()) !== JSON.stringify(settlement.toJSON())
+      || source.result.evidence.continuation !== null) {
+      throw new CurrentFlowStateConflictError("Gate acceptance requires its latest original Result and receipt");
+    }
+    const findings = buildDeferredSemanticFindingsPublication({ flowManager: this,
+      flowState: this.loadReadOnly(binding.specId), nodeId: binding.nodeId, sourceStep: binding.nodeId,
+      sourceArtifact: current.facts.catalogPublication.artifactId, attempts: current.facts.retry.used + 1,
+      round: current.facts.taskBudget?.round ?? current.facts.retry.used + 1 });
+    if (findings.deferred.length === 0) throw new CurrentFlowStateInvariantError("Gate settlement requires at least one canonical deferred finding");
+    const attempt = commandContextAttempt(state, binding.nodeId);
+    const write = findings.settlementArtifacts().artifactWrites[0] ?? null;
+    const bytes = write?.bytes ?? this.readArtifact({ specId: binding.specId,
+      logicalKey: "flow.findings", consumerNodeId: binding.nodeId }).bytes;
+    const findingsPublication = new AcceptedGateFindingsPublication({ logicalKey: "flow.findings",
+      relativePath: findings.baseline.artifact.relativePath,
+      hash: crypto.createHash("sha256").update(bytes).digest("hex"), size: bytes.length,
+      findingCount: findings.deferred.length });
+    const continuation = new AcceptedGateDeferral({ sourceReceiptId: source.receipt.id,
+      sourceResultDigest: stepResultDigest(source.result), sourcePublication: source.result.evidence.publication,
+      settlementAttempt: new GateAttemptIdentity(attempt), findingsPublication });
+    const evidence = ImplementationGateResultEvidence.fromJSON({ ...source.result.evidence.toJSON(),
+      continuation: continuation.toJSON() });
+    return this.runtime.readCanonicalTransitionView(binding.specId, (view) => {
+      const candidate = new GateDeferralPublication({ binding, source, evidence, findings, attempt,
+        revision: view.revision, confirmationOrder: view.state.confirmationOrder,
+        selectedActivityId: activityId("gate-failure-deferred") });
+      candidate.assert(view);
+      return candidate;
+    });
+  }
+
+  prepareAcceptedNonblockingPublication({ specId = null, binding, record, eligibility } = {}) {
+    const state = binding.assertCurrent();
+    const resolved = state.specId;
+    const fact = record instanceof ActivityNonBlockingRecord ? record : new ActivityNonBlockingRecord(record);
+    if (specId !== null && this.#resolveSpecId(specId) !== resolved
+      || fact.kind !== "decision" || fact.action !== "continue" || fact.sourceStep !== binding.stepId
+      || !nonblockingEligibilityMatchesRecord(eligibility, fact)) {
+      throw new CurrentFlowStateConflictError("Accepted decision requires its bound Definition-selected record");
+    }
+    const snapshot = this.readCanonicalTransitionSnapshot(resolved);
+    const currentEligibility = validateNonblockingRecordForActiveFlow(this.executionRoot(), this.loadReadOnly(resolved), this, fact);
+    if (currentEligibility.definitionDigest !== eligibility.definitionDigest) {
+      throw new CurrentFlowStateConflictError("Accepted decision differs from the current Definition selection");
+    }
+    const source = binding.stepId === "test-result-review" ? readCurrentTestChainSettlement({ flowManager: this,
+      specId: resolved, stepId: binding.stepId }) : this.readCurrentStepSettlement({ specId: resolved, stepId: binding.stepId });
+    const original = source === null ? null : savedImplementationSourceEvidence(source.result);
+    if (source === null || original?.acceptedDecision != null) throw new CurrentFlowStateConflictError("Accepted decision requires its latest original Result and receipt");
+    const publication = this.#nonblockingAcceptancePublication({ resolved, target: binding.nodeId, fact, eligibility: currentEligibility });
+    const attempt = commandContextAttempt(state, binding.nodeId);
+    const artifacts = publication.settlementArtifacts();
+    const publications = (artifacts.artifactWrites ?? []).map((write) => {
+      const value = CanonicalFlowArtifactWrite.from(write);
+      return AcceptedNonblockingPublication.fromBytes({ logicalKey: value.artifact.logicalKey,
+        relativePath: value.artifact.relativePath, bytes: value.bytes });
+    });
+    const continuation = new AcceptedNonblockingDecision({ sourceStepId: binding.stepId,
+      sourceReceiptId: source.receipt.id, sourceResultDigest: stepResultDigest(source.result),
+      sourcePublication: original.publication, settlementAttempt: ["impl-review", "test-result-review"].includes(binding.stepId)
+        ? new NonGateAttemptIdentity(attempt) : new GateAttemptIdentity(attempt),
+      evidenceRef: fact.evidenceRef, evidenceDigest: fact.evidenceDigest, definitionDigest: fact.definitionDigest,
+      resultKind: fact.resultKind, rationale: fact.rationale, remainingRisk: fact.remainingRisk, publications });
+    const Evidence = binding.stepId === "test-result-review" ? TestChainResultEvidence
+      : binding.stepId === "impl-review" ? ImplReviewResultEvidence : ImplementationGateResultEvidence;
+    const evidence = Evidence
+      .fromJSON({ ...original.toJSON(), acceptedDecision: continuation.toJSON() });
+    return this.runtime.readCanonicalTransitionView(resolved, (view) => {
+      const candidate = new NonblockingContinuationPublication({ binding, source, evidence, publication, attempt, flowManager: this,
+        revision: view.revision, confirmationOrder: view.state.confirmationOrder, record: fact,
+        selectedActivityId: `nonblocking-${crypto.createHash("sha256").update(JSON.stringify(fact.toJSON())).digest("hex")}`,
+        selectionAdmission: new NonblockingSelectionAdmission({ snapshot, record: fact }) });
+      candidate.assert(view);
+      return candidate;
+    });
+  }
+
   /** Apply only the current Definition-selected stale Task round closure. */
   recoverTaskExecutionOverrun({ specId = null, decision } = {}) {
     const resolved = this.#resolveSpecId(specId);
@@ -3035,7 +3478,7 @@ export class CanonicalFlowManagerStore {
     return this.runtime.recoverTaskExecutionOverrun({
       specId: resolved,
       activityId: activityId("task-execution-overrun-recovered"),
-      nodeId: `${selected.facts.taskId}-impl`,
+      nodeId: new TaskStepIdentity({ taskId: selected.facts.taskId, role: "impl" }).nodeId,
       attempt: state.attempt,
       references: {
         evaluations: [{ id: selected.facts.gate.failure.activityId, label: selected.facts.gate.failure.code }], findings: [],
@@ -3058,7 +3501,8 @@ export class CanonicalFlowManagerStore {
    * and referenced by the replacement Attempt Activity; flow.json carries no
    * mutable repair marker or copied history.
    */
-  repairPlanGate({ specId = null, record, issueLog, decision = null } = {}) {
+  repairPlanGate({ specId = null, record, issueLog, decision = null,
+    stepResult = null, settlement = null, settlementReceipt = null } = {}) {
     const resolved = this.#resolveSpecId(specId);
     if (resolved === null) throw new CurrentFlowStateInvariantError("no canonical active Flow");
     const repair = PlanGateRepairRecord.from(record);
@@ -3080,8 +3524,9 @@ export class CanonicalFlowManagerStore {
     }
     if (repair.phase === "task-impl") {
       const effect = connector.taskLifecycle;
+      const identity = TaskStepIdentity.fromStateNode(state, repair.route.gateStepId);
       if (effect?.operation !== "repair-task-impl"
-        || effect.taskId !== repair.route.gateStepId.slice(0, -"-gate".length)
+        || identity?.definitionId !== "task-gate" || effect.taskId !== identity.taskId
         || effect.successorStepId !== repair.targetStepId
         || JSON.stringify(effect.resetStepIds) !== JSON.stringify(repair.route.resetStepIds)) {
         throw new CurrentFlowStateInvariantError("Task Gate repair record does not match the sealed Definition lifecycle plan");
@@ -3097,6 +3542,8 @@ export class CanonicalFlowManagerStore {
     }
     const target = repair.targetStepId;
     const nextIssueLog = repair.appendToIssueLog(issueLog);
+    const continuationAdmission = gateDecision.facts.scope === "task"
+      ? this.#savedTaskGateContinuationAdmission(state, gateDecision, { stepResult, settlement, settlementReceipt }) : null;
     return this.runtime.planGateRepair({
       specId: resolved,
       activityId: activityId("plan-gate-repaired"),
@@ -3118,11 +3565,30 @@ export class CanonicalFlowManagerStore {
           route: "repair-plan-gate",
           targetNodeId: target,
         }),
-        gateDecision.facts.scope === "task"
-          ? new TaskGateSettlementAdmission(gateDecision, "continuation")
-          : null,
+        continuationAdmission,
       ),
       gateTaskLifecycle: connector.taskLifecycle?.toJSON?.() ?? null,
+    });
+  }
+
+  #savedTaskGateContinuationAdmission(state, decision, { stepResult, settlement, settlementReceipt }) {
+    const binding = new TaskStepBinding({ flowManager: this, specId: state.specId,
+      definitionStepId: "task-gate", allowFailed: true });
+    const source = this.readCurrentStepSettlement({ specId: state.specId, stepId: "task-gate" });
+    if (source === null || !(stepResult instanceof StepResult) || !(settlement instanceof StepSettlement)
+      || source.receipt.id !== settlementReceipt?.id || stepResultDigest(source.result) !== stepResultDigest(stepResult)
+      || JSON.stringify(source.settlement.toJSON()) !== JSON.stringify(settlement.toJSON())) {
+      throw new CurrentFlowStateConflictError("Task Gate repair requires its original selected Result and receipt");
+    }
+    const publicationFacts = readCurrentGateTransitionFacts({ flowManager: this,
+      flowState: this.loadReadOnly(state.specId), phase: "task-impl", root: this.root });
+    return this.runtime.readCanonicalTransitionView(state.specId, (view) => {
+      const sourceAdmission = new SavedStepPublicationAdmission({ binding, source,
+        revision: view.revision, confirmationOrder: view.state.confirmationOrder });
+      const admission = new TaskGateSettlementAdmission(decision, "continuation", null,
+        sourceAdmission, publicationFacts);
+      admission.assert(view);
+      return admission;
     });
   }
 
@@ -4474,6 +4940,7 @@ export class CanonicalFlowManagerStore {
     const state = this.runtime.load(resolved);
     if (state.current === null) throw new CurrentFlowStateInvariantError("canonical completion requires an active Attempt");
     const nodeId = state.current.at(-1);
+    assertGenericPublicationAllowed(state, "confirmation");
     if (nodeId === "spec" && stepResult !== null) {
       if (!(specSelection instanceof SpecWorkerResultSelection)) {
         throw new CurrentFlowStateInvariantError("Spec completion requires its selected worker candidate");
@@ -4564,7 +5031,7 @@ export class CanonicalFlowManagerStore {
     const state = this.runtime.load(resolved);
     if (binding?.runId !== state.runId || binding?.specId !== state.specId
       || binding?.stepId !== "draft-coverage-review"
-      || binding?.stepId !== state.current?.at(-1)
+      || (binding?.nodeId ?? binding?.stepId) !== state.current?.at(-1)
       || binding?.attempt?.id !== state.attempt?.id
       || binding?.attempt?.sequence !== state.attempt?.sequence) {
       throw new CurrentFlowStateConflictError("Draft coverage PASS binding is stale");
@@ -4681,7 +5148,7 @@ export class CanonicalFlowManagerStore {
     if (snapshot === null) throw new CurrentFlowStateInvariantError("no canonical active Flow");
     const state = snapshot.state;
     if (binding?.runId !== state.runId || binding?.specId !== state.specId
-      || binding?.stepId !== state.current?.at(-1)
+      || (binding?.nodeId ?? binding?.stepId) !== state.current?.at(-1)
       || binding?.attempt?.id !== state.attempt?.id
       || binding?.attempt?.sequence !== state.attempt?.sequence) {
       throw new CurrentFlowStateConflictError("Draft execution state binding is stale");
@@ -4693,13 +5160,14 @@ export class CanonicalFlowManagerStore {
       attemptId: binding.attempt.id,
       attemptSequence: binding.attempt.sequence,
     };
-    const receipts = this.#stepSettlementBindingActivities(resolved, receiptBinding, snapshot.activities)
-      .map((entry) => entry.result.draftSettlementReceipt)
-      .filter((receipt) => receipt.executionLifecycle !== null);
-    const latest = receipts.at(-1) ?? null;
+    const activities = this.#stepSettlementBindingActivities(resolved, receiptBinding, snapshot.activities)
+      .filter((entry) => entry.result.draftSettlementReceipt.executionLifecycle !== null);
+    const latestActivity = activities.at(-1) ?? null;
+    const latest = latestActivity?.result.draftSettlementReceipt ?? null;
     return new DraftStepExecutionState({
       binding,
       receipt: latest,
+      result: latestActivity === null ? null : latestActivity.result.stepResult,
     });
   }
 
@@ -4738,7 +5206,7 @@ export class CanonicalFlowManagerStore {
     return latest.phase === "terminal" ? latest : null;
   }
 
-  #admitStepSettlement({ resolved, state, binding, stepResult, settlement, receipt }) {
+  #admitStepSettlement({ resolved, state, binding, stepResult, settlement, receipt, acceptedPublication = null }) {
     const bindingActivities = this.#stepSettlementBindingActivities(resolved, receipt.binding);
     const replay = bindingActivities.find((entry) => entry.result.draftSettlementReceipt.id === receipt.id);
     if (replay !== undefined) {
@@ -4746,10 +5214,21 @@ export class CanonicalFlowManagerStore {
       if (latest?.id === receipt.id) return replay.result.draftSettlementReceipt;
       throw new CurrentFlowStateConflictError("Step settlement replay is stale for the latest execution generation");
     }
-    const currentBinding = binding?.runId === state.runId && binding?.specId === state.specId
-      && binding?.stepId === state.current?.at(-1) && binding.stepId === stepResult.stepId
+    let currentBinding = binding?.runId === state.runId && binding?.specId === state.specId
+      && (binding?.nodeId ?? binding?.stepId) === state.current?.at(-1) && binding.stepId === stepResult.stepId
       && binding.stepId === settlement.sourceStepId && binding?.attempt?.id === state.attempt?.id
       && binding?.attempt?.sequence === state.attempt?.sequence;
+    if (acceptedPublication instanceof NonblockingContinuationPublication) {
+      acceptedPublication.assertBinding(binding);
+      acceptedPublication.assertEvidence(stepResult.evidence);
+      currentBinding = binding.continuation.matchesState(state) && settlement instanceof StepRoute;
+    } else if (acceptedPublication instanceof GateDeferralPublication) {
+      acceptedPublication.assertBinding(binding);
+      acceptedPublication.assertEvidence(stepResult.evidence);
+      currentBinding = binding.continuation.matchesState(state)
+        && settlement instanceof StepRoute && settlement.application instanceof GateResultApplication
+        && settlement.application.decision.disposition.operation === "defer";
+    }
     if (receipt instanceof RequirementTestSettlementReceipt) {
       const latestReceipt = bindingActivities.at(-1)?.result?.draftSettlementReceipt ?? null;
       if (latestReceipt?.settlementKind === "failure" && latestReceipt.id !== receipt.id) {
@@ -4771,10 +5250,10 @@ export class CanonicalFlowManagerStore {
     return null;
   }
 
-  #specGateIssueWrite({ resolved, binding, issue }) {
+  #specGateIssueWrite({ resolved, binding, issue, view = null }) {
     if (issue === null || issue === undefined) return null;
     const existing = this.readArtifact({
-      specId: resolved, logicalKey: "issue.log", consumerNodeId: binding.stepId, optional: true,
+      specId: resolved, logicalKey: "issue.log", consumerNodeId: binding.stepId, optional: true, view,
     });
     const document = new IssueLogDocument(existing === null
       ? { entries: [] } : JSON.parse(existing.bytes.toString("utf8")));
@@ -4798,6 +5277,7 @@ export class CanonicalFlowManagerStore {
     gatePublication = null,
     specSelection = null,
     publicationLimits = undefined,
+    extraArtifactWrites = [], selectedActivityId = null, failureObservation = null,
   }) {
     const base = lifecycleResult ?? {
       outcome: "failed",
@@ -4806,7 +5286,7 @@ export class CanonicalFlowManagerStore {
       artifactRefs: [],
     };
     const result = resultWithDraftStepResult(base, binding.stepId, stepResult, receipt);
-    const failureActivityId = activityId("attempt-failed");
+    const failureActivityId = selectedActivityId ?? activityId("attempt-failed");
     const issueWrite = this.#specGateIssueWrite({ resolved, binding, issue: gatePublication?.issue });
     const repairOutcomeWrite = planGateRepairOutcome === null ? [] : (() => {
       if (!(specSelection instanceof SpecWorkerResultSelection)) {
@@ -4842,10 +5322,11 @@ export class CanonicalFlowManagerStore {
     const next = this.failCurrentAttempt({
       publicationLimits,
       specId: resolved,
-      failure: {
-        category: gatePublication?.facts.failureCategory
+      failure: stepResult.error.data?.reviewFailure != null && ["task-review", "impl-review"].includes(binding.stepId)
+        ? new ActivityFailure(failureObservation).toJSON() : {
+        category: gatePublication?.facts.failureCategory ?? failureObservation?.category
           ?? (stepResult.error instanceof RequirementTestExternalBlockedError ? "external" : STEP_RESULT_ERROR_CATEGORY),
-        code: gatePublication?.facts.failureCode ?? stepResult.error?.code ?? "STEP_RESULT_ERROR",
+        code: gatePublication?.facts.failureCode ?? failureObservation?.code ?? stepResult.error?.code ?? "STEP_RESULT_ERROR",
         message: stepResult.error.message,
         retryable: false,
         retryKind: null,
@@ -4857,25 +5338,27 @@ export class CanonicalFlowManagerStore {
       stepResult,
       settlementReceipt: receipt,
       commandResult,
-      artifactWrites: [...repairOutcomeWrite, ...(issueWrite === null ? [] : [issueWrite])],
+      artifactWrites: [...extraArtifactWrites, ...repairOutcomeWrite, ...(issueWrite === null ? [] : [issueWrite])],
       failureActivityId,
       admission: gatePublication ?? admission ?? undefined,
-      nonblocking: gatePublication === null ? null : this.#specGateNonblockingObservation({
+      nonblocking: gatePublication === null ? null : this.#stepNonblockingObservation({
         state: this.runtime.load(resolved), binding, stepResult, commandResult,
       }),
     });
     return Object.freeze({ state: next, receipt });
   }
 
-  #specGateNonblockingObservation({ state, binding, stepResult, commandResult }) {
-    const eligibility = specGateNonblockingEligibilityForResult(stepResult);
+  #stepNonblockingObservation({ state, binding, stepResult, commandResult,
+    eligibility = specGateNonblockingEligibilityForResult(stepResult) }) {
     if (eligibility === null || state.policy?.nonblocking?.enabled !== true) return null;
     const payload = attachedCanonicalCommandResultArtifact(commandResult).payload;
     const source = `${JSON.stringify(payload, null, 2)}\n`;
+    const target = attemptHistoryTargetForNode(binding.nodeId ?? binding.stepId);
     return new ActivityNonBlockingRecord({
       kind: "observation", sourceStep: binding.stepId,
       sourceAttempt: binding.attempt.sequence,
-      evidenceRef: FLOW_ARTIFACT_CONTRACTS.resolve("spec.gate").relativePath,
+      evidenceRef: FLOW_ARTIFACT_CONTRACTS.resolve(
+        target.logicalKey, target.parameters).relativePath,
       evidenceDigest: crypto.createHash("sha256").update(source).digest("hex"),
       definitionDigest: eligibility.definitionDigest,
       resultKind: eligibility.resultKind,
@@ -4892,13 +5375,9 @@ export class CanonicalFlowManagerStore {
         "Draft execution checkpoint requires its typed Execution Result, Settlement, and lifecycle",
       );
     }
-    const receipt = this.#stepSettlementReceipt({
-      binding,
-      stepResult,
-      settlement,
-      executionLifecycle,
-      artifactWrites,
-    });
+    const receipt = hasImplementationStepContract(binding.stepId)
+      ? this.#implementationStepReceipt({ binding, stepResult, settlement, executionLifecycle })
+      : this.#stepSettlementReceipt({ binding, stepResult, settlement, executionLifecycle, artifactWrites });
     const state = this.runtime.load(resolved);
     if (state.attempt?.failure !== null && state.attempt?.failure !== undefined) {
       throw new CurrentFlowStateConflictError("Draft execution cannot continue a failed Attempt");
@@ -5055,7 +5534,8 @@ export class CanonicalFlowManagerStore {
     return receipt;
   }
 
-  findStepSettlementReceipt({
+  findStepSettlementReceipt(input = {}) {
+    const {
     specId = null,
     binding,
     stepResult,
@@ -5069,12 +5549,10 @@ export class CanonicalFlowManagerStore {
     gatePublication = null,
     artifactWrites = [],
     artifactRemovals = undefined,
-    artifactBaselines = undefined,
     testSourceBaseline = undefined,
     selectedActivityId = null,
     result = null,
     lifecycleResult = null,
-    references = undefined,
     deferredReceipt = null,
     findingsPublication = null,
     specRecord = undefined,
@@ -5084,10 +5562,21 @@ export class CanonicalFlowManagerStore {
     draftGateRepairSelection = null,
     preparation = null,
     draftReturn = null,
-  } = {}) {
+    } = input;
+    let { references = undefined, artifactBaselines = undefined } = input;
     const resolved = this.#resolveSpecId(specId ?? binding?.specId);
     if (resolved === null || !(stepResult instanceof StepResult) || !(settlement instanceof StepSettlement)) {
       return null;
+    }
+    if (isOrdinaryDraftAwaitSettlement(input)) return this.findDraftAwaitSettlementReceipt(input);
+    if (hasImplementationStepContract(binding?.stepId)) {
+      const expected = this.#implementationStepReceipt(input);
+      const matching = this.#stepSettlementBindingActivities(resolved, expected.binding);
+      const selected = matching.at(-1) ?? null;
+      if (selected?.result?.draftSettlementReceipt?.id !== expected.id
+        || selected.nodeId !== (binding.nodeId ?? binding.attempt.nodeId ?? binding.stepId)) return null;
+      const stored = StepResult.fromStored(binding.stepId, selected.result.stepResult);
+      return DraftStepSettlementReceipt.assertStored(selected.result.draftSettlementReceipt, { binding, result: stored, settlement });
     }
     if (["approval", "test-generate", "test-review", "test-repair", "test-gate"].includes(binding?.stepId)) {
       const matching = this.activityLedger(resolved).filter((entry) => {
@@ -5157,13 +5646,10 @@ export class CanonicalFlowManagerStore {
   }
 
   /** Read the current Attempt, or explicitly recover a completed preparation publication. */
-  readCurrentStepSettlement({ specId = null, stepId, completed = false, view = null } = {}) {
+  readCurrentStepSettlement({ specId = null, stepId, taskId = null, completed = false, view = null } = {}) {
     const resolved = this.#resolveSpecId(specId);
     if (resolved === null) throw new CurrentFlowStateInvariantError("no canonical active Flow");
     const preparationStep = ["branch", "prepare-spec"].includes(stepId);
-    if (completed && !preparationStep) {
-      throw new CurrentFlowStateInvariantError("Completed settlement recovery requires a preparation Step");
-    }
     if (preparationStep) {
       if (view !== null) {
         if (!(view instanceof CanonicalTransitionView) || view.state.specId !== resolved) {
@@ -5176,6 +5662,37 @@ export class CanonicalFlowManagerStore {
     }
     if (view !== null) throw new CurrentFlowStateInvariantError("Acquired settlement view requires a preparation Step");
     const state = this.runtime.load(resolved);
+    const materializedIdentity = hasImplementationStepContract(stepId) ? null
+      : TaskStepIdentity.fromStateNode(state, stepId);
+    const definitionStepId = materializedIdentity?.definitionId ?? stepId;
+    if (hasImplementationStepContract(definitionStepId)) {
+      const activeIdentity = TaskStepIdentity.fromStateNode(state, state.current?.at(-1));
+      const owningTaskId = taskId ?? activeIdentity?.taskId ?? null;
+      const nodeId = materializedIdentity?.nodeId ?? (definitionStepId.startsWith("task-") && owningTaskId !== null
+        ? new TaskStepIdentity({ taskId: owningTaskId, role: definitionStepId.slice(5) }).nodeId : definitionStepId);
+      if (materializedIdentity !== null && taskId !== null && materializedIdentity.taskId !== taskId) {
+        throw new CurrentFlowStateConflictError("Task settlement read identity does not match its materialized node");
+      }
+      const node = state.findNode(nodeId);
+      const expected = completed ? node?.result?.draftSettlementReceipt?.binding ?? null : {
+        attemptId: state.attempt?.id, attemptSequence: state.attempt?.sequence };
+      if (expected === null || !completed && state.attempt?.nodeId !== nodeId) return null;
+      const selected = this.activityLedger(resolved).findLast((entry) => entry.nodeId === nodeId
+        && entry.attemptId === expected.attemptId && entry.sequence === expected.attemptSequence
+        && entry.result?.stepResult != null && entry.result?.draftSettlementReceipt != null);
+      if (selected === undefined) return null;
+      const activity = new FlowActivity(selected);
+      const result = activity.result.stepResult;
+      const settlement = definitionStepId.startsWith("task-") ? settleTaskStepResult(definitionStepId, result)
+        : settleImplStepResult(definitionStepId, result);
+      const receipt = DraftStepSettlementReceipt.assertStored(activity.result.draftSettlementReceipt, {
+        binding: { runId: state.runId, specId: resolved, stepId: definitionStepId,
+          attempt: { id: expected.attemptId, sequence: expected.attemptSequence } }, result, settlement });
+      return Object.freeze({ result, settlement, receipt, activityId: selected.id });
+    }
+    if (completed) {
+      throw new CurrentFlowStateInvariantError("Completed settlement recovery requires a preparation Step");
+    }
     if (state.current?.at(-1) !== stepId || state.attempt?.nodeId !== stepId) return null;
     const activities = this.activityLedger(resolved).filter((entry) => (
       entry.nodeId === stepId
@@ -5327,28 +5844,23 @@ export class CanonicalFlowManagerStore {
     if (resolved === null || !(stepResult instanceof DraftRefineAwaitingAnswerResult)
       || !(settlement instanceof DraftAwaitUserDecision)
       || !(awaitQuestion instanceof DraftAwaitQuestionIdentity)) return null;
-    const state = this.runtime.load(resolved);
-    if (binding?.runId !== state.runId || binding?.specId !== state.specId
-      || binding?.stepId !== "draft-refine" || state.current?.at(-1) !== "draft-refine"
-      || binding?.attempt?.id !== state.attempt?.id
-      || binding?.attempt?.sequence !== state.attempt?.sequence) return null;
-    const resultDigest = stepResultDigest(stepResult);
-    const activities = this.activityLedger(resolved).filter((entry) => {
-      const receipt = entry.result?.draftSettlementReceipt;
-      return receipt?.binding.runId === binding.runId
-        && receipt.binding.specId === binding.specId
-        && receipt.binding.stepId === binding.stepId
-        && receipt.binding.attemptId === binding.attempt.id
-        && receipt.binding.attemptSequence === binding.attempt.sequence;
+    return this.runtime.readCanonicalTransitionView(resolved, (view) => {
+      if (!new DraftAwaitQuestionSourceAdmission({ binding, awaitQuestion }).matches(view)) return null;
+      const latestActivity = this.#stepSettlementBindingActivities(resolved, {
+        runId: binding.runId, specId: binding.specId, stepId: binding.stepId,
+        attemptId: binding.attempt.id, attemptSequence: binding.attempt.sequence,
+      }, view.activities).at(-1) ?? null;
+      if (latestActivity === null || latestActivity.nodeId !== binding.stepId
+        || latestActivity.attemptId !== binding.attempt.id || latestActivity.sequence !== binding.attempt.sequence) return null;
+      const result = latestActivity.result instanceof NodeResult ? latestActivity.result : new NodeResult(latestActivity.result);
+      const latest = result.draftSettlementReceipt;
+      if (latest.resultKind !== stepResult.kind || latest.resultType !== stepResult.type
+        || latest.resultDigest !== stepResultDigest(stepResult) || latest.settlementKind !== "await"
+        || latest.targetStepId !== null || latest.effects !== null || latest.connector !== null
+        || !isDeepStrictEqual(latest.awaitQuestion, awaitQuestion.toJSON())) return null;
+      DraftStepSettlementReceipt.assertStored(latest.toJSON(), { binding, result: result.stepResult, settlement });
+      return latest;
     });
-    const latest = activities.at(-1)?.result?.draftSettlementReceipt ?? null;
-    if (latest === null || latest.resultKind !== stepResult.kind
-      || latest.resultType !== stepResult.type || latest.resultDigest !== resultDigest
-      || latest.settlementKind !== "await" || latest.targetStepId !== null
-      || latest.effects !== null || latest.connector !== null
-      || JSON.stringify(latest.awaitQuestion?.toJSON?.() ?? latest.awaitQuestion)
-        !== JSON.stringify(awaitQuestion.toJSON())) return null;
-    return latest;
   }
 
   /** Project only persisted draft-refine Result/Settlement and resume authority for one Attempt. */
@@ -5503,6 +6015,17 @@ export class CanonicalFlowManagerStore {
     if (resolved === null) throw new CurrentFlowStateInvariantError("no canonical active Flow");
     if (!(stepResult instanceof StepResult) || !(settlement instanceof StepSettlement)) {
       throw new CurrentFlowStateInvariantError("Draft settlement requires typed Result and Settlement");
+    }
+    const ordinaryAwaitInput = { binding, stepResult, settlement, awaitQuestion, artifactWrites,
+      artifactRemovals, artifactBaselines, commandResult, references, specRecord, testSourceBaseline,
+      executionLifecycle, lifecycleResult, draftCompletionApplication, gatePublication,
+      planGateRepairOutcome, draftGateRepairSelection, preparation, draftReturn };
+    const awaitAdmission = isOrdinaryDraftAwaitSettlement(ordinaryAwaitInput)
+      ? new DraftAwaitQuestionSourceAdmission({ binding, awaitQuestion }) : null;
+    if (awaitAdmission !== null) {
+      const replay = this.findDraftAwaitSettlementReceipt({ specId: resolved, binding, stepResult, settlement, awaitQuestion });
+      if (replay !== null) return Object.freeze({ state: this.runtime.load(resolved), receipt: replay });
+      this.runtime.readCanonicalTransitionView(resolved, (view) => awaitAdmission.assert(view));
     }
     if (["branch", "prepare-spec"].includes(binding?.stepId)
       && !(settlement instanceof StepErrorDecision)) {
@@ -5755,7 +6278,7 @@ export class CanonicalFlowManagerStore {
       if (stepResult instanceof SpecGateAwaitingDecisionResult
         || stepResult instanceof TaskSpecGateAwaitingDecisionResult
       ) {
-        const observation = this.#specGateNonblockingObservation({
+        const observation = this.#stepNonblockingObservation({
           state, binding, stepResult, commandResult,
         });
         const next = this.runtime.recordDraftStepSettlement({
@@ -5791,6 +6314,7 @@ export class CanonicalFlowManagerStore {
         artifactRemovals,
         artifactBaselines,
         testSourceBaseline,
+        ...(awaitAdmission === null ? {} : { admission: awaitAdmission }),
       });
       return Object.freeze({ state: next, receipt });
     }
@@ -6482,6 +7006,225 @@ export class CanonicalFlowManagerStore {
     return stepResult === null ? next : Object.freeze({ state: next, receipt });
   }
 
+  #implementationStepReceipt(input) {
+    const { binding, stepResult, settlement, executionBinding = null, executionLifecycle = null } = input;
+    const candidate = input.nonblockingPublication ?? input.gateDeferralPublication ?? input.taskStagePublication ?? input.testChainPublication ?? input.reviewPublication
+      ?? input.gatePublication ?? input.reviewFailurePublication ?? input.sourceTaskReviewStage ?? null;
+    const source = input.effect == null ? null : {
+      effect: input.effect.toJSON(), manifest: input.mutationManifest.toJSON(), handoffDigest: input.handoffDigest,
+      mutationBaselineDigest: input.sourceMutationBaseline?.digest ?? null,
+      result: input.result?.toJSON?.() ?? input.result,
+      settlement: input.sourceHandoffSettlement.toJSON(), taskStageBinding: input.taskStageBinding?.toJSON() ?? null,
+      planGateRepairOutcome: input.planGateRepairOutcome == null ? null : {
+        disposition: input.planGateRepairOutcome.disposition, repair: input.planGateRepairOutcome.repair.toJSON(),
+        report: input.planGateRepairOutcome.report.toJSON() },
+      upgradeResult: input.upgradeResult == null ? null : crypto.createHash("sha256").update(input.upgradeResult).digest("hex"),
+    };
+    const publication = new DraftStepSettlementPublication({ source,
+      candidate: candidate?.toJSON() ?? null, application: settlement.application?.toJSON() ?? null,
+      command: implementationCommandIdentity(input.commandResult),
+      manifest: input.manifest?.toJSON?.() ?? null });
+    let selectedLifecycle = executionLifecycle ?? (executionBinding === null ? null : DraftStepExecutionLifecycle.checkpoint(executionBinding));
+    if (selectedLifecycle === null && ["task-review", "impl-review"].includes(binding.stepId) && candidate !== null) {
+      const previous = this.#latestDraftExecutionLifecycle(binding.specId, binding);
+      const boundedToolingAwait = stepResult.kind === "impl-review-tooling" && settlement instanceof ImplementationAwaitDecision;
+      selectedLifecycle = previous?.phase === "claimed" ? boundedToolingAwait ? previous.published() : previous.published().terminal()
+        : previous?.phase === "terminal" ? previous : null;
+    }
+    return new DraftStepSettlementReceipt({ binding, result: stepResult, settlement, publication,
+      executionLifecycle: selectedLifecycle });
+  }
+
+  /** Save only the Step's selected meaning and the exact acquired publication. */
+  settleImplStepResult(input = {}) {
+    const { binding, stepResult, settlement } = input;
+    if (!(stepResult instanceof StepResult) || !hasImplementationStepContract(stepResult.stepId)
+      || !(settlement instanceof StepSettlement) || binding?.stepId !== stepResult.stepId
+      || settlement.sourceStepId !== stepResult.stepId || settlement.resultKind !== stepResult.kind
+      || settlement.resultType !== stepResult.type) throw new CurrentFlowStateInvariantError("implementation settlement requires its exact typed Result");
+    const resolved = this.#resolveSpecId(binding.specId);
+    const state = this.runtime.load(resolved);
+    const receipt = this.#implementationStepReceipt(input);
+    const replay = this.#admitStepSettlement({ resolved, state, binding, stepResult, settlement, receipt,
+      acceptedPublication: input.nonblockingPublication ?? input.gateDeferralPublication ?? null });
+    if (replay !== null) return Object.freeze({ state, receipt: replay });
+    if (input.effect != null) {
+      const selection = input.sourceSelection;
+      if (!(selection instanceof SourceStepSelection) || selection.result !== stepResult
+        || selection.facts.effect !== input.effect || selection.facts.evidence.handoffDigest !== input.handoffDigest
+        || selection.facts.evidence.mutationManifestDigest !== input.mutationManifest.digest
+        || selection.facts.evidence.mutationCount !== input.mutationManifest.mutations.length
+        || selection.facts.evidence.runId !== binding.runId || selection.facts.evidence.specId !== binding.specId
+        || selection.facts.evidence.nodeId !== (binding.nodeId ?? binding.stepId)
+        || selection.facts.evidence.attemptId !== binding.attempt.id
+        || selection.facts.evidence.attemptSequence !== binding.attempt.sequence) {
+        throw new CurrentFlowStateConflictError("source candidate differs from its adopted Result");
+      }
+      const next = input.planGateRepairOutcome?.disposition === "rejected-no-progress"
+        ? this.rejectPlanGateRepairHandoff({ ...input, outcome: input.planGateRepairOutcome, settlementReceipt: receipt })
+        : this.confirmSourceWorkerHandoff({ ...input, settlementReceipt: receipt });
+      return Object.freeze({ state: next, receipt });
+    }
+    const candidate = input.nonblockingPublication ?? input.gateDeferralPublication ?? input.taskStagePublication ?? input.testChainPublication ?? input.reviewPublication ?? input.gatePublication ?? input.reviewFailurePublication ?? null;
+    const writes = candidate?.artifactWrites ?? [];
+    const nodeId = binding.nodeId ?? binding.stepId;
+    const selectedActivityId = candidate?.selectedActivityId ?? activityId("implementation-step-settled");
+    const application = settlement.application;
+    const lifecycleResult = resultWithDraftStepResult(stepResult.type === "error"
+      ? { outcome: "failed", summary: stepResult.error.message, confirmedAt: new Date().toISOString(), artifactRefs: [] }
+      : resultFor("done", nodeId), binding.stepId, stepResult, receipt);
+    if (candidate instanceof NonblockingContinuationPublication) {
+      candidate.assertBinding(binding);
+      candidate.assertEvidence(savedImplementationSourceEvidence(stepResult));
+      if (!(settlement instanceof StepRoute)) throw new CurrentFlowStateConflictError("Accepted decision requires its Result-selected terminal connection");
+      const next = this.runtime.continueNonblocking({ specId: resolved, activityId: selectedActivityId, nodeId,
+        result: lifecycleResult, nonblocking: candidate.record.toJSON(), attempt: candidate.attempt.toJSON(),
+        skippedNodeIds: [], gateTaskLifecycle: application instanceof GateResultApplication
+          ? application.decision.plan.taskLifecycle?.toJSON() ?? null : null,
+        artifactWrites: candidate.artifactWrites, artifactBaselines: candidate.artifactBaselines,
+        admission: candidate, acceptedDecision: candidate.evidence.acceptedDecision });
+      if (next.nextAction()?.nodeId !== settlement.targetStepId) throw new CurrentFlowStateConflictError("Accepted decision does not reach its selected successor");
+      return Object.freeze({ state: next, receipt });
+    }
+    if (candidate instanceof GateDeferralPublication) {
+      candidate.assertBinding(binding);
+      candidate.assertEvidence(stepResult.evidence);
+      if (!(settlement instanceof StepRoute) || !(application instanceof GateResultApplication)
+        || application.decision.disposition.operation !== "defer" || settlement.connector.activateTarget === true) {
+        throw new CurrentFlowStateConflictError("accepted Gate deferral requires its terminal Result-selected connection");
+      }
+      const next = this.runtime.deferFailedGate({ specId: resolved, activityId: selectedActivityId, nodeId,
+        attempt: candidate.attempt.toJSON(), result: lifecycleResult, findingsPublication: candidate.findings,
+        acceptedDeferral: candidate.evidence.continuation,
+        gateTaskLifecycle: application.decision.plan.taskLifecycle?.toJSON() ?? null, admission: candidate });
+      return Object.freeze({ state: next, receipt });
+    }
+    if (candidate instanceof TaskStagePublication) {
+      if (!(application instanceof TaskStageApplication)) {
+        throw new CurrentFlowStateConflictError("Task stage publication differs from its selected Result");
+      }
+      candidate.assertEvidence(stepResult.evidence);
+      candidate.assertFacts(application.transition.facts);
+      const next = this.runtime.completeTaskReviewStage({ specId: resolved, activityId: selectedActivityId,
+        result: lifecycleResult, plan: application.transition, artifactWrites: writes,
+        admission: candidate.admission,
+        ...(application.transition.targetStepId === null ? {} : { targetAttempt: commandContextAttempt(state, application.transition.targetStepId) }) });
+      return Object.freeze({ state: next, receipt });
+    }
+    if (candidate instanceof ReviewFailurePublication) {
+      if (!(settlement instanceof StepErrorDecision) || stepResult.error.data?.reviewFailure == null) {
+        throw new CurrentFlowStateConflictError("Review failure publication requires its selected Error Result");
+      }
+      const observation = ReviewStepFailureObservation.fromJSON(stepResult.error.data.reviewFailure);
+      candidate.assertObservation(observation);
+      return this.#settleStepErrorResult({ resolved, binding, stepResult, settlement, receipt,
+        lifecycleResult, extraArtifactWrites: writes, selectedActivityId, admission: candidate,
+        failureObservation: observation.failure.toJSON() });
+    }
+    if (candidate !== null && !(candidate instanceof ImplCommandPublication)) throw new CurrentFlowStateInvariantError("implementation publication must be acquired by its canonical owner");
+    if (candidate !== null && (candidate.binding.runId !== binding.runId || candidate.binding.specId !== binding.specId
+      || candidate.binding.stepId !== binding.stepId || candidate.binding.nodeId !== binding.nodeId
+      || candidate.state.attempt.id !== binding.attempt.id || candidate.state.attempt.sequence !== binding.attempt.sequence)) {
+      throw new CurrentFlowStateConflictError("implementation command publication belongs to another binding");
+    }
+    const errorEvidence = stepResult.type === "error" && stepResult.error.data?.evidence != null
+      ? ["task-gate", "impl-gate"].includes(binding.stepId)
+        ? ImplementationGateResultEvidence.fromJSON(stepResult.error.data.evidence)
+        : ["test-execute", "test-result-review"].includes(binding.stepId)
+          ? TestChainResultEvidence.fromJSON(stepResult.error.data.evidence) : null
+      : null;
+    const acquiredEvidence = stepResult.evidence ?? errorEvidence;
+    if (candidate === null && acquiredEvidence != null && acquiredEvidence.executionRequired !== true
+      && !(acquiredEvidence instanceof TaskHostFilterAuthority)
+      && (stepResult.type !== "error" || acquiredEvidence.publication !== null)) {
+      throw new CurrentFlowStateConflictError("observed implementation Result requires its acquired publication candidate");
+    }
+    candidate?.assertEvidence(acquiredEvidence);
+    candidate?.assertCommand(input.commandResult);
+    const admission = candidate === null ? undefined : candidate;
+    let next;
+    if (settlement instanceof StepErrorDecision) {
+      return this.#settleStepErrorResult({ resolved, binding, stepResult, settlement, receipt,
+        lifecycleResult, extraArtifactWrites: writes, selectedActivityId, admission,
+        failureObservation: errorEvidence?.failure ?? null });
+    } else if (application instanceof TestChainApplication) {
+      if (application.decision.facts.stepId !== binding.stepId) {
+        throw new CurrentFlowStateConflictError("Test-chain application requires its one selected source failure");
+      }
+      next = this.#settleTestChainFailure({ resolved, decision: application.decision,
+        selectedActivityId, stepResult, receipt, confirmedAt: lifecycleResult.confirmedAt,
+        artifactWrites: writes, admission, nonblocking: this.#stepNonblockingObservation({
+          state, binding, stepResult, commandResult: input.commandResult, eligibility: application.eligibility }) });
+    } else if (settlement instanceof StepRoute) {
+      next = this.runtime.confirmAttempt({ specId: resolved, activityId: selectedActivityId,
+        result: lifecycleResult, artifactWrites: writes, admission,
+        gateTaskLifecycle: application instanceof GateResultApplication ? application.decision.plan.taskLifecycle?.toJSON() ?? null : null,
+        ...(settlement.connector.activateTarget === true ? {
+          targetAttempt: commandContextAttempt(state, materializeNonblockingEffectStep(state, settlement.targetStepId, nodeId)) } : {}) });
+    } else if (application instanceof GateResultApplication && application.decision.disposition.operation === "recovery") {
+      next = this.runtime.settleSpecGateRecovered({ specId: resolved, activityId: selectedActivityId, nodeId,
+        attempt: gateRecoveredAttempt(state), result: lifecycleResult, artifactWrites: writes, admission });
+    } else if (application instanceof GateResultApplication && application.decision.disposition.operation === "retry") {
+      const decision = application.decision;
+      const failure = decision.facts.failure;
+      const rejected = resultWithDraftStepResult({ outcome: "failed", summary: "Gate rejected the current Attempt.",
+        confirmedAt: lifecycleResult.confirmedAt, artifactRefs: [] }, binding.stepId, stepResult, receipt);
+      next = this.runtime.settleSpecGateRetry({ specId: resolved, activityId: selectedActivityId, nodeId,
+        attempt: gateRetryAttempt(state), result: rejected, artifactWrites: writes, admission,
+        failure: { category: failure.category, code: failure.code ?? "GATE_REJECTED",
+          message: rejected.summary, retryable: true, retryKind: "semantic" },
+        metric: decision.plan.retryMetric === null ? null : canonicalMetric({
+          phase: decision.plan.retryMetric.phase, counter: "gateRetry", delta: 1 }) });
+    } else if (application instanceof GateResultApplication
+      && application.decision.disposition.operation !== "nonblocking") {
+      const failure = application.decision.facts.failure;
+      const rejected = resultWithDraftStepResult({ outcome: "failed", summary: "Gate rejected the current Attempt.",
+        confirmedAt: lifecycleResult.confirmedAt, artifactRefs: [] }, binding.stepId, stepResult, receipt);
+      next = this.runtime.failAttempt({ specId: resolved, activityId: selectedActivityId, result: rejected,
+        artifactWrites: writes, admission,
+        failure: { category: failure.category, code: failure.code ?? "GATE_REJECTED",
+          message: rejected.summary, retryable: false, retryKind: null } });
+    } else {
+      const observation = application instanceof GateResultApplication
+        ? this.#stepNonblockingObservation({ state, binding, stepResult,
+          commandResult: input.commandResult, eligibility: application.eligibility }) : null;
+      next = this.runtime.recordDraftStepSettlement({ specId: resolved, activityId: selectedActivityId,
+        result: lifecycleResult, artifactWrites: writes, admission,
+        nonblocking: observation?.toJSON() ?? null });
+    }
+    return Object.freeze({ state: next, receipt });
+  }
+
+  readImplementationTaskFrontier(input = {}) {
+    const specId = typeof input === "string" ? input : input.specId ?? null;
+    const resolved = this.#resolveSpecId(specId);
+    const state = this.runtime.load(resolved);
+    const source = this.readArtifact({ specId: resolved, logicalKey: "spec.record", consumerNodeId: "system" });
+    const spec = JSON.parse(source.bytes.toString("utf8"));
+    return new ImplementationTaskFrontier(new TaskCollection(spec.tasks ?? []).admissionOrder()
+      .map((task) => ({ taskId: task.id, status: state.findNode(task.id.toString()).status })));
+  }
+
+  prepareImplCommandPublication({ binding, commandResult, issuePublication = null,
+    selectedActivityId = activityId("implementation-step-settled") } = {}) {
+    const resolved = this.#resolveSpecId(binding?.specId);
+    binding.assertCurrent();
+    const candidate = this.runtime.readCanonicalTransitionView(resolved, (view) => {
+      const nodeId = binding.nodeId ?? binding.stepId;
+      const artifactWrites = [...this.#attemptHistoryWrites({ specId: resolved, state: view.state, nodeId, commandResult, view }),
+        ...this.#commandPublicationWrites(commandResult)];
+      const issueWrite = this.#specGateIssueWrite({ resolved, binding, issue: issuePublication, view });
+      if (issueWrite !== null) artifactWrites.push(issueWrite);
+      const descriptors = stepResultPublicationDescriptors(artifactWrites, selectedActivityId);
+      const runtime = new Map(["test-execute", "test-result-review"].includes(binding.stepId)
+        ? [["test.execute.raw-log", view.readRuntimeArtifact({ logicalKey: "test.execute.raw-log" })]] : []);
+      return new ImplCommandPublication(IMPL_COMMAND_PUBLICATION_TOKEN, { binding, view, selectedActivityId,
+        artifactWrites, descriptors, runtime, commandResult });
+    });
+    return ImplCommandPublication.authenticate(IMPL_COMMAND_PUBLICATION_TOKEN, candidate, {
+      flowManager: this, commandResult, issuePublication });
+  }
+
   /** Project command-owned publications with the exact Store writers used by settlement. */
   previewStepResultPublications({ specId = null, nodeId, commandResult, activityId: selectedActivityId } = {}) {
     const resolved = this.#resolveSpecId(specId);
@@ -6495,18 +7238,7 @@ export class CanonicalFlowManagerStore {
       ...this.#attemptHistoryWrites({ specId: resolved, state, nodeId, commandResult }),
       ...this.#commandPublicationWrites(commandResult),
     ];
-    return Object.freeze(writes.map((write) => {
-      const artifact = write.logicalKey === "review.evidence"
-        ? FLOW_ARTIFACT_CONTRACTS.reviewEvidence({ reviewStep: write.reviewStep, digest: write.digest })
-        : FLOW_ARTIFACT_CONTRACTS.resolve(write.logicalKey, write.parameters ?? {});
-      return new RequirementTestResultPublication({
-        logicalKey: write.logicalKey,
-        relativePath: artifact.relativePath,
-        hash: crypto.createHash("sha256").update(write.bytes).digest("hex"),
-        size: write.bytes.length,
-        activityId: selectedActivityId,
-      });
-    }));
+    return stepResultPublicationDescriptors(writes, selectedActivityId);
   }
 
   /**
@@ -6854,7 +7586,7 @@ export class CanonicalFlowManagerStore {
    * Commit a sealed source-worker effect and its Attempt confirmation in one
    * Version Store transaction. Workers never receive this surface.
    */
-  confirmSourceWorkerHandoff({ specId = null, effect, mutationManifest, handoffDigest, result, upgradeResult = null, taskStageBinding = null, sourceMutationBaseline = null, sourceHandoffSettlement = null, planGateRepairOutcome = null } = {}) {
+  confirmSourceWorkerHandoff({ specId = null, effect, mutationManifest, handoffDigest, result, upgradeResult = null, taskStageBinding = null, sourceMutationBaseline = null, sourceHandoffSettlement = null, planGateRepairOutcome = null, binding, stepResult, settlement, settlementReceipt, sourceTaskReviewStage = null } = {}) {
     const resolved = this.#resolveSpecId(specId);
     if (resolved === null) throw new CurrentFlowStateInvariantError("no canonical active Flow");
     if (!(effect instanceof SourceWorkerEffect)) {
@@ -6871,9 +7603,15 @@ export class CanonicalFlowManagerStore {
       throw new CurrentFlowStateInvariantError("canonical source worker mutation manifest does not target the current Attempt");
     }
     const nodeId = state.current?.at(-1) ?? null;
-    const confirmationActivityId = activityId(nodeId === "impl-repair" ? "impl-repair-invalidation-confirmed" : "source-handoff-confirmed");
+    if (!(stepResult instanceof StepResult) || !(settlementReceipt instanceof DraftStepSettlementReceipt)
+      || !(settlement instanceof StepRoute) || binding?.stepId !== stepResult.stepId) {
+      throw new CurrentFlowStateInvariantError("canonical source confirmation requires its selected typed Result and receipt");
+    }
+    const confirmationActivityId = `source-step-settled-${settlementReceipt.id}`;
+    result = resultWithDraftStepResult(result, binding.stepId, stepResult, settlementReceipt);
+    const application = settlement.application;
     const effectTargetsActiveNode = nodeId === effect.stepId
-      || (effect.stepId.startsWith("task-") && taskIdForNode(state, nodeId) !== null && nodeId === `${taskIdForNode(state, nodeId)}-${effect.stepId.slice(5)}`);
+      || TaskStepIdentity.fromStateNode(state, nodeId)?.definitionId === effect.stepId;
     if (!effectTargetsActiveNode) throw new CurrentFlowStateInvariantError("source worker effect does not target the active Attempt");
     if (!(sourceHandoffSettlement instanceof SourceHandoffSettlement)
       || sourceHandoffSettlement.kind !== "accepted"
@@ -6987,7 +7725,7 @@ export class CanonicalFlowManagerStore {
       artifactWrites.push({ logicalKey: "file.map", mediaType: "application/json", bytes: Buffer.from(`${JSON.stringify(fileMap, null, 2)}\n`, "utf8") });
     }
     if (effect.issues.length > 0 && effect.stepId !== "task-repair") {
-      const recoveryPlan = resolveSourceQualityIssueRecoveryPlan({ sourceStep: effect.stepId, taskId: sourceTaskId });
+      const recoveryPlan = application.qualityRecovery;
       if (recoveryPlan === null) {
         throw new CurrentFlowStateInvariantError("source quality issues have no eligible Definition-backed recovery route");
       }
@@ -6995,10 +7733,24 @@ export class CanonicalFlowManagerStore {
         state, effect, handoffDigest, result, artifactWrites, recoveryPlan,
       });
     }
-    if (["task-triage", "task-repair"].includes(effect.stepId)) {
-      return this.#confirmTaskReviewSourceStage({ state, spec, effect, mutationManifest, handoffDigest, result, artifactWrites, taskStageBinding, sourceMutationBaseline, settlementAdmission: acceptanceAdmission });
+    if (effect.stepId === "task-repair") {
+      if (!(sourceTaskReviewStage instanceof TaskStagePublication) || !(application instanceof TaskStageApplication)) {
+        throw new CurrentFlowStateConflictError("Source Task repair publication differs from the selected transition");
+      }
+      sourceTaskReviewStage.assertFacts(application.transition.facts);
+      if (!(taskStageBinding instanceof TaskReviewEpisodeBinding)
+        || !sourceTaskReviewStage.sourceStageBinding?.matches(taskStageBinding)) {
+        throw new CurrentFlowStateInvariantError("Source Task repair episode does not match its acquired binding");
+      }
+      artifactWrites.push(...sourceTaskReviewStage.artifactWrites);
+      if (application.qualityRecovery !== null) this.#appendSourceQualityIssues({ state, effect, handoffDigest,
+        result, artifactWrites, recoveryPlan: application.qualityRecovery });
+      return this.runtime.completeTaskReviewStage({ specId: resolved, activityId: confirmationActivityId,
+        result, artifactWrites, plan: application.transition,
+        admission: new CombinedAdmission(acceptanceAdmission, sourceTaskReviewStage.admission),
+        ...(application.transition.targetStepId === null ? {} : { targetAttempt: commandContextAttempt(state, application.transition.targetStepId) }) });
     }
-    if (effect.repair !== null) {
+    if (["impl-repair-applied", "impl-repair-quality-issue"].includes(stepResult.kind)) {
       const repairRecord = CanonicalImplementationRepairRecord.capture({
         repair: effect.repair,
         mutationManifest,
@@ -7010,7 +7762,7 @@ export class CanonicalFlowManagerStore {
       });
       return this.runtime.repairImplementation({
         specId: resolved,
-        activityId: activityId("impl-repair-invalidated"),
+        activityId: confirmationActivityId,
         attempt: commandContextAttempt(state, "test-execute"),
         result,
         references: {
@@ -7024,10 +7776,10 @@ export class CanonicalFlowManagerStore {
         ...(sourceWorkerUpgrade === null ? {} : { sourceWorkerUpgrade: true }),
       });
     }
-    if (effect.triage !== null && effect.triage.dispositions.every((entry) => entry.disposition === "reject")) {
+    if (stepResult.kind === "impl-triage-gate-required") {
       return this.runtime.triageImplementationNoRepair({
         specId: resolved,
-        activityId: activityId("impl-triage-no-repair"),
+        activityId: confirmationActivityId,
         attempt: commandContextAttempt(state, "impl-gate"),
         result,
         references: {
@@ -7041,10 +7793,10 @@ export class CanonicalFlowManagerStore {
         ...(sourceWorkerUpgrade === null ? {} : { sourceWorkerUpgrade: true }),
       });
     }
-    if (effect.triage !== null) {
+    if (stepResult.kind === "impl-triage-repair-required") {
       return this.runtime.triageImplementationForRepair({
         specId: resolved,
-        activityId: activityId("impl-triage-repair"),
+        activityId: confirmationActivityId,
         attempt: commandContextAttempt(state, "impl-repair"),
         result,
         references: {
@@ -7064,6 +7816,8 @@ export class CanonicalFlowManagerStore {
       activityId: confirmationActivityId,
       result,
       status: effect.completionStatus,
+      ...(settlement.connector.activateTarget === true
+        ? { targetAttempt: commandContextAttempt(state, settlement.targetStepId) } : {}),
       ...(sourceSpecChanged ? { specRecord: new CanonicalSourceWorkerSpecCompletion(spec) } : {}),
       artifactWrites,
       admission: new CombinedAdmission(
@@ -7074,7 +7828,19 @@ export class CanonicalFlowManagerStore {
     });
   }
 
-  #confirmTaskReviewSourceStage({ state, spec, effect, mutationManifest, handoffDigest, result, artifactWrites, taskStageBinding, sourceMutationBaseline, settlementAdmission }) {
+  readSourceTaskExecutionBudget({ specId = null, taskId } = {}) {
+    const resolved = this.#resolveSpecId(specId);
+    const state = this.runtime.load(resolved);
+    return nextTaskExecutionBudget({ state, taskId, lineages: this.taskMutationLineages({ specId: resolved, taskId }) });
+  }
+
+  /** Acquire repair observations through the same authoritative Task-stage producer. */
+  prepareSourceTaskReviewStage({ specId = null, effect, mutationManifest, handoffDigest, taskStageBinding, artifactWrites = [], result = null } = {}) {
+    const resolved = this.#resolveSpecId(specId);
+    const state = this.runtime.load(resolved);
+    const specSource = this.readArtifact({ specId: resolved, logicalKey: "spec.record", consumerNodeId: state.current.at(-1) });
+    const spec = JSON.parse(specSource.bytes.toString("utf8"));
+    artifactWrites = [...artifactWrites];
     state.assertAttemptConfirmable();
     if (!(taskStageBinding instanceof TaskReviewEpisodeBinding)) throw new CurrentFlowStateInvariantError("Task source stage requires its parent-owned immutable episode binding");
     const taskId = taskIdForNode(state, state.current.at(-1));
@@ -7127,18 +7893,9 @@ export class CanonicalFlowManagerStore {
         ? effect.repair?.summary ?? effect.noChangeReason.reason
         : dispositions.map((entry) => entry.rationale).join("\n"),
     });
-    const completionPlan = resolveTaskReviewStageCompletion({
-      facts,
-      sourceQualityIssueCount: effect.issues.length,
-    });
-    if (completionPlan.qualityRecovery !== null) {
-      this.#appendSourceQualityIssues({
-        state, effect, handoffDigest, result, artifactWrites,
-        recoveryPlan: completionPlan.qualityRecovery,
-      });
-    }
-    const plan = completionPlan.transition;
-    return this.runtime.completeTaskReviewStage({ specId: state.specId, activityId: activityId("task-review-stage-confirmed"), result, artifactWrites, admission: new CombinedAdmission(settlementAdmission, this.#producerCompletionAdmission(state.current.at(-1), artifactWrites)), plan, ...(plan.targetStepId === null ? {} : { targetAttempt: commandContextAttempt(state, plan.targetStepId) }) });
+    return new TaskStagePublication({ facts, artifactWrites, commandResult, sourceStageBinding: inputs.binding,
+      taskFrontier: this.readImplementationTaskFrontier({ specId: state.specId }),
+      admission: this.#producerCompletionAdmission(state.current.at(-1), artifactWrites) });
   }
 
   #appendSourceQualityIssues({ state, effect, handoffDigest, result, artifactWrites, recoveryPlan }) {
@@ -7196,6 +7953,7 @@ export class CanonicalFlowManagerStore {
     result = null,
     sourceHandoffSettlement = null,
     mutationManifest = null,
+    binding = null, stepResult = null, settlementReceipt = null,
   } = {}) {
     const resolved = this.#resolveSpecId(specId);
     if (resolved === null) throw new CurrentFlowStateInvariantError("no canonical active Flow");
@@ -7207,7 +7965,7 @@ export class CanonicalFlowManagerStore {
     if (state.current === null || state.attempt === null) {
       throw new CurrentFlowStateInvariantError("plan-Gate no-progress rejection requires an active Attempt");
     }
-    const failureActivityId = activityId("plan-gate-repair-rejected");
+    const failureActivityId = settlementReceipt === null ? activityId("plan-gate-repair-rejected") : `source-step-rejected-${settlementReceipt.id}`;
     const sealed = outcome.seal(failureActivityId);
     if (sealed.targetAttempt.id !== state.attempt.id
       || sealed.targetAttempt.sequence !== state.attempt.sequence) {
@@ -7264,12 +8022,12 @@ export class CanonicalFlowManagerStore {
         retryable: false,
         retryKind: null,
       },
-      result: {
+      result: resultWithDraftStepResult({
         outcome: "failed",
         summary,
         confirmedAt: result?.confirmedAt ?? new Date().toISOString(),
         artifactRefs: [{ kind: "plan-gate-repair-outcome", id: sealed.repairId }],
-      },
+      }, binding?.stepId ?? state.current.at(-1), stepResult, settlementReceipt),
       artifactWrites,
       admission,
     });
@@ -7299,34 +8057,6 @@ export class CanonicalFlowManagerStore {
       confirmedAt: now,
       artifactRefs: [],
     };
-    if (stepResult !== null) {
-      if (!(stepResult instanceof StepResult)) {
-        throw new CurrentFlowStateInvariantError("Draft failure requires a typed StepResult");
-      }
-      if (stepResult.type === STEP_RESULT_TYPE.ERROR) {
-        if (!(settlementReceipt instanceof DraftStepSettlementReceipt || settlementReceipt instanceof RequirementTestSettlementReceipt)
-          || settlementReceipt.settlementKind !== "failure") {
-          throw new CurrentFlowStateInvariantError("Draft Error Result requires its Failure settlement receipt");
-        }
-        const requirementExternalBlock = ["approval", "test-generate", "test-review", "test-repair", "test-gate"].includes(nodeId)
-          && stepResult.error instanceof RequirementTestExternalBlockedError
-          && failure.category === "external"
-          && failure.code === stepResult.error.code
-          && failure.message === stepResult.error.message
-          && failure.retryable === false
-          && failure.retryKind === null;
-        if (failure.category !== STEP_RESULT_ERROR_CATEGORY
-          && !(nodeId === "spec-gate" && ["semantic", "local"].includes(failure.category))
-          && !requirementExternalBlock) {
-          throw new CurrentFlowStateInvariantError(
-            "Error StepResult requires step-result-error failure facts",
-          );
-        }
-        failureResult = resultWithDraftStepResult(failureResult, nodeId, stepResult, settlementReceipt);
-      } else {
-        throw new CurrentFlowStateInvariantError("failed Draft Attempt cannot use this StepResult");
-      }
-    }
     if (taskReviewUnsealedCheckpoint !== null && !(taskReviewUnsealedCheckpoint instanceof TaskReviewUnsealedCheckpoint)) {
       throw new CurrentFlowStateInvariantError("Task Review failure checkpoint must be typed");
     }
@@ -7349,6 +8079,45 @@ export class CanonicalFlowManagerStore {
     ];
     if (taskReviewUnsealedCheckpoint !== null) artifactWrites.push(taskReviewCheckpointArtifact(taskReviewUnsealedCheckpoint));
     if (taskReviewAbortedWorkUnit !== null) artifactWrites.push(taskReviewAbortedWorkUnit.artifactWrite);
+    if (stepResult !== null) {
+      if (!(stepResult instanceof StepResult)) {
+        throw new CurrentFlowStateInvariantError("Draft failure requires a typed StepResult");
+      }
+      if (stepResult.type === STEP_RESULT_TYPE.ERROR) {
+        if (!(settlementReceipt instanceof DraftStepSettlementReceipt || settlementReceipt instanceof RequirementTestSettlementReceipt)
+          || settlementReceipt.settlementKind !== "failure") {
+          throw new CurrentFlowStateInvariantError("Draft Error Result requires its Failure settlement receipt");
+        }
+        const requirementExternalBlock = ["approval", "test-generate", "test-review", "test-repair", "test-gate"].includes(nodeId)
+          && stepResult.error instanceof RequirementTestExternalBlockedError
+          && failure.category === "external"
+          && failure.code === stepResult.error.code
+          && failure.message === stepResult.error.message
+          && failure.retryable === false
+          && failure.retryKind === null;
+        const reviewObservation = ["task-review", "impl-review"].includes(stepResult.stepId)
+          && stepResult.error.data?.reviewFailure != null
+          ? ReviewStepFailureObservation.fromJSON(stepResult.error.data.reviewFailure) : null;
+        const reviewFailure = reviewObservation !== null && reviewObservation.stepId === stepResult.stepId
+          && reviewObservation.identity.runId === state.runId && reviewObservation.identity.specId === state.specId
+          && reviewObservation.identity.stepId === nodeId && reviewObservation.identity.attempt.id === state.attempt.id
+          && reviewObservation.identity.attempt.sequence === state.attempt.sequence
+          && isDeepStrictEqual(reviewObservation.failure.toJSON(), new ActivityFailure(failure).toJSON());
+        const implementationGateFailure = admission instanceof ImplCommandPublication
+          && admission.admitsGateFailure({ state, stepResult, receipt: settlementReceipt, failure,
+            artifactWrites, activityId: failureActivityId });
+        if (failure.category !== STEP_RESULT_ERROR_CATEGORY
+          && !(nodeId === "spec-gate" && ["semantic", "local"].includes(failure.category))
+          && !requirementExternalBlock && !reviewFailure && !implementationGateFailure) {
+          throw new CurrentFlowStateInvariantError(
+            "Error StepResult requires step-result-error failure facts",
+          );
+        }
+        failureResult = resultWithDraftStepResult(failureResult, stepResult.stepId, stepResult, settlementReceipt);
+      } else {
+        throw new CurrentFlowStateInvariantError("failed Draft Attempt cannot use this StepResult");
+      }
+    }
     return this.runtime.failAttempt({
       publicationLimits,
       specId: resolved,
@@ -7643,6 +8412,7 @@ export class CanonicalFlowManagerStore {
     const state = this.runtime.load(resolved);
     if (state.current === null) throw new CurrentFlowStateInvariantError("canonical result publication requires an active Attempt");
     const nodeId = state.current.at(-1);
+    assertGenericPublicationAllowed(state, "publication");
     const artifactWrites = [
       ...this.#attemptHistoryWrites({
       specId: resolved,
@@ -7662,11 +8432,161 @@ export class CanonicalFlowManagerStore {
     });
   }
 
+  prepareReviewStepFailurePublication({ binding, error, failure, checkpoint = null, workUnit = null }) {
+    const state = binding.assertCurrent();
+    if (!["task-review", "impl-review"].includes(binding.stepId) || !(error instanceof Error)) {
+      throw new CurrentFlowStateInvariantError("Review failure acquisition requires its registered Step and original error");
+    }
+    const canonicalFailure = new ActivityFailure(failure).toJSON();
+    if (checkpoint !== null) {
+      if (!(checkpoint instanceof TaskReviewUnsealedCheckpoint) || binding.stepId !== "task-review") {
+        throw new CurrentFlowStateInvariantError("Review failure checkpoint requires its exact Task Review");
+      }
+      checkpoint.assertActiveState(state);
+    }
+    const manifest = workUnit instanceof ReviewWorkUnit ? workUnit.manifestDocument : null;
+    const execution = this.draftStepExecutionState({ binding });
+    const manifestDigest = execution.lifecycle?.binding?.manifestDigest ?? null;
+    if (manifest !== null && manifestDigest !== null && manifest.digest !== manifestDigest) {
+      throw new CurrentFlowStateConflictError("Review failure work unit differs from its durable claim");
+    }
+    const observation = new ReviewStepFailureObservation({ stepId: binding.stepId,
+      taskId: binding.taskIdentity?.taskId ?? null,
+      identity: new NonGateTargetBinding({ runId: state.runId, specId: state.specId,
+        stepId: binding.nodeId ?? binding.stepId, attempt: binding.attempt }),
+      failure: canonicalFailure, manifest, executionManifestDigest: manifestDigest,
+      checkpointDigest: checkpoint?.digest ?? null, diagnostics: error.data ?? null });
+    return new ReviewFailurePublication({ binding, observation, checkpoint,
+      artifactWrites: checkpoint === null ? [] : [taskReviewCheckpointArtifact(checkpoint)] });
+  }
+
   /**
    * Publish one canonical Task Review result and apply the Definition-selected
    * review-funnel connector in the same journal transaction.
    */
-  confirmTaskReviewResult({ specId = null, commandResult } = {}) {
+  #terminalReviewPublication({ resolved, stepId, nodeId, attemptId, sequence = null }) {
+    const state = this.runtime.load(resolved);
+    if (state.current?.at(-1) === nodeId && state.attempt?.id === attemptId
+      && (sequence === null || state.attempt.sequence === sequence) && state.attempt.failure === null) return null;
+    const snapshot = this.runtime.loadSnapshot(resolved);
+    const selected = snapshot.activities.findLast((activity) => activity.nodeId === nodeId
+      && activity.attemptId === attemptId && (sequence === null || activity.sequence === sequence)
+      && activity.result?.draftSettlementReceipt?.settlementKind === "target-connection");
+    if (selected === undefined) return null;
+    const result = selected.result.stepResult;
+    const node = state.findNode(nodeId);
+    if (result.stepId !== stepId || node?.attemptSequence !== selected.sequence
+      || node.result?.draftSettlementReceipt?.id !== selected.result.draftSettlementReceipt.id) {
+      throw new CurrentFlowStateConflictError("Review replay differs from its current terminal producer");
+    }
+    const settlement = stepId === "task-review" ? settleTaskStepResult(stepId, result) : settleImplStepResult(stepId, result);
+    const receipt = DraftStepSettlementReceipt.assertStored(selected.result.draftSettlementReceipt, {
+      result, settlement, binding: { runId: state.runId, specId: resolved, stepId,
+        attempt: { id: selected.attemptId, sequence: selected.sequence } } });
+    return Object.freeze({ state, selected, result, settlement, receipt, activities: snapshot.activities });
+  }
+
+  #reviewCommandPublication({ resolved, logicalKey, parameters = {}, selected, commandResult, fingerprint }) {
+    const artifact = this.readArtifact({ specId: resolved, logicalKey, parameters, consumerNodeId: "system" });
+    const envelopes = FLOW_ARTIFACT_CONTRACTS.require(logicalKey).contentContract.parse(artifact.bytes);
+    const history = CanonicalCommandAttemptArtifactHistory.fromBytes({ logicalKey, bytes: artifact.bytes });
+    if (artifact.descriptor.activityId !== selected.id || artifact.descriptor.hash !== fingerprint
+      || history.current.attempt !== selected.sequence
+      || attachedCanonicalCommandResultArtifact(commandResult)?.logicalKey !== logicalKey
+      || !isDeepStrictEqual(history.current.payload, attachedCanonicalCommandResultArtifact(commandResult)?.payload)
+      || !isDeepStrictEqual(envelopes.current.payload.result, JSON.parse(JSON.stringify(commandResult)))) {
+      throw new CurrentFlowStateConflictError("Review replay is not its exact original command and canonical publication");
+    }
+    const writes = this.#commandPublicationWrites(commandResult);
+    this.runtime.readCanonicalTransitionView(resolved, (view) => {
+      for (const input of writes) {
+        const write = CanonicalFlowArtifactWrite.from(input);
+        const descriptor = view.catalog.artifacts.find((entry) => entry.relativePath === write.artifact.relativePath);
+        if (descriptor?.activityId !== selected.id || descriptor.hash !== crypto.createHash("sha256").update(write.bytes).digest("hex")
+          || !view.readCatalogedArtifact(descriptor).equals(write.bytes)) {
+          throw new CurrentFlowStateConflictError("Review replay changed its original evidence publication");
+        }
+      }
+    });
+    return Object.freeze({ artifact, history, writes });
+  }
+
+  readReviewPublicationReplay({ specId = null, commandResult } = {}) {
+    const resolved = this.#resolveSpecId(specId);
+    const workUnit = attachedCanonicalReviewWorkUnit(commandResult);
+    const manifest = workUnit?.manifestDocument;
+    if (manifest?.taskId === null) return this.#implReviewPublicationReplay({ resolved, commandResult, manifest });
+    const publicationBinding = attachedTaskReviewPublicationBinding(commandResult);
+    if (publicationBinding === null) throw new CurrentFlowStateInvariantError("Task Review replay requires its original sealed binding");
+    const identity = publicationBinding.executionIdentity;
+    const terminal = this.#terminalReviewPublication({ resolved, stepId: "task-review", nodeId: identity.attempt.nodeId,
+      attemptId: identity.attempt.id, sequence: identity.attempt.sequence });
+    if (terminal === null) return null;
+    const { state, selected, result, settlement, receipt } = terminal;
+    const facts = result.evidence?.facts;
+    if (result.stepId !== "task-review" || facts?.binding?.sourceFingerprint !== publicationBinding.source.fingerprint
+      || facts.binding.attemptId !== identity.attempt.id || facts.binding.attemptSequence !== identity.attempt.sequence) {
+      throw new CurrentFlowStateConflictError("Task Review replay differs from its current terminal producer");
+    }
+    const unavailable = facts.unavailable;
+    let replayWrites = [];
+    if (unavailable !== null) {
+      if (unavailable.code !== "TASK_REVIEW_PUBLICATION_UNAVAILABLE"
+        || unavailable.checkpointDigest !== publicationBinding.manifest.digest
+        || unavailable.workUnitManifestDigest !== attachedCanonicalReviewWorkUnit(commandResult)?.manifestDocument?.digest
+        || unavailable.specDigest !== publicationBinding.specDigest
+        || unavailable.contextDigest !== publicationBinding.context.fingerprint) {
+        throw new CurrentFlowStateConflictError("Task Review unavailable replay differs from its original sealed source");
+      }
+    } else {
+      const { artifact, writes } = this.#reviewCommandPublication({ resolved, logicalKey: "task.review",
+        parameters: { taskId: identity.taskId }, selected, commandResult, fingerprint: facts.binding.artifactDigest });
+      replayWrites = [{ logicalKey: "task.review", parameters: { taskId: identity.taskId },
+        mediaType: "application/json", bytes: artifact.bytes }, ...writes];
+    }
+    const acquired = new TaskStagePublication({ facts, artifactWrites: replayWrites, commandResult,
+      taskFrontier: result.evidence.frontier,
+      admission: unavailable === null ? null : new TaskReviewUnavailableResultPublicationAdmission({ publicationBinding }) });
+    const exact = this.findStepSettlementReceipt({ binding: new TaskReviewPublicationReplayBinding({ identity,
+      runId: state.runId, specId: resolved }), stepResult: result, settlement, taskStagePublication: acquired, commandResult });
+    if (exact?.id !== receipt.id) throw new CurrentFlowStateConflictError("Task Review replay differs from its exact publication receipt");
+    return new ReviewPublicationReplay({ state, receipt });
+  }
+
+  #implReviewPublicationReplay({ resolved, commandResult, manifest }) {
+    if (manifest.nodeId !== "impl-review" || manifest.phase !== "impl" || manifest.specId !== resolved) {
+      throw new CurrentFlowStateConflictError("Impl Review replay requires its original Flow work unit");
+    }
+    const terminal = this.#terminalReviewPublication({ resolved, stepId: "impl-review", nodeId: manifest.nodeId,
+      attemptId: manifest.attemptId });
+    if (terminal === null) return null;
+    const { state, selected, result, receipt, activities } = terminal;
+    const evidence = result.evidence;
+    const { history } = this.#reviewCommandPublication({ resolved, logicalKey: "impl.review",
+      selected, commandResult, fingerprint: evidence.publication.fingerprint });
+    const payload = history.current.payload;
+    const publications = canonicalReviewEvidencePublications({ evidence: evidence.review, nodeId: "impl-review" });
+    const cycle = ReviewFindingCycle.fromActivityLedger({ runId: state.runId,
+      activities: activities.filter((activity) => activity.confirmationOrder < selected.confirmationOrder) });
+    if (manifest.runId !== state.runId || !isDeepStrictEqual(evidence?.manifest?.toJSON(), manifest.toJSON())
+      || evidence.publication.producerActivityId !== selected.id || evidence.identity.attempt.id !== selected.attemptId
+      || evidence.identity.attempt.sequence !== selected.sequence
+      || !cycle.matchesArtifact(payload) || !isDeepStrictEqual(payload.canonicalTarget, manifest.target.toJSON())
+      || evidence.seal === null || !isDeepStrictEqual(payload.canonicalEvidence, evidence.review?.toJSON())
+      || !isDeepStrictEqual(attachedCanonicalCommandResultPublications(commandResult).map((publication) => publication.toJSON()),
+        publications.map((publication) => publication.toJSON()))
+      || payload.workerOutput?.digest !== evidence.seal.output.digest
+      || payload.workerOutput?.byteLength !== evidence.seal.output.byteLength
+      || receipt.executionLifecycle?.phase !== "terminal"
+      || receipt.executionLifecycle.binding.manifestDigest !== manifest.digest
+      || receipt.executionLifecycle.binding.inputDigest !== manifest.inputDigest) {
+      throw new CurrentFlowStateConflictError("Impl Review replay differs from its sealed original publication and source");
+    }
+    evidence.seal.assertManifest(manifest);
+    return new ReviewPublicationReplay({ state, receipt });
+  }
+
+  prepareTaskReviewStagePublication({ specId = null, commandResult } = {}) {
     const resolved = this.#resolveSpecId(specId);
     if (resolved === null) throw new CurrentFlowStateInvariantError("no canonical active Flow");
     const state = this.runtime.load(resolved);
@@ -7765,20 +8685,15 @@ export class CanonicalFlowManagerStore {
       sourceNoChange,
       noChangeContinuation,
     });
-    const plan = resolveTaskReviewStageTransition(facts);
-    return this.runtime.completeTaskReviewStage({
-      specId: resolved,
-      activityId: activityId("task-review-stage-confirmed"),
-      result: resultFor("done", nodeId),
-      artifactWrites,
-      admission: new TaskReviewSourcePublicationAdmission({ root: this.executionRoot(), lineageSet, sourceFingerprint: source.fingerprint, producerAdmission: this.#producerCompletionAdmission(nodeId, artifactWrites), publicationBinding }),
-      plan,
-      ...(plan.targetStepId === null ? {} : { targetAttempt: commandContextAttempt(state, plan.targetStepId) }),
-    });
+    return new TaskStagePublication({ facts, commandResult, artifactWrites, taskFrontier: this.readImplementationTaskFrontier({ specId: state.specId }), admission: new TaskReviewSourcePublicationAdmission({ root: this.executionRoot(), lineageSet, sourceFingerprint: source.fingerprint, producerAdmission: this.#producerCompletionAdmission(nodeId, artifactWrites), publicationBinding }) });
+  }
+
+  confirmTaskReviewResult(input) {
+    return this.settleImplStepResult(input);
   }
 
   /** Publish a stopped, zero-effect Task Review failure without inventing a semantic Review result. */
-  confirmTaskReviewUnavailable({ specId = null, checkpoint, decision } = {}) {
+  prepareTaskReviewUnavailablePublication({ specId = null, checkpoint, decision } = {}) {
     const resolved = this.#resolveSpecId(specId);
     if (resolved === null) throw new CurrentFlowStateInvariantError("no canonical active Flow");
     if (!(checkpoint instanceof TaskReviewUnsealedCheckpoint)) {
@@ -7837,51 +8752,36 @@ export class CanonicalFlowManagerStore {
       reason: `Task Review is unavailable: ${message}`,
       unavailable,
     });
-    const plan = resolveTaskReviewStageTransition(facts);
-    return this.runtime.completeTaskReviewStage({
-      specId: resolved,
-      activityId: activityId("task-review-unavailable"),
-      result: resultFor("done", nodeId),
-      admission: new TaskReviewUnavailablePublicationAdmission({
-        root: this.executionRoot(), lineageSet, checkpoint, specDigest, contextDigest: context.fingerprint,
-      }),
-      plan,
-      targetAttempt: commandContextAttempt(state, plan.targetStepId),
-    });
+    return new TaskStagePublication({ facts, artifactWrites: [], taskFrontier: this.readImplementationTaskFrontier({ specId: state.specId }), admission: new TaskReviewUnavailablePublicationAdmission({ root: this.executionRoot(), lineageSet, checkpoint, specDigest, contextDigest: context.fingerprint }) });
+  }
+
+  confirmTaskReviewUnavailable(input) {
+    return this.settleImplStepResult(input);
   }
 
   /** Settle a pre-commit canonical Review publication I/O failure using its original sealed binding. */
-  confirmTaskReviewPublicationUnavailable({ specId = null, commandResult, error } = {}) {
+  prepareTaskReviewPublicationUnavailable({ specId = null, commandResult, error } = {}) {
     const resolved = this.#resolveSpecId(specId);
     if (resolved === null) throw new CurrentFlowStateInvariantError("no canonical active Flow");
     const state = this.runtime.load(resolved);
     const publicationBinding = attachedTaskReviewPublicationBinding(commandResult);
     if (publicationBinding === null) throw new CurrentFlowStateInvariantError("Task Review publication failure lacks its sealed binding");
     const taskId = publicationBinding.executionIdentity.taskId;
-    if (state.current?.at(-1) !== `${taskId}-review` || state.attempt === null) {
-      const matchingUnavailable = this.activityLedger(resolved).filter((activity) => {
-        const storedPlan = activity.transition?.taskReviewStagePlan;
-        if (storedPlan?.operation !== "review-unavailable-to-gate") return false;
-        let plan;
-        try { plan = taskReviewStagePlanFromJSON(storedPlan); }
-        catch { return false; }
-        const facts = plan?.facts ?? null;
-        return facts?.unavailable?.code === "TASK_REVIEW_PUBLICATION_UNAVAILABLE"
-          && facts.binding.attemptId === publicationBinding.executionIdentity.attempt.id
-          && facts.binding.attemptSequence === publicationBinding.executionIdentity.attempt.sequence
-          && facts.binding.sourceFingerprint === publicationBinding.source.fingerprint
-          && facts.unavailable.checkpointDigest === publicationBinding.manifest.digest
-          && facts.unavailable.workUnitManifestDigest === publicationBinding.manifest.digest
-          && facts.unavailable.specDigest === publicationBinding.specDigest
-          && facts.unavailable.contextDigest === publicationBinding.context.fingerprint;
-      });
-      if (matchingUnavailable.length === 1) return state;
-      if (matchingUnavailable.length > 1) throw new CurrentFlowStateInvariantError("Task Review publication unavailable settlement is duplicated");
-      const published = this.catalog(resolved).artifacts.some((entry) => entry.logicalKey === "task.review"
-        && entry.relativePath === `steps/impl/${taskId}/review/result.json`);
-      if (published) return state;
+    const replay = this.readReviewPublicationReplay({ specId: resolved, commandResult });
+    if (replay !== null) return replay;
+    if (state.current?.at(-1) !== publicationBinding.executionIdentity.attempt.nodeId
+      || state.attempt?.id !== publicationBinding.executionIdentity.attempt.id
+      || state.attempt.sequence !== publicationBinding.executionIdentity.attempt.sequence) {
       throw new CurrentFlowStateConflictError("Task Review publication failure no longer matches its active Attempt");
     }
+    const workUnit = attachedCanonicalReviewWorkUnit(commandResult);
+    const execution = this.draftStepExecutionState({ binding: {
+      runId: state.runId, specId: resolved, stepId: "task-review", nodeId: state.attempt.nodeId, attempt: state.attempt } });
+    if (!(workUnit instanceof ReviewWorkUnit) || execution.lifecycle?.phase !== "claimed"
+      || execution.lifecycle.binding.manifestDigest !== workUnit.manifestDocument.digest) {
+      throw new CurrentFlowStateConflictError("Task Review publication failure lacks its exact stopped work-unit claim");
+    }
+    workUnit.readSealedOutput();
     const message = typeof error?.message === "string" && error.message.trim() !== ""
       ? error.message.trim() : "canonical Task Review publication is unavailable";
     const decision = resolveTaskReviewFailure(new TaskReviewFailureFacts({
@@ -7899,7 +8799,7 @@ export class CanonicalFlowManagerStore {
     const accounting = TaskReviewAccounting.fromCanonicalState({ flowManager: this, state, taskId });
     const unavailable = new TaskReviewUnavailableEvidence({
       code: decision.facts.code, message, checkpointDigest: publicationBinding.manifest.digest,
-      workUnitManifestDigest: publicationBinding.manifest.digest,
+      workUnitManifestDigest: workUnit.manifestDocument.digest,
       specDigest: publicationBinding.specDigest, contextDigest: publicationBinding.context.fingerprint,
       sourceFingerprint: publicationBinding.source.fingerprint,
       reviewCycle: ReviewFindingCycle.fromActivityLedger({ runId: state.runId, activities: this.activityLedger(resolved) }).toJSON(),
@@ -7915,17 +8815,15 @@ export class CanonicalFlowManagerStore {
       verdict: "UNAVAILABLE", mustFixCount: 0, findingCount: 0,
       reason: `Task Review publication is unavailable: ${message}`, unavailable,
     });
-    const plan = resolveTaskReviewStageTransition(facts);
-    return this.runtime.completeTaskReviewStage({
-      specId: resolved, activityId: activityId("task-review-publication-unavailable"),
-      result: resultFor("done", `${taskId}-review`),
-      admission: new TaskReviewUnavailableResultPublicationAdmission({ publicationBinding }),
-      plan, targetAttempt: commandContextAttempt(state, plan.targetStepId),
-    });
+    return new TaskStagePublication({ facts, artifactWrites: [], commandResult,
+      taskFrontier: this.readImplementationTaskFrontier({ specId: resolved }),
+      admission: new TaskReviewUnavailableResultPublicationAdmission({ publicationBinding }) });
   }
 
+  confirmTaskReviewPublicationUnavailable(input) { return this.settleImplStepResult(input); }
+
   /** Publish one host-owned exclusion decision and advance without a triage worker. */
-  confirmTaskReviewHostFilter({
+  prepareTaskReviewHostFilterPublication({
     specId = null,
     exclusions,
     expectAttemptId,
@@ -8038,109 +8936,34 @@ export class CanonicalFlowManagerStore {
         ? "The host confirmed an empty exclusion set; every canonical finding remains selected for repair."
         : filter.exclusions.map((entry) => `${entry.findingId}: ${entry.reason}`).join("\n"),
     });
-    const plan = resolveTaskReviewStageTransition(facts);
-    return this.runtime.completeTaskReviewStage({
-      specId: resolved,
-      activityId: activityId("task-review-filter-confirmed"),
-      result: resultFor("done", nodeId),
-      artifactWrites,
-      admission: new CombinedAdmission(
-        new TaskReviewHostFilterPublicationAdmission({ root: this.executionRoot(), lineageSet, filter }),
-        this.#producerCompletionAdmission(nodeId, artifactWrites),
-      ),
-      plan,
-      ...(plan.targetStepId === null ? {} : { targetAttempt: commandContextAttempt(state, plan.targetStepId) }),
-    });
+    return new TaskStagePublication({ facts, filter, commandResult, artifactWrites, taskFrontier: this.readImplementationTaskFrontier({ specId: state.specId }), admission: new CombinedAdmission(new TaskReviewHostFilterPublicationAdmission({ root: this.executionRoot(), lineageSet, filter }), this.#producerCompletionAdmission(nodeId, artifactWrites)) });
   }
 
-  /**
-   * Apply one sealed Definition plan after its producer observation has been
-   * published.  This boundary is intentionally the only test-chain consumer
-   * that interprets typed Plan effects: the registry supplies no fallback
-   * route and no action may become visible without the full Store commit.
-   */
-  applyTestChainTransitionDecision({ specId = null, decision, nonblockingRecord = null } = {}) {
-    const resolved = this.#resolveSpecId(specId);
-    if (resolved === null) throw new CurrentFlowStateInvariantError("no canonical active Flow");
-    if (!(decision instanceof NonGateTransitionDecision)) {
-      throw new CurrentFlowStateInvariantError("test-chain settlement requires a typed Definition decision");
-    }
-    const state = this.runtime.load(resolved);
-    const admission = new TestChainPlanAdmission(decision);
-    const id = testChainPlanActivityId(decision);
-    const existing = this.runtime.activities(resolved).find((activity) => activity.id === id) ?? null;
-    if (existing !== null) return this.runtime.load(resolved);
+  confirmTaskReviewHostFilter(input) {
+    return this.settleImplStepResult(input);
+  }
 
+  /** Persist the selected non-Gate failure with its current observation in one transaction. */
+  #settleTestChainFailure({ resolved, decision, selectedActivityId, stepResult,
+    receipt, confirmedAt, artifactWrites, admission, nonblocking = null }) {
     const actions = decision.plan.actions;
     const statuses = actions.filter((action) => action instanceof NonGateSetStepStatusAction);
     const increments = actions.filter((action) => action instanceof NonGateIncrementRetryAction);
     const failures = actions.filter((action) => action instanceof NonGateFailCurrentAttemptAction);
-    const nonblocking = actions.filter((action) => action instanceof NonGateRecordNonblockingAction);
-    if (statuses.length + increments.length + failures.length + nonblocking.length !== actions.length
-      || statuses.length > 1 || increments.length > 1 || failures.length > 1 || nonblocking.length > 1) {
-      throw new CurrentFlowStateInvariantError("test-chain Definition plan has an unsupported action composition");
+    const failure = failures[0];
+    if (statuses.length + increments.length + failures.length !== actions.length
+      || failures.length !== 1 || increments.length > 1
+      || !hasExactTestChainStatus(statuses, { stepId: decision.facts.stepId, status: "in_progress" })
+      || increments.some((action) => action.stepId !== decision.facts.stepId)
+      || (increments.length === 1) !== (failure.retryKind === "semantic" && failure.retryable)) {
+      throw new CurrentFlowStateInvariantError("test-chain failure settlement conflicts with its sealed Definition plan");
     }
-    if (actions.length === 0) return state;
-    if (statuses.some((action) => action.update.stepId !== decision.facts.stepId)) {
-      throw new CurrentFlowStateInvariantError("test-chain Definition plan status targets another Step");
-    }
-    if (increments.some((action) => action.stepId !== decision.facts.stepId)) {
-      throw new CurrentFlowStateInvariantError("test-chain Definition plan retry targets another Step");
-    }
-
-    if (nonblocking.length === 1) {
-      if (failures.length !== 0 || increments.length !== 0 || nonblockingRecord === null
-        || nonblocking[0].stepId !== decision.facts.stepId
-        || !hasExactTestChainStatus(statuses, { stepId: decision.facts.stepId, status: "in_progress" })) {
-        throw new CurrentFlowStateInvariantError("nonblocking test-chain settlement requires its one typed observation");
-      }
-      return this.runtime.recordNonblocking({
-        specId: resolved,
-        activityId: id,
-        nodeId: decision.facts.stepId,
-        nonblocking: nonblockingRecord,
-        artifactWrites: [],
-        timing: testChainPlanTiming(state),
-        admission,
-      });
-    }
-
-    if (failures.length === 1) {
-      const failure = failures[0];
-      if (!hasExactTestChainStatus(statuses, { stepId: decision.facts.stepId, status: "in_progress" })
-        || (increments.length === 1) !== (failure.retryKind === "semantic" && failure.retryable)) {
-        throw new CurrentFlowStateInvariantError("test-chain failure settlement conflicts with its sealed Definition plan");
-      }
-      return this.runtime.failAttempt({
-        specId: resolved,
-        activityId: id,
-        failure: {
-          category: failure.category,
-          code: failure.code,
-          message: failure.message,
-          retryable: failure.retryable,
-          retryKind: failure.retryKind,
-        },
-        result: testChainPlanResult(state, { outcome: "failed", summary: failure.message }),
-        timing: testChainPlanTiming(state),
-        admission,
-      });
-    }
-
-    if (hasExactTestChainStatus(statuses, { stepId: decision.facts.stepId, status: "done" }) && increments.length === 0) {
-      return this.runtime.confirmAttempt({
-        specId: resolved,
-        activityId: id,
-        status: "done",
-        result: testChainPlanResult(state, {
-          outcome: "passed",
-          summary: `canonical runtime transition for ${decision.facts.stepId}`,
-        }),
-        timing: testChainPlanTiming(state),
-        admission,
-      });
-    }
-    throw new CurrentFlowStateInvariantError("test-chain Definition plan has no persistence settlement");
+    const result = resultWithDraftStepResult({ outcome: "failed", summary: failure.message, confirmedAt, artifactRefs: [] },
+        decision.facts.stepId, stepResult, receipt);
+    return this.runtime.failAttempt({ specId: resolved, activityId: selectedActivityId,
+      failure: { category: failure.category, code: failure.code, message: failure.message,
+        retryable: failure.retryable, retryKind: failure.retryKind }, result,
+      artifactWrites, admission, nonblocking: nonblocking?.toJSON() ?? null });
   }
 
   /**
@@ -8283,12 +9106,10 @@ export class CanonicalFlowManagerStore {
     const fact = observation instanceof ActivityNonBlockingRecord
       ? observation
       : new ActivityNonBlockingRecord(observation);
-    if (!(eligibility instanceof DefinitionNonblockingEligibility)
+    if (!nonblockingEligibilityMatchesRecord(eligibility, fact)
       || fact.kind !== "observation"
       || eligibility.sourceStep !== next.activatedStep
-      || fact.sourceStep !== eligibility.sourceStep
-      || fact.resultKind !== eligibility.resultKind
-      || fact.definitionDigest !== eligibility.definitionDigest) {
+    ) {
       throw new CurrentFlowStateInvariantError("nonblocking activation requires its Definition-selected observation");
     }
     let currentEligibility;
@@ -8363,6 +9184,28 @@ export class CanonicalFlowManagerStore {
    * Attempt/lifecycle, and acceptance publication either commit together or
    * remain absent for an exact replay.
    */
+  #nonblockingAcceptancePublication({ resolved, target, fact, eligibility }) {
+    const flowState = this.loadReadOnly(resolved);
+    if (eligibility.acceptancePublication === "semantic-findings") {
+      const gateFacts = eligibility.gateDecision?.facts ?? null;
+      const attempts = gateFacts === null ? fact.sourceAttempt : gateFacts.retry.used + 1;
+      return buildDeferredSemanticFindingsPublication({
+        flowManager: this, flowState, nodeId: target, sourceStep: fact.sourceStep,
+        sourceArtifact: fact.evidenceRef, attempts, round: gateFacts?.taskBudget?.round ?? attempts,
+        fingerprints: eligibility.selectedFindingFingerprints.length === 0 ? null
+          : new Set(eligibility.selectedFindingFingerprints),
+      });
+    }
+    if (eligibility.acceptancePublication === "nonblocking-handoff") {
+      return buildNonblockingAcceptanceHandoffPublication({
+        flowManager: this, flowState, nodeId: target, sourceStep: fact.sourceStep,
+        evidenceRef: fact.evidenceRef, evidenceDigest: fact.evidenceDigest, resultKind: fact.resultKind,
+        attempts: fact.sourceAttempt, rationale: fact.remainingRisk,
+      });
+    }
+    throw new CurrentFlowStateInvariantError("canonical nonblocking acceptance publication is invalid");
+  }
+
   applyNonblockingDecision({ specId = null, nodeId, record, eligibility } = {}) {
     const resolved = this.#resolveSpecId(specId);
     if (resolved === null) throw new CurrentFlowStateInvariantError("no canonical active Flow");
@@ -8372,6 +9215,9 @@ export class CanonicalFlowManagerStore {
     }
     const fact = record instanceof ActivityNonBlockingRecord ? record : new ActivityNonBlockingRecord(record);
     if (fact.kind !== "decision") throw new CurrentFlowStateInvariantError("canonical nonblocking continuation requires a decision fact");
+    if (hasImplementationStepContract(fact.sourceStep) && fact.action === "continue") {
+      throw new CurrentFlowStateInvariantError("implementation continuation requires its registered Step Result and accepted publication");
+    }
     const identity = JSON.stringify(fact.toJSON());
     const stableId = `nonblocking-${crypto.createHash("sha256").update(identity).digest("hex")}`;
     const existing = this.runtime.activities(resolved).find((activity) => activity.id === stableId) ?? null;
@@ -8385,9 +9231,7 @@ export class CanonicalFlowManagerStore {
     } catch (error) {
       throw new CurrentFlowStateInvariantError(error.message);
     }
-    if (eligibility.sourceStep !== fact.sourceStep
-      || eligibility.resultKind !== fact.resultKind
-      || eligibility.definitionDigest !== fact.definitionDigest) {
+    if (!nonblockingEligibilityMatchesRecord(eligibility, fact)) {
       throw new CurrentFlowStateInvariantError("canonical nonblocking decision does not match its Definition plan");
     }
     if (currentEligibility.definitionDigest !== eligibility.definitionDigest) {
@@ -8400,36 +9244,7 @@ export class CanonicalFlowManagerStore {
     }
     const effect = eligibility.effectFor(fact.action);
     if (effect.operation === "continue") {
-      let publication = null;
-      if (eligibility.acceptancePublication === "semantic-findings") {
-        const gateFacts = eligibility.gateDecision?.facts ?? null;
-        publication = buildDeferredSemanticFindingsPublication({
-          flowManager: this,
-          flowState: this.loadReadOnly(resolved),
-          nodeId: target,
-          sourceStep: fact.sourceStep,
-          sourceArtifact: fact.evidenceRef,
-          attempts: gateFacts === null ? fact.sourceAttempt : gateFacts.retry.used + 1,
-          round: gateFacts?.taskBudget?.round ?? (gateFacts === null ? fact.sourceAttempt : gateFacts.retry.used + 1),
-          fingerprints: eligibility.selectedFindingFingerprints.length === 0
-            ? null
-            : new Set(eligibility.selectedFindingFingerprints),
-        });
-      } else if (eligibility.acceptancePublication === "nonblocking-handoff") {
-        publication = buildNonblockingAcceptanceHandoffPublication({
-          flowManager: this,
-          flowState: this.loadReadOnly(resolved),
-          nodeId: target,
-          sourceStep: fact.sourceStep,
-          evidenceRef: fact.evidenceRef,
-          evidenceDigest: fact.evidenceDigest,
-          resultKind: fact.resultKind,
-          attempts: fact.sourceAttempt,
-          rationale: fact.remainingRisk,
-        });
-      } else {
-        throw new CurrentFlowStateInvariantError("canonical nonblocking acceptance publication is invalid");
-      }
+      const publication = this.#nonblockingAcceptancePublication({ resolved, target, fact, eligibility });
       const settlement = publication?.settlementArtifacts() ?? {};
       const admission = new CombinedAdmission(
         selectionAdmission,
@@ -8594,11 +9409,7 @@ export class CanonicalFlowManagerStore {
   readActiveProducerArtifact({ specId = null, nodeId, logicalKey, parameters = {} } = {}) {
     const resolved = this.#resolveSpecId(specId);
     if (resolved === null) throw new CurrentFlowStateInvariantError("no canonical active Flow");
-    const state = this.runtime.load(resolved);
     const target = requiredText(nodeId, "canonical producer nodeId");
-    if (state.current?.at(-1) !== target) {
-      throw new CurrentFlowStateInvariantError("canonical producer artifact requires the active current Attempt");
-    }
     if (parameters === null || typeof parameters !== "object" || Array.isArray(parameters)) {
       throw new CurrentFlowStateInvariantError("canonical producer artifact parameters must be an object");
     }
@@ -8610,17 +9421,31 @@ export class CanonicalFlowManagerStore {
     if (artifact.contract.authoritySlot.publicationStep !== producer) {
       throw new CurrentFlowStateInvariantError(`canonical producer does not own artifact: ${producer}/${artifact.logicalKey}`);
     }
-    const catalog = this.runtime.catalog(resolved);
-    const descriptor = catalog.artifacts.find((entry) => entry.relativePath === artifact.relativePath) ?? null;
-    if (descriptor === null || descriptor.logicalKey !== artifact.logicalKey) {
-      throw new CurrentFlowStateInvariantError(`canonical producer artifact is absent from catalog: ${artifact.relativePath}`);
-    }
-    const location = this.location(resolved);
-    location.assertAuthority(artifact.relativePath, { mustExist: true });
-    return Object.freeze({
-      descriptor: Object.freeze(descriptor.toJSON()),
-      relativePath: artifact.relativePath,
-      bytes: Buffer.from(fs.readFileSync(location.resolve(artifact.relativePath))),
+    return this.runtime.readCanonicalTransitionView(resolved, (view) => {
+      const state = view.state;
+      if (state.current?.at(-1) !== target || state.attempt === null) {
+        throw new CurrentFlowStateInvariantError("canonical producer artifact requires the active current Attempt");
+      }
+      const descriptor = view.catalog.artifacts.find((entry) => entry.relativePath === artifact.relativePath) ?? null;
+      if (descriptor === null || descriptor.logicalKey !== artifact.logicalKey) {
+        throw new CurrentFlowStateInvariantError(`canonical producer artifact is absent from catalog: ${artifact.relativePath}`);
+      }
+      const producerActivity = view.activities.find((entry) => entry.id === descriptor.activityId);
+      const bytes = view.readCatalogedArtifact(descriptor);
+      descriptor.verifyBytes(bytes);
+      if (producerActivity?.nodeId !== target || producerActivity.transition.nodeId !== target
+        || producerActivity.attemptId !== state.attempt.id || producerActivity.sequence !== state.attempt.sequence) {
+        throw new CurrentFlowStateConflictError("canonical advisory artifact differs from its exact current producer publication");
+      }
+      const observation = CanonicalCommandArtifactObservation.fromBytes({ logicalKey: artifact.logicalKey, bytes,
+        history: artifact.contract.contentContract instanceof FlowArtifactAttemptHistoryContent,
+        producerActivityId: producerActivity.id, attemptId: producerActivity.attemptId, sequence: producerActivity.sequence });
+      return Object.freeze({
+        descriptor: Object.freeze(descriptor.toJSON()),
+        relativePath: artifact.relativePath,
+        bytes,
+        observation,
+      });
     });
   }
 
@@ -9050,7 +9875,7 @@ export class CanonicalFlowManagerStore {
     });
   }
 
-  #attemptHistoryWrites({ specId, state, nodeId, commandResult, attemptSequence = state.attempt?.sequence }) {
+  #attemptHistoryWrites({ specId, state, nodeId, commandResult, attemptSequence = state.attempt?.sequence, view = null }) {
     if (state.current?.at(-1) !== nodeId || state.attempt === null) {
       throw new CurrentFlowStateInvariantError("canonical command attempt history requires the active current Attempt");
     }
@@ -9067,7 +9892,7 @@ export class CanonicalFlowManagerStore {
         `canonical command Attempt producer is not authorized: ${updater}/${target.logicalKey}`,
       );
     }
-    const previousBytes = this.#ownedArtifactBytes(specId, artifact);
+    const previousBytes = this.#ownedArtifactBytes(specId, artifact, view);
     const previous = previousBytes === null
       ? new FlowArtifactAttemptHistory()
       : contract.contentContract.parse(previousBytes);
@@ -9097,13 +9922,14 @@ export class CanonicalFlowManagerStore {
     }];
   }
 
-  #ownedArtifactBytes(specId, artifact) {
-    const catalog = this.runtime.catalog(specId);
+  #ownedArtifactBytes(specId, artifact, view = null) {
+    const catalog = view?.catalog ?? this.runtime.catalog(specId);
     const descriptor = catalog.artifacts.find((entry) => entry.relativePath === artifact.relativePath) ?? null;
     if (descriptor === null) return null;
     if (descriptor.logicalKey !== artifact.logicalKey) {
       throw new CurrentFlowStateInvariantError("canonical artifact catalog logical key conflicts with its resolved contract");
     }
+    if (view !== null) return Buffer.from(view.readCatalogedArtifact(descriptor));
     const location = this.location(specId);
     location.assertAuthority(artifact.relativePath, { mustExist: true });
     return Buffer.from(fs.readFileSync(location.resolve(artifact.relativePath)));

@@ -89,7 +89,7 @@ export class SourceMutationAuthority {
 
   effectContract() {
     return this.mode === "required"
-      ? "required for done; every changed source mutation must occur in files[].mutationIds"
+      ? "required for done; the manifest records every source mutation, and files[].mutationIds binds every current-scope Requirement to those mutations"
       : this.mode === "optional"
         ? "optional; an empty manifest requires a recorded no-change reason"
       : "forbidden";

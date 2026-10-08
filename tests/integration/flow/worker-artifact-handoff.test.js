@@ -2,14 +2,20 @@ import { SpecGateRepairBundle } from "../../../src/flow/lib/spec-gate-repair-bun
 import { readSpecJsonValidator } from "../../../src/lib/spec-json.js";
 import { rewriteWorkerSubmission as rewriteSubmission } from "../../support/infrastructure/worker-artifact.js";
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, it } from "node:test";
 
-import { Container } from "../../../src/lib/container.js";
+import { Container, container as runtimeContainer } from "../../../src/lib/container.js";
+import { FLOW_COMMANDS } from "../../../src/flow/registry.js";
+import RunReviewCommand from "../../../src/flow/lib/run-review.js";
+import RunGateCommand from "../../../src/flow/lib/run-gate.js";
+import { acquireApprovalInput, executeApprovalInput } from "../../../src/flow/engine/composition/test.js";
+import { sourceStepRegistration } from "../../../src/flow/engine/composition/source-step.js";
+import { completeCanonicalSourceHandoff } from "../../support/builders/source-handoff-scenario.js";
 import { AgentAuthenticationFailure, AgentProcessStopEvidence, AgentTimeoutFailure } from "../../../src/lib/agent-failure.js";
 import { Agent, AgentTimeoutError } from "../../../src/lib/agent.js";
 import { dispatch } from "../../../src/lib/dispatcher.js";
@@ -420,6 +426,72 @@ function initializeGitRepository(value) {
   fs.writeFileSync(path.join(value.mainRoot, "product.js"), "export const value = 1;\n");
   execFileSync("git", ["add", "."], { cwd: value.mainRoot });
   execFileSync("git", ["commit", "-q", "-m", "fixture"], { cwd: value.mainRoot });
+}
+
+async function approveCurrentSpec(value, confirmedAt = "2026-08-04T00:00:00.000Z") {
+  const { flowManager, specId } = value;
+  const state = flowManager.canonicalState(specId);
+  const source = flowManager.readArtifact({ specId, logicalKey: "spec.record", consumerNodeId: "approval" });
+  const review = flowManager.readCurrentSpecReview({ specId, consumerNodeId: "approval" });
+  const spec = JSON.parse(source.bytes.toString("utf8"));
+  const observed = acquireApprovalInput({ state, specDescriptor: source.descriptor,
+    spec, review: review.review,
+    approval: new CanonicalSpecApproval({ confirmedAt }) });
+  const outcome = await executeApprovalInput({ stepId: "approval", flowManager, specId,
+    observed, expectedSpecDigest: source.descriptor.hash });
+  const activity = flowManager.activityLedger(specId).find((entry) => (
+    entry.result?.draftSettlementReceipt?.id === outcome.receipt.id
+  ));
+  assert.equal(activity.attemptId, state.attempt.id);
+  assert.equal(activity.sequence, state.attempt.sequence);
+  for (const task of activity.transition.approvalTasks) {
+    const expected = new ApprovalTaskAdmission({ sourceDescriptor: source.descriptor,
+      sourceTask: spec.tasks.find((candidate) => candidate.id === task.id) });
+    assert.deepEqual(task.approvalSource, expected.activitySource.toJSON());
+  }
+  return outcome;
+}
+
+/** Produce actual Review and Gate receipts; only the external evaluators are fake. */
+async function finishReviewedTask({ root, mainRoot = root, flowManager, specId, taskId }) {
+  const context = () => ({ root, mainRoot, executionRoot: root, flowManager, specId,
+    flowState: flowManager.loadReadOnly(specId), config: {} });
+  const review = new RunReviewCommand({ runCommand(_command, _args, options) {
+    const result = spawnSync(process.execPath,
+      [fileURLToPath(new URL("../../support/impl-phase-review-worker.js", import.meta.url))], {
+        ...options, env: { ...options.env, SENNEL_IMPL_SCENARIO_RESPONSE: JSON.stringify({
+          blockingFindings: [], nonBlockingImprovements: [],
+        }) },
+      });
+    return { ...result, ok: result.status === 0 };
+  } });
+  const reviewContext = context();
+  const reviewed = await review.execute(reviewContext);
+  assert.notEqual(reviewed.ok, false, JSON.stringify(reviewed));
+  await FLOW_COMMANDS.run.review.post(reviewContext, reviewed);
+  const source = flowManager.readArtifact({ specId, logicalKey: "spec.record", consumerNodeId: "task-gate" });
+  const requirements = JSON.parse(source.bytes.toString("utf8")).requirements
+    .filter((requirement) => requirement.task_ids.includes(taskId));
+  const originalGet = runtimeContainer.get.bind(runtimeContainer);
+  runtimeContainer.get = (key) => key !== "agent" ? originalGet(key) : {
+    resolve: () => true,
+    call: async () => JSON.stringify({ evaluations: requirements.map((requirement) => ({
+      guardrail_id: requirement.id, result: "pass", reason: `[REQ:${requirement.id}] Source satisfies the requirement.`,
+    })) }),
+  };
+  try {
+    const ctx = { ...context(), phase: "task-impl", skipGuardrail: true };
+    await FLOW_COMMANDS.run.gate.pre(ctx);
+    const result = await new RunGateCommand().execute(ctx);
+    assert.equal(result.result, "pass", JSON.stringify(result));
+    await FLOW_COMMANDS.run.gate.post(ctx, result);
+    const saved = flowManager.readCurrentStepSettlement({ specId, stepId: "task-gate", taskId, completed: true });
+    assert.equal(saved.result.kind, "task-gate-passed");
+    assert.equal(saved.receipt.binding.attemptId,
+      flowManager.activityLedger(specId).find((entry) => entry.id === saved.activityId).attemptId);
+  } finally {
+    runtimeContainer.get = originalGet;
+  }
 }
 
 function acquireRuntimeLock(location, logicalKey) {
@@ -3006,7 +3078,7 @@ describe("worker artifact handoff", () => {
     }
   });
 
-  it("rejects non-canonical Requirement or mutation bindings at the Store boundary without publishing state", () => {
+  it("rejects non-canonical Requirement or mutation bindings at the Store boundary without publishing state", (t) => {
     const specRecord = validSpec();
     specRecord.requirements.push({ id: "R2", desc: "Share the implementation file.", task_ids: ["T1"] });
     const value = fixture("implement", { specRecord });
@@ -3016,22 +3088,20 @@ describe("worker artifact handoff", () => {
         ctx: value.ctx, state: value.flowManager.load(), invocation: value.invocation,
       });
       fs.writeFileSync(path.join(value.executionRoot, "product.js"), "export const value = 2;\n");
-      const manifest = captureManifest(request);
+      materializeSourceWorkerEffect({ request, responseText: JSON.stringify({
+        version: 1, stepId: "implement", completionStatus: "done", issues: [],
+        overview: null, triage: null, repair: null, noChangeReason: null,
+      }) });
+      sealParentMaterializedSourceWorkerEffect({ request });
       value.coordinator.finishSourceWorker({ ctx: value.ctx, request });
-      const authority = value.flowManager.readSourceHandoffAuthority({
-        specId: value.specId,
-        identity: request.sourceHandoffIdentity,
-        requireUnsettled: true,
-      });
-      const settlement = new SourceHandoffSettlement({
-        identity: request.sourceHandoffIdentity,
-        checkpointDigest: request.sourceHandoffCheckpoint.digest,
-        eventDigest: authority.event.digest,
-        handoffDigest: "e".repeat(64),
-        kind: "accepted",
-      });
+      const preparation = value.coordinator.prepareSourceStepHandoff({ ctx: value.ctx, request,
+        mutationAuthority: value.coordinator.sourceMutationAuthority({ ctx: value.ctx, request }) });
+      const manifest = preparation.publication.mutationManifest;
       const mutationId = manifest.mutations[0].mutationId;
       const stateBefore = value.flowManager.canonicalState(value.specId).toJSON();
+      const activitiesBefore = value.flowManager.activityLedger(value.specId);
+      const catalogBefore = value.flowManager.artifactCatalog(value.specId).toJSON();
+      const sourceBefore = fs.readFileSync(path.join(value.executionRoot, "product.js"));
       const sourceEffect = (files) => new SourceWorkerEffect({
         version: 1,
         stepId: "implement",
@@ -3055,23 +3125,31 @@ describe("worker artifact handoff", () => {
           { requirementId: "R2", mutationIds: ["f".repeat(64)] },
         ],
       ]) {
-        assert.throws(
-          () => value.flowManager.confirmSourceWorkerHandoff({
-            specId: value.specId,
-            effect: sourceEffect(files),
-            mutationManifest: manifest,
-            handoffDigest: "e".repeat(64),
-            sourceHandoffSettlement: settlement,
-            result: {
-              outcome: "passed",
-              summary: "This malformed authority must not be published.",
-              confirmedAt: "2026-09-09T00:00:00.000Z",
-              artifactRefs: [],
-            },
-          }),
-          /must bind every current-scope Requirement to every current Attempt mutation/,
-        );
+        const confirm = value.flowManager.confirmSourceWorkerHandoff.bind(value.flowManager);
+        let calls = 0;
+        const boundary = t.mock.method(value.flowManager, "confirmSourceWorkerHandoff", (input) => {
+          calls += 1;
+          assert.equal(input.stepResult.kind, "implement-applied");
+          assert.equal(input.sourceSelection.result, input.stepResult);
+          // Change only the untrusted save operand after the real Step selected its candidate.
+          return confirm({ ...input, effect: sourceEffect(files) });
+        });
+        const prepared = sourceStepRegistration("implement").create({ ctx: value.ctx, request,
+          preparation, handoffCoordinator: value.coordinator });
+        try {
+          assert.throws(
+            () => prepared.step.execute(),
+            (error) => error instanceof WorkerArtifactHandoffError
+              && error.code === "FLOW_ARTIFACT_HANDOFF_CONFLICT"
+              && error.classification === "conflict" && error.recoveryPossible === false
+              && /source candidate differs from its adopted Result/.test(error.message),
+          );
+          assert.equal(calls, 1);
+        } finally { boundary.mock.restore(); }
         assert.deepEqual(value.flowManager.canonicalState(value.specId).toJSON(), stateBefore);
+        assert.deepEqual(value.flowManager.activityLedger(value.specId), activitiesBefore);
+        assert.deepEqual(value.flowManager.artifactCatalog(value.specId).toJSON(), catalogBefore);
+        assert.deepEqual(fs.readFileSync(path.join(value.executionRoot, "product.js")), sourceBefore);
         assert.equal(value.flowManager.readArtifact({
           specId: value.specId,
           logicalKey: "file.map",
@@ -3084,7 +3162,7 @@ describe("worker artifact handoff", () => {
     }
   });
 
-  it("derives durable Task file effects from each Attempt manifest across inherited dirt, shared changes, deletion, and no-change", () => {
+  it("derives durable Task file effects from each Attempt manifest across inherited dirt, shared changes, deletion, and no-change", async () => {
     const root = createTmpDir("source-authority-history-");
     const specId = "source-authority-history";
     const tasks = ["T8", "T9", "T10", "T11"].map((id) => ({
@@ -3160,10 +3238,8 @@ describe("worker artifact handoff", () => {
       return { effect, manifest };
     };
     const finishTask = (taskId) => {
-      flow.settle(`${taskId}-review`);
-      flow.settle(`${taskId}-triage`, "skipped");
-      flow.settle(`${taskId}-repair`, "skipped");
-      flow.settle(`${taskId}-gate`);
+      flow.activate(`${taskId}-review`, { settlePredecessors: false });
+      return finishReviewedTask({ root, flowManager: manager, specId, taskId });
     };
 
     try {
@@ -3173,7 +3249,7 @@ describe("worker artifact handoff", () => {
         fs.writeFileSync(path.join(root, "tests/inherited.test.js"), "export const inherited = true;\n");
       });
       assert.deepEqual(inherited.manifest.paths(), ["tests/inherited.test.js"]);
-      finishTask("T8");
+      await finishTask("T8");
       flow.activateTask("T9", { settlePredecessors: false });
 
       fs.mkdirSync(path.join(root, "src"), { recursive: true });
@@ -3218,7 +3294,7 @@ describe("worker artifact handoff", () => {
         "R9-B": ["product.js", "src/added.js"],
       });
 
-      finishTask("T9");
+      await finishTask("T9");
       flow.activateTask("T10", { settlePredecessors: false });
       const taskTen = completeTaskImplementation("T10", () => {
         fs.writeFileSync(path.join(root, "product.js"), "export const value = 10;\n");
@@ -3230,7 +3306,7 @@ describe("worker artifact handoff", () => {
         ["src/added.js", "deleted"],
         ["src/later.js", "added"],
       ]);
-      finishTask("T10");
+      await finishTask("T10");
       flow.activateTask("T11", { settlePredecessors: false });
       const taskEleven = completeTaskImplementation(
         "T11",
@@ -4239,7 +4315,7 @@ describe("worker artifact handoff", () => {
     }
   });
 
-  it("validates and publishes the spec payload type", () => {
+  it("validates and publishes the spec payload type", async () => {
     const specValue = fixture("spec", {
       beforeActivate(value) {
         publishDraftBeforeTarget(value, draftDocument("draft input"));
@@ -4260,13 +4336,14 @@ describe("worker artifact handoff", () => {
         proposed,
       );
       specValue.flow.activate("approval");
-      const approval = specValue.flowManager.approveSpecContinuation({
-        specId: specValue.specId,
-        approval: new CanonicalSpecApproval({ confirmedAt: "2026-08-04T00:00:00.000Z" }),
-      });
+      const approval = await approveCurrentSpec(specValue);
       assert.deepEqual(approval.added, ["T1"]);
       assert.equal(specValue.flowManager.load(specValue.specId).tasks[0].id, "T1");
-      assert.equal(specValue.flowManager.activityLedger(specValue.specId).at(-2).transition.operation, "add_approval_task");
+      const activity = specValue.flowManager.activityLedger(specValue.specId).findLast((entry) => (
+        entry.transition.operation === "initialize_requirement_test_lifecycle"
+      ));
+      assert.deepEqual(activity.transition.approvalTasks.map((task) => task.id), ["T1"]);
+      assert.equal(activity.result.draftSettlementReceipt.id, approval.receipt.id);
     } finally {
       removeTmpDir(specValue.mainRoot);
     }
@@ -4418,7 +4495,7 @@ describe("worker artifact handoff", () => {
     }
   });
 
-  it("replays approval Task admission after a definition-owned draft recovery", () => {
+  it("replays approval Task admission after a definition-owned draft recovery", async () => {
     const value = fixture("spec", {
       beforeActivate(input) {
         publishDraftBeforeTarget(input, draftDocument("draft input"));
@@ -4497,17 +4574,17 @@ describe("worker artifact handoff", () => {
         /Task document does not match its durable source binding/,
       );
       assert.equal(value.flowManager.canonicalState(value.specId).confirmationOrder, beforeRejectedAdmission);
-      const approval = value.flowManager.approveSpecContinuation({
-        specId: value.specId,
-        approval: new CanonicalSpecApproval({ confirmedAt: "2026-08-04T00:00:00.000Z" }),
-      });
+      const approval = await approveCurrentSpec(value);
 
       assert.deepEqual(approval.added, ["T1", "T2"]);
       assert.deepEqual(value.flowManager.load(value.specId).tasks.map((task) => task.id), ["T1", "T2"]);
       assert.equal(value.flowManager.canonicalState(value.specId).findNode("test-execute").status, "invalidated");
-      assert.equal(value.flowManager.activityLedger(value.specId).filter((activity) => (
-        activity.transition.operation === "add_approval_task"
-      )).length, 2);
+      const admitted = value.flowManager.activityLedger(value.specId).filter((activity) => (
+        activity.transition.operation === "initialize_requirement_test_lifecycle"
+      ));
+      assert.equal(admitted.length, 1);
+      assert.deepEqual(admitted[0].transition.approvalTasks.map((task) => task.id), ["T1", "T2"]);
+      assert.equal(admitted[0].result.draftSettlementReceipt.id, approval.receipt.id);
       const restarted = new FlowManager({
         root: value.executionRoot,
         mainRoot: value.mainRoot,
@@ -4524,13 +4601,14 @@ describe("worker artifact handoff", () => {
     }
   });
 
-  it("resumes approval after a partial multi-Task admission without duplicates", () => {
+  it("resumes approval after interrupted atomic multi-Task admission without duplicates", async () => {
     let admissionAttempts = 0;
     const value = fixture("spec", {
       versionStoreFaultInjector({ phase, activity }) {
-        if (phase !== "activity-ready-to-append" || activity.transition.operation !== "add_approval_task") return;
+        if (phase !== "activity-ready-to-append" || activity.transition.operation !== "initialize_requirement_test_lifecycle") return;
         admissionAttempts += 1;
-        if (admissionAttempts === 2) throw new Error("simulated interruption before the second approval Task");
+        assert.deepEqual(activity.transition.approvalTasks.map((task) => task.id), ["T1", "T2"]);
+        if (admissionAttempts === 1) throw new Error("simulated interruption before atomic approval Task admission");
       },
       beforeActivate(input) {
         publishDraftBeforeTarget(input, draftDocument("draft input"));
@@ -4546,29 +4624,32 @@ describe("worker artifact handoff", () => {
         ],
       });
       value.flow.activate("approval");
+      const stateBefore = value.flowManager.canonicalState(value.specId).toJSON();
+      const activitiesBefore = value.flowManager.activityLedger(value.specId);
+      const catalogBefore = value.flowManager.artifactCatalog(value.specId).toJSON();
 
-      assert.throws(
-        () => value.flowManager.approveSpecContinuation({
-          specId: value.specId,
-          approval: new CanonicalSpecApproval({ confirmedAt: "2026-08-04T00:00:00.000Z" }),
-        }),
+      await assert.rejects(
+        () => approveCurrentSpec(value),
         /simulated interruption/,
       );
-      assert.deepEqual(value.flowManager.load(value.specId).tasks.map((task) => task.id), ["T1"]);
+      assert.equal(admissionAttempts, 1);
+      assert.deepEqual(value.flowManager.load(value.specId).tasks, []);
+      assert.deepEqual(value.flowManager.canonicalState(value.specId).toJSON(), stateBefore);
+      assert.deepEqual(value.flowManager.activityLedger(value.specId), activitiesBefore);
+      assert.deepEqual(value.flowManager.artifactCatalog(value.specId).toJSON(), catalogBefore);
       assert.equal(findStepById(value.flowManager.load(value.specId).steps, "approval").status, "in_progress");
 
-      const resumed = value.flowManager.approveSpecContinuation({
-        specId: value.specId,
-        approval: new CanonicalSpecApproval({ confirmedAt: "2026-08-04T00:00:00.000Z" }),
-      });
+      value.flowManager = new FlowManager({ root: value.executionRoot, mainRoot: value.mainRoot,
+        inWorktree: true, specId: value.specId });
+      const resumed = await approveCurrentSpec(value);
       const activities = value.flowManager.activityLedger(value.specId);
 
-      assert.deepEqual(resumed.added, ["T2"]);
+      assert.deepEqual(resumed.added, ["T1", "T2"]);
       assert.deepEqual(value.flowManager.load(value.specId).tasks.map((task) => task.id), ["T1", "T2"]);
       assert.equal(findStepById(value.flowManager.load(value.specId).steps, "approval").status, "done");
       assert.deepEqual(
-        activities.filter((activity) => activity.transition.operation === "add_approval_task")
-          .map((activity) => activity.transition.task.id),
+        activities.filter((activity) => activity.transition.operation === "initialize_requirement_test_lifecycle")
+          .flatMap((activity) => activity.transition.approvalTasks.map((task) => task.id)),
         ["T1", "T2"],
       );
       assert.equal(activities.filter((activity) => (
@@ -4579,8 +4660,9 @@ describe("worker artifact handoff", () => {
     }
   });
 
-  it("admits only the appended Task after the definition-owned task-addition reopen route", () => {
+  it("admits only the appended Task after the definition-owned task-addition reopen route", async () => {
     const value = fixture("spec", {
+      worktree: false,
       beforeActivate(input) {
         publishDraftBeforeTarget(input, draftDocument("draft input"));
       },
@@ -4596,11 +4678,26 @@ describe("worker artifact handoff", () => {
     try {
       publishSpecProposal(value, { ...validSpec(), tasks: [first] });
       value.flow.activate("approval");
-      value.flowManager.approveSpecContinuation({
-        specId: value.specId,
-        approval: new CanonicalSpecApproval({ confirmedAt: "2026-08-04T00:00:00.000Z" }),
+      await approveCurrentSpec(value);
+      initializeGitRepository(value);
+      completeCanonicalSourceHandoff({ root: value.executionRoot, mainRoot: value.mainRoot,
+        manager: value.flowManager, specId: value.specId, stepId: "implement",
+        mutate: () => fs.writeFileSync(path.join(value.executionRoot, "product.js"), "export const value = 0;\n"),
+        effect: { version: 1, stepId: "implement", completionStatus: "done", issues: [],
+          overview: null, triage: null, repair: null, noChangeReason: null },
       });
-      value.flow.settleBefore("T1-gate").settle("T1-gate").activate("test-execute");
+      value.flow.activateTask("T1", { settlePredecessors: false });
+      completeCanonicalSourceHandoff({ root: value.executionRoot, mainRoot: value.mainRoot,
+        manager: value.flowManager, specId: value.specId, stepId: "task-impl", taskId: "T1",
+        mutate: () => fs.writeFileSync(path.join(value.executionRoot, "product.js"), "export const value = 2;\n"),
+        effect: { version: 1, stepId: "task-impl", completionStatus: "done", issues: [],
+          overview: { modules: [], data_flow: [], decisions: [] }, triage: null, repair: null, noChangeReason: null },
+      });
+      value.flow.activate("T1-review", { settlePredecessors: false });
+      await finishReviewedTask({ root: value.executionRoot, flowManager: value.flowManager,
+        specId: value.specId, taskId: "T1" });
+      value.flow.activate("test-execute", { settlePredecessors: false });
+      assert.equal(value.flowManager.canonicalState(value.specId).current.at(-1), "test-execute");
 
       value.flowManager.reopenDraft({ specId: value.specId, route: "task-addition" });
       value.flow.activate("spec");
@@ -4610,10 +4707,7 @@ describe("worker artifact handoff", () => {
         tasks: [first, second],
       });
       value.flow.activate("approval");
-      const approval = value.flowManager.approveSpecContinuation({
-        specId: value.specId,
-        approval: new CanonicalSpecApproval({ confirmedAt: "2026-08-04T01:00:00.000Z" }),
-      });
+      const approval = await approveCurrentSpec(value, "2026-08-04T01:00:00.000Z");
 
       const state = value.flowManager.load(value.specId);
       assert.deepEqual(approval.added, ["T2"]);

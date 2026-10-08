@@ -1,11 +1,12 @@
 import { DraftReviewExecutionBinding, ReviewProviderRequestIdentity } from "../definition.js";
 import { SpecReviewStepBinding } from "../engine/connectors/spec/spec-step-binding.js";
-import { ReviewWorkUnitManifest } from "./review-work-unit-values.js";
+import { StepBinding } from "../engine/step-binding.js";
+import { StepResult, SpecReviewExecutionRequiredResult } from "../engine/step-result.js";
 
-export class SpecReviewExecutionAdmission {
+export class ReviewExecutionAdmission {
   constructor({ request, recoveredClaim }) {
     if (!(request instanceof ReviewProviderRequestIdentity) || typeof recoveredClaim !== "boolean") {
-      throw new TypeError("Spec Review execution admission requires its request and claim status");
+      throw new TypeError("Review execution admission requires its request and claim status");
     }
     this.request = request;
     this.recoveredClaim = recoveredClaim;
@@ -13,14 +14,15 @@ export class SpecReviewExecutionAdmission {
   }
 }
 
-export class SpecReviewExecutionClaimPreparation {
-  constructor({ flowManager, binding, executionBinding, request, recoveredClaim, needsCheckpoint }) {
-    if (!(binding instanceof SpecReviewStepBinding) || binding.flowManager !== flowManager
+export class ReviewExecutionClaimPreparation {
+  constructor({ flowManager, binding, executionBinding, request, recoveredClaim, needsCheckpoint, ResultClass }) {
+    if (!(binding instanceof StepBinding) || binding.flowManager !== flowManager
       || !(executionBinding instanceof DraftReviewExecutionBinding)
       || !(request instanceof ReviewProviderRequestIdentity)
       || typeof recoveredClaim !== "boolean" || typeof needsCheckpoint !== "boolean"
-      || (recoveredClaim && needsCheckpoint)) {
-      throw new TypeError("Spec Review claim preparation requires its exact binding and request");
+      || (recoveredClaim && needsCheckpoint)
+      || !(ResultClass?.prototype instanceof StepResult)) {
+      throw new TypeError("Review claim preparation requires its exact binding and request");
     }
     this.flowManager = flowManager;
     this.binding = binding;
@@ -28,7 +30,17 @@ export class SpecReviewExecutionClaimPreparation {
     this.request = request;
     this.recoveredClaim = recoveredClaim;
     this.needsCheckpoint = needsCheckpoint;
+    this.ResultClass = ResultClass;
     Object.freeze(this);
+  }
+}
+
+export class SpecReviewExecutionAdmission extends ReviewExecutionAdmission {}
+
+export class SpecReviewExecutionClaimPreparation extends ReviewExecutionClaimPreparation {
+  constructor(input) {
+    if (!(input.binding instanceof SpecReviewStepBinding)) throw new TypeError("Spec Review claim requires its Spec binding");
+    super({ ...input, ResultClass: SpecReviewExecutionRequiredResult });
   }
 }
 

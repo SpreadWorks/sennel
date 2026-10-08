@@ -1,3 +1,6 @@
+import { completeAcceptedNonblockingDecision } from "../flow/engine/composition/nonblocking-implementation.js";
+import { hasImplementationStepContract } from "../flow/engine/step-result.js";
+import { completeAcceptedGateDeferral } from "../flow/engine/composition/gate-deferral.js";
 /**
  * src/lib/flow-manager.js
  *
@@ -496,6 +499,14 @@ export class FlowManager {
     if (["test-generate", "test-review", "test-repair", "test-gate"].includes(input?.stepResult?.stepId)) {
       return this.#commitStepSettlement(this.completeRequirementTestLifecycle, input);
     }
+    if (hasImplementationStepContract(input?.stepResult?.stepId)) {
+      const save = input.effect != null ? this.confirmSourceWorkerHandoff
+        : input.stepResult.stepId === "task-review"
+          ? input.taskStagePublication?.facts?.unavailable?.code === "TASK_REVIEW_PUBLICATION_UNAVAILABLE"
+            ? this.confirmTaskReviewPublicationUnavailable : this.confirmTaskReviewResult
+        : input.stepResult.stepId === "task-triage" ? this.confirmTaskReviewHostFilter : this.settleImplStepResult;
+      return this.#commitStepSettlement(save, input);
+    }
     return this.#commitStepSettlement(this.settleSpecStepResult, input);
   }
   commitDraftStepCheckpoint(input) {
@@ -503,6 +514,41 @@ export class FlowManager {
       ...input,
       executionLifecycle: DraftStepExecutionLifecycle.checkpoint(input.executionBinding, input.rejection ?? null),
     });
+  }
+  settleImplStepResult(input = {}) {
+    return this._store.settleImplStepResult({ ...input,
+      specId: input.specId ?? this._boundSpecId });
+  }
+  prepareImplCommandPublication(input) { return this._store.prepareImplCommandPublication(input); }
+  readImplementationTaskFrontier(input = {}) {
+    return this._store.readImplementationTaskFrontier(typeof input === "string" ? input
+      : { ...input, specId: input.specId ?? this._boundSpecId });
+  }
+  prepareReviewStepFailurePublication(input) { return this._store.prepareReviewStepFailurePublication(input); }
+
+  readReviewPublicationReplay(input = {}) { return this._store.readReviewPublicationReplay({ ...input,
+    specId: input.specId ?? this._boundSpecId }); }
+  prepareTaskReviewPublicationUnavailable(input = {}) { return this._store.prepareTaskReviewPublicationUnavailable({ ...input,
+    specId: input.specId ?? this._boundSpecId }); }
+  prepareTaskReviewStagePublication(input = {}) {
+    return this._store.prepareTaskReviewStagePublication({ ...input,
+      specId: input.specId ?? this._boundSpecId });
+  }
+  prepareTaskReviewHostFilterPublication(input = {}) {
+    return this._store.prepareTaskReviewHostFilterPublication({ ...input,
+      specId: input.specId ?? this._boundSpecId });
+  }
+  prepareTaskReviewUnavailablePublication(input = {}) {
+    return this._store.prepareTaskReviewUnavailablePublication({ ...input,
+      specId: input.specId ?? this._boundSpecId });
+  }
+  readSourceTaskExecutionBudget(input = {}) {
+    return this._store.readSourceTaskExecutionBudget({ ...input,
+      specId: input.specId ?? this._boundSpecId });
+  }
+  prepareSourceTaskReviewStage(input = {}) {
+    return this._store.prepareSourceTaskReviewStage({ ...input,
+      specId: input.specId ?? this._boundSpecId });
   }
   #commitStepSettlement(save, input) {
     const selected = { ...input, specId: input.specId ?? this._boundSpecId };
@@ -588,7 +634,7 @@ export class FlowManager {
     });
   }
   confirmSourceWorkerHandoff(input = {}) {
-    return this._store.confirmSourceWorkerHandoff({
+    return this._store.settleImplStepResult({
       ...input,
       specId: input.specId ?? this._boundSpecId,
     });
@@ -649,13 +695,6 @@ export class FlowManager {
   }
   confirmTaskReviewHostFilter(input = {}) {
     return this._store.confirmTaskReviewHostFilter({
-      ...input,
-      specId: input.specId ?? this._boundSpecId,
-    });
-  }
-  /** Atomically apply one Definition-owned test-chain transition plan. */
-  applyTestChainTransitionDecision(input = {}) {
-    return this._store.applyTestChainTransitionDecision({
       ...input,
       specId: input.specId ?? this._boundSpecId,
     });
@@ -732,7 +771,13 @@ export class FlowManager {
       specId: input.specId ?? this._boundSpecId,
     });
   }
+  prepareAcceptedNonblockingPublication(input = {}) {
+    return this._store.prepareAcceptedNonblockingPublication({ ...input, specId: input.specId ?? this._boundSpecId });
+  }
   applyNonblockingDecision(input = {}) {
+    if (["task-gate", "impl-gate", "impl-review", "test-result-review"].includes(input.record?.sourceStep) && input.record?.action === "continue") {
+      return completeAcceptedNonblockingDecision(this, { ...input, specId: input.specId ?? this._boundSpecId }).record;
+    }
     return this._store.applyNonblockingDecision({
       ...input,
       specId: input.specId ?? this._boundSpecId,
@@ -918,8 +963,12 @@ export class FlowManager {
     return this._store.retryGateTransition({ ...input, specId: input.specId ?? this._boundSpecId });
   }
   settleGateTransition(input = {}) {
+    if (["task-gate", "impl-gate"].includes(input.stepResult?.stepId)) {
+      return completeAcceptedGateDeferral(this, { ...input, specId: input.specId ?? this._boundSpecId });
+    }
     return this._store.settleGateTransition({ ...input, specId: input.specId ?? this._boundSpecId });
   }
+  prepareGateDeferralPublication(input) { return this._store.prepareGateDeferralPublication(input); }
   recoverTaskExecutionOverrun(input = {}) {
     return this._store.recoverTaskExecutionOverrun({ ...input, specId: input.specId ?? this._boundSpecId });
   }

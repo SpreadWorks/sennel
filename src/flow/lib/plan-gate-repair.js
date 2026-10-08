@@ -5,6 +5,9 @@ import { SpecGateDocumentTarget } from "./spec-gate-targets.js";
 import { FLOW_ARTIFACT_CONTRACTS } from "../../lib/flow-artifact-contract.js";
 import { CanonicalGateInputStore } from "./canonical-gate-artifacts.js";
 import { canonicalRepairAttemptOwner } from "./repair-attempt-lineage.js";
+import { readProspectiveCommandArtifact } from "./prospective-command-artifact.js";
+import { CanonicalCommandAttemptArtifactHistory } from "./canonical-command-result.js";
+import { TaskStepIdentity } from "./task-step-identity.js";
 import {
   GateEvidenceIdentity,
   GateObservation,
@@ -282,16 +285,15 @@ export class PlanGateRepairRoute {
 function taskRoute(taskId) {
   return new PlanGateRepairRoute({
     phase: "task-impl",
-    gateStepId: `${taskId}-gate`,
-    targetStepId: `${taskId}-impl`,
-    resetStepIds: [`${taskId}-impl`, `${taskId}-review`, `${taskId}-triage`, `${taskId}-repair`, `${taskId}-gate`],
+    gateStepId: new TaskStepIdentity({ taskId, role: "gate" }).nodeId,
+    targetStepId: new TaskStepIdentity({ taskId, role: "impl" }).nodeId,
+    resetStepIds: ["impl", "review", "triage", "repair", "gate"].map((role) => new TaskStepIdentity({ taskId, role }).nodeId),
   });
 }
 
 function taskIdForMaterializedStep(stepId, role) {
-  if (typeof stepId !== "string" || !stepId.endsWith(`-${role}`)) return null;
-  const taskId = stepId.slice(0, -(`-${role}`.length));
-  return taskId === "" || taskId === "impl" ? null : taskId;
+  const identity = TaskStepIdentity.fromNodeId(stepId);
+  return identity?.role === role && identity.taskId !== "impl" ? identity.taskId : null;
 }
 
 const ROUTES = Object.freeze([
@@ -342,13 +344,12 @@ export function planGateRepairResultLogicalKey(route) {
   return EVIDENCE_BY_PHASE.get(route.phase)?.logicalKey ?? null;
 }
 
-export function isPlanGateRepairEligibleFailure(state, route) {
+function isPlanGateRepairEligibleObservation(state, route, failure) {
   if (!(route instanceof PlanGateRepairRoute)) {
     throw new Error("plan gate repair eligibility requires a typed route");
   }
   if (state.current === null || state.current.at(-1) !== route.gateStepId || state.attempt === null) return false;
   const expected = EVIDENCE_BY_PHASE.get(route.phase);
-  const failure = state.attempt.failure;
   if (
     expected === undefined
     || failure?.category !== "semantic"
@@ -359,7 +360,11 @@ export function isPlanGateRepairEligibleFailure(state, route) {
   return true;
 }
 
-function matchingCurrentGateResult({ state, route, gateResult, catalog, activities }) {
+export function isPlanGateRepairEligibleFailure(state, route) {
+  return isPlanGateRepairEligibleObservation(state, route, state.attempt?.failure);
+}
+
+function matchingCurrentGateResult({ state, route, gateResult, catalog, activities, prospective = false }) {
   const logicalKey = planGateRepairResultLogicalKey(route);
   if (gateResult === null || gateResult.descriptor === undefined || gateResult.relativePath === undefined) return false;
   const descriptor = catalog.artifacts.find((artifact) => (
@@ -375,7 +380,7 @@ function matchingCurrentGateResult({ state, route, gateResult, catalog, activiti
     if (descriptor.relativePath !== expected.relativePath) return false;
   }
   const published = activities.find((activity) => activity.id === descriptor.activityId) ?? null;
-  const failed = activities.find((activity) => (
+  const failed = prospective ? null : activities.find((activity) => (
     activity.transition.operation === "fail_attempt"
     && activity.nodeId === route.gateStepId
     && activity.attemptId === state.attempt.id
@@ -388,8 +393,7 @@ function matchingCurrentGateResult({ state, route, gateResult, catalog, activiti
     && published.nodeId === route.gateStepId
     && published.attemptId === state.attempt.id
     && published.sequence === state.attempt.sequence
-    && failed !== null
-    && published.confirmationOrder <= failed.confirmationOrder;
+    && (prospective || failed !== null && published.confirmationOrder <= failed.confirmationOrder);
 }
 
 function matchingGateIssueLogEntry(entry, route, gateResult) {
@@ -509,13 +513,14 @@ export function createProspectivePlanGateRepairRecord({
  * turn an older issue-log observation into recovery authority for a fresh
  * Attempt at the same gate.
  */
-function latestPlanGateRepairIssueLogEntry({ state, issueLog, gateResult, catalog, activities } = {}) {
+function latestPlanGateRepairIssueLogEntry({ state, issueLog, gateResult, catalog, activities, prospective = false } = {}) {
   if (state.current === null) return null;
   const activeStepId = state.current.at(-1);
   const route = planGateRepairRouteForGateStep(activeStepId);
   if (route === null) return null;
-  if (!isPlanGateRepairEligibleFailure(state, route)) return null;
-  if (!matchingCurrentGateResult({ state, route, gateResult, catalog, activities })) return null;
+  if (!isPlanGateRepairEligibleObservation(state, route, prospective
+    ? gateResult?.payload?.artifacts?.gateTransitionFailureCategory : state.attempt.failure)) return null;
+  if (!matchingCurrentGateResult({ state, route, gateResult, catalog, activities, prospective })) return null;
   return [...issueLog.entries].reverse().find((entry) => (
     matchingGateIssueLogEntry(entry, route, gateResult)
   )) ?? null;
@@ -582,6 +587,29 @@ export function inspectCanonicalPlanGateRepair({ flowManager, state } = {}) {
   });
   if (source === null) return null;
   return new CanonicalPlanGateRepairEvidence({ route, issueLog, source });
+}
+
+/** Inspect the exact future Gate and issue publication in one acquired transaction. */
+export function inspectProspectivePlanGateRepair({ state, publication } = {}) {
+  const route = planGateRepairRouteForGateStep(state.current?.at(-1));
+  if (route === null) return null;
+  const logicalKey = planGateRepairResultLogicalKey(route);
+  const parameters = route.phase === "task-impl"
+    ? { taskId: TaskStepIdentity.fromStateNode(state, state.current.at(-1)).taskId } : {};
+  const resolved = readProspectiveCommandArtifact(publication, { logicalKey, parameters, optional: true });
+  if (resolved === null) return null;
+  const current = CanonicalCommandAttemptArtifactHistory.fromBytes({ logicalKey, bytes: resolved.bytes }).current;
+  if (current.payload?.result !== "fail"
+    || current.payload?.artifacts?.gateTransitionAttemptId !== state.attempt.id
+    || current.payload?.artifacts?.gateTransitionAttemptSequence !== state.attempt.sequence) return null;
+  const issue = readProspectiveCommandArtifact(publication, { logicalKey: "issue.log", optional: true });
+  if (issue === null) return null;
+  const issueLog = issueLogDocument(JSON.parse(issue.bytes.toString("utf8")));
+  const gateResult = { ...resolved, attempt: current.attempt, payload: current.payload };
+  const catalog = Array.isArray(publication.catalog) ? { artifacts: publication.catalog } : publication.catalog;
+  const source = latestPlanGateRepairIssueLogEntry({ state, issueLog, gateResult, catalog,
+    activities: publication.activities, prospective: true });
+  return source === null ? null : new CanonicalPlanGateRepairEvidence({ route, issueLog, source });
 }
 
 export class PlanGateRepairRecord {

@@ -13,65 +13,20 @@ import { CurrentFlowStateInvariantError, ActivityReviewPublication, NodeResult,
   assertDraftSettlementReceiptTransition } from "./current-flow-state.js";
 import { CurrentFlowStateConflictError } from "./current-flow-state-conflict-error.js";
 import { SpecReviewExecutionAdmission, SpecReviewExecutionClaimPreparation,
-  SpecReviewPublicationPreparation } from "./spec-review-operations-values.js";
+  SpecReviewPublicationPreparation, ReviewExecutionClaimPreparation, ReviewExecutionAdmission } from "./spec-review-operations-values.js";
 
 export class SpecReviewOperations {
-  static prepareExecutionClaim({ flowManager, state, manifest, skipConfirm }) {
-    if (!(manifest instanceof ReviewWorkUnitManifest)
-      || manifest.runId !== state.runId || manifest.specId !== state.specId
-      || manifest.attemptId !== state.attempt?.id) {
-      throw new StepAdmissionRefusal("Spec Review execution requires its exact work unit manifest");
-    }
-    const binding = new SpecReviewStepBinding({ flowManager, specId: state.specId });
-    const executionState = flowManager.draftStepExecutionState({ binding });
-    const current = executionState.lifecycle;
-    const target = new DraftReviewExecutionTargetIdentity(manifest.target.toJSON());
-    const executionBinding = current === null
-      ? executionState.reviewBinding({
-          manifestDigest: manifest.digest, inputDigest: manifest.inputDigest, target,
-        })
-      : new DraftReviewExecutionBinding({
-          executionGeneration: current.executionGeneration,
-          manifestDigest: manifest.digest, inputDigest: manifest.inputDigest, target,
-        });
-    if (current !== null && !current.binding.equals(executionBinding)) {
-      throw new StepAdmissionRefusal("the rebuilt Spec Review work unit differs from its durable execution binding");
-    }
-    if (current !== null && !["checkpoint", "claimed"].includes(current.phase)) {
-      throw new StepAdmissionRefusal("the Spec Review execution already has a durable publication");
-    }
-    const request = new ReviewProviderRequestIdentity({ skipConfirm });
-    if (current?.phase === "claimed" && !current.claim.request?.equals(request)) {
-      throw new StepAdmissionRefusal("the Spec Review provider request differs from its durable claim");
-    }
-    return new SpecReviewExecutionClaimPreparation({
-      flowManager, binding, executionBinding, request,
-      recoveredClaim: current?.phase === "claimed", needsCheckpoint: current === null,
-    });
+  static prepareExecutionClaim(input) {
+    const binding = new SpecReviewStepBinding({ flowManager: input.flowManager, specId: input.state.specId });
+    return prepareReviewExecutionClaim({ ...input, binding, ResultClass: SpecReviewExecutionRequiredResult,
+      PreparationClass: SpecReviewExecutionClaimPreparation });
   }
 
   static commitExecutionClaim(preparation) {
     if (!(preparation instanceof SpecReviewExecutionClaimPreparation)) {
       throw new TypeError("Spec Review claim requires its prepared execution identity");
     }
-    const { flowManager, binding, executionBinding, request, recoveredClaim } = preparation;
-    const identity = flowManager.draftStepExecutionState({ binding }).executionIdentity();
-    if (!(identity?.stepResult instanceof SpecReviewExecutionRequiredResult)) {
-      throw new Error("Spec Review execution lacks its persisted Step selection");
-    }
-    claimDraftReviewExecution({
-      flowManager,
-      binding,
-      stepResult: identity.stepResult,
-      settlement: identity.settlement,
-      executionBinding,
-      executionClaim: new DraftReviewExecutionClaim({ request }),
-    });
-    const persistedClaim = flowManager.draftStepExecutionState({ binding }).lifecycle.claim;
-    return new SpecReviewExecutionAdmission({
-      request: persistedClaim.request,
-      recoveredClaim,
-    });
+    return new SpecReviewExecutionAdmission(commitReviewExecutionClaim(preparation));
   }
 
   static publish({ flowManager, specId, commandResult }) {
@@ -194,4 +149,66 @@ export class SpecReviewOperations {
     return this.resultFromStepResult(selected, read.review.digest);
   }
 
+}
+
+/** Acquire one exact immutable semantic Review claim for any registered Review leaf. */
+export function prepareReviewExecutionClaim({ flowManager, binding, state, manifest, skipConfirm,
+  ResultClass, PreparationClass = ReviewExecutionClaimPreparation }) {
+  if (!(manifest instanceof ReviewWorkUnitManifest)
+    || manifest.runId !== state.runId || manifest.specId !== state.specId
+    || manifest.attemptId !== state.attempt?.id
+    || manifest.nodeId !== (binding.nodeId ?? binding.stepId)
+    || binding.runId !== state.runId || binding.specId !== state.specId) {
+    throw new StepAdmissionRefusal("Review execution requires its exact work unit manifest");
+  }
+  const executionState = flowManager.draftStepExecutionState({ binding });
+  const current = executionState.lifecycle;
+  const target = new DraftReviewExecutionTargetIdentity(manifest.target.toJSON());
+  const executionBinding = current === null
+    ? executionState.reviewBinding({
+        manifestDigest: manifest.digest, inputDigest: manifest.inputDigest, target,
+      })
+    : new DraftReviewExecutionBinding({
+        executionGeneration: current.executionGeneration,
+        manifestDigest: manifest.digest, inputDigest: manifest.inputDigest, target,
+      });
+  if (current !== null && !current.binding.equals(executionBinding)) {
+    throw new StepAdmissionRefusal("the rebuilt Review work unit differs from its durable execution binding");
+  }
+  if (current !== null && !["checkpoint", "claimed"].includes(current.phase)) {
+    throw new StepAdmissionRefusal("the Review execution already has a durable publication");
+  }
+  const request = new ReviewProviderRequestIdentity({ skipConfirm });
+  if (current?.phase === "claimed" && !current.claim.request?.equals(request)) {
+    throw new StepAdmissionRefusal("the Review provider request differs from its durable claim");
+  }
+  return new PreparationClass({
+    flowManager, binding, executionBinding, request, ResultClass,
+    recoveredClaim: current?.phase === "claimed", needsCheckpoint: current === null,
+  });
+}
+
+/** Save the acquired provider claim without recomputing its execution selection. */
+export function commitReviewExecutionClaim(preparation) {
+  if (!(preparation instanceof ReviewExecutionClaimPreparation)) {
+    throw new TypeError("Review claim requires its prepared execution identity");
+  }
+  const { flowManager, binding, executionBinding, request, recoveredClaim } = preparation;
+  const identity = flowManager.draftStepExecutionState({ binding }).executionIdentity();
+  if (!(identity?.stepResult instanceof preparation.ResultClass)) {
+    throw new Error("Review execution lacks its persisted Step selection");
+  }
+  claimDraftReviewExecution({
+    flowManager,
+    binding,
+    stepResult: identity.stepResult,
+    settlement: identity.settlement,
+    executionBinding,
+    executionClaim: new DraftReviewExecutionClaim({ request }),
+  });
+  const persistedClaim = flowManager.draftStepExecutionState({ binding }).lifecycle.claim;
+  return new ReviewExecutionAdmission({
+    request: persistedClaim.request,
+    recoveredClaim,
+  });
 }

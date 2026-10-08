@@ -1,3 +1,4 @@
+import { SourcePublicationCaptureFile } from "./source-publication-capture.js";
 import assert from "node:assert/strict";
 
 // FlowManager initializes the production composition graph before its shared
@@ -48,15 +49,15 @@ class PublicationObservation {
   #beforeState;
   #priorActivities;
 
-  constructor(producer, operation, input) {
+  constructor(producer, operation, input, captured = null) {
     this.#input = snapshot(input);
     this.#producer = producer instanceof FlowManager ? producer._store : producer;
     this.operation = operation;
     const { binding, stepResult } = input;
-    this.#beforeState = producer.canonicalState(input.specId ?? binding.specId);
+    this.#beforeState = captured?.beforeState ?? producer.canonicalState(input.specId ?? binding.specId);
     assert.ok(this.#beforeState instanceof CurrentFlowState,
       "publication observation requires the actual pre-save canonical state");
-    this.#priorActivities = Object.freeze(producer.activityLedger(input.specId ?? binding.specId)
+    this.#priorActivities = captured?.priorActivities ?? Object.freeze(producer.activityLedger(input.specId ?? binding.specId)
       .map((entry) => new FlowActivity(entry)));
     this.runId = binding.runId;
     this.specId = binding.specId;
@@ -66,6 +67,11 @@ class PublicationObservation {
     this.kind = stepResult.kind;
     this.resultDigest = stepResultDigest(stepResult);
     Object.freeze(this);
+  }
+
+  captureSource(file) {
+    file.write({ operation: this.operation, input: this.#input,
+      beforeState: this.#beforeState, priorActivities: this.#priorActivities });
   }
 
   matches(activity, result) {
@@ -124,12 +130,14 @@ export class ImplPhasePublicationObserver {
   #captureErrors = [];
   #mocks = [];
   #stepIds;
+  #sourceCapture;
 
-  constructor(t, { leaves = defaultLeaves } = {}) {
+  constructor(t, { leaves = defaultLeaves, sourceCapture = null } = {}) {
     if (!Array.isArray(leaves) || !leaves.length || leaves.some((leaf) => !(leaf instanceof StructureLeaf))) {
       throw new TypeError("publication observation requires an existing fixed StructureLeaf scope");
     }
     this.#stepIds = new Set(leaves.map((leaf) => leaf.stepId));
+    this.#sourceCapture = sourceCapture === null ? null : new SourcePublicationCaptureFile(sourceCapture);
     t.after(() => this.restore());
     for (const Type of [FlowManager, CanonicalFlowManagerStore]) {
       for (const [name, descriptor] of Object.entries(Object.getOwnPropertyDescriptors(Type.prototype))) {
@@ -138,7 +146,10 @@ export class ImplPhasePublicationObserver {
         const observer = this;
         this.#mocks.push(t.mock.method(Type.prototype, name, function (...args) {
           try { observer.#capture(this, `${Type.name}.${name}`, args); }
-          catch (error) { observer.#captureErrors.push({ operation: `${Type.name}.${name}`, error }); }
+          catch (error) {
+            if (observer.#sourceCapture !== null) throw error;
+            observer.#captureErrors.push({ operation: `${Type.name}.${name}`, error });
+          }
           // Preserve the receiver, argument identities, return/Promise identity,
           // and thrown error. Recording precedes the call, including postcommit
           // response loss; no finally/readback or async continuation is injected.
@@ -152,8 +163,19 @@ export class ImplPhasePublicationObserver {
     for (const input of args) {
       if (!(input?.stepResult instanceof StepResult) || !this.#stepIds.has(input.stepResult.stepId)
         || !(input.settlement instanceof StepSettlement) || input.binding?.attempt === undefined) continue;
-      this.#observations.push(new PublicationObservation(producer, operation, input));
+      const observation = new PublicationObservation(producer, operation, input);
+      this.#observations.push(observation);
+      if (this.#sourceCapture !== null && operation === "FlowManager.commitSpecStepResult" && input.effect != null) {
+        observation.captureSource(this.#sourceCapture);
+      }
     }
+  }
+
+  importSourceCapture({ filePath, nonce, processId, executionRoot }) {
+    const captured = new SourcePublicationCaptureFile({ filePath, nonce }).read({ processId, executionRoot });
+    this.#observations.push(new PublicationObservation(captured.producer, captured.operation,
+      captured.input, captured));
+    return captured.digest;
   }
 
   authenticate(manager, activity, result, settlement) {
