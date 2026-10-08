@@ -18,6 +18,7 @@ import {
   FlowArtifactCatalogCommittedSnapshot,
   FlowArtifactCatalogSnapshotEvidence,
   FlowArtifactCatalogSnapshotReader,
+  FlowArtifactCatalogSnapshotLimits,
   FlowArtifactCatalogStore,
   FlowArtifactDescriptor,
   FlowActivityId,
@@ -58,6 +59,7 @@ import {
 import { IssueLogStore } from "../../../src/flow/lib/issue-log-store.js";
 import { ReviewDisposition, ReviewEvidence, ReviewProvenance } from "../../../src/flow/lib/review-convergence.js";
 import { FLOW_ARTIFACT_CONTRACTS } from "../../../src/lib/flow-artifact-contract.js";
+import { CanonicalFlowVersionReader } from "../../../src/flow/query.js";
 
 const roots = [];
 function temporaryRoot() {
@@ -145,6 +147,30 @@ async function captureCommittedCatalogEvidence({ catalog, readArtifact }, value 
     activityIndex: FlowArtifactActivityIndex.fromBytes(ledgerBytes),
     confirmedLedgerBytes: ledgerBytes,
   });
+}
+function historicalCatalogFixture() {
+  const location = canonicalLocation();
+  const boundary = new CurrentFlowStateAdoptionBoundary({ definition: buildCurrentFlowDefinition() });
+  const flow = boundary.openVersionStore({ location });
+  flow.create(freshState(boundary, location), { specRecord: specRecord() });
+  const store = new FlowArtifactCatalogStore({ location });
+  const history = Buffer.alloc(2048, "h");
+  const catalog = publishCatalogSource(store, location, history);
+  const historyPath = catalog.artifacts.find((artifact) => artifact.hash === hash(history)).relativePath;
+  return { location, store, flow, historyPath, history };
+}
+function publishCatalogSource(store, location, bytes, publicationLimits = null) {
+  const artifact = FLOW_ARTIFACT_CONTRACTS.resolve("spec.gate.repair.source.blob", { digest: hash(bytes) });
+  store.publishMany({
+    artifacts: [{ logicalKey: artifact.logicalKey, relativePath: artifact.relativePath,
+      authoritySlot: artifact.authoritySlot(), mediaType: "text/plain", retention: artifact.contract.retention.toString() }],
+    publicationClaim: artifactPublicationClaimForStep("spec-gate-repair"), publicationLimits,
+    write: () => {
+      fs.mkdirSync(path.dirname(location.resolve(artifact.relativePath)), { recursive: true });
+      fs.writeFileSync(location.resolve(artifact.relativePath), bytes);
+    },
+  });
+  return store.require();
 }
 function spawnCatalogLockOwner(location, holdMs) {
   const runtimeLock = location.runtimeLock("runtime.lock.artifact-catalog");
@@ -1327,6 +1353,101 @@ describe("Current Flow Version storage", () => {
       }),
       /catalog snapshot aggregate artifact bytes exceed the limit/,
     );
+  });
+
+  it("catalog resource budgets: publishes a bounded batch while retaining larger immutable history", () => {
+    const { location, store, historyPath, history } = historicalCatalogFixture();
+    const original = store.require().resolve(historyPath).toJSON();
+    const content = Buffer.alloc(100, "n");
+    const catalog = publishCatalogSource(store, location, content,
+      new FlowArtifactCatalogSnapshotLimits({ maxTotalArtifactBytes: content.length }));
+    const file = FLOW_ARTIFACT_CONTRACTS.resolve("spec.gate.repair.source.blob", { digest: hash(content) }).relativePath;
+    assert.deepEqual(catalog.resolve(historyPath).toJSON(), original);
+    assert.deepEqual(fs.readFileSync(location.resolve(historyPath)), history);
+    assert.equal(catalog.resolve(file).hash, hash(content));
+    assert.equal(new FlowArtifactCatalogStore({ location }).require().hash, catalog.hash);
+  });
+
+  it("catalog resource budgets: verifies all history without charging it to retained capture bytes", async () => {
+    const { location, store, historyPath, history } = historicalCatalogFixture();
+    const prior = store.require();
+    const ledgerBytes = fs.readFileSync(location.activitiesFile);
+    const snapshot = await new FlowArtifactCatalogSnapshotReader({ location }).readCommittedSnapshot({
+      limits: { maxTotalArtifactBytes: ledgerBytes.length },
+      capture: (context) => captureCommittedCatalogEvidence(context, { source: "bounded capture" }),
+    });
+    assert.deepEqual(snapshot.value, { source: "bounded capture" });
+    assert.equal(snapshot.catalog.hash, prior.hash);
+    assert.equal(snapshot.catalog.resolve(historyPath).hash, hash(history));
+    assert.equal(store.require().hash, prior.hash);
+  });
+
+  it("catalog resource budgets: rolls back every write when the published batch itself exceeds its budget", () => {
+    const { location, store, historyPath, history } = historicalCatalogFixture();
+    const prior = store.require();
+    const content = Buffer.alloc(101, "n");
+    const file = FLOW_ARTIFACT_CONTRACTS.resolve("spec.gate.repair.source.blob", { digest: hash(content) }).relativePath;
+    assert.throws(() => publishCatalogSource(store, location, content,
+      new FlowArtifactCatalogSnapshotLimits({ maxTotalArtifactBytes: 100 })), /aggregate artifact bytes exceed the limit/);
+    assert.equal(fs.existsSync(location.resolve(file)), false);
+    assert.deepEqual(fs.readFileSync(location.resolve(historyPath)), history);
+    assert.equal(new FlowArtifactCatalogStore({ location }).require().hash, prior.hash);
+  });
+
+  it("catalog resource budgets: refuses corrupt history even when its bytes are not retained", async () => {
+    const { location, store, historyPath } = historicalCatalogFixture();
+    const prior = store.require();
+    fs.writeFileSync(location.resolve(historyPath), Buffer.alloc(2048, "x"));
+    await assert.rejects(new FlowArtifactCatalogSnapshotReader({ location }).readCommittedSnapshot({
+      limits: { maxTotalArtifactBytes: fs.statSync(location.activitiesFile).size },
+      capture: (context) => captureCommittedCatalogEvidence(context),
+    }), (error) => error.message === `artifact content does not match the catalog: ${historyPath}`);
+    assert.equal(JSON.parse(fs.readFileSync(location.catalogFile, "utf8")).hash, prior.hash);
+  });
+
+  it("catalog resource budgets: temporary inspection refuses bytes from a later catalog revision", async () => {
+    const { location, store, flow } = historicalCatalogFixture();
+    let changed = false;
+    const snapshot = await new FlowArtifactCatalogSnapshotReader({ location }).readCommittedSnapshot({
+      capture: async (context) => {
+        if (!changed) {
+          changed = true;
+          flow.apply({ activity: startActivity(flow.load(), { id: "inspection-race" }) });
+        }
+        const bytes = await context.inspectArtifact(context.catalog.resolve("flow.json"));
+        return captureCommittedCatalogEvidence(context, { attempt: context.attempt, stateDigest: hash(bytes) });
+      },
+    });
+    assert.deepEqual(snapshot.value, { attempt: 2, stateDigest: hash(fs.readFileSync(location.flowStateFile)) });
+    assert.equal(snapshot.catalog.hash, store.require().hash);
+  });
+
+  it("catalog retained history: reads and publishes with more than 64 MiB of immutable history", async () => {
+    const { location, store, flow } = historicalCatalogFixture();
+    const histories = [];
+    for (let index = 0; index < 5; index += 1) {
+      const content = Buffer.alloc(14 * 1024 * 1024, String(index));
+      publishCatalogSource(store, location, content);
+      histories.push({ hash: hash(content), size: content.length });
+    }
+    const before = store.require();
+    assert(before.artifacts.reduce((total, artifact) => total + artifact.size, 0) > 64 * 1024 * 1024);
+    const reader = new CanonicalFlowVersionReader({ repositoryRoot: location.repositoryRoot });
+    const opened = await reader.open(location.specId.toString(), 1);
+    assert.equal(opened.catalog.hash, before.hash);
+    const content = Buffer.from("Publish a small current artifact while preserving all history.\n");
+    const limits = new FlowArtifactCatalogSnapshotLimits();
+    publishCatalogSource(store, location, content, limits);
+    flow.apply({ activity: startActivity(flow.load(), { id: "large-history-resume" }), publicationLimits: limits });
+    const resumed = await new CanonicalFlowVersionReader({ repositoryRoot: location.repositoryRoot })
+      .open(location.specId.toString(), 1);
+    assert.equal(resumed.state.attempt.id, "large-history-resume-attempt");
+    assert.equal(resumed.catalog.hash, store.require().hash);
+    for (const historical of histories) {
+      const descriptor = resumed.catalog.artifacts.find((artifact) => artifact.hash === historical.hash);
+      assert.equal(descriptor.size, historical.size);
+    }
+    assert.equal(resumed.catalog.artifacts.find((artifact) => artifact.hash === hash(content)).size, content.length);
   });
 
   it("rejects reentrant catalog reads while a transaction owns the coherent view", () => {

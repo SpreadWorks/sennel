@@ -853,8 +853,8 @@ class CanonicalFlowVersionReader {
           maxConfirmedLedgerBytes: FLOW_QUERY_LIMITS.MAX_CONFIRMED_LEDGER_BYTES,
           maxTotalArtifactBytes: FLOW_QUERY_LIMITS.MAX_TOTAL_ARTIFACT_BYTES,
         },
-        capture: ({ catalog, readArtifact }) => this.captureCommittedSnapshot({
-          catalog, readArtifact, specId, version,
+        capture: ({ catalog, readArtifact, inspectArtifact }) => this.captureCommittedSnapshot({
+          catalog, readArtifact, inspectArtifact, specId, version,
         }),
       });
     } catch (error) {
@@ -867,7 +867,7 @@ class CanonicalFlowVersionReader {
     return Object.freeze({ ...snapshot.value, catalog: snapshot.catalog, location });
   }
 
-  async captureCommittedSnapshot({ catalog, readArtifact, specId, version }) {
+  async captureCommittedSnapshot({ catalog, readArtifact, inspectArtifact, specId, version }) {
     const stateDescriptor = catalog.resolve(FLOW_ARTIFACT_CONTRACTS.resolve("flow.state").relativePath);
     const specDescriptor = catalog.resolve(FLOW_ARTIFACT_CONTRACTS.resolve("spec.record").relativePath);
     const ledgerDescriptor = catalog.resolve(FLOW_ARTIFACT_CONTRACTS.resolve("flow.activities").relativePath);
@@ -909,7 +909,7 @@ class CanonicalFlowVersionReader {
     } catch (error) {
       throw new QueryError(ERROR_CODES.CANONICAL_RECORD_INCONSISTENT, "/canonical", "canonical Activity references are inconsistent", { cause: error });
     }
-    const artifactSchemaRevisions = await this.captureArtifactSchemaRevisions(catalog, ledgerDescriptor, confirmedLedger.bytes, readArtifact);
+    const artifactSchemaRevisions = await this.captureArtifactSchemaRevisions(catalog, ledgerDescriptor, confirmedLedger.bytes, inspectArtifact);
     return new FlowArtifactCatalogSnapshotEvidence({
       value: Object.freeze({ state, spec, activities, artifactSchemaRevisions }),
       activityIndex,
@@ -917,7 +917,7 @@ class CanonicalFlowVersionReader {
     });
   }
 
-  async captureArtifactSchemaRevisions(catalog, ledgerDescriptor, confirmedLedgerBytes, readArtifact) {
+  async captureArtifactSchemaRevisions(catalog, ledgerDescriptor, confirmedLedgerBytes, inspectArtifact) {
     const revisions = new Map();
     for (const descriptor of catalog.artifacts) {
       if (descriptor.logicalKey === null) {
@@ -929,7 +929,7 @@ class CanonicalFlowVersionReader {
         revisions.set(descriptor.relativePath, null);
         continue;
       }
-      const bytes = descriptor === ledgerDescriptor ? confirmedLedgerBytes : await readArtifact(descriptor);
+      const bytes = descriptor === ledgerDescriptor ? confirmedLedgerBytes : await inspectArtifact(descriptor);
       try {
         const value = contract.contentContract.parse(bytes);
         revisions.set(descriptor.relativePath, Number.isSafeInteger(value?.schemaRevision) && value.schemaRevision > 0 ? value.schemaRevision : null);

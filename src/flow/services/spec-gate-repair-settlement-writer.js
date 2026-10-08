@@ -10,8 +10,13 @@ export class SpecGateRepairSettlementWriter {
   #handoffCoordinator;
   #publication;
   #publicationReceipt;
+  #publicationLimits;
 
-  constructor({ ctx, request, binding, preparation, handoffCoordinator, publication, publicationReceipt }) {
+  constructor({ ctx, request, binding, preparation, handoffCoordinator, publication, publicationReceipt,
+    publicationLimits = new FlowArtifactCatalogSnapshotLimits() }) {
+    if (!(publicationLimits instanceof FlowArtifactCatalogSnapshotLimits)) {
+      throw new TypeError("Spec Gate repair settlement writer requires typed publication limits");
+    }
     this.#ctx = ctx;
     this.#request = request;
     this.#binding = binding;
@@ -19,11 +24,12 @@ export class SpecGateRepairSettlementWriter {
     this.#handoffCoordinator = handoffCoordinator;
     this.#publication = publication;
     this.#publicationReceipt = publicationReceipt;
+    this.#publicationLimits = publicationLimits;
   }
 
   settle(input, replayed = false) {
     const selected = { ...this.#publication, ...input, binding: this.#binding,
-      publicationLimits: new FlowArtifactCatalogSnapshotLimits() };
+      publicationLimits: this.#publicationLimits };
     try {
       if (!replayed) this.#handoffCoordinator.faultInjector({
         phase: "before-worker-handoff-publication", stepId: "spec-gate-repair",
@@ -34,12 +40,12 @@ export class SpecGateRepairSettlementWriter {
 
   settleDraftReturn(input) {
     return this.#ctx.flowManager.commitSpecStepResult({ ...input, binding: this.#binding,
-      publicationLimits: new FlowArtifactCatalogSnapshotLimits() });
+      publicationLimits: this.#publicationLimits });
   }
 
   completeProgress(input) {
     return this.#ctx.flowManager.completeSpecGateRepairProgress({ ...input, binding: this.#binding,
-      publicationLimits: new FlowArtifactCatalogSnapshotLimits(),
+      publicationLimits: this.#publicationLimits,
       publicationReceipt: this.#publicationReceipt });
   }
 

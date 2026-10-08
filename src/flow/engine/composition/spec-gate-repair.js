@@ -58,17 +58,18 @@ class SpecGateRepairPublishedDecision {
 }
 
 function serviceArguments({ ctx, request, binding, preparation, handoffCoordinator,
-  facts = preparation?.facts ?? null, continuation = null, publicationReceipt = null }) {
+  publicationLimits, facts = preparation?.facts ?? null, continuation = null, publicationReceipt = null }) {
   binding.assertCurrent();
   const input = new SpecGateRepairServiceInput({ facts, continuation,
     attemptId: binding.attempt.id,
     attemptSequence: binding.attempt.sequence });
   return [input, new SpecGateRepairSettlementWriter({ ctx, request, binding,
-    preparation, handoffCoordinator, publicationReceipt,
+    preparation, handoffCoordinator, publicationReceipt, publicationLimits,
     publication: preparation?.settlementPublication(handoffCoordinator.now) ?? {} })];
 }
 
-export async function preparePublishedSpecGateRepairArguments({ ctx, state: requestedState, handoffCoordinator }) {
+export async function preparePublishedSpecGateRepairArguments({ ctx, state: requestedState, handoffCoordinator,
+  publicationLimits = new FlowArtifactCatalogSnapshotLimits() }) {
   const state = ctx.flowManager.canonicalState(requestedState.specId);
   const execution = ctx.flowManager.draftStepExecutionState({ binding: {
     runId: state.runId, specId: state.specId, stepId: "spec-gate-repair", attempt: state.attempt,
@@ -96,7 +97,7 @@ export async function preparePublishedSpecGateRepairArguments({ ctx, state: requ
   const { facts, continuation } = new SpecGateRepairPublishedDecision({ source, ledger, refreshed,
     proposal: saved.proposal });
   return serviceArguments({ ctx, request: null, binding, preparation: null,
-    facts, handoffCoordinator, continuation,
+    facts, handoffCoordinator, continuation, publicationLimits,
     publicationReceipt: ctx.flowManager.readCurrentStepSettlement({
       specId: state.specId, stepId: "spec-gate-repair",
     }).receipt });
@@ -194,8 +195,10 @@ export function reserveSpecGateRepairWorkerCall({ ctx, request, prompt, physical
   } catch (error) { rethrowStepSettlementFailure(error); }
 }
 
-export async function prepareSpecGateRepairServiceArguments({ ctx, request, handoffCoordinator }, ConnectorClass) {
-  if (request === undefined) return preparePublishedSpecGateRepairArguments({ ctx, state: ctx.flowManager.canonicalState(ctx.specId ?? ctx.flowState.specId), handoffCoordinator });
+export async function prepareSpecGateRepairServiceArguments({ ctx, request, handoffCoordinator,
+  publicationLimits = new FlowArtifactCatalogSnapshotLimits() }, ConnectorClass) {
+  if (request === undefined) return preparePublishedSpecGateRepairArguments({ ctx,
+    state: ctx.flowManager.canonicalState(ctx.specId ?? ctx.flowState.specId), handoffCoordinator, publicationLimits });
   let preparation;
   try {
     preparation = handoffCoordinator.prepareSpecWorker({ ctx, request });
@@ -308,7 +311,7 @@ export async function prepareSpecGateRepairServiceArguments({ ctx, request, hand
     try {
       publicationReceipt = ctx.flowManager.settleSpecStepResult({
         binding, stepResult, settlement: selectSettlement(binding.stepId, stepResult),
-        publicationLimits: new FlowArtifactCatalogSnapshotLimits(),
+        publicationLimits,
         artifactWrites: [progressWrite(binding, lifecycle.executionGeneration, "publication", {
           ...saved.document, phase: "publication", budget: budget.snapshot(),
           responseCost: responseCost.toJSON(), context, proposal,
@@ -336,9 +339,9 @@ export async function prepareSpecGateRepairServiceArguments({ ctx, request, hand
     proposal: preparation.facts.proposal });
   if (selected.continuation !== null) {
     return serviceArguments({ ctx, request, binding, preparation, handoffCoordinator,
-      continuation: selected.continuation, publicationReceipt });
+      continuation: selected.continuation, publicationReceipt, publicationLimits });
   }
   const combined = preparation.withSpecGateRepairFacts(selected.facts);
   return serviceArguments({ ctx, request, binding, preparation: combined, handoffCoordinator,
-    publicationReceipt });
+    publicationReceipt, publicationLimits });
 }
