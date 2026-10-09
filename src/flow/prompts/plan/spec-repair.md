@@ -1,3 +1,4 @@
+   <!-- include("/flow/prompts/partials/spec-writing.md") -->
    - Read the immutable `spec.json` snapshot and the one canonical `review.json` only from `inputs[].document`.
    - Follow the checkout research guidance in `request.json.workerInstructions.schemaGuidance` when implementation facts are missing from the supplied evidence.
    - Write only `review.delta.json`, one immutable-input-bound delta, to the exact handoff `payloadPath`. Never edit `spec.json`, `review.json`, or any canonical Flow file.

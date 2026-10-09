@@ -10,6 +10,7 @@ import { Logger } from "../../src/lib/log.js";
 import { SpecGateRepairContext } from "../../src/flow/lib/spec-gate-repair-context.js";
 import { SpecGateRepairBundle } from "../../src/flow/lib/spec-gate-repair-bundle.js";
 import { SpecGateRepairSource } from "../../src/flow/lib/spec-gate-repair-values.js";
+import { getStepInstructions } from "../../src/flow/lib/get-step-instructions.js";
 import { readSpecJsonValidator } from "../../src/lib/spec-json.js";
 import { applySpecGateRepairOperations, SpecGateRepairAuthority } from "../../src/flow/lib/spec-repair-operations.js";
 import { validWorkerHandoffTaskSpec } from "../support/infrastructure/worker-artifact.js";
@@ -25,7 +26,10 @@ test("real repair model resolves existing evidence and returns only missing choi
       jsonOutputFlag: "--json" } } } };
   const agent = new Agent({ config, paths: { root, agentWorkDir: root },
     registry: new ProviderRegistry(config.agent.providers), logger: new Logger({ logDir: path.join(root, "logs"), enabled: false }) });
-  const prompt = fs.readFileSync(new URL("../../src/flow/prompts/plan/spec-gate-repair.md", import.meta.url), "utf8");
+  const prompt = getStepInstructions("plan.spec-gate-repair");
+  assert.match(prompt, /explore and read the execution checkout yourself/);
+  assert.match(prompt, /State shared conditions once/);
+  assert.doesNotMatch(prompt, /<!--\s*include\(/);
   for (const known of [true, false]) {
     const spec = validWorkerHandoffTaskSpec();
     spec.requirements[0].desc = known
