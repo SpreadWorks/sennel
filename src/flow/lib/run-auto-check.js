@@ -225,7 +225,7 @@ async function scoreWithAi(container, inputText) {
       maxProtocolRetryCount: 0,
       maxSynthesisCallCount: 1,
       maxAggregateItemCount: 1,
-      maxAggregateCharacters: 120_000,
+      maxAggregateCharacters: null,
     });
     response = await new PromptBatchExecutor({ executionLimit }).execute({
       plan,

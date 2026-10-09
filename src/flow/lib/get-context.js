@@ -20,7 +20,8 @@ import { container } from "../../lib/container.js";
 import { PromptBuilder } from "../../lib/prompt-builder.js";
 import {
   AtomicPromptElement, PromptInputBuilder, PromptRequestEnvelope, PromptRequestLimit,
-  PromptBatchPlan, PromptBatchExecutor, PromptBatchReducer, PromptResponseCoverageInvalidFailure,
+  PromptBatchPlan, PromptBatchExecutor, PromptBatchReducer, PromptExecutionLimit,
+  PromptResponseCoverageInvalidFailure,
 } from "../../lib/prompt-batching.js";
 
 const EXCLUDE_FIELDS = new Set(["hash", "mtime", "lines", "id", "enrich", "detail"]);
@@ -303,7 +304,9 @@ async function aiSearch(allEntries, analysis, query, _root) {
       sourceRevision: createHash("sha256").update(keyword).digest("hex"),
     })));
     const plan = PromptBatchPlan.create({ collection: builder.build(), envelope, limit });
-    selectedKeywords = await new PromptBatchExecutor().execute({
+    selectedKeywords = await new PromptBatchExecutor({
+      executionLimit: new PromptExecutionLimit({ maxAggregateCharacters: null }),
+    }).execute({
       plan,
       callAgent: (built, _batch, _retryIndex, _attempt, providerCallAdmission) => agent.call(built.userPrompt, {
         ...built, commandId: "flow.context.search", providerCallAdmission,

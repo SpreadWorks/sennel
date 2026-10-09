@@ -801,13 +801,16 @@ export class ArtifactViewSummaryService {
     if (relevant.length === 0) result = contract.createResult(units, []);
     try {
       if (result === undefined) {
+        const executionLimit = new PromptExecutionLimit({ maxAggregateCharacters: null });
         const plan = PromptBatchPlan.create({
           collection: builder.build(),
           envelope,
           limit,
-          executionLimit: new PromptExecutionLimit(),
+          executionLimit,
         });
-        result = await new PromptBatchExecutor().execute({
+        result = await new PromptBatchExecutor({
+          executionLimit,
+        }).execute({
           plan,
           callAgent: (request, _batch, _protocolRetryIndex, _attemptContext, providerCallAdmission) => this.agent.call(request.userPrompt, {
             commandId: contract.commandId,

@@ -1805,7 +1805,7 @@ async function runTaskReviewPromptPlanWithDependencies({
       maxProviderCallCount: MAX_LOOP_CALLS,
       maxProtocolRetryCount: protocolAttemptCount - 1,
       maxSynthesisCallCount: MAX_LOOP_CALLS,
-      maxAggregateCharacters: 1_000_000,
+      maxAggregateCharacters: null,
     }));
   const requiresSynthesis = (plan.chunks.length > 1 || synthesizeWhenSingle) && synthesize !== null;
   executionBudget.assertCanExecute(plan.chunks.length + (requiresSynthesis ? 1 : 0));
@@ -2536,6 +2536,7 @@ async function runLoopReviewWithDependencies({
     maxBatchCount: maxLoopCalls,
     maxProviderCallCount: maxLoopCalls,
     maxSynthesisCallCount: 1,
+    maxAggregateCharacters: null,
   }));
   executionBudget.assertCanExecute(reviewChunks.length + (needsCrossCheck ? 1 : 0));
   if (groups.length > maxLoopCalls && onBatch) onBatch({ groups, reviewChunks, maxLoopCalls });
@@ -3688,7 +3689,7 @@ async function runTestReviewWithDependencies({
         maxBatchCount: Math.max(plan.batches.length, 16),
         maxProviderCallCount: plan.batches.length + 16,
         maxSynthesisCallCount: 16,
-        maxAggregateCharacters: 1_000_000,
+        maxAggregateCharacters: null,
       }));
     const executor = new PromptBatchExecutor({ executionBudget });
     const completions = await executor.executeCompletions({
@@ -4706,7 +4707,7 @@ async function runSpecReview(root, flow, spec, config, dryRun) {
       maxBatchCount: Math.max(promptPlan.batches.length, 16),
       maxProviderCallCount: promptPlan.batches.length + 16,
       maxSynthesisCallCount: 16,
-      maxAggregateCharacters: 1_000_000,
+      maxAggregateCharacters: null,
     }));
   const executor = new PromptBatchExecutor({ executionBudget });
   const fileProtocolPolicy = promptPlan.protocolPolicy(parseSpecReviewFindings);
@@ -5256,7 +5257,7 @@ async function runDraftReview(root, flow, config, dryRun) {
       maxBatchCount: Math.max(promptPlan.batches.length, 16),
       maxProviderCallCount: promptPlan.batches.length + 16,
       maxSynthesisCallCount: 16,
-      maxAggregateCharacters: 1_000_000,
+      maxAggregateCharacters: null,
     }));
   const executor = new PromptBatchExecutor({ executionBudget });
   const fileProtocolPolicy = promptPlan.protocolPolicy(parseCompleteDraftReviewProposals);

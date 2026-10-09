@@ -110,10 +110,11 @@ export function reserveSpecGateRepairWorkerCall({ ctx, request, prompt, physical
   binding.assertCurrent();
   const context = request.inputs.find((entry) => entry.name === "spec-gate-repair-context.json").document;
   request.assertCurrent(flowManager.loadReadOnly(binding.specId));
-  const { limit, budget } = latestRepairBudget({ flowManager, specId: binding.specId,
-    attemptId: binding.attempt.id, baseRevision: context.baseRevision, consumerNodeId: binding.stepId });
   const execution = flowManager.draftStepExecutionState({ binding });
   const checkpoint = execution.lifecycle?.phase === "checkpoint";
+  const { limit, budget } = latestRepairBudget({ flowManager, specId: binding.specId,
+    attemptId: binding.attempt.id, baseRevision: context.baseRevision, consumerNodeId: binding.stepId,
+    forNewGeneration: !checkpoint });
   let base;
   let sourceWrites = [];
   let executionBinding;

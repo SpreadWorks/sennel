@@ -1606,6 +1606,7 @@ async function callGateAgent(agent, built, attempt, providerCallAdmission, provi
 function createGateExecutionBudget(phase = null) {
   return new PromptExecutionBudget(new PromptExecutionLimit({
     maxProtocolRetryCount: 1,
+    maxAggregateCharacters: null,
     ...(phase === "spec" ? { maxResponseCharacters: null } : {}),
   }));
 }

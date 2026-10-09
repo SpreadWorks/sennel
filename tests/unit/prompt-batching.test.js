@@ -723,6 +723,49 @@ describe("prompt batch execution", () => {
   });
 });
 
+describe("nullable cumulative character limits", () => {
+  it("accepts null and positive finite limits while rejecting malformed boundary values", () => {
+    const unlimited = new PromptExecutionLimit({ maxAggregateCharacters: null });
+    const finite = new PromptExecutionLimit({ maxAggregateCharacters: 10 });
+    assert.equal(unlimited.maxAggregateCharacters, null);
+    assert.equal(finite.isWithin(unlimited), true);
+    assert.equal(unlimited.isWithin(finite), false);
+    for (const maxAggregateCharacters of [0, -1, 0.5, "10", Infinity, NaN, Number.MAX_SAFE_INTEGER + 1]) {
+      assert.throws(() => new PromptExecutionLimit({ maxAggregateCharacters }), TypeError);
+    }
+    const snapshot = new PromptExecutionBudget(unlimited).snapshot();
+    for (const aggregateCharacters of [-1, 0.5, Infinity, Number.MAX_SAFE_INTEGER + 1]) {
+      assert.throws(() => PromptExecutionBudget.fromSnapshot(unlimited,
+        { ...snapshot, aggregateCharacters }), TypeError);
+    }
+  });
+
+  it("completes individually bounded responses above one million and restores spent provider slots", async () => {
+    const limit = new PromptExecutionLimit({ maxAggregateCharacters: null,
+      maxProviderCallCount: 9, maxAggregateItemCount: 9 });
+    const budget = new PromptExecutionBudget(limit);
+    const plan = buildPlan({ elements: Array.from({ length: 9 }, (_, index) =>
+      element(`unit-${index}`, index, "x".repeat(30))), maxCharacters: 45 });
+    assert.equal(plan.batches.length, 9);
+    let calls = 0;
+    const response = "r".repeat(119_000);
+    const completions = await new PromptBatchExecutor({ executionBudget: budget }).executeCompletions({
+      plan, callAgent: async () => { calls += 1; return response; },
+      responseContract: { parse: (raw) => raw },
+    });
+    assert.equal(calls, 9);
+    assert.deepEqual(completions.map((completion) => completion.response), Array(9).fill(response));
+    assert.deepEqual(budget.snapshot(), { providerCallCount: 9, synthesisCallCount: 0,
+      aggregateCharacters: 9 * response.length, aggregateItemCount: 9 });
+    const restored = PromptExecutionBudget.fromSnapshot(limit, JSON.parse(JSON.stringify(budget.snapshot())));
+    assert.deepEqual(restored.snapshot(), budget.snapshot());
+    const before = restored.snapshot();
+    assert.throws(() => restored.consumeProviderCall(), { code: "PROMPT_CALL_LIMIT_EXCEEDED" });
+    assert.throws(() => restored.consumeAggregate({ characters: 1, items: 1 }), { code: "PROMPT_RESPONSE_TOO_LARGE" });
+    assert.deepEqual(restored.snapshot(), before);
+  });
+});
+
 describe("known prompt call costs", () => {
   it("counts decoded documents and every logical instruction component independently of UTF-8 bytes", () => {
     for (const text of ["aaa", "日本語", "😀a"]) {
@@ -802,6 +845,48 @@ describe("known prompt call costs", () => {
       const before = budget.snapshot();
       assert.throws(() => plan.assertFits(budget), { code: "PROMPT_RESPONSE_TOO_LARGE" });
       assert.deepEqual(budget.snapshot(), before);
+    }
+  });
+
+  it("continues a finite historical character budget as unlimited without relaxing independent limits", () => {
+    const historicalLimit = new PromptExecutionLimit({ maxRequestCharacters: 100_000,
+      maxResponseCharacters: 100_000, maxAggregateCharacters: 10,
+      maxAggregateItemCount: 10, maxProviderCallCount: 4, maxSynthesisCallCount: 2 });
+    const historical = new PromptExecutionBudget(historicalLimit);
+    historical.consumeProviderCall();
+    historical.consumeAggregate({ characters: 9, items: 1 });
+    const restored = PromptExecutionBudget.fromSnapshot(historicalLimit,
+      JSON.parse(JSON.stringify(historical.snapshot())));
+    const currentLimit = new PromptExecutionLimit({ ...historicalLimit, maxAggregateCharacters: null });
+    assert.equal(historicalLimit.canContinueWith(currentLimit), true);
+    assert.equal(currentLimit.canContinueWith(historicalLimit), true);
+    const current = restored.withLimit(currentLimit);
+    assert.deepEqual(current.snapshot(), restored.snapshot());
+
+    const call = new PromptCallFootprint({ instructions: "individually bounded request",
+      documentTexts: ["x".repeat(400_000)] });
+    const plan = new PromptCallPlanFootprint({ calls: [call, call, call], responseAllowances:
+      Array.from({ length: 3 }, () => new PromptResponseAllowance({ characters: 1, items: 1 })) });
+    const beforePlan = current.snapshot();
+    assert.equal(plan.assertFits(current), plan);
+    assert.deepEqual(current.snapshot(), beforePlan);
+    current.consumeAggregate(plan);
+    assert.equal(current.aggregateCharacters, 9 + plan.characters);
+    assert.ok(current.aggregateCharacters > 1_000_000);
+    assert.equal(current.aggregateItemCount, 10);
+
+    const beforeRejectedItems = current.snapshot();
+    assert.throws(() => current.consumeAggregate({ characters: 1, items: 1 }),
+      { code: "PROMPT_RESPONSE_TOO_LARGE" });
+    assert.deepEqual(current.snapshot(), beforeRejectedItems);
+    for (const field of ["maxRequestCharacters", "maxResponseCharacters", "maxBatchCount",
+      "maxProviderCallCount", "maxProtocolRetryCount", "maxSynthesisCallCount",
+      "maxAggregateItemCount", "maxReductionDepth", "concurrency"]) {
+      const relaxed = new PromptExecutionLimit({ ...historicalLimit,
+        maxAggregateCharacters: null, [field]: historicalLimit[field] + 1 });
+      assert.equal(historicalLimit.canContinueWith(relaxed), false, `${field} remains an independent limit`);
+      assert.throws(() => restored.withLimit(relaxed), RangeError);
+      assert.deepEqual(restored.snapshot(), historical.snapshot());
     }
   });
 

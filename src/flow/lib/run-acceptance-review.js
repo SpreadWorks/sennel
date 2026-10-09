@@ -705,6 +705,7 @@ export class AcceptanceEvidenceExecutionPlan {
     maxProviderCallCount: 100,
     maxProtocolRetryCount: 0,
     maxSynthesisCallCount: 32,
+    maxAggregateCharacters: null,
   }) } = {}) {
     this.context = context;
     this.limit = limit;
@@ -807,7 +808,12 @@ export class AcceptanceEvidenceExecutionPlan {
   }
 }
 
-async function callAcceptanceAgent(agent, prompt, budget = new PromptExecutionBudget(), limit = new PromptRequestLimit()) {
+async function callAcceptanceAgent(
+  agent,
+  prompt,
+  budget = new PromptExecutionBudget(new PromptExecutionLimit({ maxAggregateCharacters: null })),
+  limit = new PromptRequestLimit(),
+) {
   const plan = PromptBatchPlan.fromRequest({ request: prompt, limit, id: "acceptance-request" });
   return new PromptBatchExecutor({ executionBudget: budget }).execute({
     plan,
@@ -865,6 +871,7 @@ async function resolveAcceptanceArtifact(context, responseSource) {
       maxProviderCallCount: 100,
       maxProtocolRetryCount: 0,
       maxSynthesisCallCount: 32,
+      maxAggregateCharacters: null,
     });
     const budget = new PromptExecutionBudget(executionLimit);
     let parsed;

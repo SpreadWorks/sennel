@@ -8672,7 +8672,7 @@ export class WorkerArtifactHandoffCoordinator {
       state, executionRoot: ctx.executionRoot || ctx.root });
     const { limit, budget } = latestRepairBudget({ flowManager: ctx.flowManager,
       specId: state.specId, attemptId: state.attempt.id,
-      baseRevision: frontier.source.baseRevision, consumerNodeId: "spec-gate-repair" });
+      baseRevision: frontier.source.baseRevision, consumerNodeId: "spec-gate-repair", forNewGeneration: true });
     const documents = specGateRepairContextDocuments(frontier);
     const capture = WorkerArtifactHandoffRequest.capture({ mainRoot: ctx.mainRoot || ctx.root,
       executionRoot: ctx.executionRoot || ctx.root, state, invocation,

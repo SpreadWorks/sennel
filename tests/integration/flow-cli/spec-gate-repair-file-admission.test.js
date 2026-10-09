@@ -77,14 +77,14 @@ function independentRepairScenario(specRecord) {
 }
 
 test("packs complete Unicode units into a bounded file and reloads their atomic publication", async () => {
-  // Required manifest/action reads make the former 88k-by-eight two-file fixture
-  // exceed the unchanged aggregate cap. The known-plan refusal below retains that boundary.
+  // Keep each complete selected field below the indivisible per-input bound.
   const specRecord = independentRepairSpec({ uniqueCharacters: 70_000 });
   const value = await independentRepairScenario(specRecord);
   try {
     const initialBytes = value.flowManager.readArtifact({ specId: value.specId,
       logicalKey: "spec.record", consumerNodeId: "spec-gate-repair" }).bytes;
     readSpecJsonValidator().validate(JSON.parse(initialBytes.toString("utf8")));
+    assert.ok(initialBytes.length > 64 * 1024, "64 KiB is advisory and does not reject a legal canonical Spec");
     initGitRepo(value.root);
     fs.writeFileSync(path.join(value.root, ".gitignore"), ".sennel/\n.tmp/\n");
     commitAll(value.root, "Create isolated multi-file repair repository");
@@ -175,7 +175,11 @@ test("packs complete Unicode units into a bounded file and reloads their atomic 
   } finally { removeTmpDir(value.root); }
 });
 
-test("refuses all known unique-input calls and response allowances before any canonical mutation", async () => {
+test("completes the known unique-input plan above one million aggregate characters and reloads each publication", async () => {
+  // The historical refusal included conservative response reservations. These
+  // individually bounded corrections also make actual consumed characters
+  // exceed one million without changing the known eight-unit input fixture.
+  const replacementFor = (id) => `Precisely validate ${id}. ${"x".repeat(18_000)}`;
   const specRecord = independentRepairSpec({ uniqueCharacters: 108_000 });
   const value = await independentRepairScenario(specRecord);
   try {
@@ -185,19 +189,111 @@ test("refuses all known unique-input calls and response allowances before any ca
     const before = canonicalSnapshot(value.flowManager, value.specId);
     const transport = projectionAgent(value.root);
     let calls = 0;
-    const result = await dispatchOnce(value, {
+    let chargedCharacters = 0;
+    let chargedItems = 0;
+    const contexts = [];
+    const seenUnits = new Set();
+    let baseRevision = null;
+    let result;
+    const agent = {
       projectInvocation: (prompt, options) => transport.projectInvocation(prompt, options),
-      async call() { calls += 1; assert.fail("The entire remaining plan must fit before the first provider"); },
-    });
-    assert.equal(result.ok, false);
-    assert.equal(result.errors[0].code, "PROMPT_RESPONSE_TOO_LARGE", JSON.stringify(result));
-    assert.ok(result.data.additionalCharacters > 1_000_000);
-    assert.equal(result.data.maxAggregateCharacters, 1_000_000);
-    assert.equal(result.data.additionalItems, 2 * 4 + 8,
-      "Both four-item file calls and all eight response groups must be admitted together");
-    assert.equal(calls, 0);
-    assert.deepEqual(canonicalSnapshot(new FlowManager({ root: value.root, mainRoot: value.root,
-      inWorktree: false, specId: value.specId }), value.specId), before);
+      async call(prompt, options) {
+        calls += 1;
+        transport.projectInvocation(prompt, options).assertWithinLimit(transport.promptCharacterLimit);
+        const requestPath = options.executionEnvironment.SENNEL_FLOW_HANDOFF_REQUEST;
+        const request = JSON.parse(fs.readFileSync(requestPath, "utf8"));
+        const input = requestInput(request, "spec-gate-repair-context.json");
+        assert.ok(input.byteLength <= 2 * 1024 * 1024);
+        assert.equal(input.document.mode, "repair");
+        contexts.push(input.document);
+        const physical = PromptLogicalFootprint.measure({ systemPrompt: options.systemPrompt,
+          userPrompt: prompt, jsonSchema: options.jsonSchema, fmtFallback: options.fmtFallback });
+        const action = JSON.parse(fs.readFileSync(path.join(path.dirname(requestPath), "action.json"), "utf8"));
+        chargedCharacters += physical.total
+          + (input.descriptor.deliveryMode === "file" ? workerArtifactStableStringify(input.document).length : 0)
+          + workerArtifactStableStringify(request).length + workerArtifactStableStringify(action).length;
+        chargedItems += 4;
+        baseRevision ??= input.document.baseRevision;
+        assert.equal(input.document.baseRevision, baseRevision);
+        const selections = SpecGateRepairBundle.fromJSON(input.document.bundle).selections();
+        assert.ok(selections.length > 0);
+        const groups = selections.map((selection) => {
+          assert.equal(seenUnits.has(selection.unit.id), false, "A planned repair unit must be published once");
+          seenUnits.add(selection.unit.id);
+          const writable = selection.ranges.filter((range) => range.writable);
+          assert.equal(writable.length, 1);
+          return { findingIdentities: selection.unit.findings.map((finding) => finding.identity),
+            operations: [{ kind: "edit-text-field", target: writable[0].target,
+              expectedDigest: writable[0].digest,
+              edits: [{ startByte: 0, endByte: Buffer.byteLength(writable[0].value, "utf8"),
+                replacement: replacementFor(writable[0].target.id) }],
+              reason: "Correct the entire authorized requirement field." }] };
+        });
+        const proposal = { version: 1, stage: "spec-gate-repair", baseRevision: input.document.baseRevision, groups };
+        for (const group of groups) {
+          for (const operation of group.operations) {
+            assert.ok(Buffer.byteLength(JSON.stringify(operation.edits), "utf8") <= 32 * 1024,
+              "Each edit remains within the independent value byte limit");
+            assert.ok(Buffer.byteLength(JSON.stringify(operation.edits[0].replacement), "utf8") <= 32 * 1024);
+          }
+        }
+        assert.ok(JSON.stringify(proposal).length <= 120_000,
+          "Each actual response remains within the independent character limit");
+        chargedCharacters += JSON.stringify(proposal).length;
+        chargedItems += groups.length;
+        fs.writeFileSync(requestPayloadPath(request, "spec-gate-repair.json"), workerArtifactJson(proposal));
+        sealWorkerArtifactHandoff({ requestPath,
+          invocationId: options.executionEnvironment.SENNEL_FLOW_DISPATCH_INVOCATION_ID });
+        return JSON.stringify({ sealed: true, requestDigest: request.requestDigest });
+      },
+    };
+    for (let dispatches = 0; dispatches < 16 && calls < 16; dispatches += 1) {
+      result = await dispatchOnce(value, agent);
+      if (!result.ok) assert.equal(result.errors?.[0]?.code, "FLOW_DISPATCH_LIMIT_REACHED", JSON.stringify(result));
+      value.flowManager = new FlowManager({ root: value.root, mainRoot: value.root, inWorktree: false, specId: value.specId });
+      value.ctx.flowManager = value.flowManager;
+      const generation = calls - 1;
+      const progress = ["checkpoint", "claimed", "publication"].map((phase) => JSON.parse(
+        value.flowManager.readArtifact({ specId: value.specId,
+          logicalKey: "spec.gate.repair.progress", consumerNodeId: "spec-gate-repair",
+          parameters: { attemptId: before.state.attempt.id, generation: String(generation), phase } }).bytes.toString("utf8")));
+      for (const entry of progress) {
+        assert.equal(entry.limit.maxAggregateCharacters, null);
+        assert.equal(entry.limit.maxProviderCallCount, 16);
+        assert.equal(entry.limit.maxAggregateItemCount, 100_000);
+        assert.deepEqual(entry.context, contexts[generation]);
+        assert.deepEqual(entry.limit, progress[0].limit);
+        assert.equal(entry.requestDigest, progress[0].requestDigest);
+      }
+      assert.equal(progress[0].budget.providerCallCount, generation);
+      assert.equal(progress[1].budget.providerCallCount, calls);
+      assert.equal(progress[2].budget.providerCallCount, calls);
+      assert.equal(progress[1].budget.aggregateCharacters, progress[0].budget.aggregateCharacters);
+      assert.equal(progress[2].budget.aggregateCharacters, chargedCharacters);
+      assert.equal(progress[2].budget.aggregateItemCount, chargedItems);
+      if (result.data?.nextAction?.step === "spec-review") break;
+    }
+    assert.ok(calls > 1, "The fixture must exercise more than one independently admitted provider call");
+    assert.equal(seenUnits.size, 8);
+    assert.equal(result.data?.nextAction?.step, "spec-review", JSON.stringify(result));
+    const reloaded = new FlowManager({ root: value.root, mainRoot: value.root, inWorktree: false, specId: value.specId });
+    const saved = JSON.parse(reloaded.readArtifact({ specId: value.specId,
+      logicalKey: "spec.record", consumerNodeId: "spec-review" }).bytes.toString("utf8"));
+    assert.ok(saved.requirements.slice(1).every((requirement) => requirement.desc === replacementFor(requirement.id)));
+    assert.deepEqual(saved.overview.decisions, specRecord.overview.decisions);
+    assert.equal(saved.requirements[0].desc, specRecord.requirements[0].desc);
+    const audit = JSON.parse(reloaded.readArtifact({ specId: value.specId,
+      logicalKey: "spec.gate.repair.audit", consumerNodeId: "spec-review",
+      parameters: { attemptId: before.state.attempt.id } }).bytes.toString("utf8"));
+    assert.equal(audit.acceptedGroups.length, 8);
+    const budget = latestRepairBudget({ flowManager: reloaded, specId: value.specId,
+      attemptId: before.state.attempt.id,
+      baseRevision, consumerNodeId: "spec-gate-repair" }).budget.snapshot();
+    assert.equal(budget.providerCallCount, calls);
+    assert.equal(budget.aggregateCharacters, chargedCharacters);
+    assert.equal(budget.aggregateItemCount, chargedItems);
+    assert.ok(budget.aggregateCharacters > 1_000_000);
+    assert.equal(reloaded.canonicalState(value.specId).nextAction().nodeId, "spec-review");
   } finally { removeTmpDir(value.root); }
 });
 
@@ -300,6 +396,9 @@ test("dispatches a complete Unicode repair input larger than the prompt limit an
       logicalKey: "spec.record", consumerNodeId: "spec-review" }).bytes.toString("utf8"));
     assert.equal(saved.requirements[0].desc, "Publish a precisely validated artifact.");
     assert.deepEqual(saved.overview.decisions, specRecord.overview.decisions);
+    const savedBytes = reloaded.readArtifact({ specId: value.specId,
+      logicalKey: "spec.record", consumerNodeId: "spec-review" }).bytes;
+    assert.ok(savedBytes.length > 64 * 1024, "A repaired Spec above the advisory size remains publishable");
     const audit = JSON.parse(reloaded.readArtifact({ specId: value.specId,
       logicalKey: "spec.gate.repair.audit", consumerNodeId: "spec-review",
       parameters: { attemptId } }).bytes.toString("utf8"));

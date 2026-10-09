@@ -22,7 +22,8 @@ export function readSpecGateRepairExecutionProgress({ flowManager, state, lifecy
   return progress;
 }
 
-export function latestRepairBudget({ flowManager, specId, attemptId, baseRevision, consumerNodeId }) {
+export function latestRepairBudget({ flowManager, specId, attemptId, baseRevision, consumerNodeId,
+  forNewGeneration = false }) {
   const prefix = `artifacts/spec-gate-repairs/${attemptId}/progress/`;
   const phaseOrder = { checkpoint: 0, claimed: 1, publication: 2 };
   const descriptor = flowManager.artifactCatalog(specId).artifacts
@@ -45,6 +46,14 @@ export function latestRepairBudget({ flowManager, specId, attemptId, baseRevisio
   const progress = reader.read(generation, phase);
   if (progress.document.context?.baseRevision !== baseRevision) {
     throw progressMismatch("Gate repair budget checkpoint differs from the active revision");
+  }
+  if (forNewGeneration) {
+    if (phase !== "publication") {
+      throw progressMismatch("Gate repair cannot replace unfinished generation execution limits");
+    }
+    const limit = new PromptExecutionLimit({ ...progress.limit,
+      maxAggregateCharacters: REPAIR_BUDGET_LIMIT.maxAggregateCharacters });
+    return { ...progress, limit, budget: progress.budget.withLimit(limit) };
   }
   return progress;
 }

@@ -312,7 +312,14 @@ function guardrailSourceElement(input, sequence) {
 }
 
 export class RequirementEvidencePlan {
-  constructor({ requirement, inputs, canonicalInput = null, limit = new PromptRequestLimit(), phase = null, executionLimit = new PromptExecutionLimit() }) {
+  constructor({
+    requirement,
+    inputs,
+    canonicalInput = null,
+    limit = new PromptRequestLimit(),
+    phase = null,
+    executionLimit = new PromptExecutionLimit({ maxAggregateCharacters: null }),
+  }) {
     const envelope = new RequirementObservationEnvelope(requirement, { phase });
     const builder = new PromptInputBuilder({ envelope, limit });
     const canonicalInputs = [
@@ -331,11 +338,12 @@ export class RequirementEvidencePlan {
     });
     this.requirement = requirement;
     this.limit = limit;
+    this.executionLimit = executionLimit;
     Object.freeze(this);
   }
 
   async execute({ callAgent, projectInvocation, protocolPolicy, executionBudget }) {
-    return new PromptBatchExecutor({ executionBudget }).execute({
+    return new PromptBatchExecutor({ executionLimit: this.executionLimit, executionBudget }).execute({
       plan: this.plan,
       callAgent,
       projectInvocation,

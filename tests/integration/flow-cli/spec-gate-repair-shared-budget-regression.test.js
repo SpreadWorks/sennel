@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
+import { createHash } from "node:crypto";
 import { test } from "node:test";
 import { Agent } from "../../../src/lib/agent.js";
+import { AgentProviderCompletionEvidence } from "../../../src/lib/agent-failure.js";
 import { PromptLogicalFootprint } from "../../../src/lib/prompt-batching.js";
 import { workerArtifactStableStringify } from "../../../src/flow/lib/worker-artifact-input-format.js";
 import { SpecGateRepairProgressReader } from "../../../src/flow/lib/spec-gate-repair-progress-reader.js";
@@ -21,7 +23,9 @@ import { initGitRepo, commitAll } from "../../support/infrastructure/git-repo.js
 import { validWorkerHandoffSpec, workerArtifactJson } from "../../support/infrastructure/worker-artifact.js";
 import { removeTmpDir } from "../../support/builders/tmp-dir.js";
 
-test("repairs seven findings in six units while large checkout research stays outside canonical evidence and provider budget", async () => {
+const hash = (value) => createHash("sha256").update(value).digest("hex");
+
+test("repairs seven findings in six units while worker checkout research stays outside canonical evidence and provider budget", async (t) => {
   const specRecord = validWorkerHandoffSpec();
   specRecord.requirements = Array.from({ length: 6 }, (_, index) => ({
     ...specRecord.requirements[0], id: `R${index + 1}`, task_ids: [`T${index + 1}`],
@@ -59,77 +63,84 @@ test("repairs seven findings in six units while large checkout research stays ou
   });
   try {
     const attemptId = value.flowManager.canonicalState(value.specId).attempt.id;
-    const config = { agent: { default: "fixture/worker", providers: {
+    const config = { agent: { default: "fixture/worker", promptCharacterLimit: 60_000, providers: {
       "fixture/worker": { command: "fixture-worker", args: ["{{PROMPT}}"] },
     } } };
-    const transport = new Agent({ config, paths: { root: value.root, agentWorkDir: path.join(value.root, ".tmp") },
+    const agent = new Agent({ config, paths: { root: value.root, agentWorkDir: path.join(value.root, ".tmp") },
       registry: new ProviderRegistry(config.agent.providers), logger: new Logger({ logDir: value.root, enabled: false }) });
     let providerCalls = 0;
     let context;
     let chargedCharacters = 0;
     let chargedItems = 0;
-    const agent = {
-      projectInvocation: (prompt, options) => transport.projectInvocation(prompt, options),
-      async call(prompt, options) {
-        providerCalls += 1;
-        const { SpecGateRepairBundle } = await import("../../../src/flow/lib/spec-gate-repair-bundle.js");
-        const requestPath = options.executionEnvironment.SENNEL_FLOW_HANDOFF_REQUEST;
-        const request = JSON.parse(fs.readFileSync(requestPath, "utf8"));
-        const input = requestInput(request, "spec-gate-repair-context.json");
-        context = input.document;
-        const bundle = SpecGateRepairBundle.fromJSON(context.bundle);
-        const selections = bundle.selections();
-        assert.equal(context.mode, "repair");
-        assert.equal(context.batchCount, 1);
-        assert.equal(selections.length, 6);
-        assert.equal(selections.flatMap((selection) => selection.unit.findings).length, 7);
-        assert.equal(context.bundle.sources.length, 4, "Only required canonical evidence bodies are selected initially");
-        assert.equal(sources.reduce((total, source) => total + source.content.length, 0), 602722);
-        const snapshots = new SpecGateRepairProgressReader({ flowManager: value.flowManager,
-          specId: value.specId, attemptId, consumerNodeId: "spec-gate-repair" })
-          .read(0, "checkpoint").sourceSnapshots.sources();
-        assert.equal(snapshots.length, 4);
-        for (const source of sources) {
-          assert.equal(snapshots.some((entry) => entry.origin === source.relative), false);
-          assert.equal(fs.readFileSync(path.join(options.executionWorkDir, source.relative), "utf8"), source.content);
-          assert.equal(workerArtifactStableStringify(context).includes(JSON.stringify(source.content)), false,
-            "Checkout research is read by the worker without becoming canonical selected evidence");
-          for (const selection of selections) {
-            assert.equal(selection.ranges.some((entry) => entry.value?.origin === source.relative), false);
-            const index = selection.ranges.find((entry) => entry.id.startsWith("repair-index:"));
-            assert.ok(index);
-            assert.equal(index.writable, false);
-            assert.equal(index.target, null);
-            assert.equal(index.value.descriptors.some((entry) => entry.source?.origin === source.relative), false,
-              "The canonical index does not advertise a host-selected checkout inventory");
-          }
+    t.mock.method(agent, "_callOnce", async (resolved, prompt, options) => {
+      providerCalls += 1;
+      const { SpecGateRepairBundle } = await import("../../../src/flow/lib/spec-gate-repair-bundle.js");
+      const requestPath = options.executionEnvironment.SENNEL_FLOW_HANDOFF_REQUEST;
+      const request = JSON.parse(fs.readFileSync(requestPath, "utf8"));
+      const input = requestInput(request, "spec-gate-repair-context.json");
+      context = input.document;
+      const bundle = SpecGateRepairBundle.fromJSON(context.bundle);
+      const selections = bundle.selections();
+      assert.equal(context.mode, "repair");
+      assert.equal(context.batchCount, 1);
+      assert.equal(selections.length, 6);
+      assert.equal(selections.flatMap((selection) => selection.unit.findings).length, 7);
+      assert.equal(context.bundle.sources.length, 4, "Only required canonical evidence bodies are selected initially");
+      assert.equal(sources.reduce((total, source) => total + source.content.length, 0), 602722);
+      const snapshots = new SpecGateRepairProgressReader({ flowManager: value.flowManager, specId: value.specId,
+        attemptId, consumerNodeId: "spec-gate-repair" }).read(0, "checkpoint").sourceSnapshots.sources();
+      assert.equal(snapshots.length, 4);
+      assert.ok(snapshots.every((entry) => !entry.id.startsWith("evidence:source:")),
+        "The host captures canonical repair input without selecting checkout source files");
+      for (const source of sources) {
+        // The provider stub stands at the worker boundary and reads checkout files directly.
+        const workerRead = fs.readFileSync(path.join(options.executionWorkDir, source.relative), "utf8");
+        assert.equal(workerRead, source.content);
+        assert.equal(hash(workerRead), hash(source.content));
+        assert.equal(snapshots.some((entry) => entry.origin === source.relative), false);
+        assert.equal(workerArtifactStableStringify(context).includes(JSON.stringify(source.content)), false,
+          "Checkout research is read by the worker without becoming canonical selected evidence");
+        for (const selection of selections) {
+          assert.equal(selection.ranges.some((entry) => entry.value?.origin === source.relative), false);
+          const index = selection.ranges.find((entry) => entry.id.startsWith("repair-index:"));
+          assert.ok(index);
+          assert.equal(index.writable, false);
+          assert.equal(index.target, null);
+          assert.equal(index.value.descriptors.some((entry) => entry.source?.origin === source.relative), false,
+            "The canonical index does not advertise a host-selected checkout inventory");
         }
-        const groups = selections.map((selection) => {
-          const writable = selection.ranges.filter((entry) => entry.writable);
-          assert.equal(writable.length, 1);
-          assert.equal(writable[0].target.field, "desc");
-          assert.ok(selection.unit.findings.every((finding) => finding.allowedTargets.every((permission) =>
-            permission.target.id === writable[0].target.id)));
-          return { findingIdentities: selection.unit.findings.map((finding) => finding.identity),
-            operations: [{ kind: "edit-text-field", target: writable[0].target, expectedDigest: writable[0].digest,
-              edits: [{ startByte: 0, endByte: Buffer.byteLength(writable[0].value),
-                replacement: `Precisely validate ${writable[0].target.id}.` }], reason: "Correct this exact independent unit." }] };
-        });
-        const proposal = { version: 1, stage: "spec-gate-repair", baseRevision: context.baseRevision, groups };
-        const physical = PromptLogicalFootprint.measure({ systemPrompt: options.systemPrompt,
-          userPrompt: prompt, jsonSchema: options.jsonSchema, fmtFallback: options.fmtFallback });
-        const action = JSON.parse(fs.readFileSync(path.join(path.dirname(requestPath), "action.json"), "utf8"));
-        chargedCharacters = physical.total
-          + (input.descriptor.deliveryMode === "file" ? workerArtifactStableStringify(context).length : 0)
-          + workerArtifactStableStringify(request).length + workerArtifactStableStringify(action).length
-          + JSON.stringify(proposal).length;
-        chargedItems = 4 + groups.length;
-        fs.writeFileSync(requestPayloadPath(request, "spec-gate-repair.json"), workerArtifactJson(proposal));
-        sealWorkerArtifactHandoff({ requestPath,
-          invocationId: options.executionEnvironment.SENNEL_FLOW_DISPATCH_INVOCATION_ID });
-        return JSON.stringify({ sealed: true, requestDigest: request.requestDigest });
-      },
-    };
+      }
+      const groups = selections.map((selection) => {
+        const writable = selection.ranges.filter((entry) => entry.writable);
+        assert.equal(writable.length, 1);
+        assert.equal(writable[0].target.field, "desc");
+        assert.ok(selection.unit.findings.every((finding) => finding.allowedTargets.every((permission) =>
+          permission.target.id === writable[0].target.id)));
+        return { findingIdentities: selection.unit.findings.map((finding) => finding.identity),
+          operations: [{ kind: "edit-text-field", target: writable[0].target, expectedDigest: writable[0].digest,
+            edits: [{ startByte: 0, endByte: Buffer.byteLength(writable[0].value),
+              replacement: `Precisely validate ${writable[0].target.id}.` }], reason: "Correct this exact independent unit." }] };
+      });
+      const proposal = { version: 1, stage: "spec-gate-repair", baseRevision: context.baseRevision, groups };
+      const physical = PromptLogicalFootprint.measure({ systemPrompt: options.systemPrompt,
+        userPrompt: prompt, jsonSchema: options.jsonSchema, fmtFallback: options.fmtFallback });
+      assert.ok(physical.total <= 60_000, "The admitted provider request respects the configured character limit");
+      const action = JSON.parse(fs.readFileSync(path.join(path.dirname(requestPath), "action.json"), "utf8"));
+      chargedCharacters = physical.total
+        + (input.descriptor.deliveryMode === "file" ? workerArtifactStableStringify(context).length : 0)
+        + workerArtifactStableStringify(request).length + workerArtifactStableStringify(action).length
+        + JSON.stringify(proposal).length;
+      chargedItems = 4 + groups.length;
+      fs.writeFileSync(requestPayloadPath(request, "spec-gate-repair.json"), workerArtifactJson(proposal));
+      sealWorkerArtifactHandoff({ requestPath,
+        invocationId: options.executionEnvironment.SENNEL_FLOW_DISPATCH_INVOCATION_ID });
+      const text = JSON.stringify({ sealed: true, requestDigest: request.requestDigest });
+      return { text, usage: null, stdout: text, stderr: "",
+        providerCompletionEvidence: new AgentProviderCompletionEvidence({
+          provider: resolved.providerKey, profile: resolved.profileKey, exitCode: 0,
+          stdout: text, processTreeQuiescence: "confirmed",
+        }) };
+    });
     const flowState = value.flowManager.loadReadOnly(value.specId);
     const dispatcher = new RunDispatchCommand({ agent, maxDispatches: 1 });
     dispatcher.container = dispatchContainer({ root: value.root, flowManager: value.flowManager, agent });
@@ -148,12 +159,13 @@ test("repairs seven findings in six units while large checkout research stays ou
     const audit = JSON.parse(reloaded.readArtifact({ specId: value.specId, logicalKey: "spec.gate.repair.audit",
       consumerNodeId: "spec-review", parameters: { attemptId } }).bytes.toString("utf8"));
     assert.equal(audit.acceptedGroups.length, 6);
+    assert.equal(reloaded.canonicalState(value.specId).nextAction().nodeId, "spec-review");
     const budget = latestRepairBudget({ flowManager: reloaded, specId: value.specId, attemptId,
       baseRevision: context.baseRevision, consumerNodeId: "spec-gate-repair" }).budget.snapshot();
     assert.equal(budget.providerCallCount, 1);
     assert.equal(budget.aggregateCharacters, chargedCharacters);
     assert.equal(budget.aggregateItemCount, chargedItems);
-    assert.ok(budget.aggregateCharacters <= 1_000_000);
+
     const checkpoint = JSON.parse(reloaded.readArtifact({ specId: value.specId,
       logicalKey: "spec.gate.repair.progress", consumerNodeId: "spec-gate-repair",
       parameters: { attemptId, generation: "0", phase: "checkpoint" } }).bytes.toString("utf8"));
@@ -162,8 +174,19 @@ test("repairs seven findings in six units while large checkout research stays ou
     assert.deepEqual(checkpoint.sourceSnapshotReference, context.sourceSnapshotReference);
     assert.equal(checkpoint.plan.version, 1);
     assert.equal(checkpoint.plan.calls.length, 1);
-    assert.ok(checkpoint.plan.calls[0].callCost.characters
-      + checkpoint.plan.calls[0].responseAllowance.characters <= 1_000_000);
+    assert.equal(checkpoint.limit.maxAggregateCharacters, null);
+    const progress = ["claimed", "publication"].map((phase) => JSON.parse(reloaded.readArtifact({
+      specId: value.specId, logicalKey: "spec.gate.repair.progress", consumerNodeId: "spec-gate-repair",
+      parameters: { attemptId, generation: "0", phase },
+    }).bytes.toString("utf8")));
+    assert.equal(checkpoint.budget.providerCallCount, 0);
+    for (const entry of progress) {
+      assert.deepEqual(entry.limit, checkpoint.limit);
+      assert.deepEqual(entry.context, checkpoint.context);
+      assert.equal(entry.requestDigest, checkpoint.requestDigest);
+      assert.equal(entry.budget.providerCallCount, 1);
+    }
+    assert.deepEqual(progress[1].budget, budget);
     assert.deepEqual(checkpoint.callCost, checkpoint.plan.calls[0].callCost);
     assert.deepEqual(checkpoint.responseAllowance, checkpoint.plan.calls[0].responseAllowance);
   } finally { removeTmpDir(value.root); }

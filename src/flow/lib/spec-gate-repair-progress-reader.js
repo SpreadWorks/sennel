@@ -14,7 +14,7 @@ import { specGateRepairInputFormatUnavailable } from "./worker-artifact-input-fo
 export const SPEC_GATE_REPAIR_PROGRESS_VERSION = 4;
 
 export const REPAIR_BUDGET_LIMIT = Object.freeze({ maxBatchCount: 16, maxProviderCallCount: 16,
-  maxSynthesisCallCount: 16, maxAggregateCharacters: 1_000_000, maxAggregateItemCount: 100_000 });
+  maxSynthesisCallCount: 16, maxAggregateCharacters: null, maxAggregateItemCount: 100_000 });
 
 /** One read boundary shares canonical observations; no cache survives the caller. */
 export class SpecGateRepairProgressReader {
@@ -141,7 +141,7 @@ export class SpecGateRepairProgressReader {
       throw progressMismatch("Gate repair progress execution limits have an invalid shape");
     }
     const limit = new PromptExecutionLimit(saved.limit);
-    if (Object.keys(ceiling).some((field) => typeof limit[field] !== "number" || limit[field] > ceiling[field])) {
+    if (!limit.isWithin(ceiling)) {
       throw progressMismatch("Gate repair progress relaxed its execution limits");
     }
     const callPlan = new SpecGateRepairSavedCallPlan({ plan: saved.plan, limit });
@@ -149,7 +149,7 @@ export class SpecGateRepairProgressReader {
     if (phase === "checkpoint") {
       const previous = saved.generation === 0 ? null
         : this.read(saved.generation - 1, "publication");
-      if (previous !== null && Object.keys(ceiling).some((field) => limit[field] > previous.limit[field])) {
+      if (previous !== null && !previous.limit.canContinueWith(limit)) {
         throw progressMismatch("Gate repair checkpoint expanded its durable execution limits");
       }
       const frontier = previous?.budget ?? new PromptExecutionBudget(limit);

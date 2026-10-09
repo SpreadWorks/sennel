@@ -1398,7 +1398,9 @@ export class PromptExecutionLimit {
     this.maxProtocolRetryCount = safeInteger(maxProtocolRetryCount, "Execution protocol retry limit");
     this.maxSynthesisCallCount = safeInteger(maxSynthesisCallCount, "Execution synthesis call limit", { minimum: 1 });
     this.maxAggregateItemCount = safeInteger(maxAggregateItemCount, "Execution aggregate item limit", { minimum: 1 });
-    this.maxAggregateCharacters = safeInteger(maxAggregateCharacters, "Execution aggregate character limit", { minimum: 1 });
+    this.maxAggregateCharacters = maxAggregateCharacters === null
+      ? null
+      : safeInteger(maxAggregateCharacters, "Execution aggregate character limit", { minimum: 1 });
     this.maxReductionDepth = safeInteger(maxReductionDepth, "Execution reduction depth limit", { minimum: 1 });
     this.concurrency = safeInteger(concurrency, "Execution concurrency", { minimum: 1 });
     Object.freeze(this);
@@ -1406,6 +1408,24 @@ export class PromptExecutionLimit {
 
   requestLimit() {
     return new PromptRequestLimit({ maxCharacters: this.maxRequestCharacters });
+  }
+
+  allowsAggregate({ characters, items }) {
+    return (this.maxAggregateCharacters === null || characters <= this.maxAggregateCharacters)
+      && items <= this.maxAggregateItemCount;
+  }
+
+  isWithin(ceiling) {
+    if (!(ceiling instanceof PromptExecutionLimit)) throw new TypeError("Execution limit ceiling must be typed");
+    return Object.entries(this).every(([field, value]) => (
+      ceiling[field] === null || (value !== null && value <= ceiling[field])
+    ));
+  }
+
+  /** Independent limits may tighten while aggregate character policy changes. */
+  canContinueWith(limit) {
+    if (!(limit instanceof PromptExecutionLimit)) throw new TypeError("Execution continuation limit must be typed");
+    return limit.isWithin(new PromptExecutionLimit({ ...this, maxAggregateCharacters: null }));
   }
 }
 
@@ -1490,8 +1510,9 @@ export class PromptExecutionBudget {
   assertCanConsumeAggregate({ characters, items }) {
     safeInteger(characters, "Prompt aggregate characters");
     safeInteger(items, "Prompt aggregate items");
-    if (this.aggregateCharacters + characters > this.limit.maxAggregateCharacters
-      || this.aggregateItemCount + items > this.limit.maxAggregateItemCount) {
+    const aggregateCharacters = this.aggregateCharacters + characters;
+    const aggregateItemCount = this.aggregateItemCount + items;
+    if (!this.limit.allowsAggregate({ characters: aggregateCharacters, items: aggregateItemCount })) {
       throw new PromptResponseTooLargeFailure("Prompt aggregate exceeds its shared execution limit", {
         aggregateCharacters: this.aggregateCharacters,
         aggregateItemCount: this.aggregateItemCount,
@@ -1501,6 +1522,8 @@ export class PromptExecutionBudget {
         maxAggregateItemCount: this.limit.maxAggregateItemCount,
       });
     }
+    safeInteger(aggregateCharacters, "Prompt aggregate character total");
+    safeInteger(aggregateItemCount, "Prompt aggregate item total");
   }
 
   consumeAggregate({ characters, items }) {
@@ -1518,6 +1541,13 @@ export class PromptExecutionBudget {
     });
   }
 
+  withLimit(limit) {
+    if (!this.limit.canContinueWith(limit)) {
+      throw new RangeError("Prompt execution continuation relaxes an independent limit");
+    }
+    return PromptExecutionBudget.fromSnapshot(limit, this.snapshot());
+  }
+
   static fromSnapshot(executionLimit, snapshot) {
     if (snapshot === null || typeof snapshot !== "object" || Array.isArray(snapshot)
       || Object.keys(snapshot).sort().join(",") !== [
@@ -1533,7 +1563,7 @@ export class PromptExecutionBudget {
       ["aggregateCharacters", budget.limit.maxAggregateCharacters],
     ]) {
       const value = safeInteger(snapshot[field], `Prompt execution ${field}`);
-      if (value > maximum) throw new RangeError(`Prompt execution ${field} exceeds its limit`);
+      if (maximum !== null && value > maximum) throw new RangeError(`Prompt execution ${field} exceeds its limit`);
       budget[field] = value;
     }
     return budget;
@@ -1845,7 +1875,7 @@ export class PromptBatchExecutor {
       if (parsed === undefined) throw new PromptResponseInvalidFailure("Prompt response parser returned undefined", { batchDigest: batch.digest });
       const parsedCharacters = responseCharacterCount(parsed);
       const parsedItems = responseItemCount(parsed, responseContract);
-      if (parsedCharacters > this.executionLimit.maxAggregateCharacters || parsedItems > this.executionLimit.maxAggregateItemCount) {
+      if (!this.executionLimit.allowsAggregate({ characters: parsedCharacters, items: parsedItems })) {
         throw new PromptResponseTooLargeFailure("Parsed prompt response exceeds an aggregate limit", {
           batchDigest: batch.digest,
           parsedCharacters,
@@ -1963,8 +1993,7 @@ export class PromptReductionPlan {
         nextItems: next.elements.length,
       });
     }
-    if (next.characterCount > this.executionLimit.maxAggregateCharacters
-      || next.elements.length > this.executionLimit.maxAggregateItemCount) {
+    if (!this.executionLimit.allowsAggregate({ characters: next.characterCount, items: next.elements.length })) {
       throw new PromptResponseTooLargeFailure("Prompt reduction aggregate exceeds its execution limit", {
         characterCount: next.characterCount,
         itemCount: next.elements.length,
