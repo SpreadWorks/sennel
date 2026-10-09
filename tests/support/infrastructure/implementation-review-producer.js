@@ -19,7 +19,8 @@ export class ImplementationReviewProducer {
         const child = spawnSync(process.execPath,
           [fileURLToPath(new URL("../impl-phase-review-worker.js", import.meta.url))], {
             ...options,
-            env: { ...options.env, SENNEL_IMPL_SCENARIO_RESPONSE: this.response },
+            env: { ...options.env, SENNEL_IMPL_SCENARIO_RESPONSE: this.response,
+              SENNEL_IMPL_SCENARIO_SPEC_ROOT: ctx.flowManager.specRoot },
           });
         return { ...child, ok: child.status === 0 };
       },

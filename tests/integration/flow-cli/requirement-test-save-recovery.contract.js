@@ -73,7 +73,9 @@ describe("Requirement Test durable save, rejection and recovery boundaries", { c
     assert.equal(result.errors[0].code, "FLOW_ARTIFACT_HANDOFF_INVALID");
     scenario.reload();
     assert.deepEqual(scenario.plan().toJSON(), before);
-    assert.equal(scenario.artifact("test.requirement.candidate.bundle", { requirementId: "R1", bundleRevision: "1" }), null);
+    assert.equal(scenario.artifact("test.requirement.candidate.bundle", {
+      specRevision: String(scenario.plan().specRevision.revision.value), requirementId: "R1", bundleRevision: "1",
+    }), null);
     assert.equal(scenario.artifact("tests.source", { testPath: "r1.test.js" }), null);
     assert.equal(scenario.requests.filter((request) => request.stepId === "test-generate").length, 1);
   });
@@ -100,7 +102,9 @@ describe("Requirement Test durable save, rejection and recovery boundaries", { c
     assert.equal(scenario.manager.activityLedger(scenario.specId)
       .some((activity) => activity.nodeId === "test-generate" && activity.result?.stepResult), false,
     "a stale source binding cannot persist a candidate Result");
-    assert.equal(scenario.artifact("test.requirement.candidate.bundle", { requirementId: "R1", bundleRevision: "1" }), null);
+    assert.equal(scenario.artifact("test.requirement.candidate.bundle", {
+      specRevision: String(scenario.plan().specRevision.revision.value), requirementId: "R1", bundleRevision: "1",
+    }), null);
     assert.equal(scenario.artifact("tests.source", { testPath: "r1.test.js" }), null);
     assert.equal(scenario.requests.filter((request) => request.stepId === "test-generate").length, 1);
   });

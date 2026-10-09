@@ -9,9 +9,11 @@ import {
   RequirementTestSupportArtifact,
 } from "../../src/flow/lib/requirement-test-artifacts.js";
 import {
+  RequirementTestBudget,
   RequirementTestBundleLineage,
   RequirementTestBundleRevision,
 } from "../../src/flow/lib/requirement-test-lifecycle.js";
+import { StepResult } from "../../src/flow/engine/step-result.js";
 import { RequirementTestArtifactStore } from "../../src/flow/lib/requirement-test-store.js";
 
 const SPEC_REVISION = {
@@ -21,18 +23,18 @@ const SPEC_REVISION = {
   byteLength: 100,
 };
 
-function candidate({ support = [], requirementId = "R1", testPath = null } = {}) {
+function candidate({ support = [], requirementId = "R1", testPath = null, specRevision = SPEC_REVISION, bytes = null } = {}) {
   const primaryPath = testPath ?? `tests/${requirementId.toLowerCase()}.test.js`;
-  const sourceBytes = Buffer.from(`import test from 'node:test';\ntest('${requirementId}: behavior', () => {});\n`);
+  const sourceBytes = bytes ?? Buffer.from(`import test from 'node:test';\ntest('${requirementId}: behavior', () => {});\n`);
   const source = RequirementTestCandidateSource.fromBytes({ testPath: primaryPath, bytes: sourceBytes });
   const bundle = new RequirementTestBundleRevision({
     requirementId,
-    specRevision: SPEC_REVISION,
+    specRevision,
     revision: 1,
     paths: [source.testPath],
     lineage: new RequirementTestBundleLineage({
       requirementId,
-      specRevision: SPEC_REVISION,
+      specRevision,
       bundleRevision: 1,
       predecessorRevision: null,
       sourceAttempt: { id: "generate-r1", sequence: 1 },
@@ -53,6 +55,7 @@ function manager({
   sourceBytes = null,
   candidateManifests = [],
   readCounts = null,
+  activities = [],
 } = {}) {
   const descriptors = active.map((entry) => ({
     logicalKey: "tests.source",
@@ -65,7 +68,7 @@ function manager({
     : [{ requirementId: "R1", revision: 1, bytes: bundleBytes }, ...candidateManifests];
   for (const manifest of manifests) descriptors.push({
     logicalKey: "test.requirement.candidate.bundle",
-    relativePath: `artifacts/test-candidates/${manifest.requirementId}/revision-${manifest.revision}/bundle.json`,
+    relativePath: `artifacts/test-candidates/spec-revision-${JSON.parse(manifest.bytes).bundle.specRevision.revision}/${manifest.requirementId}/revision-${manifest.revision}/bundle.json`,
     hash: crypto.createHash("sha256").update(manifest.bytes).digest("hex"),
     size: manifest.bytes.length,
   });
@@ -74,7 +77,8 @@ function manager({
       if (logicalKey === "test.requirement.candidate.bundle") {
         if (readCounts) readCounts.candidateBundle = (readCounts.candidateBundle ?? 0) + 1;
         const manifest = manifests.find((entry) => entry.requirementId === parameters.requirementId
-          && String(entry.revision) === String(parameters.bundleRevision));
+          && String(entry.revision) === String(parameters.bundleRevision)
+          && String(JSON.parse(entry.bytes).bundle.specRevision.revision) === parameters.specRevision);
         if (!manifest) throw new Error(`missing candidate bundle: ${parameters.requirementId}`);
         return {
           bytes: manifest.bytes,
@@ -120,9 +124,36 @@ function manager({
     artifactCatalog() { return { artifacts: descriptors }; },
     writeRuntimeArtifact() {},
     readRuntimeArtifact() {},
-    activityLedger() { return []; },
+    activityLedger() { return activities; },
     specLocation() { return { repositoryRoot: "/repo", resolve: (...parts) => ["/repo", ...parts].join("/") }; },
   };
+}
+
+function promotedActivity(candidateBundle) {
+  const { bundle } = candidateBundle;
+  const publication = (logicalKey, relativePath) => ({ logicalKey, relativePath,
+    hash: "c".repeat(64), size: 100, activityId: "gate-source" });
+  const result = StepResult.fromStored("test-gate", {
+    kind: "test-gate-compatible", type: "completed",
+    binding: {
+      runId: "run-support-contract", specId: bundle.specRevision.specId, leaf: "test-gate",
+      attempt: { id: "gate-attempt", sequence: 1 },
+      specRecordPublication: publication("spec.record", "spec.json"),
+      planPublication: publication("test.requirement.plan", "steps/test-generate/plan.json"),
+      requirementId: bundle.requirementId, specRevision: bundle.specRevision.toJSON(),
+      status: "reviewed", candidate: bundle.lineage.toJSON(),
+    },
+    frontier: { staged: [], pending: [] },
+    retryState: { budget: new RequirementTestBudget().toJSON(), autoApprove: true, findings: [] },
+    evidence: {
+      observation: { requirementId: bundle.requirementId, specRevision: bundle.specRevision.toJSON(),
+        bundleRevision: bundle.revision, candidateDigest: candidateBundle.digest,
+        testName: `${bundle.requirementId}: behavior`, kind: "assertion_failed",
+        sourceAttempt: bundle.lineage.sourceAttempt.toJSON() },
+      publication: publication("test.requirement.gate", "steps/test-gate/result.json"), expectation: "fail",
+    },
+  });
+  return { nodeId: "test-gate", result: { stepResult: result.toJSON() } };
 }
 
 describe("Requirement test shared support artifact", () => {
@@ -241,6 +272,37 @@ describe("Requirement test shared support artifact", () => {
       state,
     });
     assert.throws(() => primaryCollision.promotion(restored), /collides with a promoted test source/);
+  });
+
+  it("replaces only the latest promoted candidate of this Requirement from an earlier Spec", () => {
+    const previous = candidate();
+    const next = candidate({ specRevision: { ...SPEC_REVISION, revision: 2, digest: "b".repeat(64) },
+      bytes: Buffer.from("// corrected independent test source\n") });
+    const manifest = (value) => ({ requirementId: value.bundle.bundle.requirementId, revision: 1,
+      bytes: Buffer.from(JSON.stringify(value.bundle.toJSON())) });
+    const promote = ({ history = [promotedActivity(previous.bundle)], activeBytes = previous.sourceBytes,
+      oldCandidate = previous, target = next } = {}) => {
+      const store = new RequirementTestArtifactStore({ state: { schemaRevision: CURRENT_FLOW_SCHEMA_REVISION,
+        specId: SPEC_REVISION.specId }, flowManager: manager({
+        active: [{ testPath: "r1.test.js", bytes: activeBytes }], activities: history,
+        candidateManifests: [manifest(oldCandidate), manifest(target)], sourceBytes: target.sourceBytes,
+      }) });
+      return store.promotion(store.readCandidate({ bundle: target.bundle.bundle }));
+    };
+    const replacement = promote();
+    assert.deepEqual(replacement.artifactWrites.find((write) => write.logicalKey === "tests.source").bytes,
+      next.sourceBytes);
+    assert.deepEqual(replacement.artifactRemovals, []);
+    assert.equal(replacement.testSourceBaseline[0].digest, previous.source.digest);
+    const sameBytesNext = candidate({ specRevision: next.bundle.bundle.specRevision });
+    const foreign = candidate({ requirementId: "R2", testPath: "tests/r1.test.js" });
+    for (const options of [
+      { history: [] },
+      { activeBytes: Buffer.from("unpublished source\n") },
+      { history: [promotedActivity(previous.bundle), promotedActivity(sameBytesNext.bundle)], target: sameBytesNext },
+      { history: [promotedActivity(next.bundle)], target: previous },
+      { oldCandidate: foreign, history: [promotedActivity(foreign.bundle)], activeBytes: foreign.sourceBytes },
+    ]) assert.throws(() => promote(options), /collides with a promoted test source/);
   });
 
   it("rejects a primary path reserved by another Requirement before publication, while allowing repair", () => {

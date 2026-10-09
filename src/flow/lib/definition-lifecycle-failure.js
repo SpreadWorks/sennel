@@ -38,10 +38,22 @@ export class StepPersistenceFailure extends Error {
   }
 }
 
+const originalStepPersistenceFailures = new WeakSet();
+
 export function isStepPersistenceFailure(error) {
-  return error instanceof StepPersistenceFailure
+  return originalStepPersistenceFailures.has(error)
+    || error instanceof StepPersistenceFailure
     || error?.code === STEP_RESULT_ERROR_PERSISTENCE_FAILURE_CODE
     || error?.data?.failureKind === "step-persistence";
+}
+
+/** Preserve a command adapter's original IO error without losing no-fallback classification. */
+export function rethrowOriginalStepPersistenceFailure(error) {
+  if (error instanceof StepPersistenceFailure && error.cause instanceof Error) {
+    originalStepPersistenceFailures.add(error.cause);
+    throw error.cause;
+  }
+  throw error;
 }
 
 /** Read one exact committed settlement after an uncertain Store response. */

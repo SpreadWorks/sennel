@@ -45,34 +45,121 @@ export class AcceptancePhaseScenario extends ImplPhaseScenario {
       entryStep: "draft",
       execution: { mode: "branch", baseBranch: "main", featureBranch: "feature/acceptance-phase" },
       ...options,
-      gateResponse: (prompt, invocation, active) => {
+      gateResponse: (prompt, invocation, active) => active.observeAcceptanceProvider(prompt, invocation, () => {
         if (active.current() === "acceptance-review" && options.acceptanceProvider) {
-          const call = { prompt, options: invocation, response: null };
+          const call = { prompt, options: invocation, response: null,
+            ordinal: active.acceptanceCalls.length + 1, responses: [] };
           active.acceptanceCalls.push(call);
+          active.acceptanceProviderCalls.at(-1).customCall = call;
           const selected = options.acceptanceProvider?.(prompt, invocation, active);
           call.response = selected;
           if (selected !== undefined && selected !== null) return selected;
         }
-        if ((invocation.jsonSchema?.required ?? []).includes("requirementJudgments")) {
-          const evidence = JSON.parse(String(prompt).slice("## Acceptance Evidence\n".length));
+        const schema = invocation.jsonSchema;
+        const observations = schema?.properties?.observations?.items?.properties;
+        if (observations?.facts && observations.sourceRef?.enum) {
+          const batch = JSON.parse(String(prompt).split("## Batch\n")[1].split("\n")[0]);
+          if (batch.index === 0) active.acceptanceEvidenceRanges.clear();
+          const ranges = String(prompt).split("## Canonical evidence ranges\n")[1]
+            .split("\n").filter(Boolean).map((line) => JSON.parse(line));
+          for (const range of ranges) active.acceptanceEvidenceRanges.set(range.sourceRef, range);
+          const response = { observations: observations.sourceRef.enum.map((sourceRef) => {
+            const range = active.acceptanceEvidenceRanges.get(sourceRef);
+            assert.ok(range, "Acceptance map fake can only cite a transported range");
+            return { sourceRef, facts: [`${range.sourceKey}: canonical evidence range ${range.start}-${range.end}.`] };
+          }) };
+          return JSON.stringify(response);
+        }
+        if (active.current() === "acceptance-review" && schema?.properties?.sourceRefs?.items?.enum) {
+          const response = { sourceRefs: [...schema.properties.sourceRefs.items.enum],
+            summary: "The supplied canonical observations retain their exact source identities." };
+          return JSON.stringify(response);
+        }
+        if ((schema?.required ?? []).includes("requirementJudgments")) {
+          const scoped = String(prompt).includes("## Scoped binding\n");
+          const evidence = scoped ? active.transportedAcceptanceEvidence()
+            : JSON.parse(String(prompt).slice("## Acceptance Evidence\n".length));
           active.acceptanceContexts.push(Object.freeze({ evidence,
-            requirementIds: evidence.requirements.map((entry) => entry.id),
-            deferredFindings: evidence.deferredFindings }));
-          const response = options.acceptanceResponse?.(active.acceptanceCalls.length + 1, active, prompt, invocation)
+            requirementIds: scoped ? schema.properties.requirementJudgments.items.properties.requirementId.enum ?? []
+              : evidence.requirements.map((entry) => entry.id),
+            deferredFindings: scoped ? evidence.deferredFindings.filter((entry) =>
+              schema.properties.deferredFindingDispositions.items.properties.findingId.enum?.includes(entry.findingId))
+              : evidence.deferredFindings }));
+          const semantic = active.acceptanceSemanticCall(prompt, invocation);
+          const response = options.acceptanceResponse?.(semantic.ordinal, active, prompt, invocation)
             ?? acceptanceProviderResponse(active);
-          active.acceptanceCalls.push({ prompt, options: invocation, response: structuredClone(response) });
+          semantic.response ??= structuredClone(response);
+          semantic.responses.push({ prompt, options: invocation, response: structuredClone(response) });
           return JSON.stringify(response);
         }
         return gateResponse?.(prompt, invocation, active);
-      },
+      }),
     });
   }
 
   constructor(options) {
     super(options);
+    // Default callbacks describe one semantic Review generation; explicit
+    // provider overrides keep their original per-RPC acceptanceCalls contract.
     this.acceptanceCalls = [];
+    this.acceptanceProviderCalls = [];
     this.acceptanceContexts = [];
+    this.acceptanceEvidenceRanges = new Map();
     this.registeredExecutions = [];
+  }
+
+  /** Observe every actual RPC, including maps, reductions and thrown responses. */
+  observeAcceptanceProvider(prompt, invocation, respond) {
+    if (this.current() !== "acceptance-review") return respond();
+    const saved = this.manager.readCurrentStepSettlement({ specId: this.specId, stepId: "acceptance-review" });
+    const call = { prompt, options: invocation, claim: saved?.receipt.toJSON() ?? null,
+      response: null, error: null };
+    this.acceptanceProviderCalls.push(call);
+    try {
+      call.response = respond();
+      return call.response;
+    } catch (error) {
+      call.error = error;
+      throw error;
+    }
+  }
+
+  acceptanceSemanticCall(prompt, invocation) {
+    const providerCall = this.acceptanceProviderCalls.at(-1);
+    if (providerCall.customCall) return providerCall.customCall;
+    const claim = providerCall.claim;
+    assert.equal(claim?.executionLifecycle?.phase, "claimed",
+      "default Acceptance callbacks require the actual durable provider generation claim");
+    let semantic = this.acceptanceCalls.find((entry) => entry.claim?.id === claim.id);
+    if (semantic === undefined) {
+      semantic = { prompt, options: invocation, claim, ordinal: this.acceptanceCalls.length + 1,
+        response: null, responses: [] };
+      this.acceptanceCalls.push(semantic);
+    }
+    providerCall.semanticOrdinal = semantic.ordinal;
+    return semantic;
+  }
+
+  /** Reconstruct only evidence actually transported to the external fake. */
+  transportedAcceptanceEvidence() {
+    const sources = new Map();
+    for (const range of this.acceptanceEvidenceRanges.values()) {
+      const ranges = sources.get(range.sourceKey) ?? [];
+      ranges.push(range);
+      sources.set(range.sourceKey, ranges);
+    }
+    return Object.fromEntries([...sources].map(([sourceKey, ranges]) => {
+      ranges.sort((left, right) => left.start - right.start);
+      let end = 0;
+      for (const range of ranges) {
+        assert.equal(range.start, end, "Acceptance fake requires complete transported range coverage");
+        end = range.end;
+      }
+      assert.equal(end, ranges[0].sourceLength);
+      const content = ranges.map((range) => range.content).join("");
+      return [sourceKey, ["requirements", "deferredFindings", "repairEvidence"].includes(sourceKey)
+        ? JSON.parse(content) : content];
+    }));
   }
 
   initialize() {

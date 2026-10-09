@@ -9,9 +9,11 @@
 import { after, afterEach, before, describe, it } from "node:test";
 import assert from "node:assert/strict";
 import path from "node:path";
+import fs from "node:fs";
 import { createTmpDir, removeTmpDir, writeFile } from "../../support/builders/tmp-dir.js";
+import { initGitRepo, commitAll } from "../../support/infrastructure/git-repo.js";
 import { SeedWorkRoot } from "../../support/builders/seed-work-root.js";
-import { CanonicalFlowFixture, makeFlowManager } from "../../support/infrastructure/flow-setup.js";
+import { FlowAtStepFixture, makeFlowManager, produceCanonicalFixtureStep } from "../../support/infrastructure/flow-setup.js";
 import {
   CanonicalLatestReport,
   POINTER_REL_PATH,
@@ -19,73 +21,65 @@ import {
 
 const SPEC_ID = "001-demo";
 
-function canonicalReportFixture(root, { specRoot = "specs", report = null } = {}) {
+async function canonicalReportFixture(root, { specRoot = "specs", produce = true } = {}) {
+  initGitRepo(root);
+  writeFile(root, "README.md", "Canonical report display fixture.\n");
+  commitAll(root, "initial report fixture");
   const flowManager = makeFlowManager(root, { specRoot });
-  const flow = new CanonicalFlowFixture({
-    flowManager,
-    specId: SPEC_ID,
-    runId: "run-report-show",
+  const fixture = await new FlowAtStepFixture({
+    flowManager, specId: SPEC_ID, runId: "run-report-show",
     request: "Render the finalized canonical report.",
-    specRecord: { requirements: [] },
-  }).create().registerActive().activate("report");
-  if (report !== null) {
-    flowManager.publishArtifacts({
-      specId: flow.specId,
-      nodeId: "report",
-      artifactWrites: [{
-        logicalKey: "report",
-        mediaType: "application/json",
-        bytes: Buffer.isBuffer(report)
-          ? report
-          : Buffer.from(`${JSON.stringify(report)}\n`, "utf8"),
-      }],
-    });
-  }
+    execution: { mode: "direct", baseBranch: "main", featureBranch: "main" },
+    specRecord: { requirements: [{ id: "R-report", desc: "Render the finalized report.", testable: false }] },
+    targetStep: "report",
+  }).createWithProducers();
+  const flow = fixture.flow.flow;
+  if (produce) await flow.produce("report");
   writeFile(root, POINTER_REL_PATH, `${flow.specId}\n`);
   return { flow, flowManager };
 }
 
 class CanonicalReportScenario {
-  constructor(workRoot, flowManager) {
+  constructor(workRoot, flowManager, parserInput) {
     this.workRoot = workRoot;
     this.flowManager = flowManager;
     this.location = flowManager.specLocation(SPEC_ID);
+    this.parserInput = parserInput;
   }
 
-  cleanup() {
-    this.workRoot.cleanup();
+  read() {
+    return CanonicalLatestReport.read({ mainRoot: this.workRoot.root, specRoot: "specs", flowManager: this.flowManager });
   }
+
+  parser() {
+    const actual = this.read();
+    return new CanonicalLatestReport({ specId: actual.specId, relativePath: actual.relativePath,
+      path: actual.path, bytes: Buffer.isBuffer(this.parserInput) ? this.parserInput
+        : Buffer.from(`${JSON.stringify(this.parserInput)}\n`, "utf8") });
+  }
+
+  cleanup() { this.workRoot.cleanup(); }
 }
 
 class CanonicalReportSeed {
-  constructor() {
-    this.root = createTmpDir("sennel-report-seed-");
-    canonicalReportFixture(this.root);
+  constructor() { this.root = createTmpDir("sennel-report-seed-"); }
+
+  async initialize() {
+    await canonicalReportFixture(this.root, { produce: false });
+    return this;
   }
 
-  createScenario(report) {
+  async createScenario(report) {
     const workRoot = new SeedWorkRoot(this.root, { prefix: "sennel-report-show-" });
     const flowManager = makeFlowManager(workRoot.root);
     if (report !== null) {
-      flowManager.publishArtifacts({
-        specId: SPEC_ID,
-        nodeId: "report",
-        artifactWrites: [{
-          logicalKey: "report",
-          mediaType: "application/json",
-          bytes: Buffer.isBuffer(report)
-            ? report
-            : Buffer.from(`${JSON.stringify(report)}\n`, "utf8"),
-        }],
-      });
+      await produceCanonicalFixtureStep({ root: workRoot.root, mainRoot: workRoot.root, executionRoot: workRoot.root,
+        specId: SPEC_ID, flowManager, flowState: flowManager.loadReadOnly(SPEC_ID), config: {} }, "report");
     }
-    writeFile(workRoot.root, POINTER_REL_PATH, `${SPEC_ID}\n`);
-    return new CanonicalReportScenario(workRoot, flowManager);
+    return new CanonicalReportScenario(workRoot, flowManager, report);
   }
 
-  cleanup() {
-    removeTmpDir(this.root);
-  }
+  cleanup() { removeTmpDir(this.root); }
 }
 
 describe("flow report show — resolve + read", () => {
@@ -93,7 +87,7 @@ describe("flow report show — resolve + read", () => {
   let seed;
   let scenario;
 
-  before(() => { seed = new CanonicalReportSeed(); });
+  before(async () => { seed = new CanonicalReportSeed(); await seed.initialize(); });
   after(() => seed.cleanup());
   afterEach(() => {
     if (scenario) scenario.cleanup();
@@ -102,15 +96,13 @@ describe("flow report show — resolve + read", () => {
     tmp = null;
   });
 
-  it("AC1: resolves latest report.json from pointer and returns its text field", () => {
+  it("AC1: resolves latest report.json from pointer and returns its text field", async () => {
     const reportText = "  Report\n\n  Implementation\n──\n    feat: demo\n";
-    scenario = seed.createScenario({ data: {}, text: reportText });
+    scenario = await seed.createScenario({ data: {}, text: reportText });
 
-    const report = CanonicalLatestReport.read({
-      mainRoot: scenario.workRoot.root,
-      specRoot: "specs",
-      flowManager: scenario.flowManager,
-    });
+    const generated = scenario.read();
+    assert.equal(generated.text(), JSON.parse(fs.readFileSync(generated.path, "utf8")).text);
+    const report = scenario.parser();
     assert.equal(
       report.path,
       path.join(scenario.location.directory, "artifacts/report.json"),
@@ -118,11 +110,10 @@ describe("flow report show — resolve + read", () => {
     assert.equal(report.text(), reportText);
   });
 
-  it("resolves a report from a configured spec root", () => {
+  it("resolves a report from a configured spec root", async () => {
     tmp = createTmpDir("sennel-report-show-configured-root-");
-    const { flow, flowManager } = canonicalReportFixture(tmp, {
+    const { flow, flowManager } = await canonicalReportFixture(tmp, {
       specRoot: "flow-artifacts/specs",
-      report: { data: {}, text: "ok" },
     });
 
     const report = CanonicalLatestReport.read({
@@ -150,8 +141,8 @@ describe("flow report show — resolve + read", () => {
     );
   });
 
-  it("AC3: throws NO_REPORT when pointer exists but report.json is missing", () => {
-    scenario = seed.createScenario(null);
+  it("AC3: throws NO_REPORT when pointer exists but report.json is missing", async () => {
+    scenario = await seed.createScenario(null);
     assert.throws(
       () => CanonicalLatestReport.read({
         mainRoot: scenario.workRoot.root,
@@ -162,26 +153,18 @@ describe("flow report show — resolve + read", () => {
     );
   });
 
-  it("throws PARSE_ERROR when the cataloged report bytes are invalid JSON", () => {
-    scenario = seed.createScenario(Buffer.from("{ not json"));
-    const report = CanonicalLatestReport.read({
-      mainRoot: scenario.workRoot.root,
-      specRoot: "specs",
-      flowManager: scenario.flowManager,
-    });
+  it("throws PARSE_ERROR when supplied parser-boundary bytes are invalid JSON", async () => {
+    scenario = await seed.createScenario(Buffer.from("{ not json"));
+    const report = scenario.parser();
     assert.throws(
       () => report.text(),
       (err) => err.code === "PARSE_ERROR",
     );
   });
 
-  it("throws NO_TEXT when the cataloged report has no text field", () => {
-    scenario = seed.createScenario({ data: {} });
-    const report = CanonicalLatestReport.read({
-      mainRoot: scenario.workRoot.root,
-      specRoot: "specs",
-      flowManager: scenario.flowManager,
-    });
+  it("throws NO_TEXT when supplied parser-boundary bytes have no text field", async () => {
+    scenario = await seed.createScenario({ data: {} });
+    const report = scenario.parser();
     assert.throws(
       () => report.text(),
       (err) => err.code === "NO_TEXT",

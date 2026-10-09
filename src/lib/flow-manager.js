@@ -1,5 +1,5 @@
 import { completeAcceptedNonblockingDecision } from "../flow/engine/composition/nonblocking-implementation.js";
-import { hasImplementationStepContract } from "../flow/engine/step-result.js";
+import { hasImplementationStepContract, hasAcceptanceStepContract } from "../flow/engine/step-result.js";
 import { completeAcceptedGateDeferral } from "../flow/engine/composition/gate-deferral.js";
 /**
  * src/lib/flow-manager.js
@@ -493,6 +493,9 @@ export class FlowManager {
     return this.#commitStepSettlement(this.settleDraftStepResult, input);
   }
   commitSpecStepResult(input) {
+    if (hasAcceptanceStepContract(input?.stepResult?.stepId)) {
+      return this.#commitStepSettlement(this.settleAcceptanceStepResult, input);
+    }
     if (input?.stepResult?.stepId === "approval") {
       return this.#commitStepSettlement(this.approveSpecContinuation, input);
     }
@@ -519,6 +522,10 @@ export class FlowManager {
     return this._store.settleImplStepResult({ ...input,
       specId: input.specId ?? this._boundSpecId });
   }
+  settleAcceptanceStepResult(input = {}) {
+    return this._store.settleAcceptanceStepResult({ ...input, specId: input.specId ?? this._boundSpecId });
+  }
+  prepareAcceptanceCommandPublication(input) { return this._store.prepareAcceptanceCommandPublication(input); }
   prepareImplCommandPublication(input) { return this._store.prepareImplCommandPublication(input); }
   readImplementationTaskFrontier(input = {}) {
     return this._store.readImplementationTaskFrontier(typeof input === "string" ? input
@@ -627,12 +634,7 @@ export class FlowManager {
       specId: input.specId ?? this._boundSpecId,
     });
   }
-  completeAcceptanceDecisionNoOp(input = {}) {
-    return this._store.completeAcceptanceDecisionNoOp({
-      ...input,
-      specId: input.specId ?? this._boundSpecId,
-    });
-  }
+
   confirmSourceWorkerHandoff(input = {}) {
     return this._store.settleImplStepResult({
       ...input,
@@ -645,12 +647,7 @@ export class FlowManager {
       specId: input.specId ?? this._boundSpecId,
     });
   }
-  repairAcceptanceReview(input = {}) {
-    return this._store.repairAcceptanceReview({
-      ...input,
-      specId: input.specId ?? this._boundSpecId,
-    });
-  }
+
   failCurrentAttempt(input = {}) {
     return this._store.failCurrentAttempt({
       ...input,
@@ -775,7 +772,8 @@ export class FlowManager {
     return this._store.prepareAcceptedNonblockingPublication({ ...input, specId: input.specId ?? this._boundSpecId });
   }
   applyNonblockingDecision(input = {}) {
-    if (["task-gate", "impl-gate", "impl-review", "test-result-review"].includes(input.record?.sourceStep) && input.record?.action === "continue") {
+    if ((hasAcceptanceStepContract(input.record?.sourceStep)
+      || ["task-gate", "impl-gate", "impl-review", "test-result-review"].includes(input.record?.sourceStep)) && input.record?.action === "continue") {
       return completeAcceptedNonblockingDecision(this, { ...input, specId: input.specId ?? this._boundSpecId }).record;
     }
     return this._store.applyNonblockingDecision({
@@ -1007,12 +1005,7 @@ export class FlowManager {
       specId: input.specId ?? this._boundSpecId,
     });
   }
-  acceptFinalRegressionFailure(input = {}) {
-    return this._store.acceptFinalRegressionFailure({
-      ...input,
-      specId: input.specId ?? this._boundSpecId,
-    });
-  }
+
   deferFailedReview(input = {}) {
     return this._store.deferFailedReview({
       ...input,

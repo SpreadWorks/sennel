@@ -1,3 +1,4 @@
+import { TEST_EXECUTE_RESULT_FILE, TEST_RESULT_REVIEW_FILE } from "./test-artifact-paths.js";
 import { CURRENT_FLOW_SCHEMA_REVISION } from "../../lib/flow-schema-revision.js";
 import fs from "fs";
 import path from "path";
@@ -23,9 +24,7 @@ import {
 export { UPGRADE_RESULT_FILE } from "./upgrade-evidence-paths.js";
 export { UpgradeResultArtifact, validateUpgradeResultArtifact } from "./upgrade-result-artifact.js";
 
-export const TEST_EXECUTE_RESULT_FILE = "test-execute-result.json";
-export const TEST_RESULT_REVIEW_FILE = "test-result-review.json";
-export const IMPL_GATE_RESULT_FILE = "impl-gate-result.json";
+export { TEST_EXECUTE_RESULT_FILE, TEST_RESULT_REVIEW_FILE, IMPL_GATE_RESULT_FILE } from "./test-artifact-paths.js";
 export const MAX_RAW_OUTPUT_BYTES = 64 * 1024 * 1024;
 const MAX_RAW_OUTPUT_LINES = 200_000;
 const MAX_EVIDENCE_RAW_OUTPUT_LINES = 2_000;
@@ -930,7 +929,7 @@ function resolveFinalRegressionRawOutputPath(root, rawOutputPath) {
   return resolved;
 }
 
-export function validateFinalRegressionEvidence({ root, artifact, repositoryBindingOptions = {} }) {
+export function validateFinalRegressionEvidence({ root, artifact, repositoryBindingOptions = {}, requireCurrentRepository = false }) {
   try {
     validateFinalRegressionResult(artifact);
     const binding = artifact.executionBinding;
@@ -940,7 +939,7 @@ export function validateFinalRegressionEvidence({ root, artifact, repositoryBind
     if (!/^[a-f0-9]{64}$/.test(binding.worktreeSha256)) {
       throw new Error("execution binding worktree fingerprint mismatch");
     }
-    if (artifact.completed) {
+    if (artifact.completed || requireCurrentRepository) {
       const recordedRepository = new FinalRegressionRepositoryBinding(binding);
       const currentRepository = FinalRegressionRepositoryBinding.capture(root, repositoryBindingOptions);
       if (recordedRepository.headSha !== currentRepository.headSha) throw new Error("execution binding HEAD is stale");

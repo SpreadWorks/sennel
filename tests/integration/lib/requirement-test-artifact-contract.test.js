@@ -101,8 +101,8 @@ describe("Requirement test artifact authority", () => {
   it("assigns canonical paths, owners, histories, and active-source promotion", () => {
     const expectedPaths = new Map([
       ["test.requirement.plan", "steps/test-generate/plan.json"],
-      ["test.requirement.candidate.bundle", "artifacts/test-candidates/:{requirementId}/revision-:{bundleRevision}/bundle.json"],
-      ["test.requirement.candidate.source", "artifacts/test-candidates/:{requirementId}/revision-:{bundleRevision}/sources/:{testPath}"],
+      ["test.requirement.candidate.bundle", "artifacts/test-candidates/spec-revision-:{specRevision}/:{requirementId}/revision-:{bundleRevision}/bundle.json"],
+      ["test.requirement.candidate.source", "artifacts/test-candidates/spec-revision-:{specRevision}/:{requirementId}/revision-:{bundleRevision}/sources/:{testPath}"],
       ["test.requirement.support", "artifacts/test-support/:{ownerRequirementId}/:{supportPath}/:{supportDigest}"],
       ["test.requirement.review", "steps/test-review/result.json"],
       ["test.requirement.repair.progress", "steps/test-repair/progress/:{requirementId}.json"],
@@ -147,15 +147,15 @@ describe("Requirement test artifact authority", () => {
   it("resolves candidate members independently from active test source", () => {
     assert.equal(
       FLOW_ARTIFACT_CONTRACTS.resolve("test.requirement.candidate.bundle", {
-        requirementId: "R1", bundleRevision: "1",
+        specRevision: "3", requirementId: "R1", bundleRevision: "1",
       }).relativePath,
-      "artifacts/test-candidates/R1/revision-1/bundle.json",
+      "artifacts/test-candidates/spec-revision-3/R1/revision-1/bundle.json",
     );
     assert.equal(
       FLOW_ARTIFACT_CONTRACTS.resolve("test.requirement.candidate.source", {
-        requirementId: "R1", bundleRevision: "1", testPath: "tests/r1.test.js",
+        specRevision: "3", requirementId: "R1", bundleRevision: "1", testPath: "tests/r1.test.js",
       }).relativePath,
-      "artifacts/test-candidates/R1/revision-1/sources/tests/r1.test.js",
+      "artifacts/test-candidates/spec-revision-3/R1/revision-1/sources/tests/r1.test.js",
     );
     assert.equal(
       FLOW_ARTIFACT_CONTRACTS.resolve("test.requirement.support", {

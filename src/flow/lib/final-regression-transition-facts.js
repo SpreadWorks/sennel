@@ -19,7 +19,10 @@ import {
 } from "./non-gate-transition.js";
 import { FinalRegressionArtifactDigest, FinalRegressionStepFacts } from "./final-regression-transition.js";
 import { readCurrentNonGateTransitionFacts } from "./non-gate-transition-facts.js";
-import { FINAL_REGRESSION_STEP_DEFINITION, resolveNonGateTransition } from "../definition.js";
+import { StepAdmissionRefusal } from "./step-admission-refusal.js";
+import { FinalRegressionSourceAdmission } from "../steps/acceptance/final-regression-result-evidence.js";
+import { settleAcceptanceStepResult } from "../definition.js";
+import { projectFinalRegressionSourceResult } from "../engine/composition/acceptance-finalization.js";
 
 function attemptFor(snapshot) { return new NonGateAttemptIdentity(snapshot.attempt); }
 
@@ -66,45 +69,68 @@ export function readFinalRegressionTransitionFacts({
     readFacts(snapshot) {
       if (snapshot.stepId !== "final-regression") throw new Error("final-regression facts require the current final-regression Attempt");
       const current = finalArtifact(flowManager, snapshot);
-      const artifact = candidateArtifact === null
-        ? current.artifact
-        : validateFinalRegressionResult(candidateArtifact);
-      const { descriptor, relativePath } = current;
-      const attempt = attemptFor(snapshot);
-      const activity = snapshot.activities.find((entry) => entry.id === descriptor.activityId) ?? null;
-      if (activity === null) throw new Error("final-regression catalog publication has no Activity");
-      const artifactDigest = candidateArtifact === null
-        ? descriptor.hash
-        : FinalRegressionArtifactDigest.fromArtifact(artifact).value;
-      const catalogFingerprint = descriptor.hash;
-      const recordedSnapshotDigest = artifact.changedFileSnapshotDigest;
-      const currentSnapshotDigest = changedFileSnapshotDigest({ snapshot, artifact });
-      const retry = { used: snapshot.state.attempt.consumption.semantic, maximum: snapshot.state.definition.contractFor("final-regression", snapshot.state.root).semanticRetryLimit };
-      const stepFacts = FinalRegressionStepFacts.fromCanonicalArtifact({
-        artifact,
-        artifactDigest,
-        retry,
-        changedFileSnapshot: { digest: recordedSnapshotDigest, current: currentSnapshotDigest === recordedSnapshotDigest },
-        nonblocking: snapshot.state.policy?.nonblocking?.enabled === true,
-        failureRecorded: snapshot.state.attempt.failure !== null,
-      });
-      return new NonGateTransitionFacts({
-        runId: snapshot.runId, specId: snapshot.specId, stepId: "final-regression", snapshotRevision: snapshot.revision,
-        producer: new NonGateProducerOwnership({ runId: snapshot.runId, specId: snapshot.specId, activityId: activity.id, stepId: "final-regression", attempt }),
-        target: new NonGateTargetBinding({ runId: snapshot.runId, specId: snapshot.specId, stepId: "final-regression", attempt }), currentAttempt: attempt,
-        catalogPublication: new NonGateCatalogPublication({ runId: snapshot.runId, specId: snapshot.specId, stepId: "final-regression", attemptId: attempt.id, sequence: attempt.sequence, producerActivityId: activity.id, artifactId: relativePath, fingerprint: catalogFingerprint }),
-        sourcePublication: new NonGateSourcePublication({ runId: snapshot.runId, specId: snapshot.specId, stepId: "final-regression", attemptId: attempt.id, sequence: attempt.sequence, producerActivityId: activity.id, artifactId: relativePath, fingerprint: catalogFingerprint }),
-        lineage: new NonGateLineage({ sourceAttempt: attempt, canonicalAttempt: attempt, sourceFingerprint: catalogFingerprint, canonicalFingerprint: catalogFingerprint }),
-        retry: new NonGateRetryMetrics(retry),
-        completion: new NonGateCompletionFacts({ completed: artifact.completed === true }), recoveryEvidence: new NonGateRecoveryEvidence(),
-        nonblocking: snapshot.state.policy?.nonblocking?.enabled === true, stepFacts,
-      });
+      return finalRegressionFactsFromSnapshot({ snapshot, current, candidateArtifact, changedFileSnapshotDigest });
     },
   });
 }
 
 /** The sole final-regression decision entrypoint for readers and appliers. */
 export function resolveCanonicalFinalRegressionTransition(input = {}) {
-  const facts = readFinalRegressionTransitionFacts(input);
-  return facts === null ? null : resolveNonGateTransition(facts, FINAL_REGRESSION_STEP_DEFINITION);
+  const saved = input.flowManager.readCurrentStepSettlement({ specId: input.specId, stepId: "final-regression" });
+  if (saved === null) throw new StepAdmissionRefusal("Final regression observation is missing its saved Result and settlement receipt");
+  const decision = saved.settlement.application?.decision;
+  if (decision === undefined) throw new StepAdmissionRefusal("Final regression has no saved transition decision");
+  const current = readFinalRegressionTransitionFacts(input);
+  const evidence = saved.result.evidence;
+  const original = evidence?.transitionFacts;
+  if (current === null || original === null || original === undefined
+    || current.integrityFailure !== null
+    || current.runId !== original.runId || current.specId !== original.specId
+    || !current.currentAttempt.matches(original.currentAttempt)
+    || current.catalogPublication.fingerprint !== original.catalogPublication.fingerprint
+    || current.catalogPublication.producerActivityId !== original.catalogPublication.producerActivityId
+    || current.retry.used !== original.retry.used || current.retry.maximum !== original.retry.maximum) {
+    throw new StepAdmissionRefusal("Final regression saved Result no longer owns its current process evidence");
+  }
+  if (current.stepFacts.changedFileSnapshot.current) return decision;
+  const admission = new FinalRegressionSourceAdmission({ evidence, current: false });
+  const projected = projectFinalRegressionSourceResult(evidence, admission);
+  return settleAcceptanceStepResult("final-regression", projected).application.decision;
+}
+
+/** Shared acquired and prospective artifact interpretation; no route selection. */
+export function finalRegressionFactsFromSnapshot({ snapshot, current, candidateArtifact = null, changedFileSnapshotDigest }) {
+  const artifact = candidateArtifact === null
+    ? current.artifact
+    : validateFinalRegressionResult(candidateArtifact);
+  const { descriptor, relativePath } = current;
+  const attempt = attemptFor(snapshot);
+  const activity = snapshot.activities.find((entry) => entry.id === descriptor.activityId) ?? null;
+  if (activity === null) throw new Error("final-regression catalog publication has no Activity");
+  const artifactDigest = candidateArtifact === null
+    ? descriptor.hash
+    : FinalRegressionArtifactDigest.fromArtifact(artifact).value;
+  const catalogFingerprint = descriptor.hash;
+  const recordedSnapshotDigest = artifact.changedFileSnapshotDigest;
+  const currentSnapshotDigest = changedFileSnapshotDigest({ snapshot, artifact });
+  const retry = { used: snapshot.state.attempt.consumption.semantic, maximum: snapshot.state.definition.contractFor("final-regression", snapshot.state.root).semanticRetryLimit };
+  const stepFacts = FinalRegressionStepFacts.fromCanonicalArtifact({
+    artifact,
+    artifactDigest,
+    retry,
+    changedFileSnapshot: { digest: recordedSnapshotDigest, current: currentSnapshotDigest === recordedSnapshotDigest },
+    nonblocking: snapshot.state.policy?.nonblocking?.enabled === true,
+    failureRecorded: snapshot.state.attempt.failure !== null,
+  });
+  return new NonGateTransitionFacts({
+    runId: snapshot.runId, specId: snapshot.specId, stepId: "final-regression", snapshotRevision: snapshot.revision,
+    producer: new NonGateProducerOwnership({ runId: snapshot.runId, specId: snapshot.specId, activityId: activity.id, stepId: "final-regression", attempt }),
+    target: new NonGateTargetBinding({ runId: snapshot.runId, specId: snapshot.specId, stepId: "final-regression", attempt }), currentAttempt: attempt,
+    catalogPublication: new NonGateCatalogPublication({ runId: snapshot.runId, specId: snapshot.specId, stepId: "final-regression", attemptId: attempt.id, sequence: attempt.sequence, producerActivityId: activity.id, artifactId: relativePath, fingerprint: catalogFingerprint }),
+    sourcePublication: new NonGateSourcePublication({ runId: snapshot.runId, specId: snapshot.specId, stepId: "final-regression", attemptId: attempt.id, sequence: attempt.sequence, producerActivityId: activity.id, artifactId: relativePath, fingerprint: catalogFingerprint }),
+    lineage: new NonGateLineage({ sourceAttempt: attempt, canonicalAttempt: attempt, sourceFingerprint: catalogFingerprint, canonicalFingerprint: catalogFingerprint }),
+    retry: new NonGateRetryMetrics(retry),
+    completion: new NonGateCompletionFacts({ completed: artifact.completed === true }), recoveryEvidence: new NonGateRecoveryEvidence(),
+    nonblocking: snapshot.state.policy?.nonblocking?.enabled === true, stepFacts,
+  });
 }

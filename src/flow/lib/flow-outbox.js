@@ -1,13 +1,10 @@
+import { requireString } from "./flow-value-assertions.js";
+import { FlowOutboxIdentity } from "./flow-outbox-identity.js";
+export { FlowOutboxIdentity } from "./flow-outbox-identity.js";
 const OUTBOX_STATUSES = new Set(["pending", "done", "failed"]);
 const GIT_OBJECT_ID = /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/;
 const FAILURE_CODE = /^[A-Z][A-Z0-9_]{2,199}$/;
 
-function requireString(value, field) {
-  if (typeof value !== "string" || value.trim() === "") {
-    throw new Error(`${field} must be a non-empty string`);
-  }
-  return value;
-}
 
 function requireTimestamp(value, field) {
   requireString(value, field);
@@ -49,44 +46,6 @@ export class PreSyncRebaseRecovery {
   static fromError(error) {
     if (error?.code !== "MERGE_PRE_SYNC_CONFLICT" || error?.data?.recovery == null) return null;
     return PreSyncRebaseRecovery.fromStored(error.data.recovery);
-  }
-}
-
-export class FlowOutboxIdentity {
-  constructor({ runId, taskId = null, stepId, operation, idempotencyKey = null }) {
-    this.runId = requireString(runId, "outbox runId");
-    if (taskId != null) requireString(taskId, "outbox taskId");
-    this.taskId = taskId;
-    this.stepId = requireString(stepId, "outbox stepId");
-    this.operation = requireString(operation, "outbox operation");
-    const segments = ["flow-outbox-v1", this.runId, this.taskId ?? "flow", this.stepId, this.operation];
-    const derivedKey = segments.map((segment) => encodeURIComponent(segment)).join(":");
-    if (idempotencyKey != null && idempotencyKey !== derivedKey) {
-      throw new Error("outbox idempotencyKey does not match its identity");
-    }
-    this.idempotencyKey = derivedKey;
-    Object.freeze(this);
-  }
-
-  equals(other) {
-    return other instanceof FlowOutboxIdentity && this.idempotencyKey === other.idempotencyKey;
-  }
-
-  toJSON() {
-    return {
-      idempotencyKey: this.idempotencyKey,
-      runId: this.runId,
-      taskId: this.taskId,
-      stepId: this.stepId,
-      operation: this.operation,
-    };
-  }
-
-  static fromStored(value) {
-    if (!value || typeof value !== "object" || Array.isArray(value)) {
-      throw new Error("stored outbox identity must be an object");
-    }
-    return new FlowOutboxIdentity(value);
   }
 }
 

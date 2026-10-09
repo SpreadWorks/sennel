@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 import path from "node:path";
-import { IMPL_GATE_RESULT_FILE } from "./test-artifacts.js";
+import { IMPL_GATE_RESULT_FILE } from "./test-artifact-paths.js";
 
 const TARGET_ARTIFACT_FILE_BY_STEP = Object.freeze({
   "test-review": "test-review.json",

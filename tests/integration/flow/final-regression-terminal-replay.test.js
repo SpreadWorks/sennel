@@ -23,20 +23,20 @@ import {
 const SPEC_ID = "001-test";
 const SCRIPT_PATH = "final-regression-fixture.sh";
 
-function setupCanonical(root, script) {
+async function setupCanonical(root, script) {
   writeFile(root, SCRIPT_PATH, script);
   initGitRepo(root);
   commitAll(root, "initial");
   const flowManager = makeFlowManager(root);
-  const fixture = new FlowAtStepFixture({
+  const fixture = await new FlowAtStepFixture({
     flowManager,
     specId: SPEC_ID,
     runId: "run-terminal-replay",
     request: "Verify terminal final-regression replay.",
     execution: { mode: "direct", baseBranch: "main", featureBranch: "main" },
-    specRecord: { goal: "Verify terminal final-regression replay.", requirements: [] },
+    specRecord: { goal: "Verify terminal final-regression replay.", requirements: [{ id: "R-terminal", desc: "Preserve terminal regression evidence.", testable: false }] },
     targetStep: "final-regression",
-  }).create();
+  }).createWithProducers();
   commitAll(root, "record canonical final-regression frontier");
   return {
     root,
@@ -81,7 +81,7 @@ describe("final-regression terminal replay guard", () => {
   it("does not execute the project command for a terminal failed Attempt replay", async () => {
     root = createTmpDir("final-regression-terminal-replay-");
     invocationFile = path.join(os.tmpdir(), `sennel-final-regression-${process.pid}-${Date.now()}.log`);
-    const ctx = setupCanonical(root, [
+    const ctx = await setupCanonical(root, [
       `printf '%s\\n' invoked >> ${JSON.stringify(invocationFile)}`,
       "exit 1",
       "",
@@ -129,7 +129,7 @@ describe("final-regression terminal replay guard", () => {
       "exit 1",
       "",
     ].join("\n");
-    const ctx = setupCanonical(root, script);
+    const ctx = await setupCanonical(root, script);
 
     const first = await executeAndApply(ctx);
     writeFile(root, SCRIPT_PATH, `# changed input\n${script}`);
@@ -151,7 +151,7 @@ describe("final-regression terminal replay guard", () => {
 
   it("keeps final-regression advisory identity stable across activation and reload", async () => {
     root = createTmpDir("final-regression-nonblocking-reload-");
-    const ctx = setupCanonical(root, "exit 1\n");
+    const ctx = await setupCanonical(root, "exit 1\n");
     await executeAndApply(ctx);
     activateNonBlockingPolicy({
       root,

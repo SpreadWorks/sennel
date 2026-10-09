@@ -49,6 +49,10 @@ import { attachCanonicalCommandResultArtifact } from "../../../src/flow/lib/cano
 import RunTestExecuteCommand from "../../../src/flow/lib/run-test-execute.js";
 import RunTestResultReviewCommand from "../../../src/flow/lib/run-test-result-review.js";
 import { FLOW_COMMANDS } from "../../../src/flow/registry.js";
+import { acceptanceStepRegistration } from "../../../src/flow/engine/composition/acceptance.js";
+import { prepareFinalRegressionServiceArguments } from "../../../src/flow/engine/composition/acceptance-finalization.js";
+import { FinalRegressionStep } from "../../../src/flow/steps/acceptance/final-regression.js";
+import { FinalRegressionService } from "../../../src/flow/services/final-regression-service.js";
 
 const fixtureRoots = [];
 
@@ -572,9 +576,15 @@ describe("definition-owned non-Gate transition boundary", () => {
     assert.match(nextAction, /resolveCanonicalFinalRegressionTransition/, "get-next-action must project final-regression from canonical Definition facts");
     assert.match(nextAction, /selectedNonGateUserAction/, "get-next-action must project Definition-selected user Actions rather than invent them");
 
-    const registry = sources.find(({ relative }) => relative.endsWith("registry.js")).source;
-    assert.match(registry, /resolveCanonicalFinalRegressionTransition/, "registry must re-read final-regression Definition facts before applying a plan");
-    assert.match(registry, /applyFinalRegressionTransition/, "registry must apply the sealed final-regression plan");
+    const post = FLOW_COMMANDS.run["final-regression"].post.toString();
+    assert.match(post, /prepareFinalRegressionPublication/, "registry must acquire current publication facts outside the Step");
+    assert.match(post, /executeFinalRegressionInput/, "registry must execute the registered final-regression owner");
+    assert.doesNotMatch(post, /resolveCanonicalFinalRegressionTransition|applyFinalRegressionTransition/,
+      "registry must not duplicate the Step/Definition settlement judgment");
+    const registration = acceptanceStepRegistration("final-regression");
+    assert.equal(registration.StepClass, FinalRegressionStep);
+    assert.equal(registration.ServiceClass, FinalRegressionService);
+    assert.equal(registration.prepareServiceArguments, prepareFinalRegressionServiceArguments);
     const finalRunner = sources.find(({ relative }) => relative.endsWith("run-final-regression.js")).source;
     assert.match(finalRunner, /selectedNonGateUserAction/, "direct final-regression admission must require the selected typed user Action");
   });

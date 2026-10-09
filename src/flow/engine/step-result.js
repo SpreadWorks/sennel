@@ -1,3 +1,7 @@
+import { RetroResultEvidence } from "../lib/retro-values.js";
+import { AcceptanceReviewResultEvidence, AcceptanceDecisionResultEvidence } from "../steps/acceptance/acceptance-review-values.js";
+import { FinalRegressionResultEvidence } from "../steps/acceptance/final-regression-result-evidence.js";
+import { ReportResultEvidence } from "../steps/acceptance/report-values.js";
 import { ImplementationSourceEvidence } from "../lib/source-effect-values.js";
 import { TaskStageResultEvidence } from "../lib/task-stage-result-values.js";
 import { TaskHostFilterAuthority } from "../lib/task-review-host-filter-values.js";
@@ -145,10 +149,10 @@ export function stepResultDigest(result) {
     .digest("hex");
 }
 
-function declareResult(ResultClass, { stepId, kind, type, implementation = false }, operands = null) {
+function declareResult(ResultClass, { stepId, kind, type, implementation = false, acceptance = false }, operands = null) {
   if (typeof stepId !== "string" || stepId === "") throw new TypeError("StepResult Step is required");
   if (registryByKind.has(kind)) throw new Error(`duplicate Step Result kind: ${kind}`);
-  const entry = Object.freeze({ ResultClass, stepId, kind, type, ...(implementation ? { implementation: true } : {}), ...(operands === null ? {} : { operands: Object.freeze({ ...operands }) }) });
+  const entry = Object.freeze({ ResultClass, stepId, kind, type, ...(implementation ? { implementation: true } : {}), ...(acceptance ? { acceptance: true } : {}), ...(operands === null ? {} : { operands: Object.freeze({ ...operands }) }) });
   registryByKind.set(kind, entry);
   const entries = registryByStep.get(stepId) ?? [];
   entries.push(entry);
@@ -799,6 +803,30 @@ export const ImplGateEvidenceRefreshResult = operandResultClass("ImplGateEvidenc
 export const ImplGateSemanticFailureResult = operandResultClass("ImplGateSemanticFailureResult", { stepId: "impl-gate", kind: "impl-gate-semantic-failure", type: "branch-required", implementation: true }, { evidence: ImplementationGateResultEvidence }, null, validateImplementationResult);
 export const ImplGateAwaitingDecisionResult = operandResultClass("ImplGateAwaitingDecisionResult", { stepId: "impl-gate", kind: "impl-gate-awaiting-decision", type: "user-input-required", implementation: true }, { evidence: ImplementationGateResultEvidence }, null, validateImplementationResult);
 
+function validateAcceptanceResult(definition, values) {
+  if (values.evidence.stepId !== definition.stepId) throw new TypeError("Acceptance Result evidence belongs to another responsibility");
+  values.evidence.assertResultKind(definition.kind);
+}
+
+export const RetroAggregatedResult = operandResultClass("RetroAggregatedResult", { stepId: "retro", kind: "retro-aggregated", type: "completed", acceptance: true }, { evidence: RetroResultEvidence }, null, validateAcceptanceResult);
+export const RetroIncompleteResult = operandResultClass("RetroIncompleteResult", { stepId: "retro", kind: "retro-incomplete", type: "branch-required", acceptance: true }, { evidence: RetroResultEvidence }, null, validateAcceptanceResult);
+export const RetroEvidenceRefreshResult = operandResultClass("RetroEvidenceRefreshResult", { stepId: "retro", kind: "retro-evidence-refresh", type: "loop-required", acceptance: true }, { evidence: RetroResultEvidence }, null, validateAcceptanceResult);
+export const AcceptanceReviewExecutionRequiredResult = operandResultClass("AcceptanceReviewExecutionRequiredResult", { stepId: "acceptance-review", kind: "acceptance-review-execution-required", type: "loop-required", acceptance: true }, { evidence: AcceptanceReviewResultEvidence }, null, validateAcceptanceResult);
+export const AcceptanceReviewPassedResult = operandResultClass("AcceptanceReviewPassedResult", { stepId: "acceptance-review", kind: "acceptance-review-passed", type: "completed", acceptance: true }, { evidence: AcceptanceReviewResultEvidence }, null, validateAcceptanceResult);
+export const AcceptanceReviewRepairRequiredResult = operandResultClass("AcceptanceReviewRepairRequiredResult", { stepId: "acceptance-review", kind: "acceptance-review-repair-required", type: "loop-required", acceptance: true }, { evidence: AcceptanceReviewResultEvidence }, null, validateAcceptanceResult);
+export const AcceptanceReviewDecisionRequiredResult = operandResultClass("AcceptanceReviewDecisionRequiredResult", { stepId: "acceptance-review", kind: "acceptance-review-decision-required", type: "branch-required", acceptance: true }, { evidence: AcceptanceReviewResultEvidence }, null, validateAcceptanceResult);
+export const AcceptanceReviewMechanicallyBlockedResult = operandResultClass("AcceptanceReviewMechanicallyBlockedResult", { stepId: "acceptance-review", kind: "acceptance-review-mechanically-blocked", type: "branch-required", acceptance: true }, { evidence: AcceptanceReviewResultEvidence }, null, validateAcceptanceResult);
+export const AcceptanceDecisionAwaitingChoiceResult = operandResultClass("AcceptanceDecisionAwaitingChoiceResult", { stepId: "acceptance-decision", kind: "acceptance-decision-awaiting-choice", type: "user-input-required", acceptance: true }, { evidence: AcceptanceDecisionResultEvidence }, null, validateAcceptanceResult);
+export const AcceptanceDecisionRiskAcceptedResult = operandResultClass("AcceptanceDecisionRiskAcceptedResult", { stepId: "acceptance-decision", kind: "acceptance-decision-risk-accepted", type: "completed", acceptance: true }, { evidence: AcceptanceDecisionResultEvidence }, null, validateAcceptanceResult);
+export const AcceptanceDecisionAbortedResult = operandResultClass("AcceptanceDecisionAbortedResult", { stepId: "acceptance-decision", kind: "acceptance-decision-aborted", type: "completed", acceptance: true }, { evidence: AcceptanceDecisionResultEvidence }, null, validateAcceptanceResult);
+export const FinalRegressionExecutionRequiredResult = operandResultClass("FinalRegressionExecutionRequiredResult", { stepId: "final-regression", kind: "final-regression-execution-required", type: "loop-required", acceptance: true }, { evidence: FinalRegressionResultEvidence }, null, validateAcceptanceResult);
+export const FinalRegressionPassedResult = operandResultClass("FinalRegressionPassedResult", { stepId: "final-regression", kind: "final-regression-passed", type: "completed", acceptance: true }, { evidence: FinalRegressionResultEvidence }, null, validateAcceptanceResult);
+export const FinalRegressionPolicySkippedResult = operandResultClass("FinalRegressionPolicySkippedResult", { stepId: "final-regression", kind: "final-regression-policy-skipped", type: "completed", acceptance: true }, { evidence: FinalRegressionResultEvidence }, null, validateAcceptanceResult);
+export const FinalRegressionFailedResult = operandResultClass("FinalRegressionFailedResult", { stepId: "final-regression", kind: "final-regression-failed", type: "branch-required", acceptance: true }, { evidence: FinalRegressionResultEvidence }, null, validateAcceptanceResult);
+export const FinalRegressionFailureAcceptedResult = operandResultClass("FinalRegressionFailureAcceptedResult", { stepId: "final-regression", kind: "final-regression-failure-accepted", type: "completed", acceptance: true }, { evidence: FinalRegressionResultEvidence }, null, validateAcceptanceResult);
+export const ReportDeliveryRequiredResult = operandResultClass("ReportDeliveryRequiredResult", { stepId: "report", kind: "report-delivery-required", type: "loop-required", acceptance: true }, { evidence: ReportResultEvidence }, null, validateAcceptanceResult);
+export const ReportGeneratedResult = operandResultClass("ReportGeneratedResult", { stepId: "report", kind: "report-generated", type: "completed", acceptance: true }, { evidence: ReportResultEvidence }, null, validateAcceptanceResult);
+
 const errorDefinitionByStep = new Map([...registryByStep.keys()].map((stepId) => {
   const operands = stepId === "approval"
     ? { evidence: ApprovalResultEvidence }
@@ -808,6 +836,7 @@ const errorDefinitionByStep = new Map([...registryByStep.keys()].map((stepId) =>
     kind: `${stepId}-error`,
     type: STEP_RESULT_TYPE.ERROR,
     ...(registryByStep.get(stepId).some((entry) => entry.implementation) ? { implementation: true } : {}),
+    ...(registryByStep.get(stepId).some((entry) => entry.acceptance) ? { acceptance: true } : {}),
     ...(operands === null ? {} : { operands: Object.freeze({ ...operands }) }),
   })];
 }));
@@ -882,4 +911,9 @@ export function stepResultKinds(stepId) {
 /** Recognize the registered implementation contract without a second phase registry. */
 export function hasImplementationStepContract(stepId) {
   return (registryByStep.get(stepId) ?? []).some((entry) => entry.implementation === true);
+}
+
+/** Recognize the acceptance contract from its sole Result registry. */
+export function hasAcceptanceStepContract(stepId) {
+  return (registryByStep.get(stepId) ?? []).some((entry) => entry.acceptance === true);
 }

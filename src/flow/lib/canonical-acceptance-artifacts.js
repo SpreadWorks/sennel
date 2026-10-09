@@ -32,10 +32,16 @@ import { collectUntrackedDiff } from "./run-gate.js";
 import { matchUpgradeRequiredSourcePaths, validateCanonicalUpgradeEvidence } from "./test-artifacts.js";
 import { ReviewFindingCycle } from "./finding-disposition-policy.js";
 import { TaskReviewConvergenceEvidence } from "./review-recurrence.js";
+import { NonGateCatalogPublication, NonGateSourcePublication, NonGateTargetBinding } from "./non-gate-transition.js";
+import { readProspectiveCommandArtifact } from "./prospective-command-artifact.js";
+import { attachedCanonicalCommandResultArtifact } from "./canonical-command-result.js";
+import { AcceptanceRepairFindingSet } from "./acceptance-review-artifacts.js";
+import { AcceptanceReviewResultEvidence, AcceptanceDecisionResultEvidence, AcceptanceDecisionRequest } from "../steps/acceptance/acceptance-review-values.js";
+import { StepAdmissionRefusal } from "./step-admission-refusal.js";
+import { findStepById } from "./step-tree.js";
 
 const REVIEW_NODE_ID = "acceptance-review";
 const DECISION_NODE_ID = "acceptance-decision";
-const DECISION_CHOICES = new Set(["accept_risk_and_continue", "abort"]);
 const MAX_CANONICAL_ACCEPTANCE_DIFF_CHARS = 900_000;
 const REQUIRED_EVIDENCE = Object.freeze([
   Object.freeze({ logicalKey: "test.execute", alias: "test-execute-result.json" }),
@@ -261,9 +267,15 @@ export class CanonicalAcceptanceArtifactStore {
     return this.readDocument("issue.log", { optional: true })?.value ?? Object.freeze({ entries: [] });
   }
 
-  fingerprint({ diff }) {
+  fingerprint({ diff, evidence }) {
     const catalog = this.flowManager.artifactCatalog(this.specId);
-    const descriptors = catalog.artifacts.map((entry) => entry.toJSON()).sort((left, right) => (
+    // Lifecycle checkpoints update these root authorities. Their complete
+    // journal/state hashes are execution outputs; relevant Task handoffs are
+    // already acquired into the evidence object below.
+    const descriptors = catalog.artifacts.filter((entry) => !["flow.state", "flow.activities", "artifact.catalog",
+      "acceptance.review", "acceptance.review.evidence",
+      "acceptance.decision", "final.regression", "final.regression.acceptance", "report"].includes(entry.logicalKey))
+      .map((entry) => entry.toJSON()).sort((left, right) => (
       left.relativePath.localeCompare(right.relativePath)
     ));
     return digest({
@@ -272,6 +284,7 @@ export class CanonicalAcceptanceArtifactStore {
       runId: this.state.runId,
       request: this.state.request,
       diff,
+      evidence,
       descriptors,
     });
   }
@@ -332,6 +345,17 @@ export class CanonicalAcceptanceArtifactStore {
 
   async buildContext({ executionRoot }) {
     const root = requiredText(executionRoot, "canonical acceptance executionRoot");
+    const sourceCatalogHash = this.flowManager.readCanonicalTransitionView({ specId: this.specId,
+      read: (view) => {
+        const current = view.state;
+        if (["flowId", "flowVersionId", "runId", "specId", "request"].some((field) => this.state[field] !== current[field])
+          || this.state.baseBranch !== current.execution.baseBranch
+          || this.state.currentNodeId !== (current.current?.at(-1) ?? null)
+          || current.attempt !== null && findStepById(this.state.steps, this.state.currentNodeId)?.attemptSequence !== current.attempt.sequence) {
+          throw new StepAdmissionRefusal("Acceptance context requires its current canonical source state");
+        }
+        return view.catalog.hash;
+      } });
     const spec = this.spec();
     const requirements = Array.isArray(spec.requirements) ? structuredClone(spec.requirements) : [];
     const requirementIds = requirements.map((entry) => entry?.id).filter((id) => typeof id === "string" && id !== "");
@@ -388,32 +412,38 @@ export class CanonicalAcceptanceArtifactStore {
       "impl-gate-result.json": implGate,
       "retro.json": inputs.retro,
     };
+    const evidence = Object.freeze({
+      originalRequest: this.state.request,
+      requirements,
+      diff,
+      repairEvidence: repair === null
+        ? { kind: "no-repair", ref: "acceptance:no-repair", artifact: { reason: "No implementation repair was required." } }
+        : { kind: "repair-audit", ref: "impl-repair.json", artifact: repair },
+      upgradeEvidence: {
+        required: upgradeValidation.currentRequiredPaths.length > 0,
+        requiredPaths: upgradeValidation.currentRequiredPaths,
+        valid: upgradeValidation.ok,
+        ref: upgrade === null ? null : "upgrade-result.json",
+        artifact: upgrade,
+        invalidReason: upgradeValidation.ok ? null : upgradeValidation.reason,
+      },
+      testEvidence: new AcceptanceTestEvidenceProjection(evidenceArtifacts).toJSON(),
+      reviewEvidence: inputs["impl.review"]?.canonicalEvidence ?? null,
+      taskReviewHandoffs: taskReviewHandoffs.map((handoff) => handoff.toJSON()),
+      deferredFindings: deferred.findings,
+      deferredFindingEvidence: deferred.evidence,
+    });
+    const fingerprint = Object.freeze({ hash: this.fingerprint({ diff, evidence }) });
+    if (this.flowManager.artifactCatalog(this.specId).hash !== sourceCatalogHash) {
+      throw new StepAdmissionRefusal("Acceptance source catalog changed while acquiring evidence");
+    }
     return Object.freeze({
-      fingerprint: Object.freeze({ hash: this.fingerprint({ diff }) }),
+      fingerprint,
+      sourceCatalogHash,
       requirementIds: Object.freeze(requirementIds),
       mechanicalBlockers: Object.freeze(blockers),
       deferredFindings: deferred.findings,
-      evidence: Object.freeze({
-        originalRequest: this.state.request,
-        requirements,
-        diff,
-        repairEvidence: repair === null
-          ? { kind: "no-repair", ref: "acceptance:no-repair", artifact: { reason: "No implementation repair was required." } }
-          : { kind: "repair-audit", ref: "impl-repair.json", artifact: repair },
-        upgradeEvidence: {
-          required: upgradeValidation.currentRequiredPaths.length > 0,
-          requiredPaths: upgradeValidation.currentRequiredPaths,
-          valid: upgradeValidation.ok,
-          ref: upgrade === null ? null : "upgrade-result.json",
-          artifact: upgrade,
-          invalidReason: upgradeValidation.ok ? null : upgradeValidation.reason,
-        },
-        testEvidence: new AcceptanceTestEvidenceProjection(evidenceArtifacts).toJSON(),
-        reviewEvidence: inputs["impl.review"]?.canonicalEvidence ?? null,
-        taskReviewHandoffs: taskReviewHandoffs.map((handoff) => handoff.toJSON()),
-        deferredFindings: deferred.findings,
-        deferredFindingEvidence: deferred.evidence,
-      }),
+      evidence,
     });
   }
 }
@@ -464,7 +494,6 @@ export class CanonicalAcceptanceDecision {
     this.flowManager = flowManager;
     this.state = canonicalState(state);
     this.choice = requiredText(choice, "acceptance decision choice");
-    if (!DECISION_CHOICES.has(this.choice)) throw new Error(`invalid acceptance decision choice: ${this.choice}`);
     if (this.state.currentNodeId !== DECISION_NODE_ID) {
       throw new Error("canonical acceptance decision requires its active Attempt");
     }
@@ -480,34 +509,35 @@ export class CanonicalAcceptanceDecision {
     const requirements = Array.isArray(spec.requirements) ? spec.requirements : [];
     const requirementIds = requirements.map((entry) => entry?.id).filter((id) => typeof id === "string" && id !== "");
     const acceptance = validateAcceptanceReviewArtifact(review.payload, { requirementIds });
+    const request = new AcceptanceDecisionRequest({ reviewDigest: review.descriptor.hash, choice: this.choice });
     if (acceptance.verdict !== "user_decision_required") {
       throw new Error(`acceptance-decision is not available for verdict: ${acceptance.verdict}`);
     }
     const decidedAt = new Date().toISOString();
-    const userDecision = Object.freeze({ choice: this.choice, decidedAt });
+    const userDecision = Object.freeze({ choice: request.choice, decidedAt });
     const result = {
       result: "ok",
       verdict: acceptance.verdict,
-      choice: this.choice,
+      choice: request.choice,
       userDecision,
     };
     attachCanonicalCommandResultArtifact(result, new CanonicalCommandResultArtifact({
       logicalKey: "acceptance.decision",
       payload: {
         version: 1,
-        choice: this.choice,
+        choice: request.choice,
         decidedAt,
         acceptanceReviewAttempt: review.attempt,
-        acceptanceReviewDigest: review.descriptor.hash,
+        acceptanceReviewDigest: request.reviewDigest,
         repairFingerprint: acceptance.repairFingerprint,
       },
     }));
-    if (this.choice === "accept_risk_and_continue") {
+    if (request.choice === "accept_risk_and_continue") {
       const entry = decisionEntry({
         state: this.state,
         reviewAttempt: review.attempt,
         review: acceptance,
-        choice: this.choice,
+        choice: request.choice,
         decidedAt,
       });
       const nextLog = appendIssueLog(this.store.issueLog(), entry);
@@ -524,4 +554,68 @@ export class CanonicalAcceptanceDecision {
 export async function canonicalAcceptanceDiff({ flowManager, state, executionRoot } = {}) {
   const store = new CanonicalAcceptanceArtifactStore({ flowManager, state });
   return canonicalDiff({ root: executionRoot, state: store.state, location: store.location });
+}
+
+function acceptanceIdentity(state, stepId) {
+  return new NonGateTargetBinding({ runId: state.runId, specId: state.specId, stepId, attempt: state.attempt });
+}
+
+function acceptancePublicationIdentity(state, binding, published, Publication = NonGateCatalogPublication) {
+  return new Publication({ runId: state.runId, specId: state.specId, stepId: binding.stepId,
+    attemptId: binding.attempt.id, sequence: binding.attempt.sequence, producerActivityId: published.descriptor.activityId,
+    artifactId: published.relativePath, fingerprint: published.descriptor.hash });
+}
+
+/** Exact prospective Review bytes are validated before injection into the pure Step. */
+export function readAcceptanceReviewResultEvidence({ state, context, binding, publication = null,
+  commandResult = null, executionGeneration = 0 }) {
+  const decision = state.findNode("acceptance-decision");
+  const frontier = { decisionAttemptSequence: decision.attemptSequence, decisionStatus: decision.status };
+  if (publication === null) return new AcceptanceReviewResultEvidence({ identity: acceptanceIdentity(state, "acceptance-review"),
+    fingerprint: context.fingerprint.hash, requirementIds: context.requirementIds, executionGeneration, ...frontier });
+  const attached = attachedCanonicalCommandResultArtifact(commandResult);
+  if (attached?.logicalKey !== "acceptance.review") throw new TypeError("Acceptance Review requires its canonical artifact");
+  const published = readProspectiveCommandArtifact(publication, { logicalKey: "acceptance.review" });
+  const history = CanonicalCommandAttemptArtifactHistory.fromBytes({ logicalKey: "acceptance.review", bytes: published.bytes });
+  const artifact = validateAcceptanceReviewArtifact(history.current.payload, { requirementIds: context.requirementIds });
+  if (history.current.attempt !== binding.attempt.sequence || stableJson(artifact) !== stableJson(attached.payload)
+    || artifact.repairFingerprint !== context.fingerprint.hash) throw new TypeError("Acceptance Review publication differs from acquired evidence");
+  const producer = acceptancePublicationIdentity(state, binding, published);
+  return new AcceptanceReviewResultEvidence({ identity: acceptanceIdentity(state, "acceptance-review"), publication: producer,
+    fingerprint: artifact.repairFingerprint, requirementIds: context.requirementIds, reviewDigest: producer.fingerprint,
+    reviewAttempt: history.current.attempt, verdict: artifact.verdict, findingIds: new AcceptanceRepairFindingSet(artifact).toJSON(),
+    executionGeneration, ...frontier });
+}
+
+/** Acquire the current Review and exact optional explicit choice publication. */
+export function readAcceptanceDecisionResultEvidence({ flowManager, state, binding, publication = null, commandResult = null }) {
+  const projected = flowManager.loadReadOnly(state.specId);
+  const store = new CanonicalAcceptanceArtifactStore({ flowManager, state: projected, nodeId: DECISION_NODE_ID });
+  const read = store.readCurrentAttempt("acceptance.review");
+  const requirementIds = store.spec().requirements.map((requirement) => requirement.id);
+  const review = validateAcceptanceReviewArtifact(read.payload, { requirementIds });
+  if (review.verdict !== "user_decision_required") throw new TypeError("Acceptance decision requires unresolved Review risk");
+  const source = flowManager.activityLedger(state.specId).find((activity) => activity.id === read.descriptor.activityId);
+  if (source?.nodeId !== REVIEW_NODE_ID || source.sequence !== read.attempt) throw new TypeError("Acceptance Review source has no exact producer Activity");
+  const sourcePublication = new NonGateSourcePublication({ runId: state.runId, specId: state.specId, stepId: REVIEW_NODE_ID,
+    attemptId: source.attemptId, sequence: source.sequence, producerActivityId: read.descriptor.activityId,
+    artifactId: read.relativePath, fingerprint: read.descriptor.hash });
+  let choice = null;
+  let producer = null;
+  if (publication !== null) {
+    const attached = attachedCanonicalCommandResultArtifact(commandResult);
+    if (attached?.logicalKey !== "acceptance.decision") throw new TypeError("Acceptance decision requires its canonical artifact");
+    const published = readProspectiveCommandArtifact(publication, { logicalKey: "acceptance.decision" });
+    const history = CanonicalCommandAttemptArtifactHistory.fromBytes({ logicalKey: "acceptance.decision", bytes: published.bytes });
+    const record = history.current.payload;
+    const request = new AcceptanceDecisionRequest({ reviewDigest: sourcePublication.fingerprint,
+      choice: record.choice, record: { reviewDigest: record.acceptanceReviewDigest, choice: record.choice } });
+    if (history.current.attempt !== binding.attempt.sequence || stableJson(record) !== stableJson(attached.payload)
+      || record.acceptanceReviewAttempt !== read.attempt
+      || record.repairFingerprint !== review.repairFingerprint) throw new TypeError("Acceptance choice differs from its current Review lineage");
+    choice = request.choice;
+    producer = acceptancePublicationIdentity(state, binding, published);
+  }
+  return new AcceptanceDecisionResultEvidence({ identity: acceptanceIdentity(state, DECISION_NODE_ID), sourcePublication,
+    reviewAttempt: read.attempt, repairFingerprint: review.repairFingerprint, choice, publication: producer });
 }

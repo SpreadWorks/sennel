@@ -1,20 +1,12 @@
 /**
- * Read-only fact constructors for Definition-owned approval and acceptance
- * routes.  They intentionally carry evidence identities, not route labels;
- * `definition.js` is the only policy interpreter.
+ * Read-only approval facts and canonical Acceptance decision request binding.
  */
-import crypto from "node:crypto";
-
 import {
-  AcceptanceDecisionRouteFacts,
-  AcceptanceReviewRouteFacts,
   ApprovalRouteFacts,
   DefinitionRouteTarget,
 } from "../definition.js";
-
-function digest(value) {
-  return crypto.createHash("sha256").update(JSON.stringify(value)).digest("hex");
-}
+import { AcceptanceDecisionRequest } from "../steps/acceptance/acceptance-review-values.js";
+import { validateAcceptanceReviewArtifact } from "./acceptance-review-artifacts.js";
 
 function target(state, stepId) {
   const attempt = state?.attempt;
@@ -37,10 +29,6 @@ function requirementIds(spec) {
   return ids;
 }
 
-function findingDispositions(review) {
-  return (review?.deferredFindings ?? []).map((entry) => `${entry.findingId}:${entry.finalDisposition}`);
-}
-
 export function approvalRouteFacts({ state, specDescriptor, spec, requestedApproval = false, targetBinding = null } = {}) {
   return new ApprovalRouteFacts({
     target: targetBinding ?? target(state, "approval"),
@@ -51,24 +39,16 @@ export function approvalRouteFacts({ state, specDescriptor, spec, requestedAppro
   });
 }
 
-export function acceptanceReviewRouteFacts({ state, artifact, completed = true } = {}) {
-  return new AcceptanceReviewRouteFacts({
-    target: target(state, "acceptance-review"),
-    reviewArtifactDigest: digest(artifact),
-    requirementIds: artifact?.requirementJudgments?.map((entry) => entry.requirementId) ?? [],
-    findingDispositions: findingDispositions(artifact),
-    verdict: artifact?.verdict,
-    completed,
-  });
-}
-
+/** Validate a saved decision request; this boundary grants no route authority. */
 export function acceptanceDecisionRouteFacts({ state, review, reviewDescriptor, spec, choice = null, decisionRecord = null } = {}) {
-  return new AcceptanceDecisionRouteFacts({
-    target: target(state, "acceptance-decision"),
-    reviewArtifactDigest: reviewDescriptor?.hash,
-    requirementIds: requirementIds(spec),
-    findingDispositions: findingDispositions(review),
+  target(state, "acceptance-decision");
+  validateAcceptanceReviewArtifact(review, { requirementIds: requirementIds(spec) });
+  return new AcceptanceDecisionRequest({
+    reviewDigest: reviewDescriptor?.hash,
     choice,
-    decisionRecord,
+    record: decisionRecord === null ? null : {
+      reviewDigest: decisionRecord.reviewArtifactDigest,
+      choice: decisionRecord.choice,
+    },
   });
 }

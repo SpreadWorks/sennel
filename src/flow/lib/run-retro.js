@@ -15,65 +15,11 @@ import {
   isCanonicalFlowState,
 } from "./canonical-test-artifacts.js";
 import { attachCanonicalCommandResultPublications } from "./canonical-command-result.js";
-import { resolveRetroStaleEvidenceRecovery } from "../definition.js";
+import { RetroAggregate } from "./retro-values.js";
+import { acceptanceStepRegistration, prepareRetroInput } from "../engine/composition/acceptance.js";
 import { readCurrentRetroStaleEvidenceRecoveryFacts } from "./retro-stale-evidence-transition-facts.js";
 
-function aggregate(requirements, summary) {
-  const summaryById = new Map();
-  for (const entry of summary || []) {
-    if (entry?.id) summaryById.set(entry.id, entry);
-  }
-
-  const testableReqs = requirements.filter((r) => r.testable !== false);
-  const naCount = requirements.length - testableReqs.length;
-
-  const reqs = testableReqs.map((r) => {
-    const entry = summaryById.get(r.id);
-    if (!entry) {
-      return { desc: r.desc, status: "not_done", note: "missing from test-execute-result.json summary[]" };
-    }
-    if (entry.result === "pass") {
-      return { desc: r.desc, status: "done", note: entry.evidence?.test_name || "" };
-    }
-    if (entry.result === "not_applicable") {
-      return { desc: r.desc, status: "not_applicable", note: entry.reason || "no_tests_declared" };
-    }
-    if (entry.result === "deferred") {
-      return {
-        desc: r.desc,
-        status: "deferred",
-        note: `Requirement test work deferred by ${entry.deferred_receipt.sourceArtifact}`,
-      };
-    }
-    return { desc: r.desc, status: "not_done", note: entry.error || entry.evidence?.test_name || "" };
-  });
-
-  const total = reqs.length;
-  const done = reqs.filter((x) => x.status === "done").length;
-  const notApplicable = reqs.filter((x) => x.status === "not_applicable").length;
-  const deferred = reqs.filter((x) => x.status === "deferred").length;
-  const notDone = total - done - notApplicable - deferred;
-  const rate = total > 0 ? done / total : 0;
-
-  return {
-    requirements: reqs,
-    unplanned: [],
-    summary: {
-      total,
-      done,
-      partial: 0,
-      not_done: notDone,
-      not_applicable_count: notApplicable,
-      deferred_count: deferred,
-      na_count: naCount,
-      not_testable_count: naCount,
-      rate: Math.round(rate * 100) / 100,
-      notes: "aggregated from test-execute-result.json",
-    },
-  };
-}
-
-function executeCanonicalRetro(ctx) {
+async function executeCanonicalRetro(ctx) {
   const store = new CanonicalTestArtifactStore({ flowManager: ctx.flowManager, state: ctx.flowState });
   const reviewArtifact = store.readCurrentAttempt({
     logicalKey: "test.result.review",
@@ -120,11 +66,18 @@ function executeCanonicalRetro(ctx) {
     currentFingerprint: currentFingerprint.hash,
   });
   if (staleFacts !== null) {
-    const decision = resolveRetroStaleEvidenceRecovery(staleFacts);
-    ctx.flowManager.applyRetroStaleEvidenceRecoveryDecision({
-      specId: ctx.flowState.specId,
-      decision,
-    });
+    const commandResult = { result: "recovered", changed: [], artifacts: {
+      staleArtifacts: [...staleFacts.artifactNames], evidenceRefresh: { recovered: true,
+        previousFingerprint: staleFacts.previousFingerprint, currentFingerprint: staleFacts.currentFingerprint,
+        invalidatedArtifacts: [], invalidations: [], activeStep: "test-execute" } } };
+    if (ctx.dryRun === true) {
+      previewRetroInput({ ctx, stepId: "retro" });
+      return { ...commandResult, result: "dry-run" };
+    }
+    const state = ctx.flowManager.canonicalState(ctx.flowState.specId);
+    const preparation = prepareRetroInput({ flowManager: ctx.flowManager, state, commandResult,
+      fingerprint: currentFingerprint.hash, staleFacts });
+    await executeRetroInput({ ctx, flowManager: ctx.flowManager, stepId: "retro", binding: preparation.binding, preparation, commandResult });
     return {
       result: "recovered",
       changed: [],
@@ -156,18 +109,20 @@ function executeCanonicalRetro(ctx) {
   }
   const retro = {
     spec: store.location.relativeSpecFile,
+    repairFingerprint: currentFingerprint.hash,
     date: new Date().toISOString(),
     mode: "attempt-history",
-    ...aggregate(requirements, result.summary),
+    ...new RetroAggregate(requirements, result.summary).toJSON(),
   };
   const retroPath = store.location.relativeArtifact("retro");
   if (ctx.dryRun === true) {
+    previewRetroInput({ ctx, stepId: "retro" });
     return {
       result: "dry-run",
       artifacts: { spec: store.location.relativeSpecFile, retroPath, summary: retro.summary, requirements: retro.requirements },
     };
   }
-  return attachCanonicalCommandResultPublications({
+  const commandResult = attachCanonicalCommandResultPublications({
     result: "ok",
     changed: [retroPath],
     artifacts: {
@@ -178,6 +133,23 @@ function executeCanonicalRetro(ctx) {
       mode: "attempt-history",
     },
   }, [{ logicalKey: "retro", payload: retro }]);
+  const preparation = prepareRetroInput({ flowManager: ctx.flowManager,
+    state: ctx.flowManager.canonicalState(ctx.flowState.specId), commandResult, fingerprint: currentFingerprint.hash });
+  await executeRetroInput({ ctx, flowManager: ctx.flowManager, stepId: "retro", binding: preparation.binding, preparation, commandResult });
+  return commandResult;
+}
+
+export function executeRetroInput(input) {
+  const registration = acceptanceStepRegistration(input.stepId);
+  if (registration === null) throw new TypeError("Retro execution requires its production registration");
+  const selection = registration.executionContract.select({ ...input, registration });
+  return registration.executionContract.execute(selection, { ...input, registration });
+}
+export function previewRetroInput(input) {
+  const registration = acceptanceStepRegistration(input.stepId);
+  if (registration === null) throw new TypeError("Retro preview requires its production registration");
+  const selection = registration.executionContract.select({ ...input, registration });
+  return registration.executionContract.project(selection, { ...input, registration });
 }
 
 export class RunRetroCommand extends FlowCommand {

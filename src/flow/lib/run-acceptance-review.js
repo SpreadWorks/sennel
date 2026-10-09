@@ -1,6 +1,7 @@
 import { CURRENT_FLOW_SCHEMA_REVISION } from "../../lib/flow-schema-revision.js";
 import { repairJson } from "../../lib/json-parse.js";
 import { createHash } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import { container } from "../../lib/container.js";
 import { PromptBuilder } from "../../lib/prompt-builder.js";
 import {
@@ -35,6 +36,10 @@ import {
   CanonicalAcceptanceArtifactStore,
   CanonicalAcceptanceReviewPromotion,
 } from "./canonical-acceptance-artifacts.js";
+import { acceptanceStepRegistration, initializeAcceptanceDecisionAwait } from "../engine/composition/acceptance.js";
+import { prepareAcceptanceReviewInput } from "../engine/composition/acceptance-review-decision.js";
+import { DraftWorkerExecutionBinding, DraftWorkerExecutionClaim, DraftStepExecutionLifecycle } from "../definition.js";
+import { StepAdmissionRefusal } from "./step-admission-refusal.js";
 
 export const MAX_ACCEPTANCE_REQUEST_CHARS = 120_000;
 export const MAX_ACCEPTANCE_RESPONSE_CHARS = 120_000;
@@ -290,7 +295,7 @@ export class AcceptanceResponseBinding {
           repairRefs: [repairRef],
           testRefs: judgment.status === "notVerifiable"
             ? []
-            : [`test-execute-result.json#${judgment.requirementId}`, "test-result-review.json"],
+            : this.evidenceBindings.testReferences([judgment.requirementId]),
         };
       }),
       deferredFindingDispositions: this.bindDeferredFindingDispositions(deferredFindingDispositions),
@@ -302,20 +307,7 @@ export class AcceptanceResponseBinding {
     return judgments.map((judgment) => {
         const finding = this.deferredById.get(judgment.findingId);
         if (!finding) return judgment;
-        const sourceRef = `${finding.sourceArtifact}#${finding.sourceFindingId}`;
-        const allowedRefs = new Set([
-          sourceRef,
-          ...this.evidenceBindings.diffRefs,
-          ...this.evidenceBindings.repairRefs,
-          ...this.evidenceBindings.testRefs,
-        ]);
-        return {
-          ...judgment,
-          evidenceRefs: [
-            sourceRef,
-            ...(judgment.evidenceRefs || []).filter((ref) => ref !== sourceRef && allowedRefs.has(ref)),
-          ],
-        };
+        return this.evidenceBindings.bindDeferredDisposition(judgment, finding);
       });
   }
 }
@@ -825,7 +817,7 @@ async function callAcceptanceAgent(agent, prompt, budget = new PromptExecutionBu
   });
 }
 
-function acceptanceAgentFailure(ctx, failure) {
+function acceptanceAgentFailure(failure) {
   const envelope = Envelope.fail(
     "run",
     "acceptance-review",
@@ -833,26 +825,13 @@ function acceptanceAgentFailure(ctx, failure) {
     failure.message,
     failure.toJSON(),
   );
-  ctx.flowManager.failCurrentAttempt({
-    specId: ctx.flowState.specId,
-    failure: {
-      category: "agent",
-      code: failure.code,
-      message: failure.message,
-      retryable: failure.retryable === true,
-      retryKind: failure.retryable === true ? "tooling" : null,
-    },
-    result: {
-      outcome: "failed",
-      summary: failure.message,
-      confirmedAt: new Date().toISOString(),
-      artifactRefs: [],
-    },
-  });
-  return envelope;
+  const error = new Error(failure.message);
+  error.code = failure.code;
+  error.data = failure.toJSON();
+  return { failure: error, response: envelope };
 }
 
-async function resolveAcceptanceArtifact(ctx, context, responseSource) {
+async function resolveAcceptanceArtifact(context, responseSource) {
   const fixture = responseSource.load(context);
   if (fixture) {
     return {
@@ -872,14 +851,12 @@ async function resolveAcceptanceArtifact(ctx, context, responseSource) {
     resolvedAgent = agent.resolve("flow.acceptance.review");
   } catch (error) {
     const failure = error instanceof AgentFailure ? error : AgentFailure.from(error);
-    return { response: acceptanceAgentFailure(ctx, failure) };
+    return acceptanceAgentFailure(failure);
   }
   if (!resolvedAgent) {
-    return {
-      response: acceptanceAgentFailure(ctx, new AgentPermissionConfigurationFailure({
+    return acceptanceAgentFailure(new AgentPermissionConfigurationFailure({
         message: "no AI agent configured for flow.acceptance.review",
-      })),
-    };
+      }));
   }
   try {
     const limit = new PromptRequestLimit({ maxCharacters: agent.promptCharacterLimit });
@@ -927,18 +904,52 @@ async function resolveAcceptanceArtifact(ctx, context, responseSource) {
       }),
     };
   } catch (error) {
-    if (error instanceof AgentFailure) return { response: acceptanceAgentFailure(ctx, error) };
-    throw error;
+    if (error instanceof AgentFailure) return acceptanceAgentFailure(error);
+    return { failure: error, response: Envelope.fail("run", "acceptance-review",
+      error.code ?? "ACCEPTANCE_RESPONSE_INVALID", error.message, error.data ?? null) };
   }
 }
 
 async function executeCanonicalAcceptanceReview(ctx) {
-  const state = ctx.flowState;
+  const state = ctx.flowManager.loadReadOnly(ctx.flowState.specId);
   const store = new CanonicalAcceptanceArtifactStore({ flowManager: ctx.flowManager, state });
   const context = await store.buildContext({ executionRoot: ctx.executionRoot || ctx.root });
-  const resolved = await resolveAcceptanceArtifact(ctx, context, this.responseSource);
-  if (resolved.response) return resolved.response;
+  const acquired = await prepareAcceptanceReviewInput({ flowManager: ctx.flowManager,
+    state: ctx.flowManager.canonicalState(state.specId), executionRoot: ctx.executionRoot || ctx.root, context });
+  let executionBinding = null;
+  if (context.mechanicalBlockers.length === 0) {
+    const execution = ctx.flowManager.draftStepExecutionState({ binding: acquired.binding });
+    const previous = execution.lifecycle;
+    executionBinding = previous?.phase === "checkpoint" ? previous.binding
+      : new DraftWorkerExecutionBinding({ executionGeneration: execution.nextGeneration,
+        inputDigest: context.fingerprint.hash, inputRevision: context.fingerprint.hash });
+    if (executionBinding.inputDigest !== context.fingerprint.hash) throw new StepAdmissionRefusal("Acceptance execution checkpoint evidence changed");
+    const request = await prepareAcceptanceReviewInput({ flowManager: ctx.flowManager, state: ctx.flowManager.canonicalState(state.specId),
+      executionRoot: ctx.executionRoot || ctx.root, context, executionBinding,
+      executionLifecycle: DraftStepExecutionLifecycle.checkpoint(executionBinding) });
+    if (previous?.phase !== "checkpoint") await executeAcceptanceReviewInput({ ctx, flowManager: ctx.flowManager, stepId: "acceptance-review", preparation: request });
+    const claim = new DraftWorkerExecutionClaim({ dispatchInvocationId: `acceptance-${acquired.binding.attempt.id}-${executionBinding.executionGeneration}`,
+      generatedAt: new Date().toISOString(), actionDigest: context.fingerprint.hash, requestDigest: context.fingerprint.hash });
+    const claimed = await prepareAcceptanceReviewInput({ flowManager: ctx.flowManager, state: ctx.flowManager.canonicalState(state.specId),
+      executionRoot: ctx.executionRoot || ctx.root, context, executionBinding,
+      executionLifecycle: DraftStepExecutionLifecycle.checkpoint(executionBinding).claimed(claim) });
+    await executeAcceptanceReviewInput({ ctx, flowManager: ctx.flowManager, stepId: "acceptance-review", preparation: claimed });
+  }
+  const resolved = await resolveAcceptanceArtifact(context, this.responseSource);
+  if (resolved.response) {
+    const preparation = await prepareAcceptanceReviewInput({ flowManager: ctx.flowManager,
+      state: ctx.flowManager.canonicalState(state.specId), executionRoot: ctx.executionRoot || ctx.root,
+      context, executionBinding, failure: resolved.failure });
+    await executeAcceptanceReviewInput({ ctx, flowManager: ctx.flowManager, stepId: "acceptance-review", preparation });
+    return resolved.response;
+  }
   const { artifact } = resolved;
+  const refreshed = await new CanonicalAcceptanceArtifactStore({ flowManager: ctx.flowManager,
+    state: ctx.flowManager.loadReadOnly(state.specId) }).buildContext({ executionRoot: ctx.executionRoot || ctx.root });
+  if (refreshed.fingerprint.hash !== context.fingerprint.hash
+    || !isDeepStrictEqual(refreshed.requirementIds, context.requirementIds)) {
+    throw new StepAdmissionRefusal("Acceptance evidence changed during provider execution");
+  }
   const response = {
     result: "ok",
     verdict: artifact.verdict,
@@ -950,10 +961,23 @@ async function executeCanonicalAcceptanceReview(ctx) {
     hardBlockers: artifact.hardBlockers,
     evidenceRefresh: null,
   };
-  return new CanonicalAcceptanceReviewPromotion({
+  const result = new CanonicalAcceptanceReviewPromotion({
     state,
     requirementIds: context.requirementIds,
   }).promote(response, artifact);
+  const preparation = await prepareAcceptanceReviewInput({ flowManager: ctx.flowManager, state: ctx.flowManager.canonicalState(state.specId),
+    executionRoot: ctx.executionRoot || ctx.root, context: refreshed, commandResult: result, executionBinding });
+  const outcome = await executeAcceptanceReviewInput({ ctx, flowManager: ctx.flowManager, stepId: "acceptance-review", preparation, commandResult: result });
+  result.settlementReceipt = outcome.receipt.toJSON();
+  await initializeAcceptanceDecisionAwait({ flowManager: ctx.flowManager, specId: state.specId });
+  return result;
+}
+
+export function executeAcceptanceReviewInput(input) {
+  const registration = acceptanceStepRegistration(input.stepId);
+  if (registration === null) throw new TypeError("Acceptance Review requires its registered Step");
+  const selection = registration.executionContract.select({ ...input, registration });
+  return registration.executionContract.execute(selection, { ...input, registration });
 }
 
 export default class RunAcceptanceReviewCommand extends FlowCommand {
@@ -966,7 +990,11 @@ export default class RunAcceptanceReviewCommand extends FlowCommand {
   }
 
   async execute(ctx) {
-    const state = ctx.flowManager.load();
+    return this.executeSelectedAcceptance(null, { ctx });
+  }
+
+  async executeSelectedAcceptance(_selection, { ctx }) {
+    const state = ctx.flowManager.load(ctx.flowState?.specId);
     if (state?.schemaRevision !== CURRENT_FLOW_SCHEMA_REVISION) {
       throw new Error("acceptance review requires a Version-1 Flow");
     }

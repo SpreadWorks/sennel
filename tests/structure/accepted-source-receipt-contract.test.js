@@ -142,3 +142,34 @@ for (const phase of ["Theta", "Kappa"]) {
     assert.equal(built.files.get(proofFile), original); built.clean();
   });
 }
+
+const normalization = `    if (originalEvidence.acceptedDecision != null) {
+      throw new TypeError("Accepted decision requires its original unaccepted evidence");
+    }
+    originalEvidence = { ...originalEvidence };
+    delete originalEvidence.acceptedDecision;
+`;
+test("accepted source receipt recognizes the original exact proof without normalization", () => {
+  const built = fixture("OriginalProof"); built.clean();
+  const original = built.files.get(proofFile);
+  assert.ok(original.includes(normalization));
+  built.files.set(proofFile, original.replace(normalization, ""));
+  built.clean();
+  built.files.set(proofFile, original); built.clean();
+});
+for (const [name, before, after] of [
+  ["nonnull acceptance rejection", "originalEvidence.acceptedDecision != null", "false"],
+  ["original operand preservation", "originalEvidence = { ...originalEvidence };", "originalEvidence = { ...evidence };"],
+  ["exact nullable field normalization", "delete originalEvidence.acceptedDecision;", "delete originalEvidence.identity;"],
+]) test(`accepted source receipt normalization rejects weakened ${name}`, () => {
+  const built = fixture("NormalizedProof"); built.clean();
+  const original = built.files.get(proofFile);
+  assert.ok(original.includes(before)); built.files.set(proofFile, original.replace(before, after));
+  try {
+    const report = built.inspect();
+    const diagnostic = report.diagnostics.find((entry) => entry.rule === "A10" && entry.file === built.seed.adapter);
+    assert.ok(diagnostic, report.diagnostics.map(String).join("\n"));
+    assert.ok(diagnostic.line > 0 && diagnostic.column > 0 && diagnostic.trace.includes(built.seed.adapter));
+  } finally { built.files.set(proofFile, original); }
+  assert.equal(built.files.get(proofFile), original); built.clean();
+});

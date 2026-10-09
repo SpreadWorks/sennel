@@ -13,6 +13,8 @@ import { PRODUCT } from "../../lib/product.js";
 import { FlowTargetIdentityAuthority } from "../../lib/flow-target-identity-authority.js";
 import { flowStateSpecLocation } from "../../lib/flow-workspace.js";
 import { FlowCommand } from "./base-command.js";
+import { acceptanceStepRegistration } from "../engine/composition/acceptance.js";
+import { prepareFinalRegressionExecution } from "../engine/composition/acceptance-finalization.js";
 import { Envelope } from "../../lib/flow-envelope.js";
 import { loadConfig, managedConfigPath, managedOutputDir } from "../../lib/config.js";
 import {
@@ -1065,14 +1067,25 @@ async function executeCanonicalFinalRegression(ctx) {
     changed: [resultPathRelative, rawOutputPathRelative],
     artifacts: artifact.toEnvelopeArtifacts(resultPathRelative),
   }, { logicalKey: "final.regression", payload: json });
-  if (resultStatus === "pass" || resultStatus === "skipped") return commandResult;
   return commandResult;
+}
+
+export function executeFinalRegressionInput(input) {
+  const registration = acceptanceStepRegistration(input.stepId);
+  if (registration === null) throw new TypeError("Final regression requires its registered Step");
+  const selection = registration.executionContract.select({ ...input, registration });
+  return registration.executionContract.execute(selection, { ...input, registration });
 }
 
 export default class RunFinalRegressionCommand extends FlowCommand {
   async execute(ctx) {
     if (!isCanonicalFlowState(ctx.flowState)) {
       throw new Error("final-regression requires a Version-1 Flow");
+    }
+    const state = ctx.flowManager.canonicalState(ctx.flowState.specId);
+    if (!ctx.recordAndProceed && state.attempt.failure === null) {
+      const preparation = prepareFinalRegressionExecution({ flowManager: ctx.flowManager, state });
+      await executeFinalRegressionInput({ ctx, flowManager: ctx.flowManager, stepId: "final-regression", preparation });
     }
     return executeCanonicalFinalRegression(ctx);
   }

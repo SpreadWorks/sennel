@@ -1,3 +1,5 @@
+import { acceptanceStepRegistration, initializeAcceptanceDecisionAwait } from "../engine/composition/acceptance.js";
+import { hasAcceptanceStepContract } from "../engine/step-result.js";
 import { assertCurrentWorkerExecutionSelection } from "./worker-execution-admission.js";
 import { workerStepExecutionRegistration, flowStepExecutionRegistration } from "../engine/composition/registered-step-execution.js";
 import { prepareStepRegistration } from "../engine/composition/prepare.js";
@@ -118,6 +120,13 @@ function executeSelectedPrepareStepExecution(input) {
   const registration = prepareStepRegistration(input.stepId);
   if (registration === null) throw new TypeError("Preparation execution requires a registered Step");
   const selection = input.selection;
+  return registration.executionContract.execute(selection, { ...input, registration });
+}
+
+export function executeAcceptanceDispatch(input) {
+  const registration = acceptanceStepRegistration(input.stepId);
+  if (registration === null) throw new TypeError("Acceptance dispatch requires its registered Step");
+  const selection = registration.executionContract.select({ ...input, registration });
   return registration.executionContract.execute(selection, { ...input, registration });
 }
 
@@ -1560,7 +1569,7 @@ export default class RunDispatchCommand extends FlowCommand {
       stdout: (text) => { stdout += text; },
       stderr: () => {},
       setExitCode: (code) => { exitCode = code; },
-      buildHookCtx: (container, input) => buildFlowCommandHookContext(container, entry, input),
+      buildHookCtx: (container, input) => ({ ...buildFlowCommandHookContext(container, entry, input), viaFlowDispatch: true }),
     });
     return commandEnvelope(stdout.trim(), commandName, exitCode);
   }
@@ -2573,6 +2582,11 @@ export default class RunDispatchCommand extends FlowCommand {
               dispatchCount,
             }).toJSON(),
           );
+        }
+        if (action.nextAction.step === "acceptance-decision") {
+          await initializeAcceptanceDecisionAwait({ flowManager: ctx.flowManager,
+            specId: ctx.specId ?? ctx.flowState?.specId });
+          current = await this.fetchNextAction(target);
         }
         return new FlowDispatchBoundary({
           kind: "await_user_decision",

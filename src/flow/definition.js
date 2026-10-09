@@ -1,6 +1,13 @@
-import { UnexecutedStepCompletion, UnexecutedStepCompletionSet, UnexecutedStepCompletionAuthority, RetainedRouteSourceAuthority } from "./lib/unexecuted-step-completion.js";
+import { RetroConnector } from "./engine/connectors/acceptance/retro-connector.js";
+import { AcceptanceRepairConnector, AcceptanceDecisionConnector, AcceptanceFinalRegressionConnector } from "./engine/connectors/acceptance/acceptance-target-connectors.js";
+import { FinalRegressionReportConnector, ReportFinalizeCommitConnector } from "./engine/connectors/acceptance/finalization-target-connectors.js";
+import { stableJson } from "./lib/review-work-unit-values.js";
+import { requireString, requireDigest } from "./lib/flow-value-assertions.js";
+import { RetroStaleEvidencePublication, RetroStaleEvidenceRecoveryFacts } from "./lib/retro-stale-evidence-values.js";
+export { RetroStaleEvidencePublication, RetroStaleEvidenceRecoveryFacts } from "./lib/retro-stale-evidence-values.js";
+import { UnexecutedStepCompletion, UnexecutedStepCompletionSet, UnexecutedStepCompletionAuthority, RetainedRouteSourceAuthority, NonGateRetainedRouteSourceAuthority } from "./lib/unexecuted-step-completion.js";
 import { testChainObservationMeaning } from "./lib/test-chain-values.js";
-import { hasImplementationStepContract } from "./engine/step-result.js";
+import { hasImplementationStepContract, hasAcceptanceStepContract } from "./engine/step-result.js";
 import * as ImplementationResults from "./engine/step-result.js";
 import { ImplementationGateResultEvidence } from "./lib/gate-observation-values.js";
 import { buildTaskReviewStagePlanForResult, selectTaskReviewStageMeaning, taskReviewStageOperationForResultKind } from "./lib/task-review-stage-transition.js";
@@ -1063,13 +1070,6 @@ function isPlainObject(value) {
 function createMaxAttempts(value) {
   if (typeof value === "number") return new ScalarMaxAttempts(value);
   return new ModeMaxAttempts(value);
-}
-
-function requireString(value, field) {
-  if (typeof value !== "string" || value.trim() === "") {
-    throw new Error(`${field} must be a non-empty string`);
-  }
-  return value;
 }
 
 function requireStepList(value, field) {
@@ -2913,14 +2913,6 @@ function nonGatePlan(facts, disposition, { status = "in_progress", incrementRetr
   });
 }
 
-function stableJson(value) {
-  if (Array.isArray(value)) return `[${value.map((entry) => stableJson(entry)).join(",")}]`;
-  if (value !== null && typeof value === "object") {
-    return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${stableJson(value[key])}`).join(",")}}`;
-  }
-  return JSON.stringify(value);
-}
-
 function nonGateFactsFingerprint(facts) {
   return createHash("sha256").update(stableJson(facts.toJSON())).digest("hex");
 }
@@ -3023,85 +3015,6 @@ export function nonGateNonblockingEligibilityForDecision(decision) {
   });
 }
 
-function requireDigest(value, field) {
-  const digest = requireString(value, field);
-  if (!/^[a-f0-9]{64}$/.test(digest)) throw new Error(`${field} must be a SHA-256 digest`);
-  return digest;
-}
-
-/** One immutable catalog input consumed by the retro stale-evidence route. */
-export class RetroStaleEvidencePublication {
-  constructor({ logicalKey, relativePath, hash, activityId } = {}) {
-    this.logicalKey = requireString(logicalKey, "retro stale evidence logicalKey");
-    if (!new Set(["test.execute", "test.result.review"]).has(this.logicalKey)) {
-      throw new Error("retro stale evidence logicalKey is invalid");
-    }
-    this.relativePath = requireString(relativePath, "retro stale evidence relativePath");
-    this.hash = requireDigest(hash, "retro stale evidence hash");
-    this.activityId = requireString(activityId, "retro stale evidence activityId");
-    Object.freeze(this);
-  }
-
-  toJSON() {
-    return {
-      logicalKey: this.logicalKey,
-      relativePath: this.relativePath,
-      hash: this.hash,
-      activityId: this.activityId,
-    };
-  }
-}
-
-/** Canonical facts for the fixed retro -> test-execute stale-evidence recovery. */
-export class RetroStaleEvidenceRecoveryFacts {
-  constructor({ runId, specId, stepId, attemptId, sequence, snapshotRevision, publications, artifactNames, previousFingerprint, currentFingerprint } = {}) {
-    this.runId = requireString(runId, "retro stale evidence runId");
-    this.specId = requireString(specId, "retro stale evidence specId");
-    this.stepId = requireString(stepId, "retro stale evidence stepId");
-    if (this.stepId !== "retro") throw new Error("retro stale evidence facts require the retro Step");
-    this.attemptId = requireString(attemptId, "retro stale evidence Attempt id");
-    if (!Number.isSafeInteger(sequence) || sequence < 1) throw new Error("retro stale evidence Attempt sequence is invalid");
-    this.sequence = sequence;
-    this.snapshotRevision = requireString(snapshotRevision, "retro stale evidence snapshot revision");
-    if (!Array.isArray(publications) || publications.length !== 2) {
-      throw new Error("retro stale evidence facts require exactly two catalog publications");
-    }
-    this.publications = Object.freeze(publications.map((entry) => (
-      entry instanceof RetroStaleEvidencePublication ? entry : new RetroStaleEvidencePublication(entry)
-    )).sort((left, right) => left.logicalKey.localeCompare(right.logicalKey)));
-    if (new Set(this.publications.map((entry) => entry.logicalKey)).size !== this.publications.length) {
-      throw new Error("retro stale evidence catalog publications must be unique");
-    }
-    if (!Array.isArray(artifactNames) || artifactNames.length === 0
-      || artifactNames.some((entry) => typeof entry !== "string" || entry === "")) {
-      throw new Error("retro stale evidence artifact names are required");
-    }
-    this.artifactNames = Object.freeze([...new Set(artifactNames)].sort());
-    this.previousFingerprint = requireDigest(previousFingerprint, "retro stale evidence previous fingerprint");
-    this.currentFingerprint = requireDigest(currentFingerprint, "retro stale evidence current fingerprint");
-    if (this.previousFingerprint === this.currentFingerprint) {
-      throw new Error("retro stale evidence recovery requires mismatched fingerprints");
-    }
-    this.catalogFingerprint = createHash("sha256").update(stableJson(this.publications.map((entry) => entry.toJSON()))).digest("hex");
-    Object.freeze(this);
-  }
-
-  toJSON() {
-    return {
-      runId: this.runId,
-      specId: this.specId,
-      stepId: this.stepId,
-      attemptId: this.attemptId,
-      sequence: this.sequence,
-      snapshotRevision: this.snapshotRevision,
-      publications: this.publications.map((entry) => entry.toJSON()),
-      artifactNames: [...this.artifactNames],
-      previousFingerprint: this.previousFingerprint,
-      currentFingerprint: this.currentFingerprint,
-      catalogFingerprint: this.catalogFingerprint,
-    };
-  }
-}
 
 export class RetroStaleEvidenceRecoveryEffect {
   constructor({ operation = "rewind-test-evidence", sourceStepId = "retro", targetStepId = "test-execute" } = {}) {
@@ -3191,24 +3104,14 @@ export function resolveRetroStaleEvidenceRecovery(facts) {
   });
 }
 
-// Approval and acceptance are deliberately not expressed as generic worker
-// completion.  Their evidence is either a cataloged Spec publication or a
-// canonical review/decision artifact, and their next route must remain owned
-// by Definition even though the corresponding commands are setters.
+// Approval is bound to its canonical Spec publication. Acceptance policy
+// is selected exclusively from its concrete StepResult below.
 const DEFINITION_ROUTE_TOKEN = Symbol("definition-route");
 
 function digestText(value, field) {
   const text = requireString(value, field);
   if (!/^[a-f0-9]{64}$/i.test(text)) throw new Error(`${field} must be a SHA-256 digest`);
   return text;
-}
-
-function frozenStrings(value, field) {
-  if (!Array.isArray(value) || value.some((entry) => typeof entry !== "string" || entry === "")) {
-    throw new Error(`${field} must be an array of non-empty strings`);
-  }
-  if (new Set(value).size !== value.length) throw new Error(`${field} must not contain duplicates`);
-  return Object.freeze([...value]);
 }
 
 /** A target is never inferred from the caller; it is bound to the active Attempt. */
@@ -3249,47 +3152,6 @@ export class ApprovalRouteFacts {
   toJSON() { return { target: this.target.toJSON(), specPublicationDigest: this.specPublicationDigest, approvalRecord: this.approvalRecord, requestedApproval: this.requestedApproval, autoApprove: this.autoApprove }; }
 }
 
-export class AcceptanceReviewRouteFacts {
-  constructor({ target, reviewArtifactDigest, requirementIds, findingDispositions, verdict, completed = true } = {}) {
-    this.target = target instanceof DefinitionRouteTarget ? target : new DefinitionRouteTarget(target);
-    if (this.target.stepId !== "acceptance-review") throw new Error("acceptance review facts require the acceptance-review target");
-    this.reviewArtifactDigest = digestText(reviewArtifactDigest, "acceptance review artifact digest");
-    this.requirementIds = frozenStrings(requirementIds, "acceptance requirement IDs");
-    this.findingDispositions = frozenStrings(findingDispositions, "acceptance finding dispositions");
-    this.verdict = requireString(verdict, "acceptance review verdict");
-    if (!["pass", "repair_required", "user_decision_required", "blocked"].includes(this.verdict)) throw new Error("acceptance review verdict is invalid");
-    if (typeof completed !== "boolean") throw new Error("acceptance review completed must be boolean");
-    this.completed = completed;
-    Object.freeze(this);
-  }
-
-  toJSON() { return { target: this.target.toJSON(), reviewArtifactDigest: this.reviewArtifactDigest, requirementIds: [...this.requirementIds], findingDispositions: [...this.findingDispositions], verdict: this.verdict, completed: this.completed }; }
-}
-
-export class AcceptanceDecisionRouteFacts {
-  constructor({ target, reviewArtifactDigest, requirementIds, findingDispositions, decisionRecord = null, choice = null } = {}) {
-    this.target = target instanceof DefinitionRouteTarget ? target : new DefinitionRouteTarget(target);
-    if (this.target.stepId !== "acceptance-decision") throw new Error("acceptance decision facts require the acceptance-decision target");
-    this.reviewArtifactDigest = digestText(reviewArtifactDigest, "acceptance decision review digest");
-    this.requirementIds = frozenStrings(requirementIds, "acceptance decision requirement IDs");
-    this.findingDispositions = frozenStrings(findingDispositions, "acceptance decision finding dispositions");
-    if (choice !== null && !["accept_risk_and_continue", "abort"].includes(choice)) throw new Error("acceptance decision choice is invalid");
-    if (decisionRecord !== null && (decisionRecord?.choice !== choice || decisionRecord?.reviewArtifactDigest !== this.reviewArtifactDigest)) {
-      throw new Error("acceptance decision record is not bound to canonical review evidence");
-    }
-    this.choice = choice;
-    this.decisionRecord = decisionRecord === null ? null : Object.freeze(structuredClone(decisionRecord));
-    Object.freeze(this);
-  }
-
-  get integrityFailure() {
-    if (this.choice === null && this.decisionRecord !== null) return "decision_record_without_choice";
-    return null;
-  }
-
-  toJSON() { return { target: this.target.toJSON(), reviewArtifactDigest: this.reviewArtifactDigest, requirementIds: [...this.requirementIds], findingDispositions: [...this.findingDispositions], decisionRecord: this.decisionRecord, choice: this.choice }; }
-}
-
 export class DefinitionRoutePlan {
   constructor(token, { facts, route, reason = null } = {}) {
     if (token !== DEFINITION_ROUTE_TOKEN) throw new Error("Definition route plans are created only by the Definition resolver");
@@ -3303,16 +3165,10 @@ export class DefinitionRoutePlan {
 
 export class AwaitApproval extends DefinitionRoutePlan { constructor(token, facts) { super(token, { facts, route: "await-approval" }); } apply(adapter) { return adapter.awaitApproval(this); } }
 export class ConfirmAndAdvance extends DefinitionRoutePlan { constructor(token, facts) { super(token, { facts, route: "confirm-and-advance" }); } apply(adapter) { return adapter.confirmAndAdvance(this); } }
-export class RepairAcceptanceToImplTriage extends DefinitionRoutePlan { constructor(token, facts) { super(token, { facts, route: "repair-acceptance-to-impl-triage" }); } apply(adapter) { return adapter.repairAcceptanceToImplTriage(this); } }
-export class AwaitAcceptanceDecision extends DefinitionRoutePlan { constructor(token, facts) { super(token, { facts, route: "await-acceptance-decision" }); } apply(adapter) { return adapter.awaitAcceptanceDecision(this); } }
-export class AdvanceFinalRegression extends DefinitionRoutePlan { constructor(token, facts) { super(token, { facts, route: "advance-final-regression" }); } apply(adapter) { return adapter.advanceFinalRegression(this); } }
-export class Park extends DefinitionRoutePlan { constructor(token, facts) { super(token, { facts, route: "park" }); } apply(adapter) { return adapter.park(this); } }
 export class Blocked extends DefinitionRoutePlan { constructor(token, facts, reason) { super(token, { facts, route: "blocked", reason }); } apply(adapter) { return adapter.blocked(this); } }
 
 /**
- * Sole policy owner for the approval / acceptance boundary.  Setters and
- * registry post hooks may construct facts and apply this plan, but may not
- * branch on verdict, choice, or auto policy.
+ * Select the approval boundary from its canonical Spec evidence and policy.
  */
 export function resolveDefinitionRoute(facts) {
   if (facts instanceof ApprovalRouteFacts) {
@@ -3323,20 +3179,6 @@ export function resolveDefinitionRoute(facts) {
     return facts.requestedApproval || facts.autoApprove
       ? new ConfirmAndAdvance(DEFINITION_ROUTE_TOKEN, facts)
       : new AwaitApproval(DEFINITION_ROUTE_TOKEN, facts);
-  }
-  if (facts instanceof AcceptanceReviewRouteFacts) {
-    if (!facts.completed || facts.verdict === "blocked") return new Blocked(DEFINITION_ROUTE_TOKEN, facts, facts.completed ? "acceptance_blocked" : "partial_completion");
-    if (facts.verdict === "repair_required") return new RepairAcceptanceToImplTriage(DEFINITION_ROUTE_TOKEN, facts);
-    if (facts.verdict === "user_decision_required") return new AwaitAcceptanceDecision(DEFINITION_ROUTE_TOKEN, facts);
-    return new AdvanceFinalRegression(DEFINITION_ROUTE_TOKEN, facts);
-  }
-  if (facts instanceof AcceptanceDecisionRouteFacts) {
-    if (facts.integrityFailure !== null) return new Blocked(DEFINITION_ROUTE_TOKEN, facts, facts.integrityFailure);
-    // This is intentionally tokenless and ignores autoApprove.
-    if (facts.choice === null) return new AwaitAcceptanceDecision(DEFINITION_ROUTE_TOKEN, facts);
-    return facts.choice === "accept_risk_and_continue"
-      ? new AdvanceFinalRegression(DEFINITION_ROUTE_TOKEN, facts)
-      : new Park(DEFINITION_ROUTE_TOKEN, facts);
   }
   throw new Error("Definition route facts are unsupported");
 }
@@ -4038,25 +3880,10 @@ function resolveFinalizeLifecycle(input) {
 function resolveReportLifecycle(input) {
   if (input.event === "report:pre") return [new BeginOutboxEffect({ step: "report" })];
   if (input.event === "report:onError") return [new FailOutboxEffect({ step: "report" })];
-  if (input.result?.result !== "ok") return [new FailOutboxEffect({ step: "report" })];
-  return [
-    new SetStepStatus({ step: "report", status: "done" }),
-    new CompleteOutboxEffect({ step: "report" }),
-  ];
-}
-
-function resolveAcceptanceReviewLifecycle(input) {
-  if (input.event !== "acceptance-review:post") return [];
-  // A mechanically blocked review deliberately retains its active Attempt:
-  // it is evidence for a later retry/recovery, not a completed acceptance.
-  if (input.result?.verdict === "blocked") return [];
-  return [new SetStepStatus({ step: "acceptance-review", status: "done" })];
+  return [];
 }
 
 function resolveLifecycleForNode(node, input = {}) {
-  if (input.event === "acceptance-review:post" || node.id === "acceptance-review") {
-    return resolveAcceptanceReviewLifecycle(input);
-  }
   if (input.event === "review:post" || node.action === "run-review") return resolveReviewLifecycle(input);
   if (input.event === "gate:post" || node.action === "run-gate") return resolveGateLifecycle(input);
   if (String(input.event || "").startsWith("report:") || node.action === "run-report") {
@@ -4089,8 +3916,6 @@ export function resolveLifecycle(input = {}) {
     "definition:skip-steps",
     "test-execute:post",
     "test-result-review:post",
-    "retro:post",
-    "final-regression:post",
   ].includes(input.event)) {
     return [new SetStepStatus({ step: input.targetStepId, status: input.status })];
   }
@@ -4289,6 +4114,11 @@ function draftRouteEffects(sourceStepId, targetStepId) {
   ));
 }
 
+function retainedSourceRouteEffects(sourceStepId, targetStepId) {
+  return new StepRouteEffects({ resetStepIds: draftRouteEffects(sourceStepId, targetStepId).resetStepIds
+    .filter((id) => id !== sourceStepId) });
+}
+
 const STEP_SETTLEMENT_TOKEN = Symbol("Definition-selected Step settlement");
 
 /** A complete Definition-selected disposition for one concrete Step Result. */
@@ -4332,6 +4162,11 @@ export class StepRoute extends StepSettlement {
     this.requirementTestDecision = requirementTestDecision;
     this.initializationEffect = initializationEffect;
     Object.freeze(this);
+  }
+
+  requiresTargetActivation(state) {
+    return this.connector.activateTarget === true
+      || state.retainedRouteSourceRequiresReentry({ sourceStepId: this.sourceStepId, targetStepId: this.targetStepId });
   }
 
   toJSON() {
@@ -4946,7 +4781,7 @@ export class DraftStepSettlementReceipt extends DraftStepSettlementReceiptValue 
       throw new TypeError("Draft Await settlement receipt requires its exact question identity");
     }
     const executionPhase = executionLifecycle?.phase ?? null;
-    const specGateExecution = (binding.stepId === "spec-gate" || hasImplementationStepContract(binding.stepId)) && executionSettlement;
+    const specGateExecution = (binding.stepId === "spec-gate" || hasImplementationStepContract(binding.stepId) || hasAcceptanceStepContract(binding.stepId)) && executionSettlement;
     const publicationAwait = awaitSettlement || settlement instanceof SpecGateAwaitDecision
       || settlement instanceof ImplementationAwaitDecision;
     if ((["checkpoint", "claimed"].includes(executionPhase) && !executionSettlement)
@@ -5097,14 +4932,16 @@ export class DraftStepExecutionIdentity {
       || stepResult.type !== receipt.resultType || stepResultDigest(stepResult) !== receipt.resultDigest) {
       throw new TypeError("Draft execution identity Result digest is invalid");
     }
-    const settlement = hasImplementationStepContract(binding.stepId)
+    const settlement = hasAcceptanceStepContract(binding.stepId)
+      ? settleAcceptanceStepResult(binding.stepId, stepResult)
+      : hasImplementationStepContract(binding.stepId)
       ? collectTaskLeafIds().includes(binding.stepId)
         ? settleTaskStepResult(binding.stepId, stepResult)
         : settleImplStepResult(binding.stepId, stepResult)
       : ["spec-review", "spec-gate-repair"].includes(binding.stepId)
         ? settleSpecStepResult(binding.stepId, stepResult)
         : settleDraftStepResult(binding.stepId, stepResult);
-    if (!(settlement instanceof DraftExecutionSettlement)
+    if (!(settlement instanceof DraftExecutionSettlement || settlement instanceof ImplementationExecutionSettlement)
       || settlement.kind !== receipt.settlementKind
       || settlement.resultKind !== receipt.resultKind
       || settlement.resultType !== receipt.resultType) {
@@ -5118,7 +4955,7 @@ export class DraftStepExecutionIdentity {
 
   matches(stepResult, settlement) {
     return stepResult instanceof StepResult
-      && settlement instanceof DraftExecutionSettlement
+      && (settlement instanceof DraftExecutionSettlement || settlement instanceof ImplementationExecutionSettlement)
       && stepResult.stepId === this.stepResult.stepId
       && stepResultDigest(stepResult) === stepResultDigest(this.stepResult)
       && settlement.kind === this.settlement.kind
@@ -6222,13 +6059,20 @@ export function buildCurrentFlowDefinition() {
     semanticRetryLimit: node.resolveMaxAttempts({ autoApprove: false }) - 1,
     unexecutedCompletionAuthorities: scope === "flow" && IMPL_REVIEW_UNEXECUTED_COMPLETION_LEAF_IDS.has(node.id)
       ? [new UnexecutedStepCompletionAuthority({ sourceStepId: "impl-review",
-        resultKinds: ["impl-review-passed", "impl-review-advisory", "impl-review-tooling"] })] : [],
+        resultKinds: ["impl-review-passed", "impl-review-advisory", "impl-review-tooling"] })]
+      : scope === "flow" && node.id === "acceptance-decision"
+        ? [new UnexecutedStepCompletionAuthority({ sourceStepId: "acceptance-review", resultKinds: ["acceptance-review-passed"] })] : [],
     routeSkipAuthorities: scope === "flow" && node.id === "impl-repair"
       ? [new UnexecutedStepCompletionAuthority({ sourceStepId: "impl-triage",
         resultKinds: ["impl-triage-gate-required"] })] : [],
     retainedRouteSourceAuthorities: scope === "flow" && node.id === "impl-repair"
       ? [new RetainedRouteSourceAuthority({ sourceStepId: "impl-repair", targetStepId: "test-execute",
-        resultKinds: ["impl-repair-applied", "impl-repair-quality-issue"] })] : [],
+        resultKinds: ["impl-repair-applied", "impl-repair-quality-issue"],
+        resetStepIds: retainedSourceRouteEffects("impl-repair", "test-execute").resetStepIds })]
+      : scope === "flow" && node.id === "retro"
+        ? [new NonGateRetainedRouteSourceAuthority({ sourceStepId: "retro", targetStepId: "test-execute",
+          resultKinds: ["retro-evidence-refresh"],
+          resetStepIds: retainedSourceRouteEffects("retro", "test-execute").resetStepIds })] : [],
     // null remains an explicit zero-budget tooling policy in NodeContract.
     toolingRetryLimit: node.resolveToolingMaxAttempts({ autoApprove: false }),
     transitions: transitionsFor({
@@ -6951,7 +6795,7 @@ export function settleImplStepResult(stepId, result) {
   if (result instanceof ImplementationResults.ImplRepairAppliedResult
     || result instanceof ImplementationResults.ImplRepairQualityIssueResult) return implementationConnection(result,
     "test-execute", { connector: ImplSourceRepairConnector, application: selectedSourceApplication(result),
-      effects: new StepRouteEffects({ resetStepIds: draftRouteEffects(result.stepId, "test-execute").resetStepIds.filter((id) => id !== result.stepId) }) });
+      effects: retainedSourceRouteEffects(result.stepId, "test-execute") });
   if (result instanceof ImplementationResults.TestExecutionObservedResult) return implementationConnection(result, "test-result-review");
   if (result instanceof ImplementationResults.TestEvidenceAcceptedResult) return implementationConnection(result, "impl-review");
   if (result instanceof ImplementationResults.TestEvidenceRejectedResult) {
@@ -7013,6 +6857,9 @@ export function settleTaskStepResult(stepId, result) {
 
 /** Eligibility is selected from the accepted Await Result; persistence does not interpret observations. */
 export function implementationNonblockingEligibilityForResult(result) {
+  if (result instanceof ImplementationResults.RetroIncompleteResult) {
+    return acceptanceBoundaryNonblockingEligibility({ sourceStep: result.stepId, resultKind: "quality" });
+  }
   if (result?.stepId === "test-result-review") {
     if (!(result instanceof ImplementationResults.TestEvidenceRejectedResult)) return null;
     const evidence = result.evidence;
@@ -7046,4 +6893,104 @@ export function implementationNonblockingEligibilityForResult(result) {
     : evidence.failure.category === "tooling" ? new GateExternalBlockedDisposition(GATE_TRANSITION_TOKEN, meaning.reason)
       : new GateBlockedDisposition(GATE_TRANSITION_TOKEN, meaning.reason);
   return gateNonblockingEligibilityForDecision(gateDecision(strict, disposition));
+}
+
+/** A selected stale recovery retains the original producer facts for Store validation. */
+export class RetroEvidenceRefreshApplication extends ImplementationStepApplication {
+  constructor(token, decision) { super(token); this.operation = "rewind-test-evidence"; this.decision = decision; Object.freeze(this); }
+  toJSON() { return { operation: this.operation, decision: this.decision.toJSON() }; }
+}
+export class AcceptanceAdvisoryApplication extends ImplementationStepApplication {
+  constructor(token, eligibility) {
+    super(token);
+    if (!(eligibility instanceof DefinitionNonblockingEligibility)) throw new TypeError("Acceptance advisory requires its selected eligibility");
+    this.operation = "acceptance-advisory";
+    this.eligibility = eligibility;
+    Object.freeze(this);
+  }
+  toJSON() { return { operation: this.operation, eligibility: this.eligibility.toJSON() }; }
+}
+export class AcceptanceReviewPassApplication extends ImplementationStepApplication {
+  constructor(token) { super(token); this.operation = "complete-acceptance-decision-noop"; Object.freeze(this); }
+  toJSON() { return { operation: this.operation }; }
+}
+export class AcceptanceRepairApplication extends ImplementationStepApplication {
+  constructor(token, evidence) {
+    super(token); this.operation = "repair-acceptance-review";
+    this.findingIds = evidence.findingIds; this.fingerprint = evidence.fingerprint;
+    this.reviewDigest = evidence.reviewDigest; Object.freeze(this);
+  }
+  toJSON() { return { operation: this.operation, findingIds: [...this.findingIds], fingerprint: this.fingerprint, reviewDigest: this.reviewDigest }; }
+}
+export class FinalRegressionApplication extends ImplementationStepApplication {
+  constructor(token, decision) {
+    super(token); if (!(decision instanceof NonGateTransitionDecision)) throw new TypeError("Final regression application requires its selected decision");
+    this.operation = "final-regression-transition"; this.decision = decision; Object.freeze(this);
+  }
+  toJSON() { return { operation: this.operation, decision: this.decision.toJSON() }; }
+}
+/** Failure and park dispositions share the ordinary sealed Settlement authority. */
+export class StepFailureDecision extends StepSettlement {
+  constructor(token, result, application) { super(token, result, "failure"); this.application = application; Object.freeze(this); }
+  toJSON() { return { kind: this.kind, sourceStepId: this.sourceStepId, application: this.application.toJSON() }; }
+}
+export class StepParkDecision extends StepSettlement {
+  constructor(token, result) { super(token, result, "park"); Object.freeze(this); }
+  toJSON() { return { kind: this.kind, sourceStepId: this.sourceStepId }; }
+}
+function acceptanceConnection(result, targetStepId, connector, { effects = new StepRouteEffects(), application = null } = {}) {
+  return new StepRoute(STEP_SETTLEMENT_TOKEN, { result, targetStepId, connector, effects, application });
+}
+function selectedFinalRegressionSettlement(result) {
+  if (result instanceof ImplementationResults.FinalRegressionExecutionRequiredResult) return new DraftExecutionSettlement(STEP_SETTLEMENT_TOKEN, result);
+  const facts = result.evidence.transitionFacts;
+  if (result.evidence.sourceCurrent === false) {
+    const decision = nonGateDecision(facts,
+      new NonGateBlockedDisposition(NON_GATE_TRANSITION_TOKEN, "stale_changed_file_snapshot"), { noEffects: true });
+    return new StepFailureDecision(STEP_SETTLEMENT_TOKEN, result,
+      new FinalRegressionApplication(STEP_SETTLEMENT_TOKEN, decision));
+  }
+  if (result.evidence.acceptedDecision != null) return acceptanceConnection(result, "report", FinalRegressionReportConnector);
+  const decision = resolveSelectedNonGateTransition(facts, () =>
+    result instanceof ImplementationResults.FinalRegressionPassedResult || result instanceof ImplementationResults.FinalRegressionPolicySkippedResult
+      ? new NonGateTransitionSelection({ operation: "advance" })
+      : result instanceof ImplementationResults.FinalRegressionFailureAcceptedResult
+        ? new NonGateTransitionSelection({ operation: "record-and-proceed" })
+        : FINAL_REGRESSION_STEP_DEFINITION.selectionFor(facts));
+  const application = new FinalRegressionApplication(STEP_SETTLEMENT_TOKEN, decision);
+  if (result instanceof ImplementationResults.FinalRegressionPassedResult || result instanceof ImplementationResults.FinalRegressionPolicySkippedResult
+    || result instanceof ImplementationResults.FinalRegressionFailureAcceptedResult) {
+    return acceptanceConnection(result, "report", FinalRegressionReportConnector, { application });
+  }
+  if (decision.disposition.operation === "repair" || decision.disposition.operation === "retry") return new ImplementationExecutionSettlement(STEP_SETTLEMENT_TOKEN, result, application);
+  if (decision.disposition.operation === "await-user-input") return new ImplementationAwaitDecision(STEP_SETTLEMENT_TOKEN, result, application);
+  return new StepFailureDecision(STEP_SETTLEMENT_TOKEN, result, application);
+}
+/** Restore policy from the persisted concrete meaning; acquisition remains outside Definition. */
+export function settleAcceptanceStepResult(stepId, result) {
+  if (!(result instanceof StepResult) || result.stepId !== stepId || !hasAcceptanceStepContract(stepId)) throw new TypeError("Acceptance settlement requires its registered concrete Result");
+  if (result instanceof StepErrorResult) return new StepErrorDecision(STEP_SETTLEMENT_TOKEN, result);
+  if (result instanceof ImplementationResults.RetroAggregatedResult) return acceptanceConnection(result, "acceptance-review", RetroConnector);
+  if (result instanceof ImplementationResults.RetroIncompleteResult) {
+    if (result.evidence.acceptedDecision != null) return acceptanceConnection(result, "acceptance-review", RetroConnector);
+    return new ImplementationAwaitDecision(STEP_SETTLEMENT_TOKEN, result,
+      new AcceptanceAdvisoryApplication(STEP_SETTLEMENT_TOKEN, implementationNonblockingEligibilityForResult(result)));
+  }
+  if (result instanceof ImplementationResults.RetroEvidenceRefreshResult) return acceptanceConnection(result, "test-execute", RetroConnector,
+    { effects: retainedSourceRouteEffects(result.stepId, "test-execute"),
+      application: new RetroEvidenceRefreshApplication(STEP_SETTLEMENT_TOKEN, resolveRetroStaleEvidenceRecovery(result.evidence.staleFacts)) });
+  if (result instanceof ImplementationResults.AcceptanceReviewExecutionRequiredResult || result instanceof ImplementationResults.ReportDeliveryRequiredResult) return new DraftExecutionSettlement(STEP_SETTLEMENT_TOKEN, result);
+  if (result instanceof ImplementationResults.AcceptanceReviewMechanicallyBlockedResult || result instanceof ImplementationResults.AcceptanceDecisionAwaitingChoiceResult) return new ImplementationAwaitDecision(STEP_SETTLEMENT_TOKEN, result);
+  if (result instanceof ImplementationResults.AcceptanceReviewPassedResult) return acceptanceConnection(result, "final-regression", AcceptanceFinalRegressionConnector,
+    { application: new AcceptanceReviewPassApplication(STEP_SETTLEMENT_TOKEN), effects: new StepRouteEffects({ unexecutedStepCompletions:
+      ["pending", "invalidated"].includes(result.evidence.decisionStatus) ? [new UnexecutedStepCompletion({ stepId: "acceptance-decision",
+        attemptSequence: result.evidence.decisionAttemptSequence, reason: "The accepted Review requires no explicit acceptance choice." })] : [] }) });
+  if (result instanceof ImplementationResults.AcceptanceReviewRepairRequiredResult) return acceptanceConnection(result, "impl-triage", AcceptanceRepairConnector,
+    { effects: draftRouteEffects("acceptance-review", "impl-triage"), application: new AcceptanceRepairApplication(STEP_SETTLEMENT_TOKEN, result.evidence) });
+  if (result instanceof ImplementationResults.AcceptanceReviewDecisionRequiredResult) return acceptanceConnection(result, "acceptance-decision", AcceptanceDecisionConnector);
+  if (result instanceof ImplementationResults.AcceptanceDecisionRiskAcceptedResult) return acceptanceConnection(result, "final-regression", AcceptanceFinalRegressionConnector);
+  if (result instanceof ImplementationResults.AcceptanceDecisionAbortedResult) return new StepParkDecision(STEP_SETTLEMENT_TOKEN, result);
+  if (stepId === "final-regression") return selectedFinalRegressionSettlement(result);
+  if (result instanceof ImplementationResults.ReportGeneratedResult) return acceptanceConnection(result, "finalize-commit", ReportFinalizeCommitConnector);
+  throw new TypeError("Unsupported acceptance Result meaning");
 }

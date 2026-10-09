@@ -5,12 +5,14 @@ import { StructureChecker } from "../support/structure/checker.js";
 import { MemorySourceRepository } from "../support/structure/source-repository.js";
 import { SourceModule, readInvocations } from "../support/structure/source-reader.js";
 
-function fixture(phase, mode, additional = false) {
+function fixture(phase, mode, additional = false, grouped = false) {
   const taskId = `${phase}-local`;
   const gateId = `${phase}-overall`;
   const reviewId = `${phase}-assessment`;
   const evidenceId = `${phase}-evidence`;
-  const seed = new StagedExecutionSeed(phase, [taskId, gateId, reviewId, ...(additional ? [evidenceId] : [])]);
+  const groupIds = [`${phase}-advisory`, `${phase}-regression`];
+  const seed = new StagedExecutionSeed(phase, [taskId, gateId, reviewId, ...(additional ? [evidenceId] : []),
+    ...(grouped ? groupIds : [])]);
   const files = seed.files();
   const primary = files.get(seed.composition);
   const array = new SourceModule(seed.composition, primary).declaration("registrations");
@@ -32,11 +34,16 @@ function fixture(phase, mode, additional = false) {
     `import { StepRegistration } from './step-registration.js';\n${prefix}
       const evidenceMembers = Object.freeze([${values[3]}]);
       export function originalEvidence(stepId) { return evidenceMembers.find((entry) => entry.stepId === stepId) ?? null; }`);
+  if (grouped) files.set(`src/flow/engine/composition/${phase}-group.js`,
+    `import { StepRegistration } from './step-registration.js';\n${prefix}
+      const groupMembers = Object.freeze([${values.slice(4).join(",")}]);
+      export function originalGroup(stepId) { return groupMembers.find((entry) => entry.stepId === stepId) ?? null; }`);
   files.set(barrel, `export { findOriginal as findRegistration } from './${phase}-owner.js';
     export { originalReview as reviewRegistration } from './${phase}-review.js';
-    ${additional ? `export { originalEvidence as evidenceRegistration } from './${phase}-evidence.js';` : ''}`);
-  files.set(seed.composition, `import { findRegistration, reviewRegistration${additional ? ', evidenceRegistration' : ''} } from './${phase}-exports.js';\n${prefix}
-    export const registrations = Object.freeze([findRegistration('${taskId}'), findRegistration('${gateId}'), reviewRegistration${additional ? `, evidenceRegistration('${evidenceId}')` : ''}]);
+    ${additional ? `export { originalEvidence as evidenceRegistration } from './${phase}-evidence.js';` : ''}
+    ${grouped ? `export { originalGroup as groupRegistration } from './${phase}-group.js';` : ''}`);
+  files.set(seed.composition, `import { findRegistration, reviewRegistration${additional ? ', evidenceRegistration' : ''}${grouped ? ', groupRegistration' : ''} } from './${phase}-exports.js';\n${prefix}
+    export const registrations = Object.freeze([findRegistration('${taskId}'), findRegistration('${gateId}'), reviewRegistration${additional ? `, evidenceRegistration('${evidenceId}')` : ''}${grouped ? groupIds.map((id) => `, groupRegistration('${id}')`).join('') : ''}]);
     ${primary.slice(primary.indexOf("const byId"))}`);
   files.set("src/flow/engine/step-binding.js", "export class StepBinding {} export class StepBindingContinuation {}\n");
   files.set(`src/flow/engine/connectors/${phase}-bindings.js`, `import { StepBinding, StepBindingContinuation } from '../step-binding.js';
@@ -49,9 +56,9 @@ function fixture(phase, mode, additional = false) {
     }
     prepareGateDeferralPublication(input) { return this._store.prepareGateDeferralPublication(input); }
   }`);
-  const imports = `import { findRegistration as selectOriginal, reviewRegistration as selectedReview${additional ? ', evidenceRegistration as selectEvidence' : ''} } from './${phase}-exports.js';
+  const imports = `import { findRegistration as selectOriginal, reviewRegistration as selectedReview${additional ? ', evidenceRegistration as selectEvidence' : ''}${grouped ? ', groupRegistration as selectGroup' : ''} } from './${phase}-exports.js';
     import { LocalBinding, OverallBinding, ReceiptContinuation } from '../connectors/${phase}-bindings.js';
-    import { Input as GateInput, Input as ReviewInput${additional ? ', Input as EvidenceInput' : ''} } from '../../services/input.js';
+    import { Input as GateInput, Input as ReviewInput${additional ? ', Input as EvidenceInput' : ''}${grouped ? ', Input as GroupInput' : ''} } from '../../services/input.js';
     import { ServiceClass as LocalService, ServiceClass as OverallService } from '../../services/service.js';
     import { Observation } from '../../lib/observation.js';`;
   const start = mode === "acceptance" ? `
@@ -67,10 +74,11 @@ function fixture(phase, mode, additional = false) {
       : new OverallBinding({ flowManager, specId: input.specId, stepId: sourceBinding.stepId, continuation });
     const review = sourceBinding.stepId === '${reviewId}';
     ${additional ? `const evidenceReview = sourceBinding.stepId === '${evidenceId}';` : ''}
-    const registration = ${additional ? 'evidenceReview ? selectEvidence(sourceBinding.stepId) : ' : ''}review ? selectedReview : selectOriginal(sourceBinding.stepId);
+    ${grouped ? `const groupReview = ${JSON.stringify(groupIds)}.includes(sourceBinding.stepId);` : ''}
+    const registration = ${grouped ? 'groupReview ? selectGroup(sourceBinding.stepId) : ' : ''}${additional ? 'evidenceReview ? selectEvidence(sourceBinding.stepId) : ' : ''}review ? selectedReview : selectOriginal(sourceBinding.stepId);
     const prepared = registration.create({ flowManager, binding, nonblockingPublication: publication,
       evidence: publication.evidence,
-      ...(${additional ? 'evidenceReview ? { observed: new EvidenceInput({ evidence: publication.evidence }) } : ' : ''}review ? { observed: new ReviewInput({ evidence: publication.evidence }) }
+      ...(${grouped ? `sourceBinding.stepId === '${groupIds[1]}' ? { observed: new GroupInput({ evidence: publication.evidence }) } : ` : ''}${additional ? 'evidenceReview ? { observed: new EvidenceInput({ evidence: publication.evidence }) } : ' : ''}review ? { observed: new ReviewInput({ evidence: publication.evidence }) }
         : sourceBinding.stepId === '${gateId}' ? { observed: new GateInput(new Observation(publication.evidence)) } : {}) });
     prepared.step.execute();
     return { receipt: prepared.dependency(registration.ServiceClass).settlementOutcome.receipt,
@@ -98,7 +106,7 @@ function fixture(phase, mode, additional = false) {
   files.set(consumer, `${imports}\nexport function acceptSelected(flowManager, input) {${start}\n}`);
   const inspect = () => new StructureChecker(seed.scope(), new MemorySourceRepository(files)).check();
   const clean = () => { const report = inspect(); assert.equal(report.ok, true, report.diagnostics.map(String).join("\n")); };
-  return { files, consumer, owner, review, barrel, clean, inspect };
+  return { seed, files, consumer, owner, review, barrel, clean, inspect };
 }
 
 function sourceFixture(phase, mode) {
@@ -299,3 +307,72 @@ for (const phase of ["eta", "rho"]) {
     built.clean();
   });
 }
+
+for (const phase of ["gamma", "lambda"]) {
+  test(`bounded continuation ${phase} grouped lookup consumes both original registrations`, () =>
+    fixture(phase, "acceptance", true, true).clean());
+  const cases = [
+    ...common,
+    ["wrong grouped lookup", "groupReview ? selectGroup(sourceBinding.stepId)", "groupReview ? selectEvidence(sourceBinding.stepId)"],
+    ["changed grouped selection", "selectGroup(sourceBinding.stepId)", "selectGroup(input.stepId)"],
+    ["omitted grouped selection", "groupReview ? selectGroup(sourceBinding.stepId) : ", ""],
+    ["unregistered grouped ID", `${phase}-advisory`, `${phase}-unknown`],
+    ["overlapping grouped ID", `${phase}-advisory`, `${phase}-evidence`],
+    ["computed grouped IDs", JSON.stringify([`${phase}-advisory`, `${phase}-regression`]), "input.steps"],
+    ["changed grouped predicate", ".includes(sourceBinding.stepId)", ".includes(input.stepId)"],
+    ["wrong grouped input evidence", "new GroupInput({ evidence: publication.evidence })", "new GroupInput({ evidence: input.evidence })"],
+    ["wrong grouped input branch", `sourceBinding.stepId === '${phase}-regression' ?`, `sourceBinding.stepId === '${phase}-advisory' ?`],
+    ["wrong grouped Input owner", ", Input as GroupInput", ""],
+  ];
+  for (const [name, before, after] of cases) test(`bounded continuation ${phase} grouped lookup rejects ${name}`, () => {
+    const built = fixture(phase, "acceptance", true, true);
+    built.clean();
+    const original = built.files.get(built.consumer);
+    assert.ok(original.includes(before));
+    const replacement = name === "wrong grouped Input owner"
+      ? `${original.replace(before, after)}\nimport { OtherInput as GroupInput } from '../../services/foreign-input.js';`
+      : original.replace(before, after);
+    if (name === "wrong grouped Input owner") built.files.set("src/flow/services/foreign-input.js", "export class OtherInput {}\n");
+    built.files.set(built.consumer, replacement);
+    try {
+      const report = built.inspect();
+      const diagnostic = report.diagnostics.find((entry) => entry.rule === "A11" && entry.file === built.consumer);
+      assert.ok(diagnostic, report.diagnostics.map(String).join("\n"));
+      assert.ok(diagnostic.line > 0 && diagnostic.column > 0 && diagnostic.trace.includes(built.consumer));
+    } finally {
+      built.files.set(built.consumer, original);
+      built.files.delete("src/flow/services/foreign-input.js");
+    }
+    assert.equal(built.files.get(built.consumer), original);
+    built.clean();
+  });
+}
+
+test("bounded continuation traces an original grouped registration outside the inspected phase", () => {
+  const phase = "external-group";
+  const built = fixture(phase, "acceptance", true, true);
+  built.clean();
+  const scoped = new StagedExecutionSeed(phase, built.seed.ids.slice(0, 4));
+  built.files.set(scoped.definition.module, scoped.files().get(scoped.definition.module));
+  for (const index of [4, 5]) {
+    const original = `${scoped.entry}/step${index}.js`;
+    built.files.set(`src/flow/steps/grouped-${phase}/step${index}.js`, built.files.get(original));
+    built.files.delete(original);
+    for (const [file, source] of built.files) built.files.set(file,
+      source.replaceAll(`../../steps/${phase}/step${index}.js`, `../../steps/grouped-${phase}/step${index}.js`));
+  }
+  built.files.set(scoped.composition, built.files.get(scoped.composition)
+    .replace(", groupRegistration('external-group-advisory')", "")
+    .replace(", groupRegistration('external-group-regression')", ""));
+  const inspect = () => new StructureChecker(scoped.scope(), new MemorySourceRepository(built.files)).check();
+  const report = inspect();
+  assert.equal(report.ok, true, report.diagnostics.map(String).join("\n"));
+  const original = built.files.get(built.consumer);
+  built.files.set(built.consumer, original.replace("external-group-advisory", "external-group-unregistered"));
+  try {
+    const diagnostic = inspect().diagnostics.find((entry) => entry.rule === "A11" && entry.file === built.consumer);
+    assert.ok(diagnostic);
+    assert.ok(diagnostic.line > 0 && diagnostic.column > 0 && diagnostic.trace.includes(built.consumer));
+  } finally { built.files.set(built.consumer, original); }
+  assert.equal(inspect().ok, true);
+});

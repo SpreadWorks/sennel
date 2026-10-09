@@ -18,6 +18,7 @@ import { Command } from "../../lib/command.js";
 import { PRODUCT } from "../../lib/product.js";
 import { DEFAULT_FLOW_SPEC_DIR } from "../../lib/flow-workspace.js";
 import { FlowManager } from "../../lib/flow-manager.js";
+import { previewReportInput } from "./run-report.js";
 
 export const POINTER_REL_PATH = PRODUCT.managedPath("last-finalized-spec");
 
@@ -76,6 +77,7 @@ export class CanonicalLatestReport {
     }
     let resolved;
     try {
+      previewReportInput({ flowManager: manager, specId, stepId: "report", dryRun: true });
       resolved = manager.readArtifact({
         specId,
         logicalKey: "report",

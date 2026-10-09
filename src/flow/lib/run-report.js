@@ -17,14 +17,18 @@ import {
   commentOnIssueOnce,
   isGhAvailable,
 } from "../../lib/git-helpers.js";
-import { generateReport, ReportBinding } from "../commands/report.js";
+import { generateReport } from "./report-format.js";
+import { ReportBinding } from "./report-binding.js";
 import { FlowCommand } from "./base-command.js";
+import { FlowOutboxIdentity } from "./flow-outbox-identity.js";
+import { acceptanceStepRegistration } from "../engine/composition/acceptance.js";
+import { prepareReportPublication } from "../engine/composition/acceptance-finalization.js";
 import {
   validateFinalRegressionResult,
   validateUpgradeResultArtifact,
 } from "./test-artifacts.js";
 import { advisorySummary } from "./nonblocking.js";
-import { CanonicalReportArtifactStore } from "./canonical-report-artifacts.js";
+import { CanonicalReportArtifactStore, assertCanonicalReportFinalEvidence } from "./canonical-report-artifacts.js";
 import { CanonicalFileMap } from "./canonical-file-map.js";
 import {
   CanonicalCommandResultPublication,
@@ -63,14 +67,14 @@ function deliveryState(status, reason = null, idempotencyKey = null) {
 
 function hasPendingDelivery(report, idempotencyKey) {
   const delivery = report?.data?.delivery;
-  return (delivery?.status === "pending" || delivery?.status === "unsent")
-    && (delivery.idempotencyKey == null || delivery.idempotencyKey === idempotencyKey);
+  return delivery?.status === "pending"
+    && delivery.idempotencyKey === idempotencyKey;
 }
 
 function hasCompletedDelivery(report, idempotencyKey) {
   const delivery = report?.data?.delivery;
   return delivery?.status === "done"
-    && (delivery.idempotencyKey == null || delivery.idempotencyKey === idempotencyKey);
+    && delivery.idempotencyKey === idempotencyKey;
 }
 
 class CanonicalReportRetroResult {
@@ -112,8 +116,11 @@ function canonicalReportResults(store) {
   const finalRegression = store.readCurrentAttempt({ logicalKey: "final.regression", optional: true });
   if (finalRegression !== null) {
     const artifact = validateFinalRegressionResult(finalRegression.value);
+    const saved = store.flowManager.readCurrentStepSettlement({ specId: store.specId, stepId: "final-regression", completed: true });
+    const acceptedDecision = saved?.result.evidence?.acceptedDecision ?? null;
     results.finalRegression = {
       status: "done",
+      producerActivityId: finalRegression.descriptor.activityId,
       result: artifact.result,
       failureKind: artifact.failureKind,
       failureCategory: artifact.failureCategory || null,
@@ -129,7 +136,7 @@ function canonicalReportResults(store) {
       changedFileFingerprints: artifact.changedFileFingerprints || [],
       fixAttempts: artifact.fixAttempts ?? null,
       selectedAction: artifact.selectedAction || null,
-      remainingRisk: artifact.remainingRisk || null,
+      remainingRisk: acceptedDecision?.remainingRisk ?? (artifact.remainingRisk || null),
       recordAndProceed: artifact.recordAndProceed || null,
       humanSummary: artifact.humanSummary || null,
     };
@@ -171,13 +178,10 @@ function canonicalReportPublication(report) {
  * the side effect leaves one cataloged, idempotency-bound report for the
  * exact outbox recovery to inspect and resume.
  */
-function publishCanonicalReport(ctx, report) {
-  ctx.flowManager.publishCurrentAttemptResult({
-    specId: ctx.flowState.specId,
-    commandResult: attachCanonicalCommandResultPublications({ result: "pending" }, [
-      canonicalReportPublication(report),
-    ]),
-  });
+async function publishCanonicalReport(ctx, report) {
+  const commandResult = attachCanonicalCommandResultPublications({ result: "pending" }, [canonicalReportPublication(report)]);
+  const preparation = prepareReportPublication({ ctx, commandResult });
+  return executeReportInput({ ctx, flowManager: ctx.flowManager, stepId: "report", preparation, commandResult });
 }
 
 function canonicalDeliverySuccess({ report, issueComment, changed }) {
@@ -194,10 +198,18 @@ function requireCanonicalReportOutboxKey(ctx) {
   if (typeof key !== "string" || key === "") {
     throw new Error("canonical linked-Issue report delivery requires the report outbox identity");
   }
+  const state = ctx.flowManager.canonicalState(ctx.flowState.specId);
+  const identity = new FlowOutboxIdentity({ runId: state.runId, stepId: "report", operation: "report", idempotencyKey: key });
+  const current = ctx.flowManager.outboxStatus({ specId: state.specId, id: identity.idempotencyKey, operation: identity.operation });
+  if (state.current?.at(-1) !== "report" || state.runId !== ctx.flowState.runId
+    || state.attempt === null || state.attempt.failure !== null
+    || !["pending", "done"].includes(current.status)) {
+    throw new Error("Report delivery requires its admitted canonical Attempt and outbox operation");
+  }
   return key;
 }
 
-function resumeCanonicalReportDelivery(ctx, report, reportPath) {
+async function resumeCanonicalReportDelivery(ctx, report, reportPath) {
   const { root, flowState: state } = ctx;
   const executionRoot = ctx.executionRoot || root;
   const idempotencyKey = requireCanonicalReportOutboxKey(ctx);
@@ -210,7 +222,7 @@ function resumeCanonicalReportDelivery(ctx, report, reportPath) {
     });
   }
   if (!hasPendingDelivery(report, idempotencyKey)) {
-    throw new Error("canonical report delivery retry requires a pending or unsent report");
+    throw new Error("canonical report delivery retry requires a pending report");
   }
   RunReportCommand.validateFinalEvidence(report, {
     root: executionRoot,
@@ -218,8 +230,6 @@ function resumeCanonicalReportDelivery(ctx, report, reportPath) {
   });
   const delivery = postReportToIssue({ root, state, report, flowOutboxEntry: ctx.flowOutboxEntry });
   if (!delivery.ok) {
-    const pending = withDelivery(report, deliveryState("pending", delivery.reason, idempotencyKey));
-    publishCanonicalReport(ctx, pending);
     throw new Error(`failed to post report to issue #${state.issue}: ${delivery.reason}`);
   }
   const delivered = withDelivery(report, deliveryState("done", null, idempotencyKey));
@@ -236,16 +246,22 @@ function resumeCanonicalReportDelivery(ctx, report, reportPath) {
  * registry confirms the active report Attempt and publishes its report.json
  * in the same Version Store transaction.
  */
-function executeCanonicalReport(ctx) {
+async function executeCanonicalReport(ctx) {
   const { root, flowState: state } = ctx;
   const executionRoot = ctx.executionRoot || root;
+  assertCanonicalReportFinalEvidence({ flowManager: ctx.flowManager, specId: state.specId });
   const store = new CanonicalReportArtifactStore({ flowManager: ctx.flowManager, state });
   const location = ctx.flowManager.specLocation(state.specId);
   const reportPath = location.relativeArtifact("report");
   const persisted = state.issue === null
     ? null
     : store.readDocument({ logicalKey: "report", optional: true });
-  if (persisted !== null && hasPendingDelivery(persisted.value, ctx.flowOutboxEntry?.idempotencyKey)) {
+  if (persisted !== null && ctx.dryRun === true) {
+    RunReportCommand.validateFinalEvidence(persisted.value, { root: executionRoot, artifactRoot: root });
+    return { result: "dry-run", artifacts: { report: persisted.value } };
+  }
+  if (persisted !== null && (hasPendingDelivery(persisted.value, ctx.flowOutboxEntry?.idempotencyKey)
+    || hasCompletedDelivery(persisted.value, ctx.flowOutboxEntry?.idempotencyKey))) {
     return resumeCanonicalReportDelivery(ctx, persisted.value, reportPath);
   }
   const spec = store.readDocument({ logicalKey: "spec.record" });
@@ -263,6 +279,7 @@ function executeCanonicalReport(ctx) {
   const { diffStat: implDiffStat, commitMessages } = collectGitSummary(executionRoot, baseBranch);
   const report = withAdvisorySummary(generateReport({
     state,
+    specPath: location.relativeSpecFile,
     results: canonicalReportResults(store),
     redolog: issueLog?.value ?? { entries: [] },
     implDiffStat,
@@ -299,11 +316,9 @@ function executeCanonicalReport(ctx) {
   if (state.issue !== null) {
     const idempotencyKey = requireCanonicalReportOutboxKey(ctx);
     const pendingReport = withDelivery(boundReport, deliveryState("pending", null, idempotencyKey));
-    publishCanonicalReport(ctx, pendingReport);
+    await publishCanonicalReport(ctx, pendingReport);
     const delivery = postReportToIssue({ root, state, report: pendingReport, flowOutboxEntry: ctx.flowOutboxEntry });
     if (!delivery.ok) {
-      const pending = withDelivery(pendingReport, deliveryState("pending", delivery.reason, idempotencyKey));
-      publishCanonicalReport(ctx, pending);
       throw new Error(`failed to post report to issue #${state.issue}: ${delivery.reason}`);
     }
     const delivered = withDelivery(boundReport, deliveryState("done", null, idempotencyKey));
@@ -344,6 +359,20 @@ function completedIssueComment(state, flowOutboxEntry, resumed) {
   };
 }
 
+export function executeReportInput(input) {
+  const registration = acceptanceStepRegistration(input.stepId);
+  if (registration === null) throw new TypeError("Report requires its registered Step");
+  const selection = registration.executionContract.select({ ...input, registration });
+  return registration.executionContract.execute(selection, { ...input, registration });
+}
+
+export function previewReportInput(input) {
+  const registration = acceptanceStepRegistration(input.stepId);
+  if (registration === null) throw new TypeError("Report preview requires its registered Step");
+  const selection = registration.executionContract.select({ ...input, registration });
+  return registration.executionContract.project(selection, { ...input, registration });
+}
+
 export class RunReportCommand extends FlowCommand {
   static validateBinding(binding, context) {
     return ReportBinding.validate(binding, context);
@@ -354,6 +383,10 @@ export class RunReportCommand extends FlowCommand {
   }
 
   async execute(ctx) {
+    if (ctx.dryRun === true) {
+      previewReportInput({ ctx, flowManager: ctx.flowManager, stepId: "report", dryRun: true });
+      return executeCanonicalReport(ctx);
+    }
     const state = ctx.flowState;
     if (!isCanonicalFlowState(state)) {
       throw new Error("report requires a Version-1 Flow");
