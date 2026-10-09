@@ -148,6 +148,58 @@ for (const changedDelivery of [false, true]) {
   });
 }
 
+for (const mode of ["foreign-attempt", "foreign-sequence", "later-generation", "output", "partial-output", "submission", "unknown-output"]) {
+  test(`checkpoint publication refusal recovery preserves ${mode}`, async (t) => {
+    const value = await createSpecGateRepairScenario({ request: "Preserve src/entry.js.", beforeGate: sourceRepository });
+    t.after(() => removeTmpDir(value.root));
+    const request = newRequest(value, `protected-${mode}`);
+    const before = durable(value);
+    assert.throws(() => reserveFixtureSpecGateRepairWorkerCall({ ctx: value.ctx, request,
+      prompt: JSON.stringify(request.toPromptReference()),
+      publicationLimits: new FlowArtifactCatalogSnapshotLimits({ maxTotalArtifactBytes: 1 }),
+    }), /aggregate.*(?:limit|exceed)/i);
+    assert.deepEqual(durable(value), before);
+
+    let protectedPath = request.requestPath;
+    if (["foreign-attempt", "foreign-sequence", "later-generation"].includes(mode)) {
+      // The request file is an external boundary: a changed locator must never
+      // turn a delivery copy into authority to discard a different execution.
+      const document = JSON.parse(fs.readFileSync(request.requestPath, "utf8"));
+      const locator = document.inputs[0].descriptor.canonicalLocator;
+      if (mode === "foreign-attempt") locator.attemptId = "another-repair-attempt";
+      if (mode === "foreign-sequence") locator.attemptSequence += 1;
+      if (mode === "later-generation") locator.generation += 1;
+      fs.writeFileSync(request.requestPath, JSON.stringify(document));
+    } else {
+      protectedPath = mode === "output" ? request.payloadPath("spec-gate-repair.json")
+        : mode === "partial-output" ? path.join(request.payloadDirectory, "partial.txt")
+        : mode === "submission" ? request.submissionPath
+        : path.join(request.directory, "provider-output.txt");
+      // Outputs can be incomplete or undeclared after an interruption. Preserve
+      // their bytes without treating them as proof of a successful provider.
+      if (mode === "output") {
+        const context = request.inputs[0].document;
+        const selected = SpecGateRepairBundle.fromJSON(context.bundle).selections()[0];
+        fs.writeFileSync(protectedPath, workerArtifactJson({ version: 1, stage: "spec-gate-repair-context-request",
+          baseRevision: context.baseRevision, unitId: selected.unit.id, additionalRangeIds: ["goal"] }));
+      } else {
+        fs.writeFileSync(protectedPath, "unpublished worker evidence\n");
+      }
+    }
+    const requestBytes = fs.readFileSync(request.requestPath);
+    const protectedBytes = fs.readFileSync(protectedPath);
+    const deliveryPath = request.inputs[0].descriptor.deliveryPath(value.root);
+    const deliveryBytes = fs.readFileSync(deliveryPath);
+    value.ctx.flowManager = new FlowManager({ root: value.root, mainRoot: value.root, inWorktree: false, specId: value.specId });
+    assert.throws(() => new WorkerArtifactHandoffCoordinator().recoverPending({ ctx: value.ctx }),
+      (error) => error.code === "FLOW_ARTIFACT_HANDOFF_RECOVERY_REQUIRED");
+    assert.deepEqual(fs.readFileSync(request.requestPath), requestBytes);
+    assert.deepEqual(fs.readFileSync(protectedPath), protectedBytes);
+    assert.deepEqual(fs.readFileSync(deliveryPath), deliveryBytes);
+    assert.deepEqual(durable(value), before);
+  });
+}
+
 for (const mode of ["context", "repair", "draft-return", "input-unavailable"]) {
   test(`${mode} completion refuses catalog overflow without changing its publication and can resume from the saved result`, async (t) => {
     const value = await createSpecGateRepairScenario();

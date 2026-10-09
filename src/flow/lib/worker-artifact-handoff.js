@@ -6077,7 +6077,8 @@ function prePublicationArtifactError(request, error) {
   );
 }
 
-function requestFromStored(filePath, { mainRoot: trustedMainRoot = null, flowManager = null } = {}) {
+function requestFromStored(filePath, { mainRoot: trustedMainRoot = null, flowManager = null,
+  unstartedRecoveryRoot = null } = {}) {
   const resolvedRequestPath = path.resolve(filePath);
   const actionDirectory = path.dirname(resolvedRequestPath);
   const invocationDirectory = path.dirname(actionDirectory);
@@ -6150,9 +6151,36 @@ function requestFromStored(filePath, { mainRoot: trustedMainRoot = null, flowMan
     }
   }
   const payloadDirectory = path.join(actionDirectory, "payload");
+  const state = flowManager?.canonicalState(specId) ?? null;
+  let inputFlowManager = flowManager;
+  if (unstartedRecoveryRoot !== null && executionRoot === unstartedRecoveryRoot
+    && document.stepId === "spec-gate-repair" && state?.runId === runId && state.specId === specId
+    && activeFlowStepId(state) === document.stepId && state.attempt?.nodeId === document.stepId) {
+    const locator = document.inputs?.length === 1 ? document.inputs[0]?.descriptor?.canonicalLocator : null;
+    if (locator?.attemptId === state.attempt.id && locator.attemptSequence === state.attempt.sequence
+      && locator.generation === 0) {
+      const execution = flowManager.draftStepExecutionState({ binding: {
+        runId, specId, stepId: document.stepId, attempt: state.attempt,
+      } });
+      if (execution.lifecycle === null) {
+        const entries = fs.readdirSync(actionDirectory, { withFileTypes: true });
+        if (entries.length === 4 && entries.every((entry) => (
+          (["request.json", "action.json"].includes(entry.name) && entry.isFile())
+          || (["input", "payload"].includes(entry.name) && entry.isDirectory())
+        )) && fs.readdirSync(payloadDirectory).length === 0
+          && fs.readdirSync(path.join(actionDirectory, "input")).every((name) => name === SPEC_GATE_REPAIR_INPUT_NAME)) {
+          // A failed first checkpoint publication leaves no canonical execution
+          // or provider claim. Decode its exact delivery with the same boundary
+          // checks, solely to discard the unused capability and let the producer
+          // regenerate it. Any saved lifecycle or output keeps canonical decoding.
+          inputFlowManager = null;
+        }
+      }
+    }
+  }
   const unavailable = readSpecGateRepairUnavailablePayload({ stepId: document.stepId, payloadDirectory });
   const inputSnapshots = (Array.isArray(document.inputs) ? document.inputs : []).map((input) => (
-    policy.inputContract.decodeInput(input, { executionRoot, flowManager, deliveryDirectory: path.join(actionDirectory, "input"),
+    policy.inputContract.decodeInput(input, { executionRoot, flowManager: inputFlowManager, deliveryDirectory: path.join(actionDirectory, "input"),
       unavailable,
       binding: { runId, specId, inputDigest: document.inputDigest, inputRevision: document.inputRevision,
         requestDigest: digest(stableStringify(document)) } })
@@ -6165,7 +6193,7 @@ function requestFromStored(filePath, { mainRoot: trustedMainRoot = null, flowMan
     ),
     runId,
     specId,
-    state: flowManager?.canonicalState(specId) ?? null,
+    state,
     issue: document.issue ?? null,
     stepId: requiredString(document.stepId, "handoff request stepId"),
     taskId,
@@ -9380,7 +9408,8 @@ export class WorkerArtifactHandoffCoordinator {
     for (const requestPath of runtimeEntries.requestPaths) {
       let stored;
       try {
-        stored = requestFromStored(requestPath, { mainRoot, flowManager: ctx.flowManager });
+        stored = requestFromStored(requestPath, { mainRoot, flowManager: ctx.flowManager,
+          unstartedRecoveryRoot: path.resolve(executionRoot) });
       } catch (cause) {
         throw new WorkerArtifactHandoffError(
           "recovery-required",
