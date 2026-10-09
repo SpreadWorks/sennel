@@ -93,6 +93,8 @@ import {
   stepResultDigest,
 } from "../../../src/flow/engine/step-result.js";
 import GetNextActionCommand from "../../../src/flow/lib/get-next-action.js";
+import { getStepInstructions } from "../../../src/flow/lib/get-step-instructions.js";
+import { PRODUCT } from "../../../src/lib/product.js";
 import { canonicalTaskReviewFileMap } from "../../../src/flow/commands/review.js";
 import { validateAssignedRequirementTestHeaders } from "../../../src/flow/lib/test-headers.js";
 import SetStepCommand from "../../../src/flow/lib/set-step.js";
@@ -106,6 +108,7 @@ import {
   WorkerArtifactHandoffError,
   WorkerArtifactMutationAuthoritySnapshot,
   WorkerArtifactWorkerInstructions,
+  WorkerArtifactHandoffRequest,
   SourceMutationManifest,
   SourceHandoffSettlement,
   SourceRepairEffect,
@@ -1021,6 +1024,86 @@ describe("worker artifact handoff", () => {
     const restored = WorkerArtifactWorkerInstructions.fromJSON(guided.toJSON())
       .appendSchemaGuidance("exact canonical identities");
     assert.deepEqual(restored.toJSON(), guided.toJSON());
+  });
+
+  it("does not duplicate shared guidance when later instructions have already been appended", () => {
+    const guided = new WorkerArtifactWorkerInstructions()
+      .appendSchemaGuidance("shared authoring policy")
+      .appendSchemaGuidance("request-specific response contract");
+    assert.deepEqual(guided.appendSchemaGuidance("shared authoring policy").toJSON(), guided.toJSON());
+  });
+
+  for (const { stepId, prepare } of [
+    { stepId: "spec", prepare: () => fixture("spec", {
+      beforeActivate(value) { publishDraftBeforeTarget(value, draftDocument("Create the specification.")); },
+    }) },
+    { stepId: "spec-repair", prepare: prepareSpecRepairFixture },
+    { stepId: "spec-gate-repair", prepare: createSpecGateRepairScenario },
+  ]) {
+    it(`snapshots shared Spec writing guidance once in the generated ${stepId} request`, async () => {
+      const value = await prepare();
+      try {
+        const request = value.coordinator.createRequest({
+          ctx: value.ctx, state: value.flowManager.load(value.specId),
+          invocation: { ...value.invocation,
+            action: { ...value.invocation.action, nextAction: { step: stepId } } },
+        });
+        const guidance = getStepInstructions("partials.spec-writing").trim();
+        assert.equal(request.workerInstructions.schemaGuidance.split(guidance).length - 1, 1);
+        if (stepId === "spec-gate-repair") reserveSpecGateRepairWorkerCall({
+          ctx: value.ctx, request, prompt: JSON.stringify(request.toPromptReference()),
+        });
+        const bytes = fs.readFileSync(request.requestPath);
+        const saved = JSON.parse(bytes);
+        assert.deepEqual(saved.workerInstructions, request.workerInstructions.toJSON());
+        const name = request.inputs[0].name;
+        assert.equal(WorkerArtifactHandoffRequest.readInput({
+          requestPath: request.requestPath, name,
+          mainRoot: value.ctx.mainRoot || value.ctx.root, flowManager: value.flowManager,
+        }).digest, request.inputs[0].digest);
+        assert.deepEqual(fs.readFileSync(request.requestPath), bytes);
+        assert.equal(request.toPromptReference().requestDigest, request.requestDigest);
+      } finally {
+        removeTmpDir(value.mainRoot || value.root);
+      }
+    });
+  }
+
+  it("restores saved Spec writing instructions and request identity after the authoring prompt changes", async () => {
+    const value = await createSpecGateRepairScenario();
+    const envKey = PRODUCT.env("NEXT_ACTION_PROMPTS_DIR");
+    const previous = process.env[envKey];
+    try {
+      const prompts = path.join(value.root, "authoring-prompts");
+      fs.mkdirSync(path.join(prompts, "partials"), { recursive: true });
+      fs.writeFileSync(path.join(prompts, "partials", "spec-writing.md"), "Previous immutable writing policy.\n");
+      process.env[envKey] = prompts;
+      const request = value.coordinator.createRequest({
+        ctx: value.ctx, state: value.flowManager.load(value.specId), invocation: value.invocation,
+      });
+      assert.match(request.workerInstructions.schemaGuidance, /Previous immutable writing policy\./);
+      reserveSpecGateRepairWorkerCall({ ctx: value.ctx, request,
+        prompt: JSON.stringify(request.toPromptReference()) });
+      const before = fs.readFileSync(request.requestPath);
+      fs.writeFileSync(path.join(prompts, "partials", "spec-writing.md"), "New writing policy must not enter an existing request.\n");
+      const flowManager = new FlowManager({ root: value.root, mainRoot: value.root,
+        inWorktree: false, specId: value.specId });
+      const state = flowManager.canonicalState(value.specId);
+      const { lifecycle } = flowManager.draftStepExecutionState({ binding: {
+        runId: state.runId, specId: state.specId, stepId: "spec-gate-repair", attempt: state.attempt,
+      } });
+      const restored = new WorkerArtifactHandoffCoordinator().restoreClaimedDraftRequest({
+        ctx: { ...value.ctx, flowManager }, state, lifecycle,
+      });
+      assert.equal(restored.requestDigest, request.requestDigest);
+      assert.deepEqual(restored.workerInstructions.toJSON(), request.workerInstructions.toJSON());
+      assert.deepEqual(fs.readFileSync(request.requestPath), before);
+      assert.doesNotMatch(restored.workerInstructions.schemaGuidance, /New writing policy/);
+    } finally {
+      if (previous === undefined) delete process.env[envKey];
+      else process.env[envKey] = previous;
+      removeTmpDir(value.root);
+    }
   });
 
   it("references complete large worker inputs without changing the handoff digest or input authority", () => {

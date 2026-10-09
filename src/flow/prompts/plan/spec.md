@@ -1,3 +1,4 @@
+   <!-- include("/flow/prompts/partials/spec-writing.md") -->
    <!-- include("/flow/prompts/partials/worker-artifact-handoff.md") -->
    - **Before writing spec**:
      - Read `draft.json` only from the handoff `inputs[].document` snapshot and read linked GitHub issue content. Treat the draft snapshot as the primary input — do NOT re-read context already gathered in the draft phase.

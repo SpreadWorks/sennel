@@ -1,3 +1,5 @@
+<!-- include("/flow/prompts/partials/spec-writing.md") -->
+
 Repair the current Spec Gate findings using the canonical, revision-bound selected context supplied by the manifest's declared inline or immutable file delivery. Follow the checkout research guidance in `request.json.workerInstructions.schemaGuidance` when implementation facts are missing. Inline context is supplied once in the AI prompt; do not read its restoration copy again. File delivery requires the complete selected context file, not the parent-owned unselected source snapshots.
 
 When `mode` is `locate`, return `spec-gate-repair.json` with version `1`, stage `spec-gate-repair-locate`, the exact `baseRevision`, and `locations` for the finding in this batch. Each location has the complete finding `identity` and `rangeIds` drawn only from this batch's table of contents. An empty `rangeIds` array means this partition contains no matching location. Do not propose operations in this mode.

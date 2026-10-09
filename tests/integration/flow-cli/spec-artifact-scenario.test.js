@@ -13,6 +13,8 @@ import RunDispatchCommand from "../../../src/flow/lib/run-dispatch.js";
 import SetApprovalCommand from "../../../src/flow/lib/set-approval.js";
 import { NonBlockingPolicy, activateNonBlockingPolicy, decisionContextForActiveFlow, recordNonBlockingDecision } from "../../../src/flow/lib/nonblocking.js";
 import GetNextActionCommand from "../../../src/flow/lib/get-next-action.js";
+import { getStepInstructions } from "../../../src/flow/lib/get-step-instructions.js";
+import { FLOW_DISPATCH_INVOCATION_ENV } from "../../../src/flow/lib/dispatch-invocation.js";
 import { readCurrentGateTransitionFacts } from "../../../src/flow/lib/gate-transition-facts.js";
 import { CanonicalSpecReview, SpecReviewDelta } from "../../../src/flow/lib/spec-review-artifacts.js";
 import { CanonicalTestArtifactStore } from "../../../src/flow/lib/canonical-test-artifacts.js";
@@ -168,6 +170,11 @@ describe("Spec artifact lifecycle and downstream consumption", { concurrency: fa
           const invocationId = options.executionEnvironment.SENNEL_FLOW_DISPATCH_INVOCATION_ID;
           const request = JSON.parse(fs.readFileSync(requestPath, "utf8"));
           if (["spec", "spec-repair", "spec-gate-repair"].includes(request.stepId)) {
+            const writingGuidance = getStepInstructions("partials.spec-writing").trim();
+            const invocation = JSON.parse(options.executionEnvironment[FLOW_DISPATCH_INVOCATION_ENV]);
+            const action = JSON.parse(fs.readFileSync(invocation.actionFilePath, "utf8"));
+            assert.ok(action.instructions.content.includes(writingGuidance));
+            assert.equal(request.workerInstructions.schemaGuidance.split(writingGuidance).length - 1, 1);
             assert.match(request.workerInstructions.schemaGuidance,
               /Research missing source facts directly in the execution checkout/);
             assert.equal(fs.realpathSync(options.executionWorkDir), fs.realpathSync(root));

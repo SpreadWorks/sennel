@@ -9,6 +9,7 @@ import crypto from "node:crypto";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { getStepInstructions } from "./get-step-instructions.js";
 
 import { DraftGateRepairSelection } from "../steps/draft/draft-gate-repair-selection.js";
 import { AtomicFile } from "../../lib/atomic-file.js";
@@ -4542,7 +4543,7 @@ export class WorkerArtifactWorkerInstructions {
 
   appendSchemaGuidance(guidance) {
     if (guidance === null) return this;
-    if (this.schemaGuidance === guidance || this.schemaGuidance?.endsWith(`\n${guidance}`)) return this;
+    if (this.schemaGuidance !== null && `\n${this.schemaGuidance}\n`.includes(`\n${guidance}\n`)) return this;
     return new WorkerArtifactWorkerInstructions({
       retryFeedback: this.retryFeedback,
       schemaGuidance: [this.schemaGuidance, guidance].filter(Boolean).join("\n"),
@@ -4550,7 +4551,7 @@ export class WorkerArtifactWorkerInstructions {
   }
 
   bindRequest(stepId, inputs, sourceResponseContract = null) {
-    const researchGuidance = ["spec", "spec-repair", "spec-gate-repair"].includes(stepId)
+    const researchGuidance = SPEC_WRITING_WORKER_STEPS.has(stepId)
       ? SPEC_WORKER_SOURCE_RESEARCH_GUIDANCE : null;
     return this.appendSchemaGuidance(
       [researchGuidance, requestBoundWorkerResponseGuidance(stepId, inputs, sourceResponseContract)]
@@ -4558,6 +4559,8 @@ export class WorkerArtifactWorkerInstructions {
     );
   }
 }
+
+const SPEC_WRITING_WORKER_STEPS = new Set(["spec", "spec-repair", "spec-gate-repair"]);
 
 const SPEC_WORKER_SOURCE_RESEARCH_GUIDANCE = [
   "Research missing source facts directly in the execution checkout. Read its root and applicable scoped AGENTS.md rules before investigating source files and their imports.",
@@ -5020,7 +5023,11 @@ export class WorkerArtifactHandoffRequest {
       canonicalGeneration: policy.kind === "source" ? canonicalSourceHandoffGeneration({ flowManager, state }) : null,
       canonicalLocation: flowManager.specLocation(state.specId),
       flowManager,
-      workerInstructions,
+      // Snapshot the authoring policy only for newly captured requests. Stored
+      // request restoration must reproduce its original instructions and digest.
+      workerInstructions: SPEC_WRITING_WORKER_STEPS.has(policy.stepId)
+        ? workerInstructions.appendSchemaGuidance(getStepInstructions("partials.spec-writing").trim())
+        : workerInstructions,
     });
   }
 
