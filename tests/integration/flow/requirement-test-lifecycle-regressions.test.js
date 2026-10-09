@@ -155,7 +155,7 @@ function publishGenerated({ manager, specId, candidate, bytes }) {
     authority: lifecycleAuthority(state, planRead.descriptor),
     plan, leaf: "test-generate", observation: candidate,
   }));
-  const parameters = { requirementId: candidate.bundle.requirementId, bundleRevision: "1" };
+  const parameters = candidate.bundle.artifactParameters();
   manager.completeRequirementTestLifecycle({
     specId,
     decision,
@@ -187,10 +187,7 @@ function generationDecision(value, candidate) {
 }
 
 function candidateWrites(candidate, bytes) {
-  const parameters = {
-    requirementId: candidate.bundle.requirementId,
-    bundleRevision: String(candidate.bundle.revision),
-  };
+  const parameters = candidate.bundle.artifactParameters();
   return [{
     logicalKey: "test.requirement.candidate.source",
     parameters: { ...parameters, testPath: candidate.sources[0].testPath.slice("tests/".length) },

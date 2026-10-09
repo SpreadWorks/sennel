@@ -1,3 +1,4 @@
+import { acceptanceStepRegistration } from "./acceptance.js";
 import { flowLeafIdsBetween } from "../../definition.js";
 import { draftStepRegistration, draftWorkerStepRegistration } from "./draft.js";
 import { specStepRegistration, specWorkerStepRegistration } from "./spec.js";
@@ -7,7 +8,7 @@ import { implStepRegistration } from "./impl.js";
 import { taskStepRegistration } from "./task.js";
 import { workerStepExecutionContract } from "../../lib/worker-execution-admission.js";
 
-const registeredPhaseSteps = new Set(flowLeafIdsBetween("branch", "impl-gate"));
+const registeredPhaseSteps = new Set(flowLeafIdsBetween("branch", "report"));
 
 /** A targeted Definition leaf may never fall through to another phase's executor. */
 export function workerStepExecutionRegistration(stepId) {
@@ -22,7 +23,7 @@ export function workerStepExecutionRegistration(stepId) {
 }
 
 export function flowStepExecutionRegistration(stepId) {
-  const registration = taskStepRegistration(stepId) ?? implStepRegistration(stepId)
+  const registration = acceptanceStepRegistration(stepId) ?? taskStepRegistration(stepId) ?? implStepRegistration(stepId)
     ?? requirementTestStepRegistration(stepId) ?? prepareStepRegistration(stepId)
     ?? draftStepRegistration(stepId) ?? specStepRegistration(stepId);
   if (registration === null && registeredPhaseSteps.has(stepId)) {

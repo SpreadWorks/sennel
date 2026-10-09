@@ -17,7 +17,6 @@ import { createLifecycleStepTransition } from "../../../src/flow/lib/lifecycle-s
 import { NormalStepTransition } from "../../../src/flow/lib/step-transition-policy.js";
 import {
   CanonicalCommandResultPublication,
-  CanonicalCommandAttemptArtifactHistory,
   attachCanonicalCommandResultArtifact,
   attachCanonicalCommandResultPublications,
 } from "../../../src/flow/lib/canonical-command-result.js";
@@ -26,8 +25,6 @@ import { attemptHistoryTargetForNode } from "../../../src/flow/lib/producer-arti
 import { FLOW_ARTIFACT_CONTRACTS } from "../../../src/lib/flow-artifact-contract.js";
 import { FlowArtifactCatalog } from "../../../src/lib/flow-version.js";
 import { CanonicalGatePromotion } from "../../../src/flow/lib/canonical-gate-artifacts.js";
-import { readCurrentGateTransitionFacts } from "../../../src/flow/lib/gate-transition-facts.js";
-import { resolveGateTransition } from "../../../src/flow/definition.js";
 import {
   RequirementTestLifecycleFacts,
   RequirementTestStepObservation,
@@ -51,7 +48,42 @@ import {
 import { RequirementTestArtifactStore } from "../../../src/flow/lib/requirement-test-store.js";
 import { completeCanonicalSourceHandoff } from "../builders/source-handoff-scenario.js";
 import { captureCurrentTaskSource } from "../../../src/flow/lib/task-mutation-lineage.js";
-import { appendIssueLogFromGateResult } from "../../../src/flow/lib/run-gate.js";
+import { GateIssueLogEntry } from "../../../src/flow/lib/run-gate.js";
+import { implementationGateStepRegistration, prepareImplementationGatePublication } from "../../../src/flow/engine/composition/implementation-gate.js";
+import { ImplStepBinding } from "../../../src/flow/engine/connectors/impl/impl-step-binding.js";
+import { TaskStepBinding } from "../../../src/flow/engine/connectors/task/task-step-binding.js";
+
+/** Execute a claimed fixture producer through its real registration and publication hooks. */
+export async function produceCanonicalFixtureStep(ctx, nodeId) {
+  const { FLOW_COMMANDS } = await import("../../../src/flow/registry.js");
+  const { dispatchContainer, installGateProviderFake } = await import("./flow-dispatch-scenario.js");
+  const entry = FLOW_COMMANDS.run[nodeId];
+  const module = await entry.command();
+  if (nodeId === "test-execute" && !fs.existsSync(path.join(ctx.root, ".sennel", "output", "analysis.json"))) {
+    const { default: DocsScanCommand } = await import("../../../src/docs/commands/scan.js");
+    await new DocsScanCommand().execute({ docsCtx: { root: ctx.root, srcRoot: ctx.root, config: {}, type: [] } });
+  }
+  let provider = null;
+  if (nodeId === "acceptance-review") {
+    const { acceptanceProviderResponse } = await import("../acceptance-phase-scenario.js");
+    provider = installGateProviderFake((prompt) => {
+      const evidence = JSON.parse(String(prompt).slice("## Acceptance Evidence\n".length));
+      return JSON.stringify(acceptanceProviderResponse({ acceptanceContexts: [{ evidence,
+        requirementIds: evidence.requirements.map((entry) => entry.id), deferredFindings: evidence.deferredFindings }] }));
+    });
+  }
+  try {
+    if (entry.pre) await entry.pre(ctx);
+    const commandContainer = dispatchContainer({ root: ctx.root, flowManager: ctx.flowManager, agent: null });
+    const result = await new module.default().run(commandContainer, { expectSpec: ctx.specId,
+      expectRunId: ctx.flowState.runId, ...(ctx.flowState.issue === null ? { expectNoIssue: true } : { expectIssue: ctx.flowState.issue }) });
+    if (result.ok === false) throw new Error(`canonical fixture ${nodeId} failed: ${JSON.stringify(result)}`);
+    if (entry.post) await entry.post(ctx, result);
+    return result;
+  } finally {
+    provider?.mock.restore();
+  }
+}
 
 /**
  * Build a fresh Container instance with `flowManager` registered for a test
@@ -119,7 +151,7 @@ export function canonicalImplReviewArtifact(flowState, {
  * Definition decision; ordinary producer leaves attach their canonical
  * command result to the status update.
  */
-export function confirmCanonicalFixtureStep(flowManager, specId, nodeId, status = "done") {
+export function confirmCanonicalFixtureStep(flowManager, specId, nodeId, status = "done", { mutate } = {}) {
   let current = flowManager.loadReadOnly(specId);
   const resolvedSpecId = current.specId;
   const node = flattenSteps(current.steps).find((entry) => entry.id === nodeId) ?? null;
@@ -214,6 +246,7 @@ export function confirmCanonicalFixtureStep(flowManager, specId, nodeId, status 
       specId: resolvedSpecId,
       stepId: "task-impl",
       taskId: task.id,
+      mutate,
       effect: {
         version: 1,
         stepId: "task-impl",
@@ -222,7 +255,7 @@ export function confirmCanonicalFixtureStep(flowManager, specId, nodeId, status 
         overview: { modules: [], data_flow: [], decisions: [] },
         triage: null,
         repair: null,
-        noChangeReason: "The fixture Task requires no source mutation.",
+        noChangeReason: mutate === undefined ? "The fixture Task requires no source mutation." : null,
       },
     });
     return flowManager.loadReadOnly(resolvedSpecId);
@@ -231,82 +264,31 @@ export function confirmCanonicalFixtureStep(flowManager, specId, nodeId, status 
     ? (task?.steps.at(-1)?.id === nodeId ? "task-impl" : nodeId === "impl-gate" ? "integration" : null)
     : null;
   if (gatePhase !== null) {
-    let commandResult = null;
-    let facts = readCurrentGateTransitionFacts({
-      flowManager,
-      flowState: current,
-      phase: gatePhase,
-    });
-    if (facts === null) {
-      commandResult = new CanonicalGatePromotion({
-        state: flowManager.canonicalState(resolvedSpecId),
-        phase: gatePhase,
-        nodeId,
-        ...(task === null ? {} : { activeTaskId: task.id }),
-      }).promote({
-        result: "pass",
-        changed: [],
-        artifacts: {
-          evaluations: [],
-          reasons: [],
-          ...(task === null ? {} : {
-            sourceFingerprint: captureCurrentTaskSource({
-              root: flowManager.executionRoot(),
-              flowManager,
-              state: current,
-              taskId: task.id,
-            }).fingerprint,
-          }),
-        },
-      });
-      flowManager.publishCurrentAttemptResult({ specId: resolvedSpecId, commandResult });
-      facts = readCurrentGateTransitionFacts({
-        flowManager,
-        flowState: flowManager.loadReadOnly(resolvedSpecId),
-        phase: gatePhase,
-      });
-    }
-    let gateTransitionDecision = resolveGateTransition(facts);
-    if (task !== null) {
-      if (commandResult === null) {
-        const source = flowManager.readProducerArtifact({
-          specId: resolvedSpecId,
-          nodeId,
-          logicalKey: "task.gate",
-          parameters: { taskId: task.id },
-        });
-        commandResult = CanonicalCommandAttemptArtifactHistory.fromBytes({
-          logicalKey: "task.gate",
-          bytes: source.bytes,
-        }).current.payload;
-      }
-      flowManager.recordTaskGateSettlementMetric({ specId: resolvedSpecId, decision: gateTransitionDecision });
-      gateTransitionDecision = resolveGateTransition(readCurrentGateTransitionFacts({
-        flowManager,
-        flowState: flowManager.loadReadOnly(resolvedSpecId),
-        phase: gatePhase,
-      }));
-      appendIssueLogFromGateResult({
-        root: flowManager.executionRoot(),
-        mainRoot: flowManager.executionRoot(),
-        executionRoot: flowManager.executionRoot(),
-        specId: resolvedSpecId,
-        flowManager,
-        flowState: flowManager.loadReadOnly(resolvedSpecId),
-        phase: gatePhase,
-        gateTransitionDecision,
-      }, commandResult);
-      gateTransitionDecision = resolveGateTransition(readCurrentGateTransitionFacts({
-        flowManager,
-        flowState: flowManager.loadReadOnly(resolvedSpecId),
-        phase: gatePhase,
-      }));
-    }
-    return flowManager.updateStepStatus(
-      { stepId: nodeId, requestedStatus: status },
-      { specId: resolvedSpecId, gateTransitionDecision },
-    );
+    const binding = task === null
+      ? new ImplStepBinding({ flowManager, specId: resolvedSpecId, stepId: "impl-gate" })
+      : new TaskStepBinding({ flowManager, specId: resolvedSpecId, definitionStepId: "task-gate" });
+    const commandResult = new CanonicalGatePromotion({
+      state: flowManager.canonicalState(resolvedSpecId), phase: gatePhase, nodeId,
+      ...(task === null ? {} : { activeTaskId: task.id }),
+    }).promote({ result: "pass", changed: [], artifacts: {
+      evaluations: [], reasons: [],
+      ...(task === null ? {} : { sourceFingerprint: captureCurrentTaskSource({
+        root: flowManager.executionRoot(), flowManager, state: current, taskId: task.id,
+      }).fingerprint }),
+    } });
+    const ctx = { root: flowManager.executionRoot(), executionRoot: flowManager.executionRoot(),
+      mainRoot: flowManager.specLocation(resolvedSpecId).repositoryRoot,
+      specId: resolvedSpecId, flowManager, flowState: current, phase: gatePhase };
+    const publication = prepareImplementationGatePublication({ ctx, binding, commandResult,
+      IssueEntryClass: GateIssueLogEntry });
+    const registration = implementationGateStepRegistration(binding.stepId);
+    const prepared = registration.create({ flowManager, specId: resolvedSpecId, binding,
+      commandResult, evidence: publication.evidence, gatePublication: publication.gatePublication,
+      issuePublication: publication.issuePublication });
+    prepared.step.execute();
+    return flowManager.loadReadOnly(resolvedSpecId);
   }
+
   const canonicalCommandResult = status === "done"
     ? canonicalFixtureProducerResult(current, nodeId, { flowManager, specId: resolvedSpecId })
     : null;
@@ -402,44 +384,7 @@ const FIXTURE_TASK_STEP_SUFFIXES = new Map([
   ["task-gate", "gate"],
 ]);
 
-function fixtureFinalRegressionResult(flowManager, specId) {
-  const rawOutputPath = flowManager === null
-    ? "tests/.raw/final-regression-fixture.log"
-    : flowManager.specLocation(specId).relativeArtifact("final.regression.raw-log", { attempt: "001" });
-  const reason = "Fixture project policy has no supported regression command.";
-  return {
-    version: "1",
-    completed: true,
-    result: "skipped",
-    failureKind: null,
-    skipKind: "skipped_by_project_policy",
-    reason,
-    command: null,
-    commandSource: null,
-    rawOutputPath,
-    rawOutputLines: { start: 1, end: 1 },
-    process: { started: false, exitCode: null, signal: null, timedOut: false, spawnError: null },
-    childProcesses: [],
-    changedFiles: [],
-    changedFileFingerprints: [],
-    changedFileSnapshotDigest: "0".repeat(64),
-    proof: {
-      kind: "skipped_by_project_policy",
-      commandDiscovery: {
-        checkedSources: ["fixture"],
-        supportedCommandFound: false,
-        invalidConfiguredCommand: false,
-        reason,
-      },
-    },
-  };
-}
-
-/**
- * A fixture's synthetic `done` transition represents a real producer
- * completion. Publish its durable primary Attempt result, rather than
- * fabricating optional handoff artifacts with unrelated payload semantics.
- */
+/** Build an acquired early-phase fixture publication; later producers must execute their registered Step. */
 export function canonicalFixtureProducerResult(_state, nodeId, { flowManager = null, specId = null } = {}) {
   if (nodeId === "spec-review") {
     const resolvedSpecId = specId ?? _state?.specId ?? null;
@@ -489,38 +434,10 @@ export function canonicalFixtureProducerResult(_state, nodeId, { flowManager = n
       ));
     if (alreadyPublished) return null;
   }
-  // The acceptance-decision no-op is authorized by the cataloged semantic
-  // PASS, not merely an attempt-history envelope.  Fixtures that complete a
-  // whole definition therefore publish the same valid empty PASS shape a
-  // real acceptance worker would produce for a Spec without requirements.
-  const payload = nodeId === "acceptance-review"
-    ? {
-      version: 2,
-      repairFingerprint: "0".repeat(64),
-      mechanicalBlockers: [],
-      hardBlockers: [],
-      requirementJudgments: [],
-      deferredFindings: [],
-      userDecision: null,
-      verdict: "pass",
-    }
-    : nodeId === "impl-review"
-      ? {
-        version: 1,
-        phase: "impl",
-        generatedAt: "2026-01-02T03:04:05.000Z",
-        runId: _state.runId,
-        taskId: null,
-        planRewindAt: null,
-        verdict: "PASS",
-        summary: { blocking: 0, nonBlocking: 0, total: 0 },
-        blockingFindings: [],
-        nonBlockingImprovements: [],
-        repairFingerprint: "a".repeat(64),
-      }
-    : nodeId === "final-regression"
-      ? fixtureFinalRegressionResult(flowManager, specId)
-    : { fixture: "canonical-producer-result", nodeId };
+  if (["test-execute", "test-result-review", "impl-review", "retro", "acceptance-review", "acceptance-decision", "final-regression", "report"].includes(nodeId)) {
+    throw new Error(`canonical fixture ${nodeId} requires its registered producer; use activateWithProducers or produce`);
+  }
+  const payload = { fixture: "canonical-producer-result", nodeId };
   const result = { result: "fixture producer result" };
   attachCanonicalCommandResultArtifact(result, {
     logicalKey: target.logicalKey,
@@ -571,6 +488,20 @@ export function removeCatalogedArtifactForCorruptionFixture(
  * lifecycle targets, never a mutable legacy flow.json-shaped state object.
  */
 export class CanonicalFlowFixture {
+  /** Adopt an existing production-created Flow without recreating or publishing it. */
+  static fromExisting({ flowManager, specId } = {}) {
+    const state = flowManager.canonicalState(specId);
+    const fixture = new this({
+      flowManager,
+      specId: state.specId,
+      runId: state.runId,
+      request: state.request,
+      execution: state.execution,
+    });
+    fixture.created = true;
+    return fixture;
+  }
+
   constructor({
     flowManager,
     specId = "001-test",
@@ -678,31 +609,74 @@ export class CanonicalFlowFixture {
     return flattenSteps(this.state().steps);
   }
 
+  /** Find the next predecessor from the canonical definition, without changing it. */
+  #nextPredecessor(nodeId) {
+    const state = this.state();
+    const currentLeaves = flattenSteps(state.steps);
+    const targetIndex = currentLeaves.findIndex((step) => step.id === nodeId);
+    if (targetIndex < 0) throw new Error(`canonical fixture node is absent: ${nodeId}`);
+    if (state.currentNodeId === nodeId) return null;
+    if (state.currentNodeId !== null) {
+      const activeIndex = currentLeaves.findIndex((step) => step.id === state.currentNodeId);
+      if (activeIndex < 0 || activeIndex >= targetIndex) {
+        throw new Error(`canonical fixture cannot settle ${state.currentNodeId} before ${nodeId}`);
+      }
+      return state.currentNodeId;
+    }
+    return currentLeaves.slice(0, targetIndex).find((step) => !["done", "skipped"].includes(step.status))?.id ?? null;
+  }
+
   /** Confirm every definition leaf before `nodeId`, leaving no active Attempt. */
   settleBefore(nodeId) {
     for (let iteration = 0; iteration < 500; iteration += 1) {
-      const state = this.state();
-      const currentLeaves = flattenSteps(state.steps);
-      const targetIndex = currentLeaves.findIndex((step) => step.id === nodeId);
-      if (targetIndex < 0) throw new Error(`canonical fixture node is absent: ${nodeId}`);
-      if (state.currentNodeId === nodeId) return this;
-      if (state.currentNodeId !== null) {
-        const activeIndex = currentLeaves.findIndex((step) => step.id === state.currentNodeId);
-        if (activeIndex < 0 || activeIndex >= targetIndex) {
-          throw new Error(`canonical fixture cannot settle ${state.currentNodeId} before ${nodeId}`);
-        }
-        this.settle(state.currentNodeId);
-        continue;
-      }
-      const next = currentLeaves.slice(0, targetIndex).find((step) => !["done", "skipped"].includes(step.status));
-      if (next === undefined) return this;
-      this.settle(next.id);
+      const next = this.#nextPredecessor(nodeId);
+      if (next === null) return this;
+      this.settle(next);
     }
     throw new Error(`canonical fixture exceeded its settlement bound before ${nodeId}`);
   }
 
+  /** Run actual asynchronous producers when a fixture traverses their phase. */
+  async activateWithProducers(nodeId, { reviewResponses = new Map(), sourceMutations = new Map(), onActive = null, activateTarget = true } = {}) {
+    for (let iteration = 0; iteration < 500; iteration += 1) {
+      const next = this.#nextPredecessor(nodeId);
+      if (next === null) return activateTarget ? this.activate(nodeId, { settlePredecessors: false }) : this;
+      this.activate(next, { settlePredecessors: false });
+      onActive?.(next);
+      const state = this.state();
+      const task = state.tasks.find((entry) => entry.steps.some((step) => step.id === next));
+      if (next === "impl-review" || task !== undefined && next === `${task.id}-review`) {
+        this.activate(next, { settlePredecessors: false });
+        const { ImplementationReviewProducer } = await import("./implementation-review-producer.js");
+        const result = await new ImplementationReviewProducer(reviewResponses.get(next)).publish(this.#producerContext());
+        if (result.ok === false) throw new Error(`canonical fixture Review failed: ${JSON.stringify(result)}`);
+      } else if (["test-execute", "test-result-review", "retro", "acceptance-review", "final-regression", "report"].includes(next)) {
+        await this.produce(next);
+        if (this.state().currentNodeId === next) {
+          throw new Error(`canonical fixture cannot advance past incomplete producer ${next}`);
+        }
+      } else {
+        this.settle(next, "done", { mutate: sourceMutations.get(next) });
+      }
+    }
+    throw new Error(`canonical fixture exceeded its producer bound before ${nodeId}`);
+  }
+
+  /** Execute the registered producer and its normal publication hooks. */
+  async produce(nodeId) {
+    this.activate(nodeId, { settlePredecessors: false });
+    await produceCanonicalFixtureStep(this.#producerContext(), nodeId);
+    return this;
+  }
+
+  #producerContext() {
+    return { root: this.flowManager.executionRoot(), executionRoot: this.flowManager.executionRoot(),
+      mainRoot: this.flowManager.specLocation(this.specId).repositoryRoot, specId: this.specId,
+      flowManager: this.flowManager, flowState: this.state(), config: {} };
+  }
+
   /** Confirm one named definition leaf through an explicit typed Attempt. */
-  settle(nodeId, status = "done") {
+  settle(nodeId, status = "done", producerOptions = {}) {
     this.#assertCreated();
     const state = this.state();
     const node = flattenSteps(state.steps).find((entry) => entry.id === nodeId) ?? null;
@@ -716,7 +690,7 @@ export class CanonicalFlowFixture {
         this.flowManager.updateStepStatus({ stepId: nodeId, requestedStatus: "in_progress" }, { specId: this.specId });
       }
     }
-    confirmCanonicalFixtureStep(this.flowManager, this.specId, nodeId, status);
+    confirmCanonicalFixtureStep(this.flowManager, this.specId, nodeId, status, producerOptions);
     return this;
   }
 
@@ -845,7 +819,7 @@ export function promoteCanonicalRequirementTest({
       leaf: "test-generate",
       observation: candidate,
     });
-    const parameters = { requirementId, bundleRevision: "1" };
+    const parameters = candidate.bundle.artifactParameters();
     flowManager.completeRequirementTestLifecycle({
       specId,
       decision: resolveRequirementTestLifecycle(facts),
@@ -1035,6 +1009,12 @@ export class FlowAtStepFixture {
     return this;
   }
 
+  async createWithProducers(options = {}) {
+    this.flow.create().addTasks(this.taskDocuments).registerActive();
+    await this.flow.flow.activateWithProducers(this.targetStep, options);
+    return this;
+  }
+
   state() { return this.flow.state(); }
   location() { return this.flow.location(); }
 }
@@ -1073,16 +1053,27 @@ export class TaskLifecycleFixture {
 
   create() {
     this.flow.create().addTasks(this.taskDocuments).registerActive();
-    const suffix = this.targetStep.replace(/^task-/, "");
-    if (!new Set(["impl", "review", "triage", "repair", "gate"]).has(suffix)) {
-      throw new TypeError(`TaskLifecycleFixture targetStep is unsupported: ${this.targetStep}`);
-    }
+    const suffix = this.#targetRole();
     const nodeId = `${this.taskId}-${suffix}`;
     this.flow.flow.settleBefore(`${this.taskId}-impl`);
     this.flow.flow.activateTask(this.taskId, { settlePredecessors: false });
     settleTaskPredecessors(this.flow.flow, this.taskId, suffix);
     if (suffix !== "impl") this.flow.flow.activate(nodeId, { settlePredecessors: false });
     return this;
+  }
+
+  async createWithProducers(options = {}) {
+    this.flow.create().addTasks(this.taskDocuments).registerActive();
+    await this.flow.flow.activateWithProducers(`${this.taskId}-${this.#targetRole()}`, options);
+    return this;
+  }
+
+  #targetRole() {
+    const suffix = this.targetStep.replace(/^task-/, "");
+    if (!new Set(["impl", "review", "triage", "repair", "gate"]).has(suffix)) {
+      throw new TypeError(`TaskLifecycleFixture targetStep is unsupported: ${this.targetStep}`);
+    }
+    return suffix;
   }
 
   state() { return this.flow.state(); }
@@ -1264,6 +1255,18 @@ export class CanonicalNextActionScenario {
   atFlowStep(stepId) {
     this.#assertCreated();
     this.flow.activate(stepId);
+    return this;
+  }
+
+  async atFlowStepWithProducers(stepId) {
+    this.#assertCreated();
+    await this.flow.activateWithProducers(stepId);
+    return this;
+  }
+
+  async beforeFlowStepWithProducers(stepId) {
+    this.#assertCreated();
+    await this.flow.activateWithProducers(stepId, { activateTarget: false });
     return this;
   }
 

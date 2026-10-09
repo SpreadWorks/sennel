@@ -1,4 +1,5 @@
 import { AcceptedNonblockingDecision } from "./accepted-nonblocking-decision.js";
+import { NonGateTargetBinding, NonGateAttemptIdentity } from "./non-gate-transition.js";
 const text = (value, field) => {
   if (typeof value !== "string" || value.trim() === "") throw new TypeError(`${field} must be non-empty text`);
   return value.trim();
@@ -68,15 +69,42 @@ export class UnexecutedStepCompletionAuthority {
 
 /** A completed producer may remain behind the selected earlier recovery frontier. */
 export class RetainedRouteSourceAuthority {
-  constructor({ sourceStepId, resultKinds, targetStepId } = {}) {
+  constructor({ sourceStepId, resultKinds, targetStepId, resetStepIds } = {}) {
     this.sourceStepId = text(sourceStepId, "retained source Step");
     this.resultKinds = authorityResultKinds(resultKinds, "retained source");
     this.targetStepId = text(targetStepId, "retained source recovery target");
+    this.resetStepIds = authorityResultKinds(resetStepIds, "retained source reset Steps");
     Object.freeze(this);
   }
   permits(result, receipt) {
     return result?.stepId === this.sourceStepId && result.type === "loop-required"
       && this.resultKinds.includes(result.kind) && receipt?.settlementKind === "target-connection"
-      && receipt.targetStepId === this.targetStepId;
+      && receipt.targetStepId === this.targetStepId
+      && receipt.effects?.skipStepIds.length === 0
+      && receipt.effects.unexecutedStepCompletions.length === 0
+      && JSON.stringify(receipt.effects.resetStepIds) === JSON.stringify(this.resetStepIds)
+      && this.matchesBinding(result, receipt);
   }
+  matchesBinding(result, receipt) {
+    const evidence = result.evidence;
+    const binding = receipt.binding;
+    return evidence?.runId === binding.runId && evidence.specId === binding.specId
+      && evidence.nodeId === binding.stepId && evidence.attemptId === binding.attemptId
+      && evidence.attemptSequence === binding.attemptSequence;
+  }
+  preservesUnexecutedTail() { return false; }
+  retainsInvalidatedSource() { return false; }
+}
+
+/** Non-Gate rewind keeps its untouched tail under the exact retained producer. */
+export class NonGateRetainedRouteSourceAuthority extends RetainedRouteSourceAuthority {
+  matchesBinding(result, receipt) {
+    const identity = result.evidence?.identity;
+    const binding = receipt.binding;
+    return identity instanceof NonGateTargetBinding && identity.runId === binding.runId
+      && identity.specId === binding.specId && identity.stepId === binding.stepId
+      && identity.attempt.matches(new NonGateAttemptIdentity({ id: binding.attemptId, sequence: binding.attemptSequence }));
+  }
+  preservesUnexecutedTail() { return true; }
+  retainsInvalidatedSource() { return true; }
 }

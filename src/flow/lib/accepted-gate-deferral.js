@@ -1,4 +1,5 @@
 import { GateAttemptIdentity, GateCatalogPublication } from "./gate-transition.js";
+import { isDeepStrictEqual } from "node:util";
 
 const digest = (value, field) => {
   if (typeof value !== "string" || !/^[a-f0-9]{64}$/.test(value)) throw new TypeError(`${field} requires a sha256 digest`);
@@ -45,6 +46,16 @@ export class AcceptedGateDeferral {
       || !evidence.identity.attempt.matches(this.sourcePublication.attempt)
       || JSON.stringify(evidence.publication?.toJSON()) !== JSON.stringify(this.sourcePublication.toJSON())) {
       throw new TypeError("accepted Gate deferral changed its original failed implementation evaluation");
+    }
+  }
+  assertOriginalSource({ receipt, resultDigest, evidence, originalEvidence }) {
+    this.assertEvaluation(evidence);
+    const expected = evidence.toJSON();
+    delete expected.continuation;
+    if (originalEvidence.continuation != null || originalEvidence.acceptedDecision != null
+      || receipt?.id !== this.sourceReceiptId || receipt.resultDigest !== this.sourceResultDigest
+      || resultDigest !== this.sourceResultDigest || !isDeepStrictEqual(expected, originalEvidence)) {
+      throw new TypeError("Accepted Gate deferral changed its original source receipt, Result digest or evidence");
     }
   }
   toJSON() { return { sourceReceiptId: this.sourceReceiptId, sourceResultDigest: this.sourceResultDigest,

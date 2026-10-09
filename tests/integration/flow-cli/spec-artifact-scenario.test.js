@@ -658,6 +658,15 @@ describe("Spec artifact lifecycle and downstream consumption", { concurrency: fa
       assert.equal(saved.requirements[0].desc, reviewedRequirement);
       assert.equal(saved.user_approval.confirmed_at, "2026-09-23T00:00:00.000Z");
       assert.notEqual(approved.canonicalState(specId).nextAction().nodeId, "approval");
+      const approvedReview = approved.readCurrentSpecReview({ specId, consumerNodeId: "approval" });
+      assert.ok(approvedReview, "actual confirmation must retain its exact reviewed Spec basis after approval metadata advances the root");
+      const plan = JSON.parse(approved.readArtifact({ specId, logicalKey: "test.requirement.plan",
+        consumerNodeId: "test-generate" }).bytes.toString("utf8")).plan;
+      assert.deepEqual(approvedReview.review.identity.toJSON(), plan.specRevision);
+      const approvedSnapshot = approved.readArtifact({ specId, logicalKey: "spec.snapshot",
+        parameters: { revision: approvedReview.review.identity.revision.toString() }, consumerNodeId: "approval" });
+      assert.equal(approvedSnapshot.descriptor.hash, plan.specRevision.digest);
+      assert.equal(approvedSnapshot.bytes.length, plan.specRevision.byteLength);
     } finally {
       reviewProcess?.mock.restore();
       syncBuiltinESMExports();

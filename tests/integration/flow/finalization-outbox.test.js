@@ -1,5 +1,9 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import path from "node:path";
+import { initGitRepo, commitAll } from "../../support/infrastructure/git-repo.js";
+import RunReportCommand from "../../../src/flow/lib/run-report.js";
+import { FLOW_COMMANDS } from "../../../src/flow/registry.js";
 import { describe, it } from "node:test";
 
 import {
@@ -21,7 +25,7 @@ import { flattenSteps } from "../../../src/flow/lib/step-tree.js";
 import { Command } from "../../../src/lib/command.js";
 import { dispatch } from "../../../src/lib/dispatcher.js";
 import { createTmpDir, removeTmpDir } from "../../support/builders/tmp-dir.js";
-import { CanonicalFlowFixture, makeFlowManager } from "../../support/infrastructure/flow-setup.js";
+import { CanonicalFlowFixture, FlowAtStepFixture, makeFlowManager } from "../../support/infrastructure/flow-setup.js";
 
 function finalizationIdentity(stepId) {
   return new FlowOutboxIdentity({
@@ -209,16 +213,41 @@ describe("resumable finalization outbox", () => {
     assert.equal(postHooks, 1);
   });
 
-  it("marks report done before confirming the report outbox", () => {
-    const actions = resolveLifecycle({
-      event: "report:post",
-      command: "report",
-      result: { result: "ok" },
-    });
-    assert.ok(actions[0] instanceof SetStepStatus);
-    assert.ok(actions[1] instanceof CompleteOutboxEffect);
-    assert.equal(actions[0].step, "report");
-    assert.equal(actions[0].status, "done");
+  it("confirms Report completion and its outbox in one canonical publication", async () => {
+    const root = createTmpDir("report-atomic-outbox-");
+    try {
+      initGitRepo(root);
+      fs.writeFileSync(path.join(root, "README.md"), "report outbox fixture\n");
+      commitAll(root, "fixture source");
+      const specId = "001-atomic-report";
+      const flowManager = makeFlowManager(root);
+      await new FlowAtStepFixture({ flowManager, specId, runId: "run-atomic-report",
+        execution: { mode: "direct", baseBranch: "main" },
+        specRecord: { requirements: [{ id: "R1", desc: "Complete Report and its outbox atomically.", task_ids: ["T1"], testable: false }] },
+        taskDocuments: [{ id: "T1", title: "Fixture Task", goal: "Complete Report and its outbox atomically.",
+          origin: "plan", added_round: 0, status: "pending" }], targetStep: "report",
+      }).createWithProducers();
+      const state = flowManager.loadReadOnly(specId);
+      const identity = new FlowOutboxIdentity({ runId: state.runId, stepId: "report", operation: "report" });
+      const outbox = new FlowOutboxStore(flowManager, { specId });
+      const entry = outbox.begin(identity);
+      const ctx = { root, mainRoot: root, executionRoot: root, specId, flowManager,
+        flowState: state, flowOutboxEntry: entry };
+      const result = await new RunReportCommand().execute(ctx);
+      const before = flowManager.activityLedger(specId).length;
+      assert.equal(outbox.status(identity).status, "pending");
+      assert.equal(flowManager.canonicalState(specId).findNode("report").status, "in_progress");
+      await FLOW_COMMANDS.run.report.post(ctx, result);
+      const reloaded = makeFlowManager(root);
+      assert.equal(reloaded.canonicalState(specId).findNode("report").status, "done");
+      assert.equal(new FlowOutboxStore(reloaded, { specId }).status(identity).status, "done");
+      const completed = reloaded.activityLedger(specId).slice(before);
+      assert.equal(completed.length, 1);
+      assert.equal(completed[0].result.stepResult.kind, "report-generated");
+      assert.equal(completed[0].transition.outbox.id, identity.idempotencyKey);
+      assert.equal(completed[0].transition.outbox.result.result, "ok");
+      assert.deepEqual(resolveLifecycle({ event: "report:post", command: "report", result: { result: "ok" } }), []);
+    } finally { removeTmpDir(root); }
   });
 
   it("rejects raw Gate post results without a Definition Decision", () => {

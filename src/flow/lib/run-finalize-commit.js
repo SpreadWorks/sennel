@@ -1,3 +1,4 @@
+import { assertCanonicalReportFinalEvidence } from "./canonical-report-artifacts.js";
 import { runGit } from "../../lib/git-helpers.js";
 import { FlowCommand } from "./base-command.js";
 import {
@@ -57,6 +58,7 @@ export class RunFinalizeCommitCommand extends FlowCommand {
     runMigrationHook(artifactRoot, ctx.flowManager.specLocation(state.specId).relativeSpecFile, root);
     const specId = state.specId;
 
+    assertCanonicalReportFinalEvidence({ flowManager: ctx.flowManager, specId: state.specId });
     const commitPaths = new FinalizeCommitPathSet({
       repositoryRoot: artifactRoot,
       specRoot: ctx.specRoot,

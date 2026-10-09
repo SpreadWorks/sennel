@@ -36,12 +36,12 @@ import {
 const SPEC_ID = "001-record-proceed";
 const FIXTURE_PATH = "final-regression-fixture.sh";
 
-function setupProject(root, scriptBody) {
+async function setupProject(root, scriptBody) {
   writeFile(root, FIXTURE_PATH, scriptBody);
   initGitRepo(root);
   commitAll(root, "initial");
   const flowManager = makeFlowManager(root);
-  const fixture = new FlowAtStepFixture({
+  const fixture = await new FlowAtStepFixture({
     flowManager,
     specId: SPEC_ID,
     runId: "run-final-regression-recorded",
@@ -52,7 +52,7 @@ function setupProject(root, scriptBody) {
       requirements: [{ id: "R-1", desc: "A failed regression can be explicitly accepted with evidence." }],
     },
     targetStep: "final-regression",
-  }).create();
+  }).createWithProducers();
   commitAll(root, "record canonical final-regression frontier");
   return {
     root,
@@ -161,7 +161,7 @@ describe("canonical final-regression record-and-proceed", () => {
 
   test("records eligible existing failures in the immutable first Attempt", async () => {
     tmp = createTmpDir("unit-final-regression-record-proceed-existing-");
-    const ctx = setupProject(tmp, [
+    const ctx = await setupProject(tmp, [
       "printf '%s\\n' 'existing failure' >&2",
       shellPrintChildProcessRecord({
         stderr: "ERR_ASSERTION\ntests/unit/existing.test.js: existing failure\n",
@@ -186,7 +186,7 @@ describe("canonical final-regression record-and-proceed", () => {
 
   test("accepts a current-diff failure only after Definition exhausts repair and selects its user Action", async () => {
     tmp = createTmpDir("unit-final-regression-record-proceed-current-");
-    const ctx = setupProject(tmp, "printf '%s\\n' 'initial pass'\n");
+    const ctx = await setupProject(tmp, "printf '%s\\n' 'initial pass'\n");
     writeFile(tmp, FIXTURE_PATH, [
       "printf '%s\\n' 'current failure' >&2",
       shellPrintChildProcessRecord({
@@ -281,7 +281,7 @@ describe("canonical final-regression record-and-proceed", () => {
 
   test("rejects record-and-proceed when facts change after its guarded user-decision projection", async () => {
     tmp = createTmpDir("unit-final-regression-record-proceed-stale-");
-    const ctx = setupProject(tmp, "printf '%s\\n' 'initial pass'\n");
+    const ctx = await setupProject(tmp, "printf '%s\\n' 'initial pass'\n");
     writeFile(tmp, FIXTURE_PATH, [
       "printf '%s\\n' 'current failure' >&2",
       shellPrintChildProcessRecord({

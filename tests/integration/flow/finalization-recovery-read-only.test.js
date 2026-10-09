@@ -1,8 +1,12 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, describe, it } from "node:test";
+import childProcess from "node:child_process";
+import { syncBuiltinESMExports } from "node:module";
+import { afterEach, describe, it, mock } from "node:test";
 
+import RunReportCommand from "../../../src/flow/lib/run-report.js";
+import { initGitRepo, commitAll } from "../../support/infrastructure/git-repo.js";
 import GetNextActionCommand from "../../../src/flow/lib/get-next-action.js";
 import RunRecoverFinalizationCommand from "../../../src/flow/lib/run-recover-finalization.js";
 import RunClaimNextActionCommand from "../../../src/flow/lib/run-claim-next-action.js";
@@ -58,10 +62,19 @@ function context(root, manager) {
   };
 }
 
-function setupInterruptedRecovery(root, manager) {
-  const scenario = new CanonicalNextActionScenario({ flowManager: manager, specId: SPEC_ID, runId: RUN_ID })
-    .create()
-    .atFlowStep("finalize-sync");
+function finalizationScenario(root, manager, { issue = null } = {}) {
+  initGitRepo(root);
+  fs.writeFileSync(path.join(root, "README.md"), "finalization recovery fixture\n");
+  commitAll(root, "fixture source");
+  return new CanonicalNextActionScenario({ flowManager: manager, specId: SPEC_ID, runId: RUN_ID,
+    issue, execution: { mode: "direct", baseBranch: "main" },
+    specRecord: { requirements: [{ id: "R1", desc: "Exercise finalization recovery.", task_ids: ["T1"], testable: false }] },
+  }).create({ tasks: [{ id: "T1", title: "Fixture Task", goal: "Exercise finalization recovery.",
+    origin: "plan", added_round: 0, status: "pending" }] });
+}
+
+async function setupInterruptedRecovery(root, manager) {
+  const scenario = await finalizationScenario(root, manager).atFlowStepWithProducers("finalize-sync");
   const state = manager.loadReadOnly(SPEC_ID);
   const identity = finalizationOutboxIdentity(state, "finalize-sync");
   new FlowOutboxStore(manager, { specId: SPEC_ID }).begin(identity);
@@ -82,23 +95,23 @@ function setupInterruptedRecovery(root, manager) {
   return { scenario, state, identity, runtimeReceipt };
 }
 
-function setupExactReportRecovery(manager) {
-  new CanonicalNextActionScenario({ flowManager: manager, specId: SPEC_ID, runId: RUN_ID })
-    .create()
-    .atFlowStep("report");
+async function setupExactReportRecovery(manager) {
+  const root = manager.executionRoot();
+  await finalizationScenario(root, manager, { issue: 123 }).atFlowStepWithProducers("report");
   const state = manager.loadReadOnly(SPEC_ID);
   const identity = finalizationOutboxIdentity(state, "report");
   const outbox = new FlowOutboxStore(manager, { specId: SPEC_ID });
-  outbox.begin(identity);
-  manager.publishArtifacts({
-    specId: SPEC_ID,
-    nodeId: "report",
-    artifactWrites: [{
-      logicalKey: "report",
-      mediaType: "application/json",
-      bytes: Buffer.from(JSON.stringify({ data: { delivery: { status: "pending", idempotencyKey: identity.idempotencyKey } } }), "utf8"),
-    }],
+  const entry = outbox.begin(identity);
+  const original = childProcess.spawnSync;
+  const external = mock.method(childProcess, "spawnSync", (command, args, options) => {
+    if (command === "gh") return { status: 1, signal: null, stdout: "", stderr: "injected delivery interruption" };
+    return original(command, args, options);
   });
+  syncBuiltinESMExports();
+  try {
+    await assert.rejects(() => new RunReportCommand().execute({ ...context(root, manager), flowOutboxEntry: entry }),
+      /failed to post report/);
+  } finally { external.mock.restore(); syncBuiltinESMExports(); }
   outbox.fail(identity, new Error("report post-hook interrupted"));
   return { identity, outbox };
 }
@@ -174,9 +187,7 @@ describe("finalization recovery next-action projection", () => {
   it("does not claim an ordinary pending action while projecting it", async () => {
     root = createTmpDir("fe70-next-action-ordinary-");
     const manager = makeFlowManager(root);
-    new CanonicalNextActionScenario({ flowManager: manager, specId: SPEC_ID, runId: RUN_ID })
-      .create()
-      .beforeFlowStep("report");
+    await finalizationScenario(root, manager).beforeFlowStepWithProducers("report");
     const before = files(root);
     const result = await new GetNextActionCommand().execute(context(root, manager));
 
@@ -213,7 +224,7 @@ describe("finalization recovery next-action projection", () => {
   it("projects interrupted finalize-sync settlement without changing canonical state or the runtime log", async () => {
     root = createTmpDir("fe70-next-action-interrupted-");
     const manager = makeFlowManager(root);
-    const { identity } = setupInterruptedRecovery(root, manager);
+    const { identity } = await setupInterruptedRecovery(root, manager);
     const before = files(root);
     const result = await new GetNextActionCommand().execute(context(root, manager));
 
@@ -245,7 +256,7 @@ describe("finalization recovery next-action projection", () => {
   it("retains interrupted-sync advice after a nested diagnostic closes without changing saved state", async () => {
     root = createTmpDir("runtime-log-nested-sync-");
     const manager = makeFlowManager(root);
-    setupInterruptedRecovery(root, manager);
+    await setupInterruptedRecovery(root, manager);
     const child = new RuntimeLogBlockWriter({
       root,
       flowId: SPEC_ID,
@@ -268,7 +279,7 @@ describe("finalization recovery next-action projection", () => {
   it("projects a busy recovery lock as Definition-owned blocked state without changing files", async () => {
     root = createTmpDir("fe70-next-action-lock-busy-");
     const manager = makeFlowManager(root);
-    setupInterruptedRecovery(root, manager);
+    await setupInterruptedRecovery(root, manager);
     const lock = new RepositoryFlowOperationLock({ mainRoot: root });
     lock.acquire();
     try {
@@ -285,7 +296,7 @@ describe("finalization recovery next-action projection", () => {
   it("holds the main operation lock across the live finalize-sync lifecycle boundary", async () => {
     root = createTmpDir("fe70-next-action-live-sync-");
     const manager = makeFlowManager(root);
-    setupInterruptedRecovery(root, manager);
+    await setupInterruptedRecovery(root, manager);
     const ctx = context(root, manager);
     const lifecycle = FLOW_COMMANDS.run["finalize-sync"];
 
@@ -314,7 +325,7 @@ describe("finalization recovery next-action projection", () => {
         }
       },
     });
-    setupInterruptedRecovery(root, manager);
+    await setupInterruptedRecovery(root, manager);
     const before = files(root);
     inject = true;
     const recovered = await new RunRecoverFinalizationCommand().execute(context(root, manager));
@@ -333,7 +344,7 @@ describe("finalization recovery next-action projection", () => {
         }
       },
     });
-    setupInterruptedRecovery(root, crashingManager);
+    await setupInterruptedRecovery(root, crashingManager);
     inject = true;
     const crashed = await new RunRecoverFinalizationCommand().execute(context(root, crashingManager));
     assert.equal(crashed.ok, false);
@@ -348,10 +359,10 @@ describe("finalization recovery next-action projection", () => {
       .filter((activity) => activity.transition.operation === "recover_interrupted_finalize_sync").length, 1);
   });
 
-  it("rejects a foreign interrupted runtime receipt before changing canonical files", () => {
+  it("rejects a foreign interrupted runtime receipt before changing canonical files", async () => {
     root = createTmpDir("fe70-next-action-interrupted-foreign-");
     const manager = makeFlowManager(root);
-    const { runtimeReceipt } = setupInterruptedRecovery(root, manager);
+    const { runtimeReceipt } = await setupInterruptedRecovery(root, manager);
     const before = files(root);
     assert.throws(() => manager.recoverInterruptedFinalizeSync({
       specId: SPEC_ID,
@@ -363,7 +374,7 @@ describe("finalization recovery next-action projection", () => {
   it("leaves an exact durable outbox recovery failed until its explicit command consumes it", async () => {
     root = createTmpDir("fe70-next-action-exact-");
     const manager = makeFlowManager(root);
-    const { identity, outbox } = setupExactReportRecovery(manager);
+    const { identity, outbox } = await setupExactReportRecovery(manager);
     const before = files(root);
     const projection = await new GetNextActionCommand().execute(context(root, manager));
 
@@ -389,7 +400,7 @@ describe("finalization recovery next-action projection", () => {
         }
       },
     });
-    const { identity } = setupExactReportRecovery(crashingManager);
+    const { identity } = await setupExactReportRecovery(crashingManager);
     inject = true;
     const crashed = await new RunRecoverFinalizationCommand().execute(context(root, crashingManager));
     assert.equal(crashed.ok, false);

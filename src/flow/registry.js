@@ -1,3 +1,4 @@
+import { rethrowOriginalStepPersistenceFailure } from "./lib/definition-lifecycle-failure.js";
 import { CURRENT_FLOW_SCHEMA_REVISION } from "../lib/flow-schema-revision.js";
 /**
  * src/flow/registry.js
@@ -1112,6 +1113,21 @@ function loadTestResultReviewCommand() { return import("./lib/run-test-result-re
 function loadRequirementTestGateCommand() { return import('./lib/run-requirement-test-gate.js'); }
 
 
+function loadRetroCommand() { return import("./lib/run-retro.js"); }
+function loadAcceptanceReviewCommand() { return import("./lib/run-acceptance-review.js"); }
+function loadAcceptanceDecisionCommand() { return import("./lib/set-acceptance-decision.js"); }
+function loadFinalRegressionCommand() { return import("./lib/run-final-regression.js"); }
+function loadReportCommand() { return import("./lib/run-report.js"); }
+
+function assertAcceptanceCommandSettled(ctx, stepId) {
+  const specId = ctx.specId ?? ctx.flowState.specId;
+  const saved = ctx.flowManager.readCurrentStepSettlement({ specId, stepId })
+    ?? ctx.flowManager.readCurrentStepSettlement({ specId, stepId, completed: true });
+  if (saved === null) throw new Error(`${stepId} has no durable Result and settlement receipt`);
+  ctx.flowState = ctx.flowManager.loadReadOnly(specId);
+  return saved;
+}
+
 export const FLOW_COMMANDS = {
   query: {
     helpKey: "flow.query",
@@ -1544,7 +1560,7 @@ export const FLOW_COMMANDS = {
     },
     "acceptance-decision": {
       helpKey: "flow.set.acceptance-decision",
-      command: () => import("./lib/set-acceptance-decision.js"),
+      command: loadAcceptanceDecisionCommand,
       args: { flags: FLOW_TARGET_GUARD_FLAGS, options: withTargetGuardOptions(["--choice"]) },
       help: [
         "Usage: sennel flow set acceptance-decision --choice <choice>",
@@ -2767,7 +2783,7 @@ export const FLOW_COMMANDS = {
       helpKey: "flow.run.retro",
       failureOwnership: DefinitionFailureOwnership.dispatcherPrimary(),
       runtimeLog: { stepId: "retro" },
-      command: () => import("./lib/run-retro.js"),
+      command: loadRetroCommand,
       args: { flags: withTargetGuardFlags(["--dry-run"]), options: [...FLOW_RUN_OPTIONS] },
       help: [
         "Usage: sennel flow run retro [options]",
@@ -2779,27 +2795,15 @@ export const FLOW_COMMANDS = {
         "  --dry-run   Preview only, do not publish the attempt result",
       ].join("\n"),
       post(ctx, result) {
-        if (
-          result?.result === "recovered"
-          && result?.artifacts?.evidenceRefresh?.recovered === true
-        ) return;
-        if (ctx.flowState?.policy?.nonblocking?.enabled === true) {
-          const artifact = attachedCanonicalCommandResultPublications(result)
-            .find((publication) => publication.logicalKey === "retro")?.payload ?? null;
-          if (Number(artifact?.summary?.not_done || 0) > 0) return;
-        }
-        tryUpdateStepStatus(ctx, "retro", "done", undefined, { event: "retro:post", result });
-      },
-      async nonblockingPost(ctx, result) {
-        const { recordEligibleNonblockingAttempt } = await import("./lib/nonblocking.js");
-        recordEligibleNonblockingAttempt(ctx, "retro", result);
+        if (result?.result !== "recovered") assertAcceptanceCommandSettled(ctx, "retro");
+        else ctx.flowState = ctx.flowManager.loadReadOnly(ctx.flowState.specId);
       },
     },
     "final-regression": {
       helpKey: "flow.run.final-regression",
       failureOwnership: DefinitionFailureOwnership.commandPrimaryWithDispatcherFallback(),
       runtimeLog: { stepId: "final-regression" },
-      command: () => import("./lib/run-final-regression.js"),
+      command: loadFinalRegressionCommand,
       args: {
         flags: withTargetGuardFlags(["--record-and-proceed"]),
         options: ["--record-category", "--record-evidence", "--remaining-risk", ...FLOW_RUN_OPTIONS],
@@ -2812,50 +2816,19 @@ export const FLOW_COMMANDS = {
         "A current-diff failure may be recorded only as out_of_scope with explicit evidence and remaining risk.",
       ].join("\n"),
       async post(ctx, result) {
-        if (
-          result?.result === "recovered"
-          && result?.artifacts?.evidenceRefresh?.recovered === true
-        ) return;
-        const { attachedCanonicalCommandResultArtifact } = await import("./lib/canonical-command-result.js");
-        const { CanonicalTestArtifactStore } = await import("./lib/canonical-test-artifacts.js");
-        const { captureFinalRegressionChangedSnapshotDigest, resolveCanonicalFinalRegressionTransition } = await import("./lib/final-regression-transition-facts.js");
-        const { applyFinalRegressionTransition } = await import("./lib/final-regression-transition-application.js");
-        const attached = attachedCanonicalCommandResultArtifact(result);
-        if (attached?.logicalKey !== "final.regression") throw new Error("final-regression canonical result artifact is missing");
-        const specId = ctx.specId ?? ctx.flowState.specId;
-        // Explicit acceptance is a Definition-selected replacement Attempt.
-        // The producer merely publishes the evidence; this plan adapter owns
-        // the canonical settlement and must not reinterpret artifact fields.
-        if (result?.failedRecorded !== true) {
-          ctx.flowManager.publishCurrentAttemptResult({ specId, commandResult: result });
-        }
-        const state = ctx.flowManager.canonicalState(specId);
-        const store = new CanonicalTestArtifactStore({ flowManager: ctx.flowManager, state });
-        const decision = resolveCanonicalFinalRegressionTransition({
-          flowManager: ctx.flowManager, specId,
-          changedFileSnapshotDigest: () => captureFinalRegressionChangedSnapshotDigest({
-            root: ctx.executionRoot || ctx.root,
-            relativeSpecFile: store.location.relativeSpecFile,
-          }),
-          candidateArtifact: result?.failedRecorded === true ? attached.payload : null,
-        });
-        applyFinalRegressionTransition({
-          flowManager: ctx.flowManager,
-          specId,
-          commandResult: result,
-          decision,
-        });
-      },
-      async nonblockingPost(ctx, result) {
-        const { recordEligibleNonblockingAttempt } = await import("./lib/nonblocking.js");
-        recordEligibleNonblockingAttempt(ctx, "final-regression", result);
+        const { prepareFinalRegressionPublication } = await import("./engine/composition/acceptance-finalization.js");
+        const { executeFinalRegressionInput } = await loadFinalRegressionCommand();
+        const preparation = prepareFinalRegressionPublication({ ctx, commandResult: result });
+        await (ctx.viaFlowDispatch === true ? (await loadDispatchCommand()).executeAcceptanceDispatch : executeFinalRegressionInput)({ ctx, flowManager: ctx.flowManager, stepId: "final-regression", binding: preparation.binding,
+          preparation, commandResult: result });
+        ctx.flowState = ctx.flowManager.loadReadOnly(ctx.specId ?? ctx.flowState.specId);
       },
     },
     "acceptance-review": {
       helpKey: "flow.run.acceptance-review",
       failureOwnership: DefinitionFailureOwnership.commandPrimaryWithDispatcherFallback(),
       runtimeLog: { stepId: "acceptance-review" },
-      command: () => import("./lib/run-acceptance-review.js"),
+      command: loadAcceptanceReviewCommand,
       args: { flags: FLOW_TARGET_GUARD_FLAGS, options: [...FLOW_RUN_OPTIONS] },
       help: [
         "Usage: sennel flow run acceptance-review",
@@ -2864,47 +2837,15 @@ export const FLOW_COMMANDS = {
         "Publishes steps/acceptance-review/result.json through the active Version Store and routes pass/non-pass verdicts.",
       ].join("\n"),
       async post(ctx, result) {
-        const { attachedCanonicalCommandResultArtifact } = await import("./lib/canonical-command-result.js");
-        const { validateAcceptanceReviewArtifact } = await import("./lib/acceptance-review-artifacts.js");
-        const { resolveDefinitionRoute } = await import("./definition.js");
-        const { acceptanceReviewRouteFacts } = await import("./lib/definition-route-facts.js");
-        const attached = attachedCanonicalCommandResultArtifact(result);
-        if (attached?.logicalKey !== "acceptance.review") {
-          throw new Error("acceptance-review canonical result artifact is missing");
+        const specId = ctx.specId ?? ctx.flowState.specId;
+        if (result?.settlementReceipt == null
+          || result.settlementReceipt.binding?.runId !== ctx.flowState.runId) {
+          throw new Error("Acceptance Review post requires its command's exact settlement receipt");
         }
-        const spec = ctx.flowManager.readArtifact({
-          specId: ctx.flowState.specId,
-          logicalKey: "spec.record",
-          consumerNodeId: "acceptance-review",
-        });
-        const requirementIds = JSON.parse(spec.bytes.toString("utf8")).requirements
-          .map((entry) => entry.id);
-        const artifact = validateAcceptanceReviewArtifact(attached.payload, { requirementIds });
-        const specId = ctx.flowState.specId;
-        const plan = resolveDefinitionRoute(acceptanceReviewRouteFacts({
-          state: ctx.flowManager.canonicalState(specId),
-          artifact,
-        }));
-        plan.apply({
-          blocked() {
-            ctx.flowManager.publishCurrentAttemptResult({ specId, commandResult: result });
-          },
-          repairAcceptanceToImplTriage() {
-            // One Store Activity retains the reviewed artifact and creates
-            // the replacement impl-triage Attempt together.
-            ctx.flowManager.repairAcceptanceReview({ specId, commandResult: result });
-          },
-          awaitAcceptanceDecision() {
-            tryUpdateStepStatus(ctx, "acceptance-review", "done", undefined, { event: "acceptance-review:post", result });
-            ctx.flowManager.updateStepStatus({ stepId: "acceptance-decision", requestedStatus: "in_progress" }, { specId });
-          },
-          advanceFinalRegression() {
-            tryUpdateStepStatus(ctx, "acceptance-review", "done", undefined, { event: "acceptance-review:post", result });
-            ctx.flowManager.completeAcceptanceDecisionNoOp({ specId });
-            ctx.flowManager.updateStepStatus({ stepId: "final-regression", requestedStatus: "in_progress" }, { specId });
-          },
-        });
-        ctx.flowState = ctx.flowManager.load(specId);
+        const { executeAcceptanceReviewInput } = await loadAcceptanceReviewCommand();
+        await executeAcceptanceReviewInput({ ctx, flowManager: ctx.flowManager, specId,
+          stepId: "acceptance-review", receipt: result.settlementReceipt });
+        ctx.flowState = ctx.flowManager.loadReadOnly(specId);
       },
     },
     // report generates a work report from the current flow state.
@@ -2912,7 +2853,7 @@ export const FLOW_COMMANDS = {
       helpKey: "flow.run.report",
       failureOwnership: DefinitionFailureOwnership.lifecycleOutbox(),
       runtimeLog: { stepId: "report" },
-      command: () => import("./lib/run-report.js"),
+      command: loadReportCommand,
       args: { flags: withTargetGuardFlags(["--dry-run"]), options: [...FLOW_RUN_OPTIONS] },
       help: [
         "Usage: sennel flow run report [options]",
@@ -2929,10 +2870,22 @@ export const FLOW_COMMANDS = {
         });
       },
       async post(ctx, result) {
-        await applyLifecycleActionsFromRegistry(ctx, {
-          event: "report:post",
-          command: "report",
-        }, result);
+        const { prepareReportPublication } = await import("./engine/composition/acceptance-finalization.js");
+        const { executeReportInput } = await loadReportCommand();
+        const { authenticateReportCommandReplay, assertCanonicalReportFinalEvidence } = await import("./lib/canonical-report-artifacts.js");
+        const receipt = authenticateReportCommandReplay({ flowManager: ctx.flowManager,
+          specId: ctx.specId ?? ctx.flowState.specId, commandResult: result });
+        if (receipt !== null) {
+          await executeReportInput({ ctx, flowManager: ctx.flowManager, stepId: "report", receipt });
+          ctx.flowState = ctx.flowManager.loadReadOnly(ctx.specId ?? ctx.flowState.specId);
+          return;
+        }
+        assertCanonicalReportFinalEvidence({ flowManager: ctx.flowManager, specId: ctx.specId ?? ctx.flowState.specId });
+        const preparation = prepareReportPublication({ ctx, commandResult: result });
+        try {
+          await (ctx.viaFlowDispatch === true ? (await loadDispatchCommand()).executeAcceptanceDispatch : executeReportInput)({ ctx, flowManager: ctx.flowManager, stepId: "report", binding: preparation.binding, preparation, commandResult: result });
+        } catch (error) { rethrowOriginalStepPersistenceFailure(error); }
+        ctx.flowState = ctx.flowManager.loadReadOnly(ctx.specId ?? ctx.flowState.specId);
       },
       async onError(ctx, err) {
         await applyLifecycleActionsFromRegistry(ctx, {

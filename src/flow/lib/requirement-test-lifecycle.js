@@ -312,6 +312,14 @@ export class RequirementTestBundleRevision {
     return new RequirementTestBundleRevision(value);
   }
 
+  artifactParameters() {
+    return Object.freeze({
+      specRevision: String(this.specRevision.revision.value),
+      requirementId: this.requirementId,
+      bundleRevision: String(this.revision),
+    });
+  }
+
   toJSON() {
     return {
       requirementId: this.requirementId,

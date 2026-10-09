@@ -39,10 +39,10 @@ export class AcceptedNonblockingPublication {
 export class AcceptedNonblockingDecision {
   constructor({ sourceStepId, sourceReceiptId, sourceResultDigest, sourcePublication, settlementAttempt,
     evidenceRef, evidenceDigest, definitionDigest, resultKind, rationale, remainingRisk, publications }) {
-    const review = ["impl-review", "test-result-review"].includes(sourceStepId);
-    if (!["impl-review", "impl-gate", "task-gate", "test-result-review"].includes(sourceStepId)
-      || !(sourcePublication instanceof (review ? NonGateCatalogPublication : GateCatalogPublication))
-      || !(settlementAttempt instanceof (review ? NonGateAttemptIdentity : GateAttemptIdentity))
+    const nonGate = ["impl-review", "test-result-review", "retro", "final-regression"].includes(sourceStepId);
+    if (!["impl-review", "impl-gate", "task-gate", "test-result-review", "retro", "final-regression"].includes(sourceStepId)
+      || !(sourcePublication instanceof (nonGate ? NonGateCatalogPublication : GateCatalogPublication))
+      || !(settlementAttempt instanceof (nonGate ? NonGateAttemptIdentity : GateAttemptIdentity))
       || settlementAttempt.id === sourcePublication.attempt.id
       || settlementAttempt.sequence !== sourcePublication.attempt.sequence + 1
       || !["quality", "tooling", "unavailable"].includes(resultKind)
@@ -77,6 +77,11 @@ export class AcceptedNonblockingDecision {
     this.assertEvidence(evidence);
     const expected = evidence.toJSON();
     delete expected.acceptedDecision;
+    if (originalEvidence.acceptedDecision != null) {
+      throw new TypeError("Accepted decision requires its original unaccepted evidence");
+    }
+    originalEvidence = { ...originalEvidence };
+    delete originalEvidence.acceptedDecision;
     if (receipt?.id !== this.sourceReceiptId || receipt.resultDigest !== this.sourceResultDigest
       || resultDigest !== this.sourceResultDigest || !isDeepStrictEqual(expected, originalEvidence)) {
       throw new TypeError("Accepted decision changed its original source receipt, Result digest or evidence");
@@ -100,10 +105,10 @@ export class AcceptedNonblockingDecision {
       rationale: this.rationale, remainingRisk: this.remainingRisk, publications: this.publications.map((entry) => entry.toJSON()) };
   }
   static fromJSON(value) {
-    const review = ["impl-review", "test-result-review"].includes(value.sourceStepId);
+    const nonGate = ["impl-review", "test-result-review", "retro", "final-regression"].includes(value.sourceStepId);
     return new AcceptedNonblockingDecision({ ...value,
-      sourcePublication: new (review ? NonGateCatalogPublication : GateCatalogPublication)(value.sourcePublication),
-      settlementAttempt: new (review ? NonGateAttemptIdentity : GateAttemptIdentity)(value.settlementAttempt),
+      sourcePublication: new (nonGate ? NonGateCatalogPublication : GateCatalogPublication)(value.sourcePublication),
+      settlementAttempt: new (nonGate ? NonGateAttemptIdentity : GateAttemptIdentity)(value.settlementAttempt),
       publications: value.publications.map((entry) => new AcceptedNonblockingPublication(entry)) });
   }
 }

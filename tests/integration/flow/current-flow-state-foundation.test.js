@@ -46,6 +46,15 @@ import {
   TaskNode,
 } from "../../../src/flow/lib/current-flow-state.js";
 import { CurrentFlowStateConflictError } from "../../../src/flow/lib/current-flow-state-conflict-error.js";
+import { initGitRepo, commitAll } from "../../support/infrastructure/git-repo.js";
+import { CanonicalFlowFixture, FlowAtStepFixture, makeFlowManager } from "../../support/infrastructure/flow-setup.js";
+import { completeCanonicalSourceHandoff } from "../../support/builders/source-handoff-scenario.js";
+import { implementationFinding } from "../../support/impl-phase-scenario.js";
+import { ImplementationReviewProducer } from "../../support/infrastructure/implementation-review-producer.js";
+import { CanonicalTestArtifactStore } from "../../../src/flow/lib/canonical-test-artifacts.js";
+import { AcceptanceRepairFindingSet, changedPathsFromDiff } from "../../../src/flow/lib/acceptance-review-artifacts.js";
+import RunAcceptanceReviewCommand, { AcceptanceReviewResponseSource } from "../../../src/flow/lib/run-acceptance-review.js";
+import { acceptanceProviderResponse } from "../../support/acceptance-phase-scenario.js";
 import { createTmpDir, removeTmpDir } from "../../support/builders/tmp-dir.js";
 import {
   DraftQuestionsRepairChangedResult,
@@ -442,6 +451,16 @@ function tinyDefinition({ secondTransitions = null, taskSteps = null, firstOverr
     dynamicTaskContainerId: "impl",
     dynamicTaskInsertionAfterId: "implement",
   });
+}
+
+class ModelRepairProviderResponse extends AcceptanceReviewResponseSource {
+  load(context) {
+    const response = acceptanceProviderResponse({ acceptanceContexts: [context] }, { status: "notMet" });
+    return { ...response, requirementJudgments: response.requirementJudgments.map((judgment) => ({
+      ...judgment, diffRefs: changedPathsFromDiff(context.evidence.diff).map((relative) => `diff:${relative}`),
+      testRefs: ["test-execute-result.json"],
+    })) };
+  }
 }
 
 describe("Current Flow state foundation", () => {
@@ -843,10 +862,10 @@ describe("Current Flow state foundation", () => {
   it("materializes the complete Task template recursively and rejects definition-shape forgery", () => {
     const nested = tinyDefinition({
       taskSteps: [new FlowDefinitionNode({
-        id: "task-phase",
+        id: "phase",
         key: "task-phase",
         steps: [new FlowDefinitionNode({
-          id: "task-work",
+          id: "work",
           key: "task-work",
           action: tinyAction("task-work"),
         })],
@@ -1338,57 +1357,90 @@ describe("Current Flow state foundation", () => {
     assert.equal(amendment.findNode("acceptance-review").status, "invalidated");
   });
 
-  it("uses one executable claim rule for fresh and invalidated implementation no-repair gates", () => {
-    const triageResult = new NodeResult(passedResult("All implementation findings were rejected.", []));
-
-    let fresh = CurrentFlowState.create({ definition: definition() });
-    fresh = advanceUntil(fresh, "impl-triage", "fresh-no-repair");
-    const freshTriagePath = fresh.nextAction().path;
-    fresh = fresh.startAttempt({
-      path: freshTriagePath,
-      attempt: attemptFor(fresh, freshTriagePath, "fresh-impl-triage"),
+  it("uses one executable claim rule for fresh and invalidated implementation no-repair gates", async () => {
+    tmp = createTmpDir("current-flow-no-repair-producer-");
+    const specId = "001-no-repair-claim";
+    const prepare = async (directory, targetStep, findings, { activateTarget = true } = {}) => {
+      fs.mkdirSync(directory);
+      initGitRepo(directory);
+      fs.writeFileSync(path.join(directory, "README.md"), "no-repair producer fixture\n");
+      commitAll(directory, "fixture source");
+      const flowManager = makeFlowManager(directory);
+      await new FlowAtStepFixture({
+        flowManager, specId, runId: "run-no-repair-claim", request: "Exercise no-repair Gate claims.",
+        execution: { mode: "direct", baseBranch: "main" },
+        specRecord: { requirements: [{ id: "R1", desc: "Exercise no-repair Gate claims.", task_ids: ["T1"], testable: false }] },
+        taskDocuments: [{ id: "T1", title: "Fixture Task", goal: "Exercise no-repair Gate claims.",
+          origin: "plan", added_round: 0, status: "pending" }], targetStep,
+      }).createWithProducers({
+        activateTarget,
+        sourceMutations: new Map([["T1-impl", () => {
+          fs.mkdirSync(path.join(directory, "src"), { recursive: true });
+          fs.writeFileSync(path.join(directory, "src/implementation.js"), "export const beforeRepair = true;\n");
+        }]]),
+        reviewResponses: new Map([["impl-review", { findings }]]),
+      });
+      return makeFlowManager(directory);
+    };
+    const freshRoot = path.join(tmp, "fresh");
+    let manager = await prepare(freshRoot, "impl-triage", [implementationFinding()]);
+    const reject = (directory, findingKeys) => completeCanonicalSourceHandoff({
+      root: directory, manager, specId, stepId: "impl-triage",
+      effect: { version: 1, stepId: "impl-triage", completionStatus: "done", issues: [],
+        overview: null, repair: null, noChangeReason: null,
+        triage: { version: 1, dispositions: findingKeys.map((findingKey) => ({ findingKey,
+          disposition: "reject", basis: "finding-invalid", rationale: "No implementation repair is required." })) } },
     });
-    const freshGatePath = fresh.definition.pathFor(fresh.root, "impl-gate");
-    fresh = fresh.triageImplementationNoRepair({
-      path: fresh.current,
-      attempt: attemptFor(fresh, freshGatePath, "fresh-impl-gate"),
-      result: triageResult,
-    });
+    reject(freshRoot, ["missing-behavior"]);
+    const freshGateId = manager.canonicalState(specId).attempt.id;
+    manager = makeFlowManager(freshRoot);
+    const fresh = manager.canonicalState(specId);
     assert.equal(fresh.findNode("impl-repair").status, "skipped");
     assert.equal(fresh.findNode("impl-gate").status, "in_progress");
-    assert.equal(fresh.attempt.id, "fresh-impl-gate");
-
-    let recovered = CurrentFlowState.create({ definition: definition() });
-    recovered = advanceUntil(recovered, "acceptance-review", "recovered-no-repair");
-    const acceptancePath = recovered.nextAction().path;
-    recovered = recovered.startAttempt({
-      path: acceptancePath,
-      attempt: attemptFor(recovered, acceptancePath, "acceptance-rejected"),
+    assert.equal(fresh.attempt.id, freshGateId, "the actual producer's exact Gate claim survives readback");
+    const recoveredRoot = path.join(tmp, "recovered");
+    manager = await prepare(recoveredRoot, "acceptance-review", []);
+    const acceptanceResult = await new RunAcceptanceReviewCommand({ responseSource: new ModelRepairProviderResponse() }).execute({
+      root: recoveredRoot, mainRoot: recoveredRoot, executionRoot: recoveredRoot, specId,
+      flowManager: manager, flowState: manager.loadReadOnly(specId),
     });
-    const reopenedTriagePath = recovered.definition.pathFor(recovered.root, "impl-triage");
-    recovered = recovered.repairAcceptanceReview({
-      path: acceptancePath,
-      attempt: attemptFor(recovered, reopenedTriagePath, "recovered-impl-triage"),
-      result: new NodeResult(passedResult("Acceptance requested implementation reconsideration.", [])),
+    assert.equal(acceptanceResult.verdict, "repair_required");
+    const acceptance = new CanonicalTestArtifactStore({ flowManager: manager, state: manager.loadReadOnly(specId) })
+      .readCurrentAttempt({ logicalKey: "acceptance.review", consumerNodeId: "impl-triage" });
+    const repairKeys = new AcceptanceRepairFindingSet(acceptance.payload).keys;
+    completeCanonicalSourceHandoff({ root: recoveredRoot, manager, specId, stepId: "impl-triage",
+      effect: { version: 1, stepId: "impl-triage", completionStatus: "done", issues: [],
+        overview: null, repair: null, noChangeReason: null,
+        triage: { version: 1, dispositions: repairKeys.map((findingKey) => ({ findingKey,
+          disposition: "apply", basis: "repair-required", rationale: "Apply the required Acceptance repair." })) } },
     });
-    const activeClaim = recovered.executableStepClaim({
-      nodeId: "impl-triage",
-      attempt: recovered.attempt,
+    completeCanonicalSourceHandoff({ root: recoveredRoot, manager, specId, stepId: "impl-repair",
+      mutate: () => fs.writeFileSync(path.join(recoveredRoot, "src/implementation.js"), "export const afterRepair = true;\n"),
+      effect: { version: 1, stepId: "impl-repair", completionStatus: "done", issues: [],
+        overview: null, triage: null, noChangeReason: null,
+        repair: { version: 1, findings: repairKeys.map((findingKey) => ({ findingKey, paths: ["src/implementation.js"] })),
+          summary: "Applied the Acceptance repair to the implementation.", recurrenceResolutions: [] } },
     });
+    await CanonicalFlowFixture.fromExisting({ flowManager: manager, specId }).activateWithProducers("impl-review");
+    const review = await new ImplementationReviewProducer({ findings: [implementationFinding()] }).publish({
+      root: recoveredRoot, mainRoot: recoveredRoot, executionRoot: recoveredRoot, specId,
+      flowManager: manager, flowState: manager.loadReadOnly(specId),
+    });
+    assert.equal(review.artifacts.verdict, "REJECTED");
+    CanonicalFlowFixture.fromExisting({ flowManager: manager, specId }).activate("impl-triage", { settlePredecessors: false });
+    let recovered = makeFlowManager(recoveredRoot).canonicalState(specId);
+    const activeClaim = recovered.executableStepClaim({ nodeId: "impl-triage", attempt: recovered.attempt });
     assert.ok(activeClaim instanceof ExecutableStepClaim);
     assert.equal(activeClaim.origin, "active");
     assert.equal(recovered.findNode("impl-repair").status, "invalidated");
     assert.equal(recovered.findNode("impl-gate").status, "invalidated");
-
-    const recoveredGatePath = recovered.definition.pathFor(recovered.root, "impl-gate");
-    recovered = recovered.triageImplementationNoRepair({
-      path: recovered.current,
-      attempt: attemptFor(recovered, recoveredGatePath, "recovered-impl-gate"),
-      result: triageResult,
-    });
+    reject(recoveredRoot, ["missing-behavior"]);
+    const recoveredGateId = manager.canonicalState(specId).attempt.id;
+    recovered = makeFlowManager(recoveredRoot).canonicalState(specId);
     assert.equal(recovered.findNode("impl-repair").status, "skipped");
     assert.equal(recovered.findNode("impl-gate").status, "in_progress");
-    assert.equal(recovered.attempt.id, "recovered-impl-gate");
+    assert.equal(recovered.attempt.id, recoveredGateId, "the replacement Gate claim survives readback");
+    assert.notEqual(recoveredGateId, freshGateId);
     assert.equal(recovered.attempt.sequence, 2, "recover must advance the invalidated gate Attempt episode");
   });
 

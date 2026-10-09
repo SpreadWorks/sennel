@@ -49,7 +49,6 @@ const TYPE_FOR_OPERATION = Object.freeze({
   advance_task_review_stage: "result_confirmed",
   initialize_requirement_test_lifecycle: "result_confirmed",
   advance_requirement_test_lifecycle: "result_confirmed",
-  complete_acceptance_decision_noop: "result_confirmed",
   rewind: "recovery",
   rewind_test_evidence: "recovery",
   repair_implementation: "recovery",
@@ -184,8 +183,8 @@ export class CanonicalFlowRuntime {
   loadSnapshot(specId) {
     return this.store(specId).loadSnapshot();
   }
-  readCurrentSpecReview(specId) {
-    return this.store(specId).readCurrentSpecReview();
+  readCurrentSpecReview(specId, input = {}) {
+    return this.store(specId).readCurrentSpecReview(input);
   }
   readLatestSpecReview(specId) {
     return this.store(specId).readLatestSpecReview();
@@ -465,12 +464,13 @@ export class CanonicalFlowRuntime {
     });
   }
 
-  confirmAttempt({ specId, activityId, result, status = "done", timing = null, provider = null, model = null, effort = null, usage = null, references, specRecord, artifactWrites, artifactRemovals, artifactBaselines, testSourceBaseline, sourceWorkerUpgrade = undefined, admission = undefined, gateTaskLifecycle = null, targetAttempt = null, publicationLimits = undefined } = {}) {
+  confirmAttempt({ specId, activityId, result, status = "done", timing = null, provider = null, model = null, effort = null, usage = null, references, specRecord, artifactWrites, artifactRemovals, artifactBaselines, testSourceBaseline, sourceWorkerUpgrade = undefined, admission = undefined, gateTaskLifecycle = null, targetAttempt = null, outbox = null, publicationLimits = undefined } = {}) {
     const state = this.#state(specId);
     return this.#applyAttemptTransition(specId, state, {
       id: activityId,
       nodeId: this.#currentNodeId(state),
       operation: "confirm_attempt",
+      outbox,
       attempt: targetAttempt,
       result,
       status,
@@ -621,21 +621,6 @@ export class CanonicalFlowRuntime {
     });
   }
 
-  completeAcceptanceDecisionNoOp({ specId, activityId, result, timing = null, references, admission = undefined } = {}) {
-    const state = this.#state(specId);
-    return this.#applyAttemptTransition(specId, state, {
-      id: activityId,
-      nodeId: this.#currentNodeId(state),
-      operation: "complete_acceptance_decision_noop",
-      attempt: null,
-      result,
-      status: "done",
-      timing,
-      references,
-      admission,
-    });
-  }
-
   rewind({ specId, activityId, nodeId, attempt, timing = null, provider = null, model = null, effort = null, usage = null, references, artifactWrites = undefined, admission = undefined, retryRecoveryPublication = undefined, expectedAttempt = null } = {}) {
     const state = this.#state(specId);
     const expected = expectedAttempt === null ? null : CurrentAttemptIdentity.from(expectedAttempt);
@@ -658,12 +643,13 @@ export class CanonicalFlowRuntime {
   }
 
   /** Reset the fixed retro test-evidence route in one Version Store Activity. */
-  rewindTestEvidence({ specId, activityId, attempt, timing = null, provider = null, model = null, effort = null, usage = null, references } = {}) {
+  rewindTestEvidence({ specId, activityId, attempt, result = null, artifactWrites = undefined, admission = undefined, timing = null, provider = null, model = null, effort = null, usage = null, references } = {}) {
     const state = this.#state(specId);
     return this.#applyAttemptTransition(specId, state, {
       id: activityId,
-      nodeId: "test-execute",
+      nodeId: result === null ? "test-execute" : this.#currentNodeId(state),
       operation: "rewind_test_evidence",
+      result, artifactWrites, admission,
       attempt: requiredAttempt(attempt, "rewindTestEvidence"),
       timing,
       provider,
@@ -1144,12 +1130,13 @@ export class CanonicalFlowRuntime {
     });
   }
 
-  acceptFinalRegressionFailure({ specId, activityId, attempt, result, artifactWrites = undefined } = {}) {
+  acceptFinalRegressionFailure({ specId, activityId, attempt, result, artifactWrites = undefined, admission = undefined } = {}) {
     const state = this.#state(specId);
     return this.#applyAttemptTransition(specId, state, {
       id: activityId,
       nodeId: "final-regression",
       operation: "accept_final_regression_failure",
+      admission,
       attempt: requiredAttempt(attempt, "final-regression acceptance"),
       result,
       artifactWrites,
@@ -1335,6 +1322,7 @@ export class CanonicalFlowRuntime {
     approvalTasks = [],
     acceptedDeferral = null,
     acceptedDecision = null,
+    outbox = null,
   }) {
     const target = requiredText(nodeId, "transition nodeId");
     const node = state.findNode(target);
@@ -1347,7 +1335,7 @@ export class CanonicalFlowRuntime {
       ? attempt
       : operation === "complete_draft_completion"
       ? stepConnectionReceipt?.sourceAttempt ?? null
-      : operation === "plan_gate_repair" && result !== null
+      : ["plan_gate_repair", "rewind_test_evidence"].includes(operation) && result !== null
       ? state.attempt
       : new Set(["repair_implementation", "triage_implementation_for_repair", "triage_implementation_no_repair", "repair_acceptance_review", "recover_missing_producer_artifact", "recover_task_execution_overrun", "defer_failed_review", "defer_failed_gate", "advance_task_review_stage", "initialize_requirement_test_lifecycle", "advance_requirement_test_lifecycle"]).has(operation)
       ? state.attempt ?? attempt
@@ -1385,6 +1373,7 @@ export class CanonicalFlowRuntime {
         taskReviewStagePlan,
         requirementTestInitialization,
         requirementTestLifecycle,
+        outbox,
         approvalTasks,
       },
     });

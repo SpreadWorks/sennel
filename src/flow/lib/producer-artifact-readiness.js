@@ -14,6 +14,12 @@ import { FlowSpecRevision } from "../../lib/flow-spec-revision.js";
 import { CurrentFlowStateInvariantError } from "./current-flow-state.js";
 import { validateAcceptanceReviewArtifact } from "./acceptance-review-artifacts.js";
 import { TaskStepIdentity } from "./task-step-identity.js";
+import { StepResult, stepResultDigest } from "../engine/step-result.js";
+import { CanonicalCommandAttemptArtifactHistory } from "./canonical-command-result.js";
+import { isDeepStrictEqual } from "node:util";
+import { AcceptedGateDeferral } from "./accepted-gate-deferral.js";
+import { assertGateSettlementPublication } from "./gate-settlement-publication.js";
+import { DraftStepSettlementReceipt, settleImplStepResult, settleTaskStepResult } from "../definition.js";
 
 function requiredText(value, field) {
   if (typeof value !== "string" || value.trim() === "") {
@@ -218,19 +224,6 @@ function producerHandoffs(producerNodeId, consumerNodeId) {
   })];
 }
 
-function acceptanceDecisionNoOpActivity({ producer, consumerNodeId, expectedAttemptId, activities }) {
-  if (producer.id !== "acceptance-decision" || consumerNodeId !== "final-regression") return null;
-  return activities.find((activity) => (
-      activity.nodeId === producer.id
-      && activity.attemptId === expectedAttemptId
-      && activity.sequence === producer.attemptSequence
-      && (
-        activity.transition.operation === "complete_acceptance_decision_noop"
-        || (activity.transition.operation === "confirm_attempt" && activity.result?.outcome === "passed")
-      )
-    )) ?? null;
-}
-
 function passedAcceptanceReview({ state, catalog, activities, readCatalogedArtifact }) {
   const readiness = new ProducerArtifactReadiness({
     producerNodeId: "acceptance-review",
@@ -278,8 +271,58 @@ function nonblockingSourceMatches(producerNodeId, sourceStep) {
     || (sourceStep === "task-gate" && taskNode(producerNodeId, "gate") !== null);
 }
 
-function acceptedPriorAttemptSettlement({ producer, descriptor, activities }) {
+function acceptedPriorAttemptSettlement({ state, producer, descriptor, activities, readCatalogedArtifact }) {
   if (producer.status !== "done") return null;
+  for (const activity of activities) {
+    const receipt = activity.result?.draftSettlementReceipt;
+    if (activity.nodeId !== producer.id || activity.sequence !== producer.attemptSequence
+      || !["continue_nonblocking", "defer_failed_gate"].includes(activity.transition?.operation) || receipt == null
+      || activity.result?.stepResult == null) continue;
+    const stored = activity.result.stepResult;
+    const result = StepResult.fromStored(receipt.binding.stepId, stored.toJSON?.() ?? stored);
+    const gateDeferral = activity.transition.operation === "defer_failed_gate";
+    const decision = gateDeferral ? result.evidence?.continuation : result.evidence?.acceptedDecision;
+    if (gateDeferral && !(decision instanceof AcceptedGateDeferral)) continue;
+    if (decision == null) continue;
+    const source = activities.find((entry) => entry.result?.draftSettlementReceipt?.id === decision.sourceReceiptId);
+    const sourceReceipt = source?.result?.draftSettlementReceipt;
+    if (source == null || source.result?.stepResult == null
+      || activity.result.outcome !== "passed" || receipt.settlementKind !== "target-connection"
+      || receipt.binding.attemptId !== activity.attemptId || receipt.binding.attemptSequence !== activity.sequence
+      || decision.settlementAttempt.id !== activity.attemptId || decision.settlementAttempt.sequence !== activity.sequence
+      || source.id !== descriptor.activityId || source.nodeId !== producer.id
+      || decision.sourcePublication.producerActivityId !== descriptor.activityId
+      || decision.sourcePublication.artifactId !== descriptor.relativePath || decision.sourcePublication.fingerprint !== descriptor.hash
+      || source.attemptId !== decision.sourcePublication.attempt.id || source.sequence !== decision.sourcePublication.attempt.sequence) continue;
+    const originalStored = source.result.stepResult;
+    const original = StepResult.fromStored(sourceReceipt.binding.stepId, originalStored.toJSON?.() ?? originalStored);
+    if (gateDeferral) {
+      const binding = { runId: state.runId, specId: state.specId, stepId: result.stepId,
+        attempt: decision.settlementAttempt };
+      const selected = result.stepId === "task-gate" ? settleTaskStepResult(result.stepId, result)
+        : settleImplStepResult(result.stepId, result);
+      DraftStepSettlementReceipt.assertStored(receipt, { binding, result, settlement: selected });
+      const sourceBinding = { ...binding, attempt: decision.sourcePublication.attempt };
+      const sourceIdentity = result.evidence.identity;
+      const introduction = activity.transition.attempt;
+      const latestSource = activities.findLast((entry) => entry.nodeId === producer.id
+        && entry.attemptId === source.attemptId && entry.sequence === source.sequence
+        && entry.result?.draftSettlementReceipt != null);
+      if (sourceIdentity.runId !== binding.runId || sourceIdentity.specId !== binding.specId
+        || sourceIdentity.stepId !== producer.id || producer.result?.draftSettlementReceipt?.id !== receipt.id
+        || introduction?.nodeId !== producer.id || introduction.id !== activity.attemptId
+        || introduction.sequence !== activity.sequence || latestSource !== source
+        || source.transition.operation !== "fail_attempt" || source.result.outcome !== "failed"
+        || typeof readCatalogedArtifact !== "function") continue;
+      const bytes = readCatalogedArtifact(descriptor);
+      const history = CanonicalCommandAttemptArtifactHistory.fromBytes({ logicalKey: descriptor.logicalKey, bytes });
+      assertGateSettlementPublication({ state, activity: source, descriptor, historyEntry: history.current,
+        attempt: sourceBinding.attempt, publicationBytes: bytes });
+    } else decision.assertRecord(activity.transition.nonblocking);
+    decision.assertOriginalSource({ receipt: sourceReceipt, resultDigest: stepResultDigest(original),
+      evidence: result.evidence, originalEvidence: original.evidence?.toJSON() ?? original.error?.data?.evidence });
+    return source;
+  }
   return activities.find((activity) => {
     const transition = activity.transition;
     if (activity.nodeId !== producer.id
@@ -301,6 +344,42 @@ function acceptedPriorAttemptSettlement({ producer, descriptor, activities }) {
       && decision.sourceAttempt === activity.sequence
       && decision.evidenceRef === descriptor.relativePath;
   }) ?? null;
+}
+
+/** Exact accepted FAIL publication: the old failure receipt owns the new producer Attempt. */
+function isAcceptedFinalRegressionPublication({ activity, descriptor, producer, activities, readCatalogedArtifact }) {
+  if (producer.id !== "final-regression" || producer.status !== "done"
+    || activity.transition.operation !== "accept_final_regression_failure") return false;
+  const stored = activity.result?.stepResult;
+  if (stored?.kind !== "final-regression-failure-accepted") return false;
+  const result = StepResult.fromStored(producer.id, stored.toJSON?.() ?? stored);
+  const receipt = activity.result?.draftSettlementReceipt;
+  const evidence = result?.evidence;
+  const acceptedBinding = receipt?.binding;
+  const acceptedAttempt = activity.transition.attempt;
+  if (result?.kind !== "final-regression-failure-accepted" || receipt?.resultKind !== result.kind
+    || receipt.targetStepId !== "report" || acceptedBinding?.stepId !== producer.id
+    || acceptedAttempt?.id !== activity.attemptId || acceptedAttempt.sequence !== activity.sequence
+    || acceptedBinding.attemptId !== activity.attemptId || acceptedBinding.attemptSequence !== activity.sequence
+    || evidence?.identity?.attempt?.id !== activity.attemptId || evidence.identity.attempt.sequence !== activity.sequence
+    || evidence.publication?.producerActivityId !== activity.id || evidence.publication.artifactId !== descriptor.relativePath
+    || evidence.publication.fingerprint !== descriptor.hash || evidence.observation?.recordAndProceed.accepted !== true) return false;
+  const source = activities.findLast((entry) => entry.nodeId === producer.id
+    && entry.sequence === activity.sequence - 1
+    && entry.confirmationOrder < activity.confirmationOrder && entry.result?.stepResult?.kind === "final-regression-failed");
+  const original = source?.result?.draftSettlementReceipt;
+  const sourceStored = source?.result?.stepResult;
+  const sourceResult = sourceStored == null ? null : StepResult.fromStored(producer.id, sourceStored.toJSON?.() ?? sourceStored);
+  if (source?.transition.operation !== "fail_attempt" || source.result.outcome !== "failed"
+    || original?.binding.attemptId !== source.attemptId || original.binding.attemptSequence !== source.sequence
+    || original.binding.runId !== acceptedBinding.runId || original.binding.specId !== acceptedBinding.specId
+    || sourceResult.evidence.publication.producerActivityId !== source.id
+    || typeof readCatalogedArtifact !== "function") return false;
+  const history = CanonicalCommandAttemptArtifactHistory.fromBytes({ logicalKey: "final.regression", bytes: readCatalogedArtifact(descriptor) });
+  const originalFailure = history.attempts.find((entry) => entry.attempt === source.sequence)?.payload;
+  return history.current.attempt === activity.sequence && originalFailure?.result === "fail"
+    && isDeepStrictEqual(history.current.payload.recordAndProceed.executionBinding, originalFailure.executionBinding);
+
 }
 
 /** Whether an Activity is the durable publication boundary of a Draft execution generation. */
@@ -333,32 +412,12 @@ export class ProducerArtifactReadiness {
       throw new CurrentFlowStateInvariantError("producer artifact readiness requires producer state, catalog, and confirmed Activities");
     }
     let expectedAttemptId = null;
-    // A passed acceptance review owns the definition's explicit no-op path.
-    // It creates a short, durable Attempt whose operation is distinct from an
-    // operator decision. A cataloged acceptance.decision always takes
-    // precedence, even though its normal confirmation is also `passed`.
-    // Otherwise an explicit risk decision would be mistaken for a legacy
-    // no-op and rejected for correctly having a non-PASS review verdict.
+    // The saved review settlement owns the definition's unexecuted decision.
     if (producer.id === "acceptance-decision" && this.consumerNodeId === "final-regression") {
-      expectedAttemptId = producerAttemptId(state, activities, producer);
-      const hasCatalogedDecision = this.handoffs.some((handoff) => catalog.artifacts.some((entry) => (
-        entry.relativePath === handoff.relativePath && entry.logicalKey === handoff.logicalKey
-      )));
-      if (!hasCatalogedDecision) {
-        const noOp = acceptanceDecisionNoOpActivity({
-          producer,
-          consumerNodeId: this.consumerNodeId,
-          expectedAttemptId,
-          activities,
-        });
-        if (noOp !== null) {
-          try {
-            passedAcceptanceReview({ state, catalog, activities, readCatalogedArtifact });
-            return;
-          } catch (cause) {
-            throw this.#missing(`acceptance decision no-op is not backed by cataloged PASS acceptance.review: ${cause.message}`);
-          }
-        }
+      const source = state.unexecutedCompletionSource(producer.id);
+      if (source?.id === "acceptance-review") {
+        passedAcceptanceReview({ state, catalog, activities, readCatalogedArtifact });
+        return;
       }
     }
     for (const handoff of this.handoffs) {
@@ -377,7 +436,7 @@ export class ProducerArtifactReadiness {
         consumerNodeId: this.consumerNodeId,
         logicalKey: handoff.logicalKey,
       });
-      const acceptedPriorAttempt = acceptedPriorAttemptSettlement({ producer, descriptor, activities });
+      const acceptedPriorAttempt = acceptedPriorAttemptSettlement({ state, producer, descriptor, activities, readCatalogedArtifact });
       const confirmation = activities.find((activity) => (
         activity.id === descriptor.activityId
         && activity.nodeId === this.producerNodeId
@@ -404,6 +463,7 @@ export class ProducerArtifactReadiness {
           // for a Definition-owned route.
               || activity.transition.operation === "publish_artifacts"
               || isDraftExecutionPublicationActivity(activity)
+              || isAcceptedFinalRegressionPublication({ activity, descriptor, producer, activities, readCatalogedArtifact })
             ))
           // A deferral or an explicit nonblocking continuation can settle a
           // failed producer through a replacement Attempt. The source artifact
@@ -495,37 +555,6 @@ export class ProducerArtifactReadinessAdmission {
 
   assert(snapshot) {
     for (const readiness of this.readinesses) readiness.assert(snapshot);
-  }
-}
-
-/**
- * The only artifactless primary-result exception. A no-op decision is owned
- * by a cataloged PASS acceptance review, not by the command dispatcher.
- */
-export class AcceptanceDecisionNoOpAdmission {
-  constructor() {
-    this.acceptanceReadiness = new ProducerArtifactReadiness({
-      producerNodeId: "acceptance-review",
-      consumerNodeId: "final-regression",
-    });
-    Object.freeze(this);
-  }
-
-  assert({ state, catalog, activities, readCatalogedArtifact }) {
-    if (state?.current?.at(-1) !== "acceptance-decision" || state.attempt === null) {
-      throw this.#denied("acceptance-decision is not the active Attempt");
-    }
-    try {
-      passedAcceptanceReview({ state, catalog, activities, readCatalogedArtifact });
-    } catch (cause) {
-      throw this.#denied(cause.message);
-    }
-  }
-
-  #denied(detail) {
-    const error = new CurrentFlowStateInvariantError(`acceptance decision no-op is not authorized: ${detail}`);
-    error.code = "CANONICAL_ACCEPTANCE_DECISION_NOOP_NOT_AUTHORIZED";
-    return error;
   }
 }
 

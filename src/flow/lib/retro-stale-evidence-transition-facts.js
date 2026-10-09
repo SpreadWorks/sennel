@@ -7,7 +7,7 @@
  */
 
 import { CanonicalCommandAttemptArtifactHistory } from "./canonical-command-result.js";
-import { RetroStaleEvidencePublication, RetroStaleEvidenceRecoveryFacts } from "../definition.js";
+import { RetroStaleEvidencePublication, RetroStaleEvidenceRecoveryFacts } from "./retro-stale-evidence-values.js";
 import { StaleTestEvidenceMismatch } from "./stale-test-evidence-refresh.js";
 
 const REQUIRED_KEYS = Object.freeze(["test.execute", "test.result.review"]);

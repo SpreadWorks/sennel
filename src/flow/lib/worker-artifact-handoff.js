@@ -8266,7 +8266,7 @@ function canonicalHandoffPublications(request, submission, draftCandidate = null
     const candidate = new RequirementTestCandidateBundle({ bundle, sources, support });
     candidateStore.assertCandidatePrimaryPathsAvailable(candidate, provenanceIndex);
     requirementTestCandidate = candidate;
-    const parameters = { requirementId: binding.requirementId, bundleRevision: String(binding.bundleRevision) };
+    const parameters = candidate.bundle.artifactParameters();
     artifactWrites.push(...replacement.artifactWrites.map((entry) => ({
       logicalKey: "test.requirement.candidate.source",
       parameters: { ...parameters, testPath: entry.parameters.testPath },

@@ -192,7 +192,7 @@ export function definitionNonblockingEligibilityForActiveFlow(root, state, flowM
       phase: nonblockingRouteFor(step).phase, root });
     return selected === null ? null : implementationNonblockingEligibilityForResult(selected.result);
   }
-  if (step === "impl-review" || step === "task-review" || step === "test-result-review" || step === "spec-gate") {
+  if (["impl-review", "task-review", "test-result-review", "spec-gate", "retro"].includes(step)) {
     const saved = flowManager.readCurrentStepSettlement({ specId: state.specId, stepId: step });
     if (saved === null) return null;
     return step === "spec-gate"

@@ -89,6 +89,15 @@ export class AcceptanceEvidenceBindings {
       || judgment.repairRefs.some((ref) => !this.repair.includes(ref))) throw new Error("acceptance judgment contains an unbound evidence reference");
     return judgment;
   }
+  testReferences(requirementIds = this.ids) {
+    return [...requirementIds.map((id) => `test-execute-result.json#${id}`), "test-result-review.json"];
+  }
+  bindDeferredDisposition(input, finding) {
+    const sourceRef = `${finding.sourceArtifact}#${finding.sourceFindingId}`;
+    const allowedRefs = new Set([sourceRef, ...this.diff, ...this.repair, ...this.testReferences()]);
+    return { ...input, evidenceRefs: [sourceRef,
+      ...(input.evidenceRefs || []).filter((ref) => ref !== sourceRef && allowedRefs.has(ref))] };
+  }
   validateDeferredDisposition(input, finding) {
     if (input?.findingId !== finding.findingId || !DISPOSITIONS.has(input?.finalDisposition)) throw new Error("invalid deferred finding disposition");
     const refs = strings(input.evidenceRefs, "deferred evidenceRefs");

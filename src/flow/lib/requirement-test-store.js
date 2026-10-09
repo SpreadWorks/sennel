@@ -1,5 +1,6 @@
 import { CURRENT_FLOW_SCHEMA_REVISION } from "../../lib/flow-schema-revision.js";
 import crypto from "node:crypto";
+import { StepResult, TestGateCompatibleResult } from "../engine/step-result.js";
 
 import {
   CanonicalFlowArtifactBaseline,
@@ -39,13 +40,6 @@ function parseJson(bytes, field) {
   }
 }
 
-function bundleParameters(bundle) {
-  return Object.freeze({
-    requirementId: bundle.requirementId,
-    bundleRevision: String(bundle.revision),
-  });
-}
-
 function supportParameters(support) {
   return Object.freeze({
     ownerRequirementId: support.ownerRequirementId,
@@ -57,8 +51,8 @@ function supportParameters(support) {
 const PROVENANCE_INDEX_TOKEN = Symbol("requirement-test-provenance-index");
 
 export function candidateBundleParameters(relativePath) {
-  const match = /^artifacts\/test-candidates\/([^/]+)\/revision-([1-9][0-9]*)\/bundle\.json$/.exec(relativePath);
-  return match === null ? null : { requirementId: match[1], bundleRevision: match[2] };
+  const match = /^artifacts\/test-candidates\/spec-revision-([1-9][0-9]*)\/([^/]+)\/revision-([1-9][0-9]*)\/bundle\.json$/.exec(relativePath);
+  return match === null ? null : { specRevision: match[1], requirementId: match[2], bundleRevision: match[3] };
 }
 
 class RequirementTestSupportPublication {
@@ -102,7 +96,23 @@ export class RequirementTestCandidateProvenanceIndex {
   }
 
   primaryRequirementIds(testPath) {
-    return Object.freeze([...(this.#primaryClaims.get(testPath) ?? [])]);
+    return Object.freeze([...new Set((this.#primaryClaims.get(testPath) ?? [])
+      .map((candidate) => candidate.bundle.requirementId))]);
+  }
+
+  allowsPrimaryReplacement(candidate, testPath, activeBytes, promotedResult) {
+    if (!(promotedResult instanceof TestGateCompatibleResult)
+      || promotedResult.binding.requirementId !== candidate.bundle.requirementId
+      || promotedResult.binding.specRevision.specId !== candidate.bundle.specRevision.specId
+      || promotedResult.binding.specRevision.revision.value >= candidate.bundle.specRevision.revision.value) return false;
+    const activeDigest = crypto.createHash("sha256").update(activeBytes).digest("hex");
+    return (this.#primaryClaims.get(testPath) ?? []).some((previous) => (
+      previous.bundle.requirementId === candidate.bundle.requirementId
+      && previous.bundle.specRevision.equals(promotedResult.binding.specRevision)
+      && previous.digest === promotedResult.evidence.observation.candidateDigest
+      && previous.sources.some((source) => source.testPath === testPath
+        && source.digest === activeDigest && source.byteLength === activeBytes.length)
+    ));
   }
 
   supportPublications(supportPath) {
@@ -145,7 +155,7 @@ export class RequirementTestArtifactStore {
   }
 
   readCandidate({ bundle, consumerNodeId = "test-gate" } = {}) {
-    const parameters = bundleParameters(bundle);
+    const parameters = bundle.artifactParameters();
     const manifestResolved = this.flowManager.readArtifact({
       specId: this.specId,
       logicalKey: "test.requirement.candidate.bundle",
@@ -264,13 +274,19 @@ export class RequirementTestArtifactStore {
       const targetRelativePath = `tests/${source.testPath}`;
       if (replacements.has(targetRelativePath)) {
         const candidate = replacements.get(targetRelativePath);
+        const priorPromotion = candidate.kind === "candidate"
+          ? this.#latestPromotion(candidateRead.candidate.bundle.requirementId) : null;
+        if (priorPromotion !== null || candidate.kind === "support") provenanceIndex ??= this.candidateProvenanceIndex();
+        if (priorPromotion !== null && provenanceIndex.allowsPrimaryReplacement(
+          candidateRead.candidate, targetRelativePath, source.bytes, priorPromotion,
+        )) continue;
         const supportCollision = candidate.kind === "support"
           && targetRelativePath.startsWith("tests/support/")
           && this.#activeSupportOwner(
             targetRelativePath,
             candidate.support,
             source.bytes,
-            provenanceIndex ?? (provenanceIndex = this.candidateProvenanceIndex()),
+            provenanceIndex,
           );
         if (!supportCollision) {
           throw new Error(`Requirement test candidate path collides with a promoted test source: ${targetRelativePath}`);
@@ -291,6 +307,19 @@ export class RequirementTestArtifactStore {
       ...replacement,
       artifactBaselines: Object.freeze([...(candidateRead.baselines ?? [])]),
     });
+  }
+
+  // Full-tree publications also carry unchanged other-Requirement sources.
+  // The latest saved compatible Gate for this Requirement, rather than the
+  // active descriptor's last publisher, identifies the promoted candidate.
+  #latestPromotion(requirementId) {
+    const activities = this.flowManager.activityLedger(this.specId);
+    for (const activity of [...activities].reverse()) {
+      if (activity.nodeId !== "test-gate" || activity.result?.stepResult === undefined) continue;
+      const result = StepResult.fromStored("test-gate", activity.result.stepResult);
+      if (result instanceof TestGateCompatibleResult && result.binding.requirementId === requirementId) return result;
+    }
+    return null;
   }
 
   /**
@@ -323,10 +352,9 @@ export class RequirementTestArtifactStore {
     const supportClaims = new Map();
     const supportRead = new Map();
     for (const { bundle } of this.#candidateBundles(consumerNodeId)) {
-      const requirementId = bundle.bundle.requirementId;
       for (const source of bundle.sources) {
         const claims = primaryClaims.get(source.testPath) ?? [];
-        if (!claims.includes(requirementId)) claims.push(requirementId);
+        claims.push(bundle);
         primaryClaims.set(source.testPath, claims);
       }
       for (const support of bundle.support) {
@@ -462,7 +490,8 @@ export class RequirementTestArtifactStore {
           resolved.bytes,
           "Requirement test candidate bundle",
         ));
-        if (bundle.bundle.requirementId !== parameters.requirementId
+        if (String(bundle.bundle.specRevision.revision.value) !== parameters.specRevision
+          || bundle.bundle.requirementId !== parameters.requirementId
           || String(bundle.bundle.revision) !== parameters.bundleRevision) {
           throw new Error("Requirement test candidate bundle identity does not match its catalog path");
         }

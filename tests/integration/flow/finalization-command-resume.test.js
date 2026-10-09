@@ -3,10 +3,11 @@ import fs from "node:fs";
 import path from "node:path";
 import { describe, it } from "node:test";
 
-import { FlowOutbox, finalizationOutboxIdentity } from "../../../src/flow/lib/flow-outbox.js";
+import { FlowOutbox, FlowOutboxStore, finalizationOutboxIdentity } from "../../../src/flow/lib/flow-outbox.js";
 import RunFinalizeCommitCommand from "../../../src/flow/lib/run-finalize-commit.js";
 import RunFinalizeMergeCommand from "../../../src/flow/lib/run-finalize-merge.js";
 import RunFinalizeSyncCommand from "../../../src/flow/lib/run-finalize-sync.js";
+import { FLOW_COMMANDS } from "../../../src/flow/registry.js";
 import RunReportCommand from "../../../src/flow/lib/run-report.js";
 import { outboxCommitMarker } from "../../../src/flow/lib/run-finalize.js";
 import { runGit } from "../../../src/lib/git-helpers.js";
@@ -27,39 +28,45 @@ function commitCount(root, ref = "HEAD") {
   return Number(result.stdout.trim());
 }
 
-function setupFinalizationRepo(root, flowOverrides = {}) {
+async function setupFinalizationRepo(root, flowOverrides = {}) {
   initGitRepo(root);
   writeFile(root, "README.md", "baseline\n");
+  writeFile(root, "package.json", JSON.stringify({ type: "module", scripts: { test: "node --test fixture.test.js" } }));
+  writeFile(root, "fixture.test.js", "import test from 'node:test'; test('fixture regression', () => {});\n");
   commitAll(root, "test: baseline");
   checkoutNewBranch(root, "feature/001-test");
   const flowManager = makeFlowManager(root);
-  const state = new CanonicalFlowFixture({
+  writeFile(root, "src-change.js", "export const changed = true;\n");
+  const fixture = new CanonicalFlowFixture({
     flowManager,
     specId: flowOverrides.specId ?? "001-test",
     runId: flowOverrides.runId ?? "run-test",
     request: flowOverrides.request ?? "finalization fixture",
     issue: flowOverrides.issue ?? null,
+    specRecord: { requirements: [{ id: "R1", desc: "Exercise finalization recovery.", task_ids: ["T1"], testable: false }] },
     execution: {
       mode: flowOverrides.worktree === true ? "worktree" : "branch",
       baseBranch: flowOverrides.baseBranch ?? "main",
       featureBranch: flowOverrides.featureBranch ?? "feature/001-test",
     },
-  }).create().registerActive().activate("report").state();
-  writeFile(root, "src-change.js", "export const changed = true;\n");
-  return { state, flowManager };
+  }).create().addTask({ id: "T1", title: "Fixture Task", goal: "Exercise finalization recovery.",
+    origin: "plan", added_round: 0, status: "pending" }).registerActive();
+  await fixture.activateWithProducers("report");
+  return { state: fixture.state(), flowManager };
 }
 
 describe("finalization command crash resumption", () => {
   it("passes the pre-hook outbox entry unchanged to report issue comment idempotency", async () => {
     const root = createTmpDir("finalize-outbox-report-dispatch-");
+    const externalRoot = createTmpDir("finalize-gh-process-");
     const originalPath = process.env.PATH;
     const originalGhLog = process.env.SENNEL_TEST_GH_LOG;
     try {
-      const { state, flowManager } = setupFinalizationRepo(root, { issue: 414 });
-      const entry = pendingEntry(state, "report");
-      const binDir = path.join(root, "bin");
-      const ghLog = path.join(root, "gh.log");
-      writeFile(root, "bin/gh", [
+      const { state, flowManager } = await setupFinalizationRepo(root, { issue: 414 });
+      const entry = new FlowOutboxStore(flowManager, { specId: state.specId }).begin(finalizationOutboxIdentity(state, "report"));
+      const binDir = path.join(externalRoot, "bin");
+      const ghLog = path.join(externalRoot, "gh.log");
+      writeFile(externalRoot, "bin/gh", [
         "#!/bin/sh",
         "printf '%s\\n' \"$@\" >> \"$SENNEL_TEST_GH_LOG\"",
         "exit 0",
@@ -106,26 +113,29 @@ describe("finalization command crash resumption", () => {
       process.env.PATH = originalPath;
       if (originalGhLog === undefined) delete process.env.SENNEL_TEST_GH_LOG;
       else process.env.SENNEL_TEST_GH_LOG = originalGhLog;
+      removeTmpDir(externalRoot);
       removeTmpDir(root);
     }
   });
 
-  it("replays report generation without creating a second durable artifact", async () => {
+  it("replays exact report publication without creating a second durable artifact", async () => {
     const root = createTmpDir("finalize-outbox-report-");
     try {
-      const { state, flowManager } = setupFinalizationRepo(root);
-      const entry = pendingEntry(state, "report");
+      const { state, flowManager } = await setupFinalizationRepo(root);
+      const entry = new FlowOutboxStore(flowManager, { specId: state.specId }).begin(finalizationOutboxIdentity(state, "report"));
       const ctx = { root, flowState: state, flowManager, flowOutboxEntry: entry };
       const reportPath = flowManager.specLocation(state.specId).reportFile;
 
       const first = await new RunReportCommand().execute(ctx);
       assert.equal(first.result, "ok");
-      flowManager.publishCurrentAttemptResult({ specId: state.specId, commandResult: first });
+      await FLOW_COMMANDS.run.report.post(ctx, first);
       const firstBytes = fs.readFileSync(reportPath);
 
-      const resumed = await new RunReportCommand().execute(ctx);
-      assert.equal(resumed.result, "ok");
-      flowManager.publishCurrentAttemptResult({ specId: state.specId, commandResult: resumed });
+      const before = { state: flowManager.canonicalState(state.specId).toJSON(),
+        activities: flowManager.activityLedger(state.specId), catalog: flowManager.artifactCatalog(state.specId).toJSON() };
+      await FLOW_COMMANDS.run.report.post(ctx, first);
+      assert.deepEqual({ state: flowManager.canonicalState(state.specId).toJSON(),
+        activities: flowManager.activityLedger(state.specId), catalog: flowManager.artifactCatalog(state.specId).toJSON() }, before);
       assert.deepEqual(fs.readFileSync(reportPath), firstBytes);
     } finally {
       removeTmpDir(root);
@@ -135,7 +145,7 @@ describe("finalization command crash resumption", () => {
   it("does not create a second implementation commit after a pre-post-hook crash", async () => {
     const root = createTmpDir("finalize-outbox-commit-");
     try {
-      const { state, flowManager } = setupFinalizationRepo(root);
+      const { state, flowManager } = await setupFinalizationRepo(root);
       const entry = pendingEntry(state, "finalize-commit");
       const ctx = { root, flowState: state, flowManager, flowOutboxEntry: entry };
 
@@ -155,7 +165,7 @@ describe("finalization command crash resumption", () => {
     const root = createTmpDir("finalize-outbox-merge-");
     try {
       container.set("config", { commands: { gh: "disable" } });
-      const { state, flowManager } = setupFinalizationRepo(root);
+      const { state, flowManager } = await setupFinalizationRepo(root);
       commitAll(root, "feat: implementation");
       const entry = pendingEntry(state, "finalize-merge");
       const ctx = { root, flowState: state, flowManager, flowOutboxEntry: entry };
@@ -177,7 +187,7 @@ describe("finalization command crash resumption", () => {
   it("skips docs sync when its stable outbox commit is already durable", async () => {
     const root = createTmpDir("finalize-outbox-sync-");
     try {
-      const { state, flowManager } = setupFinalizationRepo(root);
+      const { state, flowManager } = await setupFinalizationRepo(root);
       const entry = pendingEntry(state, "finalize-sync");
       const marker = outboxCommitMarker(entry.idempotencyKey);
       const committed = runGit(["-C", root, "commit", "--allow-empty", "-m", "docs: sync documentation", "-m", marker]);
@@ -202,7 +212,7 @@ describe("finalization command crash resumption", () => {
   it("preserves docs build stdout, stderr, and exit code in a structured sync failure", async () => {
     const root = createTmpDir("finalize-sync-diagnostics-");
     try {
-      const { state, flowManager } = setupFinalizationRepo(root);
+      const { state, flowManager } = await setupFinalizationRepo(root);
       const command = new RunFinalizeSyncCommand({
         runCommand: () => ({
           ok: false,
@@ -245,7 +255,7 @@ describe("finalization command crash resumption", () => {
   it("binds docs generation to the main repository when finalize-sync runs from a worktree", async () => {
     const root = createTmpDir("finalize-sync-main-root-");
     try {
-      const { state } = setupFinalizationRepo(root, { worktree: true });
+      const { state } = await setupFinalizationRepo(root, { worktree: true });
       const worktreeRoot = path.join(root, ".sennel", "worktree", "feature");
       fs.mkdirSync(worktreeRoot, { recursive: true });
       let docsBuildOptions = null;

@@ -1,3 +1,4 @@
+import { acceptanceStepRegistration } from "../engine/composition/acceptance.js";
 import { draftStepRegistration, draftWorkerStepRegistration } from "../engine/composition/draft.js";
 import { specStepRegistration, specWorkerStepRegistration } from "../engine/composition/spec.js";
 import { flowStepExecutionRegistration, gateStepExecutionRegistration, reviewStepExecutionRegistration }
@@ -24,7 +25,7 @@ import { fileURLToPath } from "url";
 import { FlowCommand } from "./base-command.js";
 import { getStepInstructions } from "./get-step-instructions.js";
 import {
-  AwaitAcceptanceDecision,
+  ImplementationAwaitDecision,
   AwaitApproval,
   ConfirmAndAdvance,
   deriveNextAction,
@@ -83,10 +84,8 @@ import {
 import { inspectRetryRecoveryPlan, retryEvidenceRouteForNode } from "./retry-recovery.js";
 import { resolveCurrentReviewTransition } from "./review-transition-persistence.js";
 import {
-  acceptanceDecisionRouteFacts,
   approvalRouteFacts,
 } from "./definition-route-facts.js";
-import { CanonicalCommandAttemptArtifactHistory } from "./canonical-command-result.js";
 import { resolveNonGateNextAction } from "./non-gate-transition-application.js";
 import {
   GateTransitionActionProjection,
@@ -125,6 +124,13 @@ export function projectHostFilterExecutionDirective(input) {
 export function projectTestChainExecutionDirective(input) {
   const registration = implStepRegistration(input.stepId);
   if (registration === null) throw new TypeError("Test-chain projection requires a registered implementation Step");
+  const selection = registration.executionContract.select({ ...input, registration });
+  return registration.executionContract.project(selection, { ...input, registration });
+}
+
+export function projectAcceptanceExecutionDirective(input) {
+  const registration = acceptanceStepRegistration(input.stepId);
+  if (registration === null) throw new TypeError("Acceptance projection requires its registered Step");
   const selection = registration.executionContract.select({ ...input, registration });
   return registration.executionContract.project(selection, { ...input, registration });
 }
@@ -696,7 +702,7 @@ function projectApprovalExecutionDirective(input) {
  * the same target binding remains valid when the user returns to this scene.
  */
 function acceptanceDecisionDirective({ root, state, binding, target, config, plan }) {
-  if (target.scope !== "flow" || target.stepId !== "acceptance-decision" || !(plan instanceof AwaitAcceptanceDecision)) return null;
+  if (target.scope !== "flow" || target.stepId !== "acceptance-decision" || !(plan instanceof ImplementationAwaitDecision)) return null;
   const messages = acceptanceDecisionMessages({ root, config });
   const command = (value) => guardedCommand(value, state, binding);
   return new AwaitUserDecisionDirective({
@@ -746,17 +752,6 @@ function definitionRoutePlanForNextAction(ctx, state, typedState, target) {
     return resolveDefinitionRoute(approvalRouteFacts({
       state: typedState,
       specDescriptor: spec.descriptor,
-      spec: JSON.parse(spec.bytes.toString("utf8")),
-    }));
-  }
-  if (target.stepId === "acceptance-decision") {
-    const review = ctx.flowManager.readArtifact({ specId: state.specId, logicalKey: "acceptance.review", consumerNodeId: "acceptance-decision" });
-    const spec = ctx.flowManager.readArtifact({ specId: state.specId, logicalKey: "spec.record", consumerNodeId: "acceptance-decision" });
-    const history = CanonicalCommandAttemptArtifactHistory.fromBytes({ logicalKey: "acceptance.review", bytes: review.bytes });
-    return resolveDefinitionRoute(acceptanceDecisionRouteFacts({
-      state: typedState,
-      review: history.current.payload,
-      reviewDescriptor: review.descriptor,
       spec: JSON.parse(spec.bytes.toString("utf8")),
     }));
   }
@@ -815,6 +810,8 @@ function buildCanonicalNextActionResult(ctx, state, typedState, descriptor, bind
       ctx, scope: target.scope, stepId: reviewRegistration.stepId,
     }) : reviewSelection.disposition;
   const registeredFlowStep = flowStepExecutionRegistration(target.stepId);
+  const acceptanceProjection = registeredFlowStep?.executionContract.selectorName === "selectAcceptanceExecution"
+    ? projectAcceptanceExecutionDirective({ ctx, stepId: target.stepId }) : null;
   const hostFilterProjection = target.scope === "task"
     && taskStepRegistration(target.stepId)?.executionContract.selectorName === "selectHostFilterExecution"
     && typedState.attempt?.failure === null
@@ -852,8 +849,8 @@ function buildCanonicalNextActionResult(ctx, state, typedState, descriptor, bind
   const gateSelection = specPostFailure === null
     ? definitionOwnedGateSelection(ctx, state, target) : null;
   const gateDirective = definitionOwnedGateDirective(gateSelection, { state, binding });
-  const definitionEligibility = specPostFailure === null
-    ? definitionNonblockingEligibilityForActiveFlow(ctx.root, state, ctx.flowManager) : null;
+  const definitionEligibility = acceptanceProjection !== null ? acceptanceProjection.eligibility
+    : specPostFailure === null ? definitionNonblockingEligibilityForActiveFlow(ctx.root, state, ctx.flowManager) : null;
   const activationOffer = nonblockingActivationOfferForStrictStop({
     state,
     eligibility: definitionEligibility,
@@ -880,7 +877,8 @@ function buildCanonicalNextActionResult(ctx, state, typedState, descriptor, bind
   const outboxRecovery = target.scope === "flow"
     ? resolveFinalizationOutboxRecovery(ctx, state, target, null, interruptedRuntimeLog)
     : null;
-  const routePlan = definitionRoutePlanForNextAction(ctx, state, typedState, target);
+  const routePlan = target.stepId === "acceptance-decision" ? acceptanceProjection?.decision ?? null
+    : definitionRoutePlanForNextAction(ctx, state, typedState, target);
   const approvalDirective = approvalDecisionDirective({
     root: ctx.root,
     state,
@@ -890,7 +888,7 @@ function buildCanonicalNextActionResult(ctx, state, typedState, descriptor, bind
     action: derived.action,
     plan: routePlan,
   });
-  const userDecisionDirective = acceptanceDecisionDirective({
+  const userDecisionDirective = acceptanceProjection?.directive ?? acceptanceDecisionDirective({
     root: ctx.root,
     state,
     binding,

@@ -198,7 +198,7 @@ export class ImplPhaseScenario extends RequirementTestPhaseScenario {
       triage: null, repair: null, noChangeReason: null };
     if (["implement", "task-impl"].includes(request.stepId)) {
       fs.mkdirSync(path.join(this.root, "src"), { recursive: true });
-      fs.writeFileSync(path.join(this.root, file), "export const implemented = true;\n");
+      fs.writeFileSync(path.join(this.root, file), `export const implemented = true;\n// source Attempt: ${this.state().attempt.id}\n`);
     } else {
       const review = request.inputs.find((entry) => entry.name === (taskId ? "task-review.json" : "impl-review.json"))?.document;
       const findings = [...(review?.blockingFindings ?? []), ...(review?.nonBlockingImprovements ?? [])];

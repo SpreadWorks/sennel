@@ -611,7 +611,7 @@ export class StructureChecker {
     if (!proof || !this.#canonicalBindingSubclass(module, proof.name, "StepBindingContinuation")) return false;
     const selected = declaration.topLevelInitializer("registration");
     const selectionCalls = selected ? readInvocations({ tokens: selected.tokens }) : [];
-    if (![1, 2].includes(selectionCalls.length) || !origins.has(selectionCalls.at(-1).name)) return false;
+    if (![1, 2, 3].includes(selectionCalls.length) || !selectionCalls.some((call) => origins.has(call.name))) return false;
     const lookup = selectionCalls.at(-1).name;
     const publication = declaration.topLevelInitializer("publication");
     const access = publication?.tokens[0]?.value === "flowManager" ? readMemberAccess(publication.tokens, 0) : null;
@@ -624,10 +624,19 @@ export class StructureChecker {
       || !this.#resolveLocal(module.file, module, observation.name, new Set(), "A11")) return false;
     if (operation === "prepareAcceptedNonblockingPublication") {
       const reviewId = declaration.topLevelInitializer("review")?.tokens.find((entry) => entry.kind === "string")?.value;
-      const additionalName = selectionCalls.length === 2 ? selected.tokens[0]?.value : null;
+      const groupName = selectionCalls.length === 3 ? selected.tokens[0]?.value : null;
+      const group = groupName === null ? null : declaration.topLevelInitializer(groupName);
+      const groupIds = group?.tokens.filter((entry) => entry.kind === "string").map((entry) => entry.value) ?? [];
+      const groupLookup = groupName === null ? null : selectionCalls[0].name;
+      if (groupName !== null && (groupIds.length !== 2 || new Set(groupIds).size !== 2
+        || !group.matches(`[${groupIds.map((id) => JSON.stringify(id)).join(",")}].includes(sourceBinding.stepId)`)
+        || !groupIds.every((id) => this.#boundedSelectedService(module, groupLookup, id)))) return false;
+      const additionalCall = selectionCalls.length > 1 ? selectionCalls.at(-2) : null;
+      const additionalIndex = additionalCall === null ? -1 : selected.tokens.findIndex((token) => token.offset === additionalCall.token.offset);
+      const additionalName = additionalCall === null ? null : selected.tokens[additionalIndex - 2]?.value;
       const additional = additionalName === null ? null : declaration.topLevelInitializer(additionalName);
       const additionalId = additional?.tokens.find((entry) => entry.kind === "string")?.value;
-      const additionalLookup = selectionCalls.length === 2 ? selectionCalls[0].name : null;
+      const additionalLookup = additionalCall?.name ?? null;
       const additionalService = additionalLookup === null ? null : this.#boundedSelectedService(module, additionalLookup, additionalId);
       if (additionalLookup !== null && (!additional?.matches(`sourceBinding.stepId === '${additionalId}'`)
         || !additionalService || !(this.scope.contract.registry ?? this.scope.registrations)
@@ -641,15 +650,19 @@ export class StructureChecker {
         .some((entry) => entry.stepId === reviewId)) return false;
       const taskId = sourceBinding.tokens.find((entry) => entry.kind === "string")?.value;
       const gateId = body.find((entry, index) => entry.kind === "string" && body.slice(index - 3, index).map((token) => token.value).join("") === "==="
-        && entry.value !== taskId && entry.value !== reviewId && entry.value !== additionalId)?.value;
+        && entry.value !== taskId && entry.value !== reviewId && entry.value !== additionalId && !groupIds.includes(entry.value))?.value;
+      if (groupIds.some((id) => [taskId, gateId, reviewId, additionalId].includes(id))) return false;
       const reviewServiceProperty = readObjectProperty(selectedConstant.call.arguments[0], "ServiceClass");
       const reviewServiceName = reviewServiceProperty?.tokens.length === 1 ? reviewServiceProperty.tokens[0].value : null;
       const reviewService = reviewServiceName && this.#resolveLocal(selectedConstant.module.file, selectedConstant.module, reviewServiceName, new Set(), "A11");
       const evidenceInputs = constructors.filter((entry) => entry.name !== gateInput.name
         && new SourceInitializer(entry.token, 0, entry.arguments[0] ?? []).matches("{ evidence: publication.evidence }"));
       const reviewInput = evidenceInputs.at(-1);
-      const additionalInput = additionalLookup === null ? null : evidenceInputs[0];
-      if (evidenceInputs.length !== (additionalLookup === null ? 1 : 2)
+      const additionalInput = additionalLookup === null ? null : evidenceInputs.at(-2);
+      const groupInput = groupName === null ? null : evidenceInputs[0];
+      if (evidenceInputs.length !== selectionCalls.length
+        || groupName !== null && !this.#sameRegisteredInput(module, groupInput.name,
+          this.#boundedSelectedService(module, groupLookup, groupIds[1]))
         || additionalLookup !== null && !this.#sameRegisteredInput(module, additionalInput.name, additionalService)) return false;
       if (!taskId || !gateId || !reviewInput || !this.#boundedSelectedService(module, lookup, taskId)
         || !this.#sameRegisteredInput(module, gateInput.name, this.#boundedSelectedService(module, lookup, gateId))
@@ -667,10 +680,11 @@ export class StructureChecker {
           : new ${flowBinding}({ flowManager, specId: input.specId, stepId: sourceBinding.stepId, continuation });
         const review = sourceBinding.stepId === '${reviewId}';
         ${additionalLookup === null ? "" : `const ${additionalName} = sourceBinding.stepId === '${additionalId}';`}
-        const registration = ${additionalLookup === null ? "" : `${additionalName} ? ${additionalLookup}(sourceBinding.stepId) : `}review ? ${constant} : ${lookup}(sourceBinding.stepId);
+        ${groupName === null ? "" : `const ${groupName} = [${groupIds.map((id) => JSON.stringify(id)).join(",")}].includes(sourceBinding.stepId);`}
+        const registration = ${groupName === null ? "" : `${groupName} ? ${groupLookup}(sourceBinding.stepId) : `}${additionalLookup === null ? "" : `${additionalName} ? ${additionalLookup}(sourceBinding.stepId) : `}review ? ${constant} : ${lookup}(sourceBinding.stepId);
         const prepared = registration.create({ flowManager, binding, nonblockingPublication: publication,
           evidence: publication.evidence,
-          ...(${additionalLookup === null ? "" : `${additionalName} ? { observed: new ${additionalInput.name}({ evidence: publication.evidence }) } : `}review ? { observed: new ${reviewInput.name}({ evidence: publication.evidence }) }
+          ...(${groupName === null ? "" : `sourceBinding.stepId === '${groupIds[1]}' ? { observed: new ${groupInput.name}({ evidence: publication.evidence }) } : `}${additionalLookup === null ? "" : `${additionalName} ? { observed: new ${additionalInput.name}({ evidence: publication.evidence }) } : `}review ? { observed: new ${reviewInput.name}({ evidence: publication.evidence }) }
             : sourceBinding.stepId === '${gateId}' ? { observed: new ${gateInput.name}(new ${observation.name}(publication.evidence)) } : {}) });
         prepared.step.execute();
         return { receipt: prepared.dependency(registration.ServiceClass).settlementOutcome.receipt,
@@ -1105,15 +1119,22 @@ const revision = testSourceRevision(snapshot, testSource);
           throw new TypeError($STRING_LITERAL);
         }
       `)
-      && original.matchesBody(`
+      && ["", `
+        if (originalEvidence.acceptedDecision != null) {
+          throw new TypeError($STRING_LITERAL);
+        }
+        originalEvidence = { ...originalEvidence };
+        delete originalEvidence.acceptedDecision;
+      `].some((normalization) => original.matchesBody(`
         this.assertEvidence(evidence);
         const expected = evidence.toJSON();
         delete expected.acceptedDecision;
+        ${normalization}
         if (receipt?.id !== this.sourceReceiptId || receipt.resultDigest !== this.sourceResultDigest
           || resultDigest !== this.sourceResultDigest || !isDeepStrictEqual(expected, originalEvidence)) {
           throw new TypeError($STRING_LITERAL);
         }
-      `);
+      `));
   }
 
   #selectorRecheckedReceiptType(module, typeName) {
@@ -1178,7 +1199,42 @@ const revision = testSourceRevision(snapshot, testSource);
     });
   }
 
+  #canonicalReceiptReplayType(module, typeName) {
+    if (module?.declaration(typeName)?.tokens[0]?.value !== "class"
+      || !module.references.some((reference) => reference.specifier === "node:util"
+        && reference.bindings.get("isDeepStrictEqual") === "isDeepStrictEqual")) return false;
+    const refusal = this.#resolveLocalBinding(module.file, module, "StepAdmissionRefusal", new Set(), "A10");
+    if (refusal?.file !== "src/flow/lib/step-admission-refusal.js" || refusal.name !== "StepAdmissionRefusal") return false;
+    const constructor = readClassMember(module, typeName, "constructor");
+    const parameters = readParameters(constructor?.tokens ?? []);
+    if (parameters.length !== 1 || !new SourceInitializer(parameters[0][0], 0, parameters[0])
+      .matches("{ flowManager, specId, stepId, receipt }")) return false;
+    const members = module.classMembers(typeName);
+    if (members.staticMembers.size !== 0 || members.moduleInitializers.length !== 0
+      || members.instanceInitializers.length !== 0 || members.unresolvedInstanceMembers.length !== 0
+      || members.unresolvedStaticMembers.length !== 0
+      || [...members.instanceMembers.keys()].sort().join(",") !== ["assertCurrent", "constructor"].sort().join(",")) return false;
+    return [false, true].some((exact) => constructor.matchesBody(`
+      const saved = flowManager.readCurrentStepSettlement({ specId, stepId, completed: true${exact ? ", exactReceipt: receipt" : ""} });
+      if (saved === null || !isDeepStrictEqual(saved.receipt.toJSON(), ${exact ? "(receipt.toJSON?.() ?? receipt)" : "receipt.toJSON()"})) {
+        throw new StepAdmissionRefusal($STRING_LITERAL);
+      }
+      this.#flowManager = flowManager;
+      this.#specId = specId;
+      this.#stepId = stepId;
+      this.receipt = saved.receipt;
+      Object.freeze(this);
+    `) && readClassMember(module, typeName, "assertCurrent")?.matchesBody(`
+      const saved = this.#flowManager.readCurrentStepSettlement({ specId: this.#specId,
+        stepId: this.#stepId, completed: true${exact ? ", exactReceipt: this.receipt" : ""} });
+      if (saved === null || !isDeepStrictEqual(saved.receipt.toJSON(), this.receipt.toJSON())) {
+        throw new StepAdmissionRefusal($STRING_LITERAL);
+      }
+    `));
+  }
+
   #recheckedReceiptType(module, typeName) {
+    if (this.#canonicalReceiptReplayType(module, typeName)) return true;
     if (this.#selectorRecheckedReceiptType(module, typeName)) return true;
     if (module?.declaration(typeName)?.tokens[0]?.value !== "class") return false;
     const constructor = readClassMember(module, typeName, "constructor");
@@ -1386,10 +1442,12 @@ const revision = testSourceRevision(snapshot, testSource);
         && service !== undefined && readClassMember(service.module, Service.name, outcome) !== null;
     })) return false;
     const receiptPaths = ["receipt"];
-    const rechecked = [...module.declarationHeaders.keys()].some((name) => this.#recheckedReceiptType(module, name)
-      && readInvocations({ tokens: selector.tokens }).some((call) => call.constructed && call.name === name));
-    if ([...module.declarationHeaders.keys()].some((name) => this.#authenticatedReceiptType(module, name)
-      && readInvocations({ tokens: selector.tokens }).some((call) => call.constructed && call.name === name))) {
+    const replayTypes = readInvocations({ tokens: selector.tokens }).filter((call) => call.constructed)
+      .map((call) => this.#resolveLocalBinding(module.file, module, call.name, new Set(), "A10"))
+      .filter((binding) => binding !== null && binding !== undefined)
+      .map((binding) => ({ owner: this.#module(binding.file, [module.file, binding.file], "A10", true), name: binding.name }));
+    const rechecked = replayTypes.some(({ owner, name }) => this.#recheckedReceiptType(owner, name));
+    if (replayTypes.some(({ owner, name }) => this.#authenticatedReceiptType(owner, name))) {
       receiptPaths.push("receipt.receipt");
     }
     return receiptPaths.some((receiptPath) => ["await ", ""].some((awaitKeyword) => declaration.matchesBody(`
@@ -1510,7 +1568,10 @@ const revision = testSourceRevision(snapshot, testSource);
       if (!declaration || declaration.token.offset !== token.offset) continue;
       if (this.rules.isComposition(module.file)
         && (this.#closedRegistrationResolver(module, declaration, [...lookupNames], null)
-          || this.#implementationWorkerResolver(module, declaration))) {
+          || this.#implementationWorkerResolver(module, declaration)
+          || this.#registeredTargetInitializer(module, declaration, shape, lookupNames, usage)
+          || this.#registeredContinuationConsumer(module, declaration, new Map(readInvocations({ tokens: declaration.tokens })
+            .filter((call) => usage.isOrigin(call.token)).map((call) => [call.name, true]))))) {
         usage.accept(declaration.tokens);
       }
       const projector = shape.callers.find((caller) => caller.module === module.file && caller.operation === "project");
@@ -1521,6 +1582,50 @@ const revision = testSourceRevision(snapshot, testSource);
         if (this.#additionalProjectionInitializer(initializer, projector, shape)) usage.accept(initializer.tokens);
       }
     }
+  }
+
+  /** A fixed target may initialize its own acquired Step after canonical activation. */
+  #registeredTargetInitializer(module, declaration, shape, lookupNames, usage) {
+    const calls = readInvocations({ tokens: declaration.bodyTokens() ?? [] });
+    const lookups = calls.filter((call) => lookupNames.has(call.name) && usage.isOrigin(call.token));
+    if (lookups.length !== 1) return false;
+    const lookup = lookups[0];
+    if (lookup.arguments.length !== 1 || lookup.arguments[0].length !== 1
+      || lookup.arguments[0][0].kind !== "string") return false;
+    const stepId = lookup.arguments[0][0].value;
+    const registration = this.scope.registrations.find((entry) => entry.stepId === stepId
+      && shape.matches(entry.executionContract));
+    if (!registration) return false;
+    const preparationCalls = readInvocations({ tokens: declaration.topLevelInitializer("preparation")?.tokens ?? [] });
+    if (preparationCalls.length !== 1) return false;
+    const prepare = preparationCalls[0];
+    const preparation = this.#resolveLocalBinding(module.file, module, prepare.name, new Set(), "A10");
+    if (!preparation || !this.rules.isComposition(preparation.file)
+      || !module.originUsage([prepare.name], { acceptBindings: false, moduleBindings: true }).isOrigin(prepare.token)) return false;
+    // Resolve the same acquisition API used by this registration's argument
+    // preparation; a similarly named or shadowed helper is not authority.
+    const registrationModule = this.#registrationSourceModules().find((entry) => readInvocations(entry)
+      .some((call) => call.literals().has(stepId) && call.identifiers().has(registration.StepClass.name)));
+    const argumentsBinding = registrationModule && this.#resolveLocalBinding(registrationModule.file,
+      registrationModule, registration.prepareServiceArguments.name, new Set(), "A10");
+    const argumentsModule = argumentsBinding && this.#module(argumentsBinding.file,
+      [module.file, argumentsBinding.file], "A10", true);
+    const argumentsDeclaration = argumentsModule?.declaration(argumentsBinding.name);
+    const acquiredByRegistration = argumentsDeclaration && readInvocations({ tokens: argumentsDeclaration.tokens }).some((call) => {
+      const binding = this.#resolveLocalBinding(argumentsModule.file, argumentsModule, call.name, new Set(), "A10");
+      return binding?.file === preparation.file && binding.name === preparation.name
+        && argumentsModule.originUsage([call.name], { acceptBindings: false, moduleBindings: true }).isOrigin(call.token);
+    });
+    return acquiredByRegistration && declaration.matchesFunction("input", `
+      const flowManager = input.flowManager ?? input.ctx?.flowManager;
+      const state = flowManager.canonicalState(input.specId ?? input.ctx?.flowState?.specId);
+      if (state.current?.at(-1) !== ${JSON.stringify(stepId)}) return null;
+      const stepId = ${JSON.stringify(stepId)};
+      const registration = ${lookup.name}(${JSON.stringify(stepId)});
+      const preparation = ${prepare.name}({ flowManager, state });
+      const selection = registration.executionContract.select({ ...input, flowManager, stepId, preparation, registration });
+      return registration.executionContract.execute(selection, { ...input, flowManager, stepId, preparation, registration });
+    `);
   }
 
   #implementationWorkerResolver(module, declaration) {
@@ -1727,15 +1832,19 @@ const revision = testSourceRevision(snapshot, testSource);
     this.#declaredBindings(module, [...publicNames, ...consumers.keys()], accepted, "execution adapter", publicNames);
   }
 
-  #declaredBindings(module, origins, accepted, description, publicNames, callableEntries = false) {
-    let usage;
-    try { usage = module.originUsage(origins, { acceptBindings: false, moduleBindings: true }); }
+  #inspectOriginUsage(module, origins, description) {
+    try { return module.originUsage(origins, { acceptBindings: false, moduleBindings: true }); }
     catch (error) {
       if (!(error instanceof SourceReadError)) throw error;
       this.#diagnose("A10", module.file, error, [this.scope.registrationModule, module.file],
         `cannot inspect ${description} bindings: ${error.message}`);
-      return;
+      return null;
     }
+  }
+
+  #declaredBindings(module, origins, accepted, description, publicNames, callableEntries = false) {
+    const usage = this.#inspectOriginUsage(module, origins, description);
+    if (usage === null) return;
     for (const tokens of accepted) usage.accept(tokens);
     if (callableEntries) {
       // A checked entry is an immutable callable capability. Direct invocation
@@ -1937,6 +2046,16 @@ const revision = testSourceRevision(snapshot, testSource);
     }
     for (const declaration of this.#registeredReviewConsumers(module, names)) {
       accepted.set(declaration.token.offset, declaration.tokens);
+    }
+    const usage = this.#inspectOriginUsage(module, names, "execution lookup");
+    if (usage === null) return origins;
+    for (const [name] of module.declarationHeaders) {
+      const declaration = module.declaration(name);
+      if (declaration?.tokens[0]?.value !== "function") continue;
+      if (this.scope.contract.executionShapes.some((shape) =>
+        this.#registeredTargetInitializer(module, declaration, shape, names, usage))) {
+        accepted.set(declaration.token.offset, declaration.tokens);
+      }
     }
     this.#declaredBindings(module, origins, accepted.values(), "execution lookup", publicNames);
     return origins;
