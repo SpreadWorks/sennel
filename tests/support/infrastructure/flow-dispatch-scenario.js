@@ -11,12 +11,12 @@ import { SpecGateRepairSelectedInputIdentity } from "../../../src/flow/lib/spec-
 import { WorkerArtifactHandoffRequest } from "../../../src/flow/lib/worker-artifact-handoff.js";
 
 /** Bind a canonical manager and external worker to the production dispatcher. */
-export function dispatchContainer({ root, flowManager, agent }) {
+export function dispatchContainer({ root, mainRoot = root, inWorktree = false, config = {}, flowManager, agent }) {
   const container = new Container();
   container.register("paths", { root, agentWorkDir: path.join(root, ".tmp") });
-  container.register("mainRoot", root);
-  container.register("config", {});
-  container.register("inWorktree", false);
+  container.register("mainRoot", mainRoot);
+  container.register("config", config);
+  container.register("inWorktree", inWorktree);
   container.register("flowManager", flowManager);
   container.register("agent", agent);
   return container;

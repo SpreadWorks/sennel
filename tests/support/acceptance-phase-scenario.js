@@ -205,7 +205,10 @@ export class AcceptancePhaseScenario extends ImplPhaseScenario {
   async invokeRegistered(group, name, extra = {}, positional = []) {
     const registration = FLOW_COMMANDS[group][name];
     assert.ok(registration, `production run command ${name} must exist`);
-    const invocationContainer = dispatchContainer({ root: this.root, flowManager: this.manager, agent: this.agent });
+    const context = this.context();
+    const invocationContainer = dispatchContainer({ root: context.root, mainRoot: context.mainRoot,
+      inWorktree: context.root !== context.mainRoot, config: this.options.config ?? {},
+      flowManager: this.manager, agent: this.agent });
     const argv = [...positional, ...Object.entries(extra).flatMap(([key, value]) => {
       const option = `--${key.replace(/[A-Z]/g, (letter) => `-${letter.toLowerCase()}`)}`;
       return value === true ? [option] : value === false || value == null ? [] : [option, String(value)];

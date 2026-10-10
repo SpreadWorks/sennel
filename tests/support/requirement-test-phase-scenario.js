@@ -233,7 +233,7 @@ export class RequirementTestPhaseScenario {
       });
     } else throw new Error(`Unexpected phase worker: ${request.stepId}`);
     await this.options.beforeSeal?.(request, this);
-    sealWorkerArtifactHandoff({ requestPath, invocationId, mainRoot: this.root, flowManager: this.manager });
+    sealWorkerArtifactHandoff({ requestPath, invocationId, mainRoot: this.context().mainRoot, flowManager: this.manager });
     await this.options.afterSeal?.(request, this);
     return JSON.stringify({ sealed: true, requestDigest: request.requestDigest });
   }
@@ -253,11 +253,14 @@ export class RequirementTestPhaseScenario {
       confirmedAt: "2026-10-05T00:00:00.000Z", notes: "Requirement tests approved in phase scenario." });
   }
   async dispatch(limit = 1) {
+    const context = this.context();
     const command = new RunDispatchCommand({ agent: this.agent, maxDispatches: limit, ...(this.options.handoffCoordinator ? { handoffCoordinator: this.options.handoffCoordinator } : {}) });
-    command.container = dispatchContainer({ root: this.root, flowManager: this.manager, agent: this.agent });
-    const result = await command.execute({ ...this.context(),
+    command.container = dispatchContainer({ root: context.root, mainRoot: context.mainRoot,
+      inWorktree: context.root !== context.mainRoot, config: this.options.config ?? {},
+      flowManager: this.manager, agent: this.agent });
+    const result = await command.execute({ ...context,
       expectBinding: FlowTargetBinding.capture({ flowState: this.manager.loadReadOnly(this.specId),
-        mainRoot: this.root, authorityRoot: this.root }).serialize(), _envelopeType: "run", _envelopeKey: "dispatch" });
+        mainRoot: context.mainRoot, authorityRoot: context.root }).serialize(), _envelopeType: "run", _envelopeKey: "dispatch" });
     this.dispatches.push(result);
     // Fault scenarios restore their intentionally unavailable read boundary before
     // evidenceFor() performs its audit. Do not let observation mask that command error.

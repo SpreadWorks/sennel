@@ -53,6 +53,7 @@ class PublicationObservation {
     this.#input = snapshot(input);
     this.#producer = producer instanceof FlowManager ? producer._store : producer;
     this.operation = operation;
+    this.authorityRoot = captured?.authorityRoot ?? producer.executionRoot();
     const { binding, stepResult } = input;
     this.#beforeState = captured?.beforeState ?? producer.canonicalState(input.specId ?? binding.specId);
     assert.ok(this.#beforeState instanceof CurrentFlowState,
@@ -107,16 +108,16 @@ class PublicationObservation {
       { priorActivities: this.#priorActivities }).withConfirmationOrder(activity.confirmationOrder);
     assert.equal(afterState.runId, this.runId);
     assert.equal(afterState.specId, this.specId);
-    return new PublicationAuthentication(receipt, afterState, typedActivity);
+    return new PublicationAuthentication(receipt, afterState, typedActivity, this.authorityRoot);
   }
 }
 
 /** Authentic readback plus the exact one-Activity canonical transition audit. */
 export class PublicationAuthentication {
-  constructor(receipt, afterState, activity) {
+  constructor(receipt, afterState, activity, authorityRoot) {
     if (typeof receipt?.id !== "string" || !(afterState instanceof CurrentFlowState)
       || !(activity instanceof FlowActivity)) throw new TypeError("publication authentication requires a receipt and typed canonical replay");
-    Object.assign(this, { receipt, afterState, activity });
+    Object.assign(this, { receipt, afterState, activity, authorityRoot });
     Object.freeze(this);
   }
 }
@@ -131,6 +132,7 @@ export class ImplPhasePublicationObserver {
   #mocks = [];
   #stepIds;
   #sourceCapture;
+  #listeners = new Set();
 
   constructor(t, { leaves = defaultLeaves, sourceCapture = null } = {}) {
     if (!Array.isArray(leaves) || !leaves.length || leaves.some((leaf) => !(leaf instanceof StructureLeaf))) {
@@ -165,6 +167,7 @@ export class ImplPhasePublicationObserver {
         || !(input.settlement instanceof StepSettlement) || input.binding?.attempt === undefined) continue;
       const observation = new PublicationObservation(producer, operation, input);
       this.#observations.push(observation);
+      for (const listener of this.#listeners) listener(observation);
       if (this.#sourceCapture !== null && operation === "FlowManager.commitSpecStepResult" && input.effect != null) {
         observation.captureSource(this.#sourceCapture);
       }
@@ -173,17 +176,21 @@ export class ImplPhasePublicationObserver {
 
   importSourceCapture({ filePath, nonce, processId, executionRoot }) {
     const captured = new SourcePublicationCaptureFile({ filePath, nonce }).read({ processId, executionRoot });
-    this.#observations.push(new PublicationObservation(captured.producer, captured.operation,
-      captured.input, captured));
+    const observation = new PublicationObservation(captured.producer, captured.operation,
+      captured.input, { ...captured, authorityRoot: executionRoot });
+    this.#observations.push(observation);
+    for (const listener of this.#listeners) listener(observation);
     return captured.digest;
   }
 
-  authenticate(manager, activity, result, settlement) {
+  /** Restrict an audit to a boundary's actual captured calls without replacing
+   * the shared matching or original-input/readback authentication. */
+  authenticate(manager, activity, result, settlement, { acceptObservation = () => true } = {}) {
     assert.ok(manager instanceof FlowManager);
     assert.ok(result instanceof StepResult && settlement instanceof StepSettlement);
     const saved = activity.result?.draftSettlementReceipt;
     assert.ok(saved, "IMPL_PHASE_PUBLICATION_RECEIPT_MISSING: owning Activity must retain its receipt");
-    const observed = this.#observations.filter((entry) => entry.matches(activity, result));
+    const observed = this.#observations.filter((entry) => entry.matches(activity, result) && acceptObservation(entry));
     assert.ok(observed.length > 0,
       `IMPL_PHASE_PUBLICATION_CAPTURE_MISSING: ${activity.nodeId}/${activity.attemptId}/${activity.sequence}/${result.kind} requires its original typed save inputs`
       + this.#captureErrors.map(({ operation, error }) => `; ${operation}: ${error.name}: ${error.message}`).join(""));
@@ -204,7 +211,14 @@ export class ImplPhasePublicationObserver {
     assert.fail(`IMPL_PHASE_PUBLICATION_AUTHENTICATION_FAILED: ${activity.nodeId}/${result.kind}: ${failures.join("; ")}`);
   }
 
+  subscribe(listener) {
+    assert.equal(typeof listener, "function");
+    this.#listeners.add(listener);
+    return () => this.#listeners.delete(listener);
+  }
+
   restore() {
     for (const mocked of this.#mocks.splice(0).reverse()) mocked.mock.restore();
+    this.#listeners.clear();
   }
 }

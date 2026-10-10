@@ -141,7 +141,10 @@ export class NamedPhaseExecutionSeed {
       if (!adapterImports.has(shape.adapterModule)) adapterImports.set(shape.adapterModule, new Set());
       adapterImports.get(shape.adapterModule).add(shape.contractName);
     }
-    let composition = files.get(this.entry.composition)
+    // A phase directory and its assembly module may have different names.
+    const baseComposition = files.get(this.base.composition);
+    if (this.base.composition !== this.entry.composition) files.delete(this.base.composition);
+    let composition = baseComposition
       .replace("import { commandStepExecutionContract } from '../../lib/command-execution.js';",
         [...adapterImports].filter(([module]) => module !== this.entry.composition).map(([module, names]) => `import { ${[...names].join(", ")} } from '${path.posix.relative(path.posix.dirname(this.entry.composition), module)}';`).join("\n"))
       .replaceAll(/\bregistrations\b/g, this.entry.exportName)
