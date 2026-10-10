@@ -69,6 +69,7 @@ export async function createSpecGateRepairScenario({
   additionalObservations = [],
   issue = null, issueSnapshot = null, request = "Repair the bounded Spec Gate finding.",
   taskTestStrategy = null,
+  admitMappedTasks = true,
   versionStoreFaultInjector = null, coordinatorFaultInjector = () => {},
 } = {}) {
   const root = createTmpDir("spec-gate-repair-scenario-");
@@ -78,7 +79,8 @@ export async function createSpecGateRepairScenario({
     const flow = new CanonicalFlowFixture({ flowManager, specId,
       runId: `run-${specId}`, request, issue, issueSnapshot, specRecord,
     }).create().registerActive();
-    for (const taskId of new Set(specRecord.requirements.flatMap((requirement) => requirement.task_ids))) {
+    for (const taskId of admitMappedTasks
+      ? new Set(specRecord.requirements.flatMap((requirement) => requirement.task_ids)) : []) {
       flow.addTask({ id: taskId, title: `Implement ${taskId}`, goal: "Exercise the repair route.",
         origin: "plan", added_round: 0, status: "pending",
         ...(taskTestStrategy === null ? {} : { test_strategy: taskTestStrategy }) });

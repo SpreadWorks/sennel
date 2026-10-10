@@ -8,6 +8,8 @@ import {
   applySpecGateRepairOperations,
   applySpecRepairOperations,
   SpecGateRepairAuthority,
+  SpecGateRepairOperationInspection,
+  SpecGateRepairOperationRejection,
   SpecRepairArrayTarget,
   SpecRepairIdEntityTarget,
   specRepairTargetEntries,
@@ -72,7 +74,38 @@ function apply(spec, findings, operations, scopeExpansions = []) {
 }
 
 describe("revision-scoped spec repair operations", () => {
-  it("accepts a schema-sized Task acceptance replacement above the generic operation byte cap", () => {
+  it("publishes the last accepted immutable result without changing or sharing its input", () => {
+    const spec = sourceSpec();
+    const original = structuredClone(spec);
+    const goalTarget = { entity: "spec", field: "goal" };
+    const result = apply(spec, [
+      applyFinding("F-background", [permission(rootTarget, ["replace-field"])]),
+      applyFinding("F-goal", [permission(goalTarget, ["replace-field"])]),
+    ], [
+      replace(["F-background"], rootTarget, "The accepted background remains published.", valueDigest(spec.background)),
+      replace(["F-goal"], goalTarget, [], valueDigest(spec.goal)),
+    ]);
+    assert.deepEqual(spec, original);
+    assert.equal(result.spec.background, "The accepted background remains published.");
+    assert.equal(result.spec.goal, original.goal);
+    assert.equal(result.audit.acceptedOperations.length, 1);
+    assert.equal(result.audit.discardedOperations[0].reason, "operation produces an invalid Spec schema");
+    assert.equal(Object.isFrozen(result), true);
+    assert.equal(Object.isFrozen(result.spec), true);
+    assert.equal(Object.isFrozen(result.audit), true);
+    assert.equal(Object.isFrozen(result.audit.acceptedOperations), true);
+    assert.throws(() => { result.spec.background = "Alter the published root."; }, TypeError);
+    const published = structuredClone(result);
+    const next = apply(result.spec, [applyFinding("F-next", [permission(rootTarget, ["replace-field"])])], [
+      replace(["F-next"], rootTarget, "A later independent correction.", valueDigest(result.spec.background)),
+    ]);
+    assert.equal(next.spec.background, "A later independent correction.");
+    assert.deepEqual(result, published);
+    spec.scope.in.push("A later caller-owned mutation.");
+    assert.deepEqual(result.spec.scope.in, original.scope.in);
+  });
+
+  it("accepts a schema-sized Task acceptance replacement above 32 KiB", () => {
     const spec = sourceSpec();
     const target = { entity: "task", id: "T1", field: "acceptance" };
     const original = ["The existing acceptance criterion."];
@@ -287,12 +320,13 @@ describe("revision-scoped spec repair operations", () => {
       assert.ok(result.audit.discardedOperations.some((entry) => typeof expectedReason === "string" ? entry.reason === expectedReason : expectedReason.test(entry.reason)));
     }
     const large = sourceSpec();
-    large.requirements[0].desc = "x".repeat((32 * 1024) - 3);
+    large.requirements[0].desc = "x".repeat(119999);
+    readSpecJsonValidator().validate(large);
     const oversized = apply(large, [applyFinding("F-text", [permission(requirementTarget, ["edit-text-field"])])], [
       textEdit(["F-text"], requirementTarget, [{ startByte: 0, endByte: 0, replacement: "more" }], valueDigest(large.requirements[0].desc)),
     ]);
     assert.equal(oversized.spec.requirements[0].desc, large.requirements[0].desc);
-    assert.equal(oversized.audit.discardedOperations[0].reason, "text edit result is oversized");
+    assert.equal(oversized.audit.discardedOperations[0].reason, "operation produces an invalid Spec schema");
   });
 
   it("keeps whole-field and text-edit capabilities distinct and rejects their same-target conflict", () => {
@@ -324,7 +358,7 @@ describe("revision-scoped spec repair operations", () => {
     assert.equal(localCannotReplace.audit.discardedOperations[0].reason, "unauthorized operation");
   });
 
-  it("requires canonical byte ordering and bounded edit payloads, while allowing adjacent immutable-base ranges", () => {
+  it("requires canonical byte ordering and bounded edit counts, while allowing adjacent immutable-base ranges", () => {
     const spec = sourceSpec();
     spec.background = "abcdef";
     const expected = valueDigest(spec.background);
@@ -347,12 +381,18 @@ describe("revision-scoped spec repair operations", () => {
       { startByte: 0, endByte: 3, replacement: "first" },
     ], expected);
     const tooMany = textEdit(["F-root"], rootTarget, Array.from({ length: 65 }, () => ({ startByte: 0, endByte: 0, replacement: "x" })), expected);
-    const tooLarge = textEdit(["F-root"], rootTarget, [{ startByte: 0, endByte: 0, replacement: "x".repeat(32 * 1024) }], expected);
-    for (const [operation, message] of [[unordered, /canonical stable byte order/], [tooMany, /at most 64 edits/], [tooLarge, /replacements are oversized/]]) {
+    for (const [operation, message] of [[unordered, /canonical stable byte order/], [tooMany, /at most 64 edits/]]) {
       const rejected = apply(spec, [applyFinding("F-root", [permission(rootTarget, ["edit-text-field"])])], [operation]);
       assert.equal(rejected.spec.background, "abcdef");
       assert.ok(message.test(rejected.audit.discardedOperations[0].reason));
     }
+    const replacement = "漢\"\\\n".repeat(9000);
+    assert.ok(Buffer.byteLength(JSON.stringify(replacement)) > 32 * 1024);
+    const large = apply(spec, [applyFinding("F-root", [permission(rootTarget, ["edit-text-field"])])], [
+      textEdit(["F-root"], rootTarget, [{ startByte: 0, endByte: 0, replacement }], expected),
+    ]);
+    assert.equal(large.spec.background, `${replacement}abcdef`);
+    assert.deepEqual(large.audit.discardedOperations, []);
   });
 
   it("rejects text-edit capability for a non-string entity field", () => {
@@ -408,6 +448,101 @@ function gateApply(spec, authority, groups, baseRevision = GATE_REVISION) {
 }
 
 describe("Gate-authorized atomic Spec repair groups", () => {
+  it("does not retain invalid enum worker values in ordinary or Gate rejection diagnostics", () => {
+    const spec = sourceSpec();
+    spec.requirements[0].priority = "must";
+    const target = { entity: "requirement", id: "R1", field: "priority" };
+    const replacement = `WORKER-VALUE-MUST-NOT-LEAK-${"漢".repeat(1500)}`;
+    const operation = replace(["F-priority"], target, replacement, valueDigest("must"));
+    const ordinary = apply(spec, [applyFinding("F-priority", [permission(target, ["replace-entity-field"])])], [operation]);
+    assert.equal(ordinary.spec.requirements[0].priority, "must");
+    assert.equal(ordinary.audit.discardedOperations[0].reason, "operation produces an invalid Spec schema");
+    assert.equal(JSON.stringify(ordinary.audit).includes("WORKER-VALUE-MUST-NOT-LEAK"), false);
+    const identity = gateIdentity("invalid-enum");
+    const gate = gateApply(spec, gateAuthority(spec, [[identity, [permission(target, ["replace-entity-field"])]]]),
+      [{ findingIdentities: [identity], operations: [gateOperation(operation)] }]);
+    assert.equal(gate.spec.requirements[0].priority, "must");
+    assert.equal(gate.rejections[0].code, "FLOW_SPEC_GATE_REPAIR_OPERATION_REJECTED");
+    assert.ok(Buffer.byteLength(gate.rejections[0].message) <= 1024);
+    assert.equal(JSON.stringify(gate.audit).includes("WORKER-VALUE-MUST-NOT-LEAK"), false);
+    assert.deepEqual(gate.audit.acceptedGroups, []);
+  });
+
+  it("coalesces identical large Task replacements across ordinary findings and Gate groups", () => {
+    const spec = sourceSpec();
+    spec.tasks[0].acceptance = ["The existing acceptance criterion."];
+    const target = { entity: "task", id: "T1", field: "acceptance" };
+    const replacement = Array.from({ length: 50 }, () => "受".repeat(500));
+    const expected = valueDigest(spec.tasks[0].acceptance);
+    const ordinary = apply(spec, ["F-one", "F-two"].map((id) => applyFinding(id,
+      [permission(target, ["replace-entity-field"])])), ["F-one", "F-two"].map((id) =>
+      replace([id], target, replacement, expected)));
+    assert.deepEqual(ordinary.spec.tasks[0].acceptance, replacement);
+    assert.deepEqual(ordinary.audit.appliedFindings, ["F-one", "F-two"]);
+    assert.deepEqual(ordinary.audit.discardedOperations, []);
+    const identities = [gateIdentity("one"), gateIdentity("two")];
+    const authority = gateAuthority(spec, identities.map((identity) =>
+      [identity, [permission(target, ["replace-entity-field"])]]));
+    const gate = gateApply(spec, authority, identities.map((identity) => ({
+      findingIdentities: [identity], operations: [gateOperation(replace(["unused"], target, replacement, expected))],
+    })));
+    assert.deepEqual(gate.spec.tasks[0].acceptance, replacement);
+    assert.equal(gate.audit.acceptedGroups.length, 2);
+    assert.deepEqual(gate.audit.discardedGroups, []);
+  });
+
+  it("bounds rejection diagnostics at a complete UTF-8 character without retaining worker values", () => {
+    const rejection = new SpecGateRepairOperationRejection({ index: 0,
+      groupDigest: "e".repeat(64), reason: `${"x".repeat(1020)}${"🙂".repeat(5)}` });
+    assert.ok(Buffer.byteLength(rejection.reason) <= 1024);
+    assert.ok(Buffer.byteLength(rejection.message) <= 1024);
+    assert.equal(rejection.reason, `${"x".repeat(1020)}...`);
+    assert.equal(rejection.message.includes("\uFFFD"), false);
+    assert.deepEqual(rejection.toJSON(), { index: 0, groupDigest: "e".repeat(64), reason: rejection.reason });
+  });
+
+  it("uses canonical Requirement bounds for large replacement and UTF-8 edit candidates", () => {
+    const spec = sourceSpec();
+    const identity = gateIdentity("canonical-value-bounds");
+    const authority = gateAuthority(spec, [[identity, [permission(requirementTarget, ["replace-entity-field", "edit-text-field"])]]]);
+    const validator = readSpecJsonValidator();
+    const original = spec.requirements[0].desc;
+    for (const replacement of ["漢\"\\\n".repeat(9000), "x".repeat(119999), "x".repeat(120000)]) {
+      assert.ok(Buffer.byteLength(JSON.stringify(replacement)) > 32 * 1024);
+      const candidate = structuredClone(spec);
+      candidate.requirements[0].desc = replacement;
+      const withinCanonicalBounds = replacement.length < 120000;
+      if (withinCanonicalBounds) validator.validate(candidate);
+      else assert.throws(() => validator.validate(candidate));
+      for (const operation of [
+        replace(["unused"], requirementTarget, replacement, valueDigest(original)),
+        textEdit(["unused"], requirementTarget, [{ startByte: 0, endByte: Buffer.byteLength(original), replacement }], valueDigest(original)),
+      ]) {
+        const inspection = new SpecGateRepairOperationInspection({ spec, authority, validator,
+          inputRevision: INPUT_DIGEST,
+          repair: { version: 1, stage: "spec-gate-repair", baseRevision: GATE_REVISION,
+            groups: [{ findingIdentities: [identity], operations: [gateOperation(operation)] }] },
+        });
+        if (withinCanonicalBounds) {
+          assert.equal(inspection.spec.requirements[0].desc, replacement);
+          assert.equal(inspection.audit.acceptedGroups.length, 1);
+          assert.deepEqual(inspection.rejections, []);
+        } else {
+          assert.equal(inspection.spec.requirements[0].desc, original);
+          assert.deepEqual(inspection.audit.acceptedGroups, []);
+          const rejection = inspection.rejections[0];
+          assert.ok(rejection instanceof SpecGateRepairOperationRejection);
+          assert.equal(rejection.code, "FLOW_SPEC_GATE_REPAIR_OPERATION_REJECTED");
+          assert.equal(rejection.retryable, false);
+          assert.match(rejection.reason, /group produces an invalid Spec schema:/);
+          assert.ok(Buffer.byteLength(rejection.message) <= 1024);
+          assert.deepEqual(Object.keys(rejection.toJSON()).sort(), ["groupDigest", "index", "reason"]);
+        }
+        assert.equal(spec.requirements[0].desc, original);
+      }
+    }
+  });
+
   it("accepts a complete valid group after an intermediate schema violation and preserves unrelated UTF-8 bytes", () => {
     const spec = sourceSpec();
     spec.requirements[0].testable = true;

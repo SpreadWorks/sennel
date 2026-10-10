@@ -7198,7 +7198,7 @@ function validateSpecGateRepairWorkerPayload(request, proposal) {
   }
   if (mode === "repair") {
     if (proposal?.stage === "spec-gate-repair") {
-      new SpecGateRepairOperationBatch(proposal, readSpecJsonValidator().taskAcceptanceContract());
+      new SpecGateRepairOperationBatch(proposal);
     } else if (proposal?.stage === "spec-gate-repair-draft-return") {
       if (Object.keys(proposal).sort().join(",") !== "baseRevision,decision,evidence,stage,unitId,unresolvedBecause,version"
         || proposal.version !== 1 || proposal.baseRevision !== context.baseRevision

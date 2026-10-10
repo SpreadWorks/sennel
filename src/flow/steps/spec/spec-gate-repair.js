@@ -6,7 +6,7 @@ import {
   SpecGateRepairNoProgressResult, StepErrorResult,
   SpecGateRepairContextRequiredResult, SpecGateRepairDraftReturnRequiredResult,
 } from "../../engine/step-result.js";
-import { SpecGateRepairAuthority, applySpecGateRepairOperations } from "../../lib/spec-repair-operations.js";
+import { SpecGateRepairAuthority, SpecGateRepairOperationInspection } from "../../lib/spec-repair-operations.js";
 import { SpecGateRepairWorkerFacts, SpecGateRepairSelection, SpecGateRepairCandidate } from "../../lib/spec-gate-repair-worker-facts.js";
 import { SpecGateRepairService } from "../../services/spec-gate-repair-service.js";
 import { SpecGateRepairReviewFacts } from "../../lib/spec-gate-repair-review.js";
@@ -23,7 +23,7 @@ export function selectSpecGateRepair(facts) {
       findingIdentities: unit.findings.map((finding) => finding.identity.toJSON()),
     })),
   });
-  const applied = applySpecGateRepairOperations({
+  const applied = new SpecGateRepairOperationInspection({
     spec: facts.input.spec,
     authority,
     repair: facts.proposal,
