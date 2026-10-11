@@ -50,6 +50,7 @@ import { ReviewFindingCycle } from "./finding-disposition-policy.js";
 import { TaskReviewConvergenceEvidence } from "./review-recurrence.js";
 import { TaskReviewEpisodeBinding } from "./task-review-stage-binding.js";
 import { TaskStepIdentity } from "./task-step-identity.js";
+import { CurrentFlowMigrationCheckpoint } from "./current-flow-state.js";
 export { DraftGateProspectiveFacts } from "./draft-gate-prospective.js";
 
 const SHA256 = /^[a-f0-9]{64}$/;
@@ -60,6 +61,30 @@ export class SpecGateAdmissionRefusal extends StepAdmissionRefusal {
     this.name = "SpecGateAdmissionRefusal";
     this.code = "SPEC_GATE_ADMISSION_REFUSED";
   }
+}
+
+/** Count completed, audit-backed repairs within the current canonical planning cycle. */
+export function readSpecGateCycleProgress({ flowManager = null, state,
+  activities = flowManager?.activityLedger(state.specId),
+  catalog = flowManager?.artifactCatalog(state.specId) } = {}) {
+  const cycle = ReviewFindingCycle.fromActivityLedger({ runId: state.runId, activities });
+  const migration = state.migration ?? null;
+  if (migration !== null && !(migration instanceof CurrentFlowMigrationCheckpoint)) {
+    throw new Error("Spec Gate cycle progress requires a typed migration checkpoint");
+  }
+  const repairOutcomes = catalog.artifacts.filter((entry) => entry.logicalKey === "spec.gate.repair.audit");
+  const completedRepairs = activities.filter((activity) => (
+    activity.nodeId === "spec-gate-repair"
+    && activity.transition.operation === "confirm_attempt"
+    && ["spec-gate-repair-ready-for-gate", "spec-gate-repair-review-required"].includes(activity.result?.stepResult?.kind)
+    && activity.result?.draftSettlementReceipt?.resultKind === activity.result?.stepResult?.kind
+    && cycle.includesActivity(activity)
+    && repairOutcomes.some((entry) => entry.activityId === activity.id)
+  )).length;
+  const migratedRepairs = migration !== null
+    && (cycle.reopenConfirmationOrder ?? 0) <= migration.boundaryOrder
+    ? migration.legacyAppliedCount : 0;
+  return new SpecGateCycleProgress({ completedRepairs: migratedRepairs + completedRepairs });
 }
 
 function gateRetryUsage({ state, activities, nodeId, attempt, phase, failureCategory }) {
@@ -197,23 +222,14 @@ export function readProspectiveSpecGateFacts({ flowManager, binding, commandResu
   }
   const sameEvidence = new CanonicalGateObservationCycle({ flowManager, state })
     .prospectiveStatus().sameEvidenceFor({ phase, fingerprints });
-  const repairOutcomes = flowManager.artifactCatalog(state.specId).artifacts.filter((entry) => (
-    entry.logicalKey === "spec.gate.repair.audit"
-  ));
-  const completedRepairs = activities.filter((activity) => (
-    activity.nodeId === "spec-gate-repair"
-    && activity.transition?.operation === "confirm_attempt"
-    && ["spec-gate-repair-ready-for-gate", "spec-gate-repair-review-required"].includes(activity.result?.stepResult?.kind)
-    && activity.result?.draftSettlementReceipt?.resultKind === activity.result?.stepResult?.kind
-    && repairOutcomes.some((entry) => entry.activityId === activity.id)
-  )).length;
+  const specCycle = phase === "spec" ? readSpecGateCycleProgress({ flowManager, state, activities }) : null;
   const nonblockingEnabled = state.policy?.nonblocking?.enabled === true;
   const acceptanceBacked = nonblockingRouteFor("spec-gate")?.kind === "gate";
   return new SpecGateProspectiveFacts({
     phase, result: "fail", failureCategory: failure.category,
     failureCode: failure.code, retryExhausted: retry.exhausted,
     sameEvidence, repairAvailable: failure.category === "semantic" && fingerprints.size > 0,
-    cycle: phase === "spec" ? (state.migration?.legacyAppliedCount ?? 0) + completedRepairs + 1 : 1,
+    cycle: specCycle?.cycle ?? 1,
     nonblockingEnabled, acceptanceBacked, resultFingerprint,
     retryUsed: retry.used, retryMaximum: retry.maximum,
   });
@@ -800,13 +816,11 @@ export function readCurrentGateTransitionFacts({ flowManager, flowState, phase, 
     }
   }
   const activities = prospectivePublication?.activities ?? flowManager.activityLedger(state.specId);
-  const completedSpecRepairs = activities.filter((activity) => (
-    activity.nodeId === "spec"
-    && activity.transition?.operation === "plan_gate_repair"
-  )).length;
   const specCycle = persistedPhase === "spec"
-    ? new SpecGateCycleProgress({
-      completedRepairs: completedSpecRepairs,
+    ? readSpecGateCycleProgress({ flowManager, state,
+      activities: prospectivePublication === null ? activities
+        : activities.filter((activity) => activity.id !== prospectivePublication.selectedActivityId),
+      catalog: prospectivePublication?.catalog ?? flowManager.artifactCatalog(state.specId),
     })
     : null;
   const producerActivities = currentGateActivity({ activities, nodeId, attempt });

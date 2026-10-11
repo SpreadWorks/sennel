@@ -315,11 +315,14 @@ export class CanonicalGateRepairMigrationPreflight {
     }
     for (const activity of applied) assertOldResult(activity.result, activity, state);
     const projected = ledger.map((activity) => {
-      if (oldResultKind(activity.result) !== OLD_APPLIED) return activity;
+      // Canonical-v3 producers predate atomic approval Task admission.
+      const projectedActivity = Object.hasOwn(activity.transition, "approvalTasks")
+        ? activity : { ...activity, transition: { ...activity.transition, approvalTasks: [] } };
+      if (oldResultKind(activity.result) !== OLD_APPLIED) return projectedActivity;
       const result = { ...activity.result };
       delete result.stepResult;
       delete result.draftSettlementReceipt;
-      return { ...activity, result };
+      return { ...projectedActivity, result };
     });
     for (const activity of projected) FlowActivity.fromSerialized(activity);
     const projectedActivitiesBytes = Buffer.from(projected.map((activity) => `${JSON.stringify(activity)}\n`).join(""), "utf8");

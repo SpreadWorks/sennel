@@ -14,6 +14,7 @@ import { CanonicalGateObservationCycle } from "../../src/flow/lib/canonical-gate
 import { GateEvidenceIdentity, GateObservationCycleReader, GateObservationOccurrence } from "../../src/flow/lib/gate-observation-convergence.js";
 import { PlanGateRepairObservation, PlanGateRepairRecord } from "../../src/flow/lib/plan-gate-repair.js";
 import { SpecGateProspectiveFacts } from "../../src/flow/lib/spec-gate-prospective-facts.js";
+import { readSpecGateCycleProgress } from "../../src/flow/lib/gate-transition-facts.js";
 import { specGateResult } from "../../src/flow/steps/spec/spec-gate-result.js";
 import { CurrentFlowVersionStore, CurrentFlowState, FlowActivity } from "../../src/flow/lib/current-flow-state.js";
 import { initialCanonicalSpecReview, SpecReviewDelta, mergeSpecReviewDelta } from "../../src/flow/lib/spec-review-artifacts.js";
@@ -492,6 +493,8 @@ describe("migrate specs --to 3", () => {
     assert.equal(count.legacyCycles.repairs.length, 3);
     assert.equal(count.legacyCycles.outcomes.length, 3);
     const flowManager = new FlowManager({ root, mainRoot: root, inWorktree: false, specId: id });
+    assert.deepEqual(readSpecGateCycleProgress({ flowManager, state: loaded }).toJSON(),
+      { cycle: 4, completedRepairs: 3 });
     const readModel = new CanonicalGateObservationCycle({ flowManager, state: loaded }).read();
     assert.equal(readModel.repairCount, 3);
     assert.equal(readModel.cycles.length, 3);
@@ -510,6 +513,55 @@ describe("migrate specs --to 3", () => {
     const liveIssueLog = JSON.parse(fs.readFileSync(path.join(version, "issue-log.json"), "utf8"));
     assert.equal(liveIssueLog.entries.some((entry) => entry.kind === "plan-gate-repair"), false);
     assert.equal(runTo(root, 3).status, 0, "migration replay is idempotent");
+    flowManager.addNote("Keep the migrated planning boundary unchanged.", { specId: id });
+    flowManager.incrementMetric("spec", "gateRetry", { specId: id });
+    const observed = new FlowManager({ root, mainRoot: root, inWorktree: false, specId: id });
+    assert.deepEqual(observed.activityLedger(id).slice(-2).map((activity) => activity.transition.operation),
+      ["record_note", "record_metric"]);
+    assert.deepEqual(readSpecGateCycleProgress({ flowManager: observed, state: observed.canonicalState(id) }).toJSON(),
+      { cycle: 4, completedRepairs: 3 });
+    const idleState = flowManager.canonicalState(id).toJSON();
+    const idleActivities = flowManager.activityLedger(id);
+    assert.throws(() => flowManager.reopenDraft({ specId: id, route: "preimplementation",
+      reason: "A migrated idle Flow must first claim its next Attempt." }), /active post-draft Attempt/);
+    assert.deepEqual(flowManager.canonicalState(id).toJSON(), idleState);
+    assert.deepEqual(flowManager.activityLedger(id), idleActivities);
+    const next = flowManager.canonicalState(id).nextAction();
+    assert.equal(next.executable, true);
+    const active = flowManager.beginNextAction(id);
+    assert.equal(active.attempt.nodeId, next.nodeId);
+    assert.deepEqual(readSpecGateCycleProgress({ flowManager, state: active }).toJSON(),
+      { cycle: 4, completedRepairs: 3 });
+    const beforeReopen = flowManager.activityLedger(id);
+    flowManager.reopenDraft({ specId: id, route: "preimplementation",
+      reason: "Regenerate the migrated plan with explicit verification." });
+    const restarted = new FlowManager({ root, mainRoot: root, inWorktree: false, specId: id });
+    const reopened = restarted.canonicalState(id);
+    assert.deepEqual(readSpecGateCycleProgress({ flowManager: restarted, state: reopened }).toJSON(),
+      { cycle: 1, completedRepairs: 0 });
+    assert.deepEqual(restarted.activityLedger(id).slice(0, beforeReopen.length), beforeReopen);
+    assert.deepEqual(reopened.migration.toJSON(), loaded.migration.toJSON());
+  });
+
+  it("rejects malformed approval Tasks in the historical ledger without writing migration", () => {
+    const root = project();
+    const { version } = seedFrozenThreeCycleV3(root);
+    const activityFile = path.join(version, "activities.jsonl");
+    const activities = fs.readFileSync(activityFile, "utf8").trim().split("\n").map((line) => JSON.parse(line));
+    activities[0].transition.approvalTasks = null;
+    fs.writeFileSync(activityFile, activities.map((activity) => `${JSON.stringify(activity)}\n`).join(""));
+    refreshCatalogDescriptorForBytes(version, "activities.jsonl");
+    const filenames = ["flow.json", "activities.jsonl", "artifact-catalog.json"];
+    const before = filenames.map((name) => fs.readFileSync(path.join(version, name)));
+    for (const args of [["--dry-run"], []]) {
+      const refused = runTo(root, 3, args);
+      assert.equal(refused.status, 1);
+      assert.match(refused.stderr, /approval Tasks must be an array/);
+      for (const [index, name] of filenames.entries()) {
+        assert.deepEqual(fs.readFileSync(path.join(version, name)), before[index]);
+      }
+      assert.equal(fs.existsSync(path.join(version, "artifacts/spec-gate-repairs/migration.json")), false);
+    }
   });
 
   it("rejects a forged historical Gate fingerprint even when the old Catalog is rehashed", () => {

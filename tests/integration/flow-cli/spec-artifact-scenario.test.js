@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { SpecGateRepairBundle } from "../../../src/flow/lib/spec-gate-repair-bundle.js";
+import { SpecGateRepairProgressReader } from "../../../src/flow/lib/spec-gate-repair-progress-reader.js";
 import childProcess from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";
@@ -10,6 +11,8 @@ import { describe, it, mock } from "node:test";
 import { FlowManager } from "../../../src/lib/flow-manager.js";
 import { FlowTargetBinding } from "../../../src/lib/flow-target-guard.js";
 import RunDispatchCommand from "../../../src/flow/lib/run-dispatch.js";
+import RunReopenDraftCommand from "../../../src/flow/lib/run-reopen-draft.js";
+import * as gateFacts from "../../../src/flow/lib/gate-transition-facts.js";
 import SetApprovalCommand from "../../../src/flow/lib/set-approval.js";
 import { NonBlockingPolicy, activateNonBlockingPolicy, decisionContextForActiveFlow, recordNonBlockingDecision } from "../../../src/flow/lib/nonblocking.js";
 import GetNextActionCommand from "../../../src/flow/lib/get-next-action.js";
@@ -24,7 +27,7 @@ import {
   sealWorkerArtifactHandoff,
 } from "../../../src/flow/lib/worker-artifact-handoff.js";
 import {
-  CanonicalFlowFixture,
+  CanonicalFlowFixture, canonicalDraftDocument,
 } from "../../support/infrastructure/flow-setup.js";
 import { removeTmpDir } from "../../support/builders/tmp-dir.js";
 import { validWorkerHandoffTaskSpec, workerArtifactJson } from "../../support/infrastructure/worker-artifact.js";
@@ -34,6 +37,7 @@ import {
   installGateProviderFake,
   requestInput,
   requestPayloadPath,
+  requestSpecGateRepairIdentity,
 } from "../../support/infrastructure/flow-dispatch-scenario.js";
 
 function assertSelectedGateInstructions(next) {
@@ -49,9 +53,10 @@ function largeRepairValue(prefix) {
 }
 
 describe("Spec artifact lifecycle and downstream consumption", { concurrency: false }, () => {
-  for (const { retainGateFindings, advisoryRepair, largeGateResponse = false, largeSpecFile = false, overlongAcceptance = false, largeRepairValues = false } of [
+  for (const { retainGateFindings, advisoryRepair, largeGateResponse = false, largeSpecFile = false, overlongAcceptance = false, largeRepairValues = false, reopenPlanning = false } of [
     { retainGateFindings: false, advisoryRepair: false, overlongAcceptance: true },
     { retainGateFindings: true, advisoryRepair: false },
+    { retainGateFindings: true, advisoryRepair: false, reopenPlanning: true },
     { retainGateFindings: false, advisoryRepair: true },
     { retainGateFindings: false, advisoryRepair: false, largeGateResponse: true, largeSpecFile: false },
     { retainGateFindings: false, advisoryRepair: false, largeGateResponse: true, largeSpecFile: true },
@@ -59,6 +64,8 @@ describe("Spec artifact lifecycle and downstream consumption", { concurrency: fa
   ]) {
   it(largeRepairValues
     ? "persists 34,522-byte ordinary and Gate repairs through Review, reload and Acceptance"
+    : reopenPlanning
+    ? "starts a fresh bounded Spec Gate cycle after canonical Draft regeneration"
     : largeGateResponse
     ? `retains complete large ${largeSpecFile ? "file" : "inline"} Spec Gate findings through repair and reload`
     : advisoryRepair
@@ -80,7 +87,7 @@ describe("Spec artifact lifecycle and downstream consumption", { concurrency: fa
         }],
       }));
       const specId = "802-spec-artifact-scenario";
-      const flowManager = new FlowManager({ root, mainRoot: root, inWorktree: false, specId });
+      let flowManager = new FlowManager({ root, mainRoot: root, inWorktree: false, specId });
       // Immutable upstream inputs are established by the existing fixture's
       // production publication/settlement APIs; all Spec work starts here.
       new CanonicalFlowFixture({
@@ -99,7 +106,14 @@ describe("Spec artifact lifecycle and downstream consumption", { concurrency: fa
       const specGateAttempts = new Set();
       let specReviewRuns = 0;
       let specWorkerRuns = 0;
+      let draftWorkerRuns = 0;
       let gateRepairWorkerRuns = 0;
+      let gateRepairInspectionRuns = 0;
+      let gateRepairMutationRuns = 0;
+      let gateRepairRequest = null;
+      let gateRepairContext = null;
+      let gateRepairIdentity = null;
+      const gateRepairModes = [];
       const repairedFindingIdentities = new Set();
       const findingId = "spec-review-requirement";
       const approvedGoal = "Publish the required behavior in the Spec.";
@@ -127,6 +141,9 @@ describe("Spec artifact lifecycle and downstream consumption", { concurrency: fa
         const knownIds = observationSchema?.properties?.requirementRef?.enum ?? [];
         const state = flowManager.canonicalState(specId);
         const phase = state.current.at(-1);
+        if (reopenPlanning && phase === "draft-gate") {
+          return JSON.stringify({ observations: [], evaluationUnavailable: null });
+        }
         assert.equal(phase, "spec-gate");
         assertSelectedGateInstructions(await new GetNextActionCommand().execute({
           root, mainRoot: root, executionRoot: root, specId,
@@ -199,7 +216,7 @@ describe("Spec artifact lifecycle and downstream consumption", { concurrency: fa
               "flow dispatcher fixture\n");
           }
           requests.push(request);
-          writeWorkerPayload(request);
+          writeWorkerPayload(request, options.executionEnvironment);
           let sealed;
           try {
             sealed = sealWorkerArtifactHandoff({ requestPath, invocationId, mainRoot: root, flowManager });
@@ -216,10 +233,16 @@ describe("Spec artifact lifecycle and downstream consumption", { concurrency: fa
           return JSON.stringify({ sealed: true, requestDigest: request.requestDigest });
         },
       };
-      function writeWorkerPayload(request) {
+      function writeWorkerPayload(request, executionEnvironment) {
+          if (reopenPlanning && request.stepId === "draft") {
+            draftWorkerRuns += 1;
+            fs.writeFileSync(requestPayloadPath(request, "draft.json"), workerArtifactJson(
+              canonicalDraftDocument({ goal: "Reconsider the plan with explicit verification." })));
+            return true;
+          }
           if (request.stepId === "spec") {
             specWorkerRuns += 1;
-            assert.equal(specWorkerRuns, 1);
+            assert.equal(specWorkerRuns, reopenPlanning && draftWorkerRuns > 0 ? 2 : 1);
             fs.writeFileSync(requestPayloadPath(request, "spec.json"), workerArtifactJson({
               ...validWorkerHandoffTaskSpec(),
               goal: approvedGoal,
@@ -228,7 +251,8 @@ describe("Spec artifact lifecycle and downstream consumption", { concurrency: fa
                 ...requirement, ...(largeGateResponse ? { priority: "must" } : {}),
               })),
                 ...((largeGateResponse ? largeFindingIds : ["R10"]).map((id) => ({
-                  id, desc: id === "R10" ? gateRequirement : `Plan verification for ${id}.`,
+                  id, desc: id === "R10" ? (reopenPlanning && specWorkerRuns === 2
+                    ? `${gateRequirement} The regenerated plan requires explicit verification cases.` : gateRequirement) : `Plan verification for ${id}.`,
                   ...(largeGateResponse ? { priority: "must" } : {}),
                   testable: false, task_ids: ["T1"],
                 })))],
@@ -243,8 +267,16 @@ describe("Spec artifact lifecycle and downstream consumption", { concurrency: fa
           if (request.stepId === "spec-gate-repair") {
             gateRepairWorkerRuns += 1;
             const context = requestInput(request, "spec-gate-repair-context.json").document;
+            gateRepairModes.push(context.mode);
             assert.equal(context.mode, "repair");
-            const groups = SpecGateRepairBundle.fromJSON(context.bundle).selections().map((selection) => {
+            gateRepairMutationRuns += 1;
+            const selected = SpecGateRepairBundle.fromJSON(context.bundle).selections();
+            if (largeGateResponse) {
+              gateRepairRequest = request;
+              gateRepairContext = context;
+              gateRepairIdentity = requestSpecGateRepairIdentity(request, executionEnvironment);
+            }
+            const groups = selected.map((selection) => {
               const finding = selection.unit.findings[0];
               const target = finding.targets[0];
               const range = selection.ranges.find((entry) => entry.path === `requirements[${target.id}].desc` && entry.writable);
@@ -269,7 +301,7 @@ describe("Spec artifact lifecycle and downstream consumption", { concurrency: fa
                 assert.deepEqual(finding.allowedTargets, [{ target: gateTarget,
                   operationKinds: ["edit-text-field"] }]);
                 assert.equal(finding.observed, retainGateFindings
-                  ? `Spec behavior ${gateRepairWorkerRuns} needs a separate clarification.`
+                  ? `Spec behavior ${reopenPlanning ? specGateAttempts.size : gateRepairWorkerRuns} needs a separate clarification.`
                   : "Requirement R10 needs the Gate clarification.");
               }
               assert.equal(context.baseRevision, selection.baseRevision);
@@ -341,6 +373,15 @@ describe("Spec artifact lifecycle and downstream consumption", { concurrency: fa
         }
         const nodeId = flowManager.canonicalState(specId).current.at(-1);
         const work = ReviewWorkUnit.fromEnvironment(options.env);
+        if (reopenPlanning && ["draft-questions-review", "draft-coverage-review"].includes(nodeId)) {
+          const source = JSON.parse(options.env.SENNEL_REVIEW_DRAFT_SOURCE);
+          fs.writeFileSync(path.join(work.root, work.manifestDocument.output.basename), workerArtifactJson({
+            version: 2, phase: nodeId === "draft-questions-review" ? "draft-questions" : "draft-coverage",
+            sourceDraft: "draft.json", sourceDraftRevision: source.revision,
+            generatedAt: "2026-09-23T00:00:00.000Z", verdict: "PASS", summary: "No review findings.",
+            blockingFindings: [], advisoryFindings: [], repairTargets: [],
+          }));
+        }
         if (nodeId === "spec-review") {
           specReviewRuns += 1;
           const source = JSON.parse(options.env.SENNEL_REVIEW_SPEC_REVIEW_SOURCE);
@@ -479,6 +520,9 @@ describe("Spec artifact lifecycle and downstream consumption", { concurrency: fa
         const before = stopped.readCurrentStepSettlement({ specId, stepId: "spec-gate" });
         assert.equal(before.result.kind, "spec-gate-blocked");
         assert.equal(before.result.error.data.reason, "cycle-limit");
+        assert.deepEqual(readCurrentGateTransitionFacts({ flowManager: stopped,
+          flowState: stopped.loadReadOnly(specId), phase: "spec", root }).specCycle.toJSON(),
+        { cycle: 4, completedRepairs: 3 });
         const strictState = stopped.canonicalState(specId).toJSON();
         const strictActivities = stopped.activityLedger(specId);
         const strictCatalog = stopped.artifactCatalog(specId).toJSON();
@@ -496,6 +540,80 @@ describe("Spec artifact lifecycle and downstream consumption", { concurrency: fa
         assert.deepEqual(stopped.canonicalState(specId).toJSON(), strictState);
         assert.deepEqual(stopped.activityLedger(specId), strictActivities);
         assert.deepEqual(stopped.artifactCatalog(specId).toJSON(), strictCatalog);
+        if (reopenPlanning) {
+          assert.equal(gateRepairWorkerRuns, 3);
+          const oldAudits = stopped.artifactCatalog(specId).artifacts.filter((entry) => entry.logicalKey === "spec.gate.repair.audit");
+          assert.equal(oldAudits.length, 3);
+          const reopened = await new RunReopenDraftCommand().execute({
+            root, flowManager: stopped, flowState: stopped.loadReadOnly(specId),
+            reason: "Regenerate the plan with explicit verification after the exhausted planning cycle.",
+          });
+          assert.equal(reopened.ok, true, JSON.stringify(reopened));
+          flowManager = new FlowManager({ root, mainRoot: root, inWorktree: false, specId });
+          const reopenActivity = flowManager.activityLedger(specId).at(-1);
+          assert.equal(reopenActivity.transition.operation, "reopen_draft_preimplementation");
+          assert.deepEqual(flowManager.activityLedger(specId).slice(0, strictActivities.length), strictActivities);
+          // Run the normal Draft and Spec producers, then discard their in-memory manager.
+          for (let index = 0; index < 24 && flowManager.canonicalState(specId).nextAction().nodeId !== "spec-gate"; index += 1) {
+            const partial = await dispatch(1);
+            assert.equal(partial.errors?.[0]?.code, "FLOW_DISPATCH_LIMIT_REACHED", JSON.stringify(partial));
+          }
+          assert.equal(draftWorkerRuns, 1);
+          assert.equal(specWorkerRuns, 2);
+          flowManager = new FlowManager({ root, mainRoot: root, inWorktree: false, specId });
+          assert.equal(flowManager.canonicalState(specId).nextAction().nodeId, "spec-gate");
+          const regeneratedDraft = flowManager.readArtifact({ specId, logicalKey: "draft", consumerNodeId: "spec" });
+          assert.equal(JSON.parse(regeneratedDraft.bytes).goal, "Reconsider the plan with explicit verification.");
+          const regeneratedSpec = flowManager.readArtifact({ specId, logicalKey: "spec.record", consumerNodeId: "spec-gate" });
+          assert.match(JSON.parse(regeneratedSpec.bytes).requirements.find((entry) => entry.id === "R10").desc, /regenerated plan/);
+          const specPublication = flowManager.activityLedger(specId).find((entry) => entry.id === regeneratedSpec.descriptor.activityId);
+          assert.ok(specPublication.confirmationOrder > reopenActivity.confirmationOrder);
+          let newGate = null;
+          let firstGate;
+          for (let index = 0; index < 8 && newGate === null; index += 1) {
+            firstGate = await dispatch(1);
+            flowManager = new FlowManager({ root, mainRoot: root, inWorktree: false, specId });
+            newGate = flowManager.activityLedger(specId).find((entry) => entry.nodeId === "spec-gate"
+              && entry.result?.stepResult && entry.confirmationOrder > specPublication.confirmationOrder
+              && entry.confirmationOrder > reopenActivity.confirmationOrder) ?? null;
+            if (newGate === null) assert.equal(firstGate.errors?.[0]?.code, "FLOW_DISPATCH_LIMIT_REACHED", JSON.stringify(firstGate));
+          }
+          assert.ok(newGate, "a new Gate must actually evaluate the regenerated Spec before checking repair eligibility");
+          const gateHistory = JSON.parse(flowManager.readArtifact({ specId, logicalKey: "spec.gate",
+            consumerNodeId: "spec-gate-repair" }).bytes);
+          const evaluated = gateHistory.attempts.at(-1).artifact.payload;
+          assert.equal(evaluated.artifacts.gateTransitionAttemptId, newGate.attemptId);
+          assert.equal(evaluated.artifacts.gateTransitionAttemptSequence, newGate.sequence);
+          const findings = evaluated.artifacts.nextAction.diagnosis.observations;
+          assert.ok(findings.length > 0);
+          assert.ok(findings.every((finding) => finding.specRevision === `sha256:${regeneratedSpec.descriptor.hash}`));
+          assert.equal(newGate.result.stepResult.kind, "spec-gate-repair-required",
+            `the first Gate of a regenerated planning cycle must admit its first repair: ${JSON.stringify(newGate.result.stepResult)}`);
+          assert.equal(firstGate.errors?.[0]?.code, "FLOW_DISPATCH_LIMIT_REACHED", JSON.stringify(firstGate));
+          assert.equal(gateFacts.readSpecGateCycleProgress({ flowManager, state: flowManager.canonicalState(specId) }).cycle, 1);
+          assert.equal(flowManager.canonicalState(specId).current.at(-1), "spec-gate-repair");
+          const newRepair = await dispatch(1);
+          assert.equal(newRepair.errors?.[0]?.code, "FLOW_DISPATCH_LIMIT_REACHED", JSON.stringify(newRepair));
+          flowManager = new FlowManager({ root, mainRoot: root, inWorktree: false, specId });
+          const currentAudits = flowManager.artifactCatalog(specId).artifacts.filter((entry) => entry.logicalKey === "spec.gate.repair.audit");
+          assert.equal(currentAudits.length, 4);
+          for (const previous of oldAudits) assert.deepEqual(currentAudits.find((entry) => entry.relativePath === previous.relativePath), previous);
+          const repairedSpec = flowManager.readArtifact({ specId, logicalKey: "spec.record", consumerNodeId: "spec-gate" });
+          assert.match(JSON.parse(repairedSpec.bytes).requirements.find((entry) => entry.id === "R10").desc, /regenerated plan.*observation is addressed/);
+          const newStop = await dispatch();
+          flowManager = new FlowManager({ root, mainRoot: root, inWorktree: false, specId });
+          const settled = flowManager.readCurrentStepSettlement({ specId, stepId: "spec-gate" });
+          assert.equal(settled.result.kind, "spec-gate-blocked", JSON.stringify(newStop));
+          assert.deepEqual(settled.result.error.data, { reason: "cycle-limit", cycle: 4, maximum: 4 });
+          assert.deepEqual(readCurrentGateTransitionFacts({ flowManager,
+            flowState: flowManager.loadReadOnly(specId), phase: "spec", root }).specCycle.toJSON(),
+          { cycle: 4, completedRepairs: 3 });
+          assert.equal(gateRepairWorkerRuns, 6);
+          assert.equal(flowManager.activityLedger(specId).filter((entry) => entry.transition.operation.startsWith("reopen_draft_")).length, 1);
+          assert.deepEqual(flowManager.activityLedger(specId).slice(0, strictActivities.length), strictActivities);
+          assert.deepEqual(sealFailures, []);
+          return;
+        }
         activateNonBlockingPolicy({ root, flowManager: stopped, reason: "Retain the unresolved Spec observation for Acceptance." });
         const decision = decisionContextForActiveFlow(root, stopped.loadReadOnly(specId), stopped);
         assert.equal(decision.resultKind, "quality");
@@ -547,10 +665,41 @@ describe("Spec artifact lifecycle and downstream consumption", { concurrency: fa
         ]).flat(),
       ]);
       if (largeGateResponse) {
-        assert.equal(gateRepairWorkerRuns, 1, "Complete selected finding units share one immutable-file worker call");
+        assert.equal(gateRepairWorkerRuns, 1, "The complete initial repair input needs one worker call");
+        assert.equal(gateRepairInspectionRuns, 0, "File delivery does not add an automatic inspection call");
+        assert.equal(gateRepairMutationRuns, 1, "Complete selected finding units share one privileged immutable-file call");
+        assert.deepEqual(gateRepairModes, ["repair"]);
+        const input = gateRepairRequest.inputs[0];
+        const progress = new SpecGateRepairProgressReader({ flowManager: reloaded, specId,
+          attemptId: input.descriptor.canonicalLocator.attemptId, consumerNodeId: "spec-gate-repair" });
+        const [checkpoint, claimed, repair] = ["checkpoint", "claimed", "publication"]
+          .map((phase) => progress.read(0, phase));
+        for (const saved of [checkpoint, claimed, repair]) {
+          assert.equal(saved.document.generation, 0);
+          assert.equal(saved.document.requestDigest, gateRepairIdentity.binding.requestDigest);
+          assert.deepEqual(saved.document.context, gateRepairContext);
+          assert.deepEqual(saved.document.callCost, repair.document.callCost);
+        }
+        assert.equal(repair.document.context.mode, "repair");
+        assert.equal(repair.document.proposal.stage, "spec-gate-repair");
+        assert.equal(checkpoint.budget.snapshot().providerCallCount, 0);
+        assert.equal(claimed.budget.snapshot().providerCallCount, 1);
+        assert.equal(repair.budget.snapshot().providerCallCount, gateRepairWorkerRuns);
+        const frontier = repair.document.plan.budgetFrontier;
+        const callCost = repair.document.callCost;
+        const responseCost = repair.document.responseCost;
+        assert.equal(checkpoint.budget.snapshot().aggregateCharacters,
+          frontier.aggregateCharacters + callCost.characters);
+        assert.equal(claimed.budget.snapshot().aggregateCharacters, checkpoint.budget.snapshot().aggregateCharacters);
+        assert.equal(repair.budget.snapshot().aggregateCharacters,
+          frontier.aggregateCharacters + callCost.characters + responseCost.characters);
+        assert.equal(repair.budget.snapshot().aggregateItemCount,
+          frontier.aggregateItemCount + callCost.items + responseCost.items);
         assert.equal(repairedFindingIdentities.size, 40);
       } else {
         assert.equal(gateRepairWorkerRuns, cycles - 1);
+        assert.equal(gateRepairInspectionRuns, 0);
+        assert.equal(gateRepairMutationRuns, gateRepairWorkerRuns);
       }
       assert.equal(specGateAttempts.size, cycles);
       assert.equal(specReviewRuns, cycles);

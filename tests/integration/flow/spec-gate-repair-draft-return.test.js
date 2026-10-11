@@ -302,11 +302,18 @@ test("the retired direct user input worker stage is rejected", async () => {
     }));
     reserveSpecGateRepairWorkerCall({ ctx: value.ctx, request,
       prompt: JSON.stringify(request.toPromptReference()) });
-    sealWorkerArtifactHandoff({ requestPath: request.requestPath,
-      invocationId: request.dispatchInvocationId });
-    await assert.rejects(prepareSpecGateRepairService({ ctx: value.ctx, request,
-      Connector: SpecEntryConnector, handoffCoordinator: value.coordinator }),
-    /typed repair disposition/);
-    assert.equal(value.flowManager.canonicalState(value.specId).current.at(-1), "spec-gate-repair");
+    const beforeState = value.flowManager.canonicalState(value.specId).toJSON();
+    const beforeActivities = value.flowManager.activityLedger(value.specId);
+    const beforeCatalog = value.flowManager.artifactCatalog(value.specId).toJSON();
+    assert.throws(() => sealWorkerArtifactHandoff({ requestPath: request.requestPath,
+      invocationId: request.dispatchInvocationId }), (error) =>
+      error.code === "FLOW_ARTIFACT_HANDOFF_INVALID" && error.classification === "invalid"
+      && error.retryable === false && /typed repair disposition/.test(error.message));
+    const restarted = new FlowManager({ root: value.root, mainRoot: value.root,
+      inWorktree: false, specId: value.specId });
+    assert.equal(restarted.canonicalState(value.specId).current.at(-1), "spec-gate-repair");
+    assert.deepEqual(restarted.canonicalState(value.specId).toJSON(), beforeState);
+    assert.deepEqual(restarted.activityLedger(value.specId), beforeActivities);
+    assert.deepEqual(restarted.artifactCatalog(value.specId).toJSON(), beforeCatalog);
   } finally { removeTmpDir(value.root); }
 });

@@ -2,7 +2,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { FlowActivity } from "./current-flow-state.js";
-import { ReviewEvidence } from "./review-observation-values.js";
+import { FlowArtifactActivityAssociation, FlowArtifactActivityIndex } from "../../lib/flow-version.js";
+import { ReviewEvidence, sha256 } from "./review-observation-values.js";
 import {
   CanonicalFindingFingerprint,
   CanonicalFindingIdentity,
@@ -33,6 +34,11 @@ const DRAFT_REOPEN_ACTIVITY_OPERATIONS = new Set([
   "reopen_draft_task_addition",
   "reopen_draft_spec_correction",
 ]);
+
+function canonicalActivityDigest(activity) {
+  return sha256(JSON.stringify(activity.toJSON()));
+}
+
 export function opensReviewFindingCycle(activity) {
   return DRAFT_REOPEN_ACTIVITY_OPERATIONS.has(activity.transition.operation);
 }
@@ -200,6 +206,8 @@ class RequirementAuthority {
 }
 
 export class ReviewFindingCycle {
+  #activityDigests;
+
   constructor(input = {}) {
     const value = requireRecord(input, "review finding cycle");
     this.runId = optionalString(value.runId, "review finding cycle.runId");
@@ -213,16 +221,37 @@ export class ReviewFindingCycle {
         throw new Error(`review finding cycle.activities[${index}] must be a canonical Activity: ${error.message}`);
       }
     });
-    const latestReopen = activities.findLast(opensReviewFindingCycle);
-    if (latestReopen !== undefined && latestReopen.timing === null) {
+    if (activities.some((activity) => opensReviewFindingCycle(activity) && activity.timing === null)) {
       throw new Error("draft reopen Activity requires timing facts");
     }
+    new FlowArtifactActivityIndex(activities.map((activity) => new FlowArtifactActivityAssociation({
+      id: activity.id,
+      nodeId: activity.nodeId,
+      nodeKey: activity.nodeKey,
+      confirmationOrder: activity.confirmationOrder,
+      operation: activity.transition.operation,
+    })));
+    this.#activityDigests = new Map(activities.map((activity) => [activity.id, canonicalActivityDigest(activity)]));
+    const latestReopen = activities.findLast(opensReviewFindingCycle);
+    this.reopenConfirmationOrder = latestReopen?.confirmationOrder ?? null;
     this.planRewindAt = latestReopen?.timing?.finishedAt ?? null;
     Object.freeze(this);
   }
 
   static fromActivityLedger({ runId = null, activities = [] } = {}) {
     return new ReviewFindingCycle({ runId, activities });
+  }
+
+  includesActivity(value) {
+    let activity;
+    try { activity = FlowActivity.canonical(value); }
+    catch (error) {
+      throw new Error(`cycle membership requires an exact canonical ledger Activity: ${error.message}`);
+    }
+    if (this.#activityDigests.get(activity.id) !== canonicalActivityDigest(activity)) {
+      throw new Error("cycle membership requires an exact canonical ledger Activity");
+    }
+    return activity.confirmationOrder > (this.reopenConfirmationOrder ?? 0);
   }
 
   matchesArtifact(value) {

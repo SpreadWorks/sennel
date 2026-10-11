@@ -17,12 +17,14 @@ describe("PlanGateRepairRoute", () => {
     }
 
     const spec = planGateRepairRouteForPhase("spec");
+    assert.deepEqual(spec.resetStepIds, ["spec-gate-repair", "spec-gate"]);
     assert.deepEqual(spec.acceptedSourceStatuses("spec-gate-repair"), ["done", "skipped"]);
     assert.deepEqual(spec.acceptedSourceStatuses("spec-gate"), ["in_progress"]);
     assert.equal(spec.requestedStatus("spec-gate-repair"), "in_progress");
     assert.equal(spec.requestedStatus("spec-gate"), "pending");
     for (const stepId of ["spec", "spec-review", "spec-triage", "spec-repair"]) {
       assert.throws(() => spec.acceptedSourceStatuses(stepId), /outside plan gate repair route/);
+      assert.throws(() => spec.requestedStatus(stepId), /outside plan gate repair route/);
     }
     assert.throws(
       () => draft.acceptedSourceStatuses("draft-questions-review"),
