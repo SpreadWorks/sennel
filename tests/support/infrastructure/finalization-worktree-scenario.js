@@ -6,6 +6,7 @@ import { PrepareArtifactScenario } from "../prepare-artifact-scenario.js";
 import { FlowManager } from "../../../src/lib/flow-manager.js";
 import SetAutoCommand from "../../../src/flow/lib/set-auto.js";
 import { AtomicJsonFile } from "../../../src/lib/atomic-json-file.js";
+import { SharedFinalizeCleanupJournal } from "../../../src/flow/lib/finalize-cleanup-journal.js";
 import { FinalizeFlowStateOwner } from "../../../src/flow/lib/finalize-flow-state-owner.js";
 import { WorktreeFlowBindingStore } from "../../../src/lib/worktree-flow-binding.js";
 import { CurrentTaskSourceSnapshot } from "../../../src/flow/lib/task-mutation-lineage.js";
@@ -89,7 +90,7 @@ export class FinalizationWorktreeScenario extends FinalizationPhaseScenario {
   }
 
   journalPath() { return this.manager.specLocation(this.specId).artifact("finalize.cleanup.journal"); }
-  journal() { return new AtomicJsonFile(this.journalPath()).read(null); }
+  journal() { return SharedFinalizeCleanupJournal.open(this.manager.loadReadOnly(this.specId), { readOnly: true }).value; }
 }
 
 /** Read-only diagnosis of the actual source acquisition before and after Gate.

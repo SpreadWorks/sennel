@@ -164,6 +164,8 @@ describe("Finalization phase: genuine Report / canonical reload / external effec
   }
 
   test("F04 unknown dirty input and busy owner reject merge without changing the selected Attempt", async (t) => {
+    let lock = null;
+    t.after(() => lock?.release());
     const flow = scenario(t);
     await flow.advanceTo("finalize-merge");
     flow.write("unknown-user-change.txt", "retain this user change\n");
@@ -174,9 +176,8 @@ describe("Finalization phase: genuine Report / canonical reload / external effec
     assert.deepEqual(flow.reload().snapshot(), canonical);
     assert.deepEqual(flow.gitSnapshot(), git);
     fs.unlinkSync(path.join(flow.root, "unknown-user-change.txt"));
-    const lock = new RepositoryFlowOperationLock({ mainRoot: flow.root });
+    lock = new RepositoryFlowOperationLock({ mainRoot: flow.root });
     lock.acquire();
-    t.after(() => lock.release());
     const beforeLock = flow.snapshot();
     const busy = await flow.runRegistered("finalize-merge");
     assert.equal(busy.ok, false);

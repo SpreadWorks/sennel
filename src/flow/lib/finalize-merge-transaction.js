@@ -152,6 +152,11 @@ export class FinalizeMergeTransactionError extends Error {
     this.data = data;
     this.committed = committed === true;
   }
+  get isAdmissionRejection() {
+    return !this.committed && ["MERGE_FEATURE_HEAD_MISMATCH", "MERGE_FEATURE_OPERATION_IN_PROGRESS",
+      "MERGE_FEATURE_DIRTY", "MERGE_TARGET_OPERATION_IN_PROGRESS", "MERGE_TARGET_DIRTY",
+      "MERGE_PRE_SYNC_DIRTY", "MERGE_BASE_ADVANCED", "MERGE_GIT_PROBE_FAILED"].includes(this.code);
+  }
 }
 
 export class GitWorktreeStatus {
@@ -341,7 +346,7 @@ export class FinalizeMergeTransaction {
         message: `Unable to evaluate merge feasibility: ${gitFailureText(probe)}`,
       });
     }
-    if (/(^|\n)(changed in both|<<<<<<< )/m.test(probe.stdout)) {
+    if (/(^|\n)(added in both|changed in both|<<<<<<< )/m.test(probe.stdout)) {
       throw new FinalizeMergeTransactionError({
         code: "MERGE_CONTENT_CONFLICT",
         message: "The feature and base branches have a content conflict.",
@@ -509,8 +514,9 @@ export class FinalizeMergeTransaction {
     // Branch-mode Flow has no separate main worktree. The isolated merge and
     // ref compare-and-swap are already complete; this is only the authority
     // handoff to the published base. The preflight above permits no caller
-    // changes except Flow-owned metadata, which the post lifecycle rehydrates.
-    const checkout = runGit(["-C", this.featureRoot, "checkout", "--force", this.baseBranch]);
+    // changes except Flow-owned metadata. Preserve its current canonical
+    // receipts and index changes while switching to the published base.
+    const checkout = runGit(["-C", this.featureRoot, "checkout", this.baseBranch]);
     if (!checkout.ok) {
       throw new FinalizeMergeTransactionError({
         code: "MERGE_CALLER_TRANSITION_FAILED",

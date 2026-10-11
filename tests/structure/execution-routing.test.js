@@ -140,6 +140,77 @@ test("additional registered phases retain complete lookup, immutable selection, 
   assert.equal(restored.ok, true, restored.diagnostics.map((entry) => entry.toString()).join("\n"));
 });
 
+test("Flow and worker guards retain their own complete ranges regardless of declaration order", () => {
+  const file = "src/flow/engine/composition/registered-step-execution.js";
+  const source = original.get(file);
+  const flowRange = 'const registeredPhaseSteps = new Set(flowLeafIdsBetween("branch", "finalize-cleanup"));';
+  const workerRange = 'const registeredWorkerPhaseSteps = new Set(flowLeafIdsBetween("branch", "report"));';
+  assert.equal(source.includes(`${flowRange}\n${workerRange}`), true);
+  const files = new Map(original);
+  files.set(file, source.replace(`${flowRange}\n${workerRange}`, `${workerRange}\n${flowRange}`));
+  const reordered = inspect(files);
+  assert.equal(reordered.ok, true, reordered.diagnostics.map((entry) => entry.toString()).join("\n"));
+  for (const [before, after] of [
+    [flowRange, 'const registeredPhaseSteps = new Set(flowLeafIdsBetween("branch", "report"));'],
+    [workerRange, 'const registeredWorkerPhaseSteps = new Set(flowLeafIdsBetween("branch", "spec-review"));'],
+    [workerRange, 'const registeredWorkerPhaseSteps = new Set([]);'],
+  ]) {
+    files.set(file, source.replace(before, after));
+    const rejected = inspect(files);
+    const diagnostic = rejected.diagnostics.find((entry) => entry.rule === "A11" && entry.file === file);
+    assert.ok(diagnostic, rejected.diagnostics.map((entry) => entry.toString()).join("\n"));
+    assert.equal(diagnostic.line > 0 && diagnostic.column > 0, true);
+    assert.equal(diagnostic.trace.includes(file), true);
+  }
+  files.set(file, source);
+  const restored = inspect(files);
+  assert.equal(restored.ok, true, restored.diagnostics.map((entry) => entry.toString()).join("\n"));
+});
+
+test("each additional Flow projection must be consumed with its original module binding", () => {
+  const file = "src/flow/lib/get-next-action.js";
+  const source = original.get(file);
+  const consumption = "?? testChainProjection?.directive ?? finalizationProjection?.directive ?? workerDirective";
+  assert.equal(source.includes(consumption), true);
+  const header = "function buildCanonicalNextActionResult(ctx, state, typedState, descriptor, binding,";
+  assert.equal(source.includes(header), true);
+  const files = new Map(original);
+  for (const after of [
+    "?? testChainProjection?.directive ?? workerDirective",
+    "?? finalizationProjection?.directive ?? workerDirective",
+    "?? testChainProjection?.directive ?? finalizationProjection?.directive ?? finalizationProjection?.directive ?? workerDirective",
+  ]) {
+    files.set(file, source.replace(consumption, after));
+    const rejected = inspect(files);
+    const diagnostic = rejected.diagnostics.find((entry) => entry.rule === "A10" && entry.file === file);
+    assert.ok(diagnostic, rejected.diagnostics.map((entry) => entry.toString()).join("\n"));
+    assert.equal(diagnostic.line > 0 && diagnostic.column > 0, true);
+    assert.equal(diagnostic.trace.includes(file), true);
+  }
+  for (const foreignBinding of ["finalizationStepRegistration", "projectFinalizationExecutionDirective"]) {
+    files.set(file, source.replace(header, `${header} ${foreignBinding},`));
+    const rejected = inspect(files);
+    const diagnostic = rejected.diagnostics.find((entry) => entry.rule === "A10" && entry.file === file);
+    assert.ok(diagnostic, rejected.diagnostics.map((entry) => entry.toString()).join("\n"));
+    assert.equal(diagnostic.line > 0 && diagnostic.column > 0, true);
+    assert.equal(diagnostic.trace.includes(file), true);
+  }
+  files.set(file, source);
+  const composition = "src/flow/engine/composition/finalization.js";
+  const originalComposition = original.get(composition);
+  const contractImport = 'import { StepExecutionContract } from "./step-execution-contract.js";';
+  assert.equal(originalComposition.includes(contractImport), true);
+  files.set(composition, originalComposition.replace(contractImport,
+    'import { StepExecutionContract } from "node:util";'));
+  const foreignContract = inspect(files);
+  assert.equal(foreignContract.diagnostics.some((entry) => entry.rule === "A10" && entry.file === file), true,
+    foreignContract.diagnostics.map((entry) => entry.toString()).join("\n"));
+  files.set(composition, originalComposition);
+  files.set(file, source);
+  const restored = inspect(files);
+  assert.equal(restored.ok, true, restored.diagnostics.map((entry) => entry.toString()).join("\n"));
+});
+
 for (const [kind, file, before, after, originalName, renamedName] of [
     ["display", "src/flow/lib/get-next-action.js",
       "function buildCanonicalNextActionResult(ctx, state, typedState",

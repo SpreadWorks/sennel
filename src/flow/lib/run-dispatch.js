@@ -1,4 +1,5 @@
 import { acceptanceStepRegistration, initializeAcceptanceDecisionAwait } from "../engine/composition/acceptance.js";
+import { finalizationStepRegistration } from "../engine/composition/finalization.js";
 import { hasAcceptanceStepContract } from "../engine/step-result.js";
 import { assertCurrentWorkerExecutionSelection } from "./worker-execution-admission.js";
 import { workerStepExecutionRegistration, flowStepExecutionRegistration } from "../engine/composition/registered-step-execution.js";
@@ -126,6 +127,13 @@ function executeSelectedPrepareStepExecution(input) {
 export function executeAcceptanceDispatch(input) {
   const registration = acceptanceStepRegistration(input.stepId);
   if (registration === null) throw new TypeError("Acceptance dispatch requires its registered Step");
+  const selection = registration.executionContract.select({ ...input, registration });
+  return registration.executionContract.execute(selection, { ...input, registration });
+}
+
+export function executeFinalizationDispatch(input) {
+  const registration = finalizationStepRegistration(input.stepId);
+  if (registration === null) throw new TypeError("Finalization dispatch requires its registered Step");
   const selection = registration.executionContract.select({ ...input, registration });
   return registration.executionContract.execute(selection, { ...input, registration });
 }
@@ -1548,7 +1556,7 @@ export default class RunDispatchCommand extends FlowCommand {
     return this.runRegisteredFlowCommand(ctx, target, commandName, []);
   }
 
-  async runRegisteredFlowCommand(ctx, target, commandName, args) {
+  async runRegisteredFlowCommand(ctx, target, commandName, args, authorization = null) {
     const entry = flowCommands.run?.[commandName];
     if (!entry?.command) {
       throw new Error(`dispatcher-owned command is not registered: ${commandName}`);
@@ -1569,7 +1577,11 @@ export default class RunDispatchCommand extends FlowCommand {
       stdout: (text) => { stdout += text; },
       stderr: () => {},
       setExitCode: (code) => { exitCode = code; },
-      buildHookCtx: (container, input) => ({ ...buildFlowCommandHookContext(container, entry, input), viaFlowDispatch: true }),
+      buildHookCtx: (container, input) => {
+        if (authorization !== null) input.finalizationAuthorization = authorization;
+        return { ...buildFlowCommandHookContext(container, entry, input), viaFlowDispatch: true,
+          ...(authorization === null ? {} : { finalizationAuthorization: authorization }) };
+      },
     });
     return commandEnvelope(stdout.trim(), commandName, exitCode);
   }
@@ -1616,7 +1628,7 @@ export default class RunDispatchCommand extends FlowCommand {
     return NonBlockingAgentDecision.parse(response, context);
   }
 
-  async runDispatcherOwnedCommand(ctx, target, action) {
+  async runDispatcherOwnedCommand(ctx, target, action, invocation) {
     const command = DispatcherOwnedFlowCommand.forAction(action);
     if (command === null) return null;
     if (this.commandRunner) {
@@ -1629,6 +1641,8 @@ export default class RunDispatchCommand extends FlowCommand {
         target,
         command.commandName,
         command.command.runArguments().slice(1),
+        flowStepExecutionRegistration(command.commandName)?.executionContract.selectorName === "selectFinalizationExecution"
+          ? invocation.authorization : null,
       ),
     };
   }
@@ -2868,7 +2882,7 @@ export default class RunDispatchCommand extends FlowCommand {
 
       let dispatcherOwnedCommand;
       try {
-        dispatcherOwnedCommand = await this.runDispatcherOwnedCommand(ctx, target, action);
+        dispatcherOwnedCommand = await this.runDispatcherOwnedCommand(ctx, target, action, invocation);
       } catch (error) {
         return this.failure(
           ctx,

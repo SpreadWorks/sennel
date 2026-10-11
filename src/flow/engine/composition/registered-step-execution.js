@@ -1,4 +1,5 @@
 import { acceptanceStepRegistration } from "./acceptance.js";
+import { finalizationStepRegistration } from "./finalization.js";
 import { flowLeafIdsBetween } from "../../definition.js";
 import { draftStepRegistration, draftWorkerStepRegistration } from "./draft.js";
 import { specStepRegistration, specWorkerStepRegistration } from "./spec.js";
@@ -8,7 +9,8 @@ import { implStepRegistration } from "./impl.js";
 import { taskStepRegistration } from "./task.js";
 import { workerStepExecutionContract } from "../../lib/worker-execution-admission.js";
 
-const registeredPhaseSteps = new Set(flowLeafIdsBetween("branch", "report"));
+const registeredPhaseSteps = new Set(flowLeafIdsBetween("branch", "finalize-cleanup"));
+const registeredWorkerPhaseSteps = new Set(flowLeafIdsBetween("branch", "report"));
 
 /** A targeted Definition leaf may never fall through to another phase's executor. */
 export function workerStepExecutionRegistration(stepId) {
@@ -16,14 +18,14 @@ export function workerStepExecutionRegistration(stepId) {
   const registration = implementation?.executionContract === workerStepExecutionContract ? implementation
     : requirementTestWorkerStepRegistration(stepId) ?? draftWorkerStepRegistration(stepId)
     ?? specWorkerStepRegistration(stepId);
-  if (registration === null && registeredPhaseSteps.has(stepId)) {
+  if (registration === null && registeredWorkerPhaseSteps.has(stepId)) {
     throw new Error(`Definition leaf ${stepId} has no registered worker execution contract`);
   }
   return registration;
 }
 
 export function flowStepExecutionRegistration(stepId) {
-  const registration = acceptanceStepRegistration(stepId) ?? taskStepRegistration(stepId) ?? implStepRegistration(stepId)
+  const registration = finalizationStepRegistration(stepId) ?? acceptanceStepRegistration(stepId) ?? taskStepRegistration(stepId) ?? implStepRegistration(stepId)
     ?? requirementTestStepRegistration(stepId) ?? prepareStepRegistration(stepId)
     ?? draftStepRegistration(stepId) ?? specStepRegistration(stepId);
   if (registration === null && registeredPhaseSteps.has(stepId)) {

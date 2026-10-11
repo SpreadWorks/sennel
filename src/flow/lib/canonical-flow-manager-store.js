@@ -1,3 +1,5 @@
+import { FinalizationSettlementReceiptEvidence } from "./finalization-execution-identity.js";
+import { FinalizationResultEvidence } from "../steps/finalize/finalization-values.js";
 import { RetroResultEvidence } from "./retro-values.js";
 import { assertCurrentFinalRegressionEvidence, assertReportFinalRegressionEvidence } from "./report-final-evidence.js";
 import { AcceptedFinalRegressionBindingContinuation } from "../engine/connectors/acceptance/accepted-final-regression-binding.js";
@@ -16,7 +18,7 @@ import { ActivityFailure } from "./current-flow-state.js";
 import { ReviewWorkUnit } from "./review-work-unit.js";
 import { admitGateTransition } from "./gate-transition-application.js";
 import { attachedCanonicalReviewWorkUnit, canonicalReviewEvidencePublications } from "./canonical-review-artifacts.js";
-import { hasImplementationStepContract, hasAcceptanceStepContract } from "../engine/step-result.js";
+import { hasImplementationStepContract, hasAcceptanceStepContract, hasFinalizationStepContract } from "../engine/step-result.js";
 import { ImplementationGateResultEvidence } from "./gate-observation-values.js";
 import { AcceptedGateDeferral, AcceptedGateFindingsPublication } from "./accepted-gate-deferral.js";
 import { GateAttemptIdentity } from "./gate-transition.js";
@@ -49,6 +51,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
+import { deepFreeze } from "./review-observation-values.js";
 import { DraftGateRepairSelection } from "../steps/draft/draft-gate-repair-selection.js";
 import {
   buildCurrentFlowDefinition,
@@ -98,6 +101,7 @@ import {
   settlePrepareStepResult,
   settleSpecStepResult,
   settleAcceptanceStepResult,
+  settleFinalizationStepResult,
   settleRequirementTestStepResult,
   specGateNonblockingEligibilityForResult,
   STEP_RESULT_ERROR_CATEGORY,
@@ -1863,7 +1867,7 @@ function resultWithDraftStepResult(result, nodeId, stepResult, receipt) {
 function assertGenericPublicationAllowed(state, operation) {
   const nodeId = state.current.at(-1);
   const stepId = TaskStepIdentity.fromStateNode(state, nodeId)?.definitionId ?? nodeId;
-  if (hasImplementationStepContract(stepId) || hasAcceptanceStepContract(stepId)) {
+  if (hasImplementationStepContract(stepId) || hasAcceptanceStepContract(stepId) || hasFinalizationStepContract(stepId)) {
     throw new CurrentFlowStateInvariantError(`Implementation ${operation} requires its atomic selected Result and settlement receipt`);
   }
 }
@@ -2467,7 +2471,22 @@ function stepResultPublicationDescriptors(writes, selectedActivityId) {
 const COMMAND_PUBLICATION_TOKEN = Symbol("canonical-command-publication");
 
 /** Exact acquired command bytes and future producer identity for one atomic save. */
+class InterruptedFinalizeSyncPublication {
+  constructor({ activityId, cleanupAttempt, outbox, artifactWrites, timing, references }) {
+    this.activityId = activityId;
+    this.cleanupAttempt = deepFreeze(structuredClone(cleanupAttempt));
+    this.outbox = deepFreeze(structuredClone(outbox));
+    this.timing = deepFreeze(structuredClone(timing));
+    this.references = deepFreeze(structuredClone(references));
+    this.artifactWrites = Object.freeze(artifactWrites.map((write) => Object.freeze({ ...write, bytes: Buffer.from(write.bytes) })));
+    Object.freeze(this);
+  }
+  toJSON() { return { activityId: this.activityId, cleanupAttempt: this.cleanupAttempt,
+    outbox: this.outbox, timing: this.timing }; }
+}
+
 class CanonicalCommandPublication {
+  #finalization = null;
   #acceptance = false;
   #acceptanceExecutionRoot;
   #acceptanceArtifactRoot;
@@ -2512,6 +2531,22 @@ class CanonicalCommandPublication {
       id: selectedActivityId, binding: settlementAttempt === null ? binding : { ...binding, attempt: settlementAttempt }, confirmationOrder: view.state.confirmationOrder + 1 })]);
     this.#runtime = runtime;
   }
+  static finalization(token, candidate, evidence, commandResult, interruptedSync = null) {
+    if (token !== COMMAND_PUBLICATION_TOKEN) throw new TypeError("Finalization publication belongs to its Store");
+    candidate.interruptedSync = interruptedSync;
+    candidate.#finalization = new FinalizationSettlementReceiptEvidence({ evidence, commandResult }).assertBinding(candidate.binding);
+    const reportReceipt = evidence.execution.publication;
+    if (reportReceipt !== null && !candidate.activities.some((entry) => entry.nodeId === "report"
+      && isDeepStrictEqual(entry.result?.draftSettlementReceipt?.toJSON?.() ?? entry.result?.draftSettlementReceipt, reportReceipt))) {
+      throw new CurrentFlowStateConflictError("Finalization report authority is not an acquired canonical receipt");
+    }
+    candidate.commandFingerprint = crypto.createHash("sha256").update(JSON.stringify(candidate.#finalization.commandResult)).digest("hex");
+    candidate.outbox = evidence.execution?.outboxIdentity == null ? null : candidate.state.outbox.find(evidence.execution.outboxIdentity.idempotencyKey);
+    const claimed = candidate.activities.findLast((entry) => entry.transition?.outbox?.id === candidate.outbox?.id)?.transition.outbox;
+    candidate.outboxAttempt = claimed?.attempt ?? null;
+    candidate.outboxRecoveryReceipt = claimed?.exactRecoveryReceipt ?? null;
+    return Object.freeze(candidate);
+  }
   static acceptance(token, candidate, commandResult, flowManager) {
     if (token !== COMMAND_PUBLICATION_TOKEN) throw new TypeError("Acceptance publication belongs to its Store");
     candidate.#acceptance = true;
@@ -2524,8 +2559,8 @@ class CanonicalCommandPublication {
       candidate.resultBinding = new ImplStepBinding({ flowManager: candidate.binding.flowManager,
         specId: candidate.binding.specId, stepId: candidate.binding.stepId, continuation });
     }
-    candidate.#acceptanceExecutionRoot = flowManager.executionRoot();
-    candidate.#acceptanceArtifactRoot = flowManager.root;
+    candidate.#acceptanceExecutionRoot = flowManager.executionRoot(candidate.state);
+    candidate.#acceptanceArtifactRoot = flowManager.specLocation(candidate.binding.specId).repositoryRoot;
     candidate.#acceptanceSpecPath = flowManager.location(candidate.binding.specId).relativeSpecFile;
     if (candidate.binding.stepId === "report") {
       const saved = flowManager.readCurrentStepSettlement({ specId: candidate.binding.specId,
@@ -2630,11 +2665,19 @@ class CanonicalCommandPublication {
     }
   }
   assertCommand(commandResult) {
+    if (this.#finalization !== null) {
+      if (!isDeepStrictEqual(this.#finalization.commandResult, commandResult?.toJSON?.() ?? commandResult)) throw new CurrentFlowStateConflictError("Finalization command changed after acquisition");
+      return;
+    }
     if (crypto.createHash("sha256").update(JSON.stringify(this.#acceptance ? acceptanceCommandIdentity(commandResult) : commandPublicationIdentity(commandResult))).digest("hex") !== this.commandFingerprint) {
       throw new CurrentFlowStateConflictError("implementation command changed after publication acquisition");
     }
   }
   assertEvidence(evidence) {
+    if (this.#finalization !== null) {
+      if (!isDeepStrictEqual(this.#finalization.evidence, evidence.toJSON())) throw new CurrentFlowStateConflictError("Finalization evidence changed after acquisition");
+      return;
+    }
     if (this.#acceptance) {
       const publication = evidence?.publication;
       if (publication == null) {
@@ -2694,6 +2737,9 @@ class CanonicalCommandPublication {
   toJSON() {
     return { selectedActivityId: this.selectedActivityId, revision: this.revision,
       ...(this.settlementAttempt === null ? {} : { settlementAttempt: this.settlementAttempt.toJSON?.() ?? this.settlementAttempt }),
+      ...(this.#finalization === null ? {} : { outbox: this.outbox === null ? null : { ...this.outbox.toJSON(), attempt: this.outboxAttempt,
+        exactRecoveryReceipt: this.outboxRecoveryReceipt?.toJSON() ?? null },
+        interruptedSync: this.interruptedSync?.toJSON() ?? null }),
       catalogFingerprint: this.#baselineCatalog, commandFingerprint: this.commandFingerprint,
       artifactWrites: this.artifactWrites.map(canonicalArtifactWriteIdentity) };
   }
@@ -2986,17 +3032,27 @@ export class CanonicalFlowManagerStore {
     return state;
   }
 
-  recoverInterruptedFinalizeSync({ specId = null, runtimeLog = null } = {}) {
-    const resolved = this.#resolveSpecId(specId);
-    if (resolved === null) throw new CurrentFlowStateInvariantError("no canonical active Flow");
-    const state = this.runtime.load(resolved);
-    const runtimeReceipt = new InterruptedFinalizeSyncRuntimeLogFact({ receipt: runtimeLog }).receipt;
-    if (runtimeReceipt === null || runtimeReceipt.runId !== state.runId) {
+  recoverInterruptedFinalizeSync(input = {}) {
+    const state = this.runtime.load(this.#resolveSpecId(input.specId));
+    this.#interruptedFinalizeSyncReceipt(state, input.runtimeLog);
+    if (input.stepResult == null) throw new CurrentFlowStateInvariantError("Interrupted sync recovery requires its selected Step Result and receipt");
+    return this.settleFinalizationStepResult(input);
+  }
+
+  #interruptedFinalizeSyncReceipt(state, runtimeLog) {
+    const receipt = new InterruptedFinalizeSyncRuntimeLogFact({ receipt: runtimeLog }).receipt;
+    if (receipt === null || receipt.runId !== state.runId) {
       throw new CurrentFlowStateInvariantError("interrupted finalize-sync runtime receipt does not match the active Flow");
     }
+    return receipt;
+  }
+
+  #prepareInterruptedFinalizeSync({ resolved, view, runtimeLog }) {
+    const state = view.state;
+    const runtimeReceipt = this.#interruptedFinalizeSyncReceipt(state, runtimeLog);
     const identity = finalizationOutboxIdentity(state, "finalize-sync");
-    const existing = this.outboxStatus({ specId: resolved, id: identity.idempotencyKey, operation: identity.operation });
-    if (state.current?.at(-1) !== "finalize-sync" || state.attempt === null || existing.status !== "pending") {
+    const existing = view.activities.filter((entry) => entry.transition.outbox?.id === identity.idempotencyKey).at(-1)?.transition.outbox;
+    if (state.current?.at(-1) !== "finalize-sync" || state.attempt === null || state.outbox.find(identity.idempotencyKey) === null || existing == null) {
       throw new CurrentFlowStateInvariantError("interrupted finalize-sync recovery is no longer eligible");
     }
     const recoveryIdentity = {
@@ -3024,7 +3080,7 @@ export class CanonicalFlowManagerStore {
     }).toJSON();
     const interruption = new FinalizeSyncInterruptedError({ runtimeLog: runtimeReceipt });
     const issue = new IssueLogDocument((() => {
-      const existingIssue = this.readArtifact({ specId: resolved, logicalKey: "issue.log", consumerNodeId: "finalize-cleanup", optional: true });
+      const existingIssue = this.readArtifact({ specId: resolved, logicalKey: "issue.log", consumerNodeId: "finalize-cleanup", optional: true, view });
       return existingIssue === null ? { entries: [] } : JSON.parse(existingIssue.bytes.toString("utf8"));
     })());
     issue.append(canonicalIssueLogEntry({
@@ -3034,11 +3090,10 @@ export class CanonicalFlowManagerStore {
       timestamp: runtimeReceipt.startedAt,
       runtimeLog: runtimeReceipt,
     }), `interrupted-finalize-sync-${state.runId}-${runtimeReceipt.sequence}`);
-    return this.runtime.recoverInterruptedFinalizeSync({
-      specId: resolved,
+    return new InterruptedFinalizeSyncPublication({
       activityId: `interrupted-finalize-sync-recovered-${recoveryDigest}`,
       cleanupAttempt,
-      outbox: canonicalOutboxActivity({ outbox: { id: identity.idempotencyKey, operation: identity.operation }, attempt: existing.attempt, failure: interruption.message, failureCode: interruption.code, recovery: null, exactRecoveryReceipt: existing.exactRecoveryReceipt }),
+      outbox: canonicalOutboxActivity({ outbox: { id: identity.idempotencyKey, operation: identity.operation }, attempt: existing.attempt, failure: interruption.message, failureCode: interruption.code, recovery: null, exactRecoveryReceipt: existing.exactRecoveryReceipt?.toJSON() ?? null }),
       artifactWrites: [{ logicalKey: "issue.log", mediaType: "application/json", bytes: Buffer.from(`${JSON.stringify(issue.toJSON(), null, 2)}\n`, "utf8") }],
       timing: { startedAt: runtimeReceipt.startedAt, finishedAt: runtimeReceipt.startedAt, durationMs: 0 },
       references: { evaluations: [], findings: [], repairs: [], artifacts: [] },
@@ -3082,7 +3137,7 @@ export class CanonicalFlowManagerStore {
     return this.runtime.assertWritable(specId);
   }
 
-  executionRoot() { return this.root; }
+  executionRoot(state = null) { return this.resolveWorktreePaths(state).worktreePath ?? this.root; }
   specLocation(specId) { return this.location(specId); }
 
   resolveWorktreePaths(state) {
@@ -4901,8 +4956,13 @@ export class CanonicalFlowManagerStore {
     ) {
       throw new CurrentFlowStateInvariantError("exact recovery was already consumed for this canonical outbox entry");
     }
+    const state = this.runtime.load(resolved);
+    const attemptRecovery = hasFinalizationStepContract(outbox.operation)
+      && state.current?.at(-1) === outbox.operation && state.attempt?.failure != null
+      ? commandContextAttempt(state, outbox.operation) : null;
     this.runtime.reopenOutbox({
       specId: resolved,
+      attempt: attemptRecovery,
       activityId: stableActivityId("outbox-reopened", {
         id: outbox.id,
         operation: outbox.operation,
@@ -4951,9 +5011,9 @@ export class CanonicalFlowManagerStore {
     const timing = latest?.timing?.toJSON() ?? (latest?.result?.confirmedAt == null ? null : { finishedAt: latest.result.confirmedAt });
     const status = active !== null
       ? "pending"
-      : (latest?.transition.operation === "complete_outbox" || latest?.transition.operation === "confirm_attempt" && latest?.nodeId === "report" && latest?.transition.outbox?.result !== null)
+      : (latest?.transition.operation === "complete_outbox" || ["confirm_attempt", "record_draft_step_settlement"].includes(latest?.transition.operation) && (latest?.nodeId === "report" || hasFinalizationStepContract(latest?.nodeId)) && latest?.transition.outbox?.result !== null)
         ? "done"
-        : ["fail_outbox", "recover_interrupted_finalize_sync"].includes(latest?.transition.operation)
+        : (["fail_outbox", "recover_interrupted_finalize_sync"].includes(latest?.transition.operation) || hasFinalizationStepContract(latest?.nodeId) && latest?.transition.outbox?.failure != null)
           ? "failed"
           : "missing";
     return Object.freeze({
@@ -4967,7 +5027,7 @@ export class CanonicalFlowManagerStore {
       updatedAt: timing?.finishedAt ?? null,
       failure: latest?.transition.outbox?.failure ?? null,
       failureHistory: Object.freeze(matching
-        .filter((activity) => ["fail_outbox", "recover_interrupted_finalize_sync"].includes(activity.transition.operation))
+        .filter((activity) => ["fail_outbox", "recover_interrupted_finalize_sync"].includes(activity.transition.operation) || hasFinalizationStepContract(activity.nodeId) && activity.transition.outbox.failure !== null)
         .map((activity) => Object.freeze({
           attempt: activity.transition.outbox.attempt,
           failure: activity.transition.outbox.failure,
@@ -5653,8 +5713,8 @@ export class CanonicalFlowManagerStore {
       return null;
     }
     if (isOrdinaryDraftAwaitSettlement(input)) return this.findDraftAwaitSettlementReceipt(input);
-    if (hasImplementationStepContract(binding?.stepId) || hasAcceptanceStepContract(binding?.stepId)) {
-      const expected = hasAcceptanceStepContract(binding.stepId) ? this.#acceptanceStepReceipt(input) : this.#implementationStepReceipt(input);
+    if (hasImplementationStepContract(binding?.stepId) || hasAcceptanceStepContract(binding?.stepId) || hasFinalizationStepContract(binding?.stepId)) {
+      const expected = hasFinalizationStepContract(binding.stepId) ? this.#finalizationStepReceipt(input) : hasAcceptanceStepContract(binding.stepId) ? this.#acceptanceStepReceipt(input) : this.#implementationStepReceipt(input);
       const matching = this.#stepSettlementBindingActivities(resolved, expected.binding);
       // Exact readback authenticates an earlier immutable claim after a later
       // failure or publication. Write admission still requires the latest receipt.
@@ -5736,7 +5796,7 @@ export class CanonicalFlowManagerStore {
     const resolved = this.#resolveSpecId(specId);
     if (resolved === null) throw new CurrentFlowStateInvariantError("no canonical active Flow");
     const requestedReceipt = exactReceipt?.toJSON?.() ?? exactReceipt;
-    if (requestedReceipt !== null && (!completed || !hasAcceptanceStepContract(stepId)
+    if (requestedReceipt !== null && (!completed || !(hasAcceptanceStepContract(stepId) || hasFinalizationStepContract(stepId))
       || requestedReceipt.binding?.specId !== resolved || requestedReceipt.binding?.stepId !== stepId)) {
       throw new CurrentFlowStateConflictError("Exact Acceptance settlement receipt does not match its requested source");
     }
@@ -5753,10 +5813,10 @@ export class CanonicalFlowManagerStore {
     }
     if (view !== null) throw new CurrentFlowStateInvariantError("Acquired settlement view requires a preparation Step");
     const state = this.runtime.load(resolved);
-    const materializedIdentity = hasImplementationStepContract(stepId) || hasAcceptanceStepContract(stepId) ? null
+    const materializedIdentity = hasImplementationStepContract(stepId) || hasAcceptanceStepContract(stepId) || hasFinalizationStepContract(stepId) ? null
       : TaskStepIdentity.fromStateNode(state, stepId);
     const definitionStepId = materializedIdentity?.definitionId ?? stepId;
-    if (hasImplementationStepContract(definitionStepId) || hasAcceptanceStepContract(definitionStepId)) {
+    if (hasImplementationStepContract(definitionStepId) || hasAcceptanceStepContract(definitionStepId) || hasFinalizationStepContract(definitionStepId)) {
       const activeIdentity = TaskStepIdentity.fromStateNode(state, state.current?.at(-1));
       const owningTaskId = taskId ?? activeIdentity?.taskId ?? null;
       const nodeId = materializedIdentity?.nodeId ?? (definitionStepId.startsWith("task-") && owningTaskId !== null
@@ -5776,7 +5836,9 @@ export class CanonicalFlowManagerStore {
       const currentAttemptReceipt = requestedReceipt !== null && state.attempt?.nodeId === nodeId
         && state.attempt.id === requestedReceipt.binding.attemptId
         && state.attempt.sequence === requestedReceipt.binding.attemptSequence;
-      const expected = requestedReceipt?.binding ?? (completed ? node?.result?.draftSettlementReceipt?.binding ?? null : {
+      const activeFinalizationCompletion = completed && hasFinalizationStepContract(definitionStepId)
+        && node?.result?.draftSettlementReceipt == null && state.attempt?.nodeId === nodeId;
+      const expected = requestedReceipt?.binding ?? (completed && !activeFinalizationCompletion ? node?.result?.draftSettlementReceipt?.binding ?? null : {
         attemptId: state.attempt?.id, attemptSequence: state.attempt?.sequence });
       if (expected === null || !completed && state.attempt?.nodeId !== nodeId) return null;
       const selected = this.activityLedger(resolved).findLast((entry) => entry.nodeId === nodeId
@@ -5808,9 +5870,11 @@ export class CanonicalFlowManagerStore {
           throw new CurrentFlowStateConflictError("Saved Acceptance Result no longer owns its exact canonical publication");
         }
       }
-      const settlement = hasAcceptanceStepContract(definitionStepId) ? settleAcceptanceStepResult(definitionStepId, result)
+      const settlement = hasFinalizationStepContract(definitionStepId) ? settleFinalizationStepResult(definitionStepId, result) : hasAcceptanceStepContract(definitionStepId) ? settleAcceptanceStepResult(definitionStepId, result)
         : definitionStepId.startsWith("task-") ? settleTaskStepResult(definitionStepId, result)
           : settleImplStepResult(definitionStepId, result);
+      if (activeFinalizationCompletion && requestedReceipt === null
+        && (result.type !== "completed" || settlement.kind !== "await")) return null;
       if (detachedReceipt && (!(settlement instanceof StepRoute)
         || !settlement.effects.resetStepIds.includes(definitionStepId))) {
         throw new CurrentFlowStateConflictError("Detached Acceptance receipt does not own its source invalidation");
@@ -5818,6 +5882,9 @@ export class CanonicalFlowManagerStore {
       const receipt = DraftStepSettlementReceipt.assertStored(activity.result.draftSettlementReceipt, {
         binding: { runId: state.runId, specId: resolved, stepId: definitionStepId,
           attempt: { id: expected.attemptId, sequence: expected.attemptSequence } }, result, settlement });
+      if (hasFinalizationStepContract(definitionStepId)) {
+        FinalizationResultEvidence.fromJSON(receipt.finalization.evidence).assertResult(result);
+      }
       if (requestedReceipt !== null && !isDeepStrictEqual(receipt.toJSON(), requestedReceipt)) {
         throw new CurrentFlowStateConflictError("Exact Acceptance settlement receipt differs from its saved publication");
       }
@@ -7331,6 +7398,112 @@ export class CanonicalFlowManagerStore {
       artifactWrites: candidate.artifactWrites, artifactBaselines: candidate.artifactBaselines,
       admission: candidate, acceptedDecision: candidate.evidence.acceptedDecision });
     if (next.nextAction()?.nodeId !== settlement.targetStepId) throw new CurrentFlowStateConflictError("Accepted decision does not reach its selected successor");
+    return Object.freeze({ state: next, receipt });
+  }
+
+  #finalizationStepReceipt(input) {
+    const { binding, stepResult, settlement, evidence, commandResult = null,
+      finalizationPublication = null, executionLifecycle = null } = input;
+    const finalization = new FinalizationSettlementReceiptEvidence({ evidence, commandResult,
+      candidate: finalizationPublication?.toJSON() ?? null }).assertBinding(binding);
+    return new DraftStepSettlementReceipt({ binding, result: stepResult, settlement,
+      publication: new DraftStepSettlementPublication(finalization.toJSON()), finalization, executionLifecycle });
+  }
+
+  /** Acquire command publication and authority together before the save-only Service. */
+  prepareFinalizationCommandPublication({ binding, evidence, commandResult = null, sourceCatalogHash = null,
+    selectedActivityId = activityId("finalization-step-settled") } = {}) {
+    if (!hasFinalizationStepContract(binding?.stepId)) throw new CurrentFlowStateInvariantError("Finalization publication requires its source binding");
+    const resolved = this.#resolveSpecId(binding.specId);
+    binding.assertCurrent();
+    return this.runtime.readCanonicalTransitionView(resolved, (view) => {
+      if (sourceCatalogHash !== null && sourceCatalogHash !== view.catalog.hash) {
+        throw new StepAdmissionRefusal("Finalization source catalog changed before publication acquisition");
+      }
+      const interruptedSync = commandResult?.failure?.code === "FINALIZE_SYNC_INTERRUPTED"
+        ? this.#prepareInterruptedFinalizeSync({ resolved, view, runtimeLog: commandResult.runtimeLog }) : null;
+      if (interruptedSync !== null) selectedActivityId = interruptedSync.activityId;
+      const artifactWrites = [...this.#attemptHistoryWrites({ specId: resolved, state: view.state,
+        nodeId: binding.stepId, commandResult, view }), ...this.#commandPublicationWrites(commandResult), ...(interruptedSync?.artifactWrites ?? [])];
+      return CanonicalCommandPublication.finalization(COMMAND_PUBLICATION_TOKEN,
+        new CanonicalCommandPublication(COMMAND_PUBLICATION_TOKEN, { binding, view, selectedActivityId,
+          artifactWrites, descriptors: stepResultPublicationDescriptors(artifactWrites, selectedActivityId),
+          runtime: new Map(), commandResult }), evidence, commandResult, interruptedSync);
+    });
+  }
+
+  /** Apply Result, exact receipt, outbox and selected target or completion atomically. */
+  settleFinalizationStepResult(input = {}) {
+    const { binding, stepResult, settlement, evidence, commandResult = null, finalizationPublication: candidate = null } = input;
+    if (!(stepResult instanceof StepResult) || !(evidence instanceof FinalizationResultEvidence)
+      || !hasFinalizationStepContract(stepResult.stepId)
+      || !(settlement instanceof StepSettlement) || binding?.stepId !== stepResult.stepId
+      || settlement.sourceStepId !== stepResult.stepId || settlement.resultKind !== stepResult.kind
+      || settlement.resultType !== stepResult.type) throw new CurrentFlowStateInvariantError("Finalization settlement requires its exact typed Result");
+    if (!(candidate instanceof CanonicalCommandPublication) || candidate.binding !== binding) {
+      throw new CurrentFlowStateConflictError("Finalization requires its acquired canonical publication");
+    }
+    candidate.assertCommand(commandResult);
+    candidate.assertEvidence(evidence);
+    try { evidence.assertResult(stepResult); }
+    catch (error) {
+      if (!(error instanceof TypeError)) throw error;
+      throw new CurrentFlowStateConflictError(error.message);
+    }
+    const resolved = this.#resolveSpecId(binding.specId);
+    const state = this.runtime.load(resolved);
+    const receipt = this.#finalizationStepReceipt(input);
+    const replay = this.#admitStepSettlement({ resolved, state, binding, stepResult, settlement, receipt });
+    if (replay !== null) return Object.freeze({ state, receipt: replay });
+    if (settlement.kind !== "execution" && (candidate.outbox === null || candidate.outboxAttempt === null)) {
+      throw new CurrentFlowStateConflictError("Finalization outcome requires its pending claimed outbox");
+    }
+    if (evidence.execution.claim !== null && (evidence.execution.claim.attempt !== candidate.outboxAttempt
+      || evidence.execution.claim.idempotencyKey !== candidate.outbox?.id)) {
+      throw new CurrentFlowStateConflictError("Finalization outcome changed its acquired outbox claim");
+    }
+    if (settlement.kind === "completion" && (path.resolve(this.root) !== path.resolve(this.mainRoot)
+      || evidence.execution.mainAuthority?.mainRoot !== this.mainRoot
+      || evidence.execution.mainAuthority?.authorityRoot !== this.root)) {
+      throw new CurrentFlowStateConflictError("Final cleanup completion requires the acquired main repository authority");
+    }
+    const warningFailure = stepResult.kind === "finalize-sync-skipped-with-warning" ? commandResult?.failure ?? null : null;
+    const failed = stepResult.type === "error" ? stepResult.error : warningFailure;
+    const outbox = settlement.kind === "execution" || candidate.outbox === null ? null : {
+      id: candidate.outbox.id, operation: candidate.outbox.operation, attempt: candidate.outboxAttempt,
+      result: failed === null ? commandResult?.toJSON?.() ?? commandResult : null,
+      failure: failed?.message ?? null, failureCode: failed?.code ?? null,
+      recovery: failed?.data?.recovery ?? null,
+      exactRecoveryReceipt: candidate.outboxRecoveryReceipt?.toJSON() ?? null,
+    };
+    const result = resultWithDraftStepResult(stepResult.type === "error"
+      ? { outcome: "failed", summary: stepResult.error.message, confirmedAt: new Date().toISOString(), artifactRefs: [] }
+      : resultFor(stepResult.kind === "finalize-sync-skipped-with-warning" ? "skipped" : "done", binding.stepId), binding.stepId, stepResult, receipt);
+    const options = { specId: resolved, activityId: candidate.selectedActivityId, result,
+      artifactWrites: candidate.artifactWrites, admission: candidate, outbox,
+      operationOwnerToken: input.operationOwnerToken ?? null,
+      timing: { startedAt: result.confirmedAt, finishedAt: result.confirmedAt, durationMs: 0 } };
+    let next;
+    if (candidate.interruptedSync !== null) {
+      if (stepResult.kind !== "finalize-sync-skipped-with-warning" || !(settlement instanceof StepRoute)
+        || settlement.targetStepId !== "finalize-cleanup") throw new CurrentFlowStateConflictError("Interrupted sync publication requires its selected cleanup connection");
+      const recovery = candidate.interruptedSync;
+      if (outbox.failure !== recovery.outbox.failure || outbox.failureCode !== recovery.outbox.failureCode) {
+        throw new CurrentFlowStateConflictError("Interrupted sync Result changed its original cause");
+      }
+      next = this.runtime.recoverInterruptedFinalizeSync({ ...options, cleanupAttempt: recovery.cleanupAttempt,
+        result: { ...result, outcome: "skipped" }, outbox: recovery.outbox,
+        timing: recovery.timing, references: recovery.references });
+    } else if (settlement instanceof StepErrorDecision) {
+      next = this.runtime.failAttempt({ ...options, failure: { category: STEP_RESULT_ERROR_CATEGORY,
+        code: stepResult.error.code ?? "STEP_RESULT_ERROR", message: stepResult.error.message, retryable: false, retryKind: null } });
+    } else if (settlement instanceof StepRoute || settlement.kind === "completion") {
+      next = this.runtime.confirmAttempt({ ...options, status: result.outcome === "skipped" ? "skipped" : "done",
+        ...(settlement instanceof StepRoute && settlement.requiresTargetActivation(state)
+          ? { targetAttempt: commandContextAttempt(state, settlement.targetStepId) } : {}) });
+    } else {
+      next = this.runtime.recordDraftStepSettlement(options);
+    }
     return Object.freeze({ state: next, receipt });
   }
 

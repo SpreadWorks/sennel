@@ -3,6 +3,7 @@ import { test } from "node:test";
 import { StagedExecutionSeed } from "../fixtures/structure/staged-execution.js";
 import { StructureChecker } from "../support/structure/checker.js";
 import { MemorySourceRepository } from "../support/structure/source-repository.js";
+import { SourceModule } from "../support/structure/source-reader.js";
 
 function fixture(phase) {
   const seed = new StagedExecutionSeed(phase, ["first", "second"], null, "acquired-adoption");
@@ -275,6 +276,98 @@ function canonicalReceiptFixture(phase, external, exact = false) {
   if (external) built.files.set(owner, `import { isDeepStrictEqual } from 'node:util';
     import { StepAdmissionRefusal } from './step-admission-refusal.js';\n${replaySource}`);
   return { ...built, owner };
+}
+
+function delegatedCanonicalReceiptFixture(phase, external, chained = false, completed = true) {
+  const built = canonicalReceiptFixture(phase, external, true);
+  const Replay = `${phase}Receipt`;
+  const source = built.files.get(built.owner);
+  const declaration = new SourceModule(built.owner, source).declaration(Replay);
+  const start = source.indexOf(`export class ${Replay}`);
+  const end = declaration.tokens.at(-1).offset + 1;
+  assert.ok(start >= 0 && end > start);
+  const leaf = `return this.#flowManager.readCurrentStepSettlement({ specId: this.#specId,
+    stepId: this.#stepId, completed: this.#completed, ...(this.#completed ? { exactReceipt: receipt } : {}) });`;
+  const replay = `export class ${Replay} {
+    #flowManager; #specId; #stepId; #completed;
+    constructor({ flowManager, specId, stepId, receipt, completed = true }) {
+      this.#flowManager = flowManager;
+      this.#specId = specId;
+      this.#stepId = stepId;
+      this.#completed = completed;
+      const saved = this.#read(receipt);
+      if (saved === null || !isDeepStrictEqual(saved.receipt.toJSON(), (receipt.toJSON?.() ?? receipt))) {
+        throw new StepAdmissionRefusal('acquisition');
+      }
+      this.receipt = saved.receipt;
+      Object.freeze(this);
+    }
+    assertCurrent() {
+      const saved = this.#read(this.receipt);
+      if (saved === null || !isDeepStrictEqual(saved.receipt.toJSON(), this.receipt.toJSON())) {
+        throw new StepAdmissionRefusal('stale');
+      }
+    }
+    #read(receipt) { ${chained ? "return this.#load(receipt);" : leaf} }
+    ${chained ? `#load(receipt) { ${leaf} }` : ""}
+  }`;
+  built.files.set(built.owner, source.slice(0, start) + replay + source.slice(end));
+  if (!completed) built.files.set(built.seed.adapter, built.files.get(built.seed.adapter)
+    .replace(`stepId: input.stepId, receipt: saved.receipt })`,
+      `stepId: input.stepId, receipt: saved.receipt, completed: false })`));
+  return built;
+}
+
+for (const external of [false, true]) {
+  const placement = external ? "imported" : "local";
+  test(`canonical delegated receipt ${placement} preserves current and completed exact queries through closed helpers`, () => {
+    for (const chained of [false, true]) for (const completed of [false, true]) {
+      delegatedCanonicalReceiptFixture(`Delegated${placement}`, external, chained, completed).clean();
+    }
+  });
+  for (const [name, before, after] of [
+    ["foreign query", "this.#flowManager.readCurrentStepSettlement(", "this.#flowManager.readOtherSettlement("],
+    ["computed query", "this.#flowManager.readCurrentStepSettlement(", "this.#flowManager[queryName]("],
+    ["different source Step", "stepId: this.#stepId", "stepId: this.otherStep"],
+    ["different completion flag", "completed: this.#completed", "completed: false"],
+    ["missing completed exact operand", "{ exactReceipt: receipt }", "{}"],
+    ["foreign completed exact operand", "{ exactReceipt: receipt }", "{ exactReceipt: otherReceipt }"],
+    ["foreign acquired input", "const saved = this.#read(receipt);", "const saved = this.#read(otherReceipt);"],
+    ["foreign rechecked input", "const saved = this.#read(this.receipt);", "const saved = this.#read(this.otherReceipt);"],
+    ["self-comparison", "!isDeepStrictEqual(saved.receipt.toJSON(), this.receipt.toJSON())", "!isDeepStrictEqual(this.receipt.toJSON(), this.receipt.toJSON())"],
+    ["query-side mutation", "#read(receipt) {", "#read(receipt) { this.#flowManager.completeStep();"],
+    ["global read", "#read(receipt) {", "#read(receipt) { process.env.SAVED_RECEIPT;"],
+    ["reader escape", "#read(receipt) {", "reader() { return this.#read; } #read(receipt) {"],
+    ["missing helper", "#read(receipt) {", "#missing(receipt) {"],
+    ["completion flag mutation", "this.#completed = completed;", "this.#completed = !completed;"],
+  ]) test(`canonical delegated receipt ${placement} rejects ${name} and accepts restoration`, () => {
+    const built = delegatedCanonicalReceiptFixture(`Delegated${placement}`, external);
+    built.clean();
+    const original = built.files.get(built.owner);
+    assert.equal(original.split(before).length, 2);
+    built.files.set(built.owner, original.replace(before, after));
+    try {
+      const report = built.inspect();
+      const diagnostic = report.diagnostics.find((entry) => entry.rule === "A10");
+      assert.ok(diagnostic, report.diagnostics.map(String).join("\n"));
+      assert.ok(diagnostic.line > 0 && diagnostic.column > 0);
+      assert.ok(diagnostic.trace.includes(built.seed.adapter));
+    } finally { built.files.set(built.owner, original); }
+    built.clean();
+  });
+  test(`canonical delegated receipt ${placement} rejects a cyclic helper graph`, () => {
+    const built = delegatedCanonicalReceiptFixture(`Delegated${placement}`, external, true);
+    built.clean();
+    const original = built.files.get(built.owner);
+    const leaf = "return this.#flowManager.readCurrentStepSettlement({";
+    const start = original.indexOf(leaf);
+    const end = original.indexOf(";", start) + 1;
+    assert.ok(start >= 0 && end > start);
+    built.files.set(built.owner, original.slice(0, start) + "return this.#read(receipt);" + original.slice(end));
+    try { assert.ok(built.inspect().diagnostics.some((entry) => entry.rule === "A10")); }
+    finally { built.files.set(built.owner, original); }
+    built.clean();
+  });
 }
 
 for (const external of [false, true]) {

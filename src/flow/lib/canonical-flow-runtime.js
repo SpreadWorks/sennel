@@ -226,6 +226,7 @@ export class CanonicalFlowRuntime {
     admission,
     publicationLimits,
     retryRecoveryPublication = undefined,
+    completionActivity = null,
   } = {}) {
     const canonicalActivity = FlowActivity.canonical(activity);
     const retryPublication = retryRecoveryPublication === undefined
@@ -248,6 +249,7 @@ export class CanonicalFlowRuntime {
     }
     return this.store(specId).apply({
       activity: canonicalActivity,
+      completionActivity,
       ...(taskSpec !== undefined && { taskSpec }),
       ...(specRecord !== undefined && { specRecord }),
       ...(artifactWrites !== undefined && { artifactWrites }),
@@ -419,7 +421,7 @@ export class CanonicalFlowRuntime {
     });
   }
 
-  failAttempt({ specId, activityId, failure, result, timing = null, provider = null, model = null, effort = null, usage = null, references, artifactWrites = undefined, artifactRemovals = undefined, expectedAttempt = null, admission = undefined, nonblocking = null, publicationLimits = undefined } = {}) {
+  failAttempt({ specId, activityId, failure, result, timing = null, provider = null, model = null, effort = null, usage = null, references, artifactWrites = undefined, artifactRemovals = undefined, expectedAttempt = null, admission = undefined, nonblocking = null, publicationLimits = undefined, outbox = null } = {}) {
     const state = this.#state(specId);
     const expected = expectedAttempt === null ? null : CurrentAttemptIdentity.from(expectedAttempt);
     if (expected !== null && !expected.matches(state)) return null;
@@ -441,6 +443,7 @@ export class CanonicalFlowRuntime {
       admission,
       publicationLimits,
       nonblocking,
+      outbox,
     });
   }
 
@@ -504,6 +507,7 @@ export class CanonicalFlowRuntime {
     artifactBaselines = undefined,
     testSourceBaseline = undefined,
     nonblocking = null,
+    outbox = null,
     admission = undefined,
     publicationLimits = undefined,
   } = {}) {
@@ -522,6 +526,7 @@ export class CanonicalFlowRuntime {
       artifactBaselines,
       testSourceBaseline,
       nonblocking,
+      outbox,
       admission,
       publicationLimits,
     });
@@ -813,18 +818,19 @@ export class CanonicalFlowRuntime {
     });
   }
 
-  recoverInterruptedFinalizeSync({ specId, activityId, cleanupAttempt, outbox, timing = null, references, artifactWrites = undefined } = {}) {
+  recoverInterruptedFinalizeSync({ specId, activityId, cleanupAttempt, outbox, timing = null, references, artifactWrites = undefined, result, admission = undefined } = {}) {
     const state = this.#state(specId);
     return this.apply(specId, this.#activity(state, {
       id: activityId,
-      nodeId: "finalize-cleanup",
-      attemptId: cleanupAttempt.id,
-      sequence: cleanupAttempt.sequence,
+      nodeId: "finalize-sync",
+      attemptId: state.attempt.id,
+      sequence: state.attempt.sequence,
+      result,
       timing,
       references,
       transition: {
         operation: "recover_interrupted_finalize_sync",
-        nodeId: "finalize-cleanup",
+        nodeId: "finalize-sync",
         task: null,
         attempt: cleanupAttempt,
         status: null,
@@ -834,7 +840,7 @@ export class CanonicalFlowRuntime {
         nonblocking: null,
         finalizeSteps: null,
       },
-    }), { artifactWrites });
+    }), { artifactWrites, admission });
   }
 
   park({ specId, activityId } = {}) { return this.#applyLifecycle(specId, activityId, "park_flow"); }
@@ -989,8 +995,8 @@ export class CanonicalFlowRuntime {
     return this.#applyOutbox(specId, activityId, "begin_outbox", outbox);
   }
 
-  reopenOutbox({ specId, activityId, outbox, timing = null } = {}) {
-    return this.#applyOutbox(specId, activityId, "reopen_outbox", outbox, timing);
+  reopenOutbox({ specId, activityId, outbox, timing = null, attempt = null } = {}) {
+    return this.#applyOutbox(specId, activityId, "reopen_outbox", outbox, timing, attempt);
   }
 
   completeOutbox({ specId, activityId, outbox } = {}) {
@@ -1234,7 +1240,7 @@ export class CanonicalFlowRuntime {
     }));
   }
 
-  #applyOutbox(specId, activityId, operation, outbox, timing = null) {
+  #applyOutbox(specId, activityId, operation, outbox, timing = null, attempt = null) {
     const state = this.#state(specId);
     if (outbox === null || typeof outbox !== "object" || Array.isArray(outbox)) {
       throw new CurrentFlowStateInvariantError("outbox transition requires an outbox object");
@@ -1260,7 +1266,7 @@ export class CanonicalFlowRuntime {
         operation,
         nodeId: state.root.id,
         task: null,
-        attempt: null,
+        attempt,
         status: null,
         outbox: normalized,
         nonblocking: null,
@@ -1380,7 +1386,13 @@ export class CanonicalFlowRuntime {
     const resolvedArtifactWrites = retryRecoveryPublication == null
       ? artifactWrites
       : retryRecoveryPublication.artifactWrites;
+    const completionActivity = activity.result?.draftSettlementReceipt?.settlementKind === "completion"
+      ? this.#activity(state.withConfirmationOrder(activity.confirmationOrder), {
+        id: `${activity.id}-finalized`, nodeId: state.root.id, timing: activity.timing.toJSON(),
+        transition: { operation: "finalize_flow", nodeId: state.root.id, task: null, attempt: null, status: null },
+      }) : null;
     return this.apply(specId, activity, {
+      completionActivity,
       specRecord,
       artifactWrites: resolvedArtifactWrites,
       artifactRemovals,

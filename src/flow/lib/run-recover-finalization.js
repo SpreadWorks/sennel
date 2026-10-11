@@ -9,6 +9,25 @@ import {
   recoverInterruptedFinalizeSync,
 } from "./recover-interrupted-finalize-sync.js";
 import { TaskNode } from "./current-flow-state.js";
+import { finalizationStepRegistration, prepareFinalizationExecution } from "../engine/composition/finalization.js";
+import { flowStepExecutionRegistration } from "../engine/composition/registered-step-execution.js";
+import { FinalizeCleanupEffectPreparation } from "./finalize-cleanup-journal.js";
+import { AcceptanceReceiptReplay } from "./acceptance-receipt-replay.js";
+
+function replayFinalizationReceipt(receipt) {
+  if (!(receipt instanceof AcceptanceReceiptReplay)) throw new TypeError("Finalization replay requires its authenticated receipt");
+  receipt.assertCurrent();
+  return receipt.receipt;
+}
+
+export function executeFinalizationRecoveryInput(input) {
+  const registration = finalizationStepRegistration(input.stepId);
+  if (registration === null) throw new TypeError("Finalization recovery requires its registered Step");
+  const selection = input.selection;
+  if (selection.registration !== registration) throw new TypeError("Finalization recovery requires its exact registration");
+  if (selection.receipt !== null) return replayFinalizationReceipt(selection.receipt);
+  return registration.executionContract.execute(selection, { ...input, registration });
+}
 
 function targetFor(state, typedState) {
   const descriptor = typedState.nextAction();
@@ -30,7 +49,7 @@ export default class RunRecoverFinalizationCommand extends FlowCommand {
     super({ explicitTargetResolution: true });
   }
 
-  execute(ctx) {
+  async execute(ctx) {
     try {
       ctx.flowState = ctx.flowManager.loadReadOnly(ctx.specId);
       const typedState = ctx.flowManager.canonicalState(ctx.specId);
@@ -39,7 +58,7 @@ export default class RunRecoverFinalizationCommand extends FlowCommand {
       const interrupted = inspectInterruptedFinalizeSync(ctx);
       const planned = resolveFinalizationOutboxRecovery(ctx, ctx.flowState, target, null, interrupted);
       if (planned?.decision?.operation === "interrupted-sync-settlement") {
-        const recovered = recoverInterruptedFinalizeSync(ctx);
+        const recovered = await recoverInterruptedFinalizeSync(ctx);
         if (!recovered.recovered) throw new Error(recovered.busy ? "finalization recovery operation lock is busy" : "interrupted finalize-sync recovery is no longer eligible");
         return Envelope.ok("run", "recover-finalization", { operation: "interrupted-sync-settlement", step: "finalize-cleanup" });
       }
@@ -67,6 +86,8 @@ export default class RunRecoverFinalizationCommand extends FlowCommand {
         }
         const identity = finalizationOutboxIdentity(state, exactTarget.stepId);
         const entry = owner.outbox({ operationOwnerToken: token }).status(identity);
+        const cleanupProof = exactTarget.stepId === "finalize-cleanup"
+          ? FinalizeCleanupEffectPreparation.acquire(owner.bindContext({ ...ctx, flowState: state }), { failed: true }) : null;
         operation.assertOwned();
         owner.outbox({ operationOwnerToken: token }).reopenFailedExact(new FlowOutboxRecoveryClaim({
           identity,
@@ -74,6 +95,19 @@ export default class RunRecoverFinalizationCommand extends FlowCommand {
           failure: entry.failure,
           recoveryKey: entry.latestFailure?.recovery?.baseHead ?? null,
         }));
+        const registration = flowStepExecutionRegistration(exactTarget.stepId);
+        if (registration?.executionContract.selectorName === "selectFinalizationExecution") {
+          const recoveryContext = owner.bindContext({ ...ctx, flowState: owner.loadReadOnly(), repositoryOperationOwnerToken: token });
+          delete recoveryContext.finalizationExecution;
+          if (cleanupProof !== null) {
+            recoveryContext.finalizationEffectPreparation = FinalizeCleanupEffectPreparation.acquire(recoveryContext);
+          }
+          const preparation = prepareFinalizationExecution({ ctx: recoveryContext, stepId: exactTarget.stepId,
+            recovery: selected.decision });
+          const selection = registration.executionContract.select({ ctx: recoveryContext, stepId: exactTarget.stepId, preparation, registration });
+          await executeFinalizationRecoveryInput({ ctx: recoveryContext, flowManager: owner.flowManager,
+            stepId: exactTarget.stepId, preparation, selection });
+        }
         return Envelope.ok("run", "recover-finalization", {
           operation: "exact-outbox-recovery",
           step: exactTarget.stepId,

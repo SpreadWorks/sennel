@@ -57,7 +57,7 @@ function shouldPersistFinalizeMetricToSidecar(flowManager, context) {
 }
 
 async function persistFinalizeMetricToSidecar(flowManager, context, metric) {
-  const { recordFinalizeCleanupPostCommandMetadata } = await import("../flow/lib/run-finalize-cleanup.js");
+  const { recordFinalizeCleanupPostCommandMetadata } = await import("../flow/lib/finalize-cleanup-metadata.js");
   recordFinalizeCleanupPostCommandMetadata({
     flowManager,
     specId: context.specId,

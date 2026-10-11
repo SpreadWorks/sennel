@@ -2,6 +2,7 @@ import { RetroResultEvidence } from "../lib/retro-values.js";
 import { AcceptanceReviewResultEvidence, AcceptanceDecisionResultEvidence } from "../steps/acceptance/acceptance-review-values.js";
 import { FinalRegressionResultEvidence } from "../steps/acceptance/final-regression-result-evidence.js";
 import { ReportResultEvidence } from "../steps/acceptance/report-values.js";
+import { FinalizationExecutionIdentity } from "../lib/finalization-execution-identity.js";
 import { ImplementationSourceEvidence } from "../lib/source-effect-values.js";
 import { TaskStageResultEvidence } from "../lib/task-stage-result-values.js";
 import { TaskHostFilterAuthority } from "../lib/task-review-host-filter-values.js";
@@ -149,10 +150,10 @@ export function stepResultDigest(result) {
     .digest("hex");
 }
 
-function declareResult(ResultClass, { stepId, kind, type, implementation = false, acceptance = false }, operands = null) {
+function declareResult(ResultClass, { stepId, kind, type, implementation = false, acceptance = false, finalization = false }, operands = null) {
   if (typeof stepId !== "string" || stepId === "") throw new TypeError("StepResult Step is required");
   if (registryByKind.has(kind)) throw new Error(`duplicate Step Result kind: ${kind}`);
-  const entry = Object.freeze({ ResultClass, stepId, kind, type, ...(implementation ? { implementation: true } : {}), ...(acceptance ? { acceptance: true } : {}), ...(operands === null ? {} : { operands: Object.freeze({ ...operands }) }) });
+  const entry = Object.freeze({ ResultClass, stepId, kind, type, ...(implementation ? { implementation: true } : {}), ...(acceptance ? { acceptance: true } : {}), ...(finalization ? { finalization: true } : {}), ...(operands === null ? {} : { operands: Object.freeze({ ...operands }) }) });
   registryByKind.set(kind, entry);
   const entries = registryByStep.get(stepId) ?? [];
   entries.push(entry);
@@ -827,6 +828,27 @@ export const FinalRegressionFailureAcceptedResult = operandResultClass("FinalReg
 export const ReportDeliveryRequiredResult = operandResultClass("ReportDeliveryRequiredResult", { stepId: "report", kind: "report-delivery-required", type: "loop-required", acceptance: true }, { evidence: ReportResultEvidence }, null, validateAcceptanceResult);
 export const ReportGeneratedResult = operandResultClass("ReportGeneratedResult", { stepId: "report", kind: "report-generated", type: "completed", acceptance: true }, { evidence: ReportResultEvidence }, null, validateAcceptanceResult);
 
+function validateFinalizationExecutionResult(definition, values) {
+  if (values.execution.stepId !== definition.stepId) {
+    throw new TypeError("Finalization execution Result belongs to another responsibility");
+  }
+}
+
+export const FinalizeCommitExecutionRequiredResult = operandResultClass("FinalizeCommitExecutionRequiredResult", { stepId: "finalize-commit", kind: "finalize-commit-execution-required", type: "loop-required", finalization: true }, { execution: FinalizationExecutionIdentity }, null, validateFinalizationExecutionResult);
+export const FinalizeCommitCreatedResult = resultClass("FinalizeCommitCreatedResult", { stepId: "finalize-commit", kind: "finalize-commit-created", type: "completed", finalization: true });
+export const FinalizeCommitUnchangedResult = resultClass("FinalizeCommitUnchangedResult", { stepId: "finalize-commit", kind: "finalize-commit-unchanged", type: "completed", finalization: true });
+export const FinalizeMergeExecutionRequiredResult = operandResultClass("FinalizeMergeExecutionRequiredResult", { stepId: "finalize-merge", kind: "finalize-merge-execution-required", type: "loop-required", finalization: true }, { execution: FinalizationExecutionIdentity }, null, validateFinalizationExecutionResult);
+export const FinalizeMergeSquashedResult = resultClass("FinalizeMergeSquashedResult", { stepId: "finalize-merge", kind: "finalize-merge-squashed", type: "completed", finalization: true });
+export const FinalizeMergePolicySkippedResult = resultClass("FinalizeMergePolicySkippedResult", { stepId: "finalize-merge", kind: "finalize-merge-policy-skipped", type: "completed", finalization: true });
+export const FinalizeMergePrOpenedResult = resultClass("FinalizeMergePrOpenedResult", { stepId: "finalize-merge", kind: "finalize-merge-pr-opened", type: "completed", finalization: true });
+export const FinalizeSyncExecutionRequiredResult = operandResultClass("FinalizeSyncExecutionRequiredResult", { stepId: "finalize-sync", kind: "finalize-sync-execution-required", type: "loop-required", finalization: true }, { execution: FinalizationExecutionIdentity }, null, validateFinalizationExecutionResult);
+export const FinalizeSyncBuiltResult = resultClass("FinalizeSyncBuiltResult", { stepId: "finalize-sync", kind: "finalize-sync-built", type: "completed", finalization: true });
+export const FinalizeSyncUnchangedResult = resultClass("FinalizeSyncUnchangedResult", { stepId: "finalize-sync", kind: "finalize-sync-unchanged", type: "completed", finalization: true });
+export const FinalizeSyncSkippedWithWarningResult = resultClass("FinalizeSyncSkippedWithWarningResult", { stepId: "finalize-sync", kind: "finalize-sync-skipped-with-warning", type: "completed", finalization: true });
+export const FinalizeCleanupExecutionRequiredResult = operandResultClass("FinalizeCleanupExecutionRequiredResult", { stepId: "finalize-cleanup", kind: "finalize-cleanup-execution-required", type: "loop-required", finalization: true }, { execution: FinalizationExecutionIdentity }, null, validateFinalizationExecutionResult);
+export const FinalizeCleanupCompletedResult = resultClass("FinalizeCleanupCompletedResult", { stepId: "finalize-cleanup", kind: "finalize-cleanup-completed", type: "completed", finalization: true });
+export const FinalizeCleanupCompletedWithWarningResult = resultClass("FinalizeCleanupCompletedWithWarningResult", { stepId: "finalize-cleanup", kind: "finalize-cleanup-completed-with-warning", type: "completed", finalization: true });
+
 const errorDefinitionByStep = new Map([...registryByStep.keys()].map((stepId) => {
   const operands = stepId === "approval"
     ? { evidence: ApprovalResultEvidence }
@@ -837,6 +859,7 @@ const errorDefinitionByStep = new Map([...registryByStep.keys()].map((stepId) =>
     type: STEP_RESULT_TYPE.ERROR,
     ...(registryByStep.get(stepId).some((entry) => entry.implementation) ? { implementation: true } : {}),
     ...(registryByStep.get(stepId).some((entry) => entry.acceptance) ? { acceptance: true } : {}),
+    ...(registryByStep.get(stepId).some((entry) => entry.finalization) ? { finalization: true } : {}),
     ...(operands === null ? {} : { operands: Object.freeze({ ...operands }) }),
   })];
 }));
@@ -916,4 +939,9 @@ export function hasImplementationStepContract(stepId) {
 /** Recognize the acceptance contract from its sole Result registry. */
 export function hasAcceptanceStepContract(stepId) {
   return (registryByStep.get(stepId) ?? []).some((entry) => entry.acceptance === true);
+}
+
+/** Recognize the finalization contract from its sole Result registry. */
+export function hasFinalizationStepContract(stepId) {
+  return (registryByStep.get(stepId) ?? []).some((entry) => entry.finalization === true);
 }

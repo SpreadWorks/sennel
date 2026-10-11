@@ -48,6 +48,51 @@ export function runGit(args, opts = {}) {
   return result;
 }
 
+export class GitRefProbeError extends Error {
+  constructor(ref, result, reason = null) {
+    super(`git ref probe for ${ref} failed: ${reason || result.stderr || result.stdout || "unknown git error"}`);
+    this.code = "GIT_REF_PROBE_FAILED";
+    this.ref = ref;
+    this.result = result;
+  }
+}
+
+/** Exact ref presence or absence proved by a successful Git inventory. */
+export class GitRefObservation {
+  constructor({ ref, oid }) {
+    if (typeof ref !== "string" || !ref.startsWith("refs/") || /[\s\0]/.test(ref)) {
+      throw new Error("git ref observation requires a full ref name");
+    }
+    if (oid !== null && !isGitObjectId(oid)) throw new Error("git ref observation OID is invalid");
+    this.ref = ref;
+    this.oid = oid;
+    Object.freeze(this);
+  }
+
+  static resolve({ root, ref, runGit: runGitFn = runGit }) {
+    const result = runGitFn(["-C", root, "for-each-ref", "--format=%(refname) %(objectname)", ref]);
+    return GitRefObservation.fromResult(ref, result);
+  }
+
+  static fromResult(ref, result) {
+    if (!result.ok) throw new GitRefProbeError(ref, result);
+    let oid = null;
+    for (const record of result.stdout.trim().split("\n").filter(Boolean)) {
+      const fields = record.split(" ");
+      if (fields.length !== 2 || !fields[0].startsWith("refs/") || !isGitObjectId(fields[1])) {
+        throw new GitRefProbeError(ref, result, "ref inventory is malformed");
+      }
+      if (fields[0] !== ref) continue;
+      if (oid !== null) throw new GitRefProbeError(ref, result, "ref inventory is ambiguous");
+      oid = fields[1];
+    }
+    return new GitRefObservation({ ref, oid });
+  }
+
+  get present() { return this.oid !== null; }
+  get absent() { return this.oid === null; }
+}
+
 export class GitCommitPathProbeError extends Error {
   constructor(result) {
     super(`git commit path probe failed: ${result.stderr || result.stdout || "unknown git error"}`);

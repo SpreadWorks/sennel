@@ -22,6 +22,9 @@ import {
 import { FinalizeFlowArtifactRegistry } from "../lib/repair-state-identity.js";
 import { relativeFlowSpecFile } from "../../lib/flow-workspace.js";
 import { PRODUCT } from "../../lib/product.js";
+import { hasOutboxCommit } from "../lib/run-finalize.js";
+import { StepAdmissionRefusal } from "../lib/step-admission-refusal.js";
+import { RepositoryFlowOperationLock } from "../../lib/repository-maintenance-lock.js";
 
 const MAX_IMPLEMENTATION_SUBJECTS = 50;
 const MAX_SUBJECT_INPUT_CHARS = 4000;
@@ -241,7 +244,7 @@ function buildSquashCommitMessage({
  * @returns {"skip"|"pr"|"squash"}
  */
 function resolveMergeStrategy(state, config, ghAvailable = isGhAvailable) {
-  if (state.featureBranch === state.baseBranch) return "skip";
+  if (state.execution?.mode === "direct" || state.featureBranch === state.baseBranch) return "skip";
   const ghEnabled = config?.commands?.gh === "enable";
   return ghEnabled && ghAvailable() ? "pr" : "squash";
 }
@@ -250,6 +253,104 @@ function fallbackTitleFromSpecId(specId, featureBranch) {
   if (!specId) return featureBranch;
   const separator = specId.indexOf("-");
   return separator < 0 ? specId : specId.slice(separator + 1);
+}
+
+/** A remote PR belongs to this operation only through its exact outbox marker. */
+function inspectOperationPullRequest({ root, baseBranch, featureBranch, idempotencyKey }) {
+  if (idempotencyKey === null) return null;
+  const result = runCmd("gh", ["pr", "list", "--base", baseBranch, "--head", featureBranch,
+    "--state", "all", "--limit", "100", "--json", "number,body,url"], { cwd: root });
+  assertOk(result, "failed to inspect existing pull requests before resume");
+  let matches;
+  try { matches = JSON.parse(result.stdout || "[]"); }
+  catch (cause) { throw new StepAdmissionRefusal("Pull-request readback is invalid JSON and cannot confirm its outbox identity", cause); }
+  const marker = `<!-- sennel:${idempotencyKey} -->`;
+  if (!Array.isArray(matches) || matches.some((entry) => typeof entry.body !== "string" || !Number.isSafeInteger(entry.number))) {
+    throw new StepAdmissionRefusal("Pull-request readback did not provide its exact remote identity");
+  }
+  if (matches.some((entry) => !entry.body.includes(marker))) {
+    throw new StepAdmissionRefusal("An existing pull request belongs to another finalization outbox identity");
+  }
+  if (matches.length > 1) throw new StepAdmissionRefusal("Finalization outbox has multiple matching remote pull requests");
+  return matches[0] ?? null;
+}
+
+export class FinalizeMergeEffectPreparation {
+  constructor({ state, artifactRoot, executionRoot, mainRepoPath, spec, strategy, remote,
+    idempotencyKey, operationOwnerToken, requireRevalidationAfterSync = false, resumed = false }) {
+    this.state = Object.freeze({ specId: state.specId, issue: state.issue, request: state.request,
+      baseBranch: state.baseBranch, featureBranch: state.featureBranch, worktree: state.worktree });
+    this.artifactRoot = artifactRoot;
+    this.executionRoot = executionRoot;
+    this.mainRepoPath = mainRepoPath;
+    this.spec = spec;
+    this.strategy = strategy;
+    this.remote = remote;
+    this.idempotencyKey = idempotencyKey;
+    this.operationOwnerToken = operationOwnerToken;
+    this.requireRevalidationAfterSync = requireRevalidationAfterSync;
+    this.resumed = resumed;
+    this.flowArtifactRegistry = finalizationFeatureArtifactRegistry(state);
+    Object.freeze(this);
+  }
+  transaction() {
+    const state = this.state;
+    const implementationSubjects = collectImplementationSubjects({ cwd: this.executionRoot,
+      baseBranch: state.baseBranch, featureBranch: state.featureBranch });
+    const commitMessage = buildSquashCommitMessage({ state, spec: this.spec,
+      fallbackTitle: fallbackTitleFromSpecId(state.specId, state.featureBranch),
+      implementationSubjects, idempotencyKey: this.idempotencyKey });
+    return new FinalizeMergeTransaction({ featureRoot: this.executionRoot,
+      mainRoot: this.mainRepoPath || this.artifactRoot, baseBranch: state.baseBranch,
+      featureBranch: state.featureBranch, commitMessage, idempotencyKey: this.idempotencyKey,
+      operationOwnerToken: this.operationOwnerToken, flowArtifactRegistry: this.flowArtifactRegistry,
+      promoteFeatureWorktreeToBase: state.worktree !== true
+        && path.resolve(this.mainRepoPath || this.artifactRoot) === path.resolve(this.executionRoot) });
+  }
+  assertContext(ctx) {
+    const state = ctx.flowState;
+    if (state.specId !== this.state.specId || state.baseBranch !== this.state.baseBranch
+      || state.featureBranch !== this.state.featureBranch
+      || ctx.flowManager.executionRoot(state) !== this.executionRoot) {
+      throw new StepAdmissionRefusal("Finalize merge preparation belongs to another execution context");
+    }
+  }
+  assertCurrent(ctx) {
+    this.assertContext(ctx);
+    if (this.strategy === "skip" || this.resumed) return;
+    const checkout = runGit(["symbolic-ref", "--quiet", "--short", "HEAD"], { cwd: this.executionRoot });
+    if (!checkout.ok || checkout.stdout.trim() !== this.state.featureBranch) {
+      throw new StepAdmissionRefusal("Finalize merge requires the recorded feature branch checkout at HEAD");
+    }
+    if (this.strategy !== "squash") return;
+    try { this.transaction().inspect({ flowArtifactRegistry: this.flowArtifactRegistry }); }
+    catch (error) { if (error.code !== "MERGE_CONTENT_CONFLICT") throw error; }
+  }
+}
+
+export function prepareMergeEffect(ctx) {
+  const state = ctx.flowState;
+  const cfg = container.get("config");
+  const artifactRoot = ctx.root || container.get("root");
+  const executionRoot = ctx.executionRoot || ctx.worktreePath || artifactRoot;
+  const strategy = resolveMergeStrategy(state, cfg);
+  const idempotencyKey = ctx.idempotencyKey ?? null;
+  const resumed = strategy === "squash" && hasOutboxCommit({ root: ctx.mainRepoPath || artifactRoot,
+    ref: state.baseBranch, idempotencyKey });
+  const spec = strategy === "skip" ? null : new CanonicalFinalizeMergeSpecSource({ flowManager: ctx.flowManager, state }).summary();
+  const acquired = new FinalizeMergeEffectPreparation({ state, artifactRoot, executionRoot,
+    mainRepoPath: ctx.mainRepoPath, spec, strategy, remote: resolveRemote(cfg),
+    idempotencyKey, operationOwnerToken: ctx.repositoryOperationOwnerToken ?? null,
+    requireRevalidationAfterSync: ctx.requireRevalidationAfterSync === true, resumed });
+  const conflict = new RepositoryFlowOperationLock({ mainRoot: acquired.mainRepoPath || artifactRoot,
+    operationOwnerToken: acquired.operationOwnerToken }).inspectConflict();
+  if (conflict !== null) {
+    const refusal = new StepAdmissionRefusal(conflict.message, conflict);
+    refusal.code = conflict.code;
+    throw refusal;
+  }
+  acquired.assertCurrent(ctx);
+  return acquired;
 }
 
 /**
@@ -261,44 +362,27 @@ function fallbackTitleFromSpecId(specId, featureBranch) {
  * @param {string|null} ctx.mainRepoPath - main repo path (null if not worktree mode)
  * @returns {{ strategy: string }} - the resolved strategy
  */
-function runMerge(ctx) {
-  const { flowState: state, mainRepoPath, idempotencyKey = null } = ctx;
-  const artifactRoot = ctx.root || container.get("root");
-  const executionRoot = ctx.executionRoot || ctx.worktreePath || artifactRoot;
+function runMerge(ctx, preparation = null) {
+  const acquired = preparation ?? prepareMergeEffect(ctx);
+  if (!(acquired instanceof FinalizeMergeEffectPreparation)) throw new TypeError("Merge requires its acquired effect preparation");
+  acquired.assertContext(ctx);
+  const { state, mainRepoPath, idempotencyKey, executionRoot, strategy, spec } = acquired;
   const { baseBranch, featureBranch, worktree } = state;
-
-  const cfg = container.get("config");
-  const strategy = resolveMergeStrategy(state, cfg);
 
   if (strategy === "skip") {
     return { strategy: "skip" };
   }
-  const spec = new CanonicalFinalizeMergeSpecSource({
-    flowManager: ctx.flowManager,
-    state,
-  }).summary();
 
   // PR route
   if (strategy === "pr") {
-    const remote = resolveRemote(cfg);
+    const remote = acquired.remote;
     const fallbackTitle = fallbackTitleFromSpecId(state.specId, featureBranch);
     const title = buildPrTitle(spec, fallbackTitle);
     const marker = idempotencyKey ? `<!-- sennel:${idempotencyKey} -->` : null;
     const body = [buildPrBody(state, spec), marker].filter(Boolean).join("\n\n");
 
-    if (idempotencyKey) {
-      const existing = runCmd("gh", [
-        "pr", "list",
-        "--base", baseBranch,
-        "--head", featureBranch,
-        "--state", "all",
-        "--limit", "1",
-        "--json", "number",
-      ]);
-      assertOk(existing, "failed to inspect existing pull requests before resume");
-      const matches = JSON.parse(existing.stdout || "[]");
-      if (matches.length > 0) return { strategy: "pr", resumed: true };
-    }
+    const existing = inspectOperationPullRequest({ root: executionRoot, baseBranch, featureBranch, idempotencyKey });
+    if (existing !== null) return { strategy: "pr", resumed: true, prNumber: existing.number, prUrl: existing.url ?? null };
 
     const pushRes = runGit(["-C", executionRoot, "push", "-u", remote, featureBranch]);
     assertOk(pushRes, "git push failed");
@@ -310,15 +394,12 @@ function runMerge(ctx) {
       ...(body ? ["--body", body] : []),
     ]);
     assertOk(prRes, "gh pr create failed");
-    return { strategy: "pr" };
+    return { strategy: "pr", prUrl: prRes.stdout.trim() };
   }
 
   // Squash merge route
-  const fallbackTitle = fallbackTitleFromSpecId(state.specId, featureBranch);
-
   if (worktree && mainRepoPath) {
-    const cfg = container.get("config");
-    const remote = resolveRemote(cfg);
+    const remote = acquired.remote;
     const beforeSync = runGit(["-C", mainRepoPath, "rev-parse", featureBranch]);
     assertOk(beforeSync, "failed to capture feature HEAD before pre-merge synchronization");
     const syncResult = runPreSync({ worktreePath: executionRoot, baseBranch, featureBranch, remote });
@@ -344,7 +425,7 @@ function runMerge(ctx) {
     const afterSync = runGit(["-C", mainRepoPath, "rev-parse", featureBranch]);
     assertOk(afterSync, "failed to capture feature HEAD after pre-merge synchronization");
     if (
-      ctx.requireRevalidationAfterSync === true
+      acquired.requireRevalidationAfterSync
       && beforeSync.stdout.trim() !== afterSync.stdout.trim()
     ) {
       throw new MergeRevalidationRequiredError({
@@ -355,30 +436,7 @@ function runMerge(ctx) {
 
   }
 
-  const implementationSubjects = collectImplementationSubjects({
-    cwd: executionRoot,
-    baseBranch,
-    featureBranch,
-  });
-  const commitMessage = buildSquashCommitMessage({
-    state,
-    spec,
-    fallbackTitle,
-    implementationSubjects,
-    idempotencyKey,
-  });
-  return new FinalizeMergeTransaction({
-    featureRoot: executionRoot,
-    mainRoot: mainRepoPath || artifactRoot,
-    baseBranch,
-    featureBranch,
-    commitMessage,
-    idempotencyKey,
-    operationOwnerToken: ctx.repositoryOperationOwnerToken || null,
-    flowArtifactRegistry: finalizationFeatureArtifactRegistry(state),
-    promoteFeatureWorktreeToBase: worktree !== true
-      && path.resolve(mainRepoPath || artifactRoot) === path.resolve(executionRoot),
-  }).execute();
+  return acquired.transaction().execute();
 }
 
 /**

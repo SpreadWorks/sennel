@@ -108,7 +108,7 @@ export class CanonicalReportArtifactStore {
 /** Authenticate both saved report inputs and the implementation tested by regression. */
 export function assertCanonicalReportFinalEvidence({ flowManager, specId, report = null }) {
   const state = flowManager.canonicalState(specId);
-  const root = flowManager.executionRoot();
+  const root = flowManager.executionRoot(state);
   const location = flowManager.specLocation(specId);
   if (report !== null) ReportBinding.validate(report.data.binding, { root, artifactRoot: location.repositoryRoot });
   const current = new CanonicalReportArtifactStore({ flowManager, state }).readCurrentAttempt({ logicalKey: "final.regression" });

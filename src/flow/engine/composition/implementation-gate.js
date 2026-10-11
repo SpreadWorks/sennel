@@ -88,6 +88,7 @@ export class ImplementationGatePublicationPreparation {
 /** Acquire the owning issue entry and its final Gate observation on one future Activity. */
 export function prepareImplementationGatePublication({ ctx, binding, commandResult, IssueEntryClass }) {
   const flowManager = ctx.flowManager;
+  const root = ctx.executionRoot ?? ctx.root;
   const state = binding.assertCurrent();
   const provisional = flowManager.prepareImplCommandPublication({ binding, commandResult });
   const artifact = attachedCanonicalCommandResultArtifact(commandResult);
@@ -98,7 +99,7 @@ export function prepareImplementationGatePublication({ ctx, binding, commandResu
   if (["pass", "fail"].includes(artifact.payload.result)) {
     const flowState = flowManager.loadReadOnly(state.specId);
     const facts = taskScope ? readCurrentGateTransitionFacts({ flowManager, flowState,
-      phase, root: ctx.root, prospectivePublication: provisional }) : null;
+      phase, root, prospectivePublication: provisional }) : null;
     const entry = new IssueEntryClass({ ctx: { ...ctx, flowState }, result: commandResult,
       prospectiveFacts: facts, prospectivePublication: taskScope ? provisional : null }).toJSON();
     issuePublication = new ImplementationGateIssuePublication({ binding, entry, facts });
@@ -106,7 +107,7 @@ export function prepareImplementationGatePublication({ ctx, binding, commandResu
       issuePublication, selectedActivityId: provisional.selectedActivityId });
   }
   const evidence = readProspectiveImplementationGateEvidence({ flowManager, binding, commandResult,
-    publication: gatePublication, root: ctx.root });
+    publication: gatePublication, root });
   return new ImplementationGatePublicationPreparation({ binding, evidence, gatePublication, issuePublication, commandResult });
 }
 

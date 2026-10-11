@@ -18,6 +18,7 @@ import { Command } from "../../lib/command.js";
 import { PRODUCT } from "../../lib/product.js";
 import { DEFAULT_FLOW_SPEC_DIR } from "../../lib/flow-workspace.js";
 import { FlowManager } from "../../lib/flow-manager.js";
+import { FlowSpecId } from "../../lib/flow-spec-id.js";
 import { previewReportInput } from "./run-report.js";
 
 export const POINTER_REL_PATH = PRODUCT.managedPath("last-finalized-spec");
@@ -30,8 +31,9 @@ function reportShowError(code, message) {
 
 /**
  * Catalog-authoritative projection of the report selected by the repository
- * pointer.  Bytes and path are resolved by one Store read so consumers cannot
- * validate a descriptor and then reopen a different filesystem value.
+ * pointer or an explicitly bound Spec. Bytes and path are resolved by one
+ * Store read so consumers cannot validate a descriptor and then reopen a
+ * different filesystem value.
  */
 export class CanonicalLatestReport {
   #bytes;
@@ -53,18 +55,24 @@ export class CanonicalLatestReport {
     specRoot = DEFAULT_FLOW_SPEC_DIR,
     flowManager = null,
     consumerNodeId = "report",
+    explicitSpecId = null,
   } = {}) {
     if (typeof consumerNodeId !== "string" || consumerNodeId === "") {
       throw new Error("canonical report consumerNodeId is required");
     }
-    const pointerPath = path.join(mainRoot, POINTER_REL_PATH);
-    if (!fs.existsSync(pointerPath)) {
-      throw reportShowError("NO_POINTER", `pointer not found: ${POINTER_REL_PATH} (run finalize first)`);
+    let selectedSpecId = explicitSpecId;
+    if (selectedSpecId === null) {
+      const pointerPath = path.join(mainRoot, POINTER_REL_PATH);
+      if (!fs.existsSync(pointerPath)) {
+        throw reportShowError("NO_POINTER", `pointer not found: ${POINTER_REL_PATH} (run finalize first)`);
+      }
+      selectedSpecId = fs.readFileSync(pointerPath, "utf8").trim();
+      if (!selectedSpecId) throw reportShowError("EMPTY_POINTER", `pointer is empty: ${POINTER_REL_PATH}`);
     }
-    const specId = fs.readFileSync(pointerPath, "utf8").trim();
-    if (!specId) throw reportShowError("EMPTY_POINTER", `pointer is empty: ${POINTER_REL_PATH}`);
+    let specId;
     let manager;
     try {
+      specId = FlowSpecId.from(selectedSpecId).toString();
       manager = flowManager ?? new FlowManager({
         root: mainRoot,
         mainRoot,
@@ -73,7 +81,9 @@ export class CanonicalLatestReport {
         specId,
       });
     } catch {
-      throw reportShowError("INVALID_POINTER", `pointer has an invalid specId: ${specId}`);
+      throw explicitSpecId === null
+        ? reportShowError("INVALID_POINTER", `pointer has an invalid specId: ${selectedSpecId}`)
+        : reportShowError("INVALID_SPEC_SELECTION", `report selection has an invalid specId: ${selectedSpecId}`);
     }
     let resolved;
     try {

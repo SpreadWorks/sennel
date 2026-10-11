@@ -34,7 +34,8 @@ import { guardedCommand } from "../flow/lib/guarded-command.js";
 import { FinalizeFlowStateOwner } from "../flow/lib/finalize-flow-state-owner.js";
 import { FatalPostHookError } from "./post-hook-error.js";
 import { AgentFailure } from "./agent-failure.js";
-import { DefinitionLifecycleAttemptBinding } from "../flow/lib/definition-lifecycle-failure.js";
+import { DefinitionLifecycleAttemptBinding, isStepPersistenceFailure } from "../flow/lib/definition-lifecycle-failure.js";
+import { isStepAdmissionRefusal } from "../flow/lib/step-admission-refusal.js";
 
 function attachNonblockingContinuation(envelope, ctx, reason) {
   const state = ctx?.flowState;
@@ -516,6 +517,7 @@ export async function dispatch({
   const runtimeLogActiveNode = hookCtx.flowState ? findActiveNode(hookCtx.flowState) : null;
 
   openRuntimeLog(hookCtx);
+  let canonicalMetadataError = null;
 
   const emitPreconditionFailure = (code, message) => {
     const env = Envelope.fail(envelopeType || "run", envelopeKey || "?", code, message);
@@ -524,6 +526,7 @@ export async function dispatch({
     setExit(1);
   };
   const persistRuntimeLogMetadata = (result) => {
+    if (isStepAdmissionRefusal(canonicalMetadataError) || isStepPersistenceFailure(canonicalMetadataError)) return;
     const metadata = closedRuntimeLogMetadata;
     const requestedStepId = runtimeLogStepId(entry, hookCtx, result);
     // Public task aliases name the current task leaf before it is confirmed.
@@ -577,6 +580,7 @@ export async function dispatch({
     try {
       await entry.pre(hookCtx);
     } catch (err) {
+      canonicalMetadataError = err;
       if (hookCtx.flowOutboxEntry && entry.onError) {
         try { await entry.onError(hookCtx, err); } catch (onErrorErr) {
           writeErr(`[onError hook] ${onErrorErr.message || onErrorErr}\n`);
@@ -610,7 +614,10 @@ export async function dispatch({
   let result;
   let caught;
   if (hookCtx.flowOutboxEntry?.status === "done") {
-    result = structuredClone(hookCtx.flowOutboxEntry.result);
+    const storedResult = structuredClone(hookCtx.flowOutboxEntry.result);
+    result = envelopeKey === "finalize-cleanup"
+      ? await new CommandClass().execute(hookCtx)
+      : storedResult;
     hookCtx.flowOutboxResumed = true;
   } else {
     try {
@@ -618,7 +625,14 @@ export async function dispatch({
       input._envelopeType = envelopeType;
       input._envelopeKey = envelopeKey;
       const commandInput = hookCtx.flowOutboxEntry
-        ? { ...input, flowOutboxEntry: hookCtx.flowOutboxEntry }
+        ? { ...input, flowOutboxEntry: hookCtx.flowOutboxEntry,
+            ...(hookCtx.finalizationExecution == null ? {} : { finalizationExecution: hookCtx.finalizationExecution }),
+            ...(hookCtx.finalizationEffectPreparation == null ? {} : {
+              finalizationEffectPreparation: hookCtx.finalizationEffectPreparation,
+            }),
+            ...(hookCtx.repositoryOperationOwnerToken == null ? {} : {
+              repositoryOperationOwnerToken: hookCtx.repositoryOperationOwnerToken,
+            }) }
         : input;
       if (
         envelopeKey === "finalize-cleanup"
@@ -629,6 +643,7 @@ export async function dispatch({
       result = await cmd.run(container, commandInput);
     } catch (err) {
       caught = err;
+      canonicalMetadataError = err;
     }
   }
 
@@ -663,6 +678,7 @@ export async function dispatch({
         || result.errors[0]?.code
         || "COMMAND_ENVELOPE_FAILED";
       failure.data = result.data;
+      canonicalMetadataError = failure;
       if (hookCtx.flowOutboxEntry && entry.onError) {
         try {
           await entry.onError(hookCtx, failure);
@@ -684,6 +700,7 @@ export async function dispatch({
         const postResult = await entry.post(hookCtx, result);
         if (postResult instanceof Envelope && mode === "envelope") envelope = postResult;
       } catch (postErr) {
+        canonicalMetadataError = postErr;
         postFailed = true;
         recordDefinitionLifecycleToolingFailure(
           lifecycleAttemptBinding,

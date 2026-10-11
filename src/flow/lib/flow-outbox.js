@@ -313,6 +313,8 @@ export class FlowOutboxRecoveryClaim {
 }
 
 export class FlowOutboxRecoveryRequiredError extends Error {
+  get isAdmissionRejection() { return true; }
+
   constructor(entry) {
     if (!(entry instanceof FlowOutboxEntry) || entry.status !== "failed") {
       throw new Error("failed FlowOutboxEntry is required");
@@ -532,6 +534,8 @@ export class FlowOutboxStore {
     const startedAt = status.startedAt ?? now;
     const updatedAt = status.updatedAt ?? now;
     const attempt = status.attempt > 0 ? status.attempt : 1;
+    const exactRecoveryReceipt = status.exactRecoveryReceipt == null
+      ? null : FlowOutboxRecoveryReceipt.fromStored(status.exactRecoveryReceipt);
     if (status.status === "pending") {
       return new FlowOutboxEntry({
         identity,
@@ -539,9 +543,8 @@ export class FlowOutboxStore {
         attempt,
         startedAt,
         updatedAt,
-        exactRecoveryReceipt: status.exactRecoveryReceipt == null
-          ? null
-          : FlowOutboxRecoveryReceipt.fromStored(status.exactRecoveryReceipt),
+        failureHistory: status.failureHistory || [],
+        exactRecoveryReceipt,
       });
     }
     if (status.status === "done") {
@@ -552,6 +555,8 @@ export class FlowOutboxStore {
         startedAt,
         updatedAt,
         result: result === undefined ? status.result ?? null : result,
+        failureHistory: status.failureHistory || [],
+        exactRecoveryReceipt,
       });
     }
     if (status.status === "failed") {
@@ -563,9 +568,7 @@ export class FlowOutboxStore {
         updatedAt,
         failure: status.failure || "side effect failed",
         failureHistory: status.failureHistory || [],
-        exactRecoveryReceipt: status.exactRecoveryReceipt == null
-          ? null
-          : FlowOutboxRecoveryReceipt.fromStored(status.exactRecoveryReceipt),
+        exactRecoveryReceipt,
       });
     }
     throw new Error(`outbox entry not found: ${identity.idempotencyKey}`);

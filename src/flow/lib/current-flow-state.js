@@ -1,3 +1,4 @@
+import { FinalizationSettlementReceiptEvidence } from "./finalization-execution-identity.js";
 import { AcceptedGateDeferral } from "./accepted-gate-deferral.js";
 import { AcceptedNonblockingDecision } from "./accepted-nonblocking-decision.js";
 import { UnexecutedStepCompletionSet, UnexecutedStepCompletionAuthority, RetainedRouteSourceAuthority,
@@ -40,6 +41,7 @@ import { isConditionalDraftWorkerStep } from "./draft-conditional-worker.js";
 import { DRAFT_WORKER_RECOVERY_OPERATION, DraftWorkerRecoveryDecision } from "./draft-worker-recovery.js";
 import {
   artifactPublicationClaimForStep,
+  finalizationCompletionPublicationClaim,
   requiresWorkerSourceHandoff,
   sourceWorkerUpgradePublicationClaimForStep,
 } from "./flow-artifact-authority.js";
@@ -59,7 +61,7 @@ import {
   taskReviewStagePlanFromJSON,
 } from "./task-review-stage-transition.js";
 import { TaskStepIdentity } from "./task-step-identity.js";
-import { STEP_RESULT_TYPE, StepResult, ApprovalConfirmedWithTestsResult, ApprovalConfirmedWithoutTestsResult, stepResultDigest, hasImplementationStepContract, hasAcceptanceStepContract } from "../engine/step-result.js";
+import { STEP_RESULT_TYPE, StepResult, ApprovalConfirmedWithTestsResult, ApprovalConfirmedWithoutTestsResult, stepResultDigest, hasImplementationStepContract, hasAcceptanceStepContract, hasFinalizationStepContract } from "../engine/step-result.js";
 import { DraftQuestionResumeReceipt } from "./draft-question-resume-receipt.js";
 import { DraftStepSettlementReceiptValue } from "./draft-step-settlement-receipt.js";
 import { RequirementTestSettlementReceipt } from "./requirement-test-settlement-receipt.js";
@@ -152,7 +154,7 @@ const CONDITIONAL_WORKER_SETTLEMENT_OPERATION = "settle_conditional_worker";
 const TASK_REVIEW_STAGE_TRANSITION_OPERATION = "complete_task_review_stage";
 const REQUIREMENT_TEST_INITIALIZATION_OPERATION = "initialize_requirement_test_lifecycle";
 const REQUIREMENT_TEST_TRANSITION_OPERATION = "advance_requirement_test_lifecycle";
-const REPLACEMENT_ATTEMPT_OPERATIONS = new Set(["confirm_attempt", "repair_implementation", "triage_implementation_for_repair", "triage_implementation_no_repair", "repair_acceptance_review", "reopen_draft_preimplementation", "plan_gate_repair", "recover_missing_producer_artifact", "defer_failed_review", "defer_failed_gate", "advance_task_review_stage", REQUIREMENT_TEST_INITIALIZATION_OPERATION, REQUIREMENT_TEST_TRANSITION_OPERATION]);
+const REPLACEMENT_ATTEMPT_OPERATIONS = new Set(["reopen_outbox", "recover_interrupted_finalize_sync", "confirm_attempt", "repair_implementation", "triage_implementation_for_repair", "triage_implementation_no_repair", "repair_acceptance_review", "reopen_draft_preimplementation", "plan_gate_repair", "recover_missing_producer_artifact", "defer_failed_review", "defer_failed_gate", "advance_task_review_stage", REQUIREMENT_TEST_INITIALIZATION_OPERATION, REQUIREMENT_TEST_TRANSITION_OPERATION]);
 const SOURCE_WORKER_COMPLETION_OPERATIONS = new Set([
   "confirm_attempt",
   "repair_implementation",
@@ -185,7 +187,7 @@ const INTERRUPTED_FINALIZE_SYNC_OPERATION = "recover_interrupted_finalize_sync";
 const ATTEMPT_INTRODUCTION_OPERATIONS = new Set(["start_attempt", "retry_attempt", "retry_gate_attempt", "settle_spec_gate_retry", "settle_spec_gate_recovered", "retry_recovery_attempt", "rewind", "rewind_test_evidence", "repair_implementation", "triage_implementation_for_repair", "triage_implementation_no_repair", "repair_acceptance_review", "reopen_draft_preimplementation", "reopen_draft_task_addition", "reopen_draft_spec_correction", "plan_gate_repair", "recover_attempt", "accept_final_regression_failure", "defer_failed_review", "defer_failed_gate", "advance_task_review_stage", REQUIREMENT_TEST_INITIALIZATION_OPERATION, REQUIREMENT_TEST_TRANSITION_OPERATION, INTERRUPTED_FINALIZE_SYNC_OPERATION]);
 function transitionIntroducesAttempt(transition) {
   return ATTEMPT_INTRODUCTION_OPERATIONS.has(transition.operation)
-    || (["continue_nonblocking", "confirm_attempt"].includes(transition.operation) && transition.attempt !== null);
+    || (["continue_nonblocking", "confirm_attempt", "reopen_outbox"].includes(transition.operation) && transition.attempt !== null);
 }
 // Explicit dispatch approval is a durable authorization fact, not a mutable
 // field on flow.json.  Its append-only Activity can be replayed and checked
@@ -1425,6 +1427,27 @@ export class ActivityOutbox {
   }
 }
 
+/** Apply the exact command outcome already bound into the canonical Step receipt. */
+function settleFinalizationActivityOutbox(state, activity, outbox) {
+  const receipt = activity.result?.draftSettlementReceipt;
+  const evidence = receipt?.finalization?.evidence;
+  const identity = evidence?.execution?.outboxIdentity;
+  const expectedOutbox = receipt?.finalization?.candidate?.outbox;
+  const warningFailure = activity.result?.stepResult?.kind === "finalize-sync-skipped-with-warning"
+    ? receipt?.finalization?.commandResult?.failure ?? null : null;
+  const failure = receipt?.settlementKind === "failure" ? activity.result.stepResult.error : warningFailure;
+  if (!hasFinalizationStepContract(activity.nodeId) || receipt?.binding.stepId !== activity.nodeId
+    || identity?.idempotencyKey !== outbox.id || identity?.operation !== outbox.operation
+    || expectedOutbox?.id !== outbox.id || expectedOutbox?.operation !== outbox.operation
+    || expectedOutbox?.attempt !== outbox.attempt
+    || (failure === null ? outbox.result === null || outbox.failure !== null
+      || !isDeepStrictEqual(outbox.result.toJSON(), receipt.finalization.commandResult)
+      : outbox.failure !== failure.message || outbox.failureCode !== (failure.code ?? null))) {
+    throw new CurrentFlowStateInvariantError("Finalization settlement requires its exact observed outbox outcome");
+  }
+  return state.withOutbox(state.outbox.settle(outbox.toEntry()));
+}
+
 /** JSON command result retained by a terminal outbox Activity for restart-safe recovery. */
 export class ActivityOutboxResult {
   constructor(value) {
@@ -2113,12 +2136,21 @@ export function assertDraftSettlementReceiptTransition(priorReceipts, receipt, {
   if (lifecycle === null) {
     if (priorReceipts.length > 0) {
       const previous = priorReceipts.at(-1);
+      if (hasFinalizationStepContract(receipt.binding.stepId)) {
+        const original = previous.finalization.evidence.execution;
+        const acquired = receipt.finalization.evidence.execution;
+        for (const field of ["identity", "outboxIdentity", "approval", "expectedBaseSha", "expectedFeatureSha", "claim", "publication"]) {
+          if (!isDeepStrictEqual(original[field], acquired[field])) {
+            throw new CurrentFlowStateConflictError(`Finalization settlement changed its acquired ${field}`);
+          }
+        }
+      }
       const resume = resumeReceipts.at(-1) ?? null;
       const resumedAwait = previous?.settlementKind === "await"
         && resume?.awaitReceiptId === previous.id
         && resume?.binding?.attemptId === receipt?.binding?.attemptId
         && resume?.binding?.attemptSequence === receipt?.binding?.attemptSequence;
-      const executionProgress = (hasImplementationStepContract(receipt.binding.stepId) || hasAcceptanceStepContract(receipt.binding.stepId))
+      const executionProgress = (hasImplementationStepContract(receipt.binding.stepId) || hasAcceptanceStepContract(receipt.binding.stepId) || hasFinalizationStepContract(receipt.binding.stepId))
         && ["execution", "await"].includes(previous?.settlementKind)
         && previous?.binding?.attemptId === receipt.binding.attemptId
         && previous?.binding?.attemptSequence === receipt.binding.attemptSequence;
@@ -2165,7 +2197,7 @@ export function assertDraftSettlementReceiptTransition(priorReceipts, receipt, {
   const expectedPhases = lifecycle.phase === "claimed"
     ? ["checkpoint"] : lifecycle.phase === "publication"
       ? (publicationAwaitContinuation || gateRepairCompletion ? ["publication"] : ["claimed"])
-      : ((hasImplementationStepContract(receipt.binding.stepId) || hasAcceptanceStepContract(receipt.binding.stepId)) ? ["claimed", "publication"] : ["publication"]);
+      : ((hasImplementationStepContract(receipt.binding.stepId) || hasAcceptanceStepContract(receipt.binding.stepId) || hasFinalizationStepContract(receipt.binding.stepId)) ? ["claimed", "publication"] : ["publication"]);
   const previousGeneration = previous?.executionGeneration ?? previous?.binding?.executionGeneration;
   if (previous === null || !expectedPhases.includes(previous.phase)
     || lifecycle.executionGeneration !== previousGeneration
@@ -2185,6 +2217,7 @@ class PersistedDraftSettlementReceipt extends DraftStepSettlementReceiptValue {
     requireExactFields(value, new Set([
       "id", "binding", "resultKind", "resultType", "resultDigest", "settlementKind",
       "targetStepId", "effects", "connector", "publicationDigest", "executionLifecycle", "awaitQuestion",
+      ...(hasFinalizationStepContract(value.binding?.stepId) ? ["finalization"] : []),
       ...(["branch", "prepare-spec"].includes(value.binding?.stepId) && value.resultType !== STEP_RESULT_TYPE.ERROR
         ? ["preparation"] : []),
       ...(value.binding?.stepId === "draft-gate-repair" && value.executionLifecycle?.phase === "publication" ? ["draftGateRepairSelection"] : []),
@@ -2262,17 +2295,21 @@ class PersistedDraftSettlementReceipt extends DraftStepSettlementReceiptValue {
       && this.executionLifecycle.claim?.request === null) {
       throw new CurrentFlowStateInvariantError("Spec Review claim has no provider request identity");
     }
-    if (!["target-connection", "execution", "await", "failure", "park"].includes(value.settlementKind)) {
+    if (!["target-connection", "execution", "await", "failure", "park", "completion"].includes(value.settlementKind)) {
       throw new CurrentFlowStateInvariantError("result.draftSettlementReceipt settlement kind is invalid");
     }
     this.settlementKind = value.settlementKind;
+    if (this.settlementKind === "completion" && (this.binding.stepId !== "finalize-cleanup" || this.resultType !== STEP_RESULT_TYPE.COMPLETED)) {
+      throw new CurrentFlowStateInvariantError("Only completed cleanup may carry a Completion receipt");
+    }
     const target = this.settlementKind === "target-connection";
+    const finalizationFailure = this.settlementKind === "failure" && this.binding.stepId === "finalize-merge";
     this.targetStepId = target ? requireString(value.targetStepId, "result.draftSettlementReceipt.targetStepId") : null;
-    this.effects = target ? new PersistedDraftRouteEffects(value.effects) : null;
+    this.effects = target || finalizationFailure ? new PersistedDraftRouteEffects(value.effects) : null;
     if (target) {
       requireExactFields(value.connector, new Set(["name"]), "result.draftSettlementReceipt.connector");
       this.connector = Object.freeze({ name: requireString(value.connector.name, "result.draftSettlementReceipt.connector.name") });
-    } else if (value.targetStepId !== null || value.effects !== null || value.connector !== null) {
+    } else if (value.targetStepId !== null || !finalizationFailure && value.effects !== null || value.connector !== null) {
       throw new CurrentFlowStateInvariantError("non-connection Draft settlement cannot carry Connector data");
     } else {
       this.connector = null;
@@ -2280,7 +2317,7 @@ class PersistedDraftSettlementReceipt extends DraftStepSettlementReceiptValue {
     const phase = this.executionLifecycle?.phase ?? null;
     if ((["checkpoint", "claimed"].includes(phase) && this.settlementKind !== "execution")
       || (this.settlementKind === "execution" && !["checkpoint", "claimed", "publication"].includes(phase)
-        && !((this.binding.stepId === "spec-gate" || (hasImplementationStepContract(this.binding.stepId) || hasAcceptanceStepContract(this.binding.stepId))) && phase === null))
+        && !((this.binding.stepId === "spec-gate" || (hasImplementationStepContract(this.binding.stepId) || hasAcceptanceStepContract(this.binding.stepId) || hasFinalizationStepContract(this.binding.stepId))) && phase === null))
       || (phase === "publication" && !["execution", "await"].includes(this.settlementKind))
       || (phase === "terminal" && ["execution", "await"].includes(this.settlementKind))) {
       throw new CurrentFlowStateInvariantError("Draft execution lifecycle phase does not match its Settlement");
@@ -2289,6 +2326,8 @@ class PersistedDraftSettlementReceipt extends DraftStepSettlementReceiptValue {
       ? null : DraftGateRepairSelection.fromJSON(value.draftGateRepairSelection);
     this.draftGateRepairSelection?.assertBinding(this.binding, this.executionLifecycle);
     this.preparation = value.preparation === undefined ? null : new PreparationEvidence(value.preparation).assertStep(this.binding.stepId);
+    this.finalization = hasFinalizationStepContract(this.binding.stepId)
+      ? FinalizationSettlementReceiptEvidence.fromJSON(value.finalization).assertBinding(this.binding) : null;
     const identity = {
       binding: this.binding,
       resultKind: this.resultKind,
@@ -2302,6 +2341,7 @@ class PersistedDraftSettlementReceipt extends DraftStepSettlementReceiptValue {
       executionLifecycle: this.executionLifecycle?.toJSON() ?? null,
       awaitQuestion: this.awaitQuestion,
       ...(this.preparation === null ? {} : { preparation: this.preparation.toJSON() }),
+      ...(this.finalization === null ? {} : { finalization: this.finalization.toJSON() }),
       ...(this.draftGateRepairSelection === null ? {} : { draftGateRepairSelection: this.draftGateRepairSelection.toJSON() }),
     };
     const expectedId = crypto.createHash("sha256").update(JSON.stringify(identity)).digest("hex");
@@ -2326,6 +2366,7 @@ class PersistedDraftSettlementReceipt extends DraftStepSettlementReceiptValue {
       executionLifecycle: this.executionLifecycle?.toJSON() ?? null,
       awaitQuestion: this.awaitQuestion,
       ...(this.preparation === null ? {} : { preparation: this.preparation.toJSON() }),
+      ...(this.finalization === null ? {} : { finalization: this.finalization.toJSON() }),
       ...(this.draftGateRepairSelection === null ? {} : { draftGateRepairSelection: this.draftGateRepairSelection.toJSON() }),
     };
   }
@@ -5011,8 +5052,33 @@ export class CurrentFlowState {
     }, { definition: this.definition });
   }
 
+  /** Exact outbox recovery opens a fresh execution episode without changing the failed Attempt. */
+  recoverFinalizationOutbox({ outbox, attempt, priorActivities }) {
+    const stepId = this.current?.at(-1);
+    if (!hasFinalizationStepContract(stepId) || this.attempt?.failure == null
+      || outbox.operation !== stepId || outbox.exactRecoveryReceipt === null) {
+      throw new CurrentFlowStateInvariantError("Finalization outbox recovery requires its failed source Attempt and exact receipt");
+    }
+    const receipt = priorActivities.findLast((entry) => entry.nodeId === stepId
+      && entry.attemptId === this.attempt.id && entry.sequence === this.attempt.sequence
+      && entry.result?.draftSettlementReceipt?.settlementKind === "failure")?.result.draftSettlementReceipt;
+    if (receipt?.finalization.evidence.execution.outboxIdentity.idempotencyKey !== outbox.id
+      || receipt.finalization.candidate.outbox.attempt !== outbox.attempt
+      || outbox.exactRecoveryReceipt.failure !== this.attempt.failure.message
+      || receipt.finalization.evidence.identity.attempt.id !== this.attempt.id) {
+      throw new CurrentFlowStateConflictError("Finalization recovery differs from its failed Step receipt");
+    }
+    let restored = this.withOutbox(this.outbox.begin(outbox.toEntry()));
+    if (receipt.effects?.skipStepIds.length > 0) {
+      restored = restored.finalizeDownstream({ stepIds: receipt.effects.skipStepIds, status: "pending" });
+    }
+    return restored.#activateAttemptFromRoot({ root: restored.root, path: restored.current, attempt,
+      allowedLeafStatuses: ["in_progress"], initial: true, operation: "recoverFinalizationOutbox" });
+  }
+
   /** One atomic recovery: settle sync's pending outbox, skip sync, claim cleanup. */
-  recoverInterruptedFinalizeSync({ outbox, cleanupAttempt, confirmedAt }) {
+  recoverInterruptedFinalizeSync({ outbox, cleanupAttempt, activity }) {
+    const result = activity.result;
     this.#assertExecutionActive();
     if (this.current?.at(-1) !== "finalize-sync" || this.attempt === null) {
       throw new CurrentFlowStateInvariantError("interrupted finalize-sync recovery requires the active sync Attempt");
@@ -5021,15 +5087,12 @@ export class CurrentFlowState {
     const cleanup = this.findNode("finalize-cleanup");
     if (sync?.status !== "in_progress" || cleanup?.status !== "pending") throw new CurrentFlowStateInvariantError("interrupted finalize-sync recovery has an invalid step boundary");
     if (outbox.operation !== "finalize-sync" || this.outbox.find(outbox.id) === null) throw new CurrentFlowStateInvariantError("interrupted finalize-sync recovery requires its pending outbox identity");
-    const settled = this.withOutbox(this.outbox.settle(outbox.toEntry()));
-    const skippedRoot = reconcileCompletedParents(replaceNode(settled.root, "finalize-sync", sync.with({
-      status: "skipped", attemptSequence: sync.attemptSequence,
-      result: new NodeResult({ outcome: "skipped", summary: "interrupted finalize-sync settled", confirmedAt, artifactRefs: [] }),
-    })), settled.definition);
-    const skipped = settled.#replaceRoot(skippedRoot, null, null);
-    const expected = skipped.definition.nextExecutableLeaf(skipped.root);
-    if (expected?.id !== "finalize-cleanup") throw new CurrentFlowStateInvariantError("interrupted finalize-sync recovery must claim cleanup next");
-    return skipped.startAttempt({ path: skipped.definition.pathFor(skipped.root, "finalize-cleanup"), attempt: cleanupAttempt });
+    const settled = settleFinalizationActivityOutbox(this, activity, outbox);
+    if (result?.stepResult?.kind !== "finalize-sync-skipped-with-warning"
+      || result.draftSettlementReceipt?.targetStepId !== "finalize-cleanup") {
+      throw new CurrentFlowStateInvariantError("Interrupted sync recovery requires its typed warning Result and cleanup receipt");
+    }
+    return settled.confirmCurrentAttempt({ result, status: "skipped", targetAttempt: cleanupAttempt });
   }
 
   /**
@@ -7472,7 +7535,9 @@ export class ActivityTransition {
     this.outbox = outbox == null ? null : outbox instanceof ActivityOutbox ? outbox : new ActivityOutbox(outbox);
     const outboxRequired = OUTBOX_TRANSITION_OPERATIONS.has(operation) || operation === INTERRUPTED_FINALIZE_SYNC_OPERATION;
     const reportCompletionOutbox = operation === "confirm_attempt" && this.nodeId === "report";
-    if (!reportCompletionOutbox && outboxRequired !== (this.outbox !== null)) {
+    const finalizationOutbox = hasFinalizationStepContract(this.nodeId)
+      && ["confirm_attempt", "record_draft_step_settlement", "fail_attempt"].includes(operation);
+    if (!reportCompletionOutbox && !finalizationOutbox && outboxRequired !== (this.outbox !== null)) {
       throw new CurrentFlowStateInvariantError(
         outboxRequired
           ? `activity.transition ${operation} requires an outbox payload`
@@ -7483,13 +7548,13 @@ export class ActivityTransition {
       if (operation === "fail_outbox" && this.outbox.failure === null) {
         throw new CurrentFlowStateInvariantError("fail_outbox requires its failure fact in the Activity ledger");
       }
-      if (!["fail_outbox", INTERRUPTED_FINALIZE_SYNC_OPERATION].includes(operation) && this.outbox.failure !== null) {
+      if (!["fail_outbox", INTERRUPTED_FINALIZE_SYNC_OPERATION].includes(operation) && !finalizationOutbox && this.outbox.failure !== null) {
         throw new CurrentFlowStateInvariantError("only fail_outbox may carry an outbox failure fact");
       }
-      if (operation !== "complete_outbox" && !reportCompletionOutbox && this.outbox.result !== null) {
+      if (operation !== "complete_outbox" && !reportCompletionOutbox && !finalizationOutbox && this.outbox.result !== null) {
         throw new CurrentFlowStateInvariantError("only complete_outbox may carry an outbox result");
       }
-      if (!["fail_outbox", INTERRUPTED_FINALIZE_SYNC_OPERATION].includes(operation) && (this.outbox.failureCode !== null || this.outbox.recovery !== null)) {
+      if (!["fail_outbox", INTERRUPTED_FINALIZE_SYNC_OPERATION].includes(operation) && !finalizationOutbox && (this.outbox.failureCode !== null || this.outbox.recovery !== null)) {
         throw new CurrentFlowStateInvariantError("only fail_outbox may carry outbox failure recovery facts");
       }
       if (this.outbox.recovery !== null && this.outbox.failureCode !== "MERGE_PRE_SYNC_CONFLICT") {
@@ -7562,8 +7627,8 @@ export class ActivityTransition {
     }
     this.gateTaskLifecycle = lifecycle;
     const attemptRequired = TRANSITION_ATTEMPT_OPERATIONS.has(operation);
-    const attemptOptional = operation === "continue_nonblocking"
-      || (operation === "confirm_attempt" && this.attempt?.nodeId !== this.nodeId && status === "done");
+    const attemptOptional = operation === "continue_nonblocking" || operation === "reopen_outbox"
+      || (operation === "confirm_attempt" && this.attempt?.nodeId !== this.nodeId && ["done", "skipped"].includes(status));
     if (!attemptOptional && attemptRequired !== (this.attempt !== null)) {
       throw new CurrentFlowStateInvariantError(
         attemptRequired
@@ -7688,12 +7753,15 @@ export class ActivityTransition {
       return state.withPolicy(this.policy);
     }
     if (this.operation === INTERRUPTED_FINALIZE_SYNC_OPERATION) {
-      if (target.id !== "finalize-cleanup") throw new CurrentFlowStateInvariantError("interrupted finalize-sync Activity must target cleanup");
-      return state.recoverInterruptedFinalizeSync({ outbox: this.outbox, cleanupAttempt: this.attempt, confirmedAt: activity.timing?.finishedAt });
+      if (target.id !== "finalize-sync") throw new CurrentFlowStateInvariantError("interrupted finalize-sync Activity must bind its source Attempt");
+      return state.recoverInterruptedFinalizeSync({ outbox: this.outbox, cleanupAttempt: this.attempt, activity });
     }
     if (OUTBOX_TRANSITION_OPERATIONS.has(this.operation)) {
       if (target.id !== state.root.id) {
         throw new CurrentFlowStateInvariantError("Flow outbox transition must target the Flow root");
+      }
+      if (this.operation === "reopen_outbox" && this.attempt !== null) {
+        return state.recoverFinalizationOutbox({ outbox: this.outbox, attempt: this.attempt, priorActivities });
       }
       return ["begin_outbox", "reopen_outbox"].includes(this.operation)
         ? state.withOutbox(state.outbox.begin(this.outbox.toEntry()))
@@ -7924,7 +7992,14 @@ export class ActivityTransition {
       if (activity.attemptId !== state.attempt.id || activity.sequence !== state.attempt.sequence) {
         throw new CurrentFlowStateInvariantError("fail_attempt Activity must identify the active Attempt");
       }
-      return state.failCurrentAttempt({ failure: activity.failure, result: activity.result });
+      let failed = state.failCurrentAttempt({ failure: activity.failure, result: activity.result });
+      if (this.outbox !== null) failed = settleFinalizationActivityOutbox(failed, activity, this.outbox);
+      const effects = activity.result?.draftSettlementReceipt?.effects;
+      if (hasFinalizationStepContract(targetId) && effects !== null && effects !== undefined) {
+        failed = failed.finalizeDownstream({ stepIds: effects.skipStepIds,
+          status: "skipped", confirmedAt: activity.result.confirmedAt });
+      }
+      return failed;
     }
     if (this.operation === "record_failure") {
       if (state.current == null || state.current.at(-1) !== targetId) {
@@ -7959,7 +8034,8 @@ export class ActivityTransition {
         || receipt.binding.attemptSequence !== state.attempt.sequence) {
         throw new CurrentFlowStateInvariantError("non-terminal Draft settlement must bind the active Attempt");
       }
-      return receipt.settlementKind === "park" ? state.park() : state;
+      const settled = this.outbox === null ? state : settleFinalizationActivityOutbox(state, activity, this.outbox);
+      return receipt.settlementKind === "park" ? settled.park() : settled;
     }
     if (this.operation === CONDITIONAL_WORKER_SETTLEMENT_OPERATION) {
       if (activity.result == null || activity.attemptId !== null || activity.sequence !== null) {
@@ -8028,6 +8104,9 @@ export class ActivityTransition {
       gateTaskLifecycle: this.gateTaskLifecycle?.toJSON() ?? null,
       targetAttempt: this.attempt,
     });
+    if (hasFinalizationStepContract(targetId)) {
+      return this.outbox === null ? confirmed : settleFinalizationActivityOutbox(confirmed, activity, this.outbox);
+    }
     if (this.outbox === null) return confirmed;
     const evidence = activity.result.stepResult?.evidence;
     if (targetId !== "report" || activity.result.stepResult?.kind !== "report-generated"
@@ -8166,10 +8245,10 @@ export class FlowActivity {
       throw new CurrentFlowStateInvariantError("flow_created Activity requires its deterministic first-Activity identity");
     }
     this.result = result == null ? null : result instanceof NodeResult ? result : new NodeResult(result);
-    if (["confirm_attempt", DRAFT_WORKER_RECOVERY_OPERATION, DRAFT_COMPLETION_TRANSITION_OPERATION, DRAFT_STEP_SETTLEMENT_TRANSITION_OPERATION, CONDITIONAL_WORKER_SETTLEMENT_OPERATION, TASK_REVIEW_STAGE_TRANSITION_OPERATION, "advance_task_review_stage", REQUIREMENT_TEST_INITIALIZATION_OPERATION, REQUIREMENT_TEST_TRANSITION_OPERATION, "fail_attempt", "settle_spec_gate_retry", "settle_spec_gate_recovered", "record_failure", "continue_nonblocking", "accept_final_regression_failure", "defer_failed_review", "defer_failed_gate", "repair_implementation", "triage_implementation_for_repair", "triage_implementation_no_repair", "repair_acceptance_review"].includes(this.transition.operation) && this.result == null) {
+    if (["confirm_attempt", INTERRUPTED_FINALIZE_SYNC_OPERATION, DRAFT_WORKER_RECOVERY_OPERATION, DRAFT_COMPLETION_TRANSITION_OPERATION, DRAFT_STEP_SETTLEMENT_TRANSITION_OPERATION, CONDITIONAL_WORKER_SETTLEMENT_OPERATION, TASK_REVIEW_STAGE_TRANSITION_OPERATION, "advance_task_review_stage", REQUIREMENT_TEST_INITIALIZATION_OPERATION, REQUIREMENT_TEST_TRANSITION_OPERATION, "fail_attempt", "settle_spec_gate_retry", "settle_spec_gate_recovered", "record_failure", "continue_nonblocking", "accept_final_regression_failure", "defer_failed_review", "defer_failed_gate", "repair_implementation", "triage_implementation_for_repair", "triage_implementation_no_repair", "repair_acceptance_review"].includes(this.transition.operation) && this.result == null) {
       throw new CurrentFlowStateInvariantError("completed Attempt Activity requires a result");
     }
-    if (!["confirm_attempt", DRAFT_WORKER_RECOVERY_OPERATION, DRAFT_COMPLETION_TRANSITION_OPERATION, DRAFT_STEP_SETTLEMENT_TRANSITION_OPERATION, CONDITIONAL_WORKER_SETTLEMENT_OPERATION, TASK_REVIEW_STAGE_TRANSITION_OPERATION, "advance_task_review_stage", REQUIREMENT_TEST_INITIALIZATION_OPERATION, REQUIREMENT_TEST_TRANSITION_OPERATION, "fail_attempt", "settle_spec_gate_retry", "settle_spec_gate_recovered", "record_failure", "continue_nonblocking", "accept_final_regression_failure", "defer_failed_review", "defer_failed_gate", "repair_implementation", "triage_implementation_for_repair", "triage_implementation_no_repair", "repair_acceptance_review", "plan_gate_repair", "reopen_draft_preimplementation", "rewind_test_evidence"].includes(this.transition.operation) && this.result !== null) {
+    if (!["confirm_attempt", INTERRUPTED_FINALIZE_SYNC_OPERATION, DRAFT_WORKER_RECOVERY_OPERATION, DRAFT_COMPLETION_TRANSITION_OPERATION, DRAFT_STEP_SETTLEMENT_TRANSITION_OPERATION, CONDITIONAL_WORKER_SETTLEMENT_OPERATION, TASK_REVIEW_STAGE_TRANSITION_OPERATION, "advance_task_review_stage", REQUIREMENT_TEST_INITIALIZATION_OPERATION, REQUIREMENT_TEST_TRANSITION_OPERATION, "fail_attempt", "settle_spec_gate_retry", "settle_spec_gate_recovered", "record_failure", "continue_nonblocking", "accept_final_regression_failure", "defer_failed_review", "defer_failed_gate", "repair_implementation", "triage_implementation_for_repair", "triage_implementation_no_repair", "repair_acceptance_review", "plan_gate_repair", "reopen_draft_preimplementation", "rewind_test_evidence"].includes(this.transition.operation) && this.result !== null) {
       throw new CurrentFlowStateInvariantError("only completed Attempt Activity may carry a result");
     }
     if (this.transition.operation === "reopen_draft_preimplementation" && this.result !== null
@@ -8318,7 +8397,8 @@ export class FlowActivity {
     const attempt = this.transition.attempt;
     return transitionIntroducesAttempt(this.transition)
       && attempt?.nodeId === nodeId && attempt.id === id && attempt.sequence === sequence
-      && (this.nodeId === nodeId || this.transition.taskReviewStagePlan?.targetStepId === nodeId);
+      && (this.nodeId === nodeId || this.transition.taskReviewStagePlan?.targetStepId === nodeId
+        || this.transition.operation === "reopen_outbox");
   }
 
   static canonical(value) {
@@ -10029,6 +10109,15 @@ export class CurrentFlowVersionStore {
     if (activity.reviewPublication !== null) {
       throw new CurrentFlowStateInvariantError("review publication Activity facts are derived only by the canonical Version Store");
     }
+    const completionActivity = input?.completionActivity == null ? null : FlowActivity.canonical(input.completionActivity);
+    const completesFlow = activity.result?.draftSettlementReceipt?.settlementKind === "completion";
+    if (completesFlow !== (completionActivity !== null)
+      || (completionActivity !== null && (activity.transition.operation !== "confirm_attempt"
+        || activity.nodeId !== "finalize-cleanup" || completionActivity.transition.operation !== "finalize_flow"
+        || completionActivity.id !== `${activity.id}-finalized`
+        || completionActivity.confirmationOrder !== activity.confirmationOrder + 1))) {
+      throw new CurrentFlowStateInvariantError("Final cleanup completion requires its paired canonical finalization Activity");
+    }
     const artifactWrites = this.#artifactWrites(input?.artifactWrites, activity);
     this.#assertRequestedRevisionArtifacts(activity, artifactWrites);
     const sourceWorkerUpgrade = this.#sourceWorkerUpgrade(
@@ -10075,7 +10164,7 @@ export class CurrentFlowVersionStore {
     const specRevisionWrites = specRevisionPlan === null ? Object.freeze([]) : specRevisionPlan.writes;
     const reviewPublication = this.#reviewPublicationFact(activity, artifactWrites, specRevisionPlan);
     if (reviewPublication !== null) activity = activity.withReviewPublication(reviewPublication);
-    const activityId = FlowActivityId.from(activity.id);
+    const activityId = FlowActivityId.from(completionActivity?.id ?? activity.id);
     const allArtifactWrites = Object.freeze([...artifactWrites, ...specRevisionWrites]);
     const artifactBaselines = this.#artifactBaselines(input?.artifactBaselines);
     const systemActivity = LIFECYCLE_TRANSITION_OPERATIONS.has(activity.transition.operation)
@@ -10086,7 +10175,7 @@ export class CurrentFlowVersionStore {
       || DISPATCH_APPROVAL_TRANSITION_OPERATIONS.has(activity.transition.operation)
       || OBSERVATION_TRANSITION_OPERATIONS.has(activity.transition.operation)
       || taskAddition;
-    const stateArtifacts = systemActivity
+    const stateArtifacts = systemActivity || completionActivity !== null
       ? [
           publicationFor("flow.state", "application/json", { activityId }),
           publicationFor("flow.activities", "application/x-ndjson", { activityId }),
@@ -10167,11 +10256,15 @@ export class CurrentFlowVersionStore {
       write: () => {
         if (taskSpec !== null) this.#materializeTaskWorkspace(activity.transition.task);
         for (const task of activity.transition.approvalTasks) this.#materializeTaskWorkspace(task);
-        const result = this.#store().apply({
+        let result = this.#store().apply({
           ...input,
           activity,
           assertCurrentState: (state) => this.#assertPersistedIdentity(state),
         });
+        if (completionActivity !== null) {
+          result = this.#store().apply({ activity: completionActivity,
+            assertCurrentState: (state) => this.#assertPersistedIdentity(state) });
+        }
         if (taskSpec !== null) {
           this.#writeSpecRecord(taskSpec);
         }
@@ -10186,7 +10279,7 @@ export class CurrentFlowVersionStore {
       ? this.catalogStore.publishManySystem(options)
       : this.catalogStore.publishMany({
           ...options,
-          publicationClaim: sourceWorkerUpgrade
+          publicationClaim: completionActivity !== null ? finalizationCompletionPublicationClaim() : sourceWorkerUpgrade
             ? sourceWorkerUpgradePublicationClaimForStep(
                 FlowArtifactUpdater.fromActivityNodeId(activity.nodeId).toString(),
               )
