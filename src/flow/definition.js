@@ -1,3 +1,5 @@
+import { SpecGateRepairRecoveryEvidence } from "./lib/spec-gate-repair-recovery.js";
+export { resolveSpecGateRepairRecovery } from "./lib/spec-gate-repair-recovery.js";
 import { RetroConnector } from "./engine/connectors/acceptance/retro-connector.js";
 import { AcceptanceRepairConnector, AcceptanceDecisionConnector, AcceptanceFinalRegressionConnector } from "./engine/connectors/acceptance/acceptance-target-connectors.js";
 import { FinalRegressionReportConnector, ReportFinalizeCommitConnector } from "./engine/connectors/acceptance/finalization-target-connectors.js";
@@ -4689,7 +4691,7 @@ export class DraftStepExecutionState {
 
 /** Durable identity of one Result and its already-selected settlement. */
 export class DraftStepSettlementReceipt extends DraftStepSettlementReceiptValue {
-  constructor({ binding, result, settlement, publication, executionLifecycle = null, awaitQuestion = null, draftGateRepairSelection = null, preparation = null, finalization = null } = {}) {
+  constructor({ binding, result, settlement, publication, executionLifecycle = null, awaitQuestion = null, draftGateRepairSelection = null, preparation = null, finalization = null, specGateRepairRecovery = null } = {}) {
     super();
     if (!(result instanceof StepResult) || !(settlement instanceof StepSettlement)) {
       throw new TypeError("Step settlement receipt requires a Result and Settlement");
@@ -4779,6 +4781,11 @@ export class DraftStepSettlementReceipt extends DraftStepSettlementReceiptValue 
     this.draftGateRepairSelection = draftGateRepairSelection;
     this.preparation = preparation;
     this.finalization = finalization;
+    this.specGateRepairRecovery = specGateRepairRecovery;
+    if (specGateRepairRecovery !== null && (!(specGateRepairRecovery instanceof SpecGateRepairRecoveryEvidence)
+      || binding.stepId !== "spec-gate-repair" || executionPhase !== "publication" || !executionSettlement)) {
+      throw new TypeError("Gate repair recovery receipt requires its exact publication proof");
+    }
     const identity = DraftStepSettlementReceipt.identity(this);
     this.id = createHash("sha256").update(JSON.stringify(identity)).digest("hex");
     Object.freeze(this);
@@ -4803,6 +4810,7 @@ export class DraftStepSettlementReceipt extends DraftStepSettlementReceiptValue 
       ...(value.preparation == null ? {} : {
         preparation: value.preparation.toJSON?.() ?? value.preparation,
       }),
+      ...(value.specGateRepairRecovery == null ? {} : { specGateRepairRecovery: value.specGateRepairRecovery.toJSON?.() ?? value.specGateRepairRecovery }),
       ...(value.finalization == null ? {} : {
         finalization: value.finalization.toJSON?.() ?? value.finalization,
       }),
@@ -4820,6 +4828,14 @@ export class DraftStepSettlementReceipt extends DraftStepSettlementReceiptValue 
       new PreparationEvidence(value.preparation).assertStep(value.binding.stepId);
     } else if (value.preparation != null) {
       throw new TypeError("stored Step settlement receipt preparation is invalid");
+    }
+    if (value.specGateRepairRecovery != null) {
+      const evidence = new SpecGateRepairRecoveryEvidence(value.specGateRepairRecovery.toJSON?.() ?? value.specGateRepairRecovery);
+      if (value.binding?.stepId !== "spec-gate-repair" || value.executionLifecycle?.phase !== "publication"
+        || value.settlementKind !== "execution" || value.resultKind !== "spec-gate-repair-context-required"
+        || value.publicationDigest !== new DraftStepSettlementPublication({ specGateRepairRecovery: evidence.digest }).digest) {
+        throw new TypeError("stored Gate repair recovery receipt is invalid");
+      }
     }
     if (hasFinalizationStepContract(value.binding?.stepId)) {
       const finalization = FinalizationSettlementReceiptEvidence.fromJSON(value.finalization);
@@ -4874,6 +4890,7 @@ export class DraftStepSettlementReceipt extends DraftStepSettlementReceiptValue 
       awaitQuestion: this.awaitQuestion?.toJSON() ?? null,
       ...(this.draftGateRepairSelection === null ? {} : { draftGateRepairSelection: this.draftGateRepairSelection.toJSON() }),
       ...(this.preparation === null ? {} : { preparation: this.preparation.toJSON() }),
+      ...(this.specGateRepairRecovery === null ? {} : { specGateRepairRecovery: this.specGateRepairRecovery.toJSON() }),
       ...(this.finalization === null ? {} : { finalization: this.finalization.toJSON() }),
     };
   }

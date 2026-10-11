@@ -961,6 +961,12 @@ export class FlowManager {
   recoverTaskGateClassification(input = {}) {
     return this._store.recoverTaskGateClassification({ ...input, specId: input.specId ?? this._boundSpecId });
   }
+  previewSpecGateRepairRecovery(input = {}) {
+    return this._store.previewSpecGateRepairRecovery({ ...input, specId: input.specId ?? this._boundSpecId });
+  }
+  recoverSpecGateRepair(input = {}) {
+    return this._store.recoverSpecGateRepair({ ...input, specId: input.specId ?? this._boundSpecId });
+  }
   recoverLegacyDraftWorkerExecution(input = {}) {
     return this._store.recoverLegacyDraftWorkerExecution({ ...input, specId: input.specId ?? this._boundSpecId });
   }

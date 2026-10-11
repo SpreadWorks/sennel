@@ -2472,6 +2472,24 @@ export const FLOW_COMMANDS = {
         "  --agent-work-dir <path>  Per-invocation agent/tmp base directory",
       ].join("\n"),
     },
+    "recover-spec-gate-repair": {
+      helpKey: "flow.run.recover-spec-gate-repair",
+      requiresFlow: true,
+      runtimeLog: { stepMetadata: false },
+      explicitTargetResolution: true,
+      command: () => import("./lib/run-recover-spec-gate-repair.js"),
+      args: {
+        flags: [...FLOW_TARGET_GUARD_FLAGS, "--preview"],
+        options: [...FLOW_RUN_OPTIONS, "--preview-digest"],
+      },
+      help: [
+        `Usage: sennel flow run recover-spec-gate-repair ${FLOW_TARGET_GUARD_USAGE} [--preview | --preview-digest <digest>]`,
+        "",
+        "Preview and explicitly recover a saved Gate repair proposal after fixing its validity defect.",
+        "Preserves the failed Attempt, proposal and provider cost; the normal Step publishes the accepted repair after recovery.",
+        ...FLOW_TARGET_GUARD_HELP_LINES,
+      ].join("\n"),
+    },
     "recover-draft-execution": {
       helpKey: "flow.run.recover-draft-execution",
       requiresFlow: true,

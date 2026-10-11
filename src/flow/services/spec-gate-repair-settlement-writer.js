@@ -29,6 +29,7 @@ export class SpecGateRepairSettlementWriter {
 
   settle(input, replayed = false) {
     const selected = { ...this.#publication, ...input, binding: this.#binding,
+      specGateRepairExecutionRoot: this.#ctx.executionRoot || this.#ctx.root,
       publicationLimits: this.#publicationLimits };
     try {
       if (!replayed) this.#handoffCoordinator.faultInjector({

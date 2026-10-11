@@ -1,3 +1,5 @@
+import { SpecGateRepairRecoveryPreview, SpecGateRepairRecoveryInput } from "../engine/composition/spec-gate-repair-recovery.js";
+import { SpecGateRepairRecoveryEvidence } from "./spec-gate-repair-recovery.js";
 import { FinalizationSettlementReceiptEvidence } from "./finalization-execution-identity.js";
 import { FinalizationResultEvidence } from "../steps/finalize/finalization-values.js";
 import { RetroResultEvidence } from "./retro-values.js";
@@ -1329,7 +1331,7 @@ export class TaskGateSettlementAdmission {
 }
 
 /** The normal artifact reader bound to the catalog already locked by a transition. */
-class DraftWorkerRecoveryReader {
+class CanonicalTransitionReader {
   constructor(store, view) { this.store = store; this.view = view; }
   canonicalState() { return this.view.state; }
   activityLedger() { return this.view.activities.map((activity) => activity.toJSON()); }
@@ -1337,6 +1339,9 @@ class DraftWorkerRecoveryReader {
   readCanonicalTransitionView({ read }) { return read(this.view); }
   specLocation() { return this.view.location; }
   readArtifact(input) { return this.store.readArtifact({ ...input, view: this.view }); }
+  readLatestSpecReview(input) { return this.store.readLatestSpecReview({ ...input, view: this.view }); }
+  readCurrentStepSettlement(input) { return this.store.readCurrentStepSettlement({ ...input, view: this.view }); }
+  draftStepExecutionState(input) { return this.store.draftStepExecutionState({ ...input, view: this.view }); }
 }
 
 /** An ordinary Await observes current persisted questions without publishing new work. */
@@ -1395,13 +1400,35 @@ class DraftWorkerRecoveryAdmission {
       throw new CurrentFlowStateConflictError("Draft recovery authority changed before publication");
     }
     const preview = DraftWorkerRecoveryInputPreview.capture({
-      flowManager: new DraftWorkerRecoveryReader(this.store, view), state: view.state,
+      flowManager: new CanonicalTransitionReader(this.store, view), state: view.state,
       executionRoot: this.executionRoot, targetDigest: this.targetDigest,
       claim: new DraftWorkerExecutionClaim(current.claim),
     });
     if (!preview.matches(current.checkpointReceipt.executionLifecycle.binding)
       || preview.contentDigest !== this.preview.contentDigest) {
       throw new CurrentFlowStateConflictError("Draft recovery inputs changed before publication");
+    }
+  }
+}
+
+class SpecGateRepairRecoveryAdmission {
+  constructor({ store, evidence, executionRoot, selection, settlement, completion = false }) {
+    Object.assign(this, { store, evidence, executionRoot, selection, settlement, completion });
+    Object.freeze(this);
+  }
+  assert(view) {
+    const current = new SpecGateRepairRecoveryInput({
+      flowManager: new CanonicalTransitionReader(this.store, view), state: view.state,
+      activities: view.activities, executionRoot: this.executionRoot, targetDigest: this.evidence.targetDigest,
+    });
+    current.assertEvidence(this.evidence);
+    this.evidence.assertSelection(this.selection, this.settlement);
+    if ((current.decision.recovered !== null) !== this.completion) {
+      throw new CurrentFlowStateConflictError("Gate repair recovery authority changed before publication");
+    }
+    if (this.completion && new SpecGateRepairRecoveryEvidence(
+      current.decision.recovered.result.draftSettlementReceipt.specGateRepairRecovery).digest !== this.evidence.digest) {
+      throw new CurrentFlowStateConflictError("Gate repair completion changed its recovery proof");
     }
   }
 }
@@ -2924,7 +2951,7 @@ export class CanonicalFlowManagerStore {
   }
 
   /** Read the latest review with its immutable source revision and snapshot. */
-  readLatestSpecReview({ specId = null, consumerNodeId } = {}) {
+  readLatestSpecReview({ specId = null, consumerNodeId, view = null } = {}) {
     const resolved = this.#resolveSpecId(specId);
     if (resolved === null) throw new CurrentFlowStateInvariantError("no canonical active Flow");
     const consumer = FlowArtifactUpdater.fromActivityNodeId(
@@ -2933,7 +2960,7 @@ export class CanonicalFlowManagerStore {
     if (consumer !== "spec-gate-repair") {
       throw new CurrentFlowStateInvariantError("only Spec Gate repair may read the prior review lineage");
     }
-    const artifact = this.runtime.readLatestSpecReview(resolved);
+    const artifact = this.runtime.readLatestSpecReview(resolved, view);
     if (artifact === null) return null;
     return Object.freeze({
       revision: artifact.revision,
@@ -3428,6 +3455,35 @@ export class CanonicalFlowManagerStore {
     });
   }
 
+  previewSpecGateRepairRecovery({ specId = null, executionRoot, targetDigest } = {}) {
+    const resolved = this.#resolveSpecId(specId);
+    return this.runtime.readCanonicalTransitionView(resolved, (view) => new SpecGateRepairRecoveryPreview(new SpecGateRepairRecoveryInput({
+      flowManager: new CanonicalTransitionReader(this, view), state: view.state,
+      activities: view.activities, executionRoot, targetDigest,
+    })));
+  }
+
+  recoverSpecGateRepair({ specId = null, executionRoot, targetDigest, previewDigest } = {}) {
+    const resolved = this.#resolveSpecId(specId);
+    const preview = this.previewSpecGateRepairRecovery({ specId: resolved, executionRoot, targetDigest });
+    if (preview.digest !== previewDigest) throw new CurrentFlowStateConflictError("Gate repair recovery preview changed");
+    if (preview.decision.recovered !== null) return Object.freeze({ state: this.runtime.load(resolved),
+      receipt: preview.decision.recovered.result.draftSettlementReceipt, replayed: true });
+    const state = this.runtime.load(resolved);
+    const binding = { runId: state.runId, specId: resolved, stepId: "spec-gate-repair", attempt: state.attempt };
+    const { stepResult, settlement } = preview.executionIdentity;
+    const receipt = new DraftStepSettlementReceipt({ binding, result: stepResult, settlement,
+      publication: new DraftStepSettlementPublication({ specGateRepairRecovery: preview.digest }),
+      executionLifecycle: DraftStepExecutionLifecycle.fromJSON(preview.decision.publicationReceipt.executionLifecycle),
+      specGateRepairRecovery: preview.evidence });
+    const result = resultWithDraftStepResult(resultFor("done", binding.stepId), binding.stepId, stepResult, receipt);
+    const next = this.runtime.recoverSpecGateRepair({ specId: resolved, activityId: preview.decision.activityId,
+      attempt: new CurrentAttempt({ ...state.attempt.toJSON(), failure: null }), result,
+      admission: new SpecGateRepairRecoveryAdmission({ store: this, evidence: preview.evidence, executionRoot,
+        selection: preview.selection, settlement: preview.settlement }) });
+    return Object.freeze({ state: next, receipt, replayed: false });
+  }
+
   /** Migrate only a proven, unpublished legacy checkpoint; never rerun its rejected payload. */
   recoverLegacyDraftWorkerExecution({ specId = null, targetDigest, executionRoot } = {}) {
     const resolved = this.#resolveSpecId(specId);
@@ -3436,7 +3492,7 @@ export class CanonicalFlowManagerStore {
       const state = view.state;
       const decision = resolveDraftWorkerRecovery({ state, activities: view.activities });
       const preview = DraftWorkerRecoveryInputPreview.capture({
-        flowManager: new DraftWorkerRecoveryReader(this, view), state, executionRoot, targetDigest,
+        flowManager: new CanonicalTransitionReader(this, view), state, executionRoot, targetDigest,
         claim: new DraftWorkerExecutionClaim(decision.claim),
       });
       if (!preview.matches(decision.checkpointReceipt.executionLifecycle.binding)) {
@@ -5276,10 +5332,10 @@ export class CanonicalFlowManagerStore {
   }
 
   /** Read the latest typed generation/claim authority for one active Attempt. */
-  draftStepExecutionState({ specId = null, binding } = {}) {
+  draftStepExecutionState({ specId = null, binding, view = null } = {}) {
     const resolved = this.#resolveSpecId(specId ?? binding?.specId);
     if (resolved === null) throw new CurrentFlowStateInvariantError("no canonical active Flow");
-    const snapshot = this.runtime.loadSnapshot(resolved);
+    const snapshot = view ?? this.runtime.loadSnapshot(resolved);
     if (snapshot === null) throw new CurrentFlowStateInvariantError("no canonical active Flow");
     const state = snapshot.state;
     if (binding?.runId !== state.runId || binding?.specId !== state.specId
@@ -5321,6 +5377,9 @@ export class CanonicalFlowManagerStore {
     }
     const latest = this.#latestDraftExecutionLifecycle(resolved, binding);
     if (settlement instanceof DraftExecutionSettlement) {
+      if (latest?.phase === "terminal") {
+        throw new CurrentFlowStateConflictError("Draft execution is already terminal");
+      }
       if (latest?.phase === "claimed") return latest.published();
       if (latest?.phase === "publication") return latest;
       throw new CurrentFlowStateInvariantError(
@@ -5811,8 +5870,9 @@ export class CanonicalFlowManagerStore {
       return this.runtime.readCanonicalTransitionView(resolved,
         (current) => this.#readPreparationStepSettlement(current, stepId, completed));
     }
-    if (view !== null) throw new CurrentFlowStateInvariantError("Acquired settlement view requires a preparation Step");
-    const state = this.runtime.load(resolved);
+    if (view !== null && (!(view instanceof CanonicalTransitionView) || view.state.specId !== resolved
+      || stepId !== "spec-gate-repair")) throw new CurrentFlowStateInvariantError("Acquired settlement view requires a supported Step");
+    const state = view?.state ?? this.runtime.load(resolved);
     const materializedIdentity = hasImplementationStepContract(stepId) || hasAcceptanceStepContract(stepId) || hasFinalizationStepContract(stepId) ? null
       : TaskStepIdentity.fromStateNode(state, stepId);
     const definitionStepId = materializedIdentity?.definitionId ?? stepId;
@@ -5894,7 +5954,7 @@ export class CanonicalFlowManagerStore {
       throw new CurrentFlowStateInvariantError("Completed settlement recovery requires a preparation Step");
     }
     if (state.current?.at(-1) !== stepId || state.attempt?.nodeId !== stepId) return null;
-    const activities = this.activityLedger(resolved).filter((entry) => (
+    const activities = (view?.activities ?? this.activityLedger(resolved)).filter((entry) => (
       entry.nodeId === stepId
       && entry.attemptId === state.attempt.id
       && entry.sequence === state.attempt.sequence
@@ -5933,7 +5993,7 @@ export class CanonicalFlowManagerStore {
         throw new CurrentFlowStateInvariantError("current Spec Gate Result lacks its matching publication");
       }
     } else if (["approval", "test-generate", "test-review", "test-repair", "test-gate"].includes(stepId)) {
-      result = StepResult.fromStored(stepId, activity.result.stepResult);
+      result = StepResult.fromStored(stepId, activity.result.stepResult?.toJSON?.() ?? activity.result.stepResult);
       settlement = settleRequirementTestStepResult(stepId, result);
       try {
         receipt = RequirementTestSettlementReceipt.fromJSON(activity.result.draftSettlementReceipt, {
@@ -5945,7 +6005,7 @@ export class CanonicalFlowManagerStore {
         throw new CurrentFlowStateInvariantError(`current Requirement test Result and receipt are invalid: ${error.message}`);
       }
     } else {
-      result = StepResult.fromStored(stepId, activity.result.stepResult);
+      result = StepResult.fromStored(stepId, activity.result.stepResult?.toJSON?.() ?? activity.result.stepResult);
       try {
         receipt = DraftStepSettlementReceipt.assertStored(activity.result.draftSettlementReceipt, {
           binding: { runId: state.runId, specId: state.specId, stepId, attempt: state.attempt },
@@ -6190,6 +6250,7 @@ export class CanonicalFlowManagerStore {
 
   settleDraftStepResult({
     specId = null,
+    specGateRepairAdmission = null,
     binding,
     stepResult,
     settlement,
@@ -6690,7 +6751,9 @@ export class CanonicalFlowManagerStore {
       artifactBaselines,
       testSourceBaseline,
       planGateRepairOutcome,
-      admission: preparation === null ? undefined : new PreparationSettlementAdmission({ binding, preparation }),
+      admission: specGateRepairAdmission === null && preparation === null ? undefined
+        : new CombinedAdmission(specGateRepairAdmission,
+          preparation === null ? null : new PreparationSettlementAdmission({ binding, preparation })),
       targetAttempt: settlement.requiresTargetActivation(state)
         ? commandContextAttempt(state, settlement.targetStepId) : null,
     });
@@ -6715,6 +6778,7 @@ export class CanonicalFlowManagerStore {
     gatePublication = null,
     specSelection = null,
     specGateRepairSelection = null,
+    specGateRepairExecutionRoot = null,
     specReviewWorkerSelection = null,
     executionLifecycle = undefined,
     draftReturn = null,
@@ -6741,6 +6805,7 @@ export class CanonicalFlowManagerStore {
       });
     }
     if (binding?.stepId === "spec-gate-repair") {
+      let recoveryAdmission = null;
       const completed = stepResult instanceof SpecGateRepairReadyForGateResult
         || stepResult instanceof SpecGateRepairReviewRequiredResult;
       if (completed !== (specGateRepairSelection instanceof SpecGateRepairSelection)) {
@@ -6748,6 +6813,14 @@ export class CanonicalFlowManagerStore {
       }
       if (completed) {
         specGateRepairSelection.assertResult(stepResult);
+        const recovered = this.readCurrentStepSettlement({ specId: binding.specId, stepId: binding.stepId })
+          ?.receipt.specGateRepairRecovery;
+        if (recovered != null) {
+          const evidence = new SpecGateRepairRecoveryEvidence(recovered.toJSON?.() ?? recovered);
+          evidence.assertSelection(specGateRepairSelection, settlement);
+          recoveryAdmission = new SpecGateRepairRecoveryAdmission({ store: this, evidence,
+            executionRoot: specGateRepairExecutionRoot, selection: specGateRepairSelection, settlement, completion: true });
+        }
         const baseline = artifactBaselines.length === 1
           ? CanonicalFlowArtifactBaseline.from(artifactBaselines[0]) : null;
         const source = specGateRepairSelection.facts.input;
@@ -6774,6 +6847,7 @@ export class CanonicalFlowManagerStore {
         artifactWrites, artifactRemovals, artifactBaselines,
         executionLifecycle,
         draftReturn,
+        specGateRepairAdmission: recoveryAdmission,
       });
     }
     const resolved = this.#resolveSpecId(specId ?? binding?.specId);

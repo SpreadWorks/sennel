@@ -122,7 +122,8 @@ export function readProgressBoundSpecGateRepairInput({ flowManager, state, execu
       { retryable: false, recoveryPossible: false });
   }
   const ledger = new SpecGateRepairProgressLedger({ flowManager, specId: state.specId,
-    attemptId: state.attempt.id, baseRevision: source.baseRevision, executionLifecycle });
+    attemptId: state.attempt.id, baseRevision: source.baseRevision,
+    executionLifecycle: acceptedPublication ? null : executionLifecycle });
   const activeDraftReturn = ledger.publication?.proposal.stage === "spec-gate-repair-draft-return"
     || (acceptedPublication && ledger.entries.at(-1)?.proposal.stage === "spec-gate-repair-draft-return"
       && ledger.entries.at(-1).generation === ledger.activePublicationGeneration);

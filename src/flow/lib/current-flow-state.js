@@ -1,3 +1,4 @@
+import { SPEC_GATE_REPAIR_RECOVERY_OPERATION, SpecGateRepairRecoveryDecision, SpecGateRepairRecoveryEvidence } from "./spec-gate-repair-recovery.js";
 import { FinalizationSettlementReceiptEvidence } from "./finalization-execution-identity.js";
 import { AcceptedGateDeferral } from "./accepted-gate-deferral.js";
 import { AcceptedNonblockingDecision } from "./accepted-nonblocking-decision.js";
@@ -127,6 +128,7 @@ const TRANSITION_ATTEMPT_OPERATIONS = new Set([
   "retry_recovery_attempt",
   "update_attempt",
   DRAFT_WORKER_RECOVERY_OPERATION,
+  SPEC_GATE_REPAIR_RECOVERY_OPERATION,
   TASK_GATE_CLASSIFICATION_RECOVERY_OPERATION,
   "rewind",
   "rewind_test_evidence",
@@ -2217,6 +2219,7 @@ class PersistedDraftSettlementReceipt extends DraftStepSettlementReceiptValue {
     requireExactFields(value, new Set([
       "id", "binding", "resultKind", "resultType", "resultDigest", "settlementKind",
       "targetStepId", "effects", "connector", "publicationDigest", "executionLifecycle", "awaitQuestion",
+      ...(Object.hasOwn(value, "specGateRepairRecovery") ? ["specGateRepairRecovery"] : []),
       ...(hasFinalizationStepContract(value.binding?.stepId) ? ["finalization"] : []),
       ...(["branch", "prepare-spec"].includes(value.binding?.stepId) && value.resultType !== STEP_RESULT_TYPE.ERROR
         ? ["preparation"] : []),
@@ -2322,6 +2325,12 @@ class PersistedDraftSettlementReceipt extends DraftStepSettlementReceiptValue {
       || (phase === "terminal" && ["execution", "await"].includes(this.settlementKind))) {
       throw new CurrentFlowStateInvariantError("Draft execution lifecycle phase does not match its Settlement");
     }
+    this.specGateRepairRecovery = value.specGateRepairRecovery === undefined ? null
+      : new SpecGateRepairRecoveryEvidence(value.specGateRepairRecovery);
+    if (this.specGateRepairRecovery !== null && (this.binding.stepId !== "spec-gate-repair"
+      || this.settlementKind !== "execution" || phase !== "publication")) {
+      throw new CurrentFlowStateInvariantError("Gate repair recovery requires its publication receipt");
+    }
     this.draftGateRepairSelection = value.draftGateRepairSelection === undefined
       ? null : DraftGateRepairSelection.fromJSON(value.draftGateRepairSelection);
     this.draftGateRepairSelection?.assertBinding(this.binding, this.executionLifecycle);
@@ -2341,6 +2350,7 @@ class PersistedDraftSettlementReceipt extends DraftStepSettlementReceiptValue {
       executionLifecycle: this.executionLifecycle?.toJSON() ?? null,
       awaitQuestion: this.awaitQuestion,
       ...(this.preparation === null ? {} : { preparation: this.preparation.toJSON() }),
+      ...(this.specGateRepairRecovery === null ? {} : { specGateRepairRecovery: this.specGateRepairRecovery.toJSON() }),
       ...(this.finalization === null ? {} : { finalization: this.finalization.toJSON() }),
       ...(this.draftGateRepairSelection === null ? {} : { draftGateRepairSelection: this.draftGateRepairSelection.toJSON() }),
     };
@@ -2366,6 +2376,7 @@ class PersistedDraftSettlementReceipt extends DraftStepSettlementReceiptValue {
       executionLifecycle: this.executionLifecycle?.toJSON() ?? null,
       awaitQuestion: this.awaitQuestion,
       ...(this.preparation === null ? {} : { preparation: this.preparation.toJSON() }),
+      ...(this.specGateRepairRecovery === null ? {} : { specGateRepairRecovery: this.specGateRepairRecovery.toJSON() }),
       ...(this.finalization === null ? {} : { finalization: this.finalization.toJSON() }),
       ...(this.draftGateRepairSelection === null ? {} : { draftGateRepairSelection: this.draftGateRepairSelection.toJSON() }),
     };
@@ -5422,6 +5433,13 @@ export class CurrentFlowState {
     return this.#resumeHistoricalContinuation({ root: this.root, current: this.current, attempt: replacement });
   }
 
+  recoverSpecGateRepair({ attempt, priorActivities, activity }) {
+    this.#assertExecutionActive();
+    const decision = new SpecGateRepairRecoveryDecision({ state: this, activities: priorActivities });
+    decision.assertTransition({ activity, previousAttempt: this.attempt, attempt });
+    return this.#replaceRoot(this.root, this.current, attempt);
+  }
+
   recoverLegacyDraftWorkerExecution({ attempt, priorActivities, activity }) {
     this.#assertExecutionActive();
     const decision = new DraftWorkerRecoveryDecision({ state: this, activities: priorActivities });
@@ -7468,7 +7486,7 @@ export class ActivityTransition {
       : value;
     requireExactFields(normalized, ACTIVITY_TRANSITION_FIELDS, "activity.transition");
     const { operation, nodeId, task, attempt, status, policy, outbox, approval, nonblocking, finalizeSteps, gateTaskLifecycle, stepConnectionReceipt, taskReviewStagePlan, requirementTestInitialization, requirementTestLifecycle, draftResumeReceipt, approvalTasks } = normalized;
-    if (![FLOW_CREATION_TRANSITION_OPERATION, DRAFT_COMPLETION_TRANSITION_OPERATION, DRAFT_STEP_SETTLEMENT_TRANSITION_OPERATION, CONDITIONAL_WORKER_SETTLEMENT_OPERATION, TASK_REVIEW_STAGE_TRANSITION_OPERATION, REQUIREMENT_TEST_INITIALIZATION_OPERATION, REQUIREMENT_TEST_TRANSITION_OPERATION, "advance_task_review_stage", "add_task", "add_approval_task", "start_attempt", "retry_attempt", "retry_gate_attempt", "settle_spec_gate_retry", "settle_spec_gate_recovered", "retry_recovery_attempt", "update_attempt", TASK_GATE_CLASSIFICATION_RECOVERY_OPERATION, DRAFT_WORKER_RECOVERY_OPERATION, "fail_attempt", "record_failure", "confirm_attempt", "rewind", "rewind_test_evidence", "repair_implementation", "triage_implementation_for_repair", "triage_implementation_no_repair", "repair_acceptance_review", "reopen_draft_preimplementation", "reopen_draft_task_addition", "reopen_draft_spec_correction", "plan_gate_repair", "recover_attempt", "recover_missing_producer_artifact", "recover_task_execution_overrun", "accept_final_regression_failure", "defer_failed_review", "defer_failed_gate", INTERRUPTED_FINALIZE_SYNC_OPERATION, ...LIFECYCLE_TRANSITION_OPERATIONS, ...POLICY_TRANSITION_OPERATIONS, ...OUTBOX_TRANSITION_OPERATIONS, ...ARTIFACT_PUBLICATION_TRANSITION_OPERATIONS, ...DISPATCH_APPROVAL_TRANSITION_OPERATIONS, ...OBSERVATION_TRANSITION_OPERATIONS, ...NONBLOCKING_TRANSITION_OPERATIONS, ...FINALIZE_DOWNSTREAM_TRANSITION_OPERATIONS].includes(operation)) {
+    if (![FLOW_CREATION_TRANSITION_OPERATION, DRAFT_COMPLETION_TRANSITION_OPERATION, DRAFT_STEP_SETTLEMENT_TRANSITION_OPERATION, CONDITIONAL_WORKER_SETTLEMENT_OPERATION, TASK_REVIEW_STAGE_TRANSITION_OPERATION, REQUIREMENT_TEST_INITIALIZATION_OPERATION, REQUIREMENT_TEST_TRANSITION_OPERATION, "advance_task_review_stage", "add_task", "add_approval_task", "start_attempt", "retry_attempt", "retry_gate_attempt", "settle_spec_gate_retry", "settle_spec_gate_recovered", "retry_recovery_attempt", "update_attempt", TASK_GATE_CLASSIFICATION_RECOVERY_OPERATION, DRAFT_WORKER_RECOVERY_OPERATION, SPEC_GATE_REPAIR_RECOVERY_OPERATION, "fail_attempt", "record_failure", "confirm_attempt", "rewind", "rewind_test_evidence", "repair_implementation", "triage_implementation_for_repair", "triage_implementation_no_repair", "repair_acceptance_review", "reopen_draft_preimplementation", "reopen_draft_task_addition", "reopen_draft_spec_correction", "plan_gate_repair", "recover_attempt", "recover_missing_producer_artifact", "recover_task_execution_overrun", "accept_final_regression_failure", "defer_failed_review", "defer_failed_gate", INTERRUPTED_FINALIZE_SYNC_OPERATION, ...LIFECYCLE_TRANSITION_OPERATIONS, ...POLICY_TRANSITION_OPERATIONS, ...OUTBOX_TRANSITION_OPERATIONS, ...ARTIFACT_PUBLICATION_TRANSITION_OPERATIONS, ...DISPATCH_APPROVAL_TRANSITION_OPERATIONS, ...OBSERVATION_TRANSITION_OPERATIONS, ...NONBLOCKING_TRANSITION_OPERATIONS, ...FINALIZE_DOWNSTREAM_TRANSITION_OPERATIONS].includes(operation)) {
       throw new CurrentFlowStateInvariantError(`activity.transition.operation is invalid: ${operation}`);
     }
     this.operation = operation;
@@ -7687,7 +7705,11 @@ export class ActivityTransition {
         if (priorReceipts.some((entry) => entry.id === draftReceipt.id)) {
           throw new CurrentFlowStateConflictError("Requirement test settlement receipt was already recorded");
         }
+      } else if (this.operation === SPEC_GATE_REPAIR_RECOVERY_OPERATION) {
+        new SpecGateRepairRecoveryDecision({ state, activities: priorActivities }).assertTransition({
+          activity, previousAttempt: state.attempt, attempt: this.attempt });
       } else {
+        if (draftReceipt.specGateRepairRecovery != null) throw new CurrentFlowStateConflictError("Recovery proof requires its dedicated transition");
         const resumeReceipts = priorActivities.map((entry) => entry.transition?.draftResumeReceipt)
           .filter((receipt) => receipt?.binding.attemptId === draftReceipt.binding.attemptId
             && receipt.binding.attemptSequence === draftReceipt.binding.attemptSequence);
@@ -7975,6 +7997,9 @@ export class ActivityTransition {
       }
       return state.replaceCurrentAttempt({ attempt: this.attempt });
     }
+    if (this.operation === SPEC_GATE_REPAIR_RECOVERY_OPERATION) {
+      return state.recoverSpecGateRepair({ attempt: this.attempt, priorActivities, activity });
+    }
     if (this.operation === DRAFT_WORKER_RECOVERY_OPERATION) {
       return state.recoverLegacyDraftWorkerExecution({ attempt: this.attempt, priorActivities, activity });
     }
@@ -8183,6 +8208,7 @@ export class FlowActivity {
       update_attempt: "attempt_updated",
       [TASK_GATE_CLASSIFICATION_RECOVERY_OPERATION]: "recovery",
       [DRAFT_WORKER_RECOVERY_OPERATION]: "recovery",
+      [SPEC_GATE_REPAIR_RECOVERY_OPERATION]: "recovery",
       fail_attempt: "attempt_failed",
       record_failure: "failure_recorded",
       confirm_attempt: "result_confirmed",
@@ -8245,10 +8271,10 @@ export class FlowActivity {
       throw new CurrentFlowStateInvariantError("flow_created Activity requires its deterministic first-Activity identity");
     }
     this.result = result == null ? null : result instanceof NodeResult ? result : new NodeResult(result);
-    if (["confirm_attempt", INTERRUPTED_FINALIZE_SYNC_OPERATION, DRAFT_WORKER_RECOVERY_OPERATION, DRAFT_COMPLETION_TRANSITION_OPERATION, DRAFT_STEP_SETTLEMENT_TRANSITION_OPERATION, CONDITIONAL_WORKER_SETTLEMENT_OPERATION, TASK_REVIEW_STAGE_TRANSITION_OPERATION, "advance_task_review_stage", REQUIREMENT_TEST_INITIALIZATION_OPERATION, REQUIREMENT_TEST_TRANSITION_OPERATION, "fail_attempt", "settle_spec_gate_retry", "settle_spec_gate_recovered", "record_failure", "continue_nonblocking", "accept_final_regression_failure", "defer_failed_review", "defer_failed_gate", "repair_implementation", "triage_implementation_for_repair", "triage_implementation_no_repair", "repair_acceptance_review"].includes(this.transition.operation) && this.result == null) {
+    if (["confirm_attempt", INTERRUPTED_FINALIZE_SYNC_OPERATION, DRAFT_WORKER_RECOVERY_OPERATION, SPEC_GATE_REPAIR_RECOVERY_OPERATION, DRAFT_COMPLETION_TRANSITION_OPERATION, DRAFT_STEP_SETTLEMENT_TRANSITION_OPERATION, CONDITIONAL_WORKER_SETTLEMENT_OPERATION, TASK_REVIEW_STAGE_TRANSITION_OPERATION, "advance_task_review_stage", REQUIREMENT_TEST_INITIALIZATION_OPERATION, REQUIREMENT_TEST_TRANSITION_OPERATION, "fail_attempt", "settle_spec_gate_retry", "settle_spec_gate_recovered", "record_failure", "continue_nonblocking", "accept_final_regression_failure", "defer_failed_review", "defer_failed_gate", "repair_implementation", "triage_implementation_for_repair", "triage_implementation_no_repair", "repair_acceptance_review"].includes(this.transition.operation) && this.result == null) {
       throw new CurrentFlowStateInvariantError("completed Attempt Activity requires a result");
     }
-    if (!["confirm_attempt", INTERRUPTED_FINALIZE_SYNC_OPERATION, DRAFT_WORKER_RECOVERY_OPERATION, DRAFT_COMPLETION_TRANSITION_OPERATION, DRAFT_STEP_SETTLEMENT_TRANSITION_OPERATION, CONDITIONAL_WORKER_SETTLEMENT_OPERATION, TASK_REVIEW_STAGE_TRANSITION_OPERATION, "advance_task_review_stage", REQUIREMENT_TEST_INITIALIZATION_OPERATION, REQUIREMENT_TEST_TRANSITION_OPERATION, "fail_attempt", "settle_spec_gate_retry", "settle_spec_gate_recovered", "record_failure", "continue_nonblocking", "accept_final_regression_failure", "defer_failed_review", "defer_failed_gate", "repair_implementation", "triage_implementation_for_repair", "triage_implementation_no_repair", "repair_acceptance_review", "plan_gate_repair", "reopen_draft_preimplementation", "rewind_test_evidence"].includes(this.transition.operation) && this.result !== null) {
+    if (!["confirm_attempt", INTERRUPTED_FINALIZE_SYNC_OPERATION, DRAFT_WORKER_RECOVERY_OPERATION, SPEC_GATE_REPAIR_RECOVERY_OPERATION, DRAFT_COMPLETION_TRANSITION_OPERATION, DRAFT_STEP_SETTLEMENT_TRANSITION_OPERATION, CONDITIONAL_WORKER_SETTLEMENT_OPERATION, TASK_REVIEW_STAGE_TRANSITION_OPERATION, "advance_task_review_stage", REQUIREMENT_TEST_INITIALIZATION_OPERATION, REQUIREMENT_TEST_TRANSITION_OPERATION, "fail_attempt", "settle_spec_gate_retry", "settle_spec_gate_recovered", "record_failure", "continue_nonblocking", "accept_final_regression_failure", "defer_failed_review", "defer_failed_gate", "repair_implementation", "triage_implementation_for_repair", "triage_implementation_no_repair", "repair_acceptance_review", "plan_gate_repair", "reopen_draft_preimplementation", "rewind_test_evidence"].includes(this.transition.operation) && this.result !== null) {
       throw new CurrentFlowStateInvariantError("only completed Attempt Activity may carry a result");
     }
     if (this.transition.operation === "reopen_draft_preimplementation" && this.result !== null
@@ -8300,7 +8326,7 @@ export class FlowActivity {
         throw new CurrentFlowStateInvariantError("Activity transition Attempt nodeId must match the Activity nodeId");
       }
     }
-    if (["update_attempt", TASK_GATE_CLASSIFICATION_RECOVERY_OPERATION, DRAFT_WORKER_RECOVERY_OPERATION].includes(this.transition.operation)) {
+    if (["update_attempt", TASK_GATE_CLASSIFICATION_RECOVERY_OPERATION, DRAFT_WORKER_RECOVERY_OPERATION, SPEC_GATE_REPAIR_RECOVERY_OPERATION].includes(this.transition.operation)) {
       if (this.attemptId !== this.transition.attempt.id || this.sequence !== this.transition.attempt.sequence) {
         throw new CurrentFlowStateInvariantError("Attempt replacement Activity identity must match its replacement Attempt");
       }
@@ -8791,7 +8817,7 @@ function assertJournalAttemptIdentities(entries, { requireContiguous = false } =
       }
       registerIdentity(entry.attemptId, entry.sequence, known.nodeId);
     }
-    if (["update_attempt", TASK_GATE_CLASSIFICATION_RECOVERY_OPERATION, DRAFT_WORKER_RECOVERY_OPERATION].includes(entry.transition.operation)) {
+    if (["update_attempt", TASK_GATE_CLASSIFICATION_RECOVERY_OPERATION, DRAFT_WORKER_RECOVERY_OPERATION, SPEC_GATE_REPAIR_RECOVERY_OPERATION].includes(entry.transition.operation)) {
       if (entry.transition.attempt.nodeId !== entry.nodeId) {
         throw new CurrentFlowStateInvariantError("updated Attempt nodeId must match its Activity nodeId");
       }
@@ -9956,26 +9982,28 @@ export class CurrentFlowVersionStore {
     });
   }
   /** Read the newest validated review snapshot, retaining its original revision. */
-  readLatestSpecReview() {
+  readLatestSpecReview(view = null) {
+    const read = (catalog, snapshot) => {
+      const authority = this.#assertSpecRevisionAuthority(catalog);
+      this.#assertPersistedIdentity(snapshot.state);
+      const publications = snapshot.activities.filter((activity) => (
+        activity.nodeId === "spec-review" && activity.reviewPublication?.stage === "spec-review"
+      ));
+      for (let revision = authority.revision; revision >= 1; revision -= 1) {
+        const artifact = this.#readSpecReviewRevision(catalog, revision);
+        if (artifact !== null && publications.some((activity) => activity.reviewPublication.identity.matches(artifact.review.identity))) return artifact;
+      }
+      return null;
+    };
+    if (view !== null) {
+      if (!(view instanceof CanonicalTransitionView) || view.state.specId !== this.location.specId.toString()) {
+        throw new CurrentFlowStateInvariantError("Prior Spec review requires its acquired canonical view");
+      }
+      return read(view.catalog, view);
+    }
     return this.catalogStore.read({
       relativePaths: [resolvedArtifact("flow.state").relativePath],
-      read: (catalog) => {
-        const authority = this.#assertSpecRevisionAuthority(catalog);
-        const snapshot = this.#store().loadSnapshot();
-        this.#assertPersistedIdentity(snapshot.state);
-        const publications = snapshot.activities.filter((activity) => (
-          activity.nodeId === "spec-review" && activity.reviewPublication?.stage === "spec-review"
-        ));
-        for (let revision = authority.revision; revision >= 1; revision -= 1) {
-          const read = this.#readSpecReviewRevision(catalog, revision);
-          if (read === null) continue;
-          // Repair rebases preserve audit entries, but do not constitute a new
-          // review execution. Only the original publication proves this basis.
-          if (!publications.some((activity) => activity.reviewPublication.identity.matches(read.review.identity))) continue;
-          return read;
-        }
-        return null;
-      },
+      read: (catalog) => read(catalog, this.#store().loadSnapshot()),
     });
   }
   #readSpecReviewRevision(catalog, revision) {
@@ -10136,8 +10164,8 @@ export class CurrentFlowVersionStore {
     if (admission !== null && typeof admission.assert !== "function") {
       throw new CurrentFlowStateInvariantError("canonical admission must provide assert()");
     }
-    if (activity.transition.operation === DRAFT_WORKER_RECOVERY_OPERATION && admission === null) {
-      throw new CurrentFlowStateInvariantError("Draft execution recovery requires input proof under the publication lock");
+    if ([DRAFT_WORKER_RECOVERY_OPERATION, SPEC_GATE_REPAIR_RECOVERY_OPERATION].includes(activity.transition.operation) && admission === null) {
+      throw new CurrentFlowStateInvariantError("Execution recovery requires input proof under the publication lock");
     }
     const approvalTaskAddition = activity.transition.operation === "add_approval_task";
     if (approvalTaskAddition && !(admission instanceof ApprovalTaskAdmission)) {

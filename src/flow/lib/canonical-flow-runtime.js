@@ -1,3 +1,4 @@
+import { SPEC_GATE_REPAIR_RECOVERY_OPERATION } from "./spec-gate-repair-recovery.js";
 /**
  * Canonical Flow Version 1 runtime.
  *
@@ -39,6 +40,7 @@ const TYPE_FOR_OPERATION = Object.freeze({
   update_attempt: "attempt_updated",
   [TASK_GATE_CLASSIFICATION_RECOVERY_OPERATION]: "recovery",
   [DRAFT_WORKER_RECOVERY_OPERATION]: "recovery",
+  [SPEC_GATE_REPAIR_RECOVERY_OPERATION]: "recovery",
   fail_attempt: "attempt_failed",
   record_failure: "failure_recorded",
   confirm_attempt: "result_confirmed",
@@ -186,8 +188,8 @@ export class CanonicalFlowRuntime {
   readCurrentSpecReview(specId, input = {}) {
     return this.store(specId).readCurrentSpecReview(input);
   }
-  readLatestSpecReview(specId) {
-    return this.store(specId).readLatestSpecReview();
+  readLatestSpecReview(specId, view = null) {
+    return this.store(specId).readLatestSpecReview(view);
   }
   readCurrentSpecReviewInput(specId) {
     return this.store(specId).readCurrentSpecReviewInput();
@@ -406,6 +408,14 @@ export class CanonicalFlowRuntime {
       attempt: requiredAttempt(attempt, "recoverTaskGateClassification"),
       references,
       admission,
+    });
+  }
+
+  recoverSpecGateRepair({ specId, activityId, attempt, result, admission } = {}) {
+    const state = this.#state(specId);
+    return this.#applyAttemptTransition(specId, state, {
+      id: activityId, nodeId: this.#currentNodeId(state), operation: SPEC_GATE_REPAIR_RECOVERY_OPERATION,
+      attempt: requiredAttempt(attempt, "recoverSpecGateRepair"), result, admission,
     });
   }
 
@@ -1333,7 +1343,7 @@ export class CanonicalFlowRuntime {
     const target = requiredText(nodeId, "transition nodeId");
     const node = state.findNode(target);
     if (node === null) throw new CurrentFlowStateInvariantError(`transition node is not part of this Flow: ${target}`);
-    const transitionAttempt = ["confirm_attempt", "start_attempt", "rewind", "rewind_test_evidence", "repair_implementation", "triage_implementation_for_repair", "triage_implementation_no_repair", "repair_acceptance_review", "reopen_draft_preimplementation", "reopen_draft_task_addition", "reopen_draft_spec_correction", "plan_gate_repair", "recover_attempt", "recover_missing_producer_artifact", "recover_task_execution_overrun", "retry_attempt", "retry_gate_attempt", "settle_spec_gate_retry", "settle_spec_gate_recovered", "retry_recovery_attempt", "update_attempt", TASK_GATE_CLASSIFICATION_RECOVERY_OPERATION, DRAFT_WORKER_RECOVERY_OPERATION, "accept_final_regression_failure", "defer_failed_review", "defer_failed_gate", "continue_nonblocking", "advance_task_review_stage", "initialize_requirement_test_lifecycle", "advance_requirement_test_lifecycle"].includes(operation)
+    const transitionAttempt = ["confirm_attempt", "start_attempt", "rewind", "rewind_test_evidence", "repair_implementation", "triage_implementation_for_repair", "triage_implementation_no_repair", "repair_acceptance_review", "reopen_draft_preimplementation", "reopen_draft_task_addition", "reopen_draft_spec_correction", "plan_gate_repair", "recover_attempt", "recover_missing_producer_artifact", "recover_task_execution_overrun", "retry_attempt", "retry_gate_attempt", "settle_spec_gate_retry", "settle_spec_gate_recovered", "retry_recovery_attempt", "update_attempt", TASK_GATE_CLASSIFICATION_RECOVERY_OPERATION, DRAFT_WORKER_RECOVERY_OPERATION, SPEC_GATE_REPAIR_RECOVERY_OPERATION, "accept_final_regression_failure", "defer_failed_review", "defer_failed_gate", "continue_nonblocking", "advance_task_review_stage", "initialize_requirement_test_lifecycle", "advance_requirement_test_lifecycle"].includes(operation)
       ? attempt
       : null;
     const activityAttempt = (operation === "defer_failed_gate" && acceptedDeferral instanceof AcceptedGateDeferral)

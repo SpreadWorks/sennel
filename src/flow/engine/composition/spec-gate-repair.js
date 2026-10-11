@@ -36,7 +36,7 @@ function changedLocationPlanError({ stepId, attemptId, context, locationPlan }) 
       savedBatchDigest: context.batchDigest, currentBatchDigest: batch?.digest ?? null } });
 }
 
-class SpecGateRepairPublishedDecision {
+export class SpecGateRepairPublishedDecision {
   constructor({ source, ledger, refreshed, proposal }) {
     if (proposal.stage === "spec-gate-repair-input-unavailable") {
       this.facts = new SpecGateRepairWorkerFacts({ input: source, proposal });
@@ -75,7 +75,7 @@ export async function preparePublishedSpecGateRepairArguments({ ctx, state: requ
   } });
   const completed = ctx.flowManager.readCurrentStepSettlement({ specId: state.specId,
     stepId: "spec-gate-repair" });
-  if (completed?.result instanceof StepErrorResult && completed.receipt.settlementKind === "failure") {
+  if (completed?.result.type === "error" && completed.receipt.settlementKind === "failure") {
     return new PreparedStepReplay({ completed: true, replayed: true, stepId: "spec-gate-repair",
       stepResult: completed.result, receipt: completed.receipt, settlementReceipt: completed.receipt });
   }
