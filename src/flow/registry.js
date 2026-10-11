@@ -16,6 +16,7 @@ import { hasExplicitOption } from "../lib/flow-options.js";
 import { FatalPostHookError } from "../lib/post-hook-error.js";
 import { FLOW_QUERY_HELP } from "./query-contract.js";
 import crypto from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import fs from "fs";
 import path from "path";
 import {
@@ -77,6 +78,80 @@ import { prepareStepRegistration } from "./engine/composition/prepare.js";
 import { flowStepExecutionRegistration, gateStepExecutionRegistration } from "./engine/composition/registered-step-execution.js";
 import { isStepPersistenceFailure } from "./lib/definition-lifecycle-failure.js";
 import { StepAdmissionRefusal, isStepAdmissionRefusal } from "./lib/step-admission-refusal.js";
+import { prepareFinalizationExecution } from "./engine/composition/finalization.js";
+import { FinalizeSyncExecutionError } from "./lib/finalize-sync-diagnostics.js";
+
+function assertFinalizationAdmission(ctx, stepId) {
+  const registration = flowStepExecutionRegistration(stepId);
+  const state = ctx.flowManager.canonicalState(ctx.specId ?? ctx.flowState.specId);
+  const receipt = state.lifecycle.state === "finalized" ? ctx.flowManager.readCurrentStepSettlement({
+    specId: state.specId, stepId, completed: true })?.receipt ?? null : null;
+  registration.executionContract.select({ ctx, stepId, command: stepId, registration, receipt });
+}
+
+async function replayFinalizationCommand(ctx, stepId, result, loadCommand, adapterName) {
+  const data = result?.data ?? result;
+  if (stepId === "finalize-sync" || stepId === "finalize-cleanup"
+    || stepId === "finalize-merge" && data.strategy !== "pr") switchToMainRepoFlowAuthority(ctx);
+  const execute = ctx.viaFlowDispatch === true ? (await loadDispatchCommand()).executeFinalizationDispatch
+    : (await loadCommand())[adapterName];
+  const completed = ctx.flowManager.readCurrentStepSettlement({
+    specId: ctx.specId ?? ctx.flowState.specId, stepId, completed: true });
+  let receipt = data.settlementReceipt ?? null;
+  if (receipt === null && completed !== null) {
+    if (!isDeepStrictEqual(completed.receipt.finalization.commandResult, result?.toJSON?.() ?? result)) {
+      throw new StepAdmissionRefusal("Finalization replay changed its persisted command observation");
+    }
+    receipt = completed.receipt;
+  }
+  if (receipt !== null && receipt !== undefined) {
+    await execute({ ctx, flowManager: ctx.flowManager, stepId, receipt });
+  } else {
+    const saved = ctx.flowManager.readCurrentStepSettlement({ specId: ctx.specId ?? ctx.flowState.specId, stepId });
+    const preparation = prepareFinalizationExecution({ ctx, stepId, commandResult: data, execution: saved?.result.execution ?? null });
+    try { await execute({ ctx, flowManager: ctx.flowManager, stepId, preparation, commandResult: data }); }
+    catch (error) { rethrowOriginalStepPersistenceFailure(error); }
+  }
+  ctx.flowState = ctx.flowManager.loadReadOnly(ctx.specId ?? ctx.flowState.specId);
+}
+
+async function prepareFinalizationCommand(ctx, stepId, loadCommand, adapterName) {
+  assertFinalizationAdmission(ctx, stepId);
+  const owner = FinalizeFlowStateOwner.fromContext(ctx);
+  const entry = owner.outbox().status(finalizationOutboxIdentity(owner.loadReadOnly(), stepId));
+  if (entry?.status === "done") { ctx.flowOutboxEntry = entry; return; }
+  const mod = await loadCommand();
+  const command = new mod.default();
+  if (typeof command.prepareEffect === "function") ctx.finalizationEffectPreparation = await command.prepareEffect(ctx);
+  await applyLifecycleActionsFromRegistry(ctx, { event: "finalize:pre", command: stepId });
+  if (ctx.flowOutboxEntry?.status === "done") return;
+  const preparation = prepareFinalizationExecution({ ctx, stepId });
+  ctx.finalizationExecution = preparation.evidence.execution;
+  const checkpoint = ctx.flowManager.readCurrentStepSettlement({ specId: ctx.specId ?? ctx.flowState.specId, stepId });
+  await mod[adapterName]({ ctx, flowManager: ctx.flowManager, stepId,
+    ...(checkpoint?.settlement.kind === "execution" ? { receipt: checkpoint.receipt } : { preparation }) });
+}
+
+function preservesFinalizationCanonicalState(error) {
+  return isStepAdmissionRefusal(error) || isStepPersistenceFailure(error)
+    || ["REPOSITORY_FLOW_OPERATION_BUSY", "REPOSITORY_MAINTENANCE_BUSY"].includes(error?.code);
+}
+
+async function persistFinalizationCommandError(ctx, stepId, error, loadCommand, adapterName) {
+  if (preservesFinalizationCanonicalState(error)) return;
+  if (["finalize-sync", "finalize-cleanup"].includes(stepId)) switchToMainRepoFlowAuthority(ctx);
+  const saved = ctx.flowManager.readCurrentStepSettlement({ specId: ctx.specId ?? ctx.flowState.specId, stepId });
+  if (saved?.result.type !== "loop-required") return;
+  const commandResult = stepId === "finalize-sync" && error instanceof FinalizeSyncExecutionError
+    ? { status: "skipped", warning: true, failure: { code: error.code, message: error.message, data: error.data },
+        diagnostics: error.data.diagnostics } : null;
+  const preparation = prepareFinalizationExecution({ ctx, stepId, commandResult,
+    failure: commandResult === null ? error : null, execution: saved.result.execution });
+  const execute = ctx.viaFlowDispatch === true ? (await loadDispatchCommand()).executeFinalizationDispatch
+    : (await loadCommand())[adapterName];
+  await execute({ ctx, flowManager: ctx.flowManager, stepId, preparation, commandResult });
+  ctx.flowState = ctx.flowManager.loadReadOnly(ctx.specId ?? ctx.flowState.specId);
+}
 
 function fatalDraftPersistenceFailure(error, fallbackCode) {
   const failure = new FatalPostHookError(fallbackCode, error?.message || String(error), {
@@ -289,26 +364,6 @@ function releaseFinalizeSyncOperation(ctx) {
   else delete ctx.repositoryOperationOwnerToken;
   delete ctx.finalizeSyncPreviousRepositoryOperationOwnerToken;
   delete ctx.finalizeSyncOperation;
-}
-
-/**
- * Reset finalize-sync / finalize-cleanup status back to 'pending' on the given
- * flow manager when they are currently 'skipped'. The skipped status is set by
- * the finalize-merge onError hook on a prior failed merge; on retry success we
- * need promoteNextPendingLeaf to advance to finalize-sync, which it cannot do
- * while those steps are skipped.
- */
-/**
- * @returns {boolean} true when at least one leaf was reset, false when no-op.
- */
-function resetSkippedDownstreamSteps(stateOwner, stepIds = []) {
-  const state = stateOwner.loadReadOnly();
-  if (!state) return false;
-  const flat = flattenSteps(state.steps || []);
-  const resetIds = stepIds.filter((id) => flat.find((step) => step.id === id)?.status === "skipped");
-  if (resetIds.length === 0) return false;
-  stateOwner.finalizeDownstream({ action: "reset", stepIds: resetIds });
-  return true;
 }
 
 /**
@@ -858,36 +913,6 @@ class RegistryLifecycleAdapter {
       });
       return;
     }
-    if (handler === "prepareFinalizeMerge") {
-      const metadataPreflight = finalize.readFinalizeMergeMetadataPreflight({
-        root: this.ctx.root,
-        specId: this.ctx.specId,
-        specRoot: this.ctx.specRoot?.toString(),
-      });
-      if (finalize.hasFinalizeMergeTargetExternalDirty({
-        root: this.ctx.root,
-        specId: this.ctx.specId,
-        specRoot: this.ctx.specRoot?.toString(),
-        preflight: metadataPreflight,
-      })) {
-        return;
-      }
-      const mutated = resetSkippedDownstreamSteps(
-        this.finalizeStateOwner(),
-        args?.steps || [],
-      );
-      if (mutated) {
-        finalize.commitFinalizeMergeMetadataIfSafe({
-          root: this.ctx.root,
-          specId: this.ctx.specId,
-          specRoot: this.ctx.specRoot?.toString(),
-          preflight: metadataPreflight,
-          includeFlowJson: true,
-          message: "chore: reset downstream finalize steps for retry",
-        });
-      }
-      return;
-    }
     if (handler === "resolveMainRepoFlowManager") {
       if (args?.unlessPr && this.result?.strategy === "pr") return;
       switchToMainRepoFlowAuthority(this.ctx);
@@ -918,10 +943,6 @@ class RegistryLifecycleAdapter {
       if (current?.schemaRevision !== CURRENT_FLOW_SCHEMA_REVISION) {
         throw new Error("finalize lifecycle hooks require an active canonical Flow state");
       }
-      return;
-    }
-    if (handler === "resetSkippedDownstreamSteps") {
-      resetSkippedDownstreamSteps(this.finalizeStateOwner(), args?.steps || []);
       return;
     }
     if (handler === "commitFinalizeMergeConflictMetadata") {
@@ -1118,6 +1139,11 @@ function loadAcceptanceReviewCommand() { return import("./lib/run-acceptance-rev
 function loadAcceptanceDecisionCommand() { return import("./lib/set-acceptance-decision.js"); }
 function loadFinalRegressionCommand() { return import("./lib/run-final-regression.js"); }
 function loadReportCommand() { return import("./lib/run-report.js"); }
+function loadFinalizeCommitCommand() { return import("./lib/run-finalize-commit.js"); }
+function loadFinalizeMergeCommand() { return import("./lib/run-finalize-merge.js"); }
+function loadFinalizeSyncCommand() { return import("./lib/run-finalize-sync.js"); }
+function loadFinalizeCleanupCommand() { return import("./lib/run-finalize-cleanup.js"); }
+function loadRecoverFinalizationCommand() { return import("./lib/run-recover-finalization.js"); }
 
 function assertAcceptanceCommandSettled(ctx, stepId) {
   const specId = ctx.specId ?? ctx.flowState.specId;
@@ -2162,7 +2188,7 @@ export const FLOW_COMMANDS = {
       helpKey: "flow.run.finalize-commit",
       failureOwnership: DefinitionFailureOwnership.lifecycleOutbox(),
       runtimeLog: { stepId: "finalize-commit" },
-      command: () => import("./lib/run-finalize-commit.js"),
+      command: loadFinalizeCommitCommand,
       args: {
         flags: FLOW_TARGET_GUARD_FLAGS,
         options: ["--message", ...FLOW_RUN_OPTIONS],
@@ -2177,18 +2203,14 @@ export const FLOW_COMMANDS = {
         "  --agent-work-dir <path>  Per-invocation agent/tmp base directory",
       ].join("\n"),
       async pre(ctx) {
-        await applyLifecycleActionsFromRegistry(ctx, {
-          event: "finalize:pre",
-          command: "finalize-commit",
-        });
+        await prepareFinalizationCommand(ctx, "finalize-commit", () => loadFinalizeCommitCommand(), "executeFinalizeCommitInput");
       },
       async post(ctx, result) {
-        await applyLifecycleActionsFromRegistry(ctx, {
-          event: "finalize:post",
-          command: "finalize-commit",
-        }, result);
+        await replayFinalizationCommand(ctx, "finalize-commit", result, () => loadFinalizeCommitCommand(), "executeFinalizeCommitInput");
       },
       async onError(ctx, err) {
+        if (preservesFinalizationCanonicalState(err)) return;
+        await persistFinalizationCommandError(ctx, "finalize-commit", err, () => loadFinalizeCommitCommand(), "executeFinalizeCommitInput");
         await applyLifecycleActionsFromRegistry(ctx, {
           event: "finalize:onError",
           command: "finalize-commit",
@@ -2201,7 +2223,7 @@ export const FLOW_COMMANDS = {
       // Its failure handler commits the complete Flow metadata transaction.
       // Do not append a second runtime-log state mutation after that commit.
       runtimeLog: { stepMetadata: false },
-      command: () => import("./lib/run-finalize-merge.js"),
+      command: loadFinalizeMergeCommand,
       args: { flags: FLOW_TARGET_GUARD_FLAGS, options: [...FLOW_RUN_OPTIONS] },
       help: [
         "Usage: sennel flow run finalize-merge",
@@ -2209,18 +2231,14 @@ export const FLOW_COMMANDS = {
         "Squash merge or PR creation. On failure, subsequent steps are skipped.",
       ].join("\n"),
       async pre(ctx) {
-        await applyLifecycleActionsFromRegistry(ctx, {
-          event: "finalize:pre",
-          command: "finalize-merge",
-        });
+        await prepareFinalizationCommand(ctx, "finalize-merge", () => loadFinalizeMergeCommand(), "executeFinalizeMergeInput");
       },
       async post(ctx, result) {
-        await applyLifecycleActionsFromRegistry(ctx, {
-          event: "finalize:post",
-          command: "finalize-merge",
-        }, result);
+        await replayFinalizationCommand(ctx, "finalize-merge", result, () => loadFinalizeMergeCommand(), "executeFinalizeMergeInput");
       },
       async onError(ctx, err) {
+        if (preservesFinalizationCanonicalState(err)) return;
+        await persistFinalizationCommandError(ctx, "finalize-merge", err, () => loadFinalizeMergeCommand(), "executeFinalizeMergeInput");
         await applyLifecycleActionsFromRegistry(ctx, {
           event: "finalize:onError",
           command: "finalize-merge",
@@ -2231,7 +2249,7 @@ export const FLOW_COMMANDS = {
       helpKey: "flow.run.finalize-sync",
       failureOwnership: DefinitionFailureOwnership.lifecycleOutbox(),
       runtimeLog: { stepId: "finalize-sync", authority: "main-repository" },
-      command: () => import("./lib/run-finalize-sync.js"),
+      command: loadFinalizeSyncCommand,
       args: { flags: FLOW_TARGET_GUARD_FLAGS, options: [...FLOW_RUN_OPTIONS] },
       help: [
         "Usage: sennel flow run finalize-sync",
@@ -2239,12 +2257,17 @@ export const FLOW_COMMANDS = {
         "Build docs on main repo after merge and commit.",
       ].join("\n"),
       async pre(ctx) {
+        assertFinalizationAdmission(ctx, "finalize-sync");
         acquireFinalizeSyncOperation(ctx);
         try {
           await applyLifecycleActionsFromRegistry(ctx, {
             event: "finalize:pre",
             command: finalizeCommand("sync"),
           });
+          const preparation = prepareFinalizationExecution({ ctx, stepId: "finalize-sync" });
+          ctx.finalizationExecution = preparation.evidence.execution;
+          await (await loadFinalizeSyncCommand()).executeFinalizeSyncInput({ ctx, flowManager: ctx.flowManager,
+            stepId: "finalize-sync", preparation });
         } catch (error) {
           releaseFinalizeSyncOperation(ctx);
           throw error;
@@ -2252,17 +2275,15 @@ export const FLOW_COMMANDS = {
       },
       async post(ctx, result) {
         try {
-          await applyLifecycleActionsFromRegistry(ctx, {
-            event: "finalize:post",
-            command: finalizeCommand("sync"),
-          }, result);
+          await replayFinalizationCommand(ctx, "finalize-sync", result, () => loadFinalizeSyncCommand(), "executeFinalizeSyncInput");
         } finally {
           releaseFinalizeSyncOperation(ctx);
         }
       },
       async onError(ctx, err) {
         try {
-          if (["REPOSITORY_FLOW_OPERATION_BUSY", "REPOSITORY_MAINTENANCE_BUSY"].includes(err?.code)) return;
+          if (preservesFinalizationCanonicalState(err)) return;
+          await persistFinalizationCommandError(ctx, "finalize-sync", err, () => loadFinalizeSyncCommand(), "executeFinalizeSyncInput");
           await applyLifecycleActionsFromRegistry(ctx, {
             event: "finalize:onError",
             command: finalizeCommand("sync"),
@@ -2277,7 +2298,7 @@ export const FLOW_COMMANDS = {
       failureOwnership: DefinitionFailureOwnership.lifecycleOutbox(),
       runtimeLog: { stepMetadata: false, authority: "main-repository" },
       explicitTargetResolution: true,
-      command: () => import("./lib/run-finalize-cleanup.js"),
+      command: loadFinalizeCleanupCommand,
       args: { flags: withTargetGuardFlags(["--auto-rescue", "--force"]), options: [...FLOW_RUN_OPTIONS] },
       help: [
         "Usage: sennel flow run finalize-cleanup [--auto-rescue | --force]",
@@ -2296,15 +2317,14 @@ export const FLOW_COMMANDS = {
         "--auto-rescue and --force are mutually exclusive.",
       ].join("\n"),
       async pre(ctx) {
-        await applyLifecycleActionsFromRegistry(ctx, {
-          event: "finalize:pre",
-          command: finalizeCommand("cleanup"),
-        });
+        await prepareFinalizationCommand(ctx, "finalize-cleanup", () => loadFinalizeCleanupCommand(), "executeFinalizeCleanupInput");
       },
       // The command body removes the worktree before returning. The dispatcher
       // then records the closed runtime log and commits the shared spec + docs
       // from repository-owned modules before clearing the active entry.
       async onError(ctx, err) {
+        if (preservesFinalizationCanonicalState(err)) return;
+        await persistFinalizationCommandError(ctx, "finalize-cleanup", err, () => loadFinalizeCleanupCommand(), "executeFinalizeCleanupInput");
         await applyLifecycleActionsFromRegistry(ctx, {
           event: "finalize:onError",
           command: finalizeCommand("cleanup"),
@@ -2521,7 +2541,7 @@ export const FLOW_COMMANDS = {
       helpKey: "flow.run.recover-finalization",
       runtimeLog: { stepMetadata: false, authority: "main-repository" },
       explicitTargetResolution: true,
-      command: () => import("./lib/run-recover-finalization.js"),
+      command: loadRecoverFinalizationCommand,
       args: {
         flags: FLOW_TARGET_GUARD_FLAGS,
         options: [...FLOW_RUN_OPTIONS],

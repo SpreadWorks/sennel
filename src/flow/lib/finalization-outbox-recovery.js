@@ -15,6 +15,7 @@ import {
   resolveFinalizationRecovery,
 } from "../definition.js";
 import { hasOutboxCommit } from "./run-finalize.js";
+import { FinalizeCleanupEffectPreparation } from "./finalize-cleanup-journal.js";
 import { FinalizeMergeTransaction } from "./finalize-merge-transaction.js";
 import {
   BlockedDirective,
@@ -31,6 +32,7 @@ const FINALIZATION_COMMANDS = Object.freeze({
   "finalize-commit": "finalize-commit",
   "finalize-merge": "finalize-merge",
   "finalize-sync": "finalize-sync",
+  "finalize-cleanup": "finalize-cleanup",
 });
 
 function recoveryCommand(command, state, binding) {
@@ -185,6 +187,10 @@ export class FinalizationOutboxRecovery {
 
   #isDurable(entry) {
     if (this.target.stepId === "report") return this.#hasCanonicalReport(entry);
+    if (this.target.stepId === "finalize-cleanup") {
+      try { return FinalizeCleanupEffectPreparation.acquire(this.ctx, { failed: true }) !== null; }
+      catch { return false; }
+    }
     const mainRoot = mainRootFor(this.ctx, this.state);
     if (this.target.stepId === "finalize-merge") {
       return hasOutboxCommit({
@@ -276,7 +282,7 @@ export class FinalizationOutboxRecovery {
       const location = this.ctx.flowManager.specLocation(this.state.specId);
       const flowArtifactRegistry = new FinalizeFlowArtifactRegistry(location.relativeSpecFile);
       new FinalizeMergeTransaction({
-        featureRoot: this.ctx.executionRoot || this.ctx.root,
+        featureRoot: this.ctx.flowManager.executionRoot(this.state),
         mainRoot: mainRootFor(this.ctx, this.state),
         baseBranch: this.state.baseBranch,
         featureBranch: this.state.featureBranch,

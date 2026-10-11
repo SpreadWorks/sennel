@@ -57,6 +57,21 @@ class SourceWorkerUpgradePublicationClaim extends ArtifactPublicationClaim {
   }
 }
 
+/** Cleanup confirmation and the paired Flow lifecycle event share one publication. */
+class FinalizationCompletionPublicationClaim extends ArtifactPublicationClaim {
+  assertSlot(slot, { contractBound = false, logicalKey = null } = {}) {
+    if (["flow.state", "flow.activities"].includes(logicalKey)) {
+      const authority = logicalKey === "flow.state" ? "repository-metadata" : "canonical-flow-artifacts";
+      if (!(slot instanceof ArtifactAuthoritySlot) || slot.publicationStep !== "system"
+        || slot.authority.toString() !== authority) {
+        throw new Error("Finalization completion requires the system lifecycle state and ledger slots");
+      }
+      return slot;
+    }
+    return super.assertSlot(slot, { contractBound });
+  }
+}
+
 const PRODUCERS = new Set(["cli", "worker", "user"]);
 const OWNERS = new Set(["cli", "dispatcher", "worker", "user"]);
 const CATEGORIES = new Set(["preparation", "command", "artifact", "source", "user"]);
@@ -350,6 +365,14 @@ export function sourceWorkerUpgradePublicationClaimForStep(stepId) {
     throw new Error(`source worker upgrade publication requires a source handoff Step: ${stepId}`);
   }
   return new SourceWorkerUpgradePublicationClaim({
+    producer: entry.producer, stepId: entry.stepId, authority: entry.writableAuthority,
+  }, CLAIM_MINT);
+}
+
+/** Issue the mixed claim only for a validated cleanup completion publication. */
+export function finalizationCompletionPublicationClaim() {
+  const entry = flowArtifactAuthorityForStep("finalize-cleanup");
+  return new FinalizationCompletionPublicationClaim({
     producer: entry.producer, stepId: entry.stepId, authority: entry.writableAuthority,
   }, CLAIM_MINT);
 }

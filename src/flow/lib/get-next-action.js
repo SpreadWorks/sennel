@@ -1,4 +1,5 @@
 import { acceptanceStepRegistration } from "../engine/composition/acceptance.js";
+import { finalizationStepRegistration } from "../engine/composition/finalization.js";
 import { draftStepRegistration, draftWorkerStepRegistration } from "../engine/composition/draft.js";
 import { specStepRegistration, specWorkerStepRegistration } from "../engine/composition/spec.js";
 import { flowStepExecutionRegistration, gateStepExecutionRegistration, reviewStepExecutionRegistration }
@@ -131,6 +132,13 @@ export function projectTestChainExecutionDirective(input) {
 export function projectAcceptanceExecutionDirective(input) {
   const registration = acceptanceStepRegistration(input.stepId);
   if (registration === null) throw new TypeError("Acceptance projection requires its registered Step");
+  const selection = registration.executionContract.select({ ...input, registration });
+  return registration.executionContract.project(selection, { ...input, registration });
+}
+
+export function projectFinalizationExecutionDirective(input) {
+  const registration = finalizationStepRegistration(input.stepId);
+  if (registration === null) throw new TypeError("Finalization projection requires its registered Step");
   const selection = registration.executionContract.select({ ...input, registration });
   return registration.executionContract.project(selection, { ...input, registration });
 }
@@ -812,6 +820,9 @@ function buildCanonicalNextActionResult(ctx, state, typedState, descriptor, bind
   const registeredFlowStep = flowStepExecutionRegistration(target.stepId);
   const acceptanceProjection = registeredFlowStep?.executionContract.selectorName === "selectAcceptanceExecution"
     ? projectAcceptanceExecutionDirective({ ctx, stepId: target.stepId }) : null;
+  const finalizationProjection = target.scope === "flow"
+    && finalizationStepRegistration(target.stepId)?.executionContract.selectorName === "selectFinalizationExecution"
+    ? projectFinalizationExecutionDirective({ ctx, stepId: target.stepId }) : null;
   const hostFilterProjection = target.scope === "task"
     && taskStepRegistration(target.stepId)?.executionContract.selectorName === "selectHostFilterExecution"
     && typedState.attempt?.failure === null
@@ -941,7 +952,7 @@ function buildCanonicalNextActionResult(ctx, state, typedState, descriptor, bind
     resumeInstruction: specPostFailure.resumeInstruction,
   }));
   selectedDirective ??= userDecisionDirective ?? (workerDirective instanceof ExecuteStepDirective ? null : workerDirective) ?? approvalDirective ?? activationDirective
-    ?? outboxRecovery?.directive ?? gateDirective ?? testChainProjection?.directive ?? workerDirective ?? lifecycleDirective;
+    ?? outboxRecovery?.directive ?? gateDirective ?? testChainProjection?.directive ?? finalizationProjection?.directive ?? workerDirective ?? lifecycleDirective;
   if (hostFilterProjection !== null) selectedDirective = hostFilterProjection.directive;
   if (selectedDirective instanceof ExecuteStepDirective && target.scope === "task" && target.stepId === "task-review" && typedState.attempt?.failure === null) {
     try { assertReconciledTaskReviewInput({ flowManager: ctx.flowManager, state: typedState, taskId: target.taskId, root: ctx.executionRoot || ctx.root }); }

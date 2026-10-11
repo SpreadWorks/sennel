@@ -33,6 +33,19 @@ class RegistrationProjection {
   }
 }
 
+class RegistrationGuardRange {
+  constructor(name, range, endpoints) {
+    if (typeof name !== "string" || !name || !(range instanceof SourceInvocation)
+      || endpoints.length !== 2 || endpoints.some((value) => typeof value !== "string" || !value)) {
+      throw new TypeError("invalid registration guard range");
+    }
+    this.name = name;
+    this.range = range;
+    this.endpoints = Object.freeze([...endpoints]);
+    Object.freeze(this);
+  }
+}
+
 export class StructureScope {
   constructor(root, entry, registrations, registrationModule = `src/flow/engine/composition/${entry.split("/").at(-1)}.js`, contract = null) {
     if (typeof root !== "string" || typeof entry !== "string" || !Array.isArray(registrations)
@@ -1207,13 +1220,17 @@ const revision = testSourceRevision(snapshot, testSource);
     if (refusal?.file !== "src/flow/lib/step-admission-refusal.js" || refusal.name !== "StepAdmissionRefusal") return false;
     const constructor = readClassMember(module, typeName, "constructor");
     const parameters = readParameters(constructor?.tokens ?? []);
-    if (parameters.length !== 1 || !new SourceInitializer(parameters[0][0], 0, parameters[0])
-      .matches("{ flowManager, specId, stepId, receipt }")) return false;
+    if (parameters.length !== 1) return false;
+    const parameter = new SourceInitializer(parameters[0][0], 0, parameters[0]);
+    const direct = parameter.matches("{ flowManager, specId, stepId, receipt }");
+    const delegated = parameter.matches("{ flowManager, specId, stepId, receipt, completed = true }");
+    if (!direct && !delegated) return false;
     const members = module.classMembers(typeName);
     if (members.staticMembers.size !== 0 || members.moduleInitializers.length !== 0
       || members.instanceInitializers.length !== 0 || members.unresolvedInstanceMembers.length !== 0
-      || members.unresolvedStaticMembers.length !== 0
-      || [...members.instanceMembers.keys()].sort().join(",") !== ["assertCurrent", "constructor"].sort().join(",")) return false;
+      || members.unresolvedStaticMembers.length !== 0) return false;
+    if (delegated) return this.#delegatedCanonicalReceiptReplay(module, typeName, constructor, members);
+    if ([...members.instanceMembers.keys()].sort().join(",") !== ["assertCurrent", "constructor"].sort().join(",")) return false;
     return [false, true].some((exact) => constructor.matchesBody(`
       const saved = flowManager.readCurrentStepSettlement({ specId, stepId, completed: true${exact ? ", exactReceipt: receipt" : ""} });
       if (saved === null || !isDeepStrictEqual(saved.receipt.toJSON(), ${exact ? "(receipt.toJSON?.() ?? receipt)" : "receipt.toJSON()"})) {
@@ -1231,6 +1248,55 @@ const revision = testSourceRevision(snapshot, testSource);
         throw new StepAdmissionRefusal($STRING_LITERAL);
       }
     `));
+  }
+
+  #delegatedCanonicalReceiptReplay(module, typeName, constructor, members) {
+    const saved = constructor.topLevelInitializer("saved");
+    const access = readMemberAccess(saved?.tokens ?? [], 0);
+    const reader = access?.name;
+    if (saved?.tokens[0]?.value !== "this" || !access?.called || typeof reader !== "string"
+      || !saved.matches(`this.${reader}(receipt)`)) return false;
+    const reached = new Set();
+    if (!this.#readonlyCanonicalReceiptMethod(module, typeName, reader, reached)
+      || [...members.instanceMembers.keys()].sort().join(",")
+        !== ["assertCurrent", "constructor", ...reached].sort().join(",")) return false;
+    return constructor.matchesBody(`
+      this.#flowManager = flowManager;
+      this.#specId = specId;
+      this.#stepId = stepId;
+      this.#completed = completed;
+      const saved = this.${reader}(receipt);
+      if (saved === null || !isDeepStrictEqual(saved.receipt.toJSON(), (receipt.toJSON?.() ?? receipt))) {
+        throw new StepAdmissionRefusal($STRING_LITERAL);
+      }
+      this.receipt = saved.receipt;
+      Object.freeze(this);
+    `) && readClassMember(module, typeName, "assertCurrent")?.matchesBody(`
+      const saved = this.${reader}(this.receipt);
+      if (saved === null || !isDeepStrictEqual(saved.receipt.toJSON(), this.receipt.toJSON())) {
+        throw new StepAdmissionRefusal($STRING_LITERAL);
+      }
+    `);
+  }
+
+  /** Follow only closed same-instance query delegation; every other operation fails. */
+  #readonlyCanonicalReceiptMethod(module, typeName, name, reached) {
+    if (reached.has(name)) return false;
+    const method = readClassMember(module, typeName, name);
+    const parameters = readParameters(method?.tokens ?? []);
+    if (parameters.length !== 1 || parameters[0].length !== 1 || parameters[0][0].kind !== "identifier") return false;
+    const receipt = parameters[0][0].value;
+    reached.add(name);
+    if (method.matchesBody(`
+      return this.#flowManager.readCurrentStepSettlement({ specId: this.#specId, stepId: this.#stepId,
+        completed: this.#completed, ...(this.#completed ? { exactReceipt: ${receipt} } : {}) });
+    `)) return true;
+    const returned = method.returns();
+    const value = returned.length === 1 ? returned[0].tokens : [];
+    const access = readMemberAccess(value, 0);
+    if (value[0]?.value !== "this" || !access?.called || typeof access.name !== "string"
+      || !method.matchesBody(`return this.${access.name}(${receipt});`)) return false;
+    return this.#readonlyCanonicalReceiptMethod(module, typeName, access.name, reached);
   }
 
   #recheckedReceiptType(module, typeName) {
@@ -1633,7 +1699,8 @@ const revision = testSourceRevision(snapshot, testSource);
     const phaseLookups = this.#publicPhaseLookupNames(module);
     const contractReference = module.references.find((entry) => entry.kind === "import"
       && entry.bindings.get("workerStepExecutionContract") === "workerStepExecutionContract");
-    return lookupNames.every((name) => phaseLookups.includes(name))
+    const guard = this.#registrationGuardRange(module, declaration);
+    return guard !== null && lookupNames.every((name) => phaseLookups.includes(name))
       && contractReference !== undefined
       && this.#resolve(module.file, contractReference, [module.file], "A10", true)?.file === "src/flow/lib/worker-execution-admission.js"
       && declaration?.matchesFunction("stepId", `
@@ -1641,13 +1708,42 @@ const revision = testSourceRevision(snapshot, testSource);
   const registration = implementation?.executionContract === workerStepExecutionContract ? implementation
     : requirementTestWorkerStepRegistration(stepId) ?? draftWorkerStepRegistration(stepId)
     ?? specWorkerStepRegistration(stepId);
-  if (registration === null && registeredPhaseSteps.has(stepId)) {
+  if (registration === null && ${guard.name}.has(stepId)) {
     throw new Error(\`Definition leaf \${stepId} has no registered worker execution contract\`);
   }
   return registration;`);
   }
 
+  /** Resolve the immutable range owned by this resolver's missing-registration guard. */
+  #registrationGuardRange(module, declaration) {
+    const tokens = declaration?.bodyTokens() ?? [];
+    const guards = tokens.filter((token, index) => token.kind === "identifier"
+      && tokens[index + 1]?.value === "." && tokens[index + 2]?.value === "has"
+      && tokens[index + 3]?.value === "(" && tokens[index + 4]?.value === "stepId"
+      && tokens[index + 5]?.value === ")");
+    if (guards.length !== 1) return null;
+    const name = guards[0].value;
+    const owner = module.declaration(name);
+    const calls = readInvocations({ tokens: owner?.tokens ?? [] });
+    const range = calls.find((call) => call.name === "flowLeafIdsBetween");
+    const endpoints = range?.arguments.map((argument) => argument.length === 1 && argument[0].kind === "string"
+      ? argument[0].value : null);
+    if (endpoints?.length !== 2 || endpoints.some((value) => value === null)
+      || !owner?.matchesDeclaration(`const ${name} = new Set(flowLeafIdsBetween(${endpoints.map(JSON.stringify).join(",")}));`)) return null;
+    const imported = module.references.find((reference) => reference.kind === "import"
+      && reference.bindings.has("flowLeafIdsBetween"));
+    // Sparse source graphs express the shared query symbolically. A declared
+    // binding must retain its real Definition origin; absence is not a foreign
+    // binding and still undergoes the same range and registration closure checks.
+    if (module.declaration("flowLeafIdsBetween") !== null || imported && (
+      imported.bindings.get("flowLeafIdsBetween") !== "flowLeafIdsBetween"
+      || this.#resolve(module.file, imported, [module.file], "A11", true)?.file !== "src/flow/definition.js")) return null;
+    return new RegistrationGuardRange(name, range, endpoints);
+  }
+
   #closedRegistrationResolver(module, declaration, required, guardMessage) {
+    const guard = this.#registrationGuardRange(module, declaration);
+    if (guard === null) return false;
     const initializer = declaration?.topLevelInitializer("registration");
     const calls = initializer ? readInvocations({ tokens: initializer.tokens }) : [];
     if (calls.length === 0 || calls.some((call) => call.constructed || call.arguments.length !== 1
@@ -1677,7 +1773,7 @@ const revision = testSourceRevision(snapshot, testSource);
       : this.#source(module.file).slice(argument[0].offset, argument.at(-1).offset + 1));
     return declaration.matchesFunction("stepId", `
       const registration = ${lookups.map((name) => `${name}(stepId)`).join(" ?? ")};
-      if (registration === null && registeredPhaseSteps.has(stepId)) {
+      if (registration === null && ${guard.name}.has(stepId)) {
         throw new Error(${message});
       }
       return registration;
@@ -3380,10 +3476,18 @@ const revision = testSourceRevision(snapshot, testSource);
       const reference = owner.references.find((entry) => entry.kind === "import" && entry.bindings.has(contractName));
       const target = reference && this.#resolve(owner.file, reference, [owner.file], "A10", true);
       const binding = target?.file && this.#resolveExportBinding(target.file, reference.bindings.get(contractName), new Set(), "A10");
-      const adapter = binding && this.#module(binding.file, [owner.file, binding.file], "A10", true);
-      const declaration = adapter?.declaration(binding.name);
+      const adapter = reference === undefined ? owner
+        : binding && this.#module(binding.file, [owner.file, binding.file], "A10", true);
+      const declaration = adapter?.declaration(reference === undefined ? contractName : binding?.name);
       const select = declaration?.tokens.findIndex((token, index) => token.value === "select" && declaration.tokens[index + 1]?.value === ":") ?? -1;
-      if (stepId !== null && select >= 0) selections.push(new RegistrationProjection(stepId, declaration.tokens[select + 2]?.value));
+      const contractType = adapter && this.#resolveLocalBinding(adapter.file, adapter,
+        "StepExecutionContract", new Set(), "A10");
+      if (stepId !== null && select >= 0 && declaration.tokens.some((token, index) => token.value === "new"
+        && declaration.tokens[index + 1]?.value === "StepExecutionContract")
+        && contractType?.file === "src/flow/engine/composition/step-execution-contract.js"
+        && contractType.name === "StepExecutionContract") {
+        selections.push(new RegistrationProjection(stepId, declaration.tokens[select + 2]?.value));
+      }
     }
     for (const registration of selections) {
       const selector = registration.selector;
@@ -3407,7 +3511,8 @@ const revision = testSourceRevision(snapshot, testSource);
         const index = build.tokens.indexOf(token);
         const name = build.tokens[index + 1]?.value;
         const initializer = build.topLevelInitializer(name);
-        if (!this.#additionalProjectionInitializer(initializer, caller, shape)) continue;
+        if (!this.#additionalProjectionInitializer(initializer, caller, shape)
+          || !this.#registeredProjectionOrigins(module, initializer, caller)) continue;
         if (!result.has(shape.form)) result.set(shape.form, []);
         result.get(shape.form).push(name);
       }
@@ -3422,7 +3527,8 @@ const revision = testSourceRevision(snapshot, testSource);
         for (const [scope, selectors] of metadata) for (const selector of selectors) {
           if (!["", "&& typedState.attempt?.failure === null"].some((guard) => initializer?.matches(`
             target.scope === "${scope}" && ${caller.lookupName}(target.stepId)?.executionContract.selectorName === "${selector}" ${guard}
-              ? ${caller.declarationName}({ ctx, stepId: target.stepId }) : null`))) continue;
+              ? ${caller.declarationName}({ ctx, stepId: target.stepId }) : null`))
+            || !this.#registeredProjectionOrigins(module, initializer, caller)) continue;
           const form = `registered-${scope}`;
           if (!result.has(form)) result.set(form, []);
           result.get(form).push(name);
@@ -3430,6 +3536,31 @@ const revision = testSourceRevision(snapshot, testSource);
       }
     }
     return result;
+  }
+
+  #registeredProjectionOrigins(module, initializer, caller) {
+    const calls = readInvocations({ tokens: initializer?.tokens ?? [] });
+    const usage = module.originUsage([caller.lookupName, caller.declarationName],
+      { acceptBindings: false, moduleBindings: true });
+    return calls.length === 2 && calls.every((call) => usage.isOrigin(call.token));
+  }
+
+  /** Every acquired flow projection appears exactly once in the closed display chain. */
+  #registeredFlowProjectionChain(build, projections) {
+    const expected = new Set(projections);
+    const tokens = build?.bodyTokens() ?? [];
+    const start = tokens.findIndex((token, index) => token.value === "selectedDirective"
+      && tokens[index + 1]?.value === "?" && tokens[index + 2]?.value === "?" && tokens[index + 3]?.value === "=");
+    if (start < 0) return false;
+    const end = tokens.findIndex((token, index) => index > start && token.value === ";");
+    const chain = tokens.slice(start, end);
+    const used = chain.filter((token) => token.kind === "identifier" && expected.has(token.value)).map((token) => token.value);
+    if (used.length !== expected.size || new Set(used).size !== used.length) return false;
+    const middle = used.map((name) => `?? ${name}?.directive`).join(" ");
+    const prefix = `selectedDirective ??= userDecisionDirective ?? (workerDirective instanceof ExecuteStepDirective ? null : workerDirective)
+      ?? approvalDirective ?? activationDirective ?? outboxRecovery?.directive ?? gateDirective`;
+    return build.containsBodySequence(`${prefix} ${middle} ?? workerDirective ?? lifecycleDirective;`)
+      || expected.size === 0 && build.containsBodySequence(`${prefix} ?? lifecycleDirective;`);
   }
 
   #registeredDisplayRoutes(required) {
@@ -3479,14 +3610,7 @@ const revision = testSourceRevision(snapshot, testSource);
         ...(declaredProjections.get("deterministic-review") ?? []), ...(declaredProjections.get("registered-flow") ?? [])];
       const taskOverrides = build.containsBodySequence('target.stepId === "task-triage"')
         || build.containsBodySequence('target.stepId === "task-review"');
-      if (workerDirective && !build.containsBodySequence(`
-        selectedDirective ??= userDecisionDirective ?? (workerDirective instanceof ExecuteStepDirective ? null : workerDirective)
-          ?? approvalDirective ?? activationDirective ?? outboxRecovery?.directive ?? gateDirective ?? lifecycleDirective;
-      `) && !testProjections.some((projection) => build.containsBodySequence(`
-        selectedDirective ??= userDecisionDirective ?? (workerDirective instanceof ExecuteStepDirective ? null : workerDirective)
-          ?? approvalDirective ?? activationDirective ?? outboxRecovery?.directive ?? gateDirective
-          ?? ${projection}?.directive ?? workerDirective ?? lifecycleDirective;
-      `)) || (workerDirective && !build.containsBodySequence(
+      if (workerDirective && !this.#registeredFlowProjectionChain(build, testProjections) || (workerDirective && !build.containsBodySequence(
         "const claimRequired = selectedDirective instanceof ExecuteStepDirective"
       )) || (workerDirective && !build.containsBodySequence("directive: claimDirective.toJSON()"))
         || !(additionalName === null ? [""] : [`${additionalName} ?? (`]).some((prefix) => initialDirective?.matches(`${prefix}specPostFailure === null ? null : new BlockedDirective({
@@ -3586,10 +3710,7 @@ const revision = testSourceRevision(snapshot, testSource);
         ...(declaredProjections.get("deterministic-review") ?? []), ...(declaredProjections.get("registered-flow") ?? [])];
       if (!selection?.matches("specPostFailure === null ? definitionOwnedGateSelection(ctx, state, target) : null")
         || !directive?.matches("definitionOwnedGateDirective(gateSelection, { state, binding })")
-        || (!build.containsBodySequence("?? outboxRecovery?.directive ?? gateDirective ?? lifecycleDirective")
-          && !testProjections.some((projection) => build.containsBodySequence(`
-            ?? outboxRecovery?.directive ?? gateDirective ?? ${projection}?.directive ?? workerDirective ?? lifecycleDirective
-          `)))) {
+        || !this.#registeredFlowProjectionChain(build, testProjections)) {
         this.#diagnose("A10", file, selection?.token ?? directive?.token ?? build?.token, [file],
           "registered Gate selection is not consumed by canonical display routing");
       }
@@ -3677,10 +3798,11 @@ const revision = testSourceRevision(snapshot, testSource);
     const file = "src/flow/engine/composition/registered-step-execution.js";
     const module = this.#module(file, [file], "A10", true);
     const declaration = module?.declaration("workerStepExecutionRegistration");
-    if (!this.#implementationWorkerResolver(module, declaration) && !declaration?.matchesBody(`
+    const guard = module && this.#registrationGuardRange(module, declaration);
+    if (guard === null || !this.#implementationWorkerResolver(module, declaration) && !declaration?.matchesBody(`
       const registration = requirementTestWorkerStepRegistration(stepId) ?? draftWorkerStepRegistration(stepId)
         ?? specWorkerStepRegistration(stepId);
-      if (registration === null && registeredPhaseSteps.has(stepId)) {
+      if (registration === null && ${guard?.name}.has(stepId)) {
         throw new Error(\`Definition leaf \${stepId} has no registered worker execution contract\`);
       }
       return registration;
@@ -3962,10 +4084,11 @@ const revision = testSourceRevision(snapshot, testSource);
     }
     const module = this.#module(file, [file], "A11", true);
     if (!module) return;
-    const range = readInvocations(module).find((call) => call.name === "flowLeafIdsBetween");
+    const flowGuard = this.#registrationGuardRange(module, module.declaration("flowStepExecutionRegistration"));
+    const workerGuard = this.#registrationGuardRange(module, module.declaration("workerStepExecutionRegistration"));
+    const range = flowGuard?.range;
     const workerIds = [];
     const registrationIds = [];
-    const directRegistrationIds = [];
     const visitedRegistrationOrigins = new Set();
     const compositionFiles = new Set([this.scope.registrationModule]);
     for (const reference of module.references) {
@@ -4013,12 +4136,18 @@ const revision = testSourceRevision(snapshot, testSource);
             && tokens[offset + 1]?.value === ":" && tokens[offset + 2]?.kind === "string");
           if (index >= 0) {
             registrationIds.push(tokens[index + 2].value);
-            directRegistrationIds.push(tokens[index + 2].value);
+            const contractIndex = tokens.findIndex((token, offset) => token.value === "executionContract"
+              && tokens[offset + 1]?.value === ":");
+            const contractName = tokens[contractIndex + 2]?.value;
+            const owner = imported?.module ?? composition;
+            const binding = contractIndex < 0 ? null : this.#resolveLocalBinding(owner.file, owner,
+              contractName, new Set(), "A11");
+            if (binding?.file === "src/flow/lib/worker-execution-admission.js"
+              && binding.name === "workerStepExecutionContract") workerIds.push(tokens[index + 2].value);
           }
         }
       }
     }
-    if (workerIds.length === 0) workerIds.push(...directRegistrationIds);
     const definitionFile = "src/flow/definition.js";
     if (!this.allFiles.includes(definitionFile)) {
       this.#diagnose("A11", definitionFile, null, [definitionFile], "targeted Definition source is missing");
@@ -4085,6 +4214,17 @@ const revision = testSourceRevision(snapshot, testSource);
         }
       }
     }
+    const workerEndpoints = workerGuard?.endpoints;
+    const workerStart = directIds.indexOf(workerEndpoints?.[0]);
+    const workerEnd = directIds.indexOf(workerEndpoints?.[1]);
+    const globalStart = directIds.indexOf(endpoints?.[0]);
+    const globalEnd = directIds.indexOf(endpoints?.[1]);
+    if (workerGuard === null || workerGuard === undefined || workerStart !== globalStart
+      || workerEnd < workerStart || workerEnd > globalEnd
+      || workerIds.some((id) => directIds.includes(id) && (directIds.indexOf(id) < workerStart || directIds.indexOf(id) > workerEnd))) {
+      this.#diagnose("A11", file, workerGuard?.range.token ?? module.declaration("workerStepExecutionRegistration")?.token,
+        [file], "worker Definition guard range omits a registered worker leaf or escapes the complete Flow range");
+    }
     for (const [name, left, right] of [
       ["workerStepExecutionRegistration", "draftWorkerStepRegistration", "specWorkerStepRegistration"],
       ["flowStepExecutionRegistration", "draftStepRegistration", "specStepRegistration"],
@@ -4092,7 +4232,8 @@ const revision = testSourceRevision(snapshot, testSource);
       const body = module.declaration(name);
       const tokens = body?.tokens ?? [];
       const names = new Set(tokens.map((token) => token.value));
-      const guard = tokens.some((token, index) => token.value === "registeredPhaseSteps"
+      const selectedGuard = name === "workerStepExecutionRegistration" ? workerGuard : flowGuard;
+      const guard = selectedGuard !== null && selectedGuard !== undefined && tokens.some((token, index) => token.value === selectedGuard.name
         && tokens[index + 1]?.value === "." && tokens[index + 2]?.value === "has"
         && tokens[index + 3]?.value === "(" && tokens[index + 4]?.value === "stepId")
         && names.has("throw");

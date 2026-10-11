@@ -1859,7 +1859,7 @@ const FLOW_ARTIFACT_CONTRACT_LIST = Object.freeze([
   // report producer must therefore be able to re-read its own cataloged
   // document during the exact outbox recovery; it still cannot infer a path
   // or bypass the catalog.
-  contract("report", "artifacts/report.json", "report", "canonical-flow-artifacts", "report", own("report", ["report"], ["report", "finalize-commit", "finalize-sync", "finalize-cleanup"])),
+  contract("report", "artifacts/report.json", "report", "canonical-flow-artifacts", "report", own("report", ["report"], ["report", "finalize-commit", "finalize-merge", "finalize-sync", "finalize-cleanup"])),
   contract("ideas", "artifacts/ideas.json", "ideas", "canonical-flow-artifacts", "retro", own("retro", ["retro", "finalize-sync"], ["report", "finalize-sync"])),
   // Plugin lifecycle hooks write per-plugin durable outputs beneath this
   // namespace.  Workflow ideas retain their own contract and are excluded

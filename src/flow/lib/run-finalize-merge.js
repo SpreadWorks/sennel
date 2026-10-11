@@ -1,5 +1,5 @@
+import { executeFinalizationCommand, finalizationStepRegistration } from "../engine/composition/finalization.js";
 import { FlowCommand } from "./base-command.js";
-import { container } from "../../lib/container.js";
 import { finalizationOutboxIdentity } from "./flow-outbox.js";
 
 /**
@@ -8,37 +8,51 @@ import { finalizationOutboxIdentity } from "./flow-outbox.js";
  * (`commands.gh != enable` OR `gh` unavailable). The PR route returns
  * after PR creation and leaves the post-merge sub-steps (finalize-sync /
  * finalize-cleanup) for an out-of-process flow once the PR lands. The
- * registry post hook normalizes finalize-merge to 'done' for both routes
- * but does not advance further when the result indicates a PR was opened.
+ * registered Step records the command observation, and Definition selects
+ * Await when the Result indicates a PR was opened.
  */
+export function executeFinalizeMergeInput(input) {
+  const registration = finalizationStepRegistration(input.stepId);
+  if (registration === null) throw new TypeError("Finalize merge execution requires its registered Step");
+  const selection = registration.executionContract.select({ ...input, registration });
+  return registration.executionContract.execute(selection, { ...input, registration });
+}
+
 export class RunFinalizeMergeCommand extends FlowCommand {
   async execute(ctx) {
+    return executeFinalizationCommand({ ctx, command: this, stepId: "finalize-merge", executeInput: (input) => executeFinalizeMergeInput(input) });
+  }
+
+  async prepareEffect(ctx) {
     const state = ctx.flowState;
-    const root = ctx.executionRoot || ctx.root;
+    const executionRoot = ctx.flowManager.executionRoot(state);
     const { worktreePath, mainRepoPath } = ctx.flowManager.resolveWorktreePaths(state);
 
-    const { runMerge, resolveMergeStrategy } = await import("../commands/merge.js");
-    const cfg = container.get("config");
-    const strategy = resolveMergeStrategy(state, cfg);
-
-    if (strategy === "skip") {
-      return { status: "skipped", strategy: "skip", mergedFromSha: null };
-    }
-
-    const mergeResult = runMerge({
-      root,
+    const { prepareMergeEffect } = await import("../commands/merge.js");
+    return prepareMergeEffect({
+      root: ctx.root,
+      executionRoot,
       flowState: state,
       flowManager: ctx.flowManager,
       worktreePath,
       mainRepoPath,
       idempotencyKey: ctx.flowOutboxEntry?.idempotencyKey
         || finalizationOutboxIdentity(state, "finalize-merge").idempotencyKey,
+      repositoryOperationOwnerToken: ctx.repositoryOperationOwnerToken ?? null,
     });
+  }
+
+  async executeEffect(ctx, preparation = null) {
+    const acquired = preparation ?? await this.prepareEffect(ctx);
+    const { runMerge } = await import("../commands/merge.js");
+    const mergeResult = runMerge({ ...ctx, executionRoot: ctx.flowManager.executionRoot(ctx.flowState) }, acquired);
     return {
-      status: "done",
+      status: mergeResult.strategy === "skip" ? "skipped" : "done",
       strategy: mergeResult?.strategy || "squash",
       mergedFromSha: mergeResult?.mergedFromSha ?? null,
       ...(mergeResult?.resumed ? { resumed: true } : {}),
+      ...(mergeResult?.prNumber != null ? { prNumber: mergeResult.prNumber } : {}),
+      ...(mergeResult?.prUrl != null ? { prUrl: mergeResult.prUrl } : {}),
     };
   }
 }

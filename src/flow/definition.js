@@ -1,13 +1,17 @@
 import { RetroConnector } from "./engine/connectors/acceptance/retro-connector.js";
 import { AcceptanceRepairConnector, AcceptanceDecisionConnector, AcceptanceFinalRegressionConnector } from "./engine/connectors/acceptance/acceptance-target-connectors.js";
 import { FinalRegressionReportConnector, ReportFinalizeCommitConnector } from "./engine/connectors/acceptance/finalization-target-connectors.js";
+import { FinalizeMergeConnector } from "./engine/connectors/finalize/finalize-merge-connector.js";
+import { FinalizeSyncConnector } from "./engine/connectors/finalize/finalize-sync-connector.js";
+import { FinalizeCleanupConnector } from "./engine/connectors/finalize/finalize-cleanup-connector.js";
 import { stableJson } from "./lib/review-work-unit-values.js";
+import { FinalizationSettlementReceiptEvidence } from "./lib/finalization-execution-identity.js";
 import { requireString, requireDigest } from "./lib/flow-value-assertions.js";
 import { RetroStaleEvidencePublication, RetroStaleEvidenceRecoveryFacts } from "./lib/retro-stale-evidence-values.js";
 export { RetroStaleEvidencePublication, RetroStaleEvidenceRecoveryFacts } from "./lib/retro-stale-evidence-values.js";
 import { UnexecutedStepCompletion, UnexecutedStepCompletionSet, UnexecutedStepCompletionAuthority, RetainedRouteSourceAuthority, NonGateRetainedRouteSourceAuthority } from "./lib/unexecuted-step-completion.js";
 import { testChainObservationMeaning } from "./lib/test-chain-values.js";
-import { hasImplementationStepContract, hasAcceptanceStepContract } from "./engine/step-result.js";
+import { hasImplementationStepContract, hasAcceptanceStepContract, hasFinalizationStepContract } from "./engine/step-result.js";
 import * as ImplementationResults from "./engine/step-result.js";
 import { ImplementationGateResultEvidence } from "./lib/gate-observation-values.js";
 import { buildTaskReviewStagePlanForResult, selectTaskReviewStageMeaning, taskReviewStageOperationForResultKind } from "./lib/task-review-stage-transition.js";
@@ -3433,7 +3437,6 @@ export function applyLifecycleActions(adapter, actions) {
   for (const action of actions) action.apply(adapter);
 }
 
-const FINALIZE_SUCCESS_STATUSES = new Set(["done", "completed", "skipped"]);
 const IMPL_REVIEW_RESET_RANGE = Object.freeze([
   "test-execute",
   "test-result-review",
@@ -3580,10 +3583,6 @@ export function resolveReviewDeferralLifecycle({ scope, stepId, disposition } = 
     );
   }
   return actions;
-}
-
-function isFinalizeSuccess(result) {
-  return FINALIZE_SUCCESS_STATUSES.has(String(result?.status || result?.data?.status || ""));
 }
 
 function gateStepIdForPhase(phase) {
@@ -3792,9 +3791,6 @@ function finalizeMergeMetadataPreflightAction() {
 
 function resolveFinalizeLifecycle(input) {
   const command = input.command || input.currentStepId || input.targetStepId;
-  if (input.event === "finalize:interrupted" && command === "finalize-sync") {
-    return [new SetStepStatus({ step: command, status: "skipped" })];
-  }
   if (input.event === "finalize:pre") {
     const actions = [];
     if (command === "finalize-merge") {
@@ -3802,20 +3798,9 @@ function resolveFinalizeLifecycle(input) {
     } else if (command === "finalize-sync") {
       actions.push(new RunLifecycleHook({ module: "finalize", handler: "resolveMainRepoFlowManager" }));
     }
-    if (command === "finalize-merge") {
-      actions.push(new RunLifecycleHook({
-        module: "finalize",
-        handler: "prepareFinalizeMerge",
-        args: { steps: ["finalize-sync", "finalize-cleanup"] },
-      }));
-      // Record the idempotency key before RunFinalizeMergeCommand can start
-      // the merge. The post lifecycle begins the same identity again after
-      // authority switches to main, which is how the pending entry is carried
-      // into main's flow state without a clean-path metadata-only commit.
-      actions.push(new BeginOutboxEffect({ step: command }));
-    } else {
-      actions.push(new BeginOutboxEffect({ step: command }));
-    }
+    // The pending identity precedes external execution; its registered
+    // settlement carries the outcome into the canonical authority.
+    actions.push(new BeginOutboxEffect({ step: command }));
     return actions;
   }
   if (input.event === "finalize:onError") {
@@ -3827,15 +3812,6 @@ function resolveFinalizeLifecycle(input) {
     } else if (command === "finalize-cleanup") {
       actions.push(new RunLifecycleHook({ module: "finalize", handler: "resolveCleanupOutboxFlowManager" }));
     }
-    if (command === "finalize-merge") {
-      actions.push(new FailOutboxEffect({ step: command }));
-      actions.push(new SkipSteps({ steps: ["finalize-sync", "finalize-cleanup"] }));
-    } else {
-      actions.push(new FailOutboxEffect({ step: command }));
-      if (command === "finalize-sync") {
-        actions.push(new SetStepStatus({ step: command, status: "skipped" }));
-      }
-    }
     actions.push(new RunLifecycleHook({ module: "finalize", handler: "finalizeOnError", args: { command } }));
     if (command === "finalize-merge") {
       actions.push(new RunLifecycleHook({
@@ -3845,36 +3821,7 @@ function resolveFinalizeLifecycle(input) {
     }
     return actions;
   }
-  if (!isFinalizeSuccess(input.result)) return [new FailOutboxEffect({ step: command })];
-  const actions = [];
-  if (command === "finalize-merge" || command === "finalize-sync" || command === "finalize-cleanup") {
-    actions.push(new RunLifecycleHook({
-      module: "finalize",
-      handler: "resolveMainRepoFlowManager",
-      args: command === "finalize-merge" ? { unlessPr: true } : null,
-    }));
-  }
-  if (command === "finalize-merge") {
-    actions.push(
-      new BeginOutboxEffect({ step: command }),
-      new RunLifecycleHook({ module: "finalize", handler: "ensureFinalizeMergeInProgress" }),
-      new RunLifecycleHook({ module: "finalize", handler: "recordMergeOutcome" }),
-      new RunLifecycleHook({
-        module: "finalize",
-        handler: "resetSkippedDownstreamSteps",
-        args: { steps: ["finalize-sync", "finalize-cleanup"] },
-      }),
-    );
-  }
-  actions.push(new SetStepStatus({
-    step: command,
-    status: "done",
-    // A retried merge restores its downstream leaves for the next normal
-    // command; it does not begin finalize-sync as part of merge completion.
-    suppressAutoPromotion: command === "finalize-merge",
-  }));
-  actions.push(new CompleteOutboxEffect({ step: command }));
-  return actions;
+  return [];
 }
 
 function resolveReportLifecycle(input) {
@@ -4291,17 +4238,22 @@ export class RequirementTestAwaitDecision extends StepSettlement {
 export const STEP_RESULT_ERROR_CATEGORY = "step-result-error";
 
 export class StepErrorDecision extends StepSettlement {
-  constructor(token, result) {
+  constructor(token, result, effects = null) {
     if (!(result instanceof StepResult) || result.type !== STEP_RESULT_TYPE.ERROR) {
       throw new TypeError("error decision requires an Error Result");
     }
     super(token, result, "failure");
+    if (effects !== null && !(effects instanceof StepRouteEffects)) {
+      throw new TypeError("Error settlement effects must be typed");
+    }
+    if (effects !== null) this.effects = effects;
     this.stepId = result.stepId;
     this.error = result.error;
     Object.freeze(this);
   }
 
-  toJSON() { return { kind: this.kind, sourceStepId: this.sourceStepId }; }
+  toJSON() { return { kind: this.kind, sourceStepId: this.sourceStepId,
+    ...(this.effects === undefined ? {} : { effects: this.effects.toJSON() }) }; }
 }
 
 /**
@@ -4737,7 +4689,7 @@ export class DraftStepExecutionState {
 
 /** Durable identity of one Result and its already-selected settlement. */
 export class DraftStepSettlementReceipt extends DraftStepSettlementReceiptValue {
-  constructor({ binding, result, settlement, publication, executionLifecycle = null, awaitQuestion = null, draftGateRepairSelection = null, preparation = null } = {}) {
+  constructor({ binding, result, settlement, publication, executionLifecycle = null, awaitQuestion = null, draftGateRepairSelection = null, preparation = null, finalization = null } = {}) {
     super();
     if (!(result instanceof StepResult) || !(settlement instanceof StepSettlement)) {
       throw new TypeError("Step settlement receipt requires a Result and Settlement");
@@ -4750,6 +4702,16 @@ export class DraftStepSettlementReceipt extends DraftStepSettlementReceiptValue 
       throw new TypeError("Preparation settlement receipt requires its typed evidence");
     }
     if (preparation !== null) preparation.assertStep(result.stepId);
+    if (hasFinalizationStepContract(result.stepId)
+      ? !(finalization instanceof FinalizationSettlementReceiptEvidence) : finalization !== null) {
+      throw new TypeError("Finalization settlement receipt requires its typed durable evidence");
+    }
+    if (finalization !== null) {
+      finalization.assertBinding(binding);
+      if (new DraftStepSettlementPublication(finalization.toJSON()).digest !== publication.digest) {
+        throw new TypeError("Finalization receipt publication does not match its durable evidence");
+      }
+    }
     if (binding?.runId === undefined || binding?.specId === undefined
       || binding?.stepId !== result.stepId || settlement.sourceStepId !== result.stepId
       || settlement.resultKind !== result.kind || settlement.resultType !== result.type
@@ -4781,7 +4743,7 @@ export class DraftStepSettlementReceipt extends DraftStepSettlementReceiptValue 
       throw new TypeError("Draft Await settlement receipt requires its exact question identity");
     }
     const executionPhase = executionLifecycle?.phase ?? null;
-    const specGateExecution = (binding.stepId === "spec-gate" || hasImplementationStepContract(binding.stepId) || hasAcceptanceStepContract(binding.stepId)) && executionSettlement;
+    const specGateExecution = (binding.stepId === "spec-gate" || hasImplementationStepContract(binding.stepId) || hasAcceptanceStepContract(binding.stepId) || hasFinalizationStepContract(binding.stepId)) && executionSettlement;
     const publicationAwait = awaitSettlement || settlement instanceof SpecGateAwaitDecision
       || settlement instanceof ImplementationAwaitDecision;
     if ((["checkpoint", "claimed"].includes(executionPhase) && !executionSettlement)
@@ -4802,7 +4764,7 @@ export class DraftStepSettlementReceipt extends DraftStepSettlementReceiptValue 
     this.resultDigest = stepResultDigest(result);
     this.settlementKind = settlement.kind;
     this.targetStepId = settlement instanceof StepRoute ? settlement.targetStepId : null;
-    this.effects = settlement instanceof StepRoute ? settlement.effects : null;
+    this.effects = settlement.effects ?? null;
     this.connector = settlement instanceof StepRoute
       ? Object.freeze({ name: settlement.connector.name })
       : null;
@@ -4816,6 +4778,7 @@ export class DraftStepSettlementReceipt extends DraftStepSettlementReceiptValue 
     if (gatePublication) draftGateRepairSelection.assertBinding(this.binding, executionLifecycle);
     this.draftGateRepairSelection = draftGateRepairSelection;
     this.preparation = preparation;
+    this.finalization = finalization;
     const identity = DraftStepSettlementReceipt.identity(this);
     this.id = createHash("sha256").update(JSON.stringify(identity)).digest("hex");
     Object.freeze(this);
@@ -4840,6 +4803,9 @@ export class DraftStepSettlementReceipt extends DraftStepSettlementReceiptValue 
       ...(value.preparation == null ? {} : {
         preparation: value.preparation.toJSON?.() ?? value.preparation,
       }),
+      ...(value.finalization == null ? {} : {
+        finalization: value.finalization.toJSON?.() ?? value.finalization,
+      }),
     };
   }
 
@@ -4854,6 +4820,16 @@ export class DraftStepSettlementReceipt extends DraftStepSettlementReceiptValue 
       new PreparationEvidence(value.preparation).assertStep(value.binding.stepId);
     } else if (value.preparation != null) {
       throw new TypeError("stored Step settlement receipt preparation is invalid");
+    }
+    if (hasFinalizationStepContract(value.binding?.stepId)) {
+      const finalization = FinalizationSettlementReceiptEvidence.fromJSON(value.finalization);
+      finalization.assertBinding(binding ?? value.binding);
+      if (stableJson(finalization.toJSON()) !== stableJson(value.finalization?.toJSON?.() ?? value.finalization)
+        || new DraftStepSettlementPublication(finalization.toJSON()).digest !== value.publicationDigest) {
+        throw new TypeError("stored Finalization receipt publication is invalid");
+      }
+    } else if (value.finalization != null) {
+      throw new TypeError("stored Step settlement receipt finalization is invalid");
     }
     if (binding !== null && (value.binding?.runId !== binding.runId
       || value.binding?.specId !== binding.specId
@@ -4875,7 +4851,7 @@ export class DraftStepSettlementReceipt extends DraftStepSettlementReceiptValue 
       || value.resultType !== settlement.resultType
       || value.targetStepId !== (settlement instanceof StepRoute ? settlement.targetStepId : null)
       || JSON.stringify(value.effects?.toJSON?.() ?? value.effects ?? null)
-        !== JSON.stringify(settlement instanceof StepRoute ? settlement.effects.toJSON() : null)
+        !== JSON.stringify(settlement.effects?.toJSON() ?? null)
       || value.connector?.name !== (settlement instanceof StepRoute ? settlement.connector.name : undefined))) {
       throw new TypeError("stored Step settlement receipt selection is invalid");
     }
@@ -4898,6 +4874,7 @@ export class DraftStepSettlementReceipt extends DraftStepSettlementReceiptValue 
       awaitQuestion: this.awaitQuestion?.toJSON() ?? null,
       ...(this.draftGateRepairSelection === null ? {} : { draftGateRepairSelection: this.draftGateRepairSelection.toJSON() }),
       ...(this.preparation === null ? {} : { preparation: this.preparation.toJSON() }),
+      ...(this.finalization === null ? {} : { finalization: this.finalization.toJSON() }),
     };
   }
 }
@@ -4932,7 +4909,9 @@ export class DraftStepExecutionIdentity {
       || stepResult.type !== receipt.resultType || stepResultDigest(stepResult) !== receipt.resultDigest) {
       throw new TypeError("Draft execution identity Result digest is invalid");
     }
-    const settlement = hasAcceptanceStepContract(binding.stepId)
+    const settlement = hasFinalizationStepContract(binding.stepId)
+      ? settleFinalizationStepResult(binding.stepId, stepResult)
+      : hasAcceptanceStepContract(binding.stepId)
       ? settleAcceptanceStepResult(binding.stepId, stepResult)
       : hasImplementationStepContract(binding.stepId)
       ? collectTaskLeafIds().includes(binding.stepId)
@@ -6993,4 +6972,52 @@ export function settleAcceptanceStepResult(stepId, result) {
   if (stepId === "final-regression") return selectedFinalRegressionSettlement(result);
   if (result instanceof ImplementationResults.ReportGeneratedResult) return acceptanceConnection(result, "finalize-commit", ReportFinalizeCommitConnector);
   throw new TypeError("Unsupported acceptance Result meaning");
+}
+
+/** Final cleanup selects existing Flow completion without a target handoff. */
+export class StepCompletionDecision extends StepSettlement {
+  constructor(token, result) {
+    super(token, result, "completion");
+    Object.freeze(this);
+  }
+  toJSON() { return { kind: this.kind, sourceStepId: this.sourceStepId }; }
+}
+
+/** Restore finalization policy solely from the saved concrete Result. */
+export function settleFinalizationStepResult(stepId, result) {
+  if (!(result instanceof StepResult) || result.stepId !== stepId || !hasFinalizationStepContract(stepId)) {
+    throw new TypeError("Finalization settlement requires its registered concrete Result");
+  }
+  if (result instanceof StepErrorResult) return new StepErrorDecision(STEP_SETTLEMENT_TOKEN, result,
+    stepId === "finalize-merge" ? new StepRouteEffects({ skipStepIds: ["finalize-sync", "finalize-cleanup"] }) : null);
+  if (result instanceof ImplementationResults.FinalizeCommitExecutionRequiredResult
+    || result instanceof ImplementationResults.FinalizeMergeExecutionRequiredResult
+    || result instanceof ImplementationResults.FinalizeSyncExecutionRequiredResult
+    || result instanceof ImplementationResults.FinalizeCleanupExecutionRequiredResult) {
+    return new DraftExecutionSettlement(STEP_SETTLEMENT_TOKEN, result);
+  }
+  if (result instanceof ImplementationResults.FinalizeCommitCreatedResult
+    || result instanceof ImplementationResults.FinalizeCommitUnchangedResult) {
+    return implementationConnection(result, "finalize-merge", {
+      connector: FinalizeMergeConnector, effects: new StepRouteEffects() });
+  }
+  if (result instanceof ImplementationResults.FinalizeMergeSquashedResult
+    || result instanceof ImplementationResults.FinalizeMergePolicySkippedResult) {
+    return implementationConnection(result, "finalize-sync", {
+      connector: FinalizeSyncConnector, effects: new StepRouteEffects() });
+  }
+  if (result instanceof ImplementationResults.FinalizeMergePrOpenedResult) {
+    return new ImplementationAwaitDecision(STEP_SETTLEMENT_TOKEN, result);
+  }
+  if (result instanceof ImplementationResults.FinalizeSyncBuiltResult
+    || result instanceof ImplementationResults.FinalizeSyncUnchangedResult
+    || result instanceof ImplementationResults.FinalizeSyncSkippedWithWarningResult) {
+    return implementationConnection(result, "finalize-cleanup", {
+      connector: FinalizeCleanupConnector, effects: new StepRouteEffects() });
+  }
+  if (result instanceof ImplementationResults.FinalizeCleanupCompletedResult
+    || result instanceof ImplementationResults.FinalizeCleanupCompletedWithWarningResult) {
+    return new StepCompletionDecision(STEP_SETTLEMENT_TOKEN, result);
+  }
+  throw new TypeError("Unsupported finalization Result meaning");
 }

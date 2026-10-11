@@ -4,6 +4,25 @@ import { FinalizeFlowStateOwner } from "./finalize-flow-state-owner.js";
 import { FlowOutboxStore, finalizationOutboxIdentity } from "./flow-outbox.js";
 import { resolveFinalizationOutboxRecovery } from "./finalization-outbox-recovery.js";
 import { findStepById } from "./step-tree.js";
+import { FinalizeSyncInterruptedError } from "./finalize-sync-diagnostics.js";
+import { finalizationStepRegistration, prepareFinalizationExecution } from "../engine/composition/finalization.js";
+import { flowStepExecutionRegistration } from "../engine/composition/registered-step-execution.js";
+import { AcceptanceReceiptReplay } from "./acceptance-receipt-replay.js";
+
+function replayInterruptedFinalizeSyncReceipt(receipt) {
+  if (!(receipt instanceof AcceptanceReceiptReplay)) throw new TypeError("Interrupted sync replay requires its authenticated receipt");
+  receipt.assertCurrent();
+  return receipt.receipt;
+}
+
+export function executeInterruptedFinalizeSyncRecoveryInput(input) {
+  const registration = finalizationStepRegistration(input.stepId);
+  if (registration === null) throw new TypeError("Interrupted sync recovery requires its registered Step");
+  const selection = input.selection;
+  if (selection.registration !== registration) throw new TypeError("Interrupted sync recovery requires its exact registration");
+  if (selection.receipt !== null) return replayInterruptedFinalizeSyncReceipt(selection.receipt);
+  return registration.executionContract.execute(selection, { ...input, registration });
+}
 
 function incompleteRuntimeLog(root, state) {
   const file = runtimeLogFileForContext({
@@ -48,7 +67,7 @@ export function inspectInterruptedFinalizeSync(ctx) {
  * lock proves that no sync process currently owns the side-effect boundary;
  * only then can its pending outbox be converted into an auditable skip.
  */
-export function recoverInterruptedFinalizeSync(ctx) {
+export async function recoverInterruptedFinalizeSync(ctx) {
   const localState = ctx.flowState;
   const localSyncStep = findStepById(localState?.steps || [], "finalize-sync");
   if (localSyncStep?.status !== "in_progress") return { recovered: false, busy: false };
@@ -95,8 +114,19 @@ export function recoverInterruptedFinalizeSync(ctx) {
       return { recovered: false, busy: false };
     }
     operation.assertOwned();
-    stateOwner.flowManager.recoverInterruptedFinalizeSync({ specId: stateOwner.specId, runtimeLog, operationOwnerToken: token });
-    return { recovered: true, busy: false, stateOwner, runtimeLog, decision: selected.decision };
+    const interruption = new FinalizeSyncInterruptedError({ runtimeLog });
+    const recoveryContext = { ...lockedContext, repositoryOperationOwnerToken: token };
+    const previous = stateOwner.flowManager.readCurrentStepSettlement({ specId: stateOwner.specId, stepId: "finalize-sync" });
+    const commandResult = { status: "skipped", warning: true, runtimeLog,
+      failure: { code: interruption.code, message: interruption.message, data: interruption.data } };
+    const preparation = prepareFinalizationExecution({ ctx: recoveryContext, stepId: "finalize-sync", commandResult,
+      execution: previous?.result.execution ?? null });
+    const registration = flowStepExecutionRegistration("finalize-sync");
+    const selection = registration.executionContract.select({ ctx: recoveryContext, stepId: "finalize-sync",
+      preparation, registration });
+    const outcome = await executeInterruptedFinalizeSyncRecoveryInput({ ctx: recoveryContext,
+      flowManager: stateOwner.flowManager, stepId: "finalize-sync", preparation, selection, commandResult });
+    return { recovered: true, busy: false, stateOwner, runtimeLog, decision: selected.decision, receipt: outcome.receipt };
   } finally {
     operation.release();
   }

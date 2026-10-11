@@ -1,5 +1,5 @@
 import { completeAcceptedNonblockingDecision } from "../flow/engine/composition/nonblocking-implementation.js";
-import { hasImplementationStepContract, hasAcceptanceStepContract } from "../flow/engine/step-result.js";
+import { hasImplementationStepContract, hasAcceptanceStepContract, hasFinalizationStepContract } from "../flow/engine/step-result.js";
 import { completeAcceptedGateDeferral } from "../flow/engine/composition/gate-deferral.js";
 /**
  * src/lib/flow-manager.js
@@ -355,7 +355,7 @@ export class FlowManager {
     return this._workspace.executionVersion(withSpecIdArgDefault(specId, this._boundSpecId), FlowVersion.from(version));
   }
   pathForCurrent() { return this._store.pathForCurrent(); }
-  executionRoot() { return this._root; }
+  executionRoot(state = null) { return this._store.executionRoot(state); }
   /** Alias for the canonical Version-1 flow.json path. */
   flowStatePath() { return this._store.pathForCurrent(); }
   resolveWorktreePaths(state) { return this._store.resolveWorktreePaths(state); }
@@ -493,6 +493,9 @@ export class FlowManager {
     return this.#commitStepSettlement(this.settleDraftStepResult, input);
   }
   commitSpecStepResult(input) {
+    if (hasFinalizationStepContract(input?.stepResult?.stepId)) {
+      return this.#commitStepSettlement(this.settleFinalizationStepResult, input);
+    }
     if (hasAcceptanceStepContract(input?.stepResult?.stepId)) {
       return this.#commitStepSettlement(this.settleAcceptanceStepResult, input);
     }
@@ -525,6 +528,10 @@ export class FlowManager {
   settleAcceptanceStepResult(input = {}) {
     return this._store.settleAcceptanceStepResult({ ...input, specId: input.specId ?? this._boundSpecId });
   }
+  settleFinalizationStepResult(input = {}) {
+    return this._store.settleFinalizationStepResult({ ...input, specId: input.specId ?? this._boundSpecId });
+  }
+  prepareFinalizationCommandPublication(input) { return this._store.prepareFinalizationCommandPublication(input); }
   prepareAcceptanceCommandPublication(input) { return this._store.prepareAcceptanceCommandPublication(input); }
   prepareImplCommandPublication(input) { return this._store.prepareImplCommandPublication(input); }
   readImplementationTaskFrontier(input = {}) {

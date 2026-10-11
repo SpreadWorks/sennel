@@ -312,6 +312,25 @@ test("targeted execution route must cover its Definition endpoint and fail close
   assert.equal(sample.check().ok, true);
 });
 
+test("symbolic range guards reject explicit foreign or shadow query bindings", () => {
+  const sample = new ServiceFixture();
+  const file = "src/flow/engine/composition/registered-step-execution.js";
+  const clean = sample.files.get(file);
+  serviceSuccess(sample.check());
+  for (const binding of [
+    "import { flowLeafIdsBetween } from '../../registry.js';",
+    "import { anotherRange as flowLeafIdsBetween } from '../../definition.js';",
+    "const flowLeafIdsBetween = () => [];",
+  ]) {
+    sample.put(file, `${binding}\n${clean}`);
+    const diagnostic = has(sample.check(), "A11", file);
+    assert.equal(diagnostic.column > 0, true);
+    assert.equal(diagnostic.trace.includes(file), true);
+    sample.put(file, clean);
+    serviceSuccess(sample.check());
+  }
+});
+
 test("Flow command registry must preserve one named display and execution route", () => {
   const sample = new ServiceFixture();
   const file = "src/flow/registry.js";

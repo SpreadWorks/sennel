@@ -11,6 +11,14 @@ import { POINTER_REL_PATH } from "../../../src/flow/lib/run-report-show.js";
 import { FinalizationWorktreeScenario } from "../../support/infrastructure/finalization-worktree-scenario.js";
 import { runGit } from "../../../src/lib/git-helpers.js";
 
+// gh --json returns the requested fields. Keep the external fake faithful so
+// exact body-marker readback can prove the same PR's delivery after response loss.
+function pullRequestListJSON(args, pullRequests) {
+  const fields = args[args.indexOf("--json") + 1].split(",");
+  return JSON.stringify(pullRequests.map((pullRequest) => Object.fromEntries(fields
+    .filter((field) => Object.hasOwn(pullRequest, field)).map((field) => [field, pullRequest[field]]))));
+}
+
 export function registerFinalizationRecoveryContracts(scenario) {
   test("F02 manual approval authorizes only the current durable finalization action", async (t) => {
     const flow = scenario(t);
@@ -70,11 +78,12 @@ export function registerFinalizationRecoveryContracts(scenario) {
 
   for (const leaf of ["finalize-commit", "finalize-merge", "finalize-sync", "finalize-cleanup"]) {
     test(`F06 ${leaf} publishes its exact Execution Result before effects`, async (t) => {
+      let ctx = null;
+      t.after(() => ctx?.finalizeSyncOperation?.release());
       const flow = scenario(t);
       await flow.advanceTo(leaf);
-      const ctx = flow.context();
+      ctx = flow.context();
       await FLOW_COMMANDS.run[leaf].pre(ctx);
-      t.after(() => ctx.finalizeSyncOperation?.release());
       flow.reload();
       assert.equal(flow.state().attempt.nodeId, leaf);
       assert.equal(flow.outbox(leaf).status, "pending");
@@ -111,7 +120,7 @@ export function registerFinalizationRecoveryContracts(scenario) {
       ghProcess(args, _options, active) {
         if (args[0] === "--version") return { status: 0, stdout: "gh fixture", stderr: "" };
         assert.equal(active.outbox("finalize-merge").status, "pending");
-        if (args[0] === "pr" && args[1] === "list") return { status: 0, stdout: JSON.stringify(prs.map(({ number }) => ({ number }))), stderr: "" };
+        if (args[0] === "pr" && args[1] === "list") return { status: 0, stdout: pullRequestListJSON(args, prs), stderr: "" };
         assert.deepEqual(args.slice(0, 2), ["pr", "create"]);
         const body = args[args.indexOf("--body") + 1];
         assert.ok(body.includes(`<!-- sennel:${active.identity("finalize-merge").idempotencyKey} -->`));
@@ -171,7 +180,7 @@ export function registerFinalizationRecoveryContracts(scenario) {
         assert.equal(active.outbox("finalize-merge").status, "pending");
         const foreign = { number: 716, body: "<!-- sennel:another-flow-outbox-key -->" };
         if (args[0] === "pr" && args[1] === "list") return { status: 0,
-          stdout: JSON.stringify([args[args.indexOf("--json") + 1]?.includes("body") ? foreign : { number: 716 }]), stderr: "" };
+          stdout: pullRequestListJSON(args, [foreign]), stderr: "" };
         assert.deepEqual(args.slice(0, 2), ["pr", "view"]);
         return { status: 0, stdout: JSON.stringify(foreign), stderr: "" };
       } });
@@ -191,14 +200,15 @@ export function registerFinalizationRecoveryContracts(scenario) {
 
   for (const foreign of [false, true]) {
     test(`F05 ${foreign ? "foreign runtime identity refuses skip" : "actual interrupted docs runtime remains read-only until lock-authorized skip"}`, async (t) => {
+      let ctx = null;
+      t.after(() => ctx?.finalizeSyncOperation?.release());
       const flow = scenario(t);
       await flow.advanceTo("finalize-sync");
-      const ctx = flow.context();
+      ctx = flow.context();
       const writer = new RuntimeLogBlockWriter({ root: flow.root, flowId: flow.specId,
         runId: foreign ? "another-run" : flow.state().runId, command: "flow run finalize-sync" });
       writer.capture("stderr", "external docs process interrupted before return\n");
       await FLOW_COMMANDS.run["finalize-sync"].pre(ctx);
-      t.after(() => ctx.finalizeSyncOperation?.release());
       const identity = flow.identity("finalize-sync");
       flow.reload();
       const before = flow.snapshot();

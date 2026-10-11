@@ -5,6 +5,7 @@ import { container } from "../../src/lib/container.js";
 import { ReviewTextPromptPlan } from "../../src/flow/lib/review-text-prompt-plan.js";
 import { PromptBatchExecutor } from "../../src/lib/prompt-batching.js";
 import { FlowManager } from "../../src/lib/flow-manager.js";
+import { getMainRepoPath, isInsideWorktree } from "../../src/lib/cli.js";
 import { ReviewWorkUnit } from "../../src/flow/lib/review-work-unit.js";
 import { TaskReviewExecutionIdentity } from "../../src/flow/lib/task-review-execution-identity.js";
 import { runTaskReviewProtocol, runImplReview, resolveReviewTarget, resolveMergeBase, parseImplReviewFindings, formatImplReviewJson, classifyReviewCommandError } from "../../src/flow/commands/review.js";
@@ -12,6 +13,8 @@ import { ReviewFindingCycle } from "../../src/flow/lib/finding-disposition-polic
 try {
 const root = process.cwd();
 const specRoot = process.env.SENNEL_IMPL_SCENARIO_SPEC_ROOT;
+const inWorktree = isInsideWorktree(root);
+const flowManager = new FlowManager({ root, mainRoot: inWorktree ? getMainRepoPath(root) : root, inWorktree, specRoot });
 container.register("root", root);
 const work = ReviewWorkUnit.fromEnvironment(process.env);
 const spec = JSON.parse(fs.readFileSync(JSON.parse(process.env.SENNEL_REVIEW_SPEC_SOURCE).sourcePath, "utf8"));
@@ -30,7 +33,7 @@ if (process.env.SENNEL_IMPL_SCENARIO_FILE_FAILURE) {
 }
 if (process.env.SENNEL_REVIEW_TASK_EXECUTION_IDENTITY) {
   const source = JSON.parse(fs.readFileSync(JSON.parse(process.env.SENNEL_REVIEW_TASK_CURRENT_SOURCE).sourcePath, "utf8"));
-  raw = await runTaskReviewProtocol({ root, flowManager: new FlowManager({ root, mainRoot: root, inWorktree: false, specRoot }),
+  raw = await runTaskReviewProtocol({ root, flowManager,
     executionIdentity: TaskReviewExecutionIdentity.fromJSON(JSON.parse(process.env.SENNEL_REVIEW_TASK_EXECUTION_IDENTITY)),
     requirementIds, recurrenceHistory: [], sourcePaths: new Set(source.entries.map((entry) => entry.path)),
     agent: { providerRetryPolicy: () => ({ retryCount: 0, retryDelayMs: 1, backoffFactor: 2 }), async call() { return raw; } },
@@ -42,7 +45,6 @@ if (process.env.SENNEL_REVIEW_TASK_EXECUTION_IDENTITY) {
 } else {
   // Flow Review's writer owns scope, disposition, stable finding identity,
   // recurrence and sealed history. Fake only the external evaluator response.
-  const flowManager = new FlowManager({ root, mainRoot: root, inWorktree: false, specRoot });
   const flow = flowManager.load();
   const cycle = ReviewFindingCycle.fromActivityLedger({ runId: flow.runId,
     activities: flowManager.activityLedger(flow.specId) });

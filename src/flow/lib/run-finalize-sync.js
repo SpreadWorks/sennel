@@ -1,3 +1,4 @@
+import { executeFinalizationCommand, finalizationStepRegistration } from "../engine/composition/finalization.js";
 import path from "path";
 import { runCmd } from "../../lib/process.js";
 import { PKG_DIR } from "../../lib/cli.js";
@@ -10,6 +11,13 @@ import {
   FinalizeSyncDiagnostic,
   FinalizeSyncExecutionError,
 } from "./finalize-sync-diagnostics.js";
+
+export function executeFinalizeSyncInput(input) {
+  const registration = finalizationStepRegistration(input.stepId);
+  if (registration === null) throw new TypeError("Finalize sync execution requires its registered Step");
+  const selection = registration.executionContract.select({ ...input, registration });
+  return registration.executionContract.execute(selection, { ...input, registration });
+}
 
 export class RunFinalizeSyncCommand extends FlowCommand {
   constructor({
@@ -26,6 +34,10 @@ export class RunFinalizeSyncCommand extends FlowCommand {
   }
 
   async execute(ctx) {
+    return executeFinalizationCommand({ ctx, command: this, stepId: "finalize-sync", executeInput: (input) => executeFinalizeSyncInput(input) });
+  }
+
+  async executeEffect(ctx) {
     const state = ctx.flowState;
     const { root } = ctx;
     const { mainRepoPath } = ctx.flowManager.resolveWorktreePaths(state);
