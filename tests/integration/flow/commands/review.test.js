@@ -3622,6 +3622,29 @@ describe("buildDraftReviewPrompt stage-specific QA projection", () => {
     assert.match(prompt, /The CLI currently has a draft review stage/);
   });
 
+  it("supplies codebase evidence for questions even when the Decision Map claims user judgment", () => {
+    const contextEntries = [{ file: "src/response-format.js",
+      summary: "The existing CLI preserves structured output when no format is requested." }];
+    const prompt = buildDraftReviewPrompt({
+      ...draftJson,
+      decisionMap: { ...draftJson.decisionMap,
+        requiresUserJudgment: ["Choose the response format when omitted."] },
+      questionLedger: { ...draftJson.questionLedger, questions: [
+        { ...draftJson.questionLedger.questions[0],
+          question: "Should omitted output format preserve the existing structured response?" },
+        draftJson.questionLedger.questions[1],
+      ] },
+    }, "Preserve existing CLI behavior.", contextEntries, { key: "questions" });
+
+    assert.match(prompt, /Should omitted output format preserve the existing structured response\?/);
+    assert.match(prompt, /Choose the response format when omitted\./);
+    assert.ok(prompt.includes(`- **${contextEntries[0].file}**: ${contextEntries[0].summary}`));
+    assert.match(prompt, /Decision Map is a derived projection/);
+    assert.match(prompt, /that listing alone does not establish a user-only decision/);
+    assert.doesNotMatch(prompt, /Keep this for coverage review/);
+    assert.doesNotMatch(prompt, /\*\*Answer:\*\*/);
+  });
+
   it("limits draft-coverage-review input to answered and dropped QA", () => {
     const prompt = buildDraftReviewPrompt(draftJson, "request", [], { key: "coverage" });
     const renderedQaFieldPatterns = [

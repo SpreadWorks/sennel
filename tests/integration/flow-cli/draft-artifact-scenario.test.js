@@ -7,6 +7,7 @@ import path from "node:path";
 import { it, mock } from "node:test";
 
 import { FlowManager } from "../../../src/lib/flow-manager.js";
+import { managedOutputDir } from "../../../src/lib/config.js";
 import { FlowTargetExpectation, FlowTargetBinding } from "../../../src/lib/flow-target-guard.js";
 import { FlowDispatchInvocation, FlowDispatchSession, FlowDispatchTarget, UnapprovedFlowDispatchAuthorization } from "../../../src/flow/lib/dispatch-invocation.js";
 import GetNextActionCommand from "../../../src/flow/lib/get-next-action.js";
@@ -166,8 +167,12 @@ it("reopens Draft and preserves repair Attempt ordinals across an intervening De
 });
 
 for (const phase of ["questions", "coverage"]) {
-  for (const size of ["inline", "whole-file"]) {
-    it(`retains quoted NO_PROPOSALS in ${size} Draft ${phase} findings through publication, reload and triage`, async () => {
+  for (const size of phase === "questions" ? ["inline", "whole-file", "supplied-context"] : ["inline", "whole-file"]) {
+    const withContext = size === "supplied-context";
+    const name = withContext
+      ? "delivers searched codebase evidence to Draft question review and reloads its repair finding for triage"
+      : `retains quoted NO_PROPOSALS in ${size} Draft ${phase} findings through publication, reload and triage`;
+    it(name, async () => {
       const root = fixtureRepository(`draft-response-${phase}-${size}-`);
       try {
         const specId = `805-${phase}-${size}`;
@@ -177,7 +182,19 @@ for (const phase of ["questions", "coverage"]) {
           request: `Preserve actual findings, including quoted response markers.${size === "whole-file" ? "X".repeat(130_000) : ""}`,
           execution: { mode: "direct", baseBranch: "main", featureBranch: null },
         }).create().registerActive().activate("draft");
-        const draft = canonicalDraftDocument({ goal: "Preserve findings." });
+        const contextEntry = { file: "src/response-format.js", keywords: ["findings"],
+          summary: "The existing CLI preserves structured output when no format is requested." };
+        const question = "Should omitted output format preserve the existing structured response?";
+        const draft = canonicalDraftDocument({ goal: "Preserve findings.", questions: withContext ? [{
+          id: "q1", state: "CandidateQuestion", category: "user-visible-behavior", question,
+          revision: 0, provenance: { producer: "draft" }, evidenceDigest: "a".repeat(64),
+        }] : [] });
+        if (withContext) {
+          fs.mkdirSync(managedOutputDir(root), { recursive: true });
+          fs.writeFileSync(path.join(managedOutputDir(root), "analysis.json"), workerArtifactJson({
+            source: { entries: [contextEntry] },
+          }));
+        }
         flowManager.confirmCurrentAttempt({ specId, artifactWrites: [{
           logicalKey: "draft", mediaType: "application/json", bytes: Buffer.from(workerArtifactJson(draft)),
         }] });
@@ -189,8 +206,8 @@ for (const phase of ["questions", "coverage"]) {
           'import fs from "node:fs";',
           `const prompt = process.argv.at(-1);`,
           'const file = /^Absolute file path: (.+)$/m.exec(prompt)?.[1];',
-          'if (file) fs.readFileSync(file, "utf8");',
-          `fs.appendFileSync(${JSON.stringify(callsPath)}, JSON.stringify({ file: Boolean(file) }) + "\\n");`,
+          'const input = file ? fs.readFileSync(file, "utf8") : prompt;',
+          `fs.appendFileSync(${JSON.stringify(callsPath)}, JSON.stringify({ file: Boolean(file), input }) + "\\n");`,
           `process.stdout.write(fs.readFileSync(${JSON.stringify(responsePath)}, "utf8"));`,
         ].join("\n"));
         const config = { lang: "en", type: "base", docs: { languages: ["en"], defaultLanguage: "en" }, agent: {
@@ -212,19 +229,31 @@ for (const phase of ["questions", "coverage"]) {
           fixture.activate("draft-coverage-review");
         }
         fs.writeFileSync(callsPath, "");
-        const evidence = "The draft incorrectly quotes NO_PROPOSALS while leaving validation unspecified.";
-        fs.writeFileSync(responsePath, `### 1. Missing validation\n**Classification:** blocking\n**QA:** analysis.validation\n**Issue:** ${evidence}\n**Suggestion:** State the required validation.`);
+        const evidence = withContext
+          ? `${contextEntry.file}: ${contextEntry.summary}`
+          : "The draft incorrectly quotes NO_PROPOSALS while leaving validation unspecified.";
+        const findingField = withContext ? "repairTargets" : "blockingFindings";
+        const target = withContext ? "q1" : "analysis.validation";
+        const fieldPath = withContext ? "questionLedger.questions[0]" : "analysis.validation";
+        fs.writeFileSync(responsePath, `### 1. ${withContext ? "Redundant format question" : "Missing validation"}\n**Classification:** ${withContext ? "repair_target" : "blocking"}\n**QA:** ${target}\n**Issue:** ${evidence}\n**Suggestion:** ${withContext ? "Resolve the existing question using the cited codebase evidence." : "State the required validation."}`);
         await review();
         const calls = fs.readFileSync(callsPath, "utf8").trim().split("\n").map(JSON.parse);
         assert.equal(calls.length, phase === "coverage" ? 2 : 1);
         assert.ok(calls.every((call) => call.file === (size === "whole-file")));
+        if (withContext) {
+          assert.ok(calls[0].input.includes(`- **${contextEntry.file}**: ${contextEntry.summary}`),
+            "The external reviewer receives the context produced by the actual analysis search");
+          assert.ok(calls[0].input.includes(question));
+          assert.match(calls[0].input, /Decision Map is a derived projection/);
+        }
         flowManager = new FlowManager({ root, mainRoot: root, inWorktree: false, specId });
         const published = flowManager.readArtifact({ specId, logicalKey: `draft.${phase}.review`, consumerNodeId: `draft-${phase}-triage` });
         assertArtifactIntegrity(published);
         const artifact = JSON.parse(published.bytes).attempts.at(-1).artifact.payload;
-        assert.equal(artifact.verdict, "REJECTED");
-        assert.equal(artifact.blockingFindings.length, 1);
-        assert.equal(artifact.blockingFindings[0].evidence, evidence);
+        assert.equal(artifact.verdict, withContext ? "ADVISORY" : "REJECTED");
+        assert.equal(artifact[findingField].length, 1);
+        assert.equal(artifact[findingField][0].evidence, evidence);
+        assert.equal(artifact[findingField][0].target, target);
         assert.equal(flowManager.canonicalState(specId).nextAction().nodeId, `draft-${phase}-triage`);
         flowManager.beginNextAction(specId);
         const ctx = { root, mainRoot: root, executionRoot: root, specId, flowManager };
@@ -256,11 +285,12 @@ for (const phase of ["questions", "coverage"]) {
           assert.match(guidance, /Preserve existing QA entries and prior answers/);
           assert.match(guidance, new RegExp(`Accepted triage proceeds to draft-${phase}-repair`));
           const input = requestInput(request, `draft-review-${phase}.json`).document;
-          assert.equal(input.blockingFindings[0].evidence, evidence);
+          assert.equal(input[findingField][0].evidence, evidence);
+          assert.equal(input[findingField][0].target, target);
           fs.writeFileSync(requestPayloadPath(request, `draft-${phase}-triage.json`), workerArtifactJson({
             version: 1, phase: `draft-${phase}-triage`, sourceReview: `draft-review-${phase}.json`,
-            summary: "Apply the retained finding.", items: input.blockingFindings.map((finding) => ({
-              ...finding, decision: "apply", allowedFieldPaths: ["analysis.validation"], requiredFieldPaths: ["analysis.validation"],
+            summary: "Apply the retained finding.", items: input[findingField].map((finding) => ({
+              ...finding, decision: "apply", allowedFieldPaths: [fieldPath], requiredFieldPaths: [fieldPath],
             })),
           }));
           sealWorkerArtifactHandoff({ requestPath, invocationId: options.executionEnvironment.SENNEL_FLOW_DISPATCH_INVOCATION_ID });

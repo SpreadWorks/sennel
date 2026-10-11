@@ -1053,7 +1053,7 @@ function formatCodebaseContextForPrompt(contextEntries) {
   const contextText = contextEntries.map((e) =>
     `- **${e.file}**: ${e.summary || "(no summary)"}`
   ).join("\n");
-  return ["以下のファイルは spec との関連度順に並んでいます。", contextText].join("\n");
+  return ["以下のファイルは関連度順に並んでいます。", contextText].join("\n");
 }
 
 /**
@@ -4848,7 +4848,7 @@ function formatDraftReviewQaEntries(draftJson, stage) {
   return entries.map(formatDraftCoverageReviewEntry).join("\n\n");
 }
 
-function buildDraftQuestionReviewPrompt(draftJson, requestText) {
+function buildDraftQuestionReviewPrompt(draftJson, requestText, contextEntries) {
   const qaText = Array.isArray(draftJson?.questionLedger?.questions)
     ? formatDraftReviewQaEntries(draftJson, { key: "questions" })
     : "(no QA entries)";
@@ -4856,9 +4856,11 @@ function buildDraftQuestionReviewPrompt(draftJson, requestText) {
   return [
     "You are a draft question boundary review mapper. Check the supplied bounded range of the persisted user-decision list.",
     "This is not a question generation task. An empty question ledger is valid when the supplied authorities resolve every requirement.",
+    "The Decision Map is a derived projection of the other evidence; that listing alone does not establish a user-only decision. Compare each shown question with the Request / Issue, project rules, documentation, and supplied codebase context.",
+    "Mark an existing question as repair_target when that evidence already determines its answer. Keep an existing candidate when the supplied evidence leaves the user decision genuinely unresolved.",
     "Check only these finite defects in shown candidate entries:",
     "- The question is empty, duplicated, not self-contained, or asks for internal implementation details that project patterns should decide",
-    "- The authoritative Request / Issue, Decision Map, project rules, or supplied context already determines the answer, making the question a redundant confirmation",
+    "- The authoritative Request / Issue, project rules, or supplied context already determines the answer, making the question a redundant confirmation",
     "- The question includes an answer, rationale, evidence, or instruction instead of only the question text",
     "Do not identify missing first-pass questions.",
     "Do not propose NEW QA entries.",
@@ -4886,6 +4888,9 @@ function buildDraftQuestionReviewPrompt(draftJson, requestText) {
     "",
     "## Decision Map",
     formatDraftDecisionMap(draftJson),
+    "",
+    "## Codebase Context (related files)",
+    formatCodebaseContextForPrompt(contextEntries),
   ].join("\n");
 }
 
@@ -4902,16 +4907,12 @@ function loadDraftQaRulesPartial() {
 function buildDraftReviewPrompt(draftJson, requestText, contextEntries, stage) {
   const effectiveStage = stage || { key: "coverage" };
   if (effectiveStage.key === "questions") {
-    return buildDraftQuestionReviewPrompt(draftJson, requestText);
+    return buildDraftQuestionReviewPrompt(draftJson, requestText, contextEntries);
   }
 
   const qaText = Array.isArray(draftJson?.questionLedger?.questions)
     ? formatDraftReviewQaEntries(draftJson, effectiveStage)
     : "(no QA entries)";
-
-  const contextText = contextEntries.map((e) =>
-    `- **${e.file}**: ${e.summary || "(no summary)"}`
-  ).join("\n");
 
   return [
     "You are a draft coverage gate mapper. Check the supplied bounded range of answered and dropped draft QA before spec writing.",
@@ -4945,8 +4946,7 @@ function buildDraftReviewPrompt(draftJson, requestText, contextEntries, stage) {
     formatDraftDecisionMap(draftJson),
     "",
     "## Codebase Context (related files)",
-    "These files are ordered by relevance to the spec.",
-    contextText,
+    formatCodebaseContextForPrompt(contextEntries),
   ].join("\n");
 }
 
