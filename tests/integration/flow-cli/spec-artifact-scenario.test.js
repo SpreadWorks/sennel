@@ -43,15 +43,23 @@ function assertSelectedGateInstructions(next) {
   assert.doesNotMatch(next.instructions.content, /transition back to `spec`|gate step completes as deferred|Do not proceed until PASS/);
 }
 
+function largeRepairValue(prefix) {
+  const remainingBytes = 34_522 - Buffer.byteLength(prefix);
+  return `${prefix}${"条".repeat(Math.floor(remainingBytes / 3))}${"x".repeat(remainingBytes % 3)}`;
+}
+
 describe("Spec artifact lifecycle and downstream consumption", { concurrency: false }, () => {
-  for (const { retainGateFindings, advisoryRepair, largeGateResponse = false, largeSpecFile = false, overlongAcceptance = false } of [
+  for (const { retainGateFindings, advisoryRepair, largeGateResponse = false, largeSpecFile = false, overlongAcceptance = false, largeRepairValues = false } of [
     { retainGateFindings: false, advisoryRepair: false, overlongAcceptance: true },
     { retainGateFindings: true, advisoryRepair: false },
     { retainGateFindings: false, advisoryRepair: true },
     { retainGateFindings: false, advisoryRepair: false, largeGateResponse: true, largeSpecFile: false },
     { retainGateFindings: false, advisoryRepair: false, largeGateResponse: true, largeSpecFile: true },
+    { retainGateFindings: false, advisoryRepair: false, largeRepairValues: true },
   ]) {
-  it(largeGateResponse
+  it(largeRepairValues
+    ? "persists 34,522-byte ordinary and Gate repairs through Review, reload and Acceptance"
+    : largeGateResponse
     ? `retains complete large ${largeSpecFile ? "file" : "inline"} Spec Gate findings through repair and reload`
     : advisoryRepair
     ? "saves an advisory Spec repair, runs its worker, then gates the changed Spec"
@@ -95,8 +103,17 @@ describe("Spec artifact lifecycle and downstream consumption", { concurrency: fa
       const repairedFindingIdentities = new Set();
       const findingId = "spec-review-requirement";
       const approvedGoal = "Publish the required behavior in the Spec.";
-      const reviewedRequirement = "Retain the repaired Spec requirement in every downstream consumer.";
+      const reviewedRequirementPrefix = "Retain the repaired Spec requirement in every downstream consumer.";
+      const reviewedRequirement = largeRepairValues
+        ? largeRepairValue(reviewedRequirementPrefix)
+        : reviewedRequirementPrefix;
       const gateRequirement = "R10 must retain its original planned verification wording.";
+      const gateRepairPrefix = `${gateRequirement} The Spec Gate observation is addressed. `;
+      const gateRepairValue = largeRepairValue(gateRepairPrefix);
+      if (largeRepairValues) {
+        assert.equal(Buffer.byteLength(reviewedRequirement), 34_522);
+        assert.equal(Buffer.byteLength(gateRepairValue), 34_522);
+      }
       const gateTarget = { entity: "requirement", id: "R10", field: "desc" };
       const largeFindingIds = Array.from({ length: 8 }, (_, index) => `R${index + 10}`);
       const largeFindingReason = (id, occurrence) => `The planned verification for ${id}, gap ${occurrence + 1}, omits the required cross-section rationale. `
@@ -260,9 +277,9 @@ describe("Spec artifact lifecycle and downstream consumption", { concurrency: fa
               return { findingIdentities: selection.unit.findings.map((entry) => entry.identity),
                 operations: [{ kind: "edit-text-field", target: range.target,
                   expectedDigest: range.digest,
-                  edits: [{ startByte: Buffer.byteLength(range.value, "utf8"),
+                  edits: [{ startByte: largeRepairValues ? 0 : Buffer.byteLength(range.value, "utf8"),
                     endByte: Buffer.byteLength(range.value, "utf8"),
-                    replacement: " The Spec Gate observation is addressed." }],
+                    replacement: largeRepairValues ? gateRepairValue : " The Spec Gate observation is addressed." }],
                   reason: `Address the exact Spec Gate ${target.id} observation.`,
                 }] };
             });
@@ -328,6 +345,14 @@ describe("Spec artifact lifecycle and downstream consumption", { concurrency: fa
           specReviewRuns += 1;
           const source = JSON.parse(options.env.SENNEL_REVIEW_SPEC_REVIEW_SOURCE);
           const canonical = new CanonicalSpecReview(JSON.parse(fs.readFileSync(source.sourcePath, "utf8")));
+          if (largeRepairValues && gateRepairWorkerRuns > 0) {
+            const reviewSnapshot = flowManager.readArtifact({ specId, logicalKey: "spec.snapshot",
+              consumerNodeId: "spec-review", parameters: { revision: canonical.identity.revision.toString() } });
+            assert.equal(crypto.createHash("sha256").update(reviewSnapshot.bytes).digest("hex"), canonical.identity.digest);
+            const reviewedSpec = JSON.parse(reviewSnapshot.bytes.toString("utf8"));
+            assert.equal(reviewedSpec.requirements[0].desc, reviewedRequirement);
+            assert.equal(reviewedSpec.requirements.find((entry) => entry.id === "R10").desc, gateRepairValue);
+          }
           const delta = new SpecReviewDelta({
             version: 2,
             stage: "spec-review",
@@ -613,6 +638,7 @@ describe("Spec artifact lifecycle and downstream consumption", { concurrency: fa
       assert.equal(spec.requirements[0].desc, reviewedRequirement);
       assert.match(spec.requirements.find((entry) => entry.id === "R10").desc,
         /Spec Gate observation is addressed/);
+      if (largeRepairValues) assert.equal(spec.requirements.find((entry) => entry.id === "R10").desc, gateRepairValue);
       if (largeGateResponse) {
         for (const id of largeFindingIds) {
           assert.match(spec.requirements.find((entry) => entry.id === id).desc,

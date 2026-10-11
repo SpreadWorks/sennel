@@ -136,6 +136,7 @@ import {
 import { CurrentFlowStateConflictError } from "../../../src/flow/lib/current-flow-state-conflict-error.js";
 import { CanonicalSpecApproval } from "../../../src/flow/lib/canonical-spec-approval.js";
 import { applySpecRepairOperations } from "../../../src/flow/lib/spec-repair-operations.js";
+import { canonicalLargeTaskAcceptance } from "./fixtures/spec-repair-canonical-values.js";
 import {
   CanonicalSpecReview,
   SpecReviewDelta,
@@ -4950,6 +4951,57 @@ describe("worker artifact handoff", () => {
         [repaired],
       );
       assert.deepEqual(value.flowManager.load(value.specId).tasks, []);
+    } finally {
+      removeTmpDir(value.mainRoot);
+    }
+  });
+
+  it("preserves a repaired Task acceptance above 32 KiB across reload and downstream canonical inputs", async () => {
+    const value = fixture("spec", {
+      specRecord: validSpec(),
+      admitMappedTasks: false,
+      beforeActivate(fixtureValue) {
+        publishDraftBeforeTarget(fixtureValue, draftDocument("draft input"));
+      },
+    });
+    try {
+      const initial = {
+        id: "T1", title: "Repair the Task acceptance", goal: "Preserve canonical acceptance criteria.",
+        acceptance: ["Initial acceptance."], implementation_notes: "Use the canonical Task proposal.",
+        test_strategy: "Check persisted criteria.", origin: "plan", added_round: 0, status: "pending",
+      };
+      value.flowManager.confirmCurrentAttempt({
+        specId: value.specId,
+        specRecord: new CanonicalWorkerSpecPublication({ ...validSpec(), tasks: [initial] }),
+      });
+      const findingId = await prepareTaskProposalRepair(value, ["T1"]);
+      const acceptance = canonicalLargeTaskAcceptance();
+      const repaired = { ...initial, acceptance };
+      assert.equal(Buffer.byteLength(JSON.stringify(acceptance)), 34_522);
+      readSpecJsonValidator().validate({ ...validSpec(), tasks: [repaired] });
+      const repair = await completeTaskProposalRepair(value, taskProposalRepairRequest(value), [
+        taskProposalOperation(findingId, "T1", "acceptance", initial.acceptance, acceptance),
+      ]);
+      assert.equal(repair.stepResult.kind, "spec-repair-changed");
+
+      const restored = new FlowManager({ root: value.executionRoot, mainRoot: value.mainRoot,
+        inWorktree: true, specId: value.specId });
+      assert.equal(restored.canonicalState(value.specId).nextAction().nodeId, "spec-gate");
+      const gateInput = restored.readArtifact({ specId: value.specId,
+        logicalKey: "spec.record", consumerNodeId: "spec-gate" });
+      const persisted = JSON.parse(gateInput.bytes.toString("utf8"));
+      assert.deepEqual(persisted.tasks, [repaired]);
+      readSpecJsonValidator().validate(persisted);
+      assert.deepEqual(restored.load(value.specId).tasks, []);
+
+      const reviewInput = restored.readCurrentSpecReviewInput({ specId: value.specId,
+        consumerNodeId: "spec-review" });
+      const reviewedSnapshot = restored.readArtifact({ specId: value.specId,
+        logicalKey: "spec.snapshot", consumerNodeId: "spec-review",
+        parameters: { revision: String(reviewInput.revision).padStart(3, "0") } });
+      assert.equal(reviewInput.review.identity.digest, identityDigest(reviewedSnapshot.bytes));
+      assert.equal(reviewInput.review.identity.byteLength, reviewedSnapshot.bytes.length);
+      assert.deepEqual(JSON.parse(reviewedSnapshot.bytes.toString("utf8")).tasks, [repaired]);
     } finally {
       removeTmpDir(value.mainRoot);
     }

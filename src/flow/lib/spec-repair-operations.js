@@ -5,7 +5,7 @@ import { FlowFindingSourceIdentity } from "./flow-finding-source.js";
 const SHA256 = /^[a-f0-9]{64}$/;
 const SHA256_REVISION = /^sha256:([a-f0-9]{64})$/;
 const MAX_OPERATIONS = 64;
-const MAX_VALUE_BYTES = 32 * 1024;
+const MAX_SCOPE_EXPANSION_BYTES = 32 * 1024;
 const MAX_TEXT_EDITS = 64;
 const MAX_ATTEMPT_ERROR_BYTES = 1024;
 const COLLECTION_TARGETS = new Set([
@@ -27,20 +27,6 @@ function requiredText(value, field) {
 }
 function clone(value) { return structuredClone(value); }
 function stableBytes(value) { return Buffer.byteLength(JSON.stringify(value)); }
-function isSchemaBoundTaskAcceptanceReplacement(target, replacement, acceptanceContract) {
-  if (!target || typeof target !== "object" || Array.isArray(target)
-    || Object.keys(target).length !== 3
-    || !Object.hasOwn(target, "entity")
-    || !Object.hasOwn(target, "id")
-    || !Object.hasOwn(target, "field")
-    || target.entity !== "task"
-    || typeof target.id !== "string"
-    || target.id.trim() === ""
-    || target.field !== "acceptance"
-    || typeof acceptanceContract?.acceptsReplacement !== "function"
-    || !Number.isSafeInteger(acceptanceContract.maxReplacementBytes)) return false;
-  return acceptanceContract.acceptsReplacement(replacement);
-}
 function valueDigest(value) { return crypto.createHash("sha256").update(JSON.stringify(value)).digest("hex"); }
 function canonicalJson(value) {
   if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
@@ -80,9 +66,10 @@ function frozen(value) { return freezeNested(clone(value)); }
 function boundedErrorMessage(message) {
   const normalized = String(message ?? "spec repair attempt rejected").replace(/[\r\n\t]+/g, " ").trim();
   const bytes = Buffer.from(normalized, "utf8");
-  return bytes.length <= MAX_ATTEMPT_ERROR_BYTES
-    ? normalized
-    : `${bytes.subarray(0, MAX_ATTEMPT_ERROR_BYTES - 3).toString("utf8")}...`;
+  if (bytes.length <= MAX_ATTEMPT_ERROR_BYTES) return normalized;
+  let end = MAX_ATTEMPT_ERROR_BYTES - 3;
+  while ((bytes[end] & 0xc0) === 0x80) end -= 1;
+  return `${bytes.subarray(0, end).toString("utf8")}...`;
 }
 function fallbackAttemptAudit(baseRevision = null) {
   return {
@@ -120,7 +107,7 @@ function discardedOperation(value, reason) {
     kind: typeof source?.kind === "string" ? source.kind : null,
     target: auditTarget(source?.target),
     operationDigest: valueDigest(value),
-    reason,
+    reason: boundedErrorMessage(reason),
   });
 }
 
@@ -222,7 +209,7 @@ export class SpecGateRepairPermission extends SpecRepairPermission {
 }
 
 export class SpecRepairOperation {
-  constructor(input, index, { replacementRequired = true, editsRequired = false, maxValueBytes = MAX_VALUE_BYTES } = {}) {
+  constructor(input, index, { replacementRequired = true, editsRequired = false } = {}) {
     const keys = ["findingIds", "kind", "target", "expectedDigest", "reason"];
     if (replacementRequired) keys.push("replacement");
     if (editsRequired) keys.push("edits");
@@ -238,9 +225,6 @@ export class SpecRepairOperation {
     this.kind = requiredText(input.kind, `spec-repair.operations[${index}].kind`);
     this.target = SpecRepairTarget.fromJSON(input.target, `spec-repair.operations[${index}].target`);
     this.reason = requiredText(input.reason, `spec-repair.operations[${index}].reason`);
-    if (replacementRequired) {
-      if (stableBytes(input.replacement) > maxValueBytes) throw new Error(`spec-repair.operations[${index}].replacement is oversized`);
-    }
     this.replacement = replacementRequired ? frozen(input.replacement) : null;
     this.replacementRequired = replacementRequired;
     if (editsRequired) {
@@ -248,9 +232,6 @@ export class SpecRepairOperation {
         throw new Error(`spec-repair.operations[${index}].edits must contain at most ${MAX_TEXT_EDITS} edits`);
       }
       const edits = input.edits.map((edit, editIndex) => new SpecRepairTextEdit(edit, `spec-repair.operations[${index}].edits[${editIndex}]`));
-      if (stableBytes(input.edits) > MAX_VALUE_BYTES) {
-        throw new Error(`spec-repair.operations[${index}].edits replacements are oversized`);
-      }
       for (let editIndex = 0; editIndex < edits.length; editIndex += 1) {
         if (editIndex > 0 && (edits[editIndex - 1].startByte > edits[editIndex].startByte
           || (edits[editIndex - 1].startByte === edits[editIndex].startByte && edits[editIndex - 1].endByte > edits[editIndex].endByte))) {
@@ -315,7 +296,7 @@ export class SpecRepairFieldReplace extends SpecRepairOperation {
   apply(context) { return context.replace(this.resolve(context), this); }
 }
 export class SpecRepairIdEntityFieldReplace extends SpecRepairOperation {
-  constructor(input, index, options = {}) { super(input, index, options); if (this.kind !== "replace-entity-field" || !SpecRepairIdEntityFieldReplace.supportsTarget(this.target) || this.expectedDigest === null) throw new Error(`spec-repair.operations[${index}] replace-entity-field target or digest is invalid`); Object.freeze(this); }
+  constructor(input, index) { super(input, index); if (this.kind !== "replace-entity-field" || !SpecRepairIdEntityFieldReplace.supportsTarget(this.target) || this.expectedDigest === null) throw new Error(`spec-repair.operations[${index}] replace-entity-field target or digest is invalid`); Object.freeze(this); }
   static supportsTarget(target) { return target instanceof SpecRepairIdEntityTarget; }
   apply(context) { return context.replace(this.resolve(context), this); }
 }
@@ -334,8 +315,8 @@ export class SpecGateRepairIdEntityFieldDelete extends SpecRepairOperation {
   apply(context) { return context.deleteField(this.resolve(context), this); }
 }
 export class SpecGateRepairIdEntityFieldAdd extends SpecRepairOperation {
-  constructor(input, index, options = {}) {
-    super(input, index, options);
+  constructor(input, index) {
+    super(input, index);
     if (this.kind !== "add-entity-field" || !SpecGateRepairIdEntityFieldAdd.supportsTarget(this.target)
       || this.expectedDigest !== null) throw new Error(`spec-repair.operations[${index}] add-entity-field target or digest is invalid`);
     Object.freeze(this);
@@ -384,7 +365,7 @@ GATE_OPERATION_TYPES.set("delete-entity-field", SpecGateRepairIdEntityFieldDelet
 GATE_OPERATION_TYPES.set("add-entity-field", SpecGateRepairIdEntityFieldAdd);
 
 export class SpecRepairOperationBatch {
-  constructor(document, acceptanceContract = null) {
+  constructor(document) {
     try {
       optionalExactKeys(document, ["version", "stage", "identity", "baseReviewDigest", "findings", "operations"], ["scopeExpansions"], "review.delta.json");
       if (document.version !== 2 || document.stage !== "spec-repair") throw new Error("review.delta.json must be a spec-repair v2 delta");
@@ -405,10 +386,7 @@ export class SpecRepairOperationBatch {
       try {
         const Type = OPERATION_TYPES.get(operation?.kind);
         if (!Type) throw new Error(`spec-repair.operations[${index}] kind is invalid`);
-        const maxValueBytes = isSchemaBoundTaskAcceptanceReplacement(
-          operation?.target, operation?.replacement, acceptanceContract,
-        ) ? acceptanceContract.maxReplacementBytes : MAX_VALUE_BYTES;
-        operations.push(new Type(operation, index, { maxValueBytes }));
+        operations.push(new Type(operation, index));
       } catch (cause) { discardedOperations.push(discardedOperation(operation, cause.message)); }
     });
     this.operations = Object.freeze(operations);
@@ -421,7 +399,7 @@ export class SpecRepairOperationBatch {
     (document.scopeExpansions ?? []).forEach((proposal, index) => {
       try {
         const value = frozen(proposal);
-        if (stableBytes(value) > MAX_VALUE_BYTES) throw new Error(`spec-repair scope expansion ${index} is oversized`);
+        if (stableBytes(value) > MAX_SCOPE_EXPANSION_BYTES) throw new Error(`spec-repair scope expansion ${index} is oversized`);
         scopeExpansions.push(value);
       } catch (cause) {
         // A scope proposal is audit-only and must not poison independent
@@ -518,7 +496,6 @@ class SpecRepairApplicationContext {
     chunks.push(source.subarray(cursor));
     const replacement = Buffer.concat(chunks);
     const value = replacement.toString("utf8");
-    if (stableBytes(value) > MAX_VALUE_BYTES) return { status: "oversized" };
     reference.object[reference.key] = value;
     return { status: "ok" };
   }
@@ -530,6 +507,85 @@ class SpecRepairApplicationContext {
     throw new Error("array resolution is not owned by this application context");
   }
 }
+
+/** Safe diagnostics describe the failed contract without retaining worker values. */
+class SpecRepairCandidateRejection {
+  constructor(status) {
+    const reason = status === "conflict" ? "conflicting target resolution"
+      : status === "invalid" ? "invalid UTF-8 text edit target or range"
+        : "stale target digest";
+    this.operationReason = status === "schema-invalid" ? "operation produces an invalid Spec schema" : reason;
+    this.groupReason = status === "schema-invalid"
+      ? "group produces an invalid Spec schema: canonical Spec validation failed" : reason;
+    Object.freeze(this);
+  }
+}
+
+/** Both repair producers stage accepted work against the same immutable base.
+ * An inspection can continue staging atomic operation lists until publication.
+ * Rebuild only after rejected work changed the candidate, restoring accepted
+ * array lineage as well as values. Canonical validation owns value limits. */
+class SpecRepairCandidateInspection {
+  #candidate;
+  #immutableBase;
+  #context;
+  #validator;
+  #accepted = [];
+  #rejection = null;
+  #spec;
+  #published = false;
+
+  constructor({ spec, operations, validator }) {
+    this.#candidate = clone(spec);
+    this.#immutableBase = frozen(spec);
+    this.#context = new SpecRepairApplicationContext(this.#candidate, this.#immutableBase);
+    this.#validator = validator;
+    if (operations !== undefined) {
+      this.inspect(operations);
+      this.#spec = this.#rejection === null ? Object.freeze(this.#candidate) : null;
+      this.#published = true;
+    }
+    Object.freeze(this);
+  }
+
+  inspect(operations) {
+    if (this.#published) throw new Error("Spec repair candidate has already been published");
+    let rejection = null;
+    let staged = false;
+    for (const operation of operations) {
+      const result = operation.apply(this.#context);
+      if (result.status !== "ok") {
+        rejection = new SpecRepairCandidateRejection(result.status);
+        break;
+      }
+      staged = true;
+    }
+    if (rejection === null) {
+      try { this.#validator.validate(this.#candidate); }
+      catch { rejection = new SpecRepairCandidateRejection("schema-invalid"); }
+    }
+    if (rejection === null) this.#accepted.push(...operations);
+    else if (staged) this.#restoreAccepted();
+    this.#rejection = rejection;
+    return rejection;
+  }
+
+  #restoreAccepted() {
+    this.#candidate = clone(this.#immutableBase);
+    this.#context = new SpecRepairApplicationContext(this.#candidate, this.#immutableBase);
+    for (const operation of this.#accepted) operation.apply(this.#context);
+  }
+
+  get rejection() { return this.#rejection; }
+  get spec() {
+    if (!this.#published) {
+      this.#spec = Object.freeze(this.#candidate);
+      this.#published = true;
+    }
+    return this.#spec;
+  }
+}
+
 function collectionReference(spec, collection) {
   const parts = collection.split("."); let object = spec;
   for (let index = 0; index < parts.length - 1; index += 1) object = object?.[parts[index]];
@@ -703,20 +759,11 @@ export function applySpecRepairOperations({ spec, triage, repair, inputRevision,
   if (!(validator instanceof SpecJsonValidator)) throw new TypeError("Spec repair requires its canonical Spec validator");
   const batch = repair instanceof SpecRepairOperationBatch
     ? repair
-    : new SpecRepairOperationBatch(repair, validator.taskAcceptanceContract());
+    : new SpecRepairOperationBatch(repair);
   if (batch.baseRevision !== revisionFor(inputRevision)) throw new SpecRepairOperationsError("FLOW_SPEC_REPAIR_BASE_REVISION_MISMATCH", "spec-repair operations do not match the immutable handoff revision", { retryable: false, audit: commandOwnedAudit(batch, [], []) });
   const permissions = triageMap(triage, spec);
-  let candidate = clone(spec); let context = new SpecRepairApplicationContext(candidate, frozen(spec));
-  const accepted = []; const acceptedThisAttempt = []; const discarded = [...batch.discardedOperations, ...batch.discardedScopeExpansions]; const touched = new Map();
-  const replayAcceptedOperations = () => {
-    candidate = clone(spec);
-    context = new SpecRepairApplicationContext(candidate, frozen(spec));
-    for (const acceptedOperation of accepted) {
-      if (acceptedOperation.apply(context).status !== "ok") {
-        throw new Error("accepted operation could not be replayed against its immutable base");
-      }
-    }
-  };
+  const inspection = new SpecRepairCandidateInspection({ spec, validator });
+  const acceptedThisAttempt = []; const discarded = [...batch.discardedOperations, ...batch.discardedScopeExpansions]; const touched = new Map();
   // Authorization is a per-operation decision.  An unauthorized proposal must
   // not poison an otherwise valid operation merely because it names the same
   // location; only authorized operations participate in conflict detection.
@@ -754,26 +801,14 @@ export function applySpecRepairOperations({ spec, triage, repair, inputRevision,
       conflictingCurrentKeys.add(operation.conflictKey());
       discarded.push(discardedOperation(operation.toJSON(), "conflicting operation")); continue;
     }
-    const result = operation.apply(context);
-    if (result.status !== "ok") {
-      const reason = result.status === "conflict" ? "conflicting target resolution"
-        : result.status === "invalid" ? "invalid UTF-8 text edit target or range"
-          : result.status === "oversized" ? "text edit result is oversized"
-            : "stale target digest";
-      discarded.push(discardedOperation(operation.toJSON(), reason)); continue;
-    }
-    try {
-      validator.validate(candidate);
-    } catch {
-      // Array lineages carry immutable-base positions. Replaying accepted work
-      // rebuilds that lineage; cloning only the candidate would reinterpret
-      // later positions after a prior delete.
-      replayAcceptedOperations();
-      discarded.push(discardedOperation(operation.toJSON(), "operation produces an invalid Spec schema"));
+    const rejection = inspection.inspect([operation]);
+    if (rejection !== null) {
+      discarded.push(discardedOperation(operation.toJSON(), rejection.operationReason));
       continue;
     }
-    touched.set(operation.conflictKey(), operation); accepted.push(operation); acceptedThisAttempt.push(operation);
+    touched.set(operation.conflictKey(), operation); acceptedThisAttempt.push(operation);
   }
+  const candidate = inspection.spec;
   const audit = commandOwnedAudit(batch, acceptedThisAttempt, discarded, batch.scopeExpansions);
   // Repair is a filter, not a completeness solver. A valid partial or empty
   // operation batch remains a successful handoff; the subsequent spec-gate
@@ -835,12 +870,31 @@ function gateGroupAudit(group, index) {
   });
 }
 function rejectedGateGroup(group, index, reason) {
-  return Object.freeze({ index, groupDigest: specRepairProposalDigest(group ?? null), reason: boundedErrorMessage(reason) });
+  return new SpecGateRepairOperationRejection({ index,
+    groupDigest: specRepairProposalDigest(group ?? null), reason });
+}
+
+/** A rejected group keeps bounded diagnostics and identity, never worker values. */
+export class SpecGateRepairOperationRejection extends Error {
+  constructor({ index, groupDigest, reason }) {
+    if (!Number.isSafeInteger(index) || index < 0 || !SHA256.test(groupDigest)
+      || typeof reason !== "string") throw new TypeError("Spec Gate rejection requires its group identity and diagnostic");
+    const bounded = boundedErrorMessage(reason);
+    super(bounded);
+    this.name = "SpecGateRepairOperationRejection";
+    this.code = "FLOW_SPEC_GATE_REPAIR_OPERATION_REJECTED";
+    this.retryable = false;
+    this.index = index;
+    this.groupDigest = groupDigest;
+    this.reason = bounded;
+    Object.freeze(this);
+  }
+  toJSON() { return { index: this.index, groupDigest: this.groupDigest, reason: this.reason }; }
 }
 
 /** A worker group is one indivisible semantic correction. */
 export class SpecGateRepairOperationGroup {
-  constructor(value, index, acceptanceContract = null) {
+  constructor(value, index) {
     exactKeys(value, ["findingIdentities", "operations"], `Spec Gate repair group ${index}`);
     if (!Array.isArray(value.findingIdentities) || value.findingIdentities.length === 0) throw new Error("Spec Gate repair group requires finding identities");
     this.identities = Object.freeze(value.findingIdentities.map((entry, identityIndex) => {
@@ -858,10 +912,7 @@ export class SpecGateRepairOperationGroup {
       // full identities live at group level; this key is internal to parsing.
       const keys = Object.keys(operation ?? {});
       if (keys.includes("findingIds")) throw new Error("Spec Gate operation must not declare Review findingIds");
-      const maxValueBytes = isSchemaBoundTaskAcceptanceReplacement(
-        operation?.target, operation?.replacement, acceptanceContract,
-      ) ? acceptanceContract.maxReplacementBytes : MAX_VALUE_BYTES;
-      return new Type({ ...operation, findingIds: ["gate-group"] }, operationIndex, { maxValueBytes });
+      return new Type({ ...operation, findingIds: ["gate-group"] }, operationIndex);
     });
     const seen = new Set();
     this.operations = Object.freeze(operations.filter((operation) => {
@@ -875,7 +926,7 @@ export class SpecGateRepairOperationGroup {
 }
 
 export class SpecGateRepairOperationBatch {
-  constructor(value, acceptanceContract = null) {
+  constructor(value) {
     exactKeys(value, ["version", "stage", "baseRevision", "groups"], "Spec Gate repair proposal");
     if (value.version !== 1 || value.stage !== "spec-gate-repair" || !SHA256_REVISION.test(value.baseRevision)
       || !Array.isArray(value.groups) || value.groups.length > MAX_OPERATIONS
@@ -884,136 +935,128 @@ export class SpecGateRepairOperationBatch {
     }
     this.baseRevision = value.baseRevision;
     this.groups = Object.freeze(value.groups.map((group, index) => {
-      try { return new SpecGateRepairOperationGroup(group, index, acceptanceContract); }
+      try { return new SpecGateRepairOperationGroup(group, index); }
       catch (cause) { return rejectedGateGroup(group, index, cause.message); }
     }));
     Object.freeze(this);
   }
 }
 
-/** Applies every Gate group against one immutable baseline. One bad operation
- * rejects its entire group, while independent groups can still be adopted. */
-export function applySpecGateRepairOperations({ spec, authority, repair, inputRevision, validator }) {
-  if (!(validator instanceof SpecJsonValidator)) throw new TypeError("Spec Gate repair requires its canonical Spec validator");
-  if (!(authority instanceof SpecGateRepairAuthority)) throw new Error("Spec Gate repair requires typed Gate authority");
-  const batch = repair instanceof SpecGateRepairOperationBatch
-    ? repair
-    : new SpecGateRepairOperationBatch(repair, validator.taskAcceptanceContract());
-  const revision = revisionFor(inputRevision);
-  if (authority.baseRevision !== revision || batch.baseRevision !== revision) {
-    throw new SpecRepairOperationsError("FLOW_SPEC_REPAIR_BASE_REVISION_MISMATCH", "Spec Gate repair does not match the immutable Spec revision");
-  }
-  const rejected = [];
-  const proposed = [];
-  const conflictContext = new SpecRepairApplicationContext(clone(spec), frozen(spec));
-  for (const [index, group] of batch.groups.entries()) {
-    if (!(group instanceof SpecGateRepairOperationGroup)) { rejected.push(group); continue; }
-    if (!authority.authorizesGroup(group)) {
-      rejected.push(rejectedGateGroup(gateGroupAudit(group, index), index, "unauthorized operation"));
-      continue;
+/** Pure candidate inspection shared by Step adoption and recovery preview.
+ * One bad operation rejects its entire group; independent groups remain usable. */
+export class SpecGateRepairOperationInspection {
+  constructor({ spec, authority, repair, inputRevision, validator }) {
+    if (!(validator instanceof SpecJsonValidator)) throw new TypeError("Spec Gate repair requires its canonical Spec validator");
+    if (!(authority instanceof SpecGateRepairAuthority)) throw new Error("Spec Gate repair requires typed Gate authority");
+    const batch = repair instanceof SpecGateRepairOperationBatch
+      ? repair
+      : new SpecGateRepairOperationBatch(repair);
+    const revision = revisionFor(inputRevision);
+    if (authority.baseRevision !== revision || batch.baseRevision !== revision) {
+      throw new SpecRepairOperationsError("FLOW_SPEC_REPAIR_BASE_REVISION_MISMATCH", "Spec Gate repair does not match the immutable Spec revision");
     }
-    const claims = new Map(group.operations.map((operation) => [operation, conflictContext.conflictClaim(operation)]));
-    const unresolved = [...claims.values()].find((claim) => claim.status !== "ok");
-    if (unresolved) {
-      rejected.push(rejectedGateGroup(gateGroupAudit(group, index), index,
-        unresolved.status === "conflict" ? "conflicting target resolution" : "stale target digest"));
-      continue;
+    const rejected = [];
+    const proposed = [];
+    const conflictContext = new SpecRepairApplicationContext(clone(spec), frozen(spec));
+    for (const [index, group] of batch.groups.entries()) {
+      if (!(group instanceof SpecGateRepairOperationGroup)) { rejected.push(group); continue; }
+      if (!authority.authorizesGroup(group)) {
+        rejected.push(rejectedGateGroup(gateGroupAudit(group, index), index, "unauthorized operation"));
+        continue;
+      }
+      const claims = new Map(group.operations.map((operation) => [operation, conflictContext.conflictClaim(operation)]));
+      const unresolved = [...claims.values()].find((claim) => claim.status !== "ok");
+      if (unresolved) {
+        rejected.push(rejectedGateGroup(gateGroupAudit(group, index), index,
+          unresolved.status === "conflict" ? "conflicting target resolution" : "stale target digest"));
+        continue;
+      }
+      const conflictKeys = new Map([...claims].map(([operation, claim]) => [operation, claim.key]));
+      const operationDigests = new Map(group.operations.map((operation) => [operation, semanticOperationDigest(operation, conflictKeys.get(operation))]));
+      const seenDigests = new Set();
+      const operations = group.operations.filter((operation) => {
+        const digest = operationDigests.get(operation);
+        if (seenDigests.has(digest)) return false;
+        seenDigests.add(digest);
+        return true;
+      });
+      const conflicts = currentAttemptConflictKeys(operations, (operation) => conflictKeys.get(operation));
+      if (conflicts.size > 0) {
+        rejected.push(rejectedGateGroup(gateGroupAudit(group, index), index, "conflicting operation"));
+        continue;
+      }
+      proposed.push({ group, index, operations, conflictKeys, operationDigests });
     }
-    const conflictKeys = new Map([...claims].map(([operation, claim]) => [operation, claim.key]));
-    const operationDigests = new Map(group.operations.map((operation) => [operation, semanticOperationDigest(operation, conflictKeys.get(operation))]));
-    const seenDigests = new Set();
-    const operations = group.operations.filter((operation) => {
-      const digest = operationDigests.get(operation);
-      if (seenDigests.has(digest)) return false;
-      seenDigests.add(digest);
-      return true;
-    });
-    const conflicts = currentAttemptConflictKeys(operations, (operation) => conflictKeys.get(operation));
-    if (conflicts.size > 0) {
-      rejected.push(rejectedGateGroup(gateGroupAudit(group, index), index, "conflicting operation"));
-      continue;
+    const proposalsByUnit = new Map();
+    for (const proposal of proposed) {
+      const sameUnit = proposalsByUnit.get(proposal.group.unitKey) ?? [];
+      sameUnit.push(proposal);
+      proposalsByUnit.set(proposal.group.unitKey, sameUnit);
     }
-    proposed.push({ group, index, operations, conflictKeys, operationDigests });
-  }
-  const proposalsByUnit = new Map();
-  for (const proposal of proposed) {
-    const sameUnit = proposalsByUnit.get(proposal.group.unitKey) ?? [];
-    sameUnit.push(proposal);
-    proposalsByUnit.set(proposal.group.unitKey, sameUnit);
-  }
-  const duplicateUnits = new Set([...proposalsByUnit.values()].filter((sameUnit) => sameUnit.length > 1).flat());
-  // Resolve competing proposals before adoption so no worker or input order
-  // can win a target after another group has already changed it.
-  const byTarget = new Map();
-  for (const proposal of proposed.filter((entry) => !duplicateUnits.has(entry))) {
-    for (const operation of proposal.operations) {
-      const key = proposal.conflictKeys.get(operation);
-      const claims = byTarget.get(key) ?? [];
-      claims.push({ proposal, operation, digest: proposal.operationDigests.get(operation) });
-      byTarget.set(key, claims);
+    const duplicateUnits = new Set([...proposalsByUnit.values()].filter((sameUnit) => sameUnit.length > 1).flat());
+    // Resolve competing proposals before adoption so no worker or input order
+    // can win a target after another group has already changed it.
+    const byTarget = new Map();
+    for (const proposal of proposed.filter((entry) => !duplicateUnits.has(entry))) {
+      for (const operation of proposal.operations) {
+        const key = proposal.conflictKeys.get(operation);
+        const claims = byTarget.get(key) ?? [];
+        claims.push({ proposal, operation, digest: proposal.operationDigests.get(operation) });
+        byTarget.set(key, claims);
+      }
     }
-  }
-  const conflictingGroups = new Set();
-  for (const claims of byTarget.values()) {
-    for (let left = 0; left < claims.length; left += 1) {
-      for (let right = left + 1; right < claims.length; right += 1) {
-        const first = claims[left]; const second = claims[right];
-        if (first.proposal === second.proposal) continue;
-        if (first.digest !== second.digest
-          && !first.operation.isComposableWith(second.operation)) {
-          conflictingGroups.add(first.proposal); conflictingGroups.add(second.proposal);
+    const conflictingGroups = new Set();
+    for (const claims of byTarget.values()) {
+      for (let left = 0; left < claims.length; left += 1) {
+        for (let right = left + 1; right < claims.length; right += 1) {
+          const first = claims[left]; const second = claims[right];
+          if (first.proposal === second.proposal) continue;
+          if (first.digest !== second.digest
+            && !first.operation.isComposableWith(second.operation)) {
+            conflictingGroups.add(first.proposal); conflictingGroups.add(second.proposal);
+          }
         }
       }
     }
-  }
-  const accepted = [];
-  const acceptedOperations = [];
-  const acceptedDigests = new Set();
-  let candidate = clone(spec);
-  for (const proposal of proposed) {
-    const { group, index } = proposal;
-    if (duplicateUnits.has(proposal)) {
-      rejected.push(rejectedGateGroup(gateGroupAudit(group, index), index, "duplicate repair unit"));
-      continue;
-    }
-    if (conflictingGroups.has(proposal)) {
-      rejected.push(rejectedGateGroup(gateGroupAudit(group, index), index, "conflicting operation"));
-      continue;
-    }
-    const fresh = proposal.operations.filter((operation) => !acceptedDigests.has(proposal.operationDigests.get(operation)));
-    // Reconstruct immutable-base array lineage before every staged group. A
-    // prior deletion must never reinterpret a later base position.
-    const staged = clone(spec);
-    const context = new SpecRepairApplicationContext(staged, frozen(spec));
-    let failure = null;
-    for (const operation of [...acceptedOperations, ...fresh]) {
-      const result = operation.apply(context);
-      if (result.status !== "ok") {
-        failure = result.status === "conflict" ? "conflicting target resolution"
-          : result.status === "invalid" ? "invalid UTF-8 text edit target or range"
-            : result.status === "oversized" ? "text edit result is oversized"
-              : "stale target digest";
-        break;
+    const accepted = [];
+    const acceptedOperations = [];
+    const acceptedDigests = new Set();
+    let candidate = clone(spec);
+    for (const proposal of proposed) {
+      const { group, index } = proposal;
+      if (duplicateUnits.has(proposal)) {
+        rejected.push(rejectedGateGroup(gateGroupAudit(group, index), index, "duplicate repair unit"));
+        continue;
       }
+      if (conflictingGroups.has(proposal)) {
+        rejected.push(rejectedGateGroup(gateGroupAudit(group, index), index, "conflicting operation"));
+        continue;
+      }
+      const fresh = proposal.operations.filter((operation) => !acceptedDigests.has(proposal.operationDigests.get(operation)));
+      const inspection = new SpecRepairCandidateInspection({ spec,
+        operations: [...acceptedOperations, ...fresh], validator });
+      if (inspection.rejection !== null) {
+        rejected.push(rejectedGateGroup(gateGroupAudit(group, index), index, inspection.rejection.groupReason));
+        continue;
+      }
+      candidate = inspection.spec;
+      accepted.push(gateGroupAudit(group, index));
+      acceptedOperations.push(...fresh);
+      for (const operation of proposal.operations) acceptedDigests.add(proposal.operationDigests.get(operation));
     }
-    if (failure === null) {
-      try { validator.validate(staged); }
-      catch { failure = "group produces an invalid Spec schema"; }
-    }
-    if (failure !== null) {
-      rejected.push(rejectedGateGroup(gateGroupAudit(group, index), index, failure));
-      continue;
-    }
-    candidate = staged;
-    accepted.push(gateGroupAudit(group, index));
-    acceptedOperations.push(...fresh);
-    for (const operation of proposal.operations) acceptedDigests.add(proposal.operationDigests.get(operation));
+    this.rejections = Object.freeze(rejected.sort((a, b) => a.index - b.index));
+    this.audit = Object.freeze({
+      version: 1, phase: "spec-gate-repair", baseRevision: revision,
+      acceptedGroups: Object.freeze(accepted), discardedGroups: Object.freeze(this.rejections.map((rejection) => Object.freeze(rejection.toJSON()))),
+      operationDigest: valueDigest({ accepted, rejected }),
+      resultRevision: Object.freeze({ digest: valueDigest(candidate), byteLength: stableBytes(candidate) }),
+    });
+    this.spec = Object.freeze(candidate);
+    Object.freeze(this);
   }
-  const audit = Object.freeze({
-    version: 1, phase: "spec-gate-repair", baseRevision: revision,
-    acceptedGroups: Object.freeze(accepted), discardedGroups: Object.freeze(rejected.sort((a, b) => a.index - b.index)),
-    operationDigest: valueDigest({ accepted, rejected }),
-    resultRevision: Object.freeze({ digest: valueDigest(candidate), byteLength: stableBytes(candidate) }),
-  });
-  return Object.freeze({ spec: Object.freeze(candidate), audit });
+}
+
+/** The public application API exposes the same pure inspection as preview. */
+export function applySpecGateRepairOperations(input) {
+  return new SpecGateRepairOperationInspection(input);
 }
