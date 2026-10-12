@@ -16,6 +16,7 @@ import * as gateFacts from "../../../src/flow/lib/gate-transition-facts.js";
 import SetApprovalCommand from "../../../src/flow/lib/set-approval.js";
 import { NonBlockingPolicy, activateNonBlockingPolicy, decisionContextForActiveFlow, recordNonBlockingDecision } from "../../../src/flow/lib/nonblocking.js";
 import GetNextActionCommand from "../../../src/flow/lib/get-next-action.js";
+import GetArtifactCommand from "../../../src/flow/lib/get-artifact.js";
 import { getStepInstructions } from "../../../src/flow/lib/get-step-instructions.js";
 import { FLOW_DISPATCH_INVOCATION_ENV } from "../../../src/flow/lib/dispatch-invocation.js";
 import { readCurrentGateTransitionFacts } from "../../../src/flow/lib/gate-transition-facts.js";
@@ -50,6 +51,64 @@ function assertSelectedGateInstructions(next) {
 function largeRepairValue(prefix) {
   const remainingBytes = 34_522 - Buffer.byteLength(prefix);
   return `${prefix}${"条".repeat(Math.floor(remainingBytes / 3))}${"x".repeat(remainingBytes % 3)}`;
+}
+
+async function assertSummaryPreservesPublishedEvidence({ root, specId, flowManager, binding, requirement }) {
+  const directory = flowManager.specLocation(specId).directory;
+  const snapshot = () => {
+    const files = new Map();
+    const visit = (current) => {
+      for (const entry of fs.readdirSync(current, { withFileTypes: true })) {
+        const file = path.join(current, entry.name);
+        if (path.relative(directory, file).split(path.sep).join("/") === ".runtime/views") continue;
+        if (entry.isDirectory()) visit(file);
+        else if (entry.isFile()) files.set(path.relative(directory, file), fs.readFileSync(file));
+      }
+    };
+    visit(directory);
+    return files;
+  };
+  const before = snapshot();
+  let malformed = true;
+  let calls = 0;
+  const agent = {
+    promptCharacterLimit: 60_000,
+    resolve: () => ({ providerKey: "fixture", profileKey: "summary", profile: { args: [] } }),
+    call: async (prompt) => {
+      calls += 1;
+      const records = JSON.parse(prompt.split("Source sections (JSON):\n")[1]);
+      const response = {};
+      for (const record of records) {
+        const excerpt = { sourceRefs: [record.sourceRef], excerpt: record.excerpt };
+        if (record.kind === "requirement" || record.kind === "task") {
+          const property = record.kind === "requirement" ? "requirements" : "tasks";
+          const identity = record.kind === "requirement" ? "requirementId" : "taskId";
+          (response[property] ??= []).push({ [identity]: record.identity, ...excerpt });
+        } else response[record.kind] = excerpt;
+      }
+      if (malformed) Object.values(response).flat()[0].excerpt += "changed source";
+      return JSON.stringify(response);
+    },
+  };
+  const input = { logicalKey: "spec.record", mode: "summary", expectBinding: binding };
+  const container = dispatchContainer({ root, flowManager, agent });
+  const rejected = await new GetArtifactCommand().run(container, input);
+  assert.equal(rejected.ok, false);
+  assert.equal(rejected.errors[0].code, "ARTIFACT_VIEW_SUMMARY_INVALID");
+  assert.deepEqual(snapshot(), before);
+  assert.equal(fs.existsSync(path.join(directory, ".runtime/views/spec.record.summary.md")), false);
+  malformed = false;
+  const summarized = await new GetArtifactCommand().run(container, input);
+  assert.equal(summarized.ok, true, JSON.stringify(summarized));
+  assert.ok(summarized.data.markdown.includes(requirement));
+  assert.deepEqual(snapshot(), before);
+  const callCount = calls;
+  const restored = new FlowManager({ root, mainRoot: root, inWorktree: false, specId });
+  const cached = await new GetArtifactCommand().run(dispatchContainer({ root, flowManager: restored, agent }), input);
+  assert.equal(cached.ok, true);
+  assert.equal(cached.data.markdown, summarized.data.markdown);
+  assert.equal(calls, callCount);
+  assert.deepEqual(snapshot(), before);
 }
 
 describe("Spec artifact lifecycle and downstream consumption", { concurrency: false }, () => {
@@ -767,6 +826,10 @@ describe("Spec artifact lifecycle and downstream consumption", { concurrency: fa
         specId, logicalKey: "spec.record", consumerNodeId: "approval",
       }).bytes.toString("utf8"));
       assert.equal(spec.goal, approvedGoal);
+      if (largeRepairValues) {
+        await assertSummaryPreservesPublishedEvidence({ root, specId, flowManager: reloaded,
+          binding: projected.binding, requirement: reviewedRequirement });
+      }
       if (overlongAcceptance) {
         const retainedText = spec.tasks.find((task) => task.id === "T1").acceptance[0];
         assert.equal(retainedText, overlongAcceptanceText.slice(0, 500));
