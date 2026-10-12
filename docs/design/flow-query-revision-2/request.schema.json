@@ -1,0 +1,152 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Flow Query revision 2 request (design contract)",
+  "description": "The revision 2 request preserves the metadata and activities revision 1 contract exactly. Date validity, UTF-8 byte bounds, FlowSpecId, cursor binding and safe integer semantics use the existing query boundary validators.",
+  "oneOf": [
+    {
+      "type": "object",
+      "required": [
+        "resource",
+        "condition"
+      ],
+      "properties": {
+        "resource": {
+          "type": "string",
+          "enum": [
+            "metadata"
+          ]
+        },
+        "condition": {
+          "type": "object",
+          "required": [
+            "specId"
+          ],
+          "properties": {
+            "specId": {
+              "type": "string",
+              "maxLength": 4096,
+              "minLength": 1
+            },
+            "flowVersion": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "required": [
+        "resource",
+        "condition",
+        "page"
+      ],
+      "properties": {
+        "resource": {
+          "type": "string",
+          "enum": [
+            "activities"
+          ]
+        },
+        "condition": {
+          "type": "object",
+          "required": [
+            "specId"
+          ],
+          "properties": {
+            "specId": {
+              "type": "string",
+              "maxLength": 4096,
+              "minLength": 1
+            },
+            "flowVersion": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            }
+          },
+          "additionalProperties": false
+        },
+        "page": {
+          "type": "object",
+          "required": [
+            "limit",
+            "after"
+          ],
+          "properties": {
+            "limit": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100
+            },
+            "after": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "maxLength": 4096
+            }
+          },
+          "additionalProperties": false
+        },
+        "recordedAt": {
+          "oneOf": [
+            {
+              "type": "object",
+              "required": [
+                "gte"
+              ],
+              "properties": {
+                "gte": {
+                  "type": "string",
+                  "maxLength": 4096,
+                  "minLength": 1
+                }
+              },
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "required": [
+                "lt"
+              ],
+              "properties": {
+                "lt": {
+                  "type": "string",
+                  "maxLength": 4096,
+                  "minLength": 1
+                }
+              },
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "required": [
+                "gte",
+                "lt"
+              ],
+              "properties": {
+                "gte": {
+                  "type": "string",
+                  "maxLength": 4096,
+                  "minLength": 1
+                },
+                "lt": {
+                  "type": "string",
+                  "maxLength": 4096,
+                  "minLength": 1
+                }
+              },
+              "additionalProperties": false
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    }
+  ]
+}

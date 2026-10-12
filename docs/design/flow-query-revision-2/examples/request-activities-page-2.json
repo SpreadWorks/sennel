@@ -1,0 +1,15 @@
+{
+  "resource": "activities",
+  "condition": {
+    "specId": "example-flow",
+    "flowVersion": 1
+  },
+  "page": {
+    "limit": 1,
+    "after": "eyJkaWdlc3QiOiJhOGQ1ODQ2YTkzNjVlYTQ3NDI4OTdiMjllYTY4ODliZGUwMWEyODZlZTZkNTljMmM0MTBmYThkYmE3MWI1NTQ5IiwiZmxvd1ZlcnNpb24iOjEsImd0ZSI6IjIwMjYtMTAtMTJUMDA6MDA6MDFaIiwibHQiOiIyMDI2LTEwLTEyVDAwOjAwOjAzWiIsIm9yZGVyIjoyLCJyZXNvdXJjZSI6ImFjdGl2aXRpZXMiLCJzY2hlbWFSZXZpc2lvbiI6Miwic25hcHNob3RJZCI6InNoYTI1NjpjZWI5ZDA0N2ZhN2I4ZGQ3OGI0OWFjOTNlNDYxNThkMWYyNTY5NzFmN2ExNDFiYjBiZTJmM2I2ODJlYTA3MzE1Iiwic3BlY0lkIjoiZXhhbXBsZS1mbG93IiwidmVyc2lvbiI6Mn0"
+  },
+  "recordedAt": {
+    "gte": "2026-10-12T00:00:01Z",
+    "lt": "2026-10-12T00:00:03Z"
+  }
+}

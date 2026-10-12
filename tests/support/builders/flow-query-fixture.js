@@ -3,6 +3,8 @@ import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { mock } from "node:test";
+import { container } from "../../../src/lib/container.js";
 
 import { buildCurrentFlowDefinition } from "../../../src/flow/definition.js";
 import { FLOW_QUERY_LIMITS } from "../../../src/flow/query-contract.js";
@@ -14,7 +16,7 @@ import {
   FlowVersionAuthorityScope,
   FlowVersionLocation,
 } from "../../../src/lib/flow-version.js";
-import { createTmpDir } from "./tmp-dir.js";
+import { createTmpDir, removeTmpDir } from "./tmp-dir.js";
 import { commitAll, initGitRepo } from "../infrastructure/git-repo.js";
 
 const QUERY_CLI = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../src/sennel.js");
@@ -137,10 +139,6 @@ function failUntilBlocked(flowManager, specId) {
   }
 }
 
-function settleAll(flow) {
-  for (const step of flow.leaves()) flow.settle(step.id);
-}
-
 function gitStatus(root) {
   try {
     return execFileSync("git", ["status", "--short", "--untracked-files=all"], {
@@ -249,6 +247,10 @@ class FlowQueryFixture {
   }
 
   snapshot() { return snapshotTree(this.root); }
+
+  materializeVersion(version) {
+    return materializeVersionedCopy(this.root, this.specId, this.selectedVersion, version);
+  }
 }
 
 /**
@@ -267,9 +269,10 @@ export function createFlowQueryFixture({
   autoApprove = false,
   specId = "001-query-fixture",
   selectedVersion = storage === "migrated" ? 2 : 1,
+  task = null,
 } = {}) {
   if (!new Set(["fresh", "migrated"]).has(storage)) throw new TypeError(`unknown query fixture storage: ${storage}`);
-  if (!new Set(["active", "parked", "blocked", "finalized"]).has(lifecycle)) {
+  if (!new Set(["active", "parked"]).has(lifecycle)) {
     throw new TypeError(`unknown query fixture lifecycle: ${lifecycle}`);
   }
   if (storage === "migrated" && lifecycle !== "active") {
@@ -312,21 +315,15 @@ export function createFlowQueryFixture({
     specRecord: {
       goal: "Exercise the canonical Flow query contract.",
       capabilities: { query: true, fixture: true },
-      ...(lifecycle === "blocked" ? {
-        requirements: [{ id: "R-1", desc: "Exercise the query fixture Task.", task_ids: [DEFAULT_TASK.id] }],
-      } : {}),
+      ...(task === null ? {} : {
+        requirements: [{ id: "R-1", desc: "Exercise the query fixture Task.", task_ids: [task.id] }],
+      }),
     },
   }).create();
-  if (lifecycle === "blocked") flow.addTask({ ...DEFAULT_TASK });
+  if (task !== null) flow.addTask(task);
   flow.registerActive();
-  if (lifecycle === "blocked") {
-    flow.activateTask(DEFAULT_TASK.id);
-    failUntilBlocked(flowManager, specId);
-  } else if (lifecycle === "parked") {
+  if (lifecycle === "parked") {
     flowManager.parkFlow(specId);
-  } else if (lifecycle === "finalized") {
-    settleAll(flow);
-    flowManager.finalizeFlow(specId);
   }
 
   const versionOne = flow.location();
@@ -342,6 +339,40 @@ export function createFlowQueryFixture({
     storage,
     lifecycle,
   });
+}
+
+/** Execute lifecycle scenarios from the shared active seed through real producers. */
+export async function createFlowQueryScenarioFixture(options = {}) {
+  const lifecycle = options.lifecycle ?? "active";
+  if (!["blocked", "finalized"].includes(lifecycle)) return createFlowQueryFixture(options);
+  const fixture = createFlowQueryFixture({ ...options,
+    execution: options.execution ?? { mode: "direct", baseBranch: "main" },
+    git: options.git ?? lifecycle === "finalized", lifecycle: "active",
+    task: { ...DEFAULT_TASK } });
+  try {
+    if (lifecycle === "blocked") {
+      await fixture.flow.activateWithProducers(`${DEFAULT_TASK.id}-impl`);
+      failUntilBlocked(fixture.flowManager, fixture.specId);
+    } else {
+      await fixture.flow.activateWithProducers("report");
+      await fixture.flow.produce("report");
+      const readDependency = container.get.bind(container);
+      const configured = mock.method(container, "get", (name) => name === "config" ? {} : readDependency(name));
+      try {
+        for (const step of fixture.flow.leaves().filter((entry) => !["done", "skipped"].includes(entry.status))) {
+          if (!["done", "skipped"].includes(fixture.flow.leaves().find((entry) => entry.id === step.id).status)) {
+            await fixture.flow.produce(step.id);
+          }
+        }
+      } finally {
+        configured.mock.restore();
+      }
+    }
+    return new FlowQueryFixture({ ...fixture, lifecycle });
+  } catch (error) {
+    removeTmpDir(fixture.root);
+    throw error;
+  }
 }
 
 export function queryFixtureLimits() {

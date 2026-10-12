@@ -8,7 +8,7 @@ import path from "node:path";
 
 import { CanonicalFlowFixture, makeFlowManager, setupFlowConfig } from "../../support/infrastructure/flow-setup.js";
 import { createTmpDir, removeTmpDir } from "../../support/builders/tmp-dir.js";
-import { createFlowQueryFixture, queryFixtureLimits } from "../../support/builders/flow-query-fixture.js";
+import { createFlowQueryScenarioFixture, queryFixtureLimits } from "../../support/builders/flow-query-fixture.js";
 import { FlowQueryConsumer } from "../../support/builders/flow-query-consumer.js";
 import {
   Cursor,
@@ -19,6 +19,14 @@ import {
 } from "../../../src/flow/query.js";
 import { FlowArtifactCatalog } from "../../../src/lib/flow-version.js";
 import { AgentProcessStopEvidence } from "../../../src/lib/agent-failure.js";
+import { initGitRepo, commitAll } from "../../support/infrastructure/git-repo.js";
+import { captureGitSnapshot } from "../../../src/lib/git-helpers.js";
+import RunReviewCommand from "../../../src/flow/lib/run-review.js";
+import { CanonicalSpecReview, SpecReviewDelta, mergeSpecReviewDelta } from "../../../src/flow/lib/spec-review-artifacts.js";
+import { CanonicalCommandResultPublication, attachCanonicalCommandResultArtifact, attachCanonicalCommandResultPublications } from "../../../src/flow/lib/canonical-command-result.js";
+import { completeCanonicalSourceHandoff } from "../../support/builders/source-handoff-scenario.js";
+import { ReviewWorkUnit } from "../../../src/flow/lib/review-work-unit.js";
+import { FLOW_COMMANDS } from "../../../src/flow/registry.js";
 
 const CLI = path.join(process.cwd(), "src/sennel.js");
 const DIRECT_FLOW_CLI = path.join(process.cwd(), "src/flow.js");
@@ -42,16 +50,21 @@ function expectedArtifactId(descriptor) {
 }
 
 function assertNoInternalFields(value) {
-  const forbidden = new Set(["relativePath", "recordRevision", "catalog", "body", "checkpoint", "lock", "state"]);
-  const visit = (entry) => {
+  const forbidden = new Set(["recordRevision", "catalog", "body", "checkpoint", "lock", "state", "receipt", "rawLog"]);
+  const visit = (entry, location = "") => {
     if (Array.isArray(entry)) {
-      for (const child of entry) visit(child);
+      for (let index = 0; index < entry.length; index += 1) visit(entry[index], `${location}/${index}`);
       return;
     }
     if (entry === null || typeof entry !== "object") return;
     for (const [key, child] of Object.entries(entry)) {
       assert.equal(forbidden.has(key), false, `public response leaked internal field: ${key}`);
-      visit(child);
+      if (key === "relativePath") {
+        assert.match(location, /^\/(?:item\/artifacts\/\d+|entities\/(?:evaluations|findings|repairs)\/\d+\/(?:source|supportingSources\/\d+))$/);
+        assert.equal(path.posix.isAbsolute(child), false);
+        assert.equal(child.split("/").includes(".."), false);
+      }
+      visit(child, `${location}/${key}`);
     }
   };
   visit(value);
@@ -67,8 +80,8 @@ describe("flow query", () => {
     while (fixtureRoots.length > 0) removeTmpDir(fixtureRoots.pop());
   });
 
-  function contractFixture(options = {}) {
-    const fixture = createFlowQueryFixture(options);
+  async function contractFixture(options = {}) {
+    const fixture = await createFlowQueryScenarioFixture(options);
     fixtureRoots.push(fixture.root);
     return fixture;
   }
@@ -79,6 +92,7 @@ describe("flow query", () => {
       env: fixture.env,
       input,
       encoding: "utf8",
+      maxBuffer: queryFixtureLimits().MAX_RESPONSE_BYTES * 2,
     });
   }
 
@@ -89,11 +103,11 @@ describe("flow query", () => {
     const response = JSON.parse(result.stdout);
     new FlowQueryConsumer().consumeSerialized(result.stdout);
     assert.deepEqual(Object.keys(response).sort(), [
-      "availableFlowVersions", "item", "ok", "resource", "schemaRevision", "selectedFlowVersion",
+      "availableFlowVersions", "item", "ok", "resource", "schemaRevision", "selectedFlowVersion", "snapshot", "completeness",
     ].sort());
     assert.deepEqual(Object.keys(response.item).sort(), [
       "artifacts", "capabilities", "identity", "lifecycle", "location", "metrics",
-      "relationships", "structure", "timestamps",
+      "relationships", "structure", "timestamps", "history",
     ].sort());
     return response;
   }
@@ -101,14 +115,15 @@ describe("flow query", () => {
   function assertKnownResourceError(response, resource, code, jsonPath, { pageLimit = null } = {}) {
     const consumed = new FlowQueryConsumer().consume(response);
     assert.deepEqual(Object.keys(response).sort(), [
-      "availableFlowVersions", "error", "ok", "resource", "schemaRevision", "selectedFlowVersion",
-      ...(resource === "metadata" ? ["item"] : ["items", "pageInfo"]),
+      "availableFlowVersions", "error", "ok", "resource", "schemaRevision", "selectedFlowVersion", "snapshot", "completeness",
+      ...(resource === "metadata" ? ["item"] : ["items", "pageInfo", "entities"]),
     ].sort());
     assert.equal(response.schemaRevision, FLOW_QUERY_SCHEMA_REVISION);
     assert.equal(response.ok, false);
+    assert.equal(response.completeness, null);
     assert.equal(response.resource, resource);
     assert.equal(consumed.resource, resource);
-    assert.deepEqual(Object.keys(response.error).sort(), ["code", "message", "path"]);
+    assert.deepEqual(Object.keys(response.error).sort(), ["code", "message", "path", "reason", "referenceId"]);
     assert.equal(response.error.code, code);
     assert.equal(response.error.path, jsonPath);
     assert.doesNotMatch(JSON.stringify(response.error), /flow\.json|artifact-catalog|\.runtime|lock/);
@@ -116,18 +131,25 @@ describe("flow query", () => {
     if (resource === "metadata") assert.equal(response.item, null);
     else {
       assert.deepEqual(response.items, []);
-      assert.deepEqual(response.pageInfo, { limit: pageLimit, endCursor: null, hasNext: false });
+      assert.deepEqual(response.pageInfo, { limit: pageLimit, endCursor: null, hasNext: false, returnedItems: 0, totalItems: null });
+      assert.deepEqual(response.entities, { evaluations: [], findings: [], repairs: [] });
     }
   }
 
-  function createFlow({ withTask = false, capabilities = null } = {}) {
+  function createFlow({ withTask = false, capabilities = null, git = false } = {}) {
     tmp = createTmpDir();
     setupFlowConfig(tmp, "en");
+    if (git) {
+      initGitRepo(tmp);
+      commitAll(tmp, "query fixture baseline");
+    }
     const flowManager = makeFlowManager(tmp);
     const flow = new CanonicalFlowFixture({
       flowManager,
       specId: "001-query",
       runId: "run-query",
+      execution: { mode: "direct", baseBranch: git ? "main" : null },
+      context: git ? { gitSnapshot: captureGitSnapshot(tmp) } : null,
       specRecord: {
         goal: "query fixture",
         ...(capabilities === null ? {} : { capabilities }),
@@ -165,6 +187,16 @@ describe("flow query", () => {
     const response = JSON.parse(serialized);
     new FlowQueryConsumer().consumeSerialized(serialized);
     return response;
+  }
+
+  function activityRequestFrom(fixture, activity, { limit = 1 } = {}) {
+    const specId = fixture.specId ?? fixture.request.condition.specId;
+    const metadata = query(fixture.env, { resource: "metadata", condition: { specId } });
+    const request = { resource: "activities", condition: { specId }, page: { limit, after: null } };
+    if (activity.confirmationOrder > 1) request.page.after = new Cursor({
+      request: new QueryRequest(request), order: activity.confirmationOrder - 1, snapshotId: metadata.snapshot.id,
+    }).encode();
+    return request;
   }
 
   function rewriteTaskResultReferenceKind(fixture, kind) {
@@ -217,7 +249,7 @@ describe("flow query", () => {
       input: JSON.stringify(fixture.request),
       encoding: "utf8",
     }));
-    assert.deepEqual(directResponse, response);
+    assert.deepEqual({ ...directResponse, snapshot: { ...directResponse.snapshot, capturedAt: response.snapshot.capturedAt } }, response);
     assert.deepEqual(fs.readFileSync(path.join(tmp, "specs", "001-query", "001", "flow.json")), before);
   });
 
@@ -241,8 +273,8 @@ describe("flow query", () => {
     assert.deepEqual(response.item.capabilities, capabilities);
   });
 
-  it("reads an unbound query root without Git or worktree discovery", () => {
-    const fixture = contractFixture();
+  it("reads an unbound query root without Git or worktree discovery", async () => {
+    const fixture = await contractFixture();
     const bin = path.join(fixture.root, ".fixture-bin");
     const marker = path.join(fixture.root, "git-called");
     fs.mkdirSync(bin);
@@ -266,8 +298,8 @@ describe("flow query", () => {
     assert.doesNotMatch(result.stderr, /git|not a git repository/i);
   });
 
-  it("honors the bound work root and its configured Spec directory independently of cwd", () => {
-    const fixture = contractFixture();
+  it("honors the bound work root and its configured Spec directory independently of cwd", async () => {
+    const fixture = await contractFixture();
     const configuredSpecRoot = "canonical-flow-versions";
     fs.renameSync(path.join(fixture.root, "specs"), path.join(fixture.root, configuredSpecRoot));
     const configFile = path.join(fixture.root, ".sennel", "config.json");
@@ -302,11 +334,165 @@ describe("flow query", () => {
     assert.equal(response.pageInfo.limit, 1);
   });
 
+  it("binds metadata and Activity reads to one persisted generation independently of capture time", async () => {
+    const fixture = await contractFixture();
+    const before = fixture.snapshot();
+    const metadata = queryFixture(fixture, fixture.request());
+    const activities = query(fixture.env, fixture.request("activities"));
+    const repeated = queryFixture(fixture, fixture.request());
+    assert.equal(metadata.schemaRevision, 2);
+    assert.equal(activities.snapshot.id, metadata.snapshot.id);
+    assert.equal(repeated.snapshot.id, metadata.snapshot.id);
+    assert.notEqual(repeated.snapshot.capturedAt, metadata.snapshot.capturedAt);
+    assert.equal(metadata.snapshot.confirmationOrder, fixture.flowManager.canonicalState(fixture.specId).confirmationOrder);
+    assert.match(metadata.snapshot.catalogHash, /^[a-f0-9]{64}$/);
+    assert.match(metadata.snapshot.projectionHash, /^[a-f0-9]{64}$/);
+    assert.match(metadata.snapshot.availableFlowVersionsHash, /^[a-f0-9]{64}$/);
+    assert.deepEqual(fixture.snapshot(), before);
+  });
+
+  it("changes snapshot and rejects a cursor when a stored Version is added", async () => {
+    const fixture = await contractFixture();
+    const first = query(fixture.env, fixture.request("activities", { page: { limit: 1, after: null } }));
+    // Reuse the Versioned record seed: current fresh Flow creation owns Version 1.
+    const second = fixture.materializeVersion(2);
+    const metadata = queryFixture(fixture, fixture.request());
+    assert.deepEqual(metadata.availableFlowVersions, [1, 2]);
+    assert.notEqual(metadata.snapshot.id, first.snapshot.id);
+    assert.notEqual(metadata.snapshot.availableFlowVersionsHash, first.snapshot.availableFlowVersionsHash);
+    const result = runQuery(fixture, fixture.request("activities", { page: { limit: 1, after: first.pageInfo.endCursor } }));
+    assert.equal(result.status, 1);
+    assertKnownResourceError(JSON.parse(result.stdout), "activities", FLOW_QUERY_ERROR_CODES.SNAPSHOT_CHANGED, "/page/after", { pageLimit: 1 });
+    assert.equal(JSON.parse(fs.readFileSync(second.flowStateFile, "utf8")).flowVersion, 2);
+  });
+
+  it("rejects a digest-valid revision 1 cursor at the public CLI boundary", async () => {
+    const fixture = await contractFixture();
+    const payload = { version: 1, specId: fixture.specId, flowVersion: 1, resource: "activities", gte: null, lt: null, order: 1 };
+    const after = Buffer.from(JSON.stringify({ ...payload, digest: Cursor.digest(payload) }), "utf8").toString("base64url");
+    const result = runQuery(fixture, fixture.request("activities", { page: { limit: 1, after } }));
+    assert.equal(result.status, 1);
+    const response = JSON.parse(result.stdout);
+    assertKnownResourceError(response, "activities", FLOW_QUERY_ERROR_CODES.INVALID_CURSOR, "/page/after", { pageLimit: 1 });
+    assert.equal(response.snapshot, null);
+  });
+
+  it("preserves the saved ordered tree and maps Task nodes separately from Definition Step IDs", () => {
+    const fixture = createFlow({ withTask: true });
+    const response = query(fixture.env, fixture.request);
+    const saved = fixture.flowManager.canonicalState("001-query");
+    const nodes = new Map(response.item.structure.nodes.map((node) => [node.id, node]));
+    const visit = (node, parentId = null) => {
+      const view = nodes.get(node.id);
+      assert.ok(view, node.id);
+      assert.equal(view.key, node.key);
+      assert.equal(view.kind, node.kind);
+      assert.equal(view.status, node.status);
+      assert.equal(view.attemptSequence, node.attemptSequence);
+      assert.equal(view.parentId, parentId);
+      assert.deepEqual(view.childIds, node.steps.map((child) => child.id));
+      for (const child of node.steps) visit(child, node.id);
+    };
+    visit(saved.root);
+    assert.equal(response.item.structure.rootNodeId, saved.root.id);
+    assert.deepEqual(response.item.structure.stepIds, response.item.structure.nodes.filter((node) => node.kind === "step").map((node) => node.id));
+    assert.deepEqual(response.item.relationships.taskNodes, [{ taskId: "T-1", nodeId: "T-1" }]);
+    assert.equal(nodes.get("T-1").displayName, "Query fixture task");
+    assert.equal(nodes.get("T-1").displayNameSource, "spec-title");
+    assert.equal(nodes.get("T-1-impl").definitionStepId, "task-impl");
+    assert.equal(nodes.get("T-1").definitionStepId, null);
+  });
+
+  async function publishLargeReview(fixture, size, { recommendationSize = 0 } = {}) {
+    fixture.flow.activate("spec-review");
+    const finding = { kind: "blocking", findingId: "query-byte-bound", title: "Preserve full detail text",
+      target: "goal", issue: "A long persisted finding must remain intact.", requiredChange: recommendationSize === 0 ? "Keep the full saved description." : "x".repeat(recommendationSize),
+      whyBlocking: "The consumer needs the original observation.", body: "あ".repeat(size) };
+    const context = { root: tmp, mainRoot: tmp, executionRoot: tmp, specId: "001-query", phase: "spec",
+      flowManager: fixture.flowManager, flowState: fixture.flow.state(), config: {} };
+    const command = new RunReviewCommand({ runCommand: (_command, _args, options) => {
+      const source = JSON.parse(options.env.SENNEL_REVIEW_SPEC_REVIEW_SOURCE);
+      const review = new CanonicalSpecReview(JSON.parse(fs.readFileSync(source.sourcePath, "utf8")));
+      const delta = new SpecReviewDelta({ version: 2, stage: "spec-review", identity: review.identity.toJSON(),
+        baseReviewDigest: review.digest, findings: [finding], operations: [] });
+      fs.writeFileSync(path.join(options.env.SENNEL_REVIEW_OUTPUT_DIR, "review.delta.json"), `${JSON.stringify(delta.toJSON())}\n`);
+      ReviewWorkUnit.fromEnvironment(options.env).seal();
+      return { ok: true, status: 0, stdout: "", stderr: "", signal: null, killed: false };
+    } });
+    const result = await command.execute(context);
+    assert.notEqual(result.ok, false, JSON.stringify(result));
+    await FLOW_COMMANDS.run.review.post(context, result);
+    const reread = makeFlowManager(tmp).readCurrentSpecReview({ specId: "001-query", consumerNodeId: "spec-review" });
+    assert.equal(reread.review.toJSON().findings[0].body, finding.body);
+    assert.equal(reread.review.toJSON().findings[0].requiredChange, finding.requiredChange);
+    return finding;
+  }
+
+  it("shrinks byte-bounded pages while preserving complete saved detail text and total count", async () => {
+    const fixture = createFlow({ git: true });
+    const finding = await publishLargeReview(fixture, 600_000);
+    for (let index = 0; index < 95; index += 1) fixture.flowManager.addNote(`${index}:${"x".repeat(4000)}`, { specId: "001-query" });
+    const ledger = fixture.flowManager.activityLedger("001-query");
+    const descriptor = fixture.flowManager.artifactCatalog("001-query").artifacts.find((entry) => entry.logicalKey === "spec.review");
+    const producer = ledger.find((entry) => entry.id === descriptor.activityId);
+    const request = activityRequestFrom(fixture, producer, { limit: 100 });
+    const pages = [];
+    let after = request.page.after;
+    do {
+      const result = runQuery(fixture, { ...request, page: { limit: 100, after } });
+      assert.equal(result.status, 0, result.stderr || result.stdout);
+      assert.ok(Buffer.byteLength(result.stdout, "utf8") <= queryFixtureLimits().MAX_RESPONSE_BYTES);
+      const response = JSON.parse(result.stdout);
+      const consumed = new FlowQueryConsumer().consume(response);
+      assert.ok(response.items.length > 0);
+      assert.deepEqual(consumed.entities, response.entities);
+      pages.push(response);
+      after = response.pageInfo.endCursor;
+    } while (pages.at(-1).pageInfo.hasNext);
+    assert.ok(pages.length > 1);
+    assert.ok(pages[0].pageInfo.returnedItems < 100);
+    const items = pages.flatMap((page) => page.items);
+    assert.equal(items.length, ledger.filter((entry) => entry.confirmationOrder >= producer.confirmationOrder).length);
+    assert.ok(pages.every((page) => page.pageInfo.totalItems === ledger.length));
+    assert.equal(pages.reduce((count, page) => count + page.pageInfo.returnedItems, 0), items.length);
+    assert.equal(new Set(items.map((item) => item.activity.id)).size, items.length);
+    const detail = pages.flatMap((page) => page.entities.findings).find((entry) => entry.identity.sourceFindingId === finding.findingId);
+    assert.equal(detail.description, finding.body);
+    assert.ok(pages.every((page) => page.snapshot.id === pages[0].snapshot.id));
+  });
+
+  it("rejects an indivisible Activity detail closure over the response byte limit", async () => {
+    const fixture = createFlow({ git: true });
+    // The worker document stays below its 2 MiB limit. The public finding
+    // exposes the saved recommendation in both generic and specific views.
+    await publishLargeReview(fixture, 600_000, { recommendationSize: 200_000 });
+    const ledger = fixture.flowManager.activityLedger("001-query");
+    const descriptor = fixture.flowManager.artifactCatalog("001-query").artifacts.find((entry) => entry.logicalKey === "spec.review");
+    const producer = ledger.find((entry) => entry.id === descriptor.activityId);
+    const confirmed = ledger.find((entry) => entry.type === "result_confirmed"
+      && entry.nodeId === producer.nodeId && entry.attemptId === producer.attemptId
+      && entry.sequence === producer.sequence && entry.result?.stepResult !== undefined);
+    assert.ok(confirmed, "the real Step result consumes its same-Attempt Review publication");
+    const request = activityRequestFrom(fixture, producer);
+    let after = request.page.after;
+    let response;
+    for (let iteration = 0; iteration < ledger.length; iteration += 1) {
+      const result = runQuery(fixture, { ...request, page: { limit: 1, after } });
+      response = JSON.parse(result.stdout);
+      if (response.ok === false) {
+        assert.equal(result.status, 1);
+        break;
+      }
+      assert.equal(response.pageInfo.hasNext, true, "the oversized producer must still remain in the page sequence");
+      after = response.pageInfo.endCursor;
+    }
+    assertKnownResourceError(response, "activities", FLOW_QUERY_ERROR_CODES.RESPONSE_TOO_LARGE, "/response", { pageLimit: 1 });
+  });
+
   it("paginates by confirmationOrder without gaps or duplicates", () => {
     const fixture = createFlow({ withTask: true });
-    fixture.flow.settleBefore("T-1-impl");
-    fixture.flow.activateTask("T-1", { settlePredecessors: false });
-    fixture.flow.settle("T-1-impl");
+    fixture.flowManager.addNote("First persisted page observation.", { specId: "001-query" });
+    fixture.flowManager.addNote("Second persisted page observation.", { specId: "001-query" });
 
     const request = {
       resource: "activities",
@@ -329,14 +515,48 @@ describe("flow query", () => {
     assert.ok(pages.every((page) => page.ok === true));
     const expectedOrders = Array.from({ length: fixture.flowManager.canonicalState("001-query").confirmationOrder }, (_, index) => index + 1);
     assert.deepEqual(orders, expectedOrders);
+    assert.ok(pages.every((page) => page.snapshot.id === pages[0].snapshot.id));
+    assert.ok(pages.every((page) => page.pageInfo.totalItems === expectedOrders.length));
+    assert.equal(pages.reduce((count, page) => count + page.pageInfo.returnedItems, 0), expectedOrders.length);
     assert.equal(pages.at(-1).pageInfo.hasNext, false);
+  });
+
+  it("refuses a replaced Spec Review generation without substituting the current body", async () => {
+    const fixture = createFlow({ git: true });
+    await publishLargeReview(fixture, 100);
+    const previous = fixture.flowManager.activityLedger("001-query").find((entry) => entry.reviewPublication?.stage === "spec-review");
+    fixture.flow.activate("spec-triage", { settlePredecessors: false });
+    const source = fixture.flowManager.readCurrentSpecReview({ specId: "001-query", consumerNodeId: "spec-triage" });
+    const delta = new SpecReviewDelta({ version: 2, stage: "spec-triage", identity: source.review.identity.toJSON(),
+      baseReviewDigest: source.review.digest, findings: [], operations: [] });
+    const next = mergeSpecReviewDelta({ review: source.review, delta });
+    const commandResult = { result: "Recorded no-op Spec triage generation" };
+    attachCanonicalCommandResultArtifact(commandResult, { logicalKey: "spec.triage", payload: delta.toJSON() });
+    attachCanonicalCommandResultPublications(commandResult, [new CanonicalCommandResultPublication({
+      logicalKey: "spec.review", parameters: { revision: String(source.revision).padStart(3, "0") },
+      mediaType: "application/json", payload: next.toJSON(),
+    })]);
+    fixture.flowManager.updateStepStatus({ stepId: "spec-triage", requestedStatus: "done" }, { specId: "001-query", canonicalCommandResult: commandResult });
+    const reread = makeFlowManager(tmp).readCurrentSpecReview({ specId: "001-query", consumerNodeId: "spec-triage" });
+    assert.ok(previous.reviewPublication.generation < reread.review.generation);
+    assert.deepEqual(reread.review.toJSON(), next.toJSON());
+    const protectedFiles = ["flowStateFile", "activitiesFile", "catalogFile"].map((field) => fixture.flow.location()[field]);
+    const before = protectedFiles.map((file) => fs.readFileSync(file));
+    const result = runQuery(fixture, activityRequestFrom(fixture, previous));
+    assert.equal(result.status, 1);
+    const response = JSON.parse(result.stdout);
+    assertKnownResourceError(response, "activities", FLOW_QUERY_ERROR_CODES.DETAIL_UNAVAILABLE, "/canonical", { pageLimit: 1 });
+    assert.equal(response.error.reason, "SOURCE_GENERATION_NOT_RETAINED");
+    assert.equal(response.error.referenceId, previous.id);
+    assert.deepEqual(protectedFiles.map((file) => fs.readFileSync(file)), before);
+    const whole = runQuery(fixture, { resource: "activities", condition: { specId: "001-query" }, page: { limit: 100, after: null } });
+    assert.equal(whole.status, 1);
+    assertKnownResourceError(JSON.parse(whole.stdout), "activities", FLOW_QUERY_ERROR_CODES.DETAIL_UNAVAILABLE, "/canonical", { pageLimit: 100 });
   });
 
   it("keeps a cursor position stable when the active ledger receives an unconfirmed suffix", () => {
     const fixture = createFlow({ withTask: true });
-    fixture.flow.settleBefore("T-1-impl");
-    fixture.flow.activateTask("T-1", { settlePredecessors: false });
-    fixture.flow.settle("T-1-impl");
+    fixture.flowManager.addNote("Stable persisted page observation.", { specId: "001-query" });
 
     const request = {
       resource: "activities",
@@ -354,9 +574,10 @@ describe("flow query", () => {
     });
     assert.equal(next.ok, true);
     assert.equal(next.items[0].confirmationOrder, 2);
+    assert.equal(next.snapshot.id, first.snapshot.id);
   });
 
-  it("keeps previously read Activity positions stable after a confirmed active append", () => {
+  it("rejects a previous cursor after a confirmed active append while preserving stored Activity IDs", () => {
     const fixture = createFlow({ withTask: true });
     const request = {
       resource: "activities",
@@ -367,17 +588,17 @@ describe("flow query", () => {
     assert.equal(before.pageInfo.hasNext, false);
     assert.notEqual(before.pageInfo.endCursor, null);
 
-    fixture.flow.settleBefore("T-1-impl");
+    fixture.flowManager.addNote("A new confirmed administrative observation.", { specId: "001-query" });
     const after = query(fixture.env, request);
-    const continuation = query(fixture.env, {
+    const continuation = JSON.parse(runQuery(fixture, {
       ...request,
       page: { limit: 100, after: before.pageInfo.endCursor },
-    });
+    }).stdout);
 
     assert.deepEqual(after.items.slice(0, before.items.length), before.items);
-    assert.ok(continuation.items.length > 0);
-    assert.equal(continuation.items[0].confirmationOrder, before.items.at(-1).confirmationOrder + 1);
-    assert.equal(new Set([...before.items, ...continuation.items].map((item) => item.activity.id)).size, before.items.length + continuation.items.length);
+    assert.notEqual(after.snapshot.id, before.snapshot.id);
+    assertKnownResourceError(continuation, "activities", FLOW_QUERY_ERROR_CODES.SNAPSHOT_CHANGED, "/page/after", { pageLimit: 100 });
+    assert.equal(continuation.snapshot.id, after.snapshot.id);
   });
 
   it("projects the exact Activity shape and filters by timing.finishedAt", () => {
@@ -396,7 +617,7 @@ describe("flow query", () => {
     assert.deepEqual(Object.keys(item).sort(), [
       "activity", "artifactIds", "attempt", "blocker", "confirmationOrder", "evaluationIds",
       "failure", "findingIds", "incomplete", "metric", "node", "note", "outcome", "repairIds",
-      "sequence", "task", "timing", "transition", "usage",
+      "sequence", "task", "timing", "transition", "usage", "detailRefs", "referenceBindings", "detailCoverage",
     ].sort());
     assert.deepEqual(item.activity, { id: fixture.flowManager.activityLedger("001-query")[0].id, type: "flow_created" });
     const activity = fixture.flowManager.activityLedger("001-query")[0];
@@ -430,9 +651,9 @@ describe("flow query", () => {
     assert.equal(zeroMatch.pageInfo.endCursor, null);
   });
 
-  it("keeps canonical Review stop evidence out of the public Activity failure contract", () => {
-    const fixture = createFlow();
-    fixture.flow.activate("impl-review");
+  it("keeps canonical Review stop evidence out of the public Activity failure contract", async () => {
+    const fixture = createFlow({ git: true });
+    await fixture.flow.activateWithProducers("impl-review");
     fixture.flowManager.failCurrentAttempt({
       specId: "001-query",
       failure: {
@@ -444,12 +665,8 @@ describe("flow query", () => {
         agentStopEvidence: AgentProcessStopEvidence.confirmed(),
       },
     });
-
-    const response = query(fixture.env, {
-      resource: "activities",
-      condition: { specId: "001-query" },
-      page: { limit: 100, after: null },
-    });
+    const savedFailure = fixture.flowManager.activityLedger("001-query").find((entry) => entry.failure?.code === "AGENT_TIMEOUT");
+    const response = query(fixture.env, activityRequestFrom(fixture, savedFailure));
     const item = response.items.find((entry) => entry.failure?.code === "AGENT_TIMEOUT");
 
     assert.ok(item, JSON.stringify(response));
@@ -464,26 +681,33 @@ describe("flow query", () => {
     assertNoInternalFields(response);
   });
 
-  it("projects a confirmed Task Activity outcome using the canonical prefix", () => {
+  it("preserves a confirmed no-change Task outcome across metadata and its supported Activity", () => {
     const fixture = createFlow({ withTask: true });
     fixture.flow.settleBefore("T-1-impl");
     fixture.flow.activateTask("T-1", { settlePredecessors: false });
     fixture.flow.settle("T-1-impl");
 
-    const response = query(fixture.env, {
-      resource: "activities",
-      condition: { specId: "001-query" },
-      page: { limit: 100, after: null },
-    });
-    const item = response.items.find((entry) => entry.activity.type === "result_confirmed" && entry.task?.id === "T-1");
-    assert.ok(item);
+    const savedActivity = fixture.flowManager.activityLedger("001-query").findLast((entry) => entry.type === "result_confirmed" && entry.nodeId === "T-1-impl");
+    const metadata = query(fixture.env, fixture.request);
+    const node = metadata.item.structure.nodes.find((entry) => entry.id === "T-1-impl");
+    assert.equal(node.taskId, "T-1");
+    assert.equal(node.result.outcome, "passed");
+    assert.equal(node.result.summary, savedActivity.result.summary);
+    assert.equal(node.result.summary, "Worker handoff confirmed for task-impl; no source change: The fixture Task requires no source mutation..");
+    assert.equal(node.result.confirmedAt, savedActivity.result.confirmedAt);
+    assert.deepEqual(node.result.artifactRefs, []);
+    const result = runQuery(fixture, activityRequestFrom(fixture, savedActivity));
+    assert.equal(result.status, 0, result.stderr);
+    const response = JSON.parse(result.stdout);
+    new FlowQueryConsumer().consume(response);
+    const item = response.items[0];
+    assert.equal(item.activity.id, savedActivity.id);
     assert.deepEqual(item.task, { id: "T-1", key: "T-1" });
-    assert.equal(item.outcome.outcome, "passed");
-    assert.equal(item.outcome.summary, "Worker handoff confirmed for task-impl; no source change: The fixture Task requires no source mutation..");
-    assert.deepEqual(item.outcome.artifactRefs, []);
+    assert.deepEqual(item.outcome, node.result);
     assert.equal(item.failure, null);
     assert.equal(item.blocker, null);
     assert.equal(item.incomplete, null);
+    assert.deepEqual(item.detailCoverage.findings, { availability: "available", reason: null, count: 0 });
   });
 
   it("omits an unresolved opaque result receipt without exposing its stored ID", () => {
@@ -492,16 +716,41 @@ describe("flow query", () => {
     fixture.flow.activateTask("T-1", { settlePredecessors: false });
     fixture.flow.settle("T-1-impl");
     rewriteTaskResultReferenceKind(fixture, "unknown-result-artifact");
-
-    const response = query(fixture.env, {
-      resource: "activities",
-      condition: { specId: "001-query" },
-      page: { limit: 100, after: null },
-    });
-    const item = response.items.find((entry) => entry.activity.type === "result_confirmed" && entry.task?.id === "T-1");
-    assert.ok(item);
-    assert.deepEqual(item.outcome.artifactRefs, []);
+    const metadata = query(fixture.env, fixture.request);
+    const node = metadata.item.structure.nodes.find((entry) => entry.id === "T-1-impl");
+    assert.deepEqual(node.result.artifactRefs, []);
+    assert.doesNotMatch(JSON.stringify(metadata), /unknown-result-artifact/);
+    const saved = fixture.flowManager.activityLedger("001-query").findLast((entry) => entry.type === "result_confirmed" && entry.nodeId === "T-1-impl");
+    const result = runQuery(fixture, activityRequestFrom(fixture, saved));
+    assert.equal(result.status, 0, result.stderr);
+    const response = JSON.parse(result.stdout);
+    new FlowQueryConsumer().consume(response);
+    assert.equal(response.items[0].activity.id, saved.id);
+    assert.deepEqual(response.items[0].outcome.artifactRefs, []);
     assert.doesNotMatch(JSON.stringify(response), /unknown-result-artifact/);
+  });
+
+  it("refuses a real Task source quality observation without pretending that findings are absent", () => {
+    const fixture = createFlow({ withTask: true });
+    fixture.flow.settleBefore("T-1-impl");
+    fixture.flow.activateTask("T-1", { settlePredecessors: false });
+    completeCanonicalSourceHandoff({ root: tmp, manager: fixture.flowManager, specId: "001-query", stepId: "task-impl", taskId: "T-1",
+      effect: { version: 1, stepId: "task-impl", completionStatus: "done",
+        issues: [{ classification: "quality", reason: "The existing source has a retained quality observation.",
+          remainingRisk: "The quality observation requires a supported public detail mapping." }],
+        overview: { modules: [], data_flow: [], decisions: [] }, triage: null, repair: null,
+        noChangeReason: "The existing source needs no mutation for this requested behavior." },
+    });
+    const reloaded = makeFlowManager(tmp);
+    const saved = reloaded.activityLedger("001-query").findLast((entry) => entry.type === "result_confirmed" && entry.nodeId === "T-1-impl");
+    assert.equal(saved.result.stepResult.evidence.qualityIssueCount, 1);
+    assert.equal(reloaded.canonicalState("001-query").findNode("T-1-impl").result.toJSON().stepResult.evidence.qualityIssueCount, 1);
+    const result = runQuery(fixture, activityRequestFrom(fixture, saved));
+    assert.equal(result.status, 1);
+    const response = JSON.parse(result.stdout);
+    assertKnownResourceError(response, "activities", FLOW_QUERY_ERROR_CODES.DETAIL_UNAVAILABLE, "/canonical", { pageLimit: 1 });
+    assert.equal(response.error.reason, "PRODUCER_NOT_SUPPORTED");
+    assert.equal(response.error.referenceId, saved.id);
   });
 
   it("rejects an unresolved result reference that claims a catalog relation", () => {
@@ -666,7 +915,7 @@ describe("flow query", () => {
     assert.equal(mismatch.error.path, "/page/after");
   });
 
-  it("covers fresh lifecycle variants and preserves the canonical Git snapshot", () => {
+  it("covers fresh lifecycle variants and preserves the canonical Git snapshot", async () => {
     const cases = [
       { lifecycle: "active", git: false, expectedLifecycle: "active", blocked: false },
       { lifecycle: "parked", git: false, expectedLifecycle: "parked", blocked: false },
@@ -674,7 +923,7 @@ describe("flow query", () => {
       { lifecycle: "finalized", git: true, expectedLifecycle: "finalized", blocked: false },
     ];
     for (const testCase of cases) {
-      const fixture = contractFixture(testCase);
+      const fixture = await contractFixture(testCase);
       const before = fixture.snapshot();
       const response = queryFixture(fixture, fixture.request());
       const after = fixture.snapshot();
@@ -697,13 +946,14 @@ describe("flow query", () => {
       else assert.equal(response.item.location.git.commit, null);
       assert.deepEqual(after, before);
       if (testCase.lifecycle === "finalized") {
-        assert.deepEqual(queryFixture(fixture, fixture.request()), response);
+        const repeated = queryFixture(fixture, fixture.request());
+        assert.deepEqual({ ...repeated, snapshot: { ...repeated.snapshot, capturedAt: response.snapshot.capturedAt } }, response);
       }
     }
   });
 
-  it("uses the same reader for migrated direct records and Version 2 envelopes", () => {
-    const fixture = contractFixture({ storage: "migrated", selectedVersion: 2 });
+  it("uses the same reader for migrated direct records and Version 2 envelopes", async () => {
+    const fixture = await contractFixture({ storage: "migrated", selectedVersion: 2 });
     const before = fixture.snapshot();
     const stateEnvelope = JSON.parse(fs.readFileSync(fixture.locations[2].flowStateFile, "utf8"));
     const specEnvelope = JSON.parse(fs.readFileSync(fixture.locations[2].specFile, "utf8"));
@@ -742,7 +992,7 @@ describe("flow query", () => {
     assert.deepEqual(fixture.snapshot(), before);
   });
 
-  it("lets a Workspace/Connector consumer round-trip every public success fixture", () => {
+  it("lets a Workspace/Connector consumer round-trip every public success fixture", async () => {
     const consumer = new FlowQueryConsumer();
     const cases = [
       { options: { lifecycle: "active" }, resource: "metadata" },
@@ -751,12 +1001,11 @@ describe("flow query", () => {
       { options: { lifecycle: "finalized" }, resource: "metadata" },
       { options: { storage: "migrated", selectedVersion: 2 }, resource: "metadata" },
       { options: { lifecycle: "active" }, resource: "activities" },
-      { options: { lifecycle: "finalized" }, resource: "activities" },
       { options: { storage: "migrated", selectedVersion: 2 }, resource: "activities" },
     ];
 
     for (const testCase of cases) {
-      const fixture = contractFixture(testCase.options);
+      const fixture = await contractFixture(testCase.options);
       const result = runQuery(fixture, fixture.request(testCase.resource));
       assert.equal(result.status, 0, result.stderr);
       assert.equal(result.stdout.trim().split("\n").length, 1);
@@ -782,11 +1031,25 @@ describe("flow query", () => {
     }
   });
 
+  it("lets a consumer reject finalized history whose old detail source was not retained", async () => {
+    const fixture = await contractFixture({ lifecycle: "finalized" });
+    const metadata = queryFixture(fixture, fixture.request());
+    assert.equal(metadata.item.lifecycle.lifecycle, "finalized");
+    const before = fixture.snapshot();
+    const result = runQuery(fixture, fixture.request("activities"));
+    assert.equal(result.status, 1);
+    const response = JSON.parse(result.stdout);
+    assertKnownResourceError(response, "activities", FLOW_QUERY_ERROR_CODES.DETAIL_UNAVAILABLE, "/canonical", { pageLimit: 100 });
+    const consumed = new FlowQueryConsumer().consumeSerialized(result.stdout);
+    assert.deepEqual(consumed.items, []);
+    assert.deepEqual(consumed.entities, { evaluations: [], findings: [], repairs: [] });
+    assert.equal(consumed.completeness, null);
+    assert.deepEqual(fixture.snapshot(), before);
+  });
+
   it("lets a Workspace/Connector consumer round-trip bounded Activity pages and filters", () => {
     const fixture = createFlow({ withTask: true });
-    fixture.flow.settleBefore("T-1-impl");
-    fixture.flow.activateTask("T-1", { settlePredecessors: false });
-    fixture.flow.settle("T-1-impl");
+    fixture.flowManager.addNote("A retained administrative observation.", { specId: "001-query" });
 
     const consumer = new FlowQueryConsumer();
     const request = {
@@ -834,6 +1097,8 @@ describe("flow query", () => {
     assert.equal(inclusiveResult.status, 0, inclusiveResult.stderr);
     const inclusiveConsumed = consumer.consumeSerialized(inclusiveResult.stdout);
     assert.equal(inclusiveConsumed.items[0].confirmationOrder, 1);
+    assert.equal(inclusiveConsumed.pageInfo.totalItems, fullResponse.items.filter((item) => item.timing?.finishedAt !== null
+      && item.timing?.finishedAt !== undefined && Date.parse(item.timing.finishedAt) >= Date.parse(firstFinishedAt)).length);
 
     const exclusiveResult = runQuery(fixture, {
       resource: "activities",
@@ -849,19 +1114,23 @@ describe("flow query", () => {
       resource: "activities",
       condition: { specId: "001-query" },
       page: { limit: 100, after: null },
-      recordedAt: { gte: new Date(Date.parse(firstFinishedAt) + 1).toISOString() },
+      recordedAt: { gte: new Date(Math.max(...fullResponse.items.filter((item) => item.timing?.finishedAt)
+        .map((item) => Date.parse(item.timing.finishedAt))) + 1).toISOString() },
     });
     assert.equal(zeroMatchResult.status, 0, zeroMatchResult.stderr);
     const zeroMatchConsumed = consumer.consumeSerialized(zeroMatchResult.stdout);
     assert.deepEqual(zeroMatchConsumed.items, []);
+    assert.equal(zeroMatchConsumed.pageInfo.totalItems, 0);
+    assert.equal(zeroMatchConsumed.pageInfo.returnedItems, 0);
     assert.deepEqual(zeroMatchConsumed.pageInfo, JSON.parse(zeroMatchResult.stdout).pageInfo);
   });
 
-  it("rejects a response revision the consumer does not support", () => {
-    const fixture = contractFixture();
+  it("rejects a response revision the consumer does not support", async () => {
+    const fixture = await contractFixture();
     const response = JSON.parse(runQuery(fixture, fixture.request()).stdout);
     const consumer = new FlowQueryConsumer();
     assert.doesNotThrow(() => consumer.consume(response));
+    assert.throws(() => new FlowQueryConsumer({ supportedSchemaRevision: 1 }).consume(response), /unsupported query schema revision: 2/);
     assert.throws(
       () => consumer.consume({ ...response, schemaRevision: FLOW_QUERY_SCHEMA_REVISION + 1 }),
       /unsupported query schema revision/,
@@ -901,7 +1170,7 @@ describe("flow query", () => {
     );
   });
 
-  it("round-trips every known-resource error through the shared error enum", () => {
+  it("round-trips every known-resource error through the shared error enum", async () => {
     const consumer = new FlowQueryConsumer();
     const cases = [
       {
@@ -999,7 +1268,7 @@ describe("flow query", () => {
     ];
 
     for (const testCase of cases) {
-      const fixture = contractFixture();
+      const fixture = await contractFixture();
       testCase.mutate?.(fixture);
       const request = testCase.request(fixture);
       const result = runQuery(fixture, request, testCase.input ? { input: testCase.input(fixture) } : {});
@@ -1025,7 +1294,7 @@ describe("flow query", () => {
       }
     }
 
-    const invalidJson = contractFixture();
+    const invalidJson = await contractFixture();
     const invalidJsonResult = runQuery(invalidJson, null, { input: "not-json" });
     assert.equal(invalidJsonResult.status, 1);
     const invalidJsonResponse = JSON.parse(invalidJsonResult.stdout);
@@ -1041,9 +1310,9 @@ describe("flow query", () => {
     );
   });
 
-  it("round-trips cursor errors without exposing cursor internals", () => {
+  it("round-trips cursor errors without exposing cursor internals", async () => {
     const consumer = new FlowQueryConsumer();
-    const fixture = contractFixture({ lifecycle: "active" });
+    const fixture = await contractFixture({ lifecycle: "active" });
     const request = {
       resource: "activities",
       condition: { specId: fixture.specId },
@@ -1087,7 +1356,7 @@ describe("flow query", () => {
     assert.ok(activity);
     const projected = response.item.artifacts.find((artifact) => artifact.artifactId === expectedArtifactId(associated));
     assert.ok(projected);
-    assert.deepEqual(Object.keys(projected).sort(), ["activityIds", "artifactId", "metadata", "nodeIds", "taskIds"].sort());
+    assert.deepEqual(Object.keys(projected).sort(), ["activityIds", "artifactId", "metadata", "nodeIds", "taskIds", "artifactKey", "kind", "relativePath", "hash", "algorithm", "hashScope", "size", "authority", "cardinality", "memberId", "publicationStep", "retention", "producerActivityId", "referencingActivityIds"].sort());
     assert.deepEqual(Object.keys(projected.metadata).sort(), ["logicalKey", "mediaType", "schemaRevision"].sort());
     assert.equal(projected.metadata.logicalKey, associated.logicalKey);
     assert.equal(projected.metadata.mediaType, associated.mediaType);
@@ -1095,12 +1364,29 @@ describe("flow query", () => {
     assert.deepEqual(projected.activityIds, [associated.activityId]);
     assert.deepEqual(projected.nodeIds, [activity.nodeId]);
     assert.deepEqual(projected.taskIds, ["T-1"]);
+    assert.equal(projected.relativePath, associated.relativePath);
+    assert.equal(projected.kind, associated.kind);
+    assert.equal(projected.authority, associated.authority);
+    assert.equal(projected.cardinality, associated.cardinality);
+    assert.equal(projected.memberId, associated.memberId);
+    assert.equal(projected.retention, associated.retention);
+    assert.equal(projected.publicationStep, associated.publicationStep);
+    assert.equal(projected.producerActivityId, associated.activityId);
+    assert.equal(projected.algorithm, "sha256");
+    assert.equal(projected.hashScope, "file-bytes");
+    const bytes = fs.readFileSync(fixture.flow.location().resolve(associated.relativePath));
+    assert.equal(projected.size, bytes.length);
+    assert.equal(projected.hash, crypto.createHash("sha256").update(bytes).digest("hex"));
+    const keyIdentity = { flowVersionId: response.item.identity.flowVersionId,
+      relativePath: associated.relativePath, kind: associated.kind, authority: associated.authority,
+      cardinality: associated.cardinality, memberId: associated.memberId };
+    assert.equal(projected.artifactKey, `artifact:${crypto.createHash("sha256").update(JSON.stringify(canonicalArtifactIdentity(keyIdentity)), "utf8").digest("hex")}`);
     assert.equal(new Set(projected.activityIds).size, projected.activityIds.length);
     assert.equal(new Set(projected.nodeIds).size, projected.nodeIds.length);
     assert.equal(new Set(projected.taskIds).size, projected.taskIds.length);
   });
 
-  it("rejects every unsupported canonical authority revision", () => {
+  it("rejects every unsupported canonical authority revision", async () => {
     const cases = [
       {
         name: "state schema revision",
@@ -1167,7 +1453,7 @@ describe("flow query", () => {
     ];
 
     for (const testCase of cases) {
-      const fixture = testCase.fixture();
+      const fixture = await testCase.fixture();
       testCase.mutate(fixture);
       const before = fixture.snapshot();
       const result = runQuery(fixture, fixture.request());
@@ -1182,8 +1468,8 @@ describe("flow query", () => {
     }
   });
 
-  it("classifies missing records, identity mismatch, and catalog revision errors as canonical errors", () => {
-    const missing = contractFixture();
+  it("classifies missing records, identity mismatch, and catalog revision errors as canonical errors", async () => {
+    const missing = await contractFixture();
     fs.unlinkSync(missing.locations[1].specFile);
     const missingBefore = missing.snapshot();
     const missingResult = runQuery(missing, missing.request());
@@ -1191,7 +1477,7 @@ describe("flow query", () => {
     assertKnownResourceError(JSON.parse(missingResult.stdout), "metadata", FLOW_QUERY_ERROR_CODES.CANONICAL_RECORD_UNREADABLE, "/canonical");
     assert.deepEqual(missing.snapshot(), missingBefore);
 
-    const missingArtifact = contractFixture();
+    const missingArtifact = await contractFixture();
     const artifactCatalog = JSON.parse(fs.readFileSync(missingArtifact.locations[1].catalogFile, "utf8"));
     const catalogedArtifact = artifactCatalog.artifacts.find((artifact) => artifact.relativePath === "revisions/001/spec.json");
     assert.ok(catalogedArtifact);
@@ -1202,7 +1488,7 @@ describe("flow query", () => {
     assertKnownResourceError(JSON.parse(missingArtifactResult.stdout), "metadata", FLOW_QUERY_ERROR_CODES.CANONICAL_RECORD_UNREADABLE, "/canonical");
     assert.deepEqual(missingArtifact.snapshot(), missingArtifactBefore);
 
-    const catalog = contractFixture();
+    const catalog = await contractFixture();
     const catalogValue = JSON.parse(fs.readFileSync(catalog.locations[1].catalogFile, "utf8"));
     catalogValue.schemaRevision = 1;
     fs.writeFileSync(catalog.locations[1].catalogFile, `${JSON.stringify(catalogValue)}\n`);
@@ -1212,7 +1498,7 @@ describe("flow query", () => {
     assertKnownResourceError(JSON.parse(catalogResult.stdout), "metadata", FLOW_QUERY_ERROR_CODES.CANONICAL_RECORD_INCONSISTENT, "/canonical");
     assert.deepEqual(catalog.snapshot(), catalogBefore);
 
-    const identity = contractFixture({ storage: "fresh", selectedVersion: 2 });
+    const identity = await contractFixture({ storage: "fresh", selectedVersion: 2 });
     const stateFile = identity.locations[2].flowStateFile;
     const stateEnvelope = JSON.parse(fs.readFileSync(stateFile, "utf8"));
     stateEnvelope.flowVersion = 3;
@@ -1226,7 +1512,7 @@ describe("flow query", () => {
     assert.deepEqual(identityResponse.availableFlowVersions, []);
     assert.deepEqual(identity.snapshot(), identityBefore);
 
-    const oversized = contractFixture();
+    const oversized = await contractFixture();
     fs.writeFileSync(oversized.locations[1].flowStateFile, Buffer.alloc(queryFixtureLimits().MAX_STATE_RECORD_BYTES + 1, 0x20));
     const oversizedBefore = oversized.snapshot();
     const oversizedResult = runQuery(oversized, oversized.request());
@@ -1235,8 +1521,8 @@ describe("flow query", () => {
     assert.deepEqual(oversized.snapshot(), oversizedBefore);
   });
 
-  it("classifies a discontinuous confirmed ledger with the activities error envelope", () => {
-    const fixture = contractFixture();
+  it("classifies a discontinuous confirmed ledger with the activities error envelope", async () => {
+    const fixture = await contractFixture();
     const location = fixture.locations[1];
     const ledger = fs.readFileSync(location.activitiesFile, "utf8").trimEnd().split("\n");
     const first = JSON.parse(ledger[0]);
@@ -1257,8 +1543,8 @@ describe("flow query", () => {
     assert.deepEqual(fixture.snapshot(), before);
   });
 
-  it("rejects bounded canonical inputs without truncating the available Version set or ledger", () => {
-    const versions = contractFixture();
+  it("rejects bounded canonical inputs without truncating the available Version set or ledger", async () => {
+    const versions = await contractFixture();
     const versionRoot = path.dirname(versions.locations[1].directory);
     for (let version = 2; version <= queryFixtureLimits().MAX_AVAILABLE_FLOW_VERSIONS + 1; version += 1) {
       fs.mkdirSync(path.join(versionRoot, String(version)));
@@ -1269,7 +1555,7 @@ describe("flow query", () => {
     assertKnownResourceError(JSON.parse(versionsResult.stdout), "metadata", FLOW_QUERY_ERROR_CODES.CANONICAL_RECORD_INCONSISTENT, "/canonical");
     assert.deepEqual(versions.snapshot(), versionsBefore);
 
-    const symlinkVersion = contractFixture();
+    const symlinkVersion = await contractFixture();
     const symlinkVersionRoot = path.dirname(symlinkVersion.locations[1].directory);
     fs.symlinkSync(symlinkVersion.locations[1].directory, path.join(symlinkVersionRoot, "2"), "dir");
     const symlinkResult = runQuery(symlinkVersion, symlinkVersion.request());
@@ -1279,7 +1565,7 @@ describe("flow query", () => {
     assert.equal(symlinkResponse.selectedFlowVersion, null);
     assert.deepEqual(symlinkResponse.availableFlowVersions, []);
 
-    const ledger = contractFixture();
+    const ledger = await contractFixture();
     fs.writeFileSync(
       ledger.locations[1].activitiesFile,
       Buffer.alloc(queryFixtureLimits().MAX_CONFIRMED_LEDGER_BYTES + 1, 0x20),
@@ -1295,8 +1581,8 @@ describe("flow query", () => {
     assert.deepEqual(ledger.snapshot(), ledgerBefore);
   });
 
-  it("keeps request-file, boundary, resource-shape, and bounded-input fixtures explicit", () => {
-    const fixture = contractFixture();
+  it("keeps request-file, boundary, resource-shape, and bounded-input fixtures explicit", async () => {
+    const fixture = await contractFixture();
     const requestPath = path.join(fixture.root, "query-request.json");
     fs.writeFileSync(requestPath, `${JSON.stringify(fixture.request())}\n`);
     const before = fixture.snapshot();
@@ -1338,10 +1624,10 @@ describe("flow query", () => {
       const response = JSON.parse(result.stdout);
       const consumed = new FlowQueryConsumer().consume(response);
       if (testCase.resource === null) {
-        assert.deepEqual(Object.keys(response).sort(), ["error", "ok", "schemaRevision"].sort());
+        assert.deepEqual(Object.keys(response).sort(), ["error", "ok", "schemaRevision", "snapshot", "completeness"].sort());
         assert.equal(response.schemaRevision, FLOW_QUERY_SCHEMA_REVISION);
         assert.equal(response.ok, false);
-        assert.deepEqual(Object.keys(response.error).sort(), ["code", "message", "path"]);
+        assert.deepEqual(Object.keys(response.error).sort(), ["code", "message", "path", "reason", "referenceId"]);
         assert.equal(response.error.code, testCase.code);
         assert.equal(response.error.path, testCase.path);
         assert.equal(consumed.resource, null);

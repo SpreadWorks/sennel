@@ -1,0 +1,32 @@
+{
+  "observationId": "observation-repair-1",
+  "id": "repair-entry-1",
+  "status": "applied",
+  "title": "受入条件の追記",
+  "description": "R-1 に観測可能な結果を追記した",
+  "reason": "blocking finding に対応する",
+  "findingSourceReference": {
+    "relativePath": "artifacts/observations/review-1.json",
+    "hash": "60a30cc43c021336f0b8dd6f162a56ac2f51b49953a39d3e6093f4a578073434",
+    "observationId": "observation-review-1",
+    "sourceEntryId": "review-finding-1"
+  },
+  "items": [
+    {
+      "id": "repair-item-1",
+      "target": {
+        "entity": "requirement",
+        "id": "R-1",
+        "field": "desc",
+        "relativePath": null,
+        "jsonPointer": null
+      },
+      "operationKind": "replace",
+      "status": "applied",
+      "adoptedReason": "観測できる結果を定義する",
+      "discardedReason": null,
+      "evidence": "保存済み修正記録",
+      "findingSourceEntryId": "review-finding-1"
+    }
+  ]
+}

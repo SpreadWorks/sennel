@@ -1,0 +1,105 @@
+{
+  "publicationIdentities": [
+    {
+      "logicalKey": null,
+      "kind": "review-observation",
+      "relativePath": "artifacts/observations/review-1.json",
+      "hash": "60a30cc43c021336f0b8dd6f162a56ac2f51b49953a39d3e6093f4a578073434",
+      "size": 1378,
+      "mediaType": "application/json",
+      "authority": "canonical-flow-artifacts",
+      "cardinality": "collection",
+      "memberId": "observation-review-1",
+      "publicationStep": "spec-review",
+      "retention": "permanent",
+      "activityId": "activity-review-1",
+      "migrationMaterialization": false
+    },
+    {
+      "logicalKey": null,
+      "kind": "repair-observation",
+      "relativePath": "artifacts/observations/repair-1.json",
+      "hash": "efbaa1a93cf4cb773b1371ba8c7851c7a7ae22d415cfe42ed1d84a98753a53b7",
+      "size": 976,
+      "mediaType": "application/json",
+      "authority": "canonical-flow-artifacts",
+      "cardinality": "collection",
+      "memberId": "observation-repair-1",
+      "publicationStep": "spec-repair",
+      "retention": "permanent",
+      "activityId": "activity-repair-1",
+      "migrationMaterialization": false
+    }
+  ],
+  "sourceFiles": [
+    "sources/review-observation.json",
+    "sources/repair-observation.json"
+  ],
+  "confirmedLedgerFile": "sources/confirmed-ledger.jsonl",
+  "snapshotFiles": {
+    "catalogHash": "sources/catalog-content.json",
+    "stateHash": "sources/snapshot-state.json",
+    "specHash": "sources/snapshot-spec.json",
+    "projectionHash": "sources/projection-inputs.json"
+  },
+  "snapshotInputs": {
+    "schemaRevision": 2,
+    "flowVersionId": "flow-version-example",
+    "specId": "example-flow",
+    "flowVersion": 1,
+    "catalogHash": "99b42ced4af685a2ca1cc629bb9c95a93c22d28f28a590413e95be1a4e688ac8",
+    "confirmedLedgerHash": "381a97721405717b59c01d15a144d2b5651002d188326123ca707ce53b3c9ca9",
+    "confirmationOrder": 3,
+    "stateHash": "e9da5ee6a5252c752ca54516f621529c905ef87c35aecc16751613baa592b9e7",
+    "specHash": "ace840170ea40be11428e687b25ce1209051d9c255f5e4f2587f5adb270dd078",
+    "projectionHash": "f813b16e6925d4a41775ed32aa98549ad49d23e431604bf93c9db2fd89a0b7c8",
+    "availableFlowVersionsHash": "080a9ed428559ef602668b4c00f114f1a11c3f6b02a435f0bdc154578e4d7f22"
+  },
+  "evaluationInputs": {
+    "flowVersionId": "flow-version-example",
+    "producerActivityId": "activity-review-1",
+    "observationId": "observation-review-1",
+    "sourceEntryId": "review-evaluation-1"
+  },
+  "findingInputs": {
+    "flowVersionId": "flow-version-example",
+    "producerActivityId": "activity-review-1",
+    "observationId": "observation-review-1",
+    "identity": {
+      "sourceArtifact": "spec.review",
+      "sourceStep": "spec-review",
+      "sourceFindingId": "review-finding-1",
+      "fingerprint": "1728a240757a4c3b57ab068624d070f7fef53b273d0c89fca59633764e0c24b3"
+    }
+  },
+  "repairInputs": {
+    "flowVersionId": "flow-version-example",
+    "producerActivityId": "activity-repair-1",
+    "observationId": "observation-repair-1",
+    "sourceEntryId": "repair-entry-1"
+  },
+  "cursorInputs": [
+    {
+      "version": 2,
+      "schemaRevision": 2,
+      "specId": "example-flow",
+      "flowVersion": 1,
+      "resource": "activities",
+      "gte": "2026-10-12T00:00:01Z",
+      "lt": "2026-10-12T00:00:03Z",
+      "order": 2,
+      "snapshotId": "sha256:ceb9d047fa7b8dd78b49ac93e46158d1f256971f7a141bb0be2f3b682ea07315"
+    },
+    {
+      "version": 2,
+      "schemaRevision": 2,
+      "specId": "example-flow",
+      "flowVersion": 1,
+      "resource": "activities",
+      "gte": "2026-10-12T00:00:01Z",
+      "lt": "2026-10-12T00:00:03Z",
+      "order": 3,
+      "snapshotId": "sha256:ceb9d047fa7b8dd78b49ac93e46158d1f256971f7a141bb0be2f3b682ea07315"
+    }
+  ]
+}

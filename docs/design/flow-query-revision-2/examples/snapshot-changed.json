@@ -1,0 +1,34 @@
+{
+  "schemaRevision": 2,
+  "ok": false,
+  "resource": "activities",
+  "selectedFlowVersion": {
+    "specId": "example-flow",
+    "flowVersion": 1
+  },
+  "availableFlowVersions": [
+    1
+  ],
+  "snapshot": null,
+  "completeness": null,
+  "error": {
+    "code": "SNAPSHOT_CHANGED",
+    "path": "/page/after",
+    "message": "cursor が指す snapshot と保存世代が異なる",
+    "reason": "SNAPSHOT_ID_MISMATCH",
+    "referenceId": "eyJ2ZXJzaW9uIjoyLCJzY2hlbWFSZXZpc2lvbiI6Miwic3BlY0lkIjoiZXhhbXBsZS1mbG93IiwiZmxvd1ZlcnNpb24iOjEsInJlc291cmNlIjoiYWN0aXZpdGllcyIsImd0ZSI6IjIwMjYtMTAtMTJUMDA6MDA6MDFaIiwibHQiOiIyMDI2LTEwLTEyVDAwOjAwOjAzWiIsIm9yZGVyIjoyLCJzbmFwc2hvdElkIjoic2hhMjU2OmNlYjlkMDQ3ZmE3YjhkZDc4YjQ5YWM5M2U0NjE1OGQxZjI1Njk3MWY3YTE0MWJiMGJlMmYzYjY4MmVhMDczMTUiLCJkaWdlc3QiOiJhOGQ1ODQ2YTkzNjVlYTQ3NDI4OTdiMjllYTY4ODliZGUwMWEyODZlZTZkNTljMmM0MTBmYThkYmE3MWI1NTQ5In0"
+  },
+  "items": [],
+  "entities": {
+    "evaluations": [],
+    "findings": [],
+    "repairs": []
+  },
+  "pageInfo": {
+    "limit": 1,
+    "endCursor": null,
+    "hasNext": false,
+    "returnedItems": 0,
+    "totalItems": null
+  }
+}

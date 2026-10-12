@@ -1,0 +1,22 @@
+{
+  "schemaRevision": 2,
+  "ok": false,
+  "resource": "metadata",
+  "selectedFlowVersion": {
+    "specId": "example-flow",
+    "flowVersion": 1
+  },
+  "availableFlowVersions": [
+    1
+  ],
+  "snapshot": null,
+  "completeness": null,
+  "error": {
+    "code": "SNAPSHOT_UNSTABLE",
+    "path": "/snapshot",
+    "message": "有限 retry で同一 snapshot を確定できない",
+    "reason": "SNAPSHOT_RETRY_EXHAUSTED",
+    "referenceId": null
+  },
+  "item": null
+}

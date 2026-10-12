@@ -1342,6 +1342,9 @@ export class FlowArtifactCatalogSnapshotEvidence {
   }
 }
 
+/** The canonical catalog failed to stabilize within the read budget. */
+export class FlowArtifactCatalogSnapshotUnstableError extends Error {}
+
 /** One coherent catalog-bound value returned by the lock-free read boundary. */
 export class FlowArtifactCatalogCommittedSnapshot {
   constructor({ catalog, value } = {}) {
@@ -1497,10 +1500,10 @@ export class FlowArtifactCatalogSnapshotReader {
       }
       if (startingCatalogBytes.equals(endingCatalogBytes)) throw failure;
       if (attempt === snapshotLimits.maxAttempts) {
-        throw new Error("catalog commit changed during the bounded snapshot read", { cause: failure });
+        throw new FlowArtifactCatalogSnapshotUnstableError("catalog commit changed during the bounded snapshot read", { cause: failure });
       }
     }
-    throw new Error("catalog snapshot retry limit was exhausted");
+    throw new FlowArtifactCatalogSnapshotUnstableError("catalog snapshot retry limit was exhausted");
   }
 }
 
