@@ -82,6 +82,88 @@ export function parse(content, filePath) {
 // Extract imports
 // ---------------------------------------------------------------------------
 
+class ImportExpressionContext {
+  constructor(closing) {
+    this.closing = closing;
+    this.conditionals = 0;
+    this.functionParameters = null;
+    this.functionBody = null;
+    this.classBody = null;
+    this.classNamePending = false;
+  }
+
+  get statementScope() { return false; }
+  get expressionAfterClose() { return false; }
+  get bodyAfterClose() { return null; }
+  get resumesTemplate() { return false; }
+
+  beginConditional() { this.conditionals++; }
+
+  endConditional() {
+    if (this.conditionals === 0) return false;
+    this.conditionals--;
+    return true;
+  }
+
+  openParameters(control) {
+    if (this.classNamePending) this.classBody = null;
+    const parameters = this.functionParameters || (control ? new ImportControlContext() : new ImportExpressionContext(")"));
+    this.functionParameters = null;
+    return parameters;
+  }
+
+  openBody(statementStart, expressionStart, previous) {
+    const body = this.functionBody || this.classBody || (previous === "=>"
+      ? new ImportExpressionBodyContext("}")
+      : statementStart || !expressionStart || previous === ")"
+        ? new ImportStatementContext("}")
+        : new ImportExpressionContext("}"));
+    if (body === this.classBody) this.classBody = null;
+    this.functionBody = null;
+    return body;
+  }
+}
+
+class ImportStatementContext extends ImportExpressionContext {
+  get statementScope() { return true; }
+  get expressionAfterClose() { return true; }
+}
+
+// A function/arrow expression contains statements but completes an operand.
+class ImportExpressionBodyContext extends ImportStatementContext {
+  get expressionAfterClose() { return false; }
+}
+
+class ImportControlContext extends ImportExpressionContext {
+  constructor() { super(")"); }
+  get expressionAfterClose() { return true; }
+}
+
+class ImportFunctionParameters extends ImportExpressionContext {
+  constructor(declaration) {
+    super(")");
+    this.body = declaration
+      ? new ImportStatementContext("}")
+      : new ImportExpressionBodyContext("}");
+  }
+
+  get bodyAfterClose() { return this.body; }
+}
+
+class ImportClassContext extends ImportExpressionContext {
+  constructor(declaration) {
+    super("}");
+    this.declaration = declaration;
+  }
+
+  get expressionAfterClose() { return this.declaration; }
+}
+
+class ImportTemplateInterpolation extends ImportExpressionContext {
+  constructor() { super("}"); }
+  get resumesTemplate() { return true; }
+}
+
 function findImportMembers(content, comment, padding, quotedString) {
   const tokens = new RegExp(
     String.raw`${comment}|${quotedString}|(\.${padding})(?=import\b)|[\p{ID_Continue}$]+|=>|\+\+|--|[^\s]`,
@@ -90,14 +172,16 @@ function findImportMembers(content, comment, padding, quotedString) {
   const regexLiteral = /\/(?:\\[^]|\[(?:\\[^]|[^\]\\\r\n\u2028\u2029])*\]|[^/\\[\r\n\u2028\u2029])+\/[\p{ID_Continue}$]*/uy;
   const templateText = /(?:\\[^]|[^\\`$]|\$(?!\{))*(?:`|\$\{|$)/y;
   const expressionKeywords = new Set(["return", "throw", "case", "yield", "await", "void", "typeof", "delete", "in", "instanceof"]);
+  const statementKeywords = new Set(["else", "do", "try", "finally"]);
+  const declarationModifiers = new Set(["export", "default", "async"]);
   const controlKeywords = new Set(["if", "while", "for", "with", "switch", "catch"]);
   const members = new Set();
-  const interpolations = [];
-  const parentheses = [];
-  const blocks = [];
+  const contexts = [new ImportStatementContext("")];
   let inTemplate = false;
   let expressionStart = true;
+  let statementStart = true;
   let previous = "";
+  let previousEnd = 0;
   let controlStart = false;
   let token;
   while (tokens.lastIndex < content.length) {
@@ -108,12 +192,14 @@ function findImportMembers(content, comment, padding, quotedString) {
       tokens.lastIndex = templateText.lastIndex;
       inTemplate = false;
       if (text[0].endsWith("${")) {
-        interpolations.push(0);
+        contexts.push(new ImportTemplateInterpolation());
         expressionStart = true;
       } else {
         expressionStart = false;
       }
+      statementStart = false;
       previous = "literal";
+      previousEnd = tokens.lastIndex;
       controlStart = false;
       continue;
     }
@@ -121,10 +207,21 @@ function findImportMembers(content, comment, padding, quotedString) {
     if (!token) break;
     const value = token[0];
     if (value.startsWith("//") || value.startsWith("/*")) continue;
+    const context = contexts.at(-1);
+    const lineBreak = /[\r\n\u2028\u2029]/.test(content.slice(previousEnd, token.index));
+    if (context.statementScope && previous !== "." && lineBreak && (
+      ["return", "break", "continue", "yield"].includes(previous)
+      || (!expressionStart && ["function", "class", "async", "export"].includes(value))
+    )) {
+      statementStart = true;
+      expressionStart = true;
+    }
     if (token[1]) {
       members.add(tokens.lastIndex);
       expressionStart = false;
+      statementStart = false;
       previous = ".";
+      previousEnd = tokens.lastIndex;
       controlStart = false;
       continue;
     }
@@ -133,35 +230,72 @@ function findImportMembers(content, comment, padding, quotedString) {
       if (regexLiteral.exec(content)) {
         tokens.lastIndex = regexLiteral.lastIndex;
         expressionStart = false;
+        statementStart = false;
         previous = "literal";
+        previousEnd = tokens.lastIndex;
         controlStart = false;
         continue;
       }
     }
     if (value === "`") {
       inTemplate = true;
-    } else if (value === "}" && interpolations.length && interpolations.at(-1) === 0) {
-      interpolations.pop();
-      inTemplate = true;
+    } else if (value === "function" && previous !== ".") {
+      context.functionParameters = new ImportFunctionParameters(statementStart);
+      statementStart = false;
+      expressionStart = false;
+    } else if (value === "class" && previous !== ".") {
+      context.classBody = new ImportClassContext(statementStart);
+      context.classNamePending = true;
+      statementStart = false;
+      expressionStart = false;
+    } else if (value === "(") {
+      contexts.push(context.openParameters(controlStart));
+      expressionStart = true;
+      statementStart = false;
+    } else if (value === "[") {
+      contexts.push(new ImportExpressionContext("]"));
+      expressionStart = true;
+      statementStart = false;
+    } else if (value === "{") {
+      // The owner of a body determines what its closing brace completes.
+      const body = context.openBody(statementStart, expressionStart, previous);
+      contexts.push(body);
+      expressionStart = true;
+      statementStart = body.statementScope;
+    } else if (contexts.length > 1 && value === context.closing) {
+      contexts.pop();
+      contexts.at(-1).functionBody = context.bodyAfterClose;
+      inTemplate = context.resumesTemplate;
+      expressionStart = context.expressionAfterClose;
+      statementStart = context.expressionAfterClose;
+    } else if (value === ";") {
+      expressionStart = true;
+      statementStart = context.statementScope;
+    } else if (value === ":") {
+      context.functionParameters = null;
+      if (context.classNamePending) context.classBody = null;
+      statementStart = !context.endConditional() && context.statementScope;
+      expressionStart = true;
+    } else if (value === "?") {
+      if (content[tokens.lastIndex] !== ".") context.beginConditional();
+      expressionStart = true;
+      statementStart = false;
     } else {
-      if (interpolations.length && value === "{") interpolations[interpolations.length - 1]++;
-      if (interpolations.length && value === "}") interpolations[interpolations.length - 1]--;
-      if (value === "(") {
-        parentheses.push(controlStart);
+      const keyword = previous !== ".";
+      if (keyword && statementKeywords.has(value)) {
         expressionStart = true;
-      } else if (value === ")") {
-        expressionStart = parentheses.pop() === true;
-      } else if (value === "{") {
-        blocks.push(!expressionStart || ["", ")", "=>", ";", "{", "}", "else", "do", "try", "finally"].includes(previous));
-        expressionStart = true;
-      } else if (value === "}") {
-        expressionStart = blocks.pop() === true;
+        statementStart = true;
+      } else if (keyword && declarationModifiers.has(value)) {
+        expressionStart = false;
       } else {
-        expressionStart = expressionKeywords.has(value) || !/^(?:[\p{ID_Continue}$]|["']|[.\]]|\+\+|--)/u.test(value);
+        expressionStart = (keyword && expressionKeywords.has(value)) || !/^(?:[\p{ID_Continue}$]|["']|[.\]]|\+\+|--)/u.test(value);
+        statementStart = false;
       }
     }
+    if (value !== "class") context.classNamePending = false;
     controlStart = controlKeywords.has(value) && previous !== ".";
     previous = value;
+    previousEnd = tokens.lastIndex;
   }
   return members;
 }

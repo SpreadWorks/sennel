@@ -99,6 +99,57 @@ test("comment markers in templates and regular expressions do not hide import me
   }
 });
 
+test("a regular expression in an unbraced else does not hide a following import method", () => {
+  const content = 'if (condition) {} else /[//]/.test(value);\nobject.import("./method.js");';
+  assert.deepEqual(extractImports(content), []);
+});
+
+test("a regular expression in an unbraced else does not hide an import method on the same line", () => {
+  const content = 'if (condition) {} else /[//]/.test(value); object.import("./method.js");';
+  assert.deepEqual(extractImports(content), []);
+});
+
+test("division after a function expression does not consume an import method as a regular expression", () => {
+  const content = 'const result = function () {} / object.import("./method.js") / right;';
+  assert.deepEqual(extractImports(content), []);
+});
+
+test("statement completions permit regular expressions without losing later members or dynamic imports", () => {
+  const statements = [
+    'if (condition) {} else /[//]/.test(value);',
+    'do /[//]/.test(value); while (condition);',
+    'function declared() {} /[//]/.test(value);',
+    'export default async function* declared() {} /[//]/.test(value);',
+    'label: {} /[//]/.test(value);',
+    'class Declared {} /[//]/.test(value);',
+  ];
+  for (const statement of statements) {
+    const content = `${statement} object. /* member */ import("./method.js"); import("./dep.js");`;
+    assert.deepEqual(extractImports(content), ["./dep.js"], statement);
+  }
+});
+
+test("expression completions retain division operands and the declaration role of nested functions", () => {
+  const expressions = [
+    'function () {}',
+    'function named(arg = function () {}) { function nested() {} /[//]/.test(value); object.import("./method.js"); }',
+    'async function* named() {}',
+    '(function () {})',
+    '(() => {})',
+    '{ method() {} }',
+    'class Named { method() {} }',
+    'class extends (factory({})) {}',
+    'class extends (condition ? Left : Right) {}',
+    '"// marker"',
+    '`// marker`',
+    '/[//]/',
+  ];
+  for (const expression of expressions) {
+    const content = `const result = ${expression} / object. /* member */ import("./method.js") / import("./dep.js");`;
+    assert.deepEqual(extractImports(content), ["./dep.js"], expression);
+  }
+});
+
 test("template interpolations retain actual dynamic imports after commented dots", () => {
   const content = 'const text = `${ // description.\n /* detail */\n import("./dep.js")}`;';
   assert.deepEqual(extractImports(content), ["./dep.js"]);
