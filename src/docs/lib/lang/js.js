@@ -82,18 +82,104 @@ export function parse(content, filePath) {
 // Extract imports
 // ---------------------------------------------------------------------------
 
+function findImportMembers(content, comment, padding, quotedString) {
+  const tokens = new RegExp(
+    String.raw`${comment}|${quotedString}|(\.${padding})(?=import\b)|[\p{ID_Continue}$]+|=>|\+\+|--|[^\s]`,
+    "gu",
+  );
+  const regexLiteral = /\/(?:\\[^]|\[(?:\\[^]|[^\]\\\r\n\u2028\u2029])*\]|[^/\\[\r\n\u2028\u2029])+\/[\p{ID_Continue}$]*/uy;
+  const templateText = /(?:\\[^]|[^\\`$]|\$(?!\{))*(?:`|\$\{|$)/y;
+  const expressionKeywords = new Set(["return", "throw", "case", "yield", "await", "void", "typeof", "delete", "in", "instanceof"]);
+  const controlKeywords = new Set(["if", "while", "for", "with", "switch", "catch"]);
+  const members = new Set();
+  const interpolations = [];
+  const parentheses = [];
+  const blocks = [];
+  let inTemplate = false;
+  let expressionStart = true;
+  let previous = "";
+  let controlStart = false;
+  let token;
+  while (tokens.lastIndex < content.length) {
+    if (inTemplate) {
+      templateText.lastIndex = tokens.lastIndex;
+      const text = templateText.exec(content);
+      if (!text) break;
+      tokens.lastIndex = templateText.lastIndex;
+      inTemplate = false;
+      if (text[0].endsWith("${")) {
+        interpolations.push(0);
+        expressionStart = true;
+      } else {
+        expressionStart = false;
+      }
+      previous = "literal";
+      controlStart = false;
+      continue;
+    }
+    token = tokens.exec(content);
+    if (!token) break;
+    const value = token[0];
+    if (value.startsWith("//") || value.startsWith("/*")) continue;
+    if (token[1]) {
+      members.add(tokens.lastIndex);
+      expressionStart = false;
+      previous = ".";
+      controlStart = false;
+      continue;
+    }
+    if (value === "/" && expressionStart) {
+      regexLiteral.lastIndex = token.index;
+      if (regexLiteral.exec(content)) {
+        tokens.lastIndex = regexLiteral.lastIndex;
+        expressionStart = false;
+        previous = "literal";
+        controlStart = false;
+        continue;
+      }
+    }
+    if (value === "`") {
+      inTemplate = true;
+    } else if (value === "}" && interpolations.length && interpolations.at(-1) === 0) {
+      interpolations.pop();
+      inTemplate = true;
+    } else {
+      if (interpolations.length && value === "{") interpolations[interpolations.length - 1]++;
+      if (interpolations.length && value === "}") interpolations[interpolations.length - 1]--;
+      if (value === "(") {
+        parentheses.push(controlStart);
+        expressionStart = true;
+      } else if (value === ")") {
+        expressionStart = parentheses.pop() === true;
+      } else if (value === "{") {
+        blocks.push(!expressionStart || ["", ")", "=>", ";", "{", "}", "else", "do", "try", "finally"].includes(previous));
+        expressionStart = true;
+      } else if (value === "}") {
+        expressionStart = blocks.pop() === true;
+      } else {
+        expressionStart = expressionKeywords.has(value) || !/^(?:[\p{ID_Continue}$]|["']|[.\]]|\+\+|--)/u.test(value);
+      }
+    }
+    controlStart = controlKeywords.has(value) && previous !== ".";
+    previous = value;
+  }
+  return members;
+}
+
 export function extractImports(content) {
   const imports = [];
 
   // ESM declarations. Keep every static occurrence, including duplicates.
   // Match comments as token separators without rewriting quoted source text.
-  const comment = String.raw`(?:/\*[\s\S]*?\*/|//[^\r\n\u2028\u2029]*)`;
+  // A block comment must end at its first terminator, even when matching backtracks.
+  const comment = String.raw`(?:/\*(?:[^*]|\*(?!/))*\*/|//[^\r\n\u2028\u2029]*)`;
   const trivia = String.raw`(?:\s|${comment})`;
   const gap = `${trivia}+`;
   const padding = `${trivia}*`;
   const identifier = String.raw`(?:[\p{ID_Continue}$]|\\u(?:[\da-fA-F]{4}|\{[\da-fA-F]{1,6}\}))+`;
   const namespaceBinding = String.raw`\*${gap}as${gap}${identifier}`;
-  const namedBindings = String.raw`\{(?:${comment}|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^}])*\}`;
+  const quotedString = String.raw`(?:"(?:\\[\s\S]|[^"\\])*"|'(?:\\[\s\S]|[^'\\])*')`;
+  const namedBindings = String.raw`\{(?:${comment}|${quotedString}|[^}])*\}`;
   const defaultBinding = `${identifier}(?:${padding},${padding}(?:${namespaceBinding}|${namedBindings}))?`;
   const binding = `(?:type${gap})?(?:${defaultBinding}|${namespaceBinding}|${namedBindings})`;
   const esmRegex = new RegExp(
@@ -105,14 +191,26 @@ export function extractImports(content) {
     imports.push(m[2]);
   }
 
+  // Consume comments and strings from their starts before considering code dots.
+  // Backward trivia matching could otherwise start at a dot inside a comment.
+  const memberImports = findImportMembers(content, comment, padding, quotedString);
+
   // Add CommonJS, literal dynamic imports, and re-exports only once.
+  const dynamicImportRegex = new RegExp(
+    String.raw`(?<![\p{ID_Continue}$])import${padding}\(${padding}(["'])([^"']+)\1(?=${padding}(?:,|\)))`,
+    "gu",
+  );
   const additionalPatterns = [
     /require\s*\(\s*(["'])([^"']+)\1\s*\)/gu,
-    /(?<![\p{ID_Continue}$]|\.\s*)import\s*\(\s*(["'])([^"']+)\1(?=\s*(?:,|\)))/gu,
-    /(?<![\p{ID_Continue}$])export\s+(?:type\s+)?(?:\*\s+(?:as\s+[\p{ID_Continue}$]+\s+)?|\{[^}]*\}\s+)from\s*(["'])([^"']+)\1/gu,
+    dynamicImportRegex,
+    new RegExp(
+      String.raw`(?<![\p{ID_Continue}$])export${gap}(?:type${gap})?(?:\*${gap}(?:as${gap}${identifier}${gap})?|${namedBindings}${gap})from${padding}(["'])([^"']+)\1`,
+      "gu",
+    ),
   ];
   for (const pattern of additionalPatterns) {
     while ((m = pattern.exec(content)) !== null) {
+      if (pattern === dynamicImportRegex && memberImports.has(m.index)) continue;
       const specifier = m[2];
       if (!imports.includes(specifier)) imports.push(specifier);
     }
