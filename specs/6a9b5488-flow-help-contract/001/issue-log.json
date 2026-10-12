@@ -14183,6 +14183,3234 @@
         "requestedAt": "2026-10-05T01:05:39.504Z"
       },
       "issueLogId": "plan-gate-repair-76484c85fd3e4be14170eca088f3f69bf53238205f076010763e133066a4e74f"
+    },
+    {
+      "step": "spec-gate",
+      "level": "parent",
+      "phase": "spec",
+      "reason": "R1 scopes the registry check to 67 shared leaf, while the same spec's clarification and current-registry correction state there are 66 shared leaf. The verification denominator is inconsistent.; R3 states that run has 36 direct children, while the current-registry correction in overview.decisions states run has 35. The required group inventory is not uniquely determined.; R4 defines 67 shared leaf and 68 total leaf, conflicting with the clarification that the current inventory has 66 shared leaf plus one query leaf.; R5 repeats a 68-leaf inventory with 67 shared leaf, while R11 and the clarification use 66 shared leaf. The validation matrix scope is contradictory.; R11 excludes a 66-leaf matrix, conflicting with R1, R4, and R5, which define the shared inventory as 67 leaf. The shared/query boundary is not uniquely specified.; R1 requires constructor invariants and projection from the same option instance, but its verification only compares argv acceptance and rendered option rows; it does not define how those invariants or same-instance ownership will be checked.; R2 requires command-specific prose, examples, and translations to be maintained, but its verification only specifies the option matrix and selected CLI help comparisons; it gives no check or observable expected result for preserving those prose surfaces.; R11 names four query routes and test files, but does not state the observable expected success, help, or error outcome for stdin, request-file, help, and error cases.; This acceptance criterion only says to confirm query and docs/core/plugin display routes; it does not state the observable expected result that determines success or failure for those routes.",
+      "trigger": "gate post hook (auto)",
+      "timestamp": "2026-10-05T11:07:10.194Z",
+      "passedGuardrails": [
+        "spec-test-coverage"
+      ],
+      "headSha": "2ba144ef64c3e3cf02367895e3da91e5a41791d6",
+      "worktreeHash": "bade61de9cca2cd8ad9b640a62d252449aaf0f967a1152af6a6986bed45adf4a",
+      "observations": [
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "complete-context",
+          "where": {
+            "file": "spec.json",
+            "locator": "$.requirements[0].desc"
+          },
+          "observed": "R1 scopes the registry check to 67 shared leaf, while the same spec's clarification and current-registry correction state there are 66 shared leaf. The verification denominator is inconsistent.",
+          "severity": "blocking",
+          "refs": [
+            "complete-context"
+          ],
+          "targets": [
+            {
+              "entity": "requirement",
+              "id": "R1",
+              "field": "desc"
+            }
+          ],
+          "allowedTargets": [
+            {
+              "target": {
+                "entity": "requirement",
+                "id": "R1",
+                "field": "desc"
+              },
+              "operationKinds": [
+                "edit-text-field",
+                "replace-entity-field"
+              ]
+            }
+          ],
+          "specRevision": "sha256:2916e4ecafb16388aa1f6357dd0d2991017115aa052ae79ae4ffbcbd7d1a8294"
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "complete-context",
+          "where": {
+            "file": "spec.json",
+            "locator": "$.requirements[2].desc"
+          },
+          "observed": "R3 states that run has 36 direct children, while the current-registry correction in overview.decisions states run has 35. The required group inventory is not uniquely determined.",
+          "severity": "blocking",
+          "refs": [
+            "complete-context"
+          ],
+          "targets": [
+            {
+              "entity": "requirement",
+              "id": "R3",
+              "field": "desc"
+            }
+          ],
+          "allowedTargets": [
+            {
+              "target": {
+                "entity": "requirement",
+                "id": "R3",
+                "field": "desc"
+              },
+              "operationKinds": [
+                "edit-text-field",
+                "replace-entity-field"
+              ]
+            }
+          ],
+          "specRevision": "sha256:2916e4ecafb16388aa1f6357dd0d2991017115aa052ae79ae4ffbcbd7d1a8294"
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "complete-context",
+          "where": {
+            "file": "spec.json",
+            "locator": "$.requirements[3].desc"
+          },
+          "observed": "R4 defines 67 shared leaf and 68 total leaf, conflicting with the clarification that the current inventory has 66 shared leaf plus one query leaf.",
+          "severity": "blocking",
+          "refs": [
+            "complete-context"
+          ],
+          "targets": [
+            {
+              "entity": "requirement",
+              "id": "R4",
+              "field": "desc"
+            }
+          ],
+          "allowedTargets": [
+            {
+              "target": {
+                "entity": "requirement",
+                "id": "R4",
+                "field": "desc"
+              },
+              "operationKinds": [
+                "edit-text-field",
+                "replace-entity-field"
+              ]
+            }
+          ],
+          "specRevision": "sha256:2916e4ecafb16388aa1f6357dd0d2991017115aa052ae79ae4ffbcbd7d1a8294"
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "complete-context",
+          "where": {
+            "file": "spec.json",
+            "locator": "$.requirements[4].desc"
+          },
+          "observed": "R5 repeats a 68-leaf inventory with 67 shared leaf, while R11 and the clarification use 66 shared leaf. The validation matrix scope is contradictory.",
+          "severity": "blocking",
+          "refs": [
+            "complete-context"
+          ],
+          "targets": [
+            {
+              "entity": "requirement",
+              "id": "R5",
+              "field": "desc"
+            }
+          ],
+          "allowedTargets": [
+            {
+              "target": {
+                "entity": "requirement",
+                "id": "R5",
+                "field": "desc"
+              },
+              "operationKinds": [
+                "edit-text-field",
+                "replace-entity-field"
+              ]
+            }
+          ],
+          "specRevision": "sha256:2916e4ecafb16388aa1f6357dd0d2991017115aa052ae79ae4ffbcbd7d1a8294"
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "complete-context",
+          "where": {
+            "file": "spec.json",
+            "locator": "$.requirements[10].desc"
+          },
+          "observed": "R11 excludes a 66-leaf matrix, conflicting with R1, R4, and R5, which define the shared inventory as 67 leaf. The shared/query boundary is not uniquely specified.",
+          "severity": "blocking",
+          "refs": [
+            "complete-context"
+          ],
+          "targets": [
+            {
+              "entity": "requirement",
+              "id": "R11",
+              "field": "desc"
+            }
+          ],
+          "allowedTargets": [
+            {
+              "target": {
+                "entity": "requirement",
+                "id": "R11",
+                "field": "desc"
+              },
+              "operationKinds": [
+                "edit-text-field",
+                "replace-entity-field"
+              ]
+            }
+          ],
+          "specRevision": "sha256:2916e4ecafb16388aa1f6357dd0d2991017115aa052ae79ae4ffbcbd7d1a8294"
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "req-diff-verifiability",
+          "where": {
+            "file": "spec.json",
+            "locator": "$.requirements[0].desc"
+          },
+          "observed": "R1 requires constructor invariants and projection from the same option instance, but its verification only compares argv acceptance and rendered option rows; it does not define how those invariants or same-instance ownership will be checked.",
+          "severity": "blocking",
+          "refs": [
+            "req-diff-verifiability"
+          ],
+          "targets": [
+            {
+              "entity": "requirement",
+              "id": "R1",
+              "field": "desc"
+            }
+          ],
+          "allowedTargets": [
+            {
+              "target": {
+                "entity": "requirement",
+                "id": "R1",
+                "field": "desc"
+              },
+              "operationKinds": [
+                "edit-text-field",
+                "replace-entity-field"
+              ]
+            }
+          ],
+          "specRevision": "sha256:2916e4ecafb16388aa1f6357dd0d2991017115aa052ae79ae4ffbcbd7d1a8294"
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "req-diff-verifiability",
+          "where": {
+            "file": "spec.json",
+            "locator": "$.requirements[1].desc"
+          },
+          "observed": "R2 requires command-specific prose, examples, and translations to be maintained, but its verification only specifies the option matrix and selected CLI help comparisons; it gives no check or observable expected result for preserving those prose surfaces.",
+          "severity": "blocking",
+          "refs": [
+            "req-diff-verifiability"
+          ],
+          "targets": [
+            {
+              "entity": "requirement",
+              "id": "R2",
+              "field": "desc"
+            }
+          ],
+          "allowedTargets": [
+            {
+              "target": {
+                "entity": "requirement",
+                "id": "R2",
+                "field": "desc"
+              },
+              "operationKinds": [
+                "edit-text-field",
+                "replace-entity-field"
+              ]
+            }
+          ],
+          "specRevision": "sha256:2916e4ecafb16388aa1f6357dd0d2991017115aa052ae79ae4ffbcbd7d1a8294"
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "req-diff-verifiability",
+          "where": {
+            "file": "spec.json",
+            "locator": "$.requirements[10].desc"
+          },
+          "observed": "R11 names four query routes and test files, but does not state the observable expected success, help, or error outcome for stdin, request-file, help, and error cases.",
+          "severity": "blocking",
+          "refs": [
+            "req-diff-verifiability"
+          ],
+          "targets": [
+            {
+              "entity": "requirement",
+              "id": "R11",
+              "field": "desc"
+            }
+          ],
+          "allowedTargets": [
+            {
+              "target": {
+                "entity": "requirement",
+                "id": "R11",
+                "field": "desc"
+              },
+              "operationKinds": [
+                "edit-text-field",
+                "replace-entity-field"
+              ]
+            }
+          ],
+          "specRevision": "sha256:2916e4ecafb16388aa1f6357dd0d2991017115aa052ae79ae4ffbcbd7d1a8294"
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "req-diff-verifiability",
+          "where": {
+            "file": "spec.json",
+            "locator": "$.acceptance_criteria[4]"
+          },
+          "observed": "This acceptance criterion only says to confirm query and docs/core/plugin display routes; it does not state the observable expected result that determines success or failure for those routes.",
+          "severity": "blocking",
+          "refs": [
+            "req-diff-verifiability"
+          ],
+          "targets": [
+            {
+              "collection": "acceptance_criteria",
+              "position": 4
+            }
+          ],
+          "allowedTargets": [
+            {
+              "target": {
+                "collection": "acceptance_criteria",
+                "position": 4
+              },
+              "operationKinds": [
+                "delete-array-element",
+                "replace-array-element"
+              ]
+            }
+          ],
+          "specRevision": "sha256:2916e4ecafb16388aa1f6357dd0d2991017115aa052ae79ae4ffbcbd7d1a8294"
+        }
+      ],
+      "failedEvaluations": [
+        {
+          "guardrail_id": "complete-context",
+          "reason": "R1 scopes the registry check to 67 shared leaf, while the same spec's clarification and current-registry correction state there are 66 shared leaf. The verification denominator is inconsistent."
+        },
+        {
+          "guardrail_id": "complete-context",
+          "reason": "R3 states that run has 36 direct children, while the current-registry correction in overview.decisions states run has 35. The required group inventory is not uniquely determined."
+        },
+        {
+          "guardrail_id": "complete-context",
+          "reason": "R4 defines 67 shared leaf and 68 total leaf, conflicting with the clarification that the current inventory has 66 shared leaf plus one query leaf."
+        },
+        {
+          "guardrail_id": "complete-context",
+          "reason": "R5 repeats a 68-leaf inventory with 67 shared leaf, while R11 and the clarification use 66 shared leaf. The validation matrix scope is contradictory."
+        },
+        {
+          "guardrail_id": "complete-context",
+          "reason": "R11 excludes a 66-leaf matrix, conflicting with R1, R4, and R5, which define the shared inventory as 67 leaf. The shared/query boundary is not uniquely specified."
+        },
+        {
+          "guardrail_id": "req-diff-verifiability",
+          "reason": "R1 requires constructor invariants and projection from the same option instance, but its verification only compares argv acceptance and rendered option rows; it does not define how those invariants or same-instance ownership will be checked."
+        },
+        {
+          "guardrail_id": "req-diff-verifiability",
+          "reason": "R2 requires command-specific prose, examples, and translations to be maintained, but its verification only specifies the option matrix and selected CLI help comparisons; it gives no check or observable expected result for preserving those prose surfaces."
+        },
+        {
+          "guardrail_id": "req-diff-verifiability",
+          "reason": "R11 names four query routes and test files, but does not state the observable expected success, help, or error outcome for stdin, request-file, help, and error cases."
+        },
+        {
+          "guardrail_id": "req-diff-verifiability",
+          "reason": "This acceptance criterion only says to confirm query and docs/core/plugin display routes; it does not state the observable expected result that determines success or failure for those routes."
+        }
+      ],
+      "issueLogId": "spec-gate-result-aca05954895ed95f2cf3f2c25f74b036f0781fa73ac4108786f4c544c7f18cbe"
+    },
+    {
+      "kind": "plan-gate-repair",
+      "step": "spec-gate",
+      "phase": "spec",
+      "reason": "Guarded spec gate repair rewound to spec-gate-repair.",
+      "observations": [
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "complete-context",
+          "where": {
+            "file": "spec.json",
+            "locator": "$.requirements[0].desc"
+          },
+          "observed": "R1 scopes the registry check to 67 shared leaf, while the same spec's clarification and current-registry correction state there are 66 shared leaf. The verification denominator is inconsistent.",
+          "severity": "blocking",
+          "refs": [
+            "complete-context"
+          ],
+          "targets": [
+            {
+              "entity": "requirement",
+              "id": "R1",
+              "field": "desc"
+            }
+          ],
+          "allowedTargets": [
+            {
+              "target": {
+                "entity": "requirement",
+                "id": "R1",
+                "field": "desc"
+              },
+              "operationKinds": [
+                "edit-text-field",
+                "replace-entity-field"
+              ]
+            }
+          ],
+          "specRevision": "sha256:2916e4ecafb16388aa1f6357dd0d2991017115aa052ae79ae4ffbcbd7d1a8294",
+          "authority": {
+            "kind": "requirement",
+            "id": "complete-context"
+          },
+          "rootCause": null,
+          "fingerprint": "e51fd1b6cb4fbf9261a7fccf248e69734a017f733e299767b4a1b48015603e99"
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "complete-context",
+          "where": {
+            "file": "spec.json",
+            "locator": "$.requirements[2].desc"
+          },
+          "observed": "R3 states that run has 36 direct children, while the current-registry correction in overview.decisions states run has 35. The required group inventory is not uniquely determined.",
+          "severity": "blocking",
+          "refs": [
+            "complete-context"
+          ],
+          "targets": [
+            {
+              "entity": "requirement",
+              "id": "R3",
+              "field": "desc"
+            }
+          ],
+          "allowedTargets": [
+            {
+              "target": {
+                "entity": "requirement",
+                "id": "R3",
+                "field": "desc"
+              },
+              "operationKinds": [
+                "edit-text-field",
+                "replace-entity-field"
+              ]
+            }
+          ],
+          "specRevision": "sha256:2916e4ecafb16388aa1f6357dd0d2991017115aa052ae79ae4ffbcbd7d1a8294",
+          "authority": {
+            "kind": "requirement",
+            "id": "complete-context"
+          },
+          "rootCause": null,
+          "fingerprint": "15c7c7d4ce6fa7dcecc8db3cf4093ea0ada25f0c8c382254822ec8a876d145f4"
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "complete-context",
+          "where": {
+            "file": "spec.json",
+            "locator": "$.requirements[3].desc"
+          },
+          "observed": "R4 defines 67 shared leaf and 68 total leaf, conflicting with the clarification that the current inventory has 66 shared leaf plus one query leaf.",
+          "severity": "blocking",
+          "refs": [
+            "complete-context"
+          ],
+          "targets": [
+            {
+              "entity": "requirement",
+              "id": "R4",
+              "field": "desc"
+            }
+          ],
+          "allowedTargets": [
+            {
+              "target": {
+                "entity": "requirement",
+                "id": "R4",
+                "field": "desc"
+              },
+              "operationKinds": [
+                "edit-text-field",
+                "replace-entity-field"
+              ]
+            }
+          ],
+          "specRevision": "sha256:2916e4ecafb16388aa1f6357dd0d2991017115aa052ae79ae4ffbcbd7d1a8294",
+          "authority": {
+            "kind": "requirement",
+            "id": "complete-context"
+          },
+          "rootCause": null,
+          "fingerprint": "3ecd795cd5861c0c01d95612acf6170e0426841190a066bc77fc35f16067863f"
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "complete-context",
+          "where": {
+            "file": "spec.json",
+            "locator": "$.requirements[4].desc"
+          },
+          "observed": "R5 repeats a 68-leaf inventory with 67 shared leaf, while R11 and the clarification use 66 shared leaf. The validation matrix scope is contradictory.",
+          "severity": "blocking",
+          "refs": [
+            "complete-context"
+          ],
+          "targets": [
+            {
+              "entity": "requirement",
+              "id": "R5",
+              "field": "desc"
+            }
+          ],
+          "allowedTargets": [
+            {
+              "target": {
+                "entity": "requirement",
+                "id": "R5",
+                "field": "desc"
+              },
+              "operationKinds": [
+                "edit-text-field",
+                "replace-entity-field"
+              ]
+            }
+          ],
+          "specRevision": "sha256:2916e4ecafb16388aa1f6357dd0d2991017115aa052ae79ae4ffbcbd7d1a8294",
+          "authority": {
+            "kind": "requirement",
+            "id": "complete-context"
+          },
+          "rootCause": null,
+          "fingerprint": "e3d1b35ded472d44e3eae8d338c4d5b7885282bb103a0e80b6ad74d583a26c25"
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "complete-context",
+          "where": {
+            "file": "spec.json",
+            "locator": "$.requirements[10].desc"
+          },
+          "observed": "R11 excludes a 66-leaf matrix, conflicting with R1, R4, and R5, which define the shared inventory as 67 leaf. The shared/query boundary is not uniquely specified.",
+          "severity": "blocking",
+          "refs": [
+            "complete-context"
+          ],
+          "targets": [
+            {
+              "entity": "requirement",
+              "id": "R11",
+              "field": "desc"
+            }
+          ],
+          "allowedTargets": [
+            {
+              "target": {
+                "entity": "requirement",
+                "id": "R11",
+                "field": "desc"
+              },
+              "operationKinds": [
+                "edit-text-field",
+                "replace-entity-field"
+              ]
+            }
+          ],
+          "specRevision": "sha256:2916e4ecafb16388aa1f6357dd0d2991017115aa052ae79ae4ffbcbd7d1a8294",
+          "authority": {
+            "kind": "requirement",
+            "id": "complete-context"
+          },
+          "rootCause": null,
+          "fingerprint": "33f991e0877a3cc0a4e2e5a2713e64fb316b622a652a2a028c4b4d8fa1b69bac"
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "req-diff-verifiability",
+          "where": {
+            "file": "spec.json",
+            "locator": "$.requirements[0].desc"
+          },
+          "observed": "R1 requires constructor invariants and projection from the same option instance, but its verification only compares argv acceptance and rendered option rows; it does not define how those invariants or same-instance ownership will be checked.",
+          "severity": "blocking",
+          "refs": [
+            "req-diff-verifiability"
+          ],
+          "targets": [
+            {
+              "entity": "requirement",
+              "id": "R1",
+              "field": "desc"
+            }
+          ],
+          "allowedTargets": [
+            {
+              "target": {
+                "entity": "requirement",
+                "id": "R1",
+                "field": "desc"
+              },
+              "operationKinds": [
+                "edit-text-field",
+                "replace-entity-field"
+              ]
+            }
+          ],
+          "specRevision": "sha256:2916e4ecafb16388aa1f6357dd0d2991017115aa052ae79ae4ffbcbd7d1a8294",
+          "authority": {
+            "kind": "requirement",
+            "id": "req-diff-verifiability"
+          },
+          "rootCause": null,
+          "fingerprint": "81999601599448da6f99c75998910401d2a63134b1bfb9fff92da43dc8e3f768"
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "req-diff-verifiability",
+          "where": {
+            "file": "spec.json",
+            "locator": "$.requirements[1].desc"
+          },
+          "observed": "R2 requires command-specific prose, examples, and translations to be maintained, but its verification only specifies the option matrix and selected CLI help comparisons; it gives no check or observable expected result for preserving those prose surfaces.",
+          "severity": "blocking",
+          "refs": [
+            "req-diff-verifiability"
+          ],
+          "targets": [
+            {
+              "entity": "requirement",
+              "id": "R2",
+              "field": "desc"
+            }
+          ],
+          "allowedTargets": [
+            {
+              "target": {
+                "entity": "requirement",
+                "id": "R2",
+                "field": "desc"
+              },
+              "operationKinds": [
+                "edit-text-field",
+                "replace-entity-field"
+              ]
+            }
+          ],
+          "specRevision": "sha256:2916e4ecafb16388aa1f6357dd0d2991017115aa052ae79ae4ffbcbd7d1a8294",
+          "authority": {
+            "kind": "requirement",
+            "id": "req-diff-verifiability"
+          },
+          "rootCause": null,
+          "fingerprint": "4750c2bbf72b0e88a62f91efeaddf267f665f64e9669379586a1dafba3d15079"
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "req-diff-verifiability",
+          "where": {
+            "file": "spec.json",
+            "locator": "$.requirements[10].desc"
+          },
+          "observed": "R11 names four query routes and test files, but does not state the observable expected success, help, or error outcome for stdin, request-file, help, and error cases.",
+          "severity": "blocking",
+          "refs": [
+            "req-diff-verifiability"
+          ],
+          "targets": [
+            {
+              "entity": "requirement",
+              "id": "R11",
+              "field": "desc"
+            }
+          ],
+          "allowedTargets": [
+            {
+              "target": {
+                "entity": "requirement",
+                "id": "R11",
+                "field": "desc"
+              },
+              "operationKinds": [
+                "edit-text-field",
+                "replace-entity-field"
+              ]
+            }
+          ],
+          "specRevision": "sha256:2916e4ecafb16388aa1f6357dd0d2991017115aa052ae79ae4ffbcbd7d1a8294",
+          "authority": {
+            "kind": "requirement",
+            "id": "req-diff-verifiability"
+          },
+          "rootCause": null,
+          "fingerprint": "06495b4f08455c6c33c52a5d879868960e9ea838ca96730f8f440e114c881b13"
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "req-diff-verifiability",
+          "where": {
+            "file": "spec.json",
+            "locator": "$.acceptance_criteria[4]"
+          },
+          "observed": "This acceptance criterion only says to confirm query and docs/core/plugin display routes; it does not state the observable expected result that determines success or failure for those routes.",
+          "severity": "blocking",
+          "refs": [
+            "req-diff-verifiability"
+          ],
+          "targets": [
+            {
+              "collection": "acceptance_criteria",
+              "position": 4
+            }
+          ],
+          "allowedTargets": [
+            {
+              "target": {
+                "collection": "acceptance_criteria",
+                "position": 4
+              },
+              "operationKinds": [
+                "delete-array-element",
+                "replace-array-element"
+              ]
+            }
+          ],
+          "specRevision": "sha256:2916e4ecafb16388aa1f6357dd0d2991017115aa052ae79ae4ffbcbd7d1a8294",
+          "authority": {
+            "kind": "requirement",
+            "id": "req-diff-verifiability"
+          },
+          "rootCause": null,
+          "fingerprint": "a79670ec31f7b10f5e56caef5d3923af8ab11c932f1f4c77bf44a4773221df25"
+        }
+      ],
+      "timestamp": "2026-10-05T11:16:40.578Z",
+      "planGateRepair": {
+        "version": 2,
+        "runId": "6a9b5488-edef-4566-888e-14c37e31418c",
+        "specId": "6a9b5488-flow-help-contract",
+        "issue": 521,
+        "phase": "spec",
+        "targetStepId": "spec-gate-repair",
+        "connector": {
+          "phase": "spec",
+          "sourceGateStepId": "spec-gate",
+          "sourceAttempt": {
+            "id": "attempt-spec-gate-a1e728c5-d122-42dc-9787-ef8f601b7fdf",
+            "sequence": 12
+          },
+          "resultLogicalKey": "spec.gate",
+          "resultArtifactId": "steps/spec-gate/result.json",
+          "catalogFingerprint": "fdc127f75dadd0ed4833d6b65eccb89390300e43d178ff5679cde2fab8180a90",
+          "targetStepId": "spec-gate-repair",
+          "resetStepIds": [
+            "spec-gate-repair",
+            "spec-gate"
+          ],
+          "taskLifecycle": null
+        },
+        "evidenceIdentity": {
+          "sourceAttempt": {
+            "id": "attempt-spec-gate-a1e728c5-d122-42dc-9787-ef8f601b7fdf",
+            "sequence": 12
+          },
+          "resultLogicalKey": "spec.gate",
+          "publicationActivityId": "plan-gate-repaired-3dc13433-afc3-495c-a0bd-a5d80eb67910",
+          "catalogFingerprint": "fdc127f75dadd0ed4833d6b65eccb89390300e43d178ff5679cde2fab8180a90",
+          "transitionLineage": {
+            "sourceAttempt": {
+              "id": "attempt-spec-gate-a1e728c5-d122-42dc-9787-ef8f601b7fdf",
+              "sequence": 12
+            },
+            "canonicalAttempt": {
+              "id": "attempt-spec-gate-a1e728c5-d122-42dc-9787-ef8f601b7fdf",
+              "sequence": 12
+            },
+            "sourceFingerprint": "ce2e7c636318d7378562ca1174a2496de3ce40dedb607a332e327abe1be4ac80",
+            "canonicalFingerprint": "fdc127f75dadd0ed4833d6b65eccb89390300e43d178ff5679cde2fab8180a90",
+            "sourceRevisionFingerprint": "bb74be4478509c54640e1fe1702fc6f0ec70c6e16885349cba7641127f2291d6",
+            "canonicalRevisionFingerprint": "bb74be4478509c54640e1fe1702fc6f0ec70c6e16885349cba7641127f2291d6"
+          }
+        },
+        "sourceIssueLogId": "spec-gate-result-aca05954895ed95f2cf3f2c25f74b036f0781fa73ac4108786f4c544c7f18cbe",
+        "sourceEntryDigest": "313cdc6db0545a8b9504f0e2f276b458a9dd734cdf0058428def649f2bd2d9ec",
+        "observations": [
+          {
+            "kind": "violation",
+            "failureMode": "guardrail-violation",
+            "requirementRef": "complete-context",
+            "where": {
+              "file": "spec.json",
+              "locator": "$.requirements[0].desc"
+            },
+            "observed": "R1 scopes the registry check to 67 shared leaf, while the same spec's clarification and current-registry correction state there are 66 shared leaf. The verification denominator is inconsistent.",
+            "severity": "blocking",
+            "refs": [
+              "complete-context"
+            ],
+            "targets": [
+              {
+                "entity": "requirement",
+                "id": "R1",
+                "field": "desc"
+              }
+            ],
+            "allowedTargets": [
+              {
+                "target": {
+                  "entity": "requirement",
+                  "id": "R1",
+                  "field": "desc"
+                },
+                "operationKinds": [
+                  "edit-text-field",
+                  "replace-entity-field"
+                ]
+              }
+            ],
+            "specRevision": "sha256:2916e4ecafb16388aa1f6357dd0d2991017115aa052ae79ae4ffbcbd7d1a8294",
+            "authority": {
+              "kind": "requirement",
+              "id": "complete-context"
+            },
+            "rootCause": null,
+            "fingerprint": "e51fd1b6cb4fbf9261a7fccf248e69734a017f733e299767b4a1b48015603e99"
+          },
+          {
+            "kind": "violation",
+            "failureMode": "guardrail-violation",
+            "requirementRef": "complete-context",
+            "where": {
+              "file": "spec.json",
+              "locator": "$.requirements[2].desc"
+            },
+            "observed": "R3 states that run has 36 direct children, while the current-registry correction in overview.decisions states run has 35. The required group inventory is not uniquely determined.",
+            "severity": "blocking",
+            "refs": [
+              "complete-context"
+            ],
+            "targets": [
+              {
+                "entity": "requirement",
+                "id": "R3",
+                "field": "desc"
+              }
+            ],
+            "allowedTargets": [
+              {
+                "target": {
+                  "entity": "requirement",
+                  "id": "R3",
+                  "field": "desc"
+                },
+                "operationKinds": [
+                  "edit-text-field",
+                  "replace-entity-field"
+                ]
+              }
+            ],
+            "specRevision": "sha256:2916e4ecafb16388aa1f6357dd0d2991017115aa052ae79ae4ffbcbd7d1a8294",
+            "authority": {
+              "kind": "requirement",
+              "id": "complete-context"
+            },
+            "rootCause": null,
+            "fingerprint": "15c7c7d4ce6fa7dcecc8db3cf4093ea0ada25f0c8c382254822ec8a876d145f4"
+          },
+          {
+            "kind": "violation",
+            "failureMode": "guardrail-violation",
+            "requirementRef": "complete-context",
+            "where": {
+              "file": "spec.json",
+              "locator": "$.requirements[3].desc"
+            },
+            "observed": "R4 defines 67 shared leaf and 68 total leaf, conflicting with the clarification that the current inventory has 66 shared leaf plus one query leaf.",
+            "severity": "blocking",
+            "refs": [
+              "complete-context"
+            ],
+            "targets": [
+              {
+                "entity": "requirement",
+                "id": "R4",
+                "field": "desc"
+              }
+            ],
+            "allowedTargets": [
+              {
+                "target": {
+                  "entity": "requirement",
+                  "id": "R4",
+                  "field": "desc"
+                },
+                "operationKinds": [
+                  "edit-text-field",
+                  "replace-entity-field"
+                ]
+              }
+            ],
+            "specRevision": "sha256:2916e4ecafb16388aa1f6357dd0d2991017115aa052ae79ae4ffbcbd7d1a8294",
+            "authority": {
+              "kind": "requirement",
+              "id": "complete-context"
+            },
+            "rootCause": null,
+            "fingerprint": "3ecd795cd5861c0c01d95612acf6170e0426841190a066bc77fc35f16067863f"
+          },
+          {
+            "kind": "violation",
+            "failureMode": "guardrail-violation",
+            "requirementRef": "complete-context",
+            "where": {
+              "file": "spec.json",
+              "locator": "$.requirements[4].desc"
+            },
+            "observed": "R5 repeats a 68-leaf inventory with 67 shared leaf, while R11 and the clarification use 66 shared leaf. The validation matrix scope is contradictory.",
+            "severity": "blocking",
+            "refs": [
+              "complete-context"
+            ],
+            "targets": [
+              {
+                "entity": "requirement",
+                "id": "R5",
+                "field": "desc"
+              }
+            ],
+            "allowedTargets": [
+              {
+                "target": {
+                  "entity": "requirement",
+                  "id": "R5",
+                  "field": "desc"
+                },
+                "operationKinds": [
+                  "edit-text-field",
+                  "replace-entity-field"
+                ]
+              }
+            ],
+            "specRevision": "sha256:2916e4ecafb16388aa1f6357dd0d2991017115aa052ae79ae4ffbcbd7d1a8294",
+            "authority": {
+              "kind": "requirement",
+              "id": "complete-context"
+            },
+            "rootCause": null,
+            "fingerprint": "e3d1b35ded472d44e3eae8d338c4d5b7885282bb103a0e80b6ad74d583a26c25"
+          },
+          {
+            "kind": "violation",
+            "failureMode": "guardrail-violation",
+            "requirementRef": "complete-context",
+            "where": {
+              "file": "spec.json",
+              "locator": "$.requirements[10].desc"
+            },
+            "observed": "R11 excludes a 66-leaf matrix, conflicting with R1, R4, and R5, which define the shared inventory as 67 leaf. The shared/query boundary is not uniquely specified.",
+            "severity": "blocking",
+            "refs": [
+              "complete-context"
+            ],
+            "targets": [
+              {
+                "entity": "requirement",
+                "id": "R11",
+                "field": "desc"
+              }
+            ],
+            "allowedTargets": [
+              {
+                "target": {
+                  "entity": "requirement",
+                  "id": "R11",
+                  "field": "desc"
+                },
+                "operationKinds": [
+                  "edit-text-field",
+                  "replace-entity-field"
+                ]
+              }
+            ],
+            "specRevision": "sha256:2916e4ecafb16388aa1f6357dd0d2991017115aa052ae79ae4ffbcbd7d1a8294",
+            "authority": {
+              "kind": "requirement",
+              "id": "complete-context"
+            },
+            "rootCause": null,
+            "fingerprint": "33f991e0877a3cc0a4e2e5a2713e64fb316b622a652a2a028c4b4d8fa1b69bac"
+          },
+          {
+            "kind": "violation",
+            "failureMode": "guardrail-violation",
+            "requirementRef": "req-diff-verifiability",
+            "where": {
+              "file": "spec.json",
+              "locator": "$.requirements[0].desc"
+            },
+            "observed": "R1 requires constructor invariants and projection from the same option instance, but its verification only compares argv acceptance and rendered option rows; it does not define how those invariants or same-instance ownership will be checked.",
+            "severity": "blocking",
+            "refs": [
+              "req-diff-verifiability"
+            ],
+            "targets": [
+              {
+                "entity": "requirement",
+                "id": "R1",
+                "field": "desc"
+              }
+            ],
+            "allowedTargets": [
+              {
+                "target": {
+                  "entity": "requirement",
+                  "id": "R1",
+                  "field": "desc"
+                },
+                "operationKinds": [
+                  "edit-text-field",
+                  "replace-entity-field"
+                ]
+              }
+            ],
+            "specRevision": "sha256:2916e4ecafb16388aa1f6357dd0d2991017115aa052ae79ae4ffbcbd7d1a8294",
+            "authority": {
+              "kind": "requirement",
+              "id": "req-diff-verifiability"
+            },
+            "rootCause": null,
+            "fingerprint": "81999601599448da6f99c75998910401d2a63134b1bfb9fff92da43dc8e3f768"
+          },
+          {
+            "kind": "violation",
+            "failureMode": "guardrail-violation",
+            "requirementRef": "req-diff-verifiability",
+            "where": {
+              "file": "spec.json",
+              "locator": "$.requirements[1].desc"
+            },
+            "observed": "R2 requires command-specific prose, examples, and translations to be maintained, but its verification only specifies the option matrix and selected CLI help comparisons; it gives no check or observable expected result for preserving those prose surfaces.",
+            "severity": "blocking",
+            "refs": [
+              "req-diff-verifiability"
+            ],
+            "targets": [
+              {
+                "entity": "requirement",
+                "id": "R2",
+                "field": "desc"
+              }
+            ],
+            "allowedTargets": [
+              {
+                "target": {
+                  "entity": "requirement",
+                  "id": "R2",
+                  "field": "desc"
+                },
+                "operationKinds": [
+                  "edit-text-field",
+                  "replace-entity-field"
+                ]
+              }
+            ],
+            "specRevision": "sha256:2916e4ecafb16388aa1f6357dd0d2991017115aa052ae79ae4ffbcbd7d1a8294",
+            "authority": {
+              "kind": "requirement",
+              "id": "req-diff-verifiability"
+            },
+            "rootCause": null,
+            "fingerprint": "4750c2bbf72b0e88a62f91efeaddf267f665f64e9669379586a1dafba3d15079"
+          },
+          {
+            "kind": "violation",
+            "failureMode": "guardrail-violation",
+            "requirementRef": "req-diff-verifiability",
+            "where": {
+              "file": "spec.json",
+              "locator": "$.requirements[10].desc"
+            },
+            "observed": "R11 names four query routes and test files, but does not state the observable expected success, help, or error outcome for stdin, request-file, help, and error cases.",
+            "severity": "blocking",
+            "refs": [
+              "req-diff-verifiability"
+            ],
+            "targets": [
+              {
+                "entity": "requirement",
+                "id": "R11",
+                "field": "desc"
+              }
+            ],
+            "allowedTargets": [
+              {
+                "target": {
+                  "entity": "requirement",
+                  "id": "R11",
+                  "field": "desc"
+                },
+                "operationKinds": [
+                  "edit-text-field",
+                  "replace-entity-field"
+                ]
+              }
+            ],
+            "specRevision": "sha256:2916e4ecafb16388aa1f6357dd0d2991017115aa052ae79ae4ffbcbd7d1a8294",
+            "authority": {
+              "kind": "requirement",
+              "id": "req-diff-verifiability"
+            },
+            "rootCause": null,
+            "fingerprint": "06495b4f08455c6c33c52a5d879868960e9ea838ca96730f8f440e114c881b13"
+          },
+          {
+            "kind": "violation",
+            "failureMode": "guardrail-violation",
+            "requirementRef": "req-diff-verifiability",
+            "where": {
+              "file": "spec.json",
+              "locator": "$.acceptance_criteria[4]"
+            },
+            "observed": "This acceptance criterion only says to confirm query and docs/core/plugin display routes; it does not state the observable expected result that determines success or failure for those routes.",
+            "severity": "blocking",
+            "refs": [
+              "req-diff-verifiability"
+            ],
+            "targets": [
+              {
+                "collection": "acceptance_criteria",
+                "position": 4
+              }
+            ],
+            "allowedTargets": [
+              {
+                "target": {
+                  "collection": "acceptance_criteria",
+                  "position": 4
+                },
+                "operationKinds": [
+                  "delete-array-element",
+                  "replace-array-element"
+                ]
+              }
+            ],
+            "specRevision": "sha256:2916e4ecafb16388aa1f6357dd0d2991017115aa052ae79ae4ffbcbd7d1a8294",
+            "authority": {
+              "kind": "requirement",
+              "id": "req-diff-verifiability"
+            },
+            "rootCause": null,
+            "fingerprint": "a79670ec31f7b10f5e56caef5d3923af8ab11c932f1f4c77bf44a4773221df25"
+          }
+        ],
+        "observationFingerprints": [
+          "e51fd1b6cb4fbf9261a7fccf248e69734a017f733e299767b4a1b48015603e99",
+          "15c7c7d4ce6fa7dcecc8db3cf4093ea0ada25f0c8c382254822ec8a876d145f4",
+          "3ecd795cd5861c0c01d95612acf6170e0426841190a066bc77fc35f16067863f",
+          "e3d1b35ded472d44e3eae8d338c4d5b7885282bb103a0e80b6ad74d583a26c25",
+          "33f991e0877a3cc0a4e2e5a2713e64fb316b622a652a2a028c4b4d8fa1b69bac",
+          "81999601599448da6f99c75998910401d2a63134b1bfb9fff92da43dc8e3f768",
+          "4750c2bbf72b0e88a62f91efeaddf267f665f64e9669379586a1dafba3d15079",
+          "06495b4f08455c6c33c52a5d879868960e9ea838ca96730f8f440e114c881b13",
+          "a79670ec31f7b10f5e56caef5d3923af8ab11c932f1f4c77bf44a4773221df25"
+        ],
+        "observationRequests": [
+          {
+            "fingerprint": "e51fd1b6cb4fbf9261a7fccf248e69734a017f733e299767b4a1b48015603e99",
+            "recurrenceCount": 0,
+            "priorStrategy": null
+          },
+          {
+            "fingerprint": "15c7c7d4ce6fa7dcecc8db3cf4093ea0ada25f0c8c382254822ec8a876d145f4",
+            "recurrenceCount": 0,
+            "priorStrategy": null
+          },
+          {
+            "fingerprint": "3ecd795cd5861c0c01d95612acf6170e0426841190a066bc77fc35f16067863f",
+            "recurrenceCount": 0,
+            "priorStrategy": null
+          },
+          {
+            "fingerprint": "e3d1b35ded472d44e3eae8d338c4d5b7885282bb103a0e80b6ad74d583a26c25",
+            "recurrenceCount": 0,
+            "priorStrategy": null
+          },
+          {
+            "fingerprint": "33f991e0877a3cc0a4e2e5a2713e64fb316b622a652a2a028c4b4d8fa1b69bac",
+            "recurrenceCount": 0,
+            "priorStrategy": null
+          },
+          {
+            "fingerprint": "81999601599448da6f99c75998910401d2a63134b1bfb9fff92da43dc8e3f768",
+            "recurrenceCount": 0,
+            "priorStrategy": null
+          },
+          {
+            "fingerprint": "4750c2bbf72b0e88a62f91efeaddf267f665f64e9669379586a1dafba3d15079",
+            "recurrenceCount": 0,
+            "priorStrategy": null
+          },
+          {
+            "fingerprint": "06495b4f08455c6c33c52a5d879868960e9ea838ca96730f8f440e114c881b13",
+            "recurrenceCount": 0,
+            "priorStrategy": null
+          },
+          {
+            "fingerprint": "a79670ec31f7b10f5e56caef5d3923af8ab11c932f1f4c77bf44a4773221df25",
+            "recurrenceCount": 0,
+            "priorStrategy": null
+          }
+        ],
+        "requestedAt": "2026-10-05T11:16:40.578Z"
+      },
+      "issueLogId": "plan-gate-repair-968275fa19972f3549c8c3a8a5bfbb1555e73d5371c66f895e222fb3c33af4dc"
+    },
+    {
+      "step": "spec-gate",
+      "level": "parent",
+      "phase": "spec",
+      "reason": "T-6 の goal は、独立した query の挙動と非 Flow 共通 renderer の挙動を一つの task に含めている。; T-6 の acceptance は、query の stdin/request-file/help/error 経路と、docs/core/plugin の非 Flow help 表示を同一 task で扱っており、関連のない二つの検証対象を分離していない。",
+      "trigger": "gate post hook (auto)",
+      "timestamp": "2026-10-05T12:02:23.476Z",
+      "passedGuardrails": [
+        "spec-test-coverage"
+      ],
+      "headSha": "2ba144ef64c3e3cf02367895e3da91e5a41791d6",
+      "worktreeHash": "96583bd2bdaf1ef130ba21cb494792d3239248ee20b54079849dde32a2eea9be",
+      "observations": [
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "task-single-responsibility",
+          "where": {
+            "file": "spec.json",
+            "locator": "$.tasks[5].goal"
+          },
+          "observed": "T-6 の goal は、独立した query の挙動と非 Flow 共通 renderer の挙動を一つの task に含めている。",
+          "severity": "blocking",
+          "refs": [
+            "task-single-responsibility"
+          ],
+          "targets": [
+            {
+              "entity": "task",
+              "id": "T-6",
+              "field": "goal"
+            }
+          ],
+          "allowedTargets": [
+            {
+              "target": {
+                "entity": "task",
+                "id": "T-6",
+                "field": "goal"
+              },
+              "operationKinds": [
+                "edit-text-field",
+                "replace-entity-field"
+              ]
+            }
+          ],
+          "specRevision": "sha256:d2f434e606b2f7bce2cd52a2dba96caa0a1f3638da415b9952b35db66c9ea225"
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "task-single-responsibility",
+          "where": {
+            "file": "spec.json",
+            "locator": "$.tasks[5].acceptance"
+          },
+          "observed": "T-6 の acceptance は、query の stdin/request-file/help/error 経路と、docs/core/plugin の非 Flow help 表示を同一 task で扱っており、関連のない二つの検証対象を分離していない。",
+          "severity": "blocking",
+          "refs": [
+            "task-single-responsibility"
+          ],
+          "targets": [
+            {
+              "entity": "task",
+              "id": "T-6",
+              "field": "acceptance"
+            }
+          ],
+          "allowedTargets": [
+            {
+              "target": {
+                "entity": "task",
+                "id": "T-6",
+                "field": "acceptance"
+              },
+              "operationKinds": [
+                "delete-entity-field",
+                "replace-entity-field"
+              ]
+            }
+          ],
+          "specRevision": "sha256:d2f434e606b2f7bce2cd52a2dba96caa0a1f3638da415b9952b35db66c9ea225"
+        }
+      ],
+      "failedEvaluations": [
+        {
+          "guardrail_id": "task-single-responsibility",
+          "reason": "T-6 の goal は、独立した query の挙動と非 Flow 共通 renderer の挙動を一つの task に含めている。"
+        },
+        {
+          "guardrail_id": "task-single-responsibility",
+          "reason": "T-6 の acceptance は、query の stdin/request-file/help/error 経路と、docs/core/plugin の非 Flow help 表示を同一 task で扱っており、関連のない二つの検証対象を分離していない。"
+        }
+      ],
+      "issueLogId": "spec-gate-result-00b289417fd1c6f6d3e6f26e4af33ae2246e555289343ef8f6dd49dc9b3341f2"
+    },
+    {
+      "kind": "plan-gate-repair",
+      "step": "spec-gate",
+      "phase": "spec",
+      "reason": "Guarded spec gate repair rewound to spec-gate-repair.",
+      "observations": [
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "task-single-responsibility",
+          "where": {
+            "file": "spec.json",
+            "locator": "$.tasks[5].goal"
+          },
+          "observed": "T-6 の goal は、独立した query の挙動と非 Flow 共通 renderer の挙動を一つの task に含めている。",
+          "severity": "blocking",
+          "refs": [
+            "task-single-responsibility"
+          ],
+          "targets": [
+            {
+              "entity": "task",
+              "id": "T-6",
+              "field": "goal"
+            }
+          ],
+          "allowedTargets": [
+            {
+              "target": {
+                "entity": "task",
+                "id": "T-6",
+                "field": "goal"
+              },
+              "operationKinds": [
+                "edit-text-field",
+                "replace-entity-field"
+              ]
+            }
+          ],
+          "specRevision": "sha256:d2f434e606b2f7bce2cd52a2dba96caa0a1f3638da415b9952b35db66c9ea225",
+          "authority": {
+            "kind": "requirement",
+            "id": "task-single-responsibility"
+          },
+          "rootCause": null,
+          "fingerprint": "9b17c37f214b24022f1a5b687cf7e9b3a24e28ef461b8686d523987331f561b8"
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "task-single-responsibility",
+          "where": {
+            "file": "spec.json",
+            "locator": "$.tasks[5].acceptance"
+          },
+          "observed": "T-6 の acceptance は、query の stdin/request-file/help/error 経路と、docs/core/plugin の非 Flow help 表示を同一 task で扱っており、関連のない二つの検証対象を分離していない。",
+          "severity": "blocking",
+          "refs": [
+            "task-single-responsibility"
+          ],
+          "targets": [
+            {
+              "entity": "task",
+              "id": "T-6",
+              "field": "acceptance"
+            }
+          ],
+          "allowedTargets": [
+            {
+              "target": {
+                "entity": "task",
+                "id": "T-6",
+                "field": "acceptance"
+              },
+              "operationKinds": [
+                "delete-entity-field",
+                "replace-entity-field"
+              ]
+            }
+          ],
+          "specRevision": "sha256:d2f434e606b2f7bce2cd52a2dba96caa0a1f3638da415b9952b35db66c9ea225",
+          "authority": {
+            "kind": "requirement",
+            "id": "task-single-responsibility"
+          },
+          "rootCause": null,
+          "fingerprint": "0362f56c0184e68ad84f74f47b3f36a10ec5d35dc77ae3b3c825c6a7f26dcec2"
+        }
+      ],
+      "timestamp": "2026-10-05T12:08:56.055Z",
+      "planGateRepair": {
+        "version": 2,
+        "runId": "6a9b5488-edef-4566-888e-14c37e31418c",
+        "specId": "6a9b5488-flow-help-contract",
+        "issue": 521,
+        "phase": "spec",
+        "targetStepId": "spec-gate-repair",
+        "connector": {
+          "phase": "spec",
+          "sourceGateStepId": "spec-gate",
+          "sourceAttempt": {
+            "id": "attempt-spec-gate-bf21229b-4be4-48a3-8320-82a64a90dced",
+            "sequence": 13
+          },
+          "resultLogicalKey": "spec.gate",
+          "resultArtifactId": "steps/spec-gate/result.json",
+          "catalogFingerprint": "07017ec646c941e2f0638f2dd716af229f7727a1cca1a1ca062602337387e041",
+          "targetStepId": "spec-gate-repair",
+          "resetStepIds": [
+            "spec-gate-repair",
+            "spec-gate"
+          ],
+          "taskLifecycle": null
+        },
+        "evidenceIdentity": {
+          "sourceAttempt": {
+            "id": "attempt-spec-gate-bf21229b-4be4-48a3-8320-82a64a90dced",
+            "sequence": 13
+          },
+          "resultLogicalKey": "spec.gate",
+          "publicationActivityId": "plan-gate-repaired-d843bc75-73ce-4348-87de-6fecab102b26",
+          "catalogFingerprint": "07017ec646c941e2f0638f2dd716af229f7727a1cca1a1ca062602337387e041",
+          "transitionLineage": {
+            "sourceAttempt": {
+              "id": "attempt-spec-gate-bf21229b-4be4-48a3-8320-82a64a90dced",
+              "sequence": 13
+            },
+            "canonicalAttempt": {
+              "id": "attempt-spec-gate-bf21229b-4be4-48a3-8320-82a64a90dced",
+              "sequence": 13
+            },
+            "sourceFingerprint": "a406741993512cf25c8c2ef9207126e45e856dc03c1458eccb8b75fd64983822",
+            "canonicalFingerprint": "07017ec646c941e2f0638f2dd716af229f7727a1cca1a1ca062602337387e041",
+            "sourceRevisionFingerprint": "51b5677515db2ac797da8aaf1541539ab62c3c6d7736ec34a2cc8e5a27590173",
+            "canonicalRevisionFingerprint": "51b5677515db2ac797da8aaf1541539ab62c3c6d7736ec34a2cc8e5a27590173"
+          }
+        },
+        "sourceIssueLogId": "spec-gate-result-00b289417fd1c6f6d3e6f26e4af33ae2246e555289343ef8f6dd49dc9b3341f2",
+        "sourceEntryDigest": "5d636c7340e1c613e677918e4907369530395ebd23d2a3ef86badc4fc7d81796",
+        "observations": [
+          {
+            "kind": "violation",
+            "failureMode": "guardrail-violation",
+            "requirementRef": "task-single-responsibility",
+            "where": {
+              "file": "spec.json",
+              "locator": "$.tasks[5].goal"
+            },
+            "observed": "T-6 の goal は、独立した query の挙動と非 Flow 共通 renderer の挙動を一つの task に含めている。",
+            "severity": "blocking",
+            "refs": [
+              "task-single-responsibility"
+            ],
+            "targets": [
+              {
+                "entity": "task",
+                "id": "T-6",
+                "field": "goal"
+              }
+            ],
+            "allowedTargets": [
+              {
+                "target": {
+                  "entity": "task",
+                  "id": "T-6",
+                  "field": "goal"
+                },
+                "operationKinds": [
+                  "edit-text-field",
+                  "replace-entity-field"
+                ]
+              }
+            ],
+            "specRevision": "sha256:d2f434e606b2f7bce2cd52a2dba96caa0a1f3638da415b9952b35db66c9ea225",
+            "authority": {
+              "kind": "requirement",
+              "id": "task-single-responsibility"
+            },
+            "rootCause": null,
+            "fingerprint": "9b17c37f214b24022f1a5b687cf7e9b3a24e28ef461b8686d523987331f561b8"
+          },
+          {
+            "kind": "violation",
+            "failureMode": "guardrail-violation",
+            "requirementRef": "task-single-responsibility",
+            "where": {
+              "file": "spec.json",
+              "locator": "$.tasks[5].acceptance"
+            },
+            "observed": "T-6 の acceptance は、query の stdin/request-file/help/error 経路と、docs/core/plugin の非 Flow help 表示を同一 task で扱っており、関連のない二つの検証対象を分離していない。",
+            "severity": "blocking",
+            "refs": [
+              "task-single-responsibility"
+            ],
+            "targets": [
+              {
+                "entity": "task",
+                "id": "T-6",
+                "field": "acceptance"
+              }
+            ],
+            "allowedTargets": [
+              {
+                "target": {
+                  "entity": "task",
+                  "id": "T-6",
+                  "field": "acceptance"
+                },
+                "operationKinds": [
+                  "delete-entity-field",
+                  "replace-entity-field"
+                ]
+              }
+            ],
+            "specRevision": "sha256:d2f434e606b2f7bce2cd52a2dba96caa0a1f3638da415b9952b35db66c9ea225",
+            "authority": {
+              "kind": "requirement",
+              "id": "task-single-responsibility"
+            },
+            "rootCause": null,
+            "fingerprint": "0362f56c0184e68ad84f74f47b3f36a10ec5d35dc77ae3b3c825c6a7f26dcec2"
+          }
+        ],
+        "observationFingerprints": [
+          "9b17c37f214b24022f1a5b687cf7e9b3a24e28ef461b8686d523987331f561b8",
+          "0362f56c0184e68ad84f74f47b3f36a10ec5d35dc77ae3b3c825c6a7f26dcec2"
+        ],
+        "observationRequests": [
+          {
+            "fingerprint": "9b17c37f214b24022f1a5b687cf7e9b3a24e28ef461b8686d523987331f561b8",
+            "recurrenceCount": 0,
+            "priorStrategy": null
+          },
+          {
+            "fingerprint": "0362f56c0184e68ad84f74f47b3f36a10ec5d35dc77ae3b3c825c6a7f26dcec2",
+            "recurrenceCount": 0,
+            "priorStrategy": null
+          }
+        ],
+        "requestedAt": "2026-10-05T12:08:56.055Z"
+      },
+      "issueLogId": "plan-gate-repair-d1462c12ba614fcafa2009599332311f0702ddfd78e1f405097cd615c48f1e49"
+    },
+    {
+      "step": "spec-gate",
+      "level": "parent",
+      "phase": "spec",
+      "reason": "「安定した表示順」は安定性の判定条件を示していない。; 「読みやすい行間隔」は主観的で、目標文自体に検証条件がない。; 検証対象を「代表的な help 表示」としているが、対象 leaf・経路の選定条件が明示されていない。; 「valid representative」を使う検証ケースの具体的な入力選定条件が示されていない。; 「実 CLI representative case」がどの具体的なケースを指すか明示されていない。; 「焦点を絞った E2E」の対象範囲と選定基準が検証可能な条件として定義されていない。; 「指定例」が列挙されておらず、どの実経路・入力例を成立させるか判定できない。; T-6 の受入条件は docs/core/plugin の共通 renderer 回帰を対象とする一方、implementation_notes は query parser の移行方針を対象としており、別の concern を一つの task に束ねている。; CLI help の検証方法を「代表的」としており、実際に確認する leaf・表示経路の集合と、全体を代表すると判定する条件が未定義である。; 上限なしの owner 契約を検証する際の「valid representative」の具体的入力と、どの観測結果で合格とするかが指定されていない。; 「実 CLI representative case」の対象ケースが特定されておらず、確認方法が再現可能な条件になっていない。; 移行対象の公開 API について、影響対象の inventory または影響なしという明示的な判断がない。; 移行対象の hooks について、影響対象の inventory、新 owner、または削除判断がない。",
+      "trigger": "gate post hook (auto)",
+      "timestamp": "2026-10-05T12:36:44.097Z",
+      "passedGuardrails": [
+        "spec-test-coverage"
+      ],
+      "headSha": "2ba144ef64c3e3cf02367895e3da91e5a41791d6",
+      "worktreeHash": "73f58216ca876981ac47f498863fea4810298a660c3e355a45c67c4be8381b63",
+      "observations": [
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "unambiguous-requirements",
+          "where": {
+            "file": "spec.json",
+            "locator": "$.goal"
+          },
+          "observed": "「安定した表示順」は安定性の判定条件を示していない。",
+          "severity": "blocking",
+          "refs": [
+            "unambiguous-requirements"
+          ],
+          "targets": [
+            {
+              "entity": "spec",
+              "field": "goal"
+            }
+          ],
+          "allowedTargets": [
+            {
+              "target": {
+                "entity": "spec",
+                "field": "goal"
+              },
+              "operationKinds": [
+                "edit-text-field",
+                "replace-field"
+              ]
+            }
+          ],
+          "specRevision": "sha256:b1a85a67fef9ca3db90aa0e85e3e623dc3725ed7b712453a526cff75c11305ed"
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "unambiguous-requirements",
+          "where": {
+            "file": "spec.json",
+            "locator": "$.goal"
+          },
+          "observed": "「読みやすい行間隔」は主観的で、目標文自体に検証条件がない。",
+          "severity": "blocking",
+          "refs": [
+            "unambiguous-requirements"
+          ],
+          "targets": [
+            {
+              "entity": "spec",
+              "field": "goal"
+            }
+          ],
+          "allowedTargets": [
+            {
+              "target": {
+                "entity": "spec",
+                "field": "goal"
+              },
+              "operationKinds": [
+                "edit-text-field",
+                "replace-field"
+              ]
+            }
+          ],
+          "specRevision": "sha256:b1a85a67fef9ca3db90aa0e85e3e623dc3725ed7b712453a526cff75c11305ed"
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "unambiguous-requirements",
+          "where": {
+            "file": "spec.json",
+            "locator": "$.requirements[1].desc"
+          },
+          "observed": "検証対象を「代表的な help 表示」としているが、対象 leaf・経路の選定条件が明示されていない。",
+          "severity": "blocking",
+          "refs": [
+            "unambiguous-requirements"
+          ],
+          "targets": [
+            {
+              "entity": "requirement",
+              "id": "R2",
+              "field": "desc"
+            }
+          ],
+          "allowedTargets": [
+            {
+              "target": {
+                "entity": "requirement",
+                "id": "R2",
+                "field": "desc"
+              },
+              "operationKinds": [
+                "edit-text-field",
+                "replace-entity-field"
+              ]
+            }
+          ],
+          "specRevision": "sha256:b1a85a67fef9ca3db90aa0e85e3e623dc3725ed7b712453a526cff75c11305ed"
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "unambiguous-requirements",
+          "where": {
+            "file": "spec.json",
+            "locator": "$.requirements[5].desc"
+          },
+          "observed": "「valid representative」を使う検証ケースの具体的な入力選定条件が示されていない。",
+          "severity": "blocking",
+          "refs": [
+            "unambiguous-requirements"
+          ],
+          "targets": [
+            {
+              "entity": "requirement",
+              "id": "R6",
+              "field": "desc"
+            }
+          ],
+          "allowedTargets": [
+            {
+              "target": {
+                "entity": "requirement",
+                "id": "R6",
+                "field": "desc"
+              },
+              "operationKinds": [
+                "edit-text-field",
+                "replace-entity-field"
+              ]
+            }
+          ],
+          "specRevision": "sha256:b1a85a67fef9ca3db90aa0e85e3e623dc3725ed7b712453a526cff75c11305ed"
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "unambiguous-requirements",
+          "where": {
+            "file": "spec.json",
+            "locator": "$.requirements[5].desc"
+          },
+          "observed": "「実 CLI representative case」がどの具体的なケースを指すか明示されていない。",
+          "severity": "blocking",
+          "refs": [
+            "unambiguous-requirements"
+          ],
+          "targets": [
+            {
+              "entity": "requirement",
+              "id": "R6",
+              "field": "desc"
+            }
+          ],
+          "allowedTargets": [
+            {
+              "target": {
+                "entity": "requirement",
+                "id": "R6",
+                "field": "desc"
+              },
+              "operationKinds": [
+                "edit-text-field",
+                "replace-entity-field"
+              ]
+            }
+          ],
+          "specRevision": "sha256:b1a85a67fef9ca3db90aa0e85e3e623dc3725ed7b712453a526cff75c11305ed"
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "unambiguous-requirements",
+          "where": {
+            "file": "spec.json",
+            "locator": "$.tasks[4].acceptance"
+          },
+          "observed": "「焦点を絞った E2E」の対象範囲と選定基準が検証可能な条件として定義されていない。",
+          "severity": "blocking",
+          "refs": [
+            "unambiguous-requirements"
+          ],
+          "targets": [
+            {
+              "entity": "task",
+              "id": "T-5",
+              "field": "acceptance"
+            }
+          ],
+          "allowedTargets": [
+            {
+              "target": {
+                "entity": "task",
+                "id": "T-5",
+                "field": "acceptance"
+              },
+              "operationKinds": [
+                "delete-entity-field",
+                "replace-entity-field"
+              ]
+            }
+          ],
+          "specRevision": "sha256:b1a85a67fef9ca3db90aa0e85e3e623dc3725ed7b712453a526cff75c11305ed"
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "unambiguous-requirements",
+          "where": {
+            "file": "spec.json",
+            "locator": "$.tasks[5].acceptance"
+          },
+          "observed": "「指定例」が列挙されておらず、どの実経路・入力例を成立させるか判定できない。",
+          "severity": "blocking",
+          "refs": [
+            "unambiguous-requirements"
+          ],
+          "targets": [
+            {
+              "entity": "task",
+              "id": "T-6",
+              "field": "acceptance"
+            }
+          ],
+          "allowedTargets": [
+            {
+              "target": {
+                "entity": "task",
+                "id": "T-6",
+                "field": "acceptance"
+              },
+              "operationKinds": [
+                "delete-entity-field",
+                "replace-entity-field"
+              ]
+            }
+          ],
+          "specRevision": "sha256:b1a85a67fef9ca3db90aa0e85e3e623dc3725ed7b712453a526cff75c11305ed"
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "task-single-responsibility",
+          "where": {
+            "file": "spec.json",
+            "locator": "$.tasks[5]"
+          },
+          "observed": "T-6 の受入条件は docs/core/plugin の共通 renderer 回帰を対象とする一方、implementation_notes は query parser の移行方針を対象としており、別の concern を一つの task に束ねている。",
+          "severity": "blocking",
+          "refs": [
+            "task-single-responsibility"
+          ],
+          "targets": [
+            {
+              "entity": "task",
+              "id": "T-6",
+              "field": "acceptance"
+            },
+            {
+              "entity": "task",
+              "id": "T-6",
+              "field": "implementation_notes"
+            }
+          ],
+          "allowedTargets": [
+            {
+              "target": {
+                "entity": "task",
+                "id": "T-6",
+                "field": "acceptance"
+              },
+              "operationKinds": [
+                "delete-entity-field",
+                "replace-entity-field"
+              ]
+            },
+            {
+              "target": {
+                "entity": "task",
+                "id": "T-6",
+                "field": "implementation_notes"
+              },
+              "operationKinds": [
+                "delete-entity-field",
+                "edit-text-field",
+                "replace-entity-field"
+              ]
+            }
+          ],
+          "specRevision": "sha256:b1a85a67fef9ca3db90aa0e85e3e623dc3725ed7b712453a526cff75c11305ed"
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "req-diff-verifiability",
+          "where": {
+            "file": "spec.json",
+            "locator": "$.requirements[1].desc"
+          },
+          "observed": "CLI help の検証方法を「代表的」としており、実際に確認する leaf・表示経路の集合と、全体を代表すると判定する条件が未定義である。",
+          "severity": "blocking",
+          "refs": [
+            "req-diff-verifiability"
+          ],
+          "targets": [
+            {
+              "entity": "requirement",
+              "id": "R2",
+              "field": "desc"
+            }
+          ],
+          "allowedTargets": [
+            {
+              "target": {
+                "entity": "requirement",
+                "id": "R2",
+                "field": "desc"
+              },
+              "operationKinds": [
+                "edit-text-field",
+                "replace-entity-field"
+              ]
+            }
+          ],
+          "specRevision": "sha256:b1a85a67fef9ca3db90aa0e85e3e623dc3725ed7b712453a526cff75c11305ed"
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "req-diff-verifiability",
+          "where": {
+            "file": "spec.json",
+            "locator": "$.requirements[5].desc"
+          },
+          "observed": "上限なしの owner 契約を検証する際の「valid representative」の具体的入力と、どの観測結果で合格とするかが指定されていない。",
+          "severity": "blocking",
+          "refs": [
+            "req-diff-verifiability"
+          ],
+          "targets": [
+            {
+              "entity": "requirement",
+              "id": "R6",
+              "field": "desc"
+            }
+          ],
+          "allowedTargets": [
+            {
+              "target": {
+                "entity": "requirement",
+                "id": "R6",
+                "field": "desc"
+              },
+              "operationKinds": [
+                "edit-text-field",
+                "replace-entity-field"
+              ]
+            }
+          ],
+          "specRevision": "sha256:b1a85a67fef9ca3db90aa0e85e3e623dc3725ed7b712453a526cff75c11305ed"
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "req-diff-verifiability",
+          "where": {
+            "file": "spec.json",
+            "locator": "$.requirements[5].desc"
+          },
+          "observed": "「実 CLI representative case」の対象ケースが特定されておらず、確認方法が再現可能な条件になっていない。",
+          "severity": "blocking",
+          "refs": [
+            "req-diff-verifiability"
+          ],
+          "targets": [
+            {
+              "entity": "requirement",
+              "id": "R6",
+              "field": "desc"
+            }
+          ],
+          "allowedTargets": [
+            {
+              "target": {
+                "entity": "requirement",
+                "id": "R6",
+                "field": "desc"
+              },
+              "operationKinds": [
+                "edit-text-field",
+                "replace-entity-field"
+              ]
+            }
+          ],
+          "specRevision": "sha256:b1a85a67fef9ca3db90aa0e85e3e623dc3725ed7b712453a526cff75c11305ed"
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "migration-parity",
+          "where": {
+            "file": "spec.json",
+            "locator": "$.requirements[11].desc"
+          },
+          "observed": "移行対象の公開 API について、影響対象の inventory または影響なしという明示的な判断がない。",
+          "severity": "blocking",
+          "refs": [
+            "migration-parity"
+          ],
+          "targets": [
+            {
+              "entity": "requirement",
+              "id": "R12",
+              "field": "desc"
+            }
+          ],
+          "allowedTargets": [
+            {
+              "target": {
+                "entity": "requirement",
+                "id": "R12",
+                "field": "desc"
+              },
+              "operationKinds": [
+                "edit-text-field",
+                "replace-entity-field"
+              ]
+            }
+          ],
+          "specRevision": "sha256:b1a85a67fef9ca3db90aa0e85e3e623dc3725ed7b712453a526cff75c11305ed"
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "migration-parity",
+          "where": {
+            "file": "spec.json",
+            "locator": "$.requirements[11].desc"
+          },
+          "observed": "移行対象の hooks について、影響対象の inventory、新 owner、または削除判断がない。",
+          "severity": "blocking",
+          "refs": [
+            "migration-parity"
+          ],
+          "targets": [
+            {
+              "entity": "requirement",
+              "id": "R12",
+              "field": "desc"
+            }
+          ],
+          "allowedTargets": [
+            {
+              "target": {
+                "entity": "requirement",
+                "id": "R12",
+                "field": "desc"
+              },
+              "operationKinds": [
+                "edit-text-field",
+                "replace-entity-field"
+              ]
+            }
+          ],
+          "specRevision": "sha256:b1a85a67fef9ca3db90aa0e85e3e623dc3725ed7b712453a526cff75c11305ed"
+        }
+      ],
+      "failedEvaluations": [
+        {
+          "guardrail_id": "unambiguous-requirements",
+          "reason": "「安定した表示順」は安定性の判定条件を示していない。"
+        },
+        {
+          "guardrail_id": "unambiguous-requirements",
+          "reason": "「読みやすい行間隔」は主観的で、目標文自体に検証条件がない。"
+        },
+        {
+          "guardrail_id": "unambiguous-requirements",
+          "reason": "検証対象を「代表的な help 表示」としているが、対象 leaf・経路の選定条件が明示されていない。"
+        },
+        {
+          "guardrail_id": "unambiguous-requirements",
+          "reason": "「valid representative」を使う検証ケースの具体的な入力選定条件が示されていない。"
+        },
+        {
+          "guardrail_id": "unambiguous-requirements",
+          "reason": "「実 CLI representative case」がどの具体的なケースを指すか明示されていない。"
+        },
+        {
+          "guardrail_id": "unambiguous-requirements",
+          "reason": "「焦点を絞った E2E」の対象範囲と選定基準が検証可能な条件として定義されていない。"
+        },
+        {
+          "guardrail_id": "unambiguous-requirements",
+          "reason": "「指定例」が列挙されておらず、どの実経路・入力例を成立させるか判定できない。"
+        },
+        {
+          "guardrail_id": "task-single-responsibility",
+          "reason": "T-6 の受入条件は docs/core/plugin の共通 renderer 回帰を対象とする一方、implementation_notes は query parser の移行方針を対象としており、別の concern を一つの task に束ねている。"
+        },
+        {
+          "guardrail_id": "req-diff-verifiability",
+          "reason": "CLI help の検証方法を「代表的」としており、実際に確認する leaf・表示経路の集合と、全体を代表すると判定する条件が未定義である。"
+        },
+        {
+          "guardrail_id": "req-diff-verifiability",
+          "reason": "上限なしの owner 契約を検証する際の「valid representative」の具体的入力と、どの観測結果で合格とするかが指定されていない。"
+        },
+        {
+          "guardrail_id": "req-diff-verifiability",
+          "reason": "「実 CLI representative case」の対象ケースが特定されておらず、確認方法が再現可能な条件になっていない。"
+        },
+        {
+          "guardrail_id": "migration-parity",
+          "reason": "移行対象の公開 API について、影響対象の inventory または影響なしという明示的な判断がない。"
+        },
+        {
+          "guardrail_id": "migration-parity",
+          "reason": "移行対象の hooks について、影響対象の inventory、新 owner、または削除判断がない。"
+        }
+      ],
+      "issueLogId": "spec-gate-result-61ef735298acf2b82e65ab249a08f97d79ee515d17014eb33db312eaae27d8eb"
+    },
+    {
+      "step": "draft",
+      "reason": "reopen-draft preimplementation: ユーザーの「1で進めて」に基づき、Spec26のGate未解決13件を解消するためDraftから検証範囲・Task分担を再計画する。goalの表示順序・空白条件をR7/R8へ対応付ける。R2/R6の代表的ケースを現行registryとowner別の具体入力・期待観測に置換する。T5の実CLI対象集合と経路を確定し、T6のgoal/acceptance/implementation_notes/test_strategyを同じ責務へ揃え、query回帰を独立責務に割り当てる。R12の公開API/hooksの実利用・新owner・保持/削除/影響なし判断をsourceで確認する。元のIssue範囲と必須確認を保持し、DraftからReview/Gateまで正規に再実行する。",
+      "trigger": "user invoked sennel flow reopen-draft",
+      "resolution": "definition-owned draft replacement started after spec-gate",
+      "draftReopen": {
+        "reason": "ユーザーの「1で進めて」に基づき、Spec26のGate未解決13件を解消するためDraftから検証範囲・Task分担を再計画する。goalの表示順序・空白条件をR7/R8へ対応付ける。R2/R6の代表的ケースを現行registryとowner別の具体入力・期待観測に置換する。T5の実CLI対象集合と経路を確定し、T6のgoal/acceptance/implementation_notes/test_strategyを同じ責務へ揃え、query回帰を独立責務に割り当てる。R12の公開API/hooksの実利用・新owner・保持/削除/影響なし判断をsourceで確認する。元のIssue範囲と必須確認を保持し、DraftからReview/Gateまで正規に再実行する。",
+        "route": "preimplementation",
+        "source": {
+          "stepId": "spec-gate",
+          "attemptId": "attempt-spec-gate-d4d16e61-6905-429e-8237-820431d68eae",
+          "attemptSequence": 14,
+          "trigger": "user invoked sennel flow reopen-draft"
+        },
+        "previousDraft": {
+          "digest": "2f9fea7c4bcf574f4ab1380ec1b134dcbcb5494f66b02e4dc9c39298a8ee9448",
+          "questionLedger": {
+            "revision": 0,
+            "publication": "draft-worker-publication",
+            "evidenceDigest": "6443375a5b99258635088695cdefa410f2f160a795b8c59322674b4b740532a3",
+            "questions": []
+          }
+        },
+        "draftAttemptId": "attempt-draft-28d2862f-d248-4553-965d-c3af060c2d8a"
+      },
+      "issueLogId": "reopen-draft:6a9b5488-edef-4566-888e-14c37e31418c:attempt-draft-28d2862f-d248-4553-965d-c3af060c2d8a"
+    },
+    {
+      "step": "draft-gate",
+      "level": "parent",
+      "phase": "draft",
+      "reason": "The requirement to add “focused” real-dispatcher CLI checks does not define verifiable criteria for which checks are included.; “Focused public CLI behavior” is not defined by concrete entry points or coverage criteria.; The subjective term “focused” lacks measurable criteria, so independent reviewers may disagree on whether the required CLI verification is sufficient.; The requirement for “focused public CLI behavior” does not specify the exact behavior set or acceptance boundary.; The draft defers the per-leaf inventory to the next Spec instead of inventorying the existing public behavior being moved or replaced.; The draft defers mapping retained behavior to current or new owners; it provides no per-behavior owner mapping or explicit removal decision.; The draft requires broad CLI checks but does not define acceptance criteria proving each retained behavior works through the new path.; The stated behavior-level verification covers selected parser, help, guard, runtime, and query categories, but does not provide one behavior-level verification for every retained public surface identified, including hooks, configuration, generated artifacts, and side effects.",
+      "trigger": "gate post hook (auto)",
+      "timestamp": "2026-10-05T13:45:59.663Z",
+      "passedGuardrails": [],
+      "headSha": "2ba144ef64c3e3cf02367895e3da91e5a41791d6",
+      "worktreeHash": "0b11e52cc82da9f75e941aa5a8dbfdda338e35b317b5b5f2d80342d9d6c37b23",
+      "observations": [
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "unambiguous-requirements",
+          "where": {
+            "file": "spec.json",
+            "locator": "analysis.validation"
+          },
+          "observed": "The requirement to add “focused” real-dispatcher CLI checks does not define verifiable criteria for which checks are included.",
+          "severity": "blocking",
+          "refs": [
+            "unambiguous-requirements"
+          ]
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "unambiguous-requirements",
+          "where": {
+            "file": "spec.json",
+            "locator": "decisionMap.deferredToSpec[4].relevance"
+          },
+          "observed": "“Focused public CLI behavior” is not defined by concrete entry points or coverage criteria.",
+          "severity": "blocking",
+          "refs": [
+            "unambiguous-requirements"
+          ]
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "complete-context",
+          "where": {
+            "file": "spec.json",
+            "locator": "analysis.validation"
+          },
+          "observed": "The subjective term “focused” lacks measurable criteria, so independent reviewers may disagree on whether the required CLI verification is sufficient.",
+          "severity": "blocking",
+          "refs": [
+            "complete-context"
+          ]
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "complete-context",
+          "where": {
+            "file": "spec.json",
+            "locator": "decisionMap.deferredToSpec[4].relevance"
+          },
+          "observed": "The requirement for “focused public CLI behavior” does not specify the exact behavior set or acceptance boundary.",
+          "severity": "blocking",
+          "refs": [
+            "complete-context"
+          ]
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "migration-parity",
+          "where": {
+            "file": "spec.json",
+            "locator": "decisionMap.deferredToSpec[0]"
+          },
+          "observed": "The draft defers the per-leaf inventory to the next Spec instead of inventorying the existing public behavior being moved or replaced.",
+          "severity": "blocking",
+          "refs": [
+            "migration-parity"
+          ]
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "migration-parity",
+          "where": {
+            "file": "spec.json",
+            "locator": "decisionMap.deferredToSpec[1]"
+          },
+          "observed": "The draft defers mapping retained behavior to current or new owners; it provides no per-behavior owner mapping or explicit removal decision.",
+          "severity": "blocking",
+          "refs": [
+            "migration-parity"
+          ]
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "migration-parity",
+          "where": {
+            "file": "spec.json",
+            "locator": "analysis.validation"
+          },
+          "observed": "The draft requires broad CLI checks but does not define acceptance criteria proving each retained behavior works through the new path.",
+          "severity": "blocking",
+          "refs": [
+            "migration-parity"
+          ]
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "migration-parity",
+          "where": {
+            "file": "spec.json",
+            "locator": "scopeVerification.in[4]"
+          },
+          "observed": "The stated behavior-level verification covers selected parser, help, guard, runtime, and query categories, but does not provide one behavior-level verification for every retained public surface identified, including hooks, configuration, generated artifacts, and side effects.",
+          "severity": "blocking",
+          "refs": [
+            "migration-parity"
+          ]
+        }
+      ],
+      "failedEvaluations": [
+        {
+          "guardrail_id": "unambiguous-requirements",
+          "reason": "The requirement to add “focused” real-dispatcher CLI checks does not define verifiable criteria for which checks are included."
+        },
+        {
+          "guardrail_id": "unambiguous-requirements",
+          "reason": "“Focused public CLI behavior” is not defined by concrete entry points or coverage criteria."
+        },
+        {
+          "guardrail_id": "complete-context",
+          "reason": "The subjective term “focused” lacks measurable criteria, so independent reviewers may disagree on whether the required CLI verification is sufficient."
+        },
+        {
+          "guardrail_id": "complete-context",
+          "reason": "The requirement for “focused public CLI behavior” does not specify the exact behavior set or acceptance boundary."
+        },
+        {
+          "guardrail_id": "migration-parity",
+          "reason": "The draft defers the per-leaf inventory to the next Spec instead of inventorying the existing public behavior being moved or replaced."
+        },
+        {
+          "guardrail_id": "migration-parity",
+          "reason": "The draft defers mapping retained behavior to current or new owners; it provides no per-behavior owner mapping or explicit removal decision."
+        },
+        {
+          "guardrail_id": "migration-parity",
+          "reason": "The draft requires broad CLI checks but does not define acceptance criteria proving each retained behavior works through the new path."
+        },
+        {
+          "guardrail_id": "migration-parity",
+          "reason": "The stated behavior-level verification covers selected parser, help, guard, runtime, and query categories, but does not provide one behavior-level verification for every retained public surface identified, including hooks, configuration, generated artifacts, and side effects."
+        }
+      ],
+      "issueLogId": "draft-gate-result-601787b59195a664018b8b28e2cdbe36553921e1ba2363a07536be1b8a077167"
+    },
+    {
+      "step": "spec-gate",
+      "level": "parent",
+      "phase": "spec",
+      "reason": "The scope requires recursive FLOW_COMMANDS traversal while explicitly deriving the leaf count from the runtime registry; it defines no upper bound for recursion depth, leaf count, or traversal size, and no matched acknowledgment rationale is present.; The background describes recursive re-enumeration and future registry growth without specifying a maximum depth, count, or size for that processing.; This constraint adopts the recursive registry traversal result as authority but supplies no explicit resource bound; the referenced historical counts are expressly not an acceptance cap.; R6 preserves exit codes and names generic help, parse, guard, and command failures, but does not state what constitutes success and failure for each routed CLI command.; R2 enumerates arguments and assigns validation to existing owners, but does not specify a type, format, and range requirement for every listed user-facing positional and option; several entries are only named or labeled as text, id, path, or runId.",
+      "trigger": "gate post hook (auto)",
+      "timestamp": "2026-10-05T14:39:22.143Z",
+      "passedGuardrails": [
+        "spec-test-coverage"
+      ],
+      "headSha": "2ba144ef64c3e3cf02367895e3da91e5a41791d6",
+      "worktreeHash": "edbfaa326598f433bfd7efd2d2838e6daa4f5c36166662630dea8983cc839cb5",
+      "observations": [
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "bounded-resource-usage",
+          "where": {
+            "file": "spec.json",
+            "locator": "/scope/in/0"
+          },
+          "observed": "The scope requires recursive FLOW_COMMANDS traversal while explicitly deriving the leaf count from the runtime registry; it defines no upper bound for recursion depth, leaf count, or traversal size, and no matched acknowledgment rationale is present.",
+          "severity": "blocking",
+          "refs": [
+            "bounded-resource-usage"
+          ],
+          "targets": [
+            {
+              "collection": "scope.in",
+              "position": 0
+            }
+          ],
+          "allowedTargets": [
+            {
+              "target": {
+                "collection": "scope.in",
+                "position": 0
+              },
+              "operationKinds": [
+                "replace-array-element",
+                "delete-array-element"
+              ]
+            }
+          ],
+          "specRevision": "sha256:9c2a429f31035af363da574c7a989da6d6cc0bb22a8827ac40a3f0df0d2ace24"
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "bounded-resource-usage",
+          "where": {
+            "file": "spec.json",
+            "locator": "/background"
+          },
+          "observed": "The background describes recursive re-enumeration and future registry growth without specifying a maximum depth, count, or size for that processing.",
+          "severity": "blocking",
+          "refs": [
+            "bounded-resource-usage"
+          ],
+          "targets": [
+            {
+              "entity": "spec",
+              "field": "background"
+            }
+          ],
+          "allowedTargets": [
+            {
+              "target": {
+                "entity": "spec",
+                "field": "background"
+              },
+              "operationKinds": [
+                "edit-text-field",
+                "replace-field"
+              ]
+            }
+          ],
+          "specRevision": "sha256:9c2a429f31035af363da574c7a989da6d6cc0bb22a8827ac40a3f0df0d2ace24"
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "bounded-resource-usage",
+          "where": {
+            "file": "spec.json",
+            "locator": "/constraints/0"
+          },
+          "observed": "This constraint adopts the recursive registry traversal result as authority but supplies no explicit resource bound; the referenced historical counts are expressly not an acceptance cap.",
+          "severity": "blocking",
+          "refs": [
+            "bounded-resource-usage"
+          ],
+          "targets": [
+            {
+              "collection": "constraints",
+              "position": 0
+            }
+          ],
+          "allowedTargets": [
+            {
+              "target": {
+                "collection": "constraints",
+                "position": 0
+              },
+              "operationKinds": [
+                "replace-array-element",
+                "delete-array-element"
+              ]
+            }
+          ],
+          "specRevision": "sha256:9c2a429f31035af363da574c7a989da6d6cc0bb22a8827ac40a3f0df0d2ace24"
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "exit-code-contract",
+          "where": {
+            "file": "spec.json",
+            "locator": "/requirements/R6/desc"
+          },
+          "observed": "R6 preserves exit codes and names generic help, parse, guard, and command failures, but does not state what constitutes success and failure for each routed CLI command.",
+          "severity": "blocking",
+          "refs": [
+            "exit-code-contract"
+          ],
+          "targets": [
+            {
+              "entity": "requirement",
+              "id": "R6",
+              "field": "desc"
+            }
+          ],
+          "allowedTargets": [
+            {
+              "target": {
+                "entity": "requirement",
+                "id": "R6",
+                "field": "desc"
+              },
+              "operationKinds": [
+                "edit-text-field",
+                "replace-entity-field"
+              ]
+            }
+          ],
+          "specRevision": "sha256:9c2a429f31035af363da574c7a989da6d6cc0bb22a8827ac40a3f0df0d2ace24"
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "validate-user-input-at-entry-point",
+          "where": {
+            "file": "spec.json",
+            "locator": "/requirements/R2/desc"
+          },
+          "observed": "R2 enumerates arguments and assigns validation to existing owners, but does not specify a type, format, and range requirement for every listed user-facing positional and option; several entries are only named or labeled as text, id, path, or runId.",
+          "severity": "blocking",
+          "refs": [
+            "validate-user-input-at-entry-point"
+          ],
+          "targets": [
+            {
+              "entity": "requirement",
+              "id": "R2",
+              "field": "desc"
+            }
+          ],
+          "allowedTargets": [
+            {
+              "target": {
+                "entity": "requirement",
+                "id": "R2",
+                "field": "desc"
+              },
+              "operationKinds": [
+                "edit-text-field",
+                "replace-entity-field"
+              ]
+            }
+          ],
+          "specRevision": "sha256:9c2a429f31035af363da574c7a989da6d6cc0bb22a8827ac40a3f0df0d2ace24"
+        }
+      ],
+      "failedEvaluations": [
+        {
+          "guardrail_id": "bounded-resource-usage",
+          "reason": "The scope requires recursive FLOW_COMMANDS traversal while explicitly deriving the leaf count from the runtime registry; it defines no upper bound for recursion depth, leaf count, or traversal size, and no matched acknowledgment rationale is present."
+        },
+        {
+          "guardrail_id": "bounded-resource-usage",
+          "reason": "The background describes recursive re-enumeration and future registry growth without specifying a maximum depth, count, or size for that processing."
+        },
+        {
+          "guardrail_id": "bounded-resource-usage",
+          "reason": "This constraint adopts the recursive registry traversal result as authority but supplies no explicit resource bound; the referenced historical counts are expressly not an acceptance cap."
+        },
+        {
+          "guardrail_id": "exit-code-contract",
+          "reason": "R6 preserves exit codes and names generic help, parse, guard, and command failures, but does not state what constitutes success and failure for each routed CLI command."
+        },
+        {
+          "guardrail_id": "validate-user-input-at-entry-point",
+          "reason": "R2 enumerates arguments and assigns validation to existing owners, but does not specify a type, format, and range requirement for every listed user-facing positional and option; several entries are only named or labeled as text, id, path, or runId."
+        }
+      ],
+      "issueLogId": "spec-gate-result-e0517d68614a93e8abfa762ceccf5a214441e56c885f1f2f8a5797b8d84882bc"
+    },
+    {
+      "kind": "plan-gate-repair",
+      "step": "spec-gate",
+      "phase": "spec",
+      "reason": "Guarded spec gate repair rewound to spec-gate-repair.",
+      "observations": [
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "bounded-resource-usage",
+          "where": {
+            "file": "spec.json",
+            "locator": "/scope/in/0"
+          },
+          "observed": "The scope requires recursive FLOW_COMMANDS traversal while explicitly deriving the leaf count from the runtime registry; it defines no upper bound for recursion depth, leaf count, or traversal size, and no matched acknowledgment rationale is present.",
+          "severity": "blocking",
+          "refs": [
+            "bounded-resource-usage"
+          ],
+          "targets": [
+            {
+              "collection": "scope.in",
+              "position": 0
+            }
+          ],
+          "allowedTargets": [
+            {
+              "target": {
+                "collection": "scope.in",
+                "position": 0
+              },
+              "operationKinds": [
+                "replace-array-element",
+                "delete-array-element"
+              ]
+            }
+          ],
+          "specRevision": "sha256:9c2a429f31035af363da574c7a989da6d6cc0bb22a8827ac40a3f0df0d2ace24",
+          "authority": {
+            "kind": "requirement",
+            "id": "bounded-resource-usage"
+          },
+          "rootCause": null,
+          "fingerprint": "326d9e0b37194f6379be7623cd799a8fe01ea3fea5ee7f39534f8a3e244ca9d5"
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "bounded-resource-usage",
+          "where": {
+            "file": "spec.json",
+            "locator": "/background"
+          },
+          "observed": "The background describes recursive re-enumeration and future registry growth without specifying a maximum depth, count, or size for that processing.",
+          "severity": "blocking",
+          "refs": [
+            "bounded-resource-usage"
+          ],
+          "targets": [
+            {
+              "entity": "spec",
+              "field": "background"
+            }
+          ],
+          "allowedTargets": [
+            {
+              "target": {
+                "entity": "spec",
+                "field": "background"
+              },
+              "operationKinds": [
+                "edit-text-field",
+                "replace-field"
+              ]
+            }
+          ],
+          "specRevision": "sha256:9c2a429f31035af363da574c7a989da6d6cc0bb22a8827ac40a3f0df0d2ace24",
+          "authority": {
+            "kind": "requirement",
+            "id": "bounded-resource-usage"
+          },
+          "rootCause": null,
+          "fingerprint": "709dc1508a36658fb3c2aa40f615d74d81a046db66b55008e199a0ab55856134"
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "bounded-resource-usage",
+          "where": {
+            "file": "spec.json",
+            "locator": "/constraints/0"
+          },
+          "observed": "This constraint adopts the recursive registry traversal result as authority but supplies no explicit resource bound; the referenced historical counts are expressly not an acceptance cap.",
+          "severity": "blocking",
+          "refs": [
+            "bounded-resource-usage"
+          ],
+          "targets": [
+            {
+              "collection": "constraints",
+              "position": 0
+            }
+          ],
+          "allowedTargets": [
+            {
+              "target": {
+                "collection": "constraints",
+                "position": 0
+              },
+              "operationKinds": [
+                "replace-array-element",
+                "delete-array-element"
+              ]
+            }
+          ],
+          "specRevision": "sha256:9c2a429f31035af363da574c7a989da6d6cc0bb22a8827ac40a3f0df0d2ace24",
+          "authority": {
+            "kind": "requirement",
+            "id": "bounded-resource-usage"
+          },
+          "rootCause": null,
+          "fingerprint": "1554c77b1d230c07bb131cd8738811c5957994c8fcc3701588acbaa9358935e7"
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "exit-code-contract",
+          "where": {
+            "file": "spec.json",
+            "locator": "/requirements/R6/desc"
+          },
+          "observed": "R6 preserves exit codes and names generic help, parse, guard, and command failures, but does not state what constitutes success and failure for each routed CLI command.",
+          "severity": "blocking",
+          "refs": [
+            "exit-code-contract"
+          ],
+          "targets": [
+            {
+              "entity": "requirement",
+              "id": "R6",
+              "field": "desc"
+            }
+          ],
+          "allowedTargets": [
+            {
+              "target": {
+                "entity": "requirement",
+                "id": "R6",
+                "field": "desc"
+              },
+              "operationKinds": [
+                "edit-text-field",
+                "replace-entity-field"
+              ]
+            }
+          ],
+          "specRevision": "sha256:9c2a429f31035af363da574c7a989da6d6cc0bb22a8827ac40a3f0df0d2ace24",
+          "authority": {
+            "kind": "requirement",
+            "id": "exit-code-contract"
+          },
+          "rootCause": null,
+          "fingerprint": "77227b4d4fdc70ca437b5db20e14c73f8188ea295043b0b9a0c99f201dfa36b4"
+        },
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "validate-user-input-at-entry-point",
+          "where": {
+            "file": "spec.json",
+            "locator": "/requirements/R2/desc"
+          },
+          "observed": "R2 enumerates arguments and assigns validation to existing owners, but does not specify a type, format, and range requirement for every listed user-facing positional and option; several entries are only named or labeled as text, id, path, or runId.",
+          "severity": "blocking",
+          "refs": [
+            "validate-user-input-at-entry-point"
+          ],
+          "targets": [
+            {
+              "entity": "requirement",
+              "id": "R2",
+              "field": "desc"
+            }
+          ],
+          "allowedTargets": [
+            {
+              "target": {
+                "entity": "requirement",
+                "id": "R2",
+                "field": "desc"
+              },
+              "operationKinds": [
+                "edit-text-field",
+                "replace-entity-field"
+              ]
+            }
+          ],
+          "specRevision": "sha256:9c2a429f31035af363da574c7a989da6d6cc0bb22a8827ac40a3f0df0d2ace24",
+          "authority": {
+            "kind": "requirement",
+            "id": "validate-user-input-at-entry-point"
+          },
+          "rootCause": null,
+          "fingerprint": "b94162047e4c315e9686d0abab2cd000b0e5f4d1c0a1abd31adaa38276b25aec"
+        }
+      ],
+      "timestamp": "2026-10-05T14:47:26.330Z",
+      "planGateRepair": {
+        "version": 2,
+        "runId": "6a9b5488-edef-4566-888e-14c37e31418c",
+        "specId": "6a9b5488-flow-help-contract",
+        "issue": 521,
+        "phase": "spec",
+        "targetStepId": "spec-gate-repair",
+        "connector": {
+          "phase": "spec",
+          "sourceGateStepId": "spec-gate",
+          "sourceAttempt": {
+            "id": "attempt-spec-gate-c3773819-f60b-4a5b-8c68-93146965cff4",
+            "sequence": 15
+          },
+          "resultLogicalKey": "spec.gate",
+          "resultArtifactId": "steps/spec-gate/result.json",
+          "catalogFingerprint": "e4aa58bad692f143862be771b12128d00d5af4c4407648800ac0ed2dc9d5025b",
+          "targetStepId": "spec-gate-repair",
+          "resetStepIds": [
+            "spec-gate-repair",
+            "spec-gate"
+          ],
+          "taskLifecycle": null
+        },
+        "evidenceIdentity": {
+          "sourceAttempt": {
+            "id": "attempt-spec-gate-c3773819-f60b-4a5b-8c68-93146965cff4",
+            "sequence": 15
+          },
+          "resultLogicalKey": "spec.gate",
+          "publicationActivityId": "plan-gate-repaired-93b7e097-f88e-4c7a-a87f-2e5fa551c437",
+          "catalogFingerprint": "e4aa58bad692f143862be771b12128d00d5af4c4407648800ac0ed2dc9d5025b",
+          "transitionLineage": {
+            "sourceAttempt": {
+              "id": "attempt-spec-gate-c3773819-f60b-4a5b-8c68-93146965cff4",
+              "sequence": 15
+            },
+            "canonicalAttempt": {
+              "id": "attempt-spec-gate-c3773819-f60b-4a5b-8c68-93146965cff4",
+              "sequence": 15
+            },
+            "sourceFingerprint": "148f4280d4af83e16faf03fc644ec3c011afe014b45ea5e7d1c8820f2fd5def1",
+            "canonicalFingerprint": "e4aa58bad692f143862be771b12128d00d5af4c4407648800ac0ed2dc9d5025b",
+            "sourceRevisionFingerprint": "00cbc3a2445b2bd0f1d038beecc8e74a854e3c6b7fbbd99b230ef949bdd8a6a8",
+            "canonicalRevisionFingerprint": "00cbc3a2445b2bd0f1d038beecc8e74a854e3c6b7fbbd99b230ef949bdd8a6a8"
+          }
+        },
+        "sourceIssueLogId": "spec-gate-result-e0517d68614a93e8abfa762ceccf5a214441e56c885f1f2f8a5797b8d84882bc",
+        "sourceEntryDigest": "ef6cb411f9620029fa734dea76ef05b67ec29d933989cc145187a70a4046b01e",
+        "observations": [
+          {
+            "kind": "violation",
+            "failureMode": "guardrail-violation",
+            "requirementRef": "bounded-resource-usage",
+            "where": {
+              "file": "spec.json",
+              "locator": "/scope/in/0"
+            },
+            "observed": "The scope requires recursive FLOW_COMMANDS traversal while explicitly deriving the leaf count from the runtime registry; it defines no upper bound for recursion depth, leaf count, or traversal size, and no matched acknowledgment rationale is present.",
+            "severity": "blocking",
+            "refs": [
+              "bounded-resource-usage"
+            ],
+            "targets": [
+              {
+                "collection": "scope.in",
+                "position": 0
+              }
+            ],
+            "allowedTargets": [
+              {
+                "target": {
+                  "collection": "scope.in",
+                  "position": 0
+                },
+                "operationKinds": [
+                  "replace-array-element",
+                  "delete-array-element"
+                ]
+              }
+            ],
+            "specRevision": "sha256:9c2a429f31035af363da574c7a989da6d6cc0bb22a8827ac40a3f0df0d2ace24",
+            "authority": {
+              "kind": "requirement",
+              "id": "bounded-resource-usage"
+            },
+            "rootCause": null,
+            "fingerprint": "326d9e0b37194f6379be7623cd799a8fe01ea3fea5ee7f39534f8a3e244ca9d5"
+          },
+          {
+            "kind": "violation",
+            "failureMode": "guardrail-violation",
+            "requirementRef": "bounded-resource-usage",
+            "where": {
+              "file": "spec.json",
+              "locator": "/background"
+            },
+            "observed": "The background describes recursive re-enumeration and future registry growth without specifying a maximum depth, count, or size for that processing.",
+            "severity": "blocking",
+            "refs": [
+              "bounded-resource-usage"
+            ],
+            "targets": [
+              {
+                "entity": "spec",
+                "field": "background"
+              }
+            ],
+            "allowedTargets": [
+              {
+                "target": {
+                  "entity": "spec",
+                  "field": "background"
+                },
+                "operationKinds": [
+                  "edit-text-field",
+                  "replace-field"
+                ]
+              }
+            ],
+            "specRevision": "sha256:9c2a429f31035af363da574c7a989da6d6cc0bb22a8827ac40a3f0df0d2ace24",
+            "authority": {
+              "kind": "requirement",
+              "id": "bounded-resource-usage"
+            },
+            "rootCause": null,
+            "fingerprint": "709dc1508a36658fb3c2aa40f615d74d81a046db66b55008e199a0ab55856134"
+          },
+          {
+            "kind": "violation",
+            "failureMode": "guardrail-violation",
+            "requirementRef": "bounded-resource-usage",
+            "where": {
+              "file": "spec.json",
+              "locator": "/constraints/0"
+            },
+            "observed": "This constraint adopts the recursive registry traversal result as authority but supplies no explicit resource bound; the referenced historical counts are expressly not an acceptance cap.",
+            "severity": "blocking",
+            "refs": [
+              "bounded-resource-usage"
+            ],
+            "targets": [
+              {
+                "collection": "constraints",
+                "position": 0
+              }
+            ],
+            "allowedTargets": [
+              {
+                "target": {
+                  "collection": "constraints",
+                  "position": 0
+                },
+                "operationKinds": [
+                  "replace-array-element",
+                  "delete-array-element"
+                ]
+              }
+            ],
+            "specRevision": "sha256:9c2a429f31035af363da574c7a989da6d6cc0bb22a8827ac40a3f0df0d2ace24",
+            "authority": {
+              "kind": "requirement",
+              "id": "bounded-resource-usage"
+            },
+            "rootCause": null,
+            "fingerprint": "1554c77b1d230c07bb131cd8738811c5957994c8fcc3701588acbaa9358935e7"
+          },
+          {
+            "kind": "violation",
+            "failureMode": "guardrail-violation",
+            "requirementRef": "exit-code-contract",
+            "where": {
+              "file": "spec.json",
+              "locator": "/requirements/R6/desc"
+            },
+            "observed": "R6 preserves exit codes and names generic help, parse, guard, and command failures, but does not state what constitutes success and failure for each routed CLI command.",
+            "severity": "blocking",
+            "refs": [
+              "exit-code-contract"
+            ],
+            "targets": [
+              {
+                "entity": "requirement",
+                "id": "R6",
+                "field": "desc"
+              }
+            ],
+            "allowedTargets": [
+              {
+                "target": {
+                  "entity": "requirement",
+                  "id": "R6",
+                  "field": "desc"
+                },
+                "operationKinds": [
+                  "edit-text-field",
+                  "replace-entity-field"
+                ]
+              }
+            ],
+            "specRevision": "sha256:9c2a429f31035af363da574c7a989da6d6cc0bb22a8827ac40a3f0df0d2ace24",
+            "authority": {
+              "kind": "requirement",
+              "id": "exit-code-contract"
+            },
+            "rootCause": null,
+            "fingerprint": "77227b4d4fdc70ca437b5db20e14c73f8188ea295043b0b9a0c99f201dfa36b4"
+          },
+          {
+            "kind": "violation",
+            "failureMode": "guardrail-violation",
+            "requirementRef": "validate-user-input-at-entry-point",
+            "where": {
+              "file": "spec.json",
+              "locator": "/requirements/R2/desc"
+            },
+            "observed": "R2 enumerates arguments and assigns validation to existing owners, but does not specify a type, format, and range requirement for every listed user-facing positional and option; several entries are only named or labeled as text, id, path, or runId.",
+            "severity": "blocking",
+            "refs": [
+              "validate-user-input-at-entry-point"
+            ],
+            "targets": [
+              {
+                "entity": "requirement",
+                "id": "R2",
+                "field": "desc"
+              }
+            ],
+            "allowedTargets": [
+              {
+                "target": {
+                  "entity": "requirement",
+                  "id": "R2",
+                  "field": "desc"
+                },
+                "operationKinds": [
+                  "edit-text-field",
+                  "replace-entity-field"
+                ]
+              }
+            ],
+            "specRevision": "sha256:9c2a429f31035af363da574c7a989da6d6cc0bb22a8827ac40a3f0df0d2ace24",
+            "authority": {
+              "kind": "requirement",
+              "id": "validate-user-input-at-entry-point"
+            },
+            "rootCause": null,
+            "fingerprint": "b94162047e4c315e9686d0abab2cd000b0e5f4d1c0a1abd31adaa38276b25aec"
+          }
+        ],
+        "observationFingerprints": [
+          "326d9e0b37194f6379be7623cd799a8fe01ea3fea5ee7f39534f8a3e244ca9d5",
+          "709dc1508a36658fb3c2aa40f615d74d81a046db66b55008e199a0ab55856134",
+          "1554c77b1d230c07bb131cd8738811c5957994c8fcc3701588acbaa9358935e7",
+          "77227b4d4fdc70ca437b5db20e14c73f8188ea295043b0b9a0c99f201dfa36b4",
+          "b94162047e4c315e9686d0abab2cd000b0e5f4d1c0a1abd31adaa38276b25aec"
+        ],
+        "observationRequests": [
+          {
+            "fingerprint": "326d9e0b37194f6379be7623cd799a8fe01ea3fea5ee7f39534f8a3e244ca9d5",
+            "recurrenceCount": 0,
+            "priorStrategy": null
+          },
+          {
+            "fingerprint": "709dc1508a36658fb3c2aa40f615d74d81a046db66b55008e199a0ab55856134",
+            "recurrenceCount": 0,
+            "priorStrategy": null
+          },
+          {
+            "fingerprint": "1554c77b1d230c07bb131cd8738811c5957994c8fcc3701588acbaa9358935e7",
+            "recurrenceCount": 0,
+            "priorStrategy": null
+          },
+          {
+            "fingerprint": "77227b4d4fdc70ca437b5db20e14c73f8188ea295043b0b9a0c99f201dfa36b4",
+            "recurrenceCount": 0,
+            "priorStrategy": null
+          },
+          {
+            "fingerprint": "b94162047e4c315e9686d0abab2cd000b0e5f4d1c0a1abd31adaa38276b25aec",
+            "recurrenceCount": 0,
+            "priorStrategy": null
+          }
+        ],
+        "requestedAt": "2026-10-05T14:47:26.330Z"
+      },
+      "issueLogId": "plan-gate-repair-3a3a1cbace93e28f882a72f26caf1e31f18ae9ff5d057a4ad40c1b4aa3cbc432"
+    },
+    {
+      "step": "spec-gate-repair",
+      "reason": "Worker artifact handoff invalid: catalog publication aggregate artifact bytes exceed the limit",
+      "trigger": "Parent dispatcher rejected or could not complete a worker artifact handoff.",
+      "resolution": "Correct the worker artifact payload and dispatch the current action again.",
+      "taskId": null,
+      "timestamp": "2026-10-05T14:48:18.606Z",
+      "issueLogId": "worker-handoff-a653d13e-598a-4da8-90e8-01082a558727-e61db19b8cb0430bb26f6b7f8390067590a689f42ab4867aa6a0d11113e31ab4-invalid"
+    },
+    {
+      "step": "spec-gate-repair",
+      "reason": "Spec Gate repairの準備で保存済み全履歴の容量を1回のpublication budgetへ加算し、64MiB超過で正規checkpointを保存できなかった。",
+      "trigger": "Spec28のGate15から修復Attempt12へ進み、catalog810件の合計67,503,503 bytesになった。",
+      "resolution": "既存Catalog APIで実際に保存する全descriptorへbatch budgetを適用し、SnapshotReaderは保持対象だけcacheし履歴を1件ずつhash/Activity検証する。固定回帰5件と実catalogの読み戻しを確認した。",
+      "guardrailCandidate": "保存済み履歴の容量と1回に保持・保存するresource budgetを区別し、全件整合性検証と個別・metadata上限、atomic rollbackを維持する。",
+      "taskId": null,
+      "timestamp": "2026-10-05T15:10:27.125Z",
+      "issueLogId": "set-issue-log-a42651d8bdf466239283a764db2f438aba0b7b03497dc6be64a5564a6141dd45"
+    },
+    {
+      "step": "spec-gate-repair",
+      "reason": "Checkpoint publication rollback left an unstarted Spec Gate repair runtime request. Recovery attempted canonical restoration before transient cleanup and failed because no checkpoint had been committed.",
+      "trigger": "The same current Attempt 12 failed before any worker execution or checkpoint publication; restarting after the catalog capacity fix produced FLOW_ARTIFACT_HANDOFF_RECOVERY_REQUIRED.",
+      "resolution": "Reuse the existing request validation and transient cleanup APIs only for exact active Attempt generation-zero requests with no canonical lifecycle, claim, submission or output. Regenerate input through the normal producer. Identical regression inputs failed before the fix and passed afterward (2 tests); actual Flow recovery has not yet been confirmed.",
+      "taskId": null,
+      "timestamp": "2026-10-05T15:31:07.355Z",
+      "issueLogId": "set-issue-log-154d9ee12a1a684a515e0d2295b6ba8ac7beb6eebf24dc94ab670e59e3daa5b8"
+    },
+    {
+      "step": "spec-gate",
+      "level": "parent",
+      "phase": "spec",
+      "reason": "R2 enumerates user-facing arguments and delegates their format, domain, conditional, path, and size validation to command or value owners, while requiring parser handling through parseEntryInput/cli.parseArgs. It does not state that the CLI entry point validates each user-facing argument before passing it to internal functions.",
+      "trigger": "gate post hook (auto)",
+      "timestamp": "2026-10-05T16:26:15.895Z",
+      "passedGuardrails": [
+        "spec-test-coverage"
+      ],
+      "headSha": "2ba144ef64c3e3cf02367895e3da91e5a41791d6",
+      "worktreeHash": "f50b435cab9087440a8c308aab2e29061a891300e37c71ad4ff9ee11b4eb3fb0",
+      "observations": [
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "validate-user-input-at-entry-point",
+          "where": {
+            "file": "spec.json",
+            "locator": "requirements.R2.desc"
+          },
+          "observed": "R2 enumerates user-facing arguments and delegates their format, domain, conditional, path, and size validation to command or value owners, while requiring parser handling through parseEntryInput/cli.parseArgs. It does not state that the CLI entry point validates each user-facing argument before passing it to internal functions.",
+          "severity": "blocking",
+          "refs": [
+            "validate-user-input-at-entry-point"
+          ],
+          "targets": [
+            {
+              "entity": "requirement",
+              "id": "R2",
+              "field": "desc"
+            }
+          ],
+          "allowedTargets": [
+            {
+              "target": {
+                "entity": "requirement",
+                "id": "R2",
+                "field": "desc"
+              },
+              "operationKinds": [
+                "edit-text-field",
+                "replace-entity-field"
+              ]
+            }
+          ],
+          "specRevision": "sha256:b1d77254132a00ea9fe5b331e4c8dafa713a30fdb595a4cbfcde5c8bde0cc68d"
+        }
+      ],
+      "failedEvaluations": [
+        {
+          "guardrail_id": "validate-user-input-at-entry-point",
+          "reason": "R2 enumerates user-facing arguments and delegates their format, domain, conditional, path, and size validation to command or value owners, while requiring parser handling through parseEntryInput/cli.parseArgs. It does not state that the CLI entry point validates each user-facing argument before passing it to internal functions."
+        }
+      ],
+      "issueLogId": "spec-gate-result-148535fd6f585a391e2a317d2f57a72fea1cf6e02bba3b2f34aeb92d0f7bd6d7"
+    },
+    {
+      "kind": "plan-gate-repair",
+      "step": "spec-gate",
+      "phase": "spec",
+      "reason": "Guarded spec gate repair rewound to spec-gate-repair.",
+      "observations": [
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "validate-user-input-at-entry-point",
+          "where": {
+            "file": "spec.json",
+            "locator": "requirements.R2.desc"
+          },
+          "observed": "R2 enumerates user-facing arguments and delegates their format, domain, conditional, path, and size validation to command or value owners, while requiring parser handling through parseEntryInput/cli.parseArgs. It does not state that the CLI entry point validates each user-facing argument before passing it to internal functions.",
+          "severity": "blocking",
+          "refs": [
+            "validate-user-input-at-entry-point"
+          ],
+          "targets": [
+            {
+              "entity": "requirement",
+              "id": "R2",
+              "field": "desc"
+            }
+          ],
+          "allowedTargets": [
+            {
+              "target": {
+                "entity": "requirement",
+                "id": "R2",
+                "field": "desc"
+              },
+              "operationKinds": [
+                "edit-text-field",
+                "replace-entity-field"
+              ]
+            }
+          ],
+          "specRevision": "sha256:b1d77254132a00ea9fe5b331e4c8dafa713a30fdb595a4cbfcde5c8bde0cc68d",
+          "authority": {
+            "kind": "requirement",
+            "id": "validate-user-input-at-entry-point"
+          },
+          "rootCause": null,
+          "fingerprint": "d4de85e451ae2af914844939c0bd60f251f5d3f3e78d8ac142f19129d8009e07"
+        }
+      ],
+      "timestamp": "2026-10-05T16:32:16.677Z",
+      "planGateRepair": {
+        "version": 2,
+        "runId": "6a9b5488-edef-4566-888e-14c37e31418c",
+        "specId": "6a9b5488-flow-help-contract",
+        "issue": 521,
+        "phase": "spec",
+        "targetStepId": "spec-gate-repair",
+        "connector": {
+          "phase": "spec",
+          "sourceGateStepId": "spec-gate",
+          "sourceAttempt": {
+            "id": "attempt-spec-gate-4e617ad0-7b79-4d42-aaeb-04d61ab18913",
+            "sequence": 16
+          },
+          "resultLogicalKey": "spec.gate",
+          "resultArtifactId": "steps/spec-gate/result.json",
+          "catalogFingerprint": "c429bad13e1b4312f4b54d3dac01ae5df14616cb469833b4e9dacbb56196e257",
+          "targetStepId": "spec-gate-repair",
+          "resetStepIds": [
+            "spec-gate-repair",
+            "spec-gate"
+          ],
+          "taskLifecycle": null
+        },
+        "evidenceIdentity": {
+          "sourceAttempt": {
+            "id": "attempt-spec-gate-4e617ad0-7b79-4d42-aaeb-04d61ab18913",
+            "sequence": 16
+          },
+          "resultLogicalKey": "spec.gate",
+          "publicationActivityId": "plan-gate-repaired-c5f30148-182a-459b-8454-e1da93ff9583",
+          "catalogFingerprint": "c429bad13e1b4312f4b54d3dac01ae5df14616cb469833b4e9dacbb56196e257",
+          "transitionLineage": {
+            "sourceAttempt": {
+              "id": "attempt-spec-gate-4e617ad0-7b79-4d42-aaeb-04d61ab18913",
+              "sequence": 16
+            },
+            "canonicalAttempt": {
+              "id": "attempt-spec-gate-4e617ad0-7b79-4d42-aaeb-04d61ab18913",
+              "sequence": 16
+            },
+            "sourceFingerprint": "503dc218ed2ae589420a102bcd992cca3aa99c8bc5563e48196592630f760451",
+            "canonicalFingerprint": "c429bad13e1b4312f4b54d3dac01ae5df14616cb469833b4e9dacbb56196e257",
+            "sourceRevisionFingerprint": "02e1b7eb4f56207e01133232ab069d7d642aa31a3fe94341ab6647ea3ced05af",
+            "canonicalRevisionFingerprint": "02e1b7eb4f56207e01133232ab069d7d642aa31a3fe94341ab6647ea3ced05af"
+          }
+        },
+        "sourceIssueLogId": "spec-gate-result-148535fd6f585a391e2a317d2f57a72fea1cf6e02bba3b2f34aeb92d0f7bd6d7",
+        "sourceEntryDigest": "2b84012667639253ba94443f1c05a58e4c75c48437c54707e00b5c5d305c6ab2",
+        "observations": [
+          {
+            "kind": "violation",
+            "failureMode": "guardrail-violation",
+            "requirementRef": "validate-user-input-at-entry-point",
+            "where": {
+              "file": "spec.json",
+              "locator": "requirements.R2.desc"
+            },
+            "observed": "R2 enumerates user-facing arguments and delegates their format, domain, conditional, path, and size validation to command or value owners, while requiring parser handling through parseEntryInput/cli.parseArgs. It does not state that the CLI entry point validates each user-facing argument before passing it to internal functions.",
+            "severity": "blocking",
+            "refs": [
+              "validate-user-input-at-entry-point"
+            ],
+            "targets": [
+              {
+                "entity": "requirement",
+                "id": "R2",
+                "field": "desc"
+              }
+            ],
+            "allowedTargets": [
+              {
+                "target": {
+                  "entity": "requirement",
+                  "id": "R2",
+                  "field": "desc"
+                },
+                "operationKinds": [
+                  "edit-text-field",
+                  "replace-entity-field"
+                ]
+              }
+            ],
+            "specRevision": "sha256:b1d77254132a00ea9fe5b331e4c8dafa713a30fdb595a4cbfcde5c8bde0cc68d",
+            "authority": {
+              "kind": "requirement",
+              "id": "validate-user-input-at-entry-point"
+            },
+            "rootCause": null,
+            "fingerprint": "d4de85e451ae2af914844939c0bd60f251f5d3f3e78d8ac142f19129d8009e07"
+          }
+        ],
+        "observationFingerprints": [
+          "d4de85e451ae2af914844939c0bd60f251f5d3f3e78d8ac142f19129d8009e07"
+        ],
+        "observationRequests": [
+          {
+            "fingerprint": "d4de85e451ae2af914844939c0bd60f251f5d3f3e78d8ac142f19129d8009e07",
+            "recurrenceCount": 0,
+            "priorStrategy": null
+          }
+        ],
+        "requestedAt": "2026-10-05T16:32:16.677Z"
+      },
+      "issueLogId": "plan-gate-repair-d1709140b1d6c778801fde44f4ca983b6282fa0153b3ac7071bc3b10724db6b5"
     }
   ]
 }

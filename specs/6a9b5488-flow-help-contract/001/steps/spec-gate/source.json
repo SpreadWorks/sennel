@@ -1,7 +1,7 @@
 {
   "version": 1,
   "phase": "spec",
-  "generatedAt": "2026-10-05T01:05:32.817Z",
+  "generatedAt": "2026-10-05T16:32:04.136Z",
   "result": "fail",
   "evaluations": [
     {
@@ -15,7 +15,7 @@
     {
       "guardrail_id": "validate-user-input-at-entry-point",
       "result": "fail",
-      "reason": "The inventory lists arguments and option kinds, but delegates value type, format, empty-value rules, and limits to handlers and later requirements. It does not state those validation requirements for each user-facing argument.",
+      "reason": "R2 enumerates user-facing arguments and delegates their format, domain, conditional, path, and size validation to command or value owners, while requiring parser handling through parseEntryInput/cli.parseArgs. It does not state that the CLI entry point validates each user-facing argument before passing it to internal functions.",
       "category": "requirements",
       "title": "Validate User Input at Entry Point",
       "observations": [
@@ -25,9 +25,9 @@
           "requirementRef": "validate-user-input-at-entry-point",
           "where": {
             "file": "spec.json",
-            "locator": "requirements.R4.desc, input inventory preface"
+            "locator": "requirements.R2.desc"
           },
-          "observed": "The inventory lists arguments and option kinds, but delegates value type, format, empty-value rules, and limits to handlers and later requirements. It does not state those validation requirements for each user-facing argument.",
+          "observed": "R2 enumerates user-facing arguments and delegates their format, domain, conditional, path, and size validation to command or value owners, while requiring parser handling through parseEntryInput/cli.parseArgs. It does not state that the CLI entry point validates each user-facing argument before passing it to internal functions.",
           "severity": "blocking",
           "refs": [
             "validate-user-input-at-entry-point"
@@ -35,7 +35,7 @@
           "targets": [
             {
               "entity": "requirement",
-              "id": "R4",
+              "id": "R2",
               "field": "desc"
             }
           ],
@@ -43,187 +43,16 @@
             {
               "target": {
                 "entity": "requirement",
-                "id": "R4",
+                "id": "R2",
                 "field": "desc"
               },
               "operationKinds": [
-                "edit-text-field"
+                "edit-text-field",
+                "replace-entity-field"
               ]
             }
           ],
-          "specRevision": "sha256:31b7dbf0af0bb4295e268a09657ec45ce57c0023ba288b140cdf48c8439b73c5"
-        }
-      ]
-    },
-    {
-      "guardrail_id": "validate-user-input-at-entry-point",
-      "result": "fail",
-      "reason": "R5 names multiple positional arguments and option values, then says their values, empty-value rules, and conditional combinations follow existing handlers or domain validators. It does not list the applicable type, format, and range requirements for those arguments.",
-      "category": "requirements",
-      "title": "Validate User Input at Entry Point",
-      "observations": [
-        {
-          "kind": "violation",
-          "failureMode": "guardrail-violation",
-          "requirementRef": "validate-user-input-at-entry-point",
-          "where": {
-            "file": "spec.json",
-            "locator": "requirements.R5.desc"
-          },
-          "observed": "R5 names multiple positional arguments and option values, then says their values, empty-value rules, and conditional combinations follow existing handlers or domain validators. It does not list the applicable type, format, and range requirements for those arguments.",
-          "severity": "blocking",
-          "refs": [
-            "validate-user-input-at-entry-point"
-          ],
-          "targets": [
-            {
-              "entity": "requirement",
-              "id": "R5",
-              "field": "desc"
-            }
-          ],
-          "allowedTargets": [
-            {
-              "target": {
-                "entity": "requirement",
-                "id": "R5",
-                "field": "desc"
-              },
-              "operationKinds": [
-                "edit-text-field"
-              ]
-            }
-          ],
-          "specRevision": "sha256:31b7dbf0af0bb4295e268a09657ec45ce57c0023ba288b140cdf48c8439b73c5"
-        }
-      ]
-    },
-    {
-      "guardrail_id": "req-diff-verifiability",
-      "result": "fail",
-      "reason": "The proposed valid/invalid boundary checks do not identify the relevant inputs and expected outcomes for the arguments whose rules are deferred to existing validators.",
-      "category": "process",
-      "title": "Requirement Verification Criteria",
-      "observations": [
-        {
-          "kind": "violation",
-          "failureMode": "guardrail-violation",
-          "requirementRef": "req-diff-verifiability",
-          "where": {
-            "file": "spec.json",
-            "locator": "requirements.R5.desc, verification sentence"
-          },
-          "observed": "The proposed valid/invalid boundary checks do not identify the relevant inputs and expected outcomes for the arguments whose rules are deferred to existing validators.",
-          "severity": "blocking",
-          "refs": [
-            "req-diff-verifiability"
-          ],
-          "targets": [
-            {
-              "entity": "requirement",
-              "id": "R5",
-              "field": "desc"
-            }
-          ],
-          "allowedTargets": [
-            {
-              "target": {
-                "entity": "requirement",
-                "id": "R5",
-                "field": "desc"
-              },
-              "operationKinds": [
-                "edit-text-field"
-              ]
-            }
-          ],
-          "specRevision": "sha256:31b7dbf0af0bb4295e268a09657ec45ce57c0023ba288b140cdf48c8439b73c5"
-        }
-      ]
-    },
-    {
-      "guardrail_id": "validate-user-input-at-entry-point",
-      "result": "fail",
-      "reason": "R6 gives concrete limits for some tokens, but assigns other IDs, paths, and resource inputs to individual owners or to unspecified existing limits. Their validation requirements are not listed.",
-      "category": "requirements",
-      "title": "Validate User Input at Entry Point",
-      "observations": [
-        {
-          "kind": "violation",
-          "failureMode": "guardrail-violation",
-          "requirementRef": "validate-user-input-at-entry-point",
-          "where": {
-            "file": "spec.json",
-            "locator": "requirements.R6.desc"
-          },
-          "observed": "R6 gives concrete limits for some tokens, but assigns other IDs, paths, and resource inputs to individual owners or to unspecified existing limits. Their validation requirements are not listed.",
-          "severity": "blocking",
-          "refs": [
-            "validate-user-input-at-entry-point"
-          ],
-          "targets": [
-            {
-              "entity": "requirement",
-              "id": "R6",
-              "field": "desc"
-            }
-          ],
-          "allowedTargets": [
-            {
-              "target": {
-                "entity": "requirement",
-                "id": "R6",
-                "field": "desc"
-              },
-              "operationKinds": [
-                "edit-text-field"
-              ]
-            }
-          ],
-          "specRevision": "sha256:31b7dbf0af0bb4295e268a09657ec45ce57c0023ba288b140cdf48c8439b73c5"
-        }
-      ]
-    },
-    {
-      "guardrail_id": "req-diff-verifiability",
-      "result": "fail",
-      "reason": "For the inputs governed by unspecified owner-specific or existing limits, the planned boundary tests do not state the input conditions and observable acceptance or rejection results.",
-      "category": "process",
-      "title": "Requirement Verification Criteria",
-      "observations": [
-        {
-          "kind": "violation",
-          "failureMode": "guardrail-violation",
-          "requirementRef": "req-diff-verifiability",
-          "where": {
-            "file": "spec.json",
-            "locator": "requirements.R6.desc, verification sentence"
-          },
-          "observed": "For the inputs governed by unspecified owner-specific or existing limits, the planned boundary tests do not state the input conditions and observable acceptance or rejection results.",
-          "severity": "blocking",
-          "refs": [
-            "req-diff-verifiability"
-          ],
-          "targets": [
-            {
-              "entity": "requirement",
-              "id": "R6",
-              "field": "desc"
-            }
-          ],
-          "allowedTargets": [
-            {
-              "target": {
-                "entity": "requirement",
-                "id": "R6",
-                "field": "desc"
-              },
-              "operationKinds": [
-                "edit-text-field"
-              ]
-            }
-          ],
-          "specRevision": "sha256:31b7dbf0af0bb4295e268a09657ec45ce57c0023ba288b140cdf48c8439b73c5"
+          "specRevision": "sha256:b1d77254132a00ea9fe5b331e4c8dafa713a30fdb595a4cbfcde5c8bde0cc68d"
         }
       ]
     }
@@ -235,9 +64,9 @@
       "requirementRef": "validate-user-input-at-entry-point",
       "where": {
         "file": "spec.json",
-        "locator": "requirements.R4.desc, input inventory preface"
+        "locator": "requirements.R2.desc"
       },
-      "observed": "The inventory lists arguments and option kinds, but delegates value type, format, empty-value rules, and limits to handlers and later requirements. It does not state those validation requirements for each user-facing argument.",
+      "observed": "R2 enumerates user-facing arguments and delegates their format, domain, conditional, path, and size validation to command or value owners, while requiring parser handling through parseEntryInput/cli.parseArgs. It does not state that the CLI entry point validates each user-facing argument before passing it to internal functions.",
       "severity": "blocking",
       "refs": [
         "validate-user-input-at-entry-point"
@@ -245,7 +74,7 @@
       "targets": [
         {
           "entity": "requirement",
-          "id": "R4",
+          "id": "R2",
           "field": "desc"
         }
       ],
@@ -253,151 +82,16 @@
         {
           "target": {
             "entity": "requirement",
-            "id": "R4",
+            "id": "R2",
             "field": "desc"
           },
           "operationKinds": [
-            "edit-text-field"
+            "edit-text-field",
+            "replace-entity-field"
           ]
         }
       ],
-      "specRevision": "sha256:31b7dbf0af0bb4295e268a09657ec45ce57c0023ba288b140cdf48c8439b73c5"
-    },
-    {
-      "kind": "violation",
-      "failureMode": "guardrail-violation",
-      "requirementRef": "validate-user-input-at-entry-point",
-      "where": {
-        "file": "spec.json",
-        "locator": "requirements.R5.desc"
-      },
-      "observed": "R5 names multiple positional arguments and option values, then says their values, empty-value rules, and conditional combinations follow existing handlers or domain validators. It does not list the applicable type, format, and range requirements for those arguments.",
-      "severity": "blocking",
-      "refs": [
-        "validate-user-input-at-entry-point"
-      ],
-      "targets": [
-        {
-          "entity": "requirement",
-          "id": "R5",
-          "field": "desc"
-        }
-      ],
-      "allowedTargets": [
-        {
-          "target": {
-            "entity": "requirement",
-            "id": "R5",
-            "field": "desc"
-          },
-          "operationKinds": [
-            "edit-text-field"
-          ]
-        }
-      ],
-      "specRevision": "sha256:31b7dbf0af0bb4295e268a09657ec45ce57c0023ba288b140cdf48c8439b73c5"
-    },
-    {
-      "kind": "violation",
-      "failureMode": "guardrail-violation",
-      "requirementRef": "req-diff-verifiability",
-      "where": {
-        "file": "spec.json",
-        "locator": "requirements.R5.desc, verification sentence"
-      },
-      "observed": "The proposed valid/invalid boundary checks do not identify the relevant inputs and expected outcomes for the arguments whose rules are deferred to existing validators.",
-      "severity": "blocking",
-      "refs": [
-        "req-diff-verifiability"
-      ],
-      "targets": [
-        {
-          "entity": "requirement",
-          "id": "R5",
-          "field": "desc"
-        }
-      ],
-      "allowedTargets": [
-        {
-          "target": {
-            "entity": "requirement",
-            "id": "R5",
-            "field": "desc"
-          },
-          "operationKinds": [
-            "edit-text-field"
-          ]
-        }
-      ],
-      "specRevision": "sha256:31b7dbf0af0bb4295e268a09657ec45ce57c0023ba288b140cdf48c8439b73c5"
-    },
-    {
-      "kind": "violation",
-      "failureMode": "guardrail-violation",
-      "requirementRef": "validate-user-input-at-entry-point",
-      "where": {
-        "file": "spec.json",
-        "locator": "requirements.R6.desc"
-      },
-      "observed": "R6 gives concrete limits for some tokens, but assigns other IDs, paths, and resource inputs to individual owners or to unspecified existing limits. Their validation requirements are not listed.",
-      "severity": "blocking",
-      "refs": [
-        "validate-user-input-at-entry-point"
-      ],
-      "targets": [
-        {
-          "entity": "requirement",
-          "id": "R6",
-          "field": "desc"
-        }
-      ],
-      "allowedTargets": [
-        {
-          "target": {
-            "entity": "requirement",
-            "id": "R6",
-            "field": "desc"
-          },
-          "operationKinds": [
-            "edit-text-field"
-          ]
-        }
-      ],
-      "specRevision": "sha256:31b7dbf0af0bb4295e268a09657ec45ce57c0023ba288b140cdf48c8439b73c5"
-    },
-    {
-      "kind": "violation",
-      "failureMode": "guardrail-violation",
-      "requirementRef": "req-diff-verifiability",
-      "where": {
-        "file": "spec.json",
-        "locator": "requirements.R6.desc, verification sentence"
-      },
-      "observed": "For the inputs governed by unspecified owner-specific or existing limits, the planned boundary tests do not state the input conditions and observable acceptance or rejection results.",
-      "severity": "blocking",
-      "refs": [
-        "req-diff-verifiability"
-      ],
-      "targets": [
-        {
-          "entity": "requirement",
-          "id": "R6",
-          "field": "desc"
-        }
-      ],
-      "allowedTargets": [
-        {
-          "target": {
-            "entity": "requirement",
-            "id": "R6",
-            "field": "desc"
-          },
-          "operationKinds": [
-            "edit-text-field"
-          ]
-        }
-      ],
-      "specRevision": "sha256:31b7dbf0af0bb4295e268a09657ec45ce57c0023ba288b140cdf48c8439b73c5"
+      "specRevision": "sha256:b1d77254132a00ea9fe5b331e4c8dafa713a30fdb595a4cbfcde5c8bde0cc68d"
     }
   ],
   "issues": [],
@@ -410,33 +104,9 @@
     },
     {
       "verdict": "FAIL",
-      "detail": "Validate User Input at Entry Point — The inventory lists arguments and option kinds, but delegates value type, format, empty-value rules, and limits to handlers and later requirements. It does not state those validation requirements for each user-facing argument.",
+      "detail": "Validate User Input at Entry Point — R2 enumerates user-facing arguments and delegates their format, domain, conditional, path, and size validation to command or value owners, while requiring parser handling through parseEntryInput/cli.parseArgs. It does not state that the CLI entry point validates each user-facing argument before passing it to internal functions.",
       "guardrail_id": "validate-user-input-at-entry-point",
       "category": "requirements"
-    },
-    {
-      "verdict": "FAIL",
-      "detail": "Validate User Input at Entry Point — R5 names multiple positional arguments and option values, then says their values, empty-value rules, and conditional combinations follow existing handlers or domain validators. It does not list the applicable type, format, and range requirements for those arguments.",
-      "guardrail_id": "validate-user-input-at-entry-point",
-      "category": "requirements"
-    },
-    {
-      "verdict": "FAIL",
-      "detail": "Requirement Verification Criteria — The proposed valid/invalid boundary checks do not identify the relevant inputs and expected outcomes for the arguments whose rules are deferred to existing validators.",
-      "guardrail_id": "req-diff-verifiability",
-      "category": "process"
-    },
-    {
-      "verdict": "FAIL",
-      "detail": "Validate User Input at Entry Point — R6 gives concrete limits for some tokens, but assigns other IDs, paths, and resource inputs to individual owners or to unspecified existing limits. Their validation requirements are not listed.",
-      "guardrail_id": "validate-user-input-at-entry-point",
-      "category": "requirements"
-    },
-    {
-      "verdict": "FAIL",
-      "detail": "Requirement Verification Criteria — For the inputs governed by unspecified owner-specific or existing limits, the planned boundary tests do not state the input conditions and observable acceptance or rejection results.",
-      "guardrail_id": "req-diff-verifiability",
-      "category": "process"
     }
   ],
   "failureKind": "ai_semantic_fail",
@@ -444,5 +114,5 @@
     "category": "semantic",
     "code": "ai_semantic_fail"
   },
-  "lineage": "551b3f241c4dc58e1ad0152204c7612314ed0bf71d016f1e870cd3b37e0ffba6"
+  "lineage": "02e1b7eb4f56207e01133232ab069d7d642aa31a3fe94341ab6647ea3ced05af"
 }

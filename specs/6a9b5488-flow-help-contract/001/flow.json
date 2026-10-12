@@ -70,15 +70,15 @@
           "result": {
             "outcome": "passed",
             "summary": "Worker handoff confirmed for draft.",
-            "confirmedAt": "2026-10-05T00:43:42.366Z",
+            "confirmedAt": "2026-10-05T13:40:52.240Z",
             "artifactRefs": [
               {
                 "kind": "worker-handoff",
-                "id": "36cd7d4ed11ed75943aea5fbe4154131b37e7fd35f759cd40a4001b273477519"
+                "id": "4c33f236081b5914fcc364b35d274366ab4e2ab444ddac2ad6069e60d69e3acd"
               },
               {
                 "kind": "worker-handoff-request",
-                "id": "e4cc526f020805835a986fe49cfed5af35a892cfb5b12483c7b50eb7a1877457"
+                "id": "55f980e3a5c48a1b8d60c37b6135f5ff0d85a99f077b76ee8b26e6f845312858"
               }
             ],
             "stepResult": {
@@ -86,13 +86,13 @@
               "type": "completed"
             },
             "draftSettlementReceipt": {
-              "id": "379f732da810a0d3dd14a050686357eab375c9d074ad4d14565a4216322f1db3",
+              "id": "44d9c9bad1c488ea95a9f12695ed8aa24137a72319466ff65fcc2adfff1765d1",
               "binding": {
                 "runId": "6a9b5488-edef-4566-888e-14c37e31418c",
                 "specId": "6a9b5488-flow-help-contract",
                 "stepId": "draft",
-                "attemptId": "attempt-draft-b533233a-5ae2-4117-91b3-6ff4de5f7c14",
-                "attemptSequence": 10
+                "attemptId": "attempt-draft-28d2862f-d248-4553-965d-c3af060c2d8a",
+                "attemptSequence": 11
               },
               "resultKind": "draft-created",
               "resultType": "completed",
@@ -106,12 +106,12 @@
               "connector": {
                 "name": "DraftReviewConnector"
               },
-              "publicationDigest": "354721c1ea5ebf1b5ff0a03855baa9c7be6426f9b1f2fc97a0c4013eba7aa770",
+              "publicationDigest": "4d2ad9746cbe286d49a7af1e2dc40ced2de4f9742c1c97ae54f700d20ad8846d",
               "executionLifecycle": null,
               "awaitQuestion": null
             }
           },
-          "attemptSequence": 10,
+          "attemptSequence": 11,
           "steps": []
         },
         {
@@ -122,20 +122,20 @@
           "result": {
             "outcome": "passed",
             "summary": "canonical runtime transition for draft-questions-review",
-            "confirmedAt": "2026-10-05T00:44:55.798Z",
+            "confirmedAt": "2026-10-05T13:42:36.572Z",
             "artifactRefs": [],
             "stepResult": {
               "kind": "draft-questions-review-passed",
               "type": "completed"
             },
             "draftSettlementReceipt": {
-              "id": "63aedae13eafcde9a268b53e34d9700bd3fc3ae21599f2b5732f4f6237a82025",
+              "id": "ecc20fdca7f9f37972a4b1322cec2d091464987b6169dc0c50a87a17d715a46b",
               "binding": {
                 "runId": "6a9b5488-edef-4566-888e-14c37e31418c",
                 "specId": "6a9b5488-flow-help-contract",
                 "stepId": "draft-questions-review",
-                "attemptId": "attempt-draft-questions-review-47540454-b336-44d6-a8d1-e4c51e3a3e4e",
-                "attemptSequence": 11
+                "attemptId": "attempt-draft-questions-review-8573221c-cd73-48dd-93ba-8244e6c35891",
+                "attemptSequence": 12
               },
               "resultKind": "draft-questions-review-passed",
               "resultType": "completed",
@@ -152,17 +152,17 @@
               "connector": {
                 "name": "DraftRefineConnector"
               },
-              "publicationDigest": "aee780101ff5c1edd151e5244d47495af5c3cfbe1c89137c7b23bddc0b8eb6ae",
+              "publicationDigest": "a3c3e83035e688d57b9fc7b3bf504af5b80e27cb8056ebdcfd23e4c3e95af3dc",
               "executionLifecycle": {
                 "phase": "terminal",
                 "binding": {
                   "kind": "review",
                   "executionGeneration": 0,
-                  "manifestDigest": "a343ae4196be5946f1e630fc9684acd679112c0ddfc80b5be17f10201552abc0",
-                  "inputDigest": "a56c95054bbfe0ba808e38cf838938d5af040201e146a8c5613844e752435ca9",
+                  "manifestDigest": "7a9748449d97e8f433d7fcbf46078a41c72f58eb5d3657180d3e8bc102028b24",
+                  "inputDigest": "02616878e7bbdaa47f72bbf23453671e00b7972777e0ea95d1da1ab2b5ef1eb4",
                   "target": {
-                    "treeSha": "2ab1ca7a3f8236532cbeba3b30cb4f8c3baee0c1",
-                    "targetStateDigest": "2f9fea7c4bcf574f4ab1380ec1b134dcbcb5494f66b02e4dc9c39298a8ee9448"
+                    "treeSha": "f6bd55ea61b485551e90ddea32a2ee5f1422456c",
+                    "targetStateDigest": "73b1120c1c5f7003e4dba4c43ec95d6d3275773d8fd4d0cd2fbeba0540cb4213"
                   }
                 },
                 "claim": {
@@ -172,7 +172,7 @@
               "awaitQuestion": null
             }
           },
-          "attemptSequence": 11,
+          "attemptSequence": 12,
           "steps": []
         },
         {
@@ -183,10 +183,10 @@
           "result": {
             "outcome": "skipped",
             "summary": "Draft route from draft-questions-review bypassed draft-questions-triage",
-            "confirmedAt": "2026-10-05T00:44:55.798Z",
+            "confirmedAt": "2026-10-05T13:42:36.572Z",
             "artifactRefs": []
           },
-          "attemptSequence": 11,
+          "attemptSequence": 12,
           "steps": []
         },
         {
@@ -197,10 +197,10 @@
           "result": {
             "outcome": "skipped",
             "summary": "Draft route from draft-questions-review bypassed draft-questions-repair",
-            "confirmedAt": "2026-10-05T00:44:55.798Z",
+            "confirmedAt": "2026-10-05T13:42:36.572Z",
             "artifactRefs": []
           },
-          "attemptSequence": 11,
+          "attemptSequence": 12,
           "steps": []
         },
         {
@@ -211,20 +211,20 @@
           "result": {
             "outcome": "passed",
             "summary": "canonical runtime transition for draft-refine",
-            "confirmedAt": "2026-10-05T00:45:32.771Z",
+            "confirmedAt": "2026-10-05T13:43:28.093Z",
             "artifactRefs": [],
             "stepResult": {
               "kind": "draft-refine-completed",
               "type": "completed"
             },
             "draftSettlementReceipt": {
-              "id": "a837fa1ab16fc149951f0f8bcad70a44e66abf68d6d3489146edcffc6bef29e2",
+              "id": "322aba9e5b2089d252a8b90a97ff9e37a6dd626f78ff0249c82a4dfdb2bddf6c",
               "binding": {
                 "runId": "6a9b5488-edef-4566-888e-14c37e31418c",
                 "specId": "6a9b5488-flow-help-contract",
                 "stepId": "draft-refine",
-                "attemptId": "attempt-draft-refine-3a171d70-800e-43d9-9de8-246891df77ed",
-                "attemptSequence": 10
+                "attemptId": "attempt-draft-refine-684e018f-21bd-4132-afcb-029aee7eb93c",
+                "attemptSequence": 11
               },
               "resultKind": "draft-refine-completed",
               "resultType": "completed",
@@ -245,7 +245,7 @@
               "awaitQuestion": null
             }
           },
-          "attemptSequence": 10,
+          "attemptSequence": 11,
           "steps": []
         },
         {
@@ -256,10 +256,10 @@
           "result": {
             "outcome": "skipped",
             "summary": "Draft route from draft-refine bypassed draft-gate-repair",
-            "confirmedAt": "2026-10-05T00:45:32.771Z",
+            "confirmedAt": "2026-10-05T13:43:28.093Z",
             "artifactRefs": []
           },
-          "attemptSequence": 13,
+          "attemptSequence": 14,
           "steps": []
         },
         {
@@ -270,11 +270,11 @@
           "result": {
             "outcome": "passed",
             "summary": "Draft coverage repair completion confirmed the canonical draft.",
-            "confirmedAt": "2026-10-05T00:46:57.093Z",
+            "confirmedAt": "2026-10-05T13:45:33.455Z",
             "artifactRefs": [
               {
                 "kind": "draft-completion-connector",
-                "id": "e82aa9f59c98c11902e30fb7b3b0901bdd7cb1d9e04309f9328df31a3093dd4d"
+                "id": "ee4273cf6e765a62369e9b8bc8e4c55627b620d1bd01faae6dcc6d7a90b0b135"
               }
             ],
             "stepResult": {
@@ -282,13 +282,13 @@
               "type": "completed"
             },
             "draftSettlementReceipt": {
-              "id": "8c99d7a590236fb42d967d475c187e6233b4bd41c5ea856c949037660658acf1",
+              "id": "0aaef3642365622055bd4ad230440dcec8cdb7793d0b314468fcfa9f014fa14a",
               "binding": {
                 "runId": "6a9b5488-edef-4566-888e-14c37e31418c",
                 "specId": "6a9b5488-flow-help-contract",
                 "stepId": "draft-coverage-review",
-                "attemptId": "attempt-draft-coverage-review-7665089a-78fb-4453-89a6-dfdd58cd6a26",
-                "attemptSequence": 13
+                "attemptId": "attempt-draft-coverage-review-5d0d306c-0633-42da-a066-b586a65bd98b",
+                "attemptSequence": 14
               },
               "resultKind": "draft-coverage-review-passed",
               "resultType": "completed",
@@ -305,17 +305,17 @@
               "connector": {
                 "name": "DraftCompletionConnector"
               },
-              "publicationDigest": "9c63f1877d88d25b430bcfd31098d5a7dd4d8cb32c744112a0c86a45116a2827",
+              "publicationDigest": "75eb2366740a0881eda60d44dd6c99d82d2946ebf196bf0d074d336843f0d733",
               "executionLifecycle": {
                 "phase": "terminal",
                 "binding": {
                   "kind": "review",
                   "executionGeneration": 0,
-                  "manifestDigest": "da9602f0ab4a9b7d83d87b8689ae007694631e8b331c44e6dfffa6164d742bf9",
-                  "inputDigest": "a56c95054bbfe0ba808e38cf838938d5af040201e146a8c5613844e752435ca9",
+                  "manifestDigest": "0ef07a196ca403f06510e43f946b03916dfac01397510b90f04c07e237bae435",
+                  "inputDigest": "02616878e7bbdaa47f72bbf23453671e00b7972777e0ea95d1da1ab2b5ef1eb4",
                   "target": {
-                    "treeSha": "2ab1ca7a3f8236532cbeba3b30cb4f8c3baee0c1",
-                    "targetStateDigest": "2f9fea7c4bcf574f4ab1380ec1b134dcbcb5494f66b02e4dc9c39298a8ee9448"
+                    "treeSha": "f6bd55ea61b485551e90ddea32a2ee5f1422456c",
+                    "targetStateDigest": "73b1120c1c5f7003e4dba4c43ec95d6d3275773d8fd4d0cd2fbeba0540cb4213"
                   }
                 },
                 "claim": {
@@ -325,7 +325,7 @@
               "awaitQuestion": null
             }
           },
-          "attemptSequence": 13,
+          "attemptSequence": 14,
           "steps": []
         },
         {
@@ -336,10 +336,10 @@
           "result": {
             "outcome": "skipped",
             "summary": "Draft route from draft-coverage-review bypassed draft-coverage-triage",
-            "confirmedAt": "2026-10-05T00:46:57.093Z",
+            "confirmedAt": "2026-10-05T13:45:33.455Z",
             "artifactRefs": []
           },
-          "attemptSequence": 13,
+          "attemptSequence": 14,
           "steps": []
         },
         {
@@ -350,10 +350,10 @@
           "result": {
             "outcome": "skipped",
             "summary": "Draft route from draft-coverage-review bypassed draft-coverage-repair",
-            "confirmedAt": "2026-10-05T00:46:57.093Z",
+            "confirmedAt": "2026-10-05T13:45:33.455Z",
             "artifactRefs": []
           },
-          "attemptSequence": 13,
+          "attemptSequence": 14,
           "steps": []
         },
         {
@@ -364,20 +364,20 @@
           "result": {
             "outcome": "passed",
             "summary": "canonical runtime transition for draft-gate",
-            "confirmedAt": "2026-10-05T00:48:22.650Z",
+            "confirmedAt": "2026-10-05T13:49:32.616Z",
             "artifactRefs": [],
             "stepResult": {
               "kind": "draft-gate-carry-forward",
               "type": "completed"
             },
             "draftSettlementReceipt": {
-              "id": "607eeb2119b1dcd409cd7c88b60bc1ddf07360e6dadfc5c16b3827eb7ac23703",
+              "id": "8c3494db8bdcfb933df69cde32d6f1aa1fe287fd1f77b9639fc6fbb4d6d5cfb9",
               "binding": {
                 "runId": "6a9b5488-edef-4566-888e-14c37e31418c",
                 "specId": "6a9b5488-flow-help-contract",
                 "stepId": "draft-gate",
-                "attemptId": "attempt-draft-gate-5c4a7c87-1389-47ce-a5e3-8514fa06a13d",
-                "attemptSequence": 13
+                "attemptId": "attempt-draft-gate-7ca41627-2ff2-4c4e-9f0c-50ed2f078d90",
+                "attemptSequence": 14
               },
               "resultKind": "draft-gate-carry-forward",
               "resultType": "completed",
@@ -391,12 +391,12 @@
               "connector": {
                 "name": "DraftSpecConnector"
               },
-              "publicationDigest": "ffd4d75e68426c0caba8ad432bd036a1bebdf0dc04485820553d5e216e02609f",
+              "publicationDigest": "1cbe0e63eaf06762fbef57545b3dc0626a8435232daf5cc97d65166e5b704ecf",
               "executionLifecycle": null,
               "awaitQuestion": null
             }
           },
-          "attemptSequence": 13,
+          "attemptSequence": 14,
           "steps": []
         },
         {
@@ -407,15 +407,15 @@
           "result": {
             "outcome": "passed",
             "summary": "Worker handoff confirmed for spec.",
-            "confirmedAt": "2026-10-05T00:54:36.894Z",
+            "confirmedAt": "2026-10-05T14:08:26.291Z",
             "artifactRefs": [
               {
                 "kind": "worker-handoff",
-                "id": "b7cf72062779223bc4be1c4f38f3550b660515cb6a6b9b1458339660fb03efc9"
+                "id": "696ac50963a41361120cee8f2d56dbb4200a85d0c7535428bfcff9e29ba6d508"
               },
               {
                 "kind": "worker-handoff-request",
-                "id": "29d13007202498bf27720a1c10d7ef9c62bd97fe6ff6fa76994457a27511d32a"
+                "id": "dfcf9c9e656dcaeaf0fcd3298c36153e4661f55df631b45da7ededdada1d7537"
               }
             ],
             "stepResult": {
@@ -423,13 +423,13 @@
               "type": "completed"
             },
             "draftSettlementReceipt": {
-              "id": "0597d40b3ce6ea7b3c5c804da28098aef602fa9c961528d528e9488af3280f82",
+              "id": "f14ac71f83dec810fe85ac6ace60be1d9bd1a5e8e83f1730063f6aed10bc04cd",
               "binding": {
                 "runId": "6a9b5488-edef-4566-888e-14c37e31418c",
                 "specId": "6a9b5488-flow-help-contract",
                 "stepId": "spec",
-                "attemptId": "attempt-spec-66db345c-880a-4506-95c1-c8be30767677",
-                "attemptSequence": 8
+                "attemptId": "attempt-spec-6c011d92-7d8f-4f4c-8f0c-6d71136861cc",
+                "attemptSequence": 9
               },
               "resultKind": "spec-created",
               "resultType": "completed",
@@ -443,12 +443,12 @@
               "connector": {
                 "name": "SpecReviewConnector"
               },
-              "publicationDigest": "d1bf3cc96443bdc9801bf6c038c365022216ae48d45eff382b29b2bedea42428",
+              "publicationDigest": "9fedb76fd7c6c1a375006dc188a61b3a1044cfdc968208d434185a830fb9f926",
               "executionLifecycle": null,
               "awaitQuestion": null
             }
           },
-          "attemptSequence": 8,
+          "attemptSequence": 9,
           "steps": []
         },
         {
@@ -459,20 +459,20 @@
           "result": {
             "outcome": "passed",
             "summary": "canonical runtime transition for spec-review",
-            "confirmedAt": "2026-10-05T00:57:31.465Z",
+            "confirmedAt": "2026-10-05T16:55:19.986Z",
             "artifactRefs": [],
             "stepResult": {
               "kind": "spec-review-rejected",
               "type": "completed"
             },
             "draftSettlementReceipt": {
-              "id": "4627171aff42b37404d8d080b688dfb24400b5202c1e4e91ffd6f91575b4a420",
+              "id": "900d558680ed00096ea9d9a90d37cc85ebddc6ce7d73a1d40aa7523f19a4b737",
               "binding": {
                 "runId": "6a9b5488-edef-4566-888e-14c37e31418c",
                 "specId": "6a9b5488-flow-help-contract",
                 "stepId": "spec-review",
-                "attemptId": "attempt-spec-review-5b559607-d644-45e6-915e-bb6fa21b4d26",
-                "attemptSequence": 11
+                "attemptId": "attempt-spec-review-f054bc5b-04a1-477b-87c6-3267cd82daaf",
+                "attemptSequence": 17
               },
               "resultKind": "spec-review-rejected",
               "resultType": "completed",
@@ -492,11 +492,11 @@
                 "binding": {
                   "kind": "review",
                   "executionGeneration": 0,
-                  "manifestDigest": "48cb9a8632676349c2553fb89fa20a81d96264ae333044efef1c10a6f27f9767",
-                  "inputDigest": "47fc021ac76e3e5399e945ac98aba9bdfede9f1d8bea3d7234954a6773f7c6eb",
+                  "manifestDigest": "af5db7746ca31e5e175e9d6290df0dace519adf9cbb8d17a65950b39a86acb3f",
+                  "inputDigest": "b267ded7a9364427702be0434ad7f8c6bd385472a3336296e0f27a66c1052be0",
                   "target": {
-                    "treeSha": "2ab1ca7a3f8236532cbeba3b30cb4f8c3baee0c1",
-                    "targetStateDigest": "eab97b457e66bcb1cae7148bbb9e5c4532b055d036faff607aeabde43cd06539"
+                    "treeSha": "e67e291800de0d2a8d75f66e72cc8c0e89e0c232",
+                    "targetStateDigest": "6e37a842a2626fb56832e488fd4b87d72aad51f8dccb484c4197ba807340f0bb"
                   }
                 },
                 "claim": {
@@ -509,7 +509,7 @@
               "awaitQuestion": null
             }
           },
-          "attemptSequence": 11,
+          "attemptSequence": 17,
           "steps": []
         },
         {
@@ -520,15 +520,15 @@
           "result": {
             "outcome": "passed",
             "summary": "Worker handoff confirmed for spec-triage.",
-            "confirmedAt": "2026-10-05T01:00:01.105Z",
+            "confirmedAt": "2026-10-05T17:03:49.664Z",
             "artifactRefs": [
               {
                 "kind": "worker-handoff",
-                "id": "894e23b6af4ba6e4c43cc801c2b993a718b9a5bea3422a3e2a5f387cd20ccde1"
+                "id": "35b7c5ff22bc66646bb35731acb28275fd956c8ba9958ee0eba0fe299d6db074"
               },
               {
                 "kind": "worker-handoff-request",
-                "id": "d6ad4b626a130cdabac06cedc6d8dab6ba8cd61eeb17dbc3b4d399fda0d3aa23"
+                "id": "92cdaf62e0412c7c991f1c0bf59eb9e7bf492a4dab41375b0233eb050b6e3567"
               }
             ],
             "stepResult": {
@@ -536,13 +536,13 @@
               "type": "completed"
             },
             "draftSettlementReceipt": {
-              "id": "59f95052e7b1731df88eec2b5892e9e0a5bdc3a30290838f56abc831e42329e5",
+              "id": "932fa157f6a1fc150cc4fce6b11daec2da126047f9eca04e790c22f4863a6f15",
               "binding": {
                 "runId": "6a9b5488-edef-4566-888e-14c37e31418c",
                 "specId": "6a9b5488-flow-help-contract",
                 "stepId": "spec-triage",
-                "attemptId": "attempt-spec-triage-3cd012d6-ed42-4f65-859c-e7464365ff48",
-                "attemptSequence": 11
+                "attemptId": "attempt-spec-triage-50f5713f-3c90-4790-bbab-7c0105a94222",
+                "attemptSequence": 17
               },
               "resultKind": "spec-triage-completed",
               "resultType": "completed",
@@ -556,12 +556,12 @@
               "connector": {
                 "name": "SpecRepairConnector"
               },
-              "publicationDigest": "071b74d5044d4a191b536a20a5af863aa70a18f6e71eba28dd47d63aca5d7aba",
+              "publicationDigest": "f52342db3c75638ebff1e07127b158cd24ca6f0fc39e9c440c406e27690d9e33",
               "executionLifecycle": null,
               "awaitQuestion": null
             }
           },
-          "attemptSequence": 11,
+          "attemptSequence": 17,
           "steps": []
         },
         {
@@ -572,15 +572,15 @@
           "result": {
             "outcome": "passed",
             "summary": "Worker handoff confirmed for spec-repair.",
-            "confirmedAt": "2026-10-05T01:03:03.785Z",
+            "confirmedAt": "2026-10-05T17:13:15.724Z",
             "artifactRefs": [
               {
                 "kind": "worker-handoff",
-                "id": "42db0d28c3f69bf807a9550c737a74dc090d0c17a3e7b99b12b1b852b8a4541a"
+                "id": "11933e995eeab879ec0224dfc9196dc8b8964b0a0dee9020d9122eac0fe53296"
               },
               {
                 "kind": "worker-handoff-request",
-                "id": "644bcf6c2cfba406994adad351ab39ca6b0a1bd834334a969d0e663941543d64"
+                "id": "d35ca27ff18e62b91b82443b57af0fecd3a0c712af2e448dbd4df25dff1f3b3a"
               }
             ],
             "stepResult": {
@@ -588,13 +588,13 @@
               "type": "completed"
             },
             "draftSettlementReceipt": {
-              "id": "66c1e6f08c3b14445661592f628c86a7b10ca0ab152391a36c03d7b6e20d3a45",
+              "id": "7d76e9939af106f0df6ce66e7be4eb17e6dbdfa2d1bb45174147a606579ce211",
               "binding": {
                 "runId": "6a9b5488-edef-4566-888e-14c37e31418c",
                 "specId": "6a9b5488-flow-help-contract",
                 "stepId": "spec-repair",
-                "attemptId": "attempt-spec-repair-5147b441-d256-4af2-8e4c-99275f5791ff",
-                "attemptSequence": 11
+                "attemptId": "attempt-spec-repair-8f754dff-5295-4b52-91f5-ad6eb898077e",
+                "attemptSequence": 17
               },
               "resultKind": "spec-repair-changed",
               "resultType": "completed",
@@ -608,12 +608,12 @@
               "connector": {
                 "name": "SpecGateConnector"
               },
-              "publicationDigest": "3371982aeed3423a0644d1e7665a23c86f8bb2099ee5a95b344ab8d60f8b07b2",
+              "publicationDigest": "0f10983ed9fb43740d44bfb9536b39298a542d1b37bc562949afdc96e081fafb",
               "executionLifecycle": null,
               "awaitQuestion": null
             }
           },
-          "attemptSequence": 11,
+          "attemptSequence": 17,
           "steps": []
         },
         {
@@ -624,60 +624,64 @@
           "result": {
             "outcome": "passed",
             "summary": "canonical runtime transition for spec-gate",
-            "confirmedAt": "2026-10-05T01:05:37.427Z",
+            "confirmedAt": "2026-10-05T17:17:30.733Z",
             "artifactRefs": [],
             "stepResult": {
-              "kind": "spec-gate-repair-required",
-              "type": "loop-required"
+              "kind": "spec-gate-passed",
+              "type": "completed"
             },
             "draftSettlementReceipt": {
-              "id": "8ec0681b5fd0bbedbc8968420afd8c8a40a67c9776bbaa1b89587513b2d8241c",
+              "id": "6a9e7ebc045206341de0db83879374b8ba60ac80fce1fa522085345e9dc8bf97",
               "binding": {
                 "runId": "6a9b5488-edef-4566-888e-14c37e31418c",
                 "specId": "6a9b5488-flow-help-contract",
                 "stepId": "spec-gate",
-                "attemptId": "attempt-spec-gate-b2328b93-b55d-4dd1-ab05-524b142c0c68",
-                "attemptSequence": 11
+                "attemptId": "attempt-spec-gate-d28d5d5d-a80e-456d-9a1f-83a5da2c734d",
+                "attemptSequence": 17
               },
-              "resultKind": "spec-gate-repair-required",
-              "resultType": "loop-required",
-              "resultDigest": "1e672cf5fc1ae10a0f3a70ac860cce00ac56bf04003e44128db170fb25762871",
+              "resultKind": "spec-gate-passed",
+              "resultType": "completed",
+              "resultDigest": "399d0fcc378eabc2d7407a3e4b53209649a42fb972a48053880ffa2678ba0290",
               "settlementKind": "target-connection",
-              "targetStepId": "spec-gate-repair",
+              "targetStepId": "approval",
               "effects": {
-                "skipStepIds": [],
-                "resetStepIds": [
-                  "spec-gate-repair",
-                  "spec-gate"
-                ]
+                "skipStepIds": [
+                  "spec-gate-repair"
+                ],
+                "resetStepIds": []
               },
               "connector": {
-                "name": "SpecGateRepairConnector"
+                "name": "SpecGateApprovalConnector"
               },
-              "publicationDigest": "a957d47599832b51d8ab679329e4bdab8d554eeedb21ee292fead0f99227f88a",
+              "publicationDigest": "81ac39e28940e9d81a3b5be20d0e297e3270078e7a7726844e3f3b05d67282a6",
               "executionLifecycle": null,
               "awaitQuestion": null
             }
           },
-          "attemptSequence": 11,
+          "attemptSequence": 17,
           "steps": []
         },
         {
           "kind": "step",
           "id": "spec-gate-repair",
           "key": "plan.spec-gate-repair",
-          "status": "in_progress",
-          "result": null,
-          "attemptSequence": 9,
+          "status": "skipped",
+          "result": {
+            "outcome": "skipped",
+            "summary": "Draft route from spec-gate bypassed spec-gate-repair",
+            "confirmedAt": "2026-10-05T17:17:30.733Z",
+            "artifactRefs": []
+          },
+          "attemptSequence": 14,
           "steps": []
         },
         {
           "kind": "step",
           "id": "approval",
           "key": "plan.approval",
-          "status": "invalidated",
+          "status": "in_progress",
           "result": null,
-          "attemptSequence": 0,
+          "attemptSequence": 1,
           "steps": []
         },
         {
@@ -883,12 +887,12 @@
       ]
     }
   ],
-  "current": "spec-gate-repair",
+  "current": "approval",
   "attempt": {
-    "id": "attempt-spec-gate-repair-278fa2ae-1165-4ea4-9b6e-66fcc90ad37c",
-    "nodeId": "spec-gate-repair",
-    "sequence": 9,
-    "startedAt": "2026-10-05T01:05:39.512Z",
+    "id": "attempt-approval-52c68bec-abc6-44d4-be6f-d58e7ff63dc8",
+    "nodeId": "approval",
+    "sequence": 1,
+    "startedAt": "2026-10-05T17:17:52.060Z",
     "consumption": {
       "semantic": 0,
       "tooling": 0
@@ -900,13 +904,12 @@
       {
         "operation": "resolve-command-context",
         "resources": [
-          "spec",
-          "guardrail"
+          "spec"
         ]
       }
     ]
   },
-  "confirmationOrder": 589,
+  "confirmationOrder": 754,
   "artifacts": [],
   "outbox": [],
   "context": {

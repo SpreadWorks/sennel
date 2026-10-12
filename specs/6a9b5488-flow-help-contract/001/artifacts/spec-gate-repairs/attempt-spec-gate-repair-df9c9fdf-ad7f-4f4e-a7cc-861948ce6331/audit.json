@@ -1,0 +1,456 @@
+{
+  "version": 1,
+  "phase": "spec-gate-repair",
+  "baseRevision": "sha256:d2f434e606b2f7bce2cd52a2dba96caa0a1f3638da415b9952b35db66c9ea225",
+  "acceptedGroups": [
+    {
+      "index": 0,
+      "findingIdentities": [
+        {
+          "sourceArtifact": "steps/spec-gate/result.json",
+          "sourceStep": "spec-gate",
+          "sourceFindingId": "spec-gate:2",
+          "fingerprint": "5a8805fdc5e84ccfda4e21d9ade20dff597272c88fd921bb90224d5982af6344"
+        }
+      ],
+      "operations": [
+        {
+          "kind": "replace-entity-field",
+          "target": {
+            "entity": "task",
+            "id": "T-6",
+            "field": "acceptance"
+          },
+          "expectedDigest": "44b5cd596180be351f0cf3e91d1f20b63dccbdb7d9100cc9843060f1fa322a4b",
+          "replacement": [
+            "docs/core/plugin の共通 renderer 利用箇所で、指定例が実経路で成立する。"
+          ],
+          "reason": "T-6 の acceptance を非 Flow の共通 renderer 利用箇所という単一の検証対象に限定する。"
+        }
+      ]
+    },
+    {
+      "index": 1,
+      "findingIdentities": [
+        {
+          "sourceArtifact": "steps/spec-gate/result.json",
+          "sourceStep": "spec-gate",
+          "sourceFindingId": "spec-gate:1",
+          "fingerprint": "f2760ab7099e4525b28b8396608e4706187d27ef050d3b1c5019b0d7f9e7cfd5"
+        }
+      ],
+      "operations": [
+        {
+          "kind": "replace-entity-field",
+          "target": {
+            "entity": "task",
+            "id": "T-6",
+            "field": "goal"
+          },
+          "expectedDigest": "14539f1855bafc6cf467e5cf7feac5b0c25bf6c99f9d78d813b70eb0a13988e0",
+          "replacement": "非 Flow の共通 renderer 利用箇所の挙動を保持する。",
+          "reason": "T-6 の goal を非 Flow の共通 renderer 利用箇所という単一の検証対象に限定する。"
+        }
+      ]
+    }
+  ],
+  "discardedGroups": [],
+  "operationDigest": "fa5008bfc7dac720b40ee90a03ee6c4797b49e3295484a28378d7655f82b016d",
+  "resultRevision": {
+    "digest": "69557c97e049e058679231ecb4edca9b529d1a1c804beb1f576e86912e21e66b",
+    "byteLength": 73825
+  },
+  "sourceReviewIdentity": {
+    "specId": "6a9b5488-flow-help-contract",
+    "revision": 23,
+    "digest": "6b30c4ed84b2904bcf34322e1a29af2421c470cfe755da6bc4f0fd636a43e0af",
+    "byteLength": 74807
+  },
+  "sourceEvidenceIdentity": {
+    "sourceAttempt": {
+      "id": "attempt-spec-gate-bf21229b-4be4-48a3-8320-82a64a90dced",
+      "sequence": 13
+    },
+    "resultLogicalKey": "spec.gate",
+    "publicationActivityId": "plan-gate-repaired-d843bc75-73ce-4348-87de-6fecab102b26",
+    "catalogFingerprint": "07017ec646c941e2f0638f2dd716af229f7727a1cca1a1ca062602337387e041",
+    "transitionLineage": {
+      "sourceAttempt": {
+        "id": "attempt-spec-gate-bf21229b-4be4-48a3-8320-82a64a90dced",
+        "sequence": 13
+      },
+      "canonicalAttempt": {
+        "id": "attempt-spec-gate-bf21229b-4be4-48a3-8320-82a64a90dced",
+        "sequence": 13
+      },
+      "sourceFingerprint": "a406741993512cf25c8c2ef9207126e45e856dc03c1458eccb8b75fd64983822",
+      "canonicalFingerprint": "07017ec646c941e2f0638f2dd716af229f7727a1cca1a1ca062602337387e041",
+      "sourceRevisionFingerprint": "51b5677515db2ac797da8aaf1541539ab62c3c6d7736ec34a2cc8e5a27590173",
+      "canonicalRevisionFingerprint": "51b5677515db2ac797da8aaf1541539ab62c3c6d7736ec34a2cc8e5a27590173"
+    }
+  },
+  "sourceFindingIdentities": [
+    {
+      "sourceArtifact": "steps/spec-gate/result.json",
+      "sourceStep": "spec-gate",
+      "sourceFindingId": "spec-gate:2",
+      "fingerprint": "5a8805fdc5e84ccfda4e21d9ade20dff597272c88fd921bb90224d5982af6344"
+    },
+    {
+      "sourceArtifact": "steps/spec-gate/result.json",
+      "sourceStep": "spec-gate",
+      "sourceFindingId": "spec-gate:1",
+      "fingerprint": "f2760ab7099e4525b28b8396608e4706187d27ef050d3b1c5019b0d7f9e7cfd5"
+    }
+  ],
+  "observationIdentities": [
+    {
+      "sourceArtifact": "steps/spec-gate/result.json",
+      "sourceStep": "spec-gate",
+      "sourceFindingId": "spec-gate:1",
+      "fingerprint": "f2760ab7099e4525b28b8396608e4706187d27ef050d3b1c5019b0d7f9e7cfd5"
+    },
+    {
+      "sourceArtifact": "steps/spec-gate/result.json",
+      "sourceStep": "spec-gate",
+      "sourceFindingId": "spec-gate:2",
+      "fingerprint": "5a8805fdc5e84ccfda4e21d9ade20dff597272c88fd921bb90224d5982af6344"
+    }
+  ],
+  "repairId": "plan-gate-repair-d1462c12ba614fcafa2009599332311f0702ddfd78e1f405097cd615c48f1e49",
+  "repairRecordFingerprint": "d1462c12ba614fcafa2009599332311f0702ddfd78e1f405097cd615c48f1e49",
+  "targetAttempt": {
+    "id": "attempt-spec-gate-repair-df9c9fdf-ad7f-4f4e-a7cc-861948ce6331",
+    "sequence": 11
+  },
+  "observationResults": [
+    {
+      "fingerprint": "9b17c37f214b24022f1a5b687cf7e9b3a24e28ef461b8686d523987331f561b8",
+      "strategy": "sha256:79a9691852e30ac56b15449b9806f979aed246f5c92003a7dd1f1843f5748910",
+      "summary": "T-6 の goal を非 Flow の共通 renderer 利用箇所という単一の検証対象に限定する。",
+      "priorRepairInsufficiency": null,
+      "groupIndices": [
+        1
+      ]
+    },
+    {
+      "fingerprint": "0362f56c0184e68ad84f74f47b3f36a10ec5d35dc77ae3b3c825c6a7f26dcec2",
+      "strategy": "sha256:d82191ea84e79e6c03c55162cacbbc076e4845b84972ed12a4e27438109c7e59",
+      "summary": "T-6 の acceptance を非 Flow の共通 renderer 利用箇所という単一の検証対象に限定する。",
+      "priorRepairInsufficiency": null,
+      "groupIndices": [
+        0
+      ]
+    }
+  ],
+  "reviewFacts": {
+    "version": 1,
+    "baseRevision": "sha256:d2f434e606b2f7bce2cd52a2dba96caa0a1f3638da415b9952b35db66c9ea225",
+    "resultRevision": {
+      "digest": "69557c97e049e058679231ecb4edca9b529d1a1c804beb1f576e86912e21e66b",
+      "byteLength": 73825
+    },
+    "sourceReviewIdentity": {
+      "specId": "6a9b5488-flow-help-contract",
+      "revision": 23,
+      "digest": "6b30c4ed84b2904bcf34322e1a29af2421c470cfe755da6bc4f0fd636a43e0af",
+      "byteLength": 74807
+    },
+    "sourceReviewDigest": "79a9c4122d8c2d875a8281785b5d7a42290f50dea087f71745f178a584b506d6",
+    "sourceReviewArtifact": "revisions/023/review.json",
+    "sourceSpecDigest": "c18d19a905d07e40c77164b61f24a6cca4a9b3fb91b9af0e3a610280260adf8b",
+    "resultSpecDigest": "85abf26c48cc04b235201933f74e40bdf5342ed67bf34621dc37a55ef66353b1",
+    "findings": [
+      {
+        "identity": {
+          "sourceArtifact": "revisions/023/review.json",
+          "sourceStep": "spec-review",
+          "sourceFindingId": "spec-review-d611fa493512d36afcbefbce6c11efbe",
+          "fingerprint": "59e9252cbdf3a933914db8412b17ebf94e681c81fdbae212a3e042875d8d0598"
+        },
+        "finding": {
+          "allowedTargets": [
+            {
+              "operationKinds": [
+                "edit-text-field"
+              ],
+              "target": {
+                "entity": "spec",
+                "field": "background"
+              }
+            },
+            {
+              "operationKinds": [
+                "replace-array-element"
+              ],
+              "target": {
+                "collection": "overview.modules",
+                "position": 0
+              }
+            },
+            {
+              "operationKinds": [
+                "replace-array-element"
+              ],
+              "target": {
+                "collection": "overview.decisions",
+                "position": 0
+              }
+            },
+            {
+              "operationKinds": [
+                "edit-text-field"
+              ],
+              "target": {
+                "entity": "requirement",
+                "field": "desc",
+                "id": "R4"
+              }
+            },
+            {
+              "operationKinds": [
+                "replace-entity-field"
+              ],
+              "target": {
+                "entity": "task",
+                "field": "acceptance",
+                "id": "T-2"
+              }
+            },
+            {
+              "operationKinds": [
+                "replace-array-element"
+              ],
+              "target": {
+                "collection": "clarifications",
+                "position": 0
+              }
+            }
+          ],
+          "body": "**Target:** Background, Decisions [CORRECTION], R4, T-2, Clarifications, Acceptance Criteria\n**Issue:** The current registry contains 68 leaves: 67 shared leaves (including 36 run leaves) plus query. The spec also states 66 shared, run 35, and 65 canonical paths.\n**Required change:** Align every fixed count to 67 shared, 1 query, 68 total, and 36 run leaves, removing the contradictory 66/35/65 references.\n**Why blocking:** The implementation and completeness matrix cannot determine whether all current leaves, including recover-spec-gate-repair, are in scope; tests could pass while omitting a real command.",
+          "disposition": "apply",
+          "evidence": "The immutable Spec snapshot contains the stale 66/35 references in overview.modules[0], overview.decisions[0], clarifications[0], and task T-2 acceptance; the verified 68/67 registry count is already present in background and acceptance criteria.",
+          "findingId": "spec-review-d611fa493512d36afcbefbce6c11efbe",
+          "issue": "The current registry contains 68 leaves: 67 shared leaves (including 36 run leaves) plus query. The spec also states 66 shared, run 35, and 65 canonical paths.",
+          "kind": "blocking",
+          "requiredChange": "Align every fixed count to 67 shared, 1 query, 68 total, and 36 run leaves, removing the contradictory 66/35/65 references.",
+          "target": "Background, Decisions [CORRECTION], R4, T-2, Clarifications, Acceptance Criteria",
+          "title": "Leaf counts conflict with the verified registry",
+          "whyBlocking": "The implementation and completeness matrix cannot determine whether all current leaves, including recover-spec-gate-repair, are in scope; tests could pass while omitting a real command."
+        },
+        "relatedChanges": [],
+        "unresolvedBlocking": true
+      },
+      {
+        "identity": {
+          "sourceArtifact": "revisions/023/review.json",
+          "sourceStep": "spec-review",
+          "sourceFindingId": "spec-review-67561ff95974cc051365c22b49948760",
+          "fingerprint": "d4a9eacb13ea3acfdf85a4652dc6ade8e9ae291fb35646196f7ede6a035a71e7"
+        },
+        "finding": {
+          "allowedTargets": [
+            {
+              "operationKinds": [
+                "edit-text-field"
+              ],
+              "target": {
+                "entity": "requirement",
+                "field": "desc",
+                "id": "R1"
+              }
+            },
+            {
+              "operationKinds": [
+                "edit-text-field"
+              ],
+              "target": {
+                "entity": "requirement",
+                "field": "desc",
+                "id": "R2"
+              }
+            },
+            {
+              "operationKinds": [
+                "edit-text-field"
+              ],
+              "target": {
+                "entity": "requirement",
+                "field": "desc",
+                "id": "R3"
+              }
+            }
+          ],
+          "body": "**Target:** R1-R3; src/flow/registry.js; src/lib/command-registry.js; src/help.js\n**Issue:** FLOW_COMMANDS currently stores option names in flags/options arrays, while placeholders, aliases, and descriptions are embedded in free-form help strings. Existing flowOptions() reverse-parses only Options sections and misses entries whose option text is inline. The spec forbids reverse-parsing help prose but does not provide structured metadata for all leaf options or define how localized/prose text is retained.\n**Required change:** Require each shared leaf to declare complete structured option metadata—canonical name, aliases, kind, placeholder, description, and localization policy—in the designated registry/model, with command prose kept separately.\n**Why blocking:** Without an explicit source, implementation must either reverse-parse forbidden prose or invent/drop option metadata, making parser/help identity and preservation tests impossible to implement deterministically.",
+          "disposition": "apply",
+          "evidence": "The immutable Spec requires structured option metadata and separately retained prose in R1-R3, matching the supplied source review; these requirements are actionable corrections rather than resolved or invalid findings.",
+          "findingId": "spec-review-67561ff95974cc051365c22b49948760",
+          "issue": "FLOW_COMMANDS currently stores option names in flags/options arrays, while placeholders, aliases, and descriptions are embedded in free-form help strings. Existing flowOptions() reverse-parses only Options sections and misses entries whose option text is inline. The spec forbids reverse-parsing help prose but does not provide structured metadata for all leaf options or define how localized/prose text is retained.",
+          "kind": "blocking",
+          "requiredChange": "Require each shared leaf to declare complete structured option metadata—canonical name, aliases, kind, placeholder, description, and localization policy—in the designated registry/model, with command prose kept separately.",
+          "target": "R1-R3; src/flow/registry.js; src/lib/command-registry.js; src/help.js",
+          "title": "The required option model has no non-prose metadata source",
+          "whyBlocking": "Without an explicit source, implementation must either reverse-parse forbidden prose or invent/drop option metadata, making parser/help identity and preservation tests impossible to implement deterministically."
+        },
+        "relatedChanges": [],
+        "unresolvedBlocking": true
+      },
+      {
+        "identity": {
+          "sourceArtifact": "revisions/023/review.json",
+          "sourceStep": "spec-review",
+          "sourceFindingId": "spec-review-fc4037f818ce6182c90beff456c8edd2",
+          "fingerprint": "842928d9963f2bfca2f660d78331f83d1f119073f4d92ee3f0d2081468184a55"
+        },
+        "finding": {
+          "allowedTargets": [
+            {
+              "operationKinds": [
+                "edit-text-field"
+              ],
+              "target": {
+                "entity": "requirement",
+                "field": "desc",
+                "id": "R4"
+              }
+            },
+            {
+              "operationKinds": [
+                "edit-text-field"
+              ],
+              "target": {
+                "entity": "requirement",
+                "field": "desc",
+                "id": "R5"
+              }
+            },
+            {
+              "operationKinds": [
+                "edit-text-field"
+              ],
+              "target": {
+                "entity": "requirement",
+                "field": "desc",
+                "id": "R6"
+              }
+            }
+          ],
+          "body": "**Target:** R4-R6 P/Z definitions and boundary matrix; src/flow/lib/get-runtime-log.js; src/flow/lib/get-issue.js; src/flow/lib/set-issue.js; src/flow/lib/set-init.js\n**Issue:** The spec requires P/Z to be safe integers and requires unsafe or zero values to be rejected. Existing owners do not share that contract: runtime-log converts arbitrary positive digit strings to Number without a safe-integer check, get-issue accepts zero and unbounded digits, set-issue uses parseInt without a safe bound, and set-init checks Number.isInteger rather than Number.isSafeInteger.\n**Required change:** Replace the blanket P/Z contract with the verified per-owner contracts, or explicitly authorize and target validator changes for every affected command.\n**Why blocking:** The required rejection matrix conflicts with current accepted input and the stated compatibility/no-new-admission constraints, so implementation and tests cannot simultaneously preserve behavior and satisfy R4-R6.",
+          "disposition": "apply",
+          "evidence": "The immutable Spec applies one universal P/Z safe-integer matrix while its cited command owners have distinct contracts; R4-R6 therefore need owner-backed corrections before implementation.",
+          "findingId": "spec-review-fc4037f818ce6182c90beff456c8edd2",
+          "issue": "The spec requires P/Z to be safe integers and requires unsafe or zero values to be rejected. Existing owners do not share that contract: runtime-log converts arbitrary positive digit strings to Number without a safe-integer check, get-issue accepts zero and unbounded digits, set-issue uses parseInt without a safe bound, and set-init checks Number.isInteger rather than Number.isSafeInteger.",
+          "kind": "blocking",
+          "requiredChange": "Replace the blanket P/Z contract with the verified per-owner contracts, or explicitly authorize and target validator changes for every affected command.",
+          "target": "R4-R6 P/Z definitions and boundary matrix; src/flow/lib/get-runtime-log.js; src/flow/lib/get-issue.js; src/flow/lib/set-issue.js; src/flow/lib/set-init.js",
+          "title": "The universal safe-integer contract contradicts existing owners",
+          "whyBlocking": "The required rejection matrix conflicts with current accepted input and the stated compatibility/no-new-admission constraints, so implementation and tests cannot simultaneously preserve behavior and satisfy R4-R6."
+        },
+        "relatedChanges": [],
+        "unresolvedBlocking": true
+      },
+      {
+        "identity": {
+          "sourceArtifact": "revisions/023/review.json",
+          "sourceStep": "spec-review",
+          "sourceFindingId": "spec-review-e3da8f59673ddbc79760d006a0fa9e8d",
+          "fingerprint": "7b053ca16fe90b888c904f8796173c80349b643e86f9d66019f3234af1a64ea6"
+        },
+        "finding": {
+          "allowedTargets": [
+            {
+              "operationKinds": [
+                "edit-text-field"
+              ],
+              "target": {
+                "entity": "requirement",
+                "field": "desc",
+                "id": "R4"
+              }
+            },
+            {
+              "operationKinds": [
+                "edit-text-field"
+              ],
+              "target": {
+                "entity": "requirement",
+                "field": "desc",
+                "id": "R5"
+              }
+            },
+            {
+              "operationKinds": [
+                "edit-text-field"
+              ],
+              "target": {
+                "entity": "requirement",
+                "field": "desc",
+                "id": "R6"
+              }
+            }
+          ],
+          "body": "**Target:** R4/R5 set issue-log inventory; R6 D; src/flow/lib/set-issue-log.js\n**Issue:** The spec classifies --repair-ref-commit as D, defined as a lowercase 64-hex digest. The existing owner accepts a commit hash matching /^[0-9a-f]{7,40}$/i, including uppercase and lengths that D rejects.\n**Required change:** Classify --repair-ref-commit using the existing commit-hash contract and reserve D for actual 64-hex digests, or explicitly scope a compatible owner change.\n**Why blocking:** The generated contract would reject existing valid commit references and accept values the owner rejects, changing a preserved CLI input path and invalidating the required matrix.",
+          "disposition": "apply",
+          "evidence": "The immutable Spec classifies set issue-log --repair-ref-commit as a lowercase 64-hex digest, while the supplied owner evidence identifies a different existing commit-hash contract; the R4-R6 contract must be corrected.",
+          "findingId": "spec-review-e3da8f59673ddbc79760d006a0fa9e8d",
+          "issue": "The spec classifies --repair-ref-commit as D, defined as a lowercase 64-hex digest. The existing owner accepts a commit hash matching /^[0-9a-f]{7,40}$/i, including uppercase and lengths that D rejects.",
+          "kind": "blocking",
+          "requiredChange": "Classify --repair-ref-commit using the existing commit-hash contract and reserve D for actual 64-hex digests, or explicitly scope a compatible owner change.",
+          "target": "R4/R5 set issue-log inventory; R6 D; src/flow/lib/set-issue-log.js",
+          "title": "repair-ref-commit is classified as the wrong digest type",
+          "whyBlocking": "The generated contract would reject existing valid commit references and accept values the owner rejects, changing a preserved CLI input path and invalidating the required matrix."
+        },
+        "relatedChanges": [],
+        "unresolvedBlocking": true
+      },
+      {
+        "identity": {
+          "sourceArtifact": "revisions/023/review.json",
+          "sourceStep": "spec-review",
+          "sourceFindingId": "spec-review-250b3a597aa83b03aa87cb186ebd0c79",
+          "fingerprint": "d0b0efd928243ebbffa46d4cce02dfcd7a57e5d49b6c552fe64e1a6f47af64e2"
+        },
+        "finding": {
+          "allowedTargets": [
+            {
+              "operationKinds": [
+                "edit-text-field"
+              ],
+              "target": {
+                "entity": "requirement",
+                "field": "desc",
+                "id": "R4"
+              }
+            },
+            {
+              "operationKinds": [
+                "edit-text-field"
+              ],
+              "target": {
+                "entity": "requirement",
+                "field": "desc",
+                "id": "R5"
+              }
+            }
+          ],
+          "body": "**Target:** R4 inventory vs R5 leaf contract for set issue-log --guardrail-candidate\n**Issue:** R4 declares --guardrail-candidate as ID, while R5 declares it as T. The existing owner treats it as free-form text and applies an owner-specific minimum length, not identifier validation.\n**Required change:** Use one owner-backed class consistently, namely T plus the existing owner-specific length rule, throughout the inventory and validation sections.\n**Why blocking:** The parser/model and tests have contradictory acceptance expectations for the same option, and applying ID validation would reject the existing free-text contract.",
+          "disposition": "apply",
+          "evidence": "The immutable Spec contains the stated R4/R5 type conflict for set issue-log --guardrail-candidate, so the owner-backed T contract needs a coordinated correction.",
+          "findingId": "spec-review-250b3a597aa83b03aa87cb186ebd0c79",
+          "issue": "R4 declares --guardrail-candidate as ID, while R5 declares it as T. The existing owner treats it as free-form text and applies an owner-specific minimum length, not identifier validation.",
+          "kind": "blocking",
+          "requiredChange": "Use one owner-backed class consistently, namely T plus the existing owner-specific length rule, throughout the inventory and validation sections.",
+          "target": "R4 inventory vs R5 leaf contract for set issue-log --guardrail-candidate",
+          "title": "guardrail-candidate has conflicting type contracts",
+          "whyBlocking": "The parser/model and tests have contradictory acceptance expectations for the same option, and applying ID validation would reject the existing free-text contract."
+        },
+        "relatedChanges": [],
+        "unresolvedBlocking": true
+      }
+    ],
+    "reviewInputPreserved": false,
+    "unresolvedBlocking": true,
+    "requiresReview": true,
+    "reason": "unresolved-blocking-review"
+  }
+}

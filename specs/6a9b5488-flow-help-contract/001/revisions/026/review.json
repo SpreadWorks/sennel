@@ -1,0 +1,406 @@
+{
+  "audit": [
+    {
+      "acceptedOperations": [],
+      "appliedFindings": [],
+      "discardedOperations": [],
+      "inputDigest": "e8f5d89b27678f983b782be34c5c49f3431853319987832f52f6d70642382b1b",
+      "operationDigest": "790e561a26120cd5aba8824e99283158498cb669998f0f509e9b6e3ad4013369",
+      "outcome": "replaced",
+      "relation": "revision-scoped-canonical-review",
+      "stage": "spec-review"
+    },
+    {
+      "acceptedOperations": [],
+      "appliedFindings": [],
+      "discardedOperations": [],
+      "inputDigest": "44853dcc6ac833964c40bfff1c527f48fc31ff108c4604e1a265fc5101a25107",
+      "operationDigest": "790e561a26120cd5aba8824e99283158498cb669998f0f509e9b6e3ad4013369",
+      "outcome": "merged",
+      "relation": "revision-scoped-canonical-review",
+      "stage": "spec-triage"
+    },
+    {
+      "acceptedOperations": [
+        {
+          "edits": [
+            {
+              "endByte": 1372,
+              "replacement": " query は共有 option、argument、group-intersection、leaf matrix の投影対象から除外するが、`FLOW_QUERY_HELP` を backing とする特別な help entry と group listing の query 行は公開経路として保持する。",
+              "startByte": 1372
+            }
+          ],
+          "expectedDigest": "6a8add3c883dbd4cce533e29a7f222b7dc1fd80460bfb38c6acc859e8f18c1c9",
+          "findingIds": [
+            "spec-review-3681947d658129d6330a6f0397aac432"
+          ],
+          "kind": "edit-text-field",
+          "reason": "Keep query help public through its special entry while excluding it from shared projections.",
+          "target": {
+            "entity": "requirement",
+            "field": "desc",
+            "id": "R1"
+          }
+        },
+        {
+          "edits": [
+            {
+              "endByte": 823,
+              "replacement": " query の help は共有 renderer の option/admission projection ではなく `FLOW_QUERY_HELP` を使う独立経路で保持し、`sennel help flow query` と `sennel flow query --help` の表示、stdin/--request-file の実入力、error response を同じ query owner の契約として検証する。",
+              "startByte": 823
+            }
+          ],
+          "expectedDigest": "2abdfbb9f742d953c457393321121fbb44d4d9156ab5fff4f3adeb31ea5e32c3",
+          "findingIds": [
+            "spec-review-3681947d658129d6330a6f0397aac432"
+          ],
+          "kind": "edit-text-field",
+          "reason": "Bind query help routes and input paths to the independent query owner.",
+          "target": {
+            "entity": "requirement",
+            "field": "desc",
+            "id": "R11"
+          }
+        },
+        {
+          "edits": [
+            {
+              "endByte": 657,
+              "replacement": " query の公開 help entry/listing は `FLOW_QUERY_HELP` と query owner を通じて保持し、共有 option/argument/group-intersection/leaf matrix projection から除外する。`run settle-gate-transition` は canonical Usage を `Usage: sennel flow run settle-gate-transition [--agent-work-dir <path>] [--expect-binding <token> | [--expect-issue <number> | --expect-no-issue] [--expect-spec <spec>] [--expect-run-id <runId>]]` として扱い、既存の一文 `Persist the Definition-selected exhausted integration or Task Gate finding and settle its current Attempt.` は summary/prose として保持し、受理 option は structured Options rows から表示する。",
+              "startByte": 657
+            }
+          ],
+          "expectedDigest": "68f0f5cb203f92b9b28c4ddb471ee20105cf415a701207427c0153732b5b0398",
+          "findingIds": [
+            "spec-review-209d797d33579ed74f9e1b021cd43c13",
+            "spec-review-3681947d658129d6330a6f0397aac432"
+          ],
+          "kind": "edit-text-field",
+          "reason": "Preserve independent query help and define settle-gate-transition usage and option rendering in migration parity.",
+          "target": {
+            "entity": "requirement",
+            "field": "desc",
+            "id": "R12"
+          }
+        },
+        {
+          "expectedDigest": null,
+          "findingIds": [
+            "spec-review-3681947d658129d6330a6f0397aac432"
+          ],
+          "kind": "add-array-element",
+          "reason": "Add acceptance coverage for the preserved query help entry, listing, and independent projection boundary.",
+          "replacement": "`sennel help flow query` と `sennel flow query --help` は `FLOW_QUERY_HELP` を表示し、`sennel help flow` の group listing には query 行を残す一方、query を共有 option/argument/group-intersection/leaf matrix から除外することを実表示で確認する。",
+          "target": {
+            "collection": "acceptance_criteria"
+          }
+        },
+        {
+          "edits": [
+            {
+              "endByte": 590,
+              "replacement": " 合成 64/65 文字名は注入した renderer/registry integration test のみで検証し、CLI E2E は現行 registry に登録された実名（13/14/15 文字境界と最長登録名）に限定する。",
+              "startByte": 590
+            }
+          ],
+          "expectedDigest": "868530f3e4ec69f1cb3a7e613731433249550090bac126fbc20579208c4bc787",
+          "findingIds": [
+            "spec-review-9dc9612c7d09407f04d14a17d52ca4c1"
+          ],
+          "kind": "edit-text-field",
+          "reason": "Separate injected synthetic-name renderer tests from registered-name CLI E2E coverage.",
+          "target": {
+            "entity": "requirement",
+            "field": "desc",
+            "id": "R8"
+          }
+        },
+        {
+          "expectedDigest": "2e788a4429d6ac670ff893bc2ef5ddcf1a813880ce7515039da658ef8df9d5ad",
+          "findingIds": [
+            "spec-review-9dc9612c7d09407f04d14a17d52ca4c1"
+          ],
+          "kind": "replace-entity-field",
+          "reason": "Constrain synthetic command-name coverage to injected integration tests and production-name CLI E2E.",
+          "replacement": [
+            "get/set/run/report の三経路で subcommand/option 行が一致し、最長登録名と合成 64/65 名でも区切られる。合成 64/65 文字名は注入した renderer/registry integration test で検証し、CLI E2E は登録済み実名だけを対象にする。"
+          ],
+          "target": {
+            "entity": "task",
+            "field": "acceptance",
+            "id": "T-3"
+          }
+        },
+        {
+          "expectedDigest": null,
+          "findingIds": [
+            "spec-review-9dc9612c7d09407f04d14a17d52ca4c1"
+          ],
+          "kind": "add-array-element",
+          "reason": "Add an executable boundary for synthetic-name and registered-name coverage.",
+          "replacement": "renderer/registry integration test に注入した 64 文字・65 文字の subcommand 名は summary と ASCII 空白 2 個以上で分離して表示し、CLI E2E は現行 registry に登録された実名だけで境界と最長名を検証する。",
+          "target": {
+            "collection": "acceptance_criteria"
+          }
+        },
+        {
+          "edits": [
+            {
+              "endByte": 564,
+              "replacement": " 起動前 discovery は `--agent-work-dir <path>` と `--agent-work-dir=<path>` の両形式を左から走査し、繰り返し指定や混在時は最後の occurrence を採用して parser と同じ override を path 初期化へ渡す。",
+              "startByte": 564
+            }
+          ],
+          "expectedDigest": "9aff7d74e79cbaef0618aae60f940739064fb60f94c97511440438138d17584a",
+          "findingIds": [
+            "spec-review-afd72723a977cd2569ffd3540a1b4893"
+          ],
+          "kind": "edit-text-field",
+          "reason": "Define mixed and repeated startup work-directory precedence consistently with the parser.",
+          "target": {
+            "entity": "requirement",
+            "field": "desc",
+            "id": "R9"
+          }
+        },
+        {
+          "edits": [
+            {
+              "endByte": 990,
+              "replacement": " `run settle-gate-transition` は canonical Usage を `Usage: sennel flow run settle-gate-transition [--agent-work-dir <path>] [--expect-binding <token> | [--expect-issue <number> | --expect-no-issue] [--expect-spec <spec>] [--expect-run-id <runId>]]` として持ち、既存の一文 `Persist the Definition-selected exhausted integration or Task Gate finding and settle its current Attempt.` は summary/prose としてそのまま保持する。Options には受理する `--agent-work-dir`、`--expect-binding`、`--expect-issue`、`--expect-no-issue`、`--expect-spec`、`--expect-run-id` を structured option model の canonical rows として表示し、既存の summary/prose を Usage として再利用しない。",
+              "startByte": 990
+            }
+          ],
+          "expectedDigest": "699ac3abf6a2693b7d6598900ab1e42cd91df91ce192c1454cdd98f8369de0ff",
+          "findingIds": [
+            "spec-review-209d797d33579ed74f9e1b021cd43c13"
+          ],
+          "kind": "edit-text-field",
+          "reason": "Define the canonical settle-gate-transition usage and preserve its existing prose separately.",
+          "target": {
+            "entity": "requirement",
+            "field": "desc",
+            "id": "R2"
+          }
+        },
+        {
+          "edits": [
+            {
+              "endByte": 36160,
+              "replacement": " `run settle-gate-transition` の公開 inventory では、canonical Usage を `Usage: sennel flow run settle-gate-transition [--agent-work-dir <path>] [--expect-binding <token> | [--expect-issue <number> | --expect-no-issue] [--expect-spec <spec>] [--expect-run-id <runId>]]` とし、既存の一文 `Persist the Definition-selected exhausted integration or Task Gate finding and settle its current Attempt.` は Usage ではなく保持する summary/prose とする。受理する `--agent-work-dir` と target guard options は structured model から Options rows として投影する。",
+              "startByte": 36160
+            }
+          ],
+          "expectedDigest": "7ba08e0219e14a351b878d2ff1d3598deaeb46583eeb04cf4a4d18a770b4419f",
+          "findingIds": [
+            "spec-review-209d797d33579ed74f9e1b021cd43c13"
+          ],
+          "kind": "edit-text-field",
+          "reason": "Make the settle-gate-transition inventory usage and preserved summary explicit.",
+          "target": {
+            "entity": "requirement",
+            "field": "desc",
+            "id": "R4"
+          }
+        }
+      ],
+      "appliedFindings": [
+        "spec-review-209d797d33579ed74f9e1b021cd43c13",
+        "spec-review-3681947d658129d6330a6f0397aac432",
+        "spec-review-9dc9612c7d09407f04d14a17d52ca4c1",
+        "spec-review-afd72723a977cd2569ffd3540a1b4893"
+      ],
+      "discardedOperations": [
+        {
+          "attempt": 1,
+          "findingIds": [
+            "spec-review-afd72723a977cd2569ffd3540a1b4893"
+          ],
+          "kind": "add-array-element",
+          "operationDigest": "f87a85096b61d2a4339748f1ad3d50fea41129a38e9a80361c3a97035574a03e",
+          "reason": "unauthorized operation",
+          "target": {
+            "collection": "acceptance_criteria"
+          }
+        }
+      ],
+      "inputDigest": "b677a7fe89555cd7f789178113d1683604411c40037f8ad5920ac68eb4a50099",
+      "operationDigest": "f829afc1d009c785390948bcce04ff963142a5ad61a0990ff28b83f5831cd189",
+      "outcome": "merged",
+      "relation": "revision-scoped-canonical-review",
+      "stage": "spec-repair"
+    }
+  ],
+  "findings": [
+    {
+      "allowedTargets": [
+        {
+          "operationKinds": [
+            "edit-text-field"
+          ],
+          "target": {
+            "entity": "requirement",
+            "field": "desc",
+            "id": "R1"
+          }
+        },
+        {
+          "operationKinds": [
+            "edit-text-field"
+          ],
+          "target": {
+            "entity": "requirement",
+            "field": "desc",
+            "id": "R11"
+          }
+        },
+        {
+          "operationKinds": [
+            "edit-text-field"
+          ],
+          "target": {
+            "entity": "requirement",
+            "field": "desc",
+            "id": "R12"
+          }
+        },
+        {
+          "operationKinds": [
+            "add-array-element"
+          ],
+          "target": {
+            "collection": "acceptance_criteria"
+          }
+        }
+      ],
+      "body": "**Target:** R1/R11/R12; src/lib/command-registry.js; sennel help flow query\n**Issue:** The current public help tree exposes flow query through both sennel help flow query and the flow group listing. The spec excludes query from shared projection but does not define how these existing help routes remain available without reintroducing query into the shared model.\n**Required change:** Specify that query remains a special FLOW_QUERY_HELP-backed help entry and listing while being excluded from shared option, argument, group-intersection, and matrix projections, and add the expected help routes to the acceptance basis.\n**Why blocking:** An implementation cannot determine whether to remove query from the command tree or special-case it. Removing it breaks an existing public help route; retaining the current mapping violates the query-independence contract and can apply shared projections.",
+      "disposition": "apply",
+      "evidence": "The immutable review identifies a blocking ambiguity: the Spec excludes query from shared projections while R11 requires its independent stdin, request-file, help, and error routes. Preserving a special FLOW_QUERY_HELP-backed entry and listing while excluding it from shared projections is a valid Spec correction, and the acceptance basis must cover those routes.",
+      "findingId": "spec-review-3681947d658129d6330a6f0397aac432",
+      "issue": "The current public help tree exposes flow query through both sennel help flow query and the flow group listing. The spec excludes query from shared projection but does not define how these existing help routes remain available without reintroducing query into the shared model.",
+      "kind": "blocking",
+      "requiredChange": "Specify that query remains a special FLOW_QUERY_HELP-backed help entry and listing while being excluded from shared option, argument, group-intersection, and matrix projections, and add the expected help routes to the acceptance basis.",
+      "target": "R1/R11/R12; src/lib/command-registry.js; sennel help flow query",
+      "title": "Query help has no preserved independent integration path",
+      "whyBlocking": "An implementation cannot determine whether to remove query from the command tree or special-case it. Removing it breaks an existing public help route; retaining the current mapping violates the query-independence contract and can apply shared projections."
+    },
+    {
+      "allowedTargets": [
+        {
+          "operationKinds": [
+            "edit-text-field"
+          ],
+          "target": {
+            "entity": "requirement",
+            "field": "desc",
+            "id": "R8"
+          }
+        },
+        {
+          "operationKinds": [
+            "add-array-element"
+          ],
+          "target": {
+            "collection": "acceptance_criteria"
+          }
+        },
+        {
+          "operationKinds": [
+            "replace-entity-field"
+          ],
+          "target": {
+            "entity": "task",
+            "field": "acceptance",
+            "id": "T-3"
+          }
+        }
+      ],
+      "body": "**Target:** R8; Acceptance Criteria; T-3\n**Issue:** The production CLI uses the statically constructed core command registry, and the scope explicitly forbids adding synthetic names as production leaves. The spec nevertheless requires real CLI E2E coverage for synthetic 64/65-character names.\n**Required change:** Limit synthetic 64/65-character cases to injected renderer/registry integration tests and reserve CLI E2E coverage for registered production names, or define a sanctioned test-only registry injection point.\n**Why blocking:** The acceptance requirement is not executable within the stated scope. Without a test-only injection point, the synthetic CLI cases cannot be run; adding production commands would violate the scope and alter the shipped command surface.",
+      "disposition": "apply",
+      "evidence": "R8 and the acceptance criteria require synthetic 64/65-character CLI E2E cases even though the scope forbids synthetic production leaves. Limiting synthetic cases to injected renderer/registry integration tests and reserving CLI E2E for registered production names makes the acceptance executable without changing the shipped command surface; T-3 must carry the same test boundary.",
+      "findingId": "spec-review-9dc9612c7d09407f04d14a17d52ca4c1",
+      "issue": "The production CLI uses the statically constructed core command registry, and the scope explicitly forbids adding synthetic names as production leaves. The spec nevertheless requires real CLI E2E coverage for synthetic 64/65-character names.",
+      "kind": "blocking",
+      "requiredChange": "Limit synthetic 64/65-character cases to injected renderer/registry integration tests and reserve CLI E2E coverage for registered production names, or define a sanctioned test-only registry injection point.",
+      "target": "R8; Acceptance Criteria; T-3",
+      "title": "Synthetic command-name cases cannot satisfy the required CLI E2E coverage",
+      "whyBlocking": "The acceptance requirement is not executable within the stated scope. Without a test-only injection point, the synthetic CLI cases cannot be run; adding production commands would violate the scope and alter the shipped command surface."
+    },
+    {
+      "allowedTargets": [
+        {
+          "operationKinds": [
+            "edit-text-field"
+          ],
+          "target": {
+            "entity": "requirement",
+            "field": "desc",
+            "id": "R9"
+          }
+        }
+      ],
+      "body": "**Target:** R9; src/sennel.js; duplicate value option constraint\n**Issue:** The normal dispatcher applies last-value-wins semantics, but the startup pre-scan currently recognizes only separated --agent-work-dir values and stops at the first occurrence. It ignores equals-form occurrences. Repeated or mixed forms can therefore parse to one work directory while container initialization and log paths use another.\n**Required change:** State in R9 that startup work-directory discovery must recognize both forms and apply last-occurrence semantics across repeated and mixed occurrences, with an acceptance case covering that behavior.\n**Why blocking:** The required parser/runtime-path contract is otherwise unsafe: the accepted input, agent directory, and durable log directory can disagree, and tests limited to single occurrences cannot detect the mismatch.",
+      "disposition": "apply",
+      "evidence": "R9 names both --agent-work-dir forms but does not define last-occurrence precedence, while the startup pre-scan currently differs from the normal dispatcher. Repeated and mixed forms can therefore select inconsistent work and log paths, so the review's explicit discovery and last-occurrence contract is a valid R9 correction.",
+      "findingId": "spec-review-afd72723a977cd2569ffd3540a1b4893",
+      "issue": "The normal dispatcher applies last-value-wins semantics, but the startup pre-scan currently recognizes only separated --agent-work-dir values and stops at the first occurrence. It ignores equals-form occurrences. Repeated or mixed forms can therefore parse to one work directory while container initialization and log paths use another.",
+      "kind": "blocking",
+      "requiredChange": "State in R9 that startup work-directory discovery must recognize both forms and apply last-occurrence semantics across repeated and mixed occurrences, with an acceptance case covering that behavior.",
+      "target": "R9; src/sennel.js; duplicate value option constraint",
+      "title": "Startup work-directory selection lacks duplicate and mixed-form precedence",
+      "whyBlocking": "The required parser/runtime-path contract is otherwise unsafe: the accepted input, agent directory, and durable log directory can disagree, and tests limited to single occurrences cannot detect the mismatch."
+    },
+    {
+      "allowedTargets": [
+        {
+          "operationKinds": [
+            "edit-text-field"
+          ],
+          "target": {
+            "entity": "requirement",
+            "field": "desc",
+            "id": "R2"
+          }
+        },
+        {
+          "operationKinds": [
+            "edit-text-field"
+          ],
+          "target": {
+            "entity": "requirement",
+            "field": "desc",
+            "id": "R4"
+          }
+        },
+        {
+          "operationKinds": [
+            "edit-text-field"
+          ],
+          "target": {
+            "entity": "requirement",
+            "field": "desc",
+            "id": "R12"
+          }
+        }
+      ],
+      "body": "**Target:** R2/R4/R12; run settle-gate-transition\n**Issue:** The existing leaf help is a single prose sentence with no Usage or Options section, although its registry entry accepts the shared work-directory and target-guard options. The inventory labels that sentence as usage, while the new structured help requirements also require canonical option rendering and preservation of command prose.\n**Required change:** Define the leaf's canonical Usage text and identify the existing sentence as preserved summary/prose, or explicitly specify a prose-only exception and how its accepted Options are rendered.\n**Why blocking:** The implementation and tests cannot determine whether to add a Usage line, treat the sentence as Usage, or preserve the current exact output. Each choice changes the public help contract and affects the R1/R2 acceptance criteria.",
+      "disposition": "apply",
+      "evidence": "The inventory labels settle-gate-transition's existing sentence as usage, while R2 requires structured canonical option rows and preservation of command prose. Defining canonical Usage separately from preserved summary/prose is necessary to make the implementation and acceptance contract unambiguous.",
+      "findingId": "spec-review-209d797d33579ed74f9e1b021cd43c13",
+      "issue": "The existing leaf help is a single prose sentence with no Usage or Options section, although its registry entry accepts the shared work-directory and target-guard options. The inventory labels that sentence as usage, while the new structured help requirements also require canonical option rendering and preservation of command prose.",
+      "kind": "blocking",
+      "requiredChange": "Define the leaf's canonical Usage text and identify the existing sentence as preserved summary/prose, or explicitly specify a prose-only exception and how its accepted Options are rendered.",
+      "target": "R2/R4/R12; run settle-gate-transition",
+      "title": "settle-gate-transition has no defined canonical usage contract",
+      "whyBlocking": "The implementation and tests cannot determine whether to add a Usage line, treat the sentence as Usage, or preserve the current exact output. Each choice changes the public help contract and affects the R1/R2 acceptance criteria."
+    }
+  ],
+  "generation": 3,
+  "identity": {
+    "byteLength": 80074,
+    "digest": "b1a85a67fef9ca3db90aa0e85e3e623dc3725ed7b712453a526cff75c11305ed",
+    "revision": 26,
+    "specId": "6a9b5488-flow-help-contract"
+  },
+  "version": 2
+}

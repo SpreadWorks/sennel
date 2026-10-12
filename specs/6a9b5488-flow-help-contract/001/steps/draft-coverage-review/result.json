@@ -1000,6 +1000,83 @@
           }
         }
       }
+    },
+    {
+      "attempt": 14,
+      "nodeId": "draft-coverage-review",
+      "outcome": "completed",
+      "result": {
+        "result": "ok",
+        "changed": [],
+        "artifacts": {
+          "phase": "draft-coverage",
+          "verdict": "PASS",
+          "canonicalVerdict": "PASS",
+          "evidenceDigest": "9b4a5364e4cec82a81357feed422dc39231ad9a14c7ae106bc384e2e41c3d2fa",
+          "treeSha": "f6bd55ea61b485551e90ddea32a2ee5f1422456c",
+          "targetStateDigest": "73b1120c1c5f7003e4dba4c43ec95d6d3275773d8fd4d0cd2fbeba0540cb4213",
+          "issueCount": 0,
+          "retryPhase": "draft-coverage"
+        }
+      },
+      "artifact": {
+        "logicalKey": "draft.coverage.review",
+        "payload": {
+          "version": 2,
+          "phase": "draft-coverage",
+          "sourceDraft": "draft.json",
+          "sourceDraftRevision": {
+            "version": 1,
+            "runId": "6a9b5488-edef-4566-888e-14c37e31418c",
+            "specId": "6a9b5488-flow-help-contract",
+            "sourceStepId": "draft",
+            "digest": "73b1120c1c5f7003e4dba4c43ec95d6d3275773d8fd4d0cd2fbeba0540cb4213",
+            "byteLength": 8895,
+            "finalizedAt": "2026-10-05T13:40:52.240Z"
+          },
+          "generatedAt": "2026-10-05T13:45:20.134Z",
+          "verdict": "PASS",
+          "summary": "No draft review findings recorded.",
+          "blockingFindings": [],
+          "advisoryFindings": [],
+          "repairTargets": [],
+          "workerOutput": {
+            "digest": "183fb3751396c3d72f8e6a139a53430f69c8cc3a62dea596efab4e223d0f2231",
+            "byteLength": 600,
+            "mediaType": "application/json"
+          },
+          "canonicalEvidence": {
+            "version": 1,
+            "phase": "draft-coverage",
+            "taskId": null,
+            "treeSha": "f6bd55ea61b485551e90ddea32a2ee5f1422456c",
+            "targetStateDigest": "73b1120c1c5f7003e4dba4c43ec95d6d3275773d8fd4d0cd2fbeba0540cb4213",
+            "provenance": {
+              "provider": "sennel-review",
+              "invocationId": "990f4a183c03ad00f09749932fad75f399640c2f045a4aa433b0e47a8fcbd96d",
+              "capturedAt": "2026-10-05T13:45:20.134Z"
+            },
+            "disposition": "PASS",
+            "blockingFindings": [],
+            "advisoryFindings": [],
+            "identity": {
+              "phase": "draft-coverage",
+              "taskId": null,
+              "treeSha": "f6bd55ea61b485551e90ddea32a2ee5f1422456c",
+              "provenance": {
+                "provider": "sennel-review",
+                "invocationId": "990f4a183c03ad00f09749932fad75f399640c2f045a4aa433b0e47a8fcbd96d",
+                "capturedAt": "2026-10-05T13:45:20.134Z"
+              },
+              "evidenceDigest": "9b4a5364e4cec82a81357feed422dc39231ad9a14c7ae106bc384e2e41c3d2fa"
+            }
+          },
+          "canonicalTarget": {
+            "treeSha": "f6bd55ea61b485551e90ddea32a2ee5f1422456c",
+            "targetStateDigest": "73b1120c1c5f7003e4dba4c43ec95d6d3275773d8fd4d0cd2fbeba0540cb4213"
+          }
+        }
+      }
     }
   ]
 }

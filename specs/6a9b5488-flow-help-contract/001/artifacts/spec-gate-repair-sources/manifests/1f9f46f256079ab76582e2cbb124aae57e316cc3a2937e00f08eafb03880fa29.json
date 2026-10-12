@@ -1,0 +1,47 @@
+{
+  "version": 1,
+  "sources": [
+    {
+      "id": "evidence:draft",
+      "origin": "steps/draft/result.json",
+      "revision": "2f9fea7c4bcf574f4ab1380ec1b134dcbcb5494f66b02e4dc9c39298a8ee9448",
+      "digest": "2f9fea7c4bcf574f4ab1380ec1b134dcbcb5494f66b02e4dc9c39298a8ee9448",
+      "byteLength": 13091,
+      "availability": "available",
+      "required": true,
+      "appliesTo": []
+    },
+    {
+      "id": "evidence:issue.snapshot",
+      "origin": "issue.md",
+      "revision": "11b23553f5f64fb0e981c501225af1e22a2f06a158bbc73e11f01515a3be0e42",
+      "digest": "11b23553f5f64fb0e981c501225af1e22a2f06a158bbc73e11f01515a3be0e42",
+      "byteLength": 20993,
+      "availability": "available",
+      "required": true,
+      "appliesTo": []
+    },
+    {
+      "id": "evidence:project-rules",
+      "origin": "AGENTS.md",
+      "revision": "668900c0dffcaf6b36504830cd9a23b8a488439a7fded91f2c872a80a81caa64",
+      "digest": "668900c0dffcaf6b36504830cd9a23b8a488439a7fded91f2c872a80a81caa64",
+      "byteLength": 12688,
+      "availability": "available",
+      "required": true,
+      "appliesTo": [
+        "."
+      ]
+    },
+    {
+      "id": "evidence:request",
+      "origin": "flow.request",
+      "revision": "9cf368a1f1bfce504529656113c1032813b535724beb9a1fad052a39bc39e21c",
+      "digest": "9cf368a1f1bfce504529656113c1032813b535724beb9a1fad052a39bc39e21c",
+      "byteLength": 1087,
+      "availability": "available",
+      "required": true,
+      "appliesTo": []
+    }
+  ]
+}

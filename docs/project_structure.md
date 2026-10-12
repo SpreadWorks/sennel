@@ -40,14 +40,14 @@ src/spec/commands/    (cli)
 
 | Directory | Files | Role |
 | --- | --- | --- |
-| src/flow | 379 | controller, lib, cli, config, model, other, middleware, view, route, get guardrail flow command, Retry counter and failure classification utility, test, Metric setter command handler |
-| src/lib | 107 | lib, config, model, Metric dimension normalizer shared by agent runner and metrics aggregator, cli, controller, Error preview formatter utility, Option normalization utility, Core utility for translating glob patterns into executable regular expressions., migration, lint-executor, Makefile parsing utility for automated test command discovery., view, Repository path matching utility, Fluent builder for AI prompts assembled from labeled sections, Skill rule loader and directive expander, Test command source collection and precedence resolution., other |
-| src/docs | 52 | cli, analysis entry core library, utility, model, lib, rendering, test environment detector |
+| src/flow | 524 | controller, model, lib, cli, middleware, other, view, config, route, get guardrail flow command, Retry counter and failure classification utility, Metric setter command handler, test |
+| src/lib | 108 | lib, config, model, Metric dimension normalizer shared by agent runner and metrics aggregator, cli, controller, Error preview formatter utility, Option normalization utility, Core utility for translating glob patterns into executable regular expressions., migration, lint-executor, Makefile parsing utility for automated test command discovery., view, Repository path matching utility, Fluent builder for AI prompts assembled from labeled sections, Skill rule loader and directive expander, Test command source collection and precedence resolution., other |
+| src/docs | 52 | cli, controller, analysis entry core library, utility, model, lib, rendering, test environment detector |
 | src | 13 | cli, controller, view, route |
 | src/data | 6 | model, data-source |
 | src/check | 4 | cli, lib |
 | src/metrics | 3 | cli, lib |
-| src/spec | 2 | cli, lib |
+| src/spec | 3 | cli, view, model |
 | src/hook | 1 | Lists configured hooks for users in machine-readable or terminal-friendly form. |
 <!-- {{/data}} -->
 

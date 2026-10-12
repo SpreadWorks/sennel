@@ -1,0 +1,871 @@
+{
+  "version": 1,
+  "phase": "spec-gate-repair",
+  "baseRevision": "sha256:2916e4ecafb16388aa1f6357dd0d2991017115aa052ae79ae4ffbcbd7d1a8294",
+  "acceptedGroups": [
+    {
+      "index": 0,
+      "findingIdentities": [
+        {
+          "sourceArtifact": "steps/spec-gate/result.json",
+          "sourceStep": "spec-gate",
+          "sourceFindingId": "spec-gate:1",
+          "fingerprint": "5565bc27839c29f3cff19b63288fadf1648c4ff29ec6b37ac4b2f92550ab9df7"
+        },
+        {
+          "sourceArtifact": "steps/spec-gate/result.json",
+          "sourceStep": "spec-gate",
+          "sourceFindingId": "spec-gate:6",
+          "fingerprint": "f77ca8bca03402cf19144ea991c8e2a78d9efe66c0ced1219c7767c05597567f"
+        }
+      ],
+      "operations": [
+        {
+          "kind": "edit-text-field",
+          "target": {
+            "entity": "requirement",
+            "id": "R1",
+            "field": "desc"
+          },
+          "expectedDigest": "6ae83106f0493fa1a3fec0e2738517f22c5b7d70bb6c56433a086d7022cb0da2",
+          "reason": "Remove the stale shared-leaf denominator and make option-instance ownership and invariant verification observable.",
+          "edits": [
+            {
+              "startByte": 0,
+              "endByte": 430,
+              "replacement": "CommandDefinition/FLOW_COMMANDS が共有経路の option authority を保持する。専用クラスの constructor が name/aliases、flag・必須値・任意値の kind、placeholder、説明の invariant を強制し、args.flags/options/optionalOptions、leaf Options を同じ instance から投影する。query は bootstrapFlowQueryCli、src/flow/query.js、query-contract.js が所有する独立 parser 契約として共有経路から除外する。検証: registry integration で FLOW_COMMANDS を query 以外の全 shared leaf について実行時に再列挙し、各 leaf の option model と args 投影、暗黙の -h, --help、leaf Options の各行が同じ option instance の name/aliases、kind、placeholder、説明から生成されることを strict identity と canonical 行の比較で確認する。constructor の name/aliases、kind、placeholder、説明の不正 fixture は invariant 違反として拒否し、各 leaf の有効な argv fixture の受理結果と model の契約が一致し、registry の再列挙集合と option 行に欠落・余分・不一致がなく、query が含まれないことを期待する。"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "index": 1,
+      "findingIdentities": [
+        {
+          "sourceArtifact": "steps/spec-gate/result.json",
+          "sourceStep": "spec-gate",
+          "sourceFindingId": "spec-gate:9",
+          "fingerprint": "e1f20f1f86d54cdbd361ad819630561fb531acab43773f026dcc6368eae3e297"
+        }
+      ],
+      "operations": [
+        {
+          "kind": "replace-array-element",
+          "target": {
+            "collection": "acceptance_criteria",
+            "position": 4
+          },
+          "expectedDigest": "511d11a2ef5d5590f0327b6b67016009c5b0fd1465b9a51e5d16087ec1cda6ab",
+          "replacement": "query は同一の有効な JSON request を stdin と --request-file の各実入力経路で処理すると、両方とも exit 0 で schema-valid な同一 response を stdout に返す。query の help は入力なしで Usage を stdout に返して exit 0、invalid JSON・unsupported request・stdin と --request-file の同時指定は exit 1 で schema-valid な error response と既存 diagnostic を返し、canonical state を変更しない。docs scan、core help、plugin help は各実表示経路で exit 0 になり、共通 renderer が生成した対象の Usage/Options/Subcommands を stdout に表示する。",
+          "reason": "State the observable success, help, error, and no-mutation outcomes for every named display and query route."
+        }
+      ]
+    },
+    {
+      "index": 2,
+      "findingIdentities": [
+        {
+          "sourceArtifact": "steps/spec-gate/result.json",
+          "sourceStep": "spec-gate",
+          "sourceFindingId": "spec-gate:3",
+          "fingerprint": "c7c34a3ce051c2d6622bd143c42741ab0df674e7fb792b3cd61484d416b1d927"
+        }
+      ],
+      "operations": [
+        {
+          "kind": "edit-text-field",
+          "target": {
+            "entity": "requirement",
+            "id": "R4",
+            "field": "desc"
+          },
+          "expectedDigest": "e36accd351e3131d8f3fbbc6ee398d7e4297351079dc885f8f53432235f74fa7",
+          "reason": "Replace conflicting fixed counts with the current registry enumeration and bind the inventory to an exact observable comparison.",
+          "edits": [
+            {
+              "startByte": 0,
+              "endByte": 283,
+              "replacement": "共有経路の canonical registry leaf inventory は、query を除く FLOW_COMMANDS の全 shared leaf を対象にし、query と共有経路を合計する leaf count は registry 再帰走査の結果として記録する。query は独立 parser 契約として定義し、以下の inventory は registry を再帰走査した全 shared leaf を一度ずつ列挙する。"
+            },
+            {
+              "startByte": 35396,
+              "endByte": 35396,
+              "replacement": "\n\n検証: registry integration で query を明示的な例外として除外し、実行時の再帰走査結果と inventory の leaf、各 positional/rest/option/guard/help/usage/owner 行を一対一で照合する。各 shared leaf が一度だけ現れ、再列挙件数と合計が一致し、query の独立契約が混入しないことを期待する。"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "index": 3,
+      "findingIdentities": [
+        {
+          "sourceArtifact": "steps/spec-gate/result.json",
+          "sourceStep": "spec-gate",
+          "sourceFindingId": "spec-gate:5",
+          "fingerprint": "a22bc3e93054c7dc556a3031be1aa4d430dfa2e7bfd3db7f0da8e3bbc62ce19f"
+        },
+        {
+          "sourceArtifact": "steps/spec-gate/result.json",
+          "sourceStep": "spec-gate",
+          "sourceFindingId": "spec-gate:8",
+          "fingerprint": "da16e0d64fae6422e24dfd3840a4df4269b10d38af999b244c8a0b8bd62c694d"
+        }
+      ],
+      "operations": [
+        {
+          "kind": "edit-text-field",
+          "target": {
+            "entity": "requirement",
+            "id": "R11",
+            "field": "desc"
+          },
+          "expectedDigest": "1bbb1b1eb00945b99d4dc08be501d53685890fc44497aac403ecc24db7c748f3",
+          "reason": "Keep query outside the dynamically enumerated shared matrix and specify each route's observable result.",
+          "edits": [
+            {
+              "startByte": 0,
+              "endByte": 327,
+              "replacement": "query は bootstrapFlowQueryCli、src/flow/query.js、query-contract.js の独立 parser とし、共有 option/admission/help 投影と、FLOW_COMMANDS から再列挙した shared leaf matrix から一貫して除外する。stdin、--request-file、help、error の実経路を保持する。検証: tests/integration/flow/query.test.js と CLI E2E で、有効な同一 JSON request を stdin と --request-file から与えたときに両方が exit 0 で schema-valid な同一 response を stdout に返すこと、help は request なしで Usage を stdout に返して exit 0 になること、invalid JSON・unsupported request・stdin と --request-file の同時指定は exit 1 で schema-valid な query error response と既存 diagnostic を返し canonical state を変更しないことを確認する。"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "index": 4,
+      "findingIdentities": [
+        {
+          "sourceArtifact": "steps/spec-gate/result.json",
+          "sourceStep": "spec-gate",
+          "sourceFindingId": "spec-gate:7",
+          "fingerprint": "c8bc5b3ca47f50863a641902d7004b1ff2816567c339e5abcb8b3dd91f1a3e02"
+        }
+      ],
+      "operations": [
+        {
+          "kind": "edit-text-field",
+          "target": {
+            "entity": "requirement",
+            "id": "R2",
+            "field": "desc"
+          },
+          "expectedDigest": "c0cebf40d7ce4442d5f948f544b5ff754201209df7017c2a25f83d6407b5b5a6",
+          "reason": "Add observable preservation checks for command-specific prose, examples, and translations alongside option rows.",
+          "edits": [
+            {
+              "startByte": 0,
+              "endByte": 407,
+              "replacement": "各共有 leaf の Options に受理する明示 option と暗黙の -h, --help を canonical 行で各一回表示する。alias は同じ行、必須値と任意値は区別できる表記とし、Usage/例の再掲は重複数に含めない。command 固有 prose・例・翻訳は維持する。検証: 現行 registry から query を除く全 shared leaf を再列挙し、各 leaf の input option model と実 CLI の resume/prepare/run abort を含む代表的な help 表示を照合する。Options の canonical 行は各 option 一回、alias 同一行、必須値/任意値の placeholder 区別、暗黙の help を満たし、command 固有 prose・例・翻訳は対応する registry/localized help の期待テキストとして残り、欠落・改変がないことを確認する。"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "index": 5,
+      "findingIdentities": [
+        {
+          "sourceArtifact": "steps/spec-gate/result.json",
+          "sourceStep": "spec-gate",
+          "sourceFindingId": "spec-gate:2",
+          "fingerprint": "d7784bffc2ce805e533dc2966bfa551a76ceb4213d2429e7c8a133d5a4a30d81"
+        }
+      ],
+      "operations": [
+        {
+          "kind": "edit-text-field",
+          "target": {
+            "entity": "requirement",
+            "id": "R3",
+            "field": "desc"
+          },
+          "expectedDigest": "8049da91f0249a33c614a83d6607feb522fe616a3887cf7db7a614150edde816",
+          "reason": "Resolve the stale run count by making group membership and counts derive from the current registry.",
+          "edits": [
+            {
+              "startByte": 0,
+              "endByte": 361,
+              "replacement": "group options はその group の全 direct child leaf の完全な option 契約（aliases、value kind を含む）の積集合とする。get、set、run、report/show の direct child leaf 集合と件数は実装時の FLOW_COMMANDS を再列挙して確定し、query や過去の監査・再開始時点の固定件数を group 契約に混入させない。--agent-work-dir は run の direct child leaf の共通 option としてのみ表示する。検証: 四 group の direct child を registry から再列挙し、各 leaf の option 契約（name、aliases、flag/必須値/任意値の kind、placeholder、説明）の集合を比較して表示集合と期待積集合を一致させる。get/set/report/show に --agent-work-dir や direct child が受理しない option がなく、run だけにその option があり、query が group 集合に含まれないことを確認する。"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "index": 6,
+      "findingIdentities": [
+        {
+          "sourceArtifact": "steps/spec-gate/result.json",
+          "sourceStep": "spec-gate",
+          "sourceFindingId": "spec-gate:4",
+          "fingerprint": "5d9c99c8d590b6a5d8a2553ec16862e479773dd01d9b677b399d9237cf532817"
+        }
+      ],
+      "operations": [
+        {
+          "kind": "edit-text-field",
+          "target": {
+            "entity": "requirement",
+            "id": "R5",
+            "field": "desc"
+          },
+          "expectedDigest": "aaaa46d39173aa5da323b17a44284d93dae0a338f31c95ba819cb5663ca87e22",
+          "reason": "Remove the contradictory fixed inventory count while retaining the full per-leaf contract and making enumeration dynamic.",
+          "edits": [
+            {
+              "startByte": 0,
+              "endByte": 127,
+              "replacement": "入力の意味と検証主体を、query を除く FLOW_COMMANDS の全 shared leaf と query の独立契約ごとに保持する。"
+            },
+            {
+              "startByte": 7253,
+              "endByte": 7325,
+              "replacement": "検証は leaf ごとに入力と期待結果を一対で実行する。FLOW_COMMANDS から query を除く全 shared leaf を再列挙し、各列挙値の一つの valid fixture は entry boundary を通過して owner の既存 success envelope または次の state transition を返す。"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "discardedGroups": [],
+  "operationDigest": "7c7d8388afaa8e6de3e105d77fb60852db2d43fbf08f90b6a76a06783148717b",
+  "resultRevision": {
+    "digest": "e6fc23f24f551093e41d5d08c199e578b239e5134f1cad2e98c9a1a1ec7e0469",
+    "byteLength": 72258
+  },
+  "sourceReviewIdentity": {
+    "specId": "6a9b5488-flow-help-contract",
+    "revision": 21,
+    "digest": "2e65e4487415496c3f01dc73e5e24418e5e824e7e6cc7666b817186a5159f9bf",
+    "byteLength": 69826
+  },
+  "sourceEvidenceIdentity": {
+    "sourceAttempt": {
+      "id": "attempt-spec-gate-a1e728c5-d122-42dc-9787-ef8f601b7fdf",
+      "sequence": 12
+    },
+    "resultLogicalKey": "spec.gate",
+    "publicationActivityId": "plan-gate-repaired-3dc13433-afc3-495c-a0bd-a5d80eb67910",
+    "catalogFingerprint": "fdc127f75dadd0ed4833d6b65eccb89390300e43d178ff5679cde2fab8180a90",
+    "transitionLineage": {
+      "sourceAttempt": {
+        "id": "attempt-spec-gate-a1e728c5-d122-42dc-9787-ef8f601b7fdf",
+        "sequence": 12
+      },
+      "canonicalAttempt": {
+        "id": "attempt-spec-gate-a1e728c5-d122-42dc-9787-ef8f601b7fdf",
+        "sequence": 12
+      },
+      "sourceFingerprint": "ce2e7c636318d7378562ca1174a2496de3ce40dedb607a332e327abe1be4ac80",
+      "canonicalFingerprint": "fdc127f75dadd0ed4833d6b65eccb89390300e43d178ff5679cde2fab8180a90",
+      "sourceRevisionFingerprint": "bb74be4478509c54640e1fe1702fc6f0ec70c6e16885349cba7641127f2291d6",
+      "canonicalRevisionFingerprint": "bb74be4478509c54640e1fe1702fc6f0ec70c6e16885349cba7641127f2291d6"
+    }
+  },
+  "sourceFindingIdentities": [
+    {
+      "sourceArtifact": "steps/spec-gate/result.json",
+      "sourceStep": "spec-gate",
+      "sourceFindingId": "spec-gate:1",
+      "fingerprint": "5565bc27839c29f3cff19b63288fadf1648c4ff29ec6b37ac4b2f92550ab9df7"
+    },
+    {
+      "sourceArtifact": "steps/spec-gate/result.json",
+      "sourceStep": "spec-gate",
+      "sourceFindingId": "spec-gate:6",
+      "fingerprint": "f77ca8bca03402cf19144ea991c8e2a78d9efe66c0ced1219c7767c05597567f"
+    },
+    {
+      "sourceArtifact": "steps/spec-gate/result.json",
+      "sourceStep": "spec-gate",
+      "sourceFindingId": "spec-gate:9",
+      "fingerprint": "e1f20f1f86d54cdbd361ad819630561fb531acab43773f026dcc6368eae3e297"
+    },
+    {
+      "sourceArtifact": "steps/spec-gate/result.json",
+      "sourceStep": "spec-gate",
+      "sourceFindingId": "spec-gate:3",
+      "fingerprint": "c7c34a3ce051c2d6622bd143c42741ab0df674e7fb792b3cd61484d416b1d927"
+    },
+    {
+      "sourceArtifact": "steps/spec-gate/result.json",
+      "sourceStep": "spec-gate",
+      "sourceFindingId": "spec-gate:5",
+      "fingerprint": "a22bc3e93054c7dc556a3031be1aa4d430dfa2e7bfd3db7f0da8e3bbc62ce19f"
+    },
+    {
+      "sourceArtifact": "steps/spec-gate/result.json",
+      "sourceStep": "spec-gate",
+      "sourceFindingId": "spec-gate:8",
+      "fingerprint": "da16e0d64fae6422e24dfd3840a4df4269b10d38af999b244c8a0b8bd62c694d"
+    },
+    {
+      "sourceArtifact": "steps/spec-gate/result.json",
+      "sourceStep": "spec-gate",
+      "sourceFindingId": "spec-gate:7",
+      "fingerprint": "c8bc5b3ca47f50863a641902d7004b1ff2816567c339e5abcb8b3dd91f1a3e02"
+    },
+    {
+      "sourceArtifact": "steps/spec-gate/result.json",
+      "sourceStep": "spec-gate",
+      "sourceFindingId": "spec-gate:2",
+      "fingerprint": "d7784bffc2ce805e533dc2966bfa551a76ceb4213d2429e7c8a133d5a4a30d81"
+    },
+    {
+      "sourceArtifact": "steps/spec-gate/result.json",
+      "sourceStep": "spec-gate",
+      "sourceFindingId": "spec-gate:4",
+      "fingerprint": "5d9c99c8d590b6a5d8a2553ec16862e479773dd01d9b677b399d9237cf532817"
+    }
+  ],
+  "observationIdentities": [
+    {
+      "sourceArtifact": "steps/spec-gate/result.json",
+      "sourceStep": "spec-gate",
+      "sourceFindingId": "spec-gate:1",
+      "fingerprint": "5565bc27839c29f3cff19b63288fadf1648c4ff29ec6b37ac4b2f92550ab9df7"
+    },
+    {
+      "sourceArtifact": "steps/spec-gate/result.json",
+      "sourceStep": "spec-gate",
+      "sourceFindingId": "spec-gate:2",
+      "fingerprint": "d7784bffc2ce805e533dc2966bfa551a76ceb4213d2429e7c8a133d5a4a30d81"
+    },
+    {
+      "sourceArtifact": "steps/spec-gate/result.json",
+      "sourceStep": "spec-gate",
+      "sourceFindingId": "spec-gate:3",
+      "fingerprint": "c7c34a3ce051c2d6622bd143c42741ab0df674e7fb792b3cd61484d416b1d927"
+    },
+    {
+      "sourceArtifact": "steps/spec-gate/result.json",
+      "sourceStep": "spec-gate",
+      "sourceFindingId": "spec-gate:4",
+      "fingerprint": "5d9c99c8d590b6a5d8a2553ec16862e479773dd01d9b677b399d9237cf532817"
+    },
+    {
+      "sourceArtifact": "steps/spec-gate/result.json",
+      "sourceStep": "spec-gate",
+      "sourceFindingId": "spec-gate:5",
+      "fingerprint": "a22bc3e93054c7dc556a3031be1aa4d430dfa2e7bfd3db7f0da8e3bbc62ce19f"
+    },
+    {
+      "sourceArtifact": "steps/spec-gate/result.json",
+      "sourceStep": "spec-gate",
+      "sourceFindingId": "spec-gate:6",
+      "fingerprint": "f77ca8bca03402cf19144ea991c8e2a78d9efe66c0ced1219c7767c05597567f"
+    },
+    {
+      "sourceArtifact": "steps/spec-gate/result.json",
+      "sourceStep": "spec-gate",
+      "sourceFindingId": "spec-gate:7",
+      "fingerprint": "c8bc5b3ca47f50863a641902d7004b1ff2816567c339e5abcb8b3dd91f1a3e02"
+    },
+    {
+      "sourceArtifact": "steps/spec-gate/result.json",
+      "sourceStep": "spec-gate",
+      "sourceFindingId": "spec-gate:8",
+      "fingerprint": "da16e0d64fae6422e24dfd3840a4df4269b10d38af999b244c8a0b8bd62c694d"
+    },
+    {
+      "sourceArtifact": "steps/spec-gate/result.json",
+      "sourceStep": "spec-gate",
+      "sourceFindingId": "spec-gate:9",
+      "fingerprint": "e1f20f1f86d54cdbd361ad819630561fb531acab43773f026dcc6368eae3e297"
+    }
+  ],
+  "repairId": "plan-gate-repair-968275fa19972f3549c8c3a8a5bfbb1555e73d5371c66f895e222fb3c33af4dc",
+  "repairRecordFingerprint": "968275fa19972f3549c8c3a8a5bfbb1555e73d5371c66f895e222fb3c33af4dc",
+  "targetAttempt": {
+    "id": "attempt-spec-gate-repair-59704284-c129-4744-9104-5d50efeba911",
+    "sequence": 10
+  },
+  "observationResults": [
+    {
+      "fingerprint": "e51fd1b6cb4fbf9261a7fccf248e69734a017f733e299767b4a1b48015603e99",
+      "strategy": "sha256:ff85dddababd28b5203efc20386fc4014de5228070bb3eb0f136f1a94f8c9f3a",
+      "summary": "Remove the stale shared-leaf denominator and make option-instance ownership and invariant verification observable.",
+      "priorRepairInsufficiency": null,
+      "groupIndices": [
+        0
+      ]
+    },
+    {
+      "fingerprint": "15c7c7d4ce6fa7dcecc8db3cf4093ea0ada25f0c8c382254822ec8a876d145f4",
+      "strategy": "sha256:5f14f4963f63ffd1470b892f9d510bde2c9541f98498e5d14636607ab749cc41",
+      "summary": "Resolve the stale run count by making group membership and counts derive from the current registry.",
+      "priorRepairInsufficiency": null,
+      "groupIndices": [
+        5
+      ]
+    },
+    {
+      "fingerprint": "3ecd795cd5861c0c01d95612acf6170e0426841190a066bc77fc35f16067863f",
+      "strategy": "sha256:2313cb08fc3c9b7d29f3922836dd5f805451b485f05c4ca8e9fa19c96d6e592f",
+      "summary": "Replace conflicting fixed counts with the current registry enumeration and bind the inventory to an exact observable comparison.",
+      "priorRepairInsufficiency": null,
+      "groupIndices": [
+        2
+      ]
+    },
+    {
+      "fingerprint": "e3d1b35ded472d44e3eae8d338c4d5b7885282bb103a0e80b6ad74d583a26c25",
+      "strategy": "sha256:860500d607cce59935cd74fda09a8b6f6ac7ecadaf075ef209ed554aa3628464",
+      "summary": "Remove the contradictory fixed inventory count while retaining the full per-leaf contract and making enumeration dynamic.",
+      "priorRepairInsufficiency": null,
+      "groupIndices": [
+        6
+      ]
+    },
+    {
+      "fingerprint": "33f991e0877a3cc0a4e2e5a2713e64fb316b622a652a2a028c4b4d8fa1b69bac",
+      "strategy": "sha256:27d734dc0a9639b281231466641001759f43b8001b1114ac59e8c233c9e4c10d",
+      "summary": "Keep query outside the dynamically enumerated shared matrix and specify each route's observable result.",
+      "priorRepairInsufficiency": null,
+      "groupIndices": [
+        3
+      ]
+    },
+    {
+      "fingerprint": "81999601599448da6f99c75998910401d2a63134b1bfb9fff92da43dc8e3f768",
+      "strategy": "sha256:ff85dddababd28b5203efc20386fc4014de5228070bb3eb0f136f1a94f8c9f3a",
+      "summary": "Remove the stale shared-leaf denominator and make option-instance ownership and invariant verification observable.",
+      "priorRepairInsufficiency": null,
+      "groupIndices": [
+        0
+      ]
+    },
+    {
+      "fingerprint": "4750c2bbf72b0e88a62f91efeaddf267f665f64e9669379586a1dafba3d15079",
+      "strategy": "sha256:42502540e7d43502a0def9a67c9fc98c8759b9e2d6f5e761d61502af29d51b41",
+      "summary": "Add observable preservation checks for command-specific prose, examples, and translations alongside option rows.",
+      "priorRepairInsufficiency": null,
+      "groupIndices": [
+        4
+      ]
+    },
+    {
+      "fingerprint": "06495b4f08455c6c33c52a5d879868960e9ea838ca96730f8f440e114c881b13",
+      "strategy": "sha256:27d734dc0a9639b281231466641001759f43b8001b1114ac59e8c233c9e4c10d",
+      "summary": "Keep query outside the dynamically enumerated shared matrix and specify each route's observable result.",
+      "priorRepairInsufficiency": null,
+      "groupIndices": [
+        3
+      ]
+    },
+    {
+      "fingerprint": "a79670ec31f7b10f5e56caef5d3923af8ab11c932f1f4c77bf44a4773221df25",
+      "strategy": "sha256:4f1bbb836c60333f3a9a47495a739e59d6f1214c0cfde00710eda31a5223e7d7",
+      "summary": "State the observable success, help, error, and no-mutation outcomes for every named display and query route.",
+      "priorRepairInsufficiency": null,
+      "groupIndices": [
+        1
+      ]
+    }
+  ],
+  "reviewFacts": {
+    "version": 1,
+    "baseRevision": "sha256:2916e4ecafb16388aa1f6357dd0d2991017115aa052ae79ae4ffbcbd7d1a8294",
+    "resultRevision": {
+      "digest": "e6fc23f24f551093e41d5d08c199e578b239e5134f1cad2e98c9a1a1ec7e0469",
+      "byteLength": 72258
+    },
+    "sourceReviewIdentity": {
+      "specId": "6a9b5488-flow-help-contract",
+      "revision": 21,
+      "digest": "2e65e4487415496c3f01dc73e5e24418e5e824e7e6cc7666b817186a5159f9bf",
+      "byteLength": 69826
+    },
+    "sourceReviewDigest": "bf1f413a08d83a7266f9f7a6bf69ae0e7a6b3f28f21a2840659e0a421a264579",
+    "sourceReviewArtifact": "revisions/021/review.json",
+    "sourceSpecDigest": "deae98d136e26d206744c6a67d8b869bf0e5fe72059f705e1a890100c5c674b6",
+    "resultSpecDigest": "c18d19a905d07e40c77164b61f24a6cca4a9b3fb91b9af0e3a610280260adf8b",
+    "findings": [
+      {
+        "identity": {
+          "sourceArtifact": "revisions/021/review.json",
+          "sourceStep": "spec-review",
+          "sourceFindingId": "spec-review-0348b1974af7acf536e9fce00858080f",
+          "fingerprint": "65cf789de4c15cf18edd730acaede59ce12f07aa9e5a6386feea0e942a42e8ec"
+        },
+        "finding": {
+          "allowedTargets": [
+            {
+              "operationKinds": [
+                "edit-text-field"
+              ],
+              "target": {
+                "entity": "spec",
+                "field": "background"
+              }
+            },
+            {
+              "operationKinds": [
+                "edit-text-field"
+              ],
+              "target": {
+                "entity": "requirement",
+                "field": "desc",
+                "id": "R1"
+              }
+            },
+            {
+              "operationKinds": [
+                "edit-text-field"
+              ],
+              "target": {
+                "entity": "requirement",
+                "field": "desc",
+                "id": "R3"
+              }
+            },
+            {
+              "operationKinds": [
+                "edit-text-field"
+              ],
+              "target": {
+                "entity": "requirement",
+                "field": "desc",
+                "id": "R4"
+              }
+            },
+            {
+              "operationKinds": [
+                "edit-text-field"
+              ],
+              "target": {
+                "entity": "requirement",
+                "field": "desc",
+                "id": "R5"
+              }
+            },
+            {
+              "operationKinds": [
+                "edit-text-field"
+              ],
+              "target": {
+                "entity": "requirement",
+                "field": "desc",
+                "id": "R8"
+              }
+            },
+            {
+              "operationKinds": [
+                "replace-array-element"
+              ],
+              "target": {
+                "collection": "acceptance_criteria"
+              }
+            }
+          ],
+          "body": "**Target:** Background/R1/R3/R4/R5/R8/Acceptance; src/flow/registry.js:2394-2406\n**Issue:** The spec alternates between 67 total/66 shared and 66 total/65 shared. The checked-out registry currently has 68 leaves (67 shared plus query) because run recover-spec-gate-repair is registered but absent from the inventory.\n**Required change:** Pin the contract to one registry snapshot and make all counts, inventory, and acceptance criteria consistent; include recover-spec-gate-repair or explicitly exclude that registered entry.\n**Why blocking:** A registry-derived implementation and full parser/help matrix cannot determine whether this public command must be projected and tested.",
+          "disposition": "apply",
+          "evidence": "The immutable Spec still mixes denominators: Background and the clarification use 67 total/66 shared plus query, while R4 and R5 use 66 total/65 shared; the registry-derived implementation and acceptance matrix therefore remain ambiguous.",
+          "findingId": "spec-review-0348b1974af7acf536e9fce00858080f",
+          "issue": "The spec alternates between 67 total/66 shared and 66 total/65 shared. The checked-out registry currently has 68 leaves (67 shared plus query) because run recover-spec-gate-repair is registered but absent from the inventory.",
+          "kind": "blocking",
+          "requiredChange": "Pin the contract to one registry snapshot and make all counts, inventory, and acceptance criteria consistent; include recover-spec-gate-repair or explicitly exclude that registered entry.",
+          "target": "Background/R1/R3/R4/R5/R8/Acceptance; src/flow/registry.js:2394-2406",
+          "title": "Leaf inventory has conflicting denominators and does not match the registry",
+          "whyBlocking": "A registry-derived implementation and full parser/help matrix cannot determine whether this public command must be projected and tested."
+        },
+        "relatedChanges": [
+          {
+            "groupIndex": 0,
+            "operationIndex": 0,
+            "target": {
+              "entity": "requirement",
+              "id": "R1",
+              "field": "desc"
+            },
+            "gateFindingIdentities": [
+              {
+                "sourceArtifact": "steps/spec-gate/result.json",
+                "sourceStep": "spec-gate",
+                "sourceFindingId": "spec-gate:1",
+                "fingerprint": "5565bc27839c29f3cff19b63288fadf1648c4ff29ec6b37ac4b2f92550ab9df7"
+              },
+              {
+                "sourceArtifact": "steps/spec-gate/result.json",
+                "sourceStep": "spec-gate",
+                "sourceFindingId": "spec-gate:6",
+                "fingerprint": "f77ca8bca03402cf19144ea991c8e2a78d9efe66c0ced1219c7767c05597567f"
+              }
+            ]
+          },
+          {
+            "groupIndex": 1,
+            "operationIndex": 0,
+            "target": {
+              "collection": "acceptance_criteria",
+              "position": 4
+            },
+            "gateFindingIdentities": [
+              {
+                "sourceArtifact": "steps/spec-gate/result.json",
+                "sourceStep": "spec-gate",
+                "sourceFindingId": "spec-gate:9",
+                "fingerprint": "e1f20f1f86d54cdbd361ad819630561fb531acab43773f026dcc6368eae3e297"
+              }
+            ]
+          },
+          {
+            "groupIndex": 2,
+            "operationIndex": 0,
+            "target": {
+              "entity": "requirement",
+              "id": "R4",
+              "field": "desc"
+            },
+            "gateFindingIdentities": [
+              {
+                "sourceArtifact": "steps/spec-gate/result.json",
+                "sourceStep": "spec-gate",
+                "sourceFindingId": "spec-gate:3",
+                "fingerprint": "c7c34a3ce051c2d6622bd143c42741ab0df674e7fb792b3cd61484d416b1d927"
+              }
+            ]
+          },
+          {
+            "groupIndex": 5,
+            "operationIndex": 0,
+            "target": {
+              "entity": "requirement",
+              "id": "R3",
+              "field": "desc"
+            },
+            "gateFindingIdentities": [
+              {
+                "sourceArtifact": "steps/spec-gate/result.json",
+                "sourceStep": "spec-gate",
+                "sourceFindingId": "spec-gate:2",
+                "fingerprint": "d7784bffc2ce805e533dc2966bfa551a76ceb4213d2429e7c8a133d5a4a30d81"
+              }
+            ]
+          },
+          {
+            "groupIndex": 6,
+            "operationIndex": 0,
+            "target": {
+              "entity": "requirement",
+              "id": "R5",
+              "field": "desc"
+            },
+            "gateFindingIdentities": [
+              {
+                "sourceArtifact": "steps/spec-gate/result.json",
+                "sourceStep": "spec-gate",
+                "sourceFindingId": "spec-gate:4",
+                "fingerprint": "5d9c99c8d590b6a5d8a2553ec16862e479773dd01d9b677b399d9237cf532817"
+              }
+            ]
+          }
+        ],
+        "unresolvedBlocking": true
+      },
+      {
+        "identity": {
+          "sourceArtifact": "revisions/021/review.json",
+          "sourceStep": "spec-review",
+          "sourceFindingId": "spec-review-23f1c841bd7ee91995f66563e5462f36",
+          "fingerprint": "9c23bd681829ba822ff4d2e1919c331ffe758cf60a5556efac76147556e00f37"
+        },
+        "finding": {
+          "allowedTargets": [
+            {
+              "operationKinds": [
+                "edit-text-field"
+              ],
+              "target": {
+                "entity": "requirement",
+                "field": "desc",
+                "id": "R4"
+              }
+            },
+            {
+              "operationKinds": [
+                "edit-text-field"
+              ],
+              "target": {
+                "entity": "requirement",
+                "field": "desc",
+                "id": "R6"
+              }
+            },
+            {
+              "operationKinds": [
+                "edit-text-field"
+              ],
+              "target": {
+                "entity": "requirement",
+                "field": "desc",
+                "id": "R9"
+              }
+            }
+          ],
+          "body": "**Target:** R4/R6/R9; src/lib/config.js:114-116 and src/lib/container.js:100-107\n**Issue:** W requires an existing canonical real directory and tests file, nonexistent, and relative paths as rejects. The current resolver only applies path.resolve; relative/nonexistent overrides are supported, and Agent.ensureWorkDir creates the directory later.\n**Required change:** Define W using the existing resolveWorkDir/ensureWorkDir contract, or explicitly authorize a runtime-path behavior change and remove the preservation conflict.\n**Why blocking:** The implementation cannot know whether to preserve current agent-work-dir initialization or add early rejection, and the specified runtime/config tests cannot both pass.",
+          "disposition": "apply",
+          "evidence": "The immutable Spec describes W as a canonical absolute real directory and asks for relative/nonexistent rejection in R4/R6, but R9 requires the existing resolver and path initialization behavior; the intended runtime contract is not singular.",
+          "findingId": "spec-review-23f1c841bd7ee91995f66563e5462f36",
+          "issue": "W requires an existing canonical real directory and tests file, nonexistent, and relative paths as rejects. The current resolver only applies path.resolve; relative/nonexistent overrides are supported, and Agent.ensureWorkDir creates the directory later.",
+          "kind": "blocking",
+          "requiredChange": "Define W using the existing resolveWorkDir/ensureWorkDir contract, or explicitly authorize a runtime-path behavior change and remove the preservation conflict.",
+          "target": "R4/R6/R9; src/lib/config.js:114-116 and src/lib/container.js:100-107",
+          "title": "W contradicts the existing runtime-directory resolver",
+          "whyBlocking": "The implementation cannot know whether to preserve current agent-work-dir initialization or add early rejection, and the specified runtime/config tests cannot both pass."
+        },
+        "relatedChanges": [
+          {
+            "groupIndex": 2,
+            "operationIndex": 0,
+            "target": {
+              "entity": "requirement",
+              "id": "R4",
+              "field": "desc"
+            },
+            "gateFindingIdentities": [
+              {
+                "sourceArtifact": "steps/spec-gate/result.json",
+                "sourceStep": "spec-gate",
+                "sourceFindingId": "spec-gate:3",
+                "fingerprint": "c7c34a3ce051c2d6622bd143c42741ab0df674e7fb792b3cd61484d416b1d927"
+              }
+            ]
+          }
+        ],
+        "unresolvedBlocking": true
+      },
+      {
+        "identity": {
+          "sourceArtifact": "revisions/021/review.json",
+          "sourceStep": "spec-review",
+          "sourceFindingId": "spec-review-b5f8a5a3e9ed77f76ebc37c51faa65dc",
+          "fingerprint": "47b3b738febf09bb2c351bd2a7be82e82d622df5ee3ff69f093082f451ba4d98"
+        },
+        "finding": {
+          "allowedTargets": [
+            {
+              "operationKinds": [
+                "edit-text-field"
+              ],
+              "target": {
+                "entity": "requirement",
+                "field": "desc",
+                "id": "R4"
+              }
+            },
+            {
+              "operationKinds": [
+                "edit-text-field"
+              ],
+              "target": {
+                "entity": "requirement",
+                "field": "desc",
+                "id": "R5"
+              }
+            },
+            {
+              "operationKinds": [
+                "replace-array-element"
+              ],
+              "target": {
+                "collection": "constraints"
+              }
+            }
+          ],
+          "body": "**Target:** R4/R5; backward-compatible-cli-interface; src/lib/dispatcher.js:113-154 and src/lib/cli.js:50-85\n**Issue:** F is defined as single-occurrence and duplicate flags must reject, but the existing parser accepts repeated flags and repeated value options, with the last value winning.\n**Required change:** Specify whether duplicate flags retain existing acceptance semantics or become an intentional CLI behavior change, including the corresponding compatibility exception.\n**Why blocking:** The all-leaf matrix has no determinate expected result for duplicate probes, and parser-wide rejection changes existing input acceptance beyond the stated scope.",
+          "disposition": "apply",
+          "evidence": "The immutable Spec requires a flag to occur once and calls for duplicate rejection in R4/R5, while its backward-compatible CLI constraint preserves existing parser semantics and the supplied finding reports repeated options are currently accepted; no compatibility exception or selected duplicate policy is stated.",
+          "findingId": "spec-review-b5f8a5a3e9ed77f76ebc37c51faa65dc",
+          "issue": "F is defined as single-occurrence and duplicate flags must reject, but the existing parser accepts repeated flags and repeated value options, with the last value winning.",
+          "kind": "blocking",
+          "requiredChange": "Specify whether duplicate flags retain existing acceptance semantics or become an intentional CLI behavior change, including the corresponding compatibility exception.",
+          "target": "R4/R5; backward-compatible-cli-interface; src/lib/dispatcher.js:113-154 and src/lib/cli.js:50-85",
+          "title": "Duplicate-flag behavior conflicts with the shared parser",
+          "whyBlocking": "The all-leaf matrix has no determinate expected result for duplicate probes, and parser-wide rejection changes existing input acceptance beyond the stated scope."
+        },
+        "relatedChanges": [
+          {
+            "groupIndex": 2,
+            "operationIndex": 0,
+            "target": {
+              "entity": "requirement",
+              "id": "R4",
+              "field": "desc"
+            },
+            "gateFindingIdentities": [
+              {
+                "sourceArtifact": "steps/spec-gate/result.json",
+                "sourceStep": "spec-gate",
+                "sourceFindingId": "spec-gate:3",
+                "fingerprint": "c7c34a3ce051c2d6622bd143c42741ab0df674e7fb792b3cd61484d416b1d927"
+              }
+            ]
+          },
+          {
+            "groupIndex": 6,
+            "operationIndex": 0,
+            "target": {
+              "entity": "requirement",
+              "id": "R5",
+              "field": "desc"
+            },
+            "gateFindingIdentities": [
+              {
+                "sourceArtifact": "steps/spec-gate/result.json",
+                "sourceStep": "spec-gate",
+                "sourceFindingId": "spec-gate:4",
+                "fingerprint": "5d9c99c8d590b6a5d8a2553ec16862e479773dd01d9b677b399d9237cf532817"
+              }
+            ]
+          }
+        ],
+        "unresolvedBlocking": true
+      },
+      {
+        "identity": {
+          "sourceArtifact": "revisions/021/review.json",
+          "sourceStep": "spec-review",
+          "sourceFindingId": "spec-review-257371dac04ed346127f76025619b47d",
+          "fingerprint": "b068f6ce5c8b94c5a407bf42e8d4cc803f17066f8a4da1f79249187503f4244b"
+        },
+        "finding": {
+          "body": "**Target:** R1/R8/T1\n**Improvement:** State where optional displayOrder and localized subcommand summaries live; the current model stores summaries in helpConfig while preserving registry insertion order.\n**Why non-blocking:** The name-sorted fallback and existing metadata fields are sufficient to implement deterministic behavior.",
+          "findingId": "spec-review-257371dac04ed346127f76025619b47d",
+          "improvement": "State where optional displayOrder and localized subcommand summaries live; the current model stores summaries in helpConfig while preserving registry insertion order.",
+          "kind": "improvement",
+          "target": "R1/R8/T1",
+          "title": "Clarify display-order and summary ownership",
+          "whyNonBlocking": "The name-sorted fallback and existing metadata fields are sufficient to implement deterministic behavior."
+        },
+        "relatedChanges": [],
+        "unresolvedBlocking": false
+      },
+      {
+        "identity": {
+          "sourceArtifact": "revisions/021/review.json",
+          "sourceStep": "spec-review",
+          "sourceFindingId": "spec-review-622adcd60bc2116570ebfdb24a332af5",
+          "fingerprint": "25d06a780534e971ebefb978c1b37f14d1d171b716581ed28009b3a0ba8f1ca0"
+        },
+        "finding": {
+          "body": "**Target:** DF-29/30 and T6\n**Improvement:** List the exact docs, core-help, and plugin-help commands and observable output expected for the regression checks.\n**Why non-blocking:** The existing help renderer and tests provide an implementation/test path; this only improves scope precision.",
+          "findingId": "spec-review-622adcd60bc2116570ebfdb24a332af5",
+          "improvement": "List the exact docs, core-help, and plugin-help commands and observable output expected for the regression checks.",
+          "kind": "improvement",
+          "target": "DF-29/30 and T6",
+          "title": "Name concrete non-Flow regression commands",
+          "whyNonBlocking": "The existing help renderer and tests provide an implementation/test path; this only improves scope precision."
+        },
+        "relatedChanges": [],
+        "unresolvedBlocking": false
+      }
+    ],
+    "reviewInputPreserved": false,
+    "unresolvedBlocking": true,
+    "requiresReview": true,
+    "reason": "unresolved-blocking-review"
+  }
+}
