@@ -17,6 +17,7 @@ import {
   PromptInputBuilder,
   PromptRequestEnvelope,
   PromptRequestLimit,
+  RangedTextPromptElement,
 } from "../../lib/prompt-batching.js";
 import { MAX_SAME_SPEC_CONTRACT_CONTEXT_CHARS } from "./flow-context-limit.js";
 import {
@@ -25,8 +26,8 @@ import {
   stableArtifactViewJson,
 } from "./artifact-view-fingerprint.js";
 
-const SUMMARY_SCHEMA_REVISION = "artifact-view-summary-v3";
-const SUMMARY_CACHE_REVISION = "artifact-view-summary-cache-v3";
+const SUMMARY_SCHEMA_REVISION = "artifact-view-summary-v4";
+const SUMMARY_CACHE_REVISION = "artifact-view-summary-cache-v4";
 
 function plainText(value, field) {
   if (typeof value !== "string" || value.trim() === "") {
@@ -83,6 +84,28 @@ export class ArtifactViewSemanticUnit {
       `semantic unit ${this.id} identity`,
     );
     this.status = optionalText(value.status ?? metadata.status, `semantic unit ${this.id} status`);
+    if (new.target === ArtifactViewSemanticUnit) Object.freeze(this);
+  }
+}
+
+/** An exact transport range retaining its renderer-owned source identity. */
+export class ArtifactViewSummaryFragment extends ArtifactViewSemanticUnit {
+  constructor({ parent, id, start, end }) {
+    super(parent);
+    if (!(parent instanceof ArtifactViewSemanticUnit)
+      || parent instanceof ArtifactViewSummaryFragment
+      || !Number.isSafeInteger(start) || !Number.isSafeInteger(end)
+      || start < 0 || end <= start || end > parent.markdown.length) {
+      throw new ArtifactViewSummaryError("ARTIFACT_VIEW_SUMMARY_INVALID", "summary fragment requires a nonempty source range");
+    }
+    this.parent = parent;
+    this.id = requiredText(id, "summary fragment id");
+    if (this.id !== `${parent.id}@${start}:${end}`) {
+      throw new ArtifactViewSummaryError("ARTIFACT_VIEW_SUMMARY_INVALID", "summary fragment id must identify its exact parent range");
+    }
+    this.start = start;
+    this.end = end;
+    this.markdown = parent.markdown.slice(start, end);
     Object.freeze(this);
   }
 }
@@ -114,6 +137,25 @@ class ArtifactViewPromptElement extends AtomicPromptElement {
     });
     this.unit = unit;
     Object.freeze(this);
+  }
+}
+
+class ArtifactViewRangedPromptElement extends RangedTextPromptElement {
+  constructor({ unit, sequence, start = 0, end = unit.markdown.length, id = unit.id,
+    sourceRevision = artifactViewSha256(unit.markdown) }) {
+    super({ id, originId: unit.id, sourceRevision,
+      sequence, text: unit.markdown.slice(start, end), start, end, sourceLength: unit.markdown.length });
+    this.source = unit;
+    this.unit = start === 0 && end === unit.markdown.length && id === unit.id
+      ? unit : new ArtifactViewSummaryFragment({ parent: unit, id, start, end });
+    Object.freeze(this);
+  }
+
+  createRange({ start, end }) {
+    // Delegate range boundary validation to the shared ranged element.
+    const range = super.createRange({ start, end });
+    return new ArtifactViewRangedPromptElement({ unit: this.source, sequence: this.sequence,
+      id: range.id, start: range.start, end: range.end, sourceRevision: this.sourceRevision });
   }
 }
 
@@ -150,10 +192,58 @@ class ArtifactViewSummaryReducer extends PromptBatchReducer {
   }
 
   reduce(completions) {
-    return this.contract.createResult(
-      this.units,
-      completions.flatMap((completion) => completion.response),
-    );
+    const relevant = this.contract.relevantUnits(new ArtifactViewSummaryChunk(this.units));
+    const assemblies = relevant.map((unit) => new ArtifactViewSummaryAssembly(unit));
+    let sourceIndex = 0;
+    for (const completion of completions) {
+      const entries = new Map(completion.response.map((entry) => [entry.sourceRefs[0], entry]));
+      if (entries.size !== completion.response.length || entries.size !== completion.batch.payloadElements.length) {
+        throw new ArtifactViewSummaryError("ARTIFACT_VIEW_SUMMARY_INVALID", "summary transport coverage is duplicated or incomplete");
+      }
+      for (const element of completion.batch.payloadElements) {
+        const assembly = assemblies[sourceIndex];
+        if (!assembly) throw new ArtifactViewSummaryError("ARTIFACT_VIEW_SUMMARY_INVALID", "summary transport contains excess sources");
+        assembly.append(element.unit, entries.get(element.unit.id));
+        if (assembly.complete) sourceIndex += 1;
+      }
+    }
+    return this.contract.createResult(this.units, assemblies.map((assembly) => assembly.toEntry()));
+  }
+}
+
+/** Deterministic assembly; model output never chooses ranges or final IDs. */
+class ArtifactViewSummaryAssembly {
+  constructor(source) {
+    this.source = source;
+    this.end = 0;
+    this.excerpts = [];
+  }
+
+  get complete() { return this.end === this.source.markdown.length; }
+
+  append(unit, entry) {
+    const parent = unit instanceof ArtifactViewSummaryFragment ? unit.parent : unit;
+    const start = unit instanceof ArtifactViewSummaryFragment ? unit.start : 0;
+    const end = unit instanceof ArtifactViewSummaryFragment ? unit.end : unit.markdown.length;
+    if (parent !== this.source || start !== this.end || !entry
+      || entry.kind !== unit.kind || entry.identity !== unit.identity
+      || entry.sourceRefs.length !== 1 || entry.sourceRefs[0] !== unit.id
+      || entry.excerpt !== unit.markdown
+      || (unit.kind === "requirementJudgment" && entry.status !== unit.status)) {
+      throw new ArtifactViewSummaryError("ARTIFACT_VIEW_SUMMARY_INVALID", "summary transport changed source identity, range, order or text");
+    }
+    this.end = end;
+    this.excerpts.push(entry.excerpt);
+  }
+
+  toEntry() {
+    const excerpt = this.excerpts.join("");
+    if (!this.complete || excerpt !== this.source.markdown) {
+      throw new ArtifactViewSummaryError("ARTIFACT_VIEW_SUMMARY_INVALID", "summary transport omitted source coverage");
+    }
+    return new ArtifactViewSummaryEntry({ kind: this.source.kind, identity: this.source.identity,
+      status: this.source.kind === "requirementJudgment" ? this.source.status : null,
+      sourceRefs: [this.source.id], excerpt });
   }
 }
 
@@ -212,7 +302,7 @@ function excerptSchema(units) {
         maxItems: 1,
         items: { type: "string", enum: units.map((unit) => unit.id) },
       },
-      excerpt: { type: "string", enum: units.map((unit) => unit.markdown) },
+      excerpt: { type: "string", minLength: 1 },
     },
   };
 }
@@ -245,6 +335,12 @@ function uniqueIdentities(units, kind) {
   return identities;
 }
 
+function chunkIdentities(units, kind) {
+  return uniqueIdentities([...new Set(units.map((unit) => (
+    unit instanceof ArtifactViewSummaryFragment ? unit.parent : unit
+  )))], kind);
+}
+
 /** One accepted source-exact output value. */
 export class ArtifactViewSummaryExcerpt {
   constructor({ sourceRefs, excerpt } = {}, { freeze = true } = {}) {
@@ -257,7 +353,10 @@ export class ArtifactViewSummaryExcerpt {
     if (new Set(this.sourceRefs).size !== this.sourceRefs.length) {
       throw new ArtifactViewSummaryError("ARTIFACT_VIEW_SUMMARY_INVALID", "summary sourceRefs must not contain duplicates");
     }
-    this.excerpt = requiredText(excerpt, "summary excerpt");
+    if (typeof excerpt !== "string" || excerpt.length === 0) {
+      throw new ArtifactViewSummaryError("ARTIFACT_VIEW_SUMMARY_INVALID", "summary excerpt must be a nonempty string");
+    }
+    this.excerpt = excerpt;
     if (freeze) Object.freeze(this);
   }
 }
@@ -307,11 +406,14 @@ function assertExactExcerpt(unit, value) {
 
 function validateSingular(value, property, expected, kind) {
   if (expected.length === 0) return [];
-  if (expected.length !== 1) {
-    throw new ArtifactViewSummaryError("ARTIFACT_VIEW_SUMMARY_INVALID", `${kind} full view must contain one ${property} unit`);
+  const returned = expected.length === 1 ? [value[property]] : value[property];
+  if (!Array.isArray(returned) || returned.length !== expected.length) {
+    throw new ArtifactViewSummaryError("ARTIFACT_VIEW_SUMMARY_INVALID", `summary ${property} must retain every source range`);
   }
-  const excerpt = assertExactExcerpt(expected[0], value[property]);
-  return [new ArtifactViewSummaryEntry({ kind, sourceRefs: excerpt.sourceRefs, excerpt: excerpt.excerpt })];
+  return returned.map((item, index) => {
+    const excerpt = assertExactExcerpt(expected[index], item);
+    return new ArtifactViewSummaryEntry({ kind, sourceRefs: excerpt.sourceRefs, excerpt: excerpt.excerpt });
+  });
 }
 
 function validateCollection(value, property, expected, kind, identityName, { status = false } = {}) {
@@ -423,20 +525,22 @@ export class ArtifactViewSummaryContract {
   createResult(_units, _entries) { throw new Error("summary contract must implement createResult"); }
 
   prompt(chunk) {
-    const schema = this.schemaForChunk(chunk);
-    const allowed = this.relevantUnits(chunk).map((unit) => (
-      `- ${unit.id} (${unit.kind}${unit.identity == null ? "" : `: ${unit.identity}`})`
-    ));
+    const sources = this.relevantUnits(chunk).map((unit) => {
+      const parent = unit instanceof ArtifactViewSummaryFragment ? unit.parent : unit;
+      return { sourceRef: unit.id, parentSourceRef: parent.id, kind: unit.kind,
+        identity: unit.identity, status: unit.status,
+        start: unit instanceof ArtifactViewSummaryFragment ? unit.start : 0,
+        end: unit instanceof ArtifactViewSummaryFragment ? unit.end : unit.markdown.length,
+        sourceLength: parent.markdown.length, excerpt: unit.markdown };
+    });
     return [
       "Return only JSON that satisfies the supplied schema.",
       "Every returned excerpt must copy its cited source section exactly. Do not paraphrase, judge, recommend, merge, omit, or reorder items.",
       "A source section is its complete renderer-declared Markdown range. Include its first Markdown heading and every trailing newline exactly; headings are content, not delimiters.",
+      "A partitioned source record is an exact range of that section. Copy only its excerpt, including whitespace, and cite its sourceRef. Preserve its identity and status; do not combine ranges sharing a parentSourceRef.",
       "Return only categories present in this section and retain every listed source item in order.",
-      "Allowed source sections:",
-      ...allowed,
-      "",
-      "Full artifact view section:",
-      chunk.markdown,
+      "Source sections (JSON):",
+      JSON.stringify(sources),
     ].join("\n");
   }
 
@@ -455,7 +559,8 @@ function specChunkSchema(chunk) {
   for (const [kind, property] of [["purpose", "purpose"], ["scope", "scope"], ["constraints", "constraints"], ["openQuestions", "openQuestions"]]) {
     const expected = expectedFor(chunk, kind);
     if (expected.length > 0) {
-      properties[property] = excerptSchema(expected);
+      properties[property] = expected.length === 1 ? excerptSchema(expected)
+        : { type: "array", minItems: expected.length, maxItems: expected.length, items: excerptSchema(expected) };
       required.push(property);
     }
   }
@@ -465,7 +570,7 @@ function specChunkSchema(chunk) {
       type: "array",
       items: identifiedExcerptSchema(
         "requirementId",
-        uniqueIdentities(requirements, "requirement"),
+        chunkIdentities(requirements, "requirement"),
         requirements,
       ),
     };
@@ -475,7 +580,7 @@ function specChunkSchema(chunk) {
   if (tasks.length > 0) {
     properties.tasks = {
       type: "array",
-      items: identifiedExcerptSchema("taskId", uniqueIdentities(tasks, "task"), tasks),
+      items: identifiedExcerptSchema("taskId", chunkIdentities(tasks, "task"), tasks),
     };
     required.push("tasks");
   }
@@ -549,7 +654,7 @@ function acceptanceChunkSchema(chunk) {
     if (expected.length === 0) continue;
     properties[property] = {
       type: "array",
-      items: identifiedExcerptSchema(identityName, uniqueIdentities(expected, kind), expected, { status }),
+      items: identifiedExcerptSchema(identityName, chunkIdentities(expected, kind), expected, { status }),
     };
     required.push(property);
   }
@@ -623,7 +728,9 @@ function assertGlobalCoverage(units, entries, kind) {
   for (let index = 0; index < expected.length; index += 1) {
     const source = expected[index];
     const item = actual[index];
-    if (item.identity !== source.identity || item.excerpt !== source.markdown) {
+    if (item.identity !== source.identity || item.excerpt !== source.markdown
+      || item.sourceRefs.length !== 1 || item.sourceRefs[0] !== source.id
+      || (kind === "requirementJudgment" && item.status !== source.status)) {
       throw new ArtifactViewSummaryError("ARTIFACT_VIEW_SUMMARY_INVALID", `summary changed ${kind} source order or text`);
     }
   }
@@ -717,8 +824,16 @@ function resolvedAgentIdentity(resolved) {
 
 /** Fingerprint value for one summary cache identity. */
 export class ArtifactViewSummaryFingerprint {
-  constructor({ fullMarkdown, contract, resolved, lang = "en", i18nRevision } = {}) {
+  constructor({ fullMarkdown, units, contract, resolved, lang = "en", i18nRevision } = {}) {
     this.fullHash = artifactViewSha256(requiredText(fullMarkdown, "summary full Markdown"));
+    if (!Array.isArray(units) || units.length === 0) {
+      throw new ArtifactViewSummaryError("ARTIFACT_VIEW_SUMMARY_INVALID", "summary fingerprint requires ordered semantic units");
+    }
+    this.sources = immutableArtifactViewFingerprintInput(units.map((value) => {
+      const unit = value instanceof ArtifactViewSemanticUnit ? value : new ArtifactViewSemanticUnit(value);
+      return { id: unit.id, kind: unit.kind, identity: unit.identity, status: unit.status,
+        length: unit.markdown.length };
+    }));
     if (!(contract instanceof ArtifactViewSummaryContract)) {
       throw new ArtifactViewSummaryError("ARTIFACT_VIEW_SUMMARY_INVALID", "summary fingerprint requires a contract");
     }
@@ -728,6 +843,7 @@ export class ArtifactViewSummaryFingerprint {
     this.i18nRevision = requiredText(i18nRevision, "summary i18n revision");
     this.value = artifactViewSha256(stableArtifactViewJson({
       fullHash: this.fullHash,
+      sources: this.sources,
       contract: this.contract,
       agent: this.agent,
       lang: this.lang,
@@ -773,6 +889,7 @@ export class ArtifactViewSummaryService {
     }
     const fingerprint = new ArtifactViewSummaryFingerprint({
       fullMarkdown,
+      units,
       contract,
       resolved,
       lang: this.lang,
@@ -796,7 +913,7 @@ export class ArtifactViewSummaryService {
     const envelope = new ArtifactViewPromptEnvelope(contract);
     const limit = new PromptRequestLimit({ maxCharacters: this.agent.promptCharacterLimit });
     const builder = new PromptInputBuilder({ envelope, limit });
-    relevant.forEach((unit, sequence) => builder.add(new ArtifactViewPromptElement({ unit, sequence })));
+    relevant.forEach((unit, sequence) => builder.add(new ArtifactViewRangedPromptElement({ unit, sequence })));
     let result;
     if (relevant.length === 0) result = contract.createResult(units, []);
     try {

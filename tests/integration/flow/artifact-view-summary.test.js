@@ -195,10 +195,8 @@ describe("artifact view summary", () => {
     assert.equal(agent.calls[0].options.flowAttribution, "none");
     assert.equal(agent.calls[0].options.cacheMode, "bypass");
     assert.deepEqual(agent.calls[0].options.jsonSchema.required, ["purpose", "scope", "constraints", "openQuestions", "requirements", "tasks"]);
-    assert.deepEqual(
-      agent.calls[0].options.jsonSchema.properties.purpose.properties.excerpt.enum,
-      [view.semanticUnits[0].markdown],
-    );
+    assert.deepEqual(agent.calls[0].options.jsonSchema.properties.purpose.properties.excerpt,
+      { type: "string", minLength: 1 });
     assert.match(agent.calls[0].prompt, /Include its first Markdown heading and every trailing newline exactly/);
     assert.match(result.markdown, /^# Specification summary/m);
     assert.match(result.markdown, /Keep this exact\./);
@@ -288,6 +286,9 @@ describe("artifact view summary", () => {
       exactSpecResponseForUnits([view.semanticUnits[1]]),
       "not JSON from a later chunk",
     ]);
+    // A configured request limit keeps three actual transport requests after
+    // source bodies have been removed from the output schema.
+    agent.promptCharacterLimit = 30_000;
     const service = new ArtifactViewSummaryService({
       agent,
       cache,
@@ -313,6 +314,7 @@ describe("artifact view summary", () => {
     const mutableResolved = resolved("codex/gpt-5.6-terra-medium");
     const first = new ArtifactViewSummaryFingerprint({
       fullMarkdown: view.markdown,
+      units: view.semanticUnits,
       contract: specContract(),
       resolved: mutableResolved,
       lang: "en",
@@ -320,6 +322,7 @@ describe("artifact view summary", () => {
     });
     const changedProfile = new ArtifactViewSummaryFingerprint({
       fullMarkdown: view.markdown,
+      units: view.semanticUnits,
       contract: specContract(),
       resolved: resolved("codex/gpt-5.6-sol-medium"),
       lang: "en",
