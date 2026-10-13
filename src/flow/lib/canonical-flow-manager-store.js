@@ -1448,6 +1448,16 @@ class SpecGateRepairRecoveryAdmission {
 class CombinedAdmission {
   constructor(...admissions) { this.admissions = admissions.filter(Boolean); Object.freeze(this.admissions); Object.freeze(this); }
   assert(view) { for (const admission of this.admissions) admission.assert(view); }
+  find(AdmissionClass) {
+    for (const admission of this.admissions) {
+      if (admission instanceof AdmissionClass) return admission;
+      if (admission instanceof CombinedAdmission) {
+        const found = admission.find(AdmissionClass);
+        if (found !== null) return found;
+      }
+    }
+    return null;
+  }
 }
 
 /** Exact plugin artifact replay; publication never substitutes for successful hook execution. */
@@ -4221,7 +4231,7 @@ export class CanonicalFlowManagerStore {
     }
     if (artifactWrites.some((write) => ["execution.contract", "prompt.execution.progress", "prompt.execution.event", "prompt.execution.budget"].includes(write.logicalKey ?? write.artifact?.logicalKey))
       && !(admission instanceof PromptExecutionProgressPublication)
-      && !(admission instanceof CombinedAdmission && admission.admissions.some((entry) => entry instanceof ExecutionContractPublicationAdmission))) {
+      && !(admission instanceof CombinedAdmission && admission.find(ExecutionContractPublicationAdmission) !== null)) {
       throw new FlowExecutionContractRefusal("Execution artifacts require their dedicated canonical publication operation");
     }
     if ((artifactRemovals ?? []).some((removal) => ["execution.contract", "prompt.execution.progress", "prompt.execution.event", "prompt.execution.budget"].includes(removal.logicalKey ?? removal.artifact?.logicalKey))) {
@@ -8768,8 +8778,10 @@ export class CanonicalFlowManagerStore {
           && reviewObservation.identity.stepId === nodeId && reviewObservation.identity.attempt.id === state.attempt.id
           && reviewObservation.identity.attempt.sequence === state.attempt.sequence
           && isDeepStrictEqual(reviewObservation.failure.toJSON(), new ActivityFailure(failure).toJSON());
-        const implementationGateFailure = admission instanceof CanonicalCommandPublication
-          && admission.admitsGateFailure({ state, stepResult, receipt: settlementReceipt, failure,
+        const gatePublication = admission instanceof CombinedAdmission
+          ? admission.find(CanonicalCommandPublication) : admission;
+        const implementationGateFailure = gatePublication instanceof CanonicalCommandPublication
+          && gatePublication.admitsGateFailure({ state, stepResult, receipt: settlementReceipt, failure,
             artifactWrites, activityId: failureActivityId });
         if (failure.category !== STEP_RESULT_ERROR_CATEGORY
           && !(nodeId === "spec-gate" && ["semantic", "local"].includes(failure.category))
