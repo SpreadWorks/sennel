@@ -727,7 +727,7 @@ export class PlanGateRepairOutcome {
 }
 
 /** A Spec Gate repair settled through its own leaf and immutable audit. */
-class SpecGateRepairObservationResult {
+export class SpecGateRepairObservationResult {
   constructor({ fingerprint, strategy, summary, priorRepairInsufficiency = null, groupIndices } = {}) {
     this.fingerprint = new GateObservationFingerprint(fingerprintValue(fingerprint));
     this.strategy = requiredText(strategy, "Spec Gate repair strategy");

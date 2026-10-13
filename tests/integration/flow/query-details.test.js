@@ -230,7 +230,7 @@ test("an Activity reference includes the producer's full transitive closure with
   assert.deepEqual(closure.findings[0].activityIds, [owner.id]);
 });
 
-test("Spec repair audit reports applied operations without exposing old/new or upgrading to verified", () => {
+test("Spec repair audit returns recorded changes without restoring documents or upgrading to verified", () => {
   const first = reviewWith([finding("F-1")]);
   const operation = new SpecRepairFieldReplace({ kind: "replace-field", target: { entity: "spec", field: "goal" }, findingIds: ["F-1"], expectedDigest: "a".repeat(64), replacement: "sensitive-replacement", reason: "Required by F-1" }, 0).toJSON();
   const repaired = reviewWith([], { previous: first, id: "repair-1", stage: "spec-repair", acceptedOperations: [operation] });
@@ -246,7 +246,14 @@ test("Spec repair audit reports applied operations without exposing old/new or u
   assert.equal(closure.repairs[0].currentState, null);
   assert.deepEqual(closure.repairs[0].findingIds, [closure.findings[0].id]);
   assert.equal(closure.findings[0].identity.sourceStep, "spec-review");
-  assert.equal(JSON.stringify(closure).includes("sensitive-"), false);
+  const item = closure.repairs[0].items[0];
+  assert.deepEqual(item.change, { replacement: operation.replacement, edits: null });
+  assert.deepEqual(Object.keys(item.change).sort(), ["edits", "replacement"]);
+  for (const field of ["old", "new", "diff", "expectedDigest", "workerOutput", "canonicalEvidence", "canonicalTarget"]) {
+    assert.equal(Object.hasOwn(closure.repairs[0], field), false);
+    assert.equal(Object.hasOwn(item, field), false);
+    assert.equal(Object.hasOwn(item.change, field), false);
+  }
 });
 
 test("Spec repair no-op audit has an available skipped status with its native outcome", () => {
@@ -320,7 +327,7 @@ test("Spec repair array targets retain collection and explicit or digest-bound p
     assert.equal(closure.repairs[0].items[0].target.collection, stored.collection);
     assert.equal(closure.repairs[0].items[0].target.position, stored.position ?? null);
     assert.equal(closure.repairs[0].items[0].target.id, SpecRepairTarget.fromJSON(stored, "saved target").conflictKey(operation.expectedDigest));
-    assert.equal(JSON.stringify(closure).includes("private-replacement"), false);
+    assert.deepEqual(closure.repairs[0].items[0].change, { replacement: operation.replacement, edits: null });
   }
 });
 

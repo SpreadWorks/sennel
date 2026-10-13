@@ -116,14 +116,14 @@ export function findSourceFinding(artifact, identity) {
   }
   const source = evaluatedSource(artifact);
   const facets = [
-    failedEvaluations(source),
-    reviewBlockingFindings(source, identity.sourceStep),
-    blockingObservations(source),
-    ...allFindingFacets(source, identity.sourceStep).map((facet) => facet.findings),
+    new SourceFindingFacet("", failedEvaluations(source)),
+    new SourceFindingFacet("", reviewBlockingFindings(source, identity.sourceStep)),
+    new SourceFindingFacet("", blockingObservations(source)),
+    ...allFindingFacets(source, identity.sourceStep),
   ];
-  for (const findings of facets) {
-    const match = findings.find((finding, index) => (
-      stableSourceFindingId(identity.sourceStep, finding, index) === identity.sourceFindingId
+  for (const facet of facets) {
+    const match = facet.findings.find((finding, index) => (
+      stableSourceFindingId(identity.sourceStep, finding, facet.identityIndexes[index]) === identity.sourceFindingId
         && sourceFindingFingerprint(identity.sourceStep, finding) === identity.fingerprint
     ));
     if (match !== undefined) return match;
@@ -196,7 +196,11 @@ export function canonicalSourceFindings({ artifact, sourceStep, sourceArtifact }
 
 /** One retained source facet; indexes remain scoped to the producer array. */
 class SourceFindingFacet {
-  constructor(pointer, findings) { this.pointer = pointer; this.findings = findings; }
+  constructor(pointer, findings, identityIndexes = findings.map((_, index) => index)) {
+    this.pointer = pointer;
+    this.findings = findings;
+    this.identityIndexes = identityIndexes;
+  }
 }
 
 function allFindingFacets(source, sourceStep) {
@@ -204,6 +208,21 @@ function allFindingFacets(source, sourceStep) {
   if (sourceStep === "spec-review") fields.unshift("blocking");
   const facets = fields.filter((field) => Array.isArray(source?.[field]))
     .map((field) => new SourceFindingFacet(`/${field}`, source[field]));
+  if (sourceStep?.endsWith("-gate")) {
+    const diagnosis = source?.nextAction?.diagnosis;
+    const observations = diagnosis?.observations ?? source?.observations;
+    if (Array.isArray(observations)) {
+      // Existing Gate consumers address blocking observations by their index
+      // in the blocking-only list. Preserve that identity when advisory rows
+      // precede them, while pointers retain the original saved position.
+      let blockingIndex = 0;
+      const indexes = observations.map((finding, index) => (
+        finding?.severity === "blocking" || finding?.severity == null ? blockingIndex++ : index
+      ));
+      facets.push(new SourceFindingFacet(diagnosis?.observations === observations
+        ? "/nextAction/diagnosis/observations" : "/observations", observations, indexes));
+    }
+  }
   return facets;
 }
 
@@ -225,9 +244,12 @@ export function canonicalSourceFindingObservations({ artifact, sourceStep, sourc
   const source = evaluatedSource(artifact);
   const prefix = source === artifact ? "" : "/artifacts";
   return Object.freeze(allFindingFacets(source, sourceStep).flatMap((facet) => (
-    facet.findings.map((finding, index) => new CanonicalSourceFindingObservation({
-      canonical: canonicalSourceFinding(sourceStep, sourceArtifact, finding, index),
-      jsonPointer: `${prefix}${facet.pointer}/${index}`,
-    }))
+    facet.findings.map((finding, index) => {
+      const canonical = canonicalSourceFinding(sourceStep, sourceArtifact, finding, facet.identityIndexes[index]);
+      return new CanonicalSourceFindingObservation({
+        canonical,
+        jsonPointer: `${prefix}${facet.pointer}/${index}`,
+      });
+    })
   )));
 }

@@ -1,12 +1,24 @@
-import { FLOW_ARTIFACT_CONTRACTS } from "../lib/flow-artifact-contract.js";
+import { FLOW_ARTIFACT_CONTRACTS, FlowArtifactSpecReviewActivityEvidenceDocument } from "../lib/flow-artifact-contract.js";
 import { QueryError, canonicalJson, canonicalDigest, publicArtifactId, publicArtifactKey, ReferenceResolver } from "./query-values.js";
 import { CanonicalSpecReview } from "./lib/spec-review-artifacts.js";
+import { CanonicalDraftReviewObservation } from "./lib/canonical-review-artifacts.js";
 import { DraftReviewArtifactDocument } from "./lib/draft-review-artifacts.js";
 import { DRAFT_REVIEW_ROUTES } from "./lib/draft-review-routes.js";
 import { CanonicalCommandAttemptArtifactHistory } from "./lib/canonical-command-result.js";
 import { SpecRepairTarget, SpecRepairOperationBatch, specRepairProposalDigest } from "./lib/spec-repair-operations.js";
-import { ActivityReviewPublication, NodeResult } from "./lib/current-flow-state.js";
-import { SpecReviewExecutionRequiredResult } from "./engine/step-result.js";
+import { FlowActivity, NodeResult } from "./lib/current-flow-state.js";
+import { SpecReviewExecutionRequiredResult, DraftQuestionsReviewExecutionRequiredResult,
+  DraftCoverageReviewExecutionRequiredResult, DraftQuestionsReviewPassedResult,
+  DraftQuestionsReviewFindingsResult, DraftCoverageReviewPassedResult,
+  DraftCoverageReviewFindingsResult, SpecReviewPassedResult, SpecReviewAdvisoryResult,
+  SpecReviewRejectedResult, SpecGateRepairContextRequiredResult, SpecGateRepairReadyForGateResult,
+  SpecGateRepairReviewRequiredResult, stepResultDigest } from "./engine/step-result.js";
+import { DraftStepExecutionLifecycle, DraftReviewExecutionBinding, DraftWorkerExecutionBinding, DraftStepSettlementReceipt } from "./definition.js";
+import { ReviewWorkUnitTarget } from "./lib/review-work-unit-values.js";
+import { draftQuestionsReviewResult } from "./steps/draft/draft-questions-review.js";
+import { draftCoverageReviewResult } from "./steps/draft/draft-coverage-review.js";
+import { specReviewResult } from "./steps/spec/spec-review.js";
+import { StepConnectionReceipt } from "./lib/draft-completion-connector.js";
 import { TaskStepIdentity } from "./lib/task-step-identity.js";
 import { ImplementationSourceEvidence } from "./lib/source-effect-values.js";
 import { SourceHandoffSettlement } from "./lib/worker-artifact-handoff.js";
@@ -18,10 +30,20 @@ import { GateAttemptIdentity, GateFailureCategory } from "./lib/gate-transition.
 import { GateEvaluationScope } from "./lib/run-gate.js";
 import { AgentResponseProtocolEvidence } from "../lib/agent-response-protocol.js";
 import { DRAFT_STEP_ERROR_RECOVERY_OPERATION } from "./lib/draft-worker-recovery.js";
+import { validateRecordedGateObservation, canonicalGateFindingObservations, GateFindingSpecific } from "./query-gate-details.js";
+import { QuerySpecGateRepairObservation } from "./query-spec-gate-repair-details.js";
+import { RecordedRepairChange } from "./query-repair-change.js";
+import { PlanGateRepairRecord } from "./lib/plan-gate-repair.js";
+import { IssueLogDocument } from "./lib/issue-log-store.js";
 
 const GROUPS = Object.freeze(["evaluations", "findings", "repairs"]);
 const GATE_KEYS = new Set(["draft.gate", "spec.gate", "task.gate", "impl.gate"]);
 const SPEC_REVIEW_VERDICTS = new Set(["spec-review-passed", "spec-review-advisory", "spec-review-rejected"]);
+const REVIEW_EXECUTION_RESULTS = Object.freeze([SpecReviewExecutionRequiredResult,
+  DraftQuestionsReviewExecutionRequiredResult, DraftCoverageReviewExecutionRequiredResult]);
+const DRAFT_REVIEW_TERMINAL_RESULTS = Object.freeze([DraftQuestionsReviewPassedResult,
+  DraftQuestionsReviewFindingsResult, DraftCoverageReviewPassedResult, DraftCoverageReviewFindingsResult]);
+const SPEC_REVIEW_TERMINAL_RESULTS = Object.freeze([SpecReviewPassedResult, SpecReviewAdvisoryResult, SpecReviewRejectedResult]);
 // These ledger operations record lifecycle/administrative facts and cannot
 // produce review, evaluation, or repair observations.
 const NON_DETAIL_OPERATIONS = new Set([
@@ -153,8 +175,9 @@ class DetailEntity {
 class EvaluationCriterion {
   constructor(value, referenceId) {
     exactFields(value, ["guardrail_id", "result", "reason", "category", "title", "observations", "authority"], referenceId);
-    if (value.observations !== undefined && (!Array.isArray(value.observations) || value.observations.length !== 0)) {
-      unavailable("PRODUCER_NOT_SUPPORTED", referenceId, "Gate finding semantics have no declared public detail variant");
+    if (value.observations !== undefined) {
+      if (!Array.isArray(value.observations)) unavailable("PRODUCER_NOT_SUPPORTED", referenceId, "Gate observations must be a recorded array");
+      for (const observation of value.observations) validateRecordedGateObservation(observation);
     }
     this.id = value.guardrail_id;
     this.reason = value.reason;
@@ -267,6 +290,17 @@ class FindingDetail extends DetailEntity {
       recommendation: value.requiredChange ?? value.improvement ?? null, evidence: value.evidence ?? null };
   }
 }
+class GateFindingDetail extends FindingDetail {
+  constructor(input) {
+    super(input);
+    this.specific = new GateFindingSpecific(this.finding);
+  }
+  toJSON() {
+    const value = this.finding;
+    return { ...super.toJSON(), title: value.requirementRef, description: value.observed, observed: value.observed,
+      severity: value.severity, reason: value.failureMode, recommendation: null, evidence: null };
+  }
+}
 class RepairItemTarget {
   constructor(value) {
     this.entity = value.entity ?? value.collection ?? null;
@@ -289,18 +323,25 @@ class RepairItemTarget {
   toJSON() { return { ...this }; }
 }
 class RepairItem {
-  constructor({ id, referenceId = id, target, operationKind, status, reason = null, findingIds = [] }) {
-    Object.assign(this, { id, referenceId, target: target instanceof RepairItemTarget ? target : new RepairItemTarget(target), operationKind, status, reason, findingIds });
+  constructor({ id, referenceId = id, target, operationKind, status, reason = null, findingIds = [], change = null }) {
+    if (change !== null && !(change instanceof RecordedRepairChange)) throw new TypeError("Repair item requires its typed recorded change");
+    Object.assign(this, { id, referenceId, target: target instanceof RepairItemTarget ? target : new RepairItemTarget(target), operationKind, status, reason, findingIds, change });
   }
   matchesReference(id) { return this.id === id || this.referenceId === id; }
+  static idFor(source, flowVersionId, jsonPointer) {
+    return `repair-item:${canonicalDigest({ flowVersionId, producerActivityId: source.producerActivityId,
+      observationId: source.observationId, jsonPointer })}`;
+  }
   toJSON() { return { id: this.id, target: this.target.toJSON(), operationKind: this.operationKind,
     status: this.status.toJSON(), adoptedReason: this.status.value === "discarded" ? null : this.reason,
-    discardedReason: this.status.value === "discarded" ? this.reason : null, evidence: [], findingIds: [...this.findingIds] }; }
+    discardedReason: this.status.value === "discarded" ? this.reason : null, evidence: [], findingIds: [...this.findingIds],
+    change: this.change?.toJSON() ?? null }; }
 }
 class RepairStatus extends DetailStatus {
   constructor(items, nativeValue, skipped) {
     let value;
     if (skipped !== null && nativeValue === "continue_nonblocking") value = "skipped";
+    else if (nativeValue === "plan_gate_repair" && items.length === 0) value = "planned";
     else if (nativeValue === "merged" && items.some((item) => item.status.value === "applied")) value = "applied";
     else if (nativeValue === "no-op" && items.every((item) => item.status.value === "discarded")) value = items.length ? "discarded" : "skipped";
     else unavailable("STATUS_NOT_SUPPORTED", nativeValue, "The recorded repair outcome has no supported status mapping");
@@ -316,9 +357,19 @@ class RepairDetail extends DetailEntity {
     this.status = new RepairStatus(items, nativeValue, skipped);
     if (skipped !== null) this.kind = "lifecycle-skip";
   }
+  matchesReference(id) { return this.id === id || this.items.some((item) => item.matchesReference(id)); }
   toJSON() { return { ...this.commonJSON(), title: null, description: null, reason: this.skipped?.rationale ?? null,
     status: this.status.toJSON(),
     currentState: null, items: this.items.map((item) => item.toJSON()), specific: this.skipped === null ? null : this.skipped.toJSON() }; }
+}
+class PlannedGateRepairDetail extends RepairDetail {
+  constructor({ source, flowVersionId, record, reason }) {
+    super({ source, flowVersionId, items: [], nativeValue: "plan_gate_repair" });
+    this.record = record;
+    this.reason = reason;
+  }
+  matchesReference(id) { return id === this.record.idempotencyKey || super.matchesReference(id); }
+  toJSON() { return { ...super.toJSON(), reason: this.reason }; }
 }
 class LifecycleSkipSpecific {
   constructor(decision) { this.decision = decision; this.rationale = decision.rationale; }
@@ -353,10 +404,14 @@ export class QueryDetailArtifactRequired extends Error {
 export class QueryDetailIndex {
   constructor({ state, activities, catalog, artifactBytes, snapshotId, flowVersionId = state.flowVersionId }) {
     Object.assign(this, { state, activities, catalog, artifactBytes, snapshotId, flowVersionId });
+    this.activities = activities.map((activity) => FlowActivity.canonical(activity));
     this.resolver = new ReferenceResolver(catalog);
     this.details = new Map();
     this.entities = new DetailGroups(() => new Map());
     this.resolving = new Set();
+    this.histories = new Map();
+    this.draftReviews = new Map();
+    this.specReviews = new Map();
   }
   source(descriptor, activity, entryId, observationId, pointer = "", format = "json") {
     return new DetailSource({ descriptor, activity, flowVersionId: this.flowVersionId, entryId, observationId, pointer, format });
@@ -366,41 +421,94 @@ export class QueryDetailIndex {
     // only through their saved membership; qualified display keys are not IDs.
     return TaskStepIdentity.fromStateNode(this.state, activity.nodeId)?.definitionId ?? activity.nodeId;
   }
-  specReviewDescriptor(activity) {
+  specReviewSource(activity) {
     if (activity.reviewPublication == null) return null;
+    if (this.specReviews.has(activity.id)) return this.specReviews.get(activity.id);
+    if (activity.result?.stepResult != null) this.stepSettlementReceipt(activity);
     const publicationPath = FLOW_ARTIFACT_CONTRACTS.resolve("spec.review", {
       revision: String(activity.reviewPublication.identity.revision).padStart(3, "0"),
     }).relativePath;
+    const retained = this.catalog.artifacts.filter((entry) => entry.logicalKey === "activity.evidence"
+      && entry.activityId === activity.id).map((descriptor) => {
+        const document = FLOW_ARTIFACT_CONTRACTS.require("activity.evidence").contentContract.assertCatalogAssociation({
+          bytes: this.artifactBytesFor(descriptor), descriptor, activity });
+        if (!(document instanceof FlowArtifactSpecReviewActivityEvidenceDocument)) return null;
+        document.assertActivity(activity, { specId: this.state.specId });
+        if (document.source.path !== publicationPath) {
+          unavailable("SOURCE_GENERATION_NOT_RETAINED", activity.id, "The retained Spec Review names a different canonical revision");
+        }
+        return new RetainedSpecReviewSource({ descriptor, review: document.review,
+          sourceArtifact: publicationPath, pointer: "/review" });
+      }).filter((entry) => entry !== null);
+    if (retained.length > 1) unavailable("AMBIGUOUS_REFERENCE", activity.id, "The Spec Review has multiple retained Activity observations");
+    if (retained.length === 1) {
+      this.specReviews.set(activity.id, retained[0]);
+      return retained[0];
+    }
     const descriptor = this.resolver.resolve({ kind: "path", id: publicationPath },
       "Spec Review publication", { optional: true });
-    return descriptor?.logicalKey === "spec.review" ? descriptor : null;
+    if (descriptor?.logicalKey !== "spec.review") return null;
+    if (descriptor.activityId !== activity.id) unavailable("SOURCE_GENERATION_NOT_RETAINED", activity.id,
+      "The Spec Review generation for this Activity is not retained");
+    const review = new CanonicalSpecReview(this.read(descriptor));
+    if (activity.reviewPublication.generation !== review.generation
+      || activity.reviewPublication.reviewDigest !== review.digest) unavailable("SOURCE_GENERATION_NOT_RETAINED", activity.id,
+      "The Spec Review generation for this Activity is not retained");
+    activity.reviewPublication.assertReview(review, { specId: this.state.specId,
+      revision: review.identity.revision.value, bytes: this.artifactBytesFor(descriptor) });
+    const source = new RetainedSpecReviewSource({ descriptor, review, sourceArtifact: publicationPath, pointer: "" });
+    this.specReviews.set(activity.id, source);
+    return source;
   }
-  specReviewExecutionPhase(activity) {
-    if (activity.result?.stepResult?.kind !== "spec-review-execution-required") return null;
-    const result = activity.result instanceof NodeResult ? activity.result : new NodeResult(activity.result);
-    const receipt = result.draftSettlementReceipt;
-    const lifecycle = receipt.executionLifecycle;
-    // These persisted execution selections reserve, claim, and publish the
-    // work. Only the separate terminal Result owns the Review verdict.
-    if (!(result.stepResult instanceof SpecReviewExecutionRequiredResult)
-      || activity.transition.operation !== "record_draft_step_settlement"
-      || receipt.settlementKind !== "execution" || lifecycle?.binding.kind !== "review"
-      || !["checkpoint", "claimed", "publication"].includes(lifecycle.phase)
-      || receipt.binding.runId !== this.state.runId || receipt.binding.specId !== this.state.specId
-      || receipt.binding.stepId !== activity.nodeId
-      || receipt.binding.attemptId !== activity.attemptId || receipt.binding.attemptSequence !== activity.sequence) {
+  reviewLifecycle(activity) {
+    const stepResult = activity.result?.stepResult;
+    const execution = REVIEW_EXECUTION_RESULTS.some((Result) => stepResult instanceof Result);
+    const terminal = [...DRAFT_REVIEW_TERMINAL_RESULTS, ...SPEC_REVIEW_TERMINAL_RESULTS]
+      .some((Result) => stepResult instanceof Result);
+    if (!execution && !terminal) return null;
+    const receipt = activity.result.draftSettlementReceipt;
+    const lifecycle = this.stepExecutionLifecycle(activity);
+    if (activity.transition.operation === "complete_draft_completion") {
+      const connection = StepConnectionReceipt.fromJSON(activity.transition.stepConnectionReceipt?.toJSON?.()
+        ?? activity.transition.stepConnectionReceipt);
+      if (!(stepResult instanceof DraftCoverageReviewPassedResult) || connection.source !== "coverage-pass"
+        || connection.sourceStepId !== activity.nodeId || connection.sourceAttempt.id !== activity.attemptId
+        || connection.sourceAttempt.sequence !== activity.sequence) {
+        unavailable("PRODUCER_NOT_SUPPORTED", activity.id, "The Draft Review completion connector does not bind its source Review");
+      }
+    }
+    if (!(lifecycle.binding instanceof DraftReviewExecutionBinding)
+      || (execution ? activity.transition.operation !== "record_draft_step_settlement"
+        || receipt.settlementKind !== "execution" || !["checkpoint", "claimed", "publication"].includes(lifecycle.phase)
+        : !["confirm_attempt", "complete_draft_completion"].includes(activity.transition.operation)
+          || receipt.settlementKind === "execution" || lifecycle.phase !== "terminal")) {
       unavailable("PRODUCER_NOT_SUPPORTED", activity.id, "The Review execution Activity does not match its saved lifecycle binding");
     }
-    return lifecycle.phase;
+    return lifecycle;
+  }
+  stepSettlementReceipt(activity) {
+    const result = activity.result instanceof NodeResult ? activity.result : new NodeResult(activity.result);
+    return DraftStepSettlementReceipt.assertStored(result.draftSettlementReceipt, { result: result.stepResult,
+      binding: { runId: this.state.runId, specId: this.state.specId, stepId: activity.nodeId,
+        attempt: { id: activity.attemptId, sequence: activity.sequence } } });
+  }
+  stepExecutionLifecycle(activity) {
+    const receipt = this.stepSettlementReceipt(activity);
+    return DraftStepExecutionLifecycle.fromJSON(receipt.executionLifecycle?.toJSON?.() ?? receipt.executionLifecycle);
   }
   read(descriptor) {
-    if (!this.artifactBytes.has(descriptor.relativePath)) throw new QueryDetailArtifactRequired(descriptor);
-    const bytes = this.artifactBytes.get(descriptor.relativePath);
-    if (!Buffer.isBuffer(bytes)) throw new QueryError("CANONICAL_RECORD_UNREADABLE", "/canonical", "Captured detail artifact bytes are missing", { referenceId: descriptor.relativePath });
+    const bytes = this.artifactBytesFor(descriptor);
     try { return JSON.parse(bytes.toString("utf8")); }
     catch (cause) { throw new QueryError("CANONICAL_RECORD_INCONSISTENT", "/canonical", "Captured detail artifact is not JSON", { referenceId: descriptor.relativePath, cause }); }
   }
+  artifactBytesFor(descriptor) {
+    if (!this.artifactBytes.has(descriptor.relativePath)) throw new QueryDetailArtifactRequired(descriptor);
+    const bytes = this.artifactBytes.get(descriptor.relativePath);
+    if (!Buffer.isBuffer(bytes)) throw new QueryError("CANONICAL_RECORD_UNREADABLE", "/canonical", "Captured detail artifact bytes are missing", { referenceId: descriptor.relativePath });
+    return bytes;
+  }
   forActivity(activity) {
+    activity = FlowActivity.canonical(activity);
     if (this.details.has(activity.id)) return this.details.get(activity.id);
     if (this.resolving.has(activity.id)) unavailable("AMBIGUOUS_REFERENCE", activity.id, "Cyclic unresolved producer references");
     this.resolving.add(activity.id);
@@ -440,7 +548,7 @@ export class QueryDetailIndex {
     if (descriptors.length > 1) unavailable("AMBIGUOUS_REFERENCE", reference.id, "A detail reference resolves to multiple artifacts");
     let candidates = projected.entities[group].filter((entity) => entity.source.sourceEntryId === reference.id
       || (group === "findings" && entity.identity.sourceFindingId === reference.id)
-      || (group === "repairs" && entity.items.some((item) => item.matchesReference(reference.id)))
+      || (group === "repairs" && entity.matchesReference(reference.id))
       || descriptors.some((descriptor) => descriptor.relativePath === entity.source.relativePath));
     if (group === "findings" && descriptors.length === 0
       && new Set(candidates.map((entity) => entity.identity.toString())).size > 1) {
@@ -493,30 +601,37 @@ export class QueryDetailIndex {
     const producerStepId = this.producerStepId(activity);
     if (activity.transition.operation === "continue_nonblocking") return this.projectSkip(activity, projected);
     if (NON_DETAIL_OPERATIONS.has(activity.transition.operation)) return projected;
-    const reviewExecutionPhase = this.specReviewExecutionPhase(activity);
-    if (["checkpoint", "claimed"].includes(reviewExecutionPhase)) {
-      if (activity.reviewPublication != null) unavailable("PRODUCER_NOT_SUPPORTED", activity.id, "A Review execution claim cannot own a publication observation");
+    if (producerStepId === "spec-gate-repair") return this.projectSpecGateRepair(activity, projected);
+    const reviewLifecycle = this.reviewLifecycle(activity);
+    if (["checkpoint", "claimed"].includes(reviewLifecycle?.phase)) {
+      if (activity.reviewPublication != null || GROUPS.some((group) => activity.references[group].length !== 0)) {
+        unavailable("PRODUCER_NOT_SUPPORTED", activity.id, "A Review execution claim cannot own a detail observation");
+      }
       return projected;
+    }
+    const draftRoute = DRAFT_REVIEW_ROUTES.find((route) => route.reviewStepId === producerStepId);
+    if (draftRoute && reviewLifecycle !== null) return this.projectCanonicalDraftReview(activity, draftRoute, reviewLifecycle, projected);
+    if (draftRoute && activity.result?.stepResult != null) {
+      unavailable("PRODUCER_NOT_SUPPORTED", activity.id, "The Draft Review has no supported saved execution or terminal Result");
     }
     const taskGatePath = producerStepId === "task-gate" ? FLOW_ARTIFACT_CONTRACTS.resolve("task.gate", {
       taskId: TaskStepIdentity.fromStateNode(this.state, activity.nodeId).taskId,
     }).relativePath : null;
-    const reviewDescriptor = this.specReviewDescriptor(activity);
-    if (activity.reviewPublication != null && reviewDescriptor === null) {
+    const reviewSource = this.specReviewSource(activity);
+    if (activity.reviewPublication != null && reviewSource === null) {
       unavailable("SOURCE_GENERATION_NOT_RETAINED", activity.id, "The recorded Spec Review publication is not retained");
     }
     // Repair can own both the old revision and its rebased destination. Only
     // the revision named by the saved publication describes this observation.
-    const descriptors = this.catalog.artifacts.filter((descriptor) => descriptor.logicalKey === "spec.review"
-      ? descriptor === reviewDescriptor
-      : descriptor.activityId === activity.id
+    const descriptors = this.catalog.artifacts.filter((descriptor) => descriptor.logicalKey !== "spec.review"
+      && (descriptor.activityId === activity.id
       || ((GATE_KEYS.has(descriptor.logicalKey) || DRAFT_REVIEW_ROUTES.some((route) => route.reviewLogicalKey === descriptor.logicalKey))
         && descriptor.slot.publicationStep === producerStepId && activity.result !== null
-        && (descriptor.logicalKey !== "task.gate" || descriptor.relativePath === taskGatePath)));
+        && (descriptor.logicalKey !== "task.gate" || descriptor.relativePath === taskGatePath))));
     let handled = false;
+    if (reviewSource !== null) { this.projectSpecReview(activity, reviewSource, projected); handled = true; }
     for (const descriptor of descriptors) {
-      if (descriptor.logicalKey === "spec.review" && activity.reviewPublication !== null) { this.projectSpecReview(activity, descriptor, projected); handled = true; }
-      else if (DRAFT_REVIEW_ROUTES.some((route) => route.reviewLogicalKey === descriptor.logicalKey)) { this.projectDraftReview(activity, descriptor, projected); handled = true; }
+      if (DRAFT_REVIEW_ROUTES.some((route) => route.reviewLogicalKey === descriptor.logicalKey)) { this.projectDraftReview(activity, descriptor, projected); handled = true; }
       else if (GATE_KEYS.has(descriptor.logicalKey)) { this.projectGate(activity, descriptor, projected); handled = true; }
     }
     if (!handled && producerStepId === "spec-review" && activity.result !== null) {
@@ -564,82 +679,85 @@ export class QueryDetailIndex {
   includeSpecReviewPublication(activity, projected) {
     const referenced = (activity.result.artifactRefs ?? []).flatMap((reference) => this.resolver.matchingDescriptors(reference, "Spec Review result reference"))
       .filter((descriptor) => descriptor.logicalKey === "spec.review");
+    const lifecycle = this.reviewLifecycle(activity);
     const candidates = this.activities.filter((entry) => entry.id !== activity.id && entry.nodeId === activity.nodeId
       && entry.attemptId !== null && entry.attemptId === activity.attemptId && entry.sequence === activity.sequence
       && entry.confirmationOrder < activity.confirmationOrder && entry.reviewPublication?.stage === "spec-review")
       .filter((entry) => {
-        const descriptor = this.specReviewDescriptor(entry);
-        return descriptor?.activityId === entry.id && (referenced.length === 0 || referenced.includes(descriptor));
+        if (lifecycle !== null) {
+          const publication = this.reviewLifecycle(entry);
+          if (publication?.phase !== "publication" || !publication.terminal().equals(lifecycle)) return false;
+        }
+        const source = this.specReviewSource(entry);
+        return source?.descriptor.activityId === entry.id
+          && (referenced.length === 0 || referenced.some((descriptor) => descriptor.relativePath === source.sourceArtifact));
       });
     if (candidates.length !== 1) unavailable(candidates.length === 0 ? "SOURCE_GENERATION_NOT_RETAINED" : "AMBIGUOUS_REFERENCE",
       activity.id, "Spec Review confirmation does not resolve to one retained publication in its exact Attempt");
     // The producer resolver checks the catalog binding, generation, identity,
     // digest and bytes. A lifecycle 'passed' result never supplies a verdict.
-    const details = this.forActivity(candidates[0]);
+    this.includeActivityDetails(candidates[0], projected);
+    const publication = candidates[0];
+    const source = this.specReviewSource(publication);
+    this.projectSpecReviewVerdict(activity, source, publication, projected);
+  }
+  includeActivityDetails(activity, projected) {
+    const details = this.forActivity(activity);
     for (const group of GROUPS) {
       for (const id of details.detailRefs[group]) projected.add(group, this.entities[group].get(id));
       const coverage = details.detailCoverage[group].availability;
       if (coverage === "available") projected.applicable.add(group);
       else if (coverage === "not-recorded") projected.notRecorded.add(group);
     }
-    const publication = candidates[0];
-    const descriptor = this.specReviewDescriptor(publication);
-    this.projectSpecReviewVerdict(activity, descriptor, publication, projected);
+    return details;
   }
-  projectSpecReviewVerdict(activity, descriptor, publication, projected) {
+  projectSpecReviewVerdict(activity, retained, publication, projected) {
     const verdict = activity.result?.stepResult?.kind;
     if (!SPEC_REVIEW_VERDICTS.has(verdict)) {
       const executionPublication = activity.id === publication.id
         && publication.reviewPublication?.stage === "spec-review"
-        && this.specReviewExecutionPhase(activity) === "publication";
+        && this.reviewLifecycle(activity)?.phase === "publication";
       if (!executionPublication && this.producerStepId(activity) === "spec-review") projected.notRecorded.add("evaluations");
       return;
+    }
+    if (stepResultDigest(activity.result.stepResult) !== stepResultDigest(specReviewResult(retained.review))) {
+      unavailable("PRODUCER_NOT_SUPPORTED", activity.id, "The Spec Review terminal Result does not match its recorded publication");
     }
     const evaluation = projected.add("evaluations", new EvaluationDetail({ source: this.ledgerSource(activity),
       flowVersionId: this.flowVersionId, nativeCode: verdict, summary: activity.result.summary ?? null }));
     const observationId = `generation:${publication.reviewPublication.generation}`;
-    evaluation.supportingSources.push(this.source(descriptor, publication, observationId, observationId));
+    evaluation.supportingSources.push(this.source(retained.descriptor, publication, observationId, observationId, retained.pointer));
     projected.notRecorded.delete("evaluations");
     // A separate terminal observation references the earlier findings without
     // rewriting them. Their JSON and closure must not depend on page order.
     if (activity.id === publication.id) this.linkEvaluation(evaluation, projected.entities.findings);
     else evaluation.findingIds = projected.entities.findings.map((finding) => finding.id);
   }
-  projectSpecReview(activity, descriptor, projected) {
-    const document = this.read(descriptor);
-    let review;
+  projectSpecReview(activity, retained, projected) {
+    const { descriptor, review } = retained;
+    const document = review.toJSON();
     for (const finding of document.findings ?? []) {
       if (finding.disposition !== undefined && !["apply", "invalid", "already_resolved", "downgraded_to_non_blocking"].includes(finding.disposition)) {
         unavailable("STATUS_NOT_SUPPORTED", finding.findingId, "The stored Spec Review disposition is unsupported");
       }
     }
-    try { review = new CanonicalSpecReview(document); }
-    catch (cause) { unavailable("PRODUCER_NOT_SUPPORTED", activity.id, "Canonical Spec Review detail cannot be interpreted", cause); }
-    if (!activity.reviewPublication || descriptor.activityId !== activity.id
-      || activity.reviewPublication.generation !== review.generation || activity.reviewPublication.reviewDigest !== review.digest) {
-      unavailable("SOURCE_GENERATION_NOT_RETAINED", activity.id, "The Spec Review generation for this Activity is not retained");
-    }
-    (activity.reviewPublication instanceof ActivityReviewPublication ? activity.reviewPublication : new ActivityReviewPublication(activity.reviewPublication)).assertReview(review, { specId: this.state.specId,
-      revision: review.identity.revision.value, bytes: this.artifactBytes.get(descriptor.relativePath) });
     const observationId = `generation:${review.generation}`;
-    const observations = canonicalSourceFindingObservations({ artifact: document, sourceStep: "spec-review", sourceArtifact: descriptor.relativePath });
+    const observations = canonicalSourceFindingObservations({ artifact: document, sourceStep: "spec-review", sourceArtifact: retained.sourceArtifact });
     projected.applicable.add("findings");
     for (const observation of observations) {
       if (!findSourceFinding(document, observation.identity)) unavailable("REFERENCE_NOT_RESOLVED", observation.identity.sourceFindingId, "Exact finding identity is unresolved");
       requireRetainedText(observation.finding, observation.identity.sourceFindingId);
-      const source = this.source(descriptor, activity, observation.identity.sourceFindingId, observationId, observation.jsonPointer);
+      const source = this.source(descriptor, activity, observation.identity.sourceFindingId, observationId, retained.pointer + observation.jsonPointer);
       projected.add("findings", new FindingDetail({ source, flowVersionId: this.flowVersionId, observation }));
     }
-    this.projectSpecReviewVerdict(activity, descriptor, activity, projected);
-    if (this.producerStepId(activity) === "spec-repair") this.projectRepairAudit(activity, descriptor, review, projected);
+    this.projectSpecReviewVerdict(activity, retained, activity, projected);
+    if (this.producerStepId(activity) === "spec-repair") this.projectRepairAudit(activity, retained, projected);
   }
   payload(activity, descriptor) {
     const document = this.read(descriptor);
     if (Array.isArray(document.attempts)) {
-      const history = CanonicalCommandAttemptArtifactHistory.fromBytes({ logicalKey: descriptor.logicalKey, bytes: this.artifactBytes.get(descriptor.relativePath) });
-      const index = history.attempts.findIndex((entry) => entry.attempt === activity.sequence);
-      if (index < 0) unavailable("SOURCE_GENERATION_NOT_RETAINED", activity.id, "The producer Attempt payload is not retained");
-      return new ProducerPayload(history.attempts[index].payload, `/attempts/${index}/artifact/payload`, `attempt:${activity.attemptId}`);
+      const record = this.attemptRecord(activity, descriptor);
+      return new ProducerPayload(record.payload, `/attempts/${record.index}/artifact/payload`, `attempt:${activity.attemptId}`);
     }
     if (descriptor.activityId !== activity.id) unavailable("SOURCE_GENERATION_NOT_RETAINED", activity.id, "The producer Activity payload is not retained");
     return new ProducerPayload(document, "", `activity:${activity.id}`);
@@ -656,6 +774,68 @@ export class QueryDetailIndex {
     // fromStored normalizes producer inputs; public history must retain bytes,
     // never silently add defaults or shorten a previously stored value.
     assertRecordedProducerValue(value, review, activity.id);
+    this.projectDraftReviewDocument(activity, descriptor, record, review, projected);
+  }
+  history(descriptor) {
+    if (!this.histories.has(descriptor.relativePath)) {
+      this.read(descriptor);
+      this.histories.set(descriptor.relativePath, CanonicalCommandAttemptArtifactHistory.fromBytes({
+        logicalKey: descriptor.logicalKey, bytes: this.artifactBytes.get(descriptor.relativePath) }));
+    }
+    return this.histories.get(descriptor.relativePath);
+  }
+  attemptRecord(activity, descriptor) {
+    const record = this.history(descriptor).atAttempt(activity.sequence);
+    if (record === null) unavailable("SOURCE_GENERATION_NOT_RETAINED", activity.id, "The producer Attempt payload is not retained");
+    return record;
+  }
+  projectCanonicalDraftReview(activity, route, lifecycle, projected) {
+    if (lifecycle.phase === "terminal") {
+      const candidates = this.activities.filter((entry) => entry.id !== activity.id
+        && entry.nodeId === activity.nodeId && entry.attemptId === activity.attemptId && entry.sequence === activity.sequence
+        && entry.confirmationOrder < activity.confirmationOrder)
+        .filter((entry) => {
+          const publication = this.reviewLifecycle(entry);
+          return publication?.phase === "publication" && publication.terminal().equals(lifecycle);
+        });
+      if (candidates.length !== 1) unavailable(candidates.length === 0 ? "SOURCE_GENERATION_NOT_RETAINED" : "AMBIGUOUS_REFERENCE",
+        activity.id, "Draft Review terminal does not resolve to one publication in its exact execution binding");
+      const publication = candidates[0];
+      this.includeActivityDetails(publication, projected);
+      const review = this.draftReviews.get(publication.id);
+      const expected = route.key === "questions" ? draftQuestionsReviewResult(review.document) : draftCoverageReviewResult(review.document);
+      if (stepResultDigest(activity.result.stepResult) !== stepResultDigest(expected)) {
+        unavailable("PRODUCER_NOT_SUPPORTED", activity.id, "The Draft Review terminal Result does not match its recorded verdict");
+      }
+      return projected;
+    }
+    const path = FLOW_ARTIFACT_CONTRACTS.resolve(route.reviewLogicalKey).relativePath;
+    const descriptor = this.resolver.resolve({ kind: "path", id: path }, "Draft Review publication", { optional: true });
+    if (!descriptor) unavailable("SOURCE_GENERATION_NOT_RETAINED", activity.id, "The Draft Review publication is not retained");
+    if (descriptor.logicalKey !== route.reviewLogicalKey || descriptor.slot.publicationStep !== route.reviewStepId) {
+      unavailable("PRODUCER_NOT_SUPPORTED", activity.id, "The Draft Review catalog does not match its producer route");
+    }
+    const history = this.history(descriptor);
+    const current = history.currentRecord;
+    const latest = this.activities.find((entry) => entry.id === descriptor.activityId);
+    if (!latest || latest.nodeId !== route.reviewStepId || latest.sequence !== current.attempt
+      || current.nodeId !== route.reviewStepId || this.reviewLifecycle(latest)?.phase !== "publication") {
+      unavailable("SOURCE_GENERATION_NOT_RETAINED", activity.id, "The Draft Review history does not bind its latest catalog publication");
+    }
+    const record = this.attemptRecord(activity, descriptor);
+    requireRetainedText(record.payload, activity.id);
+    const review = new CanonicalDraftReviewObservation({ payload: record.payload, state: this.state, route });
+    review.assertTarget(new ReviewWorkUnitTarget(lifecycle.binding.target.toJSON()));
+    if (review.settlementPublication(record).digest !== activity.result.draftSettlementReceipt.publicationDigest) {
+      unavailable("PRODUCER_NOT_SUPPORTED", activity.id, "The Draft Review payload does not match its saved publication receipt");
+    }
+    this.draftReviews.set(activity.id, review);
+    this.projectDraftReviewDocument(activity, descriptor,
+      new ProducerPayload(record.payload, `/attempts/${record.index}/artifact/payload`, `attempt:${activity.attemptId}`), review.document, projected);
+    return projected;
+  }
+  projectDraftReviewDocument(activity, descriptor, record, review, projected) {
+    const value = review.toJSON();
     const source = this.source(descriptor, activity, descriptor.logicalKey, record.observationId, record.pointer);
     const evaluation = projected.add("evaluations", new EvaluationDetail({ source, flowVersionId: this.flowVersionId, nativeCode: value.verdict, summary: value.summary }));
     projected.applicable.add("findings");
@@ -665,6 +845,109 @@ export class QueryDetailIndex {
     }
     this.linkEvaluation(evaluation, projected.entities.findings);
   }
+  gateRepairPlan(activity, repairId) {
+    const descriptor = this.catalog.artifacts.find((entry) => entry.logicalKey === "issue.log");
+    if (!descriptor) unavailable("SOURCE_GENERATION_NOT_RETAINED", activity.id, "The Gate repair plan history is not retained");
+    const document = new IssueLogDocument(this.read(descriptor));
+    const matches = document.entries.map((entry, index) => ({ entry, index }))
+      .filter(({ entry }) => entry.kind === "plan-gate-repair" && entry.issueLogId === repairId);
+    if (matches.length !== 1) unavailable(matches.length === 0 ? "REFERENCE_NOT_RESOLVED" : "AMBIGUOUS_REFERENCE",
+      repairId, "The Gate repair does not resolve to one saved plan");
+    const { entry, index } = matches[0];
+    exactFields(entry, ["kind", "step", "phase", "reason", "observations", "timestamp", "planGateRepair", "issueLogId"], activity.id);
+    requireRetainedText(entry, activity.id);
+    const record = PlanGateRepairRecord.fromIssueLogEntry(entry);
+    record.assertFlow(this.state);
+    assertRecordedProducerValue(entry.planGateRepair, record, activity.id);
+    const sourceEntry = document.entries.find((candidate) => candidate.issueLogId === record.sourceIssueLogId);
+    if (!record.matchesIssueLogEntry(sourceEntry)) unavailable("SOURCE_GENERATION_NOT_RETAINED", activity.id,
+      "The Gate repair source observation is missing or changed");
+    return new RetainedGateRepairPlan({ descriptor, record, entry, pointer: `/entries/${index}/planGateRepair` });
+  }
+  projectGateRepairPlan(activity, projected) {
+    if (activity.references.repairs.length !== 1) unavailable("PRODUCER_NOT_SUPPORTED", activity.id,
+      "The Gate repair planning Activity requires its exact plan reference");
+    const reference = activity.references.repairs[0];
+    const plan = this.gateRepairPlan(activity, reference.id);
+    if (plan.record.evidenceIdentity.publicationActivityId !== activity.id
+      || plan.record.route.gateStepId !== activity.nodeId || reference.label !== plan.record.sourceIssueLogId) {
+      unavailable("SOURCE_GENERATION_NOT_RETAINED", activity.id, "The Gate repair plan does not bind its source Activity");
+    }
+    const source = this.source(plan.descriptor, activity, plan.record.idempotencyKey,
+      `repair-plan:${plan.record.idempotencyKey}`, plan.pointer);
+    const repair = projected.add("repairs", new PlannedGateRepairDetail({ source, flowVersionId: this.flowVersionId,
+      record: plan.record, reason: plan.entry.reason }));
+    repair.findingIds = projected.entities.findings.filter((finding) => finding.finding.severity === "blocking").map((finding) => finding.id);
+  }
+  projectSpecGateRepair(activity, projected) {
+    const result = activity.result?.stepResult;
+    const lifecycle = this.stepExecutionLifecycle(activity);
+    if (!(lifecycle.binding instanceof DraftWorkerExecutionBinding)) unavailable("PRODUCER_NOT_SUPPORTED", activity.id,
+      "The Gate repair Activity has no saved worker execution binding");
+    if (result instanceof SpecGateRepairContextRequiredResult) {
+      if (activity.transition.operation !== "record_draft_step_settlement"
+        || activity.result.draftSettlementReceipt.settlementKind !== "execution"
+        || !["checkpoint", "claimed", "publication"].includes(lifecycle.phase)
+        || GROUPS.some((group) => activity.references[group].length !== 0)) {
+        unavailable("PRODUCER_NOT_SUPPORTED", activity.id, "The Gate repair execution Activity contains unsupported completion semantics");
+      }
+      return projected;
+    }
+    if (!(result instanceof SpecGateRepairReadyForGateResult || result instanceof SpecGateRepairReviewRequiredResult)
+      || lifecycle.phase !== "terminal" || activity.transition.operation !== "confirm_attempt") {
+      unavailable("PRODUCER_NOT_SUPPORTED", activity.id, "The Gate repair has no supported recorded terminal Result");
+    }
+    const publications = this.activities.filter((entry) => entry.nodeId === activity.nodeId
+      && entry.attemptId === activity.attemptId && entry.sequence === activity.sequence
+      && entry.confirmationOrder < activity.confirmationOrder && entry.result?.stepResult instanceof SpecGateRepairContextRequiredResult)
+      .filter((entry) => {
+        const published = this.stepExecutionLifecycle(entry);
+        return published.phase === "publication" && published.terminal().equals(lifecycle);
+      });
+    if (publications.length !== 1) unavailable(publications.length === 0 ? "SOURCE_GENERATION_NOT_RETAINED" : "AMBIGUOUS_REFERENCE",
+      activity.id, "The Gate repair terminal has no exact worker publication");
+    const path = FLOW_ARTIFACT_CONTRACTS.resolve("spec.gate.repair.audit", { attemptId: activity.attemptId }).relativePath;
+    const descriptor = this.resolver.resolve({ kind: "path", id: path }, "Gate repair audit", { optional: true });
+    if (!descriptor || descriptor.activityId !== activity.id) unavailable("SOURCE_GENERATION_NOT_RETAINED", activity.id,
+      "The Gate repair audit for this Activity is not retained");
+    const audit = this.read(descriptor);
+    const plan = this.gateRepairPlan(activity, audit.repairId);
+    const baseSpecDescriptor = this.catalog.artifacts.find((entry) => entry.logicalKey === "spec.snapshot"
+      && `sha256:${entry.hash}` === audit.baseRevision);
+    if (!baseSpecDescriptor) unavailable("SOURCE_GENERATION_NOT_RETAINED", activity.id, "The Gate repair Spec baseline is not retained");
+    // The baseline is content-addressed. Identical revision snapshots prove
+    // the same bytes; this does not select a historical producer by proximity.
+    this.artifactBytesFor(baseSpecDescriptor);
+    const observation = new QuerySpecGateRepairObservation({ audit, state: this.state, activity, descriptor,
+      repairRecord: plan.record, baseSpecDescriptor });
+    const gate = this.activities.find((entry) => entry.id === observation.sourceEvidence.publicationActivityId
+      && entry.confirmationOrder < activity.confirmationOrder);
+    if (!gate) unavailable("REFERENCE_NOT_RESOLVED", activity.id, "The Gate repair source Activity is not retained");
+    if (gate.nodeId !== "spec-gate" || !observation.sourceEvidence.sourceAttempt.matches(
+      new GateAttemptIdentity({ id: gate.attemptId, sequence: gate.sequence }))) {
+      unavailable("SOURCE_GENERATION_NOT_RETAINED", activity.id, "The Gate repair does not bind its original Gate Attempt");
+    }
+    const gateDetails = this.forActivity(gate);
+    const findings = gateDetails.detailRefs.findings.map((id) => this.entities.findings.get(id));
+    const source = this.source(descriptor, activity, activity.id, `attempt:${activity.attemptId}`);
+    const items = observation.entries.map((entry) => {
+      const findingIds = entry.identities.map((identity) => {
+        const matches = findings.filter((finding) => finding.identity.equals(identity));
+        if (matches.length !== 1) unavailable(matches.length === 0 ? "REFERENCE_NOT_RESOLVED" : "AMBIGUOUS_REFERENCE",
+          identity.sourceFindingId, "The Gate repair finding does not resolve to its exact source observation");
+        return matches[0].id;
+      });
+      return new RepairItem({ id: RepairItem.idFor(source, this.flowVersionId, entry.jsonPointer), referenceId: entry.referenceId,
+        target: entry.target === null ? {} : RepairItemTarget.fromOperation(entry.operation.toJSON()),
+        operationKind: entry.operationKind, status: new DetailStatus(entry.status, entry.status), reason: entry.reason, findingIds,
+        change: entry.status === "applied" ? new RecordedRepairChange(entry.operation) : null });
+    });
+    const repair = projected.add("repairs", new RepairDetail({ source, flowVersionId: this.flowVersionId, items, nativeValue: "merged" }));
+    repair.findingIds = [...new Set(items.flatMap((item) => item.findingIds))];
+    repair.supportingSources.push(this.source(plan.descriptor, gate, plan.record.idempotencyKey,
+      `repair-plan:${plan.record.idempotencyKey}`, plan.pointer));
+    return projected;
+  }
   projectGate(activity, descriptor, projected) {
     const record = this.payload(activity, descriptor);
     const value = record.value;
@@ -672,7 +955,7 @@ export class QueryDetailIndex {
     const payload = value.artifacts;
     exactFields(payload, ["target", "level", "phase", "evaluations", "nextAction", "reasons", "issues", "failureKind", "failureCode",
       "gateTransitionAttemptId", "gateTransitionAttemptSequence", "gateTransitionLineage", "taskId", "sourceFingerprint",
-      "gateTransitionFailureCategory", "evaluationScope", "responseProtocolEvidence", "warnings"], activity.id);
+      "gateTransitionFailureCategory", "evaluationScope", "responseProtocolEvidence", "warnings", "observations"], activity.id);
     if (!payload || !Array.isArray(payload.evaluations)) unavailable("PRODUCER_NOT_SUPPORTED", activity.id, "The Gate producer has no supported recorded evaluation payload");
     this.assertGateBinding(activity, descriptor, payload);
     if (payload.gateTransitionFailureCategory !== undefined && value.result !== "fail") {
@@ -693,14 +976,20 @@ export class QueryDetailIndex {
       assertRecordedProducerValue(payload.nextAction, recorded, activity.id);
       nextAction = recorded;
     }
-    // Gate observations/diagnosis have no finding variant in the public schema.
-    if ((payload.observations?.length ?? 0) || (payload.nextAction?.diagnosis?.observations?.length ?? 0)) unavailable("PRODUCER_NOT_SUPPORTED", activity.id, "Gate finding semantics have no declared public detail variant");
     const source = this.source(descriptor, activity, descriptor.logicalKey, record.observationId, record.pointer);
-    projected.add("evaluations", new EvaluationDetail({ source, flowVersionId: this.flowVersionId, nativeCode: value.result,
+    const evaluation = projected.add("evaluations", new EvaluationDetail({ source, flowVersionId: this.flowVersionId, nativeCode: value.result,
       summary: value.summary ?? null, explanation: value.reason ?? null,
       specific: new GateEvaluationSpecific(payload, nextAction, activity.id),
       criteria: payload.evaluations.map((entry) => new EvaluationCriterion(entry, activity.id)) }));
     projected.applicable.add("findings");
+    for (const observation of canonicalGateFindingObservations({ artifact: value,
+      sourceStep: this.producerStepId(activity), sourceArtifact: descriptor.relativePath })) {
+      const findingSource = this.source(descriptor, activity, observation.identity.sourceFindingId,
+        record.observationId, record.pointer + observation.jsonPointer);
+      projected.add("findings", new GateFindingDetail({ source: findingSource, flowVersionId: this.flowVersionId, observation }));
+    }
+    this.linkEvaluation(evaluation, projected.entities.findings);
+    if (activity.transition.operation === "plan_gate_repair") this.projectGateRepairPlan(activity, projected);
   }
   assertGateBinding(activity, descriptor, payload) {
     const taskIdentity = TaskStepIdentity.fromStateNode(this.state, activity.nodeId);
@@ -742,12 +1031,22 @@ export class QueryDetailIndex {
       nativeValue: "continue_nonblocking", skipped: new LifecycleSkipSpecific(decision) }));
     return projected;
   }
-  projectRepairAudit(activity, descriptor, review, projected) {
+  projectRepairAudit(activity, retained, projected) {
+    const { descriptor, review } = retained;
     const audit = review.audit.at(-1);
     // assertReview already binds the descriptor-owned generation, exact bytes
     // and final audit. The producer's optional audit Activity is supplemental.
     if (audit.stage !== "spec-repair" || (audit.activityId !== undefined && audit.activityId !== activity.id)) unavailable("SOURCE_GENERATION_NOT_RETAINED", activity.id, "The repair audit is not bound to this Activity");
-    const source = this.source(descriptor, activity, activity.id, `generation:${review.generation}`, `/audit/${review.audit.length - 1}`);
+    const source = this.source(descriptor, activity, activity.id, `generation:${review.generation}`, `${retained.pointer}/audit/${review.audit.length - 1}`);
+    const inputPublications = this.activities.filter((entry) => entry.confirmationOrder < activity.confirmationOrder
+      && entry.reviewPublication?.reviewDigest === audit.inputDigest);
+    if (inputPublications.length > 1) unavailable("AMBIGUOUS_REFERENCE", activity.id, "The repair input has multiple recorded Review publications");
+    const inputFindings = inputPublications.length === 1
+      ? this.forActivity(inputPublications[0]).detailRefs.findings.map((id) => this.entities.findings.get(id))
+      : projected.entities.findings;
+    if (inputPublications.length === 0 && activity.result?.stepResult != null) {
+      unavailable("SOURCE_GENERATION_NOT_RETAINED", activity.id, "The repair input Review publication is not retained");
+    }
     const accepted = new SpecRepairOperationBatch({ version: 2, stage: "spec-repair", identity: review.identity.toJSON(),
       baseReviewDigest: audit.inputDigest, findings: [], operations: audit.acceptedOperations });
     if (accepted.discardedOperations.length) unavailable("PRODUCER_NOT_SUPPORTED", activity.id, "An accepted repair operation has unsupported semantics");
@@ -766,7 +1065,7 @@ export class QueryDetailIndex {
         const target = RepairItemTarget.fromOperation(operation);
         const findingIds = operation.findingIds ?? (operation.findingId == null ? [] : [operation.findingId]);
         const findings = findingIds.map((id) => {
-          const matches = projected.entities.findings.filter((finding) => finding.identity.sourceFindingId === id);
+          const matches = inputFindings.filter((finding) => finding.identity.sourceFindingId === id);
           if (matches.length !== 1) unavailable("AMBIGUOUS_REFERENCE", id, "Repair finding identity cannot be resolved from its retained generation");
           return matches[0].id;
         });
@@ -774,11 +1073,10 @@ export class QueryDetailIndex {
         // saved publication generation. It never uses a current array to
         // reconstruct an unretained observation. Repeated proposals retain
         // distinct items even when the producer stored the same digest.
-        const id = `repair-item:${canonicalDigest({ flowVersionId: this.flowVersionId,
-          producerActivityId: source.producerActivityId, observationId: source.observationId,
-          jsonPointer: `${source.jsonPointer}/${collection}/${position}` })}`;
+        const id = RepairItem.idFor(source, this.flowVersionId, `${source.jsonPointer}/${collection}/${position}`);
         items.push(new RepairItem({ id, referenceId: operation.operationDigest ?? specRepairProposalDigest(operation), target,
-          operationKind: operation.kind ?? null, status: new DetailStatus(status, status), reason: operation.reason ?? null, findingIds: findings }));
+          operationKind: operation.kind ?? null, status: new DetailStatus(status, status), reason: operation.reason ?? null, findingIds: findings,
+          change: status === "applied" ? new RecordedRepairChange(accepted.operations[position]) : null }));
       }
     }
     const repair = projected.add("repairs", new RepairDetail({ source, flowVersionId: this.flowVersionId, items, nativeValue: audit.outcome }));
@@ -791,6 +1089,23 @@ export class QueryDetailIndex {
 }
 class ProducerPayload {
   constructor(value, pointer, observationId) { Object.assign(this, { value, pointer, observationId }); Object.freeze(this); }
+}
+/** Storage address and semantic identity are distinct for retained observations. */
+class RetainedSpecReviewSource {
+  constructor({ descriptor, review, sourceArtifact, pointer }) {
+    if (!(review instanceof CanonicalSpecReview) || typeof sourceArtifact !== "string" || typeof pointer !== "string") {
+      throw new TypeError("Retained Spec Review requires its canonical value and source addresses");
+    }
+    Object.assign(this, { descriptor, review, sourceArtifact, pointer });
+    Object.freeze(this);
+  }
+}
+class RetainedGateRepairPlan {
+  constructor({ descriptor, record, entry, pointer }) {
+    if (!(record instanceof PlanGateRepairRecord)) throw new TypeError("Retained Gate repair requires its canonical plan");
+    Object.assign(this, { descriptor, record, entry, pointer });
+    Object.freeze(this);
+  }
 }
 
 function publicRepairTarget(value) {

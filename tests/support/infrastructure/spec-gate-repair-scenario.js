@@ -103,7 +103,7 @@ export async function createSpecGateRepairScenario({
 
 /** Produce and durably publish one bounded worker response before Step selection. */
 export function prepareSpecGateRepairHandoffInput({
-  ctx, invocation, replacement,
+  ctx, invocation, replacement, edits = null,
   coordinator = new WorkerArtifactHandoffCoordinator({
     now: () => new Date("2026-08-04T00:00:00.000Z"),
   }),
@@ -121,7 +121,7 @@ export function prepareSpecGateRepairHandoffInput({
     version: 1, stage: "spec-gate-repair", baseRevision: selected.baseRevision,
     groups: [{ findingIdentities: [selected.unit.findings[0].identity], operations: [{
       kind: "edit-text-field", target: range.target, expectedDigest: range.digest,
-      edits: [{ startByte: 0, endByte: Buffer.byteLength(range.value, "utf8"), replacement }],
+      edits: edits ?? [{ startByte: 0, endByte: Buffer.byteLength(range.value, "utf8"), replacement }],
       reason: "Correct the exact finding selected by Spec Gate.",
     }] }],
   }));

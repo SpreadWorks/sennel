@@ -1,5 +1,7 @@
 import fs from "node:fs";
 import { validateSchema } from "../lib/schema-validate.js";
+export { FLOW_QUERY_GATE_FINDING_SPECIFIC_SCHEMA } from "./query-gate-details.js";
+export { FLOW_QUERY_REPAIR_CHANGE_SCHEMA } from "./query-repair-change.js";
 
 export const FLOW_QUERY_SCHEMA_REVISION = 2;
 export const FLOW_QUERY_HELP = [

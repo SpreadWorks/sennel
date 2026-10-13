@@ -3,6 +3,7 @@ import crypto from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { ArtifactAuthority, ArtifactAuthoritySlot, ArtifactCardinality } from "./artifact-authority.js";
 import { FLOW_ARTIFACT_AUTHORITY_MATRIX } from "../flow/lib/flow-artifact-authority.js";
+import { CanonicalSpecReview } from "../flow/lib/spec-review-artifacts.js";
 import {
   RequirementTestCandidateBundle,
   RequirementTestDeferredReceipt,
@@ -1279,10 +1280,24 @@ export class FlowArtifactActivityEvidenceDocument {
       hash,
     });
     this.note = requiredText(note, "activity evidence note");
-    Object.freeze(this);
+    if (new.target === FlowArtifactActivityEvidenceDocument) Object.freeze(this);
   }
 
   static fromJSON(value) { return new FlowArtifactActivityEvidenceDocument(value); }
+
+  assertActivity(activity) {
+    if (activity?.id !== this.activityId) {
+      throw new Error("canonical activity evidence document must bind its owning Activity identity");
+    }
+    return this.assertOwner(activity);
+  }
+
+  assertOwner(activity) {
+    if (activity?.nodeId !== this.owner.nodeId || activity.nodeKey !== this.owner.nodeKey) {
+      throw new Error("activity evidence document owner does not match its Activity");
+    }
+    return this;
+  }
 
   toJSON() {
     return {
@@ -1296,6 +1311,54 @@ export class FlowArtifactActivityEvidenceDocument {
   }
 }
 
+/** The exact canonical Review record retained by one Spec publication Activity. */
+export class FlowArtifactSpecReviewActivityEvidenceDocument extends FlowArtifactActivityEvidenceDocument {
+  constructor(value = {}) {
+    if (value === null || typeof value !== "object" || Array.isArray(value)
+      || Object.keys(value).sort().join(",") !== "activityId,note,observedAt,owner,review,schemaRevision,source") {
+      throw new Error("Spec Review Activity evidence has invalid fields");
+    }
+    const { review, ...observation } = value;
+    super(observation);
+    this.review = new CanonicalSpecReview(review);
+    if (!isDeepStrictEqual(this.toJSON(), value)) {
+      throw new Error("Spec Review Activity evidence must preserve its exact canonical Review record");
+    }
+    const path = `revisions/${this.review.identity.revision.toString()}/review.json`;
+    const audit = this.review.audit.at(-1);
+    if (this.source.path !== path || this.source.pointer !== "" || this.source.hash !== this.review.digest
+      || this.review.generation < 1 || audit?.stage !== this.owner.nodeId
+      || (audit.activityId != null && audit.activityId !== this.activityId)) {
+      throw new Error("Spec Review Activity evidence does not bind its canonical source and final stage");
+    }
+    Object.freeze(this);
+  }
+
+  static fromJSON(value) { return new this(value); }
+
+  static forActivity({ activity, review, sourcePath, observedAt }) {
+    if (!(review instanceof CanonicalSpecReview)) throw new TypeError("Spec Review Activity evidence requires a canonical Review");
+    return new this({ schemaRevision: 1, activityId: activity.id,
+      owner: { nodeId: activity.nodeId, nodeKey: activity.nodeKey },
+      observedAt, source: { path: sourcePath, pointer: "", hash: review.digest },
+      note: "Canonical Spec Review publication.", review: review.toJSON() }).assertActivity(activity);
+  }
+
+  assertActivity(activity, { specId = this.review.identity.specId } = {}) {
+    super.assertActivity(activity);
+    const recordedAt = activity.timing?.finishedAt ?? activity.result?.confirmedAt;
+    if ((recordedAt != null && this.observedAt !== recordedAt) || activity.reviewPublication == null) {
+      throw new Error("Spec Review Activity evidence requires its saved publication and observation time");
+    }
+    activity.reviewPublication.assertReview(this.review, { specId,
+      revision: this.review.identity.revision.value,
+      bytes: Buffer.from(`${JSON.stringify(this.review.toJSON(), null, 2)}\n`, "utf8") });
+    return this;
+  }
+
+  toJSON() { return { ...super.toJSON(), review: this.review.toJSON() }; }
+}
+
 /** Validates immutable Activity evidence bytes and their ledger association. */
 export class FlowArtifactActivityEvidenceContent extends FlowArtifactContentContract {
   constructor() { super(); Object.freeze(this); }
@@ -1306,7 +1369,9 @@ export class FlowArtifactActivityEvidenceContent extends FlowArtifactContentCont
     try { value = JSON.parse(bytes.toString("utf8")); } catch (error) {
       throw new Error(`activity evidence must be valid JSON: ${error.message}`);
     }
-    return FlowArtifactActivityEvidenceDocument.fromJSON(value);
+    return Object.hasOwn(value ?? {}, "review")
+      ? FlowArtifactSpecReviewActivityEvidenceDocument.fromJSON(value)
+      : FlowArtifactActivityEvidenceDocument.fromJSON(value);
   }
 
   assertPublication(previousBytes, nextBytes) {
@@ -1328,13 +1393,15 @@ export class FlowArtifactActivityEvidenceContent extends FlowArtifactContentCont
     if (document.activityId !== descriptor.activityId) {
       throw new Error("activity evidence document Activity id does not match its descriptor");
     }
-    if (document.owner.nodeId !== activity?.nodeId || document.owner.nodeKey !== activity?.nodeKey) {
-      throw new Error("activity evidence document owner does not match its Activity");
-    }
+    document.assertOwner(activity);
     const contract = FLOW_ARTIFACT_CONTRACTS.require("activity.evidence");
     const artifact = FlowArtifactActivityEvidence.fromCanonicalPath(contract, descriptor.relativePath);
     if (artifact.owner.nodeId !== activity.nodeId || artifact.owner.publicationStep !== descriptor.slot.publicationStep) {
       throw new Error("activity evidence path owner does not match its Activity provenance");
+    }
+    if (document instanceof FlowArtifactSpecReviewActivityEvidenceDocument
+      && artifact.digest !== crypto.createHash("sha256").update(bytes).digest("hex")) {
+      throw new Error("Spec Review Activity evidence address does not match its exact bytes");
     }
     return document;
   }

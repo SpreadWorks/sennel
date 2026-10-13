@@ -10,6 +10,8 @@
  * confirmation.
  */
 
+import { isDeepStrictEqual } from "node:util";
+
 const ATTACHED_CANONICAL_ARTIFACT = Symbol("canonical-command-result-artifact");
 const ATTACHED_CANONICAL_PUBLICATIONS = Symbol("canonical-command-result-publications");
 
@@ -165,34 +167,66 @@ export function attachedCanonicalCommandResultPublications(result) {
   return Object.freeze(values.map((value) => CanonicalCommandResultPublication.from(value)));
 }
 
-/** Read the current producer payload from a validated attempts[] document. */
+/** One exact retained Attempt and its complete producer-owned publication input. */
+export class CanonicalCommandAttemptArtifactRecord {
+  #entry;
+
+  constructor({ logicalKey: key, entry, index }) {
+    this.#entry = jsonPayload(entry, "canonical command attempt history entry");
+    if (!Number.isSafeInteger(index) || index < 0
+      || !Number.isSafeInteger(entry.attempt) || entry.attempt < 1) {
+      throw new TypeError("Canonical command Attempt record requires its saved position and positive sequence");
+    }
+    this.index = index;
+    this.attempt = entry.attempt;
+    this.nodeId = entry.nodeId ?? null;
+    this.outcome = entry.outcome ?? null;
+    this.result = this.#entry.result ?? null;
+    this.artifact = CanonicalCommandResultArtifact.from(entry.artifact);
+    if (this.artifact.logicalKey !== key) {
+      throw new Error("canonical command attempt history artifact logicalKey mismatch");
+    }
+    Object.freeze(this);
+  }
+
+  get payload() { return this.artifact.payload; }
+
+  /** Strict normal command producer contract; abbreviated observations cannot supply it. */
+  publicationPayload() {
+    const { attempt, ...payload } = this.#entry;
+    if (!isDeepStrictEqual(Object.keys(payload).sort(), ["artifact", "nodeId", "outcome", "result"])
+      || typeof this.nodeId !== "string" || this.nodeId.trim() === ""
+      || this.outcome !== "completed"
+      || this.result === null || typeof this.result !== "object" || Array.isArray(this.result)
+      || !isDeepStrictEqual(payload.artifact, this.artifact.toJSON())) {
+      throw new TypeError("Canonical command Attempt lacks its complete publication contract");
+    }
+    return structuredClone(payload);
+  }
+
+  toJSON() { return structuredClone(this.#entry); }
+  toPayloadJSON() { return Object.freeze({ attempt: this.attempt, payload: this.payload }); }
+}
+
+/** Read exact retained producer payloads from a validated attempts[] document. */
 export class CanonicalCommandAttemptArtifactHistory {
+  #records;
+
   constructor({ logicalKey: key, attempts } = {}) {
     this.logicalKey = logicalKey(key);
     if (!Array.isArray(attempts) || attempts.length === 0) {
       throw new Error("canonical command attempt history requires a non-empty attempts array");
     }
     let previous = 0;
-    this.attempts = Object.freeze(attempts.map((entry, index) => {
-      if (entry === null || typeof entry !== "object" || Array.isArray(entry)) {
-        throw new Error(`canonical command attempt history attempts[${index}] must be an object`);
-      }
-      if (!Number.isSafeInteger(entry.attempt) || entry.attempt <= previous) {
+    this.#records = Object.freeze(attempts.map((entry, index) => {
+      const record = new CanonicalCommandAttemptArtifactRecord({ logicalKey: this.logicalKey, entry, index });
+      if (record.attempt <= previous) {
         throw new Error("canonical command attempt history attempts must be strictly increasing positive integers");
       }
-      previous = entry.attempt;
-      const artifact = entry.artifact;
-      if (artifact === null || typeof artifact !== "object" || Array.isArray(artifact)) {
-        throw new Error("canonical command attempt history artifact payload is required");
-      }
-      if (artifact.logicalKey !== this.logicalKey) {
-        throw new Error("canonical command attempt history artifact logicalKey mismatch");
-      }
-      return Object.freeze({
-        attempt: entry.attempt,
-        payload: jsonPayload(artifact.payload, "canonical command attempt artifact payload"),
-      });
+      previous = record.attempt;
+      return record;
     }));
+    this.attempts = Object.freeze(this.#records.map((record) => record.toPayloadJSON()));
     Object.freeze(this);
   }
 
@@ -203,6 +237,15 @@ export class CanonicalCommandAttemptArtifactHistory {
 
   get current() {
     return this.attempts.at(-1);
+  }
+
+  get currentRecord() { return this.#records.at(-1); }
+
+  atAttempt(sequence) {
+    if (!Number.isSafeInteger(sequence) || sequence < 1) {
+      throw new TypeError("Canonical command history requires a positive exact Attempt sequence");
+    }
+    return this.#records.find((entry) => entry.attempt === sequence) ?? null;
   }
 }
 
@@ -224,9 +267,9 @@ export class CanonicalCommandArtifactObservation {
     if (typeof history !== "boolean") throw new TypeError("Canonical command observation requires its declared artifact format");
     let artifact;
     if (history) {
-      const current = CanonicalCommandAttemptArtifactHistory.fromBytes({ logicalKey, bytes }).current;
-      if (current.attempt !== sequence) throw new Error("Canonical command history differs from its exact producer Attempt");
-      artifact = new CanonicalCommandResultArtifact({ logicalKey, payload: current.payload });
+      const record = CanonicalCommandAttemptArtifactHistory.fromBytes({ logicalKey, bytes }).currentRecord;
+      if (record.attempt !== sequence) throw new Error("Canonical command history differs from its exact producer Attempt");
+      artifact = record.artifact;
     } else artifact = CanonicalCommandResultArtifact.fromBytes({ logicalKey, bytes });
     return new CanonicalCommandArtifactObservation({ artifact, producerActivityId, attemptId, sequence });
   }
