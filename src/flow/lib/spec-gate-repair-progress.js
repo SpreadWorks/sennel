@@ -14,6 +14,7 @@ export function readSpecGateRepairExecutionProgress({ flowManager, state, lifecy
   const reader = new SpecGateRepairProgressReader({ flowManager, specId: state.specId,
     attemptId: state.attempt.id, consumerNodeId: "spec-gate-repair" });
   const progress = reader.read(lifecycle.executionGeneration, lifecycle.phase);
+  flowManager.readExecutionContract({ executionContract: progress.executionContract });
   if (progress.document.runId !== state.runId || progress.document.attemptSequence !== state.attempt.sequence
     || progress.document.inputDigest !== lifecycle.binding.inputDigest
     || progress.document.inputRevision !== lifecycle.binding.inputRevision) {

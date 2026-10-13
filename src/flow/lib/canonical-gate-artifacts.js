@@ -1,3 +1,4 @@
+import { FlowExecutionInputBaseline } from "./flow-execution-contract.js";
 import { CURRENT_FLOW_SCHEMA_REVISION } from "../../lib/flow-schema-revision.js";
 /**
  * Version-1 gate persistence boundary.
@@ -152,7 +153,14 @@ export class CanonicalGateInputStore {
     this.flowManager = flowManager;
     this.state = canonicalState(state);
     this.nodeId = requiredText(nodeId, "canonical gate input nodeId");
+    this.inputBaselines = [];
     Object.freeze(this);
+  }
+
+  #remember(descriptor) {
+    if (!this.inputBaselines.some((baseline) => baseline.baseline.artifact.relativePath === descriptor.relativePath)) {
+      this.inputBaselines.push(new FlowExecutionInputBaseline({ descriptor }));
+    }
   }
 
   readJson(logicalKey, { parameters = {}, optional = false, consumerNodeId = this.nodeId } = {}) {
@@ -164,6 +172,7 @@ export class CanonicalGateInputStore {
       optional,
     });
     if (resolved === null) return null;
+    this.#remember(resolved.descriptor);
     try {
       return Object.freeze(JSON.parse(resolved.bytes.toString("utf8")));
     } catch (error) {
@@ -175,6 +184,7 @@ export class CanonicalGateInputStore {
     const resolved = this.flowManager.readArtifact({
       specId: this.state.specId, logicalKey: "spec.record", consumerNodeId: this.nodeId,
     });
+    this.#remember(resolved.descriptor);
     return new CanonicalSpecGateRecord(resolved.bytes);
   }
   spec() { return this.specRecord().spec; }
@@ -203,6 +213,7 @@ export class CanonicalGateInputStore {
       optional,
     });
     if (resolved === null) return null;
+    this.#remember(resolved.descriptor);
     const history = CanonicalCommandAttemptArtifactHistory.fromBytes({ logicalKey, bytes: resolved.bytes });
     return Object.freeze({ attempt: history.current.attempt, payload: history.current.payload });
   }
@@ -221,6 +232,7 @@ export class CanonicalGateInputStore {
       optional,
     });
     if (resolved === null) return null;
+    this.#remember(resolved.descriptor);
     const history = CanonicalCommandAttemptArtifactHistory.fromBytes({ logicalKey, bytes: resolved.bytes });
     return Object.freeze({
       attempt: history.current.attempt,

@@ -9,6 +9,8 @@
  * Part of cac6/T8 (spec 207).
  */
 
+import { readRuntimeResource } from "./runtime-package.js";
+
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -118,7 +120,7 @@ export function truncateGeneratedSpecTaskAcceptanceText(value) {
 
 function loadSchema() {
   if (!cachedSchema) {
-    cachedSchema = JSON.parse(fs.readFileSync(SCHEMA_PATH, "utf8"));
+    cachedSchema = JSON.parse(readRuntimeResource(SCHEMA_PATH));
   }
   return cachedSchema;
 }

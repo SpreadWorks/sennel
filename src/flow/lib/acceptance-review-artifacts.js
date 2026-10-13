@@ -1,9 +1,9 @@
+import { readRuntimeResource } from "../../lib/runtime-package.js";
 /**
  * Acceptance value objects shared by the Version-1 catalog reader and worker.
  * Persistence belongs exclusively to CanonicalAcceptanceArtifactStore.
  */
 import { fileURLToPath } from "node:url";
-import fs from "node:fs";
 import { validateSchema } from "../../lib/schema-validate.js";
 
 const SCHEMA_PATH = fileURLToPath(new URL("../schemas/acceptance-review.schema.json", import.meta.url));
@@ -148,7 +148,7 @@ export function validateAcceptanceReviewArtifact(artifact, { requirementIds = nu
   return artifact;
 }
 
-function awaitedSchema() { return fs.readFileSync(SCHEMA_PATH, "utf8"); }
+function awaitedSchema() { return readRuntimeResource(SCHEMA_PATH); }
 
 export function artifactFromAcceptanceJudgments({ context, requirementJudgments, deferredFindingDispositions = [] }) {
   const blocked = context.mechanicalBlockers.length > 0;

@@ -1,3 +1,8 @@
+import { CanonicalFlowArtifactBaseline } from "./canonical-flow-artifact-baseline.js";
+import { CurrentFlowStateInvariantError } from "./current-flow-state-invariant-error.js";
+import { isPlainObject, requireString } from "./current-flow-value-validation.js";
+export { CanonicalFlowArtifactBaseline } from "./canonical-flow-artifact-baseline.js";
+export { CurrentFlowStateInvariantError } from "./current-flow-state-invariant-error.js";
 import { SPEC_GATE_REPAIR_RECOVERY_OPERATION, SpecGateRepairRecoveryDecision, SpecGateRepairRecoveryEvidence } from "./spec-gate-repair-recovery.js";
 import { FinalizationSettlementReceiptEvidence } from "./finalization-execution-identity.js";
 import { AcceptedGateDeferral } from "./accepted-gate-deferral.js";
@@ -35,7 +40,8 @@ import { FileLock } from "../../lib/file-lock.js";
 import { RealDirectoryAuthority } from "../../lib/real-directory-authority.js";
 import { AuthoritativeSpecRecord, FlowActivityId, FlowArtifactCatalog, FlowArtifactCatalogStore, FlowArtifactDescriptor, FlowId, FlowRunId, FlowSpecIdentity, FlowVersionId, FlowVersionLocation, FlowVersionMigrationOutput, FlowVersionMigrationOutputBuilder, FlowVersionMigrationOutputSet, FlowVersionRuntimeLockLocation, FlowVersionSemanticValidator } from "../../lib/flow-version.js";
 import { FlowSpecRevision } from "../../lib/flow-spec-revision.js";
-import { FLOW_ARTIFACT_CONTRACTS, FlowArtifactActivityEvidence, FlowArtifactUpdater } from "../../lib/flow-artifact-contract.js";
+import { FLOW_ARTIFACT_CONTRACTS, FlowArtifactActivityEvidence, FlowArtifactUpdater,
+  FlowArtifactSpecReviewActivityEvidenceDocument } from "../../lib/flow-artifact-contract.js";
 import { CanonicalSpecReview, initialCanonicalSpecReview } from "./spec-review-artifacts.js";
 import { GateObservationCycleReader } from "./gate-observation-convergence.js";
 import { isConditionalDraftWorkerStep } from "./draft-conditional-worker.js";
@@ -339,53 +345,6 @@ export class CanonicalFlowArtifactWrite {
  * publication lock, so unrelated artifacts may change while the observed
  * artifact retains compare-and-swap semantics.
  */
-export class CanonicalFlowArtifactBaseline {
-  constructor({ logicalKey, parameters = {}, digest = null, byteLength = 0 } = {}) {
-    if (!isPlainObject(parameters)) {
-      throw new CurrentFlowStateInvariantError("canonical artifact baseline parameters must be an object");
-    }
-    this.artifact = resolvedArtifact(requireString(logicalKey, "canonical artifact baseline logicalKey"), parameters);
-    if (["flow.state", "flow.activities", "artifact.catalog"].includes(this.artifact.logicalKey)) {
-      throw new CurrentFlowStateInvariantError("canonical Store authorities cannot be artifact baselines");
-    }
-    if (!this.artifact.contract.cataloged) {
-      throw new CurrentFlowStateInvariantError("canonical artifact baseline must target cataloged storage");
-    }
-    if (digest !== null && (typeof digest !== "string" || !/^[a-f0-9]{64}$/.test(digest))) {
-      throw new CurrentFlowStateInvariantError("canonical artifact baseline digest must be null or a SHA-256 digest");
-    }
-    if (!Number.isSafeInteger(byteLength) || byteLength < 0 || (digest === null && byteLength !== 0)) {
-      throw new CurrentFlowStateInvariantError("canonical artifact baseline byteLength is invalid");
-    }
-    this.digest = digest;
-    this.byteLength = byteLength;
-    Object.freeze(this);
-  }
-
-  static from(value) {
-    return value instanceof CanonicalFlowArtifactBaseline
-      ? value
-      : new CanonicalFlowArtifactBaseline(value);
-  }
-
-  assertCatalog(catalog) {
-    if (!(catalog instanceof FlowArtifactCatalog)) {
-      throw new CurrentFlowStateInvariantError("canonical artifact baseline requires a FlowArtifactCatalog");
-    }
-    const actual = catalog.artifacts.find((entry) => entry.relativePath === this.artifact.relativePath) ?? null;
-    const unchanged = this.digest === null
-      ? actual === null
-      : actual !== null
-        && actual.logicalKey === this.artifact.logicalKey
-        && actual.hash === this.digest
-        && actual.size === this.byteLength;
-    if (!unchanged) {
-      throw new CurrentFlowStateConflictError(
-        `canonical artifact changed after baseline capture: ${this.artifact.relativePath}`,
-      );
-    }
-  }
-}
 
 /**
  * The dispatcher-owned publication of source-worker upgrade evidence.  The
@@ -637,7 +596,7 @@ export class CanonicalFlowReviewEvidenceWrite {
 }
 
 /**
- * An immutable, non-review observation published under the exact owner of a
+ * An immutable observation published under the exact owner of a
  * Flow Activity.  This is a normal Store artifact write, not a migration
  * escape hatch: callers supply a typed document whose id/node identity is
  * checked again by the catalog when the ledger is read.
@@ -662,12 +621,11 @@ export class CanonicalFlowActivityEvidenceWrite {
     if (!(activity instanceof FlowActivity)) {
       throw new CurrentFlowStateInvariantError("canonical activity evidence publication requires a typed FlowActivity");
     }
-    if (activity.nodeId !== this.artifact.owner.nodeId
-      || activity.nodeKey !== this.document.owner.nodeKey
-      || this.document.owner.nodeId !== activity.nodeId
-      || this.document.activityId !== activity.id) {
+    if (activity.nodeId !== this.artifact.owner.nodeId) {
       throw new CurrentFlowStateInvariantError("canonical activity evidence document must bind its owning Activity identity");
     }
+    try { this.document.assertActivity(activity); }
+    catch (cause) { throw new CurrentFlowStateInvariantError(cause.message); }
     return this.artifact.publication({
       mediaType: this.mediaType,
       updater: this.artifact.owner.publicationStep,
@@ -855,19 +813,6 @@ const STATE_FIELDS = new Set([
 const NODE_FIELDS = new Set(["kind", "id", "key", "status", "result", "attemptSequence", "steps"]);
 const JOURNAL_WRITER_AUTHORITY = Symbol("current-flow-state-store-writer");
 
-function isPlainObject(value) {
-  return value !== null
-    && typeof value === "object"
-    && !Array.isArray(value)
-    && Object.getPrototypeOf(value) === Object.prototype;
-}
-
-function requireString(value, field) {
-  if (typeof value !== "string" || value.trim() === "") {
-    throw new CurrentFlowStateInvariantError(`${field} must be a non-empty string`);
-  }
-  return value;
-}
 
 function requirePositiveInteger(value, field, { allowZero = false } = {}) {
   if (!Number.isSafeInteger(value) || value < (allowZero ? 0 : 1)) {
@@ -1041,13 +986,6 @@ function nodeAtPath(root, pathIds) {
   return current;
 }
 
-export class CurrentFlowStateInvariantError extends Error {
-  constructor(message) {
-    super(message);
-    this.name = "CurrentFlowStateInvariantError";
-    this.code = "CURRENT_FLOW_STATE_INVARIANT_INVALID";
-  }
-}
 
 /**
  * Typed catalog-lock admission for the approval-only Task insertion route.
@@ -8650,6 +8588,28 @@ export class ActivityReviewPublication {
   }
 }
 
+/** The exact destination chosen by the canonical Spec revision publication. */
+class CanonicalSpecReviewActivityPublication {
+  constructor({ write, review, fact }) {
+    if (!(write instanceof CanonicalFlowArtifactWrite) || write.artifact.logicalKey !== "spec.review"
+      || !(review instanceof CanonicalSpecReview) || !(fact instanceof ActivityReviewPublication)) {
+      throw new CurrentFlowStateInvariantError("Spec Review publication requires its typed destination and Activity fact");
+    }
+    Object.assign(this, { write, review, fact });
+    Object.freeze(this);
+  }
+
+  evidenceWrite(activity, observedAt) {
+    const document = FlowArtifactSpecReviewActivityEvidenceDocument.forActivity({ activity,
+      review: this.review, sourcePath: this.write.artifact.relativePath, observedAt });
+    const bytes = Buffer.from(`${JSON.stringify(document.toJSON(), null, 2)}\n`, "utf8");
+    return new CanonicalFlowActivityEvidenceWrite({
+      artifact: FLOW_ARTIFACT_CONTRACTS.activityEvidence({ nodeId: activity.nodeId, digest: sha256Bytes(bytes) }),
+      mediaType: "application/json", bytes,
+    });
+  }
+}
+
 export class ActivityTiming {
   constructor(value) {
     requireExactFields(value, new Set(["startedAt", "finishedAt", "durationMs"]), "activity.timing");
@@ -10222,10 +10182,13 @@ export class CurrentFlowVersionStore {
     const nextSpecRecord = replacementSpec ?? taskSpec;
     const specRevisionPlan = nextSpecRecord === null ? null : this.#specRevisionWrites(nextSpecRecord, activity, artifactWrites);
     const specRevisionWrites = specRevisionPlan === null ? Object.freeze([]) : specRevisionPlan.writes;
-    const reviewPublication = this.#reviewPublicationFact(activity, artifactWrites, specRevisionPlan);
+    const reviewRecord = this.#reviewPublicationRecord(activity, artifactWrites, specRevisionPlan);
+    const reviewPublication = reviewRecord?.fact ?? null;
     if (reviewPublication !== null) activity = activity.withReviewPublication(reviewPublication);
     const activityId = FlowActivityId.from(completionActivity?.id ?? activity.id);
-    const allArtifactWrites = Object.freeze([...artifactWrites, ...specRevisionWrites]);
+    const allArtifactWrites = Object.freeze([...artifactWrites, ...specRevisionWrites,
+      ...(reviewRecord === null ? [] : [reviewRecord.evidenceWrite(activity,
+        activity.timing?.finishedAt ?? activity.result?.confirmedAt ?? new Date().toISOString())])]);
     const artifactBaselines = this.#artifactBaselines(input?.artifactBaselines);
     const systemActivity = LIFECYCLE_TRANSITION_OPERATIONS.has(activity.transition.operation)
       || POLICY_TRANSITION_OPERATIONS.has(activity.transition.operation)
@@ -10298,9 +10261,8 @@ export class CurrentFlowVersionStore {
         if (reviewPublication !== null) {
           this.#assertReviewPublicationFact({
             activity,
-            reviewPublication,
+            reviewRecord,
             artifactWrites,
-            specRevisionPlan,
             catalog,
           });
         }
@@ -10586,7 +10548,7 @@ export class CurrentFlowVersionStore {
     baseline.assertReplacement(activity, writes, testSourceRemovals);
     return baseline;
   }
-  #reviewPublicationFact(activity, requestedWrites, specRevisionPlan) {
+  #reviewPublicationRecord(activity, requestedWrites, specRevisionPlan) {
     const reviewWrites = requestedWrites.filter((write) => write.artifact.logicalKey === "spec.review");
     if (reviewWrites.length === 0) return null;
     if (reviewWrites.length !== 1) {
@@ -10625,16 +10587,15 @@ export class CurrentFlowVersionStore {
       revision: review.identity.revision.value,
       bytes: reviewWrite.bytes,
     });
-    return fact;
+    return new CanonicalSpecReviewActivityPublication({ write: reviewWrite, review, fact });
   }
-  #assertReviewPublicationFact({ activity, reviewPublication, artifactWrites, specRevisionPlan, catalog }) {
-    if (!(activity instanceof FlowActivity) || !(reviewPublication instanceof ActivityReviewPublication)) {
+  #assertReviewPublicationFact({ activity, reviewRecord, artifactWrites, catalog }) {
+    if (!(activity instanceof FlowActivity) || !(reviewRecord instanceof CanonicalSpecReviewActivityPublication)) {
       throw new CurrentFlowStateInvariantError("canonical review publication validation requires typed Activity facts");
     }
+    const reviewPublication = reviewRecord.fact;
     const requested = artifactWrites.filter((write) => write.artifact.logicalKey === "spec.review");
-    const destination = specRevisionPlan?.writes.find((write) => write.artifact.logicalKey === "spec.review")
-      ?? requested[0]
-      ?? null;
+    const destination = reviewRecord.write;
     if (requested.length !== 1 || destination === null) {
       throw new CurrentFlowStateInvariantError("canonical review publication destination is ambiguous");
     }

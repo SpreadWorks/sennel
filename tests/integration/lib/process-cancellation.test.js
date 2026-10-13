@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { it } from "node:test";
-import { runCmdAsync } from "../../../src/lib/process.js";
+import { runCmd, runCmdAsync } from "../../../src/lib/process.js";
 import { LinuxProcessStat } from "../../../src/lib/process-identity.js";
 
 function rootFixture(t) {
@@ -30,6 +30,37 @@ function waitForFile(t, file) {
     read();
   });
 }
+
+it("synchronous runner delivers stdin, fd3, cwd and task environment to the child", (t) => {
+  const root = rootFixture(t);
+  const deliveryFile = path.join(root, "delivery");
+  fs.writeFileSync(deliveryFile, "parent descriptor data");
+  const descriptor = fs.openSync(deliveryFile, "r");
+  t.after(() => fs.closeSync(descriptor));
+  const input = Buffer.from([0x00, 0x7f, 0x80, 0xff]);
+  const script = [
+    "const fs=require('node:fs');",
+    "process.stdout.write(JSON.stringify({",
+    "cwd:process.cwd(),",
+    "taskValue:process.env.SENNEL_TEST_PROCESS_DELIVERY,",
+    "stdin:fs.readFileSync(0).toString('hex'),",
+    "descriptor:fs.readFileSync(3,'utf8'),",
+    "}));",
+  ].join("");
+  const result = runCmd(process.execPath, ["-e", script], {
+    cwd: root,
+    env: { ...process.env, SENNEL_TEST_PROCESS_DELIVERY: "scoped-value" },
+    input,
+    stdio: ["pipe", "pipe", "pipe", descriptor],
+  });
+  assert.equal(result.ok, true, result.stderr);
+  assert.deepEqual(JSON.parse(result.stdout), {
+    cwd: root,
+    taskValue: "scoped-value",
+    stdin: input.toString("hex"),
+    descriptor: "parent descriptor data",
+  });
+});
 
 it("pre-aborted asynchronous command returns a failed result without dispatch", async (t) => {
   const root = rootFixture(t);

@@ -14,7 +14,7 @@ import { ImplementationGateIssuePublication } from "../../lib/gate-issue-publica
 import { attachedCanonicalCommandResultArtifact } from "../../lib/canonical-command-result.js";
 import { readProspectiveImplementationGateEvidence, readImplementationGateExecutionEvidence,
   readCurrentGateTransitionFacts } from "../../lib/gate-transition-facts.js";
-import { gateStepExecutionContract } from "../../lib/execution-admission.js";
+import { acquirePendingExecutionContract, gateStepExecutionContract } from "../../lib/execution-admission.js";
 
 export function prepareImplGateServiceArguments(input) {
   const flowManager = input.flowManager ?? input.ctx?.flowManager;
@@ -31,6 +31,8 @@ export function prepareImplGateServiceArguments(input) {
   if (!(acquired.observed instanceof ImplGateInput)) throw new TypeError("Implementation Gate composition requires acquired input");
   return [new ImplGateInput(new GateStepObservation(acquired.observed.evidence)), new ImplReviewGateSettlementWriter({
     flowManager, binding: acquired.binding,
+    executionContract: acquired.commandResult != null
+      ? acquirePendingExecutionContract({ flowManager, binding: acquired.binding, generation: 0 }) : null,
     commandResult: acquired.commandResult, gatePublication: acquired.gatePublication,
     gateDeferralPublication: acquired.gateDeferralPublication ?? null,
     nonblockingPublication: acquired.nonblockingPublication ?? null,
@@ -43,6 +45,8 @@ export function prepareTaskGateServiceArguments(input) {
   const binding = input.binding ?? new TaskStepBinding({ flowManager, specId,
     definitionStepId: "task-gate" });
   binding.assertCurrent();
+  const executionContract = input.commandResult != null || input.gatePublication != null
+    ? acquirePendingExecutionContract({ flowManager, binding, generation: 0 }) : null;
   const publication = input.gatePublication ?? (input.commandResult == null ? null
     : flowManager.prepareImplCommandPublication({ binding, commandResult: input.commandResult,
         issuePublication: input.issuePublication ?? null }));
@@ -51,7 +55,7 @@ export function prepareTaskGateServiceArguments(input) {
     ? readImplementationGateExecutionEvidence({ flowManager, binding })
     : readProspectiveImplementationGateEvidence({ flowManager, binding,
         commandResult: input.commandResult, publication }));
-  return [new TaskGateInput(new GateStepObservation(evidence)), new TaskGateSettlementWriter({ flowManager, binding,
+  return [new TaskGateInput(new GateStepObservation(evidence)), new TaskGateSettlementWriter({ flowManager, binding, executionContract,
     publication, commandResult: input.commandResult ?? null,
     gateDeferralPublication: input.gateDeferralPublication ?? null,
     nonblockingPublication: input.nonblockingPublication ?? null,
@@ -90,6 +94,7 @@ export function prepareImplementationGatePublication({ ctx, binding, commandResu
   const flowManager = ctx.flowManager;
   const root = ctx.executionRoot ?? ctx.root;
   const state = binding.assertCurrent();
+  acquirePendingExecutionContract({ flowManager, binding, generation: 0 });
   const provisional = flowManager.prepareImplCommandPublication({ binding, commandResult });
   const artifact = attachedCanonicalCommandResultArtifact(commandResult);
   const taskScope = binding.stepId === "task-gate";
@@ -114,6 +119,7 @@ export function prepareImplementationGatePublication({ ctx, binding, commandResu
 export function prepareImplGatePublication({ flowManager, state, commandResult, root = null, binding = null,
   issuePublication = null, gatePublication = null }) {
   const selectedBinding = binding ?? new ImplStepBinding({ flowManager, specId: state.specId, stepId: "impl-gate" });
+  acquirePendingExecutionContract({ flowManager, binding: selectedBinding, generation: 0 });
   const publication = gatePublication ?? flowManager.prepareImplCommandPublication({ binding: selectedBinding, commandResult, issuePublication });
   const evidence = readProspectiveImplementationGateEvidence({ flowManager, binding: selectedBinding,
     commandResult, publication, root });

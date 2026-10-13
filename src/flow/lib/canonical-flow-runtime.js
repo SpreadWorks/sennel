@@ -753,7 +753,7 @@ export class CanonicalFlowRuntime {
 
   /** Apply one fixed draft-reopen route; route selection remains Store-owned. */
   reopenDraft({ specId, activityId, route, attempt, timing = null, provider = null, model = null, effort = null, usage = null, references,
-    result = null, artifactWrites = undefined, artifactBaselines = undefined, publicationLimits = undefined } = {}) {
+    result = null, artifactWrites = undefined, artifactBaselines = undefined, publicationLimits = undefined, admission = undefined } = {}) {
     const state = this.#state(specId);
     if (!new Set(["preimplementation", "task-addition", "spec-correction"]).has(route)) {
       throw new CurrentFlowStateInvariantError("canonical draft reopen route is invalid");
@@ -772,6 +772,7 @@ export class CanonicalFlowRuntime {
       artifactWrites,
       artifactBaselines,
       publicationLimits,
+      admission,
       timing: timing ?? { startedAt: now, finishedAt: now, durationMs: 0 },
       provider,
       model,

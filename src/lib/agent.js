@@ -49,8 +49,10 @@ import {
   AgentProcessStopEvidence,
   AgentTimeoutFailure,
   EmptyAgentResponseFailure,
+  AgentProviderStartupFailureEvidence,
 } from "./agent-failure.js";
 import { resolvePromptCharacterLimit } from "./config.js";
+import { PromptExecutionJournalError, preservePromptExecutionControlFailure } from "./prompt-execution-journal.js";
 import {
   MAX_AGENT_ARGUMENT_BYTES,
   MAX_AGENT_ARGV_BYTES,
@@ -392,6 +394,7 @@ class Agent {
     const hit = cachePolicy.readsCache ? promptCache?.cache.get(promptCache.key) : null;
     const acceptedHit = hit != null && this._isCacheableResponse(hit, null, opts);
     if (acceptedHit) {
+      providerCallAdmission?.recordCacheHit({ providerKey: resolved.providerKey, profileKey: resolved.profileKey });
       opts.onCacheDecision?.({
         cacheOutcome: "hit",
         providerCalled: false,
@@ -496,6 +499,14 @@ class Agent {
     return AgentProviderRetryPolicy.from({
       agentSection: this._config.agent || {},
       options,
+    });
+  }
+
+  invocationConfiguration(resolved, options = {}) {
+    return AgentInvocationConfiguration.fromResolved(resolved, {
+      stdinFallbackThreshold: this._config.agent?.stdinFallbackThreshold ?? DEFAULT_STDIN_FALLBACK_THRESHOLD,
+      timeoutMs: options.timeoutMs ?? resolved.timeoutMs,
+      retryPolicy: this.providerRetryPolicy(options),
     });
   }
 
@@ -648,7 +659,11 @@ class Agent {
   async _callOnceWithRetry(resolved, prompt, options, retry, blueprint) {
     const maxAttempts = retry.retryCount + 1;
     let lastFailure = null;
-    for (let attempt = 0; attempt <= retry.retryCount; attempt++) {
+    const initialAttempt = options.providerCallAdmission?.initialAttemptCount ?? 0;
+    if (initialAttempt >= maxAttempts) {
+      throw new PromptExecutionJournalError("PROMPT_EXECUTION_TRANSPORT_EXHAUSTED", "Saved provider attempts exhausted this call's transport retry limit");
+    }
+    for (let attempt = initialAttempt; attempt <= retry.retryCount; attempt++) {
       const materializedInvocation = blueprint.materialize({
         agentWorkDir: this._paths.agentWorkDir,
         commandId: options.commandId,
@@ -666,8 +681,13 @@ class Agent {
         invocation: options.providerCallAdmission?.invocation ?? null,
       });
       options.abortSignal?.throwIfAborted();
-      await options.providerAttemptAdmission?.beforeProviderAttempt(providerAttemptContext);
-      await options.providerCallAdmission?.beforeProviderAttempt(providerAttemptContext);
+      try {
+        await options.providerAttemptAdmission?.beforeProviderAttempt(providerAttemptContext);
+        await options.providerCallAdmission?.beforeProviderAttempt(providerAttemptContext);
+      } catch (error) {
+        if (options.providerCallAdmission?.durable) preservePromptExecutionControlFailure(error);
+        throw error;
+      }
       options.abortSignal?.throwIfAborted();
       try {
         const result = await this._callOnce(resolved, prompt, {
@@ -687,6 +707,10 @@ class Agent {
         lastFailure = AgentFailure.from(err)
           .recordAttempts(attempt + 1, maxAttempts);
       }
+      await options.providerCallAdmission?.afterProviderFailure(lastFailure, {
+        attempt: attempt + 1,
+        maxAttempts,
+      });
       if (!lastFailure.retryable) throw lastFailure;
       if (attempt < retry.retryCount) {
         const delayMs = retry instanceof AgentProviderRetryPolicy
@@ -735,12 +759,18 @@ class Agent {
       return await new Promise((resolve, reject) => {
         const platform = this._supervision.platform || process.platform;
         const spawnChild = this._supervision.spawn || spawn;
-        const child = spawnChild(profile.command, finalArgs, {
+        let child;
+        try { child = spawnChild(profile.command, finalArgs, {
           stdio: [stdinContent != null ? "pipe" : "ignore", "pipe", "pipe"],
           cwd,
           env,
           detached: platform !== "win32",
-        });
+        }); } catch (error) {
+          const evidence = AgentProviderStartupFailureEvidence.fromSpawnFailure(error, { providerKey, profileKey });
+          if (evidence !== null) error.providerStartupEvidence = evidence;
+          reject(error);
+          return;
+        }
         providerStarted = child.pid != null;
 
         let stdinError = null;
@@ -843,6 +873,8 @@ class Agent {
           // have accumulated lexical process output. Preserve that evidence.
           err.stdout = stdout;
           err.stderr = stderr;
+          const startup = AgentProviderStartupFailureEvidence.fromSpawnFailure(err, { providerKey, profileKey, child });
+          if (startup !== null) err.providerStartupEvidence = startup;
           await observeFailure(stdout);
           reject(formatSpawnError(err, {
             command: profile.command,
@@ -1445,6 +1477,26 @@ class PromptCacheInvocation {
   }
 }
 
+/** Non-secret effective invocation fields and the independently fixed policy. */
+export class AgentInvocationConfiguration extends PromptCacheInvocation {
+  constructor({ invocation, systemPromptFlag, workDirFlag, stdinFallbackThreshold, timeoutMs, retryPolicy }) {
+    super(invocation);
+    if (!(retryPolicy instanceof AgentProviderRetryPolicy) || !Number.isFinite(timeoutMs) || timeoutMs <= 0
+      || !Number.isSafeInteger(stdinFallbackThreshold) || stdinFallbackThreshold < 1) {
+      throw new TypeError("Effective Agent invocation policy is invalid");
+    }
+    Object.assign(this, { systemPromptFlag, workDirFlag, stdinFallbackThreshold, timeoutMs, retryPolicy });
+    Object.freeze(this.args);
+    Object.freeze(this);
+  }
+  static fromResolved(resolved, policy) {
+    return new AgentInvocationConfiguration({ invocation: PromptCacheInvocation.fromProfile(resolved.profile).toJSON(),
+      systemPromptFlag: resolved.provider.systemPromptFlag(), workDirFlag: resolved.provider.workDirFlag(), ...policy });
+  }
+  toJSON() { return { ...super.toJSON(), systemPromptFlag: this.systemPromptFlag, workDirFlag: this.workDirFlag,
+    stdinFallbackThreshold: this.stdinFallbackThreshold, timeoutMs: this.timeoutMs, retryPolicy: this.retryPolicy.toJSON() }; }
+}
+
 class AgentPromptCache {
   constructor({ root, specId }) {
     this.root = path.resolve(root);
@@ -1567,7 +1619,7 @@ function formatSpawnError(err, { command, env, providerKey, profileKey, commandI
 
   diagnostic.name = err.name || "Error";
   diagnostic.cause = err;
-  for (const key of ["code", "errno", "syscall", "path", "spawnargs"]) {
+  for (const key of ["code", "errno", "syscall", "path", "spawnargs", "providerStartupEvidence"]) {
     if (err[key] != null) diagnostic[key] = err[key];
   }
   return diagnostic;

@@ -13,7 +13,8 @@
  *   VALID_SKILL_RULE_PHASES, VALID_SKILL_RULE_STATES, DRIFT_PRONE_RULE_IDS
  */
 
-import fs from "fs";
+import { readRuntimeResource } from "./runtime-package.js";
+
 import path from "path";
 import { fileURLToPath } from "url";
 import {
@@ -115,7 +116,7 @@ export function loadRules() {
 }
 
 export function loadRulesFromFile(filePath) {
-  const content = fs.readFileSync(filePath, "utf8");
+  const content = readRuntimeResource(filePath);
   return loadRulesFromString(content);
 }
 

@@ -7,14 +7,17 @@
 
 import { PKG_DIR } from "../../lib/cli.js";
 import { runCmd, assertOk } from "../../lib/process.js";
+import { RuntimeChildExecution } from "../../lib/runtime-package.js";
 import { runGit } from "../../lib/git-helpers.js";
 import { FlowCommand } from "./base-command.js";
 import path from "path";
 import { PRODUCT } from "../../lib/product.js";
 
 export class RunSyncCommand extends FlowCommand {
-  constructor() {
+  constructor({ runCommand = runCmd, git = runGit } = {}) {
     super({ requiresFlow: false });
+    this.runCommand = runCommand;
+    this.git = git;
   }
 
   async execute(ctx) {
@@ -24,7 +27,7 @@ export class RunSyncCommand extends FlowCommand {
     const docsScript = path.join(PKG_DIR, "docs.js");
 
     // Step 1: build
-    const buildRes = runCmd("node", [docsScript, "build"], { cwd: root });
+    const buildRes = RuntimeChildExecution.runSync(docsScript, ["build"], { cwd: root }, this.runCommand);
     const buildOutput = (buildRes.stdout || "").trim();
 
     if (!buildRes.ok) {
@@ -37,7 +40,7 @@ export class RunSyncCommand extends FlowCommand {
     }
 
     // Step 2: review
-    const reviewRes = runCmd("node", [docsScript, "review"], { cwd: root });
+    const reviewRes = RuntimeChildExecution.runSync(docsScript, ["review"], { cwd: root }, this.runCommand);
     const reviewOutput = (reviewRes.stdout || "").trim();
 
     if (!reviewRes.ok) {
@@ -58,11 +61,11 @@ export class RunSyncCommand extends FlowCommand {
     }
 
     // Step 3: git add (ignore errors for missing files)
-    runGit(["add", "docs/", "AGENTS.md", "CLAUDE.md", "README.md", `${PRODUCT.managedPath("output")}/`], { cwd: root });
+    this.git(["add", "docs/", "AGENTS.md", "CLAUDE.md", "README.md", `${PRODUCT.managedPath("output")}/`], { cwd: root });
 
     // Collect changed files
     let changed = [];
-    const diffRes = runGit(["diff", "--cached", "--name-only"], { cwd: root });
+    const diffRes = this.git(["diff", "--cached", "--name-only"], { cwd: root });
     if (diffRes.ok) {
       const diff = diffRes.stdout.trim();
       changed = diff ? diff.split("\n").filter(Boolean) : [];
@@ -70,7 +73,7 @@ export class RunSyncCommand extends FlowCommand {
 
     // Step 4: commit (skip if nothing to commit)
     if (changed.length > 0) {
-      const commitRes = runGit(["commit", "-m", "docs: sync documentation"], { cwd: root });
+      const commitRes = this.git(["commit", "-m", "docs: sync documentation"], { cwd: root });
       if (!commitRes.ok && !/nothing to commit/i.test(commitRes.stderr || commitRes.stdout)) {
         assertOk(commitRes, "git commit failed");
       }

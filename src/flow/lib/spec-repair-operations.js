@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import { SpecJsonValidator } from "../../lib/spec-json-validator.js";
 import { FlowFindingSourceIdentity } from "./flow-finding-source.js";
 
@@ -942,6 +943,70 @@ export class SpecGateRepairOperationBatch {
   }
 }
 
+/** One adopted group as stored by the canonical inspection serializer. */
+export class StoredSpecGateRepairAcceptedGroup {
+  constructor(value) {
+    exactKeys(value, ["index", "findingIdentities", "operations"], "stored Spec Gate repair group");
+    if (!Number.isSafeInteger(value.index) || value.index < 0) throw new TypeError("Stored Gate repair group index is invalid");
+    const group = new SpecGateRepairOperationGroup({ findingIdentities: value.findingIdentities,
+      operations: value.operations }, value.index);
+    if (!isDeepStrictEqual(gateGroupAudit(group, value.index), value)) {
+      throw new TypeError("Stored Gate repair group requires normalization or loses operations");
+    }
+    this.index = value.index;
+    this.identities = group.identities;
+    this.operations = group.operations;
+    Object.freeze(this);
+  }
+  toJSON() { return gateGroupAudit(this, this.index); }
+}
+
+/** Pure saved inspection audit, without applying edits or selecting a Result. */
+export class StoredSpecGateRepairOperationAudit {
+  constructor(value) {
+    exactKeys(value, ["version", "phase", "baseRevision", "acceptedGroups", "discardedGroups",
+      "operationDigest", "resultRevision"], "stored Spec Gate repair operation audit");
+    if (value.version !== 1 || value.phase !== "spec-gate-repair" || !SHA256_REVISION.test(value.baseRevision)
+      || !Array.isArray(value.acceptedGroups) || !Array.isArray(value.discardedGroups)
+      || value.acceptedGroups.length + value.discardedGroups.length > MAX_OPERATIONS) {
+      throw new TypeError("Stored Spec Gate repair operation audit has an invalid envelope");
+    }
+    exactKeys(value.resultRevision, ["digest", "byteLength"], "stored Gate repair result revision");
+    if (!SHA256.test(value.resultRevision.digest) || !Number.isSafeInteger(value.resultRevision.byteLength)
+      || value.resultRevision.byteLength < 0) throw new TypeError("Stored Gate repair result revision is invalid");
+    this.acceptedGroups = Object.freeze(value.acceptedGroups.map((group) => new StoredSpecGateRepairAcceptedGroup(group)));
+    if (this.acceptedGroups.reduce((count, group) => count + group.operations.length, 0) > MAX_OPERATIONS) {
+      throw new TypeError("Stored Gate repair operations exceed their producer limit");
+    }
+    this.discardedGroups = Object.freeze(value.discardedGroups.map((group) => {
+      exactKeys(group, ["index", "groupDigest", "reason"], "stored Gate repair rejection");
+      const rejection = new SpecGateRepairOperationRejection(group);
+      if (!isDeepStrictEqual(rejection.toJSON(), group)) throw new TypeError("Stored Gate repair rejection requires normalization");
+      return rejection;
+    }));
+    const indexes = [...this.acceptedGroups, ...this.discardedGroups].map((group) => group.index);
+    if (new Set(indexes).size !== indexes.length) throw new TypeError("Stored Gate repair group indexes overlap");
+    for (const groups of [this.acceptedGroups, this.discardedGroups]) {
+      if (groups.some((group, index) => index > 0 && group.index <= groups[index - 1].index)) {
+        throw new TypeError("Stored Gate repair groups are not in their producer order");
+      }
+    }
+    const accepted = this.acceptedGroups.map((group) => group.toJSON());
+    const expected = valueDigest({ accepted, rejected: this.discardedGroups });
+    if (value.operationDigest !== expected) throw new TypeError("Stored Gate repair operation digest differs from its groups");
+    this.baseRevision = value.baseRevision;
+    this.operationDigest = expected;
+    this.resultRevision = Object.freeze({ ...value.resultRevision });
+    Object.freeze(this);
+  }
+  toJSON() {
+    return Object.freeze({ version: 1, phase: "spec-gate-repair", baseRevision: this.baseRevision,
+      acceptedGroups: Object.freeze(this.acceptedGroups.map((group) => group.toJSON())),
+      discardedGroups: Object.freeze(this.discardedGroups.map((group) => group.toJSON())),
+      operationDigest: this.operationDigest, resultRevision: this.resultRevision });
+  }
+}
+
 /** Pure candidate inspection shared by Step adoption and recovery preview.
  * One bad operation rejects its entire group; independent groups remain usable. */
 export class SpecGateRepairOperationInspection {
@@ -1045,12 +1110,12 @@ export class SpecGateRepairOperationInspection {
       for (const operation of proposal.operations) acceptedDigests.add(proposal.operationDigests.get(operation));
     }
     this.rejections = Object.freeze(rejected.sort((a, b) => a.index - b.index));
-    this.audit = Object.freeze({
+    this.audit = new StoredSpecGateRepairOperationAudit({
       version: 1, phase: "spec-gate-repair", baseRevision: revision,
       acceptedGroups: Object.freeze(accepted), discardedGroups: Object.freeze(this.rejections.map((rejection) => Object.freeze(rejection.toJSON()))),
       operationDigest: valueDigest({ accepted, rejected }),
       resultRevision: Object.freeze({ digest: valueDigest(candidate), byteLength: stableBytes(candidate) }),
-    });
+    }).toJSON();
     this.spec = Object.freeze(candidate);
     Object.freeze(this);
   }

@@ -27,6 +27,7 @@ import {
   AgentPermissionConfigurationFailure,
 } from "../../lib/agent-failure.js";
 import { Envelope } from "../../lib/flow-envelope.js";
+import { stableArtifactViewJson } from "./artifact-view-fingerprint.js";
 import { FlowCommand } from "./base-command.js";
 import {
   AcceptanceEvidenceBindings,
@@ -40,6 +41,11 @@ import { acceptanceStepRegistration, initializeAcceptanceDecisionAwait } from ".
 import { prepareAcceptanceReviewInput } from "../engine/composition/acceptance-review-decision.js";
 import { DraftWorkerExecutionBinding, DraftWorkerExecutionClaim, DraftStepExecutionLifecycle } from "../definition.js";
 import { StepAdmissionRefusal } from "./step-admission-refusal.js";
+import { PromptExecutionJournal, PromptExecutionScope, isPromptExecutionControlFailure } from "../../lib/prompt-execution-journal.js";
+import { CanonicalPromptExecutionJournalWriter } from "./canonical-prompt-execution-writer.js";
+import { FlowExecutionContractRefusal, executionValueDigest } from "./flow-execution-contract.js";
+import { AcceptanceExecutionProfile, AcceptanceExecutionSpecification, AcceptanceExecutionSession,
+  readAcceptanceExecutionContinuation } from "./acceptance-execution-session.js";
 
 export const MAX_ACCEPTANCE_REQUEST_CHARS = 120_000;
 export const MAX_ACCEPTANCE_RESPONSE_CHARS = 120_000;
@@ -138,8 +144,12 @@ const ACCEPTANCE_REVIEW_RULES = Object.freeze([
   "For each taskReviewHandoff with allRejected=true, assess the original REJECTED Task Review findings and every bound reject disposition with its rationale against the current evidence. Those triage decisions skipped Task repair; do not rewrite the Review verdict or treat the rejection as an unreviewed repair.",
 ]);
 
+function acceptanceEvidenceJson(value) {
+  return JSON.stringify(JSON.parse(stableArtifactViewJson(value)), null, 2);
+}
+
 export function buildAcceptancePrompt(context) {
-  const evidence = JSON.stringify(context.evidence, null, 2);
+  const evidence = acceptanceEvidenceJson(context.evidence);
   const prompt = new PromptBuilder()
     .setRole("You are the semantic acceptance reviewer. Judge every requirement against the complete current evidence chain.")
     .setRules(ACCEPTANCE_REVIEW_RULES.join("\n"))
@@ -202,7 +212,7 @@ export function buildDeferredDispositionRepairPrompt(context, missingFindings) {
     throw new Error("missing deferred findings are required for disposition repair");
   }
   const missingIds = new Set(missingFindings.map((finding) => finding.findingId));
-  const evidence = JSON.stringify({
+  const evidence = acceptanceEvidenceJson({
     originalRequest: context.evidence.originalRequest,
     requirements: context.evidence.requirements,
     diff: context.evidence.diff,
@@ -213,7 +223,7 @@ export function buildDeferredDispositionRepairPrompt(context, missingFindings) {
     deferredFindingEvidence: context.evidence.deferredFindingEvidence.filter((entry) => (
       missingIds.has(entry.findingId)
     )),
-  }, null, 2);
+  });
   const schema = {
     type: "object",
     required: ["deferredFindingDispositions"],
@@ -473,23 +483,86 @@ class SingleResponseReducer extends PromptBatchReducer {
   }
 }
 
-function acceptanceAgentOptions(request) {
+/** Fixed request planning and the pure execution policy acquired before claim. */
+class AcceptanceExecutionConfiguration {
+  constructor({ specification, directPrompt = null, evidencePlan = null }) {
+    if (!(specification instanceof AcceptanceExecutionSpecification)
+      || specification.executionMode === "direct" && (directPrompt === null || evidencePlan !== null)
+      || specification.executionMode === "map-reduce" && (directPrompt !== null || !(evidencePlan instanceof AcceptanceEvidenceExecutionPlan))) {
+      throw new TypeError("Acceptance execution configuration is incomplete");
+    }
+    Object.assign(this, { specification, directPrompt, evidencePlan });
+    Object.freeze(this);
+  }
+}
+
+function acquireAcceptanceExecutionConfiguration(context, agent, resolvedAgent, stored = null) {
+  const executionLimit = stored === null ? new PromptExecutionLimit({
+    maxRequestCharacters: agent.promptCharacterLimit, maxProviderCallCount: 100,
+    maxProtocolRetryCount: 0, maxSynthesisCallCount: 32, maxAggregateCharacters: null,
+  }) : new PromptExecutionLimit(stored.executionLimit);
+  const limit = executionLimit.requestLimit();
+  let directPrompt = null;
+  let executionMode = stored?.executionMode ?? "direct";
+  if (executionMode === "direct") {
+    try {
+      directPrompt = buildAcceptancePrompt(context);
+      const footprint = PromptLogicalFootprint.measure(directPrompt);
+      if (!footprint.fits(limit)) throw new AcceptanceBudgetError("request", footprint.toJSON(), limit.maxCharacters);
+    } catch (error) {
+      if (!(error instanceof AcceptanceBudgetError) || stored !== null) throw error;
+      directPrompt = null;
+      executionMode = "map-reduce";
+    }
+  }
+  const evidencePlan = executionMode === "map-reduce" ? new AcceptanceEvidenceExecutionPlan(context, { limit, executionLimit }) : null;
+  const initialRequests = executionMode === "map-reduce" ? evidencePlan.observationPlan.batches.map((batch) => batch.request) : [directPrompt];
+  const profile = new AcceptanceExecutionProfile({ ...resolvedAgent, invocationConfiguration: agent.invocationConfiguration(resolvedAgent) });
+  const projections = typeof agent.projectInvocation === "function"
+    ? initialRequests.map((request) => agent.projectInvocation(request.userPrompt, {
+      ...acceptanceAgentOptions(request), ...profile.agentOptions,
+    })) : [];
+  const finalSchemas = acceptanceFinalBindings(context, 0).map(scopedAcceptanceResponseSchema);
+  const specification = new AcceptanceExecutionSpecification({ executionMode, executionLimit, profile,
+    promptDigest: executionValueDigest({ executionMode, profile: profile.toJSON(), initialRequests, projections,
+      rules: ACCEPTANCE_REVIEW_RULES, summaryRevision: new AcceptanceSummaryEnvelope().revision,
+      finalRevision: new AcceptanceFinalEnvelope().revision, deferredRepairCalls: MAX_ACCEPTANCE_DEFERRED_REPAIR_CALLS }),
+    schemaDigest: executionValueDigest({ initial: initialRequests.map((request) => request.jsonSchema),
+      response: ACCEPTANCE_RESPONSE_SCHEMA, final: finalSchemas, deferred: DEFERRED_FINDING_DISPOSITION_ITEM_SCHEMA }),
+  });
+  return new AcceptanceExecutionConfiguration({ specification, directPrompt, evidencePlan });
+}
+
+function acquireAcceptanceExecutionSession({ flowManager, executionContract, specification }) {
+  const episode = flowManager.readPromptExecutionEpisode({ executionContract });
+  const scopes = ["direct", "map", "scoped-final", "deferred-repair"].map((stage) => new PromptExecutionScope({ stage }));
+  for (let round = 0; round < specification.executionLimit.maxReductionDepth; round += 1) scopes.push(new PromptExecutionScope({ stage: "reduction", round }));
+  const journals = scopes.map((scope) => {
+    const snapshot = episode.scopes.find((entry) => entry.scope.stage === scope.stage && entry.scope.round === scope.round) ?? null;
+    return new PromptExecutionJournal({ scope, snapshot,
+      writer: new CanonicalPromptExecutionJournalWriter({ flowManager, executionContract, scope, snapshot }) });
+  });
+  return new AcceptanceExecutionSession({ specification, episode, journals });
+}
+
+function acceptanceAgentOptions(request, session = null) {
   return {
     commandId: "flow.acceptance.review",
     systemPrompt: request.systemPrompt,
     jsonSchema: request.jsonSchema,
     fmtFallback: request.fmtFallback,
+    ...session?.specification.profile.agentOptions,
   };
 }
 
-function acceptanceExecutorOptions(agent, budget) {
+function acceptanceExecutorOptions(agent, budget, session = null) {
   return {
     callAgent: (request, _batch, _protocolRetryIndex, _attemptContext, providerCallAdmission) => agent.call(
       request.userPrompt,
-      { ...acceptanceAgentOptions(request), providerCallAdmission },
+      { ...acceptanceAgentOptions(request, session), providerCallAdmission },
     ),
     ...(typeof agent.projectInvocation === "function" ? {
-      projectInvocation: (request) => agent.projectInvocation(request.userPrompt, acceptanceAgentOptions(request)),
+      projectInvocation: (request) => agent.projectInvocation(request.userPrompt, acceptanceAgentOptions(request, session)),
     } : {}),
     executionBudget: budget,
   };
@@ -507,8 +580,9 @@ function parseObservations(raw, batch) {
 }
 
 function acceptanceEvidenceElements(context) {
-  return Object.entries(context.evidence).map(([sourceKey, value], sequence) => {
-    const text = typeof value === "string" ? value : JSON.stringify(value, null, 2);
+  const evidence = JSON.parse(stableArtifactViewJson(context.evidence));
+  return Object.entries(evidence).map(([sourceKey, value], sequence) => {
+    const text = typeof value === "string" ? value : acceptanceEvidenceJson(value);
     return new AcceptanceEvidencePromptElement({
       sourceKey,
       id: `acceptance-evidence.${sourceKey}`,
@@ -720,19 +794,20 @@ export class AcceptanceEvidenceExecutionPlan {
     Object.freeze(this);
   }
 
-  async execute(agent, executionBudget = new PromptExecutionBudget(this.executionLimit)) {
+  async execute(agent, executionBudget = new PromptExecutionBudget(this.executionLimit), session = null) {
     if (!(executionBudget instanceof PromptExecutionBudget)) throw new TypeError("Acceptance evidence execution requires a shared prompt budget");
     const budget = executionBudget;
     const minimumFinalCalls = acceptanceFinalBindings(this.context, 0).length;
-    budget.assertCanExecute(this.observationPlan.batches.length + minimumFinalCalls);
+    if (!session || session.journal("map").snapshot === null) budget.assertCanExecute(this.observationPlan.batches.length + minimumFinalCalls);
     // Final bindings are known before evidence execution even though their
     // reduced context is adaptive. Reserve their synthesis allowance now so
     // an impossible command cannot consume map calls first.
-    budget.consumeSynthesisCalls(minimumFinalCalls);
-    const executor = new PromptBatchExecutor(acceptanceExecutorOptions(agent, budget));
+    if (!session) budget.consumeSynthesisCalls(minimumFinalCalls);
+    const executor = new PromptBatchExecutor(acceptanceExecutorOptions(agent, budget, session));
     const observations = await executor.execute({
       plan: this.observationPlan,
-      ...acceptanceExecutorOptions(agent, budget),
+      ...acceptanceExecutorOptions(agent, budget, session),
+      ...session?.options("map", 0, minimumFinalCalls),
       responseContract: { parse: parseObservations, itemCount: (items) => items.length },
       reducer: new AcceptanceObservationReducer(),
     });
@@ -745,6 +820,7 @@ export class AcceptanceEvidenceExecutionPlan {
     });
     let finalCandidate = null;
     const final = await reduction.execute({
+      reserveSynthesisCalls: session === null,
       isComplete: (elements) => {
         try {
           finalCandidate = buildAcceptanceScopedFinalPlan(this.context, elements, this.limit);
@@ -763,9 +839,10 @@ export class AcceptanceEvidenceExecutionPlan {
         elements.forEach((element) => builder.add(element));
         return PromptBatchPlan.create({ collection: builder.build(), envelope: reductionEnvelope, limit: this.limit });
       },
-      executeRound: (plan) => executor.executeCompletions({
+      executeRound: (plan, depth) => executor.executeCompletions({
         plan,
-        ...acceptanceExecutorOptions(agent, budget),
+        ...acceptanceExecutorOptions(agent, budget, session),
+        ...session?.options("reduction", depth, plan.batches.length),
         responseContract: {
           parse: (raw, batch) => {
             const value = parseAcceptanceResponse(raw);
@@ -796,7 +873,8 @@ export class AcceptanceEvidenceExecutionPlan {
     }
     return executor.execute({
       plan: final.plan,
-      ...acceptanceExecutorOptions(agent, budget),
+      ...acceptanceExecutorOptions(agent, budget, session),
+      ...session?.options("scoped-final"),
       responseContract: {
         parse: (raw, batch) => {
           const binding = batch.payloadElements.find((element) => element instanceof AcceptanceFinalBindingElement);
@@ -813,11 +891,14 @@ async function callAcceptanceAgent(
   prompt,
   budget = new PromptExecutionBudget(new PromptExecutionLimit({ maxAggregateCharacters: null })),
   limit = new PromptRequestLimit(),
+  session = null,
+  stage = "direct",
 ) {
   const plan = PromptBatchPlan.fromRequest({ request: prompt, limit, id: "acceptance-request" });
   return new PromptBatchExecutor({ executionBudget: budget }).execute({
     plan,
-    ...acceptanceExecutorOptions(agent, budget),
+    ...acceptanceExecutorOptions(agent, budget, session),
+    ...session?.options(stage),
     responseContract: { parse: parseAcceptanceResponse },
     reducer: new SingleResponseReducer(),
   });
@@ -837,8 +918,7 @@ function acceptanceAgentFailure(failure) {
   return { failure: error, response: envelope };
 }
 
-async function resolveAcceptanceArtifact(context, responseSource) {
-  const fixture = responseSource.load(context);
+async function resolveAcceptanceArtifact(context, { agent, configuration, session, fixture = null } = {}) {
   if (fixture) {
     return {
       artifact: artifactFromAcceptanceJudgments({
@@ -851,41 +931,12 @@ async function resolveAcceptanceArtifact(context, responseSource) {
   if (context.mechanicalBlockers.length > 0) {
     return { artifact: artifactFromAcceptanceJudgments({ context, requirementJudgments: [] }) };
   }
-  const agent = container.get("agent");
-  let resolvedAgent;
   try {
-    resolvedAgent = agent.resolve("flow.acceptance.review");
-  } catch (error) {
-    const failure = error instanceof AgentFailure ? error : AgentFailure.from(error);
-    return acceptanceAgentFailure(failure);
-  }
-  if (!resolvedAgent) {
-    return acceptanceAgentFailure(new AgentPermissionConfigurationFailure({
-        message: "no AI agent configured for flow.acceptance.review",
-      }));
-  }
-  try {
-    const limit = new PromptRequestLimit({ maxCharacters: agent.promptCharacterLimit });
-    const executionLimit = new PromptExecutionLimit({
-      maxRequestCharacters: limit.maxCharacters,
-      maxProviderCallCount: 100,
-      maxProtocolRetryCount: 0,
-      maxSynthesisCallCount: 32,
-      maxAggregateCharacters: null,
-    });
-    const budget = new PromptExecutionBudget(executionLimit);
-    let parsed;
-    try {
-      const directPrompt = buildAcceptancePrompt(context);
-      const directFootprint = PromptLogicalFootprint.measure(directPrompt);
-      if (!directFootprint.fits(limit)) {
-        throw new AcceptanceBudgetError("request", directFootprint.toJSON(), limit.maxCharacters);
-      }
-      parsed = await callAcceptanceAgent(agent, directPrompt, budget, limit);
-    } catch (error) {
-      if (!(error instanceof AcceptanceBudgetError)) throw error;
-      parsed = await new AcceptanceEvidenceExecutionPlan(context, { limit, executionLimit }).execute(agent, budget);
-    }
+    const limit = configuration.specification.requestLimit;
+    const budget = session.budget;
+    const parsed = configuration.specification.executionMode === "direct"
+      ? await callAcceptanceAgent(agent, configuration.directPrompt, budget, limit, session)
+      : await configuration.evidencePlan.execute(agent, budget, session);
     const bound = bindAcceptanceResponse(context, parsed);
     const deferredCoverage = new DeferredDispositionCoverage(
       context,
@@ -898,6 +949,8 @@ async function resolveAcceptanceArtifact(context, responseSource) {
         buildDeferredDispositionRepairPrompt(context, missingFindings),
         budget,
         limit,
+        session,
+        "deferred-repair",
       );
       const repairBound = new AcceptanceResponseBinding(context)
         .bindDeferredFindingDispositions(repairParsed.deferredFindingDispositions ?? []);
@@ -911,6 +964,7 @@ async function resolveAcceptanceArtifact(context, responseSource) {
       }),
     };
   } catch (error) {
+    if (isPromptExecutionControlFailure(error) || error instanceof StepAdmissionRefusal) throw error;
     if (error instanceof AgentFailure) return acceptanceAgentFailure(error);
     return { failure: error, response: Envelope.fail("run", "acceptance-review",
       error.code ?? "ACCEPTANCE_RESPONSE_INVALID", error.message, error.data ?? null) };
@@ -923,30 +977,70 @@ async function executeCanonicalAcceptanceReview(ctx) {
   const context = await store.buildContext({ executionRoot: ctx.executionRoot || ctx.root });
   const acquired = await prepareAcceptanceReviewInput({ flowManager: ctx.flowManager,
     state: ctx.flowManager.canonicalState(state.specId), executionRoot: ctx.executionRoot || ctx.root, context });
+  const fixture = this.responseSource.load(context);
+  if (fixture !== null && ctx.flowManager.draftStepExecutionState({ binding: acquired.binding }).lifecycle?.phase === "claimed") {
+    throw new FlowExecutionContractRefusal("A supplied response cannot replace an unfinished Acceptance provider execution");
+  }
   let executionBinding = null;
-  if (context.mechanicalBlockers.length === 0) {
+  let executionContract = acquired.executionContract;
+  let configuration = null;
+  let session = null;
+  let agent = null;
+  let resolved = null;
+  if (context.mechanicalBlockers.length === 0 && fixture === null) {
     const execution = ctx.flowManager.draftStepExecutionState({ binding: acquired.binding });
     const previous = execution.lifecycle;
-    executionBinding = previous?.phase === "checkpoint" ? previous.binding
+    executionBinding = ["checkpoint", "claimed"].includes(previous?.phase) ? previous.binding
       : new DraftWorkerExecutionBinding({ executionGeneration: execution.nextGeneration,
         inputDigest: context.fingerprint.hash, inputRevision: context.fingerprint.hash });
-    if (executionBinding.inputDigest !== context.fingerprint.hash) throw new StepAdmissionRefusal("Acceptance execution checkpoint evidence changed");
-    const request = await prepareAcceptanceReviewInput({ flowManager: ctx.flowManager, state: ctx.flowManager.canonicalState(state.specId),
-      executionRoot: ctx.executionRoot || ctx.root, context, executionBinding,
-      executionLifecycle: DraftStepExecutionLifecycle.checkpoint(executionBinding) });
-    if (previous?.phase !== "checkpoint") await executeAcceptanceReviewInput({ ctx, flowManager: ctx.flowManager, stepId: "acceptance-review", preparation: request });
-    const claim = new DraftWorkerExecutionClaim({ dispatchInvocationId: `acceptance-${acquired.binding.attempt.id}-${executionBinding.executionGeneration}`,
-      generatedAt: new Date().toISOString(), actionDigest: context.fingerprint.hash, requestDigest: context.fingerprint.hash });
-    const claimed = await prepareAcceptanceReviewInput({ flowManager: ctx.flowManager, state: ctx.flowManager.canonicalState(state.specId),
-      executionRoot: ctx.executionRoot || ctx.root, context, executionBinding,
-      executionLifecycle: DraftStepExecutionLifecycle.checkpoint(executionBinding).claimed(claim) });
-    await executeAcceptanceReviewInput({ ctx, flowManager: ctx.flowManager, stepId: "acceptance-review", preparation: claimed });
+    const stored = acquired.executionContract;
+    if (previous?.phase === "claimed") {
+      const saved = ctx.flowManager.readCurrentStepSettlement({ specId: state.specId, stepId: "acceptance-review" });
+      const continuation = readAcceptanceExecutionContinuation({ flowManager: ctx.flowManager,
+        state: ctx.flowManager.canonicalState(state.specId), saved });
+      if (!continuation.canResume) {
+        const refusal = new StepAdmissionRefusal("Acceptance execution is held by its acquired continuation evidence");
+        refusal.code = continuation.code;
+        throw refusal;
+      }
+    }
+    agent = container.get("agent");
+    let resolvedAgent;
+    try { resolvedAgent = agent.resolve("flow.acceptance.review"); }
+    catch (error) { resolved = acceptanceAgentFailure(error instanceof AgentFailure ? error : AgentFailure.from(error)); }
+    if (resolved === null && !resolvedAgent) resolved = acceptanceAgentFailure(new AgentPermissionConfigurationFailure({
+      message: "no AI agent configured for flow.acceptance.review",
+    }));
+    if (stored !== null && resolved !== null) throw new FlowExecutionContractRefusal("Saved Acceptance provider configuration is unavailable for continuation");
+    if (resolved === null) {
+      configuration = acquireAcceptanceExecutionConfiguration(context, agent, resolvedAgent, stored);
+      executionContract = configuration.specification.contract({ binding: acquired.binding,
+        generation: executionBinding.executionGeneration, context, budgetOwner: stored?.budgetOwner });
+      if (stored !== null) ctx.flowManager.readExecutionContract({ executionContract });
+      if (previous?.phase !== "claimed") {
+        if (previous?.phase !== "checkpoint") {
+          const request = await prepareAcceptanceReviewInput({ flowManager: ctx.flowManager, state: ctx.flowManager.canonicalState(state.specId),
+            executionRoot: ctx.executionRoot || ctx.root, context, executionBinding,
+            executionLifecycle: DraftStepExecutionLifecycle.checkpoint(executionBinding) });
+          await executeAcceptanceReviewInput({ ctx, flowManager: ctx.flowManager, stepId: "acceptance-review", preparation: request });
+        }
+        const claim = new DraftWorkerExecutionClaim({ dispatchInvocationId: `acceptance-${acquired.binding.attempt.id}-${executionBinding.executionGeneration}`,
+          generatedAt: new Date().toISOString(), actionDigest: context.fingerprint.hash, requestDigest: executionContract.promptDigest });
+        const claimed = await prepareAcceptanceReviewInput({ flowManager: ctx.flowManager, state: ctx.flowManager.canonicalState(state.specId),
+          executionRoot: ctx.executionRoot || ctx.root, context, executionBinding, executionContract,
+          executionLifecycle: DraftStepExecutionLifecycle.checkpoint(executionBinding).claimed(claim) });
+        await executeAcceptanceReviewInput({ ctx, flowManager: ctx.flowManager, stepId: "acceptance-review", preparation: claimed });
+      }
+      session = acquireAcceptanceExecutionSession({ flowManager: ctx.flowManager, executionContract, specification: configuration.specification });
+    } else {
+      executionBinding = null;
+    }
   }
-  const resolved = await resolveAcceptanceArtifact(context, this.responseSource);
+  resolved ??= await resolveAcceptanceArtifact(context, { agent, configuration, session, fixture });
   if (resolved.response) {
     const preparation = await prepareAcceptanceReviewInput({ flowManager: ctx.flowManager,
       state: ctx.flowManager.canonicalState(state.specId), executionRoot: ctx.executionRoot || ctx.root,
-      context, executionBinding, failure: resolved.failure });
+      context, executionBinding, executionContract, failure: resolved.failure });
     await executeAcceptanceReviewInput({ ctx, flowManager: ctx.flowManager, stepId: "acceptance-review", preparation });
     return resolved.response;
   }
@@ -973,7 +1067,7 @@ async function executeCanonicalAcceptanceReview(ctx) {
     requirementIds: context.requirementIds,
   }).promote(response, artifact);
   const preparation = await prepareAcceptanceReviewInput({ flowManager: ctx.flowManager, state: ctx.flowManager.canonicalState(state.specId),
-    executionRoot: ctx.executionRoot || ctx.root, context: refreshed, commandResult: result, executionBinding });
+    executionRoot: ctx.executionRoot || ctx.root, context: refreshed, commandResult: result, executionBinding, executionContract });
   const outcome = await executeAcceptanceReviewInput({ ctx, flowManager: ctx.flowManager, stepId: "acceptance-review", preparation, commandResult: result });
   result.settlementReceipt = outcome.receipt.toJSON();
   await initializeAcceptanceDecisionAwait({ flowManager: ctx.flowManager, specId: state.specId });

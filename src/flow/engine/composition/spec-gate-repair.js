@@ -57,13 +57,13 @@ export class SpecGateRepairPublishedDecision {
 }
 
 function serviceArguments({ ctx, request, binding, preparation, handoffCoordinator,
-  publicationLimits, facts = preparation?.facts ?? null, continuation = null, publicationReceipt = null }) {
+  publicationLimits, facts = preparation?.facts ?? null, continuation = null, publicationReceipt = null, executionContract = request?.executionContract ?? null }) {
   binding.assertCurrent();
   const input = new SpecGateRepairServiceInput({ facts, continuation,
     attemptId: binding.attempt.id,
     attemptSequence: binding.attempt.sequence });
   return [input, new SpecGateRepairSettlementWriter({ ctx, request, binding,
-    preparation, handoffCoordinator, publicationReceipt, publicationLimits,
+    preparation, handoffCoordinator, publicationReceipt, publicationLimits, executionContract,
     publication: preparation?.settlementPublication(handoffCoordinator.now) ?? {} })];
 }
 
@@ -91,12 +91,14 @@ export async function preparePublishedSpecGateRepairArguments({ ctx, state: requ
   }
   const binding = new SpecWorkerStepBinding({ flowManager: ctx.flowManager,
     specId: state.specId, revision: source.baseRevision });
+  const executionContract = ctx.flowManager.readStoredExecutionContract({ binding, generation: execution.lifecycle.executionGeneration });
+  ctx.flowManager.readExecutionContract({ executionContract });
   const refreshed = readProgressBoundSpecGateRepairInput({ flowManager: ctx.flowManager,
     state, executionRoot: ctx.executionRoot || ctx.root, acceptedPublication: true });
   const { facts, continuation } = new SpecGateRepairPublishedDecision({ source, ledger, refreshed,
     proposal: saved.proposal });
   return serviceArguments({ ctx, request: null, binding, preparation: null,
-    facts, handoffCoordinator, continuation, publicationLimits,
+    facts, handoffCoordinator, continuation, publicationLimits, executionContract,
     publicationReceipt: ctx.flowManager.readCurrentStepSettlement({
       specId: state.specId, stepId: "spec-gate-repair",
     }).receipt });
@@ -109,9 +111,10 @@ export function reserveSpecGateRepairWorkerCall({ ctx, request, prompt, physical
   const flowManager = ctx.flowManager;
   binding.assertCurrent();
   const context = request.inputs.find((entry) => entry.name === "spec-gate-repair-context.json").document;
-  request.assertCurrent(flowManager.loadReadOnly(binding.specId));
   const execution = flowManager.draftStepExecutionState({ binding });
   const checkpoint = execution.lifecycle?.phase === "checkpoint";
+  if (checkpoint) request.assertCurrent(flowManager.loadReadOnly(binding.specId));
+  else request.assertInputCurrent(flowManager.loadReadOnly(binding.specId));
   const { limit, budget } = latestRepairBudget({ flowManager, specId: binding.specId,
     attemptId: binding.attempt.id, baseRevision: context.baseRevision, consumerNodeId: binding.stepId,
     forNewGeneration: !checkpoint });
@@ -172,6 +175,7 @@ export function reserveSpecGateRepairWorkerCall({ ctx, request, prompt, physical
       requestDigest: request.requestDigest, actionFileDigest: request.actionRequestDigest, limit: { ...limit },
       actionRepositoryFingerprint: request.invocation.action.repositoryFingerprint ?? null,
       generation: executionBinding.executionGeneration, context,
+      executionContractId: request.executionContract.id, executionContract: request.executionContract.toJSON(),
       sourceSnapshotReference: sourcePublication.reference().toJSON(),
       inputDescriptors: request.inputs.map((input) => input.toJSON()),
       executionLocator: executionLocator.toJSON(), plan: callPlan.toJSON(),
@@ -179,15 +183,22 @@ export function reserveSpecGateRepairWorkerCall({ ctx, request, prompt, physical
     base.physicalPromptFootprint = call.physicalPromptFootprint.toJSON();
     base.deliveryMode = call.deliveryMode;
   }
+  request.executionContract.assertExecutionBinding(binding, executionBinding);
+  if (request.executionContract.budgetOwner !== context.baseRevision
+    || !isDeepStrictEqual(request.executionContract.executionLimit, { ...limit })) {
+    throw new Error("Spec Gate repair contract differs from its existing Attempt budget");
+  }
   try {
     if (!checkpoint) {
       flowManager.checkpointDraftStepExecution({ binding, stepResult, settlement, executionBinding,
+        executionContract: request.executionContract,
         publicationLimits,
         artifactWrites: [...sourceWrites, progressWrite(binding, executionBinding.executionGeneration, "checkpoint",
           { ...base, phase: "checkpoint", budget: budget.snapshot() })] });
     }
     budget.consumeProviderCall();
     flowManager.claimDraftStepExecution({ binding, stepResult, settlement, executionBinding,
+      executionContract: request.executionContract,
       publicationLimits,
       executionClaim: new DraftWorkerExecutionClaim(base.executionLocator),
       artifactWrites: [progressWrite(binding, executionBinding.executionGeneration, "claimed",
@@ -295,6 +306,7 @@ export async function prepareSpecGateRepairServiceArguments({ ctx, request, hand
     try {
       publicationReceipt = ctx.flowManager.settleSpecStepResult({
         binding, stepResult, settlement: selectSettlement(binding.stepId, stepResult),
+        executionContract: saved.executionContract,
         publicationLimits,
         artifactWrites: [progressWrite(binding, lifecycle.executionGeneration, "publication", {
           ...saved.document, phase: "publication", budget: budget.snapshot(),

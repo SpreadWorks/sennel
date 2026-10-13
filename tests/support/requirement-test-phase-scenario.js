@@ -24,7 +24,7 @@ import { PrepareArtifactScenario } from "./prepare-artifact-scenario.js";
 import { removeTmpDir } from "./builders/tmp-dir.js";
 import { SeedWorkRoot } from "./builders/seed-work-root.js";
 import { validWorkerHandoffTaskSpec, workerArtifactJson } from "./infrastructure/worker-artifact.js";
-import { dispatchContainer, fixtureRepository, installGateProviderFake, requestInput, requestPayloadPath } from "./infrastructure/flow-dispatch-scenario.js";
+import { dispatchContainer, fixtureRepository, installGateProviderFake, passingGateProviderResponse, requestInput, requestPayloadPath } from "./infrastructure/flow-dispatch-scenario.js";
 
 /** Real phase composition. Only the external worker, Review process and AI Gate provider are fake.
  * No lifecycle resolver, canonical publication, receipt, promotion or transition is fabricated.
@@ -82,23 +82,12 @@ export class RequirementTestPhaseScenario {
     this.gateProvider = installGateProviderFake((prompt, options) => {
       const selected = this.options.gateResponse?.(prompt, options, this);
       if (selected !== null && selected !== undefined) return selected;
-      const required = options.jsonSchema?.required ?? [];
-      if (required.includes("evaluations")) {
-        const ids = options.jsonSchema?.properties?.evaluations?.items?.properties?.guardrail_id?.enum ?? [];
-        return JSON.stringify({ evaluations: ids.map((guardrail_id) => ({
-          guardrail_id, result: "pass", reason: "Scenario accepts the configured guardrail.",
-        })) });
-      }
-      const observation = options.jsonSchema?.properties?.observations?.items;
-      const requirementIds = observation?.properties?.requirementId?.enum ?? [];
-      const sourceRefs = observation?.properties?.sourceRef?.enum ?? [];
-      if (requirementIds.length && sourceRefs.length) return JSON.stringify({
-        observations: requirementIds.flatMap((requirementId) => sourceRefs.map((sourceRef) => ({
-          requirementId, sourceRef, support: [], contradictions: [], unresolved: [],
-        }))),
-      });
-      return JSON.stringify({ observations: [], ...(required.includes("evaluationUnavailable") ? { evaluationUnavailable: null } : {}) });
-    }, this.options.providerOptions);
+      return passingGateProviderResponse(prompt, options);
+    }, { ...this.options.providerOptions,
+      ...(this.options.realProviderTransport ? {
+        transportContext: () => ({ root: this.root, flowManager: this.manager }),
+      } : {}),
+    });
     const original = childProcess.spawnSync;
     this.reviewProcess = mock.method(childProcess, "spawnSync", (command, args, options) => {
       if (command !== "node" || !String(args[0]).endsWith("/flow/commands/review.js")) return original(command, args, options);

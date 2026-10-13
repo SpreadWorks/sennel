@@ -4,8 +4,18 @@ import { TaskStepIdentity } from "./task-step-identity.js";
 import { TaskStepBinding } from "../engine/connectors/task/task-step-binding.js";
 import { TaskReviewExecutionRequiredResult } from "../engine/step-result.js";
 import { prepareReviewExecutionClaim, commitReviewExecutionClaim } from "./spec-review-operations.js";
+import { FlowExecutionContract } from "./flow-execution-contract.js";
+import { FLOW_ARTIFACT_CONTRACTS } from "../../lib/flow-artifact-contract.js";
 /** Task Review uses the same immutable Review execution protocol as Spec. */
 export class TaskReviewOperations {
+  static executionContractArtifact({ flowManager, state }) {
+    const binding = new TaskStepBinding({ flowManager, specId: state.specId, definitionStepId: "task-review" });
+    const execution = flowManager.draftStepExecutionState({ binding });
+    return FLOW_ARTIFACT_CONTRACTS.resolve("execution.contract", FlowExecutionContract.parametersForBinding({
+      binding, generation: execution.lifecycle?.executionGeneration ?? execution.nextGeneration,
+    }));
+  }
+
   static prepareExecutionClaim(input) {
     const binding = new TaskStepBinding({ flowManager: input.flowManager, specId: input.state.specId,
       definitionStepId: "task-review" });

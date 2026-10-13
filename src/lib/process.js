@@ -146,10 +146,16 @@ async function runSignalCommand(cmd, args, opts) {
  * @param {number}   [opts.timeout]   - Timeout in ms
  * @param {number}   [opts.maxBuffer] - Max stdout/stderr buffer size in bytes
  * @param {Object}   [opts.env]       - Environment variables
+ * @param {Array}    [opts.stdio]     - Standard streams and inherited descriptors
+ * @param {string|Buffer} [opts.input] - Data to write to stdin
  * @returns {{ ok: boolean, status: number, stdout: string|Buffer, stderr: string|Buffer, signal: string|null, killed: boolean, errorCode: string|null }}
  */
 export function runCmd(cmd, args, opts = {}) {
-  const res = spawnSync(cmd, args, buildProcessOptions(opts));
+  const res = spawnSync(cmd, args, {
+    ...buildProcessOptions(opts),
+    ...(opts.stdio && { stdio: opts.stdio }),
+    ...(opts.input !== undefined && { input: opts.input }),
+  });
   const preserveBytes = opts.encoding === "buffer";
   const stdout = preserveBytes
     ? (Buffer.isBuffer(res.stdout) ? res.stdout : Buffer.alloc(0))

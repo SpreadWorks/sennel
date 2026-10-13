@@ -38,6 +38,8 @@ import { attachedCanonicalCommandResultArtifact } from "./canonical-command-resu
 import { AcceptanceRepairFindingSet } from "./acceptance-review-artifacts.js";
 import { AcceptanceReviewResultEvidence, AcceptanceDecisionResultEvidence, AcceptanceDecisionRequest } from "../steps/acceptance/acceptance-review-values.js";
 import { StepAdmissionRefusal } from "./step-admission-refusal.js";
+import { FlowExecutionInputBaseline } from "./flow-execution-contract.js";
+import { FlowRepositoryRuntimeArtifactRegistry } from "./flow-repository-runtime-artifacts.js";
 import { findStepById } from "./step-tree.js";
 
 const REVIEW_NODE_ID = "acceptance-review";
@@ -104,6 +106,7 @@ async function canonicalDiff({ root, state, location }) {
   const baseBranch = state.baseBranch || state.execution?.baseBranch || "HEAD";
   const baseRef = resolveMergeBase(root, baseBranch);
   const excludedSpec = `:(exclude)${location.relativeDirectory}/**`;
+  const runtimeArtifacts = new FlowRepositoryRuntimeArtifactRegistry();
   const result = runGit([
     "diff",
     "--no-ext-diff",
@@ -112,11 +115,12 @@ async function canonicalDiff({ root, state, location }) {
     "--",
     ".",
     excludedSpec,
+    ...runtimeArtifacts.gitPathspecExcludes(),
   ], { cwd: root });
   if (!result.ok) throw new Error(`failed to build canonical acceptance diff: ${result.stderr || result.stdout}`);
   const untracked = await collectUntrackedDiff(root, {
     maxFileSize: MAX_CANONICAL_ACCEPTANCE_DIFF_CHARS,
-    excludeFile: (relativePath) => isCanonicalFlowPath(relativePath, location),
+    excludeFile: (relativePath) => isCanonicalFlowPath(relativePath, location) || runtimeArtifacts.owns(relativePath),
   });
   const diff = `${result.stdout}${untracked}`;
   if (diff.length > MAX_CANONICAL_ACCEPTANCE_DIFF_CHARS) {
@@ -267,17 +271,21 @@ export class CanonicalAcceptanceArtifactStore {
     return this.readDocument("issue.log", { optional: true })?.value ?? Object.freeze({ entries: [] });
   }
 
-  fingerprint({ diff, evidence }) {
+  executionInputDescriptors() {
     const catalog = this.flowManager.artifactCatalog(this.specId);
     // Lifecycle checkpoints update these root authorities. Their complete
     // journal/state hashes are execution outputs; relevant Task handoffs are
     // already acquired into the evidence object below.
-    const descriptors = catalog.artifacts.filter((entry) => !["flow.state", "flow.activities", "artifact.catalog",
+    return catalog.artifacts.filter((entry) => !["flow.state", "flow.activities", "artifact.catalog",
       "acceptance.review", "acceptance.review.evidence",
-      "acceptance.decision", "final.regression", "final.regression.acceptance", "report"].includes(entry.logicalKey))
-      .map((entry) => entry.toJSON()).sort((left, right) => (
+      "acceptance.decision", "final.regression", "final.regression.acceptance", "report",
+      "execution.contract", "prompt.execution.progress", "prompt.execution.event", "prompt.execution.budget"].includes(entry.logicalKey))
+      .sort((left, right) => (
       left.relativePath.localeCompare(right.relativePath)
     ));
+  }
+
+  fingerprint({ diff, evidence, descriptors = this.executionInputDescriptors() }) {
     return digest({
       flowId: this.state.flowId,
       flowVersionId: this.state.flowVersionId,
@@ -285,7 +293,7 @@ export class CanonicalAcceptanceArtifactStore {
       request: this.state.request,
       diff,
       evidence,
-      descriptors,
+      descriptors: descriptors.map((entry) => entry.toJSON()),
     });
   }
 
@@ -433,13 +441,15 @@ export class CanonicalAcceptanceArtifactStore {
       deferredFindings: deferred.findings,
       deferredFindingEvidence: deferred.evidence,
     });
-    const fingerprint = Object.freeze({ hash: this.fingerprint({ diff, evidence }) });
+    const executionInputs = this.executionInputDescriptors();
+    const fingerprint = Object.freeze({ hash: this.fingerprint({ diff, evidence, descriptors: executionInputs }) });
     if (this.flowManager.artifactCatalog(this.specId).hash !== sourceCatalogHash) {
       throw new StepAdmissionRefusal("Acceptance source catalog changed while acquiring evidence");
     }
     return Object.freeze({
       fingerprint,
       sourceCatalogHash,
+      executionInputBaselines: Object.freeze(executionInputs.map((descriptor) => new FlowExecutionInputBaseline({ descriptor }))),
       requirementIds: Object.freeze(requirementIds),
       mechanicalBlockers: Object.freeze(blockers),
       deferredFindings: deferred.findings,

@@ -23,6 +23,7 @@ export class RequirementTestSettlementPublication {
 
 /** Save-only access to the atomic canonical Requirement-test settlement transaction. */
 export class RequirementTestSettlementWriter {
+  #executionContract;
   #flowManager;
   #specId;
   #binding;
@@ -36,10 +37,11 @@ export class RequirementTestSettlementWriter {
   #result;
   #references;
 
-  constructor({ flowManager, specId, binding, commandResult = null, artifactWrites = [],
+  constructor({ flowManager, executionContract = null, specId, binding, commandResult = null, artifactWrites = [],
     artifactRemovals = [], artifactBaselines = [], deferredReceipt = null,
     findingsPublication = null, activityId = null, result = null, references = undefined } = {}) {
     if (!(binding instanceof RequirementTestResultBinding)) throw new TypeError("Requirement writer requires its acquired source binding");
+    this.#executionContract = executionContract;
     this.#flowManager = flowManager;
     this.#specId = specId;
     this.#binding = binding;
@@ -56,7 +58,7 @@ export class RequirementTestSettlementWriter {
 
   settle({ stepResult, settlement, publication = new RequirementTestSettlementPublication() }) {
     if (!(publication instanceof RequirementTestSettlementPublication)) throw new TypeError("Requirement writer requires its selected typed publication");
-    return this.#flowManager.commitSpecStepResult({ specId: this.#specId,
+    return this.#flowManager.commitSpecStepResult({ specId: this.#specId, executionContract: this.#executionContract,
       binding: { runId: this.#binding.runId, specId: this.#binding.specId,
         stepId: this.#binding.leaf, attempt: this.#binding.attempt },
       stepResult, settlement, commandResult: this.#commandResult,

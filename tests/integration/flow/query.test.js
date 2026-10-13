@@ -18,6 +18,7 @@ import {
   QueryRequest,
 } from "../../../src/flow/query.js";
 import { FlowArtifactCatalog } from "../../../src/lib/flow-version.js";
+import { FLOW_ARTIFACT_CONTRACTS, FlowArtifactSpecReviewActivityEvidenceDocument } from "../../../src/lib/flow-artifact-contract.js";
 import { AgentProcessStopEvidence } from "../../../src/lib/agent-failure.js";
 import { initGitRepo, commitAll } from "../../support/infrastructure/git-repo.js";
 import { captureGitSnapshot } from "../../../src/lib/git-helpers.js";
@@ -540,6 +541,22 @@ describe("flow query", () => {
     const reread = makeFlowManager(tmp).readCurrentSpecReview({ specId: "001-query", consumerNodeId: "spec-triage" });
     assert.ok(previous.reviewPublication.generation < reread.review.generation);
     assert.deepEqual(reread.review.toJSON(), next.toJSON());
+    // New publications retain their Review. Model already-lost history by
+    // removing only that optional archive from this test-local canonical input.
+    const location = fixture.flow.location();
+    const catalog = FlowArtifactCatalog.fromSerialized(JSON.parse(fs.readFileSync(location.catalogFile, "utf8")));
+    const archives = catalog.artifacts.filter((entry) => entry.logicalKey === "activity.evidence"
+      && entry.activityId === previous.id);
+    assert.equal(archives.length, 1);
+    const archive = archives[0];
+    const document = FLOW_ARTIFACT_CONTRACTS.require("activity.evidence").contentContract
+      .parse(fs.readFileSync(location.resolve(archive.relativePath)));
+    assert.ok(document instanceof FlowArtifactSpecReviewActivityEvidenceDocument);
+    assert.equal(document.review.digest, previous.reviewPublication.reviewDigest);
+    fs.unlinkSync(location.resolve(archive.relativePath));
+    const unretained = FlowArtifactCatalog.regenerate(catalog.artifacts.filter((entry) => entry !== archive));
+    fs.writeFileSync(location.catalogFile, `${JSON.stringify(unretained.toJSON())}\n`);
+    unretained.verify(location);
     const protectedFiles = ["flowStateFile", "activitiesFile", "catalogFile"].map((field) => fixture.flow.location()[field]);
     const before = protectedFiles.map((file) => fs.readFileSync(file));
     const result = runQuery(fixture, activityRequestFrom(fixture, previous));

@@ -53,30 +53,38 @@ import { implementationGateStepRegistration, prepareImplementationGatePublicatio
 import { ImplStepBinding } from "../../../src/flow/engine/connectors/impl/impl-step-binding.js";
 import { TaskStepBinding } from "../../../src/flow/engine/connectors/task/task-step-binding.js";
 
+function canonicalFixtureGatePhase(state, nodeId) {
+  return state.tasks.some((task) => task.steps.at(-1)?.id === nodeId)
+    ? "task-impl" : nodeId === "impl-gate" ? "integration" : null;
+}
+
 /** Execute a claimed fixture producer through its real registration and publication hooks. */
 export async function produceCanonicalFixtureStep(ctx, nodeId) {
   const { FLOW_COMMANDS } = await import("../../../src/flow/registry.js");
-  const { dispatchContainer, installGateProviderFake } = await import("./flow-dispatch-scenario.js");
-  const entry = FLOW_COMMANDS.run[nodeId];
+  const { dispatchContainer, installGateProviderFake, passingGateProviderResponse } = await import("./flow-dispatch-scenario.js");
+  const phase = canonicalFixtureGatePhase(ctx.flowState, nodeId);
+  if (phase !== null) ctx = { ...ctx, phase };
+  const entry = FLOW_COMMANDS.run[phase === null ? nodeId : "gate"];
   const module = await entry.command();
   if (nodeId === "test-execute" && !fs.existsSync(path.join(ctx.root, ".sennel", "output", "analysis.json"))) {
     const { default: DocsScanCommand } = await import("../../../src/docs/commands/scan.js");
     await new DocsScanCommand().execute({ docsCtx: { root: ctx.root, srcRoot: ctx.root, config: {}, type: [] } });
   }
-  let provider = null;
+  let provider = phase === null ? null : installGateProviderFake(passingGateProviderResponse,
+    { transportContext: () => ({ root: ctx.root, flowManager: ctx.flowManager }) });
   if (nodeId === "acceptance-review") {
     const { acceptanceProviderResponse } = await import("../acceptance-phase-scenario.js");
     provider = installGateProviderFake((prompt) => {
       const evidence = JSON.parse(String(prompt).slice("## Acceptance Evidence\n".length));
       return JSON.stringify(acceptanceProviderResponse({ acceptanceContexts: [{ evidence,
         requirementIds: evidence.requirements.map((entry) => entry.id), deferredFindings: evidence.deferredFindings }] }));
-    });
+    }, { transportContext: () => ({ root: ctx.root, flowManager: ctx.flowManager }) });
   }
   try {
     if (entry.pre) await entry.pre(ctx);
     const commandContainer = dispatchContainer({ root: ctx.root, flowManager: ctx.flowManager, agent: null });
     const result = await new module.default().run(commandContainer, { expectSpec: ctx.specId,
-      expectRunId: ctx.flowState.runId, ...(ctx.flowState.issue === null ? { expectNoIssue: true } : { expectIssue: ctx.flowState.issue }) });
+      ...(phase === null ? {} : { phase }), expectRunId: ctx.flowState.runId, ...(ctx.flowState.issue === null ? { expectNoIssue: true } : { expectIssue: ctx.flowState.issue }) });
     if (result.ok === false) throw new Error(`canonical fixture ${nodeId} failed: ${JSON.stringify(result)}`);
     if (entry.post) await entry.post(ctx, result);
     return result;
@@ -260,9 +268,7 @@ export function confirmCanonicalFixtureStep(flowManager, specId, nodeId, status 
     });
     return flowManager.loadReadOnly(resolvedSpecId);
   }
-  const gatePhase = status === "done"
-    ? (task?.steps.at(-1)?.id === nodeId ? "task-impl" : nodeId === "impl-gate" ? "integration" : null)
-    : null;
+  const gatePhase = status === "done" ? canonicalFixtureGatePhase(current, nodeId) : null;
   if (gatePhase !== null) {
     const binding = task === null
       ? new ImplStepBinding({ flowManager, specId: resolvedSpecId, stepId: "impl-gate" })
@@ -650,7 +656,8 @@ export class CanonicalFlowFixture {
         const { ImplementationReviewProducer } = await import("./implementation-review-producer.js");
         const result = await new ImplementationReviewProducer(reviewResponses.get(next)).publish(this.#producerContext());
         if (result.ok === false) throw new Error(`canonical fixture Review failed: ${JSON.stringify(result)}`);
-      } else if (["test-execute", "test-result-review", "retro", "acceptance-review", "final-regression", "report"].includes(next)) {
+      } else if (canonicalFixtureGatePhase(state, next) !== null
+        || ["test-execute", "test-result-review", "retro", "acceptance-review", "final-regression", "report"].includes(next)) {
         await this.produce(next);
         if (this.state().currentNodeId === next) {
           throw new Error(`canonical fixture cannot advance past incomplete producer ${next}`);

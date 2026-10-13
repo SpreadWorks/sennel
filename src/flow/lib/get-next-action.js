@@ -1,3 +1,4 @@
+import { readRuntimeResource } from "../../lib/runtime-package.js";
 import { acceptanceStepRegistration } from "../engine/composition/acceptance.js";
 import { finalizationStepRegistration } from "../engine/composition/finalization.js";
 import { draftStepRegistration, draftWorkerStepRegistration } from "../engine/composition/draft.js";
@@ -20,7 +21,6 @@ import { CURRENT_FLOW_SCHEMA_REVISION } from "../../lib/flow-schema-revision.js"
  * Adding a new flow step is done by editing definition.js — zero changes here.
  */
 
-import { readFileSync } from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 import { FlowCommand } from "./base-command.js";
@@ -151,7 +151,7 @@ function resolveSchemaDir() {
 
 function loadSchema(relPath) {
   const full = path.join(resolveSchemaDir(), relPath);
-  return JSON.parse(readFileSync(full, "utf8"));
+  return JSON.parse(readRuntimeResource(full));
 }
 
 function deriveStateSet(state) {

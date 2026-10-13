@@ -28,7 +28,7 @@ import { SpecReviewConnector } from "../connectors/spec/spec-review-connector.js
 import { CurrentFlowStateConflictError } from "../../lib/current-flow-state-conflict-error.js";
 import { prepareSpecGateRepairServiceArguments } from "./spec-gate-repair.js";
 import { workerStepExecutionContract } from "../../lib/worker-execution-admission.js";
-import { gateStepExecutionContract, reviewStepExecutionContract } from "../../lib/execution-admission.js";
+import { acquirePendingExecutionContract, gateStepExecutionContract, reviewStepExecutionContract } from "../../lib/execution-admission.js";
 
 export async function prepareSpecWorkerServiceArguments(input, ConnectorClass, stepId) {
   const { ctx, request, handoffCoordinator } = input;
@@ -83,6 +83,7 @@ export function prepareSpecReviewServiceArguments(input) {
     specId: input.ctx.specId ?? input.ctx.flowState.specId });
   binding.assertCurrent();
   let review = null;
+  let executionContract = null;
   if (input.executionBinding === undefined || input.executionBinding === null) {
     const read = flowManager.readCurrentSpecReviewInput({ specId: binding.specId,
       consumerNodeId: binding.stepId });
@@ -90,10 +91,11 @@ export function prepareSpecReviewServiceArguments(input) {
       throw new Error("Spec Review settlement requires its durable accepted publication");
     }
     review = read.review;
+    executionContract = acquirePendingExecutionContract({ flowManager, binding });
   }
   return [new SpecReviewInput({ review,
     executionBinding: input.executionBinding ?? null, manifest: input.manifest ?? null }),
-    new SpecReviewSettlementWriter({ flowManager, binding,
+    new SpecReviewSettlementWriter({ flowManager, binding, executionContract,
       executionBinding: input.executionBinding ?? null })];
 }
 
@@ -107,6 +109,7 @@ export async function prepareSpecGateServiceArguments(input) {
   let state;
   try { state = binding.assertCurrent(); }
   catch (cause) { throw new SpecGateAdmissionRefusal("Spec Gate binding is stale", cause); }
+  const executionContract = acquirePendingExecutionContract({ flowManager, binding, generation: 0 });
   const attached = attachedCanonicalCommandResultArtifact(result);
   let issuePublication = null;
   if (input.issuePublication === undefined && attached?.payload?.result === "fail") {
@@ -137,7 +140,7 @@ export async function prepareSpecGateServiceArguments(input) {
     throw new SpecGateAdmissionRefusal("Spec Gate inputs changed while reading prospective facts", cause);
   }
   return [new SpecGateInput(publication.facts),
-    new SpecGateSettlementWriter({ flowManager, binding,
+    new SpecGateSettlementWriter({ flowManager, binding, executionContract,
       commandResult: result, publication })];
 }
 

@@ -2,18 +2,20 @@ import { DraftStepExecutionLifecycle } from "../definition.js";
 
 /** Save the selected Spec Review Result with its exact Attempt binding. */
 export class SpecReviewSettlementWriter {
+  #executionContract;
   #flowManager;
   #binding;
   #executionBinding;
 
-  constructor({ flowManager, binding, executionBinding = null }) {
+  constructor({ flowManager, executionContract = null, binding, executionBinding = null }) {
+    this.#executionContract = executionContract;
     this.#flowManager = flowManager;
     this.#binding = binding;
     this.#executionBinding = executionBinding;
   }
 
   settle({ stepResult, settlement }) {
-    const input = { binding: this.#binding, stepResult, settlement,
+    const input = { binding: this.#binding, stepResult, settlement, executionContract: this.#executionContract,
       ...(this.#executionBinding === null ? {} : {
         executionLifecycle: DraftStepExecutionLifecycle.checkpoint(this.#executionBinding),
       }) };

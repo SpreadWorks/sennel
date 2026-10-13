@@ -1,23 +1,26 @@
+import { FlowExecutionContract } from "./flow-execution-contract.js";
 import { DraftReviewExecutionBinding, ReviewProviderRequestIdentity } from "../definition.js";
 import { SpecReviewStepBinding } from "../engine/connectors/spec/spec-step-binding.js";
 import { StepBinding } from "../engine/step-binding.js";
 import { StepResult, SpecReviewExecutionRequiredResult } from "../engine/step-result.js";
 
 export class ReviewExecutionAdmission {
-  constructor({ request, recoveredClaim }) {
-    if (!(request instanceof ReviewProviderRequestIdentity) || typeof recoveredClaim !== "boolean") {
+  constructor({ request, recoveredClaim, executionContract }) {
+    if (!(request instanceof ReviewProviderRequestIdentity) || !(executionContract instanceof FlowExecutionContract) || typeof recoveredClaim !== "boolean") {
       throw new TypeError("Review execution admission requires its request and claim status");
     }
     this.request = request;
+    this.executionContract = executionContract;
     this.recoveredClaim = recoveredClaim;
     Object.freeze(this);
   }
 }
 
 export class ReviewExecutionClaimPreparation {
-  constructor({ flowManager, binding, executionBinding, request, recoveredClaim, needsCheckpoint, ResultClass }) {
+  constructor({ flowManager, binding, executionBinding, executionContract, request, recoveredClaim, needsCheckpoint, ResultClass }) {
     if (!(binding instanceof StepBinding) || binding.flowManager !== flowManager
       || !(executionBinding instanceof DraftReviewExecutionBinding)
+      || !(executionContract instanceof FlowExecutionContract)
       || !(request instanceof ReviewProviderRequestIdentity)
       || typeof recoveredClaim !== "boolean" || typeof needsCheckpoint !== "boolean"
       || (recoveredClaim && needsCheckpoint)
@@ -27,6 +30,7 @@ export class ReviewExecutionClaimPreparation {
     this.flowManager = flowManager;
     this.binding = binding;
     this.executionBinding = executionBinding;
+    this.executionContract = executionContract;
     this.request = request;
     this.recoveredClaim = recoveredClaim;
     this.needsCheckpoint = needsCheckpoint;

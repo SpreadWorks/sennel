@@ -1,3 +1,5 @@
+import { FlowExecutionContract, FlowExecutionContractRefusal } from "./flow-execution-contract.js";
+import { readExecutionContractFromView } from "./canonical-prompt-execution.js";
 import { PromptExecutionLimit, PromptExecutionBudget, PromptResponseAllowance, PromptBatchingError } from "../../lib/prompt-batching.js";
 import { isDeepStrictEqual } from "node:util";
 import { DraftWorkerExecutionClaim } from "../definition.js";
@@ -79,6 +81,16 @@ export class SpecGateRepairProgressReader {
     const specId = this.#specId;
     const attemptId = this.#attemptId;
     const saved = JSON.parse(artifact.bytes.toString("utf8"));
+    if (saved.executionContract === undefined || saved.executionContractId === undefined) {
+      throw new FlowExecutionContractRefusal("Unfinished Gate repair progress has no execution contract");
+    }
+    const executionContract = FlowExecutionContract.fromJSON(saved.executionContract);
+    if (executionContract.id !== saved.executionContractId || executionContract.budgetOwner !== saved.context?.baseRevision
+      || executionContract.generation !== saved.generation || executionContract.inputRevision !== saved.inputRevision
+      || !isDeepStrictEqual(executionContract.executionLimit, saved.limit)) {
+      throw new FlowExecutionContractRefusal("Gate repair progress differs from its execution contract");
+    }
+    readExecutionContractFromView(this.#view, executionContract, { current: false });
     if (saved.version !== SPEC_GATE_REPAIR_PROGRESS_VERSION || saved.sourceSnapshotReference === undefined || Object.hasOwn(saved, "sourceSnapshots")
       || !Array.isArray(saved.inputDescriptors)
       || saved.inputDescriptors.some((input) => input.descriptor === undefined)) {
@@ -176,13 +188,13 @@ export class SpecGateRepairProgressReader {
     if (phase !== "checkpoint") {
       const previous = this.read(generation, phase === "claimed" ? "checkpoint" : "claimed");
       const common = ["runId", "specId", "attemptId", "attemptSequence", "generation", "inputDigest", "inputRevision",
-        "requestDigest", "executionLocator", "actionFileDigest", "actionRepositoryFingerprint", "limit", "context", "sourceSnapshotReference", "inputDescriptors", "plan", "callCost", "responseAllowance", "physicalPromptFootprint", "deliveryMode"];
+        "requestDigest", "executionContract", "executionContractId", "executionLocator", "actionFileDigest", "actionRepositoryFingerprint", "limit", "context", "sourceSnapshotReference", "inputDescriptors", "plan", "callCost", "responseAllowance", "physicalPromptFootprint", "deliveryMode"];
       if (common.some((field) => !isDeepStrictEqual(saved[field], previous.document[field]))) {
         throw progressMismatch("Gate repair progress changed an immutable checkpoint contract");
       }
     }
     const result = Object.freeze({ document: freezeSpecGateRepairValue(saved), executionLocator,
-      sourceSnapshots, limit, budget, callPlan });
+      sourceSnapshots, limit, budget, callPlan, executionContract });
     this.#entries.set(key, result);
     return result;
   }

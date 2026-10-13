@@ -4094,6 +4094,329 @@
                           }
                         },
                         "additionalProperties": false
+                      },
+                      {
+                        "type": "object",
+                        "required": [
+                          "schemaId",
+                          "kind",
+                          "failureMode",
+                          "requirementRef",
+                          "where",
+                          "refs",
+                          "specRevision",
+                          "targets",
+                          "allowedTargets"
+                        ],
+                        "properties": {
+                          "schemaId": {
+                            "type": "string",
+                            "enum": [
+                              "gate-finding@1"
+                            ]
+                          },
+                          "kind": {
+                            "type": "string",
+                            "enum": [
+                              "violation"
+                            ]
+                          },
+                          "failureMode": {
+                            "type": "string",
+                            "enum": [
+                              "spec-impl-mismatch",
+                              "guardrail-violation",
+                              "process-evidence-missing"
+                            ]
+                          },
+                          "requirementRef": {
+                            "type": "string"
+                          },
+                          "where": {
+                            "type": [
+                              "object",
+                              "null"
+                            ],
+                            "required": [
+                              "file"
+                            ],
+                            "properties": {
+                              "file": {
+                                "type": "string",
+                                "minLength": 1
+                              },
+                              "locator": {
+                                "type": "string",
+                                "minLength": 1
+                              }
+                            },
+                            "additionalProperties": false
+                          },
+                          "refs": {
+                            "type": "array",
+                            "items": {
+                              "type": "string",
+                              "minLength": 1
+                            }
+                          },
+                          "specRevision": {
+                            "type": [
+                              "string",
+                              "null"
+                            ],
+                            "pattern": "^sha256:[a-f0-9]{64}$"
+                          },
+                          "targets": {
+                            "type": [
+                              "array",
+                              "null"
+                            ],
+                            "minItems": 1,
+                            "items": {
+                              "oneOf": [
+                                {
+                                  "type": "object",
+                                  "required": [
+                                    "entity",
+                                    "field"
+                                  ],
+                                  "properties": {
+                                    "entity": {
+                                      "type": "string",
+                                      "enum": [
+                                        "spec"
+                                      ]
+                                    },
+                                    "field": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    }
+                                  },
+                                  "additionalProperties": false
+                                },
+                                {
+                                  "type": "object",
+                                  "required": [
+                                    "entity",
+                                    "id",
+                                    "field"
+                                  ],
+                                  "properties": {
+                                    "entity": {
+                                      "type": "string",
+                                      "enum": [
+                                        "requirement",
+                                        "task"
+                                      ]
+                                    },
+                                    "id": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    },
+                                    "field": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    }
+                                  },
+                                  "additionalProperties": false
+                                },
+                                {
+                                  "type": "object",
+                                  "required": [
+                                    "collection"
+                                  ],
+                                  "properties": {
+                                    "collection": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    }
+                                  },
+                                  "additionalProperties": false
+                                },
+                                {
+                                  "type": "object",
+                                  "required": [
+                                    "collection",
+                                    "position"
+                                  ],
+                                  "properties": {
+                                    "collection": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    },
+                                    "position": {
+                                      "type": "integer",
+                                      "minimum": 0
+                                    }
+                                  },
+                                  "additionalProperties": false
+                                },
+                                {
+                                  "type": "object",
+                                  "required": [
+                                    "document"
+                                  ],
+                                  "properties": {
+                                    "document": {
+                                      "type": "string",
+                                      "enum": [
+                                        "spec"
+                                      ]
+                                    }
+                                  },
+                                  "additionalProperties": false
+                                }
+                              ]
+                            }
+                          },
+                          "allowedTargets": {
+                            "type": [
+                              "array",
+                              "null"
+                            ],
+                            "minItems": 1,
+                            "items": {
+                              "type": "object",
+                              "required": [
+                                "target",
+                                "operationKinds"
+                              ],
+                              "properties": {
+                                "target": {
+                                  "oneOf": [
+                                    {
+                                      "type": "object",
+                                      "required": [
+                                        "entity",
+                                        "field"
+                                      ],
+                                      "properties": {
+                                        "entity": {
+                                          "type": "string",
+                                          "enum": [
+                                            "spec"
+                                          ]
+                                        },
+                                        "field": {
+                                          "type": "string",
+                                          "minLength": 1
+                                        }
+                                      },
+                                      "additionalProperties": false
+                                    },
+                                    {
+                                      "type": "object",
+                                      "required": [
+                                        "entity",
+                                        "id",
+                                        "field"
+                                      ],
+                                      "properties": {
+                                        "entity": {
+                                          "type": "string",
+                                          "enum": [
+                                            "requirement",
+                                            "task"
+                                          ]
+                                        },
+                                        "id": {
+                                          "type": "string",
+                                          "minLength": 1
+                                        },
+                                        "field": {
+                                          "type": "string",
+                                          "minLength": 1
+                                        }
+                                      },
+                                      "additionalProperties": false
+                                    },
+                                    {
+                                      "type": "object",
+                                      "required": [
+                                        "collection"
+                                      ],
+                                      "properties": {
+                                        "collection": {
+                                          "type": "string",
+                                          "minLength": 1
+                                        }
+                                      },
+                                      "additionalProperties": false
+                                    },
+                                    {
+                                      "type": "object",
+                                      "required": [
+                                        "collection",
+                                        "position"
+                                      ],
+                                      "properties": {
+                                        "collection": {
+                                          "type": "string",
+                                          "minLength": 1
+                                        },
+                                        "position": {
+                                          "type": "integer",
+                                          "minimum": 0
+                                        }
+                                      },
+                                      "additionalProperties": false
+                                    }
+                                  ]
+                                },
+                                "operationKinds": {
+                                  "type": "array",
+                                  "minItems": 1,
+                                  "uniqueItems": true,
+                                  "items": {
+                                    "type": "string",
+                                    "enum": [
+                                      "replace-field",
+                                      "replace-entity-field",
+                                      "edit-text-field",
+                                      "add-array-element",
+                                      "replace-array-element",
+                                      "delete-array-element",
+                                      "delete-entity-field",
+                                      "add-entity-field"
+                                    ]
+                                  }
+                                }
+                              },
+                              "additionalProperties": false
+                            }
+                          }
+                        },
+                        "additionalProperties": false,
+                        "oneOf": [
+                          {
+                            "type": "object",
+                            "properties": {
+                              "specRevision": {
+                                "type": "null"
+                              },
+                              "targets": {
+                                "type": "null"
+                              },
+                              "allowedTargets": {
+                                "type": "null"
+                              }
+                            }
+                          },
+                          {
+                            "type": "object",
+                            "properties": {
+                              "specRevision": {
+                                "type": "string"
+                              },
+                              "targets": {
+                                "type": "array"
+                              },
+                              "allowedTargets": {
+                                "type": "array"
+                              }
+                            }
+                          }
+                        ]
                       }
                     ]
                   },
@@ -4894,6 +5217,74 @@
                                 "type": "string",
                                 "minLength": 1
                               }
+                            },
+                            "change": {
+                              "oneOf": [
+                                {
+                                  "type": "null"
+                                },
+                                {
+                                  "type": "object",
+                                  "required": [
+                                    "replacement",
+                                    "edits"
+                                  ],
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "replacement": {},
+                                    "edits": {
+                                      "type": [
+                                        "array",
+                                        "null"
+                                      ],
+                                      "minItems": 1,
+                                      "items": {
+                                        "type": "object",
+                                        "required": [
+                                          "startByte",
+                                          "endByte",
+                                          "replacement"
+                                        ],
+                                        "additionalProperties": false,
+                                        "properties": {
+                                          "startByte": {
+                                            "type": "integer",
+                                            "minimum": 0
+                                          },
+                                          "endByte": {
+                                            "type": "integer",
+                                            "minimum": 0
+                                          },
+                                          "replacement": {
+                                            "type": "string"
+                                          }
+                                        }
+                                      }
+                                    }
+                                  },
+                                  "oneOf": [
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "edits": {
+                                          "type": "null"
+                                        }
+                                      }
+                                    },
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "replacement": {
+                                          "type": "null"
+                                        },
+                                        "edits": {
+                                          "type": "array"
+                                        }
+                                      }
+                                    }
+                                  ]
+                                }
+                              ]
                             }
                           },
                           "additionalProperties": false
@@ -5693,6 +6084,74 @@
                                 "type": "string",
                                 "minLength": 1
                               }
+                            },
+                            "change": {
+                              "oneOf": [
+                                {
+                                  "type": "null"
+                                },
+                                {
+                                  "type": "object",
+                                  "required": [
+                                    "replacement",
+                                    "edits"
+                                  ],
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "replacement": {},
+                                    "edits": {
+                                      "type": [
+                                        "array",
+                                        "null"
+                                      ],
+                                      "minItems": 1,
+                                      "items": {
+                                        "type": "object",
+                                        "required": [
+                                          "startByte",
+                                          "endByte",
+                                          "replacement"
+                                        ],
+                                        "additionalProperties": false,
+                                        "properties": {
+                                          "startByte": {
+                                            "type": "integer",
+                                            "minimum": 0
+                                          },
+                                          "endByte": {
+                                            "type": "integer",
+                                            "minimum": 0
+                                          },
+                                          "replacement": {
+                                            "type": "string"
+                                          }
+                                        }
+                                      }
+                                    }
+                                  },
+                                  "oneOf": [
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "edits": {
+                                          "type": "null"
+                                        }
+                                      }
+                                    },
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "replacement": {
+                                          "type": "null"
+                                        },
+                                        "edits": {
+                                          "type": "array"
+                                        }
+                                      }
+                                    }
+                                  ]
+                                }
+                              ]
                             }
                           },
                           "additionalProperties": false
@@ -7850,6 +8309,329 @@
                           }
                         },
                         "additionalProperties": false
+                      },
+                      {
+                        "type": "object",
+                        "required": [
+                          "schemaId",
+                          "kind",
+                          "failureMode",
+                          "requirementRef",
+                          "where",
+                          "refs",
+                          "specRevision",
+                          "targets",
+                          "allowedTargets"
+                        ],
+                        "properties": {
+                          "schemaId": {
+                            "type": "string",
+                            "enum": [
+                              "gate-finding@1"
+                            ]
+                          },
+                          "kind": {
+                            "type": "string",
+                            "enum": [
+                              "violation"
+                            ]
+                          },
+                          "failureMode": {
+                            "type": "string",
+                            "enum": [
+                              "spec-impl-mismatch",
+                              "guardrail-violation",
+                              "process-evidence-missing"
+                            ]
+                          },
+                          "requirementRef": {
+                            "type": "string"
+                          },
+                          "where": {
+                            "type": [
+                              "object",
+                              "null"
+                            ],
+                            "required": [
+                              "file"
+                            ],
+                            "properties": {
+                              "file": {
+                                "type": "string",
+                                "minLength": 1
+                              },
+                              "locator": {
+                                "type": "string",
+                                "minLength": 1
+                              }
+                            },
+                            "additionalProperties": false
+                          },
+                          "refs": {
+                            "type": "array",
+                            "items": {
+                              "type": "string",
+                              "minLength": 1
+                            }
+                          },
+                          "specRevision": {
+                            "type": [
+                              "string",
+                              "null"
+                            ],
+                            "pattern": "^sha256:[a-f0-9]{64}$"
+                          },
+                          "targets": {
+                            "type": [
+                              "array",
+                              "null"
+                            ],
+                            "minItems": 1,
+                            "items": {
+                              "oneOf": [
+                                {
+                                  "type": "object",
+                                  "required": [
+                                    "entity",
+                                    "field"
+                                  ],
+                                  "properties": {
+                                    "entity": {
+                                      "type": "string",
+                                      "enum": [
+                                        "spec"
+                                      ]
+                                    },
+                                    "field": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    }
+                                  },
+                                  "additionalProperties": false
+                                },
+                                {
+                                  "type": "object",
+                                  "required": [
+                                    "entity",
+                                    "id",
+                                    "field"
+                                  ],
+                                  "properties": {
+                                    "entity": {
+                                      "type": "string",
+                                      "enum": [
+                                        "requirement",
+                                        "task"
+                                      ]
+                                    },
+                                    "id": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    },
+                                    "field": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    }
+                                  },
+                                  "additionalProperties": false
+                                },
+                                {
+                                  "type": "object",
+                                  "required": [
+                                    "collection"
+                                  ],
+                                  "properties": {
+                                    "collection": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    }
+                                  },
+                                  "additionalProperties": false
+                                },
+                                {
+                                  "type": "object",
+                                  "required": [
+                                    "collection",
+                                    "position"
+                                  ],
+                                  "properties": {
+                                    "collection": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    },
+                                    "position": {
+                                      "type": "integer",
+                                      "minimum": 0
+                                    }
+                                  },
+                                  "additionalProperties": false
+                                },
+                                {
+                                  "type": "object",
+                                  "required": [
+                                    "document"
+                                  ],
+                                  "properties": {
+                                    "document": {
+                                      "type": "string",
+                                      "enum": [
+                                        "spec"
+                                      ]
+                                    }
+                                  },
+                                  "additionalProperties": false
+                                }
+                              ]
+                            }
+                          },
+                          "allowedTargets": {
+                            "type": [
+                              "array",
+                              "null"
+                            ],
+                            "minItems": 1,
+                            "items": {
+                              "type": "object",
+                              "required": [
+                                "target",
+                                "operationKinds"
+                              ],
+                              "properties": {
+                                "target": {
+                                  "oneOf": [
+                                    {
+                                      "type": "object",
+                                      "required": [
+                                        "entity",
+                                        "field"
+                                      ],
+                                      "properties": {
+                                        "entity": {
+                                          "type": "string",
+                                          "enum": [
+                                            "spec"
+                                          ]
+                                        },
+                                        "field": {
+                                          "type": "string",
+                                          "minLength": 1
+                                        }
+                                      },
+                                      "additionalProperties": false
+                                    },
+                                    {
+                                      "type": "object",
+                                      "required": [
+                                        "entity",
+                                        "id",
+                                        "field"
+                                      ],
+                                      "properties": {
+                                        "entity": {
+                                          "type": "string",
+                                          "enum": [
+                                            "requirement",
+                                            "task"
+                                          ]
+                                        },
+                                        "id": {
+                                          "type": "string",
+                                          "minLength": 1
+                                        },
+                                        "field": {
+                                          "type": "string",
+                                          "minLength": 1
+                                        }
+                                      },
+                                      "additionalProperties": false
+                                    },
+                                    {
+                                      "type": "object",
+                                      "required": [
+                                        "collection"
+                                      ],
+                                      "properties": {
+                                        "collection": {
+                                          "type": "string",
+                                          "minLength": 1
+                                        }
+                                      },
+                                      "additionalProperties": false
+                                    },
+                                    {
+                                      "type": "object",
+                                      "required": [
+                                        "collection",
+                                        "position"
+                                      ],
+                                      "properties": {
+                                        "collection": {
+                                          "type": "string",
+                                          "minLength": 1
+                                        },
+                                        "position": {
+                                          "type": "integer",
+                                          "minimum": 0
+                                        }
+                                      },
+                                      "additionalProperties": false
+                                    }
+                                  ]
+                                },
+                                "operationKinds": {
+                                  "type": "array",
+                                  "minItems": 1,
+                                  "uniqueItems": true,
+                                  "items": {
+                                    "type": "string",
+                                    "enum": [
+                                      "replace-field",
+                                      "replace-entity-field",
+                                      "edit-text-field",
+                                      "add-array-element",
+                                      "replace-array-element",
+                                      "delete-array-element",
+                                      "delete-entity-field",
+                                      "add-entity-field"
+                                    ]
+                                  }
+                                }
+                              },
+                              "additionalProperties": false
+                            }
+                          }
+                        },
+                        "additionalProperties": false,
+                        "oneOf": [
+                          {
+                            "type": "object",
+                            "properties": {
+                              "specRevision": {
+                                "type": "null"
+                              },
+                              "targets": {
+                                "type": "null"
+                              },
+                              "allowedTargets": {
+                                "type": "null"
+                              }
+                            }
+                          },
+                          {
+                            "type": "object",
+                            "properties": {
+                              "specRevision": {
+                                "type": "string"
+                              },
+                              "targets": {
+                                "type": "array"
+                              },
+                              "allowedTargets": {
+                                "type": "array"
+                              }
+                            }
+                          }
+                        ]
                       }
                     ]
                   },
@@ -8650,6 +9432,74 @@
                                 "type": "string",
                                 "minLength": 1
                               }
+                            },
+                            "change": {
+                              "oneOf": [
+                                {
+                                  "type": "null"
+                                },
+                                {
+                                  "type": "object",
+                                  "required": [
+                                    "replacement",
+                                    "edits"
+                                  ],
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "replacement": {},
+                                    "edits": {
+                                      "type": [
+                                        "array",
+                                        "null"
+                                      ],
+                                      "minItems": 1,
+                                      "items": {
+                                        "type": "object",
+                                        "required": [
+                                          "startByte",
+                                          "endByte",
+                                          "replacement"
+                                        ],
+                                        "additionalProperties": false,
+                                        "properties": {
+                                          "startByte": {
+                                            "type": "integer",
+                                            "minimum": 0
+                                          },
+                                          "endByte": {
+                                            "type": "integer",
+                                            "minimum": 0
+                                          },
+                                          "replacement": {
+                                            "type": "string"
+                                          }
+                                        }
+                                      }
+                                    }
+                                  },
+                                  "oneOf": [
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "edits": {
+                                          "type": "null"
+                                        }
+                                      }
+                                    },
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "replacement": {
+                                          "type": "null"
+                                        },
+                                        "edits": {
+                                          "type": "array"
+                                        }
+                                      }
+                                    }
+                                  ]
+                                }
+                              ]
                             }
                           },
                           "additionalProperties": false
@@ -9449,6 +10299,74 @@
                                 "type": "string",
                                 "minLength": 1
                               }
+                            },
+                            "change": {
+                              "oneOf": [
+                                {
+                                  "type": "null"
+                                },
+                                {
+                                  "type": "object",
+                                  "required": [
+                                    "replacement",
+                                    "edits"
+                                  ],
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "replacement": {},
+                                    "edits": {
+                                      "type": [
+                                        "array",
+                                        "null"
+                                      ],
+                                      "minItems": 1,
+                                      "items": {
+                                        "type": "object",
+                                        "required": [
+                                          "startByte",
+                                          "endByte",
+                                          "replacement"
+                                        ],
+                                        "additionalProperties": false,
+                                        "properties": {
+                                          "startByte": {
+                                            "type": "integer",
+                                            "minimum": 0
+                                          },
+                                          "endByte": {
+                                            "type": "integer",
+                                            "minimum": 0
+                                          },
+                                          "replacement": {
+                                            "type": "string"
+                                          }
+                                        }
+                                      }
+                                    }
+                                  },
+                                  "oneOf": [
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "edits": {
+                                          "type": "null"
+                                        }
+                                      }
+                                    },
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "replacement": {
+                                          "type": "null"
+                                        },
+                                        "edits": {
+                                          "type": "array"
+                                        }
+                                      }
+                                    }
+                                  ]
+                                }
+                              ]
                             }
                           },
                           "additionalProperties": false

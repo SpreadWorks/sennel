@@ -1,4 +1,5 @@
 import { AgentFileInputFailure } from "./agent-file-input-failure.js";
+import { isPromptExecutionControlFailure } from "./prompt-execution-journal.js";
 
 function count(value, label, minimum = 0) {
   if (!Number.isSafeInteger(value) || value < minimum) throw new TypeError(`${label} must be a safe integer >= ${minimum}`);
@@ -169,6 +170,7 @@ export async function executeAgentResponseProtocol({ callAgent, parseResponse,
     let raw;
     const providerCountBeforeCall = counts().providerAttemptCount;
     try { raw = await callAgent(request); } catch (error) {
+      if (isPromptExecutionControlFailure(error)) throw error;
       const denied = error.code === "PROMPT_CALL_LIMIT_EXCEEDED";
       const localInput = error instanceof AgentFileInputFailure;
       if (!accounting && !denied) fallbackProviderCount += error.attemptCount ?? 1;
@@ -192,6 +194,7 @@ export async function executeAgentResponseProtocol({ callAgent, parseResponse,
     if (retryKind && !entry.fresh) fail(originalError, "cached_replay");
     let parsed;
     try { parsed = parseResponse(structured ? String(raw.text ?? "") : String(raw)); } catch (error) {
+      if (isPromptExecutionControlFailure(error)) throw error;
       attempts[attempts.length - 1] = entry.withError(error);
       originalError ||= error;
       if (formatRetries >= maxFormatRetries) fail(originalError, originalError.data?.failureMode ?? "schema_validation_failure");

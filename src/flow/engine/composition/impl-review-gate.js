@@ -1,7 +1,7 @@
 import { StepRegistration } from "./step-registration.js";
 import { ImplReviewStep } from "../../steps/impl/impl-review.js";
 import { ImplReviewService } from "../../services/impl-review-service.js";
-import { reviewStepExecutionContract } from "../../lib/execution-admission.js";
+import { acquirePendingExecutionContract, reviewStepExecutionContract } from "../../lib/execution-admission.js";
 import { ImplReviewInput } from "../../services/impl-review-input.js";
 import { ImplReviewGateSettlementWriter } from "../../services/impl-review-gate-settlement-writer.js";
 import { ImplStepBinding } from "../connectors/impl/impl-step-binding.js";
@@ -28,6 +28,8 @@ export function prepareImplReviewServiceArguments(input) {
   if (!(acquired.observed instanceof ImplReviewInput)) throw new TypeError("Implementation Review composition requires acquired input");
   return [new ImplReviewInput(acquired.observed), new ImplReviewGateSettlementWriter({
     flowManager, binding: acquired.binding,
+    executionContract: acquired.commandResult != null || acquired.reviewFailurePublication != null
+      ? acquirePendingExecutionContract({ flowManager, binding: acquired.binding }) : null,
     commandResult: acquired.commandResult, reviewPublication: acquired.reviewPublication,
     executionBinding: acquired.executionBinding, manifest: acquired.observed.evidence?.manifest ?? null,
     reviewFailurePublication: acquired.reviewFailurePublication ?? null,
@@ -36,10 +38,10 @@ export function prepareImplReviewServiceArguments(input) {
 }
 
 /** Acquire the Step's exact work-unit request before provider execution. */
-export function prepareImplReviewExecutionClaim({ flowManager, state, manifest, skipConfirm = false }) {
+export function prepareImplReviewExecutionClaim({ flowManager, state, manifest, skipConfirm = false, inputBaselines = [] }) {
   const binding = new ImplStepBinding({ flowManager, specId: state.specId, stepId: "impl-review" });
   const claim = prepareReviewExecutionClaim({ flowManager, binding, state, manifest, skipConfirm,
-    ResultClass: ImplReviewExecutionRequiredResult });
+    ResultClass: ImplReviewExecutionRequiredResult, inputBaselines });
   const observed = new ImplReviewInput({ evidence: readImplReviewRequestEvidence({ flowManager, state, manifest }) });
   return new ImplReviewExecutionPreparation({ claim, binding, observed });
 }
@@ -72,6 +74,7 @@ export class ImplReviewPublicationPreparation {
 /** Acquire sealed output and the exact future canonical producer before settlement. */
 export function prepareImplReviewPublication({ flowManager, state, commandResult }) {
   const binding = new ImplStepBinding({ flowManager, specId: state.specId, stepId: "impl-review" });
+  acquirePendingExecutionContract({ flowManager, binding });
   const publication = flowManager.prepareImplCommandPublication({ binding, commandResult });
   const evidence = readProspectiveImplReviewEvidence({ flowManager, binding, commandResult, publication });
   return new ImplReviewPublicationPreparation({ binding, observed: new ImplReviewInput({ evidence }),

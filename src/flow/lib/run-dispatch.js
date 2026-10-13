@@ -1,3 +1,4 @@
+import { FlowExecutionContract, FlowExecutionContractRefusal } from "./flow-execution-contract.js";
 import { acceptanceStepRegistration, initializeAcceptanceDecisionAwait } from "../engine/composition/acceptance.js";
 import { finalizationStepRegistration } from "../engine/composition/finalization.js";
 import { hasAcceptanceStepContract } from "../engine/step-result.js";
@@ -604,22 +605,29 @@ function freshWorkerInvocation(invocation, nextAction) {
 }
 
 /**
- * Non-authoritative feedback for the one fresh retry of a rejected
- * handoff. It intentionally contains no Action, approval, or state data: the
- * retried worker keeps the same guarded action and only receives the parent
- * validator's exact correction signal.
+ * Parent-owned observation for the one fresh retry of a rejected handoff.
+ * The previous contract stays in the parent; the worker projection contains
+ * only the validator's correction signal, with no Action or approval authority.
  */
 export class WorkerArtifactRetryFeedback {
-  constructor(error, { remainingCalls = null } = {}) {
+  #previousExecutionContract;
+
+  constructor(error, { previousExecutionContract, remainingCalls = null } = {}) {
     if (!(error instanceof WorkerArtifactHandoffError) || error.retryable !== true) {
       throw new Error("worker artifact retry feedback requires a retryable handoff error");
     }
+    if (!(previousExecutionContract instanceof FlowExecutionContract)) {
+      throw new TypeError("worker artifact retry requires its previous typed execution contract");
+    }
+    this.#previousExecutionContract = previousExecutionContract;
     this.code = error.code;
     this.classification = error.classification;
     this.message = error.message;
     this.remainingCalls = remainingCalls;
     Object.freeze(this);
   }
+
+  get previousExecutionContract() { return this.#previousExecutionContract; }
 
   toJSON() {
     return {
@@ -1292,9 +1300,9 @@ function appendWorkerHandoffDiagnostic(ctx, error, request, { stepId: invocation
   // diagnostic issue-log append is itself a Flow Activity/catalog mutation;
   // defer it until a non-recoverable boundary instead of partially publishing
   // alongside the interrupted handoff.
-  // Source failures have their own checkpoint-bound canonical facts. An
+  // Source and Spec Gate repair failures have checkpoint-bound canonical facts. An
   // unrelated diagnostic write would invalidate an unsettled checkpoint.
-  if (state?.specId && (!isSpecArtifactWorkerStep(stepId) || failedState !== null)
+  if (state?.specId && ((!isSpecArtifactWorkerStep(stepId) && stepId !== "spec-gate-repair") || failedState !== null)
     && error.classification !== "recovery-required"
     && error.recoveryPossible !== true
     && (!isStepAdmissionRefusal(error) || producerFailureAdmitted)
@@ -1851,7 +1859,7 @@ export default class RunDispatchCommand extends FlowCommand {
         { retryable: false, recoveryPossible: false },
       );
     }
-    const request = reusePrior && prior?.phase === "publication"
+    let request = reusePrior && prior?.phase === "publication"
       ? persistedRequest
       : this.handoffCoordinator.createRequest({
           ctx,
@@ -1865,6 +1873,8 @@ export default class RunDispatchCommand extends FlowCommand {
           // or materialized below.
           deferConditionalAdmission: !reusePrior,
         });
+    request = request.withExecutionGeneration(executionGeneration);
+    if (claimed !== null) request.assertExecutionContract();
     if (!(reusePrior && prior?.phase === "publication") && persistedRequest !== null
       && persistedRequest.requestDigest !== request.requestDigest) {
       throw new WorkerArtifactHandoffError(
@@ -1932,6 +1942,7 @@ export default class RunDispatchCommand extends FlowCommand {
         settlement: selectedSettlement,
         executionBinding,
         executionClaim,
+        executionContract: request.executionContract,
       });
     }
     if (claimed !== null && request.requestDigest !== claimed.requestDigest) {
@@ -1947,6 +1958,7 @@ export default class RunDispatchCommand extends FlowCommand {
       request,
       invocation: workerInvocation,
       publicationRecovery: prior?.phase === "publication",
+      newlyClaimed: claimed === null,
       admittedCallOptions,
     };
   }
@@ -1985,6 +1997,7 @@ export default class RunDispatchCommand extends FlowCommand {
     let work = null;
     let resumeSealedDraftExecution = false;
     let publicationRecovery = false;
+    let conditionalWorkerNewlyClaimed = false;
     let repairExecution = null;
     let agentOptions = {};
     let draftDefinition = null;
@@ -2054,6 +2067,7 @@ export default class RunDispatchCommand extends FlowCommand {
           handoffRequest = prepared.request;
           workerInvocation = prepared.invocation;
           publicationRecovery = prepared.publicationRecovery;
+          conditionalWorkerNewlyClaimed = prepared.newlyClaimed;
         } else {
           if (action.nextAction.step === "spec-gate-repair") {
             repairExecution = planSpecGateRepairWorkerExecution({
@@ -2100,6 +2114,7 @@ export default class RunDispatchCommand extends FlowCommand {
           } else {
             handoffRequest = this.handoffCoordinator.createRequest({
               ctx, state, invocation, workerInstructions,
+              previousExecutionContract: retryFeedback?.previousExecutionContract ?? null,
             });
           }
         }
@@ -2174,6 +2189,13 @@ export default class RunDispatchCommand extends FlowCommand {
               ?? work.callOptions({ ctx, agentOptions, deferredMetric, supervisorEvents }, workerInvocation);
             try {
               await assertWorkerAgentAdmission(agent, prompt, callOptions, action.nextAction.step);
+              if (handoffRequest !== null && handoffRequest.policy.kind !== "source"
+                && handoffRequest.stepId !== "spec-gate-repair") {
+                handoffRequest.assertExecutionContract();
+                const newlyClaimed = isConditionalDraftWorkerStep(handoffRequest.stepId)
+                  ? conditionalWorkerNewlyClaimed : handoffRequest.consumeProviderClaim();
+                if (!newlyClaimed) throw new FlowExecutionContractRefusal("Worker claim has no sealed response for recovery");
+              }
               if (handoffRequest?.stepId === "spec-gate-repair") {
                 reserveSpecGateRepairWorkerCall({ ctx, request: handoffRequest, prompt,
                   physicalRequest: { ...agentOptions, userPrompt: prompt },
@@ -3051,7 +3073,7 @@ export default class RunDispatchCommand extends FlowCommand {
         attempt = await this.runWorkerAttempt(
           ctx,
           retryInvocation,
-          new WorkerArtifactRetryFeedback(firstError),
+          new WorkerArtifactRetryFeedback(firstError, { previousExecutionContract: firstRequest.executionContract }),
         );
         if (attempt.deferredMetric) deferredMetrics.push(attempt.deferredMetric);
         dispatchCount += 1;

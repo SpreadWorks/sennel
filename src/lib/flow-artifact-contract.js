@@ -3,6 +3,7 @@ import crypto from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { ArtifactAuthority, ArtifactAuthoritySlot, ArtifactCardinality } from "./artifact-authority.js";
 import { FLOW_ARTIFACT_AUTHORITY_MATRIX } from "../flow/lib/flow-artifact-authority.js";
+import { CanonicalSpecReview } from "../flow/lib/spec-review-artifacts.js";
 import {
   RequirementTestCandidateBundle,
   RequirementTestDeferredReceipt,
@@ -1279,10 +1280,24 @@ export class FlowArtifactActivityEvidenceDocument {
       hash,
     });
     this.note = requiredText(note, "activity evidence note");
-    Object.freeze(this);
+    if (new.target === FlowArtifactActivityEvidenceDocument) Object.freeze(this);
   }
 
   static fromJSON(value) { return new FlowArtifactActivityEvidenceDocument(value); }
+
+  assertActivity(activity) {
+    if (activity?.id !== this.activityId) {
+      throw new Error("canonical activity evidence document must bind its owning Activity identity");
+    }
+    return this.assertOwner(activity);
+  }
+
+  assertOwner(activity) {
+    if (activity?.nodeId !== this.owner.nodeId || activity.nodeKey !== this.owner.nodeKey) {
+      throw new Error("activity evidence document owner does not match its Activity");
+    }
+    return this;
+  }
 
   toJSON() {
     return {
@@ -1296,6 +1311,54 @@ export class FlowArtifactActivityEvidenceDocument {
   }
 }
 
+/** The exact canonical Review record retained by one Spec publication Activity. */
+export class FlowArtifactSpecReviewActivityEvidenceDocument extends FlowArtifactActivityEvidenceDocument {
+  constructor(value = {}) {
+    if (value === null || typeof value !== "object" || Array.isArray(value)
+      || Object.keys(value).sort().join(",") !== "activityId,note,observedAt,owner,review,schemaRevision,source") {
+      throw new Error("Spec Review Activity evidence has invalid fields");
+    }
+    const { review, ...observation } = value;
+    super(observation);
+    this.review = new CanonicalSpecReview(review);
+    if (!isDeepStrictEqual(this.toJSON(), value)) {
+      throw new Error("Spec Review Activity evidence must preserve its exact canonical Review record");
+    }
+    const path = `revisions/${this.review.identity.revision.toString()}/review.json`;
+    const audit = this.review.audit.at(-1);
+    if (this.source.path !== path || this.source.pointer !== "" || this.source.hash !== this.review.digest
+      || this.review.generation < 1 || audit?.stage !== this.owner.nodeId
+      || (audit.activityId != null && audit.activityId !== this.activityId)) {
+      throw new Error("Spec Review Activity evidence does not bind its canonical source and final stage");
+    }
+    Object.freeze(this);
+  }
+
+  static fromJSON(value) { return new this(value); }
+
+  static forActivity({ activity, review, sourcePath, observedAt }) {
+    if (!(review instanceof CanonicalSpecReview)) throw new TypeError("Spec Review Activity evidence requires a canonical Review");
+    return new this({ schemaRevision: 1, activityId: activity.id,
+      owner: { nodeId: activity.nodeId, nodeKey: activity.nodeKey },
+      observedAt, source: { path: sourcePath, pointer: "", hash: review.digest },
+      note: "Canonical Spec Review publication.", review: review.toJSON() }).assertActivity(activity);
+  }
+
+  assertActivity(activity, { specId = this.review.identity.specId } = {}) {
+    super.assertActivity(activity);
+    const recordedAt = activity.timing?.finishedAt ?? activity.result?.confirmedAt;
+    if ((recordedAt != null && this.observedAt !== recordedAt) || activity.reviewPublication == null) {
+      throw new Error("Spec Review Activity evidence requires its saved publication and observation time");
+    }
+    activity.reviewPublication.assertReview(this.review, { specId,
+      revision: this.review.identity.revision.value,
+      bytes: Buffer.from(`${JSON.stringify(this.review.toJSON(), null, 2)}\n`, "utf8") });
+    return this;
+  }
+
+  toJSON() { return { ...super.toJSON(), review: this.review.toJSON() }; }
+}
+
 /** Validates immutable Activity evidence bytes and their ledger association. */
 export class FlowArtifactActivityEvidenceContent extends FlowArtifactContentContract {
   constructor() { super(); Object.freeze(this); }
@@ -1306,7 +1369,9 @@ export class FlowArtifactActivityEvidenceContent extends FlowArtifactContentCont
     try { value = JSON.parse(bytes.toString("utf8")); } catch (error) {
       throw new Error(`activity evidence must be valid JSON: ${error.message}`);
     }
-    return FlowArtifactActivityEvidenceDocument.fromJSON(value);
+    return Object.hasOwn(value ?? {}, "review")
+      ? FlowArtifactSpecReviewActivityEvidenceDocument.fromJSON(value)
+      : FlowArtifactActivityEvidenceDocument.fromJSON(value);
   }
 
   assertPublication(previousBytes, nextBytes) {
@@ -1328,13 +1393,15 @@ export class FlowArtifactActivityEvidenceContent extends FlowArtifactContentCont
     if (document.activityId !== descriptor.activityId) {
       throw new Error("activity evidence document Activity id does not match its descriptor");
     }
-    if (document.owner.nodeId !== activity?.nodeId || document.owner.nodeKey !== activity?.nodeKey) {
-      throw new Error("activity evidence document owner does not match its Activity");
-    }
+    document.assertOwner(activity);
     const contract = FLOW_ARTIFACT_CONTRACTS.require("activity.evidence");
     const artifact = FlowArtifactActivityEvidence.fromCanonicalPath(contract, descriptor.relativePath);
     if (artifact.owner.nodeId !== activity.nodeId || artifact.owner.publicationStep !== descriptor.slot.publicationStep) {
       throw new Error("activity evidence path owner does not match its Activity provenance");
+    }
+    if (document instanceof FlowArtifactSpecReviewActivityEvidenceDocument
+      && artifact.digest !== crypto.createHash("sha256").update(bytes).digest("hex")) {
+      throw new Error("Spec Review Activity evidence address does not match its exact bytes");
     }
     return document;
   }
@@ -1553,7 +1620,7 @@ export class FlowArtifactRegistry {
 const FLOW_ARTIFACT_PLACEMENTS = new Map([
   ...["flow.state", "flow.activities", "spec.record", "issue.log", "artifact.catalog", "issue.snapshot"].map((key) => [key, new FlowArtifactPlacement("root-authority")]),
   ...["spec.snapshot", "spec.review"].map((key) => [key, new FlowArtifactPlacement("revision-authority")]),
-  ...["report", "ideas", "tests.source", "test.requirement.failure", "test.requirement.candidate.bundle", "test.requirement.candidate.source", "test.requirement.support", "plugin.lifecycle.artifact", "retry.recovery.baseline", "retry.recovery.receipt", "plan.gate.repair.outcome", "spec.gate.repair.migration", "spec.gate.repair.progress", "spec.gate.repair.audit", "spec.gate.repair.source.blob", "spec.gate.repair.source.manifest", "source.handoff.rollback-blob", "source.handoff.checkpoint", "source.handoff.event", "source.handoff.settlement"].map((key) => [key, new FlowArtifactPlacement("independent-deliverable")]),
+  ...["execution.contract", "prompt.execution.progress", "prompt.execution.event", "prompt.execution.budget", "report", "ideas", "tests.source", "test.requirement.failure", "test.requirement.candidate.bundle", "test.requirement.candidate.source", "test.requirement.support", "plugin.lifecycle.artifact", "retry.recovery.baseline", "retry.recovery.receipt", "plan.gate.repair.outcome", "spec.gate.repair.migration", "spec.gate.repair.progress", "spec.gate.repair.audit", "spec.gate.repair.source.blob", "spec.gate.repair.source.manifest", "source.handoff.rollback-blob", "source.handoff.checkpoint", "source.handoff.event", "source.handoff.settlement"].map((key) => [key, new FlowArtifactPlacement("independent-deliverable")]),
   ...["upgrade.result", "completion.overrides", "retry.recovery", "flow.findings", "nonblocking.handoffs"].map((key) => [key, new FlowArtifactPlacement("step-shared")]),
   ...[
     "test.requirement.gate.raw-log", "test.execute.raw-log", "final.regression.raw-log",
@@ -1576,6 +1643,7 @@ const FLOW_ARTIFACT_PLACEMENTS = new Map([
 ]);
 
 const FLOW_ARTIFACT_MUTATION_POLICIES = new Map([
+  ...["execution.contract", "prompt.execution.event"].map((key) => [key, new FlowArtifactMutationPolicy("immutable")]),
   ["task.review.reconciliation", new FlowArtifactMutationPolicy("immutable")],
   ["spec.snapshot", new FlowArtifactMutationPolicy("immutable")],
   ["review.evidence", new FlowArtifactMutationPolicy("immutable")],
@@ -1737,6 +1805,11 @@ export const FLOW_ARTIFACT_NO_ARTIFACT_STEPS = Object.freeze([
 ]);
 
 const FLOW_ARTIFACT_CONTRACT_LIST = Object.freeze([
+  contract("execution.contract", "artifacts/executions/:{episodeId}/:{generation}/contract.json", "execution-contract", "canonical-flow-artifacts", "system", own(FLOW_WIDE_RECORD_ACTORS, FLOW_WIDE_RECORD_ACTORS, FLOW_WIDE_RECORD_ACTORS), "permanent", "collection"),
+  contract("prompt.execution.progress", "artifacts/executions/:{episodeId}/:{generation}/progress/:{scopeId}.json", "prompt-execution-progress", "canonical-flow-artifacts", "system", own(FLOW_WIDE_RECORD_ACTORS, FLOW_WIDE_RECORD_ACTORS, FLOW_WIDE_RECORD_ACTORS), "permanent", "collection"),
+  contract("prompt.execution.event", "artifacts/executions/:{episodeId}/:{generation}/events/:{scopeId}/:{eventId}.json", "prompt-execution-event", "canonical-flow-artifacts", "system", own(FLOW_WIDE_RECORD_ACTORS, FLOW_WIDE_RECORD_ACTORS, FLOW_WIDE_RECORD_ACTORS), "permanent", "collection"),
+  contract("prompt.execution.budget", "artifacts/execution-budgets/:{budgetId}.json", "prompt-execution-budget", "canonical-flow-artifacts", "system", own(FLOW_WIDE_RECORD_ACTORS, FLOW_WIDE_RECORD_ACTORS, FLOW_WIDE_RECORD_ACTORS), "permanent", "collection"),
+
   // Roots retain their authoritative names.  Every other permanent output is
   // owned by its producing step; independent deliverables live in artifacts/.
   contract("flow.state", "flow.json", "flow-state", "repository-metadata", "system", own(["system", "prepare-spec"], ["system", ...NORMAL_FLOW_STEP_ACTORS], NORMAL_FLOW_STEP_ACTORS)),
@@ -2001,6 +2074,11 @@ const removeTarget = (logicalKey, legacyPaths = [], legacyPatterns = [], produce
 });
 
 export const FLOW_ARTIFACT_SWITCH_TARGETS = Object.freeze([
+  newTarget("execution.contract", "artifacts/executions/:{episodeId}/:{generation}/contract.json", "system", "system"),
+  newTarget("prompt.execution.progress", "artifacts/executions/:{episodeId}/:{generation}/progress/:{scopeId}.json", "system", "system"),
+  newTarget("prompt.execution.event", "artifacts/executions/:{episodeId}/:{generation}/events/:{scopeId}/:{eventId}.json", "system", "system"),
+  newTarget("prompt.execution.budget", "artifacts/execution-budgets/:{budgetId}.json", "system", "system"),
+
   target("flow.state", ["flow.json"], "flow.json", "prepare-spec", "prepare-spec"),
   newTarget("flow.activities", "activities.jsonl", "prepare-spec", "prepare-spec"),
   target("spec.record", ["spec.json"], "spec.json", "prepare-spec", "spec"),
@@ -2123,6 +2201,10 @@ const knownPattern = (logicalKey, action, legacyPattern) => new FlowArtifactKnow
 const knownNew = (logicalKey, canonicalPath) => new FlowArtifactKnownFile({ logicalKey, action: "new", canonicalPath });
 
 export const FLOW_ARTIFACT_NORMAL_FLOW_FILES = Object.freeze([
+  knownNew("execution.contract", "artifacts/executions/:{episodeId}/:{generation}/contract.json"),
+  knownNew("prompt.execution.progress", "artifacts/executions/:{episodeId}/:{generation}/progress/:{scopeId}.json"),
+  knownNew("prompt.execution.event", "artifacts/executions/:{episodeId}/:{generation}/events/:{scopeId}/:{eventId}.json"),
+  knownNew("prompt.execution.budget", "artifacts/execution-budgets/:{budgetId}.json"),
   known("flow.state", "switch", "flow.json"), knownNew("flow.activities", "activities.jsonl"),
   known("spec.record", "switch", "spec.json"), known("issue.log", "switch", "issue-log.json"), known("issue.log", "switch", "redolog.json"),
   knownNew("spec.snapshot", "revisions/:{revision}/spec.json"), knownNew("spec.review", "revisions/:{revision}/review.json"),

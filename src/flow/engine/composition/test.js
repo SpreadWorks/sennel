@@ -1,7 +1,7 @@
 import { StepRegistration } from "./step-registration.js";
 import { StepExecutionContract } from "./step-execution-contract.js";
 import { workerStepExecutionContract } from "../../lib/worker-execution-admission.js";
-import { gateStepExecutionContract, reviewStepExecutionContract } from "../../lib/execution-admission.js";
+import { acquirePendingExecutionContract, gateStepExecutionContract, reviewStepExecutionContract } from "../../lib/execution-admission.js";
 import { NextActionDirective } from "../../lib/next-action-directive.js";
 import { ApprovalInput } from "../../services/approval-input.js";
 import { CanonicalSpecApproval } from "../../lib/canonical-spec-approval.js";
@@ -46,7 +46,14 @@ export function prepareApprovalServiceArguments(input) {
 
 export function prepareRequirementTestServiceArguments(input, _ConnectorClass, stepId) {
   if (!(input.observed instanceof RequirementTestInput) || input.observed.stepId !== stepId) throw new TypeError("Requirement test composition requires its acquired typed leaf input");
+  let executionContract = input.executionContract ?? null;
+  if (input.commandResult != null) {
+    const acquired = input.observed.binding;
+    executionContract = acquirePendingExecutionContract({ flowManager: input.flowManager ?? input.ctx.flowManager,
+      binding: { runId: acquired.runId, specId: acquired.specId, stepId: acquired.leaf, attempt: acquired.attempt }, generation: 0 });
+  }
   return [new RequirementTestInput(input.observed), new RequirementTestSettlementWriter({
+    executionContract,
     flowManager: input.flowManager ?? input.ctx?.flowManager,
     specId: input.observed.binding.specId,
     binding: input.observed.binding,

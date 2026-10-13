@@ -1,16 +1,23 @@
 import { Step } from "../../engine/step.js";
 import { AcceptanceReviewExecutionRequiredResult, AcceptanceReviewPassedResult, AcceptanceReviewRepairRequiredResult,
-  AcceptanceReviewDecisionRequiredResult, AcceptanceReviewMechanicallyBlockedResult, StepErrorResult } from "../../engine/step-result.js";
+  AcceptanceReviewDecisionRequiredResult, AcceptanceReviewMechanicallyBlockedResult, AcceptanceReviewExecutionHeldResult, StepErrorResult } from "../../engine/step-result.js";
 import { AcceptanceReviewService } from "../../services/acceptance-review-service.js";
 import { AcceptanceReviewResultEvidence } from "./acceptance-review-values.js";
 export function acceptanceReviewResult(input) {
   if (input.failure !== null) return new StepErrorResult("acceptance-review", input.failure);
   if (!(input.evidence instanceof AcceptanceReviewResultEvidence)) throw new TypeError("Acceptance Review requires acquired evidence");
+  if (input.continuation !== null && input.continuation !== undefined) return acceptanceReviewContinuationResult(input);
   const Result = { "acceptance-review-execution-required": AcceptanceReviewExecutionRequiredResult,
     "acceptance-review-passed": AcceptanceReviewPassedResult, "acceptance-review-repair-required": AcceptanceReviewRepairRequiredResult,
     "acceptance-review-decision-required": AcceptanceReviewDecisionRequiredResult,
     "acceptance-review-mechanically-blocked": AcceptanceReviewMechanicallyBlockedResult }[input.evidence.resultKind];
   return new Result({ evidence: input.evidence });
+}
+export function acceptanceReviewContinuationResult(input) {
+  input.continuation.assertEvidence(input.evidence);
+  return input.continuation.canResume
+    ? new AcceptanceReviewExecutionRequiredResult({ evidence: input.evidence })
+    : new AcceptanceReviewExecutionHeldResult({ continuation: input.continuation });
 }
 export class AcceptanceReviewStep extends Step {
   static synchronous = true;

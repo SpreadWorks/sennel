@@ -66,6 +66,13 @@ displayName は保存済み spec title、明示 Definition label、key の順で
 
 ## 詳細と参照閉包
 
+適用済み Repair item の `change` は、保存済み操作の `replacement` または `edits` を返す。
+`edits` は元の UTF-8 本文に対する `startByte` / `endByte` / `replacement` の配列であり、
+現在の文書から変更内容を推測しない。削除操作は両値が null で、対象と操作種類が削除内容を示す。
+discarded / skipped item は `change=null` とし、適用していない操作を修正結果へ昇格しない。
+公開型は追加の `change` property を許可し、実queryはその値を明示する。
+保存本文をそのまま返し、既存の response byte 上限を超える場合は従来の拒否契約を使う。
+
 activities の items は保存済み confirmed Activity であり、details はその Activity 当時の観測である。各 entity は source と supportingSources、関連 Activity / evaluation / finding / repair ID を持つ。source には artifact の公開 ID と key、相対 path、hash、producer Activity、node、attempt、source entry、observation、format、JSON pointer を記録する。
 
 JSON source は pointer で record を選択する。JSONL source は `sourceEntryId` を confirmed Activity ID とし、pointer は null。複数の正本を合成した場合は、使用した全出典を supportingSources に保持する。
@@ -74,11 +81,25 @@ Evaluation は producer の outcome と nativeCode、判定項目ごとの期待
 
 正規 Spec Review の checkpoint / claimed 実行制御 Activity は、保存された execution-required Result と typed receipt の exact binding を確認できる場合、全 detail を `not-applicable` とする。validated typed publication は findings を `available`、evaluations を `not-applicable` とし、terminal Activity は保存済み verdict の evaluation を `available` とする。このため、正常な checkpoint → claimed → publication → terminal の activities page 全体を `details=complete` とできる。generic な untyped confirmation に verdict が記録されていない場合は引き続き `not-recorded` とする。
 
-specific は `schemaId` で選択する閉じた型とする。Spec Review finding、Draft finding、Gate evaluation、ledger skip の variant を持つ。producer の未知意味フィールドを透過せず、対応する公開型がない場合は `DETAIL_UNAVAILABLE` とする。保存済み `continue_nonblocking` は ledger を正本に `kind=lifecycle-skip` として投影する。
+Spec Review / Triage / Repair の正規 publication は、当時の canonical Review 記録を既存 `activity.evidence` の専用型へ保存する。現行 `review.json` は後続工程の authority として更新し、不変な証跡には各 Activity の指摘・分類・repair audit を保持する。query は同じ capture 内の証跡を Activity / owner / 選択 Flow / generation / identity / digest / audit stage に結び付けて読む。Finding の完全 identity は元の canonical Review path を維持し、実際の保存位置は不変証跡の `/review` 以下を source pointer とする。terminal Result は既存の pure Result factory と保存 publication の対応を検証し、publication の Finding を書き換えない。普通 Repair は audit の `inputDigest` が結び付く先行 Triage / Review の指摘を参照する。
 
-criterion の `category` と `title` は保存された値を個別に返す。Gate criterion の `authority` は必須 nullable (`null` または `mechanical`) とし、正規 Gate producer の機械的判定 authority を保持する。Gate の target、level、phase、構造化 reasons、issues、failureKind / failureCode、prescription、diagnosisSummary は `gate-evaluation@1` に保持し、共通 explanation の値を上書きしない。公開 `gate-evaluation@1` specific は `taskId` (必須 nullable string)、`sourceFingerprint` (必須 nullable lowercase SHA-256)、`failureCategory` (必須 nullable。値がある場合は `{category: semantic|local|tooling, code: string|null}`)、`evaluationScope` (必須 nullable。値がある場合は `{phase,taskId,sourceFingerprint,contentFingerprint}`)、`warnings` (必須 nullable string 配列) を持つ。scope は保存値を既存 `GateEvaluationScope.fromJSON` で検証して公開する。制御 binding の lineage と Attempt は公開 source として検証にも使う。正規 `RunGateCommand` が保存した lineage / Attempt / scope / category を既存 API で検証し、Task 別 descriptor 選択および履歴 Attempt に結び付けて投影する。内部 `responseProtocolEvidence` も既存型で検証する既知フィールドだが、公開しない。Gate finding observation のうち未対応の未知型、または未対応の非空 observation は `DETAIL_UNAVAILABLE` として拒否する。これは全 Gate variant 対応を意味しない。
+不変証跡がない記録も、現行本文がその Activity の owner / generation / digest / 選択 Flow に完全一致する場合は既存の正規本文から読める。上書きで失われた過去本文を最新本文や audit から補作しない。不正な専用証跡を無視して本文へ fallback せず、複数候補も拒否する。追加する保存は Review の意味記録であり、任意日時の Flow 全体復元や文書全文・Git差分の公開ではない。
 
-Repair item の target は entity、id、field、relativePath、jsonPointer、collection、position を持つ。collection 対象の id は既存 `SpecRepairTarget.conflictKey(expectedDigest)` による locator とする。position が未指定でも保存済み expectedDigest で対象を区別できる。position の null は単なる append の補作ではなく、producer の digest による選択を保持する。no-op の修正は `status=skipped` とし nativeValue を保持し、適用・検証済みへ昇格しない。Spec Repair audit は `activityId` がなくても、validated descriptor と ActivityReviewPublication の identity / generation / digest / bytes / audit stage / outcome による既存の exact binding から正常な修正を返す。保存済み `activityId` がある場合は binding と矛盾する値を拒否する。producer の保存形式と Flow 遷移は変更しない。
+正規 Draft questions / coverage Review の checkpoint / claimed も、concrete Result と保存 receipt の binding を確認して全 detail を `not-applicable` とする。publication は保存本文の verdict / summary を Evaluation、blocking / advisory / repair target を Finding として返し、指摘が0件でも findings は `available` とする。terminal は同じ Attempt の publication の entity IDとJSONを参照する。coverage PASS の `complete_draft_completion` は保存済み `StepConnectionReceipt` に結び付く terminal として扱う。checkpoint を評価済みへ昇格せず、修正候補を適用済み Repair として返さない。
+
+Draft publication の内部 `workerOutput` / `canonicalEvidence` / `canonicalTarget` は既存の保存型で検証するが、公開JSONへコピーしない。本文とEvidenceの対応、execution target、保存 command result を含む正規 publication intent の digest を、writer と共通の生成処理で保存 receipt に照合する。terminal は manifestDigest / inputDigest / target / generation / claim を含む完全な lifecycle binding と、保存 verdict に対応する既存 Result factory の結果を検証する。raw output、runtime seal、未保存の時刻は再生成しない。
+
+Draft Attempt history は各 record の保存位置から source pointer を作り、実際の publication Activity を producer とする。history ファイル全体の descriptor は最新 publication を示すため、過去 Attempt に最新 producer を代入したり、過去 producer と最新 descriptor のActivity ID一致を要求したりしない。保持済みの各 record と exact publication receipt を検証し、terminal から読んでも publication から読んでも同じ entity を返す。正規 producer の Activity.timing が null の場合、recordedAt filter は既存契約どおりその Activity を除外し、result.confirmedAt を代用しない。
+
+specific は `schemaId` で選択する閉じた型とする。Spec Review finding、Draft finding、Gate finding、Gate evaluation、ledger skip の variant を持つ。producer の未知意味フィールドを透過せず、対応する公開型がない場合は `DETAIL_UNAVAILABLE` とする。保存済み `continue_nonblocking` は ledger を正本に `kind=lifecycle-skip` として投影する。
+
+criterion の `category` と `title` は保存された値を個別に返す。Gate criterion の `authority` は必須 nullable (`null` または `mechanical`) とし、正規 Gate producer の機械的判定 authority を保持する。Gate の target、level、phase、構造化 reasons、issues、failureKind / failureCode、prescription、diagnosisSummary は `gate-evaluation@1` に保持し、共通 explanation の値を上書きしない。公開 `gate-evaluation@1` specific は `taskId` (必須 nullable string)、`sourceFingerprint` (必須 nullable lowercase SHA-256)、`failureCategory` (必須 nullable。値がある場合は `{category: semantic|local|tooling, code: string|null}`)、`evaluationScope` (必須 nullable。値がある場合は `{phase,taskId,sourceFingerprint,contentFingerprint}`)、`warnings` (必須 nullable string 配列) を持つ。scope は保存値を既存 `GateEvaluationScope.fromJSON` で検証して公開する。制御 binding の lineage と Attempt は公開 source として検証にも使う。正規 `RunGateCommand` が保存した lineage / Attempt / scope / category を既存 API で検証し、Task 別 descriptor 選択および履歴 Attempt に結び付けて投影する。内部 `responseProtocolEvidence` も既存型で検証する既知フィールドだが、公開しない。
+
+正規 `Observation` の既知 violation を `gate-finding@1` として返す。failureMode、requirementRef、where、refs、保存済み Spec revision / target / permission を型で検証する。NextAction diagnosis と criterion の同じ指摘を二重計数せず、鏡写しの本文が矛盾する場合は拒否する。Spec Gate の blocking 指摘には修復 producer と共通の完全 identity を使い、advisory が先に保存されていても blocking の既存 ID を変えない。未知 observation kind / 意味field は引き続き `DETAIL_UNAVAILABLE` とする。
+
+Repair item の target は entity、id、field、relativePath、jsonPointer、collection、position を持つ。collection 対象の id は既存 `SpecRepairTarget.conflictKey(expectedDigest)` による locator とする。position が未指定でも保存済み expectedDigest で対象を区別できる。position の null は単なる append の補作ではなく、producer の digest による選択を保持する。no-op の修正は `status=skipped` とし nativeValue を保持し、適用・検証済みへ昇格しない。Spec Repair audit は `activityId` がなくても、validated descriptor と ActivityReviewPublication の identity / generation / digest / bytes / audit stage / outcome による既存の exact binding から正常な修正を返す。保存済み `activityId` がある場合は binding と矛盾する値を拒否する。現行 Review authority の形式と Flow 遷移は維持し、不変な Activity 証跡を追加する。
+
+Gate の `plan_gate_repair` は issue-log 内の exact な計画と source evidence を検証し、`status=planned` の Repair として返す。適用操作を補作せず、元の Gate 指摘を参照する。Spec Gate Repair の checkpoint / claimed / worker publication は typed 実行管理として扱い、terminal の保存 audit から実際の採用操作と拒否診断を返す。完全な worker lifecycle、terminal Result、元 Gate Attempt / finding identity、計画、保存操作 digest を検証する。worker の semantic inputRevision と Spec bytes の baseRevision は異なる契約として検証する。拒否 group に保存されていない操作・対象・指摘を推測で埋めない。
 
 旧 evaluationIds / findingIds / repairIds は保存された参照 ID のまま維持する。referenceBindings の各群は `{reference:{id,label},detailIds,availability,reason}` を持ち、reference.id は群内で一意、集合は対応する旧 ID 一覧と厳密に一致する。detailIds は対応する entity 群へ解決し、evaluation 参照を finding で代用しない。1つの旧参照が複数の観測へ解決されてもよい。旧 ID 欄が空でも producer artifact に保存された詳細は detailRefs に含める。
 

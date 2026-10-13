@@ -1,3 +1,4 @@
+import { readAcceptanceExecutionContract } from "../../lib/acceptance-execution-session.js";
 import { AcceptanceReviewInput } from "../../services/acceptance-review-input.js";
 import { AcceptanceDecisionInput } from "../../services/acceptance-decision-input.js";
 import { AcceptanceSettlementWriter } from "../../services/acceptance-settlement-writer.js";
@@ -8,10 +9,10 @@ import { CanonicalAcceptanceArtifactStore, readAcceptanceReviewResultEvidence,
 /** Acquired input plus its one prospective canonical save operation. */
 export class AcceptanceReviewPreparation {
   constructor({ binding, observed, context, commandResult = null, acceptancePublication = null,
-    executionBinding = null, executionLifecycle = null, sourceCatalogHash = context.sourceCatalogHash }) {
+    executionBinding = null, executionLifecycle = null, executionContract = null, sourceCatalogHash = context.sourceCatalogHash }) {
     if (!(binding instanceof ImplStepBinding) || binding.stepId !== "acceptance-review"
       || !(observed instanceof AcceptanceReviewInput)) throw new TypeError("Acceptance Review requires acquired preparation");
-    Object.assign(this, { binding, observed, context, commandResult, acceptancePublication, executionBinding, executionLifecycle, sourceCatalogHash });
+    Object.assign(this, { binding, observed, context, commandResult, acceptancePublication, executionBinding, executionLifecycle, executionContract, sourceCatalogHash });
     Object.freeze(this);
   }
 }
@@ -25,17 +26,20 @@ export class AcceptanceDecisionPreparation {
 }
 
 export async function prepareAcceptanceReviewInput({ flowManager, state, executionRoot, context = null,
-  commandResult = null, executionBinding = null, executionLifecycle = null, failure = null }) {
+  commandResult = null, executionBinding = null, executionLifecycle = null, executionContract = null, continuation = null, failure = null }) {
   const binding = new ImplStepBinding({ flowManager, specId: state.specId, stepId: "acceptance-review" });
   const acquiredContext = context ?? await new CanonicalAcceptanceArtifactStore({ flowManager,
     state: flowManager.loadReadOnly(state.specId) }).buildContext({ executionRoot });
+  const pendingContract = readAcceptanceExecutionContract({ flowManager, state, binding, context: acquiredContext });
+  if (executionContract !== null && pendingContract !== null) pendingContract.assertMatches(executionContract);
+  executionContract ??= pendingContract;
   const publication = commandResult === null ? null : flowManager.prepareAcceptanceCommandPublication({ binding, commandResult,
     sourceCatalogHash: acquiredContext.sourceCatalogHash });
   const observed = failure === null ? new AcceptanceReviewInput({ evidence: readAcceptanceReviewResultEvidence({
     state, context: acquiredContext, binding, publication, commandResult,
-    executionGeneration: executionBinding?.executionGeneration ?? 0 }) }) : new AcceptanceReviewInput({ failure });
+    executionGeneration: executionBinding?.executionGeneration ?? 0 }), continuation }) : new AcceptanceReviewInput({ failure });
   return new AcceptanceReviewPreparation({ binding, observed, context: acquiredContext, commandResult,
-    acceptancePublication: publication, executionBinding, executionLifecycle });
+    acceptancePublication: publication, executionBinding, executionLifecycle, executionContract });
 }
 
 export function prepareAcceptanceDecisionInput({ flowManager, state, commandResult = null, failure = null }) {

@@ -1,3 +1,5 @@
+import { ExecutionProtocolSnapshot } from "./execution-protocol-snapshot.js";
+import { FlowExecutionInputBaseline, FlowExecutionContractRefusal, executionValueDigest } from "./flow-execution-contract.js";
 import fs from "node:fs";
 import crypto from "node:crypto";
 import os from "node:os";
@@ -301,13 +303,25 @@ export default class RunRequirementTestGateCommand extends FlowCommand {
     }
     assertDirectGateExecution(ctx.flowManager, state);
     const artifacts = new RequirementTestArtifactStore({ flowManager: ctx.flowManager, state });
-    const plan = artifacts.readPlan("test-gate").artifact.plan;
+    const planRead = artifacts.readPlan("test-gate");
+    const plan = planRead.artifact.plan;
     const workItem = plan.activeWorkItem();
     if (workItem?.status !== "reviewed" || workItem.bundleRevision === null) {
       throw new Error("Requirement test Gate requires one reviewed active work item");
     }
     const candidate = artifacts.readCandidate({ bundle: workItem.bundleRevision, consumerNodeId: "test-gate" });
     const testArtifacts = new CanonicalTestArtifactStore({ flowManager: ctx.flowManager, state });
+    const binding = { runId: state.runId, specId: state.specId, stepId: "test-gate", attempt: state.attempt };
+    const descriptors = [planRead.descriptor, candidate.descriptor,
+      ...candidate.sources.map((source) => source.descriptor), ...candidate.support.map((source) => source.descriptor)].filter(Boolean);
+    const inputBaselines = descriptors.map((descriptor) => new FlowExecutionInputBaseline({ descriptor }));
+    const executionContract = new ExecutionProtocolSnapshot({ prompt: {
+      requirementId: workItem.requirementId, specRevision: workItem.specRevision,
+      candidate: candidate.candidate.toJSON(), config: ctx.config ?? {},
+    }, schema: "requirement-test-gate" }).bind({ binding, generation: 0,
+      inputRevision: executionValueDigest({ plan: planRead.descriptor.hash, candidate: candidate.candidate.digest }), inputBaselines });
+    const claim = ctx.flowManager.claimExecutionContract({ binding, executionContract });
+    if (!claim.newlyClaimed) throw new FlowExecutionContractRefusal("Requirement Test Gate has an uncertain execution without a published response");
     const execution = await this.gateRunner({
       repositoryRoot: ctx.root,
       versionLocation: testArtifacts.location,
@@ -317,6 +331,7 @@ export default class RunRequirementTestGateCommand extends FlowCommand {
       sourceBytes: new Map([...candidate.sources, ...candidate.support]
         .map((source) => [source.targetRelativePath, source.bytes])),
     });
+    ctx.flowManager.readExecutionContract({ executionContract });
     const rawOutputPath = FLOW_ARTIFACT_CONTRACTS.resolve("test.requirement.gate.raw-log").relativePath;
     testArtifacts.writeRaw({
       nodeId: "test-gate",

@@ -10,6 +10,7 @@ export const acceptancePhaseResultContracts = Object.freeze([
   ["retro", "RetroIncompleteResult", "retro-incomplete", "branch-required"],
   ["retro", "RetroEvidenceRefreshResult", "retro-evidence-refresh", "loop-required"],
   ["acceptance-review", "AcceptanceReviewExecutionRequiredResult", "acceptance-review-execution-required", "loop-required"],
+  ["acceptance-review", "AcceptanceReviewExecutionHeldResult", "acceptance-review-execution-held", "user-input-required"],
   ["acceptance-review", "AcceptanceReviewPassedResult", "acceptance-review-passed", "completed"],
   ["acceptance-review", "AcceptanceReviewRepairRequiredResult", "acceptance-review-repair-required", "loop-required"],
   ["acceptance-review", "AcceptanceReviewDecisionRequiredResult", "acceptance-review-decision-required", "branch-required"],

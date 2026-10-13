@@ -1,3 +1,4 @@
+import { loadSpecJsonSchema } from "../../lib/spec-json.js";
 /**
  * Catalog-authorized reader for the closed human artifact-view registry.
  *
@@ -10,7 +11,6 @@
 
 import fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import {
   FlowArtifactCatalog,
   FlowArtifactCatalogStore,
@@ -31,7 +31,6 @@ import {
   CurrentFlowStateValidator,
 } from "./current-flow-state.js";
 
-const SPEC_SCHEMA_PATH = fileURLToPath(new URL("../schemas/spec.schema.json", import.meta.url));
 const DECISION_CHOICES = new Set(["accept_risk_and_continue", "abort"]);
 const UNRESOLVED_DEFERRED_DISPOSITIONS = new Set(["still_open", "blocking"]);
 const FINAL_DEFERRED_DISPOSITIONS = new Set([
@@ -70,10 +69,6 @@ function immutableJson(value, field) {
   } catch (error) {
     throw new Error(`${field} must be JSON-serializable: ${error.message}`);
   }
-}
-
-function readSpecSchema() {
-  return JSON.parse(fs.readFileSync(SPEC_SCHEMA_PATH, "utf8"));
 }
 
 function deferredProjection(value, field) {
@@ -480,7 +475,7 @@ export class ArtifactViewReader {
 
   #readSpec(source) {
     const spec = parsedJson(source.bytes(), "canonical spec.record");
-    const errors = validateSchema(spec, readSpecSchema());
+    const errors = validateSchema(spec, loadSpecJsonSchema());
     if (errors.length > 0) throw new Error(`canonical spec.record schema validation failed: ${errors.join("; ")}`);
     const requirementIds = spec.requirements.map((requirement) => requirement.id);
     if (new Set(requirementIds).size !== requirementIds.length) throw new Error("canonical spec.record has duplicate requirement ids");
