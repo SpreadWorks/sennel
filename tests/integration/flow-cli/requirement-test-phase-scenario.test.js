@@ -2,8 +2,12 @@ import "./requirement-test-save-recovery.contract.js";
 import "./requirement-test-stale-admission.contract.js";
 import "./requirement-test-error-admission.contract.js";
 import assert from "node:assert/strict";
-import { describe, it, mock } from "node:test";
+import { after, before, describe, it, mock } from "node:test";
+import fs from "node:fs";
 import path from "node:path";
+import RunTestExecuteCommand from "../../../src/flow/lib/run-test-execute.js";
+import { removeCatalogedArtifactForCorruptionFixture } from "../../support/infrastructure/flow-setup.js";
+import { dispatchContainer } from "../../support/infrastructure/flow-dispatch-scenario.js";
 import RunRetroCommand from "../../../src/flow/lib/run-retro.js";
 import RunAcceptanceReviewCommand, { AcceptanceReviewResponseSource } from "../../../src/flow/lib/run-acceptance-review.js";
 import { FLOW_COMMANDS } from "../../../src/flow/registry.js";
@@ -18,6 +22,7 @@ import { CanonicalAcceptanceArtifactStore } from "../../../src/flow/lib/canonica
 import { RequirementTestArtifactStore } from "../../../src/flow/lib/requirement-test-store.js";
 import { prepareCommonRequirementTestError } from "../../support/requirement-test-save-boundary.js";
 import { RequirementTestPhaseScenario, requirementTestSource, rejectFirstRequirementReview, rejectFirstRequirementReviewBatches } from "../../support/requirement-test-phase-scenario.js";
+import { CanonicalPersistenceSnapshot } from "../../support/assertions/canonical-persistence.js";
 import { assertRequirementTestResultRoundtrip } from "../../support/assertions/requirement-test-result.js";
 import { TEST_REVIEW_REPAIR_BATCH_LIMITS, canonicalTestReviewRepairForTarget, canonicalTestReviewRepairProgress } from "../../../src/flow/lib/test-review-repair.js";
 import { FlowDispatchSession, FlowDispatchTarget } from "../../../src/flow/lib/dispatch-invocation.js";
@@ -708,52 +713,111 @@ describe("Requirement Test phase production scenarios", { concurrency: false }, 
     });
   }
 
-  for (const permissionRelated of [false, true]) {
-    it(permissionRelated ? "stops external permission failures without consuming any R budget" : "preserves promoted R while tooling exhaustion defers the next R and retains Acceptance obligations", async (t) => {
-      const scenario = await approved(t, { requirements: [requirement("R1"), requirement("R2")],
-        continueImplementation: !permissionRelated,
-        testSource(id, request, scenario) {
-          return `// spec: ${id}\nimport test from 'node:test';\nimport assert from 'node:assert/strict';\nimport fs from 'node:fs';\ntest('${id}: required behavior', () => assert.ok(fs.existsSync(${JSON.stringify(path.join(scenario.root, "src", "implementation.js"))})));\n`;
-        },
-        reviewResponse(_index, revision) {
+  it("stops external permission failures without consuming any R budget", async (t) => {
+    const scenario = await approved(t, { requirements: [requirement("R1"), requirement("R2")],
+      testSource(id, _request, active) {
+        return `// spec: ${id}\nimport test from 'node:test';\nimport assert from 'node:assert/strict';\nimport fs from 'node:fs';\ntest('${id}: required behavior', () => assert.ok(fs.existsSync(${JSON.stringify(path.join(active.root, "src", "implementation.js"))})));\n`;
+      },
+      reviewResponse(_index, revision) {
         if (revision.requirementId === "R1") return { verdict: "PASS", blockingFindings: [], advisoryFindings: [] };
         return { toolingOutcome: { kind: "TOOLING_ERROR", stage: "provider", attempt: 1, maxAttempts: 3,
-          remainingAttempts: 2, reason: permissionRelated ? "permission denied" : "provider unavailable", permissionRelated } };
+          remainingAttempts: 2, reason: "permission denied", permissionRelated: true } };
       } });
-      await scenario.advanceTo("test-gate");
-      await scenario.dispatch();
-      scenario.reload();
-      assert.equal(scenario.plan().workItem("R1").status, "promoted");
-      assert.equal(scenario.plan().workItem("R2").status, "candidate_saved");
-      if (permissionRelated) {
-        await scenario.dispatch();
-        scenario.reload();
-        assert.deepEqual(scenario.plan().workItem("R2").budget.toJSON(), { autoSemantic: 0, manualSemantic: 0, tooling: 0 });
-        assert.equal((await scenario.next()).directive.kind, "blocked");
-        const before = scenario.snapshot();
-        const calls = scenario.reviews.length;
-        await scenario.dispatch();
-        assert.equal(scenario.reviews.length, calls);
-        assert.deepEqual(scenario.snapshot(), before);
-        assertSavedResult(scenario, "test-review", "test-review-external-blocked");
-      } else {
-        for (let attempt = 1; attempt <= 3; attempt += 1) {
-          await scenario.dispatch();
-          scenario.reload();
-          assert.equal(scenario.plan().workItem("R2").budget.tooling, attempt);
-          assert.equal(scenario.plan().workItem("R1").budget.tooling, 0);
-        }
-        await scenario.advanceTo("implement");
-        scenario.reload();
-        assert.deepEqual(scenario.plan().workItems.map((item) => item.status), ["promoted", "deferred"]);
-        assert.ok(scenario.artifact("test.requirement.deferred", { requirementId: "R2" }));
-        assert.equal(scenario.artifact("tests.source", { testPath: "r2.test.js" }), null);
-        const acceptance = await new CanonicalAcceptanceArtifactStore({ flowManager: scenario.manager,
-          state: scenario.manager.loadReadOnly(scenario.specId) }).buildContext({ executionRoot: scenario.root });
-        assert.ok(acceptance.deferredFindings.length > 0, "Acceptance must retain the deferred source obligations after reload");
-        await consumeMixedDownstream(scenario);
-        assertSavedResult(scenario, "test-review", "test-review-tooling-unavailable");
+    await scenario.advanceTo("test-gate");
+    await scenario.dispatch();
+    scenario.reload();
+    assert.equal(scenario.plan().workItem("R1").status, "promoted");
+    assert.equal(scenario.plan().workItem("R2").status, "candidate_saved");
+    await scenario.dispatch();
+    scenario.reload();
+    assert.deepEqual(scenario.plan().workItem("R2").budget.toJSON(), { autoSemantic: 0, manualSemantic: 0, tooling: 0 });
+    assert.equal((await scenario.next()).directive.kind, "blocked");
+    const before = scenario.snapshot();
+    const calls = scenario.reviews.length;
+    await scenario.dispatch();
+    assert.equal(scenario.reviews.length, calls);
+    assert.deepEqual(scenario.snapshot(), before);
+    assertSavedResult(scenario, "test-review", "test-review-external-blocked");
+  });
+
+  describe("mixed promoted/deferred Requirements across persisted readback", () => {
+    let seed;
+    const cleanups = [];
+    after(() => { for (const cleanup of cleanups.reverse()) cleanup(); });
+    before(async () => {
+      const scope = { after(cleanup) { cleanups.push(cleanup); } };
+      seed = await approved(scope, { requirements: [requirement("R1"), requirement("R2")],
+        continueImplementation: true,
+        testSource(id) {
+          // The immutable seed is cloned into another execution root. Resolve
+          // behavior from the actual test process cwd rather than the seed path.
+          return `// spec: ${id}\nimport test from 'node:test';\nimport assert from 'node:assert/strict';\nimport fs from 'node:fs';\ntest('${id}: required behavior', () => assert.ok(fs.existsSync('src/implementation.js')));\n`;
+        },
+        reviewResponse(_index, revision) {
+          if (revision.requirementId === "R1") return { verdict: "PASS", blockingFindings: [], advisoryFindings: [] };
+          return { toolingOutcome: { kind: "TOOLING_ERROR", stage: "provider", attempt: 1, maxAttempts: 3,
+            remainingAttempts: 2, reason: "provider unavailable", permissionRelated: false } };
+        } });
+      await seed.advanceTo("test-gate");
+      await seed.dispatch();
+      seed.reload();
+      assert.equal(seed.plan().workItem("R1").status, "promoted");
+      assert.equal(seed.plan().workItem("R2").status, "candidate_saved");
+      for (let attempt = 1; attempt <= 3; attempt += 1) {
+        await seed.dispatch();
+        seed.reload();
+        assert.equal(seed.plan().workItem("R2").budget.tooling, attempt);
+        assert.equal(seed.plan().workItem("R1").budget.tooling, 0);
       }
+      await seed.advanceTo("implement");
+      seed.reload();
+      assert.deepEqual(seed.plan().workItems.map((item) => item.status), ["promoted", "deferred"]);
+      assert.ok(seed.artifact("test.requirement.deferred", { requirementId: "R2" }));
+      assert.equal(seed.artifact("tests.source", { testPath: "r2.test.js" }), null);
+      assertSavedResult(seed, "test-review", "test-review-tooling-unavailable");
+      // This checkpoint includes the normal implementation, Task Review and
+      // Gate producers. Both consumers get isolated clones of the same evidence.
+      await seed.advanceTo("test-execute", 64);
+      seed.reload();
+      assert.equal(fs.statSync(path.join(seed.root, ".git")).isDirectory(), true,
+        "a standalone test repository may be cloned; linked worktree Git metadata may not");
     });
-  }
+
+    it("executes only promoted R and carries deferred obligations through Retro, Acceptance and Report", async (t) => {
+      const scenario = RequirementTestPhaseScenario.create(t, { seedRoot: seed.root, continueImplementation: true });
+      scenario.reload();
+      const acceptance = await new CanonicalAcceptanceArtifactStore({ flowManager: scenario.manager,
+        state: scenario.manager.loadReadOnly(scenario.specId) }).buildContext({ executionRoot: scenario.root });
+      assert.ok(acceptance.deferredFindings.length > 0, "Acceptance must retain deferred source obligations after reload");
+      await consumeMixedDownstream(scenario);
+    });
+
+    it("refuses a missing deferred receipt before running tests or changing Activity and R budget", async (t) => {
+      const scenario = RequirementTestPhaseScenario.create(t, { seedRoot: seed.root, continueImplementation: true });
+      removeCatalogedArtifactForCorruptionFixture(scenario.manager, scenario.specId,
+        "test.requirement.deferred", { requirementId: "R2" });
+      scenario.reload();
+      assert.equal(scenario.current(), "test-execute");
+      const before = scenario.snapshot();
+      const persisted = new CanonicalPersistenceSnapshot(scenario.manager, scenario.specId);
+      const budgets = scenario.plan().workItems.map((item) => item.budget.toJSON());
+      let processCalls = 0;
+      const command = new RunTestExecuteCommand({ runSpecLocal: async () => {
+        processCalls += 1;
+        assert.fail("missing deferred evidence cannot authorize a test process");
+      } });
+      command.container = dispatchContainer({ root: scenario.root, flowManager: scenario.manager,
+        config: scenario.options.config ?? {}, agent: scenario.agent });
+      await assert.rejects(() => command.execute(scenario.context()), /Requirement R2 deferred receipt is missing or stale/);
+      assert.equal(processCalls, 0);
+      assert.equal(scenario.requests.length, 0);
+      assert.equal(scenario.reviews.length, 0);
+      assert.deepEqual(scenario.reload().snapshot(), before,
+        "actual consumer refusal cannot publish an execution, append Activity or move the Attempt");
+      persisted.assertUnchanged(scenario.manager, scenario.specId, "missing deferred receipt refusal");
+      assert.deepEqual(scenario.plan().workItems.map((item) => item.budget.toJSON()), budgets);
+      assert.equal(scenario.manager.readArtifact({ specId: scenario.specId,
+        logicalKey: "test.execute", consumerNodeId: "test-result-review", optional: true }), null);
+    });
+  });
 });

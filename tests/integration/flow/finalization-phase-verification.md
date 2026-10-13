@@ -85,6 +85,10 @@ node --test tests/integration/flow/finalize-completion-boundary.test.js tests/in
 npm run test:structure
 ```
 
+上記は0717の測定時に固定した集合である。ff4aで旧merge-retry／cleanup-robustness
+の保証を工程専用シナリオへ統合した。現在の対応、実行コマンド、受入判断は
+[ff4aの統合証跡](ff4a-regression-consolidation.md)を参照する。
+
 追加集合はruntime/recovery 9ファイル、Result/receipt/canonical 9ファイル、
 導入済み全フェーズ実DI 7ファイル、工程専用シナリオ7ファイル、
 共通checker 3ファイル。全repositoryや実AIの一律実行は行わない。

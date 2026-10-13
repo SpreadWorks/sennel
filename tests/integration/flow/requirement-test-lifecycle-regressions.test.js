@@ -34,6 +34,7 @@ import {
   RequirementTestLifecycleAuthority,
 } from "../../../src/flow/lib/requirement-test-lifecycle.js";
 import { RequirementTestArtifactStore } from "../../../src/flow/lib/requirement-test-store.js";
+import { RequirementTestSettlementReceipt } from "../../../src/flow/lib/requirement-test-settlement-receipt.js";
 import {
   RequirementTestStructuralHandoffError,
   WorkerArtifactHandoffCoordinator,
@@ -313,6 +314,63 @@ function setReviewBudget({ manager, specId }, budget) {
 }
 
 describe("Requirement test lifecycle regressions", () => {
+  it("creates the next Requirement worker after reloading a same-Attempt generation receipt", async () => {
+    const value = setup(["R1", "R2"]);
+    const initialAttempt = value.manager.canonicalState(value.specId).attempt;
+    const { coordinator, ctx, request } = requirementTestHandoff(value, "first-requirement-generation");
+    fs.writeFileSync(path.join(request.payloadPath("spec-tests"), "r1.test.js"),
+      "// spec: R1\nimport test from 'node:test';\ntest('R1: behavior', () => {});\n");
+    sealRequirementTestHandoff(request);
+    const completed = await coordinator.reconcile({ ctx, request });
+    assert.equal(completed.stepResult.kind, "test-generate-candidate-saved");
+    assert.ok(completed.receipt instanceof RequirementTestSettlementReceipt);
+    assert.equal(completed.receipt.settlementKind, "execution");
+    assert.deepEqual(completed.receipt.executionContract.toJSON(), request.executionContract.toJSON());
+
+    value.manager = makeFlowManager(value.root);
+    const state = value.manager.canonicalState(value.specId);
+    assert.equal(state.current.at(-1), "test-generate");
+    assert.equal(state.attempt.id, initialAttempt.id);
+    assert.equal(state.attempt.sequence, initialAttempt.sequence);
+    const persisted = value.manager.activityLedger(value.specId)
+      .find((entry) => entry.result?.draftSettlementReceipt?.id === completed.receipt.id)
+      .result.draftSettlementReceipt;
+    assert.deepEqual(persisted, completed.receipt.toJSON());
+    const plan = new RequirementTestArtifactStore({ flowManager: value.manager, state })
+      .readPlan("test-generate").artifact.plan;
+    assert.equal(plan.workItem("R1").status, "candidate_saved");
+    assert.equal(plan.activeWorkItem().requirementId, "R2");
+    const before = canonicalSnapshot(value);
+    const execution = value.manager.draftStepExecutionState({ binding: {
+      runId: state.runId, specId: value.specId, stepId: "test-generate", attempt: state.attempt,
+    } });
+    assert.equal(execution.lifecycle, null);
+    assert.equal(execution.receiptId, null);
+    assert.deepEqual(canonicalSnapshot(value), before);
+    const next = requirementTestHandoff(value, "next-requirement-generation").request;
+    const workerSpec = next.toWorkerJSON().inputs.find((input) => input.name === "spec.json").document;
+    assert.deepEqual(workerSpec.requirements.map((requirement) => requirement.id), ["R2"]);
+    assert.equal(next.executionContract.generation, request.executionContract.generation + 1);
+    assert.equal(next.executionContract.episodeId, request.executionContract.episodeId);
+    assert.equal(next.executionContract.budgetId, request.executionContract.budgetId);
+    assert.notEqual(next.executionContract.inputRevision, request.executionContract.inputRevision);
+    assert.equal(value.manager.readStoredExecutionContract({
+      binding: next.executionBinding(), generation: next.executionContract.generation,
+    }).id, next.executionContract.id);
+    const after = canonicalSnapshot(value);
+    assert.equal(after.activities.length, before.activities.length + 1);
+    assert.equal(after.catalog.artifacts.length, before.catalog.artifacts.length + 1);
+    assert.equal(after.state.attempt.id, before.state.attempt.id);
+    assert.deepEqual(after.state.attempt.consumption, before.state.attempt.consumption);
+    const repeated = requirementTestHandoff(value, "next-requirement-generation").request;
+    assert.equal(repeated.executionContract.id, next.executionContract.id);
+    assert.deepEqual(canonicalSnapshot(value), after);
+    assert.throws(() => value.manager.claimExecutionContract({
+      binding: request.executionBinding(), executionContract: request.executionContract,
+    }), { code: "FLOW_EXECUTION_INPUT_BASELINE_CHANGED" });
+    assert.deepEqual(canonicalSnapshot(value), after);
+  });
+
   it("preserves an R6 candidate and R-bound structural finding when its sealed bundle claims only R8", () => {
     const value = setup(["R6", "R8"]);
     const { coordinator, ctx, request } = requirementTestHandoff(value);

@@ -6,10 +6,12 @@ import {
   RequirementTestBundleLineage,
   RequirementTestBundleRevision,
   RequirementTestExpectation,
+  RequirementTestExecutionLifecycle,
   RequirementTestPlan,
   RequirementTestSourceAttempt,
   RequirementTestWorkItem,
 } from "../../src/flow/lib/requirement-test-lifecycle.js";
+import { RequirementTestDeferredReceipt } from "../../src/flow/lib/requirement-test-artifacts.js";
 import { SpecRepairIdEntityTarget } from "../../src/flow/lib/spec-repair-operations.js";
 import { validateSpecJsonObject } from "../../src/lib/spec-json.js";
 
@@ -215,4 +217,43 @@ describe("Requirement test lifecycle foundation", () => {
       entity: "requirement", id: "R6", field: "preimplementation_test_expectation",
     });
   });
+});
+
+
+describe("Requirement test execution evidence", () => {
+  function receipt(specRevision = revision()) {
+    return new RequirementTestDeferredReceipt({
+      requirementId: "R8", specRevision, bundleRevision: null, candidateDigest: null,
+      expectation: "pass", budget: new RequirementTestBudget({ tooling: 4 }),
+      sourceAttempt: { id: "generate-r8", sequence: 4 },
+      sourceArtifact: "steps/test-generate/result.json",
+      sourceFindingFingerprints: ["b".repeat(64)],
+    });
+  }
+
+  function settledPlan() {
+    const plan = RequirementTestPlan.fromApprovedSpec({ spec: spec(), specRevision: revision() });
+    return plan.withWorkItem(plan.workItem("R6").withState({ status: "promoted", bundleRevision: bundle() }))
+      .withWorkItem(plan.workItem("R8").withState({ status: "deferred" }));
+  }
+
+  it("retains promoted tests and deferred obligations without treating untestable Requirements as missing", () => {
+    const deferred = receipt();
+    const lifecycle = new RequirementTestExecutionLifecycle({
+      plan: settledPlan(), receipts: [deferred], requirements: spec().requirements,
+    });
+    assert.deepEqual([...lifecycle.promotedIds], ["R6"]);
+    assert.deepEqual(lifecycle.requirements, spec().requirements);
+    assert.deepEqual(lifecycle.deferredReceipts, [deferred]);
+    lifecycle.promotedIds.add("R8");
+    assert.deepEqual([...lifecycle.promotedIds], ["R6"]);
+  });
+
+  for (const stale of [false, true]) {
+    it(`rejects a ${stale ? "stale" : "missing"} deferred receipt before execution evidence exists`, () => {
+      assert.throws(() => new RequirementTestExecutionLifecycle({
+        plan: settledPlan(), receipts: stale ? [receipt(revision(3))] : [], requirements: spec().requirements,
+      }), { message: "Requirement R8 deferred receipt is missing or stale" });
+    });
+  }
 });

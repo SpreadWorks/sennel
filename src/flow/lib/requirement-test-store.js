@@ -12,6 +12,7 @@ import {
 import {
   CanonicalTestArtifactStore,
 } from "./canonical-test-artifacts.js";
+import { RequirementTestExecutionLifecycle } from "./requirement-test-lifecycle.js";
 import {
   RequirementTestCandidateBundle,
   RequirementTestDeferredReceipt,
@@ -151,6 +152,17 @@ export class RequirementTestArtifactStore {
         digest: resolved.descriptor.hash,
         byteLength: resolved.descriptor.size,
       }),
+    });
+  }
+
+  /** Acquire and validate the complete Requirement disposition for execution. */
+  readExecutionLifecycle(consumerNodeId) {
+    const spec = new CanonicalTestArtifactStore({ flowManager: this.flowManager, state: this.state })
+      .readSpec(consumerNodeId);
+    return new RequirementTestExecutionLifecycle({
+      plan: this.readPlan(consumerNodeId).artifact.plan,
+      receipts: this.deferredReceipts(consumerNodeId),
+      requirements: Array.isArray(spec.requirements) ? spec.requirements : [],
     });
   }
 

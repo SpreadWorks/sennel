@@ -4890,7 +4890,13 @@ export class WorkerArtifactHandoffRequest {
       }
     }
     if (executionContract !== null) this.executionContract = executionContract;
-    else {
+    else if (this.stepId === "test-generate") {
+      const execution = this.flowManager.requirementTestGenerationExecutionState({
+        binding: this.executionBinding(), requirementId: this.requirementTestBinding.requirementId,
+        planPublication: this.requirementTestBinding.planPublication,
+      });
+      this.executionContract = this.createExecutionContract(executionGeneration ?? execution.generation, execution.budgetOwner);
+    } else {
       const lifecycle = this.flowManager.draftStepExecutionState({ binding: this.executionBinding() }).lifecycle;
       this.executionContract = this.createExecutionContract(executionGeneration
         ?? (this.stepId === "spec-gate-repair" ? this.inputs[0].descriptor.canonicalLocator.generation
@@ -4908,7 +4914,11 @@ export class WorkerArtifactHandoffRequest {
   createExecutionContract(generation, budgetOwner = this.executionContract?.budgetOwner) {
     const options = this.stepId === "spec-gate-repair"
       ? acquireSpecGateRepairExecutionContractOptions({ request: this, generation })
-      : { inputBaselines: this.executionContract?.inputBaselines ?? this.inputs.flatMap((input) => input.catalogBaseline ? [input.catalogBaseline] : []) };
+      : { inputBaselines: this.executionContract?.inputBaselines ?? [
+          ...this.inputs.flatMap((input) => input.catalogBaseline ? [input.catalogBaseline] : []),
+          ...(this.stepId === "test-generate"
+            ? [new FlowExecutionInputBaseline({ descriptor: this.requirementTestBinding.planPublication })] : []),
+        ] };
     return new ExecutionProtocolSnapshot({
       prompt: { instructions: this.workerInstructions.toJSON(), action: this.invocation.action.nextAction },
       schema: { response: this.sourceResponseContract?.toJSON() ?? null,

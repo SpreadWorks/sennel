@@ -7,6 +7,8 @@ import { FinalizeMergeConnector } from "./engine/connectors/finalize/finalize-me
 import { FinalizeSyncConnector } from "./engine/connectors/finalize/finalize-sync-connector.js";
 import { FinalizeCleanupConnector } from "./engine/connectors/finalize/finalize-cleanup-connector.js";
 import { stableJson } from "./lib/review-work-unit-values.js";
+import { FlowExecutionContractRefusal } from "./lib/flow-execution-contract.js";
+import { RequirementTestSettlementReceipt } from "./lib/requirement-test-settlement-receipt.js";
 import { FinalizationSettlementReceiptEvidence } from "./lib/finalization-execution-identity.js";
 import { requireString, requireDigest } from "./lib/flow-value-assertions.js";
 import { RetroStaleEvidencePublication, RetroStaleEvidenceRecoveryFacts } from "./lib/retro-stale-evidence-values.js";
@@ -48,6 +50,7 @@ import {
   RequirementTestBudget,
   RequirementTestLifecycleAuthority,
   RequirementTestPlan,
+  RequirementTestPlanPublication,
   RequirementTestSemanticFinding,
   RequirementTestSourceAttempt,
 } from "./lib/requirement-test-lifecycle.js";
@@ -5355,6 +5358,33 @@ function selectRequirementTestRoute(result, targetStepId, { requirementTestDecis
     requirementTestDecision,
     initializationEffect,
   });
+}
+
+/** A generated candidate may authorize the next Requirement in the same Attempt. */
+export class RequirementTestGenerationExecutionState {
+  constructor({ binding, requirementId, planPublication, saved = null }) {
+    if (binding.stepId !== "test-generate" || !(planPublication instanceof RequirementTestPlanPublication)) {
+      throw new TypeError("Requirement generation execution requires its bound plan publication");
+    }
+    this.generation = 0;
+    this.budgetOwner = null;
+    if (saved !== null) {
+      const { result, settlement, receipt, activityId } = saved;
+      if (!(receipt instanceof RequirementTestSettlementReceipt)) {
+        throw new TypeError("Requirement generation execution requires its typed settlement receipt");
+      }
+      receipt.assertMatches({ binding, result, settlement });
+      const decision = settlement.requirementTestDecision;
+      if (!(result instanceof TestGenerateCandidateSavedResult) || settlement.kind !== "execution"
+        || !decision?.continuesSourceAttempt || decision.nextRequirementId !== requirementId
+        || planPublication.activityId !== activityId || receipt.executionContract === null) {
+        throw new FlowExecutionContractRefusal("Requirement generation has no completed execution authorizing its current frontier");
+      }
+      this.generation = receipt.executionContract.generation + 1;
+      this.budgetOwner = receipt.executionContract.budgetOwner;
+    }
+    Object.freeze(this);
+  }
 }
 
 /** Select the persisted Requirement-test settlement from its immutable Result only. */

@@ -1,6 +1,7 @@
 import { TestChainInput } from "../../services/test-chain-input.js";
 import { TestChainSettlementWriter } from "../../services/test-chain-settlement-writer.js";
 import { TestChainResultEvidence } from "../../lib/test-chain-values.js";
+import { RequirementTestArtifactStore } from "../../lib/requirement-test-store.js";
 import { ImplStepBinding } from "../connectors/impl/impl-step-binding.js";
 import { NonGateTargetBinding, NonGateRetryMetrics } from "../../lib/non-gate-transition.js";
 import { TestChainTransitionSnapshot, readTestChainTransitionFactsFromSnapshot } from "../../lib/test-chain-transition-facts.js";
@@ -62,6 +63,8 @@ export class TestChainExecutionPreparation {
 
 export function prepareTestExecutionRequest({ flowManager, state }) {
   const binding = new ImplStepBinding({ flowManager, specId: state.specId, stepId: "test-execute" });
+  // Missing Requirement evidence cannot authorize an Execution publication.
+  new RequirementTestArtifactStore({ flowManager, state }).readExecutionLifecycle("test-execute");
   return new TestChainExecutionPreparation({ binding, observed: acquireTestExecutionInput({ state }) });
 }
 
