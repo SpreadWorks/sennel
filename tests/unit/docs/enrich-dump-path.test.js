@@ -9,6 +9,8 @@ import assert from "node:assert/strict";
 import fs from "fs";
 import path from "path";
 import { resolveWorkDir } from "../../../src/lib/config.js";
+import { PromptBatchExecutor } from "../../../src/lib/prompt-batching.js";
+import { DocumentationAgent } from "../../../src/docs/lib/documentation-agent.js";
 
 describe("enrich failure dump path", () => {
   it("resolveWorkDir ignores SENNEL_WORK_DIR and uses config.agent.workDir", () => {
@@ -50,7 +52,9 @@ describe("enrich failure dump path", () => {
     const enrichPath = path.join(process.cwd(), "src/docs/commands/enrich.js");
     const source = fs.readFileSync(enrichPath, "utf8");
 
-    assert.ok(source.includes("PromptBatchExecutor"));
+    assert.match(source, /docsAgent\.createExecutor\(\{ executionLimit \}\)/);
+    const agent = DocumentationAgent.from({ call: async () => "" }).forCommand("docs.enrich");
+    assert.ok(agent.createExecutor({ executionLimit: agent.createExecutionLimit() }) instanceof PromptBatchExecutor);
     assert.ok(!source.includes("enrich-fail-batch"));
   });
 });

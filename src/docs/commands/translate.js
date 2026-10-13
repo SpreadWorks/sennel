@@ -20,6 +20,7 @@ import { container } from "../../lib/container.js";
 import { translateMarkdownWithBatches } from "../lib/markdown-prompt-document.js";
 import { resolveDocsContext } from "../lib/docs-context.js";
 import { Command } from "../../lib/command.js";
+import { runDocumentationAiCommand, rethrowDocumentationAiStop } from "../lib/documentation-ai-execution.js";
 import { AtomicFile } from "../../lib/atomic-file.js";
 
 const logger = createLogger("translate");
@@ -91,10 +92,10 @@ function buildTranslationTasks({ sourceFiles, targetLangs, docsDir, readmePath, 
   return tasks;
 }
 
-async function runTranslate(ctx, rawArgs) {
+async function runTranslate(ctx, rawArgs = [], commandContainer = container) {
   if (!ctx) {
     const cli = parseArgs(rawArgs, {
-      flags: ["--dry-run", "--force"],
+      flags: ["--yes", "--dry-run", "--force"],
       options: ["--lang"],
       defaults: { dryRun: false, force: false, lang: "" },
     });
@@ -104,16 +105,21 @@ async function runTranslate(ctx, rawArgs) {
       const t = tr();
       const h = t.raw("ui:help.cmdHelp.translate");
       const o = h.options;
-      console.log([h.usage, "", `  ${h.desc}`, "", "Options:", `  ${o.lang}`, `  ${o.force}`, `  ${o.dryRun}`, `  ${o.help}`].join("\n"));
+      console.log([h.usage, "", `  ${h.desc}`, "", "Options:", `  ${t("ui:docsAi.yes")}`, `  ${o.lang}`, `  ${o.force}`, `  ${o.dryRun}`, `  ${o.help}`].join("\n"));
       return;
     }
 
-    ctx = resolveDocsContext(container, cli, { commandId: "docs.translate" });
+    ctx = resolveDocsContext(commandContainer, cli, { commandId: "docs.translate" });
     ctx.dryRun = cli.dryRun;
     ctx.force = cli.force;
     ctx.targetLang = cli.lang;
   }
 
+  ctx.container ||= commandContainer;
+  return runDocumentationAiCommand(ctx, rawArgs, "docs.translate", () => executeTranslate(ctx));
+}
+
+async function executeTranslate(ctx) {
   const { root, config: cfg, docsDir } = ctx;
   const docsCfg = cfg.docs;
   const docsMode = docsCfg.mode || "translate";
@@ -148,17 +154,12 @@ async function runTranslate(ctx, rawArgs) {
 
   const tasks = buildTranslationTasks({ sourceFiles, targetLangs, docsDir, readmePath, hasReadme, force: ctx.force });
 
-  if (ctx.dryRun) {
-    for (const t of tasks) {
-      logger.log(`DRY-RUN: would translate ${t.label}`);
-    }
-    logger.log(`Done. 0 file(s) translated, ${tasks.length} would be translated.`);
-    return;
-  }
+  ctx.aiSession.registerFiles("docs.translate", tasks.map((task) => task.targetPath));
+  ctx.aiSession.registerInputs(tasks.map((task) => task.sourcePath));
 
   // Ensure all target language directories exist
   const langDirs = [...new Set(tasks.map((t) => t.lang))];
-  for (const lang of langDirs) {
+  for (const lang of ctx.dryRun ? [] : langDirs) {
     fs.mkdirSync(path.join(docsDir, lang), { recursive: true });
   }
 
@@ -179,10 +180,19 @@ async function runTranslate(ctx, rawArgs) {
 
   // Translation is planned completely before publication. A provider failure
   // must not leave successful sibling files updated on disk.
-  results.throwIfErrors();
+  try { results.throwIfErrors(); } catch (error) {
+    rethrowDocumentationAiStop(error, agent);
+    throw error;
+  }
+  if (ctx.dryRun) {
+    logger.log(`Done. 0 file(s) translated, ${tasks.length} would be translated.`);
+    return;
+  }
+  ctx.aiSession.assertActive();
   for (const result of results) {
     const { task, translated } = result.value;
     new AtomicFile(task.targetPath).write(Buffer.from(translated, "utf8"));
+    ctx.aiSession.recordGeneratedFiles([task.targetPath]);
     logger.verbose(`DONE: ${task.label}`);
   }
   const totalTranslated = results.length;
@@ -196,6 +206,6 @@ export { buildTranslationTasks, translateDocument };
 export default class DocsTranslateCommand extends Command {
   static outputMode = "raw";
   async execute(ctx) {
-    return runTranslate(ctx.docsCtx, ctx._rawArgs || []);
+    return runTranslate(ctx.docsCtx, ctx._rawArgs || [], ctx.container);
   }
 }

@@ -26,14 +26,13 @@ import { iterateAnalysisCategories } from "../lib/analysis-entry.js";
 import { container } from "../../lib/container.js";
 import { resolveDocsContext } from "../lib/docs-context.js";
 import { Command } from "../../lib/command.js";
+import { runDocumentationAiCommand } from "../lib/documentation-ai-execution.js";
 import { AtomicJsonFile } from "../../lib/atomic-json-file.js";
 import { PromptBuilder } from "../../lib/prompt-builder.js";
 import { DocumentationAgent } from "../lib/documentation-agent.js";
 import {
   LinearPromptBatchTopology,
-  PromptBatchExecutor,
   PromptBatchPlan,
-  PromptExecutionLimit,
   PromptInputBuilder,
   PromptRequestLimit,
 } from "../../lib/prompt-batching.js";
@@ -56,6 +55,7 @@ function printHelp() {
       h.desc,
       "",
       "Options:",
+      `  ${t("ui:docsAi.yes")}`,
       `  ${opts.agent}`,
       `  ${opts.dryRun}`,
       `  ${opts.stdout}`,
@@ -378,35 +378,132 @@ function saveAnalysis(root, analysis) {
 // メイン
 // ---------------------------------------------------------------------------
 
-async function runEnrich(ctx, rawArgs) {
+async function runEnrich(ctx, rawArgs = [], commandContainer = container) {
   if (!ctx) {
     const cli = parseArgs(rawArgs, {
-      flags: ["--stdout", "--dry-run"],
+      flags: ["--yes", "--stdout", "--dry-run"],
       defaults: { stdout: false, dryRun: false },
     });
     if (cli.help) {
       printHelp();
       return;
     }
-    ctx = resolveDocsContext(container, cli, { commandId: "docs.enrich" });
+    ctx = resolveDocsContext(commandContainer, cli, { commandId: "docs.enrich" });
     ctx.dryRun = cli.dryRun;
     ctx.stdout = cli.stdout;
   }
 
-  const { root, srcRoot, config, type } = ctx;
+  ctx.container ||= commandContainer;
+  return runDocumentationAiCommand(ctx, rawArgs, "docs.enrich", () => executeEnrich(ctx));
+}
 
-  // Load analysis
-  const analysis = loadFullAnalysis(root);
-  if (!analysis) {
-    throw new Error("enrich: analysis.json not found. Run 'sennel docs scan' first.");
-  }
-
-  // Check for AI agent
-  const agent = container.get("agent");
+async function executeEnrich(ctx) {
+  const { root, config } = ctx;
+  const agent = ctx.agent;
   if (!agent.resolve(ctx.commandId || "docs.enrich")) {
     logger.log("WARN: no agent configured, skipping enrich.");
-    logger.log("Set 'defaultAgent' in config.json.");
     return;
+  }
+  const prepared = prepareDocumentationEnrichment(ctx);
+  if (!prepared) return;
+  const { analysis, chapters, pending, requestLimit, executionLimit, plan, docsAgent, retryCount } = prepared;
+  ctx.aiSession.registerInputs([path.join(managedOutputDir(root), "analysis.json")]);
+  const executor = docsAgent.createExecutor({ executionLimit });
+  const originRangeCounts = new Map();
+  for (const batch of plan.batches) {
+    for (const element of batch.payloadElements) {
+      originRangeCounts.set(element.originId, (originRangeCounts.get(element.originId) || 0) + 1);
+    }
+  }
+  const synthesisCount = [...originRangeCounts.values()].filter((count) => count > 1).length;
+  executor.executionBudget.assertCanExecute(plan.batches.length + synthesisCount);
+  if (synthesisCount > 0) executor.executionBudget.consumeSynthesisCalls(synthesisCount);
+  const callOptions = (request) => ({
+    commandId: ctx.commandId || "docs.enrich",
+    systemPrompt: request.systemPrompt,
+    jsonSchema: request.jsonSchema,
+    fmtFallback: request.fmtFallback,
+    retryCount,
+  });
+  const callAgent = (request, _batch, _retryIndex, _attemptContext, providerCallAdmission) => docsAgent.call(request.userPrompt, {
+    ...callOptions(request),
+    providerCallAdmission,
+  });
+  const projectInvocation = docsAgent.supportsProjectInvocation
+    ? (request) => docsAgent.projectInvocation(request.userPrompt, callOptions(request))
+    : undefined;
+  if (ctx.dryRun) {
+    await docsAgent.previewPlan({ plan, projectInvocation, executionLimit });
+    if (synthesisCount > 0) ctx.aiSession?.markUnknownPhase("docs.enrich.synthesis");
+    return prepared;
+  }
+  const completions = await executor.executeCompletions({
+    plan,
+    responseContract: new DocumentationEnrichmentResponseContract(),
+    callAgent,
+    projectInvocation,
+  });
+  const enrichment = await reduceDocumentationEnrichment({
+    completions,
+    agent: docsAgent,
+    executor,
+    limit: requestLimit,
+    executionLimit,
+    lang: config.docs?.defaultLanguage || "en",
+    callOptions,
+    projectInvocation,
+  });
+  const batchEntries = pending.map(({ category, index, file }) => ({ category, index, file }));
+  const batchResults = new ConcurrentBatchResult([{
+    value: { batch: batchEntries, enrichment }, error: null,
+  }]);
+  ctx.aiSession.assertActive();
+  const totalEnriched = new EnrichmentCheckpointCoordinator({
+    analysis,
+    chapters,
+    onWarn: (message) => logger.log(message),
+    onCheckpoint: (_checkpoint, count) => {
+      if (!ctx.dryRun && !ctx.stdout) {
+        const saved = saveAnalysis(root, analysis);
+        ctx.aiSession.recordGeneratedFiles([saved]);
+        logger.log(`saved progress (${count} entries) to ${path.relative(root, saved)}`);
+      }
+    },
+  }).apply(batchResults);
+
+  logger.log(`enriched ${totalEnriched} entries in ${plan.batches.length} batches`);
+
+  // Final output
+  if (ctx.stdout || ctx.dryRun) {
+    process.stdout.write(JSON.stringify(analysis, null, 2) + "\n");
+  } else {
+    const outputPath = saveAnalysis(root, analysis);
+    ctx.aiSession.recordGeneratedFiles([outputPath]);
+    logger.log(`output: ${path.relative(root, outputPath)}`);
+  }
+}
+
+export class DocumentationEnrichmentPreparation {
+  constructor({ analysis, chapters, pending, requestLimit, executionLimit, plan, docsAgent, retryCount }) {
+    this.analysis = analysis;
+    this.chapters = chapters;
+    this.pending = pending;
+    this.requestLimit = requestLimit;
+    this.executionLimit = executionLimit;
+    this.plan = plan;
+    this.docsAgent = docsAgent;
+    this.retryCount = retryCount;
+    Object.freeze(this);
+  }
+}
+
+export function prepareDocumentationEnrichment(ctx) {
+  const { root, config, type } = ctx;
+
+  // Load analysis
+  const analysis = ctx.preparedAnalysis || loadFullAnalysis(root);
+  if (!analysis) {
+    throw new Error("enrich: analysis.json not found. Run 'sennel docs scan' first.");
   }
 
   // Get chapter list from preset
@@ -503,7 +600,8 @@ async function runEnrich(ctx, rawArgs) {
     text: entry.essential || "",
   })));
   const collection = builder.build();
-  const executionLimit = new PromptExecutionLimit({
+  const docsAgent = DocumentationAgent.from(ctx.agent).forCommand(ctx.commandId || "docs.enrich");
+  const executionLimit = docsAgent.createExecutionLimit({
     maxRequestCharacters: promptCharacterLimit,
     concurrency,
     maxProtocolRetryCount: retryCount,
@@ -516,72 +614,7 @@ async function runEnrich(ctx, rawArgs) {
     executionLimit,
   });
   logger.log(`${plan.batches.length} batches (character limit: ${promptCharacterLimit}, concurrency: ${concurrency})`);
-  const docsAgent = DocumentationAgent.from(agent);
-  const executor = new PromptBatchExecutor({ executionLimit });
-  const originRangeCounts = new Map();
-  for (const batch of plan.batches) {
-    for (const element of batch.payloadElements) {
-      originRangeCounts.set(element.originId, (originRangeCounts.get(element.originId) || 0) + 1);
-    }
-  }
-  const synthesisCount = [...originRangeCounts.values()].filter((count) => count > 1).length;
-  executor.executionBudget.assertCanExecute(plan.batches.length + synthesisCount);
-  if (synthesisCount > 0) executor.executionBudget.consumeSynthesisCalls(synthesisCount);
-  const callOptions = (request) => ({
-    commandId: ctx.commandId || "docs.enrich",
-    systemPrompt: request.systemPrompt,
-    jsonSchema: request.jsonSchema,
-    fmtFallback: request.fmtFallback,
-    retryCount,
-  });
-  const callAgent = (request, _batch, _retryIndex, _attemptContext, providerCallAdmission) => docsAgent.call(request.userPrompt, {
-    ...callOptions(request),
-    providerCallAdmission,
-  });
-  const projectInvocation = typeof agent.projectInvocation === "function"
-    ? (request) => docsAgent.projectInvocation(request.userPrompt, callOptions(request))
-    : undefined;
-  const completions = await executor.executeCompletions({
-    plan,
-    responseContract: new DocumentationEnrichmentResponseContract(),
-    callAgent,
-    projectInvocation,
-  });
-  const enrichment = await reduceDocumentationEnrichment({
-    completions,
-    agent,
-    executor,
-    limit: requestLimit,
-    executionLimit,
-    lang: config.docs?.defaultLanguage || "en",
-    callOptions,
-    projectInvocation,
-  });
-  const batchEntries = pending.map(({ category, index, file }) => ({ category, index, file }));
-  const batchResults = new ConcurrentBatchResult([{
-    value: { batch: batchEntries, enrichment }, error: null,
-  }]);
-  const totalEnriched = new EnrichmentCheckpointCoordinator({
-    analysis,
-    chapters,
-    onWarn: (message) => logger.log(message),
-    onCheckpoint: (_checkpoint, count) => {
-      if (!ctx.dryRun && !ctx.stdout) {
-        const saved = saveAnalysis(root, analysis);
-        logger.log(`saved progress (${count} entries) to ${path.relative(root, saved)}`);
-      }
-    },
-  }).apply(batchResults);
-
-  logger.log(`enriched ${totalEnriched} entries in ${plan.batches.length} batches`);
-
-  // Final output
-  if (ctx.stdout || ctx.dryRun) {
-    process.stdout.write(JSON.stringify(analysis, null, 2) + "\n");
-  } else {
-    const outputPath = saveAnalysis(root, analysis);
-    logger.log(`output: ${path.relative(root, outputPath)}`);
-  }
+  return new DocumentationEnrichmentPreparation({ analysis, chapters, pending, requestLimit, executionLimit, plan, docsAgent, retryCount });
 }
 
 export {
@@ -595,6 +628,6 @@ export {
 export default class DocsEnrichCommand extends Command {
   static outputMode = "raw";
   async execute(ctx) {
-    return runEnrich(ctx.docsCtx, ctx._rawArgs || []);
+    return runEnrich(ctx.docsCtx, ctx._rawArgs || [], ctx.container);
   }
 }

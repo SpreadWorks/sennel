@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 
 export const GLOBAL_PROMPT_ELEMENT_HARD_MAX = 120_000;
 export const MAX_AGENT_ARGUMENT_BYTES = (128 * 1024) - 1;
@@ -1580,10 +1580,12 @@ export class PromptProviderCallAdmission {
   #attemptCount = 0;
   #settled = false;
 
-  constructor(executionBudget, scopedBudget) {
+  constructor(executionBudget, scopedBudget, { invocation = null, executionAdmission = null } = {}) {
     if (!(executionBudget instanceof PromptExecutionBudget)) throw new TypeError("Provider call admission requires a shared execution budget");
     if (scopedBudget !== undefined && !(scopedBudget instanceof PromptExecutionBudget)) throw new TypeError("Provider call admission scope requires an execution budget");
     this.#budgets = [...new Set([executionBudget, ...(scopedBudget ? [scopedBudget] : [])])];
+    this.invocation = invocation;
+    this.executionAdmission = executionAdmission;
     this.#consumeProviderCall();
   }
 
@@ -1601,12 +1603,17 @@ export class PromptProviderCallAdmission {
     return this;
   }
 
-  beforeProviderAttempt() {
+  beforeProviderAttempt(context) {
     if (!this.#claimed) throw new Error("Provider call admission must be claimed before a transport attempt");
     if (this.#settled) throw new Error("Provider call admission is already settled");
-    if (this.#attemptCount > 0) this.#consumeProviderCall();
-    this.#attemptCount += 1;
-    return this.#attemptCount;
+    const consume = () => {
+      if (this.#attemptCount > 0) this.#consumeProviderCall();
+      this.#attemptCount += 1;
+      return this.#attemptCount;
+    };
+    return this.executionAdmission
+      ? Promise.resolve(this.executionAdmission.beforeProviderAttempt(context)).then(consume)
+      : consume();
   }
 
   settle() {
@@ -1739,12 +1746,64 @@ class DefaultPromptProtocolPolicy {
   }
 }
 
+/** One validated invocation in a plan, with the exact projection if available. */
+export class PromptPreparedInvocation {
+  constructor({ batch, projection = null, logicalInvocationId = randomUUID() } = {}) {
+    if (!(batch instanceof PromptBatch)) throw new TypeError("Prepared prompt invocation requires a typed batch");
+    this.batch = batch;
+    this.projection = projection;
+    this.logicalInvocationId = requiredText(logicalInvocationId, "Prompt logical invocation identity");
+    this.inputCharacters = safeInteger(projection?.promptCharacterCount ?? batch.footprint.total,
+      "Prepared prompt invocation characters");
+    Object.freeze(this);
+  }
+}
+
+/** Read-only output of the executor's existing complete-plan preflight. */
+export class PromptPreparedExecution {
+  constructor({ plan, requestLimit, invocations, occurrenceId = randomUUID() } = {}) {
+    if (!(plan instanceof PromptBatchPlan)) throw new TypeError("Prepared prompt execution requires a typed plan");
+    if (!(requestLimit instanceof PromptRequestLimit)) throw new TypeError("Prepared prompt execution requires a typed request limit");
+    if (!Array.isArray(invocations) || invocations.length !== plan.batches.length
+      || invocations.some((entry, index) => !(entry instanceof PromptPreparedInvocation) || entry.batch !== plan.batches[index])) {
+      throw new TypeError("Prepared prompt execution must contain each plan invocation in order");
+    }
+    this.plan = plan;
+    this.requestLimit = requestLimit;
+    this.occurrenceId = requiredText(occurrenceId, "Prompt execution occurrence identity");
+    this.invocations = Object.freeze([...invocations]);
+    this.batchCount = invocations.length;
+    this.inputCharacters = safeInteger(invocations.reduce((total, invocation) => total + invocation.inputCharacters, 0),
+      "Prepared prompt execution characters");
+    Object.freeze(this);
+  }
+}
+
+/** Associates a protocol call and its transport attempts with one occurrence. */
+export class PromptInvocationExecution {
+  constructor({ preparedExecution, preparedInvocation, protocolAttemptIndex, projection = null,
+    inputCharacters, logicalInvocationId } = {}) {
+    if (!(preparedExecution instanceof PromptPreparedExecution) || !(preparedInvocation instanceof PromptPreparedInvocation)) {
+      throw new TypeError("Prompt invocation execution requires typed preparation");
+    }
+    this.occurrenceId = preparedExecution.occurrenceId;
+    this.batch = preparedInvocation.batch;
+    this.protocolAttemptIndex = safeInteger(protocolAttemptIndex, "Prompt protocol attempt index");
+    this.initialPlannedAttempt = this.protocolAttemptIndex === 0;
+    this.logicalInvocationId = requiredText(logicalInvocationId ?? (this.initialPlannedAttempt
+      ? preparedInvocation.logicalInvocationId : randomUUID()), "Prompt logical invocation identity");
+    this.projection = projection;
+    this.inputCharacters = safeInteger(inputCharacters, "Prompt invocation execution characters");
+    Object.freeze(this);
+  }
+}
+
 /**
  * Read-only execution engine. A protocol policy may call its injected `call`
  * more than once, but every actual provider call is counted by the executor.
  */
 export class PromptBatchExecutor {
-  constructor({ executionLimit = new PromptExecutionLimit(), executionBudget } = {}) {
+  constructor({ executionLimit = new PromptExecutionLimit(), executionBudget, executionAdmission = null } = {}) {
     const normalizedLimit = executionLimit instanceof PromptExecutionLimit
       ? executionLimit
       : new PromptExecutionLimit(executionLimit);
@@ -1753,7 +1812,35 @@ export class PromptBatchExecutor {
     }
     this.executionBudget = executionBudget || new PromptExecutionBudget(normalizedLimit);
     this.executionLimit = this.executionBudget.limit;
+    if (executionAdmission !== null && (typeof executionAdmission.admit !== "function"
+      || typeof executionAdmission.beforeProviderAttempt !== "function")) {
+      throw new TypeError("Prompt execution admission requires admit() and beforeProviderAttempt()");
+    }
+    this.executionAdmission = executionAdmission;
     Object.freeze(this);
+  }
+
+  async prepareExecution({ plan, projectInvocation } = {}) {
+    if (!(plan instanceof PromptBatchPlan)) throw new TypeError("Prompt executor requires a typed plan");
+    if (projectInvocation !== undefined && typeof projectInvocation !== "function") throw new TypeError("Prompt invocation projector must be a function");
+    this.executionBudget.assertCanExecute(plan.batches.length);
+    const requestLimit = new PromptRequestLimit({
+      maxCharacters: Math.min(plan.limit.maxCharacters, this.executionLimit.maxRequestCharacters),
+    });
+    const invocations = [];
+    for (const batch of plan.batches) {
+      if (!batch.footprint.fits(requestLimit)) {
+        throw new PromptBatchOverflowFailure("Prompt batch exceeds the executor request limit", {
+          batchDigest: batch.digest,
+          footprint: batch.footprint.toJSON(),
+          maxCharacters: requestLimit.maxCharacters,
+        });
+      }
+      const projection = projectInvocation ? await projectInvocation(batch.request, batch) : null;
+      if (projection !== null) assertProjection(projection, requestLimit, batch);
+      invocations.push(new PromptPreparedInvocation({ batch, projection }));
+    }
+    return new PromptPreparedExecution({ plan, requestLimit, invocations });
   }
 
   async executeCompletions({
@@ -1764,6 +1851,7 @@ export class PromptBatchExecutor {
     protocolPolicy = new DefaultPromptProtocolPolicy(),
     protocolRetryLimit = new PromptProtocolRetryLimit(this.executionLimit.maxProtocolRetryCount),
     providerAttemptLimit,
+    preparedExecution,
   } = {}) {
     if (!(plan instanceof PromptBatchPlan)) throw new TypeError("Prompt executor requires a typed plan");
     if (typeof callAgent !== "function") throw new TypeError("Prompt executor requires callAgent");
@@ -1774,20 +1862,13 @@ export class PromptBatchExecutor {
     if (providerAttemptLimit !== undefined && !(providerAttemptLimit instanceof PromptProviderAttemptLimit)) {
       throw new TypeError("Prompt executor provider attempt limit must be typed");
     }
-    this.executionBudget.assertCanExecute(plan.batches.length);
-    const requestLimit = new PromptRequestLimit({
-      maxCharacters: Math.min(plan.limit.maxCharacters, this.executionLimit.maxRequestCharacters),
-    });
-    for (const batch of plan.batches) {
-      if (!batch.footprint.fits(requestLimit)) {
-        throw new PromptBatchOverflowFailure("Prompt batch exceeds the executor request limit", {
-          batchDigest: batch.digest,
-          footprint: batch.footprint.toJSON(),
-          maxCharacters: requestLimit.maxCharacters,
-        });
-      }
-      if (projectInvocation) assertProjection(await projectInvocation(batch.request, batch), requestLimit, batch);
+    const prepared = preparedExecution ?? await this.prepareExecution({ plan, projectInvocation });
+    if (!(prepared instanceof PromptPreparedExecution) || prepared.plan !== plan) {
+      throw new TypeError("Prompt executor preparation must belong to the selected plan");
     }
+    this.executionBudget.assertCanExecute(plan.batches.length);
+    const requestLimit = prepared.requestLimit;
+    await this.executionAdmission?.admit(prepared);
 
     const completions = new Array(plan.batches.length);
     const groupAccounting = new Map(plan.batches.map((batch) => [batch.groupId, null]));
@@ -1801,6 +1882,7 @@ export class PromptBatchExecutor {
     let firstFailure = null;
     let firstFailureAccounting = null;
     const executeBatch = async (batch) => {
+      const preparedInvocation = prepared.invocations[batch.index];
       let batchCalls = 0;
       const accounting = groupAccounting.get(batch.groupId);
       const call = async (request = batch.request, attemptContext) => {
@@ -1822,14 +1904,20 @@ export class PromptBatchExecutor {
             maxCharacters: requestLimit.maxCharacters,
           });
         }
-        if (projectInvocation && !usesPreflightedRequest) {
-          assertProjection(
-            await projectInvocation(actualRequest, batch, attemptContext),
-            requestLimit,
-            batch,
-          );
-        }
-        const providerCallAdmission = new PromptProviderCallAdmission(this.executionBudget, accounting.providerBudget);
+        const projection = usesPreflightedRequest ? preparedInvocation.projection
+          : (projectInvocation ? await projectInvocation(actualRequest, batch, attemptContext) : null);
+        if (projection !== null && !usesPreflightedRequest) assertProjection(projection, requestLimit, batch);
+        const invocation = new PromptInvocationExecution({
+          preparedExecution: prepared,
+          preparedInvocation,
+          protocolAttemptIndex: batchCalls - 1,
+          projection,
+          inputCharacters: projection?.promptCharacterCount ?? actualFootprint.total,
+        });
+        const providerCallAdmission = new PromptProviderCallAdmission(this.executionBudget, accounting.providerBudget, {
+          invocation,
+          executionAdmission: this.executionAdmission,
+        });
         accounting.recordCall(providerCallAdmission);
         let rawCallResponse;
         try {

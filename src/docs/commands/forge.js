@@ -18,12 +18,15 @@ import { runCmdAsync } from "../../lib/process.js";
 import { populateFromAnalysis } from "./data.js";
 import { textFillFromAnalysis } from "./text.js";
 import { mapWithConcurrency } from "../lib/concurrency.js";
-import { PKG_DIR, parseArgs } from "../../lib/cli.js";
-import { resolveConcurrency, resolvePromptCharacterLimit, resolveWorkDir } from "../../lib/config.js";
+import { parseArgs } from "../../lib/cli.js";
+import { managedOutputDir, resolveConcurrency, resolvePromptCharacterLimit, resolveWorkDir } from "../../lib/config.js";
 import { Command } from "../../lib/command.js";
-import { loadFullAnalysis, loadAnalysisData, getChapterFiles, readText } from "../lib/command-context.js";
+import { resolveDocsContext } from "../lib/docs-context.js";
+import { runDocumentationAiCommand, rethrowDocumentationAiStop } from "../lib/documentation-ai-execution.js";
+import DocsReadmeCommand from "./readme.js";
+import DocsTranslateCommand from "./translate.js";
+import { loadFullAnalysis, getChapterFiles, readText } from "../lib/command-context.js";
 import { createResolver } from "../lib/resolver-factory.js";
-import { container } from "../../lib/container.js";
 import { translate } from "../../lib/i18n.js";
 import { EXIT_ERROR } from "../../lib/constants.js";
 import { loadSpecJson, specJsonToPromptText } from "../../lib/spec-json.js";
@@ -80,7 +83,7 @@ function estimateRelevantFiles(specText, allFiles) {
 
 function parseCliOptions(argv) {
   const opts = parseArgs(argv, {
-    flags: ["--verbose", "--dry-run"],
+    flags: ["--yes", "--verbose", "--dry-run"],
     options: ["--prompt", "--prompt-file", "--spec", "--max-runs", "--review-cmd", "--mode"],
     aliases: { "-v": "--verbose" },
     defaults: {
@@ -114,6 +117,7 @@ function printHelp() {
   console.log(
     [
       h.usage, "", "Options:",
+      `  ${t("ui:docsAi.yes")}`,
       `  ${o.prompt}`, `  ${o.promptFile}`, `  ${o.spec}`, `  ${o.maxRuns}`,
       `  ${o.reviewCmd}`, `  ${o.mode}`, `  ${o.dryRun}`,
       `  ${o.verbose}`, `  ${o.help}`,
@@ -126,11 +130,11 @@ function printHelp() {
  * コマンド文字列をコマンドと引数に分割して実行する。
  * bash に依存しない。
  */
-function runCommand(cmdString, cwd) {
+function runCommand(cmdString, cwd, signal) {
   const parts = cmdString.match(/"[^"]*"|'[^']*'|\S+/g) || [];
   const command = parts[0];
   const args = parts.slice(1).map((s) => s.replace(/^["']|["']$/g, ""));
-  return runCmdAsync(command, args, { cwd });
+  return runCmdAsync(command, args, { cwd, signal });
 }
 
 /**
@@ -159,16 +163,16 @@ async function invokeAgent(agent, prompt, { systemPrompt, verbose, label, maxCha
   }
 }
 
-export function materializeForgeInputReference(root, config, input) {
+export function materializeForgeInputReference(root, config, input, { persist = true } = {}) {
   const serialized = JSON.stringify(input, null, 2) + "\n";
   const digest = crypto.createHash("sha256").update(serialized).digest("hex");
   const inputDir = path.join(resolveWorkDir(root, config), "forge-inputs");
   const inputPath = path.join(inputDir, `${digest}.json`);
-  fs.mkdirSync(inputDir, { recursive: true });
+  if (persist) fs.mkdirSync(inputDir, { recursive: true });
   if (fs.existsSync(inputPath)) {
     const current = fs.readFileSync(inputPath, "utf8");
     if (current !== serialized) throw new Error(`forge input digest collision: ${inputPath}`);
-  } else {
+  } else if (persist) {
     new AtomicFile(inputPath).write(Buffer.from(serialized));
   }
   return new ForgeInputReferencePromptElement({
@@ -204,10 +208,14 @@ async function runPerFile({ agent, targetFiles, systemPrompt, inputReference, ro
       maxCharacters,
     });
 
+    if (!agent.dryRun) agent.session?.recordGeneratedFiles([file]);
     console.log(`[forge] done: ${file}`);
     return { file, ok: true };
   });
 
+  try { raw.throwIfErrors(); } catch (error) {
+    rethrowDocumentationAiStop(error, agent);
+  }
   return raw.map((r, i) => {
     if (r.error) {
       const file = targetFiles[i];
@@ -218,19 +226,25 @@ async function runPerFile({ agent, targetFiles, systemPrompt, inputReference, ro
   });
 }
 
-async function runForge(rawArgs, container) {
+async function runForge(rawArgs, commandContainer, docsCtx) {
   const cli = parseCliOptions(rawArgs);
   if (cli.help) {
     printHelp();
     return;
   }
 
-  const root = container.get("root");
-  const config = container.get("config");
+  const ctx = docsCtx || resolveDocsContext(commandContainer, cli, { commandId: "docs.forge" });
+  ctx.dryRun = cli.dryRun;
+  ctx.yes = cli.yes || ctx.yes;
+  return runDocumentationAiCommand(ctx, rawArgs, "docs.forge", () => executeForge(ctx, cli, commandContainer));
+}
+
+async function executeForge(ctx, cli, commandContainer) {
+  const { root, config } = ctx;
   const type = config?.type || "";
   const lang = config?.docs?.defaultLanguage;
   const t = translate();
-  const agent = container.get("agent");
+  const agent = ctx.agent;
   const hasAgent = !!agent.resolve("docs.forge");
   const mode = cli.mode || DEFAULT_MODE;
 
@@ -242,7 +256,7 @@ async function runForge(rawArgs, container) {
 
   const analysisData = loadFullAnalysis(root);
   const analysisSummary = summaryToText(analysisData);
-  if (analysisData && !cli.dryRun) {
+  if (analysisData) {
     console.log("[forge] analysis data loaded.");
     let resolveFn = null;
     try {
@@ -251,18 +265,16 @@ async function runForge(rawArgs, container) {
     } catch (err) {
       console.log(`[forge] WARN: resolver not available (${err.message}), skipping {{data}} population`);
     }
-    const populateResult = populateFromAnalysis(root, analysisData, resolveFn, { type, configChapters: config.chapters });
+    const populateResult = populateFromAnalysis(root, analysisData, resolveFn, { type, configChapters: config.chapters, aiSession: ctx.aiSession, dryRun: cli.dryRun });
     if (populateResult.populated) {
-      console.log(`[forge] populated placeholders in: ${populateResult.files.join(", ")}`);
+      console.log(`[forge] ${cli.dryRun ? "would populate" : "populated"} placeholders in: ${populateResult.files.join(", ")}`);
     }
     if (agent) {
-      const tfResult = await textFillFromAnalysis(root, analysisData, "docs.text", undefined);
+      const tfResult = await textFillFromAnalysis(root, analysisData, "docs.text", ctx.srcRoot, { agent, config, aiSession: ctx.aiSession, dryRun: cli.dryRun, preparedPlans: cli.dryRun ? populateResult.plans : [] });
       if (tfResult.filled > 0) {
         console.log(`[forge] {{text}}: ${tfResult.filled} directives resolved`);
       }
     }
-  } else if (analysisData && cli.dryRun) {
-    console.log("[forge] DRY-RUN: skipping {{data}} population and {{text}} fill");
   }
 
   let userPrompt = String(cli.prompt || "").trim();
@@ -299,20 +311,6 @@ async function runForge(rawArgs, container) {
     ].join("\n")
   );
 
-  if (cli.dryRun) {
-    console.log("[forge] DRY-RUN: target files:");
-    for (const f of getTargetFiles(root, type, config.chapters)) {
-      console.log(`  - ${f}`);
-    }
-    console.log("[forge] DRY-RUN: no files written, no review, no agent calls.");
-    console.log("\n=== DONE (dry-run) ===");
-    return;
-  }
-
-  const concurrency = resolveConcurrency(config);
-  const promptCharacterLimit = resolvePromptCharacterLimit(config);
-
-  // Spec-based file estimation: narrow target files if spec is provided
   const allTargetFiles = getTargetFiles(root, type, config.chapters);
   let initialTargetFiles = allTargetFiles;
   if (specText) {
@@ -320,11 +318,48 @@ async function runForge(rawArgs, container) {
     if (estimated.length > 0 && estimated.length < allTargetFiles.length) {
       initialTargetFiles = estimated;
       console.log(`[forge] spec-based estimation: ${estimated.length}/${allTargetFiles.length} files selected`);
-      for (const f of estimated) {
-        console.log(`  - ${f}`);
-      }
+      for (const file of estimated) console.log(`  - ${file}`);
     }
   }
+  ctx.aiSession.registerFiles("docs.forge", initialTargetFiles);
+  ctx.aiSession.registerInputs([
+    ...initialTargetFiles.map((file) => path.resolve(root, file)),
+    path.join(managedOutputDir(root), "analysis.json"),
+    ...(cli.promptFile ? [path.resolve(root, cli.promptFile)] : []),
+    ...(specPath ? [specPath] : []),
+  ]);
+
+  if (cli.dryRun) {
+    console.log("[forge] DRY-RUN: target files:");
+    for (const f of initialTargetFiles) {
+      console.log(`  - ${f}`);
+    }
+    if (analysisData) ctx.aiSession.markUnknownPhase("docs.forge.documentation");
+    if ((mode === "assist" || mode === "agent") && hasAgent) {
+      const inputReference = materializeForgeInputReference(root, config, {
+        request: userPrompt,
+        specification: specPath ? { path: path.relative(root, specPath), content: specText } : null,
+        analysis: analysisSummary || null,
+        previousReviewFeedback: null,
+        round: 1,
+        maxRuns: cli.maxRuns,
+      }, { persist: false });
+      const resolvedAgent = agent.resolve("docs.forge");
+      if (resolvedAgent && resolvedAgent.provider.systemPromptFlag()) {
+        await runPerFile({ agent, targetFiles: initialTargetFiles, systemPrompt: buildForgeSystemPrompt({ lang, inputReference }), inputReference, round: 1, maxRuns: cli.maxRuns, concurrency: resolveConcurrency(config), verbose: cli.verbose, maxCharacters: resolvePromptCharacterLimit(config) });
+      } else {
+        await invokeAgent(agent, buildForgePrompt({ lang, round: 1, maxRuns: cli.maxRuns, targetFiles: initialTargetFiles, inputReference }), { verbose: cli.verbose, maxCharacters: resolvePromptCharacterLimit(config) });
+      }
+    }
+    ctx.aiSession.markUnknownPhase("docs.readme");
+    ctx.aiSession.markUnknownPhase("docs.translate");
+    console.log("[forge] DRY-RUN: no files written, no review, no agent calls.");
+    console.log("\n=== DONE (dry-run) ===");
+    return;
+  }
+
+  const concurrency = resolveConcurrency(config);
+  const promptCharacterLimit = resolvePromptCharacterLimit(config);
 
   let reviewFeedback = "";
   let currentTargetFiles = initialTargetFiles;
@@ -380,6 +415,7 @@ async function runForge(rawArgs, container) {
           console.log(`[forge] per-file done: ${succeeded} ok, ${failed} failed`);
 
           if (succeeded > 0) usedAgent = true;
+          if (failed > 0) ctx.aiSession.markPartialError();
           if (failed > 0 && succeeded === 0) agentFailed = true;
         } else {
           // Single-call mode: all files in one prompt (agent lacks systemPromptFlag)
@@ -396,8 +432,11 @@ async function runForge(rawArgs, container) {
               verbose: cli.verbose,
               maxCharacters: promptCharacterLimit,
             });
+            ctx.aiSession.recordGeneratedFiles(targetFiles);
             usedAgent = true;
           } catch (e) {
+            rethrowDocumentationAiStop(e, ctx.aiSession);
+            ctx.aiSession.markPartialError();
             agentFailed = true;
             if (mode === "agent") {
               throw e;
@@ -414,12 +453,21 @@ async function runForge(rawArgs, container) {
 
     // docs/ を直接編集するため generate ステップは不要
 
-    const review = await runCommand(cli.reviewCmd, root);
+    ctx.aiSession.assertActive();
+    ctx.aiSession.markExternalCommand(cli.reviewCmd);
+    const review = await runCommand(cli.reviewCmd, root, ctx.aiSession.abortSignal);
+    ctx.aiSession.assertActive();
     console.log(`[forge] review: ${review.ok ? "ok" : "failed"} (code=${review.status})`);
     if (review.ok) {
       console.log("[forge] review passed.");
-      const readme = await runCommand(`node "${path.join(PKG_DIR, "docs", "commands", "readme.js")}"`, root);
-      console.log(`[forge] README.md ${readme.ok ? "updated" : "update failed"}.`);
+      try {
+        await new DocsReadmeCommand().run(commandContainer, { docsCtx: { ...ctx, commandId: "docs.readme" }, _rawArgs: [] });
+        console.log("[forge] README.md updated.");
+      } catch (error) {
+        rethrowDocumentationAiStop(error, ctx.aiSession);
+        ctx.aiSession.markPartialError();
+        console.log(`[forge] README.md update failed: ${error.message}`);
+      }
 
       // Multi-language: update non-default languages after review pass
       try {
@@ -429,14 +477,15 @@ async function runForge(rawArgs, container) {
           const docsMode = docsCfg.mode || "translate";
           if (docsMode === "translate") {
             console.log(`[forge] Re-translating to: ${nonDefaultLangs.join(", ")}`);
-            const translateCmd = `node "${path.join(PKG_DIR, "docs", "commands", "translate.js")}" --force`;
-            await runCommand(translateCmd, root);
+            await new DocsTranslateCommand().run(commandContainer, { docsCtx: { ...ctx, commandId: "docs.translate", force: true }, _rawArgs: [] });
           }
           // In generate mode, non-default langs would need separate forge runs
           // which is out of scope for this iteration
         }
-      } catch (_) {
-        // multi-lang not configured — skip
+      } catch (error) {
+        rethrowDocumentationAiStop(error, ctx.aiSession);
+        ctx.aiSession.markPartialError();
+        console.log(`[forge] WARN: translation failed: ${error.message}`);
       }
 
       console.log("\n=== DONE ===\n- forge completed");
@@ -464,6 +513,7 @@ async function runForge(rawArgs, container) {
       console.log(t("messages:forge.reviewFeedback"));
       console.log(reviewFeedback);
       process.exitCode = EXIT_ERROR;
+      ctx.aiSession.markFailed();
       return;
     }
   }
@@ -476,6 +526,6 @@ export { estimateRelevantFiles };
 export default class DocsForgeCommand extends Command {
   static outputMode = "raw";
   async execute(ctx) {
-    return runForge(ctx._rawArgs || [], this.container);
+    return runForge(ctx._rawArgs || [], this.container, ctx.docsCtx);
   }
 }

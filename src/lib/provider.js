@@ -47,6 +47,10 @@ class Provider {
   }
 }
 
+function measuredTokens(value) {
+  return Number.isSafeInteger(value) && value >= 0 ? value : null;
+}
+
 class ClaudeProvider extends Provider {
   static key = "claude";
 
@@ -69,10 +73,10 @@ class ClaudeProvider extends Provider {
         ? JSON.stringify(envelope.structured_output)
         : String(envelope.result ?? ""),
       usage: {
-        input_tokens: envelope.usage?.input_tokens ?? 0,
-        output_tokens: envelope.usage?.output_tokens ?? 0,
-        cache_read_tokens: envelope.usage?.cache_read_input_tokens ?? 0,
-        cache_creation_tokens: envelope.usage?.cache_creation_input_tokens ?? 0,
+        input_tokens: measuredTokens(envelope.usage?.input_tokens),
+        output_tokens: measuredTokens(envelope.usage?.output_tokens),
+        cache_read_tokens: measuredTokens(envelope.usage?.cache_read_input_tokens),
+        cache_creation_tokens: measuredTokens(envelope.usage?.cache_creation_input_tokens),
         cost_usd: envelope.total_cost_usd ?? null,
       },
     };
@@ -106,13 +110,17 @@ class CodexProvider extends Provider {
         usageRaw = event.usage;
       }
     }
+    const inputTokens = measuredTokens(usageRaw?.input_tokens);
+    const cachedTokens = measuredTokens(usageRaw?.cached_input_tokens);
     return {
       text,
       usage: {
-        input_tokens: (usageRaw?.input_tokens ?? 0) - (usageRaw?.cached_input_tokens ?? 0),
-        output_tokens: usageRaw?.output_tokens ?? 0,
-        cache_read_tokens: usageRaw?.cached_input_tokens ?? 0,
-        cache_creation_tokens: 0,
+        input_tokens: inputTokens !== null && cachedTokens !== null
+          ? measuredTokens(inputTokens - cachedTokens)
+          : null,
+        output_tokens: measuredTokens(usageRaw?.output_tokens),
+        cache_read_tokens: cachedTokens,
+        cache_creation_tokens: measuredTokens(usageRaw?.cache_write_input_tokens),
         cost_usd: null,
       },
     };

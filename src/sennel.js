@@ -103,7 +103,7 @@ if (definition) {
     await definition.entrypoint.execute(rest);
   } catch (err) {
     console.error(err?.stack || String(err));
-    process.exit(EXIT_ERROR);
+    process.exit(err?.exitCode ?? EXIT_ERROR);
   }
 } else {
   try {

@@ -1,9 +1,7 @@
 import {
   GLOBAL_PROMPT_ELEMENT_HARD_MAX,
-  PromptBatchExecutor,
   PromptBatchPlan,
   PromptBatchReducer,
-  PromptExecutionLimit,
   PromptRequestLimit,
   PromptResponseInvalidFailure,
 } from "../../lib/prompt-batching.js";
@@ -43,10 +41,10 @@ export async function executeForgeAgentPrompt({
   onStdout,
   onStderr,
 } = {}) {
-  const docsAgent = DocumentationAgent.from(agent);
+  const docsAgent = DocumentationAgent.from(agent).forCommand(agent.commandId || 'docs.forge');
   const resolvedLimit = maxCharacters ?? docsAgent.promptCharacterLimit ?? GLOBAL_PROMPT_ELEMENT_HARD_MAX;
   const requestLimit = new PromptRequestLimit({ maxCharacters: resolvedLimit });
-  const executionLimit = new PromptExecutionLimit({ maxRequestCharacters: resolvedLimit });
+  const executionLimit = docsAgent.createExecutionLimit({ maxRequestCharacters: resolvedLimit });
   const pb = new PromptBuilder();
   if (systemPrompt) pb.setRole(systemPrompt);
   pb.addUserPrompt("## Content", prompt);
@@ -60,7 +58,15 @@ export async function executeForgeAgentPrompt({
     onStderr,
   });
 
-  return new PromptBatchExecutor({ executionLimit }).execute({
+  const projectInvocation = docsAgent.supportsProjectInvocation
+    ? (request) => docsAgent.projectInvocation(request.userPrompt, callOptions(request))
+    : undefined;
+  if (docsAgent.dryRun) {
+    await docsAgent.previewPlan({ plan, projectInvocation, executionLimit });
+    docsAgent.session?.markUnknownPhase("docs.forge.rounds");
+    return "";
+  }
+  return docsAgent.createExecutor({ executionLimit }).execute({
     plan,
     responseContract: new ForgeAgentResponseContract(),
     reducer: new ForgeAgentResponseReducer(),
@@ -68,8 +74,6 @@ export async function executeForgeAgentPrompt({
       ...callOptions(request),
       providerCallAdmission,
     }),
-    projectInvocation: typeof agent.projectInvocation === "function"
-      ? (request) => docsAgent.projectInvocation(request.userPrompt, callOptions(request))
-      : undefined,
+    projectInvocation,
   });
 }

@@ -22,9 +22,9 @@ import {
   buildTextSystemPrompt,
 } from "../lib/text-prompts.js";
 import { parseArgs } from "../../lib/cli.js";
-import { resolveConcurrency, DEFAULT_CONCURRENCY } from "../../lib/config.js";
-import { resolvePromptCharacterLimit } from "../../lib/config.js";
+import { managedOutputDir, resolveConcurrency, resolvePromptCharacterLimit, DEFAULT_CONCURRENCY } from "../../lib/config.js";
 import { Command } from "../../lib/command.js";
+import { runDocumentationAiCommand, rethrowDocumentationAiStop } from "../lib/documentation-ai-execution.js";
 import { createLogger } from "../../lib/progress.js";
 import { translate } from "../../lib/i18n.js";
 import { getChapterFiles, loadFullAnalysis } from "../lib/command-context.js";
@@ -259,11 +259,6 @@ async function processTemplateFileBatch(text, analysis, fileName, agent, dryRun,
   // so using one here would make a bounded batch complete but ungrounded.
   const contextData = analysis;
 
-  if (dryRun) {
-    console.log(`[text] DRY-RUN batch ${fileName}: ${textFills.length} directive(s)`);
-    return { text, filled: 0, skipped: textFills.length };
-  }
-
   logger.verbose(`Batch ${fileName}: ${textFills.length} directive(s)`);
   const jsonData = await generateDocumentationDirectives({
     cleanText,
@@ -274,11 +269,17 @@ async function processTemplateFileBatch(text, analysis, fileName, agent, dryRun,
     systemPrompt,
     lang,
     agent,
+    dryRun,
     executionWorkDir: batchOptions.srcRoot,
     retryCount: batchOptions.retryCount || 0,
     maxCharacters: promptCharacterLimit,
     concurrency: concurrency || DEFAULT_CONCURRENCY,
   });
+
+  if (dryRun) {
+    console.log(`[text] DRY-RUN batch ${fileName}: ${textFills.length} directive(s)`);
+    return { text, filled: 0, skipped: textFills.length };
+  }
 
   const applied = applyBatchJsonToFile(cleanText, textFills, jsonData);
   logger.verbose(`Batch DONE ${fileName}: ${applied.filled}/${textFills.length} filled`);
@@ -343,11 +344,25 @@ function allTextDirectivesFilled(text) {
  * @param {string[]} [opts.files] - 処理対象ファイル名の配列。指定時はそのファイルのみ処理する
  * @returns {{ filled: number, skipped: number, files: string[] }}
  */
-export async function textFillFromAnalysis(root, analysis, commandId, srcRoot, opts) {
+export async function textFillFromAnalysis(root, analysis, commandId, srcRoot, opts = {}) {
+  if (!analysis) return { filled: 0, skipped: 0, files: [] };
+  const ctx = {
+    root,
+    config: opts.config || container.get("config"),
+    agent: opts.agent || container.get("agent"),
+    aiSession: opts.aiSession,
+    yes: opts.yes,
+    dryRun: opts.dryRun,
+    t: translate(),
+  };
+  return runDocumentationAiCommand(ctx, [], commandId || "docs.text", () => executeTextFillFromAnalysis(root, analysis, commandId, srcRoot, { ...opts, config: ctx.config, agent: ctx.agent }));
+}
+
+async function executeTextFillFromAnalysis(root, analysis, commandId, srcRoot, opts) {
   if (!analysis) return { filled: 0, skipped: 0, files: [] };
 
-  const cfg = container.get("config");
-  const agent = container.get("agent");
+  const cfg = opts?.config || container.get("config");
+  const agent = opts?.agent || container.get("agent");
   if (!agent.resolve(commandId || "docs.text")) {
     throw new Error("No agent configured. Set 'agent.default' in config.json or run 'sennel setup'.");
   }
@@ -363,21 +378,29 @@ export async function textFillFromAnalysis(root, analysis, commandId, srcRoot, o
 
   const targetFiles = opts?.files || getChapterFiles(docsDir, { type, configChapters: cfg?.chapters, projectRoot: root });
 
+  agent.session?.registerFiles(commandId || "docs.text", targetFiles.map((file) => path.join(docsDir, file)));
+  agent.session?.registerInputs([path.join(managedOutputDir(root), "analysis.json"), ...targetFiles.map((file) => path.join(docsDir, file))]);
+
   const changedFiles = [];
   const plans = [];
   let totalFilled = 0;
   let totalSkipped = 0;
 
+  const preparedDocuments = new Map((opts.preparedPlans || []).map((plan) => [plan.filePath, plan.proposedBytes]));
+
   // Batch mode: file-level parallelism; each file owns a bounded prompt plan.
   const fileResults = await mapWithConcurrency(targetFiles, concurrency, async (file) => {
     const filePath = path.join(docsDir, file);
     const originalBytes = fs.readFileSync(filePath);
-    const original = originalBytes.toString("utf8");
+    const original = (preparedDocuments.get(filePath) || originalBytes).toString("utf8");
     const retryCount = Number(cfg?.agent?.retryCount) || 0;
-    const result = await processTemplateFileBatch(original, analysis, file, agent, false, preamblePatterns, systemPrompt, undefined, concurrency, lang, resolvedSrcRoot, retryCount, promptCharacterLimit);
+    const result = await processTemplateFileBatch(original, analysis, file, agent, opts.dryRun, preamblePatterns, systemPrompt, undefined, concurrency, lang, resolvedSrcRoot, retryCount, promptCharacterLimit);
     return { file, filePath, originalBytes, original, result };
   });
-  fileResults.throwIfErrors();
+  try { fileResults.throwIfErrors(); } catch (error) {
+    rethrowDocumentationAiStop(error, agent);
+    throw error;
+  }
 
   for (let i = 0; i < fileResults.length; i++) {
     const entry = fileResults[i];
@@ -404,7 +427,11 @@ export async function textFillFromAnalysis(root, analysis, commandId, srcRoot, o
     }
   }
 
-  new DocumentUpdateTransaction(plans, { faultInjector: opts?.faultInjector }).commit();
+  if (!opts.dryRun) {
+    agent.session?.assertActive();
+    new DocumentUpdateTransaction(plans, { faultInjector: opts?.faultInjector }).commit();
+    agent.session?.recordGeneratedFiles(changedFiles.map((file) => path.join(docsDir, file)));
+  }
 
   return { filled: totalFilled, skipped: totalSkipped, files: changedFiles, errors: [] };
 }
@@ -453,11 +480,11 @@ function detectChangedChapters(analysis, srcRoot) {
 // ---------------------------------------------------------------------------
 // CLI メイン
 // ---------------------------------------------------------------------------
-async function runText(ctx, rawArgs) {
+async function runText(ctx, rawArgs = [], commandContainer = container) {
   // CLI モード
   if (!ctx) {
     const cli = parseArgs(rawArgs, {
-      flags: ["--dry-run", "--per-directive", "--force"],
+      flags: ["--yes", "--dry-run", "--per-directive", "--force"],
       options: ["--id", "--lang", "--docs-dir", "--files"],
       defaults: { dryRun: false, perDirective: false, force: false, id: "", lang: "", docsDir: "", files: "" },
     });
@@ -467,13 +494,14 @@ async function runText(ctx, rawArgs) {
       const o = h.options;
       console.log([
         h.usage, "", "Options:",
+        `  ${t("ui:docsAi.yes")}`,
         `  ${o.id}`, `  ${o.dryRun}`, `  ${o.perDirective}`,
         `  ${o.help}`,
       ].join("\n"));
       return;
     }
 
-    ctx = resolveDocsContext(container, cli, { commandId: "docs.text" });
+    ctx = resolveDocsContext(commandContainer, cli, { commandId: "docs.text" });
     ctx.dryRun = cli.dryRun;
     ctx.perDirective = cli.perDirective;
     ctx.force = cli.force;
@@ -481,6 +509,11 @@ async function runText(ctx, rawArgs) {
     if (cli.files) ctx.files = cli.files.split(",").map((f) => f.trim()).filter(Boolean);
   }
 
+  ctx.container ||= commandContainer;
+  return runDocumentationAiCommand(ctx, rawArgs, "docs.text", () => executeText(ctx));
+}
+
+async function executeText(ctx) {
   const { root, srcRoot, config: cfg, docsDir } = ctx;
 
   const analysis = loadFullAnalysis(root) || {};
@@ -567,6 +600,9 @@ async function runText(ctx, rawArgs) {
     fileEntries.push({ file, filePath, originalBytes, original });
   }
 
+  ctx.aiSession.registerFiles(ctx.commandId || "docs.text", fileEntries.map((entry) => entry.filePath));
+  ctx.aiSession.registerInputs([path.join(managedOutputDir(root), "analysis.json"), ...fileEntries.map((entry) => entry.filePath)]);
+
   // File-level concurrency is independent from each file's bounded prompt plan.
   const fileConcurrency = concurrency;
   const plans = [];
@@ -577,7 +613,10 @@ async function runText(ctx, rawArgs) {
     logger.verbose(`done: ${file}`);
     return { ...entry, result };
   });
-  fileResults.throwIfErrors();
+  try { fileResults.throwIfErrors(); } catch (error) {
+    rethrowDocumentationAiStop(error, agent);
+    throw error;
+  }
 
   // Apply results
   for (let i = 0; i < fileEntries.length; i++) {
@@ -614,7 +653,9 @@ async function runText(ctx, rawArgs) {
   }
 
   if (!ctx.dryRun) {
+    ctx.aiSession.assertActive();
     new DocumentUpdateTransaction(plans, { faultInjector: ctx.faultInjector }).commit();
+    ctx.aiSession.recordGeneratedFiles([...changedFiles].map((file) => path.join(docsDir, file)));
     for (const file of changedFiles) logger.verbose(`UPDATED: ${file}`);
   }
 
@@ -627,7 +668,7 @@ export { stripFillContent, countFilledInBatch, processTemplateFileBatch, process
 export default class DocsTextCommand extends Command {
   static outputMode = "raw";
   async execute(ctx) {
-    const result = await runText(ctx.docsCtx, ctx._rawArgs || []);
+    const result = await runText(ctx.docsCtx, ctx._rawArgs || [], ctx.container);
     if (result?.errors?.length > 0) {
       const err = new Error(`${result.errors.length} file(s) failed: ${result.errors.join(", ")}`);
       err.exitCode = EXIT_ERROR;

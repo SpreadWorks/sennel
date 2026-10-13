@@ -259,6 +259,26 @@ The `codex-only` profile uses `codex/gpt-6-luna-low` for lightweight work, `code
 
 ---
 
+### Large AI runs and usage reports
+
+Documentation generation reuses completed analysis for unchanged files. Initial generation or a large change can still need substantial AI input. Set the confirmation threshold in `.sennel/config.json`:
+
+```json
+{
+  "docs": {
+    "ai": {
+      "confirmationThresholdCharacters": 1000000
+    }
+  }
+}
+```
+
+This is a confirmation threshold, with a default of 1,000,000 planned prompt characters. It does not stop an approved run based on cumulative output size. `agent.promptCharacterLimit` continues to limit individual requests, which are partitioned when needed. Later stages and retries can add input that is not known at the start.
+
+Use `sennel docs build --dry-run` to inspect the currently known input plan without AI calls or generated-file writes. To approve a large run without an interactive prompt, use `sennel docs build --yes`. The same option applies to individual AI documentation commands. `--force` controls regeneration separately. A noninteractive run that needs approval returns `DOCS_AI_CONFIRMATION_REQUIRED` and a command to rerun with approval.
+
+At completion, cancellation, or failure, a report displays Input, Output, Cache read, and Cache creation on stderr and saves JSON under `.sennel/output/docs-ai-usage/<runId>.json`. Counts include actual provider retries. Missing provider usage is reported as unknown, rather than measured zero; Input uses the provider's normalized value and is not double-counted with cache reads. An external forge review command's AI consumption is outside the report. A dry-run does not save a usage report.
+
 <!-- {{data("base.docs.nav")}} -->
 [← CLI Command Reference](cli_commands.md) | [Internal Design →](internal_design.md)
 <!-- {{/data}} -->
