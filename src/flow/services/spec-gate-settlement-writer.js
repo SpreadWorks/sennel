@@ -1,5 +1,5 @@
 import { SpecGateSettlementPublication } from "../lib/spec-gate-prospective.js";
-import { StepPersistenceFailure } from "../lib/definition-lifecycle-failure.js";
+import { StepPersistenceFailure } from "../lib/step-persistence-failure.js";
 /** Save a selected Spec Gate Result and its prospective evidence. */
 export class SpecGateSettlementWriter {
   #executionContract;

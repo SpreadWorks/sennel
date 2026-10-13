@@ -32,6 +32,10 @@ export function resolveDocsContext(container, cli, overrides) {
   const t = container.get("i18n");
 
   return {
+    container,
+    yes: o.yes ?? cli?.yes ?? false,
+    dryRun: o.dryRun ?? cli?.dryRun ?? false,
+    aiSession: o.aiSession,
     root,
     srcRoot,
     config,

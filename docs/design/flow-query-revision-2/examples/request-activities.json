@@ -1,0 +1,15 @@
+{
+  "resource": "activities",
+  "condition": {
+    "specId": "example-flow",
+    "flowVersion": 1
+  },
+  "page": {
+    "limit": 1,
+    "after": null
+  },
+  "recordedAt": {
+    "gte": "2026-10-12T00:00:01Z",
+    "lt": "2026-10-12T00:00:03Z"
+  }
+}

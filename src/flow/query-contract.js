@@ -1,6 +1,9 @@
+import fs from "node:fs";
 import { validateSchema } from "../lib/schema-validate.js";
+export { FLOW_QUERY_GATE_FINDING_SPECIFIC_SCHEMA } from "./query-gate-details.js";
+export { FLOW_QUERY_REPAIR_CHANGE_SCHEMA } from "./query-repair-change.js";
 
-export const FLOW_QUERY_SCHEMA_REVISION = 1;
+export const FLOW_QUERY_SCHEMA_REVISION = 2;
 export const FLOW_QUERY_HELP = [
   "Usage: sennel flow query [--request-file <path>]",
   "",
@@ -40,6 +43,10 @@ export const FLOW_QUERY_ERROR_CODES = Object.freeze({
   CANONICAL_RECORD_INCONSISTENT: "CANONICAL_RECORD_INCONSISTENT",
   INVALID_CURSOR: "INVALID_CURSOR",
   CURSOR_QUERY_MISMATCH: "CURSOR_QUERY_MISMATCH",
+  SNAPSHOT_CHANGED: "SNAPSHOT_CHANGED",
+  SNAPSHOT_UNSTABLE: "SNAPSHOT_UNSTABLE",
+  DETAIL_UNAVAILABLE: "DETAIL_UNAVAILABLE",
+  RESPONSE_TOO_LARGE: "RESPONSE_TOO_LARGE",
 });
 
 export const FLOW_QUERY_ERROR_PATHS = Object.freeze({
@@ -51,6 +58,10 @@ export const FLOW_QUERY_ERROR_PATHS = Object.freeze({
   CANONICAL_RECORD_INCONSISTENT: "/canonical",
   INVALID_CURSOR: "/page/after",
   CURSOR_QUERY_MISMATCH: "/page/after",
+  SNAPSHOT_CHANGED: "/page/after",
+  SNAPSHOT_UNSTABLE: "/snapshot",
+  DETAIL_UNAVAILABLE: "/canonical",
+  RESPONSE_TOO_LARGE: "/response",
 });
 
 export function isFlowQueryDatetime(value) {
@@ -83,36 +94,8 @@ const positiveInteger = (maximum = undefined) => Object.freeze({
   maximum: maximum ?? MAX_SAFE_INTEGER,
 });
 
-const nonNegativeInteger = () => Object.freeze({ type: "integer", minimum: 0, maximum: MAX_SAFE_INTEGER });
 const publicString = Object.freeze({ type: "string", maxLength: FLOW_QUERY_LIMITS.MAX_PUBLIC_STRING_BYTES });
 const nullable = (schema) => Object.freeze({ ...schema, type: [schema.type, "null"] });
-const exactObject = (properties) => Object.freeze({
-  type: "object",
-  required: Object.keys(properties),
-  properties,
-  additionalProperties: false,
-});
-const publicStringList = (maxItems = FLOW_QUERY_LIMITS.MAX_PUBLIC_COLLECTION_ITEMS) => Object.freeze({ type: "array", maxItems, items: publicString });
-
-const selectedFlowVersion = Object.freeze({
-  type: "object",
-  required: ["specId", "flowVersion"],
-  properties: { specId: { ...publicString, minLength: 1 }, flowVersion: positiveInteger() },
-  additionalProperties: false,
-});
-
-const availableFlowVersions = Object.freeze({ type: "array", maxItems: FLOW_QUERY_LIMITS.MAX_AVAILABLE_FLOW_VERSIONS, items: positiveInteger() });
-
-const queryError = Object.freeze({
-  type: "object",
-  required: ["code", "path", "message"],
-  properties: {
-    code: { type: "string", enum: Object.values(FLOW_QUERY_ERROR_CODES) },
-    path: { ...publicString, minLength: 1, pattern: "^/" },
-    message: publicString,
-  },
-  additionalProperties: false,
-});
 
 const condition = Object.freeze({
   type: "object",
@@ -139,72 +122,6 @@ const recordedAt = Object.freeze({
   ],
 });
 
-const idKey = exactObject({ id: publicString, key: publicString });
-const blocker = exactObject({ code: publicString, message: publicString });
-const timestamp = exactObject({
-  value: nullable(publicString), availability: { type: "string", enum: ["available", "unavailable"] }, reason: nullable(publicString), provenance: nullable(publicString),
-});
-const artifactDescriptorView = exactObject({
-  artifactId: publicString,
-  metadata: exactObject({ logicalKey: nullable(publicString), schemaRevision: nullable(positiveInteger()), mediaType: nullable(publicString) }),
-  activityIds: publicStringList(FLOW_QUERY_LIMITS.MAX_IDS_PER_ARTIFACT),
-  nodeIds: publicStringList(FLOW_QUERY_LIMITS.MAX_IDS_PER_ARTIFACT),
-  taskIds: publicStringList(FLOW_QUERY_LIMITS.MAX_IDS_PER_ARTIFACT),
-});
-const aggregateMetrics = exactObject({
-  activityCount: nonNegativeInteger(), artifactCount: nonNegativeInteger(), stepCount: nonNegativeInteger(), taskCount: nonNegativeInteger(),
-  durationMs: nullable(nonNegativeInteger()), inputTokens: nullable(nonNegativeInteger()), outputTokens: nullable(nonNegativeInteger()), cacheReadTokens: nullable(nonNegativeInteger()), cost: { type: ["number", "null"], minimum: 0 },
-  provenance: exactObject({
-    activityCount: publicString, artifactCount: publicString, stepCount: publicString, taskCount: publicString,
-    durationMs: publicString, inputTokens: publicString, outputTokens: publicString, cacheReadTokens: publicString, cost: publicString,
-  }),
-});
-const metadataItem = exactObject({
-  identity: exactObject({ flowId: publicString, flowVersionId: publicString, runId: publicString, specId: publicString, flowVersion: positiveInteger() }),
-  lifecycle: exactObject({
-    lifecycle: { type: "string", enum: ["active", "parked", "finalized"] },
-    blocked: { type: "boolean" }, blocker: nullable(blocker),
-    nextAction: nullable(exactObject({ operation: publicString, phase: nullable(publicString), stepId: nullable(publicString), taskId: nullable(publicString) })),
-  }),
-  location: exactObject({
-    phase: nullable(publicString), stepId: nullable(publicString), taskId: nullable(publicString),
-    git: exactObject({ available: { type: "boolean" }, commit: nullable(publicString) }),
-  }),
-  structure: exactObject({ phaseId: publicString, stepIds: publicStringList(), taskIds: publicStringList() }),
-  relationships: exactObject({
-    stepTasks: { type: "array", maxItems: FLOW_QUERY_LIMITS.MAX_PUBLIC_COLLECTION_ITEMS, items: exactObject({ stepId: publicString, taskId: publicString }) },
-    taskNodes: { type: "array", maxItems: FLOW_QUERY_LIMITS.MAX_PUBLIC_COLLECTION_ITEMS, items: exactObject({ taskId: publicString, nodeId: publicString }) },
-    issues: { type: "array", maxItems: 1, items: exactObject({ number: positiveInteger(), relationship: { type: "string", enum: ["tracks"] } }) },
-  }),
-  timestamps: exactObject({ createdAt: timestamp, updatedAt: timestamp, finalizedAt: timestamp }),
-  capabilities: { type: "object", additionalProperties: { type: "boolean" } },
-  artifacts: { type: "array", maxItems: FLOW_QUERY_LIMITS.MAX_ARTIFACTS, items: artifactDescriptorView },
-  metrics: aggregateMetrics,
-});
-const activityItem = exactObject({
-  activity: exactObject({ id: publicString, type: publicString }),
-  node: exactObject({ id: publicString, key: publicString }),
-  task: nullable(idKey), attempt: nullable(exactObject({ id: publicString, sequence: positiveInteger() })),
-  sequence: nullable(positiveInteger()), confirmationOrder: positiveInteger(),
-  transition: exactObject({ operation: publicString, status: nullable(publicString) }),
-  timing: nullable(exactObject({ startedAt: publicString, finishedAt: publicString, durationMs: nullable(nonNegativeInteger()) })),
-  usage: nullable(exactObject({ inputTokens: nonNegativeInteger(), outputTokens: nonNegativeInteger(), cacheReadTokens: nonNegativeInteger(), cost: { type: ["number", "null"], minimum: 0 } })),
-  outcome: nullable(exactObject({
-    outcome: { type: "string", enum: ["passed", "failed", "skipped", "incomplete"] }, confirmedAt: publicString, summary: publicString,
-    artifactRefs: { type: "array", maxItems: FLOW_QUERY_LIMITS.MAX_PUBLIC_COLLECTION_ITEMS, items: exactObject({ kind: publicString, id: publicString }) },
-  })),
-  failure: nullable(exactObject({ category: publicString, code: publicString, message: publicString, retryable: { type: "boolean" }, retryKind: { ...nullable(publicString), enum: ["semantic", "tooling", null] } })),
-  blocker: nullable(blocker),
-  incomplete: nullable(exactObject({ code: publicString, message: publicString, operation: nullable(publicString), resources: publicStringList() })),
-  metric: nullable(exactObject({
-    phase: publicString, counter: nullable(publicString), delta: nullable(nonNegativeInteger()), reset: { type: "boolean" },
-    kind: nullable(publicString), provider: nullable(publicString), profileKey: nullable(publicString), callCount: nullable(nonNegativeInteger()), responseChars: nullable(nonNegativeInteger()), durationMs: nullable(nonNegativeInteger()), model: nullable(publicString),
-    tokens: nullable(exactObject({ input: nonNegativeInteger(), output: nonNegativeInteger(), cacheRead: nonNegativeInteger(), cacheCreation: nonNegativeInteger() })),
-    cost: { type: ["number", "null"], minimum: 0 }, cachedResponse: { type: "boolean" }, costIncomplete: { type: "boolean" },
-  })),
-  note: nullable(publicString), evaluationIds: publicStringList(), findingIds: publicStringList(), repairIds: publicStringList(), artifactIds: publicStringList(),
-});
-
 export const FLOW_QUERY_REQUEST_SCHEMAS = Object.freeze({
   metadata: Object.freeze({
     type: "object",
@@ -222,88 +139,14 @@ export const FLOW_QUERY_REQUEST_SCHEMAS = Object.freeze({
 
 export const FLOW_QUERY_REQUEST_SCHEMA = Object.freeze({ oneOf: Object.values(FLOW_QUERY_REQUEST_SCHEMAS) });
 
-function commonResponseProperties() {
-  return {
-    schemaRevision: { type: "integer", enum: [FLOW_QUERY_SCHEMA_REVISION] },
-    ok: { type: "boolean" },
-  };
-}
-
-const responsePageInfo = (allowNullLimit) => Object.freeze({
-  type: "object",
-  required: ["limit", "endCursor", "hasNext"],
-  properties: {
-    limit: allowNullLimit ? { type: ["integer", "null"], minimum: 1, maximum: FLOW_QUERY_LIMITS.MAX_PAGE_LIMIT } : positiveInteger(FLOW_QUERY_LIMITS.MAX_PAGE_LIMIT),
-    endCursor: nullable(publicString),
-    hasNext: { type: "boolean" },
-  },
-  additionalProperties: false,
-});
-
-function knownResponseProperties(resource, payload) {
-  return {
-    ...commonResponseProperties(),
-    resource: { type: "string", enum: [resource] },
-    selectedFlowVersion: { ...selectedFlowVersion, type: ["object", "null"] },
-    availableFlowVersions,
-    ...payload,
-  };
-}
-
-const metadataSuccess = Object.freeze({
-  type: "object",
-  required: ["schemaRevision", "ok", "resource", "selectedFlowVersion", "availableFlowVersions", "item"],
-  properties: knownResponseProperties("metadata", {
-    ok: { type: "boolean", enum: [true] }, selectedFlowVersion, item: metadataItem,
-  }),
-  additionalProperties: false,
-});
-
-const activitiesSuccess = Object.freeze({
-  type: "object",
-  required: ["schemaRevision", "ok", "resource", "selectedFlowVersion", "availableFlowVersions", "items", "pageInfo"],
-  properties: knownResponseProperties("activities", {
-    ok: { type: "boolean", enum: [true] }, selectedFlowVersion, items: { type: "array", maxItems: FLOW_QUERY_LIMITS.MAX_PAGE_LIMIT, items: activityItem }, pageInfo: responsePageInfo(false),
-  }),
-  additionalProperties: false,
-});
-
-const metadataError = Object.freeze({
-  type: "object",
-  required: ["schemaRevision", "ok", "resource", "selectedFlowVersion", "availableFlowVersions", "error", "item"],
-  properties: knownResponseProperties("metadata", {
-    ok: { type: "boolean", enum: [false] }, error: queryError, item: { type: "null" },
-  }),
-  additionalProperties: false,
-});
-
-const activitiesError = Object.freeze({
-  type: "object",
-  required: ["schemaRevision", "ok", "resource", "selectedFlowVersion", "availableFlowVersions", "error", "items", "pageInfo"],
-  properties: knownResponseProperties("activities", {
-    ok: { type: "boolean", enum: [false] }, error: queryError, items: { type: "array", maxItems: 0 }, pageInfo: responsePageInfo(true),
-  }),
-  additionalProperties: false,
-});
-
-const unknownResourceError = Object.freeze({
-  type: "object",
-  required: ["schemaRevision", "ok", "error"],
-  properties: { ...commonResponseProperties(), ok: { type: "boolean", enum: [false] }, error: queryError },
-  additionalProperties: false,
-});
-
-export const FLOW_QUERY_RESPONSE_SCHEMA = Object.freeze({
-  oneOf: [metadataSuccess, activitiesSuccess, metadataError, activitiesError, unknownResourceError],
-});
+export const FLOW_QUERY_RESPONSE_SCHEMA = Object.freeze(JSON.parse(fs.readFileSync(
+  new URL("./schemas/query-response.schema.json", import.meta.url), "utf8",
+)));
 
 function responseVariant(value) {
-  if (value?.ok === true && value.resource === "metadata") return metadataSuccess;
-  if (value?.ok === true && value.resource === "activities") return activitiesSuccess;
-  if (value?.ok === false && value.resource === "metadata") return metadataError;
-  if (value?.ok === false && value.resource === "activities") return activitiesError;
-  if (value?.ok === false && !Object.hasOwn(value ?? {}, "resource")) return unknownResourceError;
-  return FLOW_QUERY_RESPONSE_SCHEMA;
+  return FLOW_QUERY_RESPONSE_SCHEMA.oneOf.find((schema) => schema.properties.ok.enum[0] === value?.ok
+    && (schema.properties.resource ? schema.properties.resource.enum[0] === value?.resource : !Object.hasOwn(value ?? {}, "resource")))
+    ?? FLOW_QUERY_RESPONSE_SCHEMA;
 }
 
 export function validateFlowQueryRequest(value) {
@@ -313,10 +156,239 @@ export function validateFlowQueryRequest(value) {
 
 export function validateFlowQueryResponse(value) {
   const errors = validateSchema(value, responseVariant(value));
-  if (errors.length > 0 || value?.ok !== false) return errors;
-  const expectedPath = FLOW_QUERY_ERROR_PATHS[value.error?.code];
-  if (expectedPath !== null && expectedPath !== undefined && value.error.path !== expectedPath) {
-    errors.push(`error.path: must be ${expectedPath} for ${value.error.code}`);
+  if (errors.length > 0) return errors;
+  return new FlowQueryResponseValidation(value).validate();
+}
+
+const DETAIL_GROUPS = Object.freeze(["evaluations", "findings", "repairs"]);
+const DETAIL_ID_FIELDS = Object.freeze({ evaluations: "evaluationIds", findings: "findingIds", repairs: "repairIds" });
+
+/** Aggregate the recorded detail coverage of one page; an empty scan is complete. */
+export function detailCompletenessFor(items) {
+  const coverages = items.flatMap((item) => DETAIL_GROUPS.map((group) => item.detailCoverage[group].availability));
+  return coverages.includes("not-recorded") ? "not-recorded"
+    : coverages.length > 0 && coverages.every((value) => value === "not-applicable") ? "not-applicable" : "complete";
+}
+
+/** Checks facts present in one wire response, without reading canonical state. */
+class FlowQueryResponseValidation {
+  constructor(response) {
+    this.response = response;
+    this.errors = [];
   }
-  return errors;
+
+  check(condition, path, message) {
+    if (!condition) this.errors.push(`${path}: ${message}`);
+  }
+
+  unique(values, path) {
+    const set = new Set(values);
+    this.check(set.size === values.length, path, "must not contain duplicate identities");
+    return set;
+  }
+
+  sameIds(actual, expected, path) {
+    const actualSet = this.unique(actual, path);
+    const expectedSet = new Set(expected);
+    this.check(actualSet.size === expectedSet.size && [...actualSet].every((id) => expectedSet.has(id)), path, "must match the corresponding identities");
+  }
+
+  validate() {
+    const value = this.response;
+    this.jsonValues(value);
+    if (Object.hasOwn(value, "availableFlowVersions")) {
+      this.unique(value.availableFlowVersions, "availableFlowVersions");
+      this.check(value.availableFlowVersions.every((version, index, versions) => index === 0 || versions[index - 1] < version), "availableFlowVersions", "must be ascending");
+      if (value.selectedFlowVersion !== null) this.check(value.availableFlowVersions.includes(value.selectedFlowVersion.flowVersion), "selectedFlowVersion", "must select an available Version");
+    }
+    if (value.snapshot !== null) {
+      this.check(isFlowQueryDatetime(value.snapshot.capturedAt) && value.snapshot.capturedAt.endsWith("Z"), "snapshot.capturedAt", "must be a UTC datetime");
+      this.check(value.selectedFlowVersion !== null && value.selectedFlowVersion !== undefined, "snapshot", "requires a selected Flow Version");
+    }
+    if (!value.ok) {
+      const expected = FLOW_QUERY_ERROR_PATHS[value.error.code];
+      if (expected !== null && expected !== undefined) this.check(value.error.path === expected, "error.path", `must be ${expected} for ${value.error.code}`);
+      return this.errors;
+    }
+    if (value.resource === "metadata") this.metadata();
+    else this.activities();
+    return this.errors;
+  }
+
+  jsonValues(value, path = "response", depth = 0) {
+    this.check(depth <= FLOW_QUERY_LIMITS.MAX_CANONICAL_JSON_DEPTH, path, "exceeds the public nesting limit");
+    if (depth > FLOW_QUERY_LIMITS.MAX_CANONICAL_JSON_DEPTH) return;
+    if (typeof value === "number") this.check(Number.isFinite(value), path, "must be finite");
+    else if (value !== null && typeof value === "object") {
+      for (const [key, entry] of Object.entries(value)) this.jsonValues(entry, `${path}.${key}`, depth + 1);
+    }
+  }
+
+  metadata() {
+    const { item, selectedFlowVersion, completeness } = this.response;
+    this.check(item.identity.specId === selectedFlowVersion.specId && item.identity.flowVersion === selectedFlowVersion.flowVersion, "item.identity", "must match the selected Flow Version");
+    this.check(completeness.sourceHistory === item.history.ledgerCoverage, "completeness.sourceHistory", "must match saved history coverage");
+    const { structure } = item;
+    const nodes = new Map(structure.nodes.map((node) => [node.id, node]));
+    this.check(nodes.size === structure.nodes.length, "item.structure.nodes", "must have unique node identities");
+    const root = nodes.get(structure.rootNodeId);
+    this.check(root?.kind === "flow" && root.parentId === null, "item.structure.rootNodeId", "must identify the unique Flow root");
+    this.check(structure.nodes.filter((node) => node.kind === "flow").length === 1, "item.structure.nodes", "must have one Flow root");
+    this.sameIds(structure.stepIds, structure.nodes.filter((node) => node.kind === "step").map((node) => node.id), "item.structure.stepIds");
+    this.sameIds(structure.taskIds, structure.nodes.filter((node) => node.kind === "task").map((node) => node.id), "item.structure.taskIds");
+    this.sameIds(structure.phaseIds, structure.nodes.filter((node) => node.role === "phase").map((node) => node.id), "item.structure.phaseIds");
+    this.check(nodes.has(structure.phaseId), "item.structure.phaseId", "must identify a saved node");
+    const visited = new Set();
+    const pending = root ? [root] : [];
+    while (pending.length > 0) {
+      const node = pending.pop();
+      if (visited.has(node.id)) {
+        this.check(false, "item.structure.nodes", "must not contain a cycle or shared child");
+        continue;
+      }
+      visited.add(node.id);
+      this.unique(node.childIds, `node(${node.id}).childIds`);
+      for (const id of node.childIds) {
+        const child = nodes.get(id);
+        this.check(child !== undefined && child.parentId === node.id, `node(${node.id}).childIds`, "must resolve to children with the same parent");
+        if (child) pending.push(child);
+      }
+    }
+    this.check(visited.size === nodes.size, "item.structure.nodes", "must form one connected tree");
+    const stepTasks = [];
+    for (const node of structure.nodes) {
+      const path = `node(${node.id})`;
+      const roleMatches = node.kind === "step" ? ["phase", "group", "step"].includes(node.role) : node.role === node.kind;
+      this.check(roleMatches, `${path}.role`, "must match the saved node kind");
+      this.check((node.displayNameSource === "key") === (node.coverage.displayName === "key-fallback"), `${path}.coverage.displayName`, "must describe the display-name source");
+      if (node.displayNameSource === "key") this.check(node.displayName === node.key, `${path}.displayName`, "key fallback must retain the saved key");
+      this.check(node.kind === "step" ? node.coverage.phaseClassification !== "not-applicable" : node.coverage.phaseClassification === "not-applicable", `${path}.coverage.phaseClassification`, "must apply only to Step nodes");
+      if (node.coverage.phaseClassification === "not-recorded") this.check(node.role === "group", `${path}.role`, "unclassified Steps must be groups");
+      if (node.kind !== "step" || node.role !== "step") this.check(node.definitionStepId === null, `${path}.definitionStepId`, "only concrete Steps may identify a Definition Step");
+      const ancestors = [];
+      const seen = new Set();
+      let ancestor = node;
+      while (ancestor && !seen.has(ancestor.id)) {
+        seen.add(ancestor.id);
+        ancestors.push(ancestor);
+        ancestor = ancestor.parentId === null ? null : nodes.get(ancestor.parentId);
+      }
+      const task = ancestors.find((entry) => entry.kind === "task");
+      const phase = ancestors.find((entry) => entry.role === "phase");
+      this.check(node.taskId === (task?.id ?? null), `${path}.taskId`, "must identify the containing Task");
+      this.check(node.phaseId === (phase?.id ?? null), `${path}.phaseId`, "must identify the containing phase");
+      if (task && node.kind === "step") stepTasks.push(`${node.id}\0${task.id}`);
+      if (node.result !== null) this.check(isFlowQueryDatetime(node.result.confirmedAt), `${path}.result.confirmedAt`, "must be a recorded datetime");
+    }
+    this.sameIds(item.relationships.stepTasks.map((entry) => `${entry.stepId}\0${entry.taskId}`), stepTasks, "item.relationships.stepTasks");
+    this.sameIds(item.relationships.taskNodes.map((entry) => `${entry.taskId}\0${entry.nodeId}`), structure.taskIds.map((id) => `${id}\0${id}`), "item.relationships.taskNodes");
+    for (const [field, id] of Object.entries(item.location)) {
+      if (field !== "git" && id !== null) this.check(nodes.has(id), `item.location.${field}`, "must identify a saved node");
+    }
+    this.unique(item.artifacts.map((artifact) => artifact.artifactId), "item.artifacts.artifactId");
+    this.unique(item.artifacts.map((artifact) => artifact.artifactKey), "item.artifacts.artifactKey");
+    for (const artifact of item.artifacts) this.artifact(artifact, nodes);
+  }
+
+  relativePath(value, path) {
+    const segments = value.split("/");
+    this.check(!value.includes("\\") && !value.includes("\0") && !/^[A-Za-z]:/.test(value)
+      && segments.every((segment) => segment !== "" && segment !== "." && segment !== ".."), path, "must be a normalized Version-relative POSIX path");
+  }
+
+  artifact(artifact, nodes) {
+    const path = `artifact(${artifact.artifactId})`;
+    this.relativePath(artifact.relativePath, `${path}.relativePath`);
+    this.check((artifact.cardinality === "singleton") === (artifact.memberId === null), `${path}.memberId`, "must match artifact cardinality");
+    this.check((artifact.hashScope === "confirmed-prefix") === (artifact.metadata.logicalKey === "flow.activities"), `${path}.hashScope`, "flow.activities requires confirmed-prefix; other artifacts require file-bytes");
+    for (const field of ["activityIds", "nodeIds", "taskIds", "referencingActivityIds"]) this.unique(artifact[field], `${path}.${field}`);
+    if (artifact.producerActivityId !== null) this.check(artifact.activityIds.includes(artifact.producerActivityId), `${path}.activityIds`, "must include the recorded producer Activity");
+    for (const id of artifact.nodeIds) this.check(nodes.has(id), `${path}.nodeIds`, "must identify saved nodes");
+    for (const id of artifact.taskIds) this.check(nodes.get(id)?.kind === "task", `${path}.taskIds`, "must identify saved Tasks");
+  }
+
+  source(source, path) {
+    this.relativePath(source.relativePath, `${path}.relativePath`);
+    this.check((source.format === "jsonl") === (source.jsonPointer === null), `${path}.jsonPointer`, "JSON requires a pointer; JSONL requires null");
+  }
+
+  entity(entity, path) {
+    this.source(entity.source, `${path}.source`);
+    for (const source of entity.supportingSources) this.source(source, `${path}.supportingSources`);
+    for (const field of ["activityIds", "evaluationIds", "findingIds", "repairIds"]) this.unique(entity[field], `${path}.${field}`);
+    this.check(entity.activityIds.includes(entity.source.producerActivityId), `${path}.activityIds`, "must include the producer Activity");
+    if (entity.currentState !== undefined && entity.currentState !== null) {
+      this.check(entity.currentState.asOfSnapshotId === this.response.snapshot.id, `${path}.currentState.asOfSnapshotId`, "must identify this snapshot");
+      for (const source of entity.currentState.sources) this.source(source, `${path}.currentState.sources`);
+    }
+    if (entity.identity) this.relativePath(entity.identity.sourceArtifact, `${path}.identity.sourceArtifact`);
+    if (entity.kind === "repair" || entity.kind === "lifecycle-skip") {
+      this.unique(entity.items.map((item) => item.id), `${path}.items`);
+      for (const item of entity.items) {
+        this.unique(item.findingIds, `${path}.items.findingIds`);
+        this.check(item.findingIds.every((id) => entity.findingIds.includes(id)), `${path}.items.findingIds`, "must be included in the Repair finding references");
+        if (item.target.relativePath !== null) this.relativePath(item.target.relativePath, `${path}.items.target.relativePath`);
+        for (const evidence of item.evidence) this.source(evidence.source, `${path}.items.evidence.source`);
+      }
+    }
+  }
+
+  activities() {
+    const { items, entities, pageInfo, snapshot, completeness } = this.response;
+    this.unique(items.map((item) => item.activity.id), "items.activity.id");
+    this.unique(items.map((item) => item.confirmationOrder), "items.confirmationOrder");
+    this.check(items.every((item, index) => index === 0 || items[index - 1].confirmationOrder < item.confirmationOrder), "items.confirmationOrder", "must be ascending");
+    this.check(items.every((item) => item.confirmationOrder <= snapshot.confirmationOrder), "items.confirmationOrder", "must not exceed the snapshot confirmed prefix");
+    this.check(pageInfo.returnedItems === items.length && items.length <= pageInfo.limit, "pageInfo.returnedItems", "must equal items length and fit the requested limit");
+    this.check(pageInfo.totalItems >= items.length, "pageInfo.totalItems", "must cover the returned items");
+    this.check(items.length > 0 || !pageInfo.hasNext, "pageInfo.hasNext", "an empty page must be final");
+    this.check(!pageInfo.hasNext || pageInfo.endCursor !== null, "pageInfo.endCursor", "a non-final page requires a cursor");
+    this.check(!pageInfo.hasNext || pageInfo.totalItems > items.length, "pageInfo.totalItems", "a non-final page requires remaining items");
+    const groupIds = new Map(DETAIL_GROUPS.map((group) => [group, this.unique(entities[group].map((entity) => entity.id), `entities.${group}`)]));
+    const all = new Map();
+    for (const group of DETAIL_GROUPS) {
+      for (const entity of entities[group]) {
+        this.check(!all.has(entity.id), `entities.${group}`, "identity must be unique across detail groups");
+        all.set(entity.id, entity);
+        this.entity(entity, `${group}(${entity.id})`);
+        for (const targetGroup of DETAIL_GROUPS) {
+          for (const id of entity[DETAIL_ID_FIELDS[targetGroup]]) this.check(groupIds.get(targetGroup).has(id), `${group}(${entity.id}).${DETAIL_ID_FIELDS[targetGroup]}`, "must resolve in the corresponding entity group");
+        }
+      }
+    }
+    const roots = [];
+    for (const item of items) {
+      const path = `activity(${item.activity.id})`;
+      if (item.timing !== null) for (const field of ["startedAt", "finishedAt"]) this.check(isFlowQueryDatetime(item.timing[field]), `${path}.timing.${field}`, "must be a recorded datetime");
+      if (item.outcome !== null) this.check(isFlowQueryDatetime(item.outcome.confirmedAt), `${path}.outcome.confirmedAt`, "must be a recorded datetime");
+      this.unique(item.artifactIds, `${path}.artifactIds`);
+      for (const group of DETAIL_GROUPS) {
+        const refs = item.detailRefs[group];
+        const coverage = item.detailCoverage[group];
+        const bindings = item.referenceBindings[group];
+        this.unique(refs, `${path}.detailRefs.${group}`);
+        this.unique(item[DETAIL_ID_FIELDS[group]], `${path}.${DETAIL_ID_FIELDS[group]}`);
+        this.sameIds(bindings.map((binding) => binding.reference.id), item[DETAIL_ID_FIELDS[group]], `${path}.referenceBindings.${group}`);
+        this.check(coverage.count === refs.length, `${path}.detailCoverage.${group}.count`, "must equal the direct detail reference count");
+        for (const id of refs) this.check(groupIds.get(group).has(id), `${path}.detailRefs.${group}`, "must resolve in the corresponding entity group");
+        for (const binding of bindings) {
+          this.unique(binding.detailIds, `${path}.referenceBindings.${group}.detailIds`);
+          this.check(binding.detailIds.length > 0 && binding.detailIds.every((id) => refs.includes(id)), `${path}.referenceBindings.${group}.detailIds`, "must resolve to direct detail references");
+        }
+        if (coverage.availability !== "available") this.check(refs.length === 0 && bindings.length === 0, `${path}.detailCoverage.${group}`, "unrecorded or inapplicable detail must not carry references");
+        roots.push(...refs);
+      }
+    }
+    const reached = new Set();
+    while (roots.length > 0) {
+      const id = roots.pop();
+      if (reached.has(id)) continue;
+      const entity = all.get(id);
+      if (!entity) continue;
+      reached.add(id);
+      for (const field of Object.values(DETAIL_ID_FIELDS)) roots.push(...entity[field]);
+    }
+    this.check(reached.size === all.size, "entities", "must equal the transitive detail reference closure");
+    this.check(completeness.details === detailCompletenessFor(items), "completeness.details", "must describe the returned detail coverage");
+  }
 }

@@ -3,10 +3,8 @@ import { PromptBuilder } from "../../lib/prompt-builder.js";
 import {
   GLOBAL_PROMPT_ELEMENT_HARD_MAX,
   LinearPromptBatchTopology,
-  PromptBatchExecutor,
   PromptBatchPlan,
   PromptBatchReducer,
-  PromptExecutionLimit,
   PromptInputBuilder,
   PromptReductionLevel,
   PromptReductionPlan,
@@ -178,11 +176,12 @@ export async function generateDocumentationDirectives({
   lang,
   agent,
   executionWorkDir,
+  dryRun = false,
   retryCount = 0,
   maxCharacters,
   concurrency = 1,
 } = {}) {
-  const docsAgent = DocumentationAgent.from(agent);
+  const docsAgent = DocumentationAgent.from(agent).forCommand(agent.commandId || 'docs.text');
   const resolvedLimit = maxCharacters ?? docsAgent.promptCharacterLimit ?? GLOBAL_PROMPT_ELEMENT_HARD_MAX;
   const limit = new PromptRequestLimit({ maxCharacters: resolvedLimit });
   const envelope = new DocumentationTextPromptEnvelope({ systemPrompt, fileName, lang });
@@ -218,7 +217,7 @@ export async function generateDocumentationDirectives({
     }));
   });
   const collection = builder.build();
-  const executionLimit = new PromptExecutionLimit({ maxRequestCharacters: resolvedLimit, concurrency });
+  const executionLimit = docsAgent.createExecutionLimit({ maxRequestCharacters: resolvedLimit, concurrency });
   const directiveElements = collection.elements.filter((element) => element instanceof DocumentationDirectivePromptElement);
   const contextElements = collection.elements.filter((element) => element instanceof DocumentationContextPromptElement);
   const wholeDocumentPlan = PromptBatchPlan.create({
@@ -249,7 +248,7 @@ export async function generateDocumentationDirectives({
     retryCount,
     executionWorkDir,
   });
-  const executor = new PromptBatchExecutor({ executionLimit });
+  const executor = docsAgent.createExecutor({ executionLimit });
   const callAgent = (request, _batch, _retryIndex, _attemptContext, providerCallAdmission) => docsAgent.call(request.userPrompt, {
     ...callOptions(request),
     providerCallAdmission,
@@ -264,9 +263,15 @@ export async function generateDocumentationDirectives({
       }
     },
   });
-  const projectInvocation = typeof agent.projectInvocation === "function"
+  const projectInvocation = docsAgent.supportsProjectInvocation
     ? (request) => docsAgent.projectInvocation(request.userPrompt, callOptions(request))
     : undefined;
+  if (dryRun || docsAgent.dryRun) {
+    const plan = wholeDocumentPlan.batches.length === 1 ? wholeDocumentPlan : scopedPlan;
+    await docsAgent.previewPlan({ plan, projectInvocation, executionLimit });
+    if (plan === scopedPlan) docsAgent.session?.markUnknownPhase("docs.text.synthesis");
+    return {};
+  }
   if (wholeDocumentPlan.batches.length === 1) {
     return executor.execute({
       plan: wholeDocumentPlan,
@@ -330,7 +335,7 @@ export async function generateDocumentationDirectives({
             ...callOptions(request),
             providerCallAdmission,
           }),
-          projectInvocation: typeof agent.projectInvocation === "function" ? (request) => docsAgent.projectInvocation(request.userPrompt, callOptions(request)) : undefined,
+          projectInvocation: docsAgent.supportsProjectInvocation ? (request) => docsAgent.projectInvocation(request.userPrompt, callOptions(request)) : undefined,
         });
       },
       toNextLevel(roundCompletions, depth) {
@@ -353,7 +358,7 @@ export async function generateDocumentationDirectives({
             ...callOptions(request),
             providerCallAdmission,
           }),
-          projectInvocation: typeof agent.projectInvocation === "function" ? (request) => docsAgent.projectInvocation(request.userPrompt, callOptions(request)) : undefined,
+          projectInvocation: docsAgent.supportsProjectInvocation ? (request) => docsAgent.projectInvocation(request.userPrompt, callOptions(request)) : undefined,
         });
       },
     });

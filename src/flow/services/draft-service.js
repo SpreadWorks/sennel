@@ -1,10 +1,10 @@
 import { STEP_RESULT_TYPE, StepResult } from "../engine/step-result.js";
 import { DraftAwaitQuestionIdentity, DraftAwaitUserDecision, DraftCompletionConnector,
   DraftExecutionSettlement, settleDraftStepResult } from "../definition.js";
-import { StepPersistenceFailure, rethrowStepSettlementFailure } from "../lib/definition-lifecycle-failure.js";
+import { StepPersistenceFailure, rethrowStepSettlementFailure } from "../lib/step-persistence-failure.js";
 import { createDraftCompletionSettlementApplication } from "../lib/draft-completion-connector.js";
 import { DraftRepairOperationsError } from "../lib/draft-repair-operations.js";
-import { WorkerArtifactHandoffError } from "../lib/worker-artifact-handoff.js";
+import { WorkerArtifactHandoffError } from "../lib/worker-artifact-handoff-error.js";
 import { DraftWorkerInput } from "./draft-worker-input.js";
 import { DraftSettlementWriter } from "./draft-settlement-writer.js";
 

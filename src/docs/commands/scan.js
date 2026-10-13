@@ -228,14 +228,14 @@ function resetCategories(root, resetValue) {
 // Main
 // ---------------------------------------------------------------------------
 
-async function runScan(ctx, rawArgs) {
+async function runScan(ctx, rawArgs, commandContainer = container) {
   if (!ctx) {
     const { cli, reset, hasReset } = parseScanArgs(rawArgs);
     if (cli.help) {
       printHelp();
       return;
     }
-    ctx = resolveDocsContext(container, cli);
+    ctx = resolveDocsContext(commandContainer, cli);
     if (hasReset) {
       resetCategories(ctx.root, reset);
       return;
@@ -244,6 +244,44 @@ async function runScan(ctx, rawArgs) {
     ctx.stdout = cli.stdout;
   }
 
+  const prepared = await prepareDocumentationScan(ctx);
+  const { analysis: result, outputDir, outputPath, categoryEntries, dataSources } = prepared;
+  const { root } = ctx;
+  // 7. Output
+  if (ctx.stdout) {
+    process.stdout.write(JSON.stringify(result, null, 2) + "\n");
+  } else if (ctx.dryRun) {
+    // Summary form: { categoryName: entryCount } for every registered scan DataSource.
+    // Zero-match categories are reported as 0 so consumers can distinguish
+    // "DataSource not registered" from "registered but matched no files".
+    const summary = {};
+    for (const name of dataSources.keys()) summary[name] = 0;
+    for (const [name, { entries }] of categoryEntries) summary[name] = entries.length;
+    process.stdout.write(JSON.stringify(summary, null, 2) + "\n");
+  } else {
+    if (!fs.existsSync(outputDir)) {
+      fs.mkdirSync(outputDir, { recursive: true });
+    }
+    fs.writeFileSync(outputPath, JSON.stringify(result, null, 2) + "\n");
+    ctx.aiSession?.recordGeneratedFiles([outputPath]);
+    logger.log(`output: ${path.relative(root, outputPath)}`);
+  }
+  return prepared;
+}
+
+export class DocumentationScanPreparation {
+  constructor({ analysis, outputDir, outputPath, categoryEntries, dataSources, stats }) {
+    this.analysis = analysis;
+    this.outputDir = outputDir;
+    this.outputPath = outputPath;
+    this.categoryEntries = categoryEntries;
+    this.dataSources = dataSources;
+    this.stats = Object.freeze(stats);
+    Object.freeze(this);
+  }
+}
+
+export async function prepareDocumentationScan(ctx) {
   const { root, srcRoot: src, config: cfg, type } = ctx;
 
   logger.verbose(`type=${type}`);
@@ -260,7 +298,7 @@ async function runScan(ctx, rawArgs) {
   const outputDir = managedOutputDir(root);
   const outputPath = path.join(outputDir, "analysis.json");
   let existing = null;
-  if (!ctx.stdout && !ctx.dryRun) {
+  if (!ctx.stdout) {
     if (fs.existsSync(outputPath)) {
       try {
         existing = JSON.parse(fs.readFileSync(outputPath, "utf8"));
@@ -312,7 +350,7 @@ async function runScan(ctx, rawArgs) {
   for (const file of files) {
     // Check if existing entries have matching hash (a file can appear in multiple categories)
     const existingInfos = existingIndex.get(file.relPath) || [];
-    const hashMatch = existingInfos.length > 0 && existingInfos[0].entry.hash === file.hash;
+    const hashMatch = existingInfos.length > 0 && existingInfos.every(({ entry }) => entry.hash === file.hash);
 
     if (hashMatch) {
       // Hash match → preserve existing entries in all categories (including enrichment)
@@ -442,29 +480,12 @@ async function runScan(ctx, rawArgs) {
     }
   }
 
-  // 7. Output
-  if (ctx.stdout) {
-    process.stdout.write(JSON.stringify(result, null, 2) + "\n");
-  } else if (ctx.dryRun) {
-    // Summary form: { categoryName: entryCount } for every registered scan DataSource.
-    // Zero-match categories are reported as 0 so consumers can distinguish
-    // "DataSource not registered" from "registered but matched no files".
-    const summary = {};
-    for (const name of dataSources.keys()) summary[name] = 0;
-    for (const [name, { entries }] of categoryEntries) summary[name] = entries.length;
-    process.stdout.write(JSON.stringify(summary, null, 2) + "\n");
-  } else {
-    if (!fs.existsSync(outputDir)) {
-      fs.mkdirSync(outputDir, { recursive: true });
-    }
-    fs.writeFileSync(outputPath, JSON.stringify(result, null, 2) + "\n");
-    logger.log(`output: ${path.relative(root, outputPath)}`);
-  }
+  return new DocumentationScanPreparation({ analysis: result, outputDir, outputPath, categoryEntries, dataSources, stats });
 }
 
 export default class DocsScanCommand extends Command {
   static outputMode = "raw";
   async execute(ctx) {
-    return runScan(ctx.docsCtx, ctx._rawArgs || []);
+    return runScan(ctx.docsCtx, ctx._rawArgs || [], ctx.container);
   }
 }

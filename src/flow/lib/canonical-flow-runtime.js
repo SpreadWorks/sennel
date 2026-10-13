@@ -26,7 +26,7 @@ import { DeferredFlowFindingsPublication } from "./flow-findings.js";
 import { AcceptedGateDeferral } from "./accepted-gate-deferral.js";
 import { AcceptedNonblockingDecision } from "./accepted-nonblocking-decision.js";
 import { TASK_GATE_CLASSIFICATION_RECOVERY_OPERATION } from "./task-gate-classification-recovery.js";
-import { DRAFT_WORKER_RECOVERY_OPERATION } from "./draft-worker-recovery.js";
+import { DRAFT_WORKER_RECOVERY_OPERATION, DRAFT_STEP_ERROR_RECOVERY_OPERATION } from "./draft-worker-recovery.js";
 
 const TYPE_FOR_OPERATION = Object.freeze({
   add_task: "task_added",
@@ -40,6 +40,7 @@ const TYPE_FOR_OPERATION = Object.freeze({
   update_attempt: "attempt_updated",
   [TASK_GATE_CLASSIFICATION_RECOVERY_OPERATION]: "recovery",
   [DRAFT_WORKER_RECOVERY_OPERATION]: "recovery",
+  [DRAFT_STEP_ERROR_RECOVERY_OPERATION]: "attempt_recovered",
   [SPEC_GATE_REPAIR_RECOVERY_OPERATION]: "recovery",
   fail_attempt: "attempt_failed",
   record_failure: "failure_recorded",
@@ -428,6 +429,15 @@ export class CanonicalFlowRuntime {
       attempt: requiredAttempt(attempt, "recoverLegacyDraftWorkerExecution"),
       result,
       admission,
+    });
+  }
+
+  recoverDraftStepError({ specId, receipt, attempt, admission } = {}) {
+    const state = this.#state(specId);
+    return this.#applyAttemptTransition(specId, state, {
+      id: receipt.id, nodeId: this.#currentNodeId(state), operation: DRAFT_STEP_ERROR_RECOVERY_OPERATION,
+      attempt: requiredAttempt(attempt, "recoverDraftStepError"),
+      draftStepErrorRecoveryReceipt: receipt, admission,
     });
   }
 
@@ -1337,6 +1347,7 @@ export class CanonicalFlowRuntime {
     requirementTestInitialization = null,
     requirementTestLifecycle = null,
     approvalTasks = [],
+    draftStepErrorRecoveryReceipt = null,
     acceptedDeferral = null,
     acceptedDecision = null,
     outbox = null,
@@ -1344,7 +1355,7 @@ export class CanonicalFlowRuntime {
     const target = requiredText(nodeId, "transition nodeId");
     const node = state.findNode(target);
     if (node === null) throw new CurrentFlowStateInvariantError(`transition node is not part of this Flow: ${target}`);
-    const transitionAttempt = ["confirm_attempt", "start_attempt", "rewind", "rewind_test_evidence", "repair_implementation", "triage_implementation_for_repair", "triage_implementation_no_repair", "repair_acceptance_review", "reopen_draft_preimplementation", "reopen_draft_task_addition", "reopen_draft_spec_correction", "plan_gate_repair", "recover_attempt", "recover_missing_producer_artifact", "recover_task_execution_overrun", "retry_attempt", "retry_gate_attempt", "settle_spec_gate_retry", "settle_spec_gate_recovered", "retry_recovery_attempt", "update_attempt", TASK_GATE_CLASSIFICATION_RECOVERY_OPERATION, DRAFT_WORKER_RECOVERY_OPERATION, SPEC_GATE_REPAIR_RECOVERY_OPERATION, "accept_final_regression_failure", "defer_failed_review", "defer_failed_gate", "continue_nonblocking", "advance_task_review_stage", "initialize_requirement_test_lifecycle", "advance_requirement_test_lifecycle"].includes(operation)
+    const transitionAttempt = ["confirm_attempt", "start_attempt", "rewind", "rewind_test_evidence", "repair_implementation", "triage_implementation_for_repair", "triage_implementation_no_repair", "repair_acceptance_review", "reopen_draft_preimplementation", "reopen_draft_task_addition", "reopen_draft_spec_correction", "plan_gate_repair", "recover_attempt", "recover_missing_producer_artifact", "recover_task_execution_overrun", "retry_attempt", "retry_gate_attempt", "settle_spec_gate_retry", "settle_spec_gate_recovered", "retry_recovery_attempt", "update_attempt", TASK_GATE_CLASSIFICATION_RECOVERY_OPERATION, DRAFT_WORKER_RECOVERY_OPERATION, DRAFT_STEP_ERROR_RECOVERY_OPERATION, SPEC_GATE_REPAIR_RECOVERY_OPERATION, "accept_final_regression_failure", "defer_failed_review", "defer_failed_gate", "continue_nonblocking", "advance_task_review_stage", "initialize_requirement_test_lifecycle", "advance_requirement_test_lifecycle"].includes(operation)
       ? attempt
       : null;
     const activityAttempt = (operation === "defer_failed_gate" && acceptedDeferral instanceof AcceptedGateDeferral)
@@ -1358,7 +1369,7 @@ export class CanonicalFlowRuntime {
       ? state.attempt ?? attempt
       : operation.startsWith("reopen_draft_") && result !== null
       ? state.attempt
-      : ["start_attempt", "rewind", "rewind_test_evidence", "reopen_draft_preimplementation", "reopen_draft_task_addition", "reopen_draft_spec_correction", "plan_gate_repair", "recover_attempt", "retry_recovery_attempt", "accept_final_regression_failure"].includes(operation)
+      : ["start_attempt", "rewind", "rewind_test_evidence", "reopen_draft_preimplementation", "reopen_draft_task_addition", "reopen_draft_spec_correction", "plan_gate_repair", "recover_attempt", "retry_recovery_attempt", DRAFT_STEP_ERROR_RECOVERY_OPERATION, "accept_final_regression_failure"].includes(operation)
       ? attempt
       : state.attempt;
     if (activityAttempt === null) {
@@ -1392,6 +1403,7 @@ export class CanonicalFlowRuntime {
         requirementTestLifecycle,
         outbox,
         approvalTasks,
+        ...(draftStepErrorRecoveryReceipt === null ? {} : { draftStepErrorRecoveryReceipt }),
       },
     });
     const resolvedArtifactWrites = retryRecoveryPublication == null

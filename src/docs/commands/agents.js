@@ -20,6 +20,7 @@ import { loadFullAnalysis, getChapterFiles, readText } from "../lib/command-cont
 import { loadSpecDrivenDevelopmentTemplate } from "../../lib/agents-md.js";
 import { resolveDocsContext } from "../lib/docs-context.js";
 import { Command } from "../../lib/command.js";
+import { runDocumentationAiCommand, rethrowDocumentationAiStop } from "../lib/documentation-ai-execution.js";
 import { synthesizeProjectInstructions } from "../lib/documentation-agents-batching.js";
 import { AtomicFile } from "../../lib/atomic-file.js";
 
@@ -74,10 +75,10 @@ function replaceProjectContent(text, refined) {
 // Main
 // ---------------------------------------------------------------------------
 
-async function runAgents(ctx, rawArgs) {
+async function runAgents(ctx, rawArgs = [], commandContainer = container) {
   if (!ctx) {
     const cli = parseArgs(rawArgs, {
-      flags: ["--dry-run"],
+      flags: ["--yes", "--dry-run"],
       options: [],
       defaults: { dryRun: false },
     });
@@ -88,15 +89,21 @@ async function runAgents(ctx, rawArgs) {
       const o = h.options;
       console.log([
         h.usage, "", `  ${h.desc}`, `  ${h.descDetail}`, "", "Options:",
+      `  ${tu("ui:docsAi.yes")}`,
         `  ${o.dryRun}`,
       ].join("\n"));
       return;
     }
 
-    ctx = resolveDocsContext(container, cli);
+    ctx = resolveDocsContext(commandContainer, cli);
     ctx.dryRun = cli.dryRun;
   }
 
+  ctx.container ||= commandContainer;
+  return runDocumentationAiCommand(ctx, rawArgs, "docs.agents", () => executeAgents(ctx));
+}
+
+async function executeAgents(ctx) {
   const { root, srcRoot, config, lang, t } = ctx;
 
   const agentsPath = path.join(srcRoot, "AGENTS.md");
@@ -143,9 +150,12 @@ async function runAgents(ctx, rawArgs) {
   const { text: resolved, specDrivenDevelopmentContent, projectContent } = resolveAgentsDirectives(content, resolveFn);
   content = resolved;
 
+  ctx.aiSession.registerFiles("docs.agents", [agentsPath]);
+  ctx.aiSession.registerInputs([agentsPath, path.join(srcRoot, "README.md"), path.join(managedOutputDir(root), "analysis.json"), ...chapterFiles.map((file) => path.join(docsDir, file))]);
+
   // AI refinement for PROJECT section
   if (projectContent) {
-    const agent = container.get("agent");
+    const agent = ctx.agent;
     if (!agent.resolve("docs.agents")) {
       throw new Error("No default agent configured. Set 'agent.default' in config.json or run 'sennel setup'.");
     }
@@ -173,6 +183,7 @@ async function runAgents(ctx, rawArgs) {
       });
       content = replaceProjectContent(content, refined);
     } catch (err) {
+      rethrowDocumentationAiStop(err, ctx.aiSession);
       throw new Error(`AI agent call failed: ${err.message}`);
     }
 
@@ -185,7 +196,9 @@ async function runAgents(ctx, rawArgs) {
     return;
   }
 
+  ctx.aiSession.assertActive();
   new AtomicFile(agentsPath).write(Buffer.from(content, "utf8"));
+  ctx.aiSession.recordGeneratedFiles([agentsPath]);
   if (newFileTemplate !== null) logger.log(`created ${agentsPath}`);
   console.log(t("messages:agents.updated", { path: agentsPath }));
 }
@@ -195,6 +208,6 @@ export { runAgents };
 export default class DocsAgentsCommand extends Command {
   static outputMode = "raw";
   async execute(ctx) {
-    return runAgents(ctx.docsCtx, ctx._rawArgs || []);
+    return runAgents(ctx.docsCtx, ctx._rawArgs || [], ctx.container);
   }
 }

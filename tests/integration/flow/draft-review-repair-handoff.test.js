@@ -6,7 +6,7 @@ import { it } from "node:test";
 
 import { prepareDraftService } from "../../support/infrastructure/draft-service.js";
 import { DraftRepairCandidate } from "../../../src/flow/steps/draft/draft-repair-candidate.js";
-import { DraftQuestionsRepairUnchangedResult } from "../../../src/flow/engine/step-result.js";
+import { DraftQuestionsRepairUnchangedResult, StepErrorResult } from "../../../src/flow/engine/step-result.js";
 import { CurrentFlowStateConflictError } from "../../../src/flow/lib/current-flow-state-conflict-error.js";
 import { FlowManager } from "../../../src/lib/flow-manager.js";
 import RunDispatchCommand from "../../../src/flow/lib/run-dispatch.js";
@@ -80,6 +80,105 @@ async function worker(ctx, coordinator, StepClass, Connector, payload, refusedRe
   return new RunDispatchCommand({ handoffCoordinator: coordinator })
     .runDraftWorkerStep(ctx, request, draftWorkerStepRegistration(stepId), preparation);
 }
+
+it("Draft Step Error replacement repairs from the retained triage producer and publishes a new Review source", async () => {
+  const root = fixtureRepository("draft-repair-error-replacement-");
+  try {
+    const specId = "804-questions-repair-error-replacement";
+    let manager = new FlowManager({ root, mainRoot: root, inWorktree: false, specId });
+    const ctx = { root, mainRoot: root, executionRoot: root, specId, flowManager: manager };
+    const fixture = new CanonicalFlowFixture({ flowManager: manager, specId, runId: "run-repair-error-replacement",
+      request: "Preserve the selected triage source across explicit repair recovery.",
+      execution: { mode: "direct", baseBranch: "main", featureBranch: null },
+    }).create().registerActive().activate("draft");
+    const source = canonicalDraftDocument();
+    manager.confirmCurrentAttempt({ specId, artifactWrites: [{ logicalKey: "draft", mediaType: "application/json",
+      bytes: Buffer.from(workerArtifactJson(source)) }] });
+    fixture.activate("draft-questions-review");
+    await review(ctx, "draft-questions", true);
+    manager.beginNextAction(specId);
+    const coordinator = new WorkerArtifactHandoffCoordinator();
+    const triage = await worker(ctx, coordinator, DraftQuestionsTriageStep, DraftTriageConnector, () => ({
+      version: 1, phase: "draft-questions-triage", sourceReview: "draft-review-questions.json",
+      summary: finding.rationale, items: [{ ...finding, decision: "apply",
+        allowedFieldPaths: [finding.target], requiredFieldPaths: [finding.target] }],
+    }));
+    assert.equal(triage.stepResult.kind, "draft-questions-triage-completed");
+    manager.beginNextAction(specId);
+    const triageSource = manager.readArtifact({ specId, logicalKey: "draft.questions.triage", consumerNodeId: "draft-questions-repair" });
+    const triageActivity = manager.activityLedger(specId).findLast((activity) =>
+      activity.result?.draftSettlementReceipt?.id === triage.receipt.id);
+    assert.equal(triageSource.descriptor.activityId, triageActivity.id);
+    const request = coordinator.createRequest({ ctx, state: manager.loadReadOnly(specId), invocation: {
+      id: "repair-error-failed-request", target: { digest: "b".repeat(64) },
+      action: { digest: "a".repeat(64), nextAction: { step: "draft-questions-repair" } },
+    } });
+    const binding = await new DraftRepairConnector(request).connect();
+    const service = await prepareDraftService({ ctx, request, binding, handoffCoordinator: coordinator });
+    // This tests the chosen Error's persistence boundary, not automatic error generation.
+    await new StepErrorResult("draft-questions-repair", new Error("The selected repair could not be processed."))
+      .persist(service);
+    manager = new FlowManager({ root, mainRoot: root, inWorktree: false, specId });
+    const failed = manager.canonicalState(specId);
+    const failedActivities = manager.activityLedger(specId);
+    const failureReceipt = manager.readCurrentStepSettlement({ specId, stepId: "draft-questions-repair" }).receipt;
+    assert.equal(failed.attempt.failure.category, "step-result-error");
+    assert.equal(failed.nextAction().operation, "blocked");
+    manager.recoverDraftExecution({ specId, reason: "The bounded repair processing cause was corrected.",
+      expectedAttempt: failed.attempt });
+    manager = new FlowManager({ root, mainRoot: root, inWorktree: false, specId });
+    const replacement = manager.canonicalState(specId).attempt;
+    assert.notEqual(replacement.id, binding.attempt.id);
+    assert.equal(replacement.sequence, binding.attempt.sequence + 1);
+    assert.deepEqual(replacement.consumption.toJSON(), failed.attempt.consumption.toJSON());
+    assert.deepEqual(manager.activityLedger(specId).slice(0, failedActivities.length), failedActivities);
+    assert.equal(manager.activityLedger(specId).at(-1).transition.draftStepErrorRecoveryReceipt.failureReceiptId, failureReceipt.id);
+    assert.deepEqual(manager.readArtifact({ specId, logicalKey: "draft.questions.triage", consumerNodeId: "draft-questions-repair" }), triageSource);
+    assert.equal(manager.readCurrentStepSettlement({ specId, stepId: "draft-questions-repair" }), null);
+    const beforeStale = manager.canonicalState(specId).toJSON();
+    const beforeStaleActivities = manager.activityLedger(specId);
+    assert.throws(() => request.assertCurrent(manager.loadReadOnly(specId)), { code: "FLOW_ARTIFACT_HANDOFF_STALE" });
+    assert.deepEqual(manager.canonicalState(specId).toJSON(), beforeStale);
+    assert.deepEqual(manager.activityLedger(specId), beforeStaleActivities);
+
+    const repairedValidation = "Execute the exact regression for the retained triage finding.";
+    const repaired = await worker({ ...ctx, flowManager: manager }, coordinator,
+      DraftQuestionsRepairStep, DraftRepairConnector, (nextRequest) => {
+        assert.notEqual(nextRequest.requestDigest, request.requestDigest);
+        const input = nextRequest.inputs.find((entry) => entry.name === "draft-questions-triage.json");
+        assert.deepEqual(input.document, JSON.parse(triageSource.bytes));
+        assert.equal(input.digest, triageSource.descriptor.hash);
+        return { version: 1, baseRevision: `sha256:${nextRequest.inputRevision}`, operations: [{
+          title: finding.title, target: finding.target, kind: "replace-value", path: finding.target,
+          replacement: repairedValidation, reason: finding.rationale,
+          expectedDigest: crypto.createHash("sha256").update(JSON.stringify(source.analysis.validation)).digest("hex"),
+        }] };
+      });
+    assert.equal(repaired.stepResult.kind, "draft-questions-repair-changed");
+    manager = new FlowManager({ root, mainRoot: root, inWorktree: false, specId });
+    const terminal = manager.activityLedger(specId).findLast((activity) =>
+      activity.result?.draftSettlementReceipt?.id === repaired.receipt.id);
+    assert.equal(terminal.attemptId, replacement.id);
+    assert.equal(terminal.sequence, replacement.sequence);
+    assert.equal(terminal.result.draftSettlementReceipt.binding.attemptId, replacement.id);
+    assert.equal(manager.canonicalState(specId).nextAction().nodeId, "draft-questions-review");
+    const audit = manager.readArtifact({ specId, logicalKey: "draft.questions.repair", consumerNodeId: "draft-gate" });
+    assert.equal(audit.descriptor.activityId, terminal.id);
+    assert.equal(JSON.parse(audit.bytes).acceptedOperations.length, 1);
+    const repairedDraft = manager.readArtifact({ specId, logicalKey: "draft", consumerNodeId: "draft-questions-review" });
+    assert.equal(repairedDraft.descriptor.activityId, terminal.id);
+    assert.equal(JSON.parse(repairedDraft.bytes).analysis.validation, repairedValidation);
+    manager.beginNextAction(specId);
+    await review({ ...ctx, flowManager: manager }, "draft-questions", false);
+    const final = new FlowManager({ root, mainRoot: root, inWorktree: false, specId });
+    const consumed = JSON.parse(final.readArtifact({ specId, logicalKey: "draft.questions.review", consumerNodeId: "draft-questions-triage" }).bytes)
+      .attempts.at(-1).artifact.payload;
+    assert.equal(consumed.sourceDraftRevision.digest, repairedDraft.descriptor.hash);
+    assert.equal(consumed.verdict, "PASS");
+    assert.equal(final.canonicalState(specId).nextAction().nodeId, "draft-refine");
+    assert.deepEqual(final.activityLedger(specId).slice(0, failedActivities.length), failedActivities);
+  } finally { removeTmpDir(root); }
+});
 
 for (const phase of ["questions", "coverage"]) {
   it(`refuses a new ${phase} user choice after Review and preserves prior QA, publication and completion across reload`, async () => {

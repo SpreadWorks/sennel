@@ -131,7 +131,8 @@ describe("CodexProvider", () => {
     assert.equal(usage.input_tokens, 15); // 20 - 5 cached
     assert.equal(usage.output_tokens, 8);
     assert.equal(usage.cache_read_tokens, 5);
-    assert.equal(usage.cache_creation_tokens, 0);
+    // Absent provider measurements remain unknown; only explicit zero is zero.
+    assert.equal(usage.cache_creation_tokens, null);
   });
 
   it("parse() uses the final agent message when the stream contains progress messages", () => {

@@ -2,10 +2,8 @@ import { repairJson } from "../../lib/json-parse.js";
 import {
   GLOBAL_PROMPT_ELEMENT_HARD_MAX,
   LinearPromptBatchTopology,
-  PromptBatchExecutor,
   PromptBatchPlan,
   PromptBatchReducer,
-  PromptExecutionLimit,
   PromptInputBuilder,
   PromptRequestEnvelope,
   PromptRequestLimit,
@@ -622,14 +620,14 @@ export async function translateMarkdownWithBatches({
 } = {}) {
   const document = new MarkdownPromptDocument({ id: documentId, content, template });
   if (document.elements.length === 0) return content;
-  const docsAgent = DocumentationAgent.from(agent);
+  const docsAgent = DocumentationAgent.from(agent).forCommand(agent.commandId || commandId);
   const resolvedLimit = maxCharacters ?? docsAgent.promptCharacterLimit ?? GLOBAL_PROMPT_ELEMENT_HARD_MAX;
   const limit = new PromptRequestLimit({ maxCharacters: resolvedLimit });
   const envelope = new MarkdownTranslationPromptEnvelope({ fromLang, toLang, documentStyle, template });
   const builder = new PromptInputBuilder({ envelope, limit });
   for (const element of document.elements) builder.add(element);
   const collection = builder.build();
-  const executionLimit = new PromptExecutionLimit({ maxRequestCharacters: resolvedLimit, concurrency });
+  const executionLimit = docsAgent.createExecutionLimit({ maxRequestCharacters: resolvedLimit, concurrency });
   const plan = PromptBatchPlan.create({
     collection,
     envelope,
@@ -637,24 +635,27 @@ export async function translateMarkdownWithBatches({
     topology: new LinearPromptBatchTopology(),
     executionLimit,
   });
-  return new PromptBatchExecutor({ executionLimit }).execute({
+  const callOptions = (request) => ({
+    commandId,
+    systemPrompt: request.systemPrompt,
+    jsonSchema: request.jsonSchema,
+    fmtFallback: request.fmtFallback,
+  });
+  const projectInvocation = docsAgent.supportsProjectInvocation
+    ? (request) => docsAgent.projectInvocation(request.userPrompt, callOptions(request))
+    : undefined;
+  if (docsAgent.dryRun) {
+    await docsAgent.previewPlan({ plan, projectInvocation, executionLimit });
+    return content;
+  }
+  return docsAgent.createExecutor({ executionLimit }).execute({
     plan,
     responseContract: new MarkdownTranslationResponseContract(),
     reducer: new MarkdownTranslationReducer(document),
     callAgent: (request, _batch, _retryIndex, _attemptContext, providerCallAdmission) => docsAgent.call(request.userPrompt, {
-      commandId,
-      systemPrompt: request.systemPrompt,
-      jsonSchema: request.jsonSchema,
-      fmtFallback: request.fmtFallback,
+      ...callOptions(request),
       providerCallAdmission,
     }),
-    projectInvocation: typeof agent.projectInvocation === "function"
-      ? (request) => docsAgent.projectInvocation(request.userPrompt, {
-        commandId,
-        systemPrompt: request.systemPrompt,
-        jsonSchema: request.jsonSchema,
-        fmtFallback: request.fmtFallback,
-      })
-      : undefined,
+    projectInvocation,
   });
 }

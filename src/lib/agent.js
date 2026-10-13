@@ -36,6 +36,13 @@ import { FileLock, FileLockWaitPolicy } from "./file-lock.js";
 import { RealDirectoryAuthority } from "./real-directory-authority.js";
 import { FlowAttributionPolicy } from "./flow-attribution.js";
 import {
+  AgentProviderAttemptAdmission,
+  AgentProviderAttemptContext,
+  AgentProviderAttemptObserver,
+  AgentProviderAttemptRecord,
+  observeAgentProviderAttempt,
+} from "./agent-provider-attempt.js";
+import {
   AgentFailure,
   AgentPermissionConfigurationFailure,
   AgentProviderCompletionEvidence,
@@ -45,7 +52,7 @@ import {
   AgentProviderStartupFailureEvidence,
 } from "./agent-failure.js";
 import { resolvePromptCharacterLimit } from "./config.js";
-import { PromptExecutionJournalError } from "./prompt-execution-journal.js";
+import { PromptExecutionJournalError, preservePromptExecutionControlFailure } from "./prompt-execution-journal.js";
 import {
   MAX_AGENT_ARGUMENT_BYTES,
   MAX_AGENT_ARGV_BYTES,
@@ -322,12 +329,22 @@ class Agent {
    * @param {"ambient"|"none"} [options.flowAttribution="ambient"]
    * @param {import("./agent-invocation-metric.js").DeferredAgentInvocationMetric} [options.deferredMetric]
    * @param {import("./prompt-batching.js").PromptProviderCallAdmission} [options.providerCallAdmission]
+   * @param {AgentProviderAttemptObserver} [options.providerAttemptObserver]
+   * @param {AgentProviderAttemptAdmission} [options.providerAttemptAdmission]
+   * @param {string} [options.logicalInvocationId]
+   * @param {AbortSignal} [options.abortSignal]
    * @param {boolean} [options._dryRun] - Test-only short-circuit
    * @returns {Promise<string>} response text (trimmed)
    */
   async call(prompt, options) {
     const opts = options || {};
     if (opts._dryRun) return "";
+    if (opts.providerAttemptObserver != null && !(opts.providerAttemptObserver instanceof AgentProviderAttemptObserver)) {
+      throw new TypeError("Agent provider attempt observer must be typed");
+    }
+    if (opts.providerAttemptAdmission != null && !(opts.providerAttemptAdmission instanceof AgentProviderAttemptAdmission)) {
+      throw new TypeError("Agent provider attempt admission must be typed");
+    }
     const providerCallAdmission = opts.providerCallAdmission ?? null;
     providerCallAdmission?.claim();
     try {
@@ -363,6 +380,8 @@ class Agent {
     const retry = this.providerRetryPolicy(opts);
     const invocationOptions = {
       ...opts,
+      logicalInvocationId: opts.providerCallAdmission?.invocation?.logicalInvocationId
+        ?? opts.logicalInvocationId ?? crypto.randomUUID(),
       executionWorkDir: executionContext.providerWorkDir,
       spawnCwd: executionContext.spawnCwd,
     };
@@ -650,15 +669,31 @@ class Agent {
         commandId: options.commandId,
       });
       blueprint.projection.assertMaterializedArgvWithinLimit(materializedInvocation.finalArgs);
-      await options.providerCallAdmission?.beforeProviderAttempt({
-        attempt: attempt + 1,
-        index: attempt,
+      const providerAttemptContext = new AgentProviderAttemptContext({
+        attemptId: crypto.randomUUID(),
+        logicalInvocationId: options.logicalInvocationId,
+        commandId: options.commandId ?? null,
+        attemptIndex: attempt,
         maxAttempts,
-        providerKey: resolved.providerKey,
+        provider: resolved.providerKey,
         profileKey: resolved.profileKey,
+        inputCharacters: blueprint.projection.promptCharacterCount,
+        invocation: options.providerCallAdmission?.invocation ?? null,
       });
+      options.abortSignal?.throwIfAborted();
       try {
-        const result = await this._callOnce(resolved, prompt, options, materializedInvocation);
+        await options.providerAttemptAdmission?.beforeProviderAttempt(providerAttemptContext);
+        await options.providerCallAdmission?.beforeProviderAttempt(providerAttemptContext);
+      } catch (error) {
+        if (options.providerCallAdmission?.durable) preservePromptExecutionControlFailure(error);
+        throw error;
+      }
+      options.abortSignal?.throwIfAborted();
+      try {
+        const result = await this._callOnce(resolved, prompt, {
+          ...options,
+          providerAttemptContext,
+        }, materializedInvocation);
         const providerCompletionEvidence = result.providerCompletionEvidence
           .withAttempts(attempt + 1, maxAttempts);
         if (result.text) return { ...result, providerCompletionEvidence };
@@ -668,6 +703,7 @@ class Agent {
           maxAttempts,
         });
       } catch (err) {
+        if (options.abortSignal?.aborted) throw err;
         lastFailure = AgentFailure.from(err)
           .recordAttempts(attempt + 1, maxAttempts);
       }
@@ -696,12 +732,30 @@ class Agent {
     // is always the child cwd too, so flagless providers cannot fall back to
     // the canonical checkout through process.cwd().
     const cwd = options.spawnCwd || path.resolve(this._paths.root || process.cwd());
-
-    if (pendingSchemaWrite) {
-      await fs.promises.writeFile(pendingSchemaWrite.path, pendingSchemaWrite.content);
-    }
+    let providerStarted = false;
+    let attemptObserved = false;
+    const observeSettlement = async ({ status, usage = null }) => {
+      if (attemptObserved || !options.providerAttemptContext) return;
+      attemptObserved = true;
+      await observeAgentProviderAttempt(options.providerAttemptObserver ?? null,
+        new AgentProviderAttemptRecord({ context: options.providerAttemptContext, status, usage, providerStarted }));
+    };
+    const observeFailure = (stdout = "") => {
+      if (attemptObserved) return;
+      return observeSettlement({
+        status: "failed",
+        usage: profile.jsonOutputFlag
+          ? tryParseProvider(provider, String(stdout).trim(), false)?.usage ?? null
+          : null,
+      });
+    };
 
     try {
+      options.abortSignal?.throwIfAborted();
+      if (pendingSchemaWrite) {
+        await fs.promises.writeFile(pendingSchemaWrite.path, pendingSchemaWrite.content);
+      }
+      options.abortSignal?.throwIfAborted();
       return await new Promise((resolve, reject) => {
         const platform = this._supervision.platform || process.platform;
         const spawnChild = this._supervision.spawn || spawn;
@@ -717,6 +771,7 @@ class Agent {
           reject(error);
           return;
         }
+        providerStarted = child.pid != null;
 
         let stdinError = null;
         if (stdinContent != null) {
@@ -754,10 +809,13 @@ class Agent {
         });
 
         const completion = supervisor.wait();
+        const abort = () => supervisor.abort(options.abortSignal.reason);
+        options.abortSignal?.addEventListener("abort", abort, { once: true });
+        if (options.abortSignal?.aborted) abort();
         if (options.activityMonitor) {
           options.activityMonitor.start((timeoutDiagnostic) => supervisor.timeout(timeoutDiagnostic));
         }
-        completion.then(({ code, signal, processTreeQuiescence }) => {
+        completion.then(async ({ code, signal, processTreeQuiescence }) => {
           const providerCompletionEvidence = new AgentProviderCompletionEvidence({
             provider: providerKey,
             profile: profileKey,
@@ -769,23 +827,26 @@ class Agent {
           });
           if (code === 0 && !signal && !stdinError) {
             const trimmed = String(stdout).trim();
+            let result;
             if (profile.jsonOutputFlag) {
               const parsed = tryParseProvider(provider, trimmed);
-              resolve({
+              result = {
                 ...(parsed ?? { text: trimmed, usage: null, cacheable: false }),
                 stdout,
                 stderr,
                 providerCompletionEvidence,
-              });
+              };
             } else {
-              resolve({
+              result = {
                 text: filterStreamingEvents(trimmed),
                 usage: null,
                 stdout,
                 stderr,
                 providerCompletionEvidence,
-              });
+              };
             }
+            await observeSettlement({ status: result.text ? "completed" : "empty", usage: result.usage });
+            resolve(result);
             return;
           }
           const parts = [];
@@ -805,16 +866,16 @@ class Agent {
           error.stdout = stdout;
           error.stderr = stderr;
           error.providerCompletionEvidence = providerCompletionEvidence;
+          await observeFailure(stdout);
           reject(error);
-        }, (err) => {
+        }, async (err) => {
           // The supervisor owns timeout rejection after stdout/stderr listeners
           // have accumulated lexical process output. Preserve that evidence.
-          if (err instanceof AgentTimeoutError) {
-            err.stdout = stdout;
-            err.stderr = stderr;
-          }
+          err.stdout = stdout;
+          err.stderr = stderr;
           const startup = AgentProviderStartupFailureEvidence.fromSpawnFailure(err, { providerKey, profileKey, child });
           if (startup !== null) err.providerStartupEvidence = startup;
+          await observeFailure(stdout);
           reject(formatSpawnError(err, {
             command: profile.command,
             env,
@@ -822,11 +883,26 @@ class Agent {
             profileKey,
             commandId: options.commandId,
           }));
-        }).finally(() => options.activityMonitor?.stop());
+        }).finally(() => {
+          options.abortSignal?.removeEventListener("abort", abort);
+          options.activityMonitor?.stop();
+        });
       });
+    } catch (error) {
+      if (!options.abortSignal?.aborted || providerStarted) await observeFailure(error.stdout);
+      throw error;
     } finally {
       if (pendingSchemaWrite) {
-        await fs.promises.rm(pendingSchemaWrite.path, { force: true });
+        try {
+          await fs.promises.rm(pendingSchemaWrite.path, { force: true });
+        } catch (error) {
+          // Cleanup cannot turn a completed transport attempt into a retry.
+          try {
+            process.stderr.write(`[sennel] agent schema cleanup failed: ${error.message}\n`);
+          } catch {
+            // A failed diagnostic stream also cannot cause a provider retry.
+          }
+        }
       }
     }
   }
@@ -1010,6 +1086,12 @@ class ChildProcessSupervisor {
     this._handleTimeout(timeoutDiagnostic);
   }
 
+  abort(reason) {
+    if (this.settled || this.timeoutOwned) return;
+    this.abortReason = reason instanceof Error ? reason : new Error(String(reason ?? "Agent execution aborted"));
+    this._handleTimeout();
+  }
+
   _handleTimeout(timeoutDiagnostic = null) {
     if (this.settled || this.timeoutOwned) return;
     if (timeoutDiagnostic !== null && !(timeoutDiagnostic instanceof AgentTimeoutDiagnostic)) throw new Error("timeout diagnostic is invalid");
@@ -1017,7 +1099,7 @@ class ChildProcessSupervisor {
     this.timeoutDiagnostic = timeoutDiagnostic;
     if (this.treeDeathPollTimer) clearTimeout(this.treeDeathPollTimer);
     this.treeDeathPollTimer = null;
-    this._emit({ type: "timeout", ...(timeoutDiagnostic === null ? {} : { reason: timeoutDiagnostic.reason }) });
+    this._emit({ type: this.abortReason ? "abort" : "timeout", ...(timeoutDiagnostic === null ? {} : { reason: timeoutDiagnostic.reason }) });
     if (this.platform === "win32") {
       this._signalDirectChild("SIGTERM");
     } else {
@@ -1209,7 +1291,12 @@ class ChildProcessSupervisor {
           unterminatedMembers,
         );
     this._cleanup();
-    this._emit({ type: "settled", outcome: "timeout" });
+    this._emit({ type: "settled", outcome: this.abortReason ? "aborted" : "timeout" });
+    if (this.abortReason) {
+      this.abortReason.stopEvidence = stopEvidence;
+      this.reject(this.abortReason);
+      return;
+    }
     this.reject(new AgentTimeoutError({
       timeoutMs: this.timeoutMs,
       graceMs: this.graceMs,
@@ -1799,11 +1886,11 @@ function filterStreamingEvents(text) {
   return result.join("\n");
 }
 
-function tryParseProvider(provider, stdout) {
+function tryParseProvider(provider, stdout, reportError = true) {
   try {
     return provider.parse(stdout);
   } catch (err) {
-    process.stderr.write(`[sennel] agent output parse failed (${provider.constructor.name}): ${err.message}\n`);
+    if (reportError) process.stderr.write(`[sennel] agent output parse failed (${provider.constructor.name}): ${err.message}\n`);
     return null;
   }
 }

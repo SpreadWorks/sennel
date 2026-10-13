@@ -1,0 +1,7 @@
+{
+  "resource": "metadata",
+  "condition": {
+    "specId": "example-flow",
+    "flowVersion": 1
+  }
+}

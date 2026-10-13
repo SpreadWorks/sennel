@@ -29,20 +29,23 @@ import {
   attachCanonicalCommandResultPublications,
   CanonicalCommandAttemptArtifactHistory,
   attachedCanonicalCommandResultArtifact,
+  CanonicalCommandAttemptArtifactRecord,
 } from "./canonical-command-result.js";
+import { canonicalStepSettlementPublicationIdentity } from "./canonical-step-settlement-publication.js";
 import {
   ReviewDisposition,
   ReviewEvidence,
   ReviewProvenance,
   ReviewTargetState,
 } from "./review-convergence.js";
-import { DraftReviewEvidenceSet } from "./draft-review-artifacts.js";
+import { DraftReviewEvidenceSet, DraftReviewArtifactDocument } from "./draft-review-artifacts.js";
+import { DraftArtifactRevision } from "./draft-artifact-promotion.js";
 import { CanonicalSpecTestTopology } from "./canonical-worker-artifacts.js";
 import { CanonicalReviewInputDescriptor } from "./review-work-unit-input.js";
-import { draftReviewSourceStepIds } from "./draft-review-routes.js";
+import { draftReviewSourceStepIds, draftReviewRouteForRetryPhase, DraftReviewRoute } from "./draft-review-routes.js";
 import { isDraftExecutionPublicationActivity } from "./producer-artifact-readiness.js";
 import { ReviewWorkUnit } from "./review-work-unit.js";
-import { ReviewWorkUnitOutput, ReviewWorkUnitOutputReceipt } from "./review-work-unit-values.js";
+import { ReviewWorkUnitOutput, ReviewWorkUnitOutputReceipt, ReviewWorkUnitTarget } from "./review-work-unit-values.js";
 import { renderTaskMarkdown } from "../../spec/commands/render.js";
 import {
   CanonicalSpecReview,
@@ -366,6 +369,81 @@ function evidenceFor({ artifact, phase: reviewPhase, taskId, treeSha, targetStat
     }),
     disposition,
   });
+}
+
+/** A retained normal Draft Review publication, independent of transient worker files. */
+export class CanonicalDraftReviewObservation {
+  #artifact;
+
+  constructor({ payload, state, route } = {}) {
+    const source = jsonObject(payload, "canonical Draft Review payload");
+    const { workerOutput, canonicalEvidence, canonicalTarget, ...body } = source;
+    if (!isDeepStrictEqual(Object.keys(body).sort(), ["version", "phase", "sourceDraft", "sourceDraftRevision",
+      "generatedAt", "verdict", "summary", "blockingFindings", "advisoryFindings", "repairTargets"].sort())) {
+      throw new TypeError("Canonical Draft Review body requires its complete known fields");
+    }
+    this.document = DraftReviewArtifactDocument.fromStored(body);
+    if (!isDeepStrictEqual(this.document.toJSON(), body)) {
+      throw new TypeError("Canonical Draft Review body differs from its stored document");
+    }
+    if (!(route instanceof DraftReviewRoute)
+      || !isDeepStrictEqual(route, draftReviewRouteForRetryPhase(this.document.phase))
+      || this.document.sourceDraft !== "draft.json"
+      || !isIsoTimestamp(this.document.generatedAt)) {
+      throw new TypeError("Canonical Draft Review requires its exact route and saved generation time");
+    }
+    this.route = route;
+    this.revision = DraftArtifactRevision.from(this.document.sourceDraftRevision);
+    this.revision.assertFlow(state);
+    this.revision.assertReviewSource(route.retryPhase);
+    this.target = new ReviewWorkUnitTarget(canonicalTarget);
+    this.outputReceipt = new ReviewWorkUnitOutputReceipt(workerOutput);
+    const output = ReviewWorkUnitOutput.forReview({ phase: route.retryPhase });
+    if (!isDeepStrictEqual(this.target.toJSON(), canonicalTarget)
+      || !isDeepStrictEqual(this.outputReceipt.toJSON(), workerOutput)
+      || this.outputReceipt.mediaType !== output.mediaType) {
+      throw new TypeError("Canonical Draft Review requires its exact stored target and output receipt");
+    }
+    this.evidence = ReviewEvidence.fromJSON(jsonObject(canonicalEvidence, "canonical Draft Review evidence"));
+    // generatedAt is mandatory above: evidenceFor's writer-time fallback can
+    // never execute while interpreting a retained publication.
+    const expectedEvidence = evidenceFor({ artifact: body, phase: route.retryPhase, taskId: null,
+      treeSha: this.target.treeSha, targetStateDigest: this.target.targetStateDigest,
+      capturedAt: this.document.generatedAt, sourceName: output.basename });
+    if (!isDeepStrictEqual(this.evidence.toJSON(), expectedEvidence.toJSON())) {
+      throw new TypeError("Canonical Draft Review evidence differs from its saved body and target");
+    }
+    this.#artifact = new CanonicalCommandResultArtifact({ logicalKey: route.reviewLogicalKey, payload });
+    Object.freeze(this);
+  }
+
+  assertTarget(target) {
+    if (!this.target.equals(target)) throw new TypeError("Canonical Draft Review target differs from its execution publication");
+    return this;
+  }
+
+  /** Reconstruct only the normal Draft Review execution-publication intent. */
+  settlementPublication(record) {
+    if (!(record instanceof CanonicalCommandAttemptArtifactRecord)
+      || record.nodeId !== this.route.reviewStepId
+      || !isDeepStrictEqual(record.artifact.toJSON(), this.#artifact.toJSON())) {
+      throw new TypeError("Canonical Draft Review requires its exact Attempt publication record");
+    }
+    const saved = record.publicationPayload();
+    const commandResult = structuredClone(saved.result);
+    attachCanonicalCommandResultArtifact(commandResult, record.artifact);
+    attachCanonicalCommandResultPublications(commandResult, canonicalReviewEvidencePublications({
+      evidence: this.evidence, nodeId: this.route.reviewStepId,
+    }));
+    // DraftReviewSettlementWriter supplies none of these additional effects
+    // for an execution publication. This contract excludes terminal connector
+    // publication and any other producer whose intent has not been retained.
+    return canonicalStepSettlementPublicationIdentity({ binding: { stepId: this.route.reviewStepId },
+      settlement: null, draftCompletionApplication: null,
+      commandResult, artifactWrites: [], artifactRemovals: [], artifactBaselines: [],
+      testSourceBaseline: undefined, gatePublication: null, lifecycleResult: null,
+      references: null, specRecord: null, planGateRepairOutcome: null, preparation: null });
+  }
 }
 
 function taskParameters(taskId) {

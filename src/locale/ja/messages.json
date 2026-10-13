@@ -219,6 +219,23 @@
       { "pattern": "^(以下に|以下は)", "flags": "i" }
     ]
   },
+  "docsAi": {
+    "preview": "[docs] DRY-RUN {{command}}: {{files}}ファイル、入力予定{{characters}}文字、{{batches}}バッチ。大量実行の確認要否: {{confirmation}}",
+    "confirmationDetails": "{{command}}: {{files}}ファイル、入力予定{{characters}}文字、{{batches}}バッチ。累積入力予定{{total}}文字、実際の試行入力{{consumed}}文字。\n今回の {{run}} は時間とトークンを多く消費する可能性があります。後続工程・統合・再試行の追加量は現時点では未確定です。",
+    "question": "今回の {{command}} を続けますか？ [y/N] ",
+    "confirmationRequired": "大量のAI実行には確認が必要です。今回の実行を承認するコマンド: {{command}}",
+    "cancelled": "ユーザーの選択によりドキュメントAI実行を中止しました。",
+    "scopeChanged": "計画後にソースまたは実行設定が変更されたため、変更後の範囲について確認が必要です。",
+    "reportTitle": "[docs] AI利用量: 状態={{status}}、provider試行={{calls}}、再試行={{retries}}",
+    "reportColumns": "工程\tInput\tOutput\tCache read\tCache creation",
+    "total": "合計",
+    "unknownTokens": "既知分{{known}} / 未取得{{unknown}}試行",
+    "observationIncomplete": "[docs] 一部の試行を観測できませんでした。トークン量は取得できた分を表示しています。",
+    "externalUnobserved": "[docs] 外部レビューコマンドのAI利用量は集計に含まれていません。",
+    "reportPath": "[docs] 利用量レポート: {{path}}",
+    "reportSaveFailed": "[docs] 利用量レポートを保存できませんでした: {{message}}",
+    "unknownPhases": "[docs] DRY-RUN: 先行AI出力に依存する後続工程の量は未確定です: {{phases}}"
+  },
   "init": {
     "noType": "ERROR: type が設定されていません。.sennel/config.json に \"type\" を設定するか --type オプションを指定してください。",
     "noTemplates": "ERROR: テンプレートファイルがチェーン内に見つかりません",

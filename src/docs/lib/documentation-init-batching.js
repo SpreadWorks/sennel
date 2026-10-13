@@ -3,10 +3,8 @@ import { PromptBuilder } from "../../lib/prompt-builder.js";
 import {
   GLOBAL_PROMPT_ELEMENT_HARD_MAX,
   LinearPromptBatchTopology,
-  PromptBatchExecutor,
   PromptBatchPlan,
   PromptBatchReducer,
-  PromptExecutionLimit,
   PromptInputBuilder,
   PromptRequestEnvelope,
   PromptRequestLimit,
@@ -66,7 +64,7 @@ class ChapterSelectionReducer extends PromptBatchReducer {
 }
 
 export async function selectDocumentationChapters({ chapters, analysisText, purpose, agent, maxCharacters } = {}) {
-  const docsAgent = DocumentationAgent.from(agent);
+  const docsAgent = DocumentationAgent.from(agent).forCommand(agent.commandId || 'docs.init');
   const resolvedLimit = maxCharacters ?? docsAgent.promptCharacterLimit ?? GLOBAL_PROMPT_ELEMENT_HARD_MAX;
   const limit = new PromptRequestLimit({ maxCharacters: resolvedLimit });
   const envelope = new ChapterSelectionEnvelope({ purpose });
@@ -89,10 +87,15 @@ export async function selectDocumentationChapters({ chapters, analysisText, purp
     text: analysisText,
   }));
   const collection = builder.build();
-  const executionLimit = new PromptExecutionLimit({ maxRequestCharacters: resolvedLimit });
+  const executionLimit = docsAgent.createExecutionLimit({ maxRequestCharacters: resolvedLimit });
   const plan = PromptBatchPlan.create({ collection, envelope, limit, topology: new LinearPromptBatchTopology(), executionLimit });
   const options = (request) => ({ commandId: "docs.init", systemPrompt: request.systemPrompt, jsonSchema: request.jsonSchema, fmtFallback: request.fmtFallback });
-  return new PromptBatchExecutor({ executionLimit }).execute({
+  const projectInvocation = docsAgent.supportsProjectInvocation ? (request) => docsAgent.projectInvocation(request.userPrompt, options(request)) : undefined;
+  if (docsAgent.dryRun) {
+    await docsAgent.previewPlan({ plan, projectInvocation, executionLimit });
+    return new Set(chapters.map((chapter) => chapter.fileName));
+  }
+  return docsAgent.createExecutor({ executionLimit }).execute({
     plan,
     responseContract: new ChapterSelectionContract(new Set(chapters.map((chapter) => chapter.fileName))),
     reducer: new ChapterSelectionReducer(),
@@ -100,6 +103,6 @@ export async function selectDocumentationChapters({ chapters, analysisText, purp
       ...options(request),
       providerCallAdmission,
     }),
-    projectInvocation: typeof agent.projectInvocation === "function" ? (request) => docsAgent.projectInvocation(request.userPrompt, options(request)) : undefined,
+    projectInvocation,
   });
 }

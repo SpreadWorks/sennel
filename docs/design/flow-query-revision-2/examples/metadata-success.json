@@ -1,0 +1,396 @@
+{
+  "schemaRevision": 2,
+  "ok": true,
+  "selectedFlowVersion": {
+    "specId": "example-flow",
+    "flowVersion": 1
+  },
+  "availableFlowVersions": [
+    1
+  ],
+  "snapshot": {
+    "id": "sha256:ceb9d047fa7b8dd78b49ac93e46158d1f256971f7a141bb0be2f3b682ea07315",
+    "algorithm": "sha256",
+    "capturedAt": "2026-10-12T00:00:03Z",
+    "confirmationOrder": 3,
+    "catalogHash": "99b42ced4af685a2ca1cc629bb9c95a93c22d28f28a590413e95be1a4e688ac8",
+    "projectionHash": "f813b16e6925d4a41775ed32aa98549ad49d23e431604bf93c9db2fd89a0b7c8",
+    "availableFlowVersionsHash": "080a9ed428559ef602668b4c00f114f1a11c3f6b02a435f0bdc154578e4d7f22"
+  },
+  "resource": "metadata",
+  "completeness": {
+    "scope": "flow-version",
+    "enumeration": "complete",
+    "details": "not-applicable",
+    "sourceHistory": "complete"
+  },
+  "item": {
+    "identity": {
+      "flowId": "flow-example",
+      "flowVersionId": "flow-version-example",
+      "runId": "run-example",
+      "specId": "example-flow",
+      "flowVersion": 1
+    },
+    "history": {
+      "origin": "native",
+      "ledgerCoverage": "complete",
+      "execution": "native",
+      "continuation": null
+    },
+    "lifecycle": {
+      "lifecycle": "active",
+      "blocked": false,
+      "blocker": null,
+      "nextAction": {
+        "operation": "run",
+        "phase": "spec",
+        "stepId": "spec-gate",
+        "taskId": null
+      }
+    },
+    "location": {
+      "phase": "spec",
+      "stepId": "spec-gate",
+      "taskId": null,
+      "git": {
+        "available": false,
+        "commit": null
+      }
+    },
+    "structure": {
+      "phaseId": "spec",
+      "stepIds": [
+        "spec",
+        "spec-review",
+        "spec-repair",
+        "spec-gate",
+        "impl",
+        "T-1-impl"
+      ],
+      "taskIds": [
+        "T-1"
+      ],
+      "nodes": [
+        {
+          "id": "flow",
+          "key": "flow",
+          "kind": "flow",
+          "role": "flow",
+          "displayName": "flow",
+          "displayNameSource": "key",
+          "status": "in_progress",
+          "parentId": null,
+          "childIds": [
+            "spec",
+            "impl"
+          ],
+          "phaseId": null,
+          "taskId": null,
+          "attemptSequence": 0,
+          "result": null,
+          "coverage": {
+            "phaseClassification": "not-applicable",
+            "displayName": "key-fallback"
+          },
+          "definitionStepId": null
+        },
+        {
+          "id": "spec",
+          "key": "spec",
+          "kind": "step",
+          "role": "phase",
+          "displayName": "spec",
+          "displayNameSource": "key",
+          "status": "in_progress",
+          "parentId": "flow",
+          "childIds": [
+            "spec-review",
+            "spec-repair",
+            "spec-gate"
+          ],
+          "phaseId": "spec",
+          "taskId": null,
+          "attemptSequence": 0,
+          "result": null,
+          "coverage": {
+            "phaseClassification": "available",
+            "displayName": "key-fallback"
+          },
+          "definitionStepId": null
+        },
+        {
+          "id": "spec-review",
+          "key": "spec-review",
+          "kind": "step",
+          "role": "step",
+          "displayName": "spec-review",
+          "displayNameSource": "key",
+          "status": "done",
+          "parentId": "spec",
+          "childIds": [],
+          "phaseId": "spec",
+          "taskId": null,
+          "attemptSequence": 1,
+          "result": {
+            "outcome": "passed",
+            "confirmedAt": "2026-10-12T00:00:01Z",
+            "summary": "レビューを保存",
+            "artifactRefs": [
+              {
+                "kind": "result",
+                "id": "c217165a635359536ee3bcc8dbe6f5b23878f66fdeb4a6db70ef82f2ca2a1314"
+              }
+            ]
+          },
+          "coverage": {
+            "phaseClassification": "available",
+            "displayName": "key-fallback"
+          },
+          "definitionStepId": "spec-review"
+        },
+        {
+          "id": "spec-repair",
+          "key": "spec-repair",
+          "kind": "step",
+          "role": "step",
+          "displayName": "spec-repair",
+          "displayNameSource": "key",
+          "status": "done",
+          "parentId": "spec",
+          "childIds": [],
+          "phaseId": "spec",
+          "taskId": null,
+          "attemptSequence": 1,
+          "result": {
+            "outcome": "passed",
+            "confirmedAt": "2026-10-12T00:00:02Z",
+            "summary": "修正を保存",
+            "artifactRefs": [
+              {
+                "kind": "result",
+                "id": "9e4dd88f93fcbbaf2c943b21a80ef7abf565ac273637d67262ddcb8b1e5929cf"
+              }
+            ]
+          },
+          "coverage": {
+            "phaseClassification": "available",
+            "displayName": "key-fallback"
+          },
+          "definitionStepId": "spec-repair"
+        },
+        {
+          "id": "spec-gate",
+          "key": "spec-gate",
+          "kind": "step",
+          "role": "step",
+          "displayName": "spec-gate",
+          "displayNameSource": "key",
+          "status": "pending",
+          "parentId": "spec",
+          "childIds": [],
+          "phaseId": "spec",
+          "taskId": null,
+          "attemptSequence": 0,
+          "result": null,
+          "coverage": {
+            "phaseClassification": "available",
+            "displayName": "key-fallback"
+          },
+          "definitionStepId": "spec-gate"
+        },
+        {
+          "id": "impl",
+          "key": "impl",
+          "kind": "step",
+          "role": "phase",
+          "displayName": "impl",
+          "displayNameSource": "key",
+          "status": "pending",
+          "parentId": "flow",
+          "childIds": [
+            "T-1"
+          ],
+          "phaseId": "impl",
+          "taskId": null,
+          "attemptSequence": 0,
+          "result": null,
+          "coverage": {
+            "phaseClassification": "available",
+            "displayName": "key-fallback"
+          },
+          "definitionStepId": null
+        },
+        {
+          "id": "T-1",
+          "key": "T-1",
+          "kind": "task",
+          "role": "task",
+          "displayName": "例の実装タスク",
+          "displayNameSource": "spec-title",
+          "status": "pending",
+          "parentId": "impl",
+          "childIds": [
+            "T-1-impl"
+          ],
+          "phaseId": "impl",
+          "taskId": "T-1",
+          "attemptSequence": 0,
+          "result": null,
+          "coverage": {
+            "phaseClassification": "not-applicable",
+            "displayName": "available"
+          },
+          "definitionStepId": null
+        },
+        {
+          "id": "T-1-impl",
+          "key": "T-1-impl",
+          "kind": "step",
+          "role": "step",
+          "displayName": "T-1-impl",
+          "displayNameSource": "key",
+          "status": "pending",
+          "parentId": "T-1",
+          "childIds": [],
+          "phaseId": "impl",
+          "taskId": "T-1",
+          "attemptSequence": 0,
+          "result": null,
+          "coverage": {
+            "phaseClassification": "available",
+            "displayName": "key-fallback"
+          },
+          "definitionStepId": "task-impl"
+        }
+      ],
+      "rootNodeId": "flow",
+      "phaseIds": [
+        "spec",
+        "impl"
+      ]
+    },
+    "relationships": {
+      "stepTasks": [
+        {
+          "stepId": "T-1-impl",
+          "taskId": "T-1"
+        }
+      ],
+      "taskNodes": [
+        {
+          "taskId": "T-1",
+          "nodeId": "T-1"
+        }
+      ],
+      "issues": []
+    },
+    "timestamps": {
+      "createdAt": {
+        "value": "2026-10-12T00:00:00Z",
+        "availability": "available",
+        "reason": null,
+        "provenance": "activity-timing.finishedAt"
+      },
+      "updatedAt": {
+        "value": "2026-10-12T00:00:02Z",
+        "availability": "available",
+        "reason": null,
+        "provenance": "activity-timing.finishedAt"
+      },
+      "finalizedAt": {
+        "value": null,
+        "availability": "unavailable",
+        "reason": "finalize_flow Activity evidence is unavailable",
+        "provenance": "confirmed-activity-prefix"
+      }
+    },
+    "capabilities": {},
+    "artifacts": [
+      {
+        "artifactId": "c217165a635359536ee3bcc8dbe6f5b23878f66fdeb4a6db70ef82f2ca2a1314",
+        "metadata": {
+          "logicalKey": null,
+          "schemaRevision": null,
+          "mediaType": "application/json"
+        },
+        "activityIds": [
+          "activity-review-1"
+        ],
+        "nodeIds": [
+          "spec-review"
+        ],
+        "taskIds": [],
+        "artifactKey": "artifact:a96d91880e4a1a75623a8161f6d0abb5588c823a47eb696dff9311cc42539a8c",
+        "kind": "review-observation",
+        "relativePath": "artifacts/observations/review-1.json",
+        "hash": "60a30cc43c021336f0b8dd6f162a56ac2f51b49953a39d3e6093f4a578073434",
+        "algorithm": "sha256",
+        "hashScope": "file-bytes",
+        "size": 1378,
+        "authority": "canonical-flow-artifacts",
+        "cardinality": "collection",
+        "memberId": "observation-review-1",
+        "publicationStep": "spec-review",
+        "retention": "permanent",
+        "producerActivityId": "activity-review-1",
+        "referencingActivityIds": [
+          "activity-review-1"
+        ]
+      },
+      {
+        "artifactId": "9e4dd88f93fcbbaf2c943b21a80ef7abf565ac273637d67262ddcb8b1e5929cf",
+        "metadata": {
+          "logicalKey": null,
+          "schemaRevision": null,
+          "mediaType": "application/json"
+        },
+        "activityIds": [
+          "activity-repair-1"
+        ],
+        "nodeIds": [
+          "spec-repair"
+        ],
+        "taskIds": [],
+        "artifactKey": "artifact:4a2cdb36ccb3fd98884001861ef4c387439f36a6aa53d4ddbb15fe695582e6fa",
+        "kind": "repair-observation",
+        "relativePath": "artifacts/observations/repair-1.json",
+        "hash": "efbaa1a93cf4cb773b1371ba8c7851c7a7ae22d415cfe42ed1d84a98753a53b7",
+        "algorithm": "sha256",
+        "hashScope": "file-bytes",
+        "size": 976,
+        "authority": "canonical-flow-artifacts",
+        "cardinality": "collection",
+        "memberId": "observation-repair-1",
+        "publicationStep": "spec-repair",
+        "retention": "permanent",
+        "producerActivityId": "activity-repair-1",
+        "referencingActivityIds": [
+          "activity-repair-1"
+        ]
+      }
+    ],
+    "metrics": {
+      "activityCount": 3,
+      "artifactCount": 2,
+      "stepCount": 6,
+      "taskCount": 1,
+      "durationMs": 2000,
+      "inputTokens": null,
+      "outputTokens": null,
+      "cacheReadTokens": null,
+      "cost": null,
+      "provenance": {
+        "activityCount": "confirmed-activity-prefix",
+        "artifactCount": "canonical-artifact-catalog",
+        "stepCount": "canonical-state",
+        "taskCount": "canonical-state",
+        "durationMs": "activity-timing-durationMs",
+        "inputTokens": "activity-usage-inputTokens",
+        "outputTokens": "activity-usage-outputTokens",
+        "cacheReadTokens": "activity-usage-cacheReadTokens",
+        "cost": "activity-usage-cost"
+      }
+    }
+  }
+}

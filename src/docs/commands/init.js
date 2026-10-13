@@ -12,7 +12,8 @@ import fs from "fs";
 import path from "path";
 import { parseArgs } from "../../lib/cli.js";
 import { Command } from "../../lib/command.js";
-import { loadPackageField, resolvePromptCharacterLimit } from "../../lib/config.js";
+import { runDocumentationAiCommand, rethrowDocumentationAiStop } from "../lib/documentation-ai-execution.js";
+import { loadPackageField, managedOutputDir, resolvePromptCharacterLimit } from "../../lib/config.js";
 import { resolveTemplates, mergeResolved, resolveChaptersOrder, translateTemplate } from "../lib/template-merger.js";
 import { summaryToText } from "../lib/forge-prompts.js";
 import { createLogger } from "../../lib/progress.js";
@@ -77,6 +78,8 @@ async function aiFilterChapters(chapters, analysis, agent, _root, purpose, maxCh
       maxCharacters,
     });
   } catch (err) {
+    rethrowDocumentationAiStop(err, agent);
+    agent.session?.markPartialError();
     logger.log(`[init] WARN: AI chapter selection failed: ${err.message}`);
     return chapters;
   }
@@ -98,11 +101,11 @@ async function aiFilterChapters(chapters, analysis, agent, _root, purpose, maxCh
 // ---------------------------------------------------------------------------
 // メイン処理
 // ---------------------------------------------------------------------------
-async function runInit(ctx, rawArgs) {
+async function runInit(ctx, rawArgs = [], commandContainer = container) {
   // CLI モード: 引数をパースしてコンテキストを構築
   if (!ctx) {
     const cli = parseArgs(rawArgs, {
-      flags: ["--force", "--dry-run"],
+      flags: ["--yes", "--force", "--dry-run"],
       options: ["--type", "--lang", "--docs-dir"],
       defaults: { type: "", force: false, dryRun: false, lang: "", docsDir: "" },
     });
@@ -110,14 +113,19 @@ async function runInit(ctx, rawArgs) {
       const tu = translate();
       const h = tu.raw("ui:help.cmdHelp.init");
       const o = h.options;
-      console.log([h.usage, "", h.desc, "", "Options:", `  ${o.type}`, `  ${o.force}`, `  ${o.dryRun}`, `  ${o.help}`].join("\n"));
+      console.log([h.usage, "", h.desc, "", "Options:", `  ${tu("ui:docsAi.yes")}`, `  ${o.type}`, `  ${o.force}`, `  ${o.dryRun}`, `  ${o.help}`].join("\n"));
       return;
     }
-    ctx = resolveDocsContext(container, cli, { commandId: "docs.init" });
+    ctx = resolveDocsContext(commandContainer, cli, { commandId: "docs.init" });
     ctx.force = cli.force;
     ctx.dryRun = cli.dryRun;
   }
 
+  ctx.container ||= commandContainer;
+  return runDocumentationAiCommand(ctx, rawArgs, "docs.init", () => executeInit(ctx));
+}
+
+async function executeInit(ctx) {
   const { root, config, outputLang: lang, docsDir, agent, t } = ctx;
   const promptCharacterLimit = resolvePromptCharacterLimit(config);
 
@@ -165,13 +173,9 @@ async function runInit(ctx, rawArgs) {
     throw new Error(t("messages:init.noTemplates"));
   }
 
-  const preview = plannedChapters
-    .map((chapter) => `  - ${path.join(docsDir, chapter.fileName)}`)
-    .join("\n");
-  const plan = new WritePlan(`initialize ${plannedChapters.length} documentation files`, {
-    preview,
-  });
-  plan.add(`create ${docsDir} and write the selected documentation files`, async () => {
+  ctx.aiSession.registerFiles("docs.init", plannedChapters.map((chapter) => path.join(docsDir, chapter.fileName)));
+  ctx.aiSession.registerInputs([path.join(managedOutputDir(root), "analysis.json"), ...plannedChapters.flatMap((chapter) => chapter.resolution.sources.map((source) => source.path))]);
+  const prepareChapters = async () => {
     const chapters = [];
     for (const planned of plannedChapters) {
       const content = await planned.render(agent, root, promptCharacterLimit);
@@ -184,6 +188,8 @@ async function runInit(ctx, rawArgs) {
     const analysis = loadFullAnalysis(root);
     if (configChapters?.length) {
       logger.verbose("config.chapters defined — skipping AI chapter filter");
+    } else if (analysis && agent && ctx.dryRun && plannedChapters.some((planned) => planned.resolution.action === "translate")) {
+      ctx.aiSession.markUnknownPhase("docs.init.selection");
     } else if (analysis && agent) {
       logger.verbose("AI chapter selection...");
       const summaryData = loadAnalysisData(root);
@@ -197,9 +203,23 @@ async function runInit(ctx, rawArgs) {
       );
     }
 
+    return { chapters, filteredChapters };
+  };
+  if (ctx.dryRun) await prepareChapters();
+
+  const preview = plannedChapters
+    .map((chapter) => `  - ${path.join(docsDir, chapter.fileName)}`)
+    .join("\n");
+  const plan = new WritePlan(`initialize ${plannedChapters.length} documentation files`, {
+    preview,
+  });
+  plan.add(`create ${docsDir} and write the selected documentation files`, async () => {
+    const { chapters, filteredChapters } = await prepareChapters();
+
     const totalFiltered = chapters.length - filteredChapters.length;
     logger.verbose(`${filteredChapters.length} template files (${totalFiltered} filtered by AI)`);
 
+    ctx.aiSession.assertActive();
     fs.mkdirSync(docsDir, { recursive: true });
     const outputChapters = filteredChapters.map((ch) => ({ ...ch, outputName: ch.fileName }));
     const conflicts = outputChapters.filter((ch) => fs.existsSync(path.join(docsDir, ch.outputName)));
@@ -219,6 +239,7 @@ async function runInit(ctx, rawArgs) {
       const text = stripBlockDirectives(chapter.content);
       logger.verbose(`merged: ${chapter.fileName} → ${chapter.outputName}`);
       fs.writeFileSync(path.join(docsDir, chapter.outputName), text, "utf8");
+      ctx.aiSession.recordGeneratedFiles([path.join(docsDir, chapter.outputName)]);
     }
 
     logger.verbose(`done. ${outputChapters.length} files initialized in docs/`);
@@ -233,6 +254,6 @@ export { aiFilterChapters };
 export default class DocsInitCommand extends Command {
   static outputMode = "raw";
   async execute(ctx) {
-    return runInit(ctx.docsCtx, ctx._rawArgs || []);
+    return runInit(ctx.docsCtx, ctx._rawArgs || [], ctx.container);
   }
 }

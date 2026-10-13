@@ -1,4 +1,4 @@
-import { writeUncheckedWorkerSubmission } from "../../support/infrastructure/worker-artifact.js";
+import { writeUncheckedWorkerSubmission, workerArtifactJson } from "../../support/infrastructure/worker-artifact.js";
 import assert from "node:assert/strict";
 import { CurrentFlowStateInvariantError } from "../../../src/flow/lib/current-flow-state.js";
 import { CurrentFlowStateConflictError } from "../../../src/flow/lib/current-flow-state-conflict-error.js";
@@ -34,6 +34,13 @@ import { DraftGateRepairStep } from "../../../src/flow/steps/draft/draft-gate-re
 import { StepFactory } from "../../../src/flow/engine/step-factory.js";
 import { DraftRepairConnector } from "../../../src/flow/engine/connectors/draft/draft-repair-connector.js";
 import RunDispatchCommand from "../../../src/flow/lib/run-dispatch.js";
+import RunRecoverDraftExecutionCommand from "../../../src/flow/lib/run-recover-draft-execution.js";
+import RunReviewCommand from "../../../src/flow/lib/run-review.js";
+import { ReviewWorkUnit } from "../../../src/flow/lib/review-work-unit.js";
+import { FLOW_COMMANDS } from "../../../src/flow/registry.js";
+import { canonicalAttemptOwner } from "../../../src/flow/lib/repair-attempt-lineage.js";
+import { canonicalPlanGateRepairForTarget } from "../../../src/flow/lib/plan-gate-repair.js";
+import { FlowTargetBinding } from "../../../src/lib/flow-target-guard.js";
 import { draftWorkerStepRegistration } from "../../../src/flow/engine/composition/draft.js";
 import { CanonicalDraftReviewSource } from "../../../src/flow/lib/canonical-review-artifacts.js";
 import { findStepById } from "../../../src/flow/lib/step-tree.js";
@@ -42,6 +49,7 @@ import { createTmpDir, removeTmpDir } from "../../support/builders/tmp-dir.js";
 import { commitAll, initGitRepo } from "../../support/infrastructure/git-repo.js";
 import { DraftGateRepairScenario } from "../../support/infrastructure/draft-gate-repair-scenario.js";
 import { CanonicalFlowFixture, canonicalDraftDocument } from "../../support/infrastructure/flow-setup.js";
+import { dispatchContainer, requestInput, requestPayloadPath } from "../../support/infrastructure/flow-dispatch-scenario.js";
 
 function digest(value) {
   return crypto.createHash("sha256").update(JSON.stringify(value)).digest("hex");
@@ -498,6 +506,110 @@ describe("dedicated draft Gate repair handoff", () => {
       assert.equal(failure.result.stepResult.kind, "draft-gate-repair-error");
       assert.equal(failure.result.draftSettlementReceipt.settlementKind, "failure");
       assert.equal(catalogEntry(value.flowManager, value.scenario.specId, "plan.gate.repair.outcome"), null);
+
+      const priorActivities = value.flowManager.activityLedger(value.scenario.specId);
+      const owner = canonicalAttemptOwner({ state, activities: priorActivities, targetStepId: "draft-gate-repair" });
+      const repair = canonicalPlanGateRepairForTarget({ flowManager: value.flowManager,
+        state: value.flowManager.loadReadOnly(value.scenario.specId), targetStepId: "draft-gate-repair" });
+      assert.equal(owner.transition.operation, "plan_gate_repair");
+      let reloaded = new FlowManager({ root: value.root, mainRoot: value.root, inWorktree: false, specId: value.scenario.specId });
+      const flowState = reloaded.loadReadOnly(value.scenario.specId);
+      const recovered = new RunRecoverDraftExecutionCommand().execute({
+        ...value.scenario.ctx, flowManager: reloaded, flowState,
+        expectBinding: FlowTargetBinding.capture({ flowState, mainRoot: value.root, authorityRoot: value.root }).serialize(),
+        reason: "Correct the accepted worker integrity failure and execute the same authorized repair again.",
+      });
+      assert.equal(recovered.ok, true, JSON.stringify(recovered));
+      reloaded = new FlowManager({ root: value.root, mainRoot: value.root, inWorktree: false, specId: value.scenario.specId });
+      const replacement = reloaded.canonicalState(value.scenario.specId);
+      assert.equal(replacement.current.at(-1), "draft-gate-repair");
+      assert.notEqual(replacement.attempt.id, state.attempt.id);
+      assert.equal(replacement.attempt.sequence, state.attempt.sequence + 1);
+      assert.deepEqual(replacement.attempt.consumption.toJSON(), state.attempt.consumption.toJSON());
+      assert.deepEqual(reloaded.activityLedger(value.scenario.specId).slice(0, priorActivities.length), priorActivities);
+      const inherited = canonicalAttemptOwner({ state: replacement,
+        activities: reloaded.activityLedger(value.scenario.specId), targetStepId: "draft-gate-repair" });
+      assert.equal(inherited.id, owner.id);
+      assert.throws(() => canonicalAttemptOwner({ state: replacement,
+        activities: reloaded.activityLedger(value.scenario.specId).filter((entry) => entry.id !== failure.id),
+        targetStepId: "draft-gate-repair" }), /exact saved Error predecessor/);
+      const resumedRepair = canonicalPlanGateRepairForTarget({ flowManager: reloaded,
+        state: reloaded.loadReadOnly(value.scenario.specId), targetStepId: "draft-gate-repair" });
+      assert.equal(resumedRepair.idempotencyKey, repair.idempotencyKey);
+      const observationRepair = resumedRepair.observationRepair({ state: replacement,
+        activities: reloaded.activityLedger(value.scenario.specId), handoffRevision: request.inputRevision });
+      assert.deepEqual(observationRepair.targetAttempt.toJSON(), { id: replacement.attempt.id, sequence: replacement.attempt.sequence });
+      assert.equal(observationRepair.publicationActivityId, owner.id);
+
+      const goal = "Retain the complete behavior after explicit Step Error recovery.";
+      let workerRequest;
+      const agent = { async call(_prompt, options) {
+        const requestPath = options.executionEnvironment.SENNEL_FLOW_HANDOFF_REQUEST;
+        workerRequest = JSON.parse(fs.readFileSync(requestPath, "utf8"));
+        assert.equal(workerRequest.stepId, "draft-gate-repair");
+        assert.notEqual(workerRequest.dispatchInvocationId, request.dispatchInvocationId);
+        const execution = reloaded.draftStepExecutionState({ binding: new DraftWorkerExecutionStepBinding({
+          flowManager: reloaded, specId: value.scenario.specId, stepId: "draft-gate-repair" }) });
+        assert.equal(execution.lifecycle.phase, "claimed");
+        assert.equal(execution.lifecycle.claim.dispatchInvocationId, workerRequest.dispatchInvocationId);
+        assert.equal(reloaded.canonicalState(value.scenario.specId).attempt.id, replacement.attempt.id);
+        const recurrence = requestInput(workerRequest, "gate-observation-recurrence.json").document;
+        fs.writeFileSync(requestPayloadPath(workerRequest, "draft-gate-repair.json"), workerArtifactJson({
+          version: 1, baseRevision: `sha256:${workerRequest.inputRevision}`,
+          operations: [{ kind: "replace-value", path: "goal", replacement: goal, reason: "Restore the retained behavior." }],
+          report: { version: 1, summary: "The authorized repair now passes integrity checks.",
+            results: recurrence.entries.map((entry) => ({ fingerprint: entry.fingerprint,
+              strategy: "Restore the retained behavior.", summary: "The authorized repair now passes integrity checks.",
+              priorRepairInsufficiency: entry.recurrenceCount > 0 ? "The previous output was rejected by integrity checks." : null })) },
+        }));
+        sealWorkerArtifactHandoff({ requestPath, invocationId: workerRequest.dispatchInvocationId });
+        return "sealed";
+      } };
+      const dispatcher = new RunDispatchCommand({ agent, maxDispatches: 1, repositoryFingerprint: () => "draft-repair-error-recovery" });
+      dispatcher.container = dispatchContainer({ root: value.root, flowManager: reloaded, agent });
+      const dispatchState = reloaded.loadReadOnly(value.scenario.specId);
+      const dispatched = await dispatcher.execute({ ...value.scenario.ctx, flowManager: reloaded, flowState: dispatchState,
+        expectBinding: FlowTargetBinding.capture({ flowState: dispatchState, mainRoot: value.root, authorityRoot: value.root }).serialize() });
+      assert.equal(dispatched.errors[0].code, "FLOW_DISPATCH_LIMIT_REACHED", JSON.stringify(dispatched));
+      assert.ok(workerRequest);
+      reloaded = new FlowManager({ root: value.root, mainRoot: value.root, inWorktree: false, specId: value.scenario.specId });
+      assert.equal(reloaded.canonicalState(value.scenario.specId).nextAction().nodeId, "draft-coverage-review");
+      const draft = reloaded.readArtifact({ specId: value.scenario.specId, logicalKey: "draft", consumerNodeId: "draft-coverage-review" });
+      assert.equal(JSON.parse(draft.bytes).goal, goal);
+      const outcome = JSON.parse(reloaded.readArtifact({ specId: value.scenario.specId, logicalKey: "plan.gate.repair.outcome",
+        parameters: { repairId: repair.idempotencyKey }, consumerNodeId: "system" }).bytes);
+      assert.deepEqual(outcome.targetAttempt, { id: replacement.attempt.id, sequence: replacement.attempt.sequence });
+      assert.equal(outcome.report.outputEvidenceDigest, draft.descriptor.hash);
+      assert.equal(outcome.disposition, "applied");
+      const source = new CanonicalDraftReviewSource({ flowManager: reloaded,
+        state: reloaded.loadReadOnly(value.scenario.specId), phase: "draft-coverage" });
+      assert.equal(source.sourceNodeId, "draft-gate-repair");
+      assert.equal(source.revision().digest, draft.descriptor.hash);
+      reloaded.beginNextAction(value.scenario.specId);
+      assert.equal(reloaded.canonicalState(value.scenario.specId).current.at(-1), "draft-coverage-review");
+      let coverageCalls = 0;
+      const reviewCommand = new RunReviewCommand({ resolveTreeSha: () => "a".repeat(40), resolveTargetStateDigest: () => "b".repeat(64),
+        runCommand(_command, _args, options) {
+          coverageCalls++;
+          const source = JSON.parse(options.env.SENNEL_REVIEW_DRAFT_SOURCE);
+          assert.equal(source.revision.digest, draft.descriptor.hash);
+          assert.equal(JSON.parse(fs.readFileSync(source.sourcePath, "utf8")).goal, goal);
+          const work = ReviewWorkUnit.fromEnvironment(options.env);
+          fs.writeFileSync(`${work.root}/${work.manifestDocument.output.basename}`, workerArtifactJson({ version: 2,
+            phase: "draft-coverage", sourceDraft: "draft.json", sourceDraftRevision: source.revision,
+            generatedAt: "2026-10-13T00:00:00.000Z", verdict: "PASS", summary: "The restored repair is covered.",
+            blockingFindings: [], advisoryFindings: [], repairTargets: [] }));
+          work.seal();
+          return { ok: true, status: 0, stdout: "", stderr: "", signal: null, killed: false };
+        } });
+      const reviewContext = { ...value.scenario.ctx, flowManager: reloaded,
+        flowState: reloaded.loadReadOnly(value.scenario.specId), phase: "draft", config: {} };
+      const reviewed = await reviewCommand.execute(reviewContext);
+      await FLOW_COMMANDS.run.review.post(reviewContext, reviewed);
+      assert.equal(coverageCalls, 1);
+      const consumed = new FlowManager({ root: value.root, mainRoot: value.root, inWorktree: false, specId: value.scenario.specId });
+      assert.equal(consumed.canonicalState(value.scenario.specId).nextAction().nodeId, "draft-gate");
+      assert.deepEqual(consumed.activityLedger(value.scenario.specId).slice(0, priorActivities.length), priorActivities);
     } finally {
       removeTmpDir(value.root);
     }

@@ -1,0 +1,256 @@
+{
+  "schemaRevision": 2,
+  "ok": true,
+  "selectedFlowVersion": {
+    "specId": "example-flow",
+    "flowVersion": 1
+  },
+  "availableFlowVersions": [
+    1
+  ],
+  "snapshot": {
+    "id": "sha256:ceb9d047fa7b8dd78b49ac93e46158d1f256971f7a141bb0be2f3b682ea07315",
+    "algorithm": "sha256",
+    "capturedAt": "2026-10-12T00:00:03Z",
+    "confirmationOrder": 3,
+    "catalogHash": "99b42ced4af685a2ca1cc629bb9c95a93c22d28f28a590413e95be1a4e688ac8",
+    "projectionHash": "f813b16e6925d4a41775ed32aa98549ad49d23e431604bf93c9db2fd89a0b7c8",
+    "availableFlowVersionsHash": "080a9ed428559ef602668b4c00f114f1a11c3f6b02a435f0bdc154578e4d7f22"
+  },
+  "resource": "activities",
+  "completeness": {
+    "scope": "filtered-activities",
+    "enumeration": "complete",
+    "details": "complete",
+    "sourceHistory": "complete"
+  },
+  "items": [
+    {
+      "activity": {
+        "id": "activity-review-1",
+        "type": "attempt_confirmed"
+      },
+      "node": {
+        "id": "spec-review",
+        "key": "spec-review"
+      },
+      "task": null,
+      "attempt": {
+        "id": "attempt-review-1",
+        "sequence": 1
+      },
+      "sequence": 1,
+      "confirmationOrder": 2,
+      "transition": {
+        "operation": "confirm_attempt",
+        "status": "done"
+      },
+      "timing": {
+        "startedAt": "2026-10-12T00:00:00Z",
+        "finishedAt": "2026-10-12T00:00:01Z",
+        "durationMs": 1000
+      },
+      "usage": null,
+      "outcome": {
+        "outcome": "passed",
+        "confirmedAt": "2026-10-12T00:00:01Z",
+        "summary": "レビューを保存",
+        "artifactRefs": [
+          {
+            "kind": "result",
+            "id": "c217165a635359536ee3bcc8dbe6f5b23878f66fdeb4a6db70ef82f2ca2a1314"
+          }
+        ]
+      },
+      "failure": null,
+      "blocker": null,
+      "incomplete": null,
+      "metric": null,
+      "note": null,
+      "evaluationIds": [
+        "legacy-review-1"
+      ],
+      "findingIds": [
+        "review-finding-1"
+      ],
+      "repairIds": [],
+      "artifactIds": [
+        "c217165a635359536ee3bcc8dbe6f5b23878f66fdeb4a6db70ef82f2ca2a1314"
+      ],
+      "detailRefs": {
+        "evaluations": [
+          "evaluation:62f65f6e6ef13b5b61e97744da27df40901e8843034b58f1eba5e94f6dbaa05e"
+        ],
+        "findings": [
+          "finding:c44199a230c406e8168cdbdfe04274dbcc3ea73261b00e16b94c841e18fe4f7c"
+        ],
+        "repairs": []
+      },
+      "referenceBindings": {
+        "evaluations": [
+          {
+            "reference": {
+              "id": "legacy-review-1",
+              "label": "Spec Review"
+            },
+            "detailIds": [
+              "evaluation:62f65f6e6ef13b5b61e97744da27df40901e8843034b58f1eba5e94f6dbaa05e"
+            ],
+            "availability": "available",
+            "reason": null
+          }
+        ],
+        "findings": [
+          {
+            "reference": {
+              "id": "review-finding-1",
+              "label": "受入条件が曖昧"
+            },
+            "detailIds": [
+              "finding:c44199a230c406e8168cdbdfe04274dbcc3ea73261b00e16b94c841e18fe4f7c"
+            ],
+            "availability": "available",
+            "reason": null
+          }
+        ],
+        "repairs": []
+      },
+      "detailCoverage": {
+        "evaluations": {
+          "availability": "available",
+          "reason": null,
+          "count": 1
+        },
+        "findings": {
+          "availability": "available",
+          "reason": null,
+          "count": 1
+        },
+        "repairs": {
+          "availability": "available",
+          "reason": null,
+          "count": 0
+        }
+      }
+    }
+  ],
+  "entities": {
+    "evaluations": [
+      {
+        "id": "evaluation:62f65f6e6ef13b5b61e97744da27df40901e8843034b58f1eba5e94f6dbaa05e",
+        "kind": "evaluation",
+        "source": {
+          "artifactId": "c217165a635359536ee3bcc8dbe6f5b23878f66fdeb4a6db70ef82f2ca2a1314",
+          "artifactKey": "artifact:a96d91880e4a1a75623a8161f6d0abb5588c823a47eb696dff9311cc42539a8c",
+          "relativePath": "artifacts/observations/review-1.json",
+          "hash": "60a30cc43c021336f0b8dd6f162a56ac2f51b49953a39d3e6093f4a578073434",
+          "producerActivityId": "activity-review-1",
+          "nodeId": "spec-review",
+          "attemptId": "attempt-review-1",
+          "sourceEntryId": "review-evaluation-1",
+          "observationId": "observation-review-1",
+          "format": "json",
+          "jsonPointer": "/evaluation"
+        },
+        "supportingSources": [],
+        "activityIds": [
+          "activity-review-1"
+        ],
+        "evaluationIds": [],
+        "findingIds": [
+          "finding:c44199a230c406e8168cdbdfe04274dbcc3ea73261b00e16b94c841e18fe4f7c"
+        ],
+        "repairIds": [],
+        "title": "Spec Review",
+        "summary": "blocking finding を保存",
+        "explanation": "受入条件の確認結果",
+        "result": {
+          "outcome": "failed",
+          "nativeCode": "REJECTED"
+        },
+        "criteria": [
+          {
+            "id": "criterion-acceptance",
+            "title": "観測可能な受入条件",
+            "expected": "期待する結果が明確",
+            "observed": "受入条件が曖昧",
+            "evidence": "R-1 の記述",
+            "result": "failed",
+            "category": null,
+            "authority": null
+          }
+        ],
+        "specific": null
+      }
+    ],
+    "findings": [
+      {
+        "id": "finding:c44199a230c406e8168cdbdfe04274dbcc3ea73261b00e16b94c841e18fe4f7c",
+        "kind": "finding",
+        "source": {
+          "artifactId": "c217165a635359536ee3bcc8dbe6f5b23878f66fdeb4a6db70ef82f2ca2a1314",
+          "artifactKey": "artifact:a96d91880e4a1a75623a8161f6d0abb5588c823a47eb696dff9311cc42539a8c",
+          "relativePath": "artifacts/observations/review-1.json",
+          "hash": "60a30cc43c021336f0b8dd6f162a56ac2f51b49953a39d3e6093f4a578073434",
+          "producerActivityId": "activity-review-1",
+          "nodeId": "spec-review",
+          "attemptId": "attempt-review-1",
+          "sourceEntryId": "review-finding-1",
+          "observationId": "observation-review-1",
+          "format": "json",
+          "jsonPointer": "/findings/0"
+        },
+        "supportingSources": [],
+        "activityIds": [
+          "activity-review-1"
+        ],
+        "evaluationIds": [
+          "evaluation:62f65f6e6ef13b5b61e97744da27df40901e8843034b58f1eba5e94f6dbaa05e"
+        ],
+        "findingIds": [],
+        "repairIds": [],
+        "identity": {
+          "sourceArtifact": "spec.review",
+          "sourceStep": "spec-review",
+          "sourceFindingId": "review-finding-1",
+          "fingerprint": "1728a240757a4c3b57ab068624d070f7fef53b273d0c89fca59633764e0c24b3"
+        },
+        "findingKey": "finding:e0751635d58b4f38a1f92c7611fd6c4c45969225bc4d7d7c3e1d549c3682c148",
+        "title": "受入条件が曖昧",
+        "description": "達成判定に必要な観測可能な結果がない",
+        "reason": "達成判定ができない",
+        "expected": "観測できる結果を記載する",
+        "observed": "結果の記載がない",
+        "recommendation": "R-1 の記述を更新する",
+        "evidence": "Spec requirement R-1",
+        "severity": "blocking",
+        "status": {
+          "value": "open",
+          "availability": "available",
+          "reason": null,
+          "nativeValue": "open"
+        },
+        "currentState": null,
+        "specific": {
+          "schemaId": "spec-review-finding@1",
+          "kind": "blocking",
+          "target": "R-1.desc",
+          "issue": "受入条件が曖昧",
+          "requiredChange": "観測できる結果を追記する",
+          "whyBlocking": "達成判定ができない",
+          "improvement": null,
+          "whyNonBlocking": null,
+          "triage": null
+        }
+      }
+    ],
+    "repairs": []
+  },
+  "pageInfo": {
+    "limit": 1,
+    "endCursor": "eyJkaWdlc3QiOiJhOGQ1ODQ2YTkzNjVlYTQ3NDI4OTdiMjllYTY4ODliZGUwMWEyODZlZTZkNTljMmM0MTBmYThkYmE3MWI1NTQ5IiwiZmxvd1ZlcnNpb24iOjEsImd0ZSI6IjIwMjYtMTAtMTJUMDA6MDA6MDFaIiwibHQiOiIyMDI2LTEwLTEyVDAwOjAwOjAzWiIsIm9yZGVyIjoyLCJyZXNvdXJjZSI6ImFjdGl2aXRpZXMiLCJzY2hlbWFSZXZpc2lvbiI6Miwic25hcHNob3RJZCI6InNoYTI1NjpjZWI5ZDA0N2ZhN2I4ZGQ3OGI0OWFjOTNlNDYxNThkMWYyNTY5NzFmN2ExNDFiYjBiZTJmM2I2ODJlYTA3MzE1Iiwic3BlY0lkIjoiZXhhbXBsZS1mbG93IiwidmVyc2lvbiI6Mn0",
+    "hasNext": true,
+    "returnedItems": 1,
+    "totalItems": 2
+  }
+}

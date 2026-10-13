@@ -831,6 +831,7 @@ it("retains the producer correction limit across restarts and refuses a fourth w
   try {
     const specId = "824-draft-producer-exhaustion";
     let manager = startRepairBoundary(root, specId, "run-draft-producer-exhaustion");
+    const selectedAttempt = manager.canonicalState(specId).attempt;
     const original = manager.readArtifact({ specId, logicalKey: "draft", consumerNodeId: "draft-gate-repair" }).bytes;
     let calls = 0;
     const agent = { async call(_prompt, options) {
@@ -848,6 +849,13 @@ it("retains the producer correction limit across restarts and refuses a fourth w
       const run = activeDispatch(root, specId, manager, agent);
       await run.dispatcher.execute(run.context);
       manager = new FlowManager({ root, mainRoot: root, inWorktree: false, specId });
+      const checkpoint = executionState(manager, specId);
+      assert.equal(checkpoint.lifecycle.phase, "checkpoint");
+      assert.equal(checkpoint.lifecycle.executionGeneration, i + 1);
+      assert.equal(checkpoint.lifecycle.claim, null);
+      assert.equal(checkpoint.lifecycle.rejection.code, "FLOW_DRAFT_GATE_REPAIR_INVALID");
+      assert.equal(manager.canonicalState(specId).attempt.id, selectedAttempt.id);
+      assert.equal(manager.canonicalState(specId).attempt.sequence, selectedAttempt.sequence);
     }
     assert.equal(calls, 3);
     const state = manager.canonicalState(specId);
@@ -879,6 +887,8 @@ it("retains different rejected invocations in the issue log without retrying una
   try {
     const specId = "825-draft-rejection-diagnostics";
     let manager = startRepairBoundary(root, specId, "run-draft-rejection-diagnostics");
+    const selectedAttempt = manager.canonicalState(specId).attempt;
+    const original = manager.readArtifact({ specId, logicalKey: "draft", consumerNodeId: "draft-gate-repair" }).bytes;
     let calls = 0;
     const invocations = [];
     const agent = { async call(_prompt, options) {
@@ -901,13 +911,29 @@ it("retains different rejected invocations in the issue log without retrying una
       assert.equal(result.errors[0].code, "FLOW_DRAFT_GATE_REPAIR_INVALID");
       assert.equal(calls, index + 1);
       manager = new FlowManager({ root, mainRoot: root, inWorktree: false, specId });
+      const checkpoint = executionState(manager, specId);
+      assert.equal(checkpoint.lifecycle.phase, "checkpoint");
+      assert.equal(checkpoint.lifecycle.executionGeneration, index + 1);
+      assert.equal(checkpoint.lifecycle.claim, null);
+      assert.equal(checkpoint.lifecycle.rejection, null);
+      assert.equal(manager.canonicalState(specId).attempt.id, selectedAttempt.id);
+      assert.equal(manager.canonicalState(specId).attempt.sequence, selectedAttempt.sequence);
+      assert.deepEqual(manager.readArtifact({ specId, logicalKey: "draft", consumerNodeId: "draft-gate-repair" }).bytes, original);
     }
     const entries = JSON.parse(manager.readArtifact({ specId, logicalKey: "issue.log", consumerNodeId: "draft-gate-repair" }).bytes).entries
       .filter((entry) => entry.reason.startsWith("Worker artifact handoff invalid:"));
     assert.equal(entries.length, 2);
+    assert.equal(new Set(invocations).size, 2);
     assert.notEqual(entries[0].issueLogId, entries[1].issueLogId);
     for (let i = 0; i < 2; i++) assert.ok(entries[i].issueLogId.includes(invocations[i]));
     assert.deepEqual(manager.canonicalState(specId).attempt.consumption.toJSON(), { semantic: 0, tooling: 0 });
+    const ledger = manager.activityLedger(specId);
+    const issueLog = manager.readArtifact({ specId, logicalKey: "issue.log", consumerNodeId: "draft-gate-repair" }).bytes;
+    const replay = manager.appendIssueLog({ specId, entry: entries[1], idempotencyKey: entries[1].issueLogId });
+    assert.equal(replay.appended, false);
+    const reloaded = new FlowManager({ root, mainRoot: root, inWorktree: false, specId });
+    assert.deepEqual(reloaded.activityLedger(specId), ledger);
+    assert.deepEqual(reloaded.readArtifact({ specId, logicalKey: "issue.log", consumerNodeId: "draft-gate-repair" }).bytes, issueLog);
   } finally { removeTmpDir(root); }
 });
 

@@ -217,6 +217,26 @@ built-in の `agent.profiles` と `agent.providers` は package から実行時�
 
 ---
 
+### 大量のAI実行と利用量レポート
+
+変更のないファイルは保存済みの解析・説明を再利用します。初回生成や変更が多い場合に、AI入力の予定量を確認する閾値を `.sennel/config.json` で設定できます。
+
+```json
+{
+  "docs": {
+    "ai": {
+      "confirmationThresholdCharacters": 1000000
+    }
+  }
+}
+```
+
+既定は入力予定のプロンプト合計100万文字です。承認済みの実行を、累積結果の文字数で停止する上限ではありません。1回の入力を制限する `agent.promptCharacterLimit` は維持し、必要な場合は分割します。後続工程や再試行による追加量は、開始時点で確定できない場合があります。
+
+`sennel docs build --dry-run` で、AI呼出し・生成ファイルの書込みなしに、現在確定している入力計画を確認できます。対話なしで大量実行を承認する場合は `sennel docs build --yes` を指定します。個別のAIドキュメントコマンドでも使えます。再生成を指定する `--force` とは独立しています。非対話実行で確認が必要になると、`DOCS_AI_CONFIRMATION_REQUIRED` と承認用の再実行コマンドを表示します。
+
+完了・取消し・失敗時に Input、Output、Cache read、Cache creation を stderr に表示し、`.sennel/output/docs-ai-usage/<runId>.json` に保存します。実際のprovider再試行分も含みます。providerが報告しない値は実測0として扱わず「未取得」と表示します。Inputはproviderの正規化済み値を使い、キャッシュ読取りとの二重加算を避けます。forgeの外部レビューコマンド内のAI消費は集計対象外です。dry-runでは利用量レポートを保存しません。
+
 <!-- {{data("base.docs.nav")}} -->
 [← CLI コマンドリファレンス](cli_commands.md) | [内部設計 →](internal_design.md)
 <!-- {{/data}} -->

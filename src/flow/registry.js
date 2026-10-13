@@ -242,7 +242,12 @@ async function executePublishedDraftReviewStep(ctx, result) {
   if (published.kind !== publicationResult.kind) {
     throw new Error("Draft review publication Step selected an invalid Result");
   }
-  const step = (await registration.create({ ctx, binding, commandResult: result })).step;
+  let step;
+  try {
+    step = (await registration.create({ ctx, binding, commandResult: result })).step;
+  } catch (error) {
+    throw fatalDraftReviewFailure(error);
+  }
   let output;
   try {
     output = await step.execute();
@@ -2498,16 +2503,20 @@ export const FLOW_COMMANDS = {
       command: () => import("./lib/run-recover-draft-execution.js"),
       args: {
         flags: FLOW_TARGET_GUARD_FLAGS,
-        options: [...FLOW_RUN_OPTIONS],
+        options: [...FLOW_RUN_OPTIONS, "--reason"],
       },
       help: [
-        `Usage: sennel flow run recover-draft-execution ${FLOW_TARGET_GUARD_USAGE}`,
+        `Usage: sennel flow run recover-draft-execution [--reason <text>] ${FLOW_TARGET_GUARD_USAGE}`,
+        "",
+        "Explicitly recover a persisted Draft Step Error after resolving its cause.",
+        "Require a reason and the exact failed Attempt and Error receipt; preserve its evidence and retry consumption.",
+        "Start a replacement Attempt for the same Step without running its worker or advancing the Flow.",
         "",
         "Reconcile one legacy conditional Draft checkpoint with or without a subsequent stale-input admission failure.",
         "Preserve the Attempt and audit ledger; require the exact prior claim and unchanged canonical inputs.",
-        "This command does not execute a worker or advance the Step.",
         "",
         "Options:",
+        "  --reason <text>         Required for Step Error recovery; describe the resolved cause and re-execution decision",
         ...FLOW_TARGET_GUARD_HELP_LINES,
         "  --agent-work-dir <path>  Per-invocation agent/tmp base directory",
       ].join("\n"),

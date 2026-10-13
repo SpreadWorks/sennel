@@ -80,9 +80,8 @@ export class SpecGateRepairReviewFacts {
       && this.sourceSpecDigest !== null && this.sourceSpecDigest === this.resultSpecDigest;
     this.unresolvedBlocking = this.findings.some((finding) => finding.unresolvedBlocking);
     this.requiresReview = !this.reviewInputPreserved || this.unresolvedBlocking;
-    this.reason = this.unresolvedBlocking ? "unresolved-blocking-review"
-      : source === null ? "review-evidence-unavailable"
-        : !this.reviewInputPreserved ? "review-input-preservation-unproven" : "exact-reviewed-input-preserved";
+    this.reason = SpecGateRepairReviewFacts.reasonFor({ unresolvedBlocking: this.unresolvedBlocking,
+      sourceReviewAvailable: source !== null, reviewInputPreserved: this.reviewInputPreserved });
     freeze(this.sourceReviewIdentity);
     Object.freeze(this);
   }
@@ -93,6 +92,11 @@ export class SpecGateRepairReviewFacts {
       resultSpecDigest: this.resultSpecDigest, findings: this.findings.map((finding) => finding.toJSON()),
       reviewInputPreserved: this.reviewInputPreserved, unresolvedBlocking: this.unresolvedBlocking,
       requiresReview: this.requiresReview, reason: this.reason };
+  }
+  static reasonFor({ unresolvedBlocking, sourceReviewAvailable, reviewInputPreserved }) {
+    return unresolvedBlocking ? "unresolved-blocking-review"
+      : !sourceReviewAvailable ? "review-evidence-unavailable"
+        : !reviewInputPreserved ? "review-input-preservation-unproven" : "exact-reviewed-input-preserved";
   }
   static fromJSON(value, inputs) {
     const facts = new SpecGateRepairReviewFacts(inputs);

@@ -1,5 +1,5 @@
 import { CanonicalFlowArtifactBaseline, CanonicalWorkerSpecPublication } from "../lib/current-flow-state.js";
-import { StepPersistenceFailure } from "../lib/definition-lifecycle-failure.js";
+import { StepPersistenceFailure } from "../lib/step-persistence-failure.js";
 import { CurrentFlowStateConflictError } from "../lib/current-flow-state-conflict-error.js";
 import { SpecReviewSettlementApplication } from "../lib/spec-step-connection.js";
 import { StepErrorDecision } from "../definition.js";

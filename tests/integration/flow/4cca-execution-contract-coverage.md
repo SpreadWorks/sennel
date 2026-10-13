@@ -145,3 +145,59 @@ Follow-up verification is limited to affected contracts and consumers:
 Full suites were not repeated. Independent review and the manager's source,
 runtime, exact-result and diff checks found no remaining blocker in these fixes.
 Detailed goal-to-evidence accounting is retained in `.tmp/4cca/fix-result.json`.
+
+## Integration with concurrent main changes
+
+Implementation commit `10201fdd37687ca8cf8af99ea767f1f5e2d314c4` is integrated
+with main `a3bfa90db092abe8abfa449149daec2d186682a9`. Conflict resolution retains
+main's documentation AI admission, usage observation, cancellation, canonical
+publication identity, and shared persistence-failure classification alongside
+4cca's fixed runtime, durable provider claims and continuation accounting.
+Worktree dispatch remains in bootstrap before runtime capture; the semantic
+CLI preserves main's command-specific error exit code.
+
+Focused integration measurements are retained separately from earlier runtime
+measurements:
+
+- Agent, Prompt, documentation admission and provider observations: 102/102
+  (`merge-agent-prompt-tests.log`). The strengthened three refusal cases passed
+  again; removing only their control-failure preservation in an isolated copy
+  makes all three detect the original contract violation
+  (`merge-agent-prompt-result.json`).
+- Runtime children, worktree dispatch, docs synchronization and process control:
+  15/15 in the four selected files. Final process cancellation and actual child
+  stdin/cwd/environment/fd3 delivery: 7/7 after the new child case and final
+  synchronous-only options resolution (`process-cancellation-final.log`).
+- Documentation AI command routes, approval and session sharing: 15/15
+  (`merge-docs-ai-routes.log`). Public query root, bound work root and invalid
+  input boundaries: 3/3 selected (`merge-query-cli.log`).
+- Registered Draft and Spec production scenarios: 14/14 in one invocation
+  (`merge-phase-scenarios.log`). These cover persisted phase artifacts and their
+  real downstream Approval/Test/Acceptance use, strict stops, canonical Draft
+  regeneration, advisory repairs, and complete large inline/file evidence.
+- Draft failure/admission/publication recovery and Spec history rollback:
+  12/12 cumulative from the eleven passing selected repair cases and the final
+  refusal rerun (`merge-store-verification.json`). Review and Gate fixtures now
+  generate the required execution contract through their normal commands.
+  Spec rollback compares the publication boundary after the legitimate worker
+  claim is saved, and also asserts that this claim is present. Original result,
+  error, atomicity and no-extra-effect assertions are preserved.
+
+The initial six-file Store run was **not all-pass**: 89 tests, 61 passing and
+28 failing (`merge-store-tests.log`). Unchanged old Acceptance setup and Task
+Gate publication-only settlement fixtures are outside this integration fix.
+Two representative parent cases were run against an isolated archive of the
+exact main revision: four registry setup cases and three obsolete Task Gate
+intermediate-boundary cases fail with the same existing contract refusals;
+two aggregate parent failures make nine reported failures out of ten tests.
+The archive has no Git metadata. Those failures were not hidden by changed
+expectations, skips, or a compatibility path. This comparison attributes the
+selected failures to the baseline; it does not assert that every remaining
+old test has been independently compared. No repository-wide or real-provider
+suite was run for the merge.
+
+The final bootstrap proof is runtime revision
+`55f12f948097e8eeb747f3bc3365d5ca490484513779fa5bf70376a5f10c1671`
+(861 files; `merge-final-runtime.json`). It proves the final captured package;
+individual earlier test runs retain their original source identities and are
+not relabelled with this revision.

@@ -2,10 +2,8 @@ import { repairJson } from "../../lib/json-parse.js";
 import { PromptBuilder } from "../../lib/prompt-builder.js";
 import {
   LinearPromptBatchTopology,
-  PromptBatchExecutor,
   PromptBatchPlan,
   PromptBatchReducer,
-  PromptExecutionLimit,
   PromptInputBuilder,
   PromptReductionLevel,
   PromptReductionPlan,
@@ -86,9 +84,9 @@ function planFor(elements, envelope, limit, executionLimit) {
 }
 
 export async function synthesizeProjectInstructions({ contexts, rules, agent, maxCharacters, concurrency = 1 } = {}) {
-  const docsAgent = DocumentationAgent.from(agent);
+  const docsAgent = DocumentationAgent.from(agent).forCommand(agent.commandId || 'docs.agents');
   const limit = new PromptRequestLimit({ maxCharacters });
-  const executionLimit = new PromptExecutionLimit({
+  const executionLimit = docsAgent.createExecutionLimit({
     maxRequestCharacters: maxCharacters,
     concurrency,
     maxReductionDepth: 8,
@@ -101,7 +99,7 @@ export async function synthesizeProjectInstructions({ contexts, rules, agent, ma
     label: context.label,
     text: context.text,
   }));
-  const executor = new PromptBatchExecutor({ executionLimit });
+  const executor = docsAgent.createExecutor({ executionLimit });
   const callOptions = (request) => ({
     commandId: "docs.agents",
     systemPrompt: request.systemPrompt,
@@ -112,7 +110,7 @@ export async function synthesizeProjectInstructions({ contexts, rules, agent, ma
     ...callOptions(request),
     providerCallAdmission,
   });
-  const projectInvocation = typeof agent.projectInvocation === "function"
+  const projectInvocation = docsAgent.supportsProjectInvocation
     ? (request) => docsAgent.projectInvocation(request.userPrompt, callOptions(request))
     : undefined;
   const synthesisEnvelope = new ProjectSynthesisEnvelope({ rules });
@@ -124,6 +122,14 @@ export async function synthesizeProjectInstructions({ contexts, rules, agent, ma
     callAgent,
     projectInvocation,
   });
+  if (docsAgent.dryRun) {
+    const plan = finalPlan.batches.length === 1
+      ? finalPlan
+      : planFor(initialElements, new DocumentationSummaryEnvelope(), limit, executionLimit);
+    await docsAgent.previewPlan({ plan, projectInvocation, executionLimit });
+    if (plan !== finalPlan) docsAgent.session?.markUnknownPhase("docs.agents.synthesis");
+    return "";
+  }
   if (finalPlan.batches.length === 1) {
     executor.executionBudget.consumeSynthesisCalls(1);
     return executeFinal(finalPlan);

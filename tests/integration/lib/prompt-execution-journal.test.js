@@ -5,6 +5,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { Agent } from "../../../src/lib/agent.js";
+import { AgentProviderAttemptAdmission } from "../../../src/lib/agent-provider-attempt.js";
 import { ProviderRegistry } from "../../../src/lib/provider.js";
 import { Logger } from "../../../src/lib/log.js";
 import { UnknownProviderFailure } from "../../../src/lib/agent-failure.js";
@@ -15,7 +16,7 @@ import {
   PromptReductionPlan, PromptReductionLevel,
 } from "../../../src/lib/prompt-batching.js";
 import {
-  PromptExecutionJournal, PromptExecutionJournalSnapshot, PromptExecutionJournalWriter, PromptExecutionScope,
+  PromptExecutionJournal, PromptExecutionJournalSnapshot, PromptExecutionJournalWriter, PromptExecutionScope, isPromptExecutionControlFailure,
 } from "../../../src/lib/prompt-execution-journal.js";
 
 class MemoryWriter extends PromptExecutionJournalWriter {
@@ -87,6 +88,64 @@ function agentFixture(t, outcomes, { cached = false } = {}) {
 }
 
 describe("durable prompt execution frontier", () => {
+  for (const boundary of ["plan", "execution-attempt", "standalone-attempt"]) {
+    it(`preserves durable ${boundary} admission refusal without claims, consumption, or protocol repair`, async (t) => {
+      const writer = new MemoryWriter();
+      const { agent, starts } = agentFixture(t, []);
+      const denied = new Error("execution admission refused");
+      const budget = new PromptExecutionBudget(new PromptExecutionLimit({ maxProviderCallCount: 2 }));
+      const originalBudget = budget.snapshot();
+      let admissionCalls = 0;
+      let adapterCalls = 0;
+      let protocolRepairs = 0;
+      let parsed = 0;
+      const refuse = () => { admissionCalls += 1; throw denied; };
+      class StandaloneAdmission extends AgentProviderAttemptAdmission {
+        async beforeProviderAttempt() { refuse(); }
+      }
+      const selected = new PromptBatchExecutor({ executionBudget: budget, executionAdmission: {
+        async admit() { if (boundary === "plan") refuse(); },
+        async beforeProviderAttempt() { if (boundary === "execution-attempt") refuse(); },
+      } });
+      await assert.rejects(selected.executeCompletions({ ...options(writer, starts),
+        protocolRetryLimit: new PromptProtocolRetryLimit(1),
+        protocolPolicy: { async execute({ call, accounting }) {
+          return (await executeAgentResponseProtocol({ groupIdentity: "admission-refusal", accounting,
+            callAgent: async (request) => {
+              if (request.repair) protocolRepairs += 1;
+              return call();
+            },
+            parseResponse: (raw) => { parsed += 1; return raw; },
+          })).value;
+        } },
+        callAgent: (request, _batch, _index, _context, providerCallAdmission) => {
+          adapterCalls += 1;
+          return agent.call(request.userPrompt, { providerCallAdmission, retryCount: 1, retryDelayMs: 1,
+            ...(boundary === "standalone-attempt" && { providerAttemptAdmission: new StandaloneAdmission() }),
+          });
+        },
+      }), (error) => error === denied);
+      assert.equal(isPromptExecutionControlFailure(denied), true);
+      assert.equal(admissionCalls, 1);
+      assert.equal(adapterCalls, boundary === "plan" ? 0 : 1);
+      assert.deepEqual(starts, []);
+      assert.equal(protocolRepairs, 0);
+      assert.equal(parsed, 0);
+      assert.deepEqual(budget.snapshot(), originalBudget);
+      assert.deepEqual(writer.records.map((record) => record.event), boundary === "plan" ? [] : ["planned"]);
+      if (boundary === "plan") {
+        assert.equal(writer.persisted, null);
+      } else {
+        const restored = writer.journal().snapshot;
+        assert.deepEqual(restored.budget, originalBudget);
+        assert.equal(restored.batches[0].claim, null);
+        assert.equal(restored.batches[0].transportOrdinal, 0);
+        assert.deepEqual(restored.batches[0].responses, []);
+        assert.deepEqual(restored.batches[0].transportFailures, []);
+      }
+    });
+  }
+
   it("resumes only the remaining batch under the original two-call cap and preserves plan order", async () => {
     const writer = new MemoryWriter(); const starts = []; const plan = pairPlan();
     const limit = new PromptExecutionLimit({ maxProviderCallCount: 2, concurrency: 4 });

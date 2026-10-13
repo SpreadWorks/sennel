@@ -38,10 +38,11 @@ test("Draft production registration creates the declared Step with its exact Ser
       stepId: "draft-refine", StepClass: DraftRefineStep, ServiceClass: DraftService,
       prepareServiceArguments, executionContract: workerStepExecutionContract,
     });
-    await assert.rejects(registration(() => []).create(), /exactly its declared Service arguments/);
-    await assert.rejects(registration(() => [{}]).create(), /exactly its declared Service arguments/);
-    await assert.rejects(registration(() => [new Date(), new Date()]).create(),
+    assert.throws(() => registration(() => []).create(), /exactly its declared Service arguments/);
+    assert.throws(() => registration(() => [{}]).create(), /exactly its declared Service arguments/);
+    assert.throws(() => registration(() => [new Date(), new Date()]).create(),
       /exactly its declared Service arguments/);
+    await assert.rejects(registration(async () => []).create(), /exactly its declared Service arguments/);
   } finally {
     removeTmpDir(root);
   }

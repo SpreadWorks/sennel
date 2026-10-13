@@ -2,6 +2,7 @@ import { FlowExecutionContract, FlowExecutionContractRefusal } from "./flow-exec
 import { executionContractArtifact, ExecutionContractPublicationAdmission,
   readExecutionContractFromView, readStoredExecutionContractFromView, readPromptExecutionProgressFromView, readPromptExecutionEpisodeFromView,
   PromptExecutionProgressPublication } from "./canonical-prompt-execution.js";
+import { canonicalStepSettlementPublicationIdentity, canonicalArtifactWriteIdentity, commandResultPayload } from "./canonical-step-settlement-publication.js";
 import { SpecGateRepairRecoveryPreview, SpecGateRepairRecoveryInput } from "../engine/composition/spec-gate-repair-recovery.js";
 import { SpecGateRepairRecoveryEvidence } from "./spec-gate-repair-recovery.js";
 import { FinalizationSettlementReceiptEvidence } from "./finalization-execution-identity.js";
@@ -101,6 +102,9 @@ import {
   DraftWorkerExecutionBinding,
   DraftConditionalWorkerExecutionBinding,
   resolveDraftWorkerRecovery,
+  resolveDraftExecutionRecovery,
+  DraftExecutionRecoveryFacts,
+  DraftStepErrorRecoveryDecision,
   DraftReviewExecutionClaim,
   DraftWorkerExecutionClaim,
   SpecNextRoute,
@@ -424,16 +428,6 @@ function stableActivityId(prefix, facts) {
   return `${prefix}-${digest}`;
 }
 
-function canonicalArtifactWriteIdentity(value) {
-  const write = CanonicalFlowArtifactWrite.from(value);
-  return {
-    logicalKey: write.artifact.logicalKey,
-    relativePath: write.artifact.relativePath,
-    mediaType: write.mediaType,
-    digest: crypto.createHash("sha256").update(write.bytes).digest("hex"),
-    byteLength: write.bytes.length,
-  };
-}
 
 function requirementSettlementRequestDigest({ binding, stepResult, settlement, approval = null,
   plan = null, specRecordPublication = null, expectedSpecDigest = null, commandResult = null,
@@ -1415,6 +1409,20 @@ class DraftWorkerRecoveryAdmission {
   }
 }
 
+class DraftStepErrorRecoveryAdmission {
+  constructor({ revision, receipt }) {
+    this.revision = revision;
+    this.receipt = receipt;
+    Object.freeze(this);
+  }
+  assert(view) {
+    if (view.revision !== this.revision) {
+      throw new CurrentFlowStateConflictError("Draft Step Error recovery authority changed before publication");
+    }
+    this.receipt.assertSource({ state: view.state, activities: view.activities });
+  }
+}
+
 class SpecGateRepairRecoveryAdmission {
   constructor({ store, evidence, executionRoot, selection, settlement, completion = false }) {
     Object.assign(this, { store, evidence, executionRoot, selection, settlement, completion });
@@ -1929,34 +1937,6 @@ function gateExternalBlockedStepAttempt(state, decision) {
   });
 }
 
-function commandResultPayload(value, nodeId, artifactLogicalKey) {
-  const fallback = Object.freeze({ nodeId, outcome: "completed" });
-  if (value == null) return fallback;
-  if (typeof value !== "object" || Array.isArray(value)) {
-    return Object.freeze({ nodeId, outcome: "completed", value: String(value) });
-  }
-  // Flow command envelopes are JSON values.  A clone through JSON prevents a
-  // command-local class instance, function, or undefined field from leaking
-  // into the permanent artifact contract.
-  let result;
-  try {
-    result = JSON.parse(JSON.stringify(value));
-  } catch (error) {
-    throw new CurrentFlowStateInvariantError(`canonical command result must be JSON-serializable: ${error.message}`);
-  }
-  const attached = attachedCanonicalCommandResultArtifact(value);
-  if (attached !== null && attached.logicalKey !== artifactLogicalKey) {
-    throw new CurrentFlowStateInvariantError(
-      `canonical command result artifact does not belong to ${artifactLogicalKey}: ${attached.logicalKey}`,
-    );
-  }
-  return Object.freeze({
-    nodeId,
-    outcome: "completed",
-    result,
-    ...(attached !== null && { artifact: attached.toJSON() }),
-  });
-}
 
 function emptyAttempt(state, nodeId) {
   const node = state.findNode(nodeId);
@@ -3488,13 +3468,41 @@ export class CanonicalFlowManagerStore {
     return Object.freeze({ state: next, receipt, replayed: false });
   }
 
+  /** Explicit recovery selection from canonical facts; no automatic failure retry. */
+  recoverDraftExecution({ specId = null, reason = null, expectedAttempt, targetDigest, executionRoot } = {}) {
+    const resolved = this.#resolveSpecId(specId);
+    if (resolved === null) throw new CurrentFlowStateInvariantError("no canonical active Flow");
+    const prepared = this.runtime.readCanonicalTransitionView(resolved, (view) => {
+      const { state } = view;
+      const decision = resolveDraftExecutionRecovery(new DraftExecutionRecoveryFacts({
+        state, activities: view.activities, reason, expectedAttempt,
+      }));
+      if (!(decision instanceof DraftStepErrorRecoveryDecision)) return { decision };
+      const attempt = new CurrentAttempt({
+        ...commandContextAttempt(state, decision.stepId),
+        consumption: state.attempt.consumption.toJSON(),
+        operationClaims: state.attempt.operationClaims.map((claim) => claim.toJSON()),
+      });
+      return { decision, attempt,
+        admission: new DraftStepErrorRecoveryAdmission({ revision: view.revision, receipt: decision.receipt }) };
+    });
+    if (!(prepared.decision instanceof DraftStepErrorRecoveryDecision)) {
+      return this.recoverLegacyDraftWorkerExecution({ specId: resolved, targetDigest, executionRoot,
+        decision: prepared.decision });
+    }
+    const receipt = prepared.decision.receipt;
+    const state = this.runtime.recoverDraftStepError({ specId: resolved, receipt,
+      attempt: prepared.attempt, admission: prepared.admission });
+    return Object.freeze({ state, receipt });
+  }
+
   /** Migrate only a proven, unpublished legacy checkpoint; never rerun its rejected payload. */
-  recoverLegacyDraftWorkerExecution({ specId = null, targetDigest, executionRoot } = {}) {
+  recoverLegacyDraftWorkerExecution({ specId = null, targetDigest, executionRoot, decision: selectedDecision = null } = {}) {
     const resolved = this.#resolveSpecId(specId);
     if (resolved === null) throw new CurrentFlowStateInvariantError("no canonical active Flow");
     const prepared = this.runtime.readCanonicalTransitionView(resolved, (view) => {
       const state = view.state;
-      const decision = resolveDraftWorkerRecovery({ state, activities: view.activities });
+      const decision = selectedDecision ?? resolveDraftWorkerRecovery({ state, activities: view.activities });
       const preview = DraftWorkerRecoveryInputPreview.capture({
         flowManager: new CanonicalTransitionReader(this, view), state, executionRoot, targetDigest,
         claim: new DraftWorkerExecutionClaim(decision.claim),
@@ -5292,7 +5300,7 @@ export class CanonicalFlowManagerStore {
   } = {}) {
     const requirementTestResult = ["approval", "test-generate", "test-review", "test-repair", "test-gate"]
       .includes(binding?.stepId);
-    const publication = this.#stepSettlementPublicationIdentity({
+    const publication = canonicalStepSettlementPublicationIdentity({
       binding,
       settlement,
       draftCompletionApplication,
@@ -10405,98 +10413,6 @@ export class CanonicalFlowManagerStore {
     return this.#consumerAdmission(after, consumerNodeId);
   }
 
-  /**
-   * Seal only the artifacts and lineage this Step settlement can publish.
-   * Command-local values which do not cross the canonical boundary are
-   * intentionally absent: replay identity protects durable effects, not a
-   * caller's incidental object identity.
-   */
-  #stepSettlementPublicationIdentity({
-    binding,
-    settlement,
-    draftCompletionApplication,
-    artifactWrites,
-    artifactRemovals,
-    artifactBaselines,
-    testSourceBaseline,
-    commandResult,
-    gatePublication,
-    lifecycleResult,
-    references,
-    specRecord,
-    planGateRepairOutcome,
-    preparation,
-  }) {
-    const removalIdentity = (value) => {
-      const removal = CanonicalFlowArtifactRemoval.from(value);
-      return {
-        logicalKey: removal.artifact.logicalKey,
-        relativePath: removal.artifact.relativePath,
-      };
-    };
-    const baselineIdentity = (value) => {
-      const baseline = CanonicalFlowArtifactBaseline.from(value);
-      return {
-        logicalKey: baseline.artifact.logicalKey,
-        relativePath: baseline.artifact.relativePath,
-        digest: baseline.digest,
-        byteLength: baseline.byteLength,
-      };
-    };
-    const commandIdentity = (() => {
-      if (commandResult === undefined) return null;
-      const target = attemptHistoryTargetForNode(binding.stepId);
-      return {
-        attemptHistory: target === null ? null : {
-          logicalKey: target.logicalKey,
-          parameters: target.parameters,
-          payload: commandResultPayload(commandResult, binding.stepId, target.logicalKey),
-        },
-        ...(["branch", "prepare-spec"].includes(binding.stepId)
-          ? { preparationCommand: commandResult } : {}),
-        publications: attachedCanonicalCommandResultPublications(commandResult)
-          .map((publication) => publication.toJSON()),
-      };
-    })();
-    const testSource = testSourceBaseline === undefined
-      ? null
-      : CanonicalFlowTestSourceBaseline.from(testSourceBaseline).entries.map((entry) => ({ ...entry }));
-    const jsonIdentity = (value, field) => {
-      if (value === undefined || value === null) return null;
-      try {
-        return JSON.parse(JSON.stringify(value.toJSON?.() ?? value));
-      } catch (error) {
-        throw new CurrentFlowStateInvariantError(`Step settlement ${field} must be JSON-serializable: ${error.message}`);
-      }
-    };
-    const planGateRepair = planGateRepairOutcome === null ? null : {
-      disposition: planGateRepairOutcome.disposition,
-      repair: jsonIdentity(planGateRepairOutcome.repair, "plan-Gate repair"),
-      report: jsonIdentity(planGateRepairOutcome.report, "plan-Gate repair report"),
-    };
-    return new DraftStepSettlementPublication({
-      // Error settlements delegate their only publication to failCurrentAttempt,
-      // so raw artifact arguments cannot affect that durable transaction.
-      artifactWrites: settlement instanceof StepErrorDecision
-        ? [] : artifactWrites.map(canonicalArtifactWriteIdentity),
-      artifactRemovals: settlement instanceof StepErrorDecision
-        ? [] : (artifactRemovals ?? []).map(removalIdentity),
-      artifactBaselines: settlement instanceof StepErrorDecision
-        ? [] : (artifactBaselines ?? []).map(baselineIdentity),
-      testSourceBaseline: settlement instanceof StepErrorDecision ? null : testSource,
-      command: commandIdentity,
-      gatePublication: settlement instanceof StepErrorDecision && binding.stepId !== "spec-gate"
-        ? null : jsonIdentity(gatePublication, "Gate publication"),
-      draftCompletionApplication: draftCompletionApplication instanceof DraftCompletionSettlementApplication
-        ? jsonIdentity(draftCompletionApplication, "Draft completion application")
-        : null,
-      lifecycleResult: jsonIdentity(lifecycleResult, "lifecycle result"),
-      references: settlement instanceof StepErrorDecision ? null : jsonIdentity(references, "references"),
-      specRecord: settlement instanceof StepErrorDecision ? null : jsonIdentity(specRecord, "Spec record"),
-      planGateRepairOutcome: settlement instanceof StepErrorDecision ? null : planGateRepair,
-      ...(preparation === null ? {} : { preparation: preparation.toJSON() }),
-    });
-  }
 
   #attemptHistoryWrites({ specId, state, nodeId, commandResult, attemptSequence = state.attempt?.sequence, view = null }) {
     if (state.current?.at(-1) !== nodeId || state.attempt === null) {

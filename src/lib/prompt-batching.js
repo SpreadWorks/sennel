@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { AgentTransportFailureObservation } from "./agent-transport-failure-observation.js";
 import {
   PromptExecutionJournal,
@@ -1608,11 +1608,13 @@ export class PromptProviderCallAdmission {
   #cacheHit = false;
   #cacheIdentity = null;
 
-  constructor(executionBudget, scopedBudget, attemptJournal) {
+  constructor(executionBudget, scopedBudget, attemptJournal, { invocation = null, executionAdmission = null } = {}) {
     if (!(executionBudget instanceof PromptExecutionBudget)) throw new TypeError("Provider call admission requires a shared execution budget");
     if (scopedBudget !== undefined && !(scopedBudget instanceof PromptExecutionBudget)) throw new TypeError("Provider call admission scope requires an execution budget");
     this.#budgets = [...new Set([executionBudget, ...(scopedBudget ? [scopedBudget] : [])])];
     if (attemptJournal !== undefined && !(attemptJournal instanceof PromptProviderAttemptJournal)) throw new TypeError("Provider attempt journal must be typed");
+    this.invocation = invocation;
+    this.executionAdmission = executionAdmission;
     this.#attemptJournal = attemptJournal ?? null;
     this.#attemptCount = attemptJournal?.initialAttemptCount ?? 0;
     if (this.#attemptCount === 0) this.#consumeProviderCall();
@@ -1635,10 +1637,20 @@ export class PromptProviderCallAdmission {
   beforeProviderAttempt(context) {
     if (!this.#claimed) throw new Error("Provider call admission must be claimed before a transport attempt");
     if (this.#settled) throw new Error("Provider call admission is already settled");
-    if (this.#attemptCount > 0) this.#consumeProviderCall();
-    this.#attemptCount += 1;
-    if (this.#attemptJournal) return this.#attemptJournal.beforeProviderAttempt(context, this.#attemptCount);
-    return this.#attemptCount;
+    const consume = () => {
+      if (this.#attemptCount > 0) this.#consumeProviderCall();
+      this.#attemptCount += 1;
+      if (this.#attemptJournal) return this.#attemptJournal.beforeProviderAttempt(context, this.#attemptCount);
+      return this.#attemptCount;
+    };
+    if (!this.executionAdmission) return consume();
+    return Promise.resolve()
+      .then(() => this.executionAdmission.beforeProviderAttempt(context))
+      .then(consume)
+      .catch((error) => {
+        if (this.#attemptJournal) preservePromptExecutionControlFailure(error);
+        throw error;
+      });
   }
 
   async afterProviderFailure(failure, context) {
@@ -1867,12 +1879,64 @@ class BatchProviderAttemptJournal extends PromptProviderAttemptJournal {
   }
 }
 
+/** One validated invocation in a plan, with the exact projection if available. */
+export class PromptPreparedInvocation {
+  constructor({ batch, projection = null, logicalInvocationId = randomUUID() } = {}) {
+    if (!(batch instanceof PromptBatch)) throw new TypeError("Prepared prompt invocation requires a typed batch");
+    this.batch = batch;
+    this.projection = projection;
+    this.logicalInvocationId = requiredText(logicalInvocationId, "Prompt logical invocation identity");
+    this.inputCharacters = safeInteger(projection?.promptCharacterCount ?? batch.footprint.total,
+      "Prepared prompt invocation characters");
+    Object.freeze(this);
+  }
+}
+
+/** Read-only output of the executor's existing complete-plan preflight. */
+export class PromptPreparedExecution {
+  constructor({ plan, requestLimit, invocations, occurrenceId = randomUUID() } = {}) {
+    if (!(plan instanceof PromptBatchPlan)) throw new TypeError("Prepared prompt execution requires a typed plan");
+    if (!(requestLimit instanceof PromptRequestLimit)) throw new TypeError("Prepared prompt execution requires a typed request limit");
+    if (!Array.isArray(invocations) || invocations.length !== plan.batches.length
+      || invocations.some((entry, index) => !(entry instanceof PromptPreparedInvocation) || entry.batch !== plan.batches[index])) {
+      throw new TypeError("Prepared prompt execution must contain each plan invocation in order");
+    }
+    this.plan = plan;
+    this.requestLimit = requestLimit;
+    this.occurrenceId = requiredText(occurrenceId, "Prompt execution occurrence identity");
+    this.invocations = Object.freeze([...invocations]);
+    this.batchCount = invocations.length;
+    this.inputCharacters = safeInteger(invocations.reduce((total, invocation) => total + invocation.inputCharacters, 0),
+      "Prepared prompt execution characters");
+    Object.freeze(this);
+  }
+}
+
+/** Associates a protocol call and its transport attempts with one occurrence. */
+export class PromptInvocationExecution {
+  constructor({ preparedExecution, preparedInvocation, protocolAttemptIndex, projection = null,
+    inputCharacters, logicalInvocationId } = {}) {
+    if (!(preparedExecution instanceof PromptPreparedExecution) || !(preparedInvocation instanceof PromptPreparedInvocation)) {
+      throw new TypeError("Prompt invocation execution requires typed preparation");
+    }
+    this.occurrenceId = preparedExecution.occurrenceId;
+    this.batch = preparedInvocation.batch;
+    this.protocolAttemptIndex = safeInteger(protocolAttemptIndex, "Prompt protocol attempt index");
+    this.initialPlannedAttempt = this.protocolAttemptIndex === 0;
+    this.logicalInvocationId = requiredText(logicalInvocationId ?? (this.initialPlannedAttempt
+      ? preparedInvocation.logicalInvocationId : randomUUID()), "Prompt logical invocation identity");
+    this.projection = projection;
+    this.inputCharacters = safeInteger(inputCharacters, "Prompt invocation execution characters");
+    Object.freeze(this);
+  }
+}
+
 /**
  * Read-only execution engine. A protocol policy may call its injected `call`
  * more than once, but every actual provider call is counted by the executor.
  */
 export class PromptBatchExecutor {
-  constructor({ executionLimit = new PromptExecutionLimit(), executionBudget } = {}) {
+  constructor({ executionLimit = new PromptExecutionLimit(), executionBudget, executionAdmission = null } = {}) {
     const normalizedLimit = executionLimit instanceof PromptExecutionLimit
       ? executionLimit
       : new PromptExecutionLimit(executionLimit);
@@ -1881,7 +1945,41 @@ export class PromptBatchExecutor {
     }
     this.executionBudget = executionBudget || new PromptExecutionBudget(normalizedLimit);
     this.executionLimit = this.executionBudget.limit;
+    if (executionAdmission !== null && (typeof executionAdmission.admit !== "function"
+      || typeof executionAdmission.beforeProviderAttempt !== "function")) {
+      throw new TypeError("Prompt execution admission requires admit() and beforeProviderAttempt()");
+    }
+    this.executionAdmission = executionAdmission;
     Object.freeze(this);
+  }
+
+  async prepareExecution({ plan, projectInvocation, pendingBatches = plan?.batches, remainingCallCount = pendingBatches?.length } = {}) {
+    if (!(plan instanceof PromptBatchPlan)) throw new TypeError("Prompt executor requires a typed plan");
+    if (projectInvocation !== undefined && typeof projectInvocation !== "function") throw new TypeError("Prompt invocation projector must be a function");
+    this.executionBudget.assertCanExecute(plan.batches.length, remainingCallCount);
+    const requestLimit = new PromptRequestLimit({
+      maxCharacters: Math.min(plan.limit.maxCharacters, this.executionLimit.maxRequestCharacters),
+    });
+    const invocations = [];
+    const pending = new Set(pendingBatches);
+    for (const batch of plan.batches) {
+      // Replayed completions have no provider invocation to project.
+      if (!pending.has(batch)) {
+        invocations.push(new PromptPreparedInvocation({ batch }));
+        continue;
+      }
+      if (!batch.footprint.fits(requestLimit)) {
+        throw new PromptBatchOverflowFailure("Prompt batch exceeds the executor request limit", {
+          batchDigest: batch.digest,
+          footprint: batch.footprint.toJSON(),
+          maxCharacters: requestLimit.maxCharacters,
+        });
+      }
+      const projection = projectInvocation ? await projectInvocation(batch.request, batch) : null;
+      if (projection !== null) assertProjection(projection, requestLimit, batch);
+      invocations.push(new PromptPreparedInvocation({ batch, projection }));
+    }
+    return new PromptPreparedExecution({ plan, requestLimit, invocations });
   }
 
   async executeCompletions({
@@ -1894,6 +1992,7 @@ export class PromptBatchExecutor {
     providerAttemptLimit,
     executionJournal,
     synthesisCallCount = 0,
+    preparedExecution,
   } = {}) {
     if (!(plan instanceof PromptBatchPlan)) throw new TypeError("Prompt executor requires a typed plan");
     if (typeof callAgent !== "function") throw new TypeError("Prompt executor requires callAgent");
@@ -1916,18 +2015,16 @@ export class PromptBatchExecutor {
     const remainingCalls = pending.filter((batch) => frontiers[batch.index].responses.length === 0
       || frontiers[batch.index].transportFailures.some((failure) => !frontiers[batch.index].responses.some((response) => response.responseCallIndex === failure.responseCallIndex))).length;
     this.executionBudget.assertCanExecute(plan.batches.length, remainingCalls);
-    const requestLimit = new PromptRequestLimit({
-      maxCharacters: Math.min(plan.limit.maxCharacters, this.executionLimit.maxRequestCharacters),
-    });
-    for (const batch of pending) {
-      if (!batch.footprint.fits(requestLimit)) {
-        throw new PromptBatchOverflowFailure("Prompt batch exceeds the executor request limit", {
-          batchDigest: batch.digest,
-          footprint: batch.footprint.toJSON(),
-          maxCharacters: requestLimit.maxCharacters,
-        });
-      }
-      if (projectInvocation) assertProjection(await projectInvocation(batch.request, batch), requestLimit, batch);
+    const prepared = preparedExecution ?? await this.prepareExecution({ plan, projectInvocation, pendingBatches: pending, remainingCallCount: remainingCalls });
+    if (!(prepared instanceof PromptPreparedExecution) || prepared.plan !== plan) {
+      throw new TypeError("Prompt executor preparation must belong to the selected plan");
+    }
+    const requestLimit = prepared.requestLimit;
+    try {
+      await this.executionAdmission?.admit(prepared);
+    } catch (error) {
+      if (executionJournal) preservePromptExecutionControlFailure(error);
+      throw error;
     }
 
     const completions = new Array(plan.batches.length);
@@ -1957,6 +2054,7 @@ export class PromptBatchExecutor {
     let firstFailure = null;
     let firstFailureAccounting = null;
     const executeBatch = async (batch, replayOnly = false) => {
+      const preparedInvocation = prepared.invocations[batch.index];
       const frontier = frontiers[batch.index];
       let batchCalls = executionJournal ? frontier.batchCalls : 0;
       let responseCallIndex = 0;
@@ -2000,20 +2098,26 @@ export class PromptBatchExecutor {
               maxCharacters: requestLimit.maxCharacters,
             });
           }
-          if (projectInvocation && !usesPreflightedRequest) {
-            assertProjection(
-              await projectInvocation(actualRequest, batch, attemptContext),
-              requestLimit,
-              batch,
-            );
-          }
+          const projection = usesPreflightedRequest ? preparedInvocation.projection
+            : (projectInvocation ? await projectInvocation(actualRequest, batch, attemptContext) : null);
+          if (projection !== null && !usesPreflightedRequest) assertProjection(projection, requestLimit, batch);
+          const invocation = new PromptInvocationExecution({
+            preparedExecution: prepared,
+            preparedInvocation,
+            protocolAttemptIndex: callIndex,
+            projection,
+            inputCharacters: projection?.promptCharacterCount ?? actualFootprint.total,
+          });
           if (executionJournal) frontier.batchCalls = batchCalls;
           const attemptJournal = executionJournal ? new BatchProviderAttemptJournal({ frontier, responseCallIndex: callIndex, request: actualRequest, save }) : undefined;
           const previousFailure = frontier.transportFailures.filter((entry) => entry.responseCallIndex === callIndex).at(-1);
           if (executionJournal && previousFailure && (!previousFailure.retryable || previousFailure.attempt === previousFailure.maxAttempts)) {
             throw new PromptExecutionJournalError("PROMPT_EXECUTION_TRANSPORT_EXHAUSTED", "Saved provider call exhausted its transport attempts");
           }
-          const providerCallAdmission = new PromptProviderCallAdmission(this.executionBudget, accounting.providerBudget, attemptJournal);
+          const providerCallAdmission = new PromptProviderCallAdmission(this.executionBudget, accounting.providerBudget, attemptJournal, {
+            invocation,
+            executionAdmission: this.executionAdmission,
+          });
           if (!resumedCall) accounting.recordCall(providerCallAdmission);
           let rawCallResponse;
           try {

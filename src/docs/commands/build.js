@@ -13,12 +13,13 @@ import { pathToFileURL } from "node:url";
 import { PKG_DIR } from "../../lib/cli.js";
 import { resolveDocsContext } from "../lib/docs-context.js";
 import { Command } from "../../lib/command.js";
+import { runDocumentationAiCommand, rethrowDocumentationAiStop } from "../lib/documentation-ai-execution.js";
 import { EXIT_ERROR } from "../../lib/constants.js";
 import { ExecutionMode, WritePlan } from "../../lib/execution-plan.js";
 import { PRODUCT } from "../../lib/product.js";
 
 import { validatePresetChain } from "../../lib/presets.js";
-import DocsScanCommand from "./scan.js";
+import DocsScanCommand, { prepareDocumentationScan } from "./scan.js";
 import DocsEnrichCommand from "./enrich.js";
 import DocsInitCommand from "./init.js";
 import DocsDataCommand from "./data.js";
@@ -27,7 +28,7 @@ import DocsReadmeCommand from "./readme.js";
 import DocsAgentsCommand from "./agents.js";
 import DocsTranslateCommand from "./translate.js";
 
-const VALID_BUILD_FLAGS = new Set(["-h", "--help", "--verbose", "--dry-run", "--force", "--regenerate"]);
+const VALID_BUILD_FLAGS = new Set(["-h", "--help", "--verbose", "--dry-run", "--force", "--regenerate", "--yes"]);
 
 async function dirExists(p) {
   try {
@@ -42,8 +43,9 @@ async function dirExists(p) {
 function validateBuildArgs(rawArgs) {
   for (const a of rawArgs) {
     if (a.startsWith("-") && !VALID_BUILD_FLAGS.has(a)) {
-      process.stderr.write(`sennel docs build: unknown option '${a}'\n`);
-      process.exit(EXIT_ERROR);
+      const error = new Error(`sennel docs build: unknown option '${a}'`);
+      error.exitCode = EXIT_ERROR;
+      throw error;
     }
   }
 }
@@ -57,18 +59,24 @@ async function runBuild(rawArgs, container) {
     const o = h.options;
     console.log([
       h.usage, "", `  ${h.desc}`, `  ${h.descDetail}`, "", "Options:",
+      `  ${t("ui:docsAi.yes")}`,
       `  ${o.agent}`, `  ${o.force}`, `  ${o.dryRun}`, `  ${o.verbose}`, `  ${o.help}`,
     ].join("\n"));
     return;
   }
 
+  const baseCtx = resolveDocsContext(container, null, {
+    dryRun: rawArgs.includes("--dry-run"),
+    yes: rawArgs.includes("--yes"),
+  });
+  return runDocumentationAiCommand(baseCtx, rawArgs, "docs.build", () => executeBuild(rawArgs, container, baseCtx));
+}
+
+async function executeBuild(rawArgs, container, baseCtx) {
   const isVerbose = rawArgs.includes("--verbose");
-  const isDryRun = rawArgs.includes("--dry-run");
+  const isDryRun = baseCtx.dryRun;
   const hasForce = rawArgs.includes("--force");
   const hasRegenerate = rawArgs.includes("--regenerate");
-
-  // Build shared context once
-  const baseCtx = resolveDocsContext(container, null);
 
   // Fail-fast: chapters ↔ templates static integrity check (spec 218).
   // Runs before any heavy processing (scan/enrich/etc).
@@ -94,6 +102,19 @@ async function runBuild(rawArgs, container) {
     { label: "agents", weight: 1 },
     ...(hasTranslateStep ? [{ label: "translate", weight: 2 }] : []),
   ];
+
+  if (isDryRun) {
+    const prepared = await prepareDocumentationScan(baseCtx);
+    if (baseCtx.agent.resolve("docs.enrich")) {
+      await new DocsEnrichCommand().run(container, {
+        docsCtx: { ...baseCtx, preparedAnalysis: prepared.analysis, commandId: "docs.enrich" },
+        _rawArgs: [],
+      });
+    }
+    for (const step of pipelineSteps) {
+      if (step.label !== "scan" && step.label !== "enrich") baseCtx.aiSession.markUnknownPhase(`docs.${step.label}`);
+    }
+  }
 
   const plan = new WritePlan("run docs build pipeline", {
     preview: pipelineSteps.map((step) => `  - ${step.label}`).join("\n"),
@@ -139,8 +160,9 @@ async function runBuild(rawArgs, container) {
           if (err.code !== "ENOENT") throw err;
         }
         if (docsFiles.length === 0) {
-          console.error("[regenerate] ERROR: docs/ に章ファイルがありません。先に docs build を実行してください。");
-          process.exit(EXIT_ERROR);
+          const error = new Error("docs/ に章ファイルがありません。先に docs build を実行してください。");
+          error.exitCode = EXIT_ERROR;
+          throw error;
         }
       } else {
         logger.event("pipeline-step", { step: "init", phase: "start" });
@@ -159,6 +181,7 @@ async function runBuild(rawArgs, container) {
       if (hasAgent) {
         const textResult = await runStep(DocsTextCommand, { ...baseCtx, dryRun: isDryRun, commandId: "docs.text", force: hasForce });
         if (textResult?.errors?.length > 0) {
+          baseCtx.aiSession.markPartialError();
           progress.log(`[text] WARN: ${textResult.errors.length} file(s) had errors. Pipeline continues but docs may be incomplete.`);
         }
       } else {
@@ -198,6 +221,7 @@ async function runBuild(rawArgs, container) {
             if (hasAgent) {
               const langTextResult = await runStep(DocsTextCommand, { ...langCtx, dryRun: isDryRun, commandId: "docs.text", force: hasForce || hasRegenerate });
               if (langTextResult?.errors?.length > 0) {
+                baseCtx.aiSession.markPartialError();
                 progress.log(`[text] WARN: ${lang}: ${langTextResult.errors.length} file(s) had errors.`);
               }
             }
@@ -232,8 +256,8 @@ async function runBuild(rawArgs, container) {
     } catch (err) {
       progress.done();
       logger.event("error", { message: err.message });
-      console.error(`[build] ERROR: ${err.message}`);
-      process.exit(EXIT_ERROR);
+      rethrowDocumentationAiStop(err, baseCtx.aiSession);
+      throw err;
     }
   });
 

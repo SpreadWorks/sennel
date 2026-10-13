@@ -10,12 +10,15 @@ import {
   FlowArtifactActivityIndex,
   FlowArtifactCatalogSnapshotEvidence,
   FlowArtifactCatalogSnapshotReader,
+  FlowArtifactCatalogSnapshotUnstableError,
   FlowVersion,
   FlowVersionAuthorityScope,
   FlowVersionLocation,
 } from "../lib/flow-version.js";
 import { FLOW_ARTIFACT_CONTRACTS } from "../lib/flow-artifact-contract.js";
-import { buildCurrentFlowDefinition } from "./definition.js";
+import { buildCurrentFlowDefinition, getFlowNode, getTaskNode } from "./definition.js";
+import { TaskStepIdentity } from "./lib/task-step-identity.js";
+import { QueryDetailIndex, QueryDetailArtifactRequired } from "./query-details.js";
 import { GitSnapshot } from "../lib/git-snapshot.js";
 import {
   FLOW_QUERY_ERROR_CODES,
@@ -27,6 +30,7 @@ import {
   isFlowQueryDatetime,
   validateFlowQueryRequest,
   validateFlowQueryResponse,
+  detailCompletenessFor,
 } from "./query-contract.js";
 import {
   CurrentFlowSpecRecord,
@@ -37,20 +41,14 @@ import {
   FlowActivity,
 } from "./lib/current-flow-state.js";
 
+import { QueryError, canonicalJson, canonicalDigest, isPlainObject, requireExactObject, requirePublicString, requirePublicInteger, requirePublicStringList, publicString, uniqueLimited, uniqueObjectList, publicArtifactId, publicArtifactKey, boundedPublic, artifactIdentity, ReferenceResolver } from "./query-values.js";
+
 const ERROR_CODES = FLOW_QUERY_ERROR_CODES;
 
 const CURSOR_PAYLOAD_FIELDS = Object.freeze([
-  "digest", "flowVersion", "gte", "lt", "order", "resource", "specId", "version",
+  "digest", "flowVersion", "gte", "lt", "order", "resource", "schemaRevision", "snapshotId", "specId", "version",
 ]);
 const CURSOR_PAYLOAD_FIELD_SET = new Set(CURSOR_PAYLOAD_FIELDS);
-
-class QueryError extends Error {
-  constructor(code, jsonPath, message, { cause = null } = {}) {
-    super(message, cause ? { cause } : undefined);
-    this.code = code;
-    this.jsonPath = jsonPath;
-  }
-}
 
 class ArtifactSchemaRevisionEvidence {
   #revisions;
@@ -78,6 +76,168 @@ class SelectedFlowVersion {
   }
 
   toJSON() { return { specId: this.specId, flowVersion: this.flowVersion }; }
+}
+
+class QueryProjectionSignature {
+  constructor(hash) {
+    if (!/^[a-f0-9]{64}$/.test(hash)) throw new Error("projection signature requires a SHA-256 digest");
+    this.hash = hash;
+    Object.freeze(this);
+  }
+
+  static async read() {
+    const root = new URL("../", import.meta.url);
+    const entries = [];
+    let totalBytes = 0;
+    const visit = async (directory, prefix) => {
+      for (const entry of await fs.promises.readdir(directory, { withFileTypes: true })) {
+        if (entry.name === "tests") continue;
+        const relative = `${prefix}${entry.name}`;
+        if (entry.isDirectory()) await visit(new URL(`${entry.name}/`, directory), `${relative}/`);
+        else if (entry.isFile() && /\.(?:js|json)$/.test(entry.name)) {
+          if (entries.length >= FLOW_QUERY_LIMITS.MAX_MANAGED_ARTIFACT_ENTRIES) throw new Error("projection source count exceeds the limit");
+          const bytes = await fs.promises.readFile(new URL(entry.name, directory));
+          totalBytes += bytes.length;
+          if (totalBytes > FLOW_QUERY_LIMITS.MAX_TOTAL_ARTIFACT_BYTES) throw new Error("projection source bytes exceed the limit");
+          entries.push({ path: relative, hash: crypto.createHash("sha256").update(bytes).digest("hex") });
+        }
+      }
+    };
+    await visit(root, "");
+    entries.sort((left, right) => left.path < right.path ? -1 : left.path > right.path ? 1 : 0);
+    return new QueryProjectionSignature(canonicalDigest(entries, { maxBytes: FLOW_QUERY_LIMITS.MAX_RESPONSE_BYTES }));
+  }
+}
+
+class QuerySnapshot {
+  constructor(version, selected, available, projection) {
+    if (!(projection instanceof QueryProjectionSignature)) throw new Error("snapshot requires projection evidence");
+    const inputs = {
+      schemaRevision: FLOW_QUERY_SCHEMA_REVISION,
+      flowVersionId: version.state.flowVersionId,
+      specId: selected.specId,
+      flowVersion: selected.flowVersion,
+      catalogHash: version.catalog.hash,
+      confirmedLedgerHash: version.confirmedLedgerHash,
+      confirmationOrder: version.state.confirmationOrder,
+      stateHash: version.stateHash,
+      specHash: version.specHash,
+      projectionHash: projection.hash,
+      availableFlowVersionsHash: canonicalDigest(available),
+    };
+    this.id = `sha256:${canonicalDigest(inputs)}`;
+    this.value = Object.freeze({ id: this.id, algorithm: "sha256", capturedAt: new Date().toISOString(), confirmationOrder: inputs.confirmationOrder,
+      catalogHash: inputs.catalogHash, projectionHash: inputs.projectionHash, availableFlowVersionsHash: inputs.availableFlowVersionsHash });
+    Object.freeze(this);
+  }
+
+  toJSON() { return { ...this.value }; }
+}
+
+class QueryCaptureContext {
+  constructor(request, available, projection) {
+    if (!(request instanceof QueryRequest) || !(projection instanceof QueryProjectionSignature)) throw new Error("query capture requires typed request and projection evidence");
+    this.request = request;
+    this.available = Object.freeze([...available]);
+    this.projection = projection;
+    Object.freeze(this);
+  }
+}
+
+class QueryCapturedVersion {
+  constructor({ state, spec, activities, artifactSchemaRevisions, artifactBytes, catalog, stateBytes, specBytes, confirmedLedgerBytes }) {
+    if (!(state instanceof CurrentFlowState) || !(spec instanceof CurrentFlowSpecRecord)
+      || !(artifactSchemaRevisions instanceof ArtifactSchemaRevisionEvidence) || !(artifactBytes instanceof Map)) {
+      throw new Error("query capture requires validated canonical records");
+    }
+    Object.assign(this, { state, spec, activities, artifactSchemaRevisions, artifactBytes, catalog });
+    this.stateHash = crypto.createHash("sha256").update(stateBytes).digest("hex");
+    this.specHash = crypto.createHash("sha256").update(specBytes).digest("hex");
+    this.confirmedLedgerHash = crypto.createHash("sha256").update(confirmedLedgerBytes).digest("hex");
+    this.response = null;
+    this.projectionError = null;
+  }
+
+  rememberProjection(response, error = null) {
+    this.response = response;
+    this.projectionError = error;
+    Object.freeze(this);
+  }
+}
+
+class QueryReadSnapshot {
+  constructor(version, available, projection) {
+    if (!(projection instanceof QueryProjectionSignature)) throw new Error("query read requires projection evidence");
+    this.version = version;
+    this.available = Object.freeze([...available]);
+    this.projection = projection;
+    Object.freeze(this);
+  }
+}
+
+class QueryNodeResultView {
+  constructor(result, resolver, { legacySummary = false } = {}) {
+    this.value = result === null ? null : Object.freeze({
+      outcome: result.outcome,
+      confirmedAt: result.confirmedAt,
+      summary: legacySummary ? publicString(result.summary, "result.summary") : result.summary,
+      artifactRefs: uniqueObjectList(result.artifactRefs.map((entry) => {
+        const descriptor = resolver.resolveResultReference(entry, "Node result artifact reference");
+        return descriptor === null ? null : { kind: entry.kind, id: publicArtifactId(descriptor) };
+      }).filter((entry) => entry !== null), "result.artifactRefs"),
+    });
+    Object.freeze(this);
+  }
+
+  toJSON() { return this.value === null ? null : { ...this.value, artifactRefs: this.value.artifactRefs.map((entry) => ({ ...entry })) }; }
+}
+
+class QueryNodeView {
+  constructor({ state, spec, node, parentId, phaseId, taskId, catalog }) {
+    const historical = state.history !== null;
+    const taskIdentity = !historical && node.kind === "step" && taskId !== null
+      ? TaskStepIdentity.fromTaskNode(state.findNode(taskId), node.id) : null;
+    const definitionStepId = taskIdentity?.definitionId ?? (node.kind === "step" && node.steps.length === 0 ? node.id : null);
+    const definition = historical ? null : (taskIdentity ? getTaskNode(taskIdentity.definitionId) : getFlowNode(node.id));
+    const role = node.kind === "flow" ? "flow" : node.kind === "task" ? "task"
+      : definition === null ? "group" : parentId === state.root.id ? "phase" : node.steps.length > 0 ? "group" : "step";
+    const title = node.kind === "task" ? spec.document.tasks?.find((task) => task.id === node.id)?.title ?? null : null;
+    const displayNameSource = title !== null ? "spec-title" : definition?.label ? "definition-label" : "key";
+    this.phaseId = role === "phase" ? node.id : phaseId;
+    this.taskId = node.kind === "task" ? node.id : taskId;
+    this.value = Object.freeze({ id: node.id, key: node.key, kind: node.kind, role,
+      displayName: title ?? definition?.label ?? node.key, displayNameSource, status: node.status, parentId,
+      childIds: node.steps.map((child) => child.id), phaseId: this.phaseId, taskId: this.taskId,
+      definitionStepId: definition === null ? null : definitionStepId, attemptSequence: node.attemptSequence,
+      result: new QueryNodeResultView(node.result, new ReferenceResolver(catalog)).toJSON(),
+      coverage: { phaseClassification: node.kind !== "step" ? "not-applicable" : definition === null ? "not-recorded" : "available", displayName: displayNameSource === "key" ? "key-fallback" : "available" },
+    });
+    Object.freeze(this);
+  }
+
+  toJSON() { return { ...this.value, childIds: [...this.value.childIds], coverage: { ...this.value.coverage } }; }
+}
+
+class QueryStructure {
+  constructor({ state, spec, catalog, phaseId }) {
+    this.nodes = [];
+    const walk = (node, parentId, inheritedPhaseId = null, taskId = null) => {
+      const view = new QueryNodeView({ state, spec, node, parentId, phaseId: inheritedPhaseId, taskId, catalog });
+      this.nodes.push(view);
+      for (const child of node.steps) walk(child, node.id, view.phaseId, view.taskId);
+    };
+    walk(state.root, null);
+    this.phaseId = phaseId;
+    this.rootNodeId = state.root.id;
+    Object.freeze(this.nodes);
+    Object.freeze(this);
+  }
+
+  toJSON() {
+    const nodes = this.nodes.map((node) => node.toJSON());
+    return { phaseId: this.phaseId, stepIds: nodes.filter((node) => node.kind === "step").map((node) => node.id), taskIds: nodes.filter((node) => node.kind === "task").map((node) => node.id),
+      rootNodeId: this.rootNodeId, phaseIds: nodes.filter((node) => node.role === "phase").map((node) => node.id), nodes };
+  }
 }
 
 class QueryPage {
@@ -160,29 +320,6 @@ class CanonicalVersionDirectoryEntry {
   }
 }
 
-function canonicalJson(value, depth = 0) {
-  if (depth > FLOW_QUERY_LIMITS.MAX_CANONICAL_JSON_DEPTH) throw new Error("canonical JSON depth exceeds the limit");
-  if (value === null || typeof value !== "object") {
-    if (typeof value === "number" && !Number.isFinite(value)) throw new Error("canonical JSON cannot contain non-finite numbers");
-    return value;
-  }
-  if (Array.isArray(value)) return value.map((entry) => canonicalJson(entry, depth + 1));
-  const output = Object.create(null);
-  for (const key of Object.keys(value).sort()) output[key] = canonicalJson(value[key], depth + 1);
-  return output;
-}
-
-function canonicalDigest(value) {
-  const text = JSON.stringify(canonicalJson(value));
-  const bytes = Buffer.from(text, "utf8");
-  if (bytes.length > FLOW_QUERY_LIMITS.MAX_ARTIFACT_ID_CANONICAL_JSON_BYTES) throw new Error("artifact identity exceeds the canonical JSON byte limit");
-  return crypto.createHash("sha256").update(bytes).digest("hex");
-}
-
-function isPlainObject(value) {
-  return value !== null && typeof value === "object" && !Array.isArray(value) && Object.getPrototypeOf(value) === Object.prototype;
-}
-
 function schemaErrorPath(errors, fallback = "/request") {
   const path = /^([^:]+):/.exec(errors[0] ?? "")?.[1];
   if (path === undefined || path === "(root)") return fallback;
@@ -195,37 +332,6 @@ function assertRequestSchema(value) {
   if (errors.length > 0) {
     throw new QueryError(ERROR_CODES.INVALID_REQUEST, schemaErrorPath(errors), "request does not match the query contract");
   }
-}
-
-function requireExactObject(value, fields, label) {
-  if (!isPlainObject(value)) throw new Error(`${label} must be an object`);
-  const keys = Object.keys(value);
-  if (keys.length !== fields.length || keys.some((key) => !fields.includes(key))) {
-    throw new Error(`${label} has an invalid shape`);
-  }
-}
-
-function requirePublicString(value, label, { nullable = false } = {}) {
-  if (nullable && value === null) return null;
-  if (typeof value !== "string") throw new Error(`${label} must be a string`);
-  return publicString(value, label);
-}
-
-function requirePublicInteger(value, label, { nullable = false } = {}) {
-  if (nullable && value === null) return null;
-  if (!Number.isSafeInteger(value) || value < 0) throw new Error(`${label} must be a non-negative integer`);
-  return value;
-}
-
-function requirePublicStringList(value, label, {
-  limit = FLOW_QUERY_LIMITS.MAX_PUBLIC_COLLECTION_ITEMS,
-  unique = false,
-} = {}) {
-  if (!Array.isArray(value) || value.length > limit) {
-    throw new Error(`${label} must be a bounded array`);
-  }
-  if (unique && new Set(value).size !== value.length) throw new Error(`${label} must not contain duplicates`);
-  return value.map((entry) => requirePublicString(entry, label));
 }
 
 async function readBoundedFile(file, maxBytes, {
@@ -369,48 +475,6 @@ function replayCanonicalState(state, activities) {
   return state;
 }
 
-function publicString(value, field) {
-  if (value === null) return null;
-  if (typeof value !== "string" || Buffer.byteLength(value, "utf8") > FLOW_QUERY_LIMITS.MAX_PUBLIC_STRING_BYTES) {
-    throw new Error(`${field} exceeds the public string limit`);
-  }
-  return value;
-}
-
-function uniqueLimited(values, field, limit = FLOW_QUERY_LIMITS.MAX_PUBLIC_COLLECTION_ITEMS) {
-  const result = [...new Set(values)];
-  if (result.length > limit) throw new Error(`${field} exceeds the public collection limit`);
-  return result;
-}
-
-function uniqueObjectList(values, field, limit = FLOW_QUERY_LIMITS.MAX_PUBLIC_COLLECTION_ITEMS) {
-  const serialized = uniqueLimited(values.map((value) => JSON.stringify(value)), field, limit);
-  return serialized.map((value) => JSON.parse(value));
-}
-
-function publicArtifactId(descriptor) {
-  return canonicalDigest(artifactIdentity(descriptor));
-}
-
-function boundedPublic(value, field, depth = 0) {
-  if (depth > FLOW_QUERY_LIMITS.MAX_CANONICAL_JSON_DEPTH) throw new Error(`${field} exceeds the public nesting limit`);
-  if (value === null || typeof value === "boolean") return value;
-  if (typeof value === "string") return publicString(value, field);
-  if (typeof value === "number") {
-    if (!Number.isFinite(value)) throw new Error(`${field} must be finite`);
-    return value;
-  }
-  if (Array.isArray(value)) {
-    if (value.length > FLOW_QUERY_LIMITS.MAX_PUBLIC_COLLECTION_ITEMS) throw new Error(`${field} exceeds the public collection limit`);
-    return value.map((entry, index) => boundedPublic(entry, `${field}[${index}]`, depth + 1));
-  }
-  if (isPlainObject(value)) {
-    if (Object.keys(value).length > FLOW_QUERY_LIMITS.MAX_PUBLIC_COLLECTION_ITEMS) throw new Error(`${field} exceeds the public collection limit`);
-    return Object.fromEntries(Object.entries(value).map(([key, entry]) => [key, boundedPublic(entry, `${field}.${key}`, depth + 1)]));
-  }
-  throw new Error(`${field} has an unsupported public value`);
-}
-
 function validateIdKey(value, label) {
   if (value === null) return;
   requireExactObject(value, ["id", "key"], label);
@@ -513,25 +577,6 @@ function validateMetric(value) {
   if (typeof value.cachedResponse !== "boolean" || typeof value.costIncomplete !== "boolean") throw new Error("ActivityItem.metric flags are invalid");
 }
 
-function artifactIdentity(descriptor) {
-  const stored = descriptor.toJSON();
-  return {
-    logicalKey: stored.logicalKey,
-    kind: stored.kind,
-    relativePath: stored.relativePath,
-    hash: stored.hash,
-    size: stored.size,
-    mediaType: stored.mediaType,
-    authority: stored.authority,
-    cardinality: stored.cardinality,
-    memberId: stored.memberId,
-    publicationStep: stored.publicationStep,
-    retention: stored.retention,
-    activityId: stored.activityId,
-    migrationMaterialization: stored.migrationMaterialization,
-  };
-}
-
 class AggregateMetrics {
   constructor(value) {
     const fields = ["activityCount", "artifactCount", "stepCount", "taskCount", "durationMs", "inputTokens", "outputTokens", "cacheReadTokens", "cost", "provenance"];
@@ -561,7 +606,7 @@ class AggregateMetrics {
 
 class MetadataItem {
   constructor(value) {
-    requireExactObject(value, ["identity", "lifecycle", "location", "structure", "relationships", "timestamps", "capabilities", "artifacts", "metrics"], "MetadataItem");
+    requireExactObject(value, ["identity", "lifecycle", "location", "structure", "relationships", "timestamps", "capabilities", "artifacts", "metrics", "history"], "MetadataItem");
     requireExactObject(value.identity, ["flowId", "flowVersionId", "runId", "specId", "flowVersion"], "MetadataItem.identity");
     for (const field of ["flowId", "flowVersionId", "runId", "specId"]) requirePublicString(value.identity[field], `MetadataItem.identity.${field}`);
     requirePublicInteger(value.identity.flowVersion, "MetadataItem.identity.flowVersion");
@@ -583,7 +628,7 @@ class MetadataItem {
     } catch (error) {
       throw new Error("MetadataItem.location.git is invalid", { cause: error });
     }
-    requireExactObject(value.structure, ["phaseId", "stepIds", "taskIds"], "MetadataItem.structure");
+    requireExactObject(value.structure, ["phaseId", "stepIds", "taskIds", "rootNodeId", "phaseIds", "nodes"], "MetadataItem.structure");
     requirePublicString(value.structure.phaseId, "MetadataItem.structure.phaseId");
     requirePublicStringList(value.structure.stepIds, "MetadataItem.structure.stepIds");
     requirePublicStringList(value.structure.taskIds, "MetadataItem.structure.taskIds");
@@ -601,17 +646,19 @@ class MetadataItem {
       || Object.entries(value.capabilities).some(([key, entry]) => !/^[A-Za-z][A-Za-z0-9._-]*$/.test(key) || typeof entry !== "boolean")) throw new Error("MetadataItem.capabilities is invalid");
     if (!Array.isArray(value.artifacts) || value.artifacts.length > FLOW_QUERY_LIMITS.MAX_ARTIFACTS || value.artifacts.some((entry) => !(entry instanceof ArtifactDescriptorView))) throw new Error("MetadataItem.artifacts is invalid");
     if (!(value.metrics instanceof AggregateMetrics)) throw new Error("MetadataItem.metrics is invalid");
-    this.value = boundedPublic({ ...value, artifacts: value.artifacts.map((entry) => entry.toJSON()), metrics: value.metrics.toJSON() }, "metadata");
+    const { history, structure, artifacts, metrics, ...base } = value;
+    const originalArtifacts = artifacts.map((entry) => { const { artifactId, metadata, activityIds, nodeIds, taskIds } = entry.toJSON(); return { artifactId, metadata, activityIds, nodeIds, taskIds }; });
+    this.value = { ...boundedPublic({ ...base, structure: { phaseId: structure.phaseId, stepIds: structure.stepIds, taskIds: structure.taskIds }, artifacts: originalArtifacts, metrics: metrics.toJSON() }, "metadata"), history: structuredClone(history), structure: structuredClone(structure), artifacts: artifacts.map((entry) => entry.toJSON()) };
     Object.freeze(this.value);
     Object.freeze(this);
   }
 
-  toJSON() { return boundedPublic(this.value, "metadata"); }
+  toJSON() { return structuredClone(this.value); }
 }
 
 class ActivityItem {
   constructor(value) {
-    const fields = ["activity", "node", "task", "attempt", "sequence", "confirmationOrder", "transition", "timing", "usage", "outcome", "failure", "blocker", "incomplete", "metric", "note", "evaluationIds", "findingIds", "repairIds", "artifactIds"];
+    const fields = ["activity", "node", "task", "attempt", "sequence", "confirmationOrder", "transition", "timing", "usage", "outcome", "failure", "blocker", "incomplete", "metric", "note", "evaluationIds", "findingIds", "repairIds", "artifactIds", "detailRefs", "referenceBindings", "detailCoverage"];
     requireExactObject(value, fields, "ActivityItem");
     requireExactObject(value.activity, ["id", "type"], "ActivityItem.activity");
     requirePublicString(value.activity.id, "ActivityItem.activity.id");
@@ -631,16 +678,17 @@ class ActivityItem {
     validateTiming(value.timing); validateUsage(value.usage); validateOutcome(value.outcome); validateFailure(value.failure); validateBlocker(value.blocker, "ActivityItem.blocker"); validateIncomplete(value.incomplete); validateMetric(value.metric);
     requirePublicString(value.note, "ActivityItem.note", { nullable: true });
     for (const field of ["evaluationIds", "findingIds", "repairIds", "artifactIds"]) requirePublicStringList(value[field], `ActivityItem.${field}`);
-    this.value = boundedPublic(value, "activity");
+    const { detailRefs, referenceBindings, detailCoverage, ...base } = value;
+    this.value = { ...boundedPublic(base, "activity"), detailRefs: structuredClone(detailRefs), referenceBindings: structuredClone(referenceBindings), detailCoverage: structuredClone(detailCoverage) };
     Object.freeze(this);
   }
 
-  toJSON() { return boundedPublic(this.value, "activity"); }
+  toJSON() { return structuredClone(this.value); }
 }
 
 class ArtifactDescriptorView {
   constructor(value) {
-    requireExactObject(value, ["artifactId", "metadata", "activityIds", "nodeIds", "taskIds"], "ArtifactDescriptorView");
+    requireExactObject(value, ["artifactId", "metadata", "activityIds", "nodeIds", "taskIds", "artifactKey", "kind", "relativePath", "hash", "algorithm", "hashScope", "size", "authority", "cardinality", "memberId", "publicationStep", "retention", "producerActivityId", "referencingActivityIds"], "ArtifactDescriptorView");
     requirePublicString(value.artifactId, "ArtifactDescriptorView.artifactId");
     requireExactObject(value.metadata, ["logicalKey", "schemaRevision", "mediaType"], "ArtifactDescriptorView.metadata");
     requirePublicString(value.metadata.logicalKey, "ArtifactDescriptorView.metadata.logicalKey", { nullable: true });
@@ -653,78 +701,15 @@ class ArtifactDescriptorView {
         unique: true,
       });
     }
-    this.value = boundedPublic(value, "artifact");
+    const { artifactId, metadata, activityIds, nodeIds, taskIds, ...extended } = value;
+    this.value = { ...boundedPublic({ artifactId, metadata, activityIds, nodeIds, taskIds }, "artifact"), ...structuredClone(extended) };
     Object.freeze(this);
   }
 
-  toJSON() { return boundedPublic(this.value, "artifact"); }
+  toJSON() { return structuredClone(this.value); }
 }
 
 /** Resolve a stored ArtifactReference against the validated catalog only. */
-class ReferenceResolver {
-  constructor(catalog) {
-    if (!(catalog instanceof FlowArtifactCatalog)) throw new Error("Artifact reference resolution requires a validated catalog");
-    this.catalog = catalog;
-    Object.freeze(this);
-  }
-
-  matchingDescriptors(reference, label) {
-    if (reference === null || typeof reference !== "object") {
-      throw new QueryError(ERROR_CODES.CANONICAL_RECORD_INCONSISTENT, "/canonical", `${label} is invalid`);
-    }
-    const kind = Object.hasOwn(reference, "kind") ? reference.kind : reference.label;
-    if (typeof kind !== "string" || typeof reference.id !== "string") {
-      throw new QueryError(ERROR_CODES.CANONICAL_RECORD_INCONSISTENT, "/canonical", `${label} is invalid`);
-    }
-    return this.catalog.artifacts.filter((descriptor) => {
-      if (kind === "path") return descriptor.relativePath === reference.id;
-      if (kind === "logical") return descriptor.logicalKey === reference.id;
-      if (descriptor.kind === kind && descriptor.relativePath === reference.id) return true;
-      // Canonical result references may bind a validated resource kind to the
-      // durable content digest rather than repeating its storage path.
-      return /^[a-f0-9]{64}$/.test(reference.id)
-        && descriptor.hash === reference.id
-        && (descriptor.kind === kind || descriptor.logicalKey === kind);
-    });
-  }
-
-  resolve(reference, label, { optional = false } = {}) {
-    return this.#resolve(reference, label, { optional });
-  }
-
-  resolveActivityReference(reference, label, { optional = false } = {}) {
-    return this.#resolve(reference, label, { optional });
-  }
-
-  resolveResultReference(reference, label) {
-    const matches = this.matchingDescriptors(reference, label);
-    if (matches.length === 1) return matches[0];
-    const kind = Object.hasOwn(reference, "kind") ? reference.kind : reference.label;
-    const claimsCatalogRelation = kind === "path"
-      || kind === "logical"
-      || this.catalog.artifacts.some((descriptor) => descriptor.kind === kind || descriptor.logicalKey === kind);
-    if (matches.length === 0 && !claimsCatalogRelation) return null;
-    throw new QueryError(ERROR_CODES.CANONICAL_RECORD_INCONSISTENT, "/canonical", `${label} does not resolve to one canonical Artifact`);
-  }
-
-  #resolve(reference, label, { optional = false } = {}) {
-    const matches = this.matchingDescriptors(reference, label);
-    if (matches.length !== 1) {
-      if (optional && matches.length === 0) return null;
-      throw new QueryError(ERROR_CODES.CANONICAL_RECORD_INCONSISTENT, "/canonical", `${label} does not resolve to one canonical Artifact`);
-    }
-    return matches[0];
-  }
-
-  validateCanonicalActivityResults(activities) {
-    for (const activity of activities) {
-      for (const reference of activity.result?.artifactRefs ?? []) {
-        this.resolveResultReference(reference, "Activity result artifact reference");
-      }
-    }
-  }
-}
-
 function isoTimestamp(value, field) {
   if (!isFlowQueryDatetime(value)) throw new Error(`${field} is not a timezone-bearing ISO datetime`);
   return value;
@@ -732,10 +717,6 @@ function isoTimestamp(value, field) {
 
 function isQueryDatetime(value) {
   return isFlowQueryDatetime(value);
-}
-
-function pageInfo(page, endCursor, hasNext) {
-  return { limit: page.limit, endCursor, hasNext };
 }
 
 async function requireRealDirectory(directory, {
@@ -833,7 +814,7 @@ class CanonicalFlowVersionReader {
     return Object.freeze(versions);
   }
 
-  async open(specId, version) {
+  async open(specId, version, context = null) {
     const location = new FlowVersionLocation({
       repositoryRoot: this.repositoryRoot,
       authorityScope: FlowVersionAuthorityScope.canonical(),
@@ -854,11 +835,14 @@ class CanonicalFlowVersionReader {
           maxTotalArtifactBytes: FLOW_QUERY_LIMITS.MAX_TOTAL_ARTIFACT_BYTES,
         },
         capture: ({ catalog, readArtifact, inspectArtifact }) => this.captureCommittedSnapshot({
-          catalog, readArtifact, inspectArtifact, specId, version,
+          catalog, readArtifact, inspectArtifact, specId, version, context,
         }),
       });
     } catch (error) {
       if (error instanceof QueryError) throw error;
+      if (error instanceof FlowArtifactCatalogSnapshotUnstableError) {
+        throw new QueryError(ERROR_CODES.SNAPSHOT_UNSTABLE, "/snapshot", "canonical snapshot did not stabilize", { reason: "SNAPSHOT_RETRY_EXHAUSTED", cause: error });
+      }
       if (isCanonicalReadError(error) || isJsonParseError(error)) {
         throw new QueryError(ERROR_CODES.CANONICAL_RECORD_UNREADABLE, "/canonical", "canonical Artifact record could not be read", { cause: error });
       }
@@ -867,7 +851,23 @@ class CanonicalFlowVersionReader {
     return Object.freeze({ ...snapshot.value, catalog: snapshot.catalog, location });
   }
 
-  async captureCommittedSnapshot({ catalog, readArtifact, inspectArtifact, specId, version }) {
+  async read(specId, version, request) {
+    for (let attempt = 0; attempt < FLOW_QUERY_LIMITS.MAX_SNAPSHOT_ATTEMPTS; attempt += 1) {
+      const available = await this.listAvailableVersions(specId);
+      if (available.length === 0) throw new QueryError(ERROR_CODES.SPEC_NOT_FOUND, "/condition/specId", "requested Spec was not found");
+      if (!available.includes(version)) throw new QueryError(ERROR_CODES.FLOW_VERSION_NOT_FOUND, "/condition/flowVersion", "requested Flow Version was not found");
+      const projection = await QueryProjectionSignature.read();
+      const selected = await this.open(specId, version, new QueryCaptureContext(request, available, projection));
+      const after = await this.listAvailableVersions(specId);
+      const endingProjection = await QueryProjectionSignature.read();
+      if (JSON.stringify(available) === JSON.stringify(after) && projection.hash === endingProjection.hash) {
+        return new QueryReadSnapshot(selected, available, projection);
+      }
+    }
+    throw new QueryError(ERROR_CODES.SNAPSHOT_UNSTABLE, "/snapshot", "Version inventory or projection changed during capture", { reason: "SNAPSHOT_RETRY_EXHAUSTED" });
+  }
+
+  async captureCommittedSnapshot({ catalog, readArtifact, inspectArtifact, specId, version, context }) {
     const stateDescriptor = catalog.resolve(FLOW_ARTIFACT_CONTRACTS.resolve("flow.state").relativePath);
     const specDescriptor = catalog.resolve(FLOW_ARTIFACT_CONTRACTS.resolve("spec.record").relativePath);
     const ledgerDescriptor = catalog.resolve(FLOW_ARTIFACT_CONTRACTS.resolve("flow.activities").relativePath);
@@ -910,8 +910,27 @@ class CanonicalFlowVersionReader {
       throw new QueryError(ERROR_CODES.CANONICAL_RECORD_INCONSISTENT, "/canonical", "canonical Activity references are inconsistent", { cause: error });
     }
     const artifactSchemaRevisions = await this.captureArtifactSchemaRevisions(catalog, ledgerDescriptor, confirmedLedger.bytes, inspectArtifact);
+    const artifactBytes = new Map();
+    artifactBytes.set(ledgerDescriptor.relativePath, confirmedLedger.bytes);
+    const value = new QueryCapturedVersion({ state, spec, activities, artifactSchemaRevisions, artifactBytes, catalog,
+      stateBytes, specBytes, confirmedLedgerBytes: confirmedLedger.bytes });
+    if (context?.request) {
+      while (true) {
+        try {
+          value.rememberProjection(await new QueryProjector(context.available, context.projection).project(context.request, value));
+          break;
+        } catch (error) {
+          if (!(error instanceof QueryDetailArtifactRequired)) {
+            value.rememberProjection(null, error);
+            break;
+          }
+          if (artifactBytes.has(error.descriptor.relativePath)) throw new Error("detail hydration repeated a captured input");
+          artifactBytes.set(error.descriptor.relativePath, await readArtifact(error.descriptor));
+        }
+      }
+    }
     return new FlowArtifactCatalogSnapshotEvidence({
-      value: Object.freeze({ state, spec, activities, artifactSchemaRevisions }),
+      value: Object.freeze(value),
       activityIndex,
       confirmedLedgerBytes: confirmedLedger.bytes,
     });
@@ -1008,8 +1027,10 @@ class CanonicalFlowVersionReader {
 }
 
 class Cursor {
-  constructor({ request, order }) {
+  constructor({ request, order, snapshotId }) {
     Object.assign(this, Cursor.binding(request));
+    if (!/^sha256:[a-f0-9]{64}$/.test(snapshotId)) throw new Error("cursor requires a snapshot identity");
+    this.snapshotId = snapshotId;
     this.order = order;
     if (!Number.isSafeInteger(order) || order < 1) throw new Error("cursor order must be positive");
     this.digest = Cursor.digest(this.payload({ digest: null }));
@@ -1021,7 +1042,9 @@ class Cursor {
       digest,
       ...Cursor.binding(this),
       order: this.order,
-      version: 1,
+      version: 2,
+      schemaRevision: FLOW_QUERY_SCHEMA_REVISION,
+      snapshotId: this.snapshotId,
     };
   }
 
@@ -1037,7 +1060,7 @@ class Cursor {
     return encoded;
   }
 
-  static decode(value, request) {
+  static decode(value, request, { snapshotId = null } = {}) {
     let payload;
     try {
       if (typeof value !== "string"
@@ -1057,7 +1080,10 @@ class Cursor {
     if (!isPlainObject(payload)
       || Object.keys(payload).some((key) => !CURSOR_PAYLOAD_FIELD_SET.has(key))
       || Object.keys(payload).length !== CURSOR_PAYLOAD_FIELDS.length
-      || payload.version !== 1
+      || payload.version !== 2
+      || payload.schemaRevision !== FLOW_QUERY_SCHEMA_REVISION
+      || typeof payload.snapshotId !== "string"
+      || !/^sha256:[a-f0-9]{64}$/.test(payload.snapshotId)
       || !FLOW_QUERY_RESOURCES.includes(payload.resource)
       || typeof payload.specId !== "string"
       || typeof payload.flowVersion !== "number"
@@ -1087,6 +1113,9 @@ class Cursor {
       || payload.lt !== binding.lt) {
       throw new QueryError(ERROR_CODES.CURSOR_QUERY_MISMATCH, "/page/after", "cursor does not match this query");
     }
+    if (snapshotId !== null && payload.snapshotId !== snapshotId) {
+      throw new QueryError(ERROR_CODES.SNAPSHOT_CHANGED, "/page/after", "cursor snapshot changed", { reason: "SNAPSHOT_ID_MISMATCH", referenceId: payload.snapshotId });
+    }
     return payload.order;
   }
 
@@ -1102,7 +1131,8 @@ class Cursor {
   }
 
   static digest(payload) {
-    return crypto.createHash("sha256").update(Cursor.canonicalJson(payload), "utf8").digest("hex");
+    const { digest, ...identity } = payload;
+    return canonicalDigest(identity);
   }
 
   static canonicalJson(value) {
@@ -1111,22 +1141,25 @@ class Cursor {
 }
 
 class QueryProjector {
-  constructor(availableFlowVersions) {
+  constructor(availableFlowVersions, projection = null) {
     if (!Array.isArray(availableFlowVersions)) throw new Error("Query projector requires available Flow Versions");
     this.availableFlowVersions = Object.freeze([...availableFlowVersions]);
+    this.projection = projection;
     Object.freeze(this);
   }
 
   async project(request, version) {
     const selected = new SelectedFlowVersion(request.specId, request.flowVersion);
+    const snapshot = new QuerySnapshot(version, selected, this.availableFlowVersions, this.projection ?? await QueryProjectionSignature.read());
     return request.resource === "metadata"
-      ? this.metadata(request, version, selected)
-      : this.activities(request, version, selected);
+      ? this.metadata(request, version, selected, snapshot)
+      : this.activities(request, version, selected, snapshot);
   }
 
-  metadata(request, version, selected) {
+  metadata(request, version, selected, snapshot) {
     const item = this.metadataItem(version, selected.flowVersion);
-    return { schemaRevision: FLOW_QUERY_SCHEMA_REVISION, ok: true, resource: "metadata", selectedFlowVersion: selected.toJSON(), availableFlowVersions: this.availableFlowVersions, item: item.toJSON() };
+    return { schemaRevision: FLOW_QUERY_SCHEMA_REVISION, ok: true, resource: "metadata", selectedFlowVersion: selected.toJSON(), availableFlowVersions: this.availableFlowVersions,
+      snapshot: snapshot.toJSON(), completeness: { scope: "flow-version", enumeration: "complete", details: "not-applicable", sourceHistory: version.state.history === null ? "complete" : "partial" }, item: item.toJSON() };
   }
 
   metadataItem({ state, spec, activities, catalog, artifactSchemaRevisions }, flowVersion) {
@@ -1147,11 +1180,13 @@ class QueryProjector {
       for (const child of node.steps) walk(child);
     };
     walk(state.root);
+    const artifactRelations = new ReferenceResolver(catalog).activityRelations(activities);
     const artifactItems = catalog.artifacts.map((descriptor) => this.artifactDescriptor(
       descriptor,
       activities,
       catalog,
       { state, artifactSchemaRevisions },
+      artifactRelations,
     ));
     const stepTasks = [];
     for (const node of this.nodesOf(state.root)) {
@@ -1178,7 +1213,8 @@ class QueryProjector {
       identity: { flowId: state.flowId, flowVersionId: state.flowVersionId, runId: state.runId, specId: state.specId, flowVersion },
       lifecycle: { lifecycle: state.lifecycle.state, blocked, blocker, nextAction: next === null ? null : { operation: next.operation, phase: next.path[1] ?? null, stepId: next.path.at(-1) ?? null, taskId: nextTaskNode?.id ?? null } },
       location: { phase: currentPath[1] ?? null, stepId: leaf, taskId: taskNode?.id ?? null, git: gitSnapshot },
-      structure: { phaseId: state.root.steps.find((node) => node.steps.some((child) => child.id === currentPath[1]))?.id ?? currentPath[1] ?? "flow", stepIds: uniqueLimited(steps, "structure.stepIds"), taskIds: uniqueLimited(tasks, "structure.taskIds") },
+      structure: new QueryStructure({ state, spec, catalog, phaseId: state.root.steps.find((node) => node.steps.some((child) => child.id === currentPath[1]))?.id ?? currentPath[1] ?? "flow" }).toJSON(),
+      history: { origin: state.history === null ? "native" : "historical", ledgerCoverage: state.history === null ? "complete" : "partial", execution: state.history?.execution ?? "native", continuation: state.history?.continuation?.toJSON() ?? null },
       relationships: { stepTasks: uniqueObjectList(stepTasks, "relationships.stepTasks"), taskNodes, issues: issue },
       timestamps: activitySummary.timestamps(),
       capabilities,
@@ -1223,10 +1259,17 @@ class QueryProjector {
     };
   }
 
-  artifactDescriptor(descriptor, activities, catalog, version) {
+  artifactDescriptor(descriptor, activities, catalog, version, relations = new ReferenceResolver(catalog).activityRelations(activities)) {
+    const stored = descriptor.toJSON();
     const activity = descriptor.activityId === null ? null : activities.find((entry) => entry.id === descriptor.activityId) ?? null;
     const taskId = activity === null ? null : this.taskIdForActivity(version.state, activity);
-    return new ArtifactDescriptorView({ artifactId: publicArtifactId(descriptor), metadata: { logicalKey: requirePublicString(descriptor.logicalKey, "artifact.logicalKey", { nullable: true }), schemaRevision: this.artifactSchemaRevision(descriptor, version), mediaType: publicString(descriptor.mediaType, "artifact.mediaType") }, activityIds: activity ? [activity.id] : [], nodeIds: activity?.nodeId ? [activity.nodeId] : [], taskIds: taskId ? [taskId] : [] });
+    const referencingActivityIds = relations.activityIdsFor(descriptor);
+    return new ArtifactDescriptorView({ artifactId: publicArtifactId(descriptor), metadata: { logicalKey: requirePublicString(descriptor.logicalKey, "artifact.logicalKey", { nullable: true }), schemaRevision: this.artifactSchemaRevision(descriptor, version), mediaType: publicString(descriptor.mediaType, "artifact.mediaType") }, activityIds: activity ? [activity.id] : [], nodeIds: activity?.nodeId ? [activity.nodeId] : [], taskIds: taskId ? [taskId] : [],
+      artifactKey: publicArtifactKey(descriptor, version.state.flowVersionId),
+      kind: descriptor.kind, relativePath: descriptor.relativePath, hash: descriptor.hash, algorithm: "sha256", hashScope: descriptor.logicalKey === "flow.activities" ? "confirmed-prefix" : "file-bytes", size: descriptor.size,
+      authority: stored.authority, cardinality: stored.cardinality, memberId: stored.memberId, publicationStep: stored.publicationStep, retention: stored.retention,
+      producerActivityId: descriptor.activityId, referencingActivityIds,
+    });
   }
 
   taskIdForActivity(state, activity) {
@@ -1250,31 +1293,47 @@ class QueryProjector {
     }
   }
 
-  activities(request, version, selected) {
-    const after = request.page.after === null ? 0 : Cursor.decode(request.page.after, request);
-    const filtered = version.activities.filter((entry) => {
-      if (entry.confirmationOrder <= after) return false;
+  activities(request, version, selected, snapshot) {
+    const after = request.page.after === null ? 0 : Cursor.decode(request.page.after, request, { snapshotId: snapshot.id });
+    if (after > snapshot.value.confirmationOrder) throw new QueryError(ERROR_CODES.INVALID_CURSOR, "/page/after", "cursor order exceeds its snapshot prefix");
+    const matching = version.activities.filter((entry) => {
       if (request.recordedAt.gte === null && request.recordedAt.lt === null) return true;
       if (entry.timing?.finishedAt === null || entry.timing?.finishedAt === undefined) return false;
       return (request.recordedAt.gte === null || Date.parse(entry.timing.finishedAt) >= Date.parse(request.recordedAt.gte))
         && (request.recordedAt.lt === null || Date.parse(entry.timing.finishedAt) < Date.parse(request.recordedAt.lt));
     });
-    const items = filtered.slice(0, request.page.limit).map((entry) => this.activityItem(entry, version.state, version.catalog).toJSON());
-    const hasNext = filtered.length > items.length;
-    const endCursor = items.length === 0 ? null : new Cursor({ request, order: items.at(-1).confirmationOrder }).encode();
-    return { schemaRevision: FLOW_QUERY_SCHEMA_REVISION, ok: true, resource: "activities", selectedFlowVersion: selected.toJSON(), availableFlowVersions: this.availableFlowVersions, items, pageInfo: pageInfo(request.page, endCursor, hasNext) };
+    const remaining = matching.filter((entry) => entry.confirmationOrder > after);
+    const index = new QueryDetailIndex({ state: version.state, activities: version.activities, catalog: version.catalog, artifactBytes: version.artifactBytes, snapshotId: snapshot.id });
+    const items = [];
+    const details = [];
+    const response = () => {
+      const detailCompleteness = detailCompletenessFor(items);
+      return { schemaRevision: FLOW_QUERY_SCHEMA_REVISION, ok: true, resource: "activities", selectedFlowVersion: selected.toJSON(), availableFlowVersions: this.availableFlowVersions,
+        snapshot: snapshot.toJSON(), completeness: { scope: request.recordedAt.gte === null && request.recordedAt.lt === null ? "flow-version" : "filtered-activities", enumeration: "complete", details: detailCompleteness, sourceHistory: version.state.history === null ? "complete" : "partial" },
+        items: [...items], entities: index.closureFor(details), pageInfo: { limit: request.page.limit,
+          endCursor: items.length === 0 ? null : new Cursor({ request, order: items.at(-1).confirmationOrder, snapshotId: snapshot.id }).encode(),
+          hasNext: remaining.length > items.length, returnedItems: items.length, totalItems: matching.length } };
+    };
+    for (const activity of remaining.slice(0, request.page.limit)) {
+      const detail = index.forActivity(activity);
+      items.push(this.activityItem(activity, version.state, version.catalog, detail).toJSON());
+      details.push(detail);
+      const candidate = response();
+      if (Buffer.byteLength(JSON.stringify(candidate) + "\n", "utf8") > FLOW_QUERY_LIMITS.MAX_RESPONSE_BYTES) {
+        items.pop(); details.pop();
+        if (items.length === 0) throw new QueryError(ERROR_CODES.RESPONSE_TOO_LARGE, "/response", "one Activity and its detail closure exceed the response byte limit", { reason: "RESPONSE_BYTE_LIMIT", referenceId: activity.id });
+        break;
+      }
+    }
+    return response();
   }
 
-  activityItem(activity, state, catalog) {
+  activityItem(activity, state, catalog, details) {
     const resolver = new ReferenceResolver(catalog);
     const taskId = this.taskIdForActivity(state, activity);
     const task = activity.transition.task ?? (taskId === null
       ? null
       : { id: taskId, key: state.findNode(taskId)?.key ?? taskId });
-    const resolvePublicArtifactId = (entry, field) => {
-      const descriptor = resolver.resolveResultReference(entry, field);
-      return descriptor === null ? null : publicArtifactId(descriptor);
-    };
     const resolveOptionalActivityArtifactId = (entry, field) => {
       const descriptor = resolver.resolveActivityReference(entry, field, { optional: true });
       return descriptor === null ? null : publicArtifactId(descriptor);
@@ -1295,7 +1354,7 @@ class QueryProjector {
       transition: { operation: activity.transition.operation, status: activity.transition.status },
       timing: activity.timing?.toJSON() ?? null,
       usage: activity.usage?.toJSON() ?? null,
-      outcome: activity.result ? { outcome: activity.result.outcome, summary: publicString(activity.result.summary, "result.summary"), confirmedAt: activity.result.confirmedAt, artifactRefs: uniqueObjectList(activity.result.artifactRefs.map((entry) => ({ kind: entry.kind, id: resolvePublicArtifactId(entry, "Activity result artifact reference") })).filter((entry) => entry.id !== null), "activity.artifactRefs") } : null,
+      outcome: new QueryNodeResultView(activity.result, resolver, { legacySummary: true }).toJSON(),
       failure: this.publicFailure(activity.failure),
       blocker: attempt?.blocker ? { code: attempt.blocker.code, message: attempt.blocker.message } : null,
       incomplete: incomplete.length === 0 ? null : incomplete[0].toJSON(),
@@ -1305,21 +1364,22 @@ class QueryProjector {
       findingIds: uniqueLimited(activity.references.findings.map((entry) => entry.id), "activity.findingIds"),
       repairIds: uniqueLimited(activity.references.repairs.map((entry) => entry.id), "activity.repairIds"),
       artifactIds: publicArtifactIds(activity.references.artifacts),
+      ...details.toJSON(),
     });
   }
 }
 
-function knownResourceError({ resource, pageLimit = null }, code, jsonPath, message, availableFlowVersions = [], selectedFlowVersion = null) {
-  const base = { schemaRevision: FLOW_QUERY_SCHEMA_REVISION, ok: false, resource, selectedFlowVersion, availableFlowVersions, error: { code, path: jsonPath, message } };
+function knownResourceError({ resource, pageLimit = null }, code, jsonPath, message, availableFlowVersions = [], selectedFlowVersion = null, { snapshot = null, reason = null, referenceId = null } = {}) {
+  const base = { schemaRevision: FLOW_QUERY_SCHEMA_REVISION, ok: false, resource, selectedFlowVersion, availableFlowVersions, snapshot, completeness: null, error: { code, path: jsonPath, message, reason, referenceId } };
   return resource === "metadata"
     ? { ...base, item: null }
-    : { ...base, items: [], pageInfo: { limit: pageLimit, endCursor: null, hasNext: false } };
+    : { ...base, items: [], entities: { evaluations: [], findings: [], repairs: [] }, pageInfo: { limit: pageLimit, endCursor: null, hasNext: false, returnedItems: 0, totalItems: null } };
 }
 
 function unknownResourceError(code, jsonPath, message, resource = null) {
-  const response = { schemaRevision: FLOW_QUERY_SCHEMA_REVISION, ok: false, error: { code, path: jsonPath, message } };
+  const response = { schemaRevision: FLOW_QUERY_SCHEMA_REVISION, ok: false, snapshot: null, completeness: null, error: { code, path: jsonPath, message, reason: null, referenceId: null } };
   if (resource === null) return response;
-  return { schemaRevision: FLOW_QUERY_SCHEMA_REVISION, ok: false, resource, selectedFlowVersion: null, availableFlowVersions: [], error: response.error };
+  return { schemaRevision: FLOW_QUERY_SCHEMA_REVISION, ok: false, resource, selectedFlowVersion: null, availableFlowVersions: [], snapshot: null, completeness: null, error: response.error };
 }
 
 function publicError(error) {
@@ -1440,6 +1500,7 @@ export async function runFlowQueryCli(argv = process.argv.slice(2), { prepared =
   let reader = null;
   let available = [];
   let selectionEstablished = false;
+  let snapshot = null;
   try {
     if (prepared?.request) request = prepared.request;
     if (prepared?.error) {
@@ -1456,11 +1517,15 @@ export async function runFlowQueryCli(argv = process.argv.slice(2), { prepared =
     available = await reader.listAvailableVersions(request.specId);
     if (available.length === 0) throw new QueryError(ERROR_CODES.SPEC_NOT_FOUND, "/condition/specId", "requested Spec was not found");
     if (!available.includes(request.flowVersion)) throw new QueryError(ERROR_CODES.FLOW_VERSION_NOT_FOUND, "/condition/flowVersion", "requested Flow Version was not found");
-    const version = await reader.open(request.specId, request.flowVersion);
+    const captured = await reader.read(request.specId, request.flowVersion, request);
+    const version = captured.version;
+    available = captured.available;
     selectionEstablished = true;
-    const response = await new QueryProjector(available).project(request, version);
+    snapshot = new QuerySnapshot(version, new SelectedFlowVersion(request.specId, request.flowVersion), available, captured.projection);
+    if (version.projectionError) throw version.projectionError;
+    const response = version.response;
     const output = `${serializeQueryResponse(response)}\n`;
-    if (Buffer.byteLength(output, "utf8") > FLOW_QUERY_LIMITS.MAX_RESPONSE_BYTES) throw new QueryError(ERROR_CODES.CANONICAL_RECORD_INCONSISTENT, "/canonical", "query response exceeds the maximum size");
+    if (Buffer.byteLength(output, "utf8") > FLOW_QUERY_LIMITS.MAX_RESPONSE_BYTES) throw new QueryError(ERROR_CODES.RESPONSE_TOO_LARGE, "/response", "query response exceeds the maximum size", { reason: "RESPONSE_BYTE_LIMIT" });
     await writeStream(process.stdout, output);
     return 0;
   } catch (cause) {
@@ -1475,6 +1540,7 @@ export async function runFlowQueryCli(argv = process.argv.slice(2), { prepared =
         error.message,
         selectionEstablished || versionDiscovered ? available : [],
         selectionEstablished ? new SelectedFlowVersion(request.specId, request.flowVersion).toJSON() : null,
+        { snapshot: snapshot?.toJSON() ?? null, reason: error.reason ?? null, referenceId: error.referenceId ?? null },
       );
     } else if (FLOW_QUERY_RESOURCES.includes(requestedResource)) {
       response = knownResourceError({ resource: requestedResource }, error.code, error.jsonPath, error.message);

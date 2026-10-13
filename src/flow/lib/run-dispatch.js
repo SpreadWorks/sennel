@@ -308,13 +308,15 @@ function admitTerminalWorkerFailure(ctx, attempt, error, expectedState, invocati
     || !["missing", "invalid"].includes(error.classification)
     || !(error.isProducerFailure || DraftWorkerRejection.fromFailure(error) !== null)
     || (error.retryable && !isExternalAgentFailure(error, attempt.agentError))) return false;
+  const conditionalDraftWorker = isConditionalDraftWorkerStep(request.stepId);
   if (request.runId !== expectedState.runId || request.specId !== expectedState.specId
     || expectedState.attempt?.nodeId !== request.stepId
     || expectedState.current?.at(-1) !== request.stepId
     || expectedState.runId !== invocation.target.runId
     || (invocation.target.specId !== null && expectedState.specId !== invocation.target.specId)
     || request.stepId !== invocation.action.nextAction.step
-    || request.dispatchInvocationId !== invocation.id || request.actionDigest !== invocation.action.digest) return false;
+    || (!conditionalDraftWorker && request.dispatchInvocationId !== invocation.id)
+    || request.actionDigest !== invocation.action.digest) return false;
   // A failed authority read is a refusal, never proof that the producer failed.
   // Store exceptions remain outside this read-only boundary and propagate unchanged.
   try {
@@ -322,7 +324,10 @@ function admitTerminalWorkerFailure(ctx, attempt, error, expectedState, invocati
     if (!new CurrentAttemptIdentity(expectedState.attempt).matches(current)) return false;
     request.toPromptReference();
     request.assertCurrent(ctx.flowManager.loadReadOnly(request.specId));
-    if ((isConditionalDraftWorkerStep(request.stepId) || request.stepId === "spec-gate-repair")
+    // Conditional Draft execution can retain a claim across dispatcher restarts
+    // or claim a fresh correction invocation. Its canonical claim authenticates
+    // that worker identity independently of the enclosing dispatch invocation.
+    if ((conditionalDraftWorker || request.stepId === "spec-gate-repair")
       && canonicalWorkerExecutionClaimForStored({ flowManager: ctx.flowManager, stored: request }) === null) return false;
   } catch { return false; }
   return true;

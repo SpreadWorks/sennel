@@ -336,7 +336,7 @@ export async function reduceDocumentationEnrichment({
   projectInvocation,
 } = {}) {
   if (!(executor instanceof PromptBatchExecutor)) throw new TypeError("Enrichment reduction requires its shared executor");
-  const docsAgent = DocumentationAgent.from(agent);
+  const docsAgent = DocumentationAgent.from(agent).forCommand(agent.commandId || 'docs.enrich');
   const grouped = groupEnrichmentResults(completions);
   const finalResults = [];
   for (const entries of grouped.values()) {

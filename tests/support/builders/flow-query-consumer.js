@@ -55,7 +55,11 @@ function metadataItem(value) {
 }
 
 function activityItems(values) {
-  return values.map((item) => new ActivityItem(item).toJSON());
+  return values.map((item) => {
+    const normalized = new ActivityItem(item).toJSON();
+    if (!isDeepStrictEqual(normalized, item)) throw new Error("Activity item changed during compatibility round-trip");
+    return normalized;
+  });
 }
 
 /**
@@ -64,10 +68,13 @@ function activityItems(values) {
  * canonical record, filesystem path, or generic Flow envelope.
  */
 export class FlowQueryCompatibilityResult {
-  constructor({ resource, selectedFlowVersion: selected, availableFlowVersions: available, item = null, items = null, page = null, error = null } = {}) {
+  constructor({ resource, selectedFlowVersion: selected, availableFlowVersions: available, snapshot = null, completeness = null, entities = null, item = null, items = null, page = null, error = null } = {}) {
     this.resource = resource;
     this.selectedFlowVersion = selected;
     this.availableFlowVersions = available;
+    this.snapshot = snapshot;
+    this.completeness = completeness;
+    this.entities = entities;
     this.item = item;
     this.items = items;
     this.pageInfo = page;
@@ -112,14 +119,14 @@ export class FlowQueryConsumer {
     const selected = selectedVersion(response.selectedFlowVersion);
     const available = availableVersions(response.availableFlowVersions);
     if (response.resource === "metadata") {
-      return new FlowQueryCompatibilityResult({ resource: response.resource, selectedFlowVersion: selected, availableFlowVersions: available, item: metadataItem(response.item) });
+      return new FlowQueryCompatibilityResult({ resource: response.resource, selectedFlowVersion: selected, availableFlowVersions: available, snapshot: response.snapshot, completeness: response.completeness, item: metadataItem(response.item) });
     }
     if (!Array.isArray(response.items)
       || response.items.length > FLOW_QUERY_LIMITS.MAX_PAGE_LIMIT
       || response.items.length > response.pageInfo.limit) {
       throw new Error("activities response items are invalid");
     }
-    return new FlowQueryCompatibilityResult({ resource: response.resource, selectedFlowVersion: selected, availableFlowVersions: available, items: Object.freeze(activityItems(response.items)), page: Object.freeze({ ...response.pageInfo }) });
+    return new FlowQueryCompatibilityResult({ resource: response.resource, selectedFlowVersion: selected, availableFlowVersions: available, snapshot: response.snapshot, completeness: response.completeness, entities: response.entities, items: Object.freeze(activityItems(response.items)), page: Object.freeze({ ...response.pageInfo }) });
   }
 
   error(response) {
@@ -129,8 +136,8 @@ export class FlowQueryConsumer {
     const selected = response.selectedFlowVersion === null ? null : selectedVersion(response.selectedFlowVersion);
     const available = availableVersions(response.availableFlowVersions);
     if (response.resource === "metadata") {
-      return new FlowQueryCompatibilityResult({ resource: response.resource, selectedFlowVersion: selected, availableFlowVersions: available, error: response.error });
+      return new FlowQueryCompatibilityResult({ resource: response.resource, selectedFlowVersion: selected, availableFlowVersions: available, snapshot: response.snapshot, error: response.error });
     }
-    return new FlowQueryCompatibilityResult({ resource: response.resource, selectedFlowVersion: selected, availableFlowVersions: available, items: Object.freeze([]), page: Object.freeze({ ...response.pageInfo }), error: response.error });
+    return new FlowQueryCompatibilityResult({ resource: response.resource, selectedFlowVersion: selected, availableFlowVersions: available, snapshot: response.snapshot, entities: response.entities, items: Object.freeze([]), page: Object.freeze({ ...response.pageInfo }), error: response.error });
   }
 }
