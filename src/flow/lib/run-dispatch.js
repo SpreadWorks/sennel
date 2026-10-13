@@ -105,8 +105,8 @@ import {
 import {
   NonBlockingDecisionContext,
   decisionEvidenceForActiveFlow,
-  recordNonBlockingDecision,
 } from "./nonblocking.js";
+import { recordNonBlockingDecision } from "./nonblocking-decision.js";
 import { DraftService } from "../services/draft-service.js";
 import { draftWorkerStepRegistration } from "../engine/composition/draft.js";
 import { PreparedStep } from "../engine/composition/step-registration.js";

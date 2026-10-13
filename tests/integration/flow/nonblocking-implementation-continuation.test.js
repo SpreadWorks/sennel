@@ -4,7 +4,8 @@ import { TaskReviewScenario } from "../../support/builders/task-review-scenario.
 import { container } from "../../../src/lib/container.js";
 import RunGateCommand from "../../../src/flow/lib/run-gate.js";
 import { FLOW_COMMANDS } from "../../../src/flow/registry.js";
-import { activateNonBlockingPolicy, decisionContextForActiveFlow, recordNonBlockingDecision } from "../../../src/flow/lib/nonblocking.js";
+import { activateNonBlockingPolicy, decisionContextForActiveFlow } from "../../../src/flow/lib/nonblocking.js";
+import { recordNonBlockingDecision } from "../../../src/flow/lib/nonblocking-decision.js";
 import { StepResult } from "../../../src/flow/engine/step-result.js";
 import { settleTaskStepResult, DraftStepSettlementReceipt } from "../../../src/flow/definition.js";
 import { ImplementationReviewProducer } from "../../support/infrastructure/implementation-review-producer.js";

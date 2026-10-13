@@ -12,7 +12,8 @@ import { SpecGateIssuePublication } from "../../../src/flow/lib/gate-issue-publi
 import { CanonicalGatePromotion } from "../../../src/flow/lib/canonical-gate-artifacts.js";
 import { SpecGateStep } from "../../../src/flow/steps/spec/spec-gate.js";
 import { attachCanonicalCommandResultArtifact, CanonicalCommandResultArtifact } from "../../../src/flow/lib/canonical-command-result.js";
-import { activateNonBlockingPolicy, decisionContextForActiveFlow, recordNonBlockingDecision } from "../../../src/flow/lib/nonblocking.js";
+import { activateNonBlockingPolicy, decisionContextForActiveFlow } from "../../../src/flow/lib/nonblocking.js";
+import { recordNonBlockingDecision } from "../../../src/flow/lib/nonblocking-decision.js";
 import GetNextActionCommand from "../../../src/flow/lib/get-next-action.js";
 
 const roots = [];

@@ -234,8 +234,8 @@ import {
   activateNonBlockingPolicy,
   decisionContextForActiveFlow,
   definitionNonblockingEligibilityForActiveFlow,
-  recordNonBlockingDecision,
 } from "../../../src/flow/lib/nonblocking.js";
+import { recordNonBlockingDecision } from "../../../src/flow/lib/nonblocking-decision.js";
 import { readAuthenticatedTestExecutionCompletion } from "../../../src/flow/lib/test-chain-transition-facts.js";
 import { findStepById } from "../../../src/flow/lib/step-tree.js";
 import { ReviewFindingFingerprint } from "../../../src/flow/lib/finding-disposition-policy.js";

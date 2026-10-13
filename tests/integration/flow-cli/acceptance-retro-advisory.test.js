@@ -3,7 +3,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { test } from "node:test";
 import { AcceptancePhaseScenario } from "../../support/acceptance-phase-scenario.js";
-import { activateNonBlockingPolicy, decisionContextForActiveFlow, recordNonBlockingDecision } from "../../../src/flow/lib/nonblocking.js";
+import { activateNonBlockingPolicy, decisionContextForActiveFlow } from "../../../src/flow/lib/nonblocking.js";
+import { recordNonBlockingDecision } from "../../../src/flow/lib/nonblocking-decision.js";
 
 // Outcome -> consumer -> producer: Acceptance must retain failed-test/NotDone
 // blockers after an explicit advisory continuation. Genuine test execution and

@@ -14,7 +14,8 @@ import { StepResult } from "../../../src/flow/engine/step-result.js";
 import { settleImplStepResult, implementationNonblockingEligibilityForResult } from "../../../src/flow/definition.js";
 import { readCurrentTestChainSettlement } from "../../../src/flow/lib/test-chain-transition-facts.js";
 import { implStepRegistration, recoverTestChainExecution } from "../../../src/flow/engine/composition/impl.js";
-import { activateNonBlockingPolicy, decisionContextForActiveFlow, recordNonBlockingDecision } from "../../../src/flow/lib/nonblocking.js";
+import { activateNonBlockingPolicy, decisionContextForActiveFlow } from "../../../src/flow/lib/nonblocking.js";
+import { recordNonBlockingDecision } from "../../../src/flow/lib/nonblocking-decision.js";
 
 function digest(bytes) { return createHash("sha256").update(bytes).digest("hex"); }
 

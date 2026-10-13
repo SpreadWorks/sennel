@@ -9,7 +9,8 @@ import RunAcceptanceReviewCommand, { AcceptanceReviewResponseSource } from "../.
 import { FLOW_COMMANDS } from "../../../src/flow/registry.js";
 import { attachedCanonicalCommandResultArtifact } from "../../../src/flow/lib/canonical-command-result.js";
 import { CanonicalTestArtifactStore } from "../../../src/flow/lib/canonical-test-artifacts.js";
-import { activateNonBlockingPolicy, decisionContextForActiveFlow, recordNonBlockingDecision } from "../../../src/flow/lib/nonblocking.js";
+import { activateNonBlockingPolicy, decisionContextForActiveFlow } from "../../../src/flow/lib/nonblocking.js";
+import { recordNonBlockingDecision } from "../../../src/flow/lib/nonblocking-decision.js";
 import SetAutoCommand from "../../../src/flow/lib/set-auto.js";
 import GetStatusCommand from "../../../src/flow/lib/get-status.js";
 import RunClaimNextActionCommand from "../../../src/flow/lib/run-claim-next-action.js";

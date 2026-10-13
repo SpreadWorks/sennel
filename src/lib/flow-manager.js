@@ -1,4 +1,3 @@
-import { completeAcceptedNonblockingDecision } from "../flow/engine/composition/nonblocking-implementation.js";
 import { hasImplementationStepContract, hasAcceptanceStepContract, hasFinalizationStepContract } from "../flow/engine/step-result.js";
 import { completeAcceptedGateDeferral } from "../flow/engine/composition/gate-deferral.js";
 /**
@@ -779,10 +778,6 @@ export class FlowManager {
     return this._store.prepareAcceptedNonblockingPublication({ ...input, specId: input.specId ?? this._boundSpecId });
   }
   applyNonblockingDecision(input = {}) {
-    if ((hasAcceptanceStepContract(input.record?.sourceStep)
-      || ["task-gate", "impl-gate", "impl-review", "test-result-review"].includes(input.record?.sourceStep)) && input.record?.action === "continue") {
-      return completeAcceptedNonblockingDecision(this, { ...input, specId: input.specId ?? this._boundSpecId }).record;
-    }
     return this._store.applyNonblockingDecision({
       ...input,
       specId: input.specId ?? this._boundSpecId,

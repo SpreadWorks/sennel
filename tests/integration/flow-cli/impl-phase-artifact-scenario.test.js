@@ -25,7 +25,8 @@ import { ReviewFindingCycle } from "../../../src/flow/lib/finding-disposition-po
 import RunTestResultReviewCommand from "../../../src/flow/lib/run-test-result-review.js";
 import RunRetroCommand from "../../../src/flow/lib/run-retro.js";
 import { WorkerArtifactHandoffCoordinator } from "../../../src/flow/lib/worker-artifact-handoff.js";
-import { activateNonBlockingPolicy, decisionContextForActiveFlow, recordNonBlockingDecision } from "../../../src/flow/lib/nonblocking.js";
+import { activateNonBlockingPolicy, decisionContextForActiveFlow } from "../../../src/flow/lib/nonblocking.js";
+import { recordNonBlockingDecision } from "../../../src/flow/lib/nonblocking-decision.js";
 import { ImplPhasePublicationObserver } from "../../support/infrastructure/impl-phase-publication-observer.js";
 
 function task(id) { return { id, title: `Implement ${id}`, goal: "Implement R1", origin: "plan", added_round: 0, status: "pending" }; }

@@ -10,8 +10,8 @@ import { CanonicalFlowFixture } from "../../../support/infrastructure/flow-setup
 import {
   decisionContextForActiveFlow,
   recordEligibleNonblockingAttempt,
-  recordNonBlockingDecision,
 } from "../../../../src/flow/lib/nonblocking.js";
+import { recordNonBlockingDecision } from "../../../../src/flow/lib/nonblocking-decision.js";
 import { createTmpDir, removeTmpDir, writeJson } from "../../../support/builders/tmp-dir.js";
 import { commitAll, initGitRepo } from "../../../support/infrastructure/git-repo.js";
 

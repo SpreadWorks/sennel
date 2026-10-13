@@ -17,8 +17,8 @@ import { FlowAtStepFixture, makeFlowManager } from "../../support/infrastructure
 import {
   activateNonBlockingPolicy,
   decisionContextForActiveFlow,
-  recordNonBlockingDecision,
 } from "../../../src/flow/lib/nonblocking.js";
+import { recordNonBlockingDecision } from "../../../src/flow/lib/nonblocking-decision.js";
 
 const SPEC_ID = "001-test";
 const SCRIPT_PATH = "final-regression-fixture.sh";

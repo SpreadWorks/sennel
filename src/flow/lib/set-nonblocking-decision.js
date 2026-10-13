@@ -1,5 +1,5 @@
 import { FlowCommand } from "./base-command.js";
-import { recordNonBlockingDecision } from "./nonblocking.js";
+import { recordNonBlockingDecision } from "./nonblocking-decision.js";
 import { nonblockingFailureEnvelope } from "./nonblocking-command-failure.js";
 import { flowTargetBindingForContext } from "./guarded-command.js";
 

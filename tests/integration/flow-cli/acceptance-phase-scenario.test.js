@@ -19,7 +19,8 @@ import { RepairArtifactRegistry } from "../../../src/flow/lib/repair-state-ident
 import { UnknownProviderFailure } from "../../../src/lib/agent-failure.js";
 import { AcceptanceEvidenceExecutionPlan } from "../../../src/flow/lib/run-acceptance-review.js";
 import { PromptExecutionLimit, PromptRequestLimit } from "../../../src/lib/prompt-batching.js";
-import { activateNonBlockingPolicy, decisionContextForActiveFlow, recordNonBlockingDecision } from "../../../src/flow/lib/nonblocking.js";
+import { activateNonBlockingPolicy, decisionContextForActiveFlow } from "../../../src/flow/lib/nonblocking.js";
+import { recordNonBlockingDecision } from "../../../src/flow/lib/nonblocking-decision.js";
 import * as definition from "../../../src/flow/definition.js";
 import { acceptancePhaseResultContracts } from "../../support/assertions/acceptance-phase-result.js";
 import { assertAcceptanceFinalRegressionEvidence } from "../../support/assertions/acceptance-final-regression.js";

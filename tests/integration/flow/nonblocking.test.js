@@ -21,8 +21,8 @@ import {
   definitionNonblockingEligibilityForActiveFlow,
   decisionContextForActiveFlow,
   decisionEvidenceForActiveFlow,
-  recordNonBlockingDecision,
 } from "../../../src/flow/lib/nonblocking.js";
+import { applyNonblockingDecision, recordNonBlockingDecision } from "../../../src/flow/lib/nonblocking-decision.js";
 import { removeTmpDir } from "../../support/builders/tmp-dir.js";
 import { fromAcceptanceResult, fromFinalRegressionResult, fromGateResult, fromReviewResult, fromVerificationResult } from "../../../src/flow/lib/nonblocking-evidence.js";
 import { CanonicalAcceptanceArtifactStore } from "../../../src/flow/lib/canonical-acceptance-artifacts.js";
@@ -363,7 +363,7 @@ describe("canonical nonblocking policy", () => {
     }
   });
 
-  it("rejects direct Store mutations whose full evidence identity is not current", async (t) => {
+  it("rejects direct Store continuation and registered mutations whose full evidence identity is not current", async (t) => {
     const { root, manager, fixture } = await scenario(t);
     try {
       activateNonBlockingPolicy({
@@ -378,6 +378,20 @@ describe("canonical nonblocking policy", () => {
       const policy = state.policy.nonblocking;
       const before = JSON.stringify({ state: manager.canonicalState(fixture.specId),
         activities: manager.activityLedger(fixture.specId), catalog: manager.artifactCatalog(fixture.specId) });
+      assert.throws(() => manager.applyNonblockingDecision({
+        specId: fixture.specId,
+        nodeId: "impl-gate",
+        record: new ActivityNonBlockingRecord({
+          ...observation, kind: "decision", action: "continue",
+          rationale: "Direct continuation must not bypass its registered Result.",
+          remainingRisk: "The canonical evidence remains unresolved.",
+        }),
+        eligibility,
+      }), (error) => error instanceof CurrentFlowStateInvariantError
+        && error.code === "CURRENT_FLOW_STATE_INVARIANT_INVALID"
+        && error.message === "Step continuation requires its registered Result and accepted publication");
+      assert.equal(JSON.stringify({ state: manager.canonicalState(fixture.specId),
+        activities: manager.activityLedger(fixture.specId), catalog: manager.artifactCatalog(fixture.specId) }), before);
       for (const mutation of [
         { sourceStep: "spec-gate" },
         { sourceAttempt: context.sourceAttempt + 1 },
@@ -412,7 +426,7 @@ describe("canonical nonblocking policy", () => {
           remainingRisk: "The canonical evidence remains unresolved.",
           ...mutation,
         });
-        assert.throws(() => manager.applyNonblockingDecision({
+        assert.throws(() => applyNonblockingDecision(manager, {
           specId: fixture.specId,
           nodeId: "impl-gate",
           record: mismatchedDecision,
