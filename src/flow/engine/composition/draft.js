@@ -37,7 +37,7 @@ import { readProspectiveDraftGateFacts } from "../../lib/gate-transition-facts.j
 import { StepAdmissionRefusal } from "../../lib/step-admission-refusal.js";
 import { CurrentFlowStateConflictError } from "../../lib/current-flow-state-conflict-error.js";
 import { workerStepExecutionContract } from "../../lib/worker-execution-admission.js";
-import { gateStepExecutionContract, reviewStepExecutionContract } from "../../lib/execution-admission.js";
+import { acquirePendingExecutionContract, gateStepExecutionContract, reviewStepExecutionContract } from "../../lib/execution-admission.js";
 
 export async function prepareDraftWorkerServiceArguments(input, ConnectorClass) {
   const { ctx, request, preparation, handoffCoordinator } = input;
@@ -115,6 +115,8 @@ export async function prepareDraftReviewServiceArguments(input, _ConnectorClass,
   const publicationResult = input.publicationResult ?? null;
   let document = null;
   let completionFacts = null;
+  const executionContract = commandResult !== null || publicationResult !== null
+    ? acquirePendingExecutionContract({ flowManager, binding }) : null;
   if (commandResult !== null) {
     const artifact = attachedCanonicalCommandResultArtifact(commandResult);
     if (artifact?.logicalKey !== route.reviewLogicalKey) {
@@ -137,7 +139,7 @@ export async function prepareDraftReviewServiceArguments(input, _ConnectorClass,
   }
   return [new DraftReviewInput({ stepId, route, document,
     executionBinding, publicationPending: publicationResult !== null, completionFacts }),
-    new DraftReviewSettlementWriter({ flowManager, binding, commandResult,
+    new DraftReviewSettlementWriter({ flowManager, binding, commandResult, executionContract,
       executionBinding, publicationResult })];
 }
 
@@ -175,6 +177,7 @@ export async function prepareDraftGateServiceArguments({ ctx, result }) {
         specId: ctx.specId ?? ctx.flowState.specId,
       });
       const state = binding.assertCurrent();
+      const executionContract = acquirePendingExecutionContract({ flowManager: ctx.flowManager, binding, generation: 0 });
       const attached = attachedCanonicalCommandResultArtifact(result);
       let issuePublication = null;
       if (attached?.payload?.result === "fail") {
@@ -187,7 +190,7 @@ export async function prepareDraftGateServiceArguments({ ctx, result }) {
       const facts = readProspectiveDraftGateFacts({ flowManager: ctx.flowManager,
         binding, commandResult: result });
       return [new DraftGateInput({ facts, issuePublication }),
-        new DraftGateSettlementWriter({ flowManager: ctx.flowManager, binding,
+        new DraftGateSettlementWriter({ flowManager: ctx.flowManager, binding, executionContract,
           commandResult: result })];
 }
 

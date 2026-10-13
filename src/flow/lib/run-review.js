@@ -1,3 +1,8 @@
+import { loadMergedGuardrails } from "../../lib/guardrail.js";
+import { ReviewExecutionAdmission } from "./spec-review-operations-values.js";
+import { ExecutionProtocolSnapshot } from "./execution-protocol-snapshot.js";
+import { FlowExecutionContractRefusal, executionValueDigest } from "./flow-execution-contract.js";
+import { RuntimeChildExecution } from "../../lib/runtime-package.js";
 import { ReviewFindingCycle } from "./finding-disposition-policy.js";
 import {
   attachCanonicalCommandResultArtifact,
@@ -29,6 +34,7 @@ import {
 import { CurrentFlowStateConflictError } from "./current-flow-state-conflict-error.js";
 import { Envelope } from "../../lib/flow-envelope.js";
 import {
+  ReviewProviderRequestIdentity,
   DraftReviewExecutionBinding,
   DraftReviewExecutionClaim,
   DraftReviewExecutionTargetIdentity,
@@ -283,7 +289,7 @@ async function checkpointRequirementTestReviewExecution({ flowManager, workUnit 
  * provider request exists. Re-entry reuses the Store-owned generation only
  * when the rebuilt manifest is byte-identical to the admitted contract.
  */
-async function claimDraftReviewExecution({ flowManager, state, phase, manifest }) {
+async function claimDraftReviewExecution({ flowManager, state, phase, manifest, skipConfirm, inputBaselines = [] }) {
   const stepResult = draftReviewExecutionRequiredResult(phase);
   if (stepResult === null) return null;
   const binding = Object.freeze({
@@ -293,8 +299,10 @@ async function claimDraftReviewExecution({ flowManager, state, phase, manifest }
     attempt: state.attempt,
   });
   const executionState = flowManager.draftStepExecutionState({ binding });
-  const target = new DraftReviewExecutionTargetIdentity(manifest.target.toJSON());
   const current = executionState.lifecycle;
+  const executionContract = ExecutionProtocolSnapshot.forReview({ manifest, skipConfirm }).bind({ binding, generation: current?.executionGeneration ?? executionState.nextGeneration,
+    inputRevision: manifest.inputDigest, inputBaselines });
+  const target = new DraftReviewExecutionTargetIdentity(manifest.target.toJSON());
   let executionBinding;
   let checkpointRequired = true;
   if (current !== null && ["checkpoint", "claimed"].includes(current.phase)) {
@@ -344,6 +352,7 @@ async function claimDraftReviewExecution({ flowManager, state, phase, manifest }
       target,
     });
   }
+  if (current?.phase === "claimed") flowManager.readExecutionContract({ executionContract });
   let stepBinding;
   let selected = stepResult;
   let preparedStep;
@@ -377,8 +386,10 @@ async function claimDraftReviewExecution({ flowManager, state, phase, manifest }
     settlement: selectedSettlement,
     executionBinding,
     executionClaim: new DraftReviewExecutionClaim(),
+    executionContract,
   });
-  return executionBinding;
+  return new ReviewExecutionAdmission({ request: new ReviewProviderRequestIdentity({ skipConfirm }),
+    executionContract, recoveredClaim: current?.phase === "claimed" });
 }
 
 function checkpointFailedDraftReviewExecution({ flowManager, state, phase }) {
@@ -1809,6 +1820,14 @@ export class RunReviewCommand extends FlowCommand {
       }
       throw error;
     }
+    const executionOptionsInput = { logicalKey: "review.execution-options", logicalPath: "execution-options.json",
+      mediaType: "application/json", bytes: Buffer.from(JSON.stringify({
+        configDigest: executionValueDigest(ctx.config ?? {}), skipConfirm: ctx.skipConfirm === true,
+      })) };
+    workUnit.workUnit.declareInput(executionOptionsInput);
+    const guardrailsInput = { logicalKey: "review.guardrails", logicalPath: "guardrails.json",
+      mediaType: "application/json", bytes: Buffer.from(JSON.stringify(loadMergedGuardrails(executionRoot))) };
+    workUnit.workUnit.declareInput(guardrailsInput);
     let taskRecoveryBaseline = null;
     let taskCanonicalObservation = null;
     let taskCanonicalObservationBoundary = null;
@@ -1870,10 +1889,17 @@ export class RunReviewCommand extends FlowCommand {
           expectedNodeId,
         });
         if (existing === null) {
+          const contractArtifact = TaskReviewOperations.executionContractArtifact({ flowManager: ctx.flowManager, state });
+          const contractPath = path.relative(executionRoot, path.join(
+            ctx.flowManager.specLocation(state.specId).directory, contractArtifact.relativePath,
+          )).split(path.sep).join("/");
+          // The parent will publish only this generation's contract with its claim.
+          // Its exact producer and bytes remain checked by the canonical observation.
+          const contractPaths = contractPath.startsWith("../") || path.posix.isAbsolute(contractPath) ? [] : [contractPath];
           taskRecoveryBaseline = SourceMutationBaseline.capture({
             root: executionRoot,
             attempt: taskReviewExecution.attempt,
-            ignoredDirectories: taskReviewRecoveryIgnoredDirectories(executionRoot, workUnit, taskReviewAgent),
+            ignoredDirectories: [...taskReviewRecoveryIgnoredDirectories(executionRoot, workUnit, taskReviewAgent), ...contractPaths],
             runtimeLocks: taskReviewPublicationRuntimeLocks(ctx.flowManager, state.specId, executionRoot),
           });
           taskRecoveryBaselineInput = newTaskReviewBaselineInput({
@@ -1892,9 +1918,21 @@ export class RunReviewCommand extends FlowCommand {
         workUnit.workUnit.declareInput(taskCanonicalObservationInput);
       }
       if (persistedPhase === "test") {
+        const manifest = workUnit.workUnit.manifest();
+        const binding = { runId: state.runId, specId: state.specId, stepId: expectedNodeId,
+          nodeId: expectedNodeId, taskId, attempt: state.attempt };
+        const executionContract = ExecutionProtocolSnapshot.forReview({ manifest, skipConfirm: ctx.skipConfirm === true }).bind({ binding, generation: 0, inputRevision: manifest.inputDigest, inputBaselines: workUnit.inputBaselines });
+        const saved = ctx.flowManager.readStoredExecutionContract({ binding, generation: 0, optional: true });
+        if (saved !== null) ctx.flowManager.readExecutionContract({ executionContract });
+        workUnit.workUnit.executionContract = executionContract;
         await checkpointRequirementTestReviewExecution({
           flowManager: ctx.flowManager,
           workUnit,
+        });
+        const claim = ctx.flowManager.claimExecutionContract({ binding, executionContract });
+        reviewProviderRequest = new ReviewExecutionAdmission({
+          request: new ReviewProviderRequestIdentity({ skipConfirm: ctx.skipConfirm === true }),
+          executionContract, recoveredClaim: !claim.newlyClaimed,
         });
       }
       if (draftReviewExecutionRequiredResult(persistedPhase) !== null) {
@@ -1903,8 +1941,12 @@ export class RunReviewCommand extends FlowCommand {
           state,
           phase: persistedPhase,
           manifest: workUnit.workUnit.manifest(),
+          skipConfirm: ctx.skipConfirm === true,
+          inputBaselines: workUnit.inputBaselines,
         });
         if (executionAdmission instanceof Envelope) return executionAdmission;
+        workUnit.workUnit.executionContract = executionAdmission.executionContract;
+        reviewProviderRequest = executionAdmission;
       }
       if (persistedPhase === "spec" && !dryRun) {
         try {
@@ -1913,6 +1955,7 @@ export class RunReviewCommand extends FlowCommand {
             state,
             manifest: workUnit.workUnit.manifest(),
             skipConfirm: ctx.skipConfirm === true,
+            inputBaselines: workUnit.inputBaselines,
           });
         } catch (error) {
           if (error instanceof CurrentFlowStateConflictError) {
@@ -1926,6 +1969,7 @@ export class RunReviewCommand extends FlowCommand {
           const manifest = workUnit.workUnit.manifest();
           reviewProviderRequest = await (taskId === null ? claimImplReviewExecution : claimTaskReviewExecution)({
             flowManager: ctx.flowManager, state, manifest, skipConfirm: ctx.skipConfirm === true,
+            inputBaselines: workUnit.inputBaselines,
           });
           if (taskId !== null) {
             taskCanonicalObservation = TaskReviewOperations.authorizeExecutionObservation({
@@ -1944,6 +1988,7 @@ export class RunReviewCommand extends FlowCommand {
           throw error;
         }
       }
+      if (reviewProviderRequest?.executionContract) workUnit.workUnit.executionContract = reviewProviderRequest.executionContract;
       try {
         sealedWorkUnit = workUnit.workUnit.recoverSealed();
       } catch (error) {
@@ -1955,12 +2000,14 @@ export class RunReviewCommand extends FlowCommand {
     } catch (error) {
       return await this.#canonicalFailure(ctx, persistedPhase, error);
     }
-    if (["spec", "impl"].includes(persistedPhase) && !dryRun && sealedWorkUnit === null && reviewProviderRequest.recoveredClaim) {
+    if (!dryRun && sealedWorkUnit === null && reviewProviderRequest?.recoveredClaim) {
       return await this.#canonicalFailure(ctx, persistedPhase,
-        new Error("the claimed Spec Review provider request has no sealed output for recovery"));
+        new FlowExecutionContractRefusal("the claimed Review provider request has no sealed output for recovery"));
     }
     if (sealedWorkUnit === null) {
       const prepared = workUnit.prepare();
+      workUnit.workUnit.writeInput(executionOptionsInput);
+      workUnit.workUnit.writeInput(guardrailsInput);
       if (taskId !== null) {
         workUnit.workUnit.writeInput(taskRecoveryBaselineInput);
         workUnit.workUnit.writeInput(taskCanonicalObservationInput);
@@ -1977,12 +2024,13 @@ export class RunReviewCommand extends FlowCommand {
       const args = [];
       if (phase && phase !== IMPL_REVIEW_PHASE) args.push("--phase", phase);
       if (taskSpec !== null) args.push("--task-spec", taskSpec.logicalPath);
-      if (reviewProviderRequest !== null
+      if (reviewProviderRequest?.request != null
         ? reviewProviderRequest.request.skipConfirm : ctx.skipConfirm) args.push("--skip-confirm");
       const env = {
         ...process.env,
         [PRODUCT.env("REVIEW_OUTPUT_DIR")]: surface.directory,
         [REVIEW_WORK_UNIT_MANIFEST_ENV]: surface.manifestPath,
+        [PRODUCT.env("REVIEW_EXECUTION_CONTRACT_ID")]: workUnit.workUnit.executionContract.id,
         [PRODUCT.env("REVIEW_SPEC_SOURCE")]: JSON.stringify(specSource),
         ...(specReviewInput === null ? {} : {
           [PRODUCT.env("REVIEW_SPEC_REVIEW_SOURCE")]: JSON.stringify(specReviewInput.toJSON()),
@@ -2012,7 +2060,11 @@ export class RunReviewCommand extends FlowCommand {
       let res;
       try {
         res = await runCmdWithRetry(
-          () => this.runCommand("node", [scriptPath, ...args], { cwd: executionRoot, env }),
+          async () => {
+            const child = new RuntimeChildExecution({ environment: env });
+            try { return await this.runCommand("node", [scriptPath, ...args], child.options({ cwd: executionRoot })); }
+            finally { child.close(); }
+          },
           {
             phase: persistedPhase,
             retryCount: 0,
@@ -2135,6 +2187,7 @@ export class RunReviewCommand extends FlowCommand {
 
     let publicationStarted = false;
     try {
+      ctx.flowManager.readExecutionContract({ executionContract: workUnit.workUnit.executionContract });
       const taskReviewPublicationBinding = taskId === null ? null : new TaskReviewPublicationBinding({
         executionIdentity: taskReviewExecution,
         source: workUnit.taskSource,

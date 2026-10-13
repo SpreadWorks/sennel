@@ -1,3 +1,4 @@
+import { FlowExecutionInputBaseline } from "./flow-execution-contract.js";
 import { CURRENT_FLOW_SCHEMA_REVISION } from "../../lib/flow-schema-revision.js";
 /**
  * Version-1 review execution boundary.
@@ -578,6 +579,7 @@ export class CanonicalReviewWorkUnit {
     this.taskId = taskId == null ? null : requiredText(taskId, "canonical review taskId");
     this.nodeId = nodeIdFor({ phase: this.phase, taskId: this.taskId });
     this.specRecordDescriptor = null;
+    this.inputDescriptors = [];
     const typed = flowManager.canonicalState(state.specId);
     if (typed?.attempt?.nodeId !== this.nodeId) {
       throw new Error(`canonical review requires active Attempt for ${this.nodeId}`);
@@ -628,6 +630,12 @@ export class CanonicalReviewWorkUnit {
     });
   }
 
+  get inputBaselines() { return this.inputDescriptors.map((descriptor) => new FlowExecutionInputBaseline({ descriptor })); }
+
+  #rememberInput(descriptor) {
+    if (!this.inputDescriptors.some((entry) => entry.relativePath === descriptor.relativePath)) this.inputDescriptors.push(descriptor);
+  }
+
   prepare() {
     this.workUnit.prepare();
     return Object.freeze({ directory: this.workUnit.directory });
@@ -645,6 +653,7 @@ export class CanonicalReviewWorkUnit {
       optional,
     });
     if (resolved === null) return null;
+    this.#rememberInput(resolved.descriptor);
     if (logicalKey === "spec.record") this.specRecordDescriptor = resolved.descriptor;
     const input = {
       logicalKey,
@@ -682,6 +691,7 @@ export class CanonicalReviewWorkUnit {
       // equivalent serialization and could break its descriptor binding.
       bytes: Buffer.from(current.bytes),
     };
+    if (current.descriptor !== null) this.#rememberInput(current.descriptor);
     this.specReviewSource = Object.freeze({
       revision: current.revision,
       descriptor: current.descriptor,

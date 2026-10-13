@@ -1,21 +1,31 @@
 import { settleAcceptanceStepResult, implementationNonblockingEligibilityForResult } from "../../definition.js";
-import { isDeepStrictEqual } from "node:util";
 import { StepExecutionContract } from "./step-execution-contract.js";
 import { StepAdmissionRefusal } from "../../lib/step-admission-refusal.js";
 import { BlockedDirective } from "../../lib/next-action-directive.js";
 
 import { AcceptanceReceiptReplay } from "../../lib/acceptance-receipt-replay.js";
+import { readAcceptanceExecutionContinuation, readAcceptanceExecutionContract } from "../../lib/acceptance-execution-session.js";
+import { AcceptanceReviewInput } from "../../services/acceptance-review-input.js";
+import { acceptanceReviewContinuationResult } from "../../steps/acceptance/acceptance-review.js";
 
 class AcceptanceProjectionPreparation {
-  constructor(saved, projectedResult = null) {
+  constructor(saved, projectedResult = null, projectedSettlement = null) {
     this.saved = saved;
-    this.settlement = projectedResult === null ? saved?.settlement ?? null : settleAcceptanceStepResult(projectedResult.stepId, projectedResult);
+    this.projectedResult = projectedResult;
+    this.settlement = projectedSettlement ?? (projectedResult === null ? saved?.settlement ?? null : settleAcceptanceStepResult(projectedResult.stepId, projectedResult));
     this.eligibility = saved === null ? null : implementationNonblockingEligibilityForResult(saved.result);
     Object.freeze(this);
   }
   get directive() {
+    if (this.projectedResult?.kind === "acceptance-review-execution-held"
+      && this.settlement?.kind === "await") {
+      return new BlockedDirective({ code: this.projectedResult.continuation.code,
+        reason: "Acceptance execution cannot continue from its saved contract and provider observations.",
+        resumeInstruction: "Preserve the current execution evidence and use its explicit recovery boundary; do not repeat an uncertain provider call." });
+    }
     if (this.saved?.result.kind === "acceptance-review-execution-required"
-      && this.saved.receipt.executionLifecycle?.phase === "claimed") {
+      && this.saved.receipt.executionLifecycle?.phase === "claimed"
+      && this.projectedResult === null) {
       return new BlockedDirective({ code: "ACCEPTANCE_EXECUTION_CLAIMED",
         reason: "Acceptance execution is claimed and its response has not been published.",
         resumeInstruction: "Await the owning execution or use its explicit recovery boundary; do not start another provider call." });
@@ -59,21 +69,41 @@ export function selectAcceptanceExecution(input) {
   let preparation = input.preparation ?? null;
   const binding = input.binding ?? preparation?.binding ?? null;
   const dryRun = input.dryRun === true || input.ctx?.dryRun === true;
-  const saved = flowManager.readCurrentStepSettlement({ specId, stepId: input.stepId });
   const receipt = input.receipt == null ? null : new AcceptanceReceiptReplay({ flowManager, specId,
     stepId: input.stepId, receipt: input.receipt instanceof AcceptanceReceiptReplay ? input.receipt.receipt : input.receipt });
+  if (receipt !== null) return new AcceptanceExecutionSelection({ state, stepId: input.stepId,
+    registration: input.registration, binding: null, preparation: null, receipt });
   if (binding !== null) {
     binding.assertCurrent();
     if (binding.stepId !== input.stepId || preparation?.observed?.stepId !== input.stepId) {
       throw new StepAdmissionRefusal("Acceptance adoption requires its exact acquired publication");
     }
-    if (input.stepId === "acceptance-review" && preparation.observed.evidence?.executionRequired) {
-      if (saved?.result.kind === "acceptance-review-mechanically-blocked"
+    if (input.stepId === "acceptance-review") {
+      const pendingContract = readAcceptanceExecutionContract({ flowManager, state, binding, context: preparation.context });
+      if (pendingContract !== null) pendingContract.assertMatches(preparation.executionContract);
+    }
+  }
+  const saved = flowManager.readCurrentStepSettlement({ specId, stepId: input.stepId });
+  const claimedAcceptance = input.stepId === "acceptance-review"
+    && saved?.result.kind === "acceptance-review-execution-required"
+    && saved.receipt.executionLifecycle?.phase === "claimed";
+  const continuation = claimedAcceptance
+    ? preparation?.observed?.continuation ?? readAcceptanceExecutionContinuation({ flowManager, state, saved })
+    : null;
+  const continuationResult = continuation === null ? null
+    : acceptanceReviewContinuationResult(new AcceptanceReviewInput({ evidence: saved.result.evidence, continuation }));
+  const continuationSettlement = continuationResult === null ? null
+    : settleAcceptanceStepResult(input.stepId, continuationResult);
+
+  if (binding !== null) {
+    if (input.stepId === "acceptance-review") {
+      if (preparation.observed.evidence?.executionRequired && saved?.result.kind === "acceptance-review-mechanically-blocked"
         && preparation.observed.evidence.fingerprint === saved.result.evidence.fingerprint) {
         throw new StepAdmissionRefusal("Acceptance evidence remains mechanically blocked; unchanged evidence grants no new provider generation");
       }
       const previous = saved?.receipt.executionLifecycle;
-      if (previous?.phase === "claimed" && preparation.executionLifecycle?.phase !== "claimed") {
+      if (previous?.phase === "claimed" && preparation.executionLifecycle?.phase !== "claimed"
+        && continuationSettlement?.kind !== "execution") {
         throw new StepAdmissionRefusal("Acceptance provider response was not saved; explicit recovery is required");
       }
       if (previous !== null && previous !== undefined && preparation.executionBinding !== null
@@ -86,14 +116,14 @@ export function selectAcceptanceExecution(input) {
     const action = state.nextAction();
     const active = state.current?.at(-1) === input.stepId;
     if (!active && action?.nodeId !== input.stepId) throw new StepAdmissionRefusal("Acceptance direct execution differs from the selected Action");
-    if (input.stepId === "acceptance-review" && (saved?.receipt.executionLifecycle?.phase === "claimed"
+    if (input.stepId === "acceptance-review" && (claimedAcceptance && continuationSettlement?.kind !== "execution"
       || saved?.result.type === "error")) throw new StepAdmissionRefusal("Acceptance provider execution requires explicit recovery of its saved interruption");
   }
   if (dryRun && binding !== null) throw new StepAdmissionRefusal("Acceptance preview cannot adopt a publication");
   if (preparation === null) {
-    const projectedResult = saved === null && input.stepId === "acceptance-decision" && state.current?.at(-1) === "acceptance-decision"
-      ? acceptanceDecisionResult(prepareAcceptanceDecisionInput({ flowManager, state }).observed) : null;
-    preparation = new AcceptanceProjectionPreparation(saved, projectedResult);
+    const projectedResult = continuationResult ?? (saved === null && input.stepId === "acceptance-decision" && state.current?.at(-1) === "acceptance-decision"
+      ? acceptanceDecisionResult(prepareAcceptanceDecisionInput({ flowManager, state }).observed) : null);
+    preparation = new AcceptanceProjectionPreparation(saved, projectedResult, continuationSettlement);
   }
   return new AcceptanceExecutionSelection({ state, stepId: input.stepId,
     registration: input.registration, binding, preparation, receipt });

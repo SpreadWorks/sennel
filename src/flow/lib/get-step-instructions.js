@@ -15,7 +15,8 @@
  * structural guarantee that every registered key has a backing file.
  */
 
-import { readFileSync } from "fs";
+import { readRuntimeResource } from "../../lib/runtime-package.js";
+
 import path from "path";
 import { fileURLToPath } from "url";
 import { PKG_DIR } from "../../lib/cli.js";
@@ -53,7 +54,7 @@ export function getStepInstructions(instructionsKey) {
   const filePath = resolveKeyPath(instructionsKey);
   let rawContent;
   try {
-    rawContent = readFileSync(filePath, "utf8");
+    rawContent = readRuntimeResource(filePath);
   } catch (err) {
     if (err.code === "ENOENT") {
       throw new Error(`INSTRUCTIONS_NOT_FOUND: no prompt file for key '${instructionsKey}' (expected at ${filePath})`);

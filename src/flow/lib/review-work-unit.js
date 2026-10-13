@@ -1,3 +1,4 @@
+import { FlowExecutionContract, FlowExecutionContractRefusal } from "./flow-execution-contract.js";
 /**
  * Transient input/output work unit for one canonical review Attempt.
  *
@@ -86,6 +87,7 @@ export class ReviewWorkUnit {
     );
     this.inputs = [];
     this.manifestDocument = null;
+    this.executionContract = null;
   }
 
   prepare() {
@@ -155,6 +157,11 @@ export class ReviewWorkUnit {
     this.manifestDocument = this.manifest();
     new AtomicFile(this.manifestPath, { phaseNamespace: "review-work-unit-manifest" })
       .write(Buffer.from(`${JSON.stringify(this.manifestDocument.toJSON(), null, 2)}\n`, "utf8"));
+    if (this.executionContract !== null) {
+      new AtomicFile(path.join(this.root, "execution.json"), { phaseNamespace: "review-work-unit-execution" })
+        .write(Buffer.from(JSON.stringify({ manifestDigest: this.manifestDocument.digest,
+          contractId: this.executionContract.id, contract: this.executionContract.toJSON() })));
+    }
     return Object.freeze({ manifest: this.manifestDocument, manifestPath: this.manifestPath, directory: this.root, outputPath: this.outputPath() });
   }
 
@@ -224,6 +231,19 @@ export class ReviewWorkUnit {
     instance.manifestDocument = manifest;
     instance.manifestDigest = snapshot.digest;
     return instance;
+  }
+
+  readExecutionContract() {
+    const proof = JSON.parse(regularFile(path.join(this.root, "execution.json"), "review execution proof").bytes.toString("utf8"));
+    if (Object.keys(proof).sort().join(",") !== "contract,contractId,manifestDigest") {
+      throw new FlowExecutionContractRefusal("Review execution proof has invalid fields");
+    }
+    const contract = FlowExecutionContract.fromJSON(proof.contract);
+    if (proof.contractId !== contract.id || proof.manifestDigest !== this.manifestDocument.digest
+      || contract.inputRevision !== this.manifestDocument.inputDigest) {
+      throw new FlowExecutionContractRefusal("Review execution proof differs from its manifest");
+    }
+    return contract;
   }
 
   assertOutputDirectory(directory) {

@@ -4,6 +4,8 @@
  * Shared guardrail logic: load, filter, match, and merge guardrails from JSON.
  */
 
+import { readRuntimeResource, runtimeResourceExists } from "./runtime-package.js";
+
 import fs from "fs";
 import path from "path";
 import { createHash } from "node:crypto";
@@ -106,7 +108,7 @@ function hydrate(entry, sourcePath) {
  * @returns {Object[]} Array of guardrail objects
  */
 export function loadGuardrailFile(filePath) {
-  const content = fs.readFileSync(filePath, "utf8");
+  const content = readRuntimeResource(filePath);
   const data = JSON.parse(content);
   return (data.guardrails || []).map((e) => hydrate(e, filePath));
 }
@@ -168,7 +170,7 @@ function resolveGuardrailContext(root) {
  */
 function readGuardrailFile(dir) {
   const filePath = path.join(dir, GUARDRAIL_FILENAME);
-  if (fs.existsSync(filePath)) return loadGuardrailFile(filePath);
+  if (runtimeResourceExists(filePath)) return loadGuardrailFile(filePath);
   return null;
 }
 

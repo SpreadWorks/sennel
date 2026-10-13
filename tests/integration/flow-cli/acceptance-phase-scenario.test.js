@@ -437,7 +437,7 @@ describe("Acceptance phase canonical producer / reload / consumer scenarios", { 
       consumerNodeId: "final-regression", optional: true }), null);
   });
 
-  test("A05 real bounded Acceptance batches require a durable claim before first call and cannot resume unsaved partial provider output after reload", async (t) => {
+  test("A05 saved map progress and an uncertain provider claim survive reload without final evidence or another provider call", async (t) => {
     const calls = [];
     const limit = new PromptRequestLimit({ maxCharacters: 16_000 });
     const executionLimit = new PromptExecutionLimit({ maxRequestCharacters: limit.maxCharacters,
@@ -450,10 +450,10 @@ describe("Acceptance phase canonical producer / reload / consumer scenarios", { 
         calls.push({ prompt, schema: invocation.jsonSchema,
           snapshot: active.snapshot(), claim: active.manager.readCurrentStepSettlement({ specId: active.specId, stepId: "acceptance-review" }) });
         if (calls.length === 2) throw lost;
-        assert.equal(calls.length, 1, "an unsaved memory-only batch cannot be automatically called again");
+        assert.equal(calls.length, 1, "an uncertain provider claim cannot authorize another call");
         const ids = invocation.jsonSchema.properties.observations.items.properties.sourceRef.enum;
         return JSON.stringify({ observations: ids.map((sourceRef) => ({ sourceRef,
-          facts: ["PARTIAL_ACCEPTANCE_OBSERVATION_MUST_STAY_MEMORY_ONLY"] })) });
+          facts: ["SAVED_MAP_OBSERVATION_IS_EXECUTION_METADATA"] })) });
       } });
     // Legitimate source drift at the real Retro frontier chooses its existing
     // rewind. The large changed source then reaches fresh 03 producers; no
@@ -489,12 +489,23 @@ describe("Acceptance phase canonical producer / reload / consumer scenarios", { 
     assert.equal(claim.receipt.executionLifecycle.binding.inputDigest, acquired.fingerprint.hash);
     assert.ok(calls[1].claim);
     assert.equal(calls[1].claim.receipt.id, claim.receipt.id);
-    assert.deepEqual(calls[1].snapshot, calls[0].snapshot,
-      "partial map success and remaining prompt budget must not acquire fabricated canonical progress");
+    assert.notDeepEqual(calls[1].snapshot.catalog, calls[0].snapshot.catalog,
+      "validated map output and the next physical claim must cross the canonical persistence boundary");
+    const contract = scenario.manager.readStoredExecutionContract({ binding: claim.result.evidence.identity,
+      generation: claim.result.evidence.executionGeneration });
+    const episode = scenario.manager.readPromptExecutionEpisode({ executionContract: contract });
+    const map = episode.scopes.find((scope) => scope.scope.stage === "map");
+    assert.ok(map, "the real map producer must save its scope frontier");
+    assert.ok(map.batches[0].completion);
+    assert.match(JSON.stringify(map.batches[0].responses[0].raw), /SAVED_MAP_OBSERVATION_IS_EXECUTION_METADATA/);
+    assert.equal(map.batches[0].claim, null);
+    assert.equal(map.batches[1].claim.transportOrdinal, 1);
+    assert.deepEqual(map.batches[1].responses, []);
+    assert.deepEqual(map.batches[1].transportFailures, [],
+      "a provider failure without completion evidence cannot be recorded as an observed failure");
+    assert.equal(episode.budget.providerCallCount, 2);
     assert.equal(outcome.ok, false);
-    assert.equal(outcome.errors[0].code, "PROMPT_BATCH_EXECUTION_INCOMPLETE");
-    assert.match(outcome.errors[0].messages.join("\n"), new RegExp(lost.code),
-      "the actual batch failure must preserve its original external provider cause");
+    assert.equal(outcome.errors[0].code, "PROMPT_EXECUTION_UNCERTAIN");
     scenario.reload();
     assert.equal(scenario.current(), "acceptance-review");
     assert.equal(scenario.state().attempt.id, originalAttempt.id);
@@ -502,18 +513,19 @@ describe("Acceptance phase canonical producer / reload / consumer scenarios", { 
     assert.notEqual(scenario.state().findNode("acceptance-review").status, "done");
     assert.equal(scenario.state().findNode("final-regression").status, "pending");
     assert.equal(scenario.manager.readArtifact({ specId: scenario.specId, logicalKey: "acceptance.review",
-      consumerNodeId: "final-regression", optional: true }), null, "unsaved map responses are never partial Acceptance evidence");
+      consumerNodeId: "final-regression", optional: true }), null, "saved map progress is never a partial Acceptance verdict");
     const stopped = scenario.snapshot();
-    assert.equal(JSON.stringify(stopped).includes("PARTIAL_ACCEPTANCE_OBSERVATION_MUST_STAY_MEMORY_ONLY"), false);
+    scenario.reload();
+    assert.deepEqual(scenario.manager.readPromptExecutionEpisode({ executionContract: contract }), episode,
+      "fresh managers must preserve the saved response, uncertain claim and consumed episode budget");
     const reloadedAction = await scenario.next();
     assert.ok(["blocked", "await_user_decision"].includes(reloadedAction.directive?.kind),
-      "an interrupted, unpersisted provider generation must expose the Definition's safe hold");
+      "the uncertain provider claim must expose the Definition's safe hold");
     await scenario.dispatch(2);
-    assert.equal(calls.length, 2, "fresh manager must safely stop instead of fabricating memory-only batch resume");
+    assert.equal(calls.length, 2, "a fresh manager cannot retry the uncertain call or regenerate the saved map response");
     assert.equal(scenario.acceptanceCalls.length, 2);
     assert.deepEqual(scenario.reload().snapshot(), stopped);
     scenario.assertResults(["acceptance-review"], { terminal: false });
-    scenario.assertResults(["acceptance-review"]);
   });
 });
 

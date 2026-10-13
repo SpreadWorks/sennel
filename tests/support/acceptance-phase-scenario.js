@@ -45,6 +45,7 @@ export class AcceptancePhaseScenario extends ImplPhaseScenario {
       entryStep: "draft",
       execution: { mode: "branch", baseBranch: "main", featureBranch: "feature/acceptance-phase" },
       ...options,
+      realProviderTransport: true,
       gateResponse: (prompt, invocation, active) => active.observeAcceptanceProvider(prompt, invocation, () => {
         if (active.current() === "acceptance-review" && options.acceptanceProvider) {
           const call = { prompt, options: invocation, response: null,

@@ -15,6 +15,8 @@
  *   console.log(t("greeting"));
  */
 
+import { readRuntimeResource, runtimeResourceExists } from "./runtime-package.js";
+
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
@@ -84,8 +86,8 @@ export function deepMerge(base, override) {
  */
 function loadMessagesFromDir(lang, domain, localeDir) {
   const filePath = path.join(localeDir, lang, `${domain}.json`);
-  if (!fs.existsSync(filePath)) return {};
-  return JSON.parse(fs.readFileSync(filePath, "utf8"));
+  if (!runtimeResourceExists(filePath)) return {};
+  return JSON.parse(readRuntimeResource(filePath));
 }
 
 /**
@@ -192,7 +194,7 @@ function buildLocaleDirs(root, presetTypes) {
     });
     for (const preset of presets) {
       const presetLocale = path.join(preset.dir, "locale");
-      if (fs.existsSync(presetLocale)) {
+      if (runtimeResourceExists(presetLocale)) {
         dirs.push(presetLocale);
       }
     }

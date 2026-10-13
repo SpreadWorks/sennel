@@ -1,5 +1,6 @@
 /** Save the selected Task Result and its already acquired publication together. */
 export class TaskReviewSettlementWriter {
+  #executionContract;
   #flowManager;
   #binding;
   #publication;
@@ -7,7 +8,8 @@ export class TaskReviewSettlementWriter {
   #manifest;
   #failurePublication;
 
-  constructor({ flowManager, binding, publication = null, executionBinding = null, manifest = null, failurePublication = null }) {
+  constructor({ flowManager, executionContract = null, binding, publication = null, executionBinding = null, manifest = null, failurePublication = null }) {
+    this.#executionContract = executionContract;
     this.#flowManager = flowManager;
     this.#binding = binding;
     this.#publication = publication;
@@ -18,7 +20,7 @@ export class TaskReviewSettlementWriter {
 
   settle({ stepResult, settlement }) {
     return this.#flowManager.commitSpecStepResult({
-      binding: this.#binding, stepResult, settlement,
+      binding: this.#binding, stepResult, settlement, executionContract: this.#executionContract,
       ...(this.#publication?.commandResult == null ? {} : { commandResult: this.#publication.commandResult }),
       ...(this.#failurePublication === null ? {} : { reviewFailurePublication: this.#failurePublication }),
       ...(this.#publication === null ? {} : { taskStagePublication: this.#publication }),

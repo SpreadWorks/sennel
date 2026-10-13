@@ -33,7 +33,7 @@ export class SpecSettlementWriter {
       throw new TypeError("Spec route connector did not return its typed application");
     }
     this.#application = application;
-    const input = { binding: this.#binding, stepResult, settlement, specSelection: selection,
+    const input = { binding: this.#binding, stepResult, settlement, executionContract: this.#request.executionContract, specSelection: selection,
       application, ...this.#publication, specRecord: application?.publication,
       lifecycleResult: error ? null : this.#publication.lifecycleResult };
     const replayed = this.#outcome !== null;
@@ -70,7 +70,7 @@ export class SpecSettlementWriter {
         digest: facts.reviewDigest, byteLength: facts.reviewByteLength,
       })],
     };
-    const input = { binding: this.#binding, stepResult, settlement,
+    const input = { binding: this.#binding, stepResult, settlement, executionContract: this.#request.executionContract,
       specReviewWorkerSelection: selection, ...this.#publication };
     const replayed = this.#outcome !== null;
     this.#injectBeforePublication(replayed);

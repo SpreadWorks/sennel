@@ -2,14 +2,16 @@ import { DraftStepExecutionLifecycle, DraftExecutionSettlement } from "../defini
 
 /** Save only the Step-selected Draft Review Result. */
 export class DraftReviewSettlementWriter {
+  #executionContract;
   #flowManager;
   #binding;
   #commandResult;
   #executionBinding;
   #publicationResult;
 
-  constructor({ flowManager, binding, commandResult = null,
+  constructor({ flowManager, executionContract = null, binding, commandResult = null,
     executionBinding = null, publicationResult = null }) {
+    this.#executionContract = executionContract;
     this.#flowManager = flowManager;
     this.#binding = binding;
     this.#commandResult = commandResult;
@@ -19,7 +21,7 @@ export class DraftReviewSettlementWriter {
 
   async settle({ stepResult, settlement, draftCompletionApplication }) {
     const execution = this.#executionBinding !== null || this.#publicationResult !== null;
-    const input = { binding: this.#binding, stepResult, settlement,
+    const input = { binding: this.#binding, stepResult, settlement, executionContract: this.#executionContract,
       draftCompletionApplication,
       commandResult: execution ? this.#publicationResult ?? undefined
         : stepResult.error === null ? this.#commandResult : undefined,

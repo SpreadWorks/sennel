@@ -11,12 +11,14 @@ export class SpecGateRepairSettlementWriter {
   #publication;
   #publicationReceipt;
   #publicationLimits;
+  #executionContract;
 
-  constructor({ ctx, request, binding, preparation, handoffCoordinator, publication, publicationReceipt,
+  constructor({ ctx, request, binding, preparation, handoffCoordinator, publication, publicationReceipt, executionContract,
     publicationLimits = new FlowArtifactCatalogSnapshotLimits() }) {
     if (!(publicationLimits instanceof FlowArtifactCatalogSnapshotLimits)) {
       throw new TypeError("Spec Gate repair settlement writer requires typed publication limits");
     }
+    this.#executionContract = executionContract;
     this.#ctx = ctx;
     this.#request = request;
     this.#binding = binding;
@@ -30,7 +32,7 @@ export class SpecGateRepairSettlementWriter {
   settle(input, replayed = false) {
     const selected = { ...this.#publication, ...input, binding: this.#binding,
       specGateRepairExecutionRoot: this.#ctx.executionRoot || this.#ctx.root,
-      publicationLimits: this.#publicationLimits };
+      publicationLimits: this.#publicationLimits, executionContract: this.#executionContract };
     try {
       if (!replayed) this.#handoffCoordinator.faultInjector({
         phase: "before-worker-handoff-publication", stepId: "spec-gate-repair",
@@ -41,13 +43,13 @@ export class SpecGateRepairSettlementWriter {
 
   settleDraftReturn(input) {
     return this.#ctx.flowManager.commitSpecStepResult({ ...input, binding: this.#binding,
-      publicationLimits: this.#publicationLimits });
+      publicationLimits: this.#publicationLimits, executionContract: this.#executionContract });
   }
 
   completeProgress(input) {
     return this.#ctx.flowManager.completeSpecGateRepairProgress({ ...input, binding: this.#binding,
       publicationLimits: this.#publicationLimits,
-      publicationReceipt: this.#publicationReceipt });
+      publicationReceipt: this.#publicationReceipt, executionContract: this.#executionContract });
   }
 
   completeHandoff(stepResult, receipt, replayed) {

@@ -1,3 +1,5 @@
+import { ExecutionProtocolSnapshot } from "./execution-protocol-snapshot.js";
+import { executionValueDigest, FlowExecutionContractRefusal } from "./flow-execution-contract.js";
 import { CURRENT_FLOW_SCHEMA_REVISION } from "../../lib/flow-schema-revision.js";
 /**
  * src/flow/lib/run-gate.js
@@ -1552,9 +1554,16 @@ export class GateProviderCallAdmission {
     await this.guard(context);
     return this.base.beforeProviderAttempt(context);
   }
+  afterProviderFailure(failure, context) { return this.base.afterProviderFailure(failure, context); }
+  recordCacheHit(context) { return this.base.recordCacheHit(context); }
   settle() { return this.base.settle(); }
   get claimed() { return this.base.claimed; }
   get attemptCount() { return this.base.attemptCount; }
+  get initialAttemptCount() { return this.base.initialAttemptCount; }
+  get reserved() { return this.base.reserved; }
+  get durable() { return this.base.durable; }
+  get cacheHit() { return this.base.cacheHit; }
+  get cacheIdentity() { return this.base.cacheIdentity; }
   get settled() { return this.base.settled; }
 }
 
@@ -2237,10 +2246,22 @@ export class GateEvaluationScope {
   }
 }
 
-function currentGateEvaluationScope({ root, phase, taskId = null, sourceFingerprint = null, inputs }) {
+class GateGuardrailSnapshot {
+  constructor(root) {
+    try { this.guardrails = structuredClone(loadMergedGuardrails(root)); this.error = null; }
+    catch (error) { this.guardrails = null; this.error = error; }
+    Object.freeze(this);
+  }
+  read() {
+    if (this.error !== null) throw this.error;
+    return structuredClone(this.guardrails);
+  }
+}
+
+function currentGateEvaluationScope({ root, phase, taskId = null, sourceFingerprint = null, inputs, guardrailSnapshot = null }) {
   let guardrails;
   try {
-    guardrails = filterGuardrailsForEvaluation(loadMergedGuardrails(root), phase);
+    guardrails = filterGuardrailsForEvaluation(guardrailSnapshot === null ? loadMergedGuardrails(root) : guardrailSnapshot.read(), phase);
   } catch (error) {
     // Gate evaluation itself owns this configuration failure.  It cannot have
     // produced a reusable PASS, so the failure identity is sufficient here.
@@ -3720,6 +3741,7 @@ export async function runGateFlow(args) {
       root,
       phase,
       inputs: { targetText, authoritativeEvaluations },
+      guardrailSnapshot: ctx.guardrailSnapshot ?? null,
     });
   }
 
@@ -3768,6 +3790,7 @@ export async function runGateFlow(args) {
     previouslyPassedIds,
     {
       ...guardrailPromptOptions,
+      ...(ctx?.guardrailSnapshot ? { loadGuardrails: () => ctx.guardrailSnapshot.read() } : {}),
       executionBudget: ctx?.promptExecutionBudget ?? guardrailPromptOptions.executionBudget,
       providerCallGuard: ctx?.gateProviderCallGuard ?? null,
       priorMemoryMarkdown,
@@ -4025,11 +4048,26 @@ export class RunGateCommand extends FlowCommand {
     const inputs = new CanonicalGateInputStore({ flowManager, state: ctx.flowState, nodeId });
     const specPath = flowManager.specLocation(ctx.flowState.specId).relativeSpecFile;
     const issueLog = inputs.issueLog();
-    const canonicalCtx = { ...ctx, flowState: ctx.flowState, issueLog };
+    const canonicalCtx = { ...ctx, flowState: ctx.flowState, issueLog,
+      guardrailSnapshot: new GateGuardrailSnapshot(executionRoot) };
     const expectedAttempt = { id: state.attempt.id, sequence: state.attempt.sequence };
+    let executionContract = null;
     canonicalCtx.gateProviderCallGuard = () => {
       const currentState = flowManager.canonicalState(state.specId);
       const currentAttempt = currentState?.attempt;
+      if (executionContract === null) {
+        const binding = { runId: state.runId, specId: state.specId,
+          stepId: gateStepExecutionRegistration(phase).stepId, nodeId, taskId: activeTaskId, attempt: state.attempt };
+        const protocol = new ExecutionProtocolSnapshot({ prompt: { phase, level, skipGuardrail,
+          config: ctx.config, evaluationScope: canonicalCtx.evaluationScope?.toJSON() ?? null },
+          schema: { phase, level } });
+        executionContract = protocol.bind({ binding, generation: 0,
+          inputRevision: executionValueDigest({ inputs: inputs.inputBaselines.map((baseline) => baseline.toJSON()),
+            evaluationScope: canonicalCtx.evaluationScope?.toJSON() ?? null }),
+          inputBaselines: inputs.inputBaselines });
+        const claim = flowManager.claimExecutionContract({ binding, executionContract });
+        if (!claim.newlyClaimed) throw new FlowExecutionContractRefusal("Gate execution is already claimed without a published response");
+      } else flowManager.readExecutionContract({ executionContract });
       if (currentState?.current?.at(-1) !== nodeId
         || currentAttempt?.id !== expectedAttempt.id
         || currentAttempt?.sequence !== expectedAttempt.sequence
@@ -4103,7 +4141,7 @@ export class RunGateCommand extends FlowCommand {
       } catch (error) {
         loadError = error.message;
       }
-      const guardrails = filterByPhase(loadMergedGuardrails(executionRoot), "spec");
+      const guardrails = filterByPhase(canonicalCtx.guardrailSnapshot.read(), "spec");
       const testCoverage = guardrails.find((guardrail) => guardrail.id === SPEC_TEST_COVERAGE_GUARDRAIL_ID);
       const authoritativeEvaluations = testCoverage
         ? [new SpecTestCoverageDecision({ phase: "spec", guardrail: testCoverage }).toGateEvaluation()]
@@ -4170,7 +4208,7 @@ export class RunGateCommand extends FlowCommand {
     // No filesystem result/source writer is permitted here.  The registry
     // confirms a pass with its lifecycle Activity; a non-pass is published
     // before the retry lifecycle keeps the Attempt active.
-    if (admittedSpecRevision !== null) canonicalCtx.gateProviderCallGuard();
+    canonicalCtx.gateProviderCallGuard();
     attachGateEvaluationScope(result, canonicalCtx.evaluationScope);
     if (result?.result === "pass" || result?.result === "fail" || result?.result === "recovered") {
       new CanonicalGatePromotion({
@@ -4212,6 +4250,7 @@ export class RunGateCommand extends FlowCommand {
     const sourcePaths = source.entries.map((entry) => entry.path);
     const sourceScope = requirementAuthority.bindSourceScope(sourcePaths);
     ctx.evaluationScope = currentGateEvaluationScope({
+      guardrailSnapshot: ctx.guardrailSnapshot,
       root: executionRoot,
       phase,
       taskId: task.id,
@@ -4458,6 +4497,7 @@ export class RunGateCommand extends FlowCommand {
       perReqDiffs = buildPerRequirementDiffs(fileMap, perFileDiffs, reqIds, diff);
     }
     ctx.evaluationScope = currentGateEvaluationScope({
+      guardrailSnapshot: ctx.guardrailSnapshot,
       root: executionRoot,
       phase,
       inputs: {
@@ -4495,7 +4535,7 @@ export class RunGateCommand extends FlowCommand {
       fileMap,
     });
     if (skipGuardrail) return gatePass(level, phase, specPath, reqEvaluations, fileMapWarnings);
-    const diffGuardrails = filterByPhase(loadMergedGuardrails(executionRoot), phase);
+    const diffGuardrails = filterByPhase(ctx.guardrailSnapshot.read(), phase);
     const grResult = await checkGuardrail(
       executionRoot,
       buildGuardrailTargetTextForPrompt(specification, diff),
@@ -4503,6 +4543,7 @@ export class RunGateCommand extends FlowCommand {
       "You are an implementation compliance checker. Check the implementation against each guardrail.",
       previousResult?.passedGuardrails,
       {
+        loadGuardrails: () => ctx.guardrailSnapshot.read(),
         acknowledgedRationale: buildAcknowledgedRationaleSection({ spec, guardrails: diffGuardrails }),
         executionBudget: ctx.promptExecutionBudget,
         providerCallGuard: ctx.gateProviderCallGuard,

@@ -1,4 +1,4 @@
-import fs from "node:fs";
+import { readRuntimeResource } from "../../lib/runtime-package.js";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -39,7 +39,7 @@ export function sourceWorkerEffectJsonSchema(stepId) {
   const ref = sourceWorkerEffectSchemaRef(stepId);
   let schema = schemaCache.get(ref);
   if (!schema) {
-    schema = deepFreeze(JSON.parse(fs.readFileSync(path.join(SCHEMA_DIRECTORY, path.basename(ref)), "utf8")));
+    schema = deepFreeze(JSON.parse(readRuntimeResource(path.join(SCHEMA_DIRECTORY, path.basename(ref)))));
     schemaCache.set(ref, schema);
   }
   return schema;

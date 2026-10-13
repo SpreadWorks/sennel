@@ -1,15 +1,13 @@
-import crypto from "node:crypto";
-import fs from "node:fs";
+import { captureRegularFile } from "../../lib/regular-file-snapshot.js";
 import { fileURLToPath } from "node:url";
 
 const DEFAULT_MAX_MODULE_BYTES = 2 * 1024 * 1024;
-const READ_BUFFER_BYTES = 64 * 1024;
 
 function requireString(value, name) {
   if (typeof value !== "string" || value.trim() === "") {
     throw new Error(`${name} must be a non-empty string`);
   }
-  return value.trim();
+  return value;
 }
 
 export class RuntimeModuleFingerprint {
@@ -24,6 +22,10 @@ export class RuntimeModuleFingerprint {
     }
     this.bytes = bytes;
     Object.freeze(this);
+  }
+
+  static fromSnapshot(key, snapshot) {
+    return new RuntimeModuleFingerprint({ key, digest: snapshot.digest, bytes: snapshot.byteLength });
   }
 
   update(hash) {
@@ -52,37 +54,10 @@ export class RuntimeModuleIdentity {
   }
 
   fingerprint() {
-    const modulePath = fileURLToPath(this.moduleUrl);
-    const stat = fs.statSync(modulePath);
-    if (!stat.isFile()) {
-      throw new Error(`runtime module identity target is not a file: ${this.key}`);
-    }
-    if (stat.size > this.maxBytes) {
-      throw new Error(`runtime module identity exceeds ${this.maxBytes} bytes: ${this.key}`);
-    }
-
-    const hash = crypto.createHash("sha256");
-    const buffer = Buffer.allocUnsafe(READ_BUFFER_BYTES);
-    const descriptor = fs.openSync(modulePath, "r");
-    let bytes = 0;
-    try {
-      while (bytes < stat.size) {
-        const length = Math.min(buffer.length, stat.size - bytes);
-        const read = fs.readSync(descriptor, buffer, 0, length, bytes);
-        if (read === 0) break;
-        hash.update(buffer.subarray(0, read));
-        bytes += read;
-      }
-    } finally {
-      fs.closeSync(descriptor);
-    }
-    if (bytes !== stat.size) {
-      throw new Error(`runtime module identity changed during read: ${this.key}`);
-    }
-    return new RuntimeModuleFingerprint({
-      key: this.key,
-      digest: hash.digest("hex"),
-      bytes,
+    const snapshot = captureRegularFile(fileURLToPath(this.moduleUrl), {
+      label: this.key,
+      maxBytes: this.maxBytes,
     });
+    return RuntimeModuleFingerprint.fromSnapshot(this.key, snapshot);
   }
 }

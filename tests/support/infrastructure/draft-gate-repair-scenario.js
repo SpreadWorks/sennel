@@ -114,6 +114,7 @@ export class DraftGateRepairScenario {
       stepResult,
       settlement,
       executionBinding,
+      executionContract: this.request.executionContract,
       executionClaim: new DraftWorkerExecutionClaim({
         dispatchInvocationId: this.request.dispatchInvocationId,
         generatedAt: this.request.generatedAt,

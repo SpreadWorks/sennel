@@ -252,7 +252,7 @@ function fixture(stepId = "draft", {
   coordinator.createRequest = (input) => {
     const conditionalDraft = ["draft-refine", "draft-gate-repair"]
       .includes(input.invocation?.action?.nextAction?.step);
-    const handoff = createRequest({
+    let handoff = createRequest({
       ...input,
       deferPreparation: conditionalDraft || input.deferPreparation === true,
       deferConditionalAdmission: input.deferConditionalAdmission === true
@@ -274,6 +274,7 @@ function fixture(stepId = "draft", {
         inputRevision: handoff.inputRevision,
         contentDigest: handoff.checkpointContentDigest(),
       });
+      handoff = handoff.withExecutionGeneration(executionBinding.executionGeneration);
       const stepResult = handoff.stepId === "draft-refine"
         ? createDraftRefineResult({
             facts: readDraftTransitionFacts({
@@ -298,6 +299,7 @@ function fixture(stepId = "draft", {
         stepResult,
         settlement,
         executionBinding,
+        executionContract: handoff.executionContract,
         executionClaim: new DraftWorkerExecutionClaim({
           dispatchInvocationId: handoff.dispatchInvocationId,
           generatedAt: handoff.generatedAt,
@@ -3516,6 +3518,73 @@ describe("worker artifact handoff", () => {
     }
   });
 
+  it("refuses a changed source worker action on recovery without rolling back its source or mutating canonical state", () => {
+    const value = fixture("implement", { specRecord: validSpec() });
+    try {
+      initializeGitRepository(value);
+      const request = value.coordinator.createRequest({
+        ctx: value.ctx, state: value.flowManager.load(), invocation: value.invocation,
+      });
+      const sourcePath = path.join(value.executionRoot, "product.js");
+      fs.writeFileSync(sourcePath, "export const value = 2;\n");
+      fs.writeFileSync(request.payloadPath("effects.json"), json(implementationEffect(request, ["product.js"]).toJSON()));
+      seal(request);
+      const beforeState = value.flowManager.canonicalState(value.specId).toJSON();
+      const beforeActivities = value.flowManager.activityLedger(value.specId);
+      const beforeCatalog = value.flowManager.artifactCatalog(value.specId).toJSON();
+      const action = JSON.parse(fs.readFileSync(request.actionRequestPath, "utf8"));
+      fs.writeFileSync(request.actionRequestPath, json({ ...action, instructions: "Changed after the worker exited." }));
+      const manager = new FlowManager({ root: value.executionRoot, mainRoot: value.mainRoot,
+        inWorktree: true, specId: value.specId });
+      assert.throws(() => new WorkerArtifactHandoffCoordinator().recoverPending({
+        ctx: { ...value.ctx, flowManager: manager },
+      }), (error) => error.code === "FLOW_EXECUTION_CONTRACT_MISMATCH"
+        && error.mismatchedFields.includes("promptDigest"));
+      assert.deepEqual(manager.canonicalState(value.specId).toJSON(), beforeState);
+      assert.deepEqual(manager.activityLedger(value.specId), beforeActivities);
+      assert.deepEqual(manager.artifactCatalog(value.specId).toJSON(), beforeCatalog);
+      assert.equal(fs.readFileSync(sourcePath, "utf8"), "export const value = 2;\n");
+      assert.equal(fs.existsSync(request.submissionPath), true);
+    } finally {
+      removeTmpDir(value.mainRoot);
+    }
+  });
+
+  it("recovers a stopped rejected source payload through Definition rollback after manager reload", () => {
+    const value = fixture("implement", { specRecord: validSpec() });
+    try {
+      initializeGitRepository(value);
+      const request = value.coordinator.createRequest({
+        ctx: value.ctx, state: value.flowManager.load(), invocation: value.invocation,
+      });
+      const attempt = value.flowManager.canonicalState(value.specId).attempt;
+      const product = path.join(value.executionRoot, "product.js");
+      const sourceBefore = fs.existsSync(product) ? fs.readFileSync(product) : null;
+      fs.writeFileSync(product, "export const value = 2;\n");
+      fs.writeFileSync(request.payloadPath("effects.json"),
+        json(implementationEffect(request, ["product.js", "absent.js"]).toJSON()));
+      seal(request);
+      const manager = new FlowManager({ root: value.executionRoot, mainRoot: value.mainRoot,
+        inWorktree: true, specId: value.specId });
+      const recovered = new WorkerArtifactHandoffCoordinator().recoverPending({
+        ctx: { ...value.ctx, flowManager: manager },
+      });
+      assert.equal(recovered.completed, true);
+      assert.equal(recovered.replayed, true);
+      assert.equal(fs.existsSync(product), sourceBefore !== null,
+        "rollback restores absence as well as existing source bytes");
+      if (sourceBefore !== null) assert.deepEqual(fs.readFileSync(product), sourceBefore);
+      assert.equal(fs.existsSync(request.directory), false);
+      const state = manager.canonicalState(value.specId);
+      assert.equal(state.current.at(-1), "implement");
+      assert.equal(state.attempt.id, attempt.id);
+      assert.equal(state.attempt.consumption.semantic, attempt.consumption.semantic);
+      assert.equal(state.findNode("implement").result, null);
+    } finally {
+      removeTmpDir(value.mainRoot);
+    }
+  });
+
   it("rejects the retired worker requirement completion field", () => {
     assert.throws(() => SourceWorkerEffect.fromDocument({
       version: 1,
@@ -6339,12 +6408,14 @@ describe("worker artifact handoff", () => {
       for (let index = 0; index < 200; index += 1) {
         fs.writeFileSync(path.join(historyDir, `${index}.json`), json({ index }));
       }
-      initializeGitRepository(value);
       const request = value.coordinator.createRequest({
         ctx: value.ctx,
         state: value.flowManager.load(),
         invocation: value.invocation,
       });
+      // Include the caller's durable claim in the clean baseline before the
+      // worker mutation authority is captured; historical Spec bytes stay clean.
+      initializeGitRepository(value);
       const authority = WorkerArtifactMutationAuthoritySnapshot.capture(request);
 
       assert.equal(authority.repositories.length, 1);
@@ -8741,13 +8812,16 @@ describe("worker artifact handoff", () => {
   it("does not partially publish a valid spec-repair handoff when publication is interrupted", async () => {
     const value = prepareSpecRepairFixture();
     try {
-      const before = specRepairSnapshot(value);
+      let before = null;
       let workerCalls = 0;
       const dispatcher = new RunDispatchCommand({
         nextAction: { async run() { return structuredClone(specRepairWorkerAction()); } },
         agent: {
           async call(_prompt, options) {
             workerCalls += 1;
+            // Provider entry follows the normal claim. Protect everything from
+            // this boundary through publication, including that retained claim.
+            before = specRepairSnapshot(value);
             const requestPath = options.executionEnvironment.SENNEL_FLOW_HANDOFF_REQUEST;
             const request = JSON.parse(fs.readFileSync(requestPath, "utf8"));
             fs.writeFileSync(
@@ -8780,6 +8854,7 @@ describe("worker artifact handoff", () => {
       }), (error) => error.code === "STEP_RESULT_ERROR_PERSISTENCE_FAILED"
         && error.cause?.message === "simulated pre-commit crash");
       assert.equal(workerCalls, 1);
+      assert.notEqual(before, null);
       assert.deepEqual(specRepairSnapshot(value), before);
     } finally {
       removeTmpDir(value.mainRoot);
@@ -8819,8 +8894,8 @@ describe("worker artifact handoff", () => {
         activities: value.flowManager.activityLedger(value.specId),
         catalog: value.flowManager.artifactCatalog(value.specId).toJSON(),
       });
-      const before = snapshot();
       const request = taskProposalRepairRequest(value);
+      const before = snapshot();
       fs.writeFileSync(request.payloadPath("review.delta.json"), json(specRepairTextEditPayload(request)));
       seal(request);
       interrupt = true;

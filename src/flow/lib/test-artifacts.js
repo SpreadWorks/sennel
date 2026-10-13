@@ -1,3 +1,4 @@
+import { readRuntimeResource } from "../../lib/runtime-package.js";
 import { TEST_EXECUTE_RESULT_FILE, TEST_RESULT_REVIEW_FILE } from "./test-artifact-paths.js";
 import { CURRENT_FLOW_SCHEMA_REVISION } from "../../lib/flow-schema-revision.js";
 import fs from "fs";
@@ -49,7 +50,7 @@ const artifactSchemas = new Map();
 function validateArtifactSchema(value, schemaFile, label) {
   let schema = artifactSchemas.get(schemaFile);
   if (schema === undefined) {
-    schema = JSON.parse(fs.readFileSync(path.join(ARTIFACT_SCHEMA_DIRECTORY, schemaFile), "utf8"));
+    schema = JSON.parse(readRuntimeResource(path.join(ARTIFACT_SCHEMA_DIRECTORY, schemaFile)));
     artifactSchemas.set(schemaFile, schema);
   }
   const errors = validateSchema(value, schema);

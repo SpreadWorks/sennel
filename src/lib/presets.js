@@ -8,6 +8,8 @@
  * Multiple presets can be combined via type arrays in config.json.
  */
 
+import { readRuntimeResource, runtimeResourceExists, listRuntimeResources } from "./runtime-package.js";
+
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
@@ -26,14 +28,14 @@ export const PRESETS_DIR = CORE_PRESETS_DIR;
  * Each preset gets: { key, dir, parent, label, aliases, scan, chapters }.
  */
 function discoverPresetsInDir(presetsDir) {
-  if (!fs.existsSync(presetsDir)) return [];
+  if (!runtimeResourceExists(presetsDir)) return [];
 
-  return fs.readdirSync(presetsDir, { withFileTypes: true })
+  return listRuntimeResources(presetsDir, { withFileTypes: true })
     .filter((d) => d.isDirectory())
     .map((d) => {
       const manifestPath = path.join(presetsDir, d.name, "preset.json");
-      if (!fs.existsSync(manifestPath)) return null;
-      const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+      if (!runtimeResourceExists(manifestPath)) return null;
+      const manifest = JSON.parse(readRuntimeResource(manifestPath));
 
       return {
         key: d.name,
@@ -369,7 +371,7 @@ function resolveEffectiveChapters(typeList, projectRoot, configChapters, resolve
 
 function presetHasTemplates(preset) {
   const templatesDir = path.join(preset.dir, "templates");
-  return fs.existsSync(templatesDir);
+  return runtimeResourceExists(templatesDir);
 }
 
 /**
@@ -429,7 +431,7 @@ function validatePresetChainWithResolver(types, projectRoot, {
   languages,
   configChapters,
   projectTemplatesDirectory,
-  templateExists = fs.existsSync,
+  templateExists = runtimeResourceExists,
   reportUnlistedTemplates = true,
 } = {}, resolveChainForType) {
   if (!languages?.length) return;

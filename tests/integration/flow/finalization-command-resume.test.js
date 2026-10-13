@@ -36,7 +36,6 @@ async function setupFinalizationRepo(root, flowOverrides = {}) {
   commitAll(root, "test: baseline");
   checkoutNewBranch(root, "feature/001-test");
   const flowManager = makeFlowManager(root);
-  writeFile(root, "src-change.js", "export const changed = true;\n");
   const fixture = new CanonicalFlowFixture({
     flowManager,
     specId: flowOverrides.specId ?? "001-test",
@@ -51,7 +50,21 @@ async function setupFinalizationRepo(root, flowOverrides = {}) {
     },
   }).create().addTask({ id: "T1", title: "Fixture Task", goal: "Exercise finalization recovery.",
     origin: "plan", added_round: 0, status: "pending" }).registerActive();
-  await fixture.activateWithProducers("report");
+  await fixture.activateWithProducers("report", {
+    sourceMutations: new Map([["T1-impl", () => writeFile(root, "src-change.js", "export const changed = true;\n")]]),
+  });
+  return { state: fixture.state(), flowManager };
+}
+
+/** Effect diagnostics and commit idempotency consume execution locations and an
+ * outbox identity, without selecting or settling a Flow Step. */
+function setupFinalizeSyncEffect(root, { worktree = false } = {}) {
+  initGitRepo(root);
+  commitAll(root, "test: sync effect baseline");
+  const flowManager = makeFlowManager(root);
+  const fixture = new CanonicalFlowFixture({ flowManager,
+    execution: { mode: worktree ? "worktree" : "branch", baseBranch: "main", featureBranch: "feature/sync-effect" },
+  }).create();
   return { state: fixture.state(), flowManager };
 }
 
@@ -145,15 +158,17 @@ describe("finalization command crash resumption", () => {
   it("does not create a second implementation commit after a pre-post-hook crash", async () => {
     const root = createTmpDir("finalize-outbox-commit-");
     try {
-      const { state, flowManager } = await setupFinalizationRepo(root);
+      const { state: reportState, flowManager } = await setupFinalizationRepo(root);
+      await CanonicalFlowFixture.fromExisting({ flowManager, specId: reportState.specId }).produce("report");
+      const state = flowManager.loadReadOnly(reportState.specId);
       const entry = pendingEntry(state, "finalize-commit");
       const ctx = { root, flowState: state, flowManager, flowOutboxEntry: entry };
 
-      const first = await new RunFinalizeCommitCommand().execute(ctx);
+      const first = await new RunFinalizeCommitCommand().executeEffect(ctx);
       assert.equal(first.status, "done");
       const afterFirst = commitCount(root);
 
-      const resumed = await new RunFinalizeCommitCommand().execute(ctx);
+      const resumed = await new RunFinalizeCommitCommand().executeEffect(ctx);
       assert.equal(resumed.resumed, true);
       assert.equal(commitCount(root), afterFirst);
     } finally {
@@ -170,12 +185,12 @@ describe("finalization command crash resumption", () => {
       const entry = pendingEntry(state, "finalize-merge");
       const ctx = { root, flowState: state, flowManager, flowOutboxEntry: entry };
 
-      const first = await new RunFinalizeMergeCommand().execute(ctx);
+      const first = await new RunFinalizeMergeCommand().executeEffect(ctx);
       assert.equal(first.status, "done");
       const afterFirst = commitCount(root, "main");
       assert.equal(runGit(["-C", root, "branch", "--show-current"]).stdout.trim(), "main");
 
-      const resumed = await new RunFinalizeMergeCommand().execute(ctx);
+      const resumed = await new RunFinalizeMergeCommand().executeEffect(ctx);
       assert.equal(resumed.resumed, true);
       assert.equal(commitCount(root, "main"), afterFirst);
     } finally {
@@ -187,14 +202,14 @@ describe("finalization command crash resumption", () => {
   it("skips docs sync when its stable outbox commit is already durable", async () => {
     const root = createTmpDir("finalize-outbox-sync-");
     try {
-      const { state, flowManager } = await setupFinalizationRepo(root);
+      const { state, flowManager } = setupFinalizeSyncEffect(root);
       const entry = pendingEntry(state, "finalize-sync");
       const marker = outboxCommitMarker(entry.idempotencyKey);
       const committed = runGit(["-C", root, "commit", "--allow-empty", "-m", "docs: sync documentation", "-m", marker]);
       assert.equal(committed.ok, true, committed.stderr);
       const before = commitCount(root);
 
-      const result = await new RunFinalizeSyncCommand().execute({
+      const result = await new RunFinalizeSyncCommand().executeEffect({
         root,
         flowState: state,
         flowManager,
@@ -212,7 +227,7 @@ describe("finalization command crash resumption", () => {
   it("preserves docs build stdout, stderr, and exit code in a structured sync failure", async () => {
     const root = createTmpDir("finalize-sync-diagnostics-");
     try {
-      const { state, flowManager } = await setupFinalizationRepo(root);
+      const { state, flowManager } = setupFinalizeSyncEffect(root);
       const command = new RunFinalizeSyncCommand({
         runCommand: () => ({
           ok: false,
@@ -226,7 +241,7 @@ describe("finalization command crash resumption", () => {
       });
 
       await assert.rejects(
-        () => command.execute({
+        () => command.executeEffect({
           root,
           flowState: state,
           flowManager,
@@ -255,7 +270,7 @@ describe("finalization command crash resumption", () => {
   it("binds docs generation to the main repository when finalize-sync runs from a worktree", async () => {
     const root = createTmpDir("finalize-sync-main-root-");
     try {
-      const { state } = await setupFinalizationRepo(root, { worktree: true });
+      const { state, flowManager } = setupFinalizeSyncEffect(root, { worktree: true });
       const worktreeRoot = path.join(root, ".sennel", "worktree", "feature");
       fs.mkdirSync(worktreeRoot, { recursive: true });
       let docsBuildOptions = null;
@@ -283,12 +298,10 @@ describe("finalization command crash resumption", () => {
         },
       });
 
-      const result = await command.execute({
+      const result = await command.executeEffect({
         root: worktreeRoot,
         flowState: state,
-        flowManager: {
-          resolveWorktreePaths: () => ({ mainRepoPath: root }),
-        },
+        flowManager,
       });
 
       assert.equal(result.status, "skipped");

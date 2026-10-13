@@ -1,3 +1,4 @@
+import { ExecutionProtocolSnapshot } from "./execution-protocol-snapshot.js";
 import {
   DraftReviewExecutionBinding, DraftReviewExecutionClaim, DraftReviewExecutionTargetIdentity,
   ReviewProviderRequestIdentity, settleSpecStepResult,
@@ -31,12 +32,15 @@ export class SpecReviewOperations {
 
   static publish({ flowManager, specId, commandResult }) {
     const binding = new SpecReviewStepBinding({ flowManager, specId });
-    const identity = flowManager.draftStepExecutionState({ binding }).executionIdentity();
+    const execution = flowManager.draftStepExecutionState({ binding });
+    const identity = execution.executionIdentity();
     if (!(identity?.stepResult instanceof SpecReviewExecutionRequiredResult)) {
       throw new StepAdmissionRefusal("Spec Review publication requires its persisted execution selection");
     }
+    const executionContract = flowManager.readStoredExecutionContract({ binding, generation: execution.lifecycle.executionGeneration });
     const input = {
       binding,
+      executionContract,
       stepResult: identity.stepResult,
       settlement: identity.settlement,
       commandResult,
@@ -60,6 +64,8 @@ export class SpecReviewOperations {
     const binding = new SpecReviewStepBinding({ flowManager, specId: state.specId });
     const execution = flowManager.draftStepExecutionState({ binding });
     if (execution.lifecycle?.phase !== "publication") return null;
+    flowManager.readStoredExecutionContract({ binding, generation: execution.lifecycle.executionGeneration })
+      .assertCurrent(latest);
     const read = flowManager.readCurrentSpecReviewInput({
       specId: state.specId, consumerNodeId: binding.stepId,
     });
@@ -153,7 +159,7 @@ export class SpecReviewOperations {
 
 /** Acquire one exact immutable semantic Review claim for any registered Review leaf. */
 export function prepareReviewExecutionClaim({ flowManager, binding, state, manifest, skipConfirm,
-  ResultClass, PreparationClass = ReviewExecutionClaimPreparation }) {
+  ResultClass, PreparationClass = ReviewExecutionClaimPreparation, inputBaselines = [] }) {
   if (!(manifest instanceof ReviewWorkUnitManifest)
     || manifest.runId !== state.runId || manifest.specId !== state.specId
     || manifest.attemptId !== state.attempt?.id
@@ -163,6 +169,9 @@ export function prepareReviewExecutionClaim({ flowManager, binding, state, manif
   }
   const executionState = flowManager.draftStepExecutionState({ binding });
   const current = executionState.lifecycle;
+  const request = new ReviewProviderRequestIdentity({ skipConfirm });
+  const executionContract = ExecutionProtocolSnapshot.forReview({ manifest, skipConfirm }).bind({ binding, generation: current?.executionGeneration ?? executionState.nextGeneration,
+    inputRevision: manifest.inputDigest, inputBaselines });
   const target = new DraftReviewExecutionTargetIdentity(manifest.target.toJSON());
   const executionBinding = current === null
     ? executionState.reviewBinding({
@@ -178,12 +187,12 @@ export function prepareReviewExecutionClaim({ flowManager, binding, state, manif
   if (current !== null && !["checkpoint", "claimed"].includes(current.phase)) {
     throw new StepAdmissionRefusal("the Review execution already has a durable publication");
   }
-  const request = new ReviewProviderRequestIdentity({ skipConfirm });
   if (current?.phase === "claimed" && !current.claim.request?.equals(request)) {
     throw new StepAdmissionRefusal("the Review provider request differs from its durable claim");
   }
+  if (current?.phase === "claimed") flowManager.readExecutionContract({ executionContract });
   return new PreparationClass({
-    flowManager, binding, executionBinding, request, ResultClass,
+    flowManager, binding, executionBinding, executionContract, request, ResultClass,
     recoveredClaim: current?.phase === "claimed", needsCheckpoint: current === null,
   });
 }
@@ -193,7 +202,7 @@ export function commitReviewExecutionClaim(preparation) {
   if (!(preparation instanceof ReviewExecutionClaimPreparation)) {
     throw new TypeError("Review claim requires its prepared execution identity");
   }
-  const { flowManager, binding, executionBinding, request, recoveredClaim } = preparation;
+  const { flowManager, binding, executionBinding, executionContract, request, recoveredClaim } = preparation;
   const identity = flowManager.draftStepExecutionState({ binding }).executionIdentity();
   if (!(identity?.stepResult instanceof preparation.ResultClass)) {
     throw new Error("Review execution lacks its persisted Step selection");
@@ -205,10 +214,12 @@ export function commitReviewExecutionClaim(preparation) {
     settlement: identity.settlement,
     executionBinding,
     executionClaim: new DraftReviewExecutionClaim({ request }),
+    executionContract,
   });
   const persistedClaim = flowManager.draftStepExecutionState({ binding }).lifecycle.claim;
   return new ReviewExecutionAdmission({
     request: persistedClaim.request,
+    executionContract,
     recoveredClaim,
   });
 }

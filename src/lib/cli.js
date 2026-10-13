@@ -4,6 +4,8 @@
  * repoRoot / parseArgs — 全エントリポイント共通の CLI ユーティリティ。
  */
 
+import { readRuntimeResource } from "./runtime-package.js";
+
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
@@ -142,7 +144,7 @@ export function getMainRepoPath(root) {
  */
 export function getPackageVersion() {
   try {
-    const pkg = JSON.parse(fs.readFileSync(path.join(PKG_DIR, "..", "package.json"), "utf8"));
+    const pkg = JSON.parse(readRuntimeResource(path.join(PKG_DIR, "..", "package.json")));
     return pkg.version;
   } catch (_) {
     return "?";

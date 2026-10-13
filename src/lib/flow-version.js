@@ -57,6 +57,7 @@ const SOURCE_COMPLETION_OPERATIONS = new Set([
 // A typed task-impl overview contribution likewise updates the one root Spec
 // record, rather than creating a task-local deliverable.
 const FLOW_WIDE_TASK_ACTIVITY_ARTIFACTS = new Set([
+  "execution.contract", "prompt.execution.progress", "prompt.execution.event", "prompt.execution.budget",
   "flow.state",
   "flow.activities",
   "spec.record",

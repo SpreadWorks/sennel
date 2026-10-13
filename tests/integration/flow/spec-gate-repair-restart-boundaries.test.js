@@ -30,7 +30,7 @@ import { FlowTargetBinding } from "../../../src/lib/flow-target-guard.js";
 import { WorkerArtifactHandoffCoordinator, WorkerArtifactHandoffError,
   sealWorkerArtifactHandoff } from "../../../src/flow/lib/worker-artifact-handoff.js";
 import { createSpecGateRepairScenario, prepareSpecGateRepairHandoff } from "../../support/infrastructure/spec-gate-repair-scenario.js";
-import { createTmpDir, removeTmpDir } from "../../support/builders/tmp-dir.js";
+import { removeTmpDir } from "../../support/builders/tmp-dir.js";
 import { validWorkerHandoffSpec, workerArtifactJson } from "../../support/infrastructure/worker-artifact.js";
 import { initGitRepo, commitAll } from "../../support/infrastructure/git-repo.js";
 import { dispatchContainer, requestInput, requestPayloadPath } from "../../support/infrastructure/flow-dispatch-scenario.js";
@@ -69,7 +69,9 @@ function oversizedSpec() {
   const specRecord = validWorkerHandoffSpec();
   // The finding selects R1 itself. Unrelated overview decisions are optional
   // evidence and cannot make the initial selection oversized.
-  specRecord.requirements[0].desc = "Preserve the complete selected obligation. 漢字🙂 ".repeat(3_000);
+  // 105,600 UTF-16 characters / 118,800 UTF-8 bytes: keep the selected
+  // source above 100k while remaining below the 120k scalar hard maximum.
+  specRecord.requirements[0].desc = "Preserve the complete selected obligation. 漢字🙂 ".repeat(2_200);
   return specRecord;
 }
 
@@ -91,23 +93,21 @@ function draftReturnProposal(context, decision) {
     unresolvedBecause: "No supplied source selects the required validation target." };
 }
 
-function historicalRepairSeed(name) {
-  // Captured through the canonical HEAD 7e49c90d2 writer after completed
-  // locate generations. Each portable archive contains its canonical specs tree.
-  const root = createTmpDir(`historical-repair-${name}-`);
-  try {
-    const archive = fs.readFileSync(new URL(`../../fixtures/spec-gate-repair-historical-${name}.json.br`, import.meta.url));
-    const files = JSON.parse(brotliDecompressSync(archive).toString("utf8"));
-    for (const [relativePath, encoded] of files) {
-      const destination = path.join(root, relativePath);
-      fs.mkdirSync(path.dirname(destination), { recursive: true });
-      fs.writeFileSync(destination, Buffer.from(encoded, "base64"));
-    }
-    return root;
-  } catch (error) {
-    removeTmpDir(root);
-    throw error;
-  }
+async function historicalRepairSeed(name, specId) {
+  // The archived Activity schema predates approvalTasks. Reproduce its exact
+  // untrusted locator-only observations through the current producer instead
+  // of manufacturing missing Activity or execution proof in the archive.
+  const archive = fs.readFileSync(new URL(`../../fixtures/spec-gate-repair-historical-${name}.json.br`, import.meta.url));
+  const files = JSON.parse(brotliDecompressSync(archive).toString("utf8"));
+  const readArchived = (suffix) => JSON.parse(Buffer.from(files.find(([file]) => file.endsWith(suffix))[1], "base64").toString("utf8"));
+  const source = readArchived("/spec.json");
+  const gate = readArchived("/steps/spec-gate/result.json").attempts.at(-1).result;
+  const observations = gate.artifacts.nextAction.diagnosis.observations;
+  const value = await createSpecGateRepairScenario({ specId,
+    specRecord: { ...validWorkerHandoffSpec(), requirements: source.requirements },
+    mutateGateObservations: () => structuredClone(observations),
+  });
+  return value.root;
 }
 
 async function completeWorkerResponse(value, request, proposal) {
@@ -217,8 +217,8 @@ describe("Spec Gate repair restart boundaries", () => {
     ["mixed", "902-historical-mixed-locate"],
     ["equal-count", "903-historical-equal-count-locate"],
   ]) {
-    it(`refuses archived ${archive} locator-only Gate evidence without changing canonical state`, () => {
-      const root = historicalRepairSeed(archive);
+    it(`refuses archived ${archive} locator-only Gate evidence without changing canonical state`, async () => {
+      const root = await historicalRepairSeed(archive, specId);
       try {
         const flowManager = new FlowManager({ root, mainRoot: root, inWorktree: false, specId });
         const before = durableSnapshot(flowManager, specId);
@@ -741,6 +741,36 @@ describe("Spec Gate repair restart boundaries", () => {
       assert.equal(result.nextAction.directive.code, "FLOW_SPEC_GATE_REPAIR_RESPONSE_UNAVAILABLE");
       assert.equal(workerCalls, 0);
       assert.deepEqual(durableSnapshot(restarted, value.specId), before);
+    } finally { removeTmpDir(value.root); }
+  });
+
+  it("retains a claimed repair when its saved action is missing after restart", async () => {
+    const value = await createSpecGateRepairScenario();
+    try {
+      initGitRepo(value.root);
+      fs.writeFileSync(path.join(value.root, ".gitignore"), ".sennel/\n.tmp/\n");
+      commitAll(value.root, "Create isolated missing action repository");
+      const request = nextRequest(value, "missing-action-claim");
+      const context = request.inputs.find((entry) => entry.name === "spec-gate-repair-context.json").document;
+      reserveSpecGateRepairWorkerCall({ ctx: value.ctx, request,
+        prompt: JSON.stringify(request.toPromptReference()) });
+      const before = durableSnapshot(value.flowManager, value.specId);
+      fs.unlinkSync(path.join(request.directory, "action.json"));
+      const restarted = new FlowManager({ root: value.root, mainRoot: value.root,
+        inWorktree: false, specId: value.specId });
+      let workerCalls = 0;
+      const agent = { projectInvocation, async call() {
+        workerCalls += 1;
+        throw new Error("a missing claimed action must not start a provider");
+      } };
+      const dispatcher = new RunDispatchCommand({ agent, maxDispatches: 1 });
+      await assert.rejects(() => dispatcher.runWorkerAttempt({ ...value.ctx, flowManager: restarted },
+        value.invocation), { code: "FLOW_DRAFT_EXECUTION_CLAIM_MISMATCH" });
+      assert.equal(workerCalls, 0);
+      assert.deepEqual(durableSnapshot(restarted, value.specId), before);
+      assert.equal(latestRepairBudget({ flowManager: restarted, specId: value.specId,
+        attemptId: before.state.attempt.id, baseRevision: context.baseRevision,
+        consumerNodeId: "spec-gate-repair" }).budget.providerCallCount, 1);
     } finally { removeTmpDir(value.root); }
   });
 

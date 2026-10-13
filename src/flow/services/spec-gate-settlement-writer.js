@@ -2,12 +2,14 @@ import { SpecGateSettlementPublication } from "../lib/spec-gate-prospective.js";
 import { StepPersistenceFailure } from "../lib/definition-lifecycle-failure.js";
 /** Save a selected Spec Gate Result and its prospective evidence. */
 export class SpecGateSettlementWriter {
+  #executionContract;
   #flowManager;
   #binding;
   #commandResult;
   #publication;
 
-  constructor({ flowManager, binding, commandResult, publication }) {
+  constructor({ flowManager, executionContract = null, binding, commandResult, publication }) {
+    this.#executionContract = executionContract;
     this.#flowManager = flowManager;
     this.#binding = binding;
     this.#commandResult = commandResult;
@@ -15,7 +17,7 @@ export class SpecGateSettlementWriter {
   }
 
   settle({ stepResult, settlement, selection }) {
-    const input = { binding: this.#binding, stepResult, settlement,
+    const input = { binding: this.#binding, stepResult, settlement, executionContract: this.#executionContract,
       commandResult: this.#commandResult,
       gatePublication: new SpecGateSettlementPublication({
         publication: this.#publication, selection,

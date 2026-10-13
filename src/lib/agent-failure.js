@@ -106,6 +106,7 @@ function restoreStableAgentFailure(error) {
     maxAttempts: error.maxAttempts ?? 1,
     cause: error,
     providerCompletionEvidence: error.providerCompletionEvidence ?? null,
+    providerStartupEvidence: error.providerStartupEvidence ?? null,
     ...(error.code === "AGENT_TIMEOUT" ? { stopEvidence: error.stopEvidence ?? null } : {}),
   });
 }
@@ -205,6 +206,34 @@ export class AgentProviderCompletionEvidence {
 
 const PROCESS_STOP_STATUSES = new Set(["confirmed", "uncertain"]);
 
+const PROVIDER_STARTUP_FAILURE_CODES = new Set(["ENOENT", "EACCES", "EPERM", "ENOTDIR", "EISDIR", "EROFS", "EEXIST", "ERR_INVALID_ARG_TYPE", "ERR_INVALID_ARG_VALUE"]);
+
+/** A failed spawn observed before any provider process existed. */
+export class AgentProviderStartupFailureEvidence {
+  constructor({ provider, profile, errorCode, attemptCount = 1, maxAttempts = 1 }) {
+    this.provider = requireString(provider, "agent startup provider");
+    this.profile = requireString(profile, "agent startup profile");
+    if (!PROVIDER_STARTUP_FAILURE_CODES.has(errorCode)) throw new TypeError("Agent startup failure requires a recognized spawn failure code");
+    this.errorCode = errorCode;
+    this.attemptCount = positiveInteger(attemptCount, "agent startup attempt count");
+    this.maxAttempts = positiveInteger(maxAttempts, "agent startup attempt limit");
+    if (this.attemptCount > this.maxAttempts) throw new TypeError("Agent startup attempts exceed their limit");
+    Object.freeze(this);
+  }
+  static fromSpawnFailure(error, { providerKey, profileKey, child = null }) {
+    if (child?.pid > 0 || !PROVIDER_STARTUP_FAILURE_CODES.has(error?.code)) return null;
+    return new AgentProviderStartupFailureEvidence({ provider: providerKey, profile: profileKey, errorCode: error.code });
+  }
+  static from(value) { return value instanceof this ? value : this.fromJSON(value); }
+  static fromJSON(value) {
+    const evidence = new this(value);
+    if (JSON.stringify(evidence.toJSON()) !== JSON.stringify(value)) throw new TypeError("Serialized agent startup evidence is invalid");
+    return evidence;
+  }
+  withAttempts(attemptCount, maxAttempts) { return new AgentProviderStartupFailureEvidence({ ...this.toJSON(), attemptCount, maxAttempts }); }
+  toJSON() { return { provider: this.provider, profile: this.profile, errorCode: this.errorCode, attemptCount: this.attemptCount, maxAttempts: this.maxAttempts }; }
+}
+
 /**
  * Provider-process termination evidence produced by the process supervisor.
  * An empty member list is diagnostic data only; it is never termination proof.
@@ -275,6 +304,7 @@ export class AgentFailure extends Error {
     maxAttempts = 1,
     cause = null,
     providerCompletionEvidence = null,
+    providerStartupEvidence = null,
   }) {
     if (new.target === AgentFailure) throw new Error("AgentFailure is abstract");
     const completionEvidence = providerCompletionEvidence == null
@@ -299,6 +329,7 @@ export class AgentFailure extends Error {
       throw new Error("agent failure attemptCount must not exceed maxAttempts");
     }
     this.providerCompletionEvidence = completionEvidence;
+    this.providerStartupEvidence = providerStartupEvidence === null ? null : AgentProviderStartupFailureEvidence.from(providerStartupEvidence);
     if (this.providerCompletionEvidence !== null
       && (this.providerCompletionEvidence.attemptCount !== this.attemptCount
         || this.providerCompletionEvidence.maxAttempts !== this.maxAttempts)) {
@@ -321,6 +352,7 @@ export class AgentFailure extends Error {
     if (this.providerCompletionEvidence !== null) {
       this.providerCompletionEvidence = this.providerCompletionEvidence.withAttempts(attemptCount, maxAttempts);
     }
+    if (this.providerStartupEvidence !== null) this.providerStartupEvidence = this.providerStartupEvidence.withAttempts(attemptCount, maxAttempts);
     return this;
   }
 
@@ -358,6 +390,7 @@ export class AgentFailure extends Error {
       ...(this.providerCompletionEvidence === null ? {} : {
         providerCompletionEvidence: this.providerCompletionEvidence.toJSON(),
       }),
+      ...(this.providerStartupEvidence === null ? {} : { providerStartupEvidence: this.providerStartupEvidence.toJSON() }),
       ...(this.providerExitCode != null ? { providerExitCode: this.providerExitCode } : {}),
       ...(this.signal != null ? { signal: this.signal } : {}),
       ...(timeoutDiagnostics && this.timeoutMs != null ? { timeoutMs: this.timeoutMs } : {}),
@@ -395,6 +428,7 @@ export class AgentFailure extends Error {
       message: text || "unknown agent provider failure",
       cause: error,
       providerCompletionEvidence,
+      providerStartupEvidence: error?.providerStartupEvidence ?? null,
     };
 
     if (

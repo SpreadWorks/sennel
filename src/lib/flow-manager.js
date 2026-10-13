@@ -593,6 +593,12 @@ export class FlowManager {
       specId: input.specId ?? this._boundSpecId,
     });
   }
+  claimExecutionContract(input) { return this._store.claimExecutionContract(input); }
+  readStoredExecutionContract(input) { return this._store.readStoredExecutionContract(input); }
+  readExecutionContract(input) { return this._store.readExecutionContract(input); }
+  readPromptExecutionProgress(input) { return this._store.readPromptExecutionProgress(input); }
+  readPromptExecutionEpisode(input) { return this._store.readPromptExecutionEpisode(input); }
+  savePromptExecutionProgress(input) { return this._store.savePromptExecutionProgress(input); }
   claimDraftStepExecution(input = {}) {
     return this._store.claimDraftStepExecution({
       ...input,

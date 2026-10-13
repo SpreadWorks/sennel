@@ -2,27 +2,28 @@
 import { existsSync, readdirSync, statSync, writeSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { spawn } from "node:child_process";
-import { fileURLToPath } from "node:url";
-import { globFilesSync } from "./runner/test-file-glob.js";
-import { buildSearchDirs } from "./runner/test-runner-search-dirs.js";
-import {
+import { fileURLToPath, pathToFileURL } from "node:url";
+await import("../src/sennel.js");
+const { globFilesSync } = await import("./runner/test-file-glob.js");
+const { buildSearchDirs } = await import("./runner/test-runner-search-dirs.js");
+const {
   formatLabelSummary,
   groupTestFilesByCategory,
   parsePassCount,
-} from "./runner/test-runner-labels.js";
-import { resolveTestFiles } from "./runner/test-selection.js";
-import { TestRunner } from "./runner/test-runner.js";
-import { TestSuiteManifest } from "./runner/manifest.js";
-import { TestSuiteExecutionPolicy } from "./runner/suite-execution-policy.js";
-import { TEST_SUITE_NAMES } from "./runner/suite-definitions.js";
-import {
+} = await import("./runner/test-runner-labels.js");
+const { resolveTestFiles } = await import("./runner/test-selection.js");
+const { TestRunner } = await import("./runner/test-runner.js");
+const { TestSuiteManifest } = await import("./runner/manifest.js");
+const { TestSuiteExecutionPolicy } = await import("./runner/suite-execution-policy.js");
+const { TEST_SUITE_NAMES } = await import("./runner/suite-definitions.js");
+const {
   MINIMUM_TEST_TMPFS_BYTES,
   TestTemporaryRoot,
-} from "./test-temporary-root.js";
-import {
+} = await import("./test-temporary-root.js");
+const {
   ChildProcessExecutionRecordCodec,
   processResultFromSpawnSync,
-} from "../src/flow/lib/test-regression.js";
+} = await import("../src/flow/lib/test-regression.js");
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const SCRIPT_PATH = fileURLToPath(import.meta.url);
@@ -90,7 +91,7 @@ export async function executeFiles(files, {
   const suites = [...TEST_SUITE_NAMES, "other"].filter((category) => groups[category].length > 0);
   const runSuite = async (category) => {
     const concurrency = category === "other" ? (jobs ?? 1) : policy.concurrencyFor(category);
-    const command = ["node", "--test", "--test-concurrency", String(concurrency), ...groups[category]];
+    const command = ["node", "--test", "--test-concurrency", String(concurrency), "--import", pathToFileURL(join(ROOT, "src/sennel.js")).href, ...groups[category]];
     const result = await new Promise((resolve) => {
       const child = spawnProcess(command[0], command.slice(1), {
         cwd: root,

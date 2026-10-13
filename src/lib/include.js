@@ -6,6 +6,8 @@
  * Supports recursive resolution (includes within includes).
  */
 
+import { readRuntimeResource, runtimeResourceExists } from "./runtime-package.js";
+
 import fs from "fs";
 import path from "path";
 import { resolvePresetChains } from "./presets.js";
@@ -50,7 +52,7 @@ function resolveRegistryPresetIncludePath(includePath, opts) {
   const projectLocal = path.join(opts.projectRoot, PRODUCT.managedPath("templates", "presets", presetKey, childPath));
   if (fs.existsSync(projectLocal)) return projectLocal;
   for (const candidate of registryCandidates) {
-    if (fs.existsSync(candidate)) return candidate;
+    if (runtimeResourceExists(candidate)) return candidate;
   }
   return path.join(opts.projectRoot, PRODUCT.managedPath("templates", "presets", presetKey, childPath));
 }
@@ -134,7 +136,7 @@ export function resolveIncludes(content, opts) {
     const includePath = match[1];
     const resolved = resolveIncludePath(includePath, opts);
 
-    if (!fs.existsSync(resolved)) {
+    if (!runtimeResourceExists(resolved)) {
       const src = opts.sourceFile || opts.baseDir;
       throw new Error(`Include not found: "${includePath}" (resolved to "${resolved}") in ${src}`);
     }
@@ -144,7 +146,7 @@ export function resolveIncludes(content, opts) {
     }
 
     seen.add(resolved);
-    const included = fs.readFileSync(resolved, "utf8");
+    const included = readRuntimeResource(resolved);
 
     let expanded;
     try {

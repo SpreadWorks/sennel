@@ -11,7 +11,7 @@ import { TaskReviewInput } from "../../services/task-review-input.js";
 import { TaskHostFilterInput } from "../../services/task-host-filter-input.js";
 import { TaskReviewSettlementWriter } from "../../services/task-review-settlement-writer.js";
 import { TaskHostFilterSettlementWriter } from "../../services/task-host-filter-settlement-writer.js";
-import { reviewStepExecutionContract,
+import { acquirePendingExecutionContract, reviewStepExecutionContract,
   hostFilterStepExecutionContract, HostFilterReceiptReplay } from "../../lib/execution-admission.js";
 import { TaskReviewOperations } from "../../lib/task-review-operations.js";
 import { TaskReviewExecutionRequiredResult } from "../step-result.js";
@@ -35,8 +35,10 @@ export function prepareTaskReviewServiceArguments(input) {
         ? flowManager.prepareTaskReviewStagePublication({ specId: binding.specId, commandResult: input.commandResult })
         : flowManager.prepareTaskReviewUnavailablePublication({ specId: binding.specId, checkpoint: input.checkpoint, decision: input.decision })) : null;
   if (publication?.completed === true) return new PreparedStepReplay(publication);
+  const executionContract = publication !== null && publication !== undefined
+    ? acquirePendingExecutionContract({ flowManager, binding }) : null;
   return [new TaskReviewInput({ facts: publication?.facts ?? null, frontier: publication?.taskFrontier ?? null, manifest: input.manifest ?? null }),
-    new TaskReviewSettlementWriter({ flowManager, binding, publication,
+    new TaskReviewSettlementWriter({ flowManager, binding, publication, executionContract,
       executionBinding: input.executionBinding ?? null, manifest: input.manifest ?? null })];
 }
 

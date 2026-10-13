@@ -1,5 +1,6 @@
 /** Save-only canonical publication of an implementation Review or Gate Result. */
 export class ImplReviewGateSettlementWriter {
+  #executionContract;
   #flowManager;
   #binding;
   #commandResult;
@@ -10,8 +11,9 @@ export class ImplReviewGateSettlementWriter {
   #failurePublication;
   #deferralPublication;
   #nonblockingPublication;
-  constructor({ flowManager, binding, commandResult = null, reviewPublication = null,
+  constructor({ flowManager, executionContract = null, binding, commandResult = null, reviewPublication = null,
     gatePublication = null, executionBinding = null, manifest = null, reviewFailurePublication = null, gateDeferralPublication = null, nonblockingPublication = null }) {
+    this.#executionContract = executionContract;
     this.#flowManager = flowManager;
     this.#binding = binding;
     this.#commandResult = commandResult;
@@ -24,7 +26,7 @@ export class ImplReviewGateSettlementWriter {
     this.#nonblockingPublication = nonblockingPublication;
   }
   settle({ stepResult, settlement }) {
-    return this.#flowManager.commitSpecStepResult({ binding: this.#binding, stepResult, settlement,
+    return this.#flowManager.commitSpecStepResult({ binding: this.#binding, stepResult, settlement, executionContract: this.#executionContract,
       commandResult: this.#commandResult, reviewPublication: this.#reviewPublication,
       reviewFailurePublication: this.#failurePublication,
       gateDeferralPublication: this.#deferralPublication,

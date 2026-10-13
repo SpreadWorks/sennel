@@ -10,7 +10,7 @@
 
 import fs from "fs";
 import path from "path";
-import { fileURLToPath } from "node:url";
+import { loadSpecJsonSchema } from "../../lib/spec-json.js";
 import { parseArgs } from "../../lib/cli.js";
 import { Command } from "../../lib/command.js";
 import { EXIT_ERROR } from "../../lib/constants.js";
@@ -21,11 +21,6 @@ import {
   TaskRenderPlan,
 } from "../lib/render-contract.js";
 import { TaskCollection } from "../lib/task-values.js";
-
-const SCHEMA_PATH = path.join(
-  path.dirname(fileURLToPath(import.meta.url)),
-  "..", "..", "flow", "schemas", "spec.schema.json",
-);
 
 function printHelp() {
   console.log(
@@ -40,10 +35,6 @@ function printHelp() {
       "  -h, --help       Show this help",
     ].join("\n"),
   );
-}
-
-function loadSchema() {
-  return JSON.parse(fs.readFileSync(SCHEMA_PATH, "utf8"));
 }
 
 /**
@@ -330,7 +321,7 @@ async function runSpecRender(rawArgs, container) {
   const spec = active === null
     ? JSON.parse(fs.readFileSync(specJsonPath, "utf8"))
     : canonicalSpecView(container.get("flowManager"), active.state);
-  const schema = loadSchema();
+  const schema = loadSpecJsonSchema();
   const errors = validateSchema(spec, schema);
   if (errors.length > 0) {
     process.stderr.write(`sennel spec render: spec.json failed schema validation:\n`);

@@ -28,6 +28,7 @@ export function validWorkerHandoffTaskSpec() {
       id: "T1",
       title: "Publish guarded Spec output",
       goal: "Keep the worker payload canonical.",
+      test_strategy: "Validate guarded publication and canonical readback.",
       origin: "plan",
       added_round: 0,
       status: "pending",

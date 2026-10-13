@@ -14,6 +14,7 @@ function buildProcessOptions(opts) {
     timeout: opts.timeout,
     maxBuffer: opts.maxBuffer,
     ...(opts.env && { env: opts.env }),
+    ...(opts.stdio && { stdio: opts.stdio }),
   };
 }
 
@@ -31,6 +32,7 @@ function buildProcessOptions(opts) {
  * @param {number}   [opts.timeout]   - Timeout in ms
  * @param {number}   [opts.maxBuffer] - Max stdout/stderr buffer size in bytes
  * @param {Object}   [opts.env]       - Environment variables
+ * @param {Array}    [opts.stdio]     - Standard streams and inherited descriptors
  * @returns {{ ok: boolean, status: number, stdout: string|Buffer, stderr: string|Buffer, signal: string|null, killed: boolean, errorCode: string|null }}
  */
 export function runCmd(cmd, args, opts = {}) {

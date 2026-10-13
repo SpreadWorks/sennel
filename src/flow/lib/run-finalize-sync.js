@@ -1,6 +1,7 @@
 import { executeFinalizationCommand, finalizationStepRegistration } from "../engine/composition/finalization.js";
 import path from "path";
 import { runCmd } from "../../lib/process.js";
+import { RuntimeChildExecution } from "../../lib/runtime-package.js";
 import { PKG_DIR } from "../../lib/cli.js";
 import { runGit } from "../../lib/git-helpers.js";
 import { PRODUCT } from "../../lib/product.js";
@@ -58,14 +59,14 @@ export class RunFinalizeSyncCommand extends FlowCommand {
         return result;
       };
       const buildScript = path.join(this.packageDir, "docs.js");
-      run("docs-build", () => this.runCommand("node", [buildScript, "build"], {
+      run("docs-build", () => RuntimeChildExecution.runSync(buildScript, ["build"], {
         cwd: syncCwd,
         env: {
           ...process.env,
           [PRODUCT.env("WORK_ROOT")]: syncCwd,
           [PRODUCT.env("SOURCE_ROOT")]: syncCwd,
         },
-      }));
+      }, this.runCommand));
       const statRes = run("git-diff-stat", () => this.git(["diff", "--stat", "--", ...FINALIZE_DOCUMENTATION_PATHS], { cwd: syncCwd }));
       const nameRes = run("git-diff-name", () => this.git(["diff", "--name-only", "--", ...FINALIZE_DOCUMENTATION_PATHS], { cwd: syncCwd }));
       return {

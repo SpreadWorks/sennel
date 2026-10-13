@@ -14,9 +14,10 @@ import { SpecReviewService } from "../../services/spec-review-service.js";
 export function specReviewResult(facts) {
   if (facts instanceof Error) return new StepErrorResult("spec-review", facts);
   if (facts instanceof ReviewWorkUnitManifest) {
+    const semanticInputs = facts.inputs.filter((input) => !["review.execution-options", "review.guardrails"].includes(input.logicalKey));
     if (facts.phase !== "spec" || facts.nodeId !== "spec-review" || facts.taskId !== null
       || !facts.output.equals(ReviewWorkUnitOutput.forReview({ phase: "spec" }))
-      || facts.inputs.length !== 2
+      || semanticInputs.length !== 2
       || !facts.inputs.some((input) => input.logicalKey === "spec.record")
       || !facts.inputs.some((input) => input.logicalKey === "spec.review")) {
       throw new TypeError("Spec Review work unit does not declare its canonical inputs and delta output");

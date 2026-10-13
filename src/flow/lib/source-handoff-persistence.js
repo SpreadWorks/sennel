@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { FlowExecutionContract } from "./flow-execution-contract.js";
 import {
   FLOW_ARTIFACT_CONTRACTS,
 } from "../../lib/flow-artifact-contract.js";
@@ -52,10 +53,17 @@ function eventPrefix(identity) {
 function protocolDescriptors(view, identity) {
   const checkpointPath = FLOW_ARTIFACT_CONTRACTS.resolve(CHECKPOINT_KEY, { handoffId: identity.storageId }).relativePath;
   const prefix = checkpointPath.slice(0, checkpointPath.lastIndexOf("/") + 1);
-  return view.catalog.artifacts.filter((entry) => (
-    entry.relativePath.startsWith(prefix)
-      && new Set([CHECKPOINT_KEY, EVENT_KEY, ROLLBACK_BLOB_KEY, SETTLEMENT_KEY]).has(entry.logicalKey)
-  ));
+  return view.catalog.artifacts.filter((entry) => {
+    if (entry.logicalKey === "execution.contract") {
+      const saved = parseJSON(view.readCatalogedArtifact(entry), "source handoff execution contract");
+      const contract = FlowExecutionContract.fromJSON(saved.contract);
+      return saved.id === contract.id && contract.runId === identity.runId && contract.specId === identity.specId
+        && contract.stepId === identity.stepId && contract.nodeId === identity.nodeId
+        && contract.attemptId === identity.attempt.id && contract.attemptSequence === identity.attempt.sequence;
+    }
+    return entry.relativePath.startsWith(prefix)
+      && new Set([CHECKPOINT_KEY, EVENT_KEY, ROLLBACK_BLOB_KEY, SETTLEMENT_KEY]).has(entry.logicalKey);
+  });
 }
 
 function identityMatchesState(identity, state) {
@@ -115,7 +123,7 @@ function assertPublicationActivity({ descriptor, activities, identity, label, al
 
 /** Complete catalog-backed authority for one source handoff Attempt. */
 export class CanonicalSourceHandoffAuthority {
-  constructor({ checkpoint, checkpointDescriptor, events, eventDescriptors, settlement = null, settlementDescriptor = null, rollbackBlob, rollbackBlobDescriptor, activities } = {}) {
+  constructor({ checkpoint, checkpointDescriptor, events, eventDescriptors, settlement = null, settlementDescriptor = null, rollbackBlob, rollbackBlobDescriptor, activities, executionContractDescriptors = [] } = {}) {
     if (!(checkpoint instanceof CanonicalSourceHandoffCheckpoint)) throw new CurrentFlowStateInvariantError("source handoff authority requires a typed checkpoint");
     if (!Array.isArray(events) || events.some((entry) => !(entry instanceof SourceHandoffEvent))) throw new CurrentFlowStateInvariantError("source handoff authority requires typed events");
     if (events.length === 0 || events[0].kind !== "prepared") throw new CurrentFlowStateInvariantError("source handoff authority requires its prepared event");
@@ -160,6 +168,7 @@ export class CanonicalSourceHandoffAuthority {
     this.descriptors = Object.freeze([
       this.checkpointDescriptor, this.rollbackBlobDescriptor, ...this.eventDescriptors,
       ...(this.settlementDescriptor === null ? [] : [this.settlementDescriptor]),
+      ...executionContractDescriptors.map((descriptor) => Object.freeze({ ...descriptor })),
     ]);
     Object.freeze(this);
   }
@@ -295,6 +304,8 @@ export function readSourceHandoffAuthorityFromView({ view, identity, root, canon
     settlementDescriptor: settlementDescriptor?.toJSON() ?? null,
     rollbackBlob: view.readCatalogedArtifact(rollbackBlobDescriptor),
     rollbackBlobDescriptor: rollbackBlobDescriptor.toJSON(), activities: view.activities,
+    executionContractDescriptors: protocolDescriptors(view, expected)
+      .filter((descriptor) => descriptor.logicalKey === "execution.contract").map((descriptor) => descriptor.toJSON()),
   });
 }
 

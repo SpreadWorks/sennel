@@ -1,4 +1,10 @@
 #!/usr/bin/env node
+import { ExecutionProtocolSnapshot } from "../lib/execution-protocol-snapshot.js";
+import { currentRuntimePackage } from "../../lib/runtime-package.js";
+import { executionValueDigest, FlowExecutionContractRefusal } from "../lib/flow-execution-contract.js";
+import { assertReviewWorkUnitInputSnapshot } from "../lib/review-work-unit.js";
+import { fileURLToPath } from "node:url";
+import { readRuntimeResource } from "../../lib/runtime-package.js";
 /**
  * src/flow/commands/review.js
  *
@@ -518,6 +524,14 @@ function canonicalReviewWorkerUnit() {
   const manifestPath = process.env[REVIEW_WORK_UNIT_MANIFEST_ENV];
   if (manifestPath == null || manifestPath.trim() === "") return null;
   return ReviewWorkUnit.fromEnvironment().assertOutputDirectory(reviewOutputDirectory());
+}
+
+function canonicalReviewGuardrails(root) {
+  const workUnit = canonicalReviewWorkerUnit();
+  if (workUnit === null) return loadMergedGuardrails(root);
+  const input = workUnit.manifestDocument.inputs.find((entry) => entry.logicalKey === "review.guardrails");
+  if (!input) throw new FlowExecutionContractRefusal("Review child lacks immutable guardrails");
+  return JSON.parse(assertReviewWorkUnitInputSnapshot(input, workUnit.root).bytes.toString("utf8"));
 }
 
 function sealCanonicalReviewWorkerUnit() {
@@ -1860,7 +1874,7 @@ function loadImplReviewPolicyContext(root, spec) {
       .map((requirement) => [requirement.id, requirement]),
   );
   const guardrails = new Map(
-    filterByPhase(loadMergedGuardrails(root), "review")
+    filterByPhase(canonicalReviewGuardrails(root), "review")
       .filter((guardrail) => guardrail?.id)
       .map((guardrail) => [guardrail.id, { id: guardrail.id, severity: "blocking" }]),
   );
@@ -4896,7 +4910,7 @@ function buildDraftQuestionReviewPrompt(draftJson, requestText, contextEntries) 
 
 function loadDraftQaRulesPartial() {
   if (cachedDraftQaRulesPartial !== null) return cachedDraftQaRulesPartial;
-  cachedDraftQaRulesPartial = resolveIncludes(fs.readFileSync(DRAFT_QA_RULES_PARTIAL_PATH, "utf8"), {
+  cachedDraftQaRulesPartial = resolveIncludes(readRuntimeResource(DRAFT_QA_RULES_PARTIAL_PATH), {
     baseDir: path.dirname(DRAFT_QA_RULES_PARTIAL_PATH),
     pkgDir: PKG_DIR,
     sourceFile: DRAFT_QA_RULES_PARTIAL_PATH,
@@ -5381,6 +5395,23 @@ async function runReview(rawArgs) {
   }
 
   const config = container.get("config");
+  const executionUnit = canonicalReviewWorkerUnit();
+  if (executionUnit !== null) {
+    const contract = executionUnit.readExecutionContract();
+    const protocol = ExecutionProtocolSnapshot.forReview({ manifest: executionUnit.manifestDocument, skipConfirm: cli.skipConfirm });
+    if (contract.id !== process.env[PRODUCT.env("REVIEW_EXECUTION_CONTRACT_ID")]
+      || contract.promptDigest !== protocol.promptDigest || contract.schemaDigest !== protocol.schemaDigest
+      || contract.runtimeRevision !== currentRuntimePackage().revision
+      || contract.inputRevision !== executionUnit.manifestDocument.inputDigest) {
+      throw new FlowExecutionContractRefusal("Review child requires its exact proved execution contract");
+    }
+    const optionsInput = executionUnit.manifestDocument.inputs.find((input) => input.logicalKey === "review.execution-options");
+    if (!optionsInput) throw new FlowExecutionContractRefusal("Review child lacks immutable execution options");
+    const options = JSON.parse(assertReviewWorkUnitInputSnapshot(optionsInput, executionUnit.root).bytes.toString("utf8"));
+    if (options.configDigest !== executionValueDigest(config) || options.skipConfirm !== cli.skipConfirm) {
+      throw new FlowExecutionContractRefusal("Review child configuration differs from its parent claim");
+    }
+  }
   if (!config || Object.keys(config).length === 0) {
     console.error("Error: failed to load config.json");
     process.exit(EXIT_ERROR);
@@ -5458,7 +5489,7 @@ async function runReview(rawArgs) {
 
   const touchedFiles = taskSpec ? new Set(taskSpec.touchedFiles) : new Set(resolvedReviewTarget.touchedFiles);
   for (const file of reviewTarget.untrackedFiles) touchedFiles.add(file);
-  const reviewGuardrails = filterByPhase(loadMergedGuardrails(root), "review");
+  const reviewGuardrails = filterByPhase(canonicalReviewGuardrails(root), "review");
 
   let fileMap = {};
   if (taskSpec) {
@@ -5762,7 +5793,7 @@ export default class FlowReviewCommand extends Command {
 // Direct-invocation entrypoint: `node src/flow/commands/review.js ...args`.
 // Used by RunReviewCommand (src/flow/lib/run-review.js) as a subprocess so
 // AI review can run with its own timeout.
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1])) {
   initContainer();
   runReview(process.argv.slice(2)).catch((err) => {
     const cli = parseReviewCliArgsForError(process.argv.slice(2));

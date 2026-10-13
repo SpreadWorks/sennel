@@ -3,7 +3,9 @@ import { PreparedStep } from "../../../src/flow/engine/composition/step-registra
 import { reserveFixtureSpecGateRepairWorkerCall } from "./spec-gate-repair-admission.js";
 import { SpecGateRepairBundle } from "../../../src/flow/lib/spec-gate-repair-bundle.js";
 import fs from "node:fs";
-import { createHash } from "node:crypto";
+import path from "node:path";
+import { managedDir } from "../../../src/lib/config.js";
+import { installGateProviderFake } from "./flow-dispatch-scenario.js";
 
 import { FlowManager } from "../../../src/lib/flow-manager.js";
 import { CanonicalFlowFixture } from "./flow-setup.js";
@@ -18,7 +20,7 @@ import { SpecGateRepairStep } from "../../../src/flow/steps/spec/spec-gate-repai
 import { WorkerArtifactHandoffCoordinator, sealWorkerArtifactHandoff } from "../../../src/flow/lib/worker-artifact-handoff.js";
 import { StepFactory } from "../../../src/flow/engine/step-factory.js";
 import { workerArtifactJson } from "./worker-artifact.js";
-import { parseGuardrailArticleEvaluation } from "../../../src/flow/lib/run-gate.js";
+import { RunGateCommand } from "../../../src/flow/lib/run-gate.js";
 
 /** Reuse the same real Gate producer for an initial or recurring repair Attempt. */
 export async function enterSpecGateRepairScenario({ flowManager, flow, specId,
@@ -29,21 +31,46 @@ export async function enterSpecGateRepairScenario({ flowManager, flow, specId,
 } = {}) {
   if (flowManager.canonicalState(specId).current?.at(-1) !== "spec-gate") flow.activate("spec-gate");
   const binding = new SpecGateEvaluationBinding({ flowManager, specId });
-  const record = flowManager.readArtifact({ specId, logicalKey: "spec.record", consumerNodeId: "spec-gate" });
-  const spec = JSON.parse(record.bytes.toString("utf8"));
-  const specRevision = `sha256:${createHash("sha256").update(record.bytes).digest("hex")}`;
   const rawObservations = [{ failureMode: "guardrail-violation",
     requirementRef, where: { file: "spec.json", locator },
     observed: "The selected Spec field needs a bounded correction.",
     targets: [target], allowedTargets: [{ target, operationKinds }] },
   ...additionalObservations];
-  const observations = mutateGateObservations(parseGuardrailArticleEvaluation(JSON.stringify({ observations: rawObservations }),
-    [...new Set(rawObservations.map((observation) => observation.requirementRef))],
-    { spec, specRevision }));
-  const commandResult = new CanonicalGatePromotion({
-    state: flowManager.canonicalState(specId), phase: "spec", nodeId: "spec-gate",
-  }).promote({ result: "fail", artifacts: { phase: "spec", failureKind: "ai_semantic_fail",
-    failureCode: "GATE_REJECTED", nextAction: { diagnosis: { observations } } } });
+  // Exercise the actual provider admission and Gate evaluator. The fixture
+  // supplies only the external response; the CLI owns the execution proof.
+  const guardrailFile = path.join(managedDir(flowManager.executionRoot()), "guardrail.json");
+  const priorRules = fs.existsSync(guardrailFile) ? JSON.parse(fs.readFileSync(guardrailFile, "utf8")) : { guardrails: [] };
+  const ids = [...new Set(rawObservations.map((observation) => observation.requirementRef))];
+  const additions = ids.filter((id) => !priorRules.guardrails.some((rule) => rule.id === id)).map((id) => ({
+    id, body: "Validate the selected Spec field against its requirement.",
+    meta: { phase: ["spec"], category: "requirements" },
+  }));
+  if (additions.length) fs.writeFileSync(guardrailFile, JSON.stringify({ ...priorRules,
+    guardrails: [...priorRules.guardrails, ...additions] }));
+  const externalProvider = installGateProviderFake((_prompt, options) => JSON.stringify({
+    observations: rawObservations,
+    ...(options.jsonSchema.required.includes("evaluationUnavailable") ? { evaluationUnavailable: null } : {}),
+  }));
+  let commandResult;
+  try {
+    commandResult = await new RunGateCommand().executeCanonical({ root: flowManager.executionRoot(),
+      executionRoot: flowManager.executionRoot(), flowManager, specId,
+      flowState: flowManager.loadReadOnly(specId), config: {} }, { phase: "spec" });
+  } finally { externalProvider.mock.restore(); }
+  if (commandResult.result !== "fail" || commandResult.artifacts.failureKind !== "ai_semantic_fail") {
+    throw new Error(`Spec Gate fixture provider did not produce its selected finding: ${JSON.stringify(commandResult)}`);
+  }
+  // Deliberately malformed system-boundary inputs remain available to the
+  // existing refusal scenarios, after their genuine producer claim exists.
+  const emittedObservations = commandResult.artifacts.nextAction.diagnosis.observations;
+  const emittedBytes = JSON.stringify(emittedObservations);
+  const observations = mutateGateObservations(emittedObservations);
+  if (JSON.stringify(observations) !== emittedBytes) {
+    commandResult = { ...commandResult, artifacts: { ...commandResult.artifacts,
+      nextAction: { ...commandResult.artifacts.nextAction,
+        diagnosis: { ...commandResult.artifacts.nextAction.diagnosis, observations } } } };
+    new CanonicalGatePromotion({ state: flowManager.canonicalState(specId), phase: "spec", nodeId: "spec-gate" }).promote(commandResult);
+  }
   const issuePublication = new SpecGateIssuePublication({ binding,
     entry: { step: "spec-gate", phase: "spec", observations,
       reason: "The selected Spec field needs a correction.", trigger: "gate post hook (auto)",
@@ -68,12 +95,15 @@ export async function createSpecGateRepairScenario({
   mutateGateObservations = (observations) => observations,
   additionalObservations = [],
   issue = null, issueSnapshot = null, request = "Repair the bounded Spec Gate finding.",
-  taskTestStrategy = null,
+  taskTestStrategy = "Run the focused Gate repair scenario.",
   admitMappedTasks = true,
   versionStoreFaultInjector = null, coordinatorFaultInjector = () => {},
 } = {}) {
   const root = createTmpDir("spec-gate-repair-scenario-");
   try {
+    specRecord = { ...specRecord, requirements: specRecord.requirements.map((requirement) =>
+      specRecord.requirements.length > 3 && requirement.priority == null
+        ? { ...requirement, priority: "must" } : requirement) };
     const flowManager = new FlowManager({ root, mainRoot: root, inWorktree: false, specId,
       ...(versionStoreFaultInjector ? { versionStoreFaultInjector } : {}) });
     const flow = new CanonicalFlowFixture({ flowManager, specId,

@@ -1,5 +1,5 @@
 import { RetroResultEvidence } from "../lib/retro-values.js";
-import { AcceptanceReviewResultEvidence, AcceptanceDecisionResultEvidence } from "../steps/acceptance/acceptance-review-values.js";
+import { AcceptanceReviewResultEvidence, AcceptanceDecisionResultEvidence, AcceptanceExecutionContinuationEvidence } from "../steps/acceptance/acceptance-review-values.js";
 import { FinalRegressionResultEvidence } from "../steps/acceptance/final-regression-result-evidence.js";
 import { ReportResultEvidence } from "../steps/acceptance/report-values.js";
 import { FinalizationExecutionIdentity } from "../lib/finalization-execution-identity.js";
@@ -813,6 +813,9 @@ export const RetroAggregatedResult = operandResultClass("RetroAggregatedResult",
 export const RetroIncompleteResult = operandResultClass("RetroIncompleteResult", { stepId: "retro", kind: "retro-incomplete", type: "branch-required", acceptance: true }, { evidence: RetroResultEvidence }, null, validateAcceptanceResult);
 export const RetroEvidenceRefreshResult = operandResultClass("RetroEvidenceRefreshResult", { stepId: "retro", kind: "retro-evidence-refresh", type: "loop-required", acceptance: true }, { evidence: RetroResultEvidence }, null, validateAcceptanceResult);
 export const AcceptanceReviewExecutionRequiredResult = operandResultClass("AcceptanceReviewExecutionRequiredResult", { stepId: "acceptance-review", kind: "acceptance-review-execution-required", type: "loop-required", acceptance: true }, { evidence: AcceptanceReviewResultEvidence }, null, validateAcceptanceResult);
+export const AcceptanceReviewExecutionHeldResult = operandResultClass("AcceptanceReviewExecutionHeldResult", { stepId: "acceptance-review", kind: "acceptance-review-execution-held", type: "user-input-required", acceptance: true }, { continuation: AcceptanceExecutionContinuationEvidence }, null, (_definition, values) => {
+  if (values.continuation.canResume) throw new TypeError("Held Acceptance execution requires an unavailable continuation");
+});
 export const AcceptanceReviewPassedResult = operandResultClass("AcceptanceReviewPassedResult", { stepId: "acceptance-review", kind: "acceptance-review-passed", type: "completed", acceptance: true }, { evidence: AcceptanceReviewResultEvidence }, null, validateAcceptanceResult);
 export const AcceptanceReviewRepairRequiredResult = operandResultClass("AcceptanceReviewRepairRequiredResult", { stepId: "acceptance-review", kind: "acceptance-review-repair-required", type: "loop-required", acceptance: true }, { evidence: AcceptanceReviewResultEvidence }, null, validateAcceptanceResult);
 export const AcceptanceReviewDecisionRequiredResult = operandResultClass("AcceptanceReviewDecisionRequiredResult", { stepId: "acceptance-review", kind: "acceptance-review-decision-required", type: "branch-required", acceptance: true }, { evidence: AcceptanceReviewResultEvidence }, null, validateAcceptanceResult);

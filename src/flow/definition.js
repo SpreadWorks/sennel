@@ -4368,6 +4368,8 @@ export class DraftReviewExecutionBinding {
     Object.freeze(this);
   }
 
+  get inputRevision() { return this.inputDigest; }
+
   toJSON() {
     return {
       kind: this.kind,
@@ -6976,6 +6978,7 @@ export function settleAcceptanceStepResult(stepId, result) {
     { effects: retainedSourceRouteEffects(result.stepId, "test-execute"),
       application: new RetroEvidenceRefreshApplication(STEP_SETTLEMENT_TOKEN, resolveRetroStaleEvidenceRecovery(result.evidence.staleFacts)) });
   if (result instanceof ImplementationResults.AcceptanceReviewExecutionRequiredResult || result instanceof ImplementationResults.ReportDeliveryRequiredResult) return new DraftExecutionSettlement(STEP_SETTLEMENT_TOKEN, result);
+  if (result instanceof ImplementationResults.AcceptanceReviewExecutionHeldResult) return new ImplementationAwaitDecision(STEP_SETTLEMENT_TOKEN, result);
   if (result instanceof ImplementationResults.AcceptanceReviewMechanicallyBlockedResult || result instanceof ImplementationResults.AcceptanceDecisionAwaitingChoiceResult) return new ImplementationAwaitDecision(STEP_SETTLEMENT_TOKEN, result);
   if (result instanceof ImplementationResults.AcceptanceReviewPassedResult) return acceptanceConnection(result, "final-regression", AcceptanceFinalRegressionConnector,
     { application: new AcceptanceReviewPassApplication(STEP_SETTLEMENT_TOKEN), effects: new StepRouteEffects({ unexecutedStepCompletions:

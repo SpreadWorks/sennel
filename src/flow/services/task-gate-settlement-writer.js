@@ -1,5 +1,6 @@
 /** Save Task Gate evaluation, Result and selected effects in one canonical commit. */
 export class TaskGateSettlementWriter {
+  #executionContract;
   #flowManager;
   #binding;
   #publication;
@@ -8,7 +9,8 @@ export class TaskGateSettlementWriter {
   #deferralPublication;
   #nonblockingPublication;
 
-  constructor({ flowManager, binding, publication = null, executionBinding = null, commandResult = null, gateDeferralPublication = null, nonblockingPublication = null }) {
+  constructor({ flowManager, executionContract = null, binding, publication = null, executionBinding = null, commandResult = null, gateDeferralPublication = null, nonblockingPublication = null }) {
+    this.#executionContract = executionContract;
     this.#flowManager = flowManager;
     this.#binding = binding;
     this.#publication = publication;
@@ -19,7 +21,7 @@ export class TaskGateSettlementWriter {
   }
 
   settle({ stepResult, settlement }) {
-    return this.#flowManager.commitSpecStepResult({ binding: this.#binding, stepResult, settlement,
+    return this.#flowManager.commitSpecStepResult({ binding: this.#binding, stepResult, settlement, executionContract: this.#executionContract,
       commandResult: this.#commandResult,
       gateDeferralPublication: this.#deferralPublication,
       nonblockingPublication: this.#nonblockingPublication,

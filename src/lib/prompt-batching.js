@@ -1,4 +1,15 @@
 import { createHash } from "node:crypto";
+import { AgentTransportFailureObservation } from "./agent-transport-failure-observation.js";
+import {
+  PromptExecutionJournal,
+  PromptExecutionJournalSnapshot,
+  PromptExecutionPlanIdentity,
+  PromptProviderAttemptJournal,
+  PromptExecutionJournalError,
+  isPromptExecutionControlFailure,
+  preservePromptExecutionControlFailure,
+  PromptExecutionProviderIdentity,
+} from "./prompt-execution-journal.js";
 
 export const GLOBAL_PROMPT_ELEMENT_HARD_MAX = 120_000;
 export const MAX_AGENT_ARGUMENT_BYTES = (128 * 1024) - 1;
@@ -1457,18 +1468,19 @@ export class PromptExecutionBudget {
     this.aggregateCharacters = 0;
   }
 
-  assertCanExecute(batchCount) {
+  assertCanExecute(batchCount, requiredCalls = batchCount) {
     safeInteger(batchCount, "Prompt execution planned batch count");
+    safeInteger(requiredCalls, "Prompt execution remaining call count");
     if (batchCount > this.limit.maxBatchCount) {
       throw new PromptBatchCountExceededFailure("Prompt plan exceeds its shared execution batch limit", {
         batchCount,
         maxBatchCount: this.limit.maxBatchCount,
       });
     }
-    if (this.providerCallCount + batchCount > this.limit.maxProviderCallCount) {
+    if (this.providerCallCount + requiredCalls > this.limit.maxProviderCallCount) {
       throw new PromptCallLimitExceededFailure("Prompt plans cannot complete within their shared provider call limit", {
         providerCallCount: this.providerCallCount,
-        requiredCalls: batchCount,
+        requiredCalls,
         maxProviderCallCount: this.limit.maxProviderCallCount,
       });
     }
@@ -1548,6 +1560,19 @@ export class PromptExecutionBudget {
     return PromptExecutionBudget.fromSnapshot(limit, this.snapshot());
   }
 
+  restore(snapshot) {
+    const restored = PromptExecutionBudget.fromSnapshot(this.limit, snapshot);
+    for (const field of Object.keys(restored.snapshot())) this[field] = restored[field];
+    return this;
+  }
+
+  assertIncludes(snapshot) {
+    const saved = PromptExecutionBudget.fromSnapshot(this.limit, snapshot);
+    if (Object.keys(saved.snapshot()).some((field) => this[field] < saved[field])) {
+      throw new PromptExecutionJournalError("PROMPT_EXECUTION_FRONTIER_MISMATCH", "Latest execution budget does not include the saved scope frontier");
+    }
+  }
+
   static fromSnapshot(executionLimit, snapshot) {
     if (snapshot === null || typeof snapshot !== "object" || Array.isArray(snapshot)
       || Object.keys(snapshot).sort().join(",") !== [
@@ -1579,12 +1604,18 @@ export class PromptProviderCallAdmission {
   #claimed = false;
   #attemptCount = 0;
   #settled = false;
+  #attemptJournal;
+  #cacheHit = false;
+  #cacheIdentity = null;
 
-  constructor(executionBudget, scopedBudget) {
+  constructor(executionBudget, scopedBudget, attemptJournal) {
     if (!(executionBudget instanceof PromptExecutionBudget)) throw new TypeError("Provider call admission requires a shared execution budget");
     if (scopedBudget !== undefined && !(scopedBudget instanceof PromptExecutionBudget)) throw new TypeError("Provider call admission scope requires an execution budget");
     this.#budgets = [...new Set([executionBudget, ...(scopedBudget ? [scopedBudget] : [])])];
-    this.#consumeProviderCall();
+    if (attemptJournal !== undefined && !(attemptJournal instanceof PromptProviderAttemptJournal)) throw new TypeError("Provider attempt journal must be typed");
+    this.#attemptJournal = attemptJournal ?? null;
+    this.#attemptCount = attemptJournal?.initialAttemptCount ?? 0;
+    if (this.#attemptCount === 0) this.#consumeProviderCall();
   }
 
   #consumeProviderCall() {
@@ -1601,12 +1632,25 @@ export class PromptProviderCallAdmission {
     return this;
   }
 
-  beforeProviderAttempt() {
+  beforeProviderAttempt(context) {
     if (!this.#claimed) throw new Error("Provider call admission must be claimed before a transport attempt");
     if (this.#settled) throw new Error("Provider call admission is already settled");
     if (this.#attemptCount > 0) this.#consumeProviderCall();
     this.#attemptCount += 1;
+    if (this.#attemptJournal) return this.#attemptJournal.beforeProviderAttempt(context, this.#attemptCount);
     return this.#attemptCount;
+  }
+
+  async afterProviderFailure(failure, context) {
+    await this.#attemptJournal?.afterProviderFailure(failure, context);
+  }
+
+  recordCacheHit(context) {
+    if (!this.#claimed || this.#settled) throw new Error("Cache response requires an active claimed admission");
+    const identity = new PromptExecutionProviderIdentity(context);
+    this.#attemptJournal?.recordCacheHit(identity);
+    this.#cacheIdentity = identity;
+    this.#cacheHit = true;
   }
 
   settle() {
@@ -1625,6 +1669,10 @@ export class PromptProviderCallAdmission {
   get attemptCount() { return this.#attemptCount; }
   get settled() { return this.#settled; }
   get reserved() { return !this.#settled && this.#attemptCount === 0; }
+  get initialAttemptCount() { return this.#attemptJournal?.initialAttemptCount ?? 0; }
+  get durable() { return this.#attemptJournal !== null; }
+  get cacheHit() { return this.#cacheHit; }
+  get cacheIdentity() { return this.#cacheIdentity; }
 }
 
 export class PromptExecutionAccountingSnapshot {
@@ -1643,22 +1691,33 @@ export class PromptExecutionAccountingSnapshot {
 export class PromptExecutionAccounting {
   #responseCallCount = 0;
   #admissions = new Set();
+  #replaySnapshot = null;
 
-  constructor(providerBudget) {
+  constructor(providerBudget, responseCallCount = 0) {
     if (!(providerBudget instanceof PromptExecutionBudget)) throw new TypeError("Prompt execution accounting requires a provider budget");
     this.providerBudget = providerBudget;
+    this.#responseCallCount = safeInteger(responseCallCount, "Prompt restored response call count");
     Object.freeze(this);
   }
 
   recordCall(admission) {
     if (!(admission instanceof PromptProviderCallAdmission)) throw new TypeError("Prompt execution accounting requires provider admission");
     this.#responseCallCount += 1;
+    this.#replaySnapshot = null;
     this.#admissions.add(admission);
   }
 
-  get responseCallCount() { return this.#responseCallCount; }
+  replay(snapshot) {
+    if (!(snapshot instanceof PromptExecutionAccountingSnapshot)) throw new TypeError("Prompt replay accounting requires a typed snapshot");
+    this.#replaySnapshot = snapshot;
+  }
+
+  endReplay() { this.#replaySnapshot = null; }
+
+  get responseCallCount() { return this.#replaySnapshot?.responseCallCount ?? this.#responseCallCount; }
 
   get providerAttemptCount() {
+    if (this.#replaySnapshot) return this.#replaySnapshot.providerAttemptCount;
     const reservations = [...this.#admissions].filter((admission) => admission.reserved).length;
     return this.providerBudget.providerCallCount - reservations;
   }
@@ -1701,13 +1760,17 @@ export class PromptCompletionReducer extends PromptBatchReducer {
   }
 }
 
-function responseCharacterCount(response) {
+export function responseCharacterCount(response) {
   if (typeof response === "string") return response.length;
   try {
     return JSON.stringify(response).length;
   } catch (error) {
     throw new PromptResponseInvalidFailure("Prompt response cannot be serialized for bounded accounting", {}, error);
   }
+}
+
+export function responseContentDigest(response) {
+  return digest(typeof response === "string" ? response : JSON.stringify(response));
 }
 
 function responseItemCount(response, responseContract) {
@@ -1739,6 +1802,71 @@ class DefaultPromptProtocolPolicy {
   }
 }
 
+/** Durable hooks contain execution observations, never consumer semantics. */
+class BatchProviderAttemptJournal extends PromptProviderAttemptJournal {
+  constructor({ frontier, responseCallIndex, request, save }) {
+    const failures = frontier.transportFailures.filter((entry) => entry.responseCallIndex === responseCallIndex);
+    super(failures.length);
+    this.frontier = frontier;
+    this.responseCallIndex = responseCallIndex;
+    this.requestDigest = requestDigest(request);
+    this.schemaDigest = digest(JSON.stringify(request.jsonSchema));
+    this.save = save;
+  }
+
+  async beforeProviderAttempt(context, attemptCount) {
+    if (!context || context.attempt !== attemptCount || !Number.isSafeInteger(context.maxAttempts)
+      || context.maxAttempts < context.attempt || typeof context.providerKey !== "string" || !context.providerKey.trim()
+      || typeof context.profileKey !== "string" || !context.profileKey.trim()) {
+      throw new PromptExecutionJournalError("PROMPT_EXECUTION_TRANSPORT_INVALID", "Durable provider adapter supplied an invalid transport attempt");
+    }
+    const previous = this.frontier.transportFailures.filter((entry) => entry.responseCallIndex === this.responseCallIndex).at(-1);
+    if (previous && (!previous.retryable || context.attempt !== previous.attempt + 1
+      || context.maxAttempts > previous.maxAttempts || previous.requestDigest !== this.requestDigest
+      || previous.schemaDigest !== this.schemaDigest || previous.providerKey !== context.providerKey
+      || previous.profileKey !== context.profileKey)) {
+      throw new PromptExecutionJournalError("PROMPT_EXECUTION_TRANSPORT_INVALID", "Saved transport frontier does not permit this provider attempt");
+    }
+    this.frontier.transportOrdinal += 1;
+    this.frontier.claim = { responseCallIndex: this.responseCallIndex, transportOrdinal: this.frontier.transportOrdinal,
+      attempt: context.attempt, maxAttempts: context.maxAttempts, requestDigest: this.requestDigest, schemaDigest: this.schemaDigest,
+      providerKey: context.providerKey, profileKey: context.profileKey };
+    await this.save("claimed");
+    return attemptCount;
+  }
+
+  async afterProviderFailure(failure, context) {
+    if (this.frontier.claim === null || context?.attempt !== this.frontier.claim.attempt
+      || context.maxAttempts !== this.frontier.claim.maxAttempts || typeof failure?.code !== "string" || !failure.code.trim()
+      || typeof failure.retryable !== "boolean") {
+      throw new PromptExecutionJournalError("PROMPT_EXECUTION_TRANSPORT_INVALID", "Transport failure has no matching saved provider claim");
+    }
+    let observation;
+    try { observation = AgentTransportFailureObservation.fromFailure(failure, {
+      providerKey: this.frontier.claim.providerKey, profileKey: this.frontier.claim.profileKey,
+      attempt: context.attempt, maxAttempts: context.maxAttempts,
+    }); } catch (cause) {
+      throw new PromptExecutionJournalError("PROMPT_EXECUTION_UNCERTAIN", "Provider failure proof does not match the saved physical attempt", cause);
+    }
+    if (observation === null) throw new PromptExecutionJournalError("PROMPT_EXECUTION_UNCERTAIN", "Provider failure has no confirmed physical completion or stop evidence", failure);
+    const { requestDigest: savedRequestDigest, schemaDigest, providerKey, profileKey } = this.frontier.claim;
+    this.frontier.transportFailures.push({ responseCallIndex: this.responseCallIndex, attempt: context.attempt,
+      maxAttempts: context.maxAttempts, code: failure.code, retryable: failure.retryable === true,
+      requestDigest: savedRequestDigest, schemaDigest, providerKey, profileKey });
+    this.frontier.transportFailures.at(-1).observation = observation.toJSON();
+    this.frontier.claim = null;
+    await this.save("transport-failed");
+  }
+
+  recordCacheHit(identity) {
+    const previous = this.frontier.transportFailures.filter((entry) => entry.responseCallIndex === this.responseCallIndex).at(-1);
+    if (this.frontier.claim !== null || previous && (previous.requestDigest !== this.requestDigest
+      || previous.schemaDigest !== this.schemaDigest || previous.providerKey !== identity.providerKey || previous.profileKey !== identity.profileKey)) {
+      throw new PromptExecutionJournalError("PROMPT_EXECUTION_IDENTITY_MISMATCH", "Cache response differs from the saved provider call identity");
+    }
+  }
+}
+
 /**
  * Read-only execution engine. A protocol policy may call its injected `call`
  * more than once, but every actual provider call is counted by the executor.
@@ -1764,6 +1892,8 @@ export class PromptBatchExecutor {
     protocolPolicy = new DefaultPromptProtocolPolicy(),
     protocolRetryLimit = new PromptProtocolRetryLimit(this.executionLimit.maxProtocolRetryCount),
     providerAttemptLimit,
+    executionJournal,
+    synthesisCallCount = 0,
   } = {}) {
     if (!(plan instanceof PromptBatchPlan)) throw new TypeError("Prompt executor requires a typed plan");
     if (typeof callAgent !== "function") throw new TypeError("Prompt executor requires callAgent");
@@ -1774,11 +1904,22 @@ export class PromptBatchExecutor {
     if (providerAttemptLimit !== undefined && !(providerAttemptLimit instanceof PromptProviderAttemptLimit)) {
       throw new TypeError("Prompt executor provider attempt limit must be typed");
     }
-    this.executionBudget.assertCanExecute(plan.batches.length);
+    if (executionJournal !== undefined && !(executionJournal instanceof PromptExecutionJournal)) throw new TypeError("Prompt executor execution journal must be typed");
+    safeInteger(synthesisCallCount, "Prompt plan synthesis call reservation");
+    executionJournal?.assertResumable(plan, synthesisCallCount);
+    const restored = executionJournal?.snapshot;
+    if (restored) this.executionBudget.assertIncludes(restored.budget);
+    const frontiers = restored ? JSON.parse(JSON.stringify(restored.batches)) : plan.batches.map((batch) => ({
+      batchDigest: batch.digest, batchCalls: 0, transportOrdinal: 0, claim: null, responses: [], transportFailures: [], completion: null,
+    }));
+    const pending = plan.batches.filter((batch) => frontiers[batch.index].completion === null);
+    const remainingCalls = pending.filter((batch) => frontiers[batch.index].responses.length === 0
+      || frontiers[batch.index].transportFailures.some((failure) => !frontiers[batch.index].responses.some((response) => response.responseCallIndex === failure.responseCallIndex))).length;
+    this.executionBudget.assertCanExecute(plan.batches.length, remainingCalls);
     const requestLimit = new PromptRequestLimit({
       maxCharacters: Math.min(plan.limit.maxCharacters, this.executionLimit.maxRequestCharacters),
     });
-    for (const batch of plan.batches) {
+    for (const batch of pending) {
       if (!batch.footprint.fits(requestLimit)) {
         throw new PromptBatchOverflowFailure("Prompt batch exceeds the executor request limit", {
           batchDigest: batch.digest,
@@ -1795,64 +1936,126 @@ export class PromptBatchExecutor {
       const providerBudget = new PromptExecutionBudget(new PromptExecutionLimit({
         maxProviderCallCount: providerAttemptLimit?.maxAttemptCount ?? this.executionLimit.maxProviderCallCount,
       }));
-      groupAccounting.set(groupId, new PromptExecutionAccounting(providerBudget));
+      const savedGroup = restored?.groups.find((entry) => entry.groupId === groupId);
+      if (savedGroup) providerBudget.restore(savedGroup.budget);
+      groupAccounting.set(groupId, new PromptExecutionAccounting(providerBudget, savedGroup?.responseCallCount ?? 0));
     }
+    const save = async (event) => {
+      if (!executionJournal) return;
+      await executionJournal.save(event, new PromptExecutionJournalSnapshot({
+        scope: executionJournal.scope,
+        plan: restored?.plan ?? PromptExecutionPlanIdentity.fromPlan(plan, synthesisCallCount),
+        budget: this.executionBudget.snapshot(),
+        groups: [...groupAccounting].map(([groupId, accounting]) => ({ groupId,
+          budget: accounting.providerBudget.snapshot(), responseCallCount: accounting.responseCallCount })),
+        batches: frontiers,
+      }));
+    };
+    if (!restored && synthesisCallCount > 0) this.executionBudget.consumeSynthesisCalls(synthesisCallCount);
+    if (executionJournal && !restored) await save("planned");
     let cursor = 0;
     let firstFailure = null;
     let firstFailureAccounting = null;
-    const executeBatch = async (batch) => {
-      let batchCalls = 0;
+    const executeBatch = async (batch, replayOnly = false) => {
+      const frontier = frontiers[batch.index];
+      let batchCalls = executionJournal ? frontier.batchCalls : 0;
+      let responseCallIndex = 0;
       const accounting = groupAccounting.get(batch.groupId);
       const call = async (request = batch.request, attemptContext) => {
-        const usesPreflightedRequest = request === batch.request;
-        batchCalls += 1;
-        if (batchCalls > protocolRetryLimit.maxRetryCount + 1) {
-          throw new PromptCallLimitExceededFailure("Prompt provider call limit is exhausted", {
-            batchDigest: batch.digest,
-            batchCalls,
-            maxProtocolRetryCount: protocolRetryLimit.maxRetryCount,
-          });
-        }
-        const actualRequest = normalizePromptRequest(request);
-        const actualFootprint = PromptLogicalFootprint.measure(actualRequest);
-        if (!actualFootprint.fits(requestLimit)) {
-          throw new PromptBatchOverflowFailure("Prompt protocol request exceeds the executor request limit", {
-            batchDigest: batch.digest,
-            footprint: actualFootprint.toJSON(),
-            maxCharacters: requestLimit.maxCharacters,
-          });
-        }
-        if (projectInvocation && !usesPreflightedRequest) {
-          assertProjection(
-            await projectInvocation(actualRequest, batch, attemptContext),
-            requestLimit,
-            batch,
-          );
-        }
-        const providerCallAdmission = new PromptProviderCallAdmission(this.executionBudget, accounting.providerBudget);
-        accounting.recordCall(providerCallAdmission);
-        let rawCallResponse;
         try {
-          rawCallResponse = await callAgent(
-            actualRequest,
-            batch,
-            batchCalls - 1,
-            attemptContext,
-            providerCallAdmission,
-          );
-        } finally {
-          if (!providerCallAdmission.settled) providerCallAdmission.settle();
+          const usesPreflightedRequest = request === batch.request;
+          const callIndex = responseCallIndex++;
+          const actualRequest = normalizePromptRequest(request);
+          const savedResponse = executionJournal ? frontier.responses.find((entry) => entry.responseCallIndex === callIndex) : null;
+          if (savedResponse) {
+            if (savedResponse.requestDigest !== requestDigest(actualRequest)) {
+              throw new PromptExecutionJournalError("PROMPT_EXECUTION_IDENTITY_MISMATCH", "Protocol continuation does not match the saved response request");
+            }
+            if (savedResponse.rejection === null && responseContentDigest(savedResponse.raw) !== savedResponse.responseDigest) {
+              throw new PromptExecutionJournalError("PROMPT_EXECUTION_RESPONSE_MISMATCH", "Saved response bytes do not match their content digest");
+            }
+            accounting.replay(new PromptExecutionAccountingSnapshot(savedResponse.executionAccounting));
+            if (savedResponse.rejection) throw new PromptResponseTooLargeFailure("Saved provider response exceeded its character limit", {
+              batchDigest: batch.digest, responseCharacters: savedResponse.responseCharacters,
+              maxResponseCharacters: this.executionLimit.maxResponseCharacters,
+            });
+            return JSON.parse(JSON.stringify(savedResponse.raw));
+          }
+          if (replayOnly) throw new PromptExecutionJournalError("PROMPT_EXECUTION_RESPONSE_MISMATCH", "Completed batch protocol requested an unsaved response");
+          const resumedCall = executionJournal && callIndex < frontier.batchCalls;
+          accounting.endReplay();
+          if (!resumedCall) batchCalls += 1;
+          if (batchCalls > protocolRetryLimit.maxRetryCount + 1) {
+            throw new PromptCallLimitExceededFailure("Prompt provider call limit is exhausted", {
+              batchDigest: batch.digest,
+              batchCalls,
+              maxProtocolRetryCount: protocolRetryLimit.maxRetryCount,
+            });
+          }
+          const actualFootprint = PromptLogicalFootprint.measure(actualRequest);
+          if (!actualFootprint.fits(requestLimit)) {
+            throw new PromptBatchOverflowFailure("Prompt protocol request exceeds the executor request limit", {
+              batchDigest: batch.digest,
+              footprint: actualFootprint.toJSON(),
+              maxCharacters: requestLimit.maxCharacters,
+            });
+          }
+          if (projectInvocation && !usesPreflightedRequest) {
+            assertProjection(
+              await projectInvocation(actualRequest, batch, attemptContext),
+              requestLimit,
+              batch,
+            );
+          }
+          if (executionJournal) frontier.batchCalls = batchCalls;
+          const attemptJournal = executionJournal ? new BatchProviderAttemptJournal({ frontier, responseCallIndex: callIndex, request: actualRequest, save }) : undefined;
+          const previousFailure = frontier.transportFailures.filter((entry) => entry.responseCallIndex === callIndex).at(-1);
+          if (executionJournal && previousFailure && (!previousFailure.retryable || previousFailure.attempt === previousFailure.maxAttempts)) {
+            throw new PromptExecutionJournalError("PROMPT_EXECUTION_TRANSPORT_EXHAUSTED", "Saved provider call exhausted its transport attempts");
+          }
+          const providerCallAdmission = new PromptProviderCallAdmission(this.executionBudget, accounting.providerBudget, attemptJournal);
+          if (!resumedCall) accounting.recordCall(providerCallAdmission);
+          let rawCallResponse;
+          try {
+            rawCallResponse = await callAgent(
+              actualRequest,
+              batch,
+              batchCalls - 1,
+              attemptContext,
+              providerCallAdmission,
+            );
+            if (executionJournal && !providerCallAdmission.claimed) {
+              throw new PromptExecutionJournalError("PROMPT_EXECUTION_ADAPTER_INVALID", "Durable execution requires an adapter that claims provider admission");
+            }
+          } finally {
+            if (!providerCallAdmission.settled) providerCallAdmission.settle();
+          }
+          const rawCallCharacters = responseCharacterCount(rawCallResponse);
+          const oversized = this.executionLimit.maxResponseCharacters !== null
+            && rawCallCharacters > this.executionLimit.maxResponseCharacters;
+          if (executionJournal) {
+            const providerIdentity = providerCallAdmission.cacheHit ? providerCallAdmission.cacheIdentity : frontier.claim;
+            if (providerIdentity === null) throw new PromptExecutionJournalError("PROMPT_EXECUTION_ADAPTER_INVALID", "Durable response requires a physical claim or explicit cache identity");
+            frontier.claim = null;
+            frontier.responses.push({ responseCallIndex: callIndex, requestDigest: requestDigest(actualRequest), raw: oversized ? null : rawCallResponse,
+              schemaDigest: digest(JSON.stringify(actualRequest.jsonSchema)), providerKey: providerIdentity.providerKey, profileKey: providerIdentity.profileKey,
+              origin: providerCallAdmission.cacheHit || providerCallAdmission.attemptCount === 0 ? "cache" : "provider",
+              executionAccounting: accounting.snapshot().toJSON(), responseCharacters: rawCallCharacters, responseDigest: responseContentDigest(rawCallResponse),
+              rejection: oversized ? "PROMPT_RESPONSE_TOO_LARGE" : null });
+            await save("response");
+          }
+          if (oversized) {
+            throw new PromptResponseTooLargeFailure("Prompt provider response exceeds its character limit", {
+              batchDigest: batch.digest,
+              responseCharacters: rawCallCharacters,
+              maxResponseCharacters: this.executionLimit.maxResponseCharacters,
+            });
+          }
+          return rawCallResponse;
+        } catch (error) {
+          if (executionJournal && error instanceof PromptCallLimitExceededFailure) preservePromptExecutionControlFailure(error);
+          throw error;
         }
-        const rawCallCharacters = responseCharacterCount(rawCallResponse);
-        if (this.executionLimit.maxResponseCharacters !== null
-          && rawCallCharacters > this.executionLimit.maxResponseCharacters) {
-          throw new PromptResponseTooLargeFailure("Prompt provider response exceeds its character limit", {
-            batchDigest: batch.digest,
-            responseCharacters: rawCallCharacters,
-            maxResponseCharacters: this.executionLimit.maxResponseCharacters,
-          });
-        }
-        return rawCallResponse;
       };
       const raw = await protocolPolicy.execute({ batch, request: batch.request, call, accounting });
       const rawCharacters = responseCharacterCount(raw);
@@ -1869,6 +2072,7 @@ export class PromptBatchExecutor {
         parsed = responseContract.parse(raw, batch);
         if (parsed && typeof parsed.then === "function") parsed = await parsed;
       } catch (error) {
+        if (isPromptExecutionControlFailure(error)) throw error;
         if (error instanceof PromptBatchingError) throw error;
         throw new PromptResponseInvalidFailure("Prompt response does not satisfy its typed contract", { batchDigest: batch.digest }, error);
       }
@@ -1882,20 +2086,34 @@ export class PromptBatchExecutor {
           parsedItems,
         });
       }
-      this.executionBudget.consumeAggregate({ characters: parsedCharacters, items: parsedItems });
-      return new PromptBatchCompletion({
+      if (replayOnly && (JSON.stringify(parsed) !== JSON.stringify(frontier.completion.response)
+        || parsedCharacters !== frontier.completion.responseCharacters || parsedItems !== frontier.completion.responseItemCount)) {
+        throw new PromptExecutionJournalError("PROMPT_EXECUTION_RESPONSE_MISMATCH", "Saved completion differs from its revalidated response bytes");
+      }
+      if (!replayOnly) this.executionBudget.consumeAggregate({ characters: parsedCharacters, items: parsedItems });
+      const completion = new PromptBatchCompletion({
         batch,
         response: parsed,
         responseCharacters: parsedCharacters,
         responseItemCount: parsedItems,
-        executionAccounting: accounting.snapshot(),
+        executionAccounting: replayOnly ? new PromptExecutionAccountingSnapshot(frontier.completion.executionAccounting) : accounting.snapshot(),
       });
+      if (executionJournal && !replayOnly) {
+        frontier.completion = { response: parsed, responseCharacters: parsedCharacters, responseItemCount: parsedItems,
+          executionAccounting: accounting.snapshot().toJSON() };
+        await save("validated");
+      }
+      return completion;
     };
+    for (const batch of plan.batches) {
+      if (frontiers[batch.index].completion) completions[batch.index] = await executeBatch(batch, true);
+    }
     const worker = async () => {
       while (firstFailure === null) {
         const index = cursor;
         cursor += 1;
         if (index >= plan.batches.length) return;
+        if (completions[index]) continue;
         try {
           completions[index] = await executeBatch(plan.batches[index]);
         } catch (error) {
@@ -1904,9 +2122,11 @@ export class PromptBatchExecutor {
         }
       }
     };
-    const workerCount = Math.min(this.executionLimit.concurrency, plan.batches.length);
+    const workerCount = Math.min(executionJournal ? 1 : this.executionLimit.concurrency, pending.length);
     await Promise.all(Array.from({ length: workerCount }, () => worker()));
     if (firstFailure !== null) {
+      if (executionJournal && (isPromptExecutionControlFailure(firstFailure)
+        || firstFailure instanceof PromptCallLimitExceededFailure)) throw firstFailure;
       const completed = completions.filter(Boolean);
       const causeCode = firstFailure.code || firstFailure.failureCode || null;
       throw new PromptBatchExecutionIncompleteFailure(`Prompt batch execution did not complete; no reduced result was produced: ${causeCode || "ERROR"}: ${firstFailure.message}`, {
@@ -2002,7 +2222,7 @@ export class PromptReductionPlan {
     return next;
   }
 
-  async execute({ isComplete, buildRound, executeRound, toNextLevel, finalize } = {}) {
+  async execute({ isComplete, buildRound, executeRound, toNextLevel, finalize, reserveSynthesisCalls = true } = {}) {
     for (const [value, name] of [[isComplete, "isComplete"], [buildRound, "buildRound"], [executeRound, "executeRound"], [toNextLevel, "toNextLevel"], [finalize, "finalize"]]) {
       if (typeof value !== "function") throw new TypeError(`Prompt reduction requires ${name}()`);
     }
@@ -2010,7 +2230,7 @@ export class PromptReductionPlan {
     for (let depth = 0; depth <= this.executionLimit.maxReductionDepth; depth += 1) {
       const plan = this.planRound({ level, depth, isComplete, buildRound });
       if (plan === null) return finalize(level.elements, level.coverageDigest);
-      this.executionBudget.consumeSynthesisCalls(plan.batches.length);
+      if (reserveSynthesisCalls) this.executionBudget.consumeSynthesisCalls(plan.batches.length);
       const completions = await executeRound(plan, depth);
       level = this.advance({ level, depth, plan, completions, toNextLevel });
     }

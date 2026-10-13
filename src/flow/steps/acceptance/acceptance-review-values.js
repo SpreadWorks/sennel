@@ -77,6 +77,41 @@ export class AcceptanceReviewResultEvidence {
     publication: value.publication === null ? null : new NonGateCatalogPublication(value.publication) }); }
 }
 
+/** Acquired progress authority for continuing the current claimed execution. */
+export class AcceptanceExecutionContinuationEvidence {
+  constructor({ identity, generation, contractId, progressDigest, uncertainCalls = [], reasonCode = null }) {
+    if (!(identity instanceof NonGateTargetBinding) || identity.stepId !== "acceptance-review"
+      || !Number.isSafeInteger(generation) || generation < 0
+      || reasonCode !== null && (typeof reasonCode !== "string" || reasonCode === "")) {
+      throw new TypeError("Acceptance continuation requires its current execution identity");
+    }
+    this.identity = identity;
+    this.generation = generation;
+    this.contractId = contractId === null ? null : requireDigest(contractId, "Acceptance execution contract ID");
+    this.progressDigest = requireDigest(progressDigest, "Acceptance execution progress digest");
+    this.uncertainCalls = strings(uncertainCalls, "Acceptance uncertain provider calls");
+    this.reasonCode = reasonCode;
+    if (this.contractId === null && this.reasonCode === null) {
+      throw new TypeError("Acceptance continuation without a contract requires a refusal reason");
+    }
+    Object.freeze(this);
+  }
+  get stepId() { return this.identity.stepId; }
+  get canResume() { return this.reasonCode === null && this.uncertainCalls.length === 0; }
+  get code() { return this.reasonCode ?? (this.uncertainCalls.length > 0 ? "PROMPT_EXECUTION_UNCERTAIN" : null); }
+  assertEvidence(evidence) {
+    if (!(evidence instanceof AcceptanceReviewResultEvidence) || !evidence.executionRequired
+      || JSON.stringify(evidence.identity.toJSON()) !== JSON.stringify(this.identity.toJSON())
+      || evidence.executionGeneration !== this.generation) {
+      throw new TypeError("Acceptance continuation differs from its claimed Step evidence");
+    }
+  }
+  toJSON() { return { identity: this.identity.toJSON(), generation: this.generation,
+    contractId: this.contractId, progressDigest: this.progressDigest,
+    uncertainCalls: [...this.uncertainCalls], reasonCode: this.reasonCode }; }
+  static fromJSON(value) { return new this({ ...value, identity: new NonGateTargetBinding(value.identity) }); }
+}
+
 /** One tokenless explicit choice bound to the current immutable Review producer. */
 export class AcceptanceDecisionResultEvidence {
   constructor({ identity, sourcePublication, reviewAttempt, repairFingerprint, choice = null, publication = null } = {}) {
