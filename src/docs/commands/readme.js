@@ -19,11 +19,12 @@ import { createLogger } from "../../lib/progress.js";
 import { loadFullAnalysis } from "../lib/command-context.js";
 import { processTemplate } from "./text.js";
 import { buildTextSystemPrompt } from "../lib/text-prompts.js";
-import { resolveConcurrency } from "../../lib/config.js";
+import { managedOutputDir } from "../../lib/config.js";
 import { container } from "../../lib/container.js";
 import { PRODUCT } from "../../lib/product.js";
 import { resolveDocsContext } from "../lib/docs-context.js";
 import { Command } from "../../lib/command.js";
+import { runDocumentationAiCommand, rethrowDocumentationAiStop } from "../lib/documentation-ai-execution.js";
 
 const logger = createLogger("readme");
 
@@ -41,11 +42,11 @@ const logger = createLogger("readme");
 // main
 // ---------------------------------------------------------------------------
 
-async function runReadme(ctx, rawArgs) {
+async function runReadme(ctx, rawArgs = [], commandContainer = container) {
   // CLI モード: 引数をパースしてコンテキストを構築
   if (!ctx) {
     const cli = parseArgs(rawArgs, {
-      flags: ["--dry-run"],
+      flags: ["--yes", "--dry-run"],
       options: ["--lang", "--output"],
       defaults: { lang: "", output: "" },
     });
@@ -55,15 +56,20 @@ async function runReadme(ctx, rawArgs) {
       const t = tr();
       const h = t.raw("ui:help.cmdHelp.readme");
       const o = h.options;
-      console.log([h.usage, "", `  ${h.desc}`, "", "Options:", `  ${o.lang}`, `  ${o.output}`, `  ${o.dryRun}`, `  ${o.help}`].join("\n"));
+      console.log([h.usage, "", `  ${h.desc}`, "", "Options:", `  ${t("ui:docsAi.yes")}`, `  ${o.lang}`, `  ${o.output}`, `  ${o.dryRun}`, `  ${o.help}`].join("\n"));
       return;
     }
 
-    ctx = resolveDocsContext(container, cli);
+    ctx = resolveDocsContext(commandContainer, cli);
     ctx.dryRun = cli.dryRun;
     ctx.output = cli.output;
   }
 
+  ctx.container ||= commandContainer;
+  return runDocumentationAiCommand(ctx, rawArgs, "docs.readme", () => executeReadme(ctx));
+}
+
+async function executeReadme(ctx) {
   const { root, config, outputLang: lang, type, t } = ctx;
 
   if (!type) {
@@ -97,6 +103,10 @@ async function runReadme(ctx, rawArgs) {
     return;
   }
 
+  const selectedReadmePath = ctx.output ? path.resolve(root, ctx.output) : path.join(root, "README.md");
+  ctx.aiSession.registerFiles("docs.readme", [selectedReadmePath]);
+  ctx.aiSession.registerInputs([selectedReadmePath, path.join(managedOutputDir(root), "analysis.json"), ...readmeRes.sources.map((source) => source.path)]);
+
   // フォールバック翻訳が必要な場合
   if (readmeRes.action === "translate") {
     const agent = ctx.agent;
@@ -113,9 +123,9 @@ async function runReadme(ctx, rawArgs) {
 
   // {{data}} ディレクティブを解決
   // 非デフォルト言語の場合は docsDir を指定して chapters() が正しいディレクトリを参照するようにする
-  const readmeOutputPath = ctx.output ? path.resolve(root, ctx.output) : null;
+  const readmeOutputPath = ctx.output ? selectedReadmePath : null;
   const resolverDocsDir = readmeOutputPath ? path.dirname(readmeOutputPath) : undefined;
-  const readmePath = readmeOutputPath || path.join(root, "README.md");
+  const readmePath = selectedReadmePath;
   let resolveFn;
   try {
     const resolver = await createResolver(type, root, {
@@ -147,9 +157,11 @@ async function runReadme(ctx, rawArgs) {
   // バッチモードでは AI が構造を維持できず充填に失敗する。
   // per-directive モードで各ディレクティブを個別に処理する。
   const textDirectives = parseDirectives(resolved).filter((d) => d.type === "text");
-  if (textDirectives.length > 0 && !ctx.dryRun) {
+  if (ctx.dryRun && readmeRes.action === "translate" && textDirectives.length > 0) {
+    ctx.aiSession.markUnknownPhase("docs.readme.text");
+  } else if (textDirectives.length > 0) {
     try {
-      const cfg = container.get("config");
+      const cfg = ctx.config;
       const agent = ctx.agent;
       if (!agent || !agent.resolve("docs.readme")) {
         throw new Error("No agent configured. Set 'agent.default' in config.json or run 'sennel setup'.");
@@ -160,13 +172,15 @@ async function runReadme(ctx, rawArgs) {
 
       const result = await processTemplate(
         resolved, analysis, "README.md", agent,
-        false, [], systemPrompt, undefined, undefined, lang, ctx.srcRoot || root,
+        ctx.dryRun, [], systemPrompt, undefined, undefined, lang, ctx.srcRoot || root,
       );
       if (result.filled > 0) {
         resolved = result.text;
         logger.log(`${result.filled} text directive(s) filled in README.`);
       }
     } catch (err) {
+      rethrowDocumentationAiStop(err, ctx.aiSession);
+      ctx.aiSession.markPartialError();
       logger.log(`WARN: skipping {{text}} in README: ${err.message}`);
     }
   }
@@ -189,13 +203,15 @@ async function runReadme(ctx, rawArgs) {
     return;
   }
 
+  ctx.aiSession.assertActive();
   fs.writeFileSync(readmePath, newContent, "utf8");
+  ctx.aiSession.recordGeneratedFiles([readmePath]);
   logger.log(t("messages:readme.updated"));
 }
 
 export default class DocsReadmeCommand extends Command {
   static outputMode = "raw";
   async execute(ctx) {
-    return runReadme(ctx.docsCtx, ctx._rawArgs || []);
+    return runReadme(ctx.docsCtx, ctx._rawArgs || [], ctx.container);
   }
 }

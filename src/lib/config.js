@@ -165,6 +165,17 @@ const CONFIG_SCHEMA = {
         languages: { type: "array", items: { type: "string" }, minItems: 1 },
         defaultLanguage: { type: "string", minLength: 1 },
         mode: { type: "string", enum: ["translate", "generate"] },
+        ai: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            confirmationThresholdCharacters: {
+              type: "integer",
+              minimum: 1,
+              maximum: Number.MAX_SAFE_INTEGER,
+            },
+          },
+        },
         style: {
           type: "object",
           properties: {

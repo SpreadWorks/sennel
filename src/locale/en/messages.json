@@ -219,6 +219,23 @@
       { "pattern": "^(Here is|Based on)", "flags": "i" }
     ]
   },
+  "docsAi": {
+    "preview": "[docs] DRY-RUN {{command}}: {{files}} file(s), {{characters}} planned input characters, {{batches}} batches; large-run confirmation: {{confirmation}}",
+    "confirmationDetails": "{{command}}: {{files}} file(s), {{characters}} planned input characters, {{batches}} batches. Planned input so far: {{total}} characters; observed attempts: {{consumed}} characters.\nThis {{run}} run may consume substantial time and tokens. Later stages, synthesis and retries may add input that cannot yet be determined.",
+    "question": "Continue this {{command}} run? [y/N] ",
+    "confirmationRequired": "Large AI execution requires confirmation. Approve this run with: {{command}}",
+    "cancelled": "Documentation AI execution cancelled by the user.",
+    "scopeChanged": "The source or execution configuration changed after planning; confirmation is required for the changed scope.",
+    "reportTitle": "[docs] AI usage: status={{status}}, provider attempts={{calls}}, retries={{retries}}",
+    "reportColumns": "Stage\tInput\tOutput\tCache read\tCache creation",
+    "total": "Total",
+    "unknownTokens": "{{known}} known / {{unknown}} unknown attempts",
+    "observationIncomplete": "[docs] Some attempt observations are incomplete; token totals show the known portion.",
+    "externalUnobserved": "[docs] AI usage from the external review command is not included.",
+    "reportPath": "[docs] Usage report: {{path}}",
+    "reportSaveFailed": "[docs] Could not save the usage report: {{message}}",
+    "unknownPhases": "[docs] DRY-RUN: later AI-dependent stages are not yet determined: {{phases}}"
+  },
   "init": {
     "noType": "ERROR: type is not set. Set \"type\" in .sennel/config.json or use --type option.",
     "noTemplates": "ERROR: no template files found in chain",

@@ -76,13 +76,35 @@ function processTemplate(text, analysis, fileName, resolveFn) {
 // ---------------------------------------------------------------------------
 // populateFromAnalysis (エクスポート用: forge.js などから呼び出し可能)
 // ---------------------------------------------------------------------------
-export function populateFromAnalysis(root, analysis, resolveFn, opts) {
-  if (!analysis) return { populated: false, files: [] };
-  if (!resolveFn) return { populated: false, files: [] };
+export class DocumentationDataPreparation {
+  constructor(docsDir, plans, files) {
+    if (!plans.every((plan) => plan instanceof DocumentUpdatePlan)) throw new TypeError("Documentation data preparation requires document update plans");
+    this.docsDir = docsDir;
+    this.plans = Object.freeze(plans);
+    this.files = Object.freeze(files);
+    Object.freeze(this);
+  }
 
+  get populated() { return this.files.length > 0; }
+
+  commit({ aiSession, faultInjector } = {}) {
+    aiSession?.assertActive();
+    new DocumentUpdateTransaction(this.plans, { faultInjector }).commit();
+    aiSession?.recordGeneratedFiles(this.files.map((file) => path.join(this.docsDir, file)));
+    return this;
+  }
+}
+
+export function populateFromAnalysis(root, analysis, resolveFn, opts = {}) {
+  const prepared = prepareDataPopulation(root, analysis, resolveFn, opts);
+  return opts.dryRun ? prepared : prepared.commit(opts);
+}
+
+export function prepareDataPopulation(root, analysis, resolveFn, opts = {}) {
   const docsDir = path.join(root, "docs");
   const changedFiles = [];
   const plans = [];
+  if (!analysis || !resolveFn) return new DocumentationDataPreparation(docsDir, plans, changedFiles);
 
   const docsFiles = getChapterFiles(docsDir, { type: opts?.type, configChapters: opts?.configChapters, projectRoot: root });
 
@@ -103,9 +125,7 @@ export function populateFromAnalysis(root, analysis, resolveFn, opts) {
     }
   }
 
-  new DocumentUpdateTransaction(plans, { faultInjector: opts?.faultInjector }).commit();
-
-  return { populated: changedFiles.length > 0, files: changedFiles };
+  return new DocumentationDataPreparation(docsDir, plans, changedFiles);
 }
 
 // ---------------------------------------------------------------------------
@@ -207,7 +227,9 @@ async function runData(ctx, rawArgs) {
   }
 
   if (!ctx.dryRun && !ctx.stdout) {
+    ctx.aiSession?.assertActive();
     new DocumentUpdateTransaction(plans, { faultInjector: ctx.faultInjector }).commit();
+    ctx.aiSession?.recordGeneratedFiles([...changedFiles].map((file) => path.join(docsDir, file)));
     for (const file of changedFiles) logger.verbose(`UPDATED: ${file}`);
   }
 

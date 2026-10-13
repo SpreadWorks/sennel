@@ -1,4 +1,7 @@
 {
+  "docsAi": {
+    "yes": "--yes             Approve large AI consumption for this run"
+  },
   "setup": {
     "title": "Sennel — Setup",
     "separator": "========================",

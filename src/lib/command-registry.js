@@ -285,9 +285,9 @@ const docsDefinitionData = [
 ];
 
 const docsArgs = {
-  init: { flags: ["--force", "--dry-run"], options: ["--type"] },
+  init: { flags: ["--force", "--dry-run", "--yes"], options: ["--type"] },
   scan: { flags: ["--stdout", "--dry-run"], optionalOptions: ["--reset"] },
-  text: { flags: ["--dry-run", "--per-directive"], options: ["--agent", "--id", "--timeout"] },
+  text: { flags: ["--dry-run", "--per-directive", "--yes"], options: ["--agent", "--id", "--timeout"] },
 };
 
 const docsOptions = {
@@ -296,6 +296,8 @@ const docsOptions = {
   text: ["--agent <name>", "--id <id>", "--dry-run", "--per-directive", "--timeout <ms>", "-h, --help"],
 };
 
+const docsAiCommands = new Set(["build", "enrich", "init", "text", "readme", "forge", "translate", "agents"]);
+
 const docsSubcommands = docsDefinitionData.map(([name, modulePath, summary, usage, localeKey]) => rawDefinition(
   name,
   modulePath,
@@ -303,7 +305,7 @@ const docsSubcommands = docsDefinitionData.map(([name, modulePath, summary, usag
     section: "Docs",
     summary,
     usage,
-    options: docsOptions[name] || ["-h, --help"],
+    options: [...(docsOptions[name] || ["-h, --help"]), ...(docsAiCommands.has(name) ? ["--yes"] : [])],
     localeKey,
   },
   { args: docsArgs[name] || null },

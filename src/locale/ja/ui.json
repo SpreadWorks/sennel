@@ -1,4 +1,7 @@
 {
+  "docsAi": {
+    "yes": "--yes             今回の大量AI実行を承認する"
+  },
   "setup": {
     "title": "Sennel — セットアップ",
     "separator": "========================",
