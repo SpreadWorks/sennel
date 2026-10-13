@@ -4,7 +4,7 @@ import { SpecRepairTarget, parseSpecGateRepairPermissions } from "./spec-repair-
 import { SpecGateDocumentTarget } from "./spec-gate-targets.js";
 import { FLOW_ARTIFACT_CONTRACTS } from "../../lib/flow-artifact-contract.js";
 import { CanonicalGateInputStore } from "./canonical-gate-artifacts.js";
-import { canonicalRepairAttemptOwner } from "./repair-attempt-lineage.js";
+import { canonicalAttemptOwner } from "./repair-attempt-lineage.js";
 import { readProspectiveCommandArtifact } from "./prospective-command-artifact.js";
 import { CanonicalCommandAttemptArtifactHistory } from "./canonical-command-result.js";
 import { TaskStepIdentity } from "./task-step-identity.js";
@@ -844,7 +844,7 @@ export class PlanGateRepairRecord {
     }
     if (!Array.isArray(activities)) throw new Error("canonical plan gate repair requires an Activity ledger");
     const document = issueLogDocument(issueLog);
-    const rewind = canonicalRepairAttemptOwner({ state, activities, targetStepId });
+    const rewind = canonicalAttemptOwner({ state, activities, targetStepId });
     if (rewind?.transition?.operation !== "plan_gate_repair") return null;
     if (!Array.isArray(rewind.references?.repairs) || rewind.references.repairs.length !== 1) {
       throw new Error("canonical plan gate repair Activity requires exactly one repair reference");
@@ -867,12 +867,14 @@ export class PlanGateRepairRecord {
   }
 
   observationRepair({ state, activities, handoffRevision }) {
-    const rewind = canonicalRepairAttemptOwner({ state, activities, targetStepId: this.targetStepId });
+    const rewind = canonicalAttemptOwner({ state, activities, targetStepId: this.targetStepId });
     if (rewind?.transition?.operation !== "plan_gate_repair"
       || rewind.references?.repairs?.[0]?.id !== this.idempotencyKey) {
       throw new Error("plan Gate repair replacement Attempt has no exact publication Activity");
     }
-    const targetAttempt = rewind.transition.attempt;
+    // The owner retains the plan's authority; this execution publishes an
+    // outcome for the authenticated current Attempt after retry or recovery.
+    const targetAttempt = state.attempt;
     return new GateObservationRepair({
       repairId: this.idempotencyKey,
       sourceEvidence: this.evidenceIdentity,

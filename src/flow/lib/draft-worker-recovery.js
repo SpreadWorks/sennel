@@ -1,10 +1,131 @@
 import { createHash } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { isConditionalDraftWorkerStep } from "./draft-conditional-worker.js";
+import { STEP_RESULT_REGISTRY, STEP_RESULT_TYPE, rehydrateStepResult } from "../engine/step-result.js";
 
 export const DRAFT_WORKER_RECOVERY_OPERATION = "recover_draft_worker_execution";
+export const DRAFT_STEP_ERROR_RECOVERY_OPERATION = "recover_draft_step_error";
 
 const document = (value) => value?.toJSON?.() ?? value;
+
+function isDraftStep(stepId) {
+  return STEP_RESULT_REGISTRY.some((entry) => entry.stepId === stepId
+    && entry.stepId.startsWith("draft") && entry.type === STEP_RESULT_TYPE.ERROR);
+}
+
+/** Canonical facts captured outside the explicit recovery policy. */
+export class DraftExecutionRecoveryFacts {
+  constructor({ state, activities, reason = null, expectedAttempt = state.attempt }) {
+    const expected = document(expectedAttempt);
+    if (state.attempt?.id !== expected?.id || state.attempt?.sequence !== expected?.sequence
+      || state.attempt?.nodeId !== expected?.nodeId) {
+      throw new DraftWorkerRecoveryRefusal("Draft recovery targets a changed Attempt");
+    }
+    this.state = state;
+    this.activities = activities;
+    this.reason = reason;
+    Object.freeze(this);
+  }
+}
+
+/** Durable operator authorization bound to the exact saved Error settlement. */
+export class DraftStepErrorRecoveryReceipt {
+  constructor({ binding, failedActivityId, failureReceiptId, reason }) {
+    if (typeof reason !== "string" || reason.trim() === "") {
+      throw new DraftWorkerRecoveryRefusal("Draft Step Error recovery requires a non-empty --reason describing the correction");
+    }
+    if (!binding || Object.keys(binding).sort().join(",") !== "attemptId,attemptSequence,runId,specId,stepId"
+      || !isDraftStep(binding.stepId) || !Number.isSafeInteger(binding.attemptSequence)
+      || binding.attemptSequence < 1
+      || [binding.runId, binding.specId, binding.attemptId, failedActivityId, failureReceiptId]
+        .some((value) => typeof value !== "string" || value.trim() === "")) {
+      throw new DraftWorkerRecoveryRefusal("Draft Step Error recovery requires its exact failure binding");
+    }
+    this.binding = Object.freeze({ ...binding });
+    this.failedActivityId = failedActivityId;
+    this.failureReceiptId = failureReceiptId;
+    this.reason = reason.trim();
+    this.id = `draft-step-error-recovery-${createHash("sha256").update(JSON.stringify([
+      binding.runId, binding.specId, binding.stepId, binding.attemptId, binding.attemptSequence,
+      failedActivityId, failureReceiptId, this.reason,
+    ])).digest("hex")}`;
+    Object.freeze(this);
+  }
+
+  static fromJSON(value) {
+    if (!value || Object.keys(value).sort().join(",") !== "binding,failedActivityId,failureReceiptId,id,reason") {
+      throw new DraftWorkerRecoveryRefusal("Draft Step Error recovery receipt has an invalid schema");
+    }
+    const receipt = new this(value);
+    if (receipt.id !== value.id) throw new DraftWorkerRecoveryRefusal("Draft Step Error recovery receipt identity is invalid");
+    return receipt;
+  }
+
+  assertSource({ state, activities }) {
+    const { binding } = this;
+    const attempt = state.attempt;
+    const failed = activities.map(document).find((entry) => entry.id === this.failedActivityId);
+    const receipt = failed?.result?.draftSettlementReceipt;
+    const latest = activities.map(document).filter((entry) => entry.attemptId === binding.attemptId
+      && entry.sequence === binding.attemptSequence && entry.result?.draftSettlementReceipt != null).at(-1);
+    if (state.runId !== binding.runId || state.specId !== binding.specId
+      || state.current?.at(-1) !== binding.stepId || attempt?.nodeId !== binding.stepId
+      || attempt?.id !== binding.attemptId || attempt?.sequence !== binding.attemptSequence
+      || state.lifecycle.state !== "active" || state.history?.execution === "dormant"
+      || attempt.failure?.category !== "step-result-error"
+      || failed?.transition.operation !== "fail_attempt" || failed?.nodeId !== binding.stepId
+      || failed.attemptId !== binding.attemptId || failed.sequence !== binding.attemptSequence
+      || !isDeepStrictEqual(failed.failure, document(attempt.failure))
+      || receipt?.id !== this.failureReceiptId || receipt.settlementKind !== "failure"
+      || !isDeepStrictEqual(receipt.binding, binding) || latest?.id !== failed.id
+      || rehydrateStepResult(binding.stepId, failed.result.stepResult).type !== STEP_RESULT_TYPE.ERROR) {
+      throw new DraftWorkerRecoveryRefusal("Draft Step Error recovery requires the current exact saved failure receipt");
+    }
+  }
+
+  assertTransition({ state, activities, activity, attempt }) {
+    this.assertSource({ state, activities });
+    const previous = document(state.attempt);
+    const replacement = document(attempt);
+    const expected = { ...previous, id: replacement.id, startedAt: replacement.startedAt,
+      sequence: previous.sequence + 1, failure: null, blocker: null, incomplete: [] };
+    if (activity.id !== this.id || replacement.id === previous.id
+      || !isDeepStrictEqual(replacement, expected)) {
+      throw new DraftWorkerRecoveryRefusal("Draft Step Error recovery must start the same Step with unchanged retry consumption and resource claims");
+    }
+  }
+
+  toJSON() {
+    return { id: this.id, binding: { ...this.binding }, failedActivityId: this.failedActivityId,
+      failureReceiptId: this.failureReceiptId, reason: this.reason };
+  }
+}
+
+/** Explicit Definition decision; automatic Step Error execution stays blocked. */
+export class DraftStepErrorRecoveryDecision {
+  constructor(facts) {
+    const { state, activities, reason } = facts;
+    const failed = activities.map(document).findLast((entry) => entry.nodeId === state.current?.at(-1)
+      && entry.attemptId === state.attempt?.id && entry.sequence === state.attempt?.sequence
+      && entry.transition.operation === "fail_attempt");
+    this.receipt = new DraftStepErrorRecoveryReceipt({
+      binding: failed?.result?.draftSettlementReceipt?.binding,
+      failedActivityId: failed?.id,
+      failureReceiptId: failed?.result?.draftSettlementReceipt?.id,
+      reason,
+    });
+    this.receipt.assertSource(facts);
+    this.stepId = this.receipt.binding.stepId;
+    Object.freeze(this);
+  }
+}
+
+export function resolveDraftExecutionRecovery(facts) {
+  if (!(facts instanceof DraftExecutionRecoveryFacts)) throw new TypeError("Draft recovery requires typed canonical facts");
+  return facts.state.attempt?.failure?.category === "step-result-error"
+    ? new DraftStepErrorRecoveryDecision(facts)
+    : resolveDraftWorkerRecovery(facts);
+}
 
 export class DraftWorkerRecoveryRefusal extends Error {
   constructor(message) {

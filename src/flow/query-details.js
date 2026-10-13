@@ -17,6 +17,7 @@ import { canonicalGateLogicalKeys, canonicalGateNodeId, canonicalGateRevision } 
 import { GateAttemptIdentity, GateFailureCategory } from "./lib/gate-transition.js";
 import { GateEvaluationScope } from "./lib/run-gate.js";
 import { AgentResponseProtocolEvidence } from "../lib/agent-response-protocol.js";
+import { DRAFT_STEP_ERROR_RECOVERY_OPERATION } from "./lib/draft-worker-recovery.js";
 
 const GROUPS = Object.freeze(["evaluations", "findings", "repairs"]);
 const GATE_KEYS = new Set(["draft.gate", "spec.gate", "task.gate", "impl.gate"]);
@@ -24,6 +25,7 @@ const SPEC_REVIEW_VERDICTS = new Set(["spec-review-passed", "spec-review-advisor
 // These ledger operations record lifecycle/administrative facts and cannot
 // produce review, evaluation, or repair observations.
 const NON_DETAIL_OPERATIONS = new Set([
+  DRAFT_STEP_ERROR_RECOVERY_OPERATION,
   "create_flow", "add_task", "add_approval_task", "start_attempt", "retry_attempt", "retry_gate_attempt",
   "retry_recovery_attempt", "update_attempt", "fail_attempt", "record_failure", "rewind", "recover_attempt",
   "park_flow", "resume_flow", "finalize_flow", "set_policy", "activate_nonblocking", "update_spec_record",

@@ -8,8 +8,29 @@ import {
   DraftNextRoute,
   StepErrorDecision,
   settleDraftStepResult,
+  DraftStepErrorRecoveryReceipt,
 } from "../../src/flow/definition.js";
 import * as results from "../../src/flow/engine/step-result.js";
+
+test("explicit Step Error recovery receipts cover exactly the ten registered Draft Steps", () => {
+  const steps = results.STEP_RESULT_REGISTRY.filter((entry) => entry.type === "error"
+    && entry.stepId.startsWith("draft")).map((entry) => entry.stepId);
+  assert.equal(steps.length, 10);
+  for (const stepId of steps) {
+    const receipt = new DraftStepErrorRecoveryReceipt({
+      binding: { runId: "run-recovery", specId: "001-draft-recovery", stepId,
+        attemptId: `failed-${stepId}`, attemptSequence: 2 },
+      failedActivityId: `failure-${stepId}`, failureReceiptId: `receipt-${stepId}`,
+      reason: "Corrected the cause of this saved Step Error.",
+    });
+    assert.deepEqual(DraftStepErrorRecoveryReceipt.fromJSON(receipt.toJSON()).toJSON(), receipt.toJSON());
+    assert.throws(() => DraftStepErrorRecoveryReceipt.fromJSON({ ...receipt.toJSON(), id: "another-receipt" }),
+      /receipt identity is invalid/);
+    assert.throws(() => new DraftStepErrorRecoveryReceipt({ ...receipt.toJSON(),
+      binding: { ...receipt.binding, stepId: "spec" } }), /exact failure binding/);
+    assert.throws(() => new DraftStepErrorRecoveryReceipt({ ...receipt.toJSON(), reason: " " }), /non-empty --reason/);
+  }
+});
 
 test("Definition maps every target-connection Result through its selected Connector", () => {
   const cases = [

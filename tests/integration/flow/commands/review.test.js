@@ -39,7 +39,8 @@ import {
 } from "../../../../src/lib/prompt-batching.js";
 import { FLOW_COMMANDS } from "../../../../src/flow/registry.js";
 import { ReviewService } from "../../../../src/flow/services/review-service.js";
-import { draftStepRegistration } from "../../../../src/flow/engine/composition/draft.js";
+import { draftStepRegistration, prepareDraftReviewBinding } from "../../../../src/flow/engine/composition/draft.js";
+import { StepAdmissionRefusal } from "../../../../src/flow/lib/step-admission-refusal.js";
 import { assertServiceBoundary } from "../../../support/structure/service-boundary.js";
 import { CanonicalDraftReviewSource } from "../../../../src/flow/lib/canonical-review-artifacts.js";
 import { DraftReviewConnector } from "../../../../src/flow/engine/connectors/draft/draft-review-connector.js";
@@ -58,8 +59,8 @@ import {
 import RunReviewCommand from "../../../../src/flow/lib/run-review.js";
 import { ReviewExecutionLease } from "../../../../src/flow/lib/review-execution-lease.js";
 import RunClaimNextActionCommand from "../../../../src/flow/lib/run-claim-next-action.js";
-import { WorkerArtifactHandoffCoordinator } from "../../../../src/flow/lib/worker-artifact-handoff.js";
-import { prepareConditionalDraftWorkerThroughStep } from "../../../support/infrastructure/draft-worker-step.js";
+import { WorkerArtifactHandoffCoordinator, sealWorkerArtifactHandoff } from "../../../../src/flow/lib/worker-artifact-handoff.js";
+import { completeDraftWorkerThroughStep, prepareConditionalDraftWorkerThroughStep } from "../../../support/infrastructure/draft-worker-step.js";
 import {
   createMemoryWorkUnitCheckpointStore,
   WorkUnitToolingFailure,
@@ -1301,6 +1302,118 @@ it("retains a sealed claimed Draft review work unit when rebuilt identity mismat
   } finally {
     removeTmpDir(root);
   }
+});
+
+it("Draft Step Error replacement creates a fresh Review work unit on the retained Draft revision and feeds triage", async () => {
+  const root = createTmpDir("draft-review-error-replacement-");
+  const specId = "524-draft-review-error-replacement";
+  try {
+    const value = setupDraftReviewExecutionReentry({ root, specId,
+      runId: "run-draft-review-error-replacement", phase: "draft-questions" });
+    let manager = value.manager;
+    const binding = await prepareDraftReviewBinding({ flowManager: manager,
+      state: manager.canonicalState(specId), phase: "draft-questions" });
+    const source = manager.readArtifact({ specId, logicalKey: "draft", consumerNodeId: "draft-questions-review" });
+    const finding = { title: "State validation", target: "analysis.validation", classification: "blocking",
+      rationale: "Validation needs an explicit check.", evidence: "The retained Draft omits that check." };
+    const manifests = [];
+    const command = new RunReviewCommand({ resolveTreeSha: () => "a".repeat(40),
+      resolveTargetStateDigest: () => "b".repeat(64), runCommand(_command, _args, options) {
+        const work = ReviewWorkUnit.fromEnvironment(options.env);
+        const manifest = work.manifestDocument;
+        manifests.push(manifest);
+        const draft = JSON.parse(options.env.SENNEL_REVIEW_DRAFT_SOURCE);
+        assert.deepEqual(draft.revision, binding.revision);
+        assert.equal(manifest.attemptId, manager.canonicalState(specId).attempt.id);
+        fs.writeFileSync(path.join(work.root, manifest.output.basename), `${JSON.stringify({
+          version: 2, phase: "draft-questions", sourceDraft: "draft.json", sourceDraftRevision: draft.revision,
+          generatedAt: "2026-10-13T00:00:00.000Z", verdict: "REJECTED", summary: finding.rationale,
+          blockingFindings: [finding], advisoryFindings: [], repairTargets: [],
+        }, null, 2)}\n`);
+        work.seal();
+        return { ok: true, status: 0, stdout: "", stderr: "", signal: null, killed: false };
+      } });
+    const ctx = { root, mainRoot: root, executionRoot: root, specId, phase: "draft",
+      flowManager: manager, flowState: manager.loadReadOnly(specId), config: {} };
+    const observed = await command.execute(ctx);
+    assert.equal(observed.result, "ok", JSON.stringify(observed));
+    const publicationStep = await draftStepRegistration("draft-questions-review").create({
+      flowManager: manager, binding, publicationResult: observed });
+    assert.equal((await publicationStep.step.execute()).kind, "draft-questions-review-execution-required");
+    const prepared = await draftStepRegistration("draft-questions-review").create({
+      flowManager: manager, binding, commandResult: observed });
+    // Persist a chosen Error directly; this does not measure automatic Step Error selection.
+    await new StepErrorResult("draft-questions-review", new Error("The Review observation could not be processed."))
+      .persist(prepared.dependency(ReviewService));
+    manager = new FlowManager({ root, mainRoot: root, inWorktree: false, specId });
+    const failed = manager.canonicalState(specId);
+    const failureReceipt = manager.readCurrentStepSettlement({ specId, stepId: "draft-questions-review" }).receipt;
+    const failedActivities = manager.activityLedger(specId);
+    assert.equal(failed.attempt.failure.category, "step-result-error");
+    assert.equal(failed.nextAction().operation, "blocked");
+    manager.recoverDraftExecution({ specId, reason: "The Review observation processing cause was corrected.",
+      expectedAttempt: failed.attempt });
+    manager = new FlowManager({ root, mainRoot: root, inWorktree: false, specId });
+    const replacement = manager.canonicalState(specId).attempt;
+    assert.notEqual(replacement.id, binding.attempt.id);
+    assert.equal(replacement.sequence, binding.attempt.sequence + 1);
+    assert.deepEqual(replacement.consumption.toJSON(), failed.attempt.consumption.toJSON());
+    assert.deepEqual(manager.activityLedger(specId).slice(0, failedActivities.length), failedActivities);
+    assert.equal(manager.activityLedger(specId).at(-1).transition.draftStepErrorRecoveryReceipt.failureReceiptId,
+      failureReceipt.id);
+    assert.deepEqual(manager.readArtifact({ specId, logicalKey: "draft", consumerNodeId: "draft-questions-review" }), source);
+    assert.equal(manager.readCurrentStepSettlement({ specId, stepId: "draft-questions-review" }), null);
+    const beforeStale = manager.canonicalState(specId).toJSON();
+    const beforeStaleActivities = manager.activityLedger(specId);
+    await assert.rejects(draftStepRegistration("draft-questions-review").create({ flowManager: manager, binding }),
+      StepAdmissionRefusal);
+    assert.deepEqual(manager.canonicalState(specId).toJSON(), beforeStale);
+    assert.deepEqual(manager.activityLedger(specId), beforeStaleActivities);
+
+    const recoveredCtx = { ...ctx, flowManager: manager, flowState: manager.loadReadOnly(specId) };
+    const result = await command.execute(recoveredCtx);
+    assert.equal(result.result, "ok", JSON.stringify(result));
+    await FLOW_COMMANDS.run.review.post(recoveredCtx, result);
+    manager = new FlowManager({ root, mainRoot: root, inWorktree: false, specId });
+    assert.equal(manifests.length, 2);
+    assert.equal(manifests[0].attemptId, binding.attempt.id);
+    assert.equal(manifests[1].attemptId, replacement.id);
+    assert.notEqual(manifests[1].digest, manifests[0].digest);
+    assert.equal(manager.canonicalState(specId).nextAction().nodeId, "draft-questions-triage");
+    const publication = manager.readArtifact({ specId, logicalKey: "draft.questions.review", consumerNodeId: "draft-questions-triage" });
+    const terminal = manager.activityLedger(specId).findLast((activity) =>
+      activity.result?.stepResult?.kind === "draft-questions-review-findings");
+    assert.equal(terminal.attemptId, replacement.id);
+    assert.equal(terminal.sequence, replacement.sequence);
+    const publicationActivity = manager.activityLedger(specId).findLast((activity) =>
+      activity.nodeId === "draft-questions-review" && activity.attemptId === replacement.id
+      && activity.result?.draftSettlementReceipt?.executionLifecycle?.phase === "publication");
+    assert.equal(publication.descriptor.activityId, publicationActivity.id);
+    assert.equal(publicationActivity.sequence, replacement.sequence);
+    assert.equal(publicationActivity.result.draftSettlementReceipt.executionLifecycle.binding.manifestDigest,
+      manifests[1].digest);
+    assert.equal(terminal.result.draftSettlementReceipt.binding.attemptId, replacement.id);
+    assert.deepEqual(JSON.parse(publication.bytes).attempts.at(-1).artifact.payload.sourceDraftRevision, binding.revision);
+
+    manager.beginNextAction(specId);
+    const coordinator = new WorkerArtifactHandoffCoordinator();
+    const triageCtx = { ...ctx, flowManager: manager, flowState: manager.loadReadOnly(specId) };
+    const request = coordinator.createRequest({ ctx: triageCtx, state: manager.loadReadOnly(specId),
+      invocation: { id: "review-error-replacement-triage", target: { digest: "b".repeat(64) },
+        action: { digest: "a".repeat(64), nextAction: { step: "draft-questions-triage" } } } });
+    const triageSource = request.inputs.find((input) => input.name === "draft-review-questions.json");
+    assert.deepEqual(triageSource.document.blockingFindings, [finding]);
+    fs.writeFileSync(request.payloadPath("draft-questions-triage.json"), `${JSON.stringify({
+      version: 1, phase: "draft-questions-triage", sourceReview: "draft-review-questions.json", summary: finding.rationale,
+      items: [{ ...finding, decision: "apply", allowedFieldPaths: [finding.target], requiredFieldPaths: [finding.target] }],
+    }, null, 2)}\n`);
+    sealWorkerArtifactHandoff({ requestPath: request.requestPath, invocationId: request.dispatchInvocationId });
+    const consumed = await completeDraftWorkerThroughStep({ coordinator, ctx: triageCtx, request });
+    assert.equal(consumed.stepResult.kind, "draft-questions-triage-completed");
+    const final = new FlowManager({ root, mainRoot: root, inWorktree: false, specId });
+    assert.equal(final.canonicalState(specId).nextAction().nodeId, "draft-questions-repair");
+    assert.deepEqual(final.activityLedger(specId).slice(0, failedActivities.length), failedActivities);
+  } finally { removeTmpDir(root); }
 });
 
 it("refuses a Draft review whose Attempt changes during direct execution admission", async () => {

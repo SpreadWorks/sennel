@@ -20,7 +20,7 @@ import {
 import RunGateCommand, { appendIssueLogFromGateResult } from "../../../src/flow/lib/run-gate.js";
 import GetNextActionCommand from "../../../src/flow/lib/get-next-action.js";
 import { CanonicalGatePromotion } from "../../../src/flow/lib/canonical-gate-artifacts.js";
-import { attachCanonicalCommandResultArtifact } from "../../../src/flow/lib/canonical-command-result.js";
+import { attachCanonicalCommandResultArtifact, CanonicalCommandAttemptArtifactHistory } from "../../../src/flow/lib/canonical-command-result.js";
 import { CanonicalDraftReviewSource } from "../../../src/flow/lib/canonical-review-artifacts.js";
 import { readCurrentGateTransitionFacts } from "../../../src/flow/lib/gate-transition-facts.js";
 import { captureCurrentTaskSource } from "../../../src/flow/lib/task-mutation-lineage.js";
@@ -571,6 +571,9 @@ test("Draft Review admission refusal stops without a Step Error or dispatcher fa
     });
     flow.activate("draft-questions-review");
     claimDraftQuestionsReviewExecution(manager, specId);
+    const attemptBefore = manager.canonicalState(specId).attempt.toJSON();
+    const activitiesBefore = manager.activityLedger(specId).length;
+    const draftBefore = manager.readArtifact({ specId, consumerNodeId: "draft-questions-review", logicalKey: "draft" });
     const result = attachCanonicalCommandResultArtifact({
       result: "ok",
       artifacts: { phase: "draft-questions", verdict: "PASS" },
@@ -585,17 +588,41 @@ test("Draft Review admission refusal stops without a Step Error or dispatcher fa
     const envelope = await dispatchRegistryCommand({
       root, manager, specId, commandName: "review", CommandClass: PublishedDraftReviewCommand,
     });
-    const state = manager.canonicalState(specId);
-    const failures = manager.activityLedger(specId).filter((activity) => activity.type === "attempt_failed");
+    const reloaded = new FlowManager({ root, mainRoot: root, inWorktree: false, specId });
+    const state = reloaded.canonicalState(specId);
+    const activities = reloaded.activityLedger(specId);
+    const failures = activities.filter((activity) => activity.type === "attempt_failed");
     assert.equal(envelope.ok, false);
     assert.equal(envelope.errors.some((error) => error.code === "DRAFT_REVIEW_ADMISSION_REFUSED"), true);
     assert.equal(state.current.at(-1), "draft-questions-review");
+    assert.equal(state.attempt.id, attemptBefore.id);
+    assert.equal(state.attempt.sequence, attemptBefore.sequence);
+    assert.deepEqual(state.attempt.consumption.toJSON(), attemptBefore.consumption);
     assert.equal(state.attempt.failure, null);
+    assert.equal(state.findNode("draft-questions-review").result, null);
     assert.equal(failures.length, 0);
-    assert.equal(manager.activityLedger(specId).filter((activity) => (
+    assert.equal(activities.length, activitiesBefore + 1, "only the publication checkpoint is added");
+    assert.equal(activities.filter((activity) => (
       activity.nodeId === "draft-questions-review"
       && activity.result?.draftSettlementReceipt?.executionLifecycle?.phase === "publication"
     )).length, 1);
+    const saved = reloaded.readCurrentStepSettlement({ specId, stepId: "draft-questions-review" });
+    assert.equal(saved.result.kind, new DraftQuestionsReviewExecutionRequiredResult().kind);
+    assert.equal(saved.receipt.executionLifecycle.phase, "publication");
+    assert.equal(saved.receipt.binding.attemptId, attemptBefore.id);
+    assert.equal(saved.receipt.binding.attemptSequence, attemptBefore.sequence);
+    assert.deepEqual(saved.receipt, activities.at(-1).result.draftSettlementReceipt);
+    const publication = reloaded.readProducerArtifact({
+      specId, nodeId: "draft-questions-review", logicalKey: "draft.questions.review",
+    });
+    assert.equal(publication.descriptor.activityId, saved.activityId);
+    const history = CanonicalCommandAttemptArtifactHistory.fromBytes({
+      logicalKey: "draft.questions.review", bytes: publication.bytes,
+    });
+    assert.deepEqual(history.current, { attempt: attemptBefore.sequence, payload: {} });
+    const draftAfter = reloaded.readArtifact({ specId, consumerNodeId: "draft-questions-review", logicalKey: "draft" });
+    assert.deepEqual(draftAfter.descriptor, draftBefore.descriptor);
+    assert.deepEqual(draftAfter.bytes, draftBefore.bytes);
   } finally {
     removeTmpDir(root);
   }

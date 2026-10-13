@@ -39,7 +39,7 @@ import { FLOW_ARTIFACT_CONTRACTS, FlowArtifactActivityEvidence, FlowArtifactUpda
 import { CanonicalSpecReview, initialCanonicalSpecReview } from "./spec-review-artifacts.js";
 import { GateObservationCycleReader } from "./gate-observation-convergence.js";
 import { isConditionalDraftWorkerStep } from "./draft-conditional-worker.js";
-import { DRAFT_WORKER_RECOVERY_OPERATION, DraftWorkerRecoveryDecision } from "./draft-worker-recovery.js";
+import { DRAFT_WORKER_RECOVERY_OPERATION, DRAFT_STEP_ERROR_RECOVERY_OPERATION, DraftWorkerRecoveryDecision, DraftStepErrorRecoveryReceipt } from "./draft-worker-recovery.js";
 import {
   artifactPublicationClaimForStep,
   finalizationCompletionPublicationClaim,
@@ -128,6 +128,7 @@ const TRANSITION_ATTEMPT_OPERATIONS = new Set([
   "retry_recovery_attempt",
   "update_attempt",
   DRAFT_WORKER_RECOVERY_OPERATION,
+  DRAFT_STEP_ERROR_RECOVERY_OPERATION,
   SPEC_GATE_REPAIR_RECOVERY_OPERATION,
   TASK_GATE_CLASSIFICATION_RECOVERY_OPERATION,
   "rewind",
@@ -186,7 +187,7 @@ const ARTIFACT_PUBLICATION_TRANSITION_OPERATIONS = new Set([
 // cannot mistake historical work for another active operation.
 const OUTBOX_TRANSITION_OPERATIONS = new Set(["begin_outbox", "reopen_outbox", "complete_outbox", "fail_outbox"]);
 const INTERRUPTED_FINALIZE_SYNC_OPERATION = "recover_interrupted_finalize_sync";
-const ATTEMPT_INTRODUCTION_OPERATIONS = new Set(["start_attempt", "retry_attempt", "retry_gate_attempt", "settle_spec_gate_retry", "settle_spec_gate_recovered", "retry_recovery_attempt", "rewind", "rewind_test_evidence", "repair_implementation", "triage_implementation_for_repair", "triage_implementation_no_repair", "repair_acceptance_review", "reopen_draft_preimplementation", "reopen_draft_task_addition", "reopen_draft_spec_correction", "plan_gate_repair", "recover_attempt", "accept_final_regression_failure", "defer_failed_review", "defer_failed_gate", "advance_task_review_stage", REQUIREMENT_TEST_INITIALIZATION_OPERATION, REQUIREMENT_TEST_TRANSITION_OPERATION, INTERRUPTED_FINALIZE_SYNC_OPERATION]);
+const ATTEMPT_INTRODUCTION_OPERATIONS = new Set([DRAFT_STEP_ERROR_RECOVERY_OPERATION, "start_attempt", "retry_attempt", "retry_gate_attempt", "settle_spec_gate_retry", "settle_spec_gate_recovered", "retry_recovery_attempt", "rewind", "rewind_test_evidence", "repair_implementation", "triage_implementation_for_repair", "triage_implementation_no_repair", "repair_acceptance_review", "reopen_draft_preimplementation", "reopen_draft_task_addition", "reopen_draft_spec_correction", "plan_gate_repair", "recover_attempt", "accept_final_regression_failure", "defer_failed_review", "defer_failed_gate", "advance_task_review_stage", REQUIREMENT_TEST_INITIALIZATION_OPERATION, REQUIREMENT_TEST_TRANSITION_OPERATION, INTERRUPTED_FINALIZE_SYNC_OPERATION]);
 function transitionIntroducesAttempt(transition) {
   return ATTEMPT_INTRODUCTION_OPERATIONS.has(transition.operation)
     || (["continue_nonblocking", "confirm_attempt", "reopen_outbox"].includes(transition.operation) && transition.attempt !== null);
@@ -5450,6 +5451,19 @@ export class CurrentFlowState {
     return this.#replaceRoot(this.root, this.current, attempt);
   }
 
+  /** Apply the explicit authorization without selecting a retry or downstream route. */
+  recoverDraftStepError({ attempt, receipt, priorActivities, activity }) {
+    this.#assertExecutionActive();
+    receipt.assertTransition({ state: this, activities: priorActivities, activity, attempt });
+    const next = attempt instanceof CurrentAttempt ? attempt : new CurrentAttempt(attempt);
+    const leaf = nodeAtPath(this.root, this.current);
+    this.#assertAttemptContractForLeaf(leaf, next);
+    return this.#resumeHistoricalContinuation({
+      root: replaceNode(this.root, leaf.id, leaf.with({ attemptSequence: next.sequence })),
+      current: this.current, attempt: next,
+    });
+  }
+
   /** Start the single audited reevaluation granted by a durable receipt. */
   retryExhaustedAttempt({ attempt }) {
     this.#assertExecutionActive();
@@ -7480,17 +7494,28 @@ const ACTIVITY_TRANSITION_FIELDS = new Set([
 ]);
 
 export class ActivityTransition {
+  static fieldsFor(operation) {
+    return new Set([...ACTIVITY_TRANSITION_FIELDS,
+      ...(operation === DRAFT_STEP_ERROR_RECOVERY_OPERATION ? ["draftStepErrorRecoveryReceipt"] : []),
+    ]);
+  }
+
   constructor(value) {
     const normalized = isPlainObject(value) && (!Object.hasOwn(value, "finalizeSteps") || !Object.hasOwn(value, "gateTaskLifecycle") || !Object.hasOwn(value, "stepConnectionReceipt") || !Object.hasOwn(value, "taskReviewStagePlan") || !Object.hasOwn(value, "requirementTestInitialization") || !Object.hasOwn(value, "requirementTestLifecycle") || !Object.hasOwn(value, "draftResumeReceipt") || !Object.hasOwn(value, "approvalTasks"))
       ? { ...value, finalizeSteps: value.finalizeSteps ?? null, gateTaskLifecycle: value.gateTaskLifecycle ?? null, stepConnectionReceipt: value.stepConnectionReceipt ?? null, taskReviewStagePlan: value.taskReviewStagePlan ?? null, requirementTestInitialization: value.requirementTestInitialization ?? null, requirementTestLifecycle: value.requirementTestLifecycle ?? null, draftResumeReceipt: value.draftResumeReceipt ?? null, approvalTasks: value.approvalTasks ?? [] }
       : value;
-    requireExactFields(normalized, ACTIVITY_TRANSITION_FIELDS, "activity.transition");
-    const { operation, nodeId, task, attempt, status, policy, outbox, approval, nonblocking, finalizeSteps, gateTaskLifecycle, stepConnectionReceipt, taskReviewStagePlan, requirementTestInitialization, requirementTestLifecycle, draftResumeReceipt, approvalTasks } = normalized;
-    if (![FLOW_CREATION_TRANSITION_OPERATION, DRAFT_COMPLETION_TRANSITION_OPERATION, DRAFT_STEP_SETTLEMENT_TRANSITION_OPERATION, CONDITIONAL_WORKER_SETTLEMENT_OPERATION, TASK_REVIEW_STAGE_TRANSITION_OPERATION, REQUIREMENT_TEST_INITIALIZATION_OPERATION, REQUIREMENT_TEST_TRANSITION_OPERATION, "advance_task_review_stage", "add_task", "add_approval_task", "start_attempt", "retry_attempt", "retry_gate_attempt", "settle_spec_gate_retry", "settle_spec_gate_recovered", "retry_recovery_attempt", "update_attempt", TASK_GATE_CLASSIFICATION_RECOVERY_OPERATION, DRAFT_WORKER_RECOVERY_OPERATION, SPEC_GATE_REPAIR_RECOVERY_OPERATION, "fail_attempt", "record_failure", "confirm_attempt", "rewind", "rewind_test_evidence", "repair_implementation", "triage_implementation_for_repair", "triage_implementation_no_repair", "repair_acceptance_review", "reopen_draft_preimplementation", "reopen_draft_task_addition", "reopen_draft_spec_correction", "plan_gate_repair", "recover_attempt", "recover_missing_producer_artifact", "recover_task_execution_overrun", "accept_final_regression_failure", "defer_failed_review", "defer_failed_gate", INTERRUPTED_FINALIZE_SYNC_OPERATION, ...LIFECYCLE_TRANSITION_OPERATIONS, ...POLICY_TRANSITION_OPERATIONS, ...OUTBOX_TRANSITION_OPERATIONS, ...ARTIFACT_PUBLICATION_TRANSITION_OPERATIONS, ...DISPATCH_APPROVAL_TRANSITION_OPERATIONS, ...OBSERVATION_TRANSITION_OPERATIONS, ...NONBLOCKING_TRANSITION_OPERATIONS, ...FINALIZE_DOWNSTREAM_TRANSITION_OPERATIONS].includes(operation)) {
+    requireExactFields(normalized, ActivityTransition.fieldsFor(normalized.operation), "activity.transition");
+    const { operation, nodeId, task, attempt, status, policy, outbox, approval, nonblocking, finalizeSteps, gateTaskLifecycle, stepConnectionReceipt, taskReviewStagePlan, requirementTestInitialization, requirementTestLifecycle, draftResumeReceipt, approvalTasks, draftStepErrorRecoveryReceipt } = normalized;
+    if (![FLOW_CREATION_TRANSITION_OPERATION, DRAFT_COMPLETION_TRANSITION_OPERATION, DRAFT_STEP_SETTLEMENT_TRANSITION_OPERATION, CONDITIONAL_WORKER_SETTLEMENT_OPERATION, TASK_REVIEW_STAGE_TRANSITION_OPERATION, REQUIREMENT_TEST_INITIALIZATION_OPERATION, REQUIREMENT_TEST_TRANSITION_OPERATION, "advance_task_review_stage", "add_task", "add_approval_task", "start_attempt", "retry_attempt", "retry_gate_attempt", "settle_spec_gate_retry", "settle_spec_gate_recovered", "retry_recovery_attempt", "update_attempt", TASK_GATE_CLASSIFICATION_RECOVERY_OPERATION, DRAFT_WORKER_RECOVERY_OPERATION, DRAFT_STEP_ERROR_RECOVERY_OPERATION, SPEC_GATE_REPAIR_RECOVERY_OPERATION, "fail_attempt", "record_failure", "confirm_attempt", "rewind", "rewind_test_evidence", "repair_implementation", "triage_implementation_for_repair", "triage_implementation_no_repair", "repair_acceptance_review", "reopen_draft_preimplementation", "reopen_draft_task_addition", "reopen_draft_spec_correction", "plan_gate_repair", "recover_attempt", "recover_missing_producer_artifact", "recover_task_execution_overrun", "accept_final_regression_failure", "defer_failed_review", "defer_failed_gate", INTERRUPTED_FINALIZE_SYNC_OPERATION, ...LIFECYCLE_TRANSITION_OPERATIONS, ...POLICY_TRANSITION_OPERATIONS, ...OUTBOX_TRANSITION_OPERATIONS, ...ARTIFACT_PUBLICATION_TRANSITION_OPERATIONS, ...DISPATCH_APPROVAL_TRANSITION_OPERATIONS, ...OBSERVATION_TRANSITION_OPERATIONS, ...NONBLOCKING_TRANSITION_OPERATIONS, ...FINALIZE_DOWNSTREAM_TRANSITION_OPERATIONS].includes(operation)) {
       throw new CurrentFlowStateInvariantError(`activity.transition.operation is invalid: ${operation}`);
     }
     this.operation = operation;
     this.nodeId = requireString(nodeId, "activity.transition.nodeId");
+    this.draftStepErrorRecoveryReceipt = operation !== DRAFT_STEP_ERROR_RECOVERY_OPERATION ? null
+      : DraftStepErrorRecoveryReceipt.fromJSON(draftStepErrorRecoveryReceipt?.toJSON?.() ?? draftStepErrorRecoveryReceipt);
+    if ((operation === DRAFT_STEP_ERROR_RECOVERY_OPERATION) !== (this.draftStepErrorRecoveryReceipt !== null)) {
+      throw new CurrentFlowStateInvariantError("only Draft Step Error recovery carries its authorization receipt");
+    }
     this.task = task == null ? null : task instanceof ActivityTask ? task : new ActivityTask(task);
     this.attempt = attempt == null ? null : attempt instanceof CurrentAttempt ? attempt : new CurrentAttempt(attempt);
     this.stepConnectionReceipt = stepConnectionReceipt === null ? null : stepConnectionReceipt instanceof ActivityStepConnectionReceipt ? stepConnectionReceipt : new ActivityStepConnectionReceipt(stepConnectionReceipt);
@@ -8000,6 +8025,10 @@ export class ActivityTransition {
     if (this.operation === SPEC_GATE_REPAIR_RECOVERY_OPERATION) {
       return state.recoverSpecGateRepair({ attempt: this.attempt, priorActivities, activity });
     }
+    if (this.operation === DRAFT_STEP_ERROR_RECOVERY_OPERATION) {
+      return state.recoverDraftStepError({ attempt: this.attempt, receipt: this.draftStepErrorRecoveryReceipt,
+        priorActivities, activity });
+    }
     if (this.operation === DRAFT_WORKER_RECOVERY_OPERATION) {
       return state.recoverLegacyDraftWorkerExecution({ attempt: this.attempt, priorActivities, activity });
     }
@@ -8168,6 +8197,8 @@ export class ActivityTransition {
       requirementTestInitialization: this.requirementTestInitialization?.toJSON() ?? null,
       requirementTestLifecycle: this.requirementTestLifecycle?.toJSON() ?? null,
       draftResumeReceipt: this.draftResumeReceipt?.toJSON() ?? null,
+      ...(this.draftStepErrorRecoveryReceipt === null ? {}
+        : { draftStepErrorRecoveryReceipt: this.draftStepErrorRecoveryReceipt.toJSON() }),
       approvalTasks: this.approvalTasks.map((entry) => entry.toJSON()),
     };
   }
@@ -8208,6 +8239,7 @@ export class FlowActivity {
       update_attempt: "attempt_updated",
       [TASK_GATE_CLASSIFICATION_RECOVERY_OPERATION]: "recovery",
       [DRAFT_WORKER_RECOVERY_OPERATION]: "recovery",
+      [DRAFT_STEP_ERROR_RECOVERY_OPERATION]: "attempt_recovered",
       [SPEC_GATE_REPAIR_RECOVERY_OPERATION]: "recovery",
       fail_attempt: "attempt_failed",
       record_failure: "failure_recorded",
@@ -8317,7 +8349,7 @@ export class FlowActivity {
     } else if (this.attemptId === null || this.sequence === null) {
       throw new CurrentFlowStateInvariantError("Attempt Activity requires Attempt identity and sequence");
     }
-    if (["start_attempt", "rewind", "rewind_test_evidence", "repair_implementation", "triage_implementation_for_repair", "triage_implementation_no_repair", "repair_acceptance_review", "reopen_draft_preimplementation", "reopen_draft_task_addition", "reopen_draft_spec_correction", "plan_gate_repair", "recover_attempt", "recover_missing_producer_artifact", "recover_task_execution_overrun", "retry_recovery_attempt", "accept_final_regression_failure", "defer_failed_review", "defer_failed_gate", REQUIREMENT_TEST_INITIALIZATION_OPERATION, REQUIREMENT_TEST_TRANSITION_OPERATION, INTERRUPTED_FINALIZE_SYNC_OPERATION].includes(this.transition.operation)) {
+    if (["start_attempt", "rewind", "rewind_test_evidence", "repair_implementation", "triage_implementation_for_repair", "triage_implementation_no_repair", "repair_acceptance_review", "reopen_draft_preimplementation", "reopen_draft_task_addition", "reopen_draft_spec_correction", "plan_gate_repair", "recover_attempt", "recover_missing_producer_artifact", "recover_task_execution_overrun", "retry_recovery_attempt", DRAFT_STEP_ERROR_RECOVERY_OPERATION, "accept_final_regression_failure", "defer_failed_review", "defer_failed_gate", REQUIREMENT_TEST_INITIALIZATION_OPERATION, REQUIREMENT_TEST_TRANSITION_OPERATION, INTERRUPTED_FINALIZE_SYNC_OPERATION].includes(this.transition.operation)) {
       if (!REPLACEMENT_ATTEMPT_OPERATIONS.has(this.transition.operation) && !isRetroEvidenceRewind(this.transition.operation, this.result) && (this.attemptId !== this.transition.attempt.id || this.sequence !== this.transition.attempt.sequence)) {
         throw new CurrentFlowStateInvariantError("Activity attemptId/sequence must match its transition Attempt");
       }
@@ -8439,7 +8471,7 @@ export class FlowActivity {
     if (!Object.hasOwn(value ?? {}, "reviewPublication")) {
       throw new CurrentFlowStateInvariantError("durable Activity must declare reviewPublication");
     }
-    requireExactFields(value?.transition, ACTIVITY_TRANSITION_FIELDS, "activity.transition");
+    requireExactFields(value?.transition, ActivityTransition.fieldsFor(value?.transition?.operation), "activity.transition");
     return new FlowActivity(value);
   }
 

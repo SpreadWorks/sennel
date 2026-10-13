@@ -6,20 +6,23 @@ import { CurrentFlowStateConflictError } from "./current-flow-state-conflict-err
 import { FlowDispatchTarget } from "./dispatch-invocation.js";
 import { WorkerArtifactHandoffError } from "./worker-artifact-handoff.js";
 
-/** Explicitly reconcile one proven legacy conditional Draft checkpoint. */
+/** Explicitly recover a saved Draft Step Error or proven legacy checkpoint. */
 export default class RunRecoverDraftExecutionCommand extends FlowCommand {
   constructor() { super({ requiresFlow: true, explicitTargetResolution: true }); }
 
   execute(ctx) {
     if (ctx.flowState?.schemaRevision !== CURRENT_FLOW_SCHEMA_REVISION
-      || typeof ctx.flowManager?.recoverLegacyDraftWorkerExecution !== "function") {
+      || typeof ctx.flowManager?.recoverDraftExecution !== "function") {
       return Envelope.fail("run", "recover-draft-execution", "CANONICAL_FLOW_REQUIRED",
         "Draft execution recovery requires a canonical Flow");
     }
     try {
       const target = FlowDispatchTarget.captureContext(ctx);
-      const recovered = ctx.flowManager.recoverLegacyDraftWorkerExecution({
+      const current = ctx.flowManager.canonicalState(ctx.specId);
+      const recovered = ctx.flowManager.recoverDraftExecution({
         specId: ctx.specId,
+        reason: ctx.reason,
+        expectedAttempt: current.attempt,
         executionRoot: ctx.executionRoot || ctx.root,
         targetDigest: target.digest,
       });
@@ -28,7 +31,9 @@ export default class RunRecoverDraftExecutionCommand extends FlowCommand {
         step: state.current?.at(-1) ?? null,
         attemptId: state.attempt?.id ?? null,
         attempt: state.attempt?.sequence ?? null,
-        executionGeneration: recovered.receipt.executionLifecycle.executionGeneration,
+        ...(recovered.receipt.executionLifecycle == null
+          ? { recoveryReceipt: recovered.receipt.toJSON() }
+          : { executionGeneration: recovered.receipt.executionLifecycle.executionGeneration }),
       });
     } catch (error) {
       if (!(error instanceof DraftWorkerRecoveryRefusal)

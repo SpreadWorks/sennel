@@ -1,4 +1,4 @@
-import { rethrowStepSettlementFailure } from "../lib/definition-lifecycle-failure.js";
+import { rethrowStepSettlementFailure } from "../lib/step-persistence-failure.js";
 import { FlowArtifactCatalogSnapshotLimits } from "../../lib/flow-version.js";
 
 /** Exact handoff save capability; exposes no state or artifact reader. */

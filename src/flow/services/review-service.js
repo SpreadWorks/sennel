@@ -1,6 +1,6 @@
 import { DraftCompletionConnector, DraftExecutionSettlement, settleDraftStepResult } from "../definition.js";
 import { StepResult } from "../engine/step-result.js";
-import { StepPersistenceFailure } from "../lib/definition-lifecycle-failure.js";
+import { StepPersistenceFailure } from "../lib/step-persistence-failure.js";
 import { createDraftCompletionSettlementApplication } from "../lib/draft-completion-connector.js";
 import { DraftGatePublicationIntent } from "../lib/draft-gate-prospective.js";
 import { DraftReviewInput } from "./draft-review-input.js";

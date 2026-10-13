@@ -136,6 +136,7 @@ import {
 import { RequirementTestArtifactStore } from "./requirement-test-store.js";
 import { SpecRevisionIdentity } from "./spec-revision-identity.js";
 import { DraftWorkerContextSnapshot, TaskWorkerContextSnapshot } from "./worker-context-snapshot.js";
+import { canonicalAttemptOwner } from "./repair-attempt-lineage.js";
 import { captureCurrentTaskSource } from "./task-mutation-lineage.js";
 import { TaskReviewEpisodeBinding, TaskReviewStageInputs } from "./task-review-stage-artifacts.js";
 import {
@@ -1785,8 +1786,11 @@ function canonicalDraftReopenContext({ flowManager, state }) {
   if (canonical.current?.at(-1) !== "draft" || canonical.attempt === null) return null;
   const issue = flowManager.readArtifact({ specId: canonical.specId, logicalKey: "issue.log",
     consumerNodeId: "draft", optional: true });
-  return DraftReopenContext.fromIssueLog(issue === null
-    ? null : JSON.parse(issue.bytes.toString("utf8")), canonical.attempt.id);
+  if (issue === null) return null;
+  const document = JSON.parse(issue.bytes.toString("utf8"));
+  const owner = canonicalAttemptOwner({ state: canonical,
+    activities: flowManager.activityLedger(canonical.specId), targetStepId: "draft" });
+  return DraftReopenContext.fromIssueLog(document, owner.transition.attempt.id);
 }
 
 function canonicalPayloadBaseline({ flowManager, state, rule, requirementTestContext = null, testReviewRepairProgress = null }) {

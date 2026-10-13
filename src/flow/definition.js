@@ -38,6 +38,8 @@ import { SPEC_GATE_MAXIMUM_CYCLE } from "./lib/spec-gate-policy.js";
 import { DraftWorkerRejection } from "./lib/draft-worker-rejection.js";
 export { resolveDraftWorkerCorrection } from "./lib/draft-worker-rejection.js";
 export { resolveDraftWorkerRecovery, DraftWorkerRecoveryRefusal } from "./lib/draft-worker-recovery.js";
+export { resolveDraftExecutionRecovery, DraftExecutionRecoveryFacts,
+  DraftStepErrorRecoveryDecision, DraftStepErrorRecoveryReceipt } from "./lib/draft-worker-recovery.js";
 import { DraftGateRepairSelection } from "./steps/draft/draft-gate-repair-selection.js";
 import { isConditionalDraftWorkerStep } from "./lib/draft-conditional-worker.js";
 import { SourceHandoffFailureFacts } from "./lib/source-handoff-failure.js";

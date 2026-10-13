@@ -12,6 +12,10 @@ import { SpecGateRepairService } from "../../../src/flow/services/spec-gate-repa
 import { readProgressBoundSpecGateRepairInput } from "../../../src/flow/lib/spec-gate-repair-progress.js";
 import { SpecGateRepairStep } from "../../../src/flow/steps/spec/spec-gate-repair.js";
 import { settleSpecStepResult } from "../../../src/flow/definition.js";
+import { StepErrorResult } from "../../../src/flow/engine/step-result.js";
+import { DraftService } from "../../../src/flow/services/draft-service.js";
+import { draftWorkerStepRegistration } from "../../../src/flow/engine/composition/draft.js";
+import RunRecoverDraftExecutionCommand from "../../../src/flow/lib/run-recover-draft-execution.js";
 import { CanonicalFlowArtifactBaseline } from "../../../src/flow/lib/current-flow-state.js";
 import { DraftReopenContext } from "../../../src/flow/lib/draft-reopen-context.js";
 import { SpecEntryConnector } from "../../../src/flow/engine/connectors/spec/spec-entry-connector.js";
@@ -19,10 +23,26 @@ import { StepFactory } from "../../../src/flow/engine/step-factory.js";
 import { WorkerArtifactHandoffCoordinator, sealWorkerArtifactHandoff } from "../../../src/flow/lib/worker-artifact-handoff.js";
 import { createSpecGateRepairScenario } from "../../support/infrastructure/spec-gate-repair-scenario.js";
 import { workerArtifactJson } from "../../support/infrastructure/worker-artifact.js";
+import { canonicalDraftDocument } from "../../support/infrastructure/flow-setup.js";
 import { removeTmpDir } from "../../support/builders/tmp-dir.js";
 
 test("a published Spec Gate decision gap reopens Draft with durable worker input", async () => {
-  const value = await createSpecGateRepairScenario();
+  const answered = {
+    state: "AnsweredQuestion", id: "q1", question: "Which existing behavior should remain?",
+    category: "user-visible-behavior", revision: 1,
+    provenance: { producer: "prior-draft" }, evidenceDigest: "a".repeat(64),
+    answer: "Keep the established public behavior.", why: "The Issue requires it.",
+    considered: "Changing this behavior is outside the correction.",
+  };
+  const priorDraft = canonicalDraftDocument({ goal: "Retain the answered public behavior.", questions: [answered] });
+  const value = await createSpecGateRepairScenario({
+    issue: 500, issueSnapshot: "# Issue 500\nKeep the established public behavior.\n",
+    beforeGate: ({ flowManager, flow, specId }) => {
+      flow.activate("draft");
+      flowManager.confirmCurrentAttempt({ specId, artifactWrites: [{ logicalKey: "draft",
+        mediaType: "application/json", bytes: Buffer.from(workerArtifactJson(priorDraft)) }] });
+    },
+  });
   try {
     const request = value.coordinator.createRequest({ ctx: value.ctx,
       state: value.flowManager.load(value.specId), invocation: value.invocation });
@@ -105,6 +125,77 @@ test("a published Spec Gate decision gap reopens Draft with durable worker input
         digest: spec.descriptor.hash, byteLength: spec.descriptor.size + 1 })] }),
     /replay differs/);
     assert.throws(() => request.assertCurrent(loaded.load(value.specId)), /stale|active|Attempt/i);
+
+    const recoveredDraft = canonicalDraftDocument({ goal: "Clarify the target while retaining prior answers.", questions: [answered] });
+    fs.writeFileSync(draftRequest.payloadPath("draft.json"), workerArtifactJson(recoveredDraft));
+    sealWorkerArtifactHandoff({ requestPath: draftRequest.requestPath, invocationId: draftRequest.dispatchInvocationId });
+    const handoffCoordinator = new WorkerArtifactHandoffCoordinator();
+    const draftCtx = { ...value.ctx, flowManager: loaded };
+    const preparation = handoffCoordinator.prepareDraftWorker({ ctx: draftCtx, request: draftRequest });
+    const prepared = await draftWorkerStepRegistration("draft").create({
+      ctx: draftCtx, request: draftRequest, preparation, handoffCoordinator,
+    });
+    await new StepErrorResult("draft", new Error("Accepted Draft completion needs explicit correction."))
+      .persist(prepared.dependency(DraftService));
+    const failed = loaded.canonicalState(value.specId);
+    assert.equal(failed.nextAction().operation, "blocked");
+    const failedActivities = loaded.activityLedger(value.specId);
+    const issueBeforeRecovery = loaded.readArtifact({ specId: value.specId, logicalKey: "issue.log", consumerNodeId: "draft" });
+    const recovery = new RunRecoverDraftExecutionCommand().execute({ ...draftCtx,
+      flowState: loaded.loadReadOnly(value.specId), expectRunId: failed.runId,
+      reason: "The accepted Draft completion was corrected." });
+    assert.equal(recovery.ok, true, JSON.stringify(recovery));
+    const resumed = new FlowManager({ root: value.root, mainRoot: value.root, inWorktree: false, specId: value.specId });
+    const replacement = resumed.canonicalState(value.specId).attempt;
+    assert.notEqual(replacement.id, failed.attempt.id);
+    assert.equal(replacement.sequence, failed.attempt.sequence + 1);
+    assert.deepEqual(resumed.activityLedger(value.specId).slice(0, failedActivities.length), failedActivities);
+    assert.deepEqual(resumed.readArtifact({ specId: value.specId, logicalKey: "issue.log", consumerNodeId: "draft" }), issueBeforeRecovery);
+    assert.throws(() => draftRequest.assertCurrent(resumed.loadReadOnly(value.specId)), /stale|Attempt/i);
+    const resumedCtx = { ...value.ctx, flowManager: resumed };
+    const replacementRequest = handoffCoordinator.createRequest({ ctx: resumedCtx,
+      state: resumed.loadReadOnly(value.specId), invocation: {
+        id: "dispatch-draft-after-error-recovery", target: { digest: "c".repeat(64) },
+        action: { digest: "d".repeat(64), nextAction: { step: "draft" } },
+      } });
+    const replacementContext = replacementRequest.contextSnapshot.entries.find((entry) => entry.kind === "reopen");
+    assert.deepEqual(replacementContext.document, carried.document);
+    assert.equal(replacementContext.document.draftAttemptId, failed.attempt.id);
+    assert.deepEqual(replacementContext.document.previousDraft.questionLedger.questions, [answered]);
+    assert.deepEqual(replacementRequest.contextSnapshot.entries.find((entry) => entry.kind === "issue"),
+      draftRequest.contextSnapshot.entries.find((entry) => entry.kind === "issue"));
+    const beforeInvalidProposal = resumed.canonicalState(value.specId).toJSON();
+    const activitiesBeforeInvalidProposal = resumed.activityLedger(value.specId);
+    const catalogBeforeInvalidProposal = resumed.artifactCatalog(value.specId).toJSON();
+    const changedAnswer = canonicalDraftDocument({ questions: [{ ...answered, answer: "Replace the established behavior." }] });
+    fs.writeFileSync(replacementRequest.payloadPath("draft.json"), workerArtifactJson(changedAnswer));
+    sealWorkerArtifactHandoff({ requestPath: replacementRequest.requestPath, invocationId: replacementRequest.dispatchInvocationId });
+    assert.throws(() => handoffCoordinator.prepareDraftWorker({ ctx: resumedCtx, request: replacementRequest }),
+      /changed a prior resolved question/);
+    assert.deepEqual(resumed.canonicalState(value.specId).toJSON(), beforeInvalidProposal);
+    assert.deepEqual(resumed.activityLedger(value.specId), activitiesBeforeInvalidProposal);
+    assert.deepEqual(resumed.artifactCatalog(value.specId).toJSON(), catalogBeforeInvalidProposal);
+    const correctedRequest = handoffCoordinator.createRequest({ ctx: resumedCtx,
+      state: resumed.loadReadOnly(value.specId), invocation: {
+        id: "dispatch-draft-preserving-prior-answers", target: { digest: "c".repeat(64) },
+        action: { digest: "d".repeat(64), nextAction: { step: "draft" } },
+      } });
+    fs.writeFileSync(correctedRequest.payloadPath("draft.json"), workerArtifactJson(recoveredDraft));
+    sealWorkerArtifactHandoff({ requestPath: correctedRequest.requestPath, invocationId: correctedRequest.dispatchInvocationId });
+    const replacementPreparation = handoffCoordinator.prepareDraftWorker({ ctx: resumedCtx, request: correctedRequest });
+    const replacementStep = await draftWorkerStepRegistration("draft").create({
+      ctx: resumedCtx, request: correctedRequest, preparation: replacementPreparation, handoffCoordinator,
+    });
+    const replacementResult = await replacementStep.step.execute();
+    assert.equal(replacementResult.kind, "draft-created");
+    const completed = new FlowManager({ root: value.root, mainRoot: value.root, inWorktree: false, specId: value.specId });
+    const publishedDraft = JSON.parse(completed.readArtifact({ specId: value.specId, logicalKey: "draft",
+      consumerNodeId: "draft-questions-review" }).bytes.toString("utf8"));
+    assert.deepEqual(publishedDraft.questionLedger.questions, [answered]);
+    assert.equal(completed.canonicalState(value.specId).nextAction().nodeId, "draft-questions-review");
+    const publication = completed.activityLedger(value.specId).findLast((entry) => entry.result?.stepResult?.kind === "draft-created");
+    assert.equal(publication.attemptId, replacement.id);
+    assert.equal(publication.sequence, replacement.sequence);
   } finally { removeTmpDir(value.root); }
 });
 

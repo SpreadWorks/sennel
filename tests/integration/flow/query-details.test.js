@@ -18,6 +18,8 @@ import { NextAction, Diagnosis } from "../../../src/flow/lib/observation.js";
 import { DraftArtifactRevision } from "../../../src/flow/lib/draft-artifact-promotion.js";
 import { canonicalSourceFindingObservations, findSourceFinding } from "../../../src/flow/lib/flow-finding-source.js";
 import { canonicalGateRevision } from "../../../src/flow/lib/canonical-gate-artifacts.js";
+import { StepErrorResult } from "../../../src/flow/engine/step-result.js";
+import { settleDraftStepResult } from "../../../src/flow/definition.js";
 
 const RESPONSE_SCHEMA = JSON.parse(fs.readFileSync(new URL("../../../docs/design/flow-query-revision-2/response.schema.json", import.meta.url)));
 const ENTITY_SCHEMA = RESPONSE_SCHEMA.oneOf.find((variant) => variant.properties.resource?.enum[0] === "activities" && variant.properties.ok.enum[0]).properties.entities;
@@ -450,6 +452,38 @@ test("canonical preparation confirmation is non-detail even with its qualified d
   for (const group of ["evaluations", "findings", "repairs"]) {
     assert.deepEqual(details.detailCoverage[group], { availability: "not-applicable", reason: "NOT_APPLICABLE", count: 0 });
   }
+});
+
+test("saved Draft Step Error recovery remains an administrative query Activity after reload", (t) => {
+  const root = createTmpDir();
+  t.after(() => removeTmpDir(root));
+  let manager = makeFlowManager(root);
+  const flow = new CanonicalFlowFixture({ flowManager: manager, specId: "query-detail-draft-recovery" })
+    .create().activate("draft-gate");
+  const state = manager.canonicalState(flow.specId);
+  const error = new StepErrorResult("draft-gate", new Error("The Draft Gate needs explicit recovery."));
+  manager.settleDraftStepResult({
+    binding: { runId: state.runId, specId: flow.specId, stepId: "draft-gate", attempt: state.attempt },
+    stepResult: error, settlement: settleDraftStepResult(error.stepId, error),
+  });
+  manager = makeFlowManager(root);
+  assert.equal(manager.canonicalState(flow.specId).nextAction().operation, "blocked");
+  manager.recoverDraftExecution({ specId: flow.specId, reason: "The Draft Gate cause was corrected." });
+  manager = makeFlowManager(root);
+  const resumed = manager.canonicalState(flow.specId);
+  const activities = manager.activityLedger(flow.specId);
+  const catalog = manager.artifactCatalog(flow.specId);
+  const recovery = activities.at(-1);
+  assert.equal(recovery.transition.operation, "recover_draft_step_error");
+  const index = new QueryDetailIndex({ state: resumed, activities, catalog,
+    artifactBytes: new Map(), snapshotId: `sha256:${"d".repeat(64)}` });
+  const details = index.forActivity(recovery).toJSON();
+  for (const group of ["evaluations", "findings", "repairs"]) {
+    assert.deepEqual(details.detailCoverage[group], { availability: "not-applicable", reason: "NOT_APPLICABLE", count: 0 });
+  }
+  assert.deepEqual(manager.canonicalState(flow.specId).toJSON(), resumed.toJSON());
+  assert.deepEqual(manager.activityLedger(flow.specId), activities);
+  assert.deepEqual(manager.artifactCatalog(flow.specId).toJSON(), catalog.toJSON());
 });
 
 test("non-detail producer inventory uses current contract IDs and refuses unknown or semantic producers", () => {

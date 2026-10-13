@@ -97,6 +97,9 @@ import {
   DraftWorkerExecutionBinding,
   DraftConditionalWorkerExecutionBinding,
   resolveDraftWorkerRecovery,
+  resolveDraftExecutionRecovery,
+  DraftExecutionRecoveryFacts,
+  DraftStepErrorRecoveryDecision,
   DraftReviewExecutionClaim,
   DraftWorkerExecutionClaim,
   SpecNextRoute,
@@ -1408,6 +1411,20 @@ class DraftWorkerRecoveryAdmission {
       || preview.contentDigest !== this.preview.contentDigest) {
       throw new CurrentFlowStateConflictError("Draft recovery inputs changed before publication");
     }
+  }
+}
+
+class DraftStepErrorRecoveryAdmission {
+  constructor({ revision, receipt }) {
+    this.revision = revision;
+    this.receipt = receipt;
+    Object.freeze(this);
+  }
+  assert(view) {
+    if (view.revision !== this.revision) {
+      throw new CurrentFlowStateConflictError("Draft Step Error recovery authority changed before publication");
+    }
+    this.receipt.assertSource({ state: view.state, activities: view.activities });
   }
 }
 
@@ -3484,13 +3501,41 @@ export class CanonicalFlowManagerStore {
     return Object.freeze({ state: next, receipt, replayed: false });
   }
 
+  /** Explicit recovery selection from canonical facts; no automatic failure retry. */
+  recoverDraftExecution({ specId = null, reason = null, expectedAttempt, targetDigest, executionRoot } = {}) {
+    const resolved = this.#resolveSpecId(specId);
+    if (resolved === null) throw new CurrentFlowStateInvariantError("no canonical active Flow");
+    const prepared = this.runtime.readCanonicalTransitionView(resolved, (view) => {
+      const { state } = view;
+      const decision = resolveDraftExecutionRecovery(new DraftExecutionRecoveryFacts({
+        state, activities: view.activities, reason, expectedAttempt,
+      }));
+      if (!(decision instanceof DraftStepErrorRecoveryDecision)) return { decision };
+      const attempt = new CurrentAttempt({
+        ...commandContextAttempt(state, decision.stepId),
+        consumption: state.attempt.consumption.toJSON(),
+        operationClaims: state.attempt.operationClaims.map((claim) => claim.toJSON()),
+      });
+      return { decision, attempt,
+        admission: new DraftStepErrorRecoveryAdmission({ revision: view.revision, receipt: decision.receipt }) };
+    });
+    if (!(prepared.decision instanceof DraftStepErrorRecoveryDecision)) {
+      return this.recoverLegacyDraftWorkerExecution({ specId: resolved, targetDigest, executionRoot,
+        decision: prepared.decision });
+    }
+    const receipt = prepared.decision.receipt;
+    const state = this.runtime.recoverDraftStepError({ specId: resolved, receipt,
+      attempt: prepared.attempt, admission: prepared.admission });
+    return Object.freeze({ state, receipt });
+  }
+
   /** Migrate only a proven, unpublished legacy checkpoint; never rerun its rejected payload. */
-  recoverLegacyDraftWorkerExecution({ specId = null, targetDigest, executionRoot } = {}) {
+  recoverLegacyDraftWorkerExecution({ specId = null, targetDigest, executionRoot, decision: selectedDecision = null } = {}) {
     const resolved = this.#resolveSpecId(specId);
     if (resolved === null) throw new CurrentFlowStateInvariantError("no canonical active Flow");
     const prepared = this.runtime.readCanonicalTransitionView(resolved, (view) => {
       const state = view.state;
-      const decision = resolveDraftWorkerRecovery({ state, activities: view.activities });
+      const decision = selectedDecision ?? resolveDraftWorkerRecovery({ state, activities: view.activities });
       const preview = DraftWorkerRecoveryInputPreview.capture({
         flowManager: new CanonicalTransitionReader(this, view), state, executionRoot, targetDigest,
         claim: new DraftWorkerExecutionClaim(decision.claim),

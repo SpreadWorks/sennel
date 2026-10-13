@@ -1,5 +1,5 @@
 import { WorkerArtifactHandoffError } from "../lib/worker-artifact-handoff-error.js";
-import { StepPersistenceFailure } from "../lib/definition-lifecycle-failure.js";
+import { StepPersistenceFailure } from "../lib/step-persistence-failure.js";
 import { CurrentFlowStateConflictError } from "../lib/current-flow-state-conflict-error.js";
 import { isStepAdmissionRefusal } from "../lib/step-admission-refusal.js";
 
