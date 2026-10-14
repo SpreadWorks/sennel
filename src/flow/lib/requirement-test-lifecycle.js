@@ -508,3 +508,44 @@ export class RequirementTestPlan {
     };
   }
 }
+
+/** Settled Requirement evidence required before downstream test execution. */
+export class RequirementTestExecutionLifecycle {
+  #promotedIds;
+
+  constructor({ plan, receipts, requirements }) {
+    if (!(plan instanceof RequirementTestPlan)) {
+      throw new TypeError("Requirement test execution requires a typed plan");
+    }
+    const workItems = plan.workItems;
+    const expected = requirements.filter((requirement) => requirement.testable !== false).map((requirement) => requirement.id);
+    const ids = workItems.map((item) => item.requirementId);
+    const duplicates = ids.filter((id, index) => ids.indexOf(id) !== index);
+    const unknown = ids.filter((id) => !expected.includes(id));
+    const missing = expected.filter((id) => !ids.includes(id));
+    if (duplicates.length || unknown.length || missing.length) {
+      throw new Error(`Requirement test plan membership invalid: missing=${missing.join(",")} unknown=${unknown.join(",")} duplicate=${duplicates.join(",")}`);
+    }
+    const deferredById = new Map(receipts.map((receipt) => [receipt.requirementId, receipt]));
+    if (deferredById.size !== receipts.length) throw new Error("Requirement deferred receipts contain duplicate requirements");
+    const promoted = [];
+    for (const item of workItems) {
+      if (item.status === "promoted") promoted.push(item.requirementId);
+      else if (item.status !== "deferred") throw new Error(`Requirement ${item.requirementId} is not promoted or deferred`);
+      if (item.status === "deferred") {
+        const receipt = deferredById.get(item.requirementId);
+        if (!receipt || !item.specRevision.equals(receipt.specRevision)) throw new Error(`Requirement ${item.requirementId} deferred receipt is missing or stale`);
+      } else if (deferredById.has(item.requirementId)) {
+        throw new Error(`Requirement ${item.requirementId} is both promoted and deferred`);
+      }
+    }
+    const unknownReceipts = receipts.filter((receipt) => !ids.includes(receipt.requirementId));
+    if (unknownReceipts.length) throw new Error(`Requirement deferred receipts contain unknown requirements: ${unknownReceipts.map((receipt) => receipt.requirementId).join(",")}`);
+    this.requirements = Object.freeze([...requirements]);
+    this.deferredReceipts = Object.freeze([...receipts]);
+    this.#promotedIds = new Set(promoted);
+    Object.freeze(this);
+  }
+
+  get promotedIds() { return new Set(this.#promotedIds); }
+}

@@ -10,6 +10,7 @@ import { CanonicalSpecReview } from "../../../src/flow/lib/spec-review-artifacts
 import { DraftStepSettlementReceipt, DraftStepExecutionLifecycle, settleSpecStepResult } from "../../../src/flow/definition.js";
 import { SpecReviewPassedResult, SpecReviewAdvisoryResult } from "../../../src/flow/engine/step-result.js";
 import { QueryDetailIndex } from "../../../src/flow/query-details.js";
+import { FlowExecutionContract } from "../../../src/flow/lib/flow-execution-contract.js";
 
 const hash = (bytes) => crypto.createHash("sha256").update(bytes).digest("hex");
 
@@ -50,6 +51,73 @@ test("captured Spec Review archives bind the selected Flow and refuse unsupporte
   assert.deepEqual(current.descriptor.toJSON(), mutable.toJSON());
   mutable.verifyBytes(current.bytes);
   assert.deepEqual(scenario.protectedState(), before);
+
+  const claimDescriptor = captured.catalog.artifacts.find((descriptor) => descriptor.logicalKey === "execution.contract"
+    && captured.activities.some((activity) => activity.id === descriptor.activityId
+      && activity.nodeId === "draft-gate" && activity.transition.operation === "publish_artifacts"));
+  assert.ok(claimDescriptor, "the production Draft Gate retained its provider execution claim");
+  const claim = captured.activities.find((activity) => activity.id === claimDescriptor.activityId);
+  const claimDocument = JSON.parse(captured.artifactBytes.get(claimDescriptor.relativePath));
+  const claimItem = captured.response.items.find((item) => item.activity.id === claim.id);
+  assert.ok(claimItem);
+  for (const group of ["evaluations", "findings", "repairs"]) {
+    assert.deepEqual(claimItem.detailCoverage[group], { availability: "not-applicable", reason: "NOT_APPLICABLE", count: 0 });
+    assert.deepEqual(claimItem.detailRefs[group], []);
+  }
+
+  for (const [name, mutate] of [
+    ["a self-consistent foreign Flow contract", (value) => { value.contract.runId = "foreign-run"; }],
+    ["a contract bound to another producer Attempt", (value) => { value.contract.attemptId = "foreign-attempt"; }],
+    ["an unsupported contract observation", (value) => { value.findings = []; }],
+  ]) await t.test(`${name} cannot classify a Gate publication as execution-only`, () => {
+    const value = structuredClone(claimDocument);
+    mutate(value);
+    const contract = FlowExecutionContract.fromJSON(value.contract);
+    value.id = contract.id;
+    const bytes = Buffer.from(JSON.stringify(value));
+    const target = FLOW_ARTIFACT_CONTRACTS.resolve("execution.contract", contract.parameters);
+    const descriptor = new FlowArtifactDescriptor({
+      ...target.publication({ mediaType: "application/json", updater: claim.nodeId, activityId: claim.id }),
+      hash: hash(bytes), size: bytes.length,
+    });
+    const artifactBytes = new Map(captured.artifactBytes);
+    artifactBytes.delete(claimDescriptor.relativePath);
+    artifactBytes.set(descriptor.relativePath, bytes);
+    const index = new QueryDetailIndex({ state: captured.state, activities: captured.activities,
+      catalog: new FlowArtifactCatalog({ artifacts: captured.catalog.artifacts.map((entry) =>
+        entry.relativePath === claimDescriptor.relativePath ? descriptor : entry) }),
+      artifactBytes, snapshotId: captured.response.snapshot.id });
+    assert.throws(() => index.forActivity(claim), { code: "DETAIL_UNAVAILABLE", reason: "PRODUCER_NOT_SUPPORTED" });
+  });
+
+  await t.test("a claim cannot borrow another generation's internally consistent contract", () => {
+    const next = FlowExecutionContract.fromJSON({ ...claimDocument.contract, generation: claimDocument.contract.generation + 1 });
+    const bytes = Buffer.from(JSON.stringify({ id: next.id, contract: next.toJSON() }));
+    const other = { ...claim.toJSON(), id: `${claim.id}-other-generation`, confirmationOrder: captured.state.confirmationOrder + 1 };
+    const target = FLOW_ARTIFACT_CONTRACTS.resolve("execution.contract", next.parameters);
+    const otherDescriptor = new FlowArtifactDescriptor({
+      ...target.publication({ mediaType: "application/json", updater: other.nodeId, activityId: other.id }),
+      hash: hash(bytes), size: bytes.length,
+    });
+    const artifactBytes = new Map(captured.artifactBytes);
+    artifactBytes.set(claimDescriptor.relativePath, bytes);
+    artifactBytes.set(otherDescriptor.relativePath, bytes);
+    const artifacts = captured.catalog.artifacts.map((entry) => entry.relativePath === claimDescriptor.relativePath
+      ? new FlowArtifactDescriptor({ ...entry.toJSON(), hash: hash(bytes), size: bytes.length }) : entry);
+    const index = new QueryDetailIndex({ state: captured.state, activities: [...captured.activities, other],
+      catalog: new FlowArtifactCatalog({ artifacts: [...artifacts, otherDescriptor] }),
+      artifactBytes, snapshotId: captured.response.snapshot.id });
+    assert.throws(() => index.forActivity(claim), { code: "DETAIL_UNAVAILABLE", reason: "PRODUCER_NOT_SUPPORTED" });
+  });
+
+  await t.test("a semantic reference cannot hide behind a valid execution contract", () => {
+    const changed = claim.toJSON();
+    changed.references.findings = [{ id: finding.findingId, label: null }];
+    const index = new QueryDetailIndex({ state: captured.state,
+      activities: captured.activities.map((activity) => activity.id === claim.id ? changed : activity),
+      catalog: captured.catalog, artifactBytes: captured.artifactBytes, snapshotId: captured.response.snapshot.id });
+    assert.throws(() => index.forActivity(changed), { code: "DETAIL_UNAVAILABLE", reason: "PRODUCER_NOT_SUPPORTED" });
+  });
 
   const indexFor = ({ values = [document.toJSON()], activity = publication, mutableOwner = null } = {}) => {
     const artifacts = captured.catalog.artifacts.filter((descriptor) => descriptor.relativePath !== originalDescriptor.relativePath)

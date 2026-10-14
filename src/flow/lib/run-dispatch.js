@@ -4,7 +4,8 @@ import { FlowExecutionContract, FlowExecutionContractRefusal } from "./flow-exec
 import { acceptanceStepRegistration, initializeAcceptanceDecisionAwait } from "../engine/composition/acceptance.js";
 import { finalizationStepRegistration } from "../engine/composition/finalization.js";
 import { hasAcceptanceStepContract } from "../engine/step-result.js";
-import { assertCurrentWorkerExecutionSelection } from "./worker-execution-admission.js";
+import { assertCurrentWorkerExecutionSelection, selectDraftWorkerExecutionContinuation,
+  assertDraftWorkerExecutionContinuation } from "./worker-execution-admission.js";
 import { workerStepExecutionRegistration, flowStepExecutionRegistration } from "../engine/composition/registered-step-execution.js";
 import { prepareStepRegistration } from "../engine/composition/prepare.js";
 import { executeHostFilterInput } from "./run-filter-task-review.js";
@@ -1421,10 +1422,12 @@ export default class RunDispatchCommand extends FlowCommand {
     this.commandRunner = commandRunner;
   }
 
-  async fetchNextAction(target) {
+  async fetchNextAction(target, previousExecutionContract = null) {
     let result;
     try {
-      result = await this.nextAction.run(this.container, targetGuardInput(target));
+      result = await this.nextAction.run(this.container, {
+        ...targetGuardInput(target), previousExecutionContract,
+      });
     } catch (error) {
       if (error instanceof ProcessExecutionControlFailure) throw error;
       return Envelope.fail(
@@ -1795,6 +1798,7 @@ export default class RunDispatchCommand extends FlowCommand {
       : prior === null ? 0 : prior.executionGeneration + 1;
     const claimed = reusePrior && ["claimed", "publication"].includes(prior.phase)
       ? prior.claim : null;
+    let newlyClaimed = false;
     const workerInvocation = claimed === null
       ? (prior?.phase === "checkpoint" ? freshWorkerInvocation(invocation, invocation.action.nextAction) : invocation)
       : reboundWorkerInvocation(invocation, invocation.action.nextAction, claimed.dispatchInvocationId);
@@ -1895,7 +1899,7 @@ export default class RunDispatchCommand extends FlowCommand {
         actionDigest: request.actionDigest,
         requestDigest: request.requestDigest,
       });
-      ctx.flowManager.claimDraftStepExecution({
+      const claimResult = ctx.flowManager.claimDraftStepExecution({
         binding: stepBinding,
         stepResult: selectedStepResult,
         settlement: selectedSettlement,
@@ -1903,6 +1907,7 @@ export default class RunDispatchCommand extends FlowCommand {
         executionClaim,
         executionContract: request.executionContract,
       });
+      newlyClaimed = claimResult.newlyClaimed;
     }
     if (claimed !== null && request.requestDigest !== claimed.requestDigest) {
       throw new WorkerArtifactHandoffError(
@@ -1913,16 +1918,22 @@ export default class RunDispatchCommand extends FlowCommand {
       );
     }
     if (!(reusePrior && prior?.phase === "publication")) request.prepare();
+    const continuation = assertDraftWorkerExecutionContinuation(selectDraftWorkerExecutionContinuation({
+      ctx, state: ctx.flowManager.canonicalState(state.specId), request,
+      newlyClaimed, handoffCoordinator: this.handoffCoordinator,
+    }));
     return {
       request,
       invocation: workerInvocation,
       publicationRecovery: prior?.phase === "publication",
-      newlyClaimed: claimed === null,
+      newlyClaimed,
+      continuation,
       admittedCallOptions,
     };
   }
 
   async runWorkerAttempt(ctx, invocation, retryFeedback = null, agentOverride = null) {
+    ctx = { ...ctx, previousExecutionContract: retryFeedback?.previousExecutionContract ?? null };
     const stepId = invocation.action.nextAction.step;
     const selectedRegistration = flowStepExecutionRegistration(stepId);
     if (selectedRegistration?.executionContract.selectorName === "selectPrepareExecutionAdmission") {
@@ -1958,6 +1969,7 @@ export default class RunDispatchCommand extends FlowCommand {
     let resumeStoppedArtifactExecution = false;
     let publicationRecovery = false;
     let conditionalWorkerNewlyClaimed = false;
+    let conditionalWorkerContinuation = null;
     let repairExecution = null;
     let agentOptions = {};
     let draftDefinition = null;
@@ -2028,6 +2040,7 @@ export default class RunDispatchCommand extends FlowCommand {
           workerInvocation = prepared.invocation;
           publicationRecovery = prepared.publicationRecovery;
           conditionalWorkerNewlyClaimed = prepared.newlyClaimed;
+          conditionalWorkerContinuation = prepared.continuation;
         } else {
           if (action.nextAction.step === "spec-gate-repair") {
             repairExecution = planSpecGateRepairWorkerExecution({
@@ -2083,7 +2096,7 @@ export default class RunDispatchCommand extends FlowCommand {
           }
         }
         resumeSealedDraftExecution = (conditionalDraftExecution
-          && fs.existsSync(handoffRequest.submissionPath))
+          && conditionalWorkerContinuation.usesSavedResponse)
           || repairExecution?.sealedReplay === true
           || resumeStoppedArtifactExecution;
         if (!resumeSealedDraftExecution) {
@@ -2158,9 +2171,17 @@ export default class RunDispatchCommand extends FlowCommand {
               if (handoffRequest !== null && handoffRequest.policy.kind !== "source"
                 && handoffRequest.stepId !== "spec-gate-repair") {
                 handoffRequest.assertExecutionContract();
-                const newlyClaimed = isConditionalDraftWorkerStep(handoffRequest.stepId)
-                  ? conditionalWorkerNewlyClaimed : handoffRequest.consumeProviderClaim();
-                if (!newlyClaimed) throw new FlowExecutionContractRefusal("Worker claim has no sealed response for recovery");
+                if (isConditionalDraftWorkerStep(handoffRequest.stepId)) {
+                  conditionalWorkerContinuation = assertDraftWorkerExecutionContinuation(selectDraftWorkerExecutionContinuation({
+                    ctx, state: ctx.flowManager.canonicalState(handoffRequest.specId), request: handoffRequest,
+                    newlyClaimed: conditionalWorkerNewlyClaimed, handoffCoordinator: this.handoffCoordinator,
+                  }));
+                  if (!conditionalWorkerContinuation.requiresWorker) {
+                    throw new FlowExecutionContractRefusal("Saved Draft response became available before provider execution");
+                  }
+                } else if (!handoffRequest.consumeProviderClaim()) {
+                  throw new FlowExecutionContractRefusal("Worker claim has no sealed response for recovery");
+                }
               }
               if (handoffRequest?.stepId === "spec-gate-repair") {
                 reserveSpecGateRepairWorkerCall({ ctx, request: handoffRequest, prompt,
@@ -3022,7 +3043,10 @@ export default class RunDispatchCommand extends FlowCommand {
         // an explicitly retryable producer payload-format failure is retried
         // once with a new dispatch invocation and handoff directory. Parsed
         // semantic, identity, authority, and publication failures are terminal.
-        const retryCurrent = await this.fetchNextAction(target);
+        const retryFeedback = new WorkerArtifactRetryFeedback(attempt.error, {
+          previousExecutionContract: attempt.handoffRequest.executionContract,
+        });
+        const retryCurrent = await this.fetchNextAction(target, retryFeedback.previousExecutionContract);
         const retryState = ctx.flowManager.canonicalState(ctx.specId);
         if (
           retryCurrent instanceof Envelope
@@ -3059,7 +3083,7 @@ export default class RunDispatchCommand extends FlowCommand {
         attempt = await this.runWorkerAttempt(
           ctx,
           retryInvocation,
-          new WorkerArtifactRetryFeedback(firstError, { previousExecutionContract: firstRequest.executionContract }),
+          retryFeedback,
         );
         if (attempt.deferredMetric) deferredMetrics.push(attempt.deferredMetric);
         dispatchCount += 1;

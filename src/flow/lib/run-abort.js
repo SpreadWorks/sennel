@@ -1,12 +1,22 @@
 import fs from "node:fs";
+import crypto from "node:crypto";
 import path from "node:path";
 import { AtomicJsonFile } from "../../lib/atomic-json-file.js";
 import { Envelope } from "../../lib/flow-envelope.js";
-import { listUncommittedFiles, runGit } from "../../lib/git-helpers.js";
+import { getPorcelainV2Status, runGit } from "../../lib/git-helpers.js";
 import { RepositoryFlowOperationLock } from "../../lib/repository-maintenance-lock.js";
+import { FlowHandoffAuthorityLease } from "../../lib/flow-handoff-authority-lease.js";
+import { FlowTargetBinding, FlowTargetExpectation } from "../../lib/flow-target-guard.js";
+import { FlowWorkspace } from "../../lib/flow-workspace.js";
 import { WorktreeFlowIdentity } from "../../lib/worktree-flow-binding.js";
 import { FlowCommand } from "./base-command.js";
 import { PRODUCT } from "../../lib/product.js";
+import { FlowDispatchLease } from "./run-dispatch.js";
+import { FlowDispatchSession, FlowDispatchTarget } from "./dispatch-invocation.js";
+import { ReviewExecutionLease } from "./review-execution-lease.js";
+import { FlowCommandExecutionLease } from "./flow-command-execution-lease.js";
+import { FlowRepositoryRuntimeArtifactRegistry } from "./flow-repository-runtime-artifacts.js";
+import { AbortHistoryRecord, AbortHistoryStore } from "./abort-history.js";
 import {
   deleteFeatureBranchForCleanup,
   removeWorktreeForCleanup,
@@ -26,12 +36,12 @@ class FlowAbortJournal {
     return path.join(root, PRODUCT.managedPath("recovery", "flow-abort", `${specId}.json`));
   }
 
-  constructor({ root, state, worktreePath, featureSha }) {
+  constructor({ root, state, worktreePath, featureSha, reason, specLocation }) {
     const directory = path.join(root, PRODUCT.managedPath("recovery", "flow-abort"));
     fs.mkdirSync(directory, { recursive: true });
     this.file = new AtomicJsonFile(FlowAbortJournal.pathFor(root, state.specId));
     this.value = this.file.read(null) || {
-      version: 1,
+      version: 2,
       runId: state.runId,
       specId: state.specId,
       featureBranch: state.featureBranch,
@@ -40,9 +50,16 @@ class FlowAbortJournal {
       featureSha,
       phase: "prepared",
       updatedAt: new Date().toISOString(),
+      requestedRecord: new AbortHistoryRecord({ schemaVersion: 1, event: "abort-requested",
+        operationId: crypto.randomUUID(), runId: state.runId, specId: state.specId,
+        recordedAt: new Date().toISOString(), reason,
+        flowId: state.flowId, flowVersionId: state.flowVersionId,
+        flowVersion: specLocation.version.value, issue: state.issue, request: state.request,
+        step: state.attempt?.nodeId ?? null, execution: state.execution.toJSON(),
+        versionLocation: specLocation.relativeDirectory }).toJSON(),
     };
     if (
-      this.value.version !== 1
+      this.value.version !== 2
       || this.value.runId !== state.runId
       || this.value.specId !== state.specId
       || this.value.featureBranch !== state.featureBranch
@@ -55,6 +72,10 @@ class FlowAbortJournal {
       )
     ) {
       throw new Error("flow abort journal does not match the selected flow");
+    }
+    const requested = new AbortHistoryRecord(this.value.requestedRecord);
+    if (requested.runId !== state.runId || requested.specId !== state.specId || requested.reason !== reason) {
+      throw new Error("flow abort history does not match the selected flow and reason");
     }
     this.file.write(this.value);
   }
@@ -70,6 +91,71 @@ class FlowAbortJournal {
     }
     this.value = { ...this.value, phase, updatedAt: new Date().toISOString() };
     this.file.write(this.value);
+  }
+
+  complete(removed) {
+    if (!this.value.completedRecord) {
+      this.value = { ...this.value, completedRecord: {
+        ...this.value.requestedRecord, event: "abort-completed",
+        recordedAt: new Date().toISOString(), removed,
+      } };
+      this.file.write(this.value);
+    }
+    return new AbortHistoryRecord(this.value.completedRecord);
+  }
+}
+
+/** Hold existing execution leases only while deleting this stopped target. */
+class AbortExecutionGuard {
+  constructor() { this.owned = []; }
+
+  acquire({ root, state, worktreePath }) {
+    try {
+      if (FlowCommandExecutionLease.forRun({ mainRoot: root, runId: state.runId }).length > 0
+        || ReviewExecutionLease.forRun({ mainRoot: root, runId: state.runId }).length > 0) {
+        throw new Error("an execution owner remains for the selected Flow");
+      }
+      const executionRoot = worktreePath || root;
+      if (worktreePath && !fs.existsSync(worktreePath)) {
+        // A missing checkout cannot admit new work. Its old leases must still
+        // be absent; never recreate a worktree binding against the main root.
+        for (const file of [FlowDispatchLease.pathFor(root, state.runId),
+          FlowHandoffAuthorityLease.pathFor({ mainRoot: root, executionRoot })]) {
+          try { fs.lstatSync(file); }
+          catch (error) { if (error.code === "ENOENT") continue; throw error; }
+          throw new Error("an execution owner remains for the missing checkout");
+        }
+        return;
+      }
+      const binding = FlowTargetBinding.capture({ flowState: state, mainRoot: root,
+        authorityRoot: executionRoot, worktreePath });
+      const target = new FlowDispatchTarget({ binding,
+        expectation: new FlowTargetExpectation({ expectRunId: state.runId, expectSpec: state.specId }) });
+      const dispatch = new FlowDispatchLease(new FlowDispatchSession({ target }));
+      const handoff = new FlowHandoffAuthorityLease({ mainRoot: root, executionRoot });
+      const locks = [dispatch.lock, handoff.lock.processLock];
+      if (state.attempt !== null) {
+        locks.push(new ReviewExecutionLease({ mainRoot: root, runId: state.runId,
+          nodeId: state.attempt.nodeId, attemptId: state.attempt.id }).lock);
+      }
+      for (const lock of locks) {
+        lock.acquire({ reclaimStale: false });
+        this.owned.push(lock);
+      }
+    } catch (cause) {
+      this.release();
+      const error = new Error(`abort requires a stopped Flow: ${cause.message}`, { cause });
+      error.code = "ABORT_EXECUTION_BUSY";
+      throw error;
+    }
+  }
+
+  release() {
+    const errors = [];
+    for (const lock of this.owned.splice(0).reverse()) {
+      try { lock.release(); } catch (error) { errors.push(error); }
+    }
+    if (errors.length) throw new AggregateError(errors, "abort execution lock release failed");
   }
 }
 
@@ -91,14 +177,26 @@ export class RunAbortCommand extends FlowCommand {
   }
 
   async execute(ctx) {
-    const state = ctx.flowState;
+    let state = ctx.flowState;
     const specLocation = ctx.specLocation || ctx.flowManager.specLocation(state.specId);
     const repositoryRoot = specLocation.repositoryRoot;
     const { worktreePath } = ctx.flowManager.resolveWorktreePaths(state);
     const ownsFeatureBranch = state.featureBranch !== null && state.featureBranch !== state.baseBranch;
     const operation = new RepositoryFlowOperationLock({ mainRoot: repositoryRoot });
     const operationOwnerToken = operation.acquire();
+    const execution = new AbortExecutionGuard();
     try {
+      state = ctx.flowManager.resolveFlowRecoveryTarget(new FlowTargetExpectation({
+        expectRunId: state.runId, expectSpec: state.specId,
+      })).state;
+      if (!["active", "parked"].includes(state.lifecycleState)) {
+        return Envelope.fail("run", "abort", "ABORT_FINALIZATION_CONFLICT", "Only an unfinished Flow can be aborted.");
+      }
+      execution.acquire({ root: repositoryRoot, state, worktreePath });
+      const rootLocation = new FlowWorkspace({ repositoryRoot, executionRoot: repositoryRoot,
+        specRoot: ctx.flowManager.specRoot }).forSpec(state.specId);
+      const history = new AbortHistoryStore({ directory: rootLocation.root });
+      history.read();
       const journal = new FlowAbortJournal({
         root: repositoryRoot,
         state,
@@ -107,7 +205,9 @@ export class RunAbortCommand extends FlowCommand {
           || state.featureBranch === null
           ? null
           : branchSha(repositoryRoot, state.featureBranch),
+        reason: ctx.reason ?? null, specLocation,
       });
+      history.append(new AbortHistoryRecord(journal.value.requestedRecord));
 
       if (!journal.atLeast("worktree-removed")) {
         if (state.worktree && worktreePath && fs.existsSync(worktreePath)) {
@@ -129,8 +229,11 @@ export class RunAbortCommand extends FlowCommand {
           });
           if (!removed.ok) return removed.env;
         } else if (!state.worktree && ownsFeatureBranch) {
-          const unrelatedDirty = listUncommittedFiles({ cwd: repositoryRoot })
-            .filter((filePath) => outsideTargetSpec(filePath, specLocation.relativeDirectory));
+          const runtimeArtifacts = new FlowRepositoryRuntimeArtifactRegistry();
+          const unrelatedDirty = getPorcelainV2Status(repositoryRoot).pathSet.toArray()
+            .filter((filePath) => outsideTargetSpec(filePath, specLocation.relativeDirectory)
+              && !runtimeArtifacts.owns(filePath)
+              && filePath !== path.relative(repositoryRoot, history.file).split(path.sep).join("/"));
           if (unrelatedDirty.length > 0) {
             return Envelope.fail(
               "run",
@@ -170,10 +273,11 @@ export class RunAbortCommand extends FlowCommand {
 
       if (!journal.atLeast("spec-removed")) {
         fs.rmSync(specLocation.directory, { recursive: true });
+        if (fs.readdirSync(rootLocation.directory).length === 0) fs.rmdirSync(rootLocation.directory);
         journal.advance("spec-removed");
       }
 
-      return {
+      const result = {
         status: "aborted",
         specId: state.specId,
         removed: {
@@ -182,8 +286,13 @@ export class RunAbortCommand extends FlowCommand {
           specDir: specLocation.relativeDirectory,
         },
       };
+      history.append(journal.complete(result.removed));
+      journal.file.remove();
+      return { ...result, log: path.relative(repositoryRoot, history.file).split(path.sep).join("/") };
+    } catch (error) {
+      return Envelope.fail("run", "abort", error.code || "ABORT_FAILED", error.message);
     } finally {
-      operation.release();
+      try { execution.release(); } finally { operation.release(); }
     }
   }
 }

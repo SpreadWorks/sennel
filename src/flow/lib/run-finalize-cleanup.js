@@ -217,9 +217,10 @@ class AutoRescueIssueLogAllowance {
 }
 
 class FinalizeFlowMetadataAllowance {
-  constructor({ mainRepoPath, specRoot, specId }) {
+  constructor({ mainRepoPath, specRoot, specId, issueLogAllowance }) {
     this.mainRepoPath = mainRepoPath;
     this.specId = specId;
+    this.issueLogAllowance = issueLogAllowance;
     this.location = canonicalFlowLocation(mainRepoPath, specRoot, specId);
     this.versionStore = new CurrentFlowVersionStore({
       location: this.location,
@@ -262,12 +263,21 @@ class FinalizeFlowMetadataAllowance {
         || committedActivities.length !== committedState.confirmationOrder
         || !isDeepStrictEqual(activities.slice(0, committedActivities.length).map((entry) => entry.toJSON()), committedActivities)) return false;
       const suffix = activities.slice(committedActivities.length);
+      const currentCatalog = this.versionStore.catalog().toJSON();
+      const issueLogProducerId = this.issueLogAllowance.allowsCurrentDocument()
+        ? currentCatalog.artifacts.find((entry) => entry.logicalKey === "issue.log")?.activityId
+        : null;
+      const ownedAudit = suffix.find((activity) => activity.id === issueLogProducerId
+        && activity.transition.operation === "publish_artifacts"
+        && activity.nodeId === "finalize-cleanup" && activity.attemptId === state.attempt.id
+        && activity.sequence === state.attempt.sequence);
       if (suffix.length === 0 || !suffix.every((activity) => {
         if (activity.transition.operation === "begin_outbox") {
           const claimed = activity.transition.outbox;
           return activity.nodeId === state.root.id && claimed?.id === outbox.idempotencyKey
             && claimed.operation === outbox.identity.operation && claimed.attempt === outbox.attempt;
         }
+        if (activity.id === ownedAudit?.id) return true;
         return activity.transition.operation === "record_draft_step_settlement"
           && activity.nodeId === "finalize-cleanup" && activity.attemptId === state.attempt.id
           && activity.sequence === state.attempt.sequence
@@ -275,8 +285,8 @@ class FinalizeFlowMetadataAllowance {
       })) return false;
       const committedCatalog = this.committedDocument(this.location.relativeCatalogFile);
       const retainedDescriptors = (catalog) => catalog.artifacts
-        .filter((entry) => !["flow.state", "flow.activities"].includes(entry.logicalKey));
-      return isDeepStrictEqual(retainedDescriptors(this.versionStore.catalog().toJSON()), retainedDescriptors(committedCatalog));
+        .filter((entry) => !["flow.state", "flow.activities", ...(ownedAudit === undefined ? [] : ["issue.log"])].includes(entry.logicalKey));
+      return isDeepStrictEqual(retainedDescriptors(currentCatalog), retainedDescriptors(committedCatalog));
     } catch {
       return false;
     }
@@ -329,8 +339,11 @@ function listMainRepoDirtyFiles(
     .map((line) => line.trimEnd())
     .filter((line) => line.trim() !== "")
     .map((line) => line.slice(3));
+  const issueLogAllowance = new AutoRescueIssueLogAllowance({
+    mainRepoPath, specRoot, specId, idempotencyKey: allowedIssueLogId,
+  });
   const metadataAllowance = allowFinalizeMetadata
-    ? new FinalizeFlowMetadataAllowance({ mainRepoPath, specRoot, specId })
+    ? new FinalizeFlowMetadataAllowance({ mainRepoPath, specRoot, specId, issueLogAllowance })
     : null;
   const ownedFlowMetadata = metadataAllowance?.allowsCurrentFlowMetadata() ?? false;
   for (const flowPath of flowPaths) {
@@ -367,13 +380,7 @@ function listMainRepoDirtyFiles(
     throw error;
   }
   if (issueStatus.stdout.trim()) {
-    const allowance = new AutoRescueIssueLogAllowance({
-      mainRepoPath,
-      specRoot,
-      specId,
-      idempotencyKey: allowedIssueLogId,
-    });
-    if (!allowance.allowsCurrentDocument()) {
+    if (!issueLogAllowance.allowsCurrentDocument()) {
       dirtyFiles.push(issueLogPath);
     }
   }

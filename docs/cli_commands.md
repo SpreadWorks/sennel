@@ -123,6 +123,15 @@ Example: `sennel help`.
 
 ---
 
+### Cancel a stopped Flow
+
+Run `sennel flow run abort --expect-run-id <runId> --expect-spec <specId> --reason "Reason"`.
+Abort refuses a running Flow or an execution owner whose termination cannot be confirmed.
+`--force` permits discarding changes in the owned worktree; execution checks still apply.
+Successful cancellation removes the selected Version, owned worktree and branch, active registration,
+and cleanup journal. Requested and completed observations remain in `abort-log.jsonl` directly
+under the configured Spec root. Other Versions and earlier log lines are preserved.
+
 <!-- {{data("base.docs.nav")}} -->
 [← Project Structure](project_structure.md) | [Configuration and Customization →](configuration.md)
 <!-- {{/data}} -->

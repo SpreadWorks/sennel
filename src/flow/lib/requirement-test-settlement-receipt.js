@@ -2,12 +2,13 @@
 import { createHash } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { DraftStepSettlementReceiptValue } from "./draft-step-settlement-receipt.js";
+import { FlowExecutionContract } from "./flow-execution-contract.js";
 import { RequirementTestSourceAttempt } from "./requirement-test-lifecycle.js";
 import { StepResult, STEP_RESULT_REGISTRY, stepResultDigest } from "../engine/step-result.js";
 
 const LEAVES = new Set(["approval", "test-generate", "test-review", "test-repair", "test-gate"]);
 const READBACK_TOKEN = Symbol("Requirement test receipt readback");
-const RECEIPT_FIELDS = ["id", "binding", "resultKind", "resultType", "resultDigest", "settlementKind", "settlementDigest", "targetStepId", "connectorName", "publicationDigest", "requestDigest"];
+const RECEIPT_FIELDS = ["id", "binding", "resultKind", "resultType", "resultDigest", "settlementKind", "settlementDigest", "targetStepId", "connectorName", "publicationDigest", "requestDigest", "executionContract"];
 
 function exactFields(value, fields, label) {
   if (value === null || typeof value !== "object" || Array.isArray(value)
@@ -74,6 +75,7 @@ export class RequirementTestSettlementReceipt extends DraftStepSettlementReceipt
     if (token === READBACK_TOKEN) {
       exactFields(value, RECEIPT_FIELDS, "stored Requirement test settlement receipt");
       this.binding = RequirementTestSettlementBinding.fromJSON(value.binding);
+      this.executionContract = value.executionContract === null ? null : FlowExecutionContract.fromJSON(value.executionContract);
       this.resultKind = text(value.resultKind, "receipt Result kind");
       this.resultType = text(value.resultType, "receipt Result type");
       for (const field of ["resultDigest", "settlementDigest", "publicationDigest", "requestDigest"]) this[field] = digest(value[field], `receipt ${field}`);
@@ -86,9 +88,13 @@ export class RequirementTestSettlementReceipt extends DraftStepSettlementReceipt
       this.id = digest(value.id, "receipt id");
       if (this.id !== jsonDigest(this.#identity())) throw new TypeError("stored Requirement test settlement receipt identity is invalid");
     } else {
-      exactFields(value, ["binding", "result", "settlement", "publicationDigest", "requestDigest"], "Requirement test settlement receipt input");
+      exactFields(value, ["binding", "result", "settlement", "publicationDigest", "requestDigest", "executionContract"], "Requirement test settlement receipt input");
       if (!(value.result instanceof StepResult)) throw new TypeError("Requirement test receipt requires a typed StepResult");
       this.binding = value.binding instanceof RequirementTestSettlementBinding ? value.binding : RequirementTestSettlementBinding.capture(value.binding);
+      if (value.executionContract !== null && !(value.executionContract instanceof FlowExecutionContract)) {
+        throw new TypeError("Requirement test receipt execution contract must be typed");
+      }
+      this.executionContract = value.executionContract;
       this.resultKind = value.result.kind;
       this.resultType = value.result.type;
       this.resultDigest = stepResultDigest(value.result);
@@ -97,6 +103,14 @@ export class RequirementTestSettlementReceipt extends DraftStepSettlementReceipt
       this.requestDigest = digest(value.requestDigest, "receipt request digest");
       this.id = jsonDigest(this.#identity());
       this.assertMatches({ result: value.result, settlement: value.settlement });
+    }
+    if (this.executionContract !== null) {
+      const contract = this.executionContract;
+      if (contract.runId !== this.binding.runId || contract.specId !== this.binding.specId
+        || contract.stepId !== this.binding.stepId || contract.nodeId !== this.binding.stepId
+        || contract.attemptId !== this.binding.attemptId || contract.attemptSequence !== this.binding.attemptSequence) {
+        throw new TypeError("Requirement test receipt execution contract belongs to another Attempt");
+      }
     }
     Object.freeze(this);
   }
@@ -111,7 +125,7 @@ export class RequirementTestSettlementReceipt extends DraftStepSettlementReceipt
     return receipt;
   }
 
-  assertMatches({ binding = null, result = null, settlement = null, publicationDigest = null, requestDigest = null } = {}) {
+  assertMatches({ binding = null, result = null, settlement = null, publicationDigest = null, requestDigest = null, executionContract = undefined } = {}) {
     if (binding !== null) {
       const expected = binding instanceof RequirementTestSettlementBinding ? binding : RequirementTestSettlementBinding.capture(binding);
       if (!isDeepStrictEqual(this.binding.toJSON(), expected.toJSON())) throw new TypeError("Requirement test receipt binding is stale");
@@ -132,12 +146,14 @@ export class RequirementTestSettlementReceipt extends DraftStepSettlementReceipt
     }
     if (publicationDigest !== null && this.publicationDigest !== publicationDigest) throw new TypeError("Requirement test receipt publication does not match");
     if (requestDigest !== null && this.requestDigest !== requestDigest) throw new TypeError("Requirement test receipt request does not match");
+    if (executionContract !== undefined && !isDeepStrictEqual(this.executionContract?.toJSON() ?? null,
+      executionContract?.toJSON() ?? null)) throw new TypeError("Requirement test receipt execution contract does not match");
     return this;
   }
 
   #identity() { return { binding: this.binding.toJSON(), resultKind: this.resultKind, resultType: this.resultType,
     resultDigest: this.resultDigest, settlementKind: this.settlementKind, settlementDigest: this.settlementDigest,
     targetStepId: this.targetStepId, connectorName: this.connectorName, publicationDigest: this.publicationDigest,
-    requestDigest: this.requestDigest }; }
+    requestDigest: this.requestDigest, executionContract: this.executionContract?.toJSON() ?? null }; }
   toJSON() { return { id: this.id, ...this.#identity() }; }
 }

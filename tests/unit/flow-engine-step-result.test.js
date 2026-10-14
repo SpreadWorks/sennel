@@ -7,6 +7,7 @@ import {
   DraftGatePassedResult,
   SpecCreatedResult,
   SpecReviewPassedResult,
+  AcceptanceReviewExecutionHeldResult,
   StepErrorResult,
   STEP_RESULT_TYPE,
   StepResult,
@@ -14,6 +15,7 @@ import {
   stepResultDigest,
 } from "../../src/flow/engine/step-result.js";
 import { Step } from "../../src/flow/engine/step.js";
+import { finalizationPhaseResultContracts } from "../support/assertions/finalization-phase-result-contracts.js";
 
 test("StepResult is abstract and every concrete Result has one unique fixed contract", () => {
   const expected = [
@@ -142,6 +144,7 @@ test("StepResult is abstract and every concrete Result has one unique fixed cont
     ["RetroIncompleteResult", "retro", "retro-incomplete", "branch-required"],
     ["RetroEvidenceRefreshResult", "retro", "retro-evidence-refresh", "loop-required"],
     ["AcceptanceReviewExecutionRequiredResult", "acceptance-review", "acceptance-review-execution-required", "loop-required"],
+    ["AcceptanceReviewExecutionHeldResult", "acceptance-review", "acceptance-review-execution-held", "user-input-required"],
     ["AcceptanceReviewPassedResult", "acceptance-review", "acceptance-review-passed", "completed"],
     ["AcceptanceReviewRepairRequiredResult", "acceptance-review", "acceptance-review-repair-required", "loop-required"],
     ["AcceptanceReviewDecisionRequiredResult", "acceptance-review", "acceptance-review-decision-required", "branch-required"],
@@ -156,27 +159,16 @@ test("StepResult is abstract and every concrete Result has one unique fixed cont
     ["FinalRegressionFailureAcceptedResult", "final-regression", "final-regression-failure-accepted", "completed"],
     ["ReportDeliveryRequiredResult", "report", "report-delivery-required", "loop-required"],
     ["ReportGeneratedResult", "report", "report-generated", "completed"],
-    ["FinalizeCommitExecutionRequiredResult", "finalize-commit", "finalize-commit-execution-required", "loop-required"],
-    ["FinalizeCommitCreatedResult", "finalize-commit", "finalize-commit-created", "completed"],
-    ["FinalizeCommitUnchangedResult", "finalize-commit", "finalize-commit-unchanged", "completed"],
-    ["FinalizeMergeExecutionRequiredResult", "finalize-merge", "finalize-merge-execution-required", "loop-required"],
-    ["FinalizeMergeSquashedResult", "finalize-merge", "finalize-merge-squashed", "completed"],
-    ["FinalizeMergePolicySkippedResult", "finalize-merge", "finalize-merge-policy-skipped", "completed"],
-    ["FinalizeMergePrOpenedResult", "finalize-merge", "finalize-merge-pr-opened", "completed"],
-    ["FinalizeSyncExecutionRequiredResult", "finalize-sync", "finalize-sync-execution-required", "loop-required"],
-    ["FinalizeSyncBuiltResult", "finalize-sync", "finalize-sync-built", "completed"],
-    ["FinalizeSyncUnchangedResult", "finalize-sync", "finalize-sync-unchanged", "completed"],
-    ["FinalizeSyncSkippedWithWarningResult", "finalize-sync", "finalize-sync-skipped-with-warning", "completed"],
-    ["FinalizeCleanupExecutionRequiredResult", "finalize-cleanup", "finalize-cleanup-execution-required", "loop-required"],
-    ["FinalizeCleanupCompletedResult", "finalize-cleanup", "finalize-cleanup-completed", "completed"],
-    ["FinalizeCleanupCompletedWithWarningResult", "finalize-cleanup", "finalize-cleanup-completed-with-warning", "completed"],
+    ...finalizationPhaseResultContracts.filter(({ type }) => type !== "error")
+      .map(({ stepId, className, kind, type }) => [className, stepId, kind, type]),
     ...[
       "draft", "branch", "prepare-spec", "spec", "spec-gate-repair", "spec-triage", "spec-repair", "spec-gate", "spec-review", "draft-questions-review", "draft-questions-triage", "draft-questions-repair", "draft-refine",
       "draft-coverage-review", "draft-coverage-triage", "draft-coverage-repair", "draft-gate", "draft-gate-repair", "approval", "test-generate", "test-repair", "test-review", "test-gate",
       "implement", "task-impl", "task-review", "task-triage", "task-repair", "task-gate", "test-execute", "test-result-review", "impl-review", "impl-triage", "impl-repair", "impl-gate",
       "retro", "acceptance-review", "acceptance-decision", "final-regression", "report",
-      "finalize-commit", "finalize-merge", "finalize-sync", "finalize-cleanup",
     ].map((stepId) => ["StepErrorResult", stepId, `${stepId}-error`, "error"]),
+    ...finalizationPhaseResultContracts.filter(({ type }) => type === "error")
+      .map(({ stepId, className, kind, type }) => [className, stepId, kind, type]),
   ];
   assert.throws(() => new StepResult(), /abstract/);
   assert.deepEqual(STEP_RESULT_REGISTRY.map(({ ResultClass, stepId, kind, type }) => (

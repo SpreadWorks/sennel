@@ -19,6 +19,10 @@ function dispatchLockError(status, message, { lockPath, owner = null, cause } = 
 }
 
 export class FlowDispatchLease {
+  static pathFor(mainRoot, runId) {
+    return path.join(mainRoot, PRODUCT.managedPath(`.flow-dispatch-${flowDispatchDigest(runId).slice(0, 24)}.lock`));
+  }
+
   constructor(session) {
     if (!(session instanceof FlowDispatchSession)) {
       throw new Error("FlowDispatchLease requires a FlowDispatchSession");
@@ -40,7 +44,7 @@ export class FlowDispatchLease {
     });
     this.lock = new ProcessLock({
       directoryAuthority: directory,
-      fileName: `.flow-dispatch-${flowDispatchDigest(runId).slice(0, 24)}.lock`,
+      fileName: path.basename(FlowDispatchLease.pathFor(mainRoot, runId)),
       kind: DISPATCH_LOCK_KIND,
       authority: {
         runId,

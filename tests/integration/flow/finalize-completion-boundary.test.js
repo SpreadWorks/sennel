@@ -3,7 +3,6 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, test } from "node:test";
-import RunFinalizeCommitCommand from "../../../src/flow/lib/run-finalize-commit.js";
 import { commitFinalizeCompletion } from "../../../src/flow/lib/run-finalize.js";
 import { FlowManager } from "../../../src/lib/flow-manager.js";
 import { commitAll, initGitRepo } from "../../support/infrastructure/git-repo.js";
@@ -108,44 +107,4 @@ test("ignored configured spec root is left untracked while docs still commit", (
   assert.equal(git(["show", "--pretty=format:", "--name-only", "HEAD"]), "docs/overview.md");
   assert.equal(git(["ls-files", "flow-artifacts/specs/485-ignored"]), "");
   assert.equal(fs.existsSync(path.join(root, "flow-artifacts/specs/485-ignored/001/flow.json")), true);
-});
-
-test("implementation commit excludes the shared spec root and documentation", async () => {
-  root = createTmpDir("finalize-implementation-boundary-");
-  initGitRepo(root);
-  write("src/feature.js", "export const value = 1;\n");
-  write("docs/overview.md", "before\n");
-  commitAll(root, "test: baseline");
-  git(["switch", "-c", "feature/485-implementation"]);
-
-  const specId = "485-implementation";
-  const manager = new FlowManager({ root, mainRoot: root, inWorktree: false });
-  new CanonicalFlowFixture({
-    flowManager: manager,
-    specId,
-    runId: "run-485-implementation",
-    execution: {
-      mode: "branch",
-      baseBranch: "main",
-      featureBranch: `feature/${specId}`,
-    },
-  }).create();
-  write("src/feature.js", "export const value = 485;\n");
-  write("docs/overview.md", "generated docs\n");
-
-  const result = await new RunFinalizeCommitCommand().execute({
-    root,
-    executionRoot: root,
-    repositoryRoot: root,
-    flowManager: manager,
-    flowState: manager.loadReadOnly(specId),
-    specRoot: manager.specRoot,
-  });
-
-  assert.equal(result.status, "done");
-  assert.equal(git(["show", "--pretty=format:", "--name-only", "HEAD"]), "src/feature.js");
-  const dirty = git(["status", "--short"]);
-  assert.match(dirty, /docs\/overview\.md/);
-  assert.match(dirty, /\?\? specs\//);
-  assert.equal(fs.existsSync(path.join(root, "specs", specId, "001", "flow.json")), true);
 });

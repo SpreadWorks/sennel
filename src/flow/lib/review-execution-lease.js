@@ -1,5 +1,7 @@
 import crypto from "node:crypto";
+import fs from "node:fs";
 import path from "node:path";
+import { AtomicJsonFile } from "../../lib/atomic-json-file.js";
 import { PRODUCT } from "../../lib/product.js";
 import { ProcessLock } from "../../lib/process-lock.js";
 import { RealDirectoryAuthority } from "../../lib/real-directory-authority.js";
@@ -21,6 +23,27 @@ function leaseError(status, message, { lockPath, owner = null, cause } = {}) {
 
 /** One provider admission for one canonical review Attempt. */
 export class ReviewExecutionLease {
+  /** Resolve existing owners without reclaiming an interrupted Review. */
+  static forRun({ mainRoot, runId }) {
+    const directory = path.join(mainRoot, PRODUCT.managedPath("review-execution-locks"));
+    let names;
+    try { names = fs.readdirSync(directory); }
+    catch (error) { if (error.code === "ENOENT") return []; throw error; }
+    const leases = [];
+    for (const name of names.filter((entry) => entry.endsWith(".lock"))) {
+      const file = path.join(directory, name);
+      const bytes = new AtomicJsonFile(file).readBytes(null);
+      if (bytes === null) continue;
+      const owner = JSON.parse(bytes.toString("utf8"));
+      requiredText(owner.runId, "Review owner runId");
+      const lease = new ReviewExecutionLease({ mainRoot, runId: owner.runId,
+        nodeId: owner.nodeId, attemptId: owner.attemptId });
+      if (lease.lock.lockPath !== file) throw new Error("Review owner does not match its lock location");
+      if (lease.lock.inspect() !== null && owner.runId === runId) leases.push(lease);
+    }
+    return leases;
+  }
+
   constructor({ mainRoot, runId, nodeId, attemptId } = {}) {
     const rootPath = requiredText(mainRoot, "review execution lease mainRoot");
     const identity = [runId, nodeId, attemptId].map((value, index) => requiredText(value, `review execution lease identity[${index}]`)).join("\0");

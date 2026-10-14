@@ -98,6 +98,7 @@ import {
   DraftStepSettlementPublication,
   DraftStepExecutionLifecycle,
   DraftStepExecutionState,
+  RequirementTestGenerationExecutionState,
   DraftRefineStepState,
   DraftReviewExecutionBinding,
   DraftWorkerExecutionBinding,
@@ -5321,6 +5322,7 @@ export class CanonicalFlowManagerStore {
     draftGateRepairSelection = null,
     preparation = null,
     requestDigest = null,
+    executionContract = null,
   } = {}) {
     const requirementTestResult = ["approval", "test-generate", "test-review", "test-repair", "test-gate"]
       .includes(binding?.stepId);
@@ -5342,7 +5344,7 @@ export class CanonicalFlowManagerStore {
     });
     if (["approval", "test-generate", "test-review", "test-repair", "test-gate"].includes(binding?.stepId)) {
       return new RequirementTestSettlementReceipt({
-        binding, result: stepResult, settlement, publicationDigest: publication.digest, requestDigest,
+        binding, result: stepResult, settlement, publicationDigest: publication.digest, requestDigest, executionContract,
       });
     }
     return new DraftStepSettlementReceipt({
@@ -5378,7 +5380,7 @@ export class CanonicalFlowManagerStore {
     };
     const latest = this.#stepSettlementBindingActivities(resolved, receiptBinding)
       .map((entry) => entry.result.draftSettlementReceipt)
-      .filter((receipt) => receipt.executionLifecycle !== null)
+      .filter((receipt) => receipt.executionLifecycle != null)
       .at(-1)?.executionLifecycle ?? null;
     return latest === null ? null : DraftStepExecutionLifecycle.fromJSON(latest.toJSON?.() ?? latest);
   }
@@ -5404,7 +5406,7 @@ export class CanonicalFlowManagerStore {
       attemptSequence: binding.attempt.sequence,
     };
     const activities = this.#stepSettlementBindingActivities(resolved, receiptBinding, snapshot.activities)
-      .filter((entry) => entry.result.draftSettlementReceipt.executionLifecycle !== null);
+      .filter((entry) => entry.result.draftSettlementReceipt.executionLifecycle != null);
     const latestActivity = activities.at(-1) ?? null;
     const latest = latestActivity?.result.draftSettlementReceipt ?? null;
     return new DraftStepExecutionState({
@@ -5644,7 +5646,8 @@ export class CanonicalFlowManagerStore {
     const replay = this.#admitStepSettlement({
       resolved, state, binding, stepResult, settlement, receipt,
     });
-    if (replay !== null) return Object.freeze({ state, receipt: replay });
+    if (replay !== null) return Object.freeze({ state, receipt: replay,
+      ...(executionLifecycle.phase === "claimed" ? { newlyClaimed: false } : {}) });
     const result = resultWithDraftStepResult(
       resultFor("done", binding.stepId),
       binding.stepId,
@@ -5659,7 +5662,8 @@ export class CanonicalFlowManagerStore {
       artifactWrites,
       admission: executionContract === null ? undefined : new ExecutionContractPublicationAdmission(executionContract),
     });
-    return Object.freeze({ state: next, receipt });
+    return Object.freeze({ state: next, receipt,
+      ...(executionLifecycle.phase === "claimed" ? { newlyClaimed: true } : {}) });
   }
 
   /** Fresh generic execution admission; an acquired old claim is never new permission. */
@@ -5694,6 +5698,33 @@ export class CanonicalFlowManagerStore {
   readStoredExecutionContract(input) {
     return this.runtime.readCanonicalTransitionView(input.binding.specId,
       (view) => readStoredExecutionContractFromView(view, input));
+  }
+
+  /** Acquire the published Requirement frontier and its exact consumed execution. */
+  requirementTestGenerationExecutionState({ binding, requirementId, planPublication }) {
+    return this.runtime.readCanonicalTransitionView(binding.specId, (view) => {
+      const state = view.state;
+      if (binding.runId !== state.runId || binding.stepId !== "test-generate"
+        || state.current?.at(-1) !== binding.stepId || binding.attempt?.id !== state.attempt?.id
+        || binding.attempt?.sequence !== state.attempt?.sequence || state.attempt.failure !== null) {
+        throw new FlowExecutionContractRefusal("Requirement generation execution binding is stale");
+      }
+      const reader = new CanonicalTransitionReader(this, view);
+      const plan = new RequirementTestArtifactStore({ flowManager: reader, state }).readPlan(binding.stepId);
+      if (!planPublication.matches(plan.descriptor)
+        || plan.artifact.plan.activeWorkItem()?.requirementId !== requirementId) {
+        throw new FlowExecutionContractRefusal("Requirement generation plan frontier changed");
+      }
+      const saved = this.readCurrentStepSettlement({ specId: binding.specId, stepId: binding.stepId, view });
+      if (saved?.receipt.executionContract != null) {
+        const stored = readStoredExecutionContractFromView(view, {
+          binding, generation: saved.receipt.executionContract.generation,
+        });
+        saved.receipt.executionContract.assertMatches(stored);
+        stored.assertCurrent(state);
+      }
+      return new RequirementTestGenerationExecutionState({ binding, requirementId, planPublication, saved });
+    });
   }
 
   readExecutionContract({ executionContract }) {
@@ -5945,7 +5976,7 @@ export class CanonicalFlowManagerStore {
         artifactRemovals: artifactRemovals ?? [], artifactBaselines: artifactBaselines ?? [],
         deferredReceipt, findingsPublication });
       return RequirementTestSettlementReceipt.fromJSON(activity.result.draftSettlementReceipt, {
-        binding, result: savedResult, settlement, requestDigest,
+        binding, result: savedResult, settlement, requestDigest, executionContract,
       });
     }
     this.#assertDraftReturnPublicationInput({ stepResult, commandResult, gatePublication,
@@ -6007,7 +6038,7 @@ export class CanonicalFlowManagerStore {
         (current) => this.#readPreparationStepSettlement(current, stepId, completed));
     }
     if (view !== null && (!(view instanceof CanonicalTransitionView) || view.state.specId !== resolved
-      || stepId !== "spec-gate-repair")) throw new CurrentFlowStateInvariantError("Acquired settlement view requires a supported Step");
+      || !["spec-gate-repair", "test-generate"].includes(stepId))) throw new CurrentFlowStateInvariantError("Acquired settlement view requires a supported Step");
     const state = view?.state ?? this.runtime.load(resolved);
     const materializedIdentity = hasImplementationStepContract(stepId) || hasAcceptanceStepContract(stepId) || hasFinalizationStepContract(stepId) ? null
       : TaskStepIdentity.fromStateNode(state, stepId);
@@ -6132,7 +6163,8 @@ export class CanonicalFlowManagerStore {
       result = StepResult.fromStored(stepId, activity.result.stepResult?.toJSON?.() ?? activity.result.stepResult);
       settlement = settleRequirementTestStepResult(stepId, result);
       try {
-        receipt = RequirementTestSettlementReceipt.fromJSON(activity.result.draftSettlementReceipt, {
+        receipt = RequirementTestSettlementReceipt.fromJSON(
+          activity.result.draftSettlementReceipt.toJSON?.() ?? activity.result.draftSettlementReceipt, {
           binding: { runId: state.runId, specId: state.specId, stepId, attempt: state.attempt },
           result,
           settlement,
@@ -7215,7 +7247,7 @@ export class CanonicalFlowManagerStore {
         artifactRemovals, artifactBaselines, deferredReceipt, findingsPublication });
       if (settlement.kind === "failure") {
         const receipt = this.#stepSettlementReceipt({ binding: resultBinding, stepResult, settlement,
-          commandResult, artifactWrites, artifactRemovals, artifactBaselines, requestDigest });
+          commandResult, artifactWrites, artifactRemovals, artifactBaselines, requestDigest, executionContract });
         const replay = this.#admitStepSettlement({ resolved, state, binding: resultBinding,
           stepResult, settlement, receipt });
         if (replay !== null) return Object.freeze({ state, receipt: replay });
@@ -7264,7 +7296,7 @@ export class CanonicalFlowManagerStore {
           throw new CurrentFlowStateConflictError("Requirement test execution Result source changed before persistence");
         }
         const receipt = this.#stepSettlementReceipt({ binding: resultBinding, stepResult, settlement,
-          commandResult, artifactWrites, artifactRemovals, artifactBaselines, requestDigest });
+          commandResult, artifactWrites, artifactRemovals, artifactBaselines, requestDigest, executionContract });
         const replay = this.#admitStepSettlement({ resolved, state, binding: resultBinding,
           stepResult, settlement, receipt });
         if (replay !== null) return Object.freeze({ state, receipt: replay });
@@ -7378,7 +7410,7 @@ export class CanonicalFlowManagerStore {
     if (stepResult !== null) {
       receipt = this.#stepSettlementReceipt({ binding, stepResult, settlement, commandResult,
         artifactWrites: writes, artifactRemovals: removals, artifactBaselines: baselines,
-        testSourceBaseline, lifecycleResult: result, references, requestDigest });
+        testSourceBaseline, lifecycleResult: result, references, requestDigest, executionContract });
       const replay = this.#admitStepSettlement({ resolved, state, binding, stepResult, settlement, receipt });
       if (replay !== null) return Object.freeze({ state, receipt: replay });
     }

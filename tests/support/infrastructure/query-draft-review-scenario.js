@@ -11,8 +11,7 @@ import RunReviewCommand from "../../../src/flow/lib/run-review.js";
 import RunGateCommand from "../../../src/flow/lib/run-gate.js";
 import { FLOW_COMMANDS } from "../../../src/flow/registry.js";
 import { ReviewWorkUnit } from "../../../src/flow/lib/review-work-unit.js";
-import { CanonicalReviewWorkUnit } from "../../../src/flow/lib/canonical-review-artifacts.js";
-import { DraftReviewExecutionTargetIdentity } from "../../../src/flow/definition.js";
+import { STEP_RESULT_ERROR_PERSISTENCE_FAILURE_CODE } from "../../../src/flow/lib/step-persistence-failure.js";
 import { draftStepRegistration, prepareDraftReviewBinding } from "../../../src/flow/engine/composition/draft.js";
 import { specStepRegistration } from "../../../src/flow/engine/composition/spec.js";
 import { SpecEntryConnector } from "../../../src/flow/engine/connectors/spec/spec-entry-connector.js";
@@ -66,9 +65,9 @@ export async function produceDraftReviewResult(ctx, phase, {
 } = {}) {
   const command = new RunReviewCommand({ resolveTreeSha: () => "a".repeat(40), resolveTargetStateDigest: () => "b".repeat(64),
     runCommand: async (_command, _args, options) => {
-      if (beforeOutput !== null) await beforeOutput();
       const work = ReviewWorkUnit.fromEnvironment(options.env);
       const source = JSON.parse(options.env.SENNEL_REVIEW_DRAFT_SOURCE);
+      if (beforeOutput !== null) await beforeOutput({ source, work });
       fs.writeFileSync(path.join(work.root, work.manifestDocument.output.basename), workerArtifactJson({
         version: 2, phase, sourceDraft: "draft.json", sourceDraftRevision: source.revision,
         generatedAt: "2026-10-13T00:00:00.000Z", verdict, summary: `${phase} saved ${verdict} review.`,
@@ -80,6 +79,36 @@ export async function produceDraftReviewResult(ctx, phase, {
   });
   const result = await command.execute(ctx);
   assert.notEqual(result.ok, false, JSON.stringify(result));
+  return result;
+}
+
+/** Evaluate through the production Gate claim; publication remains caller-owned. */
+export async function produceGateResult(ctx, respond) {
+  const provider = installGateProviderFake(respond);
+  try {
+    return await new RunGateCommand().execute(ctx);
+  } finally { provider.mock.restore(); }
+}
+
+/** Supply a minimal external guardrail and its deterministic Draft judgment. */
+export async function produceDraftGateResult(ctx, { observations = [] } = {}) {
+  const ids = [...new Set(observations.map((entry) => entry.requirementRef))];
+  if (ids.length === 0) ids.push("DRAFT");
+  fs.mkdirSync(path.join(ctx.root, ".sennel"), { recursive: true });
+  fs.writeFileSync(path.join(ctx.root, ".sennel", "guardrail.json"), workerArtifactJson({
+    guardrails: ids.map((id) => ({ id, title: "Draft scenario requirement",
+      body: "Preserve the required behavior described by the Draft scenario.",
+      meta: { phase: ["draft"], category: "requirements" } })),
+  }));
+  const result = await produceGateResult({ ...ctx, phase: "draft", level: "semantic", config: {},
+    flowState: ctx.flowManager.loadReadOnly(ctx.specId) },
+  () => JSON.stringify({ observations: observations.map(({ failureMode, requirementRef, where, observed }) =>
+    ({ failureMode, requirementRef, where, observed })) }));
+  assert.equal(result.result, observations.length === 0 ? "pass" : "fail", JSON.stringify(result));
+  if (observations.length > 0) {
+    assert.equal(result.artifacts.failureKind, "ai_semantic_fail", JSON.stringify(result));
+    assert.deepEqual(result.artifacts.nextAction.diagnosis.observations, observations);
+  }
   return result;
 }
 
@@ -148,21 +177,36 @@ export class QueryDraftReviewScenario {
   }
 
   async checkpoint(phase) {
-    const state = this.manager.loadReadOnly(this.specId);
-    const unit = new CanonicalReviewWorkUnit({ flowManager: this.manager, state, phase,
-      executionRoot: this.root, treeSha: "a".repeat(40), targetStateDigest: "b".repeat(64) });
-    unit.declareCanonicalInputs();
-    const manifest = unit.workUnit.manifest();
-    const binding = await prepareDraftReviewBinding({ flowManager: this.manager, state, phase });
-    const executionBinding = this.manager.draftStepExecutionState({ binding }).reviewBinding({
-      manifestDigest: manifest.digest, inputDigest: manifest.inputDigest,
-      target: new DraftReviewExecutionTargetIdentity(manifest.target.toJSON()),
-    });
-    const prepared = await draftStepRegistration(`${phase}-review`).create({ flowManager: this.manager,
-      state, binding, executionBinding });
-    const result = await prepared.step.execute();
-    assert.equal(result.kind, `${phase}-review-execution-required`);
+    const manager = this.manager;
+    const claim = manager.claimDraftStepExecution;
+    let claimCalls = 0;
+    let checkpointState;
+    // Interrupt only the Store write boundary. The production command has
+    // already prepared every manifest input and saved the checkpoint Step.
+    manager.claimDraftStepExecution = ({ binding }) => {
+      claimCalls += 1;
+      assert.equal(binding.stepId, `${phase}-review`);
+      const execution = manager.draftStepExecutionState({ binding });
+      assert.equal(execution.lifecycle.phase, "checkpoint");
+      assert.equal(execution.executionIdentity().stepResult.kind, `${phase}-review-execution-required`);
+      assert.equal(execution.lifecycle.claim, null);
+      checkpointState = this.protectedState();
+      throw new Error("interrupt Draft Review before its execution claim");
+    };
+    try {
+      const command = new RunReviewCommand({ resolveTreeSha: () => "a".repeat(40),
+        resolveTargetStateDigest: () => "b".repeat(64),
+        runCommand: () => assert.fail("checkpoint interruption must precede the provider"),
+      });
+      const result = await command.execute({ ...this.ctx, phase: "draft", config: {},
+        flowState: manager.loadReadOnly(this.specId) });
+      assert.equal(result.ok, false);
+      assert.equal(result.errors[0].code, STEP_RESULT_ERROR_PERSISTENCE_FAILURE_CODE);
+      assert.equal(result.data.failureKind, "step-persistence");
+      assert.equal(claimCalls, 1);
+    } finally { manager.claimDraftStepExecution = claim; }
     this.reload();
+    assert.deepEqual(this.protectedState(), checkpointState);
   }
 
   async review(phase, { verdict = "PASS", blocking = [], advisory = [], repairs = [], terminal = true, beforeOutput = null } = {}) {
@@ -197,15 +241,11 @@ export class QueryDraftReviewScenario {
   async runGate({ phase, respond, expectedResult }) {
     this.manager.beginNextAction(this.specId);
     assert.equal(this.manager.canonicalState(this.specId).current.at(-1), `${phase}-gate`);
-    const provider = installGateProviderFake(respond);
-    let result;
-    try {
-      const ctx = { ...this.ctx, phase, level: "semantic", config: {},
-        flowState: this.manager.loadReadOnly(this.specId) };
-      result = await new RunGateCommand().execute(ctx);
-      assert.equal(result.result, expectedResult, JSON.stringify(result));
-      await FLOW_COMMANDS.run.gate.post(ctx, result);
-    } finally { provider.mock.restore(); }
+    const ctx = { ...this.ctx, phase, level: "semantic", config: {},
+      flowState: this.manager.loadReadOnly(this.specId) };
+    const result = await produceGateResult(ctx, respond);
+    assert.equal(result.result, expectedResult, JSON.stringify(result));
+    await FLOW_COMMANDS.run.gate.post(ctx, result);
     this.reload();
     return result;
   }

@@ -9,6 +9,7 @@ import RunDispatchCommand from "../../../src/flow/lib/run-dispatch.js";
 import RunReviewCommand from "../../../src/flow/lib/run-review.js";
 import RunGateCommand from "../../../src/flow/lib/run-gate.js";
 import GetNextActionCommand from "../../../src/flow/lib/get-next-action.js";
+import { selectWorkerExecutionAdmission } from "../../../src/flow/lib/worker-execution-admission.js";
 import RunRecoverDraftExecutionCommand from "../../../src/flow/lib/run-recover-draft-execution.js";
 import {
   DraftWorkerExecutionBinding,
@@ -27,6 +28,7 @@ import { ReviewWorkUnit } from "../../../src/flow/lib/review-work-unit.js";
 import {
   DraftWorkerRecoveryInputPreview,
   WorkerArtifactHandoffCoordinator,
+  WorkerArtifactHandoffError,
   sealWorkerArtifactHandoff,
 } from "../../../src/flow/lib/worker-artifact-handoff.js";
 import { FLOW_COMMANDS } from "../../../src/flow/registry.js";
@@ -239,128 +241,135 @@ async function interruptBeforeClaim(root, specId, manager) {
   assert.equal(checkpoint.lifecycle.claim, null);
 }
 
-it("reclaims a failed Gate repair checkpoint after restart and carries its Draft to Gate", async () => {
+async function assertRetainedClaimStops({ root, specId, manager, invocation }) {
+  const before = manager.canonicalState(specId).toJSON();
+  const activities = manager.activityLedger(specId);
+  const catalog = manager.artifactCatalog(specId).toJSON();
+  const execution = executionState(manager, specId);
+  const draft = manager.readArtifact({ specId, logicalKey: "draft", consumerNodeId: "draft-gate-repair" });
+  const run = activeDispatch(root, specId, manager, {
+    async call() { assert.fail("an existing claim without a saved response must not start another worker"); },
+  }, { maxDispatches: 5 });
+  const next = await new GetNextActionCommand().execute(run.context);
+  assert.equal(next.directive.kind, "blocked", JSON.stringify(next));
+  assert.equal(next.directive.code, "FLOW_EXECUTION_CONTRACT_MISMATCH");
+  await assert.rejects(() => run.dispatcher.runWorkerAttempt(run.context, invocation),
+    (error) => error.code === next.directive.code && error.data.failureKind === "step-admission");
+  const stopped = await run.dispatcher.execute(run.context);
+  assert.equal(stopped.dispatch.boundary, "blocked", JSON.stringify(stopped));
+  assert.equal(stopped.dispatch.dispatchCount, 0);
+  const reloaded = new FlowManager({ root, mainRoot: root, inWorktree: false, specId });
+  assert.deepEqual(reloaded.canonicalState(specId).toJSON(), before);
+  assert.deepEqual(reloaded.activityLedger(specId), activities);
+  assert.deepEqual(reloaded.artifactCatalog(specId).toJSON(), catalog);
+  assert.deepEqual(executionState(reloaded, specId).lifecycle.toJSON(), execution.lifecycle.toJSON());
+  assert.equal(executionState(reloaded, specId).receiptId, execution.receiptId);
+  const retained = reloaded.readArtifact({ specId, logicalKey: "draft", consumerNodeId: "draft-gate-repair" });
+  assert.deepEqual(retained.descriptor, draft.descriptor);
+  assert.deepEqual(retained.bytes, draft.bytes);
+}
+
+for (const boundary of ["sealed", "publication"]) {
+  it(`reprocesses the exact ${boundary} Gate repair response after reload without another provider call`, async () => {
+    const root = fixtureRepository(`draft-${boundary}-response-restart-`);
+    try {
+      const specId = `827-draft-${boundary}-response-restart`;
+      const first = startRepairBoundary(root, specId, `run-draft-${boundary}-response-restart`);
+      let calls = 0;
+      const agent = validRepairAgent(() => { calls++; });
+      const coordinator = new class extends WorkerArtifactHandoffCoordinator {
+        publishDraftWorker(input) {
+          if (boundary === "publication") super.publishDraftWorker(input);
+          throw new WorkerArtifactHandoffError("recovery-required", "FLOW_ARTIFACT_HANDOFF_RECOVERY_REQUIRED",
+            `interrupt at ${boundary} response`, { recoveryPossible: true });
+        }
+      }();
+      const interrupted = activeDispatch(root, specId, first, agent, { handoffCoordinator: coordinator });
+      await assert.rejects(() => interrupted.dispatcher.execute(interrupted.context), new RegExp(`interrupt at ${boundary}`));
+      assert.equal(calls, 1);
+      const manager = new FlowManager({ root, mainRoot: root, inWorktree: false, specId });
+      const state = manager.canonicalState(specId);
+      const execution = executionState(manager, specId);
+      assert.equal(execution.lifecycle.phase, boundary === "sealed" ? "claimed" : "publication");
+      const ledgerBefore = manager.activityLedger(specId);
+      const catalogBefore = manager.artifactCatalog(specId).toJSON();
+      const draftBefore = manager.readArtifact({ specId, logicalKey: "draft", consumerNodeId: "draft-gate-repair" });
+      const resumed = activeDispatch(root, specId, manager, {
+        async call() { assert.fail("saved response replay must not start a provider"); },
+      });
+      const next = await new GetNextActionCommand().execute(resumed.context);
+      assert.equal(next.directive.kind, "execute_step", JSON.stringify(next));
+      assert.deepEqual(manager.activityLedger(specId), ledgerBefore);
+      assert.deepEqual(manager.artifactCatalog(specId).toJSON(), catalogBefore);
+      assert.deepEqual(manager.canonicalState(specId).toJSON(), state.toJSON());
+      const result = await resumed.dispatcher.execute(resumed.context);
+      assert.equal(result.errors[0].code, "FLOW_DISPATCH_LIMIT_REACHED", JSON.stringify(result));
+      const reloaded = new FlowManager({ root, mainRoot: root, inWorktree: false, specId });
+      assert.equal(reloaded.canonicalState(specId).nextAction().nodeId, "draft-coverage-review");
+      const publications = reloaded.activityLedger(specId).filter((entry) =>
+        entry.result?.draftSettlementReceipt?.executionLifecycle?.phase === "publication");
+      assert.equal(publications.length, 1);
+      const repaired = reloaded.readArtifact({ specId, logicalKey: "draft", consumerNodeId: "draft-coverage-review" });
+      assert.equal(JSON.parse(repaired.bytes).analysis.validation,
+        "Verify the retained behavior after the restarted Gate repair.");
+      if (boundary === "publication") {
+        assert.deepEqual(repaired.descriptor, draftBefore.descriptor);
+        assert.deepEqual(repaired.bytes, draftBefore.bytes);
+      }
+      assert.equal(calls, 1);
+    } finally { removeTmpDir(root); }
+  });
+}
+
+it("holds a claimed Gate repair correction after restart without a sealed response or another worker", async () => {
   const root = fixtureRepository("draft-checkpoint-restart-");
-  let gateAgentLookup;
   try {
     const specId = "821-draft-checkpoint-restart";
     const first = startRepairBoundary(root, specId, "run-draft-checkpoint-restart");
     const selectedAttempt = first.canonicalState(specId).attempt;
-    const selectedConsumption = selectedAttempt.consumption.toJSON();
-
     const requests = [];
-    const invalidAgent = {
-      async call(_prompt, options) {
-        const requestPath = options.executionEnvironment.SENNEL_FLOW_HANDOFF_REQUEST;
-        const request = JSON.parse(fs.readFileSync(requestPath, "utf8"));
-        requests.push(request);
-        const payload = repairPayload(request);
-        payload.report.results = "invalid worker report";
-        fs.writeFileSync(requestPayloadPath(request, "draft-gate-repair.json"), workerArtifactJson(payload));
-        sealWorkerArtifactHandoff({
-          requestPath, invocationId: options.executionEnvironment.SENNEL_FLOW_DISPATCH_INVOCATION_ID,
-        });
-        return JSON.stringify({ sealed: true, requestDigest: request.requestDigest });
-      },
-    };
+    const invalidAgent = { async call(_prompt, options) {
+      const requestPath = options.executionEnvironment.SENNEL_FLOW_HANDOFF_REQUEST;
+      const request = JSON.parse(fs.readFileSync(requestPath, "utf8"));
+      requests.push(request);
+      const payload = repairPayload(request);
+      payload.report.results = "invalid worker report";
+      fs.writeFileSync(requestPayloadPath(request, "draft-gate-repair.json"), workerArtifactJson(payload));
+      sealWorkerArtifactHandoff({ requestPath,
+        invocationId: options.executionEnvironment.SENNEL_FLOW_DISPATCH_INVOCATION_ID });
+      return JSON.stringify({ sealed: true, requestDigest: request.requestDigest });
+    } };
     const initial = activeDispatch(root, specId, first, invalidAgent);
     const failed = await initial.dispatcher.execute(initial.context);
-    assert.equal(failed.ok, false);
-    assert.equal(failed.errors?.[0]?.code, "FLOW_DISPATCH_LIMIT_REACHED", JSON.stringify(failed, null, 2));
-    // A process boundary after the durable rejection must retain its correction authority.
+    assert.equal(failed.errors[0].code, "FLOW_DISPATCH_LIMIT_REACHED", JSON.stringify(failed));
+    assert.equal(requests.length, 1);
     assert.equal(executionState(first, specId).lifecycle.rejection.code, "FLOW_PLAN_GATE_REPAIR_REPORT_INVALID");
-    assert.deepEqual(requests.map((request) => request.stepId), ["draft-gate-repair"]);
-
     let restarted = new FlowManager({ root, mainRoot: root, inWorktree: false, specId });
-    const checkpoint = executionState(restarted, specId);
-    const before = restarted.canonicalState(specId);
-    const activitiesBefore = restarted.activityLedger(specId).length;
-    assert.equal(checkpoint.lifecycle.phase, "checkpoint");
-    assert.equal(checkpoint.lifecycle.executionGeneration, 1);
-    assert.equal(checkpoint.lifecycle.claim, null);
-    assert.equal(before.current.at(-1), "draft-gate-repair");
-    assert.equal(before.findNode("draft-gate-repair").status, "in_progress");
-    assert.equal(before.attempt.id, selectedAttempt.id);
-    assert.equal(before.attempt.sequence, selectedAttempt.sequence);
-    assert.deepEqual(before.attempt.consumption.toJSON(), selectedConsumption);
-
-    // Crash after claiming the correction but before materializing its request.
-    // Reload must reconstruct the exact feedback-bearing request, not a new claim.
     const claim = restarted.claimDraftStepExecution.bind(restarted);
     let retainedRequestDigest;
+    let invocation;
+    const coordinator = new class extends WorkerArtifactHandoffCoordinator {
+      createRequest(input) { invocation = input.invocation; return super.createRequest(input); }
+    }();
     restarted.claimDraftStepExecution = (input) => {
-      const result = claim(input);
+      claim(input);
       retainedRequestDigest = input.executionClaim.requestDigest;
       throw new Error("interrupt after correction claim");
     };
-    const interrupted = activeDispatch(root, specId, restarted, { async call() { assert.fail("worker must not start before interruption"); } });
+    const interrupted = activeDispatch(root, specId, restarted, {
+      async call() { assert.fail("worker must not start before interruption"); },
+    }, { handoffCoordinator: coordinator });
     await assert.rejects(() => interrupted.dispatcher.execute(interrupted.context), /interrupt after correction claim/);
     restarted = new FlowManager({ root, mainRoot: root, inWorktree: false, specId });
-    assert.equal(executionState(restarted, specId).lifecycle.phase, "claimed");
-
-    let resumedConsumption = null;
-    const validAgent = {
-      async call(_prompt, options) {
-        const requestPath = options.executionEnvironment.SENNEL_FLOW_HANDOFF_REQUEST;
-        const request = JSON.parse(fs.readFileSync(requestPath, "utf8"));
-        requests.push(request);
-        assert.equal(workerArtifactDigest(request), retainedRequestDigest);
-        assert.equal(request.workerInstructions.retryFeedback.code, "FLOW_PLAN_GATE_REPAIR_REPORT_INVALID");
-        assert.equal(request.stepId, "draft-gate-repair");
-        const activeAttempt = restarted.canonicalState(specId).attempt;
-        assert.equal(activeAttempt.id, selectedAttempt.id);
-        assert.equal(activeAttempt.sequence, selectedAttempt.sequence);
-        resumedConsumption = activeAttempt.consumption.toJSON();
-        fs.writeFileSync(requestPayloadPath(request, "draft-gate-repair.json"), workerArtifactJson(repairPayload(request)));
-        sealWorkerArtifactHandoff({
-          requestPath, invocationId: options.executionEnvironment.SENNEL_FLOW_DISPATCH_INVOCATION_ID,
-        });
-        return JSON.stringify({ sealed: true, requestDigest: request.requestDigest });
-      },
-    };
-    const gatePrompts = [];
-    gateAgentLookup = installGateProviderFake((prompt) => {
-      gatePrompts.push(prompt);
-      return JSON.stringify({ observations: [] });
-    });
-    const later = activeDispatch(root, specId, restarted, validAgent, {
-      maxDispatches: 5,
-      commandRunner: async ({ ctx, command }) => {
-        if (command.commandName === "review") return passReview(ctx);
-        if (command.commandName === "gate") return passGate(ctx);
-        assert.fail(`unexpected command: ${command.commandName}`);
-      },
-    });
-    const result = await later.dispatcher.execute(later.context);
-    assert.equal(result.errors?.[0]?.code, "FLOW_DISPATCH_LIMIT_REACHED", JSON.stringify(result, null, 2));
-    assert.deepEqual(requests.map((request) => request.stepId), ["draft-gate-repair", "draft-gate-repair"]);
-    assert.notEqual(requests[0].dispatchInvocationId, requests[1].dispatchInvocationId);
-    assert.deepEqual(resumedConsumption, selectedConsumption);
-    const terminal = restarted.activityLedger(specId).findLast((entry) => {
-      const receipt = entry.result?.draftSettlementReceipt;
-      return receipt?.binding?.attemptId === selectedAttempt.id
-        && receipt?.executionLifecycle?.phase === "terminal";
-    })?.result?.draftSettlementReceipt;
-    assert.ok(terminal);
-    assert.equal(terminal.binding.attemptSequence, selectedAttempt.sequence);
-    assert.equal(terminal.executionLifecycle.binding.executionGeneration, 1);
-    assert.equal(terminal.executionLifecycle.claim.dispatchInvocationId, requests[1].dispatchInvocationId);
-    assert.equal(restarted.canonicalState(specId).nextAction().nodeId, "spec");
-    assert.ok(restarted.activityLedger(specId).length > activitiesBefore);
-    assert.ok(gatePrompts.length > 0);
-    const repaired = restarted.readArtifact({ specId, logicalKey: "draft", consumerNodeId: "spec" });
-    const repairedDocument = JSON.parse(repaired.bytes.toString("utf8"));
-    assert.equal(repairedDocument.analysis.validation,
-      "Verify the retained behavior after the restarted Gate repair.");
-    for (const prompt of gatePrompts) {
-      const contentHeader = "## Content\n";
-      assert.ok(prompt.includes(contentHeader));
-      assert.deepEqual(JSON.parse(prompt.slice(prompt.lastIndexOf(contentHeader) + contentHeader.length)), repairedDocument);
-    }
-  } finally {
-    gateAgentLookup?.mock.restore();
-    removeTmpDir(root);
-  }
+    const execution = executionState(restarted, specId);
+    assert.equal(execution.lifecycle.phase, "claimed");
+    assert.equal(execution.lifecycle.executionGeneration, 1);
+    assert.equal(execution.lifecycle.claim.requestDigest, retainedRequestDigest);
+    assert.equal(restarted.canonicalState(specId).attempt.id, selectedAttempt.id);
+    assert.equal(restarted.canonicalState(specId).attempt.sequence, selectedAttempt.sequence);
+    assert.deepEqual(restarted.canonicalState(specId).attempt.consumption.toJSON(), selectedAttempt.consumption.toJSON());
+    await assertRetainedClaimStops({ root, specId, manager: restarted, invocation });
+  } finally { removeTmpDir(root); }
 });
 
 it("resumes a Gate repair checkpoint interrupted before the worker claim", async () => {
@@ -496,7 +505,12 @@ it("starts the next Draft refine generation after publication and dispatcher res
       },
     };
 
-    const initial = activeDispatch(root, specId, first, agent);
+    let previousInvocation;
+    const coordinator = new class extends WorkerArtifactHandoffCoordinator {
+      createRequest(input) { previousInvocation ??= input.invocation; return super.createRequest(input); }
+    }();
+    const initial = activeDispatch(root, specId, first, agent, { handoffCoordinator: coordinator });
+    const previousSelection = selectWorkerExecutionAdmission({ ctx: initial.context, stepId: "draft-refine" });
     const firstResult = await initial.dispatcher.execute(initial.context);
     assert.equal(firstResult.errors?.[0]?.code, "FLOW_DISPATCH_LIMIT_REACHED", JSON.stringify(firstResult, null, 2));
     assert.equal(calls.length, 1);
@@ -515,6 +529,17 @@ it("starts the next Draft refine generation after publication and dispatcher res
     assert.deepEqual(JSON.parse(firstPublishedDraft.bytes.toString("utf8")), published);
 
     const resumed = activeDispatch(root, specId, reloaded, agent);
+    const beforeOldSelection = reloaded.canonicalState(specId).toJSON();
+    const beforeOldActivities = reloaded.activityLedger(specId);
+    const beforeOldCatalog = reloaded.artifactCatalog(specId).toJSON();
+    await assert.rejects(() => resumed.dispatcher.executeSelectedWorker(previousSelection, {
+      ctx: resumed.context, invocation: previousInvocation,
+    }), (error) => error.code === "FLOW_WORKER_EXECUTION_SELECTION_CHANGED"
+      && error.data.failureKind === "step-admission");
+    assert.equal(calls.length, 1);
+    assert.deepEqual(reloaded.canonicalState(specId).toJSON(), beforeOldSelection);
+    assert.deepEqual(reloaded.activityLedger(specId), beforeOldActivities);
+    assert.deepEqual(reloaded.artifactCatalog(specId).toJSON(), beforeOldCatalog);
     const secondResult = await resumed.dispatcher.execute(resumed.context);
     assert.equal(secondResult.errors?.[0]?.code, "FLOW_DISPATCH_LIMIT_REACHED", JSON.stringify(secondResult, null, 2));
     assert.equal(calls.length, 2);
@@ -882,6 +907,48 @@ it("retains the producer correction limit across restarts and refuses a fourth w
   } finally { removeTmpDir(root); }
 });
 
+it("retries a malformed live Draft worker submission once and lets Review consume the repaired Draft", async () => {
+  const root = fixtureRepository("draft-malformed-live-submission-retry-");
+  try {
+    const specId = "830-draft-malformed-live-submission-retry";
+    const manager = startRepairBoundary(root, specId, "run-draft-malformed-live-submission-retry");
+    let calls = 0;
+    const agent = { async call(_prompt, options) {
+      calls++;
+      const requestPath = options.executionEnvironment.SENNEL_FLOW_HANDOFF_REQUEST;
+      const request = JSON.parse(fs.readFileSync(requestPath, "utf8"));
+      if (calls === 1) {
+        fs.writeFileSync(path.join(path.dirname(requestPath), "handoff.json"), "{");
+        const before = manager.canonicalState(specId).toJSON();
+        const activities = manager.activityLedger(specId);
+        const catalog = manager.artifactCatalog(specId).toJSON();
+        const unauthenticated = await new GetNextActionCommand().execute(run.context);
+        assert.equal(unauthenticated.directive.kind, "blocked", JSON.stringify(unauthenticated));
+        assert.deepEqual(manager.canonicalState(specId).toJSON(), before);
+        assert.deepEqual(manager.activityLedger(specId), activities);
+        assert.deepEqual(manager.artifactCatalog(specId).toJSON(), catalog);
+        return "worker returned malformed handoff";
+      }
+      fs.writeFileSync(requestPayloadPath(request, "draft-gate-repair.json"), workerArtifactJson(repairPayload(request)));
+      sealWorkerArtifactHandoff({ requestPath,
+        invocationId: options.executionEnvironment.SENNEL_FLOW_DISPATCH_INVOCATION_ID });
+      return "sealed";
+    } };
+    const run = activeDispatch(root, specId, manager, agent, { maxDispatches: 2 });
+    const result = await run.dispatcher.execute(run.context);
+    assert.equal(result.errors?.[0]?.code, "FLOW_DISPATCH_LIMIT_REACHED", JSON.stringify(result));
+    assert.equal(calls, 2);
+    assert.equal(manager.canonicalState(specId).nextAction().nodeId, "draft-coverage-review");
+    const repaired = manager.readArtifact({ specId, logicalKey: "draft", consumerNodeId: "draft-coverage-review" });
+    assert.equal(JSON.parse(repaired.bytes).analysis.validation,
+      "Verify the retained behavior after the restarted Gate repair.");
+    manager.beginNextAction(specId);
+    assert.equal(manager.canonicalState(specId).current.at(-1), "draft-coverage-review");
+    await passReview(run.context);
+    assert.equal(manager.canonicalState(specId).nextAction().nodeId, "draft-gate");
+  } finally { removeTmpDir(root); }
+});
+
 it("retains different rejected invocations in the issue log without retrying unauthorized operations", async () => {
   const root = fixtureRepository("draft-rejection-diagnostics-");
   try {
@@ -937,13 +1004,17 @@ it("retains different rejected invocations in the issue log without retrying una
   } finally { removeTmpDir(root); }
 });
 
-it("reconstructs correction feedback after a transport retry claim is interrupted", async () => {
+it("retains correction feedback and stops after a transport retry claim is interrupted", async () => {
   const root = fixtureRepository("draft-correction-transport-restart-");
   try {
     const specId = "826-draft-correction-transport";
     let manager = startRepairBoundary(root, specId, "run-draft-correction-transport");
     let calls = 0;
     let correctionDigest;
+    let invocation;
+    const coordinator = new class extends WorkerArtifactHandoffCoordinator {
+      createRequest(input) { invocation = input.invocation; return super.createRequest(input); }
+    }();
     const claim = manager.claimDraftStepExecution.bind(manager);
     manager.claimDraftStepExecution = (input) => {
       const result = claim(input);
@@ -967,17 +1038,18 @@ it("reconstructs correction feedback after a transport retry claim is interrupte
       }
       return "unsealed producer failure";
     } };
-    const interrupted = activeDispatch(root, specId, manager, agent, { maxDispatches: 5 });
+    const interrupted = activeDispatch(root, specId, manager, agent, { maxDispatches: 5, handoffCoordinator: coordinator });
     await assert.rejects(() => interrupted.dispatcher.execute(interrupted.context), /interrupt transport retry after claim/);
     assert.equal(calls, 2);
     manager = new FlowManager({ root, mainRoot: root, inWorktree: false, specId });
-    assert.equal(executionState(manager, specId).lifecycle.phase, "claimed");
-    const restarted = activeDispatch(root, specId, manager, validRepairAgent((request) => {
-      assert.equal(workerArtifactDigest(request), correctionDigest);
-      assert.equal(request.workerInstructions.retryFeedback.code, "FLOW_PLAN_GATE_REPAIR_REPORT_INVALID");
-    }));
-    const result = await restarted.dispatcher.execute(restarted.context);
-    assert.equal(result.errors[0].code, "FLOW_DISPATCH_LIMIT_REACHED", JSON.stringify(result));
-    assert.equal(manager.canonicalState(specId).nextAction().nodeId, "draft-coverage-review");
+    const execution = executionState(manager, specId);
+    assert.equal(execution.lifecycle.phase, "claimed");
+    assert.equal(execution.lifecycle.executionGeneration, 2);
+    assert.equal(execution.lifecycle.claim.requestDigest, correctionDigest);
+    const feedback = manager.activityLedger(specId)
+      .map((entry) => entry.result?.draftSettlementReceipt?.executionLifecycle?.rejection).filter(Boolean);
+    assert.equal(feedback.length, 1);
+    assert.equal(feedback[0].code, "FLOW_PLAN_GATE_REPAIR_REPORT_INVALID");
+    await assertRetainedClaimStops({ root, specId, manager, invocation });
   } finally { removeTmpDir(root); }
 });

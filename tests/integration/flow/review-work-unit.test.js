@@ -38,7 +38,7 @@ import {
   SpecReviewDelta,
 } from "../../../src/flow/lib/spec-review-artifacts.js";
 import { CanonicalTaskContext } from "../../../src/flow/lib/task-canonical-context.js";
-import { specReviewResult } from "../../../src/flow/steps/spec/spec-review.js";
+import { specReviewResult } from "../../../src/flow/steps/spec/spec-review-result.js";
 import { RequirementTestReviewSource } from "../../../src/flow/lib/requirement-test-artifacts.js";
 
 const roots = [];

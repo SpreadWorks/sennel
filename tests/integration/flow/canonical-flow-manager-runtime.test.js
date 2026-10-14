@@ -42,7 +42,7 @@ import { SpecGateEvaluationBinding, SpecReviewStepBinding } from "../../../src/f
 import { specStepRegistration, specWorkerStepRegistration } from "../../../src/flow/engine/composition/spec.js";
 import { SpecGateService } from "../../../src/flow/services/spec-gate-service.js";
 import { SpecGateIssuePublication } from "../../../src/flow/lib/gate-issue-publication.js";
-import { specReviewResult } from "../../../src/flow/steps/spec/spec-review.js";
+import { specReviewResult } from "../../../src/flow/steps/spec/spec-review-result.js";
 import { SpecReviewOperations } from "../../../src/flow/lib/spec-review-operations.js";
 import { SpecReviewWorkerService } from "../../../src/flow/services/spec-worker-review-service.js";
 import { SpecReviewWorkerFacts, SpecReviewWorkerSelection, SpecReviewWorkerCandidate } from "../../../src/flow/lib/spec-review-worker-facts.js";

@@ -14,6 +14,7 @@
  */
 
 import { Command } from "../../lib/command.js";
+import { FlowCommandExecutionLease } from "./flow-command-execution-lease.js";
 import { Envelope } from "../../lib/flow-envelope.js";
 import { flowTargetExpectation, resolveFlowContext } from "./flow-context.js";
 import {
@@ -144,7 +145,10 @@ export class FlowCommand extends Command {
         return mismatch;
       }
     }
-    return this.execute(ctx);
+    const lease = ctx.flowState && (input._envelopeType ?? "run") === "run" && !this.recoveryTargetResolution
+      ? FlowCommandExecutionLease.open(ctx) : null;
+    try { return await this.execute(ctx); }
+    finally { lease?.release(); }
   }
 
   /**

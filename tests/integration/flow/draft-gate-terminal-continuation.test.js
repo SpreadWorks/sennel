@@ -8,9 +8,11 @@ import { draftStepRegistration } from "../../../src/flow/engine/composition/draf
 import { FLOW_COMMANDS } from "../../../src/flow/registry.js";
 import { GateService } from "../../../src/flow/services/review-service.js";
 import { assertServiceBoundary } from "../../support/structure/service-boundary.js";
+import { PlanGateRepairObservation } from "../../../src/flow/lib/plan-gate-repair.js";
 import { CanonicalGateObservationCycle } from "../../../src/flow/lib/canonical-gate-observation-cycle.js";
-import { CanonicalGatePromotion } from "../../../src/flow/lib/canonical-gate-artifacts.js";
+import { produceDraftGateResult } from "../../support/infrastructure/query-draft-review-scenario.js";
 import {
+  CanonicalCommandAttemptArtifactHistory,
   attachCanonicalCommandResultArtifact,
   attachedCanonicalCommandResultArtifact,
 } from "../../../src/flow/lib/canonical-command-result.js";
@@ -55,9 +57,7 @@ it("connects a normal Draft Gate PASS to Spec before applying its lifecycle", as
       bytes: Buffer.from(`${JSON.stringify(draftWithAnsweredQuestion("Resolved behavior"), null, 2)}\n`),
     }] });
     fixture.activate("draft-gate");
-    const result = new CanonicalGatePromotion({
-      state: manager.canonicalState(specId), phase: "draft", nodeId: "draft-gate",
-    }).promote({ result: "pass", artifacts: { phase: "draft", evaluations: [] } });
+    const result = await produceDraftGateResult({ root, flowManager: manager, specId });
     await FLOW_COMMANDS.run.gate.post({
       root, mainRoot: root, executionRoot: root, specId, phase: "draft",
       flowManager: manager, flowState: manager.loadReadOnly(specId),
@@ -96,12 +96,7 @@ it("persists the Draft Gate repair loop from the normal post path", async () => 
       bytes: Buffer.from(`${JSON.stringify(draftWithAnsweredQuestion("Review this behavior"), null, 2)}\n`),
     }] });
     fixture.activate("draft-gate");
-    const result = new CanonicalGatePromotion({
-      state: manager.canonicalState(specId), phase: "draft", nodeId: "draft-gate",
-    }).promote({ result: "fail", artifacts: {
-      phase: "draft", failureKind: "ai_semantic_fail", failureCode: "GATE_REJECTED",
-      nextAction: { diagnosis: { observations: semanticObservations } },
-    } });
+    const result = await produceDraftGateResult({ root, flowManager: manager, specId }, { observations: semanticObservations });
     const settle = manager.settleDraftStepResult.bind(manager);
     let settleCalls = 0;
     manager.settleDraftStepResult = (input) => {
@@ -176,14 +171,9 @@ it("rolls back Gate evidence, issue source, Result, and repair route when settle
     const snapshot = () => paths.map((file) => (
       fs.existsSync(file) ? fs.readFileSync(file) : null
     ));
-    const before = snapshot();
-    const result = new CanonicalGatePromotion({
-      state: manager.canonicalState(specId), phase: "draft", nodeId: "draft-gate",
-    }).promote({ result: "fail", artifacts: {
-      phase: "draft", failureKind: "ai_semantic_fail", failureCode: "GATE_REJECTED",
-      nextAction: { diagnosis: { observations: semanticObservations } },
-    } });
+    const result = await produceDraftGateResult({ root, flowManager: manager, specId }, { observations: semanticObservations });
 
+    const before = snapshot();
     interrupt = true;
     await assert.rejects(() => FLOW_COMMANDS.run.gate.post({
       root, mainRoot: root, executionRoot: root, specId, phase: "draft",
@@ -221,9 +211,7 @@ it("uses the evaluated Gate result once when the Draft Gate Step settles it", as
       bytes: Buffer.from(`${JSON.stringify(draftWithAnsweredQuestion("Resolved behavior"), null, 2)}\n`),
     }] });
     fixture.activate("draft-gate");
-    const result = new CanonicalGatePromotion({
-      state: manager.canonicalState(specId), phase: "draft", nodeId: "draft-gate",
-    }).promote({ result: "pass", artifacts: { phase: "draft", evaluations: [] } });
+    const result = await produceDraftGateResult({ root, flowManager: manager, specId });
     const prepared = await draftStepRegistration("draft-gate").create({
       ctx: { flowManager: manager, specId }, result,
     });
@@ -267,9 +255,7 @@ it("rejects stale Draft Gate admission without persisting an Error Result", asyn
       bytes: Buffer.from(`${JSON.stringify(draftWithAnsweredQuestion("Bound behavior"), null, 2)}\n`),
     }] });
     fixture.activate("draft-gate");
-    const evaluated = new CanonicalGatePromotion({
-      state: manager.canonicalState(specId), phase: "draft", nodeId: "draft-gate",
-    }).promote({ result: "pass", artifacts: { phase: "draft", evaluations: [] } });
+    const evaluated = await produceDraftGateResult({ root, flowManager: manager, specId });
     const artifact = attachedCanonicalCommandResultArtifact(evaluated);
     const stalePayload = structuredClone(artifact.payload);
     stalePayload.artifacts.gateTransitionAttemptId = "stale-attempt";
@@ -313,12 +299,7 @@ function draftWithAnsweredQuestion(goal) {
 }
 
 async function dispatchDraftGateSettlement({ root, manager, specId }) {
-  const result = new CanonicalGatePromotion({
-    state: manager.canonicalState(specId), phase: "draft", nodeId: "draft-gate",
-  }).promote({ result: "fail", artifacts: {
-    phase: "draft", failureKind: "ai_semantic_fail", failureCode: "GATE_REJECTED",
-    nextAction: { diagnosis: { observations: semanticObservations } },
-  } });
+  const result = await produceDraftGateResult({ root, flowManager: manager, specId }, { observations: semanticObservations });
   await FLOW_COMMANDS.run.gate.post({
     root, mainRoot: root, executionRoot: root, specId,
     flowManager: manager, flowState: manager.loadReadOnly(specId), phase: "draft",
@@ -329,12 +310,7 @@ async function dispatchDraftGateSettlement({ root, manager, specId }) {
 }
 
 async function selectDraftGateRepair({ root, manager, specId, observations }) {
-  const result = new CanonicalGatePromotion({
-    state: manager.canonicalState(specId), phase: "draft", nodeId: "draft-gate",
-  }).promote({ result: "fail", artifacts: {
-    phase: "draft", failureKind: "ai_semantic_fail", failureCode: "GATE_REJECTED",
-    nextAction: { diagnosis: { observations } },
-  } });
+  const result = await produceDraftGateResult({ root, flowManager: manager, specId }, { observations });
   await FLOW_COMMANDS.run.gate.post({
     root, mainRoot: root, executionRoot: root, specId,
     flowManager: manager, flowState: manager.loadReadOnly(specId), phase: "draft",
@@ -454,7 +430,12 @@ async function exerciseTerminalContinuation(kind) {
       findingsInput.document.entries.map(({ sourceObservation, ...entry }) => entry),
       persistedFindings.entries,
     );
-    assert.deepEqual(findingsInput.document.entries[0].sourceObservation, semanticObservations[0]);
+    // Production Gate findings retain their evaluation as source evidence.
+    // The nested observations must preserve the original semantic judgment.
+    assert.deepEqual(findingsInput.document.entries[0].sourceObservation, {
+      guardrail_id: "R-1", result: "fail", reason: semanticObservations[0].observed,
+      category: "requirements", title: "Draft scenario requirement", observations: semanticObservations,
+    });
     assert.equal(draftInput.document.questionLedger.questions[0].state, "AnsweredQuestion");
     assert.equal(draftInput.document.questionLedger.questions[0].answer, "Keep the selected public behavior stable.");
     assert.equal(settledManager.canonicalState(specId).nextAction().nodeId, "spec");
@@ -493,7 +474,6 @@ it("settles the fifth draft Gate failure after four completed repair and coverag
     for (let cycle = 1; cycle <= 4; cycle += 1) {
       const observations = [{
         ...semanticObservations[0],
-        failureMode: `semantic-finding-${cycle}`,
         observed: `Unresolved semantic finding ${cycle}.`,
       }];
       const scenario = new DraftGateRepairScenario({ flowManager: manager, root, specId });
@@ -510,15 +490,9 @@ it("settles the fifth draft Gate failure after four completed repair and coverag
 
     const finalObservation = [{
       ...semanticObservations[0],
-      failureMode: "semantic-finding-5",
       observed: "A fifth distinct semantic finding remains.",
     }];
-    const finalResult = new CanonicalGatePromotion({
-      state: manager.canonicalState(specId), phase: "draft", nodeId: "draft-gate",
-    }).promote({ result: "fail", artifacts: {
-      phase: "draft", failureKind: "ai_semantic_fail", failureCode: "GATE_REJECTED",
-      nextAction: { diagnosis: { observations: finalObservation } },
-    } });
+    const finalResult = await produceDraftGateResult({ root, flowManager: manager, specId }, { observations: finalObservation });
     await FLOW_COMMANDS.run.gate.post({
       root, mainRoot: root, executionRoot: root, specId,
       flowManager: manager, flowState: manager.loadReadOnly(specId), phase: "draft",
@@ -529,6 +503,16 @@ it("settles the fifth draft Gate failure after four completed repair and coverag
     assert.equal(settled.activityLedger(specId).filter((entry) => (
       entry.transition.operation === "defer_failed_gate"
     )).length, 0);
+    const history = CanonicalCommandAttemptArtifactHistory.fromBytes({ logicalKey: "draft.gate",
+      bytes: settled.readArtifact({ specId, logicalKey: "draft.gate", consumerNodeId: "spec" }).bytes });
+    assert.deepEqual(history.attempts.map((entry) => entry.attempt), [1, 2, 3, 4, 5]);
+    const fingerprints = history.attempts.map((entry) => new PlanGateRepairObservation({
+      ...entry.payload.artifacts.nextAction.diagnosis.observations[0],
+      phase: "draft", scope: "flow", taskId: null,
+    }).canonical.fingerprint.toString());
+    assert.equal(new Set(fingerprints).size, 5);
+    assert.equal(settled.activityLedger(specId).filter((entry) =>
+      entry.nodeId === "draft-gate" && entry.transition.operation === "plan_gate_repair").length, 4);
     settled.beginNextAction(specId);
     const findings = settled.readArtifact({
       specId, logicalKey: "flow.findings", consumerNodeId: "system",
@@ -546,7 +530,8 @@ it("settles the fifth draft Gate failure after four completed repair and coverag
     });
     const findingsInput = specRequest.inputs.find((entry) => entry.name === "flow-findings.json");
     assert.equal(findingsInput.document.entries.some((entry) => (
-      entry.sourceObservation.observed === "A fifth distinct semantic finding remains."
+      entry.sourceObservation.observations.some((observation) =>
+        observation.observed === "A fifth distinct semantic finding remains.")
     )), true);
     const draftInput = specRequest.inputs.find((entry) => entry.name === "draft.json");
     assert.equal(draftInput.document.questionLedger.questions[0].state, "AnsweredQuestion");

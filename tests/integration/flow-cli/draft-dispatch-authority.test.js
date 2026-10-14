@@ -6,16 +6,15 @@ import { describe, it } from "node:test";
 import { DraftService } from "../../../src/flow/services/draft-service.js";
 import { StepPersistenceFailure, STEP_RESULT_ERROR_PERSISTENCE_FAILURE_CODE } from "../../../src/flow/lib/definition-lifecycle-failure.js";
 import { AgentAuthenticationFailure } from "../../../src/lib/agent-failure.js";
+import { FlowExecutionContract } from "../../../src/flow/lib/flow-execution-contract.js";
 import { FlowManager } from "../../../src/lib/flow-manager.js";
 import { FlowHandoffAuthorityLease } from "../../../src/lib/flow-handoff-authority-lease.js";
 import { FlowTargetBinding } from "../../../src/lib/flow-target-guard.js";
 import RunDispatchCommand from "../../../src/flow/lib/run-dispatch.js";
-import RunReviewCommand from "../../../src/flow/lib/run-review.js";
 import RunGateCommand from "../../../src/flow/lib/run-gate.js";
-import { CanonicalGatePromotion } from "../../../src/flow/lib/canonical-gate-artifacts.js";
+import { produceDraftGateResult, produceDraftReviewResult } from "../../support/infrastructure/query-draft-review-scenario.js";
 import { CanonicalDraftReviewSource } from "../../../src/flow/lib/canonical-review-artifacts.js";
 import { FLOW_COMMANDS } from "../../../src/flow/registry.js";
-import { ReviewWorkUnit } from "../../../src/flow/lib/review-work-unit.js";
 import {
   WorkerArtifactHandoffCoordinator,
   WorkerArtifactHandoffError,
@@ -114,31 +113,8 @@ function createAgent({ flowManager, specId, onRequest = () => {}, noProgress = f
 }
 
 async function runReviewCommand(ctx, phase, onDraftSource = () => {}) {
-  const command = new RunReviewCommand({
-    resolveTreeSha: () => "a".repeat(40),
-    resolveTargetStateDigest: () => "b".repeat(64),
-    runCommand(_command, _args, options) {
-      const work = ReviewWorkUnit.fromEnvironment(options.env);
-      const source = JSON.parse(options.env.SENNEL_REVIEW_DRAFT_SOURCE);
-      onDraftSource({ source, work });
-      fs.writeFileSync(path.join(work.root, work.manifestDocument.output.basename), `${JSON.stringify({
-        version: 2,
-        phase,
-        sourceDraft: "draft.json",
-        sourceDraftRevision: source.revision,
-        generatedAt: "2026-09-21T00:00:00.000Z",
-        verdict: "PASS",
-        summary: "The canonical Draft has no review findings.",
-        blockingFindings: [],
-        advisoryFindings: [],
-        repairTargets: [],
-      }, null, 2)}\n`);
-      work.seal();
-      return { ok: true, status: 0, stdout: "", stderr: "", signal: null, killed: false };
-    },
-  });
   const commandCtx = { ...ctx, phase: "draft", config: {}, flowState: ctx.flowManager.loadReadOnly(ctx.specId) };
-  const result = await command.execute(commandCtx);
+  const result = await produceDraftReviewResult(commandCtx, phase, { beforeOutput: onDraftSource });
   await FLOW_COMMANDS.run.review.post(commandCtx, result);
   return { ok: true, data: result, errors: [] };
 }
@@ -152,33 +128,12 @@ async function runCanonicalGateCommand(ctx) {
 
 async function runGateCommand(ctx, result) {
   const commandCtx = { ...ctx, phase: "draft", config: {}, flowState: ctx.flowManager.loadReadOnly(ctx.specId) };
-  const promotion = new CanonicalGatePromotion({
-    state: ctx.flowManager.canonicalState(ctx.specId),
-    phase: "draft",
-    nodeId: "draft-gate",
-  }).promote(result === "pass"
-    ? { result, artifacts: { phase: "draft", evaluations: [] } }
-    : {
-        result,
-        artifacts: {
-          phase: "draft",
-          failureKind: "ai_semantic_fail",
-          failureCode: "DRAFT_GATE_REJECTED",
-          nextAction: {
-            diagnosis: {
-              observations: [{
-                kind: "violation",
-                failureMode: "guardrail-violation",
-                requirementRef: "DRAFT",
-                where: { file: "draft.json", locator: "analysis.validation" },
-                observed: "The Draft must cover the handoff authority transition.",
-                severity: "blocking",
-                refs: ["DRAFT"],
-              }],
-            },
-          },
-        },
-      });
+  const promotion = await produceDraftGateResult(commandCtx, { observations: result === "pass" ? [] : [{
+    kind: "violation", failureMode: "guardrail-violation", requirementRef: "DRAFT",
+    where: { file: "draft.json", locator: "analysis.validation" },
+    observed: "The Draft must cover the handoff authority transition.",
+    severity: "blocking", refs: ["DRAFT"],
+  }] });
   await FLOW_COMMANDS.run.gate.post(commandCtx, promotion);
   return { ok: true, data: promotion, errors: [] };
 }
@@ -466,10 +421,20 @@ describe("Draft dispatcher handoff authority lifecycle", { concurrency: false },
     try {
       const { flowManager, specId } = startDraftFlow(root, "provider-refusal");
       const calls = [];
+      let claimedContract;
+      let claimedDescriptor;
+      let claimedBytes;
       const agent = {
         async call(_prompt, options) {
           const request = JSON.parse(fs.readFileSync(options.executionEnvironment.SENNEL_FLOW_HANDOFF_REQUEST));
           calls.push(request);
+          claimedContract = FlowExecutionContract.fromJSON(request.executionContract);
+          assert.equal(claimedContract.id, request.executionContractId);
+          const artifact = flowManager.readArtifact({ specId, logicalKey: "execution.contract",
+            parameters: claimedContract.parameters, consumerNodeId: "system" });
+          claimedBytes = artifact.bytes;
+          claimedDescriptor = flowManager.artifactCatalog(specId).toJSON().artifacts
+            .find((entry) => entry.relativePath === artifact.descriptor.relativePath);
           throw new AgentAuthenticationFailure({ message: "Draft provider credentials are unavailable." });
         },
       };
@@ -487,6 +452,27 @@ describe("Draft dispatcher handoff authority lifecycle", { concurrency: false },
           expectBinding: FlowTargetBinding.capture({ flowState: state, mainRoot: root, authorityRoot: root }).serialize(),
           _envelopeType: "run", _envelopeKey: "dispatch",
         });
+        const storedContract = manager.readStoredExecutionContract({
+          binding: { runId: initial.runId, specId, stepId: "draft", attempt: initial.attempt }, generation: 0,
+        });
+        assert.deepEqual(storedContract.toJSON(), claimedContract.toJSON());
+        assert.equal(storedContract.attemptId, initial.attempt.id);
+        assert.equal(storedContract.attemptSequence, initial.attempt.sequence);
+        assert.equal(storedContract.generation, 0);
+        assert.equal(storedContract.stepId, "draft");
+        const contractArtifact = manager.readArtifact({ specId, logicalKey: "execution.contract",
+          parameters: claimedContract.parameters, consumerNodeId: "system" });
+        assert.deepEqual(contractArtifact.bytes, claimedBytes);
+        const catalog = manager.artifactCatalog(specId).toJSON().artifacts;
+        assert.deepEqual(catalog.find((entry) => entry.relativePath === claimedDescriptor.relativePath), claimedDescriptor);
+        const protectedArtifacts = (entries) => entries.filter((entry) =>
+          !["issue.log", "flow.activities", "flow.state"].includes(entry.logicalKey))
+          .sort((left, right) => left.relativePath.localeCompare(right.relativePath));
+        assert.deepEqual(protectedArtifacts(catalog), protectedArtifacts([...catalogBefore, claimedDescriptor]));
+        const producer = manager.activityLedger(specId).find((entry) => entry.id === claimedDescriptor.activityId);
+        assert.equal(producer.transition.operation, "publish_artifacts");
+        assert.equal(producer.nodeId, "draft");
+        assert.equal(producer.attemptId, initial.attempt.id);
         if (manager !== flowManager) {
           assert.equal(result.dispatch.boundary, "blocked");
           assert.equal(result.dispatch.dispatchCount, 0);
@@ -508,12 +494,11 @@ describe("Draft dispatcher handoff authority lifecycle", { concurrency: false },
         assert.equal(after.attempt.failure.retryable, false);
         assert.equal(manager.canonicalState(specId).findNode("draft").result?.stepResult ?? null, null);
         assert.equal(manager.readArtifact({ specId, logicalKey: "draft", consumerNodeId: "draft-gate", optional: true }), null);
-        assert.deepEqual(manager.artifactCatalog(specId).toJSON().artifacts.filter((entry) => !["issue.log", "flow.activities", "flow.state"].includes(entry.logicalKey)),
-          catalogBefore.filter((entry) => !["issue.log", "flow.activities", "flow.state"].includes(entry.logicalKey)));
         const recorded = manager.activityLedger(specId).slice(activityCount);
-        assert.deepEqual(recorded.map((entry) => entry.transition.operation), ["record_metric", "fail_attempt", "publish_artifacts"]);
-        assert.equal(recorded[0].metric.callCount, 1);
-        assert.equal(recorded[1].attemptId, before.attempt.id);
+        assert.deepEqual(recorded.map((entry) => entry.transition.operation), ["publish_artifacts", "record_metric", "fail_attempt", "publish_artifacts"]);
+        assert.equal(recorded[0].id, producer.id);
+        assert.equal(recorded[1].metric.callCount, 1);
+        assert.equal(recorded[2].attemptId, before.attempt.id);
       }
       assert.deepEqual(calls.map((request) => request.stepId), ["draft"]);
     } finally {
