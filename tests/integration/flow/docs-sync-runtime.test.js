@@ -6,6 +6,8 @@ import path from "node:path";
 import RunSyncCommand from "../../../src/flow/lib/run-sync.js";
 import RunFinalizeSyncCommand from "../../../src/flow/lib/run-finalize-sync.js";
 import { runCmd } from "../../../src/lib/process.js";
+import { ProcessExecutionRuntime, ProcessExecutionControlFailure, ProcessExecutionStopReceipt } from "../../../src/lib/process-execution-runtime.js";
+import { FlowManager } from "../../../src/lib/flow-manager.js";
 
 const chapter = ["# Runtime documentation", "", "## Description", "Generated child documentation.", "", "## Details",
   ...Array.from({ length: 15 }, (_, index) => `Verified detail ${index}.`), ""].join("\n");
@@ -120,4 +122,77 @@ test("finalize sync builds at resolved main root and preserves real child failur
     return true;
   });
   assert.deepEqual(calls, ["diff", "diff", "status"]);
+});
+
+for (const finalizing of [false, true]) {
+  test(`${finalizing ? "finalize sync" : "sync"} awaits real managed documentation children before returning`, async (t) => {
+    const root = fixture(t);
+    const runtime = await ProcessExecutionRuntime.acquire({ mainRoot: root, executionRoot: root,
+      runId: "docs-managed-run", specId: "docs-managed-spec" });
+    t.after(async () => { if (!runtime.closed) await runtime.close(); });
+    const command = finalizing
+      ? new RunFinalizeSyncCommand({ hasCommit: () => false,
+        git: () => ({ ok: true, status: 0, stdout: "docs/overview.md\n", stderr: "" }) })
+      : new RunSyncCommand({ git() { assert.fail("dry run must not call Git"); } });
+    const ctx = { root, dryRun: true, flowState: {},
+      flowManager: { resolveWorktreePaths: () => ({ mainRepoPath: root }) } };
+    const result = await runtime.enter(() => finalizing ? command.executeEffect(ctx) : command.execute(ctx));
+    assert.equal(finalizing ? result.status : result.result, finalizing ? "done" : "dry-run");
+    assertArtifacts(root);
+    const execution = runtime.inspect().executions.find((entry) => entry.executionId === runtime.executionId);
+    assert.equal(execution.calls.length, finalizing ? 1 : 2);
+    for (const call of execution.calls) {
+      const receipt = new ProcessExecutionStopReceipt(call.receipt);
+      assert.equal(receipt.stopEvidence.confirmed, true);
+      assert.equal(receipt.checkoutIdentity.executionRoot, root);
+      assert.equal(call.outcome.code, 0);
+    }
+    await runtime.close();
+    assert.equal(ProcessExecutionRuntime.inspect({ mainRoot: root }).slot, null);
+  });
+
+  test(`${finalizing ? "finalize sync" : "sync"} preserves async process control refusal without Git effects`, async (t) => {
+    const root = fixture(t);
+    const failure = new ProcessExecutionControlFailure("stop-unconfirmed", "documentation child remains uncontrolled");
+    const command = new (finalizing ? RunFinalizeSyncCommand : RunSyncCommand)({
+      runCommand: async () => { throw failure; }, hasCommit: () => false,
+      git() { assert.fail("control refusal must not continue to Git"); },
+    });
+    const ctx = { root, flowState: {}, flowManager: { resolveWorktreePaths: () => ({ mainRepoPath: root }) } };
+    await assert.rejects(finalizing ? command.executeEffect(ctx) : command.execute(ctx), (error) => error === failure);
+    assert.equal(fs.existsSync(path.join(root, "docs")), false);
+  });
+}
+
+test("direct sync creates its own runtime and preserves the preparing Flow while closing both real children", async (t) => {
+  const root = fixture(t);
+  const flowManager = new FlowManager({ root, mainRoot: root, inWorktree: false });
+  const runId = "direct-docs-sync";
+  flowManager.createPreparingFlow(runId, { request: "Build project documentation." });
+  const before = flowManager.loadPreparingFlow(runId);
+  assert.equal(ProcessExecutionRuntime.current(), null);
+  const owner = await ProcessExecutionRuntime.acquire({ mainRoot: root, runId });
+  try {
+    await assert.rejects(new RunSyncCommand().execute({ root, mainRoot: root, executionRoot: root,
+      flowManager, preparingFlowState: before, dryRun: true }), { code: "PROCESS_EXECUTION_BUSY" });
+    assert.equal(fs.existsSync(path.join(root, "docs")), false);
+    assert.deepEqual(flowManager.loadPreparingFlow(runId), before);
+  } finally { await owner.close(); }
+  const result = await new RunSyncCommand().execute({ root, mainRoot: root, executionRoot: root,
+    flowManager, preparingFlowState: before, dryRun: true });
+  assert.equal(result.result, "dry-run");
+  assertArtifacts(root);
+  assert.equal(ProcessExecutionRuntime.current(), null);
+  assert.deepEqual(flowManager.loadPreparingFlow(runId), before);
+  const registry = ProcessExecutionRuntime.inspect({ mainRoot: root });
+  assert.equal(registry.slot, null);
+  assert.equal(registry.executions.length, 2);
+  const execution = registry.executions.at(-1);
+  assert.equal(execution.status, "closed");
+  assert.equal(execution.calls.length, 2);
+  for (const call of execution.calls) {
+    const receipt = new ProcessExecutionStopReceipt(call.receipt);
+    assert.equal(receipt.stopEvidence.confirmed, true);
+    assert.equal(receipt.binding.toJSON().runId, runId);
+  }
 });

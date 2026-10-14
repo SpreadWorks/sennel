@@ -52,6 +52,7 @@ export class FlowRepositoryRuntimeArtifactRegistry {
       `${PRODUCT.managedPath("agent-cache")}/`,
       `${PRODUCT.managedPath("agent-work")}/`,
       `${PRODUCT.managedPath("review-execution-locks")}/`,
+      `${PRODUCT.managedPath("process-runtime")}/`,
       `${PRODUCT.managedPath("output")}/`,
       `${PRODUCT.managedPath("recovery")}/`,
       `${PRODUCT.managedPath("worktree")}/`,
@@ -77,5 +78,11 @@ export class FlowRepositoryRuntimeArtifactRegistry {
       ]),
       ...this.#prefixes.map((prefix) => `:(exclude,top,glob)${prefix}**`),
     ]);
+  }
+
+  /** Directory ownership shared by source and Task Review snapshots. */
+  directoryRoots() {
+    return Object.freeze(this.#prefixes.filter((prefix) => prefix.endsWith("/"))
+      .map((prefix) => prefix.slice(0, -1)));
   }
 }

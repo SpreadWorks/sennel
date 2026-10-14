@@ -381,12 +381,12 @@ export class FlowManager {
     });
   }
 
-  resolveWorktreeBinding(expectation = null) {
+  resolveWorktreeBinding(expectation = null, options = {}) {
     if (!this._worktreeBinding) {
       throw new Error("worktree flow binding is available only inside a worktree");
     }
     if (expectation instanceof FlowTargetExpectation && !expectation.empty) {
-      return this.#resolveGuardedWorktreeBinding(expectation);
+      return this.#resolveGuardedWorktreeBinding(expectation, options);
     }
     return this._worktreeBinding.load();
   }
@@ -1647,8 +1647,8 @@ export class FlowManager {
     });
   }
 
-  #resolveGuardedWorktreeBinding(expectation) {
-    const operationLock = this.#repositoryOperationLock();
+  #resolveGuardedWorktreeBinding(expectation, options) {
+    const operationLock = this.#repositoryOperationLock(options);
     const operationOwnerToken = operationLock.acquire();
     let result;
     let primary = null;

@@ -1,3 +1,4 @@
+import { captureProcessExecutionCheckoutIdentity } from "../../lib/process-execution-runtime.js";
 import { CURRENT_FLOW_SCHEMA_REVISION } from "../../lib/flow-schema-revision.js";
 import { repairJson } from "../../lib/json-parse.js";
 import { createHash } from "node:crypto";
@@ -29,6 +30,7 @@ import {
 import { Envelope } from "../../lib/flow-envelope.js";
 import { stableArtifactViewJson } from "./artifact-view-fingerprint.js";
 import { FlowCommand } from "./base-command.js";
+import { withFlowProcessRuntime } from "./process-runtime-admission.js";
 import {
   AcceptanceEvidenceBindings,
   artifactFromAcceptanceJudgments,
@@ -533,14 +535,14 @@ function acquireAcceptanceExecutionConfiguration(context, agent, resolvedAgent, 
   return new AcceptanceExecutionConfiguration({ specification, directPrompt, evidencePlan });
 }
 
-function acquireAcceptanceExecutionSession({ flowManager, executionContract, specification }) {
-  const episode = flowManager.readPromptExecutionEpisode({ executionContract });
+function acquireAcceptanceExecutionSession({ flowManager, executionContract, specification, checkoutIdentity }) {
+  const episode = flowManager.readPromptExecutionEpisode({ executionContract, checkoutIdentity });
   const scopes = ["direct", "map", "scoped-final", "deferred-repair"].map((stage) => new PromptExecutionScope({ stage }));
   for (let round = 0; round < specification.executionLimit.maxReductionDepth; round += 1) scopes.push(new PromptExecutionScope({ stage: "reduction", round }));
   const journals = scopes.map((scope) => {
     const snapshot = episode.scopes.find((entry) => entry.scope.stage === scope.stage && entry.scope.round === scope.round) ?? null;
     return new PromptExecutionJournal({ scope, snapshot,
-      writer: new CanonicalPromptExecutionJournalWriter({ flowManager, executionContract, scope, snapshot }) });
+      writer: new CanonicalPromptExecutionJournalWriter({ flowManager, executionContract, scope, snapshot, checkoutIdentity }) });
   });
   return new AcceptanceExecutionSession({ specification, episode, journals });
 }
@@ -1031,7 +1033,8 @@ async function executeCanonicalAcceptanceReview(ctx) {
           executionLifecycle: DraftStepExecutionLifecycle.checkpoint(executionBinding).claimed(claim) });
         await executeAcceptanceReviewInput({ ctx, flowManager: ctx.flowManager, stepId: "acceptance-review", preparation: claimed });
       }
-      session = acquireAcceptanceExecutionSession({ flowManager: ctx.flowManager, executionContract, specification: configuration.specification });
+      session = acquireAcceptanceExecutionSession({ flowManager: ctx.flowManager, executionContract, specification: configuration.specification,
+        checkoutIdentity: captureProcessExecutionCheckoutIdentity({ mainRoot: ctx.mainRoot || ctx.root, executionRoot: ctx.executionRoot || ctx.root }) });
     } else {
       executionBinding = null;
     }
@@ -1091,7 +1094,7 @@ export default class RunAcceptanceReviewCommand extends FlowCommand {
   }
 
   async execute(ctx) {
-    return this.executeSelectedAcceptance(null, { ctx });
+    return withFlowProcessRuntime(ctx, () => this.executeSelectedAcceptance(null, { ctx }), { commandId: "acceptance-review" });
   }
 
   async executeSelectedAcceptance(_selection, { ctx }) {

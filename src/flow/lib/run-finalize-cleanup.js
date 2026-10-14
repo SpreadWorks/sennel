@@ -1,3 +1,5 @@
+import { withFlowProcessRuntime } from "./process-runtime-admission.js";
+import { captureFinalizationProcessAuthority } from "./finalization-process-authority.js";
 /**
  * src/flow/lib/run-finalize-cleanup.js
  *
@@ -1751,9 +1753,10 @@ export class RunFinalizeCleanupCommand extends FlowCommand {
   }
 
   async execute(ctx) {
-    return executeFinalizationCommand({
+    return withFlowProcessRuntime(ctx, () => executeFinalizationCommand({
       ctx, command: this, stepId: "finalize-cleanup", executeInput: (input) => executeFinalizeCleanupInput(input),
-    });
+    }), { commandId: "finalize-cleanup",
+      physicalAuthority: (context) => captureFinalizationProcessAuthority(context, "finalize-cleanup") });
   }
 
   projectCompletedReceipt(ctx, receipt) {

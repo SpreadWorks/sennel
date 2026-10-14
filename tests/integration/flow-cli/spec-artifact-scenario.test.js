@@ -1,12 +1,10 @@
 import assert from "node:assert/strict";
 import { SpecGateRepairBundle } from "../../../src/flow/lib/spec-gate-repair-bundle.js";
 import { SpecGateRepairProgressReader } from "../../../src/flow/lib/spec-gate-repair-progress-reader.js";
-import childProcess from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";
-import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
-import { describe, it, mock } from "node:test";
+import { describe, it } from "node:test";
 
 import { FlowManager } from "../../../src/lib/flow-manager.js";
 import { FlowTargetBinding } from "../../../src/lib/flow-target-guard.js";
@@ -32,6 +30,7 @@ import {
   CanonicalFlowFixture, canonicalDraftDocument,
 } from "../../support/infrastructure/flow-setup.js";
 import { removeTmpDir } from "../../support/builders/tmp-dir.js";
+import { installReviewProcessFake } from "../../support/infrastructure/review-process-fake.js";
 import { validWorkerHandoffTaskSpec, workerArtifactJson } from "../../support/infrastructure/worker-artifact.js";
 import {
   dispatchContainer,
@@ -426,11 +425,7 @@ describe("Spec artifact lifecycle and downstream consumption", { concurrency: fa
           }
           throw new Error(`Unexpected Spec worker: ${request.stepId}`);
       }
-      const originalSpawnSync = childProcess.spawnSync;
-      reviewProcess = mock.method(childProcess, "spawnSync", (command, args, options) => {
-        if (command !== "node" || !String(args[0]).endsWith("/flow/commands/review.js")) {
-          return originalSpawnSync(command, args, options);
-        }
+      reviewProcess = installReviewProcessFake((_command, _args, options) => {
         const nodeId = flowManager.canonicalState(specId).current.at(-1);
         const work = ReviewWorkUnit.fromEnvironment(options.env);
         if (reopenPlanning && ["draft-questions-review", "draft-coverage-review"].includes(nodeId)) {
@@ -475,9 +470,8 @@ describe("Spec artifact lifecycle and downstream consumption", { concurrency: fa
             `${JSON.stringify(delta.toJSON(), null, 2)}\n`);
         }
         work.seal();
-        return { status: 0, signal: null, stdout: "", stderr: "" };
+        return { ok: true, status: 0, signal: null, killed: false, stdout: "", stderr: "" };
       });
-      syncBuiltinESMExports();
       async function dispatch(maxDispatches = 64) {
         const dispatcher = new RunDispatchCommand({ agent, maxDispatches });
         dispatcher.container = dispatchContainer({ root, flowManager, agent });
@@ -908,7 +902,6 @@ describe("Spec artifact lifecycle and downstream consumption", { concurrency: fa
       assert.equal(approvedSnapshot.bytes.length, plan.specRevision.byteLength);
     } finally {
       reviewProcess?.mock.restore();
-      syncBuiltinESMExports();
       gateAgentLookup?.mock.restore();
       removeTmpDir(root);
     }

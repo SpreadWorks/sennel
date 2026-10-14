@@ -1,3 +1,5 @@
+import { isDeepStrictEqual } from "node:util";
+import { ProcessExecutionStopReceipt, ProcessExecutionControlFailure } from "./process-execution-values.js";
 import { AgentTransportFailureObservation } from "./agent-transport-failure-observation.js";
 
 function text(value, field) {
@@ -39,7 +41,7 @@ export function preservePromptExecutionControlFailure(error) {
 }
 
 export function isPromptExecutionControlFailure(error) {
-  return error instanceof PromptExecutionJournalError || (error !== null && typeof error === "object" && persistenceFailures.has(error));
+  return error instanceof PromptExecutionJournalError || error instanceof ProcessExecutionControlFailure || (error !== null && typeof error === "object" && persistenceFailures.has(error));
 }
 
 /** Optional durable observer used by the existing cache-aware admission. */
@@ -49,6 +51,7 @@ export class PromptProviderAttemptJournal {
   }
 
   async beforeProviderAttempt() { throw new Error(`${this.constructor.name}.beforeProviderAttempt() is not implemented`); }
+  async observeProcessStop() { throw new Error(`${this.constructor.name}.observeProcessStop() is not implemented`); }
   async afterProviderFailure() { throw new Error(`${this.constructor.name}.afterProviderFailure() is not implemented`); }
   recordCacheHit() { throw new Error(`${this.constructor.name}.recordCacheHit() is not implemented`); }
 }
@@ -74,6 +77,62 @@ export class PromptExecutionScope {
   static fromJSON(value) {
     fields(value, ["stage", "round"], "Prompt execution scope");
     return new PromptExecutionScope(value);
+  }
+}
+
+/** Exact physical Prompt transport identity, independent from retry policy. */
+export class PromptProviderProcessIdentity {
+  constructor({ scope, batchDigest, responseCallIndex, transportOrdinal, attempt, maxAttempts,
+    requestDigest, schemaDigest, providerKey, profileKey, logicalInvocationId, providerAttemptId }) {
+    this.scope = scope instanceof PromptExecutionScope ? scope : PromptExecutionScope.fromJSON(scope);
+    for (const [key, value] of Object.entries({ batchDigest, requestDigest, schemaDigest, providerKey,
+      profileKey, logicalInvocationId, providerAttemptId })) this[key] = text(value, key);
+    for (const [key, value] of Object.entries({ responseCallIndex, transportOrdinal, attempt, maxAttempts })) this[key] = integer(value, key);
+    if (transportOrdinal < 1 || attempt < 1 || maxAttempts < attempt) throw new TypeError("Prompt physical attempt ordinal is invalid");
+    Object.freeze(this);
+  }
+  toJSON() { return { scope: this.scope.toJSON(), batchDigest: this.batchDigest, responseCallIndex: this.responseCallIndex,
+    transportOrdinal: this.transportOrdinal, attempt: this.attempt, maxAttempts: this.maxAttempts,
+    requestDigest: this.requestDigest, schemaDigest: this.schemaDigest, providerKey: this.providerKey,
+    profileKey: this.profileKey, logicalInvocationId: this.logicalInvocationId, providerAttemptId: this.providerAttemptId }; }
+  static fromJSON(value) {
+    const restored = new this(value);
+    if (!isDeepStrictEqual(restored.toJSON(), value)) throw new TypeError("Prompt physical identity has unknown or inconsistent fields");
+    return restored;
+  }
+  assertClaim(claim) {
+    if (!claim || !isDeepStrictEqual(claim.processIdentity, this.toJSON())
+      || ["responseCallIndex", "transportOrdinal", "attempt", "maxAttempts", "requestDigest", "schemaDigest", "providerKey", "profileKey"]
+        .some((key) => claim[key] !== this[key])) throw new PromptExecutionJournalError("PROMPT_EXECUTION_IDENTITY_MISMATCH", "Stop observation does not match the saved Prompt claim");
+  }
+}
+
+/** Durable OS observation; never a response, failure, or claim settlement. */
+export class PromptProcessStopObservation {
+  constructor({ identity, receipt }) {
+    this.identity = identity instanceof PromptProviderProcessIdentity ? identity : PromptProviderProcessIdentity.fromJSON(identity);
+    this.receipt = receipt instanceof ProcessExecutionStopReceipt ? receipt : new ProcessExecutionStopReceipt(receipt);
+    const invocation = this.receipt.invocation;
+    const context = invocation?.providerAttemptContext;
+    const binding = this.receipt.binding.toJSON();
+    if (this.receipt.launcherIdentity === null || this.receipt.pgid === null
+      || !isDeepStrictEqual(invocation?.promptProcessIdentity, this.identity.toJSON())
+      || invocation.providerAttemptId !== this.identity.providerAttemptId || invocation.logicalInvocationId !== this.identity.logicalInvocationId
+      || context?.attemptId !== this.identity.providerAttemptId || context?.logicalInvocationId !== this.identity.logicalInvocationId
+      || context?.attempt !== this.identity.attempt || context?.maxAttempts !== this.identity.maxAttempts
+      || context?.providerKey !== this.identity.providerKey || context?.profileKey !== this.identity.profileKey
+      || !binding || ["runId", "specId", "nodeId", "attemptId", "executionContractId"].some((key) => typeof binding[key] !== "string" || !binding[key])
+      || !Number.isSafeInteger(binding.attemptSequence) || binding.attemptSequence < 1
+      || !Number.isSafeInteger(binding.executionGeneration) || binding.executionGeneration < 0) {
+      throw new PromptExecutionJournalError("PROMPT_EXECUTION_IDENTITY_MISMATCH", "Managed stop receipt differs from the Prompt physical or semantic binding");
+    }
+    Object.freeze(this);
+  }
+  toJSON() { return { identity: this.identity.toJSON(), receipt: JSON.parse(JSON.stringify(this.receipt)) }; }
+  static fromJSON(value) {
+    const restored = new this(value);
+    if (!isDeepStrictEqual(restored.toJSON(), value)) throw new TypeError("Prompt stop observation has unknown or inconsistent fields");
+    return restored;
   }
 }
 
@@ -130,7 +189,7 @@ export class PromptExecutionJournalSnapshot {
       integer(group.responseCallCount, "Prompt group response call count");
     }
     for (const [index, batch] of batches.entries()) {
-      fields(batch, ["batchDigest", "batchCalls", "transportOrdinal", "claim", "responses", "transportFailures", "completion"], "Prompt execution batch frontier");
+      fields(batch, ["batchDigest", "batchCalls", "transportOrdinal", "claim", "responses", "transportFailures", "completion", ...(Object.hasOwn(batch, "processStops") ? ["processStops"] : [])], "Prompt execution batch frontier");
       if (batch.batchDigest !== plan.batches[index].digest) throw new TypeError("Prompt execution frontier order or digest is invalid");
       integer(batch.batchCalls, "Prompt batch calls");
       integer(batch.transportOrdinal, "Prompt transport ordinal");
@@ -170,7 +229,7 @@ export class PromptExecutionJournalSnapshot {
         failedCalls.set(failure.responseCallIndex, failure.attempt);
       }
       if (batch.claim !== null) {
-        fields(batch.claim, ["responseCallIndex", "transportOrdinal", "attempt", "maxAttempts", "requestDigest", "schemaDigest", "providerKey", "profileKey"], "Prompt transport claim");
+        fields(batch.claim, ["responseCallIndex", "transportOrdinal", "attempt", "maxAttempts", "requestDigest", "schemaDigest", "providerKey", "profileKey", ...(Object.hasOwn(batch.claim, "processIdentity") ? ["processIdentity"] : [])], "Prompt transport claim");
         for (const key of ["responseCallIndex", "transportOrdinal", "attempt", "maxAttempts"]) integer(batch.claim[key], key);
         for (const key of ["requestDigest", "schemaDigest", "providerKey", "profileKey"]) text(batch.claim[key], `Prompt transport claim ${key}`);
         if (batch.claim.transportOrdinal !== batch.transportOrdinal || batch.claim.attempt < 1
@@ -178,6 +237,24 @@ export class PromptExecutionJournalSnapshot {
           || batch.claim.responseCallIndex !== batch.batchCalls - 1
           || batch.claim.attempt !== (failedCalls.get(batch.claim.responseCallIndex) ?? 0) + 1
           || responseIds.has(batch.claim.responseCallIndex)) throw new TypeError("Prompt transport claim is invalid");
+      }
+      if (batch.claim?.processIdentity) {
+        const identity = PromptProviderProcessIdentity.fromJSON(batch.claim.processIdentity);
+        identity.assertClaim(batch.claim);
+        if (identity.batchDigest !== batch.batchDigest || !isDeepStrictEqual(identity.scope.toJSON(), scope.toJSON())) throw new TypeError("Prompt physical claim belongs to another batch or scope");
+      }
+      if (Object.hasOwn(batch, "processStops")) {
+        if (!Array.isArray(batch.processStops) || batch.processStops.length === 0) throw new TypeError("Prompt stop observations are invalid");
+        const stoppedCalls = new Set();
+        for (const value of batch.processStops) {
+          const observation = PromptProcessStopObservation.fromJSON(value);
+          const identity = observation.identity;
+          if (identity.batchDigest !== batch.batchDigest || !isDeepStrictEqual(identity.scope.toJSON(), scope.toJSON())
+            || identity.transportOrdinal > batch.transportOrdinal || identity.responseCallIndex >= batch.batchCalls
+            || stoppedCalls.has(identity.transportOrdinal)) throw new TypeError("Prompt stop observation lineage is invalid");
+          stoppedCalls.add(identity.transportOrdinal);
+          if (batch.claim?.transportOrdinal === identity.transportOrdinal) identity.assertClaim(batch.claim);
+        }
       }
       const activeCall = batch.claim !== null || failedCalls.has(batch.responses.length);
       if (batch.batchCalls !== batch.responses.length + (activeCall ? 1 : 0)
@@ -214,7 +291,7 @@ export class PromptExecutionJournalSnapshot {
 
 export class PromptExecutionJournalRecord {
   constructor({ event, snapshot }) {
-    if (!["planned", "claimed", "transport-failed", "response", "validated"].includes(event)
+    if (!["planned", "claimed", "process-stopped", "transport-failed", "response", "validated"].includes(event)
       || !(snapshot instanceof PromptExecutionJournalSnapshot)) throw new TypeError("Prompt execution record is invalid");
     this.event = event;
     this.scope = snapshot.scope;

@@ -25,6 +25,7 @@ export const finalizationPhaseExecutionShapes = Object.freeze(finalizationPhaseM
   return new NamedExecutionShape(leaf.stepId, finalizationPhaseScope.composition,
     "finalizationStepExecutionContract", "selectFinalizationExecution", "projectFinalizationExecution", "executeFinalizationSelection", [
       new ExecutionCaller("src/flow/lib/get-next-action.js", "projectFinalizationExecutionDirective", lookup, "project", null, "select", true),
+      new ExecutionCaller("src/flow/lib/finalization-process-authority.js", "projectFinalizationProcessAuthorityInput", lookup, "project", null, "select", true),
       new ExecutionCaller("src/flow/lib/run-dispatch.js", "executeFinalizationDispatch", lookup, "execute", null, "select", true),
       new ExecutionCaller(commandModule, `execute${title}Input`, lookup, "execute", null, "select", true),
       new ExecutionCaller(finalizationPhaseScope.composition, "consumeFinalizationExecution", lookup, "execute", null, "consume", true),

@@ -1,4 +1,6 @@
 import { TaskStepIdentity } from "./task-step-identity.js";
+import { FlowRepositoryRuntimeArtifactRegistry } from "./flow-repository-runtime-artifacts.js";
+import { assertFlowProcessRuntimeQuiescent } from "./process-runtime-admission.js";
 import path from "node:path";
 import crypto from "node:crypto";
 import { resolveTaskReviewReconciliation } from "../definition.js";
@@ -23,7 +25,7 @@ function currentBaseline({ flowManager, state, root, attempt = state.attempt }) 
 
 function currentSnapshot(root, attempt, location) {
   return new SourceMutationBaseline({ attempt, snapshot: WorkerArtifactRepositoryMutationSnapshot.capture({ root, authorities: ["execution"],
-    ignoredDirectories: [".tmp", ".sennel/agent-cache", ".sennel/review-execution-locks", ".sennel/review-work-units"],
+    ignoredDirectories: [...new FlowRepositoryRuntimeArtifactRegistry().directoryRoots(), ".sennel/review-work-units"],
     runtimeLocks: [location.runtimeLock("runtime.lock.artifact-catalog"), location.runtimeLock("runtime.lock.current-flow-state")],
   }) });
 }
@@ -148,6 +150,8 @@ export function applyTaskReviewReconciliation({ flowManager, specId, root, expec
   if (yes !== true || typeof expectDigest !== "string" || !/^[a-f0-9]{64}$/.test(expectDigest)) {
     throw new Error("Task Review reconciliation requires --yes and the exact --expect-digest from preview");
   }
+  assertFlowProcessRuntimeQuiescent({ root, mainRoot: flowManager.specLocation(specId).repositoryRoot,
+    flowManager, specId });
   const state = flowManager.canonicalState(specId);
   const lease = new ReviewExecutionLease({ mainRoot: flowManager.specLocation(specId).repositoryRoot,
     runId: state.runId, nodeId: state.attempt.nodeId, attemptId: state.attempt.id });

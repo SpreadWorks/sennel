@@ -19,6 +19,7 @@ import { isStepAdmissionRefusal } from "./step-admission-refusal.js";
 import { AgentResponseProtocolEvidence } from "../../lib/agent-response-protocol.js";
 import { isPromptExecutionControlFailure } from "../../lib/prompt-execution-journal.js";
 import { isStepPersistenceFailure } from "./step-persistence-failure.js";
+import { ProcessExecutionControlFailure } from "../../lib/process-execution-values.js";
 
 export {
   STEP_RESULT_ERROR_PERSISTENCE_FAILURE_CODE, StepPersistenceFailure,
@@ -136,7 +137,7 @@ export class DefinitionLifecycleAttemptBinding {
 
   toolingFailure(error, fallbackCode, commandResult = null) {
     if (isStepPersistenceFailure(error) || isStepAdmissionRefusal(error)
-      || isPromptExecutionControlFailure(error)) return false;
+      || isPromptExecutionControlFailure(error) || error instanceof ProcessExecutionControlFailure) return false;
     const facts = failureFacts(error, fallbackCode);
     const state = this.flowManager.canonicalState(this.specId);
     if (state === null || state.runId !== this.runId || !this.attempt.matches(state)) return false;

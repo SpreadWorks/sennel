@@ -24,6 +24,8 @@ export class AgentProviderAttemptContext {
     this.invocation = invocation;
     if (new.target === AgentProviderAttemptContext) Object.freeze(this);
   }
+
+  toJSON() { return { ...this }; }
 }
 
 /** A settled attempt; usage is normalized exclusively by Provider.parse(). */

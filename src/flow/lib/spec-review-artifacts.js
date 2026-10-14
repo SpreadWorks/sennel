@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { ProcessExecutionStopReceipt } from "../../lib/process-execution-values.js";
 import { FlowSpecRevision } from "../../lib/flow-spec-revision.js";
 import { SpecRevisionIdentity } from "./spec-revision-identity.js";
 
@@ -291,10 +292,11 @@ export class SpecReviewAuditEntry {
 
 export class CanonicalSpecReview {
   constructor(document) {
-    const expected = ["version", "identity", "generation", "findings", "audit"];
+    const expected = ["version", "identity", "generation", "findings", "audit", ...(Object.hasOwn(document ?? {}, "processStop") ? ["processStop"] : [])];
     if (!document || typeof document !== "object" || Array.isArray(document) || Object.keys(document).length !== expected.length || expected.some((key) => !Object.hasOwn(document, key))) throw artifactError(["canonical review has an invalid schema"]);
     if (document.version !== 2) throw artifactError(["canonical review version must be 2"]);
     this.identity = new SpecRevisionIdentity(document.identity);
+    this.processStop = document.processStop === undefined ? null : new ProcessExecutionStopReceipt(document.processStop);
     if (!Number.isSafeInteger(document.generation) || document.generation < 0) throw artifactError(["canonical review generation must be a non-negative safe integer"]);
     this.generation = document.generation; this.findings = new SpecReviewFindingCollection(document.findings);
     if (!Array.isArray(document.audit)) throw artifactError(["canonical review audit must be an array"]);
@@ -302,7 +304,7 @@ export class CanonicalSpecReview {
     Object.freeze(this);
   }
   get digest() { return reviewDigest(this.toJSON()); }
-  toJSON() { return canonicalValue({ version: 2, identity: this.identity.toJSON(), generation: this.generation, findings: this.findings.findings, audit: this.audit }); }
+  toJSON() { return canonicalValue({ version: 2, identity: this.identity.toJSON(), generation: this.generation, findings: this.findings.findings, audit: this.audit, ...(this.processStop === null ? {} : { processStop: this.processStop.toJSON() }) }); }
 }
 
 function discardedFinding(value, reason) { return Object.freeze({ findingId: typeof value?.findingId === "string" ? value.findingId : null, reason }); }
@@ -405,5 +407,5 @@ export function mergeSpecReviewDelta({ review, delta, acceptedOperations = [], d
   const outcome = input.stage === "spec-review"
     ? (findingsChanged ? "replaced" : "no-op")
     : (updates.length === 0 && acceptedOperations.length === 0 ? "no-op" : "merged");
-  return new CanonicalSpecReview({ version: 2, identity: current.identity.toJSON(), generation: current.generation + 1, findings: nextFindings.findings, audit: [...current.audit, { stage: input.stage, inputDigest: input.baseReviewDigest, ...(activityId === null ? {} : { activityId }), relation: "revision-scoped-canonical-review", outcome, acceptedOperations: structuredClone(acceptedOperations), discardedOperations: structuredClone(discarded), appliedFindings, operationDigest }] });
+  return new CanonicalSpecReview({ version: 2, identity: current.identity.toJSON(), ...(input.stage !== "spec-review" && current.processStop !== null ? { processStop: current.processStop.toJSON() } : {}), generation: current.generation + 1, findings: nextFindings.findings, audit: [...current.audit, { stage: input.stage, inputDigest: input.baseReviewDigest, ...(activityId === null ? {} : { activityId }), relation: "revision-scoped-canonical-review", outcome, acceptedOperations: structuredClone(acceptedOperations), discardedOperations: structuredClone(discarded), appliedFindings, operationDigest }] });
 }

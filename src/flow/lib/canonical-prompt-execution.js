@@ -1,9 +1,10 @@
 import { isDeepStrictEqual } from "node:util";
 import { FLOW_ARTIFACT_CONTRACTS } from "../../lib/flow-artifact-contract.js";
-import { PromptExecutionJournalRecord, PromptExecutionJournalSnapshot, PromptExecutionScope } from "../../lib/prompt-execution-journal.js";
+import { PromptExecutionJournalRecord, PromptExecutionJournalSnapshot, PromptExecutionScope, PromptProcessStopObservation } from "../../lib/prompt-execution-journal.js";
 import { PromptExecutionBudget, PromptExecutionLimit, responseCharacterCount, responseContentDigest } from "../../lib/prompt-batching.js";
 import { AgentTransportFailureObservation } from "../../lib/agent-transport-failure-observation.js";
 import { FlowExecutionContract, FlowExecutionContractRefusal, executionValueDigest } from "./flow-execution-contract.js";
+import { FlowProcessStopEvidence } from "./process-runtime-evidence.js";
 import { CanonicalSpecReview } from "./spec-review-artifacts.js";
 import { DraftLifecycle } from "./draft-lifecycle.js";
 
@@ -159,20 +160,28 @@ function readScopeProgress(view, contract, scope) {
   }
   return entry;
 }
-function assertProgressDocument(entry, contract, scope) {
+function assertPromptStopContract(snapshot, contract, checkoutIdentity) {
+  for (const batch of snapshot.batches) for (const value of batch.processStops ?? []) {
+    const observation = PromptProcessStopObservation.fromJSON(value);
+    new FlowProcessStopEvidence(observation.receipt).assertContract(contract).assertCheckout(checkoutIdentity);
+  }
+}
+function assertProgressDocument(entry, contract, scope, checkoutIdentity) {
   assertProducer(entry, contract);
   const document = entry.document;
   if (document.contractId !== contract.id || document.digest !== executionValueDigest(document.record)
     || !Number.isSafeInteger(document.sequence) || document.sequence < 1
     || !same(document.record.scope, scope.toJSON())) refuse("Prompt execution frontier identity is invalid");
-  return PromptExecutionJournalSnapshot.fromJSON(document.record.snapshot);
+  const snapshot = PromptExecutionJournalSnapshot.fromJSON(document.record.snapshot);
+  assertPromptStopContract(snapshot, contract, checkoutIdentity);
+  return snapshot;
 }
-export function readPromptExecutionProgressFromView(view, contract, scope) {
+export function readPromptExecutionProgressFromView(view, contract, scope, checkoutIdentity = null) {
   if (!(scope instanceof PromptExecutionScope)) throw new TypeError("Prompt progress scope must be typed");
   readExecutionContractFromView(view, contract);
   const entry = readScopeProgress(view, contract, scope);
   if (entry === null) return null;
-  const snapshot = assertProgressDocument(entry, contract, scope);
+  const snapshot = assertProgressDocument(entry, contract, scope, checkoutIdentity);
   const immutable = read(view, "prompt.execution.event", { ...scopeParameters(contract, scope), eventId: entry.document.eventId });
   if (immutable === null || !same(immutable.document, entry.document)) refuse("Prompt execution frontier lacks its immutable event");
   assertProducer(immutable, contract);
@@ -182,7 +191,7 @@ export function readPromptExecutionProgressFromView(view, contract, scope) {
       const document = JSON.parse(view.readCatalogedArtifact(descriptor).toString("utf8"));
       const activity = view.activities.find((producer) => producer.id === descriptor.activityId);
       const saved = { document, descriptor, activity };
-      assertProgressDocument(saved, contract, scope);
+      assertProgressDocument(saved, contract, scope, checkoutIdentity);
       return document;
     }).sort((left, right) => left.sequence - right.sequence);
   let previousDigest = null;
@@ -209,7 +218,7 @@ export class CanonicalPromptExecutionEpisode {
     Object.freeze(this);
   }
 }
-export function readPromptExecutionEpisodeFromView(view, contract) {
+export function readPromptExecutionEpisodeFromView(view, contract, checkoutIdentity = null) {
   readExecutionContractFromView(view, contract);
   const prefix = `artifacts/executions/${contract.episodeId}/${contract.generation}/`;
   const scopeById = new Map();
@@ -219,7 +228,7 @@ export function readPromptExecutionEpisodeFromView(view, contract) {
     const scope = PromptExecutionScope.fromJSON(document.record.scope);
     scopeById.set(executionValueDigest(scope.toJSON()), scope);
   }
-  const scopes = [...scopeById.values()].map((scope) => readPromptExecutionProgressFromView(view, contract, scope));
+  const scopes = [...scopeById.values()].map((scope) => readPromptExecutionProgressFromView(view, contract, scope, checkoutIdentity));
   return new CanonicalPromptExecutionEpisode({ executionContract: contract, scopes, budget: readEpisodeBudget(view, contract) });
 }
 /** State deltas are checked at the persistence boundary, before durable call admission. */
@@ -228,7 +237,7 @@ function assertTransition(previous, record, currentBudget) {
   if (record.event === "planned") {
     const expected = { ...currentBudget, synthesisCallCount: currentBudget.synthesisCallCount + (next.plan.synthesisCallCount ?? 0) };
     if (previous !== null || !same(next.budget, expected)
-      || next.batches.some((entry) => entry.batchCalls !== 0 || entry.claim !== null || entry.responses.length || entry.transportFailures.length || entry.completion !== null)) refuse("Prompt plan does not begin at the durable budget frontier");
+      || next.batches.some((entry) => entry.batchCalls !== 0 || entry.claim !== null || entry.responses.length || entry.transportFailures.length || entry.processStops?.length || entry.completion !== null)) refuse("Prompt plan does not begin at the durable budget frontier");
     return;
   }
   if (previous === null || !same(previous.plan, next.plan) || !same(previous.scope, next.scope)
@@ -248,6 +257,7 @@ function assertTransition(previous, record, currentBudget) {
     if (group.responseCallCount - prior.responseCallCount !== responseDelta) refuse("Prompt group response count differs from its batch calls");
   }
   const noAggregate = delta.aggregateCharacters === 0 && delta.aggregateItemCount === 0;
+  if (record.event !== "process-stopped" && !same(batch.processStops ?? [], old.processStops ?? [])) refuse("Prompt event altered its immutable stop observations");
   if (record.event === "claimed") {
     if (old.claim !== null || batch.claim === null || batch.transportOrdinal !== old.transportOrdinal + 1
       || delta.providerCallCount !== 1 || delta.synthesisCallCount !== 0 || !noAggregate || !same(batch.responses, old.responses)
@@ -256,15 +266,26 @@ function assertTransition(previous, record, currentBudget) {
     const failed = old.transportFailures.filter((failure) => failure.responseCallIndex === batch.claim.responseCallIndex).at(-1);
     if (failed !== undefined && (!failed.retryable || batch.claim.attempt !== failed.attempt + 1
       || batch.claim.maxAttempts > failed.maxAttempts || ["requestDigest", "schemaDigest", "providerKey", "profileKey"].some((key) => batch.claim[key] !== failed[key]))) refuse("Provider retry differs from its observed failure");
+  } else if (record.event === "process-stopped") {
+    const stops = batch.processStops ?? [], oldStops = old.processStops ?? [];
+    const { processStops: ignoredOld, ...oldFrontier } = old;
+    const { processStops: ignoredNext, ...nextFrontier } = batch;
+    if (old.claim === null || !same(oldFrontier, nextFrontier) || stops.length !== oldStops.length + 1
+      || !same(stops.slice(0, -1), oldStops) || !same(next.budget, currentBudget)
+      || !same(next.groups, previous.groups)) refuse("Process stop observation changed the Prompt claim or budget");
+    PromptProcessStopObservation.fromJSON(stops.at(-1)).identity.assertClaim(old.claim);
   } else if (record.event === "transport-failed") {
     if (old.claim === null || batch.claim !== null || batch.transportFailures.length !== old.transportFailures.length + 1
       || !same(batch.transportFailures.slice(0, -1), old.transportFailures)
       || !same(batch.responses, old.responses) || !same(next.budget, currentBudget)) refuse("Transport failure does not observe the current claim");
+    if (old.claim.processIdentity && !old.processStops?.some((entry) => entry.identity.transportOrdinal === old.claim.transportOrdinal)) refuse("Transport failure has no durable managed stop observation");
     const failure = batch.transportFailures.at(-1);
     if (["responseCallIndex", "attempt", "maxAttempts", "requestDigest", "schemaDigest", "providerKey", "profileKey"].some((key) => failure[key] !== old.claim[key])) refuse("Transport failure belongs to another claim");
     AgentTransportFailureObservation.fromJSON(failure.observation).assertFailure(failure);
   } else if (record.event === "response") {
     const response = batch.responses.at(-1);
+    if (response.origin === "provider" && old.claim?.processIdentity
+      && !old.processStops?.some((entry) => entry.identity.transportOrdinal === old.claim.transportOrdinal)) refuse("Provider response has no durable managed stop observation");
     const failure = old.transportFailures.filter((entry) => entry.responseCallIndex === response.responseCallIndex).at(-1);
     const sameCall = (identity) => ["requestDigest", "schemaDigest", "providerKey", "profileKey"]
       .every((key) => identity[key] === response[key]);
@@ -287,19 +308,20 @@ function assertTransition(previous, record, currentBudget) {
   if (record.event === "response" && batch.transportOrdinal !== old.transportOrdinal) refuse("Prompt response changed its transport identity");
 }
 export class PromptExecutionProgressPublication {
-  constructor({ contract, scope, record, expectedSnapshotDigest, operationId }) {
+  constructor({ contract, scope, record, expectedSnapshotDigest, operationId, expectedCheckoutIdentity = null }) {
     if (!(contract instanceof FlowExecutionContract) || !(scope instanceof PromptExecutionScope)
       || !(record instanceof PromptExecutionJournalRecord) || !same(scope.toJSON(), record.scope.toJSON())) throw new TypeError("Prompt persistence requires typed execution inputs");
-    Object.assign(this, { contract, scope, record, expectedSnapshotDigest, operationId });
+    Object.assign(this, { contract, scope, record, expectedSnapshotDigest, operationId, expectedCheckoutIdentity });
     Object.freeze(this);
   }
   prepare(view) {
     readExecutionContractFromView(view, this.contract);
     const parameters = scopeParameters(this.contract, this.scope);
     const previous = readScopeProgress(view, this.contract, this.scope);
-    const snapshot = previous === null ? null : assertProgressDocument(previous, this.contract, this.scope).toJSON();
+    const snapshot = previous === null ? null : assertProgressDocument(previous, this.contract, this.scope, this.expectedCheckoutIdentity).toJSON();
     if ((snapshot === null ? null : executionValueDigest(snapshot)) !== this.expectedSnapshotDigest) refuse("Prompt execution scope frontier changed before save");
     const budget = readEpisodeBudget(view, this.contract);
+    assertPromptStopContract(this.record.snapshot, this.contract, this.expectedCheckoutIdentity);
     assertTransition(snapshot, this.record, budget);
     if (this.contract.executionLimit !== null) {
       const limit = new PromptExecutionLimit(this.contract.executionLimit);

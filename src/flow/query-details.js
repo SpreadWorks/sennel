@@ -1,7 +1,7 @@
 import { FLOW_ARTIFACT_CONTRACTS, FlowArtifactSpecReviewActivityEvidenceDocument } from "../lib/flow-artifact-contract.js";
 import { QueryError, canonicalJson, canonicalDigest, publicArtifactId, publicArtifactKey, ReferenceResolver } from "./query-values.js";
 import { CanonicalSpecReview } from "./lib/spec-review-artifacts.js";
-import { CanonicalDraftReviewObservation } from "./lib/canonical-review-artifacts.js";
+import { CanonicalDraftReviewObservation, reviewProcessStopContractParameters, assertStoredReviewProcessStop } from "./lib/canonical-review-artifacts.js";
 import { DraftReviewArtifactDocument } from "./lib/draft-review-artifacts.js";
 import { DRAFT_REVIEW_ROUTES } from "./lib/draft-review-routes.js";
 import { CanonicalCommandAttemptArtifactHistory } from "./lib/canonical-command-result.js";
@@ -402,8 +402,8 @@ export class QueryDetailArtifactRequired extends Error {
 
 /** Read-only detail resolution over exactly the bytes admitted by query capture. */
 export class QueryDetailIndex {
-  constructor({ state, activities, catalog, artifactBytes, snapshotId, flowVersionId = state.flowVersionId }) {
-    Object.assign(this, { state, activities, catalog, artifactBytes, snapshotId, flowVersionId });
+  constructor({ state, activities, catalog, artifactBytes, snapshotId, flowVersionId = state.flowVersionId, repositoryIdentity = null }) {
+    Object.assign(this, { state, activities, catalog, artifactBytes, snapshotId, flowVersionId, repositoryIdentity });
     this.activities = activities.map((activity) => FlowActivity.canonical(activity));
     this.resolver = new ReferenceResolver(catalog);
     this.details = new Map();
@@ -437,6 +437,7 @@ export class QueryDetailIndex {
         if (document.source.path !== publicationPath) {
           unavailable("SOURCE_GENERATION_NOT_RETAINED", activity.id, "The retained Spec Review names a different canonical revision");
         }
+        this.assertSpecReviewProcessStop(document.review, activity);
         return new RetainedSpecReviewSource({ descriptor, review: document.review,
           sourceArtifact: publicationPath, pointer: "/review" });
       }).filter((entry) => entry !== null);
@@ -451,6 +452,7 @@ export class QueryDetailIndex {
     if (descriptor.activityId !== activity.id) unavailable("SOURCE_GENERATION_NOT_RETAINED", activity.id,
       "The Spec Review generation for this Activity is not retained");
     const review = new CanonicalSpecReview(this.read(descriptor));
+    this.assertSpecReviewProcessStop(review, activity);
     if (activity.reviewPublication.generation !== review.generation
       || activity.reviewPublication.reviewDigest !== review.digest) unavailable("SOURCE_GENERATION_NOT_RETAINED", activity.id,
       "The Spec Review generation for this Activity is not retained");
@@ -460,6 +462,27 @@ export class QueryDetailIndex {
     this.specReviews.set(activity.id, source);
     return source;
   }
+  assertSpecReviewProcessStop(review, activity) {
+    if (review.processStop === null) return;
+    const binding = review.processStop.binding.value;
+    const producer = activity.reviewPublication.stage === "spec-review" ? activity
+      : this.activities.find((entry) => entry.nodeId === "spec-review"
+        && entry.attemptId === binding?.attemptId && entry.sequence === binding?.attemptSequence
+        && entry.reviewPublication?.stage === "spec-review" && entry.confirmationOrder < activity.confirmationOrder);
+    if (!producer) unavailable("SOURCE_GENERATION_NOT_RETAINED", activity.id, "Review process stop has no canonical Review producer");
+    this.assertReviewProcessStop(review.processStop, producer);
+  }
+
+  assertReviewProcessStop(processStop, activity) {
+    if (processStop === null || processStop === undefined) return;
+    const parameters = reviewProcessStopContractParameters(processStop, { state: this.state, activity });
+    const target = FLOW_ARTIFACT_CONTRACTS.resolve("execution.contract", parameters);
+    const descriptor = this.resolver.resolve({ kind: "path", id: target.relativePath }, "Review process execution contract");
+    const contractDocument = this.read(descriptor);
+    const contractActivity = this.activities.find((entry) => entry.id === descriptor.activityId);
+    assertStoredReviewProcessStop({ processStop, contractDocument, contractActivity, state: this.state, activity, repositoryIdentity: this.repositoryIdentity });
+  }
+
   reviewLifecycle(activity) {
     const stepResult = activity.result?.stepResult;
     const execution = REVIEW_EXECUTION_RESULTS.some((Result) => stepResult instanceof Result);
@@ -824,6 +847,7 @@ export class QueryDetailIndex {
     }
     const record = this.attemptRecord(activity, descriptor);
     requireRetainedText(record.payload, activity.id);
+    this.assertReviewProcessStop(record.payload.processStop, activity);
     const review = new CanonicalDraftReviewObservation({ payload: record.payload, state: this.state, route });
     review.assertTarget(new ReviewWorkUnitTarget(lifecycle.binding.target.toJSON()));
     if (review.settlementPublication(record).digest !== activity.result.draftSettlementReceipt.publicationDigest) {

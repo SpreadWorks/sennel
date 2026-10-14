@@ -2,11 +2,13 @@
  * src/lib/process.js
  *
  * Unified command execution helpers.
- * All functions return result objects — they never throw.
+ * Ordinary process failures return result objects. Managed control failures throw.
  */
 
-import { spawnSync, spawn, execFile } from "child_process";
+import { spawnSync, execFile } from "child_process";
 import { AgentTimeout, DEFAULT_AGENT_PROCESS_TREE_GRACE_MS } from "./agent-timeout.js";
+import { executeSupervisedProcess } from "./process-supervisor.js";
+import { ProcessExecutionRuntime, ProcessExecutionControlFailure } from "./process-execution-runtime.js";
 
 const DEFAULT_PROCESS_MAX_BUFFER = 1024 * 1024;
 
@@ -31,6 +33,7 @@ function failedProcessResult(err, stdout = "", stderr = "") {
     killed: err.killed ?? false,
     errorCode: typeof err.code === "string" ? err.code : null,
     ...(err.stopEvidence && { stopEvidence: err.stopEvidence }),
+    ...(err.processExecutionStopReceipt && { processExecutionStopReceipt: err.processExecutionStopReceipt }),
   };
 }
 
@@ -40,95 +43,43 @@ function processAbortError() {
   return error;
 }
 
-class ProcessOutputBuffer {
-  #chunks = [];
-  #bytes = 0;
-
-  constructor(maximum, encoding) {
-    if (typeof maximum !== "number" || maximum < 0 || Number.isNaN(maximum)) {
-      throw new TypeError("Process maximum buffer must be a non-negative number");
-    }
-    this.maximum = maximum;
-    this.encoding = encoding;
+function rejectedProcessSignal(signal) {
+  if (signal != null && !(signal instanceof AbortSignal)) {
+    const error = new TypeError("Process signal must be an AbortSignal");
+    error.code = "ERR_INVALID_ARG_TYPE";
+    return failedProcessResult(error);
   }
-
-  append(chunk) {
-    const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-    const remaining = Math.max(0, this.maximum - this.#bytes);
-    this.#chunks.push(bytes.subarray(0, remaining));
-    this.#bytes += bytes.length;
-    return this.#bytes <= this.maximum;
-  }
-
-  toString() {
-    const bytes = Buffer.concat(this.#chunks);
-    return bytes.toString(this.encoding !== "buffer" && Buffer.isEncoding(this.encoding) ? this.encoding : "utf8");
-  }
+  return signal?.aborted ? failedProcessResult(processAbortError()) : null;
 }
 
 async function runSignalCommand(cmd, args, opts) {
-  let child;
-  let supervisor;
-  let abort;
-  let stdout;
-  let stderr;
   try {
-    // Agent depends indirectly on this module through configuration and Git
-    // helpers. Load its shared supervisor after module initialization.
-    const { ChildProcessSupervisor } = await import("./agent.js");
-    if (opts.signal.aborted) return failedProcessResult(processAbortError());
-    const encoding = opts.encoding || "utf8";
-    stdout = new ProcessOutputBuffer(opts.maxBuffer ?? DEFAULT_PROCESS_MAX_BUFFER, encoding);
-    stderr = new ProcessOutputBuffer(opts.maxBuffer ?? DEFAULT_PROCESS_MAX_BUFFER, encoding);
+    if (opts.signal?.aborted) return failedProcessResult(processAbortError());
     const timeoutMs = opts.timeout == null || opts.timeout === 0 ? new AgentTimeout().toMilliseconds() : opts.timeout;
     if (!Number.isFinite(timeoutMs) || timeoutMs < 0) {
       const error = new RangeError("Process timeout must be non-negative and finite");
       error.code = "ERR_OUT_OF_RANGE";
       throw error;
     }
-    child = spawn(cmd, args, {
-      cwd: opts.cwd,
-      env: opts.env,
-      stdio: ["ignore", "pipe", "pipe"],
-      detached: process.platform !== "win32",
+    const completed = await executeSupervisedProcess(cmd, args, {
+      cwd: opts.cwd, env: opts.env, stdio: opts.stdio,
+      stdinContent: opts.input, abortSignal: opts.signal,
+      abortReason: processAbortError,
+      maxBuffer: opts.maxBuffer ?? DEFAULT_PROCESS_MAX_BUFFER,
+      encoding: opts.encoding || "utf8", timeoutMs,
+      graceMs: DEFAULT_AGENT_PROCESS_TREE_GRACE_MS, waitForProcessTree: true,
+      stopOnStdinError: true,
     });
-    supervisor = new ChildProcessSupervisor({
-      child,
-      timeoutMs,
-      graceMs: DEFAULT_AGENT_PROCESS_TREE_GRACE_MS,
-      waitForProcessTree: true,
-    });
-    const collect = (buffer, stream) => (chunk) => {
-      if (buffer.append(chunk)) return;
-      const error = new Error(`${stream} maxBuffer length exceeded`);
-      error.code = "ERR_CHILD_PROCESS_STDIO_MAXBUFFER";
-      supervisor.abort(error);
-    };
-    child.stdout.on("data", collect(stdout, "stdout"));
-    child.stderr.on("data", collect(stderr, "stderr"));
-    const completion = supervisor.wait();
-    abort = () => supervisor.abort(processAbortError());
-    opts.signal.addEventListener("abort", abort, { once: true });
-    if (opts.signal.aborted) abort();
-    const { code, signal } = await completion;
-    const output = stdout.toString();
-    const diagnostics = stderr.toString();
+    const { code, signal, stdout, stderr } = completed;
     if (code === 0 && signal === null) {
-      return { ok: true, status: 0, stdout: output, stderr: diagnostics, signal: null, killed: false };
+      return { ok: true, status: 0, stdout, stderr, signal: null, killed: false };
     }
     const error = new Error(`Command failed: ${cmd}`);
     error.code = code;
     error.signal = signal;
-    error.killed = child.killed;
-    return failedProcessResult(error, output, diagnostics);
+    return failedProcessResult(error, stdout, stderr);
   } catch (error) {
-    if (supervisor?.finalAction) {
-      error.signal = supervisor.finalAction;
-      error.killed = true;
-    }
-    return failedProcessResult(error, stdout?.toString(), stderr?.toString());
-  } finally {
-    if (abort) opts.signal.removeEventListener("abort", abort);
+    return failedProcessResult(error, error.stdout, error.stderr);
   }
 }
 
@@ -190,15 +141,10 @@ export function runCmd(cmd, args, opts = {}) {
  * @returns {Promise<{ ok: boolean, status: number, stdout: string, stderr: string, signal: string|null, killed: boolean, errorCode?: string|null }>}
  */
 export function runCmdAsync(cmd, args, opts = {}) {
-  if (opts.signal != null && !(opts.signal instanceof AbortSignal)) {
-    const error = new TypeError("Process signal must be an AbortSignal");
-    error.code = "ERR_INVALID_ARG_TYPE";
-    return Promise.resolve(failedProcessResult(error));
-  }
-  if (opts.signal?.aborted) {
-    return Promise.resolve(failedProcessResult(processAbortError()));
-  }
-  if (opts.signal) return runSignalCommand(cmd, args, opts);
+  const rejected = rejectedProcessSignal(opts.signal);
+  if (rejected) return Promise.resolve(rejected);
+  if (ProcessExecutionRuntime.current()) return runManagedCmdAsync(cmd, args, opts);
+  if (opts.signal || opts.stdio || opts.input !== undefined) return runSignalCommand(cmd, args, opts);
   return new Promise((resolve) => {
     try {
       execFile(
@@ -224,6 +170,40 @@ export function runCmdAsync(cmd, args, opts = {}) {
       );
     } catch (error) {
       resolve(failedProcessResult(error));
+    }
+  });
+}
+
+/** Asynchronous command boundary for Review and other managed CLI children. */
+export async function runManagedCmdAsync(cmd, args, opts = {}) {
+  const rejected = rejectedProcessSignal(opts.signal);
+  if (rejected) return rejected;
+  const { executeManagedProcess, withManagedProcessScope } = await import("./managed-process.js");
+  return withManagedProcessScope({ executionRoot: process.cwd() }, async (runtime) => {
+    if (!runtime) return runCmdAsync(cmd, args, opts);
+    try {
+      const completed = await executeManagedProcess(cmd, args, {
+        runtime, kind: "command", cwd: opts.cwd, env: opts.env,
+        processExecutionBinding: opts.processExecutionBinding,
+        onProcessExecutionStop: opts.onProcessExecutionStop,
+        stdio: opts.stdio, stdinContent: opts.input, abortSignal: opts.signal,
+        timeoutMs: opts.timeout || new AgentTimeout().toMilliseconds(),
+        maxBuffer: opts.maxBuffer ?? DEFAULT_PROCESS_MAX_BUFFER,
+      });
+      if (completed.code === 0 && !completed.signal && !completed.stdinError) {
+        return { ok: true, status: 0, stdout: completed.stdout, stderr: completed.stderr,
+          signal: null, killed: false, stopEvidence: completed.stopEvidence,
+          processExecutionStopReceipt: completed.processExecutionStopReceipt };
+      }
+      const error = new Error(`Command failed: ${cmd}`);
+      error.code = completed.code;
+      error.signal = completed.signal;
+      error.stopEvidence = completed.stopEvidence;
+      error.processExecutionStopReceipt = completed.processExecutionStopReceipt;
+      return failedProcessResult(error, completed.stdout, completed.stderr);
+    } catch (error) {
+      if (error instanceof ProcessExecutionControlFailure) throw error;
+      return failedProcessResult(error, error.stdout, error.stderr);
     }
   });
 }

@@ -1,3 +1,4 @@
+import { readCanonicalReviewProcessStop } from "./canonical-review-artifacts.js";
 import { ExecutionProtocolSnapshot } from "./execution-protocol-snapshot.js";
 import {
   DraftReviewExecutionBinding, DraftReviewExecutionClaim, DraftReviewExecutionTargetIdentity,
@@ -55,10 +56,10 @@ export class SpecReviewOperations {
     }
   }
 
-  static async preparePublication({ flowManager, state }) {
+  static async preparePublication({ flowManager, state, executionRoot = null }) {
     const latest = flowManager.canonicalState(state.specId);
     if (latest.current?.at(-1) !== "spec-review") {
-      const result = await this.terminalReplay({ flowManager, state: latest });
+      const result = await this.terminalReplay({ flowManager, state: latest, executionRoot });
       return result === null ? null : new SpecReviewPublicationPreparation({ result });
     }
     const binding = new SpecReviewStepBinding({ flowManager, specId: state.specId });
@@ -76,6 +77,7 @@ export class SpecReviewOperations {
     if (activity === undefined || !read.persisted || read.review.audit.at(-1)?.stage !== "spec-review") {
       throw new Error("Spec Review publication does not match its execution receipt");
     }
+    readCanonicalReviewProcessStop({ flowManager, state: latest, activity, processStop: read.review.processStop, executionRoot });
     return new SpecReviewPublicationPreparation({ binding, reviewDigest: read.review.digest });
   }
 
@@ -91,7 +93,7 @@ export class SpecReviewOperations {
   }
 
   /** Exact terminal replay is read-only and cannot select another Result. */
-  static async terminalReplay({ flowManager, state }) {
+  static async terminalReplay({ flowManager, state, executionRoot = null }) {
     if (state?.current?.at(-1) !== "spec-triage"
       && !(state?.current === null && state.nextAction()?.nodeId === "spec-triage")) return null;
     const activities = flowManager.activityLedger(state.specId);
@@ -139,6 +141,7 @@ export class SpecReviewOperations {
       || publication.reviewPublication?.stage !== "spec-review") {
       throw new Error("Spec Review terminal replay has no exact canonical publication");
     }
+    readCanonicalReviewProcessStop({ flowManager, state, activity: publication, processStop: read.review.processStop, executionRoot });
     new ActivityReviewPublication(publication.reviewPublication).assertReview(read.review, {
       specId: state.specId,
       revision: read.review.identity.revision.value,

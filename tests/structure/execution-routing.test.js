@@ -15,6 +15,58 @@ function inspect(files) {
   return new StructureChecker(scope, new MemorySourceRepository(files)).check();
 }
 
+test("process admission follows the exact Gate and Review callback and preserves registered route checks", () => {
+  const routeFailures = (files, file) => inspect(files).diagnostics.filter((entry) => entry.rule === "A10"
+    && entry.file === file && entry.message.includes("command can bypass registered selection and execution"));
+  for (const commandId of ["gate", "review"]) {
+    const file = `src/flow/lib/run-${commandId}.js`;
+    const source = original.get(file);
+    const statement = `return withFlowProcessRuntime(ctx, () => this.#executeAdmitted(ctx), { commandId: "${commandId}" });`;
+    const importStatement = 'import { captureFlowProcessExecutionBinding, withFlowProcessRuntime } from "./process-runtime-admission.js";';
+    const captureImport = 'import { captureFlowProcessExecutionBinding } from "./process-runtime-admission.js";\n';
+    assert.equal(source.includes(statement), true);
+    assert.equal(source.includes(importStatement), true);
+    assert.deepEqual(routeFailures(original, file), []);
+    const mutations = [
+      [statement, `return null; ${statement}`],
+      [statement, `if (ctx.skip) return this.#executeAdmitted(ctx); ${statement}`],
+      [statement, statement.replace("() => this.#executeAdmitted(ctx)", "() => null")],
+      [statement, statement.replace("() => this.#executeAdmitted(ctx)", "() => ctx.execute()")],
+      [statement, statement.replace("() => this.#executeAdmitted(ctx)", "() => { this.#executeAdmitted(ctx); return null; }")],
+      [statement, statement.replace("#executeAdmitted(ctx)", "#executeAdmitted({ ...ctx })")],
+      [statement, statement.replace(`commandId: "${commandId}"`, 'commandId: "dispatch"')],
+      ["async execute(ctx) {", "async execute(ctx, withFlowProcessRuntime) {"],
+      ["async #executeAdmitted(ctx) {", "async #differentEntry(ctx) {"],
+      ["async #executeAdmitted(ctx) {", "async #executeAdmitted(other) {"],
+      [importStatement, captureImport + 'import { withFlowProcessRuntime } from "./fake-admission.js";'],
+      [importStatement, captureImport + "function withFlowProcessRuntime(ctx, callback) { return callback(); }"],
+      commandId === "gate"
+        ? ['const selection = contract === null', 'const selection = ctx.skip ? null : contract === null']
+        : ['const selection = registration.executionContract.select(', 'const selection = ctx.skip ? null : registration.executionContract.select('],
+    ];
+    for (const [before, after] of mutations) {
+      assert.equal(source.includes(before), true, `${commandId} fixture target exists: ${before}`);
+      const files = new Map(original);
+      files.set(file, source.replace(before, after));
+      files.set("src/flow/lib/fake-admission.js", "export function withFlowProcessRuntime(ctx, callback) { return callback(); }");
+      const failures = routeFailures(files, file);
+      assert.ok(failures.length > 0, `${commandId} must reject ${after}`);
+      assert.equal(failures.every((entry) => entry.line > 0 && entry.column > 0 && entry.trace.includes(file)), true);
+      files.set(file, source);
+      assert.deepEqual(routeFailures(files, file), []);
+    }
+    // The shared resolver follows actual binding provenance, including aliases
+    // and re-exports; an identical local spelling alone establishes nothing.
+    const files = new Map(original);
+    files.set(file, source.replace(importStatement,
+      captureImport + 'import { withFlowProcessRuntime as admitProcess } from "./admission-reexport.js";')
+      .replace(statement, statement.replace("withFlowProcessRuntime", "admitProcess")));
+    files.set("src/flow/lib/admission-reexport.js",
+      'export { withFlowProcessRuntime } from "./process-runtime-admission.js";');
+    assert.deepEqual(routeFailures(files, file), []);
+  }
+});
+
 test("registered Gate, Review, and display routes reject Step-specific bypasses", () => {
   for (const [file, before, after] of [
     ["src/flow/engine/composition/registered-step-execution.js",

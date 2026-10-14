@@ -11,6 +11,7 @@ import { SpecGateRepairSelectedInputIdentity } from "../../../src/flow/lib/spec-
 import { WorkerArtifactHandoffRequest } from "../../../src/flow/lib/worker-artifact-handoff.js";
 import { Agent } from "../../../src/lib/agent.js";
 import { AgentProviderCompletionEvidence } from "../../../src/lib/agent-failure.js";
+import { ProcessExecutionRuntime } from "../../../src/lib/process-execution-runtime.js";
 import { Logger } from "../../../src/lib/log.js";
 
 /** Bind a canonical manager and external worker to the production dispatcher. */
@@ -129,9 +130,9 @@ export function installGateProviderFake(respond, {
   });
 }
 
-/** Keep Agent's invocation, admission, cache and retry pipeline; replace only
- * the external provider process result. Unknown failures carry no invented
- * completion evidence and must remain uncertain in the production journal. */
+/** Keep Agent's invocation, admission, cache and retry pipeline. Durable managed
+ * claims use a real Node provider for the precomputed response. Unknown failures
+ * carry no invented completion evidence and remain uncertain in the journal. */
 class ScenarioProviderAgent extends Agent {
   constructor(options, { respond, promptCharacterLimit }) {
     super(options);
@@ -143,8 +144,15 @@ class ScenarioProviderAgent extends Agent {
     return this.declaredPromptCharacterLimit ?? super.promptCharacterLimit;
   }
 
-  async _callOnce(resolved, prompt, options) {
+  async _callOnce(resolved, prompt, options, materializedInvocation) {
     const text = await this.respond(prompt, options);
+    if (ProcessExecutionRuntime.current() !== null && options.providerCallAdmission?.processExecutionIdentity != null) {
+      // The configured profile is ProviderRegistry's raw command descriptor.
+      // Let Agent own the actual managed transport, receipt and observer path.
+      return super._callOnce({ ...resolved, profile: { ...resolved.profile, command: process.execPath } },
+        prompt, options, { ...materializedInvocation,
+          finalArgs: ["-e", "process.stdin.pipe(process.stdout)"], stdinContent: text });
+    }
     return { text, usage: null, stdout: text, stderr: "",
       providerCompletionEvidence: new AgentProviderCompletionEvidence({
         provider: resolved.providerKey, profile: resolved.profileKey,

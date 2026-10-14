@@ -307,3 +307,23 @@ test("A11 an unregistered direct caller cannot escape the assembly execution ada
     [file, entry.composition], source, "import");
   files.delete(file); success(fixture.inspect(files));
 });
+
+
+test("A10 physical authority cannot replace its registered adapter or acquired selection", () => {
+  const fixture = seed();
+  const files = fixture.files();
+  const file = "src/flow/lib/finalization-process-authority.js";
+  const original = files.get(file);
+  success(fixture.inspect(files));
+  for (const [before, after] of [
+    ["registration.executionContract.project(selection,", "input.registration.executionContract.project(selection,"],
+    ["executionContract.project(selection,", "executionContract.project(input.selection,"],
+  ]) {
+    files.set(file, original.replace(before, after));
+    violation(fixture.inspect(files), "A10", file,
+      "projectFinalizationProcessAuthorityInput does not preserve registered lookup and selection",
+      [entry.composition, entry.composition, file]);
+    files.set(file, original);
+    success(fixture.inspect(files));
+  }
+});

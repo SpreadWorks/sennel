@@ -3913,6 +3913,25 @@ const revision = testSourceRevision(snapshot, testSource);
     }
   }
 
+  #registeredExecutionEntry(module, className, commandId) {
+    if (!module) return null;
+    const entry = readClassMember(module, className, "execute");
+    const callback = readClassMember(module, className, "#executeAdmitted");
+    const name = entry?.bodyTokens()?.[1]?.value;
+    // Follow only a complete, transparent admission wrapper. The selected
+    // callback is still subject to the original registered-route checks.
+    if (!name || !entry.matchesDeclaration(`execute(ctx) {
+      return ${name}(ctx, () => this.#executeAdmitted(ctx), { commandId: ${JSON.stringify(commandId)} });
+    }`)) return entry;
+    const binding = this.#resolveLocalBinding(module.file, module, name, new Set(), "A10");
+    const parameters = readParameters(callback?.tokens ?? []);
+    if (binding?.file !== "src/flow/lib/process-runtime-admission.js"
+      || binding.name !== "withFlowProcessRuntime"
+      || parameters.length !== 1 || parameters[0].length !== 1
+      || parameters[0][0].value !== "ctx") return null;
+    return callback;
+  }
+
   #registeredGateReviewExecutionRoutes(required) {
     if (!required.has("gate") && !required.has("review")) return;
     const file = "src/flow/engine/composition/registered-step-execution.js";
@@ -3942,7 +3961,7 @@ const revision = testSourceRevision(snapshot, testSource);
         "Gate phase lookup can exclude a registered Step");
       const commandFile = "src/flow/lib/run-gate.js";
       const command = this.#module(commandFile, [commandFile], "A10");
-      const entry = command && readClassMember(command, "RunGateCommand", "execute");
+      const entry = this.#registeredExecutionEntry(command, "RunGateCommand", "gate");
       const head = `
         const { root } = ctx;
         const executionRoot = ctx.executionRoot || root;
@@ -4016,7 +4035,7 @@ const revision = testSourceRevision(snapshot, testSource);
         "Review phase lookup can exclude a registered Step");
       const commandFile = "src/flow/lib/run-review.js";
       const command = this.#module(commandFile, [commandFile], "A10");
-      const entry = command && readClassMember(command, "RunReviewCommand", "execute");
+      const entry = this.#registeredExecutionEntry(command, "RunReviewCommand", "review");
       if (!entry?.matchesBody(`
     const phase = ctx.phase || null;
     const persistedPhase = reviewPhaseKeyForCtx(ctx, phase);

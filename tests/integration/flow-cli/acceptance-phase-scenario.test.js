@@ -17,6 +17,7 @@ import { acceptanceDecisionRouteFacts } from "../../../src/flow/lib/definition-r
 import { validateExplicitFinalRegressionProceed } from "../../../src/flow/lib/test-artifacts.js";
 import { RepairArtifactRegistry } from "../../../src/flow/lib/repair-state-identity.js";
 import { UnknownProviderFailure } from "../../../src/lib/agent-failure.js";
+import { runCmd } from "../../../src/lib/process.js";
 import { AcceptanceEvidenceExecutionPlan } from "../../../src/flow/lib/run-acceptance-review.js";
 import { PromptExecutionLimit, PromptRequestLimit } from "../../../src/lib/prompt-batching.js";
 import { activateNonBlockingPolicy, decisionContextForActiveFlow } from "../../../src/flow/lib/nonblocking.js";
@@ -278,7 +279,6 @@ describe("Acceptance phase canonical producer / reload / consumer scenarios", { 
   }
 
   test("A05 acquired unavailable implementation Review holds Acceptance without provider calls until authorized complete evidence is regenerated", async (t) => {
-    const originalSpawn = childProcess.spawnSync;
     let resumedExecution = null;
     const scenario = AcceptancePhaseScenario.create(t, {
       config: { lang: "en", type: "base", docs: { languages: ["en"], defaultLanguage: "en" } },
@@ -289,7 +289,7 @@ describe("Acceptance phase canonical producer / reload / consumer scenarios", { 
       },
       reviewProcessResult: (stage, ordinal, options, _active, invocation) => {
         const worker = stage === "impl-review" && ordinal === 1 ? "acceptance-phase-review-worker.js" : "impl-phase-review-worker.js";
-        return originalSpawn(process.execPath, [fileURLToPath(new URL(`../../support/${worker}`, import.meta.url)), ...invocation.args.slice(1)], {
+        return runCmd(process.execPath, [fileURLToPath(new URL(`../../support/${worker}`, import.meta.url)), ...invocation.args.slice(1)], {
           ...options, env: { ...options.env, SENNEL_IMPL_SCENARIO_RESPONSE: JSON.stringify({ blockingFindings: [], nonBlockingImprovements: [] }) },
         });
       },

@@ -1,3 +1,4 @@
+import { readFlowProcessStops } from "./process-runtime-admission.js";
 import { loadMergedGuardrails } from "../../lib/guardrail.js";
 import { ReviewExecutionAdmission } from "./spec-review-operations-values.js";
 import { ExecutionProtocolSnapshot } from "./execution-protocol-snapshot.js";
@@ -16,7 +17,12 @@ import { FlowArtifactAttemptHistory } from "../../lib/flow-artifact-contract.js"
  */
 
 import { PKG_DIR } from "../../lib/cli.js";
-import { runCmd } from "../../lib/process.js";
+import { runManagedCmdAsync } from "../../lib/process.js";
+import { ProcessExecutionControlFailure } from "../../lib/process-execution-values.js";
+import { captureProcessExecutionCheckoutIdentity } from "../../lib/process-execution-runtime.js";
+import { FlowProcessStopEvidence } from "./process-runtime-evidence.js";
+import { captureFlowProcessExecutionBinding, withFlowProcessRuntime } from "./process-runtime-admission.js";
+import { FlowRepositoryRuntimeArtifactRegistry } from "./flow-repository-runtime-artifacts.js";
 import { VALID_REVIEW_PHASES } from "../../lib/constants.js";
 import {
   AgentProcessStopEvidence,
@@ -73,6 +79,7 @@ import { ReviewTargetAuthority } from "./review-target-authority.js";
 import {
   CanonicalDraftReviewSource,
   CanonicalReviewPromotion,
+  readCanonicalReviewProcessStop,
   CanonicalReviewWorkUnit,
   canonicalReviewNodeId,
 } from "./canonical-review-artifacts.js";
@@ -965,6 +972,8 @@ function rehydratePublishedDraftReview(ctx, { state, phase }) {
       "the published Draft Review result is not a valid current Attempt result", { phase },
     );
   }
+  readCanonicalReviewProcessStop({ flowManager: ctx.flowManager, state, activity: publicationActivity,
+    processStop: payload.processStop, executionRoot: ctx.executionRoot || ctx.root });
   const result = structuredClone(stored.result);
   if (result === null || typeof result !== "object" || Array.isArray(result)) {
     return Envelope.fail(
@@ -1108,7 +1117,7 @@ export function taskReviewSourceObservationIgnoredDirectories(executionRoot, wor
   return [...new Set([
     ...taskReviewTransientDirectories(executionRoot, workUnit),
     path.posix.join(PRODUCT.managedDirName, "agent-cache"),
-    path.posix.join(PRODUCT.managedDirName, "review-execution-locks"),
+    ...new FlowRepositoryRuntimeArtifactRegistry().directoryRoots(),
     ...taskReviewAgentRuntimeDirectories(executionRoot, agent),
     ...taskReviewValidatedMetricMetadataPaths(executionRoot, workUnit),
   ])];
@@ -1696,7 +1705,7 @@ export class RunReviewCommand extends FlowCommand {
     resolveScope = resolveImplReviewScope,
     resolveTreeSha = resolveCurrentReviewTreeSha,
     resolveTargetStateDigest = resolveCurrentReviewRepairFingerprint,
-    runCommand = runCmd,
+    runCommand = runManagedCmdAsync,
   } = {}) {
     super();
     this.resolveScope = resolveScope;
@@ -1732,7 +1741,7 @@ export class RunReviewCommand extends FlowCommand {
     const expectedNodeId = canonicalReviewNodeId({ phase: persistedPhase, taskId });
     if (currentNodeId !== expectedNodeId) {
       if (persistedPhase === "spec" && !dryRun) {
-        const replay = await SpecReviewOperations.terminalReplay({ flowManager: ctx.flowManager, state });
+        const replay = await SpecReviewOperations.terminalReplay({ flowManager: ctx.flowManager, state, executionRoot });
         if (replay !== null) return replay;
       }
       throw new Error(`canonical review requires active ${expectedNodeId}, found ${currentNodeId ?? "none"}`);
@@ -1755,7 +1764,7 @@ export class RunReviewCommand extends FlowCommand {
       );
     }
     if (persistedPhase === "spec" && !dryRun) {
-      const published = await completeSpecReviewPublication({ flowManager: ctx.flowManager, state });
+      const published = await completeSpecReviewPublication({ flowManager: ctx.flowManager, state, executionRoot });
       if (published !== null) return published;
     }
     const taskReviewExecution = taskId === null
@@ -1837,6 +1846,10 @@ export class RunReviewCommand extends FlowCommand {
     let taskRecoveryBaselineInput = null;
     let taskCanonicalObservationInput = null;
     let sealedWorkUnit;
+    let processStop = null;
+    const checkoutIdentity = captureProcessExecutionCheckoutIdentity({
+      mainRoot: ctx.flowManager.specLocation(state.specId).repositoryRoot, executionRoot,
+    });
     let reviewProviderRequest = null;
     try {
       // Reconstruct the parent-owned input contract before inspecting any
@@ -2062,7 +2075,19 @@ export class RunReviewCommand extends FlowCommand {
         res = await runCmdWithRetry(
           async () => {
             const child = new RuntimeChildExecution({ environment: env });
-            try { return await this.runCommand("node", [scriptPath, ...args], child.options({ cwd: executionRoot })); }
+            try { return await this.runCommand("node", [scriptPath, ...args], child.options({
+              cwd: executionRoot,
+              onProcessExecutionStop(receipt) {
+                processStop = new FlowProcessStopEvidence(receipt)
+                  .assertContract(workUnit.workUnit.executionContract, { workUnitId: surface.manifestPath })
+                  .assertCheckout(checkoutIdentity);
+              },
+              processExecutionBinding: captureFlowProcessExecutionBinding(ctx, {
+                executionContract: workUnit.workUnit.executionContract,
+                workUnitId: surface.manifestPath,
+                commandId: "flow.review",
+              }),
+            })); }
             finally { child.close(); }
           },
           {
@@ -2074,6 +2099,7 @@ export class RunReviewCommand extends FlowCommand {
           },
         );
       } catch (error) {
+        if (error instanceof ProcessExecutionControlFailure) throw error;
         try {
           taskCanonicalObservationBoundary?.assertMetricSettlementOnly();
         } catch (observationError) {
@@ -2124,6 +2150,15 @@ export class RunReviewCommand extends FlowCommand {
         });
       }
     }
+    if (processStop === null && this.runCommand === runManagedCmdAsync) {
+      const matches = readFlowProcessStops({ mainRoot: checkoutIdentity.mainRoot, executionRoot })
+        .filter((proof) => proof.receipt.invocation?.kind === "command"
+          && proof.receipt.binding.value?.workUnitId === sealedWorkUnit.manifestPath);
+      if (matches.length !== 1) throw new ProcessExecutionControlFailure("stop-receipt-missing",
+        "Review publication requires one exact managed child stop receipt");
+      processStop = matches[0].assertContract(workUnit.workUnit.executionContract,
+        { workUnitId: sealedWorkUnit.manifestPath }).assertCheckout(checkoutIdentity);
+    }
     let promotion;
     let taskSourceManifest = null;
     const taskSpecDigest = taskReviewSpecDigest(ctx.flowManager, state, taskId);
@@ -2134,6 +2169,7 @@ export class RunReviewCommand extends FlowCommand {
     try {
       promotion = new CanonicalReviewPromotion({
         workUnit: sealedWorkUnit,
+        processStop, checkoutIdentity, executionContract: workUnit.workUnit.executionContract,
         phase: persistedPhase,
         taskId,
         treeSha,
@@ -2155,6 +2191,7 @@ export class RunReviewCommand extends FlowCommand {
         }
       }
     } catch (error) {
+      if (error instanceof ProcessExecutionControlFailure) throw error;
       if (draftReviewExecutionRequiredResult(persistedPhase) !== null) {
         try { sealedWorkUnit.cleanup(); } catch { /* next recovery reconciles retained runtime */ }
       }
@@ -2199,6 +2236,7 @@ export class RunReviewCommand extends FlowCommand {
       });
       promotion = new CanonicalReviewPromotion({
         workUnit: sealedWorkUnit,
+        processStop, checkoutIdentity, executionContract: workUnit.workUnit.executionContract,
         phase: persistedPhase,
         taskId,
         treeSha,
@@ -2221,6 +2259,7 @@ export class RunReviewCommand extends FlowCommand {
           const settled = await completeSpecReviewPublication({
             flowManager: ctx.flowManager,
             state: ctx.flowManager.canonicalState(state.specId),
+            executionRoot,
           });
           if (settled === null) throw new Error("Spec Review publication has no terminal Step Result");
           result.artifacts = { ...result.artifacts, ...settled.artifacts };
@@ -2280,6 +2319,7 @@ export class RunReviewCommand extends FlowCommand {
     taskReviewWorkUnit = null,
     advanceDraftExecution = true,
   } = {}) {
+    if (error instanceof ProcessExecutionControlFailure) throw error;
     const stepFailureKind = reviewStepFailureKind(error);
     if (stepFailureKind === "step-persistence") {
       return Envelope.fail("run", "review", error.code || "STEP_RESULT_ERROR_PERSISTENCE_FAILED",
@@ -2407,6 +2447,10 @@ export class RunReviewCommand extends FlowCommand {
   }
 
   async execute(ctx) {
+    return withFlowProcessRuntime(ctx, () => this.#executeAdmitted(ctx), { commandId: "review" });
+  }
+
+  async #executeAdmitted(ctx) {
     const phase = ctx.phase || null;
     const persistedPhase = reviewPhaseKeyForCtx(ctx, phase);
     const scope = persistedPhase === "impl" && ctx.flowState?.currentTaskId != null ? "task" : "flow";
@@ -2484,7 +2528,7 @@ export class RunReviewCommand extends FlowCommand {
     const expectedNodeId = canonicalReviewNodeId({ phase: persistedPhase, taskId });
     if (state?.current?.at(-1) !== expectedNodeId || state.attempt === null) {
       if (persistedPhase === "spec" && !dryRun) {
-        const replay = await SpecReviewOperations.terminalReplay({ flowManager: ctx.flowManager, state });
+        const replay = await SpecReviewOperations.terminalReplay({ flowManager: ctx.flowManager, state, executionRoot });
         if (replay !== null) return replay;
       }
       // executeCanonical returns the detailed canonical target error and
@@ -2497,7 +2541,7 @@ export class RunReviewCommand extends FlowCommand {
     const publishedDraftReview = rehydratePublishedDraftReview(ctx, { state, phase: persistedPhase });
     if (publishedDraftReview !== null) return publishedDraftReview;
     if (persistedPhase === "spec" && !dryRun) {
-      const publishedSpecReview = await completeSpecReviewPublication({ flowManager: ctx.flowManager, state });
+      const publishedSpecReview = await completeSpecReviewPublication({ flowManager: ctx.flowManager, state, executionRoot });
       if (publishedSpecReview !== null) return publishedSpecReview;
     }
     const admissionFailure = reviewExecutionAdmission(ctx, { persistedPhase, executionRoot });
@@ -2548,6 +2592,7 @@ export class RunReviewCommand extends FlowCommand {
           const publishedSpecReview = await completeSpecReviewPublication({
             flowManager: ctx.flowManager,
             state: refreshedState,
+            executionRoot,
           });
           if (publishedSpecReview !== null) return publishedSpecReview;
         }

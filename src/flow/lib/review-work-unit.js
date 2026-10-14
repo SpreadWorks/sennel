@@ -1,4 +1,8 @@
+import { FlowProcessStopEvidence } from "./process-runtime-evidence.js";
+import { ProcessExecutionControlFailure } from "../../lib/process-execution-values.js";
+import { captureProcessExecutionCheckoutIdentity } from "../../lib/process-execution-runtime.js";
 import { FlowExecutionContract, FlowExecutionContractRefusal } from "./flow-execution-contract.js";
+import { assertFlowProcessRuntimeQuiescent } from "./process-runtime-admission.js";
 /**
  * Transient input/output work unit for one canonical review Attempt.
  *
@@ -78,16 +82,18 @@ export class ReviewWorkUnit {
     this.attemptId = requiredText(attemptId, "review work unit attemptId");
     this.target = target instanceof ReviewWorkUnitTarget ? target : new ReviewWorkUnitTarget(target);
     this.output = output instanceof ReviewWorkUnitOutput ? output : new ReviewWorkUnitOutput(output);
-    this.root = path.join(
-      this.executionRoot,
-      REVIEW_WORK_UNIT_ROOT,
-      digest(this.specId).slice(0, 24),
-      digest(this.runId).slice(0, 24),
-      digest(`${this.nodeId}:${this.attemptId}`).slice(0, 32),
-    );
+    this.root = path.dirname(ReviewWorkUnit.manifestPathFor(this));
     this.inputs = [];
     this.manifestDocument = null;
     this.executionContract = null;
+  }
+
+  static manifestPathFor({ executionRoot, runId, specId, nodeId, attemptId }) {
+    if (!path.isAbsolute(requiredText(executionRoot, "review executionRoot"))) throw new TypeError("review executionRoot must be absolute");
+    return path.join(executionRoot, REVIEW_WORK_UNIT_ROOT,
+      digest(requiredText(specId, "review specId")).slice(0, 24),
+      digest(requiredText(runId, "review runId")).slice(0, 24),
+      digest(`${requiredText(nodeId, "review nodeId")}:${requiredText(attemptId, "review attemptId")}`).slice(0, 32), "manifest.json");
   }
 
   prepare() {
@@ -320,7 +326,7 @@ function matchesDraftReviewExecution(activity, manifest, phase, executionGenerat
     && binding.target?.targetStateDigest === manifest.target.targetStateDigest;
 }
 
-function confirmedReviewReceipt(flowManager, specId, workUnit, sealed, { catalog, activities }) {
+function confirmedReviewReceipt(flowManager, specId, workUnit, sealed, { catalog, activities, executionRoot }) {
   const manifest = workUnit.manifestDocument;
   const seal = sealed.seal;
   const draftExecution = manifest.phase === "draft-questions" || manifest.phase === "draft-coverage";
@@ -367,8 +373,16 @@ function confirmedReviewReceipt(flowManager, specId, workUnit, sealed, { catalog
       return false;
     }
     try {
-      return mergeSpecReviewDelta({ review: inputReview, delta }).digest === publishedReview.digest;
-    } catch {
+      const merged = mergeSpecReviewDelta({ review: inputReview, delta });
+      if (publishedReview.processStop === null) return merged.digest === publishedReview.digest;
+      const evidence = new FlowProcessStopEvidence(publishedReview.processStop)
+        .assertContract(workUnit.readExecutionContract(), { workUnitId: workUnit.manifestPath })
+        .assertCheckout(captureProcessExecutionCheckoutIdentity({
+          mainRoot: flowManager.specLocation(specId).repositoryRoot, executionRoot,
+        }));
+      return new CanonicalSpecReview({ ...merged.toJSON(), processStop: evidence.toJSON() }).digest === publishedReview.digest;
+    } catch (error) {
+      if (error instanceof ProcessExecutionControlFailure) throw error;
       return false;
     }
   }
@@ -581,10 +595,12 @@ function confirmedTaskReviewUnavailable({ worker, activities }) {
  * but before local cleanup. The worker manifest chooses no authority here: it
  * is only a locator which must match a canonical Activity and evidence receipt.
  */
-export function reconcileCompletedReviewWorkUnits({ flowManager, specId, executionRoot } = {}) {
+export function reconcileCompletedReviewWorkUnits({ flowManager, specId, executionRoot, mainRoot = flowManager?.mainRoot ?? executionRoot } = {}) {
   if (!flowManager || typeof flowManager.readCanonicalTransitionView !== "function") {
     throw new Error("review work unit reconciliation requires a lock-scoped FlowManager view");
   }
+  assertFlowProcessRuntimeQuiescent({ root: executionRoot,
+    mainRoot, flowManager, specId });
   const reconcile = ({ state, catalog, activities }) => {
     if (state === null) throw new Error("review work unit reconciliation requires a Version-1 Flow state");
     const root = reviewWorkUnitNamespace({ executionRoot, specId, runId: state.runId });
@@ -643,7 +659,7 @@ export function reconcileCompletedReviewWorkUnits({ flowManager, specId, executi
         || !manifest.output.equals(ReviewWorkUnitOutput.forReview({ phase: manifest.phase, taskId: manifest.taskId }))
       ) throw new Error("review work unit reconciliation identity does not match its execution namespace");
       const sealed = worker.readSealedOutput();
-      if (confirmedReviewReceipt(flowManager, specId, worker, sealed, { catalog, activities })) {
+      if (confirmedReviewReceipt(flowManager, specId, worker, sealed, { catalog, activities, executionRoot })) {
         worker.cleanup();
         cleaned += 1;
         continue;

@@ -1,10 +1,9 @@
 import assert from "node:assert/strict";
-import childProcess from "node:child_process";
 import fs from "node:fs";
-import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { mock } from "node:test";
+import { runCmd } from "../../src/lib/process.js";
+import { installReviewProcessFake } from "./infrastructure/review-process-fake.js";
 import { FlowManager } from "../../src/lib/flow-manager.js";
 import { FlowTargetBinding } from "../../src/lib/flow-target-guard.js";
 import { FLOW_ARTIFACT_CONTRACTS } from "../../src/lib/flow-artifact-contract.js";
@@ -88,54 +87,53 @@ export class RequirementTestPhaseScenario {
         transportContext: () => ({ root: this.root, flowManager: this.manager }),
       } : {}),
     });
-    const original = childProcess.spawnSync;
-    this.reviewProcess = mock.method(childProcess, "spawnSync", (command, args, options) => {
-      if (command !== "node" || !String(args[0]).endsWith("/flow/commands/review.js")) return original(command, args, options);
-      if (this.options.continueImplementation && (options.env.SENNEL_REVIEW_TASK_EXECUTION_IDENTITY || this.current() === "impl-review")) {
-        this.downstreamReviews.push(this.current());
-        return original(process.execPath, [fileURLToPath(new URL("./requirement-phase-review-worker.js", import.meta.url))], options);
-      }
-      const work = ReviewWorkUnit.fromEnvironment(options.env);
-      const nodeId = this.current();
-      if (nodeId === "test-review") {
-        this.reviewWorkUnits.set(work.manifest().attemptId, Object.freeze({ manifest: work.manifest(), seal: null }));
-        this.options.beforeReview?.(work, this);
-      }
-      if (["draft-questions-review", "draft-coverage-review"].includes(nodeId)) {
-        const source = JSON.parse(options.env.SENNEL_REVIEW_DRAFT_SOURCE);
-        fs.writeFileSync(path.join(work.root, work.manifestDocument.output.basename), workerArtifactJson({
-          version: 2, phase: nodeId === "draft-questions-review" ? "draft-questions" : "draft-coverage",
-          sourceDraft: "draft.json", sourceDraftRevision: source.revision,
-          generatedAt: "2026-10-06T00:00:00.000Z", verdict: "PASS", summary: "No review findings.",
-          blockingFindings: [], advisoryFindings: [], repairTargets: [],
-        }));
-      } else if (nodeId === "spec-review") {
-        const source = JSON.parse(options.env.SENNEL_REVIEW_SPEC_REVIEW_SOURCE);
-        const review = new CanonicalSpecReview(JSON.parse(fs.readFileSync(source.sourcePath, "utf8")));
-        fs.writeFileSync(path.join(options.env.SENNEL_REVIEW_OUTPUT_DIR, "review.delta.json"), workerArtifactJson(new SpecReviewDelta({
-          version: 2, stage: "spec-review", identity: review.identity.toJSON(), baseReviewDigest: review.digest,
-          findings: [], operations: [],
-        }).toJSON()));
-      } else {
-        assert.equal(nodeId, "test-review", "scenario only fakes the external Spec and Requirement Review processes");
-        const revision = JSON.parse(options.env.SENNEL_REVIEW_TEST_ARTIFACT_REVISION);
-        this.reviews.push(revision);
-        const response = this.options.reviewResponse?.(this.reviews.length, revision, options.env)
-          ?? { verdict: this.options.reviewVerdict ?? "PASS", blockingFindings: [], advisoryFindings: [] };
-        const parsed = parseTestReviewFindings(JSON.stringify({ blockingFindings: response.blockingFindings ?? [], advisoryFindings: response.advisoryFindings ?? [] }));
-        fs.writeFileSync(path.join(options.env.SENNEL_REVIEW_OUTPUT_DIR, "requirement-test-review.json"), workerArtifactJson({
-          ...(response.toolingOutcome ? { toolingOutcome: response.toolingOutcome } : { verdict: response.verdict }),
-          blockingFindings: parsed.blocking.map((finding) => finding.toJSON()),
-          advisoryFindings: parsed.advisory.map((finding) => finding.toJSON()),
-        }));
-      }
-      const manifest = work.manifest();
-      if (nodeId === "test-review") this.reviewWorkUnits.set(manifest.attemptId, Object.freeze({ manifest, seal: null }));
-      const seal = work.seal();
-      if (nodeId === "test-review") this.reviewWorkUnits.set(manifest.attemptId, Object.freeze({ manifest, seal }));
-      return { status: 0, signal: null, stdout: "", stderr: "" };
-    });
-    syncBuiltinESMExports();
+    this.reviewProcess = installReviewProcessFake((command, args, options) => this.runReviewProcess(command, args, options));
+  }
+
+  runReviewProcess(_command, _args, options) {
+    if (this.options.continueImplementation && (options.env.SENNEL_REVIEW_TASK_EXECUTION_IDENTITY || this.current() === "impl-review")) {
+      this.downstreamReviews.push(this.current());
+      return runCmd(process.execPath, [fileURLToPath(new URL("./requirement-phase-review-worker.js", import.meta.url))], options);
+    }
+    const work = ReviewWorkUnit.fromEnvironment(options.env);
+    const nodeId = this.current();
+    if (nodeId === "test-review") {
+      this.reviewWorkUnits.set(work.manifest().attemptId, Object.freeze({ manifest: work.manifest(), seal: null }));
+      this.options.beforeReview?.(work, this);
+    }
+    if (["draft-questions-review", "draft-coverage-review"].includes(nodeId)) {
+      const source = JSON.parse(options.env.SENNEL_REVIEW_DRAFT_SOURCE);
+      fs.writeFileSync(path.join(work.root, work.manifestDocument.output.basename), workerArtifactJson({
+        version: 2, phase: nodeId === "draft-questions-review" ? "draft-questions" : "draft-coverage",
+        sourceDraft: "draft.json", sourceDraftRevision: source.revision,
+        generatedAt: "2026-10-06T00:00:00.000Z", verdict: "PASS", summary: "No review findings.",
+        blockingFindings: [], advisoryFindings: [], repairTargets: [],
+      }));
+    } else if (nodeId === "spec-review") {
+      const source = JSON.parse(options.env.SENNEL_REVIEW_SPEC_REVIEW_SOURCE);
+      const review = new CanonicalSpecReview(JSON.parse(fs.readFileSync(source.sourcePath, "utf8")));
+      fs.writeFileSync(path.join(options.env.SENNEL_REVIEW_OUTPUT_DIR, "review.delta.json"), workerArtifactJson(new SpecReviewDelta({
+        version: 2, stage: "spec-review", identity: review.identity.toJSON(), baseReviewDigest: review.digest,
+        findings: [], operations: [],
+      }).toJSON()));
+    } else {
+      assert.equal(nodeId, "test-review", "scenario only fakes the external Spec and Requirement Review processes");
+      const revision = JSON.parse(options.env.SENNEL_REVIEW_TEST_ARTIFACT_REVISION);
+      this.reviews.push(revision);
+      const response = this.options.reviewResponse?.(this.reviews.length, revision, options.env)
+        ?? { verdict: this.options.reviewVerdict ?? "PASS", blockingFindings: [], advisoryFindings: [] };
+      const parsed = parseTestReviewFindings(JSON.stringify({ blockingFindings: response.blockingFindings ?? [], advisoryFindings: response.advisoryFindings ?? [] }));
+      fs.writeFileSync(path.join(options.env.SENNEL_REVIEW_OUTPUT_DIR, "requirement-test-review.json"), workerArtifactJson({
+        ...(response.toolingOutcome ? { toolingOutcome: response.toolingOutcome } : { verdict: response.verdict }),
+        blockingFindings: parsed.blocking.map((finding) => finding.toJSON()),
+        advisoryFindings: parsed.advisory.map((finding) => finding.toJSON()),
+      }));
+    }
+    const manifest = work.manifest();
+    if (nodeId === "test-review") this.reviewWorkUnits.set(manifest.attemptId, Object.freeze({ manifest, seal: null }));
+    const seal = work.seal();
+    if (nodeId === "test-review") this.reviewWorkUnits.set(manifest.attemptId, Object.freeze({ manifest, seal }));
+    return { ok: true, status: 0, signal: null, killed: false, stdout: "", stderr: "" };
   }
 
   spec() {
@@ -328,10 +326,10 @@ export class RequirementTestPhaseScenario {
     return { state: this.manager.canonicalState(this.specId).toJSON(),
       activities: this.manager.activityLedger(this.specId), catalog: this.manager.artifactCatalog(this.specId).toJSON() };
   }
-  close() {
+  close({ retainRoot = false } = {}) {
     this.reviewProcess?.mock.restore();
-    syncBuiltinESMExports();
     this.gateProvider?.mock.restore();
+    if (retainRoot) return;
     if (this.seedClone) this.seedClone.cleanup();
     else if (!this.options.prepared) removeTmpDir(this.root);
   }

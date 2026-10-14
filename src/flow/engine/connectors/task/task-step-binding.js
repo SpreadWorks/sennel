@@ -16,4 +16,6 @@ export class TaskStepBinding extends StepBinding {
     this.taskIdentity = identity;
     Object.freeze(this);
   }
+
+  get taskId() { return this.taskIdentity.taskId; }
 }

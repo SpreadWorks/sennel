@@ -1,10 +1,8 @@
 import assert from "node:assert/strict";
-import childProcess from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";
-import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
-import { it, mock } from "node:test";
+import { it } from "node:test";
 
 import { FlowManager } from "../../../src/lib/flow-manager.js";
 import { managedOutputDir } from "../../../src/lib/config.js";
@@ -21,6 +19,7 @@ import { ReviewWorkUnit } from "../../../src/flow/lib/review-work-unit.js";
 import { sealWorkerArtifactHandoff } from "../../../src/flow/lib/worker-artifact-handoff.js";
 import { CanonicalFlowFixture, canonicalDraftDocument } from "../../support/infrastructure/flow-setup.js";
 import { removeTmpDir } from "../../support/builders/tmp-dir.js";
+import { installReviewProcessFake } from "../../support/infrastructure/review-process-fake.js";
 import { workerArtifactJson } from "../../support/infrastructure/worker-artifact.js";
 import { dispatchContainer, fixtureRepository, installGateProviderFake, requestInput, requestPayloadPath } from "../../support/infrastructure/flow-dispatch-scenario.js";
 import { assertCanonicalStepResult } from "../../support/infrastructure/canonical-step-result.js";
@@ -63,11 +62,7 @@ it("reopens Draft and preserves repair Attempt ordinals across an intervening De
         observed: "The Draft does not state the behavioral regression check.",
       }] : [], evaluationUnavailable: null });
     });
-    const originalSpawnSync = childProcess.spawnSync;
-    reviewProcess = mock.method(childProcess, "spawnSync", (command, args, options) => {
-      if (command !== "node" || !String(args[0]).endsWith("/flow/commands/review.js")) {
-        return originalSpawnSync(command, args, options);
-      }
+    reviewProcess = installReviewProcessFake((_command, _args, options) => {
       const state = manager.canonicalState(specId);
       const step = state.current.at(-1);
       const repair = state.findNode("draft-gate-repair");
@@ -81,9 +76,8 @@ it("reopens Draft and preserves repair Attempt ordinals across an intervening De
         blockingFindings: [], advisoryFindings: [], repairTargets: [],
       }));
       work.seal();
-      return { status: 0, signal: null, stdout: "", stderr: "" };
+      return { ok: true, status: 0, signal: null, killed: false, stdout: "", stderr: "" };
     });
-    syncBuiltinESMExports();
     const agent = { async call(_prompt, options) { try {
       const requestPath = options.executionEnvironment.SENNEL_FLOW_HANDOFF_REQUEST;
       const request = JSON.parse(fs.readFileSync(requestPath, "utf8"));
@@ -161,7 +155,6 @@ it("reopens Draft and preserves repair Attempt ordinals across an intervening De
   } finally {
     gateProvider?.mock.restore();
     reviewProcess?.mock.restore();
-    syncBuiltinESMExports();
     removeTmpDir(root);
   }
 });
@@ -364,11 +357,7 @@ it("produces Draft through registered Review/Gate commands and reloads its exact
       }
       return JSON.stringify({ observations: knownIds.includes(sharedGuardrail) ? observations : [], evaluationUnavailable: null });
     });
-    const originalSpawnSync = childProcess.spawnSync;
-    reviewProcess = mock.method(childProcess, "spawnSync", (command, args, options) => {
-      if (command !== "node" || !String(args[0]).endsWith("/flow/commands/review.js")) {
-        return originalSpawnSync(command, args, options);
-      }
+    reviewProcess = installReviewProcessFake((_command, _args, options) => {
       const state = flowManager.canonicalState(specId);
       const step = state.current.at(-1);
       assert.ok(["draft-questions-review", "draft-coverage-review"].includes(step));
@@ -384,9 +373,8 @@ it("produces Draft through registered Review/Gate commands and reloads its exact
         blockingFindings: [], advisoryFindings: [], repairTargets: [],
       }));
       work.seal();
-      return { status: 0, signal: null, stdout: "", stderr: "" };
+      return { ok: true, status: 0, signal: null, killed: false, stdout: "", stderr: "" };
     });
-    syncBuiltinESMExports();
     const agent = {
       async call(_prompt, options) {
         const requestPath = options.executionEnvironment.SENNEL_FLOW_HANDOFF_REQUEST;
@@ -611,7 +599,6 @@ it("produces Draft through registered Review/Gate commands and reloads its exact
 
   } finally {
     reviewProcess?.mock.restore();
-    syncBuiltinESMExports();
     gateAgentLookup?.mock.restore();
     removeTmpDir(root);
   }
