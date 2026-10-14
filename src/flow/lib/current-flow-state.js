@@ -2070,7 +2070,7 @@ export function assertDraftSettlementReceiptTransition(priorReceipts, receipt, {
     throw new CurrentFlowStateInvariantError("Draft settlement receipt history must be an array");
   }
   const lifecycle = receipt?.executionLifecycle ?? null;
-  const executionHistory = priorReceipts.filter((entry) => entry?.executionLifecycle !== null);
+  const executionHistory = priorReceipts.filter((entry) => entry?.executionLifecycle != null);
   if (priorReceipts.some((entry) => entry?.id === receipt?.id)) {
     throw new CurrentFlowStateConflictError("Draft settlement receipt was already recorded");
   }

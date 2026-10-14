@@ -89,7 +89,7 @@ export class FinalizationPhaseScenario extends AcceptancePhaseScenario {
         this.ghCalls.push([...args]);
         return this.options.ghProcess(args, options, this);
       }
-      if (command !== "node" || !String(args[0]).endsWith("/src/docs.js") || args[1] !== "build") {
+      if (command !== process.execPath || !String(args[0]).endsWith("/src/docs.js") || args[1] !== "build") {
         return original(command, args, options);
       }
       const outbox = this.outbox("finalize-sync");

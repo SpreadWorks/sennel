@@ -225,34 +225,6 @@ function buildSummary({ root, specDir, testableRequirements, specLocal, range, f
   });
 }
 
-function requirementExecutionLifecycle({ planArtifact, receipts, requirements }) {
-  const workItems = planArtifact.plan.workItems;
-  const expected = requirements.filter((requirement) => requirement.testable !== false).map((requirement) => requirement.id);
-  const ids = workItems.map((item) => item.requirementId);
-  const duplicates = ids.filter((id, index) => ids.indexOf(id) !== index);
-  const unknown = ids.filter((id) => !expected.includes(id));
-  const missing = expected.filter((id) => !ids.includes(id));
-  if (duplicates.length || unknown.length || missing.length) {
-    throw new Error(`Requirement test plan membership invalid: missing=${missing.join(",")} unknown=${unknown.join(",")} duplicate=${duplicates.join(",")}`);
-  }
-  const deferredById = new Map(receipts.map((receipt) => [receipt.requirementId, receipt]));
-  if (deferredById.size !== receipts.length) throw new Error("Requirement deferred receipts contain duplicate requirements");
-  const promoted = [];
-  for (const item of workItems) {
-    if (item.status === "promoted") promoted.push(item.requirementId);
-    else if (item.status !== "deferred") throw new Error(`Requirement ${item.requirementId} is not promoted or deferred`);
-    if (item.status === "deferred") {
-      const receipt = deferredById.get(item.requirementId);
-      if (!receipt || !item.specRevision.equals(receipt.specRevision)) throw new Error(`Requirement ${item.requirementId} deferred receipt is missing or stale`);
-    } else if (deferredById.has(item.requirementId)) {
-      throw new Error(`Requirement ${item.requirementId} is both promoted and deferred`);
-    }
-  }
-  const unknownReceipts = receipts.filter((receipt) => !ids.includes(receipt.requirementId));
-  if (unknownReceipts.length) throw new Error(`Requirement deferred receipts contain unknown requirements: ${unknownReceipts.map((receipt) => receipt.requirementId).join(",")}`);
-  return { promotedIds: new Set(promoted), deferredReceipts: receipts };
-}
-
 function specLocalPassed(specLocal) {
   return processPassed(specLocal.result);
 }
@@ -319,16 +291,10 @@ async function executeCanonicalTestExecution(ctx, config, { runSpecLocal = runSp
   const artifacts = new CanonicalTestArtifactStore({ flowManager: ctx.flowManager, state });
   const testSourceRevision = artifacts.testSourceRevision();
   const repositoryRoot = artifacts.location.repositoryRoot;
-  const spec = artifacts.readSpec("test-execute");
-  const requirements = Array.isArray(spec.requirements) ? spec.requirements : [];
+  const lifecycle = new RequirementTestArtifactStore({ flowManager: ctx.flowManager, state })
+    .readExecutionLifecycle("test-execute");
+  const { requirements, promotedIds, deferredReceipts } = lifecycle;
   const testableRequirements = testableRequirementsForSummary(requirements);
-  const requirementStore = new RequirementTestArtifactStore({ flowManager: ctx.flowManager, state });
-  const planRead = requirementStore.readPlan("test-execute");
-  const lifecycle = requirementExecutionLifecycle({
-    planArtifact: planRead.artifact,
-    receipts: requirementStore.deferredReceipts("test-execute"),
-    requirements,
-  });
   const analysisPath = path.join(managedOutputDir(executionRoot), "analysis.json");
   if (!fs.existsSync(analysisPath)) {
     throw new Error(`analysis.json not found at ${analysisPath}: run docs scan before test-execute`);
@@ -341,7 +307,7 @@ async function executeCanonicalTestExecution(ctx, config, { runSpecLocal = runSp
     .filter((file) => /\.(test|spec)\.(js|mjs|ts)$/.test(file))
     .filter((file) => {
       const header = scanFileHeader(file);
-      return header.kind === "valid" && header.ids.some((id) => lifecycle.promotedIds.has(id));
+      return header.kind === "valid" && header.ids.some((id) => promotedIds.has(id));
     });
   const rawLines = [];
   const specLocal = await runSpecLocal({
@@ -350,8 +316,8 @@ async function executeCanonicalTestExecution(ctx, config, { runSpecLocal = runSp
     specDir: artifacts.directory,
     timeoutMs,
     files,
-    testNamePattern: lifecycle.promotedIds.size > 0
-      ? `^(?:${[...lifecycle.promotedIds].map((id) => `${id}:`.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|")})`
+    testNamePattern: promotedIds.size > 0
+      ? `^(?:${[...promotedIds].map((id) => `${id}:`.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|")})`
       : null,
   });
   const specLocalFailedIds = failedRequirementIdsFromSpecLocal(specLocal, testableRequirements);
@@ -359,9 +325,9 @@ async function executeCanonicalTestExecution(ctx, config, { runSpecLocal = runSp
     "[sennel] spec-local tests start",
     `command: ${specLocal.command}`,
     ...processOutputLines(specLocal.result),
-    ...testableRequirements.map((req) => lifecycle.promotedIds.has(req.id)
+    ...testableRequirements.map((req) => promotedIds.has(req.id)
       ? requirementRawResultLine(req, specLocal, specLocalFailedIds)
-      : `[sennel] requirement ${req.id} result deferred receipt=${JSON.stringify(lifecycle.deferredReceipts.find((receipt) => receipt.requirementId === req.id)?.toJSON())}`),
+      : `[sennel] requirement ${req.id} result deferred receipt=${JSON.stringify(deferredReceipts.find((receipt) => receipt.requirementId === req.id)?.toJSON())}`),
     "[sennel] spec-local tests end",
   ]);
   const summary = buildSummary({
@@ -372,7 +338,7 @@ async function executeCanonicalTestExecution(ctx, config, { runSpecLocal = runSp
     range: specRange,
     failedIds: specLocalFailedIds,
     files,
-    deferredReceipts: lifecycle.deferredReceipts,
+    deferredReceipts,
   });
   // Validate before writing any runtime diagnostic.  The test source paths
   // were catalog-resolved above, so this is a consumer validation rather than
@@ -382,7 +348,7 @@ async function executeCanonicalTestExecution(ctx, config, { runSpecLocal = runSp
     rawText: rawLines.join("\n"),
     rawLines,
     requirements,
-    deferredReceipts: lifecycle.deferredReceipts,
+    deferredReceipts,
   });
 
   const changedFiles = listRegressionChangedFiles({ root: executionRoot, state });

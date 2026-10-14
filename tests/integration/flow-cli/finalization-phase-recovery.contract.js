@@ -419,6 +419,15 @@ export function registerFinalizationRecoveryContracts(scenario) {
     const denied = await flow.runRegistered("recover-finalization");
     assert.equal(denied.ok, false, "unrepaired conflict cannot consume the exact recovery allowance");
     assert.deepEqual(flow.reload().snapshot(), before);
+    const failedGit = flow.gitSnapshot();
+    for (const leaf of ["finalize-merge", "finalize-sync", "finalize-cleanup"]) {
+      const unselected = await flow.runRegistered(leaf);
+      assert.equal(unselected.ok, false, `failed merge cannot authorize ${leaf} before exact recovery`);
+      assert.deepEqual(flow.reload().snapshot(), before,
+        "unselected retry cannot reset skips, append Activity or consume the recovery allowance");
+      assert.deepEqual(flow.gitSnapshot(), failedGit);
+    }
+    assert.equal(flow.docsCalls.length, 0);
     fs.writeFileSync(path.join(baseWorktree, "conflict.txt"), "accepted feature behavior\n");
     flow.git(["-C", baseWorktree, "add", "conflict.txt"]);
     flow.git(["-C", baseWorktree, "commit", "-m", "fix: explicitly resolve finalization conflict"]);

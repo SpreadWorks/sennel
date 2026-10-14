@@ -95,6 +95,11 @@ node --test tests/unit/structured-step-result-contract.test.js tests/integration
 node --test tests/unit/requirement-test-definition-policy.test.js tests/integration/flow/requirement-test-lifecycle-regressions.test.js tests/integration/flow/run-requirement-test-gate.test.js tests/integration/flow/mixed-requirement-downstream.test.js
 ```
 
+These commands record the a1ee verification set. In ff4a, the standalone mixed
+fixture is consolidated into the Requirement phase scenario. Current commands,
+the producer and consumer mapping, and outstanding acceptance evidence are in
+[the ff4a consolidation record](ff4a-regression-consolidation.md).
+
 The existing required regression command passes 45/45, and shared checker
 regressions pass 199/199. Prepare observer integration passes 5/5. Their product
 source and relevant tests are unchanged in this candidate, so those completed

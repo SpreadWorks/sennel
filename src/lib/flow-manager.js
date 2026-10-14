@@ -594,6 +594,7 @@ export class FlowManager {
   }
   claimExecutionContract(input) { return this._store.claimExecutionContract(input); }
   readStoredExecutionContract(input) { return this._store.readStoredExecutionContract(input); }
+  requirementTestGenerationExecutionState(input) { return this._store.requirementTestGenerationExecutionState(input); }
   readExecutionContract(input) { return this._store.readExecutionContract(input); }
   readPromptExecutionProgress(input) { return this._store.readPromptExecutionProgress(input); }
   readPromptExecutionEpisode(input) { return this._store.readPromptExecutionEpisode(input); }

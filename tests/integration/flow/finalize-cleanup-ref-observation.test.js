@@ -49,6 +49,14 @@ test("cleanup deletes the exact expected ref and repeated deletion proves true a
   assert.equal(validateTeardown({ mainRepoPath: root, featureBranch }).ok, true);
 });
 
+test("teardown validation refuses a remaining feature ref", (t) => {
+  const root = fixture(t);
+  const result = validateTeardown({ mainRepoPath: root, featureBranch });
+  assert.equal(result.ok, false);
+  assert.equal(result.reasons.some((reason) => reason.includes("Feature branch remains")), true);
+  assert.equal(featureOid(root), expectedSha);
+});
+
 test("a ref query failure before deletion refuses and preserves the feature ref", (t) => {
   const root = fixture(t);
   const result = removeFeature(root, (args) => args.includes("for-each-ref") ? ioFailure : runGit(args));

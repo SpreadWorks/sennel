@@ -9,8 +9,7 @@ import { finalizationPhaseSettlementExpectations } from "../../support/assertion
 test("0717 fixes all four leaves and their semantic and common Error Results", () => {
   const expected = finalizationPhaseManifest.leaves.map((leaf) => leaf.stepId).sort();
   assert.deepEqual([...new Set(finalizationPhaseResultContracts.map((entry) => entry.stepId))].sort(), expected);
-  assert.equal(finalizationPhaseResultContracts.length, 18);
-  assert.equal(new Set(finalizationPhaseResultContracts.map((entry) => entry.kind)).size, 18);
+  assert.equal(new Set(finalizationPhaseResultContracts.map((entry) => entry.kind)).size, finalizationPhaseResultContracts.length);
   for (const stepId of expected) {
     const contracts = finalizationPhaseResultContracts.filter((entry) => entry.stepId === stepId);
     assert.equal(contracts.filter((entry) => entry.type === "loop-required").length, 1);

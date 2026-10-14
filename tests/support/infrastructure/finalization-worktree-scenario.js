@@ -23,9 +23,13 @@ export class FinalizationWorktreeScenario extends FinalizationPhaseScenario {
     const prepared = PrepareArtifactScenario.create(t, { mode: "worktree",
       request: "Preserve report evidence and exact managed worktree ownership through finalization." });
     fs.appendFileSync(path.join(prepared.root, ".gitignore"), "!/.sennel/output/\n");
+    // The inherited phase setup consumes this tracked analysis baseline.
+    // Create it before real Prepare so both checkouts inherit the same bytes.
+    fs.mkdirSync(path.join(prepared.root, ".sennel", "output"), { recursive: true });
+    fs.writeFileSync(path.join(prepared.root, ".sennel", "output", "analysis.json"), "{}\n");
     fs.mkdirSync(path.join(prepared.root, "docs"), { recursive: true });
     fs.writeFileSync(path.join(prepared.root, "docs", "overview.md"), "Tracked documentation before finalization.\n");
-    prepared.git(["add", ".gitignore", "docs/overview.md"]);
+    prepared.git(["add", ".gitignore", "docs/overview.md", ".sennel/output/analysis.json"]);
     prepared.git(["commit", "-m", "Seed tracked finalization inputs"]);
     // The real worktree pre-sync fetches origin. Its entire Git peer is an
     // owned local directory, so production fetch/rebase need no network fake.
