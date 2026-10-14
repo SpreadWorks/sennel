@@ -114,6 +114,17 @@ test("an immediately escaping directly owned provider refuses stop proof before 
   assert.equal(known.startFingerprint, String(birth.startFingerprint));
   assert.equal(new ProcessIdentitySource().assess(new ProcessIdentity(known)).status, "live");
   assert.equal(record.controlFailure.code, "PROCESS_EXECUTION_IDENTITY_UNKNOWN");
+  const diagnostic = outcome.error.diagnostic;
+  assert.equal(diagnostic.role, "provider");
+  assert.equal(diagnostic.birth.pid, started.pid);
+  assert.equal(diagnostic.birth.startFingerprint, String(birth.startFingerprint));
+  assert.equal(diagnostic.originalPgid, call.pgid);
+  assert.equal(diagnostic.observedPgid, live.pgrp);
+  assert.equal(diagnostic.observedSid, live.sessionId);
+  assert.equal(diagnostic.executionId, execution.executionId);
+  assert.equal(diagnostic.callId, call.callId);
+  assert.deepEqual(record.controlFailure.diagnostic, diagnostic.toJSON());
+  assert.equal(Object.hasOwn(diagnostic.birth, "ownerToken"), false);
   await assert.rejects(ProcessExecutionRuntime.acquire({ mainRoot: root }),
     (error) => error instanceof ProcessExecutionControlFailure && error.code === "PROCESS_EXECUTION_BUSY");
   assert.equal(runtime.inspect().executions.at(-1).calls[0].receipt, null);

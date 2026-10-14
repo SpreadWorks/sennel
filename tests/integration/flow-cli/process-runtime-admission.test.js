@@ -11,6 +11,8 @@ import RunGateCommand from "../../../src/flow/lib/run-gate.js";
 import RunDispatchCommand from "../../../src/flow/lib/run-dispatch.js";
 import { FlowDispatchTarget } from "../../../src/flow/lib/dispatch-invocation.js";
 import { flowCommands } from "../../../src/lib/command-registry.js";
+import { ProcessIdentity, ProcessIdentitySource } from "../../../src/lib/process-identity.js";
+import { readManagedRecord } from "../../../src/lib/managed-process-protocol.js";
 import { ProcessExecutionRuntime, ProcessExecutionControlFailure } from "../../../src/lib/process-execution-runtime.js";
 import { SourceMutationManifest, WorkerArtifactHandoffCoordinator, WorkerArtifactHandoffSubmission } from "../../../src/flow/lib/worker-artifact-handoff.js";
 import { Command } from "../../../src/lib/command.js";
@@ -266,72 +268,164 @@ test("double SIGKILL resume stops old provider and descendant before refusing an
   assert.ok(fs.existsSync(scenario.request), "the unsealed request must remain available for diagnosis");
 });
 
-test("sealed crash recovery publishes once and a fresh canonical consumer reads the original digest", async (t) => {
-  const scenario = new ProcessRuntimeFlowScenario(seed, { test: t, sealed: true });
-  const dispatcher = await scenario.startProvider();
-  const request = JSON.parse(fs.readFileSync(scenario.request, "utf8"));
-  const payload = request.payloads.find((entry) => entry.logicalName === "draft.json");
-  const original = fs.readFileSync(payload.payloadPath);
-  const sealedOutput = JSON.parse(fs.readFileSync(scenario.started, "utf8")).sealedOutput;
-  const submission = new WorkerArtifactHandoffSubmission(JSON.parse(fs.readFileSync(sealedOutput.handoffPath, "utf8")));
-  assert.equal(submission.handoffDigest, sealedOutput.handoffDigest);
-  const before = scenario.snapshot();
-  const runtimeBefore = executionSnapshot(scenario);
-  dispatcher.kill();
-  assert.equal((await dispatcher.result).signal, "SIGKILL");
-  const resumed = await scenario.invoke(["run", "dispatch"]);
-  if (resumed.status !== 0) t.diagnostic(`sealed failure diagnostic: ${scenario.preserveFailureEvidence("sealed")}`);
-  assert.equal(resumed.status, 0, `stdout:\n${resumed.stdout}\nstderr:\n${resumed.stderr}`);
-  if (Number(fs.readFileSync(scenario.count, "utf8")) !== 1) {
-    t.diagnostic(`initial Draft call-count failure: ${scenario.preserveFailureEvidence("draft-call-count")}`);
-  }
-  assert.equal(Number(fs.readFileSync(scenario.count, "utf8")), 1,
-    "validated sealed output must be replayed without another call for its original Draft step");
-  assertStoppedReadback(scenario, runtimeBefore);
-  const manager = scenario.manager();
-  // The real Review provider records a fresh Store read while the initial
-  // publication is current. Refine subsequently promotes q1 and replaces it.
-  const initial = JSON.parse(fs.readFileSync(scenario.reviewInput, "utf8"));
-  const initialBytes = Buffer.from(initial.bytes);
-  assert.deepEqual(JSON.parse(initialBytes), JSON.parse(original));
-  assert.equal(createHash("sha256").update(initialBytes).digest("hex"), initial.descriptor.hash);
-  assert.equal(initialBytes.length, initial.descriptor.size);
-  const publications = manager.activityLedger(scenario.specId).filter((entry) => entry.nodeId === "draft"
-    && entry.attemptId === request.executionContract.attemptId
-    && entry.result?.artifactRefs?.some((ref) => ref.kind === "worker-handoff-request" && ref.id === submission.requestDigest)
-    && entry.result.artifactRefs.some((ref) => ref.kind === "worker-handoff" && ref.id === submission.handoffDigest));
-  assert.equal(publications.length, 1, "the original sealed Draft must have exactly one canonical publication");
-  assert.equal(publications[0].id, initial.descriptor.activityId);
-  const latest = scenario.assertAwaitingQuestionBoundary();
-  assert.notEqual(latest.descriptor.hash, initial.descriptor.hash,
-    "lawful Refine promotion must produce a distinct question revision");
-  assert.notDeepEqual(manager.canonicalState(scenario.specId).toJSON(), before.state);
-  const reviewSource = JSON.parse(fs.readFileSync(scenario.reviewSource, "utf8"));
-  assert.equal(reviewSource.revision.digest, initial.descriptor.hash);
-  const review = JSON.parse(manager.readArtifact({ specId: scenario.specId, logicalKey: "draft.questions.review",
-    consumerNodeId: "draft-questions-triage" }).bytes).attempts.at(-1).artifact.payload;
-  assert.equal(review.sourceDraftRevision.digest, initial.descriptor.hash);
-  assert.equal(review.verdict, "PASS");
-  assert.equal(fs.existsSync(path.dirname(path.dirname(payload.payloadPath))), false,
-    "successful canonical publication must clean its transient handoff");
-  const inventory = executionSnapshot(scenario);
-  const nestedReviewCalls = inventory.executions.flatMap((execution) => execution.calls
-    .filter((call) => call.parentCallId !== null && call.invocation.kind === "provider"
-      && call.binding.nodeId === "draft-questions-review")
-    .map((call) => ({ call, parent: execution.calls.find((entry) => entry.callId === call.parentCallId) })));
-  assert.ok(nestedReviewCalls.length > 0, "the actual Review child must attach its provider to the root execution");
-  for (const { call, parent } of nestedReviewCalls) {
-    assert.equal(parent.invocation.kind, "command");
-    assert.notEqual(call.pgid, parent.pgid, "Review CLI and provider require separate managed groups");
-    assert.deepEqual(call.binding, parent.binding, "nested physical calls must retain the exact Review execution contract");
-    assert.equal(call.receipt.stopEvidence.status, "confirmed");
-    assert.equal(parent.receipt.stopEvidence.status, "confirmed");
-  }
-  const published = scenario.snapshot();
-  const query = await scenario.invoke(["get", "next-action"]);
-  assert.equal(query.status, 0, query.stderr);
-  assert.deepEqual(scenario.snapshot(), published, "readback must not publish or spend budget again");
-});
+for (const migratedDescendant of [false, true]) {
+  test(`sealed crash recovery${migratedDescendant ? " waits for a known migrated member then" : ""} publishes once and a fresh canonical consumer reads the original digest`, async (t) => {
+    const scenario = new ProcessRuntimeFlowScenario(seed, { test: t, sealed: true, migratedDescendant });
+    const dispatcher = await scenario.startProvider();
+    const request = JSON.parse(fs.readFileSync(scenario.request, "utf8"));
+    const payload = request.payloads.find((entry) => entry.logicalName === "draft.json");
+    const original = fs.readFileSync(payload.payloadPath);
+    const sealedOutput = JSON.parse(fs.readFileSync(scenario.started, "utf8")).sealedOutput;
+    const submission = new WorkerArtifactHandoffSubmission(JSON.parse(fs.readFileSync(sealedOutput.handoffPath, "utf8")));
+    assert.equal(submission.handoffDigest, sealedOutput.handoffDigest);
+    const sealedDraft = submission.payloadManifest.find((entry) => entry.logicalName === "draft.json");
+    assert.equal(sealedDraft.digest, createHash("sha256").update(original).digest("hex"));
+    assert.equal(sealedDraft.byteLength, original.length);
+    const before = scenario.snapshot();
+    let migratedCall = null;
+    let member = null;
+    const identities = new ProcessIdentitySource();
+    if (migratedDescendant) {
+      const started = JSON.parse(fs.readFileSync(scenario.started, "utf8"));
+      member = new ProcessIdentity(started.descendantIdentity);
+      const active = executionSnapshot(scenario);
+      migratedCall = active.executions.find((entry) => entry.executionId === active.slot).calls
+        .find((call) => call.invocation.kind === "provider" && call.binding.nodeId === "draft");
+      assert.ok(migratedCall, "the actual provider must belong to a managed physical call");
+      const captured = await scenario.awaitOutcome(migratedCall.callId,
+        (record) => record.members.some((entry) => member.sameBirth(new ProcessIdentity(entry))));
+      assert.ok(captured.members.some((entry) => new ProcessIdentity(started.providerIdentity).sameBirth(new ProcessIdentity(entry))),
+        "the durable outcome must identify this exact provider birth");
+      const originalMember = identities.observe(member);
+      assert.equal(originalMember.status, "live");
+      assert.equal(originalMember.stat.pgrp, captured.pgid);
+      assert.notEqual(member.pid, captured.pgid, "setsid must exec without forking a new birth");
+      scenario.migrateMember();
+      await awaitRuntimeBarrier(scenario.migrated);
+      const moved = JSON.parse(fs.readFileSync(scenario.migrated, "utf8"));
+      assert.equal(member.sameBirth(new ProcessIdentity(moved.identity)), true);
+      assert.equal(moved.stat.pgrp, member.pid);
+      assert.equal(moved.stat.sessionId, member.pid);
+      assert.notEqual(moved.stat.pgrp, captured.pgid);
+      const provider = identities.observe(new ProcessIdentity(started.providerIdentity));
+      assert.equal(provider.status, "live");
+      assert.equal(provider.stat.pgrp, captured.pgid, "only the descendant may leave the provider group");
+      scenario.releaseProvider();
+      const exited = await scenario.awaitOutcome(migratedCall.callId, (record) => {
+        assert.equal(record.controlFailure, null, "a known member migration must preserve managed control");
+        return record.outcome.code === 0;
+      });
+      assert.notEqual(exited.state, "finished", "provider exit must not finish while the migrated birth is live");
+      assert.equal(identities.observe(member).terminated, false);
+      assert.deepEqual(scenario.snapshot(), before, "a live migrated member must prevent initial publication");
+    }
+    const runtimeBefore = executionSnapshot(scenario);
+    dispatcher.kill();
+    assert.equal((await dispatcher.result).signal, "SIGKILL");
+    const recovery = scenario.start();
+    if (migratedDescendant) {
+      const waiting = new AbortController();
+      try {
+        await Promise.race([
+          scenario.awaitOutcome(migratedCall.callId, (record) => {
+            assert.equal(record.controlFailure, null);
+            return record.state === "stopping";
+          }, { signal: waiting.signal }),
+          recovery.result.then((result) => { throw new Error(`recovery exited with a live migrated member: ${JSON.stringify(result)}`); }),
+        ]);
+        const recovering = executionSnapshot(scenario);
+        const originalExecution = recovering.executions.find((entry) => entry.executionId === runtimeBefore.slot);
+        const originalCall = originalExecution.calls.find((entry) => entry.callId === migratedCall.callId);
+        assert.equal(recovering.slot, runtimeBefore.slot);
+        assert.equal(originalExecution.status, "stopping");
+        assert.equal(originalCall.receipt, null);
+        assert.ok(originalCall.members.some((entry) => member.sameBirth(new ProcessIdentity(entry))),
+          "a fresh manager must merge the durably captured migrated birth before stop confirmation");
+        assert.equal(identities.observe(member).terminated, false);
+        assert.equal(Number(fs.readFileSync(scenario.count, "utf8")), 1);
+        assert.deepEqual(scenario.snapshot(), before, "recovery must not publish or spend budget before all members stop");
+      } catch (error) {
+        t.diagnostic(`migrated recovery diagnostic: ${scenario.preserveFailureEvidence("migrated-recovery")}`);
+        throw error;
+      } finally {
+        waiting.abort(new Error("recovery barrier observation finished"));
+        scenario.releaseMember();
+      }
+    }
+    const resumed = await recovery.result;
+    if (migratedDescendant) {
+      await awaitRuntimeBarrier(scenario.memberExited);
+      assert.equal(JSON.parse(fs.readFileSync(scenario.memberExited, "utf8")).reason, "released");
+      assert.equal(identities.observe(member).terminated, true);
+      const settlement = readManagedRecord(scenario.outcomePath(migratedCall.callId));
+      assert.equal(settlement.controlFailure, null);
+      assert.equal(settlement.outcome.code, 0);
+      assert.equal(settlement.outcome.signal, null);
+      assert.ok(settlement.state === "finished"
+        || (settlement.state === "stopping" && settlement.outcome.finalAction === "SIGKILL"),
+      "recovery requires the production launcher seal, before any fixture teardown");
+    }
+    if (resumed.status !== 0) t.diagnostic(`sealed failure diagnostic: ${scenario.preserveFailureEvidence("sealed")}`);
+    assert.equal(resumed.status, 0, `stdout:\n${resumed.stdout}\nstderr:\n${resumed.stderr}`);
+    if (Number(fs.readFileSync(scenario.count, "utf8")) !== 1) {
+      t.diagnostic(`initial Draft call-count failure: ${scenario.preserveFailureEvidence("draft-call-count")}`);
+    }
+    assert.equal(Number(fs.readFileSync(scenario.count, "utf8")), 1,
+      "validated sealed output must be replayed without another call for its original Draft step");
+    assertStoppedReadback(scenario, runtimeBefore);
+    if (migratedDescendant) {
+      const recovered = executionSnapshot(scenario).executions.find((entry) => entry.executionId === runtimeBefore.slot);
+      const call = recovered.calls.find((entry) => entry.callId === migratedCall.callId);
+      assert.ok(call.receipt.members.some((entry) => member.sameBirth(new ProcessIdentity(entry))),
+        "fresh durable receipt readback must retain the exact migrated member birth");
+      assert.deepEqual(call.receipt.members, call.members);
+      assert.equal(call.outcome.code, 0);
+    }
+    const manager = scenario.manager();
+    // The real Review provider records a fresh Store read while the initial
+    // publication is current. Refine subsequently promotes q1 and replaces it.
+    const initial = JSON.parse(fs.readFileSync(scenario.reviewInput, "utf8"));
+    const initialBytes = Buffer.from(initial.bytes);
+    assert.deepEqual(JSON.parse(initialBytes), JSON.parse(original));
+    assert.equal(createHash("sha256").update(initialBytes).digest("hex"), initial.descriptor.hash);
+    assert.equal(initialBytes.length, initial.descriptor.size);
+    const publications = manager.activityLedger(scenario.specId).filter((entry) => entry.nodeId === "draft"
+      && entry.attemptId === request.executionContract.attemptId
+      && entry.result?.artifactRefs?.some((ref) => ref.kind === "worker-handoff-request" && ref.id === submission.requestDigest)
+      && entry.result.artifactRefs.some((ref) => ref.kind === "worker-handoff" && ref.id === submission.handoffDigest));
+    assert.equal(publications.length, 1, "the original sealed Draft must have exactly one canonical publication");
+    assert.equal(publications[0].id, initial.descriptor.activityId);
+    const latest = scenario.assertAwaitingQuestionBoundary();
+    assert.notEqual(latest.descriptor.hash, initial.descriptor.hash,
+      "lawful Refine promotion must produce a distinct question revision");
+    assert.notDeepEqual(manager.canonicalState(scenario.specId).toJSON(), before.state);
+    const reviewSource = JSON.parse(fs.readFileSync(scenario.reviewSource, "utf8"));
+    assert.equal(reviewSource.revision.digest, initial.descriptor.hash);
+    const review = JSON.parse(manager.readArtifact({ specId: scenario.specId, logicalKey: "draft.questions.review",
+      consumerNodeId: "draft-questions-triage" }).bytes).attempts.at(-1).artifact.payload;
+    assert.equal(review.sourceDraftRevision.digest, initial.descriptor.hash);
+    assert.equal(review.verdict, "PASS");
+    assert.equal(fs.existsSync(path.dirname(path.dirname(payload.payloadPath))), false,
+      "successful canonical publication must clean its transient handoff");
+    const inventory = executionSnapshot(scenario);
+    const nestedReviewCalls = inventory.executions.flatMap((execution) => execution.calls
+      .filter((call) => call.parentCallId !== null && call.invocation.kind === "provider"
+        && call.binding.nodeId === "draft-questions-review")
+      .map((call) => ({ call, parent: execution.calls.find((entry) => entry.callId === call.parentCallId) })));
+    assert.ok(nestedReviewCalls.length > 0, "the actual Review child must attach its provider to the root execution");
+    for (const { call, parent } of nestedReviewCalls) {
+      assert.equal(parent.invocation.kind, "command");
+      assert.notEqual(call.pgid, parent.pgid, "Review CLI and provider require separate managed groups");
+      assert.deepEqual(call.binding, parent.binding, "nested physical calls must retain the exact Review execution contract");
+      assert.equal(call.receipt.stopEvidence.status, "confirmed");
+      assert.equal(parent.receipt.stopEvidence.status, "confirmed");
+    }
+    const published = scenario.snapshot();
+    const query = await scenario.invoke(["get", "next-action"]);
+    assert.equal(query.status, 0, query.stderr);
+    assert.deepEqual(scenario.snapshot(), published, "readback must not publish or spend budget again");
+  });
+}
 
 test("source worker crash preserves unaccepted partial edits after exact runtime termination", async (t) => {
   const scenario = new ProcessRuntimeFlowScenario(seed, { test: t, step: "implement", sourceMutation: true,

@@ -67,14 +67,20 @@ function assertRecord(record, call) {
   return record;
 }
 
+function assertNoControlFailure(record, call) {
+  if (record.state === "control-failed" || record.controlFailure != null) {
+    throw ProcessExecutionControlFailure.fromStored(record.controlFailure,
+      { executionId: call.executionId, callId: call.callId });
+  }
+}
+
 export function readManagedSettlement(call) {
   const record = assertRecord(readManagedRecord(call.outcomePath) || readManagedRecord(call.helloPath), call);
-  if (record.state === "control-failed" && record.controlFailure) throw managedControlFailure(record.controlFailure.code, record.controlFailure.message);
+  assertNoControlFailure(record, call);
   if (!verifyManagedProcessStopped(record)) return null;
   if (record.state !== "finished" && !(record.state === "stopping" && record.outcome?.finalAction === "SIGKILL")) {
     throw managedControlFailure("PROCESS_EXECUTION_OUTCOME_UNSEALED", "Managed process ended without a durable final outcome");
   }
-  if (record.controlFailure) throw managedControlFailure(record.controlFailure.code, record.controlFailure.message);
   return { outcome: record.outcome, ...readManagedOutput(call, record.outcome, { sealed: true }), members: record.members,
     stopEvidence: AgentProcessStopEvidence.confirmed(), record };
 }
@@ -187,7 +193,8 @@ export async function executeManagedProcess(command, args, options = {}) {
     let stderrBytes = 0;
     let providerSpawnObserved = false;
     const observe = (record) => {
-      if (record.state === "control-failed" && record.controlFailure) throw managedControlFailure(record.controlFailure.code, record.controlFailure.message);
+      assertRecord(record, call);
+      assertNoControlFailure(record, call);
       if (record.outcome.providerStarted && !providerSpawnObserved) {
         providerSpawnObserved = true;
         notify("provider-spawn");

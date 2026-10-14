@@ -6,7 +6,7 @@ import { isDeepStrictEqual } from "node:util";
 import { AtomicFile, fsyncDirectory } from "./atomic-file.js";
 import { FileLock } from "./file-lock.js";
 import { ProcessLock } from "./process-lock.js";
-import { LinuxProcessStat, ProcessIdentity, ProcessIdentitySource } from "./process-identity.js";
+import { ProcessIdentity, ProcessIdentitySource } from "./process-identity.js";
 import { RealDirectoryAuthority } from "./real-directory-authority.js";
 import { AgentProcessStopEvidence } from "./agent-failure.js";
 
@@ -54,7 +54,7 @@ function readJson(file, required = true) {
 
 class PhysicalCallRecord {
   constructor({ callId, parentCallId, binding, invocation, capability, endpoint, status,
-    launcherIdentity, pgid, members, permit, receipt, outcome, controlFailure }) {
+    launcherIdentity, pgid, members, permit, receipt, outcome, controlFailure }, { executionId } = {}) {
     this.callId = uuid(callId, "callId");
     this.parentCallId = parentCallId === null ? null : uuid(parentCallId, "parentCallId");
     this.binding = new ProcessExecutionBinding(binding);
@@ -70,7 +70,7 @@ class PhysicalCallRecord {
     this.permit = permit === null ? null : new ProcessExecutionStartPermit(permit);
     this.receipt = receipt === null ? null : new ProcessExecutionStopReceipt(receipt);
     this.outcome = json(outcome);
-    this.controlFailure = controlFailure === null ? null : ProcessExecutionControlFailure.fromStored(json(controlFailure));
+    this.controlFailure = controlFailure === null ? null : ProcessExecutionControlFailure.fromStored(json(controlFailure), { executionId, callId: this.callId });
     if (this.launcherIdentity !== null && (!Number.isSafeInteger(pgid) || pgid < 1 || this.launcherIdentity.pid !== pgid)) {
       throw new TypeError("Launcher must lead its dedicated process group");
     }
@@ -98,7 +98,7 @@ class RootExecutionRecord {
     this.binding = new ProcessExecutionBinding(binding);
     if (typeof accepting !== "boolean" || !["active", "stopping", "closed"].includes(status)) throw new TypeError("Execution registration state is invalid");
     this.accepting = accepting; this.status = status;
-    this.calls = calls.map((call) => new PhysicalCallRecord(call));
+    this.calls = calls.map((call) => new PhysicalCallRecord(call, { executionId: this.executionId }));
     if (new Set(this.calls.map((call) => call.callId)).size !== this.calls.length) throw new TypeError("Duplicate physical call identity");
     this.closure = json(closure);
     if (status !== "active" && accepting) throw new TypeError("Stopping execution accepts new calls");
@@ -130,6 +130,13 @@ class RootExecutionRecord {
         || !isDeepStrictEqual(json(call.receipt.launcherIdentity), json(call.launcherIdentity))
         || call.receipt.pgid !== call.pgid || !isDeepStrictEqual(json(call.receipt.members), json(call.members))
         || call.receipt.outcomeDigest !== digest(call.outcome))) throw new TypeError("Call stop receipt binding is invalid");
+    }
+    for (const call of this.calls) {
+      const primaryCallId = call.controlFailure?.primaryCause.callId;
+      if (primaryCallId == null) continue;
+      let source = this.calls.find((entry) => entry.callId === primaryCallId);
+      while (source && source.callId !== call.callId) source = this.calls.find((entry) => entry.callId === source.parentCallId);
+      if (!source) throw new TypeError("Primary control failure is outside its physical call lineage");
     }
   }
   toJSON() { return { executionId: this.executionId, ownerEpoch: this.ownerEpoch, coordinatorIdentity: this.coordinatorIdentity,
@@ -549,9 +556,10 @@ export class ProcessExecutionRuntime {
       || store.identitySource.assess(record.coordinatorIdentity).status !== "live") fail("delegation-refused", "Nested execution root ownership is invalid");
     const parent = record.calls.find((call) => call.callId === grant.callId);
     const processIdentity = store.identitySource.createOwner(crypto.randomUUID());
-    const stat = LinuxProcessStat.parse(fs.readFileSync(`/proc/${processIdentity.pid}/stat`, "utf8"));
+    const observation = store.identitySource.observe(processIdentity);
     if (!parent || parent.status !== "running" || parent.capability !== grant.capability || parent.binding.digest !== grant.bindingDigest
-      || parent.pgid !== stat.pgrp || store.identitySource.assess(parent.launcherIdentity).status !== "live") fail("delegation-refused", "Nested execution is not a member of its authorized physical call");
+      || observation.status !== "live" || observation.terminated || parent.pgid !== observation.stat?.pgrp
+      || store.identitySource.assess(parent.launcherIdentity).status !== "live") fail("delegation-refused", "Nested execution is not a member of its authorized physical call");
     if (binding !== null && !new ProcessExecutionBinding(binding).matches(parent.binding)) fail("delegation-refused", "Nested execution contract differs from the delegation");
     return { record, parent, processIdentity };
   }
@@ -668,8 +676,7 @@ export class ProcessExecutionRuntime {
     });
   }
   static #saveControlFailure(root, call, error) {
-    if (call.controlFailure === null) call.controlFailure = new ProcessExecutionControlFailure(error.reason, error.message,
-      { cause: error, executionId: root.executionId, callId: call.callId });
+    if (call.controlFailure === null) call.controlFailure = error.withContext({ executionId: root.executionId, callId: call.callId });
   }
   #assertSubtreeSettled(root, call) {
     const pending = [call]; const subtree = [];
@@ -679,7 +686,7 @@ export class ProcessExecutionRuntime {
     }
     const unfinished = subtree.find((entry) => entry.receipt === null);
     if (unfinished) fail("stop-unconfirmed", "Physical call lineage contains a descendant without a durable stop receipt",
-      { executionId: root.executionId, callId: unfinished.callId });
+      { executionId: root.executionId, callId: unfinished.callId, cause: unfinished.controlFailure ?? subtree.find((entry) => entry.controlFailure !== null)?.controlFailure });
     const failed = subtree.find((entry) => entry.controlFailure !== null);
     if (failed) throw failed.controlFailure;
   }
@@ -720,7 +727,7 @@ export class ProcessExecutionRuntime {
     const transport = inventory.length === 0 ? null : await import("./managed-process.js");
     const protocol = inventory.length === 0 ? null : await import("./managed-process-protocol.js");
     for (const callId of inventory) {
-      const record = await this.store.exclusive(() => {
+      const { record, priorFailure } = await this.store.exclusive(() => {
         const registry = this.store.read(); const root = this.#record(registry); const call = root.calls.find((entry) => entry.callId === callId);
         const directory = this.store.callDirectory(callId);
         if (call.launcherIdentity === null) {
@@ -735,26 +742,34 @@ export class ProcessExecutionRuntime {
           if (outcome.members) this.#mergeMembers(call, outcome.members);
         }
         this.store.save(registry);
-        return this.#transportRecord(root, call);
+        return { record: this.#transportRecord(root, call), priorFailure: call.controlFailure };
       });
       let response;
-      const observed = this.#proof(await transport.verifyManagedProcessStopped(record));
-      if (observed.confirmed) {
-        response = transport.readManagedSettlement(record);
-        if (response === null) fail("stop-unconfirmed", "Stopped launcher has no validated durable settlement", { executionId: this.executionId, callId });
-      } else {
-        // Only the birth-authenticated live launcher may signal its own group.
-        if (this.store.identitySource.assess(record.launcherIdentity).status !== "live") fail("stop-unconfirmed", "Orphan group has no authenticated live launcher", { executionId: this.executionId, callId });
-        response = await transport.requestManagedLauncherStop(record);
+      try {
+        const observed = this.#proof(await transport.verifyManagedProcessStopped(record));
+        if (observed.confirmed) {
+          response = transport.readManagedSettlement(record);
+          if (response === null) fail("stop-unconfirmed", "Stopped launcher has no validated durable settlement", { executionId: this.executionId, callId });
+        } else {
+          // Only the birth-authenticated live launcher may signal its own group.
+          if (this.store.identitySource.assess(record.launcherIdentity).status !== "live") fail("stop-unconfirmed", "Orphan group has no authenticated live launcher", { executionId: this.executionId, callId });
+          response = await transport.requestManagedLauncherStop(record);
+        }
+        await this.store.exclusive(async () => {
+          const registry = this.store.read(); const root = this.#record(registry); const call = root.calls.find((entry) => entry.callId === callId);
+          if (response.members) this.#mergeMembers(call, response.members);
+          const proof = this.#proof(await transport.verifyManagedProcessStopped(this.#transportRecord(root, call)));
+          if (!proof.confirmed || !AgentProcessStopEvidence.from(response.stopEvidence).confirmed) fail("stop-unconfirmed", "Launcher response lacks independent termination proof", { executionId: this.executionId, callId });
+          this.#settle(root, call, { outcome: response.outcome, stopEvidence: proof });
+          this.store.save(registry);
+        });
+      } catch (cause) {
+        if (priorFailure !== null) throw new ProcessExecutionControlFailure(cause instanceof ProcessExecutionControlFailure ? cause.reason : "stop-unconfirmed",
+          cause instanceof ProcessExecutionControlFailure ? cause.message : "Physical call stop remains unconfirmed after a recorded control failure",
+          { cause: new AggregateError([priorFailure, cause], "Recorded process failure and stop refusal"),
+            executionId: this.executionId, callId, diagnostic: priorFailure.diagnostic, primaryCause: priorFailure.primaryCause });
+        throw cause;
       }
-      await this.store.exclusive(async () => {
-        const registry = this.store.read(); const root = this.#record(registry); const call = root.calls.find((entry) => entry.callId === callId);
-        if (response.members) this.#mergeMembers(call, response.members);
-        const proof = this.#proof(await transport.verifyManagedProcessStopped(this.#transportRecord(root, call)));
-        if (!proof.confirmed || !AgentProcessStopEvidence.from(response.stopEvidence).confirmed) fail("stop-unconfirmed", "Launcher response lacks independent termination proof", { executionId: this.executionId, callId });
-        this.#settle(root, call, { outcome: response.outcome, stopEvidence: proof });
-        this.store.save(registry);
-      });
     }
     await this.store.exclusive(() => {
       const registry = this.store.read(); const root = this.#record(registry);
@@ -769,10 +784,9 @@ export class ProcessExecutionRuntime {
   }
   #registerLauncher(record, { launcherIdentity, endpoint, pgid, members = [] }, recovery = false) {
     const launcher = identity(launcherIdentity);
-    const assessment = this.store.identitySource.assess(launcher);
+    const assessment = this.store.identitySource.observe(launcher);
     if (endpoint !== record.endpoint || launcher.pid !== pgid || assessment.status === "unknown" || (!recovery && assessment.status !== "live")) fail("launcher-refused", "Launcher birth or dedicated group ownership is invalid");
-    const stat = assessment.status === "live" ? LinuxProcessStat.parse(fs.readFileSync(`/proc/${launcher.pid}/stat`, "utf8")) : null;
-    if (stat !== null && stat.pgrp !== pgid) fail("launcher-refused", "Launcher is outside its declared process group");
+    if (assessment.status === "live" && (assessment.stat === null || assessment.stat.pgrp !== pgid || (!recovery && assessment.terminated))) fail("launcher-refused", "Launcher is outside its declared executable process group");
     record.launcherIdentity = launcher; record.pgid = pgid; record.status = "registered";
     this.#mergeMembers(record, [launcher, ...members]);
   }
@@ -819,8 +833,8 @@ export class ProcessExecutionRuntime {
       if (this.store.identitySource.assess(root.coordinatorIdentity).status !== "live") fail("delegation-refused", "Nested execution coordinator is no longer alive");
       const parent = root.calls.find((call) => call.callId === this.parentCallId);
       const requester = this.store.identitySource.createOwner(crypto.randomUUID());
-      const stat = LinuxProcessStat.parse(fs.readFileSync(`/proc/${requester.pid}/stat`, "utf8"));
-      if (!parent || parent.status !== "running" || parent.pgid !== stat.pgrp
+      const observation = this.store.identitySource.observe(requester);
+      if (!parent || parent.status !== "running" || observation.status !== "live" || observation.terminated || parent.pgid !== observation.stat?.pgrp
         || this.store.identitySource.assess(parent.launcherIdentity).status !== "live") fail("delegation-refused", "Nested scope lost its registered parent group");
     }
   }

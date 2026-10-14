@@ -13,6 +13,7 @@ import { commitAll } from "./git-repo.js";
 import { FlowManager } from "../../../src/lib/flow-manager.js";
 import { ProcessExecutionRuntime } from "../../../src/lib/process-execution-runtime.js";
 import { ProcessIdentity, ProcessIdentitySource } from "../../../src/lib/process-identity.js";
+import { readManagedRecord } from "../../../src/lib/managed-process-protocol.js";
 import { CandidateQuestion } from "../../../src/flow/lib/draft-question-ledger.js";
 import { DraftLifecycle } from "../../../src/flow/lib/draft-lifecycle.js";
 import { currentRuntimePackage, listRuntimeResources, readRuntimeResource,
@@ -59,12 +60,23 @@ export function recordProcessRuntimeFlowVerification() {
 
 /** Observe a persisted barrier; the timeout bounds failure, never orders work. */
 export function awaitRuntimeBarrier(file, timeoutMs = 90_000, { signal = null } = {}) {
-  if (fs.existsSync(file)) return Promise.resolve();
+  return awaitRuntimeObservation(file, () => fs.existsSync(file), timeoutMs, signal);
+}
+
+function awaitRuntimeObservation(file, observe, timeoutMs = 90_000, signal = null) {
+  const initial = observe();
+  if (initial) return Promise.resolve(initial);
   return new Promise((resolve, reject) => {
-    const watcher = fs.watch(path.dirname(file), () => {
-      if (!fs.existsSync(file)) return;
-      finish();
-      resolve();
+    const check = () => {
+      try {
+        const value = observe();
+        if (!value) return;
+        finish();
+        resolve(value);
+      } catch (error) { finish(); reject(error); }
+    };
+    const watcher = fs.watch(path.dirname(file), (_event, name) => {
+      if (name === null || name === path.basename(file)) check();
     });
     const timer = setTimeout(() => {
       finish();
@@ -74,7 +86,7 @@ export function awaitRuntimeBarrier(file, timeoutMs = 90_000, { signal = null } 
     const finish = () => { clearTimeout(timer); watcher.close(); signal?.removeEventListener("abort", onAbort); };
     signal?.addEventListener("abort", onAbort, { once: true });
     if (signal?.aborted) { onAbort(); return; }
-    if (fs.existsSync(file)) { finish(); resolve(); }
+    check();
   });
 }
 
@@ -103,12 +115,13 @@ class RuntimeScenarioChild {
 /** A production-created Flow plus an actual deterministic external provider. */
 export class ProcessRuntimeFlowScenario {
   constructor(seed, { test, specId = "runtime-admission", runId = "runtime-admission-run", step = "draft", sealed = false,
-    descendant = false, sourceMutation = false, nestedUpgrade = false } = {}) {
+    descendant = false, migratedDescendant = false, sourceMutation = false, nestedUpgrade = false } = {}) {
     this.work = new SeedWorkRoot(seed, { prefix: "sennel-runtime-flow-" });
     this.root = this.work.root;
     this.specId = specId;
     this.runId = runId;
     this.children = [];
+    this.migratedDescendant = migratedDescendant;
     test.after(() => this.cleanup());
     const initialDraft = sealed ? canonicalDraftDocument({
       questions: [new CandidateQuestion({ id: "q1", category: "user-visible-behavior",
@@ -124,10 +137,32 @@ export class ProcessRuntimeFlowScenario {
     this.calls = path.join(this.root, ".tmp", "provider-calls.jsonl");
     this.nestedUpgrade = path.join(this.root, ".tmp", "nested-upgrade.json");
     this.nestedUpgradeStarted = path.join(this.root, ".tmp", "nested-upgrade-started.json");
+    this.migrationRelease = path.join(this.root, ".tmp", "member-migrate");
+    this.migrated = path.join(this.root, ".tmp", "member-migrated.json");
+    this.memberRelease = path.join(this.root, ".tmp", "member-release");
+    this.memberExited = path.join(this.root, ".tmp", "member-exited.json");
     this.reviewSource = path.join(this.root, ".tmp", "review-source.json");
     this.reviewInput = path.join(this.root, ".tmp", "review-input.json");
     const worker = path.join(this.root, ".tmp", "runtime-provider.mjs");
     fs.mkdirSync(path.dirname(worker), { recursive: true });
+    const migratedWorker = path.join(this.root, ".tmp", "runtime-migrated-member.mjs");
+    if (migratedDescendant) fs.writeFileSync(migratedWorker, [
+      'import fs from "node:fs";',
+      'import path from "node:path";',
+      'import { randomUUID } from "node:crypto";',
+      `const {ProcessIdentitySource}=await import(${JSON.stringify(IDENTITY_SOURCE)});`,
+      `const {AtomicFile}=await import(${JSON.stringify(ATOMIC_FILE)});`,
+      'const identity=new ProcessIdentitySource().createOwner(randomUUID());',
+      'const observation=new ProcessIdentitySource().observe(identity);',
+      `new AtomicFile(${JSON.stringify(this.migrated)}).write(JSON.stringify({identity,stat:observation.stat}));`,
+      `const release=${JSON.stringify(this.memberRelease)};`,
+      'const finish=(reason)=>{',
+      `new AtomicFile(${JSON.stringify(this.memberExited)}).write(JSON.stringify({reason,pid:process.pid}));`,
+      'process.exit(reason==="released"?0:1);};',
+      'const watcher=fs.watch(path.dirname(release),()=>{if(fs.existsSync(release))finish("released");});',
+      'setTimeout(()=>finish("deadline"),90000);',
+      'if(fs.existsSync(release))finish("released");',
+    ].join("\n"));
     fs.writeFileSync(worker, [
       'import fs from "node:fs";',
       'import path from "node:path";',
@@ -169,7 +204,16 @@ export class ProcessRuntimeFlowScenario {
         'fs.writeFileSync(path.join(root,"source.txt"),"partial worker edit\\n");',
         'fs.writeFileSync(path.join(root,".sennel","process-runtime-lookalike.txt"),"worker source outside the runtime prefix\\n");',
       ] : []),
-      descendant ? 'const child=spawn(process.execPath,["-e","setInterval(()=>{},1000)"],{stdio:"ignore"});' : 'const child=null;',
+      ...(migratedDescendant ? [
+        // Bash stays in the managed group until the test observes durable capture.
+        // Its PID is not the group leader, so setsid exec preserves its birth.
+        `const child=spawn("bash",["-c",'read -r -t 90 migration || exit 1; exec setsid "$@"',"runtime-member",process.execPath,${JSON.stringify(migratedWorker)}],{stdio:["pipe","ignore","ignore"]});`,
+        `const migrate=${JSON.stringify(this.migrationRelease)};`,
+        'const migrationWatcher=fs.watch(path.dirname(migrate),()=>{if(fs.existsSync(migrate)){migrationWatcher.close();child.stdin.end("migrate\\n");}});',
+        'if(fs.existsSync(migrate)){migrationWatcher.close();child.stdin.end("migrate\\n");}',
+        'child.stdin.on("error",(error)=>{process.stderr.write(error.message);process.exit(1);});',
+        'setTimeout(()=>process.exit(1),90000).unref();',
+      ] : [descendant ? 'const child=spawn(process.execPath,["-e","setInterval(()=>{},1000)"],{stdio:"ignore"});' : 'const child=null;']),
       'const providerIdentity=new ProcessIdentitySource().createOwner(randomUUID());',
       'const descendantIdentity=child===null?null:new ProcessIdentitySource({pid:child.pid}).createOwner(randomUUID());',
       `writeMarker(${JSON.stringify(this.started)},{pid:process.pid,descendantPid:child?.pid??null,providerIdentity,descendantIdentity,sealed:${sealed},sealedOutput:${sealed ? "sealedOutput" : "null"}});`,
@@ -273,6 +317,24 @@ export class ProcessRuntimeFlowScenario {
 
   releaseProvider() { fs.writeFileSync(this.release, "release\n"); }
 
+  outcomePath(callId) {
+    const prefix = path.join(this.root, ".sennel", "process-runtime");
+    const namespace = fs.readdirSync(prefix).find((entry) => fs.existsSync(path.join(prefix, entry, "calls", callId)));
+    assert.notEqual(namespace, undefined, "the managed call must have a durable runtime directory");
+    return path.join(prefix, namespace, "calls", callId, "outcome.json");
+  }
+
+  awaitOutcome(callId, predicate, { signal = null } = {}) {
+    const file = this.outcomePath(callId);
+    return awaitRuntimeObservation(file, () => {
+      const record = readManagedRecord(file);
+      return record !== null && predicate(record) ? record : null;
+    }, 90_000, signal);
+  }
+
+  migrateMember() { fs.writeFileSync(this.migrationRelease, "migrate\n"); }
+  releaseMember() { fs.writeFileSync(this.memberRelease, "release\n"); }
+
   preserveFailureEvidence(label) {
     const paths = new TemporaryPaths(TEST_CHECKOUT_ROOT);
     const evidence = paths.create(paths.operator(), `runtime-flow-failure-${label}-`);
@@ -282,7 +344,7 @@ export class ProcessRuntimeFlowScenario {
     fs.cpSync(location.directory, path.join(evidence, "canonical-version"), { recursive: true });
     fs.writeFileSync(path.join(evidence, "canonical-readback.json"), JSON.stringify(this.snapshot(), null, 2));
     for (const file of [this.started, this.request, this.count, this.calls, this.nestedUpgrade,
-      this.nestedUpgradeStarted, `${this.nestedUpgrade}.stdout`, `${this.nestedUpgrade}.stderr`, this.reviewSource, this.reviewInput,
+      this.nestedUpgradeStarted, this.migrationRelease, this.migrated, this.memberRelease, this.memberExited, `${this.nestedUpgrade}.stdout`, `${this.nestedUpgrade}.stderr`, this.reviewSource, this.reviewInput,
       path.join(this.root, "source.txt")]) {
       if (fs.existsSync(file)) fs.copyFileSync(file, path.join(evidence, path.basename(file)));
     }
@@ -310,6 +372,8 @@ export class ProcessRuntimeFlowScenario {
   }
 
   async cleanup() {
+    // Let an escaped fixture member terminate naturally before removing its files.
+    if (fs.existsSync(this.migrated)) this.releaseMember();
     for (const child of this.children) if (child.child.exitCode === null && child.child.signalCode === null) child.kill();
     await Promise.allSettled(this.children.map((child) => child.result));
     // These are test-owned provider handles, used only to clean up a failing
@@ -324,12 +388,52 @@ export class ProcessRuntimeFlowScenario {
         try { process.kill(owned.pid, "SIGKILL"); } catch (error) { if (error.code !== "ESRCH") throw error; }
       }
     }
+    let inventory = null;
     try {
-      const inventory = ProcessExecutionRuntime.inspect({ mainRoot: this.root });
+      inventory = ProcessExecutionRuntime.inspect({ mainRoot: this.root });
       if (inventory !== null && inventory.slot !== null) {
         const recovery = await ProcessExecutionRuntime.acquire({ mainRoot: this.root });
         await recovery.close();
       }
-    } finally { this.work.cleanup(); }
+    } catch (error) {
+      if (!this.migratedDescendant) throw error;
+      // Before-fix comparisons can withdraw launcher authority permanently.
+      // Preserve that failure before killing only this isolated fixture's anchors.
+      this.preserveFailureEvidence("migration-teardown");
+    } finally {
+      if (this.migratedDescendant && inventory !== null) {
+        const identities = new ProcessIdentitySource();
+        const launchers = inventory.executions.flatMap((entry) => entry.calls)
+          .filter((call) => call.launcherIdentity !== null)
+          .map((call) => new ProcessIdentity(call.launcherIdentity));
+        for (const launcher of launchers) {
+          if (identities.observe(launcher).terminated) continue;
+          assert.equal(identities.assess(launcher).status, "live", "fixture teardown requires authenticated launcher birth");
+          try { process.kill(launcher.pid, "SIGKILL"); } catch (error) { if (error.code !== "ESRCH") throw error; }
+        }
+        await Promise.all(launchers.map((launcher) => awaitFixtureTermination(launcher)));
+        if (fs.existsSync(this.started)) {
+          const started = JSON.parse(fs.readFileSync(this.started, "utf8"));
+          await Promise.all([started.descendantIdentity, started.providerIdentity].filter(Boolean)
+            .map((value) => awaitFixtureTermination(new ProcessIdentity(value))));
+        }
+      }
+      this.work.cleanup();
+    }
   }
+}
+
+/** Teardown observes test-owned births; its signals never establish test success. */
+function awaitFixtureTermination(identity) {
+  const source = new ProcessIdentitySource();
+  if (source.observe(identity).terminated) return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    const poll = setInterval(() => {
+      const observation = source.observe(identity);
+      if (observation.terminated) { finish(); resolve(); }
+      else if (observation.status === "unknown") { finish(); reject(new Error(observation.reason)); }
+    }, 20);
+    const timer = setTimeout(() => { finish(); reject(new Error(`fixture process ${identity.pid} did not stop`)); }, 2000);
+    const finish = () => { clearInterval(poll); clearTimeout(timer); };
+  });
 }

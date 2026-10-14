@@ -4,8 +4,8 @@ import { FileLock } from "./file-lock.js";
 import { RealDirectoryAuthority } from "./real-directory-authority.js";
 import fs from "node:fs";
 import { AtomicFile } from "./atomic-file.js";
-import { ProcessIdentity, ProcessIdentitySource, LinuxProcessStat } from "./process-identity.js";
-import { ProcessExecutionControlFailure } from "./process-execution-values.js";
+import { ProcessIdentity, ProcessIdentitySource } from "./process-identity.js";
+import { ProcessExecutionControlFailure, ProcessExecutionFailureDiagnostic } from "./process-execution-values.js";
 import { readLinuxProcessGroupMembers } from "./process-supervisor.js";
 
 export class ManagedProcessMessage {
@@ -79,47 +79,114 @@ export function writeManagedRecord(file, value, options = {}) {
   writeManagedBinary(file, Buffer.from(JSON.stringify(value)), value, options);
 }
 
-export function captureManagedMembers(pgid, ownerToken) {
+function observeManagedGroup(pgid, ownerToken, identitySource, groupReader) {
   let unavailable;
-  const stats = readLinuxProcessGroupMembers(pgid, (error) => { unavailable = error; });
+  const stats = groupReader(pgid, (error) => { unavailable = error; });
   if (unavailable || stats === null) {
     const reason = unavailable ? `${unavailable.code || unavailable.name}: ${unavailable.message}` : "no group observation";
     throw managedControlFailure("PROCESS_EXECUTION_OBSERVATION_UNKNOWN", `Managed group membership is unavailable (${reason})`, unavailable);
   }
-  const bootIdentity = new ProcessIdentitySource().readBootIdentity();
-  return stats.map((stat) => new ProcessIdentity({ pid: stat.pid, bootIdentity,
-    startFingerprint: String(stat.startFingerprint), ownerToken }));
+  let bootIdentity;
+  try { bootIdentity = identitySource.readBootIdentity(); }
+  catch (cause) { throw managedControlFailure("PROCESS_EXECUTION_OBSERVATION_UNKNOWN", "Managed boot identity is unavailable", cause); }
+  return stats.map((stat) => new ManagedProcessMemberObservation(new ProcessIdentity({ pid: stat.pid, bootIdentity,
+    startFingerprint: String(stat.startFingerprint), ownerToken }), stat));
 }
 
-/** Signal zero is an observation only. Recovery never signals a persisted PID. */
+class ManagedProcessMemberObservation {
+  constructor(identity, stat) {
+    this.identity = identity;
+    this.stat = stat;
+    Object.freeze(this);
+  }
+  get terminated() { return this.stat.state === "Z" || this.stat.state === "X"; }
+}
+
+class ManagedProcessObservedBirth {
+  constructor(member, observation) {
+    this.member = member;
+    this.observation = observation;
+    Object.freeze(this);
+  }
+}
+
+export function captureManagedMembers(pgid, ownerToken) {
+  return observeManagedGroup(pgid, ownerToken, new ProcessIdentitySource(), readLinuxProcessGroupMembers)
+    .map((member) => member.identity);
+}
+
+/** Public diagnostics deliberately omit the member's signaling authority. */
+export function managedMemberFailure(record, member, { code, message, operation, role, observation = null, cause } ) {
+  const diagnostic = new ProcessExecutionFailureDiagnostic({ executionId: record.executionId, callId: record.callId,
+    operation, role, birth: { pid: member.pid, bootIdentity: member.bootIdentity, startFingerprint: member.startFingerprint },
+    originalPgid: record.pgid, observedPgid: observation?.stat?.pgrp ?? null,
+    observedSid: observation?.stat?.sessionId ?? null, primaryCause: { code, message } });
+  return new ProcessExecutionControlFailure(code, message, { cause, executionId: record.executionId, callId: record.callId, diagnostic,
+    primaryCause: { code, message, executionId: record.executionId, callId: record.callId } });
+}
+
+/** One common assessment for launcher drain and independent receipt verification. */
+export class ManagedProcessSnapshot {
+  constructor(record, { identitySource = new ProcessIdentitySource(), groupReader = readLinuxProcessGroupMembers,
+    providerIdentity = record.providerIdentity ?? null, operation = "stop-verification", persistMembers = null } = {}) {
+    if (!Number.isSafeInteger(record.pgid) || record.pgid < 1 || !record.launcherIdentity) {
+      throw managedControlFailure("PROCESS_EXECUTION_IDENTITY_UNKNOWN", "Managed group identity is incomplete");
+    }
+    this.launcher = record.launcherIdentity instanceof ProcessIdentity ? record.launcherIdentity : new ProcessIdentity(record.launcherIdentity);
+    providerIdentity = providerIdentity === null || providerIdentity instanceof ProcessIdentity ? providerIdentity : new ProcessIdentity(providerIdentity);
+    this.group = Object.freeze(observeManagedGroup(record.pgid, this.launcher.ownerToken, identitySource, groupReader));
+    const known = new Map();
+    for (const value of [this.launcher, ...(record.members || [])]) {
+      const member = value instanceof ProcessIdentity ? value : new ProcessIdentity(value);
+      known.set(member.pid, member);
+    }
+    let added = false;
+    for (const { identity: member } of this.group) {
+      const prior = known.get(member.pid);
+      if (prior && !prior.sameBirth(member)) throw managedMemberFailure(record, prior, {
+        code: "PROCESS_EXECUTION_IDENTITY_UNKNOWN", message: "Managed member PID was reused in the owned group", operation,
+        role: prior.sameBirth(this.launcher) ? "launcher" : providerIdentity?.sameBirth(prior) ? "provider" : "descendant" });
+      if (!prior) { known.set(member.pid, member); added = true; }
+    }
+    this.members = Object.freeze([...known.values()]);
+    // A later failed observation must not discard a just-discovered birth.
+    if (added && persistMembers) persistMembers(this.members);
+    this.observations = Object.freeze(this.members.map((member) => {
+      const observation = identitySource.observe(member);
+      const role = member.sameBirth(this.launcher) ? "launcher" : providerIdentity?.sameBirth(member) ? "provider" : "descendant";
+      if (observation.status === "unknown" || (observation.status === "live" && observation.stat === null)) {
+        throw managedMemberFailure(record, member, { code: "PROCESS_EXECUTION_OBSERVATION_UNKNOWN",
+          message: observation.reason, role, operation, observation });
+      }
+      if (observation.stat !== null && role !== "descendant" && (observation.stat.pgrp !== record.pgid
+        || (role === "launcher" && observation.stat.pid !== record.pgid))) {
+        throw managedMemberFailure(record, member, { code: "PROCESS_EXECUTION_IDENTITY_UNKNOWN",
+          message: `${role} no longer owns its registered group`, role, operation, observation });
+      }
+      return new ManagedProcessObservedBirth(member, observation);
+    }));
+    Object.freeze(this);
+  }
+  isStopped({ excludeLauncher = false } = {}) {
+    const included = (member) => !excludeLauncher || !member.sameBirth(this.launcher);
+    return this.group.every((member) => !included(member.identity) || member.terminated)
+      && this.observations.every(({ member, observation }) => !included(member) || observation.terminated);
+  }
+}
+
+/** Recovery observes every recorded birth, including members outside the group. */
 export function verifyManagedProcessStopped(record) {
-  if (!Number.isSafeInteger(record.pgid) || record.pgid < 1 || !record.launcherIdentity) {
-    throw managedControlFailure("PROCESS_EXECUTION_IDENTITY_UNKNOWN", "Managed group identity is incomplete");
-  }
-  try { process.kill(-record.pgid, 0); return false; }
-  catch (cause) {
-    if (cause.code !== "ESRCH") throw managedControlFailure("PROCESS_EXECUTION_OBSERVATION_UNKNOWN", "Managed group absence cannot be observed", cause);
-  }
-  const identities = [record.launcherIdentity, ...(record.members || [])];
-  for (const value of identities) {
-    const member = value instanceof ProcessIdentity ? value : new ProcessIdentity(value);
-    const assessment = new ProcessIdentitySource().assess(member);
-    if (assessment.status === "unknown") throw managedControlFailure("PROCESS_EXECUTION_OBSERVATION_UNKNOWN", assessment.reason);
-    if (assessment.status === "live") return false;
-  }
-  return true;
+  return new ManagedProcessSnapshot(record).isStopped();
 }
 
 export function assertManagedLauncherIdentity(record) {
   const identity = record.launcherIdentity instanceof ProcessIdentity
     ? record.launcherIdentity : new ProcessIdentity(record.launcherIdentity);
-  const assessment = new ProcessIdentitySource().assess(identity);
-  if (assessment.status !== "live") throw managedControlFailure("PROCESS_EXECUTION_IDENTITY_UNKNOWN", assessment.reason);
-  let stat;
-  try { stat = LinuxProcessStat.parse(fs.readFileSync(`/proc/${identity.pid}/stat`, "utf8")); }
-  catch (cause) { throw managedControlFailure("PROCESS_EXECUTION_OBSERVATION_UNKNOWN", "Launcher membership is unavailable", cause); }
-  if (stat.pgrp !== record.pgid || stat.pid !== record.pgid) {
-    throw managedControlFailure("PROCESS_EXECUTION_IDENTITY_UNKNOWN", "Launcher no longer owns its registered group");
+  const observation = new ProcessIdentitySource().observe(identity);
+  if (observation.status !== "live" || observation.terminated || observation.stat === null
+    || observation.stat.pgrp !== record.pgid || observation.stat.pid !== record.pgid) {
+    throw managedMemberFailure(record, identity, { code: observation.status === "unknown" ? "PROCESS_EXECUTION_OBSERVATION_UNKNOWN" : "PROCESS_EXECUTION_IDENTITY_UNKNOWN",
+      message: "Launcher no longer owns its registered group", role: "launcher", operation: "launcher-authentication", observation });
   }
 }
 
@@ -147,7 +214,8 @@ export function managedRequest(call, operation, payload = {}, timeoutMs = 2000) 
       try {
         const response = JSON.parse(text.slice(0, newline));
         if (!ManagedProcessMessage.from(response).matches(call)) throw managedControlFailure("PROCESS_EXECUTION_AUTHORITY_MISMATCH", "Managed response belongs to another execution");
-        if (response.payload.error) throw managedControlFailure(response.payload.error.code, response.payload.error.message);
+        if (response.payload.error) throw ProcessExecutionControlFailure.fromStored(response.payload.error,
+          { executionId: call.executionId, callId: call.callId });
         finish(null, response.payload);
       } catch (error) { finish(error); }
     });

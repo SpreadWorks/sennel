@@ -14,26 +14,147 @@ export function executionValueSnapshot(value) { return value == null ? null : JS
 export function executionValueDigest(value) { return crypto.createHash("sha256").update(JSON.stringify(value)).digest("hex"); }
 export function executionProcessIdentity(value) { return value instanceof ProcessIdentity ? value : new ProcessIdentity(value); }
 
+const FAILURE_VERSION = 1;
+const MAX_FAILURE_BYTES = 16 * 1024;
+
+function failureFields(value, fields, name) {
+  if (value === null || typeof value !== "object" || Array.isArray(value)
+    || ![Object.prototype, null].includes(Object.getPrototypeOf(value))
+    || Object.keys(value).length !== fields.length || fields.some((field) => !Object.hasOwn(value, field))) {
+    throw new TypeError(`${name} has missing or unknown fields`);
+  }
+}
+function failureText(value, name, maximum = 2048) {
+  if (typeof value !== "string" || value.length === 0 || Buffer.byteLength(value) > maximum) throw new TypeError(`${name} exceeds its bounded text contract`);
+  return value;
+}
+function failureCode(value) {
+  if (typeof value !== "string" || !/^PROCESS_EXECUTION_[A-Z0-9_]{1,128}$/.test(value)) throw new TypeError("Process failure cause code is invalid");
+  return value;
+}
+function failureId(value, name) { return value === null ? null : executionUuid(value, name); }
+function failurePgid(value, name, nullable = false) {
+  if (nullable && value === null) return null;
+  if (!Number.isSafeInteger(value) || value < 1) throw new TypeError(`${name} must be a positive integer`);
+  return value;
+}
+
+class ProcessExecutionFailureBirth {
+  constructor(value) {
+    failureFields(value, ["pid", "bootIdentity", "startFingerprint"], "Failure birth");
+    this.pid = failurePgid(value.pid, "Failure birth PID");
+    this.bootIdentity = failureText(value.bootIdentity, "Failure boot identity", 256);
+    if (this.bootIdentity.trim() === "") throw new TypeError("Failure boot identity is required");
+    if (typeof value.startFingerprint !== "string" || !/^\d{1,32}$/.test(value.startFingerprint)) throw new TypeError("Failure birth start fingerprint is invalid");
+    this.startFingerprint = value.startFingerprint;
+    Object.freeze(this);
+  }
+  toJSON() { return { ...this }; }
+}
+
+class ProcessExecutionFailureReason {
+  constructor({ code, message }) {
+    this.code = failureCode(code);
+    this.message = failureText(message, "Primary failure message");
+  }
+  toJSON() { return { ...this }; }
+}
+
+class ProcessExecutionFailureCause extends ProcessExecutionFailureReason {
+  constructor({ code, message, executionId = null, callId = null }) {
+    super({ code, message });
+    this.executionId = failureId(executionId, "Primary failure executionId");
+    this.callId = failureId(callId, "Primary failure callId");
+    Object.freeze(this);
+  }
+  toJSON() { return { ...this }; }
+  static fromStored(value) {
+    failureFields(value, ["code", "message", "executionId", "callId"], "Primary failure cause");
+    return new this(value);
+  }
+}
+
+/** Public evidence contains birth and observation only, never signaling authority. */
+export class ProcessExecutionFailureDiagnostic {
+  constructor({ schemaVersion = FAILURE_VERSION, executionId, callId, operation, role, birth,
+    originalPgid, observedPgid = null, observedSid = null, primaryCause }) {
+    if (schemaVersion !== FAILURE_VERSION) throw new TypeError("Process failure diagnostic version is unsupported");
+    this.schemaVersion = schemaVersion;
+    this.executionId = executionUuid(executionId, "Diagnostic executionId");
+    this.callId = executionUuid(callId, "Diagnostic callId");
+    if (typeof operation !== "string" || !/^[a-z][a-z0-9-]{0,79}$/.test(operation)) throw new TypeError("Diagnostic operation is invalid");
+    if (!["launcher", "provider", "descendant"].includes(role)) throw new TypeError("Diagnostic process role is invalid");
+    this.operation = operation; this.role = role;
+    this.birth = birth instanceof ProcessExecutionFailureBirth ? birth : new ProcessExecutionFailureBirth(birth);
+    this.originalPgid = failurePgid(originalPgid, "Diagnostic original PGID");
+    if (role === "launcher" && this.originalPgid !== this.birth.pid) throw new TypeError("Diagnostic launcher must identify its original dedicated group");
+    this.observedPgid = failurePgid(observedPgid, "Diagnostic observed PGID", true);
+    this.observedSid = failurePgid(observedSid, "Diagnostic observed SID", true);
+    if ((this.observedPgid === null) !== (this.observedSid === null)) throw new TypeError("Diagnostic group and session observation must be paired");
+    failureFields(primaryCause, ["code", "message"], "Diagnostic primary cause");
+    this.primaryCause = Object.freeze(new ProcessExecutionFailureReason(primaryCause));
+    Object.freeze(this);
+  }
+  toJSON() { return { ...this, birth: this.birth.toJSON(), primaryCause: this.primaryCause.toJSON() }; }
+  static fromStored(value) {
+    failureFields(value, ["schemaVersion", "executionId", "callId", "operation", "role", "birth", "originalPgid", "observedPgid", "observedSid", "primaryCause"], "Process failure diagnostic");
+    if (value.schemaVersion !== FAILURE_VERSION) throw new TypeError("Process failure diagnostic version is unsupported");
+    return new this(value);
+  }
+}
+
 export class ProcessExecutionControlFailure extends Error {
-  constructor(reason, message, { cause, executionId = null, callId = null } = {}) {
+  constructor(reason, message, { cause, executionId = null, callId = null, diagnostic = null, primaryCause = null } = {}) {
     super(message, { cause });
+    if (typeof reason !== "string" || !/^[a-zA-Z][a-zA-Z0-9_-]*$/.test(reason) || reason.length > 128) throw new TypeError("Process failure reason is invalid");
     this.name = "ProcessExecutionControlFailure";
+    this.schemaVersion = FAILURE_VERSION;
     this.code = reason.startsWith("PROCESS_EXECUTION_") ? reason : `PROCESS_EXECUTION_${reason.replace(/-/g, "_").toUpperCase()}`;
     this.reason = reason;
-    this.executionId = executionId;
-    this.callId = callId;
+    failureText(message, "Process failure message");
+    const inherited = cause instanceof ProcessExecutionControlFailure ? cause : null;
+    const evidence = diagnostic ?? inherited?.diagnostic ?? null;
+    this.diagnostic = evidence === null ? null : evidence instanceof ProcessExecutionFailureDiagnostic ? evidence : ProcessExecutionFailureDiagnostic.fromStored(evidence);
+    this.executionId = failureId(executionId ?? inherited?.executionId ?? this.diagnostic?.executionId ?? null, "Control failure executionId");
+    this.callId = failureId(callId ?? inherited?.callId ?? this.diagnostic?.callId ?? null, "Control failure callId");
+    const primary = primaryCause ?? inherited?.primaryCause ?? (this.diagnostic === null ? null : {
+      ...this.diagnostic.primaryCause, executionId: this.diagnostic.executionId, callId: this.diagnostic.callId });
+    this.primaryCause = new ProcessExecutionFailureCause({ ...(primary ?? { code: this.code, message }),
+      executionId: primary?.executionId ?? this.executionId, callId: primary?.callId ?? this.callId });
+    if ((this.executionId !== null && this.primaryCause.executionId !== null && this.executionId !== this.primaryCause.executionId)
+      || (this.diagnostic !== null && (this.diagnostic.executionId !== this.primaryCause.executionId || this.diagnostic.callId !== this.primaryCause.callId
+        || this.diagnostic.primaryCause.code !== this.primaryCause.code || this.diagnostic.primaryCause.message !== this.primaryCause.message))) {
+      throw new TypeError("Process failure diagnostic and primary provenance disagree");
+    }
     this.retryable = false;
   }
   toJSON() {
-    return { name: this.name, reason: this.reason, code: this.code, message: this.message,
-      executionId: this.executionId, callId: this.callId, retryable: this.retryable };
+    return { schemaVersion: this.schemaVersion, name: this.name, reason: this.reason, code: this.code, message: this.message,
+      executionId: this.executionId, callId: this.callId, retryable: this.retryable,
+      diagnostic: this.diagnostic?.toJSON() ?? null, primaryCause: this.primaryCause.toJSON() };
   }
-  static fromStored(value) {
-    const restored = new this(value.reason, value.message, { executionId: value.executionId, callId: value.callId });
-    if (typeof value.message !== "string" || !isDeepStrictEqual(restored.toJSON(), value)) throw new TypeError("Process control failure has unknown or inconsistent fields");
-    if (restored.executionId !== null) executionUuid(restored.executionId, "control failure executionId");
-    if (restored.callId !== null) executionUuid(restored.callId, "control failure callId");
-    return restored;
+  withContext({ executionId, callId }) {
+    return new this.constructor(this.reason, this.message, { cause: this, executionId, callId });
+  }
+  static fromStored(value, context = {}) {
+    if (value?.schemaVersion !== FAILURE_VERSION) {
+      const reason = value?.schemaVersion === undefined ? "failure-evidence-missing" : "failure-evidence-unsupported";
+      throw new this(reason, "Process control failure lacks supported versioned evidence", {
+        executionId: context.executionId ?? (typeof value?.executionId === "string" && UUID.test(value.executionId) ? value.executionId : null),
+        callId: context.callId ?? (typeof value?.callId === "string" && UUID.test(value.callId) ? value.callId : null),
+      });
+    }
+    try {
+      failureFields(value, ["schemaVersion", "name", "reason", "code", "message", "executionId", "callId", "retryable", "diagnostic", "primaryCause"], "Process control failure");
+      const restored = new this(value.reason, value.message, { executionId: value.executionId, callId: value.callId,
+        diagnostic: value.diagnostic, primaryCause: ProcessExecutionFailureCause.fromStored(value.primaryCause) });
+      if (!isDeepStrictEqual(restored.toJSON(), value) || Buffer.byteLength(JSON.stringify(value)) > MAX_FAILURE_BYTES) throw new TypeError("Process control failure has excessive or inconsistent fields");
+      for (const field of ["executionId", "callId"]) if (context[field] !== undefined && restored[field] !== context[field]) throw new TypeError("Process control failure belongs to another physical call");
+      return restored;
+    } catch (cause) {
+      if (context.executionId !== undefined || context.callId !== undefined) throw new this("failure-evidence-invalid", "Process control failure evidence is invalid for its physical call", { ...context, cause });
+      throw cause;
+    }
   }
   static fromEnvelope(envelope) {
     const value = envelope?.data?.processExecutionControlFailure;
@@ -41,12 +162,16 @@ export class ProcessExecutionControlFailure extends Error {
     const code = Array.isArray(envelope.errors)
       ? envelope.errors.find((entry) => entry?.level === "fatal")?.code : null;
     if (value === undefined && !(typeof code === "string" && code.startsWith("PROCESS_EXECUTION_"))) return null;
+    let failure = null;
     try {
-      const failure = this.fromStored(value);
+      failure = this.fromStored(value);
       if (code !== failure.code) throw new TypeError("Failure envelope code differs from its typed data");
       return failure;
     } catch (cause) {
-      throw new this("failure-envelope-invalid", "Typed process control failure envelope is invalid", { cause });
+      const primary = failure ?? (cause instanceof this ? cause : null);
+      throw new this("failure-envelope-invalid", "Typed process control failure envelope is invalid", { cause,
+        executionId: primary?.executionId ?? null, callId: primary?.callId ?? null,
+        diagnostic: primary?.diagnostic ?? null, primaryCause: primary?.primaryCause ?? null });
     }
   }
 }

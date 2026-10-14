@@ -7,16 +7,20 @@ function invalidLinuxProcessStat(message) {
 }
 
 export class LinuxProcessStat {
-  constructor({ pid, state, pgrp, startFingerprint }) {
+  constructor({ pid, state, pgrp, sessionId, startFingerprint }) {
     if (!Number.isSafeInteger(pid) || pid < 1) throw new Error("Linux process stat pid must be a positive integer");
     if (typeof state !== "string" || state.length !== 1) throw new Error("Linux process stat state must be one character");
     if (!Number.isSafeInteger(pgrp) || pgrp < 0) throw new Error("Linux process stat pgrp must be a non-negative integer");
+    if (!Number.isSafeInteger(sessionId) || sessionId < 0) {
+      throw new Error("Linux process stat session id must be a non-negative integer");
+    }
     if (!Number.isSafeInteger(startFingerprint) || startFingerprint < 0) {
       throw new Error("Linux process stat start fingerprint must be a non-negative integer");
     }
     this.pid = pid;
     this.state = state;
     this.pgrp = pgrp;
+    this.sessionId = sessionId;
     this.startFingerprint = startFingerprint;
     Object.freeze(this);
   }
@@ -36,6 +40,7 @@ export class LinuxProcessStat {
       throw invalidLinuxProcessStat("Linux process stat state is invalid");
     }
     if (!/^\d+$/.test(fields[2])) throw invalidLinuxProcessStat("Linux process stat pgrp is invalid");
+    if (!/^\d+$/.test(fields[3])) throw invalidLinuxProcessStat("Linux process stat session id is invalid");
     if (!/^\d+$/.test(fields[19])) {
       throw invalidLinuxProcessStat("Linux process stat start fingerprint is invalid");
     }
@@ -43,8 +48,23 @@ export class LinuxProcessStat {
       pid: Number(pid),
       state: fields[0],
       pgrp: Number(fields[2]),
+      sessionId: Number(fields[3]),
       startFingerprint: Number(fields[19]),
     });
+  }
+}
+
+export class ProcessIdentityObservation {
+  constructor(status, reason, stat = null) {
+    if (!["live", "stale", "unknown"].includes(status)) throw new Error("process identity observation status is invalid");
+    if (typeof reason !== "string" || reason.trim() === "") throw new Error("process identity observation reason is required");
+    if (stat !== null && !(stat instanceof LinuxProcessStat)) throw new Error("process identity observation stat is invalid");
+    if (status !== "live" && stat !== null) throw new Error("only a live process identity observation can retain its stat");
+    this.status = status;
+    this.reason = reason;
+    this.stat = stat;
+    this.terminated = status === "stale" || (stat !== null && (stat.state === "Z" || stat.state === "X"));
+    Object.freeze(this);
   }
 }
 

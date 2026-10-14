@@ -4,6 +4,7 @@ import { afterEach, describe, it } from "node:test";
 import { Envelope } from "../../../src/lib/flow-envelope.js";
 import { RunReviewCommand } from "../../../src/flow/lib/run-review.js";
 import { FlowManager } from "../../../src/lib/flow-manager.js";
+import { ProcessExecutionRuntime } from "../../../src/lib/process-execution-runtime.js";
 import { CanonicalFlowFixture } from "../../support/infrastructure/flow-setup.js";
 import { createTmpDir, removeTmpDir } from "../../support/builders/tmp-dir.js";
 
@@ -55,22 +56,28 @@ describe("RunReviewCommand execution admission", () => {
     roots.push(root);
     const command = new BlockingReviewCommand();
     const ctx = reviewContext(root);
-    const direct = command.execute(ctx);
-    await command.entered;
-
-    // Dispatch resolves the same registered run-review command, so its call
-    // must share the direct command's run/node/Attempt lease.
-    const dispatched = await command.execute({
-      ...ctx,
-      flowState: ctx.flowManager.loadReadOnly(ctx.specId),
-    });
-    assert.equal(dispatched.ok, false);
-    assert.equal(dispatched.errors[0].code, "REVIEW_EXECUTION_BUSY");
-    assert.equal(command.calls, 1);
-
-    command.unblock();
-    const completed = await direct;
-    assert.equal(completed.ok, true);
-    assert.equal(command.calls, 1);
+    const runtime = await ProcessExecutionRuntime.acquire({ mainRoot: root,
+      runId: ctx.flowState.runId, specId: ctx.specId });
+    try {
+      // A dispatcher owns one physical execution. Both calls borrow it before
+      // testing the inner run/node/Attempt lease; foreign checkout callers are
+      // refused earlier by physical admission.
+      await runtime.enter(async () => {
+        const direct = command.execute(ctx);
+        await command.entered;
+        let completed;
+        try {
+          const dispatched = await command.execute({
+            ...ctx,
+            flowState: ctx.flowManager.loadReadOnly(ctx.specId),
+          });
+          assert.equal(dispatched.ok, false);
+          assert.equal(dispatched.errors[0].code, "REVIEW_EXECUTION_BUSY");
+          assert.equal(command.calls, 1);
+        } finally { command.unblock(); completed = await direct; }
+        assert.equal(completed.ok, true);
+        assert.equal(command.calls, 1);
+      });
+    } finally { await runtime.close(); }
   });
 });

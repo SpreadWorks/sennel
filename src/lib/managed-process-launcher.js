@@ -5,8 +5,9 @@ import { ManagedOutputSpool } from "./managed-process-output.js";
 import net from "node:net";
 import { spawn } from "node:child_process";
 import { ProcessIdentitySource } from "./process-identity.js";
+import { ProcessExecutionControlFailure } from "./process-execution-values.js";
 import {
-  ManagedProcessMessage, captureManagedMembers, writeManagedRecord, managedControlFailure,
+  ManagedProcessMessage, ManagedProcessSnapshot, writeManagedRecord, managedControlFailure, managedMemberFailure,
 } from "./managed-process-protocol.js";
 
 export class ManagedLauncher {
@@ -25,28 +26,21 @@ export class ManagedLauncher {
   }
   record() {
     return { ...this.call, launcherIdentity: this.identity, pgid: process.pid,
+      providerIdentity: this.providerIdentity ?? null,
       members: [...this.members.values()], state: this.state,
       outcome: { ...this.outcome, output: { maximum: this.config.maxBuffer, stdout: this.stdout.persist(), stderr: this.stderr.persist() } },
       controlFailure: this.controlFailure };
   }
   save() { writeManagedRecord(this.call.outcomePath, this.record()); }
   capture() {
-    let changed = false;
-    const current = captureManagedMembers(process.pid, this.call.ownerToken);
-    for (const identity of current) {
-      const prior = this.members.get(identity.pid);
-      if (prior && !prior.sameBirth(identity)) throw managedControlFailure("PROCESS_EXECUTION_IDENTITY_UNKNOWN", "Managed member PID was reused while anchor remained live");
-      if (!prior) { this.members.set(identity.pid, identity); changed = true; }
-    }
-    for (const member of this.members.values()) {
-      const status = new ProcessIdentitySource().assess(member);
-      if (status.status === "unknown") throw managedControlFailure("PROCESS_EXECUTION_OBSERVATION_UNKNOWN", status.reason);
-      if (status.status === "live" && !current.some((item) => item.sameBirth(member))) {
-        throw managedControlFailure("PROCESS_EXECUTION_IDENTITY_UNKNOWN", "Known process escaped its managed group");
-      }
-    }
-    if (changed) this.save();
-    return current;
+    return new ManagedProcessSnapshot({ ...this.call, pgid: process.pid,
+      launcherIdentity: this.identity, members: [...this.members.values()] }, {
+      providerIdentity: this.providerIdentity, operation: "launcher-capture",
+      persistMembers: (members) => {
+        this.members = new Map(members.map((member) => [member.pid, member]));
+        this.save();
+      },
+    });
   }
   async run() {
     process.on("SIGTERM", () => this.stop("external-term"));
@@ -58,8 +52,8 @@ export class ManagedLauncher {
     this.deadline = setTimeout(() => this.stop("timeout"), Math.max(1, this.config.deadline - Date.now()));
     this.poll = setInterval(() => {
       try {
-        const members = this.capture();
-        if (this.state !== "waiting" && this.childDone && this.childClosed && members.every((member) => member.pid === process.pid)) this.finish();
+        const snapshot = this.capture();
+        if (this.state !== "waiting" && this.childDone && this.childClosed && snapshot.isStopped({ excludeLauncher: true })) this.finish();
       } catch (error) { this.fail(error); }
     }, 20);
   }
@@ -85,7 +79,7 @@ export class ManagedLauncher {
         socket.end(`${JSON.stringify(new ManagedProcessMessage(this.call, "response", response))}\n`);
       } catch (error) {
         this.fail(error);
-        socket.end(`${JSON.stringify(new ManagedProcessMessage(this.call, "response", { error: { code: "PROCESS_EXECUTION_LAUNCHER_FAILURE", message: error.message } }))}\n`);
+        socket.end(`${JSON.stringify(new ManagedProcessMessage(this.call, "response", { error: this.controlFailure }))}\n`);
       }
     });
   }
@@ -126,6 +120,7 @@ export class ManagedLauncher {
         // The owned child can leave the group before its first enumeration.
         // Preserve its birth independently so group absence cannot hide it.
         this.members.set(identity.pid, identity);
+        this.providerIdentity = identity;
         this.save();
       }
       if (this.config.input != null) {
@@ -137,7 +132,8 @@ export class ManagedLauncher {
   }
   collect(stream, bytes) {
     if (!this[stream].append(bytes)) {
-      this.controlFailure = { code: "PROCESS_EXECUTION_OUTPUT_LIMIT", message: `${stream} exceeds the managed output bound` };
+      this.controlFailure = managedControlFailure("PROCESS_EXECUTION_OUTPUT_LIMIT", `${stream} exceeds the managed output bound`)
+        .withContext(this.call).toJSON();
       this.stop("output-limit");
     }
   }
@@ -161,7 +157,11 @@ export class ManagedLauncher {
     }, this.config.graceMs);
   }
   fail(error) {
-    this.controlFailure = { code: error.code || "PROCESS_EXECUTION_LAUNCHER_FAILURE", message: error.message };
+    let failure = error instanceof ProcessExecutionControlFailure ? error
+      : managedControlFailure("PROCESS_EXECUTION_LAUNCHER_FAILURE", error.message, error);
+    if (failure.diagnostic === null) failure = managedMemberFailure({ ...this.call, pgid: process.pid }, this.identity, {
+      code: failure.code, message: failure.message, operation: "launcher-control", role: "launcher", cause: failure });
+    this.controlFailure = failure.withContext(this.call).toJSON();
     this.controlBlocked = true;
     this.state = "control-failed";
     clearInterval(this.poll);

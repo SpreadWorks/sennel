@@ -396,6 +396,10 @@ test("nested Agent call authenticates inherited delegation before provider admis
 
 test("forged inherited delegation rejects an Agent call before admission or provider effects", async (t) => {
   const { root, runtime } = await fixture(t);
+  // Runtime delivery owns scratch space before the child starts. Keep setup
+  // outside the target so the assertion observes only the rejected Agent.
+  const deliveryRoot = createTmpDir("forged-agent-delivery-");
+  t.after(() => fs.rmSync(deliveryRoot, { recursive: true, force: true }));
   const script = path.join(root, "forged-agent-child.mjs");
   const moduleUrl = (name) => JSON.stringify(new URL(`../../../src/lib/${name}.js`, import.meta.url).href);
   fs.writeFileSync(script, `
@@ -411,7 +415,7 @@ test("forged inherited delegation rejects an Agent call before admission or prov
     try{await agent.call('',{providerAttemptAdmission:new Admission()});throw new Error('Unexpected success')}
     catch(error){console.log(JSON.stringify({name:error.name,code:error.code,admitted}))}
   `);
-  const result = await RuntimeChildExecution.runAsync(script, [], { cwd: root, timeout: 40000,
+  const result = await RuntimeChildExecution.runAsync(script, [], { cwd: root, repositoryRoot: deliveryRoot, timeout: 40000,
     env: { ...process.env, SENNEL_PROCESS_EXECUTION_SCOPE: "invalid-json" } });
   assert.equal(result.ok, true, result.stderr);
   assert.deepEqual(JSON.parse(result.stdout), { name: "ProcessExecutionControlFailure", code: "PROCESS_EXECUTION_DELEGATION_REFUSED", admitted: false });
@@ -522,7 +526,8 @@ test("unknown membership refuses initial TERM and later KILL without losing cont
   const signals = [];
   t.mock.method(process, "kill", (pid, signal) => { signals.push({ pid, signal }); return true; });
   for (const failAt of [1, 2]) {
-    const launcher = new ManagedLauncher({ call: { ownerToken: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+    const launcher = new ManagedLauncher({ call: { executionId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+      callId: "cccccccc-cccc-4ccc-8ccc-cccccccccccc", ownerToken: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
       outcomePath: path.join(root, `outcome-${failAt}.json`) }, maxBuffer: 64, graceMs: 20 });
     launcher.child = {};
     let observed = 0;
@@ -612,8 +617,8 @@ test("control failure preserves a live managed group while its coordinator exits
       await runtime.enter(()=>executeManagedProcess(process.execPath,['-e',
         "const fs=require('fs');fs.writeFileSync('ready',String(process.pid));setInterval(()=>process.stdout.write('still-draining'),20)"],
         {cwd:process.cwd(),timeoutMs:40000,maxBuffer:1024*1024}));
-    }catch(error){failure={name:error.name,code:error.code}}
-    try{await runtime.close()}catch(error){closureFailure={name:error.name,code:error.code}}
+    }catch(error){failure=error.toJSON()}
+    try{await runtime.close()}catch(error){closureFailure=error.toJSON()}
     fs.writeFileSync('coordinator-result.json',JSON.stringify({failure,closureFailure}));
   `);
   const delivery = new RuntimeChildExecution();
@@ -636,6 +641,17 @@ test("control failure preserves a live managed group while its coordinator exits
   assert.equal(persisted.state, "control-failed");
   assert.equal(persisted.controlFailure.code, "PROCESS_EXECUTION_OBSERVATION_UNKNOWN");
   assert.match(persisted.controlFailure.message, /EIO: injected unavailable proc observation/);
+  assert.deepEqual(result.failure, persisted.controlFailure,
+    "launcher failure must survive transport and fresh coordinator serialization");
+  assert.deepEqual(result.closureFailure.diagnostic, result.failure.diagnostic);
+  assert.deepEqual(result.closureFailure.primaryCause, result.failure.primaryCause);
+  assert.equal(result.failure.executionId, call.executionId);
+  assert.equal(result.failure.callId, call.callId);
+  assert.equal(result.failure.diagnostic.role, "launcher");
+  assert.equal(result.failure.diagnostic.birth.pid, persisted.launcherIdentity.pid);
+  assert.equal(result.failure.diagnostic.originalPgid, persisted.pgid);
+  assert.equal(result.failure.diagnostic.operation, "launcher-control");
+  assert.equal(Object.hasOwn(result.failure.diagnostic.birth, "ownerToken"), false);
   assert.ok(live.outcome.output.stdout.byteLength > 0);
   assert.equal(new ProcessIdentitySource().assess(live.launcherIdentity).status, "live");
   const finished = await Promise.race([exit, delay(2000).then(() => null)]);
@@ -646,6 +662,22 @@ test("control failure preserves a live managed group while its coordinator exits
   assert.equal(before.executions.at(-1).accepting, false);
   assert.equal(before.executions.at(-1).status, "stopping");
   assert.equal(before.executions.at(-1).calls[0].receipt, null);
+  const readback = path.join(root, "failure-readback.mjs");
+  fs.writeFileSync(readback, `
+    import {ProcessExecutionRuntime,ProcessExecutionControlFailure} from ${moduleUrl("process-execution-runtime")};
+    import {Envelope} from ${moduleUrl("flow-envelope")};
+    const call=ProcessExecutionRuntime.inspect({mainRoot:process.cwd()}).executions.at(-1).calls[0];
+    const failure=ProcessExecutionControlFailure.fromStored(call.controlFailure);
+    process.stdout.write(JSON.stringify(Envelope.fail('run','diagnostic',failure.code,failure.message,
+      {processExecutionControlFailure:failure.toJSON()}).toJSON()));
+  `);
+  const fresh = await RuntimeChildExecution.runAsync(readback, [], { cwd: root, timeout: 10000 });
+  assert.equal(fresh.ok, true, fresh.stderr);
+  const restored = ProcessExecutionControlFailure.fromEnvelope(JSON.parse(fresh.stdout));
+  assert.deepEqual(restored.toJSON(), before.executions.at(-1).calls[0].controlFailure,
+    "launcher-origin evidence must survive registry read by a new process and parent envelope decoding");
+  assert.deepEqual(restored.diagnostic.toJSON(), persisted.controlFailure.diagnostic);
+  assert.equal(/ownerToken|capability|stack/.test(fresh.stdout), false);
   await assert.rejects(ProcessExecutionRuntime.acquire({ mainRoot: root }), { code: "PROCESS_EXECUTION_OBSERVATION_UNKNOWN" });
   const after = ProcessExecutionRuntime.inspect({ mainRoot: root });
   assert.equal(after.slot, call.executionId);
