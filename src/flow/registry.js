@@ -932,6 +932,8 @@ class RegistryLifecycleAdapter {
     if (handler === "commitFinalizeCompletion") {
       finalize.commitFinalizeCompletion({
         root: this.ctx.root,
+        repositoryRoot: this.ctx.repositoryRoot || this.ctx.mainRoot || this.ctx.root,
+        runId: this.ctx.flowState?.runId,
         specId: this.ctx.specId,
         specRoot: this.ctx.specRoot?.toString(),
         idempotencyKey: this.ctx.flowOutboxEntry?.idempotencyKey,
@@ -1633,7 +1635,7 @@ export const FLOW_COMMANDS = {
         "and publication by the parent dispatcher. This command does not mutate Flow state.",
         "",
         "Options:",
-        "  --agent-work-dir <path>  Set the agent/tmp/log base directory for this invocation.",
+        "  --agent-work-dir <path>  Set the agent execution directory for this invocation.",
       ].join("\n"),
     },
     dispatch: {
@@ -1657,7 +1659,7 @@ export const FLOW_COMMANDS = {
         "",
         "Options:",
         "  --approve <token>  Resume the exact approval boundary returned by a prior dispatch.",
-        "  --agent-work-dir <path>  Set the agent/tmp/log base directory for this invocation.",
+        "  --agent-work-dir <path>  Set the agent execution directory for this invocation.",
         ...FLOW_TARGET_GUARD_HELP_LINES,
       ].join("\n"),
     },
@@ -1737,7 +1739,7 @@ export const FLOW_COMMANDS = {
         "Options:",
         "  --spec <path>                 Path to canonical Spec (directory / spec.json; auto-resolved from the active Version-1 Flow)",
         `  --phase <${VALID_GATE_PHASES.join("|")}>  Gate phase (default: auto-resolve from in-progress step)`,
-        "  --agent-work-dir <path>       Per-invocation agent/tmp base directory",
+        "  --agent-work-dir <path>       Per-invocation agent execution directory",
         "  Required evaluations cannot be bypassed from the public CLI.",
       ].join("\n"),
       async post(ctx, result) {
@@ -1921,7 +1923,7 @@ export const FLOW_COMMANDS = {
         "",
         "Options:",
         `  --phase <type>   Review phase: ${VALID_REVIEW_PHASES.map((p) => `'${p}'`).join(", ")}`,
-        "  --agent-work-dir <path>  Per-invocation agent/tmp base directory",
+        "  --agent-work-dir <path>  Per-invocation agent execution directory",
         "  --dry-run        Show proposals without applying",
         "  --skip-confirm   Skip initial confirmation prompt",
         ...FLOW_TARGET_GUARD_HELP_LINES,
@@ -2187,7 +2189,7 @@ export const FLOW_COMMANDS = {
         "Options:",
         "  --run-id <runId>   Target preparing flow (required for prelude, even when another flow is active)",
         ...FLOW_TARGET_GUARD_HELP_LINES,
-        "  --agent-work-dir <path>  Per-invocation agent/tmp base directory",
+        "  --agent-work-dir <path>  Per-invocation agent execution directory",
       ].join("\n"),
     },
     "finalize-commit": {
@@ -2206,7 +2208,7 @@ export const FLOW_COMMANDS = {
         "",
         "Options:",
         "  --message <msg>  Custom commit message",
-        "  --agent-work-dir <path>  Per-invocation agent/tmp base directory",
+        "  --agent-work-dir <path>  Per-invocation agent execution directory",
       ].join("\n"),
       async pre(ctx) {
         await prepareFinalizationCommand(ctx, "finalize-commit", () => loadFinalizeCommitCommand(), "executeFinalizeCommitInput");
@@ -2417,7 +2419,7 @@ export const FLOW_COMMANDS = {
         "",
         "Options:",
         ...FLOW_TARGET_GUARD_HELP_LINES,
-        "  --agent-work-dir <path>  Per-invocation agent/tmp base directory",
+        "  --agent-work-dir <path>  Per-invocation agent execution directory",
       ].join("\n"),
     },
     "settle-failure": {
@@ -2437,7 +2439,7 @@ export const FLOW_COMMANDS = {
         "",
         "Options:",
         ...FLOW_TARGET_GUARD_HELP_LINES,
-        "  --agent-work-dir <path>  Per-invocation agent/tmp base directory",
+        "  --agent-work-dir <path>  Per-invocation agent execution directory",
       ].join("\n"),
     },
     "settle-review-transition": {
@@ -2457,7 +2459,7 @@ export const FLOW_COMMANDS = {
         "",
         "Options:",
         ...FLOW_TARGET_GUARD_HELP_LINES,
-        "  --agent-work-dir <path>  Per-invocation agent/tmp base directory",
+        "  --agent-work-dir <path>  Per-invocation agent execution directory",
       ].join("\n"),
     },
     "recover-missing-producer-artifact": {
@@ -2477,7 +2479,7 @@ export const FLOW_COMMANDS = {
         "",
         "Options:",
         ...FLOW_TARGET_GUARD_HELP_LINES,
-        "  --agent-work-dir <path>  Per-invocation agent/tmp base directory",
+        "  --agent-work-dir <path>  Per-invocation agent execution directory",
       ].join("\n"),
     },
     "recover-spec-gate-repair": {
@@ -2521,7 +2523,7 @@ export const FLOW_COMMANDS = {
         "Options:",
         "  --reason <text>         Required for Step Error recovery; describe the resolved cause and re-execution decision",
         ...FLOW_TARGET_GUARD_HELP_LINES,
-        "  --agent-work-dir <path>  Per-invocation agent/tmp base directory",
+        "  --agent-work-dir <path>  Per-invocation agent execution directory",
       ].join("\n"),
     },
     "reconcile-task-review": {

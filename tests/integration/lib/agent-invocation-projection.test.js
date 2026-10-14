@@ -1,7 +1,7 @@
+import { createTmpDir as createTestDirectory } from "../../support/builders/tmp-dir.js";
 import { afterEach, describe, it } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { EventEmitter } from "node:events";
 import {
@@ -27,7 +27,7 @@ afterEach(() => {
 });
 
 function makeAgent(profile, agentOverrides = {}, supervision = {}) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "agent-projection-"));
+  const root = createTestDirectory("agent-projection-");
   roots.push(root);
   const agentWorkDir = path.join(root, ".tmp");
   const config = {

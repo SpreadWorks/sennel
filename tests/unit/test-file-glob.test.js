@@ -1,8 +1,8 @@
+import { createTmpDir as createTestDirectory } from "../support/builders/tmp-dir.js";
 import { afterEach, describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { tmpdir } from "node:os";
 import { globFilesSync } from "../runner/test-file-glob.js";
 
 describe("globFilesSync", () => {
@@ -14,7 +14,7 @@ describe("globFilesSync", () => {
   });
 
   function fixture() {
-    root = mkdtempSync(join(tmpdir(), "sennel-test-glob-"));
+    root = createTestDirectory("sennel-test-glob-");
     mkdirSync(join(root, "nested"), { recursive: true });
     writeFileSync(join(root, "top.test.js"), "");
     writeFileSync(join(root, "top.txt"), "");

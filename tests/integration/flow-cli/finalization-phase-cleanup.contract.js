@@ -137,7 +137,7 @@ export function registerFinalizationCleanupContracts(scenario, currentSeed) {
   let rescueSeed;
   let rescueSeedOwner;
   before(() => {
-    rescueSeedOwner = TestTemporaryRoot.createOnSystem();
+    rescueSeedOwner = TestTemporaryRoot.createOnRepository();
     rescueSeed = rescueSeedOwner.path;
     initGitRepo(rescueSeed);
     fs.writeFileSync(path.join(rescueSeed, "README.md"), "Base input.\n");

@@ -1,3 +1,4 @@
+import { flowTemporaryRoot } from "./flow-context.js";
 import { readFlowProcessStops } from "./process-runtime-admission.js";
 import { loadMergedGuardrails } from "../../lib/guardrail.js";
 import { ReviewExecutionAdmission } from "./spec-review-operations-values.js";
@@ -1005,22 +1006,14 @@ function taskReviewTransientDirectories(executionRoot, workUnit) {
   return [reviewDirectory];
 }
 
-function taskReviewAgentRuntimeDirectories(executionRoot, agent = null) {
-  const runtimeDirectories = agent?.runtimeDirectories?.();
+function taskReviewAgentRuntimeDirectories(executionRoot, agent = null, temporaryRoot = null) {
+  const runtimeDirectories = agent?.runtimeDirectories?.({ temporaryRoot });
   if (runtimeDirectories == null) return [];
   if (!(runtimeDirectories instanceof AgentRuntimeDirectorySet)) {
     throw new Error("Task Review agent runtime directories must use AgentRuntimeDirectorySet");
   }
-  return runtimeDirectories.toArray().map((candidate) => {
-    if (typeof candidate !== "string" || !path.isAbsolute(candidate)) {
-      throw new Error("Task Review agent runtime directory must be absolute");
-    }
-    const relative = path.relative(executionRoot, candidate).split(path.sep).join("/");
-    if (relative === "" || relative.startsWith("../") || path.posix.isAbsolute(relative)) {
-      throw new Error("Task Review agent runtime directory escapes its execution checkout");
-    }
-    return relative;
-  });
+  return new AgentRuntimeDirectorySet({ root: executionRoot, directories: runtimeDirectories.toArray() })
+    .toArray().map((candidate) => path.relative(executionRoot, candidate).split(path.sep).join("/"));
 }
 
 function taskReviewValidatedMetricMetadataPaths(executionRoot, workUnit) {
@@ -1113,12 +1106,12 @@ export class TaskReviewCanonicalObservationBoundary {
 }
 
 /** Parent-side source surface for a Task Review provider invocation. */
-export function taskReviewSourceObservationIgnoredDirectories(executionRoot, workUnit, agent = null) {
+export function taskReviewSourceObservationIgnoredDirectories(executionRoot, workUnit, agent = null, temporaryRoot = null) {
   return [...new Set([
     ...taskReviewTransientDirectories(executionRoot, workUnit),
     path.posix.join(PRODUCT.managedDirName, "agent-cache"),
     ...new FlowRepositoryRuntimeArtifactRegistry().directoryRoots(),
-    ...taskReviewAgentRuntimeDirectories(executionRoot, agent),
+    ...taskReviewAgentRuntimeDirectories(executionRoot, agent, temporaryRoot),
     ...taskReviewValidatedMetricMetadataPaths(executionRoot, workUnit),
   ])];
 }
@@ -1130,9 +1123,9 @@ export function taskReviewSourceObservationIgnoredDirectories(executionRoot, wor
  * to the enclosing canonical Version directory: provider changes to spec or
  * evidence artifacts remain observable across Attempts.
  */
-export function taskReviewRecoveryIgnoredDirectories(executionRoot, workUnit, agent = null) {
+export function taskReviewRecoveryIgnoredDirectories(executionRoot, workUnit, agent = null, temporaryRoot = null) {
   const directories = [
-    ...taskReviewSourceObservationIgnoredDirectories(executionRoot, workUnit, agent),
+    ...taskReviewSourceObservationIgnoredDirectories(executionRoot, workUnit, agent, temporaryRoot),
   ];
   return [...new Set(directories)];
 }
@@ -1912,7 +1905,7 @@ export class RunReviewCommand extends FlowCommand {
           taskRecoveryBaseline = SourceMutationBaseline.capture({
             root: executionRoot,
             attempt: taskReviewExecution.attempt,
-            ignoredDirectories: [...taskReviewRecoveryIgnoredDirectories(executionRoot, workUnit, taskReviewAgent), ...contractPaths],
+            ignoredDirectories: [...taskReviewRecoveryIgnoredDirectories(executionRoot, workUnit, taskReviewAgent, flowTemporaryRoot(ctx)), ...contractPaths],
             runtimeLocks: taskReviewPublicationRuntimeLocks(ctx.flowManager, state.specId, executionRoot),
           });
           taskRecoveryBaselineInput = newTaskReviewBaselineInput({
@@ -2074,7 +2067,7 @@ export class RunReviewCommand extends FlowCommand {
       try {
         res = await runCmdWithRetry(
           async () => {
-            const child = new RuntimeChildExecution({ environment: env });
+            const child = new RuntimeChildExecution({ root: ctx.repositoryRoot || ctx.mainRoot || ctx.root, environment: env, temporaryRoot: flowTemporaryRoot(ctx) });
             try { return await this.runCommand("node", [scriptPath, ...args], child.options({
               cwd: executionRoot,
               onProcessExecutionStop(receipt) {

@@ -1,10 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
-import os from "node:os";
 import crypto from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { AtomicJsonFile } from "../../lib/atomic-json-file.js";
 import { PRODUCT } from "../../lib/product.js";
+import { TemporaryPaths } from "../../lib/temporary-paths.js";
 import { DEFAULT_FLOW_SPEC_DIR, FlowSpecRoot, flowStateSpecLocation } from "../../lib/flow-workspace.js";
 import { runGit, GitRefObservation, GitRefProbeError } from "../../lib/git-helpers.js";
 import { StepPersistenceFailure, rethrowOriginalStepPersistenceFailure } from "./definition-lifecycle-failure.js";
@@ -492,7 +492,7 @@ export class FinalizeCleanupEffectPreparation {
       const baseline = mergeOutcome?.mergedFromSha;
       const rescueIdentity = autoRescueIdentity({ mainRepoPath: owner.mainRepoPath,
         baseBranch: state.baseBranch, baseline, featureBranch: state.featureBranch,
-        specRoot: flowStateSpecLocation(state).relativeRoot, specId: state.specId,
+        specRoot: flowStateSpecLocation(state).relativeRoot, specId: state.specId, runId: state.runId,
         allowedIssueLogId: finalizeAuditId("cherry-pick-conflict", state, { baseline, featureBranch: state.featureBranch }),
         allowFinalizeMetadata: true });
       const rescue = new AutoRescueCleanupStore(rescueIdentity, { readOnly: true }).load();
@@ -760,6 +760,7 @@ export class AutoRescueCleanupJournal {
         "featureBranch",
         "specRoot",
         "specId",
+        "runId",
         "allowedIssueLogId",
         "allowFinalizeMetadata",
       ],
@@ -785,12 +786,15 @@ export class AutoRescueCleanupJournal {
       : worktreeAuthority instanceof AutoRescueWorktreeAuthority
         ? worktreeAuthority
         : AutoRescueWorktreeAuthority.fromStored(worktreeAuthority);
-    const temporaryRoot = path.resolve(os.tmpdir());
+    const temporaryPaths = new TemporaryPaths(identity.mainRepoPath);
+    const temporaryRoot = autoRescueTemporaryDirectory(identity);
+    temporaryPaths.validate(tempWorktreePath);
     const relativeTemp = path.relative(temporaryRoot, path.resolve(tempWorktreePath));
     if (
       relativeTemp === ""
       || relativeTemp.startsWith("..")
       || path.isAbsolute(relativeTemp)
+      || path.dirname(path.resolve(tempWorktreePath)) !== temporaryRoot
       || !path.basename(tempWorktreePath).startsWith(PRODUCT.temporaryPrefix("rescue-tmp"))
     ) {
       throw new Error("auto-rescue temporary worktree authority is invalid");
@@ -967,6 +971,7 @@ export function autoRescueIdentity({
   featureBranch,
   specRoot = DEFAULT_FLOW_SPEC_DIR,
   specId,
+  runId = null,
   allowedIssueLogId = null,
   allowFinalizeMetadata = false,
 }) {
@@ -977,7 +982,15 @@ export function autoRescueIdentity({
     featureBranch,
     specRoot: FlowSpecRoot.from(specRoot).toString(),
     specId,
+    runId,
     allowedIssueLogId,
     allowFinalizeMetadata,
   };
+}
+
+export function autoRescueTemporaryDirectory(identity) {
+  const temporaryPaths = new TemporaryPaths(identity.mainRepoPath);
+  return identity.runId === null
+    ? temporaryPaths.runtime("auto-rescue")
+    : temporaryPaths.flow(identity.specId, identity.runId);
 }

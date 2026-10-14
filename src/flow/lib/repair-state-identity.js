@@ -1,11 +1,11 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { runGit, runGitToFile } from "../../lib/git-helpers.js";
 import { flowStateSpecLocation } from "../../lib/flow-workspace.js";
 import { FLOW_ARTIFACT_CONTRACTS } from "../../lib/flow-artifact-contract.js";
 import { PRODUCT } from "../../lib/product.js";
+import { TemporaryPaths } from "../../lib/temporary-paths.js";
 import { FlowRepositoryRuntimeArtifactRegistry } from "./flow-repository-runtime-artifacts.js";
 import { compareText } from "./text-order.js";
 
@@ -414,8 +414,7 @@ function readConfiguredBoundary(root) {
   };
 }
 
-function forEachGitNulField(root, args, label, visit) {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), PRODUCT.temporaryPrefix("repair-git")));
+function forEachGitNulField(root, directory, args, label, visit) {
   const outputPath = path.join(directory, "stdout.bin");
   try {
     const result = runGitToFile(args, { cwd: root, outputPath });
@@ -446,7 +445,7 @@ function forEachGitNulField(root, args, label, visit) {
       fs.closeSync(descriptor);
     }
   } finally {
-    fs.rmSync(directory, { recursive: true, force: true });
+    fs.rmSync(outputPath, { force: true });
   }
 }
 
@@ -479,10 +478,10 @@ function changedPathEntry(changed, relPath, boundary) {
   return entry;
 }
 
-function streamNameStatus(root, args, scope, changed, boundary) {
+function streamNameStatus(root, directory, args, scope, changed, boundary) {
   let status = null;
   let oldPath = null;
-  forEachGitNulField(root, args, `failed to collect ${scope} repair delta`, (field) => {
+  forEachGitNulField(root, directory, args, `failed to collect ${scope} repair delta`, (field) => {
     if (status == null) {
       status = field;
       return;
@@ -499,32 +498,34 @@ function streamNameStatus(root, args, scope, changed, boundary) {
   if (status != null || oldPath != null) throw new Error(`malformed ${scope} Git name-status output`);
 }
 
-function collectGitChangedPaths(root, baseline, boundary) {
+function collectGitChangedPaths(root, directory, baseline, boundary) {
   const changed = new Map();
-  streamNameStatus(root, [
+  const scratchRelative = path.relative(root, directory).split(path.sep).join("/");
+  streamNameStatus(root, directory, [
     "diff", "--name-status", "-z", "--no-ext-diff", "--find-renames", baseline.commitOid, "HEAD",
   ], "committed", changed, boundary);
-  streamNameStatus(root, [
+  streamNameStatus(root, directory, [
     "diff", "--cached", "--name-status", "-z", "--no-ext-diff", "--find-renames", "HEAD",
   ], "index", changed, boundary);
-  streamNameStatus(root, [
+  streamNameStatus(root, directory, [
     "diff", "--name-status", "-z", "--no-ext-diff", "--find-renames",
   ], "worktree", changed, boundary);
-  forEachGitNulField(root, [
+  forEachGitNulField(root, directory, [
     "ls-files", "--others", "--exclude-standard", "-z",
   ], "failed to collect untracked repair inputs", (relPath) => {
+    if (relPath.startsWith(`${scratchRelative}/`)) return;
     const entry = changedPathEntry(changed, relPath, boundary);
     entry.addStatus("worktree", "untracked");
   });
   return changed;
 }
 
-function collectIndexState(root, objectFormat, paths) {
+function collectIndexState(root, directory, objectFormat, paths) {
   const state = new Map();
   const input = [...paths];
   for (let offset = 0; offset < input.length; offset += 512) {
     const batch = input.slice(offset, offset + 512);
-    forEachGitNulField(root, ["ls-files", "--stage", "-z", "--", ...batch], "failed to read Git index", (record) => {
+    forEachGitNulField(root, directory, ["ls-files", "--stage", "-z", "--", ...batch], "failed to read Git index", (record) => {
       const match = record.match(/^(\d+) ([a-f0-9]+) (\d)\t([\s\S]+)$/i);
       if (!match) throw new Error("malformed Git index entry");
       const [, mode, rawOid, stage, rawPath] = match;
@@ -539,11 +540,11 @@ function collectIndexState(root, objectFormat, paths) {
   return state;
 }
 
-function assertSupportedIndexFlags(root) {
+function assertSupportedIndexFlags(root, directory) {
   const sparseConfig = runGit(["config", "--bool", "core.sparseCheckout"], { cwd: root });
   const sparse = sparseConfig.ok && sparseConfig.stdout.trim() === "true";
   const skipWorktreePaths = [];
-  forEachGitNulField(root, ["ls-files", "-v", "-z"], "failed to inspect Git index flags", (record) => {
+  forEachGitNulField(root, directory, ["ls-files", "-v", "-z"], "failed to inspect Git index flags", (record) => {
     const tag = record[0];
     const relPath = normalizeRepairPath(record.slice(2));
     if (/[a-z]/.test(tag)) {
@@ -782,47 +783,56 @@ export function buildRepairStateManifest({ root, artifactRoot = null, specPath, 
   const boundary = readConfiguredBoundary(root);
   if (!isGitRepository(root)) return buildFilesystemManifest({ root, specPath: normalizedSpec, boundary, registry });
   const baseline = baselineFromStateOrRepository({ root, state });
-  const skipWorktreePaths = assertSupportedIndexFlags(root);
-  const changed = collectGitChangedPaths(root, baseline, boundary);
-  collectExplicitTree(root, PRODUCT.managedPath("config.json"), changed, registry, boundary);
-  collectExplicitTree(root, PRODUCT.managedPath("config.local.json"), changed, registry, boundary);
-  collectExplicitTree(resolvedArtifactRoot, normalizedSpec, changed, registry, boundary);
-  const testSourceDirectory = path.posix.join(path.posix.dirname(normalizedSpec), "artifacts/tests");
-  collectExplicitTree(resolvedArtifactRoot, testSourceDirectory, changed, registry, boundary);
-  for (const relPath of boundary.include) collectExplicitTree(root, relPath, changed, registry, boundary);
-  for (const relPath of [...changed.keys()]) {
-    if (registry.owns(relPath)) changed.delete(relPath);
-  }
-  if (changed.size > boundary.maxChangedPaths) {
-    throw new RepairStateError(
-      "REPAIR_CHANGED_PATH_LIMIT",
-      `repair state changed path count ${changed.size} exceeds configured limit ${boundary.maxChangedPaths}; adjust flow.repairFingerprint.maxChangedPaths`,
-      { observed: changed.size, limit: boundary.maxChangedPaths, setting: "flow.repairFingerprint.maxChangedPaths" },
-    );
-  }
-  const index = collectIndexState(root, baseline.objectFormat, changed.keys());
-  const entries = [...changed.values()].map((entry) => {
-    const indexEntry = index.get(entry.path) || null;
-    const isSpecInput = entry.path === normalizedSpec
-      || entry.path.startsWith(`${testSourceDirectory}/`);
-    const identity = contentIdentity(isSpecInput ? resolvedArtifactRoot : root, entry.path, indexEntry);
-    return new CanonicalRepairEntry({
-      path: entry.path,
-      oldPath: entry.oldPath,
-      statuses: [...entry.statuses],
-      mode: identity.mode,
-      indexOid: indexEntry?.oid || null,
-      contentHash: identity.contentHash,
+  const temporaryPaths = new TemporaryPaths(resolvedArtifactRoot);
+  const temporaryDirectory = state?.specId && state?.runId
+    ? temporaryPaths.flow(state.specId, state.runId)
+    : temporaryPaths.runtime("repair-git");
+  const directory = temporaryPaths.create(temporaryDirectory, PRODUCT.temporaryPrefix("repair-git"));
+  try {
+    const skipWorktreePaths = assertSupportedIndexFlags(root, directory);
+    const changed = collectGitChangedPaths(root, directory, baseline, boundary);
+    collectExplicitTree(root, PRODUCT.managedPath("config.json"), changed, registry, boundary);
+    collectExplicitTree(root, PRODUCT.managedPath("config.local.json"), changed, registry, boundary);
+    collectExplicitTree(resolvedArtifactRoot, normalizedSpec, changed, registry, boundary);
+    const testSourceDirectory = path.posix.join(path.posix.dirname(normalizedSpec), "artifacts/tests");
+    collectExplicitTree(resolvedArtifactRoot, testSourceDirectory, changed, registry, boundary);
+    for (const relPath of boundary.include) collectExplicitTree(root, relPath, changed, registry, boundary);
+    for (const relPath of [...changed.keys()]) {
+      if (registry.owns(relPath)) changed.delete(relPath);
+    }
+    if (changed.size > boundary.maxChangedPaths) {
+      throw new RepairStateError(
+        "REPAIR_CHANGED_PATH_LIMIT",
+        `repair state changed path count ${changed.size} exceeds configured limit ${boundary.maxChangedPaths}; adjust flow.repairFingerprint.maxChangedPaths`,
+        { observed: changed.size, limit: boundary.maxChangedPaths, setting: "flow.repairFingerprint.maxChangedPaths" },
+      );
+    }
+    const index = collectIndexState(root, directory, baseline.objectFormat, changed.keys());
+    const entries = [...changed.values()].map((entry) => {
+      const indexEntry = index.get(entry.path) || null;
+      const isSpecInput = entry.path === normalizedSpec
+        || entry.path.startsWith(`${testSourceDirectory}/`);
+      const identity = contentIdentity(isSpecInput ? resolvedArtifactRoot : root, entry.path, indexEntry);
+      return new CanonicalRepairEntry({
+        path: entry.path,
+        oldPath: entry.oldPath,
+        statuses: [...entry.statuses],
+        mode: identity.mode,
+        indexOid: indexEntry?.oid || null,
+        contentHash: identity.contentHash,
+      });
     });
-  });
-  const headOid = requireOid(runGitRequired(root, ["rev-parse", "HEAD"], "failed to resolve repair state HEAD").trim(), "headOid", baseline.objectFormat);
-  const headTreeOid = requireOid(runGitRequired(root, ["rev-parse", "HEAD^{tree}"], "failed to resolve repair state tree").trim(), "headTreeOid", baseline.objectFormat);
-  return new RepairFingerprintManifest({
-    version: REPAIR_STATE_VERSION,
-    baseline,
-    headOid,
-    headTreeOid,
-    environmentHash: environmentHash(root, skipWorktreePaths),
-    entries,
-  });
+    const headOid = requireOid(runGitRequired(root, ["rev-parse", "HEAD"], "failed to resolve repair state HEAD").trim(), "headOid", baseline.objectFormat);
+    const headTreeOid = requireOid(runGitRequired(root, ["rev-parse", "HEAD^{tree}"], "failed to resolve repair state tree").trim(), "headTreeOid", baseline.objectFormat);
+    return new RepairFingerprintManifest({
+      version: REPAIR_STATE_VERSION,
+      baseline,
+      headOid,
+      headTreeOid,
+      environmentHash: environmentHash(root, skipWorktreePaths),
+      entries,
+    });
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
 }

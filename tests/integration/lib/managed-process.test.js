@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
-import os from "node:os";
+import { createTmpDir } from "../../support/builders/tmp-dir.js";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
@@ -22,7 +22,7 @@ import { executeManagedProcess, readManagedSettlement, verifyManagedProcessStopp
 import { managedRequest, readManagedRecord, writeManagedRecord } from "../../../src/lib/managed-process-protocol.js";
 
 async function fixture(t) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "managed-process-"));
+  const root = createTmpDir("managed-process-");
   let runtime;
   t.after(async () => {
     try { if (runtime && !runtime.closed) await runtime.close(); }
@@ -84,7 +84,7 @@ test("managed timeout retains provider timeout classification only after confirm
 });
 
 test("ordinary asynchronous commands preserve extra descriptors with supervised cancellation", async (t) => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "process-fd-"));
+  const root = createTmpDir("process-fd-");
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const file = path.join(root, "delivery");
   fs.writeFileSync(file, "descriptor-data");
@@ -253,7 +253,7 @@ async function waitForFile(file, timeout = 40000) {
 }
 
 test("coordinator SIGKILL leaves a draining reconnectable anchor that recovery stops before readmission", async (t) => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "managed-orphan-"));
+  const root = createTmpDir("managed-orphan-");
   let child;
   let recovery;
   t.after(async () => {
@@ -292,7 +292,7 @@ test("coordinator SIGKILL leaves a draining reconnectable anchor that recovery s
 });
 
 test("stop receipt persistence failure stays a control failure and retains the occupied slot", async (t) => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "managed-receipt-failure-"));
+  const root = createTmpDir("managed-receipt-failure-");
   let runtime;
   t.after(async () => {
     try { if (runtime) await assert.rejects(runtime.close(), ProcessExecutionControlFailure); }
@@ -336,7 +336,7 @@ test("wrong reconnect capability cannot stop a live managed provider", async (t)
 });
 
 test("bounded output overflow remains a control failure after stopping the group", async (t) => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "managed-output-failure-"));
+  const root = createTmpDir("managed-output-failure-");
   let runtime;
   t.after(async () => {
     try { if (runtime) await assert.rejects(runtime.close(), { code: "PROCESS_EXECUTION_OUTPUT_LIMIT" }); }
@@ -351,7 +351,7 @@ test("bounded output overflow remains a control failure after stopping the group
 
 
 test("visible but durability-uncertain launcher record is rejected across a fresh reader", (t) => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "managed-record-durability-"));
+  const root = createTmpDir("managed-record-durability-");
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const file = path.join(root, "outcome.json");
   const record = { executionId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
@@ -516,7 +516,7 @@ test("large legal output streams stay outside the shared registry across physica
 });
 
 test("unknown membership refuses initial TERM and later KILL without losing control failure", (t) => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "managed-membership-"));
+  const root = createTmpDir("managed-membership-");
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   t.mock.timers.enable({ apis: ["setTimeout"] });
   const signals = [];
@@ -542,7 +542,7 @@ test("unknown membership refuses initial TERM and later KILL without losing cont
 });
 
 test("control failure preserves a live managed group while its coordinator exits and fresh admission refuses", async (t) => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "managed-control-exit-"));
+  const root = createTmpDir("managed-control-exit-");
   const wrapper = path.join(root, "launcher-fixture.mjs");
   const script = path.join(root, "coordinator.mjs");
   const fixtureEndpoint = `\0sennel-fixture-${path.basename(root)}`;

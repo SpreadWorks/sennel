@@ -1,3 +1,4 @@
+import { flowTemporaryRoot } from "./flow-context.js";
 import { FlowDispatchLease } from "./flow-dispatch-lease.js";
 export { FlowDispatchLease } from "./flow-dispatch-lease.js";
 import { FlowExecutionContract, FlowExecutionContractRefusal } from "./flow-execution-contract.js";
@@ -855,6 +856,8 @@ class DispatchApprovalReceiptMutation {
 export function dispatchRepositoryFingerprint(ctx) {
   return finalRegressionWorktreeFingerprint(ctx.executionRoot || ctx.root, {
     pathspecExcludes: dispatchFingerprintPathspecExcludes(ctx),
+    repositoryRoot: ctx.repositoryRoot || ctx.mainRoot || ctx.root,
+    specId: ctx.specId, runId: ctx.flowState?.runId,
   });
 }
 
@@ -1081,6 +1084,7 @@ export class FlowDispatchWork {
     return {
       commandId: this.handoffRequest.policy.preservesRejectedSource ? `flow.dispatch.${this.handoffRequest.stepId}` : "flow.dispatch",
       executionWorkDir: ctx.executionRoot || ctx.root,
+      temporaryRoot: flowTemporaryRoot(ctx),
       processExecutionBinding: captureFlowProcessExecutionBinding(ctx, {
         executionContract: this.handoffRequest.executionContract,
         dispatchInvocationId: this.handoffRequest.dispatchInvocationId,
@@ -1594,6 +1598,7 @@ export default class RunDispatchCommand extends FlowCommand {
     const response = await agent.call(prompt, {
       commandId: "flow.dispatch.nonblocking-decision",
       executionWorkDir: ctx.executionRoot || ctx.root,
+      temporaryRoot: flowTemporaryRoot(ctx),
       cacheMode: "bypass",
       retryCount: 0,
       waitForProcessTree: true,

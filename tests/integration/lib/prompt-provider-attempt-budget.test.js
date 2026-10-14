@@ -1,8 +1,8 @@
+import { createTmpDir as createTestDirectory } from "../../support/builders/tmp-dir.js";
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { EventEmitter } from "node:events";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { Agent } from "../../../src/lib/agent.js";
 import { ProviderRegistry } from "../../../src/lib/provider.js";
@@ -17,7 +17,7 @@ import {
 } from "../../../src/lib/prompt-batching.js";
 
 function fixture(t, outcomes, { cached = false } = {}) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "prompt-attempt-budget-"));
+  const root = createTestDirectory("prompt-attempt-budget-");
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const startups = [];
   const config = { agent: { default: "test/exec", providers: {

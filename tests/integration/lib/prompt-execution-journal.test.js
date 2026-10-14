@@ -1,8 +1,8 @@
+import { createTmpDir as createTestDirectory } from "../../support/builders/tmp-dir.js";
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { EventEmitter } from "node:events";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { Agent } from "../../../src/lib/agent.js";
 import { AgentProviderAttemptAdmission } from "../../../src/lib/agent-provider-attempt.js";
@@ -64,7 +64,7 @@ function options(writer, starts, plan = PromptBatchPlan.fromRequest({ request: "
 }
 
 function agentFixture(t, outcomes, { cached = false } = {}) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "durable-prompt-"));
+  const root = createTestDirectory("durable-prompt-");
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const starts = [];
   const config = { agent: { default: "test/exec", providers: { "test/exec": { command: "worker", args: ["{{PROMPT}}"] } }, timeout: 30 } };

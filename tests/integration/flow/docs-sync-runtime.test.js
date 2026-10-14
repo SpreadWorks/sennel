@@ -1,13 +1,15 @@
+import { createTmpDir as createTestDirectory } from "../../support/builders/tmp-dir.js";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import RunSyncCommand from "../../../src/flow/lib/run-sync.js";
 import RunFinalizeSyncCommand from "../../../src/flow/lib/run-finalize-sync.js";
 import { runCmd } from "../../../src/lib/process.js";
 import { ProcessExecutionRuntime, ProcessExecutionControlFailure, ProcessExecutionStopReceipt } from "../../../src/lib/process-execution-runtime.js";
 import { FlowManager } from "../../../src/lib/flow-manager.js";
+import { CanonicalFlowFixture } from "../../support/infrastructure/flow-setup.js";
+import { captureFlowProcessExecutionBinding } from "../../../src/flow/lib/process-runtime-admission.js";
 
 const chapter = ["# Runtime documentation", "", "## Description", "Generated child documentation.", "", "## Details",
   ...Array.from({ length: 15 }, (_, index) => `Verified detail ${index}.`), ""].join("\n");
@@ -15,7 +17,7 @@ const config = { type: "base", lang: "en", docs: { languages: ["en"], defaultLan
   chapters: [{ chapter: "overview.md", desc: "Runtime documentation" }], scan: { include: ["input.txt"], exclude: [] } };
 
 function fixture(t) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "docs-sync-runtime-"));
+  const root = createTestDirectory("docs-sync-runtime-");
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const templates = path.join(root, ".sennel/templates/en/docs");
   fs.mkdirSync(templates, { recursive: true });
@@ -38,6 +40,20 @@ function assertArtifacts(root) {
   const analysis = JSON.parse(fs.readFileSync(path.join(root, ".sennel/output/analysis.json"), "utf8"));
   assert.equal(typeof analysis.analyzedAt, "string");
   assert.match(fs.readFileSync(path.join(root, "README.md"), "utf8"), /\[Runtime documentation\]\(docs\/overview\.md\)/);
+}
+
+function flowContext(mainRoot, { worktree = false } = {}) {
+  const flowManager = new FlowManager({ root: mainRoot, mainRoot, inWorktree: false });
+  const selected = new CanonicalFlowFixture({ flowManager,
+    specId: "docs-managed-spec", runId: "docs-managed-run",
+    execution: worktree ? { mode: "worktree", baseBranch: "main", featureBranch: "feature/docs-sync" }
+      : { mode: "direct" },
+  }).create();
+  const flowState = selected.state();
+  const root = flowManager.resolveWorktreePaths(flowState).worktreePath ?? mainRoot;
+  if (worktree) fs.mkdirSync(root, { recursive: true });
+  return { root, mainRoot, repositoryRoot: mainRoot, executionRoot: root,
+    specId: flowState.specId, flowState, flowManager };
 }
 
 for (const dryRun of [false, true]) {
@@ -82,8 +98,8 @@ test("sync stops before Git and reports the actual review's invalid generated ch
 
 test("finalize sync builds at resolved main root and preserves real child failure diagnostics", async (t) => {
   const root = fixture(t);
-  const worktree = path.join(root, "worktree");
-  fs.mkdirSync(worktree);
+  const ctx = flowContext(root, { worktree: true });
+  const worktree = ctx.root;
   process.env.SENNEL_WORK_ROOT = worktree;
   process.env.SENNEL_SOURCE_ROOT = worktree;
   const calls = [];
@@ -96,8 +112,6 @@ test("finalize sync builds at resolved main root and preserves real child failur
       return { ok: true, status: 0, stdout: args[0] === "diff" ? "docs/overview.md\n" : "", stderr: "" };
     },
   });
-  const ctx = { root: worktree, flowState: { worktree: true },
-    flowManager: { resolveWorktreePaths: () => ({ mainRepoPath: root }) } };
   const result = await command.executeEffect(ctx);
   assert.equal(result.status, "done");
   assert.equal(result.diagnostics[0].phase, "docs-build");
@@ -127,15 +141,15 @@ test("finalize sync builds at resolved main root and preserves real child failur
 for (const finalizing of [false, true]) {
   test(`${finalizing ? "finalize sync" : "sync"} awaits real managed documentation children before returning`, async (t) => {
     const root = fixture(t);
+    const ctx = { ...flowContext(root), dryRun: true };
     const runtime = await ProcessExecutionRuntime.acquire({ mainRoot: root, executionRoot: root,
-      runId: "docs-managed-run", specId: "docs-managed-spec" });
+      runId: ctx.flowState.runId, specId: ctx.specId,
+      binding: captureFlowProcessExecutionBinding(ctx, { commandId: finalizing ? "finalize-sync" : "sync" }) });
     t.after(async () => { if (!runtime.closed) await runtime.close(); });
     const command = finalizing
       ? new RunFinalizeSyncCommand({ hasCommit: () => false,
         git: () => ({ ok: true, status: 0, stdout: "docs/overview.md\n", stderr: "" }) })
       : new RunSyncCommand({ git() { assert.fail("dry run must not call Git"); } });
-    const ctx = { root, dryRun: true, flowState: {},
-      flowManager: { resolveWorktreePaths: () => ({ mainRepoPath: root }) } };
     const result = await runtime.enter(() => finalizing ? command.executeEffect(ctx) : command.execute(ctx));
     assert.equal(finalizing ? result.status : result.result, finalizing ? "done" : "dry-run");
     assertArtifacts(root);
@@ -145,6 +159,8 @@ for (const finalizing of [false, true]) {
       const receipt = new ProcessExecutionStopReceipt(call.receipt);
       assert.equal(receipt.stopEvidence.confirmed, true);
       assert.equal(receipt.checkoutIdentity.executionRoot, root);
+      assert.equal(receipt.binding.toJSON().runId, ctx.flowState.runId);
+      assert.equal(receipt.binding.toJSON().specId, ctx.specId);
       assert.equal(call.outcome.code, 0);
     }
     await runtime.close();
@@ -158,7 +174,7 @@ for (const finalizing of [false, true]) {
       runCommand: async () => { throw failure; }, hasCommit: () => false,
       git() { assert.fail("control refusal must not continue to Git"); },
     });
-    const ctx = { root, flowState: {}, flowManager: { resolveWorktreePaths: () => ({ mainRepoPath: root }) } };
+    const ctx = finalizing ? flowContext(root) : { root };
     await assert.rejects(finalizing ? command.executeEffect(ctx) : command.execute(ctx), (error) => error === failure);
     assert.equal(fs.existsSync(path.join(root, "docs")), false);
   });

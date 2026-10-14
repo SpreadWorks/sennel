@@ -1,3 +1,4 @@
+import { flowTemporaryRoot } from "./flow-context.js";
 import { executeFinalizationCommand, finalizationStepRegistration } from "../engine/composition/finalization.js";
 import path from "path";
 import { runManagedCmdAsync } from "../../lib/process.js";
@@ -65,6 +66,7 @@ export class RunFinalizeSyncCommand extends FlowCommand {
       const buildScript = path.join(this.packageDir, "docs.js");
       const buildResult = await RuntimeChildExecution.runAsync(buildScript, ["build"], {
         cwd: syncCwd,
+        repositoryRoot: ctx.repositoryRoot || ctx.mainRoot || root, temporaryRoot: flowTemporaryRoot(ctx),
         env: {
           ...process.env,
           [PRODUCT.env("WORK_ROOT")]: syncCwd,

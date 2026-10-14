@@ -25,6 +25,7 @@
  *   - runId: optional for active flow; REQUIRED in preparing mode.
  */
 
+import { flowTemporaryRoot } from "./flow-context.js";
 import { FlowCommand } from "./base-command.js";
 import { evaluateStaticGates } from "./auto-check-static.js";
 import { resolvePreparingRunId } from "./resolve-preparing-run-id.js";
@@ -184,7 +185,7 @@ function goalMissing(goal) {
   return normalized === "" || ["unknown", "n/a", "na", "not specified", "null"].includes(normalized);
 }
 
-async function scoreWithAi(container, inputText) {
+async function scoreWithAi(container, inputText, invocationOptions) {
   let agent;
   try {
     agent = container.get("agent");
@@ -233,6 +234,7 @@ async function scoreWithAi(container, inputText) {
         request.userPrompt,
         {
           ...request,
+          ...invocationOptions,
           commandId: "flow.auto-check",
           providerCallAdmission,
         },
@@ -240,6 +242,7 @@ async function scoreWithAi(container, inputText) {
       projectInvocation: typeof agent.projectInvocation === "function"
         ? (request) => agent.projectInvocation(request.userPrompt, {
           ...request,
+          ...invocationOptions,
           commandId: "flow.auto-check",
         })
         : undefined,
@@ -312,11 +315,11 @@ export function composeAutoCheck({ staticGates, aiBreakdown, aiReason, aiOk, aiG
   };
 }
 
-export async function runAutoCheckCore(container, inputText) {
+export async function runAutoCheckCore(container, inputText, invocationOptions = {}) {
   const staticGates = evaluateStaticGates(inputText);
   let aiResult = { breakdown: emptyBreakdown(), reason: "", ok: true };
   if (staticGates.eligible) {
-    aiResult = await scoreWithAi(container, inputText);
+    aiResult = await scoreWithAi(container, inputText, invocationOptions);
   }
   return composeAutoCheck({
     staticGates,
@@ -356,7 +359,7 @@ export default class RunAutoCheckCommand extends FlowCommand {
         return resolved.verdict;
       }
       const result = {
-        ...(await runAutoCheckCore(this.container, resolved.text)),
+        ...(await runAutoCheckCore(this.container, resolved.text, { temporaryRoot: flowTemporaryRoot(ctx) })),
         ...(resolved.goalGate ? { goalGate: resolved.goalGate } : {}),
       };
       return result;
@@ -398,7 +401,7 @@ export default class RunAutoCheckCommand extends FlowCommand {
         return resolvedInput.verdict;
       }
       const result = {
-        ...(await runAutoCheckCore(this.container, resolvedInput.text)),
+        ...(await runAutoCheckCore(this.container, resolvedInput.text, { temporaryRoot: flowTemporaryRoot(ctx) })),
         ...(resolvedInput.goalGate ? { goalGate: resolvedInput.goalGate } : {}),
       };
       if (result.eligible) {
@@ -414,6 +417,6 @@ export default class RunAutoCheckCommand extends FlowCommand {
     }
 
     // No flowManager (unusual; defensive): run stateless with empty input
-    return await runAutoCheckCore(this.container, "");
+    return await runAutoCheckCore(this.container, "", { temporaryRoot: flowTemporaryRoot(ctx) });
   }
 }

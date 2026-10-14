@@ -7,11 +7,11 @@
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { execFileSync, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { TestTemporaryRoot } from "../tests/test-temporary-root.js";
+import { TemporaryPaths } from "../src/lib/temporary-paths.js";
 
 const authorRoot = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const revisions = ["5cf1d97e0", "39148ea56", "9e839d1dc", "4dab68ee2", "857c2a64c"];
@@ -48,7 +48,8 @@ class ReviewRegressionMeasurement {
   constructor(worktree, specDirectory) {
     this.worktree = fs.realpathSync(worktree);
     this.specDirectory = fs.realpathSync(specDirectory);
-    this.output = fs.mkdtempSync(path.join(os.tmpdir(), "sennel-review-measurement-"));
+    const paths = new TemporaryPaths(this.worktree);
+    this.output = paths.create(paths.operator(), "sennel-review-measurement-");
     this.seed = path.join(this.output, "immutable-seed");
     this.rows = [];
     this.before = null;
@@ -103,8 +104,8 @@ class ReviewRegressionMeasurement {
     }
     const logPath = path.join(this.output, `${name}.tap`);
     const fd = fs.openSync(logPath, "w");
-    const temporary = TestTemporaryRoot.createOnTmpfs() ?? TestTemporaryRoot.createOnSystem();
-    environment.TMPDIR = temporary.path;
+    const temporary = TestTemporaryRoot.select({ repositoryRoot: root, environment });
+    const release = temporary.activate({ environment });
     let result;
     try {
       result = spawnSync(process.execPath, ["--test", "--test-reporter=tap", testFile], {
@@ -112,8 +113,7 @@ class ReviewRegressionMeasurement {
       });
     } finally {
       fs.closeSync(fd);
-      temporary.remove();
-      environment.TMPDIR = os.tmpdir();
+      release();
     }
     if (result.error) throw result.error;
     const log = fs.readFileSync(logPath, "utf8");

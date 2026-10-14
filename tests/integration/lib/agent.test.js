@@ -1,8 +1,9 @@
+import { testTemporaryRoot } from "../../test-environment.js";
+import { createTmpDir as createTestDirectory } from "../../support/builders/tmp-dir.js";
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import path from "path";
 import fs from "fs";
-import os from "os";
 import { EventEmitter } from "events";
 import { spawn } from "child_process";
 import { fileURLToPath, pathToFileURL } from "url";
@@ -22,7 +23,7 @@ import { AgentTimeoutDiagnostic } from "../../../src/lib/agent-timeout.js";
 import { MAX_DURABLE_STREAM_EVIDENCE_BYTES } from "../../../src/lib/bounded-stream-evidence.js";
 
 function tmpDir() {
-  return fs.mkdtempSync(path.join(os.tmpdir(), "agent-test-"));
+  return createTestDirectory("agent-test-");
 }
 
 const WORKER_ARTIFACT_HANDOFF_SCHEMA_PATH = path.resolve(
@@ -46,7 +47,7 @@ function makeAgent(profile, { config, paths, flowManager, logger, supervision } 
     config: cfg,
     paths: { root, agentWorkDir, ...(paths || {}) },
     registry,
-    logger: logger || new Logger({ logDir: os.tmpdir(), enabled: false }),
+    logger: logger || new Logger({ logDir: testTemporaryRoot().path, enabled: false }),
     flowManager,
     supervision,
   });
@@ -731,7 +732,7 @@ describe("ChildProcessSupervisor", () => {
 
 describe("Agent.call() — retry behavior", () => {
   it("retries on empty response and succeeds", async () => {
-    const tmp = path.join(os.tmpdir(), `agent-retry-${Date.now()}`);
+    const tmp = path.join(testTemporaryRoot().path, `agent-retry-${Date.now()}`);
     const script = `
       const fs = require("fs");
       const f = process.argv[1];
@@ -765,7 +766,7 @@ describe("Agent.call() — retry behavior", () => {
   });
 
   it("retries a typed unexplained non-zero provider exit within the existing bound", async (t) => {
-    const tmp = path.join(os.tmpdir(), `agent-retry-exit-${Date.now()}`);
+    const tmp = path.join(testTemporaryRoot().path, `agent-retry-exit-${Date.now()}`);
     t.after(() => fs.rmSync(tmp, { force: true }));
     const script = `
       const fs = require("fs");
@@ -799,7 +800,7 @@ describe("Agent.call() — retry behavior", () => {
   });
 
   it("retries temporary provider capacity through the existing provider loop", async (t) => {
-    const tmp = path.join(os.tmpdir(), `agent-retry-capacity-${Date.now()}`);
+    const tmp = path.join(testTemporaryRoot().path, `agent-retry-capacity-${Date.now()}`);
     t.after(() => fs.rmSync(tmp, { force: true }));
     const script = `
       const fs = require("fs");
@@ -821,7 +822,7 @@ describe("Agent.call() — retry behavior", () => {
   });
 
   it("retries a rate limit and succeeds", async (t) => {
-    const tmp = path.join(os.tmpdir(), `agent-retry-rate-limit-${Date.now()}`);
+    const tmp = path.join(testTemporaryRoot().path, `agent-retry-rate-limit-${Date.now()}`);
     t.after(() => fs.rmSync(tmp, { force: true }));
     const script = `
       const fs = require("fs");
@@ -843,7 +844,7 @@ describe("Agent.call() — retry behavior", () => {
   });
 
   it("does not retry an authentication failure", async (t) => {
-    const tmp = path.join(os.tmpdir(), `agent-no-retry-auth-${Date.now()}`);
+    const tmp = path.join(testTemporaryRoot().path, `agent-no-retry-auth-${Date.now()}`);
     t.after(() => fs.rmSync(tmp, { force: true }));
     const script = `
       const fs = require("fs");

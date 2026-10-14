@@ -245,6 +245,8 @@ function finalRegressionNextAction(ctx, state, typedState, binding) {
       flowManager: ctx.flowManager,
       specId: state.specId,
       changedFileSnapshotDigest: () => captureFinalRegressionChangedSnapshotDigest({
+        repositoryRoot: ctx.repositoryRoot || ctx.mainRoot || ctx.root,
+        specId: ctx.specId, runId: ctx.flowState?.runId,
         root: ctx.executionRoot || ctx.root,
         relativeSpecFile: store.location.relativeSpecFile,
       }),

@@ -7,10 +7,10 @@
 
 import fs from "fs";
 import crypto from "node:crypto";
-import os from "node:os";
 import path from "path";
 import { FlowTargetIdentityAuthority } from "../../lib/flow-target-identity-authority.js";
 import { PRODUCT } from "../../lib/product.js";
+import { TemporaryPaths } from "../../lib/temporary-paths.js";
 import { runManagedCmdAsync, assertOk } from "../../lib/process.js";
 import { findStepById } from "./step-tree.js";
 import {
@@ -328,7 +328,11 @@ export function commitFinalizeMergeConflictMetadata({ root, specId, specRoot = D
 }
 
 class FinalizeCompletionCommit {
-  constructor({ root, specRoot, specId, idempotencyKey, additionalPaths = [] }) {
+  constructor({ root, repositoryRoot = root, specRoot, specId, runId = null, idempotencyKey, additionalPaths = [] }) {
+    this.temporaryPaths = new TemporaryPaths(repositoryRoot);
+    this.temporaryDirectory = runId
+      ? this.temporaryPaths.flow(specId, runId)
+      : this.temporaryPaths.runtime("finalize-index");
     if (!root || !specId) throw new Error("finalize completion root and specId are required");
     if (!Array.isArray(additionalPaths) || additionalPaths.some((entry) => typeof entry !== "string")) {
       throw new Error("finalize completion additional paths are invalid");
@@ -378,7 +382,7 @@ class FinalizeCompletionCommit {
     }
 
     const parent = this.#gitValue(["rev-parse", "HEAD"], "finalize completion parent");
-    const temporaryDirectory = fs.mkdtempSync(path.join(os.tmpdir(), PRODUCT.temporaryPrefix("finalize-index")));
+    const temporaryDirectory = this.temporaryPaths.create(this.temporaryDirectory, PRODUCT.temporaryPrefix("finalize-index"));
     const temporaryIndex = path.join(temporaryDirectory, "index");
     const env = { ...process.env, GIT_INDEX_FILE: temporaryIndex };
     let primaryError = null;
@@ -464,8 +468,8 @@ class FinalizeCompletionCommit {
   }
 }
 
-export function commitFinalizeCompletion({ root, specRoot, specId, idempotencyKey, additionalPaths = [] }) {
-  return new FinalizeCompletionCommit({ root, specRoot, specId, idempotencyKey, additionalPaths }).execute();
+export function commitFinalizeCompletion({ root, repositoryRoot = root, specRoot, specId, runId = null, idempotencyKey, additionalPaths = [] }) {
+  return new FinalizeCompletionCommit({ root, repositoryRoot, specRoot, specId, runId, idempotencyKey, additionalPaths }).execute();
 }
 
 export function resolveGitCommonDir(root) {

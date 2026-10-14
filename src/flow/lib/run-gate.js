@@ -17,6 +17,8 @@ import { CURRENT_FLOW_SCHEMA_REVISION } from "../../lib/flow-schema-revision.js"
  *   { "evaluations": [{ "guardrail_id": string, "result": "pass"|"fail"|"skip", "reason": string }] }
  */
 
+import { flowTemporaryRoot } from "./flow-context.js";
+import { TemporaryPaths } from "../../lib/temporary-paths.js";
 import fs from "fs";
 import path from "path";
 import crypto from "crypto";
@@ -1024,9 +1026,9 @@ export function buildGuardrailArticleEvalPrompt(targetText, filtered, phase, rol
 }
 
 class GuardrailFileInput extends TemporaryAgentFileInput {
-  static create(executionRoot, text, phase) {
-    return super.create({ projectRoot: executionRoot,
-      runtimeRoot: path.join(executionRoot, PRODUCT.managedPath("agent-work")),
+  static create(projectRoot, temporaryRoot, text, phase) {
+    return super.create({ projectRoot,
+      runtimeRoot: temporaryRoot,
       text, logicalName: `${phase}.json`, label: `${phase}.json Gate input`, prefix: `${phase}-gate-` });
   }
 
@@ -1581,7 +1583,7 @@ function recordGatePromptMetric(recordPromptMetric, metric) {
   }
 }
 
-async function callGateAgent(agent, built, attempt, providerCallAdmission, providerCallGuard = null, promptStage = null, recordPromptMetric = null) {
+async function callGateAgent(agent, built, attempt, providerCallAdmission, providerCallGuard = null, promptStage = null, recordPromptMetric = null, invocationOptions = {}) {
   let cacheDecision = null;
   const admission = providerCallGuard === null
     ? providerCallAdmission
@@ -1590,6 +1592,7 @@ async function callGateAgent(agent, built, attempt, providerCallAdmission, provi
   let text;
   try {
     text = await agent.call(built.userPrompt, {
+      ...invocationOptions,
       commandId: "flow.spec.gate",
       systemPrompt: built.systemPrompt,
       jsonSchema: built.jsonSchema,
@@ -1627,9 +1630,9 @@ function createGateExecutionBudget(phase = null) {
   }));
 }
 
-function gateInvocationProjector(agent) {
+function gateInvocationProjector(agent, invocationOptions = {}) {
   return typeof agent.projectInvocation === "function"
-    ? (request) => agent.projectInvocation(request.userPrompt, { ...request, commandId: "flow.spec.gate" })
+    ? (request) => agent.projectInvocation(request.userPrompt, { ...request, ...invocationOptions, commandId: "flow.spec.gate" })
     : undefined;
 }
 
@@ -1816,11 +1819,13 @@ async function checkGuardrail(root, targetText, phase, role, previouslyPassedIds
       agent.promptCharacterLimit ?? MAX_IMPL_REQUIREMENT_BATCH_CHARS,
       executionBudget.limit.maxRequestCharacters,
     ) });
-    const projectInvocation = gateInvocationProjector(agent);
+    const invocationOptions = options.invocationOptions ?? { executionWorkDir: root };
+    const projectInvocation = gateInvocationProjector(agent, invocationOptions);
     const direct = gatePromptFits(built, limit,
       phase === "draft" || phase === "spec" ? projectInvocation : null);
     if ((phase === "draft" || phase === "spec") && !direct) {
-      fileInput = GuardrailFileInput.create(root, targetText, phase);
+      fileInput = GuardrailFileInput.create(options.projectRoot ?? root,
+        invocationOptions.temporaryRoot ?? TemporaryPaths.runtimePath(options.projectRoot ?? root, "gate"), targetText, phase);
       filePlans = new GuardrailJudgmentPlan({
         inputs: filtered.map((article) => new GuardrailFileJudgmentInput(article)), limit, projectInvocation,
         buildRequest: (group) => buildGuardrailArticleEvalPrompt(
@@ -1837,7 +1842,7 @@ async function checkGuardrail(root, targetText, phase, role, previouslyPassedIds
             await options.providerCallGuard?.(context);
             if (context?.index > 0) fileInput.assertUnchanged();
           },
-          "judgment", options.recordPromptMetric ?? null,
+          "judgment", options.recordPromptMetric ?? null, invocationOptions,
         ),
       });
       parsed = response;
@@ -1868,7 +1873,7 @@ async function checkGuardrail(root, targetText, phase, role, previouslyPassedIds
     }
     const callAgentFor = (stage) => (request, _batch, _index, attempt, providerCallAdmission) => callGateAgent(
       agent, request, attempt, providerCallAdmission, options.providerCallGuard ?? null,
-      stage, options.recordPromptMetric ?? null,
+      stage, options.recordPromptMetric ?? null, invocationOptions,
     );
     const judgmentInputs = [];
     for (const [index] of plans.entries()) {
@@ -3319,10 +3324,10 @@ export class RequirementGateExecutionPlan {
     for (const batch of plan.batches) projectInvocation(batch.request).assertWithinLimit(this.limit);
   }
 
-  async execute({ agent, phase, projectInvocation, executionBudget, providerCallGuard = null }) {
-    const invocationProjector = projectInvocation ?? gateInvocationProjector(agent);
+  async execute({ agent, phase, projectInvocation, executionBudget, providerCallGuard = null, invocationOptions = {} }) {
+    const invocationProjector = projectInvocation ?? gateInvocationProjector(agent, invocationOptions);
     const callAgent = (request, _batch, _index, attempt, providerCallAdmission) => callGateAgent(
-      agent, request, attempt, providerCallAdmission, providerCallGuard,
+      agent, request, attempt, providerCallAdmission, providerCallGuard, null, null, invocationOptions,
     );
     if (this.direct) {
       const result = await executeGatePlan({
@@ -3372,6 +3377,7 @@ async function evaluateCanonicalRequirements({
   sourceScope = null,
   executionBudget = createGateExecutionBudget(),
   providerCallGuard = null,
+  invocationOptions = {},
 }) {
   const requirementContexts = new Map(requirements.map((requirement) => [
     requirement.id,
@@ -3407,7 +3413,7 @@ async function evaluateCanonicalRequirements({
   }
   try {
     const limit = new PromptRequestLimit({ maxCharacters: agent.promptCharacterLimit ?? MAX_IMPL_REQUIREMENT_BATCH_CHARS });
-    const projectInvocation = gateInvocationProjector(agent);
+    const projectInvocation = gateInvocationProjector(agent, invocationOptions);
     const executions = plan.calls.flatMap((batch) => RequirementGateExecutionPlan.create(batch, limit));
     executionBudget.assertCanExecute(executions.reduce((count, execution) => count
       + (execution.direct?.batches.length ?? execution.evidence.plan.batches.length + 1), 0));
@@ -3415,7 +3421,7 @@ async function evaluateCanonicalRequirements({
     for (const execution of executions) execution.preflight(projectInvocation);
     for (const execution of executions) {
       const result = await execution.execute({
-        agent, phase, projectInvocation, executionBudget, providerCallGuard,
+        agent, phase, projectInvocation, executionBudget, providerCallGuard, invocationOptions,
       });
       evaluations.push(...result.map((entry) => ({
         ...entry,
@@ -3799,6 +3805,8 @@ export async function runGateFlow(args) {
     previouslyPassedIds,
     {
       ...guardrailPromptOptions,
+      projectRoot: ctx?.repositoryRoot || ctx?.mainRoot || root,
+      invocationOptions: { executionWorkDir: root, temporaryRoot: ctx ? flowTemporaryRoot(ctx) : new TemporaryPaths(root).runtime("gate") },
       ...(ctx?.guardrailSnapshot ? { loadGuardrails: () => ctx.guardrailSnapshot.read() } : {}),
       executionBudget: ctx?.promptExecutionBudget ?? guardrailPromptOptions.executionBudget,
       providerCallGuard: ctx?.gateProviderCallGuard ?? null,
@@ -4324,6 +4332,7 @@ export class RunGateCommand extends FlowCommand {
       previousResult,
       sourceScope,
       providerCallGuard: ctx.gateProviderCallGuard,
+      invocationOptions: { executionWorkDir: executionRoot, temporaryRoot: flowTemporaryRoot(ctx) },
     });
     if (!Array.isArray(requirementEvaluation)) return complete(requirementEvaluation);
     const result = await runGateFlow({
@@ -4542,6 +4551,7 @@ export class RunGateCommand extends FlowCommand {
       executionEvidence: integrationExecutionEvidence,
       structuredSpec: phase === "integration" ? spec : null,
       providerCallGuard: ctx.gateProviderCallGuard,
+      invocationOptions: { executionWorkDir: executionRoot, temporaryRoot: flowTemporaryRoot(ctx) },
     });
     if (!Array.isArray(requirementEvaluation)) return requirementEvaluation;
     const reqEvaluations = requirementEvaluation;
@@ -4563,6 +4573,8 @@ export class RunGateCommand extends FlowCommand {
         acknowledgedRationale: buildAcknowledgedRationaleSection({ spec, guardrails: diffGuardrails }),
         executionBudget: ctx.promptExecutionBudget,
         providerCallGuard: ctx.gateProviderCallGuard,
+        projectRoot: ctx.repositoryRoot || ctx.mainRoot || ctx.root,
+        invocationOptions: { executionWorkDir: executionRoot, temporaryRoot: flowTemporaryRoot(ctx) },
       },
     );
     if (!grResult) return gatePass(level, phase, specPath, reqEvaluations, fileMapWarnings);

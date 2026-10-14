@@ -1,8 +1,8 @@
 import { SeedCleanupScope } from "../../support/builders/seed-work-root.js";
+import { createTmpDir as createTestDirectory } from "../../support/builders/tmp-dir.js";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { after, test } from "node:test";
 
@@ -368,8 +368,8 @@ test("a catalog-bound recovery authorization rejects changed bytes", async (t) =
 });
 
 test("an external execution checkout cleans the exact authorized worker", async (t) => {
-  const mainRoot = fs.mkdtempSync(path.join(os.tmpdir(), "task-review-main-"));
-  const executionRoot = fs.mkdtempSync(path.join(os.tmpdir(), "task-review-execution-"));
+  const mainRoot = createTestDirectory("task-review-main-");
+  const executionRoot = createTestDirectory("task-review-execution-");
   t.after(() => fs.rmSync(mainRoot, { recursive: true, force: true }));
   t.after(() => fs.rmSync(executionRoot, { recursive: true, force: true }));
   for (const root of [mainRoot, executionRoot]) {

@@ -4,6 +4,7 @@ import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
 import { RuntimeChildExecution } from "./runtime-package.js";
+import { TemporaryPaths } from "./temporary-paths.js";
 import { ProcessExecutionRuntime, ProcessExecutionControlFailure, PROCESS_EXECUTION_SCOPE_ENV } from "./process-execution-runtime.js";
 import { ProcessIdentity } from "./process-identity.js";
 import { AgentProcessStopEvidence } from "./agent-failure.js";
@@ -121,7 +122,12 @@ export async function executeManagedProcess(command, args, options = {}) {
   };
   notify("intent");
   let delivery;
-  try { delivery = new RuntimeChildExecution(); }
+  try {
+    const paths = new TemporaryPaths(runtime.mainRoot);
+    const temporaryRoot = runtime.specId !== null && runtime.runId !== null
+      ? paths.flow(runtime.specId, runtime.runId) : paths.runtime("runtime-delivery");
+    delivery = new RuntimeChildExecution({ root: runtime.mainRoot, temporaryRoot });
+  }
   catch (cause) { return refuse(managedControlFailure("PROCESS_EXECUTION_RUNTIME_UNPROVEN", "Managed launcher requires the fixed parent runtime", cause)); }
   const extra = options.stdio?.slice(3) || [];
   const config = {

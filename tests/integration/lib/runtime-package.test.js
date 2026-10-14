@@ -1,3 +1,4 @@
+import { createTmpDir as createTestDirectory } from "../../support/builders/tmp-dir.js";
 /**
  * Runtime proof outcomes: bootstrap owns capture -> loader evaluates captured
  * bytes -> identity/resource consumers observe that same set. Disk mutations
@@ -6,7 +7,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
@@ -14,7 +14,7 @@ import { spawnSync } from "node:child_process";
 const repository = fileURLToPath(new URL("../../../", import.meta.url));
 
 function fixture(t) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "runtime-package-"));
+  const root = createTestDirectory("runtime-package-");
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   fs.cpSync(path.join(repository, "src"), path.join(root, "src"), { recursive: true });
   fs.copyFileSync(path.join(repository, "package.json"), path.join(root, "package.json"));

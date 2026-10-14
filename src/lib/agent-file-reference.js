@@ -1,5 +1,6 @@
 import path from "node:path";
 import fs from "node:fs";
+import { TemporaryPaths } from "./temporary-paths.js";
 import { AtomicFile } from "./atomic-file.js";
 import { captureRegularFile, RegularFileSnapshot } from "./regular-file-snapshot.js";
 import { AgentFileInputFailure } from "./agent-file-input-failure.js";
@@ -19,12 +20,12 @@ export class TemporaryAgentFileInput {
     const bytes = Buffer.from(text, "utf8");
     let directory = null;
     try {
-      fs.mkdirSync(runtimeRoot, { recursive: true });
-      directory = fs.mkdtempSync(path.join(runtimeRoot, prefix));
+      const temporaryPaths = new TemporaryPaths(projectRoot);
+      directory = temporaryPaths.create(runtimeRoot, prefix);
       const filePath = path.join(directory, logicalName);
       new AtomicFile(filePath).write(bytes);
       const expected = new RegularFileSnapshot({ filePath, bytes });
-      const reference = AgentFileReference.resolve({ projectRoot, filePath,
+      const reference = AgentFileReference.resolve({ projectRoot: temporaryPaths.root, filePath,
         label, maxBytes: bytes.length });
       if (reference.digest !== expected.digest || reference.byteLength !== expected.byteLength) {
         throw new AgentFileInputFailure("Temporary input bytes differ from the caller-owned exact input", { reference: expected });

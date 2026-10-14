@@ -1,3 +1,4 @@
+import { testTemporaryRoot } from "../../test-environment.js";
 /**
  * tests/acceptance/lib/pipeline.js
  *
@@ -7,7 +8,6 @@
  */
 
 import fs from "fs";
-import os from "node:os";
 import path from "path";
 import { removeTmpDir } from "../../support/builders/tmp-dir.js";
 import { SeedWorkRoot } from "../../support/builders/seed-work-root.js";
@@ -78,7 +78,7 @@ export function buildCtx(tmp, { agent: injectedAgent = null } = {}) {
   const docsDir = path.join(tmp, "docs");
   const registry = new ProviderRegistry(config?.agent?.providers || {});
   const paths = { root: tmp, srcRoot: tmp, agentWorkDir: path.join(tmp, ".tmp") };
-  const logger = new Logger({ logDir: os.tmpdir(), enabled: false });
+  const logger = new Logger({ logDir: testTemporaryRoot().path, enabled: false });
   const agentService = injectedAgent || new Agent({ config, paths, registry, logger });
   const agent = agentService.resolve() ? agentService : null;
   const t = createI18n(lang, { domain: "messages" });

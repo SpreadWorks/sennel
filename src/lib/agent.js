@@ -51,6 +51,7 @@ import {
   AgentProviderStartupFailureEvidence,
 } from "./agent-failure.js";
 import { resolvePromptCharacterLimit } from "./config.js";
+import { TemporaryPaths } from "./temporary-paths.js";
 import { PromptExecutionJournalError, preservePromptExecutionControlFailure } from "./prompt-execution-journal.js";
 import {
   MAX_AGENT_ARGUMENT_BYTES,
@@ -140,11 +141,11 @@ class ResolvedAgentInvocationBlueprint {
     Object.freeze(this);
   }
 
-  materialize({ agentWorkDir, commandId }) {
+  materialize({ temporaryRoot, commandId }) {
     let finalArgs = [...this.projection.finalArgs];
     let pendingSchemaWrite = null;
     if (this.projectedSchemaPath) {
-      const schemaPath = path.join(agentWorkDir, `schema-${crypto.randomUUID()}.json`);
+      const schemaPath = path.join(temporaryRoot, `schema-${crypto.randomUUID()}.json`);
       finalArgs = finalArgs.map((argument) => (
         argument === this.projectedSchemaPath ? schemaPath : argument
       ));
@@ -324,6 +325,7 @@ class Agent {
    * @param {number}  [options.retryCount=2]
    * @param {number}  [options.retryDelayMs=3000]
    * @param {string}  [options.executionWorkDir] - Per-call agent execution directory inside the repository
+   * @param {string} [options.temporaryRoot] - Selected scratch scope, independently of executionWorkDir
    * @param {boolean} [options.waitForProcessTree=false] - Wait for the provider process group to become idle
    * @param {"ambient"|"none"} [options.flowAttribution="ambient"]
    * @param {import("./agent-invocation-metric.js").DeferredAgentInvocationMetric} [options.deferredMetric]
@@ -374,10 +376,13 @@ class Agent {
       });
     }
     let executionContext;
+    let temporaryRoot;
     try {
-      ensureWorkDir(this._paths.agentWorkDir);
       executionContext = this._resolveExecutionContext(opts.executionWorkDir);
+      const temporaryPaths = this._temporaryPaths();
+      const selectedTemporaryRoot = temporaryPaths.validate(this._resolveTemporaryRoot(opts));
       ensureWorkDir(executionContext.providerWorkDir);
+      temporaryRoot = temporaryPaths.ensureDirectory(selectedTemporaryRoot);
     } catch (error) {
       if (error instanceof ProcessExecutionControlFailure) throw error;
       throw AgentFailure.from(error).recordAttempts(1, 1);
@@ -390,6 +395,7 @@ class Agent {
         ?? opts.logicalInvocationId ?? crypto.randomUUID(),
       executionWorkDir: executionContext.providerWorkDir,
       spawnCwd: executionContext.spawnCwd,
+      temporaryRoot,
     };
     const invocationBlueprint = this._createInvocationBlueprint(resolved, prompt, invocationOptions);
     invocationBlueprint.projection.assertWithinLimit(this.promptCharacterLimit);
@@ -481,6 +487,16 @@ class Agent {
     return resolved;
   }
 
+  _temporaryPaths() {
+    const root = this._paths.repositoryRoot || this._paths.root || process.cwd();
+    return new TemporaryPaths(root);
+  }
+
+  _resolveTemporaryRoot(options = {}) {
+    return options.temporaryRoot ?? this._paths.temporaryRoot
+      ?? TemporaryPaths.runtimePath(this._paths.repositoryRoot || this._paths.root || process.cwd(), "agent");
+  }
+
   _resolveExecutionContext(override) {
     const providerWorkDir = this._resolveExecutionWorkDir(override);
     const spawnCwd = override == null
@@ -516,11 +532,12 @@ class Agent {
     });
   }
 
-  runtimeDirectories() {
+  runtimeDirectories({ temporaryRoot = null } = {}) {
     return new AgentRuntimeDirectorySet({
       root: path.resolve(this._paths.root || process.cwd()),
       directories: [
         this._paths.agentWorkDir,
+        temporaryRoot ?? this._resolveTemporaryRoot(),
         this._paths.logDir,
         ...(this._logger?.runtimeDirectories?.() ?? []),
       ].filter((directory) => typeof directory === "string"),
@@ -553,7 +570,7 @@ class Agent {
     const blueprint = this._createInvocationBlueprint(resolved, prompt, options);
     blueprint.projection.assertWithinLimit(this.promptCharacterLimit);
     return blueprint.materialize({
-      agentWorkDir: this._paths.agentWorkDir,
+      temporaryRoot: this._resolveTemporaryRoot(options),
       commandId: options.commandId,
     });
   }
@@ -593,7 +610,7 @@ class Agent {
       projectedSchemaMode = schemaMode;
       if (schemaMode === "file") {
         projectedSchemaPath = path.join(
-          this._paths.agentWorkDir,
+          this._resolveTemporaryRoot(options),
           `schema-${"0".repeat(36)}.json`,
         );
         schemaSuffix.push(schemaFlag, projectedSchemaPath);
@@ -671,7 +688,7 @@ class Agent {
     }
     for (let attempt = initialAttempt; attempt <= retry.retryCount; attempt++) {
       const materializedInvocation = blueprint.materialize({
-        agentWorkDir: this._paths.agentWorkDir,
+        temporaryRoot: this._resolveTemporaryRoot(options),
         commandId: options.commandId,
       });
       blueprint.projection.assertMaterializedArgvWithinLimit(materializedInvocation.finalArgs);
@@ -759,7 +776,7 @@ class Agent {
     try {
       options.abortSignal?.throwIfAborted();
       if (pendingSchemaWrite) {
-        await fs.promises.writeFile(pendingSchemaWrite.path, pendingSchemaWrite.content);
+        TemporaryPaths.writeFile(pendingSchemaWrite.path, pendingSchemaWrite.content);
       }
       options.abortSignal?.throwIfAborted();
       let completed;

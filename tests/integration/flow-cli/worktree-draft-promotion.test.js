@@ -1,3 +1,4 @@
+import { createTmpDir as createTestDirectory } from "../../support/builders/tmp-dir.js";
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import fs from "node:fs";
@@ -16,7 +17,6 @@ import { completeDraftWorkerThroughStep } from "../../support/infrastructure/dra
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 const cliPath = path.join(repoRoot, "src/sennel.js");
-const fixtureRoot = path.join(repoRoot, ".tmp", "issue-497-draft-promotion");
 const roots = [];
 
 function git(root, args) {
@@ -26,8 +26,7 @@ function git(root, args) {
 }
 
 function createProject() {
-  fs.mkdirSync(fixtureRoot, { recursive: true });
-  const root = fs.mkdtempSync(path.join(fixtureRoot, "project-"));
+  const root = createTestDirectory("sennel-worktree-draft-promotion.test-");
   roots.push(root);
   fs.mkdirSync(path.join(root, ".sennel"), { recursive: true });
   fs.writeFileSync(path.join(root, ".sennel", "config.json"), JSON.stringify({

@@ -1,4 +1,5 @@
 import os from "node:os";
+import path from "node:path";
 
 /**
  * Remove inherited Git variables that can relocate a Git command away from
@@ -38,7 +39,7 @@ function removeGitConfigInjections(environment, names) {
   return environment;
 }
 
-export function sanitizeGitRepositoryEnvironment(environment = process.env) {
+export function sanitizeGitRepositoryEnvironment(environment = process.env, { repositoryRoot = null } = {}) {
   if (environment === null || typeof environment !== "object" || Array.isArray(environment)) {
     throw new TypeError("Git repository environment must be an object");
   }
@@ -48,5 +49,10 @@ export function sanitizeGitRepositoryEnvironment(environment = process.env) {
   // HOME remains available for normal provider credentials and other tools.
   sanitized.GIT_CONFIG_GLOBAL = os.devNull;
   sanitized.GIT_CONFIG_NOSYSTEM = "1";
+  if (repositoryRoot !== null) {
+    // The selected project may be nested inside another repository. Discovery
+    // must never substitute that ancestor for an explicit repository boundary.
+    sanitized.GIT_CEILING_DIRECTORIES = path.dirname(path.resolve(repositoryRoot));
+  }
   return sanitized;
 }

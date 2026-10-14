@@ -1,7 +1,7 @@
+import { createTmpDir as createTestDirectory } from "../../support/builders/tmp-dir.js";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
@@ -9,7 +9,7 @@ import { spawnSync } from "node:child_process";
 const repository = fileURLToPath(new URL("../../../", import.meta.url));
 
 test("authorized self-edit keeps the actual Review child on parent bytes while an independent CLI captures the edit", (t) => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "runtime-self-edit-"));
+  const root = createTestDirectory("runtime-self-edit-");
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   for (const directory of ["src", "tests/support"]) {
     fs.cpSync(path.join(repository, directory), path.join(root, directory), { recursive: true });

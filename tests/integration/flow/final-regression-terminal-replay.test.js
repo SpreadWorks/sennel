@@ -1,7 +1,7 @@
+import { testTemporaryRoot } from "../../test-environment.js";
 import { afterEach, describe, it } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 
 import RunFinalRegressionCommand from "../../../src/flow/lib/run-final-regression.js";
@@ -80,7 +80,7 @@ describe("final-regression terminal replay guard", () => {
 
   it("does not execute the project command for a terminal failed Attempt replay", async () => {
     root = createTmpDir("final-regression-terminal-replay-");
-    invocationFile = path.join(os.tmpdir(), `sennel-final-regression-${process.pid}-${Date.now()}.log`);
+    invocationFile = path.join(testTemporaryRoot().path, `sennel-final-regression-${process.pid}-${Date.now()}.log`);
     const ctx = await setupCanonical(root, [
       `printf '%s\\n' invoked >> ${JSON.stringify(invocationFile)}`,
       "exit 1",
@@ -123,7 +123,7 @@ describe("final-regression terminal replay guard", () => {
 
   it("does not infer a retry of a non-retryable Attempt from input drift", async () => {
     root = createTmpDir("final-regression-terminal-changed-");
-    invocationFile = path.join(os.tmpdir(), `sennel-final-regression-changed-${process.pid}-${Date.now()}.log`);
+    invocationFile = path.join(testTemporaryRoot().path, `sennel-final-regression-changed-${process.pid}-${Date.now()}.log`);
     const script = [
       `printf '%s\\n' invoked >> ${JSON.stringify(invocationFile)}`,
       "exit 1",

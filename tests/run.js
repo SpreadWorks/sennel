@@ -21,6 +21,8 @@ const {
   MINIMUM_TEST_TMPFS_BYTES,
   TestTemporaryRoot,
 } = await import("./test-temporary-root.js");
+const { isTmpfsDirectory } = await import("../src/lib/filesystem-type.js");
+const { standaloneTestEnvironment } = await import("../src/lib/process.js");
 const {
   ChildProcessExecutionRecordCodec,
   processResultFromSpawnSync,
@@ -120,6 +122,7 @@ export async function executeFiles(files, {
     const result = await new Promise((resolve) => {
       const child = spawnProcess(command[0], command.slice(1), {
         cwd: root,
+        env: standaloneTestEnvironment(),
         stdio: ["ignore", "pipe", "pipe"],
       });
       const stdout = new SuiteOutput(1, write);
@@ -156,11 +159,9 @@ export async function main(args = process.argv.slice(2)) {
     presetNames: getPresetNames(),
     resolveFiles,
     executeFiles: async (files, selection) => {
-      let storage = "tmpfs";
-      let temporaryRoot = TestTemporaryRoot.createOnTmpfs();
-      if (temporaryRoot === null) {
-        storage = "system fallback";
-        temporaryRoot = TestTemporaryRoot.createOnSystem();
+      const temporaryRoot = TestTemporaryRoot.select({ repositoryRoot: ROOT });
+      const storage = isTmpfsDirectory(temporaryRoot.path) ? "tmpfs" : "repository fallback";
+      if (storage === "repository fallback") {
         writeSync(
           2,
           `[sennel] test temporary storage: ${storage} ${temporaryRoot.path} (/dev/shm unavailable or below ${MINIMUM_TEST_TMPFS_BYTES / (1024n * 1024n)} MiB free; removed after run)\n`,

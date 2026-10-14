@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { pathToFileURL } from "node:url";
 import { createHash } from "node:crypto";
 import { test } from "node:test";
 import { Agent } from "../../src/lib/agent.js";
@@ -9,7 +9,7 @@ import { ProviderRegistry } from "../../src/lib/provider.js";
 import { Logger } from "../../src/lib/log.js";
 import { PromptLogicalFootprint } from "../../src/lib/prompt-batching.js";
 import { checkGuardrail } from "../../src/flow/lib/run-gate.js";
-import { createTmpDir, removeTmpDir } from "../support/builders/tmp-dir.js";
+import { TestTemporaryRoot } from "../test-temporary-root.js";
 
 // Frozen expected findings are derived from these rules, independently of the
 // baseline implementation's output. No real Flow artifacts enter this fixture.
@@ -38,8 +38,10 @@ const source = JSON.stringify({
 const expectedViolations = ["consistent-timeout", "planned-threshold"];
 
 test("real model preserves cross-range violations, justified exceptions and Spec-stage semantics", { timeout: 1_800_000 }, async (t) => {
-  const root = createTmpDir("spec-gate-quality-", { parent: fileURLToPath(new URL("../../.tmp/", import.meta.url)) });
-  t.after(() => removeTmpDir(root));
+  const owner = TestTemporaryRoot.createOnRepository();
+  const release = owner.activate();
+  t.after(release);
+  const root = owner.path;
   const model = process.env.SENNEL_GATE_QUALITY_MODEL || "gpt-6-luna";
   const profile = "quality-frozen";
   const config = { agent: { default: profile, timeout: 240, retryCount: 0, promptCharacterLimit: 18000,

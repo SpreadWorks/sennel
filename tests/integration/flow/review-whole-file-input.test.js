@@ -1,6 +1,6 @@
+import { createTmpDir as createTestDirectory } from "../../support/builders/tmp-dir.js";
 import assert from "node:assert/strict";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 import { ReviewTextPromptPlan } from "../../../src/flow/lib/review-text-prompt-plan.js";
@@ -12,7 +12,7 @@ import { validateSchema } from "../../../src/lib/schema-validate.js";
 import { synthesizeReviewFindings, classifyReviewCommandError, buildDraftReviewSynthesisPrompt, parseCompleteDraftReviewProposals } from "../../../src/flow/commands/review.js";
 
 function fixture(t, text) {
-  const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), "review-whole-file-"));
+  const projectRoot = createTestDirectory("review-whole-file-");
   t.after(() => fs.rmSync(projectRoot, { recursive: true, force: true }));
   const request = { systemPrompt: "review entire authority", userPrompt: text, jsonSchema: null, fmtFallback: null };
   const plan = ReviewTextPromptPlan.create({ request, maxChars: 6_000, projectRoot });
@@ -124,7 +124,7 @@ test("rejects a complete-looking response after provider changes referenced inpu
 });
 
 test("fitting Unicode characters use a full file when argv byte projection overflows", (t) => {
-  const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), "review-byte-projection-"));
+  const projectRoot = createTestDirectory("review-byte-projection-");
   t.after(() => fs.rmSync(projectRoot, { recursive: true, force: true }));
   const text = "日本語".repeat(30_000);
   const request = { userPrompt: text };
@@ -141,7 +141,7 @@ test("fitting Unicode characters use a full file when argv byte projection overf
 });
 
 test("file schema supports strict providers and rejects mixed success/unavailable outcomes", async (t) => {
-  const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), "review-file-schema-"));
+  const projectRoot = createTestDirectory("review-file-schema-");
   t.after(() => fs.rmSync(projectRoot, { recursive: true, force: true }));
   const successSchema = { type: "object", additionalProperties: false, required: ["findings"],
     properties: { findings: { type: "array", items: { type: "string" } } } };
@@ -167,9 +167,9 @@ test("file schema supports strict providers and rejects mixed success/unavailabl
 });
 
 test("materialization failure is a typed local stop before review execution", (t) => {
-  const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), "review-file-materialize-"));
+  const projectRoot = createTestDirectory("review-file-materialize-");
   t.after(() => fs.rmSync(projectRoot, { recursive: true, force: true }));
-  fs.writeFileSync(path.join(projectRoot, ".sennel"), "blocked runtime directory");
+  fs.writeFileSync(path.join(projectRoot, ".tmp"), "blocked runtime directory");
   assert.throws(() => ReviewTextPromptPlan.create({ request: body, maxChars: 6_000, projectRoot }), (error) => {
     assert.ok(error instanceof AgentFileInputFailure);
     const failure = classifyReviewCommandError(error, "draft");
@@ -177,5 +177,5 @@ test("materialization failure is a typed local stop before review execution", (t
     assert.equal(failure.retryable, false);
     return true;
   });
-  assert.equal(fs.readFileSync(path.join(projectRoot, ".sennel"), "utf8"), "blocked runtime directory");
+  assert.equal(fs.readFileSync(path.join(projectRoot, ".tmp"), "utf8"), "blocked runtime directory");
 });

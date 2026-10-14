@@ -1,3 +1,4 @@
+import { createTmpDir as createTestDirectory } from "../../support/builders/tmp-dir.js";
 /**
  * Tests for the new git sync helpers added by spec 211:
  *   fetchBranch, rebaseOnto, abortRebase, countCommitsBetween, listUncommittedFiles
@@ -9,7 +10,6 @@ import { describe, it, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
-import os from "node:os";
 
 import {
   fetchBranch,
@@ -35,7 +35,7 @@ function commit(dir, file, content, msg) {
 
 describe("countCommitsBetween", () => {
   let dir;
-  beforeEach(() => { dir = fs.mkdtempSync(path.join(os.tmpdir(), "gsh-count-")); init(dir); });
+  beforeEach(() => { dir = createTestDirectory("gsh-count-"); init(dir); });
   afterEach(() => fs.rmSync(dir, { recursive: true, force: true }));
 
   it("returns 0 when head has no commits beyond base", () => {
@@ -55,7 +55,7 @@ describe("countCommitsBetween", () => {
 
 describe("listUncommittedFiles", () => {
   let dir;
-  beforeEach(() => { dir = fs.mkdtempSync(path.join(os.tmpdir(), "gsh-un-")); init(dir); commit(dir, "a.txt", "a", "init"); });
+  beforeEach(() => { dir = createTestDirectory("gsh-un-"); init(dir); commit(dir, "a.txt", "a", "init"); });
   afterEach(() => fs.rmSync(dir, { recursive: true, force: true }));
 
   it("returns empty array when worktree is clean", () => {
@@ -73,7 +73,7 @@ describe("listUncommittedFiles", () => {
 
 describe("fetchBranch", () => {
   it("returns ok:false when remote does not exist (no network call attempted beyond git's own resolve)", () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "gsh-fetch-"));
+    const dir = createTestDirectory("gsh-fetch-");
     init(dir);
     commit(dir, "a.txt", "a", "init");
     try {
@@ -88,11 +88,11 @@ describe("fetchBranch", () => {
 describe("rebaseOnto / abortRebase", () => {
   let upstream, clone;
   beforeEach(() => {
-    upstream = fs.mkdtempSync(path.join(os.tmpdir(), "gsh-up-"));
+    upstream = createTestDirectory("gsh-up-");
     init(upstream);
     commit(upstream, "a.txt", "a", "base");
 
-    clone = fs.mkdtempSync(path.join(os.tmpdir(), "gsh-clone-"));
+    clone = createTestDirectory("gsh-clone-");
     runCmd("git", ["clone", "-q", upstream, clone]);
     runCmd("git", ["-C", clone, "config", "user.email", "t@example.com"]);
     runCmd("git", ["-C", clone, "config", "user.name", "T"]);

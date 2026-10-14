@@ -4,13 +4,13 @@ import { CURRENT_FLOW_SCHEMA_REVISION } from "../../lib/flow-schema-revision.js"
 import fs from "fs";
 import path from "path";
 import crypto from "crypto";
-import os from "node:os";
 import { StringDecoder } from "node:string_decoder";
 import { fileURLToPath } from "node:url";
 import { execFileSync } from "child_process";
 import { globToRegex } from "../../lib/glob.js";
 import { listChangedFilesDetailed, runGitToFile } from "../../lib/git-helpers.js";
 import { PRODUCT } from "../../lib/product.js";
+import { TemporaryPaths } from "../../lib/temporary-paths.js";
 import { assertOk } from "../../lib/process.js";
 import { validateSchema } from "../../lib/schema-validate.js";
 import { RegressionFileSnapshotList } from "./regression-file-snapshot.js";
@@ -795,18 +795,12 @@ export function finalRegressionTestCount(stdout) {
   return FinalRegressionTestSummary.parse(stdout).testCount;
 }
 
-function createFinalRegressionGitDirectory(root) {
-  const repository = fs.realpathSync(root);
-  let base = fs.realpathSync(os.tmpdir());
-  const relative = path.relative(repository, base);
-  if (relative === "" || (!path.isAbsolute(relative)
-    && relative !== ".." && !relative.startsWith(`..${path.sep}`))) {
-    // A repository-owned TMPDIR would make Git's own output appear untracked.
-    // Use a sibling directory without changing the caller's environment.
-    base = path.dirname(repository);
-    if (base === repository) throw new Error("final-regression Git output requires a temporary directory outside the repository");
-  }
-  return fs.mkdtempSync(path.join(base, PRODUCT.temporaryPrefix("final-regression-git")));
+function createFinalRegressionGitDirectory(root, { repositoryRoot = root, specId = null, runId = null } = {}) {
+  const temporaryPaths = new TemporaryPaths(repositoryRoot);
+  const directory = specId && runId
+    ? temporaryPaths.flow(specId, runId)
+    : temporaryPaths.runtime("final-regression-git");
+  return temporaryPaths.create(directory, PRODUCT.temporaryPrefix("final-regression-git"));
 }
 
 function forEachFingerprintFileChunk(filePath, visit) {
@@ -846,9 +840,14 @@ function readFingerprintUntrackedPaths(filePath) {
 // This covers staged, unstaged, and untracked content. Callers that own
 // generated state can exclude it with Git pathspecs so telemetry does not
 // masquerade as a product mutation.
-export function finalRegressionWorktreeFingerprint(root, { pathspecExcludes = [] } = {}) {
-  const pathspec = ["--", ".", ...pathspecExcludes];
-  const directory = createFinalRegressionGitDirectory(root);
+export function finalRegressionWorktreeFingerprint(root, options = {}) {
+  const { pathspecExcludes = [] } = options;
+  const directory = createFinalRegressionGitDirectory(root, options);
+  const scratchRelative = path.relative(fs.realpathSync(root), directory);
+  const scratchExcludes = scratchRelative !== ".." && !scratchRelative.startsWith(`..${path.sep}`) && !path.isAbsolute(scratchRelative)
+    ? [`:(exclude,top,literal)${scratchRelative.split(path.sep).join("/")}`]
+    : [];
+  const pathspec = ["--", ".", ...pathspecExcludes, ...scratchExcludes];
   try {
     const output = (name, args) => {
       const outputPath = path.join(directory, name);

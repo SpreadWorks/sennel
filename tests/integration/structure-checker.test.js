@@ -1,6 +1,6 @@
+import { createTmpDir as createTestDirectory } from "../support/builders/tmp-dir.js";
 import assert from "node:assert/strict";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 import { Step } from "../../src/flow/engine/step.js";
@@ -18,7 +18,7 @@ function prepareServiceArguments() { return []; }
 
 class StructureFixture {
   constructor(t, phase = "alpha", StepClass = AlphaStep) {
-    this.root = fs.mkdtempSync(path.join(os.tmpdir(), "sennel-structure-"));
+    this.root = createTestDirectory("sennel-structure-");
     this.entry = `src/flow/steps/${phase}`;
     this.registration = new StepRegistration({ stepId: "entry", StepClass, ServiceClass, prepareServiceArguments,
       executionContract: workerStepExecutionContract });
@@ -197,7 +197,7 @@ test("literal dynamic import options still enter the Step reverse index", (t) =>
 });
 
 test("isolated copy of real Draft detects an injected Step", async (t) => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "sennel-structure-real-"));
+  const root = createTestDirectory("sennel-structure-real-");
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const sourceRoot = path.resolve(path.dirname(new URL(import.meta.url).pathname), "../..");
   fs.cpSync(path.join(sourceRoot, "src"), path.join(root, "src"), { recursive: true });

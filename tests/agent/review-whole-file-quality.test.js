@@ -1,14 +1,13 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 import { Agent } from "../../src/lib/agent.js";
 import { ProviderRegistry } from "../../src/lib/provider.js";
 import { Logger } from "../../src/lib/log.js";
 import { ReviewTextPromptPlan } from "../../src/flow/lib/review-text-prompt-plan.js";
 import { PromptBatchExecutor } from "../../src/lib/prompt-batching.js";
-import { createTmpDir, removeTmpDir } from "../support/builders/tmp-dir.js";
+import { TestTemporaryRoot } from "../test-temporary-root.js";
 
 // Expected identity comes from the frozen contract, independently of model output.
 const responseSchema = { type: "object", additionalProperties: false, required: ["findingIds"],
@@ -21,8 +20,10 @@ const source = [
 ].join("\n");
 
 test("real reviewer reads complete Unicode authority and detects a head/tail contradiction", { timeout: 600_000 }, async (t) => {
-  const root = createTmpDir("review-file-quality-", { parent: fileURLToPath(new URL("../../.tmp/", import.meta.url)) });
-  t.after(() => removeTmpDir(root));
+  const owner = TestTemporaryRoot.createOnRepository();
+  const release = owner.activate();
+  t.after(release);
+  const root = owner.path;
   const profile = "review-quality";
   const model = process.env.SENNEL_REVIEW_QUALITY_MODEL || "gpt-6-luna";
   const config = { agent: { default: profile, timeout: 240, retryCount: 0, promptCharacterLimit: 18_000,

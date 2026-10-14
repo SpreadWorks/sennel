@@ -131,3 +131,11 @@ Requirement controlled afterのprefixは13.389秒、copy4回合計0.010秒、clo
 ## 7. 最終判定
 
 ユーザー指定の6件のSKIPを例外として、55dcのテスト高速化は完了。主要2群の30%条件は表記storageで達成し、CLI Gateを含む追加19群も短縮を確認した。303 PASS / 0 FAIL / 6 SKIPで、fixtureと観測APIの訂正確認も終了した。構文42ファイルと差分の最終検査は通過し、所有した比較worktreeを回収した。レビュー用worktreeと証跡は残した。製品不具合3種類の修正とスキップ6件の保証は別セッションへ引き継ぎ、製品修正済みや全原条件の保証済みとはしない。
+
+## 8. main統合時の追加確認
+
+55dc本体を`575195af8`でコミットし、mainの`03b33d965`（一時領域管理の更新）を取り込んだ。seed rootの作成はmainの`createTmpDir`へ委譲し、55dcの独立コピー・コピー失敗回収・計測を保持した。runnerの即時出力とmainの子プロセス環境管理を両方維持し、移動したseed契約にもmainのroot管理を適用した。Acceptanceの手動fixtureはmainのcase所有rootと55dcのtyped seed readbackを組み合わせ、永続cacheを復活させていない。
+
+統合後の限定確認は24 PASS / 0 FAIL / 0 SKIP。支援契約・一時領域境界・Prompt出力の20件と、RequirementのReview checkpoint、Task Review recovery、Acceptanceのdeferred repair、orphan cleanupの実rescueを各1件実行した。変更したJavaScript 42ファイルの構文確認と差分検査も通過した。フルテストと性能の再計測は実施していない。
+
+本書の性能比較と303 PASS / 6 SKIPは開始commit`199193954`に基づく検証記録であり、統合後の全対象再検証を意味しない。ユーザー指定の6件のSKIPは保持する。測定・検証の詳細証跡は元の55dc worktreeの`.tmp/55dc`に保持しており、本書の証跡への相対リンクは同worktreeで参照する。統合時の追加記録は`merge-validation.json`、`merge-support.log`、`merge-scenarios.log`。

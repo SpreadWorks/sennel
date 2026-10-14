@@ -9,6 +9,7 @@
  * `executionRoot` identifies the checkout where source commands run.
  */
 
+import { TemporaryPaths } from "../../lib/temporary-paths.js";
 import { FlowTargetExpectation } from "../../lib/flow-target-guard.js";
 import { WorktreeFlowProvenance } from "../../lib/worktree-flow-binding.js";
 import { FlowSpecLocation, flowSpecRootFromConfig } from "../../lib/flow-workspace.js";
@@ -296,4 +297,15 @@ export function buildFlowCommandHookContext(container, entry, input = {}) {
     preparingRunIdSelection: entry.preparingRunIdSelection !== false,
     input: targetInput,
   });
+}
+
+/** Resolve temporary storage from the command's already selected authority. */
+export function flowTemporaryRoot(ctx) {
+  if (ctx.temporaryRoot != null) return ctx.temporaryRoot;
+  const paths = new TemporaryPaths(ctx.repositoryRoot || ctx.mainRoot || ctx.root);
+  const specId = ctx.specId ?? ctx.flowState?.specId;
+  ctx.temporaryRoot = ctx.flowState
+    ? paths.flow(specId, ctx.flowState.runId)
+    : paths.runtime("flow");
+  return ctx.temporaryRoot;
 }

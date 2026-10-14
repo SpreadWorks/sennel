@@ -1,13 +1,13 @@
+import { createTmpDir as createTestDirectory } from "../support/builders/tmp-dir.js";
 import assert from "node:assert/strict";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { describe, it } from "node:test";
 
 import { readPromptLine } from "../../src/plugin.js";
 
 function withInputFile(content, fn) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "sennel-plugin-prompt-"));
+  const dir = createTestDirectory("sennel-plugin-prompt-");
   const file = path.join(dir, "input.txt");
   fs.writeFileSync(file, content, "utf8");
   const fd = fs.openSync(file, "r");

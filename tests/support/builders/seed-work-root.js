@@ -1,6 +1,5 @@
-import { cpSync, existsSync, mkdtempSync, rmSync } from "node:fs";
-import { join } from "node:path";
-import { tmpdir } from "node:os";
+import { cpSync, existsSync, rmSync } from "node:fs";
+import { createTmpDir } from "./tmp-dir.js";
 import { performance } from "node:perf_hooks";
 
 /** Optional test diagnostics, kept outside all canonical artifacts. */
@@ -31,11 +30,11 @@ export class SeedCleanupScope {
 }
 
 export class SeedWorkRoot {
-  constructor(seed, { prefix = "sennel-test-", parent = tmpdir(), copy = cpSync } = {}) {
+  constructor(seed, { prefix = "sennel-test-", parent, copy = cpSync } = {}) {
     if (!existsSync(seed)) throw new Error(`immutable seed does not exist: ${seed}`);
     if (!prefix.startsWith("sennel-")) throw new Error("test root prefix must be namespaced");
     this.seed = seed;
-    this.root = mkdtempSync(join(parent, prefix));
+    this.root = createTmpDir(prefix, { parent });
     const started = performance.now();
     try {
       copy(seed, this.root, { recursive: true, force: false, errorOnExist: true });

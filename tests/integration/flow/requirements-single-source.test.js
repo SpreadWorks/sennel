@@ -1,3 +1,4 @@
+import { createTmpDir as createTestDirectory } from "../../support/builders/tmp-dir.js";
 /**
  * tests/integration/flow/requirements-single-source.test.js
  *
@@ -13,7 +14,6 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { execFileSync, spawnSync } from "node:child_process";
-import os from "node:os";
 import { CanonicalFlowFixture, makeFlowManager } from "../../support/infrastructure/flow-setup.js";
 import GetResolveContextCommand from "../../../src/flow/lib/get-resolve-context.js";
 import RunResumeCommand from "../../../src/flow/lib/run-resume.js";
@@ -21,7 +21,7 @@ import RunResumeCommand from "../../../src/flow/lib/run-resume.js";
 const SENNEL = path.resolve("src/sennel.js");
 
 function createProject() {
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "req-source-"));
+  const tmp = createTestDirectory("req-source-");
   fs.mkdirSync(path.join(tmp, ".sennel"), { recursive: true });
   fs.mkdirSync(path.join(tmp, "specs", "001-test"), { recursive: true });
   execFileSync("git", ["init", tmp], { stdio: "ignore" });

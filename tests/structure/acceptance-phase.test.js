@@ -1,6 +1,6 @@
+import { createTmpDir as createTestDirectory } from "../support/builders/tmp-dir.js";
 import assert from "node:assert/strict";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { test } from "node:test";
@@ -82,7 +82,7 @@ for (const [label, source, reason] of [
   ["empty export", `export const ${entry.exportName} = [];`, "must export a nonempty"],
   ["invalid export", `export const ${entry.exportName} = [{}];`, "must export a nonempty"],
 ]) test(`A01/A11 ${label} fails with the fixed contract, before an import error`, async (t) => {
-  const isolated = fs.mkdtempSync(path.join(os.tmpdir(), "sennel-acceptance-registration-"));
+  const isolated = createTestDirectory("sennel-acceptance-registration-");
   t.after(() => fs.rmSync(isolated, { recursive: true, force: true }));
   if (source !== null) {
     const module = path.join(isolated, entry.composition);
@@ -100,7 +100,7 @@ for (const [label, source, reason] of [
 });
 
 test("isolated valid export reaches the common registration loader and checker", async (t) => {
-  const isolated = fs.mkdtempSync(path.join(os.tmpdir(), "sennel-acceptance-valid-export-"));
+  const isolated = createTestDirectory("sennel-acceptance-valid-export-");
   t.after(() => fs.rmSync(isolated, { recursive: true, force: true }));
   const module = path.join(isolated, "registrations.mjs");
   const fixtureModule = pathToFileURL(path.join(root, "tests/fixtures/structure/staged-execution.js")).href;

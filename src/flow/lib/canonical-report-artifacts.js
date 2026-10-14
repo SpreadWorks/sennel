@@ -119,7 +119,7 @@ export function assertCanonicalReportFinalEvidence({ flowManager, specId, report
     || acceptedEvidence.publication.artifactId !== current.relativePath)) {
     throw new StepAdmissionRefusal("Report final regression acceptance differs from its source publication");
   }
-  assertReportFinalRegressionEvidence({ root, relativeSpecFile: location.relativeSpecFile, artifact: current.value, acceptedEvidence });
+  assertReportFinalRegressionEvidence({ root, repositoryRoot: location.repositoryRoot, specId, runId: state.runId, relativeSpecFile: location.relativeSpecFile, artifact: current.value, acceptedEvidence });
 }
 
 /** Recover a lost commit acknowledgement from the exact saved report producer. */

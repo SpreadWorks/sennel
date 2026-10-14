@@ -4,6 +4,8 @@ import path from "node:path";
 import { execFileSync, spawn } from "node:child_process";
 import { pathToFileURL } from "node:url";
 import { createHash } from "node:crypto";
+import { TemporaryPaths } from "../../../src/lib/temporary-paths.js";
+import { TEST_CHECKOUT_ROOT } from "../../test-temporary-root.js";
 
 import { SeedWorkRoot } from "../builders/seed-work-root.js";
 import { CanonicalFlowFixture, canonicalDraftDocument, makeFlowManager } from "./flow-setup.js";
@@ -28,9 +30,8 @@ const FLOW_MANAGER = pathToFileURL(path.resolve("src/lib/flow-manager.js")).href
 
 /** Persist the exact parent bytes and Git context, separate from any fixture. */
 export function recordProcessRuntimeFlowVerification() {
-  const evidenceRoot = path.resolve(".tmp", "c2f6");
-  fs.mkdirSync(evidenceRoot, { recursive: true });
-  const directory = fs.mkdtempSync(path.join(evidenceRoot, "runtime-flow-evidence-"));
+  const paths = new TemporaryPaths(TEST_CHECKOUT_ROOT);
+  const directory = paths.create(paths.operator(), "runtime-flow-evidence-");
   const hashes = [];
   const save = (relative) => {
     const absolute = path.resolve(relative);
@@ -273,7 +274,8 @@ export class ProcessRuntimeFlowScenario {
   releaseProvider() { fs.writeFileSync(this.release, "release\n"); }
 
   preserveFailureEvidence(label) {
-    const evidence = fs.mkdtempSync(path.resolve(".tmp", "c2f6", `runtime-flow-failure-${label}-`));
+    const paths = new TemporaryPaths(TEST_CHECKOUT_ROOT);
+    const evidence = paths.create(paths.operator(), `runtime-flow-failure-${label}-`);
     fs.cpSync(path.join(this.root, ".sennel"), path.join(evidence, ".sennel"), { recursive: true });
     const manager = this.manager();
     const location = manager.specLocation(this.specId);

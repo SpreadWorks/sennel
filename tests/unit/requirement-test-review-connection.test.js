@@ -1,8 +1,8 @@
+import { createTmpDir as createTestDirectory } from "../support/builders/tmp-dir.js";
 import { CURRENT_FLOW_SCHEMA_REVISION } from "../../src/lib/flow-schema-revision.js";
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, it } from "node:test";
 
@@ -28,7 +28,7 @@ afterEach(() => {
 });
 
 function fixture() {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "requirement-review-"));
+  const root = createTestDirectory("requirement-review-");
   roots.push(root);
   const specRevision = { specId: "review-r", revision: 1, digest: "a".repeat(64), byteLength: 100 };
   const bytes = Buffer.from("// spec: R6\nimport test from 'node:test';\ntest('R6: behavior', () => {});\n");

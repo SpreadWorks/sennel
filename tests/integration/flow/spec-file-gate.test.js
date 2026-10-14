@@ -1,7 +1,7 @@
+import { createTmpDir as createTestDirectory } from "../../support/builders/tmp-dir.js";
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { it } from "node:test";
 
@@ -28,7 +28,7 @@ const filePathFromPrompt = (prompt) => {
 };
 
 async function withRoot(callback) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "spec-file-gate-"));
+  const root = createTestDirectory("spec-file-gate-");
   try { return await callback(root); } finally { fs.rmSync(root, { recursive: true, force: true }); }
 }
 

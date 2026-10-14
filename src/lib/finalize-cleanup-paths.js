@@ -1,5 +1,6 @@
 import { PRODUCT } from "./product.js";
 
+// Existing execution-directory default for cleanup; scratch and logs resolve independently.
 export const FINALIZE_CLEANUP_DURABLE_AGENT_WORK_DIR = PRODUCT.managedPath("agent-work");
 
 export class FinalizeCleanupRoute {

@@ -1,3 +1,4 @@
+import { createTmpDir as createTestDirectory } from "../../support/builders/tmp-dir.js";
 /**
  * Tests for spec 219 finalize preflight refinement (supersedes spec 211 R2/R4):
  *   - commitStepActive=true: only fail when ahead==0 AND uncommitted==0 (no-commits)
@@ -8,7 +9,6 @@ import { describe, it, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
-import os from "node:os";
 
 import { runPreflightChecks } from "../../../src/flow/lib/run-finalize.js";
 import { runCmd } from "../../../src/lib/process.js";
@@ -39,7 +39,7 @@ function dirtyWorktree(dir, file = "a.txt") {
 
 describe("runPreflightChecks — commitStepActive=true (commit step in active steps)", () => {
   let dir;
-  beforeEach(() => { dir = fs.mkdtempSync(path.join(os.tmpdir(), "fin-ca-")); init(dir); });
+  beforeEach(() => { dir = createTestDirectory("fin-ca-"); init(dir); });
   afterEach(() => fs.rmSync(dir, { recursive: true, force: true }));
 
   it("returns { ok: true } when ahead==0 and uncommitted>0 (commit step will create first commit)", () => {
@@ -77,7 +77,7 @@ describe("runPreflightChecks — commitStepActive=true (commit step in active st
 
 describe("runPreflightChecks — commitStepActive=false (commit step NOT in active steps)", () => {
   let dir;
-  beforeEach(() => { dir = fs.mkdtempSync(path.join(os.tmpdir(), "fin-ci-")); init(dir); });
+  beforeEach(() => { dir = createTestDirectory("fin-ci-"); init(dir); });
   afterEach(() => fs.rmSync(dir, { recursive: true, force: true }));
 
   it("returns { ok: false, reason: 'dirty-worktree' } when uncommitted>0 (no commit step to absorb)", () => {
@@ -118,7 +118,7 @@ describe("runPreflightChecks — commitStepActive=false (commit step NOT in acti
 
 describe("runPreflightChecks — spec-only mode", () => {
   let dir;
-  beforeEach(() => { dir = fs.mkdtempSync(path.join(os.tmpdir(), "fin-so-")); init(dir); });
+  beforeEach(() => { dir = createTestDirectory("fin-so-"); init(dir); });
   afterEach(() => fs.rmSync(dir, { recursive: true, force: true }));
 
   it("returns { ok: true, skipped: 'spec-only' } when featureBranch == baseBranch (commitStepActive=true)", () => {

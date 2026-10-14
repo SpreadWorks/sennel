@@ -1,3 +1,4 @@
+import { createTmpDir as createTestDirectory } from "../../support/builders/tmp-dir.js";
 import { afterEach, describe, it } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -6,7 +7,6 @@ import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
-const fixtureRoot = path.join(repoRoot, ".tmp", "worktree-cli-execution");
 const roots = [];
 
 function git(root, args) {
@@ -16,8 +16,7 @@ function git(root, args) {
 }
 
 function createGitWorktree({ packageName, copySource = false }) {
-  fs.mkdirSync(fixtureRoot, { recursive: true });
-  const root = fs.mkdtempSync(path.join(fixtureRoot, "project-"));
+  const root = createTestDirectory("sennel-worktree-cli-execution.test-");
   roots.push(root);
   if (copySource) fs.cpSync(path.join(repoRoot, "src"), path.join(root, "src"), { recursive: true });
   fs.writeFileSync(path.join(root, "package.json"), JSON.stringify({

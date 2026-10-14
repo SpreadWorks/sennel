@@ -1,6 +1,8 @@
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from "fs";
+import { rmSync, mkdirSync, writeFileSync } from "fs";
 import { join } from "path";
-import { tmpdir } from "os";
+import { testTemporaryRoot } from "../../test-environment.js";
+import { TemporaryPaths } from "../../../src/lib/temporary-paths.js";
+import { TEST_CHECKOUT_ROOT } from "../../test-temporary-root.js";
 import { before, after } from "node:test";
 
 const LEGACY_PRESET_FIXTURE = {
@@ -215,9 +217,8 @@ function installLegacyPresetFixture(root) {
   }
 }
 
-export function createTmpDir(prefix = "sennel-test-", { parent = tmpdir() } = {}) {
-  mkdirSync(parent, { recursive: true });
-  return mkdtempSync(join(parent, prefix));
+export function createTmpDir(prefix = "sennel-test-", { parent = testTemporaryRoot().path } = {}) {
+  return new TemporaryPaths(TEST_CHECKOUT_ROOT).create(parent, prefix);
 }
 
 export function removeTmpDir(dir) {

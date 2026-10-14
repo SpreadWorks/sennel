@@ -5,29 +5,19 @@
  * worktrees that have that branch checked out.
  */
 
-import crypto from "node:crypto";
-import { FlowCommandExecutionLease } from "./flow-command-execution-lease.js";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
-import { FlowTargetIdentityAuthority } from "../../lib/flow-target-identity-authority.js";
 import { RepositoryFlowOperationLock } from "../../lib/repository-maintenance-lock.js";
 import { GitStatusPathSet, runGit } from "../../lib/git-helpers.js";
 import { RepairArtifactRegistry } from "./repair-state-identity.js";
 import { findOutboxCommit } from "./run-finalize.js";
 import { PRODUCT } from "../../lib/product.js";
+import { TemporaryPaths } from "../../lib/temporary-paths.js";
+import { FlowRepositoryRuntimeArtifactRegistry } from "./flow-repository-runtime-artifacts.js";
 
 const GIT_OBJECT_ID = /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/;
 const OUTPUT_LIMIT = 4_000;
-const FLOW_OPERATION_LOCK_PATH = PRODUCT.managedPath(".repository-flow-operation.lock");
-
-function isFlowRuntimePath(filePath) {
-  return filePath === FLOW_OPERATION_LOCK_PATH
-    || FlowCommandExecutionLease.ownsRepositoryPath(filePath)
-    || filePath === PRODUCT.managedPath(".active-flow")
-    || FlowTargetIdentityAuthority.managesRepositoryPath(filePath)
-    || filePath.startsWith(".tmp/logs/");
-}
+const FLOW_RUNTIME_ARTIFACTS = new FlowRepositoryRuntimeArtifactRegistry();
 
 function gitFailureText(result) {
   return String(result?.stderr || result?.stdout || "unknown git failure")
@@ -198,7 +188,7 @@ export class GitWorktreeStatus {
   withoutFlowRuntimeArtifacts() {
     return new GitWorktreeStatus({
       root: this.root,
-      paths: this.paths.filter((entry) => !isFlowRuntimePath(entry)),
+      paths: this.paths.filter((entry) => !FLOW_RUNTIME_ARTIFACTS.owns(path.posix.normalize(entry))),
     });
   }
 
@@ -231,6 +221,9 @@ export class FinalizeMergeTransaction {
   constructor({
     featureRoot,
     mainRoot,
+    repositoryRoot = mainRoot,
+    specId = null,
+    runId = null,
     baseBranch,
     featureBranch,
     commitMessage,
@@ -245,6 +238,10 @@ export class FinalizeMergeTransaction {
     }
     this.featureRoot = path.resolve(featureRoot);
     this.mainRoot = path.resolve(mainRoot);
+    this.temporaryPaths = new TemporaryPaths(repositoryRoot);
+    this.temporaryDirectory = specId && runId
+      ? this.temporaryPaths.flow(specId, runId)
+      : this.temporaryPaths.runtime("finalize-merge");
     this.baseBranch = baseBranch;
     this.featureBranch = featureBranch;
     this.commitMessage = commitMessage;
@@ -378,7 +375,7 @@ export class FinalizeMergeTransaction {
         allowFeatureMetadataPaths: this.allowedFeatureMetadataPaths,
         flowArtifactRegistry: this.flowArtifactRegistry,
       });
-      const temporaryRoot = path.join(os.tmpdir(), `${PRODUCT.temporaryPrefix("finalize-merge")}${crypto.randomUUID()}`);
+      const temporaryRoot = this.temporaryPaths.create(this.temporaryDirectory, PRODUCT.temporaryPrefix("finalize-merge"));
       let added = false;
       try {
         const addedResult = runGit([
@@ -437,6 +434,8 @@ export class FinalizeMergeTransaction {
           if (!removed.ok) {
             process.stderr.write(`[sennel] warning: unable to remove isolated merge worktree ${temporaryRoot}: ${gitFailureText(removed)}\n`);
           }
+        } else {
+          fs.rmSync(temporaryRoot, { recursive: true, force: true });
         }
       }
     } finally {

@@ -1,3 +1,4 @@
+import { standaloneTestEnvironment } from "../../lib/process.js";
 import { CURRENT_FLOW_SCHEMA_REVISION } from "../../lib/flow-schema-revision.js";
 import fs from "fs";
 import path from "path";
@@ -1047,7 +1048,7 @@ class ProcessExecutionHeartbeat {
 
 export async function runProcessDetailed(command, opts = {}) {
   // A test command must run independently when the flow itself is invoked by node:test.
-  const { NODE_TEST_CONTEXT: _nodeTestContext, ...environment } = process.env;
+  const environment = standaloneTestEnvironment();
   const env = { ...environment, ...command.env };
   const heartbeat = new ProcessExecutionHeartbeat(opts);
   try {

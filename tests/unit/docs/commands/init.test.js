@@ -1,7 +1,8 @@
+import { testTemporaryRoot } from "../../../test-environment.js";
+import { createTmpDir as createTestDirectory } from "../../../support/builders/tmp-dir.js";
 import { afterEach, describe, it } from "node:test";
 import assert from "node:assert/strict";
 import path from "path";
-import os from "os";
 import fs from "fs";
 import { aiFilterChapters } from "../../../../src/docs/commands/init.js";
 import { Agent } from "../../../../src/lib/agent.js";
@@ -30,7 +31,7 @@ afterEach(() => {
 });
 
 function makeAgent(profile) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "init-test-"));
+  const root = createTestDirectory("init-test-");
   roots.push(root);
   const config = {
     agent: { default: "test/exec", providers: { "test/exec": profile }, timeout: 300 },
@@ -40,7 +41,7 @@ function makeAgent(profile) {
     config,
     paths: { root, agentWorkDir: path.join(root, ".tmp") },
     registry,
-    logger: new Logger({ logDir: os.tmpdir(), enabled: false }),
+    logger: new Logger({ logDir: testTemporaryRoot().path, enabled: false }),
   });
 }
 

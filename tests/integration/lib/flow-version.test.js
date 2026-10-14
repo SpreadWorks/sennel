@@ -1,9 +1,9 @@
+import { createTmpDir as createTestDirectory } from "../../support/builders/tmp-dir.js";
 import assert from "node:assert/strict";
 import { once } from "node:events";
 import { spawn } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, it } from "node:test";
 import { fileURLToPath } from "node:url";
@@ -63,7 +63,7 @@ import { CanonicalFlowVersionReader } from "../../../src/flow/query.js";
 
 const roots = [];
 function temporaryRoot() {
-  const result = fs.mkdtempSync(path.join(os.tmpdir(), "flow-version-"));
+  const result = createTestDirectory("flow-version-");
   roots.push(result);
   return result;
 }

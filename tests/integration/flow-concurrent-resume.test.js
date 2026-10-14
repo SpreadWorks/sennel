@@ -1,3 +1,4 @@
+import { createTmpDir as createTestDirectory } from "../support/builders/tmp-dir.js";
 import { afterEach, describe, it } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -12,7 +13,6 @@ import { confirmCanonicalFixtureStep } from "../support/infrastructure/flow-setu
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const cliPath = path.join(repoRoot, "src/sennel.js");
-const fixtureRoot = path.join(repoRoot, ".tmp", "flow-concurrent-resume");
 const roots = [];
 
 function git(root, args) {
@@ -22,8 +22,7 @@ function git(root, args) {
 }
 
 function createProject() {
-  fs.mkdirSync(fixtureRoot, { recursive: true });
-  const root = fs.mkdtempSync(path.join(fixtureRoot, "project-"));
+  const root = createTestDirectory("sennel-flow-concurrent-resume.test-");
   roots.push(root);
   fs.mkdirSync(path.join(root, ".sennel"), { recursive: true });
   fs.writeFileSync(path.join(root, ".sennel", "config.json"), JSON.stringify({

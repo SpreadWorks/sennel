@@ -18,6 +18,7 @@ import { migrateLegacyManagedGitattributes, migrateLegacyManagedGitignore } from
 import { validatePresetChainFromManagedDirectory } from "./presets.js";
 import { ProcessIdentity, ProcessIdentitySource } from "./process-identity.js";
 import { PRODUCT } from "./product.js";
+import { TemporaryPaths } from "./temporary-paths.js";
 
 // This is intentionally the complete boundary for retired managed roots.
 // Nothing outside the explicit layout revision may interpret these names.
@@ -835,9 +836,10 @@ class LayoutMigrationJournal {
   }) {
     if (!LEGACY_DIRECTORY_NAMES.includes(sourceName)) throw new Error("migration journal source directory is invalid");
     if (!JOURNAL_PHASES.has(phase)) throw new Error(`migration journal phase is invalid: ${phase}`);
-    if (!new RegExp(`^\\.tmp/${STAGING_PREFIX}[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`).test(stagingRelative)) {
+    if (!new RegExp(`^\\.tmp/runtime/migrate-layout/${STAGING_PREFIX}[A-Za-z0-9]{6}$`).test(stagingRelative)) {
       throw new Error("migration journal staging path is invalid");
     }
+    new TemporaryPaths(root).validate(path.join(root, stagingRelative));
     for (const identity of [sourceIdentity, stagedManagedIdentity]) {
       if (!identity || JSON.stringify(Object.keys(identity).sort()) !== JSON.stringify(["dev", "ino"])
         || !Number.isSafeInteger(identity.dev) || !Number.isSafeInteger(identity.ino)) {
@@ -1272,12 +1274,28 @@ function findBusyMarkers(sourceRoot) {
 }
 
 function ensureTempRoot(root) {
+  const temporaryPaths = new TemporaryPaths(root);
   const temp = path.join(root, ".tmp");
+  temporaryPaths.validate(temp);
   const stat = lstatOrNull(temp);
   const created = !stat;
   if (!stat) fs.mkdirSync(temp, { recursive: true, mode: 0o700 });
   const verified = assertRealDirectory(temp, "migration temporary directory");
   return { temp, created, identity: created ? { dev: verified.dev, ino: verified.ino } : null };
+}
+
+function removeCreatedTempRoot(root, created, identity) {
+  const temp = path.join(root, ".tmp");
+  if (!created || !lstatOrNull(temp)
+    || !sameDirectoryIdentity(temp, identity, "migration temporary directory")) return;
+  const temporaryPaths = new TemporaryPaths(root);
+  const purpose = temporaryPaths.runtime("migrate-layout");
+  for (const directory of [purpose, path.dirname(purpose), temp]) {
+    if (!lstatOrNull(directory)) continue;
+    temporaryPaths.validate(directory);
+    assertRealDirectory(directory, "migration temporary directory");
+    if (fs.readdirSync(directory).length === 0) fs.rmdirSync(directory);
+  }
 }
 
 function migrationState(root) {
@@ -1392,13 +1410,13 @@ export class LayoutMigrationRevisionOne {
     }
 
     const tempState = ensureTempRoot(this.root);
-    const tempRoot = tempState.temp;
-    const stagingRoot = path.join(tempRoot, `${STAGING_PREFIX}${crypto.randomUUID()}`);
+    const temporaryPaths = new TemporaryPaths(this.root);
+    let stagingRoot = null;
     let journal = null;
     let stagingCreated = false;
     let retainStagingForRecovery = false;
     try {
-      fs.mkdirSync(stagingRoot, { mode: 0o700 });
+      stagingRoot = temporaryPaths.create(temporaryPaths.runtime("migrate-layout"), STAGING_PREFIX);
       stagingCreated = true;
       const stagedManaged = path.join(stagingRoot, "managed-directory");
       fs.mkdirSync(stagedManaged, { mode: 0o700 });
@@ -1463,11 +1481,7 @@ export class LayoutMigrationRevisionOne {
         }
       } else if (!retainStagingForRecovery) {
         if (stagingCreated) removeTree(stagingRoot, "migration staging directory");
-        if (tempState.created
-          && sameDirectoryIdentity(tempRoot, tempState.identity, "migration temporary directory")
-          && fs.readdirSync(tempRoot).length === 0) {
-          fs.rmdirSync(tempRoot);
-        }
+        removeCreatedTempRoot(this.root, tempState.created, tempState.identity);
       }
       throw error;
     } finally {
@@ -1477,7 +1491,7 @@ export class LayoutMigrationRevisionOne {
 
   #printDryRunPlan(sourceName, treePlan, metadata) {
     this.logger.log(`[migrate] DRY-RUN: ${sourceName} -> ${PRODUCT.managedDirName}`);
-    this.logger.log(`[migrate] DRY-RUN: stage ${treePlan.size} managed entries under .tmp/${STAGING_PREFIX}<id>/managed-directory`);
+    this.logger.log(`[migrate] DRY-RUN: stage ${treePlan.size} managed entries under .tmp/runtime/migrate-layout/${STAGING_PREFIX}<id>/managed-directory`);
     for (const line of treePlan.toDryRunLines()) this.logger.log(`[migrate] DRY-RUN: ${line}`);
     for (const entry of metadata) {
       const status = entry.original.equals(entry.planned) ? "unchanged" : "replace";
@@ -1600,13 +1614,7 @@ export class LayoutMigrationRevisionOne {
   }
 
   #removeCreatedTempRoot(journal) {
-    const temp = path.join(this.root, ".tmp");
-    if (journal.tempRootCreated
-      && lstatOrNull(temp)
-      && sameDirectoryIdentity(temp, journal.tempRootIdentity, "migration temporary directory")
-      && fs.readdirSync(temp).length === 0) {
-      fs.rmdirSync(temp);
-    }
+    removeCreatedTempRoot(this.root, journal.tempRootCreated, journal.tempRootIdentity);
   }
 
   #recover(journal) {

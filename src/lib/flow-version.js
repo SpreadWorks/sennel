@@ -2,6 +2,9 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { FlowSpecRevision } from "./flow-spec-revision.js";
+import { IdentityValue, identifier, text } from "./flow-identity-value.js";
+import { FlowRunId } from "./flow-run-id.js";
+export { FlowRunId } from "./flow-run-id.js";
 import { AtomicJsonFile, AtomicJsonWriteError } from "./atomic-json-file.js";
 import { AtomicFile } from "./atomic-file.js";
 import { FileLock, FileLockWaitPolicy } from "./file-lock.js";
@@ -150,17 +153,6 @@ class TaskRetryRecoveryArtifactOwner {
     }
     return this;
   }
-}
-
-function text(value, field) {
-  if (typeof value !== "string" || value.trim() === "") throw new Error(`${field} must be a non-empty string`);
-  return value.trim();
-}
-
-function identifier(value, field) {
-  const result = text(value, field);
-  if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(result)) throw new Error(`${field} must be an identifier`);
-  return result;
 }
 
 function relativePath(value, field) {
@@ -460,13 +452,6 @@ class VersionCatalogTransactionJournal {
   abandon() { ACTIVE_VERSION_TRANSACTIONS.delete(this.file.filePath); }
 }
 
-class IdentityValue {
-  constructor(value, field) { this.value = identifier(value, field); Object.freeze(this); }
-  toString() { return this.value; }
-  toJSON() { return this.value; }
-  equals(other) { return other instanceof this.constructor && other.value === this.value; }
-}
-
 export class FlowId extends IdentityValue {
   constructor(value) { super(value, "flowId"); }
   static from(value) { return value instanceof FlowId ? value : new FlowId(value); }
@@ -480,11 +465,6 @@ export class FlowVersionId extends IdentityValue {
 export class FlowSpecIdentity extends IdentityValue {
   constructor(value) { super(value, "specId"); }
   static from(value) { return value instanceof FlowSpecIdentity ? value : new FlowSpecIdentity(value); }
-}
-
-export class FlowRunId extends IdentityValue {
-  constructor(value) { super(value, "runId"); }
-  static from(value) { return value instanceof FlowRunId ? value : new FlowRunId(value); }
 }
 
 export class FlowActivityId extends IdentityValue {

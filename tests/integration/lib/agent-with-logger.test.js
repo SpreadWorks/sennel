@@ -1,3 +1,4 @@
+import { createTmpDir as createTestDirectory } from "../../support/builders/tmp-dir.js";
 /**
  * Logger integration tests for the Agent service.
  *
@@ -10,7 +11,6 @@ import { describe, it, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
-import os from "node:os";
 
 import { Agent } from "../../../src/lib/agent.js";
 import {
@@ -51,7 +51,7 @@ describe("Agent.call() — Logger integration", () => {
   let logger;
 
   beforeEach(() => {
-    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "agent-log-"));
+    tmpDir = createTestDirectory("agent-log-");
     logFile = path.join(tmpDir, `sennel-${todayLocal()}.jsonl`);
     logger = makeLogger(tmpDir);
   });
@@ -109,7 +109,7 @@ describe("Agent.call() — metric accumulation (spec 186 R3)", () => {
   let logger;
 
   beforeEach(() => {
-    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "agent-metric-"));
+    tmpDir = createTestDirectory("agent-metric-");
     logger = makeLogger(tmpDir);
   });
   afterEach(() => {

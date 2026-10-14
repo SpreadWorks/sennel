@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 import { Agent } from "../../src/lib/agent.js";
 import { AgentFileReference } from "../../src/lib/agent-file-reference.js";
@@ -14,11 +13,13 @@ import { getStepInstructions } from "../../src/flow/lib/get-step-instructions.js
 import { readSpecJsonValidator } from "../../src/lib/spec-json.js";
 import { applySpecGateRepairOperations, SpecGateRepairAuthority } from "../../src/flow/lib/spec-repair-operations.js";
 import { validWorkerHandoffTaskSpec } from "../support/infrastructure/worker-artifact.js";
-import { createTmpDir, removeTmpDir } from "../support/builders/tmp-dir.js";
+import { TestTemporaryRoot } from "../test-temporary-root.js";
 
 test("real repair model resolves existing evidence and returns only missing choices to Draft", { timeout: 600_000 }, async (t) => {
-  const root = createTmpDir("sennel-repair-decision-", { parent: fileURLToPath(new URL("../../.tmp/", import.meta.url)) });
-  t.after(() => removeTmpDir(root));
+  const owner = TestTemporaryRoot.createOnRepository();
+  const release = owner.activate();
+  t.after(release);
+  const root = owner.path;
   const model = process.env.SENNEL_GATE_QUALITY_MODEL || "gpt-6-luna";
   const config = { agent: { default: "repair-quality", timeout: 240, retryCount: 0,
     providers: { "repair-quality": { command: "codex",

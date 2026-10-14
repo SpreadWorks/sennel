@@ -175,6 +175,8 @@ class CanonicalNonblockingFactsReader {
       flowManager: this.flowManager,
       specId: this.flowState.specId,
       changedFileSnapshotDigest: () => captureFinalRegressionChangedSnapshotDigest({
+        repositoryRoot: store.location.repositoryRoot,
+        specId: this.flowState.specId, runId: this.flowState.runId,
         root: this.root,
         relativeSpecFile: store.location.relativeSpecFile,
       }),

@@ -1,12 +1,12 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, writeFileSync, readFileSync, existsSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { writeFileSync, readFileSync, existsSync, rmSync } from "node:fs";
+import { createTmpDir } from "../support/builders/tmp-dir.js";
 import { join } from "node:path";
 import { test } from "node:test";
 import { SeedWorkRoot } from "../support/builders/seed-work-root.js";
 
 test("immutable seed creates independent work roots with cleanup", (t) => {
-  const seed = mkdtempSync(join(tmpdir(), "sennel-seed-"));
+  const seed = createTmpDir("sennel-seed-");
   let first;
   let second;
   t.after(() => {
@@ -29,7 +29,7 @@ test("immutable seed creates independent work roots with cleanup", (t) => {
 });
 
 test("a failed seed copy removes its partially populated owned root and preserves the failure", (t) => {
-  const seed = mkdtempSync(join(tmpdir(), "sennel-seed-failure-"));
+  const seed = createTmpDir("sennel-seed-failure-");
   let ownedRoot;
   t.after(() => {
     if (ownedRoot) rmSync(ownedRoot, { recursive: true, force: true });

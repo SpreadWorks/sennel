@@ -5,12 +5,13 @@
  * direct test file selection in tests/run.js.
  */
 
-import { describe, it, beforeEach, afterEach } from "node:test";
+import { describe, it, before, after, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { dirname, resolve, join } from "node:path";
 import { mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+import { TestTemporaryRoot } from "../test-temporary-root.js";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const RUN_JS = resolve(ROOT, "tests", "run.js");
@@ -23,7 +24,13 @@ function run(...args) {
   });
 }
 
-const TMP_DIR = resolve(ROOT, ".tmp", `test-file-filter-${process.pid}`);
+let temporaryOwner;
+let TMP_DIR;
+before(() => {
+  temporaryOwner = TestTemporaryRoot.createOnRepository();
+  TMP_DIR = temporaryOwner.path;
+});
+after(() => temporaryOwner?.remove());
 
 function createTmpTest(relPath, content) {
   const full = join(TMP_DIR, relPath);

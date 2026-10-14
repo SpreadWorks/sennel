@@ -13,6 +13,7 @@ test("test temporary root selects writable tmpfs with sufficient available space
   const root = TestTemporaryRoot.createOnTmpfs({
     access: () => {},
     statfs: () => ({ type: TMPFS_MAGIC, bavail: 2n, bsize: MINIMUM_TEST_TMPFS_BYTES }),
+    validate: () => {},
     create: (prefix) => {
       createdPrefix = prefix;
       return "/dev/shm/sennel-test-example";
@@ -57,19 +58,48 @@ test("test temporary root falls back when the candidate cannot be inspected", ()
   assert.equal(root, null);
 });
 
-test("system temporary root creates the same cleanup boundary on fallback storage", () => {
-  let createdPrefix = null;
-  const root = TestTemporaryRoot.createOnSystem({
-    directory: "/disk/tmp",
-    create: (prefix) => {
-      createdPrefix = prefix;
-      return "/disk/tmp/sennel-test-example";
-    },
-    remove: () => {},
+test("test temporary root leaves a candidate unselected when its root cannot be allocated", () => {
+  const failure = Object.assign(new Error("candidate storage is full"), { code: "ENOSPC" });
+  const selected = TestTemporaryRoot.createOnTmpfs({
+    access: () => {},
+    statfs: () => ({ type: TMPFS_MAGIC, bavail: 2n, bsize: MINIMUM_TEST_TMPFS_BYTES }),
+    validate: () => {},
+    create: () => { throw failure; },
   });
+  assert.equal(selected, null);
+});
 
-  assert.equal(root.path, "/disk/tmp/sennel-test-example");
-  assert.equal(createdPrefix, "/disk/tmp/sennel-test-");
+test("an allocated test root propagates storage failure without trying another root", async () => {
+  const failure = Object.assign(new Error("selected storage is full"), { code: "ENOSPC" });
+  const removals = [];
+  const root = new TestTemporaryRoot("/dev/shm/sennel-test-selected", { remove: (directory) => removals.push(directory) });
+  const environment = { TMPDIR: "previous" };
+  let writes = 0;
+  await assert.rejects(root.use(() => {
+    writes += 1;
+    assert.equal(environment.TMPDIR, root.path);
+    throw failure;
+  }, { environment, processEvents: new EventEmitter() }), (error) => error === failure);
+  assert.equal(writes, 1);
+  assert.equal(root.path, "/dev/shm/sennel-test-selected");
+  assert.deepEqual(removals, [root.path]);
+  assert.deepEqual(environment, { TMPDIR: "previous" });
+});
+
+test("borrowed test temporary roots never remove the owner's files", async () => {
+  const removals = [];
+  const root = new TestTemporaryRoot("/dev/shm/sennel-test-example", {
+    owned: false,
+    remove: (...args) => removals.push(args),
+  });
+  const environment = { TMPDIR: "previous", SENNEL_TEST_TEMP_ROOT: "shared", GIT_CEILING_DIRECTORIES: "ceiling" };
+  await root.use(() => {
+    assert.equal(environment.SENNEL_TEST_TEMP_ROOT, root.path);
+    assert.equal(environment.GIT_CEILING_DIRECTORIES, "/dev/shm:ceiling");
+  }, { environment, processEvents: new EventEmitter() });
+  root.remove();
+  assert.deepEqual(removals, []);
+  assert.deepEqual(environment, { TMPDIR: "previous", SENNEL_TEST_TEMP_ROOT: "shared", GIT_CEILING_DIRECTORIES: "ceiling" });
 });
 
 test("test temporary root restores TMPDIR and removes its complete tree after success or failure", async () => {

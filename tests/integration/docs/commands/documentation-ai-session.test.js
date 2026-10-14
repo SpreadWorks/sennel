@@ -1,6 +1,6 @@
+import { createTmpDir as createTestDirectory } from "../../../support/builders/tmp-dir.js";
 import assert from "node:assert/strict";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 import { PromptBuilder } from "../../../../src/lib/prompt-builder.js";
@@ -20,7 +20,7 @@ class FixtureEnvelope extends PromptRequestEnvelope {
 }
 
 function fixture(t, options = {}) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "sennel-docs-ai-session-"));
+  const root = createTestDirectory("sennel-docs-ai-session-");
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   let text = "";
   const output = { isTTY: options.tty || false, write(value) { text += value; } };
