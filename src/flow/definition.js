@@ -37,6 +37,9 @@ export { TestChainProcessFacts, TestExecuteStepFacts, TestResultReviewStepFacts 
 import { SPEC_GATE_MAXIMUM_CYCLE } from "./lib/spec-gate-policy.js";
 import { DraftWorkerRejection } from "./lib/draft-worker-rejection.js";
 export { resolveDraftWorkerCorrection } from "./lib/draft-worker-rejection.js";
+export { resolveDraftWorkerExecutionContinuation, DraftWorkerExecutionContinuationFacts,
+  DraftWorkerNewExecution, DraftWorkerSealedReplay, DraftWorkerPublicationReplay,
+  DraftWorkerExecutionStop } from "./lib/draft-worker-execution-continuation.js";
 export { resolveDraftWorkerRecovery, DraftWorkerRecoveryRefusal } from "./lib/draft-worker-recovery.js";
 export { resolveDraftExecutionRecovery, DraftExecutionRecoveryFacts,
   DraftStepErrorRecoveryDecision, DraftStepErrorRecoveryReceipt } from "./lib/draft-worker-recovery.js";

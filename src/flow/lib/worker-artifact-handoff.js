@@ -50,6 +50,7 @@ import {
   DraftExecutionSettlement,
   DraftConditionalWorkerExecutionBinding,
   DraftWorkerExecutionClaim,
+  DraftWorkerExecutionContinuationFacts,
   DraftStepSettlementReceipt,
   settleTaskStepResult,
   resolveRequirementTestLifecycle,
@@ -8856,6 +8857,63 @@ export class WorkerArtifactHandoffCoordinator {
 
   hasSavedWorkerSubmission({ ctx, state, executionClaim }) {
     return fs.existsSync(path.join(workerExecutionHandoffDirectory({ ctx, state, executionClaim }), "handoff.json"));
+  }
+
+  /** Observe existing conditional execution without preparing, claiming or publishing. */
+  readDraftWorkerExecutionContinuation({ ctx, state, request = null, newlyClaimed = false,
+    previousExecutionContract = null }) {
+    const execution = ctx.flowManager.draftStepExecutionState({ binding: {
+      runId: state.runId, specId: state.specId, stepId: state.attempt.nodeId, attempt: state.attempt,
+    } });
+    const lifecycle = execution.lifecycle;
+    if (!(lifecycle?.binding instanceof DraftConditionalWorkerExecutionBinding)
+      || !["claimed", "publication", "terminal"].includes(lifecycle.phase)) {
+      return new DraftWorkerExecutionContinuationFacts({ phase: lifecycle?.phase ?? null, receiptId: execution.receiptId });
+    }
+    if (lifecycle.phase === "terminal") {
+      return new DraftWorkerExecutionContinuationFacts({ phase: lifecycle.phase, receiptId: execution.receiptId });
+    }
+    let retryAuthorized = false;
+    try {
+      request ??= this.restoreClaimedDraftRequest({ ctx, state, lifecycle });
+      if (request === null) return new DraftWorkerExecutionContinuationFacts({ phase: lifecycle.phase, receiptId: execution.receiptId });
+      if (canonicalWorkerExecutionClaimForStored({ flowManager: ctx.flowManager, stored: request }) === null) {
+        throw new FlowExecutionContractRefusal("Draft worker request no longer has its exact canonical claim");
+      }
+      if (lifecycle.phase === "claimed") request.assertCurrent(ctx.flowManager.loadReadOnly(state.specId));
+      else request.assertExecutionContract();
+      if (previousExecutionContract !== null) {
+        if (!(previousExecutionContract instanceof FlowExecutionContract)) {
+          throw new TypeError("Draft protocol retry requires its previous typed execution contract");
+        }
+        previousExecutionContract.assertMatches(request.executionContract);
+        retryAuthorized = true;
+      }
+      const sealed = request.hasSealedSubmission();
+      let responseDigest = null;
+      if (sealed) {
+        const submission = readSubmission(request);
+        validateSubmission(request, submission);
+        if (readHandoffQuarantine(request, submission) !== null) {
+          throw new FlowExecutionContractRefusal("Saved Draft worker response was rejected by its parent");
+        }
+        responseDigest = submission.handoffDigest;
+      }
+      return new DraftWorkerExecutionContinuationFacts({ phase: lifecycle.phase,
+        response: sealed ? "sealed" : "unsealed", newlyClaimed, retryAuthorized,
+        receiptId: execution.receiptId, responseDigest });
+    } catch (refusal) {
+      if (lifecycle.phase === "claimed" && retryAuthorized
+        && refusal instanceof WorkerArtifactHandoffError
+        && refusal.retryable === true
+        && refusal.isProducerFailure
+        && refusal.data.transport === "worker-submission") {
+        return new DraftWorkerExecutionContinuationFacts({ phase: lifecycle.phase, response: "unsealed",
+          newlyClaimed, retryAuthorized, receiptId: execution.receiptId });
+      }
+      return new DraftWorkerExecutionContinuationFacts({ phase: lifecycle.phase, response: "invalid",
+        receiptId: execution.receiptId, refusal });
+    }
   }
 
   restoreClaimedDraftRequest({ ctx, state, lifecycle, executionLocator = null, actionFileDigest = null }) {

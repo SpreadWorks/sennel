@@ -1,23 +1,7 @@
 import { Step } from "../../engine/step.js";
-import {
-  DraftQuestionsReviewFindingsResult,
-  DraftQuestionsReviewPassedResult,
-  DraftQuestionsReviewExecutionRequiredResult,
-  StepErrorResult,
-} from "../../engine/step-result.js";
+import { DraftQuestionsReviewExecutionRequiredResult } from "../../engine/step-result.js";
 import { ReviewService } from "../../services/review-service.js";
-import { DraftReviewArtifactDocument } from "../../lib/draft-review-artifacts.js";
-
-/** Pure mapping from typed terminal Review facts to this Step's Result. */
-export function draftQuestionsReviewResult(facts) {
-  if (facts instanceof Error) return new StepErrorResult("draft-questions-review", facts);
-  if (!(facts instanceof DraftReviewArtifactDocument) || facts.phase !== "draft-questions") {
-    throw new TypeError("draft questions Review Result requires typed Review facts");
-  }
-  return facts.verdict === "PASS"
-    ? new DraftQuestionsReviewPassedResult()
-    : new DraftQuestionsReviewFindingsResult();
-}
+import { draftQuestionsReviewResult } from "./draft-review-result.js";
 
 /**
  * Review unresolved decisions and candidate questions in the bound Draft.

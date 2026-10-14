@@ -1,7 +1,7 @@
 export { workerStepExecutionContract } from "./worker-step-execution-contract.js";
 import { TaskStepIdentity } from "./task-step-identity.js";
 import { deriveNextAction, resolveDraftWorkerCorrection, resolveDraftWorkerRecovery,
-  DraftWorkerRecoveryRefusal, SpecGateRepairExecutionStop,
+  DraftWorkerRecoveryRefusal, resolveDraftWorkerExecutionContinuation, DraftWorkerExecutionStop, SpecGateRepairExecutionStop,
   SpecGateRepairExecutionFormatUnavailable } from "../definition.js";
 import { selectSpecGateRepairExecution } from "./spec-gate-repair-execution.js";
 import { DraftLifecycle } from "./draft-lifecycle.js";
@@ -11,9 +11,10 @@ import { NextActionDirectiveResolver, ExecuteStepDirective, ExecuteCommandDirect
   BlockedDirective, AwaitDraftQuestionDirective } from "./next-action-directive.js";
 import { guardedCommand } from "./guarded-command.js";
 import { WorkerArtifactHandoffError } from "./worker-artifact-handoff-error.js";
+import { WorkerArtifactHandoffCoordinator } from "./worker-artifact-handoff.js";
 
 class WorkerExecutionAdmissionSelection {
-  constructor({ state, flowState, descriptor, action, conditionalDisposition, repair, correction, recovery }) {
+  constructor({ state, flowState, descriptor, action, conditionalDisposition, repair, correction, recovery, continuation }) {
     this.state = state;
     this.flowState = flowState;
     this.descriptor = descriptor;
@@ -22,6 +23,7 @@ class WorkerExecutionAdmissionSelection {
     this.repair = repair;
     this.correction = correction;
     this.recovery = recovery;
+    this.continuation = continuation;
     Object.freeze(this);
   }
 }
@@ -49,9 +51,14 @@ export function selectWorkerExecutionAdmission({ ctx, stepId }) {
   const repair = stepId === "spec-gate-repair" && state.attempt?.nodeId === stepId
     && ["start", "recover", "resume", "retry"].includes(descriptor.operation)
     ? selectSpecGateRepairExecution({ ctx, state }) : null;
+  const continuation = isConditionalDraftWorkerStep(stepId) && state.attempt?.nodeId === stepId
+    && state.attempt.failure === null && descriptor.operation === "resume" && recovery === null
+    && (conditionalDisposition === null || conditionalDisposition.operation === "execute-worker")
+    ? selectDraftWorkerExecutionContinuation({ ctx, state,
+      previousExecutionContract: ctx.previousExecutionContract ?? null }) : null;
   const derived = deriveNextAction({ scope: taskIdentity === null ? "flow" : "task", stepId, context: flowState });
   return new WorkerExecutionAdmissionSelection({ state, flowState, descriptor,
-    action: derived.action, conditionalDisposition, repair, correction, recovery });
+    action: derived.action, conditionalDisposition, repair, correction, recovery, continuation });
 }
 
 export function projectWorkerExecutionAdmission(selection, { binding = null,
@@ -70,6 +77,11 @@ export function projectWorkerExecutionAdmission(selection, { binding = null,
     instruction: `Verify inputs and recover the retained legacy ${recovery.stepId} checkpoint before resuming dispatch.`,
     reason: "Definition selected the retained unpublished worker claim and its checkpoint on this Attempt.",
   });
+  if (selection.continuation instanceof DraftWorkerExecutionStop) {
+    return new BlockedDirective({ code: selection.continuation.code,
+      reason: selection.continuation.reason,
+      resumeInstruction: "Restore the exact saved response for this claim before resuming. Do not start another worker or reset its budget." });
+  }
   if (selection.repair?.decision instanceof SpecGateRepairExecutionStop) {
     return new BlockedDirective({ code: selection.repair.decision.code,
       reason: selection.repair.decision.reason,
@@ -94,9 +106,28 @@ export function assertWorkerExecutionAdmission(selection) {
     || selection.descriptor.operation !== "resume") {
     throw new WorkerArtifactHandoffError("recovery-required", directive.code ?? "FLOW_WORKER_EXECUTION_NOT_ADMITTED",
       directive.reason ?? "worker requires the current Definition-selected active Attempt",
-      { retryable: false, recoveryPossible: false });
+      { retryable: false, recoveryPossible: false, data: { failureKind: "step-admission" } });
   }
   return selection;
+}
+
+/** The same Definition selection is used before first start and after restart. */
+export function selectDraftWorkerExecutionContinuation({ ctx, state, request = null, newlyClaimed = false,
+  previousExecutionContract = null,
+  handoffCoordinator = new WorkerArtifactHandoffCoordinator() }) {
+  return resolveDraftWorkerExecutionContinuation(handoffCoordinator.readDraftWorkerExecutionContinuation({
+    ctx, state, request, newlyClaimed, previousExecutionContract,
+  }));
+}
+
+export function assertDraftWorkerExecutionContinuation(continuation) {
+  if (continuation instanceof DraftWorkerExecutionStop) {
+    throw new WorkerArtifactHandoffError("recovery-required", continuation.code, continuation.reason, {
+      cause: continuation.cause, retryable: false, recoveryPossible: false,
+      data: { failureKind: "step-admission" },
+    });
+  }
+  return continuation;
 }
 
 export function assertCurrentWorkerExecutionSelection(selection, current) {
@@ -107,9 +138,13 @@ export function assertCurrentWorkerExecutionSelection(selection, current) {
     || selection.state.attempt.id !== current.state.attempt.id
     || selection.state.attempt.sequence !== current.state.attempt.sequence
     || selection.descriptor.nodeId !== current.descriptor.nodeId
-    || selection.action !== current.action) {
+    || selection.action !== current.action
+    || selection.continuation?.receiptId !== current.continuation?.receiptId
+    || selection.continuation?.responseDigest !== current.continuation?.responseDigest
+    || selection.continuation?.constructor !== current.continuation?.constructor) {
     throw new WorkerArtifactHandoffError("recovery-required", "FLOW_WORKER_EXECUTION_SELECTION_CHANGED",
-      "worker execution selection changed before use", { retryable: false, recoveryPossible: false });
+      "worker execution selection changed before use", { retryable: false, recoveryPossible: false,
+        data: { failureKind: "step-admission" } });
   }
   return current;
 }

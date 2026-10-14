@@ -15,9 +15,8 @@ import { SpecReviewExecutionRequiredResult, DraftQuestionsReviewExecutionRequire
   SpecGateRepairReviewRequiredResult, stepResultDigest } from "./engine/step-result.js";
 import { DraftStepExecutionLifecycle, DraftReviewExecutionBinding, DraftWorkerExecutionBinding, DraftStepSettlementReceipt } from "./definition.js";
 import { ReviewWorkUnitTarget } from "./lib/review-work-unit-values.js";
-import { draftQuestionsReviewResult } from "./steps/draft/draft-questions-review.js";
-import { draftCoverageReviewResult } from "./steps/draft/draft-coverage-review.js";
-import { specReviewResult } from "./steps/spec/spec-review.js";
+import { draftQuestionsReviewResult, draftCoverageReviewResult } from "./steps/draft/draft-review-result.js";
+import { specReviewResult } from "./steps/spec/spec-review-result.js";
 import { StepConnectionReceipt } from "./lib/draft-completion-connector.js";
 import { TaskStepIdentity } from "./lib/task-step-identity.js";
 import { ImplementationSourceEvidence } from "./lib/source-effect-values.js";
@@ -35,6 +34,8 @@ import { QuerySpecGateRepairObservation } from "./query-spec-gate-repair-details
 import { RecordedRepairChange } from "./query-repair-change.js";
 import { PlanGateRepairRecord } from "./lib/plan-gate-repair.js";
 import { IssueLogDocument } from "./lib/issue-log-store.js";
+import { FlowExecutionContract } from "./lib/flow-execution-contract.js";
+import { readExecutionContractFromView } from "./lib/canonical-prompt-execution.js";
 
 const GROUPS = Object.freeze(["evaluations", "findings", "repairs"]);
 const GATE_KEYS = new Set(["draft.gate", "spec.gate", "task.gate", "impl.gate"]);
@@ -431,7 +432,7 @@ export class QueryDetailIndex {
     const retained = this.catalog.artifacts.filter((entry) => entry.logicalKey === "activity.evidence"
       && entry.activityId === activity.id).map((descriptor) => {
         const document = FLOW_ARTIFACT_CONTRACTS.require("activity.evidence").contentContract.assertCatalogAssociation({
-          bytes: this.artifactBytesFor(descriptor), descriptor, activity });
+          bytes: this.readCatalogedArtifact(descriptor), descriptor, activity });
         if (!(document instanceof FlowArtifactSpecReviewActivityEvidenceDocument)) return null;
         document.assertActivity(activity, { specId: this.state.specId });
         if (document.source.path !== publicationPath) {
@@ -455,7 +456,7 @@ export class QueryDetailIndex {
       || activity.reviewPublication.reviewDigest !== review.digest) unavailable("SOURCE_GENERATION_NOT_RETAINED", activity.id,
       "The Spec Review generation for this Activity is not retained");
     activity.reviewPublication.assertReview(review, { specId: this.state.specId,
-      revision: review.identity.revision.value, bytes: this.artifactBytesFor(descriptor) });
+      revision: review.identity.revision.value, bytes: this.readCatalogedArtifact(descriptor) });
     const source = new RetainedSpecReviewSource({ descriptor, review, sourceArtifact: publicationPath, pointer: "" });
     this.specReviews.set(activity.id, source);
     return source;
@@ -497,11 +498,11 @@ export class QueryDetailIndex {
     return DraftStepExecutionLifecycle.fromJSON(receipt.executionLifecycle?.toJSON?.() ?? receipt.executionLifecycle);
   }
   read(descriptor) {
-    const bytes = this.artifactBytesFor(descriptor);
+    const bytes = this.readCatalogedArtifact(descriptor);
     try { return JSON.parse(bytes.toString("utf8")); }
     catch (cause) { throw new QueryError("CANONICAL_RECORD_INCONSISTENT", "/canonical", "Captured detail artifact is not JSON", { referenceId: descriptor.relativePath, cause }); }
   }
-  artifactBytesFor(descriptor) {
+  readCatalogedArtifact(descriptor) {
     if (!this.artifactBytes.has(descriptor.relativePath)) throw new QueryDetailArtifactRequired(descriptor);
     const bytes = this.artifactBytes.get(descriptor.relativePath);
     if (!Buffer.isBuffer(bytes)) throw new QueryError("CANONICAL_RECORD_UNREADABLE", "/canonical", "Captured detail artifact bytes are missing", { referenceId: descriptor.relativePath });
@@ -601,6 +602,7 @@ export class QueryDetailIndex {
     const producerStepId = this.producerStepId(activity);
     if (activity.transition.operation === "continue_nonblocking") return this.projectSkip(activity, projected);
     if (NON_DETAIL_OPERATIONS.has(activity.transition.operation)) return projected;
+    if (this.projectExecutionClaim(activity, projected) !== null) return projected;
     if (producerStepId === "spec-gate-repair") return this.projectSpecGateRepair(activity, projected);
     const reviewLifecycle = this.reviewLifecycle(activity);
     if (["checkpoint", "claimed"].includes(reviewLifecycle?.phase)) {
@@ -646,6 +648,29 @@ export class QueryDetailIndex {
       && !NON_DETAIL_SOURCE_RESULTS.has(activity.result?.stepResult?.kind)) {
       unavailable("PRODUCER_NOT_SUPPORTED", activity.id, "No supported retained detail producer exists for this Activity");
     }
+    return projected;
+  }
+  projectExecutionClaim(activity, projected) {
+    if (activity.transition.operation !== "publish_artifacts") return null;
+    const publications = this.catalog.artifacts.filter((descriptor) => descriptor.activityId === activity.id
+      && !["flow.state", "flow.activities"].includes(descriptor.logicalKey));
+    if (publications.length !== 1 || publications[0].logicalKey !== "execution.contract") return null;
+    if (activity.result !== null
+      || activity.reviewPublication !== null || GROUPS.some((group) => activity.references[group].length !== 0)) {
+      unavailable("PRODUCER_NOT_SUPPORTED", activity.id, "An execution contract claim cannot own a detail observation");
+    }
+    const document = this.read(publications[0]);
+    exactFields(document, ["id", "contract"], activity.id);
+    const contract = FlowExecutionContract.fromJSON(document.contract);
+    const task = TaskStepIdentity.fromStateNode(this.state, activity.nodeId);
+    if (contract.runId !== this.state.runId || contract.specId !== this.state.specId
+      || contract.stepId !== this.producerStepId(activity) || contract.taskId !== (task?.taskId ?? null)
+      || FLOW_ARTIFACT_CONTRACTS.resolve("execution.contract", contract.parameters).relativePath !== publications[0].relativePath) {
+      unavailable("PRODUCER_NOT_SUPPORTED", activity.id, "The execution contract claim does not bind the selected Flow and Step");
+    }
+    // Historical claims use the captured catalog and bytes, without checking
+    // today's runtime or the inputs that subsequent publications have advanced.
+    readExecutionContractFromView(this, contract, { current: false });
     return projected;
   }
   projectTaskSourceNoChange(activity, projected) {
@@ -917,7 +942,7 @@ export class QueryDetailIndex {
     if (!baseSpecDescriptor) unavailable("SOURCE_GENERATION_NOT_RETAINED", activity.id, "The Gate repair Spec baseline is not retained");
     // The baseline is content-addressed. Identical revision snapshots prove
     // the same bytes; this does not select a historical producer by proximity.
-    this.artifactBytesFor(baseSpecDescriptor);
+    this.readCatalogedArtifact(baseSpecDescriptor);
     const observation = new QuerySpecGateRepairObservation({ audit, state: this.state, activity, descriptor,
       repairRecord: plan.record, baseSpecDescriptor });
     const gate = this.activities.find((entry) => entry.id === observation.sourceEvidence.publicationActivityId

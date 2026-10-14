@@ -167,3 +167,162 @@ or skips). They cover downstream Spec/Acceptance consumption, same-Gate
 re-execution, refusal after concurrent canonical changes and atomic rollback on
 interrupted recovery publication. These runs are limited integration checks;
 the full repository and real-agent suites were not rerun for this integration.
+
+
+## Follow-up alignment at f6c763ee (2026-10-14)
+
+This section supersedes the earlier completion assessment for the refined board
+captured in `.tmp/37a3/board-source.md`. The implementation base is
+`f6c763ee3115d93ace6f675fa4d4e4dfe9538abb`; branch `codex/37a3` and the existing
+`.sennel/worktree/37a3` are retained. No development Flow was started. This
+follow-up does not commit, merge, push, or change the board.
+
+### Decisions and scope
+
+- Draft Questions/Coverage and Spec Review share their existing typed Result
+  factories through dedicated pure modules. All callers use those modules;
+  the former Step modules have no compatibility re-exports.
+- Definition selects new execution, sealed replay, publication replay, or safe
+  stop from read-only handoff observations. `get-next-action`, direct execution,
+  and dispatch use that selection. Existing Step Error recovery, question Await,
+  semantic correction and bounded transport retry keep their existing owners.
+- Only a newly committed Store claim supplies first-start permission. Exact
+  claim replay returns `newlyClaimed: false`. Selection identity includes the
+  execution receipt and response digest, so the same Attempt cannot reuse an
+  earlier generation's selection.
+- An already claimed operation with no exact saved response stops without a
+  new provider, failure Result, Attempt, generation, or budget reset. An exact
+  sealed/publication response is processed through the existing handoff checks
+  without another provider call. A current-operation transport retry carries
+  the previous typed execution contract; it cannot be reconstructed merely by
+  restarting dispatch. Malformed submission transport errors retain the existing
+  one-retry contract only after exact previous-contract validation.
+- Fixture preparation now uses the real Review/Gate command and external
+  provider fakes. A Review checkpoint interruption occurs at the real Store claim
+  boundary, after all production manifest inputs have been declared. Rollback
+  snapshots are taken after legitimate claims and before publication.
+- The broader Query consumer checks exposed an existing Draft Gate gap: generic
+  execution-contract-only Activities were unknown to Query. Query now uses
+  `readExecutionContractFromView(..., { current: false })` with captured bytes,
+  selected Flow/Step/Task and exact selected artifact-path checks. Only a lone
+  execution contract with no semantic references, Result or Review publication
+  is execution-only. Mixed publications retain their existing projection.
+  Unknown fields, foreign Flow/Attempt/generation and semantic references fail
+  closed. No current runtime or filesystem read is introduced into projection.
+
+### Refined acceptance mapping
+
+Counts below describe individual batches, not an additive unique-test total.
+Every log is under `.tmp/37a3/` unless an absolute baseline path is given.
+
+| Board condition | Producer → storage/readback → actual consumer | Evidence |
+| --- | --- | --- |
+| 1. Pure factories and structure | Shared typed factories → existing Result codecs → Step and Query | `query-factory-route-unit.log` (13 pass); `structure-policy-final.log` (7 policy + 2 structure pass). |
+| 2. First execution exactly once | Real checkpoint/claim → Store `newlyClaimed` → conditional provider | `claim-new-replay-final.log` (1 pass), plus normal production and restart scenarios below. Exact replay retains receipt/state/ledger and has no new permission. |
+| 3. Retained claim safely stops | Interrupted real claim → new manager → next-action, direct worker execution and restarted dispatcher | `phase-restart-final.log`; `assertRetainedClaimStops` checks zero provider/dispatch calls and unchanged canonical state, Activity, catalog, receipt, Draft bytes and consumption. |
+| 4. Legal checkpoint/sealed/publication continuation | Real external output → canonical lifecycle → reload → shared selection → registered Step | `continuation-replay-r1.log` (4 pass); `query-questions-frozen-final.log` (1 pass); successful Coverage and Gate/Spec cases in `query-producer-final-r2.log`. |
+| 5. Publication interruption | Fault before/after real publication → preserved publication → restarted terminal consumer | Sealed/publication Gate repair cases in `continuation-replay-r1.log`; Query checkpoint/publication/terminal scenarios prove shared retained entities without provider re-execution. |
+| 6. Exact refusal | Old selection, foreign contract, changed retained body or binding → readback → refusal | `stale-selection-fault-comparison/`; `query-generic-claim-final-r2.log` (16 pass); original Query binding checks in `query-integration-final.log`; `worker-consumers-final.log` (14 pass). |
+| 7. Resolve the original 17 | Product/factory boundary, restart policy, proper fixture producer, fixed catalog/registry inventories | `draft-contract-final.log` (89 pass) and the restart/structure logs. Attribution below preserves the original failure categories. |
+| 8. Existing behavior | Question/repair producer, handoff validator, recovery producer → persistence → later Review/Gate | `review-authority-repair-final.log` (17 pass), `worker-consumers-final.log` (14 pass), `review-failure-boundaries-current.log` (5 pass), and provider-produced Error recovery in `draft-contract-final.log`. |
+| 9. Ten-Step ownership and atomicity | Existing composition, Service and Store → exact settlement/replay → completion connector | `draft-contract-final.log`, `structure-policy-final.log`, and the mandatory Draft/Spec phase scenarios in `phase-restart-final.log`. |
+
+`draft-malformed-submission-targeted.log` additionally proves that an ordinary
+read of malformed saved output is blocked and read-only, while its live bounded
+retry calls the provider twice total, publishes the repaired Draft, and passes
+that revision through real Coverage Review to Draft Gate.
+
+### Failure attribution and regression detection
+
+The unchanged-base measurement recorded 126 selected tests: 109 passed and 17
+failed. The baseline logs are `/tmp/sennel-37a3-current-triage-*-bootstrap.log`.
+Those failures were classified before changing assertions:
+
+- One Query import failure was a production dependency boundary violation.
+- Two restart expectations conflicted with the retained execution claim contract.
+  The same production interruption now verifies the required stop across all
+  three consumers, including unchanged evidence and no additional provider call.
+- Twelve fixture failures lacked the production execution contract/claim and
+  therefore never reached their intended rollback, terminal, or stale boundary.
+  External provider fakes now let the real producers establish those prerequisites.
+- One refusal expectation incorrectly treated a legitimate execution contract as
+  a forbidden catalog mutation. It now checks that exact retained contract and
+  separately refuses terminal artifacts, Result/failure fabrication and retries.
+- One registry expectation omitted the already registered
+  `AcceptanceReviewExecutionHeldResult`. Uniqueness and invalid restoration
+  remain checked.
+
+Additional integration findings were corrected without weakening the existing
+consumer assertions: Query checkpoint fixtures omitted execution-option inputs;
+Spec Review retained its required manifest import after the factory extraction;
+and the generic Draft Gate claim needed the strict Query projection above.
+
+Fault comparisons use gitless copies of source/tests/package only, with
+`GIT_CEILING_DIRECTORIES` preventing parent-repository discovery (`git rev-parse`
+exits 128). No live canonical state or original worktree source is modified.
+`claim-observation-fault.json` and its log record that removing only the shared
+admission observation changes the expected `blocked` directive into
+`execute_step`. `stale-selection-fault-comparison/` records identical tests with
+and without the receipt/response/constructor identity check: the omitted check
+accepts an old selection and fails `assert.rejects`; the restored check passes.
+`malformed-fault-evidence.json` records the same final live-retry test with
+only the authorized transport-error handling removed: dispatch stops after one
+call with `FLOW_ARTIFACT_HANDOFF_INVALID`; the fixed path passes and reaches
+Coverage Review. The frozen test hash, fault patch and git-isolation refusal
+are retained. All three disposable comparison snapshots were removed.
+These demonstrate known-contract regression detection, not exhaustive proof
+against unknown faults.
+
+One intermediate Query run (`query-producer-final-r2.log`) observed different
+snapshot IDs while source files were still being edited. Its Coverage and
+Gate/Spec cases passed. The Questions case retained the same assertions and
+passed after source freeze (`query-questions-frozen-final.log`); the intermediate
+failure is not counted as a product fix or a passing case. Invalid diagnostic
+assertions from development runs are likewise not regression evidence.
+
+### Remaining validation record
+
+The mandatory Draft/Spec production and checkpoint/restart batch completed with
+**30 passed, 0 failed, 0 skipped** (`phase-restart-final.log`). This includes
+normal downstream consumption, quotation/evidence preservation, Draft reopen,
+sealed/publication recovery, retained-claim stop, stale checkpoint refusal,
+legacy recovery, correction bounds, and seven Spec production variants. The
+subsequent malformed-submission case passed separately. The independent
+read-only cross-review found no actionable defect in
+execution-only Query classification, mixed-publication fallback, historical exact
+binding, captured-byte reads, or authorized transport retry. It did not rerun
+broad suites. The shared selection's earlier stale-generation finding and the
+malformed-submission retry finding have executable regression comparisons.
+
+`npm run test:agent` completed with **12 passed, 1 failed, 1 existing opt-in
+historical test skipped** (`agent-regression-current.log`). The real question
+reviewer additionally proposed dropping unresolved retention question `q5`; its
+assertion correctly failed. The prompt builder/parser, direct Agent/provider
+path, test and Draft input builder are byte-identical to the implementation base
+(`agent-quality-failure-attribution.json`). This is an observed unresolved model
+quality failure on an unchanged path, not a demonstrated baseline reproduction
+or a claim of deterministic provider stability. No expected value was weakened
+and no repeated provider run was used to obtain a pass. This additional suite is
+not an acceptance requirement of the refined board; its failure remains an
+explicit limitation of the wider validation.
+The full repository suite is outside the board's required validation. Documentation
+freshness was `stale`; a generated docs rebuild was proposed, and source plus
+measured execution remains authoritative. No external dependencies, host-specific
+callbacks, alternate state authority or lost-response recovery were introduced.
+
+
+### Follow-up final assessment
+
+The refined board's nine acceptance conditions are satisfied. The original
+17 selected failures are resolved through the production, fixture and inventory
+changes described above. No new unconditional retry or false completion is
+introduced. The additional real-provider question-quality failure remains
+unresolved and is explicitly excluded from any all-tests-passed claim.
+
+`current-candidate.json` records the base, branch and SHA-256 hashes of all 24
+changed/new JavaScript files. The final hash comparison found no drift after
+source freeze. `git diff --check` passes. The main checkout, other worktrees,
+existing canonical Flow state and original baseline evidence were not changed.
+All owned test commands have ended. Temporary fault-comparison copies were
+removed; patches, hashes, isolation proof and outcome logs remain for review.
+The branch and worktree are retained, with changes uncommitted.

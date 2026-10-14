@@ -1,23 +1,7 @@
 import { Step } from "../../engine/step.js";
-import {
-  DraftCoverageReviewFindingsResult,
-  DraftCoverageReviewPassedResult,
-  DraftCoverageReviewExecutionRequiredResult,
-  StepErrorResult,
-} from "../../engine/step-result.js";
+import { DraftCoverageReviewExecutionRequiredResult } from "../../engine/step-result.js";
 import { ReviewService } from "../../services/review-service.js";
-import { DraftReviewArtifactDocument } from "../../lib/draft-review-artifacts.js";
-
-/** Pure mapping from typed terminal Review facts to this Step's Result. */
-export function draftCoverageReviewResult(facts) {
-  if (facts instanceof Error) return new StepErrorResult("draft-coverage-review", facts);
-  if (!(facts instanceof DraftReviewArtifactDocument) || facts.phase !== "draft-coverage") {
-    throw new TypeError("draft coverage Review Result requires typed Review facts");
-  }
-  return facts.verdict === "PASS"
-    ? new DraftCoverageReviewPassedResult()
-    : new DraftCoverageReviewFindingsResult();
-}
+import { draftCoverageReviewResult } from "./draft-review-result.js";
 
 /**
  * Review the bound Draft against the original request and decisions.

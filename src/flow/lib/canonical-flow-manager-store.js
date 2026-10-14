@@ -5630,7 +5630,8 @@ export class CanonicalFlowManagerStore {
     const replay = this.#admitStepSettlement({
       resolved, state, binding, stepResult, settlement, receipt,
     });
-    if (replay !== null) return Object.freeze({ state, receipt: replay });
+    if (replay !== null) return Object.freeze({ state, receipt: replay,
+      ...(executionLifecycle.phase === "claimed" ? { newlyClaimed: false } : {}) });
     const result = resultWithDraftStepResult(
       resultFor("done", binding.stepId),
       binding.stepId,
@@ -5645,7 +5646,8 @@ export class CanonicalFlowManagerStore {
       artifactWrites,
       admission: executionContract === null ? undefined : new ExecutionContractPublicationAdmission(executionContract),
     });
-    return Object.freeze({ state: next, receipt });
+    return Object.freeze({ state: next, receipt,
+      ...(executionLifecycle.phase === "claimed" ? { newlyClaimed: true } : {}) });
   }
 
   /** Fresh generic execution admission; an acquired old claim is never new permission. */

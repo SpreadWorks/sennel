@@ -213,11 +213,21 @@ describe("Draft Step Result settlement", () => {
     const claimed = manager.claimDraftStepExecution({
       binding, stepResult: required, settlement, executionBinding, executionClaim: claim,
     });
+    assert.equal(claimed.newlyClaimed, true);
     assert.equal(claimed.receipt.executionLifecycle.phase, "claimed");
     assert.deepEqual(manager.canonicalState(specId).attempt.toJSON(), beforeAttempt);
 
     const reloaded = new FlowManager({ root, mainRoot: root, inWorktree: false });
     const restored = reloaded.draftStepExecutionState({ binding });
+    const beforeClaimReplay = reloaded.canonicalState(specId).toJSON();
+    const activitiesBeforeClaimReplay = reloaded.activityLedger(specId).length;
+    const claimReplay = reloaded.claimDraftStepExecution({
+      binding, stepResult: required, settlement, executionBinding, executionClaim: claim,
+    });
+    assert.equal(claimReplay.newlyClaimed, false);
+    assert.equal(claimReplay.receipt.id, claimed.receipt.id);
+    assert.deepEqual(reloaded.canonicalState(specId).toJSON(), beforeClaimReplay);
+    assert.equal(reloaded.activityLedger(specId).length, activitiesBeforeClaimReplay);
     assert.equal(restored.lifecycle.executionGeneration, 0);
     assert.deepEqual(restored.lifecycle.claim.toJSON(), claim.toJSON());
     assert.deepEqual(restored.flowBinding, {
