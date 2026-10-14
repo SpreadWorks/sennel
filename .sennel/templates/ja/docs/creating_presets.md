@@ -353,7 +353,7 @@ data source 側で通常は触らないが、一部の高度な resolve では�
 | `root` | string | プロジェクトルート絶対パス |
 | `mainRoot` | string | main リポジトリのパス (worktree 配下でも main 側を指す) |
 | `inWorktree` | boolean | worktree 内で実行中か |
-| `paths` | object | 各種パス (srcRoot, managedDir, outputDir, agentWorkDir, logDir, configPath) |
+| `paths` | object | 絶対パス (root, repositoryRoot, srcRoot, managedDir, outputDir, agentWorkDir, temporaryRoot, logDir, configPath)。agentWorkDir は実行先、temporaryRoot と logDir は独立した一時保存先とログ保存先。 |
 | `config` | object | `.sennel/config.json` の読み込み結果 (未初期化時は null) |
 | `lang` | string | `config.lang` (ドキュメント言語) |
 | `i18n` | function | 翻訳関数 |

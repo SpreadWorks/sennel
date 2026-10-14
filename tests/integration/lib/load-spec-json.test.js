@@ -1,14 +1,14 @@
+import { createTmpDir as createTestDirectory } from "../../support/builders/tmp-dir.js";
 import { afterEach, describe, it } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
-import os from "node:os";
 import { loadSpecJson } from "../../../src/lib/spec-json.js";
 
 const specDirectories = [];
 
 function mkSpecDir() {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "spec-json-test-"));
+  const directory = createTestDirectory("spec-json-test-");
   specDirectories.push(directory);
   return directory;
 }

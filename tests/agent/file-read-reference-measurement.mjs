@@ -1,10 +1,10 @@
+import { createTmpDir as createTestDirectory } from "../support/builders/tmp-dir.js";
 // Explicit real-provider measurement: node tests/agent/file-read-reference-measurement.mjs
 // Deliberately outside npm test:agent discovery; results are written even on failure.
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { Agent } from "../../src/lib/agent.js";
@@ -12,16 +12,20 @@ import { loadConfig } from "../../src/lib/config.js";
 import { Logger } from "../../src/lib/log.js";
 import { ProviderRegistry } from "../../src/lib/provider.js";
 import { checkGuardrail } from "../../src/flow/lib/run-gate.js";
+import { TemporaryPaths } from "../../src/lib/temporary-paths.js";
 
 const sourceRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const config = loadConfig(sourceRoot);
-const reportPath = process.env.SENNEL_FILE_REFERENCE_REPORT ?? "/tmp/sennel-6928-real-ai.json";
+const temporaryPaths = new TemporaryPaths(sourceRoot);
+const reportPath = temporaryPaths.validate(process.env.SENNEL_FILE_REFERENCE_REPORT
+  ?? path.join(temporaryPaths.operator(), "sennel-6928-real-ai.json"));
+temporaryPaths.ensureDirectory(path.dirname(reportPath));
 const digest = (bytes) => crypto.createHash("sha256").update(bytes).digest("hex");
 const report = { startedAt: new Date().toISOString(), sourceRoot, hostCwd: process.cwd(),
   commandId: "flow.spec.gate", cacheMode: "bypass", trials: [] };
 let failed = false;
 for (const phase of ["draft", "spec"]) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), `sennel-6928-${phase}-`));
+  const root = createTestDirectory(`sennel-6928-${phase}-`);
   const initialCwd = path.join(root, "agent-initial-cwd");
   const trial = { phase, root, initialCwd,
     responseCalls: [], toolCommands: [], promptMetrics: [] };

@@ -1,3 +1,4 @@
+import { createTmpDir as createTestDirectory } from "../../support/builders/tmp-dir.js";
 /**
  * tests/integration/flow/test-headers.test.js
  *
@@ -8,7 +9,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 
 const moduleUrl = new URL("../../../src/flow/lib/test-headers.js", import.meta.url);
@@ -18,7 +18,7 @@ async function loadModule() {
 }
 
 function withTmpDir(fn) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "test-headers-"));
+  const dir = createTestDirectory("test-headers-");
   try {
     return fn(dir);
   } finally {

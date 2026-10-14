@@ -1,7 +1,7 @@
+import { createTmpDir as createTestDirectory } from "../../support/builders/tmp-dir.js";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import RunSyncCommand from "../../../src/flow/lib/run-sync.js";
 import RunFinalizeSyncCommand from "../../../src/flow/lib/run-finalize-sync.js";
@@ -13,7 +13,7 @@ const config = { type: "base", lang: "en", docs: { languages: ["en"], defaultLan
   chapters: [{ chapter: "overview.md", desc: "Runtime documentation" }], scan: { include: ["input.txt"], exclude: [] } };
 
 function fixture(t) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "docs-sync-runtime-"));
+  const root = createTestDirectory("docs-sync-runtime-");
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const templates = path.join(root, ".sennel/templates/en/docs");
   fs.mkdirSync(templates, { recursive: true });

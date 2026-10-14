@@ -1,8 +1,8 @@
+import { createTmpDir as createTestDirectory } from "../support/builders/tmp-dir.js";
 import { CURRENT_FLOW_SCHEMA_REVISION } from "../../src/lib/flow-schema-revision.js";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { describe, it } from "node:test";
 
@@ -15,7 +15,7 @@ import {
 import { container } from "../../src/lib/container.js";
 
 function gitRepository() {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "sennel-upgrade-active-flows-"));
+  const root = createTestDirectory("sennel-upgrade-active-flows-");
   execFileSync("git", ["init", "--initial-branch=main"], { cwd: root, stdio: "ignore" });
   fs.writeFileSync(path.join(root, "README.md"), "fixture\n");
   execFileSync("git", ["add", "README.md"], { cwd: root, stdio: "ignore" });
@@ -55,7 +55,7 @@ describe("upgrade dry-run evidence", () => {
 
   it("does not attach a main-root upgrade to a worktree Flow evidence record", () => {
     const mainRoot = gitRepository();
-    const worktreeRoot = fs.mkdtempSync(path.join(os.tmpdir(), "sennel-upgrade-worktree-"));
+    const worktreeRoot = createTestDirectory("sennel-upgrade-worktree-");
     const worktreeAlias = `${worktreeRoot}-alias`;
     const flowManager = {
       resolveWorktreePaths() { return { worktreePath: worktreeRoot }; },
@@ -177,8 +177,8 @@ describe("upgrade dry-run evidence", () => {
 
   it("uses canonical managers for every active Flow when invoked inside one worktree", () => {
     const mainRoot = gitRepository();
-    const selfRoot = fs.mkdtempSync(path.join(os.tmpdir(), "sennel-upgrade-self-worktree-"));
-    const otherRoot = fs.mkdtempSync(path.join(os.tmpdir(), "sennel-upgrade-other-worktree-"));
+    const selfRoot = createTestDirectory("sennel-upgrade-self-worktree-");
+    const otherRoot = createTestDirectory("sennel-upgrade-other-worktree-");
     const states = new Map([
       ["001-self", activeState({ specId: "001-self", runId: "run-self", mode: "worktree", worktreePath: selfRoot })],
       ["002-other", activeState({ specId: "002-other", runId: "run-other", mode: "worktree", worktreePath: otherRoot })],

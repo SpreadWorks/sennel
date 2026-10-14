@@ -5,6 +5,7 @@
  * requiresFlow: false (can run independently).
  */
 
+import { flowTemporaryRoot } from "./flow-context.js";
 import { PKG_DIR } from "../../lib/cli.js";
 import { runCmd, assertOk } from "../../lib/process.js";
 import { RuntimeChildExecution } from "../../lib/runtime-package.js";
@@ -25,9 +26,10 @@ export class RunSyncCommand extends FlowCommand {
     const dryRun = ctx.dryRun || false;
 
     const docsScript = path.join(PKG_DIR, "docs.js");
+    const childOptions = { cwd: root, repositoryRoot: ctx.repositoryRoot || ctx.mainRoot || root, temporaryRoot: flowTemporaryRoot(ctx) };
 
     // Step 1: build
-    const buildRes = RuntimeChildExecution.runSync(docsScript, ["build"], { cwd: root }, this.runCommand);
+    const buildRes = RuntimeChildExecution.runSync(docsScript, ["build"], childOptions, this.runCommand);
     const buildOutput = (buildRes.stdout || "").trim();
 
     if (!buildRes.ok) {
@@ -40,7 +42,7 @@ export class RunSyncCommand extends FlowCommand {
     }
 
     // Step 2: review
-    const reviewRes = RuntimeChildExecution.runSync(docsScript, ["review"], { cwd: root }, this.runCommand);
+    const reviewRes = RuntimeChildExecution.runSync(docsScript, ["review"], childOptions, this.runCommand);
     const reviewOutput = (reviewRes.stdout || "").trim();
 
     if (!reviewRes.ok) {

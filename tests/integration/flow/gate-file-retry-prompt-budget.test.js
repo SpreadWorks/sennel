@@ -1,7 +1,7 @@
+import { createTmpDir as createTestDirectory } from "../../support/builders/tmp-dir.js";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { it } from "node:test";
 
@@ -40,7 +40,7 @@ function inputPath(userPrompt) {
 for (const phase of ["draft", "spec"]) {
   for (const boundary of ["logical", "projected"]) {
     it(`recovers ${phase} file-read failures when the planned ${boundary} request nearly fills its limit`, async (t) => {
-      const root = fs.mkdtempSync(path.join(os.tmpdir(), "gate-retry-budget-"));
+      const root = createTestDirectory("gate-retry-budget-");
       t.after(() => fs.rmSync(root, { recursive: true, force: true }));
       const canonical = { requirements: [{ id: "R-1", desc: `HEAD ${"あ".repeat(130000)} TAIL` }], tasks: [] };
       const source = `${JSON.stringify(canonical, null, 2)}\n`;

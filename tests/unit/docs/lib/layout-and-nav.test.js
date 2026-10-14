@@ -1,8 +1,8 @@
+import { createTmpDir as createTestDirectory } from "../../../support/builders/tmp-dir.js";
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
-import os from "node:os";
 import { container, initContainer } from "../../../../src/lib/container.js";
 import registerDocsSource from "../../../../src/data/docs.js";
 import { parseBlocks } from "../../../../src/docs/lib/directive-parser.js";
@@ -14,7 +14,7 @@ function setupDocsSource(t, chapters) {
   initContainer();
   const DocsSource = registerDocsSource(container);
   const ds = new DocsSource();
-  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "nav-test-"));
+  const tmpDir = createTestDirectory("nav-test-");
   const docsDir = path.join(tmpDir, "docs");
   fs.mkdirSync(docsDir, { recursive: true });
   for (const chapter of chapters) {

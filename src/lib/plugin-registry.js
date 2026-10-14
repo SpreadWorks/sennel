@@ -1,6 +1,7 @@
 import fs from "fs";
 import path from "path";
 import crypto from "crypto";
+import { TemporaryPaths } from "./temporary-paths.js";
 import { fileURLToPath } from "url";
 import { createPluginAgentApi } from "./agent.js";
 import { repoRoot } from "./cli.js";
@@ -818,7 +819,8 @@ export function findPluginCandidates(root) {
 }
 
 function materializeCommit(sourceRoot, commit, root) {
-  const tmp = fs.mkdtempSync(path.join(managedDir(root), "tmp-plugin-"));
+  const temporaryPaths = new TemporaryPaths(root);
+  const tmp = temporaryPaths.create(temporaryPaths.runtime("plugin-materialization"), "tmp-plugin-");
   const archivePath = path.join(tmp, "package.tar");
   const archive = runCmd("git", ["archive", "--format=tar", "-o", archivePath, commit], { cwd: sourceRoot, maxBuffer: 50 * 1024 * 1024 });
   if (!archive.ok) {

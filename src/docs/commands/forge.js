@@ -19,7 +19,7 @@ import { populateFromAnalysis } from "./data.js";
 import { textFillFromAnalysis } from "./text.js";
 import { mapWithConcurrency } from "../lib/concurrency.js";
 import { parseArgs } from "../../lib/cli.js";
-import { managedOutputDir, resolveConcurrency, resolvePromptCharacterLimit, resolveWorkDir } from "../../lib/config.js";
+import { managedOutputDir, resolveConcurrency, resolvePromptCharacterLimit } from "../../lib/config.js";
 import { Command } from "../../lib/command.js";
 import { resolveDocsContext } from "../lib/docs-context.js";
 import { runDocumentationAiCommand, rethrowDocumentationAiStop } from "../lib/documentation-ai-execution.js";
@@ -31,6 +31,7 @@ import { translate } from "../../lib/i18n.js";
 import { EXIT_ERROR } from "../../lib/constants.js";
 import { loadSpecJson, specJsonToPromptText } from "../../lib/spec-json.js";
 import { AtomicFile } from "../../lib/atomic-file.js";
+import { TemporaryPaths } from "../../lib/temporary-paths.js";
 import { ForgeInputReferencePromptElement } from "../lib/prompt-elements.js";
 import {
   summaryToText,
@@ -166,9 +167,11 @@ async function invokeAgent(agent, prompt, { systemPrompt, verbose, label, maxCha
 export function materializeForgeInputReference(root, config, input, { persist = true } = {}) {
   const serialized = JSON.stringify(input, null, 2) + "\n";
   const digest = crypto.createHash("sha256").update(serialized).digest("hex");
-  const inputDir = path.join(resolveWorkDir(root, config), "forge-inputs");
+  const temporaryPaths = new TemporaryPaths(root);
+  const inputDir = temporaryPaths.runtime("forge-inputs");
   const inputPath = path.join(inputDir, `${digest}.json`);
-  if (persist) fs.mkdirSync(inputDir, { recursive: true });
+  if (persist) temporaryPaths.ensureDirectory(inputDir);
+  TemporaryPaths.assertRegularFile(inputPath);
   if (fs.existsSync(inputPath)) {
     const current = fs.readFileSync(inputPath, "utf8");
     if (current !== serialized) throw new Error(`forge input digest collision: ${inputPath}`);

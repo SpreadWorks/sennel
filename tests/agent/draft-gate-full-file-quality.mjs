@@ -4,12 +4,14 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { TemporaryPaths } from "../../src/lib/temporary-paths.js";
 import { AtomicFile } from "../../src/lib/atomic-file.js";
 import { ensureBaselineArchive, runGateTrial, sha256 } from "./gate-quality-comparison.mjs";
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const baselineRevision = "aea1f13cf1a3556444aa50d7a8b6afc1bc3a168a";
-const runRoot = path.join(projectRoot, ".tmp/draft-gate-full-file-quality");
+const temporaryPaths = new TemporaryPaths(projectRoot);
+const runRoot = temporaryPaths.ensureDirectory(path.join(temporaryPaths.operator(), "draft-gate-full-file-quality"));
 const fixtureRoot = path.join(runRoot, "fixtures");
 const manifestPath = path.join(projectRoot, "tests/agent/draft-gate-full-file-quality.manifest.json");
 const baselineRoot = path.join(runRoot, "baseline");

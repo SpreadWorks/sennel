@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import os from "node:os";
+import { TemporaryPaths } from "./temporary-paths.js";
 import { fileURLToPath } from "node:url";
 import { RuntimePackageLocation } from "./runtime-package-location.js";
 import { RuntimePackageIdentity } from "./runtime-package-identity.js";
@@ -83,9 +83,10 @@ export function listRuntimeResources(input, { withFileTypes = false } = {}) {
 /** One direct child inherits the active runtime through an unlinked file descriptor. */
 export class RuntimeChildExecution {
   #descriptor;
-  constructor({ environment = process.env } = {}) {
+  constructor({ root = process.cwd(), temporaryRoot = null, environment = process.env } = {}) {
     const runtime = currentRuntimePackage();
-    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "sennel-runtime-child-"));
+    const temporaryPaths = new TemporaryPaths(root);
+    const directory = temporaryPaths.create(temporaryRoot ?? temporaryPaths.runtime("runtime-delivery"), "child-");
     const file = path.join(directory, "delivery.json");
     try {
       childDelivery ??= JSON.stringify({ root: location.root, identity: runtime.toJSON(), resources: [...resources] });
@@ -105,7 +106,7 @@ export class RuntimeChildExecution {
    * fresh delivery descriptor because the child consumes its shared file offset.
    */
   static runSync(script, args, options = {}, runCommand = runCmd) {
-    const child = new RuntimeChildExecution({ environment: options.env });
+    const child = new RuntimeChildExecution({ root: options.repositoryRoot || options.cwd || process.cwd(), temporaryRoot: options.temporaryRoot, environment: options.env });
     try { return runCommand(process.execPath, [script, ...args], child.options(options)); }
     finally { child.close(); }
   }

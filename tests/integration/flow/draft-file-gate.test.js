@@ -1,8 +1,8 @@
+import { createTmpDir as createTestDirectory } from "../../support/builders/tmp-dir.js";
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import { EventEmitter } from "node:events";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { it, mock } from "node:test";
 
@@ -25,7 +25,7 @@ function filePathFromPrompt(prompt) {
 }
 
 async function withRoot(callback) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "draft-file-gate-"));
+  const root = createTestDirectory("draft-file-gate-");
   try { return await callback(root); } finally { fs.rmSync(root, { recursive: true, force: true }); }
 }
 
@@ -265,7 +265,7 @@ it("removes its owned directory when the atomic Draft file write fails", async (
     injected.mock.restore();
   }
   assert.equal(calls, 0);
-  assert.deepEqual(fs.readdirSync(path.join(root, ".sennel", "agent-work")), []);
+  assert.deepEqual(fs.readdirSync(path.join(root, ".tmp", "runtime", "gate")), []);
 }));
 
 it("removes the complete Draft file after a provider exception", async () => withRoot(async (root) => {
@@ -292,7 +292,7 @@ it("refuses a single rule that cannot fit with the file reference before any pro
   assert.equal(result.passed, false);
   assert.equal(result.failureCode, "PROMPT_ELEMENT_TOO_LARGE");
   assert.equal(calls, 0);
-  assert.deepEqual(fs.readdirSync(path.join(root, ".sennel", "agent-work")), []);
+  assert.deepEqual(fs.readdirSync(path.join(root, ".tmp", "runtime", "gate")), []);
 }));
 
 it("changes the file reference digest when Draft bytes change", async () => withRoot(async (root) => {
@@ -313,19 +313,19 @@ it("changes the file reference digest when Draft bytes change", async () => with
 }));
 
 it("fails safely when the Draft file cannot be created", async () => withRoot(async (root) => {
-  fs.mkdirSync(path.join(root, ".sennel"));
-  fs.writeFileSync(path.join(root, ".sennel", "agent-work"), "blocked");
+  fs.mkdirSync(path.join(root, ".tmp", "runtime"), { recursive: true });
+  fs.writeFileSync(path.join(root, ".tmp", "runtime", "gate"), "blocked");
   let calls = 0;
   await assert.rejects(checkGuardrail(root, "x".repeat(130000), "draft", undefined, [], {
     loadGuardrails: () => [rule("D1")],
     agent: { resolve: () => true, async call() { calls += 1; return "{}"; } },
   }), (error) => {
     assertDraftFileAdmissionRefusal(error);
-    assert.equal(error.cause.cause.code, "EEXIST");
+    assert.equal(error.cause.cause.code, "REAL_DIRECTORY_AUTHORITY_AUTHORITY_INVALID");
     return true;
   });
   assert.equal(calls, 0);
-  assert.equal(fs.readFileSync(path.join(root, ".sennel", "agent-work"), "utf8"), "blocked");
+  assert.equal(fs.readFileSync(path.join(root, ".tmp", "runtime", "gate"), "utf8"), "blocked");
 }));
 
 it("recovers a Draft read failure on the fourth provider attempt and retains every response", async () => withRoot(async (root) => {

@@ -45,9 +45,9 @@ function finalArtifact(flowManager, snapshot) {
   return { artifact, descriptor, relativePath: document.relativePath };
 }
 
-export function captureFinalRegressionChangedSnapshotDigest({ root, relativeSpecFile } = {}) {
+export function captureFinalRegressionChangedSnapshotDigest({ root, relativeSpecFile, repositoryRoot = root, specId = null, runId = null } = {}) {
   const pathspecExcludes = new RepairArtifactRegistry(relativeSpecFile).gitPathspecExcludes();
-  return FinalRegressionRepositoryBinding.capture(root, { pathspecExcludes }).worktreeSha256;
+  return FinalRegressionRepositoryBinding.capture(root, { pathspecExcludes, repositoryRoot, specId, runId }).worktreeSha256;
 }
 
 /**

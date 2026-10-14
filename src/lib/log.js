@@ -23,7 +23,7 @@
  */
 
 import crypto from "crypto";
-import fs from "fs";
+import { TemporaryPaths } from "./temporary-paths.js";
 import path from "path";
 
 import { maskSensitive } from "./log-masking.js";
@@ -88,10 +88,10 @@ function extractCaller() {
 /** Append a JSON object as one line to the given file with masking. */
 async function appendJsonlMasked(file, obj, trustedRoots) {
   try {
-    await fs.promises.mkdir(path.dirname(file), { recursive: true });
     const masked = maskSensitive(obj, { trustedRoots });
-    await fs.promises.appendFile(file, JSON.stringify(masked) + "\n", "utf8");
+    TemporaryPaths.appendFile(file, JSON.stringify(masked) + "\n");
   } catch (err) {
+    if (TemporaryPaths.isBoundaryError(err)) throw err;
     process.stderr.write(`[sennel] log write failed: ${err.message}\n`);
   }
 }
@@ -100,11 +100,11 @@ async function appendJsonlMasked(file, obj, trustedRoots) {
 async function writePromptFileMasked(promptDir, requestId, payload, trustedRoots) {
   const file = path.join(promptDir, `${requestId}.json`);
   try {
-    await fs.promises.mkdir(promptDir, { recursive: true });
     const masked = maskSensitive(payload, { trustedRoots });
-    await fs.promises.writeFile(file, JSON.stringify(masked, null, 2) + "\n", "utf8");
+    TemporaryPaths.writeFile(file, JSON.stringify(masked, null, 2) + "\n");
     return file;
   } catch (err) {
+    if (TemporaryPaths.isBoundaryError(err)) throw err;
     process.stderr.write(`[sennel] prompt file write failed: ${err.message}\n`);
     return null;
   }
@@ -142,6 +142,10 @@ export class Logger {
     this.#flowManager = flowManager ?? null;
     this.#flowAttribution = new FlowAttributionPolicy(flowAttribution);
     this.#cwd = cwd ?? null;
+    if (this.#enabled) {
+      TemporaryPaths.validateRealDirectory(logDir);
+      TemporaryPaths.assertRegularFile(this.#logFiles().jsonl);
+    }
   }
 
   get enabled() {
@@ -162,7 +166,7 @@ export class Logger {
 
   #track(p) {
     this.#pending.add(p);
-    p.finally(() => this.#pending.delete(p));
+    p.then(() => this.#pending.delete(p), () => this.#pending.delete(p));
     return p;
   }
 
@@ -191,11 +195,11 @@ export class Logger {
   }
 
   #appendJsonl(file, obj) {
-    return appendJsonlMasked(file, obj, this.#trustedRoots());
+    return appendJsonlMasked(file, obj, [...this.#trustedRoots(), path.dirname(file)]);
   }
 
   #writePromptFile(promptDir, requestId, payload) {
-    return writePromptFileMasked(promptDir, requestId, payload, this.#trustedRoots());
+    return writePromptFileMasked(promptDir, requestId, payload, [...this.#trustedRoots(), promptDir]);
   }
 
   /**

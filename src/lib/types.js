@@ -80,7 +80,7 @@
 /**
  * @typedef {Object} LogsConfig
  * @property {boolean} [enabled] - Enable unified JSONL logging (default: false)
- * @property {string}  [dir]     - Log output directory (default: {agent.workDir}/logs)
+ * @property {string}  [dir]     - Log output directory (default: .tmp/logs; independent of agent execution directory)
  */
 
 /**

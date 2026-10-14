@@ -353,7 +353,7 @@ Data sources rarely touch these directly, but some advanced resolve methods refe
 | `root` | string | Absolute project root path |
 | `mainRoot` | string | Path of the main repo (points to main even from inside a worktree) |
 | `inWorktree` | boolean | Whether executing inside a worktree |
-| `paths` | object | Various paths (srcRoot, managedDir, outputDir, agentWorkDir, logDir, configPath) |
+| `paths` | object | Absolute paths (root, repositoryRoot, srcRoot, managedDir, outputDir, agentWorkDir, temporaryRoot, logDir, configPath). agentWorkDir selects execution; temporaryRoot and logDir select independent scratch and log storage. |
 | `config` | object | Loaded `.sennel/config.json` (null when uninitialized) |
 | `lang` | string | `config.lang` (documentation language) |
 | `i18n` | function | Translation function |

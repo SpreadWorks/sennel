@@ -13,6 +13,7 @@ import { AcceptanceEvidenceExecutionPlan } from "../../../src/flow/lib/run-accep
 import { PromptExecutionLimit } from "../../../src/lib/prompt-batching.js";
 import { stableArtifactViewJson } from "../../../src/flow/lib/artifact-view-fingerprint.js";
 import { SeedWorkRoot } from "../../support/builders/seed-work-root.js";
+import { createTmpDir, removeTmpDir } from "../../support/builders/tmp-dir.js";
 import { currentRuntimePackage } from "../../../src/lib/runtime-package.js";
 import { activateNonBlockingPolicy, decisionContextForActiveFlow, recordNonBlockingDecision } from "../../../src/flow/lib/nonblocking.js";
 import { registerAcceptanceExecutionSettlementCases } from "./acceptance-execution-settlement.contract.js";
@@ -213,7 +214,7 @@ describe("Acceptance durable production execution", () => {
     };
     t.after(() => { manager.readExecutionContract = readContract; });
     const result = await scenario.runRegistered("acceptance-review");
-    if (result.result !== "ok") fs.writeFileSync(path.resolve(".tmp/4cca/acceptance-map-resume-diagnostic.json"), JSON.stringify({
+    if (result.result !== "ok") fs.writeFileSync(path.join(scenario.root, "acceptance-map-resume-diagnostic.json"), JSON.stringify({
       initialFingerprint: initialContext.fingerprint, resumedFingerprint: resumedContext.fingerprint,
       initialEvidence, resumedEvidence: stableArtifactViewJson(resumedContext.evidence),
       savedContract: checkpoint.executionContract.toJSON(), expectedContracts, savedPlan: map.plan.toJSON(),
@@ -276,24 +277,23 @@ describe("Acceptance durable production execution", () => {
           evidenceRefs: [evidence.find((entry) => entry.findingId === findingId).sourceRef] })) });
       },
     };
-    const seedFile = path.resolve(".tmp/4cca/acceptance-deferred-boundary-seed.json");
-    const cached = fs.existsSync(seedFile) ? JSON.parse(fs.readFileSync(seedFile, "utf8")) : null;
-    let boundary = cached && fs.existsSync(cached.root) ? cached : null;
-    if (boundary === null) {
-      const producer = AcceptancePhaseScenario.create(t, options);
-      await producer.advanceTo("T1-gate");
-      await producer.executeCurrent(); producer.reload();
-      await producer.advanceTo("T1-impl");
-      await producer.advanceTo("T1-gate");
-      await producer.executeCurrent(); producer.reload();
-      const strict = await producer.next();
-      assert.equal(strict.directive.kind, "await_user_decision");
-      assert.deepEqual(strict.directive.actionPrompt.choices.map((entry) => entry.actionId), ["KEEP_STRICT_FLOW", "ENABLE_NONBLOCKING"]);
-      const copy = new SeedWorkRoot(producer.root, { prefix: "sennel-acceptance-deferred-boundary-", parent: path.dirname(seedFile) });
-      boundary = { root: copy.root, specId: producer.specId, frontier: "T1-gate", snapshot: producer.snapshot(),
-        runtimeRevision: currentRuntimePackage().revision };
-      fs.writeFileSync(seedFile, JSON.stringify(boundary, null, 2));
-    }
+    const seedRoot = createTmpDir("sennel-acceptance-deferred-fixture-");
+    t.after(() => removeTmpDir(seedRoot));
+    const seedFile = path.join(seedRoot, "acceptance-deferred-boundary-seed.json");
+    const producer = AcceptancePhaseScenario.create(t, options);
+    await producer.advanceTo("T1-gate");
+    await producer.executeCurrent(); producer.reload();
+    await producer.advanceTo("T1-impl");
+    await producer.advanceTo("T1-gate");
+    await producer.executeCurrent(); producer.reload();
+    const producedStrict = await producer.next();
+    assert.equal(producedStrict.directive.kind, "await_user_decision");
+    assert.deepEqual(producedStrict.directive.actionPrompt.choices.map((entry) => entry.actionId), ["KEEP_STRICT_FLOW", "ENABLE_NONBLOCKING"]);
+    const copy = new SeedWorkRoot(producer.root, { prefix: "sennel-acceptance-deferred-boundary-", parent: seedRoot });
+    t.after(() => copy.cleanup());
+    fs.writeFileSync(seedFile, JSON.stringify({ root: copy.root, specId: producer.specId, frontier: "T1-gate", snapshot: producer.snapshot(),
+      runtimeRevision: currentRuntimePackage().revision }, null, 2));
+    const boundary = JSON.parse(fs.readFileSync(seedFile, "utf8"));
     const scenario = AcceptancePhaseScenario.fromSeed(t, { ...boundary, options });
     const strict = await scenario.next();
     assert.equal(strict.directive.kind, "await_user_decision");

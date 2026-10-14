@@ -186,7 +186,7 @@ function crashAfterJournalWrite(root, writeNumber) {
     };
     new LayoutMigrationRevisionOne(${JSON.stringify(root)}, { logger: { log() {}, error() {} } }).run();
   `;
-  return spawnSync(process.execPath, ["--input-type=module", "-e", script], {
+  return spawnSync(process.execPath, ["--import", pathToFileURL(CLI).href, "--input-type=module", "-e", script], {
     cwd: root,
     encoding: "utf8",
   });
@@ -209,7 +209,7 @@ function crashAfterTemporaryManagedWrite(root) {
     };
     new LayoutMigrationRevisionOne(${JSON.stringify(root)}, { logger: { log() {}, error() {} } }).run();
   `;
-  return spawnSync(process.execPath, ["--input-type=module", "-e", script], {
+  return spawnSync(process.execPath, ["--import", pathToFileURL(CLI).href, "--input-type=module", "-e", script], {
     cwd: root,
     encoding: "utf8",
   });
@@ -230,7 +230,7 @@ function crashAfterCanonicalRenameBeforeJournalAdvance(root) {
     };
     new LayoutMigrationRevisionOne(${JSON.stringify(root)}, { logger: { log() {}, error() {} } }).run();
   `;
-  return spawnSync(process.execPath, ["--input-type=module", "-e", script], {
+  return spawnSync(process.execPath, ["--import", pathToFileURL(CLI).href, "--input-type=module", "-e", script], {
     cwd: root,
     encoding: "utf8",
   });
@@ -261,9 +261,11 @@ function createOldV6Journal(root, { sourceName, phase, canonical = false, partia
   const temp = path.join(root, ".tmp");
   const newJournalPath = path.join(temp, "sennel-migrate-layout.json");
   const current = JSON.parse(fs.readFileSync(newJournalPath, "utf8"));
-  const oldRelative = current.stagingRelative.replace("sennel-migrate-layout-", "senrail-upgrade-migrate-");
+  const oldRelative = ".tmp/senrail-upgrade-migrate-00000000-0000-4000-8000-000000000000";
   const oldStaging = path.join(root, oldRelative);
   fs.renameSync(path.join(root, current.stagingRelative), oldStaging);
+  fs.rmdirSync(path.dirname(path.join(root, current.stagingRelative)));
+  fs.rmdirSync(path.join(temp, "runtime"));
   const staged = path.join(oldStaging, ".senti");
   fs.renameSync(path.join(oldStaging, "managed-directory"), staged);
   if (sourceName === ".senti" && ["legacy-backed-up", "placed-senti", "metadata-updated"].includes(phase)) {
@@ -310,7 +312,7 @@ function crashDuringLegacyBackupRemoval(root) {
     };
     new LayoutMigrationRevisionOne(${JSON.stringify(root)}, { logger: { log() {}, error() {} } }).run();
   `;
-  return spawnSync(process.execPath, ["--input-type=module", "-e", script], {
+  return spawnSync(process.execPath, ["--import", pathToFileURL(CLI).href, "--input-type=module", "-e", script], {
     cwd: root,
     encoding: "utf8",
   });
@@ -757,6 +759,7 @@ describe("migrate layout --to 1", () => {
     const journal = JSON.parse(fs.readFileSync(path.join(root, ".tmp", "sennel-migrate-layout.json"), "utf8"));
     const preserved = path.join(root, journal.stagingRelative, "concurrent-managed-write", "concurrent.txt");
     assert.equal(fs.readFileSync(preserved, "utf8"), "crash writer data\n");
+    assert.equal(path.dirname(path.join(root, journal.stagingRelative)), path.join(root, ".tmp", "runtime", "migrate-layout"));
   });
 
   it("completes cleanup after a crash following the canonical rename but before journal advancement", () => {
@@ -974,23 +977,22 @@ describe("migrate layout --to 1", () => {
     assert.deepEqual(fs.readdirSync(path.join(root, ".tmp")), ["sennel-migrate-layout.json"]);
   });
 
-  it("does not delete a staging path created by another process during mkdir", () => {
+  it("does not delete a staging path created by another process during directory allocation", () => {
     const root = createTmpDir("sennel-migrate-layout-staging-mkdir-race-");
     roots.push(root);
     seedLegacyProject(root, ".senti");
     const beforeConfig = fs.readFileSync(path.join(root, ".senti", "config.json"));
-    const originalMkdir = fs.mkdirSync;
+    const originalMkdtemp = fs.mkdtempSync;
     let competingPath = null;
-    fs.mkdirSync = (target, options) => {
+    fs.mkdtempSync = (target, options) => {
       if (!competingPath && path.basename(String(target)).startsWith("sennel-migrate-layout-")) {
-        competingPath = String(target);
-        originalMkdir(competingPath, options);
+        competingPath = originalMkdtemp(target, options);
         fs.writeFileSync(path.join(competingPath, "owned-by-another-process.txt"), "keep\n");
         const error = new Error("injected staging mkdir collision");
         error.code = "EEXIST";
         throw error;
       }
-      return originalMkdir(target, options);
+      return originalMkdtemp(target, options);
     };
     try {
       assert.throws(
@@ -998,7 +1000,7 @@ describe("migrate layout --to 1", () => {
         /injected staging mkdir collision/,
       );
     } finally {
-      fs.mkdirSync = originalMkdir;
+      fs.mkdtempSync = originalMkdtemp;
     }
 
     assert.notEqual(competingPath, null);
@@ -1077,7 +1079,7 @@ describe("migrate layout --to 1", () => {
       new LayoutMigrationRevisionOne(root, { logger: { log() {}, error() {} } }).run();
     `;
 
-    const first = spawnSync(process.execPath, ["--input-type=module", "-e", script], {
+    const first = spawnSync(process.execPath, ["--import", pathToFileURL(CLI).href, "--input-type=module", "-e", script], {
       cwd: root,
       encoding: "utf8",
     });
@@ -1245,9 +1247,10 @@ describe("migrate layout --to 1", () => {
         && path.resolve(String(target)) === path.join(root, ".tmp", "sennel-migrate-layout.json")
         && (flags & fs.constants.O_EXCL)) {
         injected = true;
-        const stagingName = fs.readdirSync(path.join(root, ".tmp"))
+        const stagingParent = path.join(root, ".tmp", "runtime", "migrate-layout");
+        const stagingName = fs.readdirSync(stagingParent)
           .find((name) => name.startsWith("sennel-migrate-layout-"));
-        fs.writeFileSync(path.join(root, ".tmp", stagingName, ".gitignore"), "tampered\n");
+        fs.writeFileSync(path.join(stagingParent, stagingName, ".gitignore"), "tampered\n");
       }
       return originalOpen(target, flags, ...rest);
     };

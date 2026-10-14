@@ -1,3 +1,5 @@
+import { flowTemporaryRoot } from "./flow-context.js";
+import { TemporaryPaths } from "../../lib/temporary-paths.js";
 import { CURRENT_FLOW_SCHEMA_REVISION } from "../../lib/flow-schema-revision.js";
 /** Explicit human display for one closed canonical Flow artifact view. */
 
@@ -221,6 +223,8 @@ export default class GetArtifactCommand extends FlowCommand {
         const localizer = viewService.renderer.localizer;
         const summary = await new ArtifactViewSummaryService({
           agent: this.container.get("agent"),
+          temporaryRoot: request.historical
+            ? new TemporaryPaths(root).runtime("artifact-summary") : flowTemporaryRoot(ctx),
           cache: full.cacheStore,
           lang: full.fullView.language,
           i18nRevision: full.fullView.i18nRevision,

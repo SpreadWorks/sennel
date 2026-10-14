@@ -1,6 +1,6 @@
+import { createTmpDir as createTestDirectory } from "../../support/builders/tmp-dir.js";
 import assert from "node:assert/strict";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { describe, it } from "node:test";
 
@@ -85,7 +85,7 @@ const taskScopedSpec = {
 };
 
 function assertTaskCanonicalDrift({ label, mutate }) {
-  const mainRoot = fs.mkdtempSync(path.join(os.tmpdir(), "sennel-task-canonical-drift-"));
+  const mainRoot = createTestDirectory("sennel-task-canonical-drift-");
   const executionRoot = path.join(mainRoot, "execution");
   fs.mkdirSync(executionRoot, { recursive: true });
   const manager = new FlowManager({ root: executionRoot, mainRoot, inWorktree: true });
@@ -382,7 +382,7 @@ describe("canonical Task context", () => {
   });
 
   it("accepts a sealed task implementation handoff with Task-only Requirements", () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "sennel-task-handoff-"));
+    const root = createTestDirectory("sennel-task-handoff-");
     const manager = new FlowManager({ root, mainRoot: root, inWorktree: false });
     const specId = "task-scoped-handoff";
     const { tasks, ...taskSpecRecord } = taskScopedSpec;
@@ -441,7 +441,7 @@ describe("canonical Task context", () => {
   });
 
   it("accepts a second Task implementation handoff that updates an existing lineage file", async (t) => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "sennel-task-lineage-handoff-"));
+    const root = createTestDirectory("sennel-task-lineage-handoff-");
     const manager = new FlowManager({ root, mainRoot: root, inWorktree: false });
     const specId = "task-lineage-handoff";
     initGitRepo(root);
@@ -601,7 +601,7 @@ describe("canonical Task context", () => {
   });
 
   it("persists only parent-bound quality risks with the mandatory Task Review recovery", () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "sennel-task-quality-risk-"));
+    const root = createTestDirectory("sennel-task-quality-risk-");
     const manager = new FlowManager({ root, mainRoot: root, inWorktree: false });
     const specId = "task-quality-risk";
     try {
@@ -642,7 +642,7 @@ describe("canonical Task context", () => {
   });
 
   it("selects only current content declared by current-Task manifests", () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "sennel-task-source-"));
+    const root = createTestDirectory("sennel-task-source-");
     fs.mkdirSync(path.join(root, "src"));
     fs.writeFileSync(path.join(root, "src/one.js"), "export const one = 1;\n");
     fs.writeFileSync(path.join(root, "src/two.js"), "export const two = 2;\n");
@@ -683,7 +683,7 @@ describe("canonical Task context", () => {
   });
 
   it("keeps Task A dirty while Task B executes against only its own current source", async (t) => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "sennel-task-context-flow-"));
+    const root = createTestDirectory("sennel-task-context-flow-");
     const manager = new FlowManager({ root, mainRoot: root, inWorktree: false });
     const specId = "001-task-source-isolation";
     t.after(() => fs.rmSync(root, { recursive: true, force: true }));

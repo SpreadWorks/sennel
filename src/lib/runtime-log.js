@@ -1,5 +1,6 @@
 import fs from "fs";
 import path from "path";
+import { TemporaryPaths } from "./temporary-paths.js";
 
 const DEFAULT_MAX_BYTES = 5 * 1024 * 1024;
 const TRUNCATED_MARKER = "[runtime-log] truncated: size limit reached\n";
@@ -187,10 +188,14 @@ export class RuntimeLogFile {
   constructor(root, flowId) {
     this.root = root;
     this.flowId = sanitizeFlowId(flowId);
-    this.filePath = path.join(root, ".tmp", "logs", `${this.flowId}.log`);
+    this.temporaryPaths = new TemporaryPaths(root);
+    this.filePath = path.join(this.temporaryPaths.logs(), `${this.flowId}.log`);
+    TemporaryPaths.assertRegularFile(this.filePath);
   }
 
   read() {
+    this.temporaryPaths.validate(path.dirname(this.filePath));
+    TemporaryPaths.assertRegularFile(this.filePath);
     if (!fs.existsSync(this.filePath)) return "";
     return fs.readFileSync(this.filePath, "utf8");
   }
@@ -200,8 +205,8 @@ export class RuntimeLogFile {
   }
 
   append(text) {
-    fs.mkdirSync(path.dirname(this.filePath), { recursive: true });
-    fs.appendFileSync(this.filePath, text, "utf8");
+    this.temporaryPaths.ensureDirectory(path.dirname(this.filePath));
+    TemporaryPaths.appendFile(this.filePath, text);
   }
 
   blocks() {

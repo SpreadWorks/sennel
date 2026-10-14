@@ -1,5 +1,5 @@
+import { testTemporaryRoot } from "../../../test-environment.js";
 import { describe, it, afterEach, mock } from "node:test";
-import os from "os";
 import fs from "fs";
 import assert from "node:assert/strict";
 import path, { join } from "path";
@@ -2221,7 +2221,7 @@ function resolveAgent(cfg, commandId) {
     config: cfg,
     paths: { root: process.cwd(), agentWorkDir: "/tmp" },
     registry,
-    logger: new Logger({ logDir: os.tmpdir(), enabled: false }),
+    logger: new Logger({ logDir: testTemporaryRoot().path, enabled: false }),
   });
   const resolved = agent.resolve(commandId);
   return resolved ? resolved.profile : null;

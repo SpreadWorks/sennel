@@ -1,3 +1,4 @@
+import { flowTemporaryRoot } from "./flow-context.js";
 import { CURRENT_FLOW_SCHEMA_REVISION } from "../../lib/flow-schema-revision.js";
 import { repairJson } from "../../lib/json-parse.js";
 import { createHash } from "node:crypto";
@@ -496,7 +497,7 @@ class AcceptanceExecutionConfiguration {
   }
 }
 
-function acquireAcceptanceExecutionConfiguration(context, agent, resolvedAgent, stored = null) {
+function acquireAcceptanceExecutionConfiguration(context, agent, resolvedAgent, stored = null, invocationOptions = {}) {
   const executionLimit = stored === null ? new PromptExecutionLimit({
     maxRequestCharacters: agent.promptCharacterLimit, maxProviderCallCount: 100,
     maxProtocolRetryCount: 0, maxSynthesisCallCount: 32, maxAggregateCharacters: null,
@@ -520,7 +521,7 @@ function acquireAcceptanceExecutionConfiguration(context, agent, resolvedAgent, 
   const profile = new AcceptanceExecutionProfile({ ...resolvedAgent, invocationConfiguration: agent.invocationConfiguration(resolvedAgent) });
   const projections = typeof agent.projectInvocation === "function"
     ? initialRequests.map((request) => agent.projectInvocation(request.userPrompt, {
-      ...acceptanceAgentOptions(request), ...profile.agentOptions,
+      ...acceptanceAgentOptions(request), ...profile.agentOptions, ...invocationOptions,
     })) : [];
   const finalSchemas = acceptanceFinalBindings(context, 0).map(scopedAcceptanceResponseSchema);
   const specification = new AcceptanceExecutionSpecification({ executionMode, executionLimit, profile,
@@ -555,14 +556,14 @@ function acceptanceAgentOptions(request, session = null) {
   };
 }
 
-function acceptanceExecutorOptions(agent, budget, session = null) {
+function acceptanceExecutorOptions(agent, budget, session = null, invocationOptions = {}) {
   return {
     callAgent: (request, _batch, _protocolRetryIndex, _attemptContext, providerCallAdmission) => agent.call(
       request.userPrompt,
-      { ...acceptanceAgentOptions(request, session), providerCallAdmission },
+      { ...acceptanceAgentOptions(request, session), ...invocationOptions, providerCallAdmission },
     ),
     ...(typeof agent.projectInvocation === "function" ? {
-      projectInvocation: (request) => agent.projectInvocation(request.userPrompt, acceptanceAgentOptions(request, session)),
+      projectInvocation: (request) => agent.projectInvocation(request.userPrompt, { ...acceptanceAgentOptions(request, session), ...invocationOptions }),
     } : {}),
     executionBudget: budget,
   };
@@ -794,7 +795,7 @@ export class AcceptanceEvidenceExecutionPlan {
     Object.freeze(this);
   }
 
-  async execute(agent, executionBudget = new PromptExecutionBudget(this.executionLimit), session = null) {
+  async execute(agent, executionBudget = new PromptExecutionBudget(this.executionLimit), session = null, invocationOptions = {}) {
     if (!(executionBudget instanceof PromptExecutionBudget)) throw new TypeError("Acceptance evidence execution requires a shared prompt budget");
     const budget = executionBudget;
     const minimumFinalCalls = acceptanceFinalBindings(this.context, 0).length;
@@ -803,10 +804,10 @@ export class AcceptanceEvidenceExecutionPlan {
     // reduced context is adaptive. Reserve their synthesis allowance now so
     // an impossible command cannot consume map calls first.
     if (!session) budget.consumeSynthesisCalls(minimumFinalCalls);
-    const executor = new PromptBatchExecutor(acceptanceExecutorOptions(agent, budget, session));
+    const executor = new PromptBatchExecutor(acceptanceExecutorOptions(agent, budget, session, invocationOptions));
     const observations = await executor.execute({
       plan: this.observationPlan,
-      ...acceptanceExecutorOptions(agent, budget, session),
+      ...acceptanceExecutorOptions(agent, budget, session, invocationOptions),
       ...session?.options("map", 0, minimumFinalCalls),
       responseContract: { parse: parseObservations, itemCount: (items) => items.length },
       reducer: new AcceptanceObservationReducer(),
@@ -841,7 +842,7 @@ export class AcceptanceEvidenceExecutionPlan {
       },
       executeRound: (plan, depth) => executor.executeCompletions({
         plan,
-        ...acceptanceExecutorOptions(agent, budget, session),
+        ...acceptanceExecutorOptions(agent, budget, session, invocationOptions),
         ...session?.options("reduction", depth, plan.batches.length),
         responseContract: {
           parse: (raw, batch) => {
@@ -873,7 +874,7 @@ export class AcceptanceEvidenceExecutionPlan {
     }
     return executor.execute({
       plan: final.plan,
-      ...acceptanceExecutorOptions(agent, budget, session),
+      ...acceptanceExecutorOptions(agent, budget, session, invocationOptions),
       ...session?.options("scoped-final"),
       responseContract: {
         parse: (raw, batch) => {
@@ -893,11 +894,12 @@ async function callAcceptanceAgent(
   limit = new PromptRequestLimit(),
   session = null,
   stage = "direct",
+  invocationOptions = {},
 ) {
   const plan = PromptBatchPlan.fromRequest({ request: prompt, limit, id: "acceptance-request" });
   return new PromptBatchExecutor({ executionBudget: budget }).execute({
     plan,
-    ...acceptanceExecutorOptions(agent, budget, session),
+    ...acceptanceExecutorOptions(agent, budget, session, invocationOptions),
     ...session?.options(stage),
     responseContract: { parse: parseAcceptanceResponse },
     reducer: new SingleResponseReducer(),
@@ -918,7 +920,7 @@ function acceptanceAgentFailure(failure) {
   return { failure: error, response: envelope };
 }
 
-async function resolveAcceptanceArtifact(context, { agent, configuration, session, fixture = null } = {}) {
+async function resolveAcceptanceArtifact(context, { agent, configuration, session, fixture = null, invocationOptions = {} } = {}) {
   if (fixture) {
     return {
       artifact: artifactFromAcceptanceJudgments({
@@ -935,8 +937,8 @@ async function resolveAcceptanceArtifact(context, { agent, configuration, sessio
     const limit = configuration.specification.requestLimit;
     const budget = session.budget;
     const parsed = configuration.specification.executionMode === "direct"
-      ? await callAcceptanceAgent(agent, configuration.directPrompt, budget, limit, session)
-      : await configuration.evidencePlan.execute(agent, budget, session);
+      ? await callAcceptanceAgent(agent, configuration.directPrompt, budget, limit, session, "direct", invocationOptions)
+      : await configuration.evidencePlan.execute(agent, budget, session, invocationOptions);
     const bound = bindAcceptanceResponse(context, parsed);
     const deferredCoverage = new DeferredDispositionCoverage(
       context,
@@ -951,6 +953,7 @@ async function resolveAcceptanceArtifact(context, { agent, configuration, sessio
         limit,
         session,
         "deferred-repair",
+        invocationOptions,
       );
       const repairBound = new AcceptanceResponseBinding(context)
         .bindDeferredFindingDispositions(repairParsed.deferredFindingDispositions ?? []);
@@ -972,6 +975,7 @@ async function resolveAcceptanceArtifact(context, { agent, configuration, sessio
 }
 
 async function executeCanonicalAcceptanceReview(ctx) {
+  const invocationOptions = { temporaryRoot: flowTemporaryRoot(ctx) };
   const state = ctx.flowManager.loadReadOnly(ctx.flowState.specId);
   const store = new CanonicalAcceptanceArtifactStore({ flowManager: ctx.flowManager, state });
   const context = await store.buildContext({ executionRoot: ctx.executionRoot || ctx.root });
@@ -1013,7 +1017,7 @@ async function executeCanonicalAcceptanceReview(ctx) {
     }));
     if (stored !== null && resolved !== null) throw new FlowExecutionContractRefusal("Saved Acceptance provider configuration is unavailable for continuation");
     if (resolved === null) {
-      configuration = acquireAcceptanceExecutionConfiguration(context, agent, resolvedAgent, stored);
+      configuration = acquireAcceptanceExecutionConfiguration(context, agent, resolvedAgent, stored, invocationOptions);
       executionContract = configuration.specification.contract({ binding: acquired.binding,
         generation: executionBinding.executionGeneration, context, budgetOwner: stored?.budgetOwner });
       if (stored !== null) ctx.flowManager.readExecutionContract({ executionContract });
@@ -1036,7 +1040,7 @@ async function executeCanonicalAcceptanceReview(ctx) {
       executionBinding = null;
     }
   }
-  resolved ??= await resolveAcceptanceArtifact(context, { agent, configuration, session, fixture });
+  resolved ??= await resolveAcceptanceArtifact(context, { agent, configuration, session, fixture, invocationOptions });
   if (resolved.response) {
     const preparation = await prepareAcceptanceReviewInput({ flowManager: ctx.flowManager,
       state: ctx.flowManager.canonicalState(state.specId), executionRoot: ctx.executionRoot || ctx.root,

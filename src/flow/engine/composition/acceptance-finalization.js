@@ -55,6 +55,8 @@ export function prepareFinalRegressionPublication(input) {
   const facts = finalRegressionFactsFromSnapshot({ snapshot,
     current: { artifact: history.current.payload, descriptor, relativePath: descriptor.relativePath },
     changedFileSnapshotDigest: () => captureFinalRegressionChangedSnapshotDigest({
+      repositoryRoot: flowManager.specLocation(binding.specId).repositoryRoot,
+      specId: binding.specId, runId: snapshot.state.runId,
       root: flowManager.executionRoot(), relativeSpecFile: flowManager.specLocation(binding.specId).relativeSpecFile }) });
   if (!facts.stepFacts.changedFileSnapshot.current) throw new StepAdmissionRefusal("Final regression source changed before publication");
   return new AcceptanceFinalizationPreparation({ binding: publication.resultBinding ?? binding, observed: new FinalRegressionInput({ evidence: FinalRegressionResultEvidence.fromTransitionFacts(facts) }),

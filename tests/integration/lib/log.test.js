@@ -1,3 +1,4 @@
+import { createTmpDir as createTestDirectory } from "../../support/builders/tmp-dir.js";
 /**
  * Tests for the unified JSONL Logger.
  *
@@ -18,7 +19,6 @@ import { describe, it, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
-import os from "node:os";
 
 import { Logger } from "../../../src/lib/log.js";
 import { todayLocal, readJsonl } from "../../support/infrastructure/log-fixtures.js";
@@ -39,7 +39,7 @@ describe("Logger — disabled behavior", () => {
   let tmpDir;
 
   beforeEach(() => {
-    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "logger-init-"));
+    tmpDir = createTestDirectory("logger-init-");
   });
   afterEach(() => {
     fs.rmSync(tmpDir, { recursive: true, force: true });
@@ -72,7 +72,7 @@ describe("Logger.agent — start/end events and JSONL output", () => {
   let logFile;
 
   beforeEach(() => {
-    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "logger-agent-"));
+    tmpDir = createTestDirectory("logger-agent-");
     logFile = path.join(tmpDir, `sennel-${todayLocal()}.jsonl`);
   });
   afterEach(() => {
@@ -282,7 +282,7 @@ describe("Logger.git and Logger.event — API surface", () => {
   let logFile;
 
   beforeEach(() => {
-    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "logger-git-"));
+    tmpDir = createTestDirectory("logger-git-");
     logFile = path.join(tmpDir, `sennel-${todayLocal()}.jsonl`);
   });
   afterEach(() => {
@@ -323,7 +323,7 @@ describe("Logger — caller frame extraction", () => {
   let logFile;
 
   beforeEach(() => {
-    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "logger-caller-"));
+    tmpDir = createTestDirectory("logger-caller-");
     logFile = path.join(tmpDir, `sennel-${todayLocal()}.jsonl`);
   });
   afterEach(() => {
@@ -347,7 +347,7 @@ describe("Logger — I/O failure tolerance", () => {
   let tmpDir;
 
   beforeEach(() => {
-    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "logger-fail-"));
+    tmpDir = createTestDirectory("logger-fail-");
   });
   afterEach(() => {
     fs.rmSync(tmpDir, { recursive: true, force: true });
@@ -381,7 +381,7 @@ describe("Logger — sensitive information masking", () => {
   };
 
   beforeEach(() => {
-    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "logger-mask-"));
+    tmpDir = createTestDirectory("logger-mask-");
     logFile = path.join(tmpDir, `sennel-${todayLocal()}.jsonl`);
     process.env.SENNEL_WORK_ROOT = tmpDir;
   });

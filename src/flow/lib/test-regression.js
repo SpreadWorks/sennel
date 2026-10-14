@@ -1,3 +1,4 @@
+import { standaloneTestEnvironment } from "../../lib/process.js";
 import { CURRENT_FLOW_SCHEMA_REVISION } from "../../lib/flow-schema-revision.js";
 import fs from "fs";
 import path from "path";
@@ -1049,7 +1050,7 @@ export async function runProcessDetailed(command, opts = {}) {
     };
     let child;
     try {
-      const { NODE_TEST_CONTEXT: _nodeTestContext, ...environment } = process.env;
+      const environment = standaloneTestEnvironment();
       child = execFile(
         command.argv[0],
         command.argv.slice(1),

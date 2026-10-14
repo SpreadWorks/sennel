@@ -1,5 +1,5 @@
+import { testTemporaryRoot } from "../../../test-environment.js";
 import { describe, it, afterEach } from "node:test";
-import os from "os";
 import assert from "node:assert/strict";
 import { createTmpDir, removeTmpDir } from "../../../support/builders/tmp-dir.js";
 import path from "path";
@@ -15,7 +15,7 @@ function makeAgent(profile, root) {
     config,
     paths: { root, agentWorkDir: path.join(root, ".tmp") },
     registry,
-    logger: new Logger({ logDir: os.tmpdir(), enabled: false }),
+    logger: new Logger({ logDir: testTemporaryRoot().path, enabled: false }),
   });
 }
 

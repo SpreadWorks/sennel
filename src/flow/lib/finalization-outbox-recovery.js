@@ -282,6 +282,8 @@ export class FinalizationOutboxRecovery {
       const location = this.ctx.flowManager.specLocation(this.state.specId);
       const flowArtifactRegistry = new FinalizeFlowArtifactRegistry(location.relativeSpecFile);
       new FinalizeMergeTransaction({
+        repositoryRoot: this.ctx.repositoryRoot || this.ctx.mainRoot || this.ctx.root,
+        specId: this.state.specId, runId: this.state.runId,
         featureRoot: this.ctx.flowManager.executionRoot(this.state),
         mainRoot: mainRootFor(this.ctx, this.state),
         baseBranch: this.state.baseBranch,

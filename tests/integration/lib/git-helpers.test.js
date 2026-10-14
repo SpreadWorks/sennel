@@ -1,3 +1,5 @@
+import { testTemporaryRoot } from "../../test-environment.js";
+import { createTmpDir as createTestDirectory } from "../../support/builders/tmp-dir.js";
 /**
  * Tests for runGit.
  *
@@ -14,7 +16,6 @@ import { describe, it, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
-import os from "node:os";
 
 import {
   GitCommitPathSet,
@@ -50,7 +51,7 @@ describe("runGit — basic logging", () => {
   let logger;
 
   beforeEach(() => {
-    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "rungit-"));
+    tmpDir = createTestDirectory("rungit-");
     initRepo(tmpDir);
     logger = registerLogger(path.join(tmpDir, "logs"));
   });
@@ -144,9 +145,9 @@ describe("runGit — worktree regression (R2)", () => {
   let logger;
 
   beforeEach(() => {
-    mainDir = fs.mkdtempSync(path.join(os.tmpdir(), "rungit-main-"));
+    mainDir = createTestDirectory("rungit-main-");
     initRepo(mainDir);
-    worktreeDir = path.join(os.tmpdir(), `rungit-wt-${Date.now()}`);
+    worktreeDir = path.join(testTemporaryRoot().path, `rungit-wt-${Date.now()}`);
     const r = runCmd("git", ["-C", mainDir, "worktree", "add", "-b", "feature-x", worktreeDir]);
     if (!r.ok) throw new Error("worktree add failed: " + r.stderr);
 
@@ -179,7 +180,7 @@ describe("runCmd no longer logs git commands", () => {
   let logger;
 
   beforeEach(() => {
-    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "rungit-rc-"));
+    tmpDir = createTestDirectory("rungit-rc-");
     initRepo(tmpDir);
     logger = registerLogger(path.join(tmpDir, "logs"));
   });
@@ -207,7 +208,7 @@ describe("Git porcelain v2 difference authority", () => {
   let tmpDir;
 
   beforeEach(() => {
-    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "git-status-v2-"));
+    tmpDir = createTestDirectory("git-status-v2-");
     initRepo(tmpDir);
     container.reset();
   });
@@ -283,7 +284,7 @@ describe("Git porcelain v2 difference authority", () => {
       `2 R. N... 100644 100644 100644 ${oid} ${oid} R100 renamed.txt\0original.txt\0`,
     );
     assert.deepEqual(rename.pathSet.toArray(), ["renamed.txt", "original.txt"]);
-    const nonRepository = fs.mkdtempSync(path.join(os.tmpdir(), "git-status-v2-nonrepo-"));
+    const nonRepository = createTestDirectory("git-status-v2-nonrepo-");
     try {
       assert.throws(
         () => getPorcelainV2Status(nonRepository),

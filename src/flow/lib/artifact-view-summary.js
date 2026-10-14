@@ -861,11 +861,12 @@ export class ArtifactViewSummaryFingerprint {
  * in explicitly so this class cannot write Flow state or normal agent cache.
  */
 export class ArtifactViewSummaryService {
-  constructor({ agent, cache = null, lang = "en", i18nRevision, cacheWarningMessage = null } = {}) {
+  constructor({ agent, cache = null, lang = "en", i18nRevision, cacheWarningMessage = null, temporaryRoot = null } = {}) {
     if (!agent || typeof agent.resolve !== "function" || typeof agent.call !== "function") {
       throw new ArtifactViewSummaryError("ARTIFACT_VIEW_SUMMARY_INVALID", "summary service requires the shared agent surface");
     }
     this.agent = agent;
+    this.temporaryRoot = temporaryRoot;
     this.cache = cache;
     this.lang = requiredText(String(lang || "en"), "summary language");
     this.i18nRevision = requiredText(i18nRevision, "summary i18n revision");
@@ -930,6 +931,7 @@ export class ArtifactViewSummaryService {
         }).execute({
           plan,
           callAgent: (request, _batch, _protocolRetryIndex, _attemptContext, providerCallAdmission) => this.agent.call(request.userPrompt, {
+            temporaryRoot: this.temporaryRoot,
             commandId: contract.commandId,
             jsonSchema: request.jsonSchema,
             fmtFallback: request.fmtFallback,
@@ -939,6 +941,7 @@ export class ArtifactViewSummaryService {
           }),
           ...(typeof this.agent.projectInvocation === "function" ? {
             projectInvocation: (request) => this.agent.projectInvocation(request.userPrompt, {
+              temporaryRoot: this.temporaryRoot,
               commandId: contract.commandId,
               jsonSchema: request.jsonSchema,
               fmtFallback: request.fmtFallback,

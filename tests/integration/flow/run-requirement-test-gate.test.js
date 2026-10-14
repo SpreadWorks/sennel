@@ -3,6 +3,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, test } from "node:test";
+import { fileURLToPath } from "node:url";
 
 import {
   RequirementTestCandidateBundle,
@@ -14,6 +15,7 @@ import {
   RequirementTestBundleRevision,
 } from "../../../src/flow/lib/requirement-test-lifecycle.js";
 import { runRequirementTestGate } from "../../../src/flow/lib/run-requirement-test-gate.js";
+import { flowTemporaryRoot } from "../../../src/flow/lib/flow-context.js";
 import { createTmpDir, removeTmpDir } from "../../support/builders/tmp-dir.js";
 
 let root;
@@ -81,7 +83,8 @@ test("executes only the candidate named test and returns a bound observation", a
   assert.equal(result.observation.requirementId, "R1");
   assert.equal(result.observation.bundleRevision, 1);
   assert.match(result.rawLog, /exitCode: 1/);
-  assert.equal(fs.existsSync(path.join(root, "specs", "gate-engine", "001", ".runtime", "requirement-test-gate")), true);
+  assert.deepEqual(fs.readdirSync(path.join(root, ".tmp", "runtime", "requirement-test-gate")), []);
+  assert.equal(fs.existsSync(context.versionLocation.resolve(".runtime/requirement-test-gate")), false);
 });
 
 test("returns an assertion_passed observation for a passing candidate", async () => {
@@ -163,4 +166,50 @@ test("records an invalid_test observation when any materialized candidate import
   assert.equal(result.command, null);
   assert.equal(result.process, null);
   assert.match(result.rawLog, /statically imports missing pre-implementation module \.\/support\/missing\.mjs/);
+});
+
+test("selected Flow scratch preserves runner checkout, canonical import mapping and exact candidate bytes", async () => {
+  setup();
+  const checkout = path.join(root, "checkout");
+  const versionDirectory = path.join(root, "specs", "gate-engine", "001");
+  fs.mkdirSync(checkout);
+  fs.mkdirSync(versionDirectory, { recursive: true });
+  fs.writeFileSync(path.join(checkout, "value.mjs"), "export const value = 'checkout';\n");
+  fs.writeFileSync(path.join(root, "value.mjs"), "export const value = 'canonical';\n");
+  const temporaryRoot = flowTemporaryRoot({ root: checkout, repositoryRoot: root,
+    specId: "gate-engine", flowState: { specId: "gate-engine", runId: "selected-gate-run" } });
+  const source = `// spec: R1
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import { value } from '../../../../../value.mjs';
+test('R1: behavior', () => {
+  assert.equal(process.cwd(), ${JSON.stringify(checkout)});
+  assert.equal(value, 'checkout');
+  assert.equal(fs.readFileSync(new URL(import.meta.url), 'utf8'), process.env.EXPECTED_GATE_SOURCE);
+  console.log('GATE_CANDIDATE=' + import.meta.url);
+});
+`;
+  const value = candidate(source);
+  const original = process.env.EXPECTED_GATE_SOURCE;
+  process.env.EXPECTED_GATE_SOURCE = source;
+  let result;
+  try {
+    result = await runRequirementTestGate({ repositoryRoot: checkout, temporaryRepositoryRoot: root, temporaryRoot,
+      versionLocation: { resolve: (relative) => path.join(versionDirectory, ...relative.split("/")) },
+      specRevision: revision, requirementId: "R1", ...value });
+  } finally {
+    if (original === undefined) delete process.env.EXPECTED_GATE_SOURCE;
+    else process.env.EXPECTED_GATE_SOURCE = original;
+  }
+  assert.equal(result.observation.kind, "assertion_passed", result.rawLog);
+  assert.equal(result.observation.candidateDigest, value.bundle.digest);
+  const materializedFile = /^# GATE_CANDIDATE=(.+)$/m.exec(result.rawLog)?.[1];
+  assert.ok(materializedFile);
+  const candidatePath = fileURLToPath(materializedFile);
+  assert.equal(path.dirname(path.dirname(path.dirname(candidatePath))), temporaryRoot);
+  assert.equal(fs.existsSync(candidatePath), false);
+  assert.deepEqual(fs.readdirSync(temporaryRoot), []);
+  assert.equal(fs.existsSync(path.join(checkout, ".tmp")), false);
+  assert.equal(fs.existsSync(path.join(versionDirectory, ".runtime", "requirement-test-gate")), false);
 });

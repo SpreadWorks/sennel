@@ -1,8 +1,8 @@
+import { createTmpDir as createTestDirectory } from "../../support/builders/tmp-dir.js";
 import { describe, it, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import fs from "fs";
 import path from "path";
-import os from "os";
 import { execFileSync, spawnSync } from "node:child_process";
 import { CanonicalAutoCheckScenario, makeFlowManager } from "../../support/infrastructure/flow-setup.js";
 import {
@@ -37,7 +37,7 @@ function passResponse() {
 }
 
 function createTmpProject(agentResponse) {
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "verdict-persist-"));
+  const tmp = createTestDirectory("verdict-persist-");
   fs.mkdirSync(path.join(tmp, ".sennel"), { recursive: true });
   execFileSync("git", ["init", tmp], { stdio: "ignore" });
 

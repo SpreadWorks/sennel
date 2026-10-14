@@ -1,7 +1,7 @@
+import { createTmpDir as createTestDirectory } from "../../support/builders/tmp-dir.js";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, it } from "node:test";
 
@@ -14,7 +14,7 @@ describe("canonical next-action policy projection", () => {
   afterEach(() => root && fs.rmSync(root, { recursive: true, force: true }));
 
   it("does not project the retired mutable autoUpgrade cache", () => {
-    root = fs.mkdtempSync(path.join(os.tmpdir(), "canonical-next-action-policy-"));
+    root = createTestDirectory("canonical-next-action-policy-");
     fs.mkdirSync(path.join(root, ".sennel"), { recursive: true });
     fs.writeFileSync(path.join(root, ".sennel", "config.json"), JSON.stringify({
       lang: "ja",

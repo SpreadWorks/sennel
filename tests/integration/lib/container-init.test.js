@@ -2,7 +2,7 @@ import { describe, it, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { join } from "path";
-import { existsSync, mkdirSync, readFileSync } from "fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync } from "fs";
 import { container, initContainer } from "../../../src/lib/container.js";
 import { createTmpDir, removeTmpDir, writeJson } from "../../support/builders/tmp-dir.js";
 
@@ -69,7 +69,7 @@ describe("initContainer — config registration contract (R1, #175)", () => {
     }
   });
 
-  it("uses agentWorkDirOverride for agent work dir and default log dir", () => {
+  it("keeps the CLI execution directory while logs and scratch use independent defaults", () => {
     mkdirSync(join(tmp, ".sennel"), { recursive: true });
     writeJson(tmp, ".sennel/config.json", {
       lang: "ja",
@@ -82,7 +82,8 @@ describe("initContainer — config registration contract (R1, #175)", () => {
 
     const paths = container.get("paths");
     assert.equal(paths.agentWorkDir, join(tmp, ".agent-run"));
-    assert.equal(paths.logDir, join(tmp, ".agent-run", "logs"));
+    assert.equal(paths.logDir, join(tmp, ".tmp", "logs"));
+    assert.equal(paths.temporaryRoot, join(tmp, ".tmp", "runtime", "agent"));
   });
 
   it("CLI entrypoint pre-scans flow run --agent-work-dir before initContainer", () => {
@@ -115,6 +116,10 @@ describe("initContainer — config registration contract (R1, #175)", () => {
       finalizeCleanupDurablePaths: true,
     });
     const logger = container.get("logger");
+    const paths = container.get("paths");
+    assert.equal(paths.agentWorkDir, join(tmp, ".sennel", "agent-work"));
+    assert.equal(paths.temporaryRoot, join(tmp, ".tmp", "runtime", "agent"));
+    assert.equal(paths.logDir, join(tmp, ".tmp", "logs"));
     await logger.flush();
     git("worktree", "remove", "--force", worktree);
 
@@ -132,9 +137,9 @@ describe("initContainer — config registration contract (R1, #175)", () => {
     }
 
     assert.equal(stderr, "");
-    assert.equal(
-      existsSync(join(tmp, ".sennel", "agent-work", "logs")),
-      true,
-    );
+    assert.equal(existsSync(worktree), false, "logging must not recreate the removed worktree");
+    const events = readdirSync(paths.logDir).filter((name) => name.endsWith(".jsonl"))
+      .flatMap((name) => readFileSync(join(paths.logDir, name), "utf8").trim().split("\n").map(JSON.parse));
+    assert.equal(events.filter((event) => event.type === "event" && event.name === "after-cleanup").length, 1);
   });
 });

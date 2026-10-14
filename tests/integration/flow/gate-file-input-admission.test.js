@@ -31,7 +31,7 @@ function snapshotCanonical(location) {
 
 function injectInputFault(phase, kind) {
   const restores = [];
-  const target = (file) => String(file).includes(`${path.sep}agent-work${path.sep}${phase}-gate-`)
+  const target = (file) => String(file).includes(`${path.sep}${phase}-gate-`)
     && String(file).endsWith(`${path.sep}${phase}.json`);
   const originalResolve = AgentFileReference.resolve;
   let resolvingInput = false;
@@ -146,7 +146,7 @@ for (const phase of ["draft", "spec"]) {
         assert.equal(restored.canonicalState(specId).attempt.failure, null);
         assert.equal(restored.readCurrentStepSettlement({ specId, stepId: `${phase}-gate` }), null);
         assert.equal(restored.artifactCatalog(specId).artifacts.some((entry) => entry.logicalKey === `${phase}.gate`), false);
-        assert.deepEqual(fs.readdirSync(path.join(root, ".sennel", "agent-work")), []);
+        assert.deepEqual(fs.readdirSync(path.join(root, ".tmp", "flows", specId, "run-file-input-admission")), []);
       } finally {
         restoreFault?.(); gateLookup?.mock.restore(); removeTmpDir(root);
       }

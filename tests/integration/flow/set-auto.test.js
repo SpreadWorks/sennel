@@ -1,3 +1,4 @@
+import { createTmpDir as createTestDirectory } from "../../support/builders/tmp-dir.js";
 import { describe, it, afterEach } from "node:test";
 import {
   CanonicalAutoCheckScenario,
@@ -10,7 +11,6 @@ import { prepareDraftService } from "../../support/infrastructure/draft-service.
 import assert from "node:assert/strict";
 import fs from "fs";
 import path from "path";
-import os from "os";
 import { execFileSync, spawnSync } from "node:child_process";
 import {
   writeStubAgentScript,
@@ -45,7 +45,7 @@ function lowResponse() {
 }
 
 function createTmpProject(agentResponse = passResponse()) {
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "set-auto-"));
+  const tmp = createTestDirectory("set-auto-");
   fs.mkdirSync(path.join(tmp, ".sennel"), { recursive: true });
   execFileSync("git", ["init", tmp], { stdio: "ignore" });
 
@@ -314,7 +314,7 @@ describe("flow set auto", () => {
   });
 
   it("appends draft.json to auto-check input when draft-gate done (spec 220)", () => {
-    tmp = fs.mkdtempSync(path.join(os.tmpdir(), "set-auto-draft-"));
+    tmp = createTestDirectory("set-auto-draft-");
     fs.mkdirSync(path.join(tmp, ".sennel"), { recursive: true });
     execFileSync("git", ["init", tmp], { stdio: "ignore" });
 
@@ -385,7 +385,7 @@ describe("flow set auto", () => {
   });
 
   it("falls back to request+issue input when approval pending and no draft.json (R5)", () => {
-    tmp = fs.mkdtempSync(path.join(os.tmpdir(), "set-auto-fallback-"));
+    tmp = createTestDirectory("set-auto-fallback-");
     fs.mkdirSync(path.join(tmp, ".sennel"), { recursive: true });
     execFileSync("git", ["init", tmp], { stdio: "ignore" });
 
@@ -437,7 +437,7 @@ describe("flow set auto", () => {
 
   describe("PREPARING_FLOW_NOT_FOUND for unknown --run-id", () => {
     function createCapturingFixture(prefix) {
-      const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+      const dir = createTestDirectory(prefix);
       fs.mkdirSync(path.join(dir, ".sennel"), { recursive: true });
       execFileSync("git", ["init", dir], { stdio: "ignore" });
       const capturePath = path.join(dir, "captured-prompt.txt");
@@ -521,7 +521,7 @@ describe("flow set auto", () => {
   // ---------------------------------------------------------------------------
 
   function createCapturingProject() {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "set-auto-trust-"));
+    const dir = createTestDirectory("set-auto-trust-");
     fs.mkdirSync(path.join(dir, ".sennel"), { recursive: true });
     execFileSync("git", ["init", dir], { stdio: "ignore" });
     const capturePath = path.join(dir, "captured-prompt.txt");

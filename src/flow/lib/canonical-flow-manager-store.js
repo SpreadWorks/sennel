@@ -2383,6 +2383,7 @@ class SavedStepPublicationAdmission {
         throw new CurrentFlowStateConflictError("saved Review continuation lost its original publication receipt");
       }
       if (source.stepId === "final-regression") assertCurrentFinalRegressionEvidence({
+        repositoryRoot: this.#flowManager.location(source.specId).repositoryRoot, specId: source.specId, runId: state.runId,
         root: this.#flowManager.executionRoot(), relativeSpecFile: this.#flowManager.location(source.specId).relativeSpecFile,
         artifact: history.current.payload });
     } else {
@@ -2660,12 +2661,14 @@ class CanonicalCommandPublication {
           const finalArtifact = CanonicalCommandAttemptArtifactHistory.fromBytes({ logicalKey: "final.regression",
             bytes: this.readCatalogedArtifact(regression) }).current.payload;
           assertReportFinalRegressionEvidence({ root: this.#acceptanceExecutionRoot,
+            repositoryRoot: this.#acceptanceArtifactRoot, specId: this.state.specId, runId: this.state.runId,
             relativeSpecFile: this.#acceptanceSpecPath, artifact: finalArtifact,
             acceptedEvidence: this.#reportAcceptedEvidence });
         } else if (this.settlementAttempt !== null) {
           const artifact = CanonicalCommandAttemptArtifactHistory.fromBytes({ logicalKey: key, bytes }).current.payload;
           const validation = validateExplicitFinalRegressionProceed({ root: this.#acceptanceExecutionRoot, artifact,
-            repositoryBindingOptions: { pathspecExcludes: new RepairArtifactRegistry(this.#acceptanceSpecPath).gitPathspecExcludes() } });
+            repositoryBindingOptions: { repositoryRoot: this.#acceptanceArtifactRoot, specId: this.state.specId, runId: this.state.runId,
+              pathspecExcludes: new RepairArtifactRegistry(this.#acceptanceSpecPath).gitPathspecExcludes() } });
           if (!validation.ok) throw new CurrentFlowStateConflictError("Accepted regression raw execution evidence changed before settlement");
         }
       }

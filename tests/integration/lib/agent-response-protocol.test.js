@@ -1,7 +1,7 @@
+import { createTmpDir as createTestDirectory } from "../../support/builders/tmp-dir.js";
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { it } from "node:test";
 import { Agent } from "../../../src/lib/agent.js";
@@ -13,7 +13,7 @@ import { AgentResponseProtocolFailure, FileReadUnavailable,
   executeAgentResponseProtocol } from "../../../src/lib/agent-response-protocol.js";
 
 it("preserves actual Agent transport starts when admission stops a read retry", async (t) => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "agent-protocol-budget-"));
+  const root = createTestDirectory("agent-protocol-budget-");
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const config = { agent: { default: "fixture/local", timeout: 300,
     providers: { "fixture/local": { command: "fixture", args: ["{{PROMPT}}"] } } } };

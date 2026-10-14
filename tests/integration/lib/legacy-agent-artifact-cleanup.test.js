@@ -1,6 +1,6 @@
+import { createTmpDir as createTestDirectory } from "../../support/builders/tmp-dir.js";
 import assert from "node:assert/strict";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, it } from "node:test";
 
@@ -9,7 +9,7 @@ import {
 } from "../../../src/lib/legacy-agent-artifact-cleanup.js";
 
 function temporaryRoot() {
-  return fs.mkdtempSync(path.join(os.tmpdir(), "sennel-legacy-agent-artifact-"));
+  return createTestDirectory("sennel-legacy-agent-artifact-");
 }
 
 function writeJson(file, value) {

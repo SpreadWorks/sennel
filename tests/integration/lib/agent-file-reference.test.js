@@ -1,6 +1,6 @@
+import { createTmpDir as createTestDirectory } from "../../support/builders/tmp-dir.js";
 import assert from "node:assert/strict";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { it, mock } from "node:test";
 import { AgentFileReference } from "../../../src/lib/agent-file-reference.js";
@@ -8,7 +8,7 @@ import { AgentFileInputFailure } from "../../../src/lib/agent-file-input-failure
 import { captureRegularFile } from "../../../src/lib/regular-file-snapshot.js";
 
 function fixture(t) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "agent-file-reference-"));
+  const root = createTestDirectory("agent-file-reference-");
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   fs.mkdirSync(path.join(root, "nested"));
   const filePath = path.join(root, "nested", "exact.json");

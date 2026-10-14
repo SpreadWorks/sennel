@@ -1,7 +1,7 @@
+import { createTmpDir as createTestDirectory } from "../../support/builders/tmp-dir.js";
 import { afterEach, describe, it } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
 
@@ -45,7 +45,7 @@ describe("shared spec artifact and execution root boundary", () => {
   });
 
   it("binds report Git identity to executionRoot and source artifacts to the base root", () => {
-    temporaryRoot = fs.mkdtempSync(path.join(os.tmpdir(), "shared-spec-report-"));
+    temporaryRoot = createTestDirectory("shared-spec-report-");
     const executionRoot = createRepository(temporaryRoot);
     const shared = createSharedSpec(temporaryRoot);
     const reportPath = path.join(shared.specDir, "report.json");
@@ -76,7 +76,7 @@ describe("shared spec artifact and execution root boundary", () => {
   });
 
   it("fingerprints source changes from executionRoot while reading spec artifacts from the base root", () => {
-    temporaryRoot = fs.mkdtempSync(path.join(os.tmpdir(), "shared-spec-fingerprint-"));
+    temporaryRoot = createTestDirectory("shared-spec-fingerprint-");
     const executionRoot = createRepository(temporaryRoot);
     const shared = createSharedSpec(temporaryRoot);
 

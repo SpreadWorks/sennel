@@ -301,6 +301,7 @@ export class FinalizeMergeEffectPreparation {
       fallbackTitle: fallbackTitleFromSpecId(state.specId, state.featureBranch),
       implementationSubjects, idempotencyKey: this.idempotencyKey });
     return new FinalizeMergeTransaction({ featureRoot: this.executionRoot,
+      repositoryRoot: this.mainRepoPath || this.artifactRoot, specId: state.specId, runId: state.runId,
       mainRoot: this.mainRepoPath || this.artifactRoot, baseBranch: state.baseBranch,
       featureBranch: state.featureBranch, commitMessage, idempotencyKey: this.idempotencyKey,
       operationOwnerToken: this.operationOwnerToken, flowArtifactRegistry: this.flowArtifactRegistry,

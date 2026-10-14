@@ -55,7 +55,8 @@ The following user-facing choices are explicit exceptions to the auto-select rul
 
 **Flow runtime log rule (MANDATORY):**
 - Never hardcode `/tmp/...` for flow-related logs or temporary files.
-- When a flow command needs an agent/tmp/log base directory for the current invocation, pass `--agent-work-dir <path>` to `sennel flow run ...`.
+- To select the agent execution directory for the current invocation, pass `--agent-work-dir <path>` to `sennel flow run ...`. This setting does not select input, schema, or log storage.
+- Selected Flow inputs and schemas use repository-owned `.tmp/flows/<specId>/<runId>`; non-Flow and preparing calls use `.tmp/runtime/<purpose>`. Logs use the independent `.tmp/logs` default.
 - Flow commands automatically append stdout/stderr to `.tmp/logs/<flowId>.log`, or `.tmp/logs/no-flow.log` when no flow is active.
 - Use `sennel flow get runtime-log` to inspect the latest flow command output after failures.
 - Do not wrap flow commands with environment-variable prefixes or shell redirection just to capture logs; keep the command prefix as `sennel flow ...` so approval-prefix rules can match it.

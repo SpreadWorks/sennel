@@ -36,6 +36,7 @@ import { getLangHandler } from "../docs/lib/lang-factory.js";
 import { hasPathPrefix, hasSegmentPath, hasAnyPathPrefix } from "./path-match.js";
 import { parseTOML } from "../docs/lib/toml-parser.js";
 import { flowSpecRootFromConfig } from "./flow-workspace.js";
+import { TemporaryPaths } from "./temporary-paths.js";
 
 export class Container {
   constructor() {
@@ -94,23 +95,25 @@ export const container = new Container();
 /**
  * Build path service object. All fields are absolute paths.
  *
- * Work-directory priority: opts.agentWorkDirOverride > config.agent.workDir > .tmp.
- * `logDir` is computed once here and reused by Logger.
+ * Normal execution-directory priority: CLI override > config.agent.workDir > .tmp.
+ * Cleanup retains its existing repository-owned execution directory.
+ * Scratch and log paths are resolved independently of the execution directory.
  */
 function buildPaths(root, config, opts = {}) {
   const durableRoot = opts.durableRoot ? path.resolve(opts.durableRoot) : null;
   const agentWorkDir = durableRoot
     ? path.join(durableRoot, FINALIZE_CLEANUP_DURABLE_AGENT_WORK_DIR)
     : resolveWorkDir(root, config, opts);
-  const logDir = config?.logs?.dir
-    ? path.resolve(durableRoot || root, config.logs.dir)
-    : path.join(agentWorkDir, "logs");
+  const temporaryPaths = new TemporaryPaths(durableRoot || opts.repositoryRoot || root);
+  const logDir = temporaryPaths.logs(config?.logs?.dir);
   return Object.freeze({
     root,
+    repositoryRoot: opts.repositoryRoot || root,
     srcRoot: sourceRoot(),
     managedDir: managedDir(root),
     outputDir: managedOutputDir(root),
     agentWorkDir,
+    temporaryRoot: temporaryPaths.runtime("agent"),
     logDir,
     configPath: managedConfigPath(root),
   });
@@ -182,6 +185,7 @@ export function initContainer(opts = {}) {
   const paths = buildPaths(root, config, {
     agentWorkDirOverride: opts.agentWorkDirOverride,
     durableRoot: durableFinalizeRoot,
+    repositoryRoot: mainRoot,
   });
 
   container.register("root", root);

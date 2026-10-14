@@ -57,6 +57,8 @@ export default class RunClaimNextActionCommand extends FlowCommand {
           flowManager: ctx.flowManager,
           specId: ctx.specId,
           changedFileSnapshotDigest: () => captureFinalRegressionChangedSnapshotDigest({
+        repositoryRoot: ctx.repositoryRoot || ctx.mainRoot || ctx.root,
+        specId: ctx.specId, runId: ctx.flowState?.runId,
             root: ctx.executionRoot || ctx.root,
             relativeSpecFile: store.location.relativeSpecFile,
           }),

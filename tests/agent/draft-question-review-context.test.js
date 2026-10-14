@@ -13,9 +13,7 @@ import { createTmpDir, removeTmpDir } from "../support/builders/tmp-dir.js";
 import { canonicalDraftDocument } from "../support/infrastructure/flow-setup.js";
 
 test("real Draft question reviewer resolves supplied authority and preserves an unresolved user choice", { timeout: 300_000 }, async (t) => {
-  const root = createTmpDir("draft-question-context-quality-", {
-    parent: fileURLToPath(new URL("../../.tmp/", import.meta.url)),
-  });
+  const root = createTmpDir("draft-question-context-quality-");
   t.after(() => removeTmpDir(root));
   const model = process.env.SENNEL_REVIEW_QUALITY_MODEL || "gpt-6-luna";
   const profile = "draft-question-quality";

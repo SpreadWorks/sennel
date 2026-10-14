@@ -102,7 +102,7 @@ const reportFile = path.join(outputRoot, 'results.json');
 function persist() { saveJson(reportFile, report); }
 
 async function invoke(model, prompt, prefix) {
-  const runtimeRoot = createTmpDir('writing-model-runtime-', { parent: outputRoot });
+  const runtimeRoot = createTmpDir('writing-model-runtime-');
   const config = { agent: { default: 'experiment', timeout: 360, retryCount: 0, providers: { experiment: { command: 'codex', args: ['exec', '--json', '--skip-git-repo-check', '--sandbox', 'read-only', '--ephemeral', '--ignore-user-config', '--ignore-rules', '-m', model, '-c', 'model_reasoning_effort="medium"', '{{PROMPT}}'], jsonOutputFlag: '--json' } } } };
   const agent = new Agent({ config, paths: { root: runtimeRoot, agentWorkDir: runtimeRoot }, registry: new ProviderRegistry(config.agent.providers), logger: new Logger({ logDir: path.join(runtimeRoot, 'logs'), enabled: false }) });
   const meter = new ProviderOutputMeter();

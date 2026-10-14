@@ -1,8 +1,8 @@
+import { createTmpDir as createTestDirectory } from "../../support/builders/tmp-dir.js";
 import { describe, it, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import fs from "fs";
 import path from "path";
-import os from "os";
 import { execFileSync, spawnSync } from "node:child_process";
 import { CanonicalFlowFixture, makeFlowManager } from "../../support/infrastructure/flow-setup.js";
 import {
@@ -37,7 +37,7 @@ function passResponse() {
 }
 
 function createTmpProject(agentResponse = lowResponse()) {
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "auto-desired-"));
+  const tmp = createTestDirectory("auto-desired-");
   fs.mkdirSync(path.join(tmp, ".sennel"), { recursive: true });
   execFileSync("git", ["init", tmp], { stdio: "ignore" });
 

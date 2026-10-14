@@ -24,7 +24,7 @@ function reviewEvidenceError(code, message) {
 }
 
 export function resolveCurrentReviewTreeSha(root, specPath = null) {
-  const env = sanitizeGitRepositoryEnvironment();
+  const env = sanitizeGitRepositoryEnvironment(process.env, { repositoryRoot: root });
   const tree = runGit(["rev-parse", "HEAD^{tree}"], { cwd: root, env });
   if (!tree.ok) {
     throw reviewEvidenceError(

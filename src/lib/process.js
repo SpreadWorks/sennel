@@ -10,6 +10,12 @@ import { AgentTimeout, DEFAULT_AGENT_PROCESS_TREE_GRACE_MS } from "./agent-timeo
 
 const DEFAULT_PROCESS_MAX_BUFFER = 1024 * 1024;
 
+/** A nested Node test command must start independently of its caller's runner. */
+export function standaloneTestEnvironment(environment = process.env) {
+  const { NODE_TEST_CONTEXT: _nodeTestContext, ...standalone } = environment;
+  return standalone;
+}
+
 function buildProcessOptions(opts) {
   return {
     cwd: opts.cwd,

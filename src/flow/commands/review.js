@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+import { TemporaryPaths } from "../../lib/temporary-paths.js";
+import { flowTemporaryRoot, resolveFlowContext } from "../lib/flow-context.js";
 import { ExecutionProtocolSnapshot } from "../lib/execution-protocol-snapshot.js";
 import { currentRuntimePackage } from "../../lib/runtime-package.js";
 import { executionValueDigest, FlowExecutionContractRefusal } from "../lib/flow-execution-contract.js";
@@ -152,6 +154,18 @@ import {
  * timeout and cwd internally; callers only provide the system prompt and
  * (optionally) commandId.
  */
+let reviewExecutionContext = null;
+
+function reviewInputRoot() {
+  return reviewExecutionContext?.repositoryRoot
+    ?? container.get(container.has("mainRoot") ? "mainRoot" : "root");
+}
+
+function reviewTemporaryRoot() {
+  return reviewExecutionContext ? flowTemporaryRoot(reviewExecutionContext)
+    : TemporaryPaths.runtimePath(reviewInputRoot(), "review");
+}
+
 const reviewAgentInvocationOptions = (prompt, commandId, systemPrompt, protocolOptions = {}) => ({
   commandId,
   systemPrompt: prompt && typeof prompt === "object" && "userPrompt" in prompt
@@ -168,6 +182,7 @@ const reviewAgentInvocationOptions = (prompt, commandId, systemPrompt, protocolO
     // The parent binds its result to the before/after source fingerprint and
     // canonical target-state digest before promoting any review evidence.
     executionWorkDir: container.get("root"),
+    temporaryRoot: reviewTemporaryRoot(),
     // The parent keeps the provider admission lease until descendants have
     // ended; otherwise a direct and dispatched review can overlap after the
     // provider's immediate process exits.
@@ -385,18 +400,12 @@ function taskReviewProtocolIgnoredDirectories({ root, agent }) {
 }
 
 function taskReviewAgentRuntimeDirectories({ root, agent }) {
-  const runtimeDirectories = agent?.runtimeDirectories?.();
+  const runtimeDirectories = agent?.runtimeDirectories?.({ temporaryRoot: reviewTemporaryRoot() });
   if (runtimeDirectories == null) return [];
   if (!(runtimeDirectories instanceof AgentRuntimeDirectorySet)) {
     throw new Error("Task Review agent runtime directories must use AgentRuntimeDirectorySet");
   }
-  return runtimeDirectories.toArray().filter((candidate) => {
-    if (typeof candidate !== "string" || !path.isAbsolute(candidate)) {
-      throw new Error("Task Review agent runtime directory must be absolute");
-    }
-    const relative = path.relative(root, candidate);
-    return relative !== "" && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);
-  });
+  return new AgentRuntimeDirectorySet({ root, directories: runtimeDirectories.toArray() }).toArray();
 }
 
 function ensureAgent(commandId) {
@@ -4712,7 +4721,8 @@ async function runSpecReview(root, flow, spec, config, dryRun) {
     maxChars: promptLimit,
     ElementClass: SpecSectionPromptElement,
     id: "spec-review-document",
-    projectRoot: container.get("root"),
+    projectRoot: reviewInputRoot(),
+    temporaryRoot: reviewTemporaryRoot(),
     projectInvocation: typeof proposeAgent.projectInvocation === "function"
       ? (request) => projectReviewAgentInvocation(proposeAgent, request, "flow.spec.review.propose") : null,
   });
@@ -5261,7 +5271,8 @@ async function runDraftReview(root, flow, config, dryRun) {
     maxChars: promptLimit,
     ElementClass: DraftSectionPromptElement,
     id: `draft-review-${stage.key}`,
-    projectRoot: container.get("root"),
+    projectRoot: reviewInputRoot(),
+    temporaryRoot: reviewTemporaryRoot(),
     projectInvocation: typeof agent.projectInvocation === "function"
       ? (request) => projectReviewAgentInvocation(agent, request, stage.commandId, fallbackSystemPrompt) : null,
   });
@@ -5387,15 +5398,19 @@ async function runReview(rawArgs) {
     process.exit(EXIT_ERROR);
   }
 
-  const flowManager = container.get("flowManager");
-  const flow = flowManager.load();
+  const executionUnit = canonicalReviewWorkerUnit();
+  const selectedIdentity = executionUnit?.manifestDocument;
+  reviewExecutionContext = resolveFlowContext(container, { input: selectedIdentity
+    ? { expectSpec: selectedIdentity.specId, expectRunId: selectedIdentity.runId } : {} });
+  const flowManager = reviewExecutionContext.flowManager;
+  container.register("flowManager", flowManager);
+  const flow = reviewExecutionContext.flowState;
   if (!flow) {
     console.error("Error: no active flow (flow.json not found)");
     process.exit(EXIT_ERROR);
   }
 
   const config = container.get("config");
-  const executionUnit = canonicalReviewWorkerUnit();
   if (executionUnit !== null) {
     const contract = executionUnit.readExecutionContract();
     const protocol = ExecutionProtocolSnapshot.forReview({ manifest: executionUnit.manifestDocument, skipConfirm: cli.skipConfirm });

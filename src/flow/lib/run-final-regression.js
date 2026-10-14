@@ -790,6 +790,8 @@ async function executeCanonicalFinalRegression(ctx) {
       flowManager: ctx.flowManager,
       specId: state.specId,
       changedFileSnapshotDigest: () => captureFinalRegressionChangedSnapshotDigest({
+        repositoryRoot: ctx.repositoryRoot || ctx.mainRoot || ctx.root,
+        specId: ctx.specId, runId: ctx.flowState?.runId,
         root,
         relativeSpecFile: store.location.relativeSpecFile,
       }),
@@ -817,6 +819,8 @@ async function executeCanonicalFinalRegression(ctx) {
       root,
       artifact,
       repositoryBindingOptions: {
+        repositoryRoot: ctx.repositoryRoot || ctx.mainRoot || ctx.root,
+        specId: state.specId, runId: state.runId,
         pathspecExcludes: new RepairArtifactRegistry(store.location.relativeSpecFile).gitPathspecExcludes(),
       },
     });
@@ -843,6 +847,8 @@ async function executeCanonicalFinalRegression(ctx) {
       flowManager: ctx.flowManager,
       specId: state.specId,
       changedFileSnapshotDigest: () => captureFinalRegressionChangedSnapshotDigest({
+        repositoryRoot: ctx.repositoryRoot || ctx.mainRoot || ctx.root,
+        specId: ctx.specId, runId: ctx.flowState?.runId,
         root,
         relativeSpecFile: store.location.relativeSpecFile,
       }),
@@ -871,6 +877,8 @@ async function executeCanonicalFinalRegression(ctx) {
   const resultPathRelative = store.location.relativeArtifact("final.regression");
   const config = configForAuthorityRoot(root, ctx.config || {});
   const repositoryBindingOptions = {
+    repositoryRoot: ctx.repositoryRoot || ctx.mainRoot || ctx.root,
+    specId: state.specId, runId: state.runId,
     pathspecExcludes: new RepairArtifactRegistry(store.location.relativeSpecFile).gitPathspecExcludes(),
   };
   const beforeRepository = FinalRegressionRepositoryBinding.capture(root, repositoryBindingOptions);

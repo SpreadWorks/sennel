@@ -1,3 +1,4 @@
+import { createTmpDir as createTestDirectory } from "../../support/builders/tmp-dir.js";
 /**
  * tests/integration/flow/set-approval.test.js
  *
@@ -13,7 +14,6 @@ import { describe, it, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
-import os from "node:os";
 import { execFileSync, spawnSync } from "node:child_process";
 import { FlowAtStepFixture, makeFlowManager } from "../../support/infrastructure/flow-setup.js";
 import { loadSpecJson } from "../../../src/lib/spec-json.js";
@@ -21,7 +21,7 @@ import { loadSpecJson } from "../../../src/lib/spec-json.js";
 const SENNEL = path.resolve("src/sennel.js");
 
 function createProject() {
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "set-approval-"));
+  const tmp = createTestDirectory("set-approval-");
   fs.mkdirSync(path.join(tmp, ".sennel"), { recursive: true });
   execFileSync("git", ["init", tmp], { stdio: "ignore" });
   execFileSync("git", ["-C", tmp, "commit", "--allow-empty", "-m", "init"], { stdio: "ignore" });

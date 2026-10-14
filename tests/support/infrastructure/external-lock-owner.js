@@ -1,6 +1,6 @@
+import { createTmpDir as createTestDirectory } from "../builders/tmp-dir.js";
 import { spawn } from "node:child_process";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 
 function waitForFile(filePath, completion) {
@@ -40,7 +40,7 @@ export class ExternalProcessLockOwner {
   }
 
   constructor({ directory, fileName, kind, authority, waitPolicy }) {
-    this.supportRoot = fs.mkdtempSync(path.join(os.tmpdir(), "sennel-external-lock-owner-"));
+    this.supportRoot = createTestDirectory("sennel-external-lock-owner-");
     this.readyPath = path.join(this.supportRoot, "ready");
     this.stderr = "";
     this.stdinError = null;

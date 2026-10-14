@@ -5,6 +5,7 @@ import { ProcessIdentitySource } from "./process-identity.js";
 import { ProcessLock } from "./process-lock.js";
 import { RealDirectoryAuthority } from "./real-directory-authority.js";
 import { PRODUCT } from "./product.js";
+import { sanitizeGitRepositoryEnvironment } from "./git-repository-environment.js";
 
 const MAINTENANCE_KIND = "repository-maintenance";
 const FLOW_OPERATION_KIND = "repository-flow-operation";
@@ -13,7 +14,10 @@ const FLOW_OPERATION_FILE = ".repository-flow-operation.lock";
 
 export function resolveRepositoryLockRoot(root) {
   const resolved = path.resolve(root);
-  const result = spawnSync("git", ["-C", resolved, "rev-parse", "--git-common-dir"], { encoding: "utf8" });
+  const result = spawnSync("git", ["-C", resolved, "rev-parse", "--git-common-dir"], {
+    encoding: "utf8",
+    env: sanitizeGitRepositoryEnvironment(process.env, { repositoryRoot: resolved }),
+  });
   if (result.status !== 0) return resolved;
   const commonDirectory = path.resolve(resolved, result.stdout.trim());
   return path.basename(commonDirectory) === ".git" ? path.dirname(commonDirectory) : resolved;

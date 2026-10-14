@@ -1,13 +1,13 @@
+import { createTmpDir as createTestDirectory } from "../../support/builders/tmp-dir.js";
 import assert from "node:assert/strict";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { it } from "node:test";
 import { runCmd, runCmdAsync } from "../../../src/lib/process.js";
 import { LinuxProcessStat } from "../../../src/lib/process-identity.js";
 
 function rootFixture(t) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "process-cancellation-"));
+  const root = createTestDirectory("process-cancellation-");
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   return root;
 }

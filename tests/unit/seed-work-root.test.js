@@ -1,12 +1,12 @@
+import { createTmpDir as createTestDirectory } from "../support/builders/tmp-dir.js";
 import assert from "node:assert/strict";
-import { mkdtempSync, writeFileSync, existsSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { writeFileSync, existsSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { SeedWorkRoot } from "../support/builders/seed-work-root.js";
 
 test("immutable seed creates independent work roots with cleanup", () => {
-  const seed = mkdtempSync(join(tmpdir(), "sennel-seed-"));
+  const seed = createTestDirectory("sennel-seed-");
   writeFileSync(join(seed, "seed.txt"), "seed");
   const first = new SeedWorkRoot(seed);
   const second = new SeedWorkRoot(seed);

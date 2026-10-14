@@ -17,8 +17,8 @@
 
 import fs from "fs";
 import { isDeepStrictEqual } from "node:util";
-import os from "os";
 import path from "path";
+import { TemporaryPaths } from "../../lib/temporary-paths.js";
 import { Envelope } from "../../lib/flow-envelope.js";
 import { getPorcelainV2Status, runGit, GitRefObservation, GitRefProbeError } from "../../lib/git-helpers.js";
 import { FlowCommand } from "./base-command.js";
@@ -49,7 +49,7 @@ import {
 import { buildCurrentFlowDefinition, DraftStepSettlementReceipt } from "../definition.js";
 import { FLOW_ARTIFACT_CONTRACTS } from "../../lib/flow-artifact-contract.js";
 import { discoverFlowCommandHooks, runFlowCommandHooks } from "../../lib/plugin-registry.js";
-import { SharedFinalizeCleanupJournal, FinalizeTeardownAuthorization, finalizeAuditId, assertExactObjectKeys, pathExistsStrict, assertPointerReality, validateTeardown, FinalizeCleanupEffectPreparation, FinalizeRescuedCommits, AutoRescueAbortFailure, AutoRescueOutcome, AutoRescueWorktreeAuthority, AutoRescueCleanupJournal, AutoRescueCleanupStore, autoRescueIdentity } from "./finalize-cleanup-journal.js";
+import { SharedFinalizeCleanupJournal, FinalizeTeardownAuthorization, finalizeAuditId, assertExactObjectKeys, pathExistsStrict, assertPointerReality, validateTeardown, FinalizeCleanupEffectPreparation, FinalizeRescuedCommits, AutoRescueAbortFailure, AutoRescueOutcome, AutoRescueWorktreeAuthority, AutoRescueCleanupJournal, AutoRescueCleanupStore, autoRescueIdentity, autoRescueTemporaryDirectory } from "./finalize-cleanup-journal.js";
 export { validateTeardown };
 import { PRODUCT } from "../../lib/product.js";
 import {
@@ -324,6 +324,7 @@ function listMainRepoDirtyFiles(
     "--porcelain",
     "--",
     ".",
+    ...new FlowRepositoryRuntimeArtifactRegistry().gitPathspecExcludes(),
     `:!${issueLogPath}`,
     ...flowPaths.map((flowPath) => `:!${flowPath}`),
   ]);
@@ -1359,15 +1360,13 @@ export function runDetachedAutoRescue({
   featureBranch,
   specRoot = DEFAULT_FLOW_SPEC_DIR,
   specId,
+  runId = null,
   allowedIssueLogId = null,
   allowFinalizeMetadata = false,
   range,
   runGitFn = runGit,
   worktreeAuthoritySource = new AutoRescueWorktreeAuthoritySource(mainRepoPath),
-  tempWorktreePathFactory = () => path.join(
-    os.tmpdir(),
-    `${PRODUCT.temporaryPrefix("rescue-tmp")}${process.pid}-${Date.now()}`,
-  ),
+  tempWorktreePathFactory = null,
 }) {
   const identity = autoRescueIdentity({
     mainRepoPath,
@@ -1376,6 +1375,7 @@ export function runDetachedAutoRescue({
     featureBranch,
     specRoot,
     specId,
+    runId,
     allowedIssueLogId,
     allowFinalizeMetadata,
   });
@@ -1437,7 +1437,10 @@ export function runDetachedAutoRescue({
     return AutoRescueOutcome.failure("MAIN_REPO_LOCKED").toJSON();
   }
   const expectedBaseSha = baseProbe.stdout.trim();
-  const tempWorktreePath = tempWorktreePathFactory();
+  const temporaryPaths = new TemporaryPaths(mainRepoPath);
+  const tempWorktreePath = tempWorktreePathFactory
+    ? tempWorktreePathFactory()
+    : temporaryPaths.create(autoRescueTemporaryDirectory(identity), PRODUCT.temporaryPrefix("rescue-tmp"));
   const journal = AutoRescueCleanupJournal.create(
     identity,
     expectedBaseSha,
@@ -1449,6 +1452,12 @@ export function runDetachedAutoRescue({
     "-C", mainRepoPath, "worktree", "add", "--detach", tempWorktreePath, expectedBaseSha,
   ]);
   if (!addRes.ok) {
+    if (tempWorktreePathFactory === null) {
+      temporaryPaths.validate(tempWorktreePath);
+      try { fs.rmdirSync(tempWorktreePath); } catch (error) {
+        if (error.code !== "ENOENT" && error.code !== "ENOTEMPTY") throw error;
+      }
+    }
     const outcome = AutoRescueOutcome.failure("MAIN_REPO_LOCKED");
     journal.advance("body-failed", outcome);
     store.write(journal);
@@ -1539,6 +1548,7 @@ export function runAutoRescue({
   featureBranch,
   specRoot = DEFAULT_FLOW_SPEC_DIR,
   specId,
+  runId = null,
   allowedIssueLogId = null,
   allowFinalizeMetadata = false,
 }) {
@@ -1550,6 +1560,7 @@ export function runAutoRescue({
     featureBranch,
     specRoot,
     specId,
+    runId,
     allowedIssueLogId,
     allowFinalizeMetadata,
   });
@@ -1563,6 +1574,7 @@ export function runAutoRescue({
         featureBranch,
         specRoot,
         specId,
+        runId,
         range,
         allowedIssueLogId,
         allowFinalizeMetadata,
@@ -1599,6 +1611,7 @@ export function runAutoRescue({
       featureBranch,
       specRoot,
       specId,
+      runId,
       range,
       allowedIssueLogId,
       allowFinalizeMetadata,
@@ -2087,6 +2100,7 @@ export class RunFinalizeCleanupCommand extends FlowCommand {
         featureBranch,
         specRoot: requiredSpecLocation(state).relativeRoot,
         specId,
+        runId: state.runId,
         allowedIssueLogId: finalizeAuditId("cherry-pick-conflict", state, { baseline, featureBranch }),
         allowFinalizeMetadata: true,
       });
@@ -2573,8 +2587,10 @@ export function commitFinalizeCleanupPostCommandMetadata({ flowManager, specId, 
   try {
     const result = commitFinalizeCompletion({
       root,
+      repositoryRoot: specLocation.repositoryRoot,
       specRoot: specLocation.relativeRoot,
       specId,
+      runId: state.runId,
       idempotencyKey: identity.idempotencyKey,
       additionalPaths,
     });

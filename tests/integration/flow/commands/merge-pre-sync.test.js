@@ -1,3 +1,4 @@
+import { createTmpDir as createTestDirectory } from "../../../support/builders/tmp-dir.js";
 /**
  * Tests for spec 211 pre-sync behavior in merge.js (R1, R3, R6):
  *   - Before squash merge, auto-fetch + rebase in the worktree when base has advanced.
@@ -8,7 +9,6 @@ import { describe, it, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
-import os from "node:os";
 
 import { runPreSync } from "../../../../src/flow/commands/merge.js";
 import { runCmd } from "../../../../src/lib/process.js";
@@ -29,10 +29,10 @@ function commitIn(dir, file, content, msg) {
 describe("runPreSync — success path (R1)", () => {
   let upstream, worktree;
   beforeEach(() => {
-    upstream = fs.mkdtempSync(path.join(os.tmpdir(), "ps-up-"));
+    upstream = createTestDirectory("ps-up-");
     init(upstream);
     commitIn(upstream, "a.txt", "a", "base");
-    worktree = fs.mkdtempSync(path.join(os.tmpdir(), "ps-wt-"));
+    worktree = createTestDirectory("ps-wt-");
     runCmd("git", ["clone", "-q", upstream, worktree]);
     runCmd("git", ["-C", worktree, "config", "user.email", "t@example.com"]);
     runCmd("git", ["-C", worktree, "config", "user.name", "T"]);
@@ -60,10 +60,10 @@ describe("runPreSync — success path (R1)", () => {
 describe("runPreSync — conflict path (R3)", () => {
   let upstream, worktree;
   beforeEach(() => {
-    upstream = fs.mkdtempSync(path.join(os.tmpdir(), "ps-cu-"));
+    upstream = createTestDirectory("ps-cu-");
     init(upstream);
     commitIn(upstream, "a.txt", "a", "base");
-    worktree = fs.mkdtempSync(path.join(os.tmpdir(), "ps-cw-"));
+    worktree = createTestDirectory("ps-cw-");
     runCmd("git", ["clone", "-q", upstream, worktree]);
     runCmd("git", ["-C", worktree, "config", "user.email", "t@example.com"]);
     runCmd("git", ["-C", worktree, "config", "user.name", "T"]);

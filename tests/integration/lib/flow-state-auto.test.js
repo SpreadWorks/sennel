@@ -1,12 +1,12 @@
+import { createTmpDir as createTestDirectory } from "../../support/builders/tmp-dir.js";
 import { describe, it, beforeEach, afterEach } from "node:test";
 import { CanonicalFlowFixture, makeFlowManager } from "../../support/infrastructure/flow-setup.js";
 import assert from "node:assert/strict";
 import fs from "fs";
 import path from "path";
-import os from "os";
 import { execFileSync } from "node:child_process";
 function createTmpProject() {
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "flow-auto-"));
+  const tmp = createTestDirectory("flow-auto-");
   fs.mkdirSync(path.join(tmp, ".sennel"), { recursive: true });
   fs.mkdirSync(path.join(tmp, "specs", "001-test"), { recursive: true });
   execFileSync("git", ["init", tmp], { stdio: "ignore" });

@@ -10,6 +10,7 @@
  * ctx.searchQuery — search query string (search mode)
  */
 
+import { flowTemporaryRoot } from "./flow-context.js";
 import fs from "fs";
 import path from "path";
 import { createHash } from "node:crypto";
@@ -287,7 +288,7 @@ function ngramSearch(allEntries, query) {
  * @param {string} root - Project root path
  * @returns {Object[]} Matched entries
  */
-async function aiSearch(allEntries, analysis, query, _root) {
+async function aiSearch(allEntries, analysis, query, _root, invocationOptions = {}) {
   const allKeywords = collectAllKeywords(analysis);
   if (allKeywords.length === 0) return fallbackSearch(allEntries, query);
 
@@ -309,10 +310,10 @@ async function aiSearch(allEntries, analysis, query, _root) {
     }).execute({
       plan,
       callAgent: (built, _batch, _retryIndex, _attempt, providerCallAdmission) => agent.call(built.userPrompt, {
-        ...built, commandId: "flow.context.search", providerCallAdmission,
+        ...built, ...invocationOptions, commandId: "flow.context.search", providerCallAdmission,
       }),
       projectInvocation: typeof agent.projectInvocation === "function"
-        ? (built) => agent.projectInvocation(built.userPrompt, { ...built, commandId: "flow.context.search" })
+        ? (built) => agent.projectInvocation(built.userPrompt, { ...built, ...invocationOptions, commandId: "flow.context.search" })
         : undefined,
       responseContract: { parse: (raw, batch) => new SelectedKeywordResult(raw, batch) },
       reducer: new SelectedKeywordReducer(),
@@ -420,7 +421,7 @@ function _postProcess(results, allEntries, options) {
 
 function contextSearch(allEntries, analysis, query, root, mode = "ngram", options = {}) {
   if (mode === "ai") {
-    return aiSearch(allEntries, analysis, query, root);
+    return aiSearch(allEntries, analysis, query, root, options.invocationOptions);
   }
 
   let results = ngramSearch(allEntries, query);
@@ -431,7 +432,7 @@ function contextSearch(allEntries, analysis, query, root, mode = "ngram", option
   const processed = _postProcess(results, allEntries, options);
 
   if (processed.length === 0) {
-    return aiSearch(allEntries, analysis, query, root);
+    return aiSearch(allEntries, analysis, query, root, options.invocationOptions);
   }
 
   return processed;
@@ -509,7 +510,8 @@ export default class GetContextCommand extends FlowCommand {
       let config;
       try { config = loadConfig(root); } catch (_e) { config = {}; }
       const searchMode = config?.flow?.commands?.context?.search?.mode ?? "ngram";
-      const results = await contextSearch(allEntries, analysis, searchQuery, root, searchMode);
+      const results = await contextSearch(allEntries, analysis, searchQuery, root, searchMode,
+        { invocationOptions: { temporaryRoot: flowTemporaryRoot(ctx) } });
 
       return {
         total: results.length,

@@ -1,7 +1,7 @@
+import { createTmpDir as createTestDirectory } from "../../support/builders/tmp-dir.js";
 import { describe, it, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { Container } from "../../../src/lib/container.js";
 import { Command } from "../../../src/lib/command.js";
@@ -84,7 +84,7 @@ describe("dispatcher (unified runner)", () => {
   });
 
   it("binds dispatcher-generated nonblocking continuations to the current target authority", async () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "sennel-dispatcher-binding-"));
+    const root = createTestDirectory("sennel-dispatcher-binding-");
     try {
       const state = {
         specId: "001-test",
@@ -193,7 +193,7 @@ describe("dispatcher (unified runner)", () => {
     });
 
     it("rejects a target mismatch before command loading or runtime metadata persistence", async () => {
-      const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "sennel-dispatcher-"));
+      const tmp = createTestDirectory("sennel-dispatcher-");
       try {
         container.register("paths", {
           root: tmp,
@@ -255,7 +255,7 @@ describe("dispatcher (unified runner)", () => {
         ["FLOW_TARGET_RECOVERY_REQUIRED", 1],
         ["FLOW_TARGET_AUTHORITY_CORRUPT", 1],
       ]) {
-        const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "sennel-dispatcher-resolution-"));
+        const tmp = createTestDirectory("sennel-dispatcher-resolution-");
         try {
           container.register("paths", {
             root: tmp,
@@ -315,7 +315,7 @@ describe("dispatcher (unified runner)", () => {
     });
 
     it("rejects a preparing target before runtime logs, metadata, commands, or hooks", async () => {
-      const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "sennel-dispatcher-preparing-"));
+      const tmp = createTestDirectory("sennel-dispatcher-preparing-");
       try {
         container.register("paths", {
           root: tmp,
@@ -390,7 +390,7 @@ describe("dispatcher (unified runner)", () => {
     });
 
     it("flow run envelope mode writes automatic runtime log without changing stdout envelope", async () => {
-      const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "sennel-dispatcher-"));
+      const tmp = createTestDirectory("sennel-dispatcher-");
       try {
         container.register("paths", {
           root: tmp,
@@ -437,7 +437,7 @@ describe("dispatcher (unified runner)", () => {
     });
 
     it("flow run uses root .tmp/logs/<flowId>.log", async () => {
-      const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "sennel-dispatcher-"));
+      const tmp = createTestDirectory("sennel-dispatcher-");
       try {
         const agentWorkDir = path.join(tmp, ".agent-work");
         container.register("paths", { root: tmp, agentWorkDir });
@@ -477,7 +477,7 @@ describe("dispatcher (unified runner)", () => {
     });
 
     it("persists runtime metadata in the resolved flow or task scope", async () => {
-      const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "sennel-dispatcher-"));
+      const tmp = createTestDirectory("sennel-dispatcher-");
       try {
         container.register("paths", {
           root: tmp,
@@ -556,7 +556,7 @@ describe("dispatcher (unified runner)", () => {
     });
 
     it("runtime log captures dispatcher stderr callback writes", async () => {
-      const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "sennel-dispatcher-"));
+      const tmp = createTestDirectory("sennel-dispatcher-");
       try {
         container.register("paths", {
           root: tmp,
@@ -597,7 +597,7 @@ describe("dispatcher (unified runner)", () => {
     });
 
     it("flow run without active flow uses root .tmp/logs/no-flow.log", async () => {
-      const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "sennel-dispatcher-"));
+      const tmp = createTestDirectory("sennel-dispatcher-");
       try {
         const agentWorkDir = path.join(tmp, ".agent-work");
         container.register("paths", { root: tmp, agentWorkDir });
@@ -636,7 +636,7 @@ describe("dispatcher (unified runner)", () => {
     });
 
     it("allows a strict no-Flow read to suppress the runtime log", async () => {
-      const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "sennel-dispatcher-"));
+      const tmp = createTestDirectory("sennel-dispatcher-");
       try {
         const agentWorkDir = path.join(tmp, ".agent-work");
         container.register("paths", { root: tmp, agentWorkDir });
@@ -674,7 +674,7 @@ describe("dispatcher (unified runner)", () => {
     });
 
     it("runtime log write is best-effort when cleanup removes the log directory", async () => {
-      const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "sennel-dispatcher-"));
+      const tmp = createTestDirectory("sennel-dispatcher-");
       try {
         const agentWorkDir = path.join(tmp, ".agent-work");
         container.register("paths", { root: tmp, agentWorkDir });
@@ -711,7 +711,7 @@ describe("dispatcher (unified runner)", () => {
     });
 
     it("writes an outer dispatcher runtime log under main authority when nested cleanup removes its worktree", async () => {
-      const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "sennel-dispatcher-finalize-cleanup-"));
+      const tmp = createTestDirectory("sennel-dispatcher-finalize-cleanup-");
       const mainRoot = path.join(tmp, "main");
       const worktreeRoot = path.join(mainRoot, ".sennel", "worktree", "feature-demo");
       try {
@@ -774,7 +774,7 @@ describe("dispatcher (unified runner)", () => {
     });
 
     it("persists cleanup runtime metadata through the loaded command module and main flow authority", async () => {
-      const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "sennel-dispatcher-cleanup-metadata-"));
+      const tmp = createTestDirectory("sennel-dispatcher-cleanup-metadata-");
       try {
         const agentWorkDir = path.join(tmp, ".agent-work");
         container.register("paths", { root: tmp, agentWorkDir });

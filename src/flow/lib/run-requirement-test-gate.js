@@ -2,10 +2,11 @@ import { ExecutionProtocolSnapshot } from "./execution-protocol-snapshot.js";
 import { FlowExecutionInputBaseline, FlowExecutionContractRefusal, executionValueDigest } from "./flow-execution-contract.js";
 import fs from "node:fs";
 import crypto from "node:crypto";
-import os from "node:os";
 import path from "node:path";
 
-import { runCmdAsync } from "../../lib/process.js";
+import { runCmdAsync, standaloneTestEnvironment } from "../../lib/process.js";
+import { TemporaryPaths } from "../../lib/temporary-paths.js";
+import { flowTemporaryRoot } from "./flow-context.js";
 import { FLOW_ARTIFACT_CONTRACTS, FlowArtifactAttemptHistory } from "../../lib/flow-artifact-contract.js";
 import { FlowCommand } from "./base-command.js";
 import { attachCanonicalCommandResultArtifact } from "./canonical-command-result.js";
@@ -103,8 +104,12 @@ function observationFor({ bundle, requirementId, specRevision, kind, testName })
   });
 }
 
+// repositoryRoot remains the runner checkout; temporaryRepositoryRoot is the
+// canonical project authority for scratch and source-import mapping.
 export async function runRequirementTestGate({
   repositoryRoot,
+  temporaryRepositoryRoot = repositoryRoot,
+  temporaryRoot = null,
   versionLocation,
   specRevision,
   requirementId,
@@ -116,9 +121,10 @@ export async function runRequirementTestGate({
   requiredText(requirementId, "requirementId");
   if (!versionLocation || typeof versionLocation.resolve !== "function") throw new Error("versionLocation is required");
   const sources = candidateSourcesByPath(bundle, sourceBytes);
-  const runtimeParent = versionLocation.resolve(".runtime/requirement-test-gate");
-  fs.mkdirSync(runtimeParent, { recursive: true });
-  const materialized = fs.mkdtempSync(path.join(runtimeParent, "candidate-"));
+  const temporaryPaths = new TemporaryPaths(temporaryRepositoryRoot);
+  const materialized = temporaryPaths.create(
+    temporaryRoot ?? temporaryPaths.runtime("requirement-test-gate"), "candidate-",
+  );
   try {
     const testFiles = [];
     for (const source of sources.bundle.sources) {
@@ -136,7 +142,7 @@ export async function runRequirementTestGate({
     const bootstrap = new SpecTestBootstrapValidator({
       payloadSpecDir: materialized,
       canonicalSpecDir: versionLocation.resolve("artifacts"),
-      repositoryRoot,
+      repositoryRoot: temporaryRepositoryRoot,
       executionRoot: repositoryRoot,
     }).validate();
     if (!bootstrap.ok) {
@@ -191,14 +197,14 @@ export async function runRequirementTestGate({
     }
     const target = assigned[0];
     const execution = new SharedSpecTestExecution({
-      repositoryRoot,
+      repositoryRoot: temporaryRepositoryRoot,
       executionRoot: repositoryRoot,
       specRoot: materialized,
       canonicalSpecRoot: versionLocation.resolve("artifacts"),
     });
     const relative = path.relative(repositoryRoot, target.file).split(path.sep).join("/");
     const argv = execution.nodeArgv(["--test", `--test-name-pattern=^${target.testName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, relative]);
-    const { NODE_TEST_CONTEXT: _nodeTestContext, ...environment } = process.env;
+    const environment = standaloneTestEnvironment();
     const processResult = await runCmdAsync(argv[0], argv.slice(1), {
       cwd: repositoryRoot,
       timeout: timeoutMs,
@@ -324,6 +330,8 @@ export default class RunRequirementTestGateCommand extends FlowCommand {
     if (!claim.newlyClaimed) throw new FlowExecutionContractRefusal("Requirement Test Gate has an uncertain execution without a published response");
     const execution = await this.gateRunner({
       repositoryRoot: ctx.root,
+      temporaryRepositoryRoot: ctx.repositoryRoot || ctx.mainRoot || ctx.root,
+      temporaryRoot: flowTemporaryRoot(ctx),
       versionLocation: testArtifacts.location,
       specRevision: workItem.specRevision,
       requirementId: workItem.requirementId,

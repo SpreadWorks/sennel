@@ -1,7 +1,8 @@
+import { testTemporaryRoot } from "../../test-environment.js";
+import { createTmpDir as createTestDirectory } from "../../support/builders/tmp-dir.js";
 import { afterEach, describe, it } from "node:test";
 import assert from "node:assert/strict";
 import path from "path";
-import os from "os";
 import fs from "fs";
 import { Agent } from "../../../src/lib/agent.js";
 import { ProviderRegistry } from "../../../src/lib/provider.js";
@@ -10,7 +11,7 @@ import { Logger } from "../../../src/lib/log.js";
 const roots = [];
 
 function tmpDir() {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "agent-svc-"));
+  const root = createTestDirectory("agent-svc-");
   roots.push(root);
   return root;
 }
@@ -36,7 +37,7 @@ function makeAgent({ config, paths } = {}) {
     ...(paths || {}),
   };
   const registry = new ProviderRegistry(cfg.agent?.providers || {});
-  const logger = new Logger({ logDir: os.tmpdir(), enabled: false });
+  const logger = new Logger({ logDir: testTemporaryRoot().path, enabled: false });
   return new Agent({ config: cfg, paths: resolvedPaths, registry, logger });
 }
 

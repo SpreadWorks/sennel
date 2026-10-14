@@ -1,6 +1,6 @@
+import { createTmpDir as createTestDirectory } from "../support/builders/tmp-dir.js";
 import assert from "node:assert/strict";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { test } from "node:test";
@@ -125,7 +125,7 @@ for (const entry of implPhaseScopes) {
     ["empty scope", `export const ${entry.exportName} = [];`],
     ["invalid registration export", `export const ${entry.exportName} = [{}];`]]) {
     test(`A01/A11 ${name}: ${label} is a contract assertion, not a syntax/import failure`, async (t) => {
-      const isolated = fs.mkdtempSync(path.join(os.tmpdir(), "sennel-37e4-registration-"));
+      const isolated = createTestDirectory("sennel-37e4-registration-");
       t.after(() => fs.rmSync(isolated, { recursive: true, force: true }));
       const module = path.join(isolated, entry.composition);
       fs.mkdirSync(path.dirname(module), { recursive: true });
@@ -144,7 +144,7 @@ for (const entry of implPhaseScopes) {
 }
 
 test("isolated valid production export reaches the shared loader and checker without replacing production acceptance", async (t) => {
-  const isolated = fs.mkdtempSync(path.join(os.tmpdir(), "sennel-37e4-valid-export-"));
+  const isolated = createTestDirectory("sennel-37e4-valid-export-");
   t.after(() => fs.rmSync(isolated, { recursive: true, force: true }));
   const fixtureModule = pathToFileURL(path.join(root, "tests/fixtures/structure/staged-execution.js")).href;
   for (const entry of implPhaseScopes) {

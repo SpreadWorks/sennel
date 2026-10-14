@@ -1,6 +1,6 @@
+import { createTmpDir as createTestDirectory } from "../../support/builders/tmp-dir.js";
 import assert from "node:assert/strict";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 import { Observation } from "../../../src/flow/lib/observation.js";
@@ -139,7 +139,7 @@ test("complete-evidence judgments retain the target relationship contract for gr
 test("Spec Gate delivers target guidance through inline, grouped file, and batched file evaluation", async (t) => {
   for (const mode of ["inline", "grouped-file", "batched-file"]) {
     await t.test(mode, async (t) => {
-      const root = fs.mkdtempSync(path.join(os.tmpdir(), "spec-target-guidance-"));
+      const root = createTestDirectory("spec-target-guidance-");
       t.after(() => fs.rmSync(root, { recursive: true, force: true }));
       const canonicalSpec = spec();
       if (mode !== "inline") canonicalSpec.background += "x".repeat(130000);

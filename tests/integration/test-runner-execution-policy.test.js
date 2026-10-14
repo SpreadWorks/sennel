@@ -32,3 +32,25 @@ test("runner passes policy default and explicit override to Node file concurrenc
   await executeFiles([".tmp/a.test.js"], { spawnProcess, write: () => {}, root: "/repo", jobs: 2 });
   assert.deepEqual(commands[0].slice(0, 4), ["node", "--test", "--test-concurrency", "2"]);
 });
+
+test("runner child execution strips inherited Node test context and preserves temporary ownership", async () => {
+  let childEnvironment;
+  const inherited = process.env.NODE_TEST_CONTEXT;
+  process.env.NODE_TEST_CONTEXT = "child-v8";
+  try {
+    const spawnProcess = (_command, _args, options) => {
+      childEnvironment = options.env;
+      const child = new EventEmitter(); child.stdout = new EventEmitter(); child.stderr = new EventEmitter();
+      queueMicrotask(() => { child.stdout.emit("data", "# pass 1\n"); child.emit("close", 0, null); });
+      return child;
+    };
+    assert.equal(await executeFiles(["tests/unit/a.test.js"], { spawnProcess, write: () => {}, root: "/repo" }), 0);
+    assert.equal(childEnvironment.NODE_TEST_CONTEXT, undefined);
+    assert.equal(childEnvironment.TMPDIR, process.env.TMPDIR);
+    assert.equal(childEnvironment.SENNEL_TEST_TEMP_ROOT, process.env.SENNEL_TEST_TEMP_ROOT);
+    assert.equal(process.env.NODE_TEST_CONTEXT, "child-v8");
+  } finally {
+    if (inherited === undefined) delete process.env.NODE_TEST_CONTEXT;
+    else process.env.NODE_TEST_CONTEXT = inherited;
+  }
+});

@@ -1,12 +1,13 @@
+import { testTemporaryRoot } from "../../../test-environment.js";
+import { createTmpDir as createTestDirectory } from "../../../support/builders/tmp-dir.js";
 import { describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { loadDataSources } from "../../../../src/docs/lib/data-source-loader.js";
 
 function makeTmpDir(prefix) {
-  return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  return createTestDirectory(prefix);
 }
 
 describe("loadDataSources (fail-fast on broken DataSource modules)", () => {
@@ -66,7 +67,7 @@ describe("loadDataSources (fail-fast on broken DataSource modules)", () => {
   });
 
   it("returns an empty map when the directory does not exist", async () => {
-    const missing = path.join(os.tmpdir(), `sennel-loader-missing-${Date.now()}`);
+    const missing = path.join(testTemporaryRoot().path, `sennel-loader-missing-${Date.now()}`);
     const sources = await loadDataSources(missing);
     assert.equal(sources.size, 0);
   });
