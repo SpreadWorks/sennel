@@ -204,3 +204,25 @@ verified atomicity, budget, promotion, stale-admission or downstream guarantee.
 
 The worktree is retained for review. No commit, merge, push, publish, deployment,
 board mutation or Flow start is authorized or performed by this implementation.
+
+## 55dc Requirement Service audit seed boundary
+
+`requirement-test-service-boundary-coverage.test.js` shares only the normally
+produced frontier immediately before Approval: its all-five scenario and direct
+test-review/test-gate scenarios use three independent clones of one file-owned
+seed. The seed is generated lazily after actual production registrations have
+been admitted. The different Review response is installed only in the clone.
+
+The all-five observer starts before the first Approval projection and execution.
+Approval, generation, rejection, repair and Gate remain real producers in that
+clone; the direct cases preserve their actual commands and registry post hooks.
+Persisted outputs are reloaded before the target consumer. All original
+PreparedStep, constructor, declared typed argument, dependency-instance,
+consume/project and complete-registration assertions remain in place.
+
+This file owns a distinct SeedCleanupScope even when another file uses the same
+Requirement inputs. No live manager, mock or observation is shared. Existing
+seed/fromSeed validates canonical bytes, artifacts and Git HEAD on the new root
+and checks the immutable source during teardown. These boundaries describe the
+implementation; they do not assert measured correctness or a speedup before the
+parent's fixed subset comparison completes.

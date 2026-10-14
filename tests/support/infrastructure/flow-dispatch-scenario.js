@@ -13,6 +13,35 @@ import { Agent } from "../../../src/lib/agent.js";
 import { AgentProviderCompletionEvidence } from "../../../src/lib/agent-failure.js";
 import { ProcessExecutionRuntime } from "../../../src/lib/process-execution-runtime.js";
 import { Logger } from "../../../src/lib/log.js";
+import { dispatch } from "../../../src/lib/dispatcher.js";
+import { flowCommands } from "../../../src/lib/command-registry.js";
+import { buildFlowCommandHookContext } from "../../../src/flow/lib/flow-context.js";
+
+export class FlowDispatchExecution {
+  constructor(name, argv) {
+    this.name = name;
+    this.argv = argv;
+    this.result = null;
+    this.exitCode = 0;
+    this.stdout = "";
+    this.stderr = "";
+  }
+
+  get envelope() { return JSON.parse(this.stdout); }
+}
+
+/** Capture the production registry, hooks and dispatcher output in-process. */
+export async function dispatchFlowCommand({ container, group, name, argv = [], runtimeLog = false,
+  execution = new FlowDispatchExecution(name, argv) }) {
+  const entry = flowCommands[group][name];
+  assert.ok(entry, `production ${group} command ${name} must exist`);
+  await dispatch({ container, entry, argv, envelopeType: group, envelopeKey: name, runtimeLog,
+    buildHookCtx: (container, input) => buildFlowCommandHookContext(container, entry, input),
+    stdout: (text) => { execution.stdout += text; },
+    stderr: (text) => { execution.stderr += text; },
+    setExitCode: (code) => { execution.exitCode = code; } });
+  return execution;
+}
 
 /** Bind a canonical manager and external worker to the production dispatcher. */
 export function dispatchContainer({ root, mainRoot = root, inWorktree = false, config = {}, flowManager, agent }) {

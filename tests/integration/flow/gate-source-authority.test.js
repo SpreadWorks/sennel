@@ -1,5 +1,8 @@
+import { performance } from "node:perf_hooks";
+import { CanonicalScenarioSeed } from "../../support/assertions/canonical-persistence.js";
+import { SeedCleanupScope, SeedWorkRoot, observeSeedTiming } from "../../support/builders/seed-work-root.js";
 import { completeCanonicalSourceHandoff } from "../../support/builders/source-handoff-scenario.js";
-import { afterEach, describe, it } from "node:test";
+import { after, afterEach, describe, it } from "node:test";
 import assert from "node:assert/strict";
 
 import RunGateCommand, {
@@ -87,6 +90,31 @@ async function taskGateFixture(root, sourceText = "export const currentTaskBehav
   return flowManager;
 }
 
+const seedScope = new SeedCleanupScope(after);
+let taskGateSeed;
+async function standardTaskGateFixture() {
+  if (!taskGateSeed) {
+    const started = performance.now();
+    const producerRoot = createTmpDir("gate-source-authority-");
+    try {
+      const manager = await taskGateFixture(producerRoot);
+      observeSeedTiming("task-gate-producer", performance.now() - started);
+      taskGateSeed = CanonicalScenarioSeed.freeze(seedScope, { root: producerRoot, specId: SPEC_ID,
+        manager, prefix: "sennel-task-gate-seed-", frontier: "T-1-gate", snapshot: canonicalSnapshot(manager) });
+    } finally { removeTmpDir(producerRoot); }
+  }
+  const copy = new SeedWorkRoot(taskGateSeed.root, { prefix: "sennel-task-gate-case-" });
+  try {
+    const started = performance.now();
+    const flowManager = makeFlowManager(copy.root);
+    assert.deepEqual(canonicalSnapshot(flowManager), taskGateSeed.snapshot);
+    taskGateSeed.assertClone(flowManager);
+    assert.equal(flowManager.canonicalState(SPEC_ID).current?.at(-1), "T-1-gate");
+    observeSeedTiming("task-gate-readback", performance.now() - started);
+    return { root: copy.root, flowManager };
+  } catch (error) { copy.cleanup(); throw error; }
+}
+
 async function executeTaskGate(root, flowManager) {
   const ctx = {
     root,
@@ -148,8 +176,9 @@ describe("Task Gate source authority", () => {
   });
 
   it("binds a semantic failure before publication, then a fresh reader selects the sealed repair route", async () => {
-    root = createTmpDir("gate-source-authority-");
-    const flowManager = await taskGateFixture(root);
+    const seeded = await standardTaskGateFixture();
+    root = seeded.root;
+    const flowManager = seeded.flowManager;
     const originalGet = container.get.bind(container);
     container.get = (key) => key !== "agent" ? originalGet(key) : {
       resolve: () => true,
@@ -190,8 +219,9 @@ describe("Task Gate source authority", () => {
   });
 
   it("re-evaluates changed repaired source, publishes PASS, and reconstructs passed convergence after restart", async () => {
-    root = createTmpDir("gate-source-repair-pass-");
-    const flowManager = await taskGateFixture(root);
+    const seeded = await standardTaskGateFixture();
+    root = seeded.root;
+    const flowManager = seeded.flowManager;
     let providerCalls = 0;
     const originalGet = container.get.bind(container);
     container.get = (key) => key !== "agent" ? originalGet(key) : {
@@ -302,8 +332,9 @@ describe("Task Gate source authority", () => {
   });
 
   it("reuses a prior partial PASS for the exact scope before selecting the sealed repair route", async () => {
-    root = createTmpDir("gate-source-reuse-");
-    const flowManager = await taskGateFixture(root);
+    const seeded = await standardTaskGateFixture();
+    root = seeded.root;
+    const flowManager = seeded.flowManager;
     const originalGet = container.get.bind(container);
     container.get = (key) => key !== "agent" ? originalGet(key) : {
       resolve: () => true,
@@ -365,8 +396,9 @@ describe("Task Gate source authority", () => {
   });
 
   it("refuses provider-time canonical spec drift without publishing a Task Gate result", async () => {
-    root = createTmpDir("gate-source-spec-drift-");
-    const flowManager = await taskGateFixture(root);
+    const seeded = await standardTaskGateFixture();
+    root = seeded.root;
+    const flowManager = seeded.flowManager;
     let driftedSpec = null;
     const freshRead = new Proxy(flowManager, {
       get(target, property) {
@@ -418,8 +450,9 @@ describe("Task Gate source authority", () => {
   });
 
   it("refuses provider-time Task source mutation without publishing a Task Gate result", async () => {
-    root = createTmpDir("gate-source-content-drift-");
-    const flowManager = await taskGateFixture(root);
+    const seeded = await standardTaskGateFixture();
+    root = seeded.root;
+    const flowManager = seeded.flowManager;
     const originalGet = container.get.bind(container);
     container.get = (key) => key !== "agent" ? originalGet(key) : {
       resolve: () => true,
@@ -449,8 +482,9 @@ describe("Task Gate source authority", () => {
   });
 
   it("binds a tooling refusal before a fresh reader blocks the Attempt", async () => {
-    root = createTmpDir("gate-source-tooling-");
-    const flowManager = await taskGateFixture(root);
+    const seeded = await standardTaskGateFixture();
+    root = seeded.root;
+    const flowManager = seeded.flowManager;
     const originalGet = container.get.bind(container);
     container.get = (key) => key !== "agent" ? originalGet(key) : {
       resolve: () => false,

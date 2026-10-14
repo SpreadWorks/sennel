@@ -247,3 +247,22 @@ Unknown-defect completeness is not claimed.
 Frozen final test SHA-256, `tests/integration/flow/draft-repair-operations.test.js`: `c935714c6786a0430ff920d68c161566aa3293af36fa1c55b5839f4e8cbaddf6`.
 
 Frozen final test SHA-256, `tests/integration/flow-cli/draft-dispatch-authority.test.js`: `c43d2b54f7b9067e7f64c2b755ac914686b687cbcbee3d9012c45587bd32883a`.
+
+## Shared strict-stop preparation
+
+`SpecPhaseScenario` owns the unchanged seven lifecycle variants. Only the two
+strict-stop cases share a file-owned, lazily generated immutable seed. The real
+dispatcher first runs Spec, Review, triage, repair, four Gate evaluations and
+three bounded repairs. Request order, instructions, checkout, revisions,
+publications, receipts, counts, strict stop and side-effect refusal assertions
+run before the producer restores its external fakes and freezes the root.
+
+Each case reloads canonical state, Activities, catalog and artifact bytes in a
+unique clone. Prefix worker order and counts come from persisted receipts,
+Review publications, Gate attempt IDs and repair audits. New fake observations
+start empty; full-history assertions combine that readback with newly observed
+suffix calls. The Acceptance case performs repair refusal, explicit continuation
+and actual Acceptance consumption. The regeneration case performs real Draft
+and Spec generation, reload, first-repair admission and a new four-Gate,
+three-repair cycle while preserving prior Activities and audits. Large-input,
+advisory and overlong-Acceptance variants keep their distinct preparation.

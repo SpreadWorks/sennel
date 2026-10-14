@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { test } from "node:test";
+import { after, mock, test } from "node:test";
+import { SeedCleanupScope } from "../../support/builders/seed-work-root.js";
 import { PreparedStep, StepRegistration } from "../../../src/flow/engine/composition/step-registration.js";
 import { flowStepExecutionRegistration } from "../../../src/flow/engine/composition/registered-step-execution.js";
 import { ReportGeneratedResult } from "../../../src/flow/engine/step-result.js";
@@ -14,6 +15,13 @@ import { ServiceBoundaryCoverage, assertPreparedServiceBoundary, assertFixturePu
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 const leaves = finalizationPhaseManifest.leaves;
+
+const seedScope = new SeedCleanupScope(after, mock);
+let reportSeed;
+async function beforeReport(Scenario) {
+  reportSeed ??= Scenario.seed(seedScope, { frontier: "report" });
+  return reportSeed;
+}
 
 for (const leaf of leaves) {
   test(`A07/A10 ${leaf.stepId} has its own exact production registration`, () => {
@@ -33,7 +41,9 @@ for (const leaf of leaves) {
     assert.equal(flowStepExecutionRegistration(leaf.stepId), registration,
       `A07 ${leaf.stepId}: composition and caller lookup must use the exact same StepRegistration`);
     const { FinalizationPhaseScenario } = await import("../../support/finalization-phase-scenario.js");
-    const seed = await FinalizationPhaseScenario.seed(t, { frontier: leaf.nodeId });
+    const upstream = await beforeReport(FinalizationPhaseScenario);
+    const seed = await FinalizationPhaseScenario.seed(t, { ...upstream.options,
+      seedRoot: upstream.root, seedSpecId: upstream.specId, frontier: leaf.nodeId });
     for (const route of ["direct", "dispatch"]) {
       await t.test(route, async (routeTest) => {
         const scenario = FinalizationPhaseScenario.fromSeed(routeTest, seed);
@@ -82,7 +92,7 @@ test("A07/A10 direct finalization callers refuse the pending report frontier wit
   const { selected, registry } = await new FinalizationPhaseProductionRegistrations(root).registry();
   assert.deepEqual(selected.map((registration) => registration.stepId).sort(), leaves.map((leaf) => leaf.stepId).sort());
   const { FinalizationPhaseScenario } = await import("../../support/finalization-phase-scenario.js");
-  const seed = await FinalizationPhaseScenario.seed(t, { frontier: "report" });
+  const seed = await beforeReport(FinalizationPhaseScenario);
   for (const registration of selected) {
     await t.test(registration.stepId, async (refusalTest) => {
       const scenario = FinalizationPhaseScenario.fromSeed(refusalTest, seed);

@@ -1,3 +1,5 @@
+import { loadConfig } from "../../../src/lib/config.js";
+import { dispatchContainer, dispatchFlowCommand } from "../../support/infrastructure/flow-dispatch-scenario.js";
 /**
  * tests/integration/flow/prompt-i18n.test.js
  *
@@ -13,6 +15,7 @@ import { createTmpDir, removeTmpDir } from "../../support/builders/tmp-dir.js";
 import { CanonicalFlowFixture, makeFlowManager, setupFlowConfig } from "../../support/infrastructure/flow-setup.js";
 
 const FLOW_CMD = join(process.cwd(), "src/flow.js");
+const RUNTIME_BOOTSTRAP = join(process.cwd(), "src/sennel.js");
 const PROMPT_TEST_TIMEOUT_MS = 5000;
 
 function setupFlowState(dir, lang) {
@@ -20,9 +23,17 @@ function setupFlowState(dir, lang) {
   setupFlowConfig(dir, lang);
 }
 
-function getPromptEnvelope(workRoot, promptId) {
+async function getPromptEnvelope(workRoot, promptId, { realCli = false } = {}) {
+  if (!realCli) {
+    const execution = await dispatchFlowCommand({
+      container: dispatchContainer({ root: workRoot, config: loadConfig(workRoot), flowManager: makeFlowManager(workRoot) }),
+      group: "get", name: "prompt", argv: [promptId], runtimeLog: true,
+    });
+    assert.equal(execution.exitCode, 0, execution.stderr);
+    return execution.envelope;
+  }
   const result = execFileSync(
-    "node", [FLOW_CMD, "get", "prompt", promptId],
+    "node", ["--import", RUNTIME_BOOTSTRAP, FLOW_CMD, "get", "prompt", promptId],
     {
       encoding: "utf8",
       env: { ...process.env, SENNEL_WORK_ROOT: workRoot },
@@ -36,26 +47,26 @@ describe("flow get prompt i18n — Japanese", () => {
   let tmp;
   afterEach(() => tmp && removeTmpDir(tmp));
 
-  it("returns Japanese description for plan.work-environment when lang=ja", () => {
+  it("returns Japanese description for plan.work-environment when lang=ja", async () => {
     tmp = createTmpDir();
     setupFlowState(tmp, "ja");
-    const envelope = getPromptEnvelope(tmp, "plan.work-environment");
+    const envelope = await getPromptEnvelope(tmp, "plan.work-environment", { realCli: true });
     assert.equal(envelope.ok, true);
     assert.ok(envelope.data.description.includes("作業環境"), `should be Japanese: ${envelope.data.description}`);
   });
 
-  it("returns Japanese choices for plan.work-environment when lang=ja", () => {
+  it("returns Japanese choices for plan.work-environment when lang=ja", async () => {
     tmp = createTmpDir();
     setupFlowState(tmp, "ja");
-    const envelope = getPromptEnvelope(tmp, "plan.work-environment");
+    const envelope = await getPromptEnvelope(tmp, "plan.work-environment");
     const labels = envelope.data.choices.map((c) => c.label);
     assert.ok(labels.some((l) => l.includes("worktree") || l.includes("隔離")), `should have Japanese label: ${labels}`);
   });
 
-  it("returns Japanese for plan.approval when lang=ja", () => {
+  it("returns Japanese for plan.approval when lang=ja", async () => {
     tmp = createTmpDir();
     setupFlowState(tmp, "ja");
-    const envelope = getPromptEnvelope(tmp, "plan.approval");
+    const envelope = await getPromptEnvelope(tmp, "plan.approval");
     assert.ok(envelope.data.description.includes("承認"), `should be Japanese: ${envelope.data.description}`);
     assert.deepEqual(
       envelope.data.choices.map((choice) => choice.label),
@@ -68,18 +79,18 @@ describe("flow get prompt i18n — English", () => {
   let tmp;
   afterEach(() => tmp && removeTmpDir(tmp));
 
-  it("returns English description for plan.work-environment when lang=en", () => {
+  it("returns English description for plan.work-environment when lang=en", async () => {
     tmp = createTmpDir();
     setupFlowState(tmp, "en");
-    const envelope = getPromptEnvelope(tmp, "plan.work-environment");
+    const envelope = await getPromptEnvelope(tmp, "plan.work-environment", { realCli: true });
     assert.equal(envelope.ok, true);
     assert.ok(envelope.data.description.includes("Choose"), `should be English: ${envelope.data.description}`);
   });
 
-  it("returns English choices for plan.approval when lang=en", () => {
+  it("returns English choices for plan.approval when lang=en", async () => {
     tmp = createTmpDir();
     setupFlowState(tmp, "en");
-    const envelope = getPromptEnvelope(tmp, "plan.approval");
+    const envelope = await getPromptEnvelope(tmp, "plan.approval");
     const labels = envelope.data.choices.map((c) => c.label);
     assert.deepEqual(labels, [
       "Approve",
@@ -90,10 +101,10 @@ describe("flow get prompt i18n — English", () => {
     ]);
   });
 
-  it("returns English for plan.test-mode when lang=en", () => {
+  it("returns English for plan.test-mode when lang=en", async () => {
     tmp = createTmpDir();
     setupFlowState(tmp, "en");
-    const envelope = getPromptEnvelope(tmp, "plan.test-mode");
+    const envelope = await getPromptEnvelope(tmp, "plan.test-mode");
     assert.equal(envelope.data.description, "Run tests?", `should be exact English description, got: ${envelope.data.description}`);
     const labels = envelope.data.choices.map((c) => c.label);
     assert.ok(labels.includes("Run"), `should have English label "Run": ${labels}`);

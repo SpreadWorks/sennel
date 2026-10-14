@@ -287,3 +287,26 @@ the fourteen phase-03 missing-registration initial reds. Earlier one-file,
 subset and invalid-fixture development logs remain labeled historical. The
 final changed phase set also includes
 `tests/integration/flow/impl-phase-publication-observer.test.js`.
+
+## 55dc immutable prefix for Service boundary audits
+
+The twelve per-leaf audits and the all-twelve audit retain their original names,
+inputs and assertions. Their common T17 Requirement/task input and forceRepairs
+policy now produce one immutable frontier immediately before `implement`, then
+create thirteen independent roots with the existing phase seed/fromSeed API.
+The default Requirement scenario seed is a different input and is not reused.
+
+Each leaf still executes its required upstream suffix, persists the actual
+artifacts, reloads a fresh manager and executes its exact production registration.
+The all-twelve observer is installed before the first Impl producer. Every
+registration.create, TaskStepIdentity (including T17), declared argument type,
+private dependency, consumed selection and projected Action assertion remains.
+The isolated omitted-leaf, hidden/Symbol-property and wrong-argument fixtures
+remain independent and do not substitute for production execution.
+
+Production registration loading precedes lazy seed generation. SeedCleanupScope
+registers file ownership immediately; only immutable bytes are shared. Canonical
+persistence, artifact identities and Git HEAD are read back per clone, and the
+seed is checked unchanged during teardown. Runtime authority is still established
+by each real suffix consumer. These are implementation boundaries; current
+correctness and timing require the fixed, serialized 55dc comparisons.

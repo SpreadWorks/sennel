@@ -9,11 +9,13 @@ import { ApprovalInput } from "../../src/flow/services/approval-input.js";
 import { RequirementTestPhaseScenario, rejectFirstRequirementReview } from "./requirement-test-phase-scenario.js";
 import { assertRequirementTestResultRoundtrip } from "./assertions/requirement-test-result.js";
 
-export async function enterRequirementTestLeaf(t, leaf, options = {}) {
-  const scenario = RequirementTestPhaseScenario.create(t, {
+export async function enterRequirementTestLeaf(t, leaf, options = {}, seed = null) {
+  const scenarioOptions = {
     ...(leaf === "test-repair" ? { reviewResponse: rejectFirstRequirementReview } : {}),
     ...options,
-  });
+  };
+  const scenario = seed === null ? RequirementTestPhaseScenario.create(t, scenarioOptions)
+    : RequirementTestPhaseScenario.fromSeed(t, seed, scenarioOptions);
   await scenario.advanceTo("approval");
   if (leaf !== "approval") {
     await scenario.approve();

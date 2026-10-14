@@ -6,16 +6,17 @@ import { describe, it } from "node:test";
 
 import { WorkerArtifactHandoffCoordinator } from "../../../src/flow/lib/worker-artifact-handoff.js";
 import { CanonicalTestArtifactStore } from "../../../src/flow/lib/canonical-test-artifacts.js";
-import RunRequirementTestGateCommand from "../../../src/flow/lib/run-requirement-test-gate.js";
+import RunRequirementTestGateCommand, { runRequirementTestGate } from "../../../src/flow/lib/run-requirement-test-gate.js";
 import { FLOW_COMMANDS } from "../../../src/flow/registry.js";
 import { FLOW_ARTIFACT_CONTRACTS } from "../../../src/lib/flow-artifact-contract.js";
 import { CurrentFlowStateInvariantError } from "../../../src/flow/lib/current-flow-state.js";
 import { StepPersistenceFailure } from "../../../src/flow/lib/definition-lifecycle-failure.js";
 import { RequirementTestPhaseScenario } from "../../support/requirement-test-phase-scenario.js";
-import { enterRequirementTestLeaf as enter, assertSavedRequirementTestResult as savedResult, LifecycleSaveFault,
+import { assertSavedRequirementTestResult as savedResult, LifecycleSaveFault,
   gatePublicationBytes, assertGatePublicationRollback, assertGatePublicationMembers, readGateSupportBaseline,
   assertSnapshotAfterMetricFlush } from "../../support/requirement-test-save-boundary.js";
 
+export function registerRequirementTestSaveRecovery(enter) {
 describe("Requirement Test durable save, rejection and recovery boundaries", { concurrency: false }, () => {
   it("SAV-01 interrupted approval initialization cannot leave admitted Tasks or changed Spec before commit", async (t) => {
     const scenario = await enter(t, "approval");
@@ -229,9 +230,12 @@ describe("Requirement Test durable save, rejection and recovery boundaries", { c
         method: "commitSpecStepResult", storeCommit: true,
         observePersisted: () => gatePublicationBytes(scenario, candidate),
       });
+      const gateRunner = t.mock.fn(runRequirementTestGate);
+      const gateCommand = new RunRequirementTestGateCommand({ gateRunner });
+      let gateResult = null;
       const executeGatePost = async () => {
         const ctx = scenario.context();
-        const gateResult = await new RunRequirementTestGateCommand().execute(ctx);
+        gateResult = await gateCommand.execute(ctx);
         await FLOW_COMMANDS.run["requirement-test-gate"].post(ctx, gateResult);
         return gateResult;
       };
@@ -246,6 +250,8 @@ describe("Requirement Test durable save, rejection and recovery boundaries", { c
         })}`);
       fault.restore();
       assert.ok(postError, "the transaction/response fault must stop Gate post-settlement");
+      assert.ok(gateResult, "the caller retains the actual Gate response before its post-settlement fails");
+      assert.equal(gateRunner.mock.callCount(), 1, "the real candidate Gate executes exactly once");
       if (phase === "before-commit") assert.equal(postError.cause, fault.error);
       else assert.equal(postError, fault.error);
       scenario.reload();
@@ -272,8 +278,17 @@ describe("Requirement Test durable save, rejection and recovery boundaries", { c
         assert.equal(scenario.current(), "test-gate");
         assert.equal(scenario.artifact("test.requirement.gate"), null);
         assert.equal(scenario.manager.activityLedger(scenario.specId).some((entry) => entry.nodeId === "test-gate" && entry.result?.stepResult), false);
-        // Retry the same active Gate through its real producer after rollback.
-        await executeGatePost();
+        // The physical execution claim survives rollback. Refuse a second
+        // execution, then resume this same caller's post with its actual response.
+        const beforeRefusal = scenario.snapshot();
+        await assert.rejects(() => gateCommand.execute(scenario.context()), {
+          code: "FLOW_EXECUTION_CONTRACT_MISMATCH", message: /uncertain execution without a published response/,
+        });
+        assert.equal(gateRunner.mock.callCount(), 1, "an uncertain claim cannot authorize another physical Gate");
+        scenario.reload();
+        assert.deepEqual(scenario.snapshot(), beforeRefusal);
+        assertGatePublicationRollback(fault.beforePersisted, gatePublicationBytes(scenario, candidate));
+        await FLOW_COMMANDS.run["requirement-test-gate"].post(scenario.context(), gateResult);
         scenario.reload();
       }
       assert.equal(scenario.current(), "implement", "the final Requirement must activate the current implementation entry");
@@ -318,6 +333,7 @@ describe("Requirement Test durable save, rejection and recovery boundaries", { c
       assert.ok(scenario.implementationInput, "the actual next dispatcher must consume persisted Spec input");
       assert.deepEqual(scenario.implementationInput.document.requirements, JSON.parse(scenario.artifact("spec.record").bytes).requirements);
       assert.equal(gateExecution.mock.callCount(), gateCalls, "downstream dispatch must not execute Gate again");
+      assert.equal(gateRunner.mock.callCount(), 1, "recovery and downstream consumption retain one physical Gate execution");
       assert.deepEqual(savedResult(scenario, "test-gate").result, retained, "next activation must not resettle Gate");
     });
   }
@@ -362,3 +378,5 @@ describe("Requirement Test durable save, rejection and recovery boundaries", { c
     assert.deepEqual(scenario.snapshot(), before, "ownership reads/refusal must leave canonical state unchanged");
   });
 });
+
+}

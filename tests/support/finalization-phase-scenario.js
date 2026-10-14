@@ -212,11 +212,11 @@ export class FinalizationPhaseScenario extends AcceptancePhaseScenario {
     }
   }
 
-  close() {
+  close(options) {
     this.docsProcess?.mock.restore();
     this.ghProcess?.mock.restore();
     this.finalizationConfig?.mock.restore();
     syncBuiltinESMExports();
-    super.close();
+    super.close(options);
   }
 }

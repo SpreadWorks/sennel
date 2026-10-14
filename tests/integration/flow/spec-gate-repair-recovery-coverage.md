@@ -54,3 +54,17 @@ the original archive's Activity schema lacks `approvalTasks`, so restoring it
 directly fails before reaching the locator refusal. Missing Activity fields or
 runtime proof are not added to the old archive. The original stale-target
 refusal and unchanged canonical-state assertions remain in place.
+
+## Current default Gate frontier reuse
+
+Restart-boundary (30), durability (2) and default replay (2) cases each use their
+file's lazy seed from `createSpecGateRepairScenario`. The real failed Gate
+publishes its finding and selects the repair Attempt before freezing. No repair
+request, claim, sealed response, checkpoint, fault or recovery is shared.
+`CanonicalFlowFixture.fromExisting` and a fresh manager/coordinator adopt each
+independent clone; canonical persistence bytes are compared before consumption.
+The source remains non-Git; cases that initialize Git still do so in their own
+clone. Every original budget, fault, refusal, restart and exact-replay assertion
+runs after this frontier. Large Specs, alternate findings, archived evidence,
+prior Review and custom State-fault setup keep independent preparation. The
+legacy Error recovery seed described above is unchanged.

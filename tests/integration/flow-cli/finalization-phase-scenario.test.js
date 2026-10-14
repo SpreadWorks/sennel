@@ -29,7 +29,7 @@ describe("Finalization phase: genuine Report / canonical reload / external effec
   const scenario = (t, options) => FinalizationPhaseScenario.fromSeed(t, seed, options);
   const beforeRegression = (t, options) => FinalizationPhaseScenario.fromSeed(t, regressionSeed, options);
   registerFinalizationRecoveryContracts(scenario);
-  registerFinalizationCleanupContracts(scenario);
+  registerFinalizationCleanupContracts(scenario, () => seed);
   registerFinalizationWorktreeContracts();
 
   test("F01 real commit, squash, main docs and teardown preserve the produced report through last-finalized consumers", async (t) => {

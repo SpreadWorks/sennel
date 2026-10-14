@@ -3,12 +3,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { ImplPhaseScenario } from "./impl-phase-scenario.js";
-import { SeedWorkRoot } from "./builders/seed-work-root.js";
 import { futurePhaseManifests } from "./structure/phase-manifest.js";
-import { dispatch } from "../../src/lib/dispatcher.js";
-import { buildFlowCommandHookContext } from "../../src/flow/lib/flow-context.js";
-import { dispatchContainer } from "./infrastructure/flow-dispatch-scenario.js";
-import { FLOW_COMMANDS } from "../../src/flow/registry.js";
+import { dispatchContainer, dispatchFlowCommand, FlowDispatchExecution } from "./infrastructure/flow-dispatch-scenario.js";
 import { StepResult } from "../../src/flow/engine/step-result.js";
 import { DraftStepSettlementReceipt } from "../../src/flow/definition.js";
 import { CanonicalAcceptanceArtifactStore } from "../../src/flow/lib/canonical-acceptance-artifacts.js";
@@ -171,24 +167,8 @@ export class AcceptancePhaseScenario extends ImplPhaseScenario {
     super.initialize();
   }
 
-  /** Freeze a genuine completed upstream producer frontier; copies are never
-   * repaired, rebased or patched. Every consumer gets a different owned root. */
-  static async seed(t, { frontier = "retro", ...options } = {}) {
-    const producer = this.create(t, options);
-    await producer.advanceTo(frontier);
-    producer.reload();
-    const copy = new SeedWorkRoot(producer.root, { prefix: "sennel-acceptance-seed-" });
-    t.after(() => copy.cleanup());
-    return Object.freeze({ root: copy.root, specId: producer.specId, frontier,
-      snapshot: producer.snapshot(), options: Object.freeze({ ...options }) });
-  }
-
-  static fromSeed(t, seed, options = {}) {
-    const scenario = this.create(t, { ...seed.options, ...options, seedRoot: seed.root, seedSpecId: seed.specId });
-    assert.deepEqual(scenario.snapshot(), seed.snapshot, "a copied producer frontier cannot fabricate or rewrite canonical evidence");
-    assert.equal(scenario.current(), seed.frontier);
-    assert.notEqual(scenario.root, seed.root);
-    return scenario;
+  static seed(t, options = {}) {
+    return super.seed(t, { frontier: "retro", ...options });
   }
 
   async observeAcceptanceInput() {
@@ -204,8 +184,6 @@ export class AcceptancePhaseScenario extends ImplPhaseScenario {
   }
 
   async invokeRegistered(group, name, extra = {}, positional = []) {
-    const registration = FLOW_COMMANDS[group][name];
-    assert.ok(registration, `production run command ${name} must exist`);
     const context = this.context();
     const invocationContainer = dispatchContainer({ root: context.root, mainRoot: context.mainRoot,
       inWorktree: context.root !== context.mainRoot, config: this.options.config ?? {},
@@ -214,14 +192,10 @@ export class AcceptancePhaseScenario extends ImplPhaseScenario {
       const option = `--${key.replace(/[A-Z]/g, (letter) => `-${letter.toLowerCase()}`)}`;
       return value === true ? [option] : value === false || value == null ? [] : [option, String(value)];
     })];
-    const execution = { name, argv, result: null, exitCode: 0, stdout: "", stderr: "" };
+    const execution = new FlowDispatchExecution(name, argv);
     this.registeredExecutions.push(execution);
-    await dispatch({ container: invocationContainer, entry: registration, argv,
-      envelopeType: group, envelopeKey: name,
-      buildHookCtx: (container, input) => buildFlowCommandHookContext(container, registration, input),
-      stdout: (text) => { execution.stdout += text; }, stderr: (text) => { execution.stderr += text; },
-      setExitCode: (code) => { execution.exitCode = code; } });
-    const envelope = JSON.parse(execution.stdout);
+    await dispatchFlowCommand({ container: invocationContainer, group, name, argv, execution });
+    const envelope = execution.envelope;
     execution.result = envelope.ok === false ? envelope : envelope.data;
     return execution.result;
   }

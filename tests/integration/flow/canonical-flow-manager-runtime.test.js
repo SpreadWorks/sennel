@@ -10,7 +10,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
-import { afterEach, describe, it } from "node:test";
+import { after, afterEach, describe, it } from "node:test";
 
 import { FlowManager } from "../../../src/lib/flow-manager.js";
 import { ImplementationReviewProducer } from "../../support/infrastructure/implementation-review-producer.js";
@@ -199,6 +199,9 @@ import {
   FlowOutboxStore,
 } from "../../../src/flow/lib/flow-outbox.js";
 import { createTmpDir, removeTmpDir } from "../../support/builders/tmp-dir.js";
+import { SeedWorkRoot, SeedCleanupScope, observeSeedTiming } from "../../support/builders/seed-work-root.js";
+import { CanonicalScenarioSeed } from "../../support/assertions/canonical-persistence.js";
+import { performance } from "node:perf_hooks";
 import {
   completeTaskStageHandoff,
   createTaskStageHandoff,
@@ -246,6 +249,43 @@ import {
 } from "../../../src/flow/lib/spec-review-artifacts.js";
 
 const roots = [];
+const testExecutionSeedScope = new SeedCleanupScope(after);
+let testExecutionSeed;
+
+class CanonicalTestExecutionFixture {
+  constructor(repository, manager, specId) {
+    assert.equal(manager.specLocation(specId).repositoryRoot, repository);
+    this.repository = repository;
+    this.manager = manager;
+    this.created = manager.load(specId);
+  }
+}
+
+async function createTestExecutionSeed() {
+  const prefixStarted = performance.now();
+  const repository = root({ git: true });
+  const manager = new FlowManager({ root: repository, mainRoot: repository, inWorktree: false });
+  const created = manager.createFresh(request());
+  manager.addActiveFlow(created.specId, "direct");
+  await advanceTo(manager, created.specId, "test-execute");
+  observeSeedTiming("canonical-prefix", performance.now() - prefixStarted);
+  return CanonicalScenarioSeed.freeze(testExecutionSeedScope, { root: repository, manager,
+    specId: created.specId, frontier: "test-execute", prefix: "sennel-canonical-test-seed-" });
+}
+
+async function testExecutionFixture() {
+  testExecutionSeed ??= createTestExecutionSeed();
+  const seed = await testExecutionSeed;
+  const copy = new SeedWorkRoot(seed.root, { prefix: "sennel-canonical-test-clone-" });
+  roots.push(copy.root);
+  const readbackStarted = performance.now();
+  const manager = new FlowManager({ root: copy.root, mainRoot: copy.root, inWorktree: false });
+  CanonicalFlowFixture.fromExisting({ flowManager: manager, specId: seed.specId });
+  seed.assertClone(manager);
+  assert.equal(manager.load(seed.specId).currentNodeId, "test-execute");
+  observeSeedTiming("canonical-clone-readback", performance.now() - readbackStarted);
+  return new CanonicalTestExecutionFixture(copy.root, manager, seed.specId);
+}
 
 function root({ git = false } = {}) {
   const value = createTmpDir("canonical-flow-manager-");
@@ -2350,11 +2390,7 @@ describe("FlowManager canonical Version-1 runtime", () => {
   });
 
   it("routes test execution and result-review artifacts through V1 history and the transient raw contract", async () => {
-    const repository = root({ git: true });
-    const manager = new FlowManager({ root: repository, mainRoot: repository, inWorktree: false });
-    const created = manager.createFresh(request());
-    manager.addActiveFlow(created.specId, "direct");
-    await advanceTo(manager, created.specId, "test-execute");
+    const { repository, manager, created } = await testExecutionFixture();
     const executeCtx = {
       root: repository,
       mainRoot: repository,
@@ -2401,11 +2437,7 @@ describe("FlowManager canonical Version-1 runtime", () => {
   });
 
   it("refuses raw partial test-execute publication atomically and keeps its next Action unchanged", async () => {
-    const repository = root({ git: true });
-    const manager = new FlowManager({ root: repository, mainRoot: repository, inWorktree: false });
-    const created = manager.createFresh(request());
-    manager.addActiveFlow(created.specId, "direct");
-    await advanceTo(manager, created.specId, "test-execute");
+    const { repository, manager, created } = await testExecutionFixture();
     const testSourceRevision = new CanonicalTestArtifactStore({
       flowManager: manager,
       state: manager.load(created.specId),

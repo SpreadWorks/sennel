@@ -7,8 +7,6 @@ import { FlowManager } from "../../../src/lib/flow-manager.js";
 import { CanonicalFlowVersionReader, Cursor, QueryRequest } from "../../../src/flow/query.js";
 import RunReviewCommand from "../../../src/flow/lib/run-review.js";
 import RunGateCommand from "../../../src/flow/lib/run-gate.js";
-import { CanonicalGatePromotion } from "../../../src/flow/lib/canonical-gate-artifacts.js";
-import { SpecGateIssuePublication } from "../../../src/flow/lib/gate-issue-publication.js";
 import { FLOW_ARTIFACT_CONTRACTS } from "../../../src/lib/flow-artifact-contract.js";
 import { FLOW_COMMANDS } from "../../../src/flow/registry.js";
 import { specStepRegistration } from "../../../src/flow/engine/composition/spec.js";
@@ -19,9 +17,10 @@ import { SpecEntryConnector } from "../../../src/flow/engine/connectors/spec/spe
 import { SpecGateEvaluationBinding } from "../../../src/flow/engine/connectors/spec/spec-step-binding.js";
 import { specRepairTargetEntries } from "../../../src/flow/lib/spec-repair-operations.js";
 import { validWorkerHandoffSpec, validWorkerHandoffTaskSpec, workerArtifactJson } from "../../support/infrastructure/worker-artifact.js";
-import { fixtureRepository, installGateProviderFake } from "../../support/infrastructure/flow-dispatch-scenario.js";
+import { fixtureRepository, installGateProviderFake, passingGateProviderResponse } from "../../support/infrastructure/flow-dispatch-scenario.js";
 import { CanonicalFlowFixture, setupFlowConfig } from "../../support/infrastructure/flow-setup.js";
 import { SpecStepPreparationFixture } from "../../support/infrastructure/spec-step-preparation.js";
+import { createSpecGateRepairScenario, completeSpecGateRepairHandoff } from "../../support/infrastructure/spec-gate-repair-scenario.js";
 import { FlowQueryConsumer } from "../../support/builders/flow-query-consumer.js";
 import { createTmpDir, removeTmpDir } from "../../support/builders/tmp-dir.js";
 
@@ -210,9 +209,15 @@ for (const stepId of ["spec-repair", "spec-gate"]) {
       assert.equal(evaluation.specific.taskId, stored.artifacts.taskId ?? null);
       assert.equal(evaluation.specific.sourceFingerprint, stored.artifacts.sourceFingerprint ?? null);
       assert.equal(evaluation.specific.failureCategory, stored.artifacts.gateTransitionFailureCategory ?? null);
-      assert.equal(evaluation.specific.evaluationScope, stored.artifacts.evaluationScope ?? null);
-      assert.equal(evaluation.specific.warnings, stored.artifacts.warnings ?? null);
-      assert.deepEqual(evaluation.criteria, []);
+      assert.deepEqual(evaluation.specific.evaluationScope, stored.artifacts.evaluationScope ?? null);
+      assert.deepEqual(evaluation.specific.warnings, stored.artifacts.warnings ?? null);
+      assert.ok(stored.artifacts.evaluations.length > 0, "the real Gate records its evaluated criteria");
+      assert.deepEqual(evaluation.criteria, stored.artifacts.evaluations.map((criterion) => {
+        assert.equal(criterion.result, "pass");
+        return { id: criterion.guardrail_id, title: criterion.title ?? null,
+          category: criterion.category ?? null, authority: criterion.authority ?? null,
+          expected: null, observed: null, evidence: criterion.reason ?? null, result: "passed" };
+      }));
       assert.equal(evaluation.source.producerActivityId, owner.id);
       assert.equal(evaluation.source.jsonPointer, "/attempts/0/artifact/payload");
     }
@@ -334,40 +339,52 @@ test("RunGateCommand persists mechanical coverage authority and evaluation scope
   assert.equal(JSON.stringify(consumed.entities).includes("responseProtocolEvidence"), false);
 });
 
-test("production Spec Gate failed history stays bound to its saved Attempt after semantic retry", async (t) => {
-  const root = createTmpDir("query-gate-history-producer-");
-  t.after(() => removeTmpDir(root));
-  let fixture = new SpecStepPreparationFixture(root);
-  t.after(() => fixture?.dispose());
-  let input = (await fixture.createInput("spec-gate")).input;
-  let manager = input.flowManager;
-  const repository = path.join(root, "spec-gate");
-  const specId = manager.canonicalState().specId;
-  const commandResult = new CanonicalGatePromotion({ state: manager.canonicalState(specId), phase: "spec", nodeId: "spec-gate" })
-    .promote({ result: "fail", artifacts: { evaluations: [], failureKind: "ai_semantic_fail", failureCode: "GATE_REJECTED" } });
-  let prepared = await specStepRegistration("spec-gate").create({ ...input, commandResult,
-    issuePublication: new SpecGateIssuePublication({ binding: input.binding, entry: {
-      step: "spec-gate", phase: "spec", observations: [], reason: "Recorded semantic Gate failure.",
-      trigger: "gate post hook (auto)", timestamp: input.binding.assertCurrent().attempt.startedAt,
-    } }) });
-  assert.equal((await prepared.step.execute()).kind, "spec-gate-retry-required");
-  const retry = manager.canonicalState(specId).attempt;
-  const passedResult = new CanonicalGatePromotion({ state: manager.canonicalState(specId), phase: "spec", nodeId: "spec-gate" })
-    .promote({ result: "pass", artifacts: { evaluations: [] } });
+test("production Spec Gate failed history stays bound to its saved Attempt after bounded repair", async (t) => {
+  let scenario = await createSpecGateRepairScenario();
+  const repository = scenario.root;
+  const specId = scenario.specId;
+  t.after(() => removeTmpDir(repository));
+  let manager = scenario.flowManager;
+  const originalFailed = manager.activityLedger(specId)
+    .findLast((entry) => entry.result?.stepResult?.kind === "spec-gate-repair-required");
+  assert.ok(originalFailed, "the real failed Gate must save its repair Result");
+  const firstPublication = manager.readArtifact({ specId, logicalKey: "spec.gate", consumerNodeId: "spec-gate-repair" });
+  assert.equal(firstPublication.descriptor.activityId, originalFailed.id);
+  const commandResult = JSON.parse(firstPublication.bytes).attempts.at(-1).artifact.payload;
+  assert.equal(commandResult.result, "fail");
+  assert.equal(commandResult.artifacts.failureKind, "ai_semantic_fail");
+  let repaired = await completeSpecGateRepairHandoff({ ...scenario, replacement: "Publish a precisely validated artifact." });
+  assert.equal(repaired.result.kind, "spec-gate-repair-review-required");
+  manager.beginNextAction(specId);
+  assert.equal(manager.canonicalState(specId).current.at(-1), "spec-review");
+  await publishReview(scenario.ctx, []);
+  manager.beginNextAction(specId);
+  assert.equal((await executeReviewWorker(scenario.ctx, "spec-triage")).kind, "spec-triage-completed");
+  manager.beginNextAction(specId);
+  assert.equal((await executeReviewWorker(scenario.ctx, "spec-repair")).kind, "spec-repair-unchanged");
+  manager.beginNextAction(specId);
+  const nextGateAttempt = manager.canonicalState(specId).attempt;
+  assert.equal(nextGateAttempt.nodeId, "spec-gate");
+  const provider = installGateProviderFake(passingGateProviderResponse);
+  let passedResult;
+  try {
+    passedResult = await new RunGateCommand().executeCanonical({ ...scenario.ctx,
+      flowState: manager.loadReadOnly(specId), config: {} }, { phase: "spec" });
+  } finally { provider.mock.restore(); }
+  assert.equal(passedResult.result, "pass", JSON.stringify(passedResult));
   let latest = await specStepRegistration("spec-gate").create({ flowManager: manager,
     binding: new SpecGateEvaluationBinding({ flowManager: manager, specId }), commandResult: passedResult });
   assert.equal((await latest.step.execute()).kind, "spec-gate-passed");
   latest = null;
-  prepared = null;
-  input = null;
+  repaired = null;
   manager = null;
-  fixture.dispose();
-  fixture = null;
+  scenario = null;
   const reloaded = managerAt(repository, specId);
-  const failed = reloaded.activityLedger(specId).findLast((entry) => entry.result?.stepResult?.kind === "spec-gate-retry-required");
+  const failed = reloaded.activityLedger(specId).findLast((entry) => entry.result?.stepResult?.kind === "spec-gate-repair-required");
+  assert.equal(failed.id, originalFailed.id);
   const passed = reloaded.activityLedger(specId).findLast((entry) => entry.result?.stepResult?.kind === "spec-gate-passed");
   assert.equal(passed.sequence, failed.sequence + 1);
-  assert.equal(passed.attemptId, retry.id);
+  assert.equal(passed.attemptId, nextGateAttempt.id);
   assert.notEqual(passed.attemptId, failed.attemptId);
   const saved = reloaded.readArtifact({ specId, logicalKey: "spec.gate", consumerNodeId: "approval" });
   assert.equal(saved.descriptor.activityId, passed.id);
@@ -377,7 +394,7 @@ test("production Spec Gate failed history stays bound to its saved Attempt after
   assert.deepEqual(evaluation.result, { outcome: "failed", nativeCode: "fail" });
   assert.deepEqual(evaluation.specific.failureCategory, commandResult.artifacts.gateTransitionFailureCategory);
   assert.equal(evaluation.specific.failureKind, commandResult.artifacts.failureKind);
-  assert.equal(evaluation.specific.failureCode, commandResult.artifacts.failureCode);
+  assert.equal(evaluation.specific.failureCode, commandResult.artifacts.failureCode ?? null);
   assert.equal(evaluation.source.attemptId, failed.attemptId);
   assert.equal(evaluation.source.observationId, `attempt:${failed.attemptId}`);
   const [latestEvaluation] = detailFor(consumed, passed.id, "evaluations");

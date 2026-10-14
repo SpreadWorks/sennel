@@ -1,8 +1,9 @@
+import { SeedCleanupScope } from "../../support/builders/seed-work-root.js";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
-import { test } from "node:test";
+import { after, test } from "node:test";
 
 import { TaskReviewScenario } from "../../support/builders/task-review-scenario.js";
 import { installGateProviderFake } from "../../support/infrastructure/flow-dispatch-scenario.js";
@@ -26,6 +27,13 @@ import GetNextActionCommand from "../../../src/flow/lib/get-next-action.js";
 import { ReviewFindingCycle } from "../../../src/flow/lib/finding-disposition-policy.js";
 import { TaskReviewConvergenceEvidence } from "../../../src/flow/lib/review-recurrence.js";
 import { TaskReviewFailureFacts, resolveTaskReviewFailure } from "../../../src/flow/definition.js";
+
+const seedScope = new SeedCleanupScope(after);
+let implementationSeed;
+function standardScenario(t) {
+  implementationSeed ??= TaskReviewScenario.seed(seedScope);
+  return TaskReviewScenario.fromSeed(t, implementationSeed);
+}
 
 function baseline(scenario) {
   const state = scenario.state();
@@ -199,7 +207,7 @@ async function recoverFromNonRetryableProtocolFailure(scenario) {
 }
 
 test("review recovery retains a usable baseline through two failures and fresh Store instances", (t) => {
-  const scenario = new TaskReviewScenario(t).exhaust();
+  const scenario = standardScenario(t).exhaust();
   const original = scenario.state().attempt.id;
   scenario.changeEvidence(1).reload();
   const first = scenario.recover();
@@ -217,7 +225,7 @@ test("review recovery retains a usable baseline through two failures and fresh S
 });
 
 test("tooling recovery contributes zero completed Review results after reload", (t) => {
-  const scenario = new TaskReviewScenario(t).exhaust().changeEvidence(1);
+  const scenario = standardScenario(t).exhaust().changeEvidence(1);
   assert.equal(scenario.recover().reset, true);
   scenario.reload();
   const facts = ReviewTransitionFacts.forCurrentAttempt({
@@ -229,7 +237,7 @@ test("tooling recovery contributes zero completed Review results after reload", 
 });
 
 test("parent serializes semantic Review ordinal independently of tooling Attempt sequence", async (t) => {
-  const scenario = new TaskReviewScenario(t);
+  const scenario = standardScenario(t);
   useScenarioContainer(t, scenario);
 
   // A semantic reject is published by Review, then the separate Task stages
@@ -284,7 +292,7 @@ test("parent serializes semantic Review ordinal independently of tooling Attempt
 });
 
 test("unchanged exhausted recovery refuses without changing canonical state", (t) => {
-  const scenario = new TaskReviewScenario(t).exhaust().reload();
+  const scenario = standardScenario(t).exhaust().reload();
   const before = scenario.snapshot();
   const result = scenario.recover();
   assert.equal(result.ok, false);
@@ -295,7 +303,7 @@ test("unchanged exhausted recovery refuses without changing canonical state", (t
 
 for (const invalid of ["[]", "{not-json}"]) {
   test(`protocol ${invalid} failure publishes unavailable evidence and continues to Gate after reload`, async (t) => {
-    const scenario = new TaskReviewScenario(t);
+    const scenario = standardScenario(t);
     useScenarioContainer(t, scenario);
     let calls = 0;
     const review = scenario.review(invalidProtocolWorker(scenario, invalid, () => { calls += 1; }));
@@ -337,7 +345,7 @@ test("Definition refuses to continue an unknown internal Review failure", () => 
 });
 
 test("a stopped Task Review with an invalid sealed transport converges without a semantic result", async (t) => {
-  const scenario = new TaskReviewScenario(t);
+  const scenario = standardScenario(t);
   useScenarioContainer(t, scenario);
   const result = await scenario.review(() => ({
     ok: true, status: 0, stdout: "", stderr: "", signal: null, killed: false,
@@ -351,7 +359,7 @@ test("a stopped Task Review with an invalid sealed transport converges without a
 });
 
 test("a later semantic Review in the same cycle supersedes unavailable Acceptance evidence", async (t) => {
-  const scenario = new TaskReviewScenario(t);
+  const scenario = standardScenario(t);
   useScenarioContainer(t, scenario);
   let interruptedManifest = null;
   let interruptedManifestPath = null;
@@ -434,7 +442,7 @@ test("a later semantic Review in the same cycle supersedes unavailable Acceptanc
 // admission. These replace the unsupported rollback-and-retry expectations.
 for (const response of ["invalid", "unowned"]) {
 test(`${response} Review source effects stop without publication or implicit rollback after reload`, async (t) => {
-  const scenario = new TaskReviewScenario(t);
+  const scenario = standardScenario(t);
   useScenarioContainer(t, scenario);
   let calls = 0;
   const beforeAttempt = scenario.state().attempt;
@@ -492,7 +500,7 @@ test(`${response} Review source effects stop without publication or implicit rol
 }
 
 test("admitted Task Review retains a baseline before any provider can fail", (t) => {
-  const scenario = new TaskReviewScenario(t).reload();
+  const scenario = standardScenario(t).reload();
   const durable = baseline(scenario);
   assert.notEqual(durable, null, "all legal Task Review entry paths must preserve the later recovery prerequisite");
   assert.equal(durable.attemptId, scenario.state().attempt.id);
@@ -500,7 +508,7 @@ test("admitted Task Review retains a baseline before any provider can fail", (t)
 });
 
 test("an ordinary retry cannot authorize committed changes to an unsealed Review", async (t) => {
-  const scenario = new TaskReviewScenario(t);
+  const scenario = standardScenario(t);
   let previousDirectory;
   await scenario.review((_command, _args, options) => {
     previousDirectory = options.env.SENNEL_REVIEW_OUTPUT_DIR;
@@ -535,7 +543,7 @@ test("an ordinary retry cannot authorize committed changes to an unsealed Review
 });
 
 test("published PASS is admitted by Gate after all parent objects are discarded", async (t) => {
-  const scenario = new TaskReviewScenario(t);
+  const scenario = standardScenario(t);
   useScenarioContainer(t, scenario);
   const result = await publishPassingTaskReview(scenario);
   assert.equal(result.artifacts.verdict, "PASS");
@@ -550,7 +558,7 @@ test("published PASS is admitted by Gate after all parent objects are discarded"
 });
 
 test("invalidated Review recovery preserves the baseline required by a later tooling failure", async (t) => {
-  const scenario = new TaskReviewScenario(t);
+  const scenario = standardScenario(t);
   useScenarioContainer(t, scenario);
   await completePassingTask(scenario);
   // Terminal-node rewind is an existing Store production API. It invalidates
@@ -568,7 +576,7 @@ test("invalidated Review recovery preserves the baseline required by a later too
 });
 
 test("rewindTo directly recovers an invalidated Review with its baseline", async (t) => {
-  const scenario = new TaskReviewScenario(t);
+  const scenario = standardScenario(t);
   useScenarioContainer(t, scenario);
   await completePassingTask(scenario);
   scenario.reload();
@@ -587,7 +595,7 @@ test("rewindTo directly recovers an invalidated Review with its baseline", async
 });
 
 test("direct Review rewind atomically starts its replacement baseline", async (t) => {
-  const scenario = new TaskReviewScenario(t);
+  const scenario = standardScenario(t);
   useScenarioContainer(t, scenario);
   await completePassingTask(scenario);
   scenario.reload();
@@ -604,7 +612,7 @@ test("direct Review rewind atomically starts its replacement baseline", async (t
 });
 
 test("completed Task Gate rewinds without fabricating PASS retry evidence", async (t) => {
-  const scenario = new TaskReviewScenario(t);
+  const scenario = standardScenario(t);
   useScenarioContainer(t, scenario);
   await completePassingTask(scenario);
   scenario.reload();

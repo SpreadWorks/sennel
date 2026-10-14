@@ -1,8 +1,9 @@
+import { SeedCleanupScope } from "../../support/builders/seed-work-root.js";
 import { specStepRegistration } from "../../../src/flow/engine/composition/spec.js";
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import fs from "node:fs";
-import { describe, it } from "node:test";
+import { after, describe, it } from "node:test";
 
 import { FlowManager } from "../../../src/lib/flow-manager.js";
 import { CanonicalFlowArtifactBaseline } from "../../../src/flow/lib/current-flow-state.js";
@@ -16,7 +17,7 @@ import { StepPersistenceFailure } from "../../../src/flow/lib/definition-lifecyc
 import { CanonicalSpecReview, SpecReviewDelta, mergeSpecReviewDelta } from "../../../src/flow/lib/spec-review-artifacts.js";
 import { attachCanonicalCommandResultPublications } from "../../../src/flow/lib/canonical-command-result.js";
 import { WorkerArtifactHandoffCoordinator, sealWorkerArtifactHandoff } from "../../../src/flow/lib/worker-artifact-handoff.js";
-import { createSpecGateRepairScenario, prepareSpecGateRepairHandoff,
+import { seedSpecGateRepairScenario, createSpecGateRepairScenario, prepareSpecGateRepairHandoff,
   completeSpecGateRepairHandoff } from "../../support/infrastructure/spec-gate-repair-scenario.js";
 import { removeTmpDir } from "../../support/builders/tmp-dir.js";
 import { workerArtifactJson } from "../../support/infrastructure/worker-artifact.js";
@@ -25,6 +26,13 @@ const replacement = "Publish a precisely validated artifact.";
 const original = "Publish a validated artifact.";
 const hash = (value) => crypto.createHash("sha256").update(JSON.stringify(value)).digest("hex");
 const now = () => new Date("2026-08-04T00:00:00.000Z");
+
+const seedScope = new SeedCleanupScope(after);
+let repairSeed;
+async function defaultRepairScenario() {
+  repairSeed ??= seedSpecGateRepairScenario(seedScope);
+  return createSpecGateRepairScenario({ seed: await repairSeed });
+}
 
 function durableSnapshot(manager, specId) {
   return {
@@ -119,7 +127,7 @@ async function reviewAndChangeSpec({ root, specId, flowManager, flow }) {
 
 describe("Spec Gate repair terminal durability", () => {
   it("rejects a stale canonical Spec baseline without mutating the active repair", async () => {
-    const value = await createSpecGateRepairScenario();
+    const value = await defaultRepairScenario();
     try {
       const { service } = await prepareSpecGateRepairHandoff({ ctx: value.ctx,
         invocation: value.invocation, coordinator: value.coordinator, replacement });
@@ -154,7 +162,7 @@ describe("Spec Gate repair terminal durability", () => {
 
   it("recovers a lost response after atomic canonical publication and replays one exact terminal receipt", async () => {
     let interrupted = false;
-    const value = await createSpecGateRepairScenario();
+    const value = await defaultRepairScenario();
     try {
       const { service } = await prepareSpecGateRepairHandoff({ ctx: value.ctx,
         invocation: value.invocation, coordinator: value.coordinator, replacement });

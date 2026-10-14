@@ -5,7 +5,7 @@ import { CanonicalFlowRuntime } from "../../../src/flow/lib/canonical-flow-runti
 import { StepResult } from "../../../src/flow/engine/step-result.js";
 import { StepPersistenceFailure } from "../../../src/flow/lib/definition-lifecycle-failure.js";
 import {
-  ArtifactPublicationRace, enterRequirementTestLeaf, LifecycleSaveFault,
+  ArtifactPublicationRace, LifecycleSaveFault,
   prepareCommonRequirementTestError, assertSavedRequirementTestResult,
 } from "../../support/requirement-test-save-boundary.js";
 
@@ -41,6 +41,7 @@ function sourceDescriptor(scenario, logicalKey) {
   return descriptor;
 }
 
+export function registerRequirementTestErrorAdmission(enterRequirementTestLeaf) {
 describe("Requirement Test common Error Result source admission and atomic settlement", { concurrency: false }, () => {
   for (const [leaf, logicalKey] of SOURCE_PUBLICATIONS) {
     it(`ERROR STALE ${leaf} rejects a same-byte ${logicalKey} publication after prechecks`, async (t) => {
@@ -165,3 +166,5 @@ describe("Requirement Test common Error Result source admission and atomic settl
     });
   }
 });
+
+}

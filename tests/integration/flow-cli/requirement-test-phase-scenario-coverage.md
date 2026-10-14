@@ -166,3 +166,43 @@ canonical reread after the clock advances, approved-Spec schema validation at
 the outer Approval acquisition boundary, and synchronous/asynchronous
 `StepRegistration.create()` behavior. These additions close the baseline gaps
 without changing scenario premises or weakening assertions.
+
+
+## Shared upstream frontier (55dc)
+
+The entry file and its three registered contract suites own one lazy immutable
+Approval frontier. The default R1, standard Task and manual policy run the real
+Spec generation, Review and Gate before freezing. The 88 selected suffixes retain
+all original names, producers and assertions: entry 20, Error admission 37,
+stale/intermediate admission 16, and SAV-01–08 15. Different Requirements, explicit
+expectations, auto policy and upstream nonblocking continue to use their distinct
+producers. No eligible selected case means no seed is generated.
+
+Each case independently copies the complete root through `SeedWorkRoot`, adopts
+it with a fresh `FlowManager`, checks canonical state, Activity, catalog,
+permanent artifact bytes and Git HEAD, and then uses the existing Approval and
+Requirement leaf entry path. Approval Result/receipt, worker claim/seal,
+Review checkpoint, repair batches, Gate promotion, faults, restart and downstream
+consumer checks remain inside each case. Worker/review observations and managers
+are newly allocated. The producer's mocks are restored before freezing; the
+source root is reclaimed, each case owns its clone, and a top-level file hook
+checks the frozen persistence and removes the seed.
+
+The related default nonblocking scenarios share a separate completed
+Implementation/Gate frontier in their own file: 13 independent clones across
+11 test names. Actual registered Gate evaluations still exhaust the semantic
+retry limit before the single freeze. Clones adopt the persisted root directly,
+retain integration guardrails, read the saved Result and receipt, and invoke
+Definition eligibility before their original activation, decision, race,
+idempotency or journal-recovery suffix. Different Gate inputs and Task/Acceptance
+scenarios retain their own producers. Physical execution authority is never
+rewritten; real suffix consumers must accept the copied evidence.
+
+Performance comparisons use three fixed Requirement cases (Review checkpoint,
+structural repair, generation after-commit response loss) and three fixed
+nonblocking cases (activation/decision, stale transaction race, journal recovery).
+Each independent group includes seed/clone/readback and file cleanup and requires
+30% measured reduction. These representatives do not establish whole-suite
+speedups. Their successful after results are reused for correctness; the remaining
+selection excludes those names. Measurement results belong to the 55dc execution
+record, not to the historical 8e30 results above.

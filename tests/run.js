@@ -2,6 +2,7 @@
 import { existsSync, readdirSync, statSync, writeSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { spawn } from "node:child_process";
+import { StringDecoder } from "node:string_decoder";
 import { fileURLToPath, pathToFileURL } from "node:url";
 await import("../src/sennel.js");
 const { globFilesSync } = await import("./runner/test-file-glob.js");
@@ -28,6 +29,30 @@ const {
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const SCRIPT_PATH = fileURLToPath(import.meta.url);
 const CHILD_PROCESS_RECORD_CODEC = new ChildProcessExecutionRecordCodec();
+
+class SuiteOutput {
+  constructor(fd, write) {
+    this.fd = fd;
+    this.write = write;
+    this.decoder = new StringDecoder("utf8");
+    this.text = "";
+  }
+
+  append(chunk) {
+    this.publish(this.decoder.write(Buffer.from(chunk)));
+  }
+
+  finish() {
+    this.publish(this.decoder.end());
+    return this.text;
+  }
+
+  publish(text) {
+    if (!text) return;
+    this.text += text;
+    this.write(this.fd, text);
+  }
+}
 
 function getRealPresetNames() {
   return readdirSync(join(ROOT, "src", "presets"), { withFileTypes: true })
@@ -97,16 +122,16 @@ export async function executeFiles(files, {
         cwd: root,
         stdio: ["ignore", "pipe", "pipe"],
       });
-      let stdout = "";
-      let stderr = "";
-      child.stdout.on("data", (chunk) => { stdout += chunk; });
-      child.stderr.on("data", (chunk) => { stderr += chunk; });
-      child.on("error", (error) => resolve({ error, stdout, stderr }));
-      child.on("close", (status, signal) => resolve({ status, signal, stdout, stderr }));
+      const stdout = new SuiteOutput(1, write);
+      const stderr = new SuiteOutput(2, write);
+      let error;
+      child.stdout.on("data", (chunk) => stdout.append(chunk));
+      child.stderr.on("data", (chunk) => stderr.append(chunk));
+      child.on("error", (failure) => { error = failure; });
+      child.on("close", (status, signal) => resolve({ status, signal, error,
+        stdout: stdout.finish(), stderr: stderr.finish() }));
     });
     const execution = processResultFromSpawnSync(command, result);
-    if (execution.stdout) write(1, execution.stdout);
-    if (execution.stderr) write(2, execution.stderr);
     write(2, `${CHILD_PROCESS_RECORD_CODEC.encode(execution)}\n`);
     if (execution.completed) {
       counts[category] = parsePassCount(execution.stdout + execution.stderr);

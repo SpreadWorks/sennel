@@ -13,8 +13,10 @@ import { AcceptanceEvidenceExecutionPlan } from "../../../src/flow/lib/run-accep
 import { PromptExecutionLimit } from "../../../src/lib/prompt-batching.js";
 import { stableArtifactViewJson } from "../../../src/flow/lib/artifact-view-fingerprint.js";
 import { SeedWorkRoot } from "../../support/builders/seed-work-root.js";
+import { CanonicalScenarioSeed } from "../../support/assertions/canonical-persistence.js";
 import { currentRuntimePackage } from "../../../src/lib/runtime-package.js";
-import { activateNonBlockingPolicy, decisionContextForActiveFlow, recordNonBlockingDecision } from "../../../src/flow/lib/nonblocking.js";
+import { activateNonBlockingPolicy, decisionContextForActiveFlow } from "../../../src/flow/lib/nonblocking.js";
+import { recordNonBlockingDecision } from "../../../src/flow/lib/nonblocking-decision.js";
 import { registerAcceptanceExecutionSettlementCases } from "./acceptance-execution-settlement.contract.js";
 
 function episode(scenario) {
@@ -294,7 +296,8 @@ describe("Acceptance durable production execution", () => {
         runtimeRevision: currentRuntimePackage().revision };
       fs.writeFileSync(seedFile, JSON.stringify(boundary, null, 2));
     }
-    const scenario = AcceptancePhaseScenario.fromSeed(t, { ...boundary, options });
+    const seed = new CanonicalScenarioSeed({ ...boundary, options });
+    const scenario = AcceptancePhaseScenario.fromSeed(t, seed);
     const strict = await scenario.next();
     assert.equal(strict.directive.kind, "await_user_decision");
     assert.ok(strict.directive.actionPrompt.choices.some((entry) => entry.actionId === "ENABLE_NONBLOCKING"));

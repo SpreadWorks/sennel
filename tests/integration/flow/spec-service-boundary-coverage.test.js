@@ -41,27 +41,20 @@ async function inspectPreparedDependencies(registrations, fixture) {
   return preparedSteps;
 }
 
-test("every registered Spec Step Service has a prepared instance inspected for A07", async (t) => {
+test("every registered Spec Step Service has a prepared instance inspected for A07 and declared typed arguments", async (t) => {
   const registrations = await registrationSource.load();
+  assert.deepEqual(registrations, specStepRegistrations,
+    "the production source loader must select the actual exported registrations");
+  for (const [index, registration] of registrations.entries()) assert.equal(registration, specStepRegistrations[index]);
   const root = createTmpDir("spec-service-boundary-");
   t.after(() => removeTmpDir(root));
   const fixture = new SpecStepPreparationFixture(root);
   t.after(() => fixture.dispose());
-  await inspectPreparedDependencies(registrations, fixture);
-});
-
-test("canonical Spec preparation passes declared typed arguments into every Service", async (t) => {
-  const root = createTmpDir("spec-boundary-fixture-");
-  t.after(() => removeTmpDir(root));
-  const fixture = new SpecStepPreparationFixture(root);
-  t.after(() => fixture.dispose());
-  for (const registration of specStepRegistrations) {
-    const { input } = await fixture.createInput(registration.stepId);
-    const prepared = await registration.create(input);
-    const ServiceClass = registration.ServiceClass;
-    new ServiceBoundaryCoverage(specStepRegistrations).inspectPrepared(registration, prepared);
+  const preparedSteps = await inspectPreparedDependencies(registrations, fixture);
+  for (const registration of registrations) {
+    const prepared = preparedSteps.get(registration.stepId);
     assert.equal(prepared.step.constructor, registration.StepClass);
-    assert.ok(prepared.dependency(ServiceClass) instanceof ServiceClass);
+    assert.ok(prepared.dependency(registration.ServiceClass) instanceof registration.ServiceClass);
   }
 });
 

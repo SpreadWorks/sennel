@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { test } from "node:test";
+import { after, mock, test } from "node:test";
+import { SeedCleanupScope } from "../../support/builders/seed-work-root.js";
 import { PreparedStep, StepRegistration } from "../../../src/flow/engine/composition/step-registration.js";
 import { flowStepExecutionRegistration } from "../../../src/flow/engine/composition/registered-step-execution.js";
 import { StagedExecutionSeed } from "../../fixtures/structure/staged-execution.js";
@@ -14,9 +15,13 @@ import { ServiceBoundaryCoverage, assertPreparedServiceBoundary, assertFixturePu
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 const leaves = acceptancePhaseManifest.leaves;
 
+const seedScope = new SeedCleanupScope(after, mock);
+let seed;
+
 async function createScenario(t, riskRequired) {
   const { AcceptancePhaseScenario, acceptanceProviderResponse } = await import("../../support/acceptance-phase-scenario.js");
-  return AcceptancePhaseScenario.create(t, riskRequired ? {
+  seed ??= AcceptancePhaseScenario.seed(seedScope, { frontier: "retro" });
+  return AcceptancePhaseScenario.fromSeed(t, await seed, riskRequired ? {
     acceptanceResponse: (_ordinal, scenario) => acceptanceProviderResponse(scenario, { status: "notVerifiable" }),
   } : {});
 }

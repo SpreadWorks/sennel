@@ -1,6 +1,92 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
+import path from "node:path";
+import { performance } from "node:perf_hooks";
+import { FlowManager } from "../../../src/lib/flow-manager.js";
+import { ProcessExecutionRuntime } from "../../../src/lib/process-execution-runtime.js";
+import { FlowCommandExecutionLease } from "../../../src/flow/lib/flow-command-execution-lease.js";
+import { WorkerArtifactRepositoryMutationSnapshot } from "../../../src/flow/lib/worker-artifact-handoff.js";
+import { runCmd } from "../../../src/lib/process.js";
+import { CanonicalFlowFixture } from "../infrastructure/flow-setup.js";
+import { SeedWorkRoot, observeSeedTiming } from "../builders/seed-work-root.js";
+
+/** An immutable canonical frontier. Its owner chooses and produces that frontier;
+ * this value owns only copied evidence, readback and teardown verification. */
+export class CanonicalScenarioSeed {
+  #manager;
+
+  constructor({ root, specId, frontier = null, snapshot = null, options = {}, git = true,
+    observeTiming = observeSeedTiming }) {
+    const started = performance.now();
+    this.root = root;
+    this.specId = specId;
+    this.frontier = frontier;
+    this.snapshot = snapshot;
+    this.options = Object.freeze({ ...options });
+    this.git = git;
+    this.observeTiming = observeTiming;
+    this.#manager = new FlowManager({ root, mainRoot: root, inWorktree: false, specId });
+    CanonicalFlowFixture.fromExisting({ flowManager: this.#manager, specId });
+    this.persistence = new CanonicalPersistenceSnapshot(this.#manager, specId);
+    if (git) {
+      assert.equal(fs.statSync(path.join(root, ".git")).isDirectory(), true,
+        "seed copies require standalone Git metadata");
+      this.head = this.readHead(root);
+    } else {
+      assert.equal(fs.existsSync(path.join(root, ".git")), false, "non-Git seed retains its authority mode");
+      this.head = null;
+    }
+    this.repositorySnapshot = WorkerArtifactRepositoryMutationSnapshot.capture({ root, authorities: ["execution"] });
+    observeTiming("canonical-seed-readback", performance.now() - started);
+    Object.freeze(this);
+  }
+
+  static freeze(owner, { root, specId, manager, prefix = "sennel-canonical-seed-", ...options }) {
+    const runId = manager.canonicalState(specId).runId;
+    ProcessExecutionRuntime.assertQuiescent({ mainRoot: root, executionRoot: root, runId, specId });
+    assert.equal(ProcessExecutionRuntime.inspect({ mainRoot: root, executionRoot: root })?.slot ?? null, null,
+      "a producer releases its physical runtime slot before its root becomes a seed");
+    assert.equal(FlowCommandExecutionLease.forRun({ mainRoot: root, runId }).length, 0,
+      "a producer releases every command lease before its root becomes a seed");
+    const copy = new SeedWorkRoot(root, { prefix });
+    let seed;
+    owner.after(() => {
+      const verificationStarted = performance.now();
+      try { seed?.assertUnchanged(); }
+      finally {
+        (options.observeTiming ?? observeSeedTiming)("canonical-seed-verification", performance.now() - verificationStarted);
+        copy.cleanup();
+      }
+    });
+    seed = new this({ ...options, root: copy.root, specId });
+    return seed;
+  }
+
+  readHead(root) {
+    const result = runCmd("git", ["rev-parse", "HEAD"], { cwd: root });
+    assert.equal(result.ok, true, result.stderr);
+    return result.stdout.trim();
+  }
+
+  assertClone(manager) {
+    const root = manager.specLocation(this.specId).repositoryRoot;
+    assert.notEqual(root, this.root, "each case owns a separate root");
+    this.persistence.assertUnchanged(manager, this.specId, "canonical frontier clone");
+    if (this.git) assert.equal(this.readHead(root), this.head, "clone retains the seed Git HEAD");
+    else assert.equal(fs.existsSync(path.join(root, ".git")), false, "clone retains non-Git authority");
+    assert.equal(WorkerArtifactRepositoryMutationSnapshot.capture({ root, authorities: ["execution"] }).digest,
+      this.repositorySnapshot.digest, "clone retains the seed source, index and filesystem contents");
+  }
+
+  assertUnchanged() {
+    this.persistence.assertUnchanged(this.#manager, this.specId, "seed consumers");
+    if (this.git) assert.equal(this.readHead(this.root), this.head, "consumers retain seed Git HEAD");
+    else assert.equal(fs.existsSync(path.join(this.root, ".git")), false);
+    assert.equal(WorkerArtifactRepositoryMutationSnapshot.capture({ root: this.root, authorities: ["execution"] }).digest,
+      this.repositorySnapshot.digest, "consumers retain the immutable seed source and filesystem contents");
+  }
+}
 
 /** Physical persistence protected by refusal and exact replay. A semantic
  * projection alone cannot detect a byte rewrite or a changed artifact identity.

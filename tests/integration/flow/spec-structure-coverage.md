@@ -185,3 +185,26 @@ The imported four acceptance files remain identical to `becea0380` and
 `git diff --check` passes. Temporary comparison worktrees and task test logs
 were removed. Implementation changes remain uncommitted on
 `feature/99a2-spec-structure`; main remains at `becea0380` with a clean worktree.
+
+## 55dc prepared Service traversal consolidation
+
+The two production checks `every registered Spec Step Service has a prepared
+instance inspected for A07` and `canonical Spec preparation passes declared
+typed arguments into every Service` map to one case: `every registered Spec
+Step Service has a prepared instance inspected for A07 and declared typed
+arguments`. The same six actual registrations and the same
+SpecStepPreparationFixture.createInput/registration.create path run once.
+
+| Original guarantee | Assertion retained on the single prepared set |
+| --- | --- |
+| Every real registration is inspected | ProductionRegistrations loads the same module/export; each loaded registration is identical to the actual specStepRegistrations export |
+| Correct request and typed preparation | request.stepId matches the registration; ServiceBoundaryCoverage.inspectPrepared checks the actual prepared input, private dependencies and declared argument types |
+| Complete dependency coverage | assertComplete equals the set of dependencies declared across all registrations |
+| Correct Step constructor and Service instance | Each saved PreparedStep has the registered StepClass constructor and an instance of the registered ServiceClass dependency |
+
+Independent negative fixtures and checker-only tests remain separate. This
+consolidation shares only a preparation traversal inside one test; it does not
+reuse saved Results or replace any distinct producer/persistence/consumer
+scenario. The timing comparison maps the original two-case assertion union to
+the new single case, including its fixture disposal and root cleanup. No speed
+or correctness result is implied by this implementation mapping.

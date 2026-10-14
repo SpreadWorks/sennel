@@ -182,3 +182,27 @@ completed指定では同じproducer Activityに束縛されたreceiptを取得�
 provider中のclaimと機械的保留中の読取りはactive Attemptに属するため変更しない。
 補正後のA07単独実行・変更差分・読取り区分は
 `.tmp/d538-receipt-correction-verification.json` に記録する。
+
+## 55dc: immutable prefix と各 consumer の対応
+
+以下は fixture の共有境界であり、実 consumer の成功や性能改善の測定結果ではない。
+Report の比較は `acceptance-phase-scenario.test.js` の同じ独立 subset を用いる。
+
+| 対象 | 一度だけ生成する正規 prefix | clone 後に維持する producer・保存・consumer |
+| --- | --- | --- |
+| A07 unlinked 4件 | 既存 Retro seed から Retro、Acceptance、最終回帰を完了し Report 実行前で停止 | Report preview、保存前 fault、commit 応答喪失後の exact receipt replay、bound source 変更後の実 finalize-commit 拒否。Report 生成・canonical publication は各 clone 内 |
+| A07 Issue 538 linked 3件 | 同じ Issue snapshot を持つ別 Retro seed から Report 実行前まで生成 | pending 保存後の remote delivery、応答喪失と exact recovery、pending preview の remote call ゼロ。remote fake・outbox・effect は clone ごとに新規作成 |
+| Service audit 6件 | 対象 phase より前の正規上流を Retro 直前まで生成 | leaf 5件と all-five はそれぞれ対象 producer を実行。risk 応答の差は clone 後に適用し、all-five observer は最初の Retro producer より前に新設 |
+
+ordinary Retro の同じ入力は、scenario entry と imported contract の間でも共有する。
+linked は独立入力として保持し、Report までの7前提を2前提へ集約する。
+registration の存在・選択確認は lazy seed 生成より前に残す。
+全5 registration.create、typed arguments、private dependency、consume/project の
+assertion と negative checker fixture は保持する。過去 observer や完成対象 Result を
+現在の producer 監査へ流用しない。
+
+`RequirementTestPhaseScenario.seed/fromSeed`、`SeedWorkRoot`、`SeedCleanupScope` を
+再利用し、module 評価時に owner cleanup を登録する。各 consumer は独立 root で
+canonical bytes、artifact identity と Git HEAD を読み戻し、seed の不変性を teardown で
+確認する。完了履歴の root・physical receipt は書き換えず、suffix の実 consumer による
+移植先 authority の照合を残す。旧 runtime inventory を認可根拠にしない。

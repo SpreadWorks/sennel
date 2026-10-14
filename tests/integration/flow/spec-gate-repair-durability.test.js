@@ -1,17 +1,21 @@
+import { SeedCleanupScope } from "../../support/builders/seed-work-root.js";
 import { reserveFixtureSpecGateRepairWorkerCall as reserveSpecGateRepairWorkerCall } from "../../support/infrastructure/spec-gate-repair-admission.js";
 import assert from "node:assert/strict";
-import { describe, it } from "node:test";
+import { after, describe, it } from "node:test";
 
 import { FlowManager } from "../../../src/lib/flow-manager.js";
 import { removeTmpDir } from "../../support/builders/tmp-dir.js";
-import { createSpecGateRepairScenario, completeSpecGateRepairHandoff } from "../../support/infrastructure/spec-gate-repair-scenario.js";
+import { seedSpecGateRepairScenario, createSpecGateRepairScenario, completeSpecGateRepairHandoff } from "../../support/infrastructure/spec-gate-repair-scenario.js";
 import { WorkerArtifactHandoffCoordinator } from "../../../src/flow/lib/worker-artifact-handoff.js";
 import { planSpecGateRepairWorkerExecution } from "../../../src/flow/lib/spec-gate-repair-execution.js";
 
 const now = () => new Date("2026-08-04T00:00:00.000Z");
 
+const seedScope = new SeedCleanupScope(after);
+let repairSeed;
 async function gateRepairFixture() {
-  return createSpecGateRepairScenario({ specId: "500-spec-gate-repair-durability" });
+  repairSeed ??= seedSpecGateRepairScenario(seedScope, { specId: "500-spec-gate-repair-durability" });
+  return createSpecGateRepairScenario({ seed: await repairSeed });
 }
 
 function requestFor(value) {

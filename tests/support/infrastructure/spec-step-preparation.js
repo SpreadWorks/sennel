@@ -1,13 +1,15 @@
+import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 
 import { FlowManager } from "../../../src/lib/flow-manager.js";
 import { SpecEntryConnector } from "../../../src/flow/engine/connectors/spec/spec-entry-connector.js";
 import { SpecReviewStepBinding, SpecGateEvaluationBinding } from "../../../src/flow/engine/connectors/spec/spec-step-binding.js";
-import { CanonicalGatePromotion } from "../../../src/flow/lib/canonical-gate-artifacts.js";
+import { RunGateCommand } from "../../../src/flow/lib/run-gate.js";
 import { CanonicalSpecReview } from "../../../src/flow/lib/spec-review-artifacts.js";
 import { WorkerArtifactHandoffCoordinator, sealWorkerArtifactHandoff } from "../../../src/flow/lib/worker-artifact-handoff.js";
 import { createSpecGateRepairScenario, prepareSpecGateRepairHandoffInput } from "./spec-gate-repair-scenario.js";
+import { installGateProviderFake, passingGateProviderResponse } from "./flow-dispatch-scenario.js";
 import { FlowAtStepFixture } from "./flow-setup.js";
 import { validWorkerHandoffSpec, validWorkerHandoffTaskSpec, workerArtifactJson } from "./worker-artifact.js";
 import { removeTmpDir } from "../builders/tmp-dir.js";
@@ -45,6 +47,7 @@ export class SpecStepPreparationFixture {
       flowManager, specId, runId: `run-${stepId}-boundary`,
       request: "Inspect a prepared Spec dependency.", targetStep: stepId,
       specRecord: validWorkerHandoffSpec(),
+      ...(stepId === "spec-gate" ? { taskDocuments: validWorkerHandoffTaskSpec().tasks } : {}),
     }).create();
     const ctx = { root, executionRoot: root, mainRoot: root, specId, flowManager };
 
@@ -67,9 +70,14 @@ export class SpecStepPreparationFixture {
     }
     if (stepId === "spec-gate") {
       const binding = new SpecGateEvaluationBinding({ flowManager, specId });
-      const commandResult = new CanonicalGatePromotion({
-        state: flowManager.canonicalState(specId), phase: "spec", nodeId: "spec-gate",
-      }).promote({ result: "pass", artifacts: { phase: "spec", evaluations: [] } });
+      const provider = installGateProviderFake(passingGateProviderResponse);
+      let commandResult;
+      try {
+        commandResult = await new RunGateCommand().executeCanonical({
+          ...ctx, flowState: flowManager.loadReadOnly(specId), config: {},
+        }, { phase: "spec" });
+      } finally { provider.mock.restore(); }
+      assert.equal(commandResult.result, "pass", JSON.stringify(commandResult));
       return { request: { stepId }, input: { flowManager, binding, commandResult } };
     }
 

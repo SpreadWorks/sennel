@@ -3,7 +3,8 @@ import childProcess from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { syncBuiltinESMExports } from "node:module";
-import { after, before, describe, mock, test } from "node:test";
+import { after, describe, mock, test } from "node:test";
+import { SeedCleanupScope } from "../../support/builders/seed-work-root.js";
 
 import RunRetroCommand from "../../../src/flow/lib/run-retro.js";
 import RunReportCommand from "../../../src/flow/lib/run-report.js";
@@ -71,24 +72,39 @@ class ReportRemote {
   get confirmations() { return this.calls.filter((args) => args[0] === "issue" && args[1] === "view").length; }
 }
 
-describe("d538 real producer to regression and report consumer contracts", { concurrency: false }, () => {
-  let ordinary;
-  let linked;
-  const seedCleanups = [];
-  after(() => { for (const cleanup of seedCleanups.reverse()) cleanup(); });
-  before(async () => {
-    const scope = { mock, after(cleanup) { seedCleanups.push(cleanup); } };
-    ordinary = await AcceptancePhaseScenario.seed(scope, { frontier: "retro" });
-    linked = await AcceptancePhaseScenario.seed(scope, { frontier: "retro", issue: 538,
-      issueSnapshot: "# Acceptance fixture issue\nImplement the required behavior.\n" });
-  });
-  function scenario(context, options = {}) {
-    return AcceptancePhaseScenario.fromSeed(context, options.issue === 538 ? linked : ordinary);
+const seedScope = new SeedCleanupScope(after, mock);
+const retroSeeds = new Map();
+const reportSeeds = new Map();
+
+// Both Acceptance suites in this file's entrypoint share only immutable bytes;
+// each input and every live scenario retain independent ownership.
+export async function acceptanceRetroSeed({ issue = null } = {}) {
+  if (!retroSeeds.has(issue)) retroSeeds.set(issue, AcceptancePhaseScenario.seed(seedScope, {
+    frontier: "retro", ...(issue === null ? {} : { issue,
+      issueSnapshot: "# Acceptance fixture issue\nImplement the required behavior.\n" }),
+  }));
+  return retroSeeds.get(issue);
+}
+
+async function scenario(t, options = {}) {
+  return AcceptancePhaseScenario.fromSeed(t, await acceptanceRetroSeed(options));
+}
+
+async function reportScenario(t, options = {}) {
+  const key = options.issue ?? null;
+  if (!reportSeeds.has(key)) {
+    const upstream = await acceptanceRetroSeed(options);
+    reportSeeds.set(key, AcceptancePhaseScenario.seed(seedScope, { ...upstream.options,
+      seedRoot: upstream.root, seedSpecId: upstream.specId, frontier: "report" }));
   }
+  return AcceptancePhaseScenario.fromSeed(t, await reportSeeds.get(key));
+}
+
+describe("d538 real producer to regression and report consumer contracts", { concurrency: false }, () => {
 
 for (const stale of [false, true]) {
   test(`A04 retro ${stale ? "stale" : "current"} preview leaves canonical evidence and execution counts unchanged`, async (t) => {
-    const flow = scenario(t);
+    const flow = await scenario(t);
     await flow.advanceTo("retro");
     flow.reload();
     const execution = flow.commandArtifact("test.execute", "retro");
@@ -107,7 +123,7 @@ for (const stale of [false, true]) {
 }
 
 test("A04 normal Retro source drift refreshes the actual test producer with a new Attempt and preserves old history", async (t) => {
-  const flow = scenario(t);
+  const flow = await scenario(t);
   await flow.advanceTo("retro");
   flow.reload();
   const before = flow.commandArtifact("test.execute", "retro");
@@ -135,7 +151,7 @@ test("A04 normal Retro source drift refreshes the actual test producer with a ne
 });
 
 test("A06 Definition's exact failed-regression choice preserves FAIL and residual risk through actual report publication", async (t) => {
-  const flow = scenario(t);
+  const flow = await scenario(t);
   await flow.advanceTo("final-regression");
   flow.reload();
   const script = path.join(flow.root, "project-tests", "regression.sh");
@@ -220,7 +236,7 @@ test("A06 Definition's exact failed-regression choice preserves FAIL and residua
 });
 
 test("A07 unlinked report preview does not publish, claim an outbox or change the source frontier", async (t) => {
-  const flow = scenario(t);
+  const flow = await reportScenario(t);
   await flow.advanceTo("report");
   flow.reload();
   const before = flow.snapshot();
@@ -233,7 +249,7 @@ test("A07 unlinked report preview does not publish, claim an outbox or change th
 });
 
 test("A07 linked report publishes pending before delivery and reload observes the same completed outbox identity", async (t) => {
-  const flow = scenario(t, { issue: 538, issueSnapshot: "# Acceptance fixture issue\nImplement the required behavior.\n" });
+  const flow = await reportScenario(t, { issue: 538, issueSnapshot: "# Acceptance fixture issue\nImplement the required behavior.\n" });
   const remote = new ReportRemote(t, flow);
   await flow.advanceTo("report");
   flow.reload();
@@ -255,7 +271,7 @@ test("A07 linked report publishes pending before delivery and reload observes th
 });
 
 test("A07 lost report delivery response retains pending evidence and exact recovery confirms remote success without duplicate submission", async (t) => {
-  const flow = scenario(t, { issue: 538 });
+  const flow = await reportScenario(t, { issue: 538 });
   const remote = new ReportRemote(t, flow);
   await flow.advanceTo("report");
   flow.reload();
@@ -284,7 +300,7 @@ test("A07 lost report delivery response retains pending evidence and exact recov
 });
 
 test("A07 pending report preview makes zero remote calls and preserves the failed delivery exactly", async (t) => {
-  const flow = scenario(t, { issue: 538 });
+  const flow = await reportScenario(t, { issue: 538 });
   const remote = new ReportRemote(t, flow);
   await flow.advanceTo("report");
   remote.queryUnavailable = true;
@@ -311,7 +327,7 @@ test("A07 pending report preview makes zero remote calls and preserves the faile
 });
 
 test("A07 report persistence failure preserves the admitted Attempt, catalog and outbox before commit", async (t) => {
-  const flow = scenario(t);
+  const flow = await reportScenario(t);
   await flow.advanceTo("report");
   let ctx = flow.context();
   await FLOW_COMMANDS.run.report.pre(ctx);
@@ -334,7 +350,7 @@ test("A07 report persistence failure preserves the admitted Attempt, catalog and
 });
 
 test("A07 commit response loss reuses the exact report receipt without regenerating or republishing", async (t) => {
-  const flow = scenario(t);
+  const flow = await reportScenario(t);
   await flow.advanceTo("report");
   const ctx = flow.context();
   await FLOW_COMMANDS.run.report.pre(ctx);
@@ -362,7 +378,7 @@ test("A07 commit response loss reuses the exact report receipt without regenerat
 });
 
 test("A07 actual finalize-commit admission rejects a report whose bound source changed before staging", async (t) => {
-  const flow = scenario(t);
+  const flow = await reportScenario(t);
   await flow.advanceTo("report");
   await flow.runRegistered("report");
   flow.reload();

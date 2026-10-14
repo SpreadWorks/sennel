@@ -1,3 +1,5 @@
+import { loadConfig } from "../../../src/lib/config.js";
+import { dispatchContainer, dispatchFlowCommand } from "../../support/infrastructure/flow-dispatch-scenario.js";
 /**
  * tests/integration/flow/prompt-test-mode.test.js
  *
@@ -12,6 +14,7 @@ import { createTmpDir, removeTmpDir } from "../../support/builders/tmp-dir.js";
 import { CanonicalFlowFixture, makeFlowManager, setupFlowConfig } from "../../support/infrastructure/flow-setup.js";
 
 const FLOW_CMD = join(process.cwd(), "src/flow.js");
+const RUNTIME_BOOTSTRAP = join(process.cwd(), "src/sennel.js");
 
 describe("flow get prompt plan.test-mode (reworked)", () => {
   let tmp;
@@ -26,7 +29,7 @@ describe("flow get prompt plan.test-mode (reworked)", () => {
     tmp = createTmpDir();
     setupFlowState(tmp);
     const result = execFileSync(
-      "node", [FLOW_CMD, "get", "prompt", "plan.test-mode"],
+      "node", ["--import", RUNTIME_BOOTSTRAP, FLOW_CMD, "get", "prompt", "plan.test-mode"],
       { encoding: "utf8", env: { ...process.env, SENNEL_WORK_ROOT: tmp } },
     );
     const envelope = JSON.parse(result);
@@ -34,14 +37,15 @@ describe("flow get prompt plan.test-mode (reworked)", () => {
     assert.equal(envelope.data.choices.length, 3);
   });
 
-  it("does not contain unit/e2e choices", () => {
+  it("does not contain unit/e2e choices", async () => {
     tmp = createTmpDir();
     setupFlowState(tmp, "ja");
-    const result = execFileSync(
-      "node", [FLOW_CMD, "get", "prompt", "plan.test-mode"],
-      { encoding: "utf8", env: { ...process.env, SENNEL_WORK_ROOT: tmp } },
-    );
-    const envelope = JSON.parse(result);
+    const execution = await dispatchFlowCommand({
+      container: dispatchContainer({ root: tmp, config: loadConfig(tmp), flowManager: makeFlowManager(tmp) }),
+      group: "get", name: "prompt", argv: ["plan.test-mode"], runtimeLog: true,
+    });
+    assert.equal(execution.exitCode, 0, execution.stderr);
+    const envelope = execution.envelope;
     const labels = envelope.data.choices.map((c) => c.label);
     for (const label of labels) {
       assert.ok(!label.includes("ユニットテスト"), `should not contain unit test: ${label}`);
@@ -49,14 +53,15 @@ describe("flow get prompt plan.test-mode (reworked)", () => {
     }
   });
 
-  it("description asks whether to run tests (not create)", () => {
+  it("description asks whether to run tests (not create)", async () => {
     tmp = createTmpDir();
     setupFlowState(tmp, "ja");
-    const result = execFileSync(
-      "node", [FLOW_CMD, "get", "prompt", "plan.test-mode"],
-      { encoding: "utf8", env: { ...process.env, SENNEL_WORK_ROOT: tmp } },
-    );
-    const envelope = JSON.parse(result);
+    const execution = await dispatchFlowCommand({
+      container: dispatchContainer({ root: tmp, config: loadConfig(tmp), flowManager: makeFlowManager(tmp) }),
+      group: "get", name: "prompt", argv: ["plan.test-mode"], runtimeLog: true,
+    });
+    assert.equal(execution.exitCode, 0, execution.stderr);
+    const envelope = execution.envelope;
     assert.ok(
       envelope.data.description.includes("実行"),
       `description should ask about running tests, got: ${envelope.data.description}`,
@@ -67,14 +72,15 @@ describe("flow get prompt plan.test-mode (reworked)", () => {
     );
   });
 
-  it("choice labels are run/skip (not create/skip)", () => {
+  it("choice labels are run/skip (not create/skip)", async () => {
     tmp = createTmpDir();
     setupFlowState(tmp, "ja");
-    const result = execFileSync(
-      "node", [FLOW_CMD, "get", "prompt", "plan.test-mode"],
-      { encoding: "utf8", env: { ...process.env, SENNEL_WORK_ROOT: tmp } },
-    );
-    const envelope = JSON.parse(result);
+    const execution = await dispatchFlowCommand({
+      container: dispatchContainer({ root: tmp, config: loadConfig(tmp), flowManager: makeFlowManager(tmp) }),
+      group: "get", name: "prompt", argv: ["plan.test-mode"], runtimeLog: true,
+    });
+    assert.equal(execution.exitCode, 0, execution.stderr);
+    const envelope = execution.envelope;
     const labels = envelope.data.choices.map((c) => c.label);
     assert.ok(
       labels.some((l) => l === "実行する"),

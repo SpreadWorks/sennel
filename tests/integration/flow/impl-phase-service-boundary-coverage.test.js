@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { test } from "node:test";
+import { after, mock, test } from "node:test";
+import { SeedCleanupScope } from "../../support/builders/seed-work-root.js";
 
 import { PreparedStep, StepRegistration } from "../../../src/flow/engine/composition/step-registration.js";
 import { flowStepExecutionRegistration } from "../../../src/flow/engine/composition/registered-step-execution.js";
@@ -18,15 +19,20 @@ import { ServiceBoundaryCoverage, assertPreparedServiceBoundary as assertPrepare
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 const leaves = implPhaseManifest.leaves;
 
-function createScenario(t, Scenario) {
+const seedScope = new SeedCleanupScope(after, mock);
+let phaseSeed;
+
+async function createScenario(t, Scenario) {
   const seed = validWorkerHandoffTaskSpec();
-  return Scenario.create(t, {
+  phaseSeed ??= Scenario.seed(seedScope, {
+    frontier: "implement",
     forceRepairs: true,
     tasks: seed.tasks.map((task) => ({ ...task, id: "T17" })),
     requirements: seed.requirements.map(({ testable, ...requirement }) => ({
       ...requirement, task_ids: ["T17"], preimplementation_test_expectation: "fail",
     })),
   });
+  return Scenario.fromSeed(t, await phaseSeed);
 }
 
 for (const leaf of leaves) {
@@ -47,7 +53,7 @@ for (const leaf of leaves) {
     const registration = registrations.find((candidate) => candidate.stepId === leaf.stepId);
     assert.equal(flowStepExecutionRegistration(leaf.stepId), registration);
     const { ImplPhaseScenario } = await import("../../support/impl-phase-scenario.js");
-    const scenario = createScenario(t, ImplPhaseScenario);
+    const scenario = await createScenario(t, ImplPhaseScenario);
     await scenario.advanceTo(leaf.nodeId);
     scenario.reload();
     const state = scenario.manager.canonicalState(scenario.specId);
@@ -95,7 +101,7 @@ test("A07 all twelve production create paths are covered without a representativ
   const registry = [...new Set(snapshots.flatMap((snapshot) => snapshot.registry))];
   assert.deepEqual(registrations.map((entry) => entry.stepId).sort(), leaves.map((leaf) => leaf.stepId).sort());
   const { ImplPhaseScenario } = await import("../../support/impl-phase-scenario.js");
-  const scenario = createScenario(t, ImplPhaseScenario);
+  const scenario = await createScenario(t, ImplPhaseScenario);
   const observer = new PrepareExecutionObserver(t, { registrations: registry, stepIds: leaves.map((leaf) => leaf.stepId) });
   try {
     await scenario.advanceTo("retro");

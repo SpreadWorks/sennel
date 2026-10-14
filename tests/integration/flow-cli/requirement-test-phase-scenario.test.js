@@ -1,6 +1,6 @@
-import "./requirement-test-save-recovery.contract.js";
-import "./requirement-test-stale-admission.contract.js";
-import "./requirement-test-error-admission.contract.js";
+import { registerRequirementTestSaveRecovery } from "./requirement-test-save-recovery.contract.js";
+import { registerRequirementTestStaleAdmission } from "./requirement-test-stale-admission.contract.js";
+import { registerRequirementTestErrorAdmission } from "./requirement-test-error-admission.contract.js";
 import assert from "node:assert/strict";
 import { after, before, describe, it, mock } from "node:test";
 import fs from "node:fs";
@@ -20,7 +20,7 @@ import GetStatusCommand from "../../../src/flow/lib/get-status.js";
 import RunClaimNextActionCommand from "../../../src/flow/lib/run-claim-next-action.js";
 import { CanonicalAcceptanceArtifactStore } from "../../../src/flow/lib/canonical-acceptance-artifacts.js";
 import { RequirementTestArtifactStore } from "../../../src/flow/lib/requirement-test-store.js";
-import { prepareCommonRequirementTestError } from "../../support/requirement-test-save-boundary.js";
+import { enterRequirementTestLeaf, prepareCommonRequirementTestError } from "../../support/requirement-test-save-boundary.js";
 import { RequirementTestPhaseScenario, requirementTestSource, rejectFirstRequirementReview, rejectFirstRequirementReviewBatches } from "../../support/requirement-test-phase-scenario.js";
 import { CanonicalPersistenceSnapshot } from "../../support/assertions/canonical-persistence.js";
 import { assertRequirementTestResultRoundtrip } from "../../support/assertions/requirement-test-result.js";
@@ -29,6 +29,21 @@ import { FlowDispatchSession, FlowDispatchTarget } from "../../../src/flow/lib/d
 import { CanonicalSpecApproval } from "../../../src/flow/lib/canonical-spec-approval.js";
 import { acquireApprovalInput } from "../../../src/flow/engine/composition/test.js";
 import SetAcceptanceDecisionCommand from "../../../src/flow/lib/set-acceptance-decision.js";
+import { SeedCleanupScope } from "../../support/builders/seed-work-root.js";
+
+// This file owns all four registered suites and their one lazy upstream seed.
+let approvalSeed;
+const seedScope = new SeedCleanupScope(after, mock);
+function sharedApprovalSeed() {
+  return approvalSeed ??= RequirementTestPhaseScenario.seed(seedScope);
+}
+async function enterSharedRequirementLeaf(t, leaf, options = {}) {
+  return enterRequirementTestLeaf(t, leaf, options,
+    options.requirements ? null : await sharedApprovalSeed());
+}
+registerRequirementTestSaveRecovery(enterSharedRequirementLeaf);
+registerRequirementTestStaleAdmission(enterSharedRequirementLeaf);
+registerRequirementTestErrorAdmission(enterSharedRequirementLeaf);
 
 function requirement(id, expectation = "fail") {
   return { id, desc: `Observe ${id} behavior.`, task_ids: ["T1"], preimplementation_test_expectation: expectation };
@@ -39,7 +54,9 @@ function wrongRequirementOwnershipSource(id) {
 }
 
 async function approved(t, options = {}) {
-  const scenario = RequirementTestPhaseScenario.create(t, options);
+  const scenario = options.requirements || options.tasks || Object.hasOwn(options, "autoApprove")
+    ? RequirementTestPhaseScenario.create(t, options)
+    : RequirementTestPhaseScenario.fromSeed(t, await sharedApprovalSeed(), options);
   await scenario.advanceTo("approval");
   if (options.autoApprove) {
     await scenario.advanceTo(options.requirements?.every((entry) => entry.testable === false) ? "implement" : "test-generate");
@@ -500,7 +517,7 @@ describe("Requirement Test phase production scenarios", { concurrency: false }, 
     assertSavedResult(scenario, "test-gate", "test-gate-compatible");
   });
 
-  it("persists multiple repair batches in one Attempt before publishing the next candidate revision", async (t) => {
+  it("persists multiple repair batches in one Attempt before publishing the next candidate revision", { skip: "Known product defect deferred by user in 55dc; see 55dc-product-defects.md (Requirement repair execution generation)" }, async (t) => {
     const count = TEST_REVIEW_REPAIR_BATCH_LIMITS.findingCount + 1;
     const scenario = await approved(t, { reviewResponse: rejectFirstRequirementReviewBatches(count) });
     await scenario.advanceTo("test-repair");

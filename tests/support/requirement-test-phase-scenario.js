@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { performance } from "node:perf_hooks";
 import { runCmd } from "../../src/lib/process.js";
 import { installReviewProcessFake } from "./infrastructure/review-process-fake.js";
 import { FlowManager } from "../../src/lib/flow-manager.js";
@@ -21,7 +22,8 @@ import { parseTestReviewFindings } from "../../src/flow/commands/review.js";
 import { CanonicalFlowFixture, canonicalDraftDocument } from "./infrastructure/flow-setup.js";
 import { PrepareArtifactScenario } from "./prepare-artifact-scenario.js";
 import { removeTmpDir } from "./builders/tmp-dir.js";
-import { SeedWorkRoot } from "./builders/seed-work-root.js";
+import { SeedWorkRoot, SeedCleanupScope, observeSeedTiming } from "./builders/seed-work-root.js";
+import { CanonicalScenarioSeed } from "./assertions/canonical-persistence.js";
 import { validWorkerHandoffTaskSpec, workerArtifactJson } from "./infrastructure/worker-artifact.js";
 import { dispatchContainer, fixtureRepository, installGateProviderFake, passingGateProviderResponse, requestInput, requestPayloadPath } from "./infrastructure/flow-dispatch-scenario.js";
 
@@ -32,9 +34,46 @@ import { dispatchContainer, fixtureRepository, installGateProviderFake, passingG
  */
 export class RequirementTestPhaseScenario {
   static create(t, options = {}) {
-    const scenario = new RequirementTestPhaseScenario(options);
+    const scenario = new this(options);
     t.after(() => scenario.close());
     scenario.initialize();
+    return scenario;
+  }
+
+  /** Produce a frontier once, restore every producer-owned fake, then retain an
+   * immutable copy. The caller owns its lifetime; name-filtered files can call
+   * this lazily so unselected scenarios never construct a seed. */
+  static async seed(t, { frontier = "approval", prepare = null, observeTiming = observeSeedTiming, ...options } = {}) {
+    const scope = new SeedCleanupScope((cleanup) => t.after(cleanup), t.mock);
+    try {
+      const prefixStarted = performance.now();
+      const producer = this.create(scope, options);
+      if (prepare) await prepare(producer);
+      else await producer.advanceTo(frontier);
+      producer.reload();
+      assert.equal(producer.current(), frontier, "the producer must reach its requested seed frontier");
+      producer.close({ retainRoot: true });
+      producer.publicationObserver?.restore();
+      observeTiming("phase-prefix", performance.now() - prefixStarted);
+      return CanonicalScenarioSeed.freeze(t, { root: producer.root, specId: producer.specId,
+        manager: producer.manager, prefix: "sennel-phase-seed-", frontier,
+        snapshot: producer.snapshot(), options, observeTiming });
+    } finally {
+      const cleanupStarted = performance.now();
+      try { await scope.cleanup(); }
+      finally { observeTiming("phase-producer-cleanup", performance.now() - cleanupStarted); }
+    }
+  }
+
+  static fromSeed(t, seed, options = {}) {
+    const scenario = this.create(t, { ...seed.options, ...options, seedRoot: seed.root, seedSpecId: seed.specId });
+    const readbackStarted = performance.now();
+    scenario.reload();
+    CanonicalFlowFixture.fromExisting({ flowManager: scenario.manager, specId: scenario.specId });
+    assert.deepEqual(scenario.snapshot(), seed.snapshot, "a copied producer frontier cannot fabricate or rewrite canonical evidence");
+    seed.assertClone(scenario.manager);
+    assert.equal(scenario.current(), seed.frontier);
+    seed.observeTiming("phase-clone-readback", performance.now() - readbackStarted);
     return scenario;
   }
 
@@ -60,11 +99,11 @@ export class RequirementTestPhaseScenario {
     fs.mkdirSync(path.join(this.root, ".sennel"), { recursive: true });
     if (this.options.config && !this.seedClone) fs.writeFileSync(path.join(this.root, ".sennel", "config.json"),
       workerArtifactJson(this.options.config));
-    fs.writeFileSync(path.join(this.root, ".sennel", "guardrail.json"), workerArtifactJson({ guardrails: [{
+    if (!this.seedClone) fs.writeFileSync(path.join(this.root, ".sennel", "guardrail.json"), workerArtifactJson({ guardrails: [{
       id: "PHASE-SPEC", title: "Executable requirement", body: "Each requirement states the behavior and its verification.",
       meta: { phase: ["spec"], category: "requirements" },
     }] }));
-    if (this.options.continueImplementation) {
+    if (this.options.continueImplementation && !this.seedClone) {
       fs.mkdirSync(path.join(this.root, ".sennel", "output"), { recursive: true });
       fs.writeFileSync(path.join(this.root, ".sennel", "output", "analysis.json"), "{}\n");
       fs.writeFileSync(path.join(this.root, "package.json"), workerArtifactJson({ type: "module", scripts: { test: "node --test project-tests/smoke.test.js" } }));

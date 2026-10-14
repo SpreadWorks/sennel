@@ -196,3 +196,26 @@ source/testリスト、正確なbefore/after比較、要求case mapは`.tmp/0717
 最終board readbackは`board-final-readback.json`でstart本文と完全一致し、
 0717は`In Progress`のままである。board更新・Issue公開・実Flow開始・製品修正・
 commit/merge/push/外部remote書込みは行っていない。Git peerは検証所有のlocalだけである。
+
+## 55dc: cleanup / Service audit の共有前提
+
+この追記は prefix/suffix の保証対応を記録する。上記の過去検証結果を今回の
+clone 移植成功や速度比較へ流用しない。
+
+| 対象 | 共有する正規 producer prefix | 独立 clone の suffix と実 consumer |
+| --- | --- | --- |
+| F07 orphan cleanup 11前提 | 既存 finalize-commit seed から commit、squash、sync、正規 evidence の Git checkpoint、feature orphan commit を生成。cleanup claim 前で固定 | 各 clone で新しい cleanup claim。dirtiness matrix 5件、audit 保存 fault、branch 削除 fault/retry、rescue 成功、base ref lock、unknown dirt、expected-SHA race の6件で既存 fault・refusal・Report readback・rescue・teardown を実行 |
+| Finalization Service audit 5前提 | Report 実行前までの同じ上流を一度生成。4 leaf へは元の正規 advance による派生 seed を作る | direct/dispatch 各 route は対象 leaf を実行。別の Report-pending clone は4 direct caller の準備前拒否を検査。Report Result、receipt、catalog publication、保存後 reload、実 create/consume/project を保持 |
+
+cleanup seed は Sync の Definition connector が正規に activate した cleanup Attempt を保持する。凍結前と各 clone で cleanup outbox・execution settlement・journal/resume preparation がないことを確認し、各 clone の実 pre/command 後に新しい execution receipt と begin_outbox Activity、clone 自身の mainRoot/authorityRoot を検証する。Attempt の存在を root-bound execution claim と同一視しない。
+completed Finalization receipt の歴史的 mainAuthority や physical receipt の bytes を
+移植先 root へ書き換えない。clone の新しい claim と実 consumer が現在 root、refs、
+Report receipt を用いる。pending cleanup outbox、rescue journal、operation lock や
+handoff reservation を完成証拠として移植しない。matrix の live publication observer に
+よる nonterminal Result/receipt の検証も各 clone に残る。
+
+各 Service target の registration admission を重い seed 生成より前に残す。
+対象 producer の前に observer を新設し、projection だけで execution coverage を
+満たした扱いにはしない。共有 seed と各 clone は既存 seed/fromSeed と SeedWorkRoot を
+使い、SeedCleanupScope が owner hook を module 評価時に登録する。cleanup callback が
+失敗しても残りの所有 root 回収を試み、失敗を AggregateError で報告する。

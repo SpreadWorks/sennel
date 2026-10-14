@@ -3,9 +3,10 @@ import childProcess from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { syncBuiltinESMExports } from "node:module";
-import { after, before, test } from "node:test";
+import { after, before, mock, test } from "node:test";
 import { pathToFileURL } from "node:url";
-import { SeedWorkRoot } from "../../support/builders/seed-work-root.js";
+import { SeedCleanupScope, SeedWorkRoot } from "../../support/builders/seed-work-root.js";
+import { FinalizationPhaseScenario } from "../../support/finalization-phase-scenario.js";
 import { TestTemporaryRoot } from "../../test-temporary-root.js";
 import { initGitRepo, commitAll } from "../../support/infrastructure/git-repo.js";
 import { runGit } from "../../../src/lib/git-helpers.js";
@@ -16,11 +17,14 @@ import { FinalizeCommitPathSet } from "../../../src/flow/lib/finalize-commit-pat
 import { POINTER_REL_PATH } from "../../../src/flow/lib/run-report-show.js";
 import { CanonicalFlowArtifactWrite, FlowActivity } from "../../../src/flow/lib/current-flow-state.js";
 import { CanonicalPersistenceSnapshot } from "../../support/assertions/canonical-persistence.js";
+import { FinalizeCleanupEffectPreparation } from "../../../src/flow/lib/finalize-cleanup-journal.js";
+import { DraftStepSettlementReceipt } from "../../../src/flow/definition.js";
+import { StepResult } from "../../../src/flow/engine/step-result.js";
 
 const cleanupStep = "finalize-cleanup";
+const seedScope = new SeedCleanupScope(after, mock);
 
-async function orphanAtCleanup(t, scenario) {
-  const flow = scenario(t);
+async function produceOrphanBeforeCleanupClaim(flow) {
   await flow.advanceTo("finalize-sync");
   const synchronized = await flow.runRegistered("finalize-sync");
   assert.notEqual(synchronized.ok, false, JSON.stringify(synchronized));
@@ -44,8 +48,43 @@ async function orphanAtCleanup(t, scenario) {
   flow.git(["commit", "-m", "fix: preserve the post-squash change"]);
   flow.git(["switch", "main"]);
   flow.reload();
-  await flow.advanceTo(cleanupStep);
+  assertCleanupExecutionUnclaimed(flow);
   return flow;
+}
+
+// Sync's Definition connector activates the cleanup Attempt. Its root-bound
+// execution is acquired separately by cleanup's registered pre hook.
+function assertCleanupExecutionUnclaimed(flow) {
+  assert.equal(flow.state().attempt.nodeId, cleanupStep);
+  assert.equal(flow.outbox(cleanupStep), null, "the seed cannot retain a cleanup outbox claim");
+  assert.equal(flow.manager.readCurrentStepSettlement({ specId: flow.specId, stepId: cleanupStep }), null,
+    "the seed cannot retain a cleanup execution checkpoint");
+  assert.equal(FinalizeCleanupEffectPreparation.acquire(flow.context()), null,
+    "the seed cannot retain a cleanup journal or resume capability");
+}
+
+function assertCleanupExecutionClaim(flow) {
+  const activities = flow.manager.activityLedger(flow.specId);
+  const activity = activities.find((entry) => entry.nodeId === cleanupStep
+    && entry.result?.stepResult?.kind === "finalize-cleanup-execution-required");
+  assert.ok(activity, "the clone's real cleanup pre hook must publish its execution claim");
+  assert.equal(flow.seedActivityIds.has(activity.id), false, "the cleanup claim must be produced inside this clone");
+  const result = StepResult.fromStored(cleanupStep, activity.result.stepResult);
+  const execution = result.execution;
+  DraftStepSettlementReceipt.assertStored(activity.result.draftSettlementReceipt, { result, binding: {
+    runId: flow.state().runId, specId: flow.specId, stepId: cleanupStep,
+    attempt: { id: activity.attemptId, sequence: activity.sequence },
+  } });
+  assert.deepEqual(execution.mainAuthority, { mainRoot: flow.root, authorityRoot: flow.root },
+    "the new execution claim must bind this clone's repository authority");
+  const outbox = flow.outbox(cleanupStep);
+  assert.equal(execution.claim.attempt, outbox.attempt);
+  assert.equal(execution.claim.idempotencyKey, outbox.idempotencyKey);
+  assert.ok(activities.some((entry) => !flow.seedActivityIds.has(entry.id)
+    && entry.transition.operation === "begin_outbox"
+    && entry.transition.outbox?.id === execution.claim.idempotencyKey
+    && entry.transition.outbox.attempt === execution.claim.attempt),
+  "the clone must persist its own outbox claim before the cleanup effect");
 }
 
 function issueEntries(flow) {
@@ -80,7 +119,21 @@ function rescueGit(root, args) {
   return result.stdout.trim();
 }
 
-export function registerFinalizationCleanupContracts(scenario) {
+export function registerFinalizationCleanupContracts(scenario, currentSeed) {
+  let orphanSeed;
+  async function orphanAtCleanup(t) {
+    if (!orphanSeed) {
+      const upstream = currentSeed();
+      orphanSeed = FinalizationPhaseScenario.seed(seedScope, { ...upstream.options,
+        seedRoot: upstream.root, seedSpecId: upstream.specId, frontier: cleanupStep,
+        prepare: produceOrphanBeforeCleanupClaim });
+    }
+    const flow = FinalizationPhaseScenario.fromSeed(t, await orphanSeed);
+    // Keep Sync's activated Attempt and all completed receipts byte-identical.
+    // Each case's real cleanup pre hook acquires its own root-bound execution.
+    assertCleanupExecutionUnclaimed(flow);
+    return flow;
+  }
   let rescueSeed;
   let rescueSeedOwner;
   before(() => {
@@ -226,12 +279,13 @@ export function registerFinalizationCleanupContracts(scenario) {
     // frontier. These are dirtiness decisions, not repeated phase matrices.
     for (const condition of ["exact audit", "independent fact", "unrelated publication", "stale catalog", "invalid Flow metadata"]) {
       await t.test(condition, async (caseTest) => {
-        const flow = await orphanAtCleanup(caseTest, scenario);
+        const flow = await orphanAtCleanup(caseTest);
         const location = flow.manager.specLocation(flow.specId);
         assert.equal(flow.git(["status", "--porcelain"]), "",
           "the existing orphan producer checkpoint supplies the clean audit baseline");
         await FLOW_COMMANDS.run[cleanupStep].pre(flow.context());
         flow.reload();
+        assertCleanupExecutionClaim(flow);
         assert.equal(flow.outbox(cleanupStep).status, "pending");
         flow.assertResults([cleanupStep], { terminal: false });
         const input = { mainRepoPath: flow.root, baseBranch: "main",
@@ -285,9 +339,10 @@ export function registerFinalizationCleanupContracts(scenario) {
   });
 
   test("F07 force audit save failure performs no teardown and retains the exact producer/report", async (t) => {
-    const flow = await orphanAtCleanup(t, scenario);
+    const flow = await orphanAtCleanup(t);
     await FLOW_COMMANDS.run[cleanupStep].pre(flow.context());
     flow.reload();
+    assertCleanupExecutionClaim(flow);
     const before = flow.snapshot();
     const persisted = new CanonicalPersistenceSnapshot(flow.manager, flow.specId, [path.join(flow.root, POINTER_REL_PATH)]);
     const refs = retainedRefs(flow);
@@ -316,9 +371,10 @@ export function registerFinalizationCleanupContracts(scenario) {
   });
 
   test("F07 forced branch deletion failure and retry preserve independent facts and one exact audit", async (t) => {
-    const flow = await orphanAtCleanup(t, scenario);
+    const flow = await orphanAtCleanup(t);
     await FLOW_COMMANDS.run[cleanupStep].pre(flow.context());
     flow.reload();
+    assertCleanupExecutionClaim(flow);
     const independent = ["existing-other-audit", "independently-appended-fact"];
     for (const issueLogId of independent) flow.manager.appendIssueLog({ specId: flow.specId,
       entry: { step: cleanupStep, issueLogId, reason: `Keep ${issueLogId} through teardown failure.` },
@@ -354,12 +410,13 @@ export function registerFinalizationCleanupContracts(scenario) {
   });
 
   test("F07 actual auto-rescue retains an orphan commit in main before branch teardown", async (t) => {
-    const flow = await orphanAtCleanup(t, scenario);
+    const flow = await orphanAtCleanup(t);
     const source = flow.report(cleanupStep);
     const base = flow.git(["rev-parse", "main"]);
     const result = await flow.runRegistered(cleanupStep, { autoRescue: true });
     assert.notEqual(result.ok, false, JSON.stringify(result));
     flow.reload();
+    assertCleanupExecutionClaim(flow);
     assert.notEqual(flow.git(["rev-parse", "main"]), base);
     assert.equal(flow.git(["show", "main:rescued.txt"]),
       "An actual post-squash commit must survive authorized rescue.");
@@ -371,7 +428,7 @@ export function registerFinalizationCleanupContracts(scenario) {
   });
 
   test("F07 auto-rescue cannot publish over a locked base ref or lose the orphan/report", async (t) => {
-    const flow = await orphanAtCleanup(t, scenario);
+    const flow = await orphanAtCleanup(t);
     const refs = retainedRefs(flow);
     const source = flow.report(cleanupStep);
     const release = lockRef(t, flow, "main");
@@ -393,6 +450,7 @@ export function registerFinalizationCleanupContracts(scenario) {
     assert.equal(result.ok, false, "a failed real expected-ref publication must stop before teardown");
     assert.ok(result.errors.length > 0);
     flow.reload();
+    assertCleanupExecutionClaim(flow);
     assert.deepEqual(retainedRefs(flow), refs);
     assert.deepEqual(flow.report(cleanupStep), source);
     assert.equal(flow.state().lifecycle.state, "active");
@@ -401,7 +459,7 @@ export function registerFinalizationCleanupContracts(scenario) {
   });
 
   test("F07 auto-rescue refuses unknown dirty input without losing the orphan or producer report", async (t) => {
-    const flow = await orphanAtCleanup(t, scenario);
+    const flow = await orphanAtCleanup(t);
     const refs = retainedRefs(flow);
     const source = flow.report(cleanupStep);
     const foreign = "An independent edit cannot be classified as owned rescue evidence.\n";
@@ -411,6 +469,7 @@ export function registerFinalizationCleanupContracts(scenario) {
     assert.ok(result.errors.some((entry) => entry.code === "MAIN_REPO_DIRTY"), JSON.stringify(result));
     assert.ok(result.data.dirtyFiles.includes("independent-rescue-input.txt"));
     flow.reload();
+    assertCleanupExecutionClaim(flow);
     assert.deepEqual(retainedRefs(flow), refs);
     assert.equal(fs.readFileSync(path.join(flow.root, "independent-rescue-input.txt"), "utf8"), foreign);
     assert.deepEqual(flow.report(cleanupStep), source);
@@ -419,7 +478,7 @@ export function registerFinalizationCleanupContracts(scenario) {
   });
 
   test("F07 auto-rescue expected-SHA publication preserves a real competing base commit", async (t) => {
-    const flow = await orphanAtCleanup(t, scenario);
+    const flow = await orphanAtCleanup(t);
     const baseline = flow.git(["rev-parse", "main"]);
     const feature = flow.git(["rev-parse", flow.state().execution.featureBranch]);
     const report = flow.report(cleanupStep);
@@ -450,6 +509,7 @@ export function registerFinalizationCleanupContracts(scenario) {
     assert.equal(result.ok, false, "a stale expected SHA must stop rescue before teardown/materialization");
     assert.ok(result.errors.length > 0);
     flow.reload();
+    assertCleanupExecutionClaim(flow);
     assert.equal(flow.git(["rev-parse", "main"]), competingCommit,
       "rescue cannot overwrite an independently published base commit");
     assert.equal(flow.git(["rev-parse", flow.state().execution.featureBranch]), feature);

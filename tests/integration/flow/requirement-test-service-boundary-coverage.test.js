@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { test } from "node:test";
+import { after, mock, test } from "node:test";
+import { SeedCleanupScope } from "../../support/builders/seed-work-root.js";
 
 import { PreparedStep, StepRegistration } from "../../../src/flow/engine/composition/step-registration.js";
 import { flowStepExecutionRegistration, gateStepExecutionRegistration, reviewStepExecutionRegistration }
@@ -18,6 +19,13 @@ import { ServiceBoundaryCoverage } from "../../support/structure/service-boundar
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 const production = new RequirementTestProductionRegistrations(root);
 const stepIds = requirementTestManifest.leaves.map((leaf) => leaf.stepId);
+
+const seedScope = new SeedCleanupScope(after, mock);
+let seed;
+async function createScenario(t, options = {}) {
+  seed ??= RequirementTestPhaseScenario.seed(seedScope);
+  return RequirementTestPhaseScenario.fromSeed(t, await seed, options);
+}
 
 for (const stepId of stepIds) {
   test(`A07/A10 ${stepId} is selected by actual production execution lookup before preparation`, () => {
@@ -47,10 +55,8 @@ test("A07/A10/A12 real approval, generation, Review, repair and Gate all constru
   // composition loading. Current absence is contract red, never an import error.
   const { selected: registrations, registry } = await production.registry();
   const coverage = new ServiceBoundaryCoverage(registrations);
+  const scenario = await createScenario(t, { reviewResponse: rejectFirstRequirementReview });
   const observer = new PrepareExecutionObserver(t, { registrations: registry, stepIds });
-  const scenario = RequirementTestPhaseScenario.create(t, {
-    reviewResponse: rejectFirstRequirementReview,
-  });
   try {
     await scenario.advanceTo("approval");
     await scenario.next();
@@ -95,7 +101,7 @@ for (const [stepId, commandKey, Command] of [
   test(`A07/A10 direct ${stepId} and actual registry post preserve the production selection and prepare its Service`, async (t) => {
     const registrations = await production.load();
     const registration = registrations.find((entry) => entry.stepId === stepId);
-    const scenario = RequirementTestPhaseScenario.create(t);
+    const scenario = await createScenario(t);
     await scenario.advanceTo("approval");
     await scenario.approve();
     await scenario.advanceTo(stepId);

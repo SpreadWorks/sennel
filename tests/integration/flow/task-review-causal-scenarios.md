@@ -272,3 +272,22 @@ docsRead metric期待値の不一致が比較元でも再現している
 
 別担当による最終実装検証の判定は「承認」。部分変更のblocked分類、保存記録の
 bytes/catalog照合、通常retryのpayload identity、main/execution分離の指摘を解消した。
+
+## Implementation frontier reuse
+
+The 17 default causal cases and nine default checkpoint-recovery cases each
+clone a file-owned lazy seed. `TaskReviewScenario` runs its normal implementation
+handoff with `claimReview:false` only while generating that seed. Its default
+constructor behavior remains claimed Review. Clones compare canonical bytes and
+Git HEAD, then perform the real Review activation, baseline capture and claim.
+Worker execution, failures, exhaustion, recovery authorization, fresh readback,
+checkpoint corruption and safe refusals remain in each case. Alternate no-change
+implementation and external checkout cases keep their distinct preparation.
+
+The six default `gate-source-authority.test.js` cases freeze the existing real
+implementation and PASS Review producer before Gate execution. Each clone runs
+its own evaluation, partial PASS reuse, repair, provider-time source/spec drift
+or tooling refusal with the original assertions. The separate oversized-source
+input remains independent. Both groups verify that consumers leave seed
+canonical bytes and artifacts unchanged; completed physical process evidence is
+not rewritten or granted new authority during copying.

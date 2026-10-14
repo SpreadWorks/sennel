@@ -1,9 +1,10 @@
+import { SeedCleanupScope } from "../../support/builders/seed-work-root.js";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { test } from "node:test";
+import { after, test } from "node:test";
 
 import { TaskReviewScenario } from "../../support/builders/task-review-scenario.js";
 import { TaskLifecycleFixture } from "../../support/infrastructure/flow-setup.js";
@@ -24,6 +25,13 @@ import {
 import RunReviewCommand from "../../../src/flow/lib/run-review.js";
 import { ReviewFailure } from "../../../src/flow/lib/review-failure.js";
 import SetRetryCommand from "../../../src/flow/lib/set-retry.js";
+
+const seedScope = new SeedCleanupScope(after);
+let implementationSeed;
+function standardScenario(t) {
+  implementationSeed ??= TaskReviewScenario.seed(seedScope);
+  return TaskReviewScenario.fromSeed(t, implementationSeed);
+}
 
 function commitRuntimeEvidence(scenario, revision) {
   commitRuntimeEvidenceAt(scenario.root, revision);
@@ -212,7 +220,7 @@ function splitCheckoutReview(worker) {
 }
 
 test("a normal retry removes a zero-effect stopped worker before capturing its next baseline", async (t) => {
-  const scenario = new TaskReviewScenario(t);
+  const scenario = standardScenario(t);
   let directory;
   const stopped = await runtimeBoundReview(
     scenario,
@@ -234,7 +242,7 @@ test("a normal retry removes a zero-effect stopped worker before capturing its n
 });
 
 test("receipt-authorized Task Review checkout checkpoint survives reload and cleans one exact old worker", async (t) => {
-  const scenario = new TaskReviewScenario(t).exhaust();
+  const scenario = standardScenario(t).exhaust();
   commitRuntimeEvidence(scenario, 1);
   const initialRecovery = scenario.recover();
   assert.equal(initialRecovery.reset, true, JSON.stringify(initialRecovery));
@@ -265,7 +273,7 @@ test("receipt-authorized Task Review checkout checkpoint survives reload and cle
 });
 
 test("an authorization snapshot rejects a later commit without deleting its retained worker", async (t) => {
-  const scenario = new TaskReviewScenario(t).exhaust();
+  const scenario = standardScenario(t).exhaust();
   commitRuntimeEvidence(scenario, 1);
   assert.equal(scenario.recover().reset, true);
   scenario.reload();
@@ -283,7 +291,7 @@ test("an authorization snapshot rejects a later commit without deleting its reta
 });
 
 test("an authorization snapshot rejects a post-grant Task-owned source edit", async (t) => {
-  const scenario = new TaskReviewScenario(t).exhaust();
+  const scenario = standardScenario(t).exhaust();
   commitRuntimeEvidence(scenario, 1);
   assert.equal(scenario.recover().reset, true);
   scenario.reload();
@@ -301,7 +309,7 @@ test("an authorization snapshot rejects a post-grant Task-owned source edit", as
 });
 
 test("a checkpoint rejects a Task-owned source edit before recovery authorization", async (t) => {
-  const scenario = new TaskReviewScenario(t).exhaust();
+  const scenario = standardScenario(t).exhaust();
   commitRuntimeEvidence(scenario, 1);
   assert.equal(scenario.recover().reset, true);
   scenario.reload();
@@ -318,7 +326,7 @@ test("a checkpoint rejects a Task-owned source edit before recovery authorizatio
 });
 
 test("a catalog-bound checkpoint rejects changed bytes", async (t) => {
-  const scenario = new TaskReviewScenario(t).exhaust();
+  const scenario = standardScenario(t).exhaust();
   commitRuntimeEvidence(scenario, 1);
   assert.equal(scenario.recover().reset, true);
   scenario.reload();
@@ -337,7 +345,7 @@ test("a catalog-bound checkpoint rejects changed bytes", async (t) => {
 });
 
 test("a catalog-bound recovery authorization rejects changed bytes", async (t) => {
-  const scenario = new TaskReviewScenario(t).exhaust();
+  const scenario = standardScenario(t).exhaust();
   commitRuntimeEvidence(scenario, 1);
   assert.equal(scenario.recover().reset, true);
   scenario.reload();
@@ -425,7 +433,7 @@ test("an external execution checkout cleans the exact authorized worker", async 
 });
 
 test("a legacy unsealed worker without a checkpoint rejects a changed HEAD", async (t) => {
-  const scenario = new TaskReviewScenario(t);
+  const scenario = standardScenario(t);
   const previousAttempt = scenario.state().attempt;
   scenario.fail();
   scenario.manager.retryCurrentAttempt({ specId: scenario.specId });
@@ -441,7 +449,7 @@ test("a legacy unsealed worker without a checkpoint rejects a changed HEAD", asy
 });
 
 test("a later retained-worker verification failure preserves earlier cleanup candidates", async (t) => {
-  const scenario = new TaskReviewScenario(t).exhaust();
+  const scenario = standardScenario(t).exhaust();
   commitRuntimeEvidence(scenario, 1);
   assert.equal(scenario.recover().reset, true);
   scenario.reload();

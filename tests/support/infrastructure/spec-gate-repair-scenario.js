@@ -1,3 +1,7 @@
+import { performance } from "node:perf_hooks";
+import { CanonicalScenarioSeed } from "../assertions/canonical-persistence.js";
+import assert from "node:assert/strict";
+import { SeedWorkRoot, observeSeedTiming } from "../builders/seed-work-root.js";
 import { specStepRegistration } from "../../../src/flow/engine/composition/spec.js";
 import { PreparedStep } from "../../../src/flow/engine/composition/step-registration.js";
 import { reserveFixtureSpecGateRepairWorkerCall } from "./spec-gate-repair-admission.js";
@@ -88,7 +92,7 @@ export async function enterSpecGateRepairScenario({ flowManager, flow, specId,
 
 /** A real failed Gate route, leaving one active bounded repair Attempt. */
 export async function createSpecGateRepairScenario({
-  specId = "500-spec-gate-repair-scenario", specRecord = validWorkerHandoffSpec(),
+  seed = null, specId = seed?.specId ?? "500-spec-gate-repair-scenario", specRecord = validWorkerHandoffSpec(),
   locator = "requirements[R1].desc", requirementRef = "R1", beforeGate = null,
   target = { entity: "requirement", id: "R1", field: "desc" },
   operationKinds = ["edit-text-field"],
@@ -99,25 +103,34 @@ export async function createSpecGateRepairScenario({
   admitMappedTasks = true,
   versionStoreFaultInjector = null, coordinatorFaultInjector = () => {},
 } = {}) {
-  const root = createTmpDir("spec-gate-repair-scenario-");
+  const root = seed ? new SeedWorkRoot(seed.root, { prefix: "sennel-spec-repair-case-" }).root
+    : createTmpDir("spec-gate-repair-scenario-");
   try {
     specRecord = { ...specRecord, requirements: specRecord.requirements.map((requirement) =>
       specRecord.requirements.length > 3 && requirement.priority == null
         ? { ...requirement, priority: "must" } : requirement) };
     const flowManager = new FlowManager({ root, mainRoot: root, inWorktree: false, specId,
       ...(versionStoreFaultInjector ? { versionStoreFaultInjector } : {}) });
-    const flow = new CanonicalFlowFixture({ flowManager, specId,
+    const flow = seed ? CanonicalFlowFixture.fromExisting({ flowManager, specId }) : new CanonicalFlowFixture({ flowManager, specId,
       runId: `run-${specId}`, request, issue, issueSnapshot, specRecord,
     }).create().registerActive();
-    for (const taskId of admitMappedTasks
-      ? new Set(specRecord.requirements.flatMap((requirement) => requirement.task_ids)) : []) {
-      flow.addTask({ id: taskId, title: `Implement ${taskId}`, goal: "Exercise the repair route.",
-        origin: "plan", added_round: 0, status: "pending",
-        ...(taskTestStrategy === null ? {} : { test_strategy: taskTestStrategy }) });
+    if (seed) {
+      const started = performance.now();
+      assert.equal(repairFrontierSnapshot(flowManager, specId), seed.snapshot);
+      seed.assertClone(flowManager);
+      assert.equal(flowManager.canonicalState(specId).current?.at(-1), "spec-gate-repair");
+      observeSeedTiming("spec-repair-readback", performance.now() - started);
+    } else {
+      for (const taskId of admitMappedTasks
+        ? new Set(specRecord.requirements.flatMap((requirement) => requirement.task_ids)) : []) {
+        flow.addTask({ id: taskId, title: `Implement ${taskId}`, goal: "Exercise the repair route.",
+          origin: "plan", added_round: 0, status: "pending",
+          ...(taskTestStrategy === null ? {} : { test_strategy: taskTestStrategy }) });
+      }
+      if (beforeGate) await beforeGate({ root, specId, flowManager, flow });
+      await enterSpecGateRepairScenario({ flowManager, flow, specId, locator, requirementRef,
+        target, operationKinds, mutateGateObservations, additionalObservations });
     }
-    if (beforeGate) await beforeGate({ root, specId, flowManager, flow });
-    await enterSpecGateRepairScenario({ flowManager, flow, specId, locator, requirementRef,
-      target, operationKinds, mutateGateObservations, additionalObservations });
     const ctx = { root, mainRoot: root, executionRoot: root, specId, flowManager };
     const invocation = { id: "dispatch-spec-gate-repair", target: { digest: "b".repeat(64) },
       action: { digest: "a".repeat(64), nextAction: { step: "spec-gate-repair" } } };
@@ -129,6 +142,23 @@ export async function createSpecGateRepairScenario({
     removeTmpDir(root);
     throw error;
   }
+}
+
+function repairFrontierSnapshot(flowManager, specId) {
+  return JSON.stringify({ state: flowManager.canonicalState(specId).toJSON(),
+    activities: flowManager.activityLedger(specId), catalog: flowManager.artifactCatalog(specId).toJSON() });
+}
+
+/** Freeze only the completed Gate producer, before any repair request or claim. */
+export async function seedSpecGateRepairScenario(t, options = {}) {
+  const started = performance.now();
+  const producer = await createSpecGateRepairScenario(options);
+  observeSeedTiming("spec-repair-producer", performance.now() - started);
+  try {
+    return CanonicalScenarioSeed.freeze(t, { root: producer.root, specId: producer.specId,
+      manager: producer.flowManager, prefix: "sennel-spec-repair-seed-", frontier: "spec-gate-repair",
+      git: false, snapshot: repairFrontierSnapshot(producer.flowManager, producer.specId) });
+  } finally { removeTmpDir(producer.root); }
 }
 
 /** Produce and durably publish one bounded worker response before Step selection. */

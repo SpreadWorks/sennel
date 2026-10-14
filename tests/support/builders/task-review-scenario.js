@@ -1,10 +1,13 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
+import { performance } from "node:perf_hooks";
 
 import { TaskLifecycleFixture, makeFlowManager } from "../infrastructure/flow-setup.js";
 import { initGitRepo, commitAll } from "../infrastructure/git-repo.js";
 import { createTmpDir, removeTmpDir } from "./tmp-dir.js";
+import { SeedWorkRoot, observeSeedTiming } from "./seed-work-root.js";
+import { CanonicalScenarioSeed } from "../assertions/canonical-persistence.js";
 import {
   WorkerArtifactHandoffCoordinator,
   materializeSourceWorkerEffect, sealParentMaterializedSourceWorkerEffect,
@@ -108,12 +111,22 @@ export function completeTaskStageHandoff(work, effect) {
 
 /** Local canonical fixture; never dispatches a Flow or starts a worker. */
 export class TaskReviewScenario {
-  constructor(t, { noChange = false, implementationContent = "implemented source\n", additionalRequirements = [] } = {}) {
-    this.root = createTmpDir("task-review-scenario-");
+  constructor(t, { noChange = false, implementationContent = "implemented source\n", additionalRequirements = [], claimReview = true, seed = null } = {}) {
+    this.root = seed ? new SeedWorkRoot(seed.root, { prefix: "sennel-task-review-case-" }).root
+      : createTmpDir("task-review-scenario-");
     t.after(() => removeTmpDir(this.root));
     this.specId = "001-review-scenario";
     this.taskId = "T-1";
     this.sourcePath = path.join(this.root, "README.md");
+    if (seed) {
+      const started = performance.now();
+      this.reload();
+      assert.equal(this.snapshot(), seed.snapshot, "clone must preserve the unclaimed implementation frontier");
+      seed.assertClone(this.manager);
+      observeSeedTiming("task-review-readback", performance.now() - started);
+      this.claimReview();
+      return;
+    }
     fs.writeFileSync(this.sourcePath, "original source\n");
     initGitRepo(this.root);
     commitAll(this.root, "review scenario source");
@@ -129,8 +142,29 @@ export class TaskReviewScenario {
       },
       taskDocuments: [{ id: this.taskId, title: "Review behavior", goal: "Preserve Review state.", parent: null, origin: "plan", added_round: 0, status: "pending" }],
     }).create();
-    if (noChange) this.confirmNoChangeImplementation();
-    else this.confirmImplementation(implementationContent);
+    if (noChange) this.confirmNoChangeImplementation({ claimReview });
+    else this.confirmImplementation(implementationContent, { claimReview });
+  }
+
+  static seed(t) {
+    const started = performance.now();
+    const cleanups = [];
+    try {
+      const producer = new this({ after(cleanup) { cleanups.push(cleanup); } }, { claimReview: false }).reload();
+      observeSeedTiming("task-review-producer", performance.now() - started);
+      return CanonicalScenarioSeed.freeze(t, { root: producer.root, specId: producer.specId,
+        manager: producer.manager, prefix: "sennel-task-review-seed-", frontier: "T-1-review",
+        snapshot: producer.snapshot() });
+    } finally {
+      for (const cleanup of cleanups.reverse()) cleanup();
+    }
+  }
+
+  static fromSeed(t, seed) { return new this(t, { seed }); }
+
+  claimReview() {
+    this.manager.updateStepStatus({ stepId: "T-1-review", requestedStatus: "in_progress" }, { specId: this.specId });
+    return this;
   }
 
   confirmImplementation(content, { claimReview = true } = {}) {
@@ -144,9 +178,7 @@ export class TaskReviewScenario {
         noChangeReason: null,
       },
     });
-    if (claimReview) {
-      this.manager.updateStepStatus({ stepId: "T-1-review", requestedStatus: "in_progress" }, { specId: this.specId });
-    }
+    if (claimReview) this.claimReview();
     return this;
   }
 
@@ -161,9 +193,7 @@ export class TaskReviewScenario {
         noChangeReason: "The requested behavior is already present in the canonical source.",
       },
     });
-    if (claimReview) {
-      this.manager.updateStepStatus({ stepId: "T-1-review", requestedStatus: "in_progress" }, { specId: this.specId });
-    }
+    if (claimReview) this.claimReview();
     return this;
   }
 

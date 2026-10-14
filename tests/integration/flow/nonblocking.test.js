@@ -4,9 +4,11 @@ import fs from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { describe, it } from "node:test";
+import { performance } from "node:perf_hooks";
+import { after, describe, it, mock } from "node:test";
 
 import { FlowManager } from "../../../src/lib/flow-manager.js";
+import { implementationNonblockingEligibilityForResult } from "../../../src/flow/definition.js";
 import { FlowArtifactAttemptHistory, FlowArtifactAttemptRecord } from "../../../src/lib/flow-artifact-contract.js";
 import { CurrentFlowPolicy, CurrentFlowNonBlockingPolicy, ActivityTransition, ActivityNonBlockingRecord, CurrentFlowStateInvariantError } from "../../../src/flow/lib/current-flow-state.js";
 import { CurrentFlowStateConflictError } from "../../../src/flow/lib/current-flow-state-conflict-error.js";
@@ -23,6 +25,8 @@ import {
   decisionEvidenceForActiveFlow,
 } from "../../../src/flow/lib/nonblocking.js";
 import { applyNonblockingDecision, recordNonBlockingDecision } from "../../../src/flow/lib/nonblocking-decision.js";
+import { SeedWorkRoot, SeedCleanupScope } from "../../support/builders/seed-work-root.js";
+import { CanonicalFlowFixture } from "../../support/infrastructure/flow-setup.js";
 import { removeTmpDir } from "../../support/builders/tmp-dir.js";
 import { fromAcceptanceResult, fromFinalRegressionResult, fromGateResult, fromReviewResult, fromVerificationResult } from "../../../src/flow/lib/nonblocking-evidence.js";
 import { CanonicalAcceptanceArtifactStore } from "../../../src/flow/lib/canonical-acceptance-artifacts.js";
@@ -39,23 +43,61 @@ import { canonicalSourceFindings } from "../../../src/flow/lib/flow-finding-sour
 import RunRetroCommand from "../../../src/flow/lib/run-retro.js";
 import RunAcceptanceReviewCommand, { AcceptanceReviewResponseSource } from "../../../src/flow/lib/run-acceptance-review.js";
 
-async function scenario(t, { step = "impl-gate", payload = null, mixedGateFindings = false, passOnly = false } = {}) {
+let defaultGateSeed;
+const gateSeedScope = new SeedCleanupScope(after, mock);
+
+async function scenario(t, options) {
+  if (options === undefined) {
+    defaultGateSeed ??= ImplPhaseScenario.seed(gateSeedScope, {
+      ...phaseOptions({ step: "impl-gate" }), frontier: "impl-gate",
+      prepare: (phase) => prepareScenario(phase, { step: "impl-gate" }),
+    });
+    const seed = await defaultGateSeed;
+    const clone = new SeedWorkRoot(seed.root, { prefix: "sennel-nonblocking-" });
+    t.after(() => clone.cleanup());
+    const readbackStarted = performance.now();
+    const root = clone.root;
+    const manager = new FlowManager({ root, mainRoot: root, inWorktree: false, specId: seed.specId });
+    const fixture = CanonicalFlowFixture.fromExisting({ flowManager: manager, specId: seed.specId });
+    seed.assertClone(manager);
+    assert.deepEqual(manager.canonicalState(seed.specId).toJSON(), seed.snapshot.state);
+    const saved = manager.readCurrentStepSettlement({ specId: seed.specId, stepId: "impl-gate" });
+    assert.equal(saved.result.kind, "impl-gate-semantic-failure");
+    assert.equal(saved.settlement.application.decision.disposition.operation, "defer");
+    assert.equal(saved.receipt.binding.runId, fixture.runId);
+    assert.equal(saved.receipt.binding.attemptId, manager.canonicalState(seed.specId).attempt.id);
+    const eligibility = definitionNonblockingEligibilityForActiveFlow(root, manager.load(seed.specId), manager);
+    assert.equal(eligibility.sourceStep, "impl-gate");
+    assert.deepEqual(eligibility.toJSON(), implementationNonblockingEligibilityForResult(saved.result).toJSON(),
+      "the current advisory projection must derive from the exact saved typed Gate Result");
+    seed.observeTiming("nonblocking-clone-readback", performance.now() - readbackStarted);
+    return { root, manager, fixture };
+  }
+  const { step = "impl-gate", payload = null } = options;
   if (payload !== null && !["retro", "acceptance-review"].includes(step)) return malformedReviewScenario(t, payload);
-  const phase = ImplPhaseScenario.create(t, {
+  return prepareScenario(ImplPhaseScenario.create(t, phaseOptions({ ...options, step })), { ...options, step });
+}
+
+function phaseOptions({ step, mixedGateFindings = false }) {
+  return {
     ...(mixedGateFindings ? { requirements: [
       { id: "R1", desc: "Implement the required behavior.", task_ids: ["T1"], preimplementation_test_expectation: "fail" },
       { id: "R2", desc: "Preserve the independent behavior.", task_ids: ["T1"], preimplementation_test_expectation: "fail" },
     ] } : {}),
     ...(step === "retro" ? { testSource: (id) => `// spec: ${id}\nimport test from 'node:test';\nimport assert from 'node:assert/strict';\ntest('${id}: unresolved requirement', () => assert.fail('The required behavior remains unproved.'));\n` } : {}),
     gateResponse(_prompt, options, current) {
-    if (current.current() !== "impl-gate" || step !== "impl-gate") return null;
-    if (!(options.jsonSchema?.required ?? []).includes("evaluations")) return null;
-    const ids = options.jsonSchema.properties.evaluations.items.properties.guardrail_id.enum;
-    return JSON.stringify({ evaluations: ids.map((guardrail_id) => ({ guardrail_id,
-      result: mixedGateFindings && guardrail_id === "R2" ? "pass" : "fail",
-      reason: mixedGateFindings && guardrail_id === "R2" ? "This independently mapped requirement is satisfied."
-        : `[REQ:${guardrail_id}] Evaluation ${current.state().attempt.sequence} identifies an omitted behavior branch.` })) });
-  } });
+      if (current.current() !== "impl-gate" || step !== "impl-gate") return null;
+      if (!(options.jsonSchema?.required ?? []).includes("evaluations")) return null;
+      const ids = options.jsonSchema.properties.evaluations.items.properties.guardrail_id.enum;
+      return JSON.stringify({ evaluations: ids.map((guardrail_id) => ({ guardrail_id,
+        result: mixedGateFindings && guardrail_id === "R2" ? "pass" : "fail",
+        reason: mixedGateFindings && guardrail_id === "R2" ? "This independently mapped requirement is satisfied."
+          : `[REQ:${guardrail_id}] Evaluation ${current.state().attempt.sequence} identifies an omitted behavior branch.` })) });
+    },
+  };
+}
+
+async function prepareScenario(phase, { step, passOnly = false }) {
   if (step === "impl-gate") {
     const config = path.join(phase.root, ".sennel/guardrail.json");
     const document = JSON.parse(fs.readFileSync(config, "utf8"));
@@ -197,19 +239,22 @@ async function mappedTaskScenario(t, failureKind) {
 }
 
 async function toolingReviewScenario(t) {
-  const phase = ImplPhaseScenario.create(t, { reviewProcessResult(stage, _ordinal, options) {
+  const config = { lang: "en", type: "base", docs: { languages: ["en"], defaultLanguage: "en" } };
+  const phase = ImplPhaseScenario.create(t, { config, reviewProcessResult(stage, _ordinal, options, current) {
     const child = spawnSync(process.execPath, [fileURLToPath(new URL(stage === "impl-review"
       ? "../../support/infrastructure/impl-tooling-review-worker.js" : "../../support/impl-phase-review-worker.js", import.meta.url))],
       stage === "impl-review" ? options : { ...options, env: { ...options.env,
         SENNEL_IMPL_SCENARIO_RESPONSE: JSON.stringify({ blockingFindings: [], nonBlockingImprovements: [] }) } });
+    current.phaseReviews.at(-1).process = { status: child.status, stdout: child.stdout, stderr: child.stderr };
     return { ...child, ok: child.status === 0 };
   } });
-  fs.writeFileSync(path.join(phase.root, ".sennel/config.json"), JSON.stringify({ lang: "en", type: "base",
-    docs: { languages: ["en"], defaultLanguage: "en" } }));
   await phase.advanceTo("impl-review");
   await phase.executeCurrent();
   phase.reload();
-  assert.equal(phase.manager.readCurrentStepSettlement({ specId: phase.specId, stepId: "impl-review" }).result.kind, "impl-review-tooling");
+  const saved = phase.manager.readCurrentStepSettlement({ specId: phase.specId, stepId: "impl-review" });
+  assert.equal(saved.result.kind, "impl-review-tooling", JSON.stringify({
+    result: saved.result.toJSON(), process: phase.phaseReviews.at(-1).process,
+  }));
   return { root: phase.root, manager: phase.manager, fixture: { specId: phase.specId, runId: phase.state().runId }, phase };
 }
 

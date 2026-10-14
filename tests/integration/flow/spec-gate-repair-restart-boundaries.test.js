@@ -1,3 +1,4 @@
+import { SeedCleanupScope } from "../../support/builders/seed-work-root.js";
 import { ResolvedAgentInvocationProjection } from "../../../src/lib/prompt-batching.js";
 import { ServiceBoundaryCoverage } from "../../support/structure/service-boundary.js";
 import { specStepRegistration } from "../../../src/flow/engine/composition/spec.js";
@@ -9,7 +10,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { brotliDecompressSync } from "node:zlib";
 import { createHash } from "node:crypto";
-import { describe, it, mock } from "node:test";
+import { after, describe, it, mock } from "node:test";
 
 import { FlowManager } from "../../../src/lib/flow-manager.js";
 import { SpecGateRepairService } from "../../../src/flow/services/spec-gate-repair-service.js";
@@ -29,11 +30,18 @@ import RunDispatchCommand from "../../../src/flow/lib/run-dispatch.js";
 import { FlowTargetBinding } from "../../../src/lib/flow-target-guard.js";
 import { WorkerArtifactHandoffCoordinator, WorkerArtifactHandoffError,
   sealWorkerArtifactHandoff } from "../../../src/flow/lib/worker-artifact-handoff.js";
-import { createSpecGateRepairScenario, prepareSpecGateRepairHandoff } from "../../support/infrastructure/spec-gate-repair-scenario.js";
+import { seedSpecGateRepairScenario, createSpecGateRepairScenario, prepareSpecGateRepairHandoff } from "../../support/infrastructure/spec-gate-repair-scenario.js";
 import { removeTmpDir } from "../../support/builders/tmp-dir.js";
 import { validWorkerHandoffSpec, workerArtifactJson } from "../../support/infrastructure/worker-artifact.js";
 import { initGitRepo, commitAll } from "../../support/infrastructure/git-repo.js";
 import { dispatchContainer, requestInput, requestPayloadPath } from "../../support/infrastructure/flow-dispatch-scenario.js";
+
+const seedScope = new SeedCleanupScope(after);
+let repairSeed;
+async function defaultRepairScenario() {
+  repairSeed ??= seedSpecGateRepairScenario(seedScope);
+  return createSpecGateRepairScenario({ seed: await repairSeed });
+}
 
 function projectInvocation(prompt) {
   return new ResolvedAgentInvocationProjection({ providerKey: "fixture", profileKey: "fixture", command: "fixture",
@@ -231,7 +239,7 @@ describe("Spec Gate repair restart boundaries", () => {
   }
 
   it("preserves an exact claimed repair handoff's stale error when its plan is current", async () => {
-    const value = await createSpecGateRepairScenario();
+    const value = await defaultRepairScenario();
     try {
       const request = value.coordinator.createRequest({ ctx: value.ctx,
         state: value.flowManager.load(value.specId), invocation: value.invocation });
@@ -256,7 +264,7 @@ describe("Spec Gate repair restart boundaries", () => {
 
   for (const maxStalledDispatches of [1, 3]) {
     it(`continues four completed context responses in one dispatcher at stall limit ${maxStalledDispatches}`, async () => {
-      const value = await createSpecGateRepairScenario();
+      const value = await defaultRepairScenario();
       try {
         initGitRepo(value.root);
         fs.writeFileSync(path.join(value.root, ".gitignore"), ".sennel/\n.tmp/\n");
@@ -328,7 +336,7 @@ describe("Spec Gate repair restart boundaries", () => {
   }
 
   it("continues a completed intermediate response through the next dispatcher worker", async () => {
-    const value = await createSpecGateRepairScenario();
+    const value = await defaultRepairScenario();
     try {
       initGitRepo(value.root);
       fs.writeFileSync(path.join(value.root, ".gitignore"), ".sennel/\n.tmp/\n");
@@ -400,7 +408,7 @@ describe("Spec Gate repair restart boundaries", () => {
   });
 
   it("replays a published intermediate response when its transient handoff is lost", async () => {
-    const value = await createSpecGateRepairScenario();
+    const value = await defaultRepairScenario();
     try {
       initGitRepo(value.root);
       fs.writeFileSync(path.join(value.root, ".gitignore"), ".sennel/\n.tmp/\n");
@@ -482,7 +490,7 @@ describe("Spec Gate repair restart boundaries", () => {
     ["invalid action repository fingerprint", (saved) => { saved.actionRepositoryFingerprint = 42; }],
   ]) {
     it(`refuses a canonical checkpoint with ${name} after reload without charging or publishing`, async () => {
-      const value = await createSpecGateRepairScenario();
+      const value = await defaultRepairScenario();
       try {
         const request = nextRequest(value, `invalid-checkpoint-${name}`);
         const checkpoint = value.flowManager.checkpointDraftStepExecution.bind(value.flowManager);
@@ -527,7 +535,7 @@ describe("Spec Gate repair restart boundaries", () => {
     it(title, async () => {
       let interrupted = false;
       let interruptedRequestPath = null;
-      const value = await createSpecGateRepairScenario();
+      const value = await defaultRepairScenario();
       const originalOperation = FlowManager.prototype[method];
       const operationMock = mock.method(FlowManager.prototype, method, function (input) {
         if (input.binding.request?.executionRoot === value.root
@@ -637,7 +645,7 @@ describe("Spec Gate repair restart boundaries", () => {
   }
 
   it("restores a sealed claimed response without another provider call", async () => {
-    const value = await createSpecGateRepairScenario();
+    const value = await defaultRepairScenario();
     try {
       const repairAttemptId = value.flowManager.canonicalState(value.specId).attempt.id;
       initGitRepo(value.root);
@@ -676,7 +684,7 @@ describe("Spec Gate repair restart boundaries", () => {
   });
 
   it("finishes partial transient cleanup from a canonical completion receipt", async () => {
-    const value = await createSpecGateRepairScenario();
+    const value = await defaultRepairScenario();
     try {
       const request = nextRequest(value, "partial-cleanup");
       const requestBytes = fs.readFileSync(request.requestPath);
@@ -701,7 +709,7 @@ describe("Spec Gate repair restart boundaries", () => {
   });
 
   it("refuses an unsealed claimed response after restart without changing canonical progress", async () => {
-    const value = await createSpecGateRepairScenario();
+    const value = await defaultRepairScenario();
     try {
       initGitRepo(value.root);
       fs.writeFileSync(path.join(value.root, ".gitignore"), ".sennel/\n.tmp/\n");
@@ -745,7 +753,7 @@ describe("Spec Gate repair restart boundaries", () => {
   });
 
   it("retains a claimed repair when its saved action is missing after restart", async () => {
-    const value = await createSpecGateRepairScenario();
+    const value = await defaultRepairScenario();
     try {
       initGitRepo(value.root);
       fs.writeFileSync(path.join(value.root, ".gitignore"), ".sennel/\n.tmp/\n");
@@ -775,7 +783,7 @@ describe("Spec Gate repair restart boundaries", () => {
   });
 
   it("refuses a sealed response without its durable claim", async () => {
-    const value = await createSpecGateRepairScenario();
+    const value = await defaultRepairScenario();
     const interruptedClaim = mock.method(value.flowManager, "claimDraftStepExecution", () => {
       throw new Error("interrupted before worker claim");
     });
@@ -812,7 +820,7 @@ describe("Spec Gate repair restart boundaries", () => {
   });
 
   it("refuses a changed sealed response without publishing its proposal", async () => {
-    const value = await createSpecGateRepairScenario();
+    const value = await defaultRepairScenario();
     try {
       const request = nextRequest(value, "changed-seal");
       const context = request.inputs.find((entry) => entry.name === "spec-gate-repair-context.json").document;
@@ -833,7 +841,7 @@ describe("Spec Gate repair restart boundaries", () => {
   });
 
   it("rejects a direct same-generation settlement without a completion receipt", async () => {
-    const value = await createSpecGateRepairScenario();
+    const value = await defaultRepairScenario();
     try {
       const request = nextRequest(value, "direct-settlement-bypass");
       const context = request.inputs.find((entry) => entry.name === "spec-gate-repair-context.json").document;
@@ -878,7 +886,7 @@ describe("Spec Gate repair restart boundaries", () => {
   });
 
   it("rejects a changed publication on exact completion replay", async () => {
-    const value = await createSpecGateRepairScenario();
+    const value = await defaultRepairScenario();
     try {
       const request = nextRequest(value, "changed-completion-replay");
       const context = request.inputs.find((entry) => entry.name === "spec-gate-repair-context.json").document;
@@ -1048,7 +1056,7 @@ describe("Spec Gate repair restart boundaries", () => {
   });
 
   it("publishes an additional read and a user decision without minting edit authority", async () => {
-    const value = await createSpecGateRepairScenario();
+    const value = await defaultRepairScenario();
     try {
       const repairAttemptId = value.flowManager.canonicalState(value.specId).attempt.id;
       const before = durableSnapshot(value.flowManager, value.specId);
@@ -1096,7 +1104,7 @@ describe("Spec Gate repair restart boundaries", () => {
 
   for (const mode of ["context", "draft-return", "repair"]) {
     it(`dispatches a published ${mode} response after restart without another provider call`, async () => {
-      const value = await createSpecGateRepairScenario();
+      const value = await defaultRepairScenario();
       try {
         initGitRepo(value.root);
         fs.writeFileSync(path.join(value.root, ".gitignore"), ".sennel/\n.tmp/\n");

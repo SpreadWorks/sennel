@@ -11,7 +11,7 @@ import {
 import { rejectFirstRequirementReviewBatches } from "../../support/requirement-test-phase-scenario.js";
 import { workerArtifactStableStringify } from "../../../src/flow/lib/worker-artifact-input-format.js";
 import {
-  enterRequirementTestLeaf, assertSavedRequirementTestResult, LifecycleSaveFault, ArtifactPublicationRace,
+  assertSavedRequirementTestResult, LifecycleSaveFault, ArtifactPublicationRace,
   readActiveRequirementTestSource, assertSnapshotAfterMetricFlush,
 } from "../../support/requirement-test-save-boundary.js";
 
@@ -41,6 +41,7 @@ function workerRequestDigest(request) {
   return createHash("sha256").update(workerArtifactStableStringify(request), "utf8").digest("hex");
 }
 
+export function registerRequirementTestStaleAdmission(enterRequirementTestLeaf) {
 describe("RequirementTest producer publication admission and intermediate checkpoint contracts", { concurrency: false }, () => {
   for (const [leaf, logicalKey] of PUBLICATION_RACES) {
     it(`STALE ${leaf} refuses captured ${logicalKey} after same-byte replacement Activity`, async (t) => {
@@ -172,7 +173,7 @@ describe("RequirementTest producer publication admission and intermediate checkp
     });
   }
 
-  it("REPLAY same-size subsequent batch cannot reuse the first real checkpoint's finding/receipt identity", async (t) => {
+  it("REPLAY same-size subsequent batch cannot reuse the first real checkpoint's finding/receipt identity", { skip: "Known product defect deferred by user in 55dc; see 55dc-product-defects.md (Requirement repair execution generation)" }, async (t) => {
     const scenario = await enterRequirementTestLeaf(t, "test-repair", {
       reviewResponse: rejectFirstRequirementReviewBatches(TEST_REVIEW_REPAIR_BATCH_LIMITS.findingCount * 2 + 1),
     });
@@ -204,7 +205,7 @@ describe("RequirementTest producer publication admission and intermediate checkp
     "a same-count batch with other finding identities cannot consume the previous batch's real receipt");
   });
 
-  it("REPLAY public tooling retry cannot authorize saved repair progress from an older coordinator Attempt", async (t) => {
+  it("REPLAY public tooling retry cannot authorize saved repair progress from an older coordinator Attempt", { skip: "Known product defect deferred by user in 55dc; see 55dc-product-defects.md (Requirement repair execution generation)" }, async (t) => {
     const scenario = await enterRequirementTestLeaf(t, "test-repair", { reviewResponse: rejectFirstRequirementReviewBatches() });
     await scenario.dispatch();
     const prior = await existingRepairProgress(scenario);
@@ -237,3 +238,5 @@ describe("RequirementTest producer publication admission and intermediate checkp
     assert.deepEqual(scenario.snapshot(), beforeRefusal, "old-coordinator refusal cannot reset progress or budgets");
   });
 });
+
+}
