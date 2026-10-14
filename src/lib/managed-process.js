@@ -10,7 +10,7 @@ import { ProcessIdentity } from "./process-identity.js";
 import { AgentProcessStopEvidence } from "./agent-failure.js";
 import { AgentTimeoutError } from "./process-supervisor.js";
 import { DEFAULT_AGENT_PROCESS_TREE_GRACE_MS } from "./agent-timeout.js";
-import { managedControlFailure, managedRequest, readManagedRecord, assertManagedLauncherIdentity, verifyManagedProcessStopped } from "./managed-process-protocol.js";
+import { ManagedProcessSnapshot, managedControlFailure, managedRequest, readManagedRecord, assertManagedLauncherIdentity, verifyManagedProcessStopped } from "./managed-process-protocol.js";
 
 export { verifyManagedProcessStopped } from "./managed-process-protocol.js";
 
@@ -74,10 +74,14 @@ function assertNoControlFailure(record, call) {
   }
 }
 
-export function readManagedSettlement(call) {
+export function readManagedSettlement(call, { stopDeadlineMessage = null } = {}) {
   const record = assertRecord(readManagedRecord(call.outcomePath) || readManagedRecord(call.helloPath), call);
   assertNoControlFailure(record, call);
-  if (!verifyManagedProcessStopped(record)) return null;
+  const snapshot = new ManagedProcessSnapshot(record);
+  if (stopDeadlineMessage !== null) {
+    const failure = snapshot.stopFailure(stopDeadlineMessage);
+    if (failure !== null) throw failure;
+  } else if (!snapshot.isStopped()) return null;
   if (record.state !== "finished" && !(record.state === "stopping" && record.outcome?.finalAction === "SIGKILL")) {
     throw managedControlFailure("PROCESS_EXECUTION_OUTCOME_UNSEALED", "Managed process ended without a durable final outcome");
   }
@@ -87,12 +91,12 @@ export function readManagedSettlement(call) {
 
 async function waitForStop(call, timeoutMs) {
   const deadline = Date.now() + timeoutMs;
-  do {
-    const settlement = readManagedSettlement(call);
+  for (;;) {
+    const settlement = readManagedSettlement(call, { stopDeadlineMessage: Date.now() >= deadline
+      ? "Managed group termination could not be proved within the stop deadline" : null });
     if (settlement !== null) return settlement;
     await delay(20);
-  } while (Date.now() < deadline);
-  throw managedControlFailure("PROCESS_EXECUTION_STOP_UNPROVEN", "Managed group termination could not be proved within the stop deadline");
+  }
 }
 
 /** Reconnect only to an authenticated live anchor; never signal a saved PID. */
@@ -214,6 +218,7 @@ export async function executeManagedProcess(command, args, options = {}) {
     let dynamicTimeoutDiagnostic = null;
     options.activityMonitor?.start((diagnostic) => { dynamicTimeout = true; dynamicTimeoutDiagnostic = diagnostic; });
     const waitDeadline = deadline + graceMs * 2 + 3000;
+    let settlement;
     while (launcher.exitCode === null && launcher.signalCode === null) {
       if ((abortRequested || dynamicTimeout) && !stopped) {
         await managedRequest(call, "stop", { reason: abortRequested ? "abort" : "timeout" });
@@ -225,10 +230,13 @@ export async function executeManagedProcess(command, args, options = {}) {
         if (saved?.state !== "finished" && saved?.state !== "stopping"
           && launcher.exitCode === null && launcher.signalCode === null) throw error;
       }
-      if (Date.now() >= waitDeadline) throw managedControlFailure("PROCESS_EXECUTION_STOP_UNPROVEN", "Managed launcher exceeded its finite stop deadline");
+      if (Date.now() >= waitDeadline) {
+        settlement = readManagedSettlement(call, { stopDeadlineMessage: "Managed launcher exceeded its finite stop deadline" });
+        break;
+      }
       await delay(20);
     }
-    const settlement = await waitForStop(call, graceMs + 1000);
+    settlement ??= await waitForStop(call, graceMs + 1000);
     observe(settlement.record);
     notify("provider-settled", launcher.pid);
     const processExecutionStopReceipt = await runtime.finishCall(call, settlement);

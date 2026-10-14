@@ -103,9 +103,10 @@ class ManagedProcessMemberObservation {
 }
 
 class ManagedProcessObservedBirth {
-  constructor(member, observation) {
+  constructor(member, observation, role) {
     this.member = member;
     this.observation = observation;
+    this.role = role;
     Object.freeze(this);
   }
 }
@@ -132,6 +133,9 @@ export class ManagedProcessSnapshot {
     if (!Number.isSafeInteger(record.pgid) || record.pgid < 1 || !record.launcherIdentity) {
       throw managedControlFailure("PROCESS_EXECUTION_IDENTITY_UNKNOWN", "Managed group identity is incomplete");
     }
+    this.executionId = record.executionId;
+    this.callId = record.callId;
+    this.pgid = record.pgid;
     this.launcher = record.launcherIdentity instanceof ProcessIdentity ? record.launcherIdentity : new ProcessIdentity(record.launcherIdentity);
     providerIdentity = providerIdentity === null || providerIdentity instanceof ProcessIdentity ? providerIdentity : new ProcessIdentity(providerIdentity);
     this.group = Object.freeze(observeManagedGroup(record.pgid, this.launcher.ownerToken, identitySource, groupReader));
@@ -163,7 +167,7 @@ export class ManagedProcessSnapshot {
         throw managedMemberFailure(record, member, { code: "PROCESS_EXECUTION_IDENTITY_UNKNOWN",
           message: `${role} no longer owns its registered group`, role, operation, observation });
       }
-      return new ManagedProcessObservedBirth(member, observation);
+      return new ManagedProcessObservedBirth(member, observation, role);
     }));
     Object.freeze(this);
   }
@@ -171,6 +175,22 @@ export class ManagedProcessSnapshot {
     const included = (member) => !excludeLauncher || !member.sameBirth(this.launcher);
     return this.group.every((member) => !included(member.identity) || member.terminated)
       && this.observations.every(({ member, observation }) => !included(member) || observation.terminated);
+  }
+  /** Diagnose the same failed stop observation without reacquiring process state. */
+  stopFailure(message) {
+    if (this.isStopped()) return null;
+    let survivor = this.observations.find(({ observation }) => !observation.terminated && observation.stat.pgrp !== this.pgid)
+      ?? this.observations.find(({ observation, role }) => !observation.terminated && role !== "launcher")
+      ?? this.observations.find(({ observation }) => !observation.terminated);
+    if (!survivor) {
+      // A member can exit between enumeration and its birth observation. The
+      // group scan still prevents proof; retain that observation as the cause.
+      const observed = this.group.find((member) => !member.terminated);
+      const { member, role } = this.observations.find(({ member }) => member.sameBirth(observed.identity));
+      survivor = new ManagedProcessObservedBirth(member, observed, role);
+    }
+    return managedMemberFailure(this, survivor.member, { code: "PROCESS_EXECUTION_STOP_UNPROVEN", message,
+      operation: "stop-deadline", role: survivor.role, observation: survivor.observation });
   }
 }
 

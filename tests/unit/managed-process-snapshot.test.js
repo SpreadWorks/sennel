@@ -107,6 +107,88 @@ test("an empty original group cannot confirm stop while a moved descendant is li
   assert.equal(snapshot.members.some((member) => member.sameBirth(descendant)), true);
 });
 
+for (const [role, member] of [["launcher", launcher], ["provider", provider], ["descendant", descendant]]) {
+  test(`stop deadline identifies the observed surviving ${role} without another process read`, () => {
+    const fixture = new SnapshotFixture([provider, descendant]);
+    fixture.record.providerIdentity = provider;
+    fixture.record.capability = "private-call-capability";
+    fixture.group = [];
+    fixture.current.clear();
+    const observedPgid = role === "descendant" ? 600 : pgid;
+    const observedSid = role === "descendant" ? 590 : pgid;
+    fixture.current.set(member.pid, stat(member, { pgrp: observedPgid, sessionId: observedSid }));
+    const snapshot = fixture.snapshot();
+    const observations = [...fixture.events];
+    const message = "Managed group termination could not be proved within the stop deadline";
+    const failure = snapshot.stopFailure(message);
+    assert.ok(failure instanceof ProcessExecutionControlFailure);
+    assert.equal(failure.code, "PROCESS_EXECUTION_STOP_UNPROVEN");
+    assert.equal(failure.executionId, executionId);
+    assert.equal(failure.callId, callId);
+    assert.equal(failure.retryable, false);
+    assert.deepEqual(failure.diagnostic.toJSON(), {
+      schemaVersion: 1, executionId, callId, operation: "stop-deadline", role,
+      birth: { pid: member.pid, bootIdentity: member.bootIdentity, startFingerprint: member.startFingerprint },
+      originalPgid: pgid, observedPgid, observedSid,
+      primaryCause: { code: failure.code, message },
+    });
+    assert.deepEqual(failure.primaryCause.toJSON(), { code: failure.code, message, executionId, callId });
+    const stored = failure.withContext({ executionId, callId }).toJSON();
+    assert.deepEqual(stored, failure.toJSON());
+    assert.deepEqual(ProcessExecutionControlFailure.fromStored(stored, { executionId, callId }).toJSON(), stored);
+    assert.deepEqual(fixture.events, observations);
+    for (const secret of [ownerToken, fixture.record.capability]) assert.equal(JSON.stringify(stored).includes(secret), false);
+  });
+}
+
+test("stop deadline reports the moved live birth ahead of its still-live launcher and provider", () => {
+  const fixture = new SnapshotFixture([provider, descendant]);
+  fixture.record.providerIdentity = provider;
+  fixture.current.set(descendant.pid, stat(descendant, { pgrp: 600, sessionId: 590 }));
+  const snapshot = fixture.snapshot();
+  const observations = [...fixture.events];
+  const failure = snapshot.stopFailure("Managed launcher exceeded its finite stop deadline");
+  assert.equal(failure.diagnostic.role, "descendant");
+  assert.equal(failure.diagnostic.birth.pid, descendant.pid);
+  assert.equal(failure.diagnostic.observedPgid, 600);
+  assert.equal(failure.diagnostic.observedSid, 590);
+  assert.deepEqual(fixture.events, observations);
+});
+
+test("a live group observation followed by a missing birth retains the original failed stop evidence", () => {
+  const fixture = new SnapshotFixture();
+  fixture.group = [stat(descendant, { pgrp: pgid, sessionId: 590 })];
+  fixture.current.clear();
+  const snapshot = fixture.snapshot();
+  const observations = [...fixture.events];
+  const failure = snapshot.stopFailure("Managed launcher exceeded its finite stop deadline");
+  assert.equal(failure.code, "PROCESS_EXECUTION_STOP_UNPROVEN");
+  assert.equal(failure.diagnostic.role, "descendant");
+  assert.equal(failure.diagnostic.birth.pid, descendant.pid);
+  assert.equal(failure.diagnostic.observedPgid, pgid);
+  assert.equal(failure.diagnostic.observedSid, 590);
+  assert.deepEqual(fixture.events, observations);
+});
+
+test("a confirmed stopped snapshot has no stop deadline failure", () => {
+  const fixture = new SnapshotFixture();
+  fixture.group = [];
+  fixture.current.clear();
+  const snapshot = fixture.snapshot();
+  assert.equal(snapshot.isStopped(), true);
+  assert.equal(snapshot.stopFailure("Stop deadline elapsed"), null);
+});
+
+test("a fresh unknown observation keeps its typed cause after an earlier stopped snapshot", () => {
+  const fixture = new SnapshotFixture();
+  fixture.group = [];
+  fixture.current.clear();
+  assert.equal(fixture.snapshot().isStopped(), true);
+  fixture.current.set(descendant.pid, Object.assign(new Error("stat permission denied"), { code: "EACCES" }));
+  assert.throws(() => fixture.snapshot().stopFailure("Stop deadline elapsed"),
+    diagnosticFailure("PROCESS_EXECUTION_OBSERVATION_UNKNOWN", "descendant", descendant));
+});
+
 for (const state of ["Z", "X"]) {
   test(`same-birth ${state} outside the group permits launcher drain but the coordinator still includes its live launcher`, () => {
     const fixture = new SnapshotFixture();

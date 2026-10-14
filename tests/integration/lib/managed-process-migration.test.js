@@ -3,7 +3,28 @@ import fs from "node:fs";
 import { test } from "node:test";
 import { ProcessExecutionRuntime, ProcessExecutionControlFailure } from "../../../src/lib/process-execution-runtime.js";
 import { ProcessIdentity, ProcessIdentitySource } from "../../../src/lib/process-identity.js";
+import { RuntimeChildExecution } from "../../../src/lib/runtime-package.js";
 import { ManagedMigrationScenario } from "../../support/infrastructure/managed-migration-scenario.js";
+
+function assertStopDiagnostic(scenario, failure, record, call) {
+  const member = record.members.find((entry) => entry.pid === scenario.ready.descendantPid);
+  assert.ok(failure instanceof ProcessExecutionControlFailure);
+  assert.equal(failure.code, "PROCESS_EXECUTION_STOP_UNPROVEN");
+  assert.equal(failure.executionId, scenario.runtime.executionId);
+  assert.equal(failure.callId, call.callId);
+  assert.deepEqual(failure.diagnostic.birth.toJSON(), {
+    pid: member.pid, bootIdentity: member.bootIdentity, startFingerprint: member.startFingerprint,
+  });
+  assert.equal(failure.diagnostic.role, "descendant");
+  assert.equal(failure.diagnostic.originalPgid, record.pgid);
+  assert.equal(failure.diagnostic.observedPgid, scenario.moved.pgrp);
+  assert.equal(failure.diagnostic.observedSid, scenario.moved.sessionId);
+  assert.match(failure.diagnostic.operation, /stop.*deadline/);
+  assert.equal(failure.primaryCause.code, "PROCESS_EXECUTION_STOP_UNPROVEN");
+  assert.equal(failure.primaryCause.executionId, failure.executionId);
+  assert.equal(failure.primaryCause.callId, failure.callId);
+  assert.deepEqual(call.controlFailure, failure.toJSON(), "public and durable refusals must retain identical provenance");
+}
 
 for (const race of [false, true]) {
   test(`captured descendant changes session ${race ? "between enumeration and birth observation" : "before enumeration"} and naturally completes`, async (t) => {
@@ -75,6 +96,56 @@ test("a migrated member surviving original-group KILL refuses proof and keeps it
   const observation = new ProcessIdentitySource().observe(new ProcessIdentity(member));
   assert.equal(observation.terminated, false, "moved group must never receive the anchor's KILL");
   assert.equal(observation.stat.pgrp, scenario.moved.pgrp);
-  assert.equal(scenario.runtime.inspect().slot, scenario.runtime.executionId);
-  assert.equal(scenario.runtime.inspect().executions.at(-1).calls[0].receipt, null);
+  const inventory = scenario.runtime.inspect();
+  const call = inventory.executions.at(-1).calls[0];
+  assert.equal(inventory.slot, scenario.runtime.executionId);
+  assert.equal(call.receipt, null);
+  const failure = outcome.error;
+  assertStopDiagnostic(scenario, failure, record, call);
+  await assert.rejects(scenario.runtime.close(), (error) => {
+    assert.ok(error instanceof ProcessExecutionControlFailure);
+    assert.deepEqual(error.diagnostic.toJSON(), failure.diagnostic.toJSON());
+    assert.deepEqual(error.primaryCause.toJSON(), failure.primaryCause.toJSON());
+    return true;
+  });
+  const reader = scenario.file("failure-readback.mjs");
+  const source = (name) => JSON.stringify(new URL(`../../../src/lib/${name}.js`, import.meta.url).href);
+  fs.writeFileSync(reader, `
+    import {ProcessExecutionRuntime,ProcessExecutionControlFailure} from ${source("process-execution-runtime")};
+    import {Envelope} from ${source("flow-envelope")};
+    const inventory=ProcessExecutionRuntime.inspect({mainRoot:process.cwd()});
+    const call=inventory.executions.at(-1).calls.find(entry=>entry.callId===${JSON.stringify(call.callId)});
+    const failure=ProcessExecutionControlFailure.fromStored(call.controlFailure);
+    process.stdout.write(JSON.stringify(Envelope.fail('run','stop-diagnostic',failure.code,failure.message,
+      {processExecutionControlFailure:failure.toJSON()}).toJSON()));
+  `);
+  const readback = await RuntimeChildExecution.runAsync(reader, [], { cwd: scenario.root, timeout: 10000 });
+  assert.equal(readback.ok, true, readback.stderr);
+  const restored = ProcessExecutionControlFailure.fromEnvelope(JSON.parse(readback.stdout));
+  assert.deepEqual(restored.toJSON(), failure.toJSON());
+  assert.equal(/ownerToken|capability|stack/.test(readback.stdout), false);
+  const pending = scenario.runtime.inspect();
+  assert.equal(pending.slot, scenario.runtime.executionId);
+  assert.equal(pending.executions.at(-1).calls[0].receipt, null);
+});
+
+test("a finite launcher wait deadline retains the same live moved-birth diagnostic", async (t) => {
+  const scenario = new ManagedMigrationScenario(t, "launcher-deadline");
+  await scenario.start({ timeoutMs: 15000, graceMs: 100 });
+  // Advance only the coordinator's wall clock. The real launcher and provider
+  // remain alive, exercising its finite wait guard without changing supervision.
+  const realNow = Date.now.bind(Date);
+  const clock = t.mock.method(Date, "now", () => realNow() + 30000);
+  let outcome;
+  try { outcome = await scenario.invocation; }
+  finally { clock.mock.restore(); }
+  const record = scenario.readRecord();
+  const inventory = scenario.runtime.inspect();
+  const call = inventory.executions.at(-1).calls[0];
+  assert.match(outcome.error.message, /launcher exceeded its finite stop deadline/);
+  assert.equal(record.state, "running");
+  assertStopDiagnostic(scenario, outcome.error, record, call);
+  assert.equal(inventory.slot, scenario.runtime.executionId);
+  assert.equal(call.receipt, null);
+  assert.deepEqual(scenario.signals(), []);
 });
