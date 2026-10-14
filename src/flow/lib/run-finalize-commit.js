@@ -13,6 +13,7 @@ import {
 import { FinalizeCommitPathSet } from "./finalize-commit-paths.js";
 import { finalizationOutboxIdentity } from "./flow-outbox.js";
 import { StepAdmissionRefusal } from "./step-admission-refusal.js";
+import { withFlowProcessRuntime } from "./process-runtime-admission.js";
 
 export class FinalizeCommitEffectPreparation {
   constructor({ root, artifactRoot, specId, message, idempotencyKey, implementationPaths = [], resumed = false }) {
@@ -42,6 +43,10 @@ export function executeFinalizeCommitInput(input) {
 
 export class RunFinalizeCommitCommand extends FlowCommand {
   async execute(ctx) {
+    return withFlowProcessRuntime(ctx, () => this.#executeAdmitted(ctx), { commandId: "finalize-commit" });
+  }
+
+  async #executeAdmitted(ctx) {
     return executeFinalizationCommand({ ctx, command: this, stepId: "finalize-commit", executeInput: (input) => executeFinalizeCommitInput(input) });
   }
 
@@ -99,7 +104,7 @@ export class RunFinalizeCommitCommand extends FlowCommand {
     if (!(acquired instanceof FinalizeCommitEffectPreparation)) throw new TypeError("Finalize commit requires its acquired effect preparation");
     acquired.assertContext(ctx);
     if (acquired.resumed) return { status: "done", message: acquired.message, resumed: true };
-    runMigrationHook(acquired.artifactRoot, ctx.flowManager.specLocation(acquired.specId).relativeSpecFile, acquired.root);
+    await runMigrationHook(acquired.artifactRoot, ctx.flowManager.specLocation(acquired.specId).relativeSpecFile, acquired.root);
     if (acquired.implementationPaths.length === 0) return { status: "skipped", message: "nothing to commit" };
     const add = runGit(["add", "-A", "--", ...acquired.implementationPaths], { cwd: acquired.root });
     if (!add.ok) throw new Error(`failed to stage implementation paths: ${add.stderr || add.stdout}`);

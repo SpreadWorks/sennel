@@ -16,6 +16,8 @@ import { futurePhaseManifests } from "./structure/phase-manifest.js";
 import RunClaimNextActionCommand from "../../src/flow/lib/run-claim-next-action.js";
 import { IssueLogDocument } from "../../src/flow/lib/issue-log-store.js";
 import { assertCanonicalReportFinalEvidence } from "../../src/flow/lib/canonical-report-artifacts.js";
+import RunFinalizeSyncCommand from "../../src/flow/lib/run-finalize-sync.js";
+import { installCommandProcessFake } from "./infrastructure/command-process-fake.js";
 
 export const finalizationLeaves = Object.freeze(["finalize-commit", "finalize-merge", "finalize-sync", "finalize-cleanup"]);
 
@@ -84,25 +86,28 @@ export class FinalizationPhaseScenario extends AcceptancePhaseScenario {
     this.finalizationConfig = mock.method(container, "get", (name) => name === "config"
       ? this.options.config : previousGet(name));
     const original = childProcess.spawnSync;
-    this.docsProcess = mock.method(childProcess, "spawnSync", (command, args, options) => {
+    this.ghProcess = mock.method(childProcess, "spawnSync", (command, args, options) => {
       if (command === "gh" && this.options.ghProcess) {
         this.ghCalls.push([...args]);
         return this.options.ghProcess(args, options, this);
       }
-      if (command !== process.execPath || !String(args[0]).endsWith("/src/docs.js") || args[1] !== "build") {
-        return original(command, args, options);
-      }
+      return original(command, args, options);
+    });
+    this.docsProcess = installCommandProcessFake(RunFinalizeSyncCommand, (command, args, options) => {
+      assert.equal(command, process.execPath);
+      assert.ok(String(args[0]).endsWith("/src/docs.js"));
+      assert.equal(args[1], "build");
       const outbox = this.outbox("finalize-sync");
       assert.equal(outbox.status, "pending", "docs effects need the actual saved pending outbox");
       this.docsCalls.push({ args: [...args], cwd: options.cwd, env: { ...options.env },
         identity: this.identity("finalize-sync").toJSON(), outbox });
-      if (this.docsMode === "failed") return { status: 23, stdout: "docs build output\n", stderr: "docs build failed\n", signal: null };
+      if (this.docsMode === "failed") return { ok: false, status: 23, stdout: "docs build output\n", stderr: "docs build failed\n", signal: null, killed: false };
       if (this.docsMode === "built") {
         fs.mkdirSync(path.join(options.cwd, "docs"), { recursive: true });
         fs.writeFileSync(path.join(options.cwd, "docs", "overview.md"), "Generated from the merged implementation.\n");
       }
-      return { status: 0, stdout: "docs build output\n", stderr: "", signal: null };
-    });
+      return { ok: true, status: 0, stdout: "docs build output\n", stderr: "", signal: null, killed: false };
+    }, "executeEffect");
     syncBuiltinESMExports();
   }
 
@@ -209,6 +214,7 @@ export class FinalizationPhaseScenario extends AcceptancePhaseScenario {
 
   close() {
     this.docsProcess?.mock.restore();
+    this.ghProcess?.mock.restore();
     this.finalizationConfig?.mock.restore();
     syncBuiltinESMExports();
     super.close();

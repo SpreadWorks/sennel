@@ -199,7 +199,9 @@ function invocationOptions(root) {
   return {
     cwd: root,
     encoding: "utf8",
-    timeout: 30_000,
+    // A CLI boundary can execute both 30-second worker calls and persist their
+    // stop receipts. Its harness deadline must cover the complete boundary.
+    timeout: 120_000,
     env: { ...process.env, SENNEL_WORK_ROOT: root },
   };
 }
@@ -701,7 +703,7 @@ function assertApprovalMutationRejected({
   assert.equal(fs.existsSync(worker.count), false);
 }
 
-async function waitForFile(file, timeoutMs = 10_000) {
+async function waitForFile(file, timeoutMs = 60_000) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     if (fs.existsSync(file)) return;

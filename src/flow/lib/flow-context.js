@@ -70,12 +70,12 @@ function preparingAuthorityForRunId(baseFlowManager, mainRoot, paths, runId) {
   };
 }
 
-function boundWorktreeAuthority(container, baseFlowManager, mainRoot, paths, expectation) {
+function boundWorktreeAuthority(container, baseFlowManager, mainRoot, paths, expectation, operationOwnerToken) {
   if (!container.get("inWorktree")) return null;
   if (baseFlowManager.usesWorktreeFlowBinding() === false) return null;
   let identity;
   try {
-    identity = baseFlowManager.resolveWorktreeBinding(expectation);
+    identity = baseFlowManager.resolveWorktreeBinding(expectation, { operationOwnerToken });
   } catch (error) {
     return {
       flowManager: baseFlowManager,
@@ -152,6 +152,7 @@ function resolveAuthorityFlowState(container, baseFlowManager, mainRoot, options
     mainRoot,
     paths,
     targetExpectation,
+    options.input?.repositoryOperationOwnerToken ?? null,
   );
   if (worktreeAuthority) return worktreeAuthority;
   const preparingAuthority = options.preparingRunIdSelection === false

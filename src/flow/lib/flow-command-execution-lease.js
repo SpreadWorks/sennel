@@ -28,7 +28,8 @@ export class FlowCommandExecutionLease {
 
   static open(ctx) {
     const mainRoot = ctx.mainRoot || ctx.root;
-    const operation = new RepositoryFlowOperationLock({ mainRoot });
+    const operation = new RepositoryFlowOperationLock({ mainRoot,
+      operationOwnerToken: ctx.repositoryOperationOwnerToken ?? null });
     operation.acquire();
     try {
       const state = ctx.flowManager.loadReadOnly(ctx.flowState.specId);

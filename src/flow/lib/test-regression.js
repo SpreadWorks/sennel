@@ -4,6 +4,8 @@ import fs from "fs";
 import path from "path";
 import crypto from "node:crypto";
 import { execFile } from "child_process";
+import { executeManagedProcess, withManagedProcessScope } from "../../lib/managed-process.js";
+import { ProcessExecutionControlFailure } from "../../lib/process-execution-runtime.js";
 import { listChangedFilesDetailed } from "../../lib/git-helpers.js";
 import { extractMakeTestTarget, readMakefile } from "../../lib/makefile.js";
 import { collectTestCommandSources, selectTestCommandSource } from "../../lib/test-command-sources.js";
@@ -1029,62 +1031,65 @@ export function processOutputLines(result) {
   return lines;
 }
 
+class ProcessExecutionHeartbeat {
+  constructor(options) { this.options = options; this.startedAt = Date.now(); this.timer = null; }
+  start() {
+    if (!this.options.onHeartbeat || this.timer) return;
+    const requested = this.options.heartbeatIntervalMs;
+    const intervalMs = Number.isSafeInteger(requested) && requested > 0
+      ? Math.max(requested, MIN_PROCESS_HEARTBEAT_MS) : DEFAULT_PROCESS_HEARTBEAT_MS;
+    this.timer = setInterval(() => {
+      try { this.options.onHeartbeat({ elapsedMs: Date.now() - this.startedAt }); }
+      catch { /* Progress reporting must not change the child process outcome. */ }
+    }, intervalMs);
+  }
+  stop() { if (this.timer) clearInterval(this.timer); }
+}
+
 export async function runProcessDetailed(command, opts = {}) {
-  return new Promise((resolve) => {
-    const startedAt = Date.now();
-    let heartbeat = null;
-    let started = false;
-    const detailedResult = (err = null, stdout = "", stderr = "") => childProcessResult({
-      command,
-      err,
-      stdout,
-      stderr,
-      started,
-      exitCode: err ? (typeof err.code === "number" ? err.code : null) : 0,
-      signal: err?.signal ?? null,
-      captureLimitBytes: opts.captureLimitBytes,
-    });
-    const finish = (result) => {
-      if (heartbeat) clearInterval(heartbeat);
-      resolve(result);
-    };
-    let child;
-    try {
-      const environment = standaloneTestEnvironment();
-      child = execFile(
-        command.argv[0],
-        command.argv.slice(1),
-        {
-          cwd: opts.cwd,
-          encoding: opts.encoding || "utf8",
-          timeout: opts.timeoutMs,
-          // A test command must run independently when the flow itself is invoked by node:test.
-          env: { ...environment, ...command.env },
-          maxBuffer: opts.maxBuffer ?? 20 * 1024 * 1024,
-        },
-        (err, stdout, stderr) => {
-          finish(detailedResult(err, stdout, stderr));
-        },
-      );
-    } catch (err) {
-      finish(detailedResult(err));
-      return;
-    }
-    child.once("spawn", () => {
-      started = true;
-      if (!opts.onHeartbeat) return;
-      const intervalMs = Number.isSafeInteger(opts.heartbeatIntervalMs) && opts.heartbeatIntervalMs > 0
-        ? Math.max(opts.heartbeatIntervalMs, MIN_PROCESS_HEARTBEAT_MS)
-        : DEFAULT_PROCESS_HEARTBEAT_MS;
-      heartbeat = setInterval(() => {
+  // A test command must run independently when the flow itself is invoked by node:test.
+  const environment = standaloneTestEnvironment();
+  const env = { ...environment, ...command.env };
+  const heartbeat = new ProcessExecutionHeartbeat(opts);
+  try {
+    return await withManagedProcessScope({ executionRoot: opts.cwd ?? process.cwd() }, async (runtime) => {
+      if (runtime) {
         try {
-          opts.onHeartbeat({ elapsedMs: Date.now() - startedAt });
-        } catch {
-          // Progress reporting must not change the child process outcome.
+          const result = await executeManagedProcess(command.argv[0], command.argv.slice(1), {
+            runtime, kind: "command", commandId: command.source ?? "test-regression",
+            cwd: opts.cwd, env, timeoutMs: opts.timeoutMs ?? DEFAULT_TEST_TIMEOUT_SECONDS * 1000,
+            maxBuffer: opts.maxBuffer ?? 20 * 1024 * 1024,
+            processExecutionBinding: opts.processExecutionBinding,
+            onProcessExecutionStop: opts.onProcessExecutionStop,
+            onSupervisorEvent(event) { if (event.type === "provider-spawn") heartbeat.start(); },
+          });
+          return childProcessResult({ command, stdout: result.stdout, stderr: result.stderr,
+            started: result.providerStarted, exitCode: result.code, signal: result.signal,
+            captureLimitBytes: opts.captureLimitBytes });
+        } catch (err) {
+          if (err instanceof ProcessExecutionControlFailure) throw err;
+          return childProcessResult({ command, err, stdout: err.stdout, stderr: err.stderr,
+            started: err.providerStarted ?? Boolean(err.killed), exitCode: null,
+            signal: err.signal ?? err.finalAction ?? null, captureLimitBytes: opts.captureLimitBytes });
         }
-      }, intervalMs);
+      }
+      return new Promise((resolve) => {
+        let started = false;
+        const finish = (err = null, stdout = "", stderr = "") => resolve(childProcessResult({
+          command, err, stdout, stderr, started,
+          exitCode: err ? (typeof err.code === "number" ? err.code : null) : 0,
+          signal: err?.signal ?? null, captureLimitBytes: opts.captureLimitBytes,
+        }));
+        try {
+          const child = execFile(command.argv[0], command.argv.slice(1), {
+            cwd: opts.cwd, encoding: opts.encoding || "utf8", timeout: opts.timeoutMs,
+            env, maxBuffer: opts.maxBuffer ?? 20 * 1024 * 1024,
+          }, finish);
+          child.once("spawn", () => { started = true; heartbeat.start(); });
+        } catch (err) { finish(err); }
+      });
     });
-  });
+  } finally { heartbeat.stop(); }
 }
 
 export function resolveTestTimeoutSeconds(config = {}) {

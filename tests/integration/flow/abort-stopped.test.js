@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { test } from "node:test";
 import { FlowManager } from "../../../src/lib/flow-manager.js";
 import { Container } from "../../../src/lib/container.js";
@@ -52,6 +53,41 @@ function signal() {
   const promise = new Promise((done) => { resolve = done; });
   return { promise, resolve };
 }
+
+test("a command borrows its parent repository operation without releasing its owner", async (t) => {
+  const f = fixture(t);
+  const before = fs.readFileSync(f.ctx.specLocation.flowStateFile);
+  const operation = new RepositoryFlowOperationLock({ mainRoot: f.root });
+  const token = operation.acquire();
+  let executed = 0;
+  class NestedCommand extends FlowCommand {
+    execute(ctx) {
+      executed += 1;
+      assert.equal(ctx.repositoryOperationOwnerToken, token);
+      assert.equal(FlowCommandExecutionLease.forRun({ mainRoot: f.root, runId: f.ctx.flowState.runId }).length, 1);
+      return "finished";
+    }
+  }
+  try {
+    await assert.rejects(new NestedCommand().run(f.container, {
+      _envelopeType: "run", repositoryOperationOwnerToken: randomUUID(),
+    }), { code: "REPOSITORY_FLOW_OPERATION_BUSY" });
+    assert.equal(executed, 0);
+    assert.equal(FlowCommandExecutionLease.forRun({ mainRoot: f.root, runId: f.ctx.flowState.runId }).length, 0);
+    assertUntouched(f, before);
+    assert.equal(await new NestedCommand().run(f.container, {
+      _envelopeType: "run", repositoryOperationOwnerToken: token,
+    }), "finished");
+    assert.equal(executed, 1);
+    assert.equal(FlowCommandExecutionLease.forRun({ mainRoot: f.root, runId: f.ctx.flowState.runId }).length, 0);
+    assertUntouched(f, before);
+    assert.throws(() => new RepositoryFlowOperationLock({ mainRoot: f.root }).acquire(), {
+      code: "REPOSITORY_FLOW_OPERATION_BUSY",
+    });
+  } finally {
+    operation.release();
+  }
+});
 
 test("a direct running command refuses abort, then released execution permits JSONL cleanup", async (t) => {
   const f = fixture(t);

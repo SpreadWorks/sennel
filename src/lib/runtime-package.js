@@ -4,7 +4,7 @@ import { TemporaryPaths } from "./temporary-paths.js";
 import { fileURLToPath } from "node:url";
 import { RuntimePackageLocation } from "./runtime-package-location.js";
 import { RuntimePackageIdentity } from "./runtime-package-identity.js";
-import { runCmd } from "./process.js";
+import { runCmd, runManagedCmdAsync } from "./process.js";
 
 export { RuntimePackageIdentity } from "./runtime-package-identity.js";
 
@@ -108,6 +108,11 @@ export class RuntimeChildExecution {
   static runSync(script, args, options = {}, runCommand = runCmd) {
     const child = new RuntimeChildExecution({ root: options.repositoryRoot || options.cwd || process.cwd(), temporaryRoot: options.temporaryRoot, environment: options.env });
     try { return runCommand(process.execPath, [script, ...args], child.options(options)); }
+    finally { child.close(); }
+  }
+  static async runAsync(script, args, options = {}, runCommand = runManagedCmdAsync) {
+    const child = new RuntimeChildExecution({ root: options.repositoryRoot || options.cwd || process.cwd(), temporaryRoot: options.temporaryRoot, environment: options.env });
+    try { return await runCommand(process.execPath, [script, ...args], child.options(options)); }
     finally { child.close(); }
   }
   options(options = {}) {

@@ -7,21 +7,26 @@
 
 import { flowTemporaryRoot } from "./flow-context.js";
 import { PKG_DIR } from "../../lib/cli.js";
-import { runCmd, assertOk } from "../../lib/process.js";
+import { runManagedCmdAsync, assertOk } from "../../lib/process.js";
 import { RuntimeChildExecution } from "../../lib/runtime-package.js";
 import { runGit } from "../../lib/git-helpers.js";
 import { FlowCommand } from "./base-command.js";
+import { withFlowProcessRuntime } from "./process-runtime-admission.js";
 import path from "path";
 import { PRODUCT } from "../../lib/product.js";
 
 export class RunSyncCommand extends FlowCommand {
-  constructor({ runCommand = runCmd, git = runGit } = {}) {
+  constructor({ runCommand = runManagedCmdAsync, git = runGit } = {}) {
     super({ requiresFlow: false });
     this.runCommand = runCommand;
     this.git = git;
   }
 
   async execute(ctx) {
+    return withFlowProcessRuntime(ctx, () => this.#executeAdmitted(ctx), { commandId: "sync" });
+  }
+
+  async #executeAdmitted(ctx) {
     const { root } = ctx;
     const dryRun = ctx.dryRun || false;
 
@@ -29,7 +34,7 @@ export class RunSyncCommand extends FlowCommand {
     const childOptions = { cwd: root, repositoryRoot: ctx.repositoryRoot || ctx.mainRoot || root, temporaryRoot: flowTemporaryRoot(ctx) };
 
     // Step 1: build
-    const buildRes = RuntimeChildExecution.runSync(docsScript, ["build"], childOptions, this.runCommand);
+    const buildRes = await RuntimeChildExecution.runAsync(docsScript, ["build"], childOptions, this.runCommand);
     const buildOutput = (buildRes.stdout || "").trim();
 
     if (!buildRes.ok) {
@@ -42,7 +47,7 @@ export class RunSyncCommand extends FlowCommand {
     }
 
     // Step 2: review
-    const reviewRes = RuntimeChildExecution.runSync(docsScript, ["review"], childOptions, this.runCommand);
+    const reviewRes = await RuntimeChildExecution.runAsync(docsScript, ["review"], childOptions, this.runCommand);
     const reviewOutput = (reviewRes.stdout || "").trim();
 
     if (!reviewRes.ok) {

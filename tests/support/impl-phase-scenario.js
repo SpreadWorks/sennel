@@ -1,10 +1,8 @@
 import assert from "node:assert/strict";
-import childProcess from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { syncBuiltinESMExports } from "node:module";
-import { mock } from "node:test";
+import { runCmd } from "../../src/lib/process.js";
 import { RequirementTestPhaseScenario } from "./requirement-test-phase-scenario.js";
 import RunFilterTaskReviewCommand from "../../src/flow/lib/run-filter-task-review.js";
 import RunRetroCommand from "../../src/flow/lib/run-retro.js";
@@ -160,28 +158,26 @@ export class ImplPhaseScenario extends RequirementTestPhaseScenario {
     super.initialize();
     this.phaseReviews = [];
     this.phaseWorkers = [];
-    const parentSpawn = childProcess.spawnSync;
-    this.phaseReviewProcess = mock.method(childProcess, "spawnSync", (command, args, options) => {
-      if (command !== "node" || !String(args[0]).endsWith("/flow/commands/review.js")
-        || !(options.env.SENNEL_REVIEW_TASK_EXECUTION_IDENTITY || this.current() === "impl-review")) {
-        return parentSpawn(command, args, options);
-      }
-      const task = options.env.SENNEL_REVIEW_TASK_EXECUTION_IDENTITY
-        ? JSON.parse(options.env.SENNEL_REVIEW_TASK_EXECUTION_IDENTITY) : null;
-      const stage = task ? "task-review" : "impl-review";
-      const ordinal = this.phaseReviews.filter((entry) => entry.stage === stage && entry.taskId === (task?.taskId ?? null)).length + 1;
-      const response = this.options.implReviewResponse?.(stage, ordinal, options.env, this)
-        ?? { blockingFindings: this.options.forceRepairs && ordinal === 1 ? [implementationFinding({ taskId: task?.taskId })] : [], nonBlockingImprovements: [] };
-      this.phaseReviews.push({ stage, taskId: task?.taskId ?? null, ordinal, environment: structuredClone(options.env), response });
-      this.options.beforeImplReview?.(options.env, this);
-      if (this.options.reviewProcessResult) return this.options.reviewProcessResult(stage, ordinal, options, this, { command, args });
-      const processResult = parentSpawn(process.execPath, [fileURLToPath(new URL("./impl-phase-review-worker.js", import.meta.url))], {
-        ...options, env: { ...options.env, SENNEL_IMPL_SCENARIO_RESPONSE: JSON.stringify(response) },
-      });
-      this.phaseReviews.at(-1).process = { status: processResult.status, stderr: processResult.stderr };
-      return processResult;
+  }
+
+  runReviewProcess(command, args, options) {
+    if (!(options.env.SENNEL_REVIEW_TASK_EXECUTION_IDENTITY || this.current() === "impl-review")) {
+      return super.runReviewProcess(command, args, options);
+    }
+    const task = options.env.SENNEL_REVIEW_TASK_EXECUTION_IDENTITY
+      ? JSON.parse(options.env.SENNEL_REVIEW_TASK_EXECUTION_IDENTITY) : null;
+    const stage = task ? "task-review" : "impl-review";
+    const ordinal = this.phaseReviews.filter((entry) => entry.stage === stage && entry.taskId === (task?.taskId ?? null)).length + 1;
+    const response = this.options.implReviewResponse?.(stage, ordinal, options.env, this)
+      ?? { blockingFindings: this.options.forceRepairs && ordinal === 1 ? [implementationFinding({ taskId: task?.taskId })] : [], nonBlockingImprovements: [] };
+    this.phaseReviews.push({ stage, taskId: task?.taskId ?? null, ordinal, environment: structuredClone(options.env), response });
+    this.options.beforeImplReview?.(options.env, this);
+    if (this.options.reviewProcessResult) return this.options.reviewProcessResult(stage, ordinal, options, this, { command, args });
+    const processResult = runCmd(process.execPath, [fileURLToPath(new URL("./impl-phase-review-worker.js", import.meta.url))], {
+      ...options, env: { ...options.env, SENNEL_IMPL_SCENARIO_RESPONSE: JSON.stringify(response) },
     });
-    syncBuiltinESMExports();
+    this.phaseReviews.at(-1).process = { status: processResult.status, stderr: processResult.stderr };
+    return processResult;
   }
   async worker(prompt, options) {
     const request = JSON.parse(fs.readFileSync(options.executionEnvironment.SENNEL_FLOW_HANDOFF_REQUEST, "utf8"));
@@ -259,5 +255,4 @@ export class ImplPhaseScenario extends RequirementTestPhaseScenario {
   }
   assertResults(nodeIds) { return assertPhaseResults(this, nodeIds, true); }
   assertClaims(nodeIds) { return assertPhaseResults(this, nodeIds, false); }
-  close() { this.phaseReviewProcess?.mock.restore(); super.close(); }
 }

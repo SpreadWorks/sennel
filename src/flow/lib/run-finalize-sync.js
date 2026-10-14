@@ -1,12 +1,14 @@
 import { flowTemporaryRoot } from "./flow-context.js";
 import { executeFinalizationCommand, finalizationStepRegistration } from "../engine/composition/finalization.js";
 import path from "path";
-import { runCmd } from "../../lib/process.js";
+import { runManagedCmdAsync } from "../../lib/process.js";
 import { RuntimeChildExecution } from "../../lib/runtime-package.js";
 import { PKG_DIR } from "../../lib/cli.js";
 import { runGit } from "../../lib/git-helpers.js";
 import { PRODUCT } from "../../lib/product.js";
 import { FlowCommand } from "./base-command.js";
+import { withFlowProcessRuntime } from "./process-runtime-admission.js";
+import { captureFinalizationProcessAuthority } from "./finalization-process-authority.js";
 import { hasOutboxCommit } from "./run-finalize.js";
 import { FINALIZE_DOCUMENTATION_PATHS } from "./finalize-commit-paths.js";
 import {
@@ -23,7 +25,7 @@ export function executeFinalizeSyncInput(input) {
 
 export class RunFinalizeSyncCommand extends FlowCommand {
   constructor({
-    runCommand = runCmd,
+    runCommand = runManagedCmdAsync,
     git = runGit,
     hasCommit = hasOutboxCommit,
     packageDir = PKG_DIR,
@@ -36,7 +38,9 @@ export class RunFinalizeSyncCommand extends FlowCommand {
   }
 
   async execute(ctx) {
-    return executeFinalizationCommand({ ctx, command: this, stepId: "finalize-sync", executeInput: (input) => executeFinalizeSyncInput(input) });
+    return withFlowProcessRuntime(ctx, () => executeFinalizationCommand({ ctx, command: this,
+      stepId: "finalize-sync", executeInput: (input) => executeFinalizeSyncInput(input) }), { commandId: "finalize-sync",
+      physicalAuthority: (context) => captureFinalizationProcessAuthority(context, "finalize-sync") });
   }
 
   async executeEffect(ctx) {
@@ -60,7 +64,7 @@ export class RunFinalizeSyncCommand extends FlowCommand {
         return result;
       };
       const buildScript = path.join(this.packageDir, "docs.js");
-      run("docs-build", () => RuntimeChildExecution.runSync(buildScript, ["build"], {
+      const buildResult = await RuntimeChildExecution.runAsync(buildScript, ["build"], {
         cwd: syncCwd,
         repositoryRoot: ctx.repositoryRoot || ctx.mainRoot || root, temporaryRoot: flowTemporaryRoot(ctx),
         env: {
@@ -68,7 +72,8 @@ export class RunFinalizeSyncCommand extends FlowCommand {
           [PRODUCT.env("WORK_ROOT")]: syncCwd,
           [PRODUCT.env("SOURCE_ROOT")]: syncCwd,
         },
-      }, this.runCommand));
+      }, this.runCommand);
+      run("docs-build", () => buildResult);
       const statRes = run("git-diff-stat", () => this.git(["diff", "--stat", "--", ...FINALIZE_DOCUMENTATION_PATHS], { cwd: syncCwd }));
       const nameRes = run("git-diff-name", () => this.git(["diff", "--name-only", "--", ...FINALIZE_DOCUMENTATION_PATHS], { cwd: syncCwd }));
       return {

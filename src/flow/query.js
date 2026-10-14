@@ -1,6 +1,8 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { ProcessExecutionCheckoutIdentity } from "../lib/process-execution-values.js";
+import { captureProcessExecutionCheckoutIdentity } from "../lib/process-execution-runtime.js";
 
 import { FlowSpecId } from "../lib/flow-spec-id.js";
 import { PRODUCT } from "../lib/product.js";
@@ -145,12 +147,13 @@ class QueryCaptureContext {
 }
 
 class QueryCapturedVersion {
-  constructor({ state, spec, activities, artifactSchemaRevisions, artifactBytes, catalog, stateBytes, specBytes, confirmedLedgerBytes }) {
+  constructor({ state, spec, activities, artifactSchemaRevisions, artifactBytes, catalog, stateBytes, specBytes, confirmedLedgerBytes, repositoryIdentity }) {
     if (!(state instanceof CurrentFlowState) || !(spec instanceof CurrentFlowSpecRecord)
       || !(artifactSchemaRevisions instanceof ArtifactSchemaRevisionEvidence) || !(artifactBytes instanceof Map)) {
       throw new Error("query capture requires validated canonical records");
     }
-    Object.assign(this, { state, spec, activities, artifactSchemaRevisions, artifactBytes, catalog });
+    if (!(repositoryIdentity instanceof ProcessExecutionCheckoutIdentity)) throw new TypeError("Query requires its captured canonical repository identity");
+    Object.assign(this, { state, spec, activities, artifactSchemaRevisions, artifactBytes, catalog, repositoryIdentity });
     this.stateHash = crypto.createHash("sha256").update(stateBytes).digest("hex");
     this.specHash = crypto.createHash("sha256").update(specBytes).digest("hex");
     this.confirmedLedgerHash = crypto.createHash("sha256").update(confirmedLedgerBytes).digest("hex");
@@ -913,7 +916,8 @@ class CanonicalFlowVersionReader {
     const artifactBytes = new Map();
     artifactBytes.set(ledgerDescriptor.relativePath, confirmedLedger.bytes);
     const value = new QueryCapturedVersion({ state, spec, activities, artifactSchemaRevisions, artifactBytes, catalog,
-      stateBytes, specBytes, confirmedLedgerBytes: confirmedLedger.bytes });
+      stateBytes, specBytes, confirmedLedgerBytes: confirmedLedger.bytes,
+      repositoryIdentity: captureProcessExecutionCheckoutIdentity({ mainRoot: this.repositoryRoot }) });
     if (context?.request) {
       while (true) {
         try {
@@ -1303,7 +1307,8 @@ class QueryProjector {
         && (request.recordedAt.lt === null || Date.parse(entry.timing.finishedAt) < Date.parse(request.recordedAt.lt));
     });
     const remaining = matching.filter((entry) => entry.confirmationOrder > after);
-    const index = new QueryDetailIndex({ state: version.state, activities: version.activities, catalog: version.catalog, artifactBytes: version.artifactBytes, snapshotId: snapshot.id });
+    const index = new QueryDetailIndex({ state: version.state, activities: version.activities, catalog: version.catalog, artifactBytes: version.artifactBytes, snapshotId: snapshot.id,
+      repositoryIdentity: version.repositoryIdentity });
     const items = [];
     const details = [];
     const response = () => {

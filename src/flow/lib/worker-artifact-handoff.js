@@ -1,6 +1,9 @@
+import { readFlowProcessStops } from "./process-runtime-admission.js";
 import { ExecutionProtocolSnapshot } from "./execution-protocol-snapshot.js";
 import { FlowExecutionContract, FlowExecutionContractRefusal, FlowExecutionInputBaseline } from "./flow-execution-contract.js";
 import { isStepAdmissionRefusal } from "./step-admission-refusal.js";
+import { assertFlowProcessRuntimeQuiescent } from "./process-runtime-admission.js";
+import { FlowProcessStopEvidence, workerProcessStopIdentity } from "./process-runtime-evidence.js";
 import { normalizedRelativePath } from "./source-effect-fields.js";
 import { ImplementationSourceEvidence, SourceStepFacts } from "./source-effect-values.js";
 import { GateRepairWorkerReport, SourceWorkerEffect, SourceWorkerEffectReport } from "./source-effect-values.js";
@@ -85,6 +88,7 @@ import { readProgressBoundSpecGateRepairInput, readSpecGateRepairExecutionProgre
   latestRepairBudget } from "./spec-gate-repair-progress.js";
 import { acquireSpecGateRepairExecutionContractOptions } from "./spec-gate-repair-execution-contract.js";
 import { readStoredExecutionContractFromView, readExecutionContractFromView } from "./canonical-prompt-execution.js";
+import { captureProcessExecutionCheckoutIdentity } from "../../lib/process-execution-runtime.js";
 import { FLOW_ARTIFACT_CONTRACTS } from "../../lib/flow-artifact-contract.js";
 import { SpecGateRepairBundle } from "./spec-gate-repair-bundle.js";
 import { SpecGateRepairCallPlan } from "./spec-gate-repair-call-plan.js";
@@ -3796,7 +3800,7 @@ export class CanonicalSourceHandoffCheckpoint {
 
 /** One append-only protocol event, linked by the preceding event digest. */
 export class SourceHandoffEvent {
-  constructor({ identity, checkpointDigest, sequence, previousDigest = null, kind, requestDigest = null, rollbackPlanDigest = null, sourceManifest = null, workerStopped = null, failureFacts = null, digest: storedDigest = null } = {}) {
+  constructor({ identity, checkpointDigest, sequence, previousDigest = null, kind, requestDigest = null, rollbackPlanDigest = null, sourceManifest = null, workerStopped = null, failureFacts = null, processStopEvidence = null, digest: storedDigest = null } = {}) {
     this.identity = identity instanceof SourceWorkerHandoffIdentity ? identity : new SourceWorkerHandoffIdentity(identity);
     this.checkpointDigest = requiredDigest(checkpointDigest, "source handoff event checkpoint digest");
     if (!Number.isSafeInteger(sequence) || sequence < 1) throw new Error("source handoff event sequence is invalid");
@@ -3810,6 +3814,16 @@ export class SourceHandoffEvent {
     this.sourceManifest = sourceManifest === null ? null : (sourceManifest instanceof SourceMutationManifest ? sourceManifest : SourceMutationManifest.fromStored(sourceManifest));
     if (workerStopped !== null && typeof workerStopped !== "boolean") throw new Error("source handoff workerStopped is invalid");
     this.workerStopped = workerStopped;
+    this.processStopEvidence = processStopEvidence === null ? null
+      : processStopEvidence instanceof FlowProcessStopEvidence ? processStopEvidence
+      : FlowProcessStopEvidence.fromStored(processStopEvidence);
+    if (this.processStopEvidence !== null) {
+      if (kind !== "worker-exited") throw new Error("Process stop evidence belongs only to a worker-exited event");
+      this.processStopEvidence.assertIdentity({ runId: this.identity.runId,
+        specId: this.identity.specId, nodeId: this.identity.nodeId,
+        attemptId: this.identity.attempt.id, attemptSequence: this.identity.attempt.sequence,
+        dispatchInvocationId: this.identity.dispatchInvocationId, requestDigest: this.requestDigest });
+    }
     this.failureFacts = failureFacts === null ? null : (failureFacts instanceof SourceHandoffFailureFacts
       ? failureFacts
       : new SourceHandoffFailureFacts({
@@ -3841,12 +3855,14 @@ export class SourceHandoffEvent {
     if (storedDigest !== null && this.digest !== requiredDigest(storedDigest, "source handoff event digest")) throw new Error("source handoff event digest does not match its content");
     Object.freeze(this);
   }
-  unsignedJSON() { return { version: 1, identity: this.identity.toJSON(), checkpointDigest: this.checkpointDigest, sequence: this.sequence, previousDigest: this.previousDigest, kind: this.kind, requestDigest: this.requestDigest, rollbackPlanDigest: this.rollbackPlanDigest, sourceManifest: this.sourceManifest?.toJSON() ?? null, workerStopped: this.workerStopped, failureFacts: this.failureFacts?.toJSON() ?? null }; }
+  unsignedJSON() { return { version: 1, identity: this.identity.toJSON(), checkpointDigest: this.checkpointDigest, sequence: this.sequence, previousDigest: this.previousDigest, kind: this.kind, requestDigest: this.requestDigest, rollbackPlanDigest: this.rollbackPlanDigest, sourceManifest: this.sourceManifest?.toJSON() ?? null, workerStopped: this.workerStopped, failureFacts: this.failureFacts?.toJSON() ?? null,
+    ...(this.processStopEvidence === null ? {} : { processStopEvidence: this.processStopEvidence.toJSON() }) }; }
   toJSON() { return { ...this.unsignedJSON(), digest: this.digest }; }
   static fromStored(value) {
     exactObjectKeys(value, [
       "version", "identity", "checkpointDigest", "sequence", "previousDigest", "kind",
       "requestDigest", "rollbackPlanDigest", "sourceManifest", "workerStopped", "failureFacts", "digest",
+      ...(Object.hasOwn(value, "processStopEvidence") ? ["processStopEvidence"] : []),
     ], "source handoff event");
     if (value.version !== 1) throw new Error("source handoff event version is invalid");
     const event = new SourceHandoffEvent({
@@ -8716,9 +8732,24 @@ function cleanupTransientExecutionHandoffDirectory(handoffRoot, directory) {
 }
 
 export class WorkerArtifactHandoffCoordinator {
+  #stoppedArtifactRequests = new Map();
+
   constructor({ faultInjector = () => {}, now = () => new Date() } = {}) {
     this.faultInjector = faultInjector;
     this.now = now;
+  }
+
+  /** Return the stopped, sealed request without creating a new execution claim. */
+  stoppedArtifactRequest({ ctx, state, stepId }) {
+    const requests = [...this.#stoppedArtifactRequests.values()].filter((request) =>
+      request.runId === state.runId && request.specId === state.specId && request.stepId === stepId);
+    if (requests.length > 1) throw new FlowExecutionContractRefusal("Multiple stopped worker requests own the same Step");
+    const request = requests[0] ?? null;
+    if (request !== null) {
+      request.assertCurrent(state);
+      validateSubmission(request, readSubmission(request));
+    }
+    return request;
   }
 
   /** Remove a consumed repair capability using its canonical claim, without decoding transient request bytes. */
@@ -9102,7 +9133,10 @@ export class WorkerArtifactHandoffCoordinator {
     this.sourceMutationAuthority({ ctx, request }).assertSourceCanonicalTransaction(request);
   }
 
-  finishSourceWorker({ ctx, request }) {
+  finishSourceWorker({ ctx, request, processStopEvidence = null }) {
+    processStopEvidence?.assertContract(request.executionContract, workerProcessStopIdentity(request))
+      .assertCheckout(captureProcessExecutionCheckoutIdentity({ mainRoot: ctx.mainRoot || ctx.root,
+        executionRoot: ctx.executionRoot || ctx.root }));
     const authority = this.#readSourceAuthority({ ctx, request, identity: request.sourceHandoffIdentity, requireUnsettled: true });
     if (authority.event.kind !== "start-intent" || authority.event.requestDigest !== request.requestDigest) {
       throw new WorkerArtifactHandoffError("recovery-required", "FLOW_SOURCE_HANDOFF_START_UNCERTAIN", "source worker exit cannot be tied to a start-intent", { retryable: false, recoveryPossible: false });
@@ -9112,6 +9146,7 @@ export class WorkerArtifactHandoffCoordinator {
       identity: request.sourceHandoffIdentity, checkpointDigest: request.sourceHandoffCheckpoint.digest,
       sequence: authority.event.sequence + 1, previousDigest: authority.event.digest,
       kind: "worker-exited", requestDigest: request.requestDigest, sourceManifest, workerStopped: true,
+      processStopEvidence,
     });
     ctx.flowManager.appendSourceHandoffEvent({ specId: request.specId, event, executionContract: request.executionContract });
   }
@@ -9340,7 +9375,11 @@ export class WorkerArtifactHandoffCoordinator {
     return true;
   }
 
-  recoverPending({ ctx }) {
+  recoverPending({ ctx, processStops = null }) {
+    assertFlowProcessRuntimeQuiescent(ctx);
+    this.#stoppedArtifactRequests.clear();
+    const stops = processStops ?? readFlowProcessStops({ mainRoot: ctx.mainRoot || ctx.root,
+      executionRoot: ctx.executionRoot || ctx.root });
     const lease = new FlowHandoffAuthorityLease({
       mainRoot: ctx.mainRoot || ctx.root, executionRoot: ctx.executionRoot || ctx.root,
     });
@@ -9361,8 +9400,8 @@ export class WorkerArtifactHandoffCoordinator {
           "worker artifact handoff recovery requires a Version-1 Flow",
         );
       }
-      const source = this.#recoverPendingSource({ ctx, state });
-      const artifact = this.#recoverCanonicalPending({ ctx, state });
+      const source = this.#recoverPendingSource({ ctx, state, processStops: stops });
+      const artifact = this.#recoverCanonicalPending({ ctx, state, processStops: stops });
       if (source === null) return artifact;
       if (artifact === null) return source;
       return {
@@ -9375,7 +9414,7 @@ export class WorkerArtifactHandoffCoordinator {
     }
   }
 
-  #recoverPendingSource({ ctx, state }) {
+  #recoverPendingSource({ ctx, state, processStops }) {
     if (typeof ctx.flowManager.sourceHandoffAuthorities !== "function") {
       throw new WorkerArtifactHandoffError("recovery-required", "FLOW_SOURCE_HANDOFF_RECOVERY_UNTRUSTED", "canonical store does not provide source handoff recovery", { retryable: false, recoveryPossible: false });
     }
@@ -9438,6 +9477,10 @@ export class WorkerArtifactHandoffCoordinator {
         if (!request.sourceHandoffIdentity.matches(identity) || request.sourceHandoffCheckpoint.digest !== checkpoint.digest) {
           throw new WorkerArtifactHandoffError("recovery-required", "FLOW_SOURCE_HANDOFF_RECOVERY_UNTRUSTED", "source handoff request does not bind its canonical checkpoint", { retryable: false, recoveryPossible: false });
         }
+        const checkoutIdentity = captureProcessExecutionCheckoutIdentity({
+          mainRoot: ctx.mainRoot || ctx.root, executionRoot: ctx.executionRoot || ctx.root,
+        });
+        for (const event of authority.events) event.processStopEvidence?.assertCheckout(checkoutIdentity);
         if (authority.events.some((event) => ["start-intent", "worker-exited", "failure"].includes(event.kind)
           && event.requestDigest !== request.requestDigest)) {
           throw new WorkerArtifactHandoffError(
@@ -9531,6 +9574,16 @@ export class WorkerArtifactHandoffCoordinator {
         if (authority.event.kind !== "worker-exited" || authority.event.requestDigest !== request.requestDigest) {
           throw new WorkerArtifactHandoffError("recovery-required", "FLOW_SOURCE_HANDOFF_RECOVERY_UNTRUSTED", "source handoff event chain cannot prove a stopped worker", { retryable: false, recoveryPossible: false });
         }
+        if (authority.event.processStopEvidence !== null) {
+          authority.event.processStopEvidence.assertContract(request.executionContract, workerProcessStopIdentity(request));
+          for (const stop of processStops.filter((entry) => entry.receipt.callId === authority.event.processStopEvidence.receipt.callId)) {
+            stop.assertContract(request.executionContract, workerProcessStopIdentity(request));
+            if (stableStringify(stop.toJSON()) !== stableStringify(authority.event.processStopEvidence.toJSON())) {
+              throw new WorkerArtifactHandoffError("recovery-required", "FLOW_SOURCE_HANDOFF_RECOVERY_UNTRUSTED",
+                "source event stop receipt differs from the runtime receipt", { retryable: false, recoveryPossible: false });
+            }
+          }
+        }
         if (!fs.existsSync(request.submissionPath)) {
           throw new WorkerArtifactHandoffError("recovery-required", "FLOW_SOURCE_HANDOFF_RECOVERY_UNTRUSTED", "stopped source worker did not leave a sealed handoff", { retryable: false, recoveryPossible: false });
         }
@@ -9597,7 +9650,7 @@ export class WorkerArtifactHandoffCoordinator {
     throw failure;
   }
 
-  #recoverCanonicalPending({ ctx, state }) {
+  #recoverCanonicalPending({ ctx, state, processStops }) {
     const mainRoot = ctx.mainRoot || ctx.root;
     const executionRoot = ctx.executionRoot || ctx.root;
     const canonicalLocation = ctx.flowManager.specLocation(state.specId);
@@ -9646,11 +9699,30 @@ export class WorkerArtifactHandoffCoordinator {
         if (cleanupTransientExecutionHandoffDirectory(handoffRoot, stored.directory)) cleaned += 1;
         continue;
       }
+      const canonical = ctx.flowManager.canonicalState(state.specId);
+      const contract = stored.executionContract;
+      const ownsAttempt = contract.runId === canonical.runId && contract.specId === canonical.specId
+        && contract.nodeId === canonical.current?.at(-1)
+        && contract.attemptId === canonical.attempt?.id
+        && contract.attemptSequence === canonical.attempt?.sequence
+        && canonical.attempt.failure === null;
+      const claimedContract = ownsAttempt ? ctx.flowManager.readStoredExecutionContract({
+        binding: { runId: canonical.runId, specId: canonical.specId, stepId: stored.stepId,
+          nodeId: contract.nodeId, attempt: canonical.attempt },
+        generation: contract.generation, optional: true,
+      }) : null;
+      claimedContract?.assertMatches(contract);
       let submission;
       try {
         submission = readSubmission(stored);
       } catch (cause) {
         if (cause instanceof WorkerArtifactHandoffError && cause.classification === "missing") {
+          if (claimedContract !== null && processStops.some((evidence) =>
+            evidence.receipt.binding.value?.executionContractId === contract.id)) {
+            // A stopped physical call has no accepted response. Keep the
+            // exact request for the existing execution admission to refuse.
+            continue;
+          }
           // A durable worker execution claim is persisted authority for
           // this exact request. Preserve it so the same generation can
           // resume instead of inventing a fresh invocation.
@@ -9705,12 +9777,28 @@ export class WorkerArtifactHandoffCoordinator {
           },
         );
       }
+      const stoppedPhysicalExecution = claimedContract !== null && processStops.some((evidence) =>
+        evidence.receipt.binding.value?.executionContractId === contract.id);
+      if (stoppedPhysicalExecution) {
+        const stops = processStops.filter((evidence) =>
+          evidence.receipt.binding.value?.requestDigest === request.requestDigest);
+        if (stops.length === 0) throw new FlowExecutionContractRefusal("Sealed worker recovery has no exact process stop receipt");
+        const checkoutIdentity = captureProcessExecutionCheckoutIdentity({ mainRoot, executionRoot });
+        for (const evidence of stops) evidence.assertContract(request.executionContract, workerProcessStopIdentity(request))
+          .assertCheckout(checkoutIdentity);
+        request.assertCurrent(state);
+        validateSubmission(request, submission);
+      }
       if (canonicalWorkerExecutionClaimForStored({ flowManager: ctx.flowManager, state, stored }) !== null) {
         continue;
       }
       if (canonicalHandoffIsCommitted(state, request, submission, ctx.flowManager)) {
         cleanupCompletedHandoff(request.handoffRoot, canonicalHandoffReceipt(request, submission, this.now), this.faultInjector);
         cleaned += 1;
+        continue;
+      }
+      if (stoppedPhysicalExecution) {
+        this.#stoppedArtifactRequests.set(request.executionContract.id, request);
         continue;
       }
       // A parent restart has lost the in-memory validation authority. Never

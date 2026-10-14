@@ -1,3 +1,5 @@
+import { withFlowProcessRuntime } from "./process-runtime-admission.js";
+import { ProcessExecutionControlFailure } from "../../lib/process-execution-runtime.js";
 /**
  * src/flow/lib/run-final-regression.js
  *
@@ -927,6 +929,7 @@ async function executeCanonicalFinalRegression(ctx) {
     });
     resultStatus = processPassed(result) ? "pass" : "fail";
   } catch (error) {
+    if (error instanceof ProcessExecutionControlFailure) throw error;
     skipDecision = projectPolicySkipDecision({ err: error, changedFiles });
     if (skipDecision) {
       result = {
@@ -1087,6 +1090,10 @@ export function executeFinalRegressionInput(input) {
 
 export default class RunFinalRegressionCommand extends FlowCommand {
   async execute(ctx) {
+    return withFlowProcessRuntime(ctx, () => this.#executeAdmitted(ctx), { commandId: "final-regression" });
+  }
+
+  async #executeAdmitted(ctx) {
     if (!isCanonicalFlowState(ctx.flowState)) {
       throw new Error("final-regression requires a Version-1 Flow");
     }

@@ -9,6 +9,8 @@ import {
   isPromptExecutionControlFailure,
   preservePromptExecutionControlFailure,
   PromptExecutionProviderIdentity,
+  PromptProviderProcessIdentity,
+  PromptProcessStopObservation,
 } from "./prompt-execution-journal.js";
 
 export const GLOBAL_PROMPT_ELEMENT_HARD_MAX = 120_000;
@@ -1653,6 +1655,14 @@ export class PromptProviderCallAdmission {
       });
   }
 
+  async observeProcessStop(receipt, context) {
+    if (!this.#claimed || this.#settled || this.#cacheHit) throw new PromptExecutionJournalError("PROMPT_EXECUTION_IDENTITY_MISMATCH", "Stop receipt requires the active provider admission");
+    await this.#attemptJournal?.observeProcessStop(receipt, context);
+  }
+
+  get processExecutionBinding() { return this.#attemptJournal?.processExecutionBinding ?? null; }
+  get processExecutionIdentity() { return this.#attemptJournal?.processExecutionIdentity ?? null; }
+
   async afterProviderFailure(failure, context) {
     await this.#attemptJournal?.afterProviderFailure(failure, context);
   }
@@ -1816,7 +1826,7 @@ class DefaultPromptProtocolPolicy {
 
 /** Durable hooks contain execution observations, never consumer semantics. */
 class BatchProviderAttemptJournal extends PromptProviderAttemptJournal {
-  constructor({ frontier, responseCallIndex, request, save }) {
+  constructor({ frontier, responseCallIndex, request, save, scope, processExecutionBinding }) {
     const failures = frontier.transportFailures.filter((entry) => entry.responseCallIndex === responseCallIndex);
     super(failures.length);
     this.frontier = frontier;
@@ -1824,7 +1834,11 @@ class BatchProviderAttemptJournal extends PromptProviderAttemptJournal {
     this.requestDigest = requestDigest(request);
     this.schemaDigest = digest(JSON.stringify(request.jsonSchema));
     this.save = save;
+    this.scope = scope;
+    this.processExecutionBinding = processExecutionBinding;
   }
+
+  get processExecutionIdentity() { return this.frontier.claim?.processIdentity ? PromptProviderProcessIdentity.fromJSON(this.frontier.claim.processIdentity) : null; }
 
   async beforeProviderAttempt(context, attemptCount) {
     if (!context || context.attempt !== attemptCount || !Number.isSafeInteger(context.maxAttempts)
@@ -1843,8 +1857,30 @@ class BatchProviderAttemptJournal extends PromptProviderAttemptJournal {
     this.frontier.claim = { responseCallIndex: this.responseCallIndex, transportOrdinal: this.frontier.transportOrdinal,
       attempt: context.attempt, maxAttempts: context.maxAttempts, requestDigest: this.requestDigest, schemaDigest: this.schemaDigest,
       providerKey: context.providerKey, profileKey: context.profileKey };
+    if (this.processExecutionBinding !== null && typeof context.attemptId === "string" && typeof context.logicalInvocationId === "string") {
+      this.frontier.claim.processIdentity = new PromptProviderProcessIdentity({ ...this.frontier.claim,
+        scope: this.scope, batchDigest: this.frontier.batchDigest,
+        logicalInvocationId: context.logicalInvocationId, providerAttemptId: context.attemptId }).toJSON();
+    }
     await this.save("claimed");
     return attemptCount;
+  }
+
+  async observeProcessStop(receipt, context) {
+    if (this.processExecutionBinding === null) return;
+    const identity = this.processExecutionIdentity;
+    if (identity === null || context?.attemptId !== identity.providerAttemptId || context.logicalInvocationId !== identity.logicalInvocationId
+      || context.attempt !== identity.attempt || context.maxAttempts !== identity.maxAttempts
+      || context.providerKey !== identity.providerKey || context.profileKey !== identity.profileKey) {
+      throw new PromptExecutionJournalError("PROMPT_EXECUTION_IDENTITY_MISMATCH", "Stop receipt has no matching saved provider claim");
+    }
+    identity.assertClaim(this.frontier.claim);
+    const observation = new PromptProcessStopObservation({ identity, receipt });
+    if (!receipt.binding.includes(this.processExecutionBinding)) throw new PromptExecutionJournalError("PROMPT_EXECUTION_IDENTITY_MISMATCH", "Stop receipt belongs to another canonical execution contract or Attempt");
+    if (this.frontier.processStops?.some((entry) => entry.identity.transportOrdinal === identity.transportOrdinal)) throw new PromptExecutionJournalError("PROMPT_EXECUTION_IDENTITY_MISMATCH", "Prompt physical call already has a stop observation");
+    this.frontier.processStops ??= [];
+    this.frontier.processStops.push(observation.toJSON());
+    await this.save("process-stopped");
   }
 
   async afterProviderFailure(failure, context) {
@@ -1852,6 +1888,9 @@ class BatchProviderAttemptJournal extends PromptProviderAttemptJournal {
       || context.maxAttempts !== this.frontier.claim.maxAttempts || typeof failure?.code !== "string" || !failure.code.trim()
       || typeof failure.retryable !== "boolean") {
       throw new PromptExecutionJournalError("PROMPT_EXECUTION_TRANSPORT_INVALID", "Transport failure has no matching saved provider claim");
+    }
+    if (this.frontier.claim.processIdentity && !this.frontier.processStops?.some((entry) => entry.identity.transportOrdinal === this.frontier.claim.transportOrdinal)) {
+      throw new PromptExecutionJournalError("PROMPT_EXECUTION_UNCERTAIN", "Provider failure has no durable managed stop observation");
     }
     let observation;
     try { observation = AgentTransportFailureObservation.fromFailure(failure, {
@@ -2109,7 +2148,7 @@ export class PromptBatchExecutor {
             inputCharacters: projection?.promptCharacterCount ?? actualFootprint.total,
           });
           if (executionJournal) frontier.batchCalls = batchCalls;
-          const attemptJournal = executionJournal ? new BatchProviderAttemptJournal({ frontier, responseCallIndex: callIndex, request: actualRequest, save }) : undefined;
+          const attemptJournal = executionJournal ? new BatchProviderAttemptJournal({ frontier, responseCallIndex: callIndex, request: actualRequest, save, scope: executionJournal.scope, processExecutionBinding: executionJournal.writer.processExecutionBinding ?? null }) : undefined;
           const previousFailure = frontier.transportFailures.filter((entry) => entry.responseCallIndex === callIndex).at(-1);
           if (executionJournal && previousFailure && (!previousFailure.retryable || previousFailure.attempt === previousFailure.maxAttempts)) {
             throw new PromptExecutionJournalError("PROMPT_EXECUTION_TRANSPORT_EXHAUSTED", "Saved provider call exhausted its transport attempts");
@@ -2140,6 +2179,7 @@ export class PromptBatchExecutor {
           if (executionJournal) {
             const providerIdentity = providerCallAdmission.cacheHit ? providerCallAdmission.cacheIdentity : frontier.claim;
             if (providerIdentity === null) throw new PromptExecutionJournalError("PROMPT_EXECUTION_ADAPTER_INVALID", "Durable response requires a physical claim or explicit cache identity");
+            if (frontier.claim?.processIdentity && !frontier.processStops?.some((entry) => entry.identity.transportOrdinal === frontier.claim.transportOrdinal)) throw new PromptExecutionJournalError("PROMPT_EXECUTION_UNCERTAIN", "Provider response has no durable managed stop observation");
             frontier.claim = null;
             frontier.responses.push({ responseCallIndex: callIndex, requestDigest: requestDigest(actualRequest), raw: oversized ? null : rawCallResponse,
               schemaDigest: digest(JSON.stringify(actualRequest.jsonSchema)), providerKey: providerIdentity.providerKey, profileKey: providerIdentity.profileKey,

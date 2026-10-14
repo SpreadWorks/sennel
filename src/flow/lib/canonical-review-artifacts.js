@@ -1,4 +1,7 @@
-import { FlowExecutionInputBaseline } from "./flow-execution-contract.js";
+import { ProcessExecutionCheckoutIdentity, ProcessExecutionControlFailure } from "../../lib/process-execution-values.js";
+import { captureProcessExecutionCheckoutIdentity } from "../../lib/process-execution-runtime.js";
+import { FlowProcessStopEvidence } from "./process-runtime-evidence.js";
+import { FlowExecutionInputBaseline, FlowExecutionContract } from "./flow-execution-contract.js";
 import { CURRENT_FLOW_SCHEMA_REVISION } from "../../lib/flow-schema-revision.js";
 /**
  * Version-1 review execution boundary.
@@ -371,13 +374,66 @@ function evidenceFor({ artifact, phase: reviewPhase, taskId, treeSha, targetStat
   });
 }
 
+/** Read canonical receipt dependencies before handing pure facts to Review validation. */
+export function readCanonicalReviewProcessStop({ flowManager, state, activity, processStop, executionRoot = null }) {
+  if (processStop === null || processStop === undefined) return null;
+  const parameters = reviewProcessStopContractParameters(processStop, { state, activity });
+  const read = flowManager.readArtifact({ specId: state.specId, logicalKey: "execution.contract", parameters,
+    consumerNodeId: state.current?.at(-1) ?? activity.nodeId });
+  const contractDocument = JSON.parse(read.bytes.toString("utf8"));
+  const contractActivity = flowManager.activityLedger(state.specId).find((entry) => entry.id === read.descriptor.activityId);
+  const mainRoot = flowManager.specLocation(state.specId).repositoryRoot;
+  const repositoryIdentity = captureProcessExecutionCheckoutIdentity({ mainRoot });
+  const checkoutIdentity = executionRoot === null ? null
+    : captureProcessExecutionCheckoutIdentity({ mainRoot, executionRoot });
+  return assertStoredReviewProcessStop({ processStop, contractDocument, contractActivity, state, activity, checkoutIdentity, repositoryIdentity });
+}
+
+export function reviewProcessStopContractParameters(processStop, { state, activity }) {
+  const evidence = processStop instanceof FlowProcessStopEvidence ? processStop : FlowProcessStopEvidence.fromStored(processStop);
+  evidence.assertIdentity({ runId: state.runId, specId: state.specId, nodeId: activity.nodeId,
+    attemptId: activity.attemptId, attemptSequence: activity.sequence });
+  return FlowExecutionContract.parametersForBinding({ binding: { runId: state.runId, specId: state.specId,
+    nodeId: activity.nodeId, attempt: { id: activity.attemptId, sequence: activity.sequence } },
+    generation: activity.result?.draftSettlementReceipt?.executionLifecycle?.executionGeneration
+      ?? evidence.receipt.binding.value.executionGeneration });
+}
+
+export function assertStoredReviewProcessStop({ processStop, contractDocument, contractActivity, state, activity, checkoutIdentity = null, repositoryIdentity = null }) {
+  const contract = FlowExecutionContract.fromJSON(contractDocument.contract);
+  if (contractDocument.id !== contract.id || contractActivity?.nodeId !== activity.nodeId
+    || contractActivity?.attemptId !== activity.attemptId || contractActivity?.sequence !== activity.sequence) {
+    throw new ProcessExecutionControlFailure("stop-binding-mismatch", "Review stop evidence has no exact canonical execution contract producer");
+  }
+  return assertCanonicalReviewProcessStop({ processStop, executionContract: contract, checkoutIdentity, repositoryIdentity,
+    identity: { runId: state.runId, specId: state.specId, nodeId: activity.nodeId,
+      attemptId: activity.attemptId, attemptSequence: activity.sequence } });
+}
+
+/** Revalidate a saved OS observation against independently acquired canonical facts. */
+export function assertCanonicalReviewProcessStop({ processStop, executionContract, checkoutIdentity = null, repositoryIdentity = null, identity = {} }) {
+  const evidence = processStop instanceof FlowProcessStopEvidence ? processStop : FlowProcessStopEvidence.fromStored(processStop);
+  evidence.assertContract(executionContract, identity);
+  if (repositoryIdentity !== null) evidence.assertRepository(repositoryIdentity);
+  if (checkoutIdentity !== null) evidence.assertCheckout(checkoutIdentity);
+  const checkout = checkoutIdentity ?? evidence.receipt.checkoutIdentity;
+  evidence.assertIdentity({ workUnitId: ReviewWorkUnit.manifestPathFor({
+    executionRoot: checkout.executionRoot, runId: executionContract.runId, specId: executionContract.specId,
+    nodeId: executionContract.nodeId, attemptId: executionContract.attemptId,
+  }) });
+  if (evidence.receipt.invocation?.kind !== "command") throw new ProcessExecutionControlFailure("stop-binding-mismatch", "Review stop evidence requires its outer child command");
+  return evidence;
+}
+
 /** A retained normal Draft Review publication, independent of transient worker files. */
 export class CanonicalDraftReviewObservation {
   #artifact;
 
   constructor({ payload, state, route } = {}) {
     const source = jsonObject(payload, "canonical Draft Review payload");
-    const { workerOutput, canonicalEvidence, canonicalTarget, ...body } = source;
+    const { workerOutput, canonicalEvidence, canonicalTarget, processStop = null, ...body } = source;
+    this.processStop = processStop === null ? null : FlowProcessStopEvidence.fromStored(processStop);
+    this.processStop?.assertIdentity({ runId: state.runId, specId: state.specId, nodeId: route.reviewStepId });
     if (!isDeepStrictEqual(Object.keys(body).sort(), ["version", "phase", "sourceDraft", "sourceDraftRevision",
       "generatedAt", "verdict", "summary", "blockingFindings", "advisoryFindings", "repairTargets"].sort())) {
       throw new TypeError("Canonical Draft Review body requires its complete known fields");
@@ -429,6 +485,7 @@ export class CanonicalDraftReviewObservation {
       || !isDeepStrictEqual(record.artifact.toJSON(), this.#artifact.toJSON())) {
       throw new TypeError("Canonical Draft Review requires its exact Attempt publication record");
     }
+    this.processStop?.assertIdentity({ nodeId: record.nodeId, attemptSequence: record.attempt });
     const saved = record.publicationPayload();
     const commandResult = structuredClone(saved.result);
     attachCanonicalCommandResultArtifact(commandResult, record.artifact);
@@ -984,9 +1041,16 @@ export function canonicalReviewEvidencePublications({ evidence, nodeId, taskId =
 }
 
 export class CanonicalReviewPromotion {
-  constructor({ workUnit, phase: reviewPhase, taskId = null, treeSha, targetStateDigest, specReviewSource = null, requirementTestReviewSource = null, taskSource = null, taskContext = null, taskSpecDigest = null, taskReviewCycle = null, taskReviewPublicationBinding = null, implementationReviewCycle = null } = {}) {
+  constructor({ workUnit, processStop = null, checkoutIdentity = null, executionContract = null, phase: reviewPhase, taskId = null, treeSha, targetStateDigest, specReviewSource = null, requirementTestReviewSource = null, taskSource = null, taskContext = null, taskSpecDigest = null, taskReviewCycle = null, taskReviewPublicationBinding = null, implementationReviewCycle = null } = {}) {
     if (!(workUnit instanceof ReviewWorkUnit)) throw new Error("canonical review promotion requires a sealed execution work unit");
     this.workUnit = workUnit;
+    if (processStop !== null && !(processStop instanceof FlowProcessStopEvidence)) throw new TypeError("Review promotion requires typed process stop evidence");
+    this.processStop = processStop;
+    if (processStop !== null) {
+      if (!(checkoutIdentity instanceof ProcessExecutionCheckoutIdentity)) throw new TypeError("Review promotion requires captured checkout identity");
+      assertCanonicalReviewProcessStop({ processStop, executionContract, checkoutIdentity,
+        identity: { workUnitId: workUnit.manifestPath } });
+    }
     this.phase = phase(reviewPhase);
     this.taskId = taskId == null ? null : requiredText(taskId, "canonical review taskId");
     this.treeSha = requiredText(treeSha, "canonical review treeSha").toLowerCase();
@@ -1035,7 +1099,8 @@ export class CanonicalReviewPromotion {
       if (delta.stage !== "spec-review") {
         throw new Error("canonical spec-review worker output must be a spec-review delta");
       }
-      const next = mergeSpecReviewDelta({ review: this.specReviewSource.review, delta });
+      const merged = mergeSpecReviewDelta({ review: this.specReviewSource.review, delta });
+      const next = this.processStop === null ? merged : new CanonicalSpecReview({ ...merged.toJSON(), processStop: this.processStop.toJSON() });
       return Object.freeze({ sealed, delta, next });
     }
     const artifact = jsonObject(JSON.parse(sealed.bytes.toString("utf8")), `canonical ${this.phase} review artifact`);
@@ -1188,6 +1253,7 @@ export class CanonicalReviewPromotion {
         fingerprint: crypto.createHash("sha256").update(JSON.stringify(content)).digest("hex"),
       }];
     }
+    if (this.processStop !== null) normalizedArtifact.processStop = this.processStop.toJSON();
     normalizedArtifact.workerOutput = new ReviewWorkUnitOutputReceipt({
       digest: sealed.seal.output.digest,
       byteLength: sealed.seal.output.byteLength,

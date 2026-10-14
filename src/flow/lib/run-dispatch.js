@@ -1,4 +1,6 @@
 import { flowTemporaryRoot } from "./flow-context.js";
+import { FlowDispatchLease } from "./flow-dispatch-lease.js";
+export { FlowDispatchLease } from "./flow-dispatch-lease.js";
 import { FlowExecutionContract, FlowExecutionContractRefusal } from "./flow-execution-contract.js";
 import { acceptanceStepRegistration, initializeAcceptanceDecisionAwait } from "../engine/composition/acceptance.js";
 import { finalizationStepRegistration } from "../engine/composition/finalization.js";
@@ -41,8 +43,6 @@ import { DeferredAgentInvocationMetric } from "../../lib/agent-invocation-metric
 import { flowCommands } from "../../lib/command-registry.js";
 import { dispatch } from "../../lib/dispatcher.js";
 import { FlowHandoffAuthorityLease } from "../../lib/flow-handoff-authority-lease.js";
-import { ProcessLock } from "../../lib/process-lock.js";
-import { RealDirectoryAuthority } from "../../lib/real-directory-authority.js";
 import {
   AbortedDirective,
   AwaitDraftQuestionDirective,
@@ -119,6 +119,9 @@ import {
   DraftWorkerStepBinding,
 } from "../engine/connectors/draft/draft-step-binding.js";
 import { isConditionalDraftWorkerStep } from "./draft-conditional-worker.js";
+import { ProcessExecutionControlFailure } from "../../lib/process-execution-values.js";
+import { captureFlowProcessExecutionBinding, preparedFlowDispatchLease, withFlowProcessRuntime } from "./process-runtime-admission.js";
+import { FlowProcessStopEvidence, workerProcessStopIdentity } from "./process-runtime-evidence.js";
 
 function executeSelectedPrepareStepExecution(input) {
   const registration = prepareStepRegistration(input.stepId);
@@ -143,7 +146,6 @@ export function executeFinalizationDispatch(input) {
 
 const DEFAULT_MAX_DISPATCHES = 256;
 const DEFAULT_MAX_STALLED_DISPATCHES = 3;
-const DISPATCH_LOCK_KIND = "flow-dispatch";
 const RESUMABLE_DISPATCH_BOUNDARIES = new Set([
   "approval_required",
   "auto_upgrade_decision",
@@ -493,6 +495,8 @@ function commandEnvelope(output, commandName, exitCode) {
     error.code = "FLOW_DISPATCH_COMMAND_ENVELOPE_INVALID";
     throw error;
   }
+  const controlFailure = ProcessExecutionControlFailure.fromEnvelope(envelope);
+  if (controlFailure !== null) throw controlFailure;
   if (exitCode !== 0 && envelope?.ok !== false) {
     const details = Array.isArray(envelope?.errors)
       ? envelope.errors.flatMap((entry) => Array.isArray(entry?.messages) ? entry.messages : [])
@@ -857,62 +861,6 @@ export function dispatchRepositoryFingerprint(ctx) {
   });
 }
 
-function dispatchLockError(status, message, { lockPath, owner = null, cause } = {}) {
-  const error = new Error(message, { cause });
-  error.name = "FlowDispatchLockError";
-  error.code = status === "live"
-    ? "FLOW_DISPATCH_BUSY"
-    : `FLOW_DISPATCH_LOCK_${status.replace(/-/g, "_").toUpperCase()}`;
-  error.lockStatus = status;
-  error.lockPath = lockPath;
-  error.owner = owner;
-  return error;
-}
-
-export class FlowDispatchLease {
-  static pathFor(mainRoot, runId) {
-    return path.join(mainRoot, PRODUCT.managedPath(`.flow-dispatch-${flowDispatchDigest(runId).slice(0, 24)}.lock`));
-  }
-
-  constructor(session) {
-    if (!(session instanceof FlowDispatchSession)) {
-      throw new Error("FlowDispatchLease requires a FlowDispatchSession");
-    }
-    this.session = session;
-    const { target } = session;
-    const mainRoot = target.dispatchLockRoot;
-    if (!mainRoot) {
-      throw new Error("FlowDispatchLease target requires captured authority");
-    }
-    const { runId } = target;
-    const root = new RealDirectoryAuthority(mainRoot, {
-      errorFactory: dispatchLockError,
-    });
-    const directory = new RealDirectoryAuthority(path.join(mainRoot, PRODUCT.managedDirName), {
-      create: true,
-      parentAuthority: root,
-      errorFactory: dispatchLockError,
-    });
-    this.lock = new ProcessLock({
-      directoryAuthority: directory,
-      fileName: path.basename(FlowDispatchLease.pathFor(mainRoot, runId)),
-      kind: DISPATCH_LOCK_KIND,
-      authority: {
-        runId,
-        targetDigest: target.digest,
-      },
-      errorFactory: dispatchLockError,
-    });
-  }
-
-  acquire() {
-    return this.lock.acquire();
-  }
-
-  release() {
-    this.lock.release();
-  }
-}
 
 function persistDispatchApproval(ctx, invocation, fingerprint) {
   if (
@@ -1137,6 +1085,12 @@ export class FlowDispatchWork {
       commandId: this.handoffRequest.policy.preservesRejectedSource ? `flow.dispatch.${this.handoffRequest.stepId}` : "flow.dispatch",
       executionWorkDir: ctx.executionRoot || ctx.root,
       temporaryRoot: flowTemporaryRoot(ctx),
+      processExecutionBinding: captureFlowProcessExecutionBinding(ctx, {
+        executionContract: this.handoffRequest.executionContract,
+        dispatchInvocationId: this.handoffRequest.dispatchInvocationId,
+        requestDigest: this.handoffRequest.requestDigest,
+        commandId: `flow.dispatch.${this.handoffRequest.stepId}`,
+      }),
       cacheMode: "bypass", retryCount: 0, waitForProcessTree: true,
       executionEnvironment: this.executionEnvironment(workerInvocation), deferredMetric,
       onSupervisorEvent(event) {
@@ -1479,6 +1433,7 @@ export default class RunDispatchCommand extends FlowCommand {
         ...targetGuardInput(target), previousExecutionContract,
       });
     } catch (error) {
+      if (error instanceof ProcessExecutionControlFailure) throw error;
       return Envelope.fail(
         "get",
         "next-action",
@@ -2016,6 +1971,7 @@ export default class RunDispatchCommand extends FlowCommand {
     let handoffAuthorityAcquired = false;
     let work = null;
     let resumeSealedDraftExecution = false;
+    let resumeStoppedArtifactExecution = false;
     let publicationRecovery = false;
     let conditionalWorkerNewlyClaimed = false;
     let conditionalWorkerContinuation = null;
@@ -2134,7 +2090,11 @@ export default class RunDispatchCommand extends FlowCommand {
               }
             }
           } else {
-            handoffRequest = this.handoffCoordinator.createRequest({
+            handoffRequest = this.handoffCoordinator.stoppedArtifactRequest({
+              ctx, state, stepId: action.nextAction.step,
+            });
+            resumeStoppedArtifactExecution = handoffRequest !== null;
+            handoffRequest ??= this.handoffCoordinator.createRequest({
               ctx, state, invocation, workerInstructions,
               previousExecutionContract: retryFeedback?.previousExecutionContract ?? null,
             });
@@ -2142,7 +2102,8 @@ export default class RunDispatchCommand extends FlowCommand {
         }
         resumeSealedDraftExecution = (conditionalDraftExecution
           && conditionalWorkerContinuation.usesSavedResponse)
-          || repairExecution?.sealedReplay === true;
+          || repairExecution?.sealedReplay === true
+          || resumeStoppedArtifactExecution;
         if (!resumeSealedDraftExecution) {
           work = new FlowDispatchWork(workerInvocation, handoffRequest);
         }
@@ -2197,6 +2158,7 @@ export default class RunDispatchCommand extends FlowCommand {
       let agentError = null;
       let sourceResponseError = null;
       let sourceWorkerStopped = false;
+      let processStopEvidence = null;
       try {
         let responseText;
         let processError = null;
@@ -2245,7 +2207,10 @@ export default class RunDispatchCommand extends FlowCommand {
               this.handoffCoordinator.startSourceWorker({ ctx, request: handoffRequest, invocation });
               sourceWorkerStarted = true;
             }
-            responseText = await agent.call(prompt, callOptions);
+            responseText = await agent.call(prompt, { ...callOptions,
+              onProcessExecutionStop(receipt) { processStopEvidence = new FlowProcessStopEvidence(receipt)
+                .assertContract(handoffRequest.executionContract, workerProcessStopIdentity(handoffRequest)); },
+            });
           }
         } catch (error) {
           if (handoffRequest?.stepId === "spec-gate-repair" && error instanceof PromptBatchingError) {
@@ -2258,6 +2223,7 @@ export default class RunDispatchCommand extends FlowCommand {
           throw error;
         } finally {
           if (handoffRequest?.policy.kind === "source" && sourceWorkerStarted) {
+            if (processError instanceof ProcessExecutionControlFailure) throw processError;
             if (processError?.unterminatedMembers?.length > 0) {
               throw new WorkerArtifactHandoffError(
                 "recovery-required", "FLOW_SOURCE_HANDOFF_START_UNCERTAIN",
@@ -2265,7 +2231,7 @@ export default class RunDispatchCommand extends FlowCommand {
                 { cause: processError, retryable: false, recoveryPossible: false },
               );
             }
-            this.handoffCoordinator.finishSourceWorker({ ctx, request: handoffRequest });
+            this.handoffCoordinator.finishSourceWorker({ ctx, request: handoffRequest, processStopEvidence });
             sourceWorkerStopped = true;
             workerArtifactAuthority = this.handoffCoordinator.sourceMutationAuthority({ ctx, request: handoffRequest });
           }
@@ -2275,6 +2241,7 @@ export default class RunDispatchCommand extends FlowCommand {
           sealParentMaterializedSourceWorkerEffect({ request: handoffRequest });
         }
       } catch (error) {
+        if (error instanceof ProcessExecutionControlFailure) throw error;
         agentError = error;
         if (agentError instanceof AgentFailure) agentError.supervisorEvents = Object.freeze(supervisorEvents);
         if (handoffRequest?.policy.kind === "source") {
@@ -2477,6 +2444,12 @@ export default class RunDispatchCommand extends FlowCommand {
   }
 
   async execute(ctx) {
+    return withFlowProcessRuntime(ctx, () => this.#executeAdmitted(ctx), {
+      commandId: "dispatch", dispatchLeaseFactory: this.leaseFactory,
+    });
+  }
+
+  async #executeAdmitted(ctx) {
     let target;
     try {
       target = FlowDispatchTarget.captureContext(ctx);
@@ -2490,9 +2463,10 @@ export default class RunDispatchCommand extends FlowCommand {
     }
 
     const session = new FlowDispatchSession({ target });
-    const lease = this.leaseFactory(session);
+    const preparedLease = preparedFlowDispatchLease();
+    const lease = preparedLease ?? this.leaseFactory(session);
     try {
-      lease.acquire();
+      if (preparedLease === null) lease.acquire();
     } catch (error) {
       return this.failure(
         ctx,
@@ -2537,7 +2511,7 @@ export default class RunDispatchCommand extends FlowCommand {
         );
       }
     } finally {
-      lease.release();
+      if (preparedLease === null) lease.release();
     }
   }
 
@@ -2552,6 +2526,7 @@ export default class RunDispatchCommand extends FlowCommand {
         flowManager: ctx.flowManager,
         specId: ctx.specId ?? ctx.flowState?.specId,
         executionRoot: ctx.executionRoot || ctx.root,
+        mainRoot: ctx.mainRoot || ctx.root,
       });
     } catch (error) {
       if (!(error instanceof WorkerArtifactHandoffError)) throw error;
@@ -2605,6 +2580,7 @@ export default class RunDispatchCommand extends FlowCommand {
             expectIdentity: action.nonblockingDecision.identity().toJSON(),
           });
         } catch (error) {
+          if (error instanceof ProcessExecutionControlFailure) throw error;
           return this.failure(
             ctx,
             error.code || "FLOW_DISPATCH_NONBLOCKING_DECISION_FAILED",
@@ -2628,6 +2604,7 @@ export default class RunDispatchCommand extends FlowCommand {
             specId: ctx.specId ?? ctx.flowState.specId, stepId: action.nextAction.step });
           current = await this.fetchNextAction(target);
         } catch (error) {
+          if (error instanceof ProcessExecutionControlFailure) throw error;
           return this.failure(ctx, error.code || "FLOW_HOST_FILTER_CHECKPOINT_FAILED", error.message,
             blockedBoundary({ target, nextAction: current, dispatchCount,
               message: "The host filter request did not receive its canonical waiting receipt." }));
@@ -2807,6 +2784,7 @@ export default class RunDispatchCommand extends FlowCommand {
           invocation.assertCurrent(activeAction, currentState);
         }
       } catch (error) {
+        if (error instanceof ProcessExecutionControlFailure) throw error;
         return this.failure(
           ctx,
           error.code || "FLOW_DISPATCH_INVOCATION_STALE",
@@ -2827,6 +2805,7 @@ export default class RunDispatchCommand extends FlowCommand {
       try {
         approvalContinuation = await this.runApprovalContinuation(ctx, invocation);
       } catch (error) {
+        if (error instanceof ProcessExecutionControlFailure) throw error;
         return this.failure(
           ctx,
           error.code || "FLOW_DISPATCH_APPROVAL_CONTINUATION_FAILED",
@@ -2849,6 +2828,7 @@ export default class RunDispatchCommand extends FlowCommand {
       try {
         dispatcherOwnedRepair = await this.runDispatcherOwnedRepair(ctx, target, action);
       } catch (error) {
+        if (error instanceof ProcessExecutionControlFailure) throw error;
         return this.failure(
           ctx,
           error.code || "FLOW_DISPATCH_REPAIR_COMMAND_FAILED",
@@ -2895,6 +2875,7 @@ export default class RunDispatchCommand extends FlowCommand {
       try {
         dispatcherOwnedRecovery = await this.runDispatcherOwnedRecovery(ctx, target, action);
       } catch (error) {
+        if (error instanceof ProcessExecutionControlFailure) throw error;
         return this.failure(
           ctx,
           error.code || "FLOW_DISPATCH_RECOVERY_COMMAND_FAILED",
@@ -2941,6 +2922,7 @@ export default class RunDispatchCommand extends FlowCommand {
       try {
         dispatcherOwnedCommand = await this.runDispatcherOwnedCommand(ctx, target, action, invocation);
       } catch (error) {
+        if (error instanceof ProcessExecutionControlFailure) throw error;
         return this.failure(
           ctx,
           error.code || "FLOW_DISPATCH_COMMAND_FAILED",

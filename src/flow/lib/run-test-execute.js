@@ -1,3 +1,5 @@
+import { withFlowProcessRuntime } from "./process-runtime-admission.js";
+import { ProcessExecutionControlFailure } from "../../lib/process-execution-runtime.js";
 /**
  * src/flow/lib/run-test-execute.js
  *
@@ -449,6 +451,10 @@ export default class RunTestExecuteCommand extends FlowCommand {
   }
 
   async execute(ctx) {
+    return withFlowProcessRuntime(ctx, () => this.#executeAdmitted(ctx), { commandId: "test-execute" });
+  }
+
+  async #executeAdmitted(ctx) {
     const { root } = ctx;
     const executionRoot = ctx.executionRoot || root;
     if (isCanonicalFlowState(ctx.flowState)) {
@@ -466,6 +472,7 @@ export default class RunTestExecuteCommand extends FlowCommand {
       try {
         commandResult = await executeCanonicalTestExecution(executionContext, config, { runSpecLocal: this.runSpecLocal });
       } catch (err) {
+        if (err instanceof ProcessExecutionControlFailure) throw err;
         ctx.flowManager.appendIssueLog({
           specId: ctx.flowState.specId,
           entry: prerequisiteIssueEntry(executionRoot, ctx.flowState, err),

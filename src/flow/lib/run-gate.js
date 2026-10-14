@@ -70,6 +70,8 @@ import {
   VALID_LEVEL_PHASE_COMBINATIONS,
 } from "../../lib/constants.js";
 import { FlowCommand } from "./base-command.js";
+import { ProcessExecutionControlFailure } from "../../lib/process-execution-values.js";
+import { captureFlowProcessExecutionBinding, withFlowProcessRuntime } from "./process-runtime-admission.js";
 import { appendCanonicalIssueLogEntry } from "./set-issue-log.js";
 import {
   resolveGatePhaseFromState,
@@ -1547,18 +1549,23 @@ export function buildGateResultArtifact({
 // ---------------------------------------------------------------------------
 
 export class GateProviderCallAdmission {
+  #processExecutionBinding = null;
   constructor(base, guard) {
     this.base = base;
     this.guard = guard;
   }
   claim() { this.base.claim(); return this; }
   async beforeProviderAttempt(context) {
-    await this.guard(context);
+    this.#processExecutionBinding = await this.guard(context);
     return this.base.beforeProviderAttempt(context);
   }
   afterProviderFailure(failure, context) { return this.base.afterProviderFailure(failure, context); }
   recordCacheHit(context) { return this.base.recordCacheHit(context); }
   settle() { return this.base.settle(); }
+  observeProcessStop(receipt, context) { return this.base.observeProcessStop?.(receipt, context); }
+  get invocation() { return this.base.invocation; }
+  get processExecutionIdentity() { return this.base.processExecutionIdentity; }
+  get processExecutionBinding() { return this.#processExecutionBinding ?? this.base.processExecutionBinding; }
   get claimed() { return this.base.claimed; }
   get attemptCount() { return this.base.attemptCount; }
   get initialAttemptCount() { return this.base.initialAttemptCount; }
@@ -1670,9 +1677,11 @@ function requiredGateAgentResolutionFailure(agent) {
 }
 
 function requiredGateEvaluationFailure(error, protocolGroups = []) {
+  if (error instanceof ProcessExecutionControlFailure) throw error;
   // Preserve the existing protocol/provider recovery classification through
   // the shared executor's incomplete-batch wrapper.
   while (error instanceof PromptBatchingError && error.cause) error = error.cause;
+  if (error instanceof ProcessExecutionControlFailure) throw error;
   if (error instanceof GateOutputProtocolFailure && protocolGroups.length) {
     error.data.responseProtocolEvidence = new AgentResponseProtocolEvidence({ groups: protocolGroups });
     error.data.providerCalls = protocolGroups.reduce((sum, group) => sum + group.providerAttemptCount, 0);
@@ -3881,6 +3890,10 @@ export class RunGateCommand extends FlowCommand {
   }
 
   async execute(ctx) {
+    return withFlowProcessRuntime(ctx, () => this.#executeAdmitted(ctx), { commandId: "gate" });
+  }
+
+  async #executeAdmitted(ctx) {
     const { root } = ctx;
     const executionRoot = ctx.executionRoot || root;
     if (typeof ctx.flowManager?.loadReadOnly === "function" && ctx.flowState?.specId) {
@@ -4121,6 +4134,9 @@ export class RunGateCommand extends FlowCommand {
           throw error;
         }
       }
+      return captureFlowProcessExecutionBinding(canonicalCtx, {
+        executionContract, commandId: "flow.spec.gate",
+      });
     };
     let result;
 

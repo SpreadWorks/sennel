@@ -1,3 +1,4 @@
+import { captureProcessExecutionCheckoutIdentity } from "../../lib/process-execution-runtime.js";
 import { FlowExecutionContract, FlowExecutionContractRefusal } from "./flow-execution-contract.js";
 import { executionContractArtifact, ExecutionContractPublicationAdmission,
   readExecutionContractFromView, readStoredExecutionContractFromView, readPromptExecutionProgressFromView, readPromptExecutionEpisodeFromView,
@@ -4315,6 +4316,13 @@ export class CanonicalFlowManagerStore {
     const resolved = this.#resolveSpecId(specId);
     if (resolved === null) throw new CurrentFlowStateInvariantError("no canonical active Flow");
     if (!(event instanceof SourceHandoffEvent)) throw new CurrentFlowStateInvariantError("source handoff event must be typed");
+    const checkoutIdentity = event.processStopEvidence === null ? null
+      : captureProcessExecutionCheckoutIdentity({ mainRoot: this.mainRoot, executionRoot: this.root });
+    if (event.processStopEvidence !== null) {
+      event.processStopEvidence.assertContract(executionContract, {
+        dispatchInvocationId: event.identity.dispatchInvocationId, requestDigest: event.requestDigest,
+      }).assertCheckout(checkoutIdentity);
+    }
     const authority = this.readSourceHandoffAuthority({ specId: resolved, identity: event.identity });
     if (authority.settled) throw new CurrentFlowStateConflictError("source handoff is already settled");
     if (event.checkpointDigest !== authority.checkpoint.digest
@@ -4332,6 +4340,8 @@ export class CanonicalFlowManagerStore {
         identity: event.identity, checkpoint: authority.checkpoint,
         expectedCheckpointDigest: authority.checkpoint.digest,
         expectedPreviousEventDigest: authority.event.digest,
+        processStopEvidence: event.processStopEvidence, executionContract,
+        checkoutIdentity,
       })),
     });
     return this.readSourceHandoffAuthority({ specId: resolved, identity: event.identity });
@@ -4342,8 +4352,10 @@ export class CanonicalFlowManagerStore {
     const resolved = this.#resolveSpecId(specId);
     if (resolved === null) throw new CurrentFlowStateInvariantError("no canonical active Flow");
     const expected = identity instanceof SourceWorkerHandoffIdentity ? identity : new SourceWorkerHandoffIdentity(identity);
+    const repositoryIdentity = captureProcessExecutionCheckoutIdentity({ mainRoot: this.mainRoot });
     const authority = this.runtime.readCanonicalTransitionView(resolved, (view) => (
-      readSourceHandoffAuthorityFromView({ view, identity: expected, root: this.root, canonicalLocation: this.location(resolved) })
+      readSourceHandoffAuthorityFromView({ view, identity: expected, root: this.root, canonicalLocation: this.location(resolved),
+        repositoryIdentity })
     ));
     if (authority === null && !optional) throw new CurrentFlowStateInvariantError("canonical source handoff checkpoint is absent");
     if (authority !== null && requireUnsettled && authority.settled) {
@@ -4396,6 +4408,7 @@ export class CanonicalFlowManagerStore {
   sourceHandoffAuthorities({ specId = null, unsettledOnly = false } = {}) {
     const resolved = this.#resolveSpecId(specId);
     if (resolved === null) return Object.freeze([]);
+    const repositoryIdentity = captureProcessExecutionCheckoutIdentity({ mainRoot: this.mainRoot });
     return this.runtime.readCanonicalTransitionView(resolved, (view) => {
       const identities = view.catalog.artifacts
         .filter((entry) => entry.logicalKey === "source.handoff.checkpoint")
@@ -4408,6 +4421,7 @@ export class CanonicalFlowManagerStore {
         });
       const authorities = identities.map((entry) => readSourceHandoffAuthorityFromView({
         view, identity: entry, root: this.root, canonicalLocation: this.location(resolved),
+        repositoryIdentity,
       }));
       return Object.freeze(authorities.filter((entry) => !unsettledOnly || !entry.settled));
     });
@@ -5722,19 +5736,23 @@ export class CanonicalFlowManagerStore {
       (view) => readExecutionContractFromView(view, executionContract));
   }
 
-  readPromptExecutionProgress({ executionContract, scope }) {
+  readPromptExecutionProgress({ executionContract, scope, checkoutIdentity = null }) {
+    checkoutIdentity ??= captureProcessExecutionCheckoutIdentity({ mainRoot: this.mainRoot,
+      executionRoot: this.executionRoot(this.loadReadOnly(executionContract.specId)) });
     return this.runtime.readCanonicalTransitionView(executionContract.specId,
-      (view) => readPromptExecutionProgressFromView(view, executionContract, scope));
+      (view) => readPromptExecutionProgressFromView(view, executionContract, scope, checkoutIdentity));
   }
 
-  readPromptExecutionEpisode({ executionContract }) {
+  readPromptExecutionEpisode({ executionContract, checkoutIdentity = null }) {
+    checkoutIdentity ??= captureProcessExecutionCheckoutIdentity({ mainRoot: this.mainRoot,
+      executionRoot: this.executionRoot(this.loadReadOnly(executionContract.specId)) });
     return this.runtime.readCanonicalTransitionView(executionContract.specId,
-      (view) => readPromptExecutionEpisodeFromView(view, executionContract));
+      (view) => readPromptExecutionEpisodeFromView(view, executionContract, checkoutIdentity));
   }
 
-  savePromptExecutionProgress({ executionContract, scope, record, expectedSnapshotDigest, operationId }) {
+  savePromptExecutionProgress({ executionContract, scope, record, expectedSnapshotDigest, operationId, expectedCheckoutIdentity = null }) {
     const publication = new PromptExecutionProgressPublication({ contract: executionContract,
-      scope, record, expectedSnapshotDigest, operationId });
+      scope, record, expectedSnapshotDigest, operationId, expectedCheckoutIdentity });
     const prepared = this.runtime.readCanonicalTransitionView(executionContract.specId,
       (view) => publication.prepare(view));
     try {

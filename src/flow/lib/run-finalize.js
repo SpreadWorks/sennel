@@ -11,7 +11,7 @@ import path from "path";
 import { FlowTargetIdentityAuthority } from "../../lib/flow-target-identity-authority.js";
 import { PRODUCT } from "../../lib/product.js";
 import { TemporaryPaths } from "../../lib/temporary-paths.js";
-import { runCmd, assertOk } from "../../lib/process.js";
+import { runManagedCmdAsync, assertOk } from "../../lib/process.js";
 import { findStepById } from "./step-tree.js";
 import {
   runGit,
@@ -547,11 +547,11 @@ export function runPreflightChecks({ root, baseBranch, featureBranch, commitStep
 /**
  * Run a one-shot migration script bundled under the CURRENT spec's directory.
  */
-export function runMigrationHook(root, specRelPath, executionRoot = root) {
+export async function runMigrationHook(root, specRelPath, executionRoot = root) {
   if (!specRelPath) return;
   const specDir = path.dirname(specRelPath);
   const scriptPath = path.join(root, specDir, "scripts", "finalize-migration.js");
   if (!fs.existsSync(scriptPath)) return;
-  const res = runCmd("node", [scriptPath], { cwd: executionRoot });
+  const res = await runManagedCmdAsync("node", [scriptPath], { cwd: executionRoot });
   assertOk(res, `finalize migration script failed: ${scriptPath}`);
 }

@@ -38,6 +38,7 @@ import {
 } from "./lib/agent-config-files.js";
 import { removeLegacyAgentArtifacts } from "./lib/legacy-agent-artifact-cleanup.js";
 import { FlowHandoffAuthorityLease } from "./lib/flow-handoff-authority-lease.js";
+import { withFlowProcessRuntime } from "./flow/lib/process-runtime-admission.js";
 import {
   WORKER_ARTIFACT_HANDOFF_REQUEST_ENV,
   WorkerArtifactHandoffError,
@@ -304,55 +305,96 @@ async function runNormalUpgrade(cli) {
   const workerHandoff = workerHandoffRequest === null
     ? null
     : assertWorkerUpgradeAllowed({ requestPath: workerHandoffRequest, dryRun: cli.dryRun });
-  // A source worker must use the canonical Flow's base branch when computing
-  // evidence, but never obtains its publication lease or writes the Version
-  // Store. Artifact-only dry-runs do not produce a handoff payload.
-  // An external materialized upgrade serializes against the checkout before
-  // reading the active registry. Re-resolving only after this acquisition
-  // closes the no-active → dispatcher-start race.
-  const authorityLease = !dryRun && workerHandoffRequest === null
-    ? new FlowHandoffAuthorityLease({
-      mainRoot: container.has("mainRoot") ? container.get("mainRoot") : root,
-      executionRoot: root,
-    })
-    : null;
-  if (authorityLease !== null) {
-    logger.log("[upgrade] waiting for checkout handoff authority when necessary");
-    authorityLease.acquire();
-  }
-  try {
-    const activeFlows = dryRun
-      ? ActiveUpgradeFlowCollection.empty()
-      : workerHandoffRequest === null
-      ? resolveActiveUpgradeFlows(root)
-      : workerHandoff === null
+  const runWithAuthority = async () => {
+    // A source worker must use the canonical Flow's base branch when computing
+    // evidence, but never obtains its publication lease or writes the Version
+    // Store. Artifact-only dry-runs do not produce a handoff payload.
+    // An external materialized upgrade serializes against the checkout before
+    // reading the active registry. Re-resolving only after this acquisition
+    // closes the no-active → dispatcher-start race.
+    const authorityLease = !dryRun && workerHandoffRequest === null
+      ? new FlowHandoffAuthorityLease({
+        mainRoot: container.has("mainRoot") ? container.get("mainRoot") : root,
+        executionRoot: root,
+      })
+      : null;
+    if (authorityLease !== null) {
+      logger.log("[upgrade] waiting for checkout handoff authority when necessary");
+      authorityLease.acquire();
+    }
+    try {
+      const activeFlows = dryRun
         ? ActiveUpgradeFlowCollection.empty()
-        : activeUpgradeFlowForWorker(workerHandoff, root);
-    // Reject a known-unwritable canonical target before modifying skill,
-    // preset, or agent files. Publication performs the same preflight again
-    // to close state changes that race with the upgrade work itself.
-    if (workerHandoffRequest === null) activeFlows.assertWritable();
-    const command = ["sennel", "upgrade", ...process.argv.slice(2)].join(" ");
+        : workerHandoffRequest === null
+        ? resolveActiveUpgradeFlows(root)
+        : workerHandoff === null
+          ? ActiveUpgradeFlowCollection.empty()
+          : activeUpgradeFlowForWorker(workerHandoff, root);
+      // Reject a known-unwritable canonical target before modifying skill,
+      // preset, or agent files. Publication performs the same preflight again
+      // to close state changes that race with the upgrade work itself.
+      if (workerHandoffRequest === null) activeFlows.assertWritable();
+      const command = ["sennel", "upgrade", ...process.argv.slice(2)].join(" ");
 
-    const summary = {
-      skills: { updated: 0, unchanged: 0, removed: 0 },
-      legacyAgentArtifacts: { removed: 0, unchanged: 0 },
-      presets: { copied: 0 },
-      agentFiles: { updated: 0, unchanged: 0, missing: 0 },
-      config: { changed: false },
-    };
+      const summary = {
+        skills: { updated: 0, unchanged: 0, removed: 0 },
+        legacyAgentArtifacts: { removed: 0, unchanged: 0 },
+        presets: { copied: 0 },
+        agentFiles: { updated: 0, unchanged: 0, missing: 0 },
+        config: { changed: false },
+      };
 
-    const config = loadConfig(root);
-    const t = translate();
-    // Fail-fast: chapters ↔ preset chain static integrity check (spec 218).
-    if (config.type) {
+      const config = loadConfig(root);
+      const t = translate();
+      // Fail-fast: chapters ↔ preset chain static integrity check (spec 218).
+      if (config.type) {
+        try {
+          validatePresetChain(config.type, root, {
+            languages: config.docs?.languages || [],
+            configChapters: config.chapters,
+          });
+        } catch (e) {
+          logger.error(e.message);
+          writeActiveUpgradeArtifact({
+            root,
+            activeFlows,
+            workerHandoffRequest: workerHandoff === null ? null : workerHandoffRequest,
+            command,
+            dryRun,
+            exitCode: EXIT_ERROR,
+            result: "failed",
+            summary: { ...summary, error: e.message },
+          });
+          process.exitCode = EXIT_ERROR;
+          return;
+        }
+      }
+
+      if (dryRun) {
+        logger.log(t("ui:upgrade.dryRunHeader"));
+      }
+
+      function logSkillResults(results) {
+        for (const { name, status } of results) {
+          if (status === "updated") {
+            logger.log(t("ui:upgrade.skillUpdated", { name }));
+          } else {
+            logger.log(t("ui:upgrade.skillUnchanged", { name }));
+          }
+        }
+      }
+
+      // Plugins may add skills, but bundled product skills are the final authority
+      // for a name collision.
+      let skillResults = [];
       try {
-        validatePresetChain(config.type, root, {
-          languages: config.docs?.languages || [],
-          configChapters: config.chapters,
-        });
+        for (const skillsDir of enabledPluginSkillSourceDirs(root)) {
+          skillResults.push(...deploySkillsFromDir({ skillsDir, workRoot: root, dryRun }));
+        }
+        // Bundled product skills win over plugins that declare a colliding name.
+        skillResults.push(...deploySkills(root, { dryRun, force: true }));
       } catch (e) {
-        logger.error(e.message);
+        logger.error(`upgrade failed: ${e.message}`);
         writeActiveUpgradeArtifact({
           root,
           activeFlows,
@@ -361,145 +403,115 @@ async function runNormalUpgrade(cli) {
           dryRun,
           exitCode: EXIT_ERROR,
           result: "failed",
-          summary: { ...summary, error: e.message },
+          summary: { ...summary, error: `upgrade failed: ${e.message}` },
         });
         process.exitCode = EXIT_ERROR;
         return;
       }
-    }
+      logSkillResults(skillResults);
+      summary.skills.updated = skillResults.filter((r) => r.status === "updated").length;
+      summary.skills.unchanged = skillResults.filter((r) => r.status === "unchanged").length;
 
-    if (dryRun) {
-      logger.log(t("ui:upgrade.dryRunHeader"));
-    }
+      // Remove obsolete canonical and explicitly retired product skill namespaces.
+      const removedSkills = cleanupObsoleteSkills(root, [MAIN_SKILLS_DIR, ...enabledPluginSkillSourceDirs(root)], { dryRun });
+      summary.skills.removed = removedSkills.length;
+      for (const { name } of removedSkills) {
+        logger.log(t("ui:upgrade.skillRemoved", { name }));
+      }
 
-    function logSkillResults(results) {
-      for (const { name, status } of results) {
-        if (status === "updated") {
-          logger.log(t("ui:upgrade.skillUpdated", { name }));
+      try {
+        const cleanup = removeLegacyAgentArtifacts(root, { dryRun });
+        const removed = Number(cleanup.removedHandler) + Number(cleanup.updatedConfig);
+        if (removed > 0) {
+          summary.legacyAgentArtifacts.removed += removed;
+          logger.log("[upgrade] removed legacy agent-host Flow hook artifacts");
         } else {
-          logger.log(t("ui:upgrade.skillUnchanged", { name }));
+          summary.legacyAgentArtifacts.unchanged += 1;
+        }
+      } catch (e) {
+        logger.error(`upgrade failed: ${e.message}`);
+        writeActiveUpgradeArtifact({
+          root,
+          activeFlows,
+          workerHandoffRequest: workerHandoff === null ? null : workerHandoffRequest,
+          command,
+          dryRun,
+          exitCode: EXIT_ERROR,
+          result: "failed",
+          summary: { ...summary, error: `legacy agent artifact cleanup failed: ${e.message}` },
+        });
+        process.exitCode = EXIT_ERROR;
+        return;
+      }
+
+      if (!dryRun) {
+        const presetCopies = deployPresetCopies(root, {
+          presetKeys: ["base"],
+          languages: config.docs?.languages?.length ? config.docs.languages : ["en", "ja"],
+        });
+        summary.presets.copied = presetCopies.length;
+      }
+
+      const agentFileResults = AGENT_CONFIG_FILE_NAMES.map((fileName) =>
+        refreshAgentFlowFile(path.join(root, fileName), config.lang || DEFAULT_LANG, {
+          dryRun,
+          projectRoot: root,
+          presetTypes: config.type || "base",
+        }));
+      for (const result of agentFileResults) {
+        summary.agentFiles[result.status] += 1;
+        if (result.status === "updated") {
+          logger.log(t("ui:upgrade.agentFileUpdated", { file: result.file }));
+        } else if (result.status === "unchanged") {
+          logger.log(t("ui:upgrade.agentFileUnchanged", { file: result.file }));
+        } else {
+          logger.log(t("ui:upgrade.agentFileMissing", { file: result.file }));
         }
       }
-    }
 
-    // Plugins may add skills, but bundled product skills are the final authority
-    // for a name collision.
-    let skillResults = [];
-    try {
-      for (const skillsDir of enabledPluginSkillSourceDirs(root)) {
-        skillResults.push(...deploySkillsFromDir({ skillsDir, workRoot: root, dryRun }));
-      }
-      // Bundled product skills win over plugins that declare a colliding name.
-      skillResults.push(...deploySkills(root, { dryRun, force: true }));
-    } catch (e) {
-      logger.error(`upgrade failed: ${e.message}`);
-      writeActiveUpgradeArtifact({
-        root,
-        activeFlows,
-        workerHandoffRequest: workerHandoff === null ? null : workerHandoffRequest,
-        command,
-        dryRun,
-        exitCode: EXIT_ERROR,
-        result: "failed",
-        summary: { ...summary, error: `upgrade failed: ${e.message}` },
-      });
-      process.exitCode = EXIT_ERROR;
-      return;
-    }
-    logSkillResults(skillResults);
-    summary.skills.updated = skillResults.filter((r) => r.status === "updated").length;
-    summary.skills.unchanged = skillResults.filter((r) => r.status === "unchanged").length;
-
-    // Remove obsolete canonical and explicitly retired product skill namespaces.
-    const removedSkills = cleanupObsoleteSkills(root, [MAIN_SKILLS_DIR, ...enabledPluginSkillSourceDirs(root)], { dryRun });
-    summary.skills.removed = removedSkills.length;
-    for (const { name } of removedSkills) {
-      logger.log(t("ui:upgrade.skillRemoved", { name }));
-    }
-
-    try {
-      const cleanup = removeLegacyAgentArtifacts(root, { dryRun });
-      const removed = Number(cleanup.removedHandler) + Number(cleanup.updatedConfig);
-      if (removed > 0) {
-        summary.legacyAgentArtifacts.removed += removed;
-        logger.log("[upgrade] removed legacy agent-host Flow hook artifacts");
+      // Summary
+      const hasChanges = skillResults.some((r) => r.status === "updated")
+        || removedSkills.length > 0
+        || summary.legacyAgentArtifacts.removed > 0
+        || summary.agentFiles.updated > 0
+        || summary.presets.copied > 0;
+      if (!hasChanges) {
+        logger.log(t("ui:upgrade.noChanges"));
+      } else if (dryRun) {
+        logger.log(t("ui:upgrade.dryRunFooter"));
       } else {
-        summary.legacyAgentArtifacts.unchanged += 1;
+        logger.log(t("ui:upgrade.done"));
       }
-    } catch (e) {
-      logger.error(`upgrade failed: ${e.message}`);
-      writeActiveUpgradeArtifact({
-        root,
-        activeFlows,
-        workerHandoffRequest: workerHandoff === null ? null : workerHandoffRequest,
-        command,
-        dryRun,
-        exitCode: EXIT_ERROR,
-        result: "failed",
-        summary: { ...summary, error: `legacy agent artifact cleanup failed: ${e.message}` },
-      });
-      process.exitCode = EXIT_ERROR;
-      return;
-    }
 
-    if (!dryRun) {
-      const presetCopies = deployPresetCopies(root, {
-        presetKeys: ["base"],
-        languages: config.docs?.languages?.length ? config.docs.languages : ["en", "ja"],
-      });
-      summary.presets.copied = presetCopies.length;
-    }
-
-    const agentFileResults = AGENT_CONFIG_FILE_NAMES.map((fileName) =>
-      refreshAgentFlowFile(path.join(root, fileName), config.lang || DEFAULT_LANG, {
-        dryRun,
-        projectRoot: root,
-        presetTypes: config.type || "base",
-      }));
-    for (const result of agentFileResults) {
-      summary.agentFiles[result.status] += 1;
-      if (result.status === "updated") {
-        logger.log(t("ui:upgrade.agentFileUpdated", { file: result.file }));
-      } else if (result.status === "unchanged") {
-        logger.log(t("ui:upgrade.agentFileUnchanged", { file: result.file }));
-      } else {
-        logger.log(t("ui:upgrade.agentFileMissing", { file: result.file }));
+      try {
+        writeActiveUpgradeArtifact({
+          root,
+          activeFlows,
+          workerHandoffRequest: workerHandoff === null ? null : workerHandoffRequest,
+          command,
+          dryRun,
+          exitCode: 0,
+          result: resultFromSummary(0, hasChanges),
+          summary,
+        });
+      } catch (e) {
+        logger.error(`upgrade artifact write failed: ${e.message}`);
+        process.exitCode = EXIT_ERROR;
+        return;
       }
+    } finally {
+      authorityLease?.release();
     }
-
-    // Summary
-    const hasChanges = skillResults.some((r) => r.status === "updated")
-      || removedSkills.length > 0
-      || summary.legacyAgentArtifacts.removed > 0
-      || summary.agentFiles.updated > 0
-      || summary.presets.copied > 0;
-    if (!hasChanges) {
-      logger.log(t("ui:upgrade.noChanges"));
-    } else if (dryRun) {
-      logger.log(t("ui:upgrade.dryRunFooter"));
-    } else {
-      logger.log(t("ui:upgrade.done"));
-    }
-
-    try {
-      writeActiveUpgradeArtifact({
-        root,
-        activeFlows,
-        workerHandoffRequest: workerHandoff === null ? null : workerHandoffRequest,
-        command,
-        dryRun,
-        exitCode: 0,
-        result: resultFromSummary(0, hasChanges),
-        summary,
-      });
-    } catch (e) {
-      logger.error(`upgrade artifact write failed: ${e.message}`);
-      process.exitCode = EXIT_ERROR;
-      return;
-    }
-  } finally {
-    authorityLease?.release();
-  }
+  };
+  const flowManager = container.has("flowManager") ? container.get("flowManager") : null;
+  const ctx = { root, executionRoot: root,
+    mainRoot: container.has("mainRoot") ? container.get("mainRoot") : root,
+    flowManager, specId: workerHandoff?.specId ?? null,
+    flowState: workerHandoff === null ? null : flowManager.loadReadOnly(workerHandoff.specId),
+  };
+  return withFlowProcessRuntime(ctx, runWithAuthority, { commandId: "upgrade", required: !dryRun,
+    bindingOptions: { executionContract: workerHandoff?.executionContract ?? null,
+      dispatchInvocationId: workerHandoff?.dispatchInvocationId ?? null } });
 }
 
 async function main() {

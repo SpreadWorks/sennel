@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import { FlowExecutionContract } from "./flow-execution-contract.js";
+import { readExecutionContractFromView } from "./canonical-prompt-execution.js";
 import {
   FLOW_ARTIFACT_CONTRACTS,
 } from "../../lib/flow-artifact-contract.js";
@@ -180,7 +181,8 @@ export class CanonicalSourceHandoffAuthority {
 
 /** Lock-scoped CAS and capture admission shared by checkpoint, event and settlement writes. */
 export class SourceHandoffPersistenceAdmission {
-  constructor({ identity, checkpoint = null, expectedCheckpointDigest = null, expectedPreviousEventDigest = null, settlement = null, expectSettlementAbsent = true, validateCapture = false } = {}) {
+  constructor({ identity, checkpoint = null, expectedCheckpointDigest = null, expectedPreviousEventDigest = null, settlement = null, expectSettlementAbsent = true, validateCapture = false,
+    processStopEvidence = null, executionContract = null, checkoutIdentity = null } = {}) {
     this.identity = identity instanceof SourceWorkerHandoffIdentity ? identity : new SourceWorkerHandoffIdentity(identity);
     if (checkpoint !== null && !(checkpoint instanceof CanonicalSourceHandoffCheckpoint)) throw new CurrentFlowStateInvariantError("source handoff admission checkpoint must be typed");
     this.checkpoint = checkpoint;
@@ -195,11 +197,20 @@ export class SourceHandoffPersistenceAdmission {
     this.settlement = settlement;
     this.expectSettlementAbsent = expectSettlementAbsent === true;
     this.validateCapture = validateCapture === true;
+    this.processStopEvidence = processStopEvidence;
+    this.executionContract = executionContract;
+    this.checkoutIdentity = checkoutIdentity;
     Object.freeze(this);
   }
 
   assert(view) {
     if (!identityMatchesState(this.identity, view.state)) throw new CurrentFlowStateConflictError("source handoff Attempt changed before canonical publication");
+    if (this.processStopEvidence !== null) {
+      readExecutionContractFromView(view, this.executionContract);
+      this.processStopEvidence.assertContract(this.executionContract, {
+        dispatchInvocationId: this.identity.dispatchInvocationId,
+      }).assertCheckout(this.checkoutIdentity);
+    }
     if (this.validateCapture) {
       if (this.checkpoint === null) throw new CurrentFlowStateInvariantError("source handoff capture admission lacks its checkpoint");
       if (SourceMutationManifest.capture({ baseline: this.checkpoint.baseline }).mutations.length !== 0) {
@@ -276,7 +287,7 @@ export function sourceHandoffArtifactWrites({ checkpoint = null, rollbackBlob = 
   return writes;
 }
 
-export function readSourceHandoffAuthorityFromView({ view, identity, root, canonicalLocation } = {}) {
+export function readSourceHandoffAuthorityFromView({ view, identity, root, canonicalLocation, checkoutIdentity = null, repositoryIdentity = null } = {}) {
   const expected = identity instanceof SourceWorkerHandoffIdentity ? identity : new SourceWorkerHandoffIdentity(identity);
   const checkpointPath = FLOW_ARTIFACT_CONTRACTS.resolve(CHECKPOINT_KEY, { handoffId: expected.storageId }).relativePath;
   const checkpointDescriptor = view.catalog.artifacts.find((entry) => entry.logicalKey === CHECKPOINT_KEY && entry.relativePath === checkpointPath) ?? null;
@@ -290,6 +301,20 @@ export function readSourceHandoffAuthorityFromView({ view, identity, root, canon
     .filter((entry) => entry.logicalKey === EVENT_KEY && entry.relativePath.startsWith(eventPrefix(expected)))
     .sort((left, right) => left.relativePath.localeCompare(right.relativePath));
   const events = eventDescriptors.map((entry) => SourceHandoffEvent.fromStored(parseJSON(view.readCatalogedArtifact(entry), "source handoff event")));
+  for (const event of events) {
+    if (event.processStopEvidence === null) continue;
+    const descriptor = protocolDescriptors(view, expected).find((entry) => entry.logicalKey === "execution.contract"
+      && parseJSON(view.readCatalogedArtifact(entry), "source handoff execution contract").id
+        === event.processStopEvidence.receipt.binding.value.executionContractId);
+    if (descriptor === undefined) throw new CurrentFlowStateInvariantError("source process stop receipt has no canonical execution contract");
+    const contract = FlowExecutionContract.fromJSON(parseJSON(view.readCatalogedArtifact(descriptor), "source handoff execution contract").contract);
+    readExecutionContractFromView(view, contract, { current: false });
+    const evidence = event.processStopEvidence.assertContract(contract, {
+      dispatchInvocationId: expected.dispatchInvocationId, requestDigest: event.requestDigest,
+    });
+    if (checkoutIdentity !== null) evidence.assertCheckout(checkoutIdentity);
+    else evidence.assertRepository(repositoryIdentity);
+  }
   const settlementPath = FLOW_ARTIFACT_CONTRACTS.resolve(SETTLEMENT_KEY, { handoffId: expected.storageId }).relativePath;
   const settlementDescriptor = view.catalog.artifacts.find((entry) => entry.logicalKey === SETTLEMENT_KEY && entry.relativePath === settlementPath) ?? null;
   const settlement = settlementDescriptor === null

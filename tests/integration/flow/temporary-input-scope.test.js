@@ -9,6 +9,8 @@ import { TemporaryAgentFileInput } from "../../../src/lib/agent-file-reference.j
 import { flowTemporaryRoot, resolveFlowContext } from "../../../src/flow/lib/flow-context.js";
 import { checkGuardrail } from "../../../src/flow/lib/run-gate.js";
 import { ReviewTextPromptPlan } from "../../../src/flow/lib/review-text-prompt-plan.js";
+import { ProcessExecutionRuntime, ProcessExecutionStopReceipt } from "../../../src/lib/process-execution-runtime.js";
+import { executeManagedProcess } from "../../../src/lib/managed-process.js";
 import { CanonicalFlowFixture } from "../../support/infrastructure/flow-setup.js";
 import { dispatchContainer, fixtureRepository } from "../../support/infrastructure/flow-dispatch-scenario.js";
 import { removeTmpDir } from "../../support/builders/tmp-dir.js";
@@ -16,6 +18,50 @@ import { removeTmpDir } from "../../support/builders/tmp-dir.js";
 const guardrail = { id: "COMPLETE", title: "Complete input", body: "Read the entire authority.",
   meta: { phase: ["draft"], category: "requirements" } };
 const completeText = `HEAD\n${"あ".repeat(130000)}\nTAIL`;
+
+// A real managed child must keep its selected repository storage while its
+// execution checkout and durable stop receipt retain their separate authority.
+for (const specId of ["delivery-scope", null]) {
+  test(`managed ${specId === null ? "preparing" : "Flow"} delivery uses selected repository scratch and preserves checkout receipts`, async (t) => {
+    const root = fixtureRepository("temporary-managed-scope-");
+    let runtime;
+    t.after(async () => {
+      try { if (runtime && !runtime.closed) await runtime.close(); }
+      finally { removeTmpDir(root); }
+    });
+    const checkout = path.join(root, "linked");
+    execFileSync("git", ["-C", root, "worktree", "add", checkout, "-b", "delivery-linked"], { stdio: "ignore" });
+    const runId = "delivery-run";
+    runtime = await ProcessExecutionRuntime.acquire({ mainRoot: root, executionRoot: checkout, specId, runId });
+    const generated = [];
+    const create = fs.mkdtempSync;
+    t.mock.method(fs, "mkdtempSync", (...args) => {
+      const directory = create(...args);
+      generated.push(directory);
+      return directory;
+    });
+    const result = await runtime.enter(() => executeManagedProcess(process.execPath,
+      ["-e", "process.stdout.write(process.cwd())"], { runtime, cwd: checkout, timeoutMs: 20000 }));
+    assert.equal(result.code, 0);
+    assert.equal(result.stdout, fs.realpathSync(checkout));
+    const expected = specId === null ? path.join(root, ".tmp", "runtime", "runtime-delivery")
+      : path.join(root, ".tmp", "flows", specId, runId);
+    assert.ok(generated.length > 0);
+    for (const directory of generated) {
+      assert.equal(path.dirname(directory), expected);
+      assert.equal(fs.existsSync(directory), false);
+    }
+    assert.equal(result.processExecutionStopReceipt.checkoutIdentity.mainRoot, root);
+    assert.equal(result.processExecutionStopReceipt.checkoutIdentity.executionRoot, checkout);
+    await runtime.close();
+    const restored = ProcessExecutionRuntime.inspect({ mainRoot: root, executionRoot: checkout }).executions.at(-1);
+    assert.equal(restored.runId, runId);
+    assert.equal(restored.specId, specId);
+    const restoredReceipt = new ProcessExecutionStopReceipt(restored.calls[0].receipt);
+    assert.equal(restoredReceipt.stopEvidence.confirmed, true);
+    assert.deepEqual(restoredReceipt.toJSON(), result.processExecutionStopReceipt.toJSON());
+  });
+}
 
 function repository(t) {
   const root = fixtureRepository("temporary-input-scope-");

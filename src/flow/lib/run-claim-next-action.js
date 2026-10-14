@@ -12,6 +12,7 @@ import {
 } from "../definition.js";
 import { readCurrentGateTransitionFacts } from "./gate-transition-facts.js";
 import { TaskStepIdentity } from "./task-step-identity.js";
+import { withFlowProcessRuntime } from "./process-runtime-admission.js";
 
 /**
  * The only generic claim boundary for an ordinary Definition-selected worker
@@ -25,6 +26,10 @@ export default class RunClaimNextActionCommand extends FlowCommand {
   }
 
   async execute(ctx) {
+    return withFlowProcessRuntime(ctx, () => this.#executeAdmitted(ctx), { commandId: "claim-next-action" });
+  }
+
+  async #executeAdmitted(ctx) {
     try {
       ctx.flowState = ctx.flowManager.loadReadOnly(ctx.specId);
       const typed = ctx.flowManager.canonicalState(ctx.specId);

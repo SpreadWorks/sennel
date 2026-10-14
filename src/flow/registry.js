@@ -80,6 +80,7 @@ import { isStepPersistenceFailure } from "./lib/definition-lifecycle-failure.js"
 import { StepAdmissionRefusal, isStepAdmissionRefusal } from "./lib/step-admission-refusal.js";
 import { prepareFinalizationExecution } from "./engine/composition/finalization.js";
 import { FinalizeSyncExecutionError } from "./lib/finalize-sync-diagnostics.js";
+import { captureFinalizationProcessAuthority } from "./lib/finalization-process-authority.js";
 
 function assertFinalizationAdmission(ctx, stepId) {
   const registration = flowStepExecutionRegistration(stepId);
@@ -2253,6 +2254,7 @@ export const FLOW_COMMANDS = {
       },
     },
     "finalize-sync": {
+      processExecutionAuthority: (ctx) => captureFinalizationProcessAuthority(ctx, "finalize-sync"),
       helpKey: "flow.run.finalize-sync",
       failureOwnership: DefinitionFailureOwnership.lifecycleOutbox(),
       runtimeLog: { stepId: "finalize-sync", authority: "main-repository" },
@@ -2301,6 +2303,7 @@ export const FLOW_COMMANDS = {
       },
     },
     "finalize-cleanup": {
+      processExecutionAuthority: (ctx) => captureFinalizationProcessAuthority(ctx, "finalize-cleanup"),
       helpKey: "flow.run.finalize-cleanup",
       failureOwnership: DefinitionFailureOwnership.lifecycleOutbox(),
       runtimeLog: { stepMetadata: false, authority: "main-repository" },

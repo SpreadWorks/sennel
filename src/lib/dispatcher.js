@@ -36,6 +36,8 @@ import { FatalPostHookError } from "./post-hook-error.js";
 import { AgentFailure } from "./agent-failure.js";
 import { DefinitionLifecycleAttemptBinding, isStepPersistenceFailure } from "../flow/lib/definition-lifecycle-failure.js";
 import { isStepAdmissionRefusal } from "../flow/lib/step-admission-refusal.js";
+import { ProcessExecutionControlFailure } from "./process-execution-values.js";
+import { flowProcessRuntimeRequired, withFlowProcessRuntime } from "../flow/lib/process-runtime-admission.js";
 
 function attachNonblockingContinuation(envelope, ctx, reason) {
   const state = ctx?.flowState;
@@ -335,6 +337,7 @@ export async function dispatch({
 }) {
   const baseWriteOut = stdout || ((s) => process.stdout.write(s));
   let runtimeLog = null;
+  let bufferedOutput = null;
   const baseWriteErr = stderr || ((s) => process.stderr.write(s));
   const processCaptureSuppressed = { stdout: 0, stderr: 0 };
   const withProcessCaptureSuppressed = (stream, fn) => {
@@ -347,7 +350,8 @@ export async function dispatch({
   };
   const writeOut = (s) => {
     if (runtimeLog) runtimeLog.capture("stdout", s);
-    return withProcessCaptureSuppressed("stdout", () => baseWriteOut(s));
+    return withProcessCaptureSuppressed("stdout", () => bufferedOutput === null
+      ? baseWriteOut(s) : bufferedOutput.push(s));
   };
   const writeErr = (s) => {
     if (runtimeLog) runtimeLog.capture("stderr", s);
@@ -526,7 +530,8 @@ export async function dispatch({
     setExit(1);
   };
   const persistRuntimeLogMetadata = (result) => {
-    if (isStepAdmissionRefusal(canonicalMetadataError) || isStepPersistenceFailure(canonicalMetadataError)) return;
+    if (isStepAdmissionRefusal(canonicalMetadataError) || isStepPersistenceFailure(canonicalMetadataError)
+      || canonicalMetadataError instanceof ProcessExecutionControlFailure) return;
     const metadata = closedRuntimeLogMetadata;
     const requestedStepId = runtimeLogStepId(entry, hookCtx, result);
     // Public task aliases name the current task leaf before it is confirmed.
@@ -565,278 +570,307 @@ export async function dispatch({
     return;
   }
 
-  // Bind the exact active Attempt before any registry lifecycle hook can
-  // confirm, fail, or replace it.  Error handling below can therefore record
-  // a tooling failure only for this command's original Attempt.
-  const lifecycleAttemptBinding = DefinitionLifecycleAttemptBinding.capture({
-    hookCtx,
-    envelopeType,
-    envelopeKey,
-    registryFailureOwnership: entry.failureOwnership ?? null,
-  });
+  const executeLifecycle = async () => {
+    // Bind the exact active Attempt before any registry lifecycle hook can
+    // confirm, fail, or replace it.  Error handling below can therefore record
+    // a tooling failure only for this command's original Attempt.
+    const lifecycleAttemptBinding = DefinitionLifecycleAttemptBinding.capture({
+      hookCtx,
+      envelopeType,
+      envelopeKey,
+      registryFailureOwnership: entry.failureOwnership ?? null,
+    });
 
-  // 6. pre
-  if (entry.pre) {
-    try {
-      await entry.pre(hookCtx);
-    } catch (err) {
-      canonicalMetadataError = err;
-      if (hookCtx.flowOutboxEntry && entry.onError) {
-        try { await entry.onError(hookCtx, err); } catch (onErrorErr) {
-          writeErr(`[onError hook] ${onErrorErr.message || onErrorErr}\n`);
-        }
-      }
-      recordDefinitionLifecycleToolingFailure(
-        lifecycleAttemptBinding,
-        err,
-        "PRE_HOOK_FAILED",
-        writeErr,
-      );
-      await emitFailure({
-        err,
-        mode,
-        envelopeType,
-        envelopeKey,
-        writeOut,
-        writeErr,
-        setExit,
-        runtimeLogMetadata: runtimeLog?.metadata,
-        flowContext: hookCtx,
-      });
-      closeRuntimeLog();
-      persistRuntimeLogMetadata(null);
-      if (restoreStreams) restoreStreams();
-      return;
-    }
-  }
-
-  // 7. execute via Command.run
-  let result;
-  let caught;
-  if (hookCtx.flowOutboxEntry?.status === "done") {
-    const storedResult = structuredClone(hookCtx.flowOutboxEntry.result);
-    result = envelopeKey === "finalize-cleanup"
-      ? await new CommandClass().execute(hookCtx)
-      : storedResult;
-    hookCtx.flowOutboxResumed = true;
-  } else {
-    try {
-      const cmd = new CommandClass();
-      input._envelopeType = envelopeType;
-      input._envelopeKey = envelopeKey;
-      const commandInput = hookCtx.flowOutboxEntry
-        ? { ...input, flowOutboxEntry: hookCtx.flowOutboxEntry,
-            ...(hookCtx.finalizationExecution == null ? {} : { finalizationExecution: hookCtx.finalizationExecution }),
-            ...(hookCtx.finalizationEffectPreparation == null ? {} : {
-              finalizationEffectPreparation: hookCtx.finalizationEffectPreparation,
-            }),
-            ...(hookCtx.repositoryOperationOwnerToken == null ? {} : {
-              repositoryOperationOwnerToken: hookCtx.repositoryOperationOwnerToken,
-            }) }
-        : input;
-      if (
-        envelopeKey === "finalize-cleanup"
-        && typeof mod.commitFinalizeCleanupPostCommandMetadata === "function"
-      ) {
-        commandInput._deferFinalizeCompletionCommit = true;
-      }
-      result = await cmd.run(container, commandInput);
-    } catch (err) {
-      caught = err;
-      canonicalMetadataError = err;
-    }
-  }
-
-  // 8a. Success path
-  if (!caught) {
-    // Keep the command result available to lifecycle settlement and runtime
-    // metadata even when a post hook replaces only the public Envelope.
-    let envelope;
-    if (mode === "envelope") {
-      // Commands may return an Envelope directly (e.g. Envelope.fail for
-      // recoverable / user-avoidable outcomes). In that case honor it verbatim
-      // rather than re-wrapping it in Envelope.ok.
-      if (result instanceof Envelope) {
-        envelope = result;
-      } else {
-        envelope = Envelope.ok(envelopeType || "run", envelopeKey || "?", result || {});
-      }
-    }
-    let postFailed = false;
-    // Skip post hooks when the command explicitly returned an ok:false envelope —
-    // post hooks advance step status / counters assuming success, which would
-    // fire incorrectly on a judgment-result rejection.
-    const skipPost = result instanceof Envelope && result.ok === false;
-    const deferFinalizeCompletion = !skipPost
-      && envelopeKey === "finalize-cleanup"
-      && typeof mod.commitFinalizeCleanupPostCommandMetadata === "function";
-    if (skipPost) {
-      const failure = new Error(
-        result.errors.flatMap((item) => item.messages || []).join("; ") || `${envelopeKey || "command"} failed`,
-      );
-      failure.code = result.errors.find((item) => item?.level === "fatal")?.code
-        || result.errors[0]?.code
-        || "COMMAND_ENVELOPE_FAILED";
-      failure.data = result.data;
-      canonicalMetadataError = failure;
-      if (hookCtx.flowOutboxEntry && entry.onError) {
-        try {
-          await entry.onError(hookCtx, failure);
-        } catch (onErrorErr) {
-          postFailed = true;
-          if (mode === "envelope") envelope.addWarning("ON_ERROR_HOOK_FAILED", onErrorErr.message || String(onErrorErr));
-          else writeErr(`[onError hook] ${onErrorErr.message || onErrorErr}\n`);
-        }
-      }
-      recordDefinitionLifecycleToolingFailure(
-        lifecycleAttemptBinding,
-        failure,
-        "COMMAND_ENVELOPE_FAILED",
-        writeErr,
-      );
-    }
-    if (entry.post && !skipPost) {
+    // 6. pre
+    if (entry.pre) {
       try {
-        const postResult = await entry.post(hookCtx, result);
-        if (postResult instanceof Envelope && mode === "envelope") envelope = postResult;
-      } catch (postErr) {
-        canonicalMetadataError = postErr;
-        postFailed = true;
-        recordDefinitionLifecycleToolingFailure(
-          lifecycleAttemptBinding,
-          postErr,
-          "POST_HOOK_FAILED",
-          writeErr,
-          result,
-        );
-        if (mode === "envelope") {
-          if (postErr instanceof FatalPostHookError) {
-            envelope.addFatal(postErr.code, postErr.message);
-          } else {
-            envelope.addWarning("POST_HOOK_FAILED", postErr.message || String(postErr));
+        await entry.pre(hookCtx);
+      } catch (err) {
+        if (err instanceof ProcessExecutionControlFailure) throw err;
+        canonicalMetadataError = err;
+        if (hookCtx.flowOutboxEntry && entry.onError) {
+          try { await entry.onError(hookCtx, err); } catch (onErrorErr) {
+            if (onErrorErr instanceof ProcessExecutionControlFailure) throw onErrorErr;
+            writeErr(`[onError hook] ${onErrorErr.message || onErrorErr}\n`);
           }
-        } else {
-          writeErr(`[post hook] ${postErr.message || postErr}\n`);
         }
-      }
-    }
-    // Nonblocking evidence is an audit record, not a lifecycle transition.
-    // Record it after the ordinary hook has durably recorded the check
-    // attempt.  Failed Envelopes still reach this hook, but a stale artifact
-    // alone is never accepted as a newly completed attempt.
-    if (entry.nonblockingPost && !hookCtx.flowOutboxResumed) {
-      try {
-        await entry.nonblockingPost(hookCtx, result);
-      } catch (nonblockingError) {
-        postFailed = true;
         recordDefinitionLifecycleToolingFailure(
           lifecycleAttemptBinding,
-          nonblockingError,
-          "NONBLOCKING_POST_FAILED",
+          err,
+          "PRE_HOOK_FAILED",
           writeErr,
         );
-        if (mode === "envelope") {
-          envelope.addWarning("NONBLOCKING_EVIDENCE_RECORD_FAILED", nonblockingError.message || String(nonblockingError));
-          envelope.ok = false;
-          envelope.errors.push({
-            level: "fatal",
-            code: "NONBLOCKING_EVIDENCE_RECORD_FAILED",
-            messages: [nonblockingError.message || String(nonblockingError)],
-          });
-          attachNonblockingContinuation(envelope, hookCtx, "The nonblocking evidence record was not durably saved.");
-        } else {
-          writeErr(`[nonblocking evidence] ${nonblockingError.message || nonblockingError}\n`);
-        }
+        await emitFailure({
+          err,
+          mode,
+          envelopeType,
+          envelopeKey,
+          writeOut,
+          writeErr,
+          setExit,
+          runtimeLogMetadata: runtimeLog?.metadata,
+          flowContext: hookCtx,
+        });
+        closeRuntimeLog();
+        persistRuntimeLogMetadata(null);
+        if (restoreStreams) restoreStreams();
+        return;
       }
     }
-    if (deferFinalizeCompletion) {
-      closeRuntimeLog();
+
+    // 7. execute via Command.run
+    let result;
+    let caught;
+    if (hookCtx.flowOutboxEntry?.status === "done") {
+      const storedResult = structuredClone(hookCtx.flowOutboxEntry.result);
+      result = envelopeKey === "finalize-cleanup"
+        ? await new CommandClass().execute(hookCtx)
+        : storedResult;
+      hookCtx.flowOutboxResumed = true;
+    } else {
       try {
+        const cmd = new CommandClass();
+        input._envelopeType = envelopeType;
+        input._envelopeKey = envelopeKey;
+        const commandInput = hookCtx.flowOutboxEntry
+          ? { ...input, flowOutboxEntry: hookCtx.flowOutboxEntry,
+              ...(hookCtx.finalizationExecution == null ? {} : { finalizationExecution: hookCtx.finalizationExecution }),
+              ...(hookCtx.finalizationEffectPreparation == null ? {} : {
+                finalizationEffectPreparation: hookCtx.finalizationEffectPreparation,
+              }),
+              ...(hookCtx.repositoryOperationOwnerToken == null ? {} : {
+                repositoryOperationOwnerToken: hookCtx.repositoryOperationOwnerToken,
+              }) }
+          : input;
+        if (
+          envelopeKey === "finalize-cleanup"
+          && typeof mod.commitFinalizeCleanupPostCommandMetadata === "function"
+        ) {
+          commandInput._deferFinalizeCompletionCommit = true;
+        }
+        result = await cmd.run(container, commandInput);
+      } catch (err) {
+        caught = err;
+        canonicalMetadataError = err;
+      }
+    }
+
+    // 8a. Success path
+    if (!caught) {
+      // Keep the command result available to lifecycle settlement and runtime
+      // metadata even when a post hook replaces only the public Envelope.
+      let envelope;
+      if (mode === "envelope") {
+        // Commands may return an Envelope directly (e.g. Envelope.fail for
+        // recoverable / user-avoidable outcomes). In that case honor it verbatim
+        // rather than re-wrapping it in Envelope.ok.
+        if (result instanceof Envelope) {
+          envelope = result;
+        } else {
+          envelope = Envelope.ok(envelopeType || "run", envelopeKey || "?", result || {});
+        }
+      }
+      let postFailed = false;
+      // Skip post hooks when the command explicitly returned an ok:false envelope —
+      // post hooks advance step status / counters assuming success, which would
+      // fire incorrectly on a judgment-result rejection.
+      const skipPost = result instanceof Envelope && result.ok === false;
+      const deferFinalizeCompletion = !skipPost
+        && envelopeKey === "finalize-cleanup"
+        && typeof mod.commitFinalizeCleanupPostCommandMetadata === "function";
+      if (skipPost) {
+        const failure = ProcessExecutionControlFailure.fromEnvelope(result.toJSON()) ?? new Error(
+          result.errors.flatMap((item) => item.messages || []).join("; ") || `${envelopeKey || "command"} failed`,
+        );
+        failure.code = result.errors.find((item) => item?.level === "fatal")?.code
+          || result.errors[0]?.code
+          || "COMMAND_ENVELOPE_FAILED";
+        failure.data = result.data;
+        canonicalMetadataError = failure;
+        if (!(failure instanceof ProcessExecutionControlFailure) && hookCtx.flowOutboxEntry && entry.onError) {
+          try {
+            await entry.onError(hookCtx, failure);
+          } catch (onErrorErr) {
+            if (onErrorErr instanceof ProcessExecutionControlFailure) throw onErrorErr;
+            postFailed = true;
+            if (mode === "envelope") envelope.addWarning("ON_ERROR_HOOK_FAILED", onErrorErr.message || String(onErrorErr));
+            else writeErr(`[onError hook] ${onErrorErr.message || onErrorErr}\n`);
+          }
+        }
+        recordDefinitionLifecycleToolingFailure(
+          lifecycleAttemptBinding,
+          failure,
+          "COMMAND_ENVELOPE_FAILED",
+          writeErr,
+        );
+      }
+      if (entry.post && !skipPost) {
+        try {
+          const postResult = await entry.post(hookCtx, result);
+          if (postResult instanceof Envelope && mode === "envelope") envelope = postResult;
+        } catch (postErr) {
+          if (postErr instanceof ProcessExecutionControlFailure) throw postErr;
+          canonicalMetadataError = postErr;
+          postFailed = true;
+          recordDefinitionLifecycleToolingFailure(
+            lifecycleAttemptBinding,
+            postErr,
+            "POST_HOOK_FAILED",
+            writeErr,
+            result,
+          );
+          if (mode === "envelope") {
+            if (postErr instanceof FatalPostHookError) {
+              envelope.addFatal(postErr.code, postErr.message);
+            } else {
+              envelope.addWarning("POST_HOOK_FAILED", postErr.message || String(postErr));
+            }
+          } else {
+            writeErr(`[post hook] ${postErr.message || postErr}\n`);
+          }
+        }
+      }
+      // Nonblocking evidence is an audit record, not a lifecycle transition.
+      // Record it after the ordinary hook has durably recorded the check
+      // attempt.  Failed Envelopes still reach this hook, but a stale artifact
+      // alone is never accepted as a newly completed attempt.
+      if (entry.nonblockingPost && !hookCtx.flowOutboxResumed
+        && !(canonicalMetadataError instanceof ProcessExecutionControlFailure)) {
+        try {
+          await entry.nonblockingPost(hookCtx, result);
+        } catch (nonblockingError) {
+          if (nonblockingError instanceof ProcessExecutionControlFailure) throw nonblockingError;
+          postFailed = true;
+          recordDefinitionLifecycleToolingFailure(
+            lifecycleAttemptBinding,
+            nonblockingError,
+            "NONBLOCKING_POST_FAILED",
+            writeErr,
+          );
+          if (mode === "envelope") {
+            envelope.addWarning("NONBLOCKING_EVIDENCE_RECORD_FAILED", nonblockingError.message || String(nonblockingError));
+            envelope.ok = false;
+            envelope.errors.push({
+              level: "fatal",
+              code: "NONBLOCKING_EVIDENCE_RECORD_FAILED",
+              messages: [nonblockingError.message || String(nonblockingError)],
+            });
+            attachNonblockingContinuation(envelope, hookCtx, "The nonblocking evidence record was not durably saved.");
+          } else {
+            writeErr(`[nonblocking evidence] ${nonblockingError.message || nonblockingError}\n`);
+          }
+        }
+      }
+      if (deferFinalizeCompletion) {
+        closeRuntimeLog();
+        try {
+          await persistFinalizeCleanupPostReturnMetadata({
+            envelopeKey,
+            hookCtx,
+            metadata: closedRuntimeLogMetadata,
+            commandModule: mod,
+            commitCompletion: true,
+          });
+        } catch (completionError) {
+          postFailed = true;
+          recordDefinitionLifecycleToolingFailure(
+            lifecycleAttemptBinding,
+            completionError,
+            "FINALIZE_COMPLETION_COMMIT_FAILED",
+            writeErr,
+          );
+          if (mode === "envelope") {
+            envelope.addFatal(
+              "FINALIZE_COMPLETION_COMMIT_FAILED",
+              completionError.message || String(completionError),
+            );
+          } else {
+            writeErr(`[finalize completion] ${completionError.message || completionError}\n`);
+          }
+        }
+      }
+      if (mode === "envelope") {
+        settleTypedStepOutcome(envelope, result);
+        if (envelope.ok === false) {
+          attachNonblockingContinuation(envelope, hookCtx, "The normal Flow operation did not complete.");
+        }
+        if (envelope instanceof Envelope && envelope.ok === false) attachRuntimeLog(envelope, runtimeLog?.metadata);
+        writeOut(JSON.stringify(envelope.toJSON(), null, 2) + "\n");
+        emitFinalizeCleanupReportDisplay({ envelopeKey, envelope, writeErr });
+        setExit(envelope.ok && !postFailed ? 0 : 1);
+      } else if (postFailed) {
+        setExit(1);
+      }
+      closeRuntimeLog();
+      if (!deferFinalizeCompletion) {
         await persistFinalizeCleanupPostReturnMetadata({
           envelopeKey,
           hookCtx,
           metadata: closedRuntimeLogMetadata,
           commandModule: mod,
-          commitCompletion: true,
         });
-      } catch (completionError) {
-        postFailed = true;
-        recordDefinitionLifecycleToolingFailure(
-          lifecycleAttemptBinding,
-          completionError,
-          "FINALIZE_COMPLETION_COMMIT_FAILED",
-          writeErr,
-        );
-        if (mode === "envelope") {
-          envelope.addFatal(
-            "FINALIZE_COMPLETION_COMMIT_FAILED",
-            completionError.message || String(completionError),
-          );
-        } else {
-          writeErr(`[finalize completion] ${completionError.message || completionError}\n`);
-        }
       }
+      persistRuntimeLogMetadata(result);
+      if (restoreStreams) restoreStreams();
+      return;
     }
-    if (mode === "envelope") {
-      settleTypedStepOutcome(envelope, result);
-      if (envelope.ok === false) {
-        attachNonblockingContinuation(envelope, hookCtx, "The normal Flow operation did not complete.");
-      }
-      if (envelope instanceof Envelope && envelope.ok === false) attachRuntimeLog(envelope, runtimeLog?.metadata);
-      writeOut(JSON.stringify(envelope.toJSON(), null, 2) + "\n");
-      emitFinalizeCleanupReportDisplay({ envelopeKey, envelope, writeErr });
-      setExit(envelope.ok && !postFailed ? 0 : 1);
-    } else if (postFailed) {
-      setExit(1);
-    }
-    closeRuntimeLog();
-    if (!deferFinalizeCompletion) {
-      await persistFinalizeCleanupPostReturnMetadata({
-        envelopeKey,
-        hookCtx,
-        metadata: closedRuntimeLogMetadata,
-        commandModule: mod,
-      });
-    }
-    persistRuntimeLogMetadata(result);
-    if (restoreStreams) restoreStreams();
-    return;
-  }
 
-  // 8b. Failure path
-  if (entry.onError) {
-    try {
-      await entry.onError(hookCtx, caught);
-    } catch (onErrorErr) {
-      writeErr(`[onError hook] ${onErrorErr.message || onErrorErr}\n`);
+    // 8b. Failure path
+    if (entry.onError && !(caught instanceof ProcessExecutionControlFailure)) {
+      try {
+        await entry.onError(hookCtx, caught);
+      } catch (onErrorErr) {
+        if (onErrorErr instanceof ProcessExecutionControlFailure) throw onErrorErr;
+        writeErr(`[onError hook] ${onErrorErr.message || onErrorErr}\n`);
+      }
     }
+    recordDefinitionLifecycleToolingFailure(
+      lifecycleAttemptBinding,
+      caught,
+      "COMMAND_FAILED",
+      writeErr,
+    );
+    await emitFailure({
+      err: caught,
+      mode,
+      envelopeType,
+      envelopeKey,
+      writeOut,
+      writeErr,
+      setExit,
+      runtimeLogMetadata: runtimeLog?.metadata,
+      flowContext: hookCtx,
+    });
+    closeRuntimeLog();
+    await persistFinalizeCleanupPostReturnMetadata({
+      envelopeKey,
+      hookCtx,
+      metadata: closedRuntimeLogMetadata,
+      commandModule: mod,
+    });
+    persistRuntimeLogMetadata(null);
+    if (restoreStreams) restoreStreams();
+  };
+
+  const required = flowProcessRuntimeRequired({ ctx: hookCtx, envelopeType, envelopeKey, input });
+  if (required && mode === "envelope") bufferedOutput = [];
+  try {
+    await withFlowProcessRuntime(hookCtx, executeLifecycle, { commandId: envelopeKey, required,
+      physicalAuthority: entry.processExecutionAuthority ?? null });
+    const completedOutput = bufferedOutput;
+    bufferedOutput = null;
+    for (const output of completedOutput ?? []) baseWriteOut(output);
+  } catch (err) {
+    // Runtime admission and stop/receipt failures do not select a Step Result,
+    // invoke error hooks, consume retry budgets, or update canonical metadata.
+    bufferedOutput = null;
+    canonicalMetadataError = err;
+    await emitFailure({ err, mode, envelopeType, envelopeKey, writeOut, writeErr,
+      setExit, runtimeLogMetadata: runtimeLog?.metadata, flowContext: hookCtx });
+    closeRuntimeLog();
+  } finally {
+    if (restoreStreams) restoreStreams();
   }
-  recordDefinitionLifecycleToolingFailure(
-    lifecycleAttemptBinding,
-    caught,
-    "COMMAND_FAILED",
-    writeErr,
-  );
-  await emitFailure({
-    err: caught,
-    mode,
-    envelopeType,
-    envelopeKey,
-    writeOut,
-    writeErr,
-    setExit,
-    runtimeLogMetadata: runtimeLog?.metadata,
-    flowContext: hookCtx,
-  });
-  closeRuntimeLog();
-  await persistFinalizeCleanupPostReturnMetadata({
-    envelopeKey,
-    hookCtx,
-    metadata: closedRuntimeLogMetadata,
-    commandModule: mod,
-  });
-  persistRuntimeLogMetadata(null);
-  if (restoreStreams) restoreStreams();
 }
 
 async function resolveOutputMode(entry) {
@@ -862,11 +896,13 @@ function emitFailure({
   if (mode === "envelope") {
     const code = err?.code || "ERROR";
     const env = Envelope.fail(envelopeType || "run", envelopeKey || "?", code, String(err?.message || err));
-    const errorData = err?.data !== undefined
-      ? err.data
-      : err instanceof AgentFailure
-        ? err.toJSON()
-        : undefined;
+    const errorData = err instanceof ProcessExecutionControlFailure
+      ? { processExecutionControlFailure: err.toJSON() }
+      : err?.data !== undefined
+        ? err.data
+        : err instanceof AgentFailure
+          ? err.toJSON()
+          : undefined;
     if (errorData !== undefined) env.data = errorData;
     if (err?.continuation) {
       try {
