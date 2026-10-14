@@ -10,6 +10,7 @@ import { createTmpDir, removeTmpDir } from "../../support/builders/tmp-dir.js";
 import { checkoutNewBranch, commitAll, initGitRepo } from "../../support/infrastructure/git-repo.js";
 import { runGit } from "../../../src/lib/git-helpers.js";
 import { FinalizeFlowArtifactRegistry } from "../../../src/flow/lib/repair-state-identity.js";
+import { FlowCommandExecutionLease } from "../../../src/flow/lib/flow-command-execution-lease.js";
 
 function git(root, args) {
   const result = runGit(["-C", root, ...args]);
@@ -92,6 +93,21 @@ describe("FinalizeMergeTransaction", () => {
 
     assert.equal(git(root, ["rev-parse", "main"]), before);
     assert.equal(fs.readFileSync(path.join(baseWorktree, "local-only.txt"), "utf8"), "do not overwrite\n");
+  });
+
+  it("keeps a live command marker outside the merged source while preserving its owner", () => {
+    root = createTmpDir("sennel-finalize-running-marker-");
+    ({ baseWorktree } = createFixture(root));
+    fs.mkdirSync(path.join(root, ".sennel"));
+    const lease = new FlowCommandExecutionLease({ mainRoot: root, runId: "merge-run", specId: "801-merge" });
+    lease.lock.acquire();
+    const owner = fs.readFileSync(lease.lock.lockPath);
+    try {
+      assert.equal(transaction(root).execute().strategy, "squash");
+      assert.deepEqual(fs.readFileSync(lease.lock.lockPath), owner);
+      assert.equal(git(root, ["ls-tree", "-r", "--name-only", "main"])
+        .split("\n").some((file) => FlowCommandExecutionLease.ownsRepositoryPath(file)), false);
+    } finally { lease.release(); }
   });
 
   it("rejects an external dirty feature file without changing the base ref", () => {

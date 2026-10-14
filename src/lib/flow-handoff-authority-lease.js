@@ -40,6 +40,12 @@ function lockError(status, message, { lockPath, cause } = {}) {
  * remains independent even if its Flow run changes.
  */
 export class FlowHandoffAuthorityLease {
+  static pathFor({ mainRoot, executionRoot }) {
+    const scope = executionRoot === mainRoot ? "repository" : "worktree";
+    const scopeId = scope === "repository" ? "repository" : executionRoot;
+    return path.join(mainRoot, PRODUCT.managedPath(`.flow-handoff-${scope}-${digest(scopeId).slice(0, 24)}.lock`));
+  }
+
   constructor({
     mainRoot,
     executionRoot,
@@ -60,7 +66,7 @@ export class FlowHandoffAuthorityLease {
     });
     this.lock = new FileLock({
       directoryAuthority: directory,
-      fileName: `.flow-handoff-${this.scope}-${digest(this.scopeId).slice(0, 24)}.lock`,
+      fileName: path.basename(FlowHandoffAuthorityLease.pathFor(this)),
       kind: LOCK_KIND,
       authority: { scope: this.scope, scopeId: this.scopeId },
       errorFactory: lockError,

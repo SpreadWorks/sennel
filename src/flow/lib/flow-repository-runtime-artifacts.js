@@ -1,4 +1,5 @@
 import path from "node:path";
+import { FlowCommandExecutionLease } from "./flow-command-execution-lease.js";
 
 import { FlowTargetIdentityAuthority } from "../../lib/flow-target-identity-authority.js";
 import { FlowVersionRuntimeLockLocation } from "../../lib/flow-version.js";
@@ -52,6 +53,7 @@ export class FlowRepositoryRuntimeArtifactRegistry {
       `${PRODUCT.managedPath("agent-cache")}/`,
       `${PRODUCT.managedPath("agent-work")}/`,
       `${PRODUCT.managedPath("review-execution-locks")}/`,
+      FlowCommandExecutionLease.repositoryPrefix,
       `${PRODUCT.managedPath("output")}/`,
       `${PRODUCT.managedPath("recovery")}/`,
       `${PRODUCT.managedPath("worktree")}/`,

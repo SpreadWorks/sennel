@@ -6,6 +6,7 @@
  */
 
 import crypto from "node:crypto";
+import { FlowCommandExecutionLease } from "./flow-command-execution-lease.js";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -22,6 +23,7 @@ const FLOW_OPERATION_LOCK_PATH = PRODUCT.managedPath(".repository-flow-operation
 
 function isFlowRuntimePath(filePath) {
   return filePath === FLOW_OPERATION_LOCK_PATH
+    || FlowCommandExecutionLease.ownsRepositoryPath(filePath)
     || filePath === PRODUCT.managedPath(".active-flow")
     || FlowTargetIdentityAuthority.managesRepositoryPath(filePath)
     || filePath.startsWith(".tmp/logs/");

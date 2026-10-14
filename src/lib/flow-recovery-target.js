@@ -129,6 +129,12 @@ export class FlowRecoveryState {
     this.baseBranch = execution.baseBranch;
     this.featureBranch = execution.featureBranch;
     this.worktree = execution.mode === "worktree";
+    this.flowId = document.flowId;
+    this.flowVersionId = document.flowVersionId;
+    this.version = document.version;
+    this.lifecycleState = document.lifecycle?.state;
+    this.attempt = document.attempt == null ? null : structuredClone(document.attempt);
+    this.request = document.request ?? null;
     Object.freeze(this);
   }
 }

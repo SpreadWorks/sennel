@@ -172,11 +172,11 @@ export class ProcessLock {
     this.lockIdentity = null;
   }
 
-  acquire() {
+  acquire({ reclaimStale = true } = {}) {
     const initial = fs.existsSync(this.directory) ? this.inspect() : null;
     if (initial) {
       const assessment = this.processIdentitySource.assess(initial.owner.processIdentity);
-      if (assessment.status !== "stale") {
+      if (!reclaimStale || assessment.status !== "stale") {
         throw this.conflict(initial.owner, assessment);
       }
     }
@@ -186,7 +186,7 @@ export class ProcessLock {
       const existing = this.inspect();
       if (existing) {
         const assessment = this.processIdentitySource.assess(existing.owner.processIdentity);
-        if (assessment.status !== "stale") {
+        if (!reclaimStale || assessment.status !== "stale") {
           throw this.conflict(existing.owner, assessment);
         }
         if (!this.#removeStale(existing)) continue;
