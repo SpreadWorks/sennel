@@ -2163,6 +2163,27 @@ function canonicalMetric(payload) {
   });
 }
 
+/** Project a Definition-selected effect into the existing Activity metric ledger. */
+function gateRetryMetric(effect) {
+  if (effect === null) return null;
+  return canonicalMetric({
+    phase: effect.phase,
+    counter: "gateRetry",
+    delta: effect.operation === "increment" ? 1 : 0,
+    reset: effect.operation === "reset",
+  });
+}
+
+/** A receipt is applied authority only when its selected metric was saved with it. */
+function assertGateSettlementMetric(activity, settlement) {
+  if (!(settlement.application instanceof GateResultApplication)) return;
+  const expected = gateRetryMetric(settlement.application.decision.plan.retryMetric);
+  const actual = activity.metric?.toJSON?.() ?? activity.metric ?? null;
+  if (!isDeepStrictEqual(actual, expected?.toJSON() ?? null)) {
+    throw new CurrentFlowStateConflictError("Gate settlement Activity metric differs from its Definition-selected effect");
+  }
+}
+
 function observationNodeId(state, options = {}) {
   if (Object.hasOwn(options, "taskId")) {
     if (options.taskId === null) return state.root.id;
@@ -3420,12 +3441,7 @@ export class CanonicalFlowManagerStore {
       // Flow-wide task observations are anchored to the stable Task identity;
       // the Gate leaf remains part of the deterministic effect identity.
       nodeId: current.facts.target.taskId,
-      metric: canonicalMetric({
-        phase: effect.phase,
-        counter: "gateRetry",
-        delta: effect.operation === "increment" ? 1 : 0,
-        ...(effect.operation === "reset" ? { reset: true } : {}),
-      }),
+      metric: gateRetryMetric(effect),
       admission: new TaskGateSettlementAdmission(current, "metric"),
     });
   }
@@ -5462,7 +5478,10 @@ export class CanonicalFlowManagerStore {
     const replay = bindingActivities.find((entry) => entry.result.draftSettlementReceipt.id === receipt.id);
     if (replay !== undefined) {
       const latest = bindingActivities.at(-1)?.result?.draftSettlementReceipt ?? null;
-      if (latest?.id === receipt.id) return replay.result.draftSettlementReceipt;
+      if (latest?.id === receipt.id) {
+        assertGateSettlementMetric(replay, settlement);
+        return replay.result.draftSettlementReceipt;
+      }
       throw new CurrentFlowStateConflictError("Step settlement replay is stale for the latest execution generation");
     }
     let currentBinding = binding?.runId === state.runId && binding?.specId === state.specId
@@ -5950,6 +5969,7 @@ export class CanonicalFlowManagerStore {
       if (selected === null
         || selected.nodeId !== (binding.nodeId ?? binding.attempt.nodeId ?? binding.stepId)) return null;
       const activity = new FlowActivity(selected);
+      assertGateSettlementMetric(activity, settlement);
       return DraftStepSettlementReceipt.assertStored(activity.result.draftSettlementReceipt,
         { binding, result: activity.result.stepResult, settlement });
     }
@@ -6112,6 +6132,7 @@ export class CanonicalFlowManagerStore {
       const receipt = DraftStepSettlementReceipt.assertStored(activity.result.draftSettlementReceipt, {
         binding: { runId: state.runId, specId: resolved, stepId: definitionStepId,
           attempt: { id: expected.attemptId, sequence: expected.attemptSequence } }, result, settlement });
+      assertGateSettlementMetric(activity, settlement);
       if (hasFinalizationStepContract(definitionStepId)) {
         FinalizationResultEvidence.fromJSON(receipt.finalization.evidence).assertResult(result);
       }
@@ -7616,6 +7637,7 @@ export class CanonicalFlowManagerStore {
     } else if (settlement instanceof StepRoute) {
       next = this.runtime.confirmAttempt({ specId: resolved, activityId: selectedActivityId,
         result: lifecycleResult, artifactWrites: writes, admission,
+        metric: application instanceof GateResultApplication ? gateRetryMetric(application.decision.plan.retryMetric) : null,
         gateTaskLifecycle: application instanceof GateResultApplication ? application.decision.plan.taskLifecycle?.toJSON() ?? null : null,
         ...(settlement.requiresTargetActivation(state) ? {
           targetAttempt: commandContextAttempt(state, materializeNonblockingEffectStep(state, settlement.targetStepId, nodeId)) } : {}) });
@@ -7631,8 +7653,7 @@ export class CanonicalFlowManagerStore {
         attempt: gateRetryAttempt(state), result: rejected, artifactWrites: writes, admission,
         failure: { category: failure.category, code: failure.code ?? "GATE_REJECTED",
           message: rejected.summary, retryable: true, retryKind: "semantic" },
-        metric: decision.plan.retryMetric === null ? null : canonicalMetric({
-          phase: decision.plan.retryMetric.phase, counter: "gateRetry", delta: 1 }) });
+        metric: gateRetryMetric(decision.plan.retryMetric) });
     } else if (application instanceof GateResultApplication
       && application.decision.disposition.operation !== "nonblocking") {
       const failure = application.decision.facts.failure;

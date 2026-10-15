@@ -1,5 +1,7 @@
 # 55dc deferred product defects
 
+> 4b0b update: the R3 / R4a counter reset defect is fixed, and only those two skip options have been removed. Their inputs and assertions are unchanged; both failed before the product fix and pass after it. See [4b0b verification](../flow/4b0b-verification.md). The other four deferred cases remain outside this change. The original 55dc record below is retained as historical evidence.
+
 The user authorized skipping these six known failing tests so the 55dc performance optimization can proceed. These are deferred product defects, not passing verification. Their test bodies and assertions remain intact. Remove only the six `skip` options below after the corresponding product fixes, then run the listed targeted tests.
 
 | Test | Intended behavior | Defect and preserved failure evidence | Existing source plan |

@@ -41,6 +41,7 @@ import {
   FlowArtifactAttemptRecord,
 } from "../../../src/lib/flow-artifact-contract.js";
 import { buildRepairFingerprint } from "../../../src/flow/lib/repair-fingerprint.js";
+import { countGateRetry } from "../../../src/flow/lib/run-gate.js";
 import {
   CanonicalTestArtifactStore,
   canonicalRawEvidenceFingerprint,
@@ -444,7 +445,7 @@ describe("gate-impl integration (spec 202)", () => {
     assert.equal(env.data.result, "pass", "gate should PASS despite test file edits");
   });
 
-  it("R3: display retry history cannot exhaust a fresh canonical Attempt", { skip: "Known product defect deferred by user in 55dc; see 55dc-product-defects.md (Task Gate counter reset)" }, async () => {
+  it("R3: display retry history cannot exhaust a fresh canonical Attempt", async () => {
     tmp = createTmpDir();
     await setupFixture(tmp, {
       initialTest: BASE_TEST,
@@ -460,7 +461,7 @@ describe("gate-impl integration (spec 202)", () => {
     assert.equal(readCounter(tmp), 0, "PASS resets the display metric without granting it route authority");
   });
 
-  it("R4a: gate PASS resets counter to 0", { skip: "Known product defect deferred by user in 55dc; see 55dc-product-defects.md (Task Gate counter reset)" }, async () => {
+  it("R4a: gate PASS resets counter to 0", async () => {
     tmp = createTmpDir();
     const modified = [
       "// test fixture",
@@ -489,7 +490,7 @@ describe("gate-impl integration (spec 202)", () => {
     assert.equal(env.data.result, "pass", "identical test file should not trigger mechanical FAIL");
   });
 
-  it("passes bounded cited requirement context through the real gate command", async () => {
+  it("passes bounded cited requirement context through the real gate command and resets only the integration counter", async () => {
     tmp = createTmpDir();
     const capturePath = path.join(tmp, "captured-requirement-context-prompt.txt");
     const specJson = minimalSpecJson();
@@ -517,7 +518,7 @@ describe("gate-impl integration (spec 202)", () => {
       added_round: 0,
       status: "pending",
     }];
-    await setupFixture(tmp, {
+    const { flowManager } = await setupFixture(tmp, {
       initialTest: BASE_TEST,
       modifiedTest: `${BASE_TEST}// regression evidence for resultField\n`,
       specJson,
@@ -533,6 +534,11 @@ describe("gate-impl integration (spec 202)", () => {
       }),
     });
 
+    for (const phase of ["integration", "integration", "task-impl"]) {
+      flowManager.incrementMetric(phase, "gateRetry", { specId: SPEC_ID });
+    }
+    const before = flowManager.canonicalState(SPEC_ID);
+
     const res = await runGate(tmp, [], "integration", { realCli: true });
     assert.equal(res.exitCode, 0, `stderr=${res.stderr}`);
     const env = parseEnvelope(res.stdout);
@@ -543,6 +549,20 @@ describe("gate-impl integration (spec 202)", () => {
     assert.match(prompt, /\[SCHEMA:DECISION:1:1\] resultField/);
     assert.match(prompt, /\[FILE-MAP:R1:1\] tests\/dummy\.test\.js/);
     assert.match(prompt, /\[EVIDENCE:R1\]/);
+
+    const fresh = new FlowManager({ root: tmp, mainRoot: tmp, inWorktree: false });
+    const metrics = fresh.loadReadOnly(SPEC_ID).metrics;
+    assert.equal(countGateRetry(metrics, "integration"), 0);
+    assert.equal(countGateRetry(metrics, "task-impl"), 1);
+    const saved = fresh.readCurrentStepSettlement({ specId: SPEC_ID, stepId: "impl-gate", completed: true });
+    assert.equal(saved.result.kind, "impl-gate-passed");
+    assert.equal(saved.receipt.targetStepId, "retro");
+    assert.equal(fresh.canonicalState(SPEC_ID).nextAction().nodeId, "retro");
+    const producer = fresh.activityLedger(SPEC_ID).find((entry) => entry.id === saved.activityId);
+    assert.equal(producer.metric.phase, "integration");
+    assert.equal(producer.metric.counter, "gateRetry");
+    assert.equal(producer.metric.reset, true);
+    assertIntegrationGateBinding(fresh, saved.receipt, saved.activityId, before.attempt);
   });
 
   it("R5a-312: task-impl accepts explicit spec.json ID without file-map", async () => {

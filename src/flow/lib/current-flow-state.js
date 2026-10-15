@@ -8346,6 +8346,8 @@ export class FlowActivity {
         throw new CurrentFlowStateInvariantError("review publication facts are reserved for confirmed canonical Spec review stages");
       }
     }
+    const typedGateConfirmation = this.transition.operation === "confirm_attempt"
+      && ["task-gate", "impl-gate"].includes(this.result?.stepResult?.stepId);
     if (this.transition.operation === "record_metric") {
       if (this.metric === null || this.note !== null || this.timing === null) {
         throw new CurrentFlowStateInvariantError("record_metric Activity requires metric facts and timing only");
@@ -8354,8 +8356,9 @@ export class FlowActivity {
       if (this.note === null || this.metric !== null || this.timing === null) {
         throw new CurrentFlowStateInvariantError("record_note Activity requires note facts and timing only");
       }
-    } else if ((this.metric !== null && this.transition.operation !== "settle_spec_gate_retry") || this.note !== null) {
-      throw new CurrentFlowStateInvariantError("only observation Activities may carry metric or note facts");
+    } else if ((this.metric !== null && this.transition.operation !== "settle_spec_gate_retry"
+      && !typedGateConfirmation) || this.note !== null) {
+      throw new CurrentFlowStateInvariantError("metric facts require an observation or typed Gate settlement; note facts require an observation");
     }
     if (flowCreated) {
       const references = this.references.toJSON();

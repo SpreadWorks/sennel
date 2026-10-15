@@ -59,7 +59,7 @@ function canonicalFixtureGatePhase(state, nodeId) {
 }
 
 /** Execute a claimed fixture producer through its real registration and publication hooks. */
-export async function produceCanonicalFixtureStep(ctx, nodeId, { acceptanceResponse = null } = {}) {
+export async function produceCanonicalFixtureStep(ctx, nodeId, { acceptanceResponse = null, settle = true } = {}) {
   const { FLOW_COMMANDS } = await import("../../../src/flow/registry.js");
   const { dispatchContainer, installGateProviderFake, passingGateProviderResponse } = await import("./flow-dispatch-scenario.js");
   const phase = canonicalFixtureGatePhase(ctx.flowState, nodeId);
@@ -86,7 +86,7 @@ export async function produceCanonicalFixtureStep(ctx, nodeId, { acceptanceRespo
     const result = await new module.default().run(commandContainer, { expectSpec: ctx.specId,
       ...(phase === null ? {} : { phase }), expectRunId: ctx.flowState.runId, ...(ctx.flowState.issue === null ? { expectNoIssue: true } : { expectIssue: ctx.flowState.issue }) });
     if (result.ok === false) throw new Error(`canonical fixture ${nodeId} failed: ${JSON.stringify(result)}`);
-    if (entry.post) await entry.post(ctx, result);
+    if (settle && entry.post) await entry.post(ctx, result);
     return result;
   } finally {
     provider?.mock.restore();

@@ -13,6 +13,7 @@ import { execFileSync } from "node:child_process";
 import { after, afterEach, describe, it } from "node:test";
 
 import { FlowManager } from "../../../src/lib/flow-manager.js";
+import { FlowArtifactCatalog } from "../../../src/lib/flow-version.js";
 import { ImplementationReviewProducer } from "../../support/infrastructure/implementation-review-producer.js";
 import { prepareTaskGateScenario, executeTaskGateScenario, prepareIntegrationGateScenario, executeIntegrationGateScenario } from "../../support/infrastructure/task-gate-scenario.js";
 import { flowCommands } from "../../../src/lib/command-registry.js";
@@ -91,7 +92,7 @@ import SetReviewEvidenceCommand from "../../../src/flow/lib/set-review-evidence.
 import RunRecoverReviewPassCommand from "../../../src/flow/lib/run-recover-review-pass.js";
 import RunUpdateOverviewCommand from "../../../src/flow/lib/run-update-overview.js";
 import RunGateCommand, { appendIssueLogFromGateResult, GateIssueLogEntry,
-  parseGuardrailArticleEvaluation } from "../../../src/flow/lib/run-gate.js";
+  parseGuardrailArticleEvaluation, countGateRetry } from "../../../src/flow/lib/run-gate.js";
 import { computeGitState } from "../../../src/lib/git-state.js";
 import { CanonicalGatePromotion, canonicalGateRevision } from "../../../src/flow/lib/canonical-gate-artifacts.js";
 import {
@@ -173,6 +174,43 @@ function currentTaskSourceFingerprint(manager, specId, taskId = "T-1") {
     state: manager.loadReadOnly(specId),
     taskId,
   }).fingerprint;
+}
+
+function gateRetryCount(manager, specId, phase, taskId = null) {
+  return countGateRetry(manager.loadReadOnly(specId).metrics
+    .filter((entry) => entry.taskId === taskId), phase);
+}
+
+function gateSettlementSnapshot(manager, specId) {
+  return {
+    state: manager.canonicalState(specId).toJSON(),
+    activities: manager.activityLedger(specId),
+    catalog: manager.artifactCatalog(specId).toJSON(),
+    metrics: manager.loadReadOnly(specId).metrics,
+  };
+}
+
+/** Observe the real writer input without replacing its production persistence. */
+function captureStepSettlement(manager, execute) {
+  const commit = manager.commitSpecStepResult;
+  let input;
+  manager.commitSpecStepResult = function (selected) {
+    input = selected;
+    return commit.call(this, selected);
+  };
+  try {
+    const result = execute();
+    assert.ok(input, "the registered Step must save through its production writer");
+    return { input, result };
+  } finally {
+    manager.commitSpecStepResult = commit;
+  }
+}
+
+function replayStepSettlementReceipt(manager, input) {
+  return DraftStepSettlementReceipt.assertStored(manager.settleImplStepResult(input).receipt, {
+    binding: input.binding, result: input.stepResult, settlement: input.settlement,
+  });
 }
 
 function invalidTaskContextFacade(manager) {
@@ -300,6 +338,15 @@ function initializeReviewSource(rootPath) {
   commitAll(rootPath, "review source");
 }
 
+/** Reach the real provider claim before testing its atomic publication boundary. */
+async function evaluateFixtureGate(manager, specId, nodeId) {
+  return produceCanonicalFixtureStep({
+    root: manager.executionRoot(), executionRoot: manager.executionRoot(),
+    mainRoot: manager.specLocation(specId).repositoryRoot, flowManager: manager,
+    flowState: manager.loadReadOnly(specId), specId, config: {},
+  }, nodeId, { settle: false });
+}
+
 async function createMaterialTaskGateFixture({ repository, manager, ...input }) {
   if (!fs.existsSync(path.join(repository, ".git"))) initializeReviewSource(repository);
   const fixture = new TaskLifecycleFixture({
@@ -312,6 +359,7 @@ async function createMaterialTaskGateFixture({ repository, manager, ...input }) 
       `export const implemented = true;\n// ${manager.canonicalState(input.specId).attempt.id}\n`);
   }]]) });
   assert.equal(manager.canonicalState(input.specId).current.at(-1), "T-1-gate");
+  await evaluateFixtureGate(manager, input.specId, "T-1-gate");
   return fixture;
 }
 
@@ -705,6 +753,7 @@ async function integrationGateFixture(suffix) {
   await advanceTo(manager, created.specId, "impl-gate", {
     sourceMutations: new Map([["T-fixture-impl", sourceFilesMutation(repository, ["src/example.js"])]]),
   });
+  await evaluateFixtureGate(manager, created.specId, "impl-gate");
   return { manager, repository, specId: created.specId };
 }
 
@@ -6812,6 +6861,7 @@ describe("FlowManager canonical Version-1 runtime", () => {
     };
     let exhausted = null;
     for (let evaluation = 1; evaluation <= 5; evaluation += 1) {
+      if (evaluation > 1) await evaluateFixtureGate(fixture.manager, fixture.specId, "impl-gate");
       const commandResult = new CanonicalGatePromotion({
         state: fixture.manager.canonicalState(fixture.specId), phase: "integration", nodeId: "impl-gate",
       }).promote({
@@ -6829,6 +6879,8 @@ describe("FlowManager canonical Version-1 runtime", () => {
         flowState: fixture.manager.loadReadOnly(fixture.specId), phase: "integration",
         prospectivePublication: preparation.publication.gatePublication }));
       preparation.prepared.step.execute();
+      const fresh = new FlowManager({ root: fixture.repository, mainRoot: fixture.repository, inWorktree: false });
+      assert.equal(gateRetryCount(fresh, fixture.specId, "integration"), Math.min(evaluation, 4));
       if (evaluation < 5) {
         assert.equal(decision.disposition.operation, "retry");
         assert.equal(fixture.manager.canonicalState(fixture.specId).attempt.sequence, evaluation + 1);
@@ -6939,6 +6991,8 @@ describe("FlowManager canonical Version-1 runtime", () => {
         { id: "T-1", title: "first", goal: "finish first", parent: null, origin: "plan", added_round: 0, status: "pending" },
         { id: "T-2", title: "second", goal: "begin second", parent: null, origin: "plan", added_round: 0, status: "pending" },
       ] });
+    manager.appendMetric({ phase: "task-impl", counter: "gateRetry", delta: 4 }, { specId, taskId: "T-1" });
+    manager.appendMetric({ phase: "integration", counter: "gateRetry", delta: 7 }, { specId, taskId: null });
     const before = { state: manager.canonicalState(specId).toJSON(),
       activities: manager.activityLedger(specId), catalog: manager.artifactCatalog(specId).toJSON() };
     const forgedLifecycle = { operation: "complete-and-advance", taskId: "T-1", successorStepId: "T-2-impl", resetStepIds: [] };
@@ -6952,7 +7006,8 @@ describe("FlowManager canonical Version-1 runtime", () => {
     const commandResult = new CanonicalGatePromotion({ state: manager.canonicalState(specId),
       phase: "task-impl", nodeId: "T-1-gate", activeTaskId: "T-1",
     }).promote({ result: "pass", artifacts: { sourceFingerprint: currentTaskSourceFingerprint(manager, specId) } });
-    executeTaskGateScenario({ repository, manager, specId, commandResult });
+    const preparation = prepareTaskGateScenario({ repository, manager, specId, commandResult });
+    const saved = captureStepSettlement(manager, () => preparation.prepared.step.execute());
     const fresh = new FlowManager({ root: repository, mainRoot: repository, inWorktree: false });
     const reloaded = fresh.canonicalState(specId);
     assert.equal(reloaded.findNode("T-1").status, "done");
@@ -6962,6 +7017,29 @@ describe("FlowManager canonical Version-1 runtime", () => {
     assert.deepEqual(activity.transition.gateTaskLifecycle, forgedLifecycle);
     assert.equal(activity.result.stepResult.kind, "task-gate-passed");
     assert.equal(activity.result.draftSettlementReceipt.targetStepId, "T-2-impl");
+    assert.equal(gateRetryCount(fresh, specId, "task-impl", "T-1"), 0);
+    assert.equal(gateRetryCount(fresh, specId, "integration"), 7);
+    assert.equal(fresh.activityLedger(specId).length, before.activities.length + 1,
+      "the confirmation carries its metric without a separate metric Activity");
+    assert.equal(activity.metric.phase, "task-impl");
+    assert.equal(activity.metric.counter, "gateRetry");
+    assert.equal(activity.metric.reset, true);
+    const source = fresh.readCurrentStepSettlement({ specId, stepId: "T-1-gate", completed: true });
+    const receipt = source.receipt.toJSON();
+    assert.deepEqual(receipt, activity.result.draftSettlementReceipt);
+    const settledSnapshot = gateSettlementSnapshot(fresh, specId);
+    assert.deepEqual(replayStepSettlementReceipt(fresh, saved.input), receipt);
+    assert.deepEqual(fresh.findStepSettlementReceipt(saved.input).toJSON(), receipt);
+    assert.deepEqual(gateSettlementSnapshot(fresh, specId), settledSnapshot,
+      "exact replay and lost-response lookup cannot duplicate confirmation or reset");
+    fresh.incrementMetric("task-impl", "gateRetry", { specId, taskId: "T-1" });
+    const later = new FlowManager({ root: repository, mainRoot: repository, inWorktree: false });
+    const laterSnapshot = gateSettlementSnapshot(later, specId);
+    assert.deepEqual(replayStepSettlementReceipt(later, saved.input), receipt);
+    assert.deepEqual(later.findStepSettlementReceipt(saved.input).toJSON(), receipt);
+    assert.equal(gateRetryCount(later, specId, "task-impl", "T-1"), 1);
+    assert.deepEqual(gateSettlementSnapshot(later, specId), laterSnapshot,
+      "replaying an old reset must preserve later metrics, Attempts, and publications");
     const staleSpecId = "001-task-gate-pass-stale-decision";
     const staleRoot = root();
     const staleManager = new FlowManager({ root: staleRoot, mainRoot: staleRoot, inWorktree: false });
@@ -6969,6 +7047,8 @@ describe("FlowManager canonical Version-1 runtime", () => {
       runId: "run-task-gate-pass-stale-decision", request: "Reject a receipt from another current Gate.",
       taskDocuments: [{ id: "T-1", title: "other", goal: "remain unchanged",
         parent: null, origin: "plan", added_round: 0, status: "pending" }] });
+    staleManager.appendMetric({ phase: "task-impl", counter: "gateRetry", delta: 4 },
+      { specId: staleSpecId, taskId: "T-1" });
     const staleBefore = { state: staleManager.canonicalState(staleSpecId).toJSON(),
       activities: staleManager.activityLedger(staleSpecId), catalog: staleManager.artifactCatalog(staleSpecId).toJSON() };
     assert.throws(() => prepareTaskGateScenario({ repository: staleRoot, manager: staleManager, specId: staleSpecId, commandResult }),
@@ -6976,6 +7056,7 @@ describe("FlowManager canonical Version-1 runtime", () => {
     assert.deepEqual(staleManager.canonicalState(staleSpecId).toJSON(), staleBefore.state);
     assert.deepEqual(staleManager.activityLedger(staleSpecId), staleBefore.activities);
     assert.deepEqual(staleManager.artifactCatalog(staleSpecId).toJSON(), staleBefore.catalog);
+    assert.equal(gateRetryCount(staleManager, staleSpecId, "task-impl", "T-1"), 4);
   });
 
   it("persists the sealed final Task Gate pass lifecycle through Flow integration", async () => {
@@ -6986,6 +7067,9 @@ describe("FlowManager canonical Version-1 runtime", () => {
       runId: "run-task-gate-pass-integration", request: "Return to integration after the final Task.",
       taskDocuments: [{ id: "T-1", title: "only", goal: "finish only",
         parent: null, origin: "plan", added_round: 0, status: "pending" }] });
+    manager.appendMetric({ phase: "task-impl", counter: "gateRetry", delta: 4 }, { specId, taskId: "T-1" });
+    manager.appendMetric({ phase: "integration", counter: "gateRetry", delta: 7 }, { specId, taskId: null });
+    const before = manager.activityLedger(specId);
     confirmCanonicalFixtureStep(manager, specId, "T-1-gate");
     const fresh = new FlowManager({ root: repository, mainRoot: repository, inWorktree: false });
     assert.equal(fresh.canonicalState(specId).findNode("T-1").status, "done");
@@ -6994,6 +7078,133 @@ describe("FlowManager canonical Version-1 runtime", () => {
     assert.equal(activity.result.stepResult.kind, "task-gate-passed");
     assert.equal(activity.result.draftSettlementReceipt.targetStepId, "test-execute");
     assert.equal(activity.transition.gateTaskLifecycle.successorStepId, "test-execute");
+    assert.equal(gateRetryCount(fresh, specId, "task-impl", "T-1"), 0);
+    assert.equal(gateRetryCount(fresh, specId, "integration"), 7);
+    assert.equal(fresh.activityLedger(specId).length, before.length + 1);
+    const source = fresh.readCurrentStepSettlement({ specId, stepId: "T-1-gate", completed: true });
+    assert.deepEqual(source.receipt.toJSON(), activity.result.draftSettlementReceipt);
+    const gate = fresh.readArtifact({ specId, consumerNodeId: "acceptance-review",
+      logicalKey: "task.gate", parameters: { taskId: "T-1" } });
+    assert.equal(gate.descriptor.activityId, source.activityId);
+  });
+
+  it("keeps Task Gate reset atomic across save rollback and committed acknowledgement recovery", async () => {
+    for (const boundary of ["activity-appended", "before-json-rename", "before-json-directory-fsync"]) {
+      const repository = root();
+      const specId = `001-task-gate-reset-${boundary}`;
+      let armed = false;
+      let interrupted = false;
+      let catalogFile;
+      const manager = new FlowManager({ root: repository, mainRoot: repository, inWorktree: false,
+        versionStoreFaultInjector: ({ phase, filePath, activity }) => {
+          if (armed && phase === boundary && (phase === "activity-appended"
+            ? activity.nodeId === "T-1-gate" : filePath === catalogFile)) {
+            armed = false;
+            interrupted = true;
+            throw new Error(`injected Task Gate reset interruption at ${boundary}`);
+          }
+        } });
+      await createMaterialTaskGateFixture({ repository, manager, specId,
+        runId: `run-task-gate-reset-${boundary}`, request: "Commit the Gate reset and lifecycle together.",
+        taskDocuments: [{ id: "T-1", title: "only", goal: "preserve atomic Gate settlement",
+          parent: null, origin: "plan", added_round: 0, status: "pending" }] });
+      catalogFile = manager.specLocation(specId).catalogFile;
+      manager.appendMetric({ phase: "task-impl", counter: "gateRetry", delta: 4 }, { specId, taskId: "T-1" });
+      manager.appendMetric({ phase: "integration", counter: "gateRetry", delta: 7 }, { specId, taskId: null });
+      const commandResult = new CanonicalGatePromotion({ state: manager.canonicalState(specId),
+        phase: "task-impl", nodeId: "T-1-gate", activeTaskId: "T-1",
+      }).promote({ result: "pass", artifacts: { sourceFingerprint: currentTaskSourceFingerprint(manager, specId) } });
+      const preparation = prepareTaskGateScenario({ repository, manager, specId, commandResult });
+      const before = gateSettlementSnapshot(manager, specId);
+      const committed = boundary === "before-json-directory-fsync";
+      armed = true;
+      let saved;
+      if (committed) {
+        saved = captureStepSettlement(manager, () => preparation.prepared.step.execute());
+      } else {
+        assert.throws(() => preparation.prepared.step.execute(), /injected Task Gate reset interruption/);
+      }
+      assert.equal(interrupted, true, boundary);
+      const fresh = new FlowManager({ root: repository, mainRoot: repository, inWorktree: false });
+      if (!committed) {
+        assert.deepEqual(gateSettlementSnapshot(fresh, specId), before,
+          `${boundary} cannot expose a partial reset, confirmation, receipt, or publication`);
+        assert.equal(gateRetryCount(fresh, specId, "task-impl", "T-1"), 4);
+        assert.equal(fresh.canonicalState(specId).findNode("T-1").status, "in_progress");
+        assert.equal(fresh.readCurrentStepSettlement({ specId, stepId: "task-gate" }).result.kind,
+          "task-gate-execution-required");
+        const retry = new CanonicalGatePromotion({ state: fresh.canonicalState(specId),
+          phase: "task-impl", nodeId: "T-1-gate", activeTaskId: "T-1",
+        }).promote({ result: "pass", artifacts: { sourceFingerprint: currentTaskSourceFingerprint(fresh, specId) } });
+        executeTaskGateScenario({ repository, manager: fresh, specId, commandResult: retry });
+      }
+      const resumed = new FlowManager({ root: repository, mainRoot: repository, inWorktree: false });
+      const source = resumed.readCurrentStepSettlement({ specId, stepId: "T-1-gate", completed: true });
+      assert.equal(gateRetryCount(resumed, specId, "task-impl", "T-1"), 0);
+      assert.equal(gateRetryCount(resumed, specId, "integration"), 7);
+      assert.equal(resumed.canonicalState(specId).findNode("T-1").status, "done");
+      assert.equal(resumed.canonicalState(specId).nextAction().nodeId, "test-execute");
+      assert.equal(resumed.activityLedger(specId).length, before.activities.length + 1);
+      assert.equal(resumed.readArtifact({ specId, consumerNodeId: "acceptance-review",
+        logicalKey: "task.gate", parameters: { taskId: "T-1" } }).descriptor.activityId, source.activityId);
+      if (committed) {
+        const after = gateSettlementSnapshot(resumed, specId);
+        assert.deepEqual(resumed.findStepSettlementReceipt(saved.input).toJSON(), source.receipt.toJSON());
+        assert.deepEqual(replayStepSettlementReceipt(resumed, saved.input), source.receipt.toJSON());
+        assert.deepEqual(gateSettlementSnapshot(resumed, specId), after,
+          "a lost durable acknowledgement recovers the existing reset and receipt exactly once");
+      }
+    }
+  });
+
+  it("rejects metricless and mismatched saved Task Gate receipts while keeping general history readable", async (t) => {
+    const repository = root();
+    const specId = "001-task-gate-reset-authentication";
+    const manager = new FlowManager({ root: repository, mainRoot: repository, inWorktree: false });
+    await createMaterialTaskGateFixture({ repository, manager, specId,
+      runId: "run-task-gate-reset-authentication", request: "Authenticate the selected Gate metric on every receipt read.",
+      taskDocuments: [{ id: "T-1", title: "only", goal: "authenticate the committed reset",
+        parent: null, origin: "plan", added_round: 0, status: "pending" }] });
+    manager.appendMetric({ phase: "task-impl", counter: "gateRetry", delta: 4 }, { specId, taskId: "T-1" });
+    const commandResult = new CanonicalGatePromotion({ state: manager.canonicalState(specId),
+      phase: "task-impl", nodeId: "T-1-gate", activeTaskId: "T-1",
+    }).promote({ result: "pass", artifacts: { sourceFingerprint: currentTaskSourceFingerprint(manager, specId) } });
+    const saved = captureStepSettlement(manager, () => executeTaskGateScenario({ repository, manager, specId, commandResult }));
+    const validState = manager.canonicalState(specId).toJSON();
+    const receipt = manager.readCurrentStepSettlement({ specId, stepId: "T-1-gate", completed: true }).receipt.toJSON();
+    for (const variant of ["metricless", "mismatched"]) {
+      const clone = new SeedWorkRoot(repository, { prefix: `sennel-gate-reset-${variant}-` });
+      t.after(() => clone.cleanup());
+      const fresh = new FlowManager({ root: clone.root, mainRoot: clone.root, inWorktree: false });
+      const location = fresh.specLocation(specId);
+      const activities = fs.readFileSync(location.activitiesFile, "utf8").trimEnd().split("\n").map(JSON.parse);
+      const confirmation = activities.find((entry) => entry.result?.draftSettlementReceipt?.id === receipt.id);
+      assert.equal(confirmation.transition.operation, "confirm_attempt");
+      assert.equal(confirmation.metric.reset, true, "start from a genuine producer reset");
+      confirmation.metric = variant === "metricless" ? null : { ...confirmation.metric, reset: false, delta: 1 };
+      const bytes = Buffer.from(`${activities.map((entry) => JSON.stringify(entry)).join("\n")}\n`);
+      fs.writeFileSync(location.activitiesFile, bytes);
+      const catalog = JSON.parse(fs.readFileSync(location.catalogFile, "utf8"));
+      const descriptor = catalog.artifacts.find((entry) => entry.logicalKey === "flow.activities");
+      descriptor.hash = crypto.createHash("sha256").update(bytes).digest("hex");
+      descriptor.size = bytes.length;
+      fs.writeFileSync(location.catalogFile, `${JSON.stringify(new FlowArtifactCatalog({ artifacts: catalog.artifacts }).toJSON())}\n`);
+      assert.deepEqual(fresh.canonicalState(specId).toJSON(), validState,
+        "general history remains loadable without repairing an old metric");
+      assert.equal(fresh.activityLedger(specId).find((entry) => entry.id === confirmation.id).metric?.reset ?? null,
+        variant === "metricless" ? null : false);
+      const before = gateSettlementSnapshot(fresh, specId);
+      for (const read of [
+        () => fresh.settleImplStepResult(saved.input),
+        () => fresh.readCurrentStepSettlement({ specId, stepId: "T-1-gate", completed: true }),
+        () => fresh.findStepSettlementReceipt(saved.input),
+      ]) {
+        assert.throws(read, (error) => error instanceof CurrentFlowStateConflictError
+          && /metric.*Definition-selected effect/.test(error.message), variant);
+        assert.deepEqual(gateSettlementSnapshot(fresh, specId), before,
+          "receipt refusal cannot repair history, reset metrics, publish, or advance");
+      }
+    }
   });
 
   it("binds Task Gate issue settlement to the exact atomic Result and rejects partial publication", async () => {
@@ -7105,6 +7316,8 @@ describe("FlowManager canonical Version-1 runtime", () => {
     const review = await publishTaskReview({ repository, manager, specId });
     assert.notEqual(review.ok, false, JSON.stringify(review));
     assert.equal(manager.canonicalState(specId).current.at(-1), "T-1-gate");
+    await evaluateFixtureGate(manager, specId, "T-1-gate");
+    manager.appendMetric({ phase: "task-impl", counter: "gateRetry", delta: 4 }, { specId, taskId: "T-1" });
     const result = new CanonicalGatePromotion({
       state: manager.canonicalState(specId), phase: "task-impl", nodeId: "T-1-gate", activeTaskId: "T-1",
     }).promote({
@@ -7113,11 +7326,12 @@ describe("FlowManager canonical Version-1 runtime", () => {
     });
     const preparation = prepareTaskGateScenario({ repository, manager, specId, commandResult: result });
     fs.appendFileSync(path.join(repository, "README.md"), "concurrent mutation after Gate evaluation\n");
-    const before = { state: manager.canonicalState(specId).toJSON(), activities: manager.activityLedger(specId) };
+    const before = gateSettlementSnapshot(manager, specId);
     assert.throws(() => preparation.prepared.step.execute(), /source fingerprint|stale|source.*changed/i);
-    assert.deepEqual(manager.canonicalState(specId).toJSON(), before.state);
-    assert.deepEqual(manager.activityLedger(specId), before.activities);
-    assert.equal(manager.canonicalState(specId).findNode("T-1-gate").status, "in_progress");
+    const fresh = new FlowManager({ root: repository, mainRoot: repository, inWorktree: false });
+    assert.deepEqual(gateSettlementSnapshot(fresh, specId), before);
+    assert.equal(gateRetryCount(fresh, specId, "task-impl", "T-1"), 4);
+    assert.equal(fresh.canonicalState(specId).findNode("T-1-gate").status, "in_progress");
   });
 
   it("routes the first current Task Gate receipt through the sealed repair plan without a raw retry", async () => {

@@ -487,7 +487,7 @@ export class CanonicalFlowRuntime {
     });
   }
 
-  confirmAttempt({ specId, activityId, result, status = "done", timing = null, provider = null, model = null, effort = null, usage = null, references, specRecord, artifactWrites, artifactRemovals, artifactBaselines, testSourceBaseline, sourceWorkerUpgrade = undefined, admission = undefined, gateTaskLifecycle = null, targetAttempt = null, outbox = null, publicationLimits = undefined } = {}) {
+  confirmAttempt({ specId, activityId, result, status = "done", timing = null, provider = null, model = null, effort = null, usage = null, metric = null, references, specRecord, artifactWrites, artifactRemovals, artifactBaselines, testSourceBaseline, sourceWorkerUpgrade = undefined, admission = undefined, gateTaskLifecycle = null, targetAttempt = null, outbox = null, publicationLimits = undefined } = {}) {
     const state = this.#state(specId);
     return this.#applyAttemptTransition(specId, state, {
       id: activityId,
@@ -496,6 +496,7 @@ export class CanonicalFlowRuntime {
       outbox,
       attempt: targetAttempt,
       result,
+      metric,
       status,
       timing,
       provider,
