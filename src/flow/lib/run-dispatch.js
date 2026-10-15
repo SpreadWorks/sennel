@@ -57,6 +57,7 @@ import {
   RepairEvidenceDirective,
 } from "./next-action-directive.js";
 import { finalRegressionWorktreeFingerprint } from "./test-artifacts.js";
+import { FlowRepositoryRuntimeArtifactRegistry } from "./flow-repository-runtime-artifacts.js";
 import GetNextActionCommand from "./get-next-action.js";
 import { PRODUCT } from "../../lib/product.js";
 import {
@@ -65,6 +66,7 @@ import {
   WorkerArtifactRetryExhaustedError,
   RequirementTestStructuralHandoffError,
   WorkerArtifactHandoffRequest,
+  DispatchExecutionRepositoryBinding,
   WorkerArtifactHandoffReference,
   WorkerArtifactWorkerInstructions,
   canonicalWorkerExecutionClaimForStored,
@@ -726,9 +728,12 @@ function runtimeViewPathspecExcludes(location) {
  * list narrow deliberately leaves spec.record, source, tests, and every
  * other cataloged artifact in the approval fingerprint.
  */
+const FLOW_DISPATCH_RUNTIME_ARTIFACTS = new FlowRepositoryRuntimeArtifactRegistry();
+
 function dispatchFingerprintPathspecExcludes(ctx) {
   const location = optionalApprovalReceiptLocation(ctx);
   return [
+    ...FLOW_DISPATCH_RUNTIME_ARTIFACTS.gitPathspecExcludes(),
     ...(location === null
       ? []
       : [...receiptControlPathspecExcludes(location), ...runtimeViewPathspecExcludes(location)]),
@@ -1457,9 +1462,11 @@ export default class RunDispatchCommand extends FlowCommand {
 
   captureAction(ctx, session, nextAction, dispatchCount, phase) {
     try {
+      const retainedFingerprint = isConditionalDraftWorkerStep(nextAction.step)
+        ? this.handoffCoordinator.retainedDraftRepositoryFingerprint({ ctx, stepId: nextAction.step }) : null;
       return session.captureAction(
         workerFacingNextAction(nextAction),
-        this.repositoryFingerprint(ctx),
+        retainedFingerprint ?? this.repositoryFingerprint(ctx),
       );
     } catch (cause) {
       throw new FlowDispatchRepositoryFingerprintError({
@@ -1842,6 +1849,9 @@ export default class RunDispatchCommand extends FlowCommand {
           deferConditionalAdmission: !reusePrior,
         });
     request = request.withExecutionGeneration(executionGeneration);
+    if (claimed !== null && !(reusePrior && prior?.phase === "publication")) {
+      request = request.withDispatchRepositoryBinding(persistedRequest?.dispatchRepositoryBinding ?? null);
+    }
     if (claimed !== null) request.assertExecutionContract();
     if (!(reusePrior && prior?.phase === "publication") && persistedRequest !== null
       && persistedRequest.requestDigest !== request.requestDigest) {
@@ -1882,6 +1892,11 @@ export default class RunDispatchCommand extends FlowCommand {
         const result = await preparedStep.step.execute();
         return { request: null, invocation: workerInvocation, publicationRecovery: false, stepResult: result };
       }
+    }
+    if (claimed === null) {
+      request = request.withDispatchRepositoryBinding(DispatchExecutionRepositoryBinding.capture({
+        ctx, request, invocation: workerInvocation, fingerprint: this.repositoryFingerprint,
+      }));
     }
     if (claimed === null && typeof agent?.projectInvocation === "function") {
       const plannedWork = FlowDispatchWork.forAdmission(workerInvocation, request);

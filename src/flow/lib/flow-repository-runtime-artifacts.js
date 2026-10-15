@@ -68,6 +68,10 @@ export class FlowRepositoryRuntimeArtifactRegistry {
       throw new Error("repository runtime lock ownership requires FlowVersionRuntimeLockLocation values");
     }
     return this.#exact.has(relativePath)
+      || (relativePath.endsWith(".tmp") && [...this.#exact].some((owned) => (
+        relativePath.startsWith(`${owned}.`) && relativePath.slice(owned.length + 1).endsWith(".tmp")
+          && !relativePath.slice(owned.length + 1).includes("/")
+      )))
       || this.#prefixes.some((prefix) => relativePath.startsWith(prefix))
       || runtimeLocks.some((lock) => lock.matchesRepositoryPath(relativePath));
   }

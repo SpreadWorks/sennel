@@ -2,8 +2,6 @@ import { acceptanceRetroSeed } from "./acceptance-phase-finalization.contract.js
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
-import childProcess from "node:child_process";
-import { syncBuiltinESMExports } from "node:module";
 import { fileURLToPath } from "node:url";
 import { describe, test } from "node:test";
 import { AcceptancePhaseScenario, acceptanceProviderResponse } from "../../support/acceptance-phase-scenario.js";
@@ -522,7 +520,7 @@ describe("Acceptance phase canonical producer / reload / consumer scenarios", { 
   });
 });
 
-test("A03 guarded Spec correction republishes Requirement tests and rejects old question, risk decision and report identities", { skip: "Known product defect deferred by user in 55dc; see 55dc-product-defects.md (Draft answer worker admission)" }, async (t) => {
+test("A03 guarded Spec correction republishes Requirement tests and rejects old question, risk decision and report identities", async (t) => {
   const question = (revision) => ({ state: "CandidateQuestion", id: "q1", category: "user-visible-behavior",
     question: "Which requirement behavior must be preserved?", revision, provenance: { producer: "draft-worker" },
     evidenceDigest: (revision === 0 ? "a" : "b").repeat(64) });
@@ -562,19 +560,25 @@ test("A03 guarded Spec correction republishes Requirement tests and rejects old 
   // immutable frontier. The correction branch remains at final-regression,
   // where the existing authorized reopen route applies.
   const reportBranch = AcceptancePhaseScenario.fromSeed(t, seed);
-  const execFile = childProcess.execFile;
-  let regressionCalls = 0;
-  const regressionProcess = t.mock.method(childProcess, "execFile", (command, args, options, callback) => {
-    if (options.cwd !== reportBranch.root || command !== "npm") return execFile(command, args, options, callback);
-    regressionCalls += 1;
-    // External process boundary only; production still captures started,
-    // exit, raw log, classification, execution binding and user authority.
-    return execFile(process.execPath, ["-e", "process.stderr.write('ERR_ASSERTION\\nsrc/implementation.js: required behavior remains missing.\\n'); process.exit(1);"], options, callback);
-  });
-  syncBuiltinESMExports();
+  const regressionBin = createTmpDir("sennel-a03-regression-bin-");
+  const previousPath = process.env.PATH;
+  t.after(() => { process.env.PATH = previousPath; removeTmpDir(regressionBin); });
+  const regressionCallsPath = path.join(regressionBin, "calls.jsonl");
+  // The managed launcher executes npm in another process. Put the external
+  // failure producer on PATH, outside either repository's evidence binding.
+  fs.writeFileSync(path.join(regressionBin, "npm"), [
+    `#!${process.execPath}`,
+    'const fs = require("node:fs");',
+    `fs.appendFileSync(${JSON.stringify(regressionCallsPath)}, JSON.stringify({ cwd: process.cwd(), argv: process.argv.slice(2) }) + "\\n");`,
+    'process.stderr.write("ERR_ASSERTION\\nsrc/implementation.js: required behavior remains missing.\\n");',
+    "process.exit(1);",
+  ].join("\n"), { mode: 0o755 });
+  const regressionCalls = () => fs.readFileSync(regressionCallsPath, "utf8").trim().split("\n").map(JSON.parse);
+  process.env.PATH = `${regressionBin}${path.delimiter}${previousPath}`;
   const failed = await reportBranch.runRegistered("final-regression");
   assert.equal(failed.result, "fail", JSON.stringify(failed));
-  assert.equal(regressionCalls, 1);
+  assert.equal(regressionCalls().length, 1);
+  assert.deepEqual(regressionCalls()[0], { cwd: reportBranch.root, argv: ["test", "--"] });
   reportBranch.reload();
   const firstFailure = reportBranch.commandArtifact("final.regression").payload;
   assert.equal(firstFailure.failureKind, "caused_by_current_change");
@@ -582,9 +586,9 @@ test("A03 guarded Spec correction republishes Requirement tests and rejects old 
   assert.equal(repairClaim.ok, true, JSON.stringify(repairClaim));
   reportBranch.reload();
   const retried = await reportBranch.runRegistered("final-regression");
-  regressionProcess.mock.restore(); syncBuiltinESMExports();
+  process.env.PATH = previousPath;
   assert.equal(retried.result, "fail", JSON.stringify(retried));
-  assert.equal(regressionCalls, 2);
+  assert.equal(regressionCalls().length, 2);
   reportBranch.reload();
   const failureChoice = await reportBranch.next();
   assert.equal(failureChoice.directive?.kind, "await_user_decision");

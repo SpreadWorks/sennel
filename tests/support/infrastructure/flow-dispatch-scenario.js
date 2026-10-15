@@ -16,6 +16,7 @@ import { Logger } from "../../../src/lib/log.js";
 import { dispatch } from "../../../src/lib/dispatcher.js";
 import { flowCommands } from "../../../src/lib/command-registry.js";
 import { buildFlowCommandHookContext } from "../../../src/flow/lib/flow-context.js";
+import { normalizeManagedGitignore } from "../../../src/lib/gitignore.js";
 
 export class FlowDispatchExecution {
   constructor(name, argv) {
@@ -70,6 +71,12 @@ export function fixtureRepository(prefix) {
   }
 }
 
+/** Apply the normal setup policy before a fixture captures repository authority. */
+export function configureManagedFixtureRepository(root) {
+  fs.writeFileSync(path.join(root, ".gitignore"), normalizeManagedGitignore(".tmp/\n"));
+  commitAll(root, "configure managed fixture paths");
+}
+
 export function requestInput(request, name) {
   const input = request.inputs.find((entry) => entry.name === name);
   assert.notEqual(input, undefined, `${request.stepId} request must contain ${name}`);
@@ -94,6 +101,21 @@ export function requestPayloadPath(request, logicalName) {
   const payload = request.payloads.find((entry) => entry.logicalName === logicalName);
   assert.notEqual(payload, undefined, `${request.stepId} request must contain ${logicalName}`);
   return payload.payloadPath;
+}
+
+/** Observe the final parent-issued request identity at the external worker boundary. */
+export class WorkerRequestIdentityObserver {
+  #requestDigests = new Map();
+
+  constructor(worker) { this.worker = worker; }
+
+  call(prompt, options) {
+    const reference = JSON.parse(options.executionEnvironment[FLOW_DISPATCH_INVOCATION_ENV]);
+    this.#requestDigests.set(reference.dispatchInvocationId, reference.requestDigest);
+    return this.worker(prompt, options);
+  }
+
+  requestDigest(dispatchInvocationId) { return this.#requestDigests.get(dispatchInvocationId); }
 }
 
 /** Deterministic external judgments for the exact schema transported by a Gate. */

@@ -52,6 +52,7 @@ import {
   DraftAwaitUserDecision,
   DraftExecutionSettlement,
   DraftConditionalWorkerExecutionBinding,
+  DraftStepExecutionLifecycle,
   DraftWorkerExecutionClaim,
   DraftWorkerExecutionContinuationFacts,
   DraftStepSettlementReceipt,
@@ -187,7 +188,8 @@ export const WORKER_ARTIFACT_HANDOFF_REQUEST_ENV = PRODUCT.env("FLOW_HANDOFF_REQ
 const REQUIREMENT_TEST_WORKER_STEPS = new Set(["test-generate", "test-repair"]);
 // Source requests store only canonical checkpoint references. Version 4
 // intentionally rejects request documents that duplicated baseline authority.
-export const WORKER_ARTIFACT_HANDOFF_VERSION = 5;
+// Version 6 binds conditional execution currentness to its immutable request.
+export const WORKER_ARTIFACT_HANDOFF_VERSION = 6;
 export const WORKER_ARTIFACT_HANDOFF_ROOT = PRODUCT.managedPath("handoffs");
 
 const SHA256 = /^[a-f0-9]{64}$/;
@@ -1860,7 +1862,7 @@ function authoritySnapshotError(message, cause = null, data = {}) {
 
 function isWorkerRuntimePath(relativePath, runtimeLocks = []) {
   const segments = relativePath.split("/");
-  if (segments.includes(".git") || segments.includes(".tmp")) return true;
+  if (segments.includes(".git")) return true;
   return FLOW_REPOSITORY_RUNTIME_ARTIFACTS.owns(relativePath, { runtimeLocks });
 }
 
@@ -1894,6 +1896,12 @@ function authorityRuntimeLocks(runtimeLocks = []) {
     throw authoritySnapshotError("worker authority runtime locks must be typed Version lock locations");
   }
   return Object.freeze([...new Set(runtimeLocks)]);
+}
+
+/** A main-repository lock namespace must never rebase a nested worktree's source paths. */
+function authorityRuntimeLocksForRoot(root, runtimeLocks = []) {
+  const resolvedRoot = path.resolve(root);
+  return authorityRuntimeLocks(runtimeLocks).filter((lock) => isWithin(resolvedRoot, lock.directory));
 }
 
 function isIgnoredAuthorityPath(root, relativePath, ignoredDirectories, runtimeLocks = []) {
@@ -2099,7 +2107,7 @@ function authorityFileEntry(root, relativePath, budget) {
   });
 }
 
-function filteredIndexDigest(root, bytes, ignoredDirectories, runtimeLocks) {
+function filteredIndexDigest(root, bytes, runtimeLocks) {
   const hash = crypto.createHash("sha256");
   for (const record of bytes.toString("utf8").split("\u0000").filter(Boolean)) {
     const separator = record.indexOf("\t");
@@ -2107,7 +2115,9 @@ function filteredIndexDigest(root, bytes, ignoredDirectories, runtimeLocks) {
       throw authoritySnapshotError("worker artifact authority received malformed Git index data");
     }
     const relativePath = record.slice(separator + 1);
-    if (!isIgnoredAuthorityPath(root, relativePath, ignoredDirectories, runtimeLocks)) hash.update(record).update("\u0000");
+    // A generated content directory is not permission to stage changes in it.
+    // Only registered runtime ownership can normalize the immutable Git index.
+    if (!isIgnoredAuthorityPath(root, relativePath, [], runtimeLocks)) hash.update(record).update("\u0000");
   }
   return hash.digest("hex");
 }
@@ -2117,7 +2127,6 @@ function gitAuthoritySnapshot(root, { ignoredDirectories = [], runtimeLocks = []
   const indexDigest = filteredIndexDigest(
     root,
     boundedGitOutput(root, ["ls-files", "--stage", "-z"], "Git index"),
-    ignoredDirectories,
     runtimeLocks,
   );
   let status;
@@ -2201,7 +2210,7 @@ export class WorkerArtifactRepositoryMutationSnapshot {
       "worker artifact repository authority",
     )));
     this.ignoredDirectories = authorityIgnoredDirectories(ignoredDirectories);
-    this.runtimeLocks = authorityRuntimeLocks(runtimeLocks);
+    this.runtimeLocks = Object.freeze(authorityRuntimeLocksForRoot(this.root, runtimeLocks));
     if (!new Set(["git", "filesystem"]).has(mode)) {
       throw new Error(`invalid worker artifact repository snapshot mode: ${mode}`);
     }
@@ -2228,7 +2237,7 @@ export class WorkerArtifactRepositoryMutationSnapshot {
   static capture({ root, authorities, ignoredDirectories = [], runtimeLocks = [] }) {
     try {
       const ignored = authorityIgnoredDirectories(ignoredDirectories);
-      const locks = authorityRuntimeLocks(runtimeLocks);
+      const locks = authorityRuntimeLocksForRoot(root, runtimeLocks);
       const snapshot = exactGitRoot(root)
         ? gitAuthoritySnapshot(root, { ignoredDirectories: ignored, runtimeLocks: locks })
         : filesystemAuthoritySnapshot(root, { ignoredDirectories: ignored, runtimeLocks: locks });
@@ -2567,8 +2576,34 @@ function indexedSourceMutationCurrentEntry(root, relativePath, budget) {
  * captures the already-validated Activity prefix at worker start and proves
  * that the later Version is exactly that prefix plus metric observations.
  */
+class CanonicalObservationPrefixIdentity {
+  constructor({ activityCount, activityDigest, journalByteLength, journalDigest }) {
+    if (!Number.isSafeInteger(activityCount) || activityCount < 0
+      || !Number.isSafeInteger(journalByteLength) || journalByteLength < 0) {
+      throw new TypeError("canonical observation prefix requires its exact lengths");
+    }
+    this.activityCount = activityCount;
+    this.activityDigest = requiredDigest(activityDigest, "canonical observation Activity prefix digest");
+    this.journalByteLength = journalByteLength;
+    this.journalDigest = requiredDigest(journalDigest, "canonical observation journal prefix digest");
+    Object.freeze(this);
+  }
+
+  static capture(activityPrefix, activityBytes) {
+    return new this({ activityCount: activityPrefix.length,
+      activityDigest: digest(stableStringify(activityPrefix)),
+      journalByteLength: activityBytes.length, journalDigest: digest(activityBytes) });
+  }
+
+  toJSON() {
+    return { activityCount: this.activityCount, activityDigest: this.activityDigest,
+      journalByteLength: this.journalByteLength, journalDigest: this.journalDigest };
+  }
+}
+
 export class SourceWorkerCanonicalObservationAdvance {
-  constructor({ activityPrefix, activityBytes, mutablePaths, canonicalSnapshot, addedActivities = [], allowedPublications = [], allowedActivityIds = [], allowedTaskReviewClaims = [] }) {
+  constructor({ activityPrefix, activityBytes, mutablePaths, canonicalSnapshot, prefixIdentity = null,
+    addedActivities = [], allowedPublications = [], allowedActivityIds = [], allowedTaskReviewClaims = [] }) {
     if (!Array.isArray(activityPrefix) || !Array.isArray(mutablePaths) || !Array.isArray(addedActivities) || !Array.isArray(allowedPublications) || !Array.isArray(allowedActivityIds)) {
       throw new Error("source worker canonical observation advance requires Activity arrays");
     }
@@ -2580,6 +2615,10 @@ export class SourceWorkerCanonicalObservationAdvance {
     }
     this.activityPrefix = Object.freeze(activityPrefix.map((activity) => stableStringify(activity)));
     this.activityBytes = Buffer.from(activityBytes);
+    this.prefixIdentity = prefixIdentity ?? CanonicalObservationPrefixIdentity.capture(this.activityPrefix, this.activityBytes);
+    if (!(this.prefixIdentity instanceof CanonicalObservationPrefixIdentity)) {
+      throw new TypeError("canonical observation requires its typed prefix identity");
+    }
     this.mutablePaths = Object.freeze(mutablePaths.map((entry) => normalizedRelativePath(
       entry,
       "source worker canonical observation path",
@@ -2626,7 +2665,7 @@ export class SourceWorkerCanonicalObservationAdvance {
     }
   }
 
-  static captureTransitionView(view) {
+  static captureTransitionView(view, { ignoredDirectories = [] } = {}) {
     if (view === null || typeof view !== "object" || !Array.isArray(view.activities)
       || view.location === null || typeof view.location.activitiesFile !== "string") {
       throw new Error("source worker canonical observation requires a transition view");
@@ -2654,6 +2693,7 @@ export class SourceWorkerCanonicalObservationAdvance {
         root: location.directory,
         authorities: ["canonical"],
         runtimeLocks,
+        ignoredDirectories,
       }),
     });
   }
@@ -2692,10 +2732,29 @@ export class SourceWorkerCanonicalObservationAdvance {
     };
   }
 
+  /** Compact durable proof; neither the typed ledger nor its raw bodies are capabilities. */
+  checkpointJSON() {
+    return { prefixIdentity: this.prefixIdentity.toJSON(), mutablePaths: [...this.mutablePaths],
+      canonicalSnapshot: this.canonicalSnapshot.toJSON() };
+  }
+
+  static fromCheckpoint(value, { canonicalLocation }) {
+    exactObjectKeys(value, ["prefixIdentity", "mutablePaths", "canonicalSnapshot"], "canonical observation checkpoint");
+    exactObjectKeys(value.prefixIdentity, ["activityCount", "activityDigest", "journalByteLength", "journalDigest"], "canonical observation prefix");
+    const runtimeLocks = [canonicalLocation.runtimeLock("runtime.lock.artifact-catalog"),
+      canonicalLocation.runtimeLock("runtime.lock.current-flow-state")];
+    return new this({ activityPrefix: [], activityBytes: Buffer.alloc(0), mutablePaths: value.mutablePaths,
+      prefixIdentity: new CanonicalObservationPrefixIdentity(value.prefixIdentity),
+      canonicalSnapshot: WorkerArtifactRepositoryMutationSnapshot.fromStored(value.canonicalSnapshot, {
+        root: canonicalLocation.directory, authorities: ["canonical"], runtimeLocks,
+      }) });
+  }
+
   withAllowedPublication({ activityId, relativePath, digest: publicationDigest }) {
     return new SourceWorkerCanonicalObservationAdvance({
       activityPrefix: this.activityPrefix.map((entry) => JSON.parse(entry)),
       activityBytes: this.activityBytes,
+      prefixIdentity: this.prefixIdentity,
       mutablePaths: this.mutablePaths,
       canonicalSnapshot: this.canonicalSnapshot,
       addedActivities: this.addedActivities,
@@ -2713,6 +2772,7 @@ export class SourceWorkerCanonicalObservationAdvance {
     return new SourceWorkerCanonicalObservationAdvance({
       activityPrefix: this.activityPrefix.map((entry) => JSON.parse(entry)),
       activityBytes: this.activityBytes,
+      prefixIdentity: this.prefixIdentity,
       mutablePaths: this.mutablePaths,
       canonicalSnapshot: this.canonicalSnapshot,
       addedActivities: this.addedActivities,
@@ -2720,6 +2780,88 @@ export class SourceWorkerCanonicalObservationAdvance {
       allowedActivityIds: [...this.allowedActivityIds, activityId],
       allowedTaskReviewClaims: this.allowedTaskReviewClaims,
     });
+  }
+
+  /** Rebuild allowances from this request's exact durable execution, never from a directory. */
+  withConditionalWorkerExecution(view, request, submission) {
+    const contract = request.executionContract;
+    const binding = { runId: request.runId, specId: request.specId, stepId: request.stepId,
+      attempt: view.state.attempt };
+    readExecutionContractFromView(view, contract);
+    const contractPath = FLOW_ARTIFACT_CONTRACTS.resolve("execution.contract", contract.parameters).relativePath;
+    const contractDescriptor = view.catalog.artifacts.find((entry) => entry.relativePath === contractPath);
+    const allowedPayloadPaths = new Set(request.payloads.map(({ rule }) => (
+      new CanonicalWorkerArtifactAddress(rule.targetRelativePath).artifact.relativePath
+    )));
+    for (const baseline of contract.inputBaselines) {
+      if (baseline.baseline.artifact.logicalKey === "draft") allowedPayloadPaths.add(baseline.baseline.artifact.relativePath);
+    }
+    let observation = this;
+    let authenticatedClaim = false;
+    for (const activity of view.activities.slice(this.prefixIdentity.activityCount)) {
+      const receipt = activity.result?.draftSettlementReceipt;
+      const lifecycle = receipt?.executionLifecycle === null || receipt?.executionLifecycle === undefined
+        ? null : DraftStepExecutionLifecycle.fromJSON(receipt.executionLifecycle.toJSON());
+      if (activity.nodeId !== contract.nodeId || activity.attemptId !== contract.attemptId
+        || activity.sequence !== contract.attemptSequence
+        || lifecycle?.binding.executionGeneration !== contract.generation) continue;
+      if (activity.transition?.operation !== "record_draft_step_settlement"
+        || receipt.settlementKind !== "execution" || !(lifecycle.binding instanceof DraftConditionalWorkerExecutionBinding)
+        || !["checkpoint", "claimed", "publication"].includes(lifecycle.phase)) {
+        throw new FlowExecutionContractRefusal("Conditional worker canonical advance is not its exact execution receipt");
+      }
+      DraftStepSettlementReceipt.assertStored(receipt.toJSON(), { binding, result: activity.result.stepResult });
+      contract.assertExecutionBinding(binding, lifecycle.binding);
+      if (lifecycle.phase !== "checkpoint" && (lifecycle.claim.requestDigest !== request.requestDigest
+        || lifecycle.claim.actionDigest !== request.actionDigest
+        || lifecycle.claim.dispatchInvocationId !== request.dispatchInvocationId
+        || lifecycle.claim.generatedAt !== request.generatedAt)) {
+        throw new FlowExecutionContractRefusal("Conditional worker canonical advance differs from its authenticated request");
+      }
+      const descriptors = view.catalog.artifacts.filter((entry) => entry.activityId === activity.id);
+      if (lifecycle.phase === "claimed") {
+        if (contractDescriptor?.activityId !== activity.id) {
+          throw new FlowExecutionContractRefusal("Conditional worker contract lacks its exact claim producer");
+        }
+        authenticatedClaim = true;
+      }
+      if (lifecycle.phase === "publication") {
+        if (submission === null || !activity.result.artifactRefs.some((reference) => reference.kind === "worker-handoff-request"
+          && reference.id === request.requestDigest)
+          || !activity.result.artifactRefs.some((reference) => reference.kind === "worker-handoff"
+            && reference.id === submission.handoffDigest)
+          || !activity.references.artifacts.some((reference) => reference.id === submission.handoffDigest)) {
+          throw new FlowExecutionContractRefusal("Conditional worker publication lacks its exact sealed handoff");
+        }
+        if (request.stepId === "draft-gate-repair") {
+          const selection = receipt.draftGateRepairSelection;
+          const draft = view.catalog.artifacts.find((entry) => entry.logicalKey === "draft");
+          const audit = descriptors.find((entry) => entry.logicalKey === "draft.gate.repair");
+          selection.assertPublication({ draftDigest: draft?.hash,
+            auditReport: audit === undefined ? null : JSON.parse(view.readCatalogedArtifact(audit).toString("utf8")).report });
+        }
+      }
+      for (const descriptor of descriptors) {
+        if (lifecycle.phase === "claimed" ? descriptor.relativePath !== contractPath
+          : lifecycle.phase !== "publication" || !allowedPayloadPaths.has(descriptor.relativePath)) {
+          throw new FlowExecutionContractRefusal("Conditional worker receipt published an unrelated artifact");
+        }
+        if (lifecycle.phase === "publication" && request.stepId === "draft-refine") {
+          const payload = submission.payloadManifest.find((entry) => (
+            new CanonicalWorkerArtifactAddress(entry.targetRelativePath).artifact.relativePath === descriptor.relativePath
+          ));
+          if (payload?.digest !== descriptor.hash || payload.byteLength !== descriptor.size) {
+            throw new FlowExecutionContractRefusal("Conditional worker publication bytes differ from its sealed payload");
+          }
+        }
+        view.readCatalogedArtifact(descriptor);
+        observation = observation.withAllowedPublication({ activityId: activity.id,
+          relativePath: descriptor.relativePath, digest: descriptor.hash });
+      }
+      observation = observation.withAllowedActivity(activity.id);
+    }
+    if (!authenticatedClaim) throw new FlowExecutionContractRefusal("Conditional worker observation has no authenticated claim");
+    return observation;
   }
 
   /** Admit only the parent's authenticated checkpoint/claim for this immutable Task work unit. */
@@ -2737,7 +2879,7 @@ export class SourceWorkerCanonicalObservationAdvance {
         throw new Error("Task Review execution claim changed before observation admission");
       }
       const selected = [];
-      for (const activity of view.activities.slice(this.activityPrefix.length)) {
+      for (const activity of view.activities.slice(this.prefixIdentity.activityCount)) {
         const raw = activity.toJSON();
         const receipt = activity.result?.draftSettlementReceipt;
         if (receipt?.binding?.stepId !== binding.stepId
@@ -2792,6 +2934,7 @@ export class SourceWorkerCanonicalObservationAdvance {
     } });
     return new SourceWorkerCanonicalObservationAdvance({
       activityPrefix: this.activityPrefix.map((entry) => JSON.parse(entry)), activityBytes: this.activityBytes,
+      prefixIdentity: this.prefixIdentity,
       mutablePaths: this.mutablePaths, canonicalSnapshot: this.canonicalSnapshot,
       addedActivities: this.addedActivities, allowedPublications: [...this.allowedPublications, contractPublication],
       allowedActivityIds: this.allowedActivityIds, allowedTaskReviewClaims: claims,
@@ -2885,7 +3028,8 @@ function assertCanonicalObservationAdvance({
   allowedActivityIds = [],
   allowedTaskReviewClaims = [],
 }) {
-  if (current.length < observation.activityPrefix.length) {
+  const prefix = observation.prefixIdentity;
+  if (current.length < prefix.activityCount) {
     throw new WorkerArtifactHandoffError(
       "invalid",
       "FLOW_SOURCE_HANDOFF_CANONICAL_MUTATION_INVALID",
@@ -2893,9 +3037,8 @@ function assertCanonicalObservationAdvance({
       { retryable: false },
     );
   }
-  const prefixChanged = observation.activityPrefix.some((activity, index) => (
-    stableStringify(current[index]) !== activity
-  ));
+  const prefixChanged = digest(stableStringify(current.slice(0, prefix.activityCount).map((activity) => stableStringify(activity))))
+    !== prefix.activityDigest;
   if (prefixChanged) {
     throw new WorkerArtifactHandoffError(
       "invalid",
@@ -2904,7 +3047,7 @@ function assertCanonicalObservationAdvance({
       { retryable: false },
     );
   }
-  const addedActivities = current.slice(observation.activityPrefix.length);
+  const addedActivities = current.slice(prefix.activityCount);
   if (addedActivities.some((activity) => (
     activity.transition?.operation !== "record_metric"
       && !allowedPublications.some((publication) => publication.activityId === activity.id)
@@ -2936,9 +3079,9 @@ function assertCanonicalObservationAdvance({
     !observation.mutablePaths.includes(entry) && !allowedPaths.has(entry)
   ));
   const activityTail = Buffer.from(addedActivities.map((activity) => `${JSON.stringify(activity)}\n`).join(""), "utf8");
-  const exactJournalAppend = activityBytes.length >= observation.activityBytes.length
-    && activityBytes.subarray(0, observation.activityBytes.length).equals(observation.activityBytes)
-    && activityBytes.subarray(observation.activityBytes.length).equals(activityTail);
+  const exactJournalAppend = activityBytes.length >= prefix.journalByteLength
+    && digest(activityBytes.subarray(0, prefix.journalByteLength)) === prefix.journalDigest
+    && activityBytes.subarray(prefix.journalByteLength).equals(activityTail);
   const unexplainedCanonicalChange = addedActivities.length === 0 && changedPaths.length > 0;
   if (invalidPublication || unexpectedPaths.length > 0 || !exactJournalAppend || unexplainedCanonicalChange) {
     throw new WorkerArtifactHandoffError(
@@ -2956,6 +3099,84 @@ function assertCanonicalObservationAdvance({
     );
   }
   return addedActivities;
+}
+
+/** Durable request-bound proof of lawful execution writes and unchanged surrounding work. */
+export class DispatchExecutionRepositoryBinding {
+  constructor({ repositoryFingerprint, executionSnapshot, canonicalRepositorySnapshot = null, canonicalObservation }) {
+    this.repositoryFingerprint = requiredString(repositoryFingerprint, "dispatch execution repository fingerprint");
+    if (!(executionSnapshot instanceof WorkerArtifactRepositoryMutationSnapshot)
+      || canonicalRepositorySnapshot !== null && !(canonicalRepositorySnapshot instanceof WorkerArtifactRepositoryMutationSnapshot)
+      || !(canonicalObservation instanceof SourceWorkerCanonicalObservationAdvance)) {
+      throw new TypeError("dispatch execution repository binding requires typed mutation snapshots");
+    }
+    this.executionSnapshot = executionSnapshot;
+    this.canonicalRepositorySnapshot = canonicalRepositorySnapshot;
+    this.canonicalObservation = canonicalObservation;
+    Object.freeze(this);
+  }
+
+  static capture({ ctx, request, invocation, fingerprint }) {
+    const repositoryFingerprint = invocation.action.repositoryFingerprint;
+    if (fingerprint(ctx) !== repositoryFingerprint) {
+      throw new FlowExecutionContractRefusal("Repository changed before capturing its execution mutation boundary");
+    }
+    const captureOutside = (root, authority) => {
+      const ignoredDirectories = [request.canonicalDirectory, request.directory].flatMap((directory) => {
+        const relative = path.relative(root, directory).split(path.sep).join("/");
+        return relative !== "" && relative !== ".." && !relative.startsWith("../")
+          && !path.posix.isAbsolute(relative) ? [relative] : [];
+      });
+      return WorkerArtifactRepositoryMutationSnapshot.capture({ root, authorities: [authority],
+        ignoredDirectories, runtimeLocks: request.runtimeLocks });
+    };
+    const executionSnapshot = captureOutside(request.executionRoot, "execution");
+    const canonicalRepositorySnapshot = fs.realpathSync(request.executionRoot) === fs.realpathSync(request.mainRoot)
+      ? null : captureOutside(request.mainRoot, "canonical");
+    const canonicalObservation = ctx.flowManager.readCanonicalTransitionView({ specId: request.specId,
+      read: (view) => SourceWorkerCanonicalObservationAdvance.captureTransitionView(view, {
+        ignoredDirectories: [".runtime/views"],
+      }) });
+    if (fingerprint(ctx) !== repositoryFingerprint) {
+      throw new FlowExecutionContractRefusal("Repository changed while capturing its execution mutation boundary");
+    }
+    return new this({ repositoryFingerprint, executionSnapshot, canonicalRepositorySnapshot, canonicalObservation });
+  }
+
+  toJSON() {
+    return { repositoryFingerprint: this.repositoryFingerprint, executionSnapshot: this.executionSnapshot.toJSON(),
+      canonicalRepositorySnapshot: this.canonicalRepositorySnapshot?.toJSON() ?? null,
+      canonicalObservation: this.canonicalObservation.checkpointJSON() };
+  }
+
+  static fromStored(value, { executionRoot, mainRoot, canonicalLocation }) {
+    exactObjectKeys(value, ["repositoryFingerprint", "executionSnapshot", "canonicalRepositorySnapshot", "canonicalObservation"],
+      "dispatch execution repository binding");
+    const runtimeLocks = [canonicalLocation.runtimeLock("runtime.lock.artifact-catalog"),
+      canonicalLocation.runtimeLock("runtime.lock.current-flow-state")];
+    return new this({ repositoryFingerprint: value.repositoryFingerprint,
+      executionSnapshot: WorkerArtifactRepositoryMutationSnapshot.fromStored(value.executionSnapshot, {
+        root: executionRoot, authorities: ["execution"], runtimeLocks }),
+      canonicalRepositorySnapshot: value.canonicalRepositorySnapshot === null ? null
+        : WorkerArtifactRepositoryMutationSnapshot.fromStored(value.canonicalRepositorySnapshot, {
+          root: mainRoot, authorities: ["canonical"], runtimeLocks }),
+      canonicalObservation: SourceWorkerCanonicalObservationAdvance.fromCheckpoint(value.canonicalObservation, { canonicalLocation }) });
+  }
+
+  assertCurrent({ flowManager, request }) {
+    const submission = request.hasSealedSubmission() ? readSubmission(request) : null;
+    if (submission !== null) validateSubmission(request, submission);
+    for (const snapshot of [this.executionSnapshot, this.canonicalRepositorySnapshot].filter(Boolean)) {
+      const current = WorkerArtifactRepositoryMutationSnapshot.capture(snapshot);
+      if (snapshot.digest !== current.digest && snapshot.allChangedPaths(current).length > 0) {
+        throw new FlowExecutionContractRefusal("Repository outside the execution Version changed since its claim");
+      }
+    }
+    flowManager.readCanonicalTransitionView({ specId: request.specId, read: (view) => {
+      this.canonicalObservation.withConditionalWorkerExecution(view, request, submission).assertTransitionView(view);
+    } });
+    return this.repositoryFingerprint;
+  }
 }
 
 export class WorkerArtifactMutationAuthoritySnapshot {
@@ -3008,9 +3229,7 @@ export class WorkerArtifactMutationAuthoritySnapshot {
           authorities: [], ignoredDirectories: [], runtimeLocks: [],
         };
         existing.authorities.push(authority);
-        for (const lock of request.runtimeLocks) {
-          if (isWithin(resolved, fs.realpathSync(lock.directory))) existing.runtimeLocks.push(lock);
-        }
+        existing.runtimeLocks.push(...request.runtimeLocks);
         const relativeHandoff = path.relative(resolved, request.handoffRoot)
           .split(path.sep)
           .join("/");
@@ -4740,6 +4959,7 @@ export class WorkerArtifactHandoffRequest {
     sourceResponseContract = null,
     executionContract = null,
     executionGeneration = null,
+    dispatchRepositoryBinding = null,
   }) {
     this.mainRoot = path.resolve(mainRoot);
     this.executionRoot = path.resolve(executionRoot);
@@ -4854,6 +5074,10 @@ export class WorkerArtifactHandoffRequest {
     }
     this.workerInstructions = workerInstructions.bindRequest(this.stepId, this.inputs, this.sourceResponseContract);
     this.generatedAt = requiredString(generatedAt, "handoff generatedAt");
+    if (dispatchRepositoryBinding !== null && !(dispatchRepositoryBinding instanceof DispatchExecutionRepositoryBinding)) {
+      throw new TypeError("worker request repository binding must be typed");
+    }
+    this.dispatchRepositoryBinding = dispatchRepositoryBinding;
     this.handoffRoot = executionHandoffRoot(this.executionRoot, this.specId);
     if (typeof canonicalLocation?.runtimeLock !== "function") {
       throw new Error("canonical worker handoff requires Version runtime lock locations");
@@ -4952,6 +5176,11 @@ export class WorkerArtifactHandoffRequest {
   withExecutionContract(executionContract) {
     if (!(executionContract instanceof FlowExecutionContract)) throw new TypeError("Worker requires a typed execution contract");
     return new WorkerArtifactHandoffRequest({ ...this, executionContract,
+      canonicalLocation: this.flowManager.specLocation(this.specId) });
+  }
+
+  withDispatchRepositoryBinding(dispatchRepositoryBinding) {
+    return new WorkerArtifactHandoffRequest({ ...this, dispatchRepositoryBinding,
       canonicalLocation: this.flowManager.specLocation(this.specId) });
   }
 
@@ -5194,6 +5423,7 @@ export class WorkerArtifactHandoffRequest {
       inputRevision: this.inputRevision,
       executionContract: this.executionContract.toJSON(),
       executionContractId: this.executionContract.id,
+      dispatchRepositoryBinding: this.dispatchRepositoryBinding?.toJSON() ?? null,
       requirementTestBinding: this.requirementTestBinding?.toJSON() ?? null,
       // request.json is an untrusted worker capability. The complete rejected
       // review stays parent-private in the canonical store; only the selected
@@ -6218,7 +6448,7 @@ function requestFromStored(filePath, { mainRoot: trustedMainRoot = null, flowMan
   const { document } = boundedJson(resolvedRequestPath, "worker artifact handoff request");
   exactObjectKeys(document, [
     "version", "runId", "specId", "issue", "stepId", "taskId", "actionDigest", "dispatchInvocationId",
-      "targetAuthority", "inputDigest", "inputRevision", "executionContract", "executionContractId", "inputs", "testReviewRepair", "contextSnapshot",
+      "targetAuthority", "inputDigest", "inputRevision", "executionContract", "executionContractId", "dispatchRepositoryBinding", "inputs", "testReviewRepair", "contextSnapshot",
     "requirementTestBinding", "payloads", "workerInstructions", "sourceResponseContract", "specTestTopology", "sealCommand", "completionOwner", "generatedAt",
     "sourceMutationBaselineDigest", "sourceHandoffIdentity", "sourceHandoffCheckpointDigest",
   ], "worker artifact handoff request");
@@ -6328,6 +6558,7 @@ function requestFromStored(filePath, { mainRoot: trustedMainRoot = null, flowMan
     inputDigest: requiredDigest(document.inputDigest, "handoff request inputDigest"),
     inputRevision: requiredDigest(document.inputRevision, "handoff request inputRevision"),
     executionContract,
+    dispatchRepositoryBinding: document.dispatchRepositoryBinding,
     generatedAt: requiredString(document.generatedAt, "handoff request generatedAt"),
     executionRoot,
     handoffRoot,
@@ -6479,6 +6710,8 @@ function restoredStoredHandoffRequest({ mainRoot, executionRoot, state, stored, 
     workerVisibleTestReviewRepair: stored.testReviewRepair,
     workerInstructions: stored.workerInstructions,
     executionContract: stored.executionContract,
+    dispatchRepositoryBinding: stored.dispatchRepositoryBinding === null ? null
+      : DispatchExecutionRepositoryBinding.fromStored(stored.dispatchRepositoryBinding, { executionRoot, mainRoot, canonicalLocation }),
     sourceResponseContract: stored.sourceResponseContract,
     requirementTestBinding: stored.requirementTestBinding,
     sourceMutationBaseline: sourceAuthority?.checkpoint.baseline ?? null,
@@ -6547,6 +6780,8 @@ function reboundRestoredHandoffRequest({ identityRequest, mainRoot, executionRoo
     workerVisibleTestReviewRepair: stored.testReviewRepair,
     workerInstructions: stored.workerInstructions,
     executionContract: stored.executionContract,
+    dispatchRepositoryBinding: stored.dispatchRepositoryBinding === null ? null
+      : DispatchExecutionRepositoryBinding.fromStored(stored.dispatchRepositoryBinding, { executionRoot, mainRoot, canonicalLocation }),
     sourceResponseContract: stored.sourceResponseContract,
     requirementTestBinding: stored.requirementTestBinding,
     sourceMutationBaseline: sourceAuthority?.checkpoint.baseline ?? null,
@@ -9016,6 +9251,25 @@ export class WorkerArtifactHandoffCoordinator {
       );
     }
     return request;
+  }
+
+  /** Recover the original action only after independently proving its own durable writes. */
+  retainedDraftRepositoryFingerprint({ ctx, stepId }) {
+    if (!isConditionalDraftWorkerStep(stepId)) return null;
+    const state = ctx.flowManager.canonicalState(ctx.specId ?? ctx.flowState.specId);
+    if (state.attempt?.nodeId !== stepId || state.attempt.failure !== null
+      || state.nextAction()?.operation !== "resume") return null;
+    const binding = { runId: state.runId, specId: state.specId, stepId, attempt: state.attempt };
+    if (stepId === "draft-refine" && ctx.flowManager.draftRefineStepState({ binding }).executionIdentity() === null) return null;
+    const lifecycle = ctx.flowManager.draftStepExecutionState({ binding }).lifecycle;
+    if (!["claimed", "publication"].includes(lifecycle?.phase)) return null;
+    const request = this.restoreClaimedDraftRequest({ ctx, state, lifecycle });
+    if (request === null || request.dispatchRepositoryBinding === null
+      || canonicalWorkerExecutionClaimForStored({ flowManager: ctx.flowManager, stored: request }) === null) {
+      throw new FlowExecutionContractRefusal("Retained worker action lacks its authenticated repository mutation boundary");
+    }
+    request.assertExecutionContract();
+    return request.dispatchRepositoryBinding.assertCurrent({ flowManager: ctx.flowManager, request });
   }
 
   /** Capture, publish, and read back durable authority before request.json exists. */

@@ -14,11 +14,12 @@ import { WorkerArtifactHandoffError } from "./worker-artifact-handoff-error.js";
 import { WorkerArtifactHandoffCoordinator } from "./worker-artifact-handoff.js";
 
 class WorkerExecutionAdmissionSelection {
-  constructor({ state, flowState, descriptor, action, conditionalDisposition, repair, correction, recovery, continuation }) {
+  constructor({ state, flowState, descriptor, action, draftRefineStepState, conditionalDisposition, repair, correction, recovery, continuation }) {
     this.state = state;
     this.flowState = flowState;
     this.descriptor = descriptor;
     this.action = action;
+    this.draftRefineStepState = draftRefineStepState;
     this.conditionalDisposition = conditionalDisposition;
     this.repair = repair;
     this.correction = correction;
@@ -37,10 +38,18 @@ export function selectWorkerExecutionAdmission({ ctx, stepId }) {
   if (descriptor === null || (taskIdentity?.definitionId ?? descriptor.nodeId) !== stepId) {
     throw new NextActionPlanError("NEXT_ACTION_TARGET_MISMATCH", `worker admission requires selected ${stepId}`);
   }
-  const conditionalDisposition = stepId === "draft-refine"
+  const draftRefineStepState = stepId === "draft-refine"
     && state.attempt?.nodeId === stepId
     && ["start", "recover", "resume", "retry"].includes(descriptor.operation)
-    ? persistedDraftRefineDisposition({ flowManager: ctx.flowManager, typedState: state }) : null;
+    ? ctx.flowManager.draftRefineStepState({ binding: {
+      runId: state.runId,
+      specId: state.specId,
+      stepId,
+      attempt: state.attempt,
+    } }) : null;
+  const conditionalDisposition = draftRefineStepState === null ? null
+    : persistedDraftRefineDisposition({ flowManager: ctx.flowManager, typedState: state,
+      projected: draftRefineStepState });
   const activities = ctx.flowManager.activityLedger(state.specId);
   const correction = resolveDraftWorkerCorrection({ state, activities });
   let recovery = null;
@@ -53,12 +62,14 @@ export function selectWorkerExecutionAdmission({ ctx, stepId }) {
     ? selectSpecGateRepairExecution({ ctx, state }) : null;
   const continuation = isConditionalDraftWorkerStep(stepId) && state.attempt?.nodeId === stepId
     && state.attempt.failure === null && descriptor.operation === "resume" && recovery === null
-    && (conditionalDisposition === null || conditionalDisposition.operation === "execute-worker")
+    && (stepId === "draft-refine"
+      ? draftRefineStepState.executionIdentity() !== null
+      : conditionalDisposition === null || conditionalDisposition.operation === "execute-worker")
     ? selectDraftWorkerExecutionContinuation({ ctx, state,
       previousExecutionContract: ctx.previousExecutionContract ?? null }) : null;
   const derived = deriveNextAction({ scope: taskIdentity === null ? "flow" : "task", stepId, context: flowState });
   return new WorkerExecutionAdmissionSelection({ state, flowState, descriptor,
-    action: derived.action, conditionalDisposition, repair, correction, recovery, continuation });
+    action: derived.action, draftRefineStepState, conditionalDisposition, repair, correction, recovery, continuation });
 }
 
 export function projectWorkerExecutionAdmission(selection, { binding = null,
@@ -139,6 +150,8 @@ export function assertCurrentWorkerExecutionSelection(selection, current) {
     || selection.state.attempt.sequence !== current.state.attempt.sequence
     || selection.descriptor.nodeId !== current.descriptor.nodeId
     || selection.action !== current.action
+    || (selection.draftRefineStepState !== current.draftRefineStepState
+      && !selection.draftRefineStepState?.equals(current.draftRefineStepState))
     || selection.continuation?.receiptId !== current.continuation?.receiptId
     || selection.continuation?.responseDigest !== current.continuation?.responseDigest
     || selection.continuation?.constructor !== current.continuation?.constructor) {
@@ -163,18 +176,7 @@ function draftQuestionDirective(disposition) {
   });
 }
 
-function persistedDraftRefineDisposition({ flowManager, typedState }) {
-  // A pending Draft Step has no Result or Settlement to project yet. Its
-  // ordinary claim must create the Attempt before the Step selects either an
-  // execution or Await receipt.
-  if (typedState.attempt === null) return null;
-  const binding = {
-    runId: typedState.runId,
-    specId: typedState.specId,
-    stepId: "draft-refine",
-    attempt: typedState.attempt,
-  };
-  const projected = flowManager.draftRefineStepState({ binding });
+function persistedDraftRefineDisposition({ flowManager, typedState, projected }) {
   if (projected.requiresStepSelection) return null;
   const identity = projected.awaitQuestionIdentity();
   if (identity === null) return projected.dispositionForQuestion();
