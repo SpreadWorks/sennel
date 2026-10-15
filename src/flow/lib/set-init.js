@@ -39,7 +39,7 @@ export default class SetInitCommand extends FlowCommand {
           `--issue must be a positive integer: ${ctx.issue}`,
         );
       }
-      const snapshot = this.issueSnapshotSource.load({ number: n, root: ctx.root });
+      const snapshot = this.issueSnapshotSource.load({ number: n, root: ctx.root, config: ctx.config });
       if (snapshot === null) {
         return Envelope.fail(
           "set",

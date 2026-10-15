@@ -1283,7 +1283,7 @@ export const FLOW_COMMANDS = {
       requiresFlow: false,
       command: () => import("./lib/get-check.js"),
       args: { positional: ["target"] },
-      help: "Usage: sennel flow get check <target>\n\nCheck a condition. Targets: dirty, gh, impl, finalize.",
+      help: "Usage: sennel flow get check <target>\n\nCheck a condition. Targets: dirty, github, impl, finalize.",
     },
     prompt: {
       helpKey: "flow.get.prompt",
@@ -2247,9 +2247,11 @@ export const FLOW_COMMANDS = {
       async onError(ctx, err) {
         if (preservesFinalizationCanonicalState(err)) return;
         await persistFinalizationCommandError(ctx, "finalize-merge", err, () => loadFinalizeMergeCommand(), "executeFinalizeMergeInput");
+        const { resolveMergeStrategy } = await import("./commands/merge.js");
         await applyLifecycleActionsFromRegistry(ctx, {
           event: "finalize:onError",
           command: "finalize-merge",
+          mergeStrategy: ctx.finalizationEffectPreparation?.strategy ?? resolveMergeStrategy(ctx.flowState, ctx.config),
         }, null, err);
       },
     },

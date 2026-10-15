@@ -108,7 +108,7 @@ export const VALID_CHECK_TARGETS = Object.freeze([
   "impl",
   "finalize",
   "dirty",
-  "gh",
+  "github",
 ]);
 
 // ---------------------------------------------------------------------------

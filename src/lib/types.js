@@ -8,6 +8,10 @@
 // JSDoc 型定義
 // ---------------------------------------------------------------------------
 
+/** @typedef {{host: string, name: string}} GitHubRepositoryConfig */
+/** @typedef {{command: string, args: string[], timeout?: number, maxBuffer?: number, maxAttempts?: number}} ExternalGitHubProviderConfig */
+/** @typedef {{provider?: string, providers?: Object<string, ExternalGitHubProviderConfig>, timeout?: number, maxBuffer?: number, maxAttempts?: number, repository?: GitHubRepositoryConfig}} GitHubConfig */
+
 /**
  * @typedef {Object} DocumentStyle
  * @property {string} purpose   - "developer-guide" | "user-guide" | "api-reference" | 自由文字列
@@ -55,7 +59,7 @@
 
 /**
  * @typedef {Object} CommandsConfig
- * @property {"enable"|"disable"} [gh] - GitHub CLI availability (default: "disable")
+ * @property {"enable"|"disable"} [gh] - GitHub PR submission policy (default: "disable")
  */
 
 /**
@@ -94,5 +98,6 @@
  * @property {FlowConfig} [flow]             - Flow configuration
  * @property {TestConfig} [test]             - Project-level regression test configuration
  * @property {CommandsConfig} [commands]     - External command availability
+ * @property {GitHubConfig} [github]         - GitHub provider and repository settings
  * @property {LogsConfig} [logs]             - Logging configuration
  */

@@ -5,16 +5,17 @@ import { CURRENT_FLOW_SCHEMA_REVISION } from "../../lib/flow-schema-revision.js"
  * Squash merge or PR creation based on flow state.
  * Called by finalize.js with ctx containing root, flowState, worktreePath, mainRepoPath.
  *
- * Strategy is determined solely from config (`commands.gh`) and `gh` availability:
- *   commands.gh === "enable" AND gh available  → PR route
- *   otherwise                                   → squash merge route
+ * Strategy is determined solely from config (`commands.gh`):
+ *   commands.gh === "enable" → selected GitHub provider PR route
+ *   otherwise                → squash merge route
  * No CLI escape hatch exists (spec 215 / issue #223).
  */
 
-import { runCmd, assertOk } from "../../lib/process.js";
+import { assertOk } from "../../lib/process.js";
 import path from "path";
+import { resolveGitHubProvider } from "../../lib/github/provider.js";
 import { container } from "../../lib/container.js";
-import { isGhAvailable, runGit, fetchBranch, rebaseOnto, abortRebase } from "../../lib/git-helpers.js";
+import { runGit, fetchBranch, rebaseOnto, abortRebase } from "../../lib/git-helpers.js";
 import {
   FinalizeMergeTransaction,
   FinalizeMergeTransactionError,
@@ -240,13 +241,12 @@ function buildSquashCommitMessage({
  *
  * @param {{ baseBranch: string, featureBranch: string }} state
  * @param {Object} config - Spec-Driven Development config
- * @param {() => boolean} [ghAvailable=isGhAvailable]
  * @returns {"skip"|"pr"|"squash"}
  */
-function resolveMergeStrategy(state, config, ghAvailable = isGhAvailable) {
+function resolveMergeStrategy(state, config) {
   if (state.execution?.mode === "direct" || state.featureBranch === state.baseBranch) return "skip";
   const ghEnabled = config?.commands?.gh === "enable";
-  return ghEnabled && ghAvailable() ? "pr" : "squash";
+  return ghEnabled ? "pr" : "squash";
 }
 
 function fallbackTitleFromSpecId(specId, featureBranch) {
@@ -255,29 +255,9 @@ function fallbackTitleFromSpecId(specId, featureBranch) {
   return separator < 0 ? specId : specId.slice(separator + 1);
 }
 
-/** A remote PR belongs to this operation only through its exact outbox marker. */
-function inspectOperationPullRequest({ root, baseBranch, featureBranch, idempotencyKey }) {
-  if (idempotencyKey === null) return null;
-  const result = runCmd("gh", ["pr", "list", "--base", baseBranch, "--head", featureBranch,
-    "--state", "all", "--limit", "100", "--json", "number,body,url"], { cwd: root });
-  assertOk(result, "failed to inspect existing pull requests before resume");
-  let matches;
-  try { matches = JSON.parse(result.stdout || "[]"); }
-  catch (cause) { throw new StepAdmissionRefusal("Pull-request readback is invalid JSON and cannot confirm its outbox identity", cause); }
-  const marker = `<!-- sennel:${idempotencyKey} -->`;
-  if (!Array.isArray(matches) || matches.some((entry) => typeof entry.body !== "string" || !Number.isSafeInteger(entry.number))) {
-    throw new StepAdmissionRefusal("Pull-request readback did not provide its exact remote identity");
-  }
-  if (matches.some((entry) => !entry.body.includes(marker))) {
-    throw new StepAdmissionRefusal("An existing pull request belongs to another finalization outbox identity");
-  }
-  if (matches.length > 1) throw new StepAdmissionRefusal("Finalization outbox has multiple matching remote pull requests");
-  return matches[0] ?? null;
-}
-
 export class FinalizeMergeEffectPreparation {
   constructor({ state, artifactRoot, executionRoot, mainRepoPath, spec, strategy, remote,
-    idempotencyKey, operationOwnerToken, requireRevalidationAfterSync = false, resumed = false }) {
+    idempotencyKey, operationOwnerToken, githubProvider = null, repository = null, requireRevalidationAfterSync = false, resumed = false }) {
     this.state = Object.freeze({ specId: state.specId, issue: state.issue, request: state.request,
       baseBranch: state.baseBranch, featureBranch: state.featureBranch, worktree: state.worktree });
     this.artifactRoot = artifactRoot;
@@ -288,6 +268,8 @@ export class FinalizeMergeEffectPreparation {
     this.remote = remote;
     this.idempotencyKey = idempotencyKey;
     this.operationOwnerToken = operationOwnerToken;
+    this.githubProvider = githubProvider;
+    this.repository = repository;
     this.requireRevalidationAfterSync = requireRevalidationAfterSync;
     this.resumed = resumed;
     this.flowArtifactRegistry = finalizationFeatureArtifactRegistry(state);
@@ -331,17 +313,24 @@ export class FinalizeMergeEffectPreparation {
 
 export function prepareMergeEffect(ctx) {
   const state = ctx.flowState;
-  const cfg = container.get("config");
+  const cfg = ctx.config ?? container.get("config");
   const artifactRoot = ctx.root || container.get("root");
   const executionRoot = ctx.executionRoot || ctx.worktreePath || artifactRoot;
   const strategy = resolveMergeStrategy(state, cfg);
+  let githubProvider = null;
+  let repository = null;
+  if (strategy === "pr") {
+    githubProvider = resolveGitHubProvider(cfg);
+    const preflight = githubProvider.preflight({ cwd: executionRoot }).assertReady();
+    repository = preflight.repository;
+  }
   const idempotencyKey = ctx.idempotencyKey ?? null;
   const resumed = strategy === "squash" && hasOutboxCommit({ root: ctx.mainRepoPath || artifactRoot,
     ref: state.baseBranch, idempotencyKey });
   const spec = strategy === "skip" ? null : new CanonicalFinalizeMergeSpecSource({ flowManager: ctx.flowManager, state }).summary();
   const acquired = new FinalizeMergeEffectPreparation({ state, artifactRoot, executionRoot,
     mainRepoPath: ctx.mainRepoPath, spec, strategy, remote: resolveRemote(cfg),
-    idempotencyKey, operationOwnerToken: ctx.repositoryOperationOwnerToken ?? null,
+    idempotencyKey, githubProvider, repository, operationOwnerToken: ctx.repositoryOperationOwnerToken ?? null,
     requireRevalidationAfterSync: ctx.requireRevalidationAfterSync === true, resumed });
   const conflict = new RepositoryFlowOperationLock({ mainRoot: acquired.mainRepoPath || artifactRoot,
     operationOwnerToken: acquired.operationOwnerToken }).inspectConflict();
@@ -379,23 +368,20 @@ function runMerge(ctx, preparation = null) {
     const remote = acquired.remote;
     const fallbackTitle = fallbackTitleFromSpecId(state.specId, featureBranch);
     const title = buildPrTitle(spec, fallbackTitle);
-    const marker = idempotencyKey ? `<!-- sennel:${idempotencyKey} -->` : null;
-    const body = [buildPrBody(state, spec), marker].filter(Boolean).join("\n\n");
-
-    const existing = inspectOperationPullRequest({ root: executionRoot, baseBranch, featureBranch, idempotencyKey });
-    if (existing !== null) return { strategy: "pr", resumed: true, prNumber: existing.number, prUrl: existing.url ?? null };
+    const body = buildPrBody(state, spec);
+    const expectedHeadOid = ctx.finalizationExecution?.expectedFeatureSha;
+    if (!expectedHeadOid) throw new StepAdmissionRefusal("PR creation requires its persisted finalization feature HEAD");
+    const request = { cwd: executionRoot, repository: acquired.repository,
+      base: baseBranch, head: featureBranch, idempotencyKey, expectedHeadOid };
+    const existing = acquired.githubProvider.findPullRequest(request);
+    if (existing !== null) return { strategy: "pr", resumed: true,
+      prNumber: existing.number, prUrl: existing.url, repository: existing.repository.toJSON(), headOid: existing.headOid };
 
     const pushRes = runGit(["-C", executionRoot, "push", "-u", remote, featureBranch]);
     assertOk(pushRes, "git push failed");
-    const prRes = runCmd("gh", [
-      "pr", "create",
-      "--base", baseBranch,
-      "--head", featureBranch,
-      "--title", title,
-      ...(body ? ["--body", body] : []),
-    ]);
-    assertOk(prRes, "gh pr create failed");
-    return { strategy: "pr", prUrl: prRes.stdout.trim() };
+    const created = acquired.githubProvider.createPullRequest({ ...request, title, body });
+    return { strategy: "pr", prNumber: created.number, prUrl: created.url,
+      repository: created.repository.toJSON(), headOid: created.headOid };
   }
 
   // Squash merge route

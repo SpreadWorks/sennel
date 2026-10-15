@@ -1,14 +1,13 @@
 /**
  * src/lib/git-helpers.js
  *
- * Shared helpers for Git and GitHub CLI operations.
- * Includes both read-only state queries and GitHub actions (e.g. issue comments).
+ * Shared helpers for Git operations and read-only repository state queries.
  */
 
 import fs from "node:fs";
 import { spawnSync } from "node:child_process";
 import path from "node:path";
-import { runCmd, formatError, assertOk } from "./process.js";
+import { runCmd, assertOk } from "./process.js";
 import { container } from "./container.js";
 import { GIT_OBJECT_ID, GitSnapshot, isGitObjectId, isGitSnapshot } from "./git-snapshot.js";
 export { GIT_OBJECT_ID, GitSnapshot, isGitObjectId, isGitSnapshot } from "./git-snapshot.js";
@@ -500,11 +499,6 @@ export function getLastCommit(cwd) {
   return res.ok ? res.stdout.trim() : null;
 }
 
-/** @returns {boolean} */
-export function isGhAvailable() {
-  return runCmd("gh", ["--version"], { timeout: 5000 }).ok;
-}
-
 /**
  * Collect diff stat and commit messages between base and HEAD.
  * @param {string} root - Working directory
@@ -700,40 +694,4 @@ function splitBoundedGitOutput(stdout, maxEntries, label) {
     throw new Error(`listChangedFilesDetailed ${label} returned ${lines.length} entries (max ${maxEntries})`);
   }
   return lines;
-}
-
-/**
- * Post a comment to a GitHub issue.
- * @param {number|string} issueNumber
- * @param {string} body - Comment body text
- * @param {string} [cwd] - Working directory
- * @returns {{ ok: boolean, error?: string }}
- */
-export function commentOnIssue(issueNumber, body, cwd) {
-  const res = runCmd("gh", ["issue", "comment", String(issueNumber), "--body", body], {
-    cwd,
-    timeout: 30000,
-  });
-  return res.ok ? { ok: true } : { ok: false, error: formatError(res) };
-}
-
-/**
- * Post a report comment exactly once for a stable flow outbox identity.
- * A read failure is terminal because posting without proving absence could
- * duplicate a comment after a process crash.
- */
-export function commentOnIssueOnce(issueNumber, body, cwd, idempotencyKey) {
-  if (typeof idempotencyKey !== "string" || idempotencyKey === "") {
-    throw new Error("issue comment idempotencyKey is required");
-  }
-  const marker = `<!-- sennel:${idempotencyKey} -->`;
-  const existing = runCmd("gh", [
-    "issue", "view", String(issueNumber),
-    "--json", "comments",
-    "--jq", ".comments[].body",
-  ], { cwd, timeout: 30000 });
-  if (!existing.ok) return { ok: false, error: formatError(existing) };
-  if (existing.stdout.includes(marker)) return { ok: true, resumed: true };
-  const posted = commentOnIssue(issueNumber, `${body}\n\n${marker}`, cwd);
-  return posted.ok ? { ...posted, resumed: false } : posted;
 }

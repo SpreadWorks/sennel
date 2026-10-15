@@ -6,7 +6,7 @@ Commit implementation changes as a finalize sub-step. This is the first step of 
    - Run `sennel flow get resolve-context` to get JSON with:
      - `mainRepoPath`, `worktreePath`, `activeFlow`, `flowJsonPath`
      - `spec`, `baseBranch`, `featureBranch`, `worktree`
-     - `dirty`, `dirtyFiles`, `currentBranch`, `ghAvailable`
+     - `dirty`, `dirtyFiles`, `currentBranch`, `github`
 
 2. Run `sennel flow run finalize-commit [--message "<msg>"]`.
    - The command performs preflight checks, migration hooks, stages implementation changes from the execution worktree, and creates the implementation commit.

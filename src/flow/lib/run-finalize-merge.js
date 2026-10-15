@@ -5,7 +5,7 @@ import { finalizationOutboxIdentity } from "./flow-outbox.js";
 /**
  * Spec 251 R19: the self-contained finalize step transitions and the
  * cleanup-side commit transaction target the squash-merge route only
- * (`commands.gh != enable` OR `gh` unavailable). The PR route returns
+ * (`commands.gh != enable`). The PR route returns
  * after PR creation and leaves the post-merge sub-steps (finalize-sync /
  * finalize-cleanup) for an out-of-process flow once the PR lands. The
  * registered Step records the command observation, and Definition selects
@@ -31,6 +31,7 @@ export class RunFinalizeMergeCommand extends FlowCommand {
     const { prepareMergeEffect } = await import("../commands/merge.js");
     return prepareMergeEffect({
       root: ctx.root,
+      config: ctx.config,
       executionRoot,
       flowState: state,
       flowManager: ctx.flowManager,
@@ -53,6 +54,8 @@ export class RunFinalizeMergeCommand extends FlowCommand {
       ...(mergeResult?.resumed ? { resumed: true } : {}),
       ...(mergeResult?.prNumber != null ? { prNumber: mergeResult.prNumber } : {}),
       ...(mergeResult?.prUrl != null ? { prUrl: mergeResult.prUrl } : {}),
+      ...(mergeResult?.repository != null ? { repository: mergeResult.repository } : {}),
+      ...(mergeResult?.headOid != null ? { headOid: mergeResult.headOid } : {}),
     };
   }
 }

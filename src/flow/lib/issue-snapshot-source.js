@@ -39,11 +39,11 @@ export class IssueSnapshotSource {
   }
 }
 
-/** Production default: fetch and normalize the Issue through the gh boundary. */
+/** Production default: fetch and normalize the Issue through the GitHub provider boundary. */
 export class GitHubIssueSnapshotSource extends IssueSnapshotSource {
-  load({ number, root } = {}) {
+  load({ number, root, config } = {}) {
     const resolvedNumber = issueNumber(number);
-    const fetched = fetchIssue(resolvedNumber, root, { strict: false });
+    const fetched = fetchIssue(resolvedNumber, root, { strict: false, config });
     if (fetched === null) return null;
     if (typeof fetched.body !== "string") {
       process.stderr.write(`warn: failed to fetch issue #${resolvedNumber}: Issue body is not text\n`);

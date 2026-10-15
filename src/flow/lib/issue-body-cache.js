@@ -20,12 +20,12 @@ export function normalizeIssueBody(body) {
 }
 
 /**
- * Fetch the Issue body via gh (lenient), normalize it,
+ * Fetch the Issue body via the GitHub provider (lenient), normalize it,
  * and return the resulting string. Returns null when:
- *   - gh fails (fetch-issue already emits a warning to stderr)
+ *   - the provider fails (fetch-issue already emits a warning to stderr)
  *   - body is missing or empty after normalization
  */
-export function fetchNormalizedIssueBody(number, root) {
-  const fetched = fetchIssue(number, root, { strict: false });
+export function fetchNormalizedIssueBody(number, root, { config } = {}) {
+  const fetched = fetchIssue(number, root, { strict: false, config });
   return fetched ? normalizeIssueBody(fetched.body) : null;
 }

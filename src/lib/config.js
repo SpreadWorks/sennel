@@ -12,6 +12,7 @@ import { defaultAgentProfiles } from "./agent-defaults.js";
 import { flowSpecRootFromConfig } from "./flow-workspace.js";
 import { PRODUCT } from "./product.js";
 import { GLOBAL_PROMPT_ELEMENT_HARD_MAX } from "./prompt-batching.js";
+import { MAX_GITHUB_BUFFER, MAX_GITHUB_TIMEOUT, validateGitHubConfig } from "./github/config.js";
 
 /** Default concurrency for parallel file processing. */
 export const DEFAULT_CONCURRENCY = 5;
@@ -239,6 +240,41 @@ const CONFIG_SCHEMA = {
       },
     },
 
+    github: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        provider: { type: "string", minLength: 1 },
+        providers: {
+          type: "object",
+          additionalProperties: {
+            type: "object",
+            additionalProperties: false,
+            required: ["command", "args"],
+            properties: {
+              command: { type: "string", minLength: 1 },
+              args: { type: "array", items: { type: "string" } },
+              timeout: { type: "integer", minimum: 1, maximum: MAX_GITHUB_TIMEOUT },
+              maxBuffer: { type: "integer", minimum: 1, maximum: MAX_GITHUB_BUFFER },
+              maxAttempts: { type: "integer", minimum: 1, maximum: 5 },
+            },
+          },
+        },
+        timeout: { type: "integer", minimum: 1, maximum: MAX_GITHUB_TIMEOUT },
+        maxBuffer: { type: "integer", minimum: 1, maximum: MAX_GITHUB_BUFFER },
+        maxAttempts: { type: "integer", minimum: 1, maximum: 5 },
+        repository: {
+          type: "object",
+          additionalProperties: false,
+          required: ["host", "name"],
+          properties: {
+            host: { type: "string", pattern: "^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$" },
+            name: { type: "string", pattern: "^[a-z0-9_.-]+/[a-z0-9_.-]+$" },
+          },
+        },
+      },
+    },
+
     scan: {
       type: "object",
       required: ["include"],
@@ -405,6 +441,8 @@ export function validate(raw, options = {}) {
   if (Object.hasOwn(raw.agent || {}, "batchTokenLimit")) {
     errors.push("'agent.batchTokenLimit': unknown field; use 'agent.promptCharacterLimit'");
   }
+
+  validateGitHubConfig(raw, errors);
 
   if (raw.agent?.profiles) {
     for (const [profileName, profile] of Object.entries(raw.agent.profiles)) {

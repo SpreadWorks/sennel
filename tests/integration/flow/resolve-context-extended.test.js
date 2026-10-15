@@ -12,7 +12,7 @@ import { join } from "path";
 import fs from "node:fs";
 import path from "node:path";
 import { createTmpDir, removeTmpDir } from "../../support/builders/tmp-dir.js";
-const FLOW_CMD = join(process.cwd(), "src/flow.js");
+const FLOW_CMD = join(process.cwd(), "src/sennel.js");
 
 describe("flow get resolve-context (extended fields)", () => {
   let tmp;
@@ -33,7 +33,7 @@ describe("flow get resolve-context (extended fields)", () => {
 
   function runResolveContext(dir, args = []) {
     return execFileSync(
-      "node", [FLOW_CMD, "get", "resolve-context", ...args],
+      "node", [FLOW_CMD, "flow", "get", "resolve-context", ...args],
       { encoding: "utf8", env: { ...process.env, SENNEL_WORK_ROOT: dir } },
     );
   }
@@ -55,7 +55,7 @@ describe("flow get resolve-context (extended fields)", () => {
     };
   }
 
-  it("returns dirty, currentBranch, aheadCount, ghAvailable fields", () => {
+  it("returns dirty, currentBranch, aheadCount, github fields", () => {
     tmp = createTmpDir();
     setupFlowState(tmp);
     const result = runResolveContext(tmp);
@@ -63,7 +63,7 @@ describe("flow get resolve-context (extended fields)", () => {
     assert.equal(envelope.ok, true);
     assert.ok("dirty" in envelope.data, "should have dirty field");
     assert.ok("currentBranch" in envelope.data, "should have currentBranch field");
-    assert.ok("ghAvailable" in envelope.data, "should have ghAvailable field");
+    assert.ok("github" in envelope.data, "should have github field");
     assert.ok("aheadCount" in envelope.data, "should have aheadCount field");
     assert.ok("lastCommit" in envelope.data, "should have lastCommit field");
   });

@@ -22,7 +22,7 @@ export default class GetIssueCommand extends FlowCommand {
       throw new Error("issue number required (positive integer)");
     }
 
-    const data = fetchIssue(number, root, { strict: true });
+    const data = fetchIssue(number, root, { strict: true, config: ctx.config });
     return {
       number: Number(number),
       title: data.title,

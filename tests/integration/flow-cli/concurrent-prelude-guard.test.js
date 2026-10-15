@@ -1,3 +1,4 @@
+import { offlineGitHubScript } from "../../support/fakes/github.js";
 import { describe, it, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -23,9 +24,7 @@ function setupProject(tmp) {
   const bin = path.join(tmp, ".fixture-bin");
   fs.mkdirSync(bin, { recursive: true });
   const gh = path.join(bin, "gh");
-  fs.writeFileSync(gh, `#!/bin/sh
-printf '%s\\n' '{"title":"Offline fixture Issue","body":"Offline fixture immutable Issue snapshot","labels":[],"state":"OPEN"}'
-`);
+  fs.writeFileSync(gh, offlineGitHubScript());
   fs.chmodSync(gh, 0o755);
   initGitRepo(tmp);
   commitAll(tmp, "initial");

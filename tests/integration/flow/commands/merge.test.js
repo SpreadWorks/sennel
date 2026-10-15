@@ -101,7 +101,7 @@ describe("canonical finalize merge Spec source", () => {
       origin: "plan",
       added_round: 0,
       status: "pending",
-    }).registerActive().activate("finalize-merge");
+    }).registerActive();
     const retired = path.join(root, "specs", fixture.specId, "spec.json");
     fs.writeFileSync(retired, `${JSON.stringify({ goal: "retired root value" })}\n`);
 

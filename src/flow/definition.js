@@ -3824,7 +3824,10 @@ function resolveFinalizeLifecycle(input) {
       actions.push(new RunLifecycleHook({ module: "finalize", handler: "resolveCleanupOutboxFlowManager" }));
     }
     actions.push(new RunLifecycleHook({ module: "finalize", handler: "finalizeOnError", args: { command } }));
-    if (command === "finalize-merge") {
+    // PR creation binds its remote head to the persisted execution OID.
+    // Local failure commits would invalidate any submitted head on recovery.
+    // Canonical failure/audit publication remains above.
+    if (command === "finalize-merge" && input.mergeStrategy === "squash") {
       actions.push(new RunLifecycleHook({
         module: "finalize",
         handler: "commitFinalizeMergeConflictMetadata",

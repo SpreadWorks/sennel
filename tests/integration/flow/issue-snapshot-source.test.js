@@ -36,15 +36,17 @@ describe("linked Issue snapshot boundary", () => {
       body: "Fixture Issue body",
     }));
     const manager = makeFlowManager(tmp);
+    const config = { github: { provider: "gh" } };
 
     const result = new SetInitCommand({ issueSnapshotSource: source }).execute({
       root: tmp,
       flowManager: manager,
       issue: "431",
+      config,
     });
 
     assert.equal(result.runId.length > 0, true);
-    assert.deepEqual(source.inputs, [{ number: 431, root: tmp }]);
+    assert.deepEqual(source.inputs, [{ number: 431, root: tmp, config }]);
     const preparing = manager.loadPreparingFlow(result.runId);
     assert.equal(preparing.issue, 431);
     assert.equal(preparing.issueBody, "Fixture Issue body");
