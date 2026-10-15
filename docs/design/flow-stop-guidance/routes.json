@@ -1396,6 +1396,12 @@
         ]
       },
       {
+        "code": "GITHUB_INVALID_REQUEST",
+        "sources": [
+          "src/flow/lib/fetch-issue.js"
+        ]
+      },
+      {
         "code": "HISTORICAL_CONTINUATION_NOT_ADMITTED",
         "sources": [
           "src/flow/lib/get-next-action.js"

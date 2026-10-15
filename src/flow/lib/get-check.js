@@ -5,7 +5,8 @@
  * Prerequisites are derived from the definition hierarchy.
  */
 
-import { isGhAvailable, runGit } from "../../lib/git-helpers.js";
+import { runGit } from "../../lib/git-helpers.js";
+import { resolveGitHubProvider } from "../../lib/github/provider.js";
 import { VALID_CHECK_TARGETS } from "../../lib/constants.js";
 import { FlowCommand } from "./base-command.js";
 import { deriveFlowPrereqs } from "../definition.js";
@@ -41,12 +42,14 @@ function checkDirty(root) {
   };
 }
 
-function checkGh() {
-  const available = isGhAvailable();
+function checkGitHub(root, config) {
+  const github = resolveGitHubProvider(config).preflight({ cwd: root });
+  const pass = github.ready();
   return {
-    pass: available,
-    summary: available ? "gh available" : "gh command not found",
-    checks: [{ id: "gh", pass: available, message: available ? "available" : "not available" }],
+    pass,
+    summary: pass ? "GitHub provider ready" : `GitHub provider unavailable: ${github.failureCode}`,
+    checks: [{ id: "github", pass, message: pass ? "ready" : github.failureCode }],
+    github: github.toJSON(),
   };
 }
 
@@ -72,8 +75,8 @@ export default class GetCheckCommand extends FlowCommand {
       return checkDirty(executionRoot);
     }
 
-    if (target === "gh") {
-      return checkGh();
+    if (target === "github") {
+      return checkGitHub(executionRoot, ctx.config);
     }
 
     const state = ctx.flowState;

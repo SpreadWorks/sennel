@@ -1,3 +1,4 @@
+import { offlineGitHubScript } from "../../support/fakes/github.js";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
@@ -79,12 +80,7 @@ describe("finalization command crash resumption", () => {
       const entry = new FlowOutboxStore(flowManager, { specId: state.specId }).begin(finalizationOutboxIdentity(state, "report"));
       const binDir = path.join(externalRoot, "bin");
       const ghLog = path.join(externalRoot, "gh.log");
-      writeFile(externalRoot, "bin/gh", [
-        "#!/bin/sh",
-        "printf '%s\\n' \"$@\" >> \"$SENNEL_TEST_GH_LOG\"",
-        "exit 0",
-        "",
-      ].join("\n"));
+      writeFile(externalRoot, "bin/gh", offlineGitHubScript());
       fs.chmodSync(path.join(binDir, "gh"), 0o755);
       process.env.PATH = `${binDir}:${originalPath}`;
       process.env.SENNEL_TEST_GH_LOG = ghLog;

@@ -1,3 +1,4 @@
+import { offlineGitHubScript } from "../../support/fakes/github.js";
 import { describe, it, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import fs from "fs";
@@ -47,18 +48,14 @@ describe("fetch-issue helper (spec 225 R2)", () => {
 
   describe("strict: true", () => {
     it("returns parsed shape on gh success", () => {
-      const bin = writeFakeGh(tmp, `#!/bin/sh
-cat <<'JSON'
-{"title": "Test Issue", "body": "body text", "labels": [{"name": "bug"}], "state": "OPEN"}
-JSON
-`);
+      const bin = writeFakeGh(tmp, offlineGitHubScript({ title: "Test Issue", body: "body text", labels: ["bug"] }));
       restorePath = withPath(bin);
 
       const out = fetchIssue(42, tmp, { strict: true });
       assert.equal(out.title, "Test Issue");
       assert.equal(out.body, "body text");
-      assert.equal(out.state, "OPEN");
-      assert.ok(Array.isArray(out.labels));
+      assert.equal(out.state, "open");
+      assert.deepEqual(out.labels, ["bug"]);
     });
 
     it("throws when gh exits non-zero", () => {
@@ -98,11 +95,7 @@ echo "not json"
 
   describe("strict: false (lenient)", () => {
     it("returns parsed shape on gh success", () => {
-      const bin = writeFakeGh(tmp, `#!/bin/sh
-cat <<'JSON'
-{"title": "Lenient OK", "body": "ok body", "labels": [], "state": "OPEN"}
-JSON
-`);
+      const bin = writeFakeGh(tmp, offlineGitHubScript({ title: "Lenient OK", body: "ok body" }));
       restorePath = withPath(bin);
 
       const out = fetchIssue(7, tmp, { strict: false });
@@ -112,7 +105,7 @@ JSON
 
     it("returns null on gh failure and emits 1 line warning to stderr", () => {
       const bin = writeFakeGh(tmp, `#!/bin/sh
-echo "not found" >&2
+echo "token=private-test-credential\nraw private stderr" >&2
 exit 1
 `);
       restorePath = withPath(bin);
@@ -123,7 +116,9 @@ exit 1
         assert.equal(out, null);
         const stderrOut = cap.get();
         assert.match(stderrOut, /warn:/);
-        assert.match(stderrOut, /9/);
+        assert.match(stderrOut, /9: GITHUB_PROCESS_FAILURE/);
+        assert.equal(stderrOut.trim().split("\n").length, 1);
+        assert.doesNotMatch(stderrOut, /private-test-credential|raw private stderr/);
       } finally {
         cap.restore();
       }

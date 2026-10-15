@@ -1,3 +1,4 @@
+import { offlineGitHubScript } from "../../support/fakes/github.js";
 import { completeSpecGateRepairHandoff } from "../../support/infrastructure/spec-gate-repair-scenario.js";
 import { CURRENT_FLOW_SCHEMA_REVISION } from "../../../src/lib/flow-schema-revision.js";
 import { completeCanonicalSourceHandoff } from "../../support/builders/source-handoff-scenario.js";
@@ -2737,13 +2738,7 @@ describe("FlowManager canonical Version-1 runtime", () => {
     const binDirectory = path.join(providerRoot, "bin");
     const ghLog = path.join(providerRoot, "gh.log");
     fs.mkdirSync(binDirectory, { recursive: true });
-    fs.writeFileSync(path.join(binDirectory, "gh"), [
-      "#!/bin/sh",
-      "if [ \"$1\" = \"issue\" ] && [ \"$2\" = \"view\" ]; then exit 0; fi",
-      "printf '%s\\n' \"$@\" >> \"$SENNEL_TEST_GH_LOG\"",
-      "exit 0",
-      "",
-    ].join("\n"));
+    fs.writeFileSync(path.join(binDirectory, "gh"), offlineGitHubScript());
     fs.chmodSync(path.join(binDirectory, "gh"), 0o755);
     const originalPath = process.env.PATH;
     const originalGhLog = process.env.SENNEL_TEST_GH_LOG;

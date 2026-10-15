@@ -7,7 +7,8 @@
  */
 
 import fs from "fs";
-import { getWorktreeStatus, getCurrentBranch, getAheadCount, getLastCommit, isGhAvailable } from "../../lib/git-helpers.js";
+import { resolveGitHubProvider } from "../../lib/github/provider.js";
+import { getWorktreeStatus, getCurrentBranch, getAheadCount, getLastCommit } from "../../lib/git-helpers.js";
 import { derivePhase } from "../../lib/flow-helpers.js";
 import { FlowCompletion } from "./flow-completion.js";
 import { flattenSteps } from "./step-tree.js";
@@ -67,7 +68,7 @@ export function buildResolvedFlowContext(ctx) {
   const currentBranch = getCurrentBranch(effectiveRoot);
   const aheadCount = getAheadCount(effectiveRoot, state.baseBranch || "main");
   const lastCommit = getLastCommit(effectiveRoot);
-  const ghAvailable = isGhAvailable();
+  const github = resolveGitHubProvider(ctx.config).preflight({ cwd: effectiveRoot }).toJSON();
   const completion = new FlowCompletion(state);
   return {
     mainRepoPath,
@@ -92,7 +93,7 @@ export function buildResolvedFlowContext(ctx) {
     currentBranch,
     aheadCount,
     lastCommit,
-    ghAvailable,
+    github,
     completion: completion.toJSON(),
     recommendedSkill: phaseToSkill(phase),
   };

@@ -5,9 +5,44 @@ import { join } from "path";
 import { execFileSync } from "child_process";
 import { createTmpDir, removeTmpDir } from "../../../support/builders/tmp-dir.js";
 import { CanonicalFlowFixture, makeFlowManager } from "../../../support/infrastructure/flow-setup.js";
+import { FinalizationPhaseScenario } from "../../../support/finalization-phase-scenario.js";
 
 const CMD = join(process.cwd(), "src/sennel.js");
 const CMD_ARGS = ["docs", "changelog"];
+
+/** Control only the external Spec response; all publication and finalization
+ * continue through the existing production scenario. */
+class ChangelogFinalizationScenario extends FinalizationPhaseScenario {
+  initialize() {
+    this.specId = this.options.specId;
+    super.initialize();
+  }
+
+  spec() {
+    const document = super.spec();
+    return { ...document, goal: this.options.goal,
+      scope: { ...document.scope, in: this.options.scopeIn } };
+  }
+}
+
+async function createFinalizedChangelogFlow(t, {
+  specId = "001-test-feature",
+  goal = "Test feature goal.",
+  scopeIn = [],
+} = {}) {
+  const flow = ChangelogFinalizationScenario.create(t, { specId, goal, scopeIn,
+    execution: { mode: "direct", baseBranch: "main", featureBranch: null } });
+  await flow.advanceTo("finalize-commit");
+  const completed = await flow.dispatch(16);
+  assert.notEqual(completed.ok, false, JSON.stringify(completed));
+  flow.reload();
+  assert.equal(flow.state().lifecycle.state, "finalized");
+  const artifact = flow.manager.readArtifact({ specId, logicalKey: "spec.record", consumerNodeId: "system" });
+  const document = JSON.parse(artifact.bytes.toString("utf8"));
+  assert.equal(document.goal, goal);
+  assert.deepEqual(document.scope.in, scopeIn);
+  return flow;
+}
 
 /**
  * Set up a normal production V1 Flow, never a hand-written root-level
@@ -18,7 +53,6 @@ function createCanonicalChangelogFlow(tmp, {
   specId = "001-test-feature",
   goal = "Test feature goal.",
   scopeIn = [],
-  finalized = false,
 } = {}) {
   const flowManager = makeFlowManager(tmp);
   const fixture = new CanonicalFlowFixture({
@@ -32,25 +66,22 @@ function createCanonicalChangelogFlow(tmp, {
       scope: { in: scopeIn, out: [] },
     },
   }).create();
-  if (finalized) {
-    const leafIds = fixture.leaves().map((step) => step.id);
-    for (const nodeId of leafIds) fixture.settle(nodeId);
-    flowManager.finalizeFlow(specId);
-  }
   return fixture;
 }
 
 describe("changelog CLI", () => {
   let tmp;
-  afterEach(() => tmp && removeTmpDir(tmp));
+  afterEach(() => {
+    if (tmp) removeTmpDir(tmp);
+    tmp = null;
+  });
 
-  it("generates changelog from specs", () => {
-    tmp = createTmpDir();
-    const flow = createCanonicalChangelogFlow(tmp, {
+  it("generates changelog from specs", async (t) => {
+    const flow = await createFinalizedChangelogFlow(t, {
       goal: "Test feature goal.",
       scopeIn: ["Add tests"],
-      finalized: true,
     });
+    const tmp = flow.root;
     fs.mkdirSync(join(tmp, "docs"), { recursive: true });
 
     execFileSync("node", [CMD, ...CMD_ARGS], {

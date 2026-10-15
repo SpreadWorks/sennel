@@ -179,6 +179,31 @@ The pre-fix source/test copies are retained in
 commands, results, and acceptance audit. The follow-up freshness check returned
 `fresh`. No skill or preset artifact changed in this follow-up.
 
+## Main integration verification
+
+Implementation commit `c8955c085` is integrated with main `874b47dfe`.
+There were no textual conflicts. The combined source preserves main's GitHub
+provider configuration and Issue/report paths, and its `mergeStrategy`-selected
+squash-only failure metadata commit. The shared dispatcher and stop guidance
+remain the verified implementation above. The existing inventory producer
+refreshed the 69-route artifact to include `GITHUB_INVALID_REQUEST` from main.
+
+`merge-boundary-regression.log` records 81 passing selected cases: 15 unit and
+66 integration checks across guidance, dispatcher, inventory, provider
+configuration, consumers, and finalization lifecycle selection.
+`merge-finalization-regression.log` confirms the provider preflight refusal.
+Its combined invocation did not emit the other selected case's result, so
+that missing observation is not counted as success. The unchanged PR response
+loss case passed separately in `merge-pr-response-loss-isolated.log` (1/1).
+`merge-report-regression.log` confirms report response-loss recovery (1/1).
+Together these provide 84 observed passing cases, without a full-suite claim.
+The scenarios use temporary local Git repositories and fake GitHub providers;
+they do not create a real GitHub pull request or comment.
+
+`merge-tested-inputs.json` records the source and test identities used for this
+integration. Local verification inputs and logs are preserved before worktree
+removal in main's `.tmp/merge-evidence/77d0-c8955c085.tar.gz`.
+
 ## Existing query fixture corrections
 
 The frozen wider query regression run in `query-isolated-regression.log`

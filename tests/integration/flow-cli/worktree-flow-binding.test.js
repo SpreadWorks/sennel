@@ -1,3 +1,4 @@
+import { offlineGitHubScript } from "../../support/fakes/github.js";
 import { createTmpDir as createTestDirectory } from "../../support/builders/tmp-dir.js";
 import { afterEach, describe, it } from "node:test";
 import assert from "node:assert/strict";
@@ -32,9 +33,7 @@ function createProject() {
   }, null, 2));
   const bin = path.join(root, ".fixture-bin");
   fs.mkdirSync(bin, { recursive: true });
-  fs.writeFileSync(path.join(bin, "gh"), `#!/bin/sh
-printf '%s\\n' '{"title":"Offline fixture Issue","body":"Offline fixture immutable Issue snapshot","labels":[],"state":"OPEN"}'
-`, { mode: 0o755 });
+  fs.writeFileSync(path.join(bin, "gh"), offlineGitHubScript(), { mode: 0o755 });
   git(root, ["init", "-b", "main"]);
   git(root, ["config", "user.email", "test@example.com"]);
   git(root, ["config", "user.name", "Test User"]);

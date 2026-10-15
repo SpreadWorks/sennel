@@ -1,3 +1,4 @@
+import { offlineExternalGitHubScript } from "../../support/fakes/github.js";
 import assert from "node:assert/strict";
 import childProcess from "node:child_process";
 import fs from "node:fs";
@@ -43,22 +44,28 @@ class ReportRemote {
     this.#mock = t.mock.method(childProcess, "spawnSync", (command, args, options) => {
       if (command !== "gh") return this.#original(command, args, options);
       this.calls.push([...args]);
-      if (args[0] === "--version") return this.#result(0, "gh version fixture\n");
-      if (args[0] === "issue" && args[1] === "view") {
-        return this.queryUnavailable ? this.#result(1, "", "remote confirmation unavailable")
-          : this.#result(0, this.#bodies.join("\n"));
+      const repository = { full_name: "fixture/repository", html_url: "https://github.com/fixture/repository" };
+      if (args[0] === "--version" || args[0] === "auth") return this.#result(0, "gh version fixture\n");
+      if (args[0] === "repo") return this.#result(0, JSON.stringify({ nameWithOwner: repository.full_name, url: repository.html_url }));
+      assert.equal(args[0], "api");
+      if (args[1] === "repos/fixture/repository") return this.#result(0, JSON.stringify(repository));
+      assert.equal(args[1].split("?")[0], `repos/fixture/repository/issues/${flow.state().issue}/comments`);
+      if (!args.includes("POST")) {
+        return this.queryUnavailable || this.losePostResponse && this.#bodies.length > 0
+          ? this.#result(1, "", "remote confirmation unavailable")
+          : this.#result(0, JSON.stringify([this.#bodies.map((body, index) => ({ id: index + 1, body,
+            html_url: `${repository.html_url}/issues/${flow.state().issue}#issuecomment-${index + 1}` }))]));
       }
-      assert.deepEqual(args.slice(0, 3), ["issue", "comment", String(flow.state().issue)]);
       const identity = finalizationOutboxIdentity(flow.manager.loadReadOnly(flow.specId), "report");
       const pending = readReport(flow).value;
       assert.equal(pending.data.delivery.status, "pending", "pending report is durable before remote submission");
       assert.equal(pending.data.delivery.idempotencyKey, identity.idempotencyKey);
       assert.equal(new FlowOutboxStore(flow.manager).status(identity).status, "pending");
-      const body = args[args.indexOf("--body") + 1];
+      const body = JSON.parse(options.input).body;
       assert.ok(body.endsWith(`<!-- sennel:${identity.idempotencyKey} -->`));
       this.#bodies.push(body);
       if (this.losePostResponse) return this.#result(1, "", "remote response lost after submission");
-      return this.#result(0, "fixture comment posted\n");
+      return this.#result(0, JSON.stringify({ id: this.#bodies.length, body, html_url: `${repository.html_url}/issues/${flow.state().issue}#issuecomment-${this.#bodies.length}` }));
     });
     syncBuiltinESMExports();
     t.after(() => { this.#mock.mock.restore(); syncBuiltinESMExports(); });
@@ -68,8 +75,8 @@ class ReportRemote {
     return { status, signal: null, error: undefined, stdout, stderr };
   }
 
-  get submissions() { return this.calls.filter((args) => args[0] === "issue" && args[1] === "comment").length; }
-  get confirmations() { return this.calls.filter((args) => args[0] === "issue" && args[1] === "view").length; }
+  get submissions() { return this.calls.filter((args) => args[0] === "api" && args.includes("POST")).length; }
+  get confirmations() { return this.calls.filter((args) => args[0] === "api" && args[1].includes("/comments") && !args.includes("POST")).length; }
 }
 
 const seedScope = new SeedCleanupScope(after, mock);
@@ -155,7 +162,12 @@ test("A06 Definition's exact failed-regression choice preserves FAIL and residua
   await flow.advanceTo("final-regression");
   flow.reload();
   const script = path.join(flow.root, "project-tests", "regression.sh");
-  fs.writeFileSync(script, ["printf '%s\\n' 'current behavior failed' >&2", shellPrintChildProcessRecord({
+  const executionsPath = path.join(flow.root, ".tmp", "failed-regression-executions.log");
+  fs.mkdirSync(path.dirname(executionsPath), { recursive: true });
+  const executions = () => fs.existsSync(executionsPath)
+    ? fs.readFileSync(executionsPath, "utf8").trim().split("\n") : [];
+  fs.writeFileSync(script, ["printf '%s\\n' 'executed' >> .tmp/failed-regression-executions.log",
+    "printf '%s\\n' 'current behavior failed' >&2", shellPrintChildProcessRecord({
     command: ["node", "--test", "project-tests/smoke.test.js"],
     stderr: "ERR_ASSERTION\nsrc/implementation.js: required behavior is missing\n",
   }), "exit 1", ""].join("\n"));
@@ -165,14 +177,6 @@ test("A06 Definition's exact failed-regression choice preserves FAIL and residua
   };
   fs.writeFileSync(configPath, JSON.stringify({ ...config, test: { ...config.test,
     command: "sh project-tests/regression.sh", timeout: 5 } }));
-  const executions = [];
-  const execute = childProcess.execFile;
-  const observed = t.mock.method(childProcess, "execFile", (command, args, options, callback) => {
-    if (options.cwd === flow.root) executions.push([command, ...args]);
-    return execute(command, args, options, callback);
-  });
-  syncBuiltinESMExports();
-  t.after(() => { observed.mock.restore(); syncBuiltinESMExports(); });
   const failed = await flow.runRegistered("final-regression");
   assert.equal(failed.result, "fail");
   flow.reload();
@@ -202,7 +206,7 @@ test("A06 Definition's exact failed-regression choice preserves FAIL and residua
   assert.equal(firstExecution.nodeId, "final-regression");
   assert.equal(latestExecution.nodeId, "final-regression");
   assert.notEqual(latestExecution.attemptId, firstExecution.attemptId);
-  assert.equal(executions.length, 2);
+  assert.equal(executions().length, 2);
   const action = await flow.next();
   assert.equal(action.directive.kind, "await_user_decision");
   assert.equal(action.directive.actionPrompt.choices[0].actionId, "ACCEPT_FINAL_REGRESSION_FAILURE");
@@ -220,7 +224,7 @@ test("A06 Definition's exact failed-regression choice preserves FAIL and residua
   assert.equal(final.payload.remainingRisk, risk);
   assert.deepEqual(final.payload.recordAndProceed.executionBinding, latest.payload.executionBinding,
     "acceptance does not execute or reinterpret the failed project command");
-  assert.equal(executions.length, 2, "the exact explicit acceptance cannot re-execute the failed regression");
+  assert.equal(executions().length, 2, "the exact explicit acceptance cannot re-execute the failed regression");
   const reportClaim = await new RunClaimNextActionCommand().execute(flow.context());
   assert.equal(reportClaim.ok, true, JSON.stringify(reportClaim));
   flow.reload();
@@ -250,7 +254,15 @@ test("A07 unlinked report preview does not publish, claim an outbox or change th
 
 test("A07 linked report publishes pending before delivery and reload observes the same completed outbox identity", async (t) => {
   const flow = await reportScenario(t, { issue: 538, issueSnapshot: "# Acceptance fixture issue\nImplement the required behavior.\n" });
-  const remote = new ReportRemote(t, flow);
+  const script = path.join(flow.root, ".tmp", "github-report.mjs");
+  fs.mkdirSync(path.dirname(script), { recursive: true });
+  fs.writeFileSync(script, offlineExternalGitHubScript());
+  flow.options.config = { ...(flow.options.config ?? {}), github: { provider: "offline",
+    repository: { host: "github.com", name: "fixture/repository" },
+    providers: { offline: { command: process.execPath, args: [script] } } } };
+  const remote = { get calls() { return JSON.parse(fs.readFileSync(`${script}.remote.json`, "utf8")).calls; },
+    get submissions() { return this.calls.filter((request) => request.operation === "comment.create").length; },
+    get confirmations() { return this.calls.filter((request) => request.operation === "comment.search").length; } };
   await flow.advanceTo("report");
   flow.reload();
   assert.equal(flow.state().issue, 538);
@@ -265,7 +277,12 @@ test("A07 linked report publishes pending before delivery and reload observes th
   assert.equal(outbox.status, "done");
   assert.equal(outbox.idempotencyKey, identity.idempotencyKey);
   assert.equal(remote.submissions, 1);
-  assert.equal(remote.confirmations, 1);
+  assert.equal(remote.confirmations, 2, "delivery proves absence before posting and confirms the remote publication afterwards");
+  const posted = remote.calls.find((request) => request.operation === "comment.create");
+  assert.equal(posted.context.cwd, flow.root);
+  assert.deepEqual(posted.context.repository, { host: "github.com", name: "fixture/repository" });
+  assert.deepEqual(posted.payload, { number: 538, target: "issue",
+    body: `${report.text}\n\n<!-- sennel:${identity.idempotencyKey} -->` });
   assert.equal(flow.current(), "finalize-commit");
   flow.assertResults(["report"]);
 });
@@ -279,7 +296,7 @@ test("A07 lost report delivery response retains pending evidence and exact recov
   remote.losePostResponse = true;
   const failed = await flow.runRegistered("report");
   assert.equal(failed.ok, false);
-  assert.match(failed.errors[0].messages.join("\n"), /remote response lost after submission/);
+  assert.equal(failed.errors[0].code, "GITHUB_WRITE_OUTCOME_UNKNOWN");
   flow.reload();
   assert.equal(readReport(flow).value.data.delivery.status, "pending");
   assert.equal(new FlowOutboxStore(flow.manager).status(identity).status, "failed");
@@ -292,7 +309,7 @@ test("A07 lost report delivery response retains pending evidence and exact recov
   await flow.runRegistered("report");
   flow.reload();
   assert.equal(remote.submissions, 1);
-  assert.equal(remote.confirmations, 2);
+  assert.equal(remote.confirmations, 3);
   assert.equal(new FlowOutboxStore(flow.manager).status(identity).status, "done");
   assert.equal(readReport(flow).value.data.delivery.idempotencyKey, identity.idempotencyKey);
   assert.equal(flow.current(), "finalize-commit");
@@ -306,7 +323,7 @@ test("A07 pending report preview makes zero remote calls and preserves the faile
   remote.queryUnavailable = true;
   const failed = await flow.runRegistered("report");
   assert.equal(failed.ok, false);
-  assert.match(failed.errors[0].messages.join("\n"), /remote confirmation unavailable/);
+  assert.equal(failed.errors[0].code, "GITHUB_PROCESS_FAILURE");
   flow.reload();
   const pending = readReport(flow);
   assert.equal(pending.value.data.delivery.status, "pending");

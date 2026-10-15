@@ -1,3 +1,4 @@
+import { offlineGitHubScript } from "../../../support/fakes/github.js";
 import { describe, it, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
@@ -92,9 +93,7 @@ describe("flow prepare PostWorktree hook", () => {
   it("mirrors ignored plugin runtime into worktree before plugin prepare hooks are discovered", () => {
     tmp = setupProject("");
     writeFile(tmp, ".gitignore", ".sennel/*\n!.sennel/config.json\n!.sennel/output/\n");
-    writeFile(tmp, ".fixture-bin/gh", `#!/bin/sh
-printf '%s\\n' '{"title":"Plugin fixture Issue","body":"Plugin fixture immutable Issue snapshot","labels":[],"state":"OPEN"}'
-`);
+    writeFile(tmp, ".fixture-bin/gh", offlineGitHubScript({ title: "Plugin fixture Issue", body: "Plugin fixture immutable Issue snapshot" }));
     fs.chmodSync(path.join(tmp, ".fixture-bin", "gh"), 0o755);
     writeJson(tmp, ".sennel/config.local.json", {
       plugin: {

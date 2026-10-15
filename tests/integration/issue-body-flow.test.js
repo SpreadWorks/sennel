@@ -1,3 +1,4 @@
+import { offlineGitHubScript, offlineExternalGitHubScript } from "../support/fakes/github.js";
 import { describe, it, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import path from "path";
@@ -35,7 +36,9 @@ function writeFakeGh(tmp, body) {
   return bin;
 }
 
-function setupProject(tmp, { capturePath, stubGhBody } = {}) {
+function setupProject(tmp, { capturePath, stubGhBody, externalGitHub = false } = {}) {
+  const externalScript = path.join(tmp, ".external-github.mjs");
+  if (externalGitHub) fs.writeFileSync(externalScript, offlineExternalGitHubScript({ title: "T", body: "ISSUE_MARKER_e2e 本文" }));
   const stubPath = capturePath
     ? writeCapturingStubAgentScript(tmp, ".stub-agent.js", capturePath, passingScore())
     : writeStubAgentScript(tmp, ".stub-agent.js", passingScore());
@@ -44,6 +47,8 @@ function setupProject(tmp, { capturePath, stubGhBody } = {}) {
     type: "base",
     docs: { languages: ["ja"], defaultLanguage: "ja" },
     agent: stubAgentConfig(stubPath),
+    ...(externalGitHub ? { github: { provider: "offline", providers: { offline: { command: process.execPath, args: [externalScript] } },
+      repository: { host: "github.com", name: "fixture/repository" } } } : {}),
   });
   writeJson(tmp, "package.json", { name: "fixture", version: "0.0.0" });
   initGitRepo(tmp);
@@ -70,14 +75,9 @@ describe("e2e — Issue body flow (spec 225 R7/R8/R10)", () => {
   beforeEach(() => { tmp = createTmpDir("e2e-issue-body-"); });
   afterEach(() => { removeTmpDir(tmp); });
 
-  it("init → prepare → auto-check: Issue body reaches the AI prompt", () => {
+  it("named provider init → prepare → reload → auto-check: Issue snapshot reaches the AI prompt", () => {
     const capturePath = path.join(tmp, ".stub-agent-called");
-    const ghStub = `#!/bin/sh
-cat <<'JSON'
-{"title":"T","body":"ISSUE_MARKER_e2e 本文","labels":[],"state":"OPEN"}
-JSON
-`;
-    const { ghBin } = setupProject(tmp, { capturePath, stubGhBody: ghStub });
+    const { ghBin } = setupProject(tmp, { capturePath, externalGitHub: true });
 
     // set init --issue → expects preparing state with issueBody persisted
     const initRes = runCli(tmp, [

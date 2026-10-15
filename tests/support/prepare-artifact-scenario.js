@@ -1,3 +1,4 @@
+import { offlineGitHubScript } from "./fakes/github.js";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
@@ -40,10 +41,9 @@ export class PrepareArtifactScenario {
     fs.writeFileSync(path.join(root, ".sennel", "config.json"), JSON.stringify(this.config));
     fs.writeFileSync(path.join(root, "package.json"), JSON.stringify({ name: "prepare-scenario", type: "module" }));
     fs.writeFileSync(path.join(root, ".gitignore"), "/.tmp/\n/.fixture-bin/\n/specs/\n/.sennel/*\n!/.sennel/config.json\n");
-    fs.writeFileSync(path.join(root, ".fixture-bin", "gh"), [
-      `#!${process.execPath}`,
-      `process.stdout.write(${JSON.stringify(JSON.stringify({ title: "Offline Issue", body: this.issueBody, labels: [], state: "OPEN" }))});`,
-    ].join("\n"), { mode: 0o755 });
+    fs.writeFileSync(path.join(root, ".fixture-bin", "gh"), offlineGitHubScript({
+      title: "Offline Issue", body: this.issueBody,
+    }), { mode: 0o755 });
     fs.writeFileSync(path.join(root, ".fixture-bin", "agent.mjs"), [
       'import fs from "node:fs";',
       `fs.appendFileSync(${JSON.stringify(path.join(root, ".tmp", "unexpected-agent-calls"))}, "called\\n");`,

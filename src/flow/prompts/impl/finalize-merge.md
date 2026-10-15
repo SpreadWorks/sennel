@@ -3,7 +3,7 @@ Merge the feature branch as a finalize sub-step.
 ## Required Sequence
 
 1. Run `sennel flow run finalize-merge`.
-   - Merge strategy is auto-detected: `commands.gh=enable` AND `gh` available → PR, else squash merge.
+   - `commands.gh=enable` selects the configured GitHub provider for PR submission. Provider availability, authentication and repository access must succeed before Git push; failure stops this route. Unset or disabled selects squash merge.
    - Display the JSON result to the user.
 
 2. If merge fails, the onError hook automatically marks finalize-sync and finalize-cleanup as skipped.

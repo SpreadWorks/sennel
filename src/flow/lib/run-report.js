@@ -12,11 +12,8 @@
  */
 
 import path from "path";
-import {
-  collectGitSummary,
-  commentOnIssueOnce,
-  isGhAvailable,
-} from "../../lib/git-helpers.js";
+import { resolveGitHubProvider } from "../../lib/github/provider.js";
+import { collectGitSummary } from "../../lib/git-helpers.js";
 import { generateReport } from "./report-format.js";
 import { ReportBinding } from "./report-binding.js";
 import { FlowCommand } from "./base-command.js";
@@ -228,14 +225,11 @@ async function resumeCanonicalReportDelivery(ctx, report, reportPath) {
     root: executionRoot,
     artifactRoot: root,
   });
-  const delivery = postReportToIssue({ root, state, report, flowOutboxEntry: ctx.flowOutboxEntry });
-  if (!delivery.ok) {
-    throw new Error(`failed to post report to issue #${state.issue}: ${delivery.reason}`);
-  }
+  const delivery = postReportToIssue({ root: executionRoot, config: ctx.config, state, report, flowOutboxEntry: ctx.flowOutboxEntry });
   const delivered = withDelivery(report, deliveryState("done", null, idempotencyKey));
   return canonicalDeliverySuccess({
     report: delivered,
-    issueComment: completedIssueComment(state, ctx.flowOutboxEntry, delivery.posted.resumed),
+    issueComment: completedIssueComment(state, ctx.flowOutboxEntry, delivery.resumed),
     changed: [reportPath],
   });
 }
@@ -317,14 +311,11 @@ async function executeCanonicalReport(ctx) {
     const idempotencyKey = requireCanonicalReportOutboxKey(ctx);
     const pendingReport = withDelivery(boundReport, deliveryState("pending", null, idempotencyKey));
     await publishCanonicalReport(ctx, pendingReport);
-    const delivery = postReportToIssue({ root, state, report: pendingReport, flowOutboxEntry: ctx.flowOutboxEntry });
-    if (!delivery.ok) {
-      throw new Error(`failed to post report to issue #${state.issue}: ${delivery.reason}`);
-    }
+    const delivery = postReportToIssue({ root: executionRoot, config: ctx.config, state, report: pendingReport, flowOutboxEntry: ctx.flowOutboxEntry });
     const delivered = withDelivery(boundReport, deliveryState("done", null, idempotencyKey));
     return canonicalDeliverySuccess({
       report: delivered,
-      issueComment: completedIssueComment(state, ctx.flowOutboxEntry, delivery.posted.resumed),
+      issueComment: completedIssueComment(state, ctx.flowOutboxEntry, delivery.resumed),
       changed: [reportPath],
     });
   }
@@ -336,18 +327,11 @@ async function executeCanonicalReport(ctx) {
   });
 }
 
-function postReportToIssue({ root, state, report, flowOutboxEntry }) {
-  if (!isGhAvailable()) {
-    return { ok: false, reason: "gh unavailable" };
-  }
-  const posted = commentOnIssueOnce(
-    state.issue,
-    report.text,
-    root,
-    flowOutboxEntry?.idempotencyKey,
-  );
-  if (!posted.ok) return { ok: false, reason: posted.error };
-  return { ok: true, posted };
+function postReportToIssue({ root, config, state, report, flowOutboxEntry }) {
+  const provider = resolveGitHubProvider(config);
+  const preflight = provider.preflight({ cwd: root }).assertReady();
+  return provider.deliverComment({ cwd: root, repository: preflight.repository,
+    number: state.issue, body: report.text, idempotencyKey: flowOutboxEntry?.idempotencyKey, target: "issue" });
 }
 
 function completedIssueComment(state, flowOutboxEntry, resumed) {

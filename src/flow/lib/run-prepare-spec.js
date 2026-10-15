@@ -978,7 +978,7 @@ export class RunPrepareSpecCommand extends FlowCommand {
       if (typeof cached === "string") {
         resolvedIssueSnapshot = new IssueSnapshot({ number: Number(issue), body: cached });
       } else {
-        const snapshot = this.issueSnapshotSource.load({ number: Number(issue), root: mainRoot });
+        const snapshot = this.issueSnapshotSource.load({ number: Number(issue), root: mainRoot, config: ctx.config });
         if (snapshot === null) {
           return Envelope.fail(
             "run",

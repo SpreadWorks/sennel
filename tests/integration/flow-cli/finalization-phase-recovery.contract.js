@@ -1,3 +1,4 @@
+import { offlineExternalGitHubScript } from "../../support/fakes/github.js";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
@@ -11,12 +12,15 @@ import { POINTER_REL_PATH } from "../../../src/flow/lib/run-report-show.js";
 import { FinalizationWorktreeScenario } from "../../support/infrastructure/finalization-worktree-scenario.js";
 import { runGit } from "../../../src/lib/git-helpers.js";
 
-// gh --json returns the requested fields. Keep the external fake faithful so
-// exact body-marker readback can prove the same PR's delivery after response loss.
-function pullRequestListJSON(args, pullRequests) {
-  const fields = args[args.indexOf("--json") + 1].split(",");
-  return JSON.stringify(pullRequests.map((pullRequest) => Object.fromEntries(fields
-    .filter((field) => Object.hasOwn(pullRequest, field)).map((field) => [field, pullRequest[field]]))));
+function externalGitHubFixture(flow, controls) {
+  const script = path.join(flow.root, ".tmp", "github-provider.mjs");
+  const control = path.join(flow.root, ".tmp", "github-control.json");
+  fs.mkdirSync(path.dirname(script), { recursive: true });
+  fs.writeFileSync(script, offlineExternalGitHubScript({ controlPath: control }));
+  fs.writeFileSync(control, JSON.stringify(controls));
+  flow.options.config.github = { provider: "offline", repository: { host: "github.com", name: "fixture/repository" },
+    providers: { offline: { command: process.execPath, args: [script], maxAttempts: 1 } } };
+  return { control, remote: () => JSON.parse(fs.readFileSync(`${script}.remote.json`, "utf8")) };
 }
 
 export function registerFinalizationRecoveryContracts(scenario) {
@@ -114,37 +118,34 @@ export function registerFinalizationRecoveryContracts(scenario) {
   });
 
   test("F03 actual local push and keyed PR creation survive response loss and settle PR Await with zero sync/cleanup", async (t) => {
-    const prs = [];
-    let loseResponse = true;
-    const flow = scenario(t, { config: { lang: "en", type: "base", commands: { gh: "enable" } },
-      ghProcess(args, _options, active) {
-        if (args[0] === "--version") return { status: 0, stdout: "gh fixture", stderr: "" };
-        assert.equal(active.outbox("finalize-merge").status, "pending");
-        if (args[0] === "pr" && args[1] === "list") return { status: 0, stdout: pullRequestListJSON(args, prs), stderr: "" };
-        assert.deepEqual(args.slice(0, 2), ["pr", "create"]);
-        const body = args[args.indexOf("--body") + 1];
-        assert.ok(body.includes(`<!-- sennel:${active.identity("finalize-merge").idempotencyKey} -->`));
-        prs.push({ number: 717, body });
-        return { status: loseResponse ? 1 : 0, stdout: "https://example.test/pull/717", stderr: loseResponse ? "lost response after PR creation" : "" };
-      } });
+    const flow = scenario(t, { config: { lang: "en", type: "base", commands: { gh: "enable" } } });
+    const { control, remote } = externalGitHubFixture(flow, { loseResponse: true });
     flow.createLocalRemote();
     await flow.advanceTo("finalize-merge");
     const identity = flow.identity("finalize-merge");
+    const submittedHead = flow.git(["rev-parse", flow.state().execution.featureBranch]);
     const failed = await flow.runRegistered("finalize-merge");
     assert.equal(failed.ok, false);
-    assert.ok(failed.errors.some((entry) => entry.messages.some((message) => message.includes("lost response after PR creation"))), JSON.stringify(failed));
+    assert.ok(failed.errors.some((entry) => entry.code === "GITHUB_WRITE_OUTCOME_UNKNOWN"), JSON.stringify(failed));
     flow.reload();
-    assert.equal(prs.length, 1);
+    assert.equal(remote().prs.length, 1);
+    assert.equal(remote().calls.find((request) => request.operation === "pull-request.create").payload.expectedHeadOid, submittedHead);
+    assert.equal(remote().prs[0].headOid, submittedHead);
+    assert.equal(flow.git(["rev-parse", flow.state().execution.featureBranch]), submittedHead,
+      "PR failure must preserve the head already submitted to GitHub");
     assert.equal(flow.outbox("finalize-merge").status, "failed");
     const recovered = await flow.runRegistered("recover-finalization");
     assert.equal(recovered.operation, "exact-outbox-recovery", JSON.stringify(recovered));
     flow.reload();
-    loseResponse = false;
+    fs.writeFileSync(control, JSON.stringify({ loseResponse: false }));
     const replay = await flow.runRegistered("finalize-merge");
     assert.equal(replay.strategy, "pr", JSON.stringify(replay));
     assert.equal(replay.resumed, true);
+    assert.equal(replay.prNumber, 717);
+    assert.deepEqual(replay.repository, { host: "github.com", name: "fixture/repository" });
+    assert.equal(replay.headOid, flow.git(["rev-parse", flow.state().execution.featureBranch]));
     flow.reload();
-    assert.equal(prs.length, 1);
+    assert.equal(remote().prs.length, 1);
     assert.equal(flow.outbox("finalize-merge").idempotencyKey, identity.idempotencyKey);
     assert.equal(flow.outbox("finalize-merge").status, "done");
     const action = await flow.next();
@@ -168,34 +169,59 @@ export function registerFinalizationRecoveryContracts(scenario) {
     flow.assertResults(["finalize-merge"], { expectedKinds: { "finalize-merge": "finalize-merge-pr-opened" } });
     const settled = flow.manager.readCurrentStepSettlement({ specId: flow.specId, stepId: "finalize-merge", completed: true });
     assert.equal(settled.result.type, "completed");
+    assert.equal(settled.receipt.finalization.commandResult.headOid, replay.headOid);
+    assert.equal(settled.receipt.finalization.commandResult.prNumber, 717);
+    assert.deepEqual(settled.receipt.finalization.commandResult.repository, replay.repository);
     assert.equal(settled.receipt.settlementKind, "await");
     assert.equal(settled.receipt.connector, null);
     assert.equal(settled.receipt.targetStepId, null);
   });
 
+  test("F03 PR provider preflight refusal preserves Git refs without submitting a remote write", async (t) => {
+    const flow = scenario(t, { config: { lang: "en", type: "base", commands: { gh: "enable" } } });
+    const { remote } = externalGitHubFixture(flow, { authenticationFailure: true });
+    await flow.advanceTo("finalize-merge");
+    const refs = flow.git(["show-ref"]);
+    const failed = await flow.runRegistered("finalize-merge");
+    assert.equal(failed.ok, false);
+    assert.ok(failed.errors.some((entry) => entry.code === "GITHUB_AUTHENTICATION"), JSON.stringify(failed));
+    flow.reload();
+    assert.equal(flow.git(["show-ref"]), refs);
+    assert.deepEqual(remote().prs, []);
+    assert.equal(remote().calls.some((request) => request.operation === "pull-request.create"), false);
+    assert.equal(flow.outbox("finalize-merge"), null);
+    assert.equal(flow.docsCalls.length, 0);
+  });
+
   test("F03 a foreign PR on the same branch cannot authenticate the current outbox effect", async (t) => {
     const flow = scenario(t, { config: { lang: "en", type: "base", commands: { gh: "enable" } },
       ghProcess(args, _options, active) {
-        if (args[0] === "--version") return { status: 0, stdout: "gh fixture", stderr: "" };
+        const repository = { full_name: "fixture/repository", html_url: "https://github.com/fixture/repository" };
+        if (args[0] === "--version" || args[0] === "auth") return { status: 0, stdout: "gh fixture", stderr: "" };
+        if (args[0] === "repo") return { status: 0, stdout: JSON.stringify({ nameWithOwner: repository.full_name, url: repository.html_url }), stderr: "" };
+        assert.equal(args[0], "api");
+        if (args[1] === "repos/fixture/repository") return { status: 0, stdout: JSON.stringify(repository), stderr: "" };
         assert.equal(active.outbox("finalize-merge").status, "pending");
-        const foreign = { number: 716, body: "<!-- sennel:another-flow-outbox-key -->" };
-        if (args[0] === "pr" && args[1] === "list") return { status: 0,
-          stdout: pullRequestListJSON(args, [foreign]), stderr: "" };
-        assert.deepEqual(args.slice(0, 2), ["pr", "view"]);
-        return { status: 0, stdout: JSON.stringify(foreign), stderr: "" };
+        const state = active.state();
+        const foreign = { number: 716, body: "<!-- sennel:another-flow-outbox-key -->", title: "Foreign operation", state: "open",
+          html_url: "https://github.com/fixture/repository/pull/716", merged_at: null,
+          base: { repo: repository, ref: state.execution.baseBranch },
+          head: { repo: repository, ref: state.execution.featureBranch, sha: active.git(["rev-parse", state.execution.featureBranch]) } };
+        assert.equal(args[1].startsWith("repos/fixture/repository/pulls?"), true);
+        return { status: 0, stdout: JSON.stringify([[foreign]]), stderr: "" };
       } });
     flow.createLocalRemote();
     await flow.advanceTo("finalize-merge");
     const base = flow.git(["rev-parse", "main"]);
     const failed = await flow.runRegistered("finalize-merge");
     assert.equal(failed.ok, false, "a PR number is not proof of the exact outbox marker");
-    assert.ok(failed.errors.some((entry) => /marker|identity|key|proof|confirmation/i.test(entry.messages.join("\n"))), JSON.stringify(failed));
+    assert.ok(failed.errors.some((entry) => entry.code === "GITHUB_CONFLICT"), JSON.stringify(failed));
     flow.reload();
     assert.notEqual(flow.outbox("finalize-merge").status, "done");
     assert.notEqual(flow.state().findNode("finalize-merge").status, "done");
     assert.equal(flow.git(["rev-parse", "main"]), base);
     assert.equal(flow.docsCalls.length, 0);
-    assert.equal(flow.ghCalls.some((args) => args[0] === "pr" && args[1] === "create"), false);
+    assert.equal(flow.ghCalls.some((args) => args[0] === "api" && args.includes("POST")), false);
   });
 
   for (const foreign of [false, true]) {

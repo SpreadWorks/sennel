@@ -2,7 +2,7 @@ import { describe, it, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
-import { createTmpDir, removeTmpDir, writeJson } from "../support/builders/tmp-dir.js";
+import { createTmpDir, removeTmpDir, writeJson, writeFile } from "../support/builders/tmp-dir.js";
 import { initGitRepo, commitAll, checkoutNewBranch } from "../support/infrastructure/git-repo.js";
 import { CanonicalFlowFixture, TaskLifecycleFixture, makeFlowManager } from "../support/infrastructure/flow-setup.js";
 
@@ -20,7 +20,7 @@ function run(tmp, args) {
   });
 }
 
-function setupForestFixture(tmp, { taskId = null, targetStep = null, taskDocuments = [taskDocument("T-1"), taskDocument("T-2")] } = {}) {
+async function setupForestFixture(tmp, { taskId = null, targetStep = null, taskDocuments = [taskDocument("T-1"), taskDocument("T-2")] } = {}) {
   writeJson(tmp, ".sennel/config.json", { lang: "ja", type: "base", docs: { languages: ["ja"], defaultLanguage: "ja" } });
   writeJson(tmp, "package.json", { name: "fixture", version: "0.0.0" });
   initGitRepo(tmp);
@@ -35,7 +35,7 @@ function setupForestFixture(tmp, { taskId = null, targetStep = null, taskDocumen
       execution: { mode: "branch", baseBranch: "main", featureBranch: `feature/${SPEC_ID}` },
       specRecord: { requirements: [{ id: "R1", desc: "task 1 passes", priority: "must", task_ids: ["T-1"] }, { id: "R2", desc: "task 2 passes", priority: "must", task_ids: ["T-2"] }] },
     }).create().addTasks(taskDocuments).registerActive()
-    : new TaskLifecycleFixture({
+    : await new TaskLifecycleFixture({
       flowManager: fm,
       specId: SPEC_ID,
       runId: `run-${SPEC_ID}`,
@@ -43,7 +43,9 @@ function setupForestFixture(tmp, { taskId = null, targetStep = null, taskDocumen
       taskDocuments,
       taskId,
       targetStep,
-    }).create();
+    }).createWithProducers({ sourceMutations: new Map([[`${taskId}-impl`, () => {
+      writeFile(tmp, "src/task.js", "export const implemented = true;\n");
+    }]]) });
   return { fm, fixture };
 }
 
@@ -51,9 +53,9 @@ describe("REQ-C1: E2E forest lifecycle via CLI", () => {
   let tmp;
   afterEach(() => tmp && removeTmpDir(tmp));
 
-  it("canonical Spec Task admission records each Spec Task document", () => {
+  it("canonical Spec Task admission records each Spec Task document", async () => {
     tmp = createTmpDir();
-    const { fixture } = setupForestFixture(tmp);
+    const { fixture } = await setupForestFixture(tmp);
     const state = fixture.state();
     assert.deepEqual(state.tasks.map((task) => task.id), ["T-1", "T-2"]);
     assert.deepEqual(
@@ -65,9 +67,9 @@ describe("REQ-C1: E2E forest lifecycle via CLI", () => {
     );
   });
 
-  it("flow get next-action selects the active canonical Task leaf", () => {
+  it("flow get next-action selects the active canonical Task leaf", async () => {
     tmp = createTmpDir();
-    setupForestFixture(tmp, { taskId: "T-1", targetStep: "task-impl" });
+    await setupForestFixture(tmp, { taskId: "T-1", targetStep: "task-impl" });
     const res = run(tmp, ["flow", "get", "next-action"]);
     assert.equal(res.status, 0, `next-action failed: ${res.stderr}`);
     const env = JSON.parse(res.stdout);
@@ -75,10 +77,10 @@ describe("REQ-C1: E2E forest lifecycle via CLI", () => {
     assert.equal(env.data.step, "task-impl");
   });
 
-  it("complete-task leaves the next forest leaf pending for explicit selection", () => {
+  it("complete-task leaves the next forest leaf pending for explicit selection", async () => {
     tmp = createTmpDir();
-    const { fm, fixture } = setupForestFixture(tmp, { taskId: "T-1", targetStep: "task-gate" });
-    fixture.flow.flow.settle("T-1-gate");
+    const { fm, fixture } = await setupForestFixture(tmp, { taskId: "T-1", targetStep: "task-gate" });
+    await fixture.flow.flow.produce("T-1-gate");
     const res = run(tmp, ["flow", "run", "complete-task", "--task-id", "T-1"]);
     assert.equal(res.status, 0, `complete-task failed: ${res.stderr}`);
     const state = fm.loadReadOnly();
