@@ -5631,7 +5631,10 @@ describe("worker artifact handoff", () => {
         if (input.stepResult?.kind === "draft-refine-completed") terminalSettlementInputs.push(input);
         return settle(input);
       };
-      const dispatcher = new RunDispatchCommand({ handoffCoordinator: value.coordinator });
+      const dispatcher = new RunDispatchCommand({
+        handoffCoordinator: value.coordinator,
+        repositoryFingerprint: () => action.repositoryFingerprint,
+      });
       const attempt = await dispatcher.runWorkerAttempt({
         ...value.ctx,
         flowState: value.flowManager.load(),
@@ -5699,7 +5702,10 @@ describe("worker artifact handoff", () => {
         }
       }
       const coordinator = new TrackingCoordinator();
-      const attempt = await new RunDispatchCommand({ handoffCoordinator: coordinator }).runWorkerAttempt({
+      const attempt = await new RunDispatchCommand({
+        handoffCoordinator: coordinator,
+        repositoryFingerprint: () => action.repositoryFingerprint,
+      }).runWorkerAttempt({
         ...value.ctx,
         flowState: value.flowManager.load(),
       }, invocation, null, new CandidateAgent());
@@ -5777,7 +5783,10 @@ describe("worker artifact handoff", () => {
         }
       }
       const coordinator = new InterruptingCoordinator();
-      const dispatcher = new RunDispatchCommand({ handoffCoordinator: coordinator });
+      const dispatcher = new RunDispatchCommand({
+        handoffCoordinator: coordinator,
+        repositoryFingerprint: () => action.repositoryFingerprint,
+      });
       const ctx = { ...value.ctx, flowState: value.flowManager.load() };
       const conflictingSession = new FlowDispatchSession({ target: session.target });
       const conflictingAction = conflictingSession.captureAction(
@@ -5807,6 +5816,23 @@ describe("worker artifact handoff", () => {
       };
       const interruptedExecution = value.flowManager.draftStepExecutionState({ binding }).lifecycle;
       assert.equal(interruptedExecution.phase, "publication");
+
+      const freshManager = new FlowManager({
+        root: value.executionRoot, mainRoot: value.mainRoot, inWorktree: true, specId: value.specId,
+      });
+      const freshContext = { ...value.ctx, flowManager: freshManager, flowState: freshManager.load() };
+      const retainedLedger = freshManager.activityLedger(value.specId);
+      const retainedAttempt = freshManager.canonicalState(value.specId).attempt;
+      assert.equal(coordinator.retainedDraftRepositoryFingerprint({ ctx: freshContext, stepId: "draft-refine" }),
+        action.repositoryFingerprint, "owned handoff ancestor creation must preserve a filesystem replay binding");
+      const sibling = path.join(value.executionRoot, ".sennel", "handoffs", "unrelated-source.txt");
+      fs.writeFileSync(sibling, "An unrelated writer changed the surrounding execution repository.\n");
+      assert.throws(() => coordinator.retainedDraftRepositoryFingerprint({ ctx: freshContext, stepId: "draft-refine" }),
+        (error) => error.code === "FLOW_EXECUTION_CONTRACT_MISMATCH");
+      fs.unlinkSync(sibling);
+      assert.deepEqual(freshManager.activityLedger(value.specId), retainedLedger);
+      assert.deepEqual(freshManager.canonicalState(value.specId).attempt.toJSON(), retainedAttempt.toJSON());
+      assert.equal(providerCalls, 1);
 
       conflictingRequest.prepare();
       fs.writeFileSync(conflictingRequest.payloadPath("draft.json"), json(draftWithQuestionLedger([])));

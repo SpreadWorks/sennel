@@ -164,3 +164,52 @@ test("DraftRefineStepState rejects mismatched binding, Result pairs, and resume 
     resumeAfterSettlement: false,
   }), /resume ordering/);
 });
+
+test("DraftRefineStepState equality binds selection to the exact Attempt and latest settlement and answer", () => {
+  const unselected = new DraftRefineStepState({ binding: binding() });
+  assert.equal(unselected.equals(new DraftRefineStepState({ binding: binding() })), true);
+  assert.equal(unselected.equals(null), false);
+  assert.equal(unselected.equals({ binding: unselected.binding }), false);
+  for (const changed of [
+    binding({ runId: "run-2" }),
+    binding({ specId: "002-draft-refine-state" }),
+    binding({ attempt: { id: "attempt-2", nodeId: "draft-refine", sequence: 1 } }),
+    binding({ attempt: { id: "attempt-1", nodeId: "draft-refine", sequence: 2 } }),
+  ]) {
+    assert.equal(unselected.equals(new DraftRefineStepState({ binding: changed })), false);
+  }
+  const awaitReceipt = (questionRevision) => settlementReceipt(new DraftRefineAwaitingAnswerResult(), {
+    awaitQuestion: new DraftAwaitQuestionIdentity({ questionId: "q1", questionRevision,
+      sourceDigest: DIGEST_A, sourceByteLength: 42 }),
+  });
+  const firstAwait = awaitReceipt(3);
+  const nextAwait = awaitReceipt(4);
+  const awaiting = new DraftRefineStepState({ binding: binding(), settlement: firstAwait });
+  assert.equal(awaiting.equals(new DraftRefineStepState({ binding: binding(), settlement: awaitReceipt(3) })), true);
+  assert.equal(awaiting.equals(new DraftRefineStepState({ binding: binding(), settlement: nextAwait })), false);
+  const autoSelected = new DraftRefineStepState({ binding: binding(), settlement: firstAwait, autoApprove: true });
+  assert.equal(autoSelected.requiresStepSelection, true);
+  assert.equal(autoSelected.equals(awaiting), false, "the same Await can require a different semantic selection");
+  assert.equal(autoSelected.equals(unselected), false, "matching Step-selection semantics cannot erase the latest receipt");
+  const resume = (receipt, answer) => new DraftQuestionResumeReceipt({ binding: receipt.binding,
+    awaitReceiptId: receipt.id, questionId: "q1", questionRevision: receipt.awaitQuestion.questionRevision,
+    resolution: DraftQuestionResolutionIdentity.answer({ answer, why: "The current user decision." }),
+    sourceDigest: DIGEST_A, sourceByteLength: 42, outputDigest: DIGEST_C });
+  const resumed = new DraftRefineStepState({ binding: binding(), settlement: firstAwait,
+    resume: resume(firstAwait, "Keep the public behavior."), resumeAfterSettlement: true });
+  const sameAnswer = new DraftRefineStepState({ binding: binding(), settlement: awaitReceipt(3),
+    resume: resume(firstAwait, "Keep the public behavior."), resumeAfterSettlement: true });
+  const differentAnswer = new DraftRefineStepState({ binding: binding(), settlement: firstAwait,
+    resume: resume(firstAwait, "Change the public behavior."), resumeAfterSettlement: true });
+  assert.equal(resumed.equals(sameAnswer), true);
+  assert.equal(sameAnswer.equals(resumed), true);
+  assert.equal(resumed.equals(autoSelected), false, "the exact answer receipt remains part of Step-selection authority");
+  assert.equal(resumed.equals(differentAnswer), false, "the same Attempt and selection cannot reuse a different answer receipt");
+  const workerReceipt = (executionGeneration) => settlementReceipt(new DraftRefineWorkerRequiredResult(), {
+    executionLifecycle: DraftStepExecutionLifecycle.checkpoint(new DraftWorkerExecutionBinding({
+      executionGeneration, inputDigest: DIGEST_A, inputRevision: DIGEST_B })),
+  });
+  const executing = new DraftRefineStepState({ binding: binding(), settlement: workerReceipt(0) });
+  assert.equal(executing.equals(new DraftRefineStepState({ binding: binding(), settlement: workerReceipt(0) })), true);
+  assert.equal(executing.equals(new DraftRefineStepState({ binding: binding(), settlement: workerReceipt(1) })), false);
+});

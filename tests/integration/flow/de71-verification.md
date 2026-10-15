@@ -9,8 +9,9 @@ next-action 投影、共通 registry 実行、canonical な進捗確認である
 `.sennel/worktree/de71-implementation`。開始ブランチは `main`、開始 commit は
 `63896e778d11fba9b94cdb07a6479e589663e78a`。
 元 checkout の既存変更と他の worktree は変更していない。
-実作業の Flow 開始、既存 Flow の復旧、board 更新、commit、merge、push、公開は
-実施していない。テストの Git 操作と Flow は独立した検証用 repository 内に限る。
+実装・初回検証の時点では、実作業の Flow 開始、既存 Flow の復旧、board 更新、
+commit、merge、push、公開は実施していない。テストの Git 操作と Flow は独立した
+検証用 repository 内に限る。後続の commit・main 統合については末尾に記録する。
 
 開始時の docs freshness は `stale`。`sennel docs build` を提案し、現行 source と
 実行結果を判断根拠にした。生成 docs の同期は実施していない。
@@ -229,3 +230,24 @@ outbox/receipt key、authority/assurance の契約には変更がない。
 `.tmp/de71/dispatch-regression-evidence/` に縮約して保持した。
 `.tmp/de71/dispatch-cleanup.json`、`agent-orphan-cleanup.json`、`root-cleanup.json` に
 削除対象・所有根拠・終了確認を記録した。既存ログや他作業の process は削除していない。
+
+## ユーザー指示後の commit・main 統合確認
+
+2026-10-15 の commit・main マージ指示に従い、レビュー済み33ファイルを
+`064f51697`（`Execute selected Flow recovery commands through the shared registry`）
+に保存した。その後 main の `766b75e21`（Draft answer admission と authenticated
+worker replay の修正）を作業ブランチに取り込んだ。
+
+競合は `RunDispatchCommand.captureAction` の1か所で、de71 の canonical revision
+検証と main の retained worker repository fingerprint 再利用の両方を維持した。
+統合後の限定検証はすべて exit 0、skip/cancel 0:
+
+- command 値、実 registry recovery、Review publication 再開: 12/12 pass。
+  `.tmp/de71/merge-recovery-tests.log`
+- recovery 専用構造検査と独立負例: 29/29 pass。
+  `.tmp/de71/merge-structure-tests.log`
+- Draft artifact scenario と refine admission/replay: 30/30 pass。
+  `.tmp/de71/merge-draft-tests.log`
+
+初回の全体検証とは別の統合確認であり、フルテストの再実行はしていない。
+main の既存832件の未コミット変更は対象外として保持する。

@@ -16,17 +16,155 @@ import { FLOW_COMMANDS } from "../../../src/flow/registry.js";
 import { AgentAuthenticationFailure } from "../../../src/lib/agent-failure.js";
 import { CanonicalAcceptanceArtifactStore } from "../../../src/flow/lib/canonical-acceptance-artifacts.js";
 import { ReviewWorkUnit } from "../../../src/flow/lib/review-work-unit.js";
-import { sealWorkerArtifactHandoff } from "../../../src/flow/lib/worker-artifact-handoff.js";
+import { DispatchExecutionRepositoryBinding, sealWorkerArtifactHandoff } from "../../../src/flow/lib/worker-artifact-handoff.js";
 import { CanonicalFlowFixture, canonicalDraftDocument } from "../../support/infrastructure/flow-setup.js";
 import { removeTmpDir } from "../../support/builders/tmp-dir.js";
 import { installReviewProcessFake } from "../../support/infrastructure/review-process-fake.js";
 import { workerArtifactJson } from "../../support/infrastructure/worker-artifact.js";
-import { dispatchContainer, fixtureRepository, installGateProviderFake, requestInput, requestPayloadPath } from "../../support/infrastructure/flow-dispatch-scenario.js";
+import { dispatchContainer, dispatchFlowCommand, fixtureRepository, installGateProviderFake, requestInput, requestPayloadPath, WorkerRequestIdentityObserver } from "../../support/infrastructure/flow-dispatch-scenario.js";
 import { assertCanonicalStepResult } from "../../support/infrastructure/canonical-step-result.js";
+import { RequirementTestPhaseScenario } from "../../support/requirement-test-phase-scenario.js";
+import { assertCurrentWorkerExecutionSelection, projectWorkerExecutionAdmission, selectWorkerExecutionAdmission } from "../../../src/flow/lib/worker-execution-admission.js";
 
 function assertArtifactIntegrity(artifact) {
   assert.equal(crypto.createHash("sha256").update(artifact.bytes).digest("hex"), artifact.descriptor.hash);
   assert.equal(artifact.bytes.length, artifact.descriptor.size);
+}
+
+for (const remainingCandidate of [false, true]) {
+  it(remainingCandidate
+    ? "selects the next refine generation after a real answer and refuses the preceding answer selection without effects"
+    : "completes refine after a real answer without reopening the removed worker and lets Coverage consume the saved answer", async (t) => {
+    const questions = (remainingCandidate ? ["q1", "q2"] : ["q1"]).map((id) => ({
+      state: "CandidateQuestion", id, category: "user-visible-behavior",
+      question: `Which public behavior must ${id} preserve?`, revision: 0,
+      provenance: { producer: "draft-worker" }, evidenceDigest: "a".repeat(64),
+    }));
+    const scenario = RequirementTestPhaseScenario.create(t, {
+      entryStep: "draft", autoApprove: false,
+      beforeSeal(request) {
+        if (request.stepId === "draft") fs.writeFileSync(requestPayloadPath(request, "draft.json"),
+          workerArtifactJson(canonicalDraftDocument({ questions })));
+      },
+    });
+    const requestIdentity = new WorkerRequestIdentityObserver(scenario.worker.bind(scenario));
+    scenario.worker = requestIdentity.call.bind(requestIdentity);
+    await scenario.advanceTo("draft-refine");
+    await scenario.dispatch(1);
+    scenario.reload();
+    const selectedAttempt = scenario.manager.canonicalState(scenario.specId).attempt;
+    const firstWorker = scenario.requests.find((request) => request.stepId === "draft-refine");
+    assert.ok(firstWorker, "the registered refine worker must publish the Await boundary");
+    const oldRequestPath = path.join(path.dirname(path.dirname(requestPayloadPath(firstWorker, "draft.json"))), "request.json");
+    assert.equal(fs.existsSync(oldRequestPath), false, "completed Await publication removes its old handoff");
+    const firstAwait = scenario.manager.activityLedger(scenario.specId).findLast((entry) =>
+      entry.result?.stepResult?.kind === "draft-refine-awaiting-answer");
+    assert.equal(firstAwait.attemptId, selectedAttempt.id);
+    assert.equal(firstAwait.result.draftSettlementReceipt.awaitQuestion.questionId, "q1");
+
+    const answer = async (questionId) => {
+      const next = await scenario.next();
+      assert.equal(next.directive.kind, "await_draft_question", JSON.stringify(next));
+      assert.equal(next.directive.questionId, questionId);
+      const execution = await dispatchFlowCommand({
+        container: dispatchContainer({ root: scenario.root, flowManager: scenario.manager, agent: scenario.agent }),
+        group: "set", name: "draft-answer",
+        argv: [questionId, "--question-revision", String(next.directive.questionRevision),
+          "--answer", `Preserve the ${questionId} behavior.`, "--why", "It matches the current request."],
+      });
+      assert.equal(execution.envelope.ok, true, execution.stdout);
+      assert.equal(execution.envelope.data.status, "answered", execution.stdout);
+      scenario.reload();
+      assert.equal(scenario.manager.canonicalState(scenario.specId).attempt.id, selectedAttempt.id);
+      assert.deepEqual(scenario.manager.canonicalState(scenario.specId).attempt.consumption.toJSON(),
+        selectedAttempt.consumption.toJSON());
+      const projected = scenario.manager.draftRefineStepState({ binding: {
+        runId: scenario.manager.canonicalState(scenario.specId).runId, specId: scenario.specId,
+        stepId: "draft-refine", attempt: selectedAttempt,
+      } });
+      assert.equal(projected.requiresStepSelection, true);
+      assert.equal(projected.executionIdentity(), null);
+      const selection = selectWorkerExecutionAdmission({ ctx: scenario.context(), stepId: "draft-refine" });
+      assert.equal(selection.continuation, null, "a consumed Await cannot reopen the removed worker handoff");
+      assert.equal(projectWorkerExecutionAdmission(selection).kind, "execute_step");
+      return selection;
+    };
+    const precedingAnswerSelection = await answer("q1");
+    const afterFirstAnswer = scenario.artifact("draft", undefined, "draft-refine");
+    const firstAnswered = JSON.parse(afterFirstAnswer.bytes).questionLedger.questions[0];
+    assert.equal(firstAnswered.state, "AnsweredQuestion");
+    assert.equal(firstAnswered.answer, "Preserve the q1 behavior.");
+    const retainedLedger = scenario.manager.activityLedger(scenario.specId);
+    const requestsBeforeReselection = scenario.requests.length;
+    const proofCapture = remainingCandidate ? null : t.mock.method(DispatchExecutionRepositoryBinding, "capture");
+    await scenario.dispatch(1);
+    scenario.reload();
+
+    if (remainingCandidate) {
+      const secondWorker = scenario.requests.at(-1);
+      assert.equal(scenario.requests.length, requestsBeforeReselection + 1);
+      assert.equal(secondWorker.stepId, "draft-refine");
+      assert.notEqual(secondWorker.dispatchInvocationId, firstWorker.dispatchInvocationId);
+      assert.notEqual(requestIdentity.requestDigest(secondWorker.dispatchInvocationId), requestIdentity.requestDigest(firstWorker.dispatchInvocationId));
+      assert.equal(requestInput(secondWorker, "draft.json").digest, afterFirstAnswer.descriptor.hash);
+      assert.deepEqual(requestInput(secondWorker, "draft.json").document.questionLedger.questions[0], firstAnswered);
+      const reloadedState = scenario.manager.canonicalState(scenario.specId);
+      assert.equal(reloadedState.attempt.id, selectedAttempt.id);
+      assert.deepEqual(reloadedState.attempt.consumption.toJSON(), selectedAttempt.consumption.toJSON());
+      assert.deepEqual(scenario.manager.activityLedger(scenario.specId).slice(0, retainedLedger.length), retainedLedger);
+      const claims = scenario.manager.activityLedger(scenario.specId).filter((entry) =>
+        entry.nodeId === "draft-refine" && entry.result?.draftSettlementReceipt?.executionLifecycle?.phase === "claimed");
+      assert.deepEqual(claims.map((entry) => entry.result.draftSettlementReceipt.executionLifecycle.binding.executionGeneration), [0, 1]);
+      const savedExecution = claims.at(-1).result.draftSettlementReceipt.executionLifecycle;
+      assert.equal(savedExecution.binding.inputDigest, secondWorker.inputDigest);
+      assert.equal(savedExecution.binding.inputRevision, secondWorker.inputRevision);
+      assert.notEqual(savedExecution.binding.inputRevision, claims[0].result.draftSettlementReceipt.executionLifecycle.binding.inputRevision);
+      const savedClaim = savedExecution.claim;
+      assert.equal(savedClaim.requestDigest, requestIdentity.requestDigest(secondWorker.dispatchInvocationId));
+      assert.equal(savedClaim.dispatchInvocationId, secondWorker.dispatchInvocationId);
+      const currentAnswerSelection = await answer("q2");
+      assert.equal(precedingAnswerSelection.state.attempt.id, currentAnswerSelection.state.attempt.id);
+      assert.equal(precedingAnswerSelection.action, currentAnswerSelection.action);
+      const beforeRefusal = scenario.snapshot();
+      const callsBeforeRefusal = scenario.requests.length;
+      assert.throws(() => assertCurrentWorkerExecutionSelection(precedingAnswerSelection, currentAnswerSelection),
+        (error) => error.code === "FLOW_WORKER_EXECUTION_SELECTION_CHANGED" && error.data.failureKind === "step-admission");
+      assert.equal(scenario.requests.length, callsBeforeRefusal);
+      assert.deepEqual(scenario.reload().snapshot(), beforeRefusal);
+      await scenario.dispatch(1);
+      scenario.reload();
+    } else {
+      assert.equal(scenario.requests.length, requestsBeforeReselection, "answered refine completes without a provider");
+      assert.equal(proofCapture.mock.callCount(), 0, "worker-free completion must not inventory execution proof inputs");
+    }
+
+    assert.equal(scenario.current(), "draft-coverage-review");
+    const completed = scenario.manager.activityLedger(scenario.specId).findLast((entry) =>
+      entry.nodeId === "draft-refine" && entry.result?.stepResult?.kind === "draft-refine-completed");
+    assert.equal(completed.attemptId, selectedAttempt.id);
+    assert.equal(completed.result.draftSettlementReceipt.targetStepId, "draft-coverage-review");
+    const updatedDraft = scenario.artifact("draft", undefined, "draft-coverage-review");
+    assertArtifactIntegrity(updatedDraft);
+    const updated = JSON.parse(updatedDraft.bytes);
+    assert.deepEqual(updated.questionLedger.questions[0], firstAnswered);
+    const reviewProcess = scenario.runReviewProcess.bind(scenario);
+    let coverageInput;
+    scenario.runReviewProcess = (command, argv, options) => {
+      const source = JSON.parse(options.env.SENNEL_REVIEW_DRAFT_SOURCE);
+      coverageInput = JSON.parse(fs.readFileSync(source.sourcePath, "utf8"));
+      assert.deepEqual(coverageInput.questionLedger, updated.questionLedger);
+      assert.equal(source.revision.digest, updatedDraft.descriptor.hash);
+      return reviewProcess(command, argv, options);
+    };
+    await scenario.advanceTo("draft-gate");
+    scenario.reload();
+    assert.deepEqual(coverageInput.questionLedger, updated.questionLedger);
+    const coverage = scenario.artifact("draft.coverage.review", undefined, "draft-coverage-triage");
+    assertArtifactIntegrity(coverage);
+    assert.equal(JSON.parse(coverage.bytes).attempts.at(-1).artifact.payload.sourceDraftRevision.digest,
+      updatedDraft.descriptor.hash);
+    assert.equal(scenario.current(), "draft-gate");
+  });
 }
 
 it("reopens Draft and preserves repair Attempt ordinals across an intervening Definition skip", async () => {

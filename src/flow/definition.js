@@ -5048,6 +5048,18 @@ export class DraftRefineStepState {
 
   get requiresStepSelection() { return this.#selection === "step-selection-required"; }
 
+  equals(other) {
+    return other instanceof DraftRefineStepState
+      && this.#selection === other.#selection
+      && this.binding.runId === other.binding.runId
+      && this.binding.specId === other.binding.specId
+      && this.binding.stepId === other.binding.stepId
+      && this.binding.attemptId === other.binding.attemptId
+      && this.binding.attemptSequence === other.binding.attemptSequence
+      && this.#settlement?.id === other.#settlement?.id
+      && this.resumeReceiptId === other.resumeReceiptId;
+  }
+
   executionIdentity() {
     return this.#executionIdentity;
   }
