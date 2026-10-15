@@ -1,7 +1,9 @@
+import { ArtifactWorkerRecoveryAuthorized } from "./artifact-worker-execution-continuation.js";
+
 /** Read-only observations of a conditional Draft execution. */
 export class DraftWorkerExecutionContinuationFacts {
   constructor({ phase = null, response = "absent", newlyClaimed = false, retryAuthorized = false,
-    receiptId = null, responseDigest = null, refusal = null } = {}) {
+    receiptId = null, responseDigest = null, refusal = null, artifactContinuation = null } = {}) {
     if (![null, "checkpoint", "claimed", "publication", "terminal"].includes(phase)
       || !["absent", "unsealed", "sealed", "invalid"].includes(response)
       || typeof newlyClaimed !== "boolean"
@@ -11,6 +13,7 @@ export class DraftWorkerExecutionContinuationFacts {
       || receiptId !== null && !/^[a-f0-9]{64}$/.test(receiptId)
       || responseDigest !== null && !/^[a-f0-9]{64}$/.test(responseDigest)
       || refusal !== null && !(refusal instanceof Error)
+      || artifactContinuation !== null && !(artifactContinuation instanceof ArtifactWorkerRecoveryAuthorized)
       || response !== "absent" && !["claimed", "publication"].includes(phase)
       || (response === "invalid") !== (refusal instanceof Error)) {
       throw new TypeError("Draft execution continuation requires valid observed lifecycle and response facts");
@@ -22,7 +25,12 @@ export class DraftWorkerExecutionContinuationFacts {
     this.receiptId = receiptId;
     this.responseDigest = responseDigest;
     this.refusal = refusal;
+    this.artifactContinuation = artifactContinuation;
     Object.freeze(this);
+  }
+
+  withArtifactContinuation(artifactContinuation) {
+    return new DraftWorkerExecutionContinuationFacts({ ...this, artifactContinuation });
   }
 }
 
@@ -30,6 +38,8 @@ export class DraftWorkerNewExecution {
   constructor(facts) {
     this.receiptId = facts.receiptId;
     this.responseDigest = facts.responseDigest;
+    this.recoveryId = facts.artifactContinuation?.recoveryId ?? null;
+    this.executionContract = facts.artifactContinuation?.executionContract ?? null;
     Object.freeze(this);
   }
   get requiresWorker() { return true; }
@@ -86,7 +96,8 @@ export function resolveDraftWorkerExecutionContinuation(facts) {
   }
   if (facts.phase === "claimed") {
     if (facts.response === "sealed") return new DraftWorkerSealedReplay(facts);
-    return (facts.newlyClaimed || facts.retryAuthorized) && facts.response === "unsealed"
+    return (facts.newlyClaimed || facts.retryAuthorized || facts.artifactContinuation !== null)
+      && facts.response === "unsealed"
       ? new DraftWorkerNewExecution(facts) : new DraftWorkerExecutionStop(facts);
   }
   return new DraftWorkerNewExecution(facts);

@@ -89,7 +89,7 @@ export class NextActionDirective {
     if (value.kind === "await_user_decision") return new AwaitUserDecisionDirective(value);
     if (value.kind === "await_draft_question") return new AwaitDraftQuestionDirective(value);
     if (value.kind === "await_task_review_filter") return new AwaitTaskReviewFilterDirective(value);
-    if (value.kind === "blocked") return new BlockedDirective(value);
+    if (value.kind === "blocked") return BlockedDirective.fromStored(value);
     if (value.kind === "completed") return new CompletedDirective();
     if (value.kind === "aborted") return new AbortedDirective(value);
     if (value.kind === "idle") return new IdleDirective();
@@ -261,12 +261,52 @@ export class AwaitTaskReviewFilterDirective extends NextActionDirective {
   }
 }
 
+/** Public facts about a refusal, without granting another execution operation. */
+export class BlockedActionDiagnostic {
+  constructor({ code, reason, missingConditions, resolutionOperation = null,
+    resolutionImplemented = false, retryable = false }) {
+    this.code = requireString(code, "diagnostic.code", 200);
+    this.reason = requireString(reason, "diagnostic.reason");
+    if (!Array.isArray(missingConditions) || typeof resolutionImplemented !== "boolean"
+      || typeof retryable !== "boolean" || resolutionOperation === null && resolutionImplemented) {
+      throw new TypeError("Blocked diagnostic requires its missing conditions and resolution facts");
+    }
+    this.missingConditions = Object.freeze(missingConditions.map((condition) =>
+      requireString(condition, "diagnostic.missingCondition", 200)));
+    this.resolutionOperation = resolutionOperation === null ? null
+      : requireString(resolutionOperation, "diagnostic.resolutionOperation", 200);
+    this.resolutionImplemented = resolutionImplemented;
+    this.retryable = retryable;
+    Object.freeze(this);
+  }
+
+  toJSON() {
+    return { code: this.code, reason: this.reason, missingConditions: [...this.missingConditions],
+      resolutionOperation: this.resolutionOperation, resolutionImplemented: this.resolutionImplemented,
+      retryable: this.retryable };
+  }
+
+  static fromStored(value) {
+    const fields = ["code", "reason", "missingConditions", "resolutionOperation", "resolutionImplemented", "retryable"];
+    if (value === null || typeof value !== "object" || Array.isArray(value)
+      || Object.keys(value).sort().join(",") !== fields.sort().join(",")) {
+      throw new TypeError("Stored blocked diagnostic has unknown or missing fields");
+    }
+    return new this(value);
+  }
+}
+
 export class BlockedDirective extends NextActionDirective {
-  constructor({ code, reason, resumeInstruction, actionPrompt = null } = {}) {
+  constructor({ code, reason, resumeInstruction, actionPrompt = null, diagnostic = null } = {}) {
     const prompt = actionPrompt == null ? null : UserActionPrompt.fromStored(actionPrompt);
     super({ kind: "blocked", terminal: true, requiresUserAction: prompt !== null });
     this.code = requireString(code, "directive.code", 200);
     this.reason = requireString(reason, "directive.reason");
+    if (diagnostic !== null && (!(diagnostic instanceof BlockedActionDiagnostic)
+      || diagnostic.code !== this.code || diagnostic.reason !== this.reason)) {
+      throw new TypeError("Blocked directive diagnostic must match its refusal");
+    }
+    this.diagnostic = diagnostic;
     this.resumeInstruction = requireString(
       resumeInstruction || reason,
       "directive.resumeInstruction",
@@ -282,7 +322,13 @@ export class BlockedDirective extends NextActionDirective {
       reason: this.reason,
       resumeInstruction: this.resumeInstruction,
       ...(this.prompt && { actionPrompt: this.prompt.toJSON() }),
+      ...(this.diagnostic !== null && { diagnostic: this.diagnostic.toJSON() }),
     };
+  }
+
+  static fromStored(value) {
+    return new this({ ...value, diagnostic: value.diagnostic == null
+      ? null : BlockedActionDiagnostic.fromStored(value.diagnostic) });
   }
 }
 

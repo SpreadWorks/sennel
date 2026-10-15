@@ -306,6 +306,72 @@ export class ProcessExecutionStopReceipt {
     members: this.members, stopEvidence: this.stopEvidence.toJSON(), outcomeDigest: this.outcomeDigest }; }
 }
 
+class ProcessExecutionRecoveryOwner {
+  constructor(value) {
+    failureFields(value, ["executionId", "ownerEpoch", "authorityState"], "Non-execution owner");
+    this.executionId = executionUuid(value.executionId, "Non-execution executionId");
+    if (!Number.isSafeInteger(value.ownerEpoch) || value.ownerEpoch < 1
+      || !["closed", "stale", "exclusive"].includes(value.authorityState)) throw new TypeError("Non-execution owner authority is not controlled");
+    this.ownerEpoch = value.ownerEpoch;
+    this.authorityState = value.authorityState;
+    Object.freeze(this);
+  }
+  toJSON() { return { ...this }; }
+}
+
+/** Reservation and start permission are separate persisted physical facts. */
+export class ProcessExecutionRecoveryCall {
+  constructor({ executionId, ownerEpoch, callId, binding, invocation, startPermitted, receipt }) {
+    this.executionId = executionUuid(executionId, "Recovery call executionId");
+    this.callId = executionUuid(callId, "Recovery call callId");
+    if (!Number.isSafeInteger(ownerEpoch) || ownerEpoch < 1 || typeof startPermitted !== "boolean") throw new TypeError("Recovery call reservation identity is invalid");
+    this.ownerEpoch = ownerEpoch;
+    this.binding = new ProcessExecutionBinding(binding);
+    this.invocation = executionValueSnapshot(invocation);
+    this.startPermitted = startPermitted;
+    this.receipt = receipt instanceof ProcessExecutionStopReceipt ? receipt : new ProcessExecutionStopReceipt(receipt);
+    if (this.receipt.executionId !== this.executionId || this.receipt.callId !== this.callId
+      || this.receipt.ownerEpoch !== this.ownerEpoch || !this.receipt.binding.matches(this.binding)
+      || !isDeepStrictEqual(this.receipt.invocation, this.invocation)) throw new TypeError("Recovery call differs from its exact stop receipt");
+    Object.freeze(this);
+  }
+  toJSON() { return { executionId: this.executionId, callId: this.callId, ownerEpoch: this.ownerEpoch,
+    binding: this.binding.toJSON(), invocation: executionValueSnapshot(this.invocation), startPermitted: this.startPermitted,
+    receiptDigest: executionValueDigest(this.receipt) }; }
+}
+
+/** Durable absence is meaningful only with a complete, exclusively observed inventory. */
+export class ProcessExecutionNonExecutionEvidence {
+  constructor({ schemaVersion = 1, checkoutIdentity, binding, invocation = null, inventoryDigest, ownerEpoch,
+    executions, reservationBeforeSpawn = true }) {
+    if (schemaVersion !== 1 || reservationBeforeSpawn !== true) throw new TypeError("Non-execution evidence requires the durable reservation-before-spawn contract");
+    this.schemaVersion = schemaVersion;
+    this.checkoutIdentity = checkoutIdentity instanceof ProcessExecutionCheckoutIdentity ? checkoutIdentity : new ProcessExecutionCheckoutIdentity(checkoutIdentity);
+    this.binding = new ProcessExecutionBinding(binding);
+    if (this.binding.value === null || Object.keys(this.binding.value).length === 0) throw new TypeError("Non-execution evidence requires an exact semantic binding");
+    this.invocation = new ProcessExecutionBinding(invocation);
+    if (this.invocation.value !== null && Object.keys(this.invocation.value).length === 0) throw new TypeError("Non-execution invocation query must not be empty");
+    if (typeof inventoryDigest !== "string" || !/^[0-9a-f]{64}$/.test(inventoryDigest)) throw new TypeError("Non-execution inventory digest is invalid");
+    this.inventoryDigest = inventoryDigest;
+    if (!Number.isSafeInteger(ownerEpoch) || ownerEpoch < 1 || !Array.isArray(executions)
+      || executions.length !== ownerEpoch) throw new TypeError("Non-execution evidence requires the complete owner epoch inventory");
+    this.ownerEpoch = ownerEpoch;
+    this.executions = Object.freeze(executions.map((execution) => new ProcessExecutionRecoveryOwner(execution)));
+    if (this.executions.some((execution, index) => execution.ownerEpoch !== index + 1)) throw new TypeError("Non-execution owner epochs are incomplete");
+    if (this.executions.some((execution, index) => execution.authorityState === "exclusive" && index !== this.executions.length - 1)) throw new TypeError("Only the current owner may hold checkout exclusion");
+    if (new Set(this.executions.map((execution) => execution.executionId)).size !== this.executions.length) throw new TypeError("Non-execution inventory has duplicate executions");
+    this.reservationBeforeSpawn = true;
+    Object.freeze(this);
+  }
+  toJSON() { return { schemaVersion: this.schemaVersion, checkoutIdentity: this.checkoutIdentity.toJSON(),
+    binding: this.binding.toJSON(), invocation: this.invocation.toJSON(), inventoryDigest: this.inventoryDigest, ownerEpoch: this.ownerEpoch,
+    executions: this.executions.map((execution) => execution.toJSON()), reservationBeforeSpawn: this.reservationBeforeSpawn }; }
+  static fromStored(value) {
+    failureFields(value, ["schemaVersion", "checkoutIdentity", "binding", "invocation", "inventoryDigest", "ownerEpoch", "executions", "reservationBeforeSpawn"], "Non-execution evidence");
+    return new this(value);
+  }
+}
+
 export class ProcessExecutionStartPermit {
   constructor({ executionId, callId, ownerEpoch, ownerToken, capability, bindingDigest }) {
     this.executionId = executionUuid(executionId, "permit executionId");

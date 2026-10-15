@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { once } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
@@ -9,6 +9,7 @@ import { pathToFileURL } from "node:url";
 import { AtomicFile } from "../../../src/lib/atomic-file.js";
 import { AgentProcessStopEvidence } from "../../../src/lib/agent-failure.js";
 import { ProcessExecutionBinding, ProcessExecutionControlFailure, ProcessExecutionRuntime, ProcessExecutionStopReceipt,
+  ProcessExecutionNonExecutionEvidence, ProcessExecutionRecoveryCall, ProcessExecutionRecoveryEvidence,
   PROCESS_EXECUTION_SCOPE_ENV } from "../../../src/lib/process-execution-runtime.js";
 import { executeManagedProcess } from "../../../src/lib/managed-process.js";
 import { createTmpDir, removeTmpDir } from "../../support/builders/tmp-dir.js";
@@ -54,6 +55,172 @@ async function holder(t, options, reserve = false) {
 }
 async function killHolder(child) { const exited = once(child, "exit"); child.kill("SIGKILL"); await exited; }
 function failure(code) { return (error) => error instanceof ProcessExecutionControlFailure && error.code === code; }
+
+// Recovery admission traces complete saved inventory -> revoked old ownership ->
+// checkout exclusion -> exact call receipt or durable absence -> synchronous commit.
+// Missing inventory, a live owner, or any reserved call without a stop receipt must
+// refuse before the consumer can mutate canonical state.
+test("unreserved recovery has a stable durable absence proof only within checkout exclusion", async (t) => {
+  const options = fixture(t);
+  const binding = { runId: options.runId, specId: options.specId, attemptId: "unreserved-attempt", executionContractId: "unreserved-contract" };
+  const runtime = await ProcessExecutionRuntime.acquire(options);
+  await runtime.close();
+  let captured;
+  const summary = await ProcessExecutionRuntime.withRecoveryEvidence({ ...options, binding }, (evidence) => {
+    captured = evidence;
+    assert.ok(evidence instanceof ProcessExecutionRecoveryEvidence);
+    assert.equal(evidence.assertCurrent().assertBinding(binding), evidence);
+    assert.ok(evidence.nonExecution instanceof ProcessExecutionNonExecutionEvidence);
+    assert.equal(evidence.nonExecution.reservationBeforeSpawn, true);
+    assert.deepEqual(evidence.calls, []);
+    assert.deepEqual(evidence.nonExecution.executions.map((execution) => execution.authorityState), ["closed"]);
+    assert.throws(() => evidence.assertBinding({ ...binding, attemptId: "different-attempt" }), failure("PROCESS_EXECUTION_RECOVERY_BINDING_MISMATCH"));
+    const competing = spawnSync(process.execPath, ["--input-type=module", "-e", `
+      import { ProcessExecutionRuntime } from ${JSON.stringify(moduleURL)};
+      try { await ProcessExecutionRuntime.acquire(${JSON.stringify(options)}); process.exitCode = 2; }
+      catch (error) { process.stdout.write(error.code); }
+    `], { encoding: "utf8", timeout: 10000 });
+    assert.equal(competing.status, 0, competing.stderr);
+    assert.equal(competing.stdout, "PROCESS_EXECUTION_BUSY");
+    return evidence.toJSON();
+  });
+  assert.equal(summary.id, summary.digest);
+  assert.deepEqual(ProcessExecutionNonExecutionEvidence.fromStored(summary.nonExecution).toJSON(), summary.nonExecution);
+  assert.throws(() => captured.assertCurrent(), failure("PROCESS_EXECUTION_RECOVERY_AUTHORITY_EXPIRED"));
+  const reloaded = await ProcessExecutionRuntime.withRecoveryEvidence({ ...options, binding }, (evidence) => evidence.toJSON());
+  assert.deepEqual(reloaded, summary);
+  const next = await ProcessExecutionRuntime.acquire(options);
+  await next.close();
+});
+
+test("fresh recovery proves no reservation after the original coordinator birth expires", async (t) => {
+  const options = fixture(t); const { child, executionId } = await holder(t, options);
+  const binding = { runId: options.runId, executionContractId: "unreserved-dead-owner" };
+  let consumed = false;
+  await assert.rejects(ProcessExecutionRuntime.withRecoveryEvidence({ ...options, binding }, () => { consumed = true; }), failure("PROCESS_EXECUTION_BUSY"));
+  assert.equal(consumed, false);
+  await killHolder(child);
+  const before = fs.readFileSync(registryPath(options.mainRoot));
+  const summary = await ProcessExecutionRuntime.withRecoveryEvidence({ ...options, binding }, (evidence) => {
+    evidence.assertCurrent();
+    return evidence.toJSON();
+  });
+  assert.deepEqual(summary.nonExecution.executions, [{ executionId, ownerEpoch: 1, authorityState: "stale" }]);
+  assert.deepEqual(fs.readFileSync(registryPath(options.mainRoot)), before);
+});
+
+test("recovery reads archived reservation and exact stop receipt without treating no permit as no reservation", async (t) => {
+  const options = fixture(t); const binding = { executionContractId: "reserved-contract", attemptId: "reserved-attempt" };
+  const runtime = await ProcessExecutionRuntime.acquire({ ...options, binding });
+  const call = await runtime.reserveCall({ invocation: { commandId: "unstarted-provider" } });
+  const receipt = await runtime.finishCall(call, { notStarted: true, stopEvidence: AgentProcessStopEvidence.confirmed() });
+  await runtime.close();
+  const archiver = await ProcessExecutionRuntime.acquire(options);
+  await archiver.close();
+  await ProcessExecutionRuntime.withRecoveryEvidence({ ...options, binding }, (evidence) => {
+    assert.equal(evidence.nonExecution, null);
+    assert.equal(evidence.calls.length, 1);
+    assert.ok(evidence.calls[0] instanceof ProcessExecutionRecoveryCall);
+    assert.equal(evidence.calls[0].executionId, runtime.executionId);
+    assert.equal(evidence.calls[0].callId, call.callId);
+    assert.equal(evidence.calls[0].startPermitted, false);
+    assert.deepEqual(evidence.receipts[0].toJSON(), receipt.toJSON());
+    assert.deepEqual(evidence.calls[0].receipt.toJSON(), receipt.toJSON());
+    assert.equal(evidence.assertCurrent(), evidence);
+  });
+});
+
+test("dispatch recovery reuses its current exclusive owner and preserves later call admission", async (t) => {
+  const options = fixture(t); const binding = { runId: options.runId, attemptId: "dispatch-attempt" };
+  const previousInvocation = { providerAttemptId: crypto.randomUUID(), logicalInvocationId: crypto.randomUUID() };
+  const previous = await ProcessExecutionRuntime.acquire({ ...options, binding });
+  const previousCall = await previous.reserveCall({ binding: { ...binding, executionContractId: "old-generation" }, invocation: previousInvocation });
+  await previous.finishCall(previousCall, { notStarted: true, stopEvidence: AgentProcessStopEvidence.confirmed() });
+  await previous.close();
+  const current = await ProcessExecutionRuntime.acquire({ ...options, binding });
+  let scopedEvidence;
+  let invocationEvidence;
+  await current.enter(async () => {
+    const result = await ProcessExecutionRuntime.withRecoveryEvidence({ ...options, binding }, (evidence) => {
+      assert.equal(evidence.assertCurrent(), evidence);
+      assert.equal(evidence.calls.length, 1);
+      assert.equal(evidence.calls[0].callId, previousCall.callId);
+      scopedEvidence = evidence.forBinding({ ...binding, executionContractId: "new-generation" });
+      assert.ok(scopedEvidence.nonExecution instanceof ProcessExecutionNonExecutionEvidence);
+      assert.equal(scopedEvidence.calls.length, 0);
+      assert.equal(scopedEvidence.assertCurrent(), scopedEvidence);
+      assert.deepEqual(scopedEvidence.nonExecution.binding.toJSON(), { ...binding, executionContractId: "new-generation" });
+      assert.equal(scopedEvidence.nonExecution.inventoryDigest, evidence.toJSON().inventoryDigest);
+      assert.throws(() => evidence.forBinding({ runId: options.runId }), failure("PROCESS_EXECUTION_RECOVERY_BINDING_MISMATCH"));
+      assert.throws(() => evidence.forBinding({ ...binding, attemptId: "different-attempt" }), failure("PROCESS_EXECUTION_RECOVERY_BINDING_MISMATCH"));
+      const oldGeneration = evidence.forBinding({ ...binding, executionContractId: "old-generation" });
+      const previousAttempt = oldGeneration.forInvocation(previousInvocation);
+      assert.equal(previousAttempt.calls.length, 1);
+      assert.equal(previousAttempt.calls[0].callId, previousCall.callId);
+      assert.equal(previousAttempt.nonExecution, null);
+      const nextInvocation = { providerAttemptId: crypto.randomUUID(), logicalInvocationId: previousInvocation.logicalInvocationId };
+      invocationEvidence = oldGeneration.forInvocation(nextInvocation);
+      assert.equal(invocationEvidence.calls.length, 0);
+      assert.deepEqual(invocationEvidence.nonExecution.invocation.toJSON(), nextInvocation);
+      assert.equal(invocationEvidence.nonExecution.inventoryDigest, evidence.toJSON().inventoryDigest);
+      assert.equal(invocationEvidence.assertCurrent(), invocationEvidence);
+      assert.throws(() => invocationEvidence.forInvocation({ logicalInvocationId: previousInvocation.logicalInvocationId }), failure("PROCESS_EXECUTION_RECOVERY_BINDING_MISMATCH"));
+      ProcessExecutionRuntime.assertQuiescent(options);
+      return evidence.toJSON();
+    });
+    assert.equal(result.calls[0].binding.executionContractId, "old-generation");
+    assert.throws(() => scopedEvidence.assertCurrent(), failure("PROCESS_EXECUTION_RECOVERY_AUTHORITY_EXPIRED"));
+    assert.throws(() => invocationEvidence.assertCurrent(), failure("PROCESS_EXECUTION_RECOVERY_AUTHORITY_EXPIRED"));
+    const unreserved = { ...binding, executionContractId: "new-generation" };
+    await ProcessExecutionRuntime.withRecoveryEvidence({ ...options, binding: unreserved }, (evidence) => {
+      assert.deepEqual(evidence.nonExecution.executions.map((execution) => execution.authorityState), ["closed", "exclusive"]);
+    });
+    const call = await current.reserveCall({ binding: unreserved });
+    let consumed = false;
+    await assert.rejects(ProcessExecutionRuntime.withRecoveryEvidence({ ...options, binding }, () => { consumed = true; }), failure("PROCESS_EXECUTION_STOP_UNCONFIRMED"));
+    assert.equal(consumed, false);
+    await current.finishCall(call, { notStarted: true, stopEvidence: AgentProcessStopEvidence.confirmed() });
+    assert.equal(current.inspect().slot, current.executionId);
+  });
+  await current.close();
+});
+
+test("receipt absence after a physical reservation refuses recovery without invoking canonical consumer", async (t) => {
+  const options = fixture(t); const { child, executionId } = await holder(t, options, true);
+  await killHolder(child);
+  const before = fs.readFileSync(registryPath(options.mainRoot));
+  let consumed = false;
+  await assert.rejects(ProcessExecutionRuntime.withRecoveryEvidence({ ...options, binding: { executionContractId: "missing-receipt" } }, () => {
+    consumed = true;
+  }), failure("PROCESS_EXECUTION_STOP_UNCONFIRMED"));
+  assert.equal(consumed, false);
+  assert.deepEqual(fs.readFileSync(registryPath(options.mainRoot)), before);
+  assert.equal(ProcessExecutionRuntime.inspect(options).slot, executionId);
+});
+
+test("missing runtime inventory cannot prove non-execution or create replacement evidence", async (t) => {
+  const options = fixture(t); let consumed = false;
+  await assert.rejects(ProcessExecutionRuntime.withRecoveryEvidence({ ...options, binding: { executionContractId: "missing-inventory" } }, () => {
+    consumed = true;
+  }), failure("PROCESS_EXECUTION_ADMISSION_FAILED"));
+  assert.equal(consumed, false);
+  assert.equal(fs.existsSync(path.join(options.mainRoot, ".sennel")), false);
+});
+
+test("unregistered physical artifacts and changed fresh inventory prevent recovery commit", async (t) => {
+  const options = fixture(t); const runtime = await ProcessExecutionRuntime.acquire(options);
+  await runtime.close();
+  const rogue = path.join(path.dirname(registryPath(options.mainRoot)), "calls", crypto.randomUUID());
+  await ProcessExecutionRuntime.withRecoveryEvidence({ ...options, binding: { executionContractId: "changed-inventory" } }, (evidence) => {
+    fs.mkdirSync(rogue);
+    assert.throws(() => evidence.assertCurrent(), failure("PROCESS_EXECUTION_RECORD_MISSING"));
+  });
+  let consumed = false;
+  await assert.rejects(ProcessExecutionRuntime.withRecoveryEvidence({ ...options, binding: { executionContractId: "changed-inventory" } }, () => {
+    consumed = true;
+  }), failure("PROCESS_EXECUTION_RECORD_MISSING"));
+  assert.equal(consumed, false);
+});
 
 // Outcomes: reusable checkout only after receipts; live BUSY; orphan empty recovery;
 // unidentifiable launch refusal; corrupt/deleted/symlink/uncertain records preserve
@@ -109,7 +276,8 @@ test("parallel call reservations use shared admission and individual receipts al
 });
 
 test("managed provider termination receipt is read back by a new coordinator before checkout reuse", async (t) => {
-  const options = fixture(t); const runtime = await ProcessExecutionRuntime.acquire(options);
+  const options = fixture(t); const binding = { executionContractId: "managed-reservation", attemptId: "managed-attempt" };
+  const runtime = await ProcessExecutionRuntime.acquire({ ...options, binding });
   const result = await runtime.enter(() => executeManagedProcess(process.execPath, ["-e", "process.stdout.write('completed')"], {
     timeoutMs: 10000, graceMs: 100, maxBuffer: 1024,
   }));
@@ -130,6 +298,12 @@ test("managed provider termination receipt is read back by a new coordinator bef
   assert.deepEqual(receipts[0].toJSON().binding, call.binding);
   assert.equal(next.stopReceipts({ attemptId: "another-attempt" }).length, 0);
   await next.close();
+  await ProcessExecutionRuntime.withRecoveryEvidence({ ...options, binding }, (evidence) => {
+    assert.equal(evidence.nonExecution, null);
+    assert.equal(evidence.calls.length, 1);
+    assert.equal(evidence.calls[0].startPermitted, true);
+    assert.deepEqual(JSON.parse(JSON.stringify(evidence.calls[0].receipt)), call.receipt);
+  });
 });
 
 test("new process reads a killed coordinator inventory and proves empty execution closure before replacement", async (t) => {

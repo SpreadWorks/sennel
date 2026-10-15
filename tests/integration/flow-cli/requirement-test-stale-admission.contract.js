@@ -286,7 +286,16 @@ describe("RequirementTest producer publication admission and intermediate checkp
     assert.notEqual(replaced.descriptor.activityId, original.descriptor.activityId);
     const before = scenario.snapshot();
     const calls = scenario.requests.length;
-    await assert.rejects(() => scenario.dispatch(), FlowExecutionContractRefusal);
+    const rejected = await scenario.dispatch();
+    assert.equal(rejected.dispatch.boundary, "blocked");
+    assert.equal(rejected.dispatch.dispatchCount, 0);
+    const refusal = rejected.nextAction.directive;
+    assert.equal(refusal.kind, "blocked");
+    assert.equal(refusal.code, "FLOW_EXECUTION_CONTRACT_MISMATCH");
+    assert.equal(refusal.diagnostic.code, refusal.code);
+    assert.deepEqual(refusal.diagnostic.missingConditions, ["authenticated-execution-evidence"]);
+    assert.equal(refusal.diagnostic.retryable, false);
+    assert.equal(refusal.diagnostic.resolutionImplemented, false);
     scenario.reload();
     assert.deepEqual(scenario.snapshot(), before);
     assert.equal(scenario.requests.length, calls, "unauthenticated progress must refuse before the external worker");

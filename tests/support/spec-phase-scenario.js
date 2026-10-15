@@ -6,8 +6,18 @@ import { SpecGateRepairProgressReader } from "../../src/flow/lib/spec-gate-repai
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { FlowManager } from "../../src/lib/flow-manager.js";
+import { container as runtimeContainer } from "../../src/lib/container.js";
+import { dispatch as dispatchRegisteredCommand } from "../../src/lib/dispatcher.js";
+import { flowCommands } from "../../src/lib/command-registry.js";
+import { buildFlowCommandHookContext } from "../../src/flow/lib/flow-context.js";
+import { ProcessExecutionRuntime } from "../../src/lib/process-execution-runtime.js";
+import { currentRuntimePackage, listRuntimeResources, readRuntimeResource } from "../../src/lib/runtime-package.js";
+import { readFlowProcessStops } from "../../src/flow/lib/process-runtime-admission.js";
+import { FlowExecutionContract } from "../../src/flow/lib/flow-execution-contract.js";
+import { workerProcessStopIdentity } from "../../src/flow/lib/process-runtime-evidence.js";
 import { FlowTargetBinding } from "../../src/lib/flow-target-guard.js";
 import RunDispatchCommand from "../../src/flow/lib/run-dispatch.js";
 import RunReopenDraftCommand from "../../src/flow/lib/run-reopen-draft.js";
@@ -31,11 +41,12 @@ import { workerArtifactStableStringify } from "../../src/flow/lib/worker-artifac
 import {
   CanonicalFlowFixture, canonicalDraftDocument,
 } from "./infrastructure/flow-setup.js";
-import { removeTmpDir } from "./builders/tmp-dir.js";
+import { createTmpDir, removeTmpDir } from "./builders/tmp-dir.js";
 import { installReviewProcessFake } from "./infrastructure/review-process-fake.js";
 import { validWorkerHandoffTaskSpec, workerArtifactJson } from "./infrastructure/worker-artifact.js";
 import {
   dispatchContainer,
+  dispatchFlowCommand,
   fixtureRepository,
   installGateProviderFake,
   requestInput,
@@ -140,6 +151,57 @@ class SpecPhaseHistory {
   }
 }
 
+/** A separately bootstrapped package creates the historical claim with its own
+ * authenticated runtime bytes. The target package never rewrites that claim. */
+class PriorSpecWorkerRuntime {
+  constructor() {
+    this.root = createTmpDir("sennel-spec-prior-runtime-");
+    const sourceRoot = fileURLToPath(new URL("../../", import.meta.url));
+    const copyResources = (relative) => {
+      for (const entry of listRuntimeResources(path.join(sourceRoot, relative), { withFileTypes: true })) {
+        const name = `${relative}/${entry.name}`;
+        if (entry.isDirectory()) copyResources(name);
+        else {
+          const target = path.join(this.root, name);
+          fs.mkdirSync(path.dirname(target), { recursive: true });
+          fs.writeFileSync(target, readRuntimeResource(path.join(sourceRoot, name), null));
+        }
+      }
+    };
+    copyResources("src");
+    fs.writeFileSync(path.join(this.root, "package.json"), readRuntimeResource(path.join(sourceRoot, "package.json"), null));
+    // A harmless byte difference represents the package available to the old
+    // dispatcher. Both snapshots otherwise execute the same production code.
+    fs.appendFileSync(path.join(this.root, "src/lib/runtime-package.js"), "\n// Prior Spec worker runtime fixture.\n");
+    fs.cpSync(path.join(sourceRoot, "tests/support"), path.join(this.root, "tests/support"), { recursive: true });
+    for (const name of ["test-environment.js", "test-temporary-root.js"]) {
+      fs.copyFileSync(path.join(sourceRoot, "tests", name), path.join(this.root, "tests", name));
+    }
+  }
+
+  async load() {
+    const load = (relative) => import(pathToFileURL(path.join(this.root, relative)).href);
+    await load("src/sennel.js");
+    const [runtime, manager, container, dispatch, review, handoff] = await Promise.all([
+      load("src/lib/runtime-package.js"), load("src/lib/flow-manager.js"), load("src/lib/container.js"),
+      load("tests/support/infrastructure/flow-dispatch-scenario.js"),
+      load("tests/support/infrastructure/review-process-fake.js"), load("src/flow/lib/worker-artifact-handoff.js"),
+    ]);
+    this.revision = runtime.currentRuntimePackage().revision;
+    assert.notEqual(this.revision, currentRuntimePackage().revision);
+    this.FlowManager = manager.FlowManager;
+    this.container = container.container;
+    this.dispatchFlowCommand = dispatch.dispatchFlowCommand;
+    this.dispatchContainer = dispatch.dispatchContainer;
+    this.installProvider = dispatch.installGateProviderFake;
+    this.installReview = review.installReviewProcessFake;
+    this.seal = handoff.sealWorkerArtifactHandoff;
+    return this;
+  }
+
+  remove() { removeTmpDir(this.root); }
+}
+
 /** The real Spec dispatcher scenario, including all original large-input variants. */
 export class SpecPhaseScenario {
   static async seed(t) {
@@ -155,13 +217,15 @@ export class SpecPhaseScenario {
   }
 
   static async run({ retainGateFindings = false, advisoryRepair = false, largeGateResponse = false,
-    largeSpecFile = false, overlongAcceptance = false, largeRepairValues = false, reopenPlanning = false } = {},
+    largeSpecFile = false, overlongAcceptance = false, largeRepairValues = false, reopenPlanning = false,
+    interruptTriage = false, migrateRuntime = false } = {},
     { seed = null, strictSeed = false } = {}) {
     const root = seed ? new SeedWorkRoot(seed.root, { prefix: "sennel-spec-phase-case-" }).root
       : fixtureRepository("spec-artifact-scenario-");
     let retainRoot = false;
     let gateAgentLookup = null;
     let reviewProcess = null;
+    let priorRuntime = null;
     try {
       if (!seed) {
         fs.mkdirSync(path.join(root, ".sennel"), { recursive: true });
@@ -194,6 +258,12 @@ export class SpecPhaseScenario {
       const prefix = seed ? SpecPhaseHistory.read(flowManager, specId) : null;
       const requests = [];
       const sealFailures = [];
+      let interruptedRequest = null;
+      let interruptedRequestPath = null;
+      let interruptedPayload = null;
+      let interruptionDelivered = false;
+      let recoveredTriageConsumed = false;
+      let sealHandoff = sealWorkerArtifactHandoff;
       let acceptanceTruncationLogPath = null;
       const overlongAcceptanceText = "受".repeat(501);
       const sharedGuardrail = "SPEC-SHARED";
@@ -213,7 +283,8 @@ export class SpecPhaseScenario {
       const totalReviews = () => (prefix?.reviews ?? 0) + specReviewRuns;
       const totalGates = () => (prefix?.gates ?? 0) + specGateAttempts.size;
       const totalRepairs = () => (prefix?.repairs ?? 0) + gateRepairWorkerRuns;
-      const allRequestSteps = () => [...(prefix?.requestSteps ?? []), ...requests.map((request) => request.stepId)];
+      const allRequestSteps = () => [...(prefix?.requestSteps ?? []),
+        ...requests.filter((request) => request !== interruptedRequest).map((request) => request.stepId)];
       const findingId = "spec-review-requirement";
       const approvedGoal = "Publish the required behavior in the Spec.";
       const reviewedRequirementPrefix = "Retain the repaired Spec requirement in every downstream consumer.";
@@ -233,7 +304,11 @@ export class SpecPhaseScenario {
         + Array.from({ length: 47 }, (_, index) => `Evidence ${index + 1} for ${id} compares the stated behavior with its planned check.`).join(" ");
       let largeFirstResponse = null;
       let firstGroupReadFailures = 0;
-      gateAgentLookup = installGateProviderFake(async (_prompt, options) => {
+      async function providerResponse(_prompt, options) {
+        if (options.executionEnvironment?.SENNEL_FLOW_HANDOFF_REQUEST
+          || options.commandId === "flow.dispatch.nonblocking-decision") {
+          return workerResponse(_prompt, options);
+        }
         const observationSchema = options.jsonSchema?.properties?.observations?.items;
         const evidenceIds = observationSchema?.properties?.requirementId?.enum ?? [];
         const sourceRefs = observationSchema?.properties?.sourceRef?.enum ?? [];
@@ -290,9 +365,10 @@ export class SpecPhaseScenario {
           assert.ok(response.length > 120_000 && response.length < 160_000, response.length);
         }
         return response;
-      });
-      const agent = {
-        async call(_prompt, options) {
+      }
+      gateAgentLookup = installGateProviderFake(providerResponse,
+        interruptTriage ? { transportContext: () => ({ root, flowManager }) } : {});
+      async function workerResponse(_prompt, options) {
           if (options.commandId === "flow.dispatch.nonblocking-decision") {
             return JSON.stringify({
               choice: "repair",
@@ -316,9 +392,15 @@ export class SpecPhaseScenario {
           }
           requests.push(request);
           writeWorkerPayload(request, options.executionEnvironment);
+          if (interruptTriage && request.stepId === "spec-triage" && interruptedRequest === null) {
+            interruptedRequest = request;
+            interruptedRequestPath = requestPath;
+            interruptedPayload = fs.readFileSync(requestPayloadPath(request, "review.delta.json"));
+            return JSON.stringify({ interruptedBeforeSeal: true });
+          }
           let sealed;
           try {
-            sealed = sealWorkerArtifactHandoff({ requestPath, invocationId, mainRoot: root, flowManager });
+            sealed = sealHandoff({ requestPath, invocationId, mainRoot: root, flowManager });
           } catch (cause) {
             sealFailures.push({
               stepId: request.stepId,
@@ -330,8 +412,24 @@ export class SpecPhaseScenario {
           }
           if (request.stepId === "spec") acceptanceTruncationLogPath = sealed.acceptanceTruncationLog ?? null;
           return JSON.stringify({ sealed: true, requestDigest: request.requestDigest });
-        },
-      };
+      }
+      function workerAgent(container = runtimeContainer) {
+        const managedAgent = container.get("agent");
+        if (!interruptTriage) return managedAgent;
+        // Reuse the real Agent/provider admission and managed Node transport.
+        // Only the external provider's reply is lost after its durable stop.
+        const call = managedAgent.call.bind(managedAgent);
+        managedAgent.call = async (prompt, options) => {
+          const text = await call(prompt, options);
+          if (!interruptionDelivered && options.executionEnvironment?.SENNEL_FLOW_HANDOFF_REQUEST === interruptedRequestPath) {
+            interruptionDelivered = true;
+            throw new Error("Spec triage provider reply was lost before handoff sealing");
+          }
+          return text;
+        };
+        return managedAgent;
+      }
+      let agent = workerAgent();
       function writeWorkerPayload(request, executionEnvironment) {
           if (reopenPlanning && request.stepId === "draft") {
             draftWorkerRuns += 1;
@@ -445,6 +543,14 @@ export class SpecPhaseScenario {
             const review = new CanonicalSpecReview(requestInput(request, "review.json").document);
             const spec = requestInput(request, "spec.json").document;
             const hasFinding = review.findings.byId(findingId) !== null;
+            if (interruptTriage && !recoveredTriageConsumed && hasFinding) {
+              const finding = review.findings.byId(findingId);
+              assert.equal(finding.disposition, "apply");
+              assert.equal(finding.evidence, "The reviewed requirement exists in the immutable Spec snapshot.");
+              assert.deepEqual(finding.allowedTargets, [{ target: { entity: "requirement", id: "R1", field: "desc" },
+                operationKinds: ["replace-entity-field"] }]);
+              recoveredTriageConsumed = true;
+            }
             fs.writeFileSync(requestPayloadPath(request, "review.delta.json"), workerArtifactJson({
               version: 2,
               stage: "spec-repair",
@@ -465,7 +571,7 @@ export class SpecPhaseScenario {
           }
           throw new Error(`Unexpected Spec worker: ${request.stepId}`);
       }
-      reviewProcess = installReviewProcessFake((_command, _args, options) => {
+      function reviewResponse(_command, _args, options) {
         const nodeId = flowManager.canonicalState(specId).current.at(-1);
         const work = ReviewWorkUnit.fromEnvironment(options.env);
         if (reopenPlanning && ["draft-questions-review", "draft-coverage-review"].includes(nodeId)) {
@@ -511,8 +617,25 @@ export class SpecPhaseScenario {
         }
         work.seal();
         return { ok: true, status: 0, signal: null, killed: false, stdout: "", stderr: "" };
-      });
-      async function dispatch(maxDispatches = 64) {
+      }
+      reviewProcess = installReviewProcessFake(reviewResponse);
+      async function dispatch(maxDispatches = 64, runtime = null) {
+        if (interruptTriage) {
+          assert.equal(maxDispatches, 64, "interruption acceptance uses the registered production dispatch limit");
+          const invoke = runtime?.dispatchFlowCommand ?? dispatchFlowCommand;
+          const container = (runtime?.dispatchContainer ?? dispatchContainer)({ root, flowManager, agent });
+          const selected = await invoke({
+            container, group: "get", name: "next-action",
+            argv: ["--expect-run-id", flowManager.loadReadOnly(specId).runId],
+          });
+          assert.equal(selected.envelope.ok, true, selected.stdout);
+          assert.equal(typeof selected.envelope.data.binding, "string", selected.stdout);
+          const execution = await invoke({
+            container, group: "run", name: "dispatch",
+            argv: ["--expect-binding", selected.envelope.data.binding],
+          });
+          return { ...execution.envelope.data, ok: execution.envelope.ok, errors: execution.envelope.errors };
+        }
         const dispatcher = new RunDispatchCommand({ agent, maxDispatches });
         dispatcher.container = dispatchContainer({ root, flowManager, agent });
         return dispatcher.execute({
@@ -605,7 +728,138 @@ export class SpecPhaseScenario {
         }
       }
       let result;
-      if (advisoryRepair) {
+      if (interruptTriage) {
+        let interrupted;
+        if (migrateRuntime) {
+          priorRuntime = new PriorSpecWorkerRuntime();
+          await priorRuntime.load();
+          flowManager = new priorRuntime.FlowManager({ root, mainRoot: root, inWorktree: false, specId });
+          const historicalProvider = priorRuntime.installProvider(providerResponse,
+            { transportContext: () => ({ root, flowManager }) });
+          const historicalReview = priorRuntime.installReview(reviewResponse);
+          sealHandoff = priorRuntime.seal;
+          agent = workerAgent(priorRuntime.container);
+          try { interrupted = await dispatch(64, priorRuntime); }
+          finally {
+            historicalReview.mock.restore();
+            historicalProvider.mock.restore();
+            sealHandoff = sealWorkerArtifactHandoff;
+          }
+        } else interrupted = await dispatch();
+        assert.equal(interrupted.ok, false, JSON.stringify(interrupted));
+        assert.equal(interruptionDelivered, true, JSON.stringify(interrupted));
+        assert.ok(interruptedRequest, "the registered triage provider must create its canonical claim");
+        const sourceContract = FlowExecutionContract.fromJSON(interruptedRequest.executionContract);
+        assert.equal(sourceContract.runtimeRevision, priorRuntime?.revision ?? currentRuntimePackage().revision);
+        const sourceRequestDigest = crypto.createHash("sha256")
+          .update(workerArtifactStableStringify(interruptedRequest)).digest("hex");
+        const sourceDirectory = path.dirname(interruptedRequestPath);
+        assert.equal(fs.existsSync(path.join(sourceDirectory, "handoff.json")), false);
+        assert.deepEqual(fs.readFileSync(requestPayloadPath(interruptedRequest, "review.delta.json")), interruptedPayload);
+        const inventory = ProcessExecutionRuntime.inspect({ mainRoot: root, executionRoot: root });
+        assert.equal(inventory.slot, null);
+        assert.ok(inventory.executions.every((execution) => execution.status === "closed"));
+        const stoppedExecution = inventory.executions.find((execution) => execution.calls.some((call) =>
+          call.binding?.executionContractId === sourceContract.id));
+        assert.ok(stoppedExecution, "the unsealed triage must have a real managed physical call");
+        const call = stoppedExecution.calls.find((entry) => entry.binding.executionContractId === sourceContract.id);
+        assert.equal(call.permit.callId, call.callId);
+        assert.equal(call.receipt.stopEvidence.status, "confirmed");
+        const runtimeNamespace = fs.readdirSync(path.join(root, ".sennel", "process-runtime"));
+        assert.equal(runtimeNamespace.length, 1);
+        const archive = JSON.parse(fs.readFileSync(path.join(root, ".sennel", "process-runtime",
+          runtimeNamespace[0], "archives", `${stoppedExecution.executionId}.json`), "utf8"));
+        assert.deepEqual(archive.payload.execution.calls.find((entry) => entry.callId === call.callId).receipt, call.receipt);
+        assert.equal(ProcessExecutionRuntime.current(), null);
+        const stops = readFlowProcessStops({ mainRoot: root, executionRoot: root })
+          .filter((evidence) => evidence.receipt.binding.value.executionContractId === sourceContract.id);
+        assert.equal(stops.length, 1);
+        stops[0].assertContract(sourceContract, workerProcessStopIdentity({ ...interruptedRequest,
+          executionContract: sourceContract, requestDigest: sourceRequestDigest }));
+        assert.equal(stops[0].receipt.callId, call.callId);
+
+        // Discard the dispatcher, coordinator, manager and external Agent before
+        // resuming from the canonical claim and closed physical archive.
+        flowManager = new FlowManager({ root, mainRoot: root, inWorktree: false, specId });
+        agent = workerAgent();
+        const stoppedState = flowManager.canonicalState(specId);
+        if (migrateRuntime) assert.throws(() => sourceContract.assertCurrent(stoppedState),
+          { code: "FLOW_EXECUTION_CONTRACT_MISMATCH" });
+        assert.equal(stoppedState.attempt.id, sourceContract.attemptId);
+        assert.equal(stoppedState.attempt.sequence, sourceContract.attemptSequence);
+        assert.equal(stoppedState.attempt.failure, null);
+        const binding = { runId: stoppedState.runId, specId, stepId: "spec-triage", nodeId: "spec-triage",
+          taskId: null, attempt: stoppedState.attempt };
+        const retained = flowManager.artifactWorkerExecutionState({ binding });
+        assert.equal(retained.executionContract.id, sourceContract.id);
+        assert.equal(retained.recovery, null);
+        const beforeResume = { state: stoppedState.toJSON(), activities: flowManager.activityLedger(specId),
+          catalog: flowManager.artifactCatalog(specId).toJSON() };
+        const resumeOutput = [];
+        const resumeErrors = [];
+        let resumeExit = 0;
+        await dispatchRegisteredCommand({
+          container: dispatchContainer({ root, flowManager, agent }), entry: flowCommands.resume,
+          argv: ["--spec", specId], envelopeType: "run", envelopeKey: "resume", runtimeLog: false,
+          buildHookCtx: (container, input) => buildFlowCommandHookContext(container, flowCommands.resume, input),
+          stdout: (text) => resumeOutput.push(text), stderr: (text) => resumeErrors.push(text), setExitCode: (code) => { resumeExit = code; },
+        });
+        const resumed = JSON.parse(resumeOutput.join(""));
+        assert.equal(resumeExit, 0, `${JSON.stringify(resumed)}\n${resumeErrors.join("")}`);
+        assert.equal(resumed.ok, true, JSON.stringify(resumed));
+        assert.equal(resumed.data.runId, sourceContract.runId);
+        const selected = await dispatchFlowCommand({
+          container: dispatchContainer({ root, flowManager, agent }), group: "get", name: "next-action",
+          argv: ["--expect-run-id", sourceContract.runId],
+        });
+        assert.equal(selected.envelope.ok, true, selected.stdout);
+        assert.equal(selected.envelope.data.directive.actionId, "RECOVER_ARTIFACT_EXECUTION");
+        assert.equal(selected.envelope.data.directive.command.subcommand, "recover-artifact-execution");
+        assert.ok(selected.envelope.data.directive.command.args.includes("--expect-binding"));
+        assert.deepEqual({ state: flowManager.canonicalState(specId).toJSON(), activities: flowManager.activityLedger(specId),
+          catalog: flowManager.artifactCatalog(specId).toJSON() }, beforeResume);
+        assert.equal(requests.filter((request) => request.stepId === "spec-triage").length, 1);
+        result = await dispatch();
+        const restored = new FlowManager({ root, mainRoot: root, inWorktree: false, specId });
+        const frontier = restored.artifactWorkerExecutionState({ binding });
+        assert.equal(frontier.contracts.length, 2, JSON.stringify({ errors: result.errors, boundary: result.dispatch?.boundary }));
+        assert.equal(frontier.recovery.sourceContractId, sourceContract.id);
+        assert.equal(frontier.recovery.targetGeneration, sourceContract.generation + 1);
+        assert.equal(frontier.recovery.evidence.budget.providerCallCount, 1);
+        assert.equal(frontier.recovery.evidence.migratesRuntime, migrateRuntime);
+        assert.equal(frontier.recovery.sourceContract.runtimeRevision, sourceContract.runtimeRevision);
+        assert.equal(frontier.recovery.targetContract.runtimeRevision, currentRuntimePackage().revision);
+        const replacement = requests.find((request) => request.stepId === "spec-triage" && request !== interruptedRequest);
+        assert.equal(frontier.status, "accepted", JSON.stringify({ errors: result.errors, boundary: result.dispatch?.boundary,
+          triageGenerations: requests.filter((request) => request.stepId === "spec-triage").map((request) => request.executionContract.generation),
+          replacementPhysicalCalls: ProcessExecutionRuntime.inspect({ mainRoot: root, executionRoot: root }).executions
+            .flatMap((execution) => execution.calls).filter((call) => call.binding?.executionContractId === frontier.recovery.targetContractId).length }));
+        assert.ok(replacement, JSON.stringify(result));
+        const targetContract = FlowExecutionContract.fromJSON(replacement.executionContract);
+        assert.equal(targetContract.id, frontier.recovery.targetContractId);
+        assert.equal(targetContract.runtimeRevision, currentRuntimePackage().revision);
+        assert.equal(targetContract.attemptId, sourceContract.attemptId);
+        assert.equal(targetContract.attemptSequence, sourceContract.attemptSequence);
+        assert.equal(targetContract.episodeId, sourceContract.episodeId);
+        assert.equal(targetContract.budgetId, sourceContract.budgetId);
+        assert.deepEqual(targetContract.executionLimit, sourceContract.executionLimit);
+        assert.notEqual(replacement.dispatchInvocationId, interruptedRequest.dispatchInvocationId);
+        const replacementStops = readFlowProcessStops({ mainRoot: root, executionRoot: root })
+          .filter((evidence) => evidence.receipt.binding.value.executionContractId === targetContract.id);
+        assert.equal(replacementStops.length, 1);
+        assert.notEqual(replacementStops[0].receipt.callId, call.callId);
+        replacementStops[0].assertContract(targetContract, workerProcessStopIdentity({ ...replacement,
+          executionContract: targetContract, requestDigest: crypto.createHash("sha256")
+            .update(workerArtifactStableStringify(replacement)).digest("hex") }));
+        assert.equal(recoveredTriageConsumed, true, "spec-repair must read and apply the recovered canonical triage");
+        assert.equal(restored.readStoredPromptExecutionEpisode({ executionContract: targetContract,
+          currentAttempt: false }).budget.providerCallCount, 2);
+        assert.deepEqual(fs.readFileSync(requestPayloadPath(interruptedRequest, "review.delta.json")), interruptedPayload);
+        const completed = restored.activityLedger(specId).filter((entry) => entry.nodeId === "spec-triage"
+          && entry.attemptId === sourceContract.attemptId && entry.result?.stepResult?.kind === "spec-triage-completed");
+        assert.equal(completed.length, 1);
+        assert.equal(completed[0].result.draftSettlementReceipt.targetStepId, "spec-repair");
+      } else if (advisoryRepair) {
         let observedAwaitAfterReload = false;
         for (let index = 0; index < 32; index += 1) {
           const repaired = flowManager.activityLedger(specId).some((entry) => (
@@ -964,6 +1218,7 @@ export class SpecPhaseScenario {
     } finally {
       reviewProcess?.mock.restore();
       gateAgentLookup?.mock.restore();
+      priorRuntime?.remove();
       if (!retainRoot) removeTmpDir(root);
     }
   }

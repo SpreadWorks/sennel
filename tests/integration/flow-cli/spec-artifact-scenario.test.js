@@ -6,6 +6,12 @@ const seedScope = new SeedCleanupScope(after);
 let strictStopSeed;
 
 describe("Spec artifact lifecycle and downstream consumption", { concurrency: false }, () => {
+  it("resumes an unsealed stopped triage through archived process evidence and lets Spec repair consume the new generation", async () => {
+    await SpecPhaseScenario.run({ interruptTriage: true });
+  });
+  it("migrates an old runtime's unsealed triage and lets Spec repair consume the authorized generation", async () => {
+    await SpecPhaseScenario.run({ interruptTriage: true, migrateRuntime: true });
+  });
   for (const { retainGateFindings, advisoryRepair, largeGateResponse = false, largeSpecFile = false, overlongAcceptance = false, largeRepairValues = false, reopenPlanning = false } of [
     { retainGateFindings: false, advisoryRepair: false, overlongAcceptance: true },
     { retainGateFindings: true, advisoryRepair: false },

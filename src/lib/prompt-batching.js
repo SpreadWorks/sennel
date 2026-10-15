@@ -11,6 +11,7 @@ import {
   PromptExecutionProviderIdentity,
   PromptProviderProcessIdentity,
   PromptProcessStopObservation,
+  PromptExecutionReservationContinuation,
 } from "./prompt-execution-journal.js";
 
 export const GLOBAL_PROMPT_ELEMENT_HARD_MAX = 120_000;
@@ -1609,6 +1610,8 @@ export class PromptProviderCallAdmission {
   #attemptJournal;
   #cacheHit = false;
   #cacheIdentity = null;
+  #reusesReservation;
+  #reservationAvailable;
 
   constructor(executionBudget, scopedBudget, attemptJournal, { invocation = null, executionAdmission = null } = {}) {
     if (!(executionBudget instanceof PromptExecutionBudget)) throw new TypeError("Provider call admission requires a shared execution budget");
@@ -1619,7 +1622,9 @@ export class PromptProviderCallAdmission {
     this.executionAdmission = executionAdmission;
     this.#attemptJournal = attemptJournal ?? null;
     this.#attemptCount = attemptJournal?.initialAttemptCount ?? 0;
-    if (this.#attemptCount === 0) this.#consumeProviderCall();
+    this.#reusesReservation = attemptJournal?.reusesReservation === true;
+    this.#reservationAvailable = this.#reusesReservation;
+    if (this.#attemptCount === 0 && !this.#reusesReservation) this.#consumeProviderCall();
   }
 
   #consumeProviderCall() {
@@ -1640,7 +1645,8 @@ export class PromptProviderCallAdmission {
     if (!this.#claimed) throw new Error("Provider call admission must be claimed before a transport attempt");
     if (this.#settled) throw new Error("Provider call admission is already settled");
     const consume = () => {
-      if (this.#attemptCount > 0) this.#consumeProviderCall();
+      if (this.#attemptCount > 0 && !this.#reservationAvailable) this.#consumeProviderCall();
+      this.#reservationAvailable = false;
       this.#attemptCount += 1;
       if (this.#attemptJournal) return this.#attemptJournal.beforeProviderAttempt(context, this.#attemptCount);
       return this.#attemptCount;
@@ -1677,7 +1683,7 @@ export class PromptProviderCallAdmission {
 
   settle() {
     if (this.#settled) throw new Error("Provider call admission is already settled");
-    if (this.#claimed && this.#attemptCount === 0) {
+    if (this.#claimed && this.#attemptCount === 0 && !this.#reusesReservation) {
       for (const budget of this.#budgets) budget.releaseProviderCall();
     } else if (!this.#claimed) {
       // Injected adapters which do not claim admission represent one provider
@@ -1826,7 +1832,7 @@ class DefaultPromptProtocolPolicy {
 
 /** Durable hooks contain execution observations, never consumer semantics. */
 class BatchProviderAttemptJournal extends PromptProviderAttemptJournal {
-  constructor({ frontier, responseCallIndex, request, save, scope, processExecutionBinding }) {
+  constructor({ frontier, responseCallIndex, request, save, scope, processExecutionBinding, reservationContinuation = null }) {
     const failures = frontier.transportFailures.filter((entry) => entry.responseCallIndex === responseCallIndex);
     super(failures.length);
     this.frontier = frontier;
@@ -1836,6 +1842,9 @@ class BatchProviderAttemptJournal extends PromptProviderAttemptJournal {
     this.save = save;
     this.scope = scope;
     this.processExecutionBinding = processExecutionBinding;
+    this.reusesReservation = reservationContinuation instanceof PromptExecutionReservationContinuation
+      && reservationContinuation.pending && frontier.reservationContinuation !== undefined
+      && JSON.stringify(frontier.reservationContinuation) === JSON.stringify(reservationContinuation.toJSON());
   }
 
   get processExecutionIdentity() { return this.frontier.claim?.processIdentity ? PromptProviderProcessIdentity.fromJSON(this.frontier.claim.processIdentity) : null; }
@@ -1853,7 +1862,15 @@ class BatchProviderAttemptJournal extends PromptProviderAttemptJournal {
       || previous.profileKey !== context.profileKey)) {
       throw new PromptExecutionJournalError("PROMPT_EXECUTION_TRANSPORT_INVALID", "Saved transport frontier does not permit this provider attempt");
     }
-    this.frontier.transportOrdinal += 1;
+    const reservation = this.reusesReservation
+      ? PromptExecutionReservationContinuation.fromJSON(this.frontier.reservationContinuation) : null;
+    if (reservation !== null && (context.attempt !== reservation.previousClaim.attempt
+      || context.maxAttempts !== reservation.previousClaim.maxAttempts || this.requestDigest !== reservation.previousClaim.requestDigest
+      || this.schemaDigest !== reservation.previousClaim.schemaDigest || context.providerKey !== reservation.previousClaim.providerKey
+      || context.profileKey !== reservation.previousClaim.profileKey)) {
+      throw new PromptExecutionJournalError("PROMPT_EXECUTION_IDENTITY_MISMATCH", "Provider invocation changed its reconciled reservation");
+    }
+    if (reservation === null) this.frontier.transportOrdinal += 1;
     this.frontier.claim = { responseCallIndex: this.responseCallIndex, transportOrdinal: this.frontier.transportOrdinal,
       attempt: context.attempt, maxAttempts: context.maxAttempts, requestDigest: this.requestDigest, schemaDigest: this.schemaDigest,
       providerKey: context.providerKey, profileKey: context.profileKey };
@@ -1862,7 +1879,9 @@ class BatchProviderAttemptJournal extends PromptProviderAttemptJournal {
         scope: this.scope, batchDigest: this.frontier.batchDigest,
         logicalInvocationId: context.logicalInvocationId, providerAttemptId: context.attemptId }).toJSON();
     }
-    await this.save("claimed");
+    if (reservation !== null) this.frontier.reservationContinuation = reservation.consume(this.frontier.claim).toJSON();
+    await this.save(reservation === null ? "claimed" : "reservation-consumed");
+    this.reusesReservation = false;
     return attemptCount;
   }
 
@@ -2032,6 +2051,7 @@ export class PromptBatchExecutor {
     executionJournal,
     synthesisCallCount = 0,
     preparedExecution,
+    reservationContinuation = null,
   } = {}) {
     if (!(plan instanceof PromptBatchPlan)) throw new TypeError("Prompt executor requires a typed plan");
     if (typeof callAgent !== "function") throw new TypeError("Prompt executor requires callAgent");
@@ -2044,15 +2064,17 @@ export class PromptBatchExecutor {
     }
     if (executionJournal !== undefined && !(executionJournal instanceof PromptExecutionJournal)) throw new TypeError("Prompt executor execution journal must be typed");
     safeInteger(synthesisCallCount, "Prompt plan synthesis call reservation");
-    executionJournal?.assertResumable(plan, synthesisCallCount);
+    executionJournal?.assertResumable(plan, synthesisCallCount, reservationContinuation);
     const restored = executionJournal?.snapshot;
     if (restored) this.executionBudget.assertIncludes(restored.budget);
     const frontiers = restored ? JSON.parse(JSON.stringify(restored.batches)) : plan.batches.map((batch) => ({
       batchDigest: batch.digest, batchCalls: 0, transportOrdinal: 0, claim: null, responses: [], transportFailures: [], completion: null,
     }));
     const pending = plan.batches.filter((batch) => frontiers[batch.index].completion === null);
-    const remainingCalls = pending.filter((batch) => frontiers[batch.index].responses.length === 0
-      || frontiers[batch.index].transportFailures.some((failure) => !frontiers[batch.index].responses.some((response) => response.responseCallIndex === failure.responseCallIndex))).length;
+    const remainingCalls = pending.filter((batch) => (frontiers[batch.index].responses.length === 0
+      || frontiers[batch.index].transportFailures.some((failure) => !frontiers[batch.index].responses.some((response) => response.responseCallIndex === failure.responseCallIndex)))
+      && !(reservationContinuation instanceof PromptExecutionReservationContinuation
+        && JSON.stringify(frontiers[batch.index].reservationContinuation) === JSON.stringify(reservationContinuation.toJSON()))).length;
     this.executionBudget.assertCanExecute(plan.batches.length, remainingCalls);
     const prepared = preparedExecution ?? await this.prepareExecution({ plan, projectInvocation, pendingBatches: pending, remainingCallCount: remainingCalls });
     if (!(prepared instanceof PromptPreparedExecution) || prepared.plan !== plan) {
@@ -2148,7 +2170,8 @@ export class PromptBatchExecutor {
             inputCharacters: projection?.promptCharacterCount ?? actualFootprint.total,
           });
           if (executionJournal) frontier.batchCalls = batchCalls;
-          const attemptJournal = executionJournal ? new BatchProviderAttemptJournal({ frontier, responseCallIndex: callIndex, request: actualRequest, save, scope: executionJournal.scope, processExecutionBinding: executionJournal.writer.processExecutionBinding ?? null }) : undefined;
+          const attemptJournal = executionJournal ? new BatchProviderAttemptJournal({ frontier, responseCallIndex: callIndex, request: actualRequest, save, scope: executionJournal.scope,
+            processExecutionBinding: executionJournal.writer.processExecutionBinding ?? null, reservationContinuation }) : undefined;
           const previousFailure = frontier.transportFailures.filter((entry) => entry.responseCallIndex === callIndex).at(-1);
           if (executionJournal && previousFailure && (!previousFailure.retryable || previousFailure.attempt === previousFailure.maxAttempts)) {
             throw new PromptExecutionJournalError("PROMPT_EXECUTION_TRANSPORT_EXHAUSTED", "Saved provider call exhausted its transport attempts");

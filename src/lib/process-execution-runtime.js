@@ -14,13 +14,13 @@ import { ManagedStopOperationStore } from "./managed-stop-store.js";
 
 import {
   ProcessExecutionControlFailure, ProcessExecutionBinding, ProcessExecutionCheckoutIdentity,
-  ProcessExecutionStopReceipt, ProcessExecutionStartPermit,
+  ProcessExecutionStopReceipt, ProcessExecutionStartPermit, ProcessExecutionNonExecutionEvidence, ProcessExecutionRecoveryCall,
   executionUuid as uuid, executionValueSnapshot as json,
   executionValueDigest as digest, executionProcessIdentity as identity,
 } from "./process-execution-values.js";
 export {
   ProcessExecutionControlFailure, ProcessExecutionBinding, ProcessExecutionCheckoutIdentity,
-  ProcessExecutionStopReceipt, ProcessExecutionStartPermit,
+  ProcessExecutionStopReceipt, ProcessExecutionStartPermit, ProcessExecutionNonExecutionEvidence, ProcessExecutionRecoveryCall,
 } from "./process-execution-values.js";
 
 function captureCheckoutAuthorities(main, checkout) {
@@ -39,6 +39,7 @@ export const PROCESS_EXECUTION_SCOPE_ENV = "SENNEL_PROCESS_EXECUTION_SCOPE";
 const scopes = new AsyncLocalStorage();
 const MAX_REGISTRY_BYTES = 16 * 1024 * 1024;
 const RUNTIME_RECORD_VERSION = 2;
+const recoveryEvidenceAuthority = Symbol("process-runtime-recovery-evidence");
 
 function fail(reason, message, details) { throw new ProcessExecutionControlFailure(reason, message, details); }
 function exact(value, restored) {
@@ -330,10 +331,22 @@ class ProcessRuntimeStore {
       return archive.execution;
     }).sort((left, right) => left.ownerEpoch - right.ownerEpoch);
   }
+  readInventory() {
+    const registry = this.read();
+    return json({ ...registry.toJSON(), executions: [...this.readArchives(), ...registry.executions]
+      .sort((left, right) => left.ownerEpoch - right.ownerEpoch) });
+  }
   #assertInventory(registry) {
     const inventory = [...this.readArchives(), ...registry.executions].sort((left, right) => left.ownerEpoch - right.ownerEpoch);
     if (inventory.length !== registry.ownerEpoch || inventory.some((record, index) => record.ownerEpoch !== index + 1)
       || new Set(inventory.map((record) => record.executionId)).size !== inventory.length) fail("record-missing", "Runtime execution epoch inventory is missing or duplicated");
+    const calls = inventory.flatMap((execution) => execution.calls);
+    const callIds = new Set(calls.map((call) => call.callId));
+    if (callIds.size !== calls.length) fail("record-corrupt", "Runtime inventory contains duplicate physical calls");
+    for (const name of fs.readdirSync(this.callsAuthority.directory)) {
+      if (!callIds.has(name)) fail("record-missing", "A physical call artifact is outside the durable runtime inventory");
+      new RealDirectoryAuthority(path.join(this.callsAuthority.directory, name), { parentAuthority: this.callsAuthority }).assertStable();
+    }
   }
   archiveClosed() {
     const registry = this.read();
@@ -424,6 +437,77 @@ export class ProcessExecutionOwnershipReservation {
   }
 }
 
+/** A fresh physical observation usable only while its checkout exclusion is held. */
+export class ProcessExecutionRecoveryEvidence {
+  #readCurrent;
+  #active = true;
+  #binding;
+  #invocation;
+  #inventory;
+  #revocations;
+  #snapshotDigest;
+  #summary;
+  constructor({ checkoutIdentity, binding, invocation = null, inventory, revocations, readCurrent, authority }) {
+    if (authority !== recoveryEvidenceAuthority || !(checkoutIdentity instanceof ProcessExecutionCheckoutIdentity) || !(binding instanceof ProcessExecutionBinding)
+      || typeof readCurrent !== "function") throw new TypeError("Recovery evidence requires its held runtime authority");
+    this.#binding = new ProcessExecutionBinding(binding);
+    this.#invocation = new ProcessExecutionBinding(invocation);
+    this.#inventory = inventory;
+    this.#revocations = revocations;
+    this.#readCurrent = readCurrent;
+    this.#snapshotDigest = digest(inventory);
+    this.checkoutIdentity = checkoutIdentity;
+    this.calls = Object.freeze(inventory.executions.flatMap((execution) => execution.calls
+      .filter((call) => new ProcessExecutionBinding(call.binding).includes(this.#binding)
+        && (this.#invocation.value === null || new ProcessExecutionBinding(call.invocation).includes(this.#invocation)))
+      .map((call) => new ProcessExecutionRecoveryCall({ executionId: execution.executionId, ownerEpoch: execution.ownerEpoch,
+        callId: call.callId, binding: call.binding, invocation: call.invocation, startPermitted: call.permit !== null, receipt: call.receipt }))));
+    this.receipts = Object.freeze(this.calls.map((call) => call.receipt));
+    this.nonExecution = this.receipts.length === 0 ? new ProcessExecutionNonExecutionEvidence({
+      checkoutIdentity, binding, invocation, inventoryDigest: this.#snapshotDigest,
+      ownerEpoch: inventory.ownerEpoch, executions: revocations,
+    }) : null;
+    this.#summary = { schemaVersion: 1, checkoutIdentity: checkoutIdentity.toJSON(), binding: binding.toJSON(), invocation: this.#invocation.toJSON(),
+      inventoryDigest: this.#snapshotDigest, ownerEpoch: inventory.ownerEpoch,
+      calls: this.calls.map((call) => call.toJSON()), nonExecution: this.nonExecution?.toJSON() ?? null };
+    this.digest = digest(this.#summary);
+    this.id = this.digest;
+    Object.freeze(this);
+  }
+  assertCurrent() {
+    if (!this.#active) fail("recovery-authority-expired", "Physical recovery evidence is outside its checkout exclusion");
+    if (digest(this.#readCurrent()) !== this.#snapshotDigest) fail("recovery-evidence-changed", "Physical runtime inventory changed before recovery authorization");
+    return this;
+  }
+  assertBinding(binding) {
+    this.assertCurrent();
+    if (!this.#binding.matches(new ProcessExecutionBinding(binding))) fail("recovery-binding-mismatch", "Physical recovery evidence belongs to another semantic execution");
+    return this;
+  }
+  forBinding(binding) {
+    this.assertCurrent();
+    const expected = new ProcessExecutionBinding(binding);
+    if (!expected.includes(this.#binding)) fail("recovery-binding-mismatch", "Physical recovery evidence cannot expand its observed semantic execution");
+    return new ProcessExecutionRecoveryEvidence({ checkoutIdentity: this.checkoutIdentity, binding: expected,
+      invocation: this.#invocation,
+      inventory: this.#inventory, revocations: this.#revocations, authority: recoveryEvidenceAuthority,
+      readCurrent: () => { this.assertCurrent(); return this.#inventory; } });
+  }
+  forInvocation(invocation) {
+    this.assertCurrent();
+    const expected = new ProcessExecutionBinding(invocation);
+    if (expected.value === null || Object.keys(expected.value).length === 0
+      || this.#invocation.value !== null && !expected.includes(this.#invocation)) {
+      fail("recovery-binding-mismatch", "Physical recovery evidence requires a bounded invocation within its observed execution");
+    }
+    return new ProcessExecutionRecoveryEvidence({ checkoutIdentity: this.checkoutIdentity, binding: this.#binding,
+      invocation: expected, inventory: this.#inventory, revocations: this.#revocations, authority: recoveryEvidenceAuthority,
+      readCurrent: () => { this.assertCurrent(); return this.#inventory; } });
+  }
+  toJSON() { return { ...json(this.#summary), id: this.id, digest: this.digest }; }
+  invalidate() { this.#active = false; }
+}
+
 /** Checkout admission and durable physical ownership; no semantic state decisions live here. */
 export class ProcessExecutionRuntime {
   constructor(store, record, { borrowed = false, parentCallId = null, binding = record.binding, root = null } = {}) {
@@ -441,6 +525,60 @@ export class ProcessExecutionRuntime {
     this.closed = false;
   }
   static current() { return scopes.getStore() ?? null; }
+  /** Observe saved facts without starting or stopping workers; keep exclusion through a synchronous commit. */
+  static async withRecoveryEvidence({ mainRoot, executionRoot = mainRoot, binding, processIdentitySource } = {}, callback) {
+    const expected = new ProcessExecutionBinding(binding);
+    if (expected.value === null || Object.keys(expected.value).length === 0 || typeof callback !== "function") {
+      throw new TypeError("Physical recovery requires its exact binding and synchronous consumer");
+    }
+    let store;
+    const current = this.current();
+    const owned = current !== null && !current.borrowed && !current.closed && !current.root.closed
+      && current.mainRoot === path.resolve(mainRoot) && current.executionRoot === path.resolve(executionRoot)
+      ? current.root : null;
+    try {
+      store = owned?.store ?? new ProcessRuntimeStore({ mainRoot, executionRoot, create: false, processIdentitySource });
+      if (owned === null) store.ownerLock.acquire();
+    } catch (cause) {
+      if (cause instanceof ProcessExecutionControlFailure) throw cause;
+      fail(cause.lockStatus === "live" ? "busy" : "admission-failed", "Physical recovery could not acquire checkout exclusion", { cause });
+    }
+    let result;
+    let callbackFailure = null;
+    try {
+      await store.exclusive(() => {
+        const readCurrent = () => {
+          const lock = store.ownerLock.inspect();
+          if (store.ownerLock.processIdentity === null || lock === null
+            || lock.stat.dev !== store.ownerLock.lockIdentity.dev || lock.stat.ino !== store.ownerLock.lockIdentity.ino
+            || lock.owner.processIdentity.ownerToken !== store.ownerLock.processIdentity.ownerToken) {
+            fail("ownership-changed", "Physical recovery checkout exclusion changed");
+          }
+          const inventory = store.readInventory();
+          if (owned !== null) owned.#assertAccepting(owned.#record(inventory));
+          for (const execution of inventory.executions) {
+            if (execution.status !== "closed" && execution.executionId !== owned?.executionId) this.#assertRecoveryCandidate(store, execution, { runId: null, specId: null });
+            if (execution.calls.some((call) => call.receipt === null)) fail("stop-unconfirmed", "Physical recovery requires durable stop receipts for every reserved call", { executionId: execution.executionId });
+          }
+          return inventory;
+        };
+        const inventory = readCurrent();
+        if (inventory.ownerEpoch === 0) fail("record-missing", "Physical recovery has no prior execution authority to revoke");
+        const evidence = new ProcessExecutionRecoveryEvidence({ checkoutIdentity: store.checkout, binding: expected,
+          inventory, revocations: inventory.executions.map((execution) => ({ executionId: execution.executionId,
+            ownerEpoch: execution.ownerEpoch, authorityState: execution.executionId === owned?.executionId
+              ? "exclusive" : execution.status === "closed" ? "closed" : "stale" })), readCurrent,
+          authority: recoveryEvidenceAuthority });
+        try {
+          result = callback(evidence);
+          if (result?.then !== undefined) throw new TypeError("Physical recovery evidence consumer must be synchronous");
+        } catch (cause) { callbackFailure = cause; }
+        finally { evidence.invalidate(); }
+      });
+    } finally { if (owned === null) store.ownerLock.release(); }
+    if (callbackFailure !== null) throw callbackFailure;
+    return result;
+  }
   static inspect({ mainRoot, executionRoot = mainRoot } = {}) {
     try {
       const main = path.resolve(mainRoot); const checkout = path.resolve(executionRoot);
@@ -454,8 +592,7 @@ export class ProcessExecutionRuntime {
         new RealDirectoryAuthority(currentDirectory).assertStable();
       }
       const store = new ProcessRuntimeStore({ mainRoot: main, executionRoot: checkout, create: false });
-      const registry = store.read();
-      return json({ ...registry.toJSON(), executions: [...store.readArchives(), ...registry.executions] });
+      return store.readInventory();
     } catch (cause) {
       if (cause instanceof ProcessExecutionControlFailure) throw cause;
       fail("registry-failed", `Runtime inspection failed: ${cause.message}`, { cause });
@@ -468,8 +605,8 @@ export class ProcessExecutionRuntime {
         if (typeof value !== "string" || value === "") throw new TypeError("Retained checkout inspection requires exact run and spec identity");
       }
       const store = new ProcessRuntimeStore({ mainRoot, executionRoot, create: false, retainedClosed: true });
-      const registry = store.read();
-      const executions = [...store.readArchives(), ...registry.executions].sort((left, right) => left.ownerEpoch - right.ownerEpoch);
+      const registry = store.readInventory();
+      const executions = registry.executions;
       if (registry.slot !== null || executions.some((record) => record.status !== "closed")) {
         fail("stop-unconfirmed", "Retained checkout requires a closed inventory and every durable process stop receipt", { executionId: registry.slot });
       }
@@ -485,7 +622,7 @@ export class ProcessExecutionRuntime {
         if (assessment.status !== "stale") fail("identity-unknown", "Original checkout owner identity cannot be observed");
       }
       store.assertCommitted();
-      return json({ ...registry.toJSON(), executions });
+      return registry;
     } catch (cause) {
       if (cause instanceof ProcessExecutionControlFailure) throw cause;
       fail("registry-failed", `Retained checkout inspection failed: ${cause.message}`, { cause });

@@ -6,7 +6,6 @@ import { describe, it } from "node:test";
 
 import { WorkerArtifactHandoffCoordinator } from "../../../src/flow/lib/worker-artifact-handoff.js";
 import { FlowExecutionContract } from "../../../src/flow/lib/flow-execution-contract.js";
-import { executeManagedProcess } from "../../../src/lib/managed-process.js";
 import { readFlowProcessStops } from "../../../src/flow/lib/process-runtime-admission.js";
 import { FlowProcessStopEvidence, workerProcessStopIdentity } from "../../../src/flow/lib/process-runtime-evidence.js";
 import { workerArtifactStableStringify } from "../../../src/flow/lib/worker-artifact-input-format.js";
@@ -198,6 +197,7 @@ describe("Requirement Test durable save, rejection and recovery boundaries", { c
     let cleanups = 0;
     let interrupted = false;
     const scenario = await enter(t, "test-repair", {
+      realProviderTransport: true,
       reviewResponse: rejectFirstRequirementReviewBatches(TEST_REVIEW_REPAIR_BATCH_LIMITS.findingCount * 2 + 1),
       handoffCoordinator: new WorkerArtifactHandoffCoordinator({ faultInjector({ phase, stepId }) {
         if (stepId !== "test-repair" || phase !== "before-worker-handoff-cleanup-rename") return;
@@ -206,25 +206,24 @@ describe("Requirement Test durable save, rejection and recovery boundaries", { c
       } }),
     });
     const deliveredStops = [];
+    const call = scenario.agent.call.bind(scenario.agent);
     scenario.agent.call = async (prompt, options) => {
-      const response = await scenario.worker(prompt, options);
-      const result = await executeManagedProcess(process.execPath,
-        ["-e", `process.stdout.write(${JSON.stringify(response)})`], {
-          cwd: scenario.root, timeoutMs: 90000, graceMs: 100, maxBuffer: 4096,
-          processExecutionBinding: options.processExecutionBinding,
-          async onProcessExecutionStop(receipt) {
-            deliveredStops.push(new FlowProcessStopEvidence(receipt));
-            await options.onProcessExecutionStop(receipt);
-          },
-        });
-      assert.equal(result.code, 0);
-      return result.stdout;
+      return call(prompt, { ...options, timeoutMs: 90000,
+        async onProcessExecutionStop(receipt) {
+          deliveredStops.push(new FlowProcessStopEvidence(receipt));
+          await options.onProcessExecutionStop(receipt);
+        },
+      });
     };
     await scenario.dispatch();
     scenario.reload();
     const first = scenario.requests.findLast((request) => request.stepId === "test-repair");
     const result = await scenario.dispatch();
-    assert.equal(interrupted, true, "the second real nonfinal Store commit must reach cleanup");
+    assert.equal(interrupted, true, `the second real nonfinal Store commit must reach cleanup: ${JSON.stringify({
+      errors: result.errors, dispatch: result.dispatch,
+      generations: scenario.requests.filter((request) => request.stepId === "test-repair")
+        .map((request) => request.executionContract.generation),
+    })}`);
     assert.ok(JSON.stringify(result).includes(failure.message));
     scenario.reload();
     const second = scenario.requests.findLast((request) => request.stepId === "test-repair");

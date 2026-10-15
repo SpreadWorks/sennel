@@ -1620,7 +1620,7 @@ export class FlowArtifactRegistry {
 const FLOW_ARTIFACT_PLACEMENTS = new Map([
   ...["flow.state", "flow.activities", "spec.record", "issue.log", "artifact.catalog", "issue.snapshot"].map((key) => [key, new FlowArtifactPlacement("root-authority")]),
   ...["spec.snapshot", "spec.review"].map((key) => [key, new FlowArtifactPlacement("revision-authority")]),
-  ...["execution.contract", "prompt.execution.progress", "prompt.execution.event", "prompt.execution.budget", "report", "ideas", "tests.source", "test.requirement.failure", "test.requirement.candidate.bundle", "test.requirement.candidate.source", "test.requirement.support", "plugin.lifecycle.artifact", "retry.recovery.baseline", "retry.recovery.receipt", "plan.gate.repair.outcome", "spec.gate.repair.migration", "spec.gate.repair.progress", "spec.gate.repair.audit", "spec.gate.repair.source.blob", "spec.gate.repair.source.manifest", "source.handoff.rollback-blob", "source.handoff.checkpoint", "source.handoff.event", "source.handoff.settlement"].map((key) => [key, new FlowArtifactPlacement("independent-deliverable")]),
+  ...["execution.contract", "execution.request", "execution.recovery", "prompt.execution.progress", "prompt.execution.event", "prompt.execution.budget", "report", "ideas", "tests.source", "test.requirement.failure", "test.requirement.candidate.bundle", "test.requirement.candidate.source", "test.requirement.support", "plugin.lifecycle.artifact", "retry.recovery.baseline", "retry.recovery.receipt", "plan.gate.repair.outcome", "spec.gate.repair.migration", "spec.gate.repair.progress", "spec.gate.repair.audit", "spec.gate.repair.source.blob", "spec.gate.repair.source.manifest", "source.handoff.rollback-blob", "source.handoff.checkpoint", "source.handoff.event", "source.handoff.settlement"].map((key) => [key, new FlowArtifactPlacement("independent-deliverable")]),
   ...["upgrade.result", "completion.overrides", "retry.recovery", "flow.findings", "nonblocking.handoffs"].map((key) => [key, new FlowArtifactPlacement("step-shared")]),
   ...[
     "test.requirement.gate.raw-log", "test.execute.raw-log", "final.regression.raw-log",
@@ -1643,7 +1643,7 @@ const FLOW_ARTIFACT_PLACEMENTS = new Map([
 ]);
 
 const FLOW_ARTIFACT_MUTATION_POLICIES = new Map([
-  ...["execution.contract", "prompt.execution.event"].map((key) => [key, new FlowArtifactMutationPolicy("immutable")]),
+  ...["execution.contract", "execution.request", "execution.recovery", "prompt.execution.event"].map((key) => [key, new FlowArtifactMutationPolicy("immutable")]),
   ["task.review.reconciliation", new FlowArtifactMutationPolicy("immutable")],
   ["spec.snapshot", new FlowArtifactMutationPolicy("immutable")],
   ["review.evidence", new FlowArtifactMutationPolicy("immutable")],
@@ -1806,6 +1806,8 @@ export const FLOW_ARTIFACT_NO_ARTIFACT_STEPS = Object.freeze([
 
 const FLOW_ARTIFACT_CONTRACT_LIST = Object.freeze([
   contract("execution.contract", "artifacts/executions/:{episodeId}/:{generation}/contract.json", "execution-contract", "canonical-flow-artifacts", "system", own(FLOW_WIDE_RECORD_ACTORS, FLOW_WIDE_RECORD_ACTORS, FLOW_WIDE_RECORD_ACTORS), "permanent", "collection"),
+  contract("execution.recovery", "artifacts/executions/:{episodeId}/:{generation}/recovery.json", "execution-recovery", "canonical-flow-artifacts", "system", own(FLOW_WIDE_RECORD_ACTORS, FLOW_WIDE_RECORD_ACTORS, FLOW_WIDE_RECORD_ACTORS), "permanent", "collection"),
+  contract("execution.request", "artifacts/executions/:{episodeId}/:{generation}/request.json", "execution-request", "canonical-flow-artifacts", "system", own(FLOW_WIDE_RECORD_ACTORS, FLOW_WIDE_RECORD_ACTORS, FLOW_WIDE_RECORD_ACTORS), "permanent", "collection"),
   contract("prompt.execution.progress", "artifacts/executions/:{episodeId}/:{generation}/progress/:{scopeId}.json", "prompt-execution-progress", "canonical-flow-artifacts", "system", own(FLOW_WIDE_RECORD_ACTORS, FLOW_WIDE_RECORD_ACTORS, FLOW_WIDE_RECORD_ACTORS), "permanent", "collection"),
   contract("prompt.execution.event", "artifacts/executions/:{episodeId}/:{generation}/events/:{scopeId}/:{eventId}.json", "prompt-execution-event", "canonical-flow-artifacts", "system", own(FLOW_WIDE_RECORD_ACTORS, FLOW_WIDE_RECORD_ACTORS, FLOW_WIDE_RECORD_ACTORS), "permanent", "collection"),
   contract("prompt.execution.budget", "artifacts/execution-budgets/:{budgetId}.json", "prompt-execution-budget", "canonical-flow-artifacts", "system", own(FLOW_WIDE_RECORD_ACTORS, FLOW_WIDE_RECORD_ACTORS, FLOW_WIDE_RECORD_ACTORS), "permanent", "collection"),
@@ -2075,6 +2077,8 @@ const removeTarget = (logicalKey, legacyPaths = [], legacyPatterns = [], produce
 
 export const FLOW_ARTIFACT_SWITCH_TARGETS = Object.freeze([
   newTarget("execution.contract", "artifacts/executions/:{episodeId}/:{generation}/contract.json", "system", "system"),
+  newTarget("execution.recovery", "artifacts/executions/:{episodeId}/:{generation}/recovery.json", "system", "system"),
+  newTarget("execution.request", "artifacts/executions/:{episodeId}/:{generation}/request.json", "system", "system"),
   newTarget("prompt.execution.progress", "artifacts/executions/:{episodeId}/:{generation}/progress/:{scopeId}.json", "system", "system"),
   newTarget("prompt.execution.event", "artifacts/executions/:{episodeId}/:{generation}/events/:{scopeId}/:{eventId}.json", "system", "system"),
   newTarget("prompt.execution.budget", "artifacts/execution-budgets/:{budgetId}.json", "system", "system"),
@@ -2202,6 +2206,8 @@ const knownNew = (logicalKey, canonicalPath) => new FlowArtifactKnownFile({ logi
 
 export const FLOW_ARTIFACT_NORMAL_FLOW_FILES = Object.freeze([
   knownNew("execution.contract", "artifacts/executions/:{episodeId}/:{generation}/contract.json"),
+  knownNew("execution.recovery", "artifacts/executions/:{episodeId}/:{generation}/recovery.json"),
+  knownNew("execution.request", "artifacts/executions/:{episodeId}/:{generation}/request.json"),
   knownNew("prompt.execution.progress", "artifacts/executions/:{episodeId}/:{generation}/progress/:{scopeId}.json"),
   knownNew("prompt.execution.event", "artifacts/executions/:{episodeId}/:{generation}/events/:{scopeId}/:{eventId}.json"),
   knownNew("prompt.execution.budget", "artifacts/execution-budgets/:{budgetId}.json"),

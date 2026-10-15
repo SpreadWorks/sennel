@@ -1,7 +1,7 @@
 import { CURRENT_FLOW_SCHEMA_REVISION } from "../../lib/flow-schema-revision.js";
 import crypto from "node:crypto";
 
-import { CanonicalTestArtifactStore } from "./canonical-test-artifacts.js";
+import { CanonicalTestAttemptArtifact } from "./canonical-test-artifacts.js";
 import { RequirementTestCandidateBundle } from "./requirement-test-artifacts.js";
 import { RequirementTestSourceAttempt } from "./requirement-test-lifecycle.js";
 import { RequirementTestArtifactStore } from "./requirement-test-store.js";
@@ -742,8 +742,7 @@ function repairFromCatalog({ flowManager, state, consumerNodeId, reviewAttemptSe
   let sourceArtifact = "requirement-test-review.json";
   let reviewMatches = false;
   if (reviewSource !== null) {
-    const store = new CanonicalTestArtifactStore({ flowManager, state });
-    current = store.readCurrentAttempt({ logicalKey: "test.requirement.review", consumerNodeId });
+    current = new CanonicalTestAttemptArtifact({ logicalKey: "test.requirement.review", resolved: reviewSource });
     if (reviewAttemptSequence !== null && current.attempt < reviewAttemptSequence) return null;
     if (reviewAttemptSequence !== null && current.attempt > reviewAttemptSequence) {
       throw new TestReviewRepairError(

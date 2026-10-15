@@ -1,4 +1,5 @@
 import { FlowExecutionCommand } from "./lib/flow-execution-command.js";
+import { ArtifactWorkerRecoverySelection } from "./lib/artifact-worker-recovery-selection.js";
 import { SpecGateRepairRecoveryEvidence } from "./lib/spec-gate-repair-recovery.js";
 export { resolveSpecGateRepairRecovery } from "./lib/spec-gate-repair-recovery.js";
 import { RetroConnector } from "./engine/connectors/acceptance/retro-connector.js";
@@ -43,6 +44,10 @@ export { resolveDraftWorkerCorrection } from "./lib/draft-worker-rejection.js";
 export { resolveDraftWorkerExecutionContinuation, DraftWorkerExecutionContinuationFacts,
   DraftWorkerNewExecution, DraftWorkerSealedReplay, DraftWorkerPublicationReplay,
   DraftWorkerExecutionStop } from "./lib/draft-worker-execution-continuation.js";
+export { ArtifactWorkerExecutionContinuationFacts, ArtifactWorkerNewExecution,
+  ArtifactWorkerSealedReplay, ArtifactWorkerPublicationReplay, ArtifactWorkerRecoveryRequired,
+  ArtifactWorkerRecoveryAuthorized, ArtifactWorkerExecutionStop, resolveArtifactWorkerExecutionContinuation,
+} from "./lib/artifact-worker-execution-continuation.js";
 export { resolveDraftWorkerRecovery, DraftWorkerRecoveryRefusal } from "./lib/draft-worker-recovery.js";
 export { resolveDraftExecutionRecovery, DraftExecutionRecoveryFacts,
   DraftStepErrorRecoveryDecision, DraftStepErrorRecoveryReceipt } from "./lib/draft-worker-recovery.js";
@@ -4182,6 +4187,25 @@ export class DraftExecutionSettlement extends StepSettlement {
 
   toJSON() { return { kind: this.kind, sourceStepId: this.sourceStepId,
     ...(this.requirementTestDecision === null ? {} : { requirementTestDecision: this.requirementTestDecision.toJSON() }) }; }
+}
+
+/** Replacement authority continues the same Step and never activates a target. */
+export class ArtifactWorkerRecoverySettlement extends StepSettlement {
+  constructor(token, result) {
+    super(token, result, "execution-recovery");
+    this.previewDigest = result.evidence.previewDigest;
+    Object.freeze(this);
+  }
+  toJSON() { return { kind: this.kind, sourceStepId: this.sourceStepId, previewDigest: this.previewDigest }; }
+}
+
+export function settleArtifactWorkerRecoveryResult(stepId, result) {
+  if (!(result instanceof StepResult) || result.stepId !== stepId
+    || result.kind !== `${stepId}-execution-recovery-required`
+    || !(result.evidence instanceof ArtifactWorkerRecoverySelection)) {
+    throw new TypeError("Artifact recovery requires its concrete registered Step Result");
+  }
+  return new ArtifactWorkerRecoverySettlement(STEP_SETTLEMENT_TOKEN, result);
 }
 
 export class SpecGateAwaitDecision extends StepSettlement {

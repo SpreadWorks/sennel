@@ -1,5 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
-import { ProcessExecutionStopReceipt, ProcessExecutionControlFailure } from "./process-execution-values.js";
+import { createHash } from "node:crypto";
+import { ProcessExecutionStopReceipt, ProcessExecutionControlFailure, ProcessExecutionRecoveryCall,
+  ProcessExecutionNonExecutionEvidence, executionValueDigest as processEvidenceDigest } from "./process-execution-values.js";
 import { AgentTransportFailureObservation } from "./agent-transport-failure-observation.js";
 
 function text(value, field) {
@@ -136,6 +138,81 @@ export class PromptProcessStopObservation {
   }
 }
 
+/** Durable proof that one existing provider reservation has never received start permission. */
+export class PromptExecutionReservationContinuation {
+  constructor({ authorizationId, executionContractId, previousClaim, physicalEvidence, calls, consumedClaim = null, history = [] }) {
+    this.authorizationId = text(authorizationId, "Prompt reservation authorization");
+    this.executionContractId = text(executionContractId, "Prompt reservation execution contract");
+    const identity = PromptProviderProcessIdentity.fromJSON(previousClaim.processIdentity);
+    identity.assertClaim(previousClaim);
+    const { id, digest, ...summary } = physicalEvidence;
+    if (id !== digest || digest !== processEvidenceDigest(summary)
+      || summary.binding?.executionContractId !== executionContractId) throw new TypeError("Prompt reservation proof differs from its canonical execution");
+    const restored = calls.map((call) => new ProcessExecutionRecoveryCall(call));
+    if (!isDeepStrictEqual(restored.map((call) => call.toJSON()), summary.calls)
+      || !isDeepStrictEqual(summary.invocation, { providerAttemptId: identity.providerAttemptId, logicalInvocationId: identity.logicalInvocationId })
+      || restored.some((call) => call.startPermitted || call.invocation?.providerAttemptId !== identity.providerAttemptId
+        || call.invocation?.logicalInvocationId !== identity.logicalInvocationId)) {
+      throw new TypeError("Prompt reservation proof does not demonstrate an unstarted provider invocation");
+    }
+    if (restored.length === 0) {
+      if (summary.nonExecution === null) throw new TypeError("Prompt reservation has no non-execution proof");
+      const absence = ProcessExecutionNonExecutionEvidence.fromStored(summary.nonExecution);
+      if (!isDeepStrictEqual(absence.invocation.toJSON(), summary.invocation)
+        || !isDeepStrictEqual(absence.binding.toJSON(), summary.binding)
+        || !isDeepStrictEqual(absence.checkoutIdentity.toJSON(), summary.checkoutIdentity)
+        || absence.inventoryDigest !== summary.inventoryDigest || absence.ownerEpoch !== summary.ownerEpoch) {
+        throw new TypeError("Prompt reservation non-execution proof differs from its inventory");
+      }
+    } else if (summary.nonExecution !== null) throw new TypeError("Prompt reservation has contradictory physical evidence");
+    if (consumedClaim !== null) {
+      const replacement = PromptProviderProcessIdentity.fromJSON(consumedClaim.processIdentity);
+      replacement.assertClaim(consumedClaim);
+      if (["responseCallIndex", "transportOrdinal", "attempt", "maxAttempts", "requestDigest", "schemaDigest", "providerKey", "profileKey"]
+        .some((key) => previousClaim[key] !== consumedClaim[key])
+        || replacement.providerAttemptId === identity.providerAttemptId) throw new TypeError("Prompt reservation continuation changed its reserved call or reused its physical attempt");
+    }
+    if (!Array.isArray(history)) throw new TypeError("Prompt reservation history must be an ordered claim lineage");
+    const previous = history.map((entry) => {
+      fields(entry, ["previousClaim", "physicalEvidence", "calls", "consumedClaim"], "Prompt reservation history entry");
+      return new PromptExecutionReservationContinuation({ authorizationId, executionContractId, ...entry });
+    });
+    for (const [index, entry] of previous.entries()) {
+      if (entry.pending || entry.history.length !== 0 || !isDeepStrictEqual(entry.consumedClaim,
+        previous[index + 1]?.previousClaim ?? previousClaim)) throw new TypeError("Prompt reservation history is not a contiguous unused-claim lineage");
+    }
+    this.previousClaim = freeze(previousClaim);
+    this.physicalEvidence = freeze(physicalEvidence);
+    this.calls = freeze(calls);
+    this.consumedClaim = consumedClaim === null ? null : freeze(consumedClaim);
+    this.history = freeze(history);
+    Object.freeze(this);
+  }
+  get pending() { return this.consumedClaim === null; }
+  get id() {
+    const { consumedClaim, ...identity } = this.toJSON();
+    return createHash("sha256").update(JSON.stringify(identity)).digest("hex");
+  }
+  consume(claim) {
+    if (!this.pending) throw new PromptExecutionJournalError("PROMPT_EXECUTION_UNCERTAIN", "Prompt reservation continuation is already consumed");
+    return new PromptExecutionReservationContinuation({ ...this.toJSON(), consumedClaim: claim });
+  }
+  reconcile({ physicalEvidence, calls }) {
+    if (this.pending) throw new PromptExecutionJournalError("PROMPT_EXECUTION_UNCERTAIN", "Prompt reservation already has an unused continuation");
+    const { authorizationId, executionContractId, history, ...previous } = this.toJSON();
+    return new PromptExecutionReservationContinuation({ authorizationId, executionContractId,
+      previousClaim: this.consumedClaim, physicalEvidence, calls, history: [...history, previous] });
+  }
+  toJSON() { return { authorizationId: this.authorizationId, executionContractId: this.executionContractId,
+    previousClaim: this.previousClaim, physicalEvidence: this.physicalEvidence, calls: this.calls,
+    consumedClaim: this.consumedClaim, history: this.history }; }
+  static fromJSON(value) {
+    const restored = new this(value);
+    if (!isDeepStrictEqual(restored.toJSON(), value)) throw new TypeError("Prompt reservation continuation has unknown fields");
+    return restored;
+  }
+}
+
 /** Immutable identity of the entire plan, including ordered input coverage. */
 export class PromptExecutionPlanIdentity {
   constructor(value) {
@@ -189,7 +266,9 @@ export class PromptExecutionJournalSnapshot {
       integer(group.responseCallCount, "Prompt group response call count");
     }
     for (const [index, batch] of batches.entries()) {
-      fields(batch, ["batchDigest", "batchCalls", "transportOrdinal", "claim", "responses", "transportFailures", "completion", ...(Object.hasOwn(batch, "processStops") ? ["processStops"] : [])], "Prompt execution batch frontier");
+      fields(batch, ["batchDigest", "batchCalls", "transportOrdinal", "claim", "responses", "transportFailures", "completion",
+        ...(Object.hasOwn(batch, "processStops") ? ["processStops"] : []),
+        ...(Object.hasOwn(batch, "reservationContinuation") ? ["reservationContinuation"] : [])], "Prompt execution batch frontier");
       if (batch.batchDigest !== plan.batches[index].digest) throw new TypeError("Prompt execution frontier order or digest is invalid");
       integer(batch.batchCalls, "Prompt batch calls");
       integer(batch.transportOrdinal, "Prompt transport ordinal");
@@ -243,6 +322,15 @@ export class PromptExecutionJournalSnapshot {
         identity.assertClaim(batch.claim);
         if (identity.batchDigest !== batch.batchDigest || !isDeepStrictEqual(identity.scope.toJSON(), scope.toJSON())) throw new TypeError("Prompt physical claim belongs to another batch or scope");
       }
+      if (batch.reservationContinuation !== undefined) {
+        const continuation = PromptExecutionReservationContinuation.fromJSON(batch.reservationContinuation);
+        const identity = PromptProviderProcessIdentity.fromJSON(continuation.previousClaim.processIdentity);
+        if (identity.batchDigest !== batch.batchDigest || !isDeepStrictEqual(identity.scope.toJSON(), scope.toJSON())
+          || identity.transportOrdinal > batch.transportOrdinal || identity.responseCallIndex >= batch.batchCalls
+          || batch.claim !== null && (continuation.pending || batch.claim.transportOrdinal === continuation.consumedClaim.transportOrdinal)
+            && !isDeepStrictEqual(batch.claim, continuation.pending ? continuation.previousClaim : continuation.consumedClaim)
+          || continuation.pending && batch.claim === null) throw new TypeError("Prompt reservation continuation differs from its batch claim");
+      }
       if (Object.hasOwn(batch, "processStops")) {
         if (!Array.isArray(batch.processStops) || batch.processStops.length === 0) throw new TypeError("Prompt stop observations are invalid");
         const stoppedCalls = new Set();
@@ -291,7 +379,7 @@ export class PromptExecutionJournalSnapshot {
 
 export class PromptExecutionJournalRecord {
   constructor({ event, snapshot }) {
-    if (!["planned", "claimed", "process-stopped", "transport-failed", "response", "validated"].includes(event)
+    if (!["planned", "claimed", "reservation-reconciled", "reservation-consumed", "process-stopped", "transport-failed", "response", "validated"].includes(event)
       || !(snapshot instanceof PromptExecutionJournalSnapshot)) throw new TypeError("Prompt execution record is invalid");
     this.event = event;
     this.scope = snapshot.scope;
@@ -326,9 +414,12 @@ export class PromptExecutionJournal {
 
   get snapshot() { return this.#snapshot; }
 
-  assertResumable(plan, synthesisCallCount = 0) {
+  assertResumable(plan, synthesisCallCount = 0, reservationContinuation = null) {
     this.#snapshot?.plan.assertPlan(plan, synthesisCallCount);
-    if (this.#snapshot?.batches.some((batch) => batch.claim !== null)) {
+    const unresolved = this.#snapshot?.batches.filter((batch) => batch.claim !== null) ?? [];
+    if (unresolved.length > 0 && !(reservationContinuation instanceof PromptExecutionReservationContinuation
+      && reservationContinuation.pending && unresolved.length === 1
+      && isDeepStrictEqual(unresolved[0].reservationContinuation, reservationContinuation.toJSON()))) {
       throw new PromptExecutionJournalError("PROMPT_EXECUTION_UNCERTAIN", "Saved provider claim has no durable response or failure observation");
     }
   }

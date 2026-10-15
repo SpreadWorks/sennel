@@ -324,6 +324,18 @@ export class CanonicalSpecTestSource {
   get source() { return this.bytes.toString("utf8"); }
 }
 
+/** The current command result decoded from one already authenticated artifact. */
+export class CanonicalTestAttemptArtifact {
+  constructor({ logicalKey, resolved }) {
+    const history = CanonicalCommandAttemptArtifactHistory.fromBytes({ logicalKey, bytes: resolved.bytes });
+    this.attempt = history.current.attempt;
+    this.payload = history.current.payload;
+    this.relativePath = resolved.relativePath;
+    this.descriptor = resolved.descriptor;
+    Object.freeze(this);
+  }
+}
+
 /**
  * A deep command-facing adapter over FlowManager's Version-1 Store surface.
  * It does not have a legacy mode; callers choose it only after the normal
@@ -365,13 +377,7 @@ export class CanonicalTestArtifactStore {
       optional,
     });
     if (resolved === null) return null;
-    const history = CanonicalCommandAttemptArtifactHistory.fromBytes({ logicalKey, bytes: resolved.bytes });
-    return Object.freeze({
-      attempt: history.current.attempt,
-      payload: history.current.payload,
-      relativePath: resolved.relativePath,
-      descriptor: resolved.descriptor,
-    });
+    return new CanonicalTestAttemptArtifact({ logicalKey, resolved });
   }
 
   /** Resolve every cataloged spec-local test source for one authorized reader. */

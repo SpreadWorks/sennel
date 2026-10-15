@@ -1,4 +1,5 @@
 import { RetroResultEvidence } from "../lib/retro-values.js";
+import { ArtifactWorkerRecoverySelection } from "../lib/artifact-worker-recovery-selection.js";
 import { AcceptanceReviewResultEvidence, AcceptanceDecisionResultEvidence, AcceptanceExecutionContinuationEvidence } from "../steps/acceptance/acceptance-review-values.js";
 import { FinalRegressionResultEvidence } from "../steps/acceptance/final-regression-result-evidence.js";
 import { ReportResultEvidence } from "../steps/acceptance/report-values.js";
@@ -926,6 +927,27 @@ export const FinalizeCleanupExecutionRequiredResult = operandResultClass("Finali
 export const FinalizeCleanupCompletedResult = resultClass("FinalizeCleanupCompletedResult", { stepId: "finalize-cleanup", kind: "finalize-cleanup-completed", type: "completed", finalization: true });
 export const FinalizeCleanupCompletedWithWarningResult = resultClass("FinalizeCleanupCompletedWithWarningResult", { stepId: "finalize-cleanup", kind: "finalize-cleanup-completed-with-warning", type: "completed", finalization: true });
 
+// Each existing artifact producer retains a concrete Result schema in the sole
+// Result registry. Bounded Gate repair keeps its dedicated execution contract.
+for (const stepId of ["draft", "draft-questions-triage", "draft-questions-repair", "draft-refine",
+  "draft-gate-repair", "draft-coverage-triage", "draft-coverage-repair", "spec", "spec-triage",
+  "spec-repair", "test-generate", "test-repair"]) {
+  operandResultClass("ArtifactWorkerRecoveryRequiredResult", {
+    stepId, kind: `${stepId}-execution-recovery-required`, type: STEP_RESULT_TYPE.LOOP_REQUIRED,
+  }, { evidence: ArtifactWorkerRecoverySelection }, null, (definition, values) => {
+    if (values.evidence.stepId !== definition.stepId) {
+      throw new TypeError("Artifact recovery Result belongs to another producer");
+    }
+  });
+}
+
+export function artifactWorkerRecoveryResult(stepId, evidence) {
+  const definition = (registryByStep.get(stepId) ?? [])
+    .find((entry) => entry.kind === `${stepId}-execution-recovery-required`);
+  if (definition === undefined) throw new TypeError("Step has no common artifact recovery contract");
+  return new definition.ResultClass({ evidence });
+}
+
 const errorDefinitionByStep = new Map([...registryByStep.keys()].map((stepId) => {
   const operands = stepId === "approval"
     ? { evidence: ApprovalResultEvidence }
@@ -970,6 +992,8 @@ for (const definition of errorDefinitionByStep.values()) {
 }
 
 export const STEP_RESULT_REGISTRY = Object.freeze([...registryByKind.values()]);
+export const ARTIFACT_WORKER_RECOVERY_RESULT_DEFINITIONS = Object.freeze(STEP_RESULT_REGISTRY
+  .filter((definition) => definition.kind === `${definition.stepId}-execution-recovery-required`));
 
 export function rehydrateStepResult(stepId, value) {
   requireRegisteredStepId(stepId);

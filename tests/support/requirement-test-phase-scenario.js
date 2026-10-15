@@ -6,6 +6,7 @@ import { performance } from "node:perf_hooks";
 import { runCmd } from "../../src/lib/process.js";
 import { installReviewProcessFake } from "./infrastructure/review-process-fake.js";
 import { FlowManager } from "../../src/lib/flow-manager.js";
+import { container as runtimeContainer } from "../../src/lib/container.js";
 import { FlowTargetBinding } from "../../src/lib/flow-target-guard.js";
 import { FLOW_ARTIFACT_CONTRACTS } from "../../src/lib/flow-artifact-contract.js";
 import RunDispatchCommand from "../../src/flow/lib/run-dispatch.js";
@@ -91,7 +92,6 @@ export class RequirementTestPhaseScenario {
     this.resultEvidence = new Map();
     this.seedClone = options.seedRoot ? new SeedWorkRoot(options.seedRoot, { prefix: "sennel-acceptance-phase-" }) : null;
     this.root = this.seedClone?.root ?? options.prepared?.executionRoot ?? fixtureRepository("requirement-test-phase-");
-    this.agent = { call: (prompt, options) => this.worker(prompt, options) };
   }
 
   initialize() {
@@ -118,6 +118,7 @@ export class RequirementTestPhaseScenario {
       issueSnapshot: this.options.issueSnapshot ?? null,
     }).create().registerActive().activate(this.options.entryStep ?? "spec");
     this.gateProvider = installGateProviderFake((prompt, options) => {
+      if (options.executionEnvironment?.SENNEL_FLOW_HANDOFF_REQUEST) return this.worker(prompt, options);
       const selected = this.options.gateResponse?.(prompt, options, this);
       if (selected !== null && selected !== undefined) return selected;
       return passingGateProviderResponse(prompt, options);
@@ -126,6 +127,7 @@ export class RequirementTestPhaseScenario {
         transportContext: () => ({ root: this.root, flowManager: this.manager }),
       } : {}),
     });
+    this.agent = runtimeContainer.get("agent");
     this.reviewProcess = installReviewProcessFake((command, args, options) => this.runReviewProcess(command, args, options));
   }
 

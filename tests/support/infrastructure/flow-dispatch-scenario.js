@@ -160,25 +160,44 @@ export function installGateProviderFake(respond, {
       if (projectInvocation !== null) agent.projectInvocation = projectInvocation;
       return agent;
     }
-    return {
-      resolve() { return { providerKey: "fixture", profileKey: "fixture" }; },
-      ...(declaredLimit === null ? {} : { promptCharacterLimit: declaredLimit }),
-      ...(projectInvocation === null ? {} : { projectInvocation }),
-      async call(prompt, options) {
-        const admission = options.providerCallAdmission;
-        admission?.claim();
-        try {
-          await admission?.beforeProviderAttempt({
-            attempt: 1, index: 0, maxAttempts: 1,
-            providerKey: "fixture", profileKey: "fixture",
-          });
-          return await respond(prompt, options);
-        } finally {
-          admission?.settle();
-        }
-      },
-    };
+    return createScenarioProviderFake(respond, { projectInvocation, promptCharacterLimit: declaredLimit });
   });
+}
+
+/** A provider boundary that participates in the canonical Prompt reservation. */
+export function createScenarioProviderFake(respond, { projectInvocation = null, promptCharacterLimit = null } = {}) {
+  return {
+    resolve() { return { providerKey: "fixture", profileKey: "fixture" }; },
+    ...(promptCharacterLimit === null ? {} : { promptCharacterLimit }),
+    ...(projectInvocation === null ? {} : { projectInvocation }),
+    async call(prompt, options) {
+      const admission = options.providerCallAdmission;
+      admission?.claim();
+      try {
+        await admission?.beforeProviderAttempt({
+          attempt: 1, index: 0, maxAttempts: 1,
+          providerKey: "fixture", profileKey: "fixture",
+        });
+        return await respond(prompt, options);
+      } finally {
+        admission?.settle();
+      }
+    },
+  };
+}
+
+/** Adapt an imperative fixture worker while preserving its preflight methods.
+ * A worker that writes files and exits without a report has empty stdout. */
+const admittedScenarioProviders = new WeakSet();
+export function withScenarioProviderAdmission(agent) {
+  if (admittedScenarioProviders.has(agent)) return agent;
+  const worker = agent.call.bind(agent);
+  agent.call = createScenarioProviderFake(async (prompt, options) => {
+    const response = await worker(prompt, options);
+    return response === undefined ? "" : response;
+  }).call;
+  admittedScenarioProviders.add(agent);
+  return agent;
 }
 
 /** Keep Agent's invocation, admission, cache and retry pipeline. Durable managed
