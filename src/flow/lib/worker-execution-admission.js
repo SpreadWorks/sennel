@@ -1,3 +1,4 @@
+import { FlowExecutionCommand } from "./flow-execution-command.js";
 export { workerStepExecutionContract } from "./worker-step-execution-contract.js";
 import { TaskStepIdentity } from "./task-step-identity.js";
 import { deriveNextAction, resolveDraftWorkerCorrection, resolveDraftWorkerRecovery,
@@ -9,7 +10,7 @@ import { isConditionalDraftWorkerStep } from "./draft-conditional-worker.js";
 import { NextActionPlanError } from "./next-action-plan-error.js";
 import { NextActionDirectiveResolver, ExecuteStepDirective, ExecuteCommandDirective,
   BlockedDirective, AwaitDraftQuestionDirective } from "./next-action-directive.js";
-import { guardedCommand } from "./guarded-command.js";
+import { guardedExecutionCommand } from "./guarded-command.js";
 import { WorkerArtifactHandoffError } from "./worker-artifact-handoff-error.js";
 import { WorkerArtifactHandoffCoordinator } from "./worker-artifact-handoff.js";
 
@@ -84,7 +85,7 @@ export function projectWorkerExecutionAdmission(selection, { binding = null,
   });
   if (recovery !== null) return new ExecuteCommandDirective({
     actionId: "RECOVER_DRAFT_EXECUTION",
-    nextAction: guardedCommand("sennel flow run recover-draft-execution", state, binding),
+    command: guardedExecutionCommand(new FlowExecutionCommand({ group: "run", subcommand: "recover-draft-execution" }), state, binding),
     instruction: `Verify inputs and recover the retained legacy ${recovery.stepId} checkpoint before resuming dispatch.`,
     reason: "Definition selected the retained unpublished worker claim and its checkpoint on this Attempt.",
   });
@@ -221,7 +222,7 @@ function conditionalWorkerDirective(disposition, { state, binding }) {
     actionId: disposition.operation === "skip-worker"
       ? "SKIP_CONDITIONAL_WORKER"
       : "COMPLETE_CONDITIONAL_WORKER",
-    nextAction: guardedCommand("sennel flow run claim-next-action", state, binding),
+    command: guardedExecutionCommand(new FlowExecutionCommand({ group: "run", subcommand: "claim-next-action" }), state, binding),
     instruction: disposition.operation === "skip-worker"
       ? `Settle ${disposition.stepId} as skipped without starting its worker.`
       : `Settle ${disposition.stepId} from its canonical completed input.`,

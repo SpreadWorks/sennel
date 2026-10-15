@@ -6,7 +6,7 @@ import {
   FlowTargetBinding,
   FlowTargetExpectation,
 } from "../../lib/flow-target-guard.js";
-import { NextActionDirective } from "./next-action-directive.js";
+import { ExecuteCommandDirective, NextActionDirective } from "./next-action-directive.js";
 
 const DISPATCH_INVOCATION_VERSION = 1;
 const APPROVAL_RECEIPT_VERSION = 1;
@@ -157,11 +157,12 @@ export class FlowDispatchSession {
     Object.freeze(this);
   }
 
-  captureAction(nextAction, repositoryFingerprint) {
+  captureAction(nextAction, repositoryFingerprint, canonicalRevision = null) {
     return new FlowDispatchActionIdentity({
       session: this,
       nextAction,
       repositoryFingerprint,
+      canonicalRevision,
     });
   }
 
@@ -190,7 +191,9 @@ function directiveProgressIdentity(nextAction) {
     action: directive.action ?? null,
     evidenceKind: directive.evidenceKind ?? null,
     phase: directive.phase ?? null,
-    nextAction: directive.nextAction ?? directive.continuation?.nextAction ?? null,
+    command: directive instanceof ExecuteCommandDirective ? directive.command.toJSON() : null,
+    nextAction: directive instanceof ExecuteCommandDirective ? null
+      : directive.nextAction ?? directive.continuation?.nextAction ?? null,
   };
 }
 
@@ -206,7 +209,7 @@ function actionProgressIdentity(target, nextAction) {
 }
 
 export class FlowDispatchActionIdentity {
-  constructor({ session, nextAction, repositoryFingerprint }) {
+  constructor({ session, nextAction, repositoryFingerprint, canonicalRevision = null }) {
     if (!(session instanceof FlowDispatchSession)) {
       throw new Error("FlowDispatchActionIdentity requires a FlowDispatchSession");
     }
@@ -218,13 +221,17 @@ export class FlowDispatchActionIdentity {
       "FlowDispatchActionIdentity repositoryFingerprint",
     );
     this.session = session;
+    this.canonicalRevision = canonicalRevision === null ? null
+      : requireString(canonicalRevision, "FlowDispatchActionIdentity canonicalRevision");
     this.target = session.target;
     this.nextAction = nextAction;
+    this.directive = NextActionDirective.fromStored(nextAction.directive);
     this.digest = flowDispatchDigest(stableStringify({
       targetDigest: this.target.digest,
       runId: this.target.runId,
       nextAction,
       repositoryFingerprint: this.repositoryFingerprint,
+      canonicalRevision: this.canonicalRevision,
     }));
     this.canonicalActionDigest = flowDispatchDigest(stableStringify(
       actionProgressIdentity(this.target, nextAction),
@@ -265,6 +272,7 @@ export class FlowDispatchActionIdentity {
       progressDigest: this.progressDigest,
       repositoryFingerprint: this.repositoryFingerprint,
       taskId: this.nextAction.taskId ?? null,
+      canonicalRevision: this.canonicalRevision,
       step: this.nextAction.step ?? null,
       action: this.nextAction.action ?? null,
       directive,
@@ -568,6 +576,19 @@ export class FlowDispatchInvocation {
         expectedAction: this.action,
         activeAction,
       });
+    }
+    return this;
+  }
+
+  assertCommandSelection(directive) {
+    const selected = this.action.directive;
+    if (!(directive instanceof ExecuteCommandDirective)
+      || !(selected instanceof ExecuteCommandDirective)
+      || selected.actionId !== directive.actionId
+      || stableStringify(selected.command.toJSON()) !== stableStringify(directive.command.toJSON())) {
+      const error = new Error("Flow dispatch command differs from its canonical invocation selection");
+      error.code = "FLOW_DISPATCH_INVOCATION_STALE";
+      throw error;
     }
     return this;
   }

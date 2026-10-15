@@ -478,8 +478,8 @@ export class CanonicalDraftReviewObservation {
     return this;
   }
 
-  /** Reconstruct only the normal Draft Review execution-publication intent. */
-  settlementPublication(record) {
+  /** Restore the normal producer's complete command publication intent. */
+  commandResult(record) {
     if (!(record instanceof CanonicalCommandAttemptArtifactRecord)
       || record.nodeId !== this.route.reviewStepId
       || !isDeepStrictEqual(record.artifact.toJSON(), this.#artifact.toJSON())) {
@@ -492,6 +492,12 @@ export class CanonicalDraftReviewObservation {
     attachCanonicalCommandResultPublications(commandResult, canonicalReviewEvidencePublications({
       evidence: this.evidence, nodeId: this.route.reviewStepId,
     }));
+    return commandResult;
+  }
+
+  /** Reconstruct only the normal Draft Review execution-publication intent. */
+  settlementPublication(record) {
+    const commandResult = this.commandResult(record);
     // DraftReviewSettlementWriter supplies none of these additional effects
     // for an execution publication. This contract excludes terminal connector
     // publication and any other producer whose intent has not been retained.

@@ -326,14 +326,16 @@ export class FlowTargetBinding {
     return Buffer.from(JSON.stringify(this.toJSON()), "utf8").toString("base64url");
   }
 
+  guardArguments() {
+    return ["--expect-binding", this.serialize(), ...(this.issue == null ? ["--expect-no-issue"] : [])];
+  }
+
   guardCommand(command) {
     if (typeof command !== "string" || command.trim() === "") {
       throw new Error("FlowTargetBinding guarded command is required");
     }
-    const issueGuard = this.issue == null
-      ? " --expect-no-issue"
-      : "";
-    return `${command.trim()} --expect-binding '${this.serialize()}'${issueGuard}`;
+    const [option, token, ...flags] = this.guardArguments();
+    return `${command.trim()} ${option} '${token}'${flags.length ? ` ${flags.join(" ")}` : ""}`;
   }
 
   mismatchAgainst(input) {

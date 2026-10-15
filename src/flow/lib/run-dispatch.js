@@ -42,6 +42,8 @@ import { Agent } from "../../lib/agent.js";
 import { DeferredAgentInvocationMetric } from "../../lib/agent-invocation-metric.js";
 import { flowCommands } from "../../lib/command-registry.js";
 import { dispatch } from "../../lib/dispatcher.js";
+import { FlowExecutionCommand } from "./flow-execution-command.js";
+import { guardedExecutionCommand } from "./guarded-command.js";
 import { FlowHandoffAuthorityLease } from "../../lib/flow-handoff-authority-lease.js";
 import {
   AbortedDirective,
@@ -86,7 +88,6 @@ import {
   FlowDispatchSession,
   FlowDispatchTarget,
   UnapprovedFlowDispatchAuthorization,
-  flowDispatchDigest,
   FLOW_DISPATCH_INVOCATION_ENV,
 } from "./dispatch-invocation.js";
 import { buildFlowCommandHookContext } from "./flow-context.js";
@@ -95,6 +96,7 @@ import {
   DraftConditionalWorkerExecutionBinding,
   DraftWorkerExecutionBinding,
   DraftWorkerExecutionClaim,
+  DraftStepSettlementReceipt,
   resolveDefinitionRoute,
   resolveDraftWorkerCorrection,
   resolveDispatcherOwnedFlowAction,
@@ -157,15 +159,6 @@ const RESUMABLE_DISPATCH_BOUNDARIES = new Set([
 ]);
 const DISPATCHER_OWNED_REPAIR_COMMANDS = new Set([
   "repair-plan-gate",
-]);
-const DISPATCHER_OWNED_RECOVERY_COMMANDS = new Set([
-  "claim-next-action",
-  "recover-finalization",
-  "recover-missing-producer-artifact",
-  "recover-task-execution-overrun",
-  "settle-gate-transition",
-  "settle-review-transition",
-  "gate",
 ]);
 const NON_REPLAYABLE_HANDOFF_ERROR_CODES = new Set([
   "FLOW_ARTIFACT_HANDOFF_AUTHORITY_VIOLATION",
@@ -439,7 +432,7 @@ function settleSpecWorkerFailure(ctx, attempt, error, expectedState, invocation,
  * Version Store.
  */
 export class DispatcherOwnedFlowCommand {
-  constructor(nextAction) {
+  constructor(nextAction, state = null, binding = null) {
     if (!nextAction || typeof nextAction !== "object" || Array.isArray(nextAction)) {
       throw new Error("dispatcher-owned command requires a next-action object");
     }
@@ -451,41 +444,23 @@ export class DispatcherOwnedFlowCommand {
     if (nextAction.action !== definition.action) {
       throw new Error(`dispatcher-owned command action mismatch for ${scope}.${nextAction.step}`);
     }
-    this.command = definition.executionCommand;
+    this.command = state === null ? definition.executionCommand
+      : guardedExecutionCommand(definition.executionCommand, state, binding);
     this.commandName = this.command.subcommand;
     Object.freeze(this);
   }
 
-  static forAction(action) {
+  static forAction(action, ctx, target) {
     if (!(action?.directive instanceof ExecuteStepDirective)) return null;
     const scope = action.nextAction.taskId == null ? "flow" : "task";
     return resolveDispatcherOwnedFlowAction({ scope, stepId: action.nextAction.step }) === null
       ? null
-      : new DispatcherOwnedFlowCommand(action.nextAction);
-  }
-
-  argv(target, agentWorkDir = null) {
-    return [
-      ...this.command.runArguments().slice(1),
-      ...(agentWorkDir ? ["--agent-work-dir", agentWorkDir] : []),
-      ...targetGuardArguments(target),
-    ];
+      : new DispatcherOwnedFlowCommand(action.nextAction, readFlowState(ctx), target.binding);
   }
 
   get removesExecutionRoot() {
     return this.commandName === "finalize-cleanup";
   }
-}
-
-function targetGuardArguments(target) {
-  const input = target.guardInput();
-  const args = [];
-  if (input.expectBinding) return ["--expect-binding", input.expectBinding];
-  if (input.expectRunId) args.push("--expect-run-id", input.expectRunId);
-  if (input.expectSpec) args.push("--expect-spec", input.expectSpec);
-  if (input.expectIssue != null) args.push("--expect-issue", String(input.expectIssue));
-  if (input.expectNoIssue === true) args.push("--expect-no-issue");
-  return args;
 }
 
 function commandEnvelope(output, commandName, exitCode) {
@@ -519,8 +494,16 @@ function commandFailed(result) {
     || (result?.ok === false);
 }
 
-function finalizeCleanupCompletion(result) {
-  if (result?.data?.status !== "done" || result?.data?.assurance == null) {
+function finalizeCleanupCompletion(result, target) {
+  const receipt = result?.data?.settlementReceipt;
+  let validReceipt = false;
+  try {
+    DraftStepSettlementReceipt.assertStored(receipt);
+    validReceipt = receipt.binding.stepId === "finalize-cleanup" && receipt.settlementKind === "completion"
+      && receipt.binding.runId === target.runId
+      && (target.specId === null || receipt.binding.specId === target.specId);
+  } catch { /* An absent or malformed receipt cannot confirm cleanup. */ }
+  if (result?.data?.status !== "done" || !["strict", "advisory"].includes(result?.data?.assurance) || !validReceipt) {
     const error = new Error("finalize cleanup did not return its canonical completion assurance");
     error.code = "FLOW_DISPATCH_FINALIZE_CLEANUP_UNCONFIRMED";
     throw error;
@@ -1462,11 +1445,18 @@ export default class RunDispatchCommand extends FlowCommand {
 
   captureAction(ctx, session, nextAction, dispatchCount, phase) {
     try {
+      const directive = NextActionDirective.fromStored(nextAction.directive);
+      let canonicalRevision = null;
+      if (directive instanceof ExecuteCommandDirective) {
+        canonicalRevision = ctx.flowManager.readCanonicalTransitionView({ specId: ctx.specId,
+          read: (view) => view.dispatchExecutionRevision() });
+      }
       const retainedFingerprint = isConditionalDraftWorkerStep(nextAction.step)
         ? this.handoffCoordinator.retainedDraftRepositoryFingerprint({ ctx, stepId: nextAction.step }) : null;
       return session.captureAction(
         workerFacingNextAction(nextAction),
         retainedFingerprint ?? this.repositoryFingerprint(ctx),
+        canonicalRevision,
       );
     } catch (cause) {
       throw new FlowDispatchRepositoryFingerprintError({
@@ -1520,45 +1510,57 @@ export default class RunDispatchCommand extends FlowCommand {
       return this.repairCommandRunner({ ctx, target, action, commandName });
     }
 
-    return this.runRegisteredFlowCommand(ctx, target, commandName, []);
+    const command = guardedExecutionCommand(new FlowExecutionCommand({
+      group: "run", subcommand: commandName,
+    }), readFlowState(ctx), target.binding);
+    return this.runRegisteredFlowCommand(ctx, target, command);
   }
 
   /**
-   * Historical state reconciliation is a Store-owned transition, never a
-   * worker instruction. Keep this deliberately small: unlike repair commands,
-   * only no-input typed Store transitions are safe to run automatically.
+   * Execute the exact command selected by the current canonical directive.
+   * Registry handlers retain their admission, Step and Store authority checks.
    */
-  async runDispatcherOwnedRecovery(ctx, target, action) {
-    if (!(action.directive instanceof ExecuteCommandDirective)) return null;
-    const match = /^sennel flow run ([a-z][a-z0-9-]*)(?:\s|$)/.exec(action.directive.nextAction);
-    const commandName = match?.[1] || null;
-    if (!DISPATCHER_OWNED_RECOVERY_COMMANDS.has(commandName)) return null;
-    // `gate` is normally a worker-producing command and must never become a
-    // broad dispatcher-owned capability.  Definition projects this command
-    // here only for the catalog-bound publication reconciliation action; the
-    // Gate command independently verifies that exact condition before it can
-    // rehydrate anything.
-    if (commandName === "gate" && action.directive.actionId !== "RECONCILE_GATE_PUBLICATION") return null;
-    return this.runRegisteredFlowCommand(ctx, target, commandName, []);
+  assertCurrentInvocation(ctx, invocation, activeAction, receiptMutation = null) {
+    const flowState = readFlowState(ctx);
+    if (receiptMutation) {
+      receiptMutation.assertCurrent({ ctx, fingerprint: this.repositoryFingerprint, activeAction, flowState });
+    } else {
+      invocation.assertCurrent(activeAction, flowState);
+    }
+    return invocation;
   }
 
-  async runRegisteredFlowCommand(ctx, target, commandName, args, authorization = null) {
-    const entry = flowCommands.run?.[commandName];
+  async runDispatcherOwnedRecovery(ctx, target, action, invocation, receiptMutation = null) {
+    if (!(action.directive instanceof ExecuteCommandDirective)) return null;
+    invocation.assertCommandSelection(action.directive);
+    const selected = await this.fetchNextAction(target);
+    if (selected instanceof Envelope) return selected;
+    this.assertCurrentInvocation(ctx, invocation,
+      this.captureAction(ctx, invocation.session, selected, 0, "pre-handoff-validation"), receiptMutation);
+    return this.runRegisteredFlowCommand(ctx, target, action.directive.command,
+      invocation.approved ? invocation.authorization : null);
+  }
+
+  async runRegisteredFlowCommand(ctx, target, command, authorization = null) {
+    if (!(command instanceof FlowExecutionCommand)) throw new TypeError("Flow dispatch requires a FlowExecutionCommand");
+    const entry = flowCommands[command.group]?.[command.subcommand];
     if (!entry?.command) {
-      throw new Error(`dispatcher-owned command is not registered: ${commandName}`);
+      throw new Error(`dispatcher-owned command is not registered: ${command.group} ${command.subcommand}`);
     }
+    const runtimeOptions = [...(entry.args?.options ?? []), ...(entry.args?.optionalOptions ?? [])];
+    const injectAgentWorkDir = ctx.agentWorkDir && runtimeOptions.includes("--agent-work-dir")
+      && !command.args.some((arg) => arg === "--agent-work-dir" || arg.startsWith("--agent-work-dir="));
     let stdout = "";
     let exitCode = 0;
     await dispatch({
       container: this.container,
       entry,
       argv: [
-        ...args,
-        ...(ctx.agentWorkDir ? ["--agent-work-dir", ctx.agentWorkDir] : []),
-        ...targetGuardArguments(target),
+        ...command.args,
+        ...(injectAgentWorkDir ? ["--agent-work-dir", ctx.agentWorkDir] : []),
       ],
-      envelopeType: "run",
-      envelopeKey: commandName,
+      envelopeType: command.group,
+      envelopeKey: command.subcommand,
       runtimeLog: true,
       stdout: (text) => { stdout += text; },
       stderr: () => {},
@@ -1569,7 +1571,7 @@ export default class RunDispatchCommand extends FlowCommand {
           ...(authorization === null ? {} : { finalizationAuthorization: authorization }) };
       },
     });
-    return commandEnvelope(stdout.trim(), commandName, exitCode);
+    return commandEnvelope(stdout.trim(), command.subcommand, exitCode);
   }
 
   /**
@@ -1616,7 +1618,7 @@ export default class RunDispatchCommand extends FlowCommand {
   }
 
   async runDispatcherOwnedCommand(ctx, target, action, invocation) {
-    const command = DispatcherOwnedFlowCommand.forAction(action);
+    const command = DispatcherOwnedFlowCommand.forAction(action, ctx, target);
     if (command === null) return null;
     if (this.commandRunner) {
       return { command, result: await this.commandRunner({ ctx, target, action, command }) };
@@ -1626,8 +1628,7 @@ export default class RunDispatchCommand extends FlowCommand {
       result: await this.runRegisteredFlowCommand(
         ctx,
         target,
-        command.commandName,
-        command.command.runArguments().slice(1),
+        command.command,
         flowStepExecutionRegistration(command.commandName)?.executionContract.selectorName === "selectFinalizationExecution"
           ? invocation.authorization : null,
       ),
@@ -1643,6 +1644,7 @@ export default class RunDispatchCommand extends FlowCommand {
     stalledDispatches,
     owner,
     requiresCanonicalActionProgress = false,
+    preserveCommandFailure = false,
   }) {
     const refreshed = await this.fetchNextAction(target);
     if (refreshed instanceof Envelope) {
@@ -1663,7 +1665,7 @@ export default class RunDispatchCommand extends FlowCommand {
     const nextStalledDispatches = hasProgressed
       ? 0
       : stalledDispatches + 1;
-    if (requiresCanonicalActionProgress && nextStalledDispatches > 0) {
+    if (preserveCommandFailure && nextStalledDispatches > 0) {
       return {
         current: refreshed,
         stalledDispatches: nextStalledDispatches,
@@ -1686,6 +1688,7 @@ export default class RunDispatchCommand extends FlowCommand {
             message: `The dispatcher-owned ${owner} returned successfully, but the guarded Flow and repository state did not change.`,
           }),
         ),
+        progressed: false,
       };
     }
     return {
@@ -2787,17 +2790,7 @@ export default class RunDispatchCommand extends FlowCommand {
         "pre-handoff-validation",
       );
       try {
-        const currentState = readFlowState(ctx);
-        if (receiptMutation) {
-          receiptMutation.assertCurrent({
-            ctx,
-            fingerprint: this.repositoryFingerprint,
-            activeAction,
-            flowState: currentState,
-          });
-        } else {
-          invocation.assertCurrent(activeAction, currentState);
-        }
+        this.assertCurrentInvocation(ctx, invocation, activeAction, receiptMutation);
       } catch (error) {
         if (error instanceof ProcessExecutionControlFailure) throw error;
         return this.failure(
@@ -2888,7 +2881,7 @@ export default class RunDispatchCommand extends FlowCommand {
 
       let dispatcherOwnedRecovery;
       try {
-        dispatcherOwnedRecovery = await this.runDispatcherOwnedRecovery(ctx, target, action);
+        dispatcherOwnedRecovery = await this.runDispatcherOwnedRecovery(ctx, target, action, invocation, receiptMutation);
       } catch (error) {
         if (error instanceof ProcessExecutionControlFailure) throw error;
         return this.failure(
@@ -2899,24 +2892,43 @@ export default class RunDispatchCommand extends FlowCommand {
             target,
             nextAction: validated,
             dispatchCount,
-            message: "The dispatcher-owned missing producer artifact recovery failed before worker handoff could begin.",
+            message: "The selected recovery command failed before completing its canonical transition.",
           }),
         );
       }
-      if (dispatcherOwnedRecovery != null) {
+      if (action.directive instanceof ExecuteCommandDirective) {
         dispatchCount += 1;
+        if (action.directive.command.subcommand === "recover-finalization"
+          && action.nextAction.step === "finalize-cleanup") {
+          if (dispatcherOwnedRecovery?.data?.status === "done") {
+            try { finalizeCleanupCompletion(dispatcherOwnedRecovery, target); }
+            catch (error) {
+              return this.failure(ctx, commandFailed(dispatcherOwnedRecovery) ? errorCode(dispatcherOwnedRecovery) : error.code,
+                commandFailed(dispatcherOwnedRecovery) ? errorMessages(dispatcherOwnedRecovery) : error.message,
+                blockedBoundary({ target, nextAction: validated, dispatchCount,
+                  message: "Finalize cleanup recovery returned without canonical completion assurance." }));
+            }
+            return new FlowDispatchBoundary({ kind: "completed", nextAction: null, dispatchCount }).toJSON();
+          }
+          if (commandFailed(dispatcherOwnedRecovery)) return this.failure(ctx,
+            errorCode(dispatcherOwnedRecovery), errorMessages(dispatcherOwnedRecovery),
+            blockedBoundary({ target, nextAction: validated, dispatchCount,
+              message: "Finalize cleanup recovery failed without canonical completion assurance." }));
+        }
         if (commandFailed(dispatcherOwnedRecovery)) {
-          return this.failure(
-            ctx,
-            errorCode(dispatcherOwnedRecovery),
-            errorMessages(dispatcherOwnedRecovery),
-            blockedBoundary({
-              target,
-              nextAction: validated,
-              dispatchCount,
-              message: "The dispatcher-owned missing producer artifact recovery did not complete its guarded Flow transition.",
-            }),
+          const progressed = await this.parentCommandProgress({
+            ctx, session, target, invocation, dispatchCount, stalledDispatches,
+            owner: "failed recovery command", requiresCanonicalActionProgress: true,
+            preserveCommandFailure: true,
+          });
+          if (!progressed.progressed) return this.failure(
+            ctx, errorCode(dispatcherOwnedRecovery), errorMessages(dispatcherOwnedRecovery),
+            blockedBoundary({ target, nextAction: progressed.current instanceof Envelope ? validated : progressed.current,
+              dispatchCount, message: "The selected recovery command failed without a durable canonical transition." }),
           );
+          stalledDispatches = progressed.stalledDispatches;
+          current = progressed.current;
+          continue;
         }
         const progressed = await this.parentCommandProgress({
           ctx,
@@ -2925,7 +2937,8 @@ export default class RunDispatchCommand extends FlowCommand {
           invocation,
           dispatchCount,
           stalledDispatches,
-          owner: "missing producer artifact recovery",
+          owner: "recovery command",
+          requiresCanonicalActionProgress: true,
         });
         if (progressed.failure) return progressed.failure;
         stalledDispatches = progressed.stalledDispatches;
@@ -2952,6 +2965,28 @@ export default class RunDispatchCommand extends FlowCommand {
       }
       if (dispatcherOwnedCommand != null) {
         dispatchCount += 1;
+        if (dispatcherOwnedCommand.command.removesExecutionRoot) {
+          try {
+            finalizeCleanupCompletion(dispatcherOwnedCommand.result, target);
+          } catch (error) {
+            return this.failure(
+              ctx,
+              commandFailed(dispatcherOwnedCommand.result) ? errorCode(dispatcherOwnedCommand.result) : error.code,
+              commandFailed(dispatcherOwnedCommand.result) ? errorMessages(dispatcherOwnedCommand.result) : error.message,
+              blockedBoundary({
+                target,
+                nextAction: validated,
+                dispatchCount,
+                message: "Finalize cleanup returned without durable canonical completion evidence.",
+              }),
+            );
+          }
+          return new FlowDispatchBoundary({
+            kind: "completed",
+            nextAction: null,
+            dispatchCount,
+          }).toJSON();
+        }
         if (commandFailed(dispatcherOwnedCommand.result)) {
           // A command can return operational failure after its Store-owned
           // transaction commits. Do not trust a command-side marker: reload
@@ -2966,6 +3001,7 @@ export default class RunDispatchCommand extends FlowCommand {
             stalledDispatches,
             owner: "failed Flow command",
             requiresCanonicalActionProgress: true,
+            preserveCommandFailure: true,
           });
           if (progressed.failure) return progressed.failure;
           if (!progressed.progressed) {
@@ -2984,28 +3020,6 @@ export default class RunDispatchCommand extends FlowCommand {
           stalledDispatches = progressed.stalledDispatches;
           current = progressed.current;
           continue;
-        }
-        if (dispatcherOwnedCommand.command.removesExecutionRoot) {
-          try {
-            finalizeCleanupCompletion(dispatcherOwnedCommand.result);
-          } catch (error) {
-            return this.failure(
-              ctx,
-              error.code,
-              error.message,
-              blockedBoundary({
-                target,
-                nextAction: validated,
-                dispatchCount,
-                message: "Finalize cleanup returned without durable canonical completion evidence.",
-              }),
-            );
-          }
-          return new FlowDispatchBoundary({
-            kind: "completed",
-            nextAction: null,
-            dispatchCount,
-          }).toJSON();
         }
         const progressed = await this.parentCommandProgress({
           ctx,

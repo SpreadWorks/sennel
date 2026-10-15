@@ -159,7 +159,7 @@ export class FlowContinuation {
     if (!ACTION_ID.test(this.actionId)) {
       throw new Error("continuation.actionId must be a stable uppercase action token");
     }
-    this.nextAction = requireString(nextAction, "continuation.nextAction");
+    this.nextAction = requireString(nextAction, "continuation.nextAction", Infinity);
     this.instruction = requireString(instruction, "continuation.instruction");
     this.reason = requireString(reason, "continuation.reason");
     Object.freeze(this);
@@ -179,16 +179,22 @@ export class FlowContinuation {
   }
 }
 
-export function guardFlagsForState(state) {
-  if (!state) return "";
-  const shellToken = (value) => `'${String(value).replaceAll("'", "'\"'\"'")}'`;
+export function guardArgumentsForState(state) {
+  if (!state) return [];
   return [
-    ...(state.runId ? [`--expect-run-id ${shellToken(state.runId)}`] : []),
-    ...(state.specId ? [`--expect-spec ${shellToken(state.specId)}`] : []),
+    ...(state.runId ? ["--expect-run-id", String(state.runId)] : []),
+    ...(state.specId ? ["--expect-spec", String(state.specId)] : []),
     ...(Object.hasOwn(state, "issue")
-      ? [state.issue == null ? "--expect-no-issue" : `--expect-issue ${state.issue}`]
+      ? state.issue == null ? ["--expect-no-issue"] : ["--expect-issue", String(state.issue)]
       : []),
-  ].join(" ");
+  ];
+}
+
+export function guardFlagsForState(state) {
+  const args = guardArgumentsForState(state);
+  const shellToken = (value) => `'${String(value).replaceAll("'", "'\"'\"'")}'`;
+  return args.map((arg, index) => index > 0 && ["--expect-run-id", "--expect-spec"].includes(args[index - 1])
+    ? shellToken(arg) : arg).join(" ");
 }
 
 export function attachUserActionPrompt(target, prompt) {

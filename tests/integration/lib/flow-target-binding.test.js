@@ -1,3 +1,6 @@
+import { FlowExecutionCommand } from "../../../src/flow/lib/flow-execution-command.js";
+import { guardedExecutionCommand } from "../../../src/flow/lib/guarded-command.js";
+import { resolveDispatcherOwnedFlowAction } from "../../../src/flow/definition.js";
 import assert from "node:assert/strict";
 import { afterEach, test } from "node:test";
 
@@ -186,4 +189,21 @@ test("FlowTargetBinding rejects an oversized serialized token before decoding", 
     () => FlowTargetBinding.deserialize("x".repeat((32 * 1024) + 1)),
     /serialized FlowTargetBinding must not exceed 32768 bytes/,
   );
+});
+
+test("projection binds shared target guards once without mutating Definition semantic argv", () => {
+  const repository = root();
+  const state = { runId: "value-run", specId: "001-command-value", issue: null,
+    execution: { mode: "direct" }, worktree: false, featureBranch: null, baseBranch: "main" };
+  const binding = FlowTargetBinding.capture({ flowState: state, mainRoot: repository, authorityRoot: repository });
+  const command = resolveDispatcherOwnedFlowAction({ stepId: "draft-questions-review" }).executionCommand;
+  assert.ok(command instanceof FlowExecutionCommand);
+  assert.deepEqual(command.args, ["--phase", "draft"]);
+  const projected = guardedExecutionCommand(command, state, binding);
+  assert.deepEqual(projected.args, [...command.args, "--expect-binding", binding.serialize(), "--expect-no-issue"]);
+  assert.deepEqual(command.args, ["--phase", "draft"]);
+  assert.deepEqual(FlowExecutionCommand.fromStored(JSON.parse(JSON.stringify(projected))).args, projected.args);
+  assert.equal(projected.args.filter((arg) => arg === "--expect-binding").length, 1);
+  assert.deepEqual(guardedExecutionCommand(command, state).args,
+    [...command.args, "--expect-run-id", state.runId, "--expect-spec", state.specId, "--expect-no-issue"]);
 });

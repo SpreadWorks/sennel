@@ -20,7 +20,7 @@ import { CurrentFlowSpecRecord } from "../../../../src/flow/lib/current-flow-sta
 import { flattenSteps } from "../../../../src/flow/lib/step-tree.js";
 import { container } from "../../../../src/lib/container.js";
 import { attachCanonicalCommandResultArtifact } from "../../../../src/flow/lib/canonical-command-result.js";
-import { CanonicalReviewWorkUnit } from "../../../../src/flow/lib/canonical-review-artifacts.js";
+import { CanonicalReviewWorkUnit, CanonicalReviewPromotion } from "../../../../src/flow/lib/canonical-review-artifacts.js";
 import { CanonicalSourceRequirementAuthority } from "../../../../src/flow/lib/canonical-file-map.js";
 import { CanonicalSpecTestTopology } from "../../../../src/flow/lib/canonical-worker-artifacts.js";
 import { CanonicalSpecReview } from "../../../../src/flow/lib/spec-review-artifacts.js";
@@ -212,6 +212,25 @@ function setupDraftReviewExecutionReentry({ root, specId, runId, phase }) {
   return { manager, fixture, state, workUnit, manifest, binding };
 }
 
+// A recoverable positive publication includes the normal producer's target,
+// output receipt, evidence and publication intent, rather than a bare document.
+function draftReviewPublication(value, document) {
+  value.workUnit.prepare();
+  value.workUnit.materializeSpecRecord();
+  value.workUnit.materializeSpecReview();
+  value.workUnit.materializeFileMap();
+  value.workUnit.materializeDraft();
+  value.workUnit.materializeTaskSpec();
+  value.workUnit.materializeTaskContextAndSource();
+  value.workUnit.finalize();
+  const work = value.workUnit.workUnit;
+  fs.writeFileSync(path.join(work.root, work.manifestDocument.output.basename), JSON.stringify(document));
+  work.seal();
+  const promotion = new CanonicalReviewPromotion({ workUnit: work, phase: document.phase,
+    treeSha: value.manifest.target.treeSha, targetStateDigest: value.manifest.target.targetStateDigest });
+  return promotion.promote(promotion.resultFromSealedArtifact());
+}
+
 function advanceClaimedDraftQuestionsReview(manager, specId, { required, settlement, summary }) {
   const current = manager.canonicalState(specId);
   const binding = {
@@ -342,10 +361,7 @@ it("rehydrates a published Draft review Attempt before the post hook", async () 
       advisoryFindings: [],
       repairTargets: [],
     };
-    const published = attachCanonicalCommandResultArtifact({
-      result: "ok",
-      artifacts: { phase: "draft-questions", verdict: "PASS" },
-    }, { logicalKey: "draft.questions.review", payload });
+    const published = draftReviewPublication(value, payload);
     const executionResult = new DraftQuestionsReviewExecutionRequiredResult();
     const executionBinding = new DraftReviewExecutionBinding({
       executionGeneration: 0,
@@ -476,6 +492,14 @@ it("rehydrates publication committed after initial admission but before provider
     const value = setupDraftReviewExecutionReentry({
       root, specId, runId: "run-draft-review-lease-publication-race", phase: "draft-questions",
     });
+    const source = new CanonicalDraftReviewSource({ flowManager: value.manager,
+      state: value.manager.canonicalState(specId), phase: "draft-questions" });
+    const published = draftReviewPublication(value, {
+      version: 2, phase: "draft-questions", sourceDraft: "draft.json",
+      sourceDraftRevision: source.revision(), generatedAt: "2026-09-20T00:00:00.000Z",
+      verdict: "PASS", summary: "Published while the execution lease was acquired.",
+      blockingFindings: [], advisoryFindings: [], repairTargets: [],
+    });
     const executionResult = new DraftQuestionsReviewExecutionRequiredResult();
     const executionBinding = new DraftReviewExecutionBinding({
       executionGeneration: 0,
@@ -502,24 +526,13 @@ it("rehydrates publication committed after initial admission but before provider
       if (!committed) {
         committed = true;
         const current = reloaded.canonicalState(specId);
-        const source = new CanonicalDraftReviewSource({ flowManager: reloaded, state: current, phase: "draft-questions" });
         reloaded.settleDraftStepResult({
           binding: {
             runId: current.runId, specId, stepId: "draft-questions-review", attempt: current.attempt,
           },
           stepResult: executionResult,
           settlement,
-          commandResult: attachCanonicalCommandResultArtifact({
-            result: "ok", artifacts: { phase: "draft-questions", verdict: "PASS" },
-          }, {
-            logicalKey: "draft.questions.review",
-            payload: {
-              version: 2, phase: "draft-questions", sourceDraft: "draft.json",
-              sourceDraftRevision: source.revision(), generatedAt: "2026-09-20T00:00:00.000Z",
-              verdict: "PASS", summary: "Published while the execution lease was acquired.",
-              blockingFindings: [], advisoryFindings: [], repairTargets: [],
-            },
-          }),
+          commandResult: published,
         });
       }
       return token;

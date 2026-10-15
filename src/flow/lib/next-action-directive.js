@@ -1,3 +1,4 @@
+import { FlowExecutionCommand } from "./flow-execution-command.js";
 /**
  * Single orchestration contract returned by `flow get next-action`.
  *
@@ -11,7 +12,7 @@ import {
   FlowContinuation,
   UserActionPrompt,
 } from "./user-action-prompt.js";
-import { guardedCommand } from "./guarded-command.js";
+import { guardedCommand, guardedExecutionCommand } from "./guarded-command.js";
 import { CurrentNextActionDescriptor } from "./current-flow-state.js";
 import { PlanGateRepairRoute } from "./plan-gate-repair.js";
 import { MissingProducerArtifactRoute } from "./producer-artifact-readiness.js";
@@ -83,7 +84,7 @@ export class NextActionDirective {
       throw new Error("stored next-action directive must be an object");
     }
     if (value.kind === "execute_step") return new ExecuteStepDirective(value);
-    if (value.kind === "execute_command") return new ExecuteCommandDirective(value);
+    if (value.kind === "execute_command") return ExecuteCommandDirective.fromStored(value);
     if (value.kind === "repair_evidence") return new RepairEvidenceDirective(value);
     if (value.kind === "await_user_decision") return new AwaitUserDecisionDirective(value);
     if (value.kind === "await_draft_question") return new AwaitDraftQuestionDirective(value);
@@ -122,11 +123,13 @@ export class ExecuteStepDirective extends NextActionDirective {
 }
 
 export class ExecuteCommandDirective extends NextActionDirective {
-  constructor({ actionId, nextAction, instruction, reason } = {}) {
+  constructor({ actionId, command, instruction, reason } = {}) {
     super({ kind: "execute_command", terminal: false, requiresUserAction: false });
+    if (!(command instanceof FlowExecutionCommand)) throw new TypeError("execute command directive requires FlowExecutionCommand");
+    this.command = command;
     this.continuation = new FlowContinuation({
       actionId: requireActionId(actionId, "directive.actionId"),
-      nextAction,
+      nextAction: command.toString(),
       instruction,
       reason,
     });
@@ -139,7 +142,13 @@ export class ExecuteCommandDirective extends NextActionDirective {
   get reason() { return this.continuation.reason; }
 
   toJSON() {
-    return { ...super.toJSON(), ...this.continuation.toJSON() };
+    return { ...super.toJSON(), ...this.continuation.toJSON(), command: this.command.toJSON() };
+  }
+
+  static fromStored(value) {
+    const command = FlowExecutionCommand.fromStored(value?.command);
+    if (value.nextAction !== command.toString()) throw new Error("stored directive nextAction does not match command");
+    return new ExecuteCommandDirective({ ...value, command });
   }
 }
 
@@ -326,8 +335,8 @@ export class NextActionDirectiveResolver {
       throw new Error("directive resolver state is required");
     }
     this.state = state;
-    if (binding != null && typeof binding.guardCommand !== "function") {
-      throw new Error("directive resolver binding.guardCommand is required");
+    if (binding != null && typeof binding.guardArguments !== "function") {
+      throw new Error("directive resolver binding.guardArguments is required");
     }
     this.binding = binding;
     this.action = requireString(action, "directive resolver action", 200);
@@ -337,7 +346,10 @@ export class NextActionDirectiveResolver {
     this.descriptor = descriptor;
     this.recoveryCommand = recoveryCommand == null
       ? null
-      : requireString(recoveryCommand, "directive resolver recovery command");
+      : recoveryCommand;
+    if (this.recoveryCommand !== null && !(this.recoveryCommand instanceof FlowExecutionCommand)) {
+      throw new TypeError("directive resolver recovery command requires FlowExecutionCommand");
+    }
     if (retryRecoveryPlan !== null && !(retryRecoveryPlan instanceof RetryRecoveryPlan)) {
       throw new Error("directive resolver requires a typed retry recovery plan");
     }
@@ -371,7 +383,7 @@ export class NextActionDirectiveResolver {
         : "Reevaluate the stopped timeout on the same input through the single audited retry, then refresh next-action.";
     return new ExecuteCommandDirective({
       actionId: "RECOVER_EXHAUSTED_TOOLING_RETRY",
-      nextAction: this.recoveryCommand,
+      command: this.recoveryCommand,
       instruction,
       reason: this.retryRecoveryPlan.reason,
     });
@@ -394,7 +406,7 @@ export class NextActionDirectiveResolver {
           : `The recorded ${this.missingProducerArtifactRoute.producerNodeId} failure was interrupted before its consumer could be claimed, without the required canonical result.`;
         return new ExecuteCommandDirective({
           actionId: "RECOVER_MISSING_PRODUCER_ARTIFACT",
-          nextAction: guardedCommand("sennel flow run recover-missing-producer-artifact", this.state, this.binding),
+          command: guardedExecutionCommand(new FlowExecutionCommand({ group: "run", subcommand: "recover-missing-producer-artifact" }), this.state, this.binding),
           instruction: "Restore the exact producer Attempt through the catalog-checked recovery transition, then refresh next-action. Do not resume the consumer or create an artifact manually.",
           reason,
         });
@@ -426,14 +438,14 @@ export class NextActionDirectiveResolver {
       if (["draft-questions", "draft-coverage"].includes(reviewDisposition.phase)) {
         return new ExecuteCommandDirective({
           actionId: "RESUME_DRAFT_REVIEW",
-          nextAction: guardedCommand("sennel flow run review --phase draft", this.state, this.binding),
+          command: guardedExecutionCommand(new FlowExecutionCommand({ group: "run", subcommand: "review", args: ["--phase", "draft"] }), this.state, this.binding),
           instruction: "Reuse the published Draft Review Attempt through the typed Step and Service boundary, then refresh next-action. Do not invoke another provider evaluation.",
           reason: `The published ${reviewDisposition.phase} Draft Review requires Step-owned settlement recovery.`,
         });
       }
       return new ExecuteCommandDirective({
         actionId: "SETTLE_REVIEW_DEFER",
-        nextAction: guardedCommand("sennel flow run settle-review-transition", this.state, this.binding),
+        command: guardedExecutionCommand(new FlowExecutionCommand({ group: "run", subcommand: "settle-review-transition" }), this.state, this.binding),
         instruction: "Persist the definition-selected exhausted-review deferral and its canonical finding handoff, then refresh next-action. Do not rerun the active review.",
         reason: `The definition selected deferred disposition for exhausted ${reviewDisposition.phase} review evidence.`,
       });
@@ -467,7 +479,7 @@ export class NextActionDirectiveResolver {
     if (["record", "rewind"].includes(operation)) {
       return new ExecuteCommandDirective({
         actionId: "SETTLE_CANONICAL_FAILURE",
-        nextAction: guardedCommand("sennel flow run settle-failure", this.state, this.binding),
+        command: guardedExecutionCommand(new FlowExecutionCommand({ group: "run", subcommand: "settle-failure" }), this.state, this.binding),
         instruction: operation === "record"
           ? "Record the exact failed Attempt through its definition-owned terminal transition, then refresh next-action."
           : "Rewind only through the definition-owned failed Attempt transition, then refresh next-action.",

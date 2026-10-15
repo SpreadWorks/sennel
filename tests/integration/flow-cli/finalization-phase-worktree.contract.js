@@ -7,6 +7,7 @@ import { FinalizationWorktreeScenario, FinalizationWorktreeDurabilityObserver,
   from "../../support/infrastructure/finalization-worktree-scenario.js";
 import { WorktreeFlowBindingStore, WorktreeFlowIdentity } from "../../../src/lib/worktree-flow-binding.js";
 import { FLOW_COMMANDS } from "../../../src/flow/registry.js";
+import { flowCommands } from "../../../src/lib/command-registry.js";
 import { CanonicalPersistenceSnapshot } from "../../support/assertions/canonical-persistence.js";
 import RunFinalizeSyncCommand from "../../../src/flow/lib/run-finalize-sync.js";
 import { persistPromptCacheHitMetric } from "../../../src/lib/agent-invocation-metric.js";
@@ -17,6 +18,8 @@ import { runTeardown } from "../../../src/flow/lib/run-finalize-cleanup.js";
 import RunFinalizeCleanupCommand from "../../../src/flow/lib/run-finalize-cleanup.js";
 import RunReportShowCommand, { CanonicalLatestReport, POINTER_REL_PATH } from "../../../src/flow/lib/run-report-show.js";
 import { dispatchContainer } from "../../support/infrastructure/flow-dispatch-scenario.js";
+import RunDispatchCommand from "../../../src/flow/lib/run-dispatch.js";
+import GetNextActionCommand from "../../../src/flow/lib/get-next-action.js";
 
 async function atCleanup(t) {
   const flow = await FinalizationWorktreeScenario.prepare(t);
@@ -28,8 +31,8 @@ async function atCleanup(t) {
   assert.equal(flow.binding.specId, flow.specId);
   assert.equal(flow.binding.worktreePath, flow.worktreePath);
   let mergeContext;
-  const mergePost = FLOW_COMMANDS.run["finalize-merge"].post;
-  const observer = t.mock.method(FLOW_COMMANDS.run["finalize-merge"], "post", async (ctx, result) => {
+  const mergePost = flowCommands.run["finalize-merge"].post;
+  const observer = t.mock.method(flowCommands.run["finalize-merge"], "post", async (ctx, result) => {
     await mergePost(ctx, result);
     mergeContext = ctx;
   });
@@ -153,14 +156,27 @@ export function registerFinalizationWorktreeContracts() {
     assert.deepEqual(flow.report().bytes, report.bytes);
   });
 
-  test("F07 managed Prepare worktree completes every real journal phase and all later writers/consumers use main", async (t) => {
+  test("F07 dispatcher cleanup removes the managed Prepare worktree without another next-action read and later consumers use main", async (t) => {
     const { flow, source } = await atCleanup(t);
     const featureSha = flow.git(["rev-parse", flow.state().execution.featureBranch]);
     const observer = new FinalizationWorktreeDurabilityObserver(t, flow);
+    const execute = GetNextActionCommand.prototype.execute;
+    const actionReads = t.mock.method(GetNextActionCommand.prototype, "execute", function (...args) {
+      assert.equal(fs.existsSync(flow.worktreePath), true, "next-action must not read a removed execution root");
+      return execute.apply(this, args);
+    });
+    const dispatcher = new RunDispatchCommand({ agent: flow.agent, maxDispatches: 4 });
+    dispatcher.container = dispatchContainer({ root: flow.root, mainRoot: flow.mainRoot,
+      config: flow.options.config, flowManager: flow.manager, agent: flow.agent });
     let result;
-    try { result = await flow.runRegistered("finalize-cleanup"); }
-    finally { observer.restore(); }
+    try {
+      result = await dispatcher.execute({ ...flow.context(), expectRunId: flow.state().runId,
+        expectSpec: flow.specId, _envelopeType: "run", _envelopeKey: "dispatch" });
+    } finally { observer.restore(); actionReads.mock.restore(); }
     assert.notEqual(result.ok, false, JSON.stringify(result));
+    assert.equal(result.dispatch.boundary, "completed");
+    assert.equal(result.dispatch.dispatchCount, 1);
+    assert.ok(actionReads.mock.callCount() >= 2, "the dispatcher must validate the real selected cleanup before execution");
     assert.deepEqual(observer.phases.map((journal) => journal.phase), finalizationCleanupJournalPhases);
     assertCheckpointReality(flow, "completed", featureSha);
     observer.assertMainWriters(flow);

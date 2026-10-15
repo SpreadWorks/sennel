@@ -1,3 +1,5 @@
+import { FlowExecutionCommand } from "./flow-execution-command.js";
+import { guardedExecutionCommand } from "./guarded-command.js";
 import { CURRENT_FLOW_SCHEMA_REVISION } from "../../lib/flow-schema-revision.js";
 import {
   FlowOutboxStore,
@@ -35,14 +37,8 @@ const FINALIZATION_COMMANDS = Object.freeze({
   "finalize-cleanup": "finalize-cleanup",
 });
 
-function recoveryCommand(command, state, binding) {
-  if (binding) return binding.guardCommand(`sennel flow run ${command}`);
-  const guards = guardFlagsForState(state);
-  return `sennel flow run ${command}${guards ? ` ${guards}` : ""}`;
-}
-
 function finalizationRecoveryCommand(state, binding) {
-  return recoveryCommand("recover-finalization", state, binding);
+  return guardedExecutionCommand(new FlowExecutionCommand({ group: "run", subcommand: "recover-finalization" }), state, binding);
 }
 
 function refreshCommand(state, binding) {
@@ -121,7 +117,7 @@ export class FinalizationOutboxRecovery {
       return {
         directive: new ExecuteCommandDirective({
           actionId: "RECOVER_INTERRUPTED_FINALIZE_SYNC",
-          nextAction: finalizationRecoveryCommand(this.state, this.binding),
+          command: finalizationRecoveryCommand(this.state, this.binding),
           instruction: "Settle the interrupted finalize-sync attempt through the Definition-selected recovery command. It acquires the main operation lock before atomically recording the failure and cleanup audit.",
           reason: "The canonical pending finalize-sync outbox has a matching incomplete runtime-log receipt.",
         }),
@@ -174,7 +170,7 @@ export class FinalizationOutboxRecovery {
     return {
       directive: new ExecuteCommandDirective({
         actionId: `RECOVER_${this.target.stepId.replaceAll("-", "_").toUpperCase()}_OUTBOX`,
-        nextAction: finalizationRecoveryCommand(this.state, this.binding),
+        command: finalizationRecoveryCommand(this.state, this.binding),
         instruction: `Apply the one persisted exact recovery for ${this.target.stepId}. The outbox key is unchanged, so a durable side effect is resumed rather than duplicated.`,
         reason: durable
           ? `The ${this.target.stepId} side effect is durable, but its lifecycle post-hook did not finish.`

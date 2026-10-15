@@ -10,6 +10,7 @@ import RunReviewCommand from "../../../src/flow/lib/run-review.js";
 import RunGateCommand from "../../../src/flow/lib/run-gate.js";
 import RunDispatchCommand from "../../../src/flow/lib/run-dispatch.js";
 import { FlowDispatchTarget } from "../../../src/flow/lib/dispatch-invocation.js";
+import { FlowExecutionCommand } from "../../../src/flow/lib/flow-execution-command.js";
 import { flowCommands } from "../../../src/lib/command-registry.js";
 import { ProcessIdentity, ProcessIdentitySource } from "../../../src/lib/process-identity.js";
 import { readManagedRecord } from "../../../src/lib/managed-process-protocol.js";
@@ -126,7 +127,8 @@ test("registered dispatcher child restores a typed control refusal instead of re
   const command = new RunDispatchCommand();
   command.container = dispatchContainer({ root: scenario.root, flowManager: manager, agent: null });
   const target = FlowDispatchTarget.captureContext({ ...ctx, flowCommandBoundary: true });
-  await assert.rejects(command.runRegisteredFlowCommand(ctx, target, "claim-next-action", []),
+  await assert.rejects(command.runRegisteredFlowCommand(ctx, target,
+    new FlowExecutionCommand({ group: "run", subcommand: "claim-next-action" }).bindTarget(target.binding)),
     (error) => error instanceof ProcessExecutionControlFailure && error.code === failure.code
       && error.message === failure.message);
   assert.deepEqual(scenario.snapshot(), before);

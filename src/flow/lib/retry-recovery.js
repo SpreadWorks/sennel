@@ -1,3 +1,4 @@
+import { FlowExecutionCommand } from "./flow-execution-command.js";
 import { CURRENT_FLOW_SCHEMA_REVISION } from "../../lib/flow-schema-revision.js";
 /**
  * Version-1 retry recovery.
@@ -1178,6 +1179,11 @@ export function resolveRecoveryMaxAttempts({ resolvedMax } = {}) {
   return requiredPositiveInteger(resolvedMax, "resolved retry maximum");
 }
 
+export function retryRecoveryExecutionCommand({ kind, phase, reason }) {
+  return new FlowExecutionCommand({ group: "set", subcommand: "retry",
+    args: ["reset", kind, phase, "--reason", reason, "--yes"] });
+}
+
 export class RetryRecoveryView {
   constructor({ kind, phase, attempts, max, recoveryReason, recoveryPossible = false, recoveryCommand = null }) {
     this.kind = requiredText(kind, "retry view kind");
@@ -1188,7 +1194,7 @@ export class RetryRecoveryView {
     this.recoveryPossible = recoveryPossible === true;
     this.recoveryReason = requiredText(recoveryReason, "retry view reason");
     this.observation = null;
-    this.recoveryCommand = recoveryCommand == null ? null : requiredText(recoveryCommand, "retry recovery command");
+    this.recoveryCommand = recoveryCommand == null ? null : FlowExecutionCommand.fromStored(recoveryCommand);
     Object.freeze(this);
   }
 
@@ -1202,7 +1208,7 @@ export class RetryRecoveryView {
       recoveryPossible: this.recoveryPossible,
       recoveryReason: this.recoveryReason,
       observation: this.observation,
-      recoveryCommand: this.recoveryCommand,
+      recoveryCommand: this.recoveryCommand?.toString() ?? null,
     };
   }
 }
@@ -1229,7 +1235,7 @@ export function buildStateRetryRecoveryView({
     attempts,
     max,
     recoveryPossible,
-    recoveryCommand: recoveryPossible ? `sennel flow set retry reset ${kind} ${phase} --reason "${reason}" --yes` : null,
+    recoveryCommand: recoveryPossible ? retryRecoveryExecutionCommand({ kind, phase, reason }) : null,
     recoveryReason: "definition-owned-retry-budget-exhausted",
   }).toJSON();
 }
