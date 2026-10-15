@@ -14,7 +14,8 @@ export function executionValueSnapshot(value) { return value == null ? null : JS
 export function executionValueDigest(value) { return crypto.createHash("sha256").update(JSON.stringify(value)).digest("hex"); }
 export function executionProcessIdentity(value) { return value instanceof ProcessIdentity ? value : new ProcessIdentity(value); }
 
-const FAILURE_VERSION = 1;
+const FAILURE_VERSION = 2;
+const DIAGNOSTIC_VERSION = 1;
 const MAX_FAILURE_BYTES = 16 * 1024;
 
 function failureFields(value, fields, name) {
@@ -76,9 +77,9 @@ class ProcessExecutionFailureCause extends ProcessExecutionFailureReason {
 
 /** Public evidence contains birth and observation only, never signaling authority. */
 export class ProcessExecutionFailureDiagnostic {
-  constructor({ schemaVersion = FAILURE_VERSION, executionId, callId, operation, role, birth,
+  constructor({ schemaVersion = DIAGNOSTIC_VERSION, executionId, callId, operation, role, birth,
     originalPgid, observedPgid = null, observedSid = null, primaryCause }) {
-    if (schemaVersion !== FAILURE_VERSION) throw new TypeError("Process failure diagnostic version is unsupported");
+    if (schemaVersion !== DIAGNOSTIC_VERSION) throw new TypeError("Process failure diagnostic version is unsupported");
     this.schemaVersion = schemaVersion;
     this.executionId = executionUuid(executionId, "Diagnostic executionId");
     this.callId = executionUuid(callId, "Diagnostic callId");
@@ -98,13 +99,73 @@ export class ProcessExecutionFailureDiagnostic {
   toJSON() { return { ...this, birth: this.birth.toJSON(), primaryCause: this.primaryCause.toJSON() }; }
   static fromStored(value) {
     failureFields(value, ["schemaVersion", "executionId", "callId", "operation", "role", "birth", "originalPgid", "observedPgid", "observedSid", "primaryCause"], "Process failure diagnostic");
-    if (value.schemaVersion !== FAILURE_VERSION) throw new TypeError("Process failure diagnostic version is unsupported");
+    if (value.schemaVersion !== DIAGNOSTIC_VERSION) throw new TypeError("Process failure diagnostic version is unsupported");
+    return new this(value);
+  }
+}
+
+function communicationTime(value, name) {
+  if (!Number.isFinite(value) || value < 0 || value > Number.MAX_SAFE_INTEGER) throw new TypeError(`${name} must be a finite non-negative time`);
+  return value;
+}
+
+/** Measured transport outcome; no socket errors, request content or authority. */
+export class ProcessExecutionCommunicationAttempt {
+  constructor({ ordinal, responseDeadlineMs, elapsedMs, outcome }) {
+    if (!Number.isSafeInteger(ordinal) || ordinal < 1 || ordinal > 3) throw new TypeError("Communication attempt ordinal is invalid");
+    if (!["timeout", "disconnected", "connection-error", "refused", "invalid-response", "aborted", "deadline"].includes(outcome)) throw new TypeError("Communication attempt outcome is invalid");
+    this.ordinal = ordinal;
+    this.responseDeadlineMs = communicationTime(responseDeadlineMs, "Communication response deadline");
+    this.elapsedMs = communicationTime(elapsedMs, "Communication attempt elapsed time");
+    this.outcome = outcome;
+    Object.freeze(this);
+  }
+  toJSON() { return { ...this }; }
+  static fromStored(value) {
+    failureFields(value, ["ordinal", "responseDeadlineMs", "elapsedMs", "outcome"], "Communication attempt");
+    return new this(value);
+  }
+}
+
+/** Immutable first communication failure, independently enriched by stop proof. */
+export class ProcessExecutionCommunicationDiagnostic {
+  constructor({ schemaVersion = DIAGNOSTIC_VERSION, operation, budgetMs, elapsedMs, cutoff,
+    acceptance = "unknown", stopConfirmation = "unknown", attempts }) {
+    if (schemaVersion !== DIAGNOSTIC_VERSION) throw new TypeError("Communication diagnostic version is unsupported");
+    if (!["start", "status", "stop"].includes(operation)) throw new TypeError("Communication operation is invalid");
+    if (!["budget-exhausted", "operation-deadline", "aborted", "refused"].includes(cutoff)) throw new TypeError("Communication cutoff is invalid");
+    if (!["unknown", "accepted", "rejected"].includes(acceptance)) throw new TypeError("Communication acceptance is invalid");
+    if (!["unknown", "confirmed"].includes(stopConfirmation)) throw new TypeError("Communication stop confirmation is invalid");
+    if (!Array.isArray(attempts) || attempts.length > 3) throw new TypeError("Communication attempts exceed their bounded history");
+    this.schemaVersion = schemaVersion;
+    this.operation = operation;
+    this.budgetMs = communicationTime(budgetMs, "Communication budget");
+    this.elapsedMs = communicationTime(elapsedMs, "Communication elapsed time");
+    this.cutoff = cutoff;
+    this.acceptance = acceptance;
+    this.stopConfirmation = stopConfirmation;
+    this.attempts = Object.freeze(attempts.map((value) => value instanceof ProcessExecutionCommunicationAttempt ? value : ProcessExecutionCommunicationAttempt.fromStored(value)));
+    let previousDeadline = 0;
+    for (const [index, attempt] of this.attempts.entries()) {
+      if (attempt.ordinal !== index + 1 || attempt.responseDeadlineMs < previousDeadline || attempt.responseDeadlineMs > this.budgetMs
+        || attempt.elapsedMs > this.elapsedMs) throw new TypeError("Communication attempt history is inconsistent");
+      previousDeadline = attempt.responseDeadlineMs;
+    }
+    Object.freeze(this);
+  }
+  toJSON() { return { ...this, attempts: this.attempts.map((attempt) => attempt.toJSON()) }; }
+  withStopConfirmation(stopConfirmation) {
+    if (this.stopConfirmation === "confirmed" && stopConfirmation !== "confirmed") throw new TypeError("Confirmed communication stop proof cannot be removed");
+    return new this.constructor({ ...this, stopConfirmation });
+  }
+  static fromStored(value) {
+    failureFields(value, ["schemaVersion", "operation", "budgetMs", "elapsedMs", "cutoff", "acceptance", "stopConfirmation", "attempts"], "Communication diagnostic");
     return new this(value);
   }
 }
 
 export class ProcessExecutionControlFailure extends Error {
-  constructor(reason, message, { cause, executionId = null, callId = null, diagnostic = null, primaryCause = null } = {}) {
+  constructor(reason, message, { cause, executionId = null, callId = null, diagnostic = null, primaryCause = null, communication = null } = {}) {
     super(message, { cause });
     if (typeof reason !== "string" || !/^[a-zA-Z][a-zA-Z0-9_-]*$/.test(reason) || reason.length > 128) throw new TypeError("Process failure reason is invalid");
     this.name = "ProcessExecutionControlFailure";
@@ -113,6 +174,9 @@ export class ProcessExecutionControlFailure extends Error {
     this.reason = reason;
     failureText(message, "Process failure message");
     const inherited = cause instanceof ProcessExecutionControlFailure ? cause : null;
+    const communicationEvidence = communication ?? inherited?.communication ?? null;
+    this.communication = communicationEvidence === null ? null : communicationEvidence instanceof ProcessExecutionCommunicationDiagnostic
+      ? communicationEvidence : ProcessExecutionCommunicationDiagnostic.fromStored(communicationEvidence);
     const evidence = diagnostic ?? inherited?.diagnostic ?? null;
     this.diagnostic = evidence === null ? null : evidence instanceof ProcessExecutionFailureDiagnostic ? evidence : ProcessExecutionFailureDiagnostic.fromStored(evidence);
     this.executionId = failureId(executionId ?? inherited?.executionId ?? this.diagnostic?.executionId ?? null, "Control failure executionId");
@@ -131,10 +195,14 @@ export class ProcessExecutionControlFailure extends Error {
   toJSON() {
     return { schemaVersion: this.schemaVersion, name: this.name, reason: this.reason, code: this.code, message: this.message,
       executionId: this.executionId, callId: this.callId, retryable: this.retryable,
-      diagnostic: this.diagnostic?.toJSON() ?? null, primaryCause: this.primaryCause.toJSON() };
+      diagnostic: this.diagnostic?.toJSON() ?? null, primaryCause: this.primaryCause.toJSON(), communication: this.communication?.toJSON() ?? null };
   }
   withContext({ executionId, callId }) {
     return new this.constructor(this.reason, this.message, { cause: this, executionId, callId });
+  }
+  withStopConfirmation(stopConfirmation) {
+    return new this.constructor(this.reason, this.message, { cause: this,
+      communication: this.communication?.withStopConfirmation(stopConfirmation) ?? null });
   }
   static fromStored(value, context = {}) {
     if (value?.schemaVersion !== FAILURE_VERSION) {
@@ -145,9 +213,9 @@ export class ProcessExecutionControlFailure extends Error {
       });
     }
     try {
-      failureFields(value, ["schemaVersion", "name", "reason", "code", "message", "executionId", "callId", "retryable", "diagnostic", "primaryCause"], "Process control failure");
+      failureFields(value, ["schemaVersion", "name", "reason", "code", "message", "executionId", "callId", "retryable", "diagnostic", "primaryCause", "communication"], "Process control failure");
       const restored = new this(value.reason, value.message, { executionId: value.executionId, callId: value.callId,
-        diagnostic: value.diagnostic, primaryCause: ProcessExecutionFailureCause.fromStored(value.primaryCause) });
+        diagnostic: value.diagnostic, primaryCause: ProcessExecutionFailureCause.fromStored(value.primaryCause), communication: value.communication });
       if (!isDeepStrictEqual(restored.toJSON(), value) || Buffer.byteLength(JSON.stringify(value)) > MAX_FAILURE_BYTES) throw new TypeError("Process control failure has excessive or inconsistent fields");
       for (const field of ["executionId", "callId"]) if (context[field] !== undefined && restored[field] !== context[field]) throw new TypeError("Process control failure belongs to another physical call");
       return restored;
@@ -171,7 +239,7 @@ export class ProcessExecutionControlFailure extends Error {
       const primary = failure ?? (cause instanceof this ? cause : null);
       throw new this("failure-envelope-invalid", "Typed process control failure envelope is invalid", { cause,
         executionId: primary?.executionId ?? null, callId: primary?.callId ?? null,
-        diagnostic: primary?.diagnostic ?? null, primaryCause: primary?.primaryCause ?? null });
+        diagnostic: primary?.diagnostic ?? null, primaryCause: primary?.primaryCause ?? null, communication: primary?.communication ?? null });
     }
   }
 }

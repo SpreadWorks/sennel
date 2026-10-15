@@ -1,43 +1,85 @@
 import net from "node:net";
+import { randomUUID } from "node:crypto";
+import { setTimeout as delay } from "node:timers/promises";
 import path from "node:path";
-import { FileLock } from "./file-lock.js";
+import { FileLock, FileLockWaitPolicy } from "./file-lock.js";
 import { RealDirectoryAuthority } from "./real-directory-authority.js";
 import fs from "node:fs";
 import { AtomicFile } from "./atomic-file.js";
 import { ProcessIdentity, ProcessIdentitySource } from "./process-identity.js";
-import { ProcessExecutionControlFailure, ProcessExecutionFailureDiagnostic } from "./process-execution-values.js";
+import { ProcessExecutionControlFailure, ProcessExecutionFailureDiagnostic,
+  ProcessExecutionCommunicationAttempt, ProcessExecutionCommunicationDiagnostic, executionValueDigest, executionUuid,
+} from "./process-execution-values.js";
 import { readLinuxProcessGroupMembers } from "./process-supervisor.js";
+import { ManagedControlPolicy } from "./managed-control-policy.js";
+import { managedMonotonicNow } from "./managed-stop-operation.js";
 
 export class ManagedProcessMessage {
-  constructor(call, operation, payload = {}) {
+  constructor(call, operation, payload = {}, { requestId = randomUUID(), payloadDigest = executionValueDigest(payload) } = {}) {
+    const acceptance = new ManagedRequestAcceptance({ requestId, payloadDigest });
     this.executionId = call.executionId;
     this.callId = call.callId;
     this.ownerToken = call.ownerToken;
     this.capability = call.capability;
     this.operation = operation;
     this.payload = payload;
+    this.requestId = acceptance.requestId;
+    this.payloadDigest = acceptance.payloadDigest;
   }
   matches(call) {
     return this.executionId === call.executionId && this.callId === call.callId
       && this.ownerToken === call.ownerToken && this.capability === call.capability;
   }
   static from(value) {
-    return new ManagedProcessMessage(value, value.operation, value.payload);
+    let acceptance;
+    try { acceptance = new ManagedRequestAcceptance(value); }
+    catch {
+      throw managedControlFailure("PROCESS_EXECUTION_REQUEST_MISMATCH", "Managed message lacks its request identity");
+    }
+    return new ManagedProcessMessage(value, value.operation, value.payload, acceptance);
   }
+  respondsTo(request) {
+    return this.matches(request) && this.operation === request.operation
+      && this.requestId === request.requestId && this.payloadDigest === request.payloadDigest;
+  }
+  respond(payload) { return new ManagedProcessMessage(this, this.operation, payload, this); }
+  assertPayload() {
+    if (executionValueDigest(this.payload) !== this.payloadDigest) {
+      throw managedControlFailure("PROCESS_EXECUTION_REQUEST_MISMATCH", "Managed request content does not match its digest");
+    }
+  }
+}
+
+/** Durable admission identifies the request without retaining its environment. */
+export class ManagedRequestAcceptance {
+  constructor(message) {
+    this.requestId = executionUuid(message?.requestId, "Managed request ID");
+    if (typeof message.payloadDigest !== "string" || !/^[0-9a-f]{64}$/.test(message.payloadDigest)) {
+      throw new TypeError("Managed acceptance requires a request identity and content digest");
+    }
+    this.payloadDigest = message.payloadDigest;
+    Object.freeze(this);
+  }
+  matches(message) { return this.requestId === message.requestId && this.payloadDigest === message.payloadDigest; }
 }
 
 export function managedControlFailure(code, message, cause) {
   return new ProcessExecutionControlFailure(code, message, { cause });
 }
 
-function managedRecordLock(file) {
-  return new FileLock({ directoryAuthority: new RealDirectoryAuthority(path.dirname(file)),
+function managedRecordLock(file, waitPolicy, deadline) {
+  if (Number.isFinite(deadline)) {
+    const existing = waitPolicy ?? new FileLockWaitPolicy();
+    waitPolicy = new FileLockWaitPolicy({ timeoutMs: Math.min(existing.timeoutMs, Math.floor(Math.max(0, deadline - managedMonotonicNow()))),
+      intervalMs: existing.intervalMs });
+  }
+  return new FileLock({ waitPolicy, directoryAuthority: new RealDirectoryAuthority(path.dirname(file)),
     fileName: `${path.basename(file)}.lock`, kind: "managed-process-record", authority: { file: path.resolve(file) } });
 }
 
-export function readManagedBinary(file, { maximum = 16 * 1024 * 1024 } = {}) {
+export function readManagedBinary(file, { maximum = 16 * 1024 * 1024, waitPolicy, deadline } = {}) {
   try {
-    return managedRecordLock(file).runExclusive(() => {
+    return managedRecordLock(file, waitPolicy, deadline).runExclusive(() => {
       if (new AtomicFile(`${file}.transition`).read() !== null) {
         throw managedControlFailure("PROCESS_EXECUTION_DURABILITY_UNCERTAIN", `Managed record has an incomplete durable write: ${file}`);
       }
@@ -52,15 +94,15 @@ export function readManagedBinary(file, { maximum = 16 * 1024 * 1024 } = {}) {
   }
 }
 
-export function readManagedRecord(file) {
-  const bytes = readManagedBinary(file);
+export function readManagedRecord(file, options = {}) {
+  const bytes = readManagedBinary(file, options);
   try { return bytes === null ? null : JSON.parse(bytes); }
   catch (cause) { throw managedControlFailure("PROCESS_EXECUTION_RECORD_UNREADABLE", `Managed JSON cannot be read: ${file}`, cause); }
 }
 
-export function writeManagedBinary(file, bytes, identity, { faultInjector } = {}) {
+export function writeManagedBinary(file, bytes, identity, { faultInjector, waitPolicy, deadline } = {}) {
   try {
-    managedRecordLock(file).runExclusive(() => {
+    managedRecordLock(file, waitPolicy, deadline).runExclusive(() => {
       const store = new AtomicFile(file, { faultInjector });
       const content = Buffer.from(bytes);
       const transition = new AtomicFile(`${file}.transition`);
@@ -210,22 +252,37 @@ export function assertManagedLauncherIdentity(record) {
   }
 }
 
-export function managedRequest(call, operation, payload = {}, timeoutMs = 2000) {
+function managedSocketRequest(call, message, { timeoutMs, abortSignal, onWait, readSettlement }) {
   return new Promise((resolve, reject) => {
     const socket = net.createConnection(call.endpoint);
     let text = "";
-    const timer = setTimeout(() => finish(managedControlFailure("PROCESS_EXECUTION_ENDPOINT_UNAVAILABLE", "Managed launcher did not respond")), timeoutMs);
     let done = false;
+    let timer;
+    let poll;
     const finish = (error, result) => {
       if (done) return;
       done = true;
       clearTimeout(timer);
+      clearInterval(poll);
+      abortSignal?.removeEventListener("abort", aborted);
       socket.destroy();
       if (error) reject(error); else resolve(result);
     };
+    const aborted = () => finish(managedControlFailure("PROCESS_EXECUTION_COMMUNICATION_ABORTED", "Managed communication was aborted"));
+    timer = setTimeout(() => finish(managedControlFailure("PROCESS_EXECUTION_ENDPOINT_UNAVAILABLE", "Managed launcher did not respond")), Math.max(1, timeoutMs));
+    poll = setInterval(() => {
+      try {
+        onWait();
+        const settled = readSettlement();
+        if (settled !== null) finish(null, settled);
+      } catch (error) { finish(error); }
+    }, 20);
+    abortSignal?.addEventListener("abort", aborted, { once: true });
+    if (abortSignal?.aborted) aborted();
     socket.on("error", (cause) => finish(managedControlFailure("PROCESS_EXECUTION_ENDPOINT_UNAVAILABLE", "Managed launcher connection failed", cause)));
     socket.on("end", () => { if (!done) finish(managedControlFailure("PROCESS_EXECUTION_ENDPOINT_UNAVAILABLE", "Managed launcher disconnected before its response")); });
-    socket.on("connect", () => socket.write(`${JSON.stringify(new ManagedProcessMessage(call, operation, payload))}\n`));
+    socket.on("close", () => { if (!done) finish(managedControlFailure("PROCESS_EXECUTION_ENDPOINT_UNAVAILABLE", "Managed launcher disconnected before its response")); });
+    socket.on("connect", () => socket.write(`${JSON.stringify(message)}\n`));
     socket.on("data", (bytes) => {
       text += bytes;
       if (text.length > 32 * 1024 * 1024) return finish(managedControlFailure("PROCESS_EXECUTION_OUTPUT_LIMIT", "Managed response exceeds its bound"));
@@ -233,11 +290,104 @@ export function managedRequest(call, operation, payload = {}, timeoutMs = 2000) 
       if (newline === -1) return;
       try {
         const response = JSON.parse(text.slice(0, newline));
-        if (!ManagedProcessMessage.from(response).matches(call)) throw managedControlFailure("PROCESS_EXECUTION_AUTHORITY_MISMATCH", "Managed response belongs to another execution");
+        if (!ManagedProcessMessage.from(response).respondsTo(message)) throw managedControlFailure("PROCESS_EXECUTION_AUTHORITY_MISMATCH", "Managed response does not match its request");
         if (response.payload.error) throw ProcessExecutionControlFailure.fromStored(response.payload.error,
           { executionId: call.executionId, callId: call.callId });
         finish(null, response.payload);
-      } catch (error) { finish(error); }
+      } catch (error) {
+        finish(error instanceof ProcessExecutionControlFailure ? error
+          : managedControlFailure("PROCESS_EXECUTION_RESPONSE_INVALID", "Managed launcher returned an invalid response", error));
+      }
     });
   });
+}
+
+/** One communication operation, including retransmission of its exact request. */
+export async function managedRequest(call, operation, payload = {}, {
+  deadline = Infinity, abortSignal = null, readSettlement = () => null, onWait = () => {},
+  readAcceptance = () => "unknown",
+  policy = new ManagedControlPolicy(), now = managedMonotonicNow, wait = delay, request = managedSocketRequest,
+  requestId = randomUUID(),
+} = {}) {
+  if (typeof operation !== "string" || !/^[a-z][a-z0-9-]{0,79}$/.test(operation)) throw new TypeError("Invalid managed communication operation");
+  // Snapshot once: external mutation cannot turn a retry into a different start.
+  const message = new ManagedProcessMessage(call, operation, JSON.parse(JSON.stringify(payload)), { requestId });
+  const startedAt = now();
+  const operationDeadline = Math.min(startedAt + policy.budgetMs, deadline);
+  const attempts = [];
+  let firstFailure = null;
+  const elapsed = () => Math.max(0, now() - startedAt);
+  const failure = (cause, cutoff, inspectionDeadline = operationDeadline) => {
+    if (!(cause instanceof ProcessExecutionControlFailure)) cause = managedControlFailure("PROCESS_EXECUTION_RESPONSE_INVALID", "Managed control boundary returned invalid state", cause);
+    if (attempts.length === 0 && !["PROCESS_EXECUTION_ENDPOINT_UNAVAILABLE", "PROCESS_EXECUTION_COMMUNICATION_ABORTED"].includes(cause.code)) {
+      return cause.withContext(call);
+    }
+    let acceptance = "unknown";
+    try { acceptance = cause.code === "PROCESS_EXECUTION_REQUEST_MISMATCH" ? "rejected" : readAcceptance(message, inspectionDeadline); }
+    catch (acceptanceError) {
+      if (["PROCESS_EXECUTION_ENDPOINT_UNAVAILABLE", "PROCESS_EXECUTION_COMMUNICATION_ABORTED"].includes(cause.code)) {
+        cause = acceptanceError instanceof ProcessExecutionControlFailure ? acceptanceError
+          : managedControlFailure("PROCESS_EXECUTION_RESPONSE_INVALID", "Managed acceptance observation is invalid", acceptanceError);
+      } else {
+        cause.cause = new AggregateError([cause.cause, acceptanceError].filter(Boolean), "Verified refusal and subsequent acceptance observation failure");
+      }
+      cutoff = "refused";
+    }
+    const primary = cause.diagnostic !== null || cause.code !== "PROCESS_EXECUTION_ENDPOINT_UNAVAILABLE" ? cause : firstFailure ?? cause;
+    return new ProcessExecutionControlFailure(cause.code, cause.message, { cause, executionId: call.executionId, callId: call.callId,
+      primaryCause: primary.primaryCause ?? { code: primary.code, message: primary.message, executionId: call.executionId, callId: call.callId },
+      communication: ["start", "status", "stop"].includes(operation) ? new ProcessExecutionCommunicationDiagnostic({ operation, budgetMs: policy.budgetMs,
+        elapsedMs: elapsed(), cutoff, acceptance,
+        stopConfirmation: "unknown", attempts }) : null });
+  };
+  const cutoff = () => abortSignal?.aborted ? "aborted" : now() >= operationDeadline
+    ? (deadline <= startedAt + policy.budgetMs ? "operation-deadline" : "budget-exhausted") : null;
+  const check = (inspectionDeadline = operationDeadline) => {
+    onWait(inspectionDeadline);
+    return readSettlement(inspectionDeadline);
+  };
+  for (let ordinal = 1; ordinal <= policy.attemptCount; ordinal++) {
+    let settled;
+    try { settled = check(); }
+    catch (cause) { throw failure(cause, "refused"); }
+    if (settled !== null) return settled;
+    const interrupted = cutoff();
+    if (interrupted !== null) throw failure(firstFailure ?? managedControlFailure("PROCESS_EXECUTION_ENDPOINT_UNAVAILABLE", "Managed communication ended before a response"), interrupted);
+    const attemptStarted = now();
+    const responseDeadline = Math.min(startedAt + policy.responseDeadlineMs(ordinal), operationDeadline);
+    try {
+      const response = await request(call, message, { timeoutMs: responseDeadline - now(), abortSignal,
+        onWait: () => onWait(responseDeadline), readSettlement: () => readSettlement(responseDeadline) });
+      if (cutoff() !== null) throw managedControlFailure("PROCESS_EXECUTION_ENDPOINT_UNAVAILABLE", "Managed response arrived after its operation ended");
+      return response;
+    } catch (error) {
+      const cause = error instanceof ProcessExecutionControlFailure ? error
+        : managedControlFailure("PROCESS_EXECUTION_RESPONSE_INVALID", "Managed communication failed its response contract", error);
+      const transient = cause.code === "PROCESS_EXECUTION_ENDPOINT_UNAVAILABLE";
+      const verifiedFailure = !transient && cause.code !== "PROCESS_EXECUTION_COMMUNICATION_ABORTED";
+      const stopped = cutoff();
+      attempts.push(new ProcessExecutionCommunicationAttempt({ ordinal, responseDeadlineMs: responseDeadline - startedAt,
+        elapsedMs: Math.max(0, now() - attemptStarted), outcome: verifiedFailure ? "refused" : stopped === "aborted" ? "aborted"
+          : stopped === "operation-deadline" ? "deadline" : !transient ? "refused"
+            : now() >= responseDeadline ? "timeout" : "disconnected" }));
+      firstFailure ??= cause;
+      try { settled = check(responseDeadline); }
+      catch (settlementError) { throw failure(verifiedFailure ? cause : settlementError, "refused", responseDeadline); }
+      if (verifiedFailure) throw failure(cause, "refused", responseDeadline);
+      if (settled !== null) return settled;
+      // A full response timeout already consumed its slot. Early disconnects
+      // wait only the remainder, with the same output and settlement checks.
+      while (now() < responseDeadline && cutoff() === null) {
+        try { await wait(Math.min(20, responseDeadline - now()), undefined, { signal: abortSignal ?? undefined }); }
+        catch (waitError) { if (!abortSignal?.aborted) throw waitError; }
+        try { settled = check(responseDeadline); }
+        catch (settlementError) { throw failure(settlementError, "refused", responseDeadline); }
+        if (settled !== null) return settled;
+      }
+      const finalCutoff = cutoff();
+      if (finalCutoff !== null || ordinal === policy.attemptCount) {
+        throw failure(firstFailure, finalCutoff ?? "budget-exhausted", responseDeadline);
+      }
+    }
+  }
 }

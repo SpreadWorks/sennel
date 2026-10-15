@@ -1,3 +1,5 @@
+import { ExponentialBackoffPolicy } from "../../lib/exponential-backoff.js";
+
 /**
  * Bounded provider protocol shared by Review phases that need a complete
  * phase-domain contract before a response can be accepted. It deliberately
@@ -71,6 +73,7 @@ export class ReviewProtocolAttempt {
 
 /** A separately bounded transport retry budget inside one contract attempt. */
 export class ReviewProtocolTransportRetryPolicy {
+  #backoff;
   constructor({ retryCount = 0, retryDelayMs = 1, backoffFactor = 2 } = {}) {
     if (!Number.isSafeInteger(retryCount) || retryCount < 0 || retryCount > 16) {
       throw new Error("review protocol transport retryCount must be bounded");
@@ -84,6 +87,7 @@ export class ReviewProtocolTransportRetryPolicy {
     this.retryCount = retryCount;
     this.retryDelayMs = retryDelayMs;
     this.backoffFactor = backoffFactor;
+    this.#backoff = new ExponentialBackoffPolicy({ initialMs: retryDelayMs, factor: backoffFactor, attemptCount: retryCount });
     Object.freeze(this);
   }
 
@@ -99,7 +103,7 @@ export class ReviewProtocolTransportRetryPolicy {
       || transportAttempt.transportNumber > this.retryCount) {
       throw new Error("review protocol transport retry delay is outside its bounded policy");
     }
-    return this.retryDelayMs * Math.pow(this.backoffFactor, transportAttempt.transportNumber - 1);
+    return this.#backoff.valueAt(transportAttempt.transportNumber);
   }
 }
 

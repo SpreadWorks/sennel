@@ -2,6 +2,7 @@ import path from "node:path";
 import { readManagedOutput } from "./managed-process-output.js";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { isDeepStrictEqual } from "node:util";
 import { setTimeout as delay } from "node:timers/promises";
 import { RuntimeChildExecution } from "./runtime-package.js";
 import { TemporaryPaths } from "./temporary-paths.js";
@@ -10,6 +11,8 @@ import { ProcessIdentity } from "./process-identity.js";
 import { AgentProcessStopEvidence } from "./agent-failure.js";
 import { AgentTimeoutError } from "./process-supervisor.js";
 import { DEFAULT_AGENT_PROCESS_TREE_GRACE_MS } from "./agent-timeout.js";
+import { ManagedStopOperation, managedMonotonicNow } from "./managed-stop-operation.js";
+import { ManagedStopOperationStore } from "./managed-stop-store.js";
 import { ManagedProcessSnapshot, managedControlFailure, managedRequest, readManagedRecord, assertManagedLauncherIdentity, verifyManagedProcessStopped } from "./managed-process-protocol.js";
 
 export { verifyManagedProcessStopped } from "./managed-process-protocol.js";
@@ -50,7 +53,10 @@ async function invokeManagedScope(runtime, callback, environment) {
 }
 
 async function rejectManagedControlFailure(error, report) {
-  try { await report(); }
+  try {
+    const saved = await report();
+    if (saved instanceof ProcessExecutionControlFailure) error = saved;
+  }
   catch (cause) {
     if (!(cause instanceof ProcessExecutionControlFailure)) throw cause;
     error.cause = new AggregateError(error.cause === undefined ? [cause] : [error.cause, cause],
@@ -74,8 +80,16 @@ function assertNoControlFailure(record, call) {
   }
 }
 
-export function readManagedSettlement(call, { stopDeadlineMessage = null } = {}) {
-  const record = assertRecord(readManagedRecord(call.outcomePath) || readManagedRecord(call.helloPath), call);
+function readManagedRequestAcceptance(call, request, deadline) {
+  const record = readManagedRecord(call.outcomePath, { deadline });
+  if (record === null) return "unknown";
+  assertRecord(record, call);
+  const accepted = record[request.operation === "start" ? "startRequest" : request.operation === "stop" ? "stopRequest" : "statusRequest"];
+  return accepted?.requestId === request.requestId && accepted?.payloadDigest === request.payloadDigest ? "accepted" : "unknown";
+}
+
+export function readManagedSettlement(call, { stopDeadlineMessage = null, deadline } = {}) {
+  const record = assertRecord(readManagedRecord(call.outcomePath, { deadline }) || readManagedRecord(call.helloPath, { deadline }), call);
   assertNoControlFailure(record, call);
   const snapshot = new ManagedProcessSnapshot(record);
   if (stopDeadlineMessage !== null) {
@@ -85,28 +99,35 @@ export function readManagedSettlement(call, { stopDeadlineMessage = null } = {})
   if (record.state !== "finished" && !(record.state === "stopping" && record.outcome?.finalAction === "SIGKILL")) {
     throw managedControlFailure("PROCESS_EXECUTION_OUTCOME_UNSEALED", "Managed process ended without a durable final outcome");
   }
-  return { outcome: record.outcome, ...readManagedOutput(call, record.outcome, { sealed: true }), members: record.members,
+  return { outcome: record.outcome, ...readManagedOutput(call, record.outcome, { sealed: true, deadline }), members: record.members,
     stopEvidence: AgentProcessStopEvidence.confirmed(), record };
 }
 
-async function waitForStop(call, timeoutMs) {
-  const deadline = Date.now() + timeoutMs;
+async function waitForStop(call, operation, onWait = () => {}) {
   for (;;) {
-    const settlement = readManagedSettlement(call, { stopDeadlineMessage: Date.now() >= deadline
+    const settlement = readManagedSettlement(call, { deadline: operation.deadline, stopDeadlineMessage: operation.remainingMs() <= 0
       ? "Managed group termination could not be proved within the stop deadline" : null });
     if (settlement !== null) return settlement;
-    await delay(20);
+    onWait(operation.deadline);
+    await delay(Math.min(20, operation.remainingMs()));
   }
 }
 
 /** Reconnect only to an authenticated live anchor; never signal a saved PID. */
-export async function requestManagedLauncherStop(call, { graceMs = DEFAULT_AGENT_PROCESS_TREE_GRACE_MS } = {}) {
-  const record = assertRecord(readManagedRecord(call.outcomePath) || readManagedRecord(call.helloPath), call);
+export async function requestManagedLauncherStop(call, { graceMs = DEFAULT_AGENT_PROCESS_TREE_GRACE_MS, operation = null, onWait = () => {} } = {}) {
+  operation ??= call.stopOperation ?? ManagedStopOperation.begin({ graceMs });
+  operation = operation instanceof ManagedStopOperation ? operation : ManagedStopOperation.fromStored(operation);
+  const stopStore = new ManagedStopOperationStore(call);
+  operation = stopStore.read({ deadline: operation.deadline }) ?? operation;
+  const record = assertRecord(readManagedRecord(call.outcomePath, { deadline: operation.deadline }) || readManagedRecord(call.helloPath, { deadline: operation.deadline }), call);
+  operation = stopStore.claim(operation);
   if (!verifyManagedProcessStopped(record)) {
     assertManagedLauncherIdentity(record);
-    await managedRequest(call, "stop", { reason: "recovery" });
+    await managedRequest(call, "stop", operation.toPayload(), { deadline: operation.deadline, requestId: operation.requestId,
+      readSettlement: (deadline) => readManagedSettlement(call, { deadline })?.record ?? null, onWait,
+      readAcceptance: (request, deadline) => readManagedRequestAcceptance(call, request, deadline) });
   }
-  return waitForStop(call, graceMs * 2 + 2000);
+  return waitForStop(call, operation, onWait);
 }
 
 /** One physical invocation, from durable reservation through durable stop receipt. */
@@ -116,6 +137,7 @@ export async function executeManagedProcess(command, args, options = {}) {
   const timeoutMs = options.timeoutMs;
   if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) throw managedControlFailure("PROCESS_EXECUTION_INVALID_DEADLINE", "Managed process deadline must be positive and finite");
   const graceMs = options.graceMs || DEFAULT_AGENT_PROCESS_TREE_GRACE_MS;
+  const executionDeadline = managedMonotonicNow() + timeoutMs;
   const deadline = Date.now() + timeoutMs;
   const call = await runtime.reserveCall({ binding: options.processExecutionBinding ?? runtime.binding, kind: options.kind || "provider", commandId: options.commandId ?? null,
     providerAttemptId: options.providerAttemptId ?? null,
@@ -168,10 +190,25 @@ export async function executeManagedProcess(command, args, options = {}) {
     return refuse(managedControlFailure("PROCESS_EXECUTION_LAUNCHER_UNAVAILABLE", "Managed launcher could not be created", cause));
   } finally { delivery.close(); }
   let abortRequested = options.abortSignal?.aborted === true;
-  const abort = () => { abortRequested = true; };
+  const executionAbort = new AbortController();
+  const abort = () => { abortRequested = true; executionAbort.abort(); };
+  if (abortRequested) executionAbort.abort();
   options.abortSignal?.addEventListener("abort", abort, { once: true });
   let hello;
   let receiptSaved = false;
+  let settlement;
+  let observe = () => {};
+  let dynamicTimeout = false;
+  let dynamicTimeoutDiagnostic = null;
+  const observeSaved = (deadline = executionDeadline) => {
+    const record = readManagedRecord(call.outcomePath, { deadline });
+    if (record !== null) observe(record, deadline);
+  };
+  const stop = async (reason, controlFailure = null) => {
+    const operation = await runtime.beginCallStop(call, { reason, graceMs, controlFailure });
+    settlement = await requestManagedLauncherStop(call, { operation, onWait: (deadline = operation.deadline) => observeSaved(deadline) });
+    return settlement;
+  };
   try {
     const readyDeadline = deadline;
     while (!hello) {
@@ -190,54 +227,62 @@ export async function executeManagedProcess(command, args, options = {}) {
     const permit = await call.authorizeStart({ launcherIdentity: new ProcessIdentity(hello.launcherIdentity), endpoint: hello.endpoint,
       pgid: hello.pgid, members: hello.members, deadline });
     options.onSupervisorEvent?.({ type: "spawn", pid: launcher.pid, detached: true });
-    if (abortRequested) await managedRequest(call, "stop", { reason: "abort" });
-    else await managedRequest(call, "start", { permit, environment: call.executionEnvironment() });
-    let stopped = false;
     let stdoutBytes = 0;
     let stderrBytes = 0;
     let providerSpawnObserved = false;
-    const observe = (record) => {
+    observe = (record, deadline = executionDeadline, output = null) => {
       assertRecord(record, call);
       assertNoControlFailure(record, call);
       if (record.outcome.providerStarted && !providerSpawnObserved) {
         providerSpawnObserved = true;
         notify("provider-spawn");
       }
-      const output = readManagedOutput(call, record.outcome);
+      output ??= readManagedOutput(call, record.outcome, { deadline });
       for (const stream of ["stdout", "stderr"]) {
         const bytes = output[stream];
         const offset = stream === "stdout" ? stdoutBytes : stderrBytes;
         if (bytes.length > offset) {
           options.activityMonitor?.observeOutput();
           options[stream === "stdout" ? "onStdout" : "onStderr"]?.(bytes.subarray(offset).toString());
+          // A delayed reply may precede output already observed during its wait.
+          if (stream === "stdout") stdoutBytes = bytes.length; else stderrBytes = bytes.length;
         }
-        if (stream === "stdout") stdoutBytes = bytes.length; else stderrBytes = bytes.length;
       }
     };
-    let dynamicTimeout = false;
-    let dynamicTimeoutDiagnostic = null;
-    options.activityMonitor?.start((diagnostic) => { dynamicTimeout = true; dynamicTimeoutDiagnostic = diagnostic; });
-    const waitDeadline = deadline + graceMs * 2 + 3000;
-    let settlement;
-    while (launcher.exitCode === null && launcher.signalCode === null) {
-      if ((abortRequested || dynamicTimeout) && !stopped) {
-        await managedRequest(call, "stop", { reason: abortRequested ? "abort" : "timeout" });
-        stopped = true;
+    options.activityMonitor?.start((diagnostic) => {
+      dynamicTimeout = true; dynamicTimeoutDiagnostic = diagnostic; executionAbort.abort();
+    });
+    const communicate = async (operation, payload = {}) => {
+      try {
+        return await managedRequest(call, operation, payload, { deadline: executionDeadline, abortSignal: executionAbort.signal,
+          onWait: observeSaved,
+          readSettlement: (deadline) => {
+            settlement = readManagedSettlement(call, { deadline });
+            return settlement?.record ?? null;
+          },
+          readAcceptance: (request, deadline) => readManagedRequestAcceptance(call, request, deadline) });
+      } catch (error) {
+        if (error instanceof ProcessExecutionControlFailure
+          && ["operation-deadline", "aborted"].includes(error.communication?.cutoff)) {
+          await stop(abortRequested ? "abort" : "timeout");
+          return settlement.record;
+        }
+        throw error;
       }
-      try { observe(await managedRequest(call, "status")); }
-      catch (error) {
-        const saved = readManagedRecord(call.outcomePath);
-        if (saved?.state !== "finished" && saved?.state !== "stopping"
-          && launcher.exitCode === null && launcher.signalCode === null) throw error;
-      }
-      if (Date.now() >= waitDeadline) {
-        settlement = readManagedSettlement(call, { stopDeadlineMessage: "Managed launcher exceeded its finite stop deadline" });
+    };
+    if (abortRequested || managedMonotonicNow() >= executionDeadline) await stop(abortRequested ? "abort" : "timeout");
+    else observe(await communicate("start", { permit, environment: call.executionEnvironment() }), executionDeadline, settlement);
+    while (settlement === undefined || settlement === null) {
+      settlement = readManagedSettlement(call, { deadline: executionDeadline });
+      if (settlement !== null) break;
+      if (abortRequested || dynamicTimeout || managedMonotonicNow() >= executionDeadline) {
+        await stop(abortRequested ? "abort" : "timeout");
         break;
       }
-      await delay(20);
+      observe(await communicate("status"), executionDeadline, settlement);
+      if (settlement == null) await delay(Math.min(20, Math.max(0, executionDeadline - managedMonotonicNow())));
     }
-    settlement ??= await waitForStop(call, graceMs + 1000);
-    observe(settlement.record);
+    observe(settlement.record, executionDeadline, settlement);
     notify("provider-settled", launcher.pid);
     const processExecutionStopReceipt = await runtime.finishCall(call, settlement);
     receiptSaved = true;
@@ -268,6 +313,26 @@ export async function executeManagedProcess(command, args, options = {}) {
   } catch (error) {
     // Admission and durability failures retain their class. They cannot become
     // a provider retry or an ordinary exit status.
+    if (error instanceof ProcessExecutionControlFailure && error.communication !== null && error.communication !== undefined && !receiptSaved) {
+      // The original communication evidence remains the failure even if the
+      // subsequent finite stop cannot establish proof.
+      try {
+        await stop("control-failure", error);
+        try { await runtime.finishCall(call, settlement); }
+        catch (cause) {
+          const confirmed = error.withContext(call).withStopConfirmation("confirmed");
+          if (cause instanceof ProcessExecutionControlFailure && isDeepStrictEqual(cause.toJSON(), confirmed.toJSON())) {
+            // finishCall saves its receipt before refusing the original failure.
+            error = cause;
+            receiptSaved = true;
+          } else throw cause;
+        }
+        receiptSaved = true;
+        error = error.withStopConfirmation("confirmed");
+      } catch (cause) {
+        error.cause = new AggregateError([error.cause, cause].filter(Boolean), "Managed communication failure and subsequent stop");
+      }
+    }
     if (error instanceof ProcessExecutionControlFailure || receiptSaved) return refuse(error);
     return refuse(managedControlFailure("PROCESS_EXECUTION_CONTROL_FAILED", "Managed process control failed before durable settlement", error));
   } finally {

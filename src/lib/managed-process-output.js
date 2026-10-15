@@ -19,8 +19,8 @@ export class ManagedOutputSnapshot {
     return new this({ byteLength: bytes.length, sha256: crypto.createHash("sha256").update(bytes).digest("hex") }, maximum);
   }
   toJSON() { return { byteLength: this.byteLength, sha256: this.sha256 }; }
-  read(file, { sealed = false } = {}) {
-    const bytes = readManagedBinary(file, { maximum: this.maximum });
+  read(file, { sealed = false, deadline } = {}) {
+    const bytes = readManagedBinary(file, { maximum: this.maximum, deadline });
     if (bytes === null || bytes.length < this.byteLength || sealed && bytes.length !== this.byteLength) {
       throw managedControlFailure("PROCESS_EXECUTION_OUTPUT_CORRUPT", "Managed output spool has a different size");
     }
@@ -44,10 +44,10 @@ export class ManagedOutputSpool {
     this.snapshot = null;
   }
   append(bytes) { this.dirty = true; return this.buffer.append(bytes); }
-  persist() {
+  persist({ deadline } = {}) {
     if (this.dirty) {
       const bytes = this.buffer.toBuffer();
-      writeManagedBinary(this.file, bytes, this.call);
+      writeManagedBinary(this.file, bytes, this.call, { deadline });
       this.snapshot = ManagedOutputSnapshot.capture(bytes, this.maximum);
       this.dirty = false;
     }
@@ -55,13 +55,13 @@ export class ManagedOutputSpool {
   }
 }
 
-export function readManagedOutput(call, outcome, { sealed = false } = {}) {
+export function readManagedOutput(call, outcome, { sealed = false, deadline } = {}) {
   const output = outcome?.output;
   if (!output) throw managedControlFailure("PROCESS_EXECUTION_OUTPUT_CORRUPT", "Managed output references are missing");
   const result = {};
   for (const stream of ["stdout", "stderr"]) {
     result[stream] = new ManagedOutputSnapshot(output[stream], output.maximum)
-      .read(path.join(path.dirname(call.outcomePath), `${stream}.bin`), { sealed });
+      .read(path.join(path.dirname(call.outcomePath), `${stream}.bin`), { sealed, deadline });
   }
   return result;
 }

@@ -591,7 +591,7 @@ test("control failure preserves a live managed group while its coordinator exits
         if(!request.matches(config.call)||request.operation!=='fixture-cleanup')return socket.destroy();
         fs.readdirSync=readdir;
         const members=captureManagedMembers(process.pid,config.call.ownerToken);
-        socket.end(JSON.stringify(new ManagedProcessMessage(config.call,'response',{cleaning:true,pgid:process.pid,
+        socket.end(JSON.stringify(request.respond({cleaning:true,pgid:process.pid,
           launcherIdentity:members.find(member=>member.pid===process.pid),members}))+'\\n');
         setTimeout(()=>{process.kill(-process.pid,'SIGTERM');setTimeout(()=>process.kill(-process.pid,'SIGKILL'),200)},20);
       });
