@@ -113,6 +113,18 @@ flow get/set/run コマンドは「状態クエリ系」と「操作系」の2�
 - **操作系** (set-step, run-gate, run-finalize 等): `requiresFlow: true`。ユーザー起因の前提条件違反は `Envelope.fail` を return する（`throw` ではない）。内部エラー（agent 呼び出し失敗、JSON パースエラー等）は `throw` のまま（dispatcher の catch-all が `Envelope.fail` にラップ）。
 - `requiresFlow` は registry.js のエントリと FlowCommand クラスの両方に設定する。
 
+### Flow 停止案内
+
+**MUST:** Flow の未完了処理を停止し、ユーザーへ制御を返す応答は、semantic envelope が使える範囲で `Envelope.attachStopGuidance(...)` を通し、安定した error code、型付き原因、確認済みの現在状態、既存の実行制御が選んだ次の具体的な行動を含める。wire response は top-level `guidance` と唯一の `data.directive` を対にし、表示順は「何が起きたか → 確認済みの現在状態 → 次の行動」とする。semantic module 読込み前の bootstrap 拒否も、固定 runtime の証明と Node 組込みだけで同じ最小 wire 契約を返す。確認できない事実は未確認と表す。
+
+- `Envelope.fail` と throw、blocked / user-wait 応答、warning を伴う非ゼロ終了、および hook・nested command・保存・close の失敗を、共通の組立てと検証へ通す。最終応答は後続処理の結果が確定してから出力する。
+- 原因には安定した error code、型付き cause、既存の i18n catalog を使う。code や raw message だけをユーザー向け案内として返さない。
+- 次の行動と復旧可否は既存の実行制御または Definition の選択結果を使う。renderer、i18n、dispatcher、skill は再試行・復旧を推測せず、command、binding、権限を再構成しない。`FlowStopGuidance.nextAction` は表示用で実行権限を持たず、`SingleUserActionDirective` も単一の具体的行動を示すだけで CLI 実行権限を付与しない。選択済み directive を唯一の実行権限とする。
+- 自動継続、単一のユーザー行動、複数の実質的な選択、外部作業・修正依頼を区別する。自動継続に確認を足さず、単一行動を選択肢へ作り替えない。復旧の認可がない場合は診断・修正依頼を案内する。
+- 新しい停止経路は共通出力境界を通り、停止案内と選択済み directive の整合性、および次の行動が存在することを検証する。正常成功・完了・中止・idle・read-only・help に追加の操作要求を設けない。
+
+Flow の責務境界に関する追加規約は [`flow/AGENTS.md`](flow/AGENTS.md) を参照すること。
+
 ### flow runtime log
 
 flow commands automatically append visible stdout/stderr to `.tmp/logs/<flowId>.log`; commands without an active flow use `.tmp/logs/no-flow.log`. Use `sennel flow get runtime-log` for flow command failure diagnosis. Explicit shell redirection is only needed for non-flow commands or special cases outside the flow dispatcher.

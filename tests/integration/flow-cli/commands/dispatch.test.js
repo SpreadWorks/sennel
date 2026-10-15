@@ -463,7 +463,8 @@ function exactSummaryResponses(fullView, target) {
 }
 
 function envelopeNextAction(envelope) {
-  return envelope.data.nextAction ?? envelope.data;
+  return envelope.data.nextAction == null ? envelope.data
+    : { ...envelope.data.nextAction, directive: envelope.data.directive };
 }
 
 function actionPrompt(envelope) {
@@ -816,12 +817,12 @@ describe("flow dispatch CLI", () => {
     assert.equal(first.status, 0, first.stderr);
     assert.equal(first.envelope.data.dispatch.boundary, "await_user_decision");
     assert.equal(first.envelope.data.dispatch.binding, scenario.binding);
-    assert.equal(first.envelope.data.nextAction.directive.kind, "await_draft_question");
-    assert.equal(first.envelope.data.nextAction.directive.questionId, "q1");
+    assert.equal(first.envelope.data.directive.kind, "await_draft_question");
+    assert.equal(first.envelope.data.directive.questionId, "q1");
 
     const stale = invokeFlow(root, [
       "set", "draft-answer", "q1",
-      "--question-revision", String(first.envelope.data.nextAction.directive.questionRevision),
+      "--question-revision", String(first.envelope.data.directive.questionRevision),
       "--answer", "A stale target must not write this answer.",
       "--why", "This invocation deliberately uses the wrong authority.",
       "--expect-binding", staleBinding(root, scenario.state),
@@ -831,7 +832,7 @@ describe("flow dispatch CLI", () => {
 
     const firstAnswer = invokeFlow(root, [
       "set", "draft-answer", "q1",
-      "--question-revision", String(first.envelope.data.nextAction.directive.questionRevision),
+      "--question-revision", String(first.envelope.data.directive.questionRevision),
       "--answer", "Return the stable public representation selected by the user.",
       "--why", "The explicit user decision is part of the canonical draft.",
       "--expect-binding", first.envelope.data.dispatch.binding,
@@ -845,11 +846,11 @@ describe("flow dispatch CLI", () => {
     assert.equal(second.status, 0, second.stderr);
     assert.equal(second.envelope.data.dispatch.boundary, "await_user_decision");
     assert.equal(second.envelope.data.dispatch.binding, scenario.binding);
-    assert.equal(second.envelope.data.nextAction.directive.questionId, "q2");
+    assert.equal(second.envelope.data.directive.questionId, "q2");
 
     const secondAnswer = invokeFlow(root, [
       "set", "draft-answer", "q2",
-      "--question-revision", String(second.envelope.data.nextAction.directive.questionRevision),
+      "--question-revision", String(second.envelope.data.directive.questionRevision),
       "--drop",
       "--dropped-reason", "The project contract already fixes this compatibility boundary.",
       "--expect-binding", second.envelope.data.dispatch.binding,
@@ -921,9 +922,9 @@ describe("flow dispatch CLI", () => {
     assert.equal(result.envelope.data.dispatch.boundary, "approval_required");
     assert.equal(result.envelope.data.dispatch.binding, scenario.binding());
     assert.match(result.envelope.data.dispatch.approvalToken, /^[a-f0-9]{64}$/);
-    assert.equal(result.envelope.data.nextAction.directive.kind, "execute_step");
-    assert.equal(result.envelope.data.nextAction.directive.requiresUserAction, true);
-    const choices = result.envelope.data.nextAction.directive.actionPrompt.choices;
+    assert.equal(result.envelope.data.directive.kind, "execute_step");
+    assert.equal(result.envelope.data.directive.requiresUserAction, true);
+    const choices = result.envelope.data.directive.actionPrompt.choices;
     assert.deepEqual(
       choices.map((choice) => choice.actionId),
       [
@@ -1376,7 +1377,7 @@ describe("flow dispatch CLI", () => {
     assert.equal(result.envelope.data.dispatch.approvalToken, undefined);
     assert.equal(result.envelope.data.nextAction.requires_approval, false);
     assert.deepEqual(
-      result.envelope.data.nextAction.directive.actionPrompt.choices.map((choice) => choice.actionId),
+      result.envelope.data.directive.actionPrompt.choices.map((choice) => choice.actionId),
       [
         "ACCEPT_RISK_AND_CONTINUE",
         "ABORT_ACCEPTANCE",
@@ -1385,7 +1386,7 @@ describe("flow dispatch CLI", () => {
       ],
     );
     assert.deepEqual(
-      result.envelope.data.nextAction.directive.actionPrompt.choices.map((choice) => choice.label),
+      result.envelope.data.directive.actionPrompt.choices.map((choice) => choice.label),
       [
         "リスクを受け入れて続行する",
         "中止する",
@@ -1393,7 +1394,7 @@ describe("flow dispatch CLI", () => {
         "受入レビューをすべて確認する",
       ],
     );
-    for (const choice of result.envelope.data.nextAction.directive.actionPrompt.choices) {
+    for (const choice of result.envelope.data.directive.actionPrompt.choices) {
       assert.match(choice.nextAction, /--expect-binding '[A-Za-z0-9_-]+'/);
       assert.doesNotMatch(choice.nextAction, /--approve/);
     }

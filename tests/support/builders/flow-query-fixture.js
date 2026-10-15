@@ -18,6 +18,9 @@ import {
 } from "../../../src/lib/flow-version.js";
 import { createTmpDir, removeTmpDir } from "./tmp-dir.js";
 import { commitAll, initGitRepo } from "../infrastructure/git-repo.js";
+import { configureManagedFixtureRepository, dispatchContainer, dispatchFlowCommand } from "../infrastructure/flow-dispatch-scenario.js";
+import { installCommandProcessFake } from "../infrastructure/command-process-fake.js";
+import RunFinalizeSyncCommand from "../../../src/flow/lib/run-finalize-sync.js";
 
 const QUERY_CLI = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../src/sennel.js");
 const DIGEST = "sha256";
@@ -285,6 +288,7 @@ export function createFlowQueryFixture({
   if (git) {
     initGitRepo(root);
     commitAll(root, "query fixture baseline");
+    configureManagedFixtureRepository(root);
   }
 
   if (storage === "migrated") {
@@ -354,17 +358,37 @@ export async function createFlowQueryScenarioFixture(options = {}) {
       await fixture.flow.activateWithProducers(`${DEFAULT_TASK.id}-impl`);
       failUntilBlocked(fixture.flowManager, fixture.specId);
     } else {
-      await fixture.flow.activateWithProducers("report");
+      await fixture.flow.activateWithProducers("report", {
+        sourceMutations: new Map([[`${DEFAULT_TASK.id}-impl`, () => {
+          fs.writeFileSync(path.join(fixture.root, "query-contract.js"), "export const queryContractReady = true;\n");
+        }]]),
+      });
       await fixture.flow.produce("report");
       const readDependency = container.get.bind(container);
       const configured = mock.method(container, "get", (name) => name === "config" ? {} : readDependency(name));
+      const docsProcess = installCommandProcessFake(RunFinalizeSyncCommand, (command, args) => {
+        if (command !== process.execPath || !String(args[0]).endsWith("/src/docs.js") || args[1] !== "build") {
+          throw new Error("query fixture only controls the external docs build process");
+        }
+        return { ok: true, status: 0, stdout: "", stderr: "", signal: null, killed: false };
+      }, "executeEffect");
       try {
         for (const step of fixture.flow.leaves().filter((entry) => !["done", "skipped"].includes(entry.status))) {
           if (!["done", "skipped"].includes(fixture.flow.leaves().find((entry) => entry.id === step.id).status)) {
-            await fixture.flow.produce(step.id);
+            fixture.flow.activate(step.id, { settlePredecessors: false });
+            const state = fixture.flow.state();
+            const execution = await dispatchFlowCommand({
+              container: dispatchContainer({ root: fixture.root, flowManager: fixture.flowManager, agent: null }),
+              group: "run", name: step.id,
+              argv: ["--expect-spec", fixture.specId, "--expect-run-id", state.runId, "--expect-no-issue"],
+            });
+            if (!execution.envelope.ok || execution.exitCode !== 0) {
+              throw new Error(`query fixture ${step.id} failed: ${JSON.stringify(execution.envelope)}`);
+            }
           }
         }
       } finally {
+        docsProcess.mock.restore();
         configured.mock.restore();
       }
     }

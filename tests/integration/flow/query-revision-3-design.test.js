@@ -9,7 +9,7 @@ import { validateSchema } from "../../../src/lib/schema-validate.js";
 import { FLOW_QUERY_REQUEST_SCHEMA, FLOW_QUERY_RESPONSE_SCHEMA, FLOW_QUERY_LIMITS } from "../../../src/flow/query-contract.js";
 import { ActivityItem, AggregateMetrics, ArtifactDescriptorView, Cursor, MetadataItem } from "../../../src/flow/query.js";
 
-const designDirectory = fileURLToPath(new URL("../../../docs/design/flow-query-revision-2/", import.meta.url));
+const designDirectory = fileURLToPath(new URL("../../../docs/design/flow-query-revision-3/", import.meta.url));
 const read = (file) => JSON.parse(fs.readFileSync(path.join(designDirectory, file), "utf8"));
 const requestSchema = read("request.schema.json");
 const responseSchema = read("response.schema.json");
@@ -76,7 +76,7 @@ function assertClosure(page) {
   assert.ok(page.items.length > 0 || page.pageInfo.hasNext === false, "empty non-final page");
 }
 
-describe("Flow query revision 2 design artifacts", () => {
+describe("Flow query revision 3 design artifacts", () => {
   it("retains the production request schema without changing required fields or accepted values", () => {
     const { $schema, $id, title, description, ...body } = requestSchema;
     assert.equal($schema, "https://json-schema.org/draft/2020-12/schema");
@@ -114,7 +114,7 @@ describe("Flow query revision 2 design artifacts", () => {
     }
   });
 
-  it("rejects missing revision 2 fields, unknown specific semantics and unsupported native status", () => {
+  it("rejects missing revision 3 fields, unknown specific semantics and unsupported native status", () => {
     const withoutSnapshot = structuredClone(metadata);
     delete withoutSnapshot.snapshot;
     const unknownSpecific = structuredClone(pages[0]);

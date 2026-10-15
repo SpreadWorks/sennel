@@ -32,7 +32,9 @@ async function canonicalReportFixture(root, { specRoot = "specs", produce = true
     execution: { mode: "direct", baseBranch: "main", featureBranch: "main" },
     specRecord: { requirements: [{ id: "R-report", desc: "Render the finalized report.", testable: false }] },
     targetStep: "report",
-  }).createWithProducers();
+  }).createWithProducers({ sourceMutations: new Map([["T-fixture-1-impl", () => {
+    writeFile(root, "src/report.js", "export const reportReady = true;\n");
+  }]]) });
   const flow = fixture.flow.flow;
   if (produce) await flow.produce("report");
   writeFile(root, POINTER_REL_PATH, `${flow.specId}\n`);

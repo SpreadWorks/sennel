@@ -1,0 +1,2628 @@
+{
+  "schemaVersion": 1,
+  "registry": "src/flow/registry.js#FLOW_COMMANDS",
+  "routes": [
+    {
+      "path": "flow get artifact",
+      "commandModule": "src/flow/lib/get-artifact.js",
+      "adapter": "dispatcher-envelope"
+    },
+    {
+      "path": "flow get check",
+      "commandModule": "src/flow/lib/get-check.js",
+      "adapter": "dispatcher-envelope"
+    },
+    {
+      "path": "flow get context",
+      "commandModule": "src/flow/lib/get-context.js",
+      "adapter": "dispatcher-envelope"
+    },
+    {
+      "path": "flow get guardrail",
+      "commandModule": "src/flow/lib/get-guardrail.js",
+      "adapter": "dispatcher-envelope"
+    },
+    {
+      "path": "flow get issue",
+      "commandModule": "src/flow/lib/get-issue.js",
+      "adapter": "dispatcher-envelope"
+    },
+    {
+      "path": "flow get next-action",
+      "commandModule": "src/flow/lib/get-next-action.js",
+      "adapter": "dispatcher-envelope"
+    },
+    {
+      "path": "flow get prompt",
+      "commandModule": "src/flow/lib/get-prompt.js",
+      "adapter": "dispatcher-envelope"
+    },
+    {
+      "path": "flow get qa-count",
+      "commandModule": "src/flow/lib/get-qa-count.js",
+      "adapter": "dispatcher-envelope"
+    },
+    {
+      "path": "flow get resolve-context",
+      "commandModule": "src/flow/lib/get-resolve-context.js",
+      "adapter": "dispatcher-envelope"
+    },
+    {
+      "path": "flow get runtime-log",
+      "commandModule": "src/flow/lib/get-runtime-log.js",
+      "adapter": "dispatcher-envelope"
+    },
+    {
+      "path": "flow get status",
+      "commandModule": "src/flow/lib/get-status.js",
+      "adapter": "dispatcher-envelope"
+    },
+    {
+      "path": "flow prepare",
+      "commandModule": "src/flow/lib/run-prepare-spec.js",
+      "adapter": "dispatcher-envelope"
+    },
+    {
+      "path": "flow query",
+      "commandModule": "src/flow/query.js",
+      "adapter": "query-wire"
+    },
+    {
+      "path": "flow report show",
+      "commandModule": "src/flow/lib/run-report-show.js",
+      "adapter": "dispatcher-envelope"
+    },
+    {
+      "path": "flow resume",
+      "commandModule": "src/flow/lib/run-resume.js",
+      "adapter": "dispatcher-envelope"
+    },
+    {
+      "path": "flow run abort",
+      "commandModule": "src/flow/lib/run-abort.js",
+      "adapter": "dispatcher-envelope"
+    },
+    {
+      "path": "flow run acceptance-review",
+      "commandModule": "src/flow/lib/run-acceptance-review.js",
+      "adapter": "dispatcher-envelope"
+    },
+    {
+      "path": "flow run auto-check",
+      "commandModule": "src/flow/lib/run-auto-check.js",
+      "adapter": "dispatcher-envelope"
+    },
+    {
+      "path": "flow run claim-next-action",
+      "commandModule": "src/flow/lib/run-claim-next-action.js",
+      "adapter": "dispatcher-envelope"
+    },
+    {
+      "path": "flow run complete-task",
+      "commandModule": "src/flow/lib/run-complete-task.js",
+      "adapter": "dispatcher-envelope"
+    },
+    {
+      "path": "flow run dispatch",
+      "commandModule": "src/flow/lib/run-dispatch.js",
+      "adapter": "dispatcher-envelope"
+    },
+    {
+      "path": "flow run filter-task-review",
+      "commandModule": "src/flow/lib/run-filter-task-review.js",
+      "adapter": "dispatcher-envelope"
+    },
+    {
+      "path": "flow run final-regression",
+      "commandModule": "src/flow/lib/run-final-regression.js",
+      "adapter": "dispatcher-envelope"
+    },
+    {
+      "path": "flow run finalize-cleanup",
+      "commandModule": "src/flow/lib/run-finalize-cleanup.js",
+      "adapter": "dispatcher-envelope"
+    },
+    {
+      "path": "flow run finalize-commit",
+      "commandModule": "src/flow/lib/run-finalize-commit.js",
+      "adapter": "dispatcher-envelope"
+    },
+    {
+      "path": "flow run finalize-merge",
+      "commandModule": "src/flow/lib/run-finalize-merge.js",
+      "adapter": "dispatcher-envelope"
+    },
+    {
+      "path": "flow run finalize-sync",
+      "commandModule": "src/flow/lib/run-finalize-sync.js",
+      "adapter": "dispatcher-envelope"
+    },
+    {
+      "path": "flow run gate",
+      "commandModule": "src/flow/lib/run-gate.js",
+      "adapter": "dispatcher-envelope"
+    },
+    {
+      "path": "flow run lint",
+      "commandModule": "src/flow/lib/run-lint.js",
+      "adapter": "dispatcher-envelope"
+    },
+    {
+      "path": "flow run reconcile-task-review",
+      "commandModule": "src/flow/lib/run-reconcile-task-review.js",
+      "adapter": "dispatcher-envelope"
+    },
+    {
+      "path": "flow run recover-artifact-execution",
+      "commandModule": "src/flow/lib/run-recover-artifact-execution.js",
+      "adapter": "dispatcher-envelope"
+    },
+    {
+      "path": "flow run recover-draft-execution",
+      "commandModule": "src/flow/lib/run-recover-draft-execution.js",
+      "adapter": "dispatcher-envelope"
+    },
+    {
+      "path": "flow run recover-finalization",
+      "commandModule": "src/flow/lib/run-recover-finalization.js",
+      "adapter": "dispatcher-envelope"
+    },
+    {
+      "path": "flow run recover-missing-producer-artifact",
+      "commandModule": "src/flow/lib/run-recover-missing-producer-artifact.js",
+      "adapter": "dispatcher-envelope"
+    },
+    {
+      "path": "flow run recover-review-pass",
+      "commandModule": "src/flow/lib/run-recover-review-pass.js",
+      "adapter": "dispatcher-envelope"
+    },
+    {
+      "path": "flow run recover-spec-gate-repair",
+      "commandModule": "src/flow/lib/run-recover-spec-gate-repair.js",
+      "adapter": "dispatcher-envelope"
+    },
+    {
+      "path": "flow run recover-task-execution-overrun",
+      "commandModule": "src/flow/lib/run-recover-task-execution-overrun.js",
+      "adapter": "dispatcher-envelope"
+    },
+    {
+      "path": "flow run reopen-draft",
+      "commandModule": "src/flow/lib/run-reopen-draft.js",
+      "adapter": "dispatcher-envelope"
+    },
+    {
+      "path": "flow run repair-plan-gate",
+      "commandModule": "src/flow/lib/run-repair-plan-gate.js",
+      "adapter": "dispatcher-envelope"
+    },
+    {
+      "path": "flow run report",
+      "commandModule": "src/flow/lib/run-report.js",
+      "adapter": "dispatcher-envelope"
+    },
+    {
+      "path": "flow run requirement-test-gate",
+      "commandModule": "src/flow/lib/run-requirement-test-gate.js",
+      "adapter": "dispatcher-envelope"
+    },
+    {
+      "path": "flow run retro",
+      "commandModule": "src/flow/lib/run-retro.js",
+      "adapter": "dispatcher-envelope"
+    },
+    {
+      "path": "flow run review",
+      "commandModule": "src/flow/lib/run-review.js",
+      "adapter": "dispatcher-envelope"
+    },
+    {
+      "path": "flow run seal-handoff",
+      "commandModule": "src/flow/lib/run-seal-handoff.js",
+      "adapter": "dispatcher-envelope"
+    },
+    {
+      "path": "flow run settle-failure",
+      "commandModule": "src/flow/lib/run-settle-failure.js",
+      "adapter": "dispatcher-envelope"
+    },
+    {
+      "path": "flow run settle-gate-transition",
+      "commandModule": "src/flow/lib/run-settle-gate-transition.js",
+      "adapter": "dispatcher-envelope"
+    },
+    {
+      "path": "flow run settle-review-transition",
+      "commandModule": "src/flow/lib/run-settle-review-transition.js",
+      "adapter": "dispatcher-envelope"
+    },
+    {
+      "path": "flow run start-task",
+      "commandModule": "src/flow/lib/run-start-task.js",
+      "adapter": "dispatcher-envelope"
+    },
+    {
+      "path": "flow run sync",
+      "commandModule": "src/flow/lib/run-sync.js",
+      "adapter": "dispatcher-envelope"
+    },
+    {
+      "path": "flow run test-execute",
+      "commandModule": "src/flow/lib/run-test-execute.js",
+      "adapter": "dispatcher-envelope"
+    },
+    {
+      "path": "flow run test-result-review",
+      "commandModule": "src/flow/lib/run-test-result-review.js",
+      "adapter": "dispatcher-envelope"
+    },
+    {
+      "path": "flow run update-overview",
+      "commandModule": "src/flow/lib/run-update-overview.js",
+      "adapter": "dispatcher-envelope"
+    },
+    {
+      "path": "flow set acceptance-decision",
+      "commandModule": "src/flow/lib/set-acceptance-decision.js",
+      "adapter": "dispatcher-envelope"
+    },
+    {
+      "path": "flow set approval",
+      "commandModule": "src/flow/lib/set-approval.js",
+      "adapter": "dispatcher-envelope"
+    },
+    {
+      "path": "flow set auto",
+      "commandModule": "src/flow/lib/set-auto.js",
+      "adapter": "dispatcher-envelope"
+    },
+    {
+      "path": "flow set broad",
+      "commandModule": "src/flow/lib/set-broad.js",
+      "adapter": "dispatcher-envelope"
+    },
+    {
+      "path": "flow set draft-answer",
+      "commandModule": "src/flow/lib/set-draft-answer.js",
+      "adapter": "dispatcher-envelope"
+    },
+    {
+      "path": "flow set files",
+      "commandModule": "src/flow/lib/set-files.js",
+      "adapter": "dispatcher-envelope"
+    },
+    {
+      "path": "flow set init",
+      "commandModule": "src/flow/lib/set-init.js",
+      "adapter": "dispatcher-envelope"
+    },
+    {
+      "path": "flow set issue",
+      "commandModule": "src/flow/lib/set-issue.js",
+      "adapter": "dispatcher-envelope"
+    },
+    {
+      "path": "flow set issue-log",
+      "commandModule": "src/flow/lib/set-issue-log.js",
+      "adapter": "dispatcher-envelope"
+    },
+    {
+      "path": "flow set metric",
+      "commandModule": "src/flow/lib/set-metric.js",
+      "adapter": "dispatcher-envelope"
+    },
+    {
+      "path": "flow set nonblocking-decision",
+      "commandModule": "src/flow/lib/set-nonblocking-decision.js",
+      "adapter": "dispatcher-envelope"
+    },
+    {
+      "path": "flow set note",
+      "commandModule": "src/flow/lib/set-note.js",
+      "adapter": "dispatcher-envelope"
+    },
+    {
+      "path": "flow set policy",
+      "commandModule": "src/flow/lib/set-policy.js",
+      "adapter": "dispatcher-envelope"
+    },
+    {
+      "path": "flow set request",
+      "commandModule": "src/flow/lib/set-request.js",
+      "adapter": "dispatcher-envelope"
+    },
+    {
+      "path": "flow set retry",
+      "commandModule": "src/flow/lib/set-retry.js",
+      "adapter": "dispatcher-envelope"
+    },
+    {
+      "path": "flow set review-evidence",
+      "commandModule": "src/flow/lib/set-review-evidence.js",
+      "adapter": "dispatcher-envelope"
+    },
+    {
+      "path": "flow set step",
+      "commandModule": "src/flow/lib/set-step.js",
+      "adapter": "dispatcher-envelope"
+    }
+  ],
+  "errorCodeInventory": {
+    "sourceScope": [
+      "all JavaScript under src/flow/",
+      "src/flow.js",
+      "src/flow-main.js",
+      "src/cli-main.js",
+      "src/sennel.js",
+      "src/lib/dispatcher.js",
+      "src/lib/flow-envelope.js",
+      "src/lib/flow-cli-failure.js",
+      "src/lib/flow-stop-guidance.js",
+      "src/lib/agent-failure.js",
+      "src/lib/process-execution-values.js"
+    ],
+    "literalCodes": [
+      {
+        "code": "ABORT_BASE_SWITCH_FAILED",
+        "sources": [
+          "src/flow/lib/run-abort.js"
+        ]
+      },
+      {
+        "code": "ABORT_EXECUTION_BUSY",
+        "sources": [
+          "src/flow/lib/run-abort.js"
+        ]
+      },
+      {
+        "code": "ABORT_FAILED",
+        "sources": [
+          "src/flow/lib/run-abort.js"
+        ]
+      },
+      {
+        "code": "ABORT_FINALIZATION_CONFLICT",
+        "sources": [
+          "src/flow/lib/run-abort.js"
+        ]
+      },
+      {
+        "code": "ABORT_UNRELATED_DIRTY",
+        "sources": [
+          "src/flow/lib/run-abort.js"
+        ]
+      },
+      {
+        "code": "ACCEPTANCE_EXECUTION_CLAIMED",
+        "sources": [
+          "src/flow/engine/composition/acceptance.js"
+        ]
+      },
+      {
+        "code": "ACCEPTANCE_MECHANICALLY_BLOCKED",
+        "sources": [
+          "src/flow/engine/composition/acceptance.js"
+        ]
+      },
+      {
+        "code": "ACCEPTANCE_RESPONSE_INVALID",
+        "sources": [
+          "src/flow/lib/run-acceptance-review.js"
+        ]
+      },
+      {
+        "code": "ACTIVE_FLOW_MISMATCH",
+        "sources": [
+          "src/flow/lib/run-prepare-spec.js",
+          "src/lib/dispatcher.js"
+        ]
+      },
+      {
+        "code": "AGENT_AUTHENTICATION_FAILED",
+        "sources": [
+          "src/lib/agent-failure.js"
+        ]
+      },
+      {
+        "code": "AGENT_EMPTY_RESPONSE",
+        "sources": [
+          "src/lib/agent-failure.js"
+        ]
+      },
+      {
+        "code": "AGENT_PERMANENT_NETWORK_FAILURE",
+        "sources": [
+          "src/lib/agent-failure.js"
+        ]
+      },
+      {
+        "code": "AGENT_PERMISSION_CONFIGURATION_FAILED",
+        "sources": [
+          "src/lib/agent-failure.js"
+        ]
+      },
+      {
+        "code": "AGENT_TEMPORARY_NETWORK",
+        "sources": [
+          "src/lib/agent-failure.js"
+        ]
+      },
+      {
+        "code": "AGENT_TEMPORARY_PROVIDER_UNAVAILABLE",
+        "sources": [
+          "src/lib/agent-failure.js"
+        ]
+      },
+      {
+        "code": "AGENT_TEMPORARY_RATE_LIMIT",
+        "sources": [
+          "src/lib/agent-failure.js"
+        ]
+      },
+      {
+        "code": "AGENT_TIMEOUT",
+        "sources": [
+          "src/flow/definition.js",
+          "src/flow/lib/current-flow-state.js",
+          "src/lib/agent-failure.js"
+        ]
+      },
+      {
+        "code": "AGENT_UNCLASSIFIED_PROVIDER_EXIT",
+        "sources": [
+          "src/lib/agent-failure.js"
+        ]
+      },
+      {
+        "code": "AGENT_UNKNOWN_PROVIDER_FAILURE",
+        "sources": [
+          "src/lib/agent-failure.js"
+        ]
+      },
+      {
+        "code": "AGENT_USAGE_LIMIT_REACHED",
+        "sources": [
+          "src/lib/agent-failure.js"
+        ]
+      },
+      {
+        "code": "ARGS_ERROR",
+        "sources": [
+          "src/flow/lib/get-artifact.js",
+          "src/flow/lib/get-runtime-log.js",
+          "src/flow/lib/get-status.js",
+          "src/flow/lib/run-finalize-cleanup.js",
+          "src/flow/lib/run-reopen-draft.js",
+          "src/lib/dispatcher.js"
+        ]
+      },
+      {
+        "code": "ARTIFACT_VIEW_AGENT_UNAVAILABLE",
+        "sources": [
+          "src/flow/lib/artifact-view-summary.js"
+        ]
+      },
+      {
+        "code": "ARTIFACT_VIEW_CACHE_NOT_SAVED",
+        "sources": [
+          "src/flow/lib/artifact-view-cache.js",
+          "src/flow/lib/get-artifact.js"
+        ]
+      },
+      {
+        "code": "ARTIFACT_VIEW_INPUT_LIMIT",
+        "sources": [
+          "src/flow/lib/artifact-view-summary.js"
+        ]
+      },
+      {
+        "code": "ARTIFACT_VIEW_READ_FAILED",
+        "sources": [
+          "src/flow-main.js",
+          "src/flow/lib/artifact-view-service.js",
+          "src/flow/lib/get-artifact.js"
+        ]
+      },
+      {
+        "code": "ARTIFACT_VIEW_RENDER_FAILED",
+        "sources": [
+          "src/flow/lib/artifact-view-service.js"
+        ]
+      },
+      {
+        "code": "ARTIFACT_VIEW_SUMMARY_INVALID",
+        "sources": [
+          "src/flow/lib/artifact-view-summary.js"
+        ]
+      },
+      {
+        "code": "AUTO_CHECK_INELIGIBLE",
+        "sources": [
+          "src/flow/lib/set-auto.js"
+        ]
+      },
+      {
+        "code": "AUTO_CHECK_INPUT_ARTIFACT_INVALID",
+        "sources": [
+          "src/flow/lib/resolve-auto-check-input.js"
+        ]
+      },
+      {
+        "code": "AUTO_CHECK_INPUT_ARTIFACT_MISSING",
+        "sources": [
+          "src/flow/lib/resolve-auto-check-input.js"
+        ]
+      },
+      {
+        "code": "AUTO_CHECK_INPUT_INVALID",
+        "sources": [
+          "src/flow/lib/resolve-auto-check-input.js"
+        ]
+      },
+      {
+        "code": "AUTO_RESCUE_CHERRY_PICK_STATE_FAILED",
+        "sources": [
+          "src/flow/lib/run-finalize-cleanup.js"
+        ]
+      },
+      {
+        "code": "AUTO_RESCUE_CLEANUP_FAILED",
+        "sources": [
+          "src/flow/lib/run-finalize-cleanup.js"
+        ]
+      },
+      {
+        "code": "BRANCH_DELETE_FAILED",
+        "sources": [
+          "src/flow/lib/run-finalize-cleanup.js"
+        ]
+      },
+      {
+        "code": "BRANCH_REF_RESOLUTION_FAILED",
+        "sources": [
+          "src/flow/lib/run-finalize-cleanup.js"
+        ]
+      },
+      {
+        "code": "CANONICAL_DRAFT_EXECUTION_RECOVERY_FAILED",
+        "sources": [
+          "src/flow/lib/run-recover-draft-execution.js"
+        ]
+      },
+      {
+        "code": "CANONICAL_DRAFT_SOURCE_UNAVAILABLE",
+        "sources": [
+          "src/flow/lib/canonical-review-artifacts.js"
+        ]
+      },
+      {
+        "code": "CANONICAL_FAILURE_SETTLEMENT_FAILED",
+        "sources": [
+          "src/flow/lib/run-settle-failure.js"
+        ]
+      },
+      {
+        "code": "CANONICAL_FAILURE_SETTLEMENT_UNAVAILABLE",
+        "sources": [
+          "src/flow/lib/run-settle-failure.js"
+        ]
+      },
+      {
+        "code": "CANONICAL_FLOW_REQUIRED",
+        "sources": [
+          "src/flow/lib/get-artifact.js",
+          "src/flow/lib/run-recover-draft-execution.js",
+          "src/flow/lib/run-recover-missing-producer-artifact.js",
+          "src/flow/lib/run-repair-plan-gate.js",
+          "src/flow/lib/run-settle-failure.js",
+          "src/flow/lib/run-settle-review-transition.js",
+          "src/flow/lib/set-step.js"
+        ]
+      },
+      {
+        "code": "CANONICAL_MISSING_PRODUCER_ARTIFACT_RECOVERY_FAILED",
+        "sources": [
+          "src/flow/lib/run-recover-missing-producer-artifact.js"
+        ]
+      },
+      {
+        "code": "CANONICAL_MISSING_PRODUCER_ARTIFACT_RECOVERY_STALE",
+        "sources": [
+          "src/flow/lib/producer-artifact-readiness.js"
+        ]
+      },
+      {
+        "code": "CANONICAL_PRODUCER_ARTIFACT_NOT_READY",
+        "sources": [
+          "src/flow/lib/next-action-directive.js",
+          "src/flow/lib/producer-artifact-readiness.js",
+          "src/flow/lib/run-settle-failure.js"
+        ]
+      },
+      {
+        "code": "CANONICAL_RAW_ACTIVITY_MUTATION_FORBIDDEN",
+        "sources": [
+          "src/flow/lib/canonical-flow-manager-store.js"
+        ]
+      },
+      {
+        "code": "CANONICAL_RECORD_INCONSISTENT",
+        "sources": [
+          "src/flow/query-contract.js",
+          "src/flow/query-details.js"
+        ]
+      },
+      {
+        "code": "CANONICAL_RECORD_UNREADABLE",
+        "sources": [
+          "src/flow/query-contract.js",
+          "src/flow/query-details.js"
+        ]
+      },
+      {
+        "code": "CANONICAL_REVIEW_DRY_RUN_REQUIRES_PREVIEW_BOUNDARY",
+        "sources": [
+          "src/flow/lib/run-review.js"
+        ]
+      },
+      {
+        "code": "CANONICAL_REVIEW_REQUIRED",
+        "sources": [
+          "src/flow/lib/run-recover-review-pass.js",
+          "src/flow/lib/run-review.js"
+        ]
+      },
+      {
+        "code": "CANONICAL_TEST_SOURCE_REVISION_UNAVAILABLE",
+        "sources": [
+          "src/flow/lib/canonical-test-artifacts.js"
+        ]
+      },
+      {
+        "code": "CHERRY_PICK_ABORT_FAILED",
+        "sources": [
+          "src/flow/lib/finalize-cleanup-journal.js"
+        ]
+      },
+      {
+        "code": "CHERRY_PICK_CONFLICT",
+        "sources": [
+          "src/flow/lib/run-finalize-cleanup.js"
+        ]
+      },
+      {
+        "code": "COMMAND_ENVELOPE_FAILED",
+        "sources": [
+          "src/lib/dispatcher.js"
+        ]
+      },
+      {
+        "code": "CONDITIONAL_WORKER_NOT_ADMITTED",
+        "sources": [
+          "src/flow/lib/worker-execution-admission.js"
+        ]
+      },
+      {
+        "code": "CURRENT_FLOW_STATE_CONFLICT",
+        "sources": [
+          "src/flow/lib/current-flow-state-conflict-error.js"
+        ]
+      },
+      {
+        "code": "CURRENT_FLOW_STATE_INVARIANT_INVALID",
+        "sources": [
+          "src/flow/lib/current-flow-state-invariant-error.js"
+        ]
+      },
+      {
+        "code": "CURSOR_QUERY_MISMATCH",
+        "sources": [
+          "src/flow/query-contract.js"
+        ]
+      },
+      {
+        "code": "DETAIL_UNAVAILABLE",
+        "sources": [
+          "src/flow/query-contract.js",
+          "src/flow/query-details.js"
+        ]
+      },
+      {
+        "code": "DRAFT_ANSWER_NOT_SELECTED",
+        "sources": [
+          "src/flow/lib/set-draft-answer.js"
+        ]
+      },
+      {
+        "code": "DRAFT_ANSWER_STALE_PUBLICATION",
+        "sources": [
+          "src/flow/lib/set-draft-answer.js"
+        ]
+      },
+      {
+        "code": "DRAFT_ARTIFACT_BINDING_MISMATCH",
+        "sources": [
+          "src/flow/lib/draft-artifact-promotion.js"
+        ]
+      },
+      {
+        "code": "DRAFT_ARTIFACT_INVALID",
+        "sources": [
+          "src/flow/lib/draft-artifact-promotion.js"
+        ]
+      },
+      {
+        "code": "DRAFT_AWAIT_RECEIPT_STALE",
+        "sources": [
+          "src/flow/lib/worker-execution-admission.js"
+        ]
+      },
+      {
+        "code": "DRAFT_REVIEW_ADMISSION_REFUSED",
+        "sources": [
+          "src/flow/registry.js"
+        ]
+      },
+      {
+        "code": "DRAFT_REVIEW_CANONICAL_STALE",
+        "sources": [
+          "src/flow/commands/review.js"
+        ]
+      },
+      {
+        "code": "DRAFT_REVIEW_EXECUTION_ADMISSION_REJECTED",
+        "sources": [
+          "src/flow/lib/run-review.js"
+        ]
+      },
+      {
+        "code": "DRAFT_REVIEW_EXECUTION_ALREADY_PUBLISHED",
+        "sources": [
+          "src/flow/lib/run-review.js"
+        ]
+      },
+      {
+        "code": "DRAFT_REVIEW_EXECUTION_BINDING_MISMATCH",
+        "sources": [
+          "src/flow/lib/run-review.js"
+        ]
+      },
+      {
+        "code": "DRAFT_REVIEW_PUBLICATION_RECOVERY_FAILED",
+        "sources": [
+          "src/flow/lib/run-review.js"
+        ]
+      },
+      {
+        "code": "DRAFT_REVIEW_REVISION_CHANGED",
+        "sources": [
+          "src/flow/lib/draft-artifact-promotion.js"
+        ]
+      },
+      {
+        "code": "DRAFT_REVIEW_REVISION_STALE",
+        "sources": [
+          "src/flow/lib/draft-artifact-promotion.js"
+        ]
+      },
+      {
+        "code": "DRAFT_SCHEMA_INVALID",
+        "sources": [
+          "src/flow/lib/draft-transition-facts-reader.js",
+          "src/flow/lib/worker-execution-admission.js"
+        ]
+      },
+      {
+        "code": "DRAFT_TRANSITION_STATE_INVALID",
+        "sources": [
+          "src/flow/lib/draft-transition-facts-reader.js"
+        ]
+      },
+      {
+        "code": "ENOBUFS",
+        "sources": [
+          "src/flow/lib/test-regression.js"
+        ]
+      },
+      {
+        "code": "ERR_CHILD_PROCESS_STDIO_MAXBUFFER",
+        "sources": [
+          "src/flow/lib/test-regression.js"
+        ]
+      },
+      {
+        "code": "EVALUATION_SCHEMA_ERROR",
+        "sources": [
+          "src/flow/lib/run-gate.js"
+        ]
+      },
+      {
+        "code": "FINAL_REGRESSION_FACTS_UNAVAILABLE",
+        "sources": [
+          "src/flow/lib/get-next-action.js"
+        ]
+      },
+      {
+        "code": "FINAL_REGRESSION_FAILED",
+        "sources": [
+          "src/flow/definition.js"
+        ]
+      },
+      {
+        "code": "FINAL_REGRESSION_USER_ACTION_UNAVAILABLE",
+        "sources": [
+          "src/flow/lib/get-next-action.js"
+        ]
+      },
+      {
+        "code": "FINALIZATION_ACTION_CLAIM_REQUIRED",
+        "sources": [
+          "src/flow/registry.js"
+        ]
+      },
+      {
+        "code": "FINALIZATION_OUTBOX_RECOVERY_REQUIRED",
+        "sources": [
+          "src/flow/lib/flow-outbox.js"
+        ]
+      },
+      {
+        "code": "FINALIZATION_PR_AWAIT_MERGE",
+        "sources": [
+          "src/flow/engine/composition/finalization.js"
+        ]
+      },
+      {
+        "code": "FINALIZATION_RECOVERY_DURABLE_PROOF_MISSING",
+        "sources": [
+          "src/flow/lib/finalization-outbox-recovery.js"
+        ]
+      },
+      {
+        "code": "FINALIZATION_RECOVERY_LOCK_BUSY",
+        "sources": [
+          "src/flow/lib/finalization-outbox-recovery.js"
+        ]
+      },
+      {
+        "code": "FINALIZATION_RECOVERY_MAIN_AUTHORITY_REQUIRED",
+        "sources": [
+          "src/flow/lib/finalization-outbox-recovery.js"
+        ]
+      },
+      {
+        "code": "FINALIZATION_RECOVERY_NOT_ADMITTED",
+        "sources": [
+          "src/flow/lib/run-recover-finalization.js"
+        ]
+      },
+      {
+        "code": "FINALIZE_CLEANUP_STEP_MISSING",
+        "sources": [
+          "src/flow/lib/finalize-cleanup-state.js"
+        ]
+      },
+      {
+        "code": "FINALIZE_FLOW_STATE_MISMATCH",
+        "sources": [
+          "src/flow/lib/finalize-cleanup-state.js"
+        ]
+      },
+      {
+        "code": "FINALIZE_MAIN_FLOW_MISSING",
+        "sources": [
+          "src/flow/lib/finalize-cleanup-state.js"
+        ]
+      },
+      {
+        "code": "FINALIZE_MERGE_EXTERNAL_DIRTY",
+        "sources": [
+          "src/flow/lib/run-finalize.js"
+        ]
+      },
+      {
+        "code": "FINALIZE_OUTBOX_RECOVERY_EXHAUSTED",
+        "sources": [
+          "src/flow/lib/finalization-outbox-recovery.js"
+        ]
+      },
+      {
+        "code": "FINALIZE_POINTER_WRITE_FAILED",
+        "sources": [
+          "src/flow/lib/run-finalize-cleanup.js"
+        ]
+      },
+      {
+        "code": "FINALIZE_PREFLIGHT_FAILED",
+        "sources": [
+          "src/flow/lib/run-finalize.js"
+        ]
+      },
+      {
+        "code": "FINALIZE_SYNC_FAILED",
+        "sources": [
+          "src/flow/lib/finalize-sync-diagnostics.js",
+          "src/flow/lib/run-finalize-cleanup.js"
+        ]
+      },
+      {
+        "code": "FINALIZE_SYNC_INTERRUPTED",
+        "sources": [
+          "src/flow/lib/finalize-sync-diagnostics.js",
+          "src/flow/lib/run-finalize-cleanup.js"
+        ]
+      },
+      {
+        "code": "FINALIZE_TEARDOWN_JOURNAL_DIVERGED",
+        "sources": [
+          "src/flow/lib/run-finalize-cleanup.js"
+        ]
+      },
+      {
+        "code": "FINALIZE_WORKTREE_HEAD_CHANGED",
+        "sources": [
+          "src/flow/lib/run-finalize-cleanup.js"
+        ]
+      },
+      {
+        "code": "FLOW_ARTIFACT_EXECUTION_INVALID",
+        "sources": [
+          "src/flow/lib/artifact-worker-execution-continuation.js"
+        ]
+      },
+      {
+        "code": "FLOW_ARTIFACT_EXECUTION_PUBLICATION_UNKNOWN",
+        "sources": [
+          "src/flow/lib/artifact-worker-execution-continuation.js"
+        ]
+      },
+      {
+        "code": "FLOW_ARTIFACT_EXECUTION_RECOVERY_EXHAUSTED",
+        "sources": [
+          "src/flow/lib/artifact-worker-execution-continuation.js"
+        ]
+      },
+      {
+        "code": "FLOW_ARTIFACT_EXECUTION_RESPONSE_AVAILABLE",
+        "sources": [
+          "src/flow/lib/artifact-worker-execution-recovery.js"
+        ]
+      },
+      {
+        "code": "FLOW_ARTIFACT_EXECUTION_STOP_UNCONFIRMED",
+        "sources": [
+          "src/flow/lib/artifact-worker-execution-continuation.js"
+        ]
+      },
+      {
+        "code": "FLOW_ARTIFACT_HANDOFF_AUTHORITY_VIOLATION",
+        "sources": [
+          "src/flow/lib/run-dispatch.js"
+        ]
+      },
+      {
+        "code": "FLOW_ARTIFACT_HANDOFF_INVALID",
+        "sources": [
+          "src/flow/lib/run-seal-handoff.js",
+          "src/flow/lib/worker-artifact-handoff.js",
+          "src/flow/steps/draft/draft-repair-candidate.js"
+        ]
+      },
+      {
+        "code": "FLOW_ARTIFACT_HANDOFF_REQUIRED",
+        "sources": [
+          "src/flow/lib/set-step.js"
+        ]
+      },
+      {
+        "code": "FLOW_BLOCKED",
+        "sources": [
+          "src/flow/query.js"
+        ]
+      },
+      {
+        "code": "FLOW_BOOTSTRAP_FAILED",
+        "sources": [
+          "src/flow/query-contract.js",
+          "src/sennel.js"
+        ]
+      },
+      {
+        "code": "FLOW_DISPATCH_AGENT_FAILED",
+        "sources": [
+          "src/flow/lib/run-dispatch.js"
+        ]
+      },
+      {
+        "code": "FLOW_DISPATCH_APPROVAL_CONTINUATION_FAILED",
+        "sources": [
+          "src/flow/lib/run-dispatch.js"
+        ]
+      },
+      {
+        "code": "FLOW_DISPATCH_APPROVAL_STALE",
+        "sources": [
+          "src/flow/lib/run-dispatch.js"
+        ]
+      },
+      {
+        "code": "FLOW_DISPATCH_AUTHORIZATION_STALE",
+        "sources": [
+          "src/flow/lib/run-dispatch.js"
+        ]
+      },
+      {
+        "code": "FLOW_DISPATCH_COMMAND_ENVELOPE_INVALID",
+        "sources": [
+          "src/flow/lib/run-dispatch.js"
+        ]
+      },
+      {
+        "code": "FLOW_DISPATCH_COMMAND_FAILED",
+        "sources": [
+          "src/flow/lib/run-dispatch.js"
+        ]
+      },
+      {
+        "code": "FLOW_DISPATCH_DIRECTIVE_INVALID",
+        "sources": [
+          "src/flow/lib/run-dispatch.js"
+        ]
+      },
+      {
+        "code": "FLOW_DISPATCH_FINALIZE_CLEANUP_UNCONFIRMED",
+        "sources": [
+          "src/flow/lib/run-dispatch.js"
+        ]
+      },
+      {
+        "code": "FLOW_DISPATCH_INVOCATION_STALE",
+        "sources": [
+          "src/flow/lib/dispatch-invocation.js",
+          "src/flow/lib/run-dispatch.js"
+        ]
+      },
+      {
+        "code": "FLOW_DISPATCH_LIMIT_REACHED",
+        "sources": [
+          "src/flow/lib/run-dispatch.js"
+        ]
+      },
+      {
+        "code": "FLOW_DISPATCH_LOCK_FAILED",
+        "sources": [
+          "src/flow/lib/run-dispatch.js"
+        ]
+      },
+      {
+        "code": "FLOW_DISPATCH_NONBLOCKING_DECISION_FAILED",
+        "sources": [
+          "src/flow/lib/run-dispatch.js"
+        ]
+      },
+      {
+        "code": "FLOW_DISPATCH_RECOVERY_COMMAND_FAILED",
+        "sources": [
+          "src/flow/lib/run-dispatch.js"
+        ]
+      },
+      {
+        "code": "FLOW_DISPATCH_REPAIR_COMMAND_FAILED",
+        "sources": [
+          "src/flow/lib/run-dispatch.js"
+        ]
+      },
+      {
+        "code": "FLOW_DISPATCH_REPOSITORY_FINGERPRINT_FAILED",
+        "sources": [
+          "src/flow/lib/run-dispatch.js"
+        ]
+      },
+      {
+        "code": "FLOW_DISPATCH_STALLED",
+        "sources": [
+          "src/flow/lib/run-dispatch.js"
+        ]
+      },
+      {
+        "code": "FLOW_DISPATCH_TARGET_REQUIRED",
+        "sources": [
+          "src/flow/lib/process-runtime-admission.js",
+          "src/flow/lib/run-dispatch.js"
+        ]
+      },
+      {
+        "code": "FLOW_DRAFT_EXECUTION_RECOVERY_INELIGIBLE",
+        "sources": [
+          "src/flow/lib/draft-worker-recovery.js"
+        ]
+      },
+      {
+        "code": "FLOW_DRAFT_GATE_REPAIR_INVALID",
+        "sources": [
+          "src/flow/lib/draft-repair-operations.js"
+        ]
+      },
+      {
+        "code": "FLOW_DRAFT_GATE_RESULT_ALREADY_PUBLISHED",
+        "sources": [
+          "src/flow/lib/run-gate.js"
+        ]
+      },
+      {
+        "code": "FLOW_DRAFT_WORKER_CORRECTION_EXHAUSTED",
+        "sources": [
+          "src/flow/lib/worker-execution-admission.js"
+        ]
+      },
+      {
+        "code": "FLOW_EXECUTION_CONTRACT_MISMATCH",
+        "sources": [
+          "src/flow/lib/flow-execution-contract.js"
+        ]
+      },
+      {
+        "code": "FLOW_EXECUTION_INPUT_BASELINE_CHANGED",
+        "sources": [
+          "src/flow/lib/flow-execution-input-baseline.js"
+        ]
+      },
+      {
+        "code": "FLOW_GATE_EVALUATION_ADMISSION_DENIED",
+        "sources": [
+          "src/flow/lib/execution-admission.js",
+          "src/flow/lib/run-gate.js"
+        ]
+      },
+      {
+        "code": "FLOW_HOST_FILTER_CHECKPOINT_FAILED",
+        "sources": [
+          "src/flow/lib/run-dispatch.js"
+        ]
+      },
+      {
+        "code": "FLOW_INITIALIZATION_FAILED",
+        "sources": [
+          "src/lib/flow-cli-failure.js"
+        ]
+      },
+      {
+        "code": "FLOW_NEXT_ACTION_BINDING_INVALID",
+        "sources": [
+          "src/flow/lib/dispatch-invocation.js",
+          "src/flow/lib/run-dispatch.js"
+        ]
+      },
+      {
+        "code": "FLOW_NEXT_ACTION_FAILED",
+        "sources": [
+          "src/flow/lib/run-dispatch.js"
+        ]
+      },
+      {
+        "code": "FLOW_PLAN_GATE_REPAIR_NO_PROGRESS",
+        "sources": [
+          "src/flow/lib/canonical-flow-manager-store.js"
+        ]
+      },
+      {
+        "code": "FLOW_PREPARATION_REQUIRED",
+        "sources": [
+          "src/flow/lib/execution-admission.js"
+        ]
+      },
+      {
+        "code": "FLOW_PUBLIC_AUTHORITY_SENSITIVE",
+        "sources": [
+          "src/lib/flow-stop-guidance.js"
+        ]
+      },
+      {
+        "code": "FLOW_REPAIR_FINDING_COVERAGE_INVALID",
+        "sources": [
+          "src/flow/lib/repair-mutation-contract.js"
+        ]
+      },
+      {
+        "code": "FLOW_REPAIR_FINDING_MUTATION_COVERAGE_INVALID",
+        "sources": [
+          "src/flow/lib/repair-mutation-contract.js"
+        ]
+      },
+      {
+        "code": "FLOW_RUNTIME_HANDOFF_FAILED",
+        "sources": [
+          "src/sennel.js"
+        ]
+      },
+      {
+        "code": "FLOW_SOURCE_HANDOFF_CANONICAL_PATH_VIOLATION",
+        "sources": [
+          "src/flow/lib/run-dispatch.js"
+        ]
+      },
+      {
+        "code": "FLOW_SOURCE_HANDOFF_FINALIZE_AUTHORITY_VIOLATION",
+        "sources": [
+          "src/flow/lib/run-dispatch.js"
+        ]
+      },
+      {
+        "code": "FLOW_SOURCE_HANDOFF_RECOVERY_UNTRUSTED",
+        "sources": [
+          "src/flow/lib/worker-artifact-handoff.js"
+        ]
+      },
+      {
+        "code": "FLOW_SPEC_GATE_REPAIR_INPUT_FORMAT_UNAVAILABLE",
+        "sources": [
+          "src/flow/lib/spec-gate-repair-execution-decision.js"
+        ]
+      },
+      {
+        "code": "FLOW_SPEC_GATE_REPAIR_INPUT_UNAVAILABLE",
+        "sources": [
+          "src/flow/lib/spec-gate-repair-input-unavailable.js"
+        ]
+      },
+      {
+        "code": "FLOW_SPEC_GATE_REPAIR_OPERATION_REJECTED",
+        "sources": [
+          "src/flow/lib/spec-repair-operations.js"
+        ]
+      },
+      {
+        "code": "FLOW_SPEC_GATE_REPAIR_RECOVERY_INELIGIBLE",
+        "sources": [
+          "src/flow/lib/spec-gate-repair-recovery.js"
+        ]
+      },
+      {
+        "code": "FLOW_SPEC_GATE_REPAIR_RESPONSE_UNAVAILABLE",
+        "sources": [
+          "src/flow/lib/spec-gate-repair-execution-decision.js"
+        ]
+      },
+      {
+        "code": "FLOW_SPEC_GATE_RESULT_ALREADY_SETTLED",
+        "sources": [
+          "src/flow/lib/run-gate.js"
+        ]
+      },
+      {
+        "code": "FLOW_SPEC_REPAIR_BASE_REVISION_MISMATCH",
+        "sources": [
+          "src/flow/lib/spec-repair-operations.js"
+        ]
+      },
+      {
+        "code": "FLOW_SPEC_REPAIR_TRIAGE_TARGETS_INVALID",
+        "sources": [
+          "src/flow/lib/spec-repair-operations.js"
+        ]
+      },
+      {
+        "code": "FLOW_STATE_ATOMIC_BUSY",
+        "sources": [
+          "src/flow/lib/current-flow-state.js"
+        ]
+      },
+      {
+        "code": "FLOW_STEP_TRANSITION_INVALID",
+        "sources": [
+          "src/flow/lib/step-transition-policy.js"
+        ]
+      },
+      {
+        "code": "FLOW_STOP_GUIDANCE_CONFLICT",
+        "sources": [
+          "src/lib/flow-stop-guidance.js"
+        ]
+      },
+      {
+        "code": "FLOW_TARGET_NOT_FOUND",
+        "sources": [
+          "src/flow/lib/get-runtime-log.js",
+          "src/flow/lib/get-status.js",
+          "src/lib/dispatcher.js"
+        ]
+      },
+      {
+        "code": "FLOW_UNKNOWN_COMMAND",
+        "sources": [
+          "src/flow-main.js"
+        ]
+      },
+      {
+        "code": "FLOW_VERSION_NOT_FOUND",
+        "sources": [
+          "src/flow/query-contract.js"
+        ]
+      },
+      {
+        "code": "FORCED_ORPHAN_DROP",
+        "sources": [
+          "src/flow/lib/run-finalize-cleanup.js"
+        ]
+      },
+      {
+        "code": "GATE_EXTERNAL_BLOCKED",
+        "sources": [
+          "src/flow/lib/get-next-action.js"
+        ]
+      },
+      {
+        "code": "GATE_NONBLOCKING_DECISION_REQUIRED",
+        "sources": [
+          "src/flow/lib/get-next-action.js"
+        ]
+      },
+      {
+        "code": "GATE_NONBLOCKING_HANDOFF_UNAVAILABLE",
+        "sources": [
+          "src/flow/lib/get-next-action.js"
+        ]
+      },
+      {
+        "code": "GATE_OUTPUT_TOOLING_FAILURE",
+        "sources": [
+          "src/flow/lib/gate-transition-facts.js",
+          "src/flow/lib/run-gate.js"
+        ]
+      },
+      {
+        "code": "GATE_REJECTED",
+        "sources": [
+          "src/flow/lib/canonical-flow-manager-store.js"
+        ]
+      },
+      {
+        "code": "GATE_REQUIRED_AGENT_UNSET",
+        "sources": [
+          "src/flow/lib/run-gate.js"
+        ]
+      },
+      {
+        "code": "GATE_REQUIRED_EVALUATION_BYPASS_FORBIDDEN",
+        "sources": [
+          "src/flow/lib/run-gate.js"
+        ]
+      },
+      {
+        "code": "GATE_SETTLEMENT_NOT_ADMITTED",
+        "sources": [
+          "src/flow/lib/run-settle-gate-transition.js"
+        ]
+      },
+      {
+        "code": "HISTORICAL_CONTINUATION_NOT_ADMITTED",
+        "sources": [
+          "src/flow/lib/get-next-action.js"
+        ]
+      },
+      {
+        "code": "IMPLEMENTATION_GATE_BLOCKED",
+        "sources": [
+          "src/flow/registry.js"
+        ]
+      },
+      {
+        "code": "INTERNAL_USER_ACTION_CONTRACT",
+        "sources": [
+          "src/flow/lib/user-action-prompt.js"
+        ]
+      },
+      {
+        "code": "INVALID_ARG_VALUE",
+        "sources": [
+          "src/flow/lib/get-runtime-log.js",
+          "src/flow/lib/set-approval.js",
+          "src/flow/lib/set-init.js",
+          "src/flow/lib/set-issue.js",
+          "src/flow/lib/set-metric.js"
+        ]
+      },
+      {
+        "code": "INVALID_BROAD_MODE",
+        "sources": [
+          "src/flow/lib/set-broad.js"
+        ]
+      },
+      {
+        "code": "INVALID_CURSOR",
+        "sources": [
+          "src/flow/query-contract.js"
+        ]
+      },
+      {
+        "code": "INVALID_DRAFT_ANSWER",
+        "sources": [
+          "src/flow/lib/set-draft-answer.js"
+        ]
+      },
+      {
+        "code": "INVALID_FIELD",
+        "sources": [
+          "src/flow/lib/set-issue-log.js"
+        ]
+      },
+      {
+        "code": "INVALID_JSON",
+        "sources": [
+          "src/flow/lib/run-update-overview.js",
+          "src/flow/query-contract.js"
+        ]
+      },
+      {
+        "code": "INVALID_PHASE",
+        "sources": [
+          "src/flow/lib/set-metric.js"
+        ]
+      },
+      {
+        "code": "INVALID_REASON",
+        "sources": [
+          "src/flow/lib/run-reopen-draft.js",
+          "src/flow/lib/set-issue-log.js"
+        ]
+      },
+      {
+        "code": "INVALID_RECOVERY_INPUT",
+        "sources": [
+          "src/flow/lib/set-retry.js"
+        ]
+      },
+      {
+        "code": "INVALID_REPAIR_REF",
+        "sources": [
+          "src/flow/lib/set-issue-log.js"
+        ]
+      },
+      {
+        "code": "INVALID_REQ_ID",
+        "sources": [
+          "src/flow/lib/set-files.js"
+        ]
+      },
+      {
+        "code": "INVALID_REQUEST",
+        "sources": [
+          "src/flow/query-contract.js"
+        ]
+      },
+      {
+        "code": "INVALID_SHAPE",
+        "sources": [
+          "src/flow/lib/run-update-overview.js"
+        ]
+      },
+      {
+        "code": "INVALID_STATUS",
+        "sources": [
+          "src/flow/lib/set-step.js"
+        ]
+      },
+      {
+        "code": "INVALID_USAGE",
+        "sources": [
+          "src/flow/lib/resolve-preparing-run-id.js",
+          "src/flow/lib/set-approval.js",
+          "src/flow/lib/set-auto.js",
+          "src/flow/lib/set-broad.js",
+          "src/flow/lib/set-draft-answer.js",
+          "src/flow/lib/set-files.js",
+          "src/flow/lib/set-issue-log.js",
+          "src/flow/lib/set-issue.js",
+          "src/flow/lib/set-metric.js",
+          "src/flow/lib/set-note.js",
+          "src/flow/lib/set-request.js",
+          "src/flow/lib/set-review-evidence.js",
+          "src/flow/lib/set-step.js"
+        ]
+      },
+      {
+        "code": "ISSUE_IMMUTABLE",
+        "sources": [
+          "src/flow/lib/set-issue.js"
+        ]
+      },
+      {
+        "code": "ISSUE_LOG_AUDIT_FAILED",
+        "sources": [
+          "src/flow/lib/run-finalize-cleanup.js"
+        ]
+      },
+      {
+        "code": "ISSUE_SNAPSHOT_UNAVAILABLE",
+        "sources": [
+          "src/flow/lib/run-prepare-spec.js",
+          "src/flow/lib/set-init.js"
+        ]
+      },
+      {
+        "code": "MAIN_REPO_DIRTY",
+        "sources": [
+          "src/flow/lib/run-finalize-cleanup.js"
+        ]
+      },
+      {
+        "code": "MAIN_REPO_LOCKED",
+        "sources": [
+          "src/flow/lib/run-finalize-cleanup.js"
+        ]
+      },
+      {
+        "code": "MAIN_REPO_STATUS_FAILED",
+        "sources": [
+          "src/flow/lib/run-finalize-cleanup.js"
+        ]
+      },
+      {
+        "code": "MERGE_BASE_ADVANCED",
+        "sources": [
+          "src/flow/lib/finalize-merge-transaction.js"
+        ]
+      },
+      {
+        "code": "MERGE_CALLER_TRANSITION_FAILED",
+        "sources": [
+          "src/flow/lib/finalize-merge-transaction.js"
+        ]
+      },
+      {
+        "code": "MERGE_COMMIT_FAILED",
+        "sources": [
+          "src/flow/lib/finalize-merge-transaction.js"
+        ]
+      },
+      {
+        "code": "MERGE_CONTENT_CONFLICT",
+        "sources": [
+          "src/flow/lib/finalize-merge-transaction.js"
+        ]
+      },
+      {
+        "code": "MERGE_EXECUTION_FAILED",
+        "sources": [
+          "src/flow/lib/finalize-merge-transaction.js"
+        ]
+      },
+      {
+        "code": "MERGE_FEATURE_DIRTY",
+        "sources": [
+          "src/flow/lib/finalize-merge-transaction.js"
+        ]
+      },
+      {
+        "code": "MERGE_FEATURE_HEAD_MISMATCH",
+        "sources": [
+          "src/flow/lib/finalize-merge-transaction.js"
+        ]
+      },
+      {
+        "code": "MERGE_FEATURE_OPERATION_IN_PROGRESS",
+        "sources": [
+          "src/flow/lib/finalize-merge-transaction.js"
+        ]
+      },
+      {
+        "code": "MERGE_GIT_PROBE_FAILED",
+        "sources": [
+          "src/flow/lib/finalize-merge-transaction.js"
+        ]
+      },
+      {
+        "code": "MERGE_PRE_SYNC_BASE_UNAVAILABLE",
+        "sources": [
+          "src/flow/commands/merge.js"
+        ]
+      },
+      {
+        "code": "MERGE_PRE_SYNC_CONFLICT",
+        "sources": [
+          "src/flow/commands/merge.js",
+          "src/flow/lib/finalization-outbox-recovery.js"
+        ]
+      },
+      {
+        "code": "MERGE_PRE_SYNC_DIRTY",
+        "sources": [
+          "src/flow/commands/merge.js"
+        ]
+      },
+      {
+        "code": "MERGE_PRE_SYNC_FETCH_FAILED",
+        "sources": [
+          "src/flow/commands/merge.js"
+        ]
+      },
+      {
+        "code": "MERGE_REBASE_RECOVERY_UNAVAILABLE",
+        "sources": [
+          "src/flow/lib/finalization-outbox-recovery.js"
+        ]
+      },
+      {
+        "code": "MERGE_REVALIDATION_REQUIRED",
+        "sources": [
+          "src/flow/commands/merge.js"
+        ]
+      },
+      {
+        "code": "MERGE_TARGET_DIRTY",
+        "sources": [
+          "src/flow/lib/finalize-merge-transaction.js"
+        ]
+      },
+      {
+        "code": "MERGE_TARGET_MATERIALIZATION_FAILED",
+        "sources": [
+          "src/flow/lib/finalize-merge-transaction.js"
+        ]
+      },
+      {
+        "code": "MERGE_TARGET_OPERATION_IN_PROGRESS",
+        "sources": [
+          "src/flow/lib/finalize-merge-transaction.js"
+        ]
+      },
+      {
+        "code": "MERGE_WORKTREE_CREATE_FAILED",
+        "sources": [
+          "src/flow/lib/finalize-merge-transaction.js"
+        ]
+      },
+      {
+        "code": "MISSING_JSON",
+        "sources": [
+          "src/flow/lib/run-update-overview.js"
+        ]
+      },
+      {
+        "code": "MISSING_RUN_ID",
+        "sources": [
+          "src/flow/lib/resolve-preparing-run-id.js",
+          "src/flow/lib/run-auto-check.js"
+        ]
+      },
+      {
+        "code": "MISSING_TASK_ID",
+        "sources": [
+          "src/flow/lib/run-start-task.js"
+        ]
+      },
+      {
+        "code": "NEXT_ACTION_CLAIM_NOT_ADMITTED",
+        "sources": [
+          "src/flow/lib/run-claim-next-action.js"
+        ]
+      },
+      {
+        "code": "NEXT_ACTION_TARGET_MISMATCH",
+        "sources": [
+          "src/flow/lib/get-next-action.js",
+          "src/flow/lib/worker-execution-admission.js"
+        ]
+      },
+      {
+        "code": "NO_ACTIVE_FLOW",
+        "sources": [
+          "src/flow/lib/get-artifact.js",
+          "src/flow/lib/run-complete-task.js",
+          "src/flow/lib/run-reopen-draft.js",
+          "src/flow/lib/run-start-task.js",
+          "src/flow/lib/run-update-overview.js"
+        ]
+      },
+      {
+        "code": "NO_FLOW",
+        "sources": [
+          "src/flow/lib/resolve-preparing-run-id.js"
+        ]
+      },
+      {
+        "code": "NO_GATE_STEP_IN_PROGRESS",
+        "sources": [
+          "src/flow/lib/run-gate.js"
+        ]
+      },
+      {
+        "code": "NO_REQUIREMENTS",
+        "sources": [
+          "src/flow/lib/run-retro.js"
+        ]
+      },
+      {
+        "code": "NO_TASK_TARGET",
+        "sources": [
+          "src/flow/lib/run-complete-task.js"
+        ]
+      },
+      {
+        "code": "NONBLOCKING_AMBIGUOUS_REPLAY",
+        "sources": [
+          "src/flow/lib/nonblocking-decision.js"
+        ]
+      },
+      {
+        "code": "NONBLOCKING_DECISION_CONFLICT",
+        "sources": [
+          "src/flow/lib/nonblocking.js"
+        ]
+      },
+      {
+        "code": "NONBLOCKING_EVIDENCE_NOT_RECORDED",
+        "sources": [
+          "src/flow/lib/nonblocking.js"
+        ]
+      },
+      {
+        "code": "NONBLOCKING_EVIDENCE_RECORD_FAILED",
+        "sources": [
+          "src/lib/dispatcher.js"
+        ]
+      },
+      {
+        "code": "NONBLOCKING_EVIDENCE_UNCLASSIFIED",
+        "sources": [
+          "src/flow/lib/nonblocking-evidence.js"
+        ]
+      },
+      {
+        "code": "NONBLOCKING_NO_ELIGIBLE_EVIDENCE",
+        "sources": [
+          "src/flow/lib/nonblocking.js"
+        ]
+      },
+      {
+        "code": "NONBLOCKING_NOT_DEFINITION_ELIGIBLE",
+        "sources": [
+          "src/flow/lib/nonblocking.js"
+        ]
+      },
+      {
+        "code": "NONBLOCKING_OPERATION_FAILED",
+        "sources": [
+          "src/flow/lib/nonblocking-command-failure.js"
+        ]
+      },
+      {
+        "code": "NONBLOCKING_STALE_DEFINITION",
+        "sources": [
+          "src/flow/lib/nonblocking-decision.js",
+          "src/flow/lib/nonblocking.js"
+        ]
+      },
+      {
+        "code": "NONBLOCKING_STALE_EVIDENCE",
+        "sources": [
+          "src/flow/lib/nonblocking-decision.js",
+          "src/flow/lib/nonblocking.js"
+        ]
+      },
+      {
+        "code": "ON_ERROR_HOOK_FAILED",
+        "sources": [
+          "src/lib/dispatcher.js"
+        ]
+      },
+      {
+        "code": "ORPHAN_COMMITS_DETECTED",
+        "sources": [
+          "src/flow/lib/run-finalize-cleanup.js"
+        ]
+      },
+      {
+        "code": "ORPHAN_LISTING_FAILED",
+        "sources": [
+          "src/flow/lib/run-finalize-cleanup.js"
+        ]
+      },
+      {
+        "code": "OTHER_FLOW_METADATA_DIRTY",
+        "sources": [
+          "src/flow/lib/run-finalize-cleanup.js"
+        ]
+      },
+      {
+        "code": "OTHER_FLOW_METADATA_STATUS_FAILED",
+        "sources": [
+          "src/flow/lib/run-finalize-cleanup.js"
+        ]
+      },
+      {
+        "code": "PERSIST_FAILED",
+        "sources": [
+          "src/flow/lib/run-update-overview.js"
+        ]
+      },
+      {
+        "code": "PLAN_GATE_REPAIR_EVIDENCE_MISSING",
+        "sources": [
+          "src/flow/lib/run-repair-plan-gate.js"
+        ]
+      },
+      {
+        "code": "PLAN_GATE_REPAIR_INVALID",
+        "sources": [
+          "src/flow/lib/run-repair-plan-gate.js"
+        ]
+      },
+      {
+        "code": "PLAN_GATE_REPAIR_NOT_ADMITTED",
+        "sources": [
+          "src/flow/lib/run-repair-plan-gate.js"
+        ]
+      },
+      {
+        "code": "PLAN_GATE_REPAIR_STAGE_UNSUPPORTED",
+        "sources": [
+          "src/flow/lib/run-repair-plan-gate.js"
+        ]
+      },
+      {
+        "code": "PLAN_REWIND_INVALID_EVIDENCE",
+        "sources": [
+          "src/flow/lib/plan-rewind.js"
+        ]
+      },
+      {
+        "code": "PLAN_REWIND_INVALID_REASON",
+        "sources": [
+          "src/flow/lib/plan-rewind.js"
+        ]
+      },
+      {
+        "code": "PLAN_REWIND_INVALID_REQUEST",
+        "sources": [
+          "src/flow/lib/plan-rewind.js"
+        ]
+      },
+      {
+        "code": "PLUGIN_HOOK_REQUIRED_FAILED",
+        "sources": [
+          "src/flow/lib/run-finalize-cleanup.js",
+          "src/flow/lib/run-prepare-spec.js"
+        ]
+      },
+      {
+        "code": "PLUGIN_HOOK_WARNING",
+        "sources": [
+          "src/flow/lib/run-finalize-cleanup.js"
+        ]
+      },
+      {
+        "code": "PLUGIN_LIFECYCLE_FAILED",
+        "sources": [
+          "src/flow/lib/run-finalize-cleanup.js"
+        ]
+      },
+      {
+        "code": "POST_HOOK_FAILED",
+        "sources": [
+          "src/lib/dispatcher.js"
+        ]
+      },
+      {
+        "code": "PREPARING_FLOW_NOT_FOUND",
+        "sources": [
+          "src/flow/lib/resolve-preparing-run-id.js"
+        ]
+      },
+      {
+        "code": "PRODUCER_NOT_SUPPORTED",
+        "sources": [
+          "src/flow/query-details.js"
+        ]
+      },
+      {
+        "code": "PROMPT_COVERAGE_INVALID",
+        "sources": [
+          "src/flow/lib/run-acceptance-review.js"
+        ]
+      },
+      {
+        "code": "PROMPT_ELEMENT_TOO_LARGE",
+        "sources": [
+          "src/flow/lib/gate-prompt-plan.js"
+        ]
+      },
+      {
+        "code": "PROMPT_EXECUTION_IDENTITY_MISMATCH",
+        "sources": [
+          "src/flow/lib/acceptance-execution-session.js"
+        ]
+      },
+      {
+        "code": "PROMPT_RESPONSE_COVERAGE_INVALID",
+        "sources": [
+          "src/flow/lib/gate-prompt-plan.js",
+          "src/flow/lib/run-acceptance-review.js"
+        ]
+      },
+      {
+        "code": "PROMPT_RESPONSE_INVALID",
+        "sources": [
+          "src/flow/commands/review.js",
+          "src/flow/lib/gate-prompt-plan.js",
+          "src/flow/lib/run-acceptance-review.js"
+        ]
+      },
+      {
+        "code": "REPAIR_BASELINE_AMBIGUOUS",
+        "sources": [
+          "src/flow/lib/repair-state-identity.js"
+        ]
+      },
+      {
+        "code": "REPAIR_BASELINE_OBJECT_MISSING",
+        "sources": [
+          "src/flow/lib/repair-state-identity.js"
+        ]
+      },
+      {
+        "code": "REPAIR_BASELINE_PIN_FAILED",
+        "sources": [
+          "src/flow/lib/repair-state-identity.js"
+        ]
+      },
+      {
+        "code": "REPAIR_BASELINE_UNRESOLVABLE",
+        "sources": [
+          "src/flow/lib/repair-state-identity.js"
+        ]
+      },
+      {
+        "code": "REPAIR_CHANGED_PATH_LIMIT",
+        "sources": [
+          "src/flow/lib/repair-state-identity.js"
+        ]
+      },
+      {
+        "code": "REPAIR_DIRTY_SUBMODULE",
+        "sources": [
+          "src/flow/lib/repair-state-identity.js"
+        ]
+      },
+      {
+        "code": "REPAIR_INDEX_FLAG_UNSUPPORTED",
+        "sources": [
+          "src/flow/lib/repair-state-identity.js"
+        ]
+      },
+      {
+        "code": "REPORT_BINDING_INVALID",
+        "sources": [
+          "src/flow/lib/report-binding.js",
+          "src/flow/lib/report-final-evidence.js"
+        ]
+      },
+      {
+        "code": "REPORT_BINDING_STALE",
+        "sources": [
+          "src/flow/lib/report-binding.js",
+          "src/flow/lib/report-final-evidence.js"
+        ]
+      },
+      {
+        "code": "REPORT_MISSING",
+        "sources": [
+          "src/flow/lib/run-finalize-cleanup.js"
+        ]
+      },
+      {
+        "code": "REQUEST_IMMUTABLE",
+        "sources": [
+          "src/flow/lib/set-request.js"
+        ]
+      },
+      {
+        "code": "REQUIRED_WORKTREE_FILES_UNREFLECTED",
+        "sources": [
+          "src/flow/lib/run-prepare-spec.js"
+        ]
+      },
+      {
+        "code": "REQUIREMENT_TEST_REVIEW_PERMISSION_DENIED",
+        "sources": [
+          "src/flow/registry.js"
+        ]
+      },
+      {
+        "code": "RESPONSE_BYTE_LIMIT",
+        "sources": [
+          "src/flow/query.js"
+        ]
+      },
+      {
+        "code": "RESPONSE_TOO_LARGE",
+        "sources": [
+          "src/flow/query-contract.js"
+        ]
+      },
+      {
+        "code": "RETRY_NOT_AVAILABLE",
+        "sources": [
+          "src/flow/lib/set-retry.js"
+        ]
+      },
+      {
+        "code": "RETRY_RECOVERY_BASELINE_UNAVAILABLE",
+        "sources": [
+          "src/flow/definition.js"
+        ]
+      },
+      {
+        "code": "RETRY_RECOVERY_CONFIRMED_TIMEOUT_CONSUMED",
+        "sources": [
+          "src/flow/definition.js"
+        ]
+      },
+      {
+        "code": "RETRY_RECOVERY_CURRENT_ARTIFACT_PRESENT",
+        "sources": [
+          "src/flow/definition.js"
+        ]
+      },
+      {
+        "code": "RETRY_RECOVERY_CURRENT_OBSERVATION_UNAVAILABLE",
+        "sources": [
+          "src/flow/definition.js"
+        ]
+      },
+      {
+        "code": "RETRY_RECOVERY_NON_RECOVERABLE_FAILURE",
+        "sources": [
+          "src/flow/definition.js"
+        ]
+      },
+      {
+        "code": "RETRY_RECOVERY_NOT_ACTIVE",
+        "sources": [
+          "src/flow/definition.js"
+        ]
+      },
+      {
+        "code": "RETRY_RECOVERY_PROVIDER_QUIESCENCE_UNCONFIRMED",
+        "sources": [
+          "src/flow/definition.js"
+        ]
+      },
+      {
+        "code": "RETRY_RECOVERY_STATE_CHANGED",
+        "sources": [
+          "src/flow/definition.js"
+        ]
+      },
+      {
+        "code": "RETRY_RECOVERY_TASK_SOURCE_UNAVAILABLE",
+        "sources": [
+          "src/flow/definition.js"
+        ]
+      },
+      {
+        "code": "RETRY_RECOVERY_TRANSIENT_PROVIDER_CONSUMED",
+        "sources": [
+          "src/flow/definition.js"
+        ]
+      },
+      {
+        "code": "RETRY_RECOVERY_UNCHANGED_EVIDENCE_UNSUPPORTED",
+        "sources": [
+          "src/flow/definition.js"
+        ]
+      },
+      {
+        "code": "REVIEW_ALREADY_COMPLETED",
+        "sources": [
+          "src/flow/lib/set-review-evidence.js"
+        ]
+      },
+      {
+        "code": "REVIEW_DEFINITION_ACTION_REQUIRED",
+        "sources": [
+          "src/flow/lib/run-review.js"
+        ]
+      },
+      {
+        "code": "REVIEW_EVIDENCE_INVALID",
+        "sources": [
+          "src/flow/lib/set-review-evidence.js"
+        ]
+      },
+      {
+        "code": "REVIEW_EXECUTION_FAILED",
+        "sources": [
+          "src/flow/lib/run-review.js"
+        ]
+      },
+      {
+        "code": "REVIEW_EXECUTION_LEASE_IDENTITY_STALE",
+        "sources": [
+          "src/flow/lib/run-review.js"
+        ]
+      },
+      {
+        "code": "REVIEW_EXECUTION_LOCK_FAILED",
+        "sources": [
+          "src/flow/lib/run-review.js"
+        ]
+      },
+      {
+        "code": "REVIEW_FAILURE_RECORDING_FAILED",
+        "sources": [
+          "src/flow/lib/run-review.js"
+        ]
+      },
+      {
+        "code": "REVIEW_MAX_ATTEMPTS_EXCEEDED",
+        "sources": [
+          "src/flow/lib/next-action-directive.js"
+        ]
+      },
+      {
+        "code": "REVIEW_PASS_RECOVERY_GUARDS_REQUIRED",
+        "sources": [
+          "src/flow/lib/run-recover-review-pass.js"
+        ]
+      },
+      {
+        "code": "REVIEW_PASS_RECOVERY_NOT_ELIGIBLE",
+        "sources": [
+          "src/flow/lib/run-recover-review-pass.js"
+        ]
+      },
+      {
+        "code": "REVIEW_RETRY_REQUIRED",
+        "sources": [
+          "src/flow/lib/run-review.js"
+        ]
+      },
+      {
+        "code": "REVIEW_SCOPE_INVALID",
+        "sources": [
+          "src/flow/lib/run-review.js"
+        ]
+      },
+      {
+        "code": "REVIEW_TARGET_NOT_ACTIVE",
+        "sources": [
+          "src/flow/lib/set-review-evidence.js"
+        ]
+      },
+      {
+        "code": "REVIEW_TOOLING_ERROR",
+        "sources": [
+          "src/flow/lib/run-review.js"
+        ]
+      },
+      {
+        "code": "REVIEW_TOOLING_EXTERNAL_BLOCKED",
+        "sources": [
+          "src/flow/lib/next-action-directive.js"
+        ]
+      },
+      {
+        "code": "REVIEW_TRANSITION_SETTLEMENT_FAILED",
+        "sources": [
+          "src/flow/lib/run-settle-review-transition.js"
+        ]
+      },
+      {
+        "code": "REVIEW_TRANSITION_SETTLEMENT_UNAVAILABLE",
+        "sources": [
+          "src/flow/lib/run-settle-review-transition.js"
+        ]
+      },
+      {
+        "code": "RUNTIME_LOG_NOT_FOUND",
+        "sources": [
+          "src/flow/lib/get-runtime-log.js"
+        ]
+      },
+      {
+        "code": "SCENARIO_VALIDITY_REJECTED",
+        "sources": [
+          "src/flow/lib/current-flow-state.js"
+        ]
+      },
+      {
+        "code": "SNAPSHOT_CHANGED",
+        "sources": [
+          "src/flow/query-contract.js"
+        ]
+      },
+      {
+        "code": "SNAPSHOT_ID_MISMATCH",
+        "sources": [
+          "src/flow/query.js"
+        ]
+      },
+      {
+        "code": "SNAPSHOT_RETRY_EXHAUSTED",
+        "sources": [
+          "src/flow/query.js"
+        ]
+      },
+      {
+        "code": "SNAPSHOT_UNSTABLE",
+        "sources": [
+          "src/flow/query-contract.js"
+        ]
+      },
+      {
+        "code": "SPEC_GATE_ADMISSION_REFUSED",
+        "sources": [
+          "src/flow/lib/gate-transition-facts.js",
+          "src/flow/registry.js"
+        ]
+      },
+      {
+        "code": "SPEC_GATE_BLOCKED",
+        "sources": [
+          "src/flow/registry.js"
+        ]
+      },
+      {
+        "code": "SPEC_GATE_DECISION_REQUIRED",
+        "sources": [
+          "src/flow/lib/get-next-action.js"
+        ]
+      },
+      {
+        "code": "SPEC_GATE_POST_FAILED",
+        "sources": [
+          "src/flow/definition.js",
+          "src/flow/registry.js"
+        ]
+      },
+      {
+        "code": "SPEC_NOT_FOUND",
+        "sources": [
+          "src/flow/query-contract.js"
+        ]
+      },
+      {
+        "code": "SPEC_REVIEW_ARTIFACT_INVALID",
+        "sources": [
+          "src/flow/lib/spec-review-artifacts.js",
+          "src/flow/lib/spec-revision-identity.js"
+        ]
+      },
+      {
+        "code": "SPEC_REVIEW_EXECUTION_ADMISSION_REJECTED",
+        "sources": [
+          "src/flow/lib/run-review.js"
+        ]
+      },
+      {
+        "code": "SPEC_REVIEW_PUBLICATION_CONFLICT",
+        "sources": [
+          "src/flow/lib/run-review.js"
+        ]
+      },
+      {
+        "code": "SPEC_REVIEW_SETTLEMENT_INTERRUPTED",
+        "sources": [
+          "src/flow/lib/run-review.js"
+        ]
+      },
+      {
+        "code": "SQUASH_BASELINE_DIVERGED",
+        "sources": [
+          "src/flow/lib/run-finalize-cleanup.js"
+        ]
+      },
+      {
+        "code": "SQUASH_BASELINE_MISSING",
+        "sources": [
+          "src/flow/lib/run-finalize-cleanup.js"
+        ]
+      },
+      {
+        "code": "STALE_REVIEW_TARGET",
+        "sources": [
+          "src/flow/lib/run-review.js",
+          "src/flow/lib/set-review-evidence.js",
+          "src/flow/registry.js"
+        ]
+      },
+      {
+        "code": "STDOUT_DELIVERY_FAILED",
+        "sources": [
+          "src/lib/dispatcher.js"
+        ]
+      },
+      {
+        "code": "STEP_RESULT_ERROR_PERSISTENCE_FAILED",
+        "sources": [
+          "src/flow/lib/run-review.js"
+        ]
+      },
+      {
+        "code": "STRICT_RECOVERY_EXHAUSTED",
+        "sources": [
+          "src/flow/lib/get-next-action.js"
+        ]
+      },
+      {
+        "code": "TARGET_GUARDS_REQUIRED",
+        "sources": [
+          "src/flow/lib/run-reopen-draft.js"
+        ]
+      },
+      {
+        "code": "TARGET_REQUIRED",
+        "sources": [
+          "src/flow/lib/run-prepare-spec.js"
+        ]
+      },
+      {
+        "code": "TASK_ALREADY_DONE",
+        "sources": [
+          "src/flow/lib/run-start-task.js"
+        ]
+      },
+      {
+        "code": "TASK_COMPLETE_INVALID",
+        "sources": [
+          "src/flow/lib/run-complete-task.js"
+        ]
+      },
+      {
+        "code": "TASK_CONTEXT_CONTRACT_MISMATCH",
+        "sources": [
+          "src/flow/lib/get-next-action.js"
+        ]
+      },
+      {
+        "code": "TASK_CONTEXT_INVALID",
+        "sources": [
+          "src/flow/lib/get-next-action.js",
+          "src/flow/lib/run-gate.js",
+          "src/flow/lib/run-review.js"
+        ]
+      },
+      {
+        "code": "TASK_CURSOR_REQUIRED",
+        "sources": [
+          "src/flow/lib/run-gate.js",
+          "src/flow/lib/run-review.js"
+        ]
+      },
+      {
+        "code": "TASK_EXECUTION_OVERRUN_NOT_ADMITTED",
+        "sources": [
+          "src/flow/lib/run-recover-task-execution-overrun.js"
+        ]
+      },
+      {
+        "code": "TASK_REVIEW_FILTER_NOT_ADMITTED",
+        "sources": [
+          "src/flow/lib/run-filter-task-review.js"
+        ]
+      },
+      {
+        "code": "TASK_REVIEW_PARTIAL_EFFECT",
+        "sources": [
+          "src/flow/lib/run-review.js"
+        ]
+      },
+      {
+        "code": "TASK_REVIEW_PUBLICATION_UNAVAILABLE",
+        "sources": [
+          "src/flow/lib/canonical-flow-manager-store.js"
+        ]
+      },
+      {
+        "code": "TASK_REVIEW_RECONCILIATION_INPUT_CHANGED",
+        "sources": [
+          "src/flow/lib/get-next-action.js",
+          "src/flow/lib/run-review.js"
+        ]
+      },
+      {
+        "code": "TASK_REVIEW_RECONCILIATION_NOT_ADMITTED",
+        "sources": [
+          "src/flow/lib/run-reconcile-task-review.js"
+        ]
+      },
+      {
+        "code": "TASK_REVIEW_SOURCE_EFFECT_REJECTED",
+        "sources": [
+          "src/flow/lib/task-mutation-lineage.js"
+        ]
+      },
+      {
+        "code": "TASK_START_INVALID",
+        "sources": [
+          "src/flow/lib/run-start-task.js"
+        ]
+      },
+      {
+        "code": "TEARDOWN_VALIDATION_FAILED",
+        "sources": [
+          "src/flow/lib/run-finalize-cleanup.js"
+        ]
+      },
+      {
+        "code": "TEST_ARTIFACT_INVALID",
+        "sources": [
+          "src/flow/lib/run-retro.js"
+        ]
+      },
+      {
+        "code": "TEST_CHAIN_REJECTED",
+        "sources": [
+          "src/flow/definition.js",
+          "src/flow/lib/current-flow-state.js"
+        ]
+      },
+      {
+        "code": "TEST_CHAIN_RETRY_EXHAUSTED",
+        "sources": [
+          "src/flow/definition.js"
+        ]
+      },
+      {
+        "code": "TEST_CHAIN_SETTLEMENT_MISSING",
+        "sources": [
+          "src/flow/lib/test-chain-transition-facts.js"
+        ]
+      },
+      {
+        "code": "TEST_CHAIN_TOOLING_FAILURE",
+        "sources": [
+          "src/flow/definition.js"
+        ]
+      },
+      {
+        "code": "TEST_EXECUTE_RESULT_MISSING",
+        "sources": [
+          "src/flow/lib/run-retro.js"
+        ]
+      },
+      {
+        "code": "TEST_RESULT_REVIEW_MISSING",
+        "sources": [
+          "src/flow/lib/run-retro.js"
+        ]
+      },
+      {
+        "code": "TEST_RESULT_REVIEW_NOT_PASSED",
+        "sources": [
+          "src/flow/lib/run-retro.js"
+        ]
+      },
+      {
+        "code": "TEST_REVIEW_REPAIR_ATTEMPT_MISMATCH",
+        "sources": [
+          "src/flow/lib/test-review-repair.js"
+        ]
+      },
+      {
+        "code": "TEST_REVIEW_REPAIR_BATCH_LIMIT",
+        "sources": [
+          "src/flow/lib/test-review-repair.js"
+        ]
+      },
+      {
+        "code": "TEST_REVIEW_REPAIR_EVIDENCE_INVALID",
+        "sources": [
+          "src/flow/lib/test-review-repair.js"
+        ]
+      },
+      {
+        "code": "TEST_REVIEW_REPAIR_INVALID",
+        "sources": [
+          "src/flow/lib/test-review-repair-values.js",
+          "src/flow/lib/test-review-repair.js"
+        ]
+      },
+      {
+        "code": "TEST_REVIEW_REPAIR_STALE",
+        "sources": [
+          "src/flow/lib/test-review-repair.js"
+        ]
+      },
+      {
+        "code": "UNKNOWN_REVIEW_PHASE",
+        "sources": [
+          "src/flow/lib/run-review.js"
+        ]
+      },
+      {
+        "code": "UNKNOWN_TASK_ID",
+        "sources": [
+          "src/flow/lib/run-complete-task.js",
+          "src/flow/lib/run-start-task.js"
+        ]
+      },
+      {
+        "code": "UNTRACKED_LIMIT_EXCEEDED",
+        "sources": [
+          "src/flow/lib/run-gate.js"
+        ]
+      },
+      {
+        "code": "WORKTREE_DIRTY",
+        "sources": [
+          "src/flow/lib/run-finalize-cleanup.js"
+        ]
+      },
+      {
+        "code": "WORKTREE_FLOW_BINDING_REMOVE_FAILED",
+        "sources": [
+          "src/flow/lib/run-finalize-cleanup.js"
+        ]
+      },
+      {
+        "code": "WORKTREE_FORCE_REMOVE_FAILED",
+        "sources": [
+          "src/flow/lib/run-finalize-cleanup.js"
+        ]
+      },
+      {
+        "code": "WORKTREE_REMOVAL_RECOVERY_FAILED",
+        "sources": [
+          "src/flow/lib/run-finalize-cleanup.js"
+        ]
+      },
+      {
+        "code": "WORKTREE_REMOVE_FAILED",
+        "sources": [
+          "src/flow/lib/run-finalize-cleanup.js"
+        ]
+      },
+      {
+        "code": "WORKTREE_STATUS_FAILED",
+        "sources": [
+          "src/flow/lib/run-finalize-cleanup.js"
+        ]
+      }
+    ],
+    "dynamicFamilies": [
+      {
+        "id": "nested-dispatch-error-code-forwarding",
+        "source": "src/flow/lib/run-dispatch.js",
+        "evidence": "error.code ||",
+        "scope": "Nested command, worker, and recovery failures preserve a selected error code or use the call site's stable fallback."
+      },
+      {
+        "id": "dispatcher-caught-error-code-forwarding",
+        "source": "src/lib/dispatcher.js",
+        "evidence": "err?.code",
+        "scope": "Dispatcher failures preserve the thrown error's code or use a lifecycle-stage fallback."
+      },
+      {
+        "id": "query-typed-error-code-forwarding",
+        "source": "src/flow/query.js",
+        "evidence": "error.code",
+        "scope": "The independent query adapter preserves QueryError codes and maps non-query errors to its canonical error code."
+      }
+    ],
+    "completenessNote": "Literal code extraction is lexical evidence only. Dynamic forwarding, generated codes, and paths without a recognizable literal are represented by the declared dynamic families and are not claimed complete by this scan."
+  },
+  "adapters": {
+    "dispatcher-envelope": {
+      "router": "src/flow-main.js#run",
+      "producer": "src/lib/flow-envelope.js#Envelope.attachStopGuidance",
+      "boundary": "src/lib/dispatcher.js#DispatchPublication",
+      "output": "src/lib/dispatcher.js#dispatch"
+    },
+    "query-wire": {
+      "router": "src/cli-main.js#bootstrapFlowQueryCli and src/flow-main.js#bootstrapFlowQueryCli",
+      "producer": "src/lib/flow-stop-guidance.js#buildFlowStopGuidance",
+      "boundary": "src/flow/query.js#serializeQueryResponse",
+      "output": "src/flow/query.js#runFlowQueryCli"
+    }
+  },
+  "bootstrap": {
+    "route": "flow bootstrap failures before semantic modules are available",
+    "fixedRuntimeProducer": "src/sennel.js#bootstrapFailure",
+    "semanticProducer": "src/lib/flow-cli-failure.js#flowCliFailure",
+    "output": "src/sennel.js#writeSync(JSON.stringify(bootstrapFailure()))",
+    "queryProjection": "schemaRevision 3 query response with top-level guidance"
+  }
+}

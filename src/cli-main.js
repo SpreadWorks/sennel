@@ -19,6 +19,7 @@
 import { EXIT_ERROR } from "./lib/constants.js";
 import { initContainer } from "./lib/container.js";
 import { FinalizeCleanupRoute } from "./lib/finalize-cleanup-paths.js";
+import { flowCliFailure } from "./lib/flow-cli-failure.js";
 
 const rawArgs = process.argv.slice(2);
 const isFlowQuery = rawArgs[0] === "flow" && rawArgs[1] === "query";
@@ -87,20 +88,33 @@ if (definition && isHelpRequest(rest) && coreCommandRegistry.find(sharedHelpTopi
 
 // Initialize the shared dependency container once; dispatchers and commands
 // below import `container` directly from ./lib/container.js.
-initContainer({
-  entryCommand: rawArgs.join(" "),
-  agentWorkDirOverride,
-  flowAttribution: subCmd === "docs" || recoveryWithoutFlowAttribution ? "none" : "ambient",
-  finalizeCleanupDurablePaths: enableFinalizeCleanupDurablePaths,
-  allowInvalidConfig: definition?.allowInvalidConfig === true || !definition,
-});
+try {
+  initContainer({
+    entryCommand: rawArgs.join(" "),
+    agentWorkDirOverride,
+    flowAttribution: subCmd === "docs" || recoveryWithoutFlowAttribution ? "none" : "ambient",
+    finalizeCleanupDurablePaths: enableFinalizeCleanupDurablePaths,
+    allowInvalidConfig: definition?.allowInvalidConfig === true || !definition,
+  });
+} catch (error) {
+  if (subCmd !== "flow") throw error;
+  flowCliFailure(error).output();
+  process.exitCode = EXIT_ERROR;
+}
 
-if (definition) {
+if (process.exitCode === EXIT_ERROR && subCmd === "flow") {
+  // Initialization failed before dispatch; the sole public result is complete.
+} else if (definition) {
   try {
     await definition.entrypoint.execute(rest);
   } catch (err) {
-    console.error(err?.stack || String(err));
-    process.exit(err?.exitCode ?? EXIT_ERROR);
+    if (subCmd === "flow") {
+      flowCliFailure(err, { type: rest[0] ?? "run", key: rest[1] ?? rest[0] ?? "initialize" }).output();
+      process.exitCode = err?.exitCode ?? EXIT_ERROR;
+    } else {
+      console.error(err?.stack || String(err));
+      process.exit(err?.exitCode ?? EXIT_ERROR);
+    }
   }
 } else {
   try {

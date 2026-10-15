@@ -106,7 +106,8 @@ node --test tests/integration/flow-cli/draft-artifact-scenario.test.js tests/int
 選択testが同一である証跡は`.tmp/f0c5/final-evidence-manifest.json`。
 基準比較のtest本文は`.tmp/f0c5/frozen-query-regression.test.txt`に保持し、
 再作成可能な基準sourceコピーと作業用scriptは片付けた。公開仕様の説明は
-`docs/design/flow-query-revision-2/README.md`に反映した。
+`docs/design/flow-query-revision-2/README.md`に反映した。現行の設計文書は77d0で
+`docs/design/flow-query-revision-3/README.md`へ移動している。
 docs freshnessはstaleで、docs buildを提案済み。生成docs全体の最新性は保証していない。
 Flow開始／再開、commit、merge、push、ボード変更は行っていない。
 worktreeは差分と証跡のレビュー用に残す。

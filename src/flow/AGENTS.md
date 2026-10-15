@@ -2,6 +2,8 @@
 
 このドキュメントを Flow 状態遷移の責務境界、不変条件、検証要件の正本とする。`src/flow/` と、Flow の状態遷移に関係する `src/lib/flow-manager.js`、`src/lib/flow-version.js`、および対応するテストに適用し、上位の `src/AGENTS.md` と併せて従うこと。
 
+Flow の停止案内は [`../AGENTS.md`](../AGENTS.md) の「Flow 停止案内」を正本として使うこと。Definition が選んだ復旧可否・次の行動を表示層で再判断せず、選択済み directive を唯一の実行権限として保つ。
+
 ## 状態遷移方針の所有者
 
 - **MUST:** definition layer は、永続化された現在状態からFlow全体の実行方針を決める責務を所有する。StepはServiceから受け取ったtyped factsを具体的な`StepResult`へ確定し、Definitionは`stepId + StepResult`だけからSettlementと次の遷移先を選ぶ。Definitionがfactsを別途受け取り、StepResultの意味を再判定してはならない。意味のあるfacts、disposition、transition planは専用クラスで表現する。

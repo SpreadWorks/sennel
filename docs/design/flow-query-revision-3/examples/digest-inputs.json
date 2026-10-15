@@ -43,7 +43,7 @@
     "projectionHash": "sources/projection-inputs.json"
   },
   "snapshotInputs": {
-    "schemaRevision": 2,
+    "schemaRevision": 3,
     "flowVersionId": "flow-version-example",
     "specId": "example-flow",
     "flowVersion": 1,
@@ -81,25 +81,25 @@
   "cursorInputs": [
     {
       "version": 2,
-      "schemaRevision": 2,
+      "schemaRevision": 3,
       "specId": "example-flow",
       "flowVersion": 1,
       "resource": "activities",
       "gte": "2026-10-12T00:00:01Z",
       "lt": "2026-10-12T00:00:03Z",
       "order": 2,
-      "snapshotId": "sha256:ceb9d047fa7b8dd78b49ac93e46158d1f256971f7a141bb0be2f3b682ea07315"
+      "snapshotId": "sha256:75ae23ba814813434793bf2974db5f40f25117b06d8fbbee1a87d9e48dfc06ca"
     },
     {
       "version": 2,
-      "schemaRevision": 2,
+      "schemaRevision": 3,
       "specId": "example-flow",
       "flowVersion": 1,
       "resource": "activities",
       "gte": "2026-10-12T00:00:01Z",
       "lt": "2026-10-12T00:00:03Z",
       "order": 3,
-      "snapshotId": "sha256:ceb9d047fa7b8dd78b49ac93e46158d1f256971f7a141bb0be2f3b682ea07315"
+      "snapshotId": "sha256:75ae23ba814813434793bf2974db5f40f25117b06d8fbbee1a87d9e48dfc06ca"
     }
   ]
 }

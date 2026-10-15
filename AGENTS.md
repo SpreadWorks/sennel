@@ -68,6 +68,8 @@
 
 **MUST: `src/` の設計・レビュー・実装に着手する前に `src/AGENTS.md` と対象ディレクトリの `AGENTS.md` を読み、その責務・依存の制約を適用すること。** コードを変更しない設計やボード登録でも省略しない。
 
+Flow の停止案内は [`src/AGENTS.md`](src/AGENTS.md) の「Flow 停止案内」を正本とする。
+
 <!-- {{data("agents.flow")}} -->
 ## Sennel Flow
 

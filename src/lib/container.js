@@ -159,7 +159,7 @@ export function initContainer(opts = {}) {
         config = null;
         configLoaded = false;
       } else {
-      process.stderr.write(`[sennel] config load failed: ${err?.message}\n`);
+      process.stderr.write("[sennel] config load failed\n");
       throw err;
       }
     }

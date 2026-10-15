@@ -116,7 +116,7 @@ describe("flow query", () => {
   function assertKnownResourceError(response, resource, code, jsonPath, { pageLimit = null } = {}) {
     const consumed = new FlowQueryConsumer().consume(response);
     assert.deepEqual(Object.keys(response).sort(), [
-      "availableFlowVersions", "error", "ok", "resource", "schemaRevision", "selectedFlowVersion", "snapshot", "completeness",
+      "availableFlowVersions", "error", "guidance", "ok", "resource", "schemaRevision", "selectedFlowVersion", "snapshot", "completeness",
       ...(resource === "metadata" ? ["item"] : ["items", "pageInfo", "entities"]),
     ].sort());
     assert.equal(response.schemaRevision, FLOW_QUERY_SCHEMA_REVISION);
@@ -127,6 +127,8 @@ describe("flow query", () => {
     assert.deepEqual(Object.keys(response.error).sort(), ["code", "message", "path", "reason", "referenceId"]);
     assert.equal(response.error.code, code);
     assert.equal(response.error.path, jsonPath);
+    assert.equal(response.guidance.code, code);
+    assert.deepEqual(consumed.guidance, response.guidance);
     assert.doesNotMatch(JSON.stringify(response.error), /flow\.json|artifact-catalog|\.runtime|lock/);
     assertNoInternalFields(response);
     if (resource === "metadata") assert.equal(response.item, null);
@@ -341,7 +343,7 @@ describe("flow query", () => {
     const metadata = queryFixture(fixture, fixture.request());
     const activities = query(fixture.env, fixture.request("activities"));
     const repeated = queryFixture(fixture, fixture.request());
-    assert.equal(metadata.schemaRevision, 2);
+    assert.equal(metadata.schemaRevision, FLOW_QUERY_SCHEMA_REVISION);
     assert.equal(activities.snapshot.id, metadata.snapshot.id);
     assert.equal(repeated.snapshot.id, metadata.snapshot.id);
     assert.notEqual(repeated.snapshot.capturedAt, metadata.snapshot.capturedAt);
@@ -367,10 +369,11 @@ describe("flow query", () => {
     assert.equal(JSON.parse(fs.readFileSync(second.flowStateFile, "utf8")).flowVersion, 2);
   });
 
-  it("rejects a digest-valid revision 1 cursor at the public CLI boundary", async () => {
+  it("rejects a digest-valid revision 2 cursor at the public CLI boundary", async () => {
     const fixture = await contractFixture();
-    const payload = { version: 1, specId: fixture.specId, flowVersion: 1, resource: "activities", gte: null, lt: null, order: 1 };
-    const after = Buffer.from(JSON.stringify({ ...payload, digest: Cursor.digest(payload) }), "utf8").toString("base64url");
+    const payload = { version: 2, schemaRevision: 2, snapshotId: `sha256:${"a".repeat(64)}`,
+      specId: fixture.specId, flowVersion: 1, resource: "activities", gte: null, lt: null, order: 1 };
+    const after = Buffer.from(Cursor.canonicalJson({ ...payload, digest: Cursor.digest(payload) }), "utf8").toString("base64url");
     const result = runQuery(fixture, fixture.request("activities", { page: { limit: 1, after } }));
     assert.equal(result.status, 1);
     const response = JSON.parse(result.stdout);
@@ -1147,7 +1150,7 @@ describe("flow query", () => {
     const response = JSON.parse(runQuery(fixture, fixture.request()).stdout);
     const consumer = new FlowQueryConsumer();
     assert.doesNotThrow(() => consumer.consume(response));
-    assert.throws(() => new FlowQueryConsumer({ supportedSchemaRevision: 1 }).consume(response), /unsupported query schema revision: 2/);
+    assert.throws(() => new FlowQueryConsumer({ supportedSchemaRevision: 1 }).consume(response), /unsupported query schema revision: 3/);
     assert.throws(
       () => consumer.consume({ ...response, schemaRevision: FLOW_QUERY_SCHEMA_REVISION + 1 }),
       /unsupported query schema revision/,
@@ -1641,7 +1644,7 @@ describe("flow query", () => {
       const response = JSON.parse(result.stdout);
       const consumed = new FlowQueryConsumer().consume(response);
       if (testCase.resource === null) {
-        assert.deepEqual(Object.keys(response).sort(), ["error", "ok", "schemaRevision", "snapshot", "completeness"].sort());
+        assert.deepEqual(Object.keys(response).sort(), ["error", "guidance", "ok", "schemaRevision", "snapshot", "completeness"].sort());
         assert.equal(response.schemaRevision, FLOW_QUERY_SCHEMA_REVISION);
         assert.equal(response.ok, false);
         assert.deepEqual(Object.keys(response.error).sort(), ["code", "message", "path", "reason", "referenceId"]);

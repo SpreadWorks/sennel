@@ -24,15 +24,6 @@ function parseRunId(value) {
   return { runId: match[1], sequence: Number(match[2]) };
 }
 
-function outputEnvelope(envelope) {
-  process.stdout.write(JSON.stringify(envelope.toJSON(), null, 2) + "\n");
-  if (!envelope.ok) process.exitCode = 1;
-}
-
-function fail(code, message, data = null) {
-  outputEnvelope(Envelope.fail("get", "runtime-log", code, message, data));
-}
-
 export default class GetRuntimeLogCommand extends Command {
   static outputMode = "raw";
 
@@ -59,17 +50,15 @@ export default class GetRuntimeLogCommand extends Command {
         );
       }
       if (ctx.flowResolutionError) {
-        fail(
+        return Envelope.fail("get", "runtime-log",
           ctx.flowResolutionError.code || "FLOW_TARGET_NOT_FOUND",
           ctx.flowResolutionError.message,
           ctx.flowResolutionError.data,
         );
-        return;
       }
       const targetState = ctx.preparingFlowState ?? ctx.flowState;
       if (!targetState) {
-        fail("FLOW_TARGET_NOT_FOUND", "explicit flow target not found");
-        return;
+        return Envelope.fail("get", "runtime-log", "FLOW_TARGET_NOT_FOUND", "explicit flow target not found");
       }
       const mismatch = targetMismatchEnvelopeForInput({
         type: "get",
@@ -79,8 +68,7 @@ export default class GetRuntimeLogCommand extends Command {
         context: ctx,
       });
       if (mismatch) {
-        outputEnvelope(mismatch);
-        return;
+        return mismatch;
       }
       if (ctx.format != null && ctx.format !== "json") {
         throw Object.assign(new Error("--format accepts only json"), { code: "INVALID_ARG_VALUE" });
@@ -102,16 +90,14 @@ export default class GetRuntimeLogCommand extends Command {
         latestNonRuntimeLog: sequence == null && parsedRunId.runId == null,
       });
       if (!block) {
-        fail("RUNTIME_LOG_NOT_FOUND", "runtime log block not found");
-        return;
+        return Envelope.fail("get", "runtime-log", "RUNTIME_LOG_NOT_FOUND", "runtime log block not found");
       }
       if (ctx.format === "json") {
-        outputEnvelope(Envelope.ok("get", "runtime-log", block.toJSON()));
-        return;
+        return Envelope.ok("get", "runtime-log", block.toJSON());
       }
       process.stdout.write(block.text.endsWith("\n") ? block.text : `${block.text}\n`);
     } catch (err) {
-      fail(err.code || "ARGS_ERROR", err.message || String(err), err.data);
+      return Envelope.fail("get", "runtime-log", err.code || "ARGS_ERROR", err.message || String(err), err.data);
     }
   }
 }

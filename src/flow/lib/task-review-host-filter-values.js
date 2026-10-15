@@ -145,7 +145,7 @@ export class TaskReviewHostFilter extends TaskHostFilterAuthority {
     if (typeof value !== "string") throw new Error("Task Review filter requires --exclusions as a JSON array");
     let parsed;
     try { parsed = JSON.parse(value); }
-    catch (cause) { throw new Error(`Task Review exclusions are not valid JSON: ${cause.message}`); }
+    catch (cause) { throw new Error("Task Review exclusions are not valid JSON.", { cause }); }
     if (!Array.isArray(parsed)) throw new Error("Task Review exclusions must be a JSON array");
     return parsed.map((entry) => new TaskReviewFindingExclusion(entry));
   }

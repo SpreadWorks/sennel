@@ -68,7 +68,7 @@ function activityItems(values) {
  * canonical record, filesystem path, or generic Flow envelope.
  */
 export class FlowQueryCompatibilityResult {
-  constructor({ resource, selectedFlowVersion: selected, availableFlowVersions: available, snapshot = null, completeness = null, entities = null, item = null, items = null, page = null, error = null } = {}) {
+  constructor({ resource, selectedFlowVersion: selected, availableFlowVersions: available, snapshot = null, completeness = null, entities = null, item = null, items = null, page = null, error = null, guidance = null } = {}) {
     this.resource = resource;
     this.selectedFlowVersion = selected;
     this.availableFlowVersions = available;
@@ -79,6 +79,7 @@ export class FlowQueryCompatibilityResult {
     this.items = items;
     this.pageInfo = page;
     this.error = error;
+    this.guidance = guidance;
     Object.freeze(this);
   }
 }
@@ -131,13 +132,13 @@ export class FlowQueryConsumer {
 
   error(response) {
     if (!Object.hasOwn(response, "resource")) {
-      return new FlowQueryCompatibilityResult({ resource: null, selectedFlowVersion: null, availableFlowVersions: Object.freeze([]), error: response.error });
+      return new FlowQueryCompatibilityResult({ resource: null, selectedFlowVersion: null, availableFlowVersions: Object.freeze([]), error: response.error, guidance: response.guidance });
     }
     const selected = response.selectedFlowVersion === null ? null : selectedVersion(response.selectedFlowVersion);
     const available = availableVersions(response.availableFlowVersions);
     if (response.resource === "metadata") {
-      return new FlowQueryCompatibilityResult({ resource: response.resource, selectedFlowVersion: selected, availableFlowVersions: available, snapshot: response.snapshot, error: response.error });
+      return new FlowQueryCompatibilityResult({ resource: response.resource, selectedFlowVersion: selected, availableFlowVersions: available, snapshot: response.snapshot, error: response.error, guidance: response.guidance });
     }
-    return new FlowQueryCompatibilityResult({ resource: response.resource, selectedFlowVersion: selected, availableFlowVersions: available, snapshot: response.snapshot, entities: response.entities, items: Object.freeze([]), page: Object.freeze({ ...response.pageInfo }), error: response.error });
+    return new FlowQueryCompatibilityResult({ resource: response.resource, selectedFlowVersion: selected, availableFlowVersions: available, snapshot: response.snapshot, entities: response.entities, items: Object.freeze([]), page: Object.freeze({ ...response.pageInfo }), error: response.error, guidance: response.guidance });
   }
 }

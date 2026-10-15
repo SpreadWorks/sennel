@@ -1,4 +1,44 @@
 {
+  "flowStop": {
+    "explanation": "Flowの操作が停止しました（{{code}}）。元の原因は返却された診断情報で確認してください。",
+    "repair": "エラーコード {{code}} と返却された診断情報を保守担当者へ提示し、継続前の修正を依頼してください。",
+    "automatic": "選択済みdirectiveと既存の実行認可に従って処理を継続してください。",
+    "decision": "選択済みのユーザー判断に回答してから継続してください。",
+    "external": "選択済みの外部作業を完了してから継続してください。",
+    "hostFilter": "既存のホスト用レビューフィルター操作 {{command}} を実行してください。継続前に、選択済みdirectiveを使って結果を提出してください。",
+    "privateText": "返却されたエラーコードを保守担当者へ提示し、継続前に診断内容の確認を依頼してください。",
+    "privateDiagnostic": "機密情報を含む診断テキストを非公開にしました。",
+    "unconfirmed": "未確認",
+    "processControl": "プロセス実行制御が停止しました（{{code}}）。最初の原因は {{causeCode}} です。完了・保存・停止証明は確認済みの事実だけを表示します。",
+    "actions": {
+      "authentication": "新しい試行を開始する前に、プロバイダーの認証を修復または更新してください。",
+      "permission_configuration": "新しい試行を開始する前に、プロバイダーの実行ファイル、プロファイル、設定または権限を修復してください。",
+      "usage_limit": "新しい試行を開始する前に、プロバイダーの利用枠を回復するか、案内されている利用期間を待ってください。"
+    },
+    "causes": {
+      "timeout": "プロバイダーの実行期限を超過しました（{{code}}）。追加実行の前に、記録された停止証明と選択済みdirectiveに従ってください。",
+      "authentication": "プロバイダーの認証に失敗しました（{{code}}）。追加実行の前に認証の修復が必要です。",
+      "permission_configuration": "プロバイダーの設定または権限により実行できませんでした（{{code}}）。",
+      "temporary_rate_limit": "プロバイダーのレート制限により実行が中断しました（{{code}}）。",
+      "temporary_network": "一時的なネットワーク障害により実行が中断しました（{{code}}）。",
+      "temporary_provider_unavailable": "プロバイダーが一時的に利用できませんでした（{{code}}）。",
+      "unclassified_provider_exit": "プロバイダーが未分類の障害で終了しました（{{code}}）。",
+      "usage_limit": "プロバイダーの利用上限により実行できませんでした（{{code}}）。",
+      "permanent_network": "プロバイダーのネットワーク設定により実行できませんでした（{{code}}）。",
+      "unknown_provider": "プロバイダーで原因未確定の障害が発生しました（{{code}}）。",
+      "empty_response": "プロバイダーから応答がありませんでした（{{code}}）。"
+    },
+    "codes": {
+      "NO_FLOW": "操作に必要な実行中のFlowがありませんでした（{{code}}）。",
+      "FLOW_AWAITING_USER_ACTION": "Flowは選択済みのユーザー操作を待っています（{{code}}）。",
+      "FLOW_HOST_ACTION_REQUIRED": "Flowが選択済みのホスト操作を返しました（{{code}}）。既存のdirectiveに従い、同じターンでその操作を完了してください。",
+      "FLOW_BOOTSTRAP_FAILED": "Flowランタイムを起動できませんでした（{{code}}）。現在状態は未確認です。",
+      "FLOW_INITIALIZATION_FAILED": "Flowランタイムを初期化できませんでした（{{code}}）。現在状態は未確認です。",
+      "FLOW_UNKNOWN_COMMAND": "指定されたFlowコマンドは利用できません（{{code}}）。",
+      "INVALID_JSON": "Flowリクエストが正しいJSONではありません（{{code}}）。",
+      "INVALID_REQUEST": "Flowリクエストがコマンドの契約を満たしていません（{{code}}）。"
+    }
+  },
   "review": {
     "noChapters": "[FAIL] 章ファイルが見つかりません: {{dir}}",
     "foundChapters": "{{count}} 件の章ファイルを検出",

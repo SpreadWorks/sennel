@@ -3,7 +3,7 @@ import { validateSchema } from "../lib/schema-validate.js";
 export { FLOW_QUERY_GATE_FINDING_SPECIFIC_SCHEMA } from "./query-gate-details.js";
 export { FLOW_QUERY_REPAIR_CHANGE_SCHEMA } from "./query-repair-change.js";
 
-export const FLOW_QUERY_SCHEMA_REVISION = 2;
+export const FLOW_QUERY_SCHEMA_REVISION = 3;
 export const FLOW_QUERY_HELP = [
   "Usage: sennel flow query [--request-file <path>]",
   "",
@@ -35,6 +35,7 @@ export const FLOW_QUERY_LIMITS = Object.freeze({
 export const FLOW_QUERY_RESOURCES = Object.freeze(["metadata", "activities"]);
 
 export const FLOW_QUERY_ERROR_CODES = Object.freeze({
+  FLOW_BOOTSTRAP_FAILED: "FLOW_BOOTSTRAP_FAILED",
   INVALID_JSON: "INVALID_JSON",
   INVALID_REQUEST: "INVALID_REQUEST",
   SPEC_NOT_FOUND: "SPEC_NOT_FOUND",
@@ -50,6 +51,7 @@ export const FLOW_QUERY_ERROR_CODES = Object.freeze({
 });
 
 export const FLOW_QUERY_ERROR_PATHS = Object.freeze({
+  FLOW_BOOTSTRAP_FAILED: "/bootstrap",
   INVALID_JSON: "/request",
   INVALID_REQUEST: null,
   SPEC_NOT_FOUND: "/condition/specId",

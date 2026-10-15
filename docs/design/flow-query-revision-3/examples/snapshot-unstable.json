@@ -1,0 +1,51 @@
+{
+  "schemaRevision": 3,
+  "ok": false,
+  "resource": "metadata",
+  "selectedFlowVersion": {
+    "specId": "example-flow",
+    "flowVersion": 1
+  },
+  "availableFlowVersions": [
+    1
+  ],
+  "snapshot": null,
+  "completeness": null,
+  "error": {
+    "code": "SNAPSHOT_UNSTABLE",
+    "path": "/snapshot",
+    "message": "有限 retry で同一 snapshot を確定できない",
+    "reason": "SNAPSHOT_RETRY_EXHAUSTED",
+    "referenceId": null
+  },
+  "item": null,
+  "guidance": {
+    "schemaVersion": 1,
+    "code": "SNAPSHOT_UNSTABLE",
+    "cause": {
+      "kind": "reported_failure",
+      "code": "SNAPSHOT_UNSTABLE",
+      "recoveryHint": "unconfirmed"
+    },
+    "explanation": "Flowの操作が停止しました（SNAPSHOT_UNSTABLE）。元の原因は返却された診断情報で確認してください。",
+    "currentState": {
+      "operation": "flow query",
+      "completion": "unconfirmed",
+      "persistence": "unconfirmed",
+      "stop": "unconfirmed",
+      "acceptance": "unconfirmed",
+      "attemptCount": "unconfirmed",
+      "maxAttempts": "unconfirmed",
+      "budgetMs": "unconfirmed",
+      "elapsedMs": "unconfirmed",
+      "communicationAttempts": []
+    },
+    "nextAction": {
+      "kind": "external_work",
+      "instruction": "エラーコード SNAPSHOT_UNSTABLE と返却された診断情報を保守担当者へ提示し、継続前の修正を依頼してください。",
+      "preconditions": []
+    },
+    "diagnosticReference": "SNAPSHOT_UNSTABLE",
+    "presentationDigest": "21fbe2d273cd5dafeee8c13597eea4552319779ee5b5225bfd85dc3974365826"
+  }
+}

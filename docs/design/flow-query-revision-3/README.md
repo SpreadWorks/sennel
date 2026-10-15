@@ -1,6 +1,6 @@
-# Flow query revision 2 の公開契約
+# Flow query revision 3 の公開契約
 
-`sennel flow query` の revision 2 は、保存済みの木構造、評価・指摘・修正の詳細、成果物情報を同じ snapshot 世代として返す。入力と resource は既存の `metadata` / `activities` を維持する。CLI の実装は [query.js](../../../src/flow/query.js)、公開契約の正本は [query-contract.js](../../../src/flow/query-contract.js) と [runtime Schema](../../../src/flow/schemas/query-response.schema.json) にある。
+`sennel flow query` の revision 3 は、保存済みの木構造、評価・指摘・修正の詳細、成果物情報を同じ snapshot 世代として返す。入力と resource は既存の `metadata` / `activities` を維持する。CLI の実装は [query.js](../../../src/flow/query.js)、公開契約の正本は [query-contract.js](../../../src/flow/query-contract.js) と [runtime Schema](../../../src/flow/schemas/query-response.schema.json) にある。
 
 このディレクトリの Schema は対応する公開契約の資料、JSON 例は wire 形式と digest の規則を示す合成データである。例の source fixtures は現行 producer の完全な保存形式ではない。実際の保存・読み戻し・CLI 取得は [query.test.js](../../../tests/integration/flow/query.test.js) と [query-details.test.js](../../../tests/integration/flow/query-details.test.js) で別途検証する。過去に保存されなかった観測本文は復元しない。
 
@@ -9,9 +9,9 @@
 | 成果物 | 内容 |
 | --- | --- |
 | [request.schema.json](request.schema.json) | 既存 request と同じ型・値・必須条件を持つ Draft 2020-12 Schema 案 |
-| [response.schema.json](response.schema.json) | revision 2 の成功・失敗 variant、必須プロパティ、閉じた詳細型 |
+| [response.schema.json](response.schema.json) | revision 3 の成功・失敗 variant、必須プロパティ、閉じた詳細型 |
 | [examples](examples/) | metadata、2ページの activities、snapshot 変更、詳細未保持、artifact 不整合、応答上限超過の JSON 例 |
-| [契約検証](../../../tests/integration/flow/query-revision-2-design.test.js) | Schema、参照閉包、木構造、ID、hash、cursor、ページ併合、coverage と null の検証 |
+| [契約検証](../../../tests/integration/flow/query-revision-3-design.test.js) | Schema、参照閉包、木構造、ID、hash、cursor、ページ併合、coverage と null の検証 |
 | [実 CLI 検証](../../../tests/integration/flow/query.test.js) | 正規 producer の保存結果、再読み込み、標準入力 / request file、ページングと安全な拒否 |
 | [producer シナリオ検証](../../../tests/integration/flow/query-producer-scenario.test.js) | 正規 producer、保存・再読み込み、query と consumer の接続 |
 | [snapshot 境界検証](../../../tests/integration/flow/query-snapshot.test.js) | 保存 Version 一覧が変化したときの再取得と有限 retry 後の停止 |
@@ -19,7 +19,7 @@
 リポジトリルートで次を実行する。
 
 ```sh
-node --test tests/integration/flow/query-revision-2-design.test.js
+node --test tests/integration/flow/query-revision-3-design.test.js
 node --test tests/integration/flow/query.test.js tests/integration/flow/query-details.test.js tests/integration/flow/query-snapshot.test.js tests/unit/flow-query-contract.test.js
 node --test tests/integration/flow/query-producer-scenario.test.js
 ```
@@ -29,10 +29,12 @@ JSON 例は設計上の wire 形式を示す合成データである。例に付
 worktree またはインストール済み package の CLI では、次のように同じ入力を渡す。
 
 ```sh
-node src/sennel.js flow query --request-file docs/design/flow-query-revision-2/examples/request-metadata.json
+node src/sennel.js flow query --request-file docs/design/flow-query-revision-3/examples/request-metadata.json
 ```
 
 `example-flow` は形式例の ID なので、利用時には保存済みの specId と flowVersion に置き換える。標準入力から同じ JSON を渡してもよい。失敗時も1つの JSON 応答を stdout に返し、終了コードは `1` とする。
+
+revision 3 の失敗応答は必須の `guidance` に説明、確認済み状態、次の行動を返す。未確認の状態は `unconfirmed` とし、query は実行認可や復旧 command を付与しない。bootstrap 失敗も同じ閉じた失敗 Schema で検証する。 `guidance.presentationDigest` は共通 producer が公開 directive と次の行動の表示から生成する SHA-256 であり、実行認可や復旧 binding ではない。bootstrap の directive は null として計算する。
 
 ## 入出力と取得手順
 
@@ -46,7 +48,7 @@ request の `condition.specId` は必須、`condition.flowVersion` は任意で�
 {"resource":"activities","condition":{"specId":"example-flow","flowVersion":1},"page":{"limit":1,"after":null}}
 ```
 
-1. metadata の `schemaRevision=2` と `ok=true` を確認し、snapshot ID を保存する。
+1. metadata の `schemaRevision=3` と `ok=true` を確認し、snapshot ID を保存する。
 2. 同条件の activities の先頭ページを取得し、snapshot ID を比較する。異なる場合は双方を破棄して metadata から取得し直す。
 3. `endCursor` を次の `after` に渡し、全ページの snapshot ID を比較する。変化した場合は `SNAPSHOT_CHANGED` として途中のページを採用しない。
 4. `ok=true` かつ `hasNext=false` まで走査する。`returnedItems` の合計と `totalItems`、Activity ID の重複、entity の同一性、参照閉包、coverage を確認してから結果を採用する。
@@ -158,7 +160,7 @@ response の UTF-8 byte 上限は現行の 2 MiB、単一 artifact は 16 MiB �
 
 ## null と coverage と error
 
-revision 2 の追加プロパティは各 variant で必須。未関連 scalar は null、空配列は `[]` とし、undefined を使わない。null は保存元に値がないことを表し、取得失敗の代用にはしない。
+revision 3 の追加プロパティは各 variant で必須。未関連 scalar は null、空配列は `[]` とし、undefined を使わない。null は保存元に値がないことを表し、取得失敗の代用にはしない。
 
 | detailCoverage.availability | reason | count と意味 |
 | --- | --- | --- |
@@ -184,7 +186,7 @@ Schema 案は Draft 2020-12 だが、現行 `validateSchema` は `$ref`、`allOf
 
 ## 互換性と producer 保存前提
 
-全 response の schemaRevision は 2。既存 request と既存 response field の型・値・ID 一覧を保持する一方、v1 consumer の `additionalProperties=false` と revision 1 制約に対しては非互換であり、consumer 更新が必要である。v1 出力モード、非推奨 path、旧 cursor 変換は作らない。query revision、保存 Flow revision、artifact revision、cursor version は別の番号である。
+全 response の schemaRevision は 3。既存 request と既存 response field の型・値・ID 一覧を保持する一方、旧 consumer の `additionalProperties=false` と revision 2 制約に対しては非互換であり、consumer 更新が必要である。旧 revision の出力モード、非推奨 path、旧 cursor 変換は作らない。query revision、保存 Flow revision、artifact revision、cursor version は別の番号である。
 
 terminal typed Spec Review Result は ledger を verdict の正本とし、同一 Attempt・generation の retained publication を根拠として結び付ける。失われた過去 generation の本文を復元したり、別 generation の publication を代用したりしない。未保持の Version は `DETAIL_UNAVAILABLE` とする。過去 Definition / 表示名、raw log にしかない意味情報、切り詰め済み Draft finding、partial import も未保存を明示し、旧履歴の復元を主張しない。
 

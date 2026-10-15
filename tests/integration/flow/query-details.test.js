@@ -21,7 +21,7 @@ import { canonicalGateRevision } from "../../../src/flow/lib/canonical-gate-arti
 import { StepErrorResult } from "../../../src/flow/engine/step-result.js";
 import { settleDraftStepResult } from "../../../src/flow/definition.js";
 
-const RESPONSE_SCHEMA = JSON.parse(fs.readFileSync(new URL("../../../docs/design/flow-query-revision-2/response.schema.json", import.meta.url)));
+const RESPONSE_SCHEMA = JSON.parse(fs.readFileSync(new URL("../../../docs/design/flow-query-revision-3/response.schema.json", import.meta.url)));
 const ENTITY_SCHEMA = RESPONSE_SCHEMA.oneOf.find((variant) => variant.properties.resource?.enum[0] === "activities" && variant.properties.ok.enum[0]).properties.entities;
 const NOW = "2026-01-01T00:00:00.000Z";
 const IDENTITY = { specId: "query-details", revision: 1, digest: "a".repeat(64), byteLength: 32 };

@@ -3,6 +3,8 @@ import { it } from "node:test";
 
 import { Command } from "../../../src/lib/command.js";
 import { dispatch } from "../../../src/lib/dispatcher.js";
+import { FlowExecutionCommand } from "../../../src/flow/lib/flow-execution-command.js";
+import { ExecuteCommandDirective } from "../../../src/flow/lib/next-action-directive.js";
 import { AgentAuthenticationFailure } from "../../../src/lib/agent-failure.js";
 import {
   ExternalBlockedOutcome,
@@ -24,15 +26,12 @@ it("keeps a guarded mechanical recovery successful after an external-blocked att
             resumeInstruction: "Resolve the mechanical blocker.",
           }),
         }).toJSON(),
-        directive: {
-          kind: "execute_command",
-          terminal: false,
-          requiresUserAction: false,
+        directive: new ExecuteCommandDirective({
           actionId: "RECOVER_CANONICAL_REVIEW_PASS",
-          nextAction: "sennel flow run recover-review-pass --phase spec",
+          command: new FlowExecutionCommand({ group: "run", subcommand: "recover-review-pass", args: ["--phase", "spec"] }),
           instruction: "Recover the exact canonical PASS projection.",
           reason: "The prior mutable projection was overwritten.",
-        },
+        }).toJSON(),
       };
     }
   }
@@ -92,6 +91,9 @@ it("preserves typed agent failure metadata in an envelope boundary", async () =>
   const envelope = JSON.parse(stdout);
   assert.equal(envelope.ok, false);
   assert.equal(envelope.errors[0].code, "AGENT_AUTHENTICATION_FAILED");
-  assert.deepEqual(envelope.data, failure.toJSON());
+  const { directive, ...failureData } = envelope.data;
+  assert.deepEqual(failureData, failure.toJSON());
+  assert.equal(directive.kind, "single_user_action");
+  assert.equal(envelope.guidance.cause.code, failure.code);
   assert.equal(exitCode, 1);
 });

@@ -1,0 +1,42 @@
+{
+  "schemaRevision": 3,
+  "ok": false,
+  "snapshot": null,
+  "completeness": null,
+  "error": {
+    "code": "INVALID_REQUEST",
+    "path": "/resource",
+    "message": "resource は metadata または activities",
+    "reason": null,
+    "referenceId": null
+  },
+  "guidance": {
+    "schemaVersion": 1,
+    "code": "INVALID_REQUEST",
+    "cause": {
+      "kind": "reported_failure",
+      "code": "INVALID_REQUEST",
+      "recoveryHint": "unconfirmed"
+    },
+    "explanation": "Flowリクエストがコマンドの契約を満たしていません（INVALID_REQUEST）。",
+    "currentState": {
+      "operation": "flow query",
+      "completion": "unconfirmed",
+      "persistence": "unconfirmed",
+      "stop": "unconfirmed",
+      "acceptance": "unconfirmed",
+      "attemptCount": "unconfirmed",
+      "maxAttempts": "unconfirmed",
+      "budgetMs": "unconfirmed",
+      "elapsedMs": "unconfirmed",
+      "communicationAttempts": []
+    },
+    "nextAction": {
+      "kind": "external_work",
+      "instruction": "エラーコード INVALID_REQUEST と返却された診断情報を保守担当者へ提示し、継続前の修正を依頼してください。",
+      "preconditions": []
+    },
+    "diagnosticReference": "INVALID_REQUEST",
+    "presentationDigest": "809045eff75fc96aea74dc6f603f23c8a3856094d70a901687a1a201ee3a98db"
+  }
+}

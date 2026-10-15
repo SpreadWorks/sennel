@@ -16,7 +16,12 @@ const { port1, port2 } = new MessageChannel();
 const acknowledged = new Promise((resolve, reject) => {
   port1.once("message", (message) => {
     port1.close();
-    if (message.error) reject(new Error(message.error));
+    if (message.error) {
+      const error = new Error(message.error.message);
+      error.name = message.error.name;
+      error.code = message.error.code;
+      reject(error);
+    }
     else resolve(message);
   });
 });

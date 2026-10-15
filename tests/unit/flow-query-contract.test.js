@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
+import { buildFlowStopGuidance } from "../../src/lib/flow-stop-guidance.js";
 import {
   FLOW_QUERY_SCHEMA_REVISION,
   validateFlowQueryRequest,
@@ -18,7 +19,7 @@ const source = () => ({
 function activities() {
   const coverage = (availability) => ({ availability, reason: availability === "available" ? null : "NOT_APPLICABLE", count: 0 });
   return {
-    schemaRevision: 2, ok: true, resource: "activities",
+    schemaRevision: FLOW_QUERY_SCHEMA_REVISION, ok: true, resource: "activities",
     selectedFlowVersion: { specId: "sample", flowVersion: 1 }, availableFlowVersions: [1],
     snapshot: { id: snapshotId, algorithm: "sha256", capturedAt: "2026-01-01T00:00:00Z", confirmationOrder: 1, catalogHash: hash, projectionHash: hash, availableFlowVersionsHash: hash },
     completeness: { scope: "flow-version", enumeration: "complete", details: "complete", sourceHistory: "complete" },
@@ -102,8 +103,8 @@ function repairResponse() {
 }
 
 describe("Flow Query public response contract", () => {
-  it("publishes revision 2 while preserving request resource, conditions and page requirements", () => {
-    assert.equal(FLOW_QUERY_SCHEMA_REVISION, 2);
+  it("publishes revision 3 while preserving request resource, conditions and page requirements", () => {
+    assert.equal(FLOW_QUERY_SCHEMA_REVISION, 3);
     assert.deepEqual(validateFlowQueryRequest({ resource: "metadata", condition: { specId: "sample" } }), []);
     assert.deepEqual(validateFlowQueryRequest({ resource: "activities", condition: { specId: "sample" }, page: { limit: 100, after: null } }), []);
     assert.notEqual(validateFlowQueryRequest({ resource: "activities", condition: { specId: "sample" } }).length, 0);
@@ -253,7 +254,8 @@ describe("Flow Query public response contract", () => {
   });
 
   it("requires failed responses to be empty and to use the declared error path", () => {
-    const value = { schemaRevision: 2, ok: false, resource: "activities", selectedFlowVersion: null, availableFlowVersions: [], snapshot: null, completeness: null,
+    const value = { schemaRevision: FLOW_QUERY_SCHEMA_REVISION, ok: false, resource: "activities", selectedFlowVersion: null, availableFlowVersions: [], snapshot: null, completeness: null,
+      guidance: buildFlowStopGuidance({ code: "SNAPSHOT_CHANGED" }).toJSON(),
       error: { code: "SNAPSHOT_CHANGED", path: "/page/after", message: "snapshot changed", reason: "SNAPSHOT_ID_MISMATCH", referenceId: null },
       items: [], entities: { evaluations: [], findings: [], repairs: [] }, pageInfo: { limit: 1, endCursor: null, hasNext: false, returnedItems: 0, totalItems: null } };
     assert.deepEqual(validateFlowQueryResponse(value), []);

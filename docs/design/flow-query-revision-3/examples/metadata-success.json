@@ -1,5 +1,5 @@
 {
-  "schemaRevision": 2,
+  "schemaRevision": 3,
   "ok": true,
   "selectedFlowVersion": {
     "specId": "example-flow",
@@ -9,7 +9,7 @@
     1
   ],
   "snapshot": {
-    "id": "sha256:ceb9d047fa7b8dd78b49ac93e46158d1f256971f7a141bb0be2f3b682ea07315",
+    "id": "sha256:75ae23ba814813434793bf2974db5f40f25117b06d8fbbee1a87d9e48dfc06ca",
     "algorithm": "sha256",
     "capturedAt": "2026-10-12T00:00:03Z",
     "confirmationOrder": 3,
@@ -311,7 +311,7 @@
         "artifactId": "c217165a635359536ee3bcc8dbe6f5b23878f66fdeb4a6db70ef82f2ca2a1314",
         "metadata": {
           "logicalKey": null,
-          "schemaRevision": null,
+          "schemaRevision": 3,
           "mediaType": "application/json"
         },
         "activityIds": [
@@ -342,7 +342,7 @@
         "artifactId": "9e4dd88f93fcbbaf2c943b21a80ef7abf565ac273637d67262ddcb8b1e5929cf",
         "metadata": {
           "logicalKey": null,
-          "schemaRevision": null,
+          "schemaRevision": 3,
           "mediaType": "application/json"
         },
         "activityIds": [

@@ -1,4 +1,44 @@
 {
+  "flowStop": {
+    "explanation": "The Flow operation stopped ({{code}}). Inspect the returned diagnostic details for the original cause.",
+    "repair": "Provide error code {{code}} and the returned diagnostic details to the maintainer and request a fix before continuing.",
+    "automatic": "Continue using the selected directive and its existing execution authorization.",
+    "decision": "Answer the selected user decision before continuing.",
+    "external": "Complete the selected external task before continuing.",
+    "hostFilter": "Run the existing host review filter action: {{command}}. Submit its result through the selected directive before continuing.",
+    "privateText": "Provide the returned error code to the maintainer and request a diagnostic review before continuing.",
+    "privateDiagnostic": "Private diagnostic text was withheld.",
+    "unconfirmed": "unconfirmed",
+    "processControl": "Process execution control stopped ({{code}}); the original cause is {{causeCode}}. Completion, persistence, and stop proof are shown only when confirmed.",
+    "actions": {
+      "authentication": "Repair or refresh provider authentication before starting a new attempt.",
+      "permission_configuration": "Repair the provider executable, profile, configuration, or permission before starting a new attempt.",
+      "usage_limit": "Restore provider quota or wait for the documented usage window before starting a new attempt."
+    },
+    "causes": {
+      "timeout": "The provider exceeded its execution deadline ({{code}}). Use the recorded stop proof and the selected directive before any further execution.",
+      "authentication": "Provider authentication failed ({{code}}). Authentication must be repaired before further provider execution.",
+      "permission_configuration": "Provider configuration or permission prevented execution ({{code}}).",
+      "temporary_rate_limit": "The provider rate limit interrupted execution ({{code}}).",
+      "temporary_network": "A temporary network failure interrupted execution ({{code}}).",
+      "temporary_provider_unavailable": "The provider was temporarily unavailable ({{code}}).",
+      "unclassified_provider_exit": "The provider exited with an unclassified failure ({{code}}).",
+      "usage_limit": "The provider usage limit prevented execution ({{code}}).",
+      "permanent_network": "Provider network configuration prevented execution ({{code}}).",
+      "unknown_provider": "The provider failed without a confirmed classification ({{code}}).",
+      "empty_response": "The provider returned no response ({{code}})."
+    },
+    "codes": {
+      "NO_FLOW": "The operation requires an active Flow, but none was available ({{code}}).",
+      "FLOW_AWAITING_USER_ACTION": "The Flow is waiting for the selected user action ({{code}}).",
+      "FLOW_HOST_ACTION_REQUIRED": "The Flow returned the selected host action ({{code}}). Complete that action during the same turn using its existing directive.",
+      "FLOW_BOOTSTRAP_FAILED": "The Flow runtime could not start ({{code}}). Current state is unconfirmed.",
+      "FLOW_INITIALIZATION_FAILED": "The Flow runtime could not initialize ({{code}}). Current state is unconfirmed.",
+      "FLOW_UNKNOWN_COMMAND": "The requested Flow command is unavailable ({{code}}).",
+      "INVALID_JSON": "The Flow request is not valid JSON ({{code}}).",
+      "INVALID_REQUEST": "The Flow request does not satisfy the command contract ({{code}})."
+    }
+  },
   "review": {
     "noChapters": "[FAIL] no chapter files found in {{dir}}",
     "foundChapters": "Found {{count}} chapter file(s)",

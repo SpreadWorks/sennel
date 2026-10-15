@@ -23,6 +23,8 @@ const MAX_TEXT_LENGTH = 4000;
 const DIRECTIVE_KINDS = new Set([
   "execute_step",
   "execute_command",
+  "execute_continuation",
+  "single_user_action",
   "repair_evidence",
   "await_user_decision",
   "await_draft_question",
@@ -80,11 +82,14 @@ export class NextActionDirective {
   }
 
   static fromStored(value) {
+    if (value instanceof NextActionDirective) return value;
     if (!value || typeof value !== "object" || Array.isArray(value)) {
       throw new Error("stored next-action directive must be an object");
     }
     if (value.kind === "execute_step") return new ExecuteStepDirective(value);
     if (value.kind === "execute_command") return ExecuteCommandDirective.fromStored(value);
+    if (value.kind === "execute_continuation") return new ExecuteContinuationDirective(value);
+    if (value.kind === "single_user_action") return new SingleUserActionDirective(value);
     if (value.kind === "repair_evidence") return new RepairEvidenceDirective(value);
     if (value.kind === "await_user_decision") return new AwaitUserDecisionDirective(value);
     if (value.kind === "await_draft_question") return new AwaitDraftQuestionDirective(value);
@@ -95,6 +100,38 @@ export class NextActionDirective {
     if (value.kind === "idle") return new IdleDirective();
     throw new Error(`unknown stored next-action directive: ${value.kind}`);
   }
+}
+
+/** Preserve an already selected continuation without rebuilding its command. */
+export class ExecuteContinuationDirective extends NextActionDirective {
+  constructor({ continuation } = {}) {
+    super({ kind: "execute_continuation", terminal: false, requiresUserAction: false });
+    this.continuation = FlowContinuation.fromStored(continuation);
+    Object.freeze(this);
+  }
+  get actionId() { return this.continuation.actionId; }
+  get nextAction() { return this.continuation.nextAction; }
+  get instruction() { return this.continuation.instruction; }
+  get reason() { return this.continuation.reason; }
+  toJSON() { return { ...super.toJSON(), continuation: this.continuation.toJSON() }; }
+}
+
+/** One concrete user task; this grants no Flow execution capability. */
+export class SingleUserActionDirective extends NextActionDirective {
+  constructor({ actionId, instruction, reason, preconditions = [], category = "external_work" } = {}) {
+    super({ kind: "single_user_action", terminal: true, requiresUserAction: true });
+    this.actionId = requireActionId(actionId, "directive.actionId");
+    this.instruction = requireString(instruction, "directive.instruction");
+    this.reason = requireString(reason, "directive.reason");
+    if (!["single_user_action", "external_work"].includes(category) || !Array.isArray(preconditions)) {
+      throw new TypeError("single user action requires a category and prerequisite list");
+    }
+    this.category = category;
+    this.preconditions = Object.freeze(preconditions.map((value) => requireString(value, "directive.precondition")));
+    Object.freeze(this);
+  }
+  toJSON() { return { ...super.toJSON(), actionId: this.actionId, instruction: this.instruction,
+    reason: this.reason, category: this.category, preconditions: [...this.preconditions] }; }
 }
 
 export class ExecuteStepDirective extends NextActionDirective {
@@ -308,7 +345,8 @@ export class BlockedDirective extends NextActionDirective {
     }
     this.diagnostic = diagnostic;
     this.resumeInstruction = requireString(
-      resumeInstruction || reason,
+      (resumeInstruction === reason ? null : resumeInstruction)
+        ?? "Provide the error code and returned diagnostic details to the maintainer to resolve the blocking condition before continuing.",
       "directive.resumeInstruction",
     );
     this.prompt = prompt;

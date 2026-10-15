@@ -44,7 +44,8 @@ describe("Envelope", () => {
       assert.equal(j.ok, false);
       assert.equal(j.type, "set");
       assert.equal(j.key, "step");
-      assert.equal(j.data, null);
+      assert.equal(j.data.directive.kind, "single_user_action");
+      assert.equal(j.guidance.code, "BAD_INPUT");
       assert.equal(j.errors.length, 1);
       assert.equal(j.errors[0].level, "fatal");
       assert.equal(j.errors[0].code, "BAD_INPUT");

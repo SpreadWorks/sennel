@@ -479,7 +479,7 @@ const definitions = [
   }),
   new CommandDefinition({
     name: "flow",
-    entrypoint: { modulePath: "../flow.js", invocation: "script" },
+    entrypoint: { modulePath: "../flow-main.js", invocation: "script" },
     allowInvalidConfig: true,
     help: { section: "Flow", summary: "Spec-Driven Development flow commands", usage: "Usage: sennel flow <command> [options]", options: ["-h, --help"], localeKey: "ui:help.commands.flow run" },
     subcommands: flowSubcommands,

@@ -1,6 +1,8 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { buildFlowStopGuidance } from "../lib/flow-stop-guidance.js";
+import { createI18n } from "../lib/i18n.js";
 import { ProcessExecutionCheckoutIdentity } from "../lib/process-execution-values.js";
 import { captureProcessExecutionCheckoutIdentity } from "../lib/process-execution-runtime.js";
 
@@ -1392,7 +1394,16 @@ function publicError(error) {
   return new QueryError(ERROR_CODES.CANONICAL_RECORD_INCONSISTENT, "/canonical", "canonical query could not be completed", { cause: error });
 }
 
-function serializeQueryResponse(response) {
+function serializeQueryResponse(response, { error = null, t = null } = {}) {
+  if (!response.ok) {
+    const guidance = buildFlowStopGuidance({
+      code: response.error.code,
+      error,
+      operation: "flow query",
+      t,
+    });
+    response = { ...response, guidance: guidance.toJSON() };
+  }
   const errors = validateFlowQueryResponse(response);
   if (errors.length > 0) throw new Error(`query response does not match the query contract: ${errors[0]}`);
   return JSON.stringify(response);
@@ -1476,14 +1487,14 @@ function repositoryRoot() {
   return path.resolve(process.env[PRODUCT.env("WORK_ROOT")] ?? process.cwd());
 }
 
-async function specRoot() {
+async function queryConfiguration() {
   const configPath = path.join(repositoryRoot(), ".sennel", "config.json");
   let config;
   try { config = JSON.parse(await fs.promises.readFile(configPath, "utf8")); } catch (error) {
     throw new QueryError(ERROR_CODES.CANONICAL_RECORD_UNREADABLE, "/canonical", "Flow configuration could not be read", { cause: error });
   }
   try {
-    return flowSpecRootFromConfig(config).toString();
+    return { specRoot: flowSpecRootFromConfig(config).toString(), language: config?.lang };
   } catch (error) {
     throw new QueryError(ERROR_CODES.CANONICAL_RECORD_INCONSISTENT, "/canonical", "Flow configuration specDir is invalid", { cause: error });
   }
@@ -1506,6 +1517,7 @@ export async function runFlowQueryCli(argv = process.argv.slice(2), { prepared =
   let available = [];
   let selectionEstablished = false;
   let snapshot = null;
+  let language = "en";
   try {
     if (prepared?.request) request = prepared.request;
     if (prepared?.error) {
@@ -1518,7 +1530,9 @@ export async function runFlowQueryCli(argv = process.argv.slice(2), { prepared =
     }
     requestedResource = request.resource;
     request.validateCursor();
-    reader = new CanonicalFlowVersionReader({ repositoryRoot: repositoryRoot(), specRoot: await specRoot() });
+    const configuration = await queryConfiguration();
+    language = configuration.language ?? language;
+    reader = new CanonicalFlowVersionReader({ repositoryRoot: repositoryRoot(), specRoot: configuration.specRoot });
     available = await reader.listAvailableVersions(request.specId);
     if (available.length === 0) throw new QueryError(ERROR_CODES.SPEC_NOT_FOUND, "/condition/specId", "requested Spec was not found");
     if (!available.includes(request.flowVersion)) throw new QueryError(ERROR_CODES.FLOW_VERSION_NOT_FOUND, "/condition/flowVersion", "requested Flow Version was not found");
@@ -1535,6 +1549,13 @@ export async function runFlowQueryCli(argv = process.argv.slice(2), { prepared =
     return 0;
   } catch (cause) {
     const error = publicError(cause);
+    let t = null;
+    try {
+      const localize = createI18n(language, { domain: "messages" });
+      t = (key, values) => localize(key.replace(/^messages:/, ""), values);
+    } catch {
+      // A locale failure must not replace the original query failure.
+    }
     let response;
     if (request instanceof QueryRequest) {
       const versionDiscovered = error.code === ERROR_CODES.FLOW_VERSION_NOT_FOUND;
@@ -1557,7 +1578,7 @@ export async function runFlowQueryCli(argv = process.argv.slice(2), { prepared =
         FLOW_QUERY_RESOURCES.includes(requestedResource) ? requestedResource : null,
       );
     }
-    await writeStream(process.stdout, `${serializeQueryResponse(response)}\n`);
+    await writeStream(process.stdout, `${serializeQueryResponse(response, { error, t })}\n`);
     await writeStream(process.stderr, `${error.message}\n`);
     return 1;
   }
@@ -1579,4 +1600,5 @@ export {
   QueryProjector,
   QueryRequest,
   SelectedFlowVersion,
+  serializeQueryResponse,
 };

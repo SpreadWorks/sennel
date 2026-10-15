@@ -1,5 +1,5 @@
 {
-  "schemaRevision": 2,
+  "schemaRevision": 3,
   "ok": true,
   "selectedFlowVersion": {
     "specId": "example-flow",
@@ -9,7 +9,7 @@
     1
   ],
   "snapshot": {
-    "id": "sha256:ceb9d047fa7b8dd78b49ac93e46158d1f256971f7a141bb0be2f3b682ea07315",
+    "id": "sha256:75ae23ba814813434793bf2974db5f40f25117b06d8fbbee1a87d9e48dfc06ca",
     "algorithm": "sha256",
     "capturedAt": "2026-10-12T00:00:04Z",
     "confirmationOrder": 3,
@@ -330,7 +330,7 @@
   },
   "pageInfo": {
     "limit": 1,
-    "endCursor": "eyJkaWdlc3QiOiJhMjg3ZjAzYjlkMTRhOWJlOTE5NGE0NjAwODlmMmMwYjk0YjA0MjdiZmIzNTQ5NTkwODE0MDkxZjZmOGQ2Yzg4IiwiZmxvd1ZlcnNpb24iOjEsImd0ZSI6IjIwMjYtMTAtMTJUMDA6MDA6MDFaIiwibHQiOiIyMDI2LTEwLTEyVDAwOjAwOjAzWiIsIm9yZGVyIjozLCJyZXNvdXJjZSI6ImFjdGl2aXRpZXMiLCJzY2hlbWFSZXZpc2lvbiI6Miwic25hcHNob3RJZCI6InNoYTI1NjpjZWI5ZDA0N2ZhN2I4ZGQ3OGI0OWFjOTNlNDYxNThkMWYyNTY5NzFmN2ExNDFiYjBiZTJmM2I2ODJlYTA3MzE1Iiwic3BlY0lkIjoiZXhhbXBsZS1mbG93IiwidmVyc2lvbiI6Mn0",
+    "endCursor": "eyJkaWdlc3QiOiJhMmJmNTUzMTYyZGE4MWRkZjM0Y2ViZWQ2NzM0YjkzYzBiNDM2NDE0Y2ZmYTY4NTU3OWM1NDdjOTE3NmU5MDI3IiwiZmxvd1ZlcnNpb24iOjEsImd0ZSI6IjIwMjYtMTAtMTJUMDA6MDA6MDFaIiwibHQiOiIyMDI2LTEwLTEyVDAwOjAwOjAzWiIsIm9yZGVyIjozLCJyZXNvdXJjZSI6ImFjdGl2aXRpZXMiLCJzY2hlbWFSZXZpc2lvbiI6Mywic25hcHNob3RJZCI6InNoYTI1Njo3NWFlMjNiYTgxNDgxMzQzNDc5M2JmMjk3NGRiNWY0MGYyNTExN2IwNmQ4ZmJiZWUxYTg3ZDllNDhkZmMwNmNhIiwic3BlY0lkIjoiZXhhbXBsZS1mbG93IiwidmVyc2lvbiI6Mn0",
     "hasNext": false,
     "returnedItems": 1,
     "totalItems": 2

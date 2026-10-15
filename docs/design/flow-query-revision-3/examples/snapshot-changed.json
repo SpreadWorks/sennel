@@ -1,0 +1,63 @@
+{
+  "schemaRevision": 3,
+  "ok": false,
+  "resource": "activities",
+  "selectedFlowVersion": {
+    "specId": "example-flow",
+    "flowVersion": 1
+  },
+  "availableFlowVersions": [
+    1
+  ],
+  "snapshot": null,
+  "completeness": null,
+  "error": {
+    "code": "SNAPSHOT_CHANGED",
+    "path": "/page/after",
+    "message": "cursor が指す snapshot と保存世代が異なる",
+    "reason": "SNAPSHOT_ID_MISMATCH",
+    "referenceId": "eyJ2ZXJzaW9uIjoyLCJzY2hlbWFSZXZpc2lvbiI6Miwic3BlY0lkIjoiZXhhbXBsZS1mbG93IiwiZmxvd1ZlcnNpb24iOjEsInJlc291cmNlIjoiYWN0aXZpdGllcyIsImd0ZSI6IjIwMjYtMTAtMTJUMDA6MDA6MDFaIiwibHQiOiIyMDI2LTEwLTEyVDAwOjAwOjAzWiIsIm9yZGVyIjoyLCJzbmFwc2hvdElkIjoic2hhMjU2OmNlYjlkMDQ3ZmE3YjhkZDc4YjQ5YWM5M2U0NjE1OGQxZjI1Njk3MWY3YTE0MWJiMGJlMmYzYjY4MmVhMDczMTUiLCJkaWdlc3QiOiJhOGQ1ODQ2YTkzNjVlYTQ3NDI4OTdiMjllYTY4ODliZGUwMWEyODZlZTZkNTljMmM0MTBmYThkYmE3MWI1NTQ5In0"
+  },
+  "items": [],
+  "entities": {
+    "evaluations": [],
+    "findings": [],
+    "repairs": []
+  },
+  "pageInfo": {
+    "limit": 1,
+    "endCursor": null,
+    "hasNext": false,
+    "returnedItems": 0,
+    "totalItems": null
+  },
+  "guidance": {
+    "schemaVersion": 1,
+    "code": "SNAPSHOT_CHANGED",
+    "cause": {
+      "kind": "reported_failure",
+      "code": "SNAPSHOT_CHANGED",
+      "recoveryHint": "unconfirmed"
+    },
+    "explanation": "Flowの操作が停止しました（SNAPSHOT_CHANGED）。元の原因は返却された診断情報で確認してください。",
+    "currentState": {
+      "operation": "flow query",
+      "completion": "unconfirmed",
+      "persistence": "unconfirmed",
+      "stop": "unconfirmed",
+      "acceptance": "unconfirmed",
+      "attemptCount": "unconfirmed",
+      "maxAttempts": "unconfirmed",
+      "budgetMs": "unconfirmed",
+      "elapsedMs": "unconfirmed",
+      "communicationAttempts": []
+    },
+    "nextAction": {
+      "kind": "external_work",
+      "instruction": "エラーコード SNAPSHOT_CHANGED と返却された診断情報を保守担当者へ提示し、継続前の修正を依頼してください。",
+      "preconditions": []
+    },
+    "diagnosticReference": "SNAPSHOT_CHANGED",
+    "presentationDigest": "2241eff31e338e4434641beed62df9ad0abe2470a75e860e5e7310f4c1688df0"
+  }
+}

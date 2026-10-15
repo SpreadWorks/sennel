@@ -18,7 +18,7 @@ import { parseArgs as cliParseArgs } from "./cli.js";
 import { Command } from "./command.js";
 import { Envelope } from "./flow-envelope.js";
 import { RuntimeLogBlockWriter } from "./runtime-log.js";
-import { FlowTargetBinding, targetMismatchEnvelopeForInput } from "./flow-target-guard.js";
+import { targetMismatchEnvelopeForInput } from "./flow-target-guard.js";
 import { findActiveNode, taskIdForResolvedStep } from "../flow/definition.js";
 import {
   AwaitingDecisionOutcome,
@@ -30,7 +30,6 @@ import {
   attachUserActionPrompt,
   FlowContinuation,
 } from "../flow/lib/user-action-prompt.js";
-import { guardedCommand } from "../flow/lib/guarded-command.js";
 import { FinalizeFlowStateOwner } from "../flow/lib/finalize-flow-state-owner.js";
 import { FatalPostHookError } from "./post-hook-error.js";
 import { AgentFailure } from "./agent-failure.js";
@@ -38,18 +37,16 @@ import { DefinitionLifecycleAttemptBinding, isStepPersistenceFailure } from "../
 import { isStepAdmissionRefusal } from "../flow/lib/step-admission-refusal.js";
 import { ProcessExecutionControlFailure } from "./process-execution-values.js";
 import { flowProcessRuntimeRequired, withFlowProcessRuntime } from "../flow/lib/process-runtime-admission.js";
+import { nonblockingFailureContinuation } from "../flow/lib/nonblocking-command-failure.js";
+import { FlowStopFacts, publicFlowErrorMessage, selectedFlowStopDirective } from "./flow-stop-guidance.js";
 
-function attachNonblockingContinuation(envelope, ctx, reason) {
-  const state = ctx?.flowState;
-  if (!(envelope instanceof Envelope) || state?.policy?.nonblocking?.enabled !== true) return envelope;
-  if (envelope.data?.actionPrompt || envelope.data?.continuation) return envelope;
-  const binding = FlowTargetBinding.captureContext(ctx);
-  return attachFlowContinuation(envelope, new FlowContinuation({
-    actionId: "REFRESH_NONBLOCKING_FLOW",
-    nextAction: guardedCommand("sennel flow get next-action", state, binding),
-    instruction: "Refresh the guarded next action and continue the normal Flow route.",
-    reason,
-  }));
+function attachSelectedFailureContinuation(envelope, ctx, error = null) {
+  if (!(envelope instanceof Envelope) || selectedFlowStopDirective(envelope.data) !== null
+    || envelope.data?.continuation || envelope.data?.actionPrompt) return envelope;
+  const continuation = nonblockingFailureContinuation({ state: ctx?.flowState, error,
+    targetContext: ctx ?? null });
+  if (continuation !== null) attachFlowContinuation(envelope, continuation);
+  return envelope;
 }
 
 function throwUnexpected(extras) {
@@ -299,12 +296,13 @@ function settleTypedStepOutcome(envelope, result) {
   }
 }
 
-function recordDefinitionLifecycleToolingFailure(binding, error, fallbackCode, writeErr, commandResult = null) {
+function recordDefinitionLifecycleToolingFailure(binding, error, fallbackCode, writeErr, commandResult = null, onFailure = null) {
   if (!(binding instanceof DefinitionLifecycleAttemptBinding)) return false;
   try {
     return binding.toolingFailure(error, fallbackCode, commandResult);
   } catch (recordingError) {
-    writeErr(`[definition lifecycle failure] ${recordingError.message || recordingError}\n`);
+    onFailure?.(recordingError);
+    writeErr(`[definition lifecycle failure] ${publicFlowErrorMessage(recordingError)}\n`);
     return false;
   }
 }
@@ -323,7 +321,7 @@ function recordDefinitionLifecycleToolingFailure(binding, error, fallbackCode, w
  * @param {(s: string) => void} [args.stderr]        override for tests
  * @param {boolean} [args.runtimeLog]  enable flow-run human-readable runtime log
  */
-export async function dispatch({
+async function executeDispatch({
   container,
   entry,
   argv,
@@ -334,10 +332,10 @@ export async function dispatch({
   stderr,
   setExitCode,
   buildHookCtx,
+  publication,
 }) {
   const baseWriteOut = stdout || ((s) => process.stdout.write(s));
   let runtimeLog = null;
-  let bufferedOutput = null;
   const baseWriteErr = stderr || ((s) => process.stderr.write(s));
   const processCaptureSuppressed = { stdout: 0, stderr: 0 };
   const withProcessCaptureSuppressed = (stream, fn) => {
@@ -350,8 +348,7 @@ export async function dispatch({
   };
   const writeOut = (s) => {
     if (runtimeLog) runtimeLog.capture("stdout", s);
-    return withProcessCaptureSuppressed("stdout", () => bufferedOutput === null
-      ? baseWriteOut(s) : bufferedOutput.push(s));
+    return withProcessCaptureSuppressed("stdout", () => baseWriteOut(s));
   };
   const writeErr = (s) => {
     if (runtimeLog) runtimeLog.capture("stderr", s);
@@ -360,11 +357,13 @@ export async function dispatch({
   let recordedExitCode = 0;
   const baseSetExit = setExitCode || ((code) => { process.exitCode = code; });
   const setExit = (code) => {
-    recordedExitCode = code;
-    baseSetExit(code);
+    recordedExitCode = Math.max(recordedExitCode, code);
+    baseSetExit(recordedExitCode);
   };
   let closedRuntimeLogMetadata = null;
+  let runtimeLogCloseAttempted = false;
   let restoreStreams = null;
+  let canonicalMetadataError = null;
   const buildRuntimeHookCtx = (parsedInput) => {
     const skipAmbientFlowContext = entry.skipAmbientFlowContext === true;
     if (skipAmbientFlowContext || !buildHookCtx) return { container, ...parsedInput };
@@ -384,10 +383,19 @@ export async function dispatch({
       envelopeType,
       envelopeKey,
     });
+  };
+  const captureProcessStreams = () => {
+    if (restoreStreams) return;
     const originalStdoutWrite = process.stdout.write;
     const originalStderrWrite = process.stderr.write;
     process.stdout.write = function(chunk, encoding, cb) {
       if (runtimeLog && processCaptureSuppressed.stdout === 0) runtimeLog.capture("stdout", chunk);
+      if ((publication.mode === "envelope" || publication.flowBoundary) && processCaptureSuppressed.stdout === 0) {
+        if (publication.mode === "raw") publication.captureRawOutput(chunk, encoding);
+        const callback = typeof encoding === "function" ? encoding : cb;
+        if (callback) callback();
+        return true;
+      }
       return originalStdoutWrite.call(this, chunk, encoding, cb);
     };
     process.stderr.write = function(chunk, encoding, cb) {
@@ -399,11 +407,38 @@ export async function dispatch({
       process.stderr.write = originalStderrWrite;
     };
   };
+  captureProcessStreams();
+
   const closeRuntimeLog = () => {
-    if (!runtimeLog || closedRuntimeLogMetadata) return closedRuntimeLogMetadata;
+    if (!runtimeLog || runtimeLogCloseAttempted) return closedRuntimeLogMetadata;
+    runtimeLogCloseAttempted = true;
+    publication.stage = "RUNTIME_LOG_CLOSE_FAILED";
     closedRuntimeLogMetadata = runtimeLog.close(recordedExitCode);
     return closedRuntimeLogMetadata;
   };
+
+  const queueEnvelope = (envelope) => {
+    publication.accept(envelope);
+    if (runtimeLog && !closedRuntimeLogMetadata) {
+      // This is the candidate response, held until all durable finalizers settle.
+      // A later finalizer failure is merged into the sole public response.
+      runtimeLog.capture("stdout", JSON.stringify({
+        publication: "pending", ok: envelope.ok, type: envelope.type,
+        key: envelope.key, errors: envelope.errors,
+      }) + "\n");
+    }
+  };
+  publication.cleanup = () => {
+    try { closeRuntimeLog(); }
+    finally { if (restoreStreams) restoreStreams(); }
+  };
+  publication.stage = "ARGS_ERROR";
+  const recordFailure = (binding, error, code, errorWriter, result = null) =>
+    recordDefinitionLifecycleToolingFailure(binding, error, code, errorWriter, result,
+      (recordingError) => {
+        canonicalMetadataError = recordingError;
+        publication.appendFailure(recordingError, "LIFECYCLE_FAILURE_RECORD_FAILED");
+      });
 
   // 1. Parse argv → input. _rawArgs preserved for legacy adapters that
   //    need to reconstruct process.argv before calling into old main().
@@ -412,19 +447,21 @@ export async function dispatch({
     input = parseEntryInput(entry, argv);
     input._rawArgs = argv;
   } catch (err) {
-    const parseHookCtx = buildRuntimeHookCtx({});
-    openRuntimeLog(parseHookCtx);
-    const mode = await resolveOutputMode(entry);
     const helpHint = entry.helpPath
       ? `Run: ${entry.helpPath}`
       : `Run: sennel ${envelopeType || "flow"} ${envelopeKey || ""} --help`.trimEnd();
+    const refusal = Envelope.fail(envelopeType || "run", envelopeKey || "?", "ARGS_ERROR", [String(err.message || err), helpHint]);
+    if (publication.flowBoundary || entry.parseErrorsAsEnvelope === true) publication.accept(refusal);
+    let parseHookCtx = {};
+    try { parseHookCtx = buildRuntimeHookCtx({}); }
+    catch (error) { publication.appendFailure(error, "FLOW_CONTEXT_FAILED"); }
+    openRuntimeLog(parseHookCtx);
+    const mode = publication.flowBoundary ? "envelope" : await resolveOutputMode(entry);
+    publication.mode = mode;
     if (mode === "envelope" || entry.parseErrorsAsEnvelope === true) {
-      const env = Envelope.fail(envelopeType || "run", envelopeKey || "?", "ARGS_ERROR", [
-        String(err.message || err),
-        helpHint,
-      ]);
+      const env = refusal;
       attachRuntimeLog(env, runtimeLog?.metadata);
-      writeOut(JSON.stringify(env.toJSON(), null, 2) + "\n");
+      queueEnvelope(env);
     } else {
       writeErr(`${err.message || err}\n${helpHint}\n`);
       if (runtimeLog?.metadata) {
@@ -446,12 +483,14 @@ export async function dispatch({
   // 3. Resolve and guard the flow target before loading or validating the
   // command module. A mismatch cannot reach command-owned validation,
   // lifecycle hooks, execution, or step metadata persistence.
+  publication.stage = "FLOW_CONTEXT_FAILED";
   const hookCtx = buildRuntimeHookCtx(input);
+  publication.flowContext = hookCtx;
   const emitTargetFailure = (failure) => {
     attachRuntimeLog(failure, enableRuntimeLog === true && container.has("paths")
       ? { runId: runtimeLogRunId(hookCtx) }
       : null);
-    writeOut(JSON.stringify(failure.toJSON(), null, 2) + "\n");
+    queueEnvelope(failure);
     setExit(1);
   };
   const recognizedTargetResolutionError = [
@@ -507,26 +546,25 @@ export async function dispatch({
   }
 
   // 4. Load Command class
+  publication.stage = "COMMAND_LOAD_FAILED";
   const mod = await entry.command();
   const CommandClass = mod.default;
   if (!CommandClass || typeof CommandClass !== "function") {
-    writeErr(`dispatcher: module has no default export (Command class)\n`);
-    setExit(1);
-    return;
+    throw new Error("dispatcher: module has no default export (Command class)");
   }
   Command.validate(CommandClass);
 
-  const mode = CommandClass.outputMode;
+  let mode = CommandClass.outputMode;
+  publication.mode = mode;
 
   const runtimeLogActiveNode = hookCtx.flowState ? findActiveNode(hookCtx.flowState) : null;
 
   openRuntimeLog(hookCtx);
-  let canonicalMetadataError = null;
 
   const emitPreconditionFailure = (code, message) => {
     const env = Envelope.fail(envelopeType || "run", envelopeKey || "?", code, message);
     attachRuntimeLog(env, runtimeLog?.metadata);
-    writeOut(JSON.stringify(env.toJSON(), null, 2) + "\n");
+    queueEnvelope(env);
     setExit(1);
   };
   const persistRuntimeLogMetadata = (result) => {
@@ -543,10 +581,12 @@ export async function dispatch({
       ? runtimeLogActiveNode.stepId
       : requestedStepId;
     if (metadata && stepId && hookCtx.flowManager && hookCtx.flowState) {
+      publication.stage = "RUNTIME_LOG_METADATA_FAILED";
       hookCtx.flowManager.setStepRuntimeLog(stepId, metadata.toStepMetadata(), {
         ...(hookCtx.specId ? { specId: hookCtx.specId } : {}),
         taskId: taskIdForResolvedStep(runtimeLogActiveNode, stepId),
       });
+      publication.persistence = "runtime_metadata_recorded";
     }
   };
 
@@ -570,6 +610,8 @@ export async function dispatch({
     return;
   }
 
+  let lifecycleResult = null;
+  let commitFinalizeCompletion = false;
   const executeLifecycle = async () => {
     // Bind the exact active Attempt before any registry lifecycle hook can
     // confirm, fail, or replace it.  Error handling below can therefore record
@@ -588,13 +630,17 @@ export async function dispatch({
       } catch (err) {
         if (err instanceof ProcessExecutionControlFailure) throw err;
         canonicalMetadataError = err;
+        publication.accept(createFailureEnvelope({ err, envelopeType, envelopeKey,
+          runtimeLogMetadata: runtimeLog?.metadata, flowContext: hookCtx }));
+        publication.error = err;
         if (hookCtx.flowOutboxEntry && entry.onError) {
           try { await entry.onError(hookCtx, err); } catch (onErrorErr) {
             if (onErrorErr instanceof ProcessExecutionControlFailure) throw onErrorErr;
-            writeErr(`[onError hook] ${onErrorErr.message || onErrorErr}\n`);
+            publication.appendFailure(onErrorErr, "ON_ERROR_HOOK_FAILED");
+            writeErr(`[onError hook] ${publicFlowErrorMessage(onErrorErr)}\n`);
           }
         }
-        recordDefinitionLifecycleToolingFailure(
+        recordFailure(
           lifecycleAttemptBinding,
           err,
           "PRE_HOOK_FAILED",
@@ -603,6 +649,7 @@ export async function dispatch({
         await emitFailure({
           err,
           mode,
+          flowBoundary: publication.flowBoundary,
           envelopeType,
           envelopeKey,
           writeOut,
@@ -610,10 +657,8 @@ export async function dispatch({
           setExit,
           runtimeLogMetadata: runtimeLog?.metadata,
           flowContext: hookCtx,
+          queueEnvelope,
         });
-        closeRuntimeLog();
-        persistRuntimeLogMetadata(null);
-        if (restoreStreams) restoreStreams();
         return;
       }
     }
@@ -630,6 +675,7 @@ export async function dispatch({
     } else {
       try {
         const cmd = new CommandClass();
+        publication.completion = "unconfirmed";
         input._envelopeType = envelopeType;
         input._envelopeKey = envelopeKey;
         const commandInput = hookCtx.flowOutboxEntry
@@ -649,27 +695,32 @@ export async function dispatch({
           commandInput._deferFinalizeCompletionCommit = true;
         }
         result = await cmd.run(container, commandInput);
+        publication.completion = "command_returned";
       } catch (err) {
         caught = err;
         canonicalMetadataError = err;
       }
     }
 
+    lifecycleResult = result;
+
     // 8a. Success path
     if (!caught) {
       // Keep the command result available to lifecycle settlement and runtime
       // metadata even when a post hook replaces only the public Envelope.
       let envelope;
-      if (mode === "envelope") {
-        // Commands may return an Envelope directly (e.g. Envelope.fail for
-        // recoverable / user-avoidable outcomes). In that case honor it verbatim
-        // rather than re-wrapping it in Envelope.ok.
-        if (result instanceof Envelope) {
-          envelope = result;
-        } else {
-          envelope = Envelope.ok(envelopeType || "run", envelopeKey || "?", result || {});
-        }
-      }
+      const useEnvelope = () => {
+        if (mode !== "envelope" && !publication.flowBoundary) return false;
+        mode = "envelope";
+        publication.mode = mode;
+        envelope ??= result instanceof Envelope ? result
+          : Envelope.ok(envelopeType || "run", envelopeKey || "?", result || {});
+        // Retention precedes fallible hooks and lifecycle recording. Queuing
+        // diagnostics and public serialization still wait for settlement.
+        publication.accept(envelope);
+        return true;
+      };
+      if (mode === "envelope" || result instanceof Envelope) useEnvelope();
       let postFailed = false;
       // Skip post hooks when the command explicitly returned an ok:false envelope —
       // post hooks advance step status / counters assuming success, which would
@@ -678,8 +729,9 @@ export async function dispatch({
       const deferFinalizeCompletion = !skipPost
         && envelopeKey === "finalize-cleanup"
         && typeof mod.commitFinalizeCleanupPostCommandMetadata === "function";
+      commitFinalizeCompletion = deferFinalizeCompletion;
       if (skipPost) {
-        const failure = ProcessExecutionControlFailure.fromEnvelope(result.toJSON()) ?? new Error(
+        const failure = ProcessExecutionControlFailure.fromEnvelope(result) ?? new Error(
           result.errors.flatMap((item) => item.messages || []).join("; ") || `${envelopeKey || "command"} failed`,
         );
         failure.code = result.errors.find((item) => item?.level === "fatal")?.code
@@ -693,11 +745,11 @@ export async function dispatch({
           } catch (onErrorErr) {
             if (onErrorErr instanceof ProcessExecutionControlFailure) throw onErrorErr;
             postFailed = true;
-            if (mode === "envelope") envelope.addWarning("ON_ERROR_HOOK_FAILED", onErrorErr.message || String(onErrorErr));
-            else writeErr(`[onError hook] ${onErrorErr.message || onErrorErr}\n`);
+            if (mode === "envelope") envelope.addWarning("ON_ERROR_HOOK_FAILED", publicFlowErrorMessage(onErrorErr));
+            else writeErr(`[onError hook] ${publicFlowErrorMessage(onErrorErr)}\n`);
           }
         }
-        recordDefinitionLifecycleToolingFailure(
+        recordFailure(
           lifecycleAttemptBinding,
           failure,
           "COMMAND_ENVELOPE_FAILED",
@@ -707,27 +759,31 @@ export async function dispatch({
       if (entry.post && !skipPost) {
         try {
           const postResult = await entry.post(hookCtx, result);
-          if (postResult instanceof Envelope && mode === "envelope") envelope = postResult;
+          if (postResult instanceof Envelope && useEnvelope()) {
+            envelope = postResult;
+            publication.accept(envelope, { replace: true });
+          }
         } catch (postErr) {
+          const hasEnvelope = useEnvelope();
           if (postErr instanceof ProcessExecutionControlFailure) throw postErr;
           canonicalMetadataError = postErr;
           postFailed = true;
-          recordDefinitionLifecycleToolingFailure(
+          if (hasEnvelope) {
+            if (postErr instanceof FatalPostHookError) {
+              envelope.addFatal(postErr.code, publicFlowErrorMessage(postErr));
+            } else {
+              envelope.addWarning("POST_HOOK_FAILED", publicFlowErrorMessage(postErr));
+            }
+          } else {
+            writeErr(`[post hook] ${publicFlowErrorMessage(postErr)}\n`);
+          }
+          recordFailure(
             lifecycleAttemptBinding,
             postErr,
             "POST_HOOK_FAILED",
             writeErr,
             result,
           );
-          if (mode === "envelope") {
-            if (postErr instanceof FatalPostHookError) {
-              envelope.addFatal(postErr.code, postErr.message);
-            } else {
-              envelope.addWarning("POST_HOOK_FAILED", postErr.message || String(postErr));
-            }
-          } else {
-            writeErr(`[post hook] ${postErr.message || postErr}\n`);
-          }
         }
       }
       // Nonblocking evidence is an audit record, not a lifecycle transition.
@@ -739,92 +795,57 @@ export async function dispatch({
         try {
           await entry.nonblockingPost(hookCtx, result);
         } catch (nonblockingError) {
+          const hasEnvelope = useEnvelope();
           if (nonblockingError instanceof ProcessExecutionControlFailure) throw nonblockingError;
           postFailed = true;
-          recordDefinitionLifecycleToolingFailure(
+          if (hasEnvelope) {
+            envelope.addWarning("NONBLOCKING_EVIDENCE_RECORD_FAILED", publicFlowErrorMessage(nonblockingError));
+            envelope.ok = false;
+            envelope.errors.push({
+              level: "fatal",
+              code: "NONBLOCKING_EVIDENCE_RECORD_FAILED",
+              messages: [publicFlowErrorMessage(nonblockingError)],
+            });
+          } else {
+            writeErr(`[nonblocking evidence] ${publicFlowErrorMessage(nonblockingError)}\n`);
+          }
+          recordFailure(
             lifecycleAttemptBinding,
             nonblockingError,
             "NONBLOCKING_POST_FAILED",
             writeErr,
           );
-          if (mode === "envelope") {
-            envelope.addWarning("NONBLOCKING_EVIDENCE_RECORD_FAILED", nonblockingError.message || String(nonblockingError));
-            envelope.ok = false;
-            envelope.errors.push({
-              level: "fatal",
-              code: "NONBLOCKING_EVIDENCE_RECORD_FAILED",
-              messages: [nonblockingError.message || String(nonblockingError)],
-            });
-            attachNonblockingContinuation(envelope, hookCtx, "The nonblocking evidence record was not durably saved.");
-          } else {
-            writeErr(`[nonblocking evidence] ${nonblockingError.message || nonblockingError}\n`);
-          }
-        }
-      }
-      if (deferFinalizeCompletion) {
-        closeRuntimeLog();
-        try {
-          await persistFinalizeCleanupPostReturnMetadata({
-            envelopeKey,
-            hookCtx,
-            metadata: closedRuntimeLogMetadata,
-            commandModule: mod,
-            commitCompletion: true,
-          });
-        } catch (completionError) {
-          postFailed = true;
-          recordDefinitionLifecycleToolingFailure(
-            lifecycleAttemptBinding,
-            completionError,
-            "FINALIZE_COMPLETION_COMMIT_FAILED",
-            writeErr,
-          );
-          if (mode === "envelope") {
-            envelope.addFatal(
-              "FINALIZE_COMPLETION_COMMIT_FAILED",
-              completionError.message || String(completionError),
-            );
-          } else {
-            writeErr(`[finalize completion] ${completionError.message || completionError}\n`);
-          }
         }
       }
       if (mode === "envelope") {
+        if (envelope.ok === false) attachSelectedFailureContinuation(envelope, hookCtx, canonicalMetadataError);
+        publication.accept(envelope);
+      }
+      if (mode === "envelope") {
         settleTypedStepOutcome(envelope, result);
-        if (envelope.ok === false) {
-          attachNonblockingContinuation(envelope, hookCtx, "The normal Flow operation did not complete.");
-        }
         if (envelope instanceof Envelope && envelope.ok === false) attachRuntimeLog(envelope, runtimeLog?.metadata);
-        writeOut(JSON.stringify(envelope.toJSON(), null, 2) + "\n");
-        emitFinalizeCleanupReportDisplay({ envelopeKey, envelope, writeErr });
+        queueEnvelope(envelope);
         setExit(envelope.ok && !postFailed ? 0 : 1);
       } else if (postFailed) {
         setExit(1);
       }
-      closeRuntimeLog();
-      if (!deferFinalizeCompletion) {
-        await persistFinalizeCleanupPostReturnMetadata({
-          envelopeKey,
-          hookCtx,
-          metadata: closedRuntimeLogMetadata,
-          commandModule: mod,
-        });
-      }
-      persistRuntimeLogMetadata(result);
-      if (restoreStreams) restoreStreams();
       return;
     }
 
     // 8b. Failure path
+    publication.accept(createFailureEnvelope({ err: caught, envelopeType, envelopeKey,
+      runtimeLogMetadata: runtimeLog?.metadata, flowContext: hookCtx }));
+    publication.error = caught;
     if (entry.onError && !(caught instanceof ProcessExecutionControlFailure)) {
       try {
         await entry.onError(hookCtx, caught);
       } catch (onErrorErr) {
         if (onErrorErr instanceof ProcessExecutionControlFailure) throw onErrorErr;
-        writeErr(`[onError hook] ${onErrorErr.message || onErrorErr}\n`);
+        publication.appendFailure(onErrorErr, "ON_ERROR_HOOK_FAILED");
+        writeErr(`[onError hook] ${publicFlowErrorMessage(onErrorErr)}\n`);
       }
     }
-    recordDefinitionLifecycleToolingFailure(
+    recordFailure(
       lifecycleAttemptBinding,
       caught,
       "COMMAND_FAILED",
@@ -833,6 +854,7 @@ export async function dispatch({
     await emitFailure({
       err: caught,
       mode,
+      flowBoundary: publication.flowBoundary,
       envelopeType,
       envelopeKey,
       writeOut,
@@ -840,33 +862,52 @@ export async function dispatch({
       setExit,
       runtimeLogMetadata: runtimeLog?.metadata,
       flowContext: hookCtx,
+      queueEnvelope,
     });
-    closeRuntimeLog();
-    await persistFinalizeCleanupPostReturnMetadata({
-      envelopeKey,
-      hookCtx,
-      metadata: closedRuntimeLogMetadata,
-      commandModule: mod,
-    });
-    persistRuntimeLogMetadata(null);
-    if (restoreStreams) restoreStreams();
+
   };
 
+  publication.stage = "COMMAND_FAILED";
   const required = flowProcessRuntimeRequired({ ctx: hookCtx, envelopeType, envelopeKey, input });
-  if (required && mode === "envelope") bufferedOutput = [];
   try {
-    await withFlowProcessRuntime(hookCtx, executeLifecycle, { commandId: envelopeKey, required,
+    await withFlowProcessRuntime(hookCtx, async () => {
+      try { await executeLifecycle(); }
+      catch (error) {
+        canonicalMetadataError = error;
+        publication.appendFailure(error, publication.stage);
+      } finally {
+        if (entry.finally) {
+          try { await entry.finally(hookCtx); }
+          catch (error) {
+            canonicalMetadataError = error;
+            publication.appendFailure(error, "FINALLY_HOOK_FAILED");
+          }
+        }
+        recordedExitCode = Math.max(recordedExitCode, publication.exitCode);
+        try { closeRuntimeLog(); }
+        catch (error) { publication.appendFailure(error, "RUNTIME_LOG_CLOSE_FAILED"); }
+        try {
+          await persistFinalizeCleanupPostReturnMetadata({ envelopeKey, hookCtx,
+            metadata: closedRuntimeLogMetadata, commandModule: mod,
+            commitCompletion: commitFinalizeCompletion });
+        } catch (error) {
+          publication.appendFailure(error, commitFinalizeCompletion
+            ? "FINALIZE_COMPLETION_COMMIT_FAILED" : "FINALIZE_METADATA_FAILED");
+        }
+        try { persistRuntimeLogMetadata(lifecycleResult); }
+        catch (error) {
+          publication.persistence = "unconfirmed";
+          publication.appendFailure(error, "RUNTIME_LOG_METADATA_FAILED");
+        }
+        publication.stage = "PROCESS_RUNTIME_CLOSE_FAILED";
+      }
+    }, { commandId: envelopeKey, required,
       physicalAuthority: entry.processExecutionAuthority ?? null });
-    const completedOutput = bufferedOutput;
-    bufferedOutput = null;
-    for (const output of completedOutput ?? []) baseWriteOut(output);
+    if (required) publication.stop = "confirmed";
   } catch (err) {
-    // Runtime admission and stop/receipt failures do not select a Step Result,
-    // invoke error hooks, consume retry budgets, or update canonical metadata.
-    bufferedOutput = null;
+    // Runtime refusals never select a Step Result or consume semantic budgets.
     canonicalMetadataError = err;
-    await emitFailure({ err, mode, envelopeType, envelopeKey, writeOut, writeErr,
-      setExit, runtimeLogMetadata: runtimeLog?.metadata, flowContext: hookCtx });
+    publication.appendFailure(err, publication.stage);
     closeRuntimeLog();
   } finally {
     if (restoreStreams) restoreStreams();
@@ -882,44 +923,147 @@ async function resolveOutputMode(entry) {
   }
 }
 
-function emitFailure({
-  err,
-  mode,
-  envelopeType,
-  envelopeKey,
-  writeOut,
-  writeErr,
-  setExit,
-  runtimeLogMetadata,
-  flowContext,
-}) {
-  if (mode === "envelope") {
-    const code = err?.code || "ERROR";
-    const env = Envelope.fail(envelopeType || "run", envelopeKey || "?", code, String(err?.message || err));
-    const errorData = err instanceof ProcessExecutionControlFailure
-      ? { processExecutionControlFailure: err.toJSON() }
-      : err?.data !== undefined
-        ? err.data
-        : err instanceof AgentFailure
-          ? err.toJSON()
-          : undefined;
-    if (errorData !== undefined) env.data = errorData;
-    if (err?.continuation) {
-      try {
-        attachFlowContinuation(env, FlowContinuation.fromStored(err.continuation));
-      } catch {
-        attachNonblockingContinuation(env, flowContext, "The normal Flow operation did not complete.");
-      }
-    } else {
-      attachNonblockingContinuation(env, flowContext, "The normal Flow operation did not complete.");
-    }
-    attachRuntimeLog(env, runtimeLogMetadata);
-    writeOut(JSON.stringify(env.toJSON(), null, 2) + "\n");
+function createFailureEnvelope({ err, envelopeType, envelopeKey, runtimeLogMetadata, flowContext }) {
+  const code = err?.code || "ERROR";
+  const env = Envelope.fail(envelopeType || "run", envelopeKey || "?", code, publicFlowErrorMessage(err));
+  const errorData = err instanceof ProcessExecutionControlFailure
+    ? { processExecutionControlFailure: err.toJSON() }
+    : err?.data !== undefined ? err.data : err instanceof AgentFailure ? err.toJSON() : undefined;
+  if (errorData !== undefined) env.data = errorData;
+  if (err?.continuation) attachFlowContinuation(env, FlowContinuation.fromStored(err.continuation));
+  else attachSelectedFailureContinuation(env, flowContext, err);
+  attachRuntimeLog(env, runtimeLogMetadata);
+  return env;
+}
+
+function emitFailure({ err, mode, flowBoundary, envelopeType, envelopeKey, writeErr, setExit,
+  runtimeLogMetadata, queueEnvelope, flowContext }) {
+  if (mode === "envelope" || flowBoundary) {
+    queueEnvelope(createFailureEnvelope({ err, envelopeType, envelopeKey, runtimeLogMetadata, flowContext }));
+    if (mode === "raw") writeErr(`Error: ${publicFlowErrorMessage(err)}\n`);
   } else {
     writeErr(`${err?.stack || err?.message || err}\n`);
-    if (runtimeLogMetadata) {
-      writeErr(`runtimeLog.runId=${runtimeLogMetadata.runId} runtimeLog.sequence=${runtimeLogMetadata.sequence}\n`);
-    }
+    if (runtimeLogMetadata) writeErr(`runtimeLog.runId=${runtimeLogMetadata.runId} runtimeLog.sequence=${runtimeLogMetadata.sequence}\n`);
   }
   setExit(err?.exitCode ?? 1);
+}
+
+/** A command's one public response, retained through every fallible finalizer. */
+class DispatchPublication {
+  constructor({ envelopeType, envelopeKey, flowBoundary }) {
+    this.envelopeType = envelopeType;
+    this.envelopeKey = envelopeKey;
+    this.flowBoundary = flowBoundary;
+    this.mode = flowBoundary ? "envelope" : "raw";
+    this.envelope = null;
+    this.error = null;
+    this.exitCode = 0;
+    this.stage = "COMMAND_FAILED";
+    this.flowContext = null;
+    this.cleanup = null;
+    this.completion = "not_started";
+    this.persistence = "unconfirmed";
+    this.stop = "unconfirmed";
+    this.pendingRawOutput = [];
+  }
+
+  captureRawOutput(chunk, encoding) {
+    this.pendingRawOutput.push(typeof chunk === "string"
+      ? Buffer.from(chunk, typeof encoding === "string" ? encoding : "utf8") : Buffer.from(chunk));
+  }
+
+  accept(envelope, { replace = false } = {}) {
+    if (replace && this.envelope !== null && this.envelope !== envelope) {
+      // A replacement owns its public projection, including data and directive.
+      // Earlier observed causes and failure status survive that replacement.
+      const prior = this.envelope;
+      this.envelope = envelope;
+      envelope = prior;
+    }
+    if (this.envelope === null) this.envelope = envelope;
+    else if (this.envelope !== envelope) {
+      // Hooks may replace the public projection. Additional failures, however,
+      // retain every earlier cause rather than replacing the first response.
+      for (const entry of envelope.errors) {
+        if (!this.envelope.errors.some((prior) => prior.code === entry.code
+          && JSON.stringify(prior.messages) === JSON.stringify(entry.messages))) {
+          this.envelope.errors.push(entry);
+        }
+      }
+      if (!replace && this.envelope.data == null && envelope.data != null) this.envelope.data = envelope.data;
+      if (!envelope.ok) this.envelope.ok = false;
+    }
+  }
+
+  appendFailure(error, fallbackCode = "COMMAND_FAILED") {
+    const env = createFailureEnvelope({ err: error, envelopeType: this.envelopeType,
+      envelopeKey: this.envelopeKey });
+    if (!error?.code) env.errors[0].code = fallbackCode;
+    if (error instanceof ProcessExecutionControlFailure && this.envelope !== null) {
+      // Typed physical refusals remain reconstructible by the existing owner.
+      env.data = { ...this.envelope.data, ...env.data };
+      this.accept(env, { replace: true });
+      this.error = error;
+    } else {
+      this.accept(env);
+      this.error ??= error;
+    }
+    this.exitCode = error?.exitCode || 1;
+  }
+}
+
+export async function dispatch(options) {
+  const { container, entry, envelopeType, envelopeKey, stdout, stderr, setExitCode } = options;
+  const publication = new DispatchPublication({ envelopeType, envelopeKey,
+    flowBoundary: Boolean(options.buildHookCtx) || ["get", "set", "run", "report"].includes(envelopeType) });
+  const writeErr = stderr || ((text) => process.stderr.write(text));
+  const setExit = setExitCode || ((code) => { process.exitCode = code; });
+  try {
+    await executeDispatch({ ...options, publication,
+      setExitCode: (code) => { publication.exitCode = Math.max(publication.exitCode, code); } });
+  } catch (error) {
+    publication.appendFailure(error, publication.stage);
+  } finally {
+    try { publication.cleanup?.(); }
+    catch (error) { publication.appendFailure(error, "RUNTIME_LOG_CLOSE_FAILED"); }
+  }
+  let serialized = null;
+  if (publication.envelope !== null && (publication.mode === "envelope" || publication.flowBoundary)) {
+    try {
+      if (!publication.envelope.ok) attachSelectedFailureContinuation(
+        publication.envelope, publication.flowContext, publication.error);
+      publication.envelope.attachStopGuidance({ error: publication.error,
+        operation: `flow ${envelopeType || "run"} ${envelopeKey || "?"}`,
+        exitCode: publication.exitCode,
+        facts: new FlowStopFacts({ completion: publication.completion,
+          persistence: publication.persistence, stop: publication.stop }),
+        t: container.has("i18n") ? container.get("i18n") : null });
+      serialized = JSON.stringify(publication.envelope.toJSON(), null, 2) + "\n";
+    } catch (error) {
+      publication.appendFailure(error, "FLOW_RESPONSE_CONTRACT_FAILED");
+      // Reuse the common contract for an invalid producer projection, without
+      // accepting its potentially conflicting next-action authority.
+      const failure = createFailureEnvelope({ err: error, envelopeType, envelopeKey });
+      failure.errors = [...publication.envelope.errors];
+      failure.attachStopGuidance({ error, operation: `flow ${envelopeType || "run"} ${envelopeKey || "?"}`, exitCode: 1 });
+      serialized = JSON.stringify(failure.toJSON(), null, 2) + "\n";
+      publication.envelope = failure;
+    }
+  } else if (!publication.error && publication.pendingRawOutput.length > 0) {
+    serialized = Buffer.concat(publication.pendingRawOutput);
+  }
+  if (serialized !== null) {
+    // No fallible semantic work follows this publication point. A broken
+    // stdout transport gets only the minimal stderr/exit path, never new JSON.
+    try {
+      (stdout || ((text) => process.stdout.write(text)))(serialized);
+      emitFinalizeCleanupReportDisplay({ envelopeKey, envelope: publication.envelope, writeErr });
+    } catch {
+      publication.exitCode = 1;
+      try { writeErr("STDOUT_DELIVERY_FAILED: response delivery failed.\n"); } catch { /* The transport is unavailable. */ }
+    }
+  } else if (publication.error) {
+    writeErr(`${publication.error?.message || publication.error}\n`);
+  }
+  setExit(publication.exitCode);
 }

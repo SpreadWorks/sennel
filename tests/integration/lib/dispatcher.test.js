@@ -131,7 +131,9 @@ describe("dispatcher (unified runner)", () => {
         }),
       });
 
-      const continuation = JSON.parse(out.join("")).data.continuation;
+      const directive = JSON.parse(out.join("")).data.directive;
+      assert.equal(directive.kind, "execute_continuation");
+      const continuation = directive.continuation;
       const token = continuation.nextAction.match(/--expect-binding '([^']+)'/)?.[1];
       assert.ok(token);
       const binding = FlowTargetBinding.deserialize(token);

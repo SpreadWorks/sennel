@@ -11,6 +11,8 @@ This skill drives a full Spec-Driven Development flow from an explicitly started
 
 <!-- include("@skills/partials/core-principle.md") -->
 
+<!-- include("@skills/partials/stop-guidance.md") -->
+
 ### Prompt guidance placement contract
 
 When implementing prompt guidance movement between flow skill files or flow prompt files, inspect related shared regression tests and update their placement-contract assertions. The checks must cover old-placement removal assertions and new-placement presence assertions. This rule applies to general prompt guidance movement, not a single guidance topic.
@@ -208,10 +210,10 @@ continuation.
 
 Handle the returned `data.dispatch.boundary`:
 
-1. `host_action` with `nextAction.directive.kind=await_task_review_filter`: this is an agent-host action, not a user decision. Retain the exact `data.dispatch.binding`, inspect every canonical finding in `nextAction.directive.findings`, and choose only findings whose stable `findingId` should be excluded from repair. Use the finding's requirement/guardrail evidence and canonical source; do not delegate this decision to a worker and do not edit source. Replace only the `<json-array>` token in `nextAction.directive.command` with one JSON array containing objects of exactly `findingId` and a specific non-empty `reason`. Use `[]` to confirm explicitly that no findings are excluded. Execute that typed command once, unchanged otherwise, then immediately resume `sennel flow run dispatch --expect-binding <binding>`. Unknown/duplicate IDs, an empty reason, or stale Attempt/Review/source/catalog binding are a hard stop; refresh from dispatch rather than weakening or reconstructing the binding.
+1. `host_action` with `data.directive.kind=await_task_review_filter`: this is an agent-host action, not a user decision. Complete it during the same turn, without waiting for user confirmation. Retain the exact `data.dispatch.binding`, inspect every canonical finding in `data.directive.findings`, and choose only findings whose stable `findingId` should be excluded from repair. Use the finding's requirement/guardrail evidence and canonical source; do not delegate this decision to a worker and do not edit source. Replace only the `<json-array>` token in `data.directive.command` with one JSON array containing objects of exactly `findingId` and a specific non-empty `reason`. Use `[]` to confirm explicitly that no findings are excluded. Execute that typed command once, unchanged otherwise, then immediately resume `sennel flow run dispatch --expect-binding <binding>`. Unknown/duplicate IDs, an empty reason, or stale Attempt/Review/source/catalog binding are a hard stop; refresh from dispatch rather than weakening or reconstructing the binding.
 2. `approval_required`: retain both the private `approvalToken` and the exact
    `data.dispatch.binding`. Present the current localized approval choices from
-   `nextAction.directive.actionPrompt`. If the user selects the specification
+   `data.directive.actionPrompt`. If the user selects the specification
    summary or full-review choice, run exactly one of:
    - `sennel flow get artifact spec.record --mode summary --expect-binding <binding>`
    - `sennel flow get artifact spec.record --mode full --expect-binding <binding>`
@@ -254,7 +256,7 @@ Handle the returned `data.dispatch.boundary`:
    - For `ENABLE_NONBLOCKING`, record the bounded reason with
      `sennel flow set policy nonblocking --reason "<reason>" --expect-binding <token>`,
      then resume dispatch.
-   - When `nextAction.directive.kind` is `await_draft_question`, the CLI has
+   - When `data.directive.kind` is `await_draft_question`, the CLI has
      intentionally not started the non-interactive draft worker. Research only
      enough current source/context to present the existing `question` in Choice
      Format with materially different answers and one recommendation. After the
@@ -265,16 +267,16 @@ Handle the returned `data.dispatch.boundary`:
      never edit canonical `draft.json` directly, and immediately resume dispatch
      with the same binding so the CLI can return the next question or start the
      worker after all questions are resolved.
-5. `blocked`: retain the exact `data.dispatch.binding`, then report the returned reason and resume instruction as the concrete
-   blocker. `FLOW_DISPATCH_AGENT_FAILED`, `FLOW_DISPATCH_STALLED`, and
+5. `blocked`: render the common stop guidance from the command envelope in its
+   required order. Preserve the exact `data.dispatch.binding` only when the
+   returned directive carries it; do not derive a resume instruction from the
+   blocker text. Follow the directive's selected action and stop when it
+   requires a user action or external work. `FLOW_DISPATCH_AGENT_FAILED`, `FLOW_DISPATCH_STALLED`, and
    `FLOW_DISPATCH_LIMIT_REACHED` are failures, not progress summaries and not
-   permission to mark a step complete manually.
-   - `FLOW_DISPATCH_BUSY` means another live dispatcher owns this Flow. Wait
-     for that invocation to finish; never start a replacement review.
-   - `FLOW_DISPATCH_LOCK_STALE` fails closed because the former dispatcher may
-     have left a detached worker running. Verify that the complete prior
-     process tree has ended before explicit lease recovery; never delete or
-     reclaim the lease merely because no new artifact has appeared.
+   permission to mark a step complete manually. Follow the selected directive's
+   preconditions for busy, stale-lock, retry-exhaustion, and external blockers;
+   when it grants no recovery action, return the diagnostic request without
+   attempting lease recovery or a replacement worker.
 6. `completed`, `aborted`, or `idle`: report the terminal state.
 7. `target_mismatch`, or a top-level `ACTIVE_FLOW_MISMATCH` /
    `FLOW_TARGET_NOT_FOUND` returned before dispatch acquires the target: exit

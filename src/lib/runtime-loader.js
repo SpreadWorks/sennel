@@ -15,7 +15,7 @@ export function initialize({ entryPath, argv, cwd, isCli, port, delivery = null,
       let diagnostic = "";
       const exitCode = executeWorktreeLocalCli({ argv, cwd, writeError: (message) => { diagnostic += message; } });
       if (exitCode !== null) {
-        port.postMessage({ exitCode, diagnostic });
+        port.postMessage({ exitCode, diagnostic, failed: diagnostic.length > 0 });
         return;
       }
     }
@@ -28,7 +28,7 @@ export function initialize({ entryPath, argv, cwd, isCli, port, delivery = null,
     }
     port.postMessage({ entryUrl: pathToFileURL(path.join(snapshot.root, "src/cli-main.js")).href });
   } catch (error) {
-    port.postMessage({ error: error.stack || error.message });
+    port.postMessage({ error: { name: error.name, code: error.code ?? null, message: error.message } });
   } finally {
     port.close();
   }
