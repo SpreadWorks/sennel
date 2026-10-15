@@ -5,6 +5,7 @@ import { it } from "node:test";
 
 import { FlowManager } from "../../../src/lib/flow-manager.js";
 import { FlowTargetBinding } from "../../../src/lib/flow-target-guard.js";
+import { ProcessExecutionRuntime } from "../../../src/lib/process-execution-runtime.js";
 import RunDispatchCommand from "../../../src/flow/lib/run-dispatch.js";
 import RunReviewCommand from "../../../src/flow/lib/run-review.js";
 import RunGateCommand from "../../../src/flow/lib/run-gate.js";
@@ -36,9 +37,10 @@ import { CanonicalFlowFixture, canonicalDraftDocument } from "../../support/infr
 import { DraftGateRepairScenario } from "../../support/infrastructure/draft-gate-repair-scenario.js";
 import { removeTmpDir } from "../../support/builders/tmp-dir.js";
 import { workerArtifactDigest, workerArtifactJson } from "../../support/infrastructure/worker-artifact.js";
-import { dispatchContainer, fixtureRepository, installGateProviderFake, requestInput, requestPayloadPath } from "../../support/infrastructure/flow-dispatch-scenario.js";
+import { withScenarioProviderAdmission, dispatchContainer, fixtureRepository, installGateProviderFake, requestInput, requestPayloadPath } from "../../support/infrastructure/flow-dispatch-scenario.js";
 
 function activeDispatch(root, specId, manager, agent, options = {}) {
+  agent = withScenarioProviderAdmission(agent);
   const dispatcher = new RunDispatchCommand({
     agent, repositoryFingerprint: () => "draft-checkpoint-restart", maxDispatches: 1,
     ...options,
@@ -241,32 +243,52 @@ async function interruptBeforeClaim(root, specId, manager) {
   assert.equal(checkpoint.lifecycle.claim, null);
 }
 
-async function assertRetainedClaimStops({ root, specId, manager, invocation }) {
+async function assertUnusedRetainedClaimResumes({ root, specId, manager, invocation }) {
   const before = manager.canonicalState(specId).toJSON();
   const activities = manager.activityLedger(specId);
   const catalog = manager.artifactCatalog(specId).toJSON();
   const execution = executionState(manager, specId);
-  const draft = manager.readArtifact({ specId, logicalKey: "draft", consumerNodeId: "draft-gate-repair" });
-  const run = activeDispatch(root, specId, manager, {
-    async call() { assert.fail("an existing claim without a saved response must not start another worker"); },
-  }, { maxDispatches: 5 });
+  const binding = { runId: before.runId, specId, stepId: "draft-gate-repair", attempt: before.attempt };
+  const frontier = manager.artifactWorkerExecutionState({ binding });
+  const contract = frontier.executionContract;
+  assert.equal(frontier.status, "unconsumed");
+  assert.equal(frontier.recovery, null);
+  assert.equal(contract.generation, execution.lifecycle.executionGeneration);
+  const inventory = ProcessExecutionRuntime.inspect({ mainRoot: root, executionRoot: root });
+  assert.ok(inventory.executions.length > 0);
+  assert.ok(inventory.executions.every((entry) => entry.status === "closed"));
+  assert.equal(inventory.executions.flatMap((entry) => entry.calls)
+    .filter((call) => call.binding.executionContractId === contract.id).length, 0);
+  const snapshot = manager.readArtifactWorkerRequest({ executionContract: contract });
+  const budget = manager.readStoredPromptExecutionEpisode({ executionContract: contract }).budget;
+  const calls = [];
+  const run = activeDispatch(root, specId, manager, validRepairAgent((request) => {
+    calls.push(request);
+    assert.equal(request.dispatchInvocationId, invocation.id);
+    assert.equal(request.executionContractId, contract.id);
+    assert.equal(workerArtifactDigest(request), execution.lifecycle.claim.requestDigest);
+    assert.deepEqual(request.workerInstructions.retryFeedback, snapshot.request.workerInstructions.retryFeedback);
+  }));
   const next = await new GetNextActionCommand().execute(run.context);
-  assert.equal(next.directive.kind, "blocked", JSON.stringify(next));
-  assert.equal(next.directive.code, "FLOW_EXECUTION_CONTRACT_MISMATCH");
-  await assert.rejects(() => run.dispatcher.runWorkerAttempt(run.context, invocation),
-    (error) => error.code === next.directive.code && error.data.failureKind === "step-admission");
-  const stopped = await run.dispatcher.execute(run.context);
-  assert.equal(stopped.dispatch.boundary, "blocked", JSON.stringify(stopped));
-  assert.equal(stopped.dispatch.dispatchCount, 0);
+  assert.equal(next.directive.kind, "execute_step", JSON.stringify(next));
+  assert.deepEqual(manager.canonicalState(specId).toJSON(), before);
+  assert.deepEqual(manager.activityLedger(specId), activities);
+  assert.deepEqual(manager.artifactCatalog(specId).toJSON(), catalog);
+  const result = await run.dispatcher.execute(run.context);
+  assert.equal(result.errors[0]?.code, "FLOW_DISPATCH_LIMIT_REACHED", JSON.stringify(result));
+  assert.equal(result.data?.dispatch?.dispatchCount, 1, JSON.stringify(result));
+  assert.equal(calls.length, 1);
   const reloaded = new FlowManager({ root, mainRoot: root, inWorktree: false, specId });
-  assert.deepEqual(reloaded.canonicalState(specId).toJSON(), before);
-  assert.deepEqual(reloaded.activityLedger(specId), activities);
-  assert.deepEqual(reloaded.artifactCatalog(specId).toJSON(), catalog);
-  assert.deepEqual(executionState(reloaded, specId).lifecycle.toJSON(), execution.lifecycle.toJSON());
-  assert.equal(executionState(reloaded, specId).receiptId, execution.receiptId);
-  const retained = reloaded.readArtifact({ specId, logicalKey: "draft", consumerNodeId: "draft-gate-repair" });
-  assert.deepEqual(retained.descriptor, draft.descriptor);
-  assert.deepEqual(retained.bytes, draft.bytes);
+  assert.equal(reloaded.canonicalState(specId).nextAction().nodeId, "draft-coverage-review");
+  const after = reloaded.artifactWorkerExecutionState({ binding });
+  assert.equal(after.executionContract.id, contract.id);
+  assert.equal(after.contracts.length, frontier.contracts.length);
+  assert.equal(after.recovery, null);
+  const nextBudget = reloaded.readStoredPromptExecutionEpisode({ executionContract: contract, currentAttempt: false }).budget;
+  assert.equal(nextBudget.providerCallCount, budget.providerCallCount + 1);
+  const repaired = reloaded.readArtifact({ specId, logicalKey: "draft", consumerNodeId: "draft-coverage-review" });
+  assert.equal(JSON.parse(repaired.bytes).analysis.validation,
+    "Verify the retained behavior after the restarted Gate repair.");
 }
 
 for (const boundary of ["sealed", "publication"]) {
@@ -321,7 +343,7 @@ for (const boundary of ["sealed", "publication"]) {
   });
 }
 
-it("holds a claimed Gate repair correction after restart without a sealed response or another worker", async () => {
+it("resumes an unused Gate repair correction claim after restart in the same generation", async () => {
   const root = fixtureRepository("draft-checkpoint-restart-");
   try {
     const specId = "821-draft-checkpoint-restart";
@@ -368,7 +390,7 @@ it("holds a claimed Gate repair correction after restart without a sealed respon
     assert.equal(restarted.canonicalState(specId).attempt.id, selectedAttempt.id);
     assert.equal(restarted.canonicalState(specId).attempt.sequence, selectedAttempt.sequence);
     assert.deepEqual(restarted.canonicalState(specId).attempt.consumption.toJSON(), selectedAttempt.consumption.toJSON());
-    await assertRetainedClaimStops({ root, specId, manager: restarted, invocation });
+    await assertUnusedRetainedClaimResumes({ root, specId, manager: restarted, invocation });
   } finally { removeTmpDir(root); }
 });
 
@@ -1004,7 +1026,7 @@ it("retains different rejected invocations in the issue log without retrying una
   } finally { removeTmpDir(root); }
 });
 
-it("retains correction feedback and stops after a transport retry claim is interrupted", async () => {
+it("retains correction feedback when an unused transport retry claim resumes in the same generation", async () => {
   const root = fixtureRepository("draft-correction-transport-restart-");
   try {
     const specId = "826-draft-correction-transport";
@@ -1050,6 +1072,6 @@ it("retains correction feedback and stops after a transport retry claim is inter
       .map((entry) => entry.result?.draftSettlementReceipt?.executionLifecycle?.rejection).filter(Boolean);
     assert.equal(feedback.length, 1);
     assert.equal(feedback[0].code, "FLOW_PLAN_GATE_REPAIR_REPORT_INVALID");
-    await assertRetainedClaimStops({ root, specId, manager, invocation });
+    await assertUnusedRetainedClaimResumes({ root, specId, manager, invocation });
   } finally { removeTmpDir(root); }
 });

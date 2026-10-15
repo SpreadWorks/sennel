@@ -12,7 +12,7 @@ import RunDispatchCommand from "../../src/flow/lib/run-dispatch.js";
 import { sealWorkerArtifactHandoff } from "../../src/flow/lib/worker-artifact-handoff.js";
 import { CanonicalFlowFixture, canonicalDraftDocument } from "../support/infrastructure/flow-setup.js";
 import { DraftGateRepairScenario } from "../support/infrastructure/draft-gate-repair-scenario.js";
-import { dispatchContainer, fixtureRepository, requestInput, requestPayloadPath } from "../support/infrastructure/flow-dispatch-scenario.js";
+import { createScenarioProviderFake, dispatchContainer, fixtureRepository, requestInput, requestPayloadPath } from "../support/infrastructure/flow-dispatch-scenario.js";
 import { removeTmpDir } from "../support/builders/tmp-dir.js";
 import { workerArtifactJson } from "../support/infrastructure/worker-artifact.js";
 
@@ -57,15 +57,9 @@ it("a real producer corrects a retained structural rejection through the guarded
     new DraftGateRepairScenario({ flowManager: manager, root, specId }).select({ observations, issueLogId: "correction-agent-gate" });
     const real = new Agent({ config, paths: { root, agentWorkDir: path.join(root, ".tmp") },
       registry: new ProviderRegistry(config.agent.providers), logger: new Logger({ logDir: path.join(root, ".tmp", "logs"), enabled: false }), flowManager: manager });
-    const agent = { async call(prompt, options) {
-      evidence.calls++;
+    const initialProducer = createScenarioProviderFake(async (_prompt, options) => {
       const requestPath = options.executionEnvironment.SENNEL_FLOW_HANDOFF_REQUEST;
       const request = JSON.parse(fs.readFileSync(requestPath, "utf8"));
-      if (evidence.calls > 1) {
-        assert.equal(request.workerInstructions.retryFeedback.code, "FLOW_DRAFT_GATE_REPAIR_INVALID");
-        evidence.feedback = request.workerInstructions.retryFeedback;
-        return real.call(prompt, options);
-      }
       const recurrence = requestInput(request, "gate-observation-recurrence.json").document;
       const draft = requestInput(request, "draft.json").document;
       const entries = draft.decisionMap.deferredToSpec;
@@ -80,6 +74,14 @@ it("a real producer corrects a retained structural rejection through the guarded
       fs.writeFileSync(requestPayloadPath(request, "draft-gate-repair.json"), workerArtifactJson(payload));
       assert.throws(() => sealWorkerArtifactHandoff({ requestPath, invocationId: request.dispatchInvocationId }), { code: "FLOW_DRAFT_GATE_REPAIR_INVALID" });
       return "Unsealed invalid proposal retained for parent feedback.";
+    });
+    const agent = { async call(prompt, options) {
+      evidence.calls++;
+      if (evidence.calls === 1) return initialProducer.call(prompt, options);
+      const request = JSON.parse(fs.readFileSync(options.executionEnvironment.SENNEL_FLOW_HANDOFF_REQUEST, "utf8"));
+      assert.equal(request.workerInstructions.retryFeedback.code, "FLOW_DRAFT_GATE_REPAIR_INVALID");
+      evidence.feedback = request.workerInstructions.retryFeedback;
+      return real.call(prompt, options);
     } };
     const dispatcher = new RunDispatchCommand({ agent, maxDispatches: 2, repositoryFingerprint: () => "draft-correction-agent" });
     dispatcher.container = dispatchContainer({ root, flowManager: manager, agent });

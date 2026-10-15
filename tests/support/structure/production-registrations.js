@@ -131,14 +131,45 @@ export class ExecutionLoader {
 }
 
 export class StructureScopeContract {
-  constructor(definition, executionShapes = [], registry = null) {
+  constructor(definition, executionShapes = [], registry = null, operation = null) {
     if (!(definition instanceof DefinitionLeafScope) || !Array.isArray(executionShapes)
       || executionShapes.some((shape) => !(shape instanceof NamedExecutionShape || shape instanceof SharedExecutionShape))
       || new Set(executionShapes.map((shape) => shape.form)).size !== executionShapes.length
-      || registry !== null && !Array.isArray(registry)) throw new TypeError("invalid StructureScopeContract");
+      || registry !== null && !Array.isArray(registry)
+      || operation !== null && !(operation instanceof ExecutionOperationScope)) throw new TypeError("invalid StructureScopeContract");
     this.definition = definition;
     this.executionShapes = Object.freeze([...executionShapes]);
     this.registry = registry === null ? null : Object.freeze([...registry]);
+    this.operation = operation;
+    Object.freeze(this);
+  }
+}
+
+/** One outer acquisition and its later synchronous authority consumer. */
+export class ExecutionOperationLoader {
+  constructor(module, declarationName, authorityCallName) {
+    if ([module, declarationName, authorityCallName].some((value) => typeof value !== "string" || !value)) {
+      throw new TypeError("Execution operation loader requires its caller and authority acquisition");
+    }
+    Object.assign(this, { module, declarationName, authorityCallName });
+    Object.freeze(this);
+  }
+}
+
+/** An auxiliary operation keeps the producer's Definition identity and registered Result family. */
+export class ExecutionOperationScope {
+  constructor({ resultKindSuffix, resultDefinitionsName, registryName, factoryName, lookupName, executeName, loaders = [] }) {
+    for (const [name, value] of Object.entries({ resultKindSuffix, resultDefinitionsName, registryName, factoryName, lookupName, executeName })) {
+      if (typeof value !== "string" || !value || name !== "resultKindSuffix" && !/^[A-Za-z_$][\w$]*$/.test(value)) {
+        throw new TypeError("Execution operation scope requires its Result family and named production routes");
+      }
+    }
+    if (!Array.isArray(loaders) || loaders.some((loader) => !(loader instanceof ExecutionOperationLoader))
+      || new Set(loaders.map((loader) => `${loader.module}#${loader.declarationName}`)).size !== loaders.length) {
+      throw new TypeError("Execution operation loaders must have distinct typed caller contracts");
+    }
+    Object.assign(this, { resultKindSuffix, resultDefinitionsName, registryName, factoryName, lookupName, executeName });
+    this.loaders = Object.freeze([...loaders]);
     Object.freeze(this);
   }
 }
@@ -174,20 +205,23 @@ export class DependencyRegistrationIssue extends ProductionRegistrationIssue {
 
 /** Load the selected production composition before running shared structure checks. */
 export class ProductionRegistrations {
-  constructor(moduleUrl, exportName) {
+  constructor(moduleUrl, exportName, operation = null) {
     if (!(moduleUrl instanceof URL) && (typeof moduleUrl !== "string" || moduleUrl.length === 0)) {
       throw new TypeError("ProductionRegistrations requires a module URL");
     }
     if (typeof exportName !== "string" || exportName.length === 0) {
       throw new TypeError("ProductionRegistrations requires an export name");
     }
+    if (operation !== null && !(operation instanceof ExecutionOperationScope)) throw new TypeError("Production operation scope must be typed");
     this.moduleUrl = moduleUrl;
     this.exportName = exportName;
+    this.operation = operation;
     Object.freeze(this);
   }
 
-  static inspect(registrations) {
+  static inspect(registrations, operation = null) {
     if (!Array.isArray(registrations)) throw new TypeError("registration inspection requires an array");
+    if (operation !== null && !(operation instanceof ExecutionOperationScope)) throw new TypeError("registration operation scope must be typed");
     const issues = [];
     const ids = new Set();
     const classes = new Set();
@@ -196,7 +230,7 @@ export class ProductionRegistrations {
         issues.push(new InvalidRegistrationIssue());
         continue;
       }
-      if (ids.has(registration.stepId) || classes.has(registration.StepClass)) issues.push(new DuplicateRegistrationIssue(registration.stepId));
+      if (ids.has(registration.stepId) || operation === null && classes.has(registration.StepClass)) issues.push(new DuplicateRegistrationIssue(registration.stepId));
       ids.add(registration.stepId);
       classes.add(registration.StepClass);
       if (registration.StepClass.dependencies?.length !== 1 || registration.StepClass.dependencies[0] !== registration.ServiceClass) {
@@ -213,11 +247,12 @@ export class ProductionRegistrations {
     } catch (cause) {
       throw new Error(`Cannot load production registrations from ${this.moduleUrl}: ${cause.code ?? cause.name}: ${cause.message}`, { cause });
     }
-    const registrations = module[this.exportName];
+    const exported = module[this.exportName];
+    const registrations = this.operation !== null && typeof exported === "function" ? exported() : exported;
     if (!Array.isArray(registrations) || registrations.length === 0) {
       throw new TypeError(`${this.moduleUrl} must export a nonempty ${this.exportName} array of StepRegistration instances`);
     }
-    const issue = ProductionRegistrations.inspect(registrations)[0];
+    const issue = ProductionRegistrations.inspect(registrations, this.operation)[0];
     if (issue) throw issue.toLoadError(this.moduleUrl, this.exportName);
     return registrations;
   }

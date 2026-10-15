@@ -5,13 +5,19 @@ import crypto from "node:crypto";
 import { describe, it } from "node:test";
 
 import { WorkerArtifactHandoffCoordinator } from "../../../src/flow/lib/worker-artifact-handoff.js";
+import { FlowExecutionContract } from "../../../src/flow/lib/flow-execution-contract.js";
+import { readFlowProcessStops } from "../../../src/flow/lib/process-runtime-admission.js";
+import { FlowProcessStopEvidence, workerProcessStopIdentity } from "../../../src/flow/lib/process-runtime-evidence.js";
+import { workerArtifactStableStringify } from "../../../src/flow/lib/worker-artifact-input-format.js";
+import { TEST_REVIEW_REPAIR_BATCH_LIMITS, canonicalTestReviewRepairForTarget,
+  canonicalTestReviewRepairProgress } from "../../../src/flow/lib/test-review-repair.js";
 import { CanonicalTestArtifactStore } from "../../../src/flow/lib/canonical-test-artifacts.js";
 import RunRequirementTestGateCommand, { runRequirementTestGate } from "../../../src/flow/lib/run-requirement-test-gate.js";
 import { FLOW_COMMANDS } from "../../../src/flow/registry.js";
 import { FLOW_ARTIFACT_CONTRACTS } from "../../../src/lib/flow-artifact-contract.js";
 import { CurrentFlowStateInvariantError } from "../../../src/flow/lib/current-flow-state.js";
 import { StepPersistenceFailure } from "../../../src/flow/lib/definition-lifecycle-failure.js";
-import { RequirementTestPhaseScenario } from "../../support/requirement-test-phase-scenario.js";
+import { RequirementTestPhaseScenario, rejectFirstRequirementReviewBatches } from "../../support/requirement-test-phase-scenario.js";
 import { assertSavedRequirementTestResult as savedResult, LifecycleSaveFault,
   gatePublicationBytes, assertGatePublicationRollback, assertGatePublicationMembers, readGateSupportBaseline,
   assertSnapshotAfterMetricFlush } from "../../support/requirement-test-save-boundary.js";
@@ -185,6 +191,75 @@ describe("Requirement Test durable save, rejection and recovery boundaries", { c
       assert.equal(scenario.manager.activityLedger(scenario.specId).filter((activity) => activity.id === retained.id).length, 1);
     });
   }
+
+  it("SAV-06 repair second nonfinal batch cleanup recovers its genuine process-stop receipt without rerunning that batch", async (t) => {
+    const failure = new Error("e639 second nonfinal repair cleanup interruption");
+    let cleanups = 0;
+    let interrupted = false;
+    const scenario = await enter(t, "test-repair", {
+      realProviderTransport: true,
+      reviewResponse: rejectFirstRequirementReviewBatches(TEST_REVIEW_REPAIR_BATCH_LIMITS.findingCount * 2 + 1),
+      handoffCoordinator: new WorkerArtifactHandoffCoordinator({ faultInjector({ phase, stepId }) {
+        if (stepId !== "test-repair" || phase !== "before-worker-handoff-cleanup-rename") return;
+        cleanups += 1;
+        if (cleanups === 2) { interrupted = true; throw failure; }
+      } }),
+    });
+    const deliveredStops = [];
+    const call = scenario.agent.call.bind(scenario.agent);
+    scenario.agent.call = async (prompt, options) => {
+      return call(prompt, { ...options, timeoutMs: 90000,
+        async onProcessExecutionStop(receipt) {
+          deliveredStops.push(new FlowProcessStopEvidence(receipt));
+          await options.onProcessExecutionStop(receipt);
+        },
+      });
+    };
+    await scenario.dispatch();
+    scenario.reload();
+    const first = scenario.requests.findLast((request) => request.stepId === "test-repair");
+    const result = await scenario.dispatch();
+    assert.equal(interrupted, true, `the second real nonfinal Store commit must reach cleanup: ${JSON.stringify({
+      errors: result.errors, dispatch: result.dispatch,
+      generations: scenario.requests.filter((request) => request.stepId === "test-repair")
+        .map((request) => request.executionContract.generation),
+    })}`);
+    assert.ok(JSON.stringify(result).includes(failure.message));
+    scenario.reload();
+    const second = scenario.requests.findLast((request) => request.stepId === "test-repair");
+    assert.equal(second.executionContract.generation, first.executionContract.generation + 1);
+    const contract = FlowExecutionContract.fromJSON(second.executionContract);
+    const retained = savedResult(scenario, "test-repair");
+    assert.equal(retained.result.stepResult.kind, "test-repair-progress-saved");
+    assert.deepEqual(retained.result.draftSettlementReceipt.executionContract, contract.toJSON());
+    const requestDigest = crypto.createHash("sha256").update(workerArtifactStableStringify(second), "utf8").digest("hex");
+    const stopped = deliveredStops.find((evidence) => evidence.receipt.binding.value.requestDigest === requestDigest);
+    assert.ok(stopped, "the actual managed process must deliver its stop callback for this exact batch");
+    stopped.assertContract(contract, workerProcessStopIdentity({ ...second, executionContract: contract, requestDigest }));
+    assert.equal(stopped.receipt.stopEvidence.status, "confirmed");
+    const persistedStop = readFlowProcessStops({ mainRoot: scenario.root, executionRoot: scenario.root })
+      .find((evidence) => evidence.receipt.callId === stopped.receipt.callId);
+    assert.deepEqual(persistedStop.toJSON(), stopped.toJSON());
+    const state = scenario.manager.loadReadOnly(scenario.specId);
+    const repair = canonicalTestReviewRepairForTarget({ flowManager: scenario.manager, state, targetStepId: "test-repair" });
+    const progress = canonicalTestReviewRepairProgress({ flowManager: scenario.manager, state, repair, consumerNodeId: "test-repair" });
+    assert.equal(progress.complete, false);
+    assert.equal(progress.entries.filter((entry) => entry.status === "done").length,
+      TEST_REVIEW_REPAIR_BATCH_LIMITS.findingCount * 2);
+    const budget = scenario.plan().activeWorkItem().budget.toJSON();
+    const priorBatches = scenario.requests.filter((request) => request.stepId === "test-repair")
+      .map((request) => request.testReviewRepair.batch.batchId);
+    scenario.options.handoffCoordinator = new WorkerArtifactHandoffCoordinator();
+    await scenario.dispatch();
+    scenario.reload();
+    const requests = scenario.requests.filter((request) => request.stepId === "test-repair");
+    for (const batchId of priorBatches) assert.equal(requests.filter((request) => request.testReviewRepair.batch.batchId === batchId).length, 1);
+    assert.equal(requests.length, 3, "cleanup recovery must execute only the remaining third batch");
+    assert.equal(requests.at(-1).executionContract.generation, contract.generation + 1);
+    assert.equal(scenario.current(), "test-review");
+    assert.deepEqual(scenario.plan().activeWorkItem().budget.toJSON(), budget);
+    assert.equal(scenario.manager.activityLedger(scenario.specId).filter((activity) => activity.id === retained.id).length, 1);
+  });
 
   it("SAV-07 receipt read failure after generation commit stops without overwriting the committed Result", async (t) => {
     const scenario = await enter(t, "test-generate");

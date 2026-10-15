@@ -21,7 +21,7 @@ import { CanonicalFlowFixture, canonicalDraftDocument } from "../../support/infr
 import { removeTmpDir } from "../../support/builders/tmp-dir.js";
 import { installReviewProcessFake } from "../../support/infrastructure/review-process-fake.js";
 import { workerArtifactJson } from "../../support/infrastructure/worker-artifact.js";
-import { dispatchContainer, dispatchFlowCommand, fixtureRepository, installGateProviderFake, requestInput, requestPayloadPath, WorkerRequestIdentityObserver } from "../../support/infrastructure/flow-dispatch-scenario.js";
+import { createScenarioProviderFake, dispatchContainer, dispatchFlowCommand, fixtureRepository, installGateProviderFake, requestInput, requestPayloadPath, WorkerRequestIdentityObserver } from "../../support/infrastructure/flow-dispatch-scenario.js";
 import { assertCanonicalStepResult } from "../../support/infrastructure/canonical-step-result.js";
 import { RequirementTestPhaseScenario } from "../../support/requirement-test-phase-scenario.js";
 import { assertCurrentWorkerExecutionSelection, projectWorkerExecutionAdmission, selectWorkerExecutionAdmission } from "../../../src/flow/lib/worker-execution-admission.js";
@@ -216,7 +216,7 @@ it("reopens Draft and preserves repair Attempt ordinals across an intervening De
       work.seal();
       return { ok: true, status: 0, signal: null, killed: false, stdout: "", stderr: "" };
     });
-    const agent = { async call(_prompt, options) { try {
+    const agent = createScenarioProviderFake(async (_prompt, options) => { try {
       const requestPath = options.executionEnvironment.SENNEL_FLOW_HANDOFF_REQUEST;
       const request = JSON.parse(fs.readFileSync(requestPath, "utf8"));
       if (request.stepId === "draft") {
@@ -256,7 +256,7 @@ it("reopens Draft and preserves repair Attempt ordinals across an intervening De
     } catch (error) {
       if (!(error instanceof AgentAuthenticationFailure)) workerFailures.push(error);
       throw error;
-    } } };
+    } });
     for (let episode = 0; episode < 2; episode += 1) {
       const dispatcher = new RunDispatchCommand({ agent });
       dispatcher.container = dispatchContainer({ root, flowManager: manager, agent });
@@ -401,7 +401,7 @@ for (const phase of ["questions", "coverage"]) {
           authorization: new UnapprovedFlowDispatchAuthorization(action),
         });
         let workerCalls = 0;
-        const agent = { async call(prompt, options) {
+        const agent = createScenarioProviderFake(async (prompt, options) => {
           workerCalls += 1;
           assert.match(prompt, /Follow workerInstructions in request.json/);
           const workerInvocation = JSON.parse(options.executionEnvironment.SENNEL_FLOW_DISPATCH_INVOCATION);
@@ -426,7 +426,7 @@ for (const phase of ["questions", "coverage"]) {
           }));
           sealWorkerArtifactHandoff({ requestPath, invocationId: options.executionEnvironment.SENNEL_FLOW_DISPATCH_INVOCATION_ID });
           return "sealed";
-        } };
+        });
         const result = await new RunDispatchCommand().runWorkerAttempt(ctx, invocation, null, agent);
         assert.equal(workerCalls, 1);
         assert.equal(result.error, null);
@@ -513,8 +513,7 @@ it("produces Draft through registered Review/Gate commands and reloads its exact
       work.seal();
       return { ok: true, status: 0, signal: null, killed: false, stdout: "", stderr: "" };
     });
-    const agent = {
-      async call(_prompt, options) {
+    const agent = createScenarioProviderFake(async (_prompt, options) => {
         const requestPath = options.executionEnvironment.SENNEL_FLOW_HANDOFF_REQUEST;
         const request = JSON.parse(fs.readFileSync(requestPath, "utf8"));
         requests.push(request);
@@ -547,8 +546,7 @@ it("produces Draft through registered Review/Gate commands and reloads its exact
           requestPath, invocationId: options.executionEnvironment.SENNEL_FLOW_DISPATCH_INVOCATION_ID,
         });
         return JSON.stringify({ sealed: true, requestDigest: request.requestDigest });
-      },
-    };
+    });
     const makeDispatcher = (manager) => {
       const dispatcher = new RunDispatchCommand({ agent });
       dispatcher.container = dispatchContainer({ root, flowManager: manager, agent });

@@ -20,6 +20,7 @@ import fs from "fs";
 import path from "path";
 import crypto from "crypto";
 import { ProcessExecutionRuntime, ProcessExecutionControlFailure } from "./process-execution-runtime.js";
+import { ExponentialBackoffPolicy } from "./exponential-backoff.js";
 import { executeManagedProcess, withManagedProcessScope } from "./managed-process.js";
 import { generateRequestId } from "./log.js";
 import { ProviderRegistry } from "./provider.js";
@@ -175,6 +176,7 @@ class ResolvedAgentInvocationBlueprint {
  * into Agent's test seams.
  */
 export class AgentProviderRetryPolicy {
+  #backoff;
   constructor({ retryCount, retryDelayMs, backoffFactor = RETRY_BACKOFF_FACTOR } = {}) {
     if (!Number.isSafeInteger(retryCount) || retryCount < 0 || retryCount > MAX_RETRY) {
       throw new Error("agent provider retryCount must be a bounded non-negative integer");
@@ -188,6 +190,7 @@ export class AgentProviderRetryPolicy {
     this.retryCount = retryCount;
     this.retryDelayMs = retryDelayMs;
     this.backoffFactor = backoffFactor;
+    this.#backoff = new ExponentialBackoffPolicy({ initialMs: retryDelayMs, factor: backoffFactor, attemptCount: retryCount });
     Object.freeze(this);
   }
 
@@ -208,7 +211,7 @@ export class AgentProviderRetryPolicy {
     if (!Number.isSafeInteger(completedAttempts) || completedAttempts < 1 || completedAttempts > this.retryCount) {
       throw new Error("agent provider retry delay is outside its bounded policy");
     }
-    return this.retryDelayMs * Math.pow(this.backoffFactor, completedAttempts - 1);
+    return this.#backoff.valueAt(completedAttempts);
   }
 
   toJSON() {
@@ -736,10 +739,7 @@ class Agent {
       });
       if (!lastFailure.retryable) throw lastFailure;
       if (attempt < retry.retryCount) {
-        const delayMs = retry instanceof AgentProviderRetryPolicy
-          ? retry.delayBeforeRetry(attempt + 1)
-          : retry.retryDelayMs * Math.pow(RETRY_BACKOFF_FACTOR, attempt);
-        await sleep(delayMs);
+        await sleep(retry.delayBeforeRetry(attempt + 1));
       }
     }
     throw lastFailure;

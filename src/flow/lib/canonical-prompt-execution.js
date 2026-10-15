@@ -1,9 +1,19 @@
 import { isDeepStrictEqual } from "node:util";
 import { FLOW_ARTIFACT_CONTRACTS } from "../../lib/flow-artifact-contract.js";
-import { PromptExecutionJournalRecord, PromptExecutionJournalSnapshot, PromptExecutionScope, PromptProcessStopObservation } from "../../lib/prompt-execution-journal.js";
+import { PromptExecutionJournalRecord, PromptExecutionJournalSnapshot, PromptExecutionScope, PromptProcessStopObservation,
+  PromptExecutionReservationContinuation } from "../../lib/prompt-execution-journal.js";
 import { PromptExecutionBudget, PromptExecutionLimit, responseCharacterCount, responseContentDigest } from "../../lib/prompt-batching.js";
 import { AgentTransportFailureObservation } from "../../lib/agent-transport-failure-observation.js";
+import { ProcessExecutionRecoveryEvidence } from "../../lib/process-execution-runtime.js";
+import { ProcessExecutionBinding, ProcessExecutionRecoveryCall, ProcessExecutionNonExecutionEvidence,
+  ProcessExecutionCheckoutIdentity, executionValueDigest as processEvidenceDigest } from "../../lib/process-execution-values.js";
 import { FlowExecutionContract, FlowExecutionContractRefusal, executionValueDigest } from "./flow-execution-contract.js";
+import { ArtifactWorkerInputContinuation } from "./artifact-worker-input-continuation.js";
+import { ArtifactWorkerRecoveryReceipt } from "./artifact-worker-recovery-values.js";
+import { OriginalArtifactWorkerAuthorization } from "./original-artifact-worker-authorization.js";
+import { assertArtifactWorkerRequestUnsealed, readArtifactWorkerRequestSnapshotFromView } from "./artifact-worker-execution-recovery.js";
+import { WorkerArtifactHandoffRequest } from "./worker-artifact-handoff.js";
+import { FlowProcessExecutionBinding } from "./flow-process-execution-binding.js";
 import { FlowProcessStopEvidence } from "./process-runtime-evidence.js";
 import { CanonicalSpecReview } from "./spec-review-artifacts.js";
 import { DraftLifecycle } from "./draft-lifecycle.js";
@@ -26,6 +36,64 @@ function assertProducer(entry, contract) {
   if (entry.activity?.nodeId !== contract.nodeId || entry.activity?.attemptId !== contract.attemptId
     || entry.activity.sequence !== contract.attemptSequence) refuse("Execution artifact belongs to another producer Attempt");
 }
+function savedEpisodeContracts(view, contract) {
+  const prefix = `artifacts/executions/${contract.episodeId}/`;
+  return view.catalog.artifacts.filter((entry) => entry.logicalKey === "execution.contract"
+    && entry.relativePath.startsWith(prefix)).map((descriptor) => {
+    const document = JSON.parse(view.readCatalogedArtifact(descriptor).toString("utf8"));
+    const saved = FlowExecutionContract.fromJSON(document.contract);
+    readExecutionContractFromView(view, saved, { current: false });
+    if (saved.episodeId !== contract.episodeId || saved.budgetId !== contract.budgetId) {
+      refuse("Prompt history changed its canonical episode or budget owner");
+    }
+    return saved;
+  });
+}
+function physicalConsumptionRecord(view, document, contract, checkoutIdentity) {
+  const record = document.record;
+  if (record.event !== "physical-accounted" || document.contractId !== contract.id
+    || record.budgetId !== contract.budgetId || document.digest !== executionValueDigest(record)) {
+    refuse("Physical Prompt consumption differs from its immutable execution event");
+  }
+  const { id, digest, ...summary } = record.physicalEvidence;
+  if (id !== digest || digest !== processEvidenceDigest(summary)
+    || !FlowProcessExecutionBinding.forEpisode(contract).matches(new ProcessExecutionBinding(summary.binding))) {
+    refuse("Physical Prompt consumption has invalid episode inventory evidence");
+  }
+  const checkout = new ProcessExecutionCheckoutIdentity(summary.checkoutIdentity);
+  if (checkoutIdentity !== null && !checkout.matches(checkoutIdentity)) refuse("Physical Prompt consumption belongs to another checkout");
+  const calls = record.calls.map((call) => new ProcessExecutionRecoveryCall(call));
+  if (!same(calls.map((call) => call.toJSON()), summary.calls)) refuse("Physical Prompt calls differ from their inventory observation");
+  if (calls.length === 0) {
+    if (summary.nonExecution === null) refuse("Empty physical Prompt history has no non-execution proof");
+    const absence = new ProcessExecutionNonExecutionEvidence(summary.nonExecution);
+    if (!same(absence.binding.toJSON(), summary.binding) || !absence.checkoutIdentity.matches(checkout)
+      || absence.inventoryDigest !== summary.inventoryDigest) refuse("Physical Prompt non-execution proof differs from its inventory");
+  } else if (summary.nonExecution !== null) refuse("Physical Prompt inventory contradicts its non-execution proof");
+  const contracts = savedEpisodeContracts(view, contract);
+  const seen = new Set();
+  for (const call of calls) {
+    const key = `${call.executionId}/${call.callId}`;
+    if (seen.has(key)) refuse("Physical Prompt consumption repeats a call reservation");
+    seen.add(key);
+    const owner = contracts.find((entry) => entry.id === call.binding.value.executionContractId);
+    if (owner === undefined) refuse("Physical Prompt call has no canonical execution contract in this episode");
+    new FlowProcessStopEvidence(call.receipt).assertContract(owner).assertCheckout(checkout);
+  }
+  if (!Array.isArray(record.accountedCallIds) || new Set(record.accountedCallIds).size !== record.accountedCallIds.length
+    || record.accountedCallIds.some((key) => !seen.has(key))) refuse("Physical Prompt accounting has an invalid call frontier");
+  const unobserved = calls.filter((call) => call.startPermitted && !record.accountedCallIds.includes(`${call.executionId}/${call.callId}`))
+    .map((call) => `${call.executionId}/${call.callId}`);
+  if (record.aggregateAccounting !== "validated-responses-only" || !same(record.unobservedProviderUsageCallIds, unobserved)) {
+    refuse("Physical Prompt accounting omitted its unobserved provider usage");
+  }
+  const previous = PromptExecutionBudget.fromSnapshot(new PromptExecutionLimit(contract.executionLimit ?? {}), record.previousBudget);
+  for (const call of calls) if (call.startPermitted && !record.accountedCallIds.includes(`${call.executionId}/${call.callId}`)) previous.consumeProviderCall();
+  if (!same(previous.snapshot(), record.budget)) refuse("Physical Prompt accounting changed an unrelated budget counter");
+  for (const kind of ["semantic", "tooling"]) if (!Number.isSafeInteger(record.attemptConsumption[kind])
+    || record.attemptConsumption[kind] < 0) refuse("Physical Prompt accounting has invalid Attempt consumption");
+  return record;
+}
 function readEpisodeBudget(view, contract) {
   const entry = read(view, "prompt.execution.budget", { budgetId: contract.budgetId });
   if (entry === null) {
@@ -45,10 +113,14 @@ function readEpisodeBudget(view, contract) {
   if (matching.length !== 1 || latest?.relativePath !== matching[0].relativePath
     || latest.activityId !== entry.descriptor.activityId) refuse("Prompt budget lacks its latest immutable consumption event");
   const event = JSON.parse(view.readCatalogedArtifact(matching[0]).toString("utf8"));
-  if (event.contractId !== entry.document.contractId || !same(event.record.snapshot.budget, entry.document.budget)
+  const owner = savedEpisodeContracts(view, contract).find((saved) => saved.id === event.contractId);
+  if (owner === undefined) refuse("Prompt budget event has no canonical execution contract");
+  const observed = event.record.event === "physical-accounted"
+    ? physicalConsumptionRecord(view, event, owner, null).budget
+    : PromptExecutionJournalSnapshot.fromJSON(event.record.snapshot).budget;
+  if (event.contractId !== entry.document.contractId || !same(observed, entry.document.budget)
     || event.digest !== executionValueDigest(event.record)) refuse("Prompt budget differs from its consumption event");
-  const snapshot = PromptExecutionJournalSnapshot.fromJSON(event.record.snapshot);
-  return PromptExecutionBudget.fromSnapshot(new PromptExecutionLimit(contract.executionLimit ?? {}), snapshot.budget).snapshot();
+  return PromptExecutionBudget.fromSnapshot(new PromptExecutionLimit(contract.executionLimit ?? {}), observed).snapshot();
 }
 export function executionContractArtifact(contract) {
   if (!(contract instanceof FlowExecutionContract)) throw new TypeError("Execution contract must be typed");
@@ -165,6 +237,16 @@ function assertPromptStopContract(snapshot, contract, checkoutIdentity) {
     const observation = PromptProcessStopObservation.fromJSON(value);
     new FlowProcessStopEvidence(observation.receipt).assertContract(contract).assertCheckout(checkoutIdentity);
   }
+  for (const batch of snapshot.batches) if (batch.reservationContinuation !== undefined) {
+    const continuation = PromptExecutionReservationContinuation.fromJSON(batch.reservationContinuation);
+    if (continuation.executionContractId !== contract.id) refuse("Prompt reservation continuation changed its canonical contract");
+    FlowProcessExecutionBinding.forContract(contract, {
+      baseBinding: new ProcessExecutionBinding(continuation.physicalEvidence.binding) });
+    if (checkoutIdentity !== null && !new ProcessExecutionCheckoutIdentity(continuation.physicalEvidence.checkoutIdentity).matches(checkoutIdentity)) {
+      refuse("Prompt reservation continuation changed its checkout identity");
+    }
+    for (const call of continuation.calls) new FlowProcessStopEvidence(call.receipt).assertContract(contract).assertCheckout(checkoutIdentity);
+  }
 }
 function assertProgressDocument(entry, contract, scope, checkoutIdentity) {
   assertProducer(entry, contract);
@@ -179,6 +261,9 @@ function assertProgressDocument(entry, contract, scope, checkoutIdentity) {
 export function readPromptExecutionProgressFromView(view, contract, scope, checkoutIdentity = null) {
   if (!(scope instanceof PromptExecutionScope)) throw new TypeError("Prompt progress scope must be typed");
   readExecutionContractFromView(view, contract);
+  return readAuthenticatedPromptExecutionProgressFromView(view, contract, scope, checkoutIdentity);
+}
+function readAuthenticatedPromptExecutionProgressFromView(view, contract, scope, checkoutIdentity) {
   const entry = readScopeProgress(view, contract, scope);
   if (entry === null) return null;
   const snapshot = assertProgressDocument(entry, contract, scope, checkoutIdentity);
@@ -217,19 +302,263 @@ export class CanonicalPromptExecutionEpisode {
     this.executionMode = executionContract.executionMode;
     Object.freeze(this);
   }
+  /** A budget preview, never authority to start or to adopt another runtime. */
+  continuationFor(nextContract, { inputContinuation = null } = {}) {
+    return new CanonicalPromptExecutionContinuation({ episode: this, nextContract, inputContinuation });
+  }
+  get pendingReservationContinuations() {
+    return Object.freeze(this.scopes.flatMap((scope) => scope.batches)
+      .filter((batch) => batch.reservationContinuation?.consumedClaim === null)
+      .map((batch) => PromptExecutionReservationContinuation.fromJSON(batch.reservationContinuation)));
+  }
+}
+export class CanonicalPromptExecutionContinuation {
+  constructor({ episode, nextContract, inputContinuation = null }) {
+    if (!(episode instanceof CanonicalPromptExecutionEpisode) || !(nextContract instanceof FlowExecutionContract)) {
+      throw new TypeError("Prompt continuation requires its saved episode and next execution contract");
+    }
+    const previous = episode.executionContract;
+    const { generation: previousGeneration, runtimeRevision: previousRuntime, ...previousPolicy } = previous.toJSON();
+    const { generation: nextGeneration, runtimeRevision: nextRuntime, ...nextPolicy } = nextContract.toJSON();
+    if (inputContinuation !== null) {
+      if (!(inputContinuation instanceof ArtifactWorkerInputContinuation)) throw new TypeError("Prompt input continuation must be typed");
+      inputContinuation.assertContracts(previous, nextContract);
+      previousPolicy.inputRevision = nextPolicy.inputRevision;
+    }
+    if (nextGeneration !== previousGeneration + 1 || !same(previousPolicy, nextPolicy)) {
+      const fields = [...(nextGeneration === previousGeneration + 1 ? [] : ["generation"]),
+        ...Object.keys(previousPolicy).filter((field) => !same(previousPolicy[field], nextPolicy[field]))];
+      const error = new FlowExecutionContractRefusal(`Prompt continuation must preserve its episode, inputs, authority and execution limits: ${fields.join(", ")}`);
+      error.mismatchedFields = Object.freeze(fields);
+      throw error;
+    }
+    const budget = PromptExecutionBudget.fromSnapshot(new PromptExecutionLimit(nextContract.executionLimit ?? {}), episode.budget);
+    budget.assertCanExecute(1);
+    this.previousExecutionContract = previous;
+    this.executionContract = nextContract;
+    this.budget = budget.snapshot();
+    this.remainingProviderCalls = budget.limit.maxProviderCallCount - budget.providerCallCount;
+    this.inputContinuation = inputContinuation;
+    Object.freeze(this);
+  }
+  createExecutionBudget() {
+    return PromptExecutionBudget.fromSnapshot(new PromptExecutionLimit(this.executionContract.executionLimit ?? {}), this.budget);
+  }
 }
 export function readPromptExecutionEpisodeFromView(view, contract, checkoutIdentity = null) {
   readExecutionContractFromView(view, contract);
+  return readAuthenticatedPromptExecutionEpisodeFromView(view, contract, checkoutIdentity);
+}
+/** Saved runtime policy is evidence only; normal execution retains assertCurrent. */
+export function readStoredPromptExecutionEpisodeFromView(view, contract, checkoutIdentity = null, { currentAttempt = true } = {}) {
+  if (!(contract instanceof FlowExecutionContract)) throw new TypeError("Stored Prompt episode requires its typed execution contract");
+  if (view.state.runId !== contract.runId || view.state.specId !== contract.specId) refuse("Stored Prompt episode belongs to another Flow");
+  const stored = currentAttempt
+    ? readStoredExecutionContractFromView(view, { binding: { runId: contract.runId,
+      specId: contract.specId, stepId: contract.stepId, nodeId: contract.nodeId,
+      attempt: { id: contract.attemptId, sequence: contract.attemptSequence } }, generation: contract.generation })
+    : readExecutionContractFromView(view, contract, { current: false });
+  contract.assertMatches(stored);
+  return readAuthenticatedPromptExecutionEpisodeFromView(view, stored, checkoutIdentity);
+}
+function readAuthenticatedPromptExecutionEpisodeFromView(view, contract, checkoutIdentity) {
   const prefix = `artifacts/executions/${contract.episodeId}/${contract.generation}/`;
   const scopeById = new Map();
   for (const entry of view.catalog.artifacts.filter((descriptor) => ["prompt.execution.progress", "prompt.execution.event"].includes(descriptor.logicalKey)
     && descriptor.relativePath.startsWith(prefix))) {
     const document = JSON.parse(view.readCatalogedArtifact(entry).toString("utf8"));
+    if (document.record.event === "physical-accounted") {
+      if (entry.logicalKey !== "prompt.execution.event") refuse("Physical Prompt accounting cannot replace a scope frontier");
+      physicalConsumptionRecord(view, document, contract, checkoutIdentity);
+      continue;
+    }
     const scope = PromptExecutionScope.fromJSON(document.record.scope);
     scopeById.set(executionValueDigest(scope.toJSON()), scope);
   }
-  const scopes = [...scopeById.values()].map((scope) => readPromptExecutionProgressFromView(view, contract, scope, checkoutIdentity));
+  const scopes = [...scopeById.values()].map((scope) => readAuthenticatedPromptExecutionProgressFromView(view, contract, scope, checkoutIdentity));
   return new CanonicalPromptExecutionEpisode({ executionContract: contract, scopes, budget: readEpisodeBudget(view, contract) });
+}
+
+/** Import only authenticated physical calls missing from the existing Prompt journal. */
+export class LegacyArtifactPromptConsumptionPublication {
+  #preparedDigest = null;
+  constructor({ contract, physicalEvidence, operationId, expectedCheckoutIdentity = physicalEvidence?.checkoutIdentity }) {
+    if (!(contract instanceof FlowExecutionContract) || !(physicalEvidence instanceof ProcessExecutionRecoveryEvidence)
+      || !(expectedCheckoutIdentity instanceof ProcessExecutionCheckoutIdentity)
+      || typeof operationId !== "string" || !operationId) {
+      throw new TypeError("Physical Prompt accounting requires its typed canonical and runtime evidence");
+    }
+    Object.assign(this, { contract, physicalEvidence, operationId, expectedCheckoutIdentity });
+    Object.freeze(this);
+  }
+  prepare(view) {
+    this.physicalEvidence.assertBinding(FlowProcessExecutionBinding.forEpisode(this.contract));
+    if (!this.physicalEvidence.checkoutIdentity.matches(this.expectedCheckoutIdentity)) refuse("Physical Prompt accounting changed checkout authority");
+    const source = readStoredPromptExecutionEpisodeFromView(view, this.contract, this.expectedCheckoutIdentity);
+    const contracts = savedEpisodeContracts(view, this.contract);
+    if (contracts.some((contract) => contract.generation > this.contract.generation)) refuse("Physical Prompt accounting has a stale execution generation");
+    const episodes = contracts.map((contract) => readAuthenticatedPromptExecutionEpisodeFromView(view, contract, this.expectedCheckoutIdentity));
+    const accounted = new Set();
+    const claims = [];
+    for (const episode of episodes) for (const snapshot of episode.scopes) for (const batch of snapshot.batches) {
+      if (batch.claim?.processIdentity != null) claims.push({ contractId: episode.executionContract.id, identity: batch.claim.processIdentity });
+      for (const stopped of batch.processStops ?? []) accounted.add(`${stopped.receipt.executionId}/${stopped.receipt.callId}`);
+    }
+    const prefix = `artifacts/executions/${this.contract.episodeId}/`;
+    for (const descriptor of view.catalog.artifacts.filter((entry) => entry.logicalKey === "prompt.execution.event"
+      && entry.relativePath.startsWith(prefix))) {
+      const event = JSON.parse(view.readCatalogedArtifact(descriptor).toString("utf8"));
+      if (event.record.event !== "physical-accounted") continue;
+      const owner = contracts.find((contract) => contract.id === event.contractId);
+      if (owner === undefined) refuse("Physical Prompt accounting event lost its execution contract");
+      const record = physicalConsumptionRecord(view, event, owner, this.expectedCheckoutIdentity);
+      for (const call of record.calls) accounted.add(`${call.executionId}/${call.callId}`);
+    }
+    const calls = this.physicalEvidence.calls;
+    for (const call of calls) if (claims.some(({ contractId, identity }) => contractId === call.binding.value.executionContractId
+      && identity.providerAttemptId === call.invocation?.providerAttemptId
+      && identity.logicalInvocationId === call.invocation?.logicalInvocationId)) accounted.add(`${call.executionId}/${call.callId}`);
+    const scopeId = executionValueDigest(["physical-accounted", this.contract.id]);
+    const parameters = { ...this.contract.parameters, scopeId, eventId: this.operationId };
+    const saved = read(view, "prompt.execution.event", parameters);
+    if (saved !== null) {
+      assertProducer(saved, this.contract);
+      const record = physicalConsumptionRecord(view, saved.document, this.contract, this.expectedCheckoutIdentity);
+      if (!same(record.physicalEvidence, this.physicalEvidence.toJSON())) refuse("Physical Prompt accounting replay changed its inventory");
+      return this.#prepared({ writes: [], episode: source, document: saved.document });
+    }
+    const budget = PromptExecutionBudget.fromSnapshot(new PromptExecutionLimit(this.contract.executionLimit ?? {}), source.budget);
+    for (const call of calls) if (call.startPermitted && !accounted.has(`${call.executionId}/${call.callId}`)) budget.consumeProviderCall();
+    const record = { event: "physical-accounted", budgetId: this.contract.budgetId,
+      physicalEvidence: this.physicalEvidence.toJSON(), calls: calls.map((call) => ({ executionId: call.executionId,
+        callId: call.callId, ownerEpoch: call.ownerEpoch, binding: call.binding.toJSON(), invocation: call.invocation,
+        startPermitted: call.startPermitted, receipt: call.receipt.toJSON() })),
+      accountedCallIds: calls.map((call) => `${call.executionId}/${call.callId}`).filter((key) => accounted.has(key)),
+      previousBudget: source.budget, budget: budget.snapshot(),
+      aggregateAccounting: "validated-responses-only",
+      unobservedProviderUsageCallIds: calls.filter((call) => call.startPermitted && !accounted.has(`${call.executionId}/${call.callId}`))
+        .map((call) => `${call.executionId}/${call.callId}`),
+      attemptConsumption: { semantic: view.state.attempt.consumption.semantic, tooling: view.state.attempt.consumption.tooling } };
+    const document = { contractId: this.contract.id, sequence: 1, previousDigest: null,
+      eventId: this.operationId, digest: executionValueDigest(record), record };
+    physicalConsumptionRecord(view, document, this.contract, this.expectedCheckoutIdentity);
+    return this.#prepared({ document, episode: new CanonicalPromptExecutionEpisode({ executionContract: this.contract,
+      scopes: source.scopes, budget: budget.snapshot() }),
+    writes: [write("prompt.execution.event", parameters, document),
+      write("prompt.execution.budget", { budgetId: this.contract.budgetId }, { budgetId: this.contract.budgetId,
+        contractId: this.contract.id, eventId: this.operationId, budget: budget.snapshot() })] });
+  }
+  #prepared(value) {
+    if (this.#preparedDigest !== null && this.#preparedDigest !== value.document.digest) {
+      refuse("Physical Prompt budget or Attempt changed before save");
+    }
+    this.#preparedDigest = value.document.digest;
+    return value;
+  }
+  assert(view) { this.prepare(view); }
+}
+
+/** Reconcile one unused reservation under the existing replacement authorization. */
+export class CanonicalPromptReservationReconciliationPublication {
+  constructor({ contract, scope, snapshot, recoveryReceipt = null, originalAuthorization = null, request, physicalEvidence, operationId }) {
+    if (!(contract instanceof FlowExecutionContract) || !(scope instanceof PromptExecutionScope)
+      || !(snapshot instanceof PromptExecutionJournalSnapshot)
+      || recoveryReceipt !== null && !(recoveryReceipt instanceof ArtifactWorkerRecoveryReceipt)
+      || originalAuthorization !== null && !(originalAuthorization instanceof OriginalArtifactWorkerAuthorization)
+      || (recoveryReceipt === null) === (originalAuthorization === null)
+      || !(request instanceof WorkerArtifactHandoffRequest)
+      || !(physicalEvidence instanceof ProcessExecutionRecoveryEvidence) || typeof operationId !== "string" || !operationId) {
+      throw new TypeError("Prompt reservation reconciliation requires its canonical authorization, snapshot and physical evidence");
+    }
+    (recoveryReceipt?.targetContract ?? originalAuthorization.executionContract).assertMatches(contract);
+    if (!same(snapshot.scope.toJSON(), scope.toJSON()) || snapshot.batches.filter((batch) => batch.claim !== null).length !== 1) {
+      refuse("Prompt reservation reconciliation requires one exact unresolved scope claim");
+    }
+    Object.assign(this, { contract, scope, snapshot, recoveryReceipt, originalAuthorization, request, physicalEvidence, operationId });
+    Object.freeze(this);
+  }
+  get authorizationId() { return (this.recoveryReceipt ?? this.originalAuthorization).id; }
+  assertEvidence(view) {
+    readExecutionContractFromView(view, this.contract);
+    this.contract.assertMatches(this.request.executionContract);
+    const requestSnapshot = readArtifactWorkerRequestSnapshotFromView(view, { executionContract: this.contract });
+    if (requestSnapshot.requestDigest !== this.request.requestDigest
+      || this.recoveryReceipt !== null && this.recoveryReceipt.evidence.targetRequestDigest !== requestSnapshot.requestDigest) {
+      refuse("Prompt reservation differs from its exact canonical worker request");
+    }
+    const authorization = read(view, this.recoveryReceipt === null ? "execution.request" : "execution.recovery", this.contract.parameters);
+    if (this.recoveryReceipt !== null) {
+      if (authorization === null || authorization.document.id !== this.recoveryReceipt.id
+        || !same(authorization.document.receipt, this.recoveryReceipt.toJSON())) refuse("Prompt reservation has no exact canonical recovery authorization");
+    } else {
+      const original = this.originalAuthorization;
+      const claim = read(view, "execution.contract", this.contract.parameters);
+      if (authorization === null || claim === null || authorization.document.id !== original.requestSnapshot.id
+        || !same(authorization.document.snapshot, original.requestSnapshot.toJSON())
+        || authorization.descriptor.activityId !== claim.descriptor.activityId
+        || this.request.executionContract.id !== this.contract.id || this.request.requestDigest !== original.requestDigest) {
+        refuse("Prompt reservation has no exact original claim and request producer");
+      }
+    }
+    assertArtifactWorkerRequestUnsealed(this.request, requestSnapshot);
+    assertProducer(authorization, this.contract);
+    const batch = this.snapshot.batches.find((entry) => entry.claim !== null);
+    const identity = batch.claim.processIdentity;
+    if (identity === undefined) refuse("Prompt reservation has no durable physical invocation identity");
+    const physical = this.physicalEvidence.forBinding(FlowProcessExecutionBinding.forContract(this.contract))
+      .forInvocation({ providerAttemptId: identity.providerAttemptId, logicalInvocationId: identity.logicalInvocationId });
+    physical.assertCurrent();
+    if (physical.calls.some((call) => call.startPermitted)) refuse("Prompt reservation already received physical start permission");
+    const proof = { physicalEvidence: physical.toJSON(), calls: physical.calls.map((call) => ({ executionId: call.executionId,
+      callId: call.callId, ownerEpoch: call.ownerEpoch, binding: call.binding.toJSON(), invocation: call.invocation,
+      startPermitted: call.startPermitted, receipt: call.receipt.toJSON() })) };
+    const previous = batch.reservationContinuation === undefined ? null
+      : PromptExecutionReservationContinuation.fromJSON(batch.reservationContinuation);
+    if (previous !== null && previous.authorizationId !== this.authorizationId) refuse("Prompt reservation changed its original execution authorization");
+    return previous !== null && !previous.pending ? previous.reconcile(proof)
+      : new PromptExecutionReservationContinuation({ authorizationId: this.authorizationId,
+        executionContractId: this.contract.id, previousClaim: batch.claim, history: previous?.history ?? [], ...proof });
+  }
+  assertInputCurrent({ flowManager, state }) {
+    this.request.assertInputCurrent(state, { flowManager });
+    this.request.assertUnpublished({ flowManager, state });
+  }
+  prepare(view) {
+    const continuation = this.assertEvidence(view);
+    const current = readPromptExecutionProgressFromView(view, this.contract, this.scope, this.physicalEvidence.checkoutIdentity);
+    const batch = current?.batches.find((entry) => entry.claim !== null);
+    if (batch?.reservationContinuation !== undefined) {
+      const saved = PromptExecutionReservationContinuation.fromJSON(batch.reservationContinuation);
+      if (saved.authorizationId !== this.authorizationId) refuse("Prompt reservation continuation changed its execution authorization");
+      if (saved.pending) {
+        if (!same(saved.previousClaim, continuation.previousClaim)) refuse("Prompt reservation continuation was replaced");
+        return { writes: [], continuation: saved };
+      }
+    }
+    if (current === null || !same(current.toJSON(), this.snapshot.toJSON())) refuse("Prompt reservation frontier changed before reconciliation");
+    const next = JSON.parse(JSON.stringify(current.toJSON()));
+    next.batches.find((entry) => entry.claim !== null).reservationContinuation = continuation.toJSON();
+    const snapshot = PromptExecutionJournalSnapshot.fromJSON(next);
+    const publication = new PromptExecutionProgressPublication({ contract: this.contract, scope: this.scope,
+      record: new PromptExecutionJournalRecord({ event: "reservation-reconciled", snapshot }),
+      expectedSnapshotDigest: executionValueDigest(current.toJSON()), operationId: this.operationId,
+      expectedCheckoutIdentity: this.physicalEvidence.checkoutIdentity, reservationAdmission: this });
+    return { ...publication.prepare(view), continuation };
+  }
+  assert(view) { this.prepare(view); }
+  readAcknowledgement(view) {
+    const saved = read(view, "prompt.execution.event", { ...scopeParameters(this.contract, this.scope), eventId: this.operationId });
+    if (saved === null) return false;
+    assertProducer(saved, this.contract);
+    if (saved.document.contractId !== this.contract.id || saved.document.record.event !== "reservation-reconciled"
+      || saved.document.digest !== executionValueDigest(saved.document.record)) refuse("Prompt reservation acknowledgement belongs to another event");
+    const snapshot = PromptExecutionJournalSnapshot.fromJSON(saved.document.record.snapshot);
+    const batch = snapshot.batches.find((entry) => entry.reservationContinuation?.authorizationId === this.authorizationId);
+    if (batch === undefined || !same(batch.claim, this.snapshot.batches.find((entry) => entry.claim !== null).claim)) {
+      refuse("Prompt reservation acknowledgement differs from its claimed reservation");
+    }
+    return true;
+  }
 }
 /** State deltas are checked at the persistence boundary, before durable call admission. */
 function assertTransition(previous, record, currentBudget) {
@@ -237,7 +566,8 @@ function assertTransition(previous, record, currentBudget) {
   if (record.event === "planned") {
     const expected = { ...currentBudget, synthesisCallCount: currentBudget.synthesisCallCount + (next.plan.synthesisCallCount ?? 0) };
     if (previous !== null || !same(next.budget, expected)
-      || next.batches.some((entry) => entry.batchCalls !== 0 || entry.claim !== null || entry.responses.length || entry.transportFailures.length || entry.processStops?.length || entry.completion !== null)) refuse("Prompt plan does not begin at the durable budget frontier");
+      || next.batches.some((entry) => entry.batchCalls !== 0 || entry.claim !== null || entry.responses.length || entry.transportFailures.length
+        || entry.processStops?.length || entry.reservationContinuation !== undefined || entry.completion !== null)) refuse("Prompt plan does not begin at the durable budget frontier");
     return;
   }
   if (previous === null || !same(previous.plan, next.plan) || !same(previous.scope, next.scope)
@@ -257,8 +587,32 @@ function assertTransition(previous, record, currentBudget) {
     if (group.responseCallCount - prior.responseCallCount !== responseDelta) refuse("Prompt group response count differs from its batch calls");
   }
   const noAggregate = delta.aggregateCharacters === 0 && delta.aggregateItemCount === 0;
+  if (!["reservation-reconciled", "reservation-consumed"].includes(record.event)
+    && !same(batch.reservationContinuation, old.reservationContinuation)) refuse("Prompt event changed its immutable reservation continuation");
   if (record.event !== "process-stopped" && !same(batch.processStops ?? [], old.processStops ?? [])) refuse("Prompt event altered its immutable stop observations");
-  if (record.event === "claimed") {
+  if (record.event === "reservation-reconciled") {
+    const { reservationContinuation, ...frontier } = batch;
+    const { reservationContinuation: previousReservation, ...oldFrontier } = old;
+    if (old.claim === null || !same(frontier, oldFrontier)
+      || !same(next.budget, currentBudget) || !same(next.groups, previous.groups)) refuse("Prompt reconciliation changed its claim or consumed budget");
+    const continuation = PromptExecutionReservationContinuation.fromJSON(reservationContinuation);
+    if (!continuation.pending || !same(continuation.previousClaim, old.claim)) refuse("Prompt reconciliation does not bind its unresolved claim");
+    if (previousReservation === undefined) {
+      if (continuation.history.length !== 0) refuse("Initial Prompt reconciliation invented an earlier reservation lineage");
+    } else {
+      const previousContinuation = PromptExecutionReservationContinuation.fromJSON(previousReservation);
+      if (previousContinuation.pending || !same(previousContinuation.reconcile({ physicalEvidence: continuation.physicalEvidence,
+        calls: continuation.calls }).toJSON(), continuation.toJSON())) refuse("Prompt reconciliation removed or changed its prior reservation lineage");
+    }
+  } else if (record.event === "reservation-consumed") {
+    const previousContinuation = PromptExecutionReservationContinuation.fromJSON(old.reservationContinuation);
+    const continuation = PromptExecutionReservationContinuation.fromJSON(batch.reservationContinuation);
+    const { claim: oldClaim, reservationContinuation: oldReservation, ...oldFrontier } = old;
+    const { claim, reservationContinuation: replacementReservation, ...nextFrontier } = batch;
+    if (!previousContinuation.pending || continuation.pending || !same(previousContinuation.consume(claim).toJSON(), continuation.toJSON())
+      || !same(oldFrontier, nextFrontier) || !same(next.budget, currentBudget)
+      || !same(next.groups, previous.groups)) refuse("Prompt reservation was consumed twice or changed its budget");
+  } else if (record.event === "claimed") {
     if (old.claim !== null || batch.claim === null || batch.transportOrdinal !== old.transportOrdinal + 1
       || delta.providerCallCount !== 1 || delta.synthesisCallCount !== 0 || !noAggregate || !same(batch.responses, old.responses)
       || !same(batch.transportFailures, old.transportFailures) || batch.completion !== null
@@ -308,13 +662,19 @@ function assertTransition(previous, record, currentBudget) {
   if (record.event === "response" && batch.transportOrdinal !== old.transportOrdinal) refuse("Prompt response changed its transport identity");
 }
 export class PromptExecutionProgressPublication {
-  constructor({ contract, scope, record, expectedSnapshotDigest, operationId, expectedCheckoutIdentity = null }) {
+  constructor({ contract, scope, record, expectedSnapshotDigest, operationId, expectedCheckoutIdentity = null, reservationAdmission = null }) {
     if (!(contract instanceof FlowExecutionContract) || !(scope instanceof PromptExecutionScope)
       || !(record instanceof PromptExecutionJournalRecord) || !same(scope.toJSON(), record.scope.toJSON())) throw new TypeError("Prompt persistence requires typed execution inputs");
-    Object.assign(this, { contract, scope, record, expectedSnapshotDigest, operationId, expectedCheckoutIdentity });
+    Object.assign(this, { contract, scope, record, expectedSnapshotDigest, operationId, expectedCheckoutIdentity, reservationAdmission });
     Object.freeze(this);
   }
   prepare(view) {
+    if (this.record.event === "reservation-reconciled") {
+      if (!(this.reservationAdmission instanceof CanonicalPromptReservationReconciliationPublication)) refuse("Prompt reconciliation requires its held physical admission");
+      const continuation = this.reservationAdmission.assertEvidence(view);
+      const saved = this.record.snapshot.batches.find((batch) => batch.reservationContinuation !== undefined)?.reservationContinuation;
+      if (!same(saved, continuation.toJSON())) refuse("Prompt reconciliation differs from its authenticated physical observation");
+    }
     readExecutionContractFromView(view, this.contract);
     const parameters = scopeParameters(this.contract, this.scope);
     const previous = readScopeProgress(view, this.contract, this.scope);

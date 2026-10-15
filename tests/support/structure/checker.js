@@ -202,7 +202,9 @@ export class StructureChecker {
     this.#reverseIndex(stepFiles);
     this.#reverseServiceIndex();
     this.#sharedExecutionSelections((this.scope.contract?.executionShapes ?? []).filter((shape) => shape instanceof NamedExecutionShape));
-    if (this.scope.contract?.executionShapes.length) {
+    if (this.scope.contract?.operation !== null && this.scope.contract?.operation !== undefined) {
+      this.#operationExecutionRoute();
+    } else if (this.scope.contract?.executionShapes.length) {
       this.#declaredExecutionRoutes();
       if (this.scope.contract.executionShapes.some((shape) => shape.loaders.some((loader) => loader.module === "src/flow/registry.js"))) {
         this.#registryRoutes();
@@ -566,6 +568,148 @@ export class StructureChecker {
     return [...sharedExecutionAdapters.values()].find((adapter) => adapter.selectorName === selector)?.kind ?? "unknown";
   }
 
+  #operationExecutionRoute() {
+    const { operation, definition } = this.scope.contract;
+    const file = this.scope.registrationModule;
+    const trace = [this.scope.entry, file];
+    const module = this.#module(file, trace, "A11", true);
+    if (!module) return;
+    const resultIds = STEP_RESULT_REGISTRY.filter((entry) => entry.kind === `${entry.stepId}${operation.resultKindSuffix}`)
+      .map((entry) => entry.stepId).sort();
+    const declaredIds = definition.leaves.map((entry) => entry.stepId).sort();
+    if (resultIds.length === 0 || resultIds.join("\0") !== declaredIds.join("\0")) {
+      this.#diagnose("A11", file, null, trace, "operation scope differs from its sole registered Result family");
+    }
+    const registryImport = module.references.find((reference) => reference.bindings.get(operation.resultDefinitionsName) === operation.resultDefinitionsName);
+    if (!registryImport || this.#resolve(file, registryImport, trace, "A11")?.file !== "src/flow/engine/step-result.js") {
+      this.#diagnose("A11", file, registryImport?.token, trace, "operation collection does not import the sole Result registry");
+    }
+    const resultModule = this.#module("src/flow/engine/step-result.js", trace, "A11", true);
+    const definitions = resultModule?.declaration(operation.resultDefinitionsName);
+    if (!definitions?.exported || !definitions.matchesDeclaration(`const ${operation.resultDefinitionsName} = Object.freeze(STEP_RESULT_REGISTRY
+      .filter((definition) => definition.kind === \`\${definition.stepId}${operation.resultKindSuffix}\`));`)) {
+      this.#diagnose("A11", "src/flow/engine/step-result.js", definitions?.token, trace, "operation Result definitions must derive their full family from the sole registry");
+    }
+    const collection = module.declaration(operation.registryName);
+    const cacheName = `${operation.registryName}Cache`;
+    const cache = module.declaration(cacheName);
+    const expectedCollection = `${cacheName} ??= Object.freeze(${operation.resultDefinitionsName}
+      .map(${operation.factoryName})); return ${cacheName};`;
+    if (!collection?.exported || !collection.matchesFunction("", expectedCollection)
+      || !cache?.matchesDeclaration(`let ${cacheName} = null;`)) {
+      this.#diagnose("A11", file, collection?.token, trace, "operation registrations must derive the full Result family without exclusions");
+    }
+    const first = this.scope.registrations[0];
+    const factory = module.declaration(operation.factoryName);
+    if (first === undefined) return;
+    if (this.scope.registrations.some((registration) => registration.StepClass !== first.StepClass
+      || registration.ServiceClass !== first.ServiceClass
+      || registration.prepareServiceArguments !== first.prepareServiceArguments
+      || registration.executionContract !== first.executionContract)) {
+      this.#diagnose("A01", file, factory?.token, trace, "shared operation registrations differ from their single production factory");
+    }
+    const adapter = sharedExecutionAdapters.get(this.#executionKind(first));
+    if (!adapter || !factory?.matchesFunction("definition", `return new StepRegistration({
+      stepId: definition.stepId, StepClass: ${first.StepClass.name}, ServiceClass: ${first.ServiceClass.name},
+      prepareServiceArguments: ${first.prepareServiceArguments.name}, executionContract: ${adapter?.contractName}
+    });`)) {
+      this.#diagnose("A10", file, factory?.token, trace, "operation factory does not preserve its registered producer and dependencies");
+    }
+    const lookup = module.declaration(operation.lookupName);
+    if (!lookup?.exported || !lookup.matchesFunction("stepId", `return ${operation.registryName}()
+      .find((registration) => registration.stepId === stepId) ?? null;`)) {
+      this.#diagnose("A10", file, lookup?.token, trace, "operation lookup must select from its full production collection");
+    }
+    const execute = module.declaration(operation.executeName);
+    if (!execute?.exported || !execute.matchesFunction("input", `
+      const registration = ${operation.lookupName}(input.stepId);
+      if (registration === null) throw new TypeError($STRING_LITERAL);
+      const prepared = registration.create(input);
+      prepared.step.execute();
+      return prepared.dependency(registration.ServiceClass).receipt;`)) {
+      this.#diagnose("A10", file, execute?.token, trace, "operation execution must construct and consume the same registered Step and Service");
+    }
+    const closedBindings = new Map([[cacheName, [cache, collection]], [operation.registryName, [collection, lookup]],
+      [operation.factoryName, [factory, collection]], [operation.lookupName, [lookup, execute]]]
+      .map(([name, owners]) => [name, new Set(owners.flatMap((owner) => owner?.tokens ?? []).map((token) => token.offset))]));
+    for (const token of module.tokens) {
+      const allowed = token.kind === "identifier" ? closedBindings.get(token.value) : undefined;
+      if (allowed !== undefined && !allowed.has(token.offset)) {
+        this.#diagnose("A10", file, token, trace, "operation registration binding escapes its closed execution route");
+      }
+    }
+    const observedLoaders = new Set();
+    for (const sourceFile of this.allFiles) {
+      if (sourceFile === file) continue;
+      const source = this.#module(sourceFile, [sourceFile], "A10", true);
+      if (!source) continue;
+      for (const reference of source.references) {
+        if (this.#resolve(sourceFile, reference, [sourceFile, file], "A10", true)?.file !== file) continue;
+        const loader = operation.loaders.find((entry) => entry.module === sourceFile
+          && this.#operationExecutionLoader(source, reference, operation, entry));
+        if (loader !== undefined && !observedLoaders.has(loader)) observedLoaders.add(loader);
+        else this.#diagnose("A10", sourceFile, reference.token, [sourceFile, file],
+          "operation registration authority escapes its named execution adapter or acquired loader");
+      }
+    }
+    for (const loader of operation.loaders) if (!observedLoaders.has(loader)) this.#diagnose("A10", loader.module, null,
+      [loader.module, file], "operation lacks its closed outer acquisition before authority exclusion");
+  }
+
+  #operationExecutionLoader(module, reference, operation, loader) {
+    if (reference.kind !== "dynamic") return false;
+    const classNames = [...module.declarationNames()]
+      .filter((name) => module.declarationHeader(name).token.value === "class");
+    const declarations = [module.declaration(loader.declarationName), ...classNames
+      .map((name) => readClassMember(module, name, loader.declarationName))].filter(Boolean);
+    if (declarations.length !== 1) return false;
+    const method = declarations[0];
+    const body = method?.bodyTokens();
+    if (body === null || body === undefined) return false;
+    const importTokens = readTokens(`const { ${operation.executeName} } = await import(${JSON.stringify(reference.specifier)});`);
+    const start = body.findIndex((token) => token.offset === reference.token.offset) - 6;
+    if (start < 0 || body.slice(start, start + importTokens.length).length !== importTokens.length
+      || body.slice(start, start + importTokens.length).some((token, index) =>
+      token.value !== importTokens[index].value || token.kind !== importTokens[index].kind)) return false;
+    let depth = 0;
+    for (const token of body.slice(0, start)) {
+      if (["{", "(", "["].includes(token.value)) depth++;
+      if (["}", ")", "]"].includes(token.value)) depth--;
+    }
+    if (depth !== 0) return false;
+    const calls = readInvocations({ tokens: body });
+    const authorityName = readTokens(loader.authorityCallName);
+    const authority = body.flatMap((token, index) => {
+      if (token.offset <= body[start + importTokens.length - 1].offset
+        || !authorityName.every((expected, offset) => body[index + offset]?.value === expected.value)
+        || body[index + authorityName.length]?.value !== "(") return [];
+      const call = readInvocations({ tokens: body.slice(index + authorityName.length - 1) })[0];
+      return call === undefined ? [] : [new SourceInvocation(loader.authorityCallName, token, call.arguments, call.endToken)];
+    });
+    const execution = calls.filter((call) => call.name === operation.executeName);
+    if (authority.length !== 1 || execution.length !== 1
+      || authority[0].token.offset <= body[start + importTokens.length - 1]?.offset
+      || execution[0].token.offset <= authority[0].token.offset
+      || execution[0].endToken.offset >= authority[0].endToken.offset) return false;
+    const callback = authority[0].arguments.at(-1);
+    if (callback?.[0]?.value !== "(" || callback[1]?.kind !== "identifier" || callback[2]?.value !== ")"
+      || callback[3]?.value !== "=>" || callback[4]?.value !== "{" || callback.at(-1)?.value !== "}"
+      || callback.some((token) => token.value === "await")) return false;
+    const executionIndex = callback.findIndex((token) => token.offset === execution[0].token.offset);
+    const executionEnd = callback.findIndex((token) => token.offset === execution[0].endToken.offset);
+    let executionDepth = 0;
+    for (const token of callback.slice(5, executionIndex)) {
+      if (["{", "(", "["].includes(token.value)) executionDepth++;
+      if (["}", ")", "]"].includes(token.value)) executionDepth--;
+    }
+    if (executionIndex < 6 || executionDepth !== 0 || callback[executionIndex - 1]?.value !== "return"
+      || executionEnd !== callback.length - 3 || callback[executionEnd + 1]?.value !== ";") return false;
+    const usage = new SourceOriginUsage(method, [operation.executeName], { acceptBindings: false });
+    usage.accept(body.slice(start, start + importTokens.length));
+    usage.accept([execution[0].token]);
+    return usage.unresolved().length === 0;
+  }
+
   #fixedScopeContract() {
     const contract = this.scope.contract;
     if (contract === null) return;
@@ -604,7 +748,7 @@ export class StructureChecker {
         `selected registration ${registration.stepId} is outside fixed responsibility leaves`);
     }
     if (contract.registry !== null) {
-      for (const issue of ProductionRegistrations.inspect(contract.registry)) {
+      for (const issue of ProductionRegistrations.inspect(contract.registry, contract.operation)) {
         this.#diagnose("A01", this.scope.registrationModule, null, [this.scope.registrationModule], issue.toRegistryMessage());
       }
       for (const registration of this.scope.registrations) if (!contract.registry.includes(registration)) {
@@ -2854,7 +2998,7 @@ const revision = testSourceRevision(snapshot, testSource);
       }
       const match = matches[0];
       if (!index.has(match.file)) index.set(match.file, []);
-      if (index.get(match.file).some((item) => item.StepClass === registration.StepClass)) this.#diagnose("A01", match.file, match.classEntry.token, [match.file], "duplicate Step class registration");
+      if (this.scope.contract?.operation == null && index.get(match.file).some((item) => item.StepClass === registration.StepClass)) this.#diagnose("A01", match.file, match.classEntry.token, [match.file], "duplicate Step class registration");
       index.get(match.file).push(registration);
       if (!this.rules.isWithinEntry(match.file, this.scope.entry)) this.#diagnose("A01", match.file, match.classEntry.token, [match.file], "registered Step is outside scope entry");
       if (!this.#isStepClass(match.file, match.module, match.classEntry, new Set())) this.#diagnose("A01", match.file, match.classEntry.token, [match.file], "registered class does not extend Step");
@@ -2907,8 +3051,11 @@ const revision = testSourceRevision(snapshot, testSource);
   }
 
   #registrationContract(registration, step, service) {
+    const operation = this.scope.contract?.operation;
+    const matchesRegistration = (call) => call.identifiers().has(step.classEntry.name)
+      && (operation != null || call.literals().has(registration.stepId));
     const module = this.#registrationSourceModules().find((entry) => readInvocations(entry)
-      .some((call) => call.identifiers().has(step.classEntry.name) && call.literals().has(registration.stepId)));
+      .some(matchesRegistration));
     const file = module?.file ?? this.scope.registrationModule;
     if (!module) return;
     const prepareName = registration.prepareServiceArguments?.name;
@@ -2916,7 +3063,7 @@ const revision = testSourceRevision(snapshot, testSource);
       this.#diagnose("A08", file, step.classEntry.token, [file], "Service preparation must be a named function");
       return;
     }
-    const calls = readInvocations(module).filter((call) => call.identifiers().has(step.classEntry.name) && call.literals().has(registration.stepId));
+    const calls = readInvocations(module).filter(matchesRegistration);
     const matching = calls.filter((call) => {
       const names = call.identifiers();
       const helperNames = this.#registrationHelperNames(module, call.name);
@@ -2935,8 +3082,11 @@ const revision = testSourceRevision(snapshot, testSource);
     const contractSource = shape?.adapterModule ?? adapter?.adapterModule;
     const contractReference = module.references.find((reference) => reference.bindings.get(contractName) === contractName);
     const contractTarget = contractReference && this.#resolve(file, contractReference, [file], "A10");
+    const actualContract = contractTarget?.file && this.#resolveExportBinding(contractTarget.file, contractName, new Set(), "A10");
+    const expectedContract = contractSource && this.#resolveExportBinding(contractSource, contractName, new Set(), "A10");
     const localContract = contractSource === file && module.declaration(contractName) !== null;
-    if (!localContract && contractTarget?.file !== contractSource) {
+    if (!localContract && contractTarget?.file !== contractSource && (actualContract === null || actualContract === undefined
+      || actualContract.key !== expectedContract?.key)) {
       this.#diagnose("A10", file, matching[0]?.token, [file], `registration must import named ${contractName}`);
     }
     const contractDeclaration = module.declaration(matching[0]?.name ?? "");
@@ -3011,6 +3161,7 @@ const revision = testSourceRevision(snapshot, testSource);
     if (!declaration) return false;
     const tokens = declaration.tokens;
     const allocations = new Map();
+    for (const invariant of readTypeInvariants(declaration)) allocations.set(invariant.parameter, invariant.typeName);
     const tainted = new Set(["ctx", "manager", "flowManager", "container"]);
     for (let index = 0; index < tokens.length - 3; index++) {
       if (!["const", "let"].includes(tokens[index].value) || tokens[index + 2]?.value !== "=") continue;
@@ -3430,6 +3581,7 @@ const revision = testSourceRevision(snapshot, testSource);
       "commitDraftStepCheckpoint", "commitDraftStepResult", "commitSpecStepResult",
       "completeSpecGateRepairProgress", "commitDraftWorker", "commitDraftWorkerError",
       "completePublishedDraftWorker",
+      "saveArtifactWorkerRecovery",
     ]);
     for (let index = 0; index < tokens.length; index++) {
       if (!usage.isOrigin(tokens[index])) continue;
@@ -4771,7 +4923,7 @@ const revision = testSourceRevision(snapshot, testSource);
         if (registration === null) throw new TypeError("selected worker requires its production registration");
         const current = registration.executionContract.select({ ctx, stepId });
         assertCurrentWorkerExecutionSelection(selection, current);
-        return this.#executeSelectedWorker(ctx, invocation, retryFeedback, agentOverride);
+        return this.#executeSelectedWorker(ctx, invocation, retryFeedback, agentOverride, current);
       `)) this.#diagnose("A11", owner, selected?.token, [owner],
         "private worker execution must follow current registered selection verification");
       // runWorkerAttempt has its own closed admission/fallback contract in A10.

@@ -4,21 +4,23 @@ import fs from "node:fs";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { AtomicFile, fsyncDirectory } from "./atomic-file.js";
-import { FileLock } from "./file-lock.js";
+import { FileLock, FileLockWaitPolicy } from "./file-lock.js";
 import { ProcessLock } from "./process-lock.js";
 import { ProcessIdentity, ProcessIdentitySource } from "./process-identity.js";
 import { RealDirectoryAuthority } from "./real-directory-authority.js";
 import { AgentProcessStopEvidence } from "./agent-failure.js";
+import { ManagedStopOperation, managedMonotonicNow } from "./managed-stop-operation.js";
+import { ManagedStopOperationStore } from "./managed-stop-store.js";
 
 import {
   ProcessExecutionControlFailure, ProcessExecutionBinding, ProcessExecutionCheckoutIdentity,
-  ProcessExecutionStopReceipt, ProcessExecutionStartPermit,
+  ProcessExecutionStopReceipt, ProcessExecutionStartPermit, ProcessExecutionNonExecutionEvidence, ProcessExecutionRecoveryCall,
   executionUuid as uuid, executionValueSnapshot as json,
   executionValueDigest as digest, executionProcessIdentity as identity,
 } from "./process-execution-values.js";
 export {
   ProcessExecutionControlFailure, ProcessExecutionBinding, ProcessExecutionCheckoutIdentity,
-  ProcessExecutionStopReceipt, ProcessExecutionStartPermit,
+  ProcessExecutionStopReceipt, ProcessExecutionStartPermit, ProcessExecutionNonExecutionEvidence, ProcessExecutionRecoveryCall,
 } from "./process-execution-values.js";
 
 function captureCheckoutAuthorities(main, checkout) {
@@ -36,6 +38,8 @@ export function captureProcessExecutionCheckoutIdentity({ mainRoot, executionRoo
 export const PROCESS_EXECUTION_SCOPE_ENV = "SENNEL_PROCESS_EXECUTION_SCOPE";
 const scopes = new AsyncLocalStorage();
 const MAX_REGISTRY_BYTES = 16 * 1024 * 1024;
+const RUNTIME_RECORD_VERSION = 2;
+const recoveryEvidenceAuthority = Symbol("process-runtime-recovery-evidence");
 
 function fail(reason, message, details) { throw new ProcessExecutionControlFailure(reason, message, details); }
 function exact(value, restored) {
@@ -54,7 +58,7 @@ function readJson(file, required = true) {
 
 class PhysicalCallRecord {
   constructor({ callId, parentCallId, binding, invocation, capability, endpoint, status,
-    launcherIdentity, pgid, members, permit, receipt, outcome, controlFailure }, { executionId } = {}) {
+    launcherIdentity, pgid, members, permit, receipt, outcome, controlFailure, stopOperation }, { executionId } = {}) {
     this.callId = uuid(callId, "callId");
     this.parentCallId = parentCallId === null ? null : uuid(parentCallId, "parentCallId");
     this.binding = new ProcessExecutionBinding(binding);
@@ -70,6 +74,7 @@ class PhysicalCallRecord {
     this.permit = permit === null ? null : new ProcessExecutionStartPermit(permit);
     this.receipt = receipt === null ? null : new ProcessExecutionStopReceipt(receipt);
     this.outcome = json(outcome);
+    this.stopOperation = stopOperation === null ? null : ManagedStopOperation.fromStored(stopOperation);
     this.controlFailure = controlFailure === null ? null : ProcessExecutionControlFailure.fromStored(json(controlFailure), { executionId, callId: this.callId });
     if (this.launcherIdentity !== null && (!Number.isSafeInteger(pgid) || pgid < 1 || this.launcherIdentity.pid !== pgid)) {
       throw new TypeError("Launcher must lead its dedicated process group");
@@ -83,7 +88,7 @@ class PhysicalCallRecord {
   toJSON() { return { callId: this.callId, parentCallId: this.parentCallId, binding: this.binding.toJSON(),
     invocation: this.invocation, capability: this.capability, endpoint: this.endpoint, status: this.status,
     launcherIdentity: this.launcherIdentity, pgid: this.pgid, members: this.members,
-    permit: this.permit, receipt: this.receipt, outcome: this.outcome, controlFailure: this.controlFailure }; }
+    permit: this.permit, receipt: this.receipt, outcome: this.outcome, controlFailure: this.controlFailure, stopOperation: this.stopOperation }; }
 }
 
 class RootExecutionRecord {
@@ -146,7 +151,7 @@ class RootExecutionRecord {
 
 class RuntimeRegistry {
   constructor({ version, checkout, ownerEpoch, slot, executions }) {
-    if (version !== 1) throw new TypeError("Runtime registry version is invalid");
+    if (version !== RUNTIME_RECORD_VERSION) throw new TypeError("Runtime registry version is unsupported");
     this.version = version;
     this.checkout = new ProcessExecutionCheckoutIdentity(checkout);
     if (!Number.isSafeInteger(ownerEpoch) || ownerEpoch < 0) throw new TypeError("Runtime owner epoch is invalid");
@@ -170,7 +175,7 @@ class RuntimeRegistry {
 
 class ClosedProcessExecutionArchive {
   constructor({ version, checkout, execution }) {
-    if (version !== 1) throw new TypeError("Process execution archive version is invalid");
+    if (version !== RUNTIME_RECORD_VERSION) throw new TypeError("Process execution archive version is unsupported");
     this.version = version;
     this.checkout = new ProcessExecutionCheckoutIdentity(checkout);
     this.execution = new RootExecutionRecord(execution);
@@ -230,7 +235,8 @@ class ProcessRuntimeStore {
     this.transition = new AtomicFile(path.join(this.authority.directory, "transition.json"));
     const lockOptions = { directoryAuthority: this.authority, authority: json(this.checkout), processIdentitySource };
     this.ownerLock = new ProcessLock({ ...lockOptions, kind: "checkout-process-runtime", fileName: "owner.lock" });
-    this.admission = new FileLock({ ...lockOptions, kind: "process-runtime-admission", fileName: "admission.lock" });
+    this.admissionOptions = { ...lockOptions, kind: "process-runtime-admission", fileName: "admission.lock" };
+    this.admission = new FileLock(this.admissionOptions);
     this.tail = Promise.resolve();
   }
   assertStable() {
@@ -244,28 +250,50 @@ class ProcessRuntimeStore {
     }
     this.authority.assertStable(); this.callsAuthority.assertStable(); this.archivesAuthority.assertStable();
   }
-  async exclusive(body) {
+  assertCommitted() {
+    this.assertStable();
+    if (this.transition.read() !== null) fail("durability-uncertain", "An incomplete durable runtime transition requires refusal");
+  }
+  #rejectRegistryFailure(cause) {
+    if (cause instanceof ProcessExecutionControlFailure) throw cause;
+    fail(cause.durabilityUnknown ? "durability-uncertain" : "registry-failed", `Process runtime registry operation failed: ${cause.message}`, { cause });
+  }
+  async exclusive(body, { deadline = Infinity } = {}) {
     const previous = this.tail;
     let settle;
     this.tail = new Promise((resolve) => { settle = resolve; });
-    await previous;
+    let admitted = false;
+    let timer;
     try {
-      return await this.admission.runExclusiveAsync(() => {
-        this.assertStable();
-        if (this.transition.read() !== null) fail("durability-uncertain", "An incomplete durable runtime transition requires refusal");
+      if (Number.isFinite(deadline)) {
+        await Promise.race([previous, new Promise((resolve, reject) => {
+          timer = setTimeout(() => reject(new ProcessExecutionControlFailure("stop-unproven", "Runtime admission exceeded the remaining stop deadline")),
+            Math.max(0, deadline - managedMonotonicNow()));
+        })]);
+      } else await previous;
+      admitted = true;
+      clearTimeout(timer);
+      const admission = Number.isFinite(deadline) ? new FileLock({ ...this.admissionOptions,
+        waitPolicy: new FileLockWaitPolicy({ timeoutMs: Math.floor(Math.max(0, deadline - managedMonotonicNow())) }) }) : this.admission;
+      return await admission.runExclusiveAsync(() => {
+        this.assertCommitted();
         return body();
       });
     } catch (cause) {
-      if (cause instanceof ProcessExecutionControlFailure) throw cause;
-      fail(cause.durabilityUnknown ? "durability-uncertain" : "registry-failed", `Process runtime registry operation failed: ${cause.message}`, { cause });
-    } finally { settle(); }
+      this.#rejectRegistryFailure(cause);
+    } finally {
+      clearTimeout(timer);
+      // A timed-out queued operation never runs, but must not let its successor
+      // enter before the original holder has left the registry transaction.
+      if (admitted) settle(); else previous.then(settle);
+    }
   }
   initialize() {
     const anchor = readJson(this.anchor, false);
     const existing = this.file.read();
     if (anchor === null && existing === null) {
       if (fs.readdirSync(this.callsAuthority.directory).length !== 0 || fs.readdirSync(this.archivesAuthority.directory).length !== 0) fail("record-missing", "Runtime inventory is missing while call artifacts remain");
-      const empty = new RuntimeRegistry({ version: 1, checkout: json(this.checkout), ownerEpoch: 0, slot: null, executions: [] });
+      const empty = new RuntimeRegistry({ version: RUNTIME_RECORD_VERSION, checkout: json(this.checkout), ownerEpoch: 0, slot: null, executions: [] });
       this.file.write(encodeRuntimeRecord(empty));
       this.anchor.write(JSON.stringify(this.checkout));
       return this.read();
@@ -273,7 +301,15 @@ class ProcessRuntimeStore {
     if (anchor === null || existing === null) fail("record-missing", "Runtime authority or inventory was removed");
     return this.read();
   }
-  read() {
+  read({ required = true } = {}) {
+    try {
+      this.assertCommitted();
+      const snapshot = !required && this.file.read() === null ? null : this.#read();
+      this.assertCommitted();
+      return snapshot;
+    } catch (cause) { this.#rejectRegistryFailure(cause); }
+  }
+  #read() {
     this.assertStable();
     if (!isDeepStrictEqual(readJson(this.anchor), json(this.checkout))) fail("authority-mismatch", "Persisted checkout identity does not match runtime authority");
     const envelope = readJson(this.file);
@@ -295,15 +331,27 @@ class ProcessRuntimeStore {
       return archive.execution;
     }).sort((left, right) => left.ownerEpoch - right.ownerEpoch);
   }
+  readInventory() {
+    const registry = this.read();
+    return json({ ...registry.toJSON(), executions: [...this.readArchives(), ...registry.executions]
+      .sort((left, right) => left.ownerEpoch - right.ownerEpoch) });
+  }
   #assertInventory(registry) {
     const inventory = [...this.readArchives(), ...registry.executions].sort((left, right) => left.ownerEpoch - right.ownerEpoch);
     if (inventory.length !== registry.ownerEpoch || inventory.some((record, index) => record.ownerEpoch !== index + 1)
       || new Set(inventory.map((record) => record.executionId)).size !== inventory.length) fail("record-missing", "Runtime execution epoch inventory is missing or duplicated");
+    const calls = inventory.flatMap((execution) => execution.calls);
+    const callIds = new Set(calls.map((call) => call.callId));
+    if (callIds.size !== calls.length) fail("record-corrupt", "Runtime inventory contains duplicate physical calls");
+    for (const name of fs.readdirSync(this.callsAuthority.directory)) {
+      if (!callIds.has(name)) fail("record-missing", "A physical call artifact is outside the durable runtime inventory");
+      new RealDirectoryAuthority(path.join(this.callsAuthority.directory, name), { parentAuthority: this.callsAuthority }).assertStable();
+    }
   }
   archiveClosed() {
     const registry = this.read();
     for (const execution of registry.executions.filter((record) => record.status === "closed")) {
-      const archive = new ClosedProcessExecutionArchive({ version: 1, checkout: json(this.checkout), execution: json(execution) });
+      const archive = new ClosedProcessExecutionArchive({ version: RUNTIME_RECORD_VERSION, checkout: json(this.checkout), execution: json(execution) });
       const content = encodeRuntimeRecord(archive);
       const file = new AtomicFile(path.join(this.archivesAuthority.directory, `${execution.executionId}.json`), {
         faultInjector: this.faultInjector, phaseNamespace: "runtime-archive", commitGuard: () => this.assertStable(),
@@ -314,7 +362,7 @@ class ProcessRuntimeStore {
       if (file.read()?.toString() !== content) fail("record-corrupt", "Closed execution archive readback differs");
       registry.executions = registry.executions.filter((record) => record.executionId !== execution.executionId);
       this.file.write(encodeRuntimeRecord(new RuntimeRegistry(json(registry))));
-      const saved = this.read();
+      const saved = this.#read();
       if (!isDeepStrictEqual(json(saved), json(registry))) fail("record-corrupt", "Runtime archive transfer readback differs");
       this.transition.remove();
       this.faultInjector({ phase: "after-runtime-archive-readback", filePath: file.filePath });
@@ -325,7 +373,7 @@ class ProcessRuntimeStore {
     const content = encodeRuntimeRecord(validated);
     this.transition.write(JSON.stringify({ executionId: validated.slot, ownerEpoch: validated.ownerEpoch }));
     this.file.write(content);
-    const saved = this.read();
+    const saved = this.#read();
     if (!isDeepStrictEqual(json(saved), json(validated))) fail("record-corrupt", "Runtime durable readback differs from the committed inventory");
     this.transition.remove();
     this.faultInjector({ phase: "after-runtime-readback", filePath: this.file.filePath });
@@ -389,6 +437,77 @@ export class ProcessExecutionOwnershipReservation {
   }
 }
 
+/** A fresh physical observation usable only while its checkout exclusion is held. */
+export class ProcessExecutionRecoveryEvidence {
+  #readCurrent;
+  #active = true;
+  #binding;
+  #invocation;
+  #inventory;
+  #revocations;
+  #snapshotDigest;
+  #summary;
+  constructor({ checkoutIdentity, binding, invocation = null, inventory, revocations, readCurrent, authority }) {
+    if (authority !== recoveryEvidenceAuthority || !(checkoutIdentity instanceof ProcessExecutionCheckoutIdentity) || !(binding instanceof ProcessExecutionBinding)
+      || typeof readCurrent !== "function") throw new TypeError("Recovery evidence requires its held runtime authority");
+    this.#binding = new ProcessExecutionBinding(binding);
+    this.#invocation = new ProcessExecutionBinding(invocation);
+    this.#inventory = inventory;
+    this.#revocations = revocations;
+    this.#readCurrent = readCurrent;
+    this.#snapshotDigest = digest(inventory);
+    this.checkoutIdentity = checkoutIdentity;
+    this.calls = Object.freeze(inventory.executions.flatMap((execution) => execution.calls
+      .filter((call) => new ProcessExecutionBinding(call.binding).includes(this.#binding)
+        && (this.#invocation.value === null || new ProcessExecutionBinding(call.invocation).includes(this.#invocation)))
+      .map((call) => new ProcessExecutionRecoveryCall({ executionId: execution.executionId, ownerEpoch: execution.ownerEpoch,
+        callId: call.callId, binding: call.binding, invocation: call.invocation, startPermitted: call.permit !== null, receipt: call.receipt }))));
+    this.receipts = Object.freeze(this.calls.map((call) => call.receipt));
+    this.nonExecution = this.receipts.length === 0 ? new ProcessExecutionNonExecutionEvidence({
+      checkoutIdentity, binding, invocation, inventoryDigest: this.#snapshotDigest,
+      ownerEpoch: inventory.ownerEpoch, executions: revocations,
+    }) : null;
+    this.#summary = { schemaVersion: 1, checkoutIdentity: checkoutIdentity.toJSON(), binding: binding.toJSON(), invocation: this.#invocation.toJSON(),
+      inventoryDigest: this.#snapshotDigest, ownerEpoch: inventory.ownerEpoch,
+      calls: this.calls.map((call) => call.toJSON()), nonExecution: this.nonExecution?.toJSON() ?? null };
+    this.digest = digest(this.#summary);
+    this.id = this.digest;
+    Object.freeze(this);
+  }
+  assertCurrent() {
+    if (!this.#active) fail("recovery-authority-expired", "Physical recovery evidence is outside its checkout exclusion");
+    if (digest(this.#readCurrent()) !== this.#snapshotDigest) fail("recovery-evidence-changed", "Physical runtime inventory changed before recovery authorization");
+    return this;
+  }
+  assertBinding(binding) {
+    this.assertCurrent();
+    if (!this.#binding.matches(new ProcessExecutionBinding(binding))) fail("recovery-binding-mismatch", "Physical recovery evidence belongs to another semantic execution");
+    return this;
+  }
+  forBinding(binding) {
+    this.assertCurrent();
+    const expected = new ProcessExecutionBinding(binding);
+    if (!expected.includes(this.#binding)) fail("recovery-binding-mismatch", "Physical recovery evidence cannot expand its observed semantic execution");
+    return new ProcessExecutionRecoveryEvidence({ checkoutIdentity: this.checkoutIdentity, binding: expected,
+      invocation: this.#invocation,
+      inventory: this.#inventory, revocations: this.#revocations, authority: recoveryEvidenceAuthority,
+      readCurrent: () => { this.assertCurrent(); return this.#inventory; } });
+  }
+  forInvocation(invocation) {
+    this.assertCurrent();
+    const expected = new ProcessExecutionBinding(invocation);
+    if (expected.value === null || Object.keys(expected.value).length === 0
+      || this.#invocation.value !== null && !expected.includes(this.#invocation)) {
+      fail("recovery-binding-mismatch", "Physical recovery evidence requires a bounded invocation within its observed execution");
+    }
+    return new ProcessExecutionRecoveryEvidence({ checkoutIdentity: this.checkoutIdentity, binding: this.#binding,
+      invocation: expected, inventory: this.#inventory, revocations: this.#revocations, authority: recoveryEvidenceAuthority,
+      readCurrent: () => { this.assertCurrent(); return this.#inventory; } });
+  }
+  toJSON() { return { ...json(this.#summary), id: this.id, digest: this.digest }; }
+  invalidate() { this.#active = false; }
+}
+
 /** Checkout admission and durable physical ownership; no semantic state decisions live here. */
 export class ProcessExecutionRuntime {
   constructor(store, record, { borrowed = false, parentCallId = null, binding = record.binding, root = null } = {}) {
@@ -406,6 +525,60 @@ export class ProcessExecutionRuntime {
     this.closed = false;
   }
   static current() { return scopes.getStore() ?? null; }
+  /** Observe saved facts without starting or stopping workers; keep exclusion through a synchronous commit. */
+  static async withRecoveryEvidence({ mainRoot, executionRoot = mainRoot, binding, processIdentitySource } = {}, callback) {
+    const expected = new ProcessExecutionBinding(binding);
+    if (expected.value === null || Object.keys(expected.value).length === 0 || typeof callback !== "function") {
+      throw new TypeError("Physical recovery requires its exact binding and synchronous consumer");
+    }
+    let store;
+    const current = this.current();
+    const owned = current !== null && !current.borrowed && !current.closed && !current.root.closed
+      && current.mainRoot === path.resolve(mainRoot) && current.executionRoot === path.resolve(executionRoot)
+      ? current.root : null;
+    try {
+      store = owned?.store ?? new ProcessRuntimeStore({ mainRoot, executionRoot, create: false, processIdentitySource });
+      if (owned === null) store.ownerLock.acquire();
+    } catch (cause) {
+      if (cause instanceof ProcessExecutionControlFailure) throw cause;
+      fail(cause.lockStatus === "live" ? "busy" : "admission-failed", "Physical recovery could not acquire checkout exclusion", { cause });
+    }
+    let result;
+    let callbackFailure = null;
+    try {
+      await store.exclusive(() => {
+        const readCurrent = () => {
+          const lock = store.ownerLock.inspect();
+          if (store.ownerLock.processIdentity === null || lock === null
+            || lock.stat.dev !== store.ownerLock.lockIdentity.dev || lock.stat.ino !== store.ownerLock.lockIdentity.ino
+            || lock.owner.processIdentity.ownerToken !== store.ownerLock.processIdentity.ownerToken) {
+            fail("ownership-changed", "Physical recovery checkout exclusion changed");
+          }
+          const inventory = store.readInventory();
+          if (owned !== null) owned.#assertAccepting(owned.#record(inventory));
+          for (const execution of inventory.executions) {
+            if (execution.status !== "closed" && execution.executionId !== owned?.executionId) this.#assertRecoveryCandidate(store, execution, { runId: null, specId: null });
+            if (execution.calls.some((call) => call.receipt === null)) fail("stop-unconfirmed", "Physical recovery requires durable stop receipts for every reserved call", { executionId: execution.executionId });
+          }
+          return inventory;
+        };
+        const inventory = readCurrent();
+        if (inventory.ownerEpoch === 0) fail("record-missing", "Physical recovery has no prior execution authority to revoke");
+        const evidence = new ProcessExecutionRecoveryEvidence({ checkoutIdentity: store.checkout, binding: expected,
+          inventory, revocations: inventory.executions.map((execution) => ({ executionId: execution.executionId,
+            ownerEpoch: execution.ownerEpoch, authorityState: execution.executionId === owned?.executionId
+              ? "exclusive" : execution.status === "closed" ? "closed" : "stale" })), readCurrent,
+          authority: recoveryEvidenceAuthority });
+        try {
+          result = callback(evidence);
+          if (result?.then !== undefined) throw new TypeError("Physical recovery evidence consumer must be synchronous");
+        } catch (cause) { callbackFailure = cause; }
+        finally { evidence.invalidate(); }
+      });
+    } finally { if (owned === null) store.ownerLock.release(); }
+    if (callbackFailure !== null) throw callbackFailure;
+    return result;
+  }
   static inspect({ mainRoot, executionRoot = mainRoot } = {}) {
     try {
       const main = path.resolve(mainRoot); const checkout = path.resolve(executionRoot);
@@ -419,9 +592,7 @@ export class ProcessExecutionRuntime {
         new RealDirectoryAuthority(currentDirectory).assertStable();
       }
       const store = new ProcessRuntimeStore({ mainRoot: main, executionRoot: checkout, create: false });
-      if (store.transition.read() !== null) fail("durability-uncertain", "An incomplete durable runtime transition requires refusal");
-      const registry = store.read();
-      return json({ ...registry.toJSON(), executions: [...store.readArchives(), ...registry.executions] });
+      return store.readInventory();
     } catch (cause) {
       if (cause instanceof ProcessExecutionControlFailure) throw cause;
       fail("registry-failed", `Runtime inspection failed: ${cause.message}`, { cause });
@@ -434,9 +605,8 @@ export class ProcessExecutionRuntime {
         if (typeof value !== "string" || value === "") throw new TypeError("Retained checkout inspection requires exact run and spec identity");
       }
       const store = new ProcessRuntimeStore({ mainRoot, executionRoot, create: false, retainedClosed: true });
-      if (store.transition.read() !== null) fail("durability-uncertain", "An incomplete durable runtime transition requires refusal");
-      const registry = store.read();
-      const executions = [...store.readArchives(), ...registry.executions].sort((left, right) => left.ownerEpoch - right.ownerEpoch);
+      const registry = store.readInventory();
+      const executions = registry.executions;
       if (registry.slot !== null || executions.some((record) => record.status !== "closed")) {
         fail("stop-unconfirmed", "Retained checkout requires a closed inventory and every durable process stop receipt", { executionId: registry.slot });
       }
@@ -451,9 +621,8 @@ export class ProcessExecutionRuntime {
         if (assessment.status === "live") fail("busy", "Original checkout ownership reservation remains live", { executionId: latest.executionId });
         if (assessment.status !== "stale") fail("identity-unknown", "Original checkout owner identity cannot be observed");
       }
-      if (store.transition.read() !== null) fail("durability-uncertain", "Runtime changed during retained checkout inspection");
-      store.assertStable();
-      return json({ ...registry.toJSON(), executions });
+      store.assertCommitted();
+      return registry;
     } catch (cause) {
       if (cause instanceof ProcessExecutionControlFailure) throw cause;
       fail("registry-failed", `Retained checkout inspection failed: ${cause.message}`, { cause });
@@ -507,19 +676,41 @@ export class ProcessExecutionRuntime {
       if (environment[PROCESS_EXECUTION_SCOPE_ENV]) await this.reportDelegatedControlFailure({ environment, error: failure });
       throw failure;
     }
+    let recoveryDeadline = Infinity;
+    let recoveryFailureContext = null;
+    let preparingRecovery = false;
+    const recoveryStartedAt = managedMonotonicNow();
     try {
-      await store.exclusive(() => { store.initialize(); store.archiveClosed(); });
-      const old = await store.exclusive(() => store.read());
-      for (const execution of old.executions.filter((entry) => entry.status !== "closed")) {
-        const assessment = store.identitySource.assess(execution.coordinatorIdentity);
-        if (assessment.status === "live") fail("busy", "Checkout execution coordinator is still alive", { executionId: execution.executionId });
-        if (assessment.status !== "stale") fail("identity-unknown", "Checkout execution coordinator cannot be identified", { executionId: execution.executionId });
-        if ((runId !== null && execution.runId !== null && runId !== execution.runId)
-          || (specId !== null && execution.specId !== null && specId !== execution.specId)) {
-          fail("binding-mismatch", "Orphan execution belongs to another run or specification", { executionId: execution.executionId });
+      // An existing stop also bounds recovery's registry admission, before the
+      // orphan can be revalidated and stopped under that admission authority.
+      const snapshot = store.read({ required: false });
+      if (snapshot !== null) {
+        for (const execution of snapshot.executions.filter((entry) => entry.status !== "closed")) {
+          this.#assertRecoveryCandidate(store, execution, { runId, specId });
+          preparingRecovery = true;
+          const runtime = new this(store, execution);
+          for (const call of execution.calls.filter((entry) => entry.receipt === null || entry.stopOperation !== null)) {
+            let operation = call.stopOperation ?? ManagedStopOperation.begin({ now: recoveryStartedAt });
+            recoveryFailureContext = { runtime, call };
+            recoveryDeadline = Math.min(recoveryDeadline, operation.deadline);
+            operation = runtime.#readStopOperation(execution, call, operation);
+            recoveryDeadline = Math.min(recoveryDeadline, operation.deadline);
+          }
         }
+      }
+      await store.exclusive(() => { store.initialize(); store.archiveClosed(); }, { deadline: recoveryDeadline });
+      const old = await store.exclusive(() => {
+        preparingRecovery = false;
+        const registry = store.read();
+        for (const execution of registry.executions.filter((entry) => entry.status !== "closed")) {
+          this.#assertRecoveryCandidate(store, execution, { runId, specId });
+        }
+        return registry;
+      }, { deadline: recoveryDeadline });
+      preparingRecovery = false;
+      for (const execution of old.executions.filter((entry) => entry.status !== "closed")) {
         const orphan = new this(store, execution);
-        await orphan.#stopRoot(true);
+        recoveryDeadline = Math.min(recoveryDeadline, await orphan.#stopRoot(true, recoveryStartedAt));
       }
       return await store.exclusive(() => {
         const registry = store.read();
@@ -530,12 +721,25 @@ export class ProcessExecutionRuntime {
         registry.ownerEpoch = record.ownerEpoch; registry.slot = record.executionId; registry.executions.push(record);
         store.save(registry);
         return new this(store, record);
-      });
+      }, { deadline: recoveryDeadline });
     } catch (cause) {
+      if (preparingRecovery && recoveryFailureContext !== null && (cause.executionId == null || cause.callId == null)) {
+        const { runtime, call } = recoveryFailureContext;
+        cause = await runtime.#recordStopFailure(call.callId, cause, call.controlFailure, recoveryDeadline);
+      }
       try { store.ownerLock.release(); } catch (cleanup) {
         fail("admission-failed", "Runtime admission and owner lock cleanup failed", { cause: new AggregateError([cause, cleanup], "Runtime acquisition failed", { cause }) });
       }
       throw cause;
+    }
+  }
+  static #assertRecoveryCandidate(store, execution, { runId, specId }) {
+    const assessment = store.identitySource.assess(execution.coordinatorIdentity);
+    if (assessment.status === "live") fail("busy", "Checkout execution coordinator is still alive", { executionId: execution.executionId });
+    if (assessment.status !== "stale") fail("identity-unknown", "Checkout execution coordinator cannot be identified", { executionId: execution.executionId });
+    if ((runId !== null && execution.runId !== null && runId !== execution.runId)
+      || (specId !== null && execution.specId !== null && specId !== execution.specId)) {
+      fail("binding-mismatch", "Orphan execution belongs to another run or specification", { executionId: execution.executionId });
     }
   }
   static async #borrow(store, grant, { runId, specId, binding }) {
@@ -616,7 +820,7 @@ export class ProcessExecutionRuntime {
       const call = new PhysicalCallRecord({ callId, parentCallId: this.parentCallId,
         binding: json(requestedBinding), invocation: json(invocation ?? options),
         capability: crypto.randomUUID(), endpoint: `\0sennel-${callId}`, status: "intent",
-        launcherIdentity: null, pgid: null, members: [], permit: null, receipt: null, outcome: null, controlFailure: null });
+        launcherIdentity: null, pgid: null, members: [], permit: null, receipt: null, outcome: null, controlFailure: null, stopOperation: null });
       root.calls.push(call); this.store.save(registry);
       return new ProcessExecutionCall(this, call);
     });
@@ -645,6 +849,7 @@ export class ProcessExecutionRuntime {
   async finishCall(call, { outcome = null, stopEvidence, members = null, notStarted = false } = {}) {
     this.#assertCall(call);
     const transport = await import("./managed-process.js");
+    const snapshot = this.#call(this.#record(this.store.read()), call);
     return this.store.exclusive(async () => {
       const registry = this.store.read(); const root = this.#record(registry); const record = this.#call(root, call);
       this.#assertAccepting(root);
@@ -661,11 +866,12 @@ export class ProcessExecutionRuntime {
       this.store.save(registry);
       this.#assertSubtreeSettled(root, record);
       return record.receipt;
-    });
+    }, { deadline: snapshot.stopOperation?.deadline });
   }
   async recordCallControlFailure(call, error) {
     this.#assertCall(call);
     if (!(error instanceof ProcessExecutionControlFailure)) throw new TypeError("Physical failure recording requires a typed control failure");
+    const snapshot = this.#call(this.#record(this.store.read()), call);
     return this.store.exclusive(() => {
       const registry = this.store.read(); const root = this.#record(registry);
       this.#assertAccepting(root);
@@ -673,7 +879,58 @@ export class ProcessExecutionRuntime {
       ProcessExecutionRuntime.#saveControlFailure(root, record, error);
       this.store.save(registry);
       return record.controlFailure;
-    });
+    }, { deadline: snapshot.stopOperation?.deadline });
+  }
+  async beginCallStop(call, options = {}) {
+    this.#assertCall(call);
+    const controlFailure = options.controlFailure ?? null;
+    if (controlFailure !== null && !(controlFailure instanceof ProcessExecutionControlFailure)) throw new TypeError("Stop preparation requires a typed initial control failure");
+    const protocol = await import("./managed-process-protocol.js");
+    const rootSnapshot = this.#record(this.store.read());
+    const snapshot = this.#call(rootSnapshot, call);
+    let operation = snapshot.stopOperation ?? (options instanceof ManagedStopOperation ? options : ManagedStopOperation.begin(options));
+    try {
+      operation = this.#readStopOperation(rootSnapshot, snapshot, operation);
+      return await this.store.exclusive(() => {
+        const registry = this.store.read(); const root = this.#record(registry); const record = this.#call(root, call);
+        if (controlFailure !== null) ProcessExecutionRuntime.#saveControlFailure(root, record, controlFailure);
+        operation = this.#beginStop(root, record, operation);
+        this.store.save(registry);
+        const outcome = protocol.readManagedRecord(call.outcomePath, { deadline: operation.deadline });
+        if (outcome !== null) this.#assertManagedRecord(root, record, outcome);
+        return operation;
+      }, { deadline: operation.deadline });
+    } catch (cause) {
+      throw await this.#recordStopFailure(call.callId, cause, snapshot.controlFailure ?? controlFailure, operation.deadline);
+    }
+  }
+  #beginStop(root, call, proposed) {
+    const chosen = new ManagedStopOperationStore(this.#transportRecord(root, call)).claim(call.stopOperation ?? proposed);
+    if (call.stopOperation !== null && !call.stopOperation.matches(chosen)) fail("request-mismatch", "Shared stop operation differs from the durable physical call stop");
+    call.stopOperation = chosen;
+    return call.stopOperation;
+  }
+  #readStopOperation(root, call, proposed) {
+    return call.stopOperation ?? new ManagedStopOperationStore(this.#transportRecord(root, call)).read({ deadline: proposed.deadline }) ?? proposed;
+  }
+  async #recordStopFailure(callId, cause, priorFailure, deadline) {
+    let failure = priorFailure ?? (cause instanceof ProcessExecutionControlFailure ? cause
+      : new ProcessExecutionControlFailure("control-failed", "Managed stop failed before durable settlement", { cause }));
+    failure = failure.withContext({ executionId: this.executionId, callId });
+    try {
+      return await this.store.exclusive(() => {
+        const registry = this.store.read(); const root = this.#record(registry);
+        const call = root.calls.find((entry) => entry.callId === callId);
+        ProcessExecutionRuntime.#saveControlFailure(root, call, failure);
+        this.store.save(registry);
+        const saved = call.controlFailure.withContext({ executionId: this.executionId, callId });
+        saved.cause = new AggregateError([call.controlFailure, cause], "Recorded process failure and subsequent stop refusal");
+        return saved;
+      }, { deadline });
+    } catch (reportingFailure) {
+      failure.cause = new AggregateError([failure.cause, cause, reportingFailure].filter(Boolean), "Managed stop and failure persistence could not complete");
+      return failure;
+    }
   }
   static #saveControlFailure(root, call, error) {
     if (call.controlFailure === null) call.controlFailure = error.withContext({ executionId: root.executionId, callId: call.callId });
@@ -717,43 +974,71 @@ export class ProcessExecutionRuntime {
       fail("closure-failed", `Runtime closure failed: ${cause.message}`, { cause, executionId: this.executionId });
     }
   }
-  async #stopRoot(recovery) {
-    const inventory = await this.store.exclusive(() => {
-      const registry = this.store.read(); const root = this.#record(registry);
-      root.accepting = false; root.status = "stopping";
-      this.store.save(registry);
-      return root.calls.filter((call) => call.receipt === null).map((call) => call.callId);
-    });
+  async #stopRoot(recovery, startedAt = managedMonotonicNow()) {
+    // This fresh canonical snapshot only bounds admission and retains evidence if
+    // admission itself fails. Every decision is revalidated under the store lock.
+    const rootSnapshot = this.#record(this.store.read());
+    const snapshot = rootSnapshot.calls.filter((call) => call.receipt === null);
+    const operations = new Map(snapshot.map((call) => [call.callId, call.stopOperation ?? ManagedStopOperation.begin({ now: startedAt })]));
+    let deadline = Math.min(...rootSnapshot.calls.map((call) => call.stopOperation?.deadline ?? Infinity),
+      ...[...operations.values()].map((operation) => operation.deadline));
+    let inventory;
+    let refusedCall = snapshot[0];
+    try {
+      for (const call of snapshot) {
+        refusedCall = call;
+        const operation = this.#readStopOperation(rootSnapshot, call, operations.get(call.callId));
+        operations.set(call.callId, operation);
+        deadline = Math.min(deadline, operation.deadline);
+      }
+      refusedCall = snapshot.find((call) => operations.get(call.callId).deadline === deadline) ?? refusedCall;
+      inventory = await this.store.exclusive(() => {
+        const registry = this.store.read(); const root = this.#record(registry);
+        root.accepting = false; root.status = "stopping";
+        this.store.save(registry);
+        return root.calls.filter((call) => call.receipt === null).map((call) => call.callId);
+      }, { deadline });
+    } catch (cause) {
+      const call = refusedCall;
+      if (!call) throw cause;
+      throw await this.#recordStopFailure(call.callId, cause, call.controlFailure, deadline);
+    }
     const transport = inventory.length === 0 ? null : await import("./managed-process.js");
     const protocol = inventory.length === 0 ? null : await import("./managed-process-protocol.js");
     for (const callId of inventory) {
-      const { record, priorFailure } = await this.store.exclusive(() => {
-        const registry = this.store.read(); const root = this.#record(registry); const call = root.calls.find((entry) => entry.callId === callId);
-        const directory = this.store.callDirectory(callId);
-        if (call.launcherIdentity === null) {
-          const hello = protocol.readManagedRecord(path.join(directory, "hello.json"));
-          if (hello === null) fail("stop-unconfirmed", "Launch intent has no authenticated launcher identity", { executionId: this.executionId, callId });
-          if (hello.executionId !== this.executionId || hello.callId !== callId || hello.ownerToken !== this.ownerToken || hello.capability !== call.capability) fail("binding-mismatch", "Launcher greeting does not match the durable launch intent");
-          this.#registerLauncher(call, hello, recovery);
-        }
-        const outcome = protocol.readManagedRecord(path.join(directory, "outcome.json"));
-        if (outcome !== null) {
-          this.#assertManagedRecord(root, call, outcome);
-          if (outcome.members) this.#mergeMembers(call, outcome.members);
-        }
-        this.store.save(registry);
-        return { record: this.#transportRecord(root, call), priorFailure: call.controlFailure };
-      });
-      let response;
+      const priorFailure = snapshot.find((call) => call.callId === callId)?.controlFailure ?? null;
+      let operation = operations.get(callId) ?? ManagedStopOperation.begin({ now: startedAt });
       try {
+        const record = await this.store.exclusive(() => {
+          const registry = this.store.read(); const root = this.#record(registry); const call = root.calls.find((entry) => entry.callId === callId);
+          operation = this.#beginStop(root, call, operation);
+          deadline = Math.min(deadline, operation.deadline);
+          // Preserve the first stop before any contended launcher-record read.
+          this.store.save(registry);
+          const directory = this.store.callDirectory(callId);
+          if (call.launcherIdentity === null) {
+            const hello = protocol.readManagedRecord(path.join(directory, "hello.json"), { deadline: operation.deadline });
+            if (hello === null) fail("stop-unconfirmed", "Launch intent has no authenticated launcher identity", { executionId: this.executionId, callId });
+            if (hello.executionId !== this.executionId || hello.callId !== callId || hello.ownerToken !== this.ownerToken || hello.capability !== call.capability) fail("binding-mismatch", "Launcher greeting does not match the durable launch intent");
+            this.#registerLauncher(call, hello, recovery);
+          }
+          const outcome = protocol.readManagedRecord(path.join(directory, "outcome.json"), { deadline: operation.deadline });
+          if (outcome !== null) {
+            this.#assertManagedRecord(root, call, outcome);
+            if (outcome.members) this.#mergeMembers(call, outcome.members);
+          }
+          this.store.save(registry);
+          return this.#transportRecord(root, call);
+        }, { deadline: operation.deadline });
+        let response;
         const observed = this.#proof(await transport.verifyManagedProcessStopped(record));
         if (observed.confirmed) {
-          response = transport.readManagedSettlement(record);
+          response = transport.readManagedSettlement(record, { deadline: operation.deadline });
           if (response === null) fail("stop-unconfirmed", "Stopped launcher has no validated durable settlement", { executionId: this.executionId, callId });
         } else {
           // Only the birth-authenticated live launcher may signal its own group.
           if (this.store.identitySource.assess(record.launcherIdentity).status !== "live") fail("stop-unconfirmed", "Orphan group has no authenticated live launcher", { executionId: this.executionId, callId });
-          response = await transport.requestManagedLauncherStop(record);
+          response = await transport.requestManagedLauncherStop(record, { operation });
         }
         await this.store.exclusive(async () => {
           const registry = this.store.read(); const root = this.#record(registry); const call = root.calls.find((entry) => entry.callId === callId);
@@ -762,25 +1047,28 @@ export class ProcessExecutionRuntime {
           if (!proof.confirmed || !AgentProcessStopEvidence.from(response.stopEvidence).confirmed) fail("stop-unconfirmed", "Launcher response lacks independent termination proof", { executionId: this.executionId, callId });
           this.#settle(root, call, { outcome: response.outcome, stopEvidence: proof });
           this.store.save(registry);
-        });
+        }, { deadline: operation.deadline });
       } catch (cause) {
-        if (priorFailure !== null) throw new ProcessExecutionControlFailure(cause instanceof ProcessExecutionControlFailure ? cause.reason : "stop-unconfirmed",
-          cause instanceof ProcessExecutionControlFailure ? cause.message : "Physical call stop remains unconfirmed after a recorded control failure",
-          { cause: new AggregateError([priorFailure, cause], "Recorded process failure and stop refusal"),
-            executionId: this.executionId, callId, diagnostic: priorFailure.diagnostic, primaryCause: priorFailure.primaryCause });
-        throw cause;
+        throw await this.#recordStopFailure(callId, cause, priorFailure, operation.deadline);
       }
     }
-    await this.store.exclusive(() => {
-      const registry = this.store.read(); const root = this.#record(registry);
-      if (root.calls.some((call) => call.receipt === null)) fail("stop-unconfirmed", "Runtime contains physical calls without durable termination receipts");
-      root.status = "closed";
-      root.closure = { executionId: root.executionId, ownerEpoch: root.ownerEpoch,
-        receiptDigests: root.calls.map((call) => digest(call.receipt)), recovery };
-      registry.slot = null;
-      this.store.save(registry);
-      this.store.archiveClosed();
-    });
+    try {
+      await this.store.exclusive(() => {
+        const registry = this.store.read(); const root = this.#record(registry);
+        if (root.calls.some((call) => call.receipt === null)) fail("stop-unconfirmed", "Runtime contains physical calls without durable termination receipts");
+        root.status = "closed";
+        root.closure = { executionId: root.executionId, ownerEpoch: root.ownerEpoch,
+          receiptDigests: root.calls.map((call) => digest(call.receipt)), recovery };
+        registry.slot = null;
+        this.store.save(registry);
+        this.store.archiveClosed();
+      }, { deadline });
+    } catch (cause) {
+      const call = rootSnapshot.calls.find((entry) => entry.controlFailure !== null) ?? rootSnapshot.calls[0];
+      if (!call) throw cause;
+      throw await this.#recordStopFailure(call.callId, cause, call.controlFailure, deadline);
+    }
+    return deadline;
   }
   #registerLauncher(record, { launcherIdentity, endpoint, pgid, members = [] }, recovery = false) {
     const launcher = identity(launcherIdentity);
@@ -809,12 +1097,16 @@ export class ProcessExecutionRuntime {
     call.receipt = new ProcessExecutionStopReceipt({ executionId: root.executionId, callId: call.callId,
       ownerEpoch: root.ownerEpoch, checkoutIdentity: this.store.checkout, binding: call.binding, invocation: call.invocation, launcherIdentity: call.launcherIdentity,
       pgid: call.pgid, members: call.members, stopEvidence, outcomeDigest: digest(call.outcome) });
+    if (call.controlFailure?.communication !== null && call.controlFailure?.communication !== undefined) {
+      call.controlFailure = call.controlFailure.withStopConfirmation("confirmed");
+    }
   }
   #transportRecord(root, call) {
     const directory = this.store.callDirectory(call.callId);
     return { executionId: root.executionId, callId: call.callId, ownerToken: root.coordinatorIdentity.ownerToken,
       ownerEpoch: root.ownerEpoch, capability: call.capability, endpoint: call.endpoint,
       launcherIdentity: call.launcherIdentity, pgid: call.pgid, members: call.members,
+      stopOperation: call.stopOperation,
       directory, helloPath: path.join(directory, "hello.json"), outcomePath: path.join(directory, "outcome.json") };
   }
   #record(registry) {

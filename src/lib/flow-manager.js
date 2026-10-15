@@ -594,6 +594,13 @@ export class FlowManager {
   }
   claimExecutionContract(input) { return this._store.claimExecutionContract(input); }
   readStoredExecutionContract(input) { return this._store.readStoredExecutionContract(input); }
+  artifactWorkerExecutionState(input) { return this._store.artifactWorkerExecutionState(input); }
+  readArtifactWorkerRequest(input) { return this._store.readArtifactWorkerRequest(input); }
+  artifactWorkerRecoveryReceipts(input) { return this._store.artifactWorkerRecoveryReceipts(input); }
+  saveArtifactWorkerRecovery(input) { return this._store.saveArtifactWorkerRecovery(input); }
+  readStoredPromptExecutionEpisode(input) { return this._store.readStoredPromptExecutionEpisode(input); }
+  prepareArtifactWorkerPromptConsumption(input) { return this._store.prepareArtifactWorkerPromptConsumption(input); }
+  savePromptReservationReconciliation(input) { return this._store.savePromptReservationReconciliation(input); }
   requirementTestGenerationExecutionState(input) { return this._store.requirementTestGenerationExecutionState(input); }
   readExecutionContract(input) { return this._store.readExecutionContract(input); }
   readPromptExecutionProgress(input) { return this._store.readPromptExecutionProgress(input); }

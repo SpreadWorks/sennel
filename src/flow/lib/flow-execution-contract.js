@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { FlowExecutionContractValue } from "./flow-execution-contract-value.js";
 import { FlowExecutionInputBaseline } from "./flow-execution-input-baseline.js";
 import { workerArtifactStableStringify } from "./worker-artifact-input-format.js";
 export { FlowExecutionInputBaseline } from "./flow-execution-input-baseline.js";
@@ -16,10 +17,11 @@ export class FlowExecutionContractRefusal extends StepAdmissionRefusal {
 }
 
 /** Immutable, independent identities of one unfinished execution generation. */
-export class FlowExecutionContract {
+export class FlowExecutionContract extends FlowExecutionContractValue {
   constructor({ runId, specId, stepId, nodeId = stepId, taskId = null, attemptId,
     attemptSequence, generation, inputRevision, runtimeRevision, promptDigest,
     schemaDigest, budgetOwner = null, executionLimit = null, executionMode = null, inputBaselines = [] }) {
+    super();
     budgetOwner ??= FlowExecutionContract.parametersForBinding({ binding: { runId, specId, nodeId,
       attempt: { id: attemptId, sequence: attemptSequence } }, generation }).episodeId;
     for (const [key, value] of Object.entries({ runId, specId, stepId, nodeId, attemptId,

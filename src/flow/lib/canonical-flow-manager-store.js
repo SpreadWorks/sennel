@@ -1,8 +1,13 @@
 import { captureProcessExecutionCheckoutIdentity } from "../../lib/process-execution-runtime.js";
 import { FlowExecutionContract, FlowExecutionContractRefusal } from "./flow-execution-contract.js";
+import { ArtifactWorkerRecoveryPublication, readArtifactWorkerExecutionFrontierFromView,
+  artifactWorkerRequestSnapshotWrite, readArtifactWorkerRequestSnapshotFromView } from "./artifact-worker-execution-recovery.js";
+import { readArtifactWorkerRecoveryReceiptsFromView } from "./artifact-worker-execution-recovery.js";
+import { ArtifactWorkerRequestSnapshot } from "./artifact-worker-recovery-values.js";
 import { executionContractArtifact, ExecutionContractPublicationAdmission,
   readExecutionContractFromView, readStoredExecutionContractFromView, readPromptExecutionProgressFromView, readPromptExecutionEpisodeFromView,
-  PromptExecutionProgressPublication } from "./canonical-prompt-execution.js";
+  PromptExecutionProgressPublication, LegacyArtifactPromptConsumptionPublication,
+  CanonicalPromptReservationReconciliationPublication, readStoredPromptExecutionEpisodeFromView } from "./canonical-prompt-execution.js";
 import { canonicalStepSettlementPublicationIdentity, canonicalArtifactWriteIdentity, commandResultPayload } from "./canonical-step-settlement-publication.js";
 import { SpecGateRepairRecoveryPreview, SpecGateRepairRecoveryInput } from "../engine/composition/spec-gate-repair-recovery.js";
 import { SpecGateRepairRecoveryEvidence } from "./spec-gate-repair-recovery.js";
@@ -119,6 +124,8 @@ import {
   STEP_RESULT_ERROR_CATEGORY,
 } from "../definition.js";
 import { RequirementTestSettlementReceipt } from "./requirement-test-settlement-receipt.js";
+import { FlowExecutionInputBaseline } from "./flow-execution-input-baseline.js";
+import { TestReviewRepairProgressEpisode } from "./test-review-repair.js";
 import {
   BranchPreparedResult,
   BranchNotRequiredResult,
@@ -155,6 +162,8 @@ import {
   ApprovalAwaitingUserResult,
   ApprovalResultEvidence,
   RequirementTestResultPublication,
+  RequirementTestRepairProgressIdentity,
+  TestRepairProgressSavedResult,
   RequirementTestRetryState,
   RequirementTestReviewEvidence,
   RequirementTestGateEvidence,
@@ -1031,13 +1040,15 @@ class ApprovalInitializationAdmission {
 /** Recheck the saved Result's source identity under the publication lock without selecting policy again. */
 class RequirementTestResultAdmission {
   constructor({ manager, state, stepResult, settlement, decision = null, planRead, nextPlan,
-    artifactWrites = [], selectedActivityId = null } = {}) {
+    artifactWrites = [], selectedActivityId = null, result = null } = {}) {
     if (!(stepResult instanceof StepResult) || !(stepResult.binding instanceof RequirementTestResultBinding)
       || settlement?.sourceStepId !== stepResult.stepId || !(planRead?.artifact?.plan)) {
       throw new CurrentFlowStateInvariantError("Requirement test Result admission requires its selected typed Result and source plan");
     }
     this.binding = stepResult.binding;
     this.stepResultEvidence = stepResult.evidence ?? null;
+    this.progressIdentity = stepResult.progressIdentity ?? null;
+    this.artifactRefs = Object.freeze([...(result?.artifactRefs ?? [])]);
     this.settlement = settlement;
     this.decision = decision;
     this.nextPlan = nextPlan;
@@ -1144,6 +1155,22 @@ class RequirementTestResultAdmission {
         logicalKey: "test.requirement.gate",
         activityId: this.selectedActivityId,
       });
+    }
+    if (this.progressIdentity !== null) {
+      const write = exactRequirementTestWrite(this.artifactWrites, "test.requirement.repair.progress", {
+        requirementId: this.binding.requirementId,
+      });
+      const progress = TestReviewRepairProgressEpisode.fromJSON(JSON.parse(write.bytes.toString("utf8"))).assertFlow(state);
+      const publishedIdentity = RequirementTestRepairProgressIdentity.fromProgress(progress);
+      const currentProgress = reader.readArtifact({ logicalKey: "test.requirement.repair.progress",
+        parameters: { requirementId: this.binding.requirementId }, optional: true });
+      const previousIdentity = currentProgress === null ? null : RequirementTestRepairProgressIdentity.fromProgress(
+        TestReviewRepairProgressEpisode.fromJSON(JSON.parse(currentProgress.bytes.toString("utf8"))).assertFlow(state));
+      const completedRequest = this.progressIdentity.completedRequestGroupForReferences(this.artifactRefs);
+      if (!this.progressIdentity.matches(publishedIdentity)
+        || completedRequest === null || !this.progressIdentity.advances(previousIdentity, completedRequest)) {
+        throw new CurrentFlowStateConflictError("Requirement repair progress write, Result, and completed request group do not match");
+      }
     }
     const selectedNextPlan = this.decision === null ? planRead.artifact.plan : this.decision.apply(planRead.artifact.plan);
     if (JSON.stringify(selectedNextPlan.toJSON()) !== JSON.stringify(this.nextPlan.toJSON())) {
@@ -1340,8 +1367,18 @@ class CanonicalTransitionReader {
   specLocation() { return this.view.location; }
   readArtifact(input) { return this.store.readArtifact({ ...input, view: this.view }); }
   readLatestSpecReview(input) { return this.store.readLatestSpecReview({ ...input, view: this.view }); }
+  readCurrentSpecReview(input) { return this.store.readCurrentSpecReview({ ...input, view: this.view }); }
   readCurrentStepSettlement(input) { return this.store.readCurrentStepSettlement({ ...input, view: this.view }); }
   draftStepExecutionState(input) { return this.store.draftStepExecutionState({ ...input, view: this.view }); }
+}
+
+/** Reuse the locked canonical reader for the handoff's full input validation. */
+class ArtifactWorkerRecoveryInputAdmission {
+  constructor(store, publication) { this.store = store; this.publication = publication; Object.freeze(this); }
+  assert(view) {
+    this.publication.assertInputCurrent({ flowManager: new CanonicalTransitionReader(this.store, view),
+      state: projectedState(view.state, specRecordAt(view.location), view.activities) });
+  }
 }
 
 /** An ordinary Await observes current persisted questions without publishing new work. */
@@ -2946,7 +2983,7 @@ export class CanonicalFlowManagerStore {
   artifactCatalog(specId) { return this.catalog(specId); }
 
   /** Read the published review only. Absence is a valid pre-review state. */
-  readCurrentSpecReview({ specId = null, consumerNodeId } = {}) {
+  readCurrentSpecReview({ specId = null, consumerNodeId, view = null } = {}) {
     const resolved = this.#resolveSpecId(specId);
     if (resolved === null) throw new CurrentFlowStateInvariantError("no canonical active Flow");
     const consumer = FlowArtifactUpdater.fromActivityNodeId(
@@ -2959,7 +2996,7 @@ export class CanonicalFlowManagerStore {
       );
     }
     const artifact = this.runtime.readCurrentSpecReview(resolved, {
-      approval: consumer === "approval", settleResult: settleRequirementTestStepResult,
+      approval: consumer === "approval", settleResult: settleRequirementTestStepResult, view,
     });
     if (artifact === null) return null;
     return Object.freeze({
@@ -4250,12 +4287,14 @@ export class CanonicalFlowManagerStore {
         "retry recovery artifacts require the dedicated canonical retry transition",
       );
     }
-    if (artifactWrites.some((write) => ["execution.contract", "prompt.execution.progress", "prompt.execution.event", "prompt.execution.budget"].includes(write.logicalKey ?? write.artifact?.logicalKey))
+    if (artifactWrites.some((write) => ["execution.contract", "execution.request", "execution.recovery", "prompt.execution.progress", "prompt.execution.event", "prompt.execution.budget"].includes(write.logicalKey ?? write.artifact?.logicalKey))
       && !(admission instanceof PromptExecutionProgressPublication)
+      && !(admission instanceof LegacyArtifactPromptConsumptionPublication)
+      && !(admission instanceof CanonicalPromptReservationReconciliationPublication)
       && !(admission instanceof CombinedAdmission && admission.find(ExecutionContractPublicationAdmission) !== null)) {
       throw new FlowExecutionContractRefusal("Execution artifacts require their dedicated canonical publication operation");
     }
-    if ((artifactRemovals ?? []).some((removal) => ["execution.contract", "prompt.execution.progress", "prompt.execution.event", "prompt.execution.budget"].includes(removal.logicalKey ?? removal.artifact?.logicalKey))) {
+    if ((artifactRemovals ?? []).some((removal) => ["execution.contract", "execution.request", "execution.recovery", "prompt.execution.progress", "prompt.execution.event", "prompt.execution.budget"].includes(removal.logicalKey ?? removal.artifact?.logicalKey))) {
       throw new FlowExecutionContractRefusal("Execution authority and consumed budgets cannot be removed by a producer publication");
     }
     const producerNodeId = requiredText(nodeId, "canonical artifact publication nodeId");
@@ -5643,7 +5682,7 @@ export class CanonicalFlowManagerStore {
     });
   }
 
-  #recordDraftExecutionLifecycle({ resolved, binding, stepResult, settlement, executionLifecycle, artifactWrites = [], publicationLimits = undefined, executionContract = null }) {
+  #recordDraftExecutionLifecycle({ resolved, binding, stepResult, settlement, executionLifecycle, artifactWrites = [], publicationLimits = undefined, executionContract = null, admission = null }) {
     if (!(stepResult instanceof StepResult) || !(settlement instanceof DraftExecutionSettlement)
       || settlement.sourceStepId !== stepResult.stepId
       || !(executionLifecycle instanceof DraftStepExecutionLifecycle)
@@ -5682,19 +5721,24 @@ export class CanonicalFlowManagerStore {
       activityId: activityId(`draft-execution-${executionLifecycle.phase}`),
       result,
       artifactWrites,
-      admission: executionContract === null ? undefined : new ExecutionContractPublicationAdmission(executionContract),
+      admission: new CombinedAdmission(admission,
+        executionContract === null ? null : new ExecutionContractPublicationAdmission(executionContract)),
     });
     return Object.freeze({ state: next, receipt,
       ...(executionLifecycle.phase === "claimed" ? { newlyClaimed: true } : {}) });
   }
 
   /** Fresh generic execution admission; an acquired old claim is never new permission. */
-  claimExecutionContract({ binding, executionContract }) {
+  claimExecutionContract({ binding, executionContract, requestSnapshot = null }) {
     if (!(executionContract instanceof FlowExecutionContract)) throw new TypeError("Execution claim requires a typed contract");
     if (binding.runId !== executionContract.runId || binding.specId !== executionContract.specId
       || binding.stepId !== executionContract.stepId || (binding.nodeId ?? binding.stepId) !== executionContract.nodeId
       || binding.attempt.id !== executionContract.attemptId || binding.attempt.sequence !== executionContract.attemptSequence) {
       throw new FlowExecutionContractRefusal("Execution claim belongs to another Step binding");
+    }
+    if (requestSnapshot !== null) {
+      if (!(requestSnapshot instanceof ArtifactWorkerRequestSnapshot)) throw new TypeError("Execution request snapshot must be typed");
+      executionContract.assertMatches(requestSnapshot.executionContract);
     }
     const existing = this.runtime.readCanonicalTransitionView(executionContract.specId,
       (view) => readExecutionContractFromView(view, executionContract, { optional: true }));
@@ -5703,7 +5747,8 @@ export class CanonicalFlowManagerStore {
     try {
       this.runtime.publishArtifacts({ specId: executionContract.specId, activityId: selectedActivityId,
         nodeId: executionContract.nodeId, expectedAttempt: binding.attempt,
-        artifactWrites: [executionContractArtifact(executionContract)],
+        artifactWrites: [executionContractArtifact(executionContract),
+          ...(requestSnapshot === null ? [] : [artifactWorkerRequestSnapshotWrite(requestSnapshot)])],
         admission: new ExecutionContractPublicationAdmission(executionContract, { requireAbsent: true }) });
     } catch (error) {
       const acknowledged = this.runtime.readCanonicalTransitionView(executionContract.specId, (view) => {
@@ -5722,11 +5767,93 @@ export class CanonicalFlowManagerStore {
       (view) => readStoredExecutionContractFromView(view, input));
   }
 
+  artifactWorkerExecutionState(input) {
+    const checkoutIdentity = input.checkoutIdentity ?? captureProcessExecutionCheckoutIdentity({ mainRoot: this.mainRoot,
+      executionRoot: this.executionRoot(this.loadReadOnly(input.binding.specId)) });
+    return this.runtime.readCanonicalTransitionView(input.binding.specId,
+      (view) => readArtifactWorkerExecutionFrontierFromView(view, { ...input, checkoutIdentity }));
+  }
+
+  readArtifactWorkerRequest(input) {
+    return this.runtime.readCanonicalTransitionView(input.executionContract.specId,
+      (view) => readArtifactWorkerRequestSnapshotFromView(view, input));
+  }
+
+  artifactWorkerRecoveryReceipts({ specId }) {
+    return this.runtime.readCanonicalTransitionView(specId, readArtifactWorkerRecoveryReceiptsFromView);
+  }
+
+  /** Save the selected replacement and its exact authorization in one catalog transaction. */
+  saveArtifactWorkerRecovery({ publication }) {
+    if (!(publication instanceof ArtifactWorkerRecoveryPublication)) throw new TypeError("Artifact recovery save requires its selected publication");
+    const receipt = publication.receipt;
+    const contract = receipt.targetContract;
+    const inputAdmission = new ArtifactWorkerRecoveryInputAdmission(this, publication);
+    const admission = new CombinedAdmission(inputAdmission, publication);
+    const prepared = this.runtime.readCanonicalTransitionView(contract.specId, (view) => {
+      if (publication.readAcknowledgement(view)) return null;
+      inputAdmission.assert(view);
+      return publication.prepare(view);
+    });
+    if (prepared === null) return receipt;
+    try {
+      const checkpoint = publication.checkpoint;
+      if (checkpoint === null) {
+        this.runtime.publishArtifacts({ specId: contract.specId, activityId: activityId("artifact-worker-recovery-authorized"),
+          nodeId: contract.nodeId, expectedAttempt: { id: contract.attemptId, nodeId: contract.nodeId, sequence: contract.attemptSequence },
+          artifactWrites: prepared.writes, admission });
+      } else {
+        this.#recordDraftExecutionLifecycle({ resolved: contract.specId, binding: checkpoint.binding,
+          stepResult: checkpoint.stepResult, settlement: checkpoint.settlement,
+          executionLifecycle: checkpoint.lifecycle, artifactWrites: prepared.writes, admission });
+      }
+    } catch (error) {
+      const acknowledged = this.runtime.readCanonicalTransitionView(contract.specId,
+        (view) => publication.readAcknowledgement(view));
+      if (!acknowledged) throw error;
+    }
+    return receipt;
+  }
+
+  readStoredPromptExecutionEpisode({ executionContract, checkoutIdentity = null, currentAttempt = true }) {
+    checkoutIdentity ??= captureProcessExecutionCheckoutIdentity({ mainRoot: this.mainRoot,
+      executionRoot: this.executionRoot(this.loadReadOnly(executionContract.specId)) });
+    return this.runtime.readCanonicalTransitionView(executionContract.specId,
+      (view) => readStoredPromptExecutionEpisodeFromView(view, executionContract, checkoutIdentity, { currentAttempt }));
+  }
+
+  prepareArtifactWorkerPromptConsumption({ publication }) {
+    if (!(publication instanceof LegacyArtifactPromptConsumptionPublication)) throw new TypeError("Artifact worker accounting requires its typed publication");
+    return this.runtime.readCanonicalTransitionView(publication.contract.specId, (view) => publication.prepare(view));
+  }
+
+  savePromptReservationReconciliation({ publication }) {
+    if (!(publication instanceof CanonicalPromptReservationReconciliationPublication)) throw new TypeError("Prompt reservation reconciliation requires its typed publication");
+    const contract = publication.contract;
+    const inputAdmission = new ArtifactWorkerRecoveryInputAdmission(this, publication);
+    const admission = new CombinedAdmission(inputAdmission, publication);
+    const prepared = this.runtime.readCanonicalTransitionView(contract.specId, (view) => {
+      inputAdmission.assert(view);
+      return publication.prepare(view);
+    });
+    if (prepared.writes.length === 0) return prepared.continuation;
+    try {
+      this.runtime.publishArtifacts({ specId: contract.specId, nodeId: contract.nodeId,
+        expectedAttempt: { id: contract.attemptId, nodeId: contract.nodeId, sequence: contract.attemptSequence },
+        activityId: activityId("prompt-reservation-reconciled"), artifactWrites: prepared.writes, admission });
+    } catch (error) {
+      const acknowledged = this.runtime.readCanonicalTransitionView(contract.specId, (view) => publication.readAcknowledgement(view));
+      if (!acknowledged) throw error;
+    }
+    return prepared.continuation;
+  }
+
   /** Acquire the published Requirement frontier and its exact consumed execution. */
-  requirementTestGenerationExecutionState({ binding, requirementId, planPublication }) {
+  requirementTestGenerationExecutionState({ binding, requirementId, planPublication,
+    progressDescriptor = null, progressIdentity = null }) {
     return this.runtime.readCanonicalTransitionView(binding.specId, (view) => {
       const state = view.state;
-      if (binding.runId !== state.runId || binding.stepId !== "test-generate"
+      if (binding.runId !== state.runId || !["test-generate", "test-repair"].includes(binding.stepId)
         || state.current?.at(-1) !== binding.stepId || binding.attempt?.id !== state.attempt?.id
         || binding.attempt?.sequence !== state.attempt?.sequence || state.attempt.failure !== null) {
         throw new FlowExecutionContractRefusal("Requirement generation execution binding is stale");
@@ -5737,7 +5864,32 @@ export class CanonicalFlowManagerStore {
         || plan.artifact.plan.activeWorkItem()?.requirementId !== requirementId) {
         throw new FlowExecutionContractRefusal("Requirement generation plan frontier changed");
       }
-      const saved = this.readCurrentStepSettlement({ specId: binding.specId, stepId: binding.stepId, view });
+      let saved = this.readCurrentStepSettlement({ specId: binding.specId, stepId: binding.stepId, view });
+      if (binding.stepId === "test-repair") {
+        const progress = reader.readArtifact({ specId: binding.specId, logicalKey: "test.requirement.repair.progress",
+          parameters: { requirementId }, consumerNodeId: binding.stepId, optional: true });
+        if ((progress === null) !== (progressDescriptor === null)) {
+          throw new FlowExecutionContractRefusal("Requirement repair progress publication changed");
+        }
+        if (progress !== null) {
+          if (!isDeepStrictEqual(RequirementTestResultPublication.fromDescriptor(progress.descriptor).toJSON(),
+            RequirementTestResultPublication.fromDescriptor(progressDescriptor).toJSON())) {
+            throw new FlowExecutionContractRefusal("Requirement repair progress producer changed");
+          }
+          new FlowExecutionInputBaseline({ descriptor: progressDescriptor }).assert(view);
+          const episode = TestReviewRepairProgressEpisode.fromJSON(JSON.parse(progress.bytes.toString("utf8"))).assertFlow(state);
+          if (!(progressIdentity instanceof RequirementTestRepairProgressIdentity)
+            || !progressIdentity.matches(RequirementTestRepairProgressIdentity.fromProgress(episode))) {
+            throw new FlowExecutionContractRefusal("Requirement repair current progress identity changed");
+          }
+        }
+        if (saved !== null) {
+          const source = view.activities.find((entry) => entry.id === saved.activityId);
+          const completedRequest = saved.result instanceof TestRepairProgressSavedResult
+            ? saved.result.progressIdentity.completedRequestGroupForReferences(source.result.artifactRefs) : null;
+          saved = Object.freeze({ ...saved, completedRequest });
+        }
+      }
       if (saved?.receipt.executionContract != null) {
         const stored = readStoredExecutionContractFromView(view, {
           binding, generation: saved.receipt.executionContract.generation,
@@ -5745,7 +5897,8 @@ export class CanonicalFlowManagerStore {
         saved.receipt.executionContract.assertMatches(stored);
         stored.assertCurrent(state);
       }
-      return new RequirementTestGenerationExecutionState({ binding, requirementId, planPublication, saved });
+      return new RequirementTestGenerationExecutionState({ binding, requirementId, planPublication,
+        progressDescriptor, progressIdentity, saved });
     });
   }
 
@@ -5815,6 +5968,7 @@ export class CanonicalFlowManagerStore {
     executionBinding,
     executionClaim,
     executionContract = null,
+    requestSnapshot = null,
     artifactWrites = [],
     publicationLimits = undefined,
   } = {}) {
@@ -5827,6 +5981,14 @@ export class CanonicalFlowManagerStore {
     if (!(executionClaim instanceof DraftReviewExecutionClaim)
       && !(executionClaim instanceof DraftWorkerExecutionClaim)) {
       throw new CurrentFlowStateInvariantError("Draft execution claim requires a typed claim");
+    }
+    if (requestSnapshot !== null) {
+      if (!(requestSnapshot instanceof ArtifactWorkerRequestSnapshot) || executionContract === null
+        || requestSnapshot.requestDigest !== executionClaim.requestDigest) {
+        throw new FlowExecutionContractRefusal("Draft execution request snapshot differs from its exact claim");
+      }
+      executionContract.assertMatches(requestSnapshot.executionContract);
+      artifactWrites = [...artifactWrites, artifactWorkerRequestSnapshotWrite(requestSnapshot)];
     }
     return this.#recordDraftExecutionLifecycle({
       publicationLimits,
@@ -6061,7 +6223,7 @@ export class CanonicalFlowManagerStore {
         (current) => this.#readPreparationStepSettlement(current, stepId, completed));
     }
     if (view !== null && (!(view instanceof CanonicalTransitionView) || view.state.specId !== resolved
-      || !["spec-gate-repair", "test-generate"].includes(stepId))) throw new CurrentFlowStateInvariantError("Acquired settlement view requires a supported Step");
+      || !["spec-gate-repair", "test-generate", "test-repair"].includes(stepId))) throw new CurrentFlowStateInvariantError("Acquired settlement view requires a supported Step");
     const state = view?.state ?? this.runtime.load(resolved);
     const materializedIdentity = hasImplementationStepContract(stepId) || hasAcceptanceStepContract(stepId) || hasFinalizationStepContract(stepId) ? null
       : TaskStepIdentity.fromStateNode(state, stepId);
@@ -7327,7 +7489,7 @@ export class CanonicalFlowManagerStore {
         const selectedPlan = currentPlan.artifact.plan;
         const resultAdmission = new RequirementTestResultAdmission({ manager: this, state, stepResult,
           settlement, decision: null, planRead: currentPlan, nextPlan: selectedPlan, artifactWrites,
-          selectedActivityId });
+          selectedActivityId, result });
         const savedResult = resultWithDraftStepResult(result ?? resultFor("done", nodeId), nodeId,
           stepResult, receipt);
         const next = this.runtime.recordDraftStepSettlement({

@@ -2502,6 +2502,22 @@ export const FLOW_COMMANDS = {
         ...FLOW_TARGET_GUARD_HELP_LINES,
       ].join("\n"),
     },
+    "recover-artifact-execution": {
+      helpKey: "flow.run.recover-artifact-execution",
+      requiresFlow: true,
+      runtimeLog: { stepMetadata: false },
+      explicitTargetResolution: true,
+      command: () => import("./lib/run-recover-artifact-execution.js"),
+      args: { flags: FLOW_TARGET_GUARD_FLAGS, options: FLOW_RUN_OPTIONS },
+      help: [
+        `Usage: sennel flow run recover-artifact-execution ${FLOW_TARGET_GUARD_USAGE}`,
+        "",
+        "Recover an artifact worker authorization using its exact saved inputs and episode budget.",
+        "Stopped executions receive at most one replacement; unused reservations retain their generation and cost.",
+        "Preserve the interrupted claim and diagnostics; this operation does not start a provider.",
+        ...FLOW_TARGET_GUARD_HELP_LINES,
+      ].join("\n"),
+    },
     "recover-draft-execution": {
       helpKey: "flow.run.recover-draft-execution",
       requiresFlow: true,

@@ -247,27 +247,47 @@ test("live CLI runtime refuses lifecycle pre and direct Review/Gate/claim across
   assert.equal(closed.executions.find((entry) => entry.executionId === runtimeBefore.slot).status, "closed");
 });
 
-test("double SIGKILL resume stops old provider and descendant before refusing an unsealed claim", async (t) => {
+test("concurrent guarded recovery stops a SIGKILL provider and descendant and saves one unused replacement", async (t) => {
   const scenario = new ProcessRuntimeFlowScenario(seed, { test: t, descendant: true });
   const dispatcher = await scenario.startProvider();
   const before = scenario.snapshot();
+  const binding = { runId: scenario.runId, specId: scenario.specId, stepId: "draft", attempt: before.state.attempt };
+  const sourceContract = scenario.manager().artifactWorkerExecutionState({ binding }).executionContract;
+  const budget = scenario.manager().readStoredPromptExecutionEpisode({ executionContract: sourceContract }).budget;
+  const requestBytes = fs.readFileSync(scenario.request);
   const runtimeBefore = executionSnapshot(scenario);
   const pids = JSON.parse(fs.readFileSync(scenario.started, "utf8"));
   assert.ok(pids.descendantPid > 0);
   dispatcher.kill();
   const crashed = await dispatcher.result;
   assert.equal(crashed.signal, "SIGKILL");
-  const firstResume = scenario.start();
-  const secondResume = scenario.start();
+  const firstResume = scenario.start(["run", "recover-artifact-execution"]);
+  const secondResume = scenario.start(["run", "recover-artifact-execution"]);
   const resumed = await Promise.all([firstResume.result, secondResume.result]);
-  for (const result of resumed) assert.notEqual(result.status, 0, result.stderr);
+  assert.ok(resumed.some((result) => result.status === 0), JSON.stringify(resumed));
+  for (const result of resumed) {
+    const envelope = JSON.parse(result.stdout);
+    if (result.status === 0) assert.equal(envelope.ok, true, result.stdout);
+    else assertBusy(envelope);
+  }
   assert.equal(Number(fs.readFileSync(scenario.count, "utf8")), 1,
-    "uncertain input must not launch a replacement provider");
-  assert.deepEqual(scenario.snapshot(), before, "unsealed recovery changed Attempt, budget or publication");
+    "recovery authorization must not start a replacement provider");
+  const manager = scenario.manager();
+  assert.deepEqual(manager.canonicalState(scenario.specId).toJSON(), {
+    ...before.state, confirmationOrder: before.state.confirmationOrder + 1,
+  }, "one recovery publication advances its confirmation order without changing the Attempt or steps");
+  const frontier = manager.artifactWorkerExecutionState({ binding });
+  assert.deepEqual(frontier.contracts.map((contract) => contract.generation), [0, 1]);
+  assert.equal(frontier.status, "unconsumed");
+  assert.equal(frontier.recovery.sourceContractId, sourceContract.id);
+  assert.equal(frontier.executionContract.episodeId, sourceContract.episodeId);
+  assert.equal(frontier.executionContract.budgetId, sourceContract.budgetId);
+  assert.equal(manager.artifactWorkerRecoveryReceipts({ specId: scenario.specId }).length, 1);
+  assert.deepEqual(manager.readStoredPromptExecutionEpisode({ executionContract: frontier.executionContract }).budget, budget);
   assertStoppedReadback(scenario, runtimeBefore);
   assert.throws(() => process.kill(pids.pid, 0), { code: "ESRCH" });
   assert.throws(() => process.kill(pids.descendantPid, 0), { code: "ESRCH" });
-  assert.ok(fs.existsSync(scenario.request), "the unsealed request must remain available for diagnosis");
+  assert.deepEqual(fs.readFileSync(scenario.request), requestBytes, "the original unsealed request must remain intact");
 });
 
 for (const migratedDescendant of [false, true]) {

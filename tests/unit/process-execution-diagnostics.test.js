@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { ProcessExecutionControlFailure, ProcessExecutionFailureDiagnostic } from "../../src/lib/process-execution-values.js";
+import { ProcessExecutionControlFailure, ProcessExecutionFailureDiagnostic, ProcessExecutionCommunicationAttempt,
+  ProcessExecutionCommunicationDiagnostic } from "../../src/lib/process-execution-values.js";
 
 const executionId = "11111111-1111-4111-8111-111111111111";
 const callId = "22222222-2222-4222-8222-222222222222";
@@ -101,4 +102,70 @@ test("unversioned and unsupported failures produce typed missing-evidence refusa
       assert.equal(error.retryable, false); return true;
     });
   }
+});
+
+function communication() {
+  return new ProcessExecutionCommunicationDiagnostic({ operation: "start", budgetMs: 14000, elapsedMs: 14000.25,
+    cutoff: "budget-exhausted", acceptance: "unknown", attempts: [
+      new ProcessExecutionCommunicationAttempt({ ordinal: 1, responseDeadlineMs: 2000, elapsedMs: 1.25, outcome: "disconnected" }),
+      new ProcessExecutionCommunicationAttempt({ ordinal: 2, responseDeadlineMs: 6000, elapsedMs: 4000, outcome: "timeout" }),
+      new ProcessExecutionCommunicationAttempt({ ordinal: 3, responseDeadlineMs: 14000, elapsedMs: 8000.25, outcome: "timeout" }),
+    ] });
+}
+
+test("communication failure survives context, later stop proof, storage and envelopes without replacing the first cause", () => {
+  const original = new ProcessExecutionControlFailure("transport-timeout", "Launcher response budget exhausted", { executionId, callId, communication: communication() });
+  const wrapped = new ProcessExecutionControlFailure("stop-unconfirmed", "Stopping failed", { cause: original,
+    executionId, callId: parentCallId }).withContext({ executionId, callId: parentCallId });
+  const confirmed = wrapped.withStopConfirmation("confirmed");
+  assert.equal(original.communication.stopConfirmation, "unknown");
+  assert.equal(confirmed.communication.stopConfirmation, "confirmed");
+  assert.deepEqual(confirmed.communication.attempts, original.communication.attempts);
+  assert.deepEqual(confirmed.primaryCause, original.primaryCause);
+  const stored = JSON.parse(JSON.stringify(confirmed));
+  const restored = ProcessExecutionControlFailure.fromStored(stored, { executionId, callId: parentCallId });
+  assert.deepEqual(restored.toJSON(), stored);
+  assert.deepEqual(ProcessExecutionControlFailure.fromEnvelope({ ok: false,
+    data: { processExecutionControlFailure: stored }, errors: [{ level: "fatal", code: confirmed.code }] }).toJSON(), stored);
+  assert.ok(Buffer.byteLength(JSON.stringify(stored)) < 16 * 1024);
+  assert.equal(/ownerToken|capability|environment|stack/.test(JSON.stringify(stored)), false);
+  for (const value of [original.communication, original.communication.attempts, ...original.communication.attempts]) assert.equal(Object.isFrozen(value), true);
+  assert.throws(() => confirmed.withStopConfirmation("unknown"), TypeError);
+});
+
+test("communication evidence refuses unknown fields, invalid times, unordered or excessive history and retired failure revisions", () => {
+  for (const mutate of [
+    (value) => { value.communication.schemaVersion = 2; },
+    (value) => { delete value.communication.schemaVersion; },
+    (value) => { value.communication.ownerToken = "secret"; },
+    (value) => { value.communication.attempts[0].stack = "trace"; },
+    (value) => { value.communication.operation = "arbitrary-command"; },
+    (value) => { value.communication.cutoff = "success"; },
+    (value) => { value.communication.acceptance = "success"; },
+    (value) => { value.communication.stopConfirmation = "assumed"; },
+    (value) => { value.communication.elapsedMs = null; },
+    (value) => { value.communication.budgetMs = Infinity; },
+    (value) => { value.communication.attempts[0].elapsedMs = -1; },
+    (value) => { value.communication.attempts[0].elapsedMs = 15000; },
+    (value) => { value.communication.attempts[1].responseDeadlineMs = 1; },
+    (value) => { value.communication.attempts[2].responseDeadlineMs = 15000; },
+    (value) => { value.communication.attempts[0].ordinal = 2; },
+    (value) => { value.communication.attempts[0].outcome = "succeeded"; },
+    (value) => { value.communication.attempts.push(value.communication.attempts[0]); },
+  ]) {
+    const stored = new ProcessExecutionControlFailure("transport-timeout", "Budget exhausted", { executionId, callId, communication: communication() }).toJSON();
+    mutate(stored);
+    assert.throws(() => ProcessExecutionControlFailure.fromStored(stored), TypeError, mutate.toString());
+  }
+  const retired = failure().toJSON(); retired.schemaVersion = 1;
+  assert.throws(() => ProcessExecutionControlFailure.fromStored(retired), { code: "PROCESS_EXECUTION_FAILURE_EVIDENCE_UNSUPPORTED" });
+});
+
+test("pre-attempt interruption records measured elapsed time with no fabricated attempt", () => {
+  const value = new ProcessExecutionCommunicationDiagnostic({ operation: "stop", budgetMs: 100, elapsedMs: 0.75,
+    cutoff: "aborted", attempts: [] });
+  assert.equal(value.elapsedMs, 0.75);
+  assert.equal(value.acceptance, "unknown");
+  assert.equal(value.stopConfirmation, "unknown");
+  assert.deepEqual(value.attempts, []);
 });

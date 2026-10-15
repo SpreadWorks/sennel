@@ -9,6 +9,21 @@ Do not put checker callbacks, allowlists, or individual class names in a scope.
 Use production registration and declared dependencies as the source of truth so
 tests do not duplicate production wiring.
 
+Auxiliary execution operations use `ExecutionOperationScope` on their existing
+producer nodes. Derive their registrations from a named Result family in the sole
+Result registry; add no canonical nodes. A shared operation Step may serve several
+producer IDs only when the full collection, one factory, lookup, and execution
+adapter agree. Inspect operation Steps under `steps/execution/` with the same
+A01-A09 and A12 rules. A10-A11 verify the closed operation adapter rather than the
+producer's primary execution lookup. Every operation registration also needs its
+actual `PreparedStep` inspected by `ServiceBoundaryCoverage` in integration tests.
+When an outer coordinator acquires the composition lazily, declare its named
+`ExecutionOperationLoader`. Inspect the actual method, require its sole awaited
+named import before authority acquisition, and confine the adapter to one
+synchronous authority callback. Reject eager imports, aliases, unregistered
+consumers and imports moved inside exclusion; do not exempt the composition or
+caller from the reverse index.
+
 Trace indirect imports and re-exports through the dependency graph. A target
 parse failure, unresolved dependency, or unreadable reverse-reference index
 means the check is incomplete and must fail. Do not make valid violations pass

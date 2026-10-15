@@ -317,6 +317,13 @@ export class DraftWorkerContextSnapshot {
     return digest({ ...snapshot, binding: contentBinding });
   }
 
+  /** Recovery can replace dispatcher provenance while retaining the guarded target and input content. */
+  recoveryContentDigest() {
+    const { binding, ...snapshot } = this.unsignedJSON();
+    const { dispatchInvocationId, actionDigest, ...contentBinding } = binding;
+    return digest({ ...snapshot, binding: contentBinding });
+  }
+
   unsignedJSON() {
     return {
       version: this.version,

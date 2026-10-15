@@ -1,10 +1,11 @@
 import { CURRENT_FLOW_SCHEMA_REVISION } from "../../lib/flow-schema-revision.js";
 import crypto from "node:crypto";
 
-import { CanonicalTestArtifactStore } from "./canonical-test-artifacts.js";
+import { CanonicalTestAttemptArtifact } from "./canonical-test-artifacts.js";
 import { RequirementTestCandidateBundle } from "./requirement-test-artifacts.js";
 import { RequirementTestSourceAttempt } from "./requirement-test-lifecycle.js";
 import { RequirementTestArtifactStore } from "./requirement-test-store.js";
+import { RequirementTestRepairProgressIdentity } from "../engine/step-result.js";
 import {
   TestReviewRepairError, TestReviewRepairProgressHandoff, TestReviewRepairProgressEntry,
   requiredString, requiredDigest, exactObject, SHA256, MAX_TEXT_LENGTH,
@@ -367,7 +368,7 @@ function assertTestReviewRepairProgressLineage(state, sourceCandidate, coordinat
 }
 
 /** A structurally complete persisted repair episode, before matching it to current evidence. */
-class TestReviewRepairProgressEpisode {
+export class TestReviewRepairProgressEpisode {
   constructor(value = {}) {
     exactObject(value, ["version", "sourceArtifactDigest", "sourceEvidenceId", "sourceCandidate", "coordinatorAttempt", "entries", "stagedSources"], "test review repair progress artifact");
     if (value.version !== 3) {
@@ -402,6 +403,11 @@ class TestReviewRepairProgressEpisode {
   }
 
   static fromJSON(value) { return new TestReviewRepairProgressEpisode(value); }
+
+  toJSON() { return { version: this.version, sourceArtifactDigest: this.sourceArtifactDigest,
+    sourceEvidenceId: this.sourceEvidenceId, sourceCandidate: this.sourceCandidate.toJSON(),
+    coordinatorAttempt: this.coordinatorAttempt.toJSON(), entries: this.entries.map((entry) => entry.toJSON()),
+    stagedSources: this.stagedSources.map((source) => source.toJSON()) }; }
 
   assertFlow(state) {
     assertTestReviewRepairProgressLineage(state, this.sourceCandidate, this.coordinatorAttempt);
@@ -560,16 +566,11 @@ export function testReviewRepairProgressReceiptForSelectedContract({
     && candidate.fingerprint === finding.fingerprint
     && candidate.status === "done"
   )));
-  const receipt = entries[0]?.handoff ?? null;
+  const receipt = RequirementTestRepairProgressIdentity.fromProgress(episode).completedRequestGroup({ requestDigest });
   if (receipt === null
     || JSON.stringify(receipt.findingIds) !== JSON.stringify(selected.batch.findingIds)
     || receipt.batchId !== selected.batch.batchId
-    || receipt.requestDigest !== requestDigest
-    || JSON.stringify(receipt.sourceCandidate.toJSON()) !== JSON.stringify(selected.sourceCandidate.toJSON())) return null;
-  const changedPaths = receipt.changedPaths.map((entry) => entry.path);
-  if (new Set(changedPaths).size !== changedPaths.length
-    || JSON.stringify(changedPaths) !== JSON.stringify([...changedPaths].sort((left, right) => left.localeCompare(right)))
-    || changedPaths.some((changedPath) => !selected.batch.allowedTestPaths.includes(changedPath))) return null;
+    || receipt.changedPaths.some((entry) => !selected.batch.allowedTestPaths.includes(entry.path))) return null;
   const serializedReceipt = JSON.stringify(receipt.toJSON());
   if (entries.some((entry) => entry?.handoff == null || JSON.stringify(entry.handoff.toJSON()) !== serializedReceipt)) return null;
   return receipt.handoffDigest;
@@ -741,8 +742,7 @@ function repairFromCatalog({ flowManager, state, consumerNodeId, reviewAttemptSe
   let sourceArtifact = "requirement-test-review.json";
   let reviewMatches = false;
   if (reviewSource !== null) {
-    const store = new CanonicalTestArtifactStore({ flowManager, state });
-    current = store.readCurrentAttempt({ logicalKey: "test.requirement.review", consumerNodeId });
+    current = new CanonicalTestAttemptArtifact({ logicalKey: "test.requirement.review", resolved: reviewSource });
     if (reviewAttemptSequence !== null && current.attempt < reviewAttemptSequence) return null;
     if (reviewAttemptSequence !== null && current.attempt > reviewAttemptSequence) {
       throw new TestReviewRepairError(

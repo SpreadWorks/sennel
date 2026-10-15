@@ -536,8 +536,15 @@ export function readTypeInvariants(declaration) {
   const body = declaration?.bodyTokens() ?? [];
   const result = [];
   const parameters = readParameters(declaration?.tokens ?? []);
-  if (parameters.some((parameter) => parameter.length !== 1 || parameter[0].kind !== "identifier")) return result;
-  const names = new Set(parameters.map((parameter) => parameter[0].value));
+  const bindings = parameters.map((parameter) => {
+    if (parameter.length === 1 && parameter[0].kind === "identifier") return [parameter[0].value];
+    if (parameter[0]?.value !== "{" || parameter.at(-1)?.value !== "}") return null;
+    const members = readCommaSeparated(parameter, 1, parameter.length - 1);
+    return members.every((member) => member.length === 1 && member[0].kind === "identifier")
+      ? members.map((member) => member[0].value) : null;
+  });
+  if (bindings.some((binding) => binding === null)) return result;
+  const names = new Set(bindings.flat());
   let index = 0;
   while (index < body.length) {
     if (body[index].kind === "punctuation" && body[index].value === ";") { index++; continue; }

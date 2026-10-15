@@ -9952,52 +9952,59 @@ export class CurrentFlowVersionStore {
     });
   }
   /** Read a persisted current review, or null before spec-review publishes it. */
-  readCurrentSpecReview({ approval = false, settleResult = null } = {}) {
+  readCurrentSpecReview({ approval = false, settleResult = null, view = null } = {}) {
+    const read = (catalog, suppliedSnapshot = null) => {
+      const authority = this.#assertSpecRevisionAuthority(catalog);
+      if (approval) {
+        const snapshot = suppliedSnapshot ?? this.#store().loadSnapshot();
+        const state = this.#assertPersistedIdentity(snapshot.state);
+        const node = state.findNode("approval");
+        if (node?.status === "done") {
+          const result = node.result?.stepResult;
+          const receipt = node.result?.draftSettlementReceipt;
+          if (!(result instanceof ApprovalConfirmedWithTestsResult || result instanceof ApprovalConfirmedWithoutTestsResult)
+            || node.result.outcome !== "passed" || !(receipt instanceof RequirementTestSettlementReceipt)
+            || node.attemptSequence !== result.evidence.attempt.sequence || typeof settleResult !== "function") {
+            throw new CurrentFlowStateInvariantError("completed Approval review requires its genuine confirmed Result and receipt");
+          }
+          const binding = { runId: state.runId, specId: state.specId, stepId: "approval", attempt: result.evidence.attempt };
+          // The outer Store supplies the existing pure Definition selector;
+          // this foundation reader only authenticates its saved selection.
+          receipt.assertMatches({ binding, result, settlement: settleResult("approval", result) });
+          const owner = snapshot.activities.findLast((activity) => activity.nodeId === "approval"
+            && activity.attemptId === binding.attempt.id && activity.sequence === binding.attempt.sequence);
+          if (owner?.transition.operation !== REQUIREMENT_TEST_INITIALIZATION_OPERATION
+            || !isDeepStrictEqual(owner.result?.toJSON(), node.result.toJSON())) {
+            throw new CurrentFlowStateInvariantError("completed Approval review lost its exact confirmed producer Activity");
+          }
+          const read = this.#readSpecReviewRevision(catalog, result.evidence.specRevision.revision.value);
+          if (read === null || !read.review.identity.equals(result.evidence.specRevision)) {
+            throw new CurrentFlowStateInvariantError("completed Approval review does not match its immutable Spec basis");
+          }
+          const publication = snapshot.activities.find((activity) => activity.id === read.descriptor.activityId);
+          if (!(publication?.reviewPublication instanceof ActivityReviewPublication)
+            || REVIEW_PUBLICATION_STAGE_BY_NODE.get(publication.nodeId) !== publication.reviewPublication.stage) {
+            throw new CurrentFlowStateInvariantError("completed Approval review has no canonical review publication owner");
+          }
+          publication.reviewPublication.assertReview(read.review, {
+            specId: state.specId, revision: read.revision, bytes: read.bytes,
+          });
+          return Object.freeze({ revision: read.revision, descriptor: read.descriptor, bytes: read.bytes, review: read.review });
+        }
+      }
+      const read = this.#readSpecReviewRevision(catalog, authority.revision);
+      return read === null ? null : Object.freeze({ revision: read.revision,
+        descriptor: read.descriptor, bytes: read.bytes, review: read.review });
+    };
+    if (view !== null) {
+      if (!(view instanceof CanonicalTransitionView) || view.state.specId !== this.location.specId.toString()) {
+        throw new CurrentFlowStateInvariantError("Current Spec review requires its acquired canonical view");
+      }
+      return read(view.catalog, view);
+    }
     return this.catalogStore.read({
       relativePaths: [resolvedArtifact("flow.state").relativePath],
-      read: (catalog) => {
-        const authority = this.#assertSpecRevisionAuthority(catalog);
-        if (approval) {
-          const snapshot = this.#store().loadSnapshot();
-          const state = this.#assertPersistedIdentity(snapshot.state);
-          const node = state.findNode("approval");
-          if (node?.status === "done") {
-            const result = node.result?.stepResult;
-            const receipt = node.result?.draftSettlementReceipt;
-            if (!(result instanceof ApprovalConfirmedWithTestsResult || result instanceof ApprovalConfirmedWithoutTestsResult)
-              || node.result.outcome !== "passed" || !(receipt instanceof RequirementTestSettlementReceipt)
-              || node.attemptSequence !== result.evidence.attempt.sequence || typeof settleResult !== "function") {
-              throw new CurrentFlowStateInvariantError("completed Approval review requires its genuine confirmed Result and receipt");
-            }
-            const binding = { runId: state.runId, specId: state.specId, stepId: "approval", attempt: result.evidence.attempt };
-            // The outer Store supplies the existing pure Definition selector;
-            // this foundation reader only authenticates its saved selection.
-            receipt.assertMatches({ binding, result, settlement: settleResult("approval", result) });
-            const owner = snapshot.activities.findLast((activity) => activity.nodeId === "approval"
-              && activity.attemptId === binding.attempt.id && activity.sequence === binding.attempt.sequence);
-            if (owner?.transition.operation !== REQUIREMENT_TEST_INITIALIZATION_OPERATION
-              || !isDeepStrictEqual(owner.result?.toJSON(), node.result.toJSON())) {
-              throw new CurrentFlowStateInvariantError("completed Approval review lost its exact confirmed producer Activity");
-            }
-            const read = this.#readSpecReviewRevision(catalog, result.evidence.specRevision.revision.value);
-            if (read === null || !read.review.identity.equals(result.evidence.specRevision)) {
-              throw new CurrentFlowStateInvariantError("completed Approval review does not match its immutable Spec basis");
-            }
-            const publication = snapshot.activities.find((activity) => activity.id === read.descriptor.activityId);
-            if (!(publication?.reviewPublication instanceof ActivityReviewPublication)
-              || REVIEW_PUBLICATION_STAGE_BY_NODE.get(publication.nodeId) !== publication.reviewPublication.stage) {
-              throw new CurrentFlowStateInvariantError("completed Approval review has no canonical review publication owner");
-            }
-            publication.reviewPublication.assertReview(read.review, {
-              specId: state.specId, revision: read.revision, bytes: read.bytes,
-            });
-            return Object.freeze({ revision: read.revision, descriptor: read.descriptor, bytes: read.bytes, review: read.review });
-          }
-        }
-        const read = this.#readSpecReviewRevision(catalog, authority.revision);
-        return read === null ? null : Object.freeze({ revision: read.revision,
-          descriptor: read.descriptor, bytes: read.bytes, review: read.review });
-      },
+      read: (catalog) => read(catalog),
     });
   }
   /** Read the newest validated review snapshot, retaining its original revision. */

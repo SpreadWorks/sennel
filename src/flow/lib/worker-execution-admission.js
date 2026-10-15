@@ -3,19 +3,21 @@ export { workerStepExecutionContract } from "./worker-step-execution-contract.js
 import { TaskStepIdentity } from "./task-step-identity.js";
 import { deriveNextAction, resolveDraftWorkerCorrection, resolveDraftWorkerRecovery,
   DraftWorkerRecoveryRefusal, resolveDraftWorkerExecutionContinuation, DraftWorkerExecutionStop, SpecGateRepairExecutionStop,
-  SpecGateRepairExecutionFormatUnavailable } from "../definition.js";
+  SpecGateRepairExecutionFormatUnavailable, ArtifactWorkerExecutionStop, ArtifactWorkerRecoveryRequired,
+  ArtifactWorkerRecoveryAuthorized, ArtifactWorkerSealedReplay,
+  resolveArtifactWorkerExecutionContinuation } from "../definition.js";
 import { selectSpecGateRepairExecution } from "./spec-gate-repair-execution.js";
 import { DraftLifecycle } from "./draft-lifecycle.js";
 import { isConditionalDraftWorkerStep } from "./draft-conditional-worker.js";
 import { NextActionPlanError } from "./next-action-plan-error.js";
 import { NextActionDirectiveResolver, ExecuteStepDirective, ExecuteCommandDirective,
-  BlockedDirective, AwaitDraftQuestionDirective } from "./next-action-directive.js";
+  BlockedDirective, BlockedActionDiagnostic, AwaitDraftQuestionDirective } from "./next-action-directive.js";
 import { guardedExecutionCommand } from "./guarded-command.js";
 import { WorkerArtifactHandoffError } from "./worker-artifact-handoff-error.js";
-import { WorkerArtifactHandoffCoordinator } from "./worker-artifact-handoff.js";
+import { WorkerArtifactHandoffCoordinator, workerArtifactHandoffPolicy } from "./worker-artifact-handoff.js";
 
 class WorkerExecutionAdmissionSelection {
-  constructor({ state, flowState, descriptor, action, draftRefineStepState, conditionalDisposition, repair, correction, recovery, continuation }) {
+  constructor({ state, flowState, descriptor, action, draftRefineStepState, conditionalDisposition, repair, correction, recovery, continuation, artifactContinuation }) {
     this.state = state;
     this.flowState = flowState;
     this.descriptor = descriptor;
@@ -26,12 +28,14 @@ class WorkerExecutionAdmissionSelection {
     this.correction = correction;
     this.recovery = recovery;
     this.continuation = continuation;
+    this.artifactContinuation = artifactContinuation;
     Object.freeze(this);
   }
 }
 
 /** Canonical reads and Definition decisions shared by display and worker launch. */
-export function selectWorkerExecutionAdmission({ ctx, stepId }) {
+export function selectWorkerExecutionAdmission({ ctx, stepId,
+  handoffCoordinator = new WorkerArtifactHandoffCoordinator() }) {
   const state = ctx.flowManager.canonicalState(ctx.specId ?? ctx.flowState.specId);
   const flowState = ctx.flowManager.loadReadOnly(state.specId);
   const descriptor = state.nextAction();
@@ -61,16 +65,22 @@ export function selectWorkerExecutionAdmission({ ctx, stepId }) {
   const repair = stepId === "spec-gate-repair" && state.attempt?.nodeId === stepId
     && ["start", "recover", "resume", "retry"].includes(descriptor.operation)
     ? selectSpecGateRepairExecution({ ctx, state }) : null;
+  const policy = workerArtifactHandoffPolicy(stepId);
+  const artifactContinuation = policy?.supportsInterruptedRecovery
+    && state.attempt?.nodeId === stepId && state.attempt.failure === null
+    && descriptor.operation === "resume"
+    ? selectArtifactWorkerExecutionContinuation({ ctx, state, handoffCoordinator }) : null;
   const continuation = isConditionalDraftWorkerStep(stepId) && state.attempt?.nodeId === stepId
     && state.attempt.failure === null && descriptor.operation === "resume" && recovery === null
     && (stepId === "draft-refine"
       ? draftRefineStepState.executionIdentity() !== null
       : conditionalDisposition === null || conditionalDisposition.operation === "execute-worker")
-    ? selectDraftWorkerExecutionContinuation({ ctx, state,
+    ? selectDraftWorkerExecutionContinuation({ ctx, state, artifactContinuation, handoffCoordinator,
       previousExecutionContract: ctx.previousExecutionContract ?? null }) : null;
   const derived = deriveNextAction({ scope: taskIdentity === null ? "flow" : "task", stepId, context: flowState });
   return new WorkerExecutionAdmissionSelection({ state, flowState, descriptor,
-    action: derived.action, draftRefineStepState, conditionalDisposition, repair, correction, recovery, continuation });
+    action: derived.action, draftRefineStepState, conditionalDisposition, repair, correction, recovery,
+    continuation, artifactContinuation });
 }
 
 export function projectWorkerExecutionAdmission(selection, { binding = null,
@@ -89,7 +99,25 @@ export function projectWorkerExecutionAdmission(selection, { binding = null,
     instruction: `Verify inputs and recover the retained legacy ${recovery.stepId} checkpoint before resuming dispatch.`,
     reason: "Definition selected the retained unpublished worker claim and its checkpoint on this Attempt.",
   });
-  if (selection.continuation instanceof DraftWorkerExecutionStop) {
+  if (selection.artifactContinuation instanceof ArtifactWorkerExecutionStop) {
+    const code = selection.continuation instanceof DraftWorkerExecutionStop
+      ? selection.continuation.code : selection.artifactContinuation.code;
+    return new BlockedDirective({ code,
+      reason: selection.artifactContinuation.reason,
+      diagnostic: new BlockedActionDiagnostic({ ...selection.artifactContinuation, code }),
+      resumeInstruction: "Preserve the saved execution evidence and resolve the reported missing conditions before resuming." });
+  }
+  if (selection.artifactContinuation instanceof ArtifactWorkerRecoveryRequired) {
+    return new ExecuteCommandDirective({
+      actionId: "RECOVER_ARTIFACT_EXECUTION",
+      command: guardedExecutionCommand(new FlowExecutionCommand({ group: "run", subcommand: "recover-artifact-execution" }), state, binding),
+      instruction: "Recover the artifact worker's execution authorization from its saved execution and non-execution evidence.",
+      reason: "Definition selected explicit recovery within the existing Attempt and execution budget.",
+    });
+  }
+  if (selection.continuation instanceof DraftWorkerExecutionStop
+    && !(selection.artifactContinuation instanceof ArtifactWorkerRecoveryAuthorized)
+    && !(selection.artifactContinuation instanceof ArtifactWorkerSealedReplay)) {
     return new BlockedDirective({ code: selection.continuation.code,
       reason: selection.continuation.reason,
       resumeInstruction: "Restore the exact saved response for this claim before resuming. Do not start another worker or reset its budget." });
@@ -118,17 +146,30 @@ export function assertWorkerExecutionAdmission(selection) {
     || selection.descriptor.operation !== "resume") {
     throw new WorkerArtifactHandoffError("recovery-required", directive.code ?? "FLOW_WORKER_EXECUTION_NOT_ADMITTED",
       directive.reason ?? "worker requires the current Definition-selected active Attempt",
-      { retryable: false, recoveryPossible: false, data: { failureKind: "step-admission" } });
+      { retryable: false, recoveryPossible: false, data: { failureKind: "step-admission",
+        ...(directive instanceof BlockedDirective && directive.diagnostic !== null
+          ? { diagnostic: directive.diagnostic.toJSON() } : {}) } });
   }
   return selection;
 }
 
 /** The same Definition selection is used before first start and after restart. */
 export function selectDraftWorkerExecutionContinuation({ ctx, state, request = null, newlyClaimed = false,
-  previousExecutionContract = null,
+  previousExecutionContract = null, artifactContinuation = null,
   handoffCoordinator = new WorkerArtifactHandoffCoordinator() }) {
-  return resolveDraftWorkerExecutionContinuation(handoffCoordinator.readDraftWorkerExecutionContinuation({
+  const facts = handoffCoordinator.readDraftWorkerExecutionContinuation({
     ctx, state, request, newlyClaimed, previousExecutionContract,
+  });
+  artifactContinuation ??= selectArtifactWorkerExecutionContinuation({ ctx, state, request, handoffCoordinator });
+  return resolveDraftWorkerExecutionContinuation(facts.withArtifactContinuation(
+    artifactContinuation instanceof ArtifactWorkerRecoveryAuthorized ? artifactContinuation : null,
+  ));
+}
+
+export function selectArtifactWorkerExecutionContinuation({ ctx, state, request = null,
+  handoffCoordinator = new WorkerArtifactHandoffCoordinator() }) {
+  return resolveArtifactWorkerExecutionContinuation(handoffCoordinator.readArtifactWorkerExecutionContinuation({
+    ctx, state, request,
   }));
 }
 
@@ -144,7 +185,6 @@ export function assertDraftWorkerExecutionContinuation(continuation) {
 
 export function assertCurrentWorkerExecutionSelection(selection, current) {
   assertWorkerExecutionAdmission(selection);
-  assertWorkerExecutionAdmission(current);
   if (selection.state.runId !== current.state.runId
     || selection.state.specId !== current.state.specId
     || selection.state.attempt.id !== current.state.attempt.id
@@ -155,11 +195,19 @@ export function assertCurrentWorkerExecutionSelection(selection, current) {
       && !selection.draftRefineStepState?.equals(current.draftRefineStepState))
     || selection.continuation?.receiptId !== current.continuation?.receiptId
     || selection.continuation?.responseDigest !== current.continuation?.responseDigest
-    || selection.continuation?.constructor !== current.continuation?.constructor) {
+    || selection.continuation?.constructor !== current.continuation?.constructor
+    || selection.artifactContinuation?.contractId !== current.artifactContinuation?.contractId
+    || selection.artifactContinuation?.recoveryId !== current.artifactContinuation?.recoveryId
+    || selection.artifactContinuation?.responseDigest !== current.artifactContinuation?.responseDigest
+    || selection.artifactContinuation?.ownerGeneration !== current.artifactContinuation?.ownerGeneration
+    || selection.artifactContinuation?.reservationContinuation?.id !== current.artifactContinuation?.reservationContinuation?.id
+    || selection.artifactContinuation?.reservationContinuation?.pending !== current.artifactContinuation?.reservationContinuation?.pending
+    || selection.artifactContinuation?.constructor !== current.artifactContinuation?.constructor) {
     throw new WorkerArtifactHandoffError("recovery-required", "FLOW_WORKER_EXECUTION_SELECTION_CHANGED",
       "worker execution selection changed before use", { retryable: false, recoveryPossible: false,
         data: { failureKind: "step-admission" } });
   }
+  assertWorkerExecutionAdmission(current);
   return current;
 }
 

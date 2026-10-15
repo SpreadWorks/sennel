@@ -15,6 +15,21 @@ function inspect(files) {
   return new StructureChecker(scope, new MemorySourceRepository(files)).check();
 }
 
+test("private worker execution consumes the freshly verified registered selection", () => {
+  const file = "src/flow/lib/run-dispatch.js";
+  const source = original.get(file);
+  const forwarded = "return this.#executeSelectedWorker(ctx, invocation, retryFeedback, agentOverride, current);";
+  assert.equal(source.includes(forwarded), true);
+  const files = new Map(original);
+  files.set(file, source.replace(forwarded,
+    "return this.#executeSelectedWorker(ctx, invocation, retryFeedback, agentOverride);"));
+  const diagnostic = inspect(files).diagnostics.find((entry) => entry.rule === "A11" && entry.file === file
+    && entry.message === "private worker execution must follow current registered selection verification");
+  assert.ok(diagnostic);
+  assert.equal(diagnostic.line > 0 && diagnostic.column > 0, true);
+  assert.equal(inspect(original).ok, true);
+});
+
 test("process admission follows the exact Gate and Review callback and preserves registered route checks", () => {
   const routeFailures = (files, file) => inspect(files).diagnostics.filter((entry) => entry.rule === "A10"
     && entry.file === file && entry.message.includes("command can bypass registered selection and execution"));

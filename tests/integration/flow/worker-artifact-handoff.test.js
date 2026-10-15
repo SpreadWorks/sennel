@@ -93,6 +93,7 @@ import {
   stepResultDigest,
 } from "../../../src/flow/engine/step-result.js";
 import GetNextActionCommand from "../../../src/flow/lib/get-next-action.js";
+import { withScenarioProviderAdmission } from "../../support/infrastructure/flow-dispatch-scenario.js";
 import { getStepInstructions } from "../../../src/flow/lib/get-step-instructions.js";
 import { PRODUCT } from "../../../src/lib/product.js";
 import { canonicalTaskReviewFileMap } from "../../../src/flow/commands/review.js";
@@ -196,6 +197,21 @@ const WORKER_ARTIFACT_HANDOFF_SCHEMA_PATH = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   "../../../src/flow/schemas/next-action/worker-artifact-handoff.schema.json",
 );
+function nextActionRunner(command, context) {
+  return { run(_container, input) { return command.execute({ ...context(), ...input }); } };
+}
+
+async function assertBlockedArtifactAuthority(value, command) {
+  const before = value.flowManager.readCanonicalTransitionSnapshot(value.specId).toJSON();
+  const next = await command.execute({ ...value.ctx, flowState: value.flowManager.loadReadOnly(value.specId) });
+  // An unreadable retained authority is a refusal, while the Attempt stays active.
+  assert.equal(next.directive.kind, "blocked");
+  assert.deepEqual(next.directive.diagnostic.missingConditions, ["authenticated-execution-evidence"]);
+  assert.equal(next.directive.diagnostic.retryable, false);
+  assert.equal(next.directive.diagnostic.resolutionImplemented, false);
+  assert.deepEqual(value.flowManager.readCanonicalTransitionSnapshot(value.specId).toJSON(), before);
+}
+
 function fixture(stepId = "draft", {
   worktree = true,
   runId = "run-worker-handoff",
@@ -5182,7 +5198,7 @@ describe("worker artifact handoff", () => {
       let calls = 0;
       const dispatcher = new RunDispatchCommand({
         nextAction,
-        agent: {
+        agent: withScenarioProviderAdmission({
           async call(_prompt, options) {
             calls += 1;
             const requestPath = options.executionEnvironment.SENNEL_FLOW_HANDOFF_REQUEST;
@@ -5206,7 +5222,7 @@ describe("worker artifact handoff", () => {
             }, options.deferredMetric);
             return "worker report is not the completion signal";
           },
-        },
+        }),
         repositoryFingerprint: () => "stable-fixture",
         leaseFactory: () => ({ acquire() {}, release() {} }),
       });
@@ -5247,7 +5263,7 @@ describe("worker artifact handoff", () => {
               : draftWorkerAction("draft-refine");
           },
         },
-        agent: {
+        agent: withScenarioProviderAdmission({
           async call(_prompt, options) {
             const requestPath = options.executionEnvironment.SENNEL_FLOW_HANDOFF_REQUEST;
             const request = JSON.parse(fs.readFileSync(requestPath, "utf8"));
@@ -5268,7 +5284,7 @@ describe("worker artifact handoff", () => {
               idempotencyKey: "draft-refine-concurrent-issue-log",
             });
           },
-        },
+        }),
         repositoryFingerprint: () => "stable-fixture",
         leaseFactory: () => ({ acquire() {}, release() {} }),
       });
@@ -5638,7 +5654,7 @@ describe("worker artifact handoff", () => {
       const attempt = await dispatcher.runWorkerAttempt({
         ...value.ctx,
         flowState: value.flowManager.load(),
-      }, invocation, null, new SealingAgent());
+      }, invocation, null, withScenarioProviderAdmission(new SealingAgent()));
       assert.equal(attempt.error, null);
       assert.equal(attempt.stepResult.kind, "draft-refine-completed");
       const terminal = value.flowManager.canonicalState(value.specId)
@@ -5708,7 +5724,7 @@ describe("worker artifact handoff", () => {
       }).runWorkerAttempt({
         ...value.ctx,
         flowState: value.flowManager.load(),
-      }, invocation, null, new CandidateAgent());
+      }, invocation, null, withScenarioProviderAdmission(new CandidateAgent()));
 
       assert.equal(attempt.error, null);
       assert.equal(attempt.stepResult.kind, "draft-refine-worker-required");
@@ -5805,7 +5821,7 @@ describe("worker artifact handoff", () => {
         deferPreparation: true,
       });
       await assert.rejects(
-        () => dispatcher.runWorkerAttempt(ctx, invocation, null, new SealingAgent()),
+        () => dispatcher.runWorkerAttempt(ctx, invocation, null, withScenarioProviderAdmission(new SealingAgent())),
         /simulated interruption after publication/,
       );
       const binding = {
@@ -5850,7 +5866,7 @@ describe("worker artifact handoff", () => {
         { ...value.ctx, flowState: value.flowManager.load() },
         invocation,
         null,
-        new SealingAgent(),
+        withScenarioProviderAdmission(new SealingAgent()),
       );
       assert.equal(recovered.error, null);
       assert.equal(recovered.stepResult.kind, "draft-refine-completed");
@@ -6470,7 +6486,7 @@ describe("worker artifact handoff", () => {
       };
       const dispatcher = new RunDispatchCommand({
         nextAction: { async run() { return structuredClone(action); } },
-        agent: { async call() { calls += 1; return "premature report"; } },
+        agent: withScenarioProviderAdmission({ async call() { calls += 1; return "premature report"; } }),
         repositoryFingerprint: () => "stable-fixture",
         leaseFactory: () => ({ acquire() {}, release() {} }),
       });
@@ -6534,7 +6550,7 @@ describe("worker artifact handoff", () => {
           return "sealed";
         }
       }
-      const agent = new SealingAgent();
+      const agent = withScenarioProviderAdmission(new SealingAgent());
       const dispatcher = new RunDispatchCommand({ handoffCoordinator: value.coordinator });
       const attempt = await dispatcher.runWorkerAttempt({
         ...value.ctx,
@@ -6571,7 +6587,7 @@ describe("worker artifact handoff", () => {
                 : structuredClone(action);
             },
           },
-          agent: {
+          agent: withScenarioProviderAdmission({
             async call(prompt, options) {
               calls += 1;
               const requestPath = options.executionEnvironment.SENNEL_FLOW_HANDOFF_REQUEST;
@@ -6606,7 +6622,7 @@ describe("worker artifact handoff", () => {
                 });
               }
             },
-          },
+          }),
           repositoryFingerprint: () => "stable-fixture",
           leaseFactory: () => ({ acquire() {}, release() {} }),
         });
@@ -6658,7 +6674,7 @@ describe("worker artifact handoff", () => {
               : structuredClone(action);
           },
         },
-        agent: {
+        agent: withScenarioProviderAdmission({
           async call(prompt, options) {
             calls += 1;
             assert.deepEqual(options.jsonSchema, action.output_schema);
@@ -6692,7 +6708,7 @@ describe("worker artifact handoff", () => {
               invocationId: options.executionEnvironment.SENNEL_FLOW_DISPATCH_INVOCATION_ID,
             });
           },
-        },
+        }),
         repositoryFingerprint: () => "stable-fixture",
         leaseFactory: () => ({ acquire() {}, release() {} }),
       });
@@ -6736,7 +6752,7 @@ describe("worker artifact handoff", () => {
               : structuredClone(action);
           },
         },
-        agent: {
+        agent: withScenarioProviderAdmission({
           async call(prompt, options) {
             calls += 1;
             assert.deepEqual(options.jsonSchema, action.output_schema);
@@ -6766,7 +6782,7 @@ describe("worker artifact handoff", () => {
             fs.writeFileSync(payloadPath, json(validSpecRepairPayload(request)));
             sealWorkerArtifactHandoff({ requestPath, invocationId: options.executionEnvironment.SENNEL_FLOW_DISPATCH_INVOCATION_ID });
           },
-        },
+        }),
         repositoryFingerprint: () => "stable-fixture",
         leaseFactory: () => ({ acquire() {}, release() {} }),
       });
@@ -6830,7 +6846,7 @@ describe("worker artifact handoff", () => {
         let calls = 0;
         const dispatcher = new RunDispatchCommand({
           nextAction: { async run() { return structuredClone(specRepairWorkerAction()); } },
-          agent: {
+          agent: withScenarioProviderAdmission({
             async call(_prompt, options) {
               calls += 1;
               const requestPath = options.executionEnvironment.SENNEL_FLOW_HANDOFF_REQUEST;
@@ -6847,7 +6863,7 @@ describe("worker artifact handoff", () => {
                   && error.retryable === (scenario.expectedCalls === 2),
               );
             },
-          },
+          }),
           repositoryFingerprint: () => "stable-fixture",
           leaseFactory: () => ({ acquire() {}, release() {} }),
         });
@@ -6931,7 +6947,7 @@ describe("worker artifact handoff", () => {
         let calls = 0;
         const dispatcher = new RunDispatchCommand({
           nextAction: { async run() { return structuredClone(specTriageWorkerAction()); } },
-          agent: {
+          agent: withScenarioProviderAdmission({
             async call(_prompt, options) {
               calls += 1;
               const requestPath = options.executionEnvironment.SENNEL_FLOW_HANDOFF_REQUEST;
@@ -6948,7 +6964,7 @@ describe("worker artifact handoff", () => {
                   && error.retryable === (scenario.expectedCalls === 2),
               );
             },
-          },
+          }),
           repositoryFingerprint: () => "stable-fixture",
           leaseFactory: () => ({ acquire() {}, release() {} }),
         });
@@ -7019,12 +7035,12 @@ describe("worker artifact handoff", () => {
       };
       const dispatcher = new RunDispatchCommand({
         nextAction: { async run() { return structuredClone(action); } },
-        agent: {
+        agent: withScenarioProviderAdmission({
           async call() {
             calls += 1;
             throw new Error("simulated provider failure");
           },
-        },
+        }),
         repositoryFingerprint: () => "stable-fixture",
         leaseFactory: () => ({ acquire() {}, release() {} }),
       });
@@ -7399,7 +7415,7 @@ describe("worker artifact handoff", () => {
               : structuredClone(current.value);
           },
         },
-        agent: {
+        agent: withScenarioProviderAdmission({
           async call(_prompt, options) {
             calls += 1;
             assert.equal(options.jsonSchema, undefined);
@@ -7417,7 +7433,7 @@ describe("worker artifact handoff", () => {
               firstPayloadBytes = fs.readFileSync(payloadPath);
             }
           },
-        },
+        }),
         repositoryFingerprint: () => "stable-fixture",
         leaseFactory: () => ({ acquire() {}, release() {} }),
       });
@@ -7452,7 +7468,7 @@ describe("worker artifact handoff", () => {
     try {
       const dispatcher = new RunDispatchCommand({
         nextAction: { async run() { return draftWorkerAction(); } },
-        agent: {
+        agent: withScenarioProviderAdmission({
           async call(_prompt, options) {
             const requestPath = options.executionEnvironment.SENNEL_FLOW_HANDOFF_REQUEST;
             const request = JSON.parse(fs.readFileSync(requestPath, "utf8"));
@@ -7463,7 +7479,7 @@ describe("worker artifact handoff", () => {
             });
             throw new AgentTimeoutFailure({ message: "provider timed out", cause });
           },
-        },
+        }),
         repositoryFingerprint: () => "stable-fixture",
         leaseFactory: () => ({ acquire() {}, release() {} }),
       });
@@ -7499,13 +7515,13 @@ describe("worker artifact handoff", () => {
           return findStepById(value.flowManager.load().steps, "draft").status === "done"
             ? completedWorkerAction() : draftWorkerAction();
         } },
-        agent: { async call(_prompt, options) {
+        agent: withScenarioProviderAdmission({ async call(_prompt, options) {
           calls += 1;
           const requestPath = options.executionEnvironment.SENNEL_FLOW_HANDOFF_REQUEST;
           const request = JSON.parse(fs.readFileSync(requestPath, "utf8"));
           fs.writeFileSync(request.payloads.find((entry) => entry.logicalName === "draft.json").payloadPath, json(draftDocument("ordinary deadline")));
           sealWorkerArtifactHandoff({ requestPath, invocationId: options.executionEnvironment.SENNEL_FLOW_DISPATCH_INVOCATION_ID });
-        } },
+        } }),
         repositoryFingerprint: () => "stable-fixture",
         leaseFactory: () => ({ acquire() {}, release() {} }),
       });
@@ -7534,14 +7550,14 @@ describe("worker artifact handoff", () => {
           return findStepById(value.flowManager.load().steps, "draft").status === "done"
             ? completedWorkerAction() : draftWorkerAction();
         } },
-        agent: { async call(_prompt, options) {
+        agent: withScenarioProviderAdmission({ async call(_prompt, options) {
           timeoutMs = options.timeoutMs;
           activityMonitor = options.activityMonitor;
           const requestPath = options.executionEnvironment.SENNEL_FLOW_HANDOFF_REQUEST;
           const request = JSON.parse(fs.readFileSync(requestPath, "utf8"));
           fs.writeFileSync(request.payloads.find((entry) => entry.logicalName === "draft.json").payloadPath, json(draftDocument("deadline budget")));
           sealWorkerArtifactHandoff({ requestPath, invocationId: options.executionEnvironment.SENNEL_FLOW_DISPATCH_INVOCATION_ID });
-        } },
+        } }),
         repositoryFingerprint: () => "stable-fixture",
         leaseFactory: () => ({ acquire() {}, release() {} }),
       });
@@ -7594,7 +7610,7 @@ describe("worker artifact handoff", () => {
             return nextAction;
           },
         },
-        agent: {
+        agent: withScenarioProviderAdmission({
           async call(prompt, options) {
             calls += 1;
             workerOptions = options;
@@ -7611,7 +7627,7 @@ describe("worker artifact handoff", () => {
               invocationId: options.executionEnvironment.SENNEL_FLOW_DISPATCH_INVOCATION_ID,
             });
           },
-        },
+        }),
         repositoryFingerprint: () => "stable-fixture",
         leaseFactory: () => ({ acquire() {}, release() {} }),
       });
@@ -8157,7 +8173,7 @@ describe("worker artifact handoff", () => {
             output_schema: loadWorkerArtifactHandoffSchema(),
           };
         } },
-        agent: { async call(_prompt, options) {
+        agent: withScenarioProviderAdmission({ async call(_prompt, options) {
           workerCalls += 1;
           const requestPath = options.executionEnvironment.SENNEL_FLOW_HANDOFF_REQUEST;
           const request = JSON.parse(fs.readFileSync(requestPath, "utf8"));
@@ -8169,7 +8185,7 @@ describe("worker artifact handoff", () => {
             requestPath,
             invocationId: options.executionEnvironment.SENNEL_FLOW_DISPATCH_INVOCATION_ID,
           });
-        } },
+        } }),
         repositoryFingerprint: () => "stable-fixture",
         leaseFactory: () => ({ acquire() {}, release() {} }),
         handoffCoordinator: new WorkerArtifactHandoffCoordinator({
@@ -8224,7 +8240,7 @@ describe("worker artifact handoff", () => {
             return structuredClone(current.value);
           },
         },
-        agent: {
+        agent: withScenarioProviderAdmission({
           async call(_prompt, options) {
             calls += 1;
             const requestPath = options.executionEnvironment.SENNEL_FLOW_HANDOFF_REQUEST;
@@ -8239,7 +8255,7 @@ describe("worker artifact handoff", () => {
             });
             handoffDirectories.push(path.dirname(requestPath));
           },
-        },
+        }),
         repositoryFingerprint: () => "stable-fixture",
         leaseFactory: () => ({ acquire() {}, release() {} }),
       });
@@ -8292,11 +8308,11 @@ describe("worker artifact handoff", () => {
         let savedInvocation = null;
         const nextAction = new GetNextActionCommand();
         const dispatcher = new RunDispatchCommand({
-          nextAction: { run: () => nextAction.execute({
+          nextAction: nextActionRunner(nextAction, () => ({
             ...value.ctx, flowManager: activeManager,
             flowState: activeManager.loadReadOnly(value.specId),
-          }) },
-          agent: { async call(_prompt, options) {
+          })),
+          agent: withScenarioProviderAdmission({ async call(_prompt, options) {
             workerCalls += 1;
             const requestPath = options.executionEnvironment.SENNEL_FLOW_HANDOFF_REQUEST;
             const request = JSON.parse(fs.readFileSync(requestPath, "utf8"));
@@ -8306,7 +8322,7 @@ describe("worker artifact handoff", () => {
               requestPath,
               invocationId: options.executionEnvironment.SENNEL_FLOW_DISPATCH_INVOCATION_ID,
             });
-          } },
+          } }),
           repositoryFingerprint: () => "stable-fixture",
           leaseFactory: () => ({ acquire() {}, release() {} }),
         });
@@ -8393,14 +8409,14 @@ describe("worker artifact handoff", () => {
         let workerCalls = 0;
         const nextAction = new GetNextActionCommand();
         const dispatcher = new RunDispatchCommand({
-          nextAction: { run: () => nextAction.execute({
+          nextAction: nextActionRunner(nextAction, () => ({
             ...value.ctx, flowState: value.flowManager.loadReadOnly(value.specId),
-          }) },
-          agent: { async call() {
+          })),
+          agent: withScenarioProviderAdmission({ async call() {
             workerCalls += 1;
             if (workerCalls <= missingResponses) return;
             throw new AgentAuthenticationFailure({ message: "provider credentials were rejected" });
-          } },
+          } }),
           repositoryFingerprint: () => "stable-fixture",
           leaseFactory: () => ({ acquire() {}, release() {} }),
         });
@@ -8449,13 +8465,13 @@ describe("worker artifact handoff", () => {
       let workerCalls = 0;
       const nextAction = new GetNextActionCommand();
       const dispatcher = new RunDispatchCommand({
-        nextAction: { run: () => nextAction.execute({
+        nextAction: nextActionRunner(nextAction, () => ({
           ...value.ctx, flowState: value.flowManager.loadReadOnly(value.specId),
-        }) },
-        agent: { async call() {
+        })),
+        agent: withScenarioProviderAdmission({ async call() {
           workerCalls += 1;
           throw new Error("unclassified provider failure");
-        } },
+        } }),
         repositoryFingerprint: () => "stable-fixture",
         leaseFactory: () => ({ acquire() {}, release() {} }),
       });
@@ -8489,10 +8505,10 @@ describe("worker artifact handoff", () => {
       };
       const nextAction = new GetNextActionCommand();
       const dispatcher = new RunDispatchCommand({
-        nextAction: { run: () => nextAction.execute({
+        nextAction: nextActionRunner(nextAction, () => ({
           ...value.ctx, flowState: manager.loadReadOnly(value.specId),
-        }) },
-        agent: { async call(_prompt, options) {
+        })),
+        agent: withScenarioProviderAdmission({ async call(_prompt, options) {
           const requestPath = options.executionEnvironment.SENNEL_FLOW_HANDOFF_REQUEST;
           const request = JSON.parse(fs.readFileSync(requestPath, "utf8"));
           fs.writeFileSync(request.payloads[0].payloadPath, "[]\n");
@@ -8500,7 +8516,7 @@ describe("worker artifact handoff", () => {
             requestPath,
             invocationId: options.executionEnvironment.SENNEL_FLOW_DISPATCH_INVOCATION_ID,
           });
-        } },
+        } }),
         repositoryFingerprint: () => "stable-fixture",
         leaseFactory: () => ({ acquire() {}, release() {} }),
       });
@@ -8534,10 +8550,10 @@ describe("worker artifact handoff", () => {
       let appendCalls = 0;
       manager.appendIssueLog = () => { appendCalls += 1; throw new Error("unexpected diagnostic"); };
       const dispatcher = new RunDispatchCommand({
-        nextAction: { run: () => new GetNextActionCommand().execute({
+        nextAction: nextActionRunner(new GetNextActionCommand(), () => ({
           ...value.ctx, flowState: manager.loadReadOnly(value.specId),
-        }) },
-        agent: { async call(_prompt, options) {
+        })),
+        agent: withScenarioProviderAdmission({ async call(_prompt, options) {
           const requestPath = options.executionEnvironment.SENNEL_FLOW_HANDOFF_REQUEST;
           const request = JSON.parse(fs.readFileSync(requestPath, "utf8"));
           fs.writeFileSync(request.payloads[0].payloadPath, "[]\n");
@@ -8545,7 +8561,7 @@ describe("worker artifact handoff", () => {
             requestPath,
             invocationId: options.executionEnvironment.SENNEL_FLOW_DISPATCH_INVOCATION_ID,
           });
-        } },
+        } }),
         repositoryFingerprint: () => "stable-fixture",
         leaseFactory: () => ({ acquire() {}, release() {} }),
       });
@@ -8590,10 +8606,10 @@ describe("worker artifact handoff", () => {
         return append(input);
       };
       const dispatcher = new RunDispatchCommand({
-        nextAction: { run: () => new GetNextActionCommand().execute({
+        nextAction: nextActionRunner(new GetNextActionCommand(), () => ({
           ...value.ctx, flowState: manager.loadReadOnly(value.specId),
-        }) },
-        agent: { async call(_prompt, options) {
+        })),
+        agent: withScenarioProviderAdmission({ async call(_prompt, options) {
           const requestPath = options.executionEnvironment.SENNEL_FLOW_HANDOFF_REQUEST;
           const request = JSON.parse(fs.readFileSync(requestPath, "utf8"));
           fs.writeFileSync(request.payloads[0].payloadPath, "[]\n");
@@ -8601,7 +8617,7 @@ describe("worker artifact handoff", () => {
             requestPath,
             invocationId: options.executionEnvironment.SENNEL_FLOW_DISPATCH_INVOCATION_ID,
           });
-        } },
+        } }),
         repositoryFingerprint: () => "stable-fixture",
         leaseFactory: () => ({ acquire() {}, release() {} }),
       });
@@ -8642,10 +8658,10 @@ describe("worker artifact handoff", () => {
       let appendCalls = 0;
       manager.appendIssueLog = () => { appendCalls += 1; throw new Error("unexpected diagnostic"); };
       const dispatcher = new RunDispatchCommand({
-        nextAction: { run: () => new GetNextActionCommand().execute({
+        nextAction: nextActionRunner(new GetNextActionCommand(), () => ({
           ...value.ctx, flowState: manager.loadReadOnly(value.specId),
-        }) },
-        agent: { async call(_prompt, options) {
+        })),
+        agent: withScenarioProviderAdmission({ async call(_prompt, options) {
           const requestPath = options.executionEnvironment.SENNEL_FLOW_HANDOFF_REQUEST;
           const request = JSON.parse(fs.readFileSync(requestPath, "utf8"));
           fs.writeFileSync(request.payloads[0].payloadPath, "[]\n");
@@ -8653,7 +8669,7 @@ describe("worker artifact handoff", () => {
             requestPath,
             invocationId: options.executionEnvironment.SENNEL_FLOW_DISPATCH_INVOCATION_ID,
           });
-        } },
+        } }),
         repositoryFingerprint: () => "stable-fixture",
         leaseFactory: () => ({ acquire() {}, release() {} }),
       });
@@ -8681,10 +8697,10 @@ describe("worker artifact handoff", () => {
       let workerCalls = 0;
       const nextAction = new GetNextActionCommand();
       const dispatcher = new RunDispatchCommand({
-        nextAction: { run: () => nextAction.execute({
+        nextAction: nextActionRunner(nextAction, () => ({
           ...value.ctx, flowState: value.flowManager.loadReadOnly(value.specId),
-        }) },
-        agent: { async call(_prompt, options) {
+        })),
+        agent: withScenarioProviderAdmission({ async call(_prompt, options) {
           workerCalls += 1;
           const requestPath = options.executionEnvironment.SENNEL_FLOW_HANDOFF_REQUEST;
           const request = JSON.parse(fs.readFileSync(requestPath, "utf8"));
@@ -8694,7 +8710,7 @@ describe("worker artifact handoff", () => {
             invocationId: options.executionEnvironment.SENNEL_FLOW_DISPATCH_INVOCATION_ID,
           });
           fs.unlinkSync(requestPath);
-        } },
+        } }),
         repositoryFingerprint: () => "stable-fixture",
         leaseFactory: () => ({ acquire() {}, release() {} }),
       });
@@ -8707,9 +8723,7 @@ describe("worker artifact handoff", () => {
       assert.equal(result.ok, false);
       assert.equal(workerCalls, 1);
       assert.equal(value.flowManager.canonicalState(value.specId).attempt.failure, null);
-      assert.equal((await nextAction.execute({
-        ...value.ctx, flowState: value.flowManager.loadReadOnly(value.specId),
-      })).directive.kind, "execute_step");
+      await assertBlockedArtifactAuthority(value, nextAction);
     } finally {
       removeTmpDir(value.mainRoot);
     }
@@ -8730,10 +8744,10 @@ describe("worker artifact handoff", () => {
       });
       assert.equal(initial.step, "spec", JSON.stringify(initial));
       const dispatcher = new RunDispatchCommand({
-        nextAction: { run: () => nextAction.execute({
+        nextAction: nextActionRunner(nextAction, () => ({
           ...value.ctx, flowState: value.flowManager.loadReadOnly(value.specId),
-        }) },
-        agent: { async call(_prompt, options) {
+        })),
+        agent: withScenarioProviderAdmission({ async call(_prompt, options) {
           const requestPath = options.executionEnvironment.SENNEL_FLOW_HANDOFF_REQUEST;
           const request = JSON.parse(fs.readFileSync(requestPath, "utf8"));
           fs.writeFileSync(request.payloads[0].payloadPath, json(validWorkerHandoffTaskSpec()));
@@ -8744,7 +8758,7 @@ describe("worker artifact handoff", () => {
           const changedRequest = JSON.parse(fs.readFileSync(requestPath, "utf8"));
           changedRequest.generatedAt = "2026-08-04T00:00:03.000Z";
           fs.writeFileSync(requestPath, `${JSON.stringify(changedRequest, null, 2)}\n`);
-        } },
+        } }),
         repositoryFingerprint: () => "stable-fixture",
         leaseFactory: () => ({ acquire() {}, release() {} }),
       });
@@ -8758,9 +8772,7 @@ describe("worker artifact handoff", () => {
       assert.equal(value.flowManager.canonicalState(value.specId).attempt.failure, null);
       assert.deepEqual(value.flowManager.artifactCatalog(value.specId).toJSON().artifacts
         .filter((entry) => entry.logicalKey === "issue.log"), issueLogBefore);
-      assert.equal((await nextAction.execute({
-        ...value.ctx, flowState: value.flowManager.loadReadOnly(value.specId),
-      })).directive.kind, "execute_step");
+      await assertBlockedArtifactAuthority(value, nextAction);
     } finally {
       removeTmpDir(value.mainRoot);
     }
@@ -8792,7 +8804,7 @@ describe("worker artifact handoff", () => {
               return workerCalls === 0 ? structuredClone(action) : completedWorkerAction();
             },
           },
-          agent: {
+          agent: withScenarioProviderAdmission({
             async call(_prompt, options) {
               workerCalls += 1;
               const requestPath = options.executionEnvironment.SENNEL_FLOW_HANDOFF_REQUEST;
@@ -8806,7 +8818,7 @@ describe("worker artifact handoff", () => {
                 invocationId: options.executionEnvironment.SENNEL_FLOW_DISPATCH_INVOCATION_ID,
               });
             },
-          },
+          }),
           repositoryFingerprint: () => "stable-fixture",
           leaseFactory: () => ({ acquire() {}, release() {} }),
         });
@@ -8842,7 +8854,7 @@ describe("worker artifact handoff", () => {
       let workerCalls = 0;
       const dispatcher = new RunDispatchCommand({
         nextAction: { async run() { return structuredClone(specRepairWorkerAction()); } },
-        agent: {
+        agent: withScenarioProviderAdmission({
           async call(_prompt, options) {
             workerCalls += 1;
             // Provider entry follows the normal claim. Protect everything from
@@ -8859,7 +8871,7 @@ describe("worker artifact handoff", () => {
               invocationId: options.executionEnvironment.SENNEL_FLOW_DISPATCH_INVOCATION_ID,
             });
           },
-        },
+        }),
         repositoryFingerprint: () => "stable-fixture",
         leaseFactory: () => ({ acquire() {}, release() {} }),
         handoffCoordinator: new WorkerArtifactHandoffCoordinator({

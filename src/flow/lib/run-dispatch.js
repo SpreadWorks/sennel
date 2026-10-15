@@ -2,6 +2,8 @@ import { flowTemporaryRoot } from "./flow-context.js";
 import { FlowDispatchLease } from "./flow-dispatch-lease.js";
 export { FlowDispatchLease } from "./flow-dispatch-lease.js";
 import { FlowExecutionContract, FlowExecutionContractRefusal } from "./flow-execution-contract.js";
+import { executeArtifactWorkerPrompt } from "./artifact-worker-prompt-execution.js";
+import { ArtifactWorkerRecoveryAuthorized, ArtifactWorkerSealedReplay } from "../definition.js";
 import { acceptanceStepRegistration, initializeAcceptanceDecisionAwait } from "../engine/composition/acceptance.js";
 import { finalizationStepRegistration } from "../engine/composition/finalization.js";
 import { hasAcceptanceStepContract } from "../engine/step-result.js";
@@ -38,6 +40,7 @@ import { FlowCommand } from "./base-command.js";
 import { Envelope } from "../../lib/flow-envelope.js";
 import { AgentFailure } from "../../lib/agent-failure.js";
 import { PromptBatchingError, PromptRequestLimit } from "../../lib/prompt-batching.js";
+import { isPromptExecutionControlFailure } from "../../lib/prompt-execution-journal.js";
 import { Agent } from "../../lib/agent.js";
 import { DeferredAgentInvocationMetric } from "../../lib/agent-invocation-metric.js";
 import { flowCommands } from "../../lib/command-registry.js";
@@ -575,11 +578,13 @@ function reboundWorkerAuthorization(invocation, action) {
 function reboundWorkerInvocation(invocation, nextAction, id = undefined, {
   repositoryFingerprint = invocation.action.repositoryFingerprint,
   expectedDigest = invocation.action.digest,
+  canonicalRevision = null,
 } = {}) {
   const session = new FlowDispatchSession({ ...(id === undefined ? {} : { id }), target: invocation.target });
   const action = session.captureAction(
     workerFacingNextAction(nextAction),
     repositoryFingerprint,
+    canonicalRevision,
   );
   if (action.digest !== expectedDigest) {
     throw new Error("fresh worker handoff action changed before retry");
@@ -1774,6 +1779,12 @@ export default class RunDispatchCommand extends FlowCommand {
     }
     const executionState = ctx.flowManager.draftStepExecutionState({ binding: stepBinding });
     const prior = executionState.lifecycle;
+    const artifactFrontier = ctx.flowManager.artifactWorkerExecutionState({ binding: stepBinding });
+    const recoveredRequest = artifactFrontier.recovery !== null
+      && artifactFrontier.executionContract?.id === artifactFrontier.recovery.targetContractId
+      && prior?.executionGeneration === artifactFrontier.recovery.targetGeneration
+      ? this.handoffCoordinator.storedArtifactExecutionRequest({ ctx, state,
+        executionContract: artifactFrontier.executionContract }) : null;
     if (prior?.binding instanceof DraftWorkerExecutionBinding
       && !(prior.binding instanceof DraftConditionalWorkerExecutionBinding)) {
       throw conditionalDraftAdmissionError(
@@ -1814,7 +1825,13 @@ export default class RunDispatchCommand extends FlowCommand {
     const claimed = reusePrior && ["claimed", "publication"].includes(prior.phase)
       ? prior.claim : null;
     let newlyClaimed = false;
-    const workerInvocation = claimed === null
+    const workerInvocation = recoveredRequest !== null
+      ? reboundWorkerInvocation(invocation, recoveredRequest.invocation.action.nextAction, recoveredRequest.dispatchInvocationId, {
+          repositoryFingerprint: recoveredRequest.dispatchIdentity?.repositoryFingerprint,
+          canonicalRevision: recoveredRequest.dispatchIdentity?.canonicalRevision ?? null,
+          expectedDigest: recoveredRequest.actionDigest,
+        })
+      : claimed === null
       ? (prior?.phase === "checkpoint" ? freshWorkerInvocation(invocation, invocation.action.nextAction) : invocation)
       : reboundWorkerInvocation(invocation, invocation.action.nextAction, claimed.dispatchInvocationId);
     if (claimed !== null && workerInvocation.action.digest !== claimed.actionDigest) {
@@ -1824,11 +1841,11 @@ export default class RunDispatchCommand extends FlowCommand {
         "conditional Draft worker action no longer matches its canonical claim",
       );
     }
-    const persistedRequest = claimed === null ? null : this.handoffCoordinator.restoreClaimedDraftRequest({
+    const persistedRequest = recoveredRequest ?? (claimed === null ? null : this.handoffCoordinator.restoreClaimedDraftRequest({
       ctx,
       state,
       lifecycle: prior,
-    });
+    }));
     if (reusePrior && prior?.phase === "publication" && persistedRequest === null) {
       throw new WorkerArtifactHandoffError(
         "recovery-required",
@@ -1837,7 +1854,7 @@ export default class RunDispatchCommand extends FlowCommand {
         { retryable: false, recoveryPossible: false },
       );
     }
-    let request = reusePrior && prior?.phase === "publication"
+    let request = recoveredRequest ?? (reusePrior && prior?.phase === "publication"
       ? persistedRequest
       : this.handoffCoordinator.createRequest({
           ctx,
@@ -1850,7 +1867,7 @@ export default class RunDispatchCommand extends FlowCommand {
           // Step persists that exact selection before the request is admitted
           // or materialized below.
           deferConditionalAdmission: !reusePrior,
-        });
+        }));
     request = request.withExecutionGeneration(executionGeneration);
     if (claimed !== null && !(reusePrior && prior?.phase === "publication")) {
       request = request.withDispatchRepositoryBinding(persistedRequest?.dispatchRepositoryBinding ?? null);
@@ -1896,7 +1913,7 @@ export default class RunDispatchCommand extends FlowCommand {
         return { request: null, invocation: workerInvocation, publicationRecovery: false, stepResult: result };
       }
     }
-    if (claimed === null) {
+    if (claimed === null && recoveredRequest === null) {
       request = request.withDispatchRepositoryBinding(DispatchExecutionRepositoryBinding.capture({
         ctx, request, invocation: workerInvocation, fingerprint: this.repositoryFingerprint,
       }));
@@ -1929,6 +1946,7 @@ export default class RunDispatchCommand extends FlowCommand {
         executionBinding,
         executionClaim,
         executionContract: request.executionContract,
+        requestSnapshot: request.requestSnapshot(),
       });
       newlyClaimed = claimResult.newlyClaimed;
     }
@@ -1978,10 +1996,10 @@ export default class RunDispatchCommand extends FlowCommand {
     if (registration === null) throw new TypeError("selected worker requires its production registration");
     const current = registration.executionContract.select({ ctx, stepId });
     assertCurrentWorkerExecutionSelection(selection, current);
-    return this.#executeSelectedWorker(ctx, invocation, retryFeedback, agentOverride);
+    return this.#executeSelectedWorker(ctx, invocation, retryFeedback, agentOverride, current);
   }
 
-  async #executeSelectedWorker(ctx, invocation, retryFeedback = null, agentOverride = null) {
+  async #executeSelectedWorker(ctx, invocation, retryFeedback = null, agentOverride = null, selectedExecution = null) {
     const action = new FlowDispatchAction(invocation.action.nextAction);
     let handoffRequest = null;
     let handoffAuthority = null;
@@ -2108,10 +2126,26 @@ export default class RunDispatchCommand extends FlowCommand {
               }
             }
           } else {
-            handoffRequest = this.handoffCoordinator.stoppedArtifactRequest({
-              ctx, state, stepId: action.nextAction.step,
-            });
+            handoffRequest = selectedExecution?.artifactContinuation?.usesSavedResponse
+              ? this.handoffCoordinator.stoppedArtifactRequest({
+                  ctx, state, stepId: action.nextAction.step,
+                  executionContract: selectedExecution.artifactContinuation.executionContract,
+                }) : null;
             resumeStoppedArtifactExecution = handoffRequest !== null;
+            if (handoffRequest === null && (selectedExecution?.artifactContinuation instanceof ArtifactWorkerRecoveryAuthorized
+              || selectedExecution?.artifactContinuation instanceof ArtifactWorkerSealedReplay)) {
+                handoffRequest = this.handoffCoordinator.storedArtifactExecutionRequest({
+                  ctx, state, executionContract: selectedExecution.artifactContinuation.executionContract,
+                });
+                workerInvocation = reboundWorkerInvocation(invocation, handoffRequest.invocation.action.nextAction,
+                  handoffRequest.dispatchInvocationId, {
+                    repositoryFingerprint: handoffRequest.dispatchIdentity?.repositoryFingerprint,
+                    canonicalRevision: handoffRequest.dispatchIdentity?.canonicalRevision ?? null,
+                    expectedDigest: handoffRequest.actionDigest,
+                  });
+                resumeStoppedArtifactExecution = selectedExecution.artifactContinuation.usesSavedResponse;
+                if (!resumeStoppedArtifactExecution) handoffRequest.prepare();
+            }
             handoffRequest ??= this.handoffCoordinator.createRequest({
               ctx, state, invocation, workerInstructions,
               previousExecutionContract: retryFeedback?.previousExecutionContract ?? null,
@@ -2202,6 +2236,9 @@ export default class RunDispatchCommand extends FlowCommand {
                   if (!conditionalWorkerContinuation.requiresWorker) {
                     throw new FlowExecutionContractRefusal("Saved Draft response became available before provider execution");
                   }
+                  handoffRequest.dispatchRepositoryBinding?.assertCurrent({
+                    flowManager: ctx.flowManager, request: handoffRequest,
+                  });
                 } else if (!handoffRequest.consumeProviderClaim()) {
                   throw new FlowExecutionContractRefusal("Worker claim has no sealed response for recovery");
                 }
@@ -2225,10 +2262,15 @@ export default class RunDispatchCommand extends FlowCommand {
               this.handoffCoordinator.startSourceWorker({ ctx, request: handoffRequest, invocation });
               sourceWorkerStarted = true;
             }
-            responseText = await agent.call(prompt, { ...callOptions,
+            const physicalCallOptions = { ...callOptions,
               onProcessExecutionStop(receipt) { processStopEvidence = new FlowProcessStopEvidence(receipt)
                 .assertContract(handoffRequest.executionContract, workerProcessStopIdentity(handoffRequest)); },
-            });
+            };
+            responseText = handoffRequest?.policy.supportsInterruptedRecovery
+              ? await executeArtifactWorkerPrompt({ flowManager: ctx.flowManager, request: handoffRequest,
+                prompt, callOptions: physicalCallOptions, agent,
+                reservationContinuation: selectedExecution?.artifactContinuation?.reservationContinuation ?? null })
+              : await agent.call(prompt, physicalCallOptions);
           }
         } catch (error) {
           if (handoffRequest?.stepId === "spec-gate-repair" && error instanceof PromptBatchingError) {
@@ -2259,7 +2301,12 @@ export default class RunDispatchCommand extends FlowCommand {
           sealParentMaterializedSourceWorkerEffect({ request: handoffRequest });
         }
       } catch (error) {
-        if (error instanceof ProcessExecutionControlFailure) throw error;
+        if (error instanceof ProcessExecutionControlFailure || isStepPersistenceFailure(error)
+          || isPromptExecutionControlFailure(error)
+          || handoffRequest?.policy.supportsInterruptedRecovery && error instanceof PromptBatchingError) {
+          deferredMetric?.discard();
+          throw error;
+        }
         agentError = error;
         if (agentError instanceof AgentFailure) agentError.supervisorEvents = Object.freeze(supervisorEvents);
         if (handoffRequest?.policy.kind === "source") {
