@@ -13,6 +13,7 @@ import { finalizationStepRegistration, prepareFinalizationExecution } from "../e
 import { flowStepExecutionRegistration } from "../engine/composition/registered-step-execution.js";
 import { FinalizeCleanupEffectPreparation } from "./finalize-cleanup-journal.js";
 import { AcceptanceReceiptReplay } from "./acceptance-receipt-replay.js";
+import { RunFinalizeCleanupCommand } from "./run-finalize-cleanup.js";
 
 function replayFinalizationReceipt(receipt) {
   if (!(receipt instanceof AcceptanceReceiptReplay)) throw new TypeError("Finalization replay requires its authenticated receipt");
@@ -105,8 +106,12 @@ export default class RunRecoverFinalizationCommand extends FlowCommand {
           const preparation = prepareFinalizationExecution({ ctx: recoveryContext, stepId: exactTarget.stepId,
             recovery: selected.decision });
           const selection = registration.executionContract.select({ ctx: recoveryContext, stepId: exactTarget.stepId, preparation, registration });
-          await executeFinalizationRecoveryInput({ ctx: recoveryContext, flowManager: owner.flowManager,
+          const outcome = await executeFinalizationRecoveryInput({ ctx: recoveryContext, flowManager: owner.flowManager,
             stepId: exactTarget.stepId, preparation, selection });
+          const receipt = selection.receipt === null ? outcome.receipt : outcome;
+          if (exactTarget.stepId === "finalize-cleanup" && receipt.settlementKind === "completion") {
+            return new RunFinalizeCleanupCommand().projectCompletedReceipt(recoveryContext, receipt);
+          }
         }
         return Envelope.ok("run", "recover-finalization", {
           operation: "exact-outbox-recovery",

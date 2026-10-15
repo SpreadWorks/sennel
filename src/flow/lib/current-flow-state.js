@@ -9727,6 +9727,30 @@ export class CanonicalTransitionView {
     Object.freeze(this);
   }
 
+  /**
+   * Dispatch approval observes an action; its own receipt cannot invalidate
+   * that action on restart. Only trailing typed approval observations and
+   * their confirmation counter are excluded. Every other state field,
+   * Activity and cataloged input remains part of execution admission.
+   */
+  dispatchExecutionRevision() {
+    let retainedCount = this.activities.length;
+    while (retainedCount > 0) {
+      const activity = this.activities[retainedCount - 1];
+      if (!DISPATCH_APPROVAL_TRANSITION_OPERATIONS.has(activity.transition.operation)
+        || !(activity.transition.approval instanceof ActivityDispatchApproval)) break;
+      retainedCount -= 1;
+    }
+    const approvalCount = this.activities.length - retainedCount;
+    const state = this.state.withConfirmationOrder(this.state.confirmationOrder - approvalCount);
+    const artifacts = this.catalog.artifacts
+      .filter((artifact) => !["flow.state", "flow.activities"].includes(artifact.logicalKey))
+      .map((artifact) => artifact.toJSON())
+      .sort((left, right) => left.relativePath.localeCompare(right.relativePath));
+    return digest(Buffer.from(JSON.stringify({ state: state.toJSON(),
+      activities: this.activities.slice(0, retainedCount).map((activity) => activity.toJSON()), artifacts })));
+  }
+
   readCatalogedArtifact(descriptor, { maxBytes = undefined, onRead = undefined } = {}) {
     if (descriptor === null || typeof descriptor !== "object" || typeof descriptor.relativePath !== "string") {
       throw new CurrentFlowStateInvariantError("canonical transition view requires an artifact descriptor");

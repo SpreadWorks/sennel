@@ -10,6 +10,7 @@ import { FLOW_COMMANDS } from "../../../src/flow/registry.js";
 import { FlowOutboxRecoveryReceipt } from "../../../src/flow/lib/flow-outbox.js";
 import RunReportShowCommand, { CanonicalLatestReport, POINTER_REL_PATH } from "../../../src/flow/lib/run-report-show.js";
 import { dispatchContainer } from "../../support/infrastructure/flow-dispatch-scenario.js";
+import RunDispatchCommand from "../../../src/flow/lib/run-dispatch.js";
 
 function canonicalBytes(flow) {
   const location = flow.manager.specLocation(flow.specId);
@@ -66,6 +67,58 @@ describe("Registered cleanup refusal and audit persistence", { concurrency: fals
       seedRoot: commitSeed.root, seedSpecId: commitSeed.specId });
   });
   after(() => { for (const cleanup of cleanups.reverse()) cleanup(); });
+
+for (const response of ["missing-receipt", "missing-assurance", "foreign-receipt", "lost-operational-response"]) {
+test(`dispatcher cleanup authenticates the real Completion before ${response}`, async (t) => {
+  const flow = FinalizationPhaseScenario.fromSeed(t, seed);
+  const dispatcher = new RunDispatchCommand({ agent: flow.agent, maxDispatches: 4 });
+  dispatcher.container = dispatchContainer({ root: flow.root, mainRoot: flow.root,
+    config: flow.options.config, flowManager: flow.manager, agent: flow.agent });
+  const run = dispatcher.runRegisteredFlowCommand;
+  let completed = false;
+  let commandCalls = 0;
+  // Delegate the complete registered producer unchanged, then lose or corrupt
+  // only its returned command envelope at the dispatcher input boundary.
+  t.mock.method(dispatcher, "runRegisteredFlowCommand", async function (...args) {
+    const envelope = await run.apply(this, args);
+    assert.equal(args[2].subcommand, "finalize-cleanup");
+    assert.equal(envelope.ok, true, JSON.stringify(envelope.errors));
+    assert.equal(envelope.data.status, "done");
+    assert.equal(envelope.data.settlementReceipt.settlementKind, "completion");
+    commandCalls += 1;
+    completed = true;
+    const result = structuredClone(envelope);
+    if (response === "missing-receipt") delete result.data.settlementReceipt;
+    if (response === "missing-assurance") delete result.data.assurance;
+    if (response === "foreign-receipt") result.data.settlementReceipt.binding.runId = "different-run";
+    if (response === "lost-operational-response") {
+      result.ok = false;
+      result.errors = [{ level: "fatal", code: "RESPONSE_IO_FAILED", messages: ["The Completion response was interrupted."] }];
+    }
+    return result;
+  });
+  const fetch = dispatcher.fetchNextAction;
+  t.mock.method(dispatcher, "fetchNextAction", function (...args) {
+    assert.equal(completed, false, "cleanup must not reread next-action after a possibly removed execution root");
+    return fetch.apply(this, args);
+  });
+  const result = await dispatcher.execute({ ...flow.context(), expectRunId: flow.state().runId,
+    expectSpec: flow.specId, _envelopeType: "run", _envelopeKey: "dispatch" });
+  assert.equal(commandCalls, 1);
+  if (response === "lost-operational-response") {
+    assert.equal(result.dispatch.boundary, "completed");
+    assert.equal(result.dispatch.dispatchCount, 1);
+  } else {
+    assert.equal(result.ok, false);
+    assert.equal(result.errors[0].code, "FLOW_DISPATCH_FINALIZE_CLEANUP_UNCONFIRMED");
+    assert.equal(result.data.dispatch.boundary, "blocked");
+  }
+  flow.reload();
+  assert.equal(flow.state().lifecycle.state, "finalized", "the physical producer completed before its response was altered");
+  assert.equal(flow.manager.activityLedger(flow.specId).filter((activity) => activity.type === "flow_finalized").length, 1);
+  assert.equal(flow.outbox("finalize-cleanup").status, "done");
+});
+}
 
 for (const mode of ["initial-read-io", "applied-delete-readback-io"]) {
 test(`registered cleanup ref-query IO recovery: ${mode} keeps the truthful checkpoint through one Completion`, async (t) => {

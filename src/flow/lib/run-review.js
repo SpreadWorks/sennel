@@ -8,8 +8,8 @@ import { RuntimeChildExecution } from "../../lib/runtime-package.js";
 import { ReviewFindingCycle } from "./finding-disposition-policy.js";
 import {
   attachCanonicalCommandResultArtifact,
+  CanonicalCommandAttemptArtifactHistory,
 } from "./canonical-command-result.js";
-import { FlowArtifactAttemptHistory } from "../../lib/flow-artifact-contract.js";
 /**
  * src/flow/lib/run-review.js
  *
@@ -79,11 +79,14 @@ import { TaskStepIdentity } from "./task-step-identity.js";
 import { ReviewTargetAuthority } from "./review-target-authority.js";
 import {
   CanonicalDraftReviewSource,
+  CanonicalDraftReviewObservation,
   CanonicalReviewPromotion,
   readCanonicalReviewProcessStop,
   CanonicalReviewWorkUnit,
   canonicalReviewNodeId,
 } from "./canonical-review-artifacts.js";
+import { draftReviewRouteForRetryPhase } from "./draft-review-routes.js";
+import { ReviewWorkUnitTarget } from "./review-work-unit-values.js";
 import { SpecReviewOperations } from "./spec-review-operations.js";
 import { claimDraftReviewExecution as persistDraftReviewExecutionClaim } from "./draft-review-execution-claim.js";
 import { claimSpecReviewExecution, completeSpecReviewPublication } from "../engine/composition/spec.js";
@@ -911,8 +914,8 @@ function rehydratePublishedDraftReview(ctx, { state, phase }) {
     || !(execution.lifecycle.binding instanceof DraftReviewExecutionBinding)) {
     if (source === null) return null;
     try {
-      const history = FlowArtifactAttemptHistory.fromJSON(JSON.parse(source.bytes.toString("utf8")));
-      if (history.current.attempt.value !== state.attempt.sequence) return null;
+      const history = CanonicalCommandAttemptArtifactHistory.fromBytes({ logicalKey: route.logicalKey, bytes: source.bytes });
+      if (history.currentRecord.attempt !== state.attempt.sequence) return null;
     } catch (error) {
       return Envelope.fail("run", "review", "DRAFT_REVIEW_PUBLICATION_RECOVERY_FAILED", error.message, { phase });
     }
@@ -952,38 +955,26 @@ function rehydratePublishedDraftReview(ctx, { state, phase }) {
       "the Draft Review artifact is not owned by its current execution publication receipt", { phase },
     );
   }
-  let history;
+  let record;
+  let observation;
   try {
-    history = FlowArtifactAttemptHistory.fromJSON(JSON.parse(source.bytes.toString("utf8")));
+    record = CanonicalCommandAttemptArtifactHistory.fromBytes({ logicalKey: route.logicalKey, bytes: source.bytes }).currentRecord;
+    if (record.attempt !== state.attempt.sequence) {
+      throw new Error("the Draft Review publication receipt does not own the current Attempt artifact");
+    }
+    observation = new CanonicalDraftReviewObservation({
+      payload: record.payload, state, route: draftReviewRouteForRetryPhase(phase),
+    }).assertTarget(new ReviewWorkUnitTarget(execution.lifecycle.binding.target.toJSON()));
+    if (observation.settlementPublication(record).digest
+      !== publicationActivity.result.draftSettlementReceipt.publicationDigest) {
+      throw new Error("the Draft Review publication intent differs from its execution publication receipt");
+    }
   } catch (error) {
     return Envelope.fail("run", "review", "DRAFT_REVIEW_PUBLICATION_RECOVERY_FAILED", error.message, { phase });
   }
-  if (history.current.attempt.value !== state.attempt.sequence) {
-    return Envelope.fail(
-      "run", "review", "DRAFT_REVIEW_PUBLICATION_RECOVERY_FAILED",
-      "the Draft Review publication receipt does not own the current Attempt artifact", { phase },
-    );
-  }
-  const stored = history.current.payload;
-  const payload = stored?.artifact?.payload;
-  if (stored?.artifact?.logicalKey !== route.logicalKey
-    || payload?.phase !== phase || !REVIEW_VERDICT_VALUES.includes(payload?.verdict)) {
-    return Envelope.fail(
-      "run", "review", "DRAFT_REVIEW_PUBLICATION_RECOVERY_FAILED",
-      "the published Draft Review result is not a valid current Attempt result", { phase },
-    );
-  }
   readCanonicalReviewProcessStop({ flowManager: ctx.flowManager, state, activity: publicationActivity,
-    processStop: payload.processStop, executionRoot: ctx.executionRoot || ctx.root });
-  const result = structuredClone(stored.result);
-  if (result === null || typeof result !== "object" || Array.isArray(result)) {
-    return Envelope.fail(
-      "run", "review", "DRAFT_REVIEW_PUBLICATION_RECOVERY_FAILED",
-      "the published Draft Review result has no recoverable command envelope", { phase },
-    );
-  }
-  attachCanonicalCommandResultArtifact(result, { logicalKey: route.logicalKey, payload });
-  return result;
+    processStop: record.payload.processStop, executionRoot: ctx.executionRoot || ctx.root });
+  return observation.commandResult(record);
 }
 
 function taskReviewSpecDigest(flowManager, state, taskId) {

@@ -1,3 +1,4 @@
+import { FlowExecutionCommand } from "./flow-execution-command.js";
 import { readRuntimeResource } from "../../lib/runtime-package.js";
 import { acceptanceStepRegistration } from "../engine/composition/acceptance.js";
 import { finalizationStepRegistration } from "../engine/composition/finalization.js";
@@ -61,7 +62,7 @@ import {
   FlowDecisionMessages,
 } from "./flow-decision-prompt.js";
 import { FlowTargetBinding } from "../../lib/flow-target-guard.js";
-import { guardedCommand } from "./guarded-command.js";
+import { guardedCommand, guardedExecutionCommand } from "./guarded-command.js";
 import { CanonicalTestArtifactStore } from "./canonical-test-artifacts.js";
 import { RequirementTestArtifactStore } from "./requirement-test-store.js";
 import {
@@ -82,7 +83,7 @@ import {
   canonicalTestReviewRepairForTarget,
   canonicalTestReviewRepairProgress,
 } from "./test-review-repair.js";
-import { inspectRetryRecoveryPlan, retryEvidenceRouteForNode } from "./retry-recovery.js";
+import { inspectRetryRecoveryPlan, retryEvidenceRouteForNode, retryRecoveryExecutionCommand } from "./retry-recovery.js";
 import { resolveCurrentReviewTransition } from "./review-transition-persistence.js";
 import {
   approvalRouteFacts,
@@ -258,7 +259,7 @@ function finalRegressionNextAction(ctx, state, typedState, binding) {
   }
   const operation = decision.disposition.operation;
   if (operation === "repair") {
-    return new FinalRegressionNextAction({ decision, directive: new ExecuteCommandDirective({ actionId: "FINAL_REGRESSION_REPAIR", nextAction: guardedCommand("sennel flow run claim-next-action", state, binding), instruction: "Claim the Definition-selected repair episode, then repair the current regression failure and rerun final-regression through the next guarded directive.", reason: "The final-regression Definition selected bounded repair from canonical current-change evidence." }) });
+    return new FinalRegressionNextAction({ decision, directive: new ExecuteCommandDirective({ actionId: "FINAL_REGRESSION_REPAIR", command: guardedExecutionCommand(new FlowExecutionCommand({ group: "run", subcommand: "claim-next-action" }), state, binding), instruction: "Claim the Definition-selected repair episode, then repair the current regression failure and rerun final-regression through the next guarded directive.", reason: "The final-regression Definition selected bounded repair from canonical current-change evidence." }) });
   }
   if (operation === "await-user-input") {
     let userAction;
@@ -386,7 +387,7 @@ function definitionOwnedGateDirective(selection, { state, binding }) {
   const { operation, reason, phase, nonblockingHandoff } = action;
   if (operation === "reconcile") return new ExecuteCommandDirective({
     actionId: "RECONCILE_GATE_PUBLICATION",
-    nextAction: guardedCommand("sennel flow run gate", state, binding),
+    command: guardedExecutionCommand(new FlowExecutionCommand({ group: "run", subcommand: "gate" }), state, binding),
     instruction: "Reconcile the exact cataloged Gate result through its post-publication classification; do not evaluate the Gate again.",
     reason: "A current Gate result was published before its canonical post hook completed.",
   });
@@ -435,13 +436,13 @@ function definitionOwnedGateDirective(selection, { state, binding }) {
   }
   if (operation === "retry") return new ExecuteCommandDirective({
     actionId: "CLAIM_GATE_RETRY",
-    nextAction: guardedCommand("sennel flow run claim-next-action", state, binding),
+    command: guardedExecutionCommand(new FlowExecutionCommand({ group: "run", subcommand: "claim-next-action" }), state, binding),
     instruction: "Claim Definition-selected Gate retry before evaluating again.",
     reason: "The retry is bound to the current canonical Gate Attempt.",
   });
   if (operation === "defer") return new ExecuteCommandDirective({
     actionId: "SETTLE_GATE_DEFER",
-    nextAction: guardedCommand("sennel flow run settle-gate-transition", state, binding),
+    command: guardedExecutionCommand(new FlowExecutionCommand({ group: "run", subcommand: "settle-gate-transition" }), state, binding),
     instruction: "Persist the exhausted Gate findings and settle the Gate.",
     reason: "Definition selected final defer; further Gate evaluation is not admitted.",
   });
@@ -653,14 +654,10 @@ function retryRecoveryPlanFor({ ctx, state, descriptor, target }) {
 
 function retryRecoveryCommandFor({ state, descriptor, target, binding, recoveryPlan }) {
   if (recoveryPlan?.available !== true) return null;
-  const disposition = descriptor.failureDisposition;
   const route = retryEvidenceRouteForNode(state, target.nodeId);
   if (route === null) return null;
-  return guardedCommand(
-    `sennel flow set retry reset ${route.kind} ${route.phase} --reason "${disposition.reason.replaceAll('"', "'")}" --yes`,
-    state,
-    binding,
-  );
+  return guardedExecutionCommand(retryRecoveryExecutionCommand({ kind: route.kind,
+    phase: route.phase, reason: descriptor.failureDisposition.reason }), state, binding);
 }
 
 function missingProducerArtifactRouteFor({ ctx, typedState }) {
@@ -888,7 +885,7 @@ function buildCanonicalNextActionResult(ctx, state, typedState, descriptor, bind
     ? canonicalInstruction(derived, target, state)
     : "Resume the preparation protocol with this run's original inputs.";
   const outboxRecovery = target.scope === "flow"
-    ? resolveFinalizationOutboxRecovery(ctx, state, target, null, interruptedRuntimeLog)
+    ? resolveFinalizationOutboxRecovery(ctx, state, target, binding, interruptedRuntimeLog)
     : null;
   const routePlan = target.stepId === "acceptance-decision" ? acceptanceProjection?.decision ?? null
     : definitionRoutePlanForNextAction(ctx, state, typedState, target);
@@ -968,7 +965,7 @@ function buildCanonicalNextActionResult(ctx, state, typedState, descriptor, bind
   const claimDirective = claimRequired
     ? new ExecuteCommandDirective({
         actionId: "CLAIM_NEXT_ACTION",
-        nextAction: guardedCommand("sennel flow run claim-next-action", state, binding),
+        command: guardedExecutionCommand(new FlowExecutionCommand({ group: "run", subcommand: "claim-next-action" }), state, binding),
         instruction: "Claim the current Definition-selected action through the canonical Store before starting its worker.",
         reason: "get-next-action is read-only; the explicit claim command rechecks canonical facts immediately before creating the Attempt.",
       })
@@ -1069,7 +1066,7 @@ export default class GetNextActionCommand extends FlowCommand {
         definitionTransition: taskExecutionOverrun.toJSON(),
         directive: new ExecuteCommandDirective({
           actionId: "RECOVER_TASK_EXECUTION_OVERRUN",
-          nextAction: guardedCommand("sennel flow run recover-task-execution-overrun", ctx.flowState, binding),
+          command: guardedExecutionCommand(new FlowExecutionCommand({ group: "run", subcommand: "recover-task-execution-overrun" }), ctx.flowState, binding),
           instruction: "Record the Definition-selected cancellation of the stale Task implementation Attempt before continuing.",
           reason: "The canonical Task execution budget is exhausted; recovery restores the exact prior failed Gate frontier so normal retry or settlement remains authoritative.",
         }).toJSON(),

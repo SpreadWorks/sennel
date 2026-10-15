@@ -59,7 +59,7 @@ function canonicalFixtureGatePhase(state, nodeId) {
 }
 
 /** Execute a claimed fixture producer through its real registration and publication hooks. */
-export async function produceCanonicalFixtureStep(ctx, nodeId) {
+export async function produceCanonicalFixtureStep(ctx, nodeId, { acceptanceResponse = null } = {}) {
   const { FLOW_COMMANDS } = await import("../../../src/flow/registry.js");
   const { dispatchContainer, installGateProviderFake, passingGateProviderResponse } = await import("./flow-dispatch-scenario.js");
   const phase = canonicalFixtureGatePhase(ctx.flowState, nodeId);
@@ -77,7 +77,7 @@ export async function produceCanonicalFixtureStep(ctx, nodeId) {
     provider = installGateProviderFake((prompt) => {
       const evidence = JSON.parse(String(prompt).slice("## Acceptance Evidence\n".length));
       return JSON.stringify(acceptanceProviderResponse({ acceptanceContexts: [{ evidence,
-        requirementIds: evidence.requirements.map((entry) => entry.id), deferredFindings: evidence.deferredFindings }] }));
+        requirementIds: evidence.requirements.map((entry) => entry.id), deferredFindings: evidence.deferredFindings }] }, acceptanceResponse ?? undefined));
     }, { transportContext: () => ({ root: ctx.root, flowManager: ctx.flowManager }) });
   }
   try {
@@ -643,7 +643,7 @@ export class CanonicalFlowFixture {
   }
 
   /** Run actual asynchronous producers when a fixture traverses their phase. */
-  async activateWithProducers(nodeId, { reviewResponses = new Map(), sourceMutations = new Map(), onActive = null, activateTarget = true } = {}) {
+  async activateWithProducers(nodeId, { reviewResponses = new Map(), sourceMutations = new Map(), onActive = null, activateTarget = true, acceptanceResponse = null } = {}) {
     for (let iteration = 0; iteration < 500; iteration += 1) {
       const next = this.#nextPredecessor(nodeId);
       if (next === null) return activateTarget ? this.activate(nodeId, { settlePredecessors: false }) : this;
@@ -658,7 +658,7 @@ export class CanonicalFlowFixture {
         if (result.ok === false) throw new Error(`canonical fixture Review failed: ${JSON.stringify(result)}`);
       } else if (canonicalFixtureGatePhase(state, next) !== null
         || ["test-execute", "test-result-review", "retro", "acceptance-review", "final-regression", "report"].includes(next)) {
-        await this.produce(next);
+        await this.produce(next, { acceptanceResponse });
         if (this.state().currentNodeId === next) {
           throw new Error(`canonical fixture cannot advance past incomplete producer ${next}`);
         }
@@ -670,9 +670,9 @@ export class CanonicalFlowFixture {
   }
 
   /** Execute the registered producer and its normal publication hooks. */
-  async produce(nodeId) {
+  async produce(nodeId, options = {}) {
     this.activate(nodeId, { settlePredecessors: false });
-    await produceCanonicalFixtureStep(this.#producerContext(), nodeId);
+    await produceCanonicalFixtureStep(this.#producerContext(), nodeId, options);
     return this;
   }
 
@@ -1265,15 +1265,15 @@ export class CanonicalNextActionScenario {
     return this;
   }
 
-  async atFlowStepWithProducers(stepId) {
+  async atFlowStepWithProducers(stepId, options = {}) {
     this.#assertCreated();
-    await this.flow.activateWithProducers(stepId);
+    await this.flow.activateWithProducers(stepId, options);
     return this;
   }
 
-  async beforeFlowStepWithProducers(stepId) {
+  async beforeFlowStepWithProducers(stepId, options = {}) {
     this.#assertCreated();
-    await this.flow.activateWithProducers(stepId, { activateTarget: false });
+    await this.flow.activateWithProducers(stepId, { ...options, activateTarget: false });
     return this;
   }
 

@@ -180,6 +180,9 @@ export class StructureChecker {
     this.serviceBindings = new Map();
     this.bindingSubclassMatches = new Map();
     this.rules = new FlowStructureRules();
+    this.recoveryBindings = new Map();
+    this.sourceInvocations = new WeakMap();
+    this.sourceOrigins = new WeakMap();
   }
 
   check() {
@@ -206,6 +209,352 @@ export class StructureChecker {
       }
     } else this.#registeredExecutionRoute();
     return this.report;
+  }
+
+  /** Recovery inspection shares the production Step routing and provenance rules. */
+  checkRecoveryCommands() {
+    this.allFiles = this.#jsFiles(this.rules.sourceRoot);
+    this.#recoveryCommandProducers();
+    this.#recoveryCommandBoundary();
+    return this.report;
+  }
+
+  /** Reuse unchanged parsing only; dependency resolution and rule verdicts remain fresh. */
+  fork(repository) {
+    const checker = new StructureChecker(this.scope, repository);
+    checker.sourceInvocations = this.sourceInvocations;
+    checker.sourceOrigins = this.sourceOrigins;
+    const files = new Set(repository.list(this.rules.sourceRoot));
+    for (const name of ["modules", "reverseModules"]) for (const [file, module] of this[name]) {
+      if (module === null || !files.has(file)) continue;
+      const source = repository.read(file);
+      if (source !== this.sources.get(file)) continue;
+      checker[name].set(file, module);
+      checker.sources.set(file, source);
+    }
+    return checker;
+  }
+
+  #constructedInvocations(module) {
+    if (!this.sourceInvocations.has(module)) this.sourceInvocations.set(module,
+      readInvocations(module).filter((entry) => entry.constructed));
+    return this.sourceInvocations.get(module);
+  }
+
+  #sourceDeclarations(module) {
+    return [...module.declarationNames()].flatMap((name) => {
+      const declaration = module.declaration(name);
+      if (declaration?.token.value !== "class") return declaration ? [declaration] : [];
+      const members = module.classMembers(name);
+      return [...members.instanceMembers.values(), ...members.staticMembers.values()];
+    });
+  }
+
+  #recoveryBinding(module, name, file, exported, token = null) {
+    const key = `${module.file}#${name}`;
+    if (!this.recoveryBindings.has(key)) this.recoveryBindings.set(key,
+      this.#resolveLocalBinding(module.file, module, name, new Set(), "R01"));
+    const binding = this.recoveryBindings.get(key);
+    if (binding?.file !== file || binding.name !== exported) return false;
+    if (token === null) return true;
+    if (!this.sourceOrigins.has(module)) this.sourceOrigins.set(module, new Map());
+    const origins = this.sourceOrigins.get(module);
+    if (!origins.has(name)) origins.set(name, module.originUsage([name], { acceptBindings: false, moduleBindings: true }));
+    return origins.get(name).isOrigin(token);
+  }
+
+  #commandExpression(module, declaration, tokens, seen = new Set()) {
+    if (!tokens?.length) return false;
+    const commandFile = "src/flow/lib/flow-execution-command.js";
+    const calls = readInvocations({ tokens });
+    const first = calls[0];
+    if (first?.constructed && tokens[0].value === "new"
+      && first.endToken === tokens.at(-1)) return this.#recoveryBinding(module, first.name, commandFile, "FlowExecutionCommand", first.token);
+    if (tokens[0].kind === "identifier" && tokens[1]?.value === "."
+      && tokens[2]?.value === "fromStored" && tokens[3]?.value === "(" && tokens.at(-1)?.value === ")") {
+      return this.#recoveryBinding(module, tokens[0].value, commandFile, "FlowExecutionCommand", tokens[0]);
+    }
+    if (first && tokens[0] === first.token && first.endToken === tokens.at(-1)
+      && this.#recoveryBinding(module, first.name, "src/flow/lib/guarded-command.js", "guardedExecutionCommand", first.token)) {
+      return first.arguments.length === 3 && this.#commandExpression(module, declaration, first.arguments[0], seen);
+    }
+    if (tokens.length === 1 && tokens[0].kind === "identifier" && !seen.has(tokens[0].value)) {
+      seen.add(tokens[0].value);
+      const initializer = declaration?.topLevelInitializer(tokens[0].value);
+      return this.#commandExpression(module, declaration, initializer?.tokens, seen);
+    }
+    if (tokens.map((token) => token.value).join(" ") === "this . recoveryCommand") {
+      const className = declaration.name.split(".")[0];
+      const constructor = readClassMember(module, className, "constructor");
+      return constructor?.containsBodySequence("this.recoveryCommand instanceof FlowExecutionCommand") === true
+        && constructor.containsBodySequence("this.recoveryCommand = recoveryCommand == null ? null : recoveryCommand;")
+        && this.#recoveryBinding(module, "FlowExecutionCommand", commandFile, "FlowExecutionCommand");
+    }
+    if (first && tokens[0] === first.token && first.endToken === tokens.at(-1)) {
+      const binding = this.#resolveLocalBinding(module.file, module, first.name, new Set(), "R01");
+      const key = binding?.key;
+      if (!key || seen.has(key)) return false;
+      seen.add(key);
+      const target = this.#module(binding.file, [module.file, binding.file], "R01", true);
+      const helper = target?.declaration(binding.name);
+      const returns = helper?.returns() ?? [];
+      return returns.length === 1 && this.#commandExpression(target, helper, returns[0].tokens, seen);
+    }
+    return false;
+  }
+
+  #recoveryCommandProducers() {
+    const directiveFile = "src/flow/lib/next-action-directive.js";
+    const commandFile = "src/flow/lib/flow-execution-command.js";
+    const registryFile = "src/flow/registry.js";
+    const registry = this.#module(registryFile, [registryFile], "R01", true);
+    const commands = registry?.declaration("FLOW_COMMANDS");
+    if (!commands) this.#diagnose("R01", registryFile, null, [registryFile], "command registry cannot be inspected");
+    let producers = 0;
+    let values = 0;
+    for (const file of this.allFiles) {
+      const module = this.#module(file, [file], "R01", true);
+      if (!module) continue;
+      let declarations = null;
+      for (const call of this.#constructedInvocations(module)) {
+        if (nativeClassBases.has(call.name)) continue;
+        const directive = this.#recoveryBinding(module, call.name, directiveFile, "ExecuteCommandDirective");
+        const value = this.#recoveryBinding(module, call.name, commandFile, "FlowExecutionCommand");
+        if (!directive && !value) continue;
+        declarations ??= this.#sourceDeclarations(module);
+        const owner = declarations.find((entry) => entry.token.offset < call.token.offset
+          && entry.tokens.at(-1).offset >= call.endToken.offset);
+        if (directive) {
+          producers++;
+          const property = call.arguments.length === 1 && readObjectProperty(call.arguments[0], "command");
+          // A named class has a distinct lexical self-binding inside its own
+          // static method. Its closed restoration method is checked below.
+          const selfRestoration = file === directiveFile && owner?.name === "ExecuteCommandDirective.fromStored";
+          if (!selfRestoration && !this.#recoveryBinding(module, call.name, directiveFile, "ExecuteCommandDirective", call.token)
+            || !property || !this.#commandExpression(module, owner, property.tokens)) {
+            this.#diagnose("R01", file, call.token, [file, directiveFile, commandFile],
+              "ExecuteCommandDirective requires a statically proven structured command");
+          }
+        }
+        if (file === commandFile || file === "src/flow/lib/guarded-command.js"
+          || !value) continue;
+        // Source repair instructions have their own explicit command capability;
+        // this contract covers ExecuteCommand and Definition-owned Step commands.
+        if (owner?.bodyStartsWith("if (!(action.directive instanceof RepairEvidenceDirective)) return null;")) continue;
+        values++;
+        const input = call.arguments.length === 1 ? call.arguments[0] : [];
+        const group = readObjectProperty(input, "group");
+        const subcommand = readObjectProperty(input, "subcommand");
+        const groupName = group?.tokens.length === 1 && group.tokens[0].kind === "string" ? group.tokens[0].value : null;
+        const commandName = subcommand?.tokens.length === 1 && subcommand.tokens[0].kind === "string" ? subcommand.tokens[0].value : null;
+        const groupEntry = commands && groupName && readObjectProperty(commands.tokens, groupName);
+        if (!this.#recoveryBinding(module, call.name, commandFile, "FlowExecutionCommand", call.token)
+          || !["run", "set"].includes(groupName) || !commandName
+          || !groupEntry || !readObjectProperty(groupEntry.tokens, commandName)) {
+          this.#diagnose("R01", file, call.token, [file, commandFile, registryFile],
+            "structured command does not resolve to its core registry group and subcommand");
+        }
+      }
+    }
+    if (producers === 0 || values === 0) this.#diagnose("R01", directiveFile, null,
+      [directiveFile, commandFile], "production recovery command construction is missing");
+  }
+
+  #recoveryCommandBoundary() {
+    const file = "src/flow/lib/run-dispatch.js";
+    const module = this.#module(file, [file], "R02", true);
+    if (!module) return;
+    const registered = readClassMember(module, "RunDispatchCommand", "runRegisteredFlowCommand");
+    // A declared closed shape rejects discarded argv and additional guard/runtime
+    // injection even when the correct registry call also remains in the body.
+    if (!registered?.containsBodySequence("const entry = flowCommands[command.group]?.[command.subcommand];")
+      || !registered.containsBodySequence("envelopeType: command.group,")
+      || !registered.containsBodySequence("envelopeKey: command.subcommand,")) {
+      this.#diagnose("R02", file, registered?.token, [file, "src/flow/registry.js"],
+        "registered command must retain group and subcommand at the shared registry boundary");
+    }
+    const dispatchCalls = readInvocations({ tokens: registered?.bodyTokens() ?? [] }).filter((call) => call.name === "dispatch");
+    const argv = dispatchCalls.length === 1 && dispatchCalls[0].arguments.length === 1
+      && readObjectProperty(dispatchCalls[0].arguments[0], "argv");
+    const runtime = registered?.topLevelInitializer("runtimeOptions");
+    const inject = registered?.topLevelInitializer("injectAgentWorkDir");
+    if (!argv?.matches("[...command.args, ...(injectAgentWorkDir ? [\"--agent-work-dir\", ctx.agentWorkDir] : []),]")
+      || !runtime?.matches("[...(entry.args?.options ?? []), ...(entry.args?.optionalOptions ?? [])]")
+      || !inject?.matches(`ctx.agentWorkDir && runtimeOptions.includes("--agent-work-dir")
+        && !command.args.some((arg) => arg === "--agent-work-dir" || arg.startsWith("--agent-work-dir="))`)) {
+      this.#diagnose("R02", file, argv?.token ?? registered?.token, [file, "src/flow/registry.js"],
+        "registered command must preserve argv and inject only one declared runtime option");
+    }
+    const hook = dispatchCalls.length === 1 && readObjectProperty(dispatchCalls[0].arguments[0], "buildHookCtx");
+    const entry = dispatchCalls.length === 1 && readObjectProperty(dispatchCalls[0].arguments[0], "entry");
+    if (!this.#recoveryBinding(module, "flowCommands", "src/lib/command-registry.js", "flowCommands")
+      || !this.#recoveryBinding(module, "dispatch", "src/lib/dispatcher.js", "dispatch")
+      || !this.#recoveryBinding(module, "buildFlowCommandHookContext", "src/flow/lib/flow-context.js", "buildFlowCommandHookContext")
+      || !entry?.matches("entry") || !hook?.matches(`(container, input) => {
+        if (authorization !== null) input.finalizationAuthorization = authorization;
+        return { ...buildFlowCommandHookContext(container, entry, input), viaFlowDispatch: true,
+          ...(authorization === null ? {} : { finalizationAuthorization: authorization }) };
+      }`)) this.#diagnose("R04", file, registered?.token, [file, "src/lib/dispatcher.js"],
+      "registered execution must preserve the registry entry, hooks and finalization authorization");
+    if (!this.report.diagnostics.some((diagnostic) => diagnostic.file === file && ["R02", "R04"].includes(diagnostic.rule))
+      && !registered?.matchesDeclaration(`runRegisteredFlowCommand(ctx, target, command, authorization = null) {
+        if (!(command instanceof FlowExecutionCommand)) throw new TypeError($STRING_LITERAL);
+        const entry = flowCommands[command.group]?.[command.subcommand];
+        if (!entry?.command) {
+          throw new Error(\`dispatcher-owned command is not registered: \${command.group} \${command.subcommand}\`);
+        }
+        const runtimeOptions = [...(entry.args?.options ?? []), ...(entry.args?.optionalOptions ?? [])];
+        const injectAgentWorkDir = ctx.agentWorkDir && runtimeOptions.includes("--agent-work-dir")
+          && !command.args.some((arg) => arg === "--agent-work-dir" || arg.startsWith("--agent-work-dir="));
+        let stdout = "";
+        let exitCode = 0;
+        await dispatch({ container: this.container, entry,
+          argv: [...command.args, ...(injectAgentWorkDir ? ["--agent-work-dir", ctx.agentWorkDir] : []),],
+          envelopeType: command.group, envelopeKey: command.subcommand, runtimeLog: true,
+          stdout: (text) => { stdout += text; }, stderr: () => {}, setExitCode: (code) => { exitCode = code; },
+          buildHookCtx: (container, input) => {
+            if (authorization !== null) input.finalizationAuthorization = authorization;
+            return { ...buildFlowCommandHookContext(container, entry, input), viaFlowDispatch: true,
+              ...(authorization === null ? {} : { finalizationAuthorization: authorization }) };
+          },
+        });
+        return commandEnvelope(stdout.trim(), command.subcommand, exitCode);
+      }
+      `)) this.#diagnose("R02", file, registered?.token, [file], "registered command has an unknown execution shape");
+    const normalCommand = readClassMember(module, "RunDispatchCommand", "runDispatcherOwnedCommand");
+    if (!normalCommand?.containsBodySequence(`result: await this.runRegisteredFlowCommand(ctx, target, command.command,
+      flowStepExecutionRegistration(command.commandName)?.executionContract.selectorName === "selectFinalizationExecution"
+        ? invocation.authorization : null,)`)) this.#diagnose("R04", file, normalCommand?.token, [file],
+      "Definition-owned Step commands must use the shared boundary with registered finalization authorization");
+    const dispatchFile = "src/lib/dispatcher.js";
+    const dispatcher = this.#module(dispatchFile, [file, dispatchFile], "R04", true);
+    const lifecycle = dispatcher?.declaration("dispatch");
+    if (!lifecycle?.containsBodySequence("if (entry.pre) { try { await entry.pre(hookCtx); } catch (err) {")
+      || !lifecycle.containsBodySequence("if (entry.post && !skipPost) { try { const postResult = await entry.post(hookCtx, result);")
+      || !lifecycle.containsBodySequence(`await persistFinalizeCleanupPostReturnMetadata({ envelopeKey, hookCtx,
+        metadata: closedRuntimeLogMetadata, commandModule: mod, commitCompletion: true, });`)
+      || !lifecycle.containsBodySequence("await withFlowProcessRuntime(hookCtx, executeLifecycle,")) {
+      this.#diagnose("R04", dispatchFile, lifecycle?.token, [file, dispatchFile],
+        "shared dispatch must retain registered pre/post and completion receipt processing");
+    }
+    const recovery = readClassMember(module, "RunDispatchCommand", "runDispatcherOwnedRecovery");
+    if (!recovery?.matchesDeclaration(`runDispatcherOwnedRecovery(ctx, target, action, invocation, receiptMutation = null) {
+      if (!(action.directive instanceof ExecuteCommandDirective)) return null;
+      invocation.assertCommandSelection(action.directive);
+      const selected = await this.fetchNextAction(target);
+      if (selected instanceof Envelope) return selected;
+      this.assertCurrentInvocation(ctx, invocation,
+        this.captureAction(ctx, invocation.session, selected, 0, "pre-handoff-validation"), receiptMutation);
+      return this.runRegisteredFlowCommand(ctx, target, action.directive.command,
+        invocation.approved ? invocation.authorization : null);
+    }
+    `)) this.#diagnose("R03", file, recovery?.token, [file],
+      "selected recovery must verify its invocation and preserve approval authorization at the registered boundary");
+    const continuation = readClassMember(module, "RunDispatchCommand", "dispatchContinuation");
+    const body = continuation?.bodyTokens() ?? [];
+    const branch = body.findIndex((token, index) => token.value === "if" && body[index + 1]?.value === "("
+      && new SourceInitializer(token, index, body.slice(index + 2, index + 7)).matches("action.directive instanceof ExecuteCommandDirective"));
+    const memberCall = (name) => body.find((token, index) => token.value === name
+      && body[index - 1]?.value === "." && body[index + 1]?.value === "(");
+    const worker = memberCall("runWorkerAttempt");
+    const normal = memberCall("runDispatcherOwnedCommand");
+    const terminal = continuation?.containsBodySequence(`
+      if (progressed.failure) return progressed.failure;
+      stalledDispatches = progressed.stalledDispatches;
+      current = progressed.current;
+      continue;
+    } let dispatcherOwnedCommand;`);
+    if (branch < 0 || !worker || !normal || body[branch].offset >= normal.offset
+      || normal.offset >= worker.offset || !terminal
+      || !continuation.containsBodySequence("this.runDispatcherOwnedRecovery(ctx, target, action, invocation, receiptMutation)")) {
+      this.#diagnose("R03", file, continuation?.token, [file],
+        "ExecuteCommandDirective must terminate its branch before normal Step command and worker execution");
+    }
+    const current = readClassMember(module, "RunDispatchCommand", "assertCurrentInvocation");
+    if (!current?.matchesDeclaration(`assertCurrentInvocation(ctx, invocation, activeAction, receiptMutation = null) {
+      const flowState = readFlowState(ctx);
+      if (receiptMutation) {
+        receiptMutation.assertCurrent({ ctx, fingerprint: this.repositoryFingerprint, activeAction, flowState });
+      } else {
+        invocation.assertCurrent(activeAction, flowState);
+      }
+      return invocation;
+    }`) || !continuation?.containsBodySequence("this.assertCurrentInvocation(ctx, invocation, activeAction, receiptMutation);")) {
+      this.#diagnose("R03", file, current?.token ?? continuation?.token, [file],
+        "both execution boundaries must reuse current invocation and exact approval receipt validation");
+    }
+    const invocationFile = "src/flow/lib/dispatch-invocation.js";
+    const invocationModule = this.#module(invocationFile, [file, invocationFile], "R03", true);
+    const selection = invocationModule && readClassMember(invocationModule, "FlowDispatchInvocation", "assertCommandSelection");
+    const progress = invocationModule?.declaration("directiveProgressIdentity");
+    if (!selection?.matchesDeclaration(`assertCommandSelection(directive) {
+      const selected = this.action.directive;
+      if (!(directive instanceof ExecuteCommandDirective) || !(selected instanceof ExecuteCommandDirective)
+        || selected.actionId !== directive.actionId
+        || stableStringify(selected.command.toJSON()) !== stableStringify(directive.command.toJSON())) {
+        const error = new Error($STRING_LITERAL);
+        error.code = "FLOW_DISPATCH_INVOCATION_STALE";
+        throw error;
+      }
+      return this;
+    }
+    `) || !progress?.containsBodySequence("command: directive instanceof ExecuteCommandDirective ? directive.command.toJSON() : null,")
+      || !progress.containsBodySequence("nextAction: directive instanceof ExecuteCommandDirective ? null :")) {
+      this.#diagnose("R03", invocationFile, selection?.token ?? progress?.token,
+        [file, invocationFile], "command identity must use the canonical action ID and complete structured argv");
+    }
+    const identity = invocationModule && readClassMember(invocationModule, "FlowDispatchActionIdentity", "constructor");
+    if (!invocationModule || !this.#recoveryBinding(invocationModule, "NextActionDirective",
+      "src/flow/lib/next-action-directive.js", "NextActionDirective")
+      || !this.#recoveryBinding(invocationModule, "ExecuteCommandDirective",
+        "src/flow/lib/next-action-directive.js", "ExecuteCommandDirective")
+      || !identity?.matchesDeclaration(`constructor({ session, nextAction, repositoryFingerprint, canonicalRevision = null }) {
+        if (!(session instanceof FlowDispatchSession)) { throw new Error($STRING_LITERAL); }
+        if (!nextAction || typeof nextAction !== "object" || Array.isArray(nextAction)) { throw new Error($STRING_LITERAL); }
+        this.repositoryFingerprint = requireString(repositoryFingerprint, $STRING_LITERAL,);
+        this.session = session;
+        this.canonicalRevision = canonicalRevision === null ? null : requireString(canonicalRevision, $STRING_LITERAL);
+        this.target = session.target;
+        this.nextAction = nextAction;
+        this.directive = NextActionDirective.fromStored(nextAction.directive);
+        this.digest = flowDispatchDigest(stableStringify({ targetDigest: this.target.digest, runId: this.target.runId,
+          nextAction, repositoryFingerprint: this.repositoryFingerprint, canonicalRevision: this.canonicalRevision, }));
+        this.canonicalActionDigest = flowDispatchDigest(stableStringify(actionProgressIdentity(this.target, nextAction),));
+        this.progressDigest = flowDispatchDigest(stableStringify({ ...actionProgressIdentity(this.target, nextAction),
+          repositoryFingerprint: this.repositoryFingerprint, }));
+        Object.freeze(this);
+      }`)) {
+      this.#diagnose("R03", invocationFile, identity?.token, [file, invocationFile],
+        "captured command selection must belong to the immutable typed action identity");
+    }
+    const directiveModule = this.#module("src/flow/lib/next-action-directive.js", [file], "R01", true);
+    const constructor = directiveModule && readClassMember(directiveModule, "ExecuteCommandDirective", "constructor");
+    const restored = directiveModule && readClassMember(directiveModule, "ExecuteCommandDirective", "fromStored", { isStatic: true });
+    if (!constructor?.containsBodySequence("if (!(command instanceof FlowExecutionCommand)) throw new TypeError($STRING_LITERAL);")
+      || !constructor.containsBodySequence("nextAction: command.toString(),")
+      || !restored?.matchesDeclaration(`fromStored(value) {
+        const command = FlowExecutionCommand.fromStored(value?.command);
+        if (value.nextAction !== command.toString()) throw new Error($STRING_LITERAL);
+        return new ExecuteCommandDirective({ ...value, command });
+      }
+      `)) this.#diagnose("R01", directiveModule?.file ?? "src/flow/lib/next-action-directive.js",
+      constructor?.token, [file, "src/flow/lib/next-action-directive.js"], "stored directives must require a command and derive its display");
+    const commandModule = this.#module("src/flow/lib/flow-execution-command.js", [file], "R02", true);
+    const bound = commandModule && readClassMember(commandModule, "FlowExecutionCommand", "bindTarget");
+    if (!bound?.matchesBody(`return new FlowExecutionCommand({ group: this.group, subcommand: this.subcommand,
+      args: [...this.args, ...binding.guardArguments()] });`)) this.#diagnose("R02",
+      commandModule?.file ?? "src/flow/lib/flow-execution-command.js", bound?.token,
+      [file, "src/flow/lib/flow-execution-command.js"], "target guards must bind once to structured semantic argv");
+    const guardFile = "src/flow/lib/guarded-command.js";
+    const guardModule = this.#module(guardFile, [file, guardFile], "R02", true);
+    const guarded = guardModule?.declaration("guardedExecutionCommand");
+    if (!guarded?.matchesFunction("command, state, binding = null", `
+      if (!(command instanceof FlowExecutionCommand)) throw new TypeError($STRING_LITERAL);
+      if (binding !== null) return command.bindTarget(binding);
+      return new FlowExecutionCommand({ group: command.group, subcommand: command.subcommand,
+        args: [...command.args, ...guardArgumentsForState(state)] });
+    `)) this.#diagnose("R02", guardFile, guarded?.token, [file, guardFile],
+      "command projection must preserve semantic argv and bind one target guard set");
   }
 
   #diagnose(rule, file, token, trace, message) {
@@ -3619,7 +3968,7 @@ const revision = testSourceRevision(snapshot, testSource);
         })${prefix === "" ? "" : ")"}`))
         || !claimDirective?.matches(`claimRequired ? new ExecuteCommandDirective({
           actionId: "CLAIM_NEXT_ACTION",
-          nextAction: guardedCommand("sennel flow run claim-next-action", state, binding),
+          command: guardedExecutionCommand(new FlowExecutionCommand({ group: "run", subcommand: "claim-next-action" }), state, binding),
           instruction: $STRING_LITERAL,
           reason: $STRING_LITERAL,
         }) : selectedDirective`)

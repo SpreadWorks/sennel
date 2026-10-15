@@ -19,7 +19,6 @@ import { CanonicalFlowFixture } from "../../support/infrastructure/flow-setup.js
 import { TaskReviewScenario } from "../../support/builders/task-review-scenario.js";
 import { commitAll, initGitRepo } from "../../support/infrastructure/git-repo.js";
 import { createTmpDir, removeTmpDir } from "../../support/builders/tmp-dir.js";
-import { ExecuteCommandDirective, RepairEvidenceDirective } from "../../../src/flow/lib/next-action-directive.js";
 
 function completedAction() {
   return {
@@ -80,92 +79,6 @@ function taskReviewAction(taskId, step, action, key) {
     directive: { kind: "execute_step", terminal: false, requiresUserAction: false, action },
   };
 }
-
-test("dispatcher owns the typed historical missing-producer recovery command", async () => {
-  const dispatcher = new RunDispatchCommand();
-  const calls = [];
-  dispatcher.runRegisteredFlowCommand = async (_ctx, _target, commandName, args) => {
-    calls.push({ commandName, args });
-    return { ok: true, errors: [] };
-  };
-  const result = await dispatcher.runDispatcherOwnedRecovery(
-    {},
-    {},
-    {
-      directive: new ExecuteCommandDirective({
-        actionId: "RECOVER_MISSING_PRODUCER_ARTIFACT",
-        nextAction: "sennel flow run recover-missing-producer-artifact --expect-run-id recovery-run",
-        instruction: "Recover the historical producer.",
-        reason: "The consumer was claimed before the producer result existed.",
-      }),
-    },
-  );
-  assert.deepEqual(result, { ok: true, errors: [] });
-  assert.deepEqual(calls, [{ commandName: "recover-missing-producer-artifact", args: [] }]);
-});
-
-test("dispatcher owns definition-selected Review settlement without starting a worker", async () => {
-  const dispatcher = new RunDispatchCommand();
-  const calls = [];
-  dispatcher.runRegisteredFlowCommand = async (_ctx, _target, commandName, args) => {
-    calls.push({ commandName, args });
-    return { ok: true, errors: [] };
-  };
-  const result = await dispatcher.runDispatcherOwnedRecovery(
-    {},
-    {},
-    {
-      directive: new ExecuteCommandDirective({
-        actionId: "SETTLE_REVIEW_DEFER",
-        nextAction: "sennel flow run settle-review-transition --expect-run-id review-run",
-        instruction: "Persist the definition-selected Review deferral.",
-        reason: "The semantic Review retry budget is exhausted.",
-      }),
-    },
-  );
-  assert.deepEqual(result, { ok: true, errors: [] });
-  assert.deepEqual(calls, [{ commandName: "settle-review-transition", args: [] }]);
-});
-
-test("dispatcher recognizes Definition-owned Gate retry, repair, and settlement directives without a worker", async () => {
-  const dispatcher = new RunDispatchCommand();
-  const calls = [];
-  dispatcher.runRegisteredFlowCommand = async (_ctx, _target, commandName, args) => {
-    calls.push({ commandName, args });
-    return { ok: true, errors: [] };
-  };
-  const retry = await dispatcher.runDispatcherOwnedRecovery({}, {}, { directive: new ExecuteCommandDirective({
-    actionId: "CLAIM_GATE_RETRY", nextAction: "sennel flow run claim-next-action --expect-run-id run",
-    instruction: "Retry.", reason: "fixture",
-  }) });
-  const settle = await dispatcher.runDispatcherOwnedRecovery({}, {}, { directive: new ExecuteCommandDirective({
-    actionId: "SETTLE_GATE_DEFER", nextAction: "sennel flow run settle-gate-transition --expect-run-id run",
-    instruction: "Settle.", reason: "fixture",
-  }) });
-  const reconcile = await dispatcher.runDispatcherOwnedRecovery({}, {}, { directive: new ExecuteCommandDirective({
-    actionId: "RECONCILE_GATE_PUBLICATION", nextAction: "sennel flow run gate --expect-run-id run",
-    instruction: "Reconcile.", reason: "fixture",
-  }) });
-  const ordinaryGate = await dispatcher.runDispatcherOwnedRecovery({}, {}, { directive: new ExecuteCommandDirective({
-    actionId: "RUN_GATE", nextAction: "sennel flow run gate --expect-run-id run",
-    instruction: "Evaluate.", reason: "fixture",
-  }) });
-  const repair = await dispatcher.runDispatcherOwnedRepair({}, {}, { directive: new RepairEvidenceDirective({
-    actionId: "REPAIR_PLAN_GATE_EVIDENCE", evidenceKind: "gate", phase: "draft",
-    nextAction: "sennel flow run repair-plan-gate --expect-run-id run", instruction: "Repair.", reason: "fixture",
-  }) });
-  assert.equal(retry.ok, true);
-  assert.equal(settle.ok, true);
-  assert.equal(reconcile.ok, true);
-  assert.equal(ordinaryGate, null);
-  assert.equal(repair.ok, true);
-  assert.deepEqual(calls, [
-    { commandName: "claim-next-action", args: [] },
-    { commandName: "settle-gate-transition", args: [] },
-    { commandName: "gate", args: [] },
-    { commandName: "repair-plan-gate", args: [] },
-  ]);
-});
 
 test("next-action refuses a Spec Gate publication without its atomic Result", async () => {
   const root = createTmpDir("dispatcher-gate-publication-recovery-");
@@ -292,7 +205,7 @@ test("dispatcher executes a definition-owned review in the parent without starti
       },
       agent: { async call() { workerCalls += 1; } },
       commandRunner: async ({ command, target }) => {
-        commandCall = { name: command.commandName, argv: command.argv(target) };
+        commandCall = { name: command.commandName, argv: [...command.command.args] };
         flow.settle("draft-questions-review");
         return { ok: true, errors: [] };
       },
@@ -320,7 +233,7 @@ test("dispatcher executes a definition-owned review in the parent without starti
     assert.equal(workerCalls, 0);
     assert.deepEqual(commandCall, {
       name: "review",
-      argv: ["--phase", "draft", "--expect-run-id", "run-command-owner"],
+      argv: ["--phase", "draft", "--expect-run-id", "run-command-owner", "--expect-spec", specId, "--expect-no-issue"],
     });
   } finally {
     removeTmpDir(root);
@@ -698,51 +611,6 @@ test("dispatcher executes materialized task review and gate commands through the
   } finally {
     flowCommands.run.review = originals.review;
     flowCommands.run.gate = originals.gate;
-  }
-});
-
-test("finalize cleanup returns at completion without reading a removed execution root", async () => {
-  const mainRoot = createTmpDir("dispatcher-finalize-cleanup-main-");
-  const executionRoot = path.join(mainRoot, "execution");
-  try {
-    fs.mkdirSync(executionRoot, { recursive: true });
-    const specId = "504-finalize-cleanup";
-    const manager = new FlowManager({ root: executionRoot, mainRoot, inWorktree: true, specId });
-    const flow = new CanonicalFlowFixture({
-      flowManager: manager, specId, runId: "run-finalize-cleanup",
-      execution: { mode: "worktree", baseBranch: "main", featureBranch: "feature/finalize-cleanup" },
-    }).create().registerActive().activate("finalize-cleanup");
-    const action = {
-      taskId: null, step: "finalize-cleanup", action: "run-finalize-cleanup",
-      instructions: { key: "impl.finalize-cleanup", content: "Clean up." }, context: {}, output_schema: {},
-      requires_approval: false, maxAttempts: 1,
-      directive: { kind: "execute_step", terminal: false, requiresUserAction: false, action: "run-finalize-cleanup" },
-    };
-    const dispatcher = new RunDispatchCommand({
-      nextAction: { async run() { throw new Error("next-action must not read a removed execution root"); } },
-      commandRunner: async () => {
-        fs.rmSync(executionRoot, { recursive: true, force: true });
-        return { ok: true, errors: [], data: { status: "done", assurance: { completed: true } } };
-      },
-      repositoryFingerprint: () => "dispatcher-finalize-cleanup-fingerprint",
-      leaseFactory: () => ({ acquire() {}, release() {} }),
-      handoffCoordinator: { recoverPending() {} },
-    });
-    dispatcher.container = {};
-    // The first next-action read starts the loop; all reads after cleanup must
-    // be avoided because the command has removed this worktree.
-    let reads = 0;
-    dispatcher.nextAction = { async run() { return reads++ < 2 ? structuredClone(action) : (() => { throw new Error("unexpected next-action read"); })(); } };
-    const result = await dispatcher.execute({
-      root: executionRoot, mainRoot, executionRoot, specId, flowManager: manager,
-      flowState: manager.load(specId), expectRunId: "run-finalize-cleanup",
-      _envelopeType: "run", _envelopeKey: "dispatch",
-    });
-    assert.equal(result.dispatch.boundary, "completed");
-    assert.equal(result.dispatch.dispatchCount, 1);
-    assert.equal(reads, 2);
-  } finally {
-    removeTmpDir(mainRoot);
   }
 });
 

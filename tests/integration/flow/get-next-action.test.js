@@ -18,7 +18,7 @@ import {
   makeFlowManager,
 } from "../../support/infrastructure/flow-setup.js";
 import { createTmpDir, removeTmpDir } from "../../support/builders/tmp-dir.js";
-import { commitAll, initGitRepo } from "../../support/infrastructure/git-repo.js";
+import { commitAll, initGitRepo, checkoutNewBranch } from "../../support/infrastructure/git-repo.js";
 import {
   deriveNextAction,
   getFlowDefinitionOrder,
@@ -33,6 +33,7 @@ import {
 import { AwaitingUserAnswer, DraftQuestionLedger } from "../../../src/flow/lib/draft-question-ledger.js";
 import { flattenSteps, findStepById } from "../../../src/flow/lib/step-tree.js";
 import { FlowTargetBinding } from "../../../src/lib/flow-target-guard.js";
+import { NextActionDirective } from "../../../src/flow/lib/next-action-directive.js";
 import {
   ReviewDeferralEvidence,
   ReviewTransitionFacts,
@@ -88,6 +89,7 @@ function createScenario(tmp, {
   tasks = [],
   execution = { mode: "direct" },
   autoApprove = false,
+  specRecord = null,
 } = {}) {
   return new CanonicalNextActionScenario({
     flowManager: makeFlowManager(tmp),
@@ -96,11 +98,27 @@ function createScenario(tmp, {
     request: "Keep this canonical next-action request unchanged.",
     execution,
     autoApprove,
+    specRecord,
   }).create({ tasks });
 }
 
 function managerFor(scenario) {
   return scenario.flowManager;
+}
+
+function createProducerScenario(tmp, options = {}) {
+  initGitRepo(tmp);
+  fs.writeFileSync(path.join(tmp, "README.md"), "baseline\n");
+  fs.writeFileSync(path.join(tmp, "package.json"), JSON.stringify({ type: "module", scripts: { test: "node --test fixture.test.js" } }));
+  fs.writeFileSync(path.join(tmp, "fixture.test.js"), "import test from 'node:test'; import assert from 'node:assert/strict'; import { changed } from './src-change.js'; test('regression source contract', () => assert.equal(changed, true));\n");
+  commitAll(tmp, "test: producer baseline");
+  checkoutNewBranch(tmp, "feature/next-action-producers");
+  return createScenario(tmp, { tasks: [taskDocument("T-producer")], ...options,
+    execution: { mode: "branch", baseBranch: "main", featureBranch: "feature/next-action-producers" } });
+}
+
+function producerSourceMutations(tmp, taskId = "T-producer") {
+  return new Map([[`${taskId}-impl`, () => fs.writeFileSync(path.join(tmp, "src-change.js"), "export const changed = true;\n")]]);
 }
 
 function stateFor(scenario) {
@@ -630,9 +648,9 @@ describe("flow get next-action", () => {
     assert.equal(active.envelope.data.directive.requiresUserAction, false);
   });
 
-  it("does not attach finalize confirmation to its pending claim", () => {
+  it("does not attach finalize confirmation to its pending claim", async () => {
     tmp = createTmpDir();
-    const scenario = createScenario(tmp).beforeFlowStep("finalize-commit");
+    const scenario = await createProducerScenario(tmp).beforeFlowStepWithProducers("finalize-commit", { sourceMutations: producerSourceMutations(tmp) });
 
     const pending = runCli(tmp, ["flow", "get", "next-action"]);
     assert.equal(pending.exitCode, 0);
@@ -683,7 +701,7 @@ describe("flow get next-action", () => {
     assert.equal(stateFor(scenario).currentTaskId, null);
   });
 
-  it("keeps dispatch approval token-bound while exposing acceptance risk as a tokenless user decision", () => {
+  it("keeps dispatch approval token-bound while exposing acceptance risk as a tokenless user decision", async () => {
     tmp = createTmpDir();
     const approval = createScenario(tmp).atFlowStep("approval");
     const approvalResult = runCli(tmp, ["flow", "get", "next-action"]);
@@ -753,7 +771,9 @@ describe("flow get next-action", () => {
 
     removeTmpDir(tmp);
     tmp = createTmpDir();
-    const acceptance = createScenario(tmp).atFlowStep("acceptance-decision");
+    const acceptance = await createProducerScenario(tmp, { tasks: [taskDocument("T-acceptance")], specRecord: { requirements: [
+      { id: "R1", desc: "Verify the requested public behavior.", task_ids: ["T-acceptance"], testable: false },
+    ] } }).atFlowStepWithProducers("acceptance-decision", { acceptanceResponse: { status: "notVerifiable" }, sourceMutations: producerSourceMutations(tmp, "T-acceptance") });
     const binding = FlowTargetBinding.capture({
       flowState: stateFor(acceptance),
       mainRoot: tmp,
@@ -796,7 +816,7 @@ describe("flow get next-action", () => {
 
     removeTmpDir(tmp);
     tmp = createTmpDir();
-    const finalize = createScenario(tmp).atFlowStep("finalize-commit");
+    const finalize = await createProducerScenario(tmp).atFlowStepWithProducers("finalize-commit", { sourceMutations: producerSourceMutations(tmp) });
     const finalizeResult = runCli(tmp, ["flow", "get", "next-action"]);
 
     assert.equal(finalizeResult.exitCode, 0);
@@ -917,12 +937,9 @@ describe("flow get next-action", () => {
     }
   });
 
-  it("recovers one durable finalization side effect through the V1 outbox ledger", () => {
+  it("recovers one durable finalization side effect through the V1 outbox ledger", async () => {
     tmp = createTmpDir();
-    initGitRepo(tmp);
-    fs.writeFileSync(path.join(tmp, "README.md"), "baseline\n");
-    commitAll(tmp, "test: baseline");
-    const scenario = createScenario(tmp).atFlowStep("finalize-commit");
+    const scenario = await createProducerScenario(tmp).atFlowStepWithProducers("finalize-commit", { sourceMutations: producerSourceMutations(tmp) });
     const { identity, outbox } = failedFinalizationOutbox(
       scenario,
       "finalize-commit",
@@ -944,17 +961,19 @@ describe("flow get next-action", () => {
     assert.equal(envelope.data.directive.kind, "execute_command");
     assert.equal(envelope.data.directive.actionId, "RECOVER_FINALIZE_COMMIT_OUTBOX");
     assert.match(envelope.data.directive.nextAction, /^sennel flow run recover-finalization /);
+    const restoredDirective = NextActionDirective.fromStored(JSON.parse(JSON.stringify(envelope.data.directive)));
+    assert.deepEqual(restoredDirective.command.toJSON(), {
+      group: "run", subcommand: "recover-finalization",
+      args: ["--expect-binding", envelope.data.binding, "--expect-no-issue"],
+    });
     assert.equal(status.status, "failed");
     assert.equal(status.exactRecoveryReceipt, null);
     assert.equal(managerFor(scenario).activityLedger(SPEC_ID).at(-1).transition.operation, "fail_outbox");
   });
 
-  it("fails closed after an exact V1 finalization recovery is consumed", () => {
+  it("fails closed after an exact V1 finalization recovery is consumed", async () => {
     tmp = createTmpDir();
-    initGitRepo(tmp);
-    fs.writeFileSync(path.join(tmp, "README.md"), "baseline\n");
-    commitAll(tmp, "test: baseline");
-    const scenario = createScenario(tmp).atFlowStep("finalize-commit");
+    const scenario = await createProducerScenario(tmp).atFlowStepWithProducers("finalize-commit", { sourceMutations: producerSourceMutations(tmp) });
     const { identity, outbox } = failedFinalizationOutbox(
       scenario,
       "finalize-commit",
@@ -982,12 +1001,9 @@ describe("flow get next-action", () => {
     assert.equal(envelope.data.directive.code, "FINALIZE_OUTBOX_RECOVERY_EXHAUSTED");
   });
 
-  it("projects interrupted sync recovery without settling state", () => {
+  it("projects interrupted sync recovery without settling state", async () => {
     tmp = createTmpDir();
-    initGitRepo(tmp);
-    fs.writeFileSync(path.join(tmp, "README.md"), "baseline\n");
-    commitAll(tmp, "test: baseline");
-    const scenario = createScenario(tmp).atFlowStep("finalize-sync");
+    const scenario = await createProducerScenario(tmp).atFlowStepWithProducers("finalize-sync", { sourceMutations: producerSourceMutations(tmp) });
     const manager = managerFor(scenario);
     const identity = finalizationOutboxIdentity(stateFor(scenario), "finalize-sync");
     const outbox = new FlowOutboxStore(manager, { specId: SPEC_ID });
@@ -1006,6 +1022,8 @@ describe("flow get next-action", () => {
     assert.equal(envelope.data.step, "finalize-sync");
     assert.equal(envelope.data.directive.actionId, "RECOVER_INTERRUPTED_FINALIZE_SYNC");
     assert.match(envelope.data.directive.nextAction, /^sennel flow run recover-finalization /);
+    assert.deepEqual(envelope.data.directive.command.args,
+      ["--expect-binding", envelope.data.binding, "--expect-no-issue"]);
     assert.equal(stateFor(scenario).currentNodeId, "finalize-sync");
     assert.equal(findStepById(stateFor(scenario).steps, "finalize-sync").status, "in_progress");
     assert.equal(status.status, "pending");
@@ -1029,9 +1047,10 @@ describe("flow get next-action", () => {
     assert.equal(fs.existsSync(path.join(location.specRoot, SPEC_ID, "flow.json")), false);
   });
 
-  it("returns completed after every V1 leaf is confirmed", () => {
+  it("returns completed after every V1 leaf is confirmed", async () => {
     tmp = createTmpDir();
-    const scenario = createScenario(tmp).settleAll();
+    const scenario = await createProducerScenario(tmp).atFlowStepWithProducers("finalize-cleanup", { sourceMutations: producerSourceMutations(tmp) });
+    scenario.flow.settle("finalize-cleanup");
 
     const { envelope, exitCode } = runCli(tmp, ["flow", "get", "next-action"]);
 

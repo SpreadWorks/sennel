@@ -1,3 +1,4 @@
+import { FlowExecutionCommand } from "./lib/flow-execution-command.js";
 import { SpecGateRepairRecoveryEvidence } from "./lib/spec-gate-repair-recovery.js";
 export { resolveSpecGateRepairRecovery } from "./lib/spec-gate-repair-recovery.js";
 import { RetroConnector } from "./engine/connectors/acceptance/retro-connector.js";
@@ -3912,29 +3913,6 @@ export function resolveLifecyclePlan(input = {}) {
   });
 }
 
-export class FlowExecutionCommand {
-  constructor(subcommand, ...args) {
-    const tokens = [subcommand, ...args];
-    if (tokens.some((token) => (
-      typeof token !== "string" || token.trim() === "" || /\s/.test(token)
-    ))) {
-      throw new Error("flow execution command tokens must be non-empty strings without whitespace");
-    }
-    this.subcommand = subcommand;
-    this.args = Object.freeze([...args]);
-    this.tokens = Object.freeze(["sennel", "flow", "run", ...tokens]);
-    Object.freeze(this);
-  }
-
-  toString() {
-    return this.tokens.join(" ");
-  }
-
-  runArguments() {
-    return [...this.tokens.slice(3)];
-  }
-}
-
 /** The one authority permitted to terminally handle a parent command failure. */
 export const DEFINITION_FAILURE_OWNERS = Object.freeze([
   DefinitionFailureOwnership.dispatcherPrimary(),
@@ -5524,7 +5502,7 @@ const FLOW_DEFINITION = Object.freeze([
         id: "draft-questions-review",
         label: "Review (draft questions)",
         contextKinds: ["draft", "issue"],
-        executionCommand: new FlowExecutionCommand("review", "--phase", "draft"),
+        executionCommand: new FlowExecutionCommand({ group: "run", subcommand: "review", args: ["--phase", "draft"] }),
       }),
       ...createDraftReviewRouteNodes(DRAFT_QUESTIONS_ROUTE),
       new FlowNode({
@@ -5549,7 +5527,7 @@ const FLOW_DEFINITION = Object.freeze([
         id: "draft-coverage-review",
         label: "Review (draft coverage)",
         contextKinds: ["draft", "issue"],
-        executionCommand: new FlowExecutionCommand("review", "--phase", "draft"),
+        executionCommand: new FlowExecutionCommand({ group: "run", subcommand: "review", args: ["--phase", "draft"] }),
       }),
       ...createDraftReviewRouteNodes(DRAFT_COVERAGE_ROUTE),
       new FlowNode({
@@ -5563,7 +5541,7 @@ const FLOW_DEFINITION = Object.freeze([
         gatePhase: ["draft"],
         failurePolicy: "step-definition",
         definitionLifecycleOwned: true,
-        executionCommand: new FlowExecutionCommand("gate"),
+        executionCommand: new FlowExecutionCommand({ group: "run", subcommand: "gate" }),
         failureOwnership: DefinitionFailureOwnership.commandPrimaryWithDispatcherFallback(),
       }),
       new FlowNode({
@@ -5578,7 +5556,7 @@ const FLOW_DEFINITION = Object.freeze([
         id: "spec-review",
         label: "Review (spec)",
         contextKinds: ["spec", "guardrail"],
-        executionCommand: new FlowExecutionCommand("review", "--phase", "spec"),
+        executionCommand: new FlowExecutionCommand({ group: "run", subcommand: "review", args: ["--phase", "spec"] }),
       }),
       new FlowNode({
         id: "spec-triage",
@@ -5609,7 +5587,7 @@ const FLOW_DEFINITION = Object.freeze([
         gatePhase: ["spec", "task-spec"],
         failurePolicy: "step-definition",
         definitionLifecycleOwned: true,
-        executionCommand: new FlowExecutionCommand("gate"),
+        executionCommand: new FlowExecutionCommand({ group: "run", subcommand: "gate" }),
         failureOwnership: DefinitionFailureOwnership.commandPrimaryWithDispatcherFallback(),
       }),
       new FlowNode({
@@ -5649,7 +5627,7 @@ const FLOW_DEFINITION = Object.freeze([
         outputSchemaRef: "next-action/review.schema.json",
         maxAttempts: 1,
         definitionLifecycleOwned: true,
-        executionCommand: new FlowExecutionCommand("review", "--phase", "test"),
+        executionCommand: new FlowExecutionCommand({ group: "run", subcommand: "review", args: ["--phase", "test"] }),
         failureOwnership: DefinitionFailureOwnership.commandPrimaryWithDispatcherFallback(),
       }),
       new FlowNode({
@@ -5670,7 +5648,7 @@ const FLOW_DEFINITION = Object.freeze([
         outputSchemaRef: "next-action/requirement-test-gate.schema.json",
         maxAttempts: 3,
         definitionLifecycleOwned: true,
-        executionCommand: new FlowExecutionCommand("requirement-test-gate"),
+        executionCommand: new FlowExecutionCommand({ group: "run", subcommand: "requirement-test-gate" }),
         failureOwnership: DefinitionFailureOwnership.dispatcherPrimary(),
       }),
     ],
@@ -5699,7 +5677,7 @@ const FLOW_DEFINITION = Object.freeze([
         maxAttempts: 3,
         failurePolicy: "test-chain-retry",
         definitionLifecycleOwned: true,
-        executionCommand: new FlowExecutionCommand("test-execute"),
+        executionCommand: new FlowExecutionCommand({ group: "run", subcommand: "test-execute" }),
         failureOwnership: DefinitionFailureOwnership.dispatcherPrimary(),
       }),
       new FlowNode({
@@ -5712,7 +5690,7 @@ const FLOW_DEFINITION = Object.freeze([
         maxAttempts: 3,
         failurePolicy: "test-chain-retry",
         definitionLifecycleOwned: true,
-        executionCommand: new FlowExecutionCommand("test-result-review"),
+        executionCommand: new FlowExecutionCommand({ group: "run", subcommand: "test-result-review" }),
         failureOwnership: DefinitionFailureOwnership.dispatcherPrimary(),
       }),
       new FlowNode({
@@ -5726,7 +5704,7 @@ const FLOW_DEFINITION = Object.freeze([
         toolingMaxAttempts: 1,
         failurePolicy: "retry",
         definitionLifecycleOwned: true,
-        executionCommand: new FlowExecutionCommand("review", "--phase", "impl"),
+        executionCommand: new FlowExecutionCommand({ group: "run", subcommand: "review", args: ["--phase", "impl"] }),
         failureOwnership: DefinitionFailureOwnership.commandPrimaryWithDispatcherFallback(),
       }),
       new FlowNode({
@@ -5758,7 +5736,7 @@ const FLOW_DEFINITION = Object.freeze([
         gatePhase: ["integration", "task-impl"],
         failurePolicy: "block",
         definitionLifecycleOwned: true,
-        executionCommand: new FlowExecutionCommand("gate"),
+        executionCommand: new FlowExecutionCommand({ group: "run", subcommand: "gate" }),
         failureOwnership: DefinitionFailureOwnership.commandPrimaryWithDispatcherFallback(),
       }),
       new FlowNode({
@@ -5770,7 +5748,7 @@ const FLOW_DEFINITION = Object.freeze([
         outputSchemaRef: "next-action/retro.schema.json",
         maxAttempts: 2,
         definitionLifecycleOwned: true,
-        executionCommand: new FlowExecutionCommand("retro"),
+        executionCommand: new FlowExecutionCommand({ group: "run", subcommand: "retro" }),
         failureOwnership: DefinitionFailureOwnership.dispatcherPrimary(),
       }),
       new FlowNode({
@@ -5785,7 +5763,7 @@ const FLOW_DEFINITION = Object.freeze([
         failurePolicy: "amend-spec",
         failureTargetId: "spec",
         definitionLifecycleOwned: true,
-        executionCommand: new FlowExecutionCommand("acceptance-review"),
+        executionCommand: new FlowExecutionCommand({ group: "run", subcommand: "acceptance-review" }),
         failureOwnership: DefinitionFailureOwnership.commandPrimaryWithDispatcherFallback(),
       }),
       new FlowNode({
@@ -5813,7 +5791,7 @@ const FLOW_DEFINITION = Object.freeze([
         // every failed route once the canonical facts boundary is available.
         failurePolicy: "step-definition",
         definitionLifecycleOwned: true,
-        executionCommand: new FlowExecutionCommand("final-regression"),
+        executionCommand: new FlowExecutionCommand({ group: "run", subcommand: "final-regression" }),
         failureOwnership: DefinitionFailureOwnership.commandPrimaryWithDispatcherFallback(),
       }),
       new FlowNode({
@@ -5825,7 +5803,7 @@ const FLOW_DEFINITION = Object.freeze([
         outputSchemaRef: "next-action/report.schema.json",
         maxAttempts: 2,
         definitionLifecycleOwned: true,
-        executionCommand: new FlowExecutionCommand("report"),
+        executionCommand: new FlowExecutionCommand({ group: "run", subcommand: "report" }),
         failureOwnership: DefinitionFailureOwnership.lifecycleOutbox(),
       }),
       new FlowNode({
@@ -5842,7 +5820,7 @@ const FLOW_DEFINITION = Object.freeze([
             requiresApproval: true,
             autoApproveChoiceId: "1",
             definitionLifecycleOwned: true,
-            executionCommand: new FlowExecutionCommand("finalize-commit"),
+            executionCommand: new FlowExecutionCommand({ group: "run", subcommand: "finalize-commit" }),
             failureOwnership: DefinitionFailureOwnership.lifecycleOutbox(),
           }),
           new FlowNode({
@@ -5853,7 +5831,7 @@ const FLOW_DEFINITION = Object.freeze([
             contextKinds: ["spec", "diff"],
             outputSchemaRef: "next-action/finalize.schema.json",
             definitionLifecycleOwned: true,
-            executionCommand: new FlowExecutionCommand("finalize-merge"),
+            executionCommand: new FlowExecutionCommand({ group: "run", subcommand: "finalize-merge" }),
             failureOwnership: DefinitionFailureOwnership.lifecycleOutbox(),
           }),
           new FlowNode({
@@ -5868,7 +5846,7 @@ const FLOW_DEFINITION = Object.freeze([
             // this leaf so cleanup can retain the persisted evidence.
             skippable: true,
             definitionLifecycleOwned: true,
-            executionCommand: new FlowExecutionCommand("finalize-sync"),
+            executionCommand: new FlowExecutionCommand({ group: "run", subcommand: "finalize-sync" }),
             failureOwnership: DefinitionFailureOwnership.lifecycleOutbox(),
           }),
           new FlowNode({
@@ -5879,7 +5857,7 @@ const FLOW_DEFINITION = Object.freeze([
             contextKinds: ["spec"],
             outputSchemaRef: "next-action/finalize.schema.json",
             definitionLifecycleOwned: true,
-            executionCommand: new FlowExecutionCommand("finalize-cleanup"),
+            executionCommand: new FlowExecutionCommand({ group: "run", subcommand: "finalize-cleanup" }),
             failureOwnership: DefinitionFailureOwnership.lifecycleOutbox(),
           }),
         ],
@@ -5911,7 +5889,7 @@ const TASK_DEFINITION = Object.freeze([
     toolingMaxAttempts: 1,
     failurePolicy: "retry",
     definitionLifecycleOwned: true,
-    executionCommand: new FlowExecutionCommand("review", "--phase", "impl"),
+    executionCommand: new FlowExecutionCommand({ group: "run", subcommand: "review", args: ["--phase", "impl"] }),
     failureOwnership: DefinitionFailureOwnership.commandPrimaryWithDispatcherFallback(),
   }),
   new FlowNode({
@@ -5947,7 +5925,7 @@ const TASK_DEFINITION = Object.freeze([
     maxAttempts: 5,
     failurePolicy: "block",
     definitionLifecycleOwned: true,
-    executionCommand: new FlowExecutionCommand("gate"),
+    executionCommand: new FlowExecutionCommand({ group: "run", subcommand: "gate" }),
     failureOwnership: DefinitionFailureOwnership.commandPrimaryWithDispatcherFallback(),
   }),
 ]);

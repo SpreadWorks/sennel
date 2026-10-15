@@ -14,6 +14,7 @@ import { FinalizeCommitPathSet } from "../../../src/flow/lib/finalize-commit-pat
 import { registerFinalizationRecoveryContracts } from "./finalization-phase-recovery.contract.js";
 import { registerFinalizationCleanupContracts } from "./finalization-phase-cleanup.contract.js";
 import { registerFinalizationWorktreeContracts } from "./finalization-phase-worktree.contract.js";
+import { registerDispatcherFinalizationApprovalContracts } from "./dispatcher-finalization-approval.contract.js";
 
 describe("Finalization phase: genuine Report / canonical reload / external effect / consumer", { concurrency: false }, () => {
   let seed;
@@ -31,6 +32,7 @@ describe("Finalization phase: genuine Report / canonical reload / external effec
   registerFinalizationRecoveryContracts(scenario);
   registerFinalizationCleanupContracts(scenario, () => seed);
   registerFinalizationWorktreeContracts();
+  registerDispatcherFinalizationApprovalContracts(scenario);
 
   test("F01 real commit, squash, main docs and teardown preserve the produced report through last-finalized consumers", async (t) => {
     const flow = scenario(t);

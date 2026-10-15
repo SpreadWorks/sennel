@@ -81,7 +81,7 @@ export class SyntheticStructureSeed {
         "let selectedDirective = specPostFailure === null ? null : new BlockedDirective({ code: specPostFailure.code, reason: specPostFailure.reason, resumeInstruction: specPostFailure.resumeInstruction, });",
         "selectedDirective ??= userDecisionDirective ?? (workerDirective instanceof ExecuteStepDirective ? null : workerDirective) ?? approvalDirective ?? activationDirective ?? outboxRecovery?.directive ?? gateDirective ?? lifecycleDirective;",
         "const claimRequired = selectedDirective instanceof ExecuteStepDirective;",
-        "const claimDirective = claimRequired ? new ExecuteCommandDirective({ actionId: 'CLAIM_NEXT_ACTION', nextAction: guardedCommand('sennel flow run claim-next-action', state, binding), instruction: 'Claim the current Definition-selected action through the canonical Store before starting its worker.', reason: 'get-next-action is read-only; the explicit claim command rechecks canonical facts immediately before creating the Attempt.', }) : selectedDirective;",
+        "const claimDirective = claimRequired ? new ExecuteCommandDirective({ actionId: 'CLAIM_NEXT_ACTION', command: guardedExecutionCommand(new FlowExecutionCommand({ group: 'run', subcommand: 'claim-next-action' }), state, binding), instruction: 'Claim the current Definition-selected action through the canonical Store before starting its worker.', reason: 'get-next-action is read-only; the explicit claim command rechecks canonical facts immediately before creating the Attempt.', }) : selectedDirective;",
         "const result = { directive: claimDirective.toJSON() };",
         "return result;",
         "}",
