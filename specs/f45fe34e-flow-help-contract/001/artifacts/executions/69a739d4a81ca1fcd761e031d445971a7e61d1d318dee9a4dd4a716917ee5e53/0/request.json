@@ -1,0 +1,279 @@
+{
+  "id": "14456ffd31c4c674c65a875eb7bdcaf7c19d1ce0dcbbdd8ae2ada411c15b897d",
+  "snapshot": {
+    "executionContract": {
+      "runId": "f45fe34e-1029-4c53-8f5c-16633b3c694d",
+      "specId": "f45fe34e-flow-help-contract",
+      "stepId": "spec",
+      "nodeId": "spec",
+      "taskId": null,
+      "attemptId": "attempt-spec-ba84b9e1-c943-409f-a142-841a799311f4",
+      "attemptSequence": 1,
+      "generation": 0,
+      "inputRevision": "f27c275b8cb675c4363755afb4a072331661e79647865110b5a482f711bf2ffe",
+      "runtimeRevision": "a8532888a7f1edcc9001c34d6e9c9a487579c3a31c70a06ff573c67f86354385",
+      "promptDigest": "2c69abea8fd7ea6c05f2d98379dd721b303220c940c98ceb6b2165e73cff07ff",
+      "schemaDigest": "a71ab91d042ff234e1571f2e711b1d52864fe01080feea562176eaf7b00d6813",
+      "budgetOwner": "69a739d4a81ca1fcd761e031d445971a7e61d1d318dee9a4dd4a716917ee5e53",
+      "executionLimit": null,
+      "executionMode": null,
+      "inputBaselines": [
+        {
+          "logicalKey": "draft",
+          "relativePath": "steps/draft/result.json",
+          "hash": "de6834b6da8ee9d9a87e2c0020fe73ae4b8b16fb43914ac690072c7d08f465dc",
+          "size": 19044,
+          "activityId": "draft-step-settled-d1c44b80-e02c-44b4-845c-641644ee710e"
+        }
+      ]
+    },
+    "request": {
+      "version": 6,
+      "runId": "f45fe34e-1029-4c53-8f5c-16633b3c694d",
+      "specId": "f45fe34e-flow-help-contract",
+      "issue": 521,
+      "stepId": "spec",
+      "taskId": null,
+      "actionDigest": "f8db602354bf22b55c502cfd3ca2a9708cb4057b3356404b94cd3be81b33b006",
+      "dispatchInvocationId": "7689beeb-ca1b-4b36-9af0-5ab34931c7fd",
+      "targetAuthority": "canonical-flow-artifacts",
+      "inputDigest": "100361ae0f7c6f67485160cadd80f3d1710eec75ef2f8f7bac1e87aa5e456221",
+      "inputRevision": "f27c275b8cb675c4363755afb4a072331661e79647865110b5a482f711bf2ffe",
+      "executionContract": {
+        "runId": "f45fe34e-1029-4c53-8f5c-16633b3c694d",
+        "specId": "f45fe34e-flow-help-contract",
+        "stepId": "spec",
+        "nodeId": "spec",
+        "taskId": null,
+        "attemptId": "attempt-spec-ba84b9e1-c943-409f-a142-841a799311f4",
+        "attemptSequence": 1,
+        "generation": 0,
+        "inputRevision": "f27c275b8cb675c4363755afb4a072331661e79647865110b5a482f711bf2ffe",
+        "runtimeRevision": "a8532888a7f1edcc9001c34d6e9c9a487579c3a31c70a06ff573c67f86354385",
+        "promptDigest": "2c69abea8fd7ea6c05f2d98379dd721b303220c940c98ceb6b2165e73cff07ff",
+        "schemaDigest": "a71ab91d042ff234e1571f2e711b1d52864fe01080feea562176eaf7b00d6813",
+        "budgetOwner": "69a739d4a81ca1fcd761e031d445971a7e61d1d318dee9a4dd4a716917ee5e53",
+        "executionLimit": null,
+        "executionMode": null,
+        "inputBaselines": [
+          {
+            "logicalKey": "draft",
+            "relativePath": "steps/draft/result.json",
+            "hash": "de6834b6da8ee9d9a87e2c0020fe73ae4b8b16fb43914ac690072c7d08f465dc",
+            "size": 19044,
+            "activityId": "draft-step-settled-d1c44b80-e02c-44b4-845c-641644ee710e"
+          }
+        ]
+      },
+      "executionContractId": "9832bc5c5dfe7d80da3ce9c1ecce2b670d82fd11e40856dbca5493aacbca019e",
+      "dispatchRepositoryBinding": null,
+      "requirementTestBinding": null,
+      "inputs": [
+        {
+          "name": "draft.json",
+          "targetRelativePath": "draft.json",
+          "digest": "de6834b6da8ee9d9a87e2c0020fe73ae4b8b16fb43914ac690072c7d08f465dc",
+          "byteLength": 19044,
+          "document": {
+            "devType": "feature",
+            "goal": "Make Flow CLI help and routed parser contracts derive from one authoritative command definition while preserving existing command semantics, validation ownership, runtime behavior, rejection side effects, and the separate flow query contract.",
+            "analysis": {
+              "problem": "The authoritative inventory is now explicit for the initial Spec. The current FLOW_COMMANDS registry has 69 routed leaves, excluding the independent query leaf: direct leaves resume and prepare; get has status, resolve-context, check, prompt, artifact, qa-count, guardrail, issue, next-action, context, and runtime-log; set has step, request, issue, note, draft-answer, files, review-evidence, broad, policy, nonblocking-decision, metric, approval, issue-log, init, retry, acceptance-decision, and auto; run has seal-handoff, dispatch, recover-review-pass, gate, review, auto-check, finalize-commit, finalize-merge, finalize-sync, finalize-cleanup, abort, sync, reopen-draft, repair-plan-gate, settle-failure, settle-review-transition, recover-missing-producer-artifact, recover-spec-gate-repair, recover-artifact-execution, recover-draft-execution, reconcile-task-review, filter-task-review, recover-finalization, recover-task-execution-overrun, claim-next-action, settle-gate-transition, start-task, complete-task, update-overview, lint, test-execute, requirement-test-gate, test-result-review, retro, final-regression, acceptance-review, and report; report has show. The Spec must derive this inventory from the registry at test time and give every leaf a row for positionals, rest values, flags, required and optional options, aliases, implicit help, cardinality, domain, empty-value, size/path, conditional rules, concrete validator, help, execution, target guards, runtime/log/lifecycle behavior, exit codes, and rejection side effects. It must also map every direct-child group help projection and no-leaf invocation, while recording flow query as an intentionally independent parser exception. This inventory is the boundary between unchanged behavior owners and the new registry/help projections.",
+              "proposedApproach": "Extend the existing Flow command authority with structured option and subcommand metadata, then use that authority for routed parser declarations and shared help projections. Keep flow query on its independent contract, and define the retained behavior and verification boundary before implementation.",
+              "validation": "Validation is behavior-level and registry-derived. First, the integration matrix reads FLOW_COMMANDS and asserts the 69 routed leaves and direct-child groups listed in the problem inventory, then exercises each real dispatch path for its exact positional/rest, flag, required/optional value, alias, implicit-help, cardinality, domain, empty-value, size/path, and conditional contract; each accepted case asserts the existing command result and exit 0, and each missing, unknown, extra, malformed, domain, target, or command failure asserts exit 1, established diagnostics, and unchanged Flow/artifact/log state. Next, focused CLI tests exercise leaf help, every direct-child group help path, no-leaf group invocation, and help flow <group> through src/flow.js, src/sennel.js, and the help command; they compare registry-derived rows, canonical option/subcommand order, at least two ASCII spaces, the boundary names boundary-13xx, boundary-14xxx, boundary-15xxxx, the 64- and 65-character segments, and recover-missing-producer-artifact, and assert valid help is non-executing with exit 0 while no-leaf and unknown/missing selectors retain exit 1. The same focused tests cover all five target guards in matching, mismatching, and mutually exclusive forms, --agent-work-dir /path and --agent-work-dir=/path, configured-versus-default log resolution, durable finalize-cleanup resolution, lifecycle and rejection ordering, and command side effects. The query suite remains separate and asserts stdin, request-file, help, and error contracts without routing through shared metadata."
+            },
+            "decisionMap": {
+              "knownFacts": [
+                "Issue 521 defines one concern: routed Flow parser contracts and public help rendering must reflect the existing command authority while preserving the established behavior.",
+                "The shared routed Flow leaves and flow query have different ownership; the shared migration must exclude flow query and preserve its stdin, request-file, help, and error behavior.",
+                "Existing selector parsing, domain validation, target guards, runtime directory resolution, lifecycle hooks, size policies, retry policies, and exit behavior are retained contracts; the change must not add blanket validation or arbitrary new limits.",
+                "Historical leaf and omission counts are audit context only; acceptance evidence must derive current counts and intersections from the registry.",
+                "The public surfaces include leaf help, each direct-child group help path, no-leaf group invocation, routed execution, target guards, runtime directory handling, and the separate query path."
+              ],
+              "decisionPoints": [
+                "Priority: must. CommandDefinition and FLOW_COMMANDS remain the single authority for routed parser and help contracts. The implementation must not add a parallel command registry, reverse-parse help text, or maintain a second option list; all parser declarations, leaf Usage/Options rows, direct-child group projections, and implicit help must be derived from the same registry-owned metadata. All five decision points and all four deferred-to-Spec entries in this draft are must-priority requirements.",
+                "Priority: must. Every direct-child leaf of each routed group determines that group's option projection. A full option contract is the exact tuple of canonical long name, aliases (including short aliases), value kind (flag, required-value, or optional-value), placeholder when a value is accepted, description, required/optional status, positional/cardinality relation, and the existing owner of type, domain, empty-value, size, path, and conditional validation. The projection must compare that complete tuple, include implicit `-h, --help`, declare each canonical option once in Options, and retain command-specific prose/examples without treating them as option authority.",
+                "Priority: must. The shared row renderer must emit `<name><at least two ASCII spaces><summary>` without truncation or concatenation, with canonical option order (including implicit help) and ascending subcommand-name order; an explicit display-order field may override it only with name-order tie breaking. Its integration cases use exact synthetic names `boundary-13xx` (13 characters), `boundary-14xxx` (14), `boundary-15xxxx` (15), the registered longest leaf `recover-missing-producer-artifact`, a 64-character `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa` segment, and a 65-character `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa` segment. Each case asserts the same order and at least two ASCII spaces between name and summary across shared renderers; synthetic names are registry/renderer fixtures only and are not callable commands.",
+                "Priority: must. The per-surface owner/test map is fixed. (1) src/flow/registry.js owns FLOW_COMMANDS-derived leaf metadata, parser declarations, option intersections, and the exhaustive 69-leaf matrix; tests/integration/flow/ctx-dispatch.test.js must assert helpKey and target-guard declarations for resume/prepare and every applicable leaf, while a registry/integration matrix asserts accepted values plus missing, unknown, extra, malformed, domain, empty, size, path, and conditional rejections with exit 0/1 and no mutation on rejection. (2) src/lib/command-registry.js and src/help.js own the shared row renderer and direct-child group projections; tests/integration/lib/command-registry.test.js and tests/e2e/060-help-layout-validate-config.test.js assert canonical order, option intersections, at least two ASCII spaces, 13/14/15/64/65-character boundaries, and recover-missing-producer-artifact without truncation or concatenation; valid help exits 0 and does not call a leaf handler or hook. (3) src/flow.js owns sennel flow <group> --help and no-leaf group wiring, while src/sennel.js owns top-level pre-scan and help flow <group> dispatch; tests/e2e/dispatchers.test.js and focused CLI assertions must cover both entry points, direct-child rows, missing/unknown selectors, and no-leaf exit 1, with valid-help exit 0 and unchanged Flow/artifact/log state. (4) Existing command handlers, parseEntryInput, domain validators, FlowTargetExpectation/buildFlowCommandHookContext, the work-directory resolver/container, lifecycle hooks, runtime logging, and finalize-cleanup resolution retain ownership of accepted execution, target/runtime behavior, and side effects; tests/integration/flow/ctx-dispatch.test.js, tests/integration/flow/get-unknown-options.test.js, tests/integration/flow/get-runtime-log-binding.test.js, and the existing flow-cli command suites must assert matching and mismatching --expect-binding, --expect-issue, --expect-no-issue, --expect-spec, and --expect-run-id, both --agent-work-dir forms, configured/default logging, cleanup behavior, exit 0 success and exit 1 rejection before command mutation. (5) src/flow/query.js and its query contract retain independent ownership; tests/integration/flow/query.test.js and tests/integration/flow/query-producer-scenario.test.js must preserve stdin, request-file, help, and error behavior and explicitly exclude query from shared parser/help migration.",
+                "Priority: must. The exact shared target guards are `--expect-binding`, `--expect-issue`, `--expect-no-issue`, `--expect-spec`, and `--expect-run-id`; their applicable leaves must be derived from FLOW_COMMANDS. For each applicable leaf, a matching expectation succeeds through FlowTargetExpectation and buildFlowCommandHookContext, mismatching or invalid mutually-exclusive expectations fail before command-owned mutation, and omitted guards retain existing behavior and diagnostics. The exact work-directory spellings are `--agent-work-dir /path` and `--agent-work-dir=/path`; both must enter the same existing resolution path and be tested with configured and default logging."
+              ],
+              "resolvedByProjectRules": [
+                "The implementation must use Node.js built-ins and Sennel's agent-independent mechanisms; Codex hooks, Claude hooks, IDE callbacks, and host-specific lifecycle APIs are not product dependencies.",
+                "Existing APIs and test helpers must be inspected and reused when their responsibility already satisfies the requested contract; duplicated admission or validation decisions are not acceptable.",
+                "Priority: must. For this change, a structured source value requires a dedicated class when it crosses a module boundary with two or more named fields, has a constructor invariant, or owns behavior such as `toMarkdown()`, rendering, parsing, or identity comparison. The option contract and subcommand-row values therefore use classes with constructor-enforced name/alias/kind/placeholder/description and name/summary/order invariants; their methods own parser/help projection behavior. Plain strings remain appropriate only for prose, and object literals or discriminated-union-shaped records must not replace these meaningful values.",
+                "The alpha policy must not preserve obsolete formats or deprecated paths, while the Issue's explicit preservation of current command semantics and query behavior remains in scope."
+              ],
+              "requiresUserJudgment": [],
+              "deferredToSpec": [
+                {
+                  "boundary": "The initial Spec must inventory all 69 routed leaves excluding query: direct resume/prepare; get status, resolve-context, check, prompt, artifact, qa-count, guardrail, issue, next-action, context, runtime-log; set step, request, issue, note, draft-answer, files, review-evidence, broad, policy, nonblocking-decision, metric, approval, issue-log, init, retry, acceptance-decision, auto; run seal-handoff, dispatch, recover-review-pass, gate, review, auto-check, finalize-commit, finalize-merge, finalize-sync, finalize-cleanup, abort, sync, reopen-draft, repair-plan-gate, settle-failure, settle-review-transition, recover-missing-producer-artifact, recover-spec-gate-repair, recover-artifact-execution, recover-draft-execution, reconcile-task-review, filter-task-review, recover-finalization, recover-task-execution-overrun, claim-next-action, settle-gate-transition, start-task, complete-task, update-overview, lint, test-execute, requirement-test-gate, test-result-review, retro, final-regression, acceptance-review, report; and report show.",
+                  "relevance": "For each listed leaf, the Spec records the exact input and internal-context contract: positionals, rest values, flags, required and optional options, aliases, implicit help, cardinality, domain, empty-value, size/path, conditional behavior, and concrete validator, then ties it to its existing owner and behavior-level test. The same inventory records direct-child group projections, no-leaf behavior, and query as an excluded independent contract.",
+                  "owner": "spec"
+                },
+                {
+                  "boundary": "The initial Spec must define the shared parser/help projection for every listed leaf and direct-child group, including leaf help, group help, no-leaf groups, deterministic ordering, option intersections, implicit help, and the independent query exception.",
+                  "relevance": "Acceptance uses src/flow/registry.js, src/lib/command-registry.js, src/help.js, src/flow.js, and src/sennel.js as owners and asserts canonical order and at least two ASCII spaces for boundary-13xx, boundary-14xxx, boundary-15xxxx, the 64- and 65-character segments, and recover-missing-producer-artifact. Synthetic names remain renderer fixtures and are not callable commands; valid help is non-executing and no-leaf behavior remains unchanged.",
+                  "owner": "spec"
+                },
+                {
+                  "boundary": "The initial Spec must preserve target guards, runtime directory and log resolution, parse and target rejection order, lifecycle side effects, exit codes, and valid-help non-execution for every applicable listed leaf.",
+                  "relevance": "The behavior map covers --expect-binding, --expect-issue, --expect-no-issue, --expect-spec, --expect-run-id, both --agent-work-dir spellings, configured/default logging, durable finalize-cleanup resolution, matching and mismatching targets, mutually exclusive guards, command-owned validation, and unchanged mutation/cleanup timing. Accepted help/success exits 0; missing/unknown selector, parser, target, and command failures retain exit 1 unless an existing leaf contract says otherwise.",
+                  "owner": "spec"
+                },
+                {
+                  "boundary": "The initial Spec must assign behavior-level registry/integration and focused CLI E2E coverage to the complete parser, help, execution, guard, runtime, exit-code, rejection, side-effect, and query surfaces.",
+                  "relevance": "Real assertions are anchored in tests/integration/flow/ctx-dispatch.test.js, tests/integration/lib/command-registry.test.js, tests/e2e/060-help-layout-validate-config.test.js, tests/e2e/dispatchers.test.js, tests/integration/flow/get-unknown-options.test.js, tests/integration/flow/get-runtime-log-binding.test.js, and the existing flow-cli suites. The matrix derives all 69 leaves and records accepted results, exit 0/1, unchanged canonical state on rejection, valid-help handler/hook non-execution, group intersections, guard/runtime boundaries, and query stdin/request-file/help/errors; it does not duplicate query behavior into the shared registry.",
+                  "owner": "spec"
+                }
+              ]
+            },
+            "scopeVerification": {
+              "in": [
+                "The shared routed Flow command definition, parser contract, leaf help, and direct-child group help must be included.",
+                "The separate flow query parser and its stdin, request-file, help, and error behavior must be included as a preserved exception.",
+                "Priority: must. Derive the current leaf/group counts and option intersections from FLOW_COMMANDS, then verify the five named target guards, the exact `--agent-work-dir /path` and `--agent-work-dir=/path` forms, configured-versus-default log resolution, durable finalize-cleanup resolution, name lengths 13/14/15/64/65, deterministic ordering, valid-help non-execution, existing parse/target/command rejection side effects, and exit codes 0 for valid help/success and 1 for missing or unknown selectors, parser/target/command failures, and no-leaf group help. The registry/integration and focused public-path tests must each state which owner and observable result they verify."
+              ],
+              "out": [
+                "Recovery of the prior stopped flow must not be included; this Issue starts a new Draft and Spec.",
+                "Priority: must. Out of scope means no new generic admission validator, no arbitrary tighter resource or identifier limit, no retry/attempt policy change, no changed query contract, and no unrelated command-semantic, diagnostic, exit-code, lifecycle, configuration-precedence, or mutation-order change. The only permitted product changes are explicit registry-owned option/subcommand metadata, shared help-row rendering, registry-derived direct-child group projections, and the tests needed to prove those contracts. Any newly rejected input, changed owner decision, changed limit, or changed side effect outside those projections is a scope failure.",
+                "Agent-host-specific hooks and lifecycle callbacks must not be included as product dependencies."
+              ]
+            },
+            "impactOnExisting": [
+              "The Flow registry and routed parser/help consumers will be aligned around one authority; existing accepted inputs, missing/unknown/extra-input rejection, and command execution semantics must remain observable.",
+              "The public help paths through src/flow.js, src/sennel.js, and the help command will share the retained row contract; valid help must remain non-executing and no-leaf group help must retain its existing exit behavior.",
+              "FlowTargetExpectation and buildFlowCommandHookContext remain the owners of target identity and guard behavior; matching, mismatching, mutually exclusive, and missing guard cases must retain their current outcomes and mutation ordering.",
+              "The existing work-directory resolver, pre-initialization boundary, container, lifecycle hooks, logging configuration, and cleanup policy remain behavior owners; both agent-work-dir syntaxes and configured log precedence must remain covered.",
+              "The flow query modules remain an independent public surface with dedicated regression coverage, and non-Flow command namespaces must remain unchanged unless they already consume the shared renderer."
+            ],
+            "questionLedger": {
+              "revision": 0,
+              "publication": "draft-worker-publication",
+              "evidenceDigest": "6443375a5b99258635088695cdefa410f2f160a795b8c59322674b4b740532a3",
+              "questions": []
+            },
+            "openQuestions": []
+          }
+        },
+        {
+          "name": "flow-findings.json",
+          "targetRelativePath": "flow-findings.json",
+          "digest": "d772b7a39681607ad71c4d140b29320dd6cc5db576003c548728b2cb29e43746",
+          "byteLength": 26,
+          "document": {
+            "version": 2,
+            "entries": []
+          }
+        }
+      ],
+      "testReviewRepair": null,
+      "contextSnapshot": null,
+      "sourceMutationBaselineDigest": null,
+      "sourceHandoffIdentity": null,
+      "sourceHandoffCheckpointDigest": null,
+      "payloads": [
+        {
+          "logicalName": "spec.json",
+          "kind": "file",
+          "payloadPath": "/home/nakano/workspace/sennel/.sennel/worktree/feature-f45fe34e-flow-help-contract/.sennel/handoffs/631fc0e833ceefe022d49e9c/f1cb97a3beeda28f6f28c186/7edae0b473d615de0fecadfc/f8db602354bf22b55c502cfd3ca2a9708cb4057b3356404b94cd3be81b33b006/payload/spec.json",
+          "targetRelativePath": "spec.json",
+          "targetAuthority": "canonical-flow-artifacts",
+          "required": true,
+          "maxBytes": 2097152,
+          "baselineDigest": "a1c0b1f8c5ccc67b71de5a9a1d0e7e5c0347ffcb873a20cc76fd06d2383fc0a9",
+          "baselineByteLength": 359
+        }
+      ],
+      "workerInstructions": {
+        "retryFeedback": null,
+        "schemaGuidance": "The handoff file named spec.json is the canonical spec artifact payload.\nWrite valid JSON that matches this schema exactly; do not add properties outside the schema.\nThe CLI validates the payload before it can be sealed or published.\nSpec artifact schema:\n{\n  \"type\": \"object\",\n  \"required\": [\n    \"goal\",\n    \"scope\",\n    \"constraints\",\n    \"design_principles\",\n    \"overview\",\n    \"background\",\n    \"requirements\",\n    \"acceptance_criteria\",\n    \"clarifications\",\n    \"alternatives_considered\",\n    \"open_questions\",\n    \"tasks\"\n  ],\n  \"additionalProperties\": false,\n  \"properties\": {\n    \"goal\": {\n      \"type\": \"string\"\n    },\n    \"capabilities\": {\n      \"type\": \"object\",\n      \"additionalProperties\": {\n        \"type\": \"boolean\"\n      }\n    },\n    \"background\": {\n      \"type\": \"string\"\n    },\n    \"scope\": {\n      \"type\": \"object\",\n      \"required\": [\n        \"in\",\n        \"out\"\n      ],\n      \"additionalProperties\": false,\n      \"properties\": {\n        \"in\": {\n          \"type\": \"array\",\n          \"items\": {\n            \"type\": \"string\"\n          }\n        },\n        \"out\": {\n          \"type\": \"array\",\n          \"items\": {\n            \"type\": \"string\"\n          }\n        }\n      }\n    },\n    \"constraints\": {\n      \"type\": \"array\",\n      \"items\": {\n        \"type\": \"string\"\n      }\n    },\n    \"design_principles\": {\n      \"type\": \"array\",\n      \"items\": {\n        \"type\": \"string\"\n      }\n    },\n    \"overview\": {\n      \"type\": \"object\",\n      \"required\": [\n        \"modules\",\n        \"data_flow\",\n        \"decisions\"\n      ],\n      \"additionalProperties\": false,\n      \"properties\": {\n        \"modules\": {\n          \"type\": \"array\",\n          \"maxItems\": 200,\n          \"items\": {\n            \"type\": \"object\",\n            \"required\": [\n              \"text\"\n            ],\n            \"additionalProperties\": false,\n            \"properties\": {\n              \"text\": {\n                \"type\": \"string\",\n                \"maxLength\": 500\n              },\n              \"added_by_task\": {\n                \"type\": \"string\",\n                \"maxLength\": 100\n              }\n            }\n          }\n        },\n        \"data_flow\": {\n          \"type\": \"array\",\n          \"maxItems\": 200,\n          \"items\": {\n            \"type\": \"object\",\n            \"required\": [\n              \"text\"\n            ],\n            \"additionalProperties\": false,\n            \"properties\": {\n              \"text\": {\n                \"type\": \"string\",\n                \"maxLength\": 500\n              },\n              \"added_by_task\": {\n                \"type\": \"string\",\n                \"maxLength\": 100\n              }\n            }\n          }\n        },\n        \"decisions\": {\n          \"type\": \"array\",\n          \"maxItems\": 200,\n          \"items\": {\n            \"type\": \"object\",\n            \"required\": [\n              \"text\"\n            ],\n            \"additionalProperties\": false,\n            \"properties\": {\n              \"text\": {\n                \"type\": \"string\",\n                \"maxLength\": 500\n              },\n              \"evidence\": {\n                \"type\": \"string\",\n                \"maxLength\": 1000\n              },\n              \"consideredAlternatives\": {\n                \"type\": \"string\",\n                \"maxLength\": 1000\n              },\n              \"added_by_task\": {\n                \"type\": \"string\",\n                \"maxLength\": 100\n              }\n            }\n          }\n        }\n      }\n    },\n    \"requirements\": {\n      \"type\": \"array\",\n      \"items\": {\n        \"type\": \"object\",\n        \"required\": [\n          \"id\",\n          \"desc\",\n          \"task_ids\"\n        ],\n        \"additionalProperties\": false,\n        \"allOf\": [\n          {\n            \"if\": {\n              \"required\": [\n                \"testable\"\n              ],\n              \"properties\": {\n                \"testable\": {\n                  \"const\": false\n                }\n              }\n            },\n            \"then\": {\n              \"not\": {\n                \"required\": [\n                  \"preimplementation_test_expectation\"\n                ]\n              }\n            }\n          },\n          {\n            \"if\": {\n              \"not\": {\n                \"required\": [\n                  \"testable\"\n                ],\n                \"properties\": {\n                  \"testable\": {\n                    \"const\": false\n                  }\n                }\n              }\n            },\n            \"then\": {\n              \"required\": [\n                \"preimplementation_test_expectation\"\n              ]\n            }\n          }\n        ],\n        \"properties\": {\n          \"id\": {\n            \"type\": \"string\",\n            \"minLength\": 1,\n            \"maxLength\": 100,\n            \"pattern\": \"^[A-Za-z0-9][A-Za-z0-9_-]{0,99}$\"\n          },\n          \"desc\": {\n            \"type\": \"string\",\n            \"maxLength\": 119999\n          },\n          \"task_ids\": {\n            \"type\": \"array\",\n            \"minItems\": 1,\n            \"uniqueItems\": true,\n            \"items\": {\n              \"type\": \"string\",\n              \"minLength\": 1,\n              \"maxLength\": 100,\n              \"pattern\": \"^[A-Za-z0-9][A-Za-z0-9_-]{0,99}$\"\n            }\n          },\n          \"priority\": {\n            \"type\": \"string\",\n            \"enum\": [\n              \"must\",\n              \"should\",\n              \"nice-to-have\"\n            ]\n          },\n          \"testable\": {\n            \"type\": \"boolean\"\n          },\n          \"preimplementation_test_expectation\": {\n            \"type\": \"string\",\n            \"enum\": [\n              \"fail\",\n              \"pass\"\n            ]\n          }\n        }\n      }\n    },\n    \"acceptance_criteria\": {\n      \"type\": \"array\",\n      \"items\": {\n        \"type\": \"string\"\n      }\n    },\n    \"clarifications\": {\n      \"type\": \"array\",\n      \"items\": {\n        \"type\": \"object\",\n        \"required\": [\n          \"q\",\n          \"a\"\n        ],\n        \"additionalProperties\": false,\n        \"properties\": {\n          \"q\": {\n            \"type\": \"string\"\n          },\n          \"a\": {\n            \"type\": \"string\"\n          }\n        }\n      }\n    },\n    \"alternatives_considered\": {\n      \"type\": \"array\",\n      \"items\": {\n        \"type\": \"object\",\n        \"required\": [\n          \"option\",\n          \"reason\"\n        ],\n        \"additionalProperties\": false,\n        \"properties\": {\n          \"option\": {\n            \"type\": \"string\"\n          },\n          \"reason\": {\n            \"type\": \"string\"\n          }\n        }\n      }\n    },\n    \"open_questions\": {\n      \"type\": \"array\",\n      \"items\": {\n        \"type\": \"string\"\n      }\n    },\n    \"keywords\": {\n      \"type\": \"array\",\n      \"items\": {\n        \"type\": \"string\"\n      }\n    },\n    \"implementationTargets\": {\n      \"type\": \"array\",\n      \"items\": {\n        \"type\": \"string\"\n      }\n    },\n    \"user_approval\": {\n      \"type\": \"object\",\n      \"additionalProperties\": false,\n      \"properties\": {\n        \"approved\": {\n          \"type\": \"boolean\"\n        },\n        \"confirmed_at\": {\n          \"type\": \"string\"\n        },\n        \"notes\": {\n          \"type\": \"string\"\n        }\n      }\n    },\n    \"tasks\": {\n      \"type\": \"array\",\n      \"maxItems\": 200,\n      \"items\": {\n        \"type\": \"object\",\n        \"required\": [\n          \"id\",\n          \"title\",\n          \"goal\",\n          \"origin\",\n          \"added_round\",\n          \"status\"\n        ],\n        \"additionalProperties\": false,\n        \"properties\": {\n          \"id\": {\n            \"type\": \"string\",\n            \"minLength\": 1,\n            \"maxLength\": 100,\n            \"pattern\": \"^[A-Za-z0-9][A-Za-z0-9_-]{0,99}$\"\n          },\n          \"title\": {\n            \"type\": \"string\",\n            \"minLength\": 1,\n            \"maxLength\": 200\n          },\n          \"goal\": {\n            \"type\": \"string\",\n            \"minLength\": 1,\n            \"maxLength\": 1000\n          },\n          \"acceptance\": {\n            \"type\": \"array\",\n            \"maxItems\": 50,\n            \"items\": {\n              \"type\": \"string\",\n              \"minLength\": 1,\n              \"maxLength\": 500\n            }\n          },\n          \"implementation_notes\": {\n            \"type\": \"string\",\n            \"maxLength\": 5000\n          },\n          \"test_strategy\": {\n            \"type\": \"string\",\n            \"maxLength\": 2000\n          },\n          \"parent\": {\n            \"type\": [\n              \"string\",\n              \"null\"\n            ],\n            \"minLength\": 1,\n            \"maxLength\": 100,\n            \"pattern\": \"^[A-Za-z0-9][A-Za-z0-9_-]{0,99}$\"\n          },\n          \"origin\": {\n            \"type\": \"string\",\n            \"enum\": [\n              \"plan\"\n            ]\n          },\n          \"added_round\": {\n            \"type\": \"integer\",\n            \"minimum\": 0\n          },\n          \"status\": {\n            \"type\": \"string\",\n            \"enum\": [\n              \"pending\",\n              \"in_progress\",\n              \"done\",\n              \"skipped\"\n            ]\n          }\n        }\n      }\n    }\n  }\n}\n**Spec writing and revision guidance:**\n\n- Preserve every condition, value, identifier, literal, valid input, expected result, and rejection condition established by the authoritative inputs. Keep technical details exact. Do not omit, weaken, broaden, or silently change them; do not invent values or behavior.\n- State shared conditions once when the same condition applies to both requirements and tasks, and identify which entries they govern. State applicability, references, and differences or exceptions so each target's full conditions can be reconstructed unambiguously. Distinguish omitted or absent values from values inherited from a shared condition. Keep requirement-specific and task-specific conditions clear; do not generalize exceptions or infer values or ownership from names.\n- Treat 64 KiB of canonical saved UTF-8 Spec content as authoring guidance only. It is neither a hard limit nor permission to truncate, omit, or silently alter content. Do not invent values or shorten away conditions to meet that size; retain all required content even when the resulting Spec is larger.\n- Respect the current step's scope, editing authority, and immutable source input. Apply only changes the step permits, using its specified output and publication path. When implementation facts are missing, explore and read the execution checkout yourself, following the supplied checkout research guidance.\nResearch missing source facts directly in the execution checkout. Read its root and applicable scoped AGENTS.md rules before investigating source files and their imports.\nUse the actual working-tree files, including uncommitted changes. Missing or unreadable files are unavailable implementation evidence, not an unresolved user choice. Do not infer facts from omitted source or ask the host to select origins, queries, line ranges or compressed code.\nCheckout research is read-only. It never grants mutation authority, extends allowedTargets or changes the selected canonical Spec ranges. Write only the declared handoff payloads."
+      },
+      "sourceResponseContract": null,
+      "specTestTopology": null,
+      "sealCommand": "sennel flow run seal-handoff",
+      "completionOwner": "parent-dispatcher",
+      "generatedAt": "2026-10-15T17:10:51.061Z"
+    },
+    "action": {
+      "taskId": null,
+      "step": "spec",
+      "action": "write-spec",
+      "instructions": {
+        "key": "plan.spec",
+        "content": "## Persistent Rules\n\n<!-- rule: no-premature-conclusion -->\n### MUST\n**MUST: 議論の途中で「結論:」「決定:」と独断で締めてはならない。** 設計判断はユーザーが決定者である。AI は選択肢とトレードオフを示し、ユーザーの選択を待つ。\n\n### Why\n過去のセッションで、AI が議論を勝手に締めて方向性を確定させ、ユーザーが意図しない実装に進んだ事例が 8 件発生している。AI が議論をリードしすぎると、ユーザーの判断機会を奪う。\n\n### How to apply\n- このルールが表示されたフェーズでは、複数の選択肢があり得る論点を必ず Choice Format で提示する。\n- 「結論:」「決定:」「方針が確定した」等の語で議論を締めない。「推奨:」「私の見解:」までに留める。\n- ユーザーが明示的に選択肢を指定するまで、AI は最終決定を確定させない。\n\n<!-- rule: no-auto-mode-override-skill -->\n### MUST\n**MUST: AI は `sennel flow set auto on` を自分で実行してはならない。** auto モード切替はユーザーの明示的指示（`/sennel.flow-auto` 等）でのみ実行する。\n\n### Why\nauto モードは AI が確認なしに進行できるため、誤動作時の影響が大きい。AI が独断で auto を有効化すると、ユーザーの判断機会を奪う重大な逸脱となる。過去 4 件の事例あり。\n\n### How to apply\n- envelope の `requires_approval: true` を見ても、AI 側で auto を有効化することはしない。\n- ユーザーが interactive Q&A 中の場合、auto モード reminder が context にあっても判断を待つ。\n\n<!-- rule: thoroughness -->\n**MUST: 即答せず、要件・前提・例外を洗い出してから回答する。** 実装着手前に要件を列挙し、完了時に突き合わせる。\n\n<!-- rule: wait-for-instruction-skill -->\n### MUST\n**MUST: Spec-Driven Development フロー内では、CLI の `requires_approval` が true のアクションだけユーザー承認を要求する。** `requires_approval: false` の通常 step では、実行確認の選択肢を出さずに step instruction を実行する。\n\n### Why\n`requires_approval` は CLI 側が持つ承認境界である。skill 側が全 step で確認を挟むと、draft-questions-review などの機械的 step まで不要に停止し、CLI の承認設計と矛盾する。\n\n### How to apply\n- `flow get next-action` の `requires_approval` が false なら、「実行しますか？」の確認を出さずに指示を実行する。\n- `requires_approval` が true か、エラー復旧 / ユーザー回答が必要な QA loop の場合だけ Choice Format で確認する。\n- step 完了後は次の `flow get next-action` を読み、同じルールで判断する。\n\n<!-- rule: choice-format-discipline -->\n**MUST: ユーザーへの全ての質問は Choice Format で提示する。** ラベル + 1 行注釈の選択肢。詳細説明は選択肢ブロックの外（上側）に独立配置する。free-form question 禁止（applied user-requested changes の確認も含む）。\n\n<!-- rule: no-chain-product-cli -->\n**MUST: `sennel` コマンドをチェーン (`&&` `;` `|`) または background 実行してはならない。** 各 `sennel` 呼び出しは独立した foreground Bash で実行し、結果を確認してから次へ進む。\n\n<!-- rule: no-shared-repo-git-ops -->\n**MUST: active flow 中は main リポジトリで `git stash` / `git stash pop` / `git stash apply` / `git reset --hard` / `git checkout -- <path>` を実行してはならない。** 別ブランチ由来の stale な stash 復元・共有状態破壊を防ぐ。ベースライン比較は短命の detached worktree を使う。\n\n**Spec writing and revision guidance:**\n\n- Preserve every condition, value, identifier, literal, valid input, expected result, and rejection condition established by the authoritative inputs. Keep technical details exact. Do not omit, weaken, broaden, or silently change them; do not invent values or behavior.\n- State shared conditions once when the same condition applies to both requirements and tasks, and identify which entries they govern. State applicability, references, and differences or exceptions so each target's full conditions can be reconstructed unambiguously. Distinguish omitted or absent values from values inherited from a shared condition. Keep requirement-specific and task-specific conditions clear; do not generalize exceptions or infer values or ownership from names.\n- Treat 64 KiB of canonical saved UTF-8 Spec content as authoring guidance only. It is neither a hard limit nor permission to truncate, omit, or silently alter content. Do not invent values or shorten away conditions to meet that size; retain all required content even when the resulting Spec is larger.\n- Respect the current step's scope, editing authority, and immutable source input. Apply only changes the step permits, using its specified output and publication path. When implementation facts are missing, explore and read the execution checkout yourself, following the supplied checkout research guidance.\n**Dispatcher worker artifact handoff:**\n\n- Use the parent dispatcher's worker artifact handoff contract as the complete authority for Flow artifact inputs, Flow artifact outputs, and completion.\n- Read Flow artifact inputs only from the contract's immutable `inputs[].document` snapshots. Write each declared Flow artifact output only to its exact `payloads[].payloadPath`.\n- When `contextSnapshot` is present, use its digest-verified `entries[].document` values as the complete Flow context. Respect `inputAuthority.kind`, and treat omitted entries by their explicit `reason`; do not run nested Flow context, Issue, or guardrail commands.\n- Do not write canonical Flow artifacts or mark the step done. Run no Flow state-transition command unless the step instructions explicitly name a non-completion recovery command.\n- Project source and formal project tests are outside the handoff authority and remain in the execution checkout; edit them only when the step instructions explicitly require it.\n- For a source-worker contract, do not generate a mutation manifest, report a changed-file list, or run a seal command. Do not write `effects.json` or a handoff submission. After this process exits, the parent captures the immutable Attempt manifest and maps every observed mutation to every canonical Requirement in the current Flow or Task scope before it materializes and seals the canonical effect. Repair finding evidence still names the normalized project-relative paths changed for each applied finding.\n- For a non-source contract, write every declared payload, run its exact seal command, and return the successful seal command's `data` object as the worker report matching the action output schema. A rejected seal is not completion: follow the request’s workerInstructions for correction before sealing. Never modify a successfully sealed payload. Only the parent dispatcher may perform final validation, publish, record revisions, and complete the step.\n- A missing handoff contract for this action is invalid. Do not write artifacts or mutate Flow state; report the missing contract to the caller.\n   - **Before writing spec**:\n     - Read `draft.json` only from the handoff `inputs[].document` snapshot and read linked GitHub issue content. Treat the draft snapshot as the primary input — do NOT re-read context already gathered in the draft phase.\n     - Read the immutable `flow-findings.json` input for unresolved draft Gate findings. Address them in the spec alongside the recorded draft decisions, preserving already answered user choices. Their presence does not require reopening draft or asking the same question again; final disposition remains owned by acceptance review.\n     - Write all human-readable prose in `spec.json` in the language specified by `config.lang`. Preserve code symbols, command names, paths, schema fields, and other technical identifiers exactly; `keywords` remains the explicit English-only exception below.\n     - **Context gathering (supplement-first):** Only investigate additional implementation facts when draft + issue are insufficient. Follow the checkout research guidance in `request.json.workerInstructions.schemaGuidance` and inspect actual files and imports in the execution checkout.\n     - If guardrail articles for spec have NOT been loaded in this session: `sennel flow get guardrail spec`. If output is non-empty, follow these principles. Skip if already present in context.\n   - **Synthesize draft into spec, do not copy or fabricate:** Organize and abstract draft content rather than copying it directly. Do not invent content not present in the draft. Exception: if a draft policy contradicts the source code (verified in the verification step below), treat the spec correction as a `[CORRECTION]`, not a fabrication.\n   - **Acknowledged guardrail exceptions:** If the spec intentionally chooses a design that may violate a guardrail article, record the guardrail id directly in `constraints[]`, `clarifications[].q` / `.a`, or `alternatives_considered[].option` / `.reason`. Do not use `design_principles`, approval notes, overview entries, task text, or other fields as an exception-acknowledgment surface. Unresolved draft Gate findings are carried into spec by the canonical settlement route. Address those findings explicitly; exception acknowledgments are a spec.json convention for later spec/implementation review context.\n   - **Source verification step (when draft is the primary input):** When `draft.json` includes implementation policy references in `analysis.proposedApproach`, `decisionMap.*`, or answered ledger entries, cross-reference them against the actual source code. Read minimal source files only for that verification — do not re-read context already gathered in the draft phase.\n     - **Recording convention for `[VERIFY]` and `[CORRECTION]` entries (shared):** Write a concise summary in `spec.json.overview.decisions[].text` (≤ 500 chars). Put detailed source references in `evidence` (≤ 1000 chars). Split into multiple decision entries when content overflows. Each entry keeps prefix-based identification.\n     - If a draft policy matches the source: record a `[VERIFY]` entry summarising \"checked draft policy / referenced file / result=match\".\n     - If a draft policy contradicts the source: record a `[CORRECTION]` entry summarising \"draft policy / referenced file / adopted correction\" when the correction is source-verifiable. If the correction needs a user decision that is missing from draft QA, follow the draft-return rule below.\n   - **Draft return when user judgment is missing:** If spec writing discovers a missing user decision, run `sennel flow run reopen-draft --reason \"<reason>\"` instead of collecting an ad-hoc spec-phase answer. The reason should name the missing decision in one sentence. After reopen succeeds, return to draft so it can be captured in the question ledger and the normal draft review/gate/spec path can run again.\n     - Do not use this for source-verifiable corrections, wording fixes, rationale additions, or details the draft intentionally deferred to spec writing.\n     - If `reopen-draft` fails or the flow presents a recovery choice, use Choice Format for that recovery decision.\n   - Do not render or edit `spec.md` in this step. `spec.json` is the source of truth; the approval prompt renders the human-readable `spec.md` view when the user needs to read it.\n   - Fill spec.json fields: `goal`, `scope`, `constraints`, `requirements`, `acceptance_criteria`, `alternatives_considered` (if applicable).\n   - **Requirement IDs:** assign `requirements[]` IDs exactly as `R1`, `R2`, `R3`, ... in array order. Never use `R-1`, `R_1`, `R0`, or arbitrary identifiers.\n   - Every `requirements[]` entry must include a non-empty, duplicate-free `task_ids` array containing only existing `tasks[].id` values. This is the sole Requirement-to-Task mapping; do not infer mappings from prose, order, parent links, or implementation notes.\n   - **Requirement testability:** each `requirements[]` entry may carry an optional `testable` boolean. Default behavior is testable (omit the field, or set `testable: true`). Every testable Requirement must also set `preimplementation_test_expectation` to `fail` when its named test must initially fail or `pass` when current behavior must already satisfy it. Set `testable: false` only when the Requirement is inherently not verifiable through automated tests; in that case `preimplementation_test_expectation` must be omitted.\n     - Example:\n       ```json\n       { \"id\": \"R5\", \"desc\": \"rewrite the test phase prompt to teach header convention\", \"priority\": \"must\", \"testable\": false, \"task_ids\": [\"T-2\"] }\n       ```\n   - Generate `keywords`: an array of 5–15 English keywords derived from the spec content (goal, scope, requirements). These keywords are used by contextSearch for codebase relevance matching. Choose specific, concrete terms (function names, module names, domain concepts) over generic words.\n   - If draft phase was done, transfer draft.json content to spec.json using the following field mapping:\n     - `draft.json.analysis.problem` → `spec.json.background` (synthesize, do not copy verbatim)\n     - `draft.json.decisionMap.knownFacts` → `spec.json.background` and `spec.json.overview.decisions[]` where the facts materially support requirements\n     - `draft.json.decisionMap.decisionPoints` → ensure each relevant decision is represented in `requirements[]`, `acceptance_criteria`, `constraints`, or `alternatives_considered[]`\n     - `draft.json.decisionMap.resolvedByProjectRules` → incorporate as constraints or overview decisions with rationale, without asking the user again\n     - `draft.json.decisionMap.requiresUserJudgment` → treat as a readable projection and reconcile against the authoritative ledger; do not leave an item unresolved unless it is explicitly listed in `open_questions`\n     - `draft.json.decisionMap.deferredToSpec` → finalize during spec writing when it can be resolved by project rules, source verification, or conservative implementation choices\n     - answered ledger evidence digests → `spec.json.overview.decisions[].evidence`\n     - answered ledger entries with constraint-related categories → `spec.json.alternatives_considered[]` only when the answer explicitly records a rejected option.\n     - answered ledger `why` → incorporate into `spec.json.overview.decisions[].text` as rationale\n     - `draft.json.scopeVerification` → `spec.json.scope` (`{in, out}`)\n     - `draft.json.impactOnExisting` → `spec.json.overview.decisions[]` or `spec.json.background`, whichever best preserves the implementation impact context\n     - `draft.json.openQuestions` → `spec.json.open_questions`\n\n   ## Task Decomposition Rules\n\n   `spec.json.tasks[]` must be populated. Each task shall address a single concern within the spec.\n\n   - A task's `title` shall be expressible as one verb phrase (e.g. \"Add auto-promote to sync\"). Do not connect unrelated actions with \"and\" (e.g. \"Add auto-promote and refactor tests\").\n   - Unrelated sub-changes shall be split into separate tasks. Tasks whose implementation_notes span unrelated modules without a shared concern shall be split.\n   - If a task's acceptance contains multiple independent criteria that are not part of the same concern, each shall be split into its own task.\n\n   Each task shall include:\n   - `id` (required): identifier like `T-1`, `T-2`.\n   - `title` (required): short verb-phrase name.\n   - `goal` (required): 1–2 sentences stating what this task accomplishes.\n   - `acceptance` (optional): bullet-style verifiable criteria.\n   - `implementation_notes` (optional): design considerations, edge cases, files touched.\n   - `test_strategy` (optional): what to test at what granularity (unit / integration).\n   - `parent` (optional): parent task id for forest structure (null for root tasks).\n   - `origin` (required): `\"plan\"` for plan-phase tasks.\n   - `added_round` (required): 0 for initial tasks.\n   - `status` (required): `\"pending\"` initially.\n\n   Every `acceptance[]` item must be written in 500 characters or fewer. This is\n   a per-item limit, not a limit on the complete acceptance array. The CLI\n   truncates any overlong item to the first 500 characters before schema\n   validation and logs both the original and retained text; do not rely on that\n   fallback, because it can cut off a criterion. Keep each criterion concise\n   and split independent criteria into separate items.\n\n   Empty `tasks[]` or undefined `tasks` causes the spec gate to FAIL. The `task-single-responsibility` guardrail evaluates each task's concern singularity in phase `spec` and `task-spec`.\n\n   - **On complete**: write `spec.json` only to its exact handoff `payloadPath`, then run the exact handoff `sealCommand` once.\n"
+      },
+      "context": {
+        "kinds": [
+          "draft",
+          "guardrail"
+        ],
+        "paths": {},
+        "workerArtifactHandoff": {
+          "version": 2,
+          "required": true,
+          "writableAuthority": "dispatcher-handoff",
+          "publicationOwner": "dispatcher",
+          "completionValidator": "spec schema and revision transaction"
+        }
+      },
+      "output_schema": {
+        "type": "object",
+        "required": [
+          "sealed",
+          "handoffPath",
+          "handoffDigest",
+          "payloadCount"
+        ],
+        "properties": {
+          "sealed": {
+            "const": true
+          },
+          "handoffPath": {
+            "type": "string"
+          },
+          "handoffDigest": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          },
+          "payloadCount": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "acceptanceTruncationLog": {
+            "type": "string"
+          },
+          "runtimeLog": {
+            "type": "object",
+            "required": [
+              "runId",
+              "sequence"
+            ],
+            "properties": {
+              "runId": {
+                "type": "string"
+              },
+              "sequence": {
+                "type": "integer",
+                "minimum": 1
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "additionalProperties": false
+      },
+      "requires_approval": false,
+      "maxAttempts": 1,
+      "directive": {
+        "kind": "execute_step",
+        "terminal": false,
+        "requiresUserAction": false,
+        "action": "write-spec"
+      }
+    },
+    "dispatchIdentity": {
+      "repositoryFingerprint": "54e091e91b4a441d55c0976db4cc213ddafcba6eca3661c462cdc8d171debd23",
+      "canonicalRevision": null
+    }
+  }
+}

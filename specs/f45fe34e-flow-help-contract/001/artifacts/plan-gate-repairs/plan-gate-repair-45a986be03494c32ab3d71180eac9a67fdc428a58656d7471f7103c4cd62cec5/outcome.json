@@ -1,0 +1,222 @@
+{
+  "version": 1,
+  "repairId": "plan-gate-repair-45a986be03494c32ab3d71180eac9a67fdc428a58656d7471f7103c4cd62cec5",
+  "repairRecordFingerprint": "45a986be03494c32ab3d71180eac9a67fdc428a58656d7471f7103c4cd62cec5",
+  "sourceEvidence": {
+    "sourceAttempt": {
+      "id": "attempt-draft-gate-4b35f9ad-375f-4374-8582-3446d1966b34",
+      "sequence": 1
+    },
+    "resultLogicalKey": "draft.gate",
+    "publicationActivityId": "plan-gate-repaired-6edc56e9-e63d-4984-93e3-feca93007308",
+    "catalogFingerprint": "0b4d9fe44ed7612d3fca77b078fe953cd8fa646e37d827b8e25dce9c08b7497f",
+    "transitionLineage": {
+      "sourceAttempt": {
+        "id": "attempt-draft-gate-4b35f9ad-375f-4374-8582-3446d1966b34",
+        "sequence": 1
+      },
+      "canonicalAttempt": {
+        "id": "attempt-draft-gate-4b35f9ad-375f-4374-8582-3446d1966b34",
+        "sequence": 1
+      },
+      "sourceFingerprint": "5b2ed2e51ca97d6c6d826f47cc89bc01db1938c830f10178966ac569374e5408",
+      "canonicalFingerprint": "0b4d9fe44ed7612d3fca77b078fe953cd8fa646e37d827b8e25dce9c08b7497f",
+      "sourceRevisionFingerprint": "c9a9dd920008ae03f00ba92176898194e61771bb7cd565ca08c40c3e35d09fb3",
+      "canonicalRevisionFingerprint": "c9a9dd920008ae03f00ba92176898194e61771bb7cd565ca08c40c3e35d09fb3"
+    }
+  },
+  "sourceAttempt": {
+    "id": "attempt-draft-gate-4b35f9ad-375f-4374-8582-3446d1966b34",
+    "sequence": 1
+  },
+  "targetAttempt": {
+    "id": "attempt-draft-gate-repair-a220a04c-45b8-4118-ad24-7ea937a28e0b",
+    "sequence": 2
+  },
+  "publicationActivityId": "attempt-confirmed-eb6f1b5a-0dfe-47b9-a30d-05d82c26d31f",
+  "handoffRevision": "76f79f27466087636197fbdc7b3ad42e816b8ff535bee0ce9dd37234c305f7d0",
+  "disposition": "applied",
+  "report": {
+    "beforeEvidenceDigest": "21e861f51750cab2c5bf060e01f99b579da4e877f7a2b4323488d5e6b9cfc869",
+    "outputEvidenceDigest": "da03d8e57cc62729ddf8bb4f5e164e8b150827c62e8d65e717b683efe9f372e3",
+    "summary": "Replaced the draft's vague routed-help decisions with explicit option contracts, renderer boundaries, owner and test mappings, target/runtime cases, measurable class criteria, priorities, and bounded scope exclusions.",
+    "requests": [
+      {
+        "fingerprint": "ff9caa81f7a1ff7de1dd2c6ec287109e29640369c485f8464e3a8c978363e345",
+        "recurrenceCount": 0,
+        "priorStrategy": null
+      },
+      {
+        "fingerprint": "91e9bd58ab51cd2d7b4e8219b5bd175ce54399d6eefc619e02109bcd1a72c384",
+        "recurrenceCount": 0,
+        "priorStrategy": null
+      },
+      {
+        "fingerprint": "e118f4b3cd8ce73db48f7fef68c13304c0e4a93b06f26a4aa40ccfebdf5e4622",
+        "recurrenceCount": 0,
+        "priorStrategy": null
+      },
+      {
+        "fingerprint": "e559088f1818c70d3b131029382e4ae0edf3948bb91ed1e9dbdc587fda9dc7a8",
+        "recurrenceCount": 0,
+        "priorStrategy": null
+      },
+      {
+        "fingerprint": "7a0d9a3fd0875d2c6aa3efe94d5ff4dfe958ba5c58d36767ce8c136f37c809e2",
+        "recurrenceCount": 0,
+        "priorStrategy": null
+      },
+      {
+        "fingerprint": "c5b26ccbf6d297770d4184ea3bbea78c3b586df1270ee489b410c1fe7ea4eace",
+        "recurrenceCount": 0,
+        "priorStrategy": null
+      },
+      {
+        "fingerprint": "b8ae8036db8293f37620bb923d00dd6f7777c790262f0833e40a01a3c96a776c",
+        "recurrenceCount": 0,
+        "priorStrategy": null
+      },
+      {
+        "fingerprint": "1633bd0d2f53e967716aac02a44b0b1fd5b50fe8451f5e8b4ed8f89e032662ff",
+        "recurrenceCount": 0,
+        "priorStrategy": null
+      },
+      {
+        "fingerprint": "d4153b03b5c955b9c1e8fb069118f6de14ed6656c5b1d7105ac622b3eae2f212",
+        "recurrenceCount": 0,
+        "priorStrategy": null
+      },
+      {
+        "fingerprint": "2e7e688d6d65ec5bd54597f328c974f9721d95fb617eb61840dc04b7c38aebc1",
+        "recurrenceCount": 0,
+        "priorStrategy": null
+      },
+      {
+        "fingerprint": "b49e9720513730369ee54d8074c5f3a15d6b219ce8b0d1ad04f23c78cea21191",
+        "recurrenceCount": 0,
+        "priorStrategy": null
+      },
+      {
+        "fingerprint": "78a0bbb7453110f9057cf37e9ab2f18d36a08622b1dd813f449d55e6341996c1",
+        "recurrenceCount": 0,
+        "priorStrategy": null
+      }
+    ],
+    "results": [
+      {
+        "fingerprint": "ff9caa81f7a1ff7de1dd2c6ec287109e29640369c485f8464e3a8c978363e345",
+        "strategy": "Define the complete option contract at the registry boundary.",
+        "summary": "The draft now names canonical names, aliases, value kinds, placeholders, descriptions, requiredness, cardinality, domain, size/path policy, conditionals, and existing validation owners.",
+        "priorRepairInsufficiency": null,
+        "deltaIds": [
+          "da03d8e57cc62729ddf8bb4f5e164e8b150827c62e8d65e717b683efe9f372e3"
+        ]
+      },
+      {
+        "fingerprint": "91e9bd58ab51cd2d7b4e8219b5bd175ce54399d6eefc619e02109bcd1a72c384",
+        "strategy": "Specify concrete renderer boundary fixtures and expected output.",
+        "summary": "The draft now gives exact 13/14/15-character names, the registered longest leaf, exact 64/65-character synthetic segments, two-space minimum, and ordering assertions.",
+        "priorRepairInsufficiency": null,
+        "deltaIds": [
+          "da03d8e57cc62729ddf8bb4f5e164e8b150827c62e8d65e717b683efe9f372e3"
+        ]
+      },
+      {
+        "fingerprint": "e118f4b3cd8ce73db48f7fef68c13304c0e4a93b06f26a4aa40ccfebdf5e4622",
+        "strategy": "Replace the subjective class criterion with measurable structural conditions.",
+        "summary": "A value is class-owned when it crosses a module boundary with named fields, has invariants, or owns parsing/rendering/identity behavior; option and row values are named applications.",
+        "priorRepairInsufficiency": null,
+        "deltaIds": [
+          "da03d8e57cc62729ddf8bb4f5e164e8b150827c62e8d65e717b683efe9f372e3"
+        ]
+      },
+      {
+        "fingerprint": "e559088f1818c70d3b131029382e4ae0edf3948bb91ed1e9dbdc587fda9dc7a8",
+        "strategy": "Define scope by observable prohibited and permitted changes.",
+        "summary": "The draft now excludes new admission rules, arbitrary limits, retry changes, query changes, and unrelated semantic or side-effect changes, while limiting work to registry projections, rendering, and tests.",
+        "priorRepairInsufficiency": null,
+        "deltaIds": [
+          "da03d8e57cc62729ddf8bb4f5e164e8b150827c62e8d65e717b683efe9f372e3"
+        ]
+      },
+      {
+        "fingerprint": "7a0d9a3fd0875d2c6aa3efe94d5ff4dfe958ba5c58d36767ce8c136f37c809e2",
+        "strategy": "Bind focused wiring tests to named public entry points and assertions.",
+        "summary": "The draft now identifies src/flow.js, src/sennel.js, and the help command, with row, exit-code, non-execution, no-leaf, runtime, and query assertions.",
+        "priorRepairInsufficiency": null,
+        "deltaIds": [
+          "da03d8e57cc62729ddf8bb4f5e164e8b150827c62e8d65e717b683efe9f372e3"
+        ]
+      },
+      {
+        "fingerprint": "c5b26ccbf6d297770d4184ea3bbea78c3b586df1270ee489b410c1fe7ea4eace",
+        "strategy": "Enumerate the complete target-guard and work-directory coverage set.",
+        "summary": "The five guard names and both agent-work-dir spellings are now exact, tied to derived applicable leaves, existing owners, mutation ordering, and configured logging cases.",
+        "priorRepairInsufficiency": null,
+        "deltaIds": [
+          "da03d8e57cc62729ddf8bb4f5e164e8b150827c62e8d65e717b683efe9f372e3"
+        ]
+      },
+      {
+        "fingerprint": "b8ae8036db8293f37620bb923d00dd6f7777c790262f0833e40a01a3c96a776c",
+        "strategy": "Specify the exact runtime path forms and outcomes.",
+        "summary": "The draft now requires both separated and equals agent-work-dir syntax, configured/default log precedence, durable cleanup resolution, side-effect checks, and exit assertions.",
+        "priorRepairInsufficiency": null,
+        "deltaIds": [
+          "da03d8e57cc62729ddf8bb4f5e164e8b150827c62e8d65e717b683efe9f372e3"
+        ]
+      },
+      {
+        "fingerprint": "1633bd0d2f53e967716aac02a44b0b1fd5b50fe8451f5e8b4ed8f89e032662ff",
+        "strategy": "Apply the measurable structured-value criterion to the project class rule.",
+        "summary": "The same existing rule now explicitly distinguishes class-owned option and subcommand-row values from prose strings and forbids object-literal substitutes for those values.",
+        "priorRepairInsufficiency": null,
+        "deltaIds": [
+          "da03d8e57cc62729ddf8bb4f5e164e8b150827c62e8d65e717b683efe9f372e3"
+        ]
+      },
+      {
+        "fingerprint": "d4153b03b5c955b9c1e8fb069118f6de14ed6656c5b1d7105ac622b3eae2f212",
+        "strategy": "Make rendering inputs and expected spacing/order outputs executable as tests.",
+        "summary": "The shared renderer requirement now fixes concrete length fixtures, exact synthetic values, two-space separation, sorting, and non-callable synthetic scope.",
+        "priorRepairInsufficiency": null,
+        "deltaIds": [
+          "da03d8e57cc62729ddf8bb4f5e164e8b150827c62e8d65e717b683efe9f372e3"
+        ]
+      },
+      {
+        "fingerprint": "2e7e688d6d65ec5bd54597f328c974f9721d95fb617eb61840dc04b7c38aebc1",
+        "strategy": "Assign explicit must priorities in the existing decision and deferred-to-Spec text.",
+        "summary": "All five decision points and all four deferred-to-Spec entries now carry an explicit Priority: must marker without adding unsupported fields.",
+        "priorRepairInsufficiency": null,
+        "deltaIds": [
+          "da03d8e57cc62729ddf8bb4f5e164e8b150827c62e8d65e717b683efe9f372e3"
+        ]
+      },
+      {
+        "fingerprint": "b49e9720513730369ee54d8074c5f3a15d6b219ce8b0d1ad04f23c78cea21191",
+        "strategy": "Replace the missing inventory statement with a bounded owner-and-test inventory contract.",
+        "summary": "analysis.problem now enumerates routed leaves, per-leaf input dimensions, public surfaces, owners, configuration/artifacts, side effects, and query exclusion for the initial Spec.",
+        "priorRepairInsufficiency": null,
+        "deltaIds": [
+          "da03d8e57cc62729ddf8bb4f5e164e8b150827c62e8d65e717b683efe9f372e3"
+        ]
+      },
+      {
+        "fingerprint": "78a0bbb7453110f9057cf37e9ab2f18d36a08622b1dd813f449d55e6341996c1",
+        "strategy": "Map each retained public behavior to an owner and behavior-level assertion.",
+        "summary": "The draft now maps registry, renderer, flow.js, sennel.js, handlers, validators, guards, runtime/container, lifecycle, and query owners to concrete acceptance evidence.",
+        "priorRepairInsufficiency": null,
+        "deltaIds": [
+          "da03d8e57cc62729ddf8bb4f5e164e8b150827c62e8d65e717b683efe9f372e3"
+        ]
+      }
+    ],
+    "lineage": {
+      "kind": "artifact",
+      "deltaIds": [
+        "da03d8e57cc62729ddf8bb4f5e164e8b150827c62e8d65e717b683efe9f372e3"
+      ]
+    }
+  }
+}

@@ -1,0 +1,506 @@
+{
+  "id": "2794a4d4dec65b51cfc93178aa500268c5a6bf7320e02214a39f95af88d6e2f8",
+  "snapshot": {
+    "executionContract": {
+      "runId": "f45fe34e-1029-4c53-8f5c-16633b3c694d",
+      "specId": "f45fe34e-flow-help-contract",
+      "stepId": "draft",
+      "nodeId": "draft",
+      "taskId": null,
+      "attemptId": "attempt-draft-8b2d9f37-4d22-425b-96e9-0ab83839b3f7",
+      "attemptSequence": 1,
+      "generation": 0,
+      "inputRevision": "e50edd25c9b6db86333b87f70b64dbb8528976d84afed9ee20520de3719047ab",
+      "runtimeRevision": "a8532888a7f1edcc9001c34d6e9c9a487579c3a31c70a06ff573c67f86354385",
+      "promptDigest": "fe9d3d7dde45f198c8337604ab364f75fdb728a74ad073355810067be59d354a",
+      "schemaDigest": "74651e0515b445663e671d718b296dbf4b13d46b056504ffcd455a5dfd3b7be7",
+      "budgetOwner": "a3dd975f45e9e86a1695e328fe51915db25f2bb1c25018f9a092999767779cb6",
+      "executionLimit": null,
+      "executionMode": null,
+      "inputBaselines": []
+    },
+    "request": {
+      "version": 6,
+      "runId": "f45fe34e-1029-4c53-8f5c-16633b3c694d",
+      "specId": "f45fe34e-flow-help-contract",
+      "issue": 521,
+      "stepId": "draft",
+      "taskId": null,
+      "actionDigest": "adf78d935873330dbe8baa9b03d01a63b6bc36d13303634785c93ba984f45b10",
+      "dispatchInvocationId": "7689beeb-ca1b-4b36-9af0-5ab34931c7fd",
+      "targetAuthority": "canonical-flow-artifacts",
+      "inputDigest": "11c7392efbba1fb2c71a11c791dc213bdae0e6ee68f76ce2baec22ae2e934a21",
+      "inputRevision": "e50edd25c9b6db86333b87f70b64dbb8528976d84afed9ee20520de3719047ab",
+      "executionContract": {
+        "runId": "f45fe34e-1029-4c53-8f5c-16633b3c694d",
+        "specId": "f45fe34e-flow-help-contract",
+        "stepId": "draft",
+        "nodeId": "draft",
+        "taskId": null,
+        "attemptId": "attempt-draft-8b2d9f37-4d22-425b-96e9-0ab83839b3f7",
+        "attemptSequence": 1,
+        "generation": 0,
+        "inputRevision": "e50edd25c9b6db86333b87f70b64dbb8528976d84afed9ee20520de3719047ab",
+        "runtimeRevision": "a8532888a7f1edcc9001c34d6e9c9a487579c3a31c70a06ff573c67f86354385",
+        "promptDigest": "fe9d3d7dde45f198c8337604ab364f75fdb728a74ad073355810067be59d354a",
+        "schemaDigest": "74651e0515b445663e671d718b296dbf4b13d46b056504ffcd455a5dfd3b7be7",
+        "budgetOwner": "a3dd975f45e9e86a1695e328fe51915db25f2bb1c25018f9a092999767779cb6",
+        "executionLimit": null,
+        "executionMode": null,
+        "inputBaselines": []
+      },
+      "executionContractId": "96c7875698f55aab700bb907a463062edd260040027936e65d16711df2c42cc2",
+      "dispatchRepositoryBinding": null,
+      "requirementTestBinding": null,
+      "inputs": [
+        {
+          "name": "gate-observation-recurrence.json",
+          "targetRelativePath": "gate-observation-recurrence.json",
+          "digest": "f42f1b455fd60c34c934413b9767bc78f3a316131f9d4c0813ae8ee9fed6c555",
+          "byteLength": 81,
+          "document": {
+            "version": 1,
+            "phase": null,
+            "targetStepId": null,
+            "sourceEvidence": null,
+            "entries": []
+          }
+        },
+        {
+          "name": "prepare-spec-receipt.json",
+          "targetRelativePath": "prepare-spec-receipt.json",
+          "digest": "4d46c15c3dbd9f5598e02bcdb7a36e45186b0255f9edc6ebf3591b5fe3fe0304",
+          "byteLength": 26020,
+          "document": {
+            "id": "dc30fa9860f44d4f00194f6e854824f44fbbfb45d7b847d697a53757dbe1fc40",
+            "binding": {
+              "runId": "f45fe34e-1029-4c53-8f5c-16633b3c694d",
+              "specId": "f45fe34e-flow-help-contract",
+              "stepId": "prepare-spec",
+              "attemptId": "attempt-prepare-spec-02be81cf-4caa-47c3-96fe-d575f38714c3",
+              "attemptSequence": 1
+            },
+            "resultKind": "prepare-spec-ready",
+            "resultType": "completed",
+            "resultDigest": "80248f18dab22aea589481e876ce6336f87019dcc0f4fbe65b9145352f9edac3",
+            "settlementKind": "target-connection",
+            "targetStepId": "draft",
+            "effects": {
+              "skipStepIds": [],
+              "resetStepIds": []
+            },
+            "connector": {
+              "name": "PrepareDraftConnector"
+            },
+            "publicationDigest": "ac0d31d9fc2ea7547c0b2bb80af68e433340595600699c717d6b6428e2bf6278",
+            "executionLifecycle": null,
+            "awaitQuestion": null,
+            "preparation": {
+              "mode": "worktree",
+              "baseOid": "3e8427ff20868b3ffb04de6433db42dabe397294",
+              "branch": "feature/f45fe34e-flow-help-contract",
+              "worktree": "/home/nakano/workspace/sennel/.sennel/worktree/feature-f45fe34e-flow-help-contract",
+              "creationActivityId": "flow-created-13fccd3868dc833ff04ec25c04b37e2555127c23dbc2aefd1a48edb44c57a5c9",
+              "catalog": [
+                {
+                  "logicalKey": "issue.snapshot",
+                  "kind": "issue-snapshot",
+                  "relativePath": "issue.md",
+                  "hash": "11b23553f5f64fb0e981c501225af1e22a2f06a158bbc73e11f01515a3be0e42",
+                  "size": 20993,
+                  "mediaType": "text/markdown",
+                  "authority": "canonical-flow-artifacts",
+                  "cardinality": "singleton",
+                  "memberId": null,
+                  "publicationStep": "system",
+                  "retention": "permanent",
+                  "activityId": "flow-created-13fccd3868dc833ff04ec25c04b37e2555127c23dbc2aefd1a48edb44c57a5c9",
+                  "migrationMaterialization": false
+                },
+                {
+                  "logicalKey": "spec.snapshot",
+                  "kind": "spec-snapshot",
+                  "relativePath": "revisions/001/spec.json",
+                  "hash": "a1c0b1f8c5ccc67b71de5a9a1d0e7e5c0347ffcb873a20cc76fd06d2383fc0a9",
+                  "size": 359,
+                  "mediaType": "application/json",
+                  "authority": "repository-metadata",
+                  "cardinality": "collection",
+                  "memberId": "66408e198a2f21dee35046cc5d1a514f6fe60137ec1361a3aea15ee405c7f8e9",
+                  "publicationStep": "system",
+                  "retention": "permanent",
+                  "activityId": "flow-created-13fccd3868dc833ff04ec25c04b37e2555127c23dbc2aefd1a48edb44c57a5c9",
+                  "migrationMaterialization": false
+                },
+                {
+                  "logicalKey": "spec.record",
+                  "kind": "spec-record",
+                  "relativePath": "spec.json",
+                  "hash": "a1c0b1f8c5ccc67b71de5a9a1d0e7e5c0347ffcb873a20cc76fd06d2383fc0a9",
+                  "size": 359,
+                  "mediaType": "application/json",
+                  "authority": "repository-metadata",
+                  "cardinality": "singleton",
+                  "memberId": null,
+                  "publicationStep": "system",
+                  "retention": "permanent",
+                  "activityId": "flow-created-13fccd3868dc833ff04ec25c04b37e2555127c23dbc2aefd1a48edb44c57a5c9",
+                  "migrationMaterialization": false
+                }
+              ],
+              "request": "Use Issue 521’s 2026-09-24 restart contract for the initial Draft and Spec. Goal: make Flow CLI help reflect the actual routed parser contracts and render group help consistently. Scope: extend the existing CommandDefinition/FLOW_COMMANDS authority with invariant-bearing option and subcommand-row classes; derive parser declarations and leaf/group help from that authority; preserve flow query as its separate custom-parser exception; use one renderer across all public help paths. The Spec must inventory each routed leaf’s inputs and map existing validation, target-guard, runtime-path, size, lifecycle, and exit-code behavior to its current owner without adding blanket validation or new limits. Cover all direct-child group intersections, all registered leaves derived from the registry, the five target guards, long-name layout and deterministic ordering, and the existing query contract. Add registry/integration coverage and focused CLI E2E coverage for the public renderers, parser/help contracts, and query exception; map observable behavior to owners and tests, including flow.js and sennel.js paths. Preserve command semantics, validation ownership, runtime behavior, and rejection side effects. Derive current counts from the registry; do not reuse historical counts. Revision 008 is not approved, and recovery of the prior stopped flow is outside this Issue.",
+              "issueSnapshot": {
+                "number": 521,
+                "body": "## Restart contract from flow review (2026-09-24)\n\nUse the following decisions in the **initial Draft and Spec** when starting this issue again. They supersede conflicting historical audit counts and wording below. They consolidate Draft gate repairs, Spec reviews/revisions 002–008, and remaining gate findings from `specs/338319c6-flow-help-contract/001/`. Revision 008 still has unresolved blocking findings and must not be copied as an approved specification. Recovery of the stopped flow is a separate task.\n\n### 1. Exact scope and option authority\n\n- At source commit `b8b3f59550a12677d6a017bd478881c085d54399`, `FLOW_COMMANDS` has **66 leaves**, of which **65 use the shared routed path**: resume 1, prepare 1, get 11, set 17, run 34, report/show 1. The remaining leaf is query. Re-enumerate from the registry at the next start; do not hard-code 67 or 36 run leaves in acceptance tests. The old omission frequencies below are historical audit claims, not a freshly verified denominator.\n- Preserve `flow query` as an explicit custom-parser exception owned by `bootstrapFlowQueryCli`, `src/flow/query.js`, and `src/flow/query-contract.js`. Exclude it consistently from shared option/admission/help projection and exhaustive routed-parser matrices, including any R9/T5 equivalent. Preserve its stdin, `--request-file`, help and error behavior with separate regression checks.\n- Extend existing `CommandDefinition` and `FLOW_COMMANDS`; use dedicated option and subcommand-row classes with constructor invariants. An option owns name/aliases, flag/required-value/optional-value kind, placeholder and description; a row owns name, summary and optional display order. Do not add a parallel command registry or reconstruct option authority by reverse-parsing help.\n- Store authoritative option metadata explicitly at the registry boundary and share guard/runtime/help definitions. Preserve command-specific prose, examples and localization; translated prose must not replace the structured Usage/Options authority. Define each canonical option once in the Options section (with `-h, --help` on one row); appearances in Usage/examples are not duplicate option declarations. Required and optional values must be visibly distinguishable.\n- Group projection uses **all direct child leaves of that group**, not selected examples, nested descendants or unrelated entries. Match full option contracts, including aliases and value kind, rather than names alone. The current groups contain get 11, set 17, run 34 and report/show 1. Derive this inventory and its intersection from the registry. `--agent-work-dir` appears in run group options and not get/set/report.\n\n### 2. Observable rendering contract\n\n- Cover all three public paths: `sennel flow <group> --help`, `sennel help flow <group>`, and `sennel flow <group>` without a leaf (the `src/flow.js` path). The first two alone do not exercise both existing renderers.\n- Use one shared row renderer: each row has `<name><padding of at least two ASCII spaces><summary>`, with no truncation or concatenation. For the same group, subcommand rows and option rows have identical order and spacing across entry points; unrelated headings/prose need not be byte-identical.\n- Default subcommand order is locale-independent ascending name order. If display-order metadata is used, name its field and propagation in the initial Spec, define ordering for absent/equal values, and retain name order as the tie-breaker. Define deterministic option order once in the shared model (canonical name order is sufficient), including implicit help.\n- Test short names, the old 13/14/15-character padding boundary, the longest registered leaf (`recover-missing-producer-artifact` at this baseline), and synthetic 64/65-character segments. The synthetic names belong in renderer/registry integration tests; they are not callable production CLI commands and must not imply a new command-name length limit.\n\n### 3. Preserve real validation owners and input contracts\n\nThe initial Spec must include a per-leaf input inventory derived from `positionals`, `rest`, `flags`, `options`, `optionalOptions`, and implicit help. For each value, identify required/optional status, cardinality, type/format/allowed domain, empty-value behavior, existing size limits (or their absence), conditional combinations, and the concrete existing validator/registry that owns it. Keep internal context such as `_rawArgs`, resolved target and injected runtime state out of public options. Reuse existing authority; this inventory does **not** authorize a new blanket admission validator or arbitrary tighter limits.\n\n| Boundary | Existing authority / decision |\n| --- | --- |\n| Selector and argv syntax | CLI parsing / `parseEntryInput`; preserve exact selector matching, option value syntax and existing missing/unknown/extra-input behavior per leaf. |\n| Target guards and target identity | `FlowTargetExpectation` in `src/lib/flow-target-guard.js` and `buildFlowCommandHookContext` in `src/flow/lib/flow-context.js`, before command execution. |\n| Runtime directory initialization | `src/sennel.js` pre-scan, existing work-directory resolver and `src/lib/container.js`. |\n| Domain values / state-dependent combinations | Existing domain classes, constants, registries and command validators, named per field; do not copy their decisions into callers. |\n| Query | Its independent query contract, excluded from the shared migration. |\n\nExplicitly cover these previously missed distinctions:\n\n- `set step status`, `set auto value`, and `set broad action` use positional values, not new `--status`, `--auto`, or `--action` options. `get status runId` is optional; `set files` needs at least one rest path. Record per-leaf arity rather than assuming all declared positionals are required.\n- `resume --spec` is a `FlowSpecId`; `run gate --spec` is a filesystem path. `prepare --base` and `run lint --base` are Git branch names. `get runtime-log --run-id` additionally supports an identifier/sequence form. Do not infer a type from the option spelling globally.\n- Do not impose the repair's generic 100-character ID rule: `FlowSpecId` has no such limit; preparing run IDs use `PreparingFlowId`/`PreparingFlowStore` (200-character maximum, no colon at this baseline), while `FlowTargetExpectation` allows target tokens up to 300 characters. Specify `--run-id`, `--expect-run-id`, task/finding/attempt IDs and commit references against their own owners.\n- Include `get check target`, `get prompt kind`, artifact `logicalKey`, step `id/status`, note `text`, draft `questionId`, requirement `reqId`, `--format`, `--mode`, `--phase`, `--sequence`, `--category`, `--record-category`, `--step`, `--task-id`, `--normalized-finding-id`, `--repair-ref-commit`, `--expect-attempt-id`, `--approve`, and state-dependent `--choice` domains and combinations. Identify the existing authority rather than inventing common enums.\n- For actual paths, record file versus directory, existence requirements, absolute/relative support and resolution root per leaf. Cover `--agent-work-dir`, gate `--spec`, `--file`, context paths and rest paths. Do not require every output directory to already exist.\n- Record existing policies for text/JSON/path sizes, `set files` count/aggregate size, `--exclusions` entries/serialized size, retry/attempt limits, query request-file size/elements/depth, context directory traversal depth/count/read size, and review-evidence file limits. If no explicit bound exists, state that fact and its owner. Adding resource limits or changing retry policy is separate scope, not a repair prerequisite for help consistency.\n\nThe five shared target guards are `--expect-binding`, `--expect-issue`, `--expect-no-issue`, `--expect-spec`, and `--expect-run-id`. Derive their applicable leaf set from the shared registry collection. For each guard verify a matching expectation succeeds through its existing path, mismatches/invalid combinations fail before command-owned mutation, and missing flags retain existing behavior. Preserve the existing mutual-exclusion and identity rules.\n\n### 4. Runtime paths, rejection order and exit codes\n\n- Preserve both parser-supported `--agent-work-dir /path` and `--agent-work-dir=/path` forms. Resolve the current pre-scan mismatch by normalizing both through the existing option parsing/resolution authority before container initialization; do not duplicate a second option parser or add unrelated path restrictions.\n- Preserve precedence: normal `agentWorkDir` is invocation override > configured agent workDir > default; explicit `config.logs.dir` controls `logDir`, otherwise logs are under `agentWorkDir/logs`. Finalize-cleanup keeps its durable work-directory policy and resolves configured log paths against its durable root. Never assert that `agentWorkDir` and `logDir` are the same directory. Test both syntax forms with and without configured logs and the durable cleanup case.\n- Preserve existing rejection lifecycle and diagnostic behavior. Currently parse errors may build context/open a runtime log before emitting `ARGS_ERROR`, and top-level container initialization may resolve ambient Flow attribution. Do not combine “preserve behavior” with a new “no context resolution/no log writes” promise. Document help, parse failure, target rejection, valid execution, and command failure paths, including existing pre/post/onError/finally behavior. Valid help must not execute the command handler or its execution hooks. A new admission boundary or side-effect ordering change requires separate explicit scope.\n- Record observable exit contracts: valid explicit help and successful commands return 0; missing/unknown selectors and actual parser/target/command failures return 1. No-leaf group help prints help but retains exit 1. Missing required values and extra positionals must be tested against each leaf's actual parser/validator contract, without introducing new universal rejection rules.\n\n### 5. Verification and implementation mapping\n\n- Initial Draft/Spec must map each retained public surface to its current/new owner and test: parser acceptance, leaf help, every group help path, execution, guards/binding, runtime paths and query. Inventory affected APIs, lifecycle hooks, configuration, generated artifacts and side effects, explicitly marking unchanged categories.\n- Enumerate all routed leaves (including resume and prepare) in contract tests. Run at least one behavior-level assertion per retained surface through the real dispatcher/CLI path; metadata snapshots alone are insufficient. Exercise valid input/help and meaningful rejection cases with isolated fixtures/stub handlers, without executing destructive production operations.\n- Keep the exhaustive parser matrix in integration tests. Use focused public CLI E2E for entry-point wiring, abort, guarded get/set/run, group intersections, longest names, order/spacing, exit codes and runtime directory behavior. Do not duplicate the complete invalid-input matrix in both layers. Keep synthetic name boundaries in integration tests.\n- Reuse existing test helpers and verify common `CommandDefinition` consumers, including representative docs/core/plugin group help if they use the shared renderer. Preserve semantics outside Flow.\n- Extend the original file list with `src/flow.js`, the pre-initialization boundary in `src/sennel.js`, and regression touchpoints in `src/lib/container.js`, `src/lib/flow-target-guard.js`, `src/flow/lib/flow-context.js`, and query modules. These touchpoints do not require rewriting the existing owners.\n\n### Review provenance\n\n- Draft: `001/issue-log.json` draft-gate entries and `001/artifacts/plan-gate-repairs/*/outcome.json` (measurable layout, exact child set, class responsibilities and migration inventory). Draft coverage/questions evidence itself reported PASS; gate observations caused the repairs.\n- Spec: `001/revisions/002–003/review.json` (counts/query/synthetic tests); `004–005` (no-leaf route/runtime pre-scan/validation owners); `006–007` (positionals/types/lifecycle/equals syntax/domains); `008` (query exclusion, log precedence, ID boundaries, missing domains and rejection-side-effect contradictions).\n- Remaining spec-gate observations in `001/issue-log.json` (including repeated observations on 2026-09-24) cover guard enumeration, retry bounds, file/context limits and positional validation. The decisions above retain existing contracts and require explicit inventories; they do not treat speculative limits introduced by repair as accepted product requirements.\n\n## Overview\n\nBecause the parser definitions (`args.flags` / `args.options` / `args.optionalOptions`) and help definitions for `sennel flow` are managed separately, the options actually accepted do not match the displayed content. In addition, incorrect group help, broken subcommand table layouts, and display order dependent on registration order also occur.\n\nAn audit of the current source covering all 67 leaves in `FLOW_COMMANDS` and `flow get/set/run/report --help` confirmed the following:\n\n- For 41 of the 67 leaves, at least one declared flag/option is missing from help.\n- The frequently omitted shared options are `--expect-binding` (35 commands), `--expect-no-issue` / `--expect-issue` / `--expect-spec` / `--expect-run-id` (31 commands each), and `--agent-work-dir` (23 commands).\n- The implicit `-h, --help` is not displayed in the leaf help for any of the 67 leaves.\n- The group help for `flow get` / `set` / `report` displays `--agent-work-dir <path>`, which is not accepted by the leaves under those groups.\n- For subcommand names 14 characters or longer, there is no separator between the name and summary, causing the strings to run together. This affects 25 commands (`get` 1, `set` 3, `run` 21).\n- The display order of subcommands depends on their declaration order in `FLOW_COMMANDS` and is not defined as a help ordering contract.\n\n## Reproduction\n\n`flow run abort` accepts the following options according to the parser, but help displays only `--force`.\n\n```text\n--force\n--agent-work-dir <path>\n--expect-binding <token>\n--expect-issue <number>\n--expect-no-issue\n--expect-spec <spec>\n--expect-run-id <runId>\n```\n\n```console\n$ sennel flow run abort --help\nUsage: sennel flow run abort [--force]\n\nRemove only the selected flow worktree, feature branch, shared spec directory, and active entry.\n--force permits removal of a dirty isolated worktree; unrelated base-checkout changes are never removed.\n```\n\nAlso, due to the incorrect group help, the following input fails:\n\n```console\n$ sennel flow get qa-count --agent-work-dir /tmp/sennel-help-audit\nUnknown option: --agent-work-dir\n```\n\n## Cause\n\n- In `src/flow/registry.js`, the parser-authoritative `args` and display-oriented `help` are written separately by hand.\n- When a leaf is invoked with `--help`, `src/lib/dispatcher.js` outputs `entry.help` as-is and does not validate or supplement it against `args`.\n- `flowOptions()` in `src/lib/command-registry.js` reverse-parses hand-written help, while group options are managed in a separate fixed array.\n- `CommandDefinition.renderHelp()` in `src/lib/command-registry.js` and `renderCommand()` in `src/help.js` duplicate the implementation of the subcommand table.\n- Neither renderer guarantees a separator for command names exceeding the fixed width, and both display commands in registration order.\n- Existing tests verify parser acceptance for some options, but do not verify complete agreement between the parser and help contracts, the common intersection of group options, long names, or display order.\n\n## Fix direction\n\nExtend the existing `CommandDefinition` so that the parser and help reference the same option authority. Do not add a separate command abstraction.\n\n- Define a dedicated model representing the option name, value placeholder, description, and type: flag / required-value option / optional-value option.\n- Compose target guards, run runtime options, and implicit help as shared option collections.\n- Project `args.flags`, `args.options`, `args.optionalOptions`, leaf help, and group help from the model.\n- Keep command-specific descriptions and examples in the existing help, but make the model authoritative for the Usage and Options listings.\n- Derive group help options from the intersection of the option contracts of child leaves and eliminate the fixed array.\n- Consolidate subcommand sorting and alignment in a shared renderer, and reuse it for `sennel flow <group> --help` and `sennel help flow <group>`.\n- Sort subcommands by name in ascending order by default, overriding this only with explicit display-order metadata when semantic ordering is required.\n- Use a table layout of `maxName + separator` or a multiline format, guaranteeing at least two ASCII spaces of separation between the name and summary.\n\n## Acceptance criteria\n\n- For every shared routed leaf in `FLOW_COMMANDS` (65 at the restart baseline; query is an explicit exception), every parser option and implicit `-h, --help` has exactly one canonical Options row; Usage/examples may repeat names.\n- The option model distinguishes valueless flags, required-value options, and optional-value options, and provides a placeholder and description for options that take values.\n- `sennel flow run abort --help` displays `--force`, `--agent-work-dir`, all 5 target guards, and `-h, --help`.\n- `flow get --help`, `flow set --help`, and `flow report --help` do not display `--agent-work-dir`; only `flow run --help` displays it.\n- The boundary between the command name and summary is always visible on every subcommand row in `flow get/set/run/report --help`.\n- Subcommands in every group are displayed in ascending name order and do not depend on their declaration positions in `FLOW_COMMANDS`.\n- `sennel flow <group> --help` and `sennel help flow <group>` use the same ordering and layout contract.\n- Add registry/help contract tests covering all leaves and groups, including `flow resume` and `prepare`.\n- Add focused E2E tests covering `abort`, `get` / `set` / `run` with target guards, long subcommand names, and name ordering.\n- Do not change command execution semantics, target guard evaluation, or runtime directory behavior.\n\n## Target files\n\n- `src/flow/registry.js`\n- `src/lib/dispatcher.js`\n- `src/lib/command-registry.js`\n- `src/help.js`\n- `tests/integration/lib/command-registry.test.js`\n- `tests/e2e/help.test.js`\n\n## Audit basis\n\nThe parser definitions and help were compared by recursively traversing `FLOW_COMMANDS`, and representative leaf/group help and `sennel help flow <group>` were executed. The audit also confirmed that options displayed in group help but unsupported by the actual CLI result in `Unknown option`, and that existing related integration/E2E tests do not detect this issue even when they pass.\n\n<details>\n<summary>ja</summary>\n\n## 次回開始時に最初から取り込む契約（2026-09-24）\n\n上記英語セクション「Restart contract from flow review」を初回 Draft／Spec の要件として適用する。以下は同じ決定の日本語版であり、旧監査の件数・曖昧な記述より優先する。停止 flow `338319c6-flow-help-contract` の revision 008 は未解決の blocking 指摘が残っており、承認済み仕様として丸ごと転記しない。\n\n1. **対象集合**：確認した commit `b8b3f59550a12677d6a017bd478881c085d54399` では全66 leaf、query を除く共通経路65 leaf（resume 1、prepare 1、get 11、set 17、run 34、report/show 1）。次回開始時の registry から再列挙する。query は独立 parser/help の例外として、入力 inventory・共通 admission・help projection・網羅テストのすべてで一貫して除外し、stdin／request-file／help／error は別途回帰確認する。\n2. **単一の定義元**：既存 CommandDefinition／FLOW_COMMANDS を拡張し、option と表示行は invariant を持つ専用 class とする。名前・alias・値種別・placeholder・説明を構造化して明示定義し、手書き help の逆解析を authority にしない。説明・例・翻訳は保持する。「一度ずつ」は Options の canonical row 単位とし、Usage／例への再掲と混同しない。group は全 direct child leaf の完全な option 契約の共通部分を導出する。\n3. **表示経路と境界**：`flow <group> --help`、`help flow <group>`、leaf なしの `flow <group>` の3経路を共通 renderer へ接続する。行は name＋2個以上のASCII空白＋summary、同じgroupの行・optionの順序と空白を揃える。名前順はlocale非依存、表示順metadataを使うならfield・伝播・未指定・同値の規則をSpecで確定する。option順も共通modelで確定する。13/14/15文字境界、最長既存leaf、64/65文字の合成名を検証し、合成名はintegrationで扱う。新たな名前長制限は導入しない。\n4. **入力と責務の一覧**：各leafのpositional/rest/flag\n... (truncated)"
+              },
+              "mandatory": {
+                "plugins": [
+                  {
+                    "logicalKey": "plugin.lifecycle.artifact",
+                    "kind": "plugin-lifecycle-artifact",
+                    "relativePath": "artifacts/plugin-artifacts/workflow/prepare.json",
+                    "hash": "0bf81b016651667cff55f36bf5b37c2c3872f339258652d3d728625e0d7ea9fa",
+                    "size": 133,
+                    "mediaType": "application/json",
+                    "authority": "canonical-flow-artifacts",
+                    "cardinality": "collection",
+                    "memberId": "85b9812afb46ed21b1577d3596a82622fcbb2251a7a716670cbf1ea14394e0e2",
+                    "publicationStep": "system",
+                    "retention": "permanent",
+                    "activityId": "prepare-plugin-artifacts-published-dc1b328ea77a33e0c1a766b52446b1504c6338fdf2a763eaaebeb8afbbd05d84",
+                    "migrationMaterialization": false
+                  }
+                ],
+                "analysis": {
+                  "hash": "22ec3ac39762067b60ab06f15e25407716d53916c83b02fd144a25190f3b236c",
+                  "size": 1442343
+                }
+              },
+              "bindingIdentity": {
+                "runId": "f45fe34e-1029-4c53-8f5c-16633b3c694d",
+                "issue": 521,
+                "specId": "f45fe34e-flow-help-contract",
+                "worktreePath": "/home/nakano/workspace/sennel/.sennel/worktree/feature-f45fe34e-flow-help-contract"
+              }
+            }
+          }
+        }
+      ],
+      "testReviewRepair": null,
+      "contextSnapshot": {
+        "version": 1,
+        "kind": "draft",
+        "binding": {
+          "runId": "f45fe34e-1029-4c53-8f5c-16633b3c694d",
+          "specId": "f45fe34e-flow-help-contract",
+          "issue": 521,
+          "dispatchInvocationId": "7689beeb-ca1b-4b36-9af0-5ab34931c7fd",
+          "actionDigest": "adf78d935873330dbe8baa9b03d01a63b6bc36d13303634785c93ba984f45b10",
+          "targetDigest": "5a540c11305bf81529f1cabe84fa2025b3aac6139bbe4617c747110b4773fc1d"
+        },
+        "inputAuthority": {
+          "kind": "issue",
+          "digest": "6443375a5b99258635088695cdefa410f2f160a795b8c59322674b4b740532a3"
+        },
+        "entries": [
+          {
+            "kind": "issue",
+            "status": "available",
+            "digest": "6443375a5b99258635088695cdefa410f2f160a795b8c59322674b4b740532a3",
+            "document": {
+              "number": 521,
+              "body": "## Restart contract from flow review (2026-09-24)\n\nUse the following decisions in the **initial Draft and Spec** when starting this issue again. They supersede conflicting historical audit counts and wording below. They consolidate Draft gate repairs, Spec reviews/revisions 002–008, and remaining gate findings from `specs/338319c6-flow-help-contract/001/`. Revision 008 still has unresolved blocking findings and must not be copied as an approved specification. Recovery of the stopped flow is a separate task.\n\n### 1. Exact scope and option authority\n\n- At source commit `b8b3f59550a12677d6a017bd478881c085d54399`, `FLOW_COMMANDS` has **66 leaves**, of which **65 use the shared routed path**: resume 1, prepare 1, get 11, set 17, run 34, report/show 1. The remaining leaf is query. Re-enumerate from the registry at the next start; do not hard-code 67 or 36 run leaves in acceptance tests. The old omission frequencies below are historical audit claims, not a freshly verified denominator.\n- Preserve `flow query` as an explicit custom-parser exception owned by `bootstrapFlowQueryCli`, `src/flow/query.js`, and `src/flow/query-contract.js`. Exclude it consistently from shared option/admission/help projection and exhaustive routed-parser matrices, including any R9/T5 equivalent. Preserve its stdin, `--request-file`, help and error behavior with separate regression checks.\n- Extend existing `CommandDefinition` and `FLOW_COMMANDS`; use dedicated option and subcommand-row classes with constructor invariants. An option owns name/aliases, flag/required-value/optional-value kind, placeholder and description; a row owns name, summary and optional display order. Do not add a parallel command registry or reconstruct option authority by reverse-parsing help.\n- Store authoritative option metadata explicitly at the registry boundary and share guard/runtime/help definitions. Preserve command-specific prose, examples and localization; translated prose must not replace the structured Usage/Options authority. Define each canonical option once in the Options section (with `-h, --help` on one row); appearances in Usage/examples are not duplicate option declarations. Required and optional values must be visibly distinguishable.\n- Group projection uses **all direct child leaves of that group**, not selected examples, nested descendants or unrelated entries. Match full option contracts, including aliases and value kind, rather than names alone. The current groups contain get 11, set 17, run 34 and report/show 1. Derive this inventory and its intersection from the registry. `--agent-work-dir` appears in run group options and not get/set/report.\n\n### 2. Observable rendering contract\n\n- Cover all three public paths: `sennel flow <group> --help`, `sennel help flow <group>`, and `sennel flow <group>` without a leaf (the `src/flow.js` path). The first two alone do not exercise both existing renderers.\n- Use one shared row renderer: each row has `<name><padding of at least two ASCII spaces><summary>`, with no truncation or concatenation. For the same group, subcommand rows and option rows have identical order and spacing across entry points; unrelated headings/prose need not be byte-identical.\n- Default subcommand order is locale-independent ascending name order. If display-order metadata is used, name its field and propagation in the initial Spec, define ordering for absent/equal values, and retain name order as the tie-breaker. Define deterministic option order once in the shared model (canonical name order is sufficient), including implicit help.\n- Test short names, the old 13/14/15-character padding boundary, the longest registered leaf (`recover-missing-producer-artifact` at this baseline), and synthetic 64/65-character segments. The synthetic names belong in renderer/registry integration tests; they are not callable production CLI commands and must not imply a new command-name length limit.\n\n### 3. Preserve real validation owners and input contracts\n\nThe initial Spec must include a per-leaf input inventory derived from `positionals`, `rest`, `flags`, `options`, `optionalOptions`, and implicit help. For each value, identify required/optional status, cardinality, type/format/allowed domain, empty-value behavior, existing size limits (or their absence), conditional combinations, and the concrete existing validator/registry that owns it. Keep internal context such as `_rawArgs`, resolved target and injected runtime state out of public options. Reuse existing authority; this inventory does **not** authorize a new blanket admission validator or arbitrary tighter limits.\n\n| Boundary | Existing authority / decision |\n| --- | --- |\n| Selector and argv syntax | CLI parsing / `parseEntryInput`; preserve exact selector matching, option value syntax and existing missing/unknown/extra-input behavior per leaf. |\n| Target guards and target identity | `FlowTargetExpectation` in `src/lib/flow-target-guard.js` and `buildFlowCommandHookContext` in `src/flow/lib/flow-context.js`, before command execution. |\n| Runtime directory initialization | `src/sennel.js` pre-scan, existing work-directory resolver and `src/lib/container.js`. |\n| Domain values / state-dependent combinations | Existing domain classes, constants, registries and command validators, named per field; do not copy their decisions into callers. |\n| Query | Its independent query contract, excluded from the shared migration. |\n\nExplicitly cover these previously missed distinctions:\n\n- `set step status`, `set auto value`, and `set broad action` use positional values, not new `--status`, `--auto`, or `--action` options. `get status runId` is optional; `set files` needs at least one rest path. Record per-leaf arity rather than assuming all declared positionals are required.\n- `resume --spec` is a `FlowSpecId`; `run gate --spec` is a filesystem path. `prepare --base` and `run lint --base` are Git branch names. `get runtime-log --run-id` additionally supports an identifier/sequence form. Do not infer a type from the option spelling globally.\n- Do not impose the repair's generic 100-character ID rule: `FlowSpecId` has no such limit; preparing run IDs use `PreparingFlowId`/`PreparingFlowStore` (200-character maximum, no colon at this baseline), while `FlowTargetExpectation` allows target tokens up to 300 characters. Specify `--run-id`, `--expect-run-id`, task/finding/attempt IDs and commit references against their own owners.\n- Include `get check target`, `get prompt kind`, artifact `logicalKey`, step `id/status`, note `text`, draft `questionId`, requirement `reqId`, `--format`, `--mode`, `--phase`, `--sequence`, `--category`, `--record-category`, `--step`, `--task-id`, `--normalized-finding-id`, `--repair-ref-commit`, `--expect-attempt-id`, `--approve`, and state-dependent `--choice` domains and combinations. Identify the existing authority rather than inventing common enums.\n- For actual paths, record file versus directory, existence requirements, absolute/relative support and resolution root per leaf. Cover `--agent-work-dir`, gate `--spec`, `--file`, context paths and rest paths. Do not require every output directory to already exist.\n- Record existing policies for text/JSON/path sizes, `set files` count/aggregate size, `--exclusions` entries/serialized size, retry/attempt limits, query request-file size/elements/depth, context directory traversal depth/count/read size, and review-evidence file limits. If no explicit bound exists, state that fact and its owner. Adding resource limits or changing retry policy is separate scope, not a repair prerequisite for help consistency.\n\nThe five shared target guards are `--expect-binding`, `--expect-issue`, `--expect-no-issue`, `--expect-spec`, and `--expect-run-id`. Derive their applicable leaf set from the shared registry collection. For each guard verify a matching expectation succeeds through its existing path, mismatches/invalid combinations fail before command-owned mutation, and missing flags retain existing behavior. Preserve the existing mutual-exclusion and identity rules.\n\n### 4. Runtime paths, rejection order and exit codes\n\n- Preserve both parser-supported `--agent-work-dir /path` and `--agent-work-dir=/path` forms. Resolve the current pre-scan mismatch by normalizing both through the existing option parsing/resolution authority before container initialization; do not duplicate a second option parser or add unrelated path restrictions.\n- Preserve precedence: normal `agentWorkDir` is invocation override > configured agent workDir > default; explicit `config.logs.dir` controls `logDir`, otherwise logs are under `agentWorkDir/logs`. Finalize-cleanup keeps its durable work-directory policy and resolves configured log paths against its durable root. Never assert that `agentWorkDir` and `logDir` are the same directory. Test both syntax forms with and without configured logs and the durable cleanup case.\n- Preserve existing rejection lifecycle and diagnostic behavior. Currently parse errors may build context/open a runtime log before emitting `ARGS_ERROR`, and top-level container initialization may resolve ambient Flow attribution. Do not combine “preserve behavior” with a new “no context resolution/no log writes” promise. Document help, parse failure, target rejection, valid execution, and command failure paths, including existing pre/post/onError/finally behavior. Valid help must not execute the command handler or its execution hooks. A new admission boundary or side-effect ordering change requires separate explicit scope.\n- Record observable exit contracts: valid explicit help and successful commands return 0; missing/unknown selectors and actual parser/target/command failures return 1. No-leaf group help prints help but retains exit 1. Missing required values and extra positionals must be tested against each leaf's actual parser/validator contract, without introducing new universal rejection rules.\n\n### 5. Verification and implementation mapping\n\n- Initial Draft/Spec must map each retained public surface to its current/new owner and test: parser acceptance, leaf help, every group help path, execution, guards/binding, runtime paths and query. Inventory affected APIs, lifecycle hooks, configuration, generated artifacts and side effects, explicitly marking unchanged categories.\n- Enumerate all routed leaves (including resume and prepare) in contract tests. Run at least one behavior-level assertion per retained surface through the real dispatcher/CLI path; metadata snapshots alone are insufficient. Exercise valid input/help and meaningful rejection cases with isolated fixtures/stub handlers, without executing destructive production operations.\n- Keep the exhaustive parser matrix in integration tests. Use focused public CLI E2E for entry-point wiring, abort, guarded get/set/run, group intersections, longest names, order/spacing, exit codes and runtime directory behavior. Do not duplicate the complete invalid-input matrix in both layers. Keep synthetic name boundaries in integration tests.\n- Reuse existing test helpers and verify common `CommandDefinition` consumers, including representative docs/core/plugin group help if they use the shared renderer. Preserve semantics outside Flow.\n- Extend the original file list with `src/flow.js`, the pre-initialization boundary in `src/sennel.js`, and regression touchpoints in `src/lib/container.js`, `src/lib/flow-target-guard.js`, `src/flow/lib/flow-context.js`, and query modules. These touchpoints do not require rewriting the existing owners.\n\n### Review provenance\n\n- Draft: `001/issue-log.json` draft-gate entries and `001/artifacts/plan-gate-repairs/*/outcome.json` (measurable layout, exact child set, class responsibilities and migration inventory). Draft coverage/questions evidence itself reported PASS; gate observations caused the repairs.\n- Spec: `001/revisions/002–003/review.json` (counts/query/synthetic tests); `004–005` (no-leaf route/runtime pre-scan/validation owners); `006–007` (positionals/types/lifecycle/equals syntax/domains); `008` (query exclusion, log precedence, ID boundaries, missing domains and rejection-side-effect contradictions).\n- Remaining spec-gate observations in `001/issue-log.json` (including repeated observations on 2026-09-24) cover guard enumeration, retry bounds, file/context limits and positional validation. The decisions above retain existing contracts and require explicit inventories; they do not treat speculative limits introduced by repair as accepted product requirements.\n\n## Overview\n\nBecause the parser definitions (`args.flags` / `args.options` / `args.optionalOptions`) and help definitions for `sennel flow` are managed separately, the options actually accepted do not match the displayed content. In addition, incorrect group help, broken subcommand table layouts, and display order dependent on registration order also occur.\n\nAn audit of the current source covering all 67 leaves in `FLOW_COMMANDS` and `flow get/set/run/report --help` confirmed the following:\n\n- For 41 of the 67 leaves, at least one declared flag/option is missing from help.\n- The frequently omitted shared options are `--expect-binding` (35 commands), `--expect-no-issue` / `--expect-issue` / `--expect-spec` / `--expect-run-id` (31 commands each), and `--agent-work-dir` (23 commands).\n- The implicit `-h, --help` is not displayed in the leaf help for any of the 67 leaves.\n- The group help for `flow get` / `set` / `report` displays `--agent-work-dir <path>`, which is not accepted by the leaves under those groups.\n- For subcommand names 14 characters or longer, there is no separator between the name and summary, causing the strings to run together. This affects 25 commands (`get` 1, `set` 3, `run` 21).\n- The display order of subcommands depends on their declaration order in `FLOW_COMMANDS` and is not defined as a help ordering contract.\n\n## Reproduction\n\n`flow run abort` accepts the following options according to the parser, but help displays only `--force`.\n\n```text\n--force\n--agent-work-dir <path>\n--expect-binding <token>\n--expect-issue <number>\n--expect-no-issue\n--expect-spec <spec>\n--expect-run-id <runId>\n```\n\n```console\n$ sennel flow run abort --help\nUsage: sennel flow run abort [--force]\n\nRemove only the selected flow worktree, feature branch, shared spec directory, and active entry.\n--force permits removal of a dirty isolated worktree; unrelated base-checkout changes are never removed.\n```\n\nAlso, due to the incorrect group help, the following input fails:\n\n```console\n$ sennel flow get qa-count --agent-work-dir /tmp/sennel-help-audit\nUnknown option: --agent-work-dir\n```\n\n## Cause\n\n- In `src/flow/registry.js`, the parser-authoritative `args` and display-oriented `help` are written separately by hand.\n- When a leaf is invoked with `--help`, `src/lib/dispatcher.js` outputs `entry.help` as-is and does not validate or supplement it against `args`.\n- `flowOptions()` in `src/lib/command-registry.js` reverse-parses hand-written help, while group options are managed in a separate fixed array.\n- `CommandDefinition.renderHelp()` in `src/lib/command-registry.js` and `renderCommand()` in `src/help.js` duplicate the implementation of the subcommand table.\n- Neither renderer guarantees a separator for command names exceeding the fixed width, and both display commands in registration order.\n- Existing tests verify parser acceptance for some options, but do not verify complete agreement between the parser and help contracts, the common intersection of group options, long names, or display order.\n\n## Fix direction\n\nExtend the existing `CommandDefinition` so that the parser and help reference the same option authority. Do not add a separate command abstraction.\n\n- Define a dedicated model representing the option name, value placeholder, description, and type: flag / required-value option / optional-value option.\n- Compose target guards, run runtime options, and implicit help as shared option collections.\n- Project `args.flags`, `args.options`, `args.optionalOptions`, leaf help, and group help from the model.\n- Keep command-specific descriptions and examples in the existing help, but make the model authoritative for the Usage and Options listings.\n- Derive group help options from the intersection of the option contracts of child leaves and eliminate the fixed array.\n- Consolidate subcommand sorting and alignment in a shared renderer, and reuse it for `sennel flow <group> --help` and `sennel help flow <group>`.\n- Sort subcommands by name in ascending order by default, overriding this only with explicit display-order metadata when semantic ordering is required.\n- Use a table layout of `maxName + separator` or a multiline format, guaranteeing at least two ASCII spaces of separation between the name and summary.\n\n## Acceptance criteria\n\n- For every shared routed leaf in `FLOW_COMMANDS` (65 at the restart baseline; query is an explicit exception), every parser option and implicit `-h, --help` has exactly one canonical Options row; Usage/examples may repeat names.\n- The option model distinguishes valueless flags, required-value options, and optional-value options, and provides a placeholder and description for options that take values.\n- `sennel flow run abort --help` displays `--force`, `--agent-work-dir`, all 5 target guards, and `-h, --help`.\n- `flow get --help`, `flow set --help`, and `flow report --help` do not display `--agent-work-dir`; only `flow run --help` displays it.\n- The boundary between the command name and summary is always visible on every subcommand row in `flow get/set/run/report --help`.\n- Subcommands in every group are displayed in ascending name order and do not depend on their declaration positions in `FLOW_COMMANDS`.\n- `sennel flow <group> --help` and `sennel help flow <group>` use the same ordering and layout contract.\n- Add registry/help contract tests covering all leaves and groups, including `flow resume` and `prepare`.\n- Add focused E2E tests covering `abort`, `get` / `set` / `run` with target guards, long subcommand names, and name ordering.\n- Do not change command execution semantics, target guard evaluation, or runtime directory behavior.\n\n## Target files\n\n- `src/flow/registry.js`\n- `src/lib/dispatcher.js`\n- `src/lib/command-registry.js`\n- `src/help.js`\n- `tests/integration/lib/command-registry.test.js`\n- `tests/e2e/help.test.js`\n\n## Audit basis\n\nThe parser definitions and help were compared by recursively traversing `FLOW_COMMANDS`, and representative leaf/group help and `sennel help flow <group>` were executed. The audit also confirmed that options displayed in group help but unsupported by the actual CLI result in `Unknown option`, and that existing related integration/E2E tests do not detect this issue even when they pass.\n\n<details>\n<summary>ja</summary>\n\n## 次回開始時に最初から取り込む契約（2026-09-24）\n\n上記英語セクション「Restart contract from flow review」を初回 Draft／Spec の要件として適用する。以下は同じ決定の日本語版であり、旧監査の件数・曖昧な記述より優先する。停止 flow `338319c6-flow-help-contract` の revision 008 は未解決の blocking 指摘が残っており、承認済み仕様として丸ごと転記しない。\n\n1. **対象集合**：確認した commit `b8b3f59550a12677d6a017bd478881c085d54399` では全66 leaf、query を除く共通経路65 leaf（resume 1、prepare 1、get 11、set 17、run 34、report/show 1）。次回開始時の registry から再列挙する。query は独立 parser/help の例外として、入力 inventory・共通 admission・help projection・網羅テストのすべてで一貫して除外し、stdin／request-file／help／error は別途回帰確認する。\n2. **単一の定義元**：既存 CommandDefinition／FLOW_COMMANDS を拡張し、option と表示行は invariant を持つ専用 class とする。名前・alias・値種別・placeholder・説明を構造化して明示定義し、手書き help の逆解析を authority にしない。説明・例・翻訳は保持する。「一度ずつ」は Options の canonical row 単位とし、Usage／例への再掲と混同しない。group は全 direct child leaf の完全な option 契約の共通部分を導出する。\n3. **表示経路と境界**：`flow <group> --help`、`help flow <group>`、leaf なしの `flow <group>` の3経路を共通 renderer へ接続する。行は name＋2個以上のASCII空白＋summary、同じgroupの行・optionの順序と空白を揃える。名前順はlocale非依存、表示順metadataを使うならfield・伝播・未指定・同値の規則をSpecで確定する。option順も共通modelで確定する。13/14/15文字境界、最長既存leaf、64/65文字の合成名を検証し、合成名はintegrationで扱う。新たな名前長制限は導入しない。\n4. **入力と責務の一覧**：各leafのpositional/rest/flag\n... (truncated)"
+            }
+          },
+          {
+            "kind": "request",
+            "status": "available",
+            "digest": "6d1e120412a6ac7a9e240bc2f4c09a21bfc07a77bffc713ff6ecdcf9bcf30849",
+            "document": "Use Issue 521’s 2026-09-24 restart contract for the initial Draft and Spec. Goal: make Flow CLI help reflect the actual routed parser contracts and render group help consistently. Scope: extend the existing CommandDefinition/FLOW_COMMANDS authority with invariant-bearing option and subcommand-row classes; derive parser declarations and leaf/group help from that authority; preserve flow query as its separate custom-parser exception; use one renderer across all public help paths. The Spec must inventory each routed leaf’s inputs and map existing validation, target-guard, runtime-path, size, lifecycle, and exit-code behavior to its current owner without adding blanket validation or new limits. Cover all direct-child group intersections, all registered leaves derived from the registry, the five target guards, long-name layout and deterministic ordering, and the existing query contract. Add registry/integration coverage and focused CLI E2E coverage for the public renderers, parser/help contracts, and query exception; map observable behavior to owners and tests, including flow.js and sennel.js paths. Preserve command semantics, validation ownership, runtime behavior, and rejection side effects. Derive current counts from the registry; do not reuse historical counts. Revision 008 is not approved, and recovery of the prior stopped flow is outside this Issue."
+          },
+          {
+            "kind": "guardrail",
+            "status": "available",
+            "digest": "144d2bf2c3edf941b99a4a20f96f1b98c64ee5b4f76cdd09fa265514b333b37c",
+            "document": {
+              "phase": "draft",
+              "guardrails": [
+                {
+                  "id": "single-responsibility",
+                  "title": "Single Responsibility",
+                  "body": "Each spec shall address one concern. Do not bundle unrelated changes into a single specification. When a user creates an Issue or request, it defines the scope boundary for a single spec. The AI shall not propose splitting a user-defined Issue into multiple specs. Whether an Issue constitutes one concern is the user's judgment.",
+                  "meta": {
+                    "phase": [
+                      "draft",
+                      "spec"
+                    ],
+                    "category": "process"
+                  }
+                },
+                {
+                  "id": "unambiguous-requirements",
+                  "title": "Unambiguous Requirements",
+                  "body": "Requirements shall avoid vague adjectives (e.g. \"appropriate\", \"fast\", \"easy\") and instead state verifiable conditions.",
+                  "meta": {
+                    "phase": [
+                      "draft",
+                      "spec"
+                    ],
+                    "category": "code-quality"
+                  }
+                },
+                {
+                  "id": "complete-context",
+                  "title": "Complete Context",
+                  "body": "Each requirement shall be specific enough that two independent reviewers would agree on whether an implementation satisfies it. Requirements using subjective terms (e.g. 'improve', 'clean up', 'optimize') without measurable criteria shall be rewritten.",
+                  "meta": {
+                    "phase": [
+                      "draft",
+                      "spec"
+                    ],
+                    "category": "process"
+                  }
+                },
+                {
+                  "id": "no-hardcoded-secrets",
+                  "title": "No Hardcoded Secrets",
+                  "body": "Source code shall not contain API keys, passwords, tokens, or other secrets directly. Externalize them via environment variables or configuration files.",
+                  "meta": {
+                    "phase": [
+                      "draft",
+                      "spec",
+                      "task-impl"
+                    ],
+                    "category": "security"
+                  }
+                },
+                {
+                  "id": "prioritize-requirements",
+                  "title": "Prioritize Requirements",
+                  "body": "When requirements number more than three items, assign each requirement one priority: must, should, or nice-to-have.",
+                  "meta": {
+                    "phase": [
+                      "draft",
+                      "spec"
+                    ],
+                    "category": "process"
+                  }
+                },
+                {
+                  "id": "impact-on-existing-features",
+                  "title": "Impact on Existing Features",
+                  "body": "Changes shall list their impact on existing features. If no existing features are affected, state so explicitly.",
+                  "meta": {
+                    "phase": [
+                      "draft",
+                      "spec"
+                    ],
+                    "category": "code-quality"
+                  }
+                },
+                {
+                  "id": "migration-parity",
+                  "title": "Migration Parity",
+                  "body": "When a change moves, splits, extracts, replaces, or externalizes existing behavior, the draft/spec shall define migration parity before implementation. It shall inventory the existing public behavior being moved or replaced; list affected user-facing commands, APIs, hooks, config entries, generated artifacts, and side effects; map each retained behavior to its new owner or an explicit decision to remove it; define acceptance criteria proving retained behavior still works through the new path; and include at least one behavior-level verification for each retained public surface. Registration, discovery, help output, or mock routing alone are not sufficient evidence of migration parity. Intentional behavior removal shall state the user-visible impact and compatibility expectation.\n\nViolation: missing migration parity definition\nDiff-verification conditions:\n- The diff moves, splits, extracts, replaces, or externalizes existing behavior.\n- The draft/spec lacks an inventory of the existing public behavior being moved or replaced.\n- The draft/spec lacks a mapping from each retained behavior to its new owner or an explicit removal decision.\n- The draft/spec relies only on registration, discovery, help output, or mock routing checks for parity evidence.\nBlocking when: retained public behavior lacks behavior-level verification through the new path, or an intentional removal lacks user-visible impact and compatibility expectations.\nAdvisory when: the migration inventory and mapping exist, but an additional retained surface would benefit from clearer acceptance wording without changing the implementation target.",
+                  "meta": {
+                    "phase": [
+                      "draft",
+                      "spec"
+                    ],
+                    "category": "process"
+                  }
+                },
+                {
+                  "id": "draft-recommend-with-reasoning",
+                  "title": "Present Recommendations with Reasoning",
+                  "body": "For each question, present a recommended answer. State the basis: (1) project docs/, (2) guardrail principles, or (3) existing code patterns. Lead with the recommendation and keep it concise.",
+                  "meta": {
+                    "phase": [
+                      "draft"
+                    ],
+                    "category": "code-quality"
+                  }
+                },
+                {
+                  "id": "draft-explore-before-asking",
+                  "title": "Explore Before Asking",
+                  "body": "If a question can be answered by reading docs/ or exploring the codebase, do so before asking the user.",
+                  "meta": {
+                    "phase": [
+                      "draft"
+                    ],
+                    "category": "process"
+                  }
+                },
+                {
+                  "id": "draft-raise-implications",
+                  "title": "Proactively Raise Related Implications",
+                  "body": "When a decision has obvious related implications, raise them proactively. Do not wait for the user to notice the gap.",
+                  "meta": {
+                    "phase": [
+                      "draft"
+                    ],
+                    "category": "process"
+                  }
+                },
+                {
+                  "id": "draft-confirm-brainstorm-vs-decide",
+                  "title": "Confirm Brainstorm vs. Decision Before Critiquing",
+                  "body": "Before critiquing a decision, confirm whether the user is brainstorming or deciding. Do not evaluate brainstorming ideas as final decisions.",
+                  "meta": {
+                    "phase": [
+                      "draft"
+                    ],
+                    "category": "process"
+                  }
+                },
+                {
+                  "id": "draft-capture-digressions",
+                  "title": "Capture Digressions in draft.md",
+                  "body": "When a discussion digresses, capture key insights and decisions in draft.md before returning to the main thread.",
+                  "meta": {
+                    "phase": [
+                      "draft"
+                    ],
+                    "category": "code-quality"
+                  }
+                },
+                {
+                  "id": "backward-compatible-cli-interface",
+                  "title": "Backward-Compatible CLI Interface",
+                  "body": "Removing or changing the meaning of existing commands or options shall include a migration plan in the spec. acknowledged-exception handling: when a `## Matched Spec Acknowledgment Rationale` section is present for this guardrail, an intentional exception MAY pass only if the matched rationale comes from spec.json constraints, clarifications, or alternatives_considered, includes this guardrail_id at least once, and contains at least 20 non-whitespace characters after removing the guardrail_id. Example: `backward-compatible-cli-interface` is acknowledged because the old command remains available as an alias while docs and help text guide users to the replacement.",
+                  "meta": {
+                    "phase": [
+                      "draft",
+                      "spec"
+                    ],
+                    "category": "code-quality"
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "kind": "project_overview",
+            "status": "available",
+            "digest": "ee88112f5a9563fbed63a82dc61cd7e98f2308ac185a15491a59f70bb8c0e6d4",
+            "document": "<!-- {{data(\"base.docs.langSwitcher\", {labels: \"relative\"})}} -->\n[日本語](ja/overview.md) | **English**\n<!-- {{/data}} -->\n\n# Tool Overview and Architecture\n\n## Description\n\n<!-- {{text({prompt: \"Write a 1-2 sentence overview of this chapter. Include the tool's purpose, the problem it solves, and its primary use cases.\"})}} -->\n\nThis chapter introduces sennel, a CLI tool that automates documentation generation from source code analysis and enforces a Spec-Driven Development (SDD) workflow. It describes the tool's purpose—eliminating documentation drift and ungoverned AI implementation—along with its internal architecture and primary use cases for teams working with AI coding agents.\n<!-- {{/text}} -->\n\n## Content\n\n### Purpose\n\n<!-- {{text({prompt: \"Describe the problem this CLI tool solves and its target users. Derive the purpose from package.json and README.\"})}} -->\n\nEngineering teams using AI coding agents face two persistent problems: documentation that drifts out of sync with evolving source code, and AI agents that implement features without validated specifications. sennel addresses both by providing a pipeline that automatically regenerates structured documentation from live source analysis, and a three-phase SDD workflow that gates implementation behind programmatic spec validation. The tool targets software development teams—particularly those using Claude Code, Codex CLI, or similar AI agents—who need always-current documentation and a disciplined process for feature development.\n\nThe package is distributed as a Node.js CLI (`sennel`) and requires no external npm dependencies, relying solely on Node.js built-in modules. It is configured per project via `.sennel/config.json` and supports over 35 built-in presets covering technology stacks such as Node.js CLI tools, Next.js, Laravel, Hono, Drizzle ORM, Cloudflare Workers, and more.\n<!-- {{/text}} -->\n\n### Architecture Overview\n\n<!-- {{text({prompt: \"Generate a mermaid flowchart showing the tool's overall architecture. Include the dispatch structure from entry point to subcommands and the main processing flow (input → processing → output). Output only the mermaid code block.\", mode: \"deep\"})}} -->\n\n```mermaid\nflowchart TD\n    A[\"src/sennel.js\\nEntry Point\"] --> B{Namespace Dispatch}\n\n    B --> C[\"src/docs.js\"]\n    B --> D[\"src/flow.js\"]\n    B --> E[\"src/check.js\"]\n    B --> F[\"Independent Commands\\nsetup · upgrade · presets · help\"]\n\n    C --> G[\"docs/commands/\\nscan · enrich · init · data · text\\nreadme · agents · translate\"]\n    D --> H[\"flow/registry.js\\nget · set · run\"]\n    E --> I[\"check/commands/\\nconfig · freshness · scan\"]\n\n    J([\"Source Files\"]) --> K[\"scan\"]\n    K --> L[(\"analysis.json\")]\n    L --> M[\"enrich\"]\n    M --> L\n    L --> N[\"data / text\"]\n    N -->|reads| O[\"src/presets/\\nTemplates + DataSources\"]\n    N --> P[(\"docs/*.md\")]\n    P --> Q[\"readme / agents\"]\n    Q --> R([\"README.md\\nAGENTS.md\"])\n```\n<!-- {{/text}} -->\n\n### Key Concepts\n\n<!-- {{text({prompt: \"Explain the key concepts and terminology needed to understand this tool in table format. Extract the main concepts from source code.\"})}} -->\n\n| Concept | Description |\n|---|---|\n| **Preset** | A named bundle of scan patterns, chapter templates, and DataSource classes (e.g., `node-cli`, `laravel`). Presets form a single-inheritance chain via the `parent` field in `preset.json`. |\n| **Analysis** | A structured JSON snapshot (`.sennel/output/analysis.json`) produced by `docs scan`, containing file metadata, classes, methods, imports, exports, and configuration values extracted from source code. |\n| **DataSource** | A class that reads `analysis.json` and returns structured data for insertion into a documentation template via `{{data(...)}}` directives. |\n| **Directive** | A special comment in a markdown template: `{{data(...)}}` for structured data tables and `{{text(...)}}` for AI-generated prose. Both are replaced in-place during the pipeline. |\n| **Pipeline** | The ordered documentation generation sequence: `scan → enrich → init → data → text → readme → agents → [translate]`. Each stage is also executable individually. |\n| **Flow** | A single SDD cycle with three phases—Plan, Implement, Finalize—whose state is persisted in `specs/<NNN>/flow.json`. |\n| **Spec** | A specification document (`spec.md`) created in the Plan phase that defines requirements and acceptance criteria before any implementation begins. |\n| **Guardrail** | A set of design principles defined in a preset's `guardrail.json` that a spec must satisfy, validated by `flow run gate` before implementation is allowed. |\n| **Template** | A markdown file in a preset's `templates/` directory that structures a documentation chapter using directives and `{%block%}` inheritance markers. |\n| **Template Inheritance** | The `{%extends%}` / `{%block%}` mechanism that allows child preset templates to override specific sections of a parent template without duplicating the entire file. |\n<!-- {{/text}} -->\n\n### Typical Usage Flow\n\n<!-- {{text({prompt: \"Describe the typical steps from installation to first output in step format. Derive the steps from help output and command definitions in the source code.\"})}} -->\n\n1. **Install the package globally** — Run `npm install -g sennel` to make the `sennel` command available in your terminal.\n\n2. **Run the interactive setup wizard** — In your project root, run `sennel setup`. The wizard prompts for your project's type (preset, e.g., `node-cli`), documentation output languages, default language, and AI agent provider. It writes `.sennel/config.json` and creates the initial skill files.\n\n3. **Scan source code** — Run `sennel docs scan`. The scanner traverses source files defined by the preset's scan patterns and produces `.sennel/output/analysis.json` with structured metadata.\n\n4. **Enrich the analysis** — Run `sennel docs enrich`. The AI agent adds summaries, chapter assignments, and role annotations to the entries in `analysis.json`.\n\n5. **Initialize chapter templates** — Run `sennel docs init`. The preset's template inheritance chain is resolved and chapter files are written to `docs/`.\n\n6. **Populate structured data** — Run `sennel docs data`. Each `{{data(...)}}` directive in `docs/*.md` is replaced with a generated table from the corresponding DataSource.\n\n7. **Generate AI prose** — Run `sennel docs text`. Each `{{text(...)}}` directive is replaced with AI-generated content based on the directive's prompt and the current analysis.\n\n8. **Build README and agent context** — Run `sennel docs readme` and `sennel docs agents` to produce `README.md` and `AGENTS.md`.\n\n9. **Run the full pipeline at once** — Use `sennel docs build` as a shortcut to execute steps 3–8 in a single command.\n<!-- {{/text}} -->\n\n# System Overview\n\n<!-- {{data(\"monorepo.monorepo.apps\", {labels: \"overview\", ignoreError: true})}} -->\n<!-- {{/data}} -->\n\n<!-- {{text({prompt: \"Write a 1-2 sentence overview of this project.\"})}} -->\n\nsennel is a CLI tool that automates documentation generation from source code analysis and provides a Spec-Driven Development workflow for teams building with AI coding agents. It keeps project documentation synchronized with the codebase and enforces specification validation before implementation begins.\n<!-- {{/text}} -->\n\n\n\n\n\n## Description\n\n<!-- {{text({prompt: \"Write a 1-2 sentence overview of this chapter. Include the project's architecture and whether it integrates with external systems.\"})}} -->\n\nThis chapter describes the internal component architecture of sennel, showing how the CLI dispatcher, documentation pipeline, SDD flow engine, preset system, and shared libraries relate to one another. The tool integrates with external AI agent providers (Claude CLI, Codex CLI, or custom commands) and optionally with Git and the GitHub CLI for branch management and pull request workflows.\n<!-- {{/text}} -->\n\n## Content\n### Architecture Diagram\n\n<!-- {{text({prompt: \"Generate a mermaid flowchart showing the project architecture. Include data flows between major components. Output only the mermaid code block.\"})}} -->\n\n```mermaid\nflowchart TD\n    Entry[\"src/sennel.js\\nCLI Entry\"] --> Dispatch{Namespace Dispatch}\n\n    Dispatch --> DocsSrc[\"src/docs.js\"]\n    Dispatch --> FlowSrc[\"src/flow.js\"]\n    Dispatch --> CheckSrc[\"src/check.js\"]\n    Dispatch --> Indep[\"setup / upgrade / presets\"]\n\n    DocsSrc --> Pipeline[\"docs/commands/*.js\\nPipeline Stages\"]\n    Pipeline --> Scanner[\"scan → analysis.json\"]\n    Scanner --> AnalysisDB[(\"analysis.json\\n.sennel/output/\")]\n    AnalysisDB --> Enrich[\"enrich\"]\n    Enrich -->|AI call| AgentLib[\"src/lib/agent.js\"]\n    AgentLib --> AI([\"AI Agent\\nClaude / Codex / Custom\"])\n    Enrich --> AnalysisDB\n    AnalysisDB --> DataText[\"data + text\"]\n    DataText --> PresetSys[\"src/presets/\\nTemplates + DataSources\"]\n    DataText --> DocsDir[(\"docs/*.md\")]\n    DocsDir --> ReadmeAgents[\"readme + agents\"]\n    ReadmeAgents --> Output([\"README.md\\nAGENTS.md\"])\n\n    FlowSrc --> Registry[\"flow/registry.js\"]\n    Registry --> GetSet[\"flow/lib/get-*.js\\nflow/lib/set-*.js\"]\n    Registry --> RunActions[\"flow/lib/run-*.js\\ngate · review · finalize\"]\n    GetSet <--> FlowState[(\"specs/NNN/flow.json\")]\n    RunActions --> AgentLib\n    RunActions --> GitLib[\"src/lib/git-helpers.js\"]\n    GitLib --> Git([\"git / gh CLI\"])\n\n    Config[(\"config.json\\n.sennel/\")] --> DocsSrc\n    Config --> FlowSrc\n    Config --> AgentLib\n```\n<!-- {{/text}} -->\n### Component Responsibilities\n\n<!-- {{text({prompt: \"Describe the major components with their location, responsibilities, and I/O in table format.\", mode: \"deep\"})}} -->\n\n| Component | Location | Responsibility | Input | Output |\n|---|---|---|---|---|\n| **CLI Entry** | `src/sennel.js` | Parse the top-level command and dispatch to namespace handlers or independent commands | Raw CLI arguments | Delegated command invocation |\n| **Docs Dispatcher** | `src/docs.js` | Route `docs <subcmd>` to the corresponding pipeline stage handler | `docs` subcommand + args | Pipeline stage execution |\n| **Flow Dispatcher** | `src/flow.js` | Route `flow <subcmd>` to registry-defined handlers with hook support | `flow` subcommand + args | Registry-resolved command execution |\n| **Flow Registry** | `src/flow/registry.js` | Single declarative source of truth for all flow subcommands; manages lazy imports, argument schemas, and pre/post hooks | Command name lookup | Resolved handler, hooks, and argument spec |\n| **Scanner** | `src/docs/commands/scan.js` | Traverse source files, invoke language parsers, and write analysis metadata | Source files (via scan patterns in preset) | `.sennel/output/analysis.json` |\n| **Enricher** | `src/docs/commands/enrich.js` | Invoke AI agent to add summaries, chapter assignments, and role metadata to analysis entries | `analysis.json` | Enriched `analysis.json` |\n| **Template Init** | `src/docs/commands/init.js` | Resolve preset parent chain, merge `{%block%}` overrides, and write chapter files | Preset templates, parent chain | `docs/*.md` chapter files |\n| **Data Stage** | `src/docs/commands/data.js` | Execute `{{data(...)}}` directives by calling DataSource classes with analysis data | `docs/*.md`, `analysis.json`, DataSources | Updated `docs/*.md` with data tables |\n| **Text Stage** | `src/docs/commands/text.js` | Execute `{{text(...)}}` directives via AI agent calls using per-directive prompts | `docs/*.md`, `analysis.json`, AI prompts | Updated `docs/*.md` with generated prose |\n| **Readme Builder** | `src/docs/commands/readme.js` | Assemble `README.md` from chapter summaries, navigation links, and project metadata | `docs/*.md`, `config.json` | `README.md` |\n| **Agents Builder** | `src/docs/commands/agents.js` | Generate the AI agent context file from project metadata, structure, and docs | `package.json`, `config.json`, `docs/` | `AGENTS.md` |\n| **Preset System** | `src/presets/`, `src/lib/presets.js` | Auto-discover built-in and project-local presets; resolve inheritance chains; expose templates and DataSources | `config.json` `type` field | Resolved preset object with full parent chain |\n| **Config Loader** | `src/lib/config.js` | Load, parse, and validate `.sennel/config.json`; expose path helper utilities | `.sennel/config.json` | Validated config object |\n| **Agent Spawner** | `src/lib/agent.js` | Spawn AI agent subprocesses for enrichment, prose generation, and code review | Provider config, system prompt, user prompt | Parsed JSON response string |\n| **Flow State** | `src/lib/flow-state.js` | Read and write `flow.json`; manage step statuses, phases, requirements, and metrics | `specs/<NNN>/flow.json` | Typed flow state object |\n| **Language Parsers** | `src/docs/lib/lang/*.js` | Parse, minify, and extract structural metadata from source files per language (JS, PHP, etc.) | Raw source file content | Structured analysis entries |\n| **Directive Parser** | `src/docs/lib/directive-parser.js` | Identify and resolve `{{data}}`, `{{text}}`, and `{%block%}` directives within markdown | Template markdown string | Resolved markdown content |\n| **Git Helpers** | `src/lib/git-helpers.js` | Wrap `git` and `gh` CLI operations used in flow actions | Command parameters | Git operation results or error |\n| **Check Commands** | `src/check/commands/*.js` | Validate configuration schema, detect stale documentation, and verify scan integrity | `config.json`, `analysis.json`, `docs/` | Validation report with pass/fail status |\n<!-- {{/text}} -->\n### External Integrations\n\n<!-- {{text({prompt: \"If there are external system integrations, describe their purpose and connection method in table format.\"})}} -->\n\n| System | Purpose | Connection Method |\n|---|---|---|\n| **Claude CLI** | AI prose generation for `{{text}}` directives, analysis enrichment, spec gate validation, and code review | Spawned as a subprocess by `src/lib/agent.js`; configured via `agent.providers.claude` in `config.json`; communicates via stdout/stderr |\n| **Codex CLI** | Alternative AI agent provider for all AI-driven pipeline steps | Spawned as a subprocess by `src/lib/agent.js`; configured via `agent.providers.codex`; same interface as Claude CLI |\n| **Custom AI Providers** | Support for any AI agent accessible via a CLI command | Defined in `agent.providers` as a command template with argument placeholders; spawned as a subprocess by `agent.js` |\n| **Git CLI** | Branch creation, worktree management, commit, merge, and push operations during SDD flow execution | Called directly via `git` CLI in `src/lib/git-helpers.js`; must be installed and available on PATH |\n| **GitHub CLI (`gh`)** | Link flow specs to GitHub Issues and support pull request creation and management during finalization | Called via `src/lib/git-helpers.js`; requires `gh` installed, authenticated, and `commands.gh: \"enable\"` set in `config.json` |\n<!-- {{/text}} -->\n### Environment Differences\n\n<!-- {{text({prompt: \"Describe the configuration differences across environments (local/staging/production).\"})}} -->\n\nsennel is a local developer CLI tool and does not have built-in environment tiers (local, staging, production). All configuration is stored in a single `.sennel/config.json` file at the project root.\n\nDifferences across runtime contexts are managed through the following configuration fields:\n\n| Field | Local Development | CI / Automated Pipelines |\n|---|---|---|\n| `agent.timeout` | Can be left at the default; interactive sessions tolerate longer waits | Recommended to set explicitly to prevent pipeline hangs |\n| `agent.retryCount` | Lower values acceptable for interactive use | Higher values recommended for unattended runs |\n| `concurrency` | Default (5) suits most workstations | May be increased on CI hosts with more CPU cores |\n| `agent.profiles` | Named profiles can point to a developer's local AI provider | Profiles can be switched to a CI-appropriate provider command |\n| `commands.gh` | Set to `\"enable\"` when `gh` is authenticated on the developer's machine | Set to `\"enable\"` only if the CI runner has `gh` authenticated with a token |\n| `logs.enabled` | Optional; useful for debugging agent calls locally | Can be enabled to capture JSONL prompt logs for audit trails |\n\nDocumentation output files (`docs/`, `README.md`, `AGENTS.md`) are generated artifacts committed to the repository and are not environment-specific. The SDD flow state in `specs/<NNN>/flow.json` is local to the developer's worktree and is not shared between environments.\n<!-- {{/text}} -->\n\n---\n\n<!-- {{data(\"base.docs.nav\")}} -->\n[Technology Stack and Operations →](stack_and_ops.md)\n<!-- {{/data}} -->"
+          },
+          {
+            "kind": "reopen",
+            "status": "omitted",
+            "reason": "no-draft-reopen"
+          }
+        ],
+        "digest": "3d115a2ecbe953a8e102c77cc95e2259f874fbc625bea8b044633b342d4ce078"
+      },
+      "sourceMutationBaselineDigest": null,
+      "sourceHandoffIdentity": null,
+      "sourceHandoffCheckpointDigest": null,
+      "payloads": [
+        {
+          "logicalName": "draft.json",
+          "kind": "file",
+          "payloadPath": "/home/nakano/workspace/sennel/.sennel/worktree/feature-f45fe34e-flow-help-contract/.sennel/handoffs/631fc0e833ceefe022d49e9c/f1cb97a3beeda28f6f28c186/7edae0b473d615de0fecadfc/adf78d935873330dbe8baa9b03d01a63b6bc36d13303634785c93ba984f45b10/payload/draft.json",
+          "targetRelativePath": "draft.json",
+          "targetAuthority": "canonical-flow-artifacts",
+          "required": true,
+          "maxBytes": 2097152,
+          "baselineDigest": null,
+          "baselineByteLength": 0
+        }
+      ],
+      "workerInstructions": {
+        "retryFeedback": null,
+        "schemaGuidance": null
+      },
+      "sourceResponseContract": null,
+      "specTestTopology": null,
+      "sealCommand": "sennel flow run seal-handoff",
+      "completionOwner": "parent-dispatcher",
+      "generatedAt": "2026-10-15T16:52:19.488Z"
+    },
+    "action": {
+      "taskId": null,
+      "step": "draft",
+      "action": "write-draft",
+      "instructions": {
+        "key": "plan.draft",
+        "content": "## Persistent Rules\n\n<!-- rule: no-premature-conclusion -->\n### MUST\n**MUST: 議論の途中で「結論:」「決定:」と独断で締めてはならない。** 設計判断はユーザーが決定者である。AI は選択肢とトレードオフを示し、ユーザーの選択を待つ。\n\n### Why\n過去のセッションで、AI が議論を勝手に締めて方向性を確定させ、ユーザーが意図しない実装に進んだ事例が 8 件発生している。AI が議論をリードしすぎると、ユーザーの判断機会を奪う。\n\n### How to apply\n- このルールが表示されたフェーズでは、複数の選択肢があり得る論点を必ず Choice Format で提示する。\n- 「結論:」「決定:」「方針が確定した」等の語で議論を締めない。「推奨:」「私の見解:」までに留める。\n- ユーザーが明示的に選択肢を指定するまで、AI は最終決定を確定させない。\n\n<!-- rule: no-auto-mode-override-skill -->\n### MUST\n**MUST: AI は `sennel flow set auto on` を自分で実行してはならない。** auto モード切替はユーザーの明示的指示（`/sennel.flow-auto` 等）でのみ実行する。\n\n### Why\nauto モードは AI が確認なしに進行できるため、誤動作時の影響が大きい。AI が独断で auto を有効化すると、ユーザーの判断機会を奪う重大な逸脱となる。過去 4 件の事例あり。\n\n### How to apply\n- envelope の `requires_approval: true` を見ても、AI 側で auto を有効化することはしない。\n- ユーザーが interactive Q&A 中の場合、auto モード reminder が context にあっても判断を待つ。\n\n<!-- rule: thoroughness -->\n**MUST: 即答せず、要件・前提・例外を洗い出してから回答する。** 実装着手前に要件を列挙し、完了時に突き合わせる。\n\n<!-- rule: wait-for-instruction-skill -->\n### MUST\n**MUST: Spec-Driven Development フロー内では、CLI の `requires_approval` が true のアクションだけユーザー承認を要求する。** `requires_approval: false` の通常 step では、実行確認の選択肢を出さずに step instruction を実行する。\n\n### Why\n`requires_approval` は CLI 側が持つ承認境界である。skill 側が全 step で確認を挟むと、draft-questions-review などの機械的 step まで不要に停止し、CLI の承認設計と矛盾する。\n\n### How to apply\n- `flow get next-action` の `requires_approval` が false なら、「実行しますか？」の確認を出さずに指示を実行する。\n- `requires_approval` が true か、エラー復旧 / ユーザー回答が必要な QA loop の場合だけ Choice Format で確認する。\n- step 完了後は次の `flow get next-action` を読み、同じルールで判断する。\n\n<!-- rule: no-scope-splitting -->\n**MUST: Issue を勝手に分割提案しない。** ユーザーが定義した Issue が 1 つの concern であるかはユーザーの判断。AI は Issue を複数の spec に分割する提案をしない。\n\n<!-- rule: choice-format-discipline -->\n**MUST: ユーザーへの全ての質問は Choice Format で提示する。** ラベル + 1 行注釈の選択肢。詳細説明は選択肢ブロックの外（上側）に独立配置する。free-form question 禁止（applied user-requested changes の確認も含む）。\n\n<!-- rule: no-chain-product-cli -->\n**MUST: `sennel` コマンドをチェーン (`&&` `;` `|`) または background 実行してはならない。** 各 `sennel` 呼び出しは独立した foreground Bash で実行し、結果を確認してから次へ進む。\n\n<!-- rule: no-shared-repo-git-ops -->\n**MUST: active flow 中は main リポジトリで `git stash` / `git stash pop` / `git stash apply` / `git reset --hard` / `git checkout -- <path>` を実行してはならない。** 別ブランチ由来の stale な stash 復元・共有状態破壊を防ぐ。ベースライン比較は短命の detached worktree を使う。\n\n**Dispatcher worker artifact handoff:**\n\n- Use the parent dispatcher's worker artifact handoff contract as the complete authority for Flow artifact inputs, Flow artifact outputs, and completion.\n- Read Flow artifact inputs only from the contract's immutable `inputs[].document` snapshots. Write each declared Flow artifact output only to its exact `payloads[].payloadPath`.\n- When `contextSnapshot` is present, use its digest-verified `entries[].document` values as the complete Flow context. Respect `inputAuthority.kind`, and treat omitted entries by their explicit `reason`; do not run nested Flow context, Issue, or guardrail commands.\n- Do not write canonical Flow artifacts or mark the step done. Run no Flow state-transition command unless the step instructions explicitly name a non-completion recovery command.\n- Project source and formal project tests are outside the handoff authority and remain in the execution checkout; edit them only when the step instructions explicitly require it.\n- For a source-worker contract, do not generate a mutation manifest, report a changed-file list, or run a seal command. Do not write `effects.json` or a handoff submission. After this process exits, the parent captures the immutable Attempt manifest and maps every observed mutation to every canonical Requirement in the current Flow or Task scope before it materializes and seals the canonical effect. Repair finding evidence still names the normalized project-relative paths changed for each applied finding.\n- For a non-source contract, write every declared payload, run its exact seal command, and return the successful seal command's `data` object as the worker report matching the action output schema. A rejected seal is not completion: follow the request’s workerInstructions for correction before sealing. Never modify a successfully sealed payload. Only the parent dispatcher may perform final validation, publish, record revisions, and complete the step.\n- A missing handoff contract for this action is invalid. Do not write artifacts or mutate Flow state; report the missing contract to the caller.\n## Draft Question Ledger Rules\n\n`draft.json.questionLedger` is the exclusive question authority. Its exact JSON shape is:\n\n```json\n{\n  \"revision\": 0,\n  \"publication\": \"draft-worker-publication\",\n  \"evidenceDigest\": \"<64-lowercase-hex-sha256>\",\n  \"questions\": []\n}\n```\n\nQuestions are ordered by stable `q<N>` id, have unique ids, and carry their own revision, provenance, and evidence digest. The ledger may be empty. Do not emit unknown fields or retired `qa`, `status`, `evidence`, or `droppedReason` fields.\n\n### Exact exclusive question states\n\nEvery question has exactly one of these exact JSON shapes. Substitute real non-empty prose and SHA-256 digests.\n\n```json\n{\"state\":\"CandidateQuestion\",\"id\":\"q1\",\"category\":\"goal-confirmation\",\"question\":\"Which public behavior must be selected?\",\"revision\":0,\"provenance\":{\"producer\":\"draft\"},\"evidenceDigest\":\"<64-lowercase-hex-sha256>\"}\n```\n\n```json\n{\"state\":\"ResolvedByExistingInformation\",\"id\":\"q1\",\"category\":\"goal-confirmation\",\"question\":\"Which public behavior must be selected?\",\"revision\":0,\"provenance\":{\"producer\":\"draft-refine\"},\"evidenceDigest\":\"<64-lowercase-hex-sha256>\",\"resolution\":\"The request and project rule already select the stable behavior.\"}\n```\n\n```json\n{\"state\":\"AwaitingUserAnswer\",\"id\":\"q1\",\"category\":\"goal-confirmation\",\"question\":\"Which public behavior must be selected?\",\"revision\":1,\"provenance\":{\"producer\":\"definition-promotion\"},\"evidenceDigest\":\"<64-lowercase-hex-sha256>\"}\n```\n\n```json\n{\"state\":\"AnsweredQuestion\",\"id\":\"q1\",\"category\":\"goal-confirmation\",\"question\":\"Which public behavior must be selected?\",\"revision\":2,\"provenance\":{\"producer\":\"user-answer\"},\"evidenceDigest\":\"<64-lowercase-hex-sha256>\",\"answer\":\"Use the stable public representation.\",\"why\":\"The user selected it after reviewing the request and impact.\",\"considered\":\"A private representation was rejected because it breaks callers.\"}\n```\n\n```json\n{\"state\":\"DiscardedQuestion\",\"id\":\"q1\",\"category\":\"goal-confirmation\",\"question\":\"Which public behavior must be selected?\",\"revision\":2,\"provenance\":{\"producer\":\"draft-refine\"},\"evidenceDigest\":\"<64-lowercase-hex-sha256>\",\"reason\":\"The existing project rule already makes this decision.\"}\n```\n\n`category` is one of `goal-confirmation`, `impact-scope`, `acceptance-criteria`, `constraint-non-goal`, `risk-migration-policy`, `user-visible-behavior`, `dependency-integration-boundary`, `implementation-policy`, or `follow-up-coverage`. `AnsweredQuestion.answer` and `why` are non-empty; `considered` is always a string and may be empty. `ResolvedByExistingInformation.resolution` and `DiscardedQuestion.reason` are non-empty.\n\nWorkers, reviewers, and repair steps record candidates or existing-information resolutions only. They never choose a user wait. Definition alone promotes a candidate to `AwaitingUserAnswer`. A candidate is not a completeness checkbox: create one only after research proves that the request, Issue, project rules, docs, and relevant source do not determine a user-only decision. Do not turn an explicit requirement into a confirmation question. `decisionMap.requiresUserJudgment` is a readable projection; the ledger remains authoritative.\n\n### Field-level boundary\n\nDraft is RFP/requirements level only. Mentioning file paths or function names as context is permitted. Do not describe internal algorithms, data structures, control flow, or API design. Code references in question prose, provenance, evidence digest provenance, resolution, answer, why, considered, and reason are permitted as justification and do not constitute implementation details.\n\n### Premise validation\n\nBefore starting questions, fill the `analysis` object:\n\n- Read the request or issue and identify what problem is actually being solved.\n- State the proposed solution approach.\n- Evaluate whether the approach addresses the root problem, not just the surface request.\n\nIf the analysis cannot be filled without more context, investigate by reading code, docs, or issue context before proceeding.\n\n### Decision entry rule\n\nAny terminal decision entry with non-empty `why` or `considered` must have provenance and `evidenceDigest` supporting that decision. Do not invent evidence or use an empty provenance object.\n\n### Requirement priority markers\n\nEvery requirement-like draft entry that expresses a required outcome MUST include exactly one accepted priority marker: `must`, `should`, or `nice-to-have`.\n\nApply this to authored requirement-like text in `questionLedger.questions`, `scopeVerification`, `impactOnExisting`, `decisionMap`, and `openQuestions`. The marker belongs in the prose, not in a separate field.\n\nDraft coverage review must not report missing priority markers as unresolved user-decision blockers. Draft-gate preflight and gate validation own residual priority issues.\n\n### Research and self-verification\n\nBefore generating candidates, fill `decisionMap` from the request or issue, docs, project rules, and relevant source code. Record stated requirements in `knownFacts`, project-owned choices in `resolvedByProjectRules`, and a bounded spec-writing delegation in `deferredToSpec` only as `{ \"boundary\": \"...\", \"relevance\": \"...\", \"owner\": \"spec\" }`. Draft owns boundary, relevance, and owner validation; Spec owns the final detail. Create a candidate only after research proves that none of those authorities determines the choice. Do not ask for confirmation of an explicit request or ask questions based on assumptions.\n\n### Requirements category checklist\n\nUse these categories to check draft coverage. They do not require one question per category:\n\n1. Goal and Scope - Is the goal clear? Is scope bounded?\n2. Impact on existing - What existing features, code, or tests are affected?\n3. Constraints - What non-functional requirements, guardrails, or project rules apply?\n4. Edge cases - What boundary conditions or error cases matter?\n5. Test strategy - What should be tested and how?\n6. Alternatives considered - What other approaches were evaluated? Why was this one chosen?\n7. Future extensibility - How does this change affect future modifications or extensions?\n8. Consumer contracts - What rules must consumers of introduced interfaces or data structures follow?\n\n### Coverage rule\n\nDraft coverage review identifies only blocking user decisions that still prevent spec writing. It must not propose iterative follow-up loops, append ledger entries, mutate `draft.json`, or report issues that existing project rules, code patterns, or conservative implementation choices can resolve during spec writing.\n\n   **Note on subsequent task decomposition:** The spec step decomposes requirements by concern. Keep draft discussion at the requirement level and keep scope within the Issue or request boundary. Task decomposition granularity is evaluated later by the `task-single-responsibility` guardrail (phase=[spec, task-spec]).\n\n   **Draft artifact format: draft.json**\n   The draft artifact is a JSON file (`draft.json`), not markdown. The AI writes structured JSON directly.\n\n   If `contextSnapshot.entries` contains an available `reopen` entry, use its\n   `reason`, cited source evidence, and previous Draft question ledger as input.\n   Reconsider the missing decision in the normal `questionLedger`. For a Spec\n   Gate repair return, preserve earlier valid answers and resolutions exactly.\n   For another reopen, retain supported answers and correct entries that the\n   reopen reason and evidence show are obsolete. Do not turn a note or an unresolved\n   proposal into an answered question. If the Issue, request, project rules, or\n   source evidence already resolves the reason, record that fact and do not\n   create a duplicate question. The reopen entry is bound to this Draft Attempt.\n\n   **Communication rules:**\n   - Questions MUST be written in the language specified by `config.lang`. Do not mix languages within a single question.\n   - When using a technical term for the first time, add a 1-2 line definition or explanation.\n   - Each question MUST be self-contained — understandable without reading prior conversation turns.\n\n   **autoApprove mode — autonomous draft:**\n   When `autoApprove: true`, the AI conducts the draft phase autonomously:\n   - Do NOT ask the user questions in the draft step.\n   - Do NOT answer draft questions yourself in this step. Create `CandidateQuestion` entries only for genuine unresolved user decisions. An empty `questionLedger.questions[]` is valid.\n   - Use Issue content (if linked), `docs/` chapters, guardrail articles, and source code as input.\n   - Follow Draft QA Rules premise validation before creating candidates for requirement areas that need user judgment. Use the shared category list from Draft QA Rules.\n   - **Deep-read trigger:** If the linked Issue body is under 200 characters, read the relevant source code files directly from the execution checkout to build sufficient understanding before creating the checklist questions.\n   - Create the declared `draft.json` payload with these required fields checked by draft-gate:\n     - `devType` — enum: `feature` / `bugfix` / `refactor` / `docs` / `chore` / `test` / `other`\n     - `goal` — non-empty string\n     - `analysis` — `problem`, `proposedApproach`, and `validation` are all non-empty\n     - `decisionMap` — arrays for `knownFacts`, `decisionPoints`, `resolvedByProjectRules`, `requiresUserJudgment`, and `deferredToSpec`; each `deferredToSpec` entry is `{ boundary, relevance, owner: \"spec\" }`. Draft verifies only that delegation is bounded, relevant, and owned by Spec; it must not invent final specification detail.\n     - `questionLedger` — typed entries conforming to the Draft QA Rules schema\n   - Write the draft to the declared `draft.json` payload. The parent dispatcher proceeds to `draft-questions-review` after validation and publication.\n\n   **Communication rules for the draft phase (when NOT autoApprove):**\n   - Create `draft.json.questionLedger.questions[]` entries with state `CandidateQuestion` and stable ids (`q1`, `q2`, ...) only for genuine user decisions left unresolved after reading the authoritative Issue or request and project context. The ledger may be empty.\n   - Do not ask the user to reconfirm a requirement, constraint, scope boundary, or acceptance condition already stated by the Issue or request. Record it in `decisionMap.knownFacts` instead.\n   - Do not ask or answer the draft questions in this step. The draft step only creates the initial question list.\n   - **MUST: Every question to the user — including confirmations after applying user-requested changes — MUST use the Choice Format. No free-form questions. No exceptions.**\n   - Use the shared category list from Draft QA Rules to check coverage, not to manufacture a question for every category.\n   - **Before starting draft discussion**:\n     1. Use the handoff `contextSnapshot.inputAuthority` entry as the authoritative Issue or request input. If an Issue is selected, display its number and body before the first question.\n     2. **Context gathering (supplement-first):** Start from the immutable project overview and guardrail entries. If target files/modules are still unclear, inspect relevant source files directly in the execution checkout.\n     3. Do not run nested Flow context, Issue, or guardrail commands; the parent materializes and binds those values before worker startup.\n   - Fill draft.json fields for the initial question list:\n     - Candidates record provenance and evidence digests; do not select a user wait from this worker.\n     - On an initial Draft, do not create answered or discarded entries while generating the question list. On a Spec Gate repair return, retain prior valid answered and resolved entries exactly; on another reopen, correct only entries made obsolete by the reason and evidence.\n   - When the initial question list is complete, proceed to `draft-questions-review`.\n   - Write `draft.json` only to its exact handoff `payloadPath`, then run the exact handoff `sealCommand` once.\n"
+      },
+      "context": {
+        "kinds": [
+          "issue",
+          "guardrail",
+          "project_overview"
+        ],
+        "paths": {},
+        "workerArtifactHandoff": {
+          "version": 2,
+          "required": true,
+          "writableAuthority": "dispatcher-handoff",
+          "publicationOwner": "dispatcher",
+          "completionValidator": "draft schema and revision transaction"
+        }
+      },
+      "output_schema": {
+        "type": "object",
+        "required": [
+          "sealed",
+          "handoffPath",
+          "handoffDigest",
+          "payloadCount"
+        ],
+        "properties": {
+          "sealed": {
+            "const": true
+          },
+          "handoffPath": {
+            "type": "string"
+          },
+          "handoffDigest": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          },
+          "payloadCount": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "acceptanceTruncationLog": {
+            "type": "string"
+          },
+          "runtimeLog": {
+            "type": "object",
+            "required": [
+              "runId",
+              "sequence"
+            ],
+            "properties": {
+              "runId": {
+                "type": "string"
+              },
+              "sequence": {
+                "type": "integer",
+                "minimum": 1
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "additionalProperties": false
+      },
+      "requires_approval": false,
+      "maxAttempts": 1,
+      "directive": {
+        "kind": "execute_step",
+        "terminal": false,
+        "requiresUserAction": false,
+        "action": "write-draft"
+      }
+    },
+    "dispatchIdentity": {
+      "repositoryFingerprint": "54e091e91b4a441d55c0976db4cc213ddafcba6eca3661c462cdc8d171debd23",
+      "canonicalRevision": null
+    }
+  }
+}

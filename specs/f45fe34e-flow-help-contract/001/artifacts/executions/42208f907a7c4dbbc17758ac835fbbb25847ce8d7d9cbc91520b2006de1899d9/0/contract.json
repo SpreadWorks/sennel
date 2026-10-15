@@ -1,0 +1,29 @@
+{
+  "id": "93d1bc5c582267a1b0b2d3dec31122cc70b90d2212cbe6c4ac9296acd6a8aacd",
+  "contract": {
+    "runId": "f45fe34e-1029-4c53-8f5c-16633b3c694d",
+    "specId": "f45fe34e-flow-help-contract",
+    "stepId": "draft-questions-review",
+    "nodeId": "draft-questions-review",
+    "taskId": null,
+    "attemptId": "attempt-draft-questions-review-62bdbe70-ed54-4837-9a02-fe8f96ca9873",
+    "attemptSequence": 1,
+    "generation": 0,
+    "inputRevision": "1eeb104f938751173a3672d701c705c2cdb1c290d332374d1a24e00cc8dae81c",
+    "runtimeRevision": "a8532888a7f1edcc9001c34d6e9c9a487579c3a31c70a06ff573c67f86354385",
+    "promptDigest": "8d7333fe2dea850ba8db4959fb114c69a4fa821cdf29ee6217be82da21139401",
+    "schemaDigest": "c067cd9d72c5907cb5e55550be317309f5b6d8383e487b53782b44c46c361901",
+    "budgetOwner": "42208f907a7c4dbbc17758ac835fbbb25847ce8d7d9cbc91520b2006de1899d9",
+    "executionLimit": null,
+    "executionMode": null,
+    "inputBaselines": [
+      {
+        "logicalKey": "spec.record",
+        "relativePath": "spec.json",
+        "hash": "a1c0b1f8c5ccc67b71de5a9a1d0e7e5c0347ffcb873a20cc76fd06d2383fc0a9",
+        "size": 359,
+        "activityId": "flow-created-13fccd3868dc833ff04ec25c04b37e2555127c23dbc2aefd1a48edb44c57a5c9"
+      }
+    ]
+  }
+}

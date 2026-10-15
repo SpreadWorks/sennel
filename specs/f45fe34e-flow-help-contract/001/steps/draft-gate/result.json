@@ -1,0 +1,1884 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "nodeId": "draft-gate",
+      "outcome": "completed",
+      "result": {
+        "result": "fail",
+        "changed": [],
+        "artifacts": {
+          "target": "specs/f45fe34e-flow-help-contract/001/draft.json",
+          "level": "parent",
+          "phase": "draft",
+          "evaluations": [
+            {
+              "guardrail_id": "unambiguous-requirements",
+              "result": "fail",
+              "reason": "“Full option contracts” is not defined; only aliases and value kind are named. Enumerate the required contract fields or reference an authoritative schema.",
+              "category": "code-quality",
+              "title": "Unambiguous Requirements",
+              "observations": [
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "unambiguous-requirements",
+                  "where": {
+                    "file": "draft.json",
+                    "locator": "decisionMap.decisionPoints[1]"
+                  },
+                  "observed": "“Full option contracts” is not defined; only aliases and value kind are named. Enumerate the required contract fields or reference an authoritative schema.",
+                  "severity": "blocking",
+                  "refs": [
+                    "unambiguous-requirements"
+                  ]
+                }
+              ]
+            },
+            {
+              "guardrail_id": "unambiguous-requirements",
+              "result": "fail",
+              "reason": "“Short, boundary, longest, and synthetic long names” lacks concrete name lengths or boundary cases. Specify exact test inputs and expected spacing/order results.",
+              "category": "code-quality",
+              "title": "Unambiguous Requirements",
+              "observations": [
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "unambiguous-requirements",
+                  "where": {
+                    "file": "draft.json",
+                    "locator": "decisionMap.decisionPoints[2]"
+                  },
+                  "observed": "“Short, boundary, longest, and synthetic long names” lacks concrete name lengths or boundary cases. Specify exact test inputs and expected spacing/order results.",
+                  "severity": "blocking",
+                  "refs": [
+                    "unambiguous-requirements"
+                  ]
+                }
+              ]
+            },
+            {
+              "guardrail_id": "unambiguous-requirements",
+              "result": "fail",
+              "reason": "“Meaningful structured source values” uses a subjective qualifier without defining which values qualify.",
+              "category": "code-quality",
+              "title": "Unambiguous Requirements",
+              "observations": [
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "unambiguous-requirements",
+                  "where": {
+                    "file": "draft.json",
+                    "locator": "decisionMap.resolvedByProjectRules[2]"
+                  },
+                  "observed": "“Meaningful structured source values” uses a subjective qualifier without defining which values qualify.",
+                  "severity": "blocking",
+                  "refs": [
+                    "unambiguous-requirements"
+                  ]
+                }
+              ]
+            },
+            {
+              "guardrail_id": "unambiguous-requirements",
+              "result": "fail",
+              "reason": "“Arbitrary resource limit” and “unrelated command-semantic change” do not define verifiable scope boundaries.",
+              "category": "code-quality",
+              "title": "Unambiguous Requirements",
+              "observations": [
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "unambiguous-requirements",
+                  "where": {
+                    "file": "draft.json",
+                    "locator": "scopeVerification.out[1]"
+                  },
+                  "observed": "“Arbitrary resource limit” and “unrelated command-semantic change” do not define verifiable scope boundaries.",
+                  "severity": "blocking",
+                  "refs": [
+                    "unambiguous-requirements"
+                  ]
+                }
+              ]
+            },
+            {
+              "guardrail_id": "unambiguous-requirements",
+              "result": "fail",
+              "reason": "“Focused entry-point wiring tests” is subjective; identify the exact entry points and required assertions.",
+              "category": "code-quality",
+              "title": "Unambiguous Requirements",
+              "observations": [
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "unambiguous-requirements",
+                  "where": {
+                    "file": "draft.json",
+                    "locator": "decisionMap.deferredToSpec[3].relevance"
+                  },
+                  "observed": "“Focused entry-point wiring tests” is subjective; identify the exact entry points and required assertions.",
+                  "severity": "blocking",
+                  "refs": [
+                    "unambiguous-requirements"
+                  ]
+                }
+              ]
+            },
+            {
+              "guardrail_id": "complete-context",
+              "result": "fail",
+              "reason": "The requirement refers to five target guards and two agent-work-dir spellings but does not enumerate their identities or exact spellings, so independent reviewers cannot agree on the complete coverage set.",
+              "category": "process",
+              "title": "Complete Context",
+              "observations": [
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "complete-context",
+                  "where": {
+                    "file": "draft.json",
+                    "locator": "decisionMap.decisionPoints[4]"
+                  },
+                  "observed": "The requirement refers to five target guards and two agent-work-dir spellings but does not enumerate their identities or exact spellings, so independent reviewers cannot agree on the complete coverage set.",
+                  "severity": "blocking",
+                  "refs": [
+                    "complete-context"
+                  ]
+                }
+              ]
+            },
+            {
+              "guardrail_id": "complete-context",
+              "result": "fail",
+              "reason": "“Runtime path forms” is not enumerated with the required forms or expected outcomes.",
+              "category": "process",
+              "title": "Complete Context",
+              "observations": [
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "complete-context",
+                  "where": {
+                    "file": "draft.json",
+                    "locator": "scopeVerification.in[2]"
+                  },
+                  "observed": "“Runtime path forms” is not enumerated with the required forms or expected outcomes.",
+                  "severity": "blocking",
+                  "refs": [
+                    "complete-context"
+                  ]
+                }
+              ]
+            },
+            {
+              "guardrail_id": "complete-context",
+              "result": "fail",
+              "reason": "The subjective term “meaningful” lacks measurable criteria for deciding which structured source values require class-based representation.",
+              "category": "process",
+              "title": "Complete Context",
+              "observations": [
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "complete-context",
+                  "where": {
+                    "file": "draft.json",
+                    "locator": "decisionMap.resolvedByProjectRules[2]"
+                  },
+                  "observed": "The subjective term “meaningful” lacks measurable criteria for deciding which structured source values require class-based representation.",
+                  "severity": "blocking",
+                  "refs": [
+                    "complete-context"
+                  ]
+                }
+              ]
+            },
+            {
+              "guardrail_id": "complete-context",
+              "result": "fail",
+              "reason": "The rendering boundary cases are named but not specified with concrete inputs and expected outputs, preventing consistent independent acceptance decisions.",
+              "category": "process",
+              "title": "Complete Context",
+              "observations": [
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "complete-context",
+                  "where": {
+                    "file": "draft.json",
+                    "locator": "decisionMap.decisionPoints[2]"
+                  },
+                  "observed": "The rendering boundary cases are named but not specified with concrete inputs and expected outputs, preventing consistent independent acceptance decisions.",
+                  "severity": "blocking",
+                  "refs": [
+                    "complete-context"
+                  ]
+                }
+              ]
+            },
+            {
+              "guardrail_id": "prioritize-requirements",
+              "result": "fail",
+              "reason": "The draft contains more than three requirement-like items, but none is assigned a must, should, or nice-to-have priority.",
+              "category": "process",
+              "title": "Prioritize Requirements",
+              "observations": [
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "prioritize-requirements",
+                  "where": {
+                    "file": "draft.json",
+                    "locator": "decisionMap.decisionPoints and decisionMap.deferredToSpec"
+                  },
+                  "observed": "The draft contains more than three requirement-like items, but none is assigned a must, should, or nice-to-have priority.",
+                  "severity": "blocking",
+                  "refs": [
+                    "prioritize-requirements"
+                  ]
+                }
+              ]
+            },
+            {
+              "guardrail_id": "migration-parity",
+              "result": "fail",
+              "reason": "The draft explicitly states that the required inventory connecting routed leaf inputs and observable behavior to owners and tests is missing; it does not enumerate each moved/replaced public behavior and affected commands, APIs, hooks, configuration, artifacts, and side effects.",
+              "category": "process",
+              "title": "Migration Parity",
+              "observations": [
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "migration-parity",
+                  "where": {
+                    "file": "draft.json",
+                    "locator": "analysis.problem"
+                  },
+                  "observed": "The draft explicitly states that the required inventory connecting routed leaf inputs and observable behavior to owners and tests is missing; it does not enumerate each moved/replaced public behavior and affected commands, APIs, hooks, configuration, artifacts, and side effects.",
+                  "severity": "blocking",
+                  "refs": [
+                    "migration-parity"
+                  ]
+                }
+              ]
+            },
+            {
+              "guardrail_id": "migration-parity",
+              "result": "fail",
+              "reason": "The draft says the specification must later map retained behavior to owners and behavior-level tests, but provides no actual per-surface mapping or acceptance criteria proving each retained public surface works through the new path.",
+              "category": "process",
+              "title": "Migration Parity",
+              "observations": [
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "migration-parity",
+                  "where": {
+                    "file": "draft.json",
+                    "locator": "decisionMap.decisionPoints[3]"
+                  },
+                  "observed": "The draft says the specification must later map retained behavior to owners and behavior-level tests, but provides no actual per-surface mapping or acceptance criteria proving each retained public surface works through the new path.",
+                  "severity": "blocking",
+                  "refs": [
+                    "migration-parity"
+                  ]
+                }
+              ]
+            }
+          ],
+          "reasons": [
+            {
+              "verdict": "FAIL",
+              "detail": "Unambiguous Requirements — “Full option contracts” is not defined; only aliases and value kind are named. Enumerate the required contract fields or reference an authoritative schema.",
+              "guardrail_id": "unambiguous-requirements",
+              "category": "code-quality"
+            },
+            {
+              "verdict": "FAIL",
+              "detail": "Unambiguous Requirements — “Short, boundary, longest, and synthetic long names” lacks concrete name lengths or boundary cases. Specify exact test inputs and expected spacing/order results.",
+              "guardrail_id": "unambiguous-requirements",
+              "category": "code-quality"
+            },
+            {
+              "verdict": "FAIL",
+              "detail": "Unambiguous Requirements — “Meaningful structured source values” uses a subjective qualifier without defining which values qualify.",
+              "guardrail_id": "unambiguous-requirements",
+              "category": "code-quality"
+            },
+            {
+              "verdict": "FAIL",
+              "detail": "Unambiguous Requirements — “Arbitrary resource limit” and “unrelated command-semantic change” do not define verifiable scope boundaries.",
+              "guardrail_id": "unambiguous-requirements",
+              "category": "code-quality"
+            },
+            {
+              "verdict": "FAIL",
+              "detail": "Unambiguous Requirements — “Focused entry-point wiring tests” is subjective; identify the exact entry points and required assertions.",
+              "guardrail_id": "unambiguous-requirements",
+              "category": "code-quality"
+            },
+            {
+              "verdict": "FAIL",
+              "detail": "Complete Context — The requirement refers to five target guards and two agent-work-dir spellings but does not enumerate their identities or exact spellings, so independent reviewers cannot agree on the complete coverage set.",
+              "guardrail_id": "complete-context",
+              "category": "process"
+            },
+            {
+              "verdict": "FAIL",
+              "detail": "Complete Context — “Runtime path forms” is not enumerated with the required forms or expected outcomes.",
+              "guardrail_id": "complete-context",
+              "category": "process"
+            },
+            {
+              "verdict": "FAIL",
+              "detail": "Complete Context — The subjective term “meaningful” lacks measurable criteria for deciding which structured source values require class-based representation.",
+              "guardrail_id": "complete-context",
+              "category": "process"
+            },
+            {
+              "verdict": "FAIL",
+              "detail": "Complete Context — The rendering boundary cases are named but not specified with concrete inputs and expected outputs, preventing consistent independent acceptance decisions.",
+              "guardrail_id": "complete-context",
+              "category": "process"
+            },
+            {
+              "verdict": "FAIL",
+              "detail": "Prioritize Requirements — The draft contains more than three requirement-like items, but none is assigned a must, should, or nice-to-have priority.",
+              "guardrail_id": "prioritize-requirements",
+              "category": "process"
+            },
+            {
+              "verdict": "FAIL",
+              "detail": "Migration Parity — The draft explicitly states that the required inventory connecting routed leaf inputs and observable behavior to owners and tests is missing; it does not enumerate each moved/replaced public behavior and affected commands, APIs, hooks, configuration, artifacts, and side effects.",
+              "guardrail_id": "migration-parity",
+              "category": "process"
+            },
+            {
+              "verdict": "FAIL",
+              "detail": "Migration Parity — The draft says the specification must later map retained behavior to owners and behavior-level tests, but provides no actual per-surface mapping or acceptance criteria proving each retained public surface works through the new path.",
+              "guardrail_id": "migration-parity",
+              "category": "process"
+            }
+          ],
+          "issues": [],
+          "failureKind": "ai_semantic_fail",
+          "nextAction": {
+            "diagnosis": {
+              "summary": "12 observation(s).",
+              "observations": [
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "unambiguous-requirements",
+                  "where": {
+                    "file": "draft.json",
+                    "locator": "decisionMap.decisionPoints[1]"
+                  },
+                  "observed": "“Full option contracts” is not defined; only aliases and value kind are named. Enumerate the required contract fields or reference an authoritative schema.",
+                  "severity": "blocking",
+                  "refs": [
+                    "unambiguous-requirements"
+                  ]
+                },
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "unambiguous-requirements",
+                  "where": {
+                    "file": "draft.json",
+                    "locator": "decisionMap.decisionPoints[2]"
+                  },
+                  "observed": "“Short, boundary, longest, and synthetic long names” lacks concrete name lengths or boundary cases. Specify exact test inputs and expected spacing/order results.",
+                  "severity": "blocking",
+                  "refs": [
+                    "unambiguous-requirements"
+                  ]
+                },
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "unambiguous-requirements",
+                  "where": {
+                    "file": "draft.json",
+                    "locator": "decisionMap.resolvedByProjectRules[2]"
+                  },
+                  "observed": "“Meaningful structured source values” uses a subjective qualifier without defining which values qualify.",
+                  "severity": "blocking",
+                  "refs": [
+                    "unambiguous-requirements"
+                  ]
+                },
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "unambiguous-requirements",
+                  "where": {
+                    "file": "draft.json",
+                    "locator": "scopeVerification.out[1]"
+                  },
+                  "observed": "“Arbitrary resource limit” and “unrelated command-semantic change” do not define verifiable scope boundaries.",
+                  "severity": "blocking",
+                  "refs": [
+                    "unambiguous-requirements"
+                  ]
+                },
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "unambiguous-requirements",
+                  "where": {
+                    "file": "draft.json",
+                    "locator": "decisionMap.deferredToSpec[3].relevance"
+                  },
+                  "observed": "“Focused entry-point wiring tests” is subjective; identify the exact entry points and required assertions.",
+                  "severity": "blocking",
+                  "refs": [
+                    "unambiguous-requirements"
+                  ]
+                },
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "complete-context",
+                  "where": {
+                    "file": "draft.json",
+                    "locator": "decisionMap.decisionPoints[4]"
+                  },
+                  "observed": "The requirement refers to five target guards and two agent-work-dir spellings but does not enumerate their identities or exact spellings, so independent reviewers cannot agree on the complete coverage set.",
+                  "severity": "blocking",
+                  "refs": [
+                    "complete-context"
+                  ]
+                },
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "complete-context",
+                  "where": {
+                    "file": "draft.json",
+                    "locator": "scopeVerification.in[2]"
+                  },
+                  "observed": "“Runtime path forms” is not enumerated with the required forms or expected outcomes.",
+                  "severity": "blocking",
+                  "refs": [
+                    "complete-context"
+                  ]
+                },
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "complete-context",
+                  "where": {
+                    "file": "draft.json",
+                    "locator": "decisionMap.resolvedByProjectRules[2]"
+                  },
+                  "observed": "The subjective term “meaningful” lacks measurable criteria for deciding which structured source values require class-based representation.",
+                  "severity": "blocking",
+                  "refs": [
+                    "complete-context"
+                  ]
+                },
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "complete-context",
+                  "where": {
+                    "file": "draft.json",
+                    "locator": "decisionMap.decisionPoints[2]"
+                  },
+                  "observed": "The rendering boundary cases are named but not specified with concrete inputs and expected outputs, preventing consistent independent acceptance decisions.",
+                  "severity": "blocking",
+                  "refs": [
+                    "complete-context"
+                  ]
+                },
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "prioritize-requirements",
+                  "where": {
+                    "file": "draft.json",
+                    "locator": "decisionMap.decisionPoints and decisionMap.deferredToSpec"
+                  },
+                  "observed": "The draft contains more than three requirement-like items, but none is assigned a must, should, or nice-to-have priority.",
+                  "severity": "blocking",
+                  "refs": [
+                    "prioritize-requirements"
+                  ]
+                },
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "migration-parity",
+                  "where": {
+                    "file": "draft.json",
+                    "locator": "analysis.problem"
+                  },
+                  "observed": "The draft explicitly states that the required inventory connecting routed leaf inputs and observable behavior to owners and tests is missing; it does not enumerate each moved/replaced public behavior and affected commands, APIs, hooks, configuration, artifacts, and side effects.",
+                  "severity": "blocking",
+                  "refs": [
+                    "migration-parity"
+                  ]
+                },
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "migration-parity",
+                  "where": {
+                    "file": "draft.json",
+                    "locator": "decisionMap.decisionPoints[3]"
+                  },
+                  "observed": "The draft says the specification must later map retained behavior to owners and behavior-level tests, but provides no actual per-surface mapping or acceptance criteria proving each retained public surface works through the new path.",
+                  "severity": "blocking",
+                  "refs": [
+                    "migration-parity"
+                  ]
+                }
+              ]
+            },
+            "prescription": "Repair the draft evidence selected by Definition."
+          },
+          "evaluationScope": {
+            "phase": "draft",
+            "taskId": null,
+            "sourceFingerprint": null,
+            "contentFingerprint": "7063cbe62f9dfd1654ff30ddb52846d77e05eb81389d3c20072ba334ea415097"
+          },
+          "gateTransitionFailureCategory": {
+            "category": "semantic",
+            "code": "ai_semantic_fail"
+          },
+          "gateTransitionLineage": "c9a9dd920008ae03f00ba92176898194e61771bb7cd565ca08c40c3e35d09fb3",
+          "gateTransitionAttemptId": "attempt-draft-gate-4b35f9ad-375f-4374-8582-3446d1966b34",
+          "gateTransitionAttemptSequence": 1
+        }
+      },
+      "artifact": {
+        "logicalKey": "draft.gate",
+        "payload": {
+          "result": "fail",
+          "changed": [],
+          "artifacts": {
+            "target": "specs/f45fe34e-flow-help-contract/001/draft.json",
+            "level": "parent",
+            "phase": "draft",
+            "evaluations": [
+              {
+                "guardrail_id": "unambiguous-requirements",
+                "result": "fail",
+                "reason": "“Full option contracts” is not defined; only aliases and value kind are named. Enumerate the required contract fields or reference an authoritative schema.",
+                "category": "code-quality",
+                "title": "Unambiguous Requirements",
+                "observations": [
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "unambiguous-requirements",
+                    "where": {
+                      "file": "draft.json",
+                      "locator": "decisionMap.decisionPoints[1]"
+                    },
+                    "observed": "“Full option contracts” is not defined; only aliases and value kind are named. Enumerate the required contract fields or reference an authoritative schema.",
+                    "severity": "blocking",
+                    "refs": [
+                      "unambiguous-requirements"
+                    ]
+                  }
+                ]
+              },
+              {
+                "guardrail_id": "unambiguous-requirements",
+                "result": "fail",
+                "reason": "“Short, boundary, longest, and synthetic long names” lacks concrete name lengths or boundary cases. Specify exact test inputs and expected spacing/order results.",
+                "category": "code-quality",
+                "title": "Unambiguous Requirements",
+                "observations": [
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "unambiguous-requirements",
+                    "where": {
+                      "file": "draft.json",
+                      "locator": "decisionMap.decisionPoints[2]"
+                    },
+                    "observed": "“Short, boundary, longest, and synthetic long names” lacks concrete name lengths or boundary cases. Specify exact test inputs and expected spacing/order results.",
+                    "severity": "blocking",
+                    "refs": [
+                      "unambiguous-requirements"
+                    ]
+                  }
+                ]
+              },
+              {
+                "guardrail_id": "unambiguous-requirements",
+                "result": "fail",
+                "reason": "“Meaningful structured source values” uses a subjective qualifier without defining which values qualify.",
+                "category": "code-quality",
+                "title": "Unambiguous Requirements",
+                "observations": [
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "unambiguous-requirements",
+                    "where": {
+                      "file": "draft.json",
+                      "locator": "decisionMap.resolvedByProjectRules[2]"
+                    },
+                    "observed": "“Meaningful structured source values” uses a subjective qualifier without defining which values qualify.",
+                    "severity": "blocking",
+                    "refs": [
+                      "unambiguous-requirements"
+                    ]
+                  }
+                ]
+              },
+              {
+                "guardrail_id": "unambiguous-requirements",
+                "result": "fail",
+                "reason": "“Arbitrary resource limit” and “unrelated command-semantic change” do not define verifiable scope boundaries.",
+                "category": "code-quality",
+                "title": "Unambiguous Requirements",
+                "observations": [
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "unambiguous-requirements",
+                    "where": {
+                      "file": "draft.json",
+                      "locator": "scopeVerification.out[1]"
+                    },
+                    "observed": "“Arbitrary resource limit” and “unrelated command-semantic change” do not define verifiable scope boundaries.",
+                    "severity": "blocking",
+                    "refs": [
+                      "unambiguous-requirements"
+                    ]
+                  }
+                ]
+              },
+              {
+                "guardrail_id": "unambiguous-requirements",
+                "result": "fail",
+                "reason": "“Focused entry-point wiring tests” is subjective; identify the exact entry points and required assertions.",
+                "category": "code-quality",
+                "title": "Unambiguous Requirements",
+                "observations": [
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "unambiguous-requirements",
+                    "where": {
+                      "file": "draft.json",
+                      "locator": "decisionMap.deferredToSpec[3].relevance"
+                    },
+                    "observed": "“Focused entry-point wiring tests” is subjective; identify the exact entry points and required assertions.",
+                    "severity": "blocking",
+                    "refs": [
+                      "unambiguous-requirements"
+                    ]
+                  }
+                ]
+              },
+              {
+                "guardrail_id": "complete-context",
+                "result": "fail",
+                "reason": "The requirement refers to five target guards and two agent-work-dir spellings but does not enumerate their identities or exact spellings, so independent reviewers cannot agree on the complete coverage set.",
+                "category": "process",
+                "title": "Complete Context",
+                "observations": [
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "complete-context",
+                    "where": {
+                      "file": "draft.json",
+                      "locator": "decisionMap.decisionPoints[4]"
+                    },
+                    "observed": "The requirement refers to five target guards and two agent-work-dir spellings but does not enumerate their identities or exact spellings, so independent reviewers cannot agree on the complete coverage set.",
+                    "severity": "blocking",
+                    "refs": [
+                      "complete-context"
+                    ]
+                  }
+                ]
+              },
+              {
+                "guardrail_id": "complete-context",
+                "result": "fail",
+                "reason": "“Runtime path forms” is not enumerated with the required forms or expected outcomes.",
+                "category": "process",
+                "title": "Complete Context",
+                "observations": [
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "complete-context",
+                    "where": {
+                      "file": "draft.json",
+                      "locator": "scopeVerification.in[2]"
+                    },
+                    "observed": "“Runtime path forms” is not enumerated with the required forms or expected outcomes.",
+                    "severity": "blocking",
+                    "refs": [
+                      "complete-context"
+                    ]
+                  }
+                ]
+              },
+              {
+                "guardrail_id": "complete-context",
+                "result": "fail",
+                "reason": "The subjective term “meaningful” lacks measurable criteria for deciding which structured source values require class-based representation.",
+                "category": "process",
+                "title": "Complete Context",
+                "observations": [
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "complete-context",
+                    "where": {
+                      "file": "draft.json",
+                      "locator": "decisionMap.resolvedByProjectRules[2]"
+                    },
+                    "observed": "The subjective term “meaningful” lacks measurable criteria for deciding which structured source values require class-based representation.",
+                    "severity": "blocking",
+                    "refs": [
+                      "complete-context"
+                    ]
+                  }
+                ]
+              },
+              {
+                "guardrail_id": "complete-context",
+                "result": "fail",
+                "reason": "The rendering boundary cases are named but not specified with concrete inputs and expected outputs, preventing consistent independent acceptance decisions.",
+                "category": "process",
+                "title": "Complete Context",
+                "observations": [
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "complete-context",
+                    "where": {
+                      "file": "draft.json",
+                      "locator": "decisionMap.decisionPoints[2]"
+                    },
+                    "observed": "The rendering boundary cases are named but not specified with concrete inputs and expected outputs, preventing consistent independent acceptance decisions.",
+                    "severity": "blocking",
+                    "refs": [
+                      "complete-context"
+                    ]
+                  }
+                ]
+              },
+              {
+                "guardrail_id": "prioritize-requirements",
+                "result": "fail",
+                "reason": "The draft contains more than three requirement-like items, but none is assigned a must, should, or nice-to-have priority.",
+                "category": "process",
+                "title": "Prioritize Requirements",
+                "observations": [
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "prioritize-requirements",
+                    "where": {
+                      "file": "draft.json",
+                      "locator": "decisionMap.decisionPoints and decisionMap.deferredToSpec"
+                    },
+                    "observed": "The draft contains more than three requirement-like items, but none is assigned a must, should, or nice-to-have priority.",
+                    "severity": "blocking",
+                    "refs": [
+                      "prioritize-requirements"
+                    ]
+                  }
+                ]
+              },
+              {
+                "guardrail_id": "migration-parity",
+                "result": "fail",
+                "reason": "The draft explicitly states that the required inventory connecting routed leaf inputs and observable behavior to owners and tests is missing; it does not enumerate each moved/replaced public behavior and affected commands, APIs, hooks, configuration, artifacts, and side effects.",
+                "category": "process",
+                "title": "Migration Parity",
+                "observations": [
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "migration-parity",
+                    "where": {
+                      "file": "draft.json",
+                      "locator": "analysis.problem"
+                    },
+                    "observed": "The draft explicitly states that the required inventory connecting routed leaf inputs and observable behavior to owners and tests is missing; it does not enumerate each moved/replaced public behavior and affected commands, APIs, hooks, configuration, artifacts, and side effects.",
+                    "severity": "blocking",
+                    "refs": [
+                      "migration-parity"
+                    ]
+                  }
+                ]
+              },
+              {
+                "guardrail_id": "migration-parity",
+                "result": "fail",
+                "reason": "The draft says the specification must later map retained behavior to owners and behavior-level tests, but provides no actual per-surface mapping or acceptance criteria proving each retained public surface works through the new path.",
+                "category": "process",
+                "title": "Migration Parity",
+                "observations": [
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "migration-parity",
+                    "where": {
+                      "file": "draft.json",
+                      "locator": "decisionMap.decisionPoints[3]"
+                    },
+                    "observed": "The draft says the specification must later map retained behavior to owners and behavior-level tests, but provides no actual per-surface mapping or acceptance criteria proving each retained public surface works through the new path.",
+                    "severity": "blocking",
+                    "refs": [
+                      "migration-parity"
+                    ]
+                  }
+                ]
+              }
+            ],
+            "reasons": [
+              {
+                "verdict": "FAIL",
+                "detail": "Unambiguous Requirements — “Full option contracts” is not defined; only aliases and value kind are named. Enumerate the required contract fields or reference an authoritative schema.",
+                "guardrail_id": "unambiguous-requirements",
+                "category": "code-quality"
+              },
+              {
+                "verdict": "FAIL",
+                "detail": "Unambiguous Requirements — “Short, boundary, longest, and synthetic long names” lacks concrete name lengths or boundary cases. Specify exact test inputs and expected spacing/order results.",
+                "guardrail_id": "unambiguous-requirements",
+                "category": "code-quality"
+              },
+              {
+                "verdict": "FAIL",
+                "detail": "Unambiguous Requirements — “Meaningful structured source values” uses a subjective qualifier without defining which values qualify.",
+                "guardrail_id": "unambiguous-requirements",
+                "category": "code-quality"
+              },
+              {
+                "verdict": "FAIL",
+                "detail": "Unambiguous Requirements — “Arbitrary resource limit” and “unrelated command-semantic change” do not define verifiable scope boundaries.",
+                "guardrail_id": "unambiguous-requirements",
+                "category": "code-quality"
+              },
+              {
+                "verdict": "FAIL",
+                "detail": "Unambiguous Requirements — “Focused entry-point wiring tests” is subjective; identify the exact entry points and required assertions.",
+                "guardrail_id": "unambiguous-requirements",
+                "category": "code-quality"
+              },
+              {
+                "verdict": "FAIL",
+                "detail": "Complete Context — The requirement refers to five target guards and two agent-work-dir spellings but does not enumerate their identities or exact spellings, so independent reviewers cannot agree on the complete coverage set.",
+                "guardrail_id": "complete-context",
+                "category": "process"
+              },
+              {
+                "verdict": "FAIL",
+                "detail": "Complete Context — “Runtime path forms” is not enumerated with the required forms or expected outcomes.",
+                "guardrail_id": "complete-context",
+                "category": "process"
+              },
+              {
+                "verdict": "FAIL",
+                "detail": "Complete Context — The subjective term “meaningful” lacks measurable criteria for deciding which structured source values require class-based representation.",
+                "guardrail_id": "complete-context",
+                "category": "process"
+              },
+              {
+                "verdict": "FAIL",
+                "detail": "Complete Context — The rendering boundary cases are named but not specified with concrete inputs and expected outputs, preventing consistent independent acceptance decisions.",
+                "guardrail_id": "complete-context",
+                "category": "process"
+              },
+              {
+                "verdict": "FAIL",
+                "detail": "Prioritize Requirements — The draft contains more than three requirement-like items, but none is assigned a must, should, or nice-to-have priority.",
+                "guardrail_id": "prioritize-requirements",
+                "category": "process"
+              },
+              {
+                "verdict": "FAIL",
+                "detail": "Migration Parity — The draft explicitly states that the required inventory connecting routed leaf inputs and observable behavior to owners and tests is missing; it does not enumerate each moved/replaced public behavior and affected commands, APIs, hooks, configuration, artifacts, and side effects.",
+                "guardrail_id": "migration-parity",
+                "category": "process"
+              },
+              {
+                "verdict": "FAIL",
+                "detail": "Migration Parity — The draft says the specification must later map retained behavior to owners and behavior-level tests, but provides no actual per-surface mapping or acceptance criteria proving each retained public surface works through the new path.",
+                "guardrail_id": "migration-parity",
+                "category": "process"
+              }
+            ],
+            "issues": [],
+            "failureKind": "ai_semantic_fail",
+            "nextAction": {
+              "diagnosis": {
+                "summary": "12 observation(s).",
+                "observations": [
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "unambiguous-requirements",
+                    "where": {
+                      "file": "draft.json",
+                      "locator": "decisionMap.decisionPoints[1]"
+                    },
+                    "observed": "“Full option contracts” is not defined; only aliases and value kind are named. Enumerate the required contract fields or reference an authoritative schema.",
+                    "severity": "blocking",
+                    "refs": [
+                      "unambiguous-requirements"
+                    ]
+                  },
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "unambiguous-requirements",
+                    "where": {
+                      "file": "draft.json",
+                      "locator": "decisionMap.decisionPoints[2]"
+                    },
+                    "observed": "“Short, boundary, longest, and synthetic long names” lacks concrete name lengths or boundary cases. Specify exact test inputs and expected spacing/order results.",
+                    "severity": "blocking",
+                    "refs": [
+                      "unambiguous-requirements"
+                    ]
+                  },
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "unambiguous-requirements",
+                    "where": {
+                      "file": "draft.json",
+                      "locator": "decisionMap.resolvedByProjectRules[2]"
+                    },
+                    "observed": "“Meaningful structured source values” uses a subjective qualifier without defining which values qualify.",
+                    "severity": "blocking",
+                    "refs": [
+                      "unambiguous-requirements"
+                    ]
+                  },
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "unambiguous-requirements",
+                    "where": {
+                      "file": "draft.json",
+                      "locator": "scopeVerification.out[1]"
+                    },
+                    "observed": "“Arbitrary resource limit” and “unrelated command-semantic change” do not define verifiable scope boundaries.",
+                    "severity": "blocking",
+                    "refs": [
+                      "unambiguous-requirements"
+                    ]
+                  },
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "unambiguous-requirements",
+                    "where": {
+                      "file": "draft.json",
+                      "locator": "decisionMap.deferredToSpec[3].relevance"
+                    },
+                    "observed": "“Focused entry-point wiring tests” is subjective; identify the exact entry points and required assertions.",
+                    "severity": "blocking",
+                    "refs": [
+                      "unambiguous-requirements"
+                    ]
+                  },
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "complete-context",
+                    "where": {
+                      "file": "draft.json",
+                      "locator": "decisionMap.decisionPoints[4]"
+                    },
+                    "observed": "The requirement refers to five target guards and two agent-work-dir spellings but does not enumerate their identities or exact spellings, so independent reviewers cannot agree on the complete coverage set.",
+                    "severity": "blocking",
+                    "refs": [
+                      "complete-context"
+                    ]
+                  },
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "complete-context",
+                    "where": {
+                      "file": "draft.json",
+                      "locator": "scopeVerification.in[2]"
+                    },
+                    "observed": "“Runtime path forms” is not enumerated with the required forms or expected outcomes.",
+                    "severity": "blocking",
+                    "refs": [
+                      "complete-context"
+                    ]
+                  },
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "complete-context",
+                    "where": {
+                      "file": "draft.json",
+                      "locator": "decisionMap.resolvedByProjectRules[2]"
+                    },
+                    "observed": "The subjective term “meaningful” lacks measurable criteria for deciding which structured source values require class-based representation.",
+                    "severity": "blocking",
+                    "refs": [
+                      "complete-context"
+                    ]
+                  },
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "complete-context",
+                    "where": {
+                      "file": "draft.json",
+                      "locator": "decisionMap.decisionPoints[2]"
+                    },
+                    "observed": "The rendering boundary cases are named but not specified with concrete inputs and expected outputs, preventing consistent independent acceptance decisions.",
+                    "severity": "blocking",
+                    "refs": [
+                      "complete-context"
+                    ]
+                  },
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "prioritize-requirements",
+                    "where": {
+                      "file": "draft.json",
+                      "locator": "decisionMap.decisionPoints and decisionMap.deferredToSpec"
+                    },
+                    "observed": "The draft contains more than three requirement-like items, but none is assigned a must, should, or nice-to-have priority.",
+                    "severity": "blocking",
+                    "refs": [
+                      "prioritize-requirements"
+                    ]
+                  },
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "migration-parity",
+                    "where": {
+                      "file": "draft.json",
+                      "locator": "analysis.problem"
+                    },
+                    "observed": "The draft explicitly states that the required inventory connecting routed leaf inputs and observable behavior to owners and tests is missing; it does not enumerate each moved/replaced public behavior and affected commands, APIs, hooks, configuration, artifacts, and side effects.",
+                    "severity": "blocking",
+                    "refs": [
+                      "migration-parity"
+                    ]
+                  },
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "migration-parity",
+                    "where": {
+                      "file": "draft.json",
+                      "locator": "decisionMap.decisionPoints[3]"
+                    },
+                    "observed": "The draft says the specification must later map retained behavior to owners and behavior-level tests, but provides no actual per-surface mapping or acceptance criteria proving each retained public surface works through the new path.",
+                    "severity": "blocking",
+                    "refs": [
+                      "migration-parity"
+                    ]
+                  }
+                ]
+              },
+              "prescription": "Repair the draft evidence selected by Definition."
+            },
+            "evaluationScope": {
+              "phase": "draft",
+              "taskId": null,
+              "sourceFingerprint": null,
+              "contentFingerprint": "7063cbe62f9dfd1654ff30ddb52846d77e05eb81389d3c20072ba334ea415097"
+            },
+            "gateTransitionFailureCategory": {
+              "category": "semantic",
+              "code": "ai_semantic_fail"
+            },
+            "gateTransitionLineage": "c9a9dd920008ae03f00ba92176898194e61771bb7cd565ca08c40c3e35d09fb3",
+            "gateTransitionAttemptId": "attempt-draft-gate-4b35f9ad-375f-4374-8582-3446d1966b34",
+            "gateTransitionAttemptSequence": 1
+          }
+        }
+      }
+    },
+    {
+      "attempt": 2,
+      "nodeId": "draft-gate",
+      "outcome": "completed",
+      "result": {
+        "result": "fail",
+        "changed": [],
+        "artifacts": {
+          "target": "specs/f45fe34e-flow-help-contract/001/draft.json",
+          "level": "parent",
+          "phase": "draft",
+          "evaluations": [
+            {
+              "guardrail_id": "migration-parity",
+              "result": "fail",
+              "reason": "The draft says the initial Spec must enumerate every routed leaf and behavior, but does not itself provide that inventory of existing public behavior and affected surfaces.",
+              "category": "process",
+              "title": "Migration Parity",
+              "observations": [
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "migration-parity",
+                  "where": {
+                    "file": "draft.json",
+                    "locator": "analysis.problem"
+                  },
+                  "observed": "The draft says the initial Spec must enumerate every routed leaf and behavior, but does not itself provide that inventory of existing public behavior and affected surfaces.",
+                  "severity": "blocking",
+                  "refs": [
+                    "migration-parity"
+                  ]
+                }
+              ]
+            },
+            {
+              "guardrail_id": "migration-parity",
+              "result": "fail",
+              "reason": "The draft requires a per-surface owner/test map but does not provide a mapping from each retained behavior to its new owner or an explicit removal decision.",
+              "category": "process",
+              "title": "Migration Parity",
+              "observations": [
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "migration-parity",
+                  "where": {
+                    "file": "draft.json",
+                    "locator": "decisionMap.decisionPoints[3]"
+                  },
+                  "observed": "The draft requires a per-surface owner/test map but does not provide a mapping from each retained behavior to its new owner or an explicit removal decision.",
+                  "severity": "blocking",
+                  "refs": [
+                    "migration-parity"
+                  ]
+                }
+              ]
+            },
+            {
+              "guardrail_id": "migration-parity",
+              "result": "fail",
+              "reason": "Validation is described as planned future coverage; the draft does not include behavior-level verification for each retained public surface through the new path.",
+              "category": "process",
+              "title": "Migration Parity",
+              "observations": [
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "migration-parity",
+                  "where": {
+                    "file": "draft.json",
+                    "locator": "analysis.validation"
+                  },
+                  "observed": "Validation is described as planned future coverage; the draft does not include behavior-level verification for each retained public surface through the new path.",
+                  "severity": "blocking",
+                  "refs": [
+                    "migration-parity"
+                  ]
+                }
+              ]
+            }
+          ],
+          "reasons": [
+            {
+              "verdict": "FAIL",
+              "detail": "Migration Parity — The draft says the initial Spec must enumerate every routed leaf and behavior, but does not itself provide that inventory of existing public behavior and affected surfaces.",
+              "guardrail_id": "migration-parity",
+              "category": "process"
+            },
+            {
+              "verdict": "FAIL",
+              "detail": "Migration Parity — The draft requires a per-surface owner/test map but does not provide a mapping from each retained behavior to its new owner or an explicit removal decision.",
+              "guardrail_id": "migration-parity",
+              "category": "process"
+            },
+            {
+              "verdict": "FAIL",
+              "detail": "Migration Parity — Validation is described as planned future coverage; the draft does not include behavior-level verification for each retained public surface through the new path.",
+              "guardrail_id": "migration-parity",
+              "category": "process"
+            }
+          ],
+          "issues": [],
+          "failureKind": "ai_semantic_fail",
+          "nextAction": {
+            "diagnosis": {
+              "summary": "3 observation(s).",
+              "observations": [
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "migration-parity",
+                  "where": {
+                    "file": "draft.json",
+                    "locator": "analysis.problem"
+                  },
+                  "observed": "The draft says the initial Spec must enumerate every routed leaf and behavior, but does not itself provide that inventory of existing public behavior and affected surfaces.",
+                  "severity": "blocking",
+                  "refs": [
+                    "migration-parity"
+                  ]
+                },
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "migration-parity",
+                  "where": {
+                    "file": "draft.json",
+                    "locator": "decisionMap.decisionPoints[3]"
+                  },
+                  "observed": "The draft requires a per-surface owner/test map but does not provide a mapping from each retained behavior to its new owner or an explicit removal decision.",
+                  "severity": "blocking",
+                  "refs": [
+                    "migration-parity"
+                  ]
+                },
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "migration-parity",
+                  "where": {
+                    "file": "draft.json",
+                    "locator": "analysis.validation"
+                  },
+                  "observed": "Validation is described as planned future coverage; the draft does not include behavior-level verification for each retained public surface through the new path.",
+                  "severity": "blocking",
+                  "refs": [
+                    "migration-parity"
+                  ]
+                }
+              ]
+            },
+            "prescription": "Repair the draft evidence selected by Definition."
+          },
+          "evaluationScope": {
+            "phase": "draft",
+            "taskId": null,
+            "sourceFingerprint": null,
+            "contentFingerprint": "2167af3ebaf2c99046e581b3551f9a9cfb32391239a1575498efd81e70db15c0"
+          },
+          "gateTransitionFailureCategory": {
+            "category": "semantic",
+            "code": "ai_semantic_fail"
+          },
+          "gateTransitionLineage": "ed13336ce39740725f27c53e64bc82433754e8985e038dff4b814bb89db01c3c",
+          "gateTransitionAttemptId": "attempt-draft-gate-6e352731-2e48-4154-8920-b2c3240abe3b",
+          "gateTransitionAttemptSequence": 2
+        }
+      },
+      "artifact": {
+        "logicalKey": "draft.gate",
+        "payload": {
+          "result": "fail",
+          "changed": [],
+          "artifacts": {
+            "target": "specs/f45fe34e-flow-help-contract/001/draft.json",
+            "level": "parent",
+            "phase": "draft",
+            "evaluations": [
+              {
+                "guardrail_id": "migration-parity",
+                "result": "fail",
+                "reason": "The draft says the initial Spec must enumerate every routed leaf and behavior, but does not itself provide that inventory of existing public behavior and affected surfaces.",
+                "category": "process",
+                "title": "Migration Parity",
+                "observations": [
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "migration-parity",
+                    "where": {
+                      "file": "draft.json",
+                      "locator": "analysis.problem"
+                    },
+                    "observed": "The draft says the initial Spec must enumerate every routed leaf and behavior, but does not itself provide that inventory of existing public behavior and affected surfaces.",
+                    "severity": "blocking",
+                    "refs": [
+                      "migration-parity"
+                    ]
+                  }
+                ]
+              },
+              {
+                "guardrail_id": "migration-parity",
+                "result": "fail",
+                "reason": "The draft requires a per-surface owner/test map but does not provide a mapping from each retained behavior to its new owner or an explicit removal decision.",
+                "category": "process",
+                "title": "Migration Parity",
+                "observations": [
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "migration-parity",
+                    "where": {
+                      "file": "draft.json",
+                      "locator": "decisionMap.decisionPoints[3]"
+                    },
+                    "observed": "The draft requires a per-surface owner/test map but does not provide a mapping from each retained behavior to its new owner or an explicit removal decision.",
+                    "severity": "blocking",
+                    "refs": [
+                      "migration-parity"
+                    ]
+                  }
+                ]
+              },
+              {
+                "guardrail_id": "migration-parity",
+                "result": "fail",
+                "reason": "Validation is described as planned future coverage; the draft does not include behavior-level verification for each retained public surface through the new path.",
+                "category": "process",
+                "title": "Migration Parity",
+                "observations": [
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "migration-parity",
+                    "where": {
+                      "file": "draft.json",
+                      "locator": "analysis.validation"
+                    },
+                    "observed": "Validation is described as planned future coverage; the draft does not include behavior-level verification for each retained public surface through the new path.",
+                    "severity": "blocking",
+                    "refs": [
+                      "migration-parity"
+                    ]
+                  }
+                ]
+              }
+            ],
+            "reasons": [
+              {
+                "verdict": "FAIL",
+                "detail": "Migration Parity — The draft says the initial Spec must enumerate every routed leaf and behavior, but does not itself provide that inventory of existing public behavior and affected surfaces.",
+                "guardrail_id": "migration-parity",
+                "category": "process"
+              },
+              {
+                "verdict": "FAIL",
+                "detail": "Migration Parity — The draft requires a per-surface owner/test map but does not provide a mapping from each retained behavior to its new owner or an explicit removal decision.",
+                "guardrail_id": "migration-parity",
+                "category": "process"
+              },
+              {
+                "verdict": "FAIL",
+                "detail": "Migration Parity — Validation is described as planned future coverage; the draft does not include behavior-level verification for each retained public surface through the new path.",
+                "guardrail_id": "migration-parity",
+                "category": "process"
+              }
+            ],
+            "issues": [],
+            "failureKind": "ai_semantic_fail",
+            "nextAction": {
+              "diagnosis": {
+                "summary": "3 observation(s).",
+                "observations": [
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "migration-parity",
+                    "where": {
+                      "file": "draft.json",
+                      "locator": "analysis.problem"
+                    },
+                    "observed": "The draft says the initial Spec must enumerate every routed leaf and behavior, but does not itself provide that inventory of existing public behavior and affected surfaces.",
+                    "severity": "blocking",
+                    "refs": [
+                      "migration-parity"
+                    ]
+                  },
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "migration-parity",
+                    "where": {
+                      "file": "draft.json",
+                      "locator": "decisionMap.decisionPoints[3]"
+                    },
+                    "observed": "The draft requires a per-surface owner/test map but does not provide a mapping from each retained behavior to its new owner or an explicit removal decision.",
+                    "severity": "blocking",
+                    "refs": [
+                      "migration-parity"
+                    ]
+                  },
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "migration-parity",
+                    "where": {
+                      "file": "draft.json",
+                      "locator": "analysis.validation"
+                    },
+                    "observed": "Validation is described as planned future coverage; the draft does not include behavior-level verification for each retained public surface through the new path.",
+                    "severity": "blocking",
+                    "refs": [
+                      "migration-parity"
+                    ]
+                  }
+                ]
+              },
+              "prescription": "Repair the draft evidence selected by Definition."
+            },
+            "evaluationScope": {
+              "phase": "draft",
+              "taskId": null,
+              "sourceFingerprint": null,
+              "contentFingerprint": "2167af3ebaf2c99046e581b3551f9a9cfb32391239a1575498efd81e70db15c0"
+            },
+            "gateTransitionFailureCategory": {
+              "category": "semantic",
+              "code": "ai_semantic_fail"
+            },
+            "gateTransitionLineage": "ed13336ce39740725f27c53e64bc82433754e8985e038dff4b814bb89db01c3c",
+            "gateTransitionAttemptId": "attempt-draft-gate-6e352731-2e48-4154-8920-b2c3240abe3b",
+            "gateTransitionAttemptSequence": 2
+          }
+        }
+      }
+    },
+    {
+      "attempt": 3,
+      "nodeId": "draft-gate",
+      "outcome": "completed",
+      "result": {
+        "result": "pass",
+        "changed": [],
+        "artifacts": {
+          "target": "specs/f45fe34e-flow-help-contract/001/draft.json",
+          "level": "parent",
+          "phase": "draft",
+          "evaluations": [
+            {
+              "guardrail_id": "single-responsibility",
+              "result": "pass",
+              "reason": "no observations emitted",
+              "category": "process",
+              "title": "Single Responsibility",
+              "observations": []
+            },
+            {
+              "guardrail_id": "unambiguous-requirements",
+              "result": "pass",
+              "reason": "no observations emitted",
+              "category": "code-quality",
+              "title": "Unambiguous Requirements",
+              "observations": []
+            },
+            {
+              "guardrail_id": "complete-context",
+              "result": "pass",
+              "reason": "no observations emitted",
+              "category": "process",
+              "title": "Complete Context",
+              "observations": []
+            },
+            {
+              "guardrail_id": "no-hardcoded-secrets",
+              "result": "pass",
+              "reason": "no observations emitted",
+              "category": "security",
+              "title": "No Hardcoded Secrets",
+              "observations": []
+            },
+            {
+              "guardrail_id": "prioritize-requirements",
+              "result": "pass",
+              "reason": "no observations emitted",
+              "category": "process",
+              "title": "Prioritize Requirements",
+              "observations": []
+            },
+            {
+              "guardrail_id": "impact-on-existing-features",
+              "result": "pass",
+              "reason": "no observations emitted",
+              "category": "code-quality",
+              "title": "Impact on Existing Features",
+              "observations": []
+            },
+            {
+              "guardrail_id": "migration-parity",
+              "result": "pass",
+              "reason": "no observations emitted",
+              "category": "process",
+              "title": "Migration Parity",
+              "observations": []
+            },
+            {
+              "guardrail_id": "draft-recommend-with-reasoning",
+              "result": "pass",
+              "reason": "no observations emitted",
+              "category": "code-quality",
+              "title": "Present Recommendations with Reasoning",
+              "observations": []
+            },
+            {
+              "guardrail_id": "draft-explore-before-asking",
+              "result": "pass",
+              "reason": "no observations emitted",
+              "category": "process",
+              "title": "Explore Before Asking",
+              "observations": []
+            },
+            {
+              "guardrail_id": "draft-raise-implications",
+              "result": "pass",
+              "reason": "no observations emitted",
+              "category": "process",
+              "title": "Proactively Raise Related Implications",
+              "observations": []
+            },
+            {
+              "guardrail_id": "draft-confirm-brainstorm-vs-decide",
+              "result": "pass",
+              "reason": "no observations emitted",
+              "category": "process",
+              "title": "Confirm Brainstorm vs. Decision Before Critiquing",
+              "observations": []
+            },
+            {
+              "guardrail_id": "draft-capture-digressions",
+              "result": "pass",
+              "reason": "no observations emitted",
+              "category": "code-quality",
+              "title": "Capture Digressions in draft.md",
+              "observations": []
+            },
+            {
+              "guardrail_id": "backward-compatible-cli-interface",
+              "result": "pass",
+              "reason": "no observations emitted",
+              "category": "code-quality",
+              "title": "Backward-Compatible CLI Interface",
+              "observations": []
+            }
+          ],
+          "reasons": [
+            {
+              "verdict": "PASS",
+              "detail": "Single Responsibility — no observations emitted",
+              "guardrail_id": "single-responsibility",
+              "category": "process"
+            },
+            {
+              "verdict": "PASS",
+              "detail": "Unambiguous Requirements — no observations emitted",
+              "guardrail_id": "unambiguous-requirements",
+              "category": "code-quality"
+            },
+            {
+              "verdict": "PASS",
+              "detail": "Complete Context — no observations emitted",
+              "guardrail_id": "complete-context",
+              "category": "process"
+            },
+            {
+              "verdict": "PASS",
+              "detail": "No Hardcoded Secrets — no observations emitted",
+              "guardrail_id": "no-hardcoded-secrets",
+              "category": "security"
+            },
+            {
+              "verdict": "PASS",
+              "detail": "Prioritize Requirements — no observations emitted",
+              "guardrail_id": "prioritize-requirements",
+              "category": "process"
+            },
+            {
+              "verdict": "PASS",
+              "detail": "Impact on Existing Features — no observations emitted",
+              "guardrail_id": "impact-on-existing-features",
+              "category": "code-quality"
+            },
+            {
+              "verdict": "PASS",
+              "detail": "Migration Parity — no observations emitted",
+              "guardrail_id": "migration-parity",
+              "category": "process"
+            },
+            {
+              "verdict": "PASS",
+              "detail": "Present Recommendations with Reasoning — no observations emitted",
+              "guardrail_id": "draft-recommend-with-reasoning",
+              "category": "code-quality"
+            },
+            {
+              "verdict": "PASS",
+              "detail": "Explore Before Asking — no observations emitted",
+              "guardrail_id": "draft-explore-before-asking",
+              "category": "process"
+            },
+            {
+              "verdict": "PASS",
+              "detail": "Proactively Raise Related Implications — no observations emitted",
+              "guardrail_id": "draft-raise-implications",
+              "category": "process"
+            },
+            {
+              "verdict": "PASS",
+              "detail": "Confirm Brainstorm vs. Decision Before Critiquing — no observations emitted",
+              "guardrail_id": "draft-confirm-brainstorm-vs-decide",
+              "category": "process"
+            },
+            {
+              "verdict": "PASS",
+              "detail": "Capture Digressions in draft.md — no observations emitted",
+              "guardrail_id": "draft-capture-digressions",
+              "category": "code-quality"
+            },
+            {
+              "verdict": "PASS",
+              "detail": "Backward-Compatible CLI Interface — no observations emitted",
+              "guardrail_id": "backward-compatible-cli-interface",
+              "category": "code-quality"
+            }
+          ],
+          "nextAction": {
+            "diagnosis": {
+              "summary": "No blocking observations.",
+              "observations": []
+            },
+            "prescription": "Continue with the Definition-selected Gate action."
+          },
+          "evaluationScope": {
+            "phase": "draft",
+            "taskId": null,
+            "sourceFingerprint": null,
+            "contentFingerprint": "ade508a81e2999fc6a11cef06a086f5a3d0224e14633daff0461ccb29bd58c31"
+          },
+          "gateTransitionLineage": "6694fa11405c00050e7f8403150c23c32a260771fe1c9f5228cf03dec3a3c05e",
+          "gateTransitionAttemptId": "attempt-draft-gate-2718b268-81a9-419a-b184-09f189deb0a9",
+          "gateTransitionAttemptSequence": 3
+        }
+      },
+      "artifact": {
+        "logicalKey": "draft.gate",
+        "payload": {
+          "result": "pass",
+          "changed": [],
+          "artifacts": {
+            "target": "specs/f45fe34e-flow-help-contract/001/draft.json",
+            "level": "parent",
+            "phase": "draft",
+            "evaluations": [
+              {
+                "guardrail_id": "single-responsibility",
+                "result": "pass",
+                "reason": "no observations emitted",
+                "category": "process",
+                "title": "Single Responsibility",
+                "observations": []
+              },
+              {
+                "guardrail_id": "unambiguous-requirements",
+                "result": "pass",
+                "reason": "no observations emitted",
+                "category": "code-quality",
+                "title": "Unambiguous Requirements",
+                "observations": []
+              },
+              {
+                "guardrail_id": "complete-context",
+                "result": "pass",
+                "reason": "no observations emitted",
+                "category": "process",
+                "title": "Complete Context",
+                "observations": []
+              },
+              {
+                "guardrail_id": "no-hardcoded-secrets",
+                "result": "pass",
+                "reason": "no observations emitted",
+                "category": "security",
+                "title": "No Hardcoded Secrets",
+                "observations": []
+              },
+              {
+                "guardrail_id": "prioritize-requirements",
+                "result": "pass",
+                "reason": "no observations emitted",
+                "category": "process",
+                "title": "Prioritize Requirements",
+                "observations": []
+              },
+              {
+                "guardrail_id": "impact-on-existing-features",
+                "result": "pass",
+                "reason": "no observations emitted",
+                "category": "code-quality",
+                "title": "Impact on Existing Features",
+                "observations": []
+              },
+              {
+                "guardrail_id": "migration-parity",
+                "result": "pass",
+                "reason": "no observations emitted",
+                "category": "process",
+                "title": "Migration Parity",
+                "observations": []
+              },
+              {
+                "guardrail_id": "draft-recommend-with-reasoning",
+                "result": "pass",
+                "reason": "no observations emitted",
+                "category": "code-quality",
+                "title": "Present Recommendations with Reasoning",
+                "observations": []
+              },
+              {
+                "guardrail_id": "draft-explore-before-asking",
+                "result": "pass",
+                "reason": "no observations emitted",
+                "category": "process",
+                "title": "Explore Before Asking",
+                "observations": []
+              },
+              {
+                "guardrail_id": "draft-raise-implications",
+                "result": "pass",
+                "reason": "no observations emitted",
+                "category": "process",
+                "title": "Proactively Raise Related Implications",
+                "observations": []
+              },
+              {
+                "guardrail_id": "draft-confirm-brainstorm-vs-decide",
+                "result": "pass",
+                "reason": "no observations emitted",
+                "category": "process",
+                "title": "Confirm Brainstorm vs. Decision Before Critiquing",
+                "observations": []
+              },
+              {
+                "guardrail_id": "draft-capture-digressions",
+                "result": "pass",
+                "reason": "no observations emitted",
+                "category": "code-quality",
+                "title": "Capture Digressions in draft.md",
+                "observations": []
+              },
+              {
+                "guardrail_id": "backward-compatible-cli-interface",
+                "result": "pass",
+                "reason": "no observations emitted",
+                "category": "code-quality",
+                "title": "Backward-Compatible CLI Interface",
+                "observations": []
+              }
+            ],
+            "reasons": [
+              {
+                "verdict": "PASS",
+                "detail": "Single Responsibility — no observations emitted",
+                "guardrail_id": "single-responsibility",
+                "category": "process"
+              },
+              {
+                "verdict": "PASS",
+                "detail": "Unambiguous Requirements — no observations emitted",
+                "guardrail_id": "unambiguous-requirements",
+                "category": "code-quality"
+              },
+              {
+                "verdict": "PASS",
+                "detail": "Complete Context — no observations emitted",
+                "guardrail_id": "complete-context",
+                "category": "process"
+              },
+              {
+                "verdict": "PASS",
+                "detail": "No Hardcoded Secrets — no observations emitted",
+                "guardrail_id": "no-hardcoded-secrets",
+                "category": "security"
+              },
+              {
+                "verdict": "PASS",
+                "detail": "Prioritize Requirements — no observations emitted",
+                "guardrail_id": "prioritize-requirements",
+                "category": "process"
+              },
+              {
+                "verdict": "PASS",
+                "detail": "Impact on Existing Features — no observations emitted",
+                "guardrail_id": "impact-on-existing-features",
+                "category": "code-quality"
+              },
+              {
+                "verdict": "PASS",
+                "detail": "Migration Parity — no observations emitted",
+                "guardrail_id": "migration-parity",
+                "category": "process"
+              },
+              {
+                "verdict": "PASS",
+                "detail": "Present Recommendations with Reasoning — no observations emitted",
+                "guardrail_id": "draft-recommend-with-reasoning",
+                "category": "code-quality"
+              },
+              {
+                "verdict": "PASS",
+                "detail": "Explore Before Asking — no observations emitted",
+                "guardrail_id": "draft-explore-before-asking",
+                "category": "process"
+              },
+              {
+                "verdict": "PASS",
+                "detail": "Proactively Raise Related Implications — no observations emitted",
+                "guardrail_id": "draft-raise-implications",
+                "category": "process"
+              },
+              {
+                "verdict": "PASS",
+                "detail": "Confirm Brainstorm vs. Decision Before Critiquing — no observations emitted",
+                "guardrail_id": "draft-confirm-brainstorm-vs-decide",
+                "category": "process"
+              },
+              {
+                "verdict": "PASS",
+                "detail": "Capture Digressions in draft.md — no observations emitted",
+                "guardrail_id": "draft-capture-digressions",
+                "category": "code-quality"
+              },
+              {
+                "verdict": "PASS",
+                "detail": "Backward-Compatible CLI Interface — no observations emitted",
+                "guardrail_id": "backward-compatible-cli-interface",
+                "category": "code-quality"
+              }
+            ],
+            "nextAction": {
+              "diagnosis": {
+                "summary": "No blocking observations.",
+                "observations": []
+              },
+              "prescription": "Continue with the Definition-selected Gate action."
+            },
+            "evaluationScope": {
+              "phase": "draft",
+              "taskId": null,
+              "sourceFingerprint": null,
+              "contentFingerprint": "ade508a81e2999fc6a11cef06a086f5a3d0224e14633daff0461ccb29bd58c31"
+            },
+            "gateTransitionLineage": "6694fa11405c00050e7f8403150c23c32a260771fe1c9f5228cf03dec3a3c05e",
+            "gateTransitionAttemptId": "attempt-draft-gate-2718b268-81a9-419a-b184-09f189deb0a9",
+            "gateTransitionAttemptSequence": 3
+          }
+        }
+      }
+    }
+  ]
+}

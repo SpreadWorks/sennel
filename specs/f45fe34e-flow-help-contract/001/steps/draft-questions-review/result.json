@@ -1,0 +1,145 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "nodeId": "draft-questions-review",
+      "outcome": "completed",
+      "result": {
+        "result": "ok",
+        "changed": [],
+        "artifacts": {
+          "phase": "draft-questions",
+          "verdict": "PASS",
+          "canonicalVerdict": "PASS",
+          "evidenceDigest": "3549f0ddbd1b3b65d2824f60560766c9eb02d42abb85d0b7133bf5515e3c8a04",
+          "treeSha": "25e7662d0b6e20bf93e9b9ca594431afbd38466d",
+          "targetStateDigest": "21e861f51750cab2c5bf060e01f99b579da4e877f7a2b4323488d5e6b9cfc869",
+          "issueCount": 0,
+          "retryPhase": "draft-questions"
+        }
+      },
+      "artifact": {
+        "logicalKey": "draft.questions.review",
+        "payload": {
+          "version": 2,
+          "phase": "draft-questions",
+          "sourceDraft": "draft.json",
+          "sourceDraftRevision": {
+            "version": 1,
+            "runId": "f45fe34e-1029-4c53-8f5c-16633b3c694d",
+            "specId": "f45fe34e-flow-help-contract",
+            "sourceStepId": "draft",
+            "digest": "21e861f51750cab2c5bf060e01f99b579da4e877f7a2b4323488d5e6b9cfc869",
+            "byteLength": 8582,
+            "finalizedAt": "2026-10-15T16:54:41.009Z"
+          },
+          "generatedAt": "2026-10-15T16:55:09.865Z",
+          "verdict": "PASS",
+          "summary": "No draft review findings recorded.",
+          "blockingFindings": [],
+          "advisoryFindings": [],
+          "repairTargets": [],
+          "processStop": {
+            "executionId": "383e9d79-6589-4631-b6a6-6be4e0d817f5",
+            "callId": "a198b7fc-3fc3-4b52-9d85-4fb1f2245844",
+            "ownerEpoch": 1,
+            "checkoutIdentity": {
+              "mainRoot": "/home/nakano/workspace/sennel",
+              "executionRoot": "/home/nakano/workspace/sennel/.sennel/worktree/feature-f45fe34e-flow-help-contract",
+              "mainDevice": 2049,
+              "mainInode": 5985052,
+              "checkoutDevice": 2049,
+              "checkoutInode": 10632452
+            },
+            "binding": {
+              "runId": "f45fe34e-1029-4c53-8f5c-16633b3c694d",
+              "specId": "f45fe34e-flow-help-contract",
+              "nodeId": "draft-questions-review",
+              "taskId": null,
+              "attemptId": "attempt-draft-questions-review-62bdbe70-ed54-4837-9a02-fe8f96ca9873",
+              "attemptSequence": 1,
+              "executionContractId": "93d1bc5c582267a1b0b2d3dec31122cc70b90d2212cbe6c4ac9296acd6a8aacd",
+              "executionGeneration": 0,
+              "dispatchInvocationId": null,
+              "workUnitId": "/home/nakano/workspace/sennel/.sennel/worktree/feature-f45fe34e-flow-help-contract/.sennel/review-work-units/631fc0e833ceefe022d49e9c/f1cb97a3beeda28f6f28c186/42b9e712696b8aa14501660f5e79dc12/manifest.json",
+              "requestDigest": null,
+              "commandId": "flow.review"
+            },
+            "invocation": {
+              "kind": "command",
+              "commandId": null,
+              "providerAttemptId": null,
+              "logicalInvocationId": null,
+              "providerAttemptContext": null,
+              "promptProcessIdentity": null,
+              "timeoutMs": 1800000,
+              "deadline": 1792085090315
+            },
+            "launcherIdentity": {
+              "pid": 480890,
+              "bootIdentity": "170bfac1-ae97-4af2-886e-446048300243",
+              "startFingerprint": "52287895",
+              "ownerToken": "316bf940-730b-4978-a3ab-e9aeb1b71d6c"
+            },
+            "pgid": 480890,
+            "members": [
+              {
+                "pid": 480890,
+                "bootIdentity": "170bfac1-ae97-4af2-886e-446048300243",
+                "startFingerprint": "52287895",
+                "ownerToken": "316bf940-730b-4978-a3ab-e9aeb1b71d6c"
+              },
+              {
+                "pid": 480910,
+                "bootIdentity": "170bfac1-ae97-4af2-886e-446048300243",
+                "startFingerprint": "52287980",
+                "ownerToken": "e4b4bd6a-510b-418c-a3e5-34e6c2ed5c0b"
+              }
+            ],
+            "stopEvidence": {
+              "status": "confirmed",
+              "reason": "process-tree-death-observed",
+              "unterminatedMembers": []
+            },
+            "outcomeDigest": "bd3eeeaf71c2431026d626b28169344c540d2e0273e0d368c26590ed81745033"
+          },
+          "workerOutput": {
+            "digest": "5273467b8f44cdd84420bdfef2d836dad2841c80421d15704dd86bd16674375d",
+            "byteLength": 601,
+            "mediaType": "application/json"
+          },
+          "canonicalEvidence": {
+            "version": 1,
+            "phase": "draft-questions",
+            "taskId": null,
+            "treeSha": "25e7662d0b6e20bf93e9b9ca594431afbd38466d",
+            "targetStateDigest": "21e861f51750cab2c5bf060e01f99b579da4e877f7a2b4323488d5e6b9cfc869",
+            "provenance": {
+              "provider": "sennel-review",
+              "invocationId": "2e286fa5f1fa89d0ae2d2003fd0bd606e0e51f8915c347321fbf63b792d22ba7",
+              "capturedAt": "2026-10-15T16:55:09.865Z"
+            },
+            "disposition": "PASS",
+            "blockingFindings": [],
+            "advisoryFindings": [],
+            "identity": {
+              "phase": "draft-questions",
+              "taskId": null,
+              "treeSha": "25e7662d0b6e20bf93e9b9ca594431afbd38466d",
+              "provenance": {
+                "provider": "sennel-review",
+                "invocationId": "2e286fa5f1fa89d0ae2d2003fd0bd606e0e51f8915c347321fbf63b792d22ba7",
+                "capturedAt": "2026-10-15T16:55:09.865Z"
+              },
+              "evidenceDigest": "3549f0ddbd1b3b65d2824f60560766c9eb02d42abb85d0b7133bf5515e3c8a04"
+            }
+          },
+          "canonicalTarget": {
+            "treeSha": "25e7662d0b6e20bf93e9b9ca594431afbd38466d",
+            "targetStateDigest": "21e861f51750cab2c5bf060e01f99b579da4e877f7a2b4323488d5e6b9cfc869"
+          }
+        }
+      }
+    }
+  ]
+}

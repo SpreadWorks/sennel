@@ -1,0 +1,150 @@
+{
+  "version": 2,
+  "phase": "draft-gate-repair",
+  "sourceAuthority": {
+    "kind": "plan-gate-repair",
+    "repairId": "plan-gate-repair-c732468383ddcf705568495c3d8e915805b809a5eb51e51eb9422d84422faa59",
+    "recordFingerprint": "c732468383ddcf705568495c3d8e915805b809a5eb51e51eb9422d84422faa59"
+  },
+  "baseRevision": "sha256:4e9f900069fe8519bc19982bf9038005be1374d22703b5582e80af47df4e9270",
+  "acceptedOperations": [
+    {
+      "kind": "replace-value",
+      "path": "analysis.problem",
+      "replacement": "The authoritative inventory is now explicit for the initial Spec. The current FLOW_COMMANDS registry has 69 routed leaves, excluding the independent query leaf: direct leaves resume and prepare; get has status, resolve-context, check, prompt, artifact, qa-count, guardrail, issue, next-action, context, and runtime-log; set has step, request, issue, note, draft-answer, files, review-evidence, broad, policy, nonblocking-decision, metric, approval, issue-log, init, retry, acceptance-decision, and auto; run has seal-handoff, dispatch, recover-review-pass, gate, review, auto-check, finalize-commit, finalize-merge, finalize-sync, finalize-cleanup, abort, sync, reopen-draft, repair-plan-gate, settle-failure, settle-review-transition, recover-missing-producer-artifact, recover-spec-gate-repair, recover-artifact-execution, recover-draft-execution, reconcile-task-review, filter-task-review, recover-finalization, recover-task-execution-overrun, claim-next-action, settle-gate-transition, start-task, complete-task, update-overview, lint, test-execute, requirement-test-gate, test-result-review, retro, final-regression, acceptance-review, and report; report has show. The Spec must derive this inventory from the registry at test time and give every leaf a row for positionals, rest values, flags, required and optional options, aliases, implicit help, cardinality, domain, empty-value, size/path, conditional rules, concrete validator, help, execution, target guards, runtime/log/lifecycle behavior, exit codes, and rejection side effects. It must also map every direct-child group help projection and no-leaf invocation, while recording flow query as an intentionally independent parser exception. This inventory is the boundary between unchanged behavior owners and the new registry/help projections.",
+      "reason": "Make the complete current routed-leaf and public-behavior inventory part of the Draft so the initial Spec has an explicit migration boundary instead of only a future inventory requirement.",
+      "observedDigest": "3b38a7f0542ccb226a0aeda9af7a73236b8dc2c5528b6493a5016c9a06cc9bc6"
+    },
+    {
+      "kind": "replace-value",
+      "path": "decisionMap.decisionPoints[3]",
+      "replacement": "Priority: must. The per-surface owner/test map is fixed. (1) src/flow/registry.js owns FLOW_COMMANDS-derived leaf metadata, parser declarations, option intersections, and the exhaustive 69-leaf matrix; tests/integration/flow/ctx-dispatch.test.js must assert helpKey and target-guard declarations for resume/prepare and every applicable leaf, while a registry/integration matrix asserts accepted values plus missing, unknown, extra, malformed, domain, empty, size, path, and conditional rejections with exit 0/1 and no mutation on rejection. (2) src/lib/command-registry.js and src/help.js own the shared row renderer and direct-child group projections; tests/integration/lib/command-registry.test.js and tests/e2e/060-help-layout-validate-config.test.js assert canonical order, option intersections, at least two ASCII spaces, 13/14/15/64/65-character boundaries, and recover-missing-producer-artifact without truncation or concatenation; valid help exits 0 and does not call a leaf handler or hook. (3) src/flow.js owns sennel flow <group> --help and no-leaf group wiring, while src/sennel.js owns top-level pre-scan and help flow <group> dispatch; tests/e2e/dispatchers.test.js and focused CLI assertions must cover both entry points, direct-child rows, missing/unknown selectors, and no-leaf exit 1, with valid-help exit 0 and unchanged Flow/artifact/log state. (4) Existing command handlers, parseEntryInput, domain validators, FlowTargetExpectation/buildFlowCommandHookContext, the work-directory resolver/container, lifecycle hooks, runtime logging, and finalize-cleanup resolution retain ownership of accepted execution, target/runtime behavior, and side effects; tests/integration/flow/ctx-dispatch.test.js, tests/integration/flow/get-unknown-options.test.js, tests/integration/flow/get-runtime-log-binding.test.js, and the existing flow-cli command suites must assert matching and mismatching --expect-binding, --expect-issue, --expect-no-issue, --expect-spec, and --expect-run-id, both --agent-work-dir forms, configured/default logging, cleanup behavior, exit 0 success and exit 1 rejection before command mutation. (5) src/flow/query.js and its query contract retain independent ownership; tests/integration/flow/query.test.js and tests/integration/flow/query-producer-scenario.test.js must preserve stdin, request-file, help, and error behavior and explicitly exclude query from shared parser/help migration.",
+      "reason": "Replace the abstract owner-map requirement with concrete owners, real dispatcher/CLI test files, accepted and rejected cases, exit behavior, mutation expectations, and the query exception.",
+      "observedDigest": "2c544a066448075cea1bb0de83f240c4f7ce77029c243871616155d1f6f2b1ef"
+    },
+    {
+      "kind": "replace-value",
+      "path": "analysis.validation",
+      "replacement": "Validation is behavior-level and registry-derived. First, the integration matrix reads FLOW_COMMANDS and asserts the 69 routed leaves and direct-child groups listed in the problem inventory, then exercises each real dispatch path for its exact positional/rest, flag, required/optional value, alias, implicit-help, cardinality, domain, empty-value, size/path, and conditional contract; each accepted case asserts the existing command result and exit 0, and each missing, unknown, extra, malformed, domain, target, or command failure asserts exit 1, established diagnostics, and unchanged Flow/artifact/log state. Next, focused CLI tests exercise leaf help, every direct-child group help path, no-leaf group invocation, and help flow <group> through src/flow.js, src/sennel.js, and the help command; they compare registry-derived rows, canonical option/subcommand order, at least two ASCII spaces, the boundary names boundary-13xx, boundary-14xxx, boundary-15xxxx, the 64- and 65-character segments, and recover-missing-producer-artifact, and assert valid help is non-executing with exit 0 while no-leaf and unknown/missing selectors retain exit 1. The same focused tests cover all five target guards in matching, mismatching, and mutually exclusive forms, --agent-work-dir /path and --agent-work-dir=/path, configured-versus-default log resolution, durable finalize-cleanup resolution, lifecycle and rejection ordering, and command side effects. The query suite remains separate and asserts stdin, request-file, help, and error contracts without routing through shared metadata.",
+      "reason": "Turn planned validation into observable accepted/rejected behavior checks for every routed leaf and every public entry point, with explicit side-effect, exit-code, renderer-boundary, runtime, guard, and query assertions.",
+      "observedDigest": "b1d04db3b3313df1763666d3e8efc9910c74ad2992b591fbc0e510cfeeed27ef"
+    },
+    {
+      "kind": "replace-value",
+      "path": "decisionMap.deferredToSpec[0]",
+      "replacement": {
+        "boundary": "The initial Spec must inventory all 69 routed leaves excluding query: direct resume/prepare; get status, resolve-context, check, prompt, artifact, qa-count, guardrail, issue, next-action, context, runtime-log; set step, request, issue, note, draft-answer, files, review-evidence, broad, policy, nonblocking-decision, metric, approval, issue-log, init, retry, acceptance-decision, auto; run seal-handoff, dispatch, recover-review-pass, gate, review, auto-check, finalize-commit, finalize-merge, finalize-sync, finalize-cleanup, abort, sync, reopen-draft, repair-plan-gate, settle-failure, settle-review-transition, recover-missing-producer-artifact, recover-spec-gate-repair, recover-artifact-execution, recover-draft-execution, reconcile-task-review, filter-task-review, recover-finalization, recover-task-execution-overrun, claim-next-action, settle-gate-transition, start-task, complete-task, update-overview, lint, test-execute, requirement-test-gate, test-result-review, retro, final-regression, acceptance-review, report; and report show.",
+        "relevance": "For each listed leaf, the Spec records the exact input and internal-context contract: positionals, rest values, flags, required and optional options, aliases, implicit help, cardinality, domain, empty-value, size/path, conditional behavior, and concrete validator, then ties it to its existing owner and behavior-level test. The same inventory records direct-child group projections, no-leaf behavior, and query as an excluded independent contract.",
+        "owner": "spec"
+      },
+      "reason": "Put the concrete registry inventory and per-leaf contract requirement in the existing deferred-to-Spec record without changing its schema.",
+      "observedDigest": "a5e444a3a5dbe1e7a814e1032cfa821aedb5273cac1a9f00c6a8c5dc2d5769fe"
+    },
+    {
+      "kind": "replace-value",
+      "path": "decisionMap.deferredToSpec[1]",
+      "replacement": {
+        "boundary": "The initial Spec must define the shared parser/help projection for every listed leaf and direct-child group, including leaf help, group help, no-leaf groups, deterministic ordering, option intersections, implicit help, and the independent query exception.",
+        "relevance": "Acceptance uses src/flow/registry.js, src/lib/command-registry.js, src/help.js, src/flow.js, and src/sennel.js as owners and asserts canonical order and at least two ASCII spaces for boundary-13xx, boundary-14xxx, boundary-15xxxx, the 64- and 65-character segments, and recover-missing-producer-artifact. Synthetic names remain renderer fixtures and are not callable commands; valid help is non-executing and no-leaf behavior remains unchanged.",
+        "owner": "spec"
+      },
+      "reason": "Make the renderer, projection, ordering, spacing, synthetic-boundary, and query-exception acceptance criteria explicit in the existing deferred entry.",
+      "observedDigest": "ff083a88d247801b747d8e9bd19b2e079f78a64428b7dfae2613e00daff375be"
+    },
+    {
+      "kind": "replace-value",
+      "path": "decisionMap.deferredToSpec[2]",
+      "replacement": {
+        "boundary": "The initial Spec must preserve target guards, runtime directory and log resolution, parse and target rejection order, lifecycle side effects, exit codes, and valid-help non-execution for every applicable listed leaf.",
+        "relevance": "The behavior map covers --expect-binding, --expect-issue, --expect-no-issue, --expect-spec, --expect-run-id, both --agent-work-dir spellings, configured/default logging, durable finalize-cleanup resolution, matching and mismatching targets, mutually exclusive guards, command-owned validation, and unchanged mutation/cleanup timing. Accepted help/success exits 0; missing/unknown selector, parser, target, and command failures retain exit 1 unless an existing leaf contract says otherwise.",
+        "owner": "spec"
+      },
+      "reason": "Record the retained guard, runtime, lifecycle, rejection-order, exit-code, and non-execution behavior that the Spec must protect.",
+      "observedDigest": "90f4cac9e336945e0c86cbffdccb218d8a40963adf193b19db96eef4056482fc"
+    },
+    {
+      "kind": "replace-value",
+      "path": "decisionMap.deferredToSpec[3]",
+      "replacement": {
+        "boundary": "The initial Spec must assign behavior-level registry/integration and focused CLI E2E coverage to the complete parser, help, execution, guard, runtime, exit-code, rejection, side-effect, and query surfaces.",
+        "relevance": "Real assertions are anchored in tests/integration/flow/ctx-dispatch.test.js, tests/integration/lib/command-registry.test.js, tests/e2e/060-help-layout-validate-config.test.js, tests/e2e/dispatchers.test.js, tests/integration/flow/get-unknown-options.test.js, tests/integration/flow/get-runtime-log-binding.test.js, and the existing flow-cli suites. The matrix derives all 69 leaves and records accepted results, exit 0/1, unchanged canonical state on rejection, valid-help handler/hook non-execution, group intersections, guard/runtime boundaries, and query stdin/request-file/help/errors; it does not duplicate query behavior into the shared registry.",
+        "owner": "spec"
+      },
+      "reason": "Bind every retained surface to concrete integration and CLI assertions, including persistence and rejection side effects, without adding fields to the deferred-to-Spec entries.",
+      "observedDigest": "acd4def8cfc5e2d51503ed3971100750b1f30347b5533dd90dedb42b5b271041"
+    }
+  ],
+  "discardedOperations": [],
+  "appliedFindingKeys": [],
+  "operationDigest": "3861d5d5da774069cb70a5be4446a469c75690251c5197553bd798648cbcf977",
+  "audit": {
+    "envelopeErrors": [],
+    "baseRevisionMatches": true,
+    "missingRequiredTargets": [],
+    "lifecycleIssues": [],
+    "duplicatePaths": [],
+    "overlappingPaths": [],
+    "outputByteLength": 19044
+  },
+  "sourceIssueLogId": "draft-gate-result-81bb3364875121bcb56648352f318ab7097f11c7c7bcf5ebac61481ccd108905",
+  "sourceEntryDigest": "3e8a5265f8231aff9a35f8c706547b2ffedfd1284e7fa4772a629789cc9c5c69",
+  "resultLogicalKey": "draft.gate",
+  "catalogFingerprint": "6346847a1cc0debf135d753ef80698ebd865f91d3ecc504e5b2b979f04ab4d00",
+  "report": {
+    "beforeEvidenceDigest": "da03d8e57cc62729ddf8bb4f5e164e8b150827c62e8d65e717b683efe9f372e3",
+    "outputEvidenceDigest": "de6834b6da8ee9d9a87e2c0020fe73ae4b8b16fb43914ac690072c7d08f465dc",
+    "summary": "Added the complete routed-leaf inventory, per-surface owner and test map, and behavior-level verification contract while preserving the independent query path and existing semantics.",
+    "requests": [
+      {
+        "fingerprint": "82cb3f1f53e1ac86f7c665b1b69a07a9ef6b195c88ba3fa516d414decdf33753",
+        "recurrenceCount": 0,
+        "priorStrategy": null
+      },
+      {
+        "fingerprint": "1a1d7b38eac44607fb0f009ae5b54416046fe5298e80cb2920060c18700edbcb",
+        "recurrenceCount": 0,
+        "priorStrategy": null
+      },
+      {
+        "fingerprint": "776d728fa0423ca8db49d70e49cd922cdd2a10f88c28552b319671ea61d385ec",
+        "recurrenceCount": 0,
+        "priorStrategy": null
+      }
+    ],
+    "results": [
+      {
+        "fingerprint": "82cb3f1f53e1ac86f7c665b1b69a07a9ef6b195c88ba3fa516d414decdf33753",
+        "strategy": "Add the current registry-derived 69-leaf inventory and its observable behavior boundary to analysis.problem and the first deferred-to-Spec entry.",
+        "summary": "The Draft now names every routed leaf, direct-child group, query exception, and per-leaf contract dimension required for the initial Spec.",
+        "priorRepairInsufficiency": null,
+        "deltaIds": [
+          "de6834b6da8ee9d9a87e2c0020fe73ae4b8b16fb43914ac690072c7d08f465dc"
+        ]
+      },
+      {
+        "fingerprint": "1a1d7b38eac44607fb0f009ae5b54416046fe5298e80cb2920060c18700edbcb",
+        "strategy": "Replace the abstract owner/test requirement with a concrete five-part owner map covering registry metadata, shared renderers, entry points, retained runtime behavior, and query.",
+        "summary": "The Draft now maps each retained surface to real source owners and dispatcher/CLI assertions, including accepted/rejected outcomes, exit codes, mutation expectations, and query exclusion.",
+        "priorRepairInsufficiency": null,
+        "deltaIds": [
+          "de6834b6da8ee9d9a87e2c0020fe73ae4b8b16fb43914ac690072c7d08f465dc"
+        ]
+      },
+      {
+        "fingerprint": "776d728fa0423ca8db49d70e49cd922cdd2a10f88c28552b319671ea61d385ec",
+        "strategy": "Define an executable registry/integration and focused CLI validation matrix for parser, help, execution, guard, runtime, rejection, side-effect, and query behavior.",
+        "summary": "The Draft now requires observable accepted and rejected cases through real dispatch paths, exact renderer boundaries, non-executing help, preserved exit behavior, and separate query regression coverage.",
+        "priorRepairInsufficiency": null,
+        "deltaIds": [
+          "de6834b6da8ee9d9a87e2c0020fe73ae4b8b16fb43914ac690072c7d08f465dc"
+        ]
+      }
+    ],
+    "lineage": {
+      "kind": "artifact",
+      "deltaIds": [
+        "de6834b6da8ee9d9a87e2c0020fe73ae4b8b16fb43914ac690072c7d08f465dc"
+      ]
+    }
+  }
+}

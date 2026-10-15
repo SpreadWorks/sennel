@@ -1,0 +1,356 @@
+{
+  "contractId": "63b044444cb0f87a6b10e9adaff38c9f31a6eff2f892d10595ec1e38688d5b3d",
+  "sequence": 5,
+  "previousDigest": "1f5bb006d1ee0c13af37c041527fb92e053ef2cc1afd1e478ccf9e74f9506af9",
+  "eventId": "a67a808f-e749-482f-a7ea-716ed159ad47",
+  "digest": "fe974882e90270321d39db614b8a5aa538d12070cc9d162626701d64816edb4e",
+  "record": {
+    "scope": {
+      "stage": "artifact-worker",
+      "round": 0
+    },
+    "event": "validated",
+    "snapshot": {
+      "scope": {
+        "stage": "artifact-worker",
+        "round": 0
+      },
+      "plan": {
+        "digest": "d133524cc2e45a4f5a996a29688615b43d017f8f5ed2b9e7128d1436fce06010",
+        "collectionDigest": "85fa8dbe2bbd52667d2f3cec0738b9f04e64e69c210713297521693fcc2d5228",
+        "batches": [
+          {
+            "digest": "afcf80f63097bcba96e26381c048ad28a7907dc44ab1490eb81ad5ab356eaf02",
+            "groupId": "linear",
+            "index": 0,
+            "coverage": [
+              {
+                "elementId": "artifact-worker",
+                "sourceRevision": "4e9f900069fe8519bc19982bf9038005be1374d22703b5582e80af47df4e9270",
+                "start": 0,
+                "end": 2727,
+                "sourceLength": 2727,
+                "status": "atomic"
+              }
+            ]
+          }
+        ],
+        "synthesisCallCount": 0
+      },
+      "budget": {
+        "providerCallCount": 1,
+        "synthesisCallCount": 0,
+        "aggregateCharacters": 384,
+        "aggregateItemCount": 1
+      },
+      "groups": [
+        {
+          "groupId": "linear",
+          "budget": {
+            "providerCallCount": 1,
+            "synthesisCallCount": 0,
+            "aggregateCharacters": 0,
+            "aggregateItemCount": 0
+          },
+          "responseCallCount": 1
+        }
+      ],
+      "batches": [
+        {
+          "batchDigest": "afcf80f63097bcba96e26381c048ad28a7907dc44ab1490eb81ad5ab356eaf02",
+          "batchCalls": 1,
+          "transportOrdinal": 1,
+          "claim": null,
+          "responses": [
+            {
+              "responseCallIndex": 0,
+              "requestDigest": "2091de38c5663b24f3679926f8ca9fc8836fbed60b0681155df79482e65300f4",
+              "raw": "{\"sealed\":true,\"handoffPath\":\"/home/nakano/workspace/sennel/.sennel/worktree/feature-f45fe34e-flow-help-contract/.sennel/handoffs/631fc0e833ceefe022d49e9c/f1cb97a3beeda28f6f28c186/7edae0b473d615de0fecadfc/578f5c3cbf89e89fbc2efc99f06c06bf018c1d1dc8473452e38240560dc0caff/handoff.json\",\"handoffDigest\":\"6b1f31f650320e99917a5fdba21f9e627fef31adee4694df41a0bd1871c5e913\",\"payloadCount\":1}",
+              "schemaDigest": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+              "providerKey": "codex",
+              "profileKey": "codex/gpt-5.6-luna",
+              "origin": "provider",
+              "executionAccounting": {
+                "responseCallCount": 1,
+                "providerAttemptCount": 1
+              },
+              "responseCharacters": 384,
+              "responseDigest": "246eee8cfac74b84ba45fdbce104b58fa08773aa4d94a0425554e643490e2aad",
+              "rejection": null
+            }
+          ],
+          "transportFailures": [],
+          "completion": {
+            "response": "{\"sealed\":true,\"handoffPath\":\"/home/nakano/workspace/sennel/.sennel/worktree/feature-f45fe34e-flow-help-contract/.sennel/handoffs/631fc0e833ceefe022d49e9c/f1cb97a3beeda28f6f28c186/7edae0b473d615de0fecadfc/578f5c3cbf89e89fbc2efc99f06c06bf018c1d1dc8473452e38240560dc0caff/handoff.json\",\"handoffDigest\":\"6b1f31f650320e99917a5fdba21f9e627fef31adee4694df41a0bd1871c5e913\",\"payloadCount\":1}",
+            "responseCharacters": 384,
+            "responseItemCount": 1,
+            "executionAccounting": {
+              "responseCallCount": 1,
+              "providerAttemptCount": 1
+            }
+          },
+          "processStops": [
+            {
+              "identity": {
+                "scope": {
+                  "stage": "artifact-worker",
+                  "round": 0
+                },
+                "batchDigest": "afcf80f63097bcba96e26381c048ad28a7907dc44ab1490eb81ad5ab356eaf02",
+                "responseCallIndex": 0,
+                "transportOrdinal": 1,
+                "attempt": 1,
+                "maxAttempts": 1,
+                "requestDigest": "2091de38c5663b24f3679926f8ca9fc8836fbed60b0681155df79482e65300f4",
+                "schemaDigest": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+                "providerKey": "codex",
+                "profileKey": "codex/gpt-5.6-luna",
+                "logicalInvocationId": "06e546f2-e3de-4633-bbf1-93b0d69987e6",
+                "providerAttemptId": "4ebdf28d-f99f-4afd-9f12-62c4ec8ddaef"
+              },
+              "receipt": {
+                "executionId": "383e9d79-6589-4631-b6a6-6be4e0d817f5",
+                "callId": "7e363dca-58f7-4ee1-a800-3ab2bb109dd9",
+                "ownerEpoch": 1,
+                "checkoutIdentity": {
+                  "mainRoot": "/home/nakano/workspace/sennel",
+                  "executionRoot": "/home/nakano/workspace/sennel/.sennel/worktree/feature-f45fe34e-flow-help-contract",
+                  "mainDevice": 2049,
+                  "mainInode": 5985052,
+                  "checkoutDevice": 2049,
+                  "checkoutInode": 10632452
+                },
+                "binding": {
+                  "runId": "f45fe34e-1029-4c53-8f5c-16633b3c694d",
+                  "specId": "f45fe34e-flow-help-contract",
+                  "nodeId": "draft-gate-repair",
+                  "taskId": null,
+                  "attemptId": "attempt-draft-gate-repair-dfc45f14-c7cf-40b9-b7bf-9028ea752f03",
+                  "attemptSequence": 3,
+                  "executionContractId": "63b044444cb0f87a6b10e9adaff38c9f31a6eff2f892d10595ec1e38688d5b3d",
+                  "executionGeneration": 0,
+                  "dispatchInvocationId": "7689beeb-ca1b-4b36-9af0-5ab34931c7fd",
+                  "workUnitId": null,
+                  "requestDigest": "f8dbf04f373ef0bd86d4b4c759f075dc5b0ace39ca5dda3010979abe7ac90774",
+                  "commandId": "flow.dispatch.draft-gate-repair"
+                },
+                "invocation": {
+                  "kind": "provider",
+                  "commandId": "flow.dispatch",
+                  "providerAttemptId": "4ebdf28d-f99f-4afd-9f12-62c4ec8ddaef",
+                  "logicalInvocationId": "06e546f2-e3de-4633-bbf1-93b0d69987e6",
+                  "providerAttemptContext": {
+                    "attemptId": "4ebdf28d-f99f-4afd-9f12-62c4ec8ddaef",
+                    "logicalInvocationId": "06e546f2-e3de-4633-bbf1-93b0d69987e6",
+                    "commandId": "flow.dispatch",
+                    "provider": "codex",
+                    "providerKey": "codex",
+                    "profileKey": "codex/gpt-5.6-luna",
+                    "attemptIndex": 0,
+                    "index": 0,
+                    "attempt": 1,
+                    "maxAttempts": 1,
+                    "inputCharacters": 2727,
+                    "invocation": {
+                      "occurrenceId": "ebbb61d0-7a2c-4699-9825-f8de4638f95d",
+                      "batch": {
+                        "index": 0,
+                        "count": 1,
+                        "collectionDigest": "85fa8dbe2bbd52667d2f3cec0738b9f04e64e69c210713297521693fcc2d5228",
+                        "groupId": "linear",
+                        "contextElements": [],
+                        "payloadElements": [
+                          {
+                            "id": "artifact-worker",
+                            "originId": "artifact-worker",
+                            "sourceRevision": "4e9f900069fe8519bc19982bf9038005be1374d22703b5582e80af47df4e9270",
+                            "sequence": 0,
+                            "text": "You are a worker owned by the sennel Flow CLI dispatcher.\nExecute exactly one supplied non-terminal Flow action in the current repository.\nDo not invoke a sennel.flow skill and do not run `sennel flow run dispatch`.\nDo not merely describe the work. Perform the edits and commands required by\nthe action through its handoff payloads and seal command; do not perform a separate Flow transition.\nRun every command in the foreground and wait for it to finish. Never start\na review, gate, test, or other Flow command in parallel or in the background.\nNever choose a user decision. If a genuine user decision appears unexpectedly,\nleave it unchanged and report that fact.\nTarget-sensitive sennel commands inherit the CLI-captured Flow binding.\nDo not construct or append target identity arguments.\nWhen the directive includes nextAction, execute that exact CLI-generated\ncommand; do not infer completion from pre-existing artifacts.\n\n\nMachine-readable dispatch invocation contract:\nRead the bounded JSON in environment variable SENNEL_FLOW_DISPATCH_INVOCATION. It contains only action identity, immutable request/action file references, authorization, and target binding. Verify both file digests before using their full contents.\nFollow workerInstructions in request.json, including any payload schema guidance or retry correction.\n\nGuarded next action:\nRead and execute the full guarded action from actionFilePath in the dispatch invocation contract. Its canonical JSON digest must equal actionFileDigest and its identity must equal actionDigest.\n\nYour response is only a worker report. The CLI ignores it as a completion\nsignal and independently verifies the refreshed Flow and repository state.\n\nThis action uses the worker artifact handoff contract in request.json.\nTreat its input snapshots as the immutable source for this action.\nRead requestPath from the dispatch invocation contract in full before acting; it contains the input documents, context, selected repair capability, output authority, spec-test topology when applicable, and the seal command.\nWrite every declared payload only to its exact payloadPath. Existing\ninstructions naming canonical artifact paths are overridden for outputs.\nDo not mark the Flow step done. After writing all payloads, run the exact\nsealCommand from request.json. If validation rejects it, follow workerInstructions for correction before sealing. Never modify a successfully sealed payload. The parent dispatcher alone performs final validation, publishes, records\nrevisions, and completes the step under canonical repository authority.\nReturn the successful seal command data object as the worker report; it must\nmatch the guarded action output_schema but is never a completion signal.\n\n"
+                          }
+                        ],
+                        "elements": [
+                          {
+                            "id": "artifact-worker",
+                            "originId": "artifact-worker",
+                            "sourceRevision": "4e9f900069fe8519bc19982bf9038005be1374d22703b5582e80af47df4e9270",
+                            "sequence": 0,
+                            "text": "You are a worker owned by the sennel Flow CLI dispatcher.\nExecute exactly one supplied non-terminal Flow action in the current repository.\nDo not invoke a sennel.flow skill and do not run `sennel flow run dispatch`.\nDo not merely describe the work. Perform the edits and commands required by\nthe action through its handoff payloads and seal command; do not perform a separate Flow transition.\nRun every command in the foreground and wait for it to finish. Never start\na review, gate, test, or other Flow command in parallel or in the background.\nNever choose a user decision. If a genuine user decision appears unexpectedly,\nleave it unchanged and report that fact.\nTarget-sensitive sennel commands inherit the CLI-captured Flow binding.\nDo not construct or append target identity arguments.\nWhen the directive includes nextAction, execute that exact CLI-generated\ncommand; do not infer completion from pre-existing artifacts.\n\n\nMachine-readable dispatch invocation contract:\nRead the bounded JSON in environment variable SENNEL_FLOW_DISPATCH_INVOCATION. It contains only action identity, immutable request/action file references, authorization, and target binding. Verify both file digests before using their full contents.\nFollow workerInstructions in request.json, including any payload schema guidance or retry correction.\n\nGuarded next action:\nRead and execute the full guarded action from actionFilePath in the dispatch invocation contract. Its canonical JSON digest must equal actionFileDigest and its identity must equal actionDigest.\n\nYour response is only a worker report. The CLI ignores it as a completion\nsignal and independently verifies the refreshed Flow and repository state.\n\nThis action uses the worker artifact handoff contract in request.json.\nTreat its input snapshots as the immutable source for this action.\nRead requestPath from the dispatch invocation contract in full before acting; it contains the input documents, context, selected repair capability, output authority, spec-test topology when applicable, and the seal command.\nWrite every declared payload only to its exact payloadPath. Existing\ninstructions naming canonical artifact paths are overridden for outputs.\nDo not mark the Flow step done. After writing all payloads, run the exact\nsealCommand from request.json. If validation rejects it, follow workerInstructions for correction before sealing. Never modify a successfully sealed payload. The parent dispatcher alone performs final validation, publishes, records\nrevisions, and completes the step under canonical repository authority.\nReturn the successful seal command data object as the worker report; it must\nmatch the guarded action output_schema but is never a completion signal.\n\n"
+                          }
+                        ],
+                        "request": {
+                          "systemPrompt": null,
+                          "userPrompt": "You are a worker owned by the sennel Flow CLI dispatcher.\nExecute exactly one supplied non-terminal Flow action in the current repository.\nDo not invoke a sennel.flow skill and do not run `sennel flow run dispatch`.\nDo not merely describe the work. Perform the edits and commands required by\nthe action through its handoff payloads and seal command; do not perform a separate Flow transition.\nRun every command in the foreground and wait for it to finish. Never start\na review, gate, test, or other Flow command in parallel or in the background.\nNever choose a user decision. If a genuine user decision appears unexpectedly,\nleave it unchanged and report that fact.\nTarget-sensitive sennel commands inherit the CLI-captured Flow binding.\nDo not construct or append target identity arguments.\nWhen the directive includes nextAction, execute that exact CLI-generated\ncommand; do not infer completion from pre-existing artifacts.\n\n\nMachine-readable dispatch invocation contract:\nRead the bounded JSON in environment variable SENNEL_FLOW_DISPATCH_INVOCATION. It contains only action identity, immutable request/action file references, authorization, and target binding. Verify both file digests before using their full contents.\nFollow workerInstructions in request.json, including any payload schema guidance or retry correction.\n\nGuarded next action:\nRead and execute the full guarded action from actionFilePath in the dispatch invocation contract. Its canonical JSON digest must equal actionFileDigest and its identity must equal actionDigest.\n\nYour response is only a worker report. The CLI ignores it as a completion\nsignal and independently verifies the refreshed Flow and repository state.\n\nThis action uses the worker artifact handoff contract in request.json.\nTreat its input snapshots as the immutable source for this action.\nRead requestPath from the dispatch invocation contract in full before acting; it contains the input documents, context, selected repair capability, output authority, spec-test topology when applicable, and the seal command.\nWrite every declared payload only to its exact payloadPath. Existing\ninstructions naming canonical artifact paths are overridden for outputs.\nDo not mark the Flow step done. After writing all payloads, run the exact\nsealCommand from request.json. If validation rejects it, follow workerInstructions for correction before sealing. Never modify a successfully sealed payload. The parent dispatcher alone performs final validation, publishes, records\nrevisions, and completes the step under canonical repository authority.\nReturn the successful seal command data object as the worker report; it must\nmatch the guarded action output_schema but is never a completion signal.\n\n",
+                          "jsonSchema": null,
+                          "fmtFallback": null
+                        },
+                        "footprint": {
+                          "systemPrompt": 0,
+                          "userPrompt": 2727,
+                          "jsonSchema": 0,
+                          "fmtFallback": 0,
+                          "separators": 0,
+                          "total": 2727
+                        },
+                        "coverage": [
+                          {
+                            "elementId": "artifact-worker",
+                            "sourceRevision": "4e9f900069fe8519bc19982bf9038005be1374d22703b5582e80af47df4e9270",
+                            "start": 0,
+                            "end": 2727,
+                            "sourceLength": 2727,
+                            "status": "atomic"
+                          }
+                        ],
+                        "digest": "afcf80f63097bcba96e26381c048ad28a7907dc44ab1490eb81ad5ab356eaf02"
+                      },
+                      "protocolAttemptIndex": 0,
+                      "initialPlannedAttempt": true,
+                      "logicalInvocationId": "06e546f2-e3de-4633-bbf1-93b0d69987e6",
+                      "projection": {
+                        "providerKey": "codex",
+                        "profileKey": "codex/gpt-5.6-luna",
+                        "command": "codex",
+                        "promptCharacterCount": 2727,
+                        "systemPromptCharacterCount": 0,
+                        "schemaCharacterCount": 0,
+                        "finalArgs": [
+                          "exec",
+                          "--json",
+                          "--sandbox",
+                          "workspace-write",
+                          "-m",
+                          "gpt-5.6-luna",
+                          "-C",
+                          "/home/nakano/workspace/sennel/.sennel/worktree/feature-f45fe34e-flow-help-contract",
+                          "You are a worker owned by the sennel Flow CLI dispatcher.\nExecute exactly one supplied non-terminal Flow action in the current repository.\nDo not invoke a sennel.flow skill and do not run `sennel flow run dispatch`.\nDo not merely describe the work. Perform the edits and commands required by\nthe action through its handoff payloads and seal command; do not perform a separate Flow transition.\nRun every command in the foreground and wait for it to finish. Never start\na review, gate, test, or other Flow command in parallel or in the background.\nNever choose a user decision. If a genuine user decision appears unexpectedly,\nleave it unchanged and report that fact.\nTarget-sensitive sennel commands inherit the CLI-captured Flow binding.\nDo not construct or append target identity arguments.\nWhen the directive includes nextAction, execute that exact CLI-generated\ncommand; do not infer completion from pre-existing artifacts.\n\n\nMachine-readable dispatch invocation contract:\nRead the bounded JSON in environment variable SENNEL_FLOW_DISPATCH_INVOCATION. It contains only action identity, immutable request/action file references, authorization, and target binding. Verify both file digests before using their full contents.\nFollow workerInstructions in request.json, including any payload schema guidance or retry correction.\n\nGuarded next action:\nRead and execute the full guarded action from actionFilePath in the dispatch invocation contract. Its canonical JSON digest must equal actionFileDigest and its identity must equal actionDigest.\n\nYour response is only a worker report. The CLI ignores it as a completion\nsignal and independently verifies the refreshed Flow and repository state.\n\nThis action uses the worker artifact handoff contract in request.json.\nTreat its input snapshots as the immutable source for this action.\nRead requestPath from the dispatch invocation contract in full before acting; it contains the input documents, context, selected repair capability, output authority, spec-test topology when applicable, and the seal command.\nWrite every declared payload only to its exact payloadPath. Existing\ninstructions naming canonical artifact paths are overridden for outputs.\nDo not mark the Flow step done. After writing all payloads, run the exact\nsealCommand from request.json. If validation rejects it, follow workerInstructions for correction before sealing. Never modify a successfully sealed payload. The parent dispatcher alone performs final validation, publishes, records\nrevisions, and completes the step under canonical repository authority.\nReturn the successful seal command data object as the worker report; it must\nmatch the guarded action output_schema but is never a completion signal.\n\n"
+                        ],
+                        "inlineArgvByteCount": 2859,
+                        "argvByteCount": 2859,
+                        "maxArgumentByteCount": 2727,
+                        "schemaMode": "none",
+                        "usesStdin": false
+                      },
+                      "inputCharacters": 2727
+                    }
+                  },
+                  "promptProcessIdentity": {
+                    "scope": {
+                      "stage": "artifact-worker",
+                      "round": 0
+                    },
+                    "batchDigest": "afcf80f63097bcba96e26381c048ad28a7907dc44ab1490eb81ad5ab356eaf02",
+                    "responseCallIndex": 0,
+                    "transportOrdinal": 1,
+                    "attempt": 1,
+                    "maxAttempts": 1,
+                    "requestDigest": "2091de38c5663b24f3679926f8ca9fc8836fbed60b0681155df79482e65300f4",
+                    "schemaDigest": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+                    "providerKey": "codex",
+                    "profileKey": "codex/gpt-5.6-luna",
+                    "logicalInvocationId": "06e546f2-e3de-4633-bbf1-93b0d69987e6",
+                    "providerAttemptId": "4ebdf28d-f99f-4afd-9f12-62c4ec8ddaef"
+                  },
+                  "timeoutMs": 1800000,
+                  "deadline": 1792085587287
+                },
+                "launcherIdentity": {
+                  "pid": 489542,
+                  "bootIdentity": "170bfac1-ae97-4af2-886e-446048300243",
+                  "startFingerprint": "52337634",
+                  "ownerToken": "316bf940-730b-4978-a3ab-e9aeb1b71d6c"
+                },
+                "pgid": 489542,
+                "members": [
+                  {
+                    "pid": 489542,
+                    "bootIdentity": "170bfac1-ae97-4af2-886e-446048300243",
+                    "startFingerprint": "52337634",
+                    "ownerToken": "316bf940-730b-4978-a3ab-e9aeb1b71d6c"
+                  },
+                  {
+                    "pid": 489566,
+                    "bootIdentity": "170bfac1-ae97-4af2-886e-446048300243",
+                    "startFingerprint": "52337753",
+                    "ownerToken": "316bf940-730b-4978-a3ab-e9aeb1b71d6c"
+                  },
+                  {
+                    "pid": 489578,
+                    "bootIdentity": "170bfac1-ae97-4af2-886e-446048300243",
+                    "startFingerprint": "52337758",
+                    "ownerToken": "316bf940-730b-4978-a3ab-e9aeb1b71d6c"
+                  },
+                  {
+                    "pid": 489591,
+                    "bootIdentity": "170bfac1-ae97-4af2-886e-446048300243",
+                    "startFingerprint": "52337760",
+                    "ownerToken": "316bf940-730b-4978-a3ab-e9aeb1b71d6c"
+                  },
+                  {
+                    "pid": 489592,
+                    "bootIdentity": "170bfac1-ae97-4af2-886e-446048300243",
+                    "startFingerprint": "52337763",
+                    "ownerToken": "316bf940-730b-4978-a3ab-e9aeb1b71d6c"
+                  },
+                  {
+                    "pid": 489594,
+                    "bootIdentity": "170bfac1-ae97-4af2-886e-446048300243",
+                    "startFingerprint": "52337768",
+                    "ownerToken": "316bf940-730b-4978-a3ab-e9aeb1b71d6c"
+                  },
+                  {
+                    "pid": 489595,
+                    "bootIdentity": "170bfac1-ae97-4af2-886e-446048300243",
+                    "startFingerprint": "52337772",
+                    "ownerToken": "316bf940-730b-4978-a3ab-e9aeb1b71d6c"
+                  },
+                  {
+                    "pid": 489609,
+                    "bootIdentity": "170bfac1-ae97-4af2-886e-446048300243",
+                    "startFingerprint": "52337801",
+                    "ownerToken": "316bf940-730b-4978-a3ab-e9aeb1b71d6c"
+                  },
+                  {
+                    "pid": 489610,
+                    "bootIdentity": "170bfac1-ae97-4af2-886e-446048300243",
+                    "startFingerprint": "52337805",
+                    "ownerToken": "316bf940-730b-4978-a3ab-e9aeb1b71d6c"
+                  },
+                  {
+                    "pid": 491666,
+                    "bootIdentity": "170bfac1-ae97-4af2-886e-446048300243",
+                    "startFingerprint": "52352611",
+                    "ownerToken": "316bf940-730b-4978-a3ab-e9aeb1b71d6c"
+                  },
+                  {
+                    "pid": 491668,
+                    "bootIdentity": "170bfac1-ae97-4af2-886e-446048300243",
+                    "startFingerprint": "52352613",
+                    "ownerToken": "316bf940-730b-4978-a3ab-e9aeb1b71d6c"
+                  },
+                  {
+                    "pid": 491669,
+                    "bootIdentity": "170bfac1-ae97-4af2-886e-446048300243",
+                    "startFingerprint": "52352613",
+                    "ownerToken": "316bf940-730b-4978-a3ab-e9aeb1b71d6c"
+                  },
+                  {
+                    "pid": 491863,
+                    "bootIdentity": "170bfac1-ae97-4af2-886e-446048300243",
+                    "startFingerprint": "52353622",
+                    "ownerToken": "316bf940-730b-4978-a3ab-e9aeb1b71d6c"
+                  }
+                ],
+                "stopEvidence": {
+                  "status": "confirmed",
+                  "reason": "process-tree-death-observed",
+                  "unterminatedMembers": []
+                },
+                "outcomeDigest": "6a0f55840ca88f332ef0e28947e67e86f2f887d71094ad1457aa6525937a6adf"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

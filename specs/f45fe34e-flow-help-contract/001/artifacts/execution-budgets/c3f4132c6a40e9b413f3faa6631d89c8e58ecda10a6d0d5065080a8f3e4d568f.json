@@ -1,0 +1,11 @@
+{
+  "budgetId": "c3f4132c6a40e9b413f3faa6631d89c8e58ecda10a6d0d5065080a8f3e4d568f",
+  "contractId": "df1efa25edda4254e1adb1306dcb5711fb1dfb8814e361cae88497f34e75cbc9",
+  "eventId": "b635c680-f1b7-4780-8fd4-f85aa8db6224",
+  "budget": {
+    "providerCallCount": 1,
+    "synthesisCallCount": 0,
+    "aggregateCharacters": 384,
+    "aggregateItemCount": 1
+  }
+}

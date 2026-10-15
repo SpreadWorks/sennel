@@ -1,0 +1,97 @@
+{
+  "contractId": "9832bc5c5dfe7d80da3ce9c1ecce2b670d82fd11e40856dbca5493aacbca019e",
+  "sequence": 2,
+  "previousDigest": "772f1864a51781daa158227c7c59ef1e13c3d0e41093536d8f86b071b3b1574c",
+  "eventId": "cc380119-82d2-4b40-af37-5832c8cb8f75",
+  "digest": "783a8d8f80b3e4481a207ac6ac34e3330f63426d40219adbd108a4aaa34138dc",
+  "record": {
+    "scope": {
+      "stage": "artifact-worker",
+      "round": 0
+    },
+    "event": "claimed",
+    "snapshot": {
+      "scope": {
+        "stage": "artifact-worker",
+        "round": 0
+      },
+      "plan": {
+        "digest": "ceba974db57b374bc4f2693121f61dd521ebf720bde9d8a644a7dd97e94b0500",
+        "collectionDigest": "37f62cd6de510d2b87e7f03bd21797955ecf68609e167e377178c3e15b53d01a",
+        "batches": [
+          {
+            "digest": "ee088bbdad99b0fdc7e211360d8b2053ea0dfd927b8ed01e565efe7577ef0c02",
+            "groupId": "linear",
+            "index": 0,
+            "coverage": [
+              {
+                "elementId": "artifact-worker",
+                "sourceRevision": "f27c275b8cb675c4363755afb4a072331661e79647865110b5a482f711bf2ffe",
+                "start": 0,
+                "end": 2727,
+                "sourceLength": 2727,
+                "status": "atomic"
+              }
+            ]
+          }
+        ],
+        "synthesisCallCount": 0
+      },
+      "budget": {
+        "providerCallCount": 1,
+        "synthesisCallCount": 0,
+        "aggregateCharacters": 0,
+        "aggregateItemCount": 0
+      },
+      "groups": [
+        {
+          "groupId": "linear",
+          "budget": {
+            "providerCallCount": 1,
+            "synthesisCallCount": 0,
+            "aggregateCharacters": 0,
+            "aggregateItemCount": 0
+          },
+          "responseCallCount": 1
+        }
+      ],
+      "batches": [
+        {
+          "batchDigest": "ee088bbdad99b0fdc7e211360d8b2053ea0dfd927b8ed01e565efe7577ef0c02",
+          "batchCalls": 1,
+          "transportOrdinal": 1,
+          "claim": {
+            "responseCallIndex": 0,
+            "transportOrdinal": 1,
+            "attempt": 1,
+            "maxAttempts": 1,
+            "requestDigest": "59dc0f679cd86701daec35aa2a5ab85c38ba21130874626158f0ecb60522b6df",
+            "schemaDigest": "12b768a171deb101f2912b50552f3f5f1b89c96548276fdf7c96e80e77f7c841",
+            "providerKey": "codex",
+            "profileKey": "codex/gpt-5.6-luna",
+            "processIdentity": {
+              "scope": {
+                "stage": "artifact-worker",
+                "round": 0
+              },
+              "batchDigest": "ee088bbdad99b0fdc7e211360d8b2053ea0dfd927b8ed01e565efe7577ef0c02",
+              "responseCallIndex": 0,
+              "transportOrdinal": 1,
+              "attempt": 1,
+              "maxAttempts": 1,
+              "requestDigest": "59dc0f679cd86701daec35aa2a5ab85c38ba21130874626158f0ecb60522b6df",
+              "schemaDigest": "12b768a171deb101f2912b50552f3f5f1b89c96548276fdf7c96e80e77f7c841",
+              "providerKey": "codex",
+              "profileKey": "codex/gpt-5.6-luna",
+              "logicalInvocationId": "0e10c1b5-fb83-43ff-9305-652993ea4379",
+              "providerAttemptId": "abf2296c-6a06-41b4-9bbd-3e420c401b23"
+            }
+          },
+          "responses": [],
+          "transportFailures": [],
+          "completion": null
+        }
+      ]
+    }
+  }
+}

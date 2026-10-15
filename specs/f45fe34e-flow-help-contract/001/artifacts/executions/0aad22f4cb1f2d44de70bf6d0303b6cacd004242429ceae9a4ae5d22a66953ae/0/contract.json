@@ -1,0 +1,36 @@
+{
+  "id": "c739ec195315e0664614f2f1e4c1ce79dd68b032ee09fb0ee50335caf7d5b425",
+  "contract": {
+    "runId": "f45fe34e-1029-4c53-8f5c-16633b3c694d",
+    "specId": "f45fe34e-flow-help-contract",
+    "stepId": "draft-gate",
+    "nodeId": "draft-gate",
+    "taskId": null,
+    "attemptId": "attempt-draft-gate-2718b268-81a9-419a-b184-09f189deb0a9",
+    "attemptSequence": 3,
+    "generation": 0,
+    "inputRevision": "07715bc59f99a983881a7d498172126c326895de670e8e2767a146e8f0158bc2",
+    "runtimeRevision": "a8532888a7f1edcc9001c34d6e9c9a487579c3a31c70a06ff573c67f86354385",
+    "promptDigest": "8ddfcc87286abf82e81b7e19110e3844d5b8420db34e13404864bd3e51a0211d",
+    "schemaDigest": "459c4f3f11210275096bcc6ed760c2af17aef96154dfc505459f32aefe1da44f",
+    "budgetOwner": "0aad22f4cb1f2d44de70bf6d0303b6cacd004242429ceae9a4ae5d22a66953ae",
+    "executionLimit": null,
+    "executionMode": null,
+    "inputBaselines": [
+      {
+        "logicalKey": "issue.log",
+        "relativePath": "issue-log.json",
+        "hash": "51b5407dd51f9835821b891a902d02fe0809da513a658e058050982c518b8963",
+        "size": 49978,
+        "activityId": "plan-gate-repaired-77a1d3b2-072d-4364-a797-d3ae4bb3607f"
+      },
+      {
+        "logicalKey": "draft",
+        "relativePath": "steps/draft/result.json",
+        "hash": "de6834b6da8ee9d9a87e2c0020fe73ae4b8b16fb43914ac690072c7d08f465dc",
+        "size": 19044,
+        "activityId": "draft-step-settled-d1c44b80-e02c-44b4-845c-641644ee710e"
+      }
+    ]
+  }
+}

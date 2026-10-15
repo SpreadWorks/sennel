@@ -1,0 +1,21 @@
+{
+  "id": "96c7875698f55aab700bb907a463062edd260040027936e65d16711df2c42cc2",
+  "contract": {
+    "runId": "f45fe34e-1029-4c53-8f5c-16633b3c694d",
+    "specId": "f45fe34e-flow-help-contract",
+    "stepId": "draft",
+    "nodeId": "draft",
+    "taskId": null,
+    "attemptId": "attempt-draft-8b2d9f37-4d22-425b-96e9-0ab83839b3f7",
+    "attemptSequence": 1,
+    "generation": 0,
+    "inputRevision": "e50edd25c9b6db86333b87f70b64dbb8528976d84afed9ee20520de3719047ab",
+    "runtimeRevision": "a8532888a7f1edcc9001c34d6e9c9a487579c3a31c70a06ff573c67f86354385",
+    "promptDigest": "fe9d3d7dde45f198c8337604ab364f75fdb728a74ad073355810067be59d354a",
+    "schemaDigest": "74651e0515b445663e671d718b296dbf4b13d46b056504ffcd455a5dfd3b7be7",
+    "budgetOwner": "a3dd975f45e9e86a1695e328fe51915db25f2bb1c25018f9a092999767779cb6",
+    "executionLimit": null,
+    "executionMode": null,
+    "inputBaselines": []
+  }
+}

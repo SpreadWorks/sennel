@@ -1,0 +1,148 @@
+{
+  "version": 1,
+  "phase": "draft",
+  "generatedAt": "2026-10-15T17:02:44.112Z",
+  "result": "fail",
+  "evaluations": [
+    {
+      "guardrail_id": "migration-parity",
+      "result": "fail",
+      "reason": "The draft says the initial Spec must enumerate every routed leaf and behavior, but does not itself provide that inventory of existing public behavior and affected surfaces.",
+      "category": "process",
+      "title": "Migration Parity",
+      "observations": [
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "migration-parity",
+          "where": {
+            "file": "draft.json",
+            "locator": "analysis.problem"
+          },
+          "observed": "The draft says the initial Spec must enumerate every routed leaf and behavior, but does not itself provide that inventory of existing public behavior and affected surfaces.",
+          "severity": "blocking",
+          "refs": [
+            "migration-parity"
+          ]
+        }
+      ]
+    },
+    {
+      "guardrail_id": "migration-parity",
+      "result": "fail",
+      "reason": "The draft requires a per-surface owner/test map but does not provide a mapping from each retained behavior to its new owner or an explicit removal decision.",
+      "category": "process",
+      "title": "Migration Parity",
+      "observations": [
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "migration-parity",
+          "where": {
+            "file": "draft.json",
+            "locator": "decisionMap.decisionPoints[3]"
+          },
+          "observed": "The draft requires a per-surface owner/test map but does not provide a mapping from each retained behavior to its new owner or an explicit removal decision.",
+          "severity": "blocking",
+          "refs": [
+            "migration-parity"
+          ]
+        }
+      ]
+    },
+    {
+      "guardrail_id": "migration-parity",
+      "result": "fail",
+      "reason": "Validation is described as planned future coverage; the draft does not include behavior-level verification for each retained public surface through the new path.",
+      "category": "process",
+      "title": "Migration Parity",
+      "observations": [
+        {
+          "kind": "violation",
+          "failureMode": "guardrail-violation",
+          "requirementRef": "migration-parity",
+          "where": {
+            "file": "draft.json",
+            "locator": "analysis.validation"
+          },
+          "observed": "Validation is described as planned future coverage; the draft does not include behavior-level verification for each retained public surface through the new path.",
+          "severity": "blocking",
+          "refs": [
+            "migration-parity"
+          ]
+        }
+      ]
+    }
+  ],
+  "observations": [
+    {
+      "kind": "violation",
+      "failureMode": "guardrail-violation",
+      "requirementRef": "migration-parity",
+      "where": {
+        "file": "draft.json",
+        "locator": "analysis.problem"
+      },
+      "observed": "The draft says the initial Spec must enumerate every routed leaf and behavior, but does not itself provide that inventory of existing public behavior and affected surfaces.",
+      "severity": "blocking",
+      "refs": [
+        "migration-parity"
+      ]
+    },
+    {
+      "kind": "violation",
+      "failureMode": "guardrail-violation",
+      "requirementRef": "migration-parity",
+      "where": {
+        "file": "draft.json",
+        "locator": "decisionMap.decisionPoints[3]"
+      },
+      "observed": "The draft requires a per-surface owner/test map but does not provide a mapping from each retained behavior to its new owner or an explicit removal decision.",
+      "severity": "blocking",
+      "refs": [
+        "migration-parity"
+      ]
+    },
+    {
+      "kind": "violation",
+      "failureMode": "guardrail-violation",
+      "requirementRef": "migration-parity",
+      "where": {
+        "file": "draft.json",
+        "locator": "analysis.validation"
+      },
+      "observed": "Validation is described as planned future coverage; the draft does not include behavior-level verification for each retained public surface through the new path.",
+      "severity": "blocking",
+      "refs": [
+        "migration-parity"
+      ]
+    }
+  ],
+  "issues": [],
+  "reasons": [
+    {
+      "verdict": "FAIL",
+      "detail": "Migration Parity — The draft says the initial Spec must enumerate every routed leaf and behavior, but does not itself provide that inventory of existing public behavior and affected surfaces.",
+      "guardrail_id": "migration-parity",
+      "category": "process"
+    },
+    {
+      "verdict": "FAIL",
+      "detail": "Migration Parity — The draft requires a per-surface owner/test map but does not provide a mapping from each retained behavior to its new owner or an explicit removal decision.",
+      "guardrail_id": "migration-parity",
+      "category": "process"
+    },
+    {
+      "verdict": "FAIL",
+      "detail": "Migration Parity — Validation is described as planned future coverage; the draft does not include behavior-level verification for each retained public surface through the new path.",
+      "guardrail_id": "migration-parity",
+      "category": "process"
+    }
+  ],
+  "failureKind": "ai_semantic_fail",
+  "failureCategory": {
+    "category": "semantic",
+    "code": "ai_semantic_fail"
+  },
+  "lineage": "ed13336ce39740725f27c53e64bc82433754e8985e038dff4b814bb89db01c3c"
+}

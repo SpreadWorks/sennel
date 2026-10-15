@@ -1,0 +1,29 @@
+{
+  "id": "9832bc5c5dfe7d80da3ce9c1ecce2b670d82fd11e40856dbca5493aacbca019e",
+  "contract": {
+    "runId": "f45fe34e-1029-4c53-8f5c-16633b3c694d",
+    "specId": "f45fe34e-flow-help-contract",
+    "stepId": "spec",
+    "nodeId": "spec",
+    "taskId": null,
+    "attemptId": "attempt-spec-ba84b9e1-c943-409f-a142-841a799311f4",
+    "attemptSequence": 1,
+    "generation": 0,
+    "inputRevision": "f27c275b8cb675c4363755afb4a072331661e79647865110b5a482f711bf2ffe",
+    "runtimeRevision": "a8532888a7f1edcc9001c34d6e9c9a487579c3a31c70a06ff573c67f86354385",
+    "promptDigest": "2c69abea8fd7ea6c05f2d98379dd721b303220c940c98ceb6b2165e73cff07ff",
+    "schemaDigest": "a71ab91d042ff234e1571f2e711b1d52864fe01080feea562176eaf7b00d6813",
+    "budgetOwner": "69a739d4a81ca1fcd761e031d445971a7e61d1d318dee9a4dd4a716917ee5e53",
+    "executionLimit": null,
+    "executionMode": null,
+    "inputBaselines": [
+      {
+        "logicalKey": "draft",
+        "relativePath": "steps/draft/result.json",
+        "hash": "de6834b6da8ee9d9a87e2c0020fe73ae4b8b16fb43914ac690072c7d08f465dc",
+        "size": 19044,
+        "activityId": "draft-step-settled-d1c44b80-e02c-44b4-845c-641644ee710e"
+      }
+    ]
+  }
+}

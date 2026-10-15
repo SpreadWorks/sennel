@@ -1,0 +1,29 @@
+{
+  "id": "324d2c1751afd500355d0db395b6cfa369872b9a703250a9de2bd5e9c3f3dacb",
+  "contract": {
+    "runId": "f45fe34e-1029-4c53-8f5c-16633b3c694d",
+    "specId": "f45fe34e-flow-help-contract",
+    "stepId": "draft-coverage-review",
+    "nodeId": "draft-coverage-review",
+    "taskId": null,
+    "attemptId": "attempt-draft-coverage-review-ab04041f-2b8b-4c22-ab40-c3fc401ca45c",
+    "attemptSequence": 2,
+    "generation": 0,
+    "inputRevision": "d5d243983dd55e412a382d062f1de0a7c8b6183fa799b5780f4430d8de497497",
+    "runtimeRevision": "a8532888a7f1edcc9001c34d6e9c9a487579c3a31c70a06ff573c67f86354385",
+    "promptDigest": "153f71b79a4694d07ec17f4f1413af42506e91962c42e3e0109a088e27368d47",
+    "schemaDigest": "62d3413d47e1f25d4130d2ea30209123a8a2191a7a2cebb657dc14654582173b",
+    "budgetOwner": "a94447098cdebef8bc9012800c7ef2487da71598e58da0decc7e2e0d8318ddba",
+    "executionLimit": null,
+    "executionMode": null,
+    "inputBaselines": [
+      {
+        "logicalKey": "spec.record",
+        "relativePath": "spec.json",
+        "hash": "a1c0b1f8c5ccc67b71de5a9a1d0e7e5c0347ffcb873a20cc76fd06d2383fc0a9",
+        "size": 359,
+        "activityId": "flow-created-13fccd3868dc833ff04ec25c04b37e2555127c23dbc2aefd1a48edb44c57a5c9"
+      }
+    ]
+  }
+}

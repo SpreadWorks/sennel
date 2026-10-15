@@ -1,0 +1,71 @@
+{
+  "contractId": "df1efa25edda4254e1adb1306dcb5711fb1dfb8814e361cae88497f34e75cbc9",
+  "sequence": 1,
+  "previousDigest": null,
+  "eventId": "29119028-8ef1-42b2-958f-989d0c3fff09",
+  "digest": "7fc93a56849ad1d91a831d57f65b7c8752f3faf1aa6718d9b01969d7260c952d",
+  "record": {
+    "scope": {
+      "stage": "artifact-worker",
+      "round": 0
+    },
+    "event": "planned",
+    "snapshot": {
+      "scope": {
+        "stage": "artifact-worker",
+        "round": 0
+      },
+      "plan": {
+        "digest": "2df4b7a7945e5e590010de6c8bc1f28b60506223a4f1a28783e0570de5e82178",
+        "collectionDigest": "425b8fac0f72461964c8d7989f6ead1578d689741095128eee872d8a014edb84",
+        "batches": [
+          {
+            "digest": "007a47233120a7497b67103553dc29efe6d0cf7b4a4b4c98e2b8ecb998915767",
+            "groupId": "linear",
+            "index": 0,
+            "coverage": [
+              {
+                "elementId": "artifact-worker",
+                "sourceRevision": "76f79f27466087636197fbdc7b3ad42e816b8ff535bee0ce9dd37234c305f7d0",
+                "start": 0,
+                "end": 2727,
+                "sourceLength": 2727,
+                "status": "atomic"
+              }
+            ]
+          }
+        ],
+        "synthesisCallCount": 0
+      },
+      "budget": {
+        "providerCallCount": 0,
+        "synthesisCallCount": 0,
+        "aggregateCharacters": 0,
+        "aggregateItemCount": 0
+      },
+      "groups": [
+        {
+          "groupId": "linear",
+          "budget": {
+            "providerCallCount": 0,
+            "synthesisCallCount": 0,
+            "aggregateCharacters": 0,
+            "aggregateItemCount": 0
+          },
+          "responseCallCount": 0
+        }
+      ],
+      "batches": [
+        {
+          "batchDigest": "007a47233120a7497b67103553dc29efe6d0cf7b4a4b4c98e2b8ecb998915767",
+          "batchCalls": 0,
+          "transportOrdinal": 0,
+          "claim": null,
+          "responses": [],
+          "transportFailures": [],
+          "completion": null
+        }
+      ]
+    }
+  }
+}

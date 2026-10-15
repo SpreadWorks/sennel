@@ -1,0 +1,439 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "nodeId": "draft-coverage-review",
+      "outcome": "completed",
+      "result": {
+        "result": "ok",
+        "changed": [],
+        "artifacts": {
+          "phase": "draft-coverage",
+          "verdict": "PASS",
+          "canonicalVerdict": "PASS",
+          "evidenceDigest": "a1cdbf368f582555184122fc96630e31a24b57818e866b5b949079a474f0e435",
+          "treeSha": "25e7662d0b6e20bf93e9b9ca594431afbd38466d",
+          "targetStateDigest": "21e861f51750cab2c5bf060e01f99b579da4e877f7a2b4323488d5e6b9cfc869",
+          "issueCount": 0,
+          "retryPhase": "draft-coverage"
+        }
+      },
+      "artifact": {
+        "logicalKey": "draft.coverage.review",
+        "payload": {
+          "version": 2,
+          "phase": "draft-coverage",
+          "sourceDraft": "draft.json",
+          "sourceDraftRevision": {
+            "version": 1,
+            "runId": "f45fe34e-1029-4c53-8f5c-16633b3c694d",
+            "specId": "f45fe34e-flow-help-contract",
+            "sourceStepId": "draft",
+            "digest": "21e861f51750cab2c5bf060e01f99b579da4e877f7a2b4323488d5e6b9cfc869",
+            "byteLength": 8582,
+            "finalizedAt": "2026-10-15T16:54:41.009Z"
+          },
+          "generatedAt": "2026-10-15T16:56:19.682Z",
+          "verdict": "PASS",
+          "summary": "No draft review findings recorded.",
+          "blockingFindings": [],
+          "advisoryFindings": [],
+          "repairTargets": [],
+          "processStop": {
+            "executionId": "383e9d79-6589-4631-b6a6-6be4e0d817f5",
+            "callId": "1e7ad452-d682-42a4-9650-067ebedef111",
+            "ownerEpoch": 1,
+            "checkoutIdentity": {
+              "mainRoot": "/home/nakano/workspace/sennel",
+              "executionRoot": "/home/nakano/workspace/sennel/.sennel/worktree/feature-f45fe34e-flow-help-contract",
+              "mainDevice": 2049,
+              "mainInode": 5985052,
+              "checkoutDevice": 2049,
+              "checkoutInode": 10632452
+            },
+            "binding": {
+              "runId": "f45fe34e-1029-4c53-8f5c-16633b3c694d",
+              "specId": "f45fe34e-flow-help-contract",
+              "nodeId": "draft-coverage-review",
+              "taskId": null,
+              "attemptId": "attempt-draft-coverage-review-838de6f7-12c9-426f-9311-a26d7e17e24c",
+              "attemptSequence": 1,
+              "executionContractId": "0051f4a514f57dbe1ac3095396fd81b9186538a2fe947741323d4072820a86e7",
+              "executionGeneration": 0,
+              "dispatchInvocationId": null,
+              "workUnitId": "/home/nakano/workspace/sennel/.sennel/worktree/feature-f45fe34e-flow-help-contract/.sennel/review-work-units/631fc0e833ceefe022d49e9c/f1cb97a3beeda28f6f28c186/f2d7791706ee13ca376fc822adb526aa/manifest.json",
+              "requestDigest": null,
+              "commandId": "flow.review"
+            },
+            "invocation": {
+              "kind": "command",
+              "commandId": null,
+              "providerAttemptId": null,
+              "logicalInvocationId": null,
+              "providerAttemptContext": null,
+              "promptProcessIdentity": null,
+              "timeoutMs": 1800000,
+              "deadline": 1792085136606
+            },
+            "launcherIdentity": {
+              "pid": 481893,
+              "bootIdentity": "170bfac1-ae97-4af2-886e-446048300243",
+              "startFingerprint": "52292541",
+              "ownerToken": "316bf940-730b-4978-a3ab-e9aeb1b71d6c"
+            },
+            "pgid": 481893,
+            "members": [
+              {
+                "pid": 481893,
+                "bootIdentity": "170bfac1-ae97-4af2-886e-446048300243",
+                "startFingerprint": "52292541",
+                "ownerToken": "316bf940-730b-4978-a3ab-e9aeb1b71d6c"
+              },
+              {
+                "pid": 481940,
+                "bootIdentity": "170bfac1-ae97-4af2-886e-446048300243",
+                "startFingerprint": "52292697",
+                "ownerToken": "1f5cca64-f345-4fcd-ab09-1812180c508e"
+              },
+              {
+                "pid": 482026,
+                "bootIdentity": "170bfac1-ae97-4af2-886e-446048300243",
+                "startFingerprint": "52293301",
+                "ownerToken": "316bf940-730b-4978-a3ab-e9aeb1b71d6c"
+              }
+            ],
+            "stopEvidence": {
+              "status": "confirmed",
+              "reason": "process-tree-death-observed",
+              "unterminatedMembers": []
+            },
+            "outcomeDigest": "e51253a0e4748fcffdb8501def0d34a7a67a04dd71d2a866a16f7306c4ade637"
+          },
+          "workerOutput": {
+            "digest": "f9182adab58f8608404a997be388fad541eb1ff156c40e88fc1e3509b968ac98",
+            "byteLength": 600,
+            "mediaType": "application/json"
+          },
+          "canonicalEvidence": {
+            "version": 1,
+            "phase": "draft-coverage",
+            "taskId": null,
+            "treeSha": "25e7662d0b6e20bf93e9b9ca594431afbd38466d",
+            "targetStateDigest": "21e861f51750cab2c5bf060e01f99b579da4e877f7a2b4323488d5e6b9cfc869",
+            "provenance": {
+              "provider": "sennel-review",
+              "invocationId": "f84e19ac13180dc0ca09dc96aeed893367b48ae42860818c4c516288a91c8935",
+              "capturedAt": "2026-10-15T16:56:19.682Z"
+            },
+            "disposition": "PASS",
+            "blockingFindings": [],
+            "advisoryFindings": [],
+            "identity": {
+              "phase": "draft-coverage",
+              "taskId": null,
+              "treeSha": "25e7662d0b6e20bf93e9b9ca594431afbd38466d",
+              "provenance": {
+                "provider": "sennel-review",
+                "invocationId": "f84e19ac13180dc0ca09dc96aeed893367b48ae42860818c4c516288a91c8935",
+                "capturedAt": "2026-10-15T16:56:19.682Z"
+              },
+              "evidenceDigest": "a1cdbf368f582555184122fc96630e31a24b57818e866b5b949079a474f0e435"
+            }
+          },
+          "canonicalTarget": {
+            "treeSha": "25e7662d0b6e20bf93e9b9ca594431afbd38466d",
+            "targetStateDigest": "21e861f51750cab2c5bf060e01f99b579da4e877f7a2b4323488d5e6b9cfc869"
+          }
+        }
+      }
+    },
+    {
+      "attempt": 2,
+      "nodeId": "draft-coverage-review",
+      "outcome": "completed",
+      "result": {
+        "result": "ok",
+        "changed": [],
+        "artifacts": {
+          "phase": "draft-coverage",
+          "verdict": "PASS",
+          "canonicalVerdict": "PASS",
+          "evidenceDigest": "03826dc8edde039889c831832161520bbe86e829dbdfc9eb69dafbe86cbdd870",
+          "treeSha": "25e7662d0b6e20bf93e9b9ca594431afbd38466d",
+          "targetStateDigest": "da03d8e57cc62729ddf8bb4f5e164e8b150827c62e8d65e717b683efe9f372e3",
+          "issueCount": 0,
+          "retryPhase": "draft-coverage"
+        }
+      },
+      "artifact": {
+        "logicalKey": "draft.coverage.review",
+        "payload": {
+          "version": 2,
+          "phase": "draft-coverage",
+          "sourceDraft": "draft.json",
+          "sourceDraftRevision": {
+            "version": 1,
+            "runId": "f45fe34e-1029-4c53-8f5c-16633b3c694d",
+            "specId": "f45fe34e-flow-help-contract",
+            "sourceStepId": "draft-gate-repair",
+            "digest": "da03d8e57cc62729ddf8bb4f5e164e8b150827c62e8d65e717b683efe9f372e3",
+            "byteLength": 14019,
+            "finalizedAt": "2026-10-15T17:00:40.731Z"
+          },
+          "generatedAt": "2026-10-15T17:01:22.684Z",
+          "verdict": "PASS",
+          "summary": "No draft review findings recorded.",
+          "blockingFindings": [],
+          "advisoryFindings": [],
+          "repairTargets": [],
+          "processStop": {
+            "executionId": "383e9d79-6589-4631-b6a6-6be4e0d817f5",
+            "callId": "7b5ece3c-74d8-48d0-9c03-8fd0fae3bf5f",
+            "ownerEpoch": 1,
+            "checkoutIdentity": {
+              "mainRoot": "/home/nakano/workspace/sennel",
+              "executionRoot": "/home/nakano/workspace/sennel/.sennel/worktree/feature-f45fe34e-flow-help-contract",
+              "mainDevice": 2049,
+              "mainInode": 5985052,
+              "checkoutDevice": 2049,
+              "checkoutInode": 10632452
+            },
+            "binding": {
+              "runId": "f45fe34e-1029-4c53-8f5c-16633b3c694d",
+              "specId": "f45fe34e-flow-help-contract",
+              "nodeId": "draft-coverage-review",
+              "taskId": null,
+              "attemptId": "attempt-draft-coverage-review-ab04041f-2b8b-4c22-ab40-c3fc401ca45c",
+              "attemptSequence": 2,
+              "executionContractId": "324d2c1751afd500355d0db395b6cfa369872b9a703250a9de2bd5e9c3f3dacb",
+              "executionGeneration": 0,
+              "dispatchInvocationId": null,
+              "workUnitId": "/home/nakano/workspace/sennel/.sennel/worktree/feature-f45fe34e-flow-help-contract/.sennel/review-work-units/631fc0e833ceefe022d49e9c/f1cb97a3beeda28f6f28c186/cf578d0ebe0a9c1b2754a72ba19fb85b/manifest.json",
+              "requestDigest": null,
+              "commandId": "flow.review"
+            },
+            "invocation": {
+              "kind": "command",
+              "commandId": null,
+              "providerAttemptId": null,
+              "logicalInvocationId": null,
+              "providerAttemptContext": null,
+              "promptProcessIdentity": null,
+              "timeoutMs": 1800000,
+              "deadline": 1792085452879
+            },
+            "launcherIdentity": {
+              "pid": 487169,
+              "bootIdentity": "170bfac1-ae97-4af2-886e-446048300243",
+              "startFingerprint": "52324166",
+              "ownerToken": "316bf940-730b-4978-a3ab-e9aeb1b71d6c"
+            },
+            "pgid": 487169,
+            "members": [
+              {
+                "pid": 487169,
+                "bootIdentity": "170bfac1-ae97-4af2-886e-446048300243",
+                "startFingerprint": "52324166",
+                "ownerToken": "316bf940-730b-4978-a3ab-e9aeb1b71d6c"
+              },
+              {
+                "pid": 487178,
+                "bootIdentity": "170bfac1-ae97-4af2-886e-446048300243",
+                "startFingerprint": "52324294",
+                "ownerToken": "98ec7725-8e3b-4495-9166-03311316540d"
+              }
+            ],
+            "stopEvidence": {
+              "status": "confirmed",
+              "reason": "process-tree-death-observed",
+              "unterminatedMembers": []
+            },
+            "outcomeDigest": "7b499e28f4465c2225dc8c010b3e62219f7760de546e079a2d616237e1843951"
+          },
+          "workerOutput": {
+            "digest": "0d5ae816ef03a4d56e5a3d2a610aa3a9237128dda25fd19726d0ceba1ea01848",
+            "byteLength": 613,
+            "mediaType": "application/json"
+          },
+          "canonicalEvidence": {
+            "version": 1,
+            "phase": "draft-coverage",
+            "taskId": null,
+            "treeSha": "25e7662d0b6e20bf93e9b9ca594431afbd38466d",
+            "targetStateDigest": "da03d8e57cc62729ddf8bb4f5e164e8b150827c62e8d65e717b683efe9f372e3",
+            "provenance": {
+              "provider": "sennel-review",
+              "invocationId": "399f6099a7678cf5a684ec2d9d6a60d0ab01e310bea297f238cf4dcaad8cfcb9",
+              "capturedAt": "2026-10-15T17:01:22.684Z"
+            },
+            "disposition": "PASS",
+            "blockingFindings": [],
+            "advisoryFindings": [],
+            "identity": {
+              "phase": "draft-coverage",
+              "taskId": null,
+              "treeSha": "25e7662d0b6e20bf93e9b9ca594431afbd38466d",
+              "provenance": {
+                "provider": "sennel-review",
+                "invocationId": "399f6099a7678cf5a684ec2d9d6a60d0ab01e310bea297f238cf4dcaad8cfcb9",
+                "capturedAt": "2026-10-15T17:01:22.684Z"
+              },
+              "evidenceDigest": "03826dc8edde039889c831832161520bbe86e829dbdfc9eb69dafbe86cbdd870"
+            }
+          },
+          "canonicalTarget": {
+            "treeSha": "25e7662d0b6e20bf93e9b9ca594431afbd38466d",
+            "targetStateDigest": "da03d8e57cc62729ddf8bb4f5e164e8b150827c62e8d65e717b683efe9f372e3"
+          }
+        }
+      }
+    },
+    {
+      "attempt": 3,
+      "nodeId": "draft-coverage-review",
+      "outcome": "completed",
+      "result": {
+        "result": "ok",
+        "changed": [],
+        "artifacts": {
+          "phase": "draft-coverage",
+          "verdict": "PASS",
+          "canonicalVerdict": "PASS",
+          "evidenceDigest": "f617994d4ce3d9eb0d2a3e1068f793f11cd115febb6a90c1f5ada29cadfaf456",
+          "treeSha": "25e7662d0b6e20bf93e9b9ca594431afbd38466d",
+          "targetStateDigest": "de6834b6da8ee9d9a87e2c0020fe73ae4b8b16fb43914ac690072c7d08f465dc",
+          "issueCount": 0,
+          "retryPhase": "draft-coverage"
+        }
+      },
+      "artifact": {
+        "logicalKey": "draft.coverage.review",
+        "payload": {
+          "version": 2,
+          "phase": "draft-coverage",
+          "sourceDraft": "draft.json",
+          "sourceDraftRevision": {
+            "version": 1,
+            "runId": "f45fe34e-1029-4c53-8f5c-16633b3c694d",
+            "specId": "f45fe34e-flow-help-contract",
+            "sourceStepId": "draft-gate-repair",
+            "digest": "de6834b6da8ee9d9a87e2c0020fe73ae4b8b16fb43914ac690072c7d08f465dc",
+            "byteLength": 19044,
+            "finalizedAt": "2026-10-15T17:06:06.277Z"
+          },
+          "generatedAt": "2026-10-15T17:08:08.987Z",
+          "verdict": "PASS",
+          "summary": "No draft review findings recorded.",
+          "blockingFindings": [],
+          "advisoryFindings": [],
+          "repairTargets": [],
+          "processStop": {
+            "executionId": "383e9d79-6589-4631-b6a6-6be4e0d817f5",
+            "callId": "b9d76417-74c5-4c7e-9381-e9f030e4beef",
+            "ownerEpoch": 1,
+            "checkoutIdentity": {
+              "mainRoot": "/home/nakano/workspace/sennel",
+              "executionRoot": "/home/nakano/workspace/sennel/.sennel/worktree/feature-f45fe34e-flow-help-contract",
+              "mainDevice": 2049,
+              "mainInode": 5985052,
+              "checkoutDevice": 2049,
+              "checkoutInode": 10632452
+            },
+            "binding": {
+              "runId": "f45fe34e-1029-4c53-8f5c-16633b3c694d",
+              "specId": "f45fe34e-flow-help-contract",
+              "nodeId": "draft-coverage-review",
+              "taskId": null,
+              "attemptId": "attempt-draft-coverage-review-d760023e-4a1a-4cc8-aafa-d29ce9d3c3dd",
+              "attemptSequence": 3,
+              "executionContractId": "447d44a6de6cc472096566e871edb2540e143cee4ef65e46584825bb44141b08",
+              "executionGeneration": 0,
+              "dispatchInvocationId": null,
+              "workUnitId": "/home/nakano/workspace/sennel/.sennel/worktree/feature-f45fe34e-flow-help-contract/.sennel/review-work-units/631fc0e833ceefe022d49e9c/f1cb97a3beeda28f6f28c186/e7502f53ac0d849c053edb542e65b7e2/manifest.json",
+              "requestDigest": null,
+              "commandId": "flow.review"
+            },
+            "invocation": {
+              "kind": "command",
+              "commandId": null,
+              "providerAttemptId": null,
+              "logicalInvocationId": null,
+              "providerAttemptContext": null,
+              "promptProcessIdentity": null,
+              "timeoutMs": 1800000,
+              "deadline": 1792085793663
+            },
+            "launcherIdentity": {
+              "pid": 492782,
+              "bootIdentity": "170bfac1-ae97-4af2-886e-446048300243",
+              "startFingerprint": "52358323",
+              "ownerToken": "316bf940-730b-4978-a3ab-e9aeb1b71d6c"
+            },
+            "pgid": 492782,
+            "members": [
+              {
+                "pid": 492782,
+                "bootIdentity": "170bfac1-ae97-4af2-886e-446048300243",
+                "startFingerprint": "52358323",
+                "ownerToken": "316bf940-730b-4978-a3ab-e9aeb1b71d6c"
+              },
+              {
+                "pid": 492839,
+                "bootIdentity": "170bfac1-ae97-4af2-886e-446048300243",
+                "startFingerprint": "52358696",
+                "ownerToken": "37efe8a2-6dd3-442f-b409-6622db7fc9ec"
+              },
+              {
+                "pid": 492926,
+                "bootIdentity": "170bfac1-ae97-4af2-886e-446048300243",
+                "startFingerprint": "52359590",
+                "ownerToken": "316bf940-730b-4978-a3ab-e9aeb1b71d6c"
+              }
+            ],
+            "stopEvidence": {
+              "status": "confirmed",
+              "reason": "process-tree-death-observed",
+              "unterminatedMembers": []
+            },
+            "outcomeDigest": "4f2fc41e5b141db00a7d5647110b6b5fcef0010b4286ef0e44c6733c1c0c150c"
+          },
+          "workerOutput": {
+            "digest": "ac4604780419723221d7da705115b43a10f1bc7efc1e3db6afee6a3221323088",
+            "byteLength": 613,
+            "mediaType": "application/json"
+          },
+          "canonicalEvidence": {
+            "version": 1,
+            "phase": "draft-coverage",
+            "taskId": null,
+            "treeSha": "25e7662d0b6e20bf93e9b9ca594431afbd38466d",
+            "targetStateDigest": "de6834b6da8ee9d9a87e2c0020fe73ae4b8b16fb43914ac690072c7d08f465dc",
+            "provenance": {
+              "provider": "sennel-review",
+              "invocationId": "348b8308f11dbed195fa24f6327d9a9f99a3e35186764ba27dfc5feba4ef6af1",
+              "capturedAt": "2026-10-15T17:08:08.987Z"
+            },
+            "disposition": "PASS",
+            "blockingFindings": [],
+            "advisoryFindings": [],
+            "identity": {
+              "phase": "draft-coverage",
+              "taskId": null,
+              "treeSha": "25e7662d0b6e20bf93e9b9ca594431afbd38466d",
+              "provenance": {
+                "provider": "sennel-review",
+                "invocationId": "348b8308f11dbed195fa24f6327d9a9f99a3e35186764ba27dfc5feba4ef6af1",
+                "capturedAt": "2026-10-15T17:08:08.987Z"
+              },
+              "evidenceDigest": "f617994d4ce3d9eb0d2a3e1068f793f11cd115febb6a90c1f5ada29cadfaf456"
+            }
+          },
+          "canonicalTarget": {
+            "treeSha": "25e7662d0b6e20bf93e9b9ca594431afbd38466d",
+            "targetStateDigest": "de6834b6da8ee9d9a87e2c0020fe73ae4b8b16fb43914ac690072c7d08f465dc"
+          }
+        }
+      }
+    }
+  ]
+}

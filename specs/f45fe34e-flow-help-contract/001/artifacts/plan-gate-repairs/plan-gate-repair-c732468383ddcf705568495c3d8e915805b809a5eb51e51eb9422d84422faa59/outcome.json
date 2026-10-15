@@ -1,0 +1,96 @@
+{
+  "version": 1,
+  "repairId": "plan-gate-repair-c732468383ddcf705568495c3d8e915805b809a5eb51e51eb9422d84422faa59",
+  "repairRecordFingerprint": "c732468383ddcf705568495c3d8e915805b809a5eb51e51eb9422d84422faa59",
+  "sourceEvidence": {
+    "sourceAttempt": {
+      "id": "attempt-draft-gate-6e352731-2e48-4154-8920-b2c3240abe3b",
+      "sequence": 2
+    },
+    "resultLogicalKey": "draft.gate",
+    "publicationActivityId": "plan-gate-repaired-77a1d3b2-072d-4364-a797-d3ae4bb3607f",
+    "catalogFingerprint": "6346847a1cc0debf135d753ef80698ebd865f91d3ecc504e5b2b979f04ab4d00",
+    "transitionLineage": {
+      "sourceAttempt": {
+        "id": "attempt-draft-gate-6e352731-2e48-4154-8920-b2c3240abe3b",
+        "sequence": 2
+      },
+      "canonicalAttempt": {
+        "id": "attempt-draft-gate-6e352731-2e48-4154-8920-b2c3240abe3b",
+        "sequence": 2
+      },
+      "sourceFingerprint": "de1a86561c8f12c077b360d6087742ec860843376b751729c0bf06690f0ae578",
+      "canonicalFingerprint": "6346847a1cc0debf135d753ef80698ebd865f91d3ecc504e5b2b979f04ab4d00",
+      "sourceRevisionFingerprint": "ed13336ce39740725f27c53e64bc82433754e8985e038dff4b814bb89db01c3c",
+      "canonicalRevisionFingerprint": "ed13336ce39740725f27c53e64bc82433754e8985e038dff4b814bb89db01c3c"
+    }
+  },
+  "sourceAttempt": {
+    "id": "attempt-draft-gate-6e352731-2e48-4154-8920-b2c3240abe3b",
+    "sequence": 2
+  },
+  "targetAttempt": {
+    "id": "attempt-draft-gate-repair-dfc45f14-c7cf-40b9-b7bf-9028ea752f03",
+    "sequence": 3
+  },
+  "publicationActivityId": "attempt-confirmed-cc16c1a7-1686-46aa-85aa-2f8b346a9a83",
+  "handoffRevision": "4e9f900069fe8519bc19982bf9038005be1374d22703b5582e80af47df4e9270",
+  "disposition": "applied",
+  "report": {
+    "beforeEvidenceDigest": "da03d8e57cc62729ddf8bb4f5e164e8b150827c62e8d65e717b683efe9f372e3",
+    "outputEvidenceDigest": "de6834b6da8ee9d9a87e2c0020fe73ae4b8b16fb43914ac690072c7d08f465dc",
+    "summary": "Added the complete routed-leaf inventory, per-surface owner and test map, and behavior-level verification contract while preserving the independent query path and existing semantics.",
+    "requests": [
+      {
+        "fingerprint": "82cb3f1f53e1ac86f7c665b1b69a07a9ef6b195c88ba3fa516d414decdf33753",
+        "recurrenceCount": 0,
+        "priorStrategy": null
+      },
+      {
+        "fingerprint": "1a1d7b38eac44607fb0f009ae5b54416046fe5298e80cb2920060c18700edbcb",
+        "recurrenceCount": 0,
+        "priorStrategy": null
+      },
+      {
+        "fingerprint": "776d728fa0423ca8db49d70e49cd922cdd2a10f88c28552b319671ea61d385ec",
+        "recurrenceCount": 0,
+        "priorStrategy": null
+      }
+    ],
+    "results": [
+      {
+        "fingerprint": "82cb3f1f53e1ac86f7c665b1b69a07a9ef6b195c88ba3fa516d414decdf33753",
+        "strategy": "Add the current registry-derived 69-leaf inventory and its observable behavior boundary to analysis.problem and the first deferred-to-Spec entry.",
+        "summary": "The Draft now names every routed leaf, direct-child group, query exception, and per-leaf contract dimension required for the initial Spec.",
+        "priorRepairInsufficiency": null,
+        "deltaIds": [
+          "de6834b6da8ee9d9a87e2c0020fe73ae4b8b16fb43914ac690072c7d08f465dc"
+        ]
+      },
+      {
+        "fingerprint": "1a1d7b38eac44607fb0f009ae5b54416046fe5298e80cb2920060c18700edbcb",
+        "strategy": "Replace the abstract owner/test requirement with a concrete five-part owner map covering registry metadata, shared renderers, entry points, retained runtime behavior, and query.",
+        "summary": "The Draft now maps each retained surface to real source owners and dispatcher/CLI assertions, including accepted/rejected outcomes, exit codes, mutation expectations, and query exclusion.",
+        "priorRepairInsufficiency": null,
+        "deltaIds": [
+          "de6834b6da8ee9d9a87e2c0020fe73ae4b8b16fb43914ac690072c7d08f465dc"
+        ]
+      },
+      {
+        "fingerprint": "776d728fa0423ca8db49d70e49cd922cdd2a10f88c28552b319671ea61d385ec",
+        "strategy": "Define an executable registry/integration and focused CLI validation matrix for parser, help, execution, guard, runtime, rejection, side-effect, and query behavior.",
+        "summary": "The Draft now requires observable accepted and rejected cases through real dispatch paths, exact renderer boundaries, non-executing help, preserved exit behavior, and separate query regression coverage.",
+        "priorRepairInsufficiency": null,
+        "deltaIds": [
+          "de6834b6da8ee9d9a87e2c0020fe73ae4b8b16fb43914ac690072c7d08f465dc"
+        ]
+      }
+    ],
+    "lineage": {
+      "kind": "artifact",
+      "deltaIds": [
+        "de6834b6da8ee9d9a87e2c0020fe73ae4b8b16fb43914ac690072c7d08f465dc"
+      ]
+    }
+  }
+}

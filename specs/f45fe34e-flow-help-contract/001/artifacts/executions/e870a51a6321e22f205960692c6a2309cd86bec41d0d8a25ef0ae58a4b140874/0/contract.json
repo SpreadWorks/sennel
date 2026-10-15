@@ -1,0 +1,29 @@
+{
+  "id": "4b898d2f2fcf89606a7108ff18c43e5d354572cfcf6a891a5321804d4c150025",
+  "contract": {
+    "runId": "f45fe34e-1029-4c53-8f5c-16633b3c694d",
+    "specId": "f45fe34e-flow-help-contract",
+    "stepId": "draft-gate",
+    "nodeId": "draft-gate",
+    "taskId": null,
+    "attemptId": "attempt-draft-gate-4b35f9ad-375f-4374-8582-3446d1966b34",
+    "attemptSequence": 1,
+    "generation": 0,
+    "inputRevision": "2c90dc2235935f5ed41fcf81c53c03e7315a75e7a35766587a9478c667a5b1a1",
+    "runtimeRevision": "a8532888a7f1edcc9001c34d6e9c9a487579c3a31c70a06ff573c67f86354385",
+    "promptDigest": "ac84a5d2e0f99659c1db4bee00a0cdef135bd90291882a9858a696f96da95ef1",
+    "schemaDigest": "459c4f3f11210275096bcc6ed760c2af17aef96154dfc505459f32aefe1da44f",
+    "budgetOwner": "e870a51a6321e22f205960692c6a2309cd86bec41d0d8a25ef0ae58a4b140874",
+    "executionLimit": null,
+    "executionMode": null,
+    "inputBaselines": [
+      {
+        "logicalKey": "draft",
+        "relativePath": "steps/draft/result.json",
+        "hash": "21e861f51750cab2c5bf060e01f99b579da4e877f7a2b4323488d5e6b9cfc869",
+        "size": 8582,
+        "activityId": "attempt-confirmed-8256d604-3ab1-40c5-984b-b49f7f8f452d"
+      }
+    ]
+  }
+}
