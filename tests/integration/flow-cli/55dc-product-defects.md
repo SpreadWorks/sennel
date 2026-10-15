@@ -1,5 +1,7 @@
 # 55dc deferred product defects
 
+> e639 update: the three Requirement repair execution-generation defects below are fixed, and their three skip options have been removed. The original test inputs, bodies and assertions are unchanged: all three failed before the product fix and pass after it, with no skips (`.tmp/e639/baseline.log`, `.tmp/e639/frozen-after-fix.log`). The focused repair checks also pass: 14 unchanged cases from `.tmp/e639/repair-regression.log` plus four final cases from `.tmp/e639/repair-corrected-cases.log`, including recovery through a fresh manager and coordinator with genuine process-stop proof. See [e639 verification](../flow/e639-verification.md). Only the A03 guarded Spec correction case remains deferred. The six-row 55dc record below, including its source plans and failure evidence, is retained as history.
+
 > 4b0b update: the R3 / R4a counter reset defect is fixed, and only those two skip options have been removed. Their inputs and assertions are unchanged; both failed before the product fix and pass after it. See [4b0b verification](../flow/4b0b-verification.md). The other four deferred cases remain outside this change. The original 55dc record below is retained as historical evidence.
 
 The user authorized skipping these six known failing tests so the 55dc performance optimization can proceed. These are deferred product defects, not passing verification. Their test bodies and assertions remain intact. Remove only the six `skip` options below after the corresponding product fixes, then run the listed targeted tests.

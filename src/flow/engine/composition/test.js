@@ -16,7 +16,7 @@ import {
   RequirementTestPlanPublication, RequirementTestSemanticFinding,
   RequirementTestSourceAttempt,
 } from "../../lib/requirement-test-lifecycle.js";
-import { RequirementTestCandidateBundle, RequirementTestCandidateSource } from "../../lib/requirement-test-artifacts.js";
+import { RequirementTestCandidateBundle } from "../../lib/requirement-test-artifacts.js";
 import { SpecRevisionIdentity } from "../../lib/spec-revision-identity.js";
 import { initializeRequirementTestLifecycle } from "../../definition.js";
 import { ApprovalService } from "../../services/approval-service.js";
@@ -183,26 +183,6 @@ export function acquireRequirementTestInput({ state, stepId, planRead, specRecor
   }
   return new RequirementTestInput({ binding, frontier, retryState, workItem,
     candidateBundle, structuralFinding, evidence, progressIdentity, error });
-}
-
-/** Project persisted test-review repair progress into the Step Result value type. */
-export function requirementTestRepairProgressIdentity(progress) {
-  if (progress === null || progress === undefined || typeof progress.toJSON !== "function") {
-    throw new TypeError("Requirement test repair progress requires its canonical checkpoint");
-  }
-  const document = progress.toJSON();
-  return new RequirementTestRepairProgressIdentity({
-    sourceArtifactDigest: document.sourceArtifactDigest,
-    sourceEvidenceId: document.sourceEvidenceId,
-    sourceCandidate: RequirementTestCandidateBundle.fromJSON(document.sourceCandidate),
-    coordinatorAttempt: RequirementTestSourceAttempt.fromJSON(document.coordinatorAttempt),
-    entries: progress.entries,
-    stagedSources: progress.stagedSources.map((source) => new RequirementTestCandidateSource({
-      testPath: source.testPath.startsWith("tests/") ? source.testPath : `tests/${source.testPath}`,
-      digest: source.digest,
-      byteLength: source.bytes.length,
-    })),
-  });
 }
 
 /** Consume the production Approval registration from its acquired typed input. */

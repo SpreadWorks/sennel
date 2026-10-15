@@ -70,10 +70,10 @@ import {
   readDraftCompletionCatalogDigest,
 } from "./draft-completion-connector.js";
 import { DraftTransitionFacts } from "./draft-transition-facts.js";
-import { STEP_RESULT_TYPE, StepResult, RequirementTestResultPublication } from "../engine/step-result.js";
+import { STEP_RESULT_TYPE, StepResult, RequirementTestResultPublication, RequirementTestRepairProgressIdentity } from "../engine/step-result.js";
 import { DraftWorkerExecutionStepBinding } from "../engine/connectors/draft/draft-step-binding.js";
 import {
-  acquireRequirementTestInput, requirementTestRepairProgressIdentity,
+  acquireRequirementTestInput,
   requirementTestWorkerStepRegistration,
 } from "../engine/composition/test.js";
 import { sourceStepRegistration } from "../engine/composition/source-step.js";
@@ -5130,12 +5130,23 @@ export class WorkerArtifactHandoffRequest {
           document: input.document, descriptor })]);
       }
     }
+    this.requirementTestProgressBaseline = null;
     if (executionContract !== null) this.executionContract = executionContract;
-    else if (this.stepId === "test-generate") {
+    else if (REQUIREMENT_TEST_WORKER_STEPS.has(this.stepId)) {
+      const progress = this.stepId === "test-repair" ? this.flowManager.readArtifact({
+        specId: this.specId, logicalKey: "test.requirement.repair.progress",
+        parameters: { requirementId: this.requirementTestBinding.requirementId },
+        consumerNodeId: this.stepId, optional: true,
+      }) : null;
       const execution = this.flowManager.requirementTestGenerationExecutionState({
         binding: this.executionBinding(), requirementId: this.requirementTestBinding.requirementId,
         planPublication: this.requirementTestBinding.planPublication,
+        progressDescriptor: progress?.descriptor ?? null,
+        progressIdentity: this.testReviewRepairProgress === null ? null
+          : RequirementTestRepairProgressIdentity.fromProgress(this.testReviewRepairProgress),
       });
+      this.requirementTestProgressBaseline = progress === null ? null
+        : new FlowExecutionInputBaseline({ descriptor: progress.descriptor });
       this.executionContract = this.createExecutionContract(executionGeneration ?? execution.generation, execution.budgetOwner);
     } else {
       const lifecycle = this.flowManager.draftStepExecutionState({ binding: this.executionBinding() }).lifecycle;
@@ -5157,8 +5168,9 @@ export class WorkerArtifactHandoffRequest {
       ? acquireSpecGateRepairExecutionContractOptions({ request: this, generation })
       : { inputBaselines: this.executionContract?.inputBaselines ?? [
           ...this.inputs.flatMap((input) => input.catalogBaseline ? [input.catalogBaseline] : []),
-          ...(this.stepId === "test-generate"
+          ...(REQUIREMENT_TEST_WORKER_STEPS.has(this.stepId)
             ? [new FlowExecutionInputBaseline({ descriptor: this.requirementTestBinding.planPublication })] : []),
+          ...(this.requirementTestProgressBaseline === null ? [] : [this.requirementTestProgressBaseline]),
         ] };
     return new ExecutionProtocolSnapshot({
       prompt: { instructions: this.workerInstructions.toJSON(), action: this.invocation.action.nextAction },
@@ -10040,15 +10052,18 @@ export class WorkerArtifactHandoffCoordinator {
         const checkoutIdentity = captureProcessExecutionCheckoutIdentity({ mainRoot, executionRoot });
         for (const evidence of stops) evidence.assertContract(request.executionContract, workerProcessStopIdentity(request))
           .assertCheckout(checkoutIdentity);
-        request.assertCurrent(state);
         validateSubmission(request, submission);
       }
-      if (canonicalWorkerExecutionClaimForStored({ flowManager: ctx.flowManager, state, stored }) !== null) {
-        continue;
-      }
+      // Publication advances the repair progress baseline. Authenticate its
+      // exact completed handoff before asking an unfinished request to match
+      // the current frontier; completed requests need cleanup only.
       if (canonicalHandoffIsCommitted(state, request, submission, ctx.flowManager)) {
         cleanupCompletedHandoff(request.handoffRoot, canonicalHandoffReceipt(request, submission, this.now), this.faultInjector);
         cleaned += 1;
+        continue;
+      }
+      if (stoppedPhysicalExecution) request.assertCurrent(state);
+      if (canonicalWorkerExecutionClaimForStored({ flowManager: ctx.flowManager, state, stored }) !== null) {
         continue;
       }
       if (stoppedPhysicalExecution) {
@@ -10958,7 +10973,7 @@ export class WorkerArtifactHandoffCoordinator {
       planRead,
       specRecordPublication: specRecord.descriptor,
       candidateBundle: partial ? null : publications.requirementTestCandidate,
-      progressIdentity: partial ? requirementTestRepairProgressIdentity(repairCheckpoint.progress) : null,
+      progressIdentity: partial ? RequirementTestRepairProgressIdentity.fromProgress(repairCheckpoint.progress) : null,
     });
     const selectedActivityId = `requirement-test-${request.stepId}-${crypto.randomUUID()}`;
     const registration = requirementTestWorkerStepRegistration(request.stepId);

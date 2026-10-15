@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { describe, it } from "node:test";
 
 import { TemporaryNetworkFailure } from "../../../src/lib/agent-failure.js";
+import { ProcessExecutionControlFailure } from "../../../src/lib/process-execution-runtime.js";
 import { candidateBundleParameters } from "../../../src/flow/lib/requirement-test-store.js";
 import {
   TEST_REVIEW_REPAIR_BATCH_LIMITS, canonicalTestReviewRepairForTarget,
@@ -10,6 +11,9 @@ import {
 } from "../../../src/flow/lib/test-review-repair.js";
 import { rejectFirstRequirementReviewBatches } from "../../support/requirement-test-phase-scenario.js";
 import { workerArtifactStableStringify } from "../../../src/flow/lib/worker-artifact-input-format.js";
+import { FlowExecutionContract, FlowExecutionContractRefusal } from "../../../src/flow/lib/flow-execution-contract.js";
+import { RequirementTestRepairProgressIdentity, TestRepairProgressSavedResult } from "../../../src/flow/engine/step-result.js";
+import { RequirementTestSettlementReceipt } from "../../../src/flow/lib/requirement-test-settlement-receipt.js";
 import {
   assertSavedRequirementTestResult, LifecycleSaveFault, ArtifactPublicationRace,
   readActiveRequirementTestSource, assertSnapshotAfterMetricFlush,
@@ -173,7 +177,7 @@ describe("RequirementTest producer publication admission and intermediate checkp
     });
   }
 
-  it("REPLAY same-size subsequent batch cannot reuse the first real checkpoint's finding/receipt identity", { skip: "Known product defect deferred by user in 55dc; see 55dc-product-defects.md (Requirement repair execution generation)" }, async (t) => {
+  it("REPLAY same-size subsequent batch cannot reuse the first real checkpoint's finding/receipt identity", async (t) => {
     const scenario = await enterRequirementTestLeaf(t, "test-repair", {
       reviewResponse: rejectFirstRequirementReviewBatches(TEST_REVIEW_REPAIR_BATCH_LIMITS.findingCount * 2 + 1),
     });
@@ -205,7 +209,7 @@ describe("RequirementTest producer publication admission and intermediate checkp
     "a same-count batch with other finding identities cannot consume the previous batch's real receipt");
   });
 
-  it("REPLAY public tooling retry cannot authorize saved repair progress from an older coordinator Attempt", { skip: "Known product defect deferred by user in 55dc; see 55dc-product-defects.md (Requirement repair execution generation)" }, async (t) => {
+  it("REPLAY public tooling retry cannot authorize saved repair progress from an older coordinator Attempt", async (t) => {
     const scenario = await enterRequirementTestLeaf(t, "test-repair", { reviewResponse: rejectFirstRequirementReviewBatches() });
     await scenario.dispatch();
     const prior = await existingRepairProgress(scenario);
@@ -237,6 +241,240 @@ describe("RequirementTest producer publication admission and intermediate checkp
       repair: prior.repair, consumerNodeId: "test-repair" }), /lineage|Attempt|coordinator|stale/i);
     assert.deepEqual(scenario.snapshot(), beforeRefusal, "old-coordinator refusal cannot reset progress or budgets");
   });
+
+  it("GENERATION repair reload advances only the completed batch and retains its budget owner", async (t) => {
+    const scenario = await enterRequirementTestLeaf(t, "test-repair", {
+      reviewResponse: rejectFirstRequirementReviewBatches(TEST_REVIEW_REPAIR_BATCH_LIMITS.findingCount * 2 + 1),
+    });
+    await scenario.dispatch();
+    scenario.reload();
+    const first = scenario.requests.findLast((request) => request.stepId === "test-repair");
+    const saved = assertSavedRequirementTestResult(scenario, "test-repair");
+    assert.deepEqual(saved.result.draftSettlementReceipt.executionContract, first.executionContract);
+    const budget = scenario.plan().activeWorkItem().budget.toJSON();
+    await scenario.dispatch();
+    scenario.reload();
+    const second = scenario.requests.findLast((request) => request.stepId === "test-repair");
+    assert.equal(second.executionContract.generation, first.executionContract.generation + 1);
+    const firstContract = FlowExecutionContract.fromJSON(first.executionContract);
+    const secondContract = FlowExecutionContract.fromJSON(second.executionContract);
+    assert.equal(secondContract.episodeId, firstContract.episodeId);
+    assert.equal(secondContract.budgetId, firstContract.budgetId);
+    assert.deepEqual(second.executionContract.budgetOwner, first.executionContract.budgetOwner);
+    assert.notEqual(second.executionContract.promptDigest, first.executionContract.promptDigest);
+    assert.notEqual(second.testReviewRepair.batch.batchId, first.testReviewRepair.batch.batchId);
+    assert.deepEqual(scenario.plan().activeWorkItem().budget.toJSON(), budget);
+    assert.equal(assertSavedRequirementTestResult(scenario, "test-repair").result.draftSettlementReceipt
+      .executionContract.generation, second.executionContract.generation);
+    assert.equal((await existingRepairProgress(scenario)).progress.complete, false);
+  });
+
+  it("GENERATION same-byte repair progress from a different producer cannot authorize another batch", async (t) => {
+    const scenario = await enterRequirementTestLeaf(t, "test-repair", {
+      reviewResponse: rejectFirstRequirementReviewBatches(),
+    });
+    await scenario.dispatch();
+    scenario.reload();
+    const parameters = { requirementId: "R1" };
+    const original = scenario.artifact("test.requirement.repair.progress", parameters);
+    scenario.manager.publishArtifacts({ specId: scenario.specId, nodeId: "test-repair",
+      artifactWrites: [{ logicalKey: "test.requirement.repair.progress", parameters,
+        mediaType: "application/json", bytes: original.bytes }],
+    });
+    const replaced = scenario.artifact("test.requirement.repair.progress", parameters);
+    assert.equal(replaced.descriptor.hash, original.descriptor.hash);
+    assert.notEqual(replaced.descriptor.activityId, original.descriptor.activityId);
+    const before = scenario.snapshot();
+    const calls = scenario.requests.length;
+    await assert.rejects(() => scenario.dispatch(), FlowExecutionContractRefusal);
+    scenario.reload();
+    assert.deepEqual(scenario.snapshot(), before);
+    assert.equal(scenario.requests.length, calls, "unauthenticated progress must refuse before the external worker");
+  });
+
+  for (const alteration of ["write", "Result", "request group"]) {
+    it(`ATOMIC nonfinal repair refuses a mismatched ${alteration} without a progress receipt`, async (t) => {
+      const scenario = await enterRequirementTestLeaf(t, "test-repair", {
+        reviewResponse: rejectFirstRequirementReviewBatches(TEST_REVIEW_REPAIR_BATCH_LIMITS.findingCount * 2 + 1),
+      });
+      let previousGroup = null;
+      if (alteration === "request group") {
+        await scenario.dispatch();
+        scenario.reload();
+        previousGroup = assertSavedRequirementTestResult(scenario, "test-repair").result.artifactRefs;
+      }
+      const previousProgress = scenario.artifact("test.requirement.repair.progress", { requirementId: "R1" });
+      const target = Object.getPrototypeOf(scenario.manager);
+      const original = target.completeRequirementTestLifecycle;
+      let before = null;
+      let refusal = null;
+      const control = t.mock.method(target, "completeRequirementTestLifecycle", function (input) {
+        if (input.stepResult?.kind !== "test-repair-progress-saved") return original.call(this, input);
+        before = scenario.snapshot();
+        const changed = { ...input };
+        if (alteration === "write") {
+          changed.artifactWrites = input.artifactWrites.map((write) => {
+            if (write.logicalKey !== "test.requirement.repair.progress") return write;
+            const progress = JSON.parse(write.bytes.toString("utf8"));
+            progress.sourceArtifactDigest = "f".repeat(64);
+            return { ...write, bytes: Buffer.from(JSON.stringify(progress)) };
+          });
+        } else if (alteration === "Result") {
+          const result = input.stepResult;
+          const identity = result.progressIdentity;
+          changed.stepResult = new TestRepairProgressSavedResult({ binding: result.binding,
+            frontier: result.frontier, retryState: result.retryState,
+            progressIdentity: new RequirementTestRepairProgressIdentity({
+              sourceArtifactDigest: "f".repeat(64), sourceEvidenceId: identity.sourceEvidenceId,
+              sourceCandidate: identity.sourceCandidate, coordinatorAttempt: identity.coordinatorAttempt,
+              entries: identity.entries, stagedSources: identity.stagedSources,
+            }),
+          });
+        } else {
+          changed.result = { ...input.result, artifactRefs: input.result.artifactRefs.map((reference) =>
+            previousGroup.find((prior) => prior.kind === reference.kind) ?? reference) };
+          assert.notDeepEqual(changed.result.artifactRefs, input.result.artifactRefs,
+            "the second same-sized batch must present the first genuine completed group's refs");
+        }
+        try { return original.call(this, changed); }
+        catch (error) { refusal = error; throw error; }
+      });
+      try {
+        const dispatched = await scenario.dispatch().then((result) => ({ result, error: null }),
+          (error) => ({ result: null, error }));
+        if (dispatched.error !== null) assert.equal(dispatched.error, refusal,
+          "a propagated refusal must be the actual Store conflict captured at this boundary");
+        else assert.ok(dispatched.result.errors?.length > 0, "a rejected completion must report an error");
+      } finally { control.mock.restore(); }
+      assert.ok(before, "the real producer must reach its nonfinal Store transaction");
+      assert.ok(refusal, "Store admission must refuse the changed completion before commit");
+      assert.match(refusal.message, /progress|identity|receipt|group|handoff|mismatch|differs/i);
+      scenario.reload();
+      assertSnapshotAfterMetricFlush(scenario.snapshot(), before, "test-repair");
+      assert.deepEqual(scenario.artifact("test.requirement.repair.progress", { requirementId: "R1" }), previousProgress);
+    });
+  }
+
+  it("GENERATION unfinished repair claim cannot authorize another provider call or generation", async (t) => {
+    const scenario = await enterRequirementTestLeaf(t, "test-repair", {
+      reviewResponse: rejectFirstRequirementReviewBatches(),
+    });
+    const refusal = new ProcessExecutionControlFailure("receipt-delivery-failed", "external worker stopped before its response was sealed");
+    scenario.options.beforeSeal = (request) => { if (request.stepId === "test-repair") throw refusal; };
+    await assert.rejects(() => scenario.dispatch(), (error) => error === refusal);
+    scenario.reload();
+    const before = scenario.snapshot();
+    const calls = scenario.requests.filter((request) => request.stepId === "test-repair").length;
+    const rejected = await scenario.dispatch();
+    assert.equal(rejected.errors[0].code, "FLOW_EXECUTION_CONTRACT_MISMATCH");
+    scenario.reload();
+    assert.equal(scenario.requests.filter((request) => request.stepId === "test-repair").length, calls);
+    assert.deepEqual(scenario.snapshot(), before);
+  });
+
+  it("REPLAY exact nonfinal repair Store input returns its saved receipt and changed input conflicts", async (t) => {
+    const scenario = await enterRequirementTestLeaf(t, "test-repair", {
+      reviewResponse: rejectFirstRequirementReviewBatches(),
+    });
+    const target = Object.getPrototypeOf(scenario.manager);
+    const original = target.completeRequirementTestLifecycle;
+    let captured = null;
+    let completed = null;
+    const control = t.mock.method(target, "completeRequirementTestLifecycle", function (input) {
+      const result = original.call(this, input);
+      if (input.stepResult?.kind === "test-repair-progress-saved") { captured = input; completed = result; }
+      return result;
+    });
+    try { await scenario.dispatch(); }
+    finally { control.mock.restore(); }
+    assert.ok(captured, "the real worker and registered Step must commit a nonfinal Result");
+    scenario.reload();
+    const before = scenario.snapshot();
+    const replay = scenario.manager.completeRequirementTestLifecycle(captured);
+    assert.equal(replay.receipt.id, completed.receipt.id);
+    assert.deepEqual(RequirementTestSettlementReceipt.fromJSON(replay.receipt).toJSON(), completed.receipt.toJSON());
+    assert.deepEqual(scenario.snapshot(), before);
+    const changed = { ...captured, result: { ...captured.result,
+      artifactRefs: captured.result.artifactRefs.map((reference) => reference.kind === "worker-handoff-request"
+        ? { ...reference, id: "f".repeat(64) } : reference),
+    } };
+    assert.throws(() => scenario.manager.completeRequirementTestLifecycle(changed),
+      { code: "CURRENT_FLOW_STATE_CONFLICT" });
+    scenario.reload();
+    assert.deepEqual(scenario.snapshot(), before);
+  });
+
+  for (const [boundary, logicalKey] of [["claim", "test.requirement.plan"], ["provider", "test.requirement.repair.progress"]]) {
+    it(`BASELINE repair ${boundary} refuses same-byte ${logicalKey} producer replacement before the worker`, async (t) => {
+      const scenario = await enterRequirementTestLeaf(t, "test-repair", {
+        reviewResponse: rejectFirstRequirementReviewBatches(),
+      });
+      await scenario.dispatch();
+      scenario.reload();
+      const publications = ["test.requirement.plan", "test.requirement.repair.progress"].map((key) =>
+        scenario.artifact(key, key.endsWith("progress") ? { requirementId: "R1" } : {}));
+      const calls = scenario.requests.filter((request) => request.stepId === "test-repair").length;
+      let hit = false;
+      let changedSnapshot = null;
+      let selectedContract = null;
+      const replace = (contract) => {
+        if (hit) return;
+        hit = true;
+        selectedContract = contract;
+        for (const publication of publications) assert.ok(contract.inputBaselines.some((baseline) =>
+          baseline.toJSON().logicalKey === publication.descriptor.logicalKey
+          && baseline.toJSON().relativePath === publication.descriptor.relativePath
+          && baseline.toJSON().hash === publication.descriptor.hash
+          && baseline.toJSON().size === publication.descriptor.size
+          && baseline.toJSON().activityId === publication.descriptor.activityId),
+        "the real repair contract must carry each exact plan/progress producer baseline");
+        const parameters = logicalKey.endsWith("progress") ? { requirementId: "R1" } : {};
+        const publication = scenario.artifact(logicalKey, parameters);
+        scenario.manager.publishArtifacts({ specId: scenario.specId, nodeId: "test-repair",
+          artifactWrites: [{ logicalKey, parameters, mediaType: "application/json", bytes: publication.bytes }],
+        });
+        const replaced = scenario.artifact(logicalKey, parameters);
+        assert.equal(replaced.descriptor.hash, publication.descriptor.hash);
+        assert.notEqual(replaced.descriptor.activityId, publication.descriptor.activityId);
+        changedSnapshot = scenario.snapshot();
+      };
+      let control = null;
+      if (boundary === "claim") {
+        const target = Object.getPrototypeOf(scenario.manager);
+        const original = target.claimExecutionContract;
+        control = t.mock.method(target, "claimExecutionContract", function (input) {
+          if (input.executionContract.stepId === "test-repair") replace(input.executionContract);
+          return original.call(this, input);
+        });
+      } else {
+        scenario.agent.projectInvocation = (_prompt, options) => {
+          const binding = options.processExecutionBinding.value;
+          if (binding.nodeId === "test-repair") {
+            const state = scenario.manager.canonicalState(scenario.specId);
+            const contract = scenario.manager.readStoredExecutionContract({
+              binding: { runId: state.runId, specId: state.specId, stepId: "test-repair", attempt: state.attempt },
+              generation: binding.executionGeneration, optional: true,
+            });
+            if (contract !== null) replace(contract);
+          }
+          return { assertWithinLimit() {} };
+        };
+      }
+      try {
+        if (boundary === "claim") {
+          await assert.rejects(() => scenario.dispatch(), { code: "FLOW_EXECUTION_INPUT_BASELINE_CHANGED" });
+        } else {
+          const rejected = await scenario.dispatch();
+          assert.equal(rejected.errors[0].code, "FLOW_EXECUTION_INPUT_BASELINE_CHANGED");
+        }
+      } finally { control?.mock.restore(); delete scenario.agent.projectInvocation; }
+      assert.equal(hit, true, "the real claim/provider admission must reach its producer race");
+      assert.equal(selectedContract.generation, 1);
+      scenario.reload();
+      assert.deepEqual(scenario.snapshot(), changedSnapshot);
+      assert.equal(scenario.requests.filter((request) => request.stepId === "test-repair").length, calls);
+    });
+  }
 });
 
 }

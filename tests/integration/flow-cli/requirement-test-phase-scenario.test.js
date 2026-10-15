@@ -517,7 +517,7 @@ describe("Requirement Test phase production scenarios", { concurrency: false }, 
     assertSavedResult(scenario, "test-gate", "test-gate-compatible");
   });
 
-  it("persists multiple repair batches in one Attempt before publishing the next candidate revision", { skip: "Known product defect deferred by user in 55dc; see 55dc-product-defects.md (Requirement repair execution generation)" }, async (t) => {
+  it("persists multiple repair batches in one Attempt before publishing the next candidate revision", async (t) => {
     const count = TEST_REVIEW_REPAIR_BATCH_LIMITS.findingCount + 1;
     const scenario = await approved(t, { reviewResponse: rejectFirstRequirementReviewBatches(count) });
     await scenario.advanceTo("test-repair");

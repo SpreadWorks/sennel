@@ -26,6 +26,8 @@ import {
 } from "../lib/review-work-unit-values.js";
 import { ReviewEvidenceIdentity } from "../lib/review-evidence-values.js";
 import { TestReviewRepairProgressEntry } from "../lib/test-review-repair-values.js";
+import { CanonicalWorkerTestTreeSnapshot } from "../lib/canonical-worker-artifacts.js";
+import { workerArtifactStableStringify } from "../lib/worker-artifact-input-format.js";
 
 export const STEP_RESULT_TYPE = Object.freeze({
   COMPLETED: "completed",
@@ -618,6 +620,78 @@ export class RequirementTestRepairProgressIdentity {
     }
     this.digest = createHash("sha256").update(JSON.stringify(this.#projection())).digest("hex");
     Object.freeze(this);
+  }
+  static fromProgress(progress) {
+    const document = progress.toJSON();
+    return new RequirementTestRepairProgressIdentity({
+      sourceArtifactDigest: document.sourceArtifactDigest,
+      sourceEvidenceId: document.sourceEvidenceId,
+      sourceCandidate: RequirementTestCandidateBundle.fromJSON(document.sourceCandidate),
+      coordinatorAttempt: RequirementTestSourceAttempt.fromJSON(document.coordinatorAttempt),
+      entries: progress.entries,
+      stagedSources: progress.stagedSources.map((source) => new RequirementTestCandidateSource({
+        testPath: source.testPath.startsWith("tests/") ? source.testPath : `tests/${source.testPath}`,
+        digest: source.digest, byteLength: source.bytes.length,
+      })),
+    });
+  }
+  matches(other) {
+    return other instanceof RequirementTestRepairProgressIdentity && sameValue(this, other);
+  }
+  completedRequestGroup({ requestDigest, handoffDigest = null }) {
+    const matching = this.entries.filter((entry) => entry.handoff?.requestDigest === requestDigest);
+    const receipt = matching[0]?.handoff ?? null;
+    if (receipt === null || handoffDigest !== null && receipt.handoffDigest !== handoffDigest
+      || !sameValue(receipt.sourceCandidate, this.sourceCandidate)) return null;
+    const group = this.entries.filter((entry) => entry.handoff?.batchId === receipt.batchId);
+    const findingIds = group.map((entry) => entry.findingId).sort((left, right) => left.localeCompare(right));
+    const changedPaths = receipt.changedPaths.map((entry) => entry.path);
+    if (!isDeepStrictEqual(findingIds, receipt.findingIds) || matching.length !== group.length
+      || group.some((entry) => entry.status !== "done" || !sameValue(entry.handoff, receipt))
+      || new Set(changedPaths).size !== changedPaths.length
+      || !isDeepStrictEqual(changedPaths, [...changedPaths].sort((left, right) => left.localeCompare(right)))) return null;
+    return receipt;
+  }
+  completedRequestGroupForReferences(artifactRefs) {
+    const requests = artifactRefs.filter((entry) => entry.kind === "worker-handoff-request");
+    const handoffs = artifactRefs.filter((entry) => entry.kind === "worker-handoff");
+    return requests.length === 1 && handoffs.length === 1
+      ? this.completedRequestGroup({ requestDigest: requests[0].id, handoffDigest: handoffs[0].id }) : null;
+  }
+  advances(previous, receipt) {
+    if (previous !== null && (!(previous instanceof RequirementTestRepairProgressIdentity)
+      || previous.sourceArtifactDigest !== this.sourceArtifactDigest || previous.sourceEvidenceId !== this.sourceEvidenceId
+      || !sameValue(previous.sourceCandidate, this.sourceCandidate)
+      || !sameValue(previous.coordinatorAttempt, this.coordinatorAttempt)
+      || previous.entries.length !== this.entries.length)) return false;
+    for (const entry of this.entries) {
+      const before = previous?.entries.find((candidate) => candidate.findingId === entry.findingId) ?? null;
+      if (previous !== null && (before === null || before.fingerprint !== entry.fingerprint)) return false;
+      if (receipt.findingIds.includes(entry.findingId)) {
+        if (before !== null && before.status !== "pending") return false;
+      } else if (before === null ? entry.status !== "pending" : !sameValue(entry, before)) return false;
+    }
+    const beforeSources = previous?.stagedSources ?? this.sourceCandidate.sources;
+    const beforeTree = this.#treeSnapshot(beforeSources);
+    const afterTree = this.#treeSnapshot(this.stagedSources);
+    if (createHash("sha256").update(workerArtifactStableStringify(beforeTree.entries)).digest("hex") !== receipt.beforeTreeDigest
+      || createHash("sha256").update(workerArtifactStableStringify(afterTree.entries)).digest("hex") !== receipt.afterTreeDigest) return false;
+    const changedPaths = new Map(receipt.changedPaths.map((entry) => [`tests/${entry.path}`, entry]));
+    const beforeByPath = new Map(beforeTree.entries.map((entry) => [entry.targetRelativePath, entry]));
+    const afterByPath = new Map(afterTree.entries.map((entry) => [entry.targetRelativePath, entry]));
+    for (const testPath of new Set([...beforeByPath.keys(), ...afterByPath.keys()])) {
+      const before = beforeByPath.get(testPath) ?? null;
+      const after = afterByPath.get(testPath) ?? null;
+      const changed = changedPaths.get(testPath) ?? null;
+      if (changed === null ? !isDeepStrictEqual(before, after)
+        : changed.beforeDigest !== (before?.digest ?? null) || changed.afterDigest !== after?.digest) return false;
+    }
+    return [...changedPaths.keys()].every((testPath) => afterByPath.has(testPath));
+  }
+  #treeSnapshot(sources) {
+    return new CanonicalWorkerTestTreeSnapshot(sources.map((source) => ({
+      targetRelativePath: source.testPath, digest: source.digest, byteLength: source.byteLength,
+    })));
   }
   static fromJSON(value) {
     exactResultFields(value, ["sourceArtifactDigest", "sourceEvidenceId", "sourceCandidate", "coordinatorAttempt", "entries", "stagedSources", "digest"], "stored repair progress identity");

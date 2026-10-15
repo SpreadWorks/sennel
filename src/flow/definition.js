@@ -5353,28 +5353,37 @@ function selectRequirementTestRoute(result, targetStepId, { requirementTestDecis
   });
 }
 
-/** A generated candidate may authorize the next Requirement in the same Attempt. */
+/** A completed Requirement publication may authorize the next execution in the same Attempt. */
 export class RequirementTestGenerationExecutionState {
-  constructor({ binding, requirementId, planPublication, saved = null }) {
-    if (binding.stepId !== "test-generate" || !(planPublication instanceof RequirementTestPlanPublication)) {
-      throw new TypeError("Requirement generation execution requires its bound plan publication");
+  constructor({ binding, requirementId, planPublication, progressDescriptor = null, progressIdentity = null, saved = null }) {
+    if (!["test-generate", "test-repair"].includes(binding.stepId)
+      || !(planPublication instanceof RequirementTestPlanPublication)) {
+      throw new TypeError("Requirement execution requires its bound plan publication");
     }
     this.generation = 0;
     this.budgetOwner = null;
     if (saved !== null) {
-      const { result, settlement, receipt, activityId } = saved;
+      const { result, settlement, receipt, activityId, completedRequest = null } = saved;
       if (!(receipt instanceof RequirementTestSettlementReceipt)) {
         throw new TypeError("Requirement generation execution requires its typed settlement receipt");
       }
       receipt.assertMatches({ binding, result, settlement });
       const decision = settlement.requirementTestDecision;
-      if (!(result instanceof TestGenerateCandidateSavedResult) || settlement.kind !== "execution"
-        || !decision?.continuesSourceAttempt || decision.nextRequirementId !== requirementId
-        || planPublication.activityId !== activityId || receipt.executionContract === null) {
+      const completed = binding.stepId === "test-generate"
+        ? result instanceof TestGenerateCandidateSavedResult && decision?.continuesSourceAttempt
+          && decision.nextRequirementId === requirementId && planPublication.activityId === activityId
+        : result instanceof TestRepairProgressSavedResult && result.binding.requirementId === requirementId
+          && result.binding.planPublication.matches(planPublication) && progressDescriptor?.activityId === activityId
+          && result.progressIdentity.matches(progressIdentity) && completedRequest !== null
+          && progressIdentity.completedRequestGroup({ requestDigest: completedRequest.requestDigest,
+            handoffDigest: completedRequest.handoffDigest }) !== null;
+      if (!completed || settlement.kind !== "execution" || receipt.executionContract === null) {
         throw new FlowExecutionContractRefusal("Requirement generation has no completed execution authorizing its current frontier");
       }
       this.generation = receipt.executionContract.generation + 1;
       this.budgetOwner = receipt.executionContract.budgetOwner;
+    } else if (binding.stepId === "test-repair" && progressIdentity?.entries.some((entry) => entry.status === "done")) {
+      throw new FlowExecutionContractRefusal("Requirement repair progress has no completed execution receipt");
     }
     Object.freeze(this);
   }
