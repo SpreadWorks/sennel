@@ -1,4 +1,5 @@
 import { flowTemporaryRoot } from "./flow-context.js";
+import { SourceExecutionObservationAppends } from "./source-execution-observation-appends.js";
 import { readFlowProcessStops } from "./process-runtime-admission.js";
 import { loadMergedGuardrails } from "../../lib/guardrail.js";
 import { ReviewExecutionAdmission } from "./spec-review-operations-values.js";
@@ -2167,7 +2168,9 @@ export class RunReviewCommand extends FlowCommand {
         implementationReviewCycle,
       });
       if (taskId !== null) {
-        taskSourceManifest = SourceMutationManifest.capture({ baseline: taskRecoveryBaseline });
+        taskSourceManifest = ctx.flowManager.readCanonicalTransitionView({ specId: state.specId,
+          read: (view) => SourceMutationManifest.capture({ baseline: taskRecoveryBaseline,
+            executionObservations: new SourceExecutionObservationAppends(view, taskRecoveryBaseline.snapshot) }) });
         if (taskSourceManifest.mutations.length > 0) {
           throw new TaskReviewSourceEffectRejection(
             `Task Review must not modify source: ${taskSourceManifest.paths().join(", ")}`,

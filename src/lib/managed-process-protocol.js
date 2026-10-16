@@ -4,8 +4,8 @@ import { setTimeout as delay } from "node:timers/promises";
 import path from "node:path";
 import { FileLock, FileLockWaitPolicy } from "./file-lock.js";
 import { RealDirectoryAuthority } from "./real-directory-authority.js";
-import fs from "node:fs";
 import { AtomicFile } from "./atomic-file.js";
+import { readManagedBinarySnapshot, decodeManagedRecord } from "./managed-process-record.js";
 import { ProcessIdentity, ProcessIdentitySource } from "./process-identity.js";
 import { ProcessExecutionControlFailure, ProcessExecutionFailureDiagnostic,
   ProcessExecutionCommunicationAttempt, ProcessExecutionCommunicationDiagnostic, executionValueDigest, executionUuid,
@@ -79,15 +79,7 @@ function managedRecordLock(file, waitPolicy, deadline) {
 
 export function readManagedBinary(file, { maximum = 16 * 1024 * 1024, waitPolicy, deadline } = {}) {
   try {
-    return managedRecordLock(file, waitPolicy, deadline).runExclusive(() => {
-      if (new AtomicFile(`${file}.transition`).read() !== null) {
-        throw managedControlFailure("PROCESS_EXECUTION_DURABILITY_UNCERTAIN", `Managed record has an incomplete durable write: ${file}`);
-      }
-      try {
-        if (fs.lstatSync(file).size > maximum) throw managedControlFailure("PROCESS_EXECUTION_OUTPUT_CORRUPT", "Managed file exceeds its bounded size");
-      } catch (cause) { if (cause.code !== "ENOENT") throw cause; }
-      return new AtomicFile(file).read();
-    });
+    return managedRecordLock(file, waitPolicy, deadline).runExclusive(() => readManagedBinarySnapshot(file, { maximum }));
   } catch (cause) {
     if (cause instanceof ProcessExecutionControlFailure) throw cause;
     throw managedControlFailure("PROCESS_EXECUTION_RECORD_UNREADABLE", `Managed process record cannot be read: ${file}`, cause);
@@ -95,9 +87,7 @@ export function readManagedBinary(file, { maximum = 16 * 1024 * 1024, waitPolicy
 }
 
 export function readManagedRecord(file, options = {}) {
-  const bytes = readManagedBinary(file, options);
-  try { return bytes === null ? null : JSON.parse(bytes); }
-  catch (cause) { throw managedControlFailure("PROCESS_EXECUTION_RECORD_UNREADABLE", `Managed JSON cannot be read: ${file}`, cause); }
+  return decodeManagedRecord(readManagedBinary(file, options), file);
 }
 
 export function writeManagedBinary(file, bytes, identity, { faultInjector, waitPolicy, deadline } = {}) {

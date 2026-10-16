@@ -24,7 +24,7 @@ function requireDuration(value) {
   return value;
 }
 
-function buildMetricEntry(phase, { usage, responseChars, model, durationMs, provider, profileKey }) {
+function buildMetricEntry(phase, { usage, responseChars, model, durationMs, provider, profileKey, executionObservation }) {
   return {
     phase,
     kind: "agent",
@@ -33,13 +33,14 @@ function buildMetricEntry(phase, { usage, responseChars, model, durationMs, prov
     callCount: 1,
     responseChars: responseChars || 0,
     durationMs,
+    ...(executionObservation && { executionObservation }),
     ...(model && { model }),
     ...(usage && {
       tokens: {
-        input: usage.input_tokens || 0,
-        output: usage.output_tokens || 0,
-        cacheRead: usage.cache_read_tokens || 0,
-        cacheCreation: usage.cache_creation_tokens || 0,
+        input: usage.input_tokens ?? null,
+        output: usage.output_tokens ?? null,
+        cacheRead: usage.cache_read_tokens ?? null,
+        cacheCreation: usage.cache_creation_tokens ?? null,
       },
       ...(usage.cost_usd != null && { cost: usage.cost_usd }),
     }),
@@ -81,7 +82,7 @@ class FlowAgentMetric {
 }
 
 export class AgentInvocationMetric extends FlowAgentMetric {
-  constructor({ flowManager, context, provider, profileKey, usage, responseChars, model, durationMs }) {
+  constructor({ flowManager, context, provider, profileKey, usage, responseChars, model, durationMs, executionObservation = null }) {
     super({ flowManager, context });
     requireFlowMetricCapability(flowManager, "accumulateAgentMetrics");
     this.phase = String(context.flowPhase);
@@ -92,14 +93,15 @@ export class AgentInvocationMetric extends FlowAgentMetric {
       responseChars,
       model,
       durationMs: requireDuration(durationMs),
+      executionObservation,
     });
     this.entry = Object.freeze(buildMetricEntry(this.phase, this.options));
     Object.freeze(this);
   }
 
-  static capture({ flowManager, ...options }) {
+  static capture({ flowManager, context: fixedContext, ...options }) {
     const manager = requireFlowManager(flowManager);
-    const context = manager.resolveCurrentContext();
+    const context = fixedContext === undefined ? manager.resolveCurrentContext() : fixedContext;
     if (!context?.flowPhase) return null;
     return new AgentInvocationMetric({ flowManager: manager, context, ...options });
   }
@@ -109,15 +111,16 @@ export class AgentInvocationMetric extends FlowAgentMetric {
   }
 
   persistToFlow() {
-    this.flowManager.accumulateAgentMetrics(this.phase, this.options);
+    this.flowManager.accumulateAgentMetrics(this.phase, { ...this.options,
+      specId: this.context.specId, taskId: this.context.taskId ?? null });
   }
 }
 
 class PromptCacheHitMetric extends FlowAgentMetric {
-  constructor({ flowManager, context, provider, profileKey, responseChars }) {
+  constructor({ flowManager, context, provider, profileKey, responseChars, executionObservation = null }) {
     super({ flowManager, context });
     requireFlowMetricCapability(flowManager, "appendMetric");
-    this.options = Object.freeze({ provider, profileKey, responseChars });
+    this.options = Object.freeze({ provider, profileKey, responseChars, executionObservation });
     this.entry = Object.freeze({
       phase: String(context.flowPhase),
       kind: "agent-cache",
@@ -126,6 +129,7 @@ class PromptCacheHitMetric extends FlowAgentMetric {
       callCount: 0,
       cachedResponse: true,
       responseChars,
+      ...(executionObservation && { executionObservation }),
     });
     Object.freeze(this);
   }
@@ -170,7 +174,7 @@ export class DeferredAgentInvocationMetric {
     }
     if (this.#captured) throw new Error("agent invocation metric was already captured");
     if (this.#flushed) throw new Error("agent invocation metric was already flushed");
-    this.#metric = this.#flowManager && this.#context?.flowPhase
+    this.#metric = !metric.options?.executionObservation && this.#flowManager && this.#context?.flowPhase
       ? metric.bind(this.#flowManager, this.#context)
       : metric;
     this.#captured = true;

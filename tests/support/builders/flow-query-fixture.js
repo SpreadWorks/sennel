@@ -154,7 +154,7 @@ function gitStatus(root) {
   }
 }
 
-function snapshotTree(root) {
+export function snapshotFlowQueryTree(root) {
   const entries = [];
   const observedPaths = new Set();
   const visit = (directory) => {
@@ -249,7 +249,7 @@ class FlowQueryFixture {
     };
   }
 
-  snapshot() { return snapshotTree(this.root); }
+  snapshot() { return snapshotFlowQueryTree(this.root); }
 
   materializeVersion(version) {
     return materializeVersionedCopy(this.root, this.specId, this.selectedVersion, version);

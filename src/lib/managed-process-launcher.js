@@ -5,8 +5,8 @@ import { ManagedOutputSpool } from "./managed-process-output.js";
 import net from "node:net";
 import { spawn } from "node:child_process";
 import { ProcessIdentitySource } from "./process-identity.js";
-import { ProcessExecutionControlFailure } from "./process-execution-values.js";
-import { ManagedStopOperation } from "./managed-stop-operation.js";
+import { ProcessExecutionControlFailure, ProcessExecutionTiming } from "./process-execution-values.js";
+import { ManagedStopOperation, managedMonotonicNow } from "./managed-stop-operation.js";
 import { ManagedStopOperationStore } from "./managed-stop-store.js";
 import { MANAGED_REQUEST_INACTIVITY_MS } from "./managed-control-policy.js";
 import {
@@ -23,6 +23,8 @@ export class ManagedLauncher {
     this.stdout = new ManagedOutputSpool(this.call, "stdout", config.maxBuffer);
     this.stderr = new ManagedOutputSpool(this.call, "stderr", config.maxBuffer);
     this.outcome = { providerStarted: false, code: null, signal: null, timedOut: false, aborted: false, finalAction: null, stdinError: null };
+    this.timing = new ProcessExecutionTiming();
+    this.startedMonotonic = null;
     this.child = null;
     this.controlFailure = null;
     this.exiting = false;
@@ -35,7 +37,7 @@ export class ManagedLauncher {
     return { ...this.call, launcherIdentity: this.identity, pgid: process.pid,
       providerIdentity: this.providerIdentity ?? null,
       members: [...this.members.values()], state: this.state,
-      outcome: { ...this.outcome, output: { maximum: this.config.maxBuffer,
+      outcome: { ...this.outcome, timing: this.timing, output: { maximum: this.config.maxBuffer,
         stdout: this.stdout.persist({ deadline: this.stopOperation?.deadline }), stderr: this.stderr.persist({ deadline: this.stopOperation?.deadline }) } },
       controlFailure: this.controlFailure, startRequest: this.startRequest, stopRequest: this.stopRequest,
       stopOperation: this.stopOperation?.toJSON() ?? null };
@@ -118,6 +120,7 @@ export class ManagedLauncher {
     if (Date.now() >= this.config.deadline) { this.stop("timeout"); return; }
     this.state = "running";
     this.startRequest = new ManagedRequestAcceptance(request);
+    this.timing = new ProcessExecutionTiming({ ...this.timing, startAcceptedAt: new Date().toISOString() });
     this.save();
     try {
       this.child = spawn(this.config.command, this.config.args, {
@@ -126,6 +129,10 @@ export class ManagedLauncher {
         stdio: [this.config.input == null ? "ignore" : "pipe", "pipe", "pipe", ...this.config.extraDescriptors],
       });
       this.outcome.providerStarted = this.child.pid != null;
+      if (this.outcome.providerStarted) {
+        this.startedMonotonic = managedMonotonicNow();
+        this.timing = new ProcessExecutionTiming({ ...this.timing, startedAt: new Date().toISOString() });
+      }
       this.child.on("error", (error) => {
         this.outcome.error = { code: error.code, message: error.message };
         this.childDone = true;
@@ -174,6 +181,9 @@ export class ManagedLauncher {
         throw managedControlFailure("PROCESS_EXECUTION_REQUEST_MISMATCH", "Stop request differs from the accepted operation");
       }
       this.stopOperation = chosen;
+      if (this.timing.stopRequestedAt === null) {
+        this.timing = new ProcessExecutionTiming({ ...this.timing, stopRequestedAt: new Date().toISOString() });
+      }
       if (request !== null) this.stopRequest ??= new ManagedRequestAcceptance(request);
       if (this.state === "stopping" || this.exiting) { this.save(); return; }
     } catch (error) {
@@ -245,6 +255,8 @@ export class ManagedLauncher {
     // Give pipe events already queued by the child's exit one event-loop turn.
     setImmediate(() => {
       this.state = "finished";
+      this.timing = new ProcessExecutionTiming({ ...this.timing, finishedAt: new Date().toISOString(),
+        durationMs: this.startedMonotonic === null ? null : Math.max(0, managedMonotonicNow() - this.startedMonotonic) });
       try { this.save(); }
       catch (error) { process.exitCode = 1; }
       this.server.close(() => process.exit(process.exitCode || 0));

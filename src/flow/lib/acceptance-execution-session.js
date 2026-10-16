@@ -1,4 +1,4 @@
-import { PromptExecutionBudget, PromptExecutionLimit, PromptRequestLimit } from "../../lib/prompt-batching.js";
+import { PromptExecutionBudget, PromptExecutionLimit, PromptRequestLimit, PromptBatchCompletion } from "../../lib/prompt-batching.js";
 import { AgentInvocationConfiguration } from "../../lib/agent.js";
 import { PromptExecutionJournal, PromptExecutionScope, PromptExecutionJournalError } from "../../lib/prompt-execution-journal.js";
 import { CanonicalPromptExecutionEpisode } from "./canonical-prompt-execution.js";
@@ -41,6 +41,7 @@ export class AcceptanceExecutionSpecification {
 
 /** Physical execution consumes only acquired frontiers and save-only journals. */
 export class AcceptanceExecutionSession {
+  #contributions = new Map();
   constructor({ specification, episode, journals }) {
     if (!(specification instanceof AcceptanceExecutionSpecification) || !(episode instanceof CanonicalPromptExecutionEpisode)
       || !Array.isArray(journals) || journals.some((journal) => !(journal instanceof PromptExecutionJournal))) {
@@ -54,6 +55,14 @@ export class AcceptanceExecutionSession {
     this.journals = Object.freeze([...journals]);
     Object.freeze(this);
   }
+  adoptCompletions(completions) {
+    for (const completion of completions) {
+      if (!(completion instanceof PromptBatchCompletion)) throw new TypeError("Acceptance selection requires actual typed prompt completions");
+      const contribution = completion.responseContribution();
+      if (contribution !== null) this.#contributions.set(executionValueDigest(contribution.toJSON()), contribution);
+    }
+  }
+  get responseContributions() { return Object.freeze([...this.#contributions.values()]); }
   journal(stage, round = 0) {
     const scope = new PromptExecutionScope({ stage, round });
     const journal = this.journals.find((entry) => entry.scope.stage === scope.stage && entry.scope.round === scope.round);

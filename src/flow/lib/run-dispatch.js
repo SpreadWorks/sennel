@@ -2269,6 +2269,7 @@ export default class RunDispatchCommand extends FlowCommand {
             responseText = handoffRequest?.policy.supportsInterruptedRecovery
               ? await executeArtifactWorkerPrompt({ flowManager: ctx.flowManager, request: handoffRequest,
                 prompt, callOptions: physicalCallOptions, agent,
+                onResponse: (response) => { handoffRequest = handoffRequest.withPromptResponse(response); },
                 reservationContinuation: selectedExecution?.artifactContinuation?.reservationContinuation ?? null })
               : await agent.call(prompt, physicalCallOptions);
           }

@@ -25,9 +25,10 @@ function activities() {
     completeness: { scope: "flow-version", enumeration: "complete", details: "complete", sourceHistory: "complete" },
     items: [{
       activity: { id: "activity-1", type: "attempt_confirmed" }, node: { id: "review", key: "review" }, task: null,
-      attempt: { id: "attempt-1", sequence: 1 }, sequence: 1, confirmationOrder: 1,
+      attempt: { id: "attempt-1", sequence: 1, startedAt: null }, sequence: 1, confirmationOrder: 1,
       transition: { operation: "confirm_attempt", status: "done" }, timing: null, usage: null, outcome: null,
       failure: null, blocker: null, incomplete: null, metric: null, note: null,
+      resultConfirmedAt: null, provider: null, model: null, effort: null, outbox: null, executionRefs: [],
       evaluationIds: ["legacy-1"], findingIds: [], repairIds: [], artifactIds: [hash],
       detailRefs: { evaluations: [evaluationId], findings: [], repairs: [] },
       referenceBindings: { evaluations: [{ reference: { id: "legacy-1", label: null }, detailIds: [evaluationId], availability: "available", reason: null }], findings: [], repairs: [] },
@@ -67,6 +68,131 @@ function metadata() {
       provenance: { activityCount: "confirmed-activity-prefix", artifactCount: "canonical-artifact-catalog", stepCount: "canonical-state", taskCount: "canonical-state", durationMs: "activity-timing-durationMs", inputTokens: "activity-usage-inputTokens", outputTokens: "activity-usage-outputTokens", cacheReadTokens: "activity-usage-cacheReadTokens", cost: "activity-usage-cost" },
     },
   };
+  Object.assign(value.item, {
+  "executionCoverage": {
+    "sourceHistory": "partial",
+    "availability": "not-recorded",
+    "reason": "PRODUCER_DID_NOT_RECORD",
+    "producerCoverage": [
+      {
+        "producer": "agent-invocation",
+        "status": "not-recorded",
+        "boundary": "no-source-registration"
+      },
+      {
+        "producer": "provider-attempt",
+        "status": "not-recorded",
+        "boundary": "no-source-registration"
+      },
+      {
+        "producer": "outbox-attempt",
+        "status": "not-recorded",
+        "boundary": "no-source-registration"
+      },
+      {
+        "producer": "process-call",
+        "status": "not-recorded",
+        "boundary": "no-managed-runtime-source-registration"
+      },
+      {
+        "producer": "synchronous-command",
+        "status": "outside-managed-scope",
+        "boundary": "outside-managed-launcher"
+      },
+      {
+        "producer": "unmanaged-async-command",
+        "status": "outside-managed-scope",
+        "boundary": "outside-managed-launcher"
+      },
+      {
+        "producer": "direct-spawn",
+        "status": "outside-managed-scope",
+        "boundary": "outside-managed-launcher"
+      },
+      {
+        "producer": "provider-internal-tool",
+        "status": "outside-managed-scope",
+        "boundary": "outside-managed-launcher"
+      },
+      {
+        "producer": "outer-agent",
+        "status": "outside-managed-scope",
+        "boundary": "outside-managed-launcher"
+      }
+    ],
+    "unassignedItemCount": 0
+  },
+  "executionSummary": {
+    "stepAttemptCount": 0,
+    "logicalInvocationCount": 0,
+    "providerAttemptCount": 0,
+    "managedCallCount": 0,
+    "outboxAttemptCount": 0,
+    "cacheHitCount": 0,
+    "providerStarts": {
+      "confirmed": 0,
+      "notStarted": 0,
+      "unknown": 0
+    },
+    "providerUsage": {
+      "inputTokens": {
+        "knownTotal": 0,
+        "measuredSubjects": 0,
+        "eligibleSubjects": 0,
+        "unknownSubjects": 0,
+        "completeness": "complete"
+      },
+      "outputTokens": {
+        "knownTotal": 0,
+        "measuredSubjects": 0,
+        "eligibleSubjects": 0,
+        "unknownSubjects": 0,
+        "completeness": "complete"
+      },
+      "cacheReadTokens": {
+        "knownTotal": 0,
+        "measuredSubjects": 0,
+        "eligibleSubjects": 0,
+        "unknownSubjects": 0,
+        "completeness": "complete"
+      },
+      "cacheCreationTokens": {
+        "knownTotal": 0,
+        "measuredSubjects": 0,
+        "eligibleSubjects": 0,
+        "unknownSubjects": 0,
+        "completeness": "complete"
+      },
+      "costUsd": {
+        "knownTotal": 0,
+        "measuredSubjects": 0,
+        "eligibleSubjects": 0,
+        "unknownSubjects": 0,
+        "completeness": "complete"
+      }
+    },
+    "logicalDuration": {
+      "knownTotalMs": 0,
+      "measuredSubjects": 0,
+      "eligibleSubjects": 0,
+      "completeness": "complete"
+    },
+    "processDuration": {
+      "knownTotalMs": 0,
+      "measuredSubjects": 0,
+      "eligibleSubjects": 0,
+      "completeness": "complete"
+    },
+    "observedSpan": {
+      "startedAt": null,
+      "finishedAt": null,
+      "completeness": "partial"
+    },
+    "legacyMetricCount": 0,
+    "unassignedMeasurementCount": 0
+  },
+  "executionSources": []
+});
   return value;
 }
 

@@ -248,6 +248,12 @@ export class FlowArtifactAttemptHistory {
     }));
   }
   append(record) { return new FlowArtifactAttemptHistory([...this.attempts, record]); }
+  prefixThrough(exactAttempt) {
+    const attempt = exactAttempt instanceof FlowArtifactAttempt ? exactAttempt : new FlowArtifactAttempt(exactAttempt);
+    const index = this.attempts.findIndex((record) => record.attempt.value === attempt.value);
+    if (index === -1) throw new Error("artifact attempt history does not retain the exact requested Attempt");
+    return new FlowArtifactAttemptHistory(this.attempts.slice(0, index + 1));
+  }
   assertExtends(previous) {
     if (!(previous instanceof FlowArtifactAttemptHistory)) throw new Error("previous artifact attempt history is required");
     if (this.attempts.length < previous.attempts.length) throw new Error("artifact attempt history must be append-only");
@@ -259,6 +265,7 @@ export class FlowArtifactAttemptHistory {
     return this;
   }
   toJSON() { return { attempts: this.attempts.map((record) => record.toJSON()) }; }
+  toBytes() { return Buffer.from(`${JSON.stringify(this.toJSON(), null, 2)}\n`, "utf8"); }
 }
 
 export class FlowArtifactAttemptRecord {
@@ -1620,7 +1627,7 @@ export class FlowArtifactRegistry {
 const FLOW_ARTIFACT_PLACEMENTS = new Map([
   ...["flow.state", "flow.activities", "spec.record", "issue.log", "artifact.catalog", "issue.snapshot"].map((key) => [key, new FlowArtifactPlacement("root-authority")]),
   ...["spec.snapshot", "spec.review"].map((key) => [key, new FlowArtifactPlacement("revision-authority")]),
-  ...["execution.contract", "execution.request", "execution.recovery", "prompt.execution.progress", "prompt.execution.event", "prompt.execution.budget", "report", "ideas", "tests.source", "test.requirement.failure", "test.requirement.candidate.bundle", "test.requirement.candidate.source", "test.requirement.support", "plugin.lifecycle.artifact", "retry.recovery.baseline", "retry.recovery.receipt", "plan.gate.repair.outcome", "spec.gate.repair.migration", "spec.gate.repair.progress", "spec.gate.repair.audit", "spec.gate.repair.source.blob", "spec.gate.repair.source.manifest", "source.handoff.rollback-blob", "source.handoff.checkpoint", "source.handoff.event", "source.handoff.settlement"].map((key) => [key, new FlowArtifactPlacement("independent-deliverable")]),
+  ...["execution.response.adoption", "execution.source.manifest", "execution.observation", "execution.contract", "execution.request", "execution.recovery", "prompt.execution.progress", "prompt.execution.event", "prompt.execution.budget", "report", "ideas", "tests.source", "test.requirement.failure", "test.requirement.candidate.bundle", "test.requirement.candidate.source", "test.requirement.support", "plugin.lifecycle.artifact", "retry.recovery.baseline", "retry.recovery.receipt", "plan.gate.repair.outcome", "spec.gate.repair.migration", "spec.gate.repair.progress", "spec.gate.repair.audit", "spec.gate.repair.source.blob", "spec.gate.repair.source.manifest", "source.handoff.rollback-blob", "source.handoff.checkpoint", "source.handoff.event", "source.handoff.settlement"].map((key) => [key, new FlowArtifactPlacement("independent-deliverable")]),
   ...["upgrade.result", "completion.overrides", "retry.recovery", "flow.findings", "nonblocking.handoffs"].map((key) => [key, new FlowArtifactPlacement("step-shared")]),
   ...[
     "test.requirement.gate.raw-log", "test.execute.raw-log", "final.regression.raw-log",
@@ -1643,7 +1650,7 @@ const FLOW_ARTIFACT_PLACEMENTS = new Map([
 ]);
 
 const FLOW_ARTIFACT_MUTATION_POLICIES = new Map([
-  ...["execution.contract", "execution.request", "execution.recovery", "prompt.execution.event"].map((key) => [key, new FlowArtifactMutationPolicy("immutable")]),
+  ...["execution.response.adoption", "execution.source.manifest", "execution.observation", "execution.contract", "execution.request", "execution.recovery", "prompt.execution.event"].map((key) => [key, new FlowArtifactMutationPolicy("immutable")]),
   ["task.review.reconciliation", new FlowArtifactMutationPolicy("immutable")],
   ["spec.snapshot", new FlowArtifactMutationPolicy("immutable")],
   ["review.evidence", new FlowArtifactMutationPolicy("immutable")],
@@ -1805,6 +1812,9 @@ export const FLOW_ARTIFACT_NO_ARTIFACT_STEPS = Object.freeze([
 ]);
 
 const FLOW_ARTIFACT_CONTRACT_LIST = Object.freeze([
+  contract("execution.response.adoption", "artifacts/execution-observations/adoptions/:{adoptionId}.json", "prompt-response-adoption", "canonical-flow-artifacts", "system", own(FLOW_WIDE_RECORD_ACTORS, FLOW_WIDE_RECORD_ACTORS, FLOW_WIDE_RECORD_ACTORS), "permanent", "collection"),
+  contract("execution.source.manifest", "artifacts/execution-observations/sources/:{sourceId}.json", "execution-source-manifest", "canonical-flow-artifacts", "system", own(["system"], ["system"], FLOW_WIDE_RECORD_ACTORS), "permanent", "collection"),
+  contract("execution.observation", "artifacts/execution-observations/facts/:{observationId}.json", "execution-observation", "canonical-flow-artifacts", "system", own(["system"], ["system"], FLOW_WIDE_RECORD_ACTORS), "permanent", "collection"),
   contract("execution.contract", "artifacts/executions/:{episodeId}/:{generation}/contract.json", "execution-contract", "canonical-flow-artifacts", "system", own(FLOW_WIDE_RECORD_ACTORS, FLOW_WIDE_RECORD_ACTORS, FLOW_WIDE_RECORD_ACTORS), "permanent", "collection"),
   contract("execution.recovery", "artifacts/executions/:{episodeId}/:{generation}/recovery.json", "execution-recovery", "canonical-flow-artifacts", "system", own(FLOW_WIDE_RECORD_ACTORS, FLOW_WIDE_RECORD_ACTORS, FLOW_WIDE_RECORD_ACTORS), "permanent", "collection"),
   contract("execution.request", "artifacts/executions/:{episodeId}/:{generation}/request.json", "execution-request", "canonical-flow-artifacts", "system", own(FLOW_WIDE_RECORD_ACTORS, FLOW_WIDE_RECORD_ACTORS, FLOW_WIDE_RECORD_ACTORS), "permanent", "collection"),
@@ -2076,6 +2086,9 @@ const removeTarget = (logicalKey, legacyPaths = [], legacyPatterns = [], produce
 });
 
 export const FLOW_ARTIFACT_SWITCH_TARGETS = Object.freeze([
+  newTarget("execution.response.adoption", "artifacts/execution-observations/adoptions/:{adoptionId}.json", "system", "system"),
+  newTarget("execution.source.manifest", "artifacts/execution-observations/sources/:{sourceId}.json", "system", "system"),
+  newTarget("execution.observation", "artifacts/execution-observations/facts/:{observationId}.json", "system", "system"),
   newTarget("execution.contract", "artifacts/executions/:{episodeId}/:{generation}/contract.json", "system", "system"),
   newTarget("execution.recovery", "artifacts/executions/:{episodeId}/:{generation}/recovery.json", "system", "system"),
   newTarget("execution.request", "artifacts/executions/:{episodeId}/:{generation}/request.json", "system", "system"),
@@ -2205,6 +2218,9 @@ const knownPattern = (logicalKey, action, legacyPattern) => new FlowArtifactKnow
 const knownNew = (logicalKey, canonicalPath) => new FlowArtifactKnownFile({ logicalKey, action: "new", canonicalPath });
 
 export const FLOW_ARTIFACT_NORMAL_FLOW_FILES = Object.freeze([
+  knownNew("execution.response.adoption", "artifacts/execution-observations/adoptions/:{adoptionId}.json"),
+  knownNew("execution.source.manifest", "artifacts/execution-observations/sources/:{sourceId}.json"),
+  knownNew("execution.observation", "artifacts/execution-observations/facts/:{observationId}.json"),
   knownNew("execution.contract", "artifacts/executions/:{episodeId}/:{generation}/contract.json"),
   knownNew("execution.recovery", "artifacts/executions/:{episodeId}/:{generation}/recovery.json"),
   knownNew("execution.request", "artifacts/executions/:{episodeId}/:{generation}/request.json"),

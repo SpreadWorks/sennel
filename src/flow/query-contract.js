@@ -7,7 +7,7 @@ export const FLOW_QUERY_SCHEMA_REVISION = 3;
 export const FLOW_QUERY_HELP = [
   "Usage: sennel flow query [--request-file <path>]",
   "",
-  "Read canonical Flow Version metadata or confirmed Activities as one JSON response.",
+  "Read canonical Flow Version metadata, confirmed Activities or execution observations as one JSON response.",
   "Input is a single JSON request from stdin or --request-file.",
 ].join("\n");
 export const FLOW_QUERY_LIMITS = Object.freeze({
@@ -32,7 +32,7 @@ export const FLOW_QUERY_LIMITS = Object.freeze({
   MAX_TOTAL_ARTIFACT_BYTES: 67_108_864,
 });
 
-export const FLOW_QUERY_RESOURCES = Object.freeze(["metadata", "activities"]);
+export const FLOW_QUERY_RESOURCES = Object.freeze(["metadata", "activities", "executions"]);
 
 export const FLOW_QUERY_ERROR_CODES = Object.freeze({
   FLOW_BOOTSTRAP_FAILED: "FLOW_BOOTSTRAP_FAILED",
@@ -42,6 +42,7 @@ export const FLOW_QUERY_ERROR_CODES = Object.freeze({
   FLOW_VERSION_NOT_FOUND: "FLOW_VERSION_NOT_FOUND",
   CANONICAL_RECORD_UNREADABLE: "CANONICAL_RECORD_UNREADABLE",
   CANONICAL_RECORD_INCONSISTENT: "CANONICAL_RECORD_INCONSISTENT",
+  EXECUTION_RECORD_INCONSISTENT: "EXECUTION_RECORD_INCONSISTENT",
   INVALID_CURSOR: "INVALID_CURSOR",
   CURSOR_QUERY_MISMATCH: "CURSOR_QUERY_MISMATCH",
   SNAPSHOT_CHANGED: "SNAPSHOT_CHANGED",
@@ -58,6 +59,7 @@ export const FLOW_QUERY_ERROR_PATHS = Object.freeze({
   FLOW_VERSION_NOT_FOUND: "/condition/flowVersion",
   CANONICAL_RECORD_UNREADABLE: "/canonical",
   CANONICAL_RECORD_INCONSISTENT: "/canonical",
+  EXECUTION_RECORD_INCONSISTENT: "/canonical",
   INVALID_CURSOR: "/page/after",
   CURSOR_QUERY_MISMATCH: "/page/after",
   SNAPSHOT_CHANGED: "/page/after",
@@ -124,19 +126,25 @@ const recordedAt = Object.freeze({
   ],
 });
 
+const expectSnapshotId = Object.freeze({ type: "string", pattern: "^sha256:[a-f0-9]{64}$" });
+const executionTarget = Object.freeze({ type: "object", required: ["nodeId", "includeDescendants", "attemptId"],
+  properties: { nodeId: { ...publicString, minLength: 1 }, includeDescendants: { type: "boolean" }, attemptId: nullable({ ...publicString, minLength: 1 }) }, additionalProperties: false });
+
 export const FLOW_QUERY_REQUEST_SCHEMAS = Object.freeze({
   metadata: Object.freeze({
     type: "object",
     required: ["resource", "condition"],
-    properties: { resource: { type: "string", enum: ["metadata"] }, condition },
+    properties: { resource: { type: "string", enum: ["metadata"] }, condition, expectSnapshotId },
     additionalProperties: false,
   }),
   activities: Object.freeze({
     type: "object",
     required: ["resource", "condition", "page"],
-    properties: { resource: { type: "string", enum: ["activities"] }, condition, page: page(FLOW_QUERY_LIMITS.MAX_PAGE_LIMIT), recordedAt },
+    properties: { resource: { type: "string", enum: ["activities"] }, condition, page: page(FLOW_QUERY_LIMITS.MAX_PAGE_LIMIT), recordedAt, expectSnapshotId },
     additionalProperties: false,
   }),
+  executions: Object.freeze({ type: "object", required: ["resource", "condition", "page"],
+    properties: { resource: { type: "string", enum: ["executions"] }, condition, page: page(FLOW_QUERY_LIMITS.MAX_PAGE_LIMIT), target: executionTarget, expectSnapshotId }, additionalProperties: false }),
 });
 
 export const FLOW_QUERY_REQUEST_SCHEMA = Object.freeze({ oneOf: Object.values(FLOW_QUERY_REQUEST_SCHEMAS) });
@@ -213,7 +221,8 @@ class FlowQueryResponseValidation {
       return this.errors;
     }
     if (value.resource === "metadata") this.metadata();
-    else this.activities();
+    else if (value.resource === "activities") this.activities();
+    else this.executions();
     return this.errors;
   }
 
@@ -335,17 +344,47 @@ class FlowQueryResponseValidation {
     }
   }
 
+  page(items, pageInfo) {
+    this.check(pageInfo.returnedItems === items.length && items.length <= pageInfo.limit, "pageInfo.returnedItems", "must equal items length and fit the requested limit");
+    this.check(pageInfo.totalItems >= items.length, "pageInfo.totalItems", "must cover the returned items");
+    this.check(items.length > 0 || !pageInfo.hasNext, "pageInfo.hasNext", "an empty page must be final");
+    this.check(!pageInfo.hasNext || pageInfo.endCursor !== null, "pageInfo.endCursor", "a non-final page requires a cursor");
+    this.check(!pageInfo.hasNext || pageInfo.totalItems > items.length, "pageInfo.totalItems", "a non-final page requires remaining items");
+  }
+
+  executions() {
+    const { items, relations, endpoints, measurements, pageInfo, selectedFlowVersion } = this.response;
+    this.page(items, pageInfo);
+    this.unique(items.map((item) => item.id), "items.id");
+    this.unique(relations.map((relation) => relation.id), "relations.id");
+    this.unique(endpoints.map((endpoint) => endpoint.ref.id), "endpoints.ref.id");
+    const measured = new Map(measurements.map((measurement) => [measurement.measurementId, measurement]));
+    this.check(measured.size === measurements.length, "measurements", "measurement identities must be unique");
+    const references = new Map([...items.map((item) => [item.id, item.kind]), ...endpoints.map((endpoint) => [endpoint.ref.id, endpoint.ref.kind])]);
+    for (const relation of relations) for (const reference of [relation.from, relation.to]) {
+      this.check(references.get(reference.id) === reference.kind, "relations", "each endpoint must resolve to an item or endpoint of the same kind");
+      this.check(items.some((item) => item.id === relation.from.id || item.id === relation.to.id), "relations", "a relation must touch a page item");
+    }
+    this.check(items.every((item, index) => index === 0 || Buffer.compare(Buffer.from(items[index - 1].id), Buffer.from(item.id)) < 0), "items.id", "must be in ascending UTF-8 byte order");
+    for (const item of items) {
+      this.check(item.binding.specId === selectedFlowVersion.specId, "items.binding.specId", "must match the selected Spec");
+      if (item.kind === "provider-attempt" && item.usageRef !== null) {
+        const measurement = measured.get(item.usageRef);
+        this.check(measurement?.subjectRef.kind === item.kind && measurement?.subjectRef.id === item.id, "items.usageRef", "must resolve to this provider attempt's measurement");
+      }
+      if (item.kind === "agent-invocation") {
+        this.check(item.status !== "received" || item.response.receivedAt !== null && item.response.receiverObservationRef !== null, "items.response", "received requires durable receiver evidence");
+      }
+    }
+  }
+
   activities() {
     const { items, entities, pageInfo, snapshot, completeness } = this.response;
     this.unique(items.map((item) => item.activity.id), "items.activity.id");
     this.unique(items.map((item) => item.confirmationOrder), "items.confirmationOrder");
     this.check(items.every((item, index) => index === 0 || items[index - 1].confirmationOrder < item.confirmationOrder), "items.confirmationOrder", "must be ascending");
     this.check(items.every((item) => item.confirmationOrder <= snapshot.confirmationOrder), "items.confirmationOrder", "must not exceed the snapshot confirmed prefix");
-    this.check(pageInfo.returnedItems === items.length && items.length <= pageInfo.limit, "pageInfo.returnedItems", "must equal items length and fit the requested limit");
-    this.check(pageInfo.totalItems >= items.length, "pageInfo.totalItems", "must cover the returned items");
-    this.check(items.length > 0 || !pageInfo.hasNext, "pageInfo.hasNext", "an empty page must be final");
-    this.check(!pageInfo.hasNext || pageInfo.endCursor !== null, "pageInfo.endCursor", "a non-final page requires a cursor");
-    this.check(!pageInfo.hasNext || pageInfo.totalItems > items.length, "pageInfo.totalItems", "a non-final page requires remaining items");
+    this.page(items, pageInfo);
     const groupIds = new Map(DETAIL_GROUPS.map((group) => [group, this.unique(entities[group].map((entity) => entity.id), `entities.${group}`)]));
     const all = new Map();
     for (const group of DETAIL_GROUPS) {

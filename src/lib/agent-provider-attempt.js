@@ -6,7 +6,7 @@ function requiredText(value, name) {
 /** Identity and provider-visible input at one transport dispatch boundary. */
 export class AgentProviderAttemptContext {
   constructor({ attemptId, logicalInvocationId, commandId = null, provider, profileKey,
-    attemptIndex, maxAttempts, inputCharacters, invocation = null } = {}) {
+    attemptIndex, maxAttempts, inputCharacters, invocation = null, observationBinding = null, measurementId = null } = {}) {
     this.attemptId = requiredText(attemptId, "Agent provider attempt identity");
     this.logicalInvocationId = requiredText(logicalInvocationId, "Agent logical invocation identity");
     this.commandId = commandId === null ? null : requiredText(commandId, "Agent command identity");
@@ -22,6 +22,8 @@ export class AgentProviderAttemptContext {
     this.maxAttempts = maxAttempts;
     this.inputCharacters = inputCharacters;
     this.invocation = invocation;
+    this.observationBinding = observationBinding;
+    this.measurementId = measurementId;
     if (new.target === AgentProviderAttemptContext) Object.freeze(this);
   }
 
@@ -30,12 +32,16 @@ export class AgentProviderAttemptContext {
 
 /** A settled attempt; usage is normalized exclusively by Provider.parse(). */
 export class AgentProviderAttemptRecord extends AgentProviderAttemptContext {
-  constructor({ context, usage = null, status, providerStarted } = {}) {
+  constructor({ context, usage = null, status, providerStarted, reported = null, startedAt = null, endedAt = null, durationMs = null } = {}) {
     if (!(context instanceof AgentProviderAttemptContext)) throw new TypeError("Agent attempt record requires a typed context");
     super(context);
     if (!["completed", "empty", "failed"].includes(status)) throw new TypeError("Agent provider attempt status is invalid");
-    if (typeof providerStarted !== "boolean") throw new TypeError("Agent provider-started observation must be boolean");
+    if (providerStarted !== null && typeof providerStarted !== "boolean") throw new TypeError("Agent provider-started observation must be boolean or unknown");
     this.usage = usage === null ? null : Object.freeze({ ...usage });
+    this.reported = Object.freeze({ model: reported?.model ?? null, effort: reported?.effort ?? null });
+    this.durationMs = durationMs;
+    this.startedAt = startedAt;
+    this.endedAt = endedAt;
     this.status = status;
     this.providerStarted = providerStarted;
     Object.freeze(this);

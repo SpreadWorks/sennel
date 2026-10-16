@@ -266,6 +266,7 @@ export class Logger {
         type: "agent",
         phase: "start",
         requestId: entry.requestId,
+        ...(entry.executionObservation && { executionObservation: entry.executionObservation }),
         specId: startCtx.specId,
         flowPhase: startCtx.flowPhase,
         taskId: startCtx.taskId,
@@ -286,6 +287,7 @@ export class Logger {
 
     const promptPayload = {
       requestId: entry.requestId,
+      ...(entry.executionObservation && { executionObservation: entry.executionObservation }),
       ts: new Date().toISOString(),
       context: {
         entryCommand: this.#entryCommand,
@@ -336,6 +338,7 @@ export class Logger {
       type: "agent",
       phase: "end",
       requestId: entry.requestId,
+      ...(entry.executionObservation && { executionObservation: entry.executionObservation }),
       specId: ctx.specId,
       flowPhase: ctx.flowPhase,
       taskId: ctx.taskId,

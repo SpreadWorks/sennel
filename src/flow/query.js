@@ -4,6 +4,7 @@ import path from "node:path";
 import { buildFlowStopGuidance } from "../lib/flow-stop-guidance.js";
 import { createI18n } from "../lib/i18n.js";
 import { ProcessExecutionCheckoutIdentity } from "../lib/process-execution-values.js";
+import { FlowExecutionMeasurementReference } from "../lib/flow-execution-observation.js";
 import { captureProcessExecutionCheckoutIdentity } from "../lib/process-execution-runtime.js";
 
 import { FlowSpecId } from "../lib/flow-spec-id.js";
@@ -22,7 +23,9 @@ import {
 import { FLOW_ARTIFACT_CONTRACTS } from "../lib/flow-artifact-contract.js";
 import { buildCurrentFlowDefinition, getFlowNode, getTaskNode } from "./definition.js";
 import { TaskStepIdentity } from "./lib/task-step-identity.js";
-import { QueryDetailIndex, QueryDetailArtifactRequired } from "./query-details.js";
+import { QueryDetailIndex } from "./query-details.js";
+import { QueryArtifactCapture } from "./query-artifact-capture.js";
+import { QueryExecutionInputs, QueryExecutionGraph, QueryExecutionTarget, ExecutionCursor, projectExecutionPage } from "./query-executions.js";
 import { GitSnapshot } from "../lib/git-snapshot.js";
 import {
   FLOW_QUERY_ERROR_CODES,
@@ -39,6 +42,7 @@ import {
 import {
   CurrentFlowSpecRecord,
   CurrentFlowActivitySummary,
+  CurrentFlowAttemptHistory,
   CurrentFlowState,
   CurrentFlowStateValidator,
   AGGREGATE_METRIC_PROVENANCE,
@@ -128,6 +132,7 @@ class QuerySnapshot {
       specHash: version.specHash,
       projectionHash: projection.hash,
       availableFlowVersionsHash: canonicalDigest(available),
+      executionHash: version.executionInputs?.digest ?? null,
     };
     this.id = `sha256:${canonicalDigest(inputs)}`;
     this.value = Object.freeze({ id: this.id, algorithm: "sha256", capturedAt: new Date().toISOString(), confirmationOrder: inputs.confirmationOrder,
@@ -149,13 +154,15 @@ class QueryCaptureContext {
 }
 
 class QueryCapturedVersion {
-  constructor({ state, spec, activities, artifactSchemaRevisions, artifactBytes, catalog, stateBytes, specBytes, confirmedLedgerBytes, repositoryIdentity }) {
+  constructor({ state, spec, activities, attemptHistory, artifactSchemaRevisions, artifactBytes, catalog, stateBytes, specBytes, confirmedLedgerBytes, repositoryIdentity, executionInputs, referenceResolver }) {
     if (!(state instanceof CurrentFlowState) || !(spec instanceof CurrentFlowSpecRecord)
       || !(artifactSchemaRevisions instanceof ArtifactSchemaRevisionEvidence) || !(artifactBytes instanceof Map)) {
       throw new Error("query capture requires validated canonical records");
     }
     if (!(repositoryIdentity instanceof ProcessExecutionCheckoutIdentity)) throw new TypeError("Query requires its captured canonical repository identity");
-    Object.assign(this, { state, spec, activities, artifactSchemaRevisions, artifactBytes, catalog, repositoryIdentity });
+    if (!(executionInputs instanceof QueryExecutionInputs)) throw new TypeError("Query requires captured execution sources");
+    if (!(attemptHistory instanceof CurrentFlowAttemptHistory)) throw new TypeError("Query requires captured Attempt lifecycle facts");
+    Object.assign(this, { state, spec, activities, attemptHistory, artifactSchemaRevisions, artifactBytes, catalog, repositoryIdentity, executionInputs, referenceResolver });
     this.stateHash = crypto.createHash("sha256").update(stateBytes).digest("hex");
     this.specHash = crypto.createHash("sha256").update(specBytes).digest("hex");
     this.confirmedLedgerHash = crypto.createHash("sha256").update(confirmedLedgerBytes).digest("hex");
@@ -198,7 +205,7 @@ class QueryNodeResultView {
 }
 
 class QueryNodeView {
-  constructor({ state, spec, node, parentId, phaseId, taskId, catalog }) {
+  constructor({ state, spec, node, parentId, phaseId, taskId, referenceResolver }) {
     const historical = state.history !== null;
     const taskIdentity = !historical && node.kind === "step" && taskId !== null
       ? TaskStepIdentity.fromTaskNode(state.findNode(taskId), node.id) : null;
@@ -214,7 +221,7 @@ class QueryNodeView {
       displayName: title ?? definition?.label ?? node.key, displayNameSource, status: node.status, parentId,
       childIds: node.steps.map((child) => child.id), phaseId: this.phaseId, taskId: this.taskId,
       definitionStepId: definition === null ? null : definitionStepId, attemptSequence: node.attemptSequence,
-      result: new QueryNodeResultView(node.result, new ReferenceResolver(catalog)).toJSON(),
+      result: new QueryNodeResultView(node.result, referenceResolver).toJSON(),
       coverage: { phaseClassification: node.kind !== "step" ? "not-applicable" : definition === null ? "not-recorded" : "available", displayName: displayNameSource === "key" ? "key-fallback" : "available" },
     });
     Object.freeze(this);
@@ -224,10 +231,10 @@ class QueryNodeView {
 }
 
 class QueryStructure {
-  constructor({ state, spec, catalog, phaseId }) {
+  constructor({ state, spec, referenceResolver, phaseId }) {
     this.nodes = [];
     const walk = (node, parentId, inheritedPhaseId = null, taskId = null) => {
-      const view = new QueryNodeView({ state, spec, node, parentId, phaseId: inheritedPhaseId, taskId, catalog });
+      const view = new QueryNodeView({ state, spec, node, parentId, phaseId: inheritedPhaseId, taskId, referenceResolver });
       this.nodes.push(view);
       for (const child of node.steps) walk(child, node.id, view.phaseId, view.taskId);
     };
@@ -286,7 +293,7 @@ class QueryRequest {
     }
     const resource = value.resource;
     if (typeof resource !== "string" || !FLOW_QUERY_RESOURCES.includes(resource)) {
-      throw new QueryError(ERROR_CODES.INVALID_REQUEST, "/resource", "resource must be metadata or activities");
+      throw new QueryError(ERROR_CODES.INVALID_REQUEST, "/resource", "resource must be metadata, activities or executions");
     }
     assertRequestSchema(value);
     if (typeof value.condition.specId !== "string" || value.condition.specId.trim() === "") {
@@ -301,13 +308,16 @@ class QueryRequest {
     }
     this.resource = resource;
     this.flowVersion = version ?? 1;
-    this.page = resource === "activities" ? new QueryPage(value.page) : null;
+    this.page = resource !== "metadata" ? new QueryPage(value.page) : null;
     this.recordedAt = resource === "activities" ? new DateRange(value.recordedAt) : null;
+    this.expectSnapshotId = value.expectSnapshotId ?? null;
+    this.target = resource === "executions" && value.target !== undefined ? new QueryExecutionTarget(value.target) : null;
     Object.freeze(this);
   }
 
   validateCursor() {
     if (this.resource === "activities" && this.page.after !== null) Cursor.decode(this.page.after, this);
+    if (this.resource === "executions" && this.page.after !== null) ExecutionCursor.decode(this.page.after, this);
     return this;
   }
 }
@@ -412,7 +422,7 @@ function stateCreatedActivityId(state) {
   return `flow-created-${identityDigest}`;
 }
 
-function replayCanonicalState(state, activities) {
+function replayCanonicalState(state, activities, attemptHistory) {
   if (!(state instanceof CurrentFlowState) || !Array.isArray(activities)) {
     throw new Error("canonical state replay requires typed state and Activities");
   }
@@ -468,8 +478,10 @@ function replayCanonicalState(state, activities) {
     if (!node || node.key !== activity.nodeKey) {
       throw new Error("Activity must reference a state node by stable id and semantic key");
     }
+    const before = replayed;
     replayed = activity.transition.apply(replayed, activity, { priorActivities })
       .withConfirmationOrder(activity.confirmationOrder);
+    attemptHistory.recordTransition(before, replayed, activity);
     priorActivities.push(activity);
   }
   const expectedState = state.toJSON();
@@ -570,14 +582,15 @@ function validateIncomplete(value) {
 
 function validateMetric(value) {
   if (value === null) return;
-  requireExactObject(value, ["phase", "counter", "delta", "reset", "kind", "provider", "profileKey", "callCount", "responseChars", "durationMs", "model", "tokens", "cost", "cachedResponse", "costIncomplete"], "ActivityItem.metric");
+  requireExactObject(value, ["phase", "counter", "delta", "reset", "kind", "provider", "profileKey", "callCount", "responseChars", "durationMs", "model", "tokens", "cost", "cachedResponse", "costIncomplete", "executionObservation"], "ActivityItem.metric");
+  if (value.executionObservation !== null) new FlowExecutionMeasurementReference(value.executionObservation);
   requirePublicString(value.phase, "ActivityItem.metric.phase");
   requirePublicString(value.counter, "ActivityItem.metric.counter", { nullable: true });
   requirePublicInteger(value.delta, "ActivityItem.metric.delta", { nullable: true });
   if (typeof value.reset !== "boolean") throw new Error("ActivityItem.metric.reset must be boolean");
   for (const field of ["kind", "provider", "profileKey", "model"]) requirePublicString(value[field], `ActivityItem.metric.${field}`, { nullable: true });
   for (const field of ["callCount", "responseChars", "durationMs"]) requirePublicInteger(value[field], `ActivityItem.metric.${field}`, { nullable: true });
-  if (value.tokens !== null) { requireExactObject(value.tokens, ["input", "output", "cacheRead", "cacheCreation"], "ActivityItem.metric.tokens"); for (const field of Object.keys(value.tokens)) requirePublicInteger(value.tokens[field], `ActivityItem.metric.tokens.${field}`); }
+  if (value.tokens !== null) { requireExactObject(value.tokens, ["input", "output", "cacheRead", "cacheCreation"], "ActivityItem.metric.tokens"); for (const field of Object.keys(value.tokens)) requirePublicInteger(value.tokens[field], `ActivityItem.metric.tokens.${field}`, { nullable: true }); }
   validateCost(value.cost, "ActivityItem.metric.cost");
   if (typeof value.cachedResponse !== "boolean" || typeof value.costIncomplete !== "boolean") throw new Error("ActivityItem.metric flags are invalid");
 }
@@ -611,7 +624,7 @@ class AggregateMetrics {
 
 class MetadataItem {
   constructor(value) {
-    requireExactObject(value, ["identity", "lifecycle", "location", "structure", "relationships", "timestamps", "capabilities", "artifacts", "metrics", "history"], "MetadataItem");
+    requireExactObject(value, ["identity", "lifecycle", "location", "structure", "relationships", "timestamps", "capabilities", "artifacts", "metrics", "history", "executionCoverage", "executionSummary", "executionSources"], "MetadataItem");
     requireExactObject(value.identity, ["flowId", "flowVersionId", "runId", "specId", "flowVersion"], "MetadataItem.identity");
     for (const field of ["flowId", "flowVersionId", "runId", "specId"]) requirePublicString(value.identity[field], `MetadataItem.identity.${field}`);
     requirePublicInteger(value.identity.flowVersion, "MetadataItem.identity.flowVersion");
@@ -663,7 +676,7 @@ class MetadataItem {
 
 class ActivityItem {
   constructor(value) {
-    const fields = ["activity", "node", "task", "attempt", "sequence", "confirmationOrder", "transition", "timing", "usage", "outcome", "failure", "blocker", "incomplete", "metric", "note", "evaluationIds", "findingIds", "repairIds", "artifactIds", "detailRefs", "referenceBindings", "detailCoverage"];
+    const fields = ["activity", "node", "task", "attempt", "sequence", "confirmationOrder", "transition", "timing", "usage", "outcome", "failure", "blocker", "incomplete", "metric", "note", "evaluationIds", "findingIds", "repairIds", "artifactIds", "detailRefs", "referenceBindings", "detailCoverage", "resultConfirmedAt", "provider", "model", "effort", "outbox", "executionRefs"];
     requireExactObject(value, fields, "ActivityItem");
     requireExactObject(value.activity, ["id", "type"], "ActivityItem.activity");
     requirePublicString(value.activity.id, "ActivityItem.activity.id");
@@ -672,7 +685,7 @@ class ActivityItem {
     requirePublicString(value.node.id, "ActivityItem.node.id");
     requirePublicString(value.node.key, "ActivityItem.node.key");
     validateIdKey(value.task, "ActivityItem.task");
-    if (value.attempt !== null) { requireExactObject(value.attempt, ["id", "sequence"], "ActivityItem.attempt"); requirePublicString(value.attempt.id, "ActivityItem.attempt.id"); requirePublicInteger(value.attempt.sequence, "ActivityItem.attempt.sequence"); if (value.attempt.sequence < 1) throw new Error("ActivityItem.attempt.sequence must be positive"); }
+    if (value.attempt !== null) { requireExactObject(value.attempt, ["id", "sequence", "startedAt"], "ActivityItem.attempt"); requirePublicString(value.attempt.id, "ActivityItem.attempt.id"); requirePublicInteger(value.attempt.sequence, "ActivityItem.attempt.sequence"); if (value.attempt.sequence < 1) throw new Error("ActivityItem.attempt.sequence must be positive"); if (value.attempt.startedAt !== null) isoTimestamp(value.attempt.startedAt, "ActivityItem.attempt.startedAt"); }
     requirePublicInteger(value.sequence, "ActivityItem.sequence", { nullable: true });
     if (value.sequence !== null && value.sequence < 1) throw new Error("ActivityItem.sequence must be positive");
     requirePublicInteger(value.confirmationOrder, "ActivityItem.confirmationOrder");
@@ -862,7 +875,12 @@ class CanonicalFlowVersionReader {
       if (available.length === 0) throw new QueryError(ERROR_CODES.SPEC_NOT_FOUND, "/condition/specId", "requested Spec was not found");
       if (!available.includes(version)) throw new QueryError(ERROR_CODES.FLOW_VERSION_NOT_FOUND, "/condition/flowVersion", "requested Flow Version was not found");
       const projection = await QueryProjectionSignature.read();
-      const selected = await this.open(specId, version, new QueryCaptureContext(request, available, projection));
+      let selected;
+      try { selected = await this.open(specId, version, new QueryCaptureContext(request, available, projection)); }
+      catch (error) {
+        if (error instanceof QueryError && error.code === ERROR_CODES.SNAPSHOT_UNSTABLE) continue;
+        throw error;
+      }
       const after = await this.listAvailableVersions(specId);
       const endingProjection = await QueryProjectionSignature.read();
       if (JSON.stringify(available) === JSON.stringify(after) && projection.hash === endingProjection.hash) {
@@ -902,39 +920,38 @@ class CanonicalFlowVersionReader {
     if (state.specId !== specId || spec.specId.toString() !== specId) throw new QueryError(ERROR_CODES.CANONICAL_RECORD_INCONSISTENT, "/canonical", "canonical identity does not match the selected Spec");
     const confirmedLedger = this.readConfirmedLedger(ledgerBytes, state.confirmationOrder);
     const activities = confirmedLedger.activities;
+    const attemptHistory = new CurrentFlowAttemptHistory();
     try {
-      replayCanonicalState(state, activities);
+      replayCanonicalState(state, activities, attemptHistory);
     } catch (error) {
       throw new QueryError(ERROR_CODES.CANONICAL_RECORD_INCONSISTENT, "/canonical", "canonical state and Activity ledger are inconsistent", { cause: error });
     }
+    const artifactBytes = new Map([[ledgerDescriptor.relativePath, confirmedLedger.bytes]]);
+    const artifactCapture = new QueryArtifactCapture(artifactBytes, readArtifact);
+    const referenceResolver = new ReferenceResolver(catalog, { readArtifact: (descriptor) => artifactCapture.read(descriptor) });
     let activityIndex;
     try {
       activityIndex = FlowArtifactActivityIndex.fromBytes(confirmedLedger.bytes);
-      new ReferenceResolver(catalog).validateCanonicalActivityResults(activities);
+      await artifactCapture.hydrate(() => referenceResolver.validateCanonicalActivityResults(activities));
     } catch (error) {
       throw new QueryError(ERROR_CODES.CANONICAL_RECORD_INCONSISTENT, "/canonical", "canonical Activity references are inconsistent", { cause: error });
     }
     const artifactSchemaRevisions = await this.captureArtifactSchemaRevisions(catalog, ledgerDescriptor, confirmedLedger.bytes, inspectArtifact);
-    const artifactBytes = new Map();
-    artifactBytes.set(ledgerDescriptor.relativePath, confirmedLedger.bytes);
-    const value = new QueryCapturedVersion({ state, spec, activities, artifactSchemaRevisions, artifactBytes, catalog,
+    const readExecutionArtifact = async (descriptor) => {
+      if (!artifactBytes.has(descriptor.relativePath)) artifactBytes.set(descriptor.relativePath, await readArtifact(descriptor));
+      return artifactBytes.get(descriptor.relativePath);
+    };
+    const captureExecutions = () => QueryExecutionInputs.capture({ mainRoot: this.repositoryRoot, state, activities, catalog, readArtifact: readExecutionArtifact, artifactCapture });
+    const executionInputs = await captureExecutions();
+    const value = new QueryCapturedVersion({ state, spec, activities, attemptHistory, artifactSchemaRevisions, artifactBytes, catalog,
       stateBytes, specBytes, confirmedLedgerBytes: confirmedLedger.bytes,
-      repositoryIdentity: captureProcessExecutionCheckoutIdentity({ mainRoot: this.repositoryRoot }) });
+      repositoryIdentity: captureProcessExecutionCheckoutIdentity({ mainRoot: this.repositoryRoot }), executionInputs, referenceResolver });
     if (context?.request) {
-      while (true) {
-        try {
-          value.rememberProjection(await new QueryProjector(context.available, context.projection).project(context.request, value));
-          break;
-        } catch (error) {
-          if (!(error instanceof QueryDetailArtifactRequired)) {
-            value.rememberProjection(null, error);
-            break;
-          }
-          if (artifactBytes.has(error.descriptor.relativePath)) throw new Error("detail hydration repeated a captured input");
-          artifactBytes.set(error.descriptor.relativePath, await readArtifact(error.descriptor));
-        }
-      }
+      try { value.rememberProjection(await artifactCapture.hydrate(() => new QueryProjector(context.available, context.projection).project(context.request, value))); }
+      catch (error) { value.rememberProjection(null, error); }
     }
+    const endingExecutionInputs = await captureExecutions();
+    if (endingExecutionInputs.digest !== executionInputs.digest) throw new QueryError(ERROR_CODES.SNAPSHOT_UNSTABLE, "/snapshot", "Execution source changed during canonical capture");
     return new FlowArtifactCatalogSnapshotEvidence({
       value: Object.freeze(value),
       activityIndex,
@@ -1157,10 +1174,19 @@ class QueryProjector {
   async project(request, version) {
     const selected = new SelectedFlowVersion(request.specId, request.flowVersion);
     const snapshot = new QuerySnapshot(version, selected, this.availableFlowVersions, this.projection ?? await QueryProjectionSignature.read());
+    if (request.expectSnapshotId !== null && request.expectSnapshotId !== snapshot.id) throw new QueryError(ERROR_CODES.SNAPSHOT_CHANGED, "/page/after", "Expected query snapshot changed", { reason: "SNAPSHOT_ID_MISMATCH", referenceId: request.expectSnapshotId });
+    if (request.resource === "executions") {
+      const graph = this.executionGraph(version);
+      return projectExecutionPage({ graph, request, snapshot, envelope: { schemaRevision: FLOW_QUERY_SCHEMA_REVISION, ok: true, resource: "executions",
+        selectedFlowVersion: selected.toJSON(), availableFlowVersions: this.availableFlowVersions, snapshot: snapshot.toJSON(),
+        completeness: { scope: request.target === null ? "flow-version" : "filtered-executions", enumeration: "complete", details: "not-applicable", sourceHistory: graph.coverage().sourceHistory === "complete" ? "complete" : "partial" } } });
+    }
     return request.resource === "metadata"
       ? this.metadata(request, version, selected, snapshot)
       : this.activities(request, version, selected, snapshot);
   }
+
+  executionGraph(version) { return new QueryExecutionGraph({ state: version.state, activities: version.activities, attemptHistory: version.attemptHistory, catalog: version.catalog, inputs: version.executionInputs }); }
 
   metadata(request, version, selected, snapshot) {
     const item = this.metadataItem(version, selected.flowVersion);
@@ -1168,7 +1194,9 @@ class QueryProjector {
       snapshot: snapshot.toJSON(), completeness: { scope: "flow-version", enumeration: "complete", details: "not-applicable", sourceHistory: version.state.history === null ? "complete" : "partial" }, item: item.toJSON() };
   }
 
-  metadataItem({ state, spec, activities, catalog, artifactSchemaRevisions }, flowVersion) {
+  metadataItem(version, flowVersion) {
+    const { state, spec, activities, catalog, artifactSchemaRevisions } = version;
+    const executions = this.executionGraph(version);
     const currentPath = state.current ?? [];
     const leaf = currentPath.at(-1) ?? null;
     const taskNode = currentPath.map((id) => state.findNode(id)).find((node) => node?.kind === "task") ?? null;
@@ -1186,7 +1214,7 @@ class QueryProjector {
       for (const child of node.steps) walk(child);
     };
     walk(state.root);
-    const artifactRelations = new ReferenceResolver(catalog).activityRelations(activities);
+    const artifactRelations = version.referenceResolver.activityRelations(activities);
     const artifactItems = catalog.artifacts.map((descriptor) => this.artifactDescriptor(
       descriptor,
       activities,
@@ -1219,7 +1247,7 @@ class QueryProjector {
       identity: { flowId: state.flowId, flowVersionId: state.flowVersionId, runId: state.runId, specId: state.specId, flowVersion },
       lifecycle: { lifecycle: state.lifecycle.state, blocked, blocker, nextAction: next === null ? null : { operation: next.operation, phase: next.path[1] ?? null, stepId: next.path.at(-1) ?? null, taskId: nextTaskNode?.id ?? null } },
       location: { phase: currentPath[1] ?? null, stepId: leaf, taskId: taskNode?.id ?? null, git: gitSnapshot },
-      structure: new QueryStructure({ state, spec, catalog, phaseId: state.root.steps.find((node) => node.steps.some((child) => child.id === currentPath[1]))?.id ?? currentPath[1] ?? "flow" }).toJSON(),
+      structure: new QueryStructure({ state, spec, referenceResolver: version.referenceResolver, phaseId: state.root.steps.find((node) => node.steps.some((child) => child.id === currentPath[1]))?.id ?? currentPath[1] ?? "flow" }).toJSON(),
       history: { origin: state.history === null ? "native" : "historical", ledgerCoverage: state.history === null ? "complete" : "partial", execution: state.history?.execution ?? "native", continuation: state.history?.continuation?.toJSON() ?? null },
       relationships: { stepTasks: uniqueObjectList(stepTasks, "relationships.stepTasks"), taskNodes, issues: issue },
       timestamps: activitySummary.timestamps(),
@@ -1230,6 +1258,9 @@ class QueryProjector {
         stepCount: steps.length,
         taskCount: tasks.length,
       })),
+      executionCoverage: executions.coverage(),
+      executionSummary: executions.summary(),
+      executionSources: executions.sourceSummaries(),
     });
   }
 
@@ -1265,7 +1296,7 @@ class QueryProjector {
     };
   }
 
-  artifactDescriptor(descriptor, activities, catalog, version, relations = new ReferenceResolver(catalog).activityRelations(activities)) {
+  artifactDescriptor(descriptor, activities, catalog, version, relations = version.referenceResolver.activityRelations(activities)) {
     const stored = descriptor.toJSON();
     const activity = descriptor.activityId === null ? null : activities.find((entry) => entry.id === descriptor.activityId) ?? null;
     const taskId = activity === null ? null : this.taskIdForActivity(version.state, activity);
@@ -1300,6 +1331,7 @@ class QueryProjector {
   }
 
   activities(request, version, selected, snapshot) {
+    const executions = this.executionGraph(version);
     const after = request.page.after === null ? 0 : Cursor.decode(request.page.after, request, { snapshotId: snapshot.id });
     if (after > snapshot.value.confirmationOrder) throw new QueryError(ERROR_CODES.INVALID_CURSOR, "/page/after", "cursor order exceeds its snapshot prefix");
     const matching = version.activities.filter((entry) => {
@@ -1310,7 +1342,7 @@ class QueryProjector {
     });
     const remaining = matching.filter((entry) => entry.confirmationOrder > after);
     const index = new QueryDetailIndex({ state: version.state, activities: version.activities, catalog: version.catalog, artifactBytes: version.artifactBytes, snapshotId: snapshot.id,
-      repositoryIdentity: version.repositoryIdentity });
+      repositoryIdentity: version.repositoryIdentity, referenceResolver: version.referenceResolver });
     const items = [];
     const details = [];
     const response = () => {
@@ -1323,7 +1355,7 @@ class QueryProjector {
     };
     for (const activity of remaining.slice(0, request.page.limit)) {
       const detail = index.forActivity(activity);
-      items.push(this.activityItem(activity, version.state, version.catalog, detail).toJSON());
+      items.push(this.activityItem(activity, version.state, detail, executions, version.referenceResolver).toJSON());
       details.push(detail);
       const candidate = response();
       if (Buffer.byteLength(JSON.stringify(candidate) + "\n", "utf8") > FLOW_QUERY_LIMITS.MAX_RESPONSE_BYTES) {
@@ -1335,8 +1367,7 @@ class QueryProjector {
     return response();
   }
 
-  activityItem(activity, state, catalog, details) {
-    const resolver = new ReferenceResolver(catalog);
+  activityItem(activity, state, details, executions, resolver) {
     const taskId = this.taskIdForActivity(state, activity);
     const task = activity.transition.task ?? (taskId === null
       ? null
@@ -1355,7 +1386,8 @@ class QueryProjector {
       activity: { id: activity.id, type: activity.type },
       node: { id: activity.nodeId, key: activity.nodeKey },
       task: task === null ? null : { id: task.id, key: task.key },
-      attempt: activity.attemptId === null ? null : { id: activity.attemptId, sequence: activity.sequence },
+      attempt: activity.attemptId === null ? null : { id: activity.attemptId, sequence: activity.sequence,
+        startedAt: executions.attempts.get(activity.attemptId)?.attempt.startedAt ?? null },
       sequence: activity.sequence,
       confirmationOrder: activity.confirmationOrder,
       transition: { operation: activity.transition.operation, status: activity.transition.status },
@@ -1365,12 +1397,16 @@ class QueryProjector {
       failure: this.publicFailure(activity.failure),
       blocker: attempt?.blocker ? { code: attempt.blocker.code, message: attempt.blocker.message } : null,
       incomplete: incomplete.length === 0 ? null : incomplete[0].toJSON(),
-      metric: activity.metric?.toJSON() ?? null,
+      metric: activity.metric === null ? null : { ...activity.metric.toJSON(), executionObservation: activity.metric.executionObservation?.toJSON() ?? null },
       note: activity.note?.text ?? null,
       evaluationIds: uniqueLimited(activity.references.evaluations.map((entry) => entry.id), "activity.evaluationIds"),
       findingIds: uniqueLimited(activity.references.findings.map((entry) => entry.id), "activity.findingIds"),
       repairIds: uniqueLimited(activity.references.repairs.map((entry) => entry.id), "activity.repairIds"),
       artifactIds: publicArtifactIds(activity.references.artifacts),
+      resultConfirmedAt: activity.result?.confirmedAt ?? null,
+      provider: activity.provider, model: activity.model, effort: activity.effort,
+      outbox: executions.publicOutboxForActivity(activity),
+      executionRefs: executions.activityReferences(activity),
       ...details.toJSON(),
     });
   }
@@ -1378,6 +1414,8 @@ class QueryProjector {
 
 function knownResourceError({ resource, pageLimit = null }, code, jsonPath, message, availableFlowVersions = [], selectedFlowVersion = null, { snapshot = null, reason = null, referenceId = null } = {}) {
   const base = { schemaRevision: FLOW_QUERY_SCHEMA_REVISION, ok: false, resource, selectedFlowVersion, availableFlowVersions, snapshot, completeness: null, error: { code, path: jsonPath, message, reason, referenceId } };
+  if (resource === "executions") return { ...base, items: [], relations: [], endpoints: [], measurements: [], summary: null, coverage: null,
+    pageInfo: { limit: pageLimit, endCursor: null, hasNext: false, returnedItems: 0, totalItems: null } };
   return resource === "metadata"
     ? { ...base, item: null }
     : { ...base, items: [], entities: { evaluations: [], findings: [], repairs: [] }, pageInfo: { limit: pageLimit, endCursor: null, hasNext: false, returnedItems: 0, totalItems: null } };

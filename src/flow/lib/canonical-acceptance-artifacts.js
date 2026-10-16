@@ -1,4 +1,5 @@
 import { CURRENT_FLOW_SCHEMA_REVISION } from "../../lib/flow-schema-revision.js";
+import { isFlowExecutionObservationArtifact } from "../../lib/flow-execution-observation.js";
 /**
  * Canonical acceptance persistence boundary.
  *
@@ -279,7 +280,8 @@ export class CanonicalAcceptanceArtifactStore {
     return catalog.artifacts.filter((entry) => !["flow.state", "flow.activities", "artifact.catalog",
       "acceptance.review", "acceptance.review.evidence",
       "acceptance.decision", "final.regression", "final.regression.acceptance", "report",
-      "execution.contract", "prompt.execution.progress", "prompt.execution.event", "prompt.execution.budget"].includes(entry.logicalKey))
+      "execution.contract", "prompt.execution.progress", "prompt.execution.event", "prompt.execution.budget"].includes(entry.logicalKey)
+      && !isFlowExecutionObservationArtifact(entry.logicalKey))
       .sort((left, right) => (
       left.relativePath.localeCompare(right.relativePath)
     ));

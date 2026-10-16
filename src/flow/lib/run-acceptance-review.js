@@ -47,6 +47,7 @@ import { StepAdmissionRefusal } from "./step-admission-refusal.js";
 import { PromptExecutionJournal, PromptExecutionScope, isPromptExecutionControlFailure } from "../../lib/prompt-execution-journal.js";
 import { CanonicalPromptExecutionJournalWriter } from "./canonical-prompt-execution-writer.js";
 import { FlowExecutionContractRefusal, executionValueDigest } from "./flow-execution-contract.js";
+import { CanonicalPromptResponseContributionSelection } from "./prompt-response-adoption.js";
 import { AcceptanceExecutionProfile, AcceptanceExecutionSpecification, AcceptanceExecutionSession,
   readAcceptanceExecutionContinuation } from "./acceptance-execution-session.js";
 
@@ -451,8 +452,11 @@ class AcceptanceObservationEnvelope extends PromptRequestEnvelope {
 }
 
 class AcceptanceObservationReducer extends PromptBatchReducer {
+  constructor(session = null) { super(); this.session = session; Object.freeze(this); }
   reduce(completions) {
-    return Object.freeze(completions.flatMap((completion) => completion.response));
+    const observations = Object.freeze(completions.flatMap((completion) => completion.response));
+    this.session?.adoptCompletions(completions);
+    return observations;
   }
 }
 
@@ -480,8 +484,10 @@ class AcceptanceSummaryEnvelope extends PromptRequestEnvelope {
 }
 
 class SingleResponseReducer extends PromptBatchReducer {
+  constructor(session = null) { super(); this.session = session; Object.freeze(this); }
   reduce(completions) {
     if (completions.length !== 1) throw new Error("Acceptance final response requires one atomic completion");
+    this.session?.adoptCompletions(completions);
     return completions[0].response;
   }
 }
@@ -734,8 +740,9 @@ class AcceptanceScopedResponse {
 }
 
 class AcceptanceScopedReducer extends PromptBatchReducer {
-  constructor(bindings) {
+  constructor(bindings, session = null) {
     super();
+    this.session = session;
     this.bindings = Object.freeze([...bindings]);
     Object.freeze(this);
   }
@@ -747,6 +754,7 @@ class AcceptanceScopedReducer extends PromptBatchReducer {
     if (actual.length !== expected.size || new Set(actual).size !== expected.size || actual.some((id) => !expected.has(id))) {
       throw new PromptBatchingError("PROMPT_RESPONSE_COVERAGE_INVALID", "Acceptance scoped responses do not cover every final binding exactly once");
     }
+    this.session?.adoptCompletions(completions);
     return {
       requirementJudgments: responses.flatMap((response) => response.requirementJudgments),
       deferredFindingDispositions: responses.flatMap((response) => response.deferredFindingDispositions),
@@ -812,7 +820,7 @@ export class AcceptanceEvidenceExecutionPlan {
       ...acceptanceExecutorOptions(agent, budget, session, invocationOptions),
       ...session?.options("map", 0, minimumFinalCalls),
       responseContract: { parse: parseObservations, itemCount: (items) => items.length },
-      reducer: new AcceptanceObservationReducer(),
+      reducer: new AcceptanceObservationReducer(session),
     });
     const initialElements = observationsAsElements(observations);
     const reductionEnvelope = new AcceptanceSummaryEnvelope();
@@ -865,10 +873,12 @@ export class AcceptanceEvidenceExecutionPlan {
           },
         },
       }),
-      toNextLevel: (completions) => new PromptReductionLevel({
-        elements: completions.map((completion) => completion.response),
-        coverageDigest: this.observationPlan.collection.digest,
-      }),
+      toNextLevel: (completions) => {
+        const level = new PromptReductionLevel({ elements: completions.map((completion) => completion.response),
+          coverageDigest: this.observationPlan.collection.digest });
+        session?.adoptCompletions(completions);
+        return level;
+      },
       finalize: () => finalCandidate,
     });
     if (final.plan.batches.length !== minimumFinalCalls) {
@@ -884,7 +894,7 @@ export class AcceptanceEvidenceExecutionPlan {
           return new AcceptanceScopedResponse({ binding, response: parseAcceptanceResponse(raw) });
         },
       },
-      reducer: new AcceptanceScopedReducer(final.bindings),
+      reducer: new AcceptanceScopedReducer(final.bindings, session),
     });
   }
 }
@@ -904,7 +914,7 @@ async function callAcceptanceAgent(
     ...acceptanceExecutorOptions(agent, budget, session, invocationOptions),
     ...session?.options(stage),
     responseContract: { parse: parseAcceptanceResponse },
-    reducer: new SingleResponseReducer(),
+    reducer: new SingleResponseReducer(session),
   });
 }
 
@@ -961,13 +971,13 @@ async function resolveAcceptanceArtifact(context, { agent, configuration, sessio
         .bindDeferredFindingDispositions(repairParsed.deferredFindingDispositions ?? []);
       deferredCoverage.add(repairBound);
     }
-    return {
-      artifact: artifactFromAcceptanceJudgments({
-        context,
-        requirementJudgments: bound.requirementJudgments,
-        deferredFindingDispositions: deferredCoverage.requireComplete(),
-      }),
-    };
+    const artifact = artifactFromAcceptanceJudgments({ context,
+      requirementJudgments: bound.requirementJudgments, deferredFindingDispositions: deferredCoverage.requireComplete() });
+    const contributions = session.responseContributions;
+    return { artifact, promptResponseSelection: contributions.length === 0 ? null : new CanonicalPromptResponseContributionSelection({
+      executionContract: session.executionContract, publicationLogicalKey: "acceptance.review",
+      publicationDigest: executionValueDigest(artifact), contributions,
+    }) };
   } catch (error) {
     if (isPromptExecutionControlFailure(error) || error instanceof StepAdmissionRefusal) throw error;
     if (error instanceof AgentFailure) return acceptanceAgentFailure(error);
@@ -1051,7 +1061,7 @@ async function executeCanonicalAcceptanceReview(ctx) {
     await executeAcceptanceReviewInput({ ctx, flowManager: ctx.flowManager, stepId: "acceptance-review", preparation });
     return resolved.response;
   }
-  const { artifact } = resolved;
+  const { artifact, promptResponseSelection = null } = resolved;
   const refreshed = await new CanonicalAcceptanceArtifactStore({ flowManager: ctx.flowManager,
     state: ctx.flowManager.loadReadOnly(state.specId) }).buildContext({ executionRoot: ctx.executionRoot || ctx.root });
   if (refreshed.fingerprint.hash !== context.fingerprint.hash
@@ -1074,7 +1084,7 @@ async function executeCanonicalAcceptanceReview(ctx) {
     requirementIds: context.requirementIds,
   }).promote(response, artifact);
   const preparation = await prepareAcceptanceReviewInput({ flowManager: ctx.flowManager, state: ctx.flowManager.canonicalState(state.specId),
-    executionRoot: ctx.executionRoot || ctx.root, context: refreshed, commandResult: result, executionBinding, executionContract });
+    executionRoot: ctx.executionRoot || ctx.root, context: refreshed, commandResult: result, executionBinding, executionContract, promptResponseSelection });
   const outcome = await executeAcceptanceReviewInput({ ctx, flowManager: ctx.flowManager, stepId: "acceptance-review", preparation, commandResult: result });
   result.settlementReceipt = outcome.receipt.toJSON();
   await initializeAcceptanceDecisionAwait({ flowManager: ctx.flowManager, specId: state.specId });

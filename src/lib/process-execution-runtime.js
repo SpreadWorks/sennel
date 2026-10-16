@@ -11,9 +11,10 @@ import { RealDirectoryAuthority } from "./real-directory-authority.js";
 import { AgentProcessStopEvidence } from "./agent-failure.js";
 import { ManagedStopOperation, managedMonotonicNow } from "./managed-stop-operation.js";
 import { ManagedStopOperationStore } from "./managed-stop-store.js";
+import { readManagedRecordSnapshot, assertManagedRecordIdentity } from "./managed-process-record.js";
 
 import {
-  ProcessExecutionControlFailure, ProcessExecutionBinding, ProcessExecutionCheckoutIdentity,
+  ProcessExecutionControlFailure, ProcessExecutionBinding, ProcessExecutionCheckoutIdentity, ProcessExecutionTiming,
   ProcessExecutionStopReceipt, ProcessExecutionStartPermit, ProcessExecutionNonExecutionEvidence, ProcessExecutionRecoveryCall,
   executionUuid as uuid, executionValueSnapshot as json,
   executionValueDigest as digest, executionProcessIdentity as identity,
@@ -194,11 +195,13 @@ function encodeRuntimeRecord(record) {
 }
 
 class ProcessRuntimeStore {
-  constructor({ mainRoot, executionRoot, processIdentitySource = new ProcessIdentitySource(), faultInjector = () => {}, create = true, retainedClosed = false }) {
-    if (retainedClosed && create) throw new TypeError("Retained checkout inspection cannot create runtime authority");
+  constructor({ mainRoot, executionRoot, processIdentitySource = new ProcessIdentitySource(), faultInjector = () => {}, create = true, retainedClosed = false, historical = false }) {
+    if ((retainedClosed || historical) && create) throw new TypeError("Historical checkout inspection cannot create runtime authority");
     this.mainAuthority = new RealDirectoryAuthority(mainRoot);
+    this.historical = historical;
     this.retainedExecutionRoot = null;
-    if (retainedClosed) {
+    if (historical) this.retainedExecutionRoot = path.resolve(executionRoot);
+    else if (retainedClosed) {
       try { fs.lstatSync(path.resolve(executionRoot)); }
       catch (cause) {
         if (cause.code !== "ENOENT") throw cause;
@@ -242,7 +245,7 @@ class ProcessRuntimeStore {
   assertStable() {
     this.mainAuthority.assertStable();
     if (this.checkoutAuthority !== null) this.checkoutAuthority.assertStable();
-    else {
+    else if (!this.historical) {
       try {
         fs.lstatSync(this.retainedExecutionRoot);
         fail("authority-mismatch", "Retained checkout path reappeared during inspection");
@@ -508,9 +511,66 @@ export class ProcessExecutionRecoveryEvidence {
   invalidate() { this.#active = false; }
 }
 
+/** Validated saved facts, without process control or recovery authority. */
+export class ProcessExecutionLauncherObservation {
+  #outcome;
+  constructor(record) {
+    if (!["waiting", "running", "stopping", "finished", "control-failed"].includes(record.state)
+      || record.outcome === null || typeof record.outcome !== "object" || Array.isArray(record.outcome)
+      || typeof record.outcome.providerStarted !== "boolean") throw new TypeError("Managed launcher observation is malformed");
+    this.state = record.state;
+    this.providerStarted = record.outcome.providerStarted;
+    this.timing = new ProcessExecutionTiming(record.outcome.timing);
+    this.#outcome = json(record.outcome);
+    this.digest = digest({ state: this.state, outcome: this.#outcome });
+    Object.freeze(this);
+  }
+  get outcome() { return json(this.#outcome); }
+  toJSON() { return { state: this.state, providerStarted: this.providerStarted, timing: this.timing.toJSON(),
+    outcome: this.outcome, digest: this.digest }; }
+}
+
+export class ProcessExecutionHistoricalInventory {
+  #inventory;
+  #executions;
+  constructor(inventory, { runId, specId, readLauncherObservation } = {}) {
+    this.#inventory = json(inventory);
+    this.checkoutIdentity = new ProcessExecutionCheckoutIdentity(inventory.checkout);
+    this.#executions = this.#inventory.executions.filter((execution) => (runId === undefined || execution.runId === runId)
+      && (specId === undefined || execution.specId === specId));
+    this.#executions = this.#executions.map((execution) => ({ ...execution, calls: execution.calls.map((call) => {
+      const applicable = ["registered", "running"].includes(call.status);
+      const observation = applicable && readLauncherObservation ? readLauncherObservation(execution, call) : null;
+      return { ...call, launcherObservation: observation?.toJSON() ?? null,
+        launcherObservationCoverage: applicable ? observation === null ? "unavailable" : "recorded" : "not-applicable" };
+    }) }));
+    this.digest = digest({ inventory: this.#inventory, executions: this.#executions });
+    Object.freeze(this);
+  }
+  get inventory() { return json(this.#inventory); }
+  get executions() { return json(this.#executions); }
+  toJSON() { return { checkoutIdentity: this.checkoutIdentity.toJSON(), inventory: this.inventory,
+    executions: this.executions, digest: this.digest }; }
+}
+
+/** A producer must publish its required evidence before a call becomes durable. */
+export class ProcessExecutionCallAdmission {
+  #admit;
+  constructor({ admit }) {
+    if (typeof admit !== "function") throw new TypeError("Process call admission requires a synchronous producer");
+    this.#admit = admit;
+    Object.freeze(this);
+  }
+  admit({ runtime, binding }) {
+    const result = this.#admit({ runtime, binding });
+    if (result?.then !== undefined) throw new TypeError("Process call admission must complete synchronously");
+  }
+}
+
 /** Checkout admission and durable physical ownership; no semantic state decisions live here. */
 export class ProcessExecutionRuntime {
-  constructor(store, record, { borrowed = false, parentCallId = null, binding = record.binding, root = null } = {}) {
+  constructor(store, record, { borrowed = false, parentCallId = null, binding = record.binding, root = null, callAdmission = null } = {}) {
+    if (callAdmission !== null && !(callAdmission instanceof ProcessExecutionCallAdmission)) throw new TypeError("Typed process call admission is required");
     this.store = store;
     this.mainRoot = store.checkout.mainRoot;
     this.executionRoot = store.checkout.executionRoot;
@@ -519,12 +579,39 @@ export class ProcessExecutionRuntime {
     this.ownerToken = record.coordinatorIdentity.ownerToken;
     this.runId = record.runId; this.specId = record.specId;
     this.binding = new ProcessExecutionBinding(binding);
+    this.callAdmission = callAdmission;
     this.borrowed = borrowed;
     this.parentCallId = parentCallId;
     this.root = root ?? this;
     this.closed = false;
   }
   static current() { return scopes.getStore() ?? null; }
+  get checkoutIdentity() { return this.store.checkout; }
+  get sourceId() { return digest(this.checkoutIdentity); }
+  /** Pure historical read: retained namespace, inventory, archives and receipts share the normal store validation. */
+  static readHistoricalInventory({ mainRoot, executionRoot = mainRoot, checkoutIdentity, runId, specId } = {}) {
+    try {
+      const store = new ProcessRuntimeStore({ mainRoot, executionRoot, create: false, historical: true });
+      if (checkoutIdentity !== undefined && !store.checkout.matches(new ProcessExecutionCheckoutIdentity(checkoutIdentity))) {
+        fail("authority-mismatch", "Historical runtime source belongs to another checkout identity");
+      }
+      const inventory = store.readInventory();
+      store.assertCommitted();
+      const result = new ProcessExecutionHistoricalInventory(inventory, { runId, specId,
+        readLauncherObservation(execution, call) {
+          const record = readManagedRecordSnapshot(path.join(store.callsAuthority.directory, call.callId, "outcome.json"));
+          if (record === null) return null;
+          assertManagedRecordIdentity(record, { ...call, executionId: execution.executionId,
+            ownerToken: execution.coordinatorIdentity.ownerToken }, { code: "PROCESS_EXECUTION_BINDING_MISMATCH" });
+          return new ProcessExecutionLauncherObservation(record);
+        } });
+      store.assertCommitted();
+      return result;
+    } catch (cause) {
+      if (cause instanceof ProcessExecutionControlFailure) throw cause;
+      fail("registry-failed", `Historical runtime inspection failed: ${cause.message}`, { cause });
+    }
+  }
   /** Observe saved facts without starting or stopping workers; keep exclusion through a synchronous commit. */
   static async withRecoveryEvidence({ mainRoot, executionRoot = mainRoot, binding, processIdentitySource } = {}, callback) {
     const expected = new ProcessExecutionBinding(binding);
@@ -787,7 +874,7 @@ export class ProcessExecutionRuntime {
     });
   }
   enter(callback) { this.#assertOpen(); return scopes.run(this, callback); }
-  async withBinding(binding, callback) {
+  async withBinding(binding, callback, { callAdmission = this.callAdmission } = {}) {
     this.#assertOpen();
     const snapshot = new ProcessExecutionBinding(binding);
     if (this.borrowed && !snapshot.matches(this.binding)) fail("delegation-refused", "Nested scope cannot replace its delegated execution contract");
@@ -806,7 +893,7 @@ export class ProcessExecutionRuntime {
     });
     const record = { executionId: this.executionId, ownerEpoch: this.ownerEpoch,
       coordinatorIdentity: { ownerToken: this.ownerToken }, runId: freshRunId, specId: freshSpecId, binding };
-    const scope = new ProcessExecutionRuntime(this.store, record, { borrowed: this.borrowed, parentCallId: this.parentCallId, binding, root: this.root });
+    const scope = new ProcessExecutionRuntime(this.store, record, { borrowed: this.borrowed, parentCallId: this.parentCallId, binding, root: this.root, callAdmission });
     return scopes.run(scope, callback);
   }
   async reserveCall({ binding = this.binding, invocation = null, ...options } = {}) {
@@ -818,9 +905,10 @@ export class ProcessExecutionRuntime {
       this.#assertAccepting(root);
       const callId = crypto.randomUUID();
       const call = new PhysicalCallRecord({ callId, parentCallId: this.parentCallId,
-        binding: json(requestedBinding), invocation: json(invocation ?? options),
+        binding: json(requestedBinding), invocation: json(invocation ?? { ...options, reservedAt: new Date().toISOString() }),
         capability: crypto.randomUUID(), endpoint: `\0sennel-${callId}`, status: "intent",
         launcherIdentity: null, pgid: null, members: [], permit: null, receipt: null, outcome: null, controlFailure: null, stopOperation: null });
+      this.callAdmission?.admit({ runtime: this, binding: requestedBinding });
       root.calls.push(call); this.store.save(registry);
       return new ProcessExecutionCall(this, call);
     });
@@ -1080,11 +1168,8 @@ export class ProcessExecutionRuntime {
   }
   #proof(stopped) { return stopped ? AgentProcessStopEvidence.confirmed() : AgentProcessStopEvidence.uncertain("managed-group-or-member-still-alive"); }
   #assertManagedRecord(root, call, record) {
-    if (record.executionId !== root.executionId || record.callId !== call.callId
-      || record.ownerToken !== root.coordinatorIdentity.ownerToken || record.capability !== call.capability
-      || record.pgid !== call.pgid || !identity(record.launcherIdentity).sameBirth(call.launcherIdentity)) {
-      fail("binding-mismatch", "Durable launcher outcome belongs to another physical call");
-    }
+    assertManagedRecordIdentity(record, { ...call, executionId: root.executionId,
+      ownerToken: root.coordinatorIdentity.ownerToken }, { code: "PROCESS_EXECUTION_BINDING_MISMATCH" });
   }
   #mergeMembers(record, members) {
     for (const value of members) {
