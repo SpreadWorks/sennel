@@ -108,7 +108,7 @@ describe("flow query", () => {
     ].sort());
     assert.deepEqual(Object.keys(response.item).sort(), [
       "artifacts", "capabilities", "identity", "lifecycle", "location", "metrics",
-      "relationships", "structure", "timestamps", "history",
+      "relationships", "structure", "timestamps", "history", "executionCoverage", "executionSummary", "executionSources",
     ].sort());
     return response;
   }
@@ -638,6 +638,7 @@ describe("flow query", () => {
       "activity", "artifactIds", "attempt", "blocker", "confirmationOrder", "evaluationIds",
       "failure", "findingIds", "incomplete", "metric", "node", "note", "outcome", "repairIds",
       "sequence", "task", "timing", "transition", "usage", "detailRefs", "referenceBindings", "detailCoverage",
+      "resultConfirmedAt", "provider", "model", "effort", "outbox", "executionRefs",
     ].sort());
     assert.deepEqual(item.activity, { id: fixture.flowManager.activityLedger("001-query")[0].id, type: "flow_created" });
     const activity = fixture.flowManager.activityLedger("001-query")[0];
@@ -655,6 +656,9 @@ describe("flow query", () => {
     assert.equal(item.incomplete, null);
     assert.equal(item.metric, null);
     assert.equal(item.note, null);
+    assert.equal(item.resultConfirmedAt, null);
+    assert.deepEqual(item.executionRefs, []);
+    assert.equal(item.outbox, null);
     assert.deepEqual(item.evaluationIds, []);
     assert.deepEqual(item.findingIds, []);
     assert.deepEqual(item.repairIds, []);

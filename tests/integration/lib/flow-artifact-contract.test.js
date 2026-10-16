@@ -62,6 +62,9 @@ describe("Flow artifact contract registry", () => {
     assert.equal(paths.get("report"), "artifacts/report.json");
     assert.equal(paths.get("ideas"), "artifacts/ideas.json");
     assert.equal(paths.get("plugin.lifecycle.artifact"), "artifacts/plugin-artifacts/:{pluginArtifactPath}");
+    assert.equal(paths.get("execution.response.adoption"), "artifacts/execution-observations/adoptions/:{adoptionId}.json");
+    assert.equal(paths.get("execution.source.manifest"), "artifacts/execution-observations/sources/:{sourceId}.json");
+    assert.equal(paths.get("execution.observation"), "artifacts/execution-observations/facts/:{observationId}.json");
     assert.equal(paths.get("task.gate"), "steps/impl/:{taskId}/gate/result.json");
     assert.equal(paths.get("task.gate.source"), "steps/impl/:{taskId}/gate/source.json");
     assert.equal(paths.has("task.impl"), false);
@@ -79,6 +82,9 @@ describe("Flow artifact contract registry", () => {
     assert.deepEqual(
       FLOW_ARTIFACT_SWITCH_TARGETS.filter((entry) => entry.action === "new").map((entry) => entry.logicalKey),
       [
+        "execution.response.adoption", "execution.source.manifest", "execution.observation",
+        "execution.contract", "execution.recovery", "execution.request",
+        "prompt.execution.progress", "prompt.execution.event", "prompt.execution.budget",
         "flow.activities", "spec.snapshot", "spec.review", "artifact.catalog",
         "test.requirement.plan", "test.requirement.failure", "test.requirement.candidate.bundle",
         "test.requirement.candidate.source", "test.requirement.support", "test.requirement.review", "test.requirement.repair.progress",

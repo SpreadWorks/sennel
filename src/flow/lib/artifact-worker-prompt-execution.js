@@ -2,14 +2,28 @@ import { PromptBatchPlan, PromptBatchExecutor, PromptExecutionLimit, PromptExecu
   PromptBatchExecutionIncompleteFailure } from "../../lib/prompt-batching.js";
 import { AgentFailure } from "../../lib/agent-failure.js";
 import { WorkerArtifactHandoffError } from "./worker-artifact-handoff-error.js";
-import { PromptExecutionJournal, PromptExecutionScope } from "../../lib/prompt-execution-journal.js";
+import { PromptExecutionJournal, PromptExecutionScope, PromptResponseExecutionObservation } from "../../lib/prompt-execution-journal.js";
 import { FlowExecutionContract } from "./flow-execution-contract.js";
 import { CanonicalPromptExecutionJournalWriter } from "./canonical-prompt-execution-writer.js";
 import { captureProcessExecutionCheckoutIdentity } from "../../lib/process-execution-runtime.js";
 
+/** Carries the selected response and exact receiver evidence to publication. */
+export class ArtifactWorkerPromptResponse {
+  constructor({ response, receivedResponses, executionContractId, generation }) {
+    if (typeof response !== "string" || typeof executionContractId !== "string" || !executionContractId
+      || !Number.isSafeInteger(generation) || generation < 0 || !Array.isArray(receivedResponses)
+      || receivedResponses.some((entry) => !(entry instanceof PromptResponseExecutionObservation))) {
+      throw new TypeError("Artifact worker response requires its selected typed receiver evidence");
+    }
+    Object.assign(this, { response, receivedResponses: Object.freeze([...receivedResponses]), executionContractId, generation });
+    Object.freeze(this);
+  }
+  toJSON() { return { ...this, receivedResponses: this.receivedResponses.map((entry) => entry.toJSON()) }; }
+}
+
 /** Outer assembly reads the episode; the writer remains a save-only Store adapter. */
 export async function executeArtifactWorkerPrompt({ flowManager, request, prompt, callOptions, agent, checkoutIdentity = null,
-  reservationContinuation = null }) {
+  reservationContinuation = null, onResponse = null }) {
   const executionContract = request.executionContract;
   if (!(executionContract instanceof FlowExecutionContract)) throw new TypeError("Artifact worker Prompt execution requires its canonical contract");
   checkoutIdentity ??= captureProcessExecutionCheckoutIdentity({ mainRoot: request.mainRoot ?? flowManager._mainRoot,
@@ -40,5 +54,8 @@ export async function executeArtifactWorkerPrompt({ flowManager, request, prompt
       && (error.cause instanceof AgentFailure || error.cause instanceof WorkerArtifactHandoffError)) throw error.cause;
     throw error;
   }
-  return completions[0].response;
+  const response = new ArtifactWorkerPromptResponse({ response: completions[0].response,
+    receivedResponses: completions[0].receivedResponses, executionContractId: executionContract.id, generation: executionContract.generation });
+  onResponse?.(response);
+  return response.response;
 }

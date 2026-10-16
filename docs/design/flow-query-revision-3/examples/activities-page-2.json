@@ -9,7 +9,7 @@
     1
   ],
   "snapshot": {
-    "id": "sha256:75ae23ba814813434793bf2974db5f40f25117b06d8fbbee1a87d9e48dfc06ca",
+    "id": "sha256:dafd7fb2a6d6a7bd148d2069a7738ecf426936e2f7d7d3f39ed2b617b7307fe6",
     "algorithm": "sha256",
     "capturedAt": "2026-10-12T00:00:04Z",
     "confirmationOrder": 3,
@@ -37,7 +37,8 @@
       "task": null,
       "attempt": {
         "id": "attempt-repair-1",
-        "sequence": 1
+        "sequence": 1,
+        "startedAt": null
       },
       "sequence": 1,
       "confirmationOrder": 3,
@@ -115,7 +116,13 @@
           "reason": null,
           "count": 1
         }
-      }
+      },
+      "resultConfirmedAt": "2026-10-12T00:00:02Z",
+      "provider": null,
+      "model": null,
+      "effort": null,
+      "outbox": null,
+      "executionRefs": []
     }
   ],
   "entities": {
@@ -330,7 +337,7 @@
   },
   "pageInfo": {
     "limit": 1,
-    "endCursor": "eyJkaWdlc3QiOiJhMmJmNTUzMTYyZGE4MWRkZjM0Y2ViZWQ2NzM0YjkzYzBiNDM2NDE0Y2ZmYTY4NTU3OWM1NDdjOTE3NmU5MDI3IiwiZmxvd1ZlcnNpb24iOjEsImd0ZSI6IjIwMjYtMTAtMTJUMDA6MDA6MDFaIiwibHQiOiIyMDI2LTEwLTEyVDAwOjAwOjAzWiIsIm9yZGVyIjozLCJyZXNvdXJjZSI6ImFjdGl2aXRpZXMiLCJzY2hlbWFSZXZpc2lvbiI6Mywic25hcHNob3RJZCI6InNoYTI1Njo3NWFlMjNiYTgxNDgxMzQzNDc5M2JmMjk3NGRiNWY0MGYyNTExN2IwNmQ4ZmJiZWUxYTg3ZDllNDhkZmMwNmNhIiwic3BlY0lkIjoiZXhhbXBsZS1mbG93IiwidmVyc2lvbiI6Mn0",
+    "endCursor": "eyJkaWdlc3QiOiI2Y2U0ODVmNTgzZDhhYjk3Y2Q4M2Q2NTZmNTAyMjlhM2Y2NWVkNDlmZTk0MjhmMGFkNDg3OGQ3ZjA5MmVjOGUxIiwiZmxvd1ZlcnNpb24iOjEsImd0ZSI6IjIwMjYtMTAtMTJUMDA6MDA6MDFaIiwibHQiOiIyMDI2LTEwLTEyVDAwOjAwOjAzWiIsIm9yZGVyIjozLCJyZXNvdXJjZSI6ImFjdGl2aXRpZXMiLCJzY2hlbWFSZXZpc2lvbiI6Mywic25hcHNob3RJZCI6InNoYTI1NjpkYWZkN2ZiMmE2ZDZhN2JkMTQ4ZDIwNjlhNzczOGVjZjQyNjkzNmUyZjdkN2QzZjM5ZWQyYjYxN2I3MzA3ZmU2Iiwic3BlY0lkIjoiZXhhbXBsZS1mbG93IiwidmVyc2lvbiI6Mn0",
     "hasNext": false,
     "returnedItems": 1,
     "totalItems": 2

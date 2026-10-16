@@ -68,7 +68,8 @@ function activityItems(values) {
  * canonical record, filesystem path, or generic Flow envelope.
  */
 export class FlowQueryCompatibilityResult {
-  constructor({ resource, selectedFlowVersion: selected, availableFlowVersions: available, snapshot = null, completeness = null, entities = null, item = null, items = null, page = null, error = null, guidance = null } = {}) {
+  constructor({ resource, selectedFlowVersion: selected, availableFlowVersions: available, snapshot = null, completeness = null, entities = null, item = null, items = null, page = null, error = null, guidance = null,
+    relations = null, endpoints = null, measurements = null, summary = null, coverage = null } = {}) {
     this.resource = resource;
     this.selectedFlowVersion = selected;
     this.availableFlowVersions = available;
@@ -80,6 +81,7 @@ export class FlowQueryCompatibilityResult {
     this.pageInfo = page;
     this.error = error;
     this.guidance = guidance;
+    Object.assign(this, { relations, endpoints, measurements, summary, coverage });
     Object.freeze(this);
   }
 }
@@ -122,6 +124,13 @@ export class FlowQueryConsumer {
     if (response.resource === "metadata") {
       return new FlowQueryCompatibilityResult({ resource: response.resource, selectedFlowVersion: selected, availableFlowVersions: available, snapshot: response.snapshot, completeness: response.completeness, item: metadataItem(response.item) });
     }
+    if (response.resource === "executions") {
+      return new FlowQueryCompatibilityResult({ resource: response.resource, selectedFlowVersion: selected, availableFlowVersions: available,
+        snapshot: response.snapshot, completeness: response.completeness, items: Object.freeze(structuredClone(response.items)),
+        relations: Object.freeze(structuredClone(response.relations)), endpoints: Object.freeze(structuredClone(response.endpoints)),
+        measurements: Object.freeze(structuredClone(response.measurements)), summary: structuredClone(response.summary),
+        coverage: structuredClone(response.coverage), page: Object.freeze({ ...response.pageInfo }) });
+    }
     if (!Array.isArray(response.items)
       || response.items.length > FLOW_QUERY_LIMITS.MAX_PAGE_LIMIT
       || response.items.length > response.pageInfo.limit) {
@@ -139,6 +148,10 @@ export class FlowQueryConsumer {
     if (response.resource === "metadata") {
       return new FlowQueryCompatibilityResult({ resource: response.resource, selectedFlowVersion: selected, availableFlowVersions: available, snapshot: response.snapshot, error: response.error, guidance: response.guidance });
     }
+    if (response.resource === "executions") return new FlowQueryCompatibilityResult({ resource: response.resource,
+      selectedFlowVersion: selected, availableFlowVersions: available, snapshot: response.snapshot, items: Object.freeze([]),
+      relations: Object.freeze([]), endpoints: Object.freeze([]), measurements: Object.freeze([]), summary: null, coverage: null,
+      page: Object.freeze({ ...response.pageInfo }), error: response.error, guidance: response.guidance });
     return new FlowQueryCompatibilityResult({ resource: response.resource, selectedFlowVersion: selected, availableFlowVersions: available, snapshot: response.snapshot, entities: response.entities, items: Object.freeze([]), page: Object.freeze({ ...response.pageInfo }), error: response.error, guidance: response.guidance });
   }
 }

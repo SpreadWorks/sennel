@@ -36,7 +36,8 @@ import { AgentFailure } from "./agent-failure.js";
 import { DefinitionLifecycleAttemptBinding, isStepPersistenceFailure } from "../flow/lib/definition-lifecycle-failure.js";
 import { isStepAdmissionRefusal } from "../flow/lib/step-admission-refusal.js";
 import { ProcessExecutionControlFailure } from "./process-execution-values.js";
-import { flowProcessRuntimeRequired, withFlowProcessRuntime } from "../flow/lib/process-runtime-admission.js";
+import { flowProcessRuntimeRequired, withFlowProcessRuntime, captureFlowProcessExecutionBinding } from "../flow/lib/process-runtime-admission.js";
+import { ProcessExecutionRuntime } from "./process-execution-runtime.js";
 import { nonblockingFailureContinuation } from "../flow/lib/nonblocking-command-failure.js";
 import { FlowStopFacts, publicFlowErrorMessage, selectedFlowStopDirective } from "./flow-stop-guidance.js";
 
@@ -694,7 +695,12 @@ async function executeDispatch({
         ) {
           commandInput._deferFinalizeCompletionCommit = true;
         }
-        result = await cmd.run(container, commandInput);
+        const runtime = ProcessExecutionRuntime.current();
+        const outboxBinding = hookCtx.flowOutboxEntry?.executionBinding ?? null;
+        result = runtime !== null && !runtime.borrowed && outboxBinding !== null
+          ? await runtime.withBinding(captureFlowProcessExecutionBinding(hookCtx, { commandId: runtime.binding.value?.commandId ?? envelopeKey }),
+            () => cmd.run(container, commandInput))
+          : await cmd.run(container, commandInput);
         publication.completion = "command_returned";
       } catch (err) {
         caught = err;

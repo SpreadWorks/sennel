@@ -1,3 +1,7 @@
+import { CombinedAdmission } from "./combined-admission.js";
+import { PromptResponseAdoptionPublicationAdmission } from "./prompt-response-adoption-publication.js";
+import { FlowExecutionObservationStartingAdmission } from "./flow-execution-observation-admission.js";
+import { FlowExecutionObservationBinding } from "../../lib/flow-execution-observation.js";
 import { SPEC_GATE_REPAIR_RECOVERY_OPERATION } from "./spec-gate-repair-recovery.js";
 /**
  * Canonical Flow Version 1 runtime.
@@ -250,6 +254,9 @@ export class CanonicalFlowRuntime {
         artifactWrites,
       });
     }
+    const promptAdoptions = (artifactWrites ?? []).filter((write) => (write.logicalKey ?? write.artifact?.logicalKey) === "execution.response.adoption");
+    if (promptAdoptions.length > 0) admission = new CombinedAdmission(admission,
+      new PromptResponseAdoptionPublicationAdmission(promptAdoptions, canonicalActivity, artifactWrites));
     return this.store(specId).apply({
       activity: canonicalActivity,
       completionActivity,
@@ -1276,6 +1283,7 @@ export class CanonicalFlowRuntime {
       failureCode: outbox.failureCode ?? null,
       recovery: outbox.recovery ?? null,
       exactRecoveryReceipt: outbox.exactRecoveryReceipt ?? null,
+      ...(outbox.executionBinding == null ? {} : { executionBinding: outbox.executionBinding }),
     };
     return this.apply(specId, this.#activity(state, {
       id: activityId,
@@ -1293,7 +1301,8 @@ export class CanonicalFlowRuntime {
         outbox: normalized,
         nonblocking: null,
       },
-    }));
+    }), { admission: operation === "begin_outbox" && normalized.executionBinding != null
+      ? new FlowExecutionObservationStartingAdmission(FlowExecutionObservationBinding.fromJSON(normalized.executionBinding)) : undefined });
   }
 
   #recordObservation(specId, activityId, operation, { nodeId = null, metric = null, note = null, timing = null, admission = undefined } = {}) {

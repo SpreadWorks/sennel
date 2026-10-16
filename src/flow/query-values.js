@@ -1,5 +1,7 @@
 import crypto from "node:crypto";
 import { FlowArtifactCatalog } from "../lib/flow-version.js";
+import { FLOW_ARTIFACT_CONTRACTS, FlowArtifactAttemptHistoryContent } from "../lib/flow-artifact-contract.js";
+import { NonGateCatalogPublication } from "./lib/non-gate-transition.js";
 import { FLOW_QUERY_ERROR_CODES as ERROR_CODES, FLOW_QUERY_LIMITS } from "./query-contract.js";
 
 class QueryError extends Error {
@@ -139,13 +141,15 @@ function artifactIdentity(descriptor) {
 
 
 class ReferenceResolver {
-  constructor(catalog) {
+  constructor(catalog, { readArtifact = null } = {}) {
     if (!(catalog instanceof FlowArtifactCatalog)) throw new Error("Artifact reference resolution requires a validated catalog");
     this.catalog = catalog;
+    this.readArtifact = readArtifact;
     this.byPath = new Map();
     this.byLogicalKey = new Map();
     this.byKindPath = new Map();
     this.byHashKind = new Map();
+    this.retainedByHashKind = new Map();
     const add = (index, key, descriptor) => index.set(key, [...(index.get(key) ?? []), descriptor]);
     for (const descriptor of catalog.artifacts) {
       add(this.byPath, descriptor.relativePath, descriptor);
@@ -157,7 +161,7 @@ class ReferenceResolver {
     Object.freeze(this);
   }
 
-  matchingDescriptors(reference, label) {
+  matchingDescriptors(reference, label, { activity = null } = {}) {
     if (reference === null || typeof reference !== "object") {
       throw new QueryError(ERROR_CODES.CANONICAL_RECORD_INCONSISTENT, "/canonical", `${label} is invalid`);
     }
@@ -167,8 +171,57 @@ class ReferenceResolver {
     }
     if (kind === "path") return this.byPath.get(reference.id) ?? [];
     if (kind === "logical") return this.byLogicalKey.get(reference.id) ?? [];
-    return [...new Set([...(this.byKindPath.get(JSON.stringify([kind, reference.id])) ?? []),
+    const matches = [...new Set([...(this.byKindPath.get(JSON.stringify([kind, reference.id])) ?? []),
       ...(/^[a-f0-9]{64}$/.test(reference.id) ? this.byHashKind.get(JSON.stringify([kind, reference.id])) ?? [] : [])])];
+    if (matches.length > 0 || !/^[a-f0-9]{64}$/.test(reference.id)) return matches;
+    if (activity === null) return this.retainedByHashKind.get(JSON.stringify([kind, reference.id])) ?? [];
+    if (this.readArtifact === null) return [];
+    return this.retainedHistoryDescriptors(reference.id, kind, activity);
+  }
+
+  /** A historical hash must identify the complete retained prefix of its saved publisher. */
+  retainedHistoryDescriptors(hash, kind, activity) {
+    if (activity.attemptId === null || !Number.isSafeInteger(activity.sequence) || activity.sequence < 1) return [];
+    const matches = [];
+    for (const descriptor of this.catalog.artifacts) {
+      if (descriptor.logicalKey === null || descriptor.kind !== kind && descriptor.logicalKey !== kind) continue;
+      const content = FLOW_ARTIFACT_CONTRACTS.require(descriptor.logicalKey).contentContract;
+      if (!(content instanceof FlowArtifactAttemptHistoryContent)) continue;
+      const capturedBytes = this.readArtifact(descriptor);
+      let history;
+      try {
+        descriptor.verifyBytes(capturedBytes);
+        history = content.parse(capturedBytes);
+      } catch (cause) {
+        throw new QueryError(ERROR_CODES.CANONICAL_RECORD_INCONSISTENT, "/canonical", "Retained history differs from its cataloged bytes", { cause });
+      }
+      let prefix;
+      try { prefix = history.prefixThrough(activity.sequence); }
+      catch { continue; }
+      if (prefix.current.payload.nodeId !== activity.nodeId) continue;
+      const bytes = prefix.toBytes();
+      if (crypto.createHash("sha256").update(bytes).digest("hex") !== hash) continue;
+      const storedPublication = activity.result?.stepResult?.evidence?.publication;
+      if (storedPublication != null) {
+        let publication;
+        try { publication = storedPublication instanceof NonGateCatalogPublication
+          ? storedPublication : new NonGateCatalogPublication(storedPublication); }
+        catch (cause) {
+          throw new QueryError(ERROR_CODES.CANONICAL_RECORD_INCONSISTENT, "/canonical", "Retained history publication identity is invalid", { cause });
+        }
+        if (publication.artifactId !== descriptor.relativePath || publication.fingerprint !== hash
+          || publication.producerActivityId !== activity.id || publication.stepId !== activity.nodeId
+          || publication.attempt.id !== activity.attemptId || publication.attempt.sequence !== activity.sequence) continue;
+      }
+      matches.push(descriptor);
+    }
+    if (matches.length === 1) {
+      const descriptor = matches[0];
+      for (const alias of new Set([descriptor.kind, descriptor.logicalKey])) {
+        this.retainedByHashKind.set(JSON.stringify([alias, hash]), matches);
+      }
+    }
+    return matches;
   }
 
   resolve(reference, label, { optional = false } = {}) {
@@ -179,8 +232,8 @@ class ReferenceResolver {
     return this.#resolve(reference, label, { optional });
   }
 
-  resolveResultReference(reference, label) {
-    const matches = this.matchingDescriptors(reference, label);
+  resolveResultReference(reference, label, { activity = null } = {}) {
+    const matches = this.matchingDescriptors(reference, label, { activity });
     if (matches.length === 1) return matches[0];
     const kind = Object.hasOwn(reference, "kind") ? reference.kind : reference.label;
     const claimsCatalogRelation = kind === "path"
@@ -202,7 +255,7 @@ class ReferenceResolver {
   validateCanonicalActivityResults(activities) {
     for (const activity of activities) {
       for (const reference of activity.result?.artifactRefs ?? []) {
-        this.resolveResultReference(reference, "Activity result artifact reference");
+        this.resolveResultReference(reference, "Activity result artifact reference", { activity });
       }
     }
   }

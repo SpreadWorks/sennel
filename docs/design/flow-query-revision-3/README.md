@@ -137,9 +137,9 @@ producerActivityId は保存 descriptor.activityId とする。system / import �
 snapshot は id、algorithm、capturedAt、confirmationOrder、catalogHash、projectionHash、availableFlowVersionsHash を持つ。identity 入力は次の閉じた object とする。
 
 ```text
-{schemaRevision:2,flowVersionId,specId,flowVersion,catalogHash,
+{schemaRevision:3,flowVersionId,specId,flowVersion,catalogHash,
  confirmedLedgerHash,confirmationOrder,stateHash,specHash,
- projectionHash,availableFlowVersionsHash}
+ projectionHash,availableFlowVersionsHash,executionHash}
 ```
 
 catalogHash は既存 catalog content hash。stateHash / specHash は同じ committed snapshot の保存 bytes、confirmedLedgerHash は confirmed prefix の bytes から計算する。projectionHash は使用した Definition、公開 mapping / Schema、表示資源の内容 digest を含む。availableFlowVersionsHash は昇順の保存 Version 一覧から計算する。
@@ -191,3 +191,16 @@ Schema 案は Draft 2020-12 だが、現行 `validateSchema` は `$ref`、`allOf
 terminal typed Spec Review Result は ledger を verdict の正本とし、同一 Attempt・generation の retained publication を根拠として結び付ける。失われた過去 generation の本文を復元したり、別 generation の publication を代用したりしない。未保持の Version は `DETAIL_UNAVAILABLE` とする。過去 Definition / 表示名、raw log にしかない意味情報、切り詰め済み Draft finding、partial import も未保存を明示し、旧履歴の復元を主張しない。
 
 Task source の no-change は、保存された typed evidence、指摘件数、accepted settlement の同一性、同 Activity に属する Gate 修正 outcome の不在を既存 producer 契約で確認した場合に取得できる。未対応の品質観測や修正情報を持つケースを空の指摘一覧へ置き換えない。詳細のない行政 Activity は producer の役割から not-applicable と判定し、空の参照欄だけで not-recorded を推測しない。
+
+## 実行観測の追加
+
+`executions` resource、共通 `expectSnapshotId`、metadata / activities の実行欄は
+[Flow 実行観測 query](../flow-executions/README.md) を参照する。`executionHash` は
+同じ capture の immutable source manifests / facts、選択 Version の検証済み runtime
+入力、canonical receiver / contract / adoption の正規化値の digest である。runtime と
+canonical 入力を交差して再読し、安定しない場合は `SNAPSHOT_UNSTABLE` とする。
+query 時刻、現在 PID の生存、別 Version の実行更新は入力に含めない。
+
+元の detail examples は execution producer を記録していない範囲を表すため、
+`executionCoverage` は partial / not-recorded とし、Attempt の開始時刻を timing から
+補作しない。実行の正常生成と採用の検証には正規 producer シナリオを使用する。

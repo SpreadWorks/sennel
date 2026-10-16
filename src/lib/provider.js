@@ -30,6 +30,8 @@ class Provider {
     throw new Error("Provider.parse() must be implemented by a subclass.");
   }
 
+  requestedIdentity(_args) { return { model: null, effort: null }; }
+
   systemPromptFlag() {
     return null;
   }
@@ -45,6 +47,28 @@ class Provider {
   builtinProfiles() {
     return {};
   }
+}
+
+function reportedText(value) {
+  return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+function reportedIdentity(envelope) {
+  return { model: reportedText(envelope?.model),
+    effort: reportedText(envelope?.reasoning_effort ?? envelope?.reasoning?.effort ?? envelope?.effort) };
+}
+
+function argumentValue(args, flags) {
+  let result = null;
+  for (let index = 0; index < args.length; index += 1) {
+    if (flags.includes(args[index])) result = reportedText(args[index + 1]);
+    for (const flag of flags) if (args[index].startsWith(`${flag}=`)) result = reportedText(args[index].slice(flag.length + 1));
+  }
+  return result;
+}
+
+function measuredCost(value) {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : null;
 }
 
 function measuredTokens(value) {
@@ -72,14 +96,19 @@ class ClaudeProvider extends Provider {
       text: envelope.structured_output != null
         ? JSON.stringify(envelope.structured_output)
         : String(envelope.result ?? ""),
+      reported: reportedIdentity(envelope),
       usage: {
         input_tokens: measuredTokens(envelope.usage?.input_tokens),
         output_tokens: measuredTokens(envelope.usage?.output_tokens),
         cache_read_tokens: measuredTokens(envelope.usage?.cache_read_input_tokens),
         cache_creation_tokens: measuredTokens(envelope.usage?.cache_creation_input_tokens),
-        cost_usd: envelope.total_cost_usd ?? null,
+        cost_usd: measuredCost(envelope.total_cost_usd),
       },
     };
+  }
+
+  requestedIdentity(args) {
+    return { model: argumentValue(args, ["--model"]), effort: argumentValue(args, ["--effort"]) };
   }
 
   systemPromptFlag() {
@@ -101,9 +130,12 @@ class CodexProvider extends Provider {
   parse(stdout) {
     let text = "";
     let usageRaw = null;
+    let reported = reportedIdentity(null);
     for (const line of stdout.trim().split("\n")) {
       if (!line.trim()) continue;
       const event = JSON.parse(line);
+      const identity = reportedIdentity(event);
+      reported = { model: identity.model ?? reported.model, effort: identity.effort ?? reported.effort };
       if (event.type === "item.completed" && event.item?.type === "agent_message") {
         text = String(event.item.text ?? "");
       } else if (event.type === "turn.completed") {
@@ -114,6 +146,7 @@ class CodexProvider extends Provider {
     const cachedTokens = measuredTokens(usageRaw?.cached_input_tokens);
     return {
       text,
+      reported,
       usage: {
         input_tokens: inputTokens !== null && cachedTokens !== null
           ? measuredTokens(inputTokens - cachedTokens)
@@ -124,6 +157,13 @@ class CodexProvider extends Provider {
         cost_usd: null,
       },
     };
+  }
+
+  requestedIdentity(args) {
+    const configuration = args.filter((argument, index) => ["-c", "--config"].includes(args[index - 1]));
+    const effort = configuration.filter((value) => value.startsWith("model_reasoning_effort=")).at(-1);
+    return { model: argumentValue(args, ["-m", "--model"]),
+      effort: effort === undefined ? null : effort.slice(effort.indexOf("=") + 1).replace(/^"|"$/g, "") };
   }
 
   systemPromptFlag() {

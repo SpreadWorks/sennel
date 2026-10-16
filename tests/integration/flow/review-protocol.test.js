@@ -2,6 +2,7 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
+import { execFileSync } from "node:child_process";
 
 import {
   ReviewProtocolContract,
@@ -24,6 +25,9 @@ import { PRODUCT } from "../../../src/lib/product.js";
 import { ProviderRegistry } from "../../../src/lib/provider.js";
 import { createTmpDir, removeTmpDir } from "../../support/builders/tmp-dir.js";
 import { commitAll, initGitRepo } from "../../support/infrastructure/git-repo.js";
+import { TaskReviewScenario } from "../../support/builders/task-review-scenario.js";
+import { SourceExecutionObservationAppends } from "../../../src/flow/lib/source-execution-observation-appends.js";
+import { SourceMutationManifest } from "../../../src/flow/lib/worker-artifact-handoff.js";
 
 function contract() {
   return new ReviewProtocolContract({
@@ -62,6 +66,69 @@ class SourceObserver {
 }
 
 describe("Task Review protocol", () => {
+  it("keeps shared canonical observations outside a linked checkout from masking checkout source edits", async (t) => {
+    const scenario = new TaskReviewScenario(t);
+    const checkout = path.join(scenario.root, ".tmp", "linked-checkout");
+    execFileSync("git", ["worktree", "add", "--detach", checkout, "HEAD"], { cwd: scenario.root, stdio: "ignore" });
+    const outputVariable = PRODUCT.env("REVIEW_OUTPUT_DIR");
+    const previousOutput = process.env[outputVariable];
+    process.env[outputVariable] = path.join(checkout, ".tmp", "review-output");
+    try {
+      const observer = new TaskReviewSourceEffectObserver({ root: checkout, flowManager: scenario.manager, specId: scenario.specId,
+        executionIdentity: TaskReviewExecutionIdentity.fromCanonicalState({ state: scenario.state(), taskId: scenario.taskId, reviewAttempt: 1 }) });
+      const before = observer.capture({ number: 1 });
+      const session = scenario.manager.prepareExecutionObservationSession({ specId: scenario.specId });
+      session.append({ kind: "agent-started", entityId: "linked-checkout-observation", data: {} });
+      const observed = observer.capture({ number: 1 });
+      assert.equal(observer.hasEffect(before, observed), false);
+      const manifest = (baseline) => scenario.manager.readCanonicalTransitionView({ specId: scenario.specId,
+        read: (view) => SourceMutationManifest.capture({ baseline, executionObservations: new SourceExecutionObservationAppends(view, baseline.snapshot) }) });
+      assert.deepEqual(manifest(before.baseline).paths(), []);
+      fs.appendFileSync(path.join(checkout, "README.md"), "unexpected checkout source edit\n");
+      session.append({ kind: "agent-response-ready", entityId: "linked-checkout-observation", data: {} });
+      const changed = observer.capture({ number: 1 });
+      assert.equal(observer.hasEffect(observed, changed), true);
+      assert.deepEqual(observer.describe(observed, changed).detail.changedPaths, ["README.md"]);
+      assert.deepEqual(manifest(observed.baseline).paths(), ["README.md"]);
+    } finally {
+      if (previousOutput === undefined) delete process.env[outputVariable];
+      else process.env[outputVariable] = previousOutput;
+    }
+  });
+
+  for (const changesSource of [false, true]) it(`real Agent observation appends ${changesSource ? "cannot hide a Task source edit" : "remain read-only Task Review input"}`, async (t) => {
+    const scenario = new TaskReviewScenario(t);
+    const outputVariable = PRODUCT.env("REVIEW_OUTPUT_DIR");
+    const previousOutput = process.env[outputVariable];
+    process.env[outputVariable] = path.join(scenario.root, ".tmp", "review-output");
+    container.reset();
+    container.register("root", scenario.root);
+    const valid = JSON.stringify({ blockingFindings: [], nonBlockingImprovements: [] });
+    const program = `${changesSource ? `require('node:fs').appendFileSync(${JSON.stringify(scenario.sourcePath)},'unexpected source edit\\n');` : ""}process.stdout.write(${JSON.stringify(valid)});`;
+    const profile = { command: process.execPath, args: ["-e", program, "{{PROMPT}}"] };
+    const config = { agent: { default: "test/observed", retryCount: 0, providers: { "test/observed": profile }, timeout: 10 } };
+    const agent = new Agent({ config,
+      paths: { root: scenario.root, agentWorkDir: path.join(scenario.root, ".tmp"), logDir: path.join(scenario.root, ".tmp", "logs") },
+      registry: new ProviderRegistry(config.agent.providers), logger: new Logger({ enabled: false }), flowManager: scenario.manager });
+    try {
+      const result = runTaskReviewProtocol({ root: scenario.root, specId: scenario.specId,
+        executionIdentity: TaskReviewExecutionIdentity.fromCanonicalState({ state: scenario.manager.canonicalState(scenario.specId), taskId: scenario.taskId, reviewAttempt: 1 }),
+        flowManager: scenario.manager, requirementIds: new Set(["R-1"]), agent, prompt: "review the Task", systemPrompt: "return Review JSON" });
+      if (changesSource) await assert.rejects(result, (error) => error instanceof ReviewProtocolFailure && error.kind === "effect_observed");
+      else {
+        try { assert.equal(await result, valid); }
+        catch (error) { assert.fail(`${error.message}: ${JSON.stringify(error.effectEvidence)}`); }
+      }
+      const observations = await scenario.manager.readExecutionObservations({ specId: scenario.specId });
+      assert.equal(observations.manifests.length, 1);
+      assert.ok(observations.facts.length >= 4, "the real Agent must persist its enclosed provider observations");
+    } finally {
+      container.reset();
+      if (previousOutput === undefined) delete process.env[outputVariable];
+      else process.env[outputVariable] = previousOutput;
+    }
+  });
+
   it("round-trips the parent-issued Task Review execution identity", () => {
     const identity = taskReviewExecution({ taskId: "T-1", attemptId: "canonical-attempt", sequence: 2 });
     const restored = TaskReviewExecutionIdentity.fromJSON(identity.toJSON());
