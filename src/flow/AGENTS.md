@@ -88,6 +88,18 @@ Flow の停止案内は [`../AGENTS.md`](../AGENTS.md) の「Flow 停止案内�
 
 ## 必須の検証
 
+### 永続化契約の変更
+
+- Artifact path、schema、hash input、Activity shape を変更する場合は、同じ変更で
+  対応する契約 revision と直前 revision からの明示的 migration を用意する。
+- source 契約と producer の由来を記録した直前 revision の immutable fixture を
+  保存する。現行 serializer で旧形式を模したものを真正な旧入力の証明にしない。
+- migration の回帰テストと、通常 runtime の `FLOW_MIGRATION_REQUIRED` 案内を
+  接続する。対象限定の preview・apply・recovery と必要な実行順序を案内する。
+- 失敗時の無変更または transaction recovery、移行後の厳格な読み戻し、保存した
+  成果物の実際の後続利用を検証する。成功結果や継続権限を補作しない。
+- 通常 runtime に旧形式の互換 fallback や自動 migration を追加しない。
+
 ### 欠損した Task Review 証拠の明示的な整理
 
 - `reconcile-task-review` は、baseline を欠いた未公表の復旧済み Task Review が tooling/provider failure で停止した場合だけ、Definition が許可する明示的な経路である。通常の retry や旧フォーマット互換処理として使用しない。

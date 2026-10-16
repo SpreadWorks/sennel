@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import { parseMigrateArgs } from "../../src/migrate.js";
+import { coreCommandRegistry } from "../../src/lib/command-registry.js";
+import { MigrationSpecRoot, MigrationSpecSelection } from "../../src/lib/migration-spec-root.js";
 import {
   MigrationBlocker,
   MigrationComponentExecutor,
@@ -16,10 +18,10 @@ import {
 describe("migrate CLI grammar", () => {
   it("accepts only a revisioned layout or specs route", () => {
     assert.deepEqual(parseMigrateArgs(["layout", "--to", "1"]), {
-      component: "layout", to: 1, dryRun: false, help: false,
+      component: "layout", to: 1, specId: null, dryRun: false, help: false,
     });
     assert.deepEqual(parseMigrateArgs(["specs", "--dry-run", "--to", "1"]), {
-      component: "specs", to: 1, dryRun: true, help: false,
+      component: "specs", to: 1, specId: null, dryRun: true, help: false,
     });
   });
 
@@ -28,6 +30,48 @@ describe("migrate CLI grammar", () => {
     assert.throws(() => parseMigrateArgs(["layout"]), /Missing required option: --to/);
     assert.throws(() => parseMigrateArgs(["layout", "--to", "01"]), /positive revision number/);
     assert.throws(() => parseMigrateArgs(["layout", "--migrate", "--to", "1"]), /Unknown option: --migrate/);
+  });
+
+  it("retains one literal spec selector across every supported revision", () => {
+    for (const revision of [1, 2, 3, 4]) {
+      assert.deepEqual(parseMigrateArgs(["specs", "--spec", "515-active", "--to", String(revision), "--dry-run"]), {
+        component: "specs", to: revision, specId: "515-active", dryRun: true, help: false,
+      });
+    }
+  });
+
+  it("rejects missing, duplicate, unsafe and non-spec selectors", () => {
+    for (const value of ["", "../515-active", "/515-active", "515/active", "515\\active", "515..active", "515-active.lock", "515-active.", " 515-active", "515-active "]) {
+      assert.throws(() => parseMigrateArgs(["specs", "--to", "2", "--spec", value]), /literal identifier/);
+    }
+    for (const args of [[], ["--dry-run"], ["--to", "2"]]) {
+      assert.throws(() => parseMigrateArgs(["specs", "--spec", ...args]), /Missing required value: --spec/);
+    }
+    assert.throws(() => parseMigrateArgs(["specs", "--to", "2", "--spec", "515-active", "--spec", "516-other"]), /only be supplied once/);
+    assert.throws(() => parseMigrateArgs(["layout", "--to", "1", "--spec", "515-active"]), /only available for specs/);
+  });
+
+  it("publishes the selector and configured-root default in shared help metadata", () => {
+    const help = coreCommandRegistry.find(["migrate"]).helpConfig;
+    assert.match(help.usage, /--to <revision>/);
+    assert.match(help.usage, /--spec <specId>/);
+    assert.ok(help.options.includes("--spec <specId> (specs only; omit for all specs)"));
+  });
+});
+
+describe("migration selection identity", () => {
+  it("uses the same literal identifier contract and distinct recovery identities per revision and configured root", () => {
+    const selected = MigrationSpecSelection.from("515-active");
+    assert.equal(MigrationSpecSelection.from(selected), selected);
+    assert.equal(MigrationSpecSelection.from(null).specId, null);
+    assert.throws(() => MigrationSpecSelection.from("../515-active"), /literal identifier/);
+    const root = new MigrationSpecRoot({ root: "/project", relativePath: "nested/specs", authority: "canonical" });
+    const other = new MigrationSpecRoot({ root: "/project", relativePath: "specs", authority: "canonical" });
+    const names = [1, 2, 3, 4].map((revision) => selected.journalFileName(root, revision));
+    assert.equal(new Set(names).size, 4);
+    assert.ok(names.every((name) => /^[a-f0-9]{64}\.json$/.test(name)));
+    assert.notEqual(selected.journalFileName(root), selected.journalFileName(other));
+    assert.throws(() => MigrationSpecSelection.from(null).journalFileName(root), /requires one spec/);
   });
 });
 

@@ -2948,7 +2948,6 @@ export class CanonicalFlowManagerStore {
     const resolved = this.#resolveSpecId(specId);
     if (resolved === null) return null;
     const location = this.location(resolved);
-    if (!fs.existsSync(location.directory)) return null;
     const snapshot = this.runtime.loadSnapshot(resolved);
     if (snapshot === null) return null;
     return projectedState(snapshot.state, specRecordAt(location), snapshot.activities);
@@ -3225,17 +3224,21 @@ export class CanonicalFlowManagerStore {
   specLocation(specId) { return this.location(specId); }
 
   resolveWorktreePaths(state) {
+    return CanonicalFlowManagerStore.resolveWorktreePaths({ root: this.root, mainRoot: this.mainRoot, state });
+  }
+
+  static resolveWorktreePaths({ root, mainRoot, state }) {
     if (state?.execution?.mode !== "worktree" && state?.worktree !== true) {
       return { worktreePath: null, mainRepoPath: null };
     }
-    const worktreePath = this.root === this.mainRoot
+    const worktreePath = root === mainRoot
       ? path.join(
-          managedDir(this.mainRoot),
+          managedDir(mainRoot),
           "worktree",
           state.execution.featureBranch.replace(/\//g, "-"),
         )
-      : this.root;
-    return { worktreePath, mainRepoPath: this.mainRoot };
+      : root;
+    return { worktreePath, mainRepoPath: mainRoot };
   }
 
   updateStepStatus(transition, opts = {}) {

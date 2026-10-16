@@ -1,0 +1,51 @@
+{
+  "schemaRevision": 2,
+  "artifacts": [
+    {
+      "logicalKey": "flow.activities",
+      "kind": "activity-ledger",
+      "relativePath": "activities.jsonl",
+      "hash": "26bacf283f3668187b46444804d4b94e3a2a3679f2324af465243a06f1875b16",
+      "size": 2505,
+      "mediaType": "application/x-ndjson",
+      "authority": "canonical-flow-artifacts",
+      "cardinality": "singleton",
+      "memberId": null,
+      "publicationStep": "branch",
+      "retention": "permanent",
+      "activityId": "legacy-confirm_attempt",
+      "migrationMaterialization": false
+    },
+    {
+      "logicalKey": "flow.state",
+      "kind": "flow-state",
+      "relativePath": "flow.json",
+      "hash": "bfae04cb72deb206f0b6c6f489b0c5be6a224d4481f9a41a9e39b76851f45592",
+      "size": 10403,
+      "mediaType": "application/json",
+      "authority": "repository-metadata",
+      "cardinality": "singleton",
+      "memberId": null,
+      "publicationStep": "branch",
+      "retention": "permanent",
+      "activityId": "legacy-confirm_attempt",
+      "migrationMaterialization": false
+    },
+    {
+      "logicalKey": "spec.record",
+      "kind": "spec-record",
+      "relativePath": "spec.json",
+      "hash": "edf2af7da7bb4ae4d095e9c716b6f3ac07c89425902c5934dd7bd82d76e51bfe",
+      "size": 86,
+      "mediaType": "application/json",
+      "authority": "repository-metadata",
+      "cardinality": "singleton",
+      "memberId": null,
+      "publicationStep": "system",
+      "retention": "permanent",
+      "activityId": "flow-created-12aef45f5b5f8213048f40d0086bd3b7913e73d18311ec930df7bf8cb0bcda40",
+      "migrationMaterialization": false
+    }
+  ],
+  "hash": "8415ba1681b5b097595675d930d4b97647f1ac383fdc7239f9e4c16b392c2f99"
+}

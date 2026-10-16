@@ -417,8 +417,8 @@ const definitions = [
     help: {
       section: "Project",
       summary: "Migrate project layout or Flow specifications to a revision",
-      usage: "Usage: sennel migrate <layout|specs> --to 1 [--dry-run]",
-      options: ["--to <revision>", "--dry-run", "-h, --help"],
+      usage: "Usage: sennel migrate <layout|specs> --to <revision> [--spec <specId>] [--dry-run]",
+      options: ["--to <revision>", "--spec <specId> (specs only; omit for all specs)", "--dry-run", "-h, --help"],
       localeKey: "ui:help.commands.migrate",
     },
   }),

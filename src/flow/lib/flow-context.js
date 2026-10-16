@@ -14,6 +14,7 @@ import { FlowTargetExpectation } from "../../lib/flow-target-guard.js";
 import { WorktreeFlowProvenance } from "../../lib/worktree-flow-binding.js";
 import { FlowSpecLocation, flowSpecRootFromConfig } from "../../lib/flow-workspace.js";
 import { FLOW_DISPATCH_INVOCATION_ID_ENV } from "./dispatch-invocation.js";
+import { formatFlowReadFailureForCli } from "../../lib/flow-format-error.js";
 
 const MISSING_PREPARING_FLOW_STATE = Object.freeze({});
 const DISPATCH_INVOCATION_ENV = FLOW_DISPATCH_INVOCATION_ID_ENV;
@@ -287,16 +288,28 @@ export function buildFlowCommandHookContext(container, entry, input = {}) {
     && input.spec != null
     ? { ...input, expectSpec: input.spec }
     : input;
-  return resolveFlowContext(container, {
-    allowMissingActive: entry.requiresFlow === false,
-    captureTargetResolutionError: true,
-    explicitTargetResolution: entry.explicitTargetResolution === true,
-    mismatchTargetResolution: entry.mismatchTargetResolution === true,
-    recoveryTargetResolution: entry.recoveryTargetResolution === true,
-    positionalRunIdTarget: entry.positionalRunIdTarget === true,
-    preparingRunIdSelection: entry.preparingRunIdSelection !== false,
-    input: targetInput,
-  });
+  const flowManager = container.get("flowManager");
+  let context;
+  try {
+    context = resolveFlowContext(container, {
+      allowMissingActive: entry.requiresFlow === false,
+      captureTargetResolutionError: true,
+      explicitTargetResolution: entry.explicitTargetResolution === true,
+      mismatchTargetResolution: entry.mismatchTargetResolution === true,
+      recoveryTargetResolution: entry.recoveryTargetResolution === true,
+      positionalRunIdTarget: entry.positionalRunIdTarget === true,
+      preparingRunIdSelection: entry.preparingRunIdSelection !== false,
+      input: targetInput,
+    });
+  } catch (cause) {
+    throw formatFlowReadFailureForCli({ cause, flowManager });
+  }
+  if (context.flowResolutionError) {
+    context.flowResolutionError = formatFlowReadFailureForCli({
+      cause: context.flowResolutionError, flowManager, targetResolution: true,
+    });
+  }
+  return context;
 }
 
 /** Resolve temporary storage from the command's already selected authority. */

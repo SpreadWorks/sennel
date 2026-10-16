@@ -14,6 +14,7 @@ import { buildFlowCommandHookContext } from "./flow/lib/flow-context.js";
 import { coreCommandRegistry } from "./lib/command-registry.js";
 import { dispatch } from "./lib/dispatcher.js";
 import { flowCliFailure } from "./lib/flow-cli-failure.js";
+import { isFlowFormatGuidance } from "./lib/flow-format-error.js";
 
 const args = process.argv.slice(2);
 if (args[0] === "query") {
@@ -52,6 +53,7 @@ function isolatedArtifactHookContext(container, flowResolutionError = null) {
 }
 
 function artifactContextReadFailure(cause) {
+  if (isFlowFormatGuidance(cause)) return cause;
   const error = new Error(cause?.message || String(cause), { cause });
   error.code = "ARTIFACT_VIEW_READ_FAILED";
   return error;

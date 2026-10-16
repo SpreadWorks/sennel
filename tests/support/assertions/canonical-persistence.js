@@ -10,6 +10,7 @@ import { WorkerArtifactRepositoryMutationSnapshot } from "../../../src/flow/lib/
 import { runCmd } from "../../../src/lib/process.js";
 import { CanonicalFlowFixture } from "../infrastructure/flow-setup.js";
 import { SeedWorkRoot, observeSeedTiming } from "../builders/seed-work-root.js";
+import { OfflineMigrationDirectorySnapshot } from "../../../src/lib/offline-migration-transaction.js";
 
 /** An immutable canonical frontier. Its owner chooses and produces that frontier;
  * this value owns only copied evidence, readback and teardown verification. */
@@ -146,5 +147,36 @@ export class CanonicalPersistenceSnapshot {
       `${operation} must retain permanent artifact bytes`);
     assert.deepEqual(actual.additionalBytes, this.additionalBytes,
       `${operation} must not publish rejected artifact bytes`);
+  }
+}
+
+/** Physical source evidence before a legacy tree can pass current validation.
+ * Include all authorities and uncataloged files; ignore only caller-owned
+ * diagnostics. This does not parse or normalize persisted Flow documents. */
+export class StoredFlowPersistenceSnapshot {
+  constructor(root, { ignoredDirectories = [] } = {}) {
+    this.root = path.resolve(root);
+    this.ignoredDirectories = Object.freeze([...ignoredDirectories]);
+    const snapshots = [];
+    const visit = (directory, relative = "") => {
+      const names = fs.readdirSync(directory).filter((name) => {
+        const entryPath = relative ? `${relative}/${name}` : name;
+        return !this.ignoredDirectories.some((ignored) => entryPath === ignored || entryPath.startsWith(`${ignored}/`));
+      });
+      snapshots.push(OfflineMigrationDirectorySnapshot.capture(path.dirname(this.root), directory, { includedNames: names }));
+      for (const name of names.sort()) {
+        const entry = path.join(directory, name);
+        if (fs.lstatSync(entry).isDirectory()) visit(entry, relative ? `${relative}/${name}` : name);
+      }
+    };
+    visit(this.root);
+    this.snapshots = Object.freeze(snapshots);
+    this.digest = createHash("sha256").update(JSON.stringify(snapshots.map((snapshot) => snapshot.toJSON()))).digest("hex");
+    Object.freeze(this);
+  }
+
+  assertUnchanged() {
+    const current = new StoredFlowPersistenceSnapshot(this.root, { ignoredDirectories: this.ignoredDirectories });
+    assert.equal(current.digest, this.digest, "persisted source bytes and authorities must remain unchanged");
   }
 }

@@ -123,6 +123,28 @@ Example: `sennel help`.
 
 ---
 
+### Migrate a saved Flow
+
+`sennel migrate specs --to <revision> --spec <specId> --dry-run` previews one
+literal Spec identity under the configured `flow.specDir`. Omit `--spec` to
+process all Specs. An invalid or absent selected Spec fails without falling
+back to all Specs. Preview leaves the Spec, identity authority, registry,
+worktree binding and transaction journals unchanged.
+
+When a normal Flow command reports `FLOW_MIGRATION_REQUIRED`, run its exact
+targeted preview command, then the corresponding command without `--dry-run`.
+The response lists the required migrations in order. Revision 2 moves the old
+Artifact layout; existing revisions 3 and 4 migrate later persisted contracts.
+Keep the same `--spec` for each preview, apply and recovery. Completing revision
+2 alone does not authorize continuation when another migration remains.
+
+Migration preserves proven completed Steps, the run identity and current
+progress. It refuses missing or changed evidence; it does not regenerate a
+completed result. Interrupted apply is recovered by repeating the same targeted
+command. Normal Flow commands never apply migrations automatically.
+`FLOW_FORMAT_UNSUPPORTED` identifies a format outside the supported migration
+contracts; an integrity error identifies damaged or inconsistent authority.
+
 ### Cancel a stopped Flow
 
 Run `sennel flow run abort --expect-run-id <runId> --expect-spec <specId> --reason "Reason"`.

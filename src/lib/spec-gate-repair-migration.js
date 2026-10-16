@@ -1,6 +1,7 @@
 /** Migration-only proof for canonical Flow states saved before Spec Gate repair became a leaf. */
 import crypto from "node:crypto";
 import fs from "node:fs";
+import { LegacyFlowActivityDocument } from "./legacy-flow-activity.js";
 
 import { FlowArtifactCatalog } from "./flow-version.js";
 import {
@@ -237,6 +238,19 @@ function proveCompleteLedger(stateValue, projectedActivities, originalActivities
   }
 }
 
+/** Read-only validation shared with the earlier revision-artifact migration.
+ * This proves the old ledger; it does not publish a v4 state or grant execution. */
+export function inspectCanonicalV3State({ state, projectedActivities, originalActivities, definition }) {
+  if (state.schemaRevision !== 3 || state.version !== 1 || state.attempt !== null
+    || state.history !== null || Object.hasOwn(state, "migration")) {
+    fail("old Flow is not an idle native canonical-v3 ledger");
+  }
+  assertOldTree(state, definition.materializeRoot().toJSON(), definition);
+  if (projectedActivities.length !== state.confirmationOrder) fail("old Flow and Activity confirmation orders differ");
+  proveCompleteLedger(state, projectedActivities, originalActivities, definition);
+  return new CurrentFlowState(projectedState(state), { definition: legacyDefinition(definition) });
+}
+
 function assertOldResult(result, activity, state) {
   const stepResult = result.stepResult;
   const receipt = result.draftSettlementReceipt;
@@ -286,7 +300,7 @@ export class CanonicalGateRepairMigrationPreflight {
     const activitiesBytes = fs.readFileSync(this.location.activitiesFile);
     const catalogBytes = fs.readFileSync(this.location.catalogFile);
     const state = parse(flowBytes, "old flow.json");
-    const catalog = new FlowArtifactCatalog(parse(catalogBytes, "old artifact-catalog.json"));
+    const catalog = FlowArtifactCatalog.fromSerialized(parse(catalogBytes, "old artifact-catalog.json"));
     catalog.verify(this.location);
     for (const [relativePath, logicalKey] of [["flow.json", "flow.state"], ["activities.jsonl", "flow.activities"], ["spec.json", "spec.record"]]) {
       if (catalog.resolve(relativePath).logicalKey !== logicalKey) fail(`old Catalog does not bind ${relativePath}`);
@@ -316,8 +330,7 @@ export class CanonicalGateRepairMigrationPreflight {
     for (const activity of applied) assertOldResult(activity.result, activity, state);
     const projected = ledger.map((activity) => {
       // Canonical-v3 producers predate atomic approval Task admission.
-      const projectedActivity = Object.hasOwn(activity.transition, "approvalTasks")
-        ? activity : { ...activity, transition: { ...activity.transition, approvalTasks: [] } };
+      const projectedActivity = new LegacyFlowActivityDocument(activity).toJSON();
       if (oldResultKind(activity.result) !== OLD_APPLIED) return projectedActivity;
       const result = { ...activity.result };
       delete result.stepResult;

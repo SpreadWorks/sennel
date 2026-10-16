@@ -1,0 +1,2594 @@
+{
+  "root": {
+    "kind": "flow",
+    "id": "flow",
+    "key": "flow",
+    "steps": [
+      {
+        "kind": "step",
+        "id": "plan",
+        "key": "plan",
+        "steps": [
+          {
+            "kind": "step",
+            "id": "branch",
+            "key": "plan.branch",
+            "steps": [],
+            "contract": {
+              "semanticRetryLimit": 0,
+              "toolingRetryLimit": null,
+              "transitions": [
+                "pending:in_progress",
+                "in_progress:done",
+                "in_progress:skipped",
+                "done:in_progress",
+                "skipped:in_progress",
+                "invalidated:in_progress",
+                "pending:invalidated",
+                "in_progress:invalidated",
+                "done:invalidated",
+                "skipped:invalidated"
+              ],
+              "resourceContract": {
+                "required": [],
+                "authority": "definition"
+              },
+              "completion": "all_children_terminal"
+            },
+            "action": {
+              "action": "create-branch",
+              "instructionsKey": "plan.branch",
+              "contextKinds": [],
+              "outputSchemaRef": null,
+              "requiresApproval": false,
+              "autoApproveChoiceId": null,
+              "maxAttempts": 1,
+              "sideEffects": null,
+              "failurePolicy": {
+                "kind": "block",
+                "targetNodeId": null
+              },
+              "executionCommand": null,
+              "failureOwnership": null,
+              "artifactAuthority": {
+                "sourceScopes": [
+                  "all_tasks",
+                  "flow"
+                ],
+                "selection": "latest_upstream"
+              }
+            }
+          },
+          {
+            "kind": "step",
+            "id": "prepare-spec",
+            "key": "plan.prepare-spec",
+            "steps": [],
+            "contract": {
+              "semanticRetryLimit": 0,
+              "toolingRetryLimit": null,
+              "transitions": [
+                "pending:in_progress",
+                "in_progress:done",
+                "done:in_progress",
+                "skipped:in_progress",
+                "invalidated:in_progress",
+                "pending:invalidated",
+                "in_progress:invalidated",
+                "done:invalidated",
+                "skipped:invalidated"
+              ],
+              "resourceContract": {
+                "required": [],
+                "authority": "definition"
+              },
+              "completion": "all_children_terminal"
+            },
+            "action": {
+              "action": "prepare-spec",
+              "instructionsKey": "plan.prepare-spec",
+              "contextKinds": [],
+              "outputSchemaRef": null,
+              "requiresApproval": false,
+              "autoApproveChoiceId": null,
+              "maxAttempts": 1,
+              "sideEffects": null,
+              "failurePolicy": {
+                "kind": "block",
+                "targetNodeId": null
+              },
+              "executionCommand": null,
+              "failureOwnership": null,
+              "artifactAuthority": {
+                "sourceScopes": [
+                  "all_tasks",
+                  "flow"
+                ],
+                "selection": "latest_upstream"
+              }
+            }
+          },
+          {
+            "kind": "step",
+            "id": "draft",
+            "key": "plan.draft",
+            "steps": [],
+            "contract": {
+              "semanticRetryLimit": 0,
+              "toolingRetryLimit": null,
+              "transitions": [
+                "pending:in_progress",
+                "in_progress:done",
+                "done:in_progress",
+                "skipped:in_progress",
+                "invalidated:in_progress",
+                "pending:invalidated",
+                "in_progress:invalidated",
+                "done:invalidated",
+                "skipped:invalidated"
+              ],
+              "resourceContract": {
+                "required": [
+                  "issue",
+                  "guardrail",
+                  "project_overview"
+                ],
+                "authority": "definition"
+              },
+              "completion": "all_children_terminal"
+            },
+            "action": {
+              "action": "write-draft",
+              "instructionsKey": "plan.draft",
+              "contextKinds": [
+                "issue",
+                "guardrail",
+                "project_overview"
+              ],
+              "outputSchemaRef": "next-action/worker-artifact-handoff.schema.json",
+              "requiresApproval": false,
+              "autoApproveChoiceId": null,
+              "maxAttempts": 1,
+              "sideEffects": null,
+              "failurePolicy": {
+                "kind": "block",
+                "targetNodeId": null
+              },
+              "executionCommand": null,
+              "failureOwnership": null,
+              "artifactAuthority": {
+                "sourceScopes": [
+                  "all_tasks",
+                  "flow"
+                ],
+                "selection": "latest_upstream"
+              }
+            }
+          },
+          {
+            "kind": "step",
+            "id": "draft-questions-review",
+            "key": "plan.draft-questions-review",
+            "steps": [],
+            "contract": {
+              "semanticRetryLimit": 0,
+              "toolingRetryLimit": 1,
+              "transitions": [
+                "pending:in_progress",
+                "in_progress:done",
+                "in_progress:failed",
+                "failed:in_progress",
+                "failed:invalidated",
+                "done:in_progress",
+                "skipped:in_progress",
+                "invalidated:in_progress",
+                "pending:invalidated",
+                "in_progress:invalidated",
+                "done:invalidated",
+                "skipped:invalidated"
+              ],
+              "resourceContract": {
+                "required": [
+                  "draft",
+                  "issue"
+                ],
+                "authority": "definition"
+              },
+              "completion": "all_children_terminal"
+            },
+            "action": {
+              "action": "run-review",
+              "instructionsKey": "plan.draft-questions-review",
+              "contextKinds": [
+                "draft",
+                "issue"
+              ],
+              "outputSchemaRef": "next-action/review.schema.json",
+              "requiresApproval": false,
+              "autoApproveChoiceId": null,
+              "maxAttempts": 1,
+              "sideEffects": null,
+              "failurePolicy": {
+                "kind": "retry",
+                "targetNodeId": null
+              },
+              "executionCommand": "sennel flow run review --phase draft",
+              "failureOwnership": "command-primary-dispatcher-fallback",
+              "artifactAuthority": {
+                "sourceScopes": [
+                  "all_tasks",
+                  "flow"
+                ],
+                "selection": "latest_upstream"
+              }
+            }
+          },
+          {
+            "kind": "step",
+            "id": "draft-questions-triage",
+            "key": "plan.draft-questions-triage",
+            "steps": [],
+            "contract": {
+              "semanticRetryLimit": 0,
+              "toolingRetryLimit": null,
+              "transitions": [
+                "pending:in_progress",
+                "in_progress:done",
+                "in_progress:skipped",
+                "done:in_progress",
+                "skipped:in_progress",
+                "invalidated:in_progress",
+                "pending:invalidated",
+                "in_progress:invalidated",
+                "done:invalidated",
+                "skipped:invalidated"
+              ],
+              "resourceContract": {
+                "required": [
+                  "draft",
+                  "issue",
+                  "guardrail"
+                ],
+                "authority": "definition"
+              },
+              "completion": "all_children_terminal"
+            },
+            "action": {
+              "action": "write-draft",
+              "instructionsKey": "plan.draft-questions-triage",
+              "contextKinds": [
+                "draft",
+                "issue",
+                "guardrail"
+              ],
+              "outputSchemaRef": "next-action/worker-artifact-handoff.schema.json",
+              "requiresApproval": false,
+              "autoApproveChoiceId": null,
+              "maxAttempts": 1,
+              "sideEffects": null,
+              "failurePolicy": {
+                "kind": "block",
+                "targetNodeId": null
+              },
+              "executionCommand": null,
+              "failureOwnership": null,
+              "artifactAuthority": {
+                "sourceScopes": [
+                  "all_tasks",
+                  "flow"
+                ],
+                "selection": "latest_upstream"
+              }
+            }
+          },
+          {
+            "kind": "step",
+            "id": "draft-questions-repair",
+            "key": "plan.draft-questions-repair",
+            "steps": [],
+            "contract": {
+              "semanticRetryLimit": 0,
+              "toolingRetryLimit": null,
+              "transitions": [
+                "pending:in_progress",
+                "in_progress:done",
+                "in_progress:skipped",
+                "done:in_progress",
+                "skipped:in_progress",
+                "invalidated:in_progress",
+                "pending:invalidated",
+                "in_progress:invalidated",
+                "done:invalidated",
+                "skipped:invalidated"
+              ],
+              "resourceContract": {
+                "required": [
+                  "draft",
+                  "issue",
+                  "guardrail"
+                ],
+                "authority": "definition"
+              },
+              "completion": "all_children_terminal"
+            },
+            "action": {
+              "action": "write-draft",
+              "instructionsKey": "plan.draft-questions-repair",
+              "contextKinds": [
+                "draft",
+                "issue",
+                "guardrail"
+              ],
+              "outputSchemaRef": "next-action/worker-artifact-handoff.schema.json",
+              "requiresApproval": false,
+              "autoApproveChoiceId": null,
+              "maxAttempts": 1,
+              "sideEffects": null,
+              "failurePolicy": {
+                "kind": "block",
+                "targetNodeId": null
+              },
+              "executionCommand": null,
+              "failureOwnership": null,
+              "artifactAuthority": {
+                "sourceScopes": [
+                  "all_tasks",
+                  "flow"
+                ],
+                "selection": "latest_upstream"
+              }
+            }
+          },
+          {
+            "kind": "step",
+            "id": "draft-refine",
+            "key": "plan.draft-refine",
+            "steps": [],
+            "contract": {
+              "semanticRetryLimit": 0,
+              "toolingRetryLimit": null,
+              "transitions": [
+                "pending:in_progress",
+                "in_progress:done",
+                "done:in_progress",
+                "skipped:in_progress",
+                "invalidated:in_progress",
+                "pending:invalidated",
+                "in_progress:invalidated",
+                "done:invalidated",
+                "skipped:invalidated"
+              ],
+              "resourceContract": {
+                "required": [
+                  "draft",
+                  "issue",
+                  "guardrail",
+                  "project_overview"
+                ],
+                "authority": "definition"
+              },
+              "completion": "all_children_terminal"
+            },
+            "action": {
+              "action": "write-draft",
+              "instructionsKey": "plan.draft-refine",
+              "contextKinds": [
+                "draft",
+                "issue",
+                "guardrail",
+                "project_overview"
+              ],
+              "outputSchemaRef": "next-action/worker-artifact-handoff.schema.json",
+              "requiresApproval": false,
+              "autoApproveChoiceId": null,
+              "maxAttempts": 1,
+              "sideEffects": null,
+              "failurePolicy": {
+                "kind": "block",
+                "targetNodeId": null
+              },
+              "executionCommand": null,
+              "failureOwnership": null,
+              "artifactAuthority": {
+                "sourceScopes": [
+                  "all_tasks",
+                  "flow"
+                ],
+                "selection": "latest_upstream"
+              }
+            }
+          },
+          {
+            "kind": "step",
+            "id": "draft-gate-repair",
+            "key": "plan.draft-gate-repair",
+            "steps": [],
+            "contract": {
+              "semanticRetryLimit": 0,
+              "toolingRetryLimit": null,
+              "transitions": [
+                "pending:in_progress",
+                "in_progress:done",
+                "done:in_progress",
+                "skipped:in_progress",
+                "invalidated:in_progress",
+                "pending:invalidated",
+                "in_progress:invalidated",
+                "done:invalidated",
+                "skipped:invalidated"
+              ],
+              "resourceContract": {
+                "required": [
+                  "issue",
+                  "guardrail",
+                  "project_overview"
+                ],
+                "authority": "definition"
+              },
+              "completion": "all_children_terminal"
+            },
+            "action": {
+              "action": "write-draft",
+              "instructionsKey": "plan.draft",
+              "contextKinds": [
+                "issue",
+                "guardrail",
+                "project_overview"
+              ],
+              "outputSchemaRef": "next-action/worker-artifact-handoff.schema.json",
+              "requiresApproval": false,
+              "autoApproveChoiceId": null,
+              "maxAttempts": 1,
+              "sideEffects": null,
+              "failurePolicy": {
+                "kind": "block",
+                "targetNodeId": null
+              },
+              "executionCommand": null,
+              "failureOwnership": null,
+              "artifactAuthority": {
+                "sourceScopes": [
+                  "all_tasks",
+                  "flow"
+                ],
+                "selection": "latest_upstream"
+              }
+            }
+          },
+          {
+            "kind": "step",
+            "id": "draft-coverage-review",
+            "key": "plan.draft-coverage-review",
+            "steps": [],
+            "contract": {
+              "semanticRetryLimit": 0,
+              "toolingRetryLimit": 1,
+              "transitions": [
+                "pending:in_progress",
+                "in_progress:done",
+                "in_progress:failed",
+                "failed:in_progress",
+                "failed:invalidated",
+                "done:in_progress",
+                "skipped:in_progress",
+                "invalidated:in_progress",
+                "pending:invalidated",
+                "in_progress:invalidated",
+                "done:invalidated",
+                "skipped:invalidated"
+              ],
+              "resourceContract": {
+                "required": [
+                  "draft",
+                  "issue"
+                ],
+                "authority": "definition"
+              },
+              "completion": "all_children_terminal"
+            },
+            "action": {
+              "action": "run-review",
+              "instructionsKey": "plan.draft-coverage-review",
+              "contextKinds": [
+                "draft",
+                "issue"
+              ],
+              "outputSchemaRef": "next-action/review.schema.json",
+              "requiresApproval": false,
+              "autoApproveChoiceId": null,
+              "maxAttempts": 1,
+              "sideEffects": null,
+              "failurePolicy": {
+                "kind": "retry",
+                "targetNodeId": null
+              },
+              "executionCommand": "sennel flow run review --phase draft",
+              "failureOwnership": "command-primary-dispatcher-fallback",
+              "artifactAuthority": {
+                "sourceScopes": [
+                  "all_tasks",
+                  "flow"
+                ],
+                "selection": "latest_upstream"
+              }
+            }
+          },
+          {
+            "kind": "step",
+            "id": "draft-coverage-triage",
+            "key": "plan.draft-coverage-triage",
+            "steps": [],
+            "contract": {
+              "semanticRetryLimit": 0,
+              "toolingRetryLimit": null,
+              "transitions": [
+                "pending:in_progress",
+                "in_progress:done",
+                "in_progress:skipped",
+                "done:in_progress",
+                "skipped:in_progress",
+                "invalidated:in_progress",
+                "pending:invalidated",
+                "in_progress:invalidated",
+                "done:invalidated",
+                "skipped:invalidated"
+              ],
+              "resourceContract": {
+                "required": [
+                  "draft",
+                  "issue",
+                  "guardrail"
+                ],
+                "authority": "definition"
+              },
+              "completion": "all_children_terminal"
+            },
+            "action": {
+              "action": "write-draft",
+              "instructionsKey": "plan.draft-coverage-triage",
+              "contextKinds": [
+                "draft",
+                "issue",
+                "guardrail"
+              ],
+              "outputSchemaRef": "next-action/worker-artifact-handoff.schema.json",
+              "requiresApproval": false,
+              "autoApproveChoiceId": null,
+              "maxAttempts": 1,
+              "sideEffects": null,
+              "failurePolicy": {
+                "kind": "block",
+                "targetNodeId": null
+              },
+              "executionCommand": null,
+              "failureOwnership": null,
+              "artifactAuthority": {
+                "sourceScopes": [
+                  "all_tasks",
+                  "flow"
+                ],
+                "selection": "latest_upstream"
+              }
+            }
+          },
+          {
+            "kind": "step",
+            "id": "draft-coverage-repair",
+            "key": "plan.draft-coverage-repair",
+            "steps": [],
+            "contract": {
+              "semanticRetryLimit": 0,
+              "toolingRetryLimit": null,
+              "transitions": [
+                "pending:in_progress",
+                "in_progress:done",
+                "in_progress:skipped",
+                "done:in_progress",
+                "skipped:in_progress",
+                "invalidated:in_progress",
+                "pending:invalidated",
+                "in_progress:invalidated",
+                "done:invalidated",
+                "skipped:invalidated"
+              ],
+              "resourceContract": {
+                "required": [
+                  "draft",
+                  "issue",
+                  "guardrail"
+                ],
+                "authority": "definition"
+              },
+              "completion": "all_children_terminal"
+            },
+            "action": {
+              "action": "write-draft",
+              "instructionsKey": "plan.draft-coverage-repair",
+              "contextKinds": [
+                "draft",
+                "issue",
+                "guardrail"
+              ],
+              "outputSchemaRef": "next-action/worker-artifact-handoff.schema.json",
+              "requiresApproval": false,
+              "autoApproveChoiceId": null,
+              "maxAttempts": 1,
+              "sideEffects": null,
+              "failurePolicy": {
+                "kind": "block",
+                "targetNodeId": null
+              },
+              "executionCommand": null,
+              "failureOwnership": null,
+              "artifactAuthority": {
+                "sourceScopes": [
+                  "all_tasks",
+                  "flow"
+                ],
+                "selection": "latest_upstream"
+              }
+            }
+          },
+          {
+            "kind": "step",
+            "id": "draft-gate",
+            "key": "plan.draft-gate",
+            "steps": [],
+            "contract": {
+              "semanticRetryLimit": 4,
+              "toolingRetryLimit": null,
+              "transitions": [
+                "pending:in_progress",
+                "in_progress:done",
+                "in_progress:failed",
+                "failed:in_progress",
+                "failed:invalidated",
+                "done:in_progress",
+                "skipped:in_progress",
+                "invalidated:in_progress",
+                "pending:invalidated",
+                "in_progress:invalidated",
+                "done:invalidated",
+                "skipped:invalidated"
+              ],
+              "resourceContract": {
+                "required": [
+                  "draft",
+                  "guardrail"
+                ],
+                "authority": "definition"
+              },
+              "completion": "all_children_terminal"
+            },
+            "action": {
+              "action": "run-gate",
+              "instructionsKey": "plan.draft-gate",
+              "contextKinds": [
+                "draft",
+                "guardrail"
+              ],
+              "outputSchemaRef": "next-action/gate.schema.json",
+              "requiresApproval": false,
+              "autoApproveChoiceId": null,
+              "maxAttempts": 5,
+              "sideEffects": null,
+              "failurePolicy": {
+                "kind": "step-definition",
+                "targetNodeId": null
+              },
+              "executionCommand": "sennel flow run gate",
+              "failureOwnership": "command-primary-dispatcher-fallback",
+              "artifactAuthority": {
+                "sourceScopes": [
+                  "all_tasks",
+                  "flow"
+                ],
+                "selection": "latest_upstream"
+              }
+            }
+          },
+          {
+            "kind": "step",
+            "id": "spec",
+            "key": "plan.spec",
+            "steps": [],
+            "contract": {
+              "semanticRetryLimit": 0,
+              "toolingRetryLimit": null,
+              "transitions": [
+                "pending:in_progress",
+                "in_progress:done",
+                "done:in_progress",
+                "skipped:in_progress",
+                "invalidated:in_progress",
+                "pending:invalidated",
+                "in_progress:invalidated",
+                "done:invalidated",
+                "skipped:invalidated"
+              ],
+              "resourceContract": {
+                "required": [
+                  "draft",
+                  "guardrail"
+                ],
+                "authority": "definition"
+              },
+              "completion": "all_children_terminal"
+            },
+            "action": {
+              "action": "write-spec",
+              "instructionsKey": "plan.spec",
+              "contextKinds": [
+                "draft",
+                "guardrail"
+              ],
+              "outputSchemaRef": "next-action/worker-artifact-handoff.schema.json",
+              "requiresApproval": false,
+              "autoApproveChoiceId": null,
+              "maxAttempts": 1,
+              "sideEffects": null,
+              "failurePolicy": {
+                "kind": "block",
+                "targetNodeId": null
+              },
+              "executionCommand": null,
+              "failureOwnership": null,
+              "artifactAuthority": {
+                "sourceScopes": [
+                  "all_tasks",
+                  "flow"
+                ],
+                "selection": "latest_upstream"
+              }
+            }
+          },
+          {
+            "kind": "step",
+            "id": "spec-review",
+            "key": "plan.spec-review",
+            "steps": [],
+            "contract": {
+              "semanticRetryLimit": 3,
+              "toolingRetryLimit": 1,
+              "transitions": [
+                "pending:in_progress",
+                "in_progress:done",
+                "in_progress:failed",
+                "failed:in_progress",
+                "failed:invalidated",
+                "done:in_progress",
+                "skipped:in_progress",
+                "invalidated:in_progress",
+                "pending:invalidated",
+                "in_progress:invalidated",
+                "done:invalidated",
+                "skipped:invalidated"
+              ],
+              "resourceContract": {
+                "required": [
+                  "spec",
+                  "guardrail"
+                ],
+                "authority": "definition"
+              },
+              "completion": "all_children_terminal"
+            },
+            "action": {
+              "action": "run-review",
+              "instructionsKey": "plan.spec-review",
+              "contextKinds": [
+                "spec",
+                "guardrail"
+              ],
+              "outputSchemaRef": "next-action/review.schema.json",
+              "requiresApproval": false,
+              "autoApproveChoiceId": null,
+              "maxAttempts": 4,
+              "sideEffects": null,
+              "failurePolicy": {
+                "kind": "retry",
+                "targetNodeId": null
+              },
+              "executionCommand": "sennel flow run review --phase spec",
+              "failureOwnership": "command-primary-dispatcher-fallback",
+              "artifactAuthority": {
+                "sourceScopes": [
+                  "all_tasks",
+                  "flow"
+                ],
+                "selection": "latest_upstream"
+              }
+            }
+          },
+          {
+            "kind": "step",
+            "id": "spec-triage",
+            "key": "plan.spec-triage",
+            "steps": [],
+            "contract": {
+              "semanticRetryLimit": 0,
+              "toolingRetryLimit": null,
+              "transitions": [
+                "pending:in_progress",
+                "in_progress:done",
+                "in_progress:skipped",
+                "done:in_progress",
+                "skipped:in_progress",
+                "invalidated:in_progress",
+                "pending:invalidated",
+                "in_progress:invalidated",
+                "done:invalidated",
+                "skipped:invalidated"
+              ],
+              "resourceContract": {
+                "required": [
+                  "spec",
+                  "guardrail"
+                ],
+                "authority": "definition"
+              },
+              "completion": "all_children_terminal"
+            },
+            "action": {
+              "action": "write-spec",
+              "instructionsKey": "plan.spec-triage",
+              "contextKinds": [
+                "spec",
+                "guardrail"
+              ],
+              "outputSchemaRef": "next-action/worker-artifact-handoff.schema.json",
+              "requiresApproval": false,
+              "autoApproveChoiceId": null,
+              "maxAttempts": 1,
+              "sideEffects": null,
+              "failurePolicy": {
+                "kind": "block",
+                "targetNodeId": null
+              },
+              "executionCommand": null,
+              "failureOwnership": null,
+              "artifactAuthority": {
+                "sourceScopes": [
+                  "all_tasks",
+                  "flow"
+                ],
+                "selection": "latest_upstream"
+              }
+            }
+          },
+          {
+            "kind": "step",
+            "id": "spec-repair",
+            "key": "plan.spec-repair",
+            "steps": [],
+            "contract": {
+              "semanticRetryLimit": 0,
+              "toolingRetryLimit": null,
+              "transitions": [
+                "pending:in_progress",
+                "in_progress:done",
+                "in_progress:skipped",
+                "done:in_progress",
+                "skipped:in_progress",
+                "invalidated:in_progress",
+                "pending:invalidated",
+                "in_progress:invalidated",
+                "done:invalidated",
+                "skipped:invalidated"
+              ],
+              "resourceContract": {
+                "required": [
+                  "spec",
+                  "guardrail"
+                ],
+                "authority": "definition"
+              },
+              "completion": "all_children_terminal"
+            },
+            "action": {
+              "action": "write-spec",
+              "instructionsKey": "plan.spec-repair",
+              "contextKinds": [
+                "spec",
+                "guardrail"
+              ],
+              "outputSchemaRef": "next-action/worker-artifact-handoff.schema.json",
+              "requiresApproval": false,
+              "autoApproveChoiceId": null,
+              "maxAttempts": 1,
+              "sideEffects": null,
+              "failurePolicy": {
+                "kind": "block",
+                "targetNodeId": null
+              },
+              "executionCommand": null,
+              "failureOwnership": null,
+              "artifactAuthority": {
+                "sourceScopes": [
+                  "all_tasks",
+                  "flow"
+                ],
+                "selection": "latest_upstream"
+              }
+            }
+          },
+          {
+            "kind": "step",
+            "id": "spec-gate",
+            "key": "plan.spec-gate",
+            "steps": [],
+            "contract": {
+              "semanticRetryLimit": 4,
+              "toolingRetryLimit": null,
+              "transitions": [
+                "pending:in_progress",
+                "in_progress:done",
+                "in_progress:failed",
+                "failed:in_progress",
+                "failed:invalidated",
+                "done:in_progress",
+                "skipped:in_progress",
+                "invalidated:in_progress",
+                "pending:invalidated",
+                "in_progress:invalidated",
+                "done:invalidated",
+                "skipped:invalidated"
+              ],
+              "resourceContract": {
+                "required": [
+                  "spec",
+                  "guardrail"
+                ],
+                "authority": "definition"
+              },
+              "completion": "all_children_terminal"
+            },
+            "action": {
+              "action": "run-gate",
+              "instructionsKey": "plan.spec-gate",
+              "contextKinds": [
+                "spec",
+                "guardrail"
+              ],
+              "outputSchemaRef": "next-action/gate.schema.json",
+              "requiresApproval": false,
+              "autoApproveChoiceId": null,
+              "maxAttempts": 5,
+              "sideEffects": null,
+              "failurePolicy": {
+                "kind": "step-definition",
+                "targetNodeId": null
+              },
+              "executionCommand": "sennel flow run gate",
+              "failureOwnership": "command-primary-dispatcher-fallback",
+              "artifactAuthority": {
+                "sourceScopes": [
+                  "all_tasks",
+                  "flow"
+                ],
+                "selection": "latest_upstream"
+              }
+            }
+          },
+          {
+            "kind": "step",
+            "id": "approval",
+            "key": "plan.approval",
+            "steps": [],
+            "contract": {
+              "semanticRetryLimit": 0,
+              "toolingRetryLimit": null,
+              "transitions": [
+                "pending:in_progress",
+                "in_progress:done",
+                "done:in_progress",
+                "skipped:in_progress",
+                "invalidated:in_progress",
+                "pending:invalidated",
+                "in_progress:invalidated",
+                "done:invalidated",
+                "skipped:invalidated"
+              ],
+              "resourceContract": {
+                "required": [
+                  "spec"
+                ],
+                "authority": "definition"
+              },
+              "completion": "all_children_terminal"
+            },
+            "action": {
+              "action": "await-approval",
+              "instructionsKey": "plan.approval",
+              "contextKinds": [
+                "spec"
+              ],
+              "outputSchemaRef": "next-action/approval.schema.json",
+              "requiresApproval": true,
+              "autoApproveChoiceId": "1",
+              "maxAttempts": 1,
+              "sideEffects": [
+                "syncSpecTasks"
+              ],
+              "failurePolicy": {
+                "kind": "block",
+                "targetNodeId": null
+              },
+              "executionCommand": null,
+              "failureOwnership": null,
+              "artifactAuthority": {
+                "sourceScopes": [
+                  "all_tasks",
+                  "flow"
+                ],
+                "selection": "latest_upstream"
+              }
+            }
+          },
+          {
+            "kind": "step",
+            "id": "test-generate",
+            "key": "plan.test",
+            "steps": [],
+            "contract": {
+              "semanticRetryLimit": 0,
+              "toolingRetryLimit": null,
+              "transitions": [
+                "pending:in_progress",
+                "in_progress:done",
+                "done:in_progress",
+                "skipped:in_progress",
+                "invalidated:in_progress",
+                "pending:invalidated",
+                "in_progress:invalidated",
+                "done:invalidated",
+                "skipped:invalidated"
+              ],
+              "resourceContract": {
+                "required": [
+                  "issue",
+                  "guardrail",
+                  "project_overview"
+                ],
+                "authority": "definition"
+              },
+              "completion": "all_children_terminal"
+            },
+            "action": {
+              "action": "write-draft",
+              "instructionsKey": "plan.draft",
+              "contextKinds": [
+                "issue",
+                "guardrail",
+                "project_overview"
+              ],
+              "outputSchemaRef": "next-action/worker-artifact-handoff.schema.json",
+              "requiresApproval": false,
+              "autoApproveChoiceId": null,
+              "maxAttempts": 1,
+              "sideEffects": null,
+              "failurePolicy": {
+                "kind": "block",
+                "targetNodeId": null
+              },
+              "executionCommand": null,
+              "failureOwnership": null,
+              "artifactAuthority": {
+                "sourceScopes": [
+                  "all_tasks",
+                  "flow"
+                ],
+                "selection": "latest_upstream"
+              }
+            }
+          },
+          {
+            "kind": "step",
+            "id": "test-review",
+            "key": "plan.test-review",
+            "steps": [],
+            "contract": {
+              "semanticRetryLimit": 4,
+              "toolingRetryLimit": 1,
+              "transitions": [
+                "pending:in_progress",
+                "in_progress:done",
+                "pending:skipped",
+                "in_progress:skipped",
+                "in_progress:failed",
+                "failed:in_progress",
+                "failed:invalidated",
+                "done:in_progress",
+                "skipped:in_progress",
+                "invalidated:in_progress",
+                "pending:invalidated",
+                "in_progress:invalidated",
+                "done:invalidated",
+                "skipped:invalidated"
+              ],
+              "resourceContract": {
+                "required": [
+                  "spec",
+                  "guardrail"
+                ],
+                "authority": "definition"
+              },
+              "completion": "all_children_terminal"
+            },
+            "action": {
+              "action": "run-review",
+              "instructionsKey": "plan.test-review",
+              "contextKinds": [
+                "spec",
+                "guardrail"
+              ],
+              "outputSchemaRef": "next-action/review.schema.json",
+              "requiresApproval": false,
+              "autoApproveChoiceId": null,
+              "maxAttempts": 5,
+              "sideEffects": null,
+              "failurePolicy": {
+                "kind": "retry",
+                "targetNodeId": null
+              },
+              "executionCommand": "sennel flow run review --phase test",
+              "failureOwnership": "command-primary-dispatcher-fallback",
+              "artifactAuthority": {
+                "sourceScopes": [
+                  "all_tasks",
+                  "flow"
+                ],
+                "selection": "latest_upstream"
+              }
+            }
+          },
+          {
+            "kind": "step",
+            "id": "test-repair",
+            "key": "plan.test-repair",
+            "steps": [],
+            "contract": {
+              "semanticRetryLimit": 0,
+              "toolingRetryLimit": null,
+              "transitions": [
+                "pending:in_progress",
+                "in_progress:done",
+                "done:in_progress",
+                "skipped:in_progress",
+                "invalidated:in_progress",
+                "pending:invalidated",
+                "in_progress:invalidated",
+                "done:invalidated",
+                "skipped:invalidated"
+              ],
+              "resourceContract": {
+                "required": [
+                  "issue",
+                  "guardrail",
+                  "project_overview"
+                ],
+                "authority": "definition"
+              },
+              "completion": "all_children_terminal"
+            },
+            "action": {
+              "action": "write-draft",
+              "instructionsKey": "plan.draft",
+              "contextKinds": [
+                "issue",
+                "guardrail",
+                "project_overview"
+              ],
+              "outputSchemaRef": "next-action/worker-artifact-handoff.schema.json",
+              "requiresApproval": false,
+              "autoApproveChoiceId": null,
+              "maxAttempts": 1,
+              "sideEffects": null,
+              "failurePolicy": {
+                "kind": "block",
+                "targetNodeId": null
+              },
+              "executionCommand": null,
+              "failureOwnership": null,
+              "artifactAuthority": {
+                "sourceScopes": [
+                  "all_tasks",
+                  "flow"
+                ],
+                "selection": "latest_upstream"
+              }
+            }
+          },
+          {
+            "kind": "step",
+            "id": "test-gate",
+            "key": "plan.test-gate",
+            "steps": [],
+            "contract": {
+              "semanticRetryLimit": 0,
+              "toolingRetryLimit": null,
+              "transitions": [
+                "pending:in_progress",
+                "in_progress:done",
+                "done:in_progress",
+                "skipped:in_progress",
+                "invalidated:in_progress",
+                "pending:invalidated",
+                "in_progress:invalidated",
+                "done:invalidated",
+                "skipped:invalidated"
+              ],
+              "resourceContract": {
+                "required": [
+                  "issue",
+                  "guardrail",
+                  "project_overview"
+                ],
+                "authority": "definition"
+              },
+              "completion": "all_children_terminal"
+            },
+            "action": {
+              "action": "write-draft",
+              "instructionsKey": "plan.draft",
+              "contextKinds": [
+                "issue",
+                "guardrail",
+                "project_overview"
+              ],
+              "outputSchemaRef": "next-action/worker-artifact-handoff.schema.json",
+              "requiresApproval": false,
+              "autoApproveChoiceId": null,
+              "maxAttempts": 1,
+              "sideEffects": null,
+              "failurePolicy": {
+                "kind": "block",
+                "targetNodeId": null
+              },
+              "executionCommand": null,
+              "failureOwnership": null,
+              "artifactAuthority": {
+                "sourceScopes": [
+                  "all_tasks",
+                  "flow"
+                ],
+                "selection": "latest_upstream"
+              }
+            }
+          }
+        ],
+        "contract": {
+          "semanticRetryLimit": 0,
+          "toolingRetryLimit": null,
+          "transitions": [
+            "pending:in_progress",
+            "in_progress:done",
+            "done:in_progress",
+            "skipped:in_progress",
+            "invalidated:in_progress",
+            "pending:invalidated",
+            "in_progress:invalidated",
+            "done:invalidated",
+            "skipped:invalidated"
+          ],
+          "resourceContract": {
+            "required": [],
+            "authority": "definition"
+          },
+          "completion": "all_children_terminal"
+        },
+        "action": null
+      },
+      {
+        "kind": "step",
+        "id": "impl",
+        "key": "impl",
+        "steps": [
+          {
+            "kind": "step",
+            "id": "implement",
+            "key": "impl.implement",
+            "steps": [],
+            "contract": {
+              "semanticRetryLimit": 2,
+              "toolingRetryLimit": null,
+              "transitions": [
+                "pending:in_progress",
+                "in_progress:done",
+                "pending:done",
+                "done:in_progress",
+                "skipped:in_progress",
+                "invalidated:in_progress",
+                "pending:invalidated",
+                "in_progress:invalidated",
+                "done:invalidated",
+                "skipped:invalidated"
+              ],
+              "resourceContract": {
+                "required": [
+                  "spec",
+                  "test",
+                  "overview"
+                ],
+                "authority": "definition"
+              },
+              "completion": "all_children_terminal"
+            },
+            "action": {
+              "action": "run-impl",
+              "instructionsKey": "impl.implement",
+              "contextKinds": [
+                "spec",
+                "test",
+                "overview"
+              ],
+              "outputSchemaRef": "next-action/impl.schema.json",
+              "requiresApproval": false,
+              "autoApproveChoiceId": null,
+              "maxAttempts": 3,
+              "sideEffects": null,
+              "failurePolicy": {
+                "kind": "block",
+                "targetNodeId": null
+              },
+              "executionCommand": null,
+              "failureOwnership": null,
+              "artifactAuthority": {
+                "sourceScopes": [
+                  "all_tasks",
+                  "flow"
+                ],
+                "selection": "latest_upstream"
+              }
+            }
+          },
+          {
+            "kind": "step",
+            "id": "test-execute",
+            "key": "impl.test-execute",
+            "steps": [],
+            "contract": {
+              "semanticRetryLimit": 2,
+              "toolingRetryLimit": null,
+              "transitions": [
+                "pending:in_progress",
+                "in_progress:done",
+                "done:in_progress",
+                "skipped:in_progress",
+                "invalidated:in_progress",
+                "pending:invalidated",
+                "in_progress:invalidated",
+                "done:invalidated",
+                "skipped:invalidated"
+              ],
+              "resourceContract": {
+                "required": [
+                  "spec",
+                  "test"
+                ],
+                "authority": "definition"
+              },
+              "completion": "all_children_terminal"
+            },
+            "action": {
+              "action": "run-test-execute",
+              "instructionsKey": "impl.test-execute",
+              "contextKinds": [
+                "spec",
+                "test"
+              ],
+              "outputSchemaRef": "next-action/test-execute.schema.json",
+              "requiresApproval": false,
+              "autoApproveChoiceId": null,
+              "maxAttempts": 3,
+              "sideEffects": null,
+              "failurePolicy": {
+                "kind": "test-chain-retry",
+                "targetNodeId": null
+              },
+              "executionCommand": "sennel flow run test-execute",
+              "failureOwnership": "dispatcher-primary",
+              "artifactAuthority": {
+                "sourceScopes": [
+                  "all_tasks",
+                  "flow"
+                ],
+                "selection": "latest_upstream"
+              }
+            }
+          },
+          {
+            "kind": "step",
+            "id": "test-result-review",
+            "key": "impl.test-result-review",
+            "steps": [],
+            "contract": {
+              "semanticRetryLimit": 2,
+              "toolingRetryLimit": null,
+              "transitions": [
+                "pending:in_progress",
+                "in_progress:done",
+                "done:in_progress",
+                "skipped:in_progress",
+                "invalidated:in_progress",
+                "pending:invalidated",
+                "in_progress:invalidated",
+                "done:invalidated",
+                "skipped:invalidated"
+              ],
+              "resourceContract": {
+                "required": [
+                  "spec",
+                  "test"
+                ],
+                "authority": "definition"
+              },
+              "completion": "all_children_terminal"
+            },
+            "action": {
+              "action": "run-test-result-review",
+              "instructionsKey": "impl.test-result-review",
+              "contextKinds": [
+                "spec",
+                "test"
+              ],
+              "outputSchemaRef": "next-action/test-result-review.schema.json",
+              "requiresApproval": false,
+              "autoApproveChoiceId": null,
+              "maxAttempts": 3,
+              "sideEffects": null,
+              "failurePolicy": {
+                "kind": "test-chain-retry",
+                "targetNodeId": null
+              },
+              "executionCommand": "sennel flow run test-result-review",
+              "failureOwnership": "dispatcher-primary",
+              "artifactAuthority": {
+                "sourceScopes": [
+                  "all_tasks",
+                  "flow"
+                ],
+                "selection": "latest_upstream"
+              }
+            }
+          },
+          {
+            "kind": "step",
+            "id": "impl-review",
+            "key": "impl.impl-review",
+            "steps": [],
+            "contract": {
+              "semanticRetryLimit": 3,
+              "toolingRetryLimit": 1,
+              "transitions": [
+                "pending:in_progress",
+                "in_progress:done",
+                "in_progress:failed",
+                "failed:in_progress",
+                "failed:invalidated",
+                "done:in_progress",
+                "skipped:in_progress",
+                "invalidated:in_progress",
+                "pending:invalidated",
+                "in_progress:invalidated",
+                "done:invalidated",
+                "skipped:invalidated"
+              ],
+              "resourceContract": {
+                "required": [
+                  "spec",
+                  "diff",
+                  "testlog"
+                ],
+                "authority": "definition"
+              },
+              "completion": "all_children_terminal"
+            },
+            "action": {
+              "action": "run-review",
+              "instructionsKey": "impl.impl-review",
+              "contextKinds": [
+                "spec",
+                "diff",
+                "testlog"
+              ],
+              "outputSchemaRef": "next-action/review.schema.json",
+              "requiresApproval": false,
+              "autoApproveChoiceId": null,
+              "maxAttempts": 4,
+              "sideEffects": null,
+              "failurePolicy": {
+                "kind": "retry",
+                "targetNodeId": null
+              },
+              "executionCommand": "sennel flow run review --phase impl",
+              "failureOwnership": "command-primary-dispatcher-fallback",
+              "artifactAuthority": {
+                "sourceScopes": [
+                  "all_tasks",
+                  "flow"
+                ],
+                "selection": "latest_upstream"
+              }
+            }
+          },
+          {
+            "kind": "step",
+            "id": "impl-triage",
+            "key": "impl.impl-triage",
+            "steps": [],
+            "contract": {
+              "semanticRetryLimit": 0,
+              "toolingRetryLimit": null,
+              "transitions": [
+                "pending:in_progress",
+                "in_progress:done",
+                "in_progress:skipped",
+                "done:in_progress",
+                "skipped:in_progress",
+                "invalidated:in_progress",
+                "pending:invalidated",
+                "in_progress:invalidated",
+                "done:invalidated",
+                "skipped:invalidated"
+              ],
+              "resourceContract": {
+                "required": [
+                  "spec",
+                  "diff"
+                ],
+                "authority": "definition"
+              },
+              "completion": "all_children_terminal"
+            },
+            "action": {
+              "action": "write-impl-triage",
+              "instructionsKey": "impl.impl-triage",
+              "contextKinds": [
+                "spec",
+                "diff"
+              ],
+              "outputSchemaRef": "next-action/impl.schema.json",
+              "requiresApproval": false,
+              "autoApproveChoiceId": null,
+              "maxAttempts": 1,
+              "sideEffects": null,
+              "failurePolicy": {
+                "kind": "block",
+                "targetNodeId": null
+              },
+              "executionCommand": null,
+              "failureOwnership": null,
+              "artifactAuthority": {
+                "sourceScopes": [
+                  "all_tasks",
+                  "flow"
+                ],
+                "selection": "latest_upstream"
+              }
+            }
+          },
+          {
+            "kind": "step",
+            "id": "impl-repair",
+            "key": "impl.impl-repair",
+            "steps": [],
+            "contract": {
+              "semanticRetryLimit": 2,
+              "toolingRetryLimit": null,
+              "transitions": [
+                "pending:in_progress",
+                "in_progress:done",
+                "in_progress:skipped",
+                "pending:skipped",
+                "invalidated:skipped",
+                "done:in_progress",
+                "skipped:in_progress",
+                "invalidated:in_progress",
+                "pending:invalidated",
+                "in_progress:invalidated",
+                "done:invalidated",
+                "skipped:invalidated"
+              ],
+              "resourceContract": {
+                "required": [
+                  "spec",
+                  "diff"
+                ],
+                "authority": "definition"
+              },
+              "completion": "all_children_terminal"
+            },
+            "action": {
+              "action": "run-impl-repair",
+              "instructionsKey": "impl.impl-repair",
+              "contextKinds": [
+                "spec",
+                "diff"
+              ],
+              "outputSchemaRef": "next-action/impl.schema.json",
+              "requiresApproval": false,
+              "autoApproveChoiceId": null,
+              "maxAttempts": 3,
+              "sideEffects": null,
+              "failurePolicy": {
+                "kind": "block",
+                "targetNodeId": null
+              },
+              "executionCommand": null,
+              "failureOwnership": null,
+              "artifactAuthority": {
+                "sourceScopes": [
+                  "all_tasks",
+                  "flow"
+                ],
+                "selection": "latest_upstream"
+              }
+            }
+          },
+          {
+            "kind": "step",
+            "id": "impl-gate",
+            "key": "impl.impl-gate",
+            "steps": [],
+            "contract": {
+              "semanticRetryLimit": 4,
+              "toolingRetryLimit": null,
+              "transitions": [
+                "pending:in_progress",
+                "in_progress:done",
+                "done:in_progress",
+                "skipped:in_progress",
+                "invalidated:in_progress",
+                "pending:invalidated",
+                "in_progress:invalidated",
+                "done:invalidated",
+                "skipped:invalidated"
+              ],
+              "resourceContract": {
+                "required": [
+                  "spec",
+                  "diff",
+                  "testlog"
+                ],
+                "authority": "definition"
+              },
+              "completion": "all_children_terminal"
+            },
+            "action": {
+              "action": "run-gate",
+              "instructionsKey": "impl.impl-gate",
+              "contextKinds": [
+                "spec",
+                "diff",
+                "testlog"
+              ],
+              "outputSchemaRef": "next-action/gate.schema.json",
+              "requiresApproval": false,
+              "autoApproveChoiceId": null,
+              "maxAttempts": 5,
+              "sideEffects": null,
+              "failurePolicy": {
+                "kind": "block",
+                "targetNodeId": null
+              },
+              "executionCommand": "sennel flow run gate",
+              "failureOwnership": "command-primary-dispatcher-fallback",
+              "artifactAuthority": {
+                "sourceScopes": [
+                  "all_tasks",
+                  "flow"
+                ],
+                "selection": "latest_upstream"
+              }
+            }
+          },
+          {
+            "kind": "step",
+            "id": "retro",
+            "key": "impl.retro",
+            "steps": [],
+            "contract": {
+              "semanticRetryLimit": 1,
+              "toolingRetryLimit": null,
+              "transitions": [
+                "pending:in_progress",
+                "in_progress:done",
+                "done:in_progress",
+                "skipped:in_progress",
+                "invalidated:in_progress",
+                "pending:invalidated",
+                "in_progress:invalidated",
+                "done:invalidated",
+                "skipped:invalidated"
+              ],
+              "resourceContract": {
+                "required": [
+                  "spec",
+                  "test"
+                ],
+                "authority": "definition"
+              },
+              "completion": "all_children_terminal"
+            },
+            "action": {
+              "action": "run-retro",
+              "instructionsKey": "impl.retro",
+              "contextKinds": [
+                "spec",
+                "test"
+              ],
+              "outputSchemaRef": "next-action/retro.schema.json",
+              "requiresApproval": false,
+              "autoApproveChoiceId": null,
+              "maxAttempts": 2,
+              "sideEffects": null,
+              "failurePolicy": {
+                "kind": "block",
+                "targetNodeId": null
+              },
+              "executionCommand": "sennel flow run retro",
+              "failureOwnership": "dispatcher-primary",
+              "artifactAuthority": {
+                "sourceScopes": [
+                  "all_tasks",
+                  "flow"
+                ],
+                "selection": "latest_upstream"
+              }
+            }
+          },
+          {
+            "kind": "step",
+            "id": "acceptance-review",
+            "key": "impl.acceptance-review",
+            "steps": [],
+            "contract": {
+              "semanticRetryLimit": 0,
+              "toolingRetryLimit": null,
+              "transitions": [
+                "pending:in_progress",
+                "in_progress:done",
+                "done:in_progress",
+                "skipped:in_progress",
+                "invalidated:in_progress",
+                "pending:invalidated",
+                "in_progress:invalidated",
+                "done:invalidated",
+                "skipped:invalidated"
+              ],
+              "resourceContract": {
+                "required": [
+                  "spec",
+                  "diff",
+                  "test",
+                  "issue-log",
+                  "retro",
+                  "report"
+                ],
+                "authority": "definition"
+              },
+              "completion": "all_children_terminal"
+            },
+            "action": {
+              "action": "run-acceptance-review",
+              "instructionsKey": "impl.acceptance-review",
+              "contextKinds": [
+                "spec",
+                "diff",
+                "test",
+                "issue-log",
+                "retro",
+                "report"
+              ],
+              "outputSchemaRef": "next-action/acceptance-review.schema.json",
+              "requiresApproval": false,
+              "autoApproveChoiceId": null,
+              "maxAttempts": 1,
+              "sideEffects": [
+                "promoteFinalRegression"
+              ],
+              "failurePolicy": {
+                "kind": "amend-spec",
+                "targetNodeId": "spec"
+              },
+              "executionCommand": "sennel flow run acceptance-review",
+              "failureOwnership": "command-primary-dispatcher-fallback",
+              "artifactAuthority": {
+                "sourceScopes": [
+                  "all_tasks",
+                  "flow"
+                ],
+                "selection": "latest_upstream"
+              }
+            }
+          },
+          {
+            "kind": "step",
+            "id": "acceptance-decision",
+            "key": "impl.acceptance-decision",
+            "steps": [],
+            "contract": {
+              "semanticRetryLimit": 0,
+              "toolingRetryLimit": null,
+              "transitions": [
+                "pending:in_progress",
+                "in_progress:done",
+                "in_progress:skipped",
+                "done:in_progress",
+                "skipped:in_progress",
+                "invalidated:in_progress",
+                "pending:invalidated",
+                "in_progress:invalidated",
+                "done:invalidated",
+                "skipped:invalidated"
+              ],
+              "resourceContract": {
+                "required": [
+                  "spec",
+                  "diff",
+                  "test"
+                ],
+                "authority": "definition"
+              },
+              "completion": "all_children_terminal"
+            },
+            "action": {
+              "action": "set-acceptance-decision",
+              "instructionsKey": "impl.acceptance-decision",
+              "contextKinds": [
+                "spec",
+                "diff",
+                "test"
+              ],
+              "outputSchemaRef": "next-action/acceptance-review.schema.json",
+              "requiresApproval": false,
+              "autoApproveChoiceId": null,
+              "maxAttempts": 1,
+              "sideEffects": null,
+              "failurePolicy": {
+                "kind": "block",
+                "targetNodeId": null
+              },
+              "executionCommand": null,
+              "failureOwnership": null,
+              "artifactAuthority": {
+                "sourceScopes": [
+                  "all_tasks",
+                  "flow"
+                ],
+                "selection": "latest_upstream"
+              }
+            }
+          },
+          {
+            "kind": "step",
+            "id": "final-regression",
+            "key": "impl.final-regression",
+            "steps": [],
+            "contract": {
+              "semanticRetryLimit": 1,
+              "toolingRetryLimit": null,
+              "transitions": [
+                "pending:in_progress",
+                "in_progress:done",
+                "in_progress:failed",
+                "failed:in_progress",
+                "failed:invalidated",
+                "done:in_progress",
+                "skipped:in_progress",
+                "invalidated:in_progress",
+                "pending:invalidated",
+                "in_progress:invalidated",
+                "done:invalidated",
+                "skipped:invalidated"
+              ],
+              "resourceContract": {
+                "required": [
+                  "spec",
+                  "test"
+                ],
+                "authority": "definition"
+              },
+              "completion": "all_children_terminal"
+            },
+            "action": {
+              "action": "run-final-regression",
+              "instructionsKey": "impl.final-regression",
+              "contextKinds": [
+                "spec",
+                "test"
+              ],
+              "outputSchemaRef": "next-action/final-regression.schema.json",
+              "requiresApproval": false,
+              "autoApproveChoiceId": null,
+              "maxAttempts": 2,
+              "sideEffects": null,
+              "failurePolicy": {
+                "kind": "step-definition",
+                "targetNodeId": null
+              },
+              "executionCommand": "sennel flow run final-regression",
+              "failureOwnership": "command-primary-dispatcher-fallback",
+              "artifactAuthority": {
+                "sourceScopes": [
+                  "all_tasks",
+                  "flow"
+                ],
+                "selection": "latest_upstream"
+              }
+            }
+          },
+          {
+            "kind": "step",
+            "id": "report",
+            "key": "impl.report",
+            "steps": [],
+            "contract": {
+              "semanticRetryLimit": 1,
+              "toolingRetryLimit": null,
+              "transitions": [
+                "pending:in_progress",
+                "in_progress:done",
+                "done:in_progress",
+                "skipped:in_progress",
+                "invalidated:in_progress",
+                "pending:invalidated",
+                "in_progress:invalidated",
+                "done:invalidated",
+                "skipped:invalidated"
+              ],
+              "resourceContract": {
+                "required": [
+                  "spec",
+                  "diff",
+                  "test",
+                  "issue-log",
+                  "retro"
+                ],
+                "authority": "definition"
+              },
+              "completion": "all_children_terminal"
+            },
+            "action": {
+              "action": "run-report",
+              "instructionsKey": "impl.report",
+              "contextKinds": [
+                "spec",
+                "diff",
+                "test",
+                "issue-log",
+                "retro"
+              ],
+              "outputSchemaRef": "next-action/report.schema.json",
+              "requiresApproval": false,
+              "autoApproveChoiceId": null,
+              "maxAttempts": 2,
+              "sideEffects": null,
+              "failurePolicy": {
+                "kind": "block",
+                "targetNodeId": null
+              },
+              "executionCommand": "sennel flow run report",
+              "failureOwnership": "lifecycle-outbox",
+              "artifactAuthority": {
+                "sourceScopes": [
+                  "all_tasks",
+                  "flow"
+                ],
+                "selection": "latest_upstream"
+              }
+            }
+          },
+          {
+            "kind": "step",
+            "id": "finalize",
+            "key": "finalize",
+            "steps": [
+              {
+                "kind": "step",
+                "id": "finalize-commit",
+                "key": "impl.finalize-commit",
+                "steps": [],
+                "contract": {
+                  "semanticRetryLimit": 0,
+                  "toolingRetryLimit": null,
+                  "transitions": [
+                    "pending:in_progress",
+                    "in_progress:done",
+                    "done:in_progress",
+                    "skipped:in_progress",
+                    "invalidated:in_progress",
+                    "pending:invalidated",
+                    "in_progress:invalidated",
+                    "done:invalidated",
+                    "skipped:invalidated"
+                  ],
+                  "resourceContract": {
+                    "required": [
+                      "spec",
+                      "diff"
+                    ],
+                    "authority": "definition"
+                  },
+                  "completion": "all_children_terminal"
+                },
+                "action": {
+                  "action": "run-finalize-commit",
+                  "instructionsKey": "impl.finalize-commit",
+                  "contextKinds": [
+                    "spec",
+                    "diff"
+                  ],
+                  "outputSchemaRef": "next-action/finalize.schema.json",
+                  "requiresApproval": true,
+                  "autoApproveChoiceId": "1",
+                  "maxAttempts": 1,
+                  "sideEffects": null,
+                  "failurePolicy": {
+                    "kind": "block",
+                    "targetNodeId": null
+                  },
+                  "executionCommand": "sennel flow run finalize-commit",
+                  "failureOwnership": "lifecycle-outbox",
+                  "artifactAuthority": {
+                    "sourceScopes": [
+                      "all_tasks",
+                      "flow"
+                    ],
+                    "selection": "latest_upstream"
+                  }
+                }
+              },
+              {
+                "kind": "step",
+                "id": "finalize-merge",
+                "key": "impl.finalize-merge",
+                "steps": [],
+                "contract": {
+                  "semanticRetryLimit": 0,
+                  "toolingRetryLimit": null,
+                  "transitions": [
+                    "pending:in_progress",
+                    "in_progress:done",
+                    "done:in_progress",
+                    "skipped:in_progress",
+                    "invalidated:in_progress",
+                    "pending:invalidated",
+                    "in_progress:invalidated",
+                    "done:invalidated",
+                    "skipped:invalidated"
+                  ],
+                  "resourceContract": {
+                    "required": [
+                      "spec",
+                      "diff"
+                    ],
+                    "authority": "definition"
+                  },
+                  "completion": "all_children_terminal"
+                },
+                "action": {
+                  "action": "run-finalize-merge",
+                  "instructionsKey": "impl.finalize-merge",
+                  "contextKinds": [
+                    "spec",
+                    "diff"
+                  ],
+                  "outputSchemaRef": "next-action/finalize.schema.json",
+                  "requiresApproval": false,
+                  "autoApproveChoiceId": null,
+                  "maxAttempts": 1,
+                  "sideEffects": null,
+                  "failurePolicy": {
+                    "kind": "block",
+                    "targetNodeId": null
+                  },
+                  "executionCommand": "sennel flow run finalize-merge",
+                  "failureOwnership": "lifecycle-outbox",
+                  "artifactAuthority": {
+                    "sourceScopes": [
+                      "all_tasks",
+                      "flow"
+                    ],
+                    "selection": "latest_upstream"
+                  }
+                }
+              },
+              {
+                "kind": "step",
+                "id": "finalize-sync",
+                "key": "impl.finalize-sync",
+                "steps": [],
+                "contract": {
+                  "semanticRetryLimit": 0,
+                  "toolingRetryLimit": null,
+                  "transitions": [
+                    "pending:in_progress",
+                    "in_progress:done",
+                    "in_progress:skipped",
+                    "pending:skipped",
+                    "skipped:pending",
+                    "done:in_progress",
+                    "skipped:in_progress",
+                    "invalidated:in_progress",
+                    "pending:invalidated",
+                    "in_progress:invalidated",
+                    "done:invalidated",
+                    "skipped:invalidated"
+                  ],
+                  "resourceContract": {
+                    "required": [
+                      "spec"
+                    ],
+                    "authority": "definition"
+                  },
+                  "completion": "all_children_terminal"
+                },
+                "action": {
+                  "action": "run-finalize-sync",
+                  "instructionsKey": "impl.finalize-sync",
+                  "contextKinds": [
+                    "spec"
+                  ],
+                  "outputSchemaRef": "next-action/finalize.schema.json",
+                  "requiresApproval": false,
+                  "autoApproveChoiceId": null,
+                  "maxAttempts": 1,
+                  "sideEffects": null,
+                  "failurePolicy": {
+                    "kind": "block",
+                    "targetNodeId": null
+                  },
+                  "executionCommand": "sennel flow run finalize-sync",
+                  "failureOwnership": "lifecycle-outbox",
+                  "artifactAuthority": {
+                    "sourceScopes": [
+                      "all_tasks",
+                      "flow"
+                    ],
+                    "selection": "latest_upstream"
+                  }
+                }
+              },
+              {
+                "kind": "step",
+                "id": "finalize-cleanup",
+                "key": "impl.finalize-cleanup",
+                "steps": [],
+                "contract": {
+                  "semanticRetryLimit": 0,
+                  "toolingRetryLimit": null,
+                  "transitions": [
+                    "pending:in_progress",
+                    "in_progress:done",
+                    "pending:skipped",
+                    "skipped:pending",
+                    "done:in_progress",
+                    "skipped:in_progress",
+                    "invalidated:in_progress",
+                    "pending:invalidated",
+                    "in_progress:invalidated",
+                    "done:invalidated",
+                    "skipped:invalidated"
+                  ],
+                  "resourceContract": {
+                    "required": [
+                      "spec"
+                    ],
+                    "authority": "definition"
+                  },
+                  "completion": "all_children_terminal"
+                },
+                "action": {
+                  "action": "run-finalize-cleanup",
+                  "instructionsKey": "impl.finalize-cleanup",
+                  "contextKinds": [
+                    "spec"
+                  ],
+                  "outputSchemaRef": "next-action/finalize.schema.json",
+                  "requiresApproval": false,
+                  "autoApproveChoiceId": null,
+                  "maxAttempts": 1,
+                  "sideEffects": null,
+                  "failurePolicy": {
+                    "kind": "block",
+                    "targetNodeId": null
+                  },
+                  "executionCommand": "sennel flow run finalize-cleanup",
+                  "failureOwnership": "lifecycle-outbox",
+                  "artifactAuthority": {
+                    "sourceScopes": [
+                      "all_tasks",
+                      "flow"
+                    ],
+                    "selection": "latest_upstream"
+                  }
+                }
+              }
+            ],
+            "contract": {
+              "semanticRetryLimit": 0,
+              "toolingRetryLimit": null,
+              "transitions": [
+                "pending:in_progress",
+                "in_progress:done",
+                "done:in_progress",
+                "skipped:in_progress",
+                "invalidated:in_progress",
+                "pending:invalidated",
+                "in_progress:invalidated",
+                "done:invalidated",
+                "skipped:invalidated"
+              ],
+              "resourceContract": {
+                "required": [],
+                "authority": "definition"
+              },
+              "completion": "all_children_terminal"
+            },
+            "action": null
+          }
+        ],
+        "contract": {
+          "semanticRetryLimit": 0,
+          "toolingRetryLimit": null,
+          "transitions": [
+            "pending:in_progress",
+            "in_progress:done",
+            "done:in_progress",
+            "skipped:in_progress",
+            "invalidated:in_progress",
+            "pending:invalidated",
+            "in_progress:invalidated",
+            "done:invalidated",
+            "skipped:invalidated"
+          ],
+          "resourceContract": {
+            "required": [],
+            "authority": "definition"
+          },
+          "completion": "all_children_terminal"
+        },
+        "action": null
+      }
+    ],
+    "contract": {
+      "semanticRetryLimit": 0,
+      "toolingRetryLimit": null,
+      "transitions": [
+        "pending:in_progress",
+        "in_progress:done",
+        "done:in_progress",
+        "skipped:in_progress",
+        "invalidated:in_progress",
+        "pending:invalidated",
+        "in_progress:invalidated",
+        "done:invalidated",
+        "skipped:invalidated"
+      ],
+      "resourceContract": {
+        "required": [],
+        "authority": "definition"
+      },
+      "completion": "all_children_terminal"
+    },
+    "action": null
+  },
+  "taskTemplate": {
+    "kind": "task",
+    "id": "task",
+    "key": "task",
+    "steps": [
+      {
+        "kind": "step",
+        "id": "task-impl",
+        "key": "task.task-impl",
+        "steps": [],
+        "contract": {
+          "semanticRetryLimit": 0,
+          "toolingRetryLimit": null,
+          "transitions": [
+            "pending:in_progress",
+            "in_progress:done",
+            "done:in_progress",
+            "skipped:in_progress",
+            "invalidated:in_progress",
+            "pending:invalidated",
+            "in_progress:invalidated",
+            "done:invalidated",
+            "skipped:invalidated"
+          ],
+          "resourceContract": {
+            "required": [
+              "task_spec",
+              "related_summary",
+              "overview"
+            ],
+            "authority": "definition"
+          },
+          "completion": "all_children_terminal"
+        },
+        "action": {
+          "action": "run-impl",
+          "instructionsKey": "task.task-impl",
+          "contextKinds": [
+            "task_spec",
+            "related_summary",
+            "overview"
+          ],
+          "outputSchemaRef": "next-action/impl.schema.json",
+          "requiresApproval": false,
+          "autoApproveChoiceId": null,
+          "maxAttempts": 1,
+          "sideEffects": null,
+          "failurePolicy": {
+            "kind": "block",
+            "targetNodeId": null
+          },
+          "executionCommand": null,
+          "failureOwnership": null,
+          "artifactAuthority": {
+            "sourceScopes": [
+              "same_task",
+              "flow"
+            ],
+            "selection": "latest_upstream"
+          }
+        }
+      },
+      {
+        "kind": "step",
+        "id": "task-review",
+        "key": "task.task-review",
+        "steps": [],
+        "contract": {
+          "semanticRetryLimit": 3,
+          "toolingRetryLimit": 1,
+          "transitions": [
+            "pending:in_progress",
+            "in_progress:done",
+            "in_progress:failed",
+            "failed:in_progress",
+            "failed:invalidated",
+            "done:in_progress",
+            "skipped:in_progress",
+            "invalidated:in_progress",
+            "pending:invalidated",
+            "in_progress:invalidated",
+            "done:invalidated",
+            "skipped:invalidated"
+          ],
+          "resourceContract": {
+            "required": [
+              "task_spec",
+              "diff",
+              "testlog"
+            ],
+            "authority": "definition"
+          },
+          "completion": "all_children_terminal"
+        },
+        "action": {
+          "action": "run-review",
+          "instructionsKey": "task.task-review",
+          "contextKinds": [
+            "task_spec",
+            "diff",
+            "testlog"
+          ],
+          "outputSchemaRef": "next-action/review.schema.json",
+          "requiresApproval": false,
+          "autoApproveChoiceId": null,
+          "maxAttempts": 4,
+          "sideEffects": null,
+          "failurePolicy": {
+            "kind": "retry",
+            "targetNodeId": null
+          },
+          "executionCommand": "sennel flow run review --phase impl",
+          "failureOwnership": "command-primary-dispatcher-fallback",
+          "artifactAuthority": {
+            "sourceScopes": [
+              "same_task",
+              "flow"
+            ],
+            "selection": "latest_upstream"
+          }
+        }
+      },
+      {
+        "kind": "step",
+        "id": "task-triage",
+        "key": "task.task-review-filter",
+        "steps": [],
+        "contract": {
+          "semanticRetryLimit": 0,
+          "toolingRetryLimit": null,
+          "transitions": [
+            "pending:in_progress",
+            "in_progress:done",
+            "done:in_progress",
+            "skipped:in_progress",
+            "invalidated:in_progress",
+            "pending:invalidated",
+            "in_progress:invalidated",
+            "done:invalidated",
+            "skipped:invalidated"
+          ],
+          "resourceContract": {
+            "required": [
+              "issue",
+              "guardrail",
+              "project_overview"
+            ],
+            "authority": "definition"
+          },
+          "completion": "all_children_terminal"
+        },
+        "action": {
+          "action": "write-draft",
+          "instructionsKey": "plan.draft",
+          "contextKinds": [
+            "issue",
+            "guardrail",
+            "project_overview"
+          ],
+          "outputSchemaRef": "next-action/worker-artifact-handoff.schema.json",
+          "requiresApproval": false,
+          "autoApproveChoiceId": null,
+          "maxAttempts": 1,
+          "sideEffects": null,
+          "failurePolicy": {
+            "kind": "block",
+            "targetNodeId": null
+          },
+          "executionCommand": null,
+          "failureOwnership": null,
+          "artifactAuthority": {
+            "sourceScopes": [
+              "all_tasks",
+              "flow"
+            ],
+            "selection": "latest_upstream"
+          }
+        }
+      },
+      {
+        "kind": "step",
+        "id": "task-repair",
+        "key": "task.task-repair",
+        "steps": [],
+        "contract": {
+          "semanticRetryLimit": 0,
+          "toolingRetryLimit": null,
+          "transitions": [
+            "pending:in_progress",
+            "in_progress:done",
+            "done:in_progress",
+            "skipped:in_progress",
+            "invalidated:in_progress",
+            "pending:invalidated",
+            "in_progress:invalidated",
+            "done:invalidated",
+            "skipped:invalidated"
+          ],
+          "resourceContract": {
+            "required": [
+              "issue",
+              "guardrail",
+              "project_overview"
+            ],
+            "authority": "definition"
+          },
+          "completion": "all_children_terminal"
+        },
+        "action": {
+          "action": "write-draft",
+          "instructionsKey": "plan.draft",
+          "contextKinds": [
+            "issue",
+            "guardrail",
+            "project_overview"
+          ],
+          "outputSchemaRef": "next-action/worker-artifact-handoff.schema.json",
+          "requiresApproval": false,
+          "autoApproveChoiceId": null,
+          "maxAttempts": 1,
+          "sideEffects": null,
+          "failurePolicy": {
+            "kind": "block",
+            "targetNodeId": null
+          },
+          "executionCommand": null,
+          "failureOwnership": null,
+          "artifactAuthority": {
+            "sourceScopes": [
+              "all_tasks",
+              "flow"
+            ],
+            "selection": "latest_upstream"
+          }
+        }
+      },
+      {
+        "kind": "step",
+        "id": "task-gate",
+        "key": "impl.impl-gate",
+        "steps": [],
+        "contract": {
+          "semanticRetryLimit": 4,
+          "toolingRetryLimit": null,
+          "transitions": [
+            "pending:in_progress",
+            "in_progress:done",
+            "done:in_progress",
+            "skipped:in_progress",
+            "invalidated:in_progress",
+            "pending:invalidated",
+            "in_progress:invalidated",
+            "done:invalidated",
+            "skipped:invalidated"
+          ],
+          "resourceContract": {
+            "required": [
+              "task_spec",
+              "guardrail"
+            ],
+            "authority": "definition"
+          },
+          "completion": "all_children_terminal"
+        },
+        "action": {
+          "action": "run-gate",
+          "instructionsKey": "impl.impl-gate",
+          "contextKinds": [
+            "task_spec",
+            "guardrail"
+          ],
+          "outputSchemaRef": "next-action/gate.schema.json",
+          "requiresApproval": false,
+          "autoApproveChoiceId": null,
+          "maxAttempts": 5,
+          "sideEffects": null,
+          "failurePolicy": {
+            "kind": "block",
+            "targetNodeId": null
+          },
+          "executionCommand": "sennel flow run gate",
+          "failureOwnership": "command-primary-dispatcher-fallback",
+          "artifactAuthority": {
+            "sourceScopes": [
+              "same_task",
+              "flow"
+            ],
+            "selection": "latest_upstream"
+          }
+        }
+      }
+    ],
+    "contract": {
+      "semanticRetryLimit": 0,
+      "toolingRetryLimit": null,
+      "transitions": [
+        "pending:in_progress",
+        "in_progress:done",
+        "done:in_progress",
+        "skipped:in_progress",
+        "invalidated:in_progress",
+        "pending:invalidated",
+        "in_progress:invalidated",
+        "done:invalidated",
+        "skipped:invalidated"
+      ],
+      "resourceContract": {
+        "required": [],
+        "authority": "definition"
+      },
+      "completion": "all_children_terminal"
+    },
+    "action": null
+  },
+  "dynamicTaskContainerId": "impl",
+  "dynamicTaskInsertionAfterId": "implement"
+}

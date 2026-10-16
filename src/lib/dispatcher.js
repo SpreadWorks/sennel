@@ -16,6 +16,7 @@
 
 import { parseArgs as cliParseArgs } from "./cli.js";
 import { Command } from "./command.js";
+import { isFlowFormatError } from "./flow-format-error.js";
 import { Envelope } from "./flow-envelope.js";
 import { RuntimeLogBlockWriter } from "./runtime-log.js";
 import { targetMismatchEnvelopeForInput } from "./flow-target-guard.js";
@@ -500,7 +501,8 @@ async function executeDispatch({
     "FLOW_TARGET_RECOVERY_REQUIRED",
     "FLOW_TARGET_AUTHORITY_CORRUPT",
   ].includes(hookCtx.flowResolutionError?.code)
-    || hookCtx.flowResolutionError?.code?.startsWith("FLOW_TARGET_AUTHORITY_");
+    || hookCtx.flowResolutionError?.code?.startsWith("FLOW_TARGET_AUTHORITY_")
+    || isFlowFormatError(hookCtx.flowResolutionError);
   const targetResolutionError = hookCtx.flowResolutionError && (
     entry.explicitTargetResolution === true || recognizedTargetResolutionError
   )

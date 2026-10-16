@@ -10,6 +10,7 @@ import {
   migrationSuccessLine,
 } from "./lib/migration.js";
 import { LayoutMigrationRevisionOne } from "./lib/layout-migration.js";
+import { FlowSpecId } from "./lib/flow-spec-id.js";
 
 const COMPONENTS = new Set(["layout", "specs"]);
 
@@ -47,11 +48,12 @@ function parseTarget(value) {
 export function parseMigrateArgs(argv) {
   const [component, ...rest] = argv;
   if (!COMPONENTS.has(component)) {
-    throw new Error("Usage: sennel migrate <layout|specs> --to <revision> [--dry-run]");
+    throw new Error("Usage: sennel migrate <layout|specs> --to <revision> [--spec <specId>] [--dry-run]");
   }
   let to = null;
   let dryRun = false;
   let help = false;
+  let specId = null;
   for (let index = 0; index < rest.length; index += 1) {
     const argument = rest[index];
     if (argument === "-h" || argument === "--help") {
@@ -69,9 +71,18 @@ export function parseMigrateArgs(argv) {
       index += 1;
       continue;
     }
+    if (argument === "--spec") {
+      if (component !== "specs") throw new Error("--spec is only available for specs migrations");
+      if (specId !== null) throw new Error("--spec may only be supplied once");
+      const value = rest[index + 1];
+      if (value == null || value.startsWith("-")) throw new Error("Missing required value: --spec");
+      specId = FlowSpecId.from(value).toString();
+      index += 1;
+      continue;
+    }
     throw new Error(`Unknown option: ${argument}`);
   }
-  return Object.freeze({ component, to: help ? to : parseTarget(to), dryRun, help });
+  return Object.freeze({ component, to: help ? to : parseTarget(to), specId, dryRun, help });
 }
 
 function printHelp(component = null) {
@@ -80,10 +91,10 @@ function printHelp(component = null) {
     return;
   }
   if (component === "specs") {
-    console.log("Usage: sennel migrate specs --to 4 [--dry-run]\n\nMigrate Flow specifications to a target revision.");
+    console.log("Usage: sennel migrate specs --to <revision> [--spec <specId>] [--dry-run]\n\nMigrate Flow specifications to a target revision. --spec selects one literal spec ID; omit it to migrate all specs in the configured root. Apply revisions 2, 3, and 4 in order when required.");
     return;
   }
-  console.log("Usage: sennel migrate <layout|specs> --to 1 [--dry-run]");
+  console.log("Usage: sennel migrate <layout|specs> --to <revision> [--spec <specId>] [--dry-run]");
 }
 
 function registry() {
@@ -98,9 +109,9 @@ function registry() {
   const specsRevision = new MigrationRevision({
       component: "specs",
       revision: 1,
-      apply: async ({ root, dryRun, output, targetRevision = 1 }) => {
+      apply: async ({ root, dryRun, output, specId, targetRevision = 1 }) => {
         const { SpecsMigrationRevisionOne } = await import("./lib/specs-migration.js");
-        return new SpecsMigrationRevisionOne(root, { dryRun, logger: output, targetRevision }).run();
+        return new SpecsMigrationRevisionOne(root, { dryRun, logger: output, specId, targetRevision }).run();
       },
     });
   const specsRevisionTwo = new MigrationRevision({
@@ -111,17 +122,17 @@ function registry() {
   const specsRevisionThree = new MigrationRevision({
     component: "specs",
     revision: 3,
-    apply: async ({ root, dryRun, output }) => {
+    apply: async ({ root, dryRun, output, specId }) => {
       const { SpecsMigrationRevisionThree } = await import("./lib/specs-migration.js");
-      return new SpecsMigrationRevisionThree(root, { dryRun, logger: output }).run();
+      return new SpecsMigrationRevisionThree(root, { dryRun, logger: output, specId }).run();
     },
   });
   const specsRevisionFour = new MigrationRevision({
     component: "specs",
     revision: 4,
-    apply: async ({ root, dryRun, output }) => {
+    apply: async ({ root, dryRun, output, specId }) => {
       const { SpecsMigrationRevisionFour } = await import("./lib/specs-migration.js");
-      return new SpecsMigrationRevisionFour(root, { dryRun, logger: output }).run();
+      return new SpecsMigrationRevisionFour(root, { dryRun, logger: output, specId }).run();
     },
   });
   const executeSpecsRoute = ({ plan, ...context }) => specsRevision.apply({
@@ -160,9 +171,11 @@ async function execute(cli) {
     revisions: route,
   });
   const output = new MigrationCommandOutput({ dryRun: cli.dryRun });
+  const { container } = await import("./lib/container.js");
+  const root = cli.component === "specs" ? container.get("mainRoot") : repoRoot();
   const outcome = {
     complete: true,
-    ...((await migrations.execute(plan, { root: repoRoot(), dryRun: cli.dryRun, output }) || {})),
+    ...((await migrations.execute(plan, { root, dryRun: cli.dryRun, specId: cli.specId, output }) || {})),
   };
   output.flushErrors();
   if (outcome.requiresRecovery || outcome.complete === false) {
@@ -170,7 +183,12 @@ async function execute(cli) {
     process.exitCode = 1;
     return;
   }
-  if (!cli.dryRun) console.log(migrationSuccessLine(cli.component, cli.to));
+  if (!cli.dryRun) {
+    for (const assessment of outcome.assessments ?? []) console.log(JSON.stringify({
+      component: cli.component, appliedMigrationRevision: cli.to, remaining: assessment,
+    }));
+    console.log(migrationSuccessLine(cli.component, cli.to));
+  }
 }
 
 export async function main() {

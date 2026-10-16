@@ -350,7 +350,12 @@ export class ActiveFlowRegistry {
 
   /** @returns {ActiveFlowEntry[]} */
   load() {
-    return readActiveFlowAuthority(activeFlowPath(this._mainRoot)).document.toJSON();
+    return ActiveFlowRegistry.readEntries(this._mainRoot);
+  }
+
+  /** Read authority at an already resolved mainRoot without mutation infrastructure. */
+  static readEntries(mainRoot) {
+    return readActiveFlowAuthority(activeFlowPath(mainRoot)).document.toJSON();
   }
 
   snapshot(options = {}) {

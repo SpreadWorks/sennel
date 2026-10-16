@@ -6,6 +6,8 @@ import { spawnSync } from "node:child_process";
 import { afterEach, describe, it } from "node:test";
 
 import { createTmpDir, removeTmpDir, writeFile, writeJson } from "../support/builders/tmp-dir.js";
+import { SeedWorkRoot } from "../support/builders/seed-work-root.js";
+import { CanonicalPersistenceSnapshot, StoredFlowPersistenceSnapshot } from "../support/assertions/canonical-persistence.js";
 import { buildCurrentFlowDefinition } from "../../src/flow/definition.js";
 import { FlowArtifactCatalog, FlowVersionAuthorityScope, FlowVersionLocation } from "../../src/lib/flow-version.js";
 import { FlowManager } from "../../src/lib/flow-manager.js";
@@ -16,9 +18,12 @@ import { PlanGateRepairObservation, PlanGateRepairRecord } from "../../src/flow/
 import { SpecGateProspectiveFacts } from "../../src/flow/lib/spec-gate-prospective-facts.js";
 import { readSpecGateCycleProgress } from "../../src/flow/lib/gate-transition-facts.js";
 import { specGateResult } from "../../src/flow/steps/spec/spec-gate-result.js";
-import { CurrentFlowVersionStore, CurrentFlowState, FlowActivity } from "../../src/flow/lib/current-flow-state.js";
+import { CurrentFlowVersionStore, CurrentFlowState, CurrentFlowStateInvariantError, FlowActivity } from "../../src/flow/lib/current-flow-state.js";
 import { initialCanonicalSpecReview, SpecReviewDelta, mergeSpecReviewDelta } from "../../src/flow/lib/spec-review-artifacts.js";
 import {
+  inspectFlowMigrationRequirements,
+  SpecsMigrationRevisionOne,
+  SpecsMigrationRevisionThree,
   canonicalVersionDirectories,
   LegacyFlowSource,
   LegacyRuntimeResidueClassifier,
@@ -259,6 +264,15 @@ function refreshCatalogFile(root, id, relativePath) {
   refreshCatalogDescriptorForBytes(version, relativePath);
 }
 
+// The historical writer hashes its whole catalog as well as each artifact.
+// Raw retired-path fixtures cannot use the current descriptor registry, but
+// must still retain the historical writer's exact catalog-content invariant.
+function writeRawLegacyCatalog(catalogPath, catalog) {
+  catalog.artifacts.sort((left, right) => left.relativePath < right.relativePath ? -1 : left.relativePath > right.relativePath ? 1 : 0);
+  catalog.hash = crypto.createHash("sha256").update(JSON.stringify({ schemaRevision: catalog.schemaRevision, artifacts: catalog.artifacts })).digest("hex");
+  fs.writeFileSync(catalogPath, `${JSON.stringify(catalog, null, 2)}\n`);
+}
+
 function appendLegacyReviewDescriptor(versionDirectory, relativePath, bytes, { activityId = null, migrationMaterialization = true, publicationStep = "system" } = {}) {
   const catalogPath = path.join(versionDirectory, "artifact-catalog.json");
   const catalog = JSON.parse(fs.readFileSync(catalogPath, "utf8"));
@@ -278,7 +292,7 @@ function appendLegacyReviewDescriptor(versionDirectory, relativePath, bytes, { a
     activityId,
     migrationMaterialization,
   });
-  fs.writeFileSync(catalogPath, `${JSON.stringify(catalog, null, 2)}\n`);
+  writeRawLegacyCatalog(catalogPath, catalog);
 }
 
 function writeLegacyReviewDocument(versionDirectory, relativePath, document, options = {}) {
@@ -296,7 +310,7 @@ function refreshRawLegacyDescriptor(versionDirectory, relativePath) {
   assert.ok(descriptor, `missing legacy descriptor: ${relativePath}`);
   descriptor.hash = crypto.createHash("sha256").update(bytes).digest("hex");
   descriptor.size = bytes.length;
-  fs.writeFileSync(catalogPath, `${JSON.stringify(catalog, null, 2)}\n`);
+  writeRawLegacyCatalog(catalogPath, catalog);
 }
 
 function seedLegacySpecReviewChain(root, id, { malformed = false, acceptedRepair = false } = {}) {
@@ -812,6 +826,13 @@ describe("migrate specs --to 2", () => {
     assert.equal(catalog.artifacts.some((entry) => ["steps/spec-review/result.json", "steps/spec-triage/result.json", "steps/spec-repair/result.json"].includes(entry.relativePath)), false);
     const report = JSON.parse(fs.readFileSync(path.join(versionDirectory, "artifacts/migration/spec-review-conversion.json"), "utf8"));
     assert.equal(report.classification, "proven-converted");
+    const reader = new FlowManager({ root, mainRoot: root, inWorktree: false, specId: id });
+    const downstream = reader.readCurrentSpecReview({ specId: id, consumerNodeId: "spec-gate" });
+    const consumedFinding = downstream.review.findings.byId("legacy-review-finding");
+    assert.ok(consumedFinding, "the reloaded Gate input must retain the migrated finding");
+    assert.equal(consumedFinding.findingId, "legacy-review-finding");
+    assert.equal(consumedFinding.disposition, "invalid");
+    assert.equal(downstream.review.identity.digest, crypto.createHash("sha256").update(fs.readFileSync(path.join(versionDirectory, "revisions/001/spec.json"))).digest("hex"));
     const rerun = run(root);
     assert.equal(rerun.status, 0, rerun.stderr);
   });
@@ -844,7 +865,7 @@ describe("migrate specs --to 2", () => {
       descriptor.activityId = activityId;
       descriptor.publicationStep = "spec-review";
       descriptor.migrationMaterialization = false;
-      fs.writeFileSync(catalogPath, `${JSON.stringify(catalog, null, 2)}\n`);
+      writeRawLegacyCatalog(catalogPath, catalog);
       if (label === "forged") {
         const activitiesPath = path.join(versionDirectory, "activities.jsonl");
         fs.appendFileSync(activitiesPath, `${JSON.stringify({ id: activityId, nodeId: "spec-review", type: "result_confirmed", transition: { operation: "confirm_attempt" } })}\n`);
@@ -859,21 +880,24 @@ describe("migrate specs --to 2", () => {
     const root = project();
     const id = "515-wrong-stage-review-activity";
     seedLegacy(root, id);
+    const source = legacyFlow(root, id);
+    source.createdAt = "2026-01-01T00:00:00.000Z";
+    writeLegacyFlow(root, id, source);
     const versionDirectory = seedLegacySpecReviewChain(root, id);
     const state = new CurrentFlowState(JSON.parse(fs.readFileSync(path.join(versionDirectory, "flow.json"), "utf8")), {
       definition: buildCurrentFlowDefinition(),
     });
-    const wrongStageActivity = FlowActivity.flowCreated(state, "2026-01-01T00:00:00.000Z");
+    assert.equal(state.history.creation.status, "available");
     const activitiesPath = path.join(versionDirectory, "activities.jsonl");
-    fs.writeFileSync(activitiesPath, `${JSON.stringify(wrongStageActivity.toJSON())}\n`);
-    refreshRawLegacyDescriptor(versionDirectory, "activities.jsonl");
+    const wrongStageActivity = JSON.parse(fs.readFileSync(activitiesPath, "utf8").trim().split("\n")[0]);
+    assert.equal(wrongStageActivity.type, "flow_created", "use the migration owner's proven creation Activity");
     const catalogPath = path.join(versionDirectory, "artifact-catalog.json");
     const catalog = JSON.parse(fs.readFileSync(catalogPath, "utf8"));
     const descriptor = catalog.artifacts.find((entry) => entry.relativePath === "steps/spec-review/result.json");
     descriptor.activityId = wrongStageActivity.id;
     descriptor.publicationStep = "spec-review";
     descriptor.migrationMaterialization = false;
-    fs.writeFileSync(catalogPath, `${JSON.stringify(catalog, null, 2)}\n`);
+    writeRawLegacyCatalog(catalogPath, catalog);
     const result = run(root, ["--dry-run"]);
     assert.equal(result.status, 1, "wrong-stage provenance must block migration");
     assert.match(result.stderr, /UNPROVABLE_LEGACY_SPEC_REVIEW|UNBOUND_LEGACY_SPEC_REVIEW/);
@@ -974,7 +998,7 @@ describe("migrate specs --to 2", () => {
     const catalogPath = path.join(versionDirectory, "artifact-catalog.json");
     const catalog = JSON.parse(fs.readFileSync(catalogPath, "utf8"));
     catalog.artifacts = catalog.artifacts.filter((entry) => !removed.includes(entry.relativePath));
-    fs.writeFileSync(catalogPath, `${JSON.stringify(catalog, null, 2)}\n`);
+    writeRawLegacyCatalog(catalogPath, catalog);
     const flowPath = path.join(versionDirectory, "flow.json");
     const flow = JSON.parse(fs.readFileSync(flowPath, "utf8"));
     const reviewStep = legacyStepLocation(flow.steps, "spec-review");
@@ -1007,6 +1031,20 @@ describe("migrate specs --to 2", () => {
     source.status = "finalized";
     writeLegacyFlow(root, id, source);
     const versionDirectory = seedLegacySpecReviewChain(root, id, { malformed: true });
+    const catalogPath = path.join(versionDirectory, "artifact-catalog.json");
+    const originalCatalog = fs.readFileSync(catalogPath);
+    for (const [field, invalid] of [["activityId", 42], ["mediaType", " "]]) {
+      const catalog = JSON.parse(originalCatalog);
+      catalog.artifacts.find((entry) => entry.relativePath === "steps/spec-review/result.json")[field] = invalid;
+      writeRawLegacyCatalog(catalogPath, catalog);
+      const before = physicalSnapshot(root);
+      assert.equal(inspectFlowMigrationRequirements({ root, specId: id }).classification, "integrity-error", field);
+      for (const dryRun of [true, false]) {
+        assert.equal(migrateSelected(root, id, 2, dryRun).complete, false, field);
+        assert.equal(physicalSnapshot(root), before, "malformed source descriptor cannot become archived-unproven evidence");
+      }
+    }
+    fs.writeFileSync(catalogPath, originalCatalog);
     const result = run(root);
     assert.equal(result.status, 0, result.stderr);
     for (const legacyPath of ["steps/spec-review/result.json", "steps/spec-triage/result.json", "steps/spec-repair/result.json"]) {
@@ -1030,7 +1068,7 @@ describe("migrate specs --to 2", () => {
     const catalogPath = path.join(versionDirectory, "artifact-catalog.json");
     const catalog = JSON.parse(fs.readFileSync(catalogPath, "utf8"));
     catalog.artifacts = catalog.artifacts.filter((entry) => entry.relativePath !== "steps/spec-review/result.json");
-    fs.writeFileSync(catalogPath, `${JSON.stringify(catalog, null, 2)}\n`);
+    writeRawLegacyCatalog(catalogPath, catalog);
     const result = run(root);
     assert.equal(result.status, 0, result.stderr);
     const report = JSON.parse(fs.readFileSync(path.join(versionDirectory, "artifacts/migration/spec-review-conversion.json"), "utf8"));
@@ -2580,5 +2618,164 @@ describe("migrate specs --to 2", () => {
     assert.equal(fs.existsSync(path.join(root, "specs", backup)), true);
     assert.equal(fs.existsSync(path.join(journalDirectory)), true);
     assert.equal(fs.existsSync(foreignTarget), true);
+  });
+});
+
+
+function frozenV1Project() {
+  const work = new SeedWorkRoot(path.resolve("tests/fixtures/legacy-activity-v1/project"), { prefix: "sennel-legacy-activity-" });
+  roots.push(work.root);
+  return { root: work.root, id: "001-legacy-activity" };
+}
+
+function physicalSnapshot(root) {
+  return new StoredFlowPersistenceSnapshot(root).digest;
+}
+
+function migrateSelected(root, id, revision, dryRun = false) {
+  const messages = [];
+  const logger = { log: (message) => messages.push(message), error: (message) => messages.push(message) };
+  const migration = revision === 3 ? new SpecsMigrationRevisionThree(root, { specId: id, dryRun, logger })
+    : new SpecsMigrationRevisionOne(root, { specId: id, targetRevision: revision, dryRun, logger });
+  return { ...migration.run(), messages };
+}
+
+describe("historical Activity source contract", () => {
+  it("preserves historical writer bytes through preview and explicitly completes revision two then three", () => {
+    const { root, id } = frozenV1Project();
+    const fixture = path.resolve("tests/fixtures/legacy-activity-v1");
+    for (const [relativePath, expected] of Object.entries(JSON.parse(fs.readFileSync(path.join(fixture, "SHA256.json"), "utf8")))) {
+      assert.equal(crypto.createHash("sha256").update(fs.readFileSync(path.join(fixture, relativePath))).digest("hex"), expected);
+    }
+    const version = path.join(root, "specs", id, "001");
+    const originalFlow = JSON.parse(fs.readFileSync(path.join(version, "flow.json"), "utf8"));
+    const originalActivities = fs.readFileSync(path.join(version, "activities.jsonl"));
+    const originalCatalog = fs.readFileSync(path.join(version, "artifact-catalog.json"));
+    const originalRecords = originalActivities.toString("utf8").trimEnd().split("\n").map(JSON.parse);
+    assert.ok(originalRecords.every((record) => !Object.hasOwn(record, "reviewPublication")));
+    assert.equal(originalRecords.at(-1).transition.operation, "confirm_attempt");
+    assert.equal(originalRecords.at(-1).nodeId, "branch");
+    const before = physicalSnapshot(root);
+    const assessment = inspectFlowMigrationRequirements({ root, specId: id });
+    assert.equal(assessment.classification, "migratable", assessment.message);
+    assert.deepEqual(assessment.requiredRevisions, [2, 3]);
+    const preview = migrateSelected(root, id, 2, true);
+    assert.equal(preview.complete, true, preview.messages.join("\n"));
+    assert.equal(physicalSnapshot(root), before, "preview and classification preserve every source byte and authority");
+    assert.equal(migrateSelected(root, id, 2).complete, true);
+    assert.equal(JSON.parse(fs.readFileSync(path.join(version, "flow.json"), "utf8")).schemaRevision, originalFlow.schemaRevision);
+    assert.equal(originalFlow.schemaRevision, 3);
+    assert.throws(() => versionStore(root, id).load(), CurrentFlowStateInvariantError);
+    assert.deepEqual(inspectFlowMigrationRequirements({ root, specId: id }).requiredRevisions, [3]);
+    const final = migrateSelected(root, id, 3);
+    assert.equal(final.complete, true, final.messages.join("\n"));
+    const manager = new FlowManager({ root, mainRoot: root, inWorktree: false, specId: id });
+    const state = manager.canonicalState(id);
+    assert.equal(state.runId, originalFlow.runId);
+    assert.deepEqual(state.lifecycle.toJSON(), originalFlow.lifecycle);
+    assert.equal(state.history, null);
+    assert.deepEqual(state.findNode("branch").toJSON(), originalFlow.steps[0].steps.find((entry) => entry.id === "branch"));
+    assert.equal(state.current, null);
+    assert.equal(state.nextAction().nodeId, "prepare-spec");
+    assert.deepEqual(fs.readFileSync(path.join(version, "artifacts/migration/legacy-activity-v1/activities.jsonl")), originalActivities);
+    assert.deepEqual(fs.readFileSync(path.join(version, "artifacts/migration/legacy-activity-v1/artifact-catalog.json")), originalCatalog);
+    const canonical = new CanonicalPersistenceSnapshot(manager, id);
+    assert.equal(inspectFlowMigrationRequirements({ root, specId: id }).classification, "current");
+    canonical.assertUnchanged(new FlowManager({ root, mainRoot: root, inWorktree: false, specId: id }), id, "fresh strict manager reload");
+    const active = manager.beginNextAction(id);
+    assert.equal(active.attempt.nodeId, "prepare-spec");
+    const restarted = new FlowManager({ root, mainRoot: root, inWorktree: false, specId: id });
+    assert.equal(restarted.canonicalState(id).attempt.id, active.attempt.id);
+    const reviewInput = restarted.readCurrentSpecReviewInput({ specId: id, consumerNodeId: "spec-review" });
+    assert.equal(reviewInput.review.identity.specId, id);
+    assert.equal(reviewInput.persisted, false);
+  });
+
+  it("refuses required-at-source omissions and catalog laundering without changing source or recovery state", () => {
+    for (const corruption of ["required-field", "required-attempt", "manual-modernization", "catalog-schema", "catalog-hash", "provenance"]) {
+      const { root, id } = frozenV1Project();
+      const version = path.join(root, "specs", id, "001");
+      const file = path.join(version, "activities.jsonl");
+      const records = fs.readFileSync(file, "utf8").trimEnd().split("\n").map(JSON.parse);
+      if (corruption === "provenance") {
+        const catalogPath = path.join(version, "artifact-catalog.json");
+        const catalog = JSON.parse(fs.readFileSync(catalogPath, "utf8"));
+        catalog.artifacts.find((entry) => entry.relativePath === "flow.json").activityId = "missing-source-activity";
+        writeRawLegacyCatalog(catalogPath, catalog);
+      } else if (corruption === "catalog-schema" || corruption === "catalog-hash") {
+        const catalog = JSON.parse(fs.readFileSync(path.join(version, "artifact-catalog.json"), "utf8"));
+        if (corruption === "catalog-schema") catalog.schemaRevision = 999;
+        else catalog.hash = "0".repeat(64);
+        fs.writeFileSync(path.join(version, "artifact-catalog.json"), JSON.stringify(catalog));
+      } else {
+        if (corruption === "required-field") delete records[0].transition.policy;
+        if (corruption === "required-attempt") delete records[1].attemptId;
+        if (corruption === "manual-modernization") records[0].reviewPublication = null;
+        fs.writeFileSync(file, records.map((entry) => `${JSON.stringify(entry)}\n`).join(""));
+        if (corruption !== "manual-modernization") refreshCatalogDescriptorForBytes(version, "activities.jsonl");
+      }
+      const before = physicalSnapshot(root);
+      assert.equal(inspectFlowMigrationRequirements({ root, specId: id }).classification, "integrity-error", corruption);
+      for (const dryRun of [true, false]) {
+        assert.equal(migrateSelected(root, id, 2, dryRun).complete, false, corruption);
+        assert.equal(physicalSnapshot(root), before, corruption);
+      }
+    }
+  });
+
+  it("rejects a hash-consistent mismatched native ledger at the same source preflight used by dry-run", () => {
+    const root = project();
+    const id = "001-native-ledger-mismatch";
+    createExistingVersion(root, id, { flowId: "mismatch-flow", flowVersionId: "mismatch-version", runId: "mismatch-run" });
+    const version = path.join(root, "specs", id, "001");
+    fs.rmSync(path.join(version, "revisions"), { recursive: true });
+    rewriteCatalogFile(version, (artifacts) => artifacts.filter((entry) => !entry.relativePath.startsWith("revisions/")));
+    const flow = JSON.parse(fs.readFileSync(path.join(version, "flow.json"), "utf8"));
+    flow.confirmationOrder += 1;
+    fs.writeFileSync(path.join(version, "flow.json"), JSON.stringify(flow));
+    refreshCatalogDescriptorForBytes(version, "flow.json");
+    const before = physicalSnapshot(root);
+    assert.equal(inspectFlowMigrationRequirements({ root, specId: id }).classification, "integrity-error");
+    assert.equal(migrateSelected(root, id, 2, true).complete, false);
+    assert.equal(physicalSnapshot(root), before);
+  });
+
+  it("recovers only the selected historical root after each publication interruption", () => {
+    for (const phase of ["journal-written", "source-backed-up", "stage-placed"]) {
+      const { root, id } = frozenV1Project();
+      const other = "001-unrelated-broken";
+      writeFile(root, `specs/${other}/001/flow.json`, "broken canonical input");
+      writeFile(root, ".tmp/sennel-migrate-specs/unrelated.json", "broken unrelated journal");
+      const transaction = new CanonicalRevisionRootTransaction({ root, specRoot: resolveMigrationSpecRoot(root).root,
+        specId: id, definition: buildCurrentFlowDefinition(), faultInjector: ({ phase: reached }) => {
+          if (phase === reached) throw new Error(`historical source interruption ${phase}`);
+        } });
+      assert.throws(() => transaction.apply(), /historical source interruption/);
+      const recovered = migrateSelected(root, id, 2);
+      assert.equal(recovered.complete, true, recovered.messages.join("\n"));
+      assert.equal(migrateSelected(root, id, 3).complete, true);
+      assert.equal(versionStore(root, id).load().findNode("branch").status, "done");
+      assert.equal(fs.readFileSync(path.join(root, `specs/${other}/001/flow.json`), "utf8"), "broken canonical input");
+      assert.equal(fs.readFileSync(path.join(root, ".tmp/sennel-migrate-specs/unrelated.json"), "utf8"), "broken unrelated journal");
+    }
+  });
+
+  it("refuses publication when a foreign identity appears after the migration journal is written", () => {
+    const { root, id } = frozenV1Project();
+    const source = path.join(root, "specs", id);
+    const before = physicalSnapshot(source);
+    const current = JSON.parse(fs.readFileSync(path.join(source, "001/flow.json"), "utf8"));
+    const transaction = new CanonicalRevisionRootTransaction({ root, specRoot: resolveMigrationSpecRoot(root).root,
+      specId: id, definition: buildCurrentFlowDefinition(), faultInjector: ({ phase }) => {
+        if (phase === "journal-written") {
+          writeJson(root, "specs/002-concurrent/001/flow.json", { runId: current.runId });
+        }
+      } });
+    assert.throws(() => transaction.apply(), { code: "RUN_ID_COLLISION" });
+    assert.equal(physicalSnapshot(source), before);
+    assert.equal(fs.readdirSync(path.join(root, ".tmp/sennel-migrate-specs")).length, 1);
+    assert.equal(fs.readdirSync(path.join(root, "specs")).some((name) => name.includes("-backup-")), false);
+    assert.throws(() => migrateSelected(root, id, 2), { code: "RUN_ID_COLLISION" });
+    assert.equal(physicalSnapshot(source), before);
   });
 });

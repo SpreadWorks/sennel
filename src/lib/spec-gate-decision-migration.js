@@ -1,6 +1,7 @@
 /** One-way projection of the retired Spec Gate repair question receipt. */
 import crypto from "node:crypto";
 import fs from "node:fs";
+import { LegacyFlowActivityDocument } from "./legacy-flow-activity.js";
 
 import { FlowArtifactCatalog, FlowVersionLocation } from "./flow-version.js";
 import { FLOW_ARTIFACT_CONTRACTS } from "./flow-artifact-contract.js";
@@ -78,7 +79,7 @@ export class CanonicalGateDecisionMigrationPlan {
     if (state.schemaRevision !== 4 || state.specId !== this.location.specId.toString()) {
       fail("Flow schema or Spec identity differs from the canonical Version");
     }
-    const catalog = new FlowArtifactCatalog(parse(catalogBytes, "artifact Catalog"));
+    const catalog = FlowArtifactCatalog.fromSerialized(parse(catalogBytes, "artifact Catalog"));
     catalog.verify(this.location);
     for (const [name, key] of [["flow.json", "flow.state"], ["activities.jsonl", "flow.activities"], ["spec.json", "spec.record"]]) {
       if (catalog.resolve(name).logicalKey !== key) fail(`Catalog does not bind ${name}`);
@@ -171,8 +172,9 @@ export class CanonicalGateDecisionMigrationPlan {
     });
     const ids = new Set(old.map((entry) => entry.id));
     if (ids.size !== old.length || publications.size !== old.length) fail("old question settlements are not one-to-one with publications");
-    const newActivitiesBytes = Buffer.from(projectedActivities.map((entry) => `${JSON.stringify(entry)}\n`).join(""));
-    for (const entry of projectedActivities) FlowActivity.fromSerialized(entry);
+    const normalizedActivities = projectedActivities.map((entry) => new LegacyFlowActivityDocument(entry).toJSON());
+    const newActivitiesBytes = Buffer.from(normalizedActivities.map((entry) => `${JSON.stringify(entry)}\n`).join(""));
+    for (const entry of normalizedActivities) FlowActivity.fromSerialized(entry);
     new CurrentFlowState(projectedState, { definition: this.definition });
     return Object.freeze({
       state, catalog, flowBytes, activitiesBytes, catalogBytes,

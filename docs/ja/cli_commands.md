@@ -515,6 +515,26 @@ stdout と stderr の使い分けルールは以下の通りです。
 
 ---
 
+### 保存済み Flow の migration
+
+`sennel migrate specs --to <revision> --spec <specId> --dry-run` は、設定済み
+`flow.specDir` の単一 Spec をプレビューします。`--spec` を省略すると全件を
+処理します。不正・不存在の指定を全件処理へ切り替えることはありません。
+プレビューは Spec、identity authority、registry、worktree binding、journal を
+変更しません。
+
+通常の Flow command が `FLOW_MIGRATION_REQUIRED` を返した場合は、案内された
+対象限定の dry-run を確認し、同じコマンドから `--dry-run` を外して適用します。
+必要な migration は応答の順序に従い、各段階のプレビュー・適用・復旧で同じ
+`--spec` を保持してください。revision 2 は旧 Artifact layout、既存 revision
+3/4 は後続の保存契約を移行します。後続 migration が必要な場合、revision 2
+の完了だけでは継続できません。
+
+証明できる完了済み Step、run identity、進行位置を維持し、欠損・改変された
+証跡は拒否します。完了結果を再生成しません。中断後は同じ対象限定コマンドを
+再実行して復旧します。通常の Flow command は自動 migration を行いません。
+未対応形式の `FLOW_FORMAT_UNSUPPORTED` と authority の整合性エラーを区別します。
+
 <!-- {{data("base.docs.nav")}} -->
 [← プロジェクト構成](project_structure.md) | [設定とカスタマイズ →](configuration.md)
 <!-- {{/data}} -->

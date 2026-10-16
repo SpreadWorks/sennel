@@ -6,6 +6,7 @@ import { CURRENT_FLOW_SCHEMA_REVISION } from "../../lib/flow-schema-revision.js"
 import { Command } from "../../lib/command.js";
 import { Envelope } from "../../lib/flow-envelope.js";
 import { FlowSpecId } from "../../lib/flow-spec-id.js";
+import { isFlowFormatGuidance } from "../../lib/flow-format-error.js";
 import { FLOW_ARTIFACT_VIEW_REGISTRY } from "./artifact-view-registry.js";
 import { ArtifactViewService } from "./artifact-view-service.js";
 import {
@@ -132,6 +133,7 @@ function summaryContractFor(request, localizer) {
 }
 
 function failureFor(error, mode) {
+  if (isFlowFormatGuidance(error)) return Envelope.fail("get", "artifact", error.code, error.message, error.data);
   if (error instanceof ArtifactViewRequestError || error instanceof ArtifactViewSummaryError) {
     return Envelope.fail("get", "artifact", error.code, error.message);
   }
@@ -142,6 +144,7 @@ function failureFor(error, mode) {
 }
 
 function activeContextReadFailure(error) {
+  if (isFlowFormatGuidance(error)) return error;
   // Active target resolution reconstructs the canonical Flow state before the
   // view service can read the requested artifact.  A corrupt attempt history
   // at that boundary is still a canonical artifact read failure, never an AI

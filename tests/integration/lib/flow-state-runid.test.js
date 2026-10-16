@@ -14,14 +14,17 @@ afterEach(() => {
 });
 
 describe("canonical Flow run identity", () => {
-  it("ignores a legacy root flow.json without rewriting its bytes", () => {
+  it("rejects a pre-Version root flow.json without rewriting its bytes", () => {
     root = createTmpDir();
     const file = path.join(root, "specs/001-test/flow.json");
     fs.mkdirSync(path.dirname(file), { recursive: true });
     fs.writeFileSync(file, '{"specId":"001-test"}\n');
     const before = fs.readFileSync(file);
 
-    assert.equal(makeFlowManager(root).loadReadOnly("001-test"), null);
+    assert.throws(
+      () => makeFlowManager(root).loadReadOnly("001-test"),
+      { code: "FLOW_FORMAT_UNSUPPORTED" },
+    );
     assert.deepEqual(fs.readFileSync(file), before);
   });
 

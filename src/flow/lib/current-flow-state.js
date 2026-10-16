@@ -9326,6 +9326,15 @@ export class CurrentFlowStateStore {
     return this.loadSnapshot()?.state ?? null;
   }
 
+  /** Validate an already authenticated snapshot without reading or mutating storage.
+   * Offline format migrations use this after validating original catalog bytes
+   * and projecting only their explicit wire-format differences. */
+  validateActivities(state, activities) {
+    const canonical = this.validator.validate(state);
+    this.#assertJournalConsistency(canonical, activities.map(FlowActivity.canonical));
+    return canonical;
+  }
+
   loadSnapshot() {
     return this.#withLock(() => this.#loadSnapshotUnlocked());
   }

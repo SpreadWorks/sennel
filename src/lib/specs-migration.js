@@ -16,6 +16,8 @@ import { ArtifactAuthoritySlot } from "./artifact-authority.js";
 import { PRODUCT } from "./product.js";
 import {
   FlowArtifactCatalog,
+  FlowArtifactActivityIndex,
+  FlowActivityId,
   FlowArtifactCatalogStore,
   FlowArtifactDescriptor,
   FlowId,
@@ -42,8 +44,10 @@ import {
   MigrationMapping,
   MigrationReport,
 } from "./migration.js";
-import { resolveMigrationSpecRoot } from "./migration-spec-root.js";
-import { CanonicalGateRepairMigrationPreflight } from "./spec-gate-repair-migration.js";
+import { resolveMigrationSpecRoot, MigrationSpecSelection } from "./migration-spec-root.js";
+import { LegacyFlowActivityLedger } from "./legacy-flow-activity.js";
+import { assertMigrationFlowAuthority, MigrationFlowAuthorityPreflight, MigrationFlowIdentity, MigrationFlowIdentityIndex } from "./migration-flow-authority.js";
+import { CanonicalGateRepairMigrationPreflight, inspectCanonicalV3State } from "./spec-gate-repair-migration.js";
 import { CanonicalGateDecisionMigrationPlan } from "./spec-gate-decision-migration.js";
 import { CURRENT_FLOW_SCHEMA_REVISION } from "./flow-schema-revision.js";
 import { buildCurrentFlowDefinition } from "../flow/definition.js";
@@ -51,6 +55,7 @@ import {
   CurrentFlowSpecRecord,
   CurrentFlowState,
   CurrentFlowStateSerializer,
+  CurrentFlowStateStore,
   CurrentFlowStateValidator,
   CurrentFlowVersionStore,
   CanonicalFlowActivityEvidenceWrite,
@@ -2423,35 +2428,11 @@ function collectRegularFiles(directory, relative = "", files = []) {
   return files.sort(codeUnitOrder);
 }
 
-function legacyActivityLedgerBytes(file) {
-  const bytes = fs.readFileSync(file);
-  if (bytes.length === 0) return bytes;
-  const lines = bytes.toString("utf8").split("\n");
-  if (lines.at(-1) !== "") {
-    throw new LegacyFlowMigrationError("INVALID_ACTIVITY_LEDGER", "historical activities.jsonl must end with a newline");
+function legacyActivityLedger(file) {
+  try { return new LegacyFlowActivityLedger(fs.readFileSync(file)); }
+  catch (cause) {
+    throw new LegacyFlowMigrationError("INVALID_ACTIVITY_LEDGER", `historical activities.jsonl is invalid: ${cause.message}`);
   }
-  const normalized = lines.slice(0, -1).map((line, index) => {
-    const value = parseObject(Buffer.from(line, "utf8"), `historical activities.jsonl:${index + 1}`);
-    return Object.hasOwn(value, "reviewPublication") ? value : { ...value, reviewPublication: null };
-  });
-  return Buffer.from(`${normalized.map((entry) => JSON.stringify(entry)).join("\n")}\n`, "utf8");
-}
-
-function legacyActivityRecords(file) {
-  const bytes = legacyActivityLedgerBytes(file);
-  const records = new Map();
-  if (bytes.length === 0) return records;
-  for (const [index, line] of bytes.toString("utf8").trimEnd().split("\n").entries()) {
-    const record = parseObject(Buffer.from(line, "utf8"), `historical activities.jsonl:${index + 1}`);
-    try {
-      const activity = FlowActivity.fromSerialized(record);
-      if (records.has(activity.id)) throw new Error(`duplicate Activity id: ${activity.id}`);
-      records.set(activity.id, activity);
-    } catch (cause) {
-      throw new LegacyFlowMigrationError("INVALID_ACTIVITY_LEDGER", `historical activities.jsonl has an invalid Activity at line ${index + 1}: ${cause.message}`);
-    }
-  }
-  return records;
 }
 
 /** Migration-only proof/conversion for retired independent Spec review files.
@@ -2787,7 +2768,9 @@ class LegacyCanonicalVersionPreflight {
 
   inspect() {
     const catalogValue = parseObject(fs.readFileSync(this.location.catalogFile), "historical artifact-catalog.json");
-    if (!Array.isArray(catalogValue.artifacts)) {
+    if (catalogValue.schemaRevision !== new FlowArtifactCatalog().schemaRevision
+      || Object.keys(catalogValue).some((key) => !["schemaRevision", "artifacts", "hash"].includes(key))
+      || !Array.isArray(catalogValue.artifacts)) {
       throw new LegacyFlowMigrationError("INVALID_VERSION_TARGET", "historical artifact catalog requires artifacts");
     }
     const descriptors = new Map();
@@ -2796,23 +2779,80 @@ class LegacyCanonicalVersionPreflight {
         || !Number.isSafeInteger(descriptor.size) || descriptor.size < 0 || descriptors.has(descriptor.relativePath)) {
         throw new LegacyFlowMigrationError("INVALID_VERSION_TARGET", "historical artifact catalog has an invalid descriptor");
       }
+      normalizedRelative(descriptor.relativePath, "historical artifact path");
       descriptors.set(descriptor.relativePath, descriptor);
+    }
+    const retiredReviewPaths = new Set(legacySpecReviewPaths(this.directory).values());
+    const sourceDescriptors = [];
+    for (const descriptor of descriptors.values()) {
+      if (!retiredReviewPaths.has(descriptor.relativePath)) sourceDescriptors.push(new FlowArtifactDescriptor(descriptor).toJSON());
+      else {
+        const slot = new ArtifactAuthoritySlot(descriptor);
+        if (descriptor.retention !== "permanent" || typeof descriptor.mediaType !== "string" || descriptor.mediaType.trim() === ""
+          || !Object.hasOwn(descriptor, "activityId") || typeof descriptor.migrationMaterialization !== "boolean") {
+          throw new LegacyFlowMigrationError("INVALID_VERSION_TARGET", "historical review descriptor has invalid provenance");
+        }
+        if (descriptor.activityId !== null) FlowActivityId.from(descriptor.activityId);
+        sourceDescriptors.push({ logicalKey: descriptor.logicalKey, kind: slot.kind,
+          relativePath: descriptor.relativePath, hash: descriptor.hash, size: descriptor.size,
+          mediaType: descriptor.mediaType, ...slot.toJSON(), retention: descriptor.retention,
+          activityId: descriptor.activityId, migrationMaterialization: descriptor.migrationMaterialization });
+      }
+    }
+    for (const sourceDescriptor of sourceDescriptors) {
+      const descriptor = descriptors.get(sourceDescriptor.relativePath);
+      if (Object.keys(descriptor).length !== Object.keys(sourceDescriptor).length
+        || Object.keys(sourceDescriptor).some((field) => !Object.hasOwn(descriptor, field))) {
+        throw new LegacyFlowMigrationError("INVALID_VERSION_TARGET", "historical artifact descriptor omits or adds a serialized field");
+      }
+    }
+    const retainedCatalog = new FlowArtifactCatalog({ artifacts: sourceDescriptors.filter((descriptor) => !retiredReviewPaths.has(descriptor.relativePath)) });
+    const authorityClaims = new Set(retainedCatalog.artifacts.map((descriptor) => descriptor.authorityKey()));
+    for (const descriptor of sourceDescriptors.filter((entry) => retiredReviewPaths.has(entry.relativePath))) {
+      const claim = new ArtifactAuthoritySlot(descriptor).claimKey();
+      if (authorityClaims.has(claim)) throw new LegacyFlowMigrationError("INVALID_VERSION_TARGET", "historical catalog has a duplicate retired review authority slot");
+      authorityClaims.add(claim);
+    }
+    sourceDescriptors.sort((left, right) => codeUnitOrder(left.relativePath, right.relativePath) || codeUnitOrder(left.kind, right.kind));
+    if (catalogValue.hash !== sha256(Buffer.from(JSON.stringify({ schemaRevision: catalogValue.schemaRevision, artifacts: sourceDescriptors })))) {
+      throw new LegacyFlowMigrationError("VERSION_CATALOG_INTEGRITY", "historical artifact catalog hash differs from its source content");
     }
     // Inspect every entry for filesystem safety. Some V1 producer output is
     // intentionally noncataloged transient evidence, so only descriptor
     // claims (and legacy review evidence) are hash-bound here.
     collectRegularFiles(this.directory);
-    for (const relativePath of descriptors.keys()) {
-      if (!fs.existsSync(path.join(this.directory, relativePath))) {
+    for (const [relativePath, descriptor] of descriptors) {
+      const file = path.join(this.directory, relativePath);
+      if (!fs.existsSync(file)) {
         throw new LegacyFlowMigrationError("MISSING_VERSION_ARTIFACT", `historical catalog artifact is absent: ${relativePath}`);
+      }
+      const bytes = fs.readFileSync(file);
+      if (sha256(bytes) !== descriptor.hash || bytes.length !== descriptor.size) {
+        throw new LegacyFlowMigrationError("VERSION_ARTIFACT_INTEGRITY", `historical catalog bytes differ: ${relativePath}`);
       }
     }
     for (const required of ["flow.json", "spec.json", "activities.jsonl"]) {
       if (!descriptors.has(required)) throw new LegacyFlowMigrationError("INVALID_VERSION_TARGET", `historical catalog omits ${required}`);
     }
+    for (const [file, key] of [["flow.json", "flow.state"], ["spec.json", "spec.record"], ["activities.jsonl", "flow.activities"]]) {
+      if (descriptors.get(file).logicalKey !== key) throw new LegacyFlowMigrationError("INVALID_VERSION_TARGET", `historical catalog does not bind ${file}`);
+    }
     const specBytes = fs.readFileSync(this.location.specFile);
     const spec = new CurrentFlowSpecRecord(parseObject(specBytes, "historical spec.json"), { specId: this.location.specId.toString() });
-    const state = new CurrentFlowState(parseObject(fs.readFileSync(this.location.flowStateFile), "historical flow.json"), { definition: this.definition });
+    const rawState = parseObject(fs.readFileSync(this.location.flowStateFile), "historical flow.json");
+    const ledger = legacyActivityLedger(this.location.activitiesFile);
+    const activityIndex = FlowArtifactActivityIndex.fromBytes(fs.readFileSync(this.location.activitiesFile));
+    for (const descriptor of retainedCatalog.artifacts) {
+      if (descriptor.activityId !== null) activityIndex.require(descriptor.activityId).assertRelatedArtifact(descriptor);
+    }
+    const state = rawState.schemaRevision === 3
+      ? inspectCanonicalV3State({ state: rawState, projectedActivities: [...ledger.records.values()].map((entry) => entry.toJSON()),
+          originalActivities: [...ledger.records.values()].map((entry) => entry.toJSON()), definition: this.definition })
+      : new CurrentFlowState(rawState, { definition: this.definition });
+    if (rawState.schemaRevision === CURRENT_FLOW_SCHEMA_REVISION) {
+      new CurrentFlowStateStore({ directory: this.location.directory, definition: this.definition })
+        .validateActivities(state, [...ledger.records.values()]);
+    }
     if (!spec.specId.equals(this.location.specId) || state.identity.specId.toString() !== this.location.specId.toString()) {
       throw new LegacyFlowMigrationError("VERSION_IDENTITY_MISMATCH", "historical Version state/spec identity does not match its directory");
     }
@@ -2824,7 +2864,7 @@ class LegacyCanonicalVersionPreflight {
         specId: this.location.specId.toString(),
         specBytes,
         descriptors,
-        activities: legacyActivityRecords(this.location.activitiesFile),
+        activities: ledger.records,
         lifecycle: state.lifecycle.state,
       });
       if (conversion.classification === "absent"
@@ -2850,7 +2890,8 @@ class LegacyCanonicalVersionPreflight {
       descriptors,
       state,
       specBytes,
-      activitiesBytes: legacyActivityLedgerBytes(this.location.activitiesFile),
+      activitiesBytes: ledger.bytes,
+      requiredRevisions: Object.freeze(rawState.schemaRevision === 3 ? [3] : []),
       conversion,
       unprovenReview,
     });
@@ -2871,7 +2912,7 @@ export class CanonicalRevisionRootTransaction {
     this.faultInjector = faultInjector;
     this.specDirectory = path.join(this.root, ...specRoot.relativePath.split("/"), this.specId);
     this.journalDirectory = journalDirectoryFor(this.root);
-    this.journalPath = path.join(this.journalDirectory, `${sha256(Buffer.from(`${specRoot.relativePath}\0${this.specId}\0${revision === 2 ? "revision-root" : `revision-root-${revision}`}`, "utf8"))}.json`);
+    this.journalPath = path.join(this.journalDirectory, new MigrationSpecSelection(this.specId).journalFileName(specRoot, revision));
     Object.freeze(this);
   }
 
@@ -2880,7 +2921,10 @@ export class CanonicalRevisionRootTransaction {
   }
 
   #validateRoot(directory, repositoryRoot = this.root) {
-    for (const version of this.#versions(directory)) {
+    const states = [];
+    const versions = this.#versions(directory);
+    let currentState = null;
+    for (const version of versions) {
       const location = new FlowVersionLocation({
         repositoryRoot,
         authorityScope: FlowVersionAuthorityScope.canonical(),
@@ -2891,9 +2935,13 @@ export class CanonicalRevisionRootTransaction {
       if (location.directory !== path.join(directory, version)) {
         throw new Error("canonical revision staging location does not mirror its repository authority");
       }
-      if (this.revision === 4 && !fs.existsSync(location.resolve(
-        "artifacts/migration/spec-gate-decision-v4/flow.json",
-      ))) continue;
+      const rawState = parseObject(fs.readFileSync(location.flowStateFile), "staged Flow state");
+      states.push(rawState);
+      if (location.version.value === 1) currentState = rawState;
+      if (this.revision === 2 && rawState.schemaRevision === 3) {
+        new CanonicalGateRepairMigrationPreflight({ location, definition: this.definition }).inspect();
+        continue;
+      }
       validateExistingVersion({
         root: repositoryRoot,
         specRoot: this.specRoot,
@@ -2901,10 +2949,12 @@ export class CanonicalRevisionRootTransaction {
         version,
         definition: this.definition,
       });
-      if (this.revision === 3 && location.version.value === 1) {
-        new CurrentFlowVersionStore({ location, definition: this.definition }).load();
+      if (location.version.value === 1) {
+        const pending = new CanonicalGateDecisionMigrationPlan({ location, definition: this.definition }).inspect();
+        if (pending === null) new CurrentFlowVersionStore({ location, definition: this.definition }).load();
       }
     }
+    assertMigrationFlowAuthority({ root: this.root, specRoot: this.specRoot, specId: this.specId, states, versions: versions.map(Number), currentState });
   }
 
   #preflight() {
@@ -3175,7 +3225,16 @@ export class CanonicalRevisionRootTransaction {
         version: Number(version),
       });
       const activitiesFile = path.join(directory, "activities.jsonl");
+      const activityArchives = [];
       if (!fs.readFileSync(activitiesFile).equals(plan.activitiesBytes)) {
+        for (const file of ["activities.jsonl", "artifact-catalog.json"]) {
+          const relativePath = `artifacts/migration/legacy-activity-v1/${file}`;
+          writeExclusive(location.resolve(relativePath), fs.readFileSync(location.resolve(file)));
+          activityArchives.push(FlowArtifactDescriptor.fromFile({ location,
+            authoritySlot: migrationSlot(relativePath), relativePath,
+            mediaType: file.endsWith(".jsonl") ? "application/x-ndjson" : "application/json",
+            retention: "permanent", migrationMaterialization: true }));
+        }
         fs.writeFileSync(activitiesFile, plan.activitiesBytes, { mode: 0o600 });
       }
       const legacyPaths = plan.conversion === null ? plan.unprovenReview.paths : plan.conversion.legacyPaths;
@@ -3229,6 +3288,7 @@ export class CanonicalRevisionRootTransaction {
           return new FlowArtifactDescriptor({ ...entry, hash: sha256(currentBytes), size: currentBytes.length });
         });
       const additions = [
+        ...activityArchives,
         revisionDescriptorForBytes("spec.snapshot", parameters, bytes),
         ...(reviewBytes === null ? [] : [revisionDescriptorForBytes("spec.review", parameters, reviewBytes)]),
         ...archivedDescriptors,
@@ -3275,6 +3335,14 @@ export class CanonicalRevisionRootTransaction {
     const stageExists = lstatOrNull(stage) !== null;
     const backupExists = lstatOrNull(backup) !== null;
     if (dryRun) return Object.freeze({ specId: transaction.specId, requiresRecovery: true, state: { sourceExists, stageExists, backupExists } });
+    const authorityRoot = backupExists ? backup : source;
+    if (lstatOrNull(authorityRoot) !== null) {
+      const versions = canonicalVersionDirectories(authorityRoot);
+      const states = versions.map((version) =>
+        parseObject(fs.readFileSync(path.join(authorityRoot, version, "flow.json")), "recovery Flow identity"));
+      const currentState = states[versions.indexOf("001")] ?? null;
+      assertMigrationFlowAuthority({ root, specRoot, specId: transaction.specId, states, versions: versions.map(Number), currentState });
+    }
     const clear = () => { fs.unlinkSync(journalPath); removeEmptyJournalDirectory(path.dirname(journalPath)); };
     if (sourceExists && stageExists && !backupExists) {
       if (!sameIdentity(directoryIdentity(source, "canonical revision migration source"), sourceIdentity)
@@ -3287,6 +3355,7 @@ export class CanonicalRevisionRootTransaction {
       if (!sameIdentity(directoryIdentity(backup, "canonical revision migration backup"), sourceIdentity)
         || !sameIdentity(directoryIdentity(stage, "canonical revision migration stage"), stageIdentity)
         || treeFingerprint(backup) !== journal.sourceHash || treeFingerprint(stage) !== journal.stageHash) throw new Error("canonical revision migration recovery bytes do not match journal");
+      transaction.#validateRoot(stage, stageContainer);
       fs.renameSync(stage, source); transaction.#validateRoot(source);
       fs.rmSync(backup, { recursive: true, force: true }); fs.rmSync(stageContainer, { recursive: true, force: true }); clear();
       return Object.freeze({ specId: transaction.specId, recovered: "placed-staging" });
@@ -3313,6 +3382,12 @@ export class CanonicalRevisionRootTransaction {
     // The proof plan is built before even a journal directory is created.
     // Dry-run and apply therefore share the same lifecycle/blocker decision.
     const plans = this.#preflight();
+    const sourceVersions = this.#versions(this.specDirectory);
+    const sourceStates = sourceVersions.map((version) =>
+      plans.get(version)?.state ?? parseObject(fs.readFileSync(path.join(this.specDirectory, version, "flow.json")), "migration source Flow"));
+    const currentState = sourceStates[sourceVersions.indexOf("001")] ?? null;
+    const assertAuthority = () => assertMigrationFlowAuthority({ root: this.root, specRoot: this.specRoot, specId: this.specId, states: sourceStates, versions: sourceVersions.map(Number), currentState });
+    assertAuthority();
     fs.mkdirSync(this.journalDirectory, { recursive: true, mode: 0o755 });
     assertRealDirectory(this.journalDirectory, "specs migration journal directory");
     const token = crypto.randomUUID();
@@ -3339,6 +3414,7 @@ export class CanonicalRevisionRootTransaction {
       journaled = true;
       this.faultInjector({ phase: "journal-written", transaction: this });
       if (treeFingerprint(this.specDirectory) !== sourceHash) throw new LegacyFlowMigrationError("SOURCE_CHANGED", "canonical spec root changed during revision migration");
+      assertAuthority();
       fs.renameSync(this.specDirectory, backup);
       this.faultInjector({ phase: "source-backed-up", transaction: this });
       fs.renameSync(stage, this.specDirectory);
@@ -3349,7 +3425,9 @@ export class CanonicalRevisionRootTransaction {
       fs.rmSync(stageContainer, { recursive: true, force: true });
       fs.unlinkSync(this.journalPath);
       removeEmptyJournalDirectory(this.journalDirectory);
-      return Object.freeze({ specId: this.specId, complete: true });
+      const requiredRevisions = [...new Set([...plans.values()].flatMap((plan) => plan?.requiredRevisions ?? []))];
+      return Object.freeze({ specId: this.specId, complete: true, requiredRevisions,
+        continuationReady: requiredRevisions.length === 0 });
     } catch (error) {
       if (!journaled) {
         if (fs.existsSync(stageContainer)) fs.rmSync(stageContainer, { recursive: true, force: true });
@@ -3737,18 +3815,18 @@ export class SpecsMigrationTransaction {
     // transaction must not materialize the canonical managed root, because
     // that would make a later layout migration incorrectly become a no-op.
     this.journalDirectory = journalDirectoryFor(this.root);
-    this.journalPath = path.join(this.journalDirectory, `${sha256(Buffer.from(`${specRoot.relativePath}\0${this.specId}`, "utf8"))}.json`);
+    this.journalPath = path.join(this.journalDirectory, new MigrationSpecSelection(this.specId).journalFileName(specRoot));
     this.faultInjector = faultInjector;
     Object.freeze(this);
   }
 
-  static recoverAll({ root, specRoot, dryRun }) {
+  static recoverAll({ root, specRoot, dryRun, selection = MigrationSpecSelection.from(null) }) {
     const journalDirectory = journalDirectoryFor(root);
     const stat = lstatOrNull(journalDirectory);
     if (stat === null) return Object.freeze([]);
     if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error("specs migration recovery directory is unsafe");
     const recoveries = [];
-    for (const entry of fs.readdirSync(journalDirectory, { withFileTypes: true })) {
+    for (const entry of selection.recoveryEntries(specRoot, journalDirectory)) {
       if (!entry.isFile() || entry.isSymbolicLink() || !entry.name.endsWith(".json")) throw new Error("specs migration recovery directory contains an unsafe entry");
       const journalPath = path.join(journalDirectory, entry.name);
       const journal = new AtomicJsonFile(journalPath).read(null);
@@ -4145,7 +4223,7 @@ class HistoricalCanonicalVersionValidator {
     if (!spec.specId.equals(this.location.specId)) {
       throw new LegacyFlowMigrationError("VERSION_IDENTITY_MISMATCH", "historical canonical spec identity does not match its Version root");
     }
-    const catalog = new FlowArtifactCatalog(parseObject(fs.readFileSync(this.location.catalogFile), "historical artifact-catalog.json"));
+    const catalog = FlowArtifactCatalog.fromSerialized(parseObject(fs.readFileSync(this.location.catalogFile), "historical artifact-catalog.json"));
     // `verify` proves descriptor path/hash/size and proves there is no
     // untracked catalog-managed file before a staged tree can be swapped.
     catalog.verify(this.location);
@@ -4217,6 +4295,10 @@ function validateExistingVersion({ root, specRoot, specId, version, definition, 
     specId,
     version: Number.parseInt(version, 10),
   });
+  const raw = parseObject(fs.readFileSync(location.flowStateFile), "canonical Flow state");
+  if (raw.schemaRevision === 3 && fs.existsSync(location.artifact("spec.snapshot", { revision: "001" }))) {
+    return new CanonicalGateRepairMigrationPreflight({ location, definition }).inspect().state;
+  }
   if (location.version.value !== 1) {
     return new HistoricalCanonicalVersionValidator({
       root, specRoot, specId, version, definition, allowPreRevisionMigration,
@@ -4251,9 +4333,10 @@ function rootEntryBlocker(code, entry, message) {
 
 /** Public revision implementation registered by `sennel migrate specs --to 1`. */
 export class SpecsMigrationRevisionOne {
-  constructor(root, { dryRun = false, logger = console, targetRevision = 1 } = {}) {
+  constructor(root, { dryRun = false, logger = console, targetRevision = 1, specId = null } = {}) {
     this.root = path.resolve(root);
     this.dryRun = dryRun === true;
+    this.selection = MigrationSpecSelection.from(specId);
     if (targetRevision !== 1 && targetRevision !== 2) throw new Error("Specs migration target revision is invalid");
     this.targetRevision = targetRevision;
     if (!logger || typeof logger.log !== "function" || typeof logger.error !== "function") {
@@ -4271,15 +4354,15 @@ export class SpecsMigrationRevisionOne {
       return { complete: false };
     }
     const specRoot = resolved.root;
-    const recovery = SpecsMigrationTransaction.recoverAll({ root: this.root, specRoot, dryRun: this.dryRun });
+    const recovery = SpecsMigrationTransaction.recoverAll({ root: this.root, specRoot, dryRun: this.dryRun, selection: this.selection });
     if (recovery.some((entry) => entry.requiresRecovery)) {
       for (const entry of recovery) this.logger.error(`spec ${entry.specId}: RECOVERY_REQUIRED`);
       return { complete: false, requiresRecovery: true };
     }
-    const rootStat = lstatOrNull(specRoot.path);
-    if (rootStat === null) return { complete: true };
-    if (!rootStat.isDirectory() || rootStat.isSymbolicLink()) {
-      this.logger.error("SPEC_ROOT_INVALID: resolved spec root must be a real directory");
+    let entries;
+    try { entries = this.selection.entries(specRoot); }
+    catch (error) {
+      this.logger.error(`${error.code ?? "SPEC_ROOT_INVALID"}: ${error.message}`);
       return { complete: false };
     }
     const candidates = [];
@@ -4287,7 +4370,7 @@ export class SpecsMigrationRevisionOne {
     const failures = [];
     const existingVersions = [];
     const revisionPreflights = new Map();
-    for (const entry of fs.readdirSync(specRoot.path, { withFileTypes: true }).sort((left, right) => codeUnitOrder(left.name, right.name))) {
+    for (const entry of entries) {
       const directory = path.join(specRoot.path, entry.name);
       if (entry.isSymbolicLink()) {
         failures.push(rootEntryBlocker("UNSAFE_SPEC_ROOT_ENTRY", entry, "spec root contains a symbolic-link entry"));
@@ -4320,6 +4403,7 @@ export class SpecsMigrationRevisionOne {
         failures.push({ specId, blocker: new MigrationBlocker({ code: error.code ?? "INVALID_VERSION_TARGET", path: specId, message: error.message }) });
         continue;
       }
+      const validVersions = new Set();
       for (const version of versions) {
         try {
           const location = new FlowVersionLocation({
@@ -4339,6 +4423,7 @@ export class SpecsMigrationRevisionOne {
           });
           if (preflight !== null) revisionPreflights.set(`${specId}/${version}`, preflight);
           existingVersions.push({ specId, version, state, path: `${specId}/${version}` });
+          validVersions.add(version);
         } catch (error) {
           failures.push({
             specId,
@@ -4352,7 +4437,8 @@ export class SpecsMigrationRevisionOne {
       }
       if (versions.length > 0) {
         const rootEntries = fs.readdirSync(directory);
-        const extra = rootEntries.filter((name) => !versions.includes(name));
+        const versionNames = new Set(versions);
+        const extra = rootEntries.filter((name) => !versionNames.has(name));
         if (extra.length > 0) {
           failures.push({
             specId,
@@ -4364,14 +4450,16 @@ export class SpecsMigrationRevisionOne {
           });
           continue;
         }
-        if (this.dryRun && versions.every((version) => existingVersions.some((record) => record.specId === specId && record.version === version))) {
+        if (this.dryRun && versions.every((version) => validVersions.has(version))) {
           const needsRevision = this.targetRevision >= 2 && versions.some((version) => !fs.existsSync(path.join(directory, version, "revisions", "001", "spec.json")));
           this.logger.log(JSON.stringify({
             component: "specs",
             specId,
             classification: needsRevision ? "versioned-v1-to-v2" : "versioned",
             versions,
-            ...(needsRevision ? {
+            ...(needsRevision ? { continuationReady: false,
+              requiredRevisions: [...new Set(versions.flatMap((version) => [2, ...(revisionPreflights.get(`${specId}/${version}`)?.requiredRevisions ?? [])]))],
+
               reviewConversions: versions.flatMap((version) => {
                 const preflight = revisionPreflights.get(`${specId}/${version}`);
                 if (preflight === undefined) return [];
@@ -4401,7 +4489,24 @@ export class SpecsMigrationRevisionOne {
         failures.push({ specId, blocker: new MigrationBlocker({ code: error.code ?? "UNSUPPORTED_LEGACY_FLOW", path: `${specId}/flow.json`, message: error.message }) });
       }
     }
-    this.#markIdentityCollisions(candidates, existingVersions, failures);
+    const records = [...existingVersions,
+      ...candidates.map((candidate) => ({ specId: candidate.source.specId, state: candidate.state, version: "001" }))];
+    const recordsBySpec = new Map();
+    for (const record of records) {
+      if (!recordsBySpec.has(record.specId)) recordsBySpec.set(record.specId, []);
+      recordsBySpec.get(record.specId).push(record);
+    }
+    const authorityPreflight = new MigrationFlowAuthorityPreflight({ root: this.root, specRoot });
+    for (const [specId, members] of recordsBySpec) {
+      try {
+        authorityPreflight.assert({ specId, states: members.map((entry) => entry.state),
+          versions: members.map((entry) => Number(entry.version)),
+          currentState: members.find((entry) => entry.version === "001")?.state ?? null });
+      } catch (error) {
+        failures.push({ specId, blocker: new MigrationBlocker({ code: error.code ?? "FLOW_TARGET_AUTHORITY_CORRUPT", path: specId, message: error.message }) });
+      }
+    }
+    this.#markIdentityCollisions(records, failures, specRoot);
     const blocked = new Set(failures.map((entry) => entry.specId));
     for (const candidate of candidates) {
       if (blocked.has(candidate.source.specId)) continue;
@@ -4430,59 +4535,42 @@ export class SpecsMigrationRevisionOne {
       }
     }
     for (const failure of failures) this.logger.error(`spec ${failure.specId}: ${failure.blocker.toString()}`);
-    return { complete: failures.length === 0 };
+    const failedSpecs = new Set(failures.map((failure) => failure.specId));
+    const assessments = this.dryRun ? [] : [...recordsBySpec.keys()]
+      .filter((specId) => !failedSpecs.has(specId))
+      .map((specId) => inspectFlowMigrationRequirements({ root: this.root, specRoot, specId, definition: this.definition }))
+      .filter((assessment) => assessment.classification === "migratable").map((assessment) => assessment.toJSON());
+    return { complete: failures.length === 0, assessments };
   }
 
-  #markIdentityCollisions(candidates, existingVersions, failures) {
-    const records = [
-      ...existingVersions.map((entry) => ({ specId: entry.specId, path: entry.path, state: entry.state })),
-      ...candidates.map((candidate) => ({ specId: candidate.source.specId, path: candidate.source.specId, state: candidate.state })),
-    ];
-    const reported = new Set(failures.map((failure) => `${failure.specId}\0${failure.blocker.code}\0${failure.blocker.path ?? ""}`));
-    const reportPair = (code, value, left, right, message) => {
-      for (const record of [left, right]) {
-        const key = `${record.specId}\0${code}\0${record.path}`;
-        if (reported.has(key)) continue;
-        reported.add(key);
-        failures.push({
-          specId: record.specId,
-          blocker: new MigrationBlocker({ code, path: record.path, message: `${message}: ${value}` }),
-        });
+  #markIdentityCollisions(records, failures, specRoot) {
+    const identities = records.map((record) => new MigrationFlowIdentity(record.state, specRoot.relativePath, Number(record.version)));
+    const index = new MigrationFlowIdentityIndex(identities);
+    const reported = new Map();
+    for (const failure of failures) {
+      if (!reported.has(failure.specId)) reported.set(failure.specId, new Set());
+      reported.get(failure.specId).add(failure.blocker.code);
+    }
+    for (const identity of identities) {
+      if (!reported.has(identity.specId)) reported.set(identity.specId, new Set());
+      const codes = reported.get(identity.specId);
+      for (const error of index.collisionsFor(identity)) {
+        if (codes.has(error.code)) continue;
+        codes.add(error.code);
+        failures.push({ specId: identity.specId, blocker: new MigrationBlocker({
+          code: error.code, path: identity.specId, message: error.message }) });
       }
-    };
-    const global = (code, valueFor, message, permitted = () => false) => {
-      const seen = new Map();
-      for (const record of records) {
-        const value = valueFor(record.state);
-        const prior = seen.get(value);
-        if (prior !== undefined && !permitted(prior, record)) reportPair(code, value, prior, record, message);
-        else if (prior === undefined) seen.set(value, record);
-      }
-    };
-    // One logical Flow may have multiple revisions for the same spec. It may
-    // never cross a spec boundary, and a concrete (flowId, Version) pair is
-    // unique repository-wide.
-    global(
-      "FLOW_ID_CROSS_SPEC_COLLISION",
-      (state) => state.flowId,
-      "flowId is shared across different spec identities",
-      (left, right) => left.specId === right.specId,
-    );
-    global(
-      "FLOW_VERSION_TUPLE_COLLISION",
-      (state) => `${state.flowId}@${state.version}`,
-      "flowId and Version pair is already materialized",
-    );
-    global("FLOW_VERSION_ID_COLLISION", (state) => state.flowVersionId, "flowVersionId is already claimed");
-    global("RUN_ID_COLLISION", (state) => state.runId, "runId is already claimed");
+    }
   }
+
 }
 
 /** Shared discovery and transaction policy for canonical revision migrations. */
 class CanonicalRevisionMigrationRunner {
-  constructor(root, { dryRun = false, logger = console } = {}) {
+  constructor(root, { dryRun = false, logger = console, specId = null } = {}) {
     this.root = path.resolve(root);
     this.dryRun = dryRun === true;
+    this.selection = MigrationSpecSelection.from(specId);
     this.logger = logger;
     this.definition = buildCurrentFlowDefinition();
     Object.freeze(this);
@@ -4501,21 +4589,22 @@ class CanonicalRevisionMigrationRunner {
     }
     const specRoot = resolved.root;
     const recovery = SpecsMigrationTransaction.recoverAll({
-      root: this.root, specRoot, dryRun: this.dryRun,
+      root: this.root, specRoot, dryRun: this.dryRun, selection: this.selection,
     });
     if (recovery.some((entry) => entry.requiresRecovery)) {
       for (const entry of recovery) this.logger.error(`spec ${entry.specId}: RECOVERY_REQUIRED`);
       return { complete: false, requiresRecovery: true };
     }
-    const stat = lstatOrNull(specRoot.path);
-    if (stat === null) return { complete: true };
-    if (!stat.isDirectory() || stat.isSymbolicLink()) {
-      this.logger.error("SPEC_ROOT_INVALID: resolved spec root must be a real directory");
+    let entries;
+    try { entries = this.selection.entries(specRoot); }
+    catch (error) {
+      this.logger.error(`${error.code ?? "SPEC_ROOT_INVALID"}: ${error.message}`);
       return { complete: false };
     }
     const candidates = [];
     const failures = [];
-    for (const entry of fs.readdirSync(specRoot.path, { withFileTypes: true }).sort((a, b) => codeUnitOrder(a.name, b.name))) {
+    const authorityPreflight = new MigrationFlowAuthorityPreflight({ root: this.root, specRoot });
+    for (const entry of entries) {
       if (!entry.isDirectory() || entry.isSymbolicLink()) continue;
       let specId;
       try { specId = FlowSpecIdentity.from(entry.name).toString(); }
@@ -4538,6 +4627,9 @@ class CanonicalRevisionMigrationRunner {
           });
           plans.push(this.inspectVersion({ location, version, specRoot, specId }));
         }
+        const states = versions.map((version) => parseObject(fs.readFileSync(path.join(directory, version, "flow.json")), "migration source Flow"));
+        authorityPreflight.assert({ specId,
+          states, versions: versions.map(Number), currentState: states[versions.indexOf("001")] ?? null });
         if (this.dryRun) {
           this.logger.log(JSON.stringify({ component: "specs", specId, versions: plans }));
         } else if (plans.some((plan) => plan.classification === this.migrationClassification)) {
@@ -4556,7 +4648,11 @@ class CanonicalRevisionMigrationRunner {
     for (const { specId, error } of failures) {
       this.logger.error(`spec ${specId}: ${error.code ?? this.blockedCode}: ${error.message}`);
     }
-    return { complete: failures.length === 0 };
+    const failedSpecs = new Set(failures.map((failure) => failure.specId));
+    const assessments = this.dryRun ? [] : candidates.filter((candidate) => !failedSpecs.has(candidate.specId))
+      .map((candidate) => inspectFlowMigrationRequirements({ root: this.root, specRoot, specId: candidate.specId, definition: this.definition }))
+      .filter((assessment) => assessment.classification === "migratable").map((assessment) => assessment.toJSON());
+    return { complete: failures.length === 0, assessments };
   }
 }
 
@@ -4596,5 +4692,99 @@ export class SpecsMigrationRevisionFour extends CanonicalRevisionMigrationRunner
     }
     return { version, classification: this.migrationClassification,
       legacyQuestionCount: plan.oldActivityIds.length };
+  }
+}
+
+/** Public read-only classification. Runtime may report this value but cannot
+ * use it to read legacy state or execute a migration. */
+export class FlowMigrationAssessment {
+  constructor({ classification, specId, sourceContract = null, requiredRevisions = [], code = null, message = null, cause = null }) {
+    if (!["current", "absent", "migratable", "unsupported", "integrity-error"].includes(classification)) throw new TypeError("unknown Flow migration classification");
+    FlowSpecIdentity.from(specId);
+    if (!Array.isArray(requiredRevisions) || requiredRevisions.some((revision, index) => ![2, 3, 4].includes(revision)
+      || (index > 0 && requiredRevisions[index - 1] >= revision))) throw new TypeError("Flow migration revisions must be ordered and unique");
+    if ((classification === "migratable") !== (requiredRevisions.length > 0)) throw new TypeError("only migratable Flow may require revisions");
+    this.classification = classification;
+    this.specId = specId;
+    this.sourceContract = sourceContract ?? (classification === "absent" ? null : "unrecognized-persisted-flow");
+    this.requiredRevisions = Object.freeze([...requiredRevisions]);
+    this.code = code;
+    this.message = message ?? (classification === "migratable"
+      ? `Flow ${specId} requires explicit specs migration revision(s) ${requiredRevisions.join(", ")}; canonical data is unchanged. Preview: sennel migrate specs --to ${requiredRevisions[0]} --spec ${specId} --dry-run`
+      : null);
+    if (this.sourceContract !== null && (typeof this.sourceContract !== "string" || this.sourceContract.trim() === "")) throw new TypeError("Flow migration source contract must be nonempty");
+    if (["migratable", "unsupported", "integrity-error"].includes(classification)
+      && (typeof this.message !== "string" || this.message.trim() === "")) throw new TypeError("Flow migration diagnosis requires a message");
+    this.cause = cause;
+    Object.freeze(this);
+  }
+
+  toJSON() {
+    const migrations = this.requiredRevisions.map((revision) => {
+      const command = `sennel migrate specs --to ${revision} --spec ${this.specId}`;
+      return { revision, dryRunCommand: `${command} --dry-run`, applyCommand: command };
+    });
+    return { specId: this.specId, sourceContract: this.sourceContract,
+      requiredRevisions: this.requiredRevisions, targetMigrationRevision: this.requiredRevisions[0] ?? null,
+      dryRunCommand: migrations[0]?.dryRunCommand ?? null, migrations,
+      canonicalChanged: false, continuationReady: this.classification === "current" };
+  }
+}
+
+export function inspectFlowMigrationRequirements({ root, specRoot, specId, version = 1, definition = buildCurrentFlowDefinition() }) {
+  let sourceContract = null;
+  const result = (classification, options = {}) => new FlowMigrationAssessment({ classification, specId, sourceContract, ...options });
+  try {
+    const resolved = specRoot === undefined ? resolveMigrationSpecRoot(root) : { root: { relativePath: typeof specRoot === "string" ? specRoot : specRoot.relativePath } };
+    if (resolved.blocker) throw new Error(resolved.blocker.toString());
+    const location = new FlowVersionLocation({ repositoryRoot: root, authorityScope: FlowVersionAuthorityScope.canonical(),
+      specRoot: resolved.root.relativePath, specId, version: Number(version) });
+    const directory = path.dirname(location.directory);
+    if (!fs.existsSync(location.directory)) {
+      return fs.existsSync(path.join(directory, "flow.json"))
+        ? result("unsupported", { code: "FLOW_FORMAT_UNSUPPORTED", message: "pre-Version Flow requires explicit historical migration" })
+        : result("absent");
+    }
+    assertRealDirectory(directory, "Flow spec root");
+    const versions = canonicalVersionDirectories(directory);
+    if (fs.existsSync(path.join(directory, "flow.json"))) throw new LegacyFlowMigrationError("SOURCE_TARGET_CONFLICT", "legacy flow.json and Version directories coexist");
+    if (fs.readdirSync(directory).some((entry) => !versions.includes(entry))) throw new LegacyFlowMigrationError("MIXED_VERSION_ROOT", "canonical spec root contains non-Version entries");
+    assertRealDirectory(location.directory, "Flow Version");
+    const raw = parseObject(fs.readFileSync(location.flowStateFile), "flow.json");
+    sourceContract = `${fs.existsSync(location.artifact("spec.snapshot", { revision: "001" })) ? "spec-revision-layout" : "versioned-v1-artifact-layout"}/flow-schema-${raw.schemaRevision}`;
+    if (raw.version !== 1 || ![3, CURRENT_FLOW_SCHEMA_REVISION].includes(raw.schemaRevision)) {
+      return result("unsupported", { code: "FLOW_FORMAT_UNSUPPORTED", message: `unsupported persisted Flow contract: ${sourceContract}` });
+    }
+    const required = new Set();
+    const states = [];
+    let currentState = null;
+    for (const memberVersion of versions) {
+      const member = memberVersion === location.version.pathSegment ? location : new FlowVersionLocation({
+        repositoryRoot: root, authorityScope: FlowVersionAuthorityScope.canonical(),
+        specRoot: resolved.root.relativePath, specId, version: Number(memberVersion) });
+      const state = member === location ? raw : parseObject(fs.readFileSync(member.flowStateFile), "flow.json");
+      if (state.version !== 1 || ![3, CURRENT_FLOW_SCHEMA_REVISION].includes(state.schemaRevision)) {
+        return result("unsupported", { code: "FLOW_FORMAT_UNSUPPORTED", message: `unsupported Flow schema in Version ${memberVersion}: ${state.schemaRevision}` });
+      }
+      states.push(state);
+      if (member.version.value === 1) currentState = state;
+      if (!fs.existsSync(member.artifact("spec.snapshot", { revision: "001" }))) {
+        const plan = new LegacyCanonicalVersionPreflight({ directory: member.directory, location: member, definition }).inspect();
+        for (const revision of [2, ...plan.requiredRevisions]) required.add(revision);
+      } else if (state.schemaRevision === 3) {
+        new CanonicalGateRepairMigrationPreflight({ location: member, definition }).inspect();
+        required.add(3);
+      } else {
+        const plan = new CanonicalGateDecisionMigrationPlan({ location: member, definition }).inspect();
+        if (plan !== null) required.add(4);
+        else if (member.version.value === 1) new CurrentFlowVersionStore({ location: member, definition }).load();
+        else validateExistingVersion({ root, specRoot: resolved.root, specId, version: memberVersion, definition });
+      }
+    }
+    assertMigrationFlowAuthority({ root, specRoot: resolved.root, specId, states, versions: versions.map(Number), currentState });
+    const requiredRevisions = [...required].sort((left, right) => left - right);
+    return result(requiredRevisions.length > 0 ? "migratable" : "current", { requiredRevisions });
+  } catch (cause) {
+    return result("integrity-error", { code: cause.code ?? "FLOW_INTEGRITY_ERROR", message: cause.message, cause });
   }
 }

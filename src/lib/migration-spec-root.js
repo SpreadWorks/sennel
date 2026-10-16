@@ -1,9 +1,15 @@
 import fs from "node:fs";
 import path from "node:path";
+import { createHash } from "node:crypto";
 
 import { MigrationBlocker } from "./migration.js";
+import { FlowSpecId } from "./flow-spec-id.js";
 import { LEGACY_MANAGED_DIRECTORY_NAMES } from "./legacy-managed-directory-migration.js";
 import { PRODUCT } from "./product.js";
+
+function compareEntryNames(left, right) {
+  return left.name < right.name ? -1 : left.name > right.name ? 1 : 0;
+}
 
 function readObject(filePath, label) {
   let value;
@@ -115,3 +121,56 @@ export function resolveMigrationSpecRoot(root) {
 }
 
 export { LEGACY_MANAGED_DIRECTORY_NAMES };
+
+/** One literal spec, or the existing project-wide migration selection. */
+export class MigrationSpecSelection {
+  constructor(specId = null) {
+    this.specId = specId === null ? null : FlowSpecId.from(specId).toString();
+    Object.freeze(this);
+  }
+
+  static from(specId) {
+    return specId instanceof MigrationSpecSelection ? specId : new MigrationSpecSelection(specId);
+  }
+
+  entries(specRoot) {
+    let stat;
+    try { stat = fs.lstatSync(specRoot.path); }
+    catch (error) {
+      if (error.code !== "ENOENT") throw error;
+      if (this.specId === null) return [];
+      throw this.#failure("SPEC_NOT_FOUND", `selected spec does not exist: ${this.specId}`);
+    }
+    if (!stat.isDirectory() || stat.isSymbolicLink() || fs.realpathSync(specRoot.path) !== path.resolve(specRoot.path)) {
+      throw this.#failure("SPEC_ROOT_INVALID", "resolved spec root must be a real directory");
+    }
+    const entries = fs.readdirSync(specRoot.path, { withFileTypes: true });
+    if (this.specId === null) return entries.sort(compareEntryNames);
+    const selected = entries.find((entry) => entry.name === this.specId);
+    if (!selected) throw this.#failure("SPEC_NOT_FOUND", `selected spec does not exist: ${this.specId}`);
+    if (!selected.isDirectory() || selected.isSymbolicLink()) {
+      throw this.#failure("UNSAFE_SPEC_ROOT_ENTRY", `selected spec must be a real directory: ${this.specId}`);
+    }
+    return [selected];
+  }
+
+  journalFileName(specRoot, revision = 1) {
+    if (this.specId === null) throw new Error("migration journal identity requires one spec");
+    if (![1, 2, 3, 4].includes(revision)) throw new Error("migration journal revision is invalid");
+    const suffix = revision === 1 ? "" : `\0${revision === 2 ? "revision-root" : `revision-root-${revision}`}`;
+    return `${createHash("sha256").update(`${specRoot.relativePath}\0${this.specId}${suffix}`).digest("hex")}.json`;
+  }
+
+  recoveryEntries(specRoot, journalDirectory) {
+    const entries = fs.readdirSync(journalDirectory, { withFileTypes: true });
+    const names = this.specId === null ? null : new Set([1, 2, 3, 4].map((revision) => this.journalFileName(specRoot, revision)));
+    return entries.filter((entry) => names === null || names.has(entry.name))
+      .sort(compareEntryNames);
+  }
+
+  #failure(code, message) {
+    const error = new Error(message);
+    error.code = code;
+    return error;
+  }
+}

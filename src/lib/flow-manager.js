@@ -27,6 +27,7 @@ import { WorktreeFlowBindingStore } from "./worktree-flow-binding.js";
 import { RepositoryFlowOperationLock } from "./repository-maintenance-lock.js";
 import { bindFlowStateLocation, DEFAULT_FLOW_SPEC_DIR, FlowWorkspace } from "./flow-workspace.js";
 import { FlowVersion } from "./flow-version.js";
+import { isFlowFormatGuidance } from "./flow-format-error.js";
 import {
   CanonicalFlowCreateRequest,
   CanonicalFlowManagerStore,
@@ -1498,6 +1499,7 @@ export class FlowManager {
         state = resolved?.state ?? null;
       }
     } catch (cause) {
+      if (isFlowFormatGuidance(cause)) throw cause;
       throw new FlowTargetRecoveryError(
         identity,
         `selected flow target state is corrupt or unreadable: ${identity.runId}`,

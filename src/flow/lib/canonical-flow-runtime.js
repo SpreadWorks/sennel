@@ -9,6 +9,7 @@ import { SPEC_GATE_REPAIR_RECOVERY_OPERATION } from "./spec-gate-repair-recovery
 
 import { DEFAULT_FLOW_SPEC_DIR, FlowWorkspace } from "../../lib/flow-workspace.js";
 import { FlowVersion } from "../../lib/flow-version.js";
+import { diagnoseFlowFormat, isFlowFormatError } from "../../lib/flow-format-error.js";
 import {
   ActivityTransition,
   CurrentAttemptIdentity,
@@ -180,26 +181,26 @@ export class CanonicalFlowRuntime {
   }
 
   load(specId) {
-    return this.store(specId).load();
+    return this.#read(specId, (store) => store.load(), { stateRead: true });
   }
 
   loadSnapshot(specId) {
-    return this.store(specId).loadSnapshot();
+    return this.#read(specId, (store) => store.loadSnapshot(), { stateRead: true, allowAbsent: true });
   }
   readCurrentSpecReview(specId, input = {}) {
-    return this.store(specId).readCurrentSpecReview(input);
+    return this.#read(specId, (store) => store.readCurrentSpecReview(input));
   }
   readLatestSpecReview(specId, view = null) {
-    return this.store(specId).readLatestSpecReview(view);
+    return this.#read(specId, (store) => store.readLatestSpecReview(view));
   }
   readCurrentSpecReviewInput(specId) {
-    return this.store(specId).readCurrentSpecReviewInput();
+    return this.#read(specId, (store) => store.readCurrentSpecReviewInput());
   }
   loadTransitionSnapshot(specId) {
-    return this.store(specId).loadTransitionSnapshot();
+    return this.#read(specId, (store) => store.loadTransitionSnapshot());
   }
   readCanonicalTransitionView(specId, read) {
-    return this.store(specId).readCanonicalTransitionView(read);
+    return this.#read(specId, (store) => store.readCanonicalTransitionView(read));
   }
 
   assertWritable(specId) {
@@ -211,11 +212,29 @@ export class CanonicalFlowRuntime {
   }
 
   activities(specId) {
-    return this.store(specId).activities();
+    return this.#read(specId, (store) => store.activities());
   }
 
   catalog(specId) {
-    return this.store(specId).catalog();
+    return this.#read(specId, (store) => store.catalog());
+  }
+
+  #read(specId, read, { stateRead = false, allowAbsent = false } = {}) {
+    const store = this.store(specId);
+    let result;
+    try {
+      result = read(store);
+    } catch (cause) {
+      if (isFlowFormatError(cause)) throw cause;
+      const error = diagnoseFlowFormat({ location: store.location, definition: this.definition, cause, allowAbsent });
+      if (error === null) return null;
+      throw error;
+    }
+    if (stateRead && result === null) {
+      const error = diagnoseFlowFormat({ location: store.location, definition: this.definition });
+      if (error !== null) throw error;
+    }
+    return result;
   }
 
   apply(specId, activity, {

@@ -34,6 +34,7 @@ const [subCmd, ...rest] = rawArgs;
 const recoveryWithoutFlowAttribution = subCmd === "flow"
   && rest[0] === "run"
   && rest[1] === "abort";
+const flowAttribution = subCmd === "docs" || subCmd === "migrate" || recoveryWithoutFlowAttribution ? "none" : "ambient";
 let agentWorkDirOverride = null;
 const enableFinalizeCleanupDurablePaths = FinalizeCleanupRoute
   .fromCliArgs(rawArgs)
@@ -73,7 +74,7 @@ function helpTopic(head, args) {
 }
 
 async function renderSharedHelp(argv) {
-  initContainer({ entryCommand: rawArgs.join(" "), allowInvalidConfig: true });
+  initContainer({ entryCommand: rawArgs.join(" "), allowInvalidConfig: true, flowAttribution });
   const { renderHelp } = await import("./help.js");
   console.log(await renderHelp({ root: process.cwd(), argv }));
   process.exit(0);
@@ -92,7 +93,7 @@ try {
   initContainer({
     entryCommand: rawArgs.join(" "),
     agentWorkDirOverride,
-    flowAttribution: subCmd === "docs" || recoveryWithoutFlowAttribution ? "none" : "ambient",
+    flowAttribution,
     finalizeCleanupDurablePaths: enableFinalizeCleanupDurablePaths,
     allowInvalidConfig: definition?.allowInvalidConfig === true || !definition,
   });

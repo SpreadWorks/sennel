@@ -211,7 +211,7 @@ export class FlowTargetIdentity {
     return expectation.mismatchAgainst(this.toSelectionJSON()) == null;
   }
 
-  assertState(state) {
+  assertState(state, { specRoot } = {}) {
     let actual;
     try {
       actual = this.preparing
@@ -219,7 +219,7 @@ export class FlowTargetIdentity {
         : FlowTargetIdentity.active(
           state,
           this.mode,
-          FlowVersionRelativeLocation.fromArtifactPath({
+          specRoot ?? FlowVersionRelativeLocation.fromArtifactPath({
             relativeArtifactPath: this.stateLocation,
             logicalKey: "flow.state",
           }).specRoot,
@@ -446,7 +446,12 @@ export class FlowTargetIdentityAuthority {
   }
 
   snapshot() {
-    const current = readAuthority(authorityPath(this._mainRoot));
+    return FlowTargetIdentityAuthority.readSnapshot(this._mainRoot);
+  }
+
+  /** Read authority at an already resolved mainRoot without mutation infrastructure. */
+  static readSnapshot(mainRoot) {
+    const current = readAuthority(authorityPath(mainRoot));
     return new FlowTargetIdentitySnapshot({ entries: current.document.entries, revision: current.revision });
   }
 
