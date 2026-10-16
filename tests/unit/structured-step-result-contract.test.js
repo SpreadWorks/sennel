@@ -31,6 +31,9 @@ import { ReviewDisposition, ReviewEvidence } from "../../src/flow/lib/review-con
 import {
   ReviewWorkUnitManifest, ReviewWorkUnitOutput, ReviewWorkUnitSeal,
 } from "../../src/flow/lib/review-work-unit-values.js";
+import { ArtifactWorkerRecoverySelection } from "../../src/flow/lib/artifact-worker-recovery-selection.js";
+import { ArtifactWorkerRecoveryEvidence } from "../../src/flow/lib/artifact-worker-recovery-values.js";
+import { FlowExecutionContract } from "../../src/flow/lib/flow-execution-contract.js";
 
 const LEAVES = Object.freeze(["approval", "test-generate", "test-review", "test-repair", "test-gate"]);
 // Frozen expectations from a1ee / 8e30 section 3. This table is deliberately
@@ -55,6 +58,12 @@ const CLOSED_RESULTS = Object.freeze([
   ...LEAVES.slice(1).map((leaf) => [leaf, `${leaf}-tooling-unavailable`, "loop-required"]),
   ...LEAVES.slice(1, 4).map((leaf) => [leaf, `${leaf}-external-blocked`, "error"]),
   ...LEAVES.map((leaf) => [leaf, `${leaf}-error`, "error"]),
+].map(Object.freeze));
+// 5d2fd96be adds execution recovery without changing the semantic contracts
+// above. These operations carry acquired recovery evidence, not test operands.
+const RECOVERY_RESULTS = Object.freeze([
+  ["test-generate", "test-generate-execution-recovery-required", "loop-required"],
+  ["test-repair", "test-repair-execution-recovery-required", "loop-required"],
 ].map(Object.freeze));
 const FORBIDDEN = Object.freeze([
   "target", "targetStepId", "effect", "effects", "connector", "wholePlan", "plan",
@@ -119,7 +128,8 @@ function settle(result) {
 
 test("02 registry is closed for all five leaves and reuses StepErrorResult only for common errors", () => {
   const actual = engine.STEP_RESULT_REGISTRY.filter((entry) => LEAVES.includes(entry.stepId));
-  assert.deepEqual(actual.map(({ stepId, kind, type }) => [stepId, kind, type]).sort(), [...CLOSED_RESULTS].sort());
+  assert.deepEqual(actual.map(({ stepId, kind, type }) => [stepId, kind, type]).sort(),
+    [...CLOSED_RESULTS, ...RECOVERY_RESULTS].sort());
   const semanticClasses = new Set();
   for (const [leaf, kind, type] of CLOSED_RESULTS) {
       const ResultClass = registered(leaf, kind, type);
@@ -130,6 +140,97 @@ test("02 registry is closed for all five leaves and reuses StepErrorResult only 
       semanticClasses.add(ResultClass);
     }
   }
+});
+
+function recoverySelection(stepId) {
+  const sourceContract = new FlowExecutionContract({
+    runId: "run-result-contract", specId: "result-contract", stepId,
+    attemptId: `attempt-${stepId}`, attemptSequence: 3, generation: 0,
+    inputRevision: hash("recovery-input"), runtimeRevision: "saved-runtime",
+    promptDigest: hash("recovery-prompt"), schemaDigest: hash("recovery-schema"),
+  });
+  const targetContract = new FlowExecutionContract({
+    ...sourceContract.toJSON(), generation: 1, runtimeRevision: "current-runtime",
+  });
+  return new ArtifactWorkerRecoveryEvidence({
+    sourceContract, targetContract, requestDigest: hash("source-request"),
+    targetRequestDigest: hash("target-request"), physicalEvidenceDigest: hash("stopped-worker"),
+    budget: { providerCallCount: 1, synthesisCallCount: 0, aggregateCharacters: 128, aggregateItemCount: 1 },
+    sourceDispatchInvocationId: "source-dispatch", targetDispatchInvocationId: "target-dispatch",
+  }).selection();
+}
+
+for (const [leaf, kind, type] of RECOVERY_RESULTS) {
+  test(`02 ${kind}: saved typed recovery selects only its own execution recovery Settlement`, () => {
+    const ResultClass = registered(leaf, kind, type);
+    const evidence = recoverySelection(leaf);
+    const result = engine.artifactWorkerRecoveryResult(leaf, evidence);
+    assert.equal(result.constructor, ResultClass);
+    assert.notEqual(ResultClass, engine.StepErrorResult);
+    assert.equal(result.stepId, leaf);
+    assert.equal(result.kind, kind);
+    assert.equal(result.type, type);
+    const stored = json(result);
+    assert.deepEqual(stored, { kind, type, evidence: evidence.toJSON() });
+    const restored = engine.rehydrateStepResult(leaf, stored);
+    assert.equal(restored.constructor, ResultClass);
+    assert.equal(restored.evidence.constructor, ArtifactWorkerRecoverySelection);
+    assert.notEqual(restored.evidence, evidence);
+    assert.ok(Object.isFrozen(restored.evidence));
+    assert.deepEqual(restored.toJSON(), stored);
+    assert.equal(engine.stepResultDigest(restored), engine.stepResultDigest(result));
+
+    const selected = definition.settleArtifactWorkerRecoveryResult(leaf, restored);
+    assert.equal(selected.constructor, definition.ArtifactWorkerRecoverySettlement);
+    assert.ok(selected instanceof definition.StepSettlement);
+    assert.equal(selected.resultKind, kind);
+    assert.equal(selected.resultType, type);
+    assert.deepEqual(selected.toJSON(), {
+      kind: "execution-recovery", sourceStepId: leaf, previewDigest: evidence.previewDigest,
+    });
+    assert.deepEqual(selected.toJSON(), definition.settleArtifactWorkerRecoveryResult(leaf, result).toJSON());
+    assert.equal("connector" in selected, false);
+    assert.equal("targetStepId" in selected, false);
+    assert.deepEqual(restored.toJSON(), stored, "selection preserves the saved evidence");
+    assert.throws(() => definition.settleRequirementTestStepResult(leaf, restored), TypeError);
+
+    const otherLeaf = leaf === "test-generate" ? "test-repair" : "test-generate";
+    assert.throws(() => engine.artifactWorkerRecoveryResult(otherLeaf, evidence), TypeError);
+    assert.throws(() => engine.rehydrateStepResult(otherLeaf, stored), TypeError);
+    assert.throws(() => definition.settleArtifactWorkerRecoveryResult(otherLeaf, restored), TypeError);
+    assert.throws(() => engine.rehydrateStepResult(leaf,
+      { ...stored, evidence: recoverySelection(otherLeaf).toJSON() }), TypeError);
+  });
+}
+
+test("02 recovery codec refuses generic test operands and unauthenticated replacement evidence", () => {
+  const leaf = "test-generate";
+  const evidence = recoverySelection(leaf);
+  const result = engine.artifactWorkerRecoveryResult(leaf, evidence);
+  const ResultClass = registered(leaf, "test-generate-execution-recovery-required", "loop-required");
+  assert.throws(() => new ResultClass({ evidence: evidence.toJSON() }), TypeError,
+    "live operands require the dedicated selection class");
+  assert.throws(() => new ResultClass(operands()), TypeError,
+    "ordinary requirement test operands cannot authorize recovery");
+  const stored = json(result);
+  for (const mutation of [
+    { type: "completed" }, { binding: operands().binding.toJSON() },
+    { evidence: null }, { evidence: operands().retryState.toJSON() },
+  ]) assert.throws(() => engine.rehydrateStepResult(leaf, { ...stored, ...mutation }), TypeError);
+  for (const mutation of [
+    { targetGeneration: evidence.sourceGeneration },
+    { targetContractId: evidence.sourceContractId },
+    { targetPolicyDigest: hash("changed-policy") },
+    { previewDigest: "untrusted" },
+    { physicalEvidence: {} },
+  ]) assert.throws(() => engine.rehydrateStepResult(leaf,
+    { ...stored, evidence: { ...stored.evidence, ...mutation } }), TypeError);
+  const missing = json(stored);
+  delete missing.evidence.budgetId;
+  assert.throws(() => engine.rehydrateStepResult(leaf, missing), TypeError);
+  assert.throws(() => definition.settleArtifactWorkerRecoveryResult(leaf,
+    new engine.TestGenerateCandidateSavedResult(operands())), TypeError);
+  assert.throws(() => definition.settleArtifactWorkerRecoveryResult(leaf, stored), TypeError);
 });
 
 for (const [leaf, kind, type] of CLOSED_RESULTS) {

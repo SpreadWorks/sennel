@@ -4,12 +4,12 @@ import fs from "fs";
 import { join } from "path";
 import { spawnSync } from "child_process";
 import { createTmpDir, removeTmpDir, writeJson } from "../support/builders/tmp-dir.js";
+import { deploySkills } from "../../src/lib/skills.js";
 import { resolveIncludes } from "../../src/lib/include.js";
 import { stripDataMarkers } from "../../src/docs/lib/directive-parser.js";
 import { loadRules, expandSkillRulesDirectives } from "../../src/lib/skill-rules.js";
 
 const CMD = join(process.cwd(), "src/sennel.js");
-const CMD_ARGS_PREFIX = ["setup"];
 const PKG_DIR = join(process.cwd(), "src");
 const SKILL_SOURCES_DIR = join(PKG_DIR, "skills");
 const MAX_SKILL_SOURCES = 64;
@@ -45,19 +45,46 @@ function assertSkillNamesUseNamespace(skillNames, label) {
   }
 }
 
-function assertDeployedSkillFiles(skillsDir) {
-  const skillNames = fs.readdirSync(skillsDir);
-  assert.ok(
-    skillNames.length <= MAX_SKILL_SOURCES,
-    `expected at most ${MAX_SKILL_SOURCES} deployed skills under ${skillsDir}`,
-  );
-  for (const skillName of skillNames) {
-    const skillPath = join(skillsDir, skillName, "SKILL.md");
-    assert.ok(fs.existsSync(skillPath), `${skillPath} should exist`);
-    const stat = fs.lstatSync(skillPath);
-    assert.ok(!stat.isSymbolicLink(), `${skillPath} should not be a symlink`);
-    assert.ok(stat.isFile(), `${skillPath} should be a regular file`);
+function assertRegularFile(filePath) {
+  const stat = fs.lstatSync(filePath);
+  assert.equal(stat.isSymbolicLink(), false, `${filePath} should not be a symlink`);
+  assert.equal(stat.isFile(), true, `${filePath} should be a regular file`);
+}
+
+function assertNoSymlinks(directory) {
+  const stat = fs.lstatSync(directory);
+  assert.equal(stat.isSymbolicLink(), false, `${directory} should not be a symlink`);
+  if (stat.isDirectory()) {
+    for (const entry of fs.readdirSync(directory)) assertNoSymlinks(join(directory, entry));
   }
+}
+
+function assertDeployedSkillFiles(workRoot) {
+  const expectedNames = listSkillSourceNames().sort();
+  for (const base of [".claude", ".agents"]) {
+    assertNoSymlinks(join(workRoot, base));
+    const skillsDir = join(workRoot, base, "skills");
+    const skillNames = fs.readdirSync(skillsDir).sort();
+    assert.deepEqual(skillNames, expectedNames, `${skillsDir} should contain every bundled skill`);
+    assertSkillNamesUseNamespace(skillNames, `${base}/skills`);
+    for (const skillName of skillNames) {
+      const skillRoot = join(skillsDir, skillName);
+      assert.equal(fs.lstatSync(skillRoot).isDirectory(), true, `${skillRoot} should be a real directory`);
+      assertRegularFile(join(skillRoot, "SKILL.md"));
+    }
+  }
+}
+
+function runSetup(workRoot, extraArgs = []) {
+  const result = spawnSync(process.execPath, [CMD, "setup", ...NI_ARGS, ...extraArgs], {
+    encoding: "utf8",
+    cwd: workRoot,
+    timeout: 10000,
+    env: { ...process.env, SENNEL_WORK_ROOT: workRoot, SENNEL_SOURCE_ROOT: workRoot },
+  });
+  assert.equal(result.error, undefined, result.stderr);
+  assert.equal(result.signal, null, result.stderr);
+  assert.equal(result.status, 0, `stderr: ${result.stderr}\nstdout: ${result.stdout}`);
 }
 
 describe("051: skill namespace with dot separator", () => {
@@ -83,70 +110,22 @@ describe("051: skill namespace with dot separator", () => {
     });
   });
 
-  describe("setup deploys skills without symlinks", () => {
-    it("copies skills directly to .claude/skills/ and .agents/skills/", () => {
+  describe("bundled skill deployment", () => {
+    it("deploySkills copies the exact bundled set as regular files with expanded content to both targets", () => {
       tmp = createTmpDir();
-      writeJson(tmp, "package.json", { name: "test-proj" });
-
-      const result = spawnSync("node", [CMD, ...CMD_ARGS_PREFIX, ...NI_ARGS], {
-        encoding: "utf8",
-        cwd: tmp,
-        timeout: 10000,
-        env: { ...process.env, SENNEL_WORK_ROOT: tmp, SENNEL_SOURCE_ROOT: tmp },
-      });
-      assert.equal(result.status, 0, `stderr: ${result.stderr}`);
-
-      const claudeSkills = join(tmp, ".claude", "skills");
-      const agentsSkills = join(tmp, ".agents", "skills");
-
-      // Both directories should exist
-      assert.ok(fs.existsSync(claudeSkills), ".claude/skills/ should exist");
-      assert.ok(fs.existsSync(agentsSkills), ".agents/skills/ should exist");
-
-      // Check skill directories use new naming
-      const claudeDirs = fs.readdirSync(claudeSkills);
-      const agentsDirs = fs.readdirSync(agentsSkills);
-      assert.ok(claudeDirs.length > 0, "should have skills in .claude/skills/");
-      assert.ok(agentsDirs.length > 0, "should have skills in .agents/skills/");
-
-      assertSkillNamesUseNamespace(claudeDirs, ".claude/skills");
-      assertSkillNamesUseNamespace(agentsDirs, ".agents/skills");
-    });
-
-    it("skill files are real files, not symlinks", () => {
-      tmp = createTmpDir();
-      writeJson(tmp, "package.json", { name: "test-proj" });
-
-      spawnSync("node", [CMD, ...CMD_ARGS_PREFIX, ...NI_ARGS], {
-        encoding: "utf8",
-        cwd: tmp,
-        timeout: 10000,
-        env: { ...process.env, SENNEL_WORK_ROOT: tmp, SENNEL_SOURCE_ROOT: tmp },
+      writeJson(tmp, ".sennel/config.json", {
+        lang: "en", type: "base", docs: { languages: ["en"], defaultLanguage: "en" },
       });
 
-      const claudeSkills = join(tmp, ".claude", "skills");
-      const agentsSkills = join(tmp, ".agents", "skills");
-      assertDeployedSkillFiles(claudeSkills);
-      assertDeployedSkillFiles(agentsSkills);
-    });
-
-    it("skill content matches bundled skill sources", () => {
-      tmp = createTmpDir();
-      writeJson(tmp, "package.json", { name: "test-proj" });
-
-      spawnSync("node", [CMD, ...CMD_ARGS_PREFIX, ...NI_ARGS], {
-        encoding: "utf8",
-        cwd: tmp,
-        timeout: 10000,
-        env: { ...process.env, SENNEL_WORK_ROOT: tmp, SENNEL_SOURCE_ROOT: tmp },
-      });
-
+      const results = deploySkills(tmp);
       const skillSourceNames = listSkillSourceNames();
+      assert.deepEqual(results.map(({ name }) => name).sort(), [...skillSourceNames].sort());
+      assertDeployedSkillFiles(tmp);
 
+      const rules = loadRules();
       for (const skillName of skillSourceNames) {
         const sourceFile = resolveSkillFile(skillName);
         const rawContent = fs.readFileSync(sourceFile, "utf8");
-        // Resolve includes + skill-rule expansion + marker strip to match what deploySkills actually writes (spec 252).
         const includedContent = resolveIncludes(rawContent, {
           baseDir: join(SKILL_SOURCES_DIR, skillName),
           pkgDir: PKG_DIR,
@@ -154,82 +133,41 @@ describe("051: skill namespace with dot separator", () => {
           presetsDir: join(PKG_DIR, "presets"),
           sourceFile,
         });
-        const expandedContent = expandSkillRulesDirectives(includedContent, loadRules());
-        const sourceContent = stripDataMarkers(expandedContent);
-        const claudeContent = fs.readFileSync(join(tmp, ".claude", "skills", skillName, "SKILL.md"), "utf8");
-        const agentsContent = fs.readFileSync(join(tmp, ".agents", "skills", skillName, "SKILL.md"), "utf8");
-        assert.equal(claudeContent, sourceContent, `.claude/skills/${skillName}/SKILL.md should match skill source`);
-        assert.equal(agentsContent, sourceContent, `.agents/skills/${skillName}/SKILL.md should match skill source`);
+        const sourceContent = stripDataMarkers(expandSkillRulesDirectives(includedContent, rules));
+        for (const base of [".claude", ".agents"]) {
+          const skillPath = join(tmp, base, "skills", skillName, "SKILL.md");
+          const content = fs.readFileSync(skillPath, "utf8");
+          assert.equal(content, sourceContent, `${skillPath} should match the expanded skill source`);
+          assert.doesNotMatch(content, /<!-- include\(/, `${skillPath} should have no unresolved includes`);
+        }
       }
     });
   });
 
-  describe("AGENTS.md / CLAUDE.md independent management", () => {
-    it("setup creates AGENTS.md as a real file (not symlink) in non-interactive mode", () => {
+  describe("setup agent instruction generation", () => {
+    it("setup --agent claude,codex generates both instruction files and deploys skills as regular files", () => {
       tmp = createTmpDir();
       writeJson(tmp, "package.json", { name: "test-proj" });
 
-      spawnSync("node", [CMD, ...CMD_ARGS_PREFIX, ...NI_ARGS], {
-        encoding: "utf8",
-        cwd: tmp,
-        timeout: 10000,
-        env: { ...process.env, SENNEL_WORK_ROOT: tmp, SENNEL_SOURCE_ROOT: tmp },
-      });
+      runSetup(tmp, ["--agent", "claude,codex"]);
 
-      const agentsPath = join(tmp, "AGENTS.md");
-      if (fs.existsSync(agentsPath)) {
-        const stat = fs.lstatSync(agentsPath);
-        assert.ok(!stat.isSymbolicLink(), "AGENTS.md should not be a symlink");
+      assertDeployedSkillFiles(tmp);
+      for (const name of ["AGENTS.md", "CLAUDE.md"]) {
+        const instructionPath = join(tmp, name);
+        assertRegularFile(instructionPath);
+        assert.match(fs.readFileSync(instructionPath, "utf8"), /<!-- \{\{data\("agents\.flow"\)\}\} -->/);
       }
     });
 
-    it("setup creates CLAUDE.md as a real file (not symlink) in non-interactive mode", () => {
+    it("setup without --agent deploys skills without generating instruction files", () => {
       tmp = createTmpDir();
       writeJson(tmp, "package.json", { name: "test-proj" });
 
-      spawnSync("node", [CMD, ...CMD_ARGS_PREFIX, ...NI_ARGS], {
-        encoding: "utf8",
-        cwd: tmp,
-        timeout: 10000,
-        env: { ...process.env, SENNEL_WORK_ROOT: tmp, SENNEL_SOURCE_ROOT: tmp },
-      });
+      runSetup(tmp);
 
-      const claudePath = join(tmp, "CLAUDE.md");
-      if (fs.existsSync(claudePath)) {
-        const stat = fs.lstatSync(claudePath);
-        assert.ok(!stat.isSymbolicLink(), "CLAUDE.md should not be a symlink");
-      }
-    });
-
-    it("setup does not create any symlinks", () => {
-      tmp = createTmpDir();
-      writeJson(tmp, "package.json", { name: "test-proj" });
-
-      spawnSync("node", [CMD, ...CMD_ARGS_PREFIX, ...NI_ARGS], {
-        encoding: "utf8",
-        cwd: tmp,
-        timeout: 10000,
-        env: { ...process.env, SENNEL_WORK_ROOT: tmp, SENNEL_SOURCE_ROOT: tmp },
-      });
-
-      // Recursively check no symlinks exist
-      function checkNoSymlinks(dir) {
-        if (!fs.existsSync(dir)) return;
-        for (const entry of fs.readdirSync(dir)) {
-          const full = join(dir, entry);
-          const stat = fs.lstatSync(full);
-          assert.ok(!stat.isSymbolicLink(), `${full} should not be a symlink`);
-          if (stat.isDirectory()) checkNoSymlinks(full);
-        }
-      }
-      checkNoSymlinks(join(tmp, ".claude"));
-      checkNoSymlinks(join(tmp, ".agents"));
-      // Check root-level md files
-      for (const f of ["CLAUDE.md", "AGENTS.md"]) {
-        const p = join(tmp, f);
-        if (fs.existsSync(p)) {
-          assert.ok(!fs.lstatSync(p).isSymbolicLink(), `${f} should not be a symlink`);
-        }
+      assertDeployedSkillFiles(tmp);
+      for (const name of ["AGENTS.md", "CLAUDE.md"]) {
+        assert.equal(fs.existsSync(join(tmp, name)), false, `${name} should require --agent`);
       }
     });
   });

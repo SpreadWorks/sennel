@@ -12,7 +12,7 @@ import { CanonicalFlowFixture, makeFlowManager } from "../../../support/infrastr
 import { createTmpDir, removeTmpDir } from "../../../support/builders/tmp-dir.js";
 
 const SENNEL = path.resolve("src/sennel.js");
-const SPECIMEN = path.resolve("specs/6a9b5488-flow-help-contract/001/spec.json");
+const SPECIMEN = path.resolve("tests/fixtures/artifact-summary-original-spec/spec.json");
 const SPECIMEN_HASH = "df142f1dd06136fdfe83763037bc53d338d135943844cb533002d42497a238bc";
 const LIMIT = 60_000;
 const SUMMARY_KINDS = ["purpose", "scope", "constraints", "openQuestions", "requirement", "task"];

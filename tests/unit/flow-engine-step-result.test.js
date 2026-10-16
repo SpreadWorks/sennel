@@ -161,6 +161,14 @@ test("StepResult is abstract and every concrete Result has one unique fixed cont
     ["ReportGeneratedResult", "report", "report-generated", "completed"],
     ...finalizationPhaseResultContracts.filter(({ type }) => type !== "error")
       .map(({ stepId, className, kind, type }) => [className, stepId, kind, type]),
+    // 5d2fd96be: interrupted artifact execution is an operation on these
+    // existing producers. Gate repair retains its separate execution contract.
+    ...[
+      "draft", "draft-questions-triage", "draft-questions-repair", "draft-refine",
+      "draft-gate-repair", "draft-coverage-triage", "draft-coverage-repair", "spec",
+      "spec-triage", "spec-repair", "test-generate", "test-repair",
+    ].map((stepId) => ["ArtifactWorkerRecoveryRequiredResult", stepId,
+      `${stepId}-execution-recovery-required`, "loop-required"]),
     ...[
       "draft", "branch", "prepare-spec", "spec", "spec-gate-repair", "spec-triage", "spec-repair", "spec-gate", "spec-review", "draft-questions-review", "draft-questions-triage", "draft-questions-repair", "draft-refine",
       "draft-coverage-review", "draft-coverage-triage", "draft-coverage-repair", "draft-gate", "draft-gate-repair", "approval", "test-generate", "test-repair", "test-review", "test-gate",

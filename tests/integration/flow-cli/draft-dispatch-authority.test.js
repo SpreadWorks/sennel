@@ -6,7 +6,9 @@ import { describe, it } from "node:test";
 import { DraftService } from "../../../src/flow/services/draft-service.js";
 import { StepPersistenceFailure, STEP_RESULT_ERROR_PERSISTENCE_FAILURE_CODE } from "../../../src/flow/lib/definition-lifecycle-failure.js";
 import { AgentAuthenticationFailure } from "../../../src/lib/agent-failure.js";
-import { FlowExecutionContract } from "../../../src/flow/lib/flow-execution-contract.js";
+import { FlowExecutionContract, executionValueDigest } from "../../../src/flow/lib/flow-execution-contract.js";
+import { FLOW_ARTIFACT_CONTRACTS } from "../../../src/lib/flow-artifact-contract.js";
+import { PromptExecutionScope } from "../../../src/lib/prompt-execution-journal.js";
 import { FlowManager } from "../../../src/lib/flow-manager.js";
 import { FlowHandoffAuthorityLease } from "../../../src/lib/flow-handoff-authority-lease.js";
 import { FlowTargetBinding } from "../../../src/lib/flow-target-guard.js";
@@ -33,6 +35,7 @@ import {
   installGateProviderFake,
   requestInput,
   requestPayloadPath,
+  withScenarioProviderAdmission,
 } from "../../support/infrastructure/flow-dispatch-scenario.js";
 
 function startDraftFlow(root, suffix) {
@@ -75,12 +78,58 @@ function writeDraftGateRepair(request, replacement) {
   }));
 }
 
+// PromptExecutionProgressPublication owns an immutable event and the matching
+// scope frontier/budget. Authenticate only these contract-scoped changes before
+// excluding their exact paths from the unrelated-artifact equality assertion.
+function assertPromptReservationPublications(flowManager, specId, contract, activities) {
+  const expectedEvents = ["planned", "claimed"];
+  assert.equal(activities.length, expectedEvents.length);
+  const scope = new PromptExecutionScope({ stage: "artifact-worker" });
+  const parameters = { ...contract.parameters, scopeId: executionValueDigest(scope.toJSON()) };
+  const catalog = flowManager.artifactCatalog(specId).toJSON().artifacts;
+  const paths = new Set();
+  let lastEvent;
+  for (const [index, activity] of activities.entries()) {
+    assert.equal(activity.transition.operation, "publish_artifacts");
+    assert.equal(activity.nodeId, contract.nodeId);
+    assert.equal(activity.attemptId, contract.attemptId);
+    assert.equal(activity.sequence, contract.attemptSequence);
+    const descriptors = catalog.filter((entry) => entry.logicalKey === "prompt.execution.event"
+      && entry.activityId === activity.id);
+    assert.equal(descriptors.length, 1);
+    const eventId = path.basename(descriptors[0].relativePath, ".json");
+    const artifact = flowManager.readArtifact({ specId, logicalKey: "prompt.execution.event",
+      parameters: { ...parameters, eventId }, consumerNodeId: "system" });
+    assert.deepEqual(artifact.descriptor, descriptors[0]);
+    const document = JSON.parse(artifact.bytes);
+    assert.equal(document.contractId, contract.id);
+    assert.equal(document.eventId, eventId);
+    assert.equal(document.record.event, expectedEvents[index]);
+    assert.deepEqual(document.record.scope, scope.toJSON());
+    assert.equal(document.record.snapshot.budget.providerCallCount, expectedEvents[index] === "planned" ? 0 : 1);
+    paths.add(artifact.descriptor.relativePath);
+    lastEvent = document;
+  }
+  for (const logicalKey of ["prompt.execution.progress", "prompt.execution.budget"]) {
+    const artifact = flowManager.readArtifact({ specId, logicalKey, consumerNodeId: "system",
+      parameters: logicalKey === "prompt.execution.budget" ? { budgetId: contract.budgetId } : parameters });
+    assert.equal(artifact.descriptor.activityId, activities.at(-1).id);
+    const document = JSON.parse(artifact.bytes);
+    assert.equal(document.contractId, contract.id);
+    assert.equal(document.eventId, lastEvent.eventId);
+    if (logicalKey === "prompt.execution.progress") assert.deepEqual(document, lastEvent);
+    else assert.deepEqual(document.budget, lastEvent.record.snapshot.budget);
+    paths.add(artifact.descriptor.relativePath);
+  }
+  return paths;
+}
+
 function createAgent({ flowManager, specId, onRequest = () => {}, noProgress = false, afterGateRepair = () => {} }) {
   const initialDraft = canonicalDraftDocument({
     goal: "Release handoff authority between conditional Draft workers.",
   });
   const repairedValidation = "Verify a worker-free refinement followed by a worker-backed Gate repair.";
-  return {
+  return withScenarioProviderAdmission({
     repairedValidation,
     async call(_prompt, options) {
       const requestPath = options.executionEnvironment.SENNEL_FLOW_HANDOFF_REQUEST;
@@ -109,7 +158,7 @@ function createAgent({ flowManager, specId, onRequest = () => {}, noProgress = f
       sealWorkerArtifactHandoff({ requestPath, invocationId });
       return JSON.stringify({ sealed: true, requestDigest: requestDocument.requestDigest });
     },
-  };
+  });
 }
 
 async function runReviewCommand(ctx, phase, onDraftSource = () => {}) {
@@ -424,7 +473,8 @@ describe("Draft dispatcher handoff authority lifecycle", { concurrency: false },
       let claimedContract;
       let claimedDescriptor;
       let claimedBytes;
-      const agent = {
+      let promptActivities;
+      const agent = withScenarioProviderAdmission({
         async call(_prompt, options) {
           const request = JSON.parse(fs.readFileSync(options.executionEnvironment.SENNEL_FLOW_HANDOFF_REQUEST));
           calls.push(request);
@@ -435,9 +485,10 @@ describe("Draft dispatcher handoff authority lifecycle", { concurrency: false },
           claimedBytes = artifact.bytes;
           claimedDescriptor = flowManager.artifactCatalog(specId).toJSON().artifacts
             .find((entry) => entry.relativePath === artifact.descriptor.relativePath);
+          promptActivities = flowManager.activityLedger(specId).slice(-2);
           throw new AgentAuthenticationFailure({ message: "Draft provider credentials are unavailable." });
         },
-      };
+      });
       const initial = flowManager.canonicalState(specId).toJSON();
       const catalogBefore = flowManager.artifactCatalog(specId).toJSON().artifacts;
       for (const restarted of [false, true]) {
@@ -465,10 +516,24 @@ describe("Draft dispatcher handoff authority lifecycle", { concurrency: false },
         assert.deepEqual(contractArtifact.bytes, claimedBytes);
         const catalog = manager.artifactCatalog(specId).toJSON().artifacts;
         assert.deepEqual(catalog.find((entry) => entry.relativePath === claimedDescriptor.relativePath), claimedDescriptor);
+        const promptPaths = assertPromptReservationPublications(manager, specId, claimedContract, promptActivities);
+        const requestArtifact = manager.readArtifact({ specId, logicalKey: "execution.request",
+          parameters: claimedContract.parameters, consumerNodeId: "system" });
+        assert.equal(requestArtifact.descriptor.relativePath,
+          FLOW_ARTIFACT_CONTRACTS.resolve("execution.request", claimedContract.parameters).relativePath);
+        assert.equal(requestArtifact.descriptor.activityId, claimedDescriptor.activityId);
+        const snapshot = manager.readArtifactWorkerRequest({ executionContract: claimedContract });
+        assert.deepEqual(snapshot.request, calls[0]);
+        assert.equal(snapshot.requestDigest, executionValueDigest(calls[0]));
+        const executionPaths = new Set([...promptPaths, claimedDescriptor.relativePath, requestArtifact.descriptor.relativePath]);
+        assert.deepEqual(catalog.filter((entry) => executionPaths.has(entry.relativePath))
+          .map((entry) => entry.logicalKey).sort(), ["execution.contract", "execution.request", "prompt.execution.budget",
+          "prompt.execution.event", "prompt.execution.event", "prompt.execution.progress"]);
         const protectedArtifacts = (entries) => entries.filter((entry) =>
-          !["issue.log", "flow.activities", "flow.state"].includes(entry.logicalKey))
+          !["issue.log", "flow.activities", "flow.state"].includes(entry.logicalKey)
+          && !executionPaths.has(entry.relativePath))
           .sort((left, right) => left.relativePath.localeCompare(right.relativePath));
-        assert.deepEqual(protectedArtifacts(catalog), protectedArtifacts([...catalogBefore, claimedDescriptor]));
+        assert.deepEqual(protectedArtifacts(catalog), protectedArtifacts(catalogBefore));
         const producer = manager.activityLedger(specId).find((entry) => entry.id === claimedDescriptor.activityId);
         assert.equal(producer.transition.operation, "publish_artifacts");
         assert.equal(producer.nodeId, "draft");
@@ -495,10 +560,12 @@ describe("Draft dispatcher handoff authority lifecycle", { concurrency: false },
         assert.equal(manager.canonicalState(specId).findNode("draft").result?.stepResult ?? null, null);
         assert.equal(manager.readArtifact({ specId, logicalKey: "draft", consumerNodeId: "draft-gate", optional: true }), null);
         const recorded = manager.activityLedger(specId).slice(activityCount);
-        assert.deepEqual(recorded.map((entry) => entry.transition.operation), ["publish_artifacts", "record_metric", "fail_attempt", "publish_artifacts"]);
+        assert.deepEqual(recorded.map((entry) => entry.transition.operation), [
+          "publish_artifacts", "publish_artifacts", "publish_artifacts", "record_metric", "fail_attempt", "publish_artifacts",
+        ]);
         assert.equal(recorded[0].id, producer.id);
-        assert.equal(recorded[1].metric.callCount, 1);
-        assert.equal(recorded[2].attemptId, before.attempt.id);
+        assert.equal(recorded[3].metric.callCount, 1);
+        assert.equal(recorded[4].attemptId, before.attempt.id);
       }
       assert.deepEqual(calls.map((request) => request.stepId), ["draft"]);
     } finally {

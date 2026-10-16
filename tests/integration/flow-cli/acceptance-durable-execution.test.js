@@ -11,6 +11,7 @@ import { PromptExecutionJournalSnapshot } from "../../../src/lib/prompt-executio
 import { canonicalPlanGateRepairForTarget } from "../../../src/flow/lib/plan-gate-repair.js";
 import { AcceptanceEvidenceExecutionPlan } from "../../../src/flow/lib/run-acceptance-review.js";
 import { PromptExecutionLimit } from "../../../src/lib/prompt-batching.js";
+import { container as runtimeContainer } from "../../../src/lib/container.js";
 import { stableArtifactViewJson } from "../../../src/flow/lib/artifact-view-fingerprint.js";
 import { SeedWorkRoot } from "../../support/builders/seed-work-root.js";
 import { CanonicalScenarioSeed } from "../../support/assertions/canonical-persistence.js";
@@ -163,8 +164,9 @@ describe("Acceptance durable production execution", () => {
 
   it("reconstructs a saved map completion and multiple reduction rounds before scoped final using the same fixed episode", async (t) => {
     const reductionCalls = []; let requestLimit = 16_000;
+    let acceptanceActive = false;
     const scenario = AcceptancePhaseScenario.fromSeed(t, seed, { providerOptions: {
-      promptCharacterLimit: () => scenario.current() === "acceptance-review" ? requestLimit : null },
+      promptCharacterLimit: () => acceptanceActive ? requestLimit : null },
       acceptanceProvider: (prompt, options, active) => {
         const observation = options.jsonSchema?.properties?.observations?.items?.properties;
         if (observation) {
@@ -187,6 +189,8 @@ describe("Acceptance durable production execution", () => {
       `\n${"// Preserve the required behavior and its independently verified branch.\n".repeat(1_000)}`);
     assert.equal((await scenario.runRegistered("retro")).result, "recovered");
     await scenario.advanceTo("acceptance-review");
+    acceptanceActive = true;
+    assert.equal(runtimeContainer.get("agent").promptCharacterLimit, 16_000);
     const initialContext = await scenario.observeAcceptanceInput();
     const initialEvidence = stableArtifactViewJson(initialContext.evidence);
     const attempt = scenario.state().attempt;
@@ -204,6 +208,8 @@ describe("Acceptance durable production execution", () => {
     const completedRequest = scenario.acceptanceProviderCalls[0].prompt;
     requestLimit = 20_000;
     scenario.reload();
+    assert.equal(runtimeContainer.get("agent").promptCharacterLimit, 20_000);
+    assert.equal(episode(scenario).executionLimit.maxRequestCharacters, 16_000);
     const resumedContext = await scenario.observeAcceptanceInput();
     const executionLimit = new PromptExecutionLimit(checkpoint.executionLimit);
     const plans = [initialContext, resumedContext].map((context) => new AcceptanceEvidenceExecutionPlan(context,
