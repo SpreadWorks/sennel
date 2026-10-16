@@ -1,7 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs";
 import { FlowProcessStopEvidence } from "./process-runtime-evidence.js";
-import { ProcessExecutionRuntime, PROCESS_EXECUTION_SCOPE_ENV } from "../../lib/process-execution-runtime.js";
+import { ProcessExecutionRuntime, ProcessExecutionCallAdmission, PROCESS_EXECUTION_SCOPE_ENV } from "../../lib/process-execution-runtime.js";
 import { CURRENT_FLOW_SCHEMA_REVISION } from "../../lib/flow-schema-revision.js";
 import { taskIdForResolvedStep, findActiveNode } from "../definition.js";
 import { StepAdmissionRefusal } from "./step-admission-refusal.js";
@@ -21,9 +21,14 @@ export function captureFlowProcessExecutionBinding(ctx, { executionContract = nu
   const flowState = state === null ? ctx.flowState : ctx.flowManager.loadReadOnly(specId);
   const active = flowState ? findActiveNode(flowState) : null;
   const attempt = state?.attempt ?? null;
+  const outboxBinding = ctx.flowOutboxEntry?.executionBinding ?? null;
+  if (outboxBinding !== null && ["runId", "specId", "flowVersionId"].some((field) => outboxBinding[field] !== state?.[field])) {
+    throw new ProcessExecutionControlFailure("binding-changed", "Outbox execution reference belongs to another Flow Version");
+  }
   return new FlowProcessExecutionBinding({
     runId: state?.runId ?? ctx.preparingFlowState?.runId ?? null,
     specId: state?.specId ?? specId,
+    flowVersionId: state?.flowVersionId ?? null,
     nodeId: attempt?.nodeId ?? active?.stepId ?? null,
     taskId: active === null ? null : taskIdForResolvedStep(active, active.stepId),
     attemptId: attempt?.id ?? null,
@@ -34,6 +39,7 @@ export function captureFlowProcessExecutionBinding(ctx, { executionContract = nu
     workUnitId,
     requestDigest,
     commandId,
+    outboxAttemptId: outboxBinding?.outboxAttemptId ?? null,
   });
 }
 
@@ -129,9 +135,15 @@ class FlowProcessRuntimeAdmission {
       this.runtime = await ProcessExecutionRuntime.acquire({ mainRoot: authority.mainRoot,
         executionRoot: authority.executionRoot, runId: authority.runId, specId: authority.specId, binding: null });
     }
-    return admissions.run(this, () => this.runtime.enter(() =>
-      this.runtime.withBinding(this.runtime.borrowed ? this.runtime.binding
-        : captureFlowProcessExecutionBinding(ctx, bindingOptions), callback)));
+    const binding = this.runtime.borrowed ? this.runtime.binding : captureFlowProcessExecutionBinding(ctx, bindingOptions);
+    const callAdmission = new ProcessExecutionCallAdmission({ admit: ({ binding: requested }) => {
+      if (requested.value?.attemptId != null) {
+        const session = ctx.flowManager.prepareExecutionObservationSession({ specId: requested.value.specId, binding: requested });
+        if (session === null) throw new ProcessExecutionControlFailure("observation-save-failed",
+          "Managed execution requires its exact saved observation source");
+      }
+    } });
+    return admissions.run(this, () => this.runtime.enter(() => this.runtime.withBinding(binding, callback, { callAdmission })));
   }
 
   assertAuthority(authority) {

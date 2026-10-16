@@ -1,4 +1,12 @@
 import { offlineExternalGitHubScript } from "../../support/fakes/github.js";
+import { FlowManager } from "../../../src/lib/flow-manager.js";
+import { Container } from "../../../src/lib/container.js";
+import { Command } from "../../../src/lib/command.js";
+import { dispatch } from "../../../src/lib/dispatcher.js";
+import { ProcessExecutionRuntime } from "../../../src/lib/process-execution-runtime.js";
+import { runManagedCmdAsync } from "../../../src/lib/process.js";
+import { withFlowProcessRuntime } from "../../../src/flow/lib/process-runtime-admission.js";
+import { FlowOutboxStore, FlowOutboxRecoveryClaim, finalizationOutboxIdentity } from "../../../src/flow/lib/flow-outbox.js";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
@@ -24,6 +32,80 @@ function externalGitHubFixture(flow, controls) {
 }
 
 export function registerFinalizationRecoveryContracts(scenario) {
+  test("F09 exact Outbox recovery binds the resumed process to its replacement Attempt and retains the Outbox origin", async (t) => {
+    const flow = scenario(t);
+    await flow.advanceTo("finalize-commit");
+    const { root, manager, specId } = flow;
+    const origin = manager.canonicalState(specId);
+    const identity = finalizationOutboxIdentity(manager.loadReadOnly(specId), "finalize-commit");
+    const hook = path.join(root, ".git", "hooks", "pre-commit");
+    fs.writeFileSync(hook, "#!/bin/sh\nprintf 'controlled commit interruption\\n' >&2\nexit 1\n", { mode: 0o755 });
+    const failed = await flow.runRegistered("finalize-commit");
+    assert.equal(failed.ok, false, JSON.stringify(failed));
+    fs.unlinkSync(hook);
+    flow.reload();
+    const beginning = new FlowOutboxStore(manager, { specId }).status(identity);
+    assert.equal(beginning.status, "failed");
+    const failure = beginning.failure;
+    assert.equal(manager.canonicalState(specId).attempt.failure.message, failure);
+    flow.close({ retainRoot: true });
+
+    // Discard the producer manager and reconstruct both failed records before
+    // the normal exact recovery transition creates the replacement Step Attempt.
+    const restored = new FlowManager({ root, mainRoot: root, inWorktree: false });
+    const restoredStore = new FlowOutboxStore(restored, { specId });
+    const context = () => ({ root, mainRoot: root, executionRoot: root, specId,
+      flowManager: restored, flowState: restored.loadReadOnly(specId) });
+    let replacement;
+    let executions = 0;
+    class ResumedCommand extends Command {
+      static outputMode = "envelope";
+      buildContext(input) { return { ...context(), ...input }; }
+      async execute(ctx) {
+        const admitted = ProcessExecutionRuntime.current().binding.toJSON();
+        assert.equal(admitted.attemptId, replacement.attempt.id, "dispatcher captures the post-recovery Attempt");
+        assert.equal(admitted.attemptSequence, replacement.attempt.sequence);
+        assert.equal(admitted.outboxAttemptId, beginning.executionBinding.outboxAttemptId);
+        return withFlowProcessRuntime(ctx, async () => {
+          executions += 1;
+          const result = await runManagedCmdAsync(process.execPath, ["-e", "process.stdout.write('resumed')"], { cwd: root, timeout: 20000 });
+          return { stdout: result.stdout };
+        }, { commandId: "resumed-outbox-operation" });
+      }
+    }
+    const container = new Container();
+    container.register("config", {});
+    let output = "";
+    let exitCode;
+    await dispatch({ container, entry: { args: {}, requiresFlow: false,
+      command: async () => ({ default: ResumedCommand }),
+      pre(ctx) {
+        ctx.flowOutboxEntry = restoredStore.reopenFailedExact(new FlowOutboxRecoveryClaim({ identity,
+          attempt: beginning.attempt, failure }));
+        replacement = restored.canonicalState(specId);
+        assert.notEqual(replacement.attempt.id, origin.attempt.id);
+        assert.equal(replacement.attempt.sequence, origin.attempt.sequence + 1);
+      } },
+      argv: [], envelopeType: "run", envelopeKey: "resumed-outbox-operation", buildHookCtx: context,
+      stdout: value => { output += value; }, stderr() {}, setExitCode: value => { exitCode = value; } });
+    assert.equal(exitCode, 0, output);
+    assert.equal(JSON.parse(output).data.stdout, "resumed");
+    assert.equal(executions, 1);
+    const history = ProcessExecutionRuntime.readHistoricalInventory({ mainRoot: root, executionRoot: root,
+      runId: replacement.runId, specId });
+    const calls = history.executions.flatMap(execution => execution.calls)
+      .filter(call => call.binding.outboxAttemptId === beginning.executionBinding.outboxAttemptId);
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].binding.attemptId, replacement.attempt.id);
+    assert.equal(calls[0].binding.attemptSequence, replacement.attempt.sequence);
+    assert.equal(calls[0].binding.executionContractId, null);
+    assert.equal(calls[0].binding.outboxAttemptId, beginning.executionBinding.outboxAttemptId);
+    const savedOutbox = new FlowOutboxStore(new FlowManager({ root, mainRoot: root, inWorktree: false }), { specId }).status(identity);
+    assert.equal(savedOutbox.executionBinding.attemptId, origin.attempt.id);
+    assert.equal(savedOutbox.executionBinding.outboxAttemptId, calls[0].binding.outboxAttemptId);
+    assert.equal(savedOutbox.attempt, beginning.attempt);
+  });
+
   test("F02 manual approval authorizes only the current durable finalization action", async (t) => {
     const flow = scenario(t);
     const policy = await flow.invokeRegistered("set", "auto", {}, ["off"]);

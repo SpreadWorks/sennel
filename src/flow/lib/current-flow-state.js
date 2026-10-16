@@ -1,3 +1,6 @@
+import { CanonicalPromptResponseAdoption, PromptResponseAdoptionAdmissionValue } from "./prompt-response-adoption.js";
+import { FlowExecutionObservationStore } from "./flow-execution-observation-store.js";
+import { FlowExecutionObservationBinding, FlowExecutionMeasurementReference } from "../../lib/flow-execution-observation.js";
 import { CanonicalFlowArtifactBaseline } from "./canonical-flow-artifact-baseline.js";
 import { CurrentFlowStateInvariantError } from "./current-flow-state-invariant-error.js";
 import { isPlainObject, requireString } from "./current-flow-value-validation.js";
@@ -1332,9 +1335,12 @@ export class ActivityOutbox {
     if (!isPlainObject(value)) throw new CurrentFlowStateInvariantError("activity.outbox must be an object");
     requireExactFields(value, new Set([
       "id", "operation", "attempt", "result", "failure", "failureCode", "recovery", "exactRecoveryReceipt",
+      ...(Object.hasOwn(value, "executionBinding") ? ["executionBinding"] : []),
     ]), "activity.outbox");
+    this.executionBinding = value.executionBinding == null ? null : FlowExecutionObservationBinding.fromJSON(value.executionBinding);
     this.entry = new CurrentFlowOutboxEntry({ id: value.id, operation: value.operation });
     this.attempt = requirePositiveInteger(value.attempt, "activity.outbox.attempt");
+    this.executionBinding?.assertOutboxAttempt(this.entry.id, this.attempt);
     this.result = value.result === null ? null : new ActivityOutboxResult(value.result);
     if (value.failure !== null) requireString(value.failure, "activity.outbox.failure");
     this.failure = value.failure;
@@ -1358,6 +1364,7 @@ export class ActivityOutbox {
   toJSON() {
     return {
       ...this.entry.toJSON(),
+      ...(this.executionBinding === null ? {} : { executionBinding: this.executionBinding.toJSON() }),
       attempt: this.attempt,
       result: this.result?.toJSON() ?? null,
       failure: this.failure,
@@ -2750,6 +2757,48 @@ export class CurrentAttemptIdentity {
 
   toJSON() {
     return { id: this.id, nodeId: this.nodeId, sequence: this.sequence };
+  }
+}
+
+/** A saved boundary at which an exact Attempt failed or ceased to be active. */
+class CurrentFlowAttemptFinish {
+  constructor(identity, activity) {
+    this.identity = CurrentAttemptIdentity.from(identity);
+    if (!(activity instanceof FlowActivity)) throw new CurrentFlowStateInvariantError("Attempt finish requires its confirmed Activity");
+    this.activity = activity;
+    this.finishedAt = activity.result?.confirmedAt ?? activity.timing?.finishedAt ?? null;
+    Object.freeze(this);
+  }
+}
+
+/** Observe the canonical reducer without interpreting Results or selecting routes. */
+export class CurrentFlowAttemptHistory {
+  #finishes = new Map();
+
+  recordTransition(before, after, activity) {
+    if (!(before instanceof CurrentFlowState) || !(after instanceof CurrentFlowState)
+      || !(activity instanceof FlowActivity)) {
+      throw new CurrentFlowStateInvariantError("Attempt history requires a canonical state transition");
+    }
+    // Canonical recovery can resume the same identity. Its earlier failure
+    // remains a Result fact, but no longer marks the unfinished Attempt's end.
+    if (after.attempt !== null && CurrentAttemptIdentity.from(after.attempt).matches(after)) {
+      this.#finishes.delete(after.attempt.id);
+    }
+    if (before.attempt === null) return;
+    const identity = CurrentAttemptIdentity.from(before.attempt);
+    if (identity.matches(before) && !identity.matches(after) && !this.#finishes.has(identity.id)) {
+      this.#finishes.set(identity.id, new CurrentFlowAttemptFinish(identity, activity));
+    }
+  }
+
+  finishFor(attempt) {
+    const identity = CurrentAttemptIdentity.from(attempt);
+    const finish = this.#finishes.get(identity.id) ?? null;
+    if (finish !== null && (finish.identity.nodeId !== identity.nodeId || finish.identity.sequence !== identity.sequence)) {
+      throw new CurrentFlowStateInvariantError("Attempt finish identity differs from its start");
+    }
+    return finish;
   }
 }
 
@@ -7221,7 +7270,9 @@ export class ActivityMetric {
       "phase", "counter", "delta", "reset", "kind", "provider", "profileKey",
       "callCount", "responseChars", "durationMs", "model", "tokens", "cost",
       "cachedResponse", "costIncomplete",
+      ...(Object.hasOwn(value, "executionObservation") ? ["executionObservation"] : []),
     ]), "activity.metric");
+    this.executionObservation = value.executionObservation == null ? null : new FlowExecutionMeasurementReference(value.executionObservation);
     this.phase = requireString(value.phase, "activity.metric.phase");
     if (value.counter !== null) requireString(value.counter, "activity.metric.counter");
     this.counter = value.counter;
@@ -7248,7 +7299,7 @@ export class ActivityMetric {
       this.tokens = Object.freeze(Object.fromEntries(
         ["input", "output", "cacheRead", "cacheCreation"].map((field) => [
           field,
-          requirePositiveInteger(value.tokens[field], `activity.metric.tokens.${field}`, { allowZero: true }),
+          value.tokens[field] === null ? null : requirePositiveInteger(value.tokens[field], `activity.metric.tokens.${field}`, { allowZero: true }),
         ]),
       ));
     } else {
@@ -7290,6 +7341,7 @@ export class ActivityMetric {
       cost: this.cost,
       cachedResponse: this.cachedResponse,
       costIncomplete: this.costIncomplete,
+      ...(this.executionObservation === null ? {} : { executionObservation: this.executionObservation.toJSON() }),
     };
   }
 
@@ -7310,6 +7362,7 @@ export class ActivityMetric {
       ...(this.cost === null ? {} : { cost: this.cost }),
       ...(this.cachedResponse ? { cachedResponse: true } : {}),
       ...(this.costIncomplete ? { costIncomplete: true } : {}),
+      ...(this.executionObservation === null ? {} : { executionObservation: this.executionObservation.toJSON() }),
       taskId,
       ts: timestamp,
     };
@@ -9812,6 +9865,10 @@ export class CurrentFlowVersionStore {
     });
     Object.freeze(this);
   }
+  executionObservationStore({ catalogStore = this.catalogStore } = {}) {
+    return new FlowExecutionObservationStore({ location: this.location, catalogStore,
+      readState: (catalog) => this.#canonicalTransitionView(catalog).state });
+  }
   /** Create one fresh canonical Version root without exposing a partial tree. */
   createFresh({
     flowId,
@@ -10196,6 +10253,11 @@ export class CurrentFlowVersionStore {
       artifactRemovals,
     );
     const admission = input?.admission ?? null;
+    if (artifactWrites.some((write) => write.artifact.logicalKey === "execution.response.adoption")
+      && !(admission instanceof PromptResponseAdoptionAdmissionValue)
+      && !(admission?.find?.(PromptResponseAdoptionAdmissionValue) instanceof PromptResponseAdoptionAdmissionValue)) {
+      throw new CurrentFlowStateInvariantError("Prompt response adoption requires its canonical journal publication admission");
+    }
     if (admission !== null && typeof admission.assert !== "function") {
       throw new CurrentFlowStateInvariantError("canonical admission must provide assert()");
     }
@@ -10314,6 +10376,13 @@ export class CurrentFlowVersionStore {
         // consumer claim, and no caller can defer this failure downstream.
         if (admission !== null) {
           admission.assert(this.#canonicalTransitionView(catalog));
+        }
+        for (const write of artifactWrites.filter((entry) => entry.artifact.logicalKey === "execution.response.adoption")) {
+          const adoption = CanonicalPromptResponseAdoption.fromJSON(JSON.parse(write.bytes));
+          if (write.artifact.relativePath !== FLOW_ARTIFACT_CONTRACTS.resolve("execution.response.adoption", { adoptionId: adoption.id }).relativePath) {
+            throw new CurrentFlowStateInvariantError("Prompt response adoption publication path differs from its identity");
+          }
+          adoption.assertPublication(this.#canonicalTransitionView(catalog), activity);
         }
         for (const baseline of artifactBaselines) baseline.assertCatalog(catalog);
         testSourceBaseline?.assertCatalog(catalog);

@@ -1,3 +1,7 @@
+import { SourceExecutionObservationAppends } from "./source-execution-observation-appends.js";
+import { capturePromptResponseAdoptionsFromView } from "./prompt-response-adoption-publication.js";
+import { isFlowExecutionObservationArtifact } from "../../lib/flow-execution-observation.js";
+import { CanonicalPromptResponseSelection, CanonicalPromptResponseAdoption } from "./prompt-response-adoption.js";
 import { readFlowProcessStops } from "./process-runtime-admission.js";
 import { ExecutionProtocolSnapshot } from "./execution-protocol-snapshot.js";
 import { FlowExecutionContract, FlowExecutionContractRefusal, FlowExecutionInputBaseline } from "./flow-execution-contract.js";
@@ -2462,20 +2466,27 @@ export class SourceMutationManifest {
     return digest(stableStringify({ attempt: CurrentAttemptIdentity.from(attempt).toJSON(), path: normalizedRelativePath(relativePath, "source mutation id path") }));
   }
 
-  static capture({ baseline } = {}) {
+  static capture({ baseline, executionObservations = null } = {}) {
     if (!(baseline instanceof SourceMutationBaseline)) throw new Error("source mutation manifest requires a baseline");
+    if (executionObservations !== null && !(executionObservations instanceof SourceExecutionObservationAppends)) {
+      throw new TypeError("Source mutation observation exclusions require validated execution appends");
+    }
     const current = WorkerArtifactRepositoryMutationSnapshot.capture({
       root: baseline.snapshot.root,
       authorities: baseline.snapshot.authorities,
       ignoredDirectories: baseline.snapshot.ignoredDirectories,
       runtimeLocks: baseline.snapshot.runtimeLocks,
     });
-    const changed = baseline.snapshot.allChangedPaths(current);
+    let changed = baseline.snapshot.allChangedPaths(current);
     if (changed.includes("<HEAD>") || changed.includes("<index>")) {
       throw new WorkerArtifactHandoffError("invalid", "FLOW_SOURCE_HANDOFF_FINALIZE_AUTHORITY_VIOLATION", "source worker must not commit or stage repository changes", { retryable: false, data: { changedPaths: changed.slice(0, 20) } });
     }
     const before = new Map(baseline.snapshot.entries.map((entry) => [entry.path, entry]));
     const after = new Map(current.entries.map((entry) => [entry.path, entry]));
+    if (executionObservations !== null) {
+      if (!executionObservations.matches(after)) throw authoritySnapshotError("Execution observation appends differ from their cataloged bytes");
+      changed = changed.filter((relativePath) => !executionObservations.allowsPath(relativePath));
+    }
     const indexBudget = { bytes: 0 };
     const mutations = changed.map((relativePath) => {
       // Git snapshots intentionally record only dirty paths. With HEAD and
@@ -2549,8 +2560,8 @@ export class SourceMutationManifest {
     }
     return this;
   }
-  assertMatchesCurrent(baseline) {
-    const current = SourceMutationManifest.capture({ baseline });
+  assertMatchesCurrent(baseline, { executionObservations = null } = {}) {
+    const current = SourceMutationManifest.capture({ baseline, executionObservations });
     if (current.digest !== this.digest) {
       throw new WorkerArtifactHandoffError("stale", "FLOW_SOURCE_HANDOFF_MANIFEST_STALE", "source changed after its sealed mutation manifest; regenerate the handoff", { retryable: true, data: { expectedManifestDigest: this.digest, currentManifestDigest: current.digest } });
     }
@@ -2633,7 +2644,7 @@ class CanonicalObservationPrefixIdentity {
 }
 
 export class SourceWorkerCanonicalObservationAdvance {
-  constructor({ activityPrefix, activityBytes, mutablePaths, canonicalSnapshot, prefixIdentity = null,
+  constructor({ activityPrefix, activityBytes, mutablePaths, canonicalSnapshot, catalogHash, prefixIdentity = null,
     addedActivities = [], allowedPublications = [], allowedActivityIds = [], allowedTaskReviewClaims = [] }) {
     if (!Array.isArray(activityPrefix) || !Array.isArray(mutablePaths) || !Array.isArray(addedActivities) || !Array.isArray(allowedPublications) || !Array.isArray(allowedActivityIds)) {
       throw new Error("source worker canonical observation advance requires Activity arrays");
@@ -2656,6 +2667,7 @@ export class SourceWorkerCanonicalObservationAdvance {
     )));
     this.addedActivities = Object.freeze(addedActivities.map((activity) => Object.freeze(structuredClone(activity))));
     this.canonicalSnapshot = canonicalSnapshot;
+    this.catalogHash = requiredDigest(catalogHash, "source worker baseline catalog hash");
     this.allowedPublications = Object.freeze(allowedPublications.map((publication) => {
       if (publication === null || typeof publication !== "object") {
         throw new Error("source worker allowed canonical publication is invalid");
@@ -2714,6 +2726,7 @@ export class SourceWorkerCanonicalObservationAdvance {
     ];
     return new SourceWorkerCanonicalObservationAdvance({
       activityPrefix,
+      catalogHash: view.catalog.hash,
       activityBytes: fs.readFileSync(location.activitiesFile),
       mutablePaths: [
         path.relative(location.directory, location.flowStateFile),
@@ -2742,6 +2755,7 @@ export class SourceWorkerCanonicalObservationAdvance {
       location.runtimeLock("runtime.lock.current-flow-state"),
     ];
     return new SourceWorkerCanonicalObservationAdvance({
+      catalogHash: value.catalogHash,
       activityPrefix: value.activityPrefix.map((entry) => JSON.parse(entry)),
       activityBytes: Buffer.from(value.activityBytes, "base64"),
       mutablePaths: value.mutablePaths,
@@ -2760,21 +2774,22 @@ export class SourceWorkerCanonicalObservationAdvance {
       activityBytes: this.activityBytes.toString("base64"),
       mutablePaths: [...this.mutablePaths],
       canonicalSnapshot: this.canonicalSnapshot.toJSON(),
+      catalogHash: this.catalogHash,
     };
   }
 
   /** Compact durable proof; neither the typed ledger nor its raw bodies are capabilities. */
   checkpointJSON() {
     return { prefixIdentity: this.prefixIdentity.toJSON(), mutablePaths: [...this.mutablePaths],
-      canonicalSnapshot: this.canonicalSnapshot.toJSON() };
+      canonicalSnapshot: this.canonicalSnapshot.toJSON(), catalogHash: this.catalogHash };
   }
 
   static fromCheckpoint(value, { canonicalLocation }) {
-    exactObjectKeys(value, ["prefixIdentity", "mutablePaths", "canonicalSnapshot"], "canonical observation checkpoint");
+    exactObjectKeys(value, ["prefixIdentity", "mutablePaths", "canonicalSnapshot", "catalogHash"], "canonical observation checkpoint");
     exactObjectKeys(value.prefixIdentity, ["activityCount", "activityDigest", "journalByteLength", "journalDigest"], "canonical observation prefix");
     const runtimeLocks = [canonicalLocation.runtimeLock("runtime.lock.artifact-catalog"),
       canonicalLocation.runtimeLock("runtime.lock.current-flow-state")];
-    return new this({ activityPrefix: [], activityBytes: Buffer.alloc(0), mutablePaths: value.mutablePaths,
+    return new this({ catalogHash: value.catalogHash, activityPrefix: [], activityBytes: Buffer.alloc(0), mutablePaths: value.mutablePaths,
       prefixIdentity: new CanonicalObservationPrefixIdentity(value.prefixIdentity),
       canonicalSnapshot: WorkerArtifactRepositoryMutationSnapshot.fromStored(value.canonicalSnapshot, {
         root: canonicalLocation.directory, authorities: ["canonical"], runtimeLocks,
@@ -2787,7 +2802,7 @@ export class SourceWorkerCanonicalObservationAdvance {
       activityBytes: this.activityBytes,
       prefixIdentity: this.prefixIdentity,
       mutablePaths: this.mutablePaths,
-      canonicalSnapshot: this.canonicalSnapshot,
+      canonicalSnapshot: this.canonicalSnapshot, catalogHash: this.catalogHash,
       addedActivities: this.addedActivities,
       allowedPublications: [...this.allowedPublications, {
         activityId,
@@ -2805,7 +2820,7 @@ export class SourceWorkerCanonicalObservationAdvance {
       activityBytes: this.activityBytes,
       prefixIdentity: this.prefixIdentity,
       mutablePaths: this.mutablePaths,
-      canonicalSnapshot: this.canonicalSnapshot,
+      canonicalSnapshot: this.canonicalSnapshot, catalogHash: this.catalogHash,
       addedActivities: this.addedActivities,
       allowedPublications: this.allowedPublications,
       allowedActivityIds: [...this.allowedActivityIds, activityId],
@@ -2845,6 +2860,11 @@ export class SourceWorkerCanonicalObservationAdvance {
     )));
     for (const baseline of contract.inputBaselines) {
       if (baseline.baseline.artifact.logicalKey === "draft") allowedPayloadPaths.add(baseline.baseline.artifact.relativePath);
+    }
+    if (submission !== null) for (const publication of capturePromptResponseAdoptionsFromView(view)) {
+      if (publication.adoption.requestDigest !== request.requestDigest || publication.adoption.handoffDigest !== submission.handoffDigest) continue;
+      request.executionContract.assertMatches(publication.adoption.selection.executionContract);
+      allowedPayloadPaths.add(publication.descriptor.relativePath);
     }
     let observation = this;
     let authenticatedClaim = false;
@@ -2926,7 +2946,7 @@ export class SourceWorkerCanonicalObservationAdvance {
           : lifecycle.phase !== "publication" || !allowedPayloadPaths.has(descriptor.relativePath)) {
           throw new FlowExecutionContractRefusal(`Conditional worker receipt published an unrelated artifact: ${descriptor.logicalKey} (${lifecycle.phase}, ${sourceExecution ? "source" : "target"})`);
         }
-        if (lifecycle.phase === "publication" && request.stepId === "draft-refine") {
+        if (lifecycle.phase === "publication" && request.stepId === "draft-refine" && !isFlowExecutionObservationArtifact(descriptor.logicalKey)) {
           const payload = submission.payloadManifest.find((entry) => (
             new CanonicalWorkerArtifactAddress(entry.targetRelativePath).artifact.relativePath === descriptor.relativePath
           ));
@@ -3045,7 +3065,7 @@ export class SourceWorkerCanonicalObservationAdvance {
     return new SourceWorkerCanonicalObservationAdvance({
       activityPrefix: this.activityPrefix.map((entry) => JSON.parse(entry)), activityBytes: this.activityBytes,
       prefixIdentity: this.prefixIdentity,
-      mutablePaths: this.mutablePaths, canonicalSnapshot: this.canonicalSnapshot,
+      mutablePaths: this.mutablePaths, canonicalSnapshot: this.canonicalSnapshot, catalogHash: this.catalogHash,
       addedActivities: this.addedActivities, allowedPublications: [...this.allowedPublications, contractPublication],
       allowedActivityIds: this.allowedActivityIds, allowedTaskReviewClaims: claims,
     });
@@ -3110,6 +3130,7 @@ export class SourceWorkerCanonicalObservationAdvance {
       allowedPublications: this.allowedPublications,
       allowedActivityIds: this.allowedActivityIds,
       allowedTaskReviewClaims: this.allowedTaskReviewClaims,
+      executionObservations: new SourceExecutionObservationAppends(view, canonicalSnapshot),
     });
     if (!advance) return this;
     return new SourceWorkerCanonicalObservationAdvance({
@@ -3117,6 +3138,7 @@ export class SourceWorkerCanonicalObservationAdvance {
       activityBytes,
       mutablePaths: this.mutablePaths,
       canonicalSnapshot: currentSnapshot,
+      catalogHash: view.catalog.hash,
       addedActivities,
     });
   }
@@ -3137,6 +3159,7 @@ function assertCanonicalObservationAdvance({
   allowedPublications = [],
   allowedActivityIds = [],
   allowedTaskReviewClaims = [],
+  executionObservations,
 }) {
   const prefix = observation.prefixIdentity;
   if (current.length < prefix.activityCount) {
@@ -3186,14 +3209,16 @@ function assertCanonicalObservationAdvance({
     }
   }
   const unexpectedPaths = changedPaths.filter((entry) => (
-    !observation.mutablePaths.includes(entry) && !allowedPaths.has(entry)
+    !observation.mutablePaths.includes(entry) && !allowedPaths.has(entry) && !executionObservations.allowsPath(entry)
   ));
   const activityTail = Buffer.from(addedActivities.map((activity) => `${JSON.stringify(activity)}\n`).join(""), "utf8");
   const exactJournalAppend = activityBytes.length >= prefix.journalByteLength
     && digest(activityBytes.subarray(0, prefix.journalByteLength)) === prefix.journalDigest
     && activityBytes.subarray(prefix.journalByteLength).equals(activityTail);
-  const unexplainedCanonicalChange = addedActivities.length === 0 && changedPaths.length > 0;
-  if (invalidPublication || unexpectedPaths.length > 0 || !exactJournalAppend || unexplainedCanonicalChange) {
+  const unexplainedCanonicalChange = addedActivities.length === 0 && changedPaths.length > 0
+    && (!executionObservations.explainsUnjournaled(changedPaths)
+      || !executionObservations.preservesCatalogHash(observation.catalogHash));
+  if (invalidPublication || !executionObservations.matches(currentEntries) || unexpectedPaths.length > 0 || !exactJournalAppend || unexplainedCanonicalChange) {
     throw new WorkerArtifactHandoffError(
       "invalid",
       "FLOW_SOURCE_HANDOFF_CANONICAL_MUTATION_INVALID",
@@ -5097,6 +5122,7 @@ export class WorkerArtifactHandoffRequest {
     executionGeneration = null,
     dispatchRepositoryBinding = null,
     dispatchIdentity = null,
+    promptResponseSelection = null,
   }) {
     this.mainRoot = path.resolve(mainRoot);
     this.executionRoot = path.resolve(executionRoot);
@@ -5289,7 +5315,19 @@ export class WorkerArtifactHandoffRequest {
         ?? (this.stepId === "spec-gate-repair" ? this.inputs[0].descriptor.canonicalLocator.generation
           : frontier?.executionContract?.generation ?? lifecycle?.executionGeneration ?? 0), frontier?.executionContract?.budgetOwner);
     }
+    if (promptResponseSelection !== null) {
+      if (!(promptResponseSelection instanceof CanonicalPromptResponseSelection)) throw new TypeError("Worker selected Prompt response must be typed");
+      this.executionContract.assertMatches(promptResponseSelection.executionContract);
+    }
+    this.promptResponseSelection = promptResponseSelection;
     Object.freeze(this);
+  }
+
+  withPromptResponse(response) {
+    if (response.receivedResponses.length === 0) return this;
+    return new WorkerArtifactHandoffRequest({ ...this,
+      promptResponseSelection: CanonicalPromptResponseSelection.fromResponse(response, this.executionContract),
+      canonicalLocation: this.flowManager.specLocation(this.specId) });
   }
 
   executionBinding() {
@@ -7325,6 +7363,7 @@ export class WorkerArtifactHandoffReceipt {
       ? null
       : RequirementTestWorkerHandoffBinding.fromJSON(input.requirementTestBinding);
     this.payloadDigest = requiredDigest(input.payloadDigest, "worker artifact receipt payloadDigest");
+    this.promptResponseAdoption = input.promptResponseAdoption == null ? null : CanonicalPromptResponseAdoption.fromJSON(input.promptResponseAdoption);
     this.consumedAt = requiredString(input.consumedAt, "worker artifact receipt consumedAt");
     if (!Number.isFinite(Date.parse(this.consumedAt))) {
       throw new Error("worker artifact receipt consumedAt must be an ISO timestamp");
@@ -7347,6 +7386,7 @@ export class WorkerArtifactHandoffReceipt {
       requirementTestBinding: this.requirementTestBinding?.toJSON() ?? null,
       payloadDigest: this.payloadDigest,
       consumedAt: this.consumedAt,
+      ...(this.promptResponseAdoption === null ? {} : { promptResponseAdoption: this.promptResponseAdoption.toJSON() }),
     };
   }
 }
@@ -7752,13 +7792,14 @@ class SpecWorkerPreparation {
   }
 
   settlementPublication(now) {
+    const adoption = this.publications === null ? promptResponseAdoptionForHandoff(this.request, this.submission) : null;
     return {
       lifecycleResult: canonicalHandoffResult(this.request, this.submission, now),
       references: {
         evaluations: [], findings: [], repairs: [],
         artifacts: [{ id: this.submission.handoffDigest, label: this.request.stepId }],
       },
-      artifactWrites: this.publications?.artifactWrites ?? [],
+      artifactWrites: this.publications?.artifactWrites ?? (adoption === null ? [] : [adoption.artifactWrite()]),
       artifactRemovals: this.publications?.artifactRemovals ?? [],
       artifactBaselines: this.publications?.artifactBaselines ?? [],
     };
@@ -8636,8 +8677,15 @@ function canonicalTestTreeBaselineForPublication(request) {
   return baseline;
 }
 
+function promptResponseAdoptionForHandoff(request, submission) {
+  return request.promptResponseSelection === null ? null : new CanonicalPromptResponseAdoption({
+    selection: request.promptResponseSelection, requestDigest: request.requestDigest,
+    handoffDigest: submission.handoffDigest, payloadDigest: manifestDigest(submission.payloadManifest) });
+}
+
 function canonicalHandoffPublications(request, submission, draftCandidate = null) {
-  const artifactWrites = [];
+  const adoption = promptResponseAdoptionForHandoff(request, submission);
+  const artifactWrites = adoption === null ? [] : [adoption.artifactWrite()];
   const artifactRemovals = [];
   const artifactBaselines = new Map();
   let specRecord;
@@ -8996,6 +9044,7 @@ function testReviewRepairProgressPublicationResult(request, publications, next) 
 }
 
 function canonicalHandoffReceipt(request, submission, now) {
+  const adoption = promptResponseAdoptionForHandoff(request, submission);
   return new WorkerArtifactHandoffReceipt({
     version: 1,
     runId: request.runId,
@@ -9009,6 +9058,7 @@ function canonicalHandoffReceipt(request, submission, now) {
     inputRevision: request.inputRevision,
     requirementTestBinding: request.requirementTestBinding?.toJSON() ?? null,
     payloadDigest: manifestDigest(submission.payloadManifest),
+    ...(adoption === null ? {} : { promptResponseAdoption: adoption.toJSON() }),
     consumedAt: now().toISOString(),
   });
 }
@@ -11276,6 +11326,10 @@ export class WorkerArtifactHandoffCoordinator {
             executionContract: request.executionContract,
             specId: request.specId,
             nodeId: request.stepId,
+            references: { evaluations: [], findings: [], repairs: [], artifacts: [
+              { id: submission.handoffDigest, label: "worker-handoff" },
+              { id: request.requestDigest, label: "worker-handoff-request" },
+            ] },
             artifactWrites: publications.artifactWrites,
             artifactRemovals: publications.artifactRemovals,
             artifactBaselines: publications.artifactBaselines,
@@ -11575,6 +11629,7 @@ export class WorkerArtifactHandoffCoordinator {
         handoffDigest: submission.handoffDigest, sourceHandoffSettlement, taskStageBinding,
         sourceMutationBaseline: request.sourceMutationBaseline, planGateRepairOutcome,
         sourceTaskReviewStage: prospectiveStage,
+        promptResponseAdoption: promptResponseAdoptionForHandoff(request, submission),
         result: lifecycleResult,
         ...(upgradeResult === null ? {} : { upgradeResult }) } });
   }

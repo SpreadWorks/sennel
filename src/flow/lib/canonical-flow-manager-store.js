@@ -1,4 +1,9 @@
-import { captureProcessExecutionCheckoutIdentity } from "../../lib/process-execution-runtime.js";
+import { executionValueDigest as processExecutionValueDigest } from "../../lib/process-execution-values.js";
+import { CanonicalPromptResponseAdoption, CanonicalPromptResponseContributionSelection } from "./prompt-response-adoption.js";
+import { CombinedAdmission } from "./combined-admission.js";
+import { CurrentFlowOutboxAttemptHistory } from "./flow-outbox-attempt-history.js";
+import { FlowExecutionObservationBinding, FlowExecutionObservationSession, FlowExecutionSourceManifest, captureExecutionObservations, executionProducerCoverage } from "../../lib/flow-execution-observation.js";
+import { ProcessExecutionRuntime, captureProcessExecutionCheckoutIdentity } from "../../lib/process-execution-runtime.js";
 import { FlowExecutionContract, FlowExecutionContractRefusal } from "./flow-execution-contract.js";
 import { ArtifactWorkerRecoveryPublication, readArtifactWorkerExecutionFrontierFromView,
   artifactWorkerRequestSnapshotWrite, readArtifactWorkerRequestSnapshotFromView } from "./artifact-worker-execution-recovery.js";
@@ -1484,21 +1489,6 @@ class SpecGateRepairRecoveryAdmission {
   }
 }
 
-class CombinedAdmission {
-  constructor(...admissions) { this.admissions = admissions.filter(Boolean); Object.freeze(this.admissions); Object.freeze(this); }
-  assert(view) { for (const admission of this.admissions) admission.assert(view); }
-  find(AdmissionClass) {
-    for (const admission of this.admissions) {
-      if (admission instanceof AdmissionClass) return admission;
-      if (admission instanceof CombinedAdmission) {
-        const found = admission.find(AdmissionClass);
-        if (found !== null) return found;
-      }
-    }
-    return null;
-  }
-}
-
 /** Exact plugin artifact replay; publication never substitutes for successful hook execution. */
 class PreparationPluginPublication {
   constructor({ store, specId, receipt, artifactWrites }) {
@@ -1747,12 +1737,13 @@ function canonicalIssueLogEntry(value) {
   return structuredClone(value);
 }
 
-function canonicalOutboxActivity({ outbox, attempt, result = null, failure = null, failureCode = null, recovery = null, exactRecoveryReceipt = null } = {}) {
+function canonicalOutboxActivity({ outbox, attempt, result = null, failure = null, failureCode = null, recovery = null, exactRecoveryReceipt = null, executionBinding = null } = {}) {
   if (!Number.isSafeInteger(attempt) || attempt < 1) {
     throw new CurrentFlowStateInvariantError("canonical outbox attempt must be a positive integer");
   }
   return Object.freeze({
     ...canonicalOutboxInput(outbox),
+    ...(executionBinding === null ? {} : { executionBinding: executionBinding.toJSON?.() ?? executionBinding }),
     attempt,
     result,
     failure,
@@ -2175,10 +2166,10 @@ function canonicalMetric(payload) {
   const tokens = payload.tokens == null
     ? null
     : {
-        input: nullableNonNegativeInteger(payload.tokens.input ?? 0, "metric.tokens.input"),
-        output: nullableNonNegativeInteger(payload.tokens.output ?? 0, "metric.tokens.output"),
-        cacheRead: nullableNonNegativeInteger(payload.tokens.cacheRead ?? 0, "metric.tokens.cacheRead"),
-        cacheCreation: nullableNonNegativeInteger(payload.tokens.cacheCreation ?? 0, "metric.tokens.cacheCreation"),
+        input: nullableNonNegativeInteger(payload.tokens.input, "metric.tokens.input"),
+        output: nullableNonNegativeInteger(payload.tokens.output, "metric.tokens.output"),
+        cacheRead: nullableNonNegativeInteger(payload.tokens.cacheRead, "metric.tokens.cacheRead"),
+        cacheCreation: nullableNonNegativeInteger(payload.tokens.cacheCreation, "metric.tokens.cacheCreation"),
       };
   const counter = nullableString(payload.counter, "metric.counter");
   return new ActivityMetric({
@@ -2197,6 +2188,7 @@ function canonicalMetric(payload) {
     cost: nullableCost(payload.cost),
     cachedResponse: payload.cachedResponse === true,
     costIncomplete: payload.costIncomplete === true,
+    ...(payload.executionObservation == null ? {} : { executionObservation: payload.executionObservation }),
   });
 }
 
@@ -4281,7 +4273,7 @@ export class CanonicalFlowManagerStore {
    * a definition leaf; the Store derives the catalog claim and Activity
    * identity from that leaf instead of accepting a path or an authority.
    */
-  publishArtifacts({ specId = null, nodeId, artifactWrites, artifactRemovals = undefined, artifactBaselines = undefined, testSourceBaseline = undefined, admission = undefined, publicationActivityId = null, executionContract = null } = {}) {
+  publishArtifacts({ specId = null, nodeId, artifactWrites, artifactRemovals = undefined, artifactBaselines = undefined, testSourceBaseline = undefined, admission = undefined, publicationActivityId = null, executionContract = null, references = undefined } = {}) {
     const resolved = this.#resolveSpecId(specId);
     if (resolved === null) throw new CurrentFlowStateInvariantError("no canonical active Flow");
     const state = this.runtime.load(resolved);
@@ -4320,6 +4312,7 @@ export class CanonicalFlowManagerStore {
         ? activityId("artifacts-published")
         : requiredText(publicationActivityId, "canonical artifact publication Activity id"),
       nodeId: producerNodeId,
+      references,
       artifactWrites,
       artifactRemovals,
       artifactBaselines,
@@ -5045,12 +5038,16 @@ export class CanonicalFlowManagerStore {
     const outbox = canonicalOutboxInput({ id, operation });
     const existing = this.outboxStatus({ specId: resolved, ...outbox });
     if (["pending", "done"].includes(existing.status)) return existing;
+    const session = this.prepareExecutionObservationSession({ specId: resolved });
+    const attempt = existing.status === "failed" ? existing.attempt + 1 : 1;
+    const executionBinding = session?.binding.forOutboxAttempt(id, attempt) ?? null;
     this.runtime.beginOutbox({
       specId: resolved,
       activityId: activityId("outbox-started"),
       outbox: canonicalOutboxActivity({
         outbox,
-        attempt: existing.status === "failed" ? existing.attempt + 1 : 1,
+        attempt,
+        executionBinding,
       }),
     });
     return this.outboxStatus({ specId: resolved, ...outbox });
@@ -5073,6 +5070,7 @@ export class CanonicalFlowManagerStore {
         attempt: existing.attempt,
         result,
         exactRecoveryReceipt: existing.exactRecoveryReceipt,
+        executionBinding: existing.executionBinding,
       }),
     });
     return Object.freeze({ ...this.outboxStatus({ specId: resolved, ...outbox }), result });
@@ -5096,6 +5094,7 @@ export class CanonicalFlowManagerStore {
         failureCode,
         recovery,
         exactRecoveryReceipt: existing.exactRecoveryReceipt,
+        executionBinding: existing.executionBinding,
       }),
     });
     return this.outboxStatus({ specId: resolved, ...outbox });
@@ -5145,6 +5144,7 @@ export class CanonicalFlowManagerStore {
       outbox: canonicalOutboxActivity({
         outbox,
         attempt,
+        executionBinding: existing.executionBinding,
         exactRecoveryReceipt: {
           idempotencyKey: outbox.id,
           attempt,
@@ -5161,52 +5161,8 @@ export class CanonicalFlowManagerStore {
     if (resolved === null) throw new CurrentFlowStateInvariantError("no canonical active Flow");
     const outbox = canonicalOutboxInput({ id, operation });
     const snapshot = this.runtime.loadSnapshot(resolved);
-    const confirmedActivities = snapshot.activities.slice(0, snapshot.state.confirmationOrder);
-    const matching = confirmedActivities.filter((activity) => (
-      activity.transition.outbox !== null && activity.transition.outbox.id === outbox.id
-    ));
-    for (const activity of matching) {
-      if (activity.transition.outbox.operation !== outbox.operation) {
-        throw new CurrentFlowStateInvariantError("canonical outbox id cannot change its operation");
-      }
-    }
-    const latest = matching.at(-1) ?? null;
-    const active = snapshot.state.outbox.find(outbox.id);
-    if (active !== null && active.operation !== outbox.operation) {
-      throw new CurrentFlowStateInvariantError("canonical outbox id cannot change its operation");
-    }
-    const attempts = matching.map((activity) => activity.transition.outbox.attempt);
-    const timing = latest?.timing?.toJSON() ?? (latest?.result?.confirmedAt == null ? null : { finishedAt: latest.result.confirmedAt });
-    const status = active !== null
-      ? "pending"
-      : (latest?.transition.operation === "complete_outbox" || ["confirm_attempt", "record_draft_step_settlement"].includes(latest?.transition.operation) && (latest?.nodeId === "report" || hasFinalizationStepContract(latest?.nodeId)) && latest?.transition.outbox?.result !== null)
-        ? "done"
-        : (["fail_outbox", "recover_interrupted_finalize_sync"].includes(latest?.transition.operation) || hasFinalizationStepContract(latest?.nodeId) && latest?.transition.outbox?.failure != null)
-          ? "failed"
-          : "missing";
-    return Object.freeze({
-      ...outbox,
-      status,
-      attempt: attempts.at(-1) ?? 0,
-      startedAt: matching.findLast((activity) => (
-        activity.transition.outbox.attempt === attempts.at(-1)
-        && ["begin_outbox", "reopen_outbox"].includes(activity.transition.operation)
-      ))?.timing?.startedAt ?? null,
-      updatedAt: timing?.finishedAt ?? null,
-      failure: latest?.transition.outbox?.failure ?? null,
-      failureHistory: Object.freeze(matching
-        .filter((activity) => ["fail_outbox", "recover_interrupted_finalize_sync"].includes(activity.transition.operation) || hasFinalizationStepContract(activity.nodeId) && activity.transition.outbox.failure !== null)
-        .map((activity) => Object.freeze({
-          attempt: activity.transition.outbox.attempt,
-          failure: activity.transition.outbox.failure,
-          recordedAt: activity.timing?.finishedAt ?? null,
-          code: activity.transition.outbox.failureCode,
-          recovery: activity.transition.outbox.recovery?.toJSON() ?? null,
-        }))),
-      exactRecoveryReceipt: latest?.transition.outbox?.exactRecoveryReceipt?.toJSON() ?? null,
-      result: latest?.transition.outbox?.result?.toJSON() ?? null,
-      activityId: latest?.id ?? null,
-    });
+    return CurrentFlowOutboxAttemptHistory.fromActivities(snapshot.activities.slice(0, snapshot.state.confirmationOrder))
+      .status({ ...outbox, active: snapshot.state.outbox.find(outbox.id) });
   }
 
   #assertPlanGateRepairOutcome({ resolved, state, nodeId, outcome, handoffRevision }) {
@@ -5729,6 +5685,65 @@ export class CanonicalFlowManagerStore {
     });
     return Object.freeze({ state: next, receipt,
       ...(executionLifecycle.phase === "claimed" ? { newlyClaimed: true } : {}) });
+  }
+
+  /** Acquire immutable observation ownership before executing any external work. */
+  prepareExecutionObservationSession({ specId = null, binding = null, executionContract = null } = {}) {
+    const supplied = binding?.toJSON?.() ?? binding;
+    const resolved = this.#resolveSpecId(specId ?? executionContract?.specId ?? supplied?.specId);
+    if (resolved === null) return null;
+    const acquired = this.runtime.readCanonicalTransitionView(resolved, (view) => {
+      const state = view.state;
+      if (state.attempt === null) return null;
+      const fixed = new FlowExecutionObservationBinding({
+        flowVersionId: state.flowVersionId, runId: state.runId, specId: state.specId,
+        nodeId: state.attempt.nodeId, taskId: taskIdForNode(state, state.attempt.nodeId),
+        attemptId: state.attempt.id, attemptSequence: state.attempt.sequence,
+        executionContractId: executionContract?.id ?? supplied?.executionContractId ?? null,
+        executionGeneration: executionContract?.generation ?? supplied?.executionGeneration ?? null,
+        outboxAttemptId: supplied?.outboxAttemptId ?? null,
+      });
+      if (supplied !== null && supplied !== undefined) {
+        for (const field of ["flowVersionId", "runId", "specId", "nodeId", "taskId", "attemptId", "attemptSequence", "executionContractId", "executionGeneration"]) {
+          if (Object.hasOwn(supplied, field) && supplied[field] !== fixed[field]) {
+            throw new CurrentFlowStateConflictError(`Execution observation starting binding differs: ${field}`);
+          }
+        }
+      }
+      if (executionContract !== null) {
+        executionContract.assertCurrent(state);
+        if (executionContract.taskId !== fixed.taskId) throw new CurrentFlowStateConflictError("Execution observation contract Task differs");
+      }
+      const checkout = ProcessExecutionRuntime.current()?.store.checkout ?? null;
+      const checkoutIdentity = checkout?.toJSON() ?? null;
+      const runtimeSourceId = checkoutIdentity === null ? null : processExecutionValueDigest(checkoutIdentity);
+      const manifest = new FlowExecutionSourceManifest({
+        id: processExecutionValueDigest([fixed.flowVersionId, fixed.runId, fixed.specId, runtimeSourceId]),
+        flowVersionId: fixed.flowVersionId, runId: fixed.runId, specId: fixed.specId,
+        recordingStartedAt: new Date().toISOString(), runtimeSourceId, checkoutIdentity,
+        checkoutNamespace: runtimeSourceId,
+        boundary: { confirmationOrder: state.confirmationOrder, activityCount: view.activities.length },
+        producerCoverage: executionProducerCoverage({ recorded: true, managedRuntime: checkout !== null }),
+      });
+      return { fixed, manifest };
+    });
+    if (acquired === null) return null;
+    const versionStore = this.runtime.store(resolved);
+    const store = versionStore.executionObservationStore();
+    const manifest = store.ensureSource(acquired.manifest);
+    return new FlowExecutionObservationSession({ binding: acquired.fixed, sourceId: manifest.id, record: (fact) => store.append(fact) });
+  }
+
+  readExecutionObservations({ specId = null } = {}) {
+    const resolved = this.#resolveSpecId(specId);
+    if (resolved === null) return null;
+    const captured = this.runtime.readCanonicalTransitionView(resolved, (view) => ({
+      catalog: view.catalog,
+      expectedBinding: { flowVersionId: view.state.flowVersionId, runId: view.state.runId, specId: view.state.specId },
+      bytes: new Map(view.catalog.artifacts.filter((entry) => ["execution.source.manifest", "execution.observation"].includes(entry.logicalKey))
+        .map((entry) => [entry.relativePath, view.readCatalogedArtifact(entry)])),
+    }));
+    return captureExecutionObservations({ ...captured, readArtifact: (descriptor) => captured.bytes.get(descriptor.relativePath) });
   }
 
   /** Fresh generic execution admission; an acquired old claim is never new permission. */
@@ -8040,6 +8055,9 @@ export class CanonicalFlowManagerStore {
     const result = resultWithDraftStepResult(stepResult.type === "error"
       ? { outcome: "failed", summary: stepResult.error.message, confirmedAt: new Date().toISOString(), artifactRefs: [] }
       : resultFor("done", binding.stepId), binding.stepId, stepResult, receipt);
+    for (const write of writes.filter((entry) => entry.logicalKey === "execution.response.adoption")) {
+      result.artifactRefs.push(CanonicalPromptResponseAdoption.fromJSON(JSON.parse(write.bytes)).publicationReference());
+    }
     const application = settlement.application;
     let next;
     if (settlement instanceof StepErrorDecision) {
@@ -8061,7 +8079,7 @@ export class CanonicalFlowManagerStore {
       const review = writes.find((write) => write.logicalKey === "acceptance.review");
       if (review === undefined) throw new CurrentFlowStateInvariantError("Acceptance repair requires its exact review publication");
       const digest = crypto.createHash("sha256").update(review.bytes).digest("hex");
-      const repairResult = { ...result, artifactRefs: [{ kind: "acceptance-review", id: digest }] };
+      const repairResult = { ...result, artifactRefs: [...result.artifactRefs, { kind: "acceptance-review", id: digest }] };
       next = this.runtime.repairAcceptanceReview({ specId: resolved, activityId: selectedActivityId,
         attempt: commandContextAttempt(state, "impl-triage"), result: repairResult,
         references: { evaluations: [], findings: [], repairs: [], artifacts: [{ id: digest, label: "acceptance.review" }] },
@@ -8116,6 +8134,7 @@ export class CanonicalFlowManagerStore {
 
   /** Acquire immutable command bytes and the prospective catalog under the canonical lock. */
   prepareAcceptanceCommandPublication({ binding, commandResult, acceptedFailure = false, sourceCatalogHash = null,
+    promptResponseSelection = null,
     selectedActivityId = activityId("acceptance-step-settled") } = {}) {
     if (!hasAcceptanceStepContract(binding?.stepId)) throw new CurrentFlowStateInvariantError("Acceptance publication requires an Acceptance binding");
     const resolved = this.#resolveSpecId(binding.specId);
@@ -8130,6 +8149,12 @@ export class CanonicalFlowManagerStore {
       }
       const artifactWrites = [...this.#attemptHistoryWrites({ specId: resolved, state: view.state,
         nodeId: binding.stepId, commandResult, view, attemptSequence: settlementAttempt?.sequence ?? view.state.attempt.sequence }), ...this.#commandPublicationWrites(commandResult)];
+      if (promptResponseSelection !== null) {
+        if (!(promptResponseSelection instanceof CanonicalPromptResponseContributionSelection)) {
+          throw new CurrentFlowStateInvariantError("Acceptance Prompt response selection must contain acquired completion contributions");
+        }
+        artifactWrites.push(new CanonicalPromptResponseAdoption({ selection: promptResponseSelection }).artifactWrite());
+      }
       const descriptors = stepResultPublicationDescriptors(artifactWrites, selectedActivityId);
       const runtime = new Map();
       return new CanonicalCommandPublication(COMMAND_PUBLICATION_TOKEN, { binding, view, selectedActivityId,
@@ -8499,7 +8524,7 @@ export class CanonicalFlowManagerStore {
    * Commit a sealed source-worker effect and its Attempt confirmation in one
    * Version Store transaction. Workers never receive this surface.
    */
-  confirmSourceWorkerHandoff({ specId = null, effect, mutationManifest, handoffDigest, result, upgradeResult = null, taskStageBinding = null, sourceMutationBaseline = null, sourceHandoffSettlement = null, planGateRepairOutcome = null, binding, stepResult, settlement, settlementReceipt, sourceTaskReviewStage = null, executionContract = null } = {}) {
+  confirmSourceWorkerHandoff({ specId = null, effect, mutationManifest, handoffDigest, result, upgradeResult = null, taskStageBinding = null, sourceMutationBaseline = null, sourceHandoffSettlement = null, planGateRepairOutcome = null, binding, stepResult, settlement, settlementReceipt, sourceTaskReviewStage = null, executionContract = null, promptResponseAdoption = null } = {}) {
     const resolved = this.#resolveSpecId(specId);
     if (resolved === null) throw new CurrentFlowStateInvariantError("no canonical active Flow");
     if (!(effect instanceof SourceWorkerEffect)) {
@@ -8573,7 +8598,8 @@ export class CanonicalFlowManagerStore {
       if (taskId === null) throw new CurrentFlowStateInvariantError("source overview effect requires an active Task implementation");
       spec = new CanonicalOverviewUpdate({ taskId, additions: effect.overview.additions }).applyTo(spec).document;
     }
-    const artifactWrites = [...settlementWrites];
+    if (promptResponseAdoption !== null && !(promptResponseAdoption instanceof CanonicalPromptResponseAdoption)) throw new TypeError("Source Prompt response adoption must be typed");
+    const artifactWrites = [...settlementWrites, ...(promptResponseAdoption === null ? [] : [promptResponseAdoption.artifactWrite()])];
     if (planGateRepairOutcome !== null) {
       if (!(planGateRepairOutcome instanceof PlanGateRepairOutcomeDraft)
         || planGateRepairOutcome.disposition !== "applied"
@@ -9912,10 +9938,15 @@ export class CanonicalFlowManagerStore {
     const specId = this.#resolveSpecId(opts.specId);
     if (specId === null) return null;
     const state = this.runtime.load(specId);
+    if (payload.executionObservation != null) {
+      const fixed = FlowExecutionObservationBinding.fromJSON(payload.executionObservation.binding);
+      fixed.assertVersion(state);
+      if (state.findNode(fixed.nodeId) === null) throw new CurrentFlowStateConflictError("Metric observation Step is absent");
+    }
     return this.runtime.recordMetric({
       specId,
       activityId: activityId("metric-recorded"),
-      nodeId: observationNodeId(state, opts),
+      nodeId: payload.executionObservation?.binding?.nodeId ?? observationNodeId(state, opts),
       metric: canonicalMetric(payload),
     });
   }
@@ -9927,10 +9958,11 @@ export class CanonicalFlowManagerStore {
 
   accumulateAgentMetrics(phase, options = {}) {
     if (!phase) return null;
-    const { usage, responseChars, model, durationMs, provider, profileKey } = options;
+    const { usage, responseChars, model, durationMs, provider, profileKey, executionObservation } = options;
     return this.appendMetric({
       phase,
       kind: "agent",
+      ...(executionObservation == null ? {} : { executionObservation }),
       provider: normalizeAgentMetricDimension(provider),
       profileKey: normalizeAgentMetricDimension(profileKey),
       callCount: 1,
@@ -9939,10 +9971,10 @@ export class CanonicalFlowManagerStore {
       ...(model && { model }),
       ...(usage && {
         tokens: {
-          input: usage.input_tokens || 0,
-          output: usage.output_tokens || 0,
-          cacheRead: usage.cache_read_tokens || 0,
-          cacheCreation: usage.cache_creation_tokens || 0,
+          input: usage.input_tokens ?? null,
+          output: usage.output_tokens ?? null,
+          cacheRead: usage.cache_read_tokens ?? null,
+          cacheCreation: usage.cache_creation_tokens ?? null,
         },
         ...(usage.cost_usd != null && { cost: usage.cost_usd }),
       }),
@@ -10708,7 +10740,7 @@ export class CanonicalFlowManagerStore {
       logicalKey: target.logicalKey,
       parameters: target.parameters,
       mediaType: "application/json",
-      bytes: Buffer.from(`${JSON.stringify(next.toJSON(), null, 2)}\n`, "utf8"),
+      bytes: next.toBytes(),
     }];
   }
 

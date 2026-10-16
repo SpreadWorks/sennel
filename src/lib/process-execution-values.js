@@ -14,6 +14,56 @@ export function executionValueSnapshot(value) { return value == null ? null : JS
 export function executionValueDigest(value) { return crypto.createHash("sha256").update(JSON.stringify(value)).digest("hex"); }
 export function executionProcessIdentity(value) { return value instanceof ProcessIdentity ? value : new ProcessIdentity(value); }
 
+class ProcessExecutionCommandValue {
+  constructor(value, reason) {
+    this.value = value;
+    this.reason = reason;
+    if (new.target === ProcessExecutionCommandValue) Object.freeze(this);
+  }
+  toJSON() { return { value: this.value, reason: this.reason }; }
+}
+
+class ProcessExecutionCommandArgument extends ProcessExecutionCommandValue {
+  constructor(position) {
+    // Argument payloads may contain arbitrary credentials, prompt text or paths.
+    // Preserve their exact positions without guessing which contents are public.
+    super(null, "not-public");
+    this.position = position;
+    Object.freeze(this);
+  }
+  toJSON() { return { position: this.position, ...super.toJSON() }; }
+}
+
+/** A disclosure-safe descriptor derived from the actual launcher input. */
+export class ProcessExecutionCommandDescriptor {
+  constructor(program, args, { cwd, executionRoot } = {}) {
+    const publicProgram = typeof program === "string" && /^[a-zA-Z0-9_.+-]+$/.test(program);
+    this.program = new ProcessExecutionCommandValue(publicProgram ? program : null,
+      publicProgram ? null : path.isAbsolute(program) ? "absolute-path" : "not-public");
+    this.argv = Object.freeze(args.map((_, position) => new ProcessExecutionCommandArgument(position)));
+    this.cwd = new ProcessExecutionCommandValue(cwd === undefined ? "inherited" : path.resolve(cwd) === path.resolve(executionRoot)
+      ? "execution-root" : null, cwd !== undefined && path.resolve(cwd) !== path.resolve(executionRoot) ? "not-public" : null);
+    this.complete = publicProgram && args.length === 0 && this.cwd.reason === null;
+    Object.freeze(this);
+  }
+  toJSON() { return { program: this.program, argv: this.argv, cwd: this.cwd, complete: this.complete }; }
+}
+
+/** Wall-clock observations and a separately measured monotonic physical span. */
+export class ProcessExecutionTiming {
+  constructor({ startAcceptedAt = null, startedAt = null, stopRequestedAt = null, finishedAt = null, durationMs = null } = {}) {
+    for (const value of [startAcceptedAt, startedAt, stopRequestedAt, finishedAt]) {
+      if (value !== null && (typeof value !== "string" || new Date(value).toISOString() !== value)) throw new TypeError("Process timing requires an ISO timestamp");
+    }
+    if (durationMs !== null && (!Number.isFinite(durationMs) || durationMs < 0 || startedAt === null || finishedAt === null)) {
+      throw new TypeError("Process duration requires a measured start and finish");
+    }
+    Object.assign(this, { startAcceptedAt, startedAt, stopRequestedAt, finishedAt, durationMs });
+    Object.freeze(this);
+  }
+  toJSON() { return { ...this }; }
+}
+
 const FAILURE_VERSION = 2;
 const DIAGNOSTIC_VERSION = 1;
 const MAX_FAILURE_BYTES = 16 * 1024;

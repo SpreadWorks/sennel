@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { SourceExecutionObservationAppends } from "./source-execution-observation-appends.js";
 import { TaskRepairRecurrence } from "./review-recurrence.js";
 import { CanonicalCommandAttemptArtifactHistory } from "./canonical-command-result.js";
 import { TaskReviewAccounting, canonicalTaskReviewHistory } from "./task-review-accounting.js";
@@ -95,7 +96,9 @@ export class TaskReviewPublicationBinding {
       || view.state.runId !== this.source.runId || view.state.specId !== this.source.specId) {
       throw new Error("Task Review publication Attempt or Task binding changed before canonical publication");
     }
-    this.manifest.assertMatchesCurrent(this.baseline);
+    this.manifest.assertMatchesCurrent(this.baseline, {
+      executionObservations: new SourceExecutionObservationAppends(view, this.baseline.snapshot),
+    });
     this.canonicalObservation.assertTransitionView(view);
     const { bytes, document } = canonicalSpecFromView(view);
     if (crypto.createHash("sha256").update(bytes).digest("hex") !== this.specDigest) {

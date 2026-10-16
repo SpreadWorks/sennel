@@ -593,6 +593,12 @@ export class FlowManager {
       specId: input.specId ?? this._boundSpecId,
     });
   }
+  prepareExecutionObservationSession(input = {}) {
+    return this._store.prepareExecutionObservationSession({ ...input, specId: input.specId ?? this._boundSpecId });
+  }
+  readExecutionObservations(input = {}) {
+    return this._store.readExecutionObservations({ ...input, specId: input.specId ?? this._boundSpecId });
+  }
   claimExecutionContract(input) { return this._store.claimExecutionContract(input); }
   readStoredExecutionContract(input) { return this._store.readStoredExecutionContract(input); }
   artifactWorkerExecutionState(input) { return this._store.artifactWorkerExecutionState(input); }

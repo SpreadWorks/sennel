@@ -1,5 +1,6 @@
 import path from "node:path";
 import { readManagedOutput } from "./managed-process-output.js";
+import { assertManagedRecordIdentity } from "./managed-process-record.js";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual } from "node:util";
@@ -8,6 +9,7 @@ import { RuntimeChildExecution } from "./runtime-package.js";
 import { TemporaryPaths } from "./temporary-paths.js";
 import { ProcessExecutionRuntime, ProcessExecutionControlFailure, PROCESS_EXECUTION_SCOPE_ENV } from "./process-execution-runtime.js";
 import { ProcessIdentity } from "./process-identity.js";
+import { ProcessExecutionCommandDescriptor } from "./process-execution-values.js";
 import { AgentProcessStopEvidence } from "./agent-failure.js";
 import { AgentTimeoutError } from "./process-supervisor.js";
 import { DEFAULT_AGENT_PROCESS_TREE_GRACE_MS } from "./agent-timeout.js";
@@ -65,13 +67,7 @@ async function rejectManagedControlFailure(error, report) {
   throw error;
 }
 
-function assertRecord(record, call) {
-  if (!record || record.executionId !== call.executionId || record.callId !== call.callId
-    || record.capability !== call.capability || record.ownerToken !== call.ownerToken) {
-    throw managedControlFailure("PROCESS_EXECUTION_AUTHORITY_MISMATCH", "Managed record belongs to another physical call");
-  }
-  return record;
-}
+function assertRecord(record, call) { return assertManagedRecordIdentity(record, call); }
 
 function assertNoControlFailure(record, call) {
   if (record.state === "control-failed" || record.controlFailure != null) {
@@ -143,7 +139,10 @@ export async function executeManagedProcess(command, args, options = {}) {
     providerAttemptId: options.providerAttemptId ?? null,
     logicalInvocationId: options.logicalInvocationId ?? null,
     providerAttemptContext: options.providerAttemptContext ?? null,
+    observationBinding: options.observationBinding ?? null,
+    measurementId: options.measurementId ?? null,
     promptProcessIdentity: options.promptProcessIdentity ?? null,
+    command: new ProcessExecutionCommandDescriptor(command, args, { cwd: options.cwd, executionRoot: runtime.executionRoot }),
     timeoutMs, deadline });
   const notify = (type, pid = null) => options.onSupervisorEvent?.({ type, pid, callId: call.callId, executionId: call.executionId });
   const refuse = async (error) => {
@@ -291,24 +290,23 @@ export async function executeManagedProcess(command, args, options = {}) {
     const outcome = settlement.outcome;
     const stdout = settlement.stdout.toString();
     const stderr = settlement.stderr.toString();
+    let failure = null;
     if (outcome.timedOut) {
-      const error = new AgentTimeoutError({ timeoutMs, graceMs, finalAction: outcome.finalAction,
+      failure = new AgentTimeoutError({ timeoutMs, graceMs, finalAction: outcome.finalAction,
         stopEvidence: settlement.stopEvidence, timeoutDiagnostic: dynamicTimeoutDiagnostic || options.timeoutDiagnostic || null });
-      error.stdout = stdout; error.stderr = stderr; error.processExecutionStopReceipt = processExecutionStopReceipt;
-      throw error;
+    } else if (outcome.aborted || abortRequested) {
+      failure = options.abortSignal?.reason instanceof Error ? options.abortSignal.reason : new Error("The operation was aborted");
+      failure.stopEvidence = settlement.stopEvidence;
+    } else if (outcome.error) {
+      failure = new Error(outcome.error.message);
+      failure.code = outcome.error.code;
     }
-    if (outcome.aborted || abortRequested) {
-      const error = options.abortSignal?.reason instanceof Error ? options.abortSignal.reason : new Error("The operation was aborted");
-      error.stopEvidence = settlement.stopEvidence;
-      error.stdout = stdout; error.stderr = stderr; error.processExecutionStopReceipt = processExecutionStopReceipt;
-      throw error;
+    if (failure !== null) {
+      Object.assign(failure, { stdout, stderr, processExecutionStopReceipt,
+        providerStarted: outcome.providerStarted, timing: outcome.timing ?? null });
+      throw failure;
     }
-    if (outcome.error) {
-      const error = new Error(outcome.error.message); error.code = outcome.error.code;
-      error.stdout = stdout; error.stderr = stderr; error.processExecutionStopReceipt = processExecutionStopReceipt; error.providerStarted = outcome.providerStarted;
-      throw error;
-    }
-    return { providerStarted: outcome.providerStarted, code: outcome.code, signal: outcome.signal, stdout, stderr,
+    return { providerStarted: outcome.providerStarted, code: outcome.code, signal: outcome.signal, stdout, stderr, timing: outcome.timing ?? null,
       processExecutionStopReceipt, stdinError: outcome.stdinError, processTreeQuiescence: "confirmed", stopEvidence: settlement.stopEvidence };
   } catch (error) {
     // Admission and durability failures retain their class. They cannot become

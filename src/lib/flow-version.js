@@ -60,7 +60,7 @@ const SOURCE_COMPLETION_OPERATIONS = new Set([
 // A typed task-impl overview contribution likewise updates the one root Spec
 // record, rather than creating a task-local deliverable.
 const FLOW_WIDE_TASK_ACTIVITY_ARTIFACTS = new Set([
-  "execution.contract", "prompt.execution.progress", "prompt.execution.event", "prompt.execution.budget",
+  "execution.response.adoption", "execution.contract", "prompt.execution.progress", "prompt.execution.event", "prompt.execution.budget",
   "flow.state",
   "flow.activities",
   "spec.record",
@@ -1058,6 +1058,11 @@ export class FlowArtifactActivityAssociation {
       if (sourceCompletion || externalUpgrade) return this;
       throw new Error("system upgrade.result may be associated only with a source completion or publish_upgrade_result Activity");
     }
+    // Metric and note Activities can name their fixed producing Step while
+    // the Store publishes the shared state/ledger with system authority.
+    if (["record_metric", "record_note"].includes(this.operation)
+      && ["flow.state", "flow.activities"].includes(artifact.logicalKey)
+      && artifact.slot.publicationStep === "system") return this;
     let updaterStep;
     try {
       updaterStep = this.updaterStep;

@@ -123,6 +123,7 @@ import {
   SourceMutationBaseline,
 } from "../lib/worker-artifact-handoff.js";
 import { TaskReviewExecutionIdentity } from "../lib/task-review-execution-identity.js";
+import { SourceExecutionObservationCatalog, SourceExecutionObservationAppends } from "../lib/source-execution-observation-appends.js";
 import {
   ReviewProtocolContract,
   ReviewProtocolController,
@@ -161,9 +162,9 @@ function reviewInputRoot() {
     ?? container.get(container.has("mainRoot") ? "mainRoot" : "root");
 }
 
-function reviewTemporaryRoot() {
+function reviewTemporaryRoot(root = reviewInputRoot()) {
   return reviewExecutionContext ? flowTemporaryRoot(reviewExecutionContext)
-    : TemporaryPaths.runtimePath(reviewInputRoot(), "review");
+    : TemporaryPaths.runtimePath(root, "review");
 }
 
 const reviewAgentInvocationOptions = (prompt, commandId, systemPrompt, protocolOptions = {}) => ({
@@ -322,10 +323,11 @@ async function synthesizeReviewFindings({
 }
 
 class TaskReviewSourceObservation {
-  constructor({ protocolAttempt, baseline } = {}) {
+  constructor({ protocolAttempt, baseline, executionObservations = null } = {}) {
     this.protocolAttempt = protocolAttempt;
     if (!(baseline instanceof SourceMutationBaseline)) throw new Error("Task Review source observation requires a source baseline");
     this.baseline = baseline;
+    this.executionObservations = executionObservations;
     Object.freeze(this);
   }
 }
@@ -344,29 +346,47 @@ class TaskReviewSourceEffectDetail {
 }
 
 export class TaskReviewSourceEffectObserver {
-  constructor({ root, executionIdentity, agent = null } = {}) {
+  constructor({ root, executionIdentity, agent = null, flowManager = null, specId = null } = {}) {
     this.root = path.resolve(root);
     if (!(executionIdentity instanceof TaskReviewExecutionIdentity)) {
       throw new Error("Task Review source observation requires its typed execution identity");
     }
     this.executionIdentity = executionIdentity;
+    this.flowManager = flowManager;
+    this.specId = specId;
     this.ignoredDirectories = taskReviewProtocolIgnoredDirectories({ root: this.root, agent });
     Object.freeze(this);
   }
 
   capture(protocolAttempt) {
-    return new TaskReviewSourceObservation({
-      protocolAttempt,
-      baseline: SourceMutationBaseline.capture({
-        root: this.root,
-        attempt: this.executionIdentity.attempt,
-        ignoredDirectories: this.ignoredDirectories,
-      }),
-    });
+    const capture = (view = null) => {
+      if (view !== null && !this.executionIdentity.attempt.matches(view.state)) {
+        throw new Error("Task Review source observation differs from its parent-issued Attempt");
+      }
+      return new TaskReviewSourceObservation({
+        protocolAttempt,
+        baseline: SourceMutationBaseline.capture({
+          root: this.root,
+          attempt: this.executionIdentity.attempt,
+          ignoredDirectories: this.ignoredDirectories,
+          runtimeLocks: view === null ? [] : [view.location.runtimeLock("runtime.lock.artifact-catalog"),
+            view.location.runtimeLock("runtime.lock.current-flow-state")],
+        }),
+        executionObservations: view === null ? null : new SourceExecutionObservationCatalog(view),
+      });
+    };
+    return typeof this.flowManager?.readCanonicalTransitionView === "function"
+      ? this.flowManager.readCanonicalTransitionView({ ...(this.specId === null ? {} : { specId: this.specId }), read: capture }) : capture();
   }
 
   hasEffect(before, after) {
-    return before.baseline.snapshot.allChangedPaths(after.baseline.snapshot).length > 0;
+    const changed = before.baseline.snapshot.allChangedPaths(after.baseline.snapshot);
+    if (changed.length === 0) return false;
+    if (before.executionObservations === null || after.executionObservations === null) return true;
+    const appends = new SourceExecutionObservationAppends(after.executionObservations, before.baseline.snapshot);
+    return !appends.preservesCatalog(before.executionObservations)
+      || !appends.matches(new Map(after.baseline.snapshot.entries.map((entry) => [entry.path, entry])))
+      || !appends.explainsUnjournaled(changed);
   }
 
   describe(before, after) {
@@ -400,7 +420,7 @@ function taskReviewProtocolIgnoredDirectories({ root, agent }) {
 }
 
 function taskReviewAgentRuntimeDirectories({ root, agent }) {
-  const runtimeDirectories = agent?.runtimeDirectories?.({ temporaryRoot: reviewTemporaryRoot() });
+  const runtimeDirectories = agent?.runtimeDirectories?.({ temporaryRoot: reviewTemporaryRoot(root) });
   if (runtimeDirectories == null) return [];
   if (!(runtimeDirectories instanceof AgentRuntimeDirectorySet)) {
     throw new Error("Task Review agent runtime directories must use AgentRuntimeDirectorySet");
@@ -2781,6 +2801,7 @@ async function runReviewWithDependencies(options) {
 
 async function runTaskReviewProtocol({
   root,
+  specId = null,
   executionIdentity,
   flowManager,
   requirementIds,
@@ -2806,7 +2827,16 @@ async function runTaskReviewProtocol({
   if (!(executionIdentity instanceof TaskReviewExecutionIdentity)) {
     throw new Error("Task Review protocol requires its typed execution identity");
   }
-  const observer = new TaskReviewSourceEffectObserver({ root, executionIdentity, agent });
+  const manifest = canonicalReviewWorkerUnit()?.manifestDocument ?? null;
+  if (manifest !== null) {
+    if (specId !== null && specId !== manifest.specId
+      || manifest.taskId !== executionIdentity.taskId || manifest.nodeId !== executionIdentity.attempt.nodeId
+      || manifest.attemptId !== executionIdentity.attempt.id) {
+      throw new FlowExecutionContractRefusal("Task Review observation target differs from its parent work unit");
+    }
+    specId ??= manifest.specId;
+  }
+  const observer = new TaskReviewSourceEffectObserver({ root, executionIdentity, agent, flowManager, specId });
   const deferredMetrics = new Map();
   const metricSettlement = new ReviewProtocolAttemptSettlement({
     settle: async (attempt) => {
@@ -5593,6 +5623,7 @@ async function runReview(rawArgs) {
         maxProviderCalls: 2 * (taskReviewTransportRetryPolicy(reviewAgent).retryCount + 1),
         execute: ({ request, call }) => runTaskReviewProtocol({
           root,
+          specId: flow.specId,
           executionIdentity: taskReviewExecution,
           flowManager,
           requirementIds,

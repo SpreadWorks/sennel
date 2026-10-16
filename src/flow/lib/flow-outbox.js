@@ -1,3 +1,4 @@
+import { FlowExecutionObservationBinding } from "../../lib/flow-execution-observation.js";
 import { requireString } from "./flow-value-assertions.js";
 import { FlowOutboxIdentity } from "./flow-outbox-identity.js";
 export { FlowOutboxIdentity } from "./flow-outbox-identity.js";
@@ -138,6 +139,7 @@ export class FlowOutboxEntry {
     failure = null,
     failureHistory = [],
     exactRecoveryReceipt = null,
+    executionBinding = null,
   }) {
     if (!(identity instanceof FlowOutboxIdentity)) throw new Error("outbox identity is required");
     if (!OUTBOX_STATUSES.has(status)) throw new Error(`invalid outbox status: ${status}`);
@@ -153,6 +155,9 @@ export class FlowOutboxEntry {
     if (exactRecoveryReceipt != null && !(exactRecoveryReceipt instanceof FlowOutboxRecoveryReceipt)) {
       throw new Error("outbox exact recovery receipt must be a FlowOutboxRecoveryReceipt");
     }
+    this.executionBinding = executionBinding === null ? null : executionBinding instanceof FlowExecutionObservationBinding
+      ? executionBinding : FlowExecutionObservationBinding.fromJSON(executionBinding);
+    this.executionBinding?.assertOutboxAttempt(identity.idempotencyKey, attempt);
     this.identity = identity;
     this.status = status;
     this.attempt = attempt;
@@ -202,6 +207,7 @@ export class FlowOutboxEntry {
       updatedAt,
       failureHistory: this.failureHistory,
       exactRecoveryReceipt: this.exactRecoveryReceipt,
+      executionBinding: this.executionBinding,
     });
   }
 
@@ -217,6 +223,7 @@ export class FlowOutboxEntry {
       result,
       failureHistory: this.failureHistory,
       exactRecoveryReceipt: this.exactRecoveryReceipt,
+      executionBinding: this.executionBinding,
     });
   }
 
@@ -235,12 +242,14 @@ export class FlowOutboxEntry {
         recordedAt: at,
       })],
       exactRecoveryReceipt: this.exactRecoveryReceipt,
+      executionBinding: this.executionBinding,
     });
   }
 
   toJSON() {
     return {
       ...this.identity.toJSON(),
+      ...(this.executionBinding === null ? {} : { executionBinding: this.executionBinding.toJSON() }),
       status: this.status,
       attempt: this.attempt,
       startedAt: this.startedAt,
@@ -298,6 +307,7 @@ export class FlowOutboxRecoveryClaim {
     const updatedAt = requireTimestamp(at, "exact recovery timestamp");
     return new FlowOutboxEntry({
       identity: entry.identity,
+      executionBinding: entry.executionBinding,
       status: "pending",
       attempt: entry.attempt,
       startedAt: entry.startedAt,
@@ -544,6 +554,7 @@ export class FlowOutboxStore {
         startedAt,
         updatedAt,
         failureHistory: status.failureHistory || [],
+        executionBinding: status.executionBinding ?? null,
         exactRecoveryReceipt,
       });
     }
@@ -556,6 +567,7 @@ export class FlowOutboxStore {
         updatedAt,
         result: result === undefined ? status.result ?? null : result,
         failureHistory: status.failureHistory || [],
+        executionBinding: status.executionBinding ?? null,
         exactRecoveryReceipt,
       });
     }
@@ -568,6 +580,7 @@ export class FlowOutboxStore {
         updatedAt,
         failure: status.failure || "side effect failed",
         failureHistory: status.failureHistory || [],
+        executionBinding: status.executionBinding ?? null,
         exactRecoveryReceipt,
       });
     }

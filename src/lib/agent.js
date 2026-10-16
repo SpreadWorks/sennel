@@ -17,6 +17,9 @@
  */
 
 import fs from "fs";
+import { performance } from "node:perf_hooks";
+import { AgentExecutionObservation } from "./agent-execution-observation.js";
+import { FlowExecutionObservationSession } from "./flow-execution-observation.js";
 import path from "path";
 import crypto from "crypto";
 import { ProcessExecutionRuntime, ProcessExecutionControlFailure } from "./process-execution-runtime.js";
@@ -340,9 +343,14 @@ class Agent {
    * @param {boolean} [options._dryRun] - Test-only short-circuit
    * @returns {Promise<string>} response text (trimmed)
    */
-  async call(prompt, options) {
-    return withManagedProcessScope({ executionRoot: this._paths.root || process.cwd() },
-      () => this._callInProcessScope(prompt, options));
+  async call(prompt, options = {}) {
+    options ??= {};
+    const logicalInvocationId = options.providerCallAdmission?.invocation?.logicalInvocationId
+      ?? options.logicalInvocationId ?? crypto.randomUUID();
+    const caller = AgentExecutionObservation.currentCaller();
+    return AgentExecutionObservation.run(logicalInvocationId, () =>
+      withManagedProcessScope({ executionRoot: this._paths.root || process.cwd() },
+        () => this._callInProcessScope(prompt, { ...options, logicalInvocationId, observationCaller: caller })));
   }
 
   async _callInProcessScope(prompt, options) {
@@ -354,6 +362,10 @@ class Agent {
     if (opts.providerAttemptAdmission != null && !(opts.providerAttemptAdmission instanceof AgentProviderAttemptAdmission)) {
       throw new TypeError("Agent provider attempt admission must be typed");
     }
+    if (opts.executionObservationSession != null && !(opts.executionObservationSession instanceof FlowExecutionObservationSession)) {
+      throw new TypeError("Agent execution observation session must be typed");
+    }
+    let observation = null;
     const providerCallAdmission = opts.providerCallAdmission ?? null;
     providerCallAdmission?.claim();
     try {
@@ -378,6 +390,30 @@ class Agent {
         message: attempt.formatFailure(),
       });
     }
+    const capturedMetricContext = flowAttribution.usesFlowState ? this._flowManager?.resolveCurrentContext() ?? null : null;
+    const metricContext = capturedMetricContext === null ? null : Object.freeze({ ...capturedMetricContext });
+    const runtime = ProcessExecutionRuntime.current();
+    const processExecutionBinding = opts.processExecutionBinding ?? providerCallAdmission?.processExecutionBinding
+      ?? (runtime?.binding?.value == null ? null : runtime.binding);
+    let session;
+    try {
+      session = flowAttribution.usesFlowState
+        ? (opts.executionObservationSession ?? this._flowManager?.prepareExecutionObservationSession?.({
+            binding: processExecutionBinding,
+          }) ?? null)
+        : null;
+    } catch (cause) {
+      if (cause instanceof ProcessExecutionControlFailure) throw cause;
+      throw new ProcessExecutionControlFailure("observation-save-failed", "Execution observation could not be started", { cause });
+    }
+    const requestId = generateRequestId();
+    if (session) observation = new AgentExecutionObservation({ session,
+      logicalInvocationId: opts.logicalInvocationId, requestId, caller: opts.observationCaller,
+      role: opts.commandId ?? null,
+      requested: { provider: resolved.providerKey, profileKey: resolved.profileKey,
+        ...resolved.provider.requestedIdentity(resolved.profile.args ?? []) },
+      promptIdentity: providerCallAdmission?.promptObservationIdentity ?? null });
+    providerCallAdmission?.recordExecutionObservation?.(observation?.diagnosticReference() ?? null);
     let executionContext;
     let temporaryRoot;
     try {
@@ -394,8 +430,9 @@ class Agent {
     const retry = this.providerRetryPolicy(opts);
     const invocationOptions = {
       ...opts,
-      logicalInvocationId: opts.providerCallAdmission?.invocation?.logicalInvocationId
-        ?? opts.logicalInvocationId ?? crypto.randomUUID(),
+      executionObservation: observation,
+      processExecutionBinding: processExecutionBinding ?? (runtime?.borrowed ? runtime.binding : session?.binding.toJSON()),
+      logicalInvocationId: opts.logicalInvocationId,
       executionWorkDir: executionContext.providerWorkDir,
       spawnCwd: executionContext.spawnCwd,
       temporaryRoot,
@@ -415,12 +452,14 @@ class Agent {
         providerCalled: false,
         fresh: false,
       });
+      observation?.ready({ cacheOutcome: "hit", result: { text: hit, usage: null } });
       await persistPromptCacheHitMetric({
         flowManager: this._flowManager,
         context: promptCache.context,
         provider: resolved.providerKey,
         profileKey: resolved.profileKey,
         responseChars: textStats(hit).chars,
+        executionObservation: observation?.diagnosticReference() ?? null,
       }, opts.deferredMetric ?? null);
       return hit;
     }
@@ -430,10 +469,9 @@ class Agent {
       await promptCache.cache.removeIfMatches(promptCache.key, hit);
     }
     let cacheCandidate = null;
+    const cacheOutcome = hit != null ? "invalid_hit" : cachePolicy.mode === "default" ? "miss" : cachePolicy.mode;
     opts.onCacheDecision?.({
-      cacheOutcome: hit != null
-        ? "invalid_hit"
-        : (cachePolicy.mode === "refresh" ? "refresh" : (cachePolicy.mode === "bypass" ? "bypass" : "miss")),
+      cacheOutcome,
       providerCalled: true,
       fresh: hit != null || cachePolicy.mode !== "default",
     });
@@ -447,6 +485,7 @@ class Agent {
       profileKey: resolved.profileKey,
       flowAttribution,
       deferredMetric: opts.deferredMetric ?? null,
+      metricContext, requestId, observation,
       invoke: async () => {
         cacheCandidate = await this._callOnceWithRetry(
           resolved,
@@ -455,6 +494,7 @@ class Agent {
           retry,
           invocationBlueprint,
         );
+        observation?.ready({ cacheOutcome, result: cacheCandidate });
         return cacheCandidate;
       },
     });
@@ -462,6 +502,9 @@ class Agent {
       await promptCache.cache.set(promptCache.key, text);
     }
     return text;
+    } catch (error) {
+      observation?.failed(error);
+      throw error;
     } finally {
       providerCallAdmission?.settle();
     }
@@ -695,8 +738,11 @@ class Agent {
         commandId: options.commandId,
       });
       blueprint.projection.assertMaterializedArgvWithinLimit(materializedInvocation.finalArgs);
+      const providerAttemptId = crypto.randomUUID();
       const providerAttemptContext = new AgentProviderAttemptContext({
-        attemptId: crypto.randomUUID(),
+        attemptId: providerAttemptId,
+        measurementId: providerAttemptId,
+        observationBinding: options.executionObservation?.binding.toJSON() ?? null,
         logicalInvocationId: options.logicalInvocationId,
         commandId: options.commandId ?? null,
         attemptIndex: attempt,
@@ -715,6 +761,7 @@ class Agent {
         throw error;
       }
       options.abortSignal?.throwIfAborted();
+      options.executionObservation?.providerStarted(providerAttemptContext);
       try {
         const result = await this._callOnce(resolved, prompt, {
           ...options,
@@ -756,21 +803,22 @@ class Agent {
     // the canonical checkout through process.cwd().
     const cwd = options.spawnCwd || path.resolve(this._paths.root || process.cwd());
     let providerStarted = false;
+    let startedAt = null;
+    const monotonicStart = performance.now();
     let attemptObserved = false;
-    const observeSettlement = async ({ status, usage = null }) => {
+    const observeSettlement = async ({ status, usage = null, reported = null, outcome = null }) => {
       if (attemptObserved || !options.providerAttemptContext) return;
       attemptObserved = true;
-      await observeAgentProviderAttempt(options.providerAttemptObserver ?? null,
-        new AgentProviderAttemptRecord({ context: options.providerAttemptContext, status, usage, providerStarted }));
+      const record = new AgentProviderAttemptRecord({ context: options.providerAttemptContext, status, usage,
+        providerStarted, reported, startedAt, endedAt: new Date().toISOString(),
+        durationMs: Math.max(0, Math.round(performance.now() - monotonicStart)) });
+      options.executionObservation?.providerSettled(record, outcome);
+      await observeAgentProviderAttempt(options.providerAttemptObserver ?? null, record);
     };
-    const observeFailure = (stdout = "") => {
+    const observeFailure = (error) => {
       if (attemptObserved) return;
-      return observeSettlement({
-        status: "failed",
-        usage: profile.jsonOutputFlag
-          ? tryParseProvider(provider, String(stdout).trim(), false)?.usage ?? null
-          : null,
-      });
+      const parsed = profile.jsonOutputFlag ? tryParseProvider(provider, String(error.stdout ?? "").trim(), false) : null;
+      return observeSettlement({ status: "failed", usage: parsed?.usage ?? null, reported: parsed?.reported ?? null, outcome: error });
     };
 
     try {
@@ -795,7 +843,10 @@ class Agent {
           platform: this._supervision.platform,
           spawn: this._supervision.spawn,
           runTaskkill: this._supervision.runTaskkill,
-          onSpawn: (child) => { providerStarted = child.pid != null; },
+          onSpawn: (child) => {
+            providerStarted = child.pid != null;
+            if (providerStarted) startedAt = new Date().toISOString();
+          },
           onEvent: options.onSupervisorEvent,
           onSupervisorEvent: (event) => {
             options.onSupervisorEvent?.(event);
@@ -807,15 +858,22 @@ class Agent {
           waitForProcessTree: options.waitForProcessTree === true,
           timeoutDiagnostic: options.timeoutDiagnostic,
           commandId: options.commandId,
+          observationBinding: options.executionObservation?.binding.toJSON() ?? null,
+          measurementId: options.providerAttemptContext?.measurementId ?? null,
           providerAttemptId: options.providerAttemptContext?.attemptId,
           logicalInvocationId: options.providerAttemptContext?.logicalInvocationId,
           providerAttemptContext: options.providerAttemptContext?.toJSON() ?? null,
           promptProcessIdentity: options.providerCallAdmission?.processExecutionIdentity?.toJSON() ?? null,
         });
         if (completed.providerStarted !== undefined) providerStarted = completed.providerStarted;
+        startedAt = completed.timing?.startedAt ?? startedAt;
       } catch (error) {
         if (error.providerStarted !== undefined) providerStarted = error.providerStarted;
-        if (error instanceof ProcessExecutionControlFailure) throw error;
+        startedAt = error.timing?.startedAt ?? startedAt;
+        if (error instanceof ProcessExecutionControlFailure) {
+          if (error.providerStarted === undefined && !providerStarted) providerStarted = null;
+          throw error;
+        }
         const startup = AgentProviderStartupFailureEvidence.fromSpawnFailure(error, { providerKey, profileKey, child: error.child });
         if (startup !== null) error.providerStartupEvidence = startup;
         throw formatSpawnError(error, { command: profile.command, env, providerKey, profileKey, commandId: options.commandId });
@@ -831,8 +889,10 @@ class Agent {
           ...(profile.jsonOutputFlag ? (parsed ?? { text: trimmed, usage: null, cacheable: false })
             : { text: filterStreamingEvents(trimmed), usage: null }),
           stdout, stderr, providerCompletionEvidence,
+          processExecutionStopReceipt: completed.processExecutionStopReceipt ?? null,
+          stopEvidence: completed.stopEvidence ?? null,
         };
-        await observeSettlement({ status: result.text ? "completed" : "empty", usage: result.usage });
+        await observeSettlement({ status: result.text ? "completed" : "empty", usage: result.usage, reported: result.reported, outcome: result });
         return result;
       }
       const parts = [`provider=${providerKey}`, `profile=${profileKey}`];
@@ -844,10 +904,12 @@ class Agent {
       if (stdoutPreview) parts.push(`stdoutPreview=${stdoutPreview}`);
       const error = new Error(parts.join(" | ") || "unknown error");
       Object.assign(error, { code, signal, killed: signal === "SIGTERM", stdinError: stdinError || null,
-        stdout, stderr, providerCompletionEvidence });
+        stdout, stderr, providerCompletionEvidence,
+        processExecutionStopReceipt: completed.processExecutionStopReceipt ?? null,
+        stopEvidence: completed.stopEvidence ?? null });
       throw error;
     } catch (error) {
-      if (!(error instanceof ProcessExecutionControlFailure) && (!options.abortSignal?.aborted || providerStarted)) await observeFailure(error.stdout);
+      if (error.reason !== "observation-save-failed") await observeFailure(error);
       throw error;
     } finally {
       if (pendingSchemaWrite) {
@@ -1100,7 +1162,7 @@ function formatSpawnError(err, { command, env, providerKey, profileKey, commandI
 
   diagnostic.name = err.name || "Error";
   diagnostic.cause = err;
-  for (const key of ["code", "errno", "syscall", "path", "spawnargs", "providerStartupEvidence"]) {
+  for (const key of ["code", "errno", "syscall", "path", "spawnargs", "providerStartupEvidence", "providerStarted", "timing", "processExecutionStopReceipt", "stopEvidence"]) {
     if (err[key] != null) diagnostic[key] = err[key];
   }
   return diagnostic;
@@ -1398,14 +1460,15 @@ async function runWithLogging({
   profileKey,
   flowAttribution,
   deferredMetric,
+  metricContext, requestId, observation,
   invoke,
 }) {
-  const requestId = generateRequestId();
   const startedAt = Date.now();
   const logAttribution = flowAttribution.usesFlowState
-    ? {}
+    ? { flowContext: metricContext }
     : { flowContext: flowAttribution.logContext };
-  await logger.agent({ phase: "start", requestId, ...logAttribution });
+  const executionObservation = observation?.diagnosticReference() ?? null;
+  await logger.agent({ phase: "start", requestId, executionObservation, ...logAttribution });
 
   let result = null;
   let err = null;
@@ -1421,7 +1484,8 @@ async function runWithLogging({
     const responseStats = textStats(text);
     const payload = {
       agentKey: command ?? null,
-      model: null,
+      model: result?.reported?.model ?? null,
+      executionObservation,
       prompt: { system: systemPrompt, user: prompt },
       response: {
         text,
@@ -1451,7 +1515,8 @@ async function runWithLogging({
         profileKey,
         usage,
         responseChars: responseStats.chars,
-        model: null,
+        model: result?.reported?.model ?? null,
+        context: metricContext, executionObservation,
         durationMs: Math.max(0, Math.round(Date.now() - startedAt)),
       }, deferredMetric);
     }

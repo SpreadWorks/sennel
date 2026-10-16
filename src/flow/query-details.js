@@ -1,5 +1,7 @@
 import { FLOW_ARTIFACT_CONTRACTS, FlowArtifactSpecReviewActivityEvidenceDocument } from "../lib/flow-artifact-contract.js";
 import { QueryError, canonicalJson, canonicalDigest, publicArtifactId, publicArtifactKey, ReferenceResolver } from "./query-values.js";
+import { QueryArtifactCapture, QueryDetailArtifactRequired } from "./query-artifact-capture.js";
+export { QueryDetailArtifactRequired } from "./query-artifact-capture.js";
 import { CanonicalSpecReview } from "./lib/spec-review-artifacts.js";
 import { CanonicalDraftReviewObservation, reviewProcessStopContractParameters, assertStoredReviewProcessStop } from "./lib/canonical-review-artifacts.js";
 import { DraftReviewArtifactDocument } from "./lib/draft-review-artifacts.js";
@@ -392,21 +394,12 @@ class ProducerDetails {
   }
 }
 
-/** Capture must hydrate this cataloged input before retrying the projection. */
-export class QueryDetailArtifactRequired extends Error {
-  constructor(descriptor) {
-    super(`Detail projection requires captured artifact bytes: ${descriptor.relativePath}`);
-    this.name = "QueryDetailArtifactRequired";
-    this.descriptor = descriptor;
-  }
-}
-
 /** Read-only detail resolution over exactly the bytes admitted by query capture. */
 export class QueryDetailIndex {
-  constructor({ state, activities, catalog, artifactBytes, snapshotId, flowVersionId = state.flowVersionId, repositoryIdentity = null }) {
+  constructor({ state, activities, catalog, artifactBytes, snapshotId, flowVersionId = state.flowVersionId, repositoryIdentity = null, referenceResolver = null }) {
     Object.assign(this, { state, activities, catalog, artifactBytes, snapshotId, flowVersionId, repositoryIdentity });
     this.activities = activities.map((activity) => FlowActivity.canonical(activity));
-    this.resolver = new ReferenceResolver(catalog);
+    this.resolver = referenceResolver ?? new ReferenceResolver(catalog);
     this.details = new Map();
     this.entities = new DetailGroups(() => new Map());
     this.resolving = new Set();
@@ -526,10 +519,7 @@ export class QueryDetailIndex {
     catch (cause) { throw new QueryError("CANONICAL_RECORD_INCONSISTENT", "/canonical", "Captured detail artifact is not JSON", { referenceId: descriptor.relativePath, cause }); }
   }
   readCatalogedArtifact(descriptor) {
-    if (!this.artifactBytes.has(descriptor.relativePath)) throw new QueryDetailArtifactRequired(descriptor);
-    const bytes = this.artifactBytes.get(descriptor.relativePath);
-    if (!Buffer.isBuffer(bytes)) throw new QueryError("CANONICAL_RECORD_UNREADABLE", "/canonical", "Captured detail artifact bytes are missing", { referenceId: descriptor.relativePath });
-    return bytes;
+    return new QueryArtifactCapture(this.artifactBytes).read(descriptor);
   }
   forActivity(activity) {
     activity = FlowActivity.canonical(activity);

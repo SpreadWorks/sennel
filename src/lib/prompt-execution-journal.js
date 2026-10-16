@@ -2,6 +2,7 @@ import { isDeepStrictEqual } from "node:util";
 import { createHash } from "node:crypto";
 import { ProcessExecutionStopReceipt, ProcessExecutionControlFailure, ProcessExecutionRecoveryCall,
   ProcessExecutionNonExecutionEvidence, executionValueDigest as processEvidenceDigest } from "./process-execution-values.js";
+import { FlowExecutionObservationBinding } from "./flow-execution-observation.js";
 import { AgentTransportFailureObservation } from "./agent-transport-failure-observation.js";
 
 function text(value, field) {
@@ -79,6 +80,28 @@ export class PromptExecutionScope {
   static fromJSON(value) {
     fields(value, ["stage", "round"], "Prompt execution scope");
     return new PromptExecutionScope(value);
+  }
+}
+
+/** Exact durable receiver evidence, carried alongside the existing response. */
+export class PromptResponseExecutionObservation {
+  constructor({ binding, logicalInvocationId, requestId, scope, planDigest, batchDigest,
+    responseCallIndex, requestDigest, schemaDigest, providerKey, profileKey, responseDigest, receivedAt }) {
+    this.binding = binding instanceof FlowExecutionObservationBinding ? binding : FlowExecutionObservationBinding.fromJSON(binding);
+    this.scope = scope instanceof PromptExecutionScope ? scope : PromptExecutionScope.fromJSON(scope);
+    for (const [key, value] of Object.entries({ logicalInvocationId, requestId, planDigest, batchDigest,
+      requestDigest, schemaDigest, providerKey, profileKey, responseDigest, receivedAt })) this[key] = text(value, key);
+    if (Number.isNaN(Date.parse(receivedAt))) throw new TypeError("Prompt receiver observation timestamp is invalid");
+    this.responseCallIndex = integer(responseCallIndex, "Prompt received response index");
+    Object.freeze(this);
+  }
+  toJSON() { return { ...this, binding: this.binding.toJSON(), scope: this.scope.toJSON() }; }
+  static fromJSON(value) { const restored = new this(value); fields(value, Object.keys(restored.toJSON()), "Prompt receiver observation"); return restored; }
+  assertResponse({ scope, planDigest, batchDigest, response }) {
+    if (!isDeepStrictEqual(this.scope.toJSON(), scope.toJSON()) || this.planDigest !== planDigest || this.batchDigest !== batchDigest
+      || ["responseCallIndex", "requestDigest", "schemaDigest", "providerKey", "profileKey", "responseDigest"]
+        .some((key) => this[key] !== response[key])) throw new TypeError("Prompt receiver observation differs from its saved response");
+    return this;
   }
 }
 
@@ -276,7 +299,7 @@ export class PromptExecutionJournalSnapshot {
       const responseIds = new Set();
       const group = groups.find((entry) => entry.groupId === plan.batches[index].groupId);
       for (const [responseIndex, response] of batch.responses.entries()) {
-        fields(response, ["responseCallIndex", "requestDigest", "schemaDigest", "providerKey", "profileKey", "raw", "origin", "executionAccounting", "responseCharacters", "responseDigest", "rejection"], "Prompt response observation");
+        fields(response, ["responseCallIndex", "requestDigest", "schemaDigest", "providerKey", "profileKey", "raw", "origin", "executionAccounting", "responseCharacters", "responseDigest", "rejection", ...(Object.hasOwn(response, "executionObservation") ? ["executionObservation"] : [])], "Prompt response observation");
         integer(response.responseCallIndex, "Prompt response call index");
         text(response.requestDigest, "Prompt response request digest");
         for (const key of ["schemaDigest", "providerKey", "profileKey"]) text(response[key], `Prompt response ${key}`);
@@ -291,6 +314,8 @@ export class PromptExecutionJournalSnapshot {
           || responseIds.has(response.responseCallIndex)
           || response.executionAccounting.responseCallCount > group.responseCallCount
           || response.executionAccounting.providerAttemptCount > group.budget.providerCallCount) throw new TypeError("Prompt response observation is invalid");
+        if (response.executionObservation !== undefined) PromptResponseExecutionObservation.fromJSON(response.executionObservation)
+          .assertResponse({ scope, planDigest: plan.digest, batchDigest: batch.batchDigest, response });
         responseIds.add(response.responseCallIndex);
       }
       const failedCalls = new Map();

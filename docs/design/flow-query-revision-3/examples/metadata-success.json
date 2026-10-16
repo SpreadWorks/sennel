@@ -9,7 +9,7 @@
     1
   ],
   "snapshot": {
-    "id": "sha256:75ae23ba814813434793bf2974db5f40f25117b06d8fbbee1a87d9e48dfc06ca",
+    "id": "sha256:dafd7fb2a6d6a7bd148d2069a7738ecf426936e2f7d7d3f39ed2b617b7307fe6",
     "algorithm": "sha256",
     "capturedAt": "2026-10-12T00:00:03Z",
     "confirmationOrder": 3,
@@ -391,6 +391,129 @@
         "cacheReadTokens": "activity-usage-cacheReadTokens",
         "cost": "activity-usage-cost"
       }
-    }
+    },
+    "executionCoverage": {
+      "sourceHistory": "partial",
+      "availability": "not-recorded",
+      "reason": "PRODUCER_DID_NOT_RECORD",
+      "producerCoverage": [
+        {
+          "producer": "agent-invocation",
+          "status": "not-recorded",
+          "boundary": "no-source-registration"
+        },
+        {
+          "producer": "provider-attempt",
+          "status": "not-recorded",
+          "boundary": "no-source-registration"
+        },
+        {
+          "producer": "outbox-attempt",
+          "status": "not-recorded",
+          "boundary": "no-source-registration"
+        },
+        {
+          "producer": "process-call",
+          "status": "not-recorded",
+          "boundary": "no-managed-runtime-source-registration"
+        },
+        {
+          "producer": "synchronous-command",
+          "status": "outside-managed-scope",
+          "boundary": "outside-managed-launcher"
+        },
+        {
+          "producer": "unmanaged-async-command",
+          "status": "outside-managed-scope",
+          "boundary": "outside-managed-launcher"
+        },
+        {
+          "producer": "direct-spawn",
+          "status": "outside-managed-scope",
+          "boundary": "outside-managed-launcher"
+        },
+        {
+          "producer": "provider-internal-tool",
+          "status": "outside-managed-scope",
+          "boundary": "outside-managed-launcher"
+        },
+        {
+          "producer": "outer-agent",
+          "status": "outside-managed-scope",
+          "boundary": "outside-managed-launcher"
+        }
+      ],
+      "unassignedItemCount": 0
+    },
+    "executionSummary": {
+      "stepAttemptCount": 0,
+      "logicalInvocationCount": 0,
+      "providerAttemptCount": 0,
+      "managedCallCount": 0,
+      "outboxAttemptCount": 0,
+      "cacheHitCount": 0,
+      "providerStarts": {
+        "confirmed": 0,
+        "notStarted": 0,
+        "unknown": 0
+      },
+      "providerUsage": {
+        "inputTokens": {
+          "knownTotal": 0,
+          "measuredSubjects": 0,
+          "eligibleSubjects": 0,
+          "unknownSubjects": 0,
+          "completeness": "complete"
+        },
+        "outputTokens": {
+          "knownTotal": 0,
+          "measuredSubjects": 0,
+          "eligibleSubjects": 0,
+          "unknownSubjects": 0,
+          "completeness": "complete"
+        },
+        "cacheReadTokens": {
+          "knownTotal": 0,
+          "measuredSubjects": 0,
+          "eligibleSubjects": 0,
+          "unknownSubjects": 0,
+          "completeness": "complete"
+        },
+        "cacheCreationTokens": {
+          "knownTotal": 0,
+          "measuredSubjects": 0,
+          "eligibleSubjects": 0,
+          "unknownSubjects": 0,
+          "completeness": "complete"
+        },
+        "costUsd": {
+          "knownTotal": 0,
+          "measuredSubjects": 0,
+          "eligibleSubjects": 0,
+          "unknownSubjects": 0,
+          "completeness": "complete"
+        }
+      },
+      "logicalDuration": {
+        "knownTotalMs": 0,
+        "measuredSubjects": 0,
+        "eligibleSubjects": 0,
+        "completeness": "complete"
+      },
+      "processDuration": {
+        "knownTotalMs": 0,
+        "measuredSubjects": 0,
+        "eligibleSubjects": 0,
+        "completeness": "complete"
+      },
+      "observedSpan": {
+        "startedAt": null,
+        "finishedAt": null,
+        "completeness": "partial"
+      },
+      "legacyMetricCount": 0,
+      "unassignedMeasurementCount": 0
+    },
+    "executionSources": []
   }
 }

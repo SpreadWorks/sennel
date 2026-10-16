@@ -12,6 +12,7 @@ import {
   PromptProviderProcessIdentity,
   PromptProcessStopObservation,
   PromptExecutionReservationContinuation,
+  PromptResponseExecutionObservation,
 } from "./prompt-execution-journal.js";
 
 export const GLOBAL_PROMPT_ELEMENT_HARD_MAX = 120_000;
@@ -1610,6 +1611,7 @@ export class PromptProviderCallAdmission {
   #attemptJournal;
   #cacheHit = false;
   #cacheIdentity = null;
+  #executionObservation = null;
   #reusesReservation;
   #reservationAvailable;
 
@@ -1667,6 +1669,12 @@ export class PromptProviderCallAdmission {
   }
 
   get processExecutionBinding() { return this.#attemptJournal?.processExecutionBinding ?? null; }
+  get promptObservationIdentity() { return this.#attemptJournal?.promptObservationIdentity ?? null; }
+  get executionObservation() { return this.#executionObservation; }
+  recordExecutionObservation(reference) {
+    if (!this.#claimed || this.#settled || this.#executionObservation !== null) throw new Error("Prompt execution observation requires an active admission");
+    this.#executionObservation = reference;
+  }
   get processExecutionIdentity() { return this.#attemptJournal?.processExecutionIdentity ?? null; }
 
   async afterProviderFailure(failure, context) {
@@ -1758,8 +1766,32 @@ export class PromptExecutionAccounting {
   }
 }
 
+/** Exact receiver inputs whose validated completion a reducer actually consumes. */
+export class PromptCompletionResponseContribution {
+  constructor({ batchDigest, completionDigest, receivedResponses }) {
+    this.batchDigest = requiredText(batchDigest, "Prompt contribution batch digest");
+    if (typeof completionDigest !== "string" || !/^[a-f0-9]{64}$/.test(completionDigest)
+      || !Array.isArray(receivedResponses) || receivedResponses.length === 0) {
+      throw new TypeError("Prompt response contribution requires retained completion and receiver identities");
+    }
+    this.completionDigest = completionDigest;
+    this.receivedResponses = Object.freeze(receivedResponses.map((reference) => reference instanceof PromptResponseExecutionObservation
+      ? reference : PromptResponseExecutionObservation.fromJSON(reference)));
+    if (this.receivedResponses.some((reference) => reference.batchDigest !== batchDigest)) {
+      throw new TypeError("Prompt contribution receiver belongs to another batch");
+    }
+    Object.freeze(this);
+  }
+  toJSON() { return { batchDigest: this.batchDigest, completionDigest: this.completionDigest,
+    receivedResponses: this.receivedResponses.map((reference) => reference.toJSON()) }; }
+  static fromJSON(value) {
+    assertSerializedFields(value, ["batchDigest", "completionDigest", "receivedResponses"], "Prompt response contribution");
+    return new this(value);
+  }
+}
+
 export class PromptBatchCompletion {
-  constructor({ batch, response, responseCharacters, responseItemCount, executionAccounting } = {}) {
+  constructor({ batch, response, responseCharacters, responseItemCount, executionAccounting, receivedResponses = [] } = {}) {
     if (!(batch instanceof PromptBatch)) throw new TypeError("Prompt completion requires its typed batch");
     if (response === undefined) throw new PromptResponseInvalidFailure("Prompt completion response is undefined", { batchDigest: batch.digest });
     this.batch = batch;
@@ -1772,7 +1804,16 @@ export class PromptBatchCompletion {
       throw new TypeError("Prompt completion accounting must be a typed snapshot");
     }
     this.executionAccounting = executionAccounting ?? null;
+    if (!Array.isArray(receivedResponses) || receivedResponses.some((entry) => !(entry instanceof PromptResponseExecutionObservation))) {
+      throw new TypeError("Prompt completion receiver references must be typed");
+    }
+    this.receivedResponses = Object.freeze([...receivedResponses]);
     Object.freeze(this);
+  }
+  responseContribution() {
+    return this.receivedResponses.length === 0 ? null : new PromptCompletionResponseContribution({
+      batchDigest: this.batchDigest, completionDigest: responseContentDigest(this.response), receivedResponses: this.receivedResponses,
+    });
   }
 }
 
@@ -1832,7 +1873,7 @@ class DefaultPromptProtocolPolicy {
 
 /** Durable hooks contain execution observations, never consumer semantics. */
 class BatchProviderAttemptJournal extends PromptProviderAttemptJournal {
-  constructor({ frontier, responseCallIndex, request, save, scope, processExecutionBinding, reservationContinuation = null }) {
+  constructor({ frontier, responseCallIndex, request, save, scope, planDigest, processExecutionBinding, reservationContinuation = null }) {
     const failures = frontier.transportFailures.filter((entry) => entry.responseCallIndex === responseCallIndex);
     super(failures.length);
     this.frontier = frontier;
@@ -1841,11 +1882,16 @@ class BatchProviderAttemptJournal extends PromptProviderAttemptJournal {
     this.schemaDigest = digest(JSON.stringify(request.jsonSchema));
     this.save = save;
     this.scope = scope;
+    this.planDigest = planDigest;
     this.processExecutionBinding = processExecutionBinding;
     this.reusesReservation = reservationContinuation instanceof PromptExecutionReservationContinuation
       && reservationContinuation.pending && frontier.reservationContinuation !== undefined
       && JSON.stringify(frontier.reservationContinuation) === JSON.stringify(reservationContinuation.toJSON());
   }
+
+  get promptObservationIdentity() { return { scope: this.scope.toJSON(), planDigest: this.planDigest,
+    batchDigest: this.frontier.batchDigest, responseCallIndex: this.responseCallIndex,
+    requestDigest: this.requestDigest, schemaDigest: this.schemaDigest }; }
 
   get processExecutionIdentity() { return this.frontier.claim?.processIdentity ? PromptProviderProcessIdentity.fromJSON(this.frontier.claim.processIdentity) : null; }
 
@@ -2170,7 +2216,7 @@ export class PromptBatchExecutor {
             inputCharacters: projection?.promptCharacterCount ?? actualFootprint.total,
           });
           if (executionJournal) frontier.batchCalls = batchCalls;
-          const attemptJournal = executionJournal ? new BatchProviderAttemptJournal({ frontier, responseCallIndex: callIndex, request: actualRequest, save, scope: executionJournal.scope,
+          const attemptJournal = executionJournal ? new BatchProviderAttemptJournal({ frontier, responseCallIndex: callIndex, request: actualRequest, save, scope: executionJournal.scope, planDigest: plan.digest,
             processExecutionBinding: executionJournal.writer.processExecutionBinding ?? null, reservationContinuation }) : undefined;
           const previousFailure = frontier.transportFailures.filter((entry) => entry.responseCallIndex === callIndex).at(-1);
           if (executionJournal && previousFailure && (!previousFailure.retryable || previousFailure.attempt === previousFailure.maxAttempts)) {
@@ -2208,7 +2254,18 @@ export class PromptBatchExecutor {
               schemaDigest: digest(JSON.stringify(actualRequest.jsonSchema)), providerKey: providerIdentity.providerKey, profileKey: providerIdentity.profileKey,
               origin: providerCallAdmission.cacheHit || providerCallAdmission.attemptCount === 0 ? "cache" : "provider",
               executionAccounting: accounting.snapshot().toJSON(), responseCharacters: rawCallCharacters, responseDigest: responseContentDigest(rawCallResponse),
-              rejection: oversized ? "PROMPT_RESPONSE_TOO_LARGE" : null });
+              rejection: oversized ? "PROMPT_RESPONSE_TOO_LARGE" : null,
+              ...(providerCallAdmission.executionObservation && { executionObservation: {
+                binding: providerCallAdmission.executionObservation.binding,
+                logicalInvocationId: providerCallAdmission.executionObservation.logicalInvocationId,
+                requestId: providerCallAdmission.executionObservation.requestId,
+                scope: executionJournal.scope.toJSON(), planDigest: plan.digest, batchDigest: batch.digest,
+                responseCallIndex: callIndex, requestDigest: requestDigest(actualRequest),
+                schemaDigest: digest(JSON.stringify(actualRequest.jsonSchema)), providerKey: providerIdentity.providerKey,
+                profileKey: providerIdentity.profileKey, responseDigest: responseContentDigest(rawCallResponse),
+                receivedAt: new Date().toISOString(),
+              } }),
+            });
             await save("response");
           }
           if (oversized) {
@@ -2261,6 +2318,9 @@ export class PromptBatchExecutor {
       const completion = new PromptBatchCompletion({
         batch,
         response: parsed,
+        receivedResponses: protocolPolicy instanceof DefaultPromptProtocolPolicy
+          && frontier.responses[0]?.executionObservation !== undefined
+          ? [PromptResponseExecutionObservation.fromJSON(frontier.responses[0].executionObservation)] : [],
         responseCharacters: parsedCharacters,
         responseItemCount: parsedItems,
         executionAccounting: replayOnly ? new PromptExecutionAccountingSnapshot(frontier.completion.executionAccounting) : accounting.snapshot(),
