@@ -49,9 +49,17 @@ export function read() {
   if (process.platform === 'darwin') return fs.readFileSync('snapshot.json');
   return fs.readFileSync('/proc/self/stat');
 }`;
+const extractedPlatformRead = `import fs from 'node:fs';
+export function read() {
+  if (process.platform === 'linux') return readLinux();
+  return fs.readFileSync('snapshot.json');
+}
+function readLinux() { return fs.readFileSync('/proc/self/stat'); }`;
 for (const [name, valid, invalid, rule, classification] of [
   ["platform coverage", platformRead, platformRead.replace("return fs.readFileSync('snapshot.json');", "return;"), "OS01", "violation"],
   ["typed Node execution", portableInvocationSource, portableInvocationSource.replace("['worker.js']", "['-e', 'process.kill(-123)']"), "OS04", "incomplete"],
+  ["inline Node preload", portableInvocationSource.replace("['worker.js']", "['--import', './preload.js', 'worker.js']"), portableInvocationSource.replace("['worker.js']", "['--import', 'data:text/javascript;base64,Y29uc29sZS5sb2coMSk=', 'worker.js']"), "OS04", "incomplete"],
+  ["private platform helper", extractedPlatformRead, `${extractedPlatformRead}\nreadLinux();`, "OS01", "violation"],
   ["tagged path provenance", "import fs from 'node:fs'; fs.readFileSync(String.raw`ordinary/snapshot.json`);", "import fs from 'node:fs'; fs.readFileSync(String.raw`/proc/self/stat`);", "OS01", "violation"],
 ]) test(`${name} reaches CLI exit status, located evidence and exact recovery`, (t) => {
   const fixture = new AuditFixture(t);

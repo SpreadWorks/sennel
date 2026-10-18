@@ -11,6 +11,13 @@ const nodeInlineOptions = new Set(["-e", "-p", "-pe", "-ep", "--eval", "--print"
 const nodeLoaderOptions = new Set(["-r", "--require", "--import"]);
 const nodeNoOperandOptions = new Set(["-v", "--version", "-h", "--help", "-c", "--check", "-i", "--interactive", "--watch", "--test"]);
 
+function inlineModule(specifier) {
+  // The URL scheme establishes an inline module, regardless of its MIME type,
+  // encoding or contents. Never decode or execute its payload to classify it.
+  try { return new URL(specifier).protocol === "data:"; }
+  catch { return false; } // Ordinary preload paths are not absolute URLs.
+}
+
 function nodeEvalCandidate(args) {
   for (let index = 0; index < args.length; index++) {
     const value = args[index] instanceof ExecutionArgument ? args[index].value : args[index];
@@ -44,9 +51,14 @@ export class NodeExecutionBoundary {
         if (index + 1 >= args.length) return new NodeExecutionBoundary("incomplete", value);
         const operand = args[++index] instanceof ExecutionArgument ? args[index] : new ExecutionArgument(args[index], false);
         if (operand.unresolved) return new NodeExecutionBoundary("incomplete", value);
+        if (value === "--import" && inlineModule(operand.value)) return new NodeExecutionBoundary("inline", value);
         continue;
       }
-      if (["--require", "--import"].some((option) => value.startsWith(`${option}=`))) continue;
+      if (value.startsWith("--import=")) {
+        if (inlineModule(value.slice("--import=".length))) return new NodeExecutionBoundary("inline", "--import");
+        continue;
+      }
+      if (value.startsWith("--require=")) continue;
       if (nodeNoOperandOptions.has(value)) continue;
       if (/^-[ep].+/.test(value)) continue;
       if (value.startsWith("-")) return nodeEvalCandidate(args.slice(index + 1))

@@ -56,8 +56,24 @@ const emptyEnvironment = new Map();
 const maximumModuleEvaluations = 6000;
 
 class PlatformModuleBoundaries {
-  constructor() { this.boundaries = []; }
+  constructor() {
+    this.boundaries = [];
+    this.callers = new Map();
+    this.usages = new Map();
+    this.public = new Set();
+    this.resolutions = new Map();
+    this.contexts = new Map();
+    this.ready = false;
+  }
   at(token) { return this.boundaries.filter((boundary) => boundary.contains(token)).sort((a, b) => a.declaration.tokens.length - b.declaration.tokens.length)[0]; }
+  forDeclaration(declaration) { return this.boundaries.find((boundary) => boundary.declaration.token.offset === declaration.token.offset); }
+}
+class PlatformCallContext {
+  constructor(platforms, uncertain = false, knownPlatforms = platforms) {
+    if (typeof uncertain !== "boolean" || platforms.some((platform) => !supportedPlatforms.includes(platform))
+      || knownPlatforms.some((platform) => !platforms.includes(platform))) throw new TypeError("supported platform reachability required");
+    Object.assign(this, { platforms, uncertain, knownPlatforms });
+  }
 }
 class SourceCallLocation {
   constructor(module, token) { Object.assign(this, { module, token }); }
@@ -436,6 +452,7 @@ class OsSourceOrigins {
     this.interpolationBoundaries = new WeakMap();
     this.deepCalls = true;
     this.scanHelpers = true;
+    this.selectCallRoute = () => null;
     this.observing = false;
     this.work = 0;
     this.onCall = () => {};
@@ -665,7 +682,10 @@ class OsSourceOrigins {
         const local = new Map(callee.environment);
         const parameters = readParameters(callee.declaration.tokens);
         this.bindArguments(callee.module, parameters, args, local);
-        if (this.scanHelpers) this.scan(callee.module, callee.declaration.bodyTokens() ?? [], local);
+        const route = this.selectCallRoute(callee);
+        if (this.scanHelpers) this.scan(callee.module, route?.tokens ?? callee.declaration.bodyTokens() ?? [], local);
+        if (route) return route.terminal === "return" ? this.value(callee.module, route.result, local)
+          : new UnknownValue("helper has no proven returned value", true, callee.trace);
         const returns = callee.declaration.returns();
         if (returns.length === 1) {
           const result = this.value(callee.module, returns[0].tokens, local);
@@ -723,12 +743,16 @@ class OsSourceOrigins {
     const cache = this.values.get(module);
     const key = `${expression[0]?.offset}:${expression.at(-1)?.offset}`;
     if (cacheable && cache.has(key)) return cache.get(key);
-    const count = (this.evaluations.get(module.file) ?? 0) + 1;
-    this.evaluations.set(module.file, count);
-    if (count > maximumModuleEvaluations || ++this.work > maximumModuleEvaluations) throw new SourceEvaluationLimit(module, expression[0]);
+    this.consumeWork(module, expression[0]);
     const value = this.expression(module, expression, environment);
     if (cacheable) cache.set(key, value);
     return value;
+  }
+
+  consumeWork(module, token) {
+    const count = (this.evaluations.get(module.file) ?? 0) + 1;
+    this.evaluations.set(module.file, count);
+    if (count > maximumModuleEvaluations || ++this.work > maximumModuleEvaluations) throw new SourceEvaluationLimit(module, token);
   }
 
   template(module, token, environment, raw = false) {
@@ -966,7 +990,11 @@ export class OsIndependenceRules {
     const delegations = new Set();
     const typedDeclarations = new Set();
     let unknown = false;
-    const previous = this.origins.onCall;
+    const previous = [this.origins.onCall, this.origins.selectCallRoute];
+    this.origins.selectCallRoute = (callee) => {
+      const boundary = this.indexPlatforms(callee.module).forDeclaration(callee.declaration);
+      return boundary?.modeled ? boundary.routes.find((entry) => entry.platform === route.platform) : null;
+    };
     this.origins.onCall = (callee, args, token, owner) => {
       const index = owner.tokens.indexOf(token);
       if (["Error", "TypeError", "RangeError"].includes(token.value) && owner.isUnbound(token.value, token)
@@ -997,11 +1025,12 @@ export class OsIndependenceRules {
     try {
       this.origins.scan(module, route.tokens);
       result = route.terminal === "return" ? this.origins.value(module, route.result) : null;
-    } finally { this.origins.onCall = previous; }
+    } finally { [this.origins.onCall, this.origins.selectCallRoute] = previous; }
     for (const callee of delegations) {
       if (!(callee.declaration.bodyTokens() ?? []).some((token) => ["throw", "if", "switch", "for", "while", "try"].includes(token.value))) continue;
-      const boundary = this.platformModules.get(callee.module)?.at(callee.declaration.token);
-      if (!typedDeclarations.has(`${callee.module.file}:${callee.declaration.token.offset}`) && !(boundary?.dependent && boundary.classification === null)) unknown = true;
+      const boundary = this.indexPlatforms(callee.module).forDeclaration(callee.declaration);
+      if (!typedDeclarations.has(`${callee.module.file}:${callee.declaration.token.offset}`)
+        && !(boundary?.dependent && this.resolvePlatform(callee.module, boundary) === null)) unknown = true;
     }
     if (unknown) return "unknown";
     const resultKind = result instanceof LiteralValue ? `literal:${typeof result.value}:${[false, null, undefined].includes(result.value) ? String(result.value) : "value"}` : "result";
@@ -1014,12 +1043,13 @@ export class OsIndependenceRules {
     if (this.platformModules.has(module)) return this.platformModules.get(module);
     const index = new PlatformModuleBoundaries();
     this.platformModules.set(module, index);
-    const previous = [this.origins.onCall, this.origins.onMember, this.origins.onUnsupported];
+    const previous = [this.origins.onCall, this.origins.onMember, this.origins.onUnsupported, this.origins.deepCalls];
     const observing = this.origins.observing;
     this.origins.observing = true;
     this.origins.onCall = this.origins.onMember = this.origins.onUnsupported = () => {};
     try {
       const declarations = [...namedFunctions(module)];
+      const names = new Map(declarations.map((declaration) => [declaration.token.offset, declaration.name]));
       for (const name of module.declarationNames()) {
         const header = module.declarationHeader(name);
         if (header.token.value === "class") {
@@ -1032,35 +1062,98 @@ export class OsIndependenceRules {
           for (const expression of origins?.expressions ?? []) {
             if (expression.tokens[0]?.value !== "function" && !expression.tokens.some((token) => token.kind === "punctuation" && token.value === "=>")) continue;
             const value = this.origins.value(module, expression.tokens);
-            if (value instanceof CallableValue) declarations.push(value.declaration);
+            if (value instanceof CallableValue) {
+              declarations.push(value.declaration);
+              names.set(value.declaration.token.offset, name);
+            }
           }
         }
       }
       for (const declaration of declarations) {
-        const boundary = new PlatformImplementationBoundary(declaration, (tokens) => this.platformExpression(module, tokens), (route) => this.platformSignature(module, route));
+        const boundary = new PlatformImplementationBoundary(declaration, (tokens) => this.platformExpression(module, tokens));
         index.boundaries.push(boundary);
-        if (!boundary.dependent) continue;
-        if (boundary.classification) this.diagnose("OS01", module.file, declaration.token, [module.file], boundary.message, boundary.classification);
+        index.callers.set(boundary, new Map());
+        const name = names.get(declaration.token.offset);
+        if (!name) { index.public.add(boundary); continue; }
+        const usage = module.originUsage([name], { moduleBindings: true, mutableAliases: true });
+        const header = module.declarationHeader(name);
+        usage.accept([module.tokens[module.tokens.indexOf(header.token) + 1]]);
+        index.usages.set(boundary, usage);
+        if (header.prefix.some((token) => token.value === "export") || module.exports.some((entry) => !entry.reference && usage.origins.has(entry.local))) index.public.add(boundary);
       }
+      // Every declaration is registered before calls or guarantees are resolved.
+      // Reuse the value evaluator for aliases, imports and callable identities;
+      // the lexical origin index accounts for uses it cannot resolve as calls.
+      this.origins.deepCalls = false;
+      this.origins.onCall = (callee, args, token, owner) => {
+        if (!(callee instanceof CallableValue)) return;
+        const target = this.indexPlatforms(callee.module);
+        const boundary = target.forDeclaration(callee.declaration);
+        if (!boundary) return;
+        target.callers.get(boundary).set(`${owner.file}:${token.offset}`, new SourceCallLocation(owner, token));
+        if (owner === callee.module) target.usages.get(boundary)?.accept([token]);
+      };
+      if (index.usages.size) this.origins.scan(module);
+      index.ready = true;
     } finally {
-      [this.origins.onCall, this.origins.onMember, this.origins.onUnsupported] = previous;
+      [this.origins.onCall, this.origins.onMember, this.origins.onUnsupported, this.origins.deepCalls] = previous;
       this.origins.observing = observing;
     }
     return index;
   }
+  resolvePlatform(module, boundary) {
+    const index = this.indexPlatforms(module);
+    if (index.resolutions.get(boundary) === "active") return "incomplete";
+    if (index.resolutions.get(boundary) === "done") return boundary.classification;
+    index.resolutions.set(boundary, "active");
+    const context = this.boundaryContext(module, boundary, new Set());
+    boundary.classify((route) => this.platformSignature(module, route), context.platforms, context.knownPlatforms);
+    index.resolutions.set(boundary, "done");
+    return boundary.classification;
+  }
+  boundaryContext(module, boundary, active) {
+    const index = this.indexPlatforms(module);
+    if (index.public.has(boundary)) return new PlatformCallContext([...supportedPlatforms]);
+    if (!index.ready || active.has(boundary)) return new PlatformCallContext([...supportedPlatforms], true, []);
+    if (index.contexts.has(boundary)) return index.contexts.get(boundary);
+    this.origins.consumeWork(module, boundary.declaration.token);
+    const callers = [...index.callers.get(boundary).values()];
+    const unresolved = !callers.length || !index.usages.has(boundary) || index.usages.get(boundary).unresolved().length > 0;
+    const contexts = unresolved ? [new PlatformCallContext([...supportedPlatforms], true, [])] : [];
+    active.add(boundary);
+    try { for (const caller of callers) contexts.push(this.platformContext(caller.module, caller.token, active)); }
+    finally { active.delete(boundary); }
+    const context = new PlatformCallContext([...new Set(contexts.flatMap((entry) => entry.platforms))], contexts.some((entry) => entry.uncertain), [...new Set(contexts.flatMap((entry) => entry.knownPlatforms))]);
+    // A cyclic/opaque route is not a completed reachability result. Caching its
+    // partial traversal would make a later caller depend on declaration order.
+    if (!context.uncertain) index.contexts.set(boundary, context);
+    return context;
+  }
+  platformContext(module, token, active = new Set()) {
+    const boundary = this.indexPlatforms(module).at(token);
+    if (!boundary) return new PlatformCallContext([...supportedPlatforms]);
+    const context = this.boundaryContext(module, boundary, active);
+    const routes = boundary.routesAt(token);
+    // A declaration's token represents entry into its body, before its split.
+    if (!boundary.modeled || token.offset === boundary.declaration.token.offset) return context;
+    if (!routes.length) return new PlatformCallContext(context.platforms, true, []);
+    const selected = routes.map((route) => route.platform);
+    return new PlatformCallContext(context.platforms.filter((platform) => selected.includes(platform)), context.uncertain || routes.some((route) => route.unknown),
+      context.knownPlatforms.filter((platform) => routes.some((route) => route.platform === platform && !route.unknown)));
+  }
   capability(rule, module, token, value, platforms, message, classification = "violation") {
     let active = [...supportedPlatforms];
+    let known = [...supportedPlatforms];
     let uncertain = false;
     for (const location of [...this.origins.callers, new SourceCallLocation(module, token)]) {
-      const boundary = this.platformModules.get(location.module)?.at(location.token);
-      if (!boundary?.dependent) continue;
-      const selected = boundary.platformsAt(location.token);
-      active = active.filter((platform) => selected.includes(platform));
-      uncertain ||= boundary.routes.some((route) => route.unknown);
+      const context = this.platformContext(location.module, location.token);
+      active = active.filter((platform) => context.platforms.includes(platform));
+      known = known.filter((platform) => context.knownPlatforms.includes(platform));
+      uncertain ||= context.uncertain;
     }
     if (active.every((platform) => platforms.includes(platform))) return;
-    if (uncertain || classification === "incomplete") this.incomplete(rule, module, token, value, `${message}; platform compatibility is unresolved`);
-    else this.violation(rule, module, token, value, `${message}; required without an implementation on ${active.filter((platform) => !platforms.includes(platform)).join(", ")}`);
+    if (classification === "incomplete" || uncertain && known.every((platform) => platforms.includes(platform))) this.incomplete(rule, module, token, value, `${message}; platform compatibility is unresolved`);
+    else this.violation(rule, module, token, value, `${message}; required without an implementation on ${known.filter((platform) => !platforms.includes(platform)).join(", ")}`);
   }
   platformSelection(module, token, value) {
     const boundary = this.platformModules.get(module)?.at(token);
@@ -1311,9 +1404,19 @@ export class OsIndependenceRules {
   inspect(module) {
     this.origins.evaluations = new Map();
     this.origins.work = 0;
-    try { this.indexPlatforms(module); }
+    const previous = [this.origins.onCall, this.origins.onMember, this.origins.onUnsupported, this.origins.observing];
+    this.origins.observing = true;
+    this.origins.onCall = this.origins.onMember = this.origins.onUnsupported = () => {};
+    try {
+      for (const boundary of this.indexPlatforms(module).boundaries) {
+        this.resolvePlatform(module, boundary);
+        if (boundary.dependent && boundary.classification) this.diagnose("OS01", module.file, boundary.declaration.token, [module.file], boundary.message, boundary.classification);
+      }
+    }
     catch (error) {
       this.diagnose("OS00", module.file, error, [module.file], `platform path inspection incomplete: ${error.message}`, "incomplete");
+    } finally {
+      [this.origins.onCall, this.origins.onMember, this.origins.onUnsupported, this.origins.observing] = previous;
     }
     // Each independently inspected source root gets a fresh finite work budget.
     // Work performed through an earlier caller must not suppress this module's rules.

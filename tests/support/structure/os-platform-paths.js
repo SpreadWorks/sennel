@@ -118,34 +118,53 @@ class ImplementationRoute {
 }
 
 export class PlatformImplementationBoundary {
-  constructor(declaration, expression, signature) {
-    Object.assign(this, { declaration, expression, signature });
+  constructor(declaration, expression) {
+    Object.assign(this, { declaration, expression });
     this.conditions = new Set();
     this.dependent = false;
     this.routes = supportedPlatforms.map((platform) => new ImplementationRoute(platform));
-    const body = new Statements(declaration.bodyTokens() ?? []).block();
+    const tokens = declaration.bodyTokens();
+    this.modeled = tokens !== null;
+    const body = new Statements(tokens ?? []).block();
+    this.indexConditions(body);
     for (const route of this.routes) this.walk(body, route);
     this.classification = null;
     this.message = null;
+  }
+  classify(signature, platforms = supportedPlatforms, knownPlatforms = platforms) {
     if (!this.dependent) return;
-    const results = this.routes.map((route) => signature(route));
-    const missing = this.routes.filter((route, index) => !route.unknown && (route.terminal === "throw" || results[index] === "empty"));
-    if (missing.length) {
+    const routes = this.routes.filter((route) => platforms.includes(route.platform));
+    const results = routes.map((route) => signature(route));
+    const missing = routes.filter((route, index) => !route.unknown && (route.terminal === "throw" || results[index] === "empty"));
+    const knownMissing = missing.filter((route) => knownPlatforms.includes(route.platform));
+    if (knownMissing.length) {
       this.classification = "violation";
-      this.message = `shared platform boundary has no normal implementation for ${missing.map((route) => route.platform).join(", ")} (missing, rejection or no-op)`;
-    } else if (this.routes.some((route) => route.unknown) || results.includes("unknown") || new Set(results).size !== 1) {
+      this.message = `shared platform boundary has no normal implementation for ${knownMissing.map((route) => route.platform).join(", ")} (missing, rejection or no-op)`;
+    } else if (missing.length || !routes.length || routes.some((route) => route.unknown) || results.includes("unknown") || new Set(results).size !== 1) {
       this.classification = "incomplete";
       this.message = "shared platform boundary cannot prove matching result/effect guarantees on Linux, macOS and Windows";
     }
   }
   contains(token) { return token.offset >= this.declaration.token.offset && token.offset <= this.declaration.tokens.at(-1).offset; }
-  platformsAt(token) { return this.routes.filter((route) => route.tokens.some((item) => item.offset === token.offset)).map((route) => route.platform); }
+  routesAt(token) { return this.routes.filter((route) => route.tokens.some((item) => item.offset === token.offset)); }
+  indexConditions(node) {
+    if (node instanceof Block) { node.statements.forEach((child) => this.indexConditions(child)); return; }
+    if (!(node instanceof Branch || node instanceof SwitchBranch)) return;
+    const tokens = node instanceof Branch ? node.condition : node.selector;
+    node.interpretation = this.expression(tokens);
+    if (node.interpretation.dependent) {
+      this.dependent = true;
+      for (const token of tokens) this.conditions.add(token.offset);
+    }
+    if (node instanceof Branch) { this.indexConditions(node.yes); this.indexConditions(node.no); }
+    else node.cases.forEach((entry) => this.indexConditions(entry.body));
+  }
   walk(node, route) {
     if (route.terminal) return;
     if (node instanceof Block) {
       for (const child of node.statements) this.walk(child, route);
     } else if (node instanceof Branch) {
-      const condition = this.expression(node.condition);
+      const condition = node.interpretation;
       if (!condition.dependent) {
         const known = condition.at(route.platform);
         if (known !== null) { this.walk(known ? node.yes : node.no, route); return; }
@@ -157,17 +176,13 @@ export class PlatformImplementationBoundary {
         this.appendAll(node.no, route);
         return;
       }
-      this.dependent = true;
-      for (const token of node.condition) this.conditions.add(token.offset);
       route.tokens.push(...node.condition);
       const value = condition.at(route.platform);
       if (value === null) { route.unknown = true; this.appendAll(node.yes, route); this.appendAll(node.no, route); }
       else this.walk(value ? node.yes : node.no, route);
     } else if (node instanceof SwitchBranch) {
-      const selector = this.expression(node.selector);
+      const selector = node.interpretation;
       if (!selector.dependent) { route.unknown = true; node.cases.forEach((entry) => this.appendAll(entry.body, route)); return; }
-      this.dependent = true;
-      for (const token of node.selector) this.conditions.add(token.offset);
       route.tokens.push(...node.selector);
       const value = selector.at(route.platform);
       const labels = node.cases.map((entry) => entry.label === null ? undefined : this.expression(entry.label).at(route.platform));

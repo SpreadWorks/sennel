@@ -30,6 +30,21 @@ routes fail; unmatched effect/result or filesystem-flag guarantees remain
 incomplete. A checked caller's platform context follows the existing helper-call
 path into the typed launch boundary.
 
+Private helper capabilities also use the union of OS contexts reaching their
+resolved callers. The existing callable resolver supplies call edges and the
+lexical origin index accounts for aliases and unresolved uses. Exported functions
+and module initialization still require all supported platforms. Escaped or
+unresolved callers remain incomplete; a known incompatible call still fails even
+alongside an unresolved one. No helper body or source file is excluded.
+
+Boundary registration and call indexing finish before guarantee classification.
+Helper signatures use the selected OS route through the same source evaluator,
+and dependent guarantees resolve lazily with an active-resolution guard. Cycles
+and unsupported paths that cannot prove guarantees are incomplete within the
+finite analysis budget, independently of declaration order. Conditions are indexed
+before route execution, so an unconditional rejection cannot hide a later missing
+implementation behind unreachable dispatch code.
+
 Known executable identities carry their available platforms. A conditional
 `node.exe`/`node` launch is allowed when all routes use the same typed boundary;
 an unconditional Windows-only launch lacks the other implementations. Unknown
@@ -156,6 +171,12 @@ check, not complete Node CLI validation. Typed argv validation alone does not
 inspect a `-e`/`--eval`/`-p` body. Inline programs without an inspected module
 boundary are incomplete, including harmless programs; their contents are never
 classified by forbidden-word matching.
+
+`--import` operands with a `data:` URL are also inline modules, in both joined
+and separate option forms. The URL scheme is inspected without decoding or
+executing its payload; base64 and ordinary contents receive the same incomplete
+diagnostic. File preloads remain module operands, and option-looking application
+data after a script or `--` does not acquire execution authority.
 
 At owned typed callers, an unresolved executable identity also stays incomplete;
 a string-type guard cannot establish that Node's execution options are inert.
