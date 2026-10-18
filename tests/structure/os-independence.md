@@ -164,10 +164,11 @@ Both native source launches and public instructions use the same
 `NodeExecutionBoundary`. Node eval/print options are inspected before the script operand or explicit
 `--` boundary. Later application argv, including unresolved string data, remains
 data. An unresolved argument before that boundary is incomplete. Known value-taking options
-consume their operand, and an unproven prefix cannot establish that a later eval
-option is application data. Command-string words come from the same shell syntax
-walk; native argv does not acquire shell parsing. This is an execution-boundary
-check, not complete Node CLI validation. Typed argv validation alone does not
+consume their operand. Known switches such as `--no-warnings` keep the same
+sequential option inspection active; an unknown prefix remains incomplete rather
+than guessing a script boundary from later arguments. Command-string words come
+from the same shell syntax walk; native argv does not acquire shell parsing. This
+is an execution-boundary check, not complete Node CLI validation. Typed argv validation alone does not
 inspect a `-e`/`--eval`/`-p` body. Inline programs without an inspected module
 boundary are incomplete, including harmless programs; their contents are never
 classified by forbidden-word matching.

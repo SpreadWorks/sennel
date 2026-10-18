@@ -39,6 +39,11 @@ test("Node eval and print options before the script remain incomplete", () => {
     "node --eval=doTask()",
     "node -p doTask()",
     "node --print doTask()",
+    "node --no-warnings -e doTask()",
+    "node --no-warnings --eval doTask()",
+    "node --no-warnings --eval=doTask()",
+    "node --no-warnings -p doTask()",
+    "node --no-warnings --print doTask()",
   ]) {
     const report = inspect(file, "Run \`" + command + "\`.");
     assert.equal(report.complete, false, command);
@@ -80,7 +85,7 @@ test("Node option parsing stops at the explicit end marker and rejects unknown p
   assert.equal(unknown.complete, false);
   assert.deepEqual(unknown.diagnostics.map((entry) => [entry.rule, entry.classification]), [["OS04", "incomplete"]]);
 
-  for (const command of ["node -eSOURCE scripts/worker.js", "node -pSOURCE scripts/worker.js"]) {
+  for (const command of ["node scripts/worker.js -eSOURCE", "node scripts/worker.js -pSOURCE"]) {
     assert.deepEqual(inspect(file, "Run \`" + command + "\`.").diagnostics, [], command);
   }
 });

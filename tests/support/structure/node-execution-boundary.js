@@ -9,22 +9,13 @@ export class ExecutionArgument {
 
 const nodeInlineOptions = new Set(["-e", "-p", "-pe", "-ep", "--eval", "--print"]);
 const nodeLoaderOptions = new Set(["-r", "--require", "--import"]);
-const nodeNoOperandOptions = new Set(["-v", "--version", "-h", "--help", "-c", "--check", "-i", "--interactive", "--watch", "--test"]);
+const nodeNoOperandOptions = new Set(["-v", "--version", "-h", "--help", "-c", "--check", "-i", "--interactive", "--watch", "--test", "--no-warnings"]);
 
 function inlineModule(specifier) {
   // The URL scheme establishes an inline module, regardless of its MIME type,
   // encoding or contents. Never decode or execute its payload to classify it.
   try { return new URL(specifier).protocol === "data:"; }
   catch { return false; } // Ordinary preload paths are not absolute URLs.
-}
-
-function nodeEvalCandidate(args) {
-  for (let index = 0; index < args.length; index++) {
-    const value = args[index] instanceof ExecutionArgument ? args[index].value : args[index];
-    if (value === "--") return false;
-    if (nodeInlineOptions.has(value) || /^--(?:eval|print)=/.test(value)) return true;
-  }
-  return false;
 }
 
 /** The Node CLI authority ends at its first script operand or explicit `--`. */
@@ -60,9 +51,7 @@ export class NodeExecutionBoundary {
       }
       if (value.startsWith("--require=")) continue;
       if (nodeNoOperandOptions.has(value)) continue;
-      if (/^-[ep].+/.test(value)) continue;
-      if (value.startsWith("-")) return nodeEvalCandidate(args.slice(index + 1))
-        ? new NodeExecutionBoundary("incomplete", value) : new NodeExecutionBoundary("script");
+      if (value.startsWith("-")) return new NodeExecutionBoundary("incomplete", value);
       return new NodeExecutionBoundary("script");
     }
     return new NodeExecutionBoundary("script");

@@ -44,7 +44,7 @@ test("quoted or escaped operators and structured native argv remain inert, and s
     ["src/skills/example/quoted-fence.md", "```sh\nnode scripts/show.js '&& chmod 700 private-dir $(literal) `literal`'\n```"],
     ["src/skills/example/quoted-process-substitution.md", "```sh\nnode scripts/show.js '<(literal) >(literal)'\n```"],
     ["src/skills/example/escaped.md", ["```sh", String.raw`node scripts/show.js \&\& \; private-dir`, "node --version # ; chmod 700 private-dir", "```"].join("\n")],
-    ["src/presets/example/preset.json", JSON.stringify({ executable: "node", args: ["--message", "&& chmod 700 private-dir; $(literal)"], shell: false })],
+    ["src/presets/example/preset.json", JSON.stringify({ executable: "node", args: ["scripts/show.js", "--message", "&& chmod 700 private-dir; $(literal)"], shell: false })],
     ["src/flow/prompts/simple.md", "Run `node scripts/check.mjs`."],
   ]);
 
