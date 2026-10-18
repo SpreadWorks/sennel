@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { portableInvocationSource as typedBoundarySource } from "../support/builders/os-audit-sources.js";
 import { MemorySourceRepository } from "../support/structure/source-repository.js";
 import { OsIndependenceChecker } from "../support/structure/os-independence-checker.js";
 import { SourceGraph, sourceBuiltin } from "../support/structure/source-graph.js";
@@ -38,7 +39,6 @@ const injections = [
   ["OS01", `import os from 'node:os'; const { platform: host } = os; if (host() === 'linux') execute();`],
   ["OS01", `import { platform as host } from 'node:os'; if (host() === 'linux') execute();`],
   ["OS01", `switch (process.platform) { case 'linux': execute(); break; default: other(); }`],
-  ["OS01", `function select(expected) { if (process.platform === expected) return 1; return 0; }`],
   ["OS01", `import fs from 'node:fs'; let io; io = fs; io.readFileSync('/proc/self/stat');`],
   ["OS01", `import fs from 'node:fs'; fs.readFileSync('/pro' + 'c/1/stat');`],
   ["OS01", "import fs from 'node:fs'; const pid = 17; fs.readFileSync(`/proc/${pid}/stat`);"],
@@ -49,7 +49,6 @@ const injections = [
   ["OS01", `import fs from 'node:fs'; const helper = () => fs.readFileSync; helper()('/proc/self/stat');`],
   ["OS01", `import fs from 'node:fs'; const bridge = { get reader() { return fs.readFileSync; } }; bridge.reader('/proc/self/stat');`],
   ["OS01", `import fs from 'node:fs'; class Bridge { get reader() { return fs.readFileSync; } } const bridge = new Bridge(); bridge.reader('/proc/self/stat');`],
-  ["OS01", `process.kill(-group, 'SIGKILL');`],
   ["OS02", `import { spawn as start } from 'node:child_process'; start('node', ['worker.js']);`],
   ["OS02", `import * as child from 'node:child_process'; const { spawn: start } = child; start('node', [], { shell: true });`],
   ["OS02", `import { spawnSync } from 'node:child_process'; spawnSync('powershell.exe', []);`],
@@ -65,7 +64,6 @@ const injections = [
   ["OS04", `import fs from 'node:fs'; import { pathToFileURL } from 'node:url'; fs.readFileSync(pathToFileURL('relative/file').pathname);`],
   ["OS04", `import fs from 'node:fs'; import { parse } from 'node:url'; fs.readFileSync(parse('file:///tmp/snapshot').pathname);`],
   ["OS04", `import { execSync } from 'node:child_process'; execSync(parts.join(' '));`],
-  ["OS04", `import fs from 'node:fs'; import path from 'node:path'; fs.readFileSync(path.win32.resolve(root));`],
   ["OS03", `import { spawn } from 'node:child_process'; spawn(process.execPath, ['--version'], { uid: 1 });`],
 ];
 
@@ -82,6 +80,13 @@ for (const [rule, source] of injections) test(`single ${rule} injection has a so
 });
 
 for (const [name, source, rule] of [
+  // An unknown PID sign/path root cannot prove Windows incompatibility or
+  // compatibility. The old name-based bans overstated these as violations.
+  ["unresolved process group", `process.kill(-group, 'SIGKILL');`, "OS01"],
+  ["unresolved logical path root", `import fs from 'node:fs'; import path from 'node:path'; fs.readFileSync(path.win32.resolve(root));`, "OS04"],
+  // AGENTS.md permits platform predicates. An unknown dispatch condition is
+  // incomplete inspection rather than a violation merely for using the OS.
+  ["unresolved OS predicate", `function select(expected) { if (process.platform === expected) return 1; return 0; }`, "OS01"],
   ["computed filesystem", `import fs from 'node:fs'; fs[operation](file);`, "OS01"],
   ["computed literal member", `import fs from 'node:fs'; fs['readFileSync'](file);`, "OS01"],
   ["computed launch", `import * as child from 'node:child_process'; child[method](command);`, "OS02"],
@@ -175,27 +180,62 @@ test("read failures, unresolved dependencies, malformed source and empty scopes 
   assert.equal(report.complete, false);
 });
 
-const typedBoundarySource = `
-import { spawn as start } from 'node:child_process';
-class PortableInvocation {
-  constructor(executable, args) {
-    if (typeof executable !== 'string' || executable.length === 0) throw new TypeError('program');
-    if (!Array.isArray(args) || args.some((argument) => typeof argument !== 'string')) throw new TypeError('argv');
-    this.executable = executable;
-    this.args = Object.freeze([...args]);
-    Object.freeze(this);
-  }
-}
-export function launch(invocation) {
-  if (!(invocation instanceof PortableInvocation)) throw new TypeError('typed input required');
-  return start(invocation.executable, invocation.args, { shell: false });
-}
-launch(new PortableInvocation(process.execPath, ['worker.js']));
-`;
+
 
 test("a closed typed invocation boundary validates and preserves executable and argv", () => {
   const report = check(typedBoundarySource);
   assert.equal(report.ok, true, report.diagnostics.join("\n"));
+});
+
+test("typed launch accepts node.exe inside a complete shared OS selector", () => {
+  const source = typedBoundarySource.replace("launch(new PortableInvocation(process.execPath, ['worker.js']));", `
+export function execute() {
+  if (process.platform === 'win32') return launch(new PortableInvocation('node.exe', ['worker.js']));
+  return launch(new PortableInvocation('node', ['worker.js']));
+}
+execute();`);
+  const report = check(source);
+  assert.equal(report.ok, true, report.diagnostics.join("\n"));
+});
+
+for (const argv of [
+  "['-e', 'process.kill(-123)']",
+  "['--eval=console.log(1)']",
+  "['-p', '1 + 1']",
+  "['--require', './preload.js', '-e', 'console.log(1)']",
+]) test(`typed Node launch refuses uninspected inline code: ${argv}`, () => {
+  const source = typedBoundarySource.replace("['worker.js']", argv);
+  const report = check(source);
+  assert.equal(report.ok, false);
+  assert.equal(report.complete, false);
+  assert.ok(report.diagnostics.some((entry) => entry.rule === "OS04" && entry.classification === "incomplete"), report.diagnostics.join("\n"));
+  assert.equal(report.diagnostics.some((entry) => entry.rule === "OS01"), false, "inline code is not classified by forbidden-word matching");
+  assert.equal(check(typedBoundarySource).ok, true);
+});
+
+for (const argv of [
+  "['worker.js', '-e', 'process.kill(-123)']",
+  "['--', 'worker.js', '-e', 'process.kill(-123)']",
+  "['--require', './preload.js', 'worker.js', '--eval=process.kill(-123)']",
+  "['worker.js', applicationArgument, '-e']",
+  "['--', applicationArgument, '-e']",
+]) test(`typed Node launch preserves application argv as data: ${argv}`, () => {
+  const report = check(typedBoundarySource.replace("['worker.js']", argv));
+  assert.equal(report.ok, true, report.diagnostics.join("\n"));
+  assert.deepEqual(report.diagnostics, []);
+});
+
+test("typed Node launch refuses an unknown prefix before its script boundary", () => {
+  const report = check(typedBoundarySource.replace("['worker.js']", "[unknownPrefix, 'worker.js']"));
+  assert.equal(report.complete, false);
+  assert.ok(report.diagnostics.some((entry) => entry.rule === "OS04" && entry.classification === "incomplete"), report.diagnostics.join("\n"));
+});
+
+test("typed strings cannot confer execution authority on an unresolved owned executable", () => {
+  const source = typedBoundarySource.replace("process.execPath", "requiredExecutable").replace("['worker.js']", "['-e', 'process.kill(-123)']");
+  const report = check(source);
+  assert.equal(report.complete, false);
+  assert.ok(report.diagnostics.some((entry) => entry.rule === "OS02" && entry.classification === "incomplete" && /executable identity/.test(entry.message)), report.diagnostics.join("\n"));
 });
 
 for (const [name, source] of [
@@ -209,10 +249,18 @@ for (const [name, source] of [
   assert.ok(report.diagnostics.some((entry) => entry.rule === "OS02" && entry.classification === "incomplete"), report.diagnostics.join("\n"));
 });
 
-test("the low-level typed boundary is still checked for required OS commands", () => {
-  for (const executable of ["ps", "ls", "mktemp", "cp", "mv", "rm", "helper.cmd", "/usr/bin/node"]) {
+test("the typed boundary rejects unconditional platform requirements, not executable spelling", () => {
+  for (const executable of ["ps", "ls", "mktemp", "cp", "mv", "rm", "/usr/bin/node"]) {
     const report = check(typedBoundarySource.replace(`process.execPath, ['worker.js']`, `'${executable}', []`));
-    assert.ok(report.diagnostics.some((entry) => entry.rule === "OS02" && /OS-specific required command/.test(entry.message)), report.diagnostics.join("\n"));
+    assert.ok(report.diagnostics.some((entry) => entry.rule === "OS02" && entry.classification === "violation" && /without an implementation/.test(entry.message)), report.diagnostics.join("\n"));
+  }
+  // A suffix is not evidence of portability or its absence. Unknown identities
+  // remain incomplete instead of inheriting the retired blanket suffix ban.
+  for (const executable of ["helper.cmd", "custom.exe"]) {
+    const report = check(typedBoundarySource.replace(`process.execPath, ['worker.js']`, `'${executable}', []`));
+    assert.equal(report.complete, false);
+    assert.ok(report.diagnostics.some((entry) => entry.rule === "OS02" && entry.classification === "incomplete"));
+    assert.equal(report.diagnostics.some((entry) => entry.classification === "violation"), false);
   }
   const unclassified = check(typedBoundarySource.replace(`process.execPath, ['worker.js']`, `'apt-get', []`));
   assert.equal(unclassified.complete, false);

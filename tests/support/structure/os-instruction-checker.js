@@ -1,9 +1,10 @@
 import path from "node:path";
+import { ExecutionArgument, NodeExecutionBoundary } from "./node-execution-boundary.js";
 import { SourceStructureChecker, SourceStructureScope } from "./source-structure-checker.js";
 import { SourceGraph } from "./source-graph.js";
 import { readClassMember, readTokens, SourceToken, sourceContainsSequence } from "./source-reader.js";
 import { OsIndependenceDiagnostic } from "./os-independence-checker.js";
-import { classifyExecutable, OsSpecificExecutable, UnclassifiedExecutable } from "./os-command-policy.js";
+import { classifyExecutable, UnclassifiedExecutable, supportedPlatforms } from "./os-command-policy.js";
 
 /** An executable slot retains its producer and consumer-facing representation. */
 export class InstructionProjection {
@@ -43,15 +44,6 @@ export class InstructionAuditReport {
   get complete() { return !this.diagnostics.some((entry) => entry.classification === "incomplete"); }
 }
 
-class ShellWord {
-  constructor(value, expandable) {
-    if (typeof value !== "string" || typeof expandable !== "boolean") throw new TypeError("shell word required");
-    this.value = value;
-    this.expandable = expandable;
-    Object.freeze(this);
-  }
-}
-
 /** Detect shell syntax and expose simple words from the same quote/escape walk. */
 class ShellCompoundSyntax {
   constructor(command) {
@@ -69,7 +61,7 @@ class ShellCompoundSyntax {
     let expandable = false;
     let active = false;
     const finishWord = () => {
-      if (active) this.words.push(new ShellWord(word, expandable));
+      if (active) this.words.push(new ExecutionArgument(word, expandable));
       word = "";
       expandable = false;
       active = false;
@@ -121,56 +113,6 @@ class ShellCompoundSyntax {
   }
 
   get compound() { return this.operator !== null; }
-}
-
-const nodeInlineOptions = new Set(["-e", "-p", "-pe", "-ep", "--eval", "--print"]);
-const nodeLoaderOptions = new Set(["-r", "--require", "--import"]);
-const nodeNoOperandOptions = new Set(["-v", "--version", "-h", "--help", "-c", "--check", "-i", "--interactive", "--watch", "--test"]);
-
-function nodeEvalCandidate(args) {
-  for (let index = 0; index < args.length; index++) {
-    const value = args[index] instanceof ShellWord ? args[index].value : args[index];
-    if (value === "--") return false;
-    if (nodeInlineOptions.has(value) || /^--(?:eval|print)=/.test(value)) return true;
-  }
-  return false;
-}
-
-/** The Node CLI authority ends at its first script operand or explicit `--`. */
-class NodeExecutionBoundary {
-  constructor(status, option = null) {
-    if (!["script", "inline", "incomplete"].includes(status)) throw new TypeError("Node execution boundary status required");
-    this.status = status;
-    this.option = option;
-    Object.freeze(this);
-  }
-
-  static inspect(executable, args) {
-    const name = executable.replaceAll("\\", "/").split("/").at(-1).toLowerCase();
-    if (name !== "node" && name !== "node.exe") return null;
-    for (let index = 0; index < args.length; index++) {
-      const argument = args[index] instanceof ShellWord ? args[index] : new ShellWord(args[index], false);
-      const value = argument.value;
-      if (argument.expandable) return new NodeExecutionBoundary("incomplete", value);
-      if (value === "--") return new NodeExecutionBoundary("script");
-      if (nodeInlineOptions.has(value) || /^--(?:eval|print)=/.test(value)) {
-        return new NodeExecutionBoundary("inline", value);
-      }
-      if (nodeLoaderOptions.has(value)) {
-        if (index + 1 >= args.length) return new NodeExecutionBoundary("incomplete", value);
-        const operand = args[++index] instanceof ShellWord ? args[index] : new ShellWord(args[index], false);
-        if (operand.expandable) return new NodeExecutionBoundary("incomplete", value);
-        continue;
-      }
-      if (["--require", "--import"].some((option) => value.startsWith(`${option}=`))) continue;
-      if (nodeNoOperandOptions.has(value)) continue;
-      if (/^-[ep].+/.test(value)) continue;
-      if (value.startsWith("-")) return nodeEvalCandidate(args.slice(index + 1))
-        ? new NodeExecutionBoundary("incomplete", value) : new NodeExecutionBoundary("script");
-      return new NodeExecutionBoundary("script");
-    }
-    return new NodeExecutionBoundary("script");
-  }
 }
 
 function location(text, offset, value = "instruction") {
@@ -317,11 +259,11 @@ function inspectSyntax(projection, report) {
   else if (executable) {
     const representation = projection instanceof InstructionInvocation && projection.executionBoundary === "native" && !projection.shell ? "native" : "instruction";
     const classification = classifyExecutable(executable, { representation });
-    if (classification instanceof OsSpecificExecutable) diagnose(report, "OS02", file, token, route, "public executable instruction requires an OS-specific command or shell");
-    else if (classification instanceof UnclassifiedExecutable) diagnose(report, "OS02", file, token, route, "public executable instruction has no classified portable executable identity", "incomplete");
+    if (classification instanceof UnclassifiedExecutable) diagnose(report, "OS02", file, token, route, "public executable instruction has no classified portable executable identity", "incomplete");
+    else if (supportedPlatforms.some((platform) => !classification.platforms.includes(platform))) diagnose(report, "OS02", file, token, route, "unconditional public instruction lacks a corresponding executable on every supported platform");
   }
-  const nodeBoundary = projection instanceof InstructionInvocation
-    ? projection.shell ? null : NodeExecutionBoundary.inspect(projection.executable, projection.args)
+  const nodeBoundary = projection instanceof InstructionInvocation && !projection.shell
+    ? NodeExecutionBoundary.inspect(projection.executable, projection.args)
     : syntax?.compound || shellSyntax ? null : NodeExecutionBoundary.inspect(syntax?.words[0]?.value || "", syntax?.words.slice(1) || []);
   if (nodeBoundary?.status === "inline") {
     // Do not grep executable JavaScript strings for effects. The module
@@ -333,8 +275,9 @@ function inspectSyntax(projection, report) {
     diagnose(report, "OS04", file, token, route, `Node option boundary cannot be proven before the script entry (${nodeBoundary.option})`, "incomplete");
     return;
   }
-  if (/(?:^|[\s'"=])\/(?:proc|sys|dev\/shm)(?:\/|\b)|\b(?:TMPDIR|XDG_RUNTIME_DIR)=\/|\b(?:kill|process\.kill)\s*\(?\s*-/.test(command)) {
-    diagnose(report, "OS01", file, token, route, "public executable instruction requires a pseudo-filesystem or process-group operation");
+  const arguments_ = projection instanceof InstructionInvocation ? [projection.executable, ...projection.args] : syntax?.words.map((word) => word.value) ?? [];
+  if (arguments_.some((argument) => /^(?:(?:--?[^=\s]+|TMPDIR|XDG_RUNTIME_DIR)=)?\/(?:proc|sys|dev\/shm)(?:\/|$)/.test(argument))) {
+    diagnose(report, "OS01", file, token, route, "public executable instruction requires a pseudo-filesystem path");
   }
   if (!(projection instanceof InstructionInvocation) || projection.shell) {
     if (/^(?:eval|Invoke-Expression)\b/.test(command)) diagnose(report, "OS04", file, token, route, "public executable instruction reparses executable shell text");

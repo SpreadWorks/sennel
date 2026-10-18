@@ -36,6 +36,8 @@ for (const [name, source] of [
   ["absolute resolve resets discard the earlier OS path", `${imports}fs.readFileSync(path.resolve('/proc', '/ordinary', 'snapshot.json'));`],
   ["POSIX storage paths formatted through the native boundary", `${imports}fs.readFileSync(path.resolve('ordinary', path.posix.join('logical', 'snapshot.json'))); export function read(root, file) { return fs.readFileSync(path.resolve(root, path.posix.normalize(file))); }`],
   ["logical values, relative paths and owned I/O", portable],
+  // AGENTS.md requires compatible paths, not a particular formatter name.
+  ["known POSIX output accepted by native filesystem APIs on every target", `${imports}fs.readFileSync(path.posix.join('logical', 'snapshot.json'));`],
 ]) test(`${name} remain portable`, () => assertPortable(source));
 
 for (const [name, expression] of [
@@ -164,7 +166,6 @@ for (const [name, expression, rule] of [
 });
 
 for (const [name, expression, rule] of [
-  ["direct logical POSIX I/O", `path.posix.join('logical', 'snapshot.json')`, "OS04"],
   ["Windows logical syntax across a native formatter", `path.resolve('ordinary', path.win32.join('logical', 'snapshot.json'))`, "OS04"],
   ["concrete pseudo path across logical and native formatters", `path.resolve('ordinary', path.posix.join('/proc', 'self', 'stat'))`, "OS01"],
 ]) test(`${name} still rejects its boundary violation`, () => {

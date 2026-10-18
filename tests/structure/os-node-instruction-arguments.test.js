@@ -10,6 +10,15 @@ function inspect(file, text) {
 
 const file = "src/skills/example/SKILL.md";
 
+test("Node application data resembling JavaScript is not classified by its words", () => {
+  for (const body of ["process.kill(-123)", "fs.readFileSync('/proc/self/stat')"]) {
+    const report = inspect("src/presets/example/preset.json", JSON.stringify({
+      executable: "node", args: ["scripts/worker.js", "-e", body], shell: false,
+    }));
+    assert.deepEqual(report.diagnostics, []);
+  }
+});
+
 test("Node application argv after a script remains inert in structured and public commands", () => {
   const publicCommand = inspect(file, "Run \`node scripts/worker.js -e ordinary-data\`.");
   assert.deepEqual(publicCommand.diagnostics, []);
@@ -40,6 +49,12 @@ test("Node eval and print options before the script remain incomplete", () => {
     '{"executable":"node","args":["-e","doTask()"],"shell":false}');
   assert.equal(structured.complete, false);
   assert.deepEqual(structured.diagnostics.map((entry) => [entry.rule, entry.classification]), [["OS04", "incomplete"]]);
+  const shell = inspect("src/presets/example/preset.json", JSON.stringify({
+    executable: "node", args: ["-e", "doTask()"], shell: true,
+  }));
+  // Native JSON already rejects shell:true at OS02; inline inspection remains
+  // incomplete independently of that authority-contract violation.
+  assert.deepEqual(shell.diagnostics.map((entry) => [entry.rule, entry.classification]), [["OS02", "violation"], ["OS04", "incomplete"]]);
 });
 
 test("Node loader operands do not become script boundaries before a later eval option", () => {

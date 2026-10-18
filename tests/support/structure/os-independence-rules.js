@@ -1,5 +1,7 @@
 import { SourceDeclaration, SourceTemplateToken, matching, readCommaSeparated, readObjectProperty, readParameters } from "./source-reader.js";
-import { classifyExecutable, OsSpecificExecutable, UnclassifiedExecutable } from "./os-command-policy.js";
+import { classifyExecutable, UnclassifiedExecutable, supportedPlatforms } from "./os-command-policy.js";
+import { ExecutionArgument, NodeExecutionBoundary } from "./node-execution-boundary.js";
+import { PlatformExpression, PlatformImplementationBoundary } from "./os-platform-paths.js";
 import { posix, win32 } from "node:path";
 
 const sensitiveBuiltins = new Set(["fs", "fs/promises", "child_process", "process", "os", "path", "url", "module", "vm", "globalThis", "global"]);
@@ -46,11 +48,28 @@ function filesystemContract(callee) {
   return filesystemContracts.get(name?.replace(/Sync$/, ""));
 }
 const osFlags = new Set(["O_DIRECTORY", "O_NOFOLLOW", "O_DIRECT", "O_DSYNC", "O_SYNC", "UV_FS_O_FILEMAP", "S_IFSOCK", "S_IFIFO"]);
+const posixPlatforms = ["linux", "darwin"];
 const platformMembers = new Set(["platform", "type", "release", "version", "machine"]);
 const authorityMembers = new Set(["uid", "gid", "mode", "getuid", "geteuid", "getgid", "getegid"]);
 const pseudoPath = /^(?:\/proc(?:\/|$)|\/sys(?:\/|$)|\/dev(?:\/|$)|[A-Za-z]:\\(?:Windows|WINDOWS)(?:\\|$))/;
 const emptyEnvironment = new Map();
 const maximumModuleEvaluations = 6000;
+
+class PlatformModuleBoundaries {
+  constructor() { this.boundaries = []; }
+  at(token) { return this.boundaries.filter((boundary) => boundary.contains(token)).sort((a, b) => a.declaration.tokens.length - b.declaration.tokens.length)[0]; }
+}
+class SourceCallLocation {
+  constructor(module, token) { Object.assign(this, { module, token }); }
+}
+function* namedFunctions(module) {
+  for (const name of module.declarationNames()) {
+    if (module.declarationHeader(name).token.value === "function") yield module.declaration(name);
+  }
+}
+function signalArgument(args) {
+  return !args[1] || args[1] instanceof LiteralValue && args[1].value === undefined ? new LiteralValue("SIGTERM") : args[1];
+}
 
 class SourceEvaluationLimit extends Error {
   constructor(module, token) {
@@ -62,9 +81,9 @@ class SourceEvaluationLimit extends Error {
 }
 
 function strip(tokens) {
-  while (["await", "return"].includes(tokens[0]?.value)) tokens = tokens.slice(1);
-  while (tokens.at(-1)?.value === ";") tokens = tokens.slice(0, -1);
-  while (tokens[0]?.value === "(" && matching(tokens, 0, "(", ")") === tokens.length - 1) tokens = tokens.slice(1, -1);
+  while (tokens[0]?.kind === "identifier" && ["await", "return"].includes(tokens[0].value)) tokens = tokens.slice(1);
+  while (tokens.at(-1)?.kind === "punctuation" && tokens.at(-1).value === ";") tokens = tokens.slice(0, -1);
+  while (tokens[0]?.kind === "punctuation" && tokens[0].value === "(" && matching(tokens, 0, "(", ")") === tokens.length - 1) tokens = tokens.slice(1, -1);
   return tokens;
 }
 
@@ -77,9 +96,9 @@ function endOfExpression(tokens, start, stops = new Set([";", ","]), boundary = 
   for (let index = start; index < tokens.length; index++) {
     if (tokens[index].offset >= boundary) return index;
     if (tokens[index] instanceof SourceTemplateToken) index = templateEnd(tokens, index);
-    else if (["(", "[", "{"].includes(tokens[index].value)) {
+    else if (tokens[index].kind === "punctuation" && ["(", "[", "{"].includes(tokens[index].value)) {
       index = matching(tokens, index, tokens[index].value, { "(": ")", "[": "]", "{": "}" }[tokens[index].value]);
-    } else if (stops.has(tokens[index].value) || [")", "]", "}"].includes(tokens[index].value)) return index;
+    } else if (tokens[index].kind === "punctuation" && (stops.has(tokens[index].value) || [")", "]", "}"].includes(tokens[index].value))) return index;
   }
   return tokens.length;
 }
@@ -211,6 +230,9 @@ class DescriptorMethodValue extends DerivedValue {}
 class ChildMethodValue extends DerivedValue {}
 class ConcatenationValue extends DerivedValue { get sensitive() { return this.origin.sensitive; } }
 class TemplateValue extends DerivedValue { get sensitive() { return this.origin.sensitive; } }
+class TaggedTemplateValue extends DerivedValue {
+  get sensitive() { return this.origin.sensitive || pseudoPathUse(this) !== null; }
+}
 class WindowsPathValue extends DerivedValue {}
 class PosixPathValue extends DerivedValue {}
 /** A syntax-specific, source-only path result; null text retains uncertain inputs. */
@@ -237,8 +259,8 @@ class UnresolvedCompositionValue extends UnknownValue {
     this.origin = origin;
   }
 }
-class PathStringMethodValue extends DerivedValue { get sensitive() { return this.origin.sensitive || pseudoPathUse(this.origin) !== null; } }
-class TransformedPathValue extends DerivedValue { get sensitive() { return this.origin.sensitive || pseudoPathUse(this.origin) !== null; } }
+class RetainedStringMethodValue extends DerivedValue { get sensitive() { return this.origin.sensitive || pseudoPathUse(this.origin) !== null; } }
+class TransformedStringValue extends DerivedValue { get sensitive() { return this.origin.sensitive || pseudoPathUse(this.origin) !== null; } }
 class ConditionalFilesystemPathValue extends DerivedValue {}
 class ModuleLoaderValue extends SensitiveValue {}
 class BindingExpression {
@@ -280,7 +302,7 @@ function valueOrigins(value, nativePath = false, urlPaths = false) {
     // Windows separators remain literal characters on POSIX hosts.
     return nativePath && value instanceof PosixPathValue ? inputs : [value, ...inputs];
   }
-  if (value instanceof ConcatenationValue || value instanceof TemplateValue || value instanceof UnresolvedCompositionValue || value instanceof TransformedPathValue || value instanceof PathStringMethodValue || value instanceof ConditionalFilesystemPathValue) return [value, ...valueOrigins(value.origin, nativePath, urlPaths)];
+  if (value instanceof ConcatenationValue || value instanceof TemplateValue || value instanceof TaggedTemplateValue || value instanceof UnresolvedCompositionValue || value instanceof TransformedStringValue || value instanceof RetainedStringMethodValue || value instanceof ConditionalFilesystemPathValue) return [value, ...valueOrigins(value.origin, nativePath, urlPaths)];
   if (urlPaths && (value instanceof FileUrlValue || value instanceof NativePathValue || value instanceof UnresolvedUrlPathValue)) return [value, ...valueOrigins(value.details, nativePath, true)];
   if (urlPaths && value instanceof UrlPathnameValue) return [value, ...valueOrigins(value.origin, nativePath, true)];
   return [value];
@@ -360,6 +382,7 @@ function composePath(callee, args) {
 }
 
 function pseudoPathUse(value) {
+  if (value instanceof TaggedTemplateValue) return value.origin.values.some((part) => pseudoPathUse(part)) ? "incomplete" : null;
   if (value instanceof FileUrlPathValue) {
     if (value.uncertain) return "incomplete";
     return [value.text(posix), value.text(win32)].some((text) => pseudoPath.test(text)) ? "violation" : null;
@@ -367,7 +390,7 @@ function pseudoPathUse(value) {
   if (value instanceof FileUrlValue || value instanceof NativePathValue) return pseudoPathUse(value.details);
   if (value instanceof UrlPathnameValue) return pseudoPathUse(value.origin);
   if (value instanceof UnresolvedUrlPathValue) return value.details.values.some((part) => pseudoPathUse(part)) ? "incomplete" : null;
-  if (value instanceof TransformedPathValue || value instanceof PathStringMethodValue || value instanceof ConditionalFilesystemPathValue) return pseudoPathUse(value.origin) ? "incomplete" : null;
+  if (value instanceof TransformedStringValue || value instanceof RetainedStringMethodValue || value instanceof ConditionalFilesystemPathValue) return pseudoPathUse(value.origin) ? "incomplete" : null;
   if (value instanceof UnresolvedCompositionValue) return pseudoPathUse(value.origin) ? "incomplete" : null;
   if (value instanceof LiteralValue) return typeof value.value === "string" && pseudoPath.test(value.value) ? "violation" : null;
   if (value instanceof TemplateValue) return pseudoPath.test(value.details) ? "violation"
@@ -407,14 +430,18 @@ class OsSourceOrigins {
     this.activeExports = new Set();
     this.activeCalls = new Set();
     this.route = [];
+    this.callers = [];
     this.evaluations = new Map();
     this.values = new WeakMap();
     this.interpolationBoundaries = new WeakMap();
     this.deepCalls = true;
+    this.scanHelpers = true;
+    this.observing = false;
     this.work = 0;
     this.onCall = () => {};
     this.onMember = () => {};
     this.onUnsupported = () => {};
+    this.onSelection = () => {};
   }
 
   expressionEnd(module, tokens, start, stops) {
@@ -477,7 +504,7 @@ class OsSourceOrigins {
     if (!binding) {
       if (module.isUnbound("process", token) && token.value === "process") return new BuiltinValue("process", [], [module.file]);
       if (["true", "false", "null", "undefined"].includes(token.value)) return new LiteralValue({ true: true, false: false, null: null, undefined: undefined }[token.value], [module.file]);
-      if (["URL", "Reflect", "Object", "console", "globalThis", "global"].includes(token.value) && module.isUnbound(token.value, token)) return new BuiltinValue(token.value, [], [module.file]);
+      if (["URL", "Reflect", "Object", "String", "console", "globalThis", "global"].includes(token.value) && module.isUnbound(token.value, token)) return new BuiltinValue(token.value, [], [module.file]);
       return new UnknownValue();
     }
     const imported = module.references.find((reference) => reference.kind === "import" && reference.bindings.has(token.value)
@@ -569,7 +596,7 @@ class OsSourceOrigins {
 
   member(receiver, name, token, module, environment) {
     if (receiver instanceof BuiltinValue) {
-      if (["globalThis", "global"].includes(receiver.builtin) && ["process", "console", "Object", "Reflect", "URL"].includes(name)) return new BuiltinValue(name, [], receiver.trace);
+      if (["globalThis", "global"].includes(receiver.builtin) && ["process", "console", "Object", "String", "Reflect", "URL"].includes(name)) return new BuiltinValue(name, [], receiver.trace);
       const result = new BuiltinValue(receiver.builtin, [...receiver.members, name], receiver.trace);
       if ((receiver.builtin === "process" || receiver.builtin === "os") && platformMembers.has(name)) return new PlatformValue(result);
       if (authorityMembers.has(name) && ["process", "os"].includes(receiver.builtin)) return new AuthorityValue(result);
@@ -608,7 +635,7 @@ class OsSourceOrigins {
     if ((receiver instanceof StatValue || receiver instanceof StatfsValue) && (authorityMembers.has(name) || name === "type")) return new AuthorityValue(receiver, name);
     if (receiver instanceof UserInfoValue && authorityMembers.has(name)) return new AuthorityValue(receiver, name);
     if (receiver instanceof FileUrlValue && name === "pathname") return new UrlPathnameValue(receiver);
-    if (receiver instanceof UrlPathnameValue || receiver instanceof FileUrlValue || receiver instanceof NativePathValue || receiver instanceof TransformedPathValue) return new PathStringMethodValue(receiver);
+    if (receiver instanceof PlatformValue || receiver instanceof UrlPathnameValue || receiver instanceof FileUrlValue || receiver instanceof NativePathValue || receiver instanceof TaggedTemplateValue || receiver instanceof TransformedStringValue) return new RetainedStringMethodValue(receiver);
     if (receiver instanceof FileDescriptorValue) return new DescriptorMethodValue(receiver, name);
     if (receiver instanceof ChildProcessValue) return new ChildMethodValue(receiver, name);
     if (receiver instanceof WindowsPathValue || receiver instanceof PosixPathValue) return receiver;
@@ -631,12 +658,14 @@ class OsSourceOrigins {
       if (this.activeCalls.has(key)) return new UnknownValue("recursive helper result", args.some((arg) => arg.sensitive), callee.trace);
       this.activeCalls.add(key);
       const previousRoute = this.route;
+      const previousCallers = this.callers;
       this.route = [...new Set([...previousRoute, module.file, ...callee.trace])];
+      this.callers = [...previousCallers, new SourceCallLocation(module, token)];
       try {
         const local = new Map(callee.environment);
         const parameters = readParameters(callee.declaration.tokens);
         this.bindArguments(callee.module, parameters, args, local);
-        this.scan(callee.module, callee.declaration.bodyTokens() ?? [], local);
+        if (this.scanHelpers) this.scan(callee.module, callee.declaration.bodyTokens() ?? [], local);
         const returns = callee.declaration.returns();
         if (returns.length === 1) {
           const result = this.value(callee.module, returns[0].tokens, local);
@@ -647,10 +676,10 @@ class OsSourceOrigins {
         if (arrow >= 0 && callee.declaration.tokens[arrow + 1]?.value !== "{") return this.value(callee.module, callee.declaration.tokens.slice(arrow + 1), local);
         const alternatives = returns.map((entry) => this.value(callee.module, entry.tokens, local));
         return uncertainOrigins([...alternatives, ...args.filter((arg) => arg.sensitive)], "helper has no single static result");
-      } finally { this.activeCalls.delete(key); this.route = previousRoute; }
+      } finally { this.activeCalls.delete(key); this.route = previousRoute; this.callers = previousCallers; }
     }
     if (callee instanceof DerivedValue) {
-      if (callee instanceof PathStringMethodValue) return new TransformedPathValue(callee.origin);
+      if (callee instanceof RetainedStringMethodValue) return new TransformedStringValue(callee.origin);
       if (callee instanceof PlatformValue || callee instanceof AuthorityValue) return callee;
       if (callee instanceof DescriptorMethodValue) return new UnknownValue();
       if (callee instanceof JoinMethodValue) {
@@ -689,7 +718,7 @@ class OsSourceOrigins {
   }
 
   value(module, expression, environment = emptyEnvironment) {
-    const cacheable = this.deepCalls && environment.size === 0 && this.activeBindings.size === 0 && this.activeExports.size === 0 && this.activeCalls.size === 0;
+    const cacheable = !this.observing && this.deepCalls && environment.size === 0 && this.activeBindings.size === 0 && this.activeExports.size === 0 && this.activeCalls.size === 0;
     if (!this.values.has(module)) this.values.set(module, new Map());
     const cache = this.values.get(module);
     const key = `${expression[0]?.offset}:${expression.at(-1)?.offset}`;
@@ -702,19 +731,34 @@ class OsSourceOrigins {
     return value;
   }
 
+  template(module, token, environment, raw = false) {
+    const chunk = (index) => raw ? token.chunks[index]?.raw ?? "" : token.chunks[index]?.value ?? "";
+    let text = chunk(0);
+    const values = [];
+    for (let index = 0; index < token.interpolations.length; index++) {
+      const part = this.value(module, token.interpolations[index].tokens, environment);
+      values.push(part);
+      text += (part instanceof LiteralValue ? String(part.value) : "<dynamic>") + chunk(index + 1);
+    }
+    return values.every((item) => item instanceof LiteralValue) ? new LiteralValue(text, [module.file])
+      : new TemplateValue(new SequenceValue(values, [module.file, ...values.flatMap((value) => value.trace)]), text);
+  }
+
   expression(module, expression, environment) {
     const tokens = strip(expression);
     if (!tokens.length) return new UnknownValue();
     const token = tokens[0];
+    if (tokens.length === 1 && token.kind === "string") return new LiteralValue(token.value, [module.file]);
     for (let index = 0; index < tokens.length; index++) {
       if (tokens[index] instanceof SourceTemplateToken) { index = templateEnd(tokens, index); continue; }
-      if (["(", "[", "{"].includes(tokens[index].value)) { index = matching(tokens, index, tokens[index].value, { "(": ")", "[": "]", "{": "}" }[tokens[index].value]); continue; }
+      if (tokens[index].kind === "punctuation" && ["(", "[", "{"].includes(tokens[index].value)) { index = matching(tokens, index, tokens[index].value, { "(": ")", "[": "]", "{": "}" }[tokens[index].value]); continue; }
       if (tokens[index].value !== "?" || tokens[index + 1]?.value === "." || tokens[index + 1]?.value === "?") continue;
       let depth = 0;
       for (let end = index + 1; end < tokens.length; end++) {
-        if (["(", "[", "{"].includes(tokens[end].value)) { end = matching(tokens, end, tokens[end].value, { "(": ")", "[": "]", "{": "}" }[tokens[end].value]); continue; }
+        if (tokens[end].kind === "punctuation" && ["(", "[", "{"].includes(tokens[end].value)) { end = matching(tokens, end, tokens[end].value, { "(": ")", "[": "]", "{": "}" }[tokens[end].value]); continue; }
         if (tokens[end].value === "?") depth++;
         if (tokens[end].value !== ":" || depth-- !== 0) continue;
+        this.onSelection(this.value(module, tokens.slice(0, index), environment), tokens[0], module);
         return uncertainOrigins([
           this.value(module, tokens.slice(index + 1, end), environment),
           this.value(module, tokens.slice(end + 1), environment),
@@ -724,17 +768,17 @@ class OsSourceOrigins {
     let arrow = -1;
     for (let index = 0; index < tokens.length; index++) {
       if (tokens[index] instanceof SourceTemplateToken) index = templateEnd(tokens, index);
-      else if (["(", "[", "{"].includes(tokens[index].value)) index = matching(tokens, index, tokens[index].value, { "(": ")", "[": "]", "{": "}" }[tokens[index].value]);
+      else if (tokens[index].kind === "punctuation" && ["(", "[", "{"].includes(tokens[index].value)) index = matching(tokens, index, tokens[index].value, { "(": ")", "[": "]", "{": "}" }[tokens[index].value]);
       else if (tokens[index].value === "=>") { arrow = index; break; }
     }
-    if (token.value === "function" || arrow >= 0 && (tokens[0].value === "(" || tokens[0].kind === "identifier")) {
+    if (token.kind === "identifier" && token.value === "function" || arrow >= 0 && (tokens[0].value === "(" || tokens[0].kind === "identifier")) {
       return new CallableValue(module, new SourceDeclaration(`<helper:${token.offset}>`, tokens), environment, [module.file]);
     }
-    if (token.value === "class") return new ClassValue(module, tokens[1]?.value, false, [module.file]);
+    if (token.kind === "identifier" && token.value === "class") return new ClassValue(module, tokens[1]?.value, false, [module.file]);
     // Evaluate concatenation before postfix expressions, without interpreting operators.
     for (let index = 0; index < tokens.length - 1; index++) {
       if (tokens[index] instanceof SourceTemplateToken) { index = templateEnd(tokens, index); continue; }
-      if (["(", "[", "{"].includes(tokens[index].value)) { index = matching(tokens, index, tokens[index].value, { "(": ")", "[": "]", "{": "}" }[tokens[index].value]); continue; }
+      if (tokens[index].kind === "punctuation" && ["(", "[", "{"].includes(tokens[index].value)) { index = matching(tokens, index, tokens[index].value, { "(": ")", "[": "]", "{": "}" }[tokens[index].value]); continue; }
       if (index > 0 && tokens[index].value === "+") {
         const left = this.value(module, tokens.slice(0, index), environment);
         const right = this.value(module, tokens.slice(index + 1), environment);
@@ -747,19 +791,11 @@ class OsSourceOrigins {
     }
     const loaded = module.references.find((entry) => ["dynamic", "require"].includes(entry.kind) && entry.token.offset === token.offset);
     let value; let cursor = 1; let constructed = false;
-    if (token.value === "new") { constructed = true; value = this.identifier(module, tokens[1], environment); cursor = 2; }
+    if (token.kind === "identifier" && token.value === "new") { constructed = true; value = this.identifier(module, tokens[1], environment); cursor = 2; }
     else if (token.kind === "string") value = new LiteralValue(token.value, [module.file]);
     else if (token.kind === "number") value = new LiteralValue(Number(token.value.replaceAll("_", "")), [module.file]);
     else if (token.value === "<template>" && token.chunks) {
-      let text = token.chunks[0]?.value ?? "";
-      const values = [];
-      for (let index = 0; index < token.interpolations.length; index++) {
-        const part = this.value(module, token.interpolations[index].tokens, environment);
-        values.push(part);
-        text += (part instanceof LiteralValue ? String(part.value) : "<dynamic>") + (token.chunks[index + 1]?.value ?? "");
-      }
-      value = values.every((item) => item instanceof LiteralValue) ? new LiteralValue(text, [module.file])
-        : new TemplateValue(new SequenceValue(values, [module.file]), text);
+      value = this.template(module, token, environment);
       cursor = tokens.findIndex((item) => item === token.endToken) + 1;
       if (cursor === 0) cursor = tokens.length;
     } else if (token.value === "[") {
@@ -800,10 +836,20 @@ class OsSourceOrigins {
         const member = tokens[cursor + 1];
         this.onMember(value, member.value, member, module, false);
         value = this.member(value, member.value, member, module, environment); cursor += 2;
+      } else if (tokens[cursor] instanceof SourceTemplateToken) {
+        const template = tokens[cursor];
+        if (value instanceof BuiltinValue && value.builtin === "String" && value.member === "raw") {
+          value = this.template(module, template, environment, true);
+        } else {
+          const cooked = this.template(module, template, environment);
+          const raw = this.template(module, template, environment, true);
+          value = new TaggedTemplateValue(new SequenceValue([cooked, raw], [...value.trace, ...cooked.trace, ...raw.trace]));
+        }
+        cursor = templateEnd(tokens, cursor) + 1;
       } else if (tokens[cursor].value === "[") {
         const end = matching(tokens, cursor, "[", "]");
         const key = this.value(module, tokens.slice(cursor + 1, end), environment);
-        if (key instanceof PlatformValue) this.diagnose("OS01", module.file, tokens[cursor], [module.file, ...key.trace], "OS identity selects a computed implementation");
+        if (key instanceof PlatformValue) this.onUnsupported(new UnknownValue("computed platform dispatch has no inspected implementation paths", true, key.trace), tokens[cursor], module);
         this.onMember(value, null, tokens[cursor], module, true);
         value = new UnknownValue("computed capability access", value.sensitive, value.trace); cursor = end + 1;
       } else if (tokens[cursor].value === "(") {
@@ -840,10 +886,14 @@ export class OsIndependenceRules {
   constructor(graph, diagnose) {
     Object.assign(this, { graph, diagnose });
     this.origins = new OsSourceOrigins(graph, diagnose);
+    this.platformModules = new WeakMap();
     this.origins.onCall = (...args) => this.call(...args);
     this.origins.onMember = (...args) => this.member(...args);
     this.origins.onUnsupported = (value, token, module) => {
       if (value.sensitive) this.incomplete(this.ruleFor(value), module, token, value, value.reason);
+    };
+    this.origins.onSelection = (value, token, module) => {
+      if (!this.origins.observing && valueOrigins(value).some((origin) => origin instanceof PlatformValue)) this.platformSelection(module, token, value);
     };
   }
   incomplete(rule, module, token, value, message) {
@@ -852,8 +902,177 @@ export class OsIndependenceRules {
   violation(rule, module, token, value, message) {
     this.diagnose(rule, module.file, token, [...this.origins.route, module.file, ...value.trace], message);
   }
+  platformExpression(module, tokens) {
+    tokens = strip(tokens);
+    // Ordinary input predicates do not require walking arbitrary helper bodies
+    // to discover an OS selector. Resolve their lexical roots through the same
+    // origin graph first; opaque selectors remain incomplete at their real use.
+    const scan = this.origins.scanHelpers;
+    let candidate = false;
+    this.origins.scanHelpers = false;
+    try {
+      for (let index = 0; index < tokens.length; index++) {
+        const token = tokens[index];
+        if (token.kind !== "identifier" || tokens[index - 1]?.value === ".") continue;
+        const value = this.origins.identifier(module, token);
+        if (valueOrigins(value).some((origin) => origin instanceof PlatformValue || origin instanceof BuiltinValue && ["process", "os"].includes(origin.builtin))) { candidate = true; break; }
+      }
+    } finally { this.origins.scanHelpers = scan; }
+    if (!candidate && !(tokens.length === 1 && (tokens[0].kind === "string" || tokens[0].kind === "number" || ["true", "false", "null", "undefined"].includes(tokens[0].value)))) return new PlatformExpression(false, supportedPlatforms.map(() => null));
+    // Split logical operators before using the shared value evaluator, whose
+    // general provenance contract deliberately does not interpret precedence.
+    for (const operator of ["||", "&&"]) {
+      for (let index = 0; index < tokens.length - 1; index++) {
+        if (tokens[index] instanceof SourceTemplateToken) { index = templateEnd(tokens, index); continue; }
+        if (tokens[index].kind === "punctuation" && ["(", "[", "{"].includes(tokens[index].value)) { index = matching(tokens, index, tokens[index].value, { "(": ")", "[": "]", "{": "}" }[tokens[index].value]); continue; }
+        if (`${tokens[index].value}${tokens[index + 1].value}` !== operator) continue;
+        const left = this.platformExpression(module, tokens.slice(0, index));
+        const right = this.platformExpression(module, tokens.slice(index + 2));
+        return new PlatformExpression(left.dependent || right.dependent, supportedPlatforms.map((platform) => {
+          const a = left.at(platform); const b = right.at(platform);
+          if (operator === "&&" && a === false || operator === "||" && a === true) return a;
+          return a === null || b === null ? null : operator === "&&" ? Boolean(a && b) : Boolean(a || b);
+        }));
+      }
+    }
+    const interpret = (value) => {
+      if (value instanceof LiteralValue) return new PlatformExpression(false, supportedPlatforms.map(() => value.value ?? null));
+      if (value instanceof PlatformValue) {
+        const member = value.origin.member;
+        const values = member === "platform" ? supportedPlatforms : member === "type" ? ["Linux", "Darwin", "Windows_NT"] : supportedPlatforms.map(() => null);
+        return new PlatformExpression(true, [...values]);
+      }
+      if (value instanceof OperationValue) {
+        const operands = value.values.map(interpret);
+        const dependent = operands.some((operand) => operand.dependent);
+        return new PlatformExpression(dependent, supportedPlatforms.map((platform) => {
+          const [a, b] = operands.map((operand) => operand.at(platform));
+          if (a === null || value.operator !== "!" && b === null) return null;
+          if (value.operator === "!") return !a;
+          if (["===", "=="].includes(value.operator)) return a === b;
+          if (["!==", "!="].includes(value.operator)) return a !== b;
+          return null;
+        }));
+      }
+      return new PlatformExpression(valueOrigins(value).some((origin) => origin instanceof PlatformValue), supportedPlatforms.map(() => null));
+    };
+    const scanHelpers = this.origins.scanHelpers;
+    this.origins.scanHelpers = false;
+    try { return interpret(this.origins.value(module, tokens)); }
+    finally { this.origins.scanHelpers = scanHelpers; }
+  }
+  platformSignature(module, route) {
+    const effects = new Map();
+    const delegations = new Set();
+    const typedDeclarations = new Set();
+    let unknown = false;
+    const previous = this.origins.onCall;
+    this.origins.onCall = (callee, args, token, owner) => {
+      const index = owner.tokens.indexOf(token);
+      if (["Error", "TypeError", "RangeError"].includes(token.value) && owner.isUnbound(token.value, token)
+        && owner.tokens[index - 1]?.value === "new" && owner.tokens[index - 2]?.value === "throw") return;
+      if (callee instanceof BuiltinValue) {
+        if (["fs", "fs/promises", "child_process"].includes(callee.builtin) || callee.builtin === "process" && callee.member === "kill") {
+          if (callee.builtin === "child_process" && this.typedBoundary(owner, token) === true) {
+            for (const declaration of namedFunctions(owner)) {
+              if (declaration.token.offset <= token.offset && declaration.tokens.at(-1).offset >= token.offset) typedDeclarations.add(`${owner.file}:${declaration.token.offset}`);
+            }
+          }
+          const flags = args.flatMap((arg) => valueOrigins(arg)).filter((arg) => arg instanceof BuiltinValue && osFlags.has(arg.member) && arg.member !== "UV_FS_O_FILEMAP").map((arg) => arg.member).sort();
+          const mode = ["fs", "fs/promises"].includes(callee.builtin) && ["open", "openSync"].includes(callee.member) ? args[1]
+            : callee.builtin === "process" && callee.member === "kill" ? signalArgument(args) : null;
+          const knownArgument = (value) => value instanceof LiteralValue ? JSON.stringify(value.value) : value instanceof BuiltinValue ? value.identity : "unresolved";
+          let contract = mode ? knownArgument(mode) : "";
+          if (mode instanceof OperationValue) {
+            const values = valueOrigins(mode).filter((value) => !(mode.operator === "|" && ["fs", "fs/promises"].includes(callee.builtin) && value instanceof BuiltinValue && value.member === "UV_FS_O_FILEMAP"));
+            const operands = values.map(knownArgument).sort();
+            contract = operands.length === 1 && mode.operator === "|" ? operands[0] : `${mode.operator}:${operands.join("|")}`;
+          }
+          effects.set(`${owner.file}:${token.offset}`, `${callee.identity}:${flags.join("|")}:${contract}`);
+        } else if (!["console", "Object", "String", "path", "os", "url", "URL"].includes(callee.builtin)) unknown = true;
+      } else if (callee instanceof CallableValue) delegations.add(callee);
+      else if (callee instanceof UnknownValue || callee instanceof ModuleLoaderValue) unknown = true;
+    };
+    let result;
+    try {
+      this.origins.scan(module, route.tokens);
+      result = route.terminal === "return" ? this.origins.value(module, route.result) : null;
+    } finally { this.origins.onCall = previous; }
+    for (const callee of delegations) {
+      if (!(callee.declaration.bodyTokens() ?? []).some((token) => ["throw", "if", "switch", "for", "while", "try"].includes(token.value))) continue;
+      const boundary = this.platformModules.get(callee.module)?.at(callee.declaration.token);
+      if (!typedDeclarations.has(`${callee.module.file}:${callee.declaration.token.offset}`) && !(boundary?.dependent && boundary.classification === null)) unknown = true;
+    }
+    if (unknown) return "unknown";
+    const resultKind = result instanceof LiteralValue ? `literal:${typeof result.value}:${[false, null, undefined].includes(result.value) ? String(result.value) : "value"}` : "result";
+    if (effects.size) return `${[...effects.values()].join(",")};${route.terminal === "return" ? resultKind : "void"}`;
+    if (result instanceof ClassValue && result.instance && this.invocationClass(result)) return "typed invocation";
+    if (result instanceof LiteralValue && result.value != null && result.value !== false) return `literal:${typeof result.value}`;
+    return result instanceof UnknownValue && route.result.length ? "unknown" : "empty";
+  }
+  indexPlatforms(module) {
+    if (this.platformModules.has(module)) return this.platformModules.get(module);
+    const index = new PlatformModuleBoundaries();
+    this.platformModules.set(module, index);
+    const previous = [this.origins.onCall, this.origins.onMember, this.origins.onUnsupported];
+    const observing = this.origins.observing;
+    this.origins.observing = true;
+    this.origins.onCall = this.origins.onMember = this.origins.onUnsupported = () => {};
+    try {
+      const declarations = [...namedFunctions(module)];
+      for (const name of module.declarationNames()) {
+        const header = module.declarationHeader(name);
+        if (header.token.value === "class") {
+          const members = module.classMembers(name);
+          declarations.push(...members.instanceMembers.values(), ...members.staticMembers.values());
+        } else if (["const", "let"].includes(header.token.value)) {
+          // The existing binding index already bounds initializer expressions;
+          // reading every full variable declaration is unnecessary here.
+          const origins = this.origins.index(module).get(module.moduleBinding(name));
+          for (const expression of origins?.expressions ?? []) {
+            if (expression.tokens[0]?.value !== "function" && !expression.tokens.some((token) => token.kind === "punctuation" && token.value === "=>")) continue;
+            const value = this.origins.value(module, expression.tokens);
+            if (value instanceof CallableValue) declarations.push(value.declaration);
+          }
+        }
+      }
+      for (const declaration of declarations) {
+        const boundary = new PlatformImplementationBoundary(declaration, (tokens) => this.platformExpression(module, tokens), (route) => this.platformSignature(module, route));
+        index.boundaries.push(boundary);
+        if (!boundary.dependent) continue;
+        if (boundary.classification) this.diagnose("OS01", module.file, declaration.token, [module.file], boundary.message, boundary.classification);
+      }
+    } finally {
+      [this.origins.onCall, this.origins.onMember, this.origins.onUnsupported] = previous;
+      this.origins.observing = observing;
+    }
+    return index;
+  }
+  capability(rule, module, token, value, platforms, message, classification = "violation") {
+    let active = [...supportedPlatforms];
+    let uncertain = false;
+    for (const location of [...this.origins.callers, new SourceCallLocation(module, token)]) {
+      const boundary = this.platformModules.get(location.module)?.at(location.token);
+      if (!boundary?.dependent) continue;
+      const selected = boundary.platformsAt(location.token);
+      active = active.filter((platform) => selected.includes(platform));
+      uncertain ||= boundary.routes.some((route) => route.unknown);
+    }
+    if (active.every((platform) => platforms.includes(platform))) return;
+    if (uncertain || classification === "incomplete") this.incomplete(rule, module, token, value, `${message}; platform compatibility is unresolved`);
+    else this.violation(rule, module, token, value, `${message}; required without an implementation on ${active.filter((platform) => !platforms.includes(platform)).join(", ")}`);
+  }
+  platformSelection(module, token, value) {
+    const boundary = this.platformModules.get(module)?.at(token);
+    if (boundary?.dependent && boundary.conditions.has(token.offset)) return;
+    if (boundary) {
+      this.incomplete("OS01", module, token, value, "platform selection expression has no inspected implementation path split");
+      return;
+    }
+    this.violation("OS01", module, token, value, "platform implementation selection bypasses an inspected shared function boundary");
+  }
   ruleFor(value) {
-    if (value instanceof PathStringMethodValue || value instanceof TransformedPathValue) return valueOrigins(value.origin, false, true).some((origin) => origin instanceof UrlPathnameValue) ? "OS04" : "OS01";
+    if (value instanceof RetainedStringMethodValue || value instanceof TransformedStringValue) return valueOrigins(value.origin, false, true).some((origin) => origin instanceof UrlPathnameValue) ? "OS04" : "OS01";
     if (value instanceof UnresolvedCompositionValue) return valueOrigins(value.origin).some((origin) => origin instanceof UrlPathnameValue || origin instanceof WindowsPathValue || origin instanceof PosixPathValue) ? "OS04" : "OS01";
     if (value instanceof BuiltinValue) return value.builtin === "child_process" ? "OS02" : ["url", "path"].includes(value.builtin) ? "OS04" : "OS01";
     if (value instanceof AuthorityValue || value instanceof StatValue || value instanceof StatfsValue || value instanceof FileDescriptorValue) return "OS03";
@@ -871,7 +1090,7 @@ export class OsIndependenceRules {
     if (callee instanceof UnknownValue && callee.sensitive) this.incomplete(this.ruleFor(callee), module, token, callee, callee.reason);
     if (callee instanceof BuiltinValue) {
       const name = callee.member;
-      if (callee.builtin === "process" && name === "kill") this.violation("OS01", module, token, callee, "PID/PGID signalling bypasses a retained ChildProcess handle");
+      if (callee.builtin === "process" && name === "kill") this.signal(callee, args, token, module);
       if (callee.builtin === "vm" && name !== "isContext" || callee.builtin === "module" && !["createRequire", "isBuiltin"].includes(name)
         || callee.builtin === "process" && ["getBuiltinModule", "require"].includes(name)
         || ["globalThis", "global"].includes(callee.builtin) && ["eval", "Function"].includes(name)) this.incomplete("OS02", module, token, callee, "runtime module/code loading obscures the inspectable capability graph");
@@ -888,41 +1107,61 @@ export class OsIndependenceRules {
     if (callee instanceof ChildMethodValue && callee.details === "kill" && args.length > 0
       && (!(args[0] instanceof LiteralValue) || !["SIGTERM", "SIGKILL", "SIGINT", "SIGQUIT"].includes(args[0].value))) this.incomplete("OS01", module, token, callee, "retained ChildProcess kill has no proven portable signal");
     if (!(callee instanceof CallableValue) && !(callee instanceof ClassValue) && !(callee instanceof BuiltinValue)
-      && !(callee instanceof JoinMethodValue || callee instanceof StringMethodValue || callee instanceof PathStringMethodValue || callee instanceof ChildMethodValue || callee instanceof DescriptorMethodValue)) {
+      && !(callee instanceof JoinMethodValue || callee instanceof StringMethodValue || callee instanceof RetainedStringMethodValue || callee instanceof ChildMethodValue || callee instanceof DescriptorMethodValue)) {
       for (const arg of args.filter((arg) => arg.sensitive)) this.incomplete(this.ruleFor(arg), module, token, arg, "OS-sensitive capability escapes to an uninspected consumer");
     }
   }
   property(value, name) {
     return value instanceof ObjectValue ? this.origins.member(value, name, value.tokens[0], value.module, value.environment) : new UnknownValue();
   }
+  signal(callee, args, token, module) {
+    const pid = args[0];
+    const signal = signalArgument(args);
+    const portableSignal = signal instanceof LiteralValue && [0, "SIGTERM", "SIGKILL", "SIGINT"].includes(signal.value);
+    const positivePid = pid instanceof LiteralValue && Number.isInteger(pid.value) && pid.value > 0
+      || pid instanceof BuiltinValue && pid.builtin === "process" && pid.member === "pid";
+    if (positivePid && portableSignal) return;
+    const groupPid = pid instanceof LiteralValue && Number.isInteger(pid.value) && pid.value <= 0
+      || pid instanceof OperationValue && pid.operator === "-" && pid.values[0] instanceof LiteralValue && pid.values[0].value > 0;
+    this.capability("OS01", module, token, callee, posixPlatforms, "PID/PGID or signal contract has no corresponding Windows implementation", groupPid ? "violation" : "incomplete");
+  }
   launch(callee, args, token, module) {
     const options = args.find((value) => value instanceof ObjectValue);
     for (const property of ["uid", "gid"]) {
-      if (options && readObjectProperty(options.tokens, property)) this.violation("OS03", module, token, callee, `process ${property} option requires an OS-specific authority model`);
+      if (options && readObjectProperty(options.tokens, property)) this.capability("OS03", module, token, callee, posixPlatforms, `process ${property} option requires a corresponding Windows authority implementation`);
     }
     if (options?.tokens.some((item, index, tokens) => item.value === "." && tokens[index + 1]?.value === "." && tokens[index + 2]?.value === ".")) this.incomplete("OS02", module, token, callee, "spread launch options cannot prove shell and OS authority settings");
-    if (this.property(options, "shell") instanceof LiteralValue && this.property(options, "shell").value === true) this.violation("OS02", module, token, callee, "shell:true makes invocation depend on the host shell");
+    if (this.property(options, "shell") instanceof LiteralValue && this.property(options, "shell").value === true) this.violation("OS02", module, token, callee, "shell:true bypasses the shell:false typed argv boundary");
     if (["exec", "execSync"].includes(callee.member)) this.violation("OS04", module, token, callee, "execution authority is reparsed from a shell command string");
     const command = args[0];
     if (command instanceof LiteralValue) {
       const executable = classifyExecutable(String(command.value));
-      if (executable instanceof OsSpecificExecutable) this.violation("OS02", module, token, callee, `OS-specific required command or shim ${executable.identity}`);
+      if (!(executable instanceof UnclassifiedExecutable)) this.capability("OS02", module, token, callee, executable.platforms, `required executable ${executable.identity} has no corresponding platform implementation`);
       if (executable instanceof UnclassifiedExecutable) this.incomplete("OS02", module, token, callee, `required executable portability is unclassified: ${executable.identity}`);
     }
     if (command instanceof ShellTextValue || args.some((value) => value instanceof ShellArgvValue)) this.violation("OS04", module, token, callee, "typed invocation was converted to shell text and reparsed");
+    const nodeExecutable = command instanceof BuiltinValue && command.builtin === "process" && command.member === "execPath" ? "node"
+      : command instanceof LiteralValue && typeof command.value === "string" ? command.value : "";
+    const argv = args[1];
+    const nodeArguments = argv?.constructor === SequenceValue ? argv.values.map((value) => value instanceof LiteralValue && typeof value.value === "string"
+      ? new ExecutionArgument(value.value, false) : new ExecutionArgument("", true)) : [new ExecutionArgument("", true)];
+    const nodeBoundary = NodeExecutionBoundary.inspect(nodeExecutable, nodeArguments);
+    if (nodeBoundary?.status === "inline") this.incomplete("OS04", module, token, callee, "inline JavaScript execution has no inspected module boundary");
+    else if (nodeBoundary?.status === "incomplete") this.incomplete("OS04", module, token, callee, `Node option boundary cannot be proven before the script entry (${nodeBoundary.option})`);
     const fixture = this.ownedFixture(module, token, callee, args);
     if (fixture === null) this.incomplete("OS02", module, token, callee, "test-owned launch has an unsupported cleanup or inline-code contract");
     else if (!fixture) {
       const boundary = this.typedBoundary(module, token);
       if (boundary === null) this.incomplete("OS02", module, token, callee, "apparent typed invocation boundary has an unsupported authority contract");
       else if (!boundary) this.violation("OS02", module, token, callee, "direct child_process launch bypasses the shared typed invocation boundary");
+      else if (this.origins.callers.length > 0 && !(command instanceof LiteralValue)
+        && !(command instanceof BuiltinValue && command.builtin === "process" && command.member === "execPath")) this.incomplete("OS02", module, token, callee, "typed launch executable identity is unresolved at an owned caller");
     }
   }
   typedBoundary(module, token) {
     // A closed, deliberately narrow contract. Token words alone confer no authority.
-    for (const name of module.declarationNames()) {
-      const declaration = module.declaration(name);
-      if (!declaration?.callable || declaration.token.offset > token.offset || declaration.tokens.at(-1).offset < token.offset) continue;
+    for (const declaration of namedFunctions(module)) {
+      if (declaration.token.offset > token.offset || declaration.tokens.at(-1).offset < token.offset) continue;
       const body = declaration.bodyTokens() ?? [];
       const guard = body.findIndex((item) => item.value === "instanceof");
       if (guard < 0) return false;
@@ -1020,9 +1259,11 @@ export class OsIndependenceRules {
     const flags = (value) => value instanceof BuiltinValue ? value.members.filter((member) => osFlags.has(member))
       : value instanceof SequenceValue || value instanceof ObjectValue ? value.values.flatMap(flags)
         : value instanceof ConcatenationValue ? flags(value.origin) : [];
-    for (const flag of args.flatMap(flags)) this.violation("OS03", module, token, callee, `OS-specific filesystem flag ${flag}`);
+    // Node documents UV_FS_O_FILEMAP as an ignored optimization elsewhere;
+    // its presence establishes no stronger public filesystem guarantee.
+    for (const flag of args.flatMap(flags)) this.capability("OS03", module, token, callee, flag === "UV_FS_O_FILEMAP" ? supportedPlatforms : posixPlatforms, `filesystem flag ${flag} has no corresponding platform guarantee`);
     for (const input of filesystemContract(callee)?.paths(args, (value, key) => this.property(value, key)) ?? []) this.filesystemPath(callee, input, token, module);
-    if (/^(?:chmod|chown|fchmod|fchown|lchmod|lchown)/.test(name)) this.violation("OS03", module, token, callee, "UID/mode mutation cannot establish portable authority");
+    if (/^(?:chmod|chown|fchmod|fchown|lchmod|lchown)/.test(name)) this.capability("OS03", module, token, callee, posixPlatforms, "UID/mode mutation requires a corresponding Windows authority implementation");
     if (/^(?:fsync|fdatasync)/.test(name)) {
       if (args[0] instanceof FileDescriptorValue) this.descriptorSync(args[0], token, module);
       else this.incomplete("OS03", module, token, callee, "fsync descriptor has no proven regular writable-file origin");
@@ -1031,17 +1272,32 @@ export class OsIndependenceRules {
   filesystemPath(callee, input, token, module) {
     const pathOrigin = new SequenceValue([callee, input], [...callee.trace, ...input.trace]);
     const pathUse = pseudoPathUse(input);
-    if (pathUse === "violation") this.violation("OS01", module, token, pathOrigin, "pseudo-filesystem or fixed OS path is used for I/O");
+    if (pathUse === "violation") {
+      const texts = [pathText(input, posix), pathText(input, win32), input instanceof TemplateValue ? input.details : null].filter((text) => text !== null && pseudoPath.test(text));
+      const platforms = texts.length ? texts.map((text) => /^\/(?:proc|sys)(?:\/|$)/.test(text) ? ["linux"] : text.startsWith("/dev") ? posixPlatforms : ["win32"])
+        .reduce((common, selected) => common.filter((platform) => selected.includes(platform)), [...supportedPlatforms]) : [];
+      this.capability("OS01", module, token, pathOrigin, platforms, "pseudo-filesystem or fixed OS path is used for I/O");
+    }
     if (pathUse === "incomplete") this.incomplete("OS01", module, token, pathOrigin, "path composition retains an unresolved pseudo-filesystem or fixed OS origin");
     const origins = valueOrigins(input, false, true);
-    const unresolvedTransform = origins.some((value) => value instanceof UnresolvedCompositionValue || value instanceof TransformedPathValue || value instanceof PathStringMethodValue || value instanceof ConditionalFilesystemPathValue);
+    if (pathUse !== "incomplete" && origins.some((value) => value instanceof TaggedTemplateValue)) this.incomplete("OS01", module, token, pathOrigin, "unsupported template tag has no proven filesystem path transformation");
+    const unresolvedTransform = origins.some((value) => value instanceof TaggedTemplateValue || value instanceof UnresolvedCompositionValue || value instanceof TransformedStringValue || value instanceof RetainedStringMethodValue || value instanceof ConditionalFilesystemPathValue);
     if (origins.some((value) => value instanceof UrlPathnameValue)) {
       if (unresolvedTransform) this.incomplete("OS04", module, token, pathOrigin, "unsupported string transform retains file URL pathname provenance at native I/O");
       else this.violation("OS04", module, token, pathOrigin, "file URL pathname is used for native filesystem I/O");
     }
     if (origins.some((value) => value instanceof WindowsPathValue || value instanceof PosixPathValue)) {
       if (unresolvedTransform) this.incomplete("OS04", module, token, pathOrigin, "unsupported string transform retains logical path provenance at native I/O");
-      else this.violation("OS04", module, token, pathOrigin, "logical path syntax bypasses the native filesystem path boundary");
+      else for (const origin of origins.filter((value) => value instanceof WindowsPathValue || value instanceof PosixPathValue)) {
+        const text = origin.details.text;
+        const rootedResolve = origin.origin.member !== "resolve" || origin.details.values.some((value) => {
+          const part = pathText(value, origin.details.syntax);
+          return part !== null && origin.details.syntax.isAbsolute(part);
+        });
+        const sharedText = text !== null && rootedResolve && !text.includes("\\") && !/^[A-Za-z]:|^\/\//.test(text);
+        const platforms = sharedText ? supportedPlatforms : origin instanceof PosixPathValue ? posixPlatforms : ["win32"];
+        this.capability("OS04", module, token, pathOrigin, platforms, "logical path has no compatible native interpretation on every selected platform", text === null || !rootedResolve ? "incomplete" : "violation");
+      }
     }
     const unresolved = origins.find((value) => (value instanceof UnknownValue || value instanceof OperationValue) && value.sensitive);
     if (unresolved) this.incomplete("OS01", module, token, pathOrigin, unresolved.reason ?? "operator result has no proven filesystem path origin");
@@ -1049,10 +1305,16 @@ export class OsIndependenceRules {
 
   descriptorSync(descriptor, token, module) {
     const flags = descriptor.details?.[1];
-    if (descriptor.origin.member.startsWith("opendir") || flags instanceof LiteralValue && flags.value === "r") this.violation("OS03", module, token, descriptor, "read-only/directory descriptor fsync is required as a portable guarantee");
+    if (descriptor.origin.member.startsWith("opendir") || flags instanceof LiteralValue && flags.value === "r") this.capability("OS03", module, token, descriptor, posixPlatforms, "read-only/directory descriptor fsync requires a corresponding Windows guarantee");
     else if (!(flags instanceof LiteralValue) || !/^[wax]/.test(String(flags.value))) this.incomplete("OS03", module, token, descriptor, "descriptor origin does not prove a regular writable file for fsync");
   }
   inspect(module) {
+    this.origins.evaluations = new Map();
+    this.origins.work = 0;
+    try { this.indexPlatforms(module); }
+    catch (error) {
+      this.diagnose("OS00", module.file, error, [module.file], `platform path inspection incomplete: ${error.message}`, "incomplete");
+    }
     // Each independently inspected source root gets a fresh finite work budget.
     // Work performed through an earlier caller must not suppress this module's rules.
     this.origins.evaluations = new Map();
@@ -1065,9 +1327,11 @@ export class OsIndependenceRules {
     this.origins.evaluations = new Map();
     this.origins.work = 0;
     this.origins.scan(module);
+    const bindingExpressions = new Set([...this.origins.index(module).values()].flatMap((origins) => origins.expressions.map((expression) => expression.tokens[0]?.offset)));
     for (let index = 0; index < tokens.length - 1; index++) {
       if (tokens[index].value !== "=" || tokens[index - 1]?.value === "=" || tokens[index + 1]?.value === "="
         || tokens[index - 1]?.kind === "identifier" && tokens[index - 2]?.value !== ".") continue;
+      if (bindingExpressions.has(tokens[index + 1]?.offset)) continue; // The shared binding projection owns declaration/destructuring validation.
       const value = this.origins.value(module, tokens.slice(index + 1, endOfExpression(tokens, index + 1)));
       if (value.sensitive) this.incomplete(this.ruleFor(value), module, tokens[index], value, "member/destructuring assignment escapes an OS-sensitive capability");
     }
@@ -1075,28 +1339,28 @@ export class OsIndependenceRules {
       if (tokens[index].value !== "switch" || tokens[index + 1]?.value !== "(") continue;
       const end = matching(tokens, index + 1, "(", ")");
       const value = this.origins.value(module, tokens.slice(index + 2, end));
-      if (value instanceof PlatformValue) this.violation("OS01", module, tokens[index], value, "OS identity selects a switch implementation");
-      if (value instanceof AuthorityValue) this.violation("OS03", module, tokens[index], value, "UID/mode/filesystem magic selects an authority branch");
+      if (value instanceof PlatformValue) this.platformSelection(module, tokens[index + 2] ?? tokens[index], value);
+      if (value instanceof AuthorityValue) this.capability("OS03", module, tokens[index], value, posixPlatforms, "UID/mode/filesystem magic selects an authority branch without a corresponding platform guarantee");
     }
     for (let index = 0; index < tokens.length; index++) {
       const token = tokens[index];
-      if (token.kind !== "identifier" || [".", "import", "from", "as"].includes(tokens[index - 1]?.value)
+      if (token.kind !== "identifier" || [".", "import", "from", "as", "function", "class"].includes(tokens[index - 1]?.value)
         || ["const", "let", "var", "function", "class", "return", "if", "switch", "case", "while", "for", "catch", "throw", "export", "from"].includes(token.value)
         || tokens[index + 1]?.value === "=" && tokens[index + 2]?.value !== "=") continue;
       const value = this.origins.value(module, tokens.slice(index, this.origins.expressionEnd(module, tokens, index)));
       if (value instanceof UnknownValue && value.sensitive) this.incomplete("OS02", module, token, value, value.reason);
-      if (value instanceof OperationValue && value.sensitive && !value.supported) this.incomplete("OS02", module, token, value, "unsupported operator obscures an OS-sensitive value");
       const identities = valueOrigins(value);
+      const platformPredicate = identities.some((origin) => origin instanceof PlatformValue) && value instanceof OperationValue && ["===", "==", "!==", "!=", "!"].includes(value.operator);
+      if (value instanceof OperationValue && value.sensitive && !value.supported && !platformPredicate) this.incomplete("OS02", module, token, value, "unsupported operator obscures an OS-sensitive value");
       if (!identities.some((origin) => origin instanceof PlatformValue || origin instanceof AuthorityValue)) continue;
       let start = index;
       while (start > 0 && ![";", "{" , "}"].includes(tokens[start - 1].value)) start--;
       const end = this.origins.expressionEnd(module, tokens, index, new Set([";", "{"]));
       const statement = tokens.slice(start, end);
-      const branch = statement.some((item, position) => ["if", "switch", "case", "<", ">"].includes(item.value)
-        || item.value === "?" && statement[position + 1]?.value !== "."
-        || item.value === "=" && (statement[position - 1]?.value === "=" || statement[position + 1]?.value === "="));
-      if (identities.some((origin) => origin instanceof PlatformValue) && branch) this.violation("OS01", module, token, value, "OS identity selects implementation behavior");
-      if (identities.some((origin) => origin instanceof AuthorityValue) && branch) this.violation("OS03", module, token, value, "UID/mode/filesystem magic is used as authority or a portability guarantee");
+      const branch = statement.some((item, position) => ["if", "switch", "case"].includes(item.value)
+        || item.value === "?" && statement[position + 1]?.value !== ".");
+      if (identities.some((origin) => origin instanceof PlatformValue) && branch) this.platformSelection(module, token, value);
+      if (identities.some((origin) => origin instanceof AuthorityValue) && branch) this.capability("OS03", module, token, value, posixPlatforms, "UID/mode/filesystem magic is used as authority without a corresponding platform guarantee");
     }
     for (const token of module.dynamic) {
       if (!module.references.some((entry) => entry.kind === "dynamic" && entry.token.offset === token.offset)) this.incomplete("OS02", module, token, new UnknownValue(), "dynamic loading cannot prove the OS-sensitive capability graph complete");

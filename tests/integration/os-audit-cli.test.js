@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 import { auditOsIndependence, auditOsIndependenceAt } from "../support/structure/os-audit.js";
 import { SourceRepository, MemorySourceRepository } from "../support/structure/source-repository.js";
+import { portableInvocationSource } from "../support/builders/os-audit-sources.js";
 
 const script = fileURLToPath(new URL("../../scripts/check-os-independence.js", import.meta.url));
 
@@ -41,6 +42,40 @@ class AuditFixture {
     return report;
   }
 }
+
+const platformRead = `import fs from 'node:fs';
+export function read() {
+  if (process.platform === 'win32') return fs.readFileSync('snapshot.json');
+  if (process.platform === 'darwin') return fs.readFileSync('snapshot.json');
+  return fs.readFileSync('/proc/self/stat');
+}`;
+for (const [name, valid, invalid, rule, classification] of [
+  ["platform coverage", platformRead, platformRead.replace("return fs.readFileSync('snapshot.json');", "return;"), "OS01", "violation"],
+  ["typed Node execution", portableInvocationSource, portableInvocationSource.replace("['worker.js']", "['-e', 'process.kill(-123)']"), "OS04", "incomplete"],
+  ["tagged path provenance", "import fs from 'node:fs'; fs.readFileSync(String.raw`ordinary/snapshot.json`);", "import fs from 'node:fs'; fs.readFileSync(String.raw`/proc/self/stat`);", "OS01", "violation"],
+]) test(`${name} reaches CLI exit status, located evidence and exact recovery`, (t) => {
+  const fixture = new AuditFixture(t);
+  const file = "src/audited-boundary.mjs";
+  fixture.write(file, valid);
+  const clean = fixture.run();
+  assert.equal(clean.exitCode, 0, JSON.stringify(clean.diagnostics));
+  assert.equal(clean.ok, true);
+
+  fixture.write(file, invalid);
+  const rejected = fixture.run();
+  assert.equal(rejected.exitCode, classification === "incomplete" ? 2 : 1, JSON.stringify(rejected.diagnostics));
+  assert.equal(rejected.ok, false);
+  const diagnostic = rejected.diagnostics.find((entry) => entry.rule === rule && entry.file === file && entry.classification === classification);
+  assert.ok(diagnostic, JSON.stringify(rejected.diagnostics));
+  assert.ok(diagnostic.line > 0 && diagnostic.column > 0);
+  assert.ok(diagnostic.trace.includes(file));
+  assert.notEqual(rejected.source.digest, clean.source.digest);
+
+  fixture.write(file, valid);
+  const recovered = fixture.run();
+  assert.equal(recovered.exitCode, 0, JSON.stringify(recovered.diagnostics));
+  assert.equal(recovered.source.digest, clean.source.digest);
+});
 
 test("audit CLI inspects unreachable source, reports status, and recovers after removal", (t) => {
   const fixture = new AuditFixture(t);

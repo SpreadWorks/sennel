@@ -1,5 +1,6 @@
 import { SourceGraph, StructureDiagnostic } from "./source-graph.js";
 import { OsIndependenceRules } from "./os-independence-rules.js";
+import { supportedPlatforms } from "./os-command-policy.js";
 
 export class OsIndependenceDiagnostic extends StructureDiagnostic {}
 
@@ -9,6 +10,8 @@ export class OsIndependenceReport {
     this.diagnostics = [];
     this.visited = new Set();
     this.coverage = { declared: scope.files.length, discovered: 0, inspected: 0, incomplete: 0, rules: ["OS01", "OS02", "OS03", "OS04"] };
+    this.coverage.platforms = supportedPlatforms;
+    this.coverage.contract = "Source-only path and capability checks. Structural success does not prove equivalent runtime behavior across platforms.";
   }
   get complete() { return !this.diagnostics.some((entry) => entry.classification === "incomplete"); }
   get ok() { return this.complete && this.diagnostics.length === 0; }
