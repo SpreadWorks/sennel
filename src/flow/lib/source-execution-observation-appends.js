@@ -28,9 +28,23 @@ class SourceExecutionObservationAppend {
     this.digest = descriptor.hash;
     Object.freeze(this);
   }
-  matches(entries) {
+  matches(entries, mode) {
     const entry = entries.get(this.relativePath);
-    return entry?.kind === "file" && entry.digest === this.digest;
+    // A Git difference snapshot omits ignored and clean tracked files. This
+    // append already has exact bytes authenticated by its current catalog view.
+    if (entry === undefined) return mode === "git";
+    return entry.kind === "file" && entry.digest === this.digest;
+  }
+}
+
+/** Actual prior catalog boundary; it does not fabricate a filesystem snapshot. */
+export class SourceExecutionObservationCatalogBaseline {
+  constructor({ catalog, root }) {
+    if (!(catalog instanceof FlowArtifactCatalog)) throw new TypeError("Execution observation baseline requires its typed prior catalog");
+    if (typeof root !== "string" || !path.isAbsolute(root)) throw new TypeError("Execution observation baseline requires an absolute repository root");
+    this.catalog = catalog;
+    this.root = root;
+    Object.freeze(this);
   }
 }
 
@@ -41,7 +55,11 @@ export class SourceExecutionObservationAppends {
   constructor(view, baseline) {
     const observation = view instanceof SourceExecutionObservationCatalog ? view : new SourceExecutionObservationCatalog(view);
     this.#catalog = observation.catalog;
-    const before = new Set(baseline.entries.map((entry) => entry.path));
+    this.root = baseline.root;
+    const before = new Set(baseline instanceof SourceExecutionObservationCatalogBaseline
+      ? baseline.catalog.artifacts.map((descriptor) => observation.relativePath(descriptor.relativePath, baseline.root))
+        .filter((relativePath) => relativePath !== null)
+      : baseline.entries.map((entry) => entry.path));
     this.appended = Object.freeze(this.#catalog.artifacts.filter((descriptor) => isFlowExecutionObservationArtifact(descriptor.logicalKey)
       && descriptor.logicalKey !== "execution.response.adoption").flatMap((descriptor) => {
       const relativePath = observation.relativePath(descriptor.relativePath, baseline.root);
@@ -57,15 +75,23 @@ export class SourceExecutionObservationAppends {
     this.catalogPath = observation.relativePath(FLOW_ARTIFACT_CONTRACTS.resolve("artifact.catalog").relativePath, baseline.root);
     Object.freeze(this);
   }
-  matches(entries) { return this.appended.every((append) => append.matches(entries)); }
+  matches(snapshot) {
+    if (snapshot.root !== this.root) return false;
+    const entries = new Map(snapshot.entries.map((entry) => [entry.path, entry]));
+    return this.appended.every((append) => append.matches(entries, snapshot.mode));
+  }
   allowsPath(relativePath) { return this.#paths.has(relativePath); }
+  allowsFilePath(relativePath) { return this.appended.some((append) => append.relativePath === relativePath); }
+  retainedCatalog() {
+    const added = new Set(this.appended.map((append) => append.catalogRelativePath));
+    return FlowArtifactCatalog.regenerate(this.#catalog.artifacts.filter((descriptor) => !added.has(descriptor.relativePath)));
+  }
   preservesCatalog(previous) {
     if (!(previous instanceof SourceExecutionObservationCatalog)) throw new TypeError("Execution observation append requires its retained catalog boundary");
     return this.preservesCatalogHash(previous.catalog.hash);
   }
   preservesCatalogHash(hash) {
-    const added = new Set(this.appended.map((append) => append.catalogRelativePath));
-    return FlowArtifactCatalog.regenerate(this.#catalog.artifacts.filter((descriptor) => !added.has(descriptor.relativePath))).hash === hash;
+    return this.retainedCatalog().hash === hash;
   }
   explainsUnjournaled(changedPaths) {
     return this.appended.length > 0 && changedPaths.every((entry) => entry === this.catalogPath || this.#paths.has(entry));

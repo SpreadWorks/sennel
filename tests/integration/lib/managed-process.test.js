@@ -310,9 +310,21 @@ test("stop receipt persistence failure stays a control failure and retains the o
     assert.equal(error.code, "PROCESS_EXECUTION_REGISTRY_FAILED");
     return true;
   });
-  const registry = runtime.store.read();
+  // Inspect physical bytes without presenting an incomplete transaction as a
+  // committed registry. The normal read boundary must continue to refuse it.
+  const registryBytes = fs.readFileSync(runtime.store.file.filePath);
+  const transitionBytes = fs.readFileSync(runtime.store.transition.filePath);
+  const registry = JSON.parse(registryBytes).payload;
   assert.equal(registry.slot, runtime.executionId);
   assert.equal(registry.executions.at(-1).calls[0].receipt, null);
+  assert.equal(JSON.parse(transitionBytes).executionId, runtime.executionId);
+  const uncertain = (error) => error instanceof ProcessExecutionControlFailure
+    && error.code === "PROCESS_EXECUTION_DURABILITY_UNCERTAIN";
+  assert.throws(() => runtime.store.read(), uncertain);
+  assert.throws(() => ProcessExecutionRuntime.inspect({ mainRoot: root }), uncertain);
+  await assert.rejects(runtime.reserveCall(), uncertain);
+  assert.deepEqual(fs.readFileSync(runtime.store.file.filePath), registryBytes);
+  assert.deepEqual(fs.readFileSync(runtime.store.transition.filePath), transitionBytes);
 });
 
 

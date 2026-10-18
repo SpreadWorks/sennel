@@ -1,14 +1,25 @@
 import { Step } from "../../engine/step.js";
 import { ImplReviewExecutionRequiredResult, ImplReviewPassedResult, ImplReviewAdvisoryResult,
-  ImplReviewRejectedResult, ImplReviewToolingResult, StepErrorResult } from "../../engine/step-result.js";
+  ImplReviewRejectedResult, ImplReviewDeferredResult, ImplReviewExhaustedResult,
+  ImplReviewToolingResult, StepErrorResult } from "../../engine/step-result.js";
 import { ReviewStepFailureObservation } from "../../lib/review-step-failure-values.js";
-import { ImplReviewResultEvidence } from "../../lib/impl-review-values.js";
+import { ImplReviewResultEvidence, ImplReviewDeferral, ImplReviewExhaustion, ImplReviewRejectionMeaning } from "../../lib/impl-review-values.js";
 import { ImplReviewService } from "../../services/impl-review-service.js";
 
 export function implReviewResult(input) {
   if (input.failure instanceof ReviewStepFailureObservation) return new StepErrorResult("impl-review", input.failure.toError());
   if (!(input.evidence instanceof ImplReviewResultEvidence)) throw new TypeError("Implementation Review requires acquired input");
   const evidence = input.evidence;
+  if (evidence.resultKind === "impl-review-rejected") {
+    const meaning = new ImplReviewRejectionMeaning({ attempts: evidence.retry.used + 1,
+      maximum: evidence.retry.maximum, deferrable: input.deferralEvidence?.available === true });
+    if (meaning.value === "deferrable") return new ImplReviewDeferredResult({ evidence,
+      deferral: new ImplReviewDeferral({ attempts: meaning.attempts, maximum: meaning.maximum,
+        fingerprints: input.deferralEvidence.sourceFingerprints }) });
+    if (meaning.value === "exhausted") return new ImplReviewExhaustedResult({ evidence,
+      exhaustion: new ImplReviewExhaustion({ attempts: meaning.attempts, maximum: meaning.maximum,
+        reason: input.deferralEvidence?.reason ?? "The source has no deferrable semantic finding." }) });
+  }
   const Result = { "impl-review-execution-required": ImplReviewExecutionRequiredResult,
     "impl-review-passed": ImplReviewPassedResult, "impl-review-advisory": ImplReviewAdvisoryResult,
     "impl-review-rejected": ImplReviewRejectedResult, "impl-review-tooling": ImplReviewToolingResult }[evidence.resultKind];

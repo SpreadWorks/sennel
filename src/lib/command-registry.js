@@ -431,7 +431,7 @@ const definitions = [
   new CommandDefinition({
     name: "docs",
     entrypoint: { modulePath: "../docs.js", invocation: "script" },
-    help: { section: "Docs", summary: "Documentation commands", usage: "Usage: sennel docs <command> [options]", options: ["-h, --help"], localeKey: "ui:help.commands.docs build" },
+    help: { section: "Docs", summary: "Documentation commands", usage: "Usage: sennel docs <command> [options]", options: ["-h, --help"], localeKey: "ui:help.commands.docs" },
     subcommands: docsSubcommands,
   }),
   new CommandDefinition({
@@ -447,7 +447,7 @@ const definitions = [
   new CommandDefinition({
     name: "metrics",
     entrypoint: { modulePath: "../metrics.js", invocation: "script" },
-    help: { section: "Metrics", summary: "Metrics commands", usage: "Usage: sennel metrics <command> [options]", options: ["-h, --help"], localeKey: "ui:help.commands.metrics token" },
+    help: { section: "Metrics", summary: "Metrics commands", usage: "Usage: sennel metrics <command> [options]", options: ["-h, --help"], localeKey: "ui:help.commands.metrics" },
     subcommands: [
       rawDefinition("token", "../metrics/commands/token.js", { section: "Metrics", summary: "Aggregate and display token/cache/cost metrics", usage: "Usage: sennel metrics token [options]", options: ["-h, --help"], localeKey: "ui:help.commands.metrics token" }),
       rawDefinition("review", "../metrics/commands/review.js", { section: "Metrics", summary: "Aggregate review metrics", usage: "Usage: sennel metrics review [options]", options: ["-h, --help"], localeKey: "ui:help.commands.metrics review" }),
@@ -474,14 +474,14 @@ const definitions = [
   new CommandDefinition({
     name: "presets",
     entrypoint: { modulePath: "../presets-cmd.js", invocation: "main" },
-    help: { section: "Info", summary: "Preset commands", usage: "Usage: sennel presets <command>", options: ["-h, --help"], localeKey: "ui:help.commands.presets list" },
+    help: { section: "Info", summary: "Preset commands", usage: "Usage: sennel presets <command>", options: ["-h, --help"], localeKey: "ui:help.commands.presets" },
     subcommands: [childRoute("list", { section: "Info", summary: "Show preset inheritance tree", usage: "Usage: sennel presets list", options: ["-h, --help"], localeKey: "ui:help.commands.presets list" })],
   }),
   new CommandDefinition({
     name: "flow",
     entrypoint: { modulePath: "../flow-main.js", invocation: "script" },
     allowInvalidConfig: true,
-    help: { section: "Flow", summary: "Spec-Driven Development flow commands", usage: "Usage: sennel flow <command> [options]", options: ["-h, --help"], localeKey: "ui:help.commands.flow run" },
+    help: { section: "Flow", summary: "Spec-Driven Development flow commands", usage: "Usage: sennel flow <command> [options]", options: ["-h, --help"], localeKey: "ui:help.commands.flow" },
     subcommands: flowSubcommands,
   }),
 ];

@@ -6,6 +6,7 @@ import {
   makeFlowManager,
 } from "../../support/infrastructure/flow-setup.js";
 import { createTmpDir, removeTmpDir } from "../../support/builders/tmp-dir.js";
+import { initGitRepo, commitAll } from "../../support/infrastructure/git-repo.js";
 
 function taskDocument(overrides = {}) {
   return {
@@ -33,6 +34,8 @@ function freshFlow(tmp) {
 }
 
 function activeTask(tmp, { taskId = "001", taskDocuments = [taskDocument({ id: taskId })] } = {}) {
+  initGitRepo(tmp);
+  commitAll(tmp, "Task API fixture baseline");
   const fixture = new TaskLifecycleFixture({
     flowManager: makeFlowManager(tmp),
     specId: "001-test",
@@ -44,8 +47,22 @@ function activeTask(tmp, { taskId = "001", taskDocuments = [taskDocument({ id: t
   return { fixture, fm: makeFlowManager(tmp) };
 }
 
-function settleTask(fixture, taskId) {
-  for (const suffix of ["impl", "review", "triage", "repair", "gate"]) fixture.flow.flow.settle(`${taskId}-${suffix}`);
+async function settleTask(fixture, taskId) {
+  await fixture.flow.flow.activateWithProducers(`${taskId}-review`);
+  await fixture.flow.flow.produce(`${taskId}-review`);
+}
+
+function confirmTaskWithoutMutation(fm, taskId) {
+  const snapshot = () => JSON.stringify({
+    state: fm.canonicalState("001-test").toJSON(),
+    activities: fm.activityLedger("001-test"),
+    catalog: fm.artifactCatalog("001-test").toJSON(),
+  });
+  const before = snapshot();
+  const result = fm.completeTask(taskId);
+  assert.equal(result.tasks.find((task) => task.id === taskId).status, "done");
+  assert.equal(snapshot(), before, "completion confirmation must not create a second transition or publication");
+  return result;
 }
 
 describe("FlowManager canonical Task API", () => {
@@ -104,24 +121,25 @@ describe("FlowManager canonical Task API", () => {
     assert.throws(() => fm.completeTask("001"), /cannot complete before all child Steps are done/);
   });
 
-  it("completes a Task after each child Step is confirmed", () => {
+  it("confirms a Task completed by the registered no-change Review without another transition", async () => {
     tmp = createTmpDir();
     const { fixture, fm } = activeTask(tmp);
-    settleTask(fixture, "001");
-    fm.completeTask("001");
+    await settleTask(fixture, "001");
+    confirmTaskWithoutMutation(fm, "001");
     const state = fm.load("001-test");
     assert.equal(state.tasks[0].status, "done");
     assert.equal(state.currentTaskId, null);
   });
 
-  it("keeps another active Task selected when completing an earlier terminal Task", () => {
+  it("keeps another active Task selected when confirming an earlier terminal Task", async () => {
     tmp = createTmpDir();
     const { fixture, fm } = activeTask(tmp, {
       taskDocuments: [taskDocument({ id: "001" }), taskDocument({ id: "002" })],
     });
-    settleTask(fixture, "001");
+    await settleTask(fixture, "001");
     fixture.flow.flow.activateTask("002", { settlePredecessors: false });
-    fm.completeTask("001");
+    const confirmed = confirmTaskWithoutMutation(fm, "001");
+    assert.equal(confirmed.currentTaskId, "002");
     assert.equal(fm.load("001-test").currentTaskId, "002");
     assert.equal(fm.load("001-test").tasks.find((task) => task.id === "001").status, "done");
   });

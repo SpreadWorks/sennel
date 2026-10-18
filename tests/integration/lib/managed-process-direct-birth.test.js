@@ -123,7 +123,11 @@ test("an immediately escaping directly owned provider refuses stop proof before 
   assert.equal(diagnostic.observedSid, live.sessionId);
   assert.equal(diagnostic.executionId, execution.executionId);
   assert.equal(diagnostic.callId, call.callId);
-  assert.deepEqual(record.controlFailure.diagnostic, diagnostic.toJSON());
+  assert.deepEqual(call.controlFailure.diagnostic, diagnostic.toJSON(),
+    "the returned refusal must preserve the first diagnostic saved by its runtime");
+  assert.equal(record.controlFailure.diagnostic.operation, "launcher-capture");
+  assert.deepEqual({ ...record.controlFailure.diagnostic, operation: diagnostic.operation }, diagnostic.toJSON(),
+    "independent launcher and coordinator observations identify the same escaped birth while retaining their own operation");
   assert.equal(Object.hasOwn(diagnostic.birth, "ownerToken"), false);
   await assert.rejects(ProcessExecutionRuntime.acquire({ mainRoot: root }),
     (error) => error instanceof ProcessExecutionControlFailure && error.code === "PROCESS_EXECUTION_BUSY");

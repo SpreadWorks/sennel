@@ -12,7 +12,7 @@ import {
   writeTokenCache,
 } from "../../support/builders/metrics-token.js";
 
-function createFlow(tmp, specId, tokenInput) {
+async function createFlow(tmp, specId, tokenInput) {
   return createCanonicalTokenMetricsFlow(tmp, {
     specId,
     agentMetrics: [{ phase: "draft", input: tokenInput, output: 1, cacheRead: 0, cacheCreation: 0, cost: 0.01 }],
@@ -27,10 +27,10 @@ describe("metrics token content-addressed cache", () => {
   let tmp;
   afterEach(() => tmp && removeTmpDir(tmp));
 
-  it("ignores a changed retired root flow.json when canonical input is unchanged", () => {
+  it("ignores a changed retired root flow.json when canonical input is unchanged", async () => {
     tmp = createTmpDir("sennel-metrics-cache-canonical-only-");
     writeBaseConfig(tmp);
-    createFlow(tmp, "001-alpha", 100);
+    await createFlow(tmp, "001-alpha", 100);
     assert.equal(draftInput(runTokenJson(tmp)), 100);
 
     // This is intentionally an invalid retired-layout document. A V1 reader
@@ -43,22 +43,22 @@ describe("metrics token content-addressed cache", () => {
     assert.equal(draftInput(runTokenJson(tmp)), 100);
   });
 
-  it("rebuilds when a second canonical finalized Flow is added", () => {
+  it("rebuilds when a second canonical finalized Flow is added", async () => {
     tmp = createTmpDir("sennel-metrics-cache-add-");
     writeBaseConfig(tmp);
-    createFlow(tmp, "001-alpha", 100);
+    await createFlow(tmp, "001-alpha", 100);
     assert.equal(draftInput(runTokenJson(tmp)), 100);
 
-    createFlow(tmp, "002-beta", 200);
+    await createFlow(tmp, "002-beta", 200);
 
     assert.equal(draftInput(runTokenJson(tmp)), 300);
   });
 
-  it("rebuilds when a canonical Version root is removed", () => {
+  it("rebuilds when a canonical Version root is removed", async () => {
     tmp = createTmpDir("sennel-metrics-cache-delete-");
     writeBaseConfig(tmp);
-    createFlow(tmp, "001-alpha", 100);
-    const deleted = createFlow(tmp, "002-beta", 200);
+    await createFlow(tmp, "001-alpha", 100);
+    const deleted = await createFlow(tmp, "002-beta", 200);
     assert.equal(draftInput(runTokenJson(tmp)), 300);
 
     rmSync(deleted.location.directory, { recursive: true, force: true });
@@ -66,10 +66,10 @@ describe("metrics token content-addressed cache", () => {
     assert.equal(draftInput(runTokenJson(tmp)), 100);
   });
 
-  it("reuses the cache when the canonical input set and contents are unchanged", () => {
+  it("reuses the cache when the canonical input set and contents are unchanged", async () => {
     tmp = createTmpDir("sennel-metrics-cache-hit-");
     writeBaseConfig(tmp);
-    createFlow(tmp, "001-alpha", 100);
+    await createFlow(tmp, "001-alpha", 100);
     runTokenJson(tmp);
     const cache = readTokenCache(tmp);
     assert.match(cache.inputFingerprint, /^[a-f0-9]{64}$/);

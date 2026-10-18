@@ -60,9 +60,9 @@ class HistoryCheckpoint {
   static async capture(scenario, label) {
     scenario.reload();
     const before = scenario.protectedState();
-    const metadata = await scenario.captureQuery({ resource: "metadata", condition: { specId: scenario.specId } }, { fixedSource: true });
+    const metadata = await scenario.captureQuery({ resource: "metadata", condition: { specId: scenario.specId } });
     const activities = await scenario.captureQuery({ resource: "activities", condition: { specId: scenario.specId },
-      page: { limit: 100, after: null } }, { fixedSource: true });
+      page: { limit: 100, after: null } });
     const consumer = new FlowQueryConsumer();
     const checkpoint = new HistoryCheckpoint({ label,
       metadata: metadata.version.projectionError === null ? consumer.consume(metadata.version.response) : null,

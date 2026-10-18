@@ -1,3 +1,4 @@
+import { SENNEL_BOOTSTRAP } from "../../support/infrastructure/node-bootstrap.js";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import crypto from "node:crypto";
@@ -18,6 +19,8 @@ import {
   sealParentMaterializedSourceWorkerEffect,
 } from "../../../src/flow/lib/worker-artifact-handoff.js";
 import { FlowManager } from "../../../src/lib/flow-manager.js";
+import { ProcessExecutionRuntime, ProcessExecutionControlFailure } from "../../../src/lib/process-execution-runtime.js";
+import { withFlowProcessRuntime } from "../../../src/flow/lib/process-runtime-admission.js";
 import { FlowArtifactCatalog } from "../../../src/lib/flow-version.js";
 import { container } from "../../../src/lib/container.js";
 import { CanonicalFlowFixture } from "../../support/infrastructure/flow-setup.js";
@@ -235,7 +238,7 @@ async function taskReviewPolicyScenario(t, stepId) {
   return { scenario, request: work.request };
 }
 
-it("survives a real parent process stop after source sealing and recovers from disk", (t) => {
+it("survives a real parent process stop after source sealing and recovers from disk", async (t) => {
   const scenario = new SourceCheckpointScenario(t, "implement");
   const moduleUrl = (relativePath) => pathToFileURL(path.join(process.cwd(), relativePath)).href;
   const child = `
@@ -245,6 +248,7 @@ it("survives a real parent process stop after source sealing and recovers from d
     import RunDispatchCommand from ${JSON.stringify(moduleUrl("src/flow/lib/run-dispatch.js"))};
     import { WorkerArtifactHandoffCoordinator } from ${JSON.stringify(moduleUrl("src/flow/lib/worker-artifact-handoff.js"))};
     import { sourceWorkerEffectJsonSchema } from ${JSON.stringify(moduleUrl("src/flow/lib/source-worker-effect-schema.js"))};
+    import { withScenarioProviderAdmission } from ${JSON.stringify(moduleUrl("tests/support/infrastructure/flow-dispatch-scenario.js"))};
     const root = process.env.FFCA_EXECUTION_ROOT;
     const mainRoot = process.env.FFCA_MAIN_ROOT;
     const specId = process.env.FFCA_SPEC_ID;
@@ -261,10 +265,10 @@ it("survives a real parent process stop after source sealing and recovers from d
     }
     const dispatcher = new RunDispatchCommand({
       nextAction: { async run() { return action; } },
-      agent: { async call() {
+      agent: withScenarioProviderAdmission({ async call() {
         fs.writeFileSync(path.join(root, "process-worker.js"), "// sealed before parent stop\\n");
         return JSON.stringify({ version: 1, stepId: "implement", completionStatus: "done", issues: [], overview: null, triage: null, repair: null, noChangeReason: null });
-      } },
+      } }),
       repositoryFingerprint: () => "stable-process-fixture",
       leaseFactory: () => ({ acquire() {}, release() {} }),
       handoffCoordinator: new CrashBeforeReconcileCoordinator(),
@@ -276,7 +280,7 @@ it("survives a real parent process stop after source sealing and recovers from d
       _envelopeType: "run", _envelopeKey: "dispatch", config: {},
     });
   `;
-  const stopped = spawnSync(process.execPath, ["--input-type=module", "--eval", child], {
+  const stopped = spawnSync(process.execPath, ["--import", SENNEL_BOOTSTRAP, "--input-type=module", "--eval", child], {
     cwd: process.cwd(), encoding: "utf8",
     env: {
       ...process.env,
@@ -288,7 +292,23 @@ it("survives a real parent process stop after source sealing and recovers from d
   assert.equal(stopped.status, 86, stopped.stderr || stopped.stdout);
   scenario.reload();
 
-  const recovered = new WorkerArtifactHandoffCoordinator().recoverPending({ ctx: scenario.context() });
+  const runtimeRoots = { mainRoot: scenario.mainRoot, executionRoot: scenario.executionRoot };
+  const occupied = ProcessExecutionRuntime.inspect(runtimeRoots).slot;
+  assert.notEqual(occupied, null);
+  const beforeAdmission = scenario.manager.readCanonicalTransitionSnapshot(scenario.specId).toJSON();
+  assert.throws(() => new WorkerArtifactHandoffCoordinator().recoverPending({ ctx: scenario.context() }),
+    (error) => error instanceof ProcessExecutionControlFailure && error.code === "PROCESS_EXECUTION_BUSY");
+  assert.deepEqual(scenario.manager.readCanonicalTransitionSnapshot(scenario.specId).toJSON(), beforeAdmission,
+    "a dead coordinator alone cannot authorize canonical recovery");
+  const state = scenario.manager.loadReadOnly(scenario.specId);
+  const ctx = { ...scenario.context(), flowState: state, expectRunId: state.runId,
+    expectSpec: scenario.specId, expectNoIssue: true };
+  const recovered = await withFlowProcessRuntime(ctx,
+    () => new WorkerArtifactHandoffCoordinator().recoverPending({ ctx }),
+    { commandId: "dispatch", required: true });
+  const closed = ProcessExecutionRuntime.inspect(runtimeRoots);
+  assert.equal(closed.slot, null);
+  assert.equal(closed.executions.find((execution) => execution.executionId === occupied).status, "closed");
 
   assert.equal(recovered?.completed, true);
   assert.equal(scenario.manager.canonicalState(scenario.specId).findNode("implement").status, "done");
@@ -394,7 +414,7 @@ describe("durable source handoff checkpoints", () => {
             ctx: { root, executionRoot: root, mainRoot, specId, flowManager: manager },
           });
         `;
-        const stopped = spawnSync(process.execPath, ["--input-type=module", "--eval", child], {
+        const stopped = spawnSync(process.execPath, ["--import", SENNEL_BOOTSTRAP, "--input-type=module", "--eval", child], {
           cwd: process.cwd(), encoding: "utf8",
           env: {
             ...process.env,

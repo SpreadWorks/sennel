@@ -369,7 +369,10 @@ class VersionTreeSnapshot {
         }
         if (entry.isDirectory() && !entry.isSymbolicLink()) {
           if (collect(absolute)) containsTransientEntry = true;
-          else directories.push(absolute);
+          // Existing directories are still their original authorities. Keep
+          // their metadata when rolling back files; only remove directories
+          // introduced by the rejected transaction.
+          else if (!this.directories.has(relative)) directories.push(absolute);
         } else {
           files.push(absolute);
         }
@@ -1498,11 +1501,15 @@ export class FlowArtifactCatalogStore {
   #catalogBytes = null;
   #catalog = null;
 
-  constructor({ location, faultInjector } = {}) {
+  constructor({ location, faultInjector, assertInitialReadFormat = null } = {}) {
     if (!(location instanceof FlowVersionLocation)) throw new Error("FlowVersionLocation is required for artifact catalog storage");
+    if (assertInitialReadFormat !== null && typeof assertInitialReadFormat !== "function") {
+      throw new Error("initial catalog read format assertion must be a function or null");
+    }
     location.requireScope("canonical");
     location.assertAuthority();
     this.location = location;
+    this.assertInitialReadFormat = assertInitialReadFormat;
     this.file = new AtomicJsonFile(location.catalogFile, ...(faultInjector ? [{ faultInjector }] : []));
     this.#activityIndexFile = new FlowArtifactActivityIndexFile(location.activitiesFile);
     Object.freeze(this);
@@ -1890,6 +1897,16 @@ export class FlowArtifactCatalogStore {
     const runtimeLock = this.location.runtimeLock("runtime.lock.artifact-catalog");
     const runtimeDirectory = runtimeLock.runtimeDirectory;
     const lockDirectory = runtimeLock.directory;
+    if (this.assertInitialReadFormat !== null && !fs.existsSync(lockDirectory)) {
+      try {
+        this.assertInitialReadFormat();
+      } catch (error) {
+        // If another operation created the lock directory, the normal
+        // locked path no longer needs to establish this missing branch.
+        // All recovery and integrity validation still belongs to that path.
+        if (!fs.existsSync(lockDirectory)) throw error;
+      }
+    }
     // Establish the non-authoritative runtime branch before its identity is
     // captured.  Publication never treats these files as catalog entries.
     fs.mkdirSync(lockDirectory, { recursive: true, mode: 0o755 });

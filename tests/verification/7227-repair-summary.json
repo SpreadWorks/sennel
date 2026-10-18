@@ -1,0 +1,1870 @@
+{
+  "task": "7227",
+  "recordedAt": "2026-10-18T02:07:46.090Z",
+  "baseCommit": "d0a2525517712c891ecf8b357107133c2f412895",
+  "scope": {
+    "originalClassifiedFailedFiles": 93,
+    "additionalAsyncLifetimeTarget": 1,
+    "totalTargets": 94
+  },
+  "targetCounts": {
+    "verified": 94
+  },
+  "verification": {
+    "runtimeSource": {
+      "record": "final-v6-runtime-source-native-completion.json",
+      "stages": 7,
+      "pass": 177,
+      "runtimeWholePass": 127
+    },
+    "nonblocking": {
+      "record": "final-v6-nonblocking-whole-after.json",
+      "pass": 32
+    },
+    "acceptance": {
+      "record": "final-v6-acceptance-phase-whole-after.json",
+      "pass": 51
+    },
+    "structure": {
+      "record": "final-v6-normal-structure-suite.json",
+      "pass": 1021
+    },
+    "realAgent": {
+      "record": "final-v6-normal-agent-suite.json",
+      "pass": 13,
+      "fail": 0,
+      "cancelled": 0,
+      "existingHistoricalSkipped": 1,
+      "originalWorkerSuiteLimitPreserved": 480000
+    }
+  },
+  "nativeReceipts": [
+    {
+      "name": "final-v6-runtime-whole-after.json",
+      "sha256": "3749862a8a38dc23083a7cd38ba622e1fbb459e5d05ae8286c1a843f6014bf7f",
+      "command": [
+        "/home/nakano/.nvm/versions/node/v22.22.0/bin/node",
+        "--test",
+        "--test-concurrency",
+        "1",
+        "--experimental-test-isolation=none",
+        "--import",
+        "file:///home/nakano/workspace/sennel/.sennel/worktree/7227/src/sennel.js",
+        "--test-reporter=tap",
+        "--test-reporter-destination=/home/nakano/workspace/sennel/.sennel/worktree/7227/tests/verification/7227-test-repair/final-v6-runtime-whole-after.tap",
+        "/home/nakano/workspace/sennel/.sennel/worktree/7227/tests/integration/flow/canonical-flow-manager-runtime.test.js"
+      ],
+      "summary": {
+        "tests": 127,
+        "suites": 1,
+        "pass": 127,
+        "fail": 0,
+        "cancelled": 0,
+        "skipped": 0,
+        "todo": 0,
+        "duration_ms": 1678168.292834
+      },
+      "tapPlanAudit": {
+        "plans": 2,
+        "complete": true,
+        "gaps": []
+      },
+      "allApplicableInputsUnchanged": true
+    },
+    {
+      "name": "final-v6-empty-current-plan-whole-after.json",
+      "sha256": "7477fa71d3754e48aabf87a330e10da119388036fdb39a252a08376d65f51d17",
+      "command": [
+        "/home/nakano/.nvm/versions/node/v22.22.0/bin/node",
+        "--test",
+        "--test-concurrency",
+        "1",
+        "--experimental-test-isolation=none",
+        "--import",
+        "file:///home/nakano/workspace/sennel/.sennel/worktree/7227/src/sennel.js",
+        "--test-reporter=tap",
+        "--test-reporter-destination=/home/nakano/workspace/sennel/.sennel/worktree/7227/tests/verification/7227-test-repair/final-v6-empty-current-plan-whole-after.tap",
+        "/home/nakano/workspace/sennel/.sennel/worktree/7227/tests/integration/flow/empty-test-source-current-plan.test.js"
+      ],
+      "summary": {
+        "tests": 6,
+        "suites": 0,
+        "pass": 6,
+        "fail": 0,
+        "cancelled": 0,
+        "skipped": 0,
+        "todo": 0,
+        "duration_ms": 1434.697896
+      },
+      "tapPlanAudit": {
+        "plans": 1,
+        "complete": true,
+        "gaps": []
+      },
+      "allApplicableInputsUnchanged": true
+    },
+    {
+      "name": "final-v6-empty-source-receipt-consumers-whole-after.json",
+      "sha256": "90e4760564c7df5e82a607b4f764b87539f950bc3db3bbf2b0a32a62bee05fd8",
+      "command": [
+        "/home/nakano/.nvm/versions/node/v22.22.0/bin/node",
+        "--test",
+        "--test-concurrency",
+        "1",
+        "--experimental-test-isolation=none",
+        "--import",
+        "file:///home/nakano/workspace/sennel/.sennel/worktree/7227/src/sennel.js",
+        "--test-reporter=tap",
+        "--test-reporter-destination=/home/nakano/workspace/sennel/.sennel/worktree/7227/tests/verification/7227-test-repair/final-v6-empty-source-receipt-consumers-whole-after.tap",
+        "/home/nakano/workspace/sennel/.sennel/worktree/7227/tests/integration/flow/empty-test-source-receipt-consumers.test.js"
+      ],
+      "summary": {
+        "tests": 2,
+        "suites": 0,
+        "pass": 2,
+        "fail": 0,
+        "cancelled": 0,
+        "skipped": 0,
+        "todo": 0,
+        "duration_ms": 97641.660709
+      },
+      "tapPlanAudit": {
+        "plans": 1,
+        "complete": true,
+        "gaps": []
+      },
+      "allApplicableInputsUnchanged": true
+    },
+    {
+      "name": "final-v6-requirement-lifecycle-unit-after.json",
+      "sha256": "1c7b780d047ee7e59068d485593bb3c0917691c4d8c12d451c9263c876165d29",
+      "command": [
+        "/home/nakano/.nvm/versions/node/v22.22.0/bin/node",
+        "--test",
+        "--test-concurrency",
+        "1",
+        "--experimental-test-isolation=none",
+        "--import",
+        "file:///home/nakano/workspace/sennel/.sennel/worktree/7227/src/sennel.js",
+        "--test-reporter=tap",
+        "--test-reporter-destination=/home/nakano/workspace/sennel/.sennel/worktree/7227/tests/verification/7227-test-repair/final-v6-requirement-lifecycle-unit-after.tap",
+        "/home/nakano/workspace/sennel/.sennel/worktree/7227/tests/unit/requirement-test-lifecycle.test.js"
+      ],
+      "summary": {
+        "tests": 10,
+        "suites": 2,
+        "pass": 10,
+        "fail": 0,
+        "cancelled": 0,
+        "skipped": 0,
+        "todo": 0,
+        "duration_ms": 633.080643
+      },
+      "tapPlanAudit": {
+        "plans": 3,
+        "complete": true,
+        "gaps": []
+      },
+      "allApplicableInputsUnchanged": true
+    },
+    {
+      "name": "final-v6-requirement-artifacts-unit-after.json",
+      "sha256": "f15082ba6b44f1039536f20616de65684a26168aeb4101ecc9ee99391c15a7e6",
+      "command": [
+        "/home/nakano/.nvm/versions/node/v22.22.0/bin/node",
+        "--test",
+        "--test-concurrency",
+        "1",
+        "--experimental-test-isolation=none",
+        "--import",
+        "file:///home/nakano/workspace/sennel/.sennel/worktree/7227/src/sennel.js",
+        "--test-reporter=tap",
+        "--test-reporter-destination=/home/nakano/workspace/sennel/.sennel/worktree/7227/tests/verification/7227-test-repair/final-v6-requirement-artifacts-unit-after.tap",
+        "/home/nakano/workspace/sennel/.sennel/worktree/7227/tests/unit/requirement-test-artifacts.test.js"
+      ],
+      "summary": {
+        "tests": 5,
+        "suites": 1,
+        "pass": 5,
+        "fail": 0,
+        "cancelled": 0,
+        "skipped": 0,
+        "todo": 0,
+        "duration_ms": 299.994511
+      },
+      "tapPlanAudit": {
+        "plans": 2,
+        "complete": true,
+        "gaps": []
+      },
+      "allApplicableInputsUnchanged": true
+    },
+    {
+      "name": "final-v6-requirement-lifecycle-regressions-whole-after.json",
+      "sha256": "779e852f08d5409b1a9ec82d8e45141d5d56504ae1c35686c47e0f8101506939",
+      "command": [
+        "/home/nakano/.nvm/versions/node/v22.22.0/bin/node",
+        "--test",
+        "--test-concurrency",
+        "1",
+        "--experimental-test-isolation=none",
+        "--import",
+        "file:///home/nakano/workspace/sennel/.sennel/worktree/7227/src/sennel.js",
+        "--test-reporter=tap",
+        "--test-reporter-destination=/home/nakano/workspace/sennel/.sennel/worktree/7227/tests/verification/7227-test-repair/final-v6-requirement-lifecycle-regressions-whole-after.tap",
+        "/home/nakano/workspace/sennel/.sennel/worktree/7227/tests/integration/flow/requirement-test-lifecycle-regressions.test.js"
+      ],
+      "summary": {
+        "tests": 26,
+        "suites": 1,
+        "pass": 26,
+        "fail": 0,
+        "cancelled": 0,
+        "skipped": 0,
+        "todo": 0,
+        "duration_ms": 102128.641864
+      },
+      "tapPlanAudit": {
+        "plans": 2,
+        "complete": true,
+        "gaps": []
+      },
+      "allApplicableInputsUnchanged": true
+    },
+    {
+      "name": "final-v6-four-real-review-public-regression-after.json",
+      "sha256": "2850c0f572b27a857beed314dab087fb8c9e72bda079552212769ab0d544b2d7",
+      "command": [
+        "/home/nakano/.nvm/versions/node/v22.22.0/bin/node",
+        "--test",
+        "--test-concurrency",
+        "1",
+        "--experimental-test-isolation=none",
+        "--import",
+        "file:///home/nakano/workspace/sennel/.sennel/worktree/7227/src/sennel.js",
+        "--test-reporter=tap",
+        "--test-reporter-destination=/home/nakano/workspace/sennel/.sennel/worktree/7227/tests/verification/7227-test-repair/final-v6-four-real-review-public-regression-after.tap",
+        "/home/nakano/workspace/sennel/.sennel/worktree/7227/tests/integration/flow/flow-review-semantic-budget.test.js"
+      ],
+      "summary": {
+        "tests": 1,
+        "suites": 0,
+        "pass": 1,
+        "fail": 0,
+        "cancelled": 0,
+        "skipped": 0,
+        "todo": 0,
+        "duration_ms": 680634.339631
+      },
+      "tapPlanAudit": {
+        "plans": 1,
+        "complete": true,
+        "gaps": []
+      },
+      "allApplicableInputsUnchanged": true
+    },
+    {
+      "name": "final-v6-nonblocking-whole-after.json",
+      "sha256": "43ede24fc42b0a80d685d40d81c5cb32e5f6f233473ab6c9b207fdf7f2bf4e9c",
+      "command": [
+        "/home/nakano/.nvm/versions/node/v22.22.0/bin/node",
+        "--test",
+        "--test-concurrency",
+        "1",
+        "--experimental-test-isolation=none",
+        "--import",
+        "file:///home/nakano/workspace/sennel/.sennel/worktree/7227/src/sennel.js",
+        "--test-reporter=tap",
+        "--test-reporter-destination=/home/nakano/workspace/sennel/.sennel/worktree/7227/tests/verification/7227-test-repair/final-v6-nonblocking-whole-after.tap",
+        "/home/nakano/workspace/sennel/.sennel/worktree/7227/tests/integration/flow/nonblocking.test.js"
+      ],
+      "summary": {
+        "tests": 32,
+        "suites": 1,
+        "pass": 32,
+        "fail": 0,
+        "cancelled": 0,
+        "skipped": 0,
+        "todo": 0,
+        "duration_ms": 1910437.859533
+      },
+      "tapPlanAudit": {
+        "plans": 2,
+        "complete": true,
+        "gaps": []
+      },
+      "allApplicableInputsUnchanged": true
+    },
+    {
+      "name": "final-v6-acceptance-phase-whole-after.json",
+      "sha256": "49cff260cafe30d2565c0013bdb14aa4f8d1ee65d3bfdefb10fae8d929013348",
+      "command": [
+        "/home/nakano/.nvm/versions/node/v22.22.0/bin/node",
+        "--test",
+        "--test-concurrency",
+        "1",
+        "--experimental-test-isolation=none",
+        "--import",
+        "file:///home/nakano/workspace/sennel/.sennel/worktree/7227/src/sennel.js",
+        "--test-reporter=tap",
+        "--test-reporter-destination=/home/nakano/workspace/sennel/.sennel/worktree/7227/tests/verification/7227-test-repair/final-v6-acceptance-phase-whole-after.tap",
+        "/home/nakano/workspace/sennel/.sennel/worktree/7227/tests/integration/flow-cli/acceptance-phase-scenario.test.js"
+      ],
+      "summary": {
+        "tests": 51,
+        "suites": 2,
+        "pass": 51,
+        "fail": 0,
+        "cancelled": 0,
+        "skipped": 0,
+        "todo": 0,
+        "duration_ms": 3982457.830577
+      },
+      "tapPlanAudit": {
+        "plans": 3,
+        "complete": true,
+        "gaps": []
+      },
+      "allApplicableInputsUnchanged": true
+    },
+    {
+      "name": "final-v6-normal-structure-suite.json",
+      "sha256": "208e0f58b9fa3d593ed003516422f2005bc5f85c35f10dd7d3bc1e15a64dadcd",
+      "command": [
+        "npm",
+        "run",
+        "test:structure"
+      ],
+      "summary": {
+        "tests": 1021,
+        "suites": 0,
+        "pass": 1021,
+        "fail": 0,
+        "cancelled": 0,
+        "skipped": 0,
+        "todo": 0,
+        "duration_ms": 678606.398143
+      },
+      "tapPlanAudit": {
+        "plans": 1,
+        "complete": true,
+        "gaps": []
+      },
+      "allApplicableInputsUnchanged": true
+    },
+    {
+      "name": "final-v6-normal-agent-suite.json",
+      "sha256": "34e0ed13505544f020bc0e559c267c190e55489fc8cc2862c5b1db6a5e29ee96",
+      "command": [
+        "npm",
+        "run",
+        "test:agent"
+      ],
+      "summary": {
+        "tests": 14,
+        "suites": 3,
+        "pass": 13,
+        "fail": 0,
+        "cancelled": 0,
+        "skipped": 1,
+        "todo": 0,
+        "duration_ms": 798972.604354
+      },
+      "tapPlanAudit": {
+        "plans": 4,
+        "complete": true,
+        "gaps": []
+      },
+      "allApplicableInputsUnchanged": true
+    }
+  ],
+  "limitations": [
+    "Known failures and related legal/refusal/recovery boundaries verified; unknown-defect completeness is not claimed.",
+    "Real-agent suite retains one preexisting opt-in historical #521 comparison skip.",
+    "Historical failed and cancelled runs are preserved. Mixed batches are qualified by individual target outcomes, and original recovery11 plus its added focused refusal assertions are distinguished."
+  ],
+  "evidenceRetention": "Detailed immutable 7227 baseline and repair records remain local under tests/verification/7227/ and tests/verification/7227-test-repair/. They are not included in this compact committed report. Receipt hashes identify those local records; no repository-wide npm test:all success is claimed.",
+  "targets": [
+    {
+      "path": "tests/integration/flow-cli/acceptance-phase-scenario.test.js",
+      "origin": "failed-test-defect",
+      "necessity": "Acceptance independently consumes actual unavailable implementation Review, enforces mechanical HOLD before provider invocation, and permits only authorized regeneration with a fresh correctly bound execution generation while preserving old receipt/Activity/journal.",
+      "duplicates": [
+        {
+          "path": "tests/integration/flow-cli/impl-phase-artifact-scenario.test.js",
+          "assessment": "Impl Review unavailable evidence alone does not prove actual Acceptance input acquisition/HOLD/provider suppression and later authorized regeneration of evidence."
+        }
+      ],
+      "decision": "retain-and-repair",
+      "status": "verified",
+      "repair": "Initialize the real container before overriding the nondeterministic external Review agent. All real bounded unavailable protocol, parent promotion, HOLD, explicit decision, regeneration, fresh Attempt/provider execution claim and historical receipt/journal checks are unchanged."
+    },
+    {
+      "path": "tests/integration/flow-cli/commands/dispatch.test.js",
+      "origin": "failed-test-defect",
+      "necessity": "Public child CLI dispatch serialization, exact target/approval/token/retry boundaries, manual Acceptance exception and read-only view summary/cache/binding reacquisition.",
+      "duplicates": [],
+      "decision": "retain-and-repair",
+      "status": "verified",
+      "repair": "Earlier genuine Spec Gate repair -> actual Review/Gate prefix invalidates and leaves Approval pending for child dispatch; preserve token/no worker/receipt assertions. Initialize actual Git baseline and Bootstrap direct lease-owner child. Risk and read-only Acceptance view CLI cases reuse existing AcceptancePhaseScenario with normally produced notVerifiable semantic judgment; preserve manual/tokenless autoApprove exception, exact choices, read-only cache/summary/stale binding/approval invariants. External CLI worker/summary scripts are installed BEFORE producing evidence, so no source fingerprint is rewritten after the Review. Remove duplicated fabricated impl.review/flow.findings/acceptance.review Attempt history and fake arbitrary repairFingerprint. Current CLI assertions need a genuine manual decision; dynamic finding source resolution remains the separately retained GetArtifact consumer's contract."
+    },
+    {
+      "path": "tests/integration/flow-cli/commands/get-artifact.test.js",
+      "origin": "failed-test-defect",
+      "necessity": "Owns executable artifact argument routing, machine envelope and exit status, nonauthoritative view-cache behavior, and explicit completed-Version selection despite corrupt ambient active registry.",
+      "duplicates": [
+        {
+          "path": "tests/integration/flow/artifact-view.test.js",
+          "assessment": "Underlying view readers cannot prove executable argument/envelope/exit routing or corrupt ambient registry isolation for an explicitly supplied completed target; original process-facing assertions are retained."
+        }
+      ],
+      "decision": "retain-and-repair",
+      "status": "verified",
+      "repair": "Replace obsolete manual completion of every leaf with an owned Git repository and the registered asynchronous producers through finalization. Provide a meaningful non-testable Requirement and explicit README ownership at the active implement boundary using the common implementationFiles input; finalize normally. Other three original CLI cases and all output/refusal/cache assertions unchanged."
+    },
+    {
+      "path": "tests/integration/flow-cli/commands/nonblocking-policy.test.js",
+      "origin": "failed-test-defect",
+      "necessity": "Keep all4 actual child CLI outcomes: saved quality evidence/policy shape/continue, stale digest refusal, wrong target refusal, and refreshed actual Review producer evidence.",
+      "duplicates": [
+        {
+          "path": "tests/integration/flow/nonblocking.test.js",
+          "assessment": "General library policy matrix does not cross actual child CLI parsing/target guards and immutable source digest readback."
+        },
+        {
+          "path": "tests/integration/flow/nonblocking-implementation-continuation.test.js",
+          "assessment": "Deep typed-source continuation proofs differ from these four child CLI boundaries; reuse existing actual Impl phase fixture."
+        }
+      ],
+      "decision": "retain-and-repair-normal-producer-fixture",
+      "status": "verified",
+      "repair": "undefined Completed Spec Gate source is read by its declared Approval consumer, retaining exact original source hash.",
+      "repairEvidence": "tests/verification/7227-test-repair/nonblocking-policy-repair-contract-review.json"
+    },
+    {
+      "path": "tests/integration/flow-cli/commands/worktree-finalize.test.js",
+      "origin": "failed-test-defect",
+      "necessity": "Retain5 distinct public CLI outcomes: report-display I/O warning with canonical Report intact, exact last-finalized pointer and active registry removal, inactive status, actual docs-sync failure warning through cleanup, and direct merge policy skip.",
+      "duplicates": [
+        {
+          "path": "tests/integration/flow-cli/finalization-phase-recovery.contract.js",
+          "assessment": "F04 real Prepare-created worktree pre-sync conflict verifies rebase abort baseline, saved exact remote base, guarded repair/recovery and resumed effects. It supersedes the removed manual main-side synthetic worktree fixture; must verify primary focused replacement."
+        },
+        {
+          "path": "tests/integration/flow/finalize-merge-conflict-metadata.test.js",
+          "assessment": "Owns exact metadata-only failure commit set, while the retained5 cases own public child CLI parsing/selector/envelope/status."
+        }
+      ],
+      "decision": "retain5-repair-normal-producers-and-retire1-duplicate",
+      "status": "verified",
+      "repair": "Use a genuine FinalizationPhaseScenario immutable upstream seed with direct featureBranch:null and real child CLI. Complete the actual cleanup before injecting an external report-read EIO only during the call-through real display reader; canonical validation, saved receipt, report bytes and persistence remain intact. Docs warnings come from real external build failure and typed settlement. Replace the synthetic rebase fixture with the stronger Prepare-backed F04 real worktree conflict/recovery primary.",
+      "retiredCases": [
+        {
+          "name": "requires rebase repair before granting a finalize-merge retry, then accepts it",
+          "reason": "Manual WorktreeFlowIdentity/main-side synchronous fixture duplicated the stronger Prepare-backed F04 physical worktree pre-sync scenario. Exact metadata-only commit remains owned by retained dedicated test.",
+          "primary": "tests/integration/flow-cli/finalization-phase-scenario.test.js: F04 real worktree pre-sync conflict preserves the abort baseline and requires the exact saved remote base before recovery",
+          "verification": {
+            "record": "final-current-source-finalization-retirement-primaries-after.json",
+            "case": "F04 real worktree pre-sync conflict preserves the abort baseline and requires the exact saved remote base before recovery",
+            "actualExitCode": 0
+          }
+        }
+      ]
+    },
+    {
+      "path": "tests/integration/flow-cli/file-read-exhaustion-scenario.test.js",
+      "origin": "failed-test-defect",
+      "necessity": "Draft/Spec each own four-response file-read exhaustion, durable exact diagnostic, unchanged semantic budget and refusal to restart after reload.",
+      "duplicates": [
+        {
+          "path": "tests/integration/flow-cli/spec-file-failure-scenario.test.js",
+          "assessment": "Different final outcomes: file-read retry exhaustion/blocked restart versus grouped target-validation regeneration and atomic publication. Retain both; fake only unrelated upstream Review process through existing common injection API."
+        }
+      ],
+      "decision": "retain-and-repair",
+      "status": "verified",
+      "repair": "Use existing provider admission wrapper; replace obsolete global spawnSync interception with existing public Review process dependency fake. Preserve all Gate group/target/retry/atomic persistence/readback/blocked restart assertions."
+    },
+    {
+      "path": "tests/integration/flow-cli/impl-phase-artifact-scenario.test.js",
+      "origin": "failed-test-defect",
+      "necessity": "Keep Task-specific I09 repair lineage/quality issue/authenticated capture/typed Result recovery distinct from lower implement checkpoint tests.",
+      "duplicates": [
+        {
+          "path": "tests/integration/flow/source-handoff-checkpoint.test.js",
+          "assessment": "Shared commit boundaries exercise different independently observable Task repair lineage and phase typed Results."
+        }
+      ],
+      "decision": "retain-and-repair",
+      "status": "verified",
+      "repair": "Fresh I09 child imports public runtime bootstrap; every existing crash/reload/replay assertion retained."
+    },
+    {
+      "path": "tests/integration/flow-cli/prepare-worktree-branch-resume.test.js",
+      "origin": "failed-test-defect",
+      "necessity": "Owns actual child response/acknowledgement loss, stale Prepare journal owner, branch/plugin publication recovery and genuine Draft consumption after reload.",
+      "duplicates": [
+        {
+          "path": "tests/integration/flow-cli/prepare-artifact-scenario.test.js",
+          "assessment": "General Prepare scenarios do not replace actual dead child acknowledgement loss and changed plugin publication refusal."
+        }
+      ],
+      "decision": "retain-and-repair",
+      "status": "verified",
+      "repair": "Bootstrap both real fault-injection child launches; wrap imperative Draft fake with existing withScenarioProviderAdmission; preserve original3 recovery/publication/consumer cases."
+    },
+    {
+      "path": "tests/integration/flow-cli/requirement-test-phase-scenario.test.js",
+      "origin": "failed-test-defect",
+      "necessity": "Owns real producer-to-saved-state-to-reload-to-consumer connections for Approval/Requirement Generation/Review/Repair/Gate, publication races and durable save/error boundaries.",
+      "duplicates": [],
+      "decision": "retain-and-repair",
+      "status": "verified",
+      "repair": "Plan races assert the actual earlier StepAdmissionRefusal and exact post-race snapshot; Spec races authenticate exactly their existing claimed response+validated events/budget/progress before retaining every other state/artifact/semantic invariant. Both Spec races pass with complete native TAP. Whole four-suite entry remains required."
+    },
+    {
+      "path": "tests/integration/flow-cli/spec-file-failure-scenario.test.js",
+      "origin": "failed-test-defect",
+      "necessity": "Owns late Spec group unavailability preserving accepted prefix; valid response after invalid target regeneration; bounded invalid target exhaustion without publication.",
+      "duplicates": [
+        {
+          "path": "tests/integration/flow-cli/file-read-exhaustion-scenario.test.js",
+          "assessment": "Different final outcomes: file-read retry exhaustion/blocked restart versus grouped target-validation regeneration and atomic publication. Retain both; fake only unrelated upstream Review process through existing common injection API."
+        }
+      ],
+      "decision": "retain-and-repair",
+      "status": "verified",
+      "repair": "Use existing provider admission wrapper; replace obsolete global spawnSync interception with existing public Review process dependency fake. Preserve all Gate group/target/retry/atomic persistence/readback/blocked restart assertions."
+    },
+    {
+      "path": "tests/integration/flow-cli/spec-gate-draft-return-scenario.test.js",
+      "origin": "failed-test-defect",
+      "necessity": "A real Spec Gate gap must reopen Draft, preserve both kinds of prior resolved question, await a new answer, regenerate Spec, pass Gate and persist approval; invalid lost/duplicate prior questions must have no canonical effects.",
+      "duplicates": [
+        {
+          "path": "tests/integration/flow/spec-gate-repair-draft-return.test.js",
+          "assessment": "Focused source/receipt/recovery branch differs from full registered Answer-to-Spec-to-Approval composition and the two prior resolved question types."
+        }
+      ],
+      "decision": "retain-and-repair",
+      "status": "verified",
+      "repair": "Fork each invalid proposal from an existing immutable CanonicalScenarioSeed before any Draft worker claim, retaining one request per root and full protected snapshots. Original root remains unclaimed for its actual dispatcher. Use existing public Review process fake and admitted deterministic provider; all later answer, regeneration and approval assertions unchanged."
+    },
+    {
+      "path": "tests/integration/flow-cli/spec-gate-repair-file-admission.test.js",
+      "origin": "failed-test-defect",
+      "necessity": "Retain all9: real bounded Unicode/file delivery, unique aggregate planning, atomic publication reload and preflight refusal of indivisible connected input/argv transport remain distinct execution contracts.",
+      "duplicates": [
+        {
+          "path": "tests/integration/flow-cli/spec-artifact-scenario.test.js",
+          "assessment": "Whole phase checks actual ordinary/Gate file delivery and downstream consumers, but not this2MiB indivisible input refusal or exact aggregate accounting matrix."
+        }
+      ],
+      "decision": "retain-and-repair-fixture",
+      "status": "verified"
+    },
+    {
+      "path": "tests/integration/flow-cli/worker-handoff-full-flow.test.js",
+      "origin": "failed-test-defect",
+      "necessity": "Retained case connects real Draft entry, claimed Refine publication interruption/reload, bounded authorized coverage repair and unchanged repair, exact receipt object ownership, actual Draft Gate and next Spec worker input. Producer protocol tests alone do not prove that connection.",
+      "duplicates": [
+        {
+          "path": "tests/integration/flow-cli/spec-artifact-scenario.test.js",
+          "assessment": "Actual parent-owned Spec Review, bounded typed repair, revision-scoped audit, permitted fields and subsequent actual Approval/Test/Acceptance."
+        },
+        {
+          "path": "tests/integration/flow-cli/impl-phase-artifact-scenario.test.js",
+          "assessment": "Actual two Tasks/source manifests, Task Review/filter/repair, Flow Review/repair, fresh Test chain and Retro."
+        },
+        {
+          "path": "tests/integration/flow-cli/finalization-phase-scenario.test.js",
+          "assessment": "Normal Draft-to-report prefix and actual finalization, completed/last-finalized consumers with exact report ownership."
+        },
+        {
+          "path": "tests/integration/lib/flow-artifact-contract.test.js",
+          "assessment": "Exhaustive declared authority actors and canonical ownership."
+        },
+        {
+          "path": "tests/integration/flow/worker-artifact-handoff.test.js",
+          "assessment": "Actual worker/parent handoff authority and malformed/unauthorized source/repair rejection."
+        }
+      ],
+      "decision": "retain1-repair-normal-producers-and-retire1-obsolete-scripted-duplicate",
+      "status": "verified",
+      "repair": "Initialize genuine Git baseline before the normal conditional Draft fingerprint. Evaluate actual Draft Gate through its provider claim rather than generic promotion. Retain all original authorized/discarded delta, immutable Activity/source ownership, exact checkpoint/claimed/publication/terminal order, receipt identity and downstream Draft bytes assertions.",
+      "retiredCases": [
+        {
+          "name": "routes artifacts and source effects to workers, and commands/approval to the parent",
+          "reason": "This manually activated a static leaf route independent of Definition decisions, intercepted nextAction and commandRunner, bypassed leases, synthesized generic Review/Gate publication and asserted lineage for skipped PASS branches. It cannot prove a normal full Flow. Current producer scenarios own its genuine contracts; obsolete synthetic route counts are not a product contract.",
+          "primaries": [
+            {
+              "path": "tests/integration/flow-cli/spec-artifact-scenario.test.js",
+              "cases": [
+                "publishes and repairs Spec, then reloads it for Approval, Test and Acceptance"
+              ],
+              "contracts": "Actual parent-owned Spec Review, bounded typed repair, revision-scoped audit, permitted fields and subsequent actual Approval/Test/Acceptance.",
+              "verification": {
+                "record": "final-current-source-spec-retirement-primary-after.json",
+                "actualExitCode": 0,
+                "allApplicableInputsUnchanged": true,
+                "cases": [
+                  "publishes and repairs Spec, then reloads it for Approval, Test and Acceptance"
+                ]
+              }
+            },
+            {
+              "path": "tests/integration/flow-cli/impl-phase-artifact-scenario.test.js",
+              "cases": [
+                "I01 all Tasks: normal producer chain survives reload and Retro consumes the exact test producer",
+                "I07 Impl repair invalidates the former test chain and preserves repair quality through the next checkpoint"
+              ],
+              "contracts": "Actual two Tasks/source manifests, Task Review/filter/repair, Flow Review/repair, fresh Test chain and Retro.",
+              "verification": {
+                "record": "final-current-source-impl-retirement-primaries-after.json",
+                "actualExitCode": 0,
+                "allApplicableInputsUnchanged": true,
+                "cases": [
+                  "I01 all Tasks: normal producer chain survives reload and Retro consumes the exact test producer",
+                  "I07 Impl repair invalidates the former test chain and preserves repair quality through the next checkpoint"
+                ]
+              }
+            },
+            {
+              "path": "tests/integration/flow-cli/finalization-phase-scenario.test.js",
+              "cases": [
+                "F01 real commit, squash, main docs and teardown preserve the produced report through last-finalized consumers"
+              ],
+              "contracts": "Normal Draft-to-report prefix and actual finalization, completed/last-finalized consumers with exact report ownership.",
+              "verification": {
+                "record": "final-current-source-finalization-retirement-primaries-after.json",
+                "actualExitCode": 0,
+                "allApplicableInputsUnchanged": true,
+                "cases": [
+                  "F01 real commit, squash, main docs and teardown preserve the produced report through last-finalized consumers"
+                ]
+              }
+            },
+            {
+              "path": "tests/integration/lib/flow-artifact-contract.test.js",
+              "cases": [
+                "does not retain ownership or switch actors outside the authority matrix",
+                "binds placement, ownership, and authority to the canonical publication boundary"
+              ],
+              "contracts": "Exhaustive declared authority actors and canonical ownership.",
+              "verification": {
+                "record": "budget-shared-artifact-authority-after.json",
+                "actualExitCode": 0,
+                "allApplicableInputsUnchanged": true,
+                "cases": [
+                  "does not retain ownership or switch actors outside the authority matrix",
+                  "binds placement, ownership, and authority to the canonical publication boundary"
+                ]
+              }
+            },
+            {
+              "path": "tests/integration/flow/worker-artifact-handoff.test.js",
+              "cases": [
+                "seals source-worker upgrade evidence and publishes it only with the parent confirmation",
+                "rejects a direct canonical file mutation during a source handoff",
+                "rejects full-spec and legacy repair envelopes at the worker boundary"
+              ],
+              "contracts": "Actual worker/parent handoff authority and malformed/unauthorized source/repair rejection.",
+              "verification": {
+                "record": "final-worker-artifact-whole-after.json",
+                "actualExitCode": 0,
+                "allApplicableInputsUnchanged": true,
+                "cases": [
+                  "seals source-worker upgrade evidence and publishes it only with the parent confirmation",
+                  "rejects a direct canonical file mutation during a source handoff",
+                  "rejects full-spec and legacy repair envelopes at the worker boundary"
+                ]
+              }
+            }
+          ],
+          "verification": "Completed: every explicit replacement primary is present in native0 main-worktree reports, and the retained unique Draft case passed its whole1-case owner again with the final shared action-capture helper."
+        }
+      ]
+    },
+    {
+      "path": "tests/integration/flow-cli/worktree-cli-execution.test.js",
+      "origin": "failed-test-defect",
+      "necessity": "Executable Git worktree handoff selects the correct local source and refuses absent worktree-local bootstrap before semantic dispatch; unrelated consumer worktrees retain installed package execution.",
+      "duplicates": [
+        {
+          "path": "tests/integration/flow/stop-guidance-cli.test.js",
+          "assessment": "Generic module-loader failures lack the managed-worktree reexecution branch. Unknown route wire checks belong to E2E and were deduplicated there."
+        }
+      ],
+      "decision": "retain-and-repair",
+      "status": "verified",
+      "repair": "Reuse shared Git setup; replace retired stderr prose/path expectations with exact sole typed bootstrap failure/guidance/exit contract, retaining other worktree routing assertions."
+    },
+    {
+      "path": "tests/integration/flow-metrics/canonical-flow-metrics.test.js",
+      "origin": "failed-test-defect",
+      "necessity": "Owns the canonical metrics index and review-metric consumer: saved finalized Version identity, exact catalog/revision input locators, typed token/question facts, and exclusion of a retired uncataloged sibling review.",
+      "duplicates": [
+        {
+          "path": "tests/integration/metrics/token.test.js",
+          "assessment": "Token CLI formatting does not prove CanonicalMetricsFlowIndex saved artifact locations or review-source exclusion. Reuse its existing canonical metrics producer fixture instead of another completion implementation."
+        }
+      ],
+      "decision": "retain-and-repair",
+      "status": "verified",
+      "repair": "Replace only the first scenario manual leaf-completion helper with existing createCanonicalTokenMetricsFlow. Supply the same spec id, request, goal, one Draft question and 11/7/3/2 token facts with0.01 cost; let its owned Git, meaningful Requirement/Task source producers and normal finalization establish the saved lifecycle. All original index/metric/locator assertions and the second review projection case remain unchanged; remove duplicate finalizeFixture helper."
+    },
+    {
+      "path": "tests/integration/flow.test.js",
+      "origin": "failed-test-defect",
+      "necessity": "Canonical registry/storage and explicit Step transitions remain distinct; a truly terminal Flow must refuse another normal confirmation without inventing a next pending leaf.",
+      "duplicates": [
+        {
+          "path": "tests/integration/flow-cli/finalization-phase-cleanup.contract.js",
+          "assessment": "Physical cleanup completion differs from the no-next-leaf normal-transition refusal observed here."
+        }
+      ],
+      "decision": "retain-and-repair",
+      "status": "verified",
+      "repair": "Terminal-only scenario now uses isolated Git and existing async FlowAtStepFixture producers, a meaningful Requirement and explicit existing source map. It retains the terminal refusal and every-leaf terminal assertions. Shared implementationFiles prerequisite extension is queued after the active Spec scenario."
+    },
+    {
+      "path": "tests/integration/flow/acceptance-historical-claim-receipt.test.js",
+      "origin": "failed-test-defect",
+      "necessity": "Proves that a completed immutable Acceptance execution claim remains exactly readable after a later Error publication while that historical readback grants neither stale settlement nor another provider call.",
+      "duplicates": [
+        {
+          "path": "tests/integration/flow-cli/acceptance-provider-observations.test.js",
+          "assessment": "Owns uncertain response loss and per-RPC/generation observation. It intentionally preserves an unresolved claim and cannot establish historical-after-Error readback. This test retains the Error outcome with a genuinely returned invalid external response."
+        },
+        {
+          "path": "tests/integration/flow/prompt-process-stop-receipt.test.js",
+          "assessment": "Owns managed process proof and Prompt uncertainty. It does not publish and reload the later Acceptance Error or authenticate/reject the older Step receipt through both write boundaries."
+        }
+      ],
+      "decision": "retain-and-repair",
+      "status": "verified",
+      "repair": "Replace the unsupported assumption that an unproven lost response becomes Error with an actual managed transport returning invalid Acceptance judgment data. Preserve later Error, exact historical claim, owning Activity order, both stale-write refusals and unchanged persistence. Observe the claim only after its public save completed and compare that exact receipt after reload. Distinguish one semantic generation from its RPCs and assert no additional RPC across historical readback/refused writes."
+    },
+    {
+      "path": "tests/integration/flow/acceptance-module-import.test.js",
+      "origin": "failed-test-defect",
+      "necessity": "Fresh-process import of three Acceptance entry graphs proves module initialization independent of import order; generic runtime snapshot tests do not prove these entry graphs.",
+      "duplicates": [
+        {
+          "path": "tests/integration/lib/runtime-package.test.js",
+          "assessment": "Owns package capture/proof; does not initialize each Acceptance entry graph, so not redundant."
+        }
+      ],
+      "decision": "retain-and-repair",
+      "status": "verified",
+      "repair": "Use public builtin-only package bootstrap before semantic import; preserve exact stdout/status assertions."
+    },
+    {
+      "path": "tests/integration/flow/canonical-flow-manager-runtime.test.js",
+      "origin": "failed-test-defect",
+      "necessity": "Integration of canonical transaction atomicity, exact authority, refusal, replay and reload into subsequent semantic decisions; complements pure selection and phase-wide scenarios.",
+      "duplicates": [],
+      "decision": "retain127-and-repair-producers; retire-invalid-empty-failure-prelude",
+      "status": "verified",
+      "repairEvidence": "tests/verification/7227-test-repair/canonical-runtime-repair-progress.json"
+    },
+    {
+      "path": "tests/integration/flow/commands/review.test.js",
+      "origin": "failed-test-defect",
+      "necessity": "Retain command result ownership, normal claim identity/replay, checkpoint ACK recovery, low-level corrupted inputs and actual child refusal, plus separate implementation history/file-map/filter consumers.",
+      "duplicates": [],
+      "decision": "retain110 and repair actual producer/child prerequisites",
+      "status": "verified",
+      "repairEvidence": "tests/verification/7227-test-repair/review-command-repair-progress.json"
+    },
+    {
+      "path": "tests/integration/flow/definition-lifecycle-failure.test.js",
+      "origin": "failed-test-defect",
+      "necessity": "Keep dispatcher/registry failure ownership for every active target, command-recorded semantic failures, Draft command/Step/post faults, post-commit response failures and atomic Gate-vs-fallback races. These verify refusal/readback/continuation boundaries rather than duplicate pure selection.",
+      "duplicates": [],
+      "decision": "retain35; replace11-obsolete-staged-publication-rows-with-atomic-primary-contracts",
+      "status": "verified",
+      "repairEvidence": "tests/verification/7227-test-repair/definition-lifecycle-repair-progress.json",
+      "replacementVerification": {
+        "record": "final-v6-runtime-whole-after.json",
+        "actualExitCode": 0,
+        "cases": [
+          "persists the sealed Task Gate pass lifecycle through Task completion and its exact successor",
+          "keeps Task Gate reset atomic across save rollback and committed acknowledgement recovery",
+          "rejects metricless and mismatched saved Task Gate receipts while keeping general history readable",
+          "binds Task Gate issue settlement to the exact atomic Result and rejects partial publication",
+          "rejects a Task Gate decision when allow-listed source changes before atomic result publication"
+        ],
+        "allApplicableInputsUnchanged": true
+      }
+    },
+    {
+      "path": "tests/integration/flow/draft-await-settlement-replay.test.js",
+      "origin": "failed-test-defect",
+      "necessity": "Renewed Draft Await after explicit Step Error recovery must use a new Attempt receipt, refuse the old answer receipt, preserve prior ledger/budget and complete the same Step after the authorized answer.",
+      "duplicates": [
+        {
+          "path": "tests/integration/flow/draft-question-ledger.test.js",
+          "assessment": "This scenario specifically connects Error replacement, a fresh Await, stale old answer refusal and terminal completion across reload; generic question answer/replay is owned separately."
+        }
+      ],
+      "decision": "retain-and-repair",
+      "status": "verified",
+      "repair": "Only the actual worker/recovery scenario now starts from existing fixtureRepository so normal Git source/dispatch authority exists. Exact old/new receipt identities and all later Answer/completion assertions unchanged."
+    },
+    {
+      "path": "tests/integration/flow/draft-gate-repair-handoff.test.js",
+      "origin": "failed-test-defect",
+      "necessity": "Draft Gate repair must preserve original repair lineage and budget across accepted integrity Error, explicit replacement and actual worker reuse; same bytes republished by a new producer cannot inherit saved execution authority.",
+      "duplicates": [
+        {
+          "path": "tests/integration/flow/draft-await-settlement-replay.test.js",
+          "assessment": "Await answer authorization differs from actual Gate repair worker execution and retained repair lineage."
+        }
+      ],
+      "decision": "retain-and-repair",
+      "status": "verified",
+      "repair": "Use existing withScenarioProviderAdmission at the deterministic external worker. Identical-byte Draft republication is refused by the earlier canonical input producer baseline check; assert its exact stable code and artifact identity, retaining physical/semantic no-change assertions."
+    },
+    {
+      "path": "tests/integration/flow/draft-question-ledger.test.js",
+      "origin": "failed-test-defect",
+      "necessity": "Draft fact-acquisition failures must remain refusals with no selected Result, ledger, catalog or state publication; normal Answer/Await/replay/promotion remain distinct causal contracts.",
+      "duplicates": [
+        {
+          "path": "tests/integration/flow/draft-await-settlement-replay.test.js",
+          "assessment": "Await receipt replay differs from pre-Service fact acquisition failure."
+        }
+      ],
+      "decision": "retain-and-repair",
+      "status": "verified",
+      "repair": "Assert rejection at existing prepareDraftService acquisition boundary, before a Step exists, preserving original error identity, one read and all fresh-Store no-change assertions."
+    },
+    {
+      "path": "tests/integration/flow/draft-repair-operations.test.js",
+      "origin": "failed-test-defect",
+      "necessity": "Owns strict bounded repair operations, immutable source, discarded operation audit and Gate batch refusal. Retain12 behavioral cases.",
+      "duplicates": [
+        {
+          "path": "tests/integration/flow/get-step-instructions.test.js",
+          "assessment": "Expanded instructions already prove worker handoff authority, exact payload path/seal and no worker completion."
+        },
+        {
+          "path": "tests/integration/flow/draft-completion-connector.test.js",
+          "assessment": "Actual Definition/Store tests already prove completion ownership, legal repair promotion, stale/refused completion and reload. Fresh20pass here."
+        }
+      ],
+      "decision": "retain-and-repair",
+      "status": "verified",
+      "repair": "Delete raw prompt phrase case and unused file-reading helper; that phrase was not a required instruction contract."
+    },
+    {
+      "path": "tests/integration/flow/final-regression-record-and-proceed.test.js",
+      "origin": "failed-test-defect",
+      "necessity": "Existing failures and Definition-exhausted current failures must require exact explicit acceptance, retaining original evidence and refusal of premature continuation.",
+      "duplicates": [
+        {
+          "path": "tests/integration/flow-cli/finalization-phase-cleanup.contract.js",
+          "assessment": "Full cleanup persistence differs from this file unique outbox/projection/regression refusal and recovery outcomes."
+        }
+      ],
+      "decision": "retain-and-repair",
+      "status": "verified",
+      "repair": "Explicit existing source ownership supplied at normal implement producer; shared option not yet implemented to preserve the currently running Spec scenario inputs. Other original failures in the file still require review after the setup reaches their assertions."
+    },
+    {
+      "path": "tests/integration/flow/final-regression-terminal-replay.test.js",
+      "origin": "failed-test-defect",
+      "necessity": "Terminal regression replay and non-retryable evidence drift must not start another project command or replace saved authority.",
+      "duplicates": [
+        {
+          "path": "tests/integration/flow-cli/finalization-phase-cleanup.contract.js",
+          "assessment": "Full cleanup persistence differs from this file unique outbox/projection/regression refusal and recovery outcomes."
+        }
+      ],
+      "decision": "retain-and-repair",
+      "status": "verified",
+      "repair": "Explicit existing source ownership supplied at normal implement producer; shared option not yet implemented to preserve the currently running Spec scenario inputs. Other original failures in the file still require review after the setup reaches their assertions."
+    },
+    {
+      "path": "tests/integration/flow/final-regression.test.js",
+      "origin": "failed-test-defect",
+      "necessity": "Retain all16: actual project command pass/classification/timeout/authority selection, changed-snapshot rejection, Definition/claim handoff and per-Attempt durable logs are distinct outcomes.",
+      "duplicates": [
+        {
+          "path": "tests/integration/flow/final-regression-record-and-proceed.test.js",
+          "assessment": "Owns explicit acceptance of an existing failure; its5 cases do not cover this command/classification/authority/retry matrix. Reuse the same existing producer-backed late fixture APIs."
+        },
+        {
+          "path": "tests/integration/flow/final-regression-terminal-replay.test.js",
+          "assessment": "Owns terminal refusal/replay, distinct from the16 producer and routing outcomes."
+        }
+      ],
+      "decision": "retain-and-repair-fixture",
+      "status": "verified",
+      "repair": "Real producer frontier, direct typed CurrentFlowStateConflictError with exact unchanged persistence, and original complete final regression observations. Runtime-only paths now share the canonical Git exclusion owner. Definition-approved EPERM activation is restored using the authenticated existing final-regression decision. All16 whole cases pass, no expected runtime path or prompt assertions weakened."
+    },
+    {
+      "path": "tests/integration/flow/finalization-outbox.test.js",
+      "origin": "failed-test-defect",
+      "necessity": "Finalization must keep exact outbox identity and atomic Report/completion, explicit failure recovery and no duplicate remote effects.",
+      "duplicates": [
+        {
+          "path": "tests/integration/flow-cli/finalization-phase-cleanup.contract.js",
+          "assessment": "Full cleanup persistence differs from this file unique outbox/projection/regression refusal and recovery outcomes."
+        },
+        {
+          "path": "tests/integration/flow/finalization-phase-result-contract.test.js",
+          "assessment": "Current primary registry/Definition settlement coverage for all four leaves and typed common Errors. Six removed tests demand old resolveLifecycle arrays of SetStepStatus/CompleteOutboxEffect or automatic failure skip; current source has no such post route and delegates errors to the typed registered producer."
+        },
+        {
+          "path": "tests/integration/flow-cli/finalization-phase-recovery.contract.js",
+          "assessment": "F05 actual interrupted sync requires authorized skip, F06 publishes exact claimed Result before effects and replays successful sync after lost acknowledgement. Covers current public durability; old failure-always-skipped expectation contradicts the contract."
+        },
+        {
+          "path": "tests/integration/flow-cli/finalization-completion-atomicity.test.js",
+          "assessment": "Actual cleanup completion publishes Step receipt/outbox/lifecycle atomically and rolls both publications back at either interrupted boundary. Current Report atomic publication test remains in this target."
+        }
+      ],
+      "decision": "retain-and-repair",
+      "status": "verified",
+      "repair": "Explicit existing source ownership supplied at normal implement producer; shared option not yet implemented to preserve the currently running Spec scenario inputs. Other original failures in the file still require review after the setup reaches their assertions. Remove six retired legacy lifecycle-action tests; retain all ten current outbox identity, exact recovery, ABA, atomic failure, dispatcher idempotency, Report publication and raw Gate refusal cases. No completed/skipped expectation is weakened."
+    },
+    {
+      "path": "tests/integration/flow/finalization-recovery-read-only.test.js",
+      "origin": "failed-test-defect",
+      "necessity": "Read-only next-action and recovery preview must preserve canonical files, runtime logs and locks, and only the explicit selected claim/recovery may mutate authority.",
+      "duplicates": [
+        {
+          "path": "tests/integration/flow-cli/finalization-phase-cleanup.contract.js",
+          "assessment": "Full cleanup persistence differs from this file unique outbox/projection/regression refusal and recovery outcomes."
+        }
+      ],
+      "decision": "retain-and-repair",
+      "status": "verified",
+      "repair": "Explicit existing source ownership supplied at normal implement producer; shared option not yet implemented to preserve the currently running Spec scenario inputs. Other original failures in the file still require review after the setup reaches their assertions."
+    },
+    {
+      "path": "tests/integration/flow/finalize-merge-conflict-metadata.test.js",
+      "origin": "failed-test-defect",
+      "necessity": "Owns finalize-merge metadata-only commit scope after lifecycle failure, pending Outbox before merge, external dirty input refusal before Outbox mutation and deferred Flow-owned analysis allowance.",
+      "duplicates": [
+        {
+          "path": "tests/integration/flow-cli/finalization-phase-recovery.contract.js",
+          "assessment": "F04 actual squash conflict/recovery covers refs, Attempt, skips and exact recovery, but does not assert this exact committed metadata set or the deferred analysis/external-dirty pre-hook boundary. Retain all four narrow lifecycle tests and reuse its normal phase fixture."
+        }
+      ],
+      "decision": "retain-and-repair",
+      "status": "verified",
+      "repair": "Replace manual late leaf completion and post-hoc Git initialization with existing FinalizationPhaseScenario through the actual claimed finalize-merge frontier. Reuse its expensive prefix only as a lazy immutable seed with owned clones per case. Use the actual context and real pre-hook before injected onError. Derive the same four metadata paths from the public Version location rather than a hard-coded fixture spec id. All exact file set, clean status, pending Outbox, dirty refusal, unchanged steps and analysis assertions remain."
+    },
+    {
+      "path": "tests/integration/flow/flow-steps.test.js",
+      "origin": "failed-test-defect",
+      "necessity": "Owns static leaf ordering and phase/budget contracts; fixed Requirement lifecycle directly after approval remains observable.",
+      "duplicates": [
+        {
+          "path": "tests/integration/flow/get-step-instructions.test.js",
+          "assessment": "Instruction rendering does not prove Definition leaf order. Retain remaining18 distinct ordering/map/budget cases."
+        }
+      ],
+      "decision": "retain-and-repair",
+      "status": "verified",
+      "repair": "Assert exact four-step Requirement lifecycle immediately after approval rather than obsolete entire preceding prefix. Delete2cases preserving retired approach/fill-spec names and legacy absence loop."
+    },
+    {
+      "path": "tests/integration/flow/gate-diff-compaction.test.js",
+      "origin": "failed-test-defect",
+      "necessity": "Retain the13 pure evidence/prompt cases and4 actual Task Gate scoping/batching/partial-failure/full-source-readback outcomes. They cover exact source bodies and batch atomicity, distinct from phase route tests.",
+      "duplicates": [
+        {
+          "path": "tests/integration/flow/task-review-no-change-continuation.test.js",
+          "assessment": "Primary2 actual no-change Review/Definition/skip-Gate/reload/Acceptance/reopen cases replace the removed impossible no-source active-Gate scenario."
+        },
+        {
+          "path": "tests/integration/flow/task-review-stages.test.js",
+          "assessment": "Owns the legitimate Task Review state/stage publication, not complete Gate source batching or 133813-character evidence."
+        }
+      ],
+      "decision": "retain17-and-retire1-invalid-scenario",
+      "status": "verified",
+      "repair": "Preserve original compaction/tooling/full-source assertions. Read the actual StepErrorResult failure evidence through ImplementationGateResultEvidence.fromJSON(error.data.evidence), assert Error/failure receipt; real Review/Source/Gate producers remain.",
+      "retiredCases": [
+        {
+          "name": "rejects an explicitly invoked Task Gate when the Task has no source evidence",
+          "reason": "Its synthetic Review had skipped required source/Review authority and forced an active Gate. Current normal no-change Review completes the Task and skips Gate with an Acceptance continuation; do not force that retired route or change product guards.",
+          "primary": "tests/integration/flow/task-review-no-change-continuation.test.js",
+          "verification": "budget-shared-task-no-change-after.json: whole2/2; actual no-change Task Review retains the lawful continuation and skips Gate without invented source"
+        }
+      ]
+    },
+    {
+      "path": "tests/integration/flow/gate-phase-inference.test.js",
+      "origin": "failed-test-defect",
+      "necessity": "Owns flow/Task Gate phase resolution, stale/ambiguous and explicit scope behavior, stable runtime-log Step identity and refusal of nonselected/advanced Gate actions.",
+      "duplicates": [
+        {
+          "path": "tests/integration/flow/task-review-stages.test.js",
+          "assessment": "Task Review continuation decisions do not prove Gate phase inference, explicit runtime-log Step identity or pre-hook Flow/Task ownership. Preserve the original inference and admission matrix."
+        }
+      ],
+      "decision": "retain-and-repair",
+      "status": "verified",
+      "repair": "Both canonical scope cases now use owned Git repositories and registered asynchronous predecessor producers. The Task Gate is reachable through an actual changed Task source handoff and real Review rather than manually setting Review/triage/repair statuses. The integration case preserves the original pending target via activateTarget:false so its pre-hook still owns the observed active identity. All original scope/refusal and pure resolution assertions are retained."
+    },
+    {
+      "path": "tests/integration/flow/gate-retry-counter-transparency.test.js",
+      "origin": "failed-test-defect",
+      "necessity": "Owns exclusion of issueLog/docsRead/srcRead/question metrics from Gate retry budgets and actual issue-log command persistence not charging gateRetry.",
+      "duplicates": [
+        {
+          "path": "tests/integration/flow/set-retry.test.js",
+          "assessment": "Retry lifecycle accounting does not detect accidental issue-log charging of a Gate retry budget. Keep the three direct decisions and one command/persistence boundary."
+        }
+      ],
+      "decision": "retain-and-repair",
+      "status": "verified",
+      "repair": "Prepare the same impl-gate frontier through actual asynchronous producers in an owned Git repository with an existing main base branch. The issue-log CLI invocation and exact zero gateRetry metrics assertions are unchanged."
+    },
+    {
+      "path": "tests/integration/flow/get-artifact.test.js",
+      "origin": "failed-test-defect",
+      "necessity": "Keep command adapter full/structured-summary rendering from a real Acceptance result, exact declared dynamic source identity, actual manual decision, source corruption before summary-cache reuse, no provider invocation on invalid source, and absent source fingerprint rejection.",
+      "duplicates": [],
+      "decision": "retain9-repair-normal-canonical-producer-and-preserve-command-adapter-contracts",
+      "status": "verified",
+      "repair": "Retain two real finalized/migrated Version routes; dynamic Acceptance command consumer now uses normally bounded Spec Gate/repair/Review -> explicit retained finding -> Requirement Test/Impl -> actual Acceptance decision, existing immutable seed with independent clones, and actual SetAcceptanceDecisionCommand. Preserve source fingerprints, full/structured summary, cache/no-call corruption and negative source identity checks. See get-artifact-dynamic-source-repair-progress.json."
+    },
+    {
+      "path": "tests/integration/flow/impl-phase-publication-observer.test.js",
+      "origin": "failed-test-defect",
+      "necessity": "Owns exact original typed Draft dispatcher save authentication, fresh-Store replay, changed self-signed publication digest refusal and unchanged state.",
+      "duplicates": [
+        {
+          "path": "tests/integration/flow/source-publication-capture-boundary.test.js",
+          "assessment": "Source capture has PID/nonce/bytes/binding authority; this case separately verifies observer receipt authentication against original Draft Store save."
+        }
+      ],
+      "decision": "retain-and-repair",
+      "status": "verified",
+      "repair": "Use existing provider admission wrapper around only external Draft worker; preserve production dispatch, Store capture and independent receipt refusal."
+    },
+    {
+      "path": "tests/integration/flow/lock-wrapper-contract.test.js",
+      "origin": "failed-test-defect",
+      "necessity": "Five distinct wrappers project physical ProcessLock outcomes to their public domain codes and must preserve rejected owner bytes/inode and refuse corrupt state.",
+      "duplicates": [
+        {
+          "path": "tests/integration/lib/process-lock-failure-semantics.test.js",
+          "assessment": "Primitive owns identity classification/wait policy matrix; wrappers own exact public code/status/data projection only."
+        }
+      ],
+      "decision": "retain-and-repair",
+      "status": "verified",
+      "repair": "Inject typed unavailable observation at existing ProcessIdentitySource external observation boundary; obsolete fs.readFileSync boot-file interception never reached the descriptor reader. All busy/unknown/corrupt mappings and unchanged-owner assertions retained; no OS paths added."
+    },
+    {
+      "path": "tests/integration/flow/missing-producer-artifact-recovery.test.js",
+      "origin": "failed-test-defect",
+      "necessity": "Historical missing producer restoration must append exactly one authentic Activity, preserve old failure, avoid invented consumer claims, refuse stale/forged producer authority and be atomic under actual competing processes.",
+      "duplicates": [
+        {
+          "path": "tests/integration/flow-cli/acceptance-phase-scenario.test.js",
+          "assessment": "A05 physical missing impl.review owns real command/read refusal and exact authority restoration; A02 owns current typed repair-to-impl-triage. Delete the obsolete raw repairAcceptanceReview facade case with unversioned manufactured payload; do not resurrect removed API."
+        }
+      ],
+      "decision": "retain-and-repair",
+      "status": "verified",
+      "repair": "Exhausted unchanged tooling evidence follows the current Definition retry blocker code. Fresh competing semantic children preload the existing shared bootstrap and successful stdout must identify actual recovery; retained single Activity/fresh state assertions stay unchanged."
+    },
+    {
+      "path": "tests/integration/flow/non-gate-transition-boundary.test.js",
+      "origin": "failed-test-defect",
+      "necessity": "Retain Definition route/fact/plan boundaries, durable lineage and safe refusal before a producer is admitted.",
+      "duplicates": [
+        {
+          "path": "tests/integration/flow/non-gate-transition-boundary.test.js",
+          "assessment": "Failing full-command double repeated existing unreceipted-publication admission matrix, omitted current physical ownership prerequisites, and used real checkout root. Consolidate both Step IDs at the existing admission API owner."
+        },
+        {
+          "path": "tests/integration/flow/test-review-rejected-continuation.test.js",
+          "assessment": "Real producer-backed command refusal/continuation owns the public command wiring; keep this file focused on isolated admission decisions."
+        }
+      ],
+      "decision": "deduplicate-and-repair",
+      "status": "verified",
+      "repair": "Remove invalid duplicated full-command/global-spawn-mock case. Extend existing admission test to both test-execute and test-result-review, preserving precise StepAdmissionRefusal and zero producer effects. No invented canonical state, current Flow mutation or product guard accommodation."
+    },
+    {
+      "path": "tests/integration/flow/nonblocking-implementation-continuation.test.js",
+      "origin": "failed-test-defect",
+      "necessity": "Keep all3 actual typed Task Gate tooling, integration Gate semantic selection, and Flow Review tooling acceptance/replay/forgery/unchanged-child-frontier outcomes.",
+      "duplicates": [
+        {
+          "path": "tests/integration/flow/nonblocking.test.js",
+          "assessment": "General policy matrix does not cover these exact authentic child unavailable protocol, forged nominal publication selections, journal/response-loss and no-child-cursor-change assertions."
+        }
+      ],
+      "decision": "retain-and-repair-fixture",
+      "status": "verified"
+    },
+    {
+      "path": "tests/integration/flow/nonblocking.test.js",
+      "origin": "failed-test-defect",
+      "necessity": "Retain all32: policy eligibility, exact source receipt/digest, stale/refused/competing decisions, recovery and advisory/strict transitions across actual phases have distinct outcomes.",
+      "duplicates": [
+        {
+          "path": "tests/integration/flow/nonblocking-implementation-continuation.test.js",
+          "assessment": "Owns deep actual child/forgery/replay variants, not this broad policy/source/phase and decision matrix."
+        }
+      ],
+      "decision": "retain-and-repair-fixture",
+      "status": "verified",
+      "repair": "Retain all32 policy/source/phase and exact identity cases. Inconclusive actual Acceptance Review correctly routes to acceptance-decision; assert saved Result/receipt/manual directive and forbid advisory bypass. For deliberately absent/forged Review input, next-action and activation must enforce their own exact refusal boundaries and leave canonical persistence unchanged. The two malformed variants clone one genuine immutable Review-input seed. Keep Definition-owned Task Review/Gate recovery and current evidence identity assertions; no product policy or guard changed for these fixtures."
+    },
+    {
+      "path": "tests/integration/flow/optional-flow-context.test.js",
+      "origin": "failed-test-defect",
+      "necessity": "Base FlowCommand composes optional/missing/preparing/ambiguous/explicit selection and must not invoke a command after typed resolution refusal.",
+      "duplicates": [
+        {
+          "path": "tests/integration/flow/resolve-active-flow.test.js",
+          "assessment": "Owns registry discovery decisions; this file owns their effect at the command context boundary and actual selected command lease/fresh canonical read."
+        }
+      ],
+      "decision": "retain-and-repair",
+      "status": "verified",
+      "repair": "Reuse CanonicalFlowFixture in caller-owned root for selected active state and real loadReadOnly; retain resolution doubles and actual lease, with unchanged canonical snapshot after selected command."
+    },
+    {
+      "path": "tests/integration/flow/post-hook-flow-scope.test.js",
+      "origin": "failed-test-defect",
+      "necessity": "Owns rejection of a Flow claim replacing an active Task and actual Flow producer completion preserving a previously completed Task and null currentTaskId.",
+      "duplicates": [
+        {
+          "path": "tests/integration/task-decomposition/t4-forest-wiring.test.js",
+          "assessment": "Task propagation alone does not prove that a later actual Flow-level producer publication cannot reopen a terminal Task. Retain the original two scope outcomes."
+        }
+      ],
+      "decision": "retain-and-repair",
+      "status": "verified",
+      "repair": "Only the producer completion case now uses an owned Git repository, explicit base branch, registered asynchronous predecessor producers and actual test-execute publication. The original status/currentTaskId/terminal Task assertions and active Task rejection case are unchanged."
+    },
+    {
+      "path": "tests/integration/flow/query-activity-history-producer.test.js",
+      "origin": "failed-test-defect",
+      "necessity": "Real Review/Gate/repair producers must retain their original historical verdicts, findings, UTF-8 repair audit, source privacy and reference closure after later publications; read and real CLI must agree without mutating canonical state.",
+      "duplicates": [
+        {
+          "path": "tests/integration/flow/query-spec-review-history-binding.test.js",
+          "assessment": "Binding/refusal matrix differs from the multi-publication historical retention across Review, triage, repair, Gate and recheck."
+        },
+        {
+          "path": "tests/integration/flow/query-draft-review-producer.test.js",
+          "assessment": "Draft historical producer does not cover Spec repair audit and later Gate continuity."
+        }
+      ],
+      "decision": "retain-and-repair",
+      "status": "verified",
+      "repair": "Remove redundant per-scenario package copies and unproved semantic imports. Reuse already immutable parent runtime for the reader and RuntimeChildExecution for the actual CLI, retaining exact snapshot/cursor/response parity. Shared helper has five consumers, all require verification."
+    },
+    {
+      "path": "tests/integration/flow/query-producer-scenario.test.js",
+      "origin": "failed-test-defect",
+      "necessity": "Reloaded query closure must retain the actual Spec Review/repair/Gate producer meaning and disambiguate two Task Gate publications whose Attempt sequences are both one. These are actual saved-source consumer contracts, not duplicate pure query format cases.",
+      "duplicates": [],
+      "decision": "retain-and-use-normal-target-Gate-producer",
+      "status": "verified",
+      "repair": "Use the normal registered Task Gate producer with an explicit Git base, then read its completed typed settlement and receipt after persistence. Retain all original query projection, source closure and task scope assertions.",
+      "repairEvidence": "tests/verification/7227-test-repair/query-task-gate-producer-repair-progress.json"
+    },
+    {
+      "path": "tests/integration/flow/removed-commands.test.js",
+      "origin": "failed-test-defect",
+      "necessity": "Retired command names are not current contracts. Keep representative unknown public-route refusal in E2E.",
+      "duplicates": [
+        {
+          "path": "tests/e2e/dispatchers.test.js",
+          "assessment": "Primary executable routing owner; four replacement unknown-route cases passed. Entire E2E file remains red only on independent help description product defect."
+        }
+      ],
+      "decision": "remove-obsolete-matrix",
+      "status": "verified",
+      "repair": "Delete5legacy-name CLI probes; current representative unknown group/get/set/run tests assert actual exit1, exact typed error code and namespace."
+    },
+    {
+      "path": "tests/integration/flow/reopen-draft-spec-correction.test.js",
+      "origin": "failed-test-defect",
+      "necessity": "Retain all5: completed-Task task-addition route and exact spec-correction guards/evidence coexist with pre-implementation Draft reopening and worker replacement effects.",
+      "duplicates": [
+        {
+          "path": "tests/integration/flow-cli/spec-gate-draft-return-scenario.test.js",
+          "assessment": "Owns Spec Gate returning through questions, saved worker regeneration and Approval, not completed Task addition or these command guards."
+        }
+      ],
+      "decision": "retain-and-repair-fixture",
+      "status": "verified"
+    },
+    {
+      "path": "tests/integration/flow/requirement-test-lifecycle-regressions.test.js",
+      "origin": "failed-test-defect",
+      "necessity": "Proves typed Requirement lifecycle candidate lineage, same-byte input replacement refusal, independent semantic/tooling budgets, atomic Result/receipt/route, partial repair persistence and permission blocking.",
+      "duplicates": [],
+      "decision": "retain-and-repair",
+      "status": "verified",
+      "repair": "Use a real Git checkout and normal Requirement admission, RunReviewCommand with only the external sealed Review worker controlled, and RunRequirementTestGateCommand with a genuinely failing preimplementation candidate. Real execution claims, persisted results, reload, stale replay refusal, collision rejection and three execution labels are retained."
+    },
+    {
+      "path": "tests/integration/flow/retry-recovery-convergence.test.js",
+      "origin": "failed-test-defect",
+      "necessity": "Owns definition-derived active Review identities, exact semantic/tooling retry transitions and operation claims, stale cross-run worker selection refusal before effects, and durable Review recovery identity comparison.",
+      "duplicates": [
+        {
+          "path": "tests/integration/flow/set-retry.test.js",
+          "assessment": "The reset command owns exhausted recovery admission; this target owns lower-level canonical retry/selection authority and pure recovery identity semantics. Preserve its independent outcomes while sharing normal predecessor setup."
+        }
+      ],
+      "decision": "retain-and-repair",
+      "status": "verified",
+      "repair": "Produce the actual Requirement candidate through explicit Approval; authenticate its persisted concrete Result through StepResult.fromStored and its exact typed target receipt. All21 original retry/recovery routes and budget assertions pass."
+    },
+    {
+      "path": "tests/integration/flow/review-process-stop.test.js",
+      "origin": "failed-test-defect",
+      "necessity": "Exact Draft/Spec child stop receipt must survive promotion, fresh repository read and checkout deletion with wrong contract/workUnit/Attempt/repository refusals. Generic Task receipt case protects its separate Task binding.",
+      "duplicates": [
+        {
+          "path": "tests/integration/lib/process-execution-runtime.test.js",
+          "assessment": "Physical runtime receipt coverage does not prove canonical Review promotion and post-checkout readback."
+        }
+      ],
+      "decision": "retain-and-repair",
+      "status": "verified",
+      "repair": "Initialize the real Review child through package bootstrap while keeping managed process and stop receipt real."
+    },
+    {
+      "path": "tests/integration/flow/routing.test.js",
+      "origin": "failed-test-defect",
+      "necessity": "Help/no-command and unknown-route refusal are current process contracts. Legacy status/start/park/parked enumerations need no preservation.",
+      "duplicates": [
+        {
+          "path": "tests/e2e/dispatchers.test.js",
+          "assessment": "Existing public Flow route case strengthened with exact exit/envelope results. Root help description discrepancy is pending independently verified product correction."
+        }
+      ],
+      "decision": "consolidate-in-e2e",
+      "status": "verified",
+      "repair": "Move representative process behavior to primary E2E dispatcher owner; delete6overlapping legacy probes."
+    },
+    {
+      "path": "tests/integration/flow/service-boundary-coverage.test.js",
+      "origin": "failed-test-defect",
+      "necessity": "Runtime A07 must inspect actual Service own descriptors, registered dependency identity and typed constructor arguments for every Draft registration. Static AST checks and isolated type constructors cannot substitute for actual production composition.",
+      "duplicates": [
+        {
+          "path": "tests/structure/draft.test.js",
+          "assessment": "Primary architecture AST checks production registrations and source boundaries; it does not instantiate every Service. This runtime argument/preparation proof remains necessary."
+        },
+        {
+          "path": "tests/integration/flow/spec-service-boundary-coverage.test.js",
+          "assessment": "Same shared checker, different production phase and registration set. Reuse normal Draft producers/claim acquisition rather than copying Spec outcomes or deleting Draft scope."
+        }
+      ],
+      "decision": "retain-and-repair-actual-production-preparation",
+      "status": "verified",
+      "repairEvidence": "tests/verification/7227-test-repair/draft-service-boundary-repair-progress.json"
+    },
+    {
+      "path": "tests/integration/flow/set-auto.test.js",
+      "origin": "failed-test-defect",
+      "necessity": "CLI set-auto must refuse untrusted active canonical authority before provider execution and preserve exact canonical bytes; preparing trusted cache/fallback, persisted Draft Await reselection and policy effects remain distinct current contracts.",
+      "duplicates": [
+        {
+          "path": "tests/integration/flow/set-auto.test.js",
+          "assessment": "Both legacy-cache variations change uncataloged flow.json bytes and reach the same integrity refusal before their different cache contents are consumed. Keep one representative wire/provider/unchanged-evidence case; remove the second input permutation."
+        },
+        {
+          "path": "tests/integration/flow/current-flow-state-foundation.test.js",
+          "assessment": "Owns exact state deserialization/malformed-field decisions; CLI case uniquely composes integrity refusal with public response/provider non-execution and preserved authorities."
+        }
+      ],
+      "decision": "deduplicate-and-repair",
+      "status": "verified",
+      "repair": "Replace retired raw stderr expectation with exact exit1/typed integrity envelope/guidance; retain provider-marker assertion and add byte-exact state/catalog/journal preservation. Reuse shared Git initialization and existing CLI helper; unify identical capturing fixtures."
+    },
+    {
+      "path": "tests/integration/flow/set-retry.test.js",
+      "origin": "failed-test-defect",
+      "necessity": "Owns semantic/tooling retry budgets, unchanged/changed-input exhausted Review recovery, atomic competing retries, exact historical artifact retention and typed baseline/runtime/quiescence refusal across all Review stages.",
+      "duplicates": [
+        {
+          "path": "tests/integration/flow/missing-producer-artifact-recovery.test.js",
+          "assessment": "Missing producer repair has a different admission and does not prove exhausted Review retries, receipt lineage, or preserved prior Review publication."
+        },
+        {
+          "path": "tests/integration/flow/commands/review.test.js",
+          "assessment": "Normal Review execution tests do not cover the retry command, exhausted recovery receipts, or simultaneous recovery contenders."
+        }
+      ],
+      "decision": "retain-and-repair",
+      "status": "verified",
+      "repair": "Prepare the unchanged Review frontier through real asynchronous registered producers in an owned Git fixture; reuse exact same precondition only via immutable CanonicalScenarioSeed clones. All original 57 case assertions retained. Preload actual bootstrap in fresh concurrent processes and join both even on barrier failure. Install the existing process fake only for the intended confirmed timeout while the phase fake is active, then restore it before normal publication."
+    },
+    {
+      "path": "tests/integration/flow/set-step-impl-repair.test.js",
+      "origin": "failed-test-defect",
+      "necessity": "Owns refusal of raw set-step completion for current and non-current definition-owned Impl repair leaves, actual triage/repair source receipts and downstream Test route, legitimate source-linked unexecuted skips, and rejection of a mutable noncanonical manager.",
+      "duplicates": [
+        {
+          "path": "tests/integration/flow-cli/impl-phase-artifact-scenario.test.js",
+          "assessment": "Phase execution alone does not call raw set-step against current/non-current repair leaves or prove no effects at this public command boundary. Keep all four cases."
+        }
+      ],
+      "decision": "retain-and-repair",
+      "status": "verified",
+      "repair": "Replace the invalid synchronous late Flow fixture with the existing actual ImplPhaseScenario reaching triage via a real blocking Review. Reuse this expensive common frontier only as an immutable lazy seed with owned clone per test, shared by the existing triage/repair scenario and non-current completion refusal. Keep every original Result/source receipt/skip/Attempt/snapshot assertion. The noncanonical negative now uses an owned temporary root with cleanup registered before command execution instead of the real worktree root."
+    },
+    {
+      "path": "tests/integration/flow/source-handoff-checkpoint.test.js",
+      "origin": "failed-test-defect",
+      "necessity": "Owns durable Source request/start/seal/accept/rollback checkpoints across genuine child stop, catalog commit points and fresh canonical managers; exact replay/refusal/cross-Task boundaries remain distinct.",
+      "duplicates": [
+        {
+          "path": "tests/integration/flow-cli/impl-phase-artifact-scenario.test.js",
+          "assessment": "Higher I09 cases verify phase consumption and typed Results; Source file additionally owns protocol checkpoint identity, rollback and refusal matrix."
+        }
+      ],
+      "decision": "retain-and-repair",
+      "status": "verified",
+      "repair": "Retain direct busy refusal and unchanged canonical snapshot, then normal exact-target runtime/dispatch ownership reacquisition before canonical Source recovery; old orphan runtime closes and replay stays empty. Public bootstrap and provider admission in both actual child paths retained."
+    },
+    {
+      "path": "tests/integration/flow/source-publication-capture-boundary.test.js",
+      "origin": "failed-test-defect",
+      "necessity": "Owns authenticated capture of the actual original Source save, exact candidate bytes, producer PID/nonce/root/binding and tamper/foreign-root refusal without canonical mutation.",
+      "duplicates": [
+        {
+          "path": "tests/integration/flow-cli/impl-phase-artifact-scenario.test.js",
+          "assessment": "I09 uses authentic capture for interruption recovery but does not replace this explicit capture-boundary tamper matrix."
+        }
+      ],
+      "decision": "retain-and-repair",
+      "status": "verified",
+      "repair": "Bootstrap the real child before recovery/capture; preserve every authenticity, wrong binding and unchanged evidence assertion."
+    },
+    {
+      "path": "tests/integration/flow/spec-gate-command-boundary.test.js",
+      "origin": "failed-test-defect",
+      "necessity": "Distinct command/post/dispatcher boundaries: transaction rollback, direct/dispatch equivalence, stale/wrong artifact or phase refusal, exact protocol failure evidence/failure persistence and save faults. These complement producer and pure Result-selection tests.",
+      "duplicates": [],
+      "decision": "retain-nine-boundary-cases; retire-unreachable-duplicate-retry-case",
+      "status": "verified",
+      "repairEvidence": "tests/verification/7227-test-repair/spec-gate-command-boundary-repair-progress.json"
+    },
+    {
+      "path": "tests/integration/flow/spec-gate-post-failure.test.js",
+      "origin": "failed-test-defect",
+      "necessity": "Durable post failure and forged receipt must remain blocked after reload, status/next-action and dispatcher; both distinct negative contracts retained.",
+      "duplicates": [],
+      "decision": "retain-and-repair-producer",
+      "status": "verified",
+      "repairEvidence": "tests/verification/7227-test-repair/spec-gate-post-failure-repair-progress.json"
+    },
+    {
+      "path": "tests/integration/flow/spec-gate-repair-draft-return.test.js",
+      "origin": "failed-test-defect",
+      "necessity": "Spec Gate decision gaps must carry exact Draft reopen context, retained answered questions, error recovery lineage and bound worker input across actual publication/reload; an altered old answer must be refused without mutation.",
+      "duplicates": [
+        {
+          "path": "tests/integration/flow-cli/spec-artifact-scenario.test.js",
+          "assessment": "Full phase owns fresh regenerated Spec Gate cycles; this focused scenario owns prior answered-question continuity through an accepted Draft Error replacement."
+        }
+      ],
+      "decision": "retain-and-repair",
+      "status": "verified",
+      "repair": "Fork the negative changed-answer proposal from the existing CanonicalScenarioSeed before either replacement worker claim. Each owned root claims one normal request. The valid original root completes its original claimed request instead of inventing another invocation for an unfinished generation. Preserve negative refusal, both protected states, all prior context/receipt/source assertions and positive downstream publication."
+    },
+    {
+      "path": "tests/integration/flow/spec-gate-repair-locale-order.test.js",
+      "origin": "failed-test-defect",
+      "necessity": "Distinct real-process locale boundary for evidence/index/selection/blob identity and claimed checkpoint fresh read; source ownership tests do not vary locale.",
+      "duplicates": [
+        {
+          "path": "tests/integration/flow/spec-gate-repair-sources.test.js",
+          "assessment": "Canonical-only capture and explicit scoped rule contracts supply valid prerequisites; no process-locale permutation there."
+        }
+      ],
+      "decision": "retain-and-repair",
+      "status": "verified",
+      "repair": "Use explicitly saved scoped-rule snapshots and genuine canonical root-rule producer. Retire obsolete implicit code inventory and code-change evidence assumption. Preserve exact context/bundle/snapshot equality and EVIDENCE_CHANGED refusal with unchanged state."
+    },
+    {
+      "path": "tests/integration/flow/spec-gate-repair-recovery.test.js",
+      "origin": "failed-test-defect",
+      "necessity": "Retains public explicit recovery from a genuinely producer-generated historical Error: preview/apply/replay, same candidate into Review, invalid/unchanged refusal, target/digest/rule drift refusal, three atomic rollback points and lost acknowledgement replay.",
+      "duplicates": [
+        {
+          "path": "tests/integration/flow/spec-gate-repair-snapshot-readback.test.js",
+          "assessment": "Ordinary execution checkpoint restore does not cover authorized supersession of a saved historical Error with preview authority, same Error/budget retention and explicit recovery transaction."
+        },
+        {
+          "path": "tests/integration/flow-cli/spec-gate-repair-file-admission.test.js",
+          "assessment": "Current large-input success does not prove genuine historical Error creation or recovery of its saved producer evidence."
+        }
+      ],
+      "decision": "retain-and-repair",
+      "status": "verified",
+      "repair": "Move the unchanged genuine historical Error producer into a fresh child bootstrapped from its isolated copy. Reuse TestTemporaryRoot as borrowed child storage without global parent environment changes; parent receives serialized saved identities only. Keep public Review process fake and all11 original recovery assertions.",
+      "coverageQualification": "Focused extension; original11 full recovery cases separately pass in producer-consumer-repairs-after.json at the same product source revision. No whole extended11 exit0 is inferred."
+    },
+    {
+      "path": "tests/integration/flow/spec-gate-repair-response-boundary.test.js",
+      "origin": "failed-test-defect",
+      "necessity": "Malformed external payload must not obtain a seal or a canonical publication, charge response cost, adopt a Spec or advance to Review; unauthorized current responses remain charged once and refused at semantic adoption.",
+      "duplicates": [
+        {
+          "path": "tests/integration/flow/spec-gate-repair-input-format.test.js",
+          "assessment": "Saved historical progress format refusal differs from rejection of a new malformed external response before sealing."
+        }
+      ],
+      "decision": "retain-and-repair",
+      "status": "verified",
+      "repair": "Expect the retired payload rejection at its current public seal boundary with exact error type/code and absent seal; retain all saved budget, publication, Spec and next-action assertions."
+    },
+    {
+      "path": "tests/integration/flow/spec-gate-repair-snapshot-readback.test.js",
+      "origin": "failed-test-defect",
+      "necessity": "A richer immutable checkpoint must restore exact saved source/rule snapshots, claim its next generation and refuse canonical/scoped rule drift or tampered manifest/blob without budget or persistence changes.",
+      "duplicates": [
+        {
+          "path": "tests/integration/flow/spec-gate-repair-source-identity.test.js",
+          "assessment": "Manifest identity/producer substitution owner; this scenario additionally verifies complete saved research and rule restoration across checkpoint/claim/publication."
+        }
+      ],
+      "decision": "retain-and-repair",
+      "status": "verified",
+      "repair": "Manual typed checkpoint now carries the exact same request-generated execution contract in its progress document and normal checkpoint Store input, matching the production checkpoint writer. No evidence guard bypass."
+    },
+    {
+      "path": "tests/integration/flow/spec-gate-result-settlement.test.js",
+      "origin": "failed-test-defect",
+      "necessity": "Actual selected Gate Result/receipt/publication atomicity, immutable selection refusal, policy stop/observation, corrupt classification refusal and exact replay through reload are distinct from pure Result selection.",
+      "duplicates": [],
+      "decision": "retain8 actual settlement contracts; merge duplicate and replace2 unproducible scenarios",
+      "status": "verified",
+      "repairEvidence": "tests/verification/7227-test-repair/spec-gate-result-settlement-repair-progress.json"
+    },
+    {
+      "path": "tests/integration/flow/stop-guidance-inventory.test.js",
+      "origin": "failed-test-defect",
+      "necessity": "Maintain the checked-in documentation reference for every current production Flow registry leaf, error literal ownership and real output adapter connections, including nested directive authority.",
+      "duplicates": [
+        {
+          "path": "tests/integration/flow/stop-guidance-cli.test.js",
+          "assessment": "Representative real CLI failure paths cannot enumerate all registry leaves/aliases/literal owners; inventory is distinct lexical/reference coverage, not runtime code completeness."
+        }
+      ],
+      "decision": "repair-reference-retain-test",
+      "status": "verified",
+      "repair": "Correct only two source-evidenced stale reference facts in docs/design/flow-stop-guidance/routes.json: CANONICAL_RECORD_UNREADABLE moved from query-details to query-artifact-capture; add existing EXECUTION_RECORD_INCONSISTENT from FLOW_QUERY_ERROR_CODES. Keep derivation and all test assertions unchanged. Prior execution evidence is not edited."
+    },
+    {
+      "path": "tests/integration/flow/task-review-prompt-chunks.test.js",
+      "origin": "failed-test-defect",
+      "necessity": "Complete oversized Task source must be evaluated across map/reduction/final synthesis before one real parent publication; protocol/effect/provider loss must not seal partial evidence and a fresh Attempt must regenerate it.",
+      "duplicates": [
+        {
+          "path": "tests/integration/flow/commands/review.test.js",
+          "assessment": "Generic Review protocol fragments do not prove Task source coverage, reduction effect refusal, no premature canonical publication and fresh-attempt regeneration."
+        }
+      ],
+      "decision": "retain-and-repair",
+      "status": "verified",
+      "repair": "Use real setupFlowConfig/initContainer in an owned root and bind the parent context to that same loaded config. Keep nondeterministic provider and process boundary fakes; all original chunk/source/seal/publication/retry assertions unchanged."
+    },
+    {
+      "path": "tests/integration/flow/task-review-publication-binding.test.js",
+      "origin": "failed-test-defect",
+      "necessity": "Sealed original Task Review cannot authorize another Attempt; exact parent binding, publication, aborted archive and retry/reload guarantees are observable independent contracts.",
+      "duplicates": [
+        {
+          "path": "tests/integration/flow/task-review-stages.test.js",
+          "assessment": "Stage failure race differs from replacing the complete active Attempt before replaying an old sealed result."
+        }
+      ],
+      "decision": "retain-and-repair",
+      "status": "verified",
+      "repair": "Replace incidental message regex with exact execution-contract refusal code at the canonical current-Attempt read; strengthen full protected persistence snapshot equality."
+    },
+    {
+      "path": "tests/integration/flow/task-review-stages.test.js",
+      "origin": "failed-test-defect",
+      "necessity": "Task Review/triage/repair receipts must not publish success after failure or affect a successor; source and finding lineage, no-change and recurring budget remain distinct producer outcomes.",
+      "duplicates": [
+        {
+          "path": "tests/integration/flow/task-review-publication-binding.test.js",
+          "assessment": "This file owns actual final stage selection races, not stale sealed-result replay or aborted archive lifecycle."
+        }
+      ],
+      "decision": "retain-and-repair",
+      "status": "verified",
+      "repair": "Inject failed Attempt only when final typed TaskReviewGateRequiredResult is selected, leaving genuine checkpoint/claim path intact. Source repair now asserts exact typed handoff conflict and unchanged persistence; legitimate catalog conflict is an earlier valid refusal than private message wording."
+    },
+    {
+      "path": "tests/integration/flow/task-stage-frontier-settlement.test.js",
+      "origin": "failed-test-defect",
+      "necessity": "Owns exact acquired successor frontier identity and failure atomicity when a same-kind Result substitutes another Task's completion state.",
+      "duplicates": [
+        {
+          "path": "tests/integration/lib/flow-manager-tasks.test.js",
+          "assessment": "Public Task projection/confirmation does not test forged frontier evidence or settlement save rejection."
+        }
+      ],
+      "decision": "retain-and-repair",
+      "status": "verified",
+      "repair": "Supply missing claimReview adapter required by existing TaskReviewScenario producer; preserve source snapshot, acquired successor, real Result/settlement/writer and atomic refusal assertions."
+    },
+    {
+      "path": "tests/integration/flow/throw-to-envelope-codes.test.js",
+      "origin": "failed-test-defect",
+      "necessity": "Owns public command machine-envelope codes for auto rejection, absent Retro evidence and invalid arguments, including missing Test execution with a saved Test-result Review.",
+      "duplicates": [
+        {
+          "path": "tests/integration/flow/post-hook-flow-scope.test.js",
+          "assessment": "Producer completion scope does not prove the CLI Retro missing-artifact envelope or the specific upstream evidence diagnostic."
+        }
+      ],
+      "decision": "retain-and-repair",
+      "status": "verified",
+      "repair": "Only R2b now creates the declared physical feature branch and uses registered asynchronous predecessors and actual test-result-review publication before deliberately removing test.execute through the existing corruption fixture. Its Requirement is explicitly non-testable so scenario setup has no unrelated external project test prerequisite. Remove the obsolete hand-made attempts payload helper and unused activeStep shortcut. Retain exact TEST_EXECUTE_RESULT_MISSING and message assertions, all other CLI cases unchanged."
+    },
+    {
+      "path": "tests/integration/flow/worker-artifact-handoff.test.js",
+      "origin": "failed-test-defect",
+      "necessity": "Retain all195: request/seal/source mutation/currentness, privacy, immutable claims, safe retention/replay, publication atomicity, provider failure precedence and exact consumed execution evidence have distinct observable contracts.",
+      "duplicates": [
+        {
+          "path": "tests/integration/flow/artifact-worker-prompt-dispatch.test.js",
+          "assessment": "Owns durable prompt adapter/execution accounting; these cases own the resulting parent handoff publication, recovery, failure precedence and canonical readback. Reuse its production protocol rather than faking Prompt proof."
+        }
+      ],
+      "decision": "retain-and-repair-fixture-contracts",
+      "status": "verified",
+      "repairEvidence": "impl-review-accounting-prototype-progress.json"
+    },
+    {
+      "path": "tests/integration/forest-regression/t-a3-no-flat-fallback.test.js",
+      "origin": "failed-test-defect",
+      "necessity": "No independent public contract remains in this file. Its names describe retired findCurrentTask/allTasksDone internals; one case asserts only truthiness and the other bypasses registered producers to reach Finalization.",
+      "duplicates": [
+        {
+          "path": "tests/integration/flow/get-next-action.test.js",
+          "assessment": "resolves a Task worker action through its materialized Step identity checks exact Task/Step/schema/context/canonical frontier; does not attach finalize confirmation to its pending claim proves producer-backed Finalization frontier, explicit claim and public directive."
+        }
+      ],
+      "decision": "delete-superseded-duplicate",
+      "status": "verified",
+      "repair": "Delete the obsolete two-case entry; retain current exact-observable primary routing cases and verify them at the public CLI boundary."
+    },
+    {
+      "path": "tests/integration/lib/active-flow-registry-transaction.test.js",
+      "origin": "failed-test-defect",
+      "necessity": "Owns atomic registry operations and actual second-process add/remove/cleanStale refusal under maintenance. In-process lock tests cannot establish another process obeys the same authority.",
+      "duplicates": [
+        {
+          "path": "tests/integration/lib/dispatcher.test.js",
+          "assessment": "Dispatcher behavior does not test registry atomicity or cross-process maintenance exclusion."
+        }
+      ],
+      "decision": "retain-and-repair",
+      "status": "verified",
+      "repair": "Bootstrap semantic imports in fresh child fixtures, preserving IPC, environment, original outcomes, timeout and assertions."
+    },
+    {
+      "path": "tests/integration/lib/agent-failure-boundaries.test.js",
+      "origin": "failed-test-defect",
+      "necessity": "Preserves typed Agent/Review failure accounting, terminal replay and the unique durable FlowOutboxStore.beginCommand refusal for an already failed operation.",
+      "duplicates": [
+        {
+          "path": "tests/integration/flow/finalization-outbox.test.js",
+          "assessment": "Value-object identity/reopen/ABA tests cannot detect omission of the public durable Store.beginCommand failed-entry guard. Retain this one current Store boundary and all original typed failure cases."
+        }
+      ],
+      "decision": "retain-and-repair",
+      "status": "verified",
+      "repair": "Only the failed outbox precondition becomes an owned Git fixture with meaningful Requirement, normal Task source handoff and actual registered asynchronous producers through finalize-sync. Explicit source file ownership is published at implement. The existing begin/fail/beginCommand exact refusal and unchanged failed entry assertions are retained; no provider or recovery policy source is changed."
+    },
+    {
+      "path": "tests/integration/lib/agent-service.test.js",
+      "origin": "failed-test-defect",
+      "necessity": "Unique builtin family resolution, bounded missing-provider context, asynchronous dry-run, configured default workdir flags/stdin threshold and retry option normalization remain useful.",
+      "duplicates": [
+        {
+          "path": "tests/integration/lib/agent.test.js",
+          "assessment": "Existing basic invocation and profile resolution own default/missing/profile/fallback decisions. Remove four repeated resolution probes and the construction-only reflection case; preserve unique configuration projection and retry normalization here."
+        }
+      ],
+      "decision": "deduplicate-and-repair",
+      "status": "verified",
+      "repair": "Remove obsolete reflective call.length and unsupported timeout prohibition test; await exact empty dry-run result with no provider configured. No product signature change."
+    },
+    {
+      "path": "tests/integration/lib/container-init.test.js",
+      "origin": "failed-test-defect",
+      "necessity": "Container config/null/renderables and runtime path initialization, including actual semantic CLI pre-initialization override scoping, are observable composition contracts.",
+      "duplicates": [
+        {
+          "path": "tests/integration/lib/config.test.js",
+          "assessment": "Owns resolver precedence alone; container retains actual wiring and real fresh-process semantic entry. Duplicate empty-object rejection adds nothing to exact-null assertion and is removed."
+        }
+      ],
+      "decision": "deduplicate-and-repair",
+      "status": "verified",
+      "repair": "Replace regex in old bootstrap module with fresh bootstrapped semantic CLI process and captured actual container path, checking run consumes override and get retains config; shared Git producer setup reused."
+    },
+    {
+      "path": "tests/integration/lib/flow-manager-tasks.test.js",
+      "origin": "failed-test-defect",
+      "necessity": "Owns FlowManager public Task API projection/refusal and completion confirmation, including no duplicate state/catalog/Activity publication and another Task's active selection.",
+      "duplicates": [
+        {
+          "path": "tests/integration/flow/task-stage-frontier-settlement.test.js",
+          "assessment": "Frontier forgery refusal at Store is separate from FlowManager.completeTask read-only public API behavior."
+        }
+      ],
+      "decision": "retain-and-repair",
+      "status": "verified",
+      "repair": "Use existing registered Task implementation and Review producer path, which legitimately completes no-change Task with linked skips; prepare real Git authority and confirm completion without writing. Centralize Review execution in existing CanonicalFlowFixture.produce instead of bypassing it or forcing already-terminal Gate."
+    },
+    {
+      "path": "tests/integration/lib/managed-control-close.test.js",
+      "origin": "failed-test-defect",
+      "necessity": "Owns close/handoff/dead-owner recovery refusal across accepted stop, durable first-failure identity, fixed deadline, contention, fresh read and unchanged repeated stop; retain each distinct terminal/authorization condition.",
+      "duplicates": [
+        {
+          "path": "tests/integration/lib/managed-process.test.js",
+          "assessment": "Managed command success/timeout/receipt tests do not substitute close/admission/recovery failure atomicity and persisted-deadline assertions."
+        }
+      ],
+      "decision": "retain-and-repair",
+      "status": "verified",
+      "repair": "Bootstrap semantic imports in fresh child fixtures, preserving IPC, environment, original outcomes, timeout and assertions."
+    },
+    {
+      "path": "tests/integration/lib/managed-process-direct-birth.test.js",
+      "origin": "failed-test-defect",
+      "necessity": "Immediate direct-provider escape before group enumeration must retain its exact birth, refuse stop proof while live, persist origin and block successor admission.",
+      "duplicates": [
+        {
+          "path": "tests/unit/managed-process-snapshot.test.js",
+          "assessment": "Owns per-observation diagnostic fields; physical direct birth and runtime first-failure provenance are integration-specific."
+        },
+        {
+          "path": "tests/integration/lib/managed-process.test.js",
+          "assessment": "Pinned launcher-origin persistence is a separate deterministic observer path; direct escape admits either independently observed source and compares runtime return to its own first saved diagnostic."
+        }
+      ],
+      "decision": "retain-and-repair",
+      "status": "verified",
+      "repair": "Preserve exact returned-to-runtime diagnostic equality and launcher operation separately; compare identical birth/failure facts across independent observations without assuming both operation origins equal."
+    },
+    {
+      "path": "tests/integration/lib/managed-process-migration.test.js",
+      "origin": "failed-test-defect",
+      "necessity": "Retain real captured descendant before/during enumeration, natural completion, timeout/abort drain and finite stop refusal with durable exact provenance/fresh Envelope.",
+      "duplicates": [
+        {
+          "path": "tests/integration/lib/managed-stop-store.test.js",
+          "assessment": "Owns current shared monotonic stop-deadline contention; no product finite wait-without-stop branch remains."
+        },
+        {
+          "path": "tests/unit/managed-process-snapshot.test.js",
+          "assessment": "Owns survivor diagnostic selection at exhausted stop deadline; retained physical migration refusal composes it."
+        }
+      ],
+      "decision": "remove-retired-case-retain-current-contracts",
+      "status": "verified",
+      "repair": "Remove obsolete wall-clock jump/retired launcher-wait-without-stop case. Current execution deadline starts a shared stop operation and does not promise the obsolete no-signal path. Other five physical lifecycle cases remain unchanged."
+    },
+    {
+      "path": "tests/integration/lib/managed-process.test.js",
+      "origin": "failed-test-defect",
+      "necessity": "Physical managed invocation must retain slot/no receipt after receipt save failure and refuse incomplete durable transaction across public reads and successor admission.",
+      "duplicates": [
+        {
+          "path": "tests/integration/lib/process-execution-runtime.test.js",
+          "assessment": "Primitive owns generic transition failure; managed layer uniquely connects real provider termination, finishCall receipt save refusal, physical retained bytes and public safe refusal."
+        }
+      ],
+      "decision": "retain-and-repair",
+      "status": "verified",
+      "repair": "Read retained physical bytes as uncommitted evidence, preserve original slot/no receipt assertions, and require typed durability refusal through normal read/fresh inspection/admission with byte-exact unchanged marker/registry."
+    },
+    {
+      "path": "tests/integration/lib/process-execution-diagnostics.test.js",
+      "origin": "failed-test-defect",
+      "necessity": "Owns typed stop-failure preservation and secret-free Envelope reconstruction after genuine managed execution, durable registry save and fresh-process read.",
+      "duplicates": [
+        {
+          "path": "tests/integration/lib/process-execution-runtime.test.js",
+          "assessment": "Runtime owner/receipt cases do not assert exact diagnostic/primary-cause Envelope roundtrip or prevent sibling-call failure adoption."
+        }
+      ],
+      "decision": "retain-and-repair",
+      "status": "verified",
+      "repair": "Bootstrap semantic imports in fresh child fixtures, preserving IPC, environment, original outcomes, timeout and assertions."
+    },
+    {
+      "path": "tests/integration/metrics/token-cache-fingerprint.test.js",
+      "origin": "failed-test-defect",
+      "necessity": "Canonical-only content fingerprint invalidation on Flow add/remove and cache reuse is separate from formatting and date extraction.",
+      "duplicates": [
+        {
+          "path": "tests/support/builders/metrics-token.js",
+          "assessment": "All three files reuse one purpose-built canonical producer fixture; retain distinct reader/cache/date outcomes rather than replicating a whole scenario per layer."
+        }
+      ],
+      "decision": "retain-and-repair",
+      "status": "verified",
+      "repair": "Make shared setup async, register the real active target, execute existing registered producers before typed finalization, and await every consumer. Reuse shared Git setup and RuntimeChildExecution to keep actual CLI and parent on the same immutable package. No metric expectation changes."
+    },
+    {
+      "path": "tests/integration/metrics/token-finalized-at.test.js",
+      "origin": "failed-test-defect",
+      "necessity": "Finalization Activity timing, exclusion of active Flow, legacy cache invalidation and matching fingerprint reuse are date/provenance boundaries.",
+      "duplicates": [
+        {
+          "path": "tests/support/builders/metrics-token.js",
+          "assessment": "All three files reuse one purpose-built canonical producer fixture; retain distinct reader/cache/date outcomes rather than replicating a whole scenario per layer."
+        }
+      ],
+      "decision": "retain-and-repair",
+      "status": "verified",
+      "repair": "Make shared setup async, register the real active target, execute existing registered producers before typed finalization, and await every consumer. Reuse shared Git setup and RuntimeChildExecution to keep actual CLI and parent on the same immutable package. No metric expectation changes."
+    },
+    {
+      "path": "tests/integration/metrics/token.test.js",
+      "origin": "failed-test-defect",
+      "necessity": "Public json/text/csv formats and difficulty inputs from canonical Spec/Issue/Activity facts remain current reader contracts.",
+      "duplicates": [
+        {
+          "path": "tests/support/builders/metrics-token.js",
+          "assessment": "All three files reuse one purpose-built canonical producer fixture; retain distinct reader/cache/date outcomes rather than replicating a whole scenario per layer."
+        }
+      ],
+      "decision": "retain-and-repair",
+      "status": "verified",
+      "repair": "Make shared setup async, register the real active target, execute existing registered producers before typed finalization, and await every consumer. Reuse shared Git setup and RuntimeChildExecution to keep actual CLI and parent on the same immutable package. No metric expectation changes."
+    },
+    {
+      "path": "tests/integration/spec-gate-decision-migration.test.js",
+      "origin": "failed-test-defect",
+      "necessity": "Owns authentic retired Spec question migration, exact raw archives and note semantics, selected worktree evidence, root-swap interruption recovery, explicit earlier-version/catalog/worker-claim refusal and post-migration Draft/worker use.",
+      "duplicates": [
+        {
+          "path": "tests/integration/specs-migration.test.js",
+          "assessment": "Generic migration/root-stage recovery is primary there; this target additionally proves the real retired question publication, source archive, note normalization, worktree context and projected Spec/Draft consumer binding. All seven retained."
+        }
+      ],
+      "decision": "retain-and-repair",
+      "status": "verified",
+      "repair": "Compare notes through the existing public FlowActivity restoration/serialization so absent optional legacy fields and current normalized empty fields have the same semantic representation; exact original bytes remain independently asserted in the migration archive. The helper that deliberately authors a different but catalog-consistent artifact and the historical archive-removal fixture now serialize through FlowArtifactCatalog, recomputing its top-level content hash. Keep the separate intentional already-projected corrupt catalog test raw and unchanged. All worker-claim, unchanged-ledger, missing-worktree, progress-budget and archive assertions remain."
+    },
+    {
+      "path": "tests/integration/structure-production-contract.test.js",
+      "origin": "failed-test-defect",
+      "necessity": "Actual copied production Draft/Spec graphs must reject injected architecture violations, recover after restoration and load each phase without importing opposite composition.",
+      "duplicates": [
+        {
+          "path": "tests/structure/recovery-command-contract.test.js",
+          "assessment": "Different recovery routing rules; cannot replace phase isolation, actual production registrations or A10/A11/A12 mutation detection."
+        }
+      ],
+      "decision": "retain-and-repair",
+      "status": "verified",
+      "repair": "Bootstrap the isolated package copy, preserving opposite-phase trap and exact registrations assertions; never bootstrap original checkout for copy."
+    },
+    {
+      "path": "tests/integration/task-decomposition/t4-forest-wiring.test.js",
+      "origin": "failed-test-defect",
+      "necessity": "Canonical Task parent admission, deterministic forest selection and persisted completion propagation through siblings, recursive parents, independent Tasks and an unclaimed next Task remain distinct observable contracts.",
+      "duplicates": [
+        {
+          "path": "tests/integration/task-decomposition/t5-auto-promote.test.js",
+          "assessment": "No-auto-claim completion case is consolidated here; pure promoteNextPending input behavior remains in T5."
+        },
+        {
+          "path": "tests/integration/lib/flow-manager-tasks.test.js",
+          "assessment": "Manager API owns read-only completion confirmation and refusal; T4 retains parent/recursive/flat propagation across actual registered no-change Review."
+        }
+      ],
+      "decision": "retain-and-repair",
+      "status": "verified",
+      "repair": "Replace synchronous invented Review/Gate confirmations with existing activateWithProducers/produce Review under an isolated Git fixture. Passing no-change Review legally completes the Task and its skipped children; completeTask then confirms the saved fact. Expected persisted parent/next/flat states unchanged."
+    },
+    {
+      "path": "tests/integration/task-decomposition/t5-auto-promote.test.js",
+      "origin": "failed-test-defect",
+      "necessity": "Pure Task selection and explicit claim behavior plus real CLI transition from Task to Flow scope must remain correct.",
+      "duplicates": [
+        {
+          "path": "tests/integration/task-decomposition/t4-forest-wiring.test.js",
+          "assessment": "Remove the standalone identical no-auto-claim completion setup; T4 owns that persisted invariant. Artifact-layout ownership remains with flow artifact/location tests."
+        }
+      ],
+      "decision": "retain-and-repair",
+      "status": "verified",
+      "repair": "Real completion prerequisite now uses async TaskLifecycleFixture.createWithProducers and the registered no-change Review. It does not force a Gate already skipped by the selected no-change completion."
+    },
+    {
+      "path": "tests/integration/task-decomposition/t6-step-redesign-and-cli.test.js",
+      "origin": "failed-test-defect",
+      "necessity": "Manual Task commands must resolve explicit/current/just-completed targets, reject early or absent targets, retain pending next Tasks and report parent completion without manufacturing another transition.",
+      "duplicates": [
+        {
+          "path": "tests/integration/task-decomposition/t4-forest-wiring.test.js",
+          "assessment": "Parent rule owned in T4; this case checks command confirmation after the actual Gate and its just-completed Activity. Explicit and implicit command target paths differ."
+        }
+      ],
+      "decision": "retain-and-repair",
+      "status": "verified",
+      "repair": "Shared local completion fixture reuses async TaskLifecycleFixture plus normal Review and Gate producers and real Task source mutations. Keeps the Gate confirmation Activity required by implicit target resolution. Both parented children use the same normal producer sequence. Fix file URL conversion for OS-neutral source paths."
+    },
+    {
+      "path": "tests/structure/recovery-command-contract.test.js",
+      "origin": "failed-test-defect",
+      "necessity": "R01/R02/R03 and caller-side R04 protect structured command identity, canonical revalidation, one shared registry call, hook context and finalization authorization. Retain26architecture cases. Private core dispatch pre/post/Completion implementation layout is not a required architecture contract.",
+      "duplicates": [
+        {
+          "path": "tests/integration/lib/dispatcher.test.js",
+          "assessment": "Primary owner of observable pre/execute/post order. Five new narrow cases cover conditional Completion commit and single response after fallible finalizer; isolated negative controls prepared to prove omitted operations are detected."
+        },
+        {
+          "path": "tests/integration/lib/dispatcher-stop-guidance.test.js",
+          "assessment": "Owns actual final-hook/log/metadata failure retention and final public output order."
+        },
+        {
+          "path": "tests/integration/flow-cli/finalization-cleanup-registered-persistence.test.js",
+          "assessment": "Owns genuine canonical Completion receipt, finalization and altered/missing/foreign response recovery. Prior14pass evidence retained; dispatcher mocks do not replace this authority scenario."
+        }
+      ],
+      "decision": "retain-static-caller-contracts-consolidate-core-behavior-in-runtime-tests",
+      "status": "verified",
+      "repair": "Remove3duplicated/obsolete private-layout mutations and stale core literal search. Keep static registry/hook/authorization checks. Add5observable Completion admission/output cases to existing primary runtime owner."
+    },
+    {
+      "path": "tests/integration/flow/test-headers.test.js",
+      "origin": "unjoined-async-fixture",
+      "necessity": "Owns exact header parsing, filesystem discovery, requirement coverage and assigned-bundle refusal/value contracts. All32 registrations retained.",
+      "duplicates": [
+        {
+          "path": "tests/integration/flow/worker-artifact-handoff.test.js",
+          "assessment": "Consumer composition at line4571; does not duplicate parser/discovery/coverage matrix; retain lower-level owning test."
+        }
+      ],
+      "decision": "retain-and-repair",
+      "status": "verified",
+      "repair": "Await21 fixture callbacks and await before cleanup; preserve all assertions."
+    }
+  ]
+}

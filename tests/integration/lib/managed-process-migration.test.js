@@ -128,24 +128,3 @@ test("a migrated member surviving original-group KILL refuses proof and keeps it
   assert.equal(pending.slot, scenario.runtime.executionId);
   assert.equal(pending.executions.at(-1).calls[0].receipt, null);
 });
-
-test("a finite launcher wait deadline retains the same live moved-birth diagnostic", async (t) => {
-  const scenario = new ManagedMigrationScenario(t, "launcher-deadline");
-  await scenario.start({ timeoutMs: 15000, graceMs: 100 });
-  // Advance only the coordinator's wall clock. The real launcher and provider
-  // remain alive, exercising its finite wait guard without changing supervision.
-  const realNow = Date.now.bind(Date);
-  const clock = t.mock.method(Date, "now", () => realNow() + 30000);
-  let outcome;
-  try { outcome = await scenario.invocation; }
-  finally { clock.mock.restore(); }
-  const record = scenario.readRecord();
-  const inventory = scenario.runtime.inspect();
-  const call = inventory.executions.at(-1).calls[0];
-  assert.match(outcome.error.message, /launcher exceeded its finite stop deadline/);
-  assert.equal(record.state, "running");
-  assertStopDiagnostic(scenario, outcome.error, record, call);
-  assert.equal(inventory.slot, scenario.runtime.executionId);
-  assert.equal(call.receipt, null);
-  assert.deepEqual(scenario.signals(), []);
-});

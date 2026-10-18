@@ -106,6 +106,8 @@ const mutations = [
   ["missing source proof", "accepted.assertOriginalSource({", "accepted.otherMethod({"],
   ["wrong producer binding", "producerBinding = originalReceipt.binding;", "producerBinding = binding;"],
   ["lost lineage", "evidence.lineage.sourceFingerprint !== evidence.source.fingerprint", "false"],
+  ["lost locked source reader","assertCurrentTestSourceRevision(payload, view, undefined, \"test-chain artifact\", (descriptor) => view.readCatalogedArtifact(descriptor));","assertCurrentTestSourceRevision(payload, view);"],
+  ["lost plan reader forwarding","    readCatalogedArtifact,\n",""],
   ["lost raw authentication", "canonicalRawEvidenceFingerprint(raw.bytes) !== payload.rawEvidenceFingerprint", "false"],
   ["stale early return", "if (saved === null) return null;", "if (saved === null) return null; return saved;"],
   ["unchecked execution replay", "selection.receipt.assertCurrent(); return selection.receipt.receipt;", "return selection.receipt.receipt;"],

@@ -486,6 +486,12 @@ describe("artifact human views", () => {
       version: baseline.document.target.version,
     });
     assert.equal(baselineFullFingerprint.inputs.registry.logicalKey, "acceptance.review");
+    const priorDocument = new ArtifactViewDocument({ ...baseline.document,
+      entry: new ArtifactViewRegistryEntry({ ...baseline.document.entry, rendererRevision: "1" }) });
+    const priorView = new ArtifactFullViewRenderer({ config: { lang: baseline.language } }).render(priorDocument);
+    assert.equal(priorView.markdown, baseline.markdown, "this comparison changes only the declared renderer revision");
+    assert.notEqual(new ArtifactFullViewFingerprint({ fullView: priorView }).toString(), baselineFullFingerprint.toString(),
+      "old Acceptance render fingerprints must not reuse stale full or summary caches");
     const originalFingerprint = baselineFullFingerprint.toString();
     assert.throws(
       () => baselineFullFingerprint.inputs.registry.dependencies.push({ logicalKey: "unapproved.record", required: true }),
@@ -501,10 +507,14 @@ describe("artifact human views", () => {
       [{ target: "tests/a.test.js", requiredChange: "Add regression coverage", improvement: "Name the boundary", whyNonBlocking: "It is advisory" }, ["tests/a.test.js", "Add regression coverage", "Name the boundary", "It is advisory"]],
       [{ title: "Draft finding", target: "scope", rationale: "The draft lacks a decision", evidence: "draft.json" }, ["Draft finding", "scope", "The draft lacks a decision", "draft.json"]],
       [{ guardrail_id: "GR-1", target: "src/gate.js", where: "line 12", why_violates: "Breaks the guardrail", ignoredManagement: { hash: "not for people" } }, ["GR-1", "src/gate.js", "line 12", "Breaks the guardrail"]],
+      [{ observed: "The required branch is absent.", where: { file: "spec.json", locator: "requirements.R1.desc" }, severity: "blocking", failureMode: "guardrail-violation", refs: ["GR-SPEC"], ignoredManagement: { observed: "internal-only" } }, ["The required branch is absent.", "spec.json", "requirements.R1.desc", "GR-SPEC"]],
     ];
     for (const [finding, expected] of cases) {
-      const markdown = new ArtifactViewFindingDetail(finding).toMarkdown(localizer);
+      const detail = new ArtifactViewFindingDetail(finding);
+      const markdown = detail.toMarkdown(localizer);
       for (const text of expected) assert.match(markdown, new RegExp(text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+      for (const text of expected) assert.ok(detail.sourceText().includes(text));
+      assert.equal(markdown.includes("internal-only"), false);
       assert.equal(markdown.includes("ignoredManagement"), false);
       assert.equal(markdown.includes("hash"), false);
     }

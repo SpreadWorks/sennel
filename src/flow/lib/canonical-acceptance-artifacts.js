@@ -29,6 +29,7 @@ import {
   attachCanonicalCommandResultPublications,
 } from "./canonical-command-result.js";
 import { CanonicalFlowFindingsStore, FlowFindingsArtifact } from "./flow-findings.js";
+import { readFlowReviewSemanticHandoff } from "./flow-review-semantic-handoff.js";
 import { collectUntrackedDiff } from "./run-gate.js";
 import { matchUpgradeRequiredSourcePaths, validateCanonicalUpgradeEvidence } from "./test-artifacts.js";
 import { ReviewFindingCycle } from "./finding-disposition-policy.js";
@@ -392,7 +393,11 @@ export class CanonicalAcceptanceArtifactStore {
     if (inputs["test.result.review"]?.verdict !== "pass") {
       blocker(blockers, "failed_tests", "Test-result-review evidence is not passing.");
     }
-    if (!["PASS", "ADVISORY"].includes(inputs["impl.review"]?.verdict)) {
+    const reviewAccepted = ["PASS", "ADVISORY"].includes(inputs["impl.review"]?.verdict)
+      || inputs["impl.review"]?.verdict === "REJECTED"
+        && readFlowReviewSemanticHandoff({ flowManager: this.flowManager,
+          state: this.state, consumerNodeId: this.nodeId }) !== null;
+    if (!reviewAccepted) {
       blocker(blockers, "failed_review", "Implementation review evidence is not passing.");
     }
     const implGate = inputs["impl.gate"] === null ? null : currentGateEvidence(inputs["impl.gate"]);

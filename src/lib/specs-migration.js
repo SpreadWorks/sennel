@@ -3402,9 +3402,9 @@ export class CanonicalRevisionRootTransaction {
     let journaled = false;
     try {
       this.#materialize(stageContainer, plans);
+      this.#validateRoot(stage, stageContainer);
       const stageIdentity = directoryIdentity(stage, "canonical revision staging root");
       const stageHash = treeFingerprint(stage);
-      this.#validateRoot(stage, stageContainer);
       if (treeFingerprint(this.specDirectory) !== sourceHash) throw new LegacyFlowMigrationError("SOURCE_CHANGED", "canonical spec root changed during revision migration");
       new AtomicJsonFile(this.journalPath).write({
         schemaRevision: JOURNAL_SCHEMA_REVISION, component: JOURNAL_COMPONENT, revision: REVISION,

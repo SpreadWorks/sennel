@@ -22,12 +22,15 @@ import {
   GitPorcelainV2Status,
   GitPorcelainV2StatusError,
   getPorcelainV2Status,
+  getWorktreeStatus,
+  listChangedFilesDetailed,
   runGit,
 } from "../../../src/lib/git-helpers.js";
 import { runCmd } from "../../../src/lib/process.js";
 import { Logger } from "../../../src/lib/log.js";
 import { container } from "../../../src/lib/container.js";
 import { todayLocal, readJsonl } from "../../support/infrastructure/log-fixtures.js";
+import { FlowRepositoryRuntimeArtifactRegistry } from "../../../src/flow/lib/flow-repository-runtime-artifacts.js";
 
 function initRepo(dir) {
   runCmd("git", ["init", "-q", "-b", "main", dir]);
@@ -204,6 +207,254 @@ describe("runCmd no longer logs git commands", () => {
   });
 });
 
+describe("getWorktreeStatus pathspec exclusions", () => {
+  let tmpDir;
+
+  beforeEach(() => {
+    tmpDir = createTestDirectory("worktree-status-excludes-");
+    initRepo(tmpDir);
+    container.reset();
+    fs.mkdirSync(path.join(tmpDir, ".sennel"));
+    fs.writeFileSync(path.join(tmpDir, ".sennel", "config.json"), "{}\n");
+    const added = runGit(["add", ".sennel/config.json"], { cwd: tmpDir });
+    assert.equal(added.ok, true, added.stderr);
+    const committed = runGit(["commit", "-q", "-m", "Track project config"], { cwd: tmpDir });
+    assert.equal(committed.ok, true, committed.stderr);
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+    container.reset();
+  });
+
+  it("excludes owned runtime while retaining tracked, untracked, similar-name and non-ASCII user changes", () => {
+    const runtime = path.join(tmpDir, ".sennel", "process-runtime");
+    fs.mkdirSync(runtime, { recursive: true });
+    fs.writeFileSync(path.join(runtime, "runtime.json"), "{}\n");
+    const options = { pathspecExcludes: new FlowRepositoryRuntimeArtifactRegistry().gitPathspecExcludes() };
+    assert.equal(getWorktreeStatus(tmpDir).dirty, true,
+      "ordinary status consumers must continue observing runtime changes");
+    assert.deepEqual(getWorktreeStatus(tmpDir, options), { dirty: false, dirtyFiles: [] });
+
+    const configured = runGit(["config", "core.quotePath", "false"], { cwd: tmpDir });
+    assert.equal(configured.ok, true, configured.stderr);
+    fs.appendFileSync(path.join(tmpDir, "README.md"), "user edit\n");
+    const lookalike = path.join(tmpDir, ".sennel", "process-runtime-lookalike");
+    fs.mkdirSync(lookalike);
+    fs.writeFileSync(path.join(lookalike, "user.txt"), "user content\n");
+    fs.writeFileSync(path.join(tmpDir, "資料 file.txt"), "user content\n");
+    const status = getWorktreeStatus(tmpDir, options);
+    assert.equal(status.dirty, true);
+    assert.equal(status.dirtyFiles.length, 3);
+    assert.match(status.dirtyFiles.join("\n"), /M README\.md/);
+    assert.ok(status.dirtyFiles.includes("?? .sennel/process-runtime-lookalike/"));
+    assert.ok(status.dirtyFiles.includes('?? "資料 file.txt"'));
+  });
+
+  it("retains a user rename across an excluded runtime boundary", () => {
+    const runtime = path.join(tmpDir, ".sennel", "process-runtime");
+    fs.mkdirSync(runtime, { recursive: true });
+    const moved = runGit(["mv", "README.md", ".sennel/process-runtime/user-moved.md"], { cwd: tmpDir });
+    assert.equal(moved.ok, true, moved.stderr);
+    const status = getWorktreeStatus(tmpDir, {
+      pathspecExcludes: new FlowRepositoryRuntimeArtifactRegistry().gitPathspecExcludes(),
+    });
+    assert.equal(status.dirty, true);
+    assert.equal(status.dirtyFiles.length, 1);
+    assert.match(status.dirtyFiles[0], /README\.md/,
+      "moving user content into a runtime directory must retain its user-side deletion");
+  });
+
+  it("preserves parent and sibling user changes from a subdirectory while excluding owned runtime", () => {
+    const cwd = path.join(tmpDir, "packages", "app");
+    const sibling = path.join(tmpDir, "packages", "sibling");
+    fs.mkdirSync(cwd, { recursive: true });
+    fs.mkdirSync(sibling);
+    fs.writeFileSync(path.join(cwd, "README.md"), "app seed\n");
+    fs.writeFileSync(path.join(sibling, "README.md"), "sibling seed\n");
+    const added = runGit(["add", "packages"], { cwd: tmpDir });
+    assert.equal(added.ok, true, added.stderr);
+    const committed = runGit(["commit", "-q", "-m", "Track nested projects"], { cwd: tmpDir });
+    assert.equal(committed.ok, true, committed.stderr);
+    const configured = runGit(["config", "status.relativePaths", "true"], { cwd: tmpDir });
+    assert.equal(configured.ok, true, configured.stderr);
+
+    const runtime = path.join(tmpDir, ".sennel", "process-runtime");
+    fs.mkdirSync(runtime);
+    fs.writeFileSync(path.join(runtime, "runtime.json"), "{}\n");
+    const options = { pathspecExcludes: new FlowRepositoryRuntimeArtifactRegistry().gitPathspecExcludes() };
+    assert.equal(getWorktreeStatus(cwd).dirty, true);
+    assert.deepEqual(getWorktreeStatus(cwd, options), { dirty: false, dirtyFiles: [] },
+      "repository-root runtime ownership must still apply from a nested cwd");
+
+    fs.appendFileSync(path.join(tmpDir, "README.md"), "parent edit\n");
+    fs.appendFileSync(path.join(sibling, "README.md"), "sibling edit\n");
+    fs.writeFileSync(path.join(tmpDir, "parent-untracked.txt"), "parent content\n");
+    fs.writeFileSync(path.join(sibling, "untracked.txt"), "sibling content\n");
+    const ordinary = getWorktreeStatus(cwd);
+    const excluded = getWorktreeStatus(cwd, options);
+    assert.equal(ordinary.dirty, true);
+    assert.equal(excluded.dirty, true,
+      "runtime exclusions must preserve the ordinary repository-wide observation scope");
+    assert.equal(ordinary.dirtyFiles.length, 5);
+    assert.equal(excluded.dirtyFiles.length, 4);
+    for (const relativePath of ["../../README.md", "../sibling/README.md",
+      "../../parent-untracked.txt", "../sibling/untracked.txt"]) {
+      assert.ok(ordinary.dirtyFiles.some((line) => line.endsWith(` ${relativePath}`)), relativePath);
+      assert.ok(excluded.dirtyFiles.some((line) => line.endsWith(` ${relativePath}`)), relativePath);
+    }
+  });
+
+  it("distinguishes cwd-relative runtime ownership from Git-root ownership while preserving outside user changes", () => {
+    const cwd = path.join(tmpDir, "packages", "app");
+    const sibling = path.join(tmpDir, "packages", "sibling");
+    fs.mkdirSync(path.join(cwd, ".sennel"), { recursive: true });
+    fs.mkdirSync(sibling);
+    fs.writeFileSync(path.join(cwd, ".sennel", "config.json"), "{}\n");
+    fs.writeFileSync(path.join(sibling, "README.md"), "sibling seed\n");
+    const added = runGit(["add", "packages"], { cwd: tmpDir });
+    assert.equal(added.ok, true, added.stderr);
+    const committed = runGit(["commit", "-q", "-m", "Track configured nested project"], { cwd: tmpDir });
+    assert.equal(committed.ok, true, committed.stderr);
+    const configured = runGit(["config", "status.relativePaths", "true"], { cwd: tmpDir });
+    assert.equal(configured.ok, true, configured.stderr);
+
+    fs.mkdirSync(path.join(cwd, ".sennel", "process-runtime"));
+    fs.writeFileSync(path.join(cwd, ".sennel", "process-runtime", "runtime.json"), "{}\n");
+    fs.writeFileSync(path.join(cwd, ".sennel", ".repository-flow-operation.lock"), "owned lock fixture\n");
+    const registry = new FlowRepositoryRuntimeArtifactRegistry();
+    const projectOptions = { pathspecExcludes: registry.gitPathspecExcludes({ relativeToCwd: true }) };
+    const repositoryOptions = { pathspecExcludes: registry.gitPathspecExcludes() };
+    assert.equal(getWorktreeStatus(cwd, repositoryOptions).dirty, true,
+      "the default Git-root authority must not own a nested project's runtime");
+    assert.deepEqual(getWorktreeStatus(cwd, projectOptions), { dirty: false, dirtyFiles: [] },
+      "the configured project's runtime and operation lock must be excluded from its cwd");
+
+    fs.mkdirSync(path.join(tmpDir, ".sennel", "process-runtime"));
+    fs.writeFileSync(path.join(tmpDir, ".sennel", "process-runtime", "runtime.json"), "{}\n");
+    const projectRuntimeOnly = getWorktreeStatus(cwd, projectOptions);
+    assert.equal(projectRuntimeOnly.dirty, true);
+    assert.deepEqual(projectRuntimeOnly.dirtyFiles, ["?? ../../.sennel/process-runtime/"],
+      "cwd-relative ownership must leave another project's Git-root runtime visible");
+    const repositoryRuntimeOnly = getWorktreeStatus(cwd, repositoryOptions);
+    assert.equal(repositoryRuntimeOnly.dirty, true);
+    assert.equal(repositoryRuntimeOnly.dirtyFiles.length, 2);
+    assert.ok(repositoryRuntimeOnly.dirtyFiles.includes("?? .sennel/process-runtime/"));
+    assert.ok(repositoryRuntimeOnly.dirtyFiles.includes("?? .sennel/.repository-flow-operation.lock"));
+
+    fs.appendFileSync(path.join(tmpDir, "README.md"), "parent edit\n");
+    fs.writeFileSync(path.join(sibling, "untracked.txt"), "sibling content\n");
+    for (const options of [projectOptions, repositoryOptions]) {
+      const status = getWorktreeStatus(cwd, options);
+      assert.equal(status.dirty, true);
+      assert.ok(status.dirtyFiles.some((line) => line.endsWith(" ../../README.md")));
+      assert.ok(status.dirtyFiles.includes("?? ../sibling/untracked.txt"));
+    }
+  });
+});
+
+describe("listChangedFilesDetailed pathspec exclusions", () => {
+  let tmpDir;
+  let runtime;
+  let pathspecExcludes;
+
+  beforeEach(() => {
+    tmpDir = createTestDirectory("changed-files-excludes-");
+    initRepo(tmpDir);
+    container.reset();
+    runtime = path.join(tmpDir, ".sennel", "process-runtime");
+    fs.mkdirSync(runtime, { recursive: true });
+    pathspecExcludes = new FlowRepositoryRuntimeArtifactRegistry().gitPathspecExcludes();
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+    container.reset();
+  });
+
+  it("filters owned tracked, committed and untracked runtime while retaining every user change", () => {
+    fs.writeFileSync(path.join(runtime, "registry.json"), "baseline\n");
+    assert.equal(runGit(["add", ".sennel/process-runtime/registry.json"], { cwd: tmpDir }).ok, true);
+    assert.equal(runGit(["commit", "-q", "-m", "Track runtime baseline"], { cwd: tmpDir }).ok, true);
+    assert.equal(runGit(["branch", "regression-base"], { cwd: tmpDir }).ok, true);
+    fs.writeFileSync(path.join(runtime, "registry.json"), "committed update\n");
+    fs.writeFileSync(path.join(runtime, "committed.json"), "committed runtime\n");
+    fs.writeFileSync(path.join(tmpDir, "committed-user.js"), "export const user = true;\n");
+    assert.equal(runGit(["add", ".sennel/process-runtime", "committed-user.js"], { cwd: tmpDir }).ok, true);
+    assert.equal(runGit(["commit", "-q", "-m", "Record runtime and user changes"], { cwd: tmpDir }).ok, true);
+    fs.appendFileSync(path.join(runtime, "registry.json"), "working update\n");
+    fs.writeFileSync(path.join(runtime, "untracked.json"), "untracked runtime\n");
+    fs.appendFileSync(path.join(tmpDir, "README.md"), "tracked user update\n");
+    fs.mkdirSync(path.join(tmpDir, ".sennel", "process-runtime-lookalike"));
+    fs.writeFileSync(path.join(tmpDir, ".sennel", "process-runtime-lookalike", "user.txt"), "user content\n");
+    fs.writeFileSync(path.join(tmpDir, "資料 file.txt"), "user content\n");
+    assert.equal(runGit(["config", "core.quotePath", "false"], { cwd: tmpDir }).ok, true);
+    const options = { cwd: tmpDir, baseBranch: "regression-base", untrackedFiles: "all" };
+    const ordinary = listChangedFilesDetailed(options);
+    assert.ok(ordinary.some((entry) => entry.path.startsWith(".sennel/process-runtime/")),
+      "ordinary observers must retain runtime changes");
+    const selected = listChangedFilesDetailed({ ...options, pathspecExcludes });
+    assert.deepEqual(new Map(selected.map(({ path, status }) => [path, status])), new Map([
+      [".sennel/process-runtime-lookalike/user.txt", "untracked"],
+      ["committed-user.js", "added"], ["README.md", "modified"], ["資料 file.txt", "untracked"],
+    ]));
+  });
+
+  it("applies runtime ownership before the changed-file bound without changing the default observer", () => {
+    for (const name of ["owner.lock", "registry.json", "call.json"]) fs.writeFileSync(path.join(runtime, name), "runtime\n");
+    fs.appendFileSync(path.join(tmpDir, "README.md"), "user change\n");
+    const options = { cwd: tmpDir, untrackedFiles: "all", maxChangedFileEntries: 1 };
+    assert.throws(() => listChangedFilesDetailed(options), /returned .* entries/);
+    assert.deepEqual(listChangedFilesDetailed({ ...options, pathspecExcludes }), [
+      { path: "README.md", status: "modified" },
+    ]);
+  });
+
+  for (const committed of [false, true]) {
+    it(`retains the user-side deletion of a ${committed ? "committed" : "staged"} rename into runtime`, () => {
+      assert.equal(runGit(["branch", "rename-base"], { cwd: tmpDir }).ok, true);
+      assert.equal(runGit(["mv", "README.md", ".sennel/process-runtime/user-moved.md"], { cwd: tmpDir }).ok, true);
+      if (committed) assert.equal(runGit(["commit", "-q", "-m", "Move user content"], { cwd: tmpDir }).ok, true);
+      const options = { cwd: tmpDir, ...(committed ? { baseBranch: "rename-base" } : {}) };
+      assert.ok(listChangedFilesDetailed(options).some((entry) => entry.status === "renamed" && entry.old_path === "README.md"));
+      assert.deepEqual(listChangedFilesDetailed({ ...options, pathspecExcludes }), [
+        { path: "README.md", status: "deleted" },
+      ]);
+    });
+  }
+
+  it("preserves parent and sibling scope from a nested cwd while excluding Git-root runtime", () => {
+    const cwd = path.join(tmpDir, "packages", "app");
+    const sibling = path.join(tmpDir, "packages", "sibling");
+    fs.mkdirSync(cwd, { recursive: true });
+    fs.mkdirSync(sibling);
+    fs.writeFileSync(path.join(cwd, "README.md"), "app baseline\n");
+    fs.writeFileSync(path.join(sibling, "README.md"), "sibling baseline\n");
+    assert.equal(runGit(["add", "packages"], { cwd: tmpDir }).ok, true);
+    assert.equal(runGit(["commit", "-q", "-m", "Track nested projects"], { cwd: tmpDir }).ok, true);
+    assert.equal(runGit(["config", "status.relativePaths", "true"], { cwd: tmpDir }).ok, true);
+    fs.appendFileSync(path.join(tmpDir, "README.md"), "parent edit\n");
+    fs.appendFileSync(path.join(sibling, "README.md"), "sibling edit\n");
+    fs.writeFileSync(path.join(runtime, "runtime.json"), "runtime\n");
+    const ordinary = listChangedFilesDetailed({ cwd, untrackedFiles: "all" });
+    const selected = listChangedFilesDetailed({ cwd, untrackedFiles: "all", pathspecExcludes });
+    assert.deepEqual(new Set(selected.map((entry) => entry.path)), new Set(["README.md", "packages/sibling/README.md"]));
+    assert.ok(ordinary.some((entry) => entry.path === ".sennel/process-runtime/runtime.json"));
+  });
+
+  it("uses the explicit project-relative ownership scope without hiding another project's runtime", () => {
+    const cwd = path.join(tmpDir, "packages", "app");
+    const owned = path.join(cwd, ".sennel", "process-runtime");
+    fs.mkdirSync(owned, { recursive: true });
+    fs.writeFileSync(path.join(owned, "runtime.json"), "project runtime\n");
+    fs.writeFileSync(path.join(runtime, "runtime.json"), "other project runtime\n");
+    fs.appendFileSync(path.join(tmpDir, "README.md"), "parent user change\n");
+    const projectExcludes = new FlowRepositoryRuntimeArtifactRegistry().gitPathspecExcludes({ relativeToCwd: true });
+    const selected = listChangedFilesDetailed({ cwd, untrackedFiles: "all", pathspecExcludes: projectExcludes });
+    assert.deepEqual(new Set(selected.map((entry) => entry.path)), new Set(["README.md", ".sennel/process-runtime/runtime.json"]));
+  });
+});
+
 describe("Git porcelain v2 difference authority", () => {
   let tmpDir;
 
@@ -242,6 +493,50 @@ describe("Git porcelain v2 difference authority", () => {
     assert.equal(status.entries.find((entry) => entry.path === deleted).worktreeMode, 0);
     assert.equal(status.entries.find((entry) => entry.path === typeChanged).worktreeMode, 0o120000);
     assert.equal(status.entries.find((entry) => entry.path === special).kind, "untracked");
+  });
+
+  it("supports scoped typed status with detected file modes while preserving the raw index and default arguments", async () => {
+    runCmd("git", ["-C", tmpDir, "config", "core.fileMode", "false"]);
+    const stagedPath = "staged source.json";
+    fs.writeFileSync(path.join(tmpDir, stagedPath), "independent staged blob\n");
+    runCmd("git", ["-C", tmpDir, "add", "--", stagedPath]);
+    fs.writeFileSync(path.join(tmpDir, stagedPath), "authentic working bytes\n");
+    fs.writeFileSync(path.join(tmpDir, "README.md"), "parent user edit\n");
+    const cwd = path.join(tmpDir, "packages", "app");
+    fs.mkdirSync(cwd, { recursive: true });
+    fs.mkdirSync(path.join(tmpDir, "packages", "sibling"), { recursive: true });
+    const siblingPath = "packages/sibling/user 日本語.txt";
+    fs.writeFileSync(path.join(tmpDir, siblingPath), "sibling user input\n");
+    const runtimePath = ".sennel/process-runtime/owned.json";
+    fs.mkdirSync(path.dirname(path.join(tmpDir, runtimePath)), { recursive: true });
+    fs.writeFileSync(path.join(tmpDir, runtimePath), "{}\n");
+    const logger = registerLogger(path.join(tmpDir, "logs"));
+    const indexPath = path.resolve(tmpDir, runGit(["rev-parse", "--git-path", "index"], { cwd: tmpDir }).stdout.trim());
+    const indexBytes = fs.readFileSync(indexPath);
+    const pathspecs = [...new FlowRepositoryRuntimeArtifactRegistry().gitPathspecExcludes()];
+
+    const status = getPorcelainV2Status(cwd, { pathspecs, forceFileMode: false });
+    assert.ok(status instanceof GitPorcelainV2Status);
+    assert.ok(status.pathSet.toArray().includes("README.md"));
+    assert.ok(status.pathSet.toArray().includes(siblingPath));
+    assert.equal(status.pathSet.toArray().includes(runtimePath), false);
+    assert.equal(status.entries.find((entry) => entry.path === siblingPath).kind, "untracked");
+    assert.equal(status.entries.find((entry) => entry.path === stagedPath).kind, "ordinary");
+    const selected = getPorcelainV2Status(tmpDir, { pathspecs: ["README.md"], forceFileMode: false });
+    assert.deepEqual(selected.pathSet.toArray(), ["README.md"]);
+    getPorcelainV2Status(tmpDir);
+    assert.deepEqual(fs.readFileSync(indexPath), indexBytes, "all status queries must leave the raw index unchanged");
+
+    await logger.flush();
+    const commands = readJsonl(path.join(tmpDir, "logs", `sennel-${todayLocal()}.jsonl`))
+      .filter((entry) => entry.type === "git" && entry.cmd.includes("--porcelain=v2"))
+      .map((entry) => entry.cmd);
+    const common = ["git", "--no-optional-locks", "status", "--porcelain=v2", "-z", "--untracked-files=all", "--no-renames"];
+    assert.deepEqual(commands, [
+      [...common, "--", ...pathspecs],
+      [...common, "--", "README.md"],
+      ["git", "--no-optional-locks", "-c", "core.fileMode=true", ...common.slice(2)],
+    ]);
   });
 
   it("forces executable-bit observation when repository core.fileMode is false", () => {

@@ -835,6 +835,63 @@ describe("dispatcher (unified runner)", () => {
       }
     });
 
+    for (const [outcome, expectedCalls, expectedExit] of [
+      ["success", ["pre", "execute", "post", "commit", "stdout"], 0],
+      ["pre-failure", ["pre", "stdout"], 1],
+      ["command-failure", ["pre", "execute", "stdout"], 1],
+      ["returned-failure", ["pre", "execute", "stdout"], 1],
+      ["commit-failure", ["pre", "execute", "post", "commit", "stdout"], 1],
+    ]) {
+      it(`cleanup Completion publication: ${outcome} settles before its sole public response`, async (t) => {
+        const root = createTestDirectory("dispatcher-completion-");
+        t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+        container.register("root", root);
+        container.register("paths", { root, agentWorkDir: path.join(root, ".tmp") });
+        const calls = [];
+        class Cmd extends Command {
+          static outputMode = "envelope";
+          execute() {
+            calls.push("execute");
+            if (outcome === "command-failure") throw new Error("Command refused before completion.");
+            if (outcome === "returned-failure") return Envelope.fail("run", "finalize-cleanup",
+              "FIXTURE_REFUSED", "Command refused before completion.");
+            return { status: "done" };
+          }
+        }
+        const entry = {
+          command: async () => ({ default: Cmd,
+            commitFinalizeCleanupPostCommandMetadata() {
+              calls.push("commit");
+              if (outcome === "commit-failure") throw new Error("Completion could not be committed.");
+            },
+          }),
+          args: { options: [] },
+          requiresFlow: false,
+          pre() {
+            calls.push("pre");
+            if (outcome === "pre-failure") throw new Error("Precondition refused before execution.");
+          },
+          post() { calls.push("post"); },
+        };
+        const output = [];
+        let exitCode = 0;
+        await dispatch({ container, entry, argv: [], envelopeType: "run", envelopeKey: "finalize-cleanup",
+          runtimeLog: false,
+          buildHookCtx: () => ({ root, specId: "completion-fixture", flowState: { runId: "completion-run" }, flowManager: {} }),
+          stdout(text) { calls.push("stdout"); output.push(text); },
+          stderr() {},
+          setExitCode(code) { exitCode = code; },
+        });
+        assert.deepEqual(calls, expectedCalls);
+        assert.equal(output.length, 1, "a fallible finalizer cannot follow an earlier success response");
+        assert.equal(exitCode, expectedExit);
+        const envelope = JSON.parse(output[0]);
+        assert.equal(envelope.ok, expectedExit === 0);
+        if (outcome === "returned-failure") assert.equal(envelope.errors[0].code, "FIXTURE_REFUSED");
+        if (outcome === "commit-failure") assert.ok(envelope.errors.some((error) => error.code === "FINALIZE_COMPLETION_COMMIT_FAILED"));
+      });
+    }
+
     it("raw mode lets the command write stdout itself", async () => {
       class Cmd extends Command {
         static outputMode = "raw";

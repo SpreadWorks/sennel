@@ -33,6 +33,65 @@ export class ImplReviewMeaning {
   }
 }
 
+/** Semantic rejection classified once from its acquired budget and handoff evidence. */
+export class ImplReviewRejectionMeaning {
+  constructor({ attempts, maximum, deferrable }) {
+    if (!Number.isSafeInteger(attempts) || attempts < 0
+      || !Number.isSafeInteger(maximum) || maximum < 1 || typeof deferrable !== "boolean") {
+      throw new TypeError("Implementation Review rejection requires its observed count, limit and source availability");
+    }
+    this.attempts = attempts;
+    this.maximum = maximum;
+    this.value = attempts < maximum ? "rejected" : deferrable ? "deferrable" : "exhausted";
+    Object.freeze(this);
+  }
+}
+
+/** Exact semantic observation selected for an exhausted Acceptance handoff. */
+export class ImplReviewDeferral {
+  constructor({ attempts, maximum, fingerprints }) {
+    if (!Number.isSafeInteger(attempts) || !Number.isSafeInteger(maximum) || maximum < 1 || attempts < maximum
+      || !Array.isArray(fingerprints) || fingerprints.length === 0
+      || fingerprints.some(value => typeof value !== "string" || !/^[a-f0-9]{64}$/.test(value))
+      || new Set(fingerprints).size !== fingerprints.length) throw new TypeError("Implementation Review deferral needs exhausted semantic observations and exact fingerprints");
+    this.attempts = attempts;
+    this.maximum = maximum;
+    this.fingerprints = Object.freeze([...fingerprints]);
+    Object.freeze(this);
+  }
+  assertEvidence(evidence) {
+    if (!(evidence instanceof ImplReviewResultEvidence) || evidence.review?.disposition.value !== "REJECTED"
+      || this.attempts !== evidence.retry.used + 1 || this.maximum !== evidence.retry.maximum) {
+      throw new TypeError("Implementation Review deferral differs from its actual semantic observation");
+    }
+    const expected = evidence.review.disposition.blockingFindings
+      .filter(finding => ["must-fix", "deferred"].includes(finding.disposition)).map(finding => finding.fingerprint);
+    if (JSON.stringify(this.fingerprints) !== JSON.stringify(expected)) {
+      throw new TypeError("Implementation Review deferral differs from its canonical finding identities");
+    }
+  }
+  toJSON() { return { attempts: this.attempts, maximum: this.maximum, fingerprints: [...this.fingerprints] }; }
+  static fromJSON(value) { return new ImplReviewDeferral(value); }
+}
+
+/** Exhaustion whose source cannot supply a valid semantic handoff. */
+export class ImplReviewExhaustion {
+  constructor({ attempts, maximum, reason }) {
+    if (!Number.isSafeInteger(attempts) || !Number.isSafeInteger(maximum) || maximum < 1 || attempts < maximum
+      || typeof reason !== "string" || reason.trim() === "") throw new TypeError("Implementation Review exhaustion requires its count and invalid source reason");
+    Object.assign(this, { attempts, maximum, reason });
+    Object.freeze(this);
+  }
+  assertEvidence(evidence) {
+    if (!(evidence instanceof ImplReviewResultEvidence) || evidence.review?.disposition.value !== "REJECTED"
+      || this.attempts !== evidence.retry.used + 1 || this.maximum !== evidence.retry.maximum) {
+      throw new TypeError("Implementation Review exhaustion differs from its actual semantic observation");
+    }
+  }
+  toJSON() { return { attempts: this.attempts, maximum: this.maximum, reason: this.reason }; }
+  static fromJSON(value) { return new ImplReviewExhaustion(value); }
+}
+
 /** Exact Review Attempt, worker receipt, canonical evidence and independent Flow budget. */
 export class ImplReviewResultEvidence {
   #meaning;

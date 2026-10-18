@@ -73,7 +73,8 @@ import {
   FlowWorkspace,
   flowStateSpecLocation,
 } from "../../lib/flow-workspace.js";
-import { FlowVersion } from "../../lib/flow-version.js";
+import { FlowVersion, FlowArtifactCatalog } from "../../lib/flow-version.js";
+import { SourceExecutionObservationAppends, SourceExecutionObservationCatalogBaseline } from "./source-execution-observation-appends.js";
 import { FlowManager } from "../../lib/flow-manager.js";
 import { deleteRepairBaselineForFlow } from "./repair-state-identity.js";
 import { FlowRepositoryRuntimeArtifactRegistry } from "./flow-repository-runtime-artifacts.js";
@@ -226,21 +227,22 @@ class FinalizeFlowMetadataAllowance {
       location: this.location,
       definition: buildCurrentFlowDefinition(),
     });
-    this.outboxStore = new FlowOutboxStore(new FlowManager({
+    this.flowManager = new FlowManager({
       root: mainRepoPath, mainRoot: mainRepoPath, inWorktree: false, specRoot, specId,
-    }), { specId });
+    });
+    this.outboxStore = new FlowOutboxStore(this.flowManager, { specId });
   }
 
-  allowsCurrentFlowMetadata() {
+  acquireCurrentFlowMetadata() {
     try {
       const snapshot = this.versionStore.loadSnapshot();
       if (snapshot === null || snapshot.state.specId !== this.specId
-        || snapshot.state.current?.at(-1) !== "finalize-cleanup" || snapshot.state.attempt === null) return false;
+        || snapshot.state.current?.at(-1) !== "finalize-cleanup" || snapshot.state.attempt === null) return null;
       const { state, activities } = snapshot;
       const selected = activities.findLast((activity) => activity.nodeId === "finalize-cleanup"
         && activity.attemptId === state.attempt.id && activity.sequence === state.attempt.sequence
         && activity.result?.stepResult?.kind === "finalize-cleanup-execution-required");
-      if (selected === undefined) return false;
+      if (selected === undefined) return null;
       const result = selected.result.stepResult;
       const receipt = selected.result.draftSettlementReceipt;
       const execution = result.execution;
@@ -249,10 +251,10 @@ class FinalizeFlowMetadataAllowance {
       } });
       if (receipt.settlementKind !== "execution" || execution.identity.runId !== state.runId
         || execution.identity.specId !== state.specId || execution.identity.attempt.id !== state.attempt.id
-        || execution.identity.attempt.sequence !== state.attempt.sequence) return false;
+        || execution.identity.attempt.sequence !== state.attempt.sequence) return null;
       const outbox = this.outboxStore.status(execution.outboxIdentity);
       if (outbox?.status !== "pending" || execution.claim?.attempt !== outbox.attempt
-        || execution.claim?.idempotencyKey !== outbox.idempotencyKey) return false;
+        || execution.claim?.idempotencyKey !== outbox.idempotencyKey) return null;
 
       const committedState = new CurrentFlowStateValidator({ definition: buildCurrentFlowDefinition() })
         .validate(this.committedDocument(this.location.relativeFlowStateFile));
@@ -261,7 +263,7 @@ class FinalizeFlowMetadataAllowance {
       if (committedState.runId !== state.runId || committedState.specId !== state.specId
         || committedState.attempt?.id !== state.attempt.id || committedState.attempt?.sequence !== state.attempt.sequence
         || committedActivities.length !== committedState.confirmationOrder
-        || !isDeepStrictEqual(activities.slice(0, committedActivities.length).map((entry) => entry.toJSON()), committedActivities)) return false;
+        || !isDeepStrictEqual(activities.slice(0, committedActivities.length).map((entry) => entry.toJSON()), committedActivities)) return null;
       const suffix = activities.slice(committedActivities.length);
       const currentCatalog = this.versionStore.catalog().toJSON();
       const issueLogProducerId = this.issueLogAllowance.allowsCurrentDocument()
@@ -282,13 +284,23 @@ class FinalizeFlowMetadataAllowance {
           && activity.nodeId === "finalize-cleanup" && activity.attemptId === state.attempt.id
           && activity.sequence === state.attempt.sequence
           && activity.result?.draftSettlementReceipt?.id === receipt.id;
-      })) return false;
-      const committedCatalog = this.committedDocument(this.location.relativeCatalogFile);
+      })) return null;
+      const committedCatalog = FlowArtifactCatalog.fromSerialized(this.committedDocument(this.location.relativeCatalogFile));
+      const observationAppends = this.flowManager.readCanonicalTransitionView({ specId: this.specId, read: (view) => {
+        if (view.catalog.hash !== currentCatalog.hash || view.revision !== snapshot.revision
+          || view.state.runId !== state.runId || view.state.specId !== state.specId) {
+          throw new Error("Finalize metadata changed before observation append readback");
+        }
+        return new SourceExecutionObservationAppends(view, new SourceExecutionObservationCatalogBaseline({
+          catalog: committedCatalog, root: this.mainRepoPath,
+        }));
+      } });
       const retainedDescriptors = (catalog) => catalog.artifacts
         .filter((entry) => !["flow.state", "flow.activities", ...(ownedAudit === undefined ? [] : ["issue.log"])].includes(entry.logicalKey));
-      return isDeepStrictEqual(retainedDescriptors(currentCatalog), retainedDescriptors(committedCatalog));
+      return isDeepStrictEqual(retainedDescriptors(observationAppends.retainedCatalog().toJSON()),
+        retainedDescriptors(committedCatalog.toJSON())) ? observationAppends : null;
     } catch {
-      return false;
+      return null;
     }
   }
 
@@ -319,73 +331,37 @@ function listMainRepoDirtyFiles(
     location.relativeActivitiesFile,
     location.relativeCatalogFile,
   ];
-  const res = runGit([
-    "-C",
-    mainRepoPath,
-    "status",
-    "--porcelain",
-    "--",
-    ".",
-    ...new FlowRepositoryRuntimeArtifactRegistry().gitPathspecExcludes(),
-    `:!${issueLogPath}`,
-    ...flowPaths.map((flowPath) => `:!${flowPath}`),
-  ]);
-  if (!res.ok) {
-    const error = new Error(`main repository status probe failed: ${res.stderr || res.stdout || "unknown Git error"}`);
+  let status;
+  try {
+    status = getPorcelainV2Status(mainRepoPath, {
+      forceFileMode: false,
+      pathspecs: [".", ...new FlowRepositoryRuntimeArtifactRegistry().gitPathspecExcludes()],
+    });
+  } catch (cause) {
+    const error = new Error(`main repository status probe failed: ${cause.message}`, { cause });
     error.code = "MAIN_REPO_STATUS_FAILED";
     throw error;
   }
-  const dirtyFiles = res.stdout
-    .split("\n")
-    .map((line) => line.trimEnd())
-    .filter((line) => line.trim() !== "")
-    .map((line) => line.slice(3));
+  const untrackedPaths = new Set(status.entries.filter((entry) => entry.kind === "untracked")
+    .map((entry) => entry.path));
+  const observedPaths = new Set(status.pathSet.toArray());
+  const dirtyFiles = [...observedPaths].filter((relativePath) => relativePath !== issueLogPath
+    && !flowPaths.includes(relativePath));
   const issueLogAllowance = new AutoRescueIssueLogAllowance({
     mainRepoPath, specRoot, specId, idempotencyKey: allowedIssueLogId,
   });
   const metadataAllowance = allowFinalizeMetadata
     ? new FinalizeFlowMetadataAllowance({ mainRepoPath, specRoot, specId, issueLogAllowance })
     : null;
-  const ownedFlowMetadata = metadataAllowance?.allowsCurrentFlowMetadata() ?? false;
+  const ownedFlowMetadata = metadataAllowance?.acquireCurrentFlowMetadata() ?? null;
   for (const flowPath of flowPaths) {
-    const flowStatus = runGit([
-      "-C",
-      mainRepoPath,
-      "status",
-      "--porcelain",
-      "--untracked-files=all",
-      "--",
-      flowPath,
-    ]);
-    if (!flowStatus.ok) {
-      const error = new Error(`main repository Flow metadata status probe failed: ${flowStatus.stderr || flowStatus.stdout || "unknown Git error"}`);
-      error.code = "MAIN_REPO_STATUS_FAILED";
-      throw error;
-    }
-    if (flowStatus.stdout.trim() && !ownedFlowMetadata) {
-      dirtyFiles.push(flowPath);
-    }
+    if (observedPaths.has(flowPath) && !ownedFlowMetadata) dirtyFiles.push(flowPath);
   }
-  const issueStatus = runGit([
-    "-C",
-    mainRepoPath,
-    "status",
-    "--porcelain",
-    "--untracked-files=all",
-    "--",
-    issueLogPath,
-  ]);
-  if (!issueStatus.ok) {
-    const error = new Error(`main repository issue-log status probe failed: ${issueStatus.stderr || issueStatus.stdout || "unknown Git error"}`);
-    error.code = "MAIN_REPO_STATUS_FAILED";
-    throw error;
+  if (observedPaths.has(issueLogPath) && !issueLogAllowance.allowsCurrentDocument()) {
+    dirtyFiles.push(issueLogPath);
   }
-  if (issueStatus.stdout.trim()) {
-    if (!issueLogAllowance.allowsCurrentDocument()) {
-      dirtyFiles.push(issueLogPath);
-    }
-  }
-  return dirtyFiles;
+  return dirtyFiles.filter((relativePath) => !untrackedPaths.has(relativePath)
+    || ownedFlowMetadata?.allowsFilePath(relativePath) !== true);
 }
 
 function listOtherDirtyFlowJsonPaths(mainRepoPath, specRoot, specId) {

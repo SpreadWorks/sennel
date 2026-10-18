@@ -397,18 +397,22 @@ export class GitPorcelainV2Status {
   }
 }
 
-/** Read the repository difference authority with executable-bit observation enabled. */
-export function getPorcelainV2Status(cwd) {
-  const result = runGit([
+/** Read typed repository differences without refreshing the index.
+ * The default preserves executable-bit observation. Set forceFileMode=false
+ * to respect Git's repository/filesystem configuration instead.
+ */
+export function getPorcelainV2Status(cwd, { pathspecs = [], forceFileMode = true } = {}) {
+  const args = [
     "--no-optional-locks",
-    "-c",
-    "core.fileMode=true",
+    ...(forceFileMode ? ["-c", "core.fileMode=true"] : []),
     "status",
     "--porcelain=v2",
     "-z",
     "--untracked-files=all",
     "--no-renames",
-  ], { cwd, encoding: "buffer", maxBuffer: 64 * 1024 * 1024 });
+  ];
+  if (pathspecs.length > 0) args.push("--", ...pathspecs);
+  const result = runGit(args, { cwd, encoding: "buffer", maxBuffer: 64 * 1024 * 1024 });
   if (!result.ok) {
     const error = new Error(`git porcelain v2 status failed: ${result.stderr || result.stdout || "unknown git error"}`);
     error.code = "GIT_STATUS_PORCELAIN_V2_FAILED";
@@ -453,8 +457,10 @@ export function runGitToFile(args, { cwd, outputPath, timeout, log = true } = {}
 }
 
 /** @returns {{ dirty: boolean, dirtyFiles: string[] }} */
-export function getWorktreeStatus(cwd) {
-  const res = runGit(["status", "--short"], { cwd });
+export function getWorktreeStatus(cwd, { pathspecExcludes = [] } = {}) {
+  const args = ["status", "--short"];
+  if (pathspecExcludes.length > 0) args.push("--", ...pathspecExcludes);
+  const res = runGit(args, { cwd });
   if (!res.ok) return { dirty: false, dirtyFiles: [] };
   const files = res.stdout.trim().split("\n").filter(Boolean);
   return { dirty: files.length > 0, dirtyFiles: files };
@@ -627,15 +633,17 @@ export const DEFAULT_MAX_CHANGED_FILE_ENTRIES = 2000;
  *
  * Includes committed changes against baseBranch, working tree changes, and
  * untracked files. Returned entries are root-relative POSIX paths sorted by
- * path/status.
+ * path/status. Optional Git pathspec exclusions apply before entry bounds and
+ * preserve the user side of renames across an excluded boundary.
  *
- * @param {{cwd?: string, baseBranch?: string, untrackedFiles?: "normal"|"all", maxChangedFileEntries?: number}} [opts]
+ * @param {{cwd?: string, baseBranch?: string, untrackedFiles?: "normal"|"all", maxChangedFileEntries?: number, pathspecExcludes?: string[]}} [opts]
  * @returns {Array<{status:string,path:string,old_path?:string}>}
  */
 export function listChangedFilesDetailed(opts = {}) {
   const cwd = opts.cwd;
   const maxChangedFileEntries = normalizeChangedFilesLimit(opts.maxChangedFileEntries);
   const untrackedFiles = normalizeUntrackedFilesMode(opts.untrackedFiles);
+  const pathspec = opts.pathspecExcludes?.length ? ["--", ...opts.pathspecExcludes] : [];
   const byKey = new Map();
   const add = (entry) => {
     if (!entry?.path) return;
@@ -647,7 +655,7 @@ export function listChangedFilesDetailed(opts = {}) {
   };
 
   if (opts.baseBranch) {
-    const committed = runGit(["diff", "--name-status", `${opts.baseBranch}...HEAD`], { cwd });
+    const committed = runGit(["diff", "--name-status", `${opts.baseBranch}...HEAD`, ...pathspec], { cwd });
     assertOk(committed, "listChangedFilesDetailed committed diff failed");
     for (const line of splitBoundedGitOutput(committed.stdout, maxChangedFileEntries, "committed diff")) {
       const parts = line.split("\t");
@@ -658,7 +666,7 @@ export function listChangedFilesDetailed(opts = {}) {
     }
   }
 
-  const statusArgs = ["status", "--porcelain", `--untracked-files=${untrackedFiles}`];
+  const statusArgs = ["status", "--porcelain", `--untracked-files=${untrackedFiles}`, ...pathspec];
   const porcelain = runGit(statusArgs, { cwd });
   assertOk(porcelain, "listChangedFilesDetailed status failed");
   for (const line of splitBoundedGitOutput(porcelain.stdout, maxChangedFileEntries, "status")) {

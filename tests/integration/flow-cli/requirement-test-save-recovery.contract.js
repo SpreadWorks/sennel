@@ -17,6 +17,7 @@ import { FLOW_COMMANDS } from "../../../src/flow/registry.js";
 import { FLOW_ARTIFACT_CONTRACTS } from "../../../src/lib/flow-artifact-contract.js";
 import { CurrentFlowStateInvariantError } from "../../../src/flow/lib/current-flow-state.js";
 import { StepPersistenceFailure } from "../../../src/flow/lib/definition-lifecycle-failure.js";
+import { StepAdmissionRefusal } from "../../../src/flow/lib/step-admission-refusal.js";
 import { RequirementTestPhaseScenario, rejectFirstRequirementReviewBatches } from "../../support/requirement-test-phase-scenario.js";
 import { assertSavedRequirementTestResult as savedResult, LifecycleSaveFault,
   gatePublicationBytes, assertGatePublicationRollback, assertGatePublicationMembers, readGateSupportBaseline,
@@ -88,6 +89,7 @@ describe("Requirement Test durable save, rejection and recovery boundaries", { c
   });
 
   it("SAV-04 same-byte new plan Activity invalidates a sealed generator claim before adoption", async (t) => {
+    let replacedSnapshot;
     const scenario = await enter(t, "test-generate", { afterSeal(request, current) {
       if (request.stepId !== "test-generate") return;
       const original = current.artifact("test.requirement.plan");
@@ -97,15 +99,18 @@ describe("Requirement Test durable save, rejection and recovery boundaries", { c
       assert.equal(replaced.descriptor.hash, original.descriptor.hash);
       assert.notEqual(replaced.descriptor.activityId, original.descriptor.activityId,
         "real publication changes Activity identity while preserving byte hash");
+      replacedSnapshot = current.snapshot();
     } });
     const beforePlan = scenario.plan().toJSON();
-    const result = await scenario.dispatch();
-    assert.equal(result.errors[0].code, "FLOW_REQUIREMENT_TEST_HANDOFF_STALE",
-      `same-byte plan publication must surface stale admission: ${JSON.stringify(result.errors)}`);
+    await assert.rejects(() => scenario.dispatch(), (error) => (
+      error instanceof StepAdmissionRefusal && error.code === "FLOW_EXECUTION_INPUT_BASELINE_CHANGED"
+    ));
+    assert.notEqual(replacedSnapshot, undefined, "the normal worker must reach the intended producer replacement");
     scenario.reload();
+    assert.deepEqual(scenario.snapshot(), replacedSnapshot,
+      "the refused execution cannot persist observations, a fallback metric, a Result or a route after its input producer changed");
     assert.deepEqual(scenario.plan().toJSON(), beforePlan);
     assert.equal(scenario.current(), "test-generate");
-    assert.ok(result.errors?.length > 0, "one bounded dispatch must stop after the stale handoff is refused");
     assert.equal(scenario.manager.activityLedger(scenario.specId)
       .some((activity) => activity.nodeId === "test-generate" && activity.result?.stepResult), false,
     "a stale source binding cannot persist a candidate Result");

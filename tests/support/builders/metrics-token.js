@@ -1,10 +1,13 @@
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { writeJson } from "./tmp-dir.js";
 import { CanonicalFlowFixture, makeFlowManager } from "../infrastructure/flow-setup.js";
+import { initGitRepo, commitAll, checkoutNewBranch } from "../infrastructure/git-repo.js";
+import { RuntimeChildExecution } from "../../../src/lib/runtime-package.js";
 
-export const SENNEL = join(process.cwd(), "src/sennel.js");
+export const SENNEL = fileURLToPath(new URL("../../../src/cli-main.js", import.meta.url));
 
 export function writeBaseConfig(tmp) {
   writeJson(tmp, ".sennel/config.json", {
@@ -15,11 +18,11 @@ export function writeBaseConfig(tmp) {
 }
 
 export function runToken(tmp, args = []) {
-  return execFileSync("node", [SENNEL, "metrics", "token", ...args], {
+  return RuntimeChildExecution.runSync(SENNEL, ["metrics", "token", ...args], {
     encoding: "utf8",
     env: { ...process.env, SENNEL_WORK_ROOT: tmp, SENNEL_SOURCE_ROOT: tmp },
     cwd: tmp,
-  });
+  }, execFileSync);
 }
 
 export function runTokenJson(tmp) {
@@ -27,11 +30,11 @@ export function runTokenJson(tmp) {
 }
 
 export function runTokenCapture(tmp, args = ["--format", "json"]) {
-  const res = spawnSync("node", [SENNEL, "metrics", "token", ...args], {
+  const res = RuntimeChildExecution.runSync(SENNEL, ["metrics", "token", ...args], {
     encoding: "utf8",
     env: { ...process.env, SENNEL_WORK_ROOT: tmp, SENNEL_SOURCE_ROOT: tmp },
     cwd: tmp,
-  });
+  }, spawnSync);
   return { stdout: res.stdout ?? "", stderr: res.stderr ?? "", status: res.status };
 }
 
@@ -65,11 +68,11 @@ function canonicalUsage(metric) {
  * then reaches finalization through every typed lifecycle transition. It is
  * not a converter for arbitrary old flow.json blobs.
  */
-export function createCanonicalTokenMetricsFlow(tmp, {
+export async function createCanonicalTokenMetricsFlow(tmp, {
   specId = "001-alpha",
   request = "Collect token metrics.",
   goal = "Collect token metrics.",
-  requirements = [],
+  requirements = [{ id: "R-metrics", desc: "Preserve the behavior whose execution supplies metrics." }],
   draftQuestions = 0,
   agentMetrics = [{ phase: "draft", input: 100, output: 50, cacheRead: 20, cacheCreation: 10, cost: 0.01, callCount: 2 }],
   issueEntries = [],
@@ -80,6 +83,11 @@ export function createCanonicalTokenMetricsFlow(tmp, {
   }
   if (!Number.isSafeInteger(draftQuestions) || draftQuestions < 0) {
     throw new TypeError("canonical token metrics fixture draftQuestions must be a non-negative safe integer");
+  }
+  if (!existsSync(join(tmp, ".git"))) {
+    initGitRepo(tmp);
+    writeFileSync(join(tmp, ".gitignore"), ".sennel/\n.tmp/\nspecs/\n");
+    commitAll(tmp, "Create isolated metrics repository");
   }
   const flowManager = makeFlowManager(tmp);
   const normalizedRequirements = requirements.map((requirement, index) => ({
@@ -94,9 +102,9 @@ export function createCanonicalTokenMetricsFlow(tmp, {
     specId,
     runId: `token-metrics-${specId}`,
     request,
-    execution: { mode: "direct" },
+    execution: { mode: "direct", baseBranch: "main", featureBranch: null },
     specRecord: { goal, requirements: normalizedRequirements },
-  }).create();
+  }).create().registerActive();
   const taskIds = new Set(normalizedRequirements.flatMap((requirement) => requirement.task_ids));
   for (const taskId of taskIds) {
     flow.addTask({
@@ -138,8 +146,15 @@ export function createCanonicalTokenMetricsFlow(tmp, {
     flow.settle("branch");
   }
   if (finalized) {
-    const leafIds = flow.leaves().map((step) => step.id);
-    for (const nodeId of leafIds) flow.settle(nodeId);
+    checkoutNewBranch(tmp, `metrics/${specId}`);
+    const sourceMutations = new Map([...taskIds].map((taskId) => [`${taskId}-impl`, () => {
+      writeFileSync(join(tmp, `metrics-${specId}-${taskId}.js`), "export const taskMetricsBehavior = true;\n");
+    }]));
+    sourceMutations.set("implement", () => {
+      writeFileSync(join(tmp, `metrics-${specId}-implementation.js`), "export const metricsBehavior = true;\n");
+    });
+    await flow.activateWithProducers("finalize-cleanup", { sourceMutations });
+    flow.settle("finalize-cleanup");
     flowManager.finalizeFlow(specId);
   }
   return Object.freeze({

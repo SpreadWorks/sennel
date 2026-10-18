@@ -11,6 +11,9 @@ import { TaskReviewAccounting } from "../../../src/flow/lib/task-review-accounti
 import { ReviewFindingCycle } from "../../../src/flow/lib/finding-disposition-policy.js";
 import { TaskReviewConvergenceEvidence } from "../../../src/flow/lib/review-recurrence.js";
 import { TaskSourceFailureObservation } from "../../../src/flow/lib/task-source-failure.js";
+import { StepAdmissionRefusal } from "../../../src/flow/lib/step-admission-refusal.js";
+import { CurrentFlowStateConflictError } from "../../../src/flow/lib/current-flow-state-conflict-error.js";
+import { TaskReviewGateRequiredResult } from "../../../src/flow/engine/step-result.js";
 import { buildAcceptancePrompt } from "../../../src/flow/lib/run-acceptance-review.js";
 import {
   materializeSourceWorkerEffect, sealParentMaterializedSourceWorkerEffect,
@@ -397,11 +400,16 @@ test("a Task Review cannot publish success after its Attempt has failed", async 
   const confirm = scenario.manager.confirmTaskReviewResult.bind(scenario.manager);
   let failedSnapshot;
   scenario.manager.confirmTaskReviewResult = (input) => {
-    scenario.fail();
-    failedSnapshot = scenario.snapshot();
+    if (input.stepResult instanceof TaskReviewGateRequiredResult) {
+      scenario.fail();
+      failedSnapshot = scenario.snapshot();
+    }
     return confirm(input);
   };
-  await assert.rejects(() => review(scenario, []), /failed Attempt cannot be confirmed/);
+  await assert.rejects(() => review(scenario, []), (error) => (
+    error instanceof StepAdmissionRefusal && error.cause instanceof CurrentFlowStateConflictError
+  ));
+  assert.notEqual(failedSnapshot, undefined, "the failure is injected after selecting the final Review Result");
   assert.equal(scenario.snapshot(), failedSnapshot);
   scenario.reload();
   assert.equal(scenario.state().attempt.failure.category, "tooling");
@@ -421,7 +429,9 @@ test("a Task source handoff cannot publish success after its Attempt has failed"
     return confirm(input);
   };
   fs.appendFileSync(scenario.sourcePath, "late repair\n");
-  assert.throws(() => scenario.completeHandoff(work, repairEffect(["missing-behavior"])), /failed Attempt cannot be confirmed/);
+  assert.throws(() => scenario.completeHandoff(work, repairEffect(["missing-behavior"])), {
+    name: "WorkerArtifactHandoffError", code: "FLOW_ARTIFACT_HANDOFF_CONFLICT",
+  });
   assert.equal(scenario.snapshot(), failedSnapshot);
   scenario.reload();
   assert.equal(scenario.state().current.at(-1), "T-1-repair");

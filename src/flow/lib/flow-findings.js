@@ -295,6 +295,28 @@ export class CanonicalFlowFindingSourceArtifact {
   }
 }
 
+/** Capture one cataloged findings document and its compare-and-swap baseline. */
+export function readFlowFindingsSnapshot({ flowManager, flowState, nodeId }) {
+  const resolved = flowManager.readArtifact({
+    specId: flowState.specId,
+    logicalKey: FLOW_FINDINGS_LOGICAL_KEY,
+    consumerNodeId: nodeId,
+    optional: true,
+  });
+  const artifact = new FlowFindingsArtifact(resolved === null ? { entries: [] } : jsonFromArtifact(
+    resolved.bytes,
+    "canonical flow findings",
+  ));
+  return new CanonicalFlowFindingsSnapshot({
+    artifact,
+    baseline: new CanonicalFlowArtifactBaseline({
+      logicalKey: FLOW_FINDINGS_LOGICAL_KEY,
+      digest: resolved?.descriptor.hash ?? null,
+      byteLength: resolved?.descriptor.size ?? 0,
+    }),
+  });
+}
+
 /**
  * One deep catalog boundary for deferred semantic findings. It owns both the
  * catalog read and the producer-authorized publication; callers never infer a
@@ -318,24 +340,7 @@ export class CanonicalFlowFindingsStore {
   }
 
   readSnapshot() {
-    const resolved = this.flowManager.readArtifact({
-      specId: this.flowState.specId,
-      logicalKey: FLOW_FINDINGS_LOGICAL_KEY,
-      consumerNodeId: this.nodeId,
-      optional: true,
-    });
-    const artifact = new FlowFindingsArtifact(resolved === null ? { entries: [] } : jsonFromArtifact(
-      resolved.bytes,
-      "canonical flow findings",
-    ));
-    return new CanonicalFlowFindingsSnapshot({
-      artifact,
-      baseline: new CanonicalFlowArtifactBaseline({
-        logicalKey: FLOW_FINDINGS_LOGICAL_KEY,
-        digest: resolved?.descriptor.hash ?? null,
-        byteLength: resolved?.descriptor.size ?? 0,
-      }),
-    });
+    return readFlowFindingsSnapshot({ flowManager: this.flowManager, flowState: this.flowState, nodeId: this.nodeId });
   }
 
   read({ filterCurrentRun = false } = {}) {

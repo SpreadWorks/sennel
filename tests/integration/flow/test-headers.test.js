@@ -17,10 +17,10 @@ async function loadModule() {
   return import(moduleUrl.href);
 }
 
-function withTmpDir(fn) {
+async function withTmpDir(fn) {
   const dir = createTestDirectory("test-headers-");
   try {
-    return fn(dir);
+    return await fn(dir);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -109,7 +109,7 @@ test("R4: parseHeader rejects non-canonical `R0` IDs", async () => {
 
 // R4: duplicate IDs in single header
 test("R4: scanFileHeader detects duplicate IDs", async () => {
-  withTmpDir(async (root) => {
+  await withTmpDir(async (root) => {
     const { scanFileHeader } = await loadModule();
     const file = writeFile(root, "foo.test.js", "// spec: R1 R1\nimport x;\n");
     const result = scanFileHeader(file);
@@ -119,7 +119,7 @@ test("R4: scanFileHeader detects duplicate IDs", async () => {
 
 // R1: shebang skip + license comment + valid header
 test("R1: scanFileHeader skips shebang and license, then finds valid header", async () => {
-  withTmpDir(async (root) => {
+  await withTmpDir(async (root) => {
     const { scanFileHeader } = await loadModule();
     const content = "#!/usr/bin/env node\n// Copyright 2026\n// spec: R1\nimport x;\n";
     const file = writeFile(root, "foo.test.js", content);
@@ -131,7 +131,7 @@ test("R1: scanFileHeader skips shebang and license, then finds valid header", as
 
 // R1: missing header
 test("R1: scanFileHeader returns missing when no spec header before code", async () => {
-  withTmpDir(async (root) => {
+  await withTmpDir(async (root) => {
     const { scanFileHeader } = await loadModule();
     const file = writeFile(root, "foo.test.js", "import x from 'y';\n");
     const result = scanFileHeader(file);
@@ -141,7 +141,7 @@ test("R1: scanFileHeader returns missing when no spec header before code", async
 
 // R4: duplicate valid headers in same file
 test("R4: scanFileHeader detects duplicate valid headers", async () => {
-  withTmpDir(async (root) => {
+  await withTmpDir(async (root) => {
     const { scanFileHeader } = await loadModule();
     // Both headers must come before code
     const content = "// spec: R1\n// spec: R2\n";
@@ -153,7 +153,7 @@ test("R4: scanFileHeader detects duplicate valid headers", async () => {
 
 // R1+R8: discovery of spec test files
 test("R1: getSpecTestFiles discovers .{test,spec}.{js,ts,mjs}", async () => {
-  withTmpDir(async (root) => {
+  await withTmpDir(async (root) => {
     const { getSpecTestFiles } = await loadModule();
     const specDir = path.join(root, "specs", "249-foo");
     writeFile(specDir, "tests/a.test.js", "// spec: R1\n");
@@ -168,7 +168,7 @@ test("R1: getSpecTestFiles discovers .{test,spec}.{js,ts,mjs}", async () => {
 
 // R12: discovery returns empty when tests dir absent
 test("R12: getSpecTestFiles returns empty array when tests/ absent", async () => {
-  withTmpDir(async (root) => {
+  await withTmpDir(async (root) => {
     const { getSpecTestFiles } = await loadModule();
     const specDir = path.join(root, "specs", "foo");
     fs.mkdirSync(specDir, { recursive: true });
@@ -179,7 +179,7 @@ test("R12: getSpecTestFiles returns empty array when tests/ absent", async () =>
 
 // R3: coverage evaluator: all testable covered
 test("R3: validateTestHeaders passes when all testable requirements covered", async () => {
-  withTmpDir(async (root) => {
+  await withTmpDir(async (root) => {
     const { validateTestHeaders } = await loadModule();
     const specDir = path.join(root, "specs", "249-foo");
     writeFile(specDir, "tests/a.test.js", "// spec: R1 R2\nimport { test, it } from 'node:test';\nit('R1: x', ()=>{});\nit('R2: y', ()=>{});\n");
@@ -193,7 +193,7 @@ test("R3: validateTestHeaders passes when all testable requirements covered", as
 
 // R4: uncovered testable requirement
 test("R4: validateTestHeaders reports uncoveredRequirements", async () => {
-  withTmpDir(async (root) => {
+  await withTmpDir(async (root) => {
     const { validateTestHeaders } = await loadModule();
     const specDir = path.join(root, "specs", "249-foo");
     writeFile(specDir, "tests/a.test.js", "// spec: R1\nit('R1: x', ()=>{});\n");
@@ -208,7 +208,7 @@ test("R4: validateTestHeaders reports uncoveredRequirements", async () => {
 
 // R3: testable: false excluded from coverage
 test("R3: testable: false requirements excluded from coverage", async () => {
-  withTmpDir(async (root) => {
+  await withTmpDir(async (root) => {
     const { validateTestHeaders } = await loadModule();
     const specDir = path.join(root, "specs", "249-foo");
     writeFile(specDir, "tests/a.test.js", "// spec: R1\nit('R1: x', ()=>{});\n");
@@ -225,7 +225,7 @@ test("R3: testable: false requirements excluded from coverage", async () => {
 
 // R4: unknown ID
 test("R4: validateTestHeaders reports unknownIds", async () => {
-  withTmpDir(async (root) => {
+  await withTmpDir(async (root) => {
     const { validateTestHeaders } = await loadModule();
     const specDir = path.join(root, "specs", "249-foo");
     writeFile(specDir, "tests/a.test.js", "// spec: R99\nit('R99: x', ()=>{});\n");
@@ -240,7 +240,7 @@ test("R4: validateTestHeaders reports unknownIds", async () => {
 
 // R4: notTestableInHeader
 test("R4: validateTestHeaders reports notTestableInHeader", async () => {
-  withTmpDir(async (root) => {
+  await withTmpDir(async (root) => {
     const { validateTestHeaders } = await loadModule();
     const specDir = path.join(root, "specs", "249-foo");
     writeFile(specDir, "tests/a.test.js", "// spec: R1\nit('R1: x', ()=>{});\n");
@@ -255,7 +255,7 @@ test("R4: validateTestHeaders reports notTestableInHeader", async () => {
 
 // R4: headerNoTest (header declares R1 but no R1: test name in same file)
 test("R4: validateTestHeaders reports headerNoTest", async () => {
-  withTmpDir(async (root) => {
+  await withTmpDir(async (root) => {
     const { validateTestHeaders } = await loadModule();
     const specDir = path.join(root, "specs", "249-foo");
     writeFile(specDir, "tests/a.test.js", "// spec: R1\nit('something else', ()=>{});\n");
@@ -270,7 +270,7 @@ test("R4: validateTestHeaders reports headerNoTest", async () => {
 
 // R4: testNoHeader (R1: test exists but header doesn't declare it)
 test("R4: validateTestHeaders reports testNoHeader", async () => {
-  withTmpDir(async (root) => {
+  await withTmpDir(async (root) => {
     const { validateTestHeaders } = await loadModule();
     const specDir = path.join(root, "specs", "249-foo");
     writeFile(specDir, "tests/a.test.js", "// spec: R2\nit('R2: x', ()=>{});\nit('R1: leak', ()=>{});\n");
@@ -285,7 +285,7 @@ test("R4: validateTestHeaders reports testNoHeader", async () => {
 
 // R12: no tests dir + only testable: false requirements => ok
 test("R12: validateTestHeaders ok when all requirements are testable: false and no tests dir", async () => {
-  withTmpDir(async (root) => {
+  await withTmpDir(async (root) => {
     const { validateTestHeaders } = await loadModule();
     const specDir = path.join(root, "specs", "249-foo");
     fs.mkdirSync(specDir, { recursive: true });
@@ -302,7 +302,7 @@ test("R12: validateTestHeaders ok when all requirements are testable: false and 
 
 // R12: no tests dir + testable requirements => uncovered all
 test("R12: validateTestHeaders fails uncovered when tests dir absent and testable requirements exist", async () => {
-  withTmpDir(async (root) => {
+  await withTmpDir(async (root) => {
     const { validateTestHeaders } = await loadModule();
     const specDir = path.join(root, "specs", "249-foo");
     fs.mkdirSync(specDir, { recursive: true });
@@ -316,7 +316,7 @@ test("R12: validateTestHeaders fails uncovered when tests dir absent and testabl
 });
 
 test("assigned validation counts only the assigned Requirement and allows a secondary Requirement", async () => {
-  withTmpDir(async (root) => {
+  await withTmpDir(async (root) => {
     const { validateAssignedRequirementTestHeaders, AssignedRequirementTestValidation } = await loadModule();
     const specDir = path.join(root, "specs", "249-foo");
     writeFile(specDir, "tests/a.test.js", "// spec: R6 R8\nit('R6: primary', ()=>{});\nit('R8: secondary', ()=>{});\n");
@@ -337,7 +337,7 @@ test("assigned validation counts only the assigned Requirement and allows a seco
 });
 
 test("assigned validation ignores pre-existing active tests outside the candidate bundle", async () => {
-  withTmpDir(async (root) => {
+  await withTmpDir(async (root) => {
     const { validateAssignedRequirementTestHeaders } = await loadModule();
     const specDir = path.join(root, "specs", "249-foo");
     writeFile(specDir, "tests/active.test.js", "// spec: R6\nit('R6: active', ()=>{});\n");
@@ -355,7 +355,7 @@ test("assigned validation ignores pre-existing active tests outside the candidat
 });
 
 test("assigned validation rejects escaped and non-test candidate paths", async () => {
-  withTmpDir(async (root) => {
+  await withTmpDir(async (root) => {
     const { validateAssignedRequirementTestHeaders } = await loadModule();
     const specDir = path.join(root, "specs", "249-foo");
     writeFile(specDir, "tests/candidate.test.js", "// spec: R6\nit('R6: primary', ()=>{});\n");
@@ -370,7 +370,7 @@ test("assigned validation rejects escaped and non-test candidate paths", async (
 });
 
 test("assigned validation rejects non-canonical Requirement IDs", async () => {
-  withTmpDir(async (root) => {
+  await withTmpDir(async (root) => {
     const { validateAssignedRequirementTestHeaders } = await loadModule();
     const specDir = path.join(root, "specs", "249-foo");
     writeFile(specDir, "tests/candidate.test.js", "// spec: R1\nit('R1: primary', ()=>{});\n");
@@ -387,7 +387,7 @@ test("assigned validation rejects non-canonical Requirement IDs", async () => {
 });
 
 test("assigned validation rejects a bundle containing only a secondary Requirement", async () => {
-  withTmpDir(async (root) => {
+  await withTmpDir(async (root) => {
     const { validateAssignedRequirementTestHeaders } = await loadModule();
     const specDir = path.join(root, "specs", "249-foo");
     writeFile(specDir, "tests/a.test.js", "// spec: R8\nit('R8: secondary', ()=>{});\n");
@@ -406,7 +406,7 @@ test("assigned validation rejects a bundle containing only a secondary Requireme
 });
 
 test("assigned validation reports missing primary header or test name as recoverable issues", async () => {
-  withTmpDir(async (root) => {
+  await withTmpDir(async (root) => {
     const { validateAssignedRequirementTestHeaders } = await loadModule();
     const specDir = path.join(root, "specs", "249-foo");
     writeFile(specDir, "tests/a.test.js", "// spec: R6\nit('R8: secondary', ()=>{});\n");

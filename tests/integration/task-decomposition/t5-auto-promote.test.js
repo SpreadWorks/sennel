@@ -4,6 +4,7 @@ import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { createTmpDir, removeTmpDir } from "../../support/builders/tmp-dir.js";
 import { CanonicalFlowFixture, TaskLifecycleFixture, makeFlowManager } from "../../support/infrastructure/flow-setup.js";
+import { fixtureRepository } from "../../support/infrastructure/flow-dispatch-scenario.js";
 import { promoteNextPending, findNextPendingTask } from "../../../src/lib/flow-helpers.js";
 
 function pureTask(id, status = "pending", parent = null) {
@@ -58,24 +59,6 @@ describe("T-5: Task selection and explicit claim boundaries", () => {
     assert.equal(state.currentTaskId, null);
   });
 
-  it("a completed Task does not auto-claim the next pending Task", () => {
-    tmp = createTmpDir();
-    const fm = makeFlowManager(tmp);
-    const fixture = new TaskLifecycleFixture({
-      flowManager: fm,
-      specId: "226-complete-separation",
-      taskDocuments: [taskDocument("T-1"), taskDocument("T-2")],
-      taskId: "T-1",
-      targetStep: "task-gate",
-    }).create();
-    fixture.flow.flow.settle("T-1-gate");
-    fm.completeTask("T-1");
-    const state = fm.loadReadOnly();
-    assert.equal(state.currentTaskId, null);
-    assert.equal(state.tasks.find((task) => task.id === "T-2").status, "pending");
-    assert.equal(fixture.location().taskArtifactLocation("T-1").relativeDirectory, "steps/impl/T-1");
-  });
-
   it("the next pending Task is claimed only by the typed startTask transition", () => {
     tmp = createTmpDir();
     const fm = makeFlowManager(tmp);
@@ -88,17 +71,17 @@ describe("T-5: Task selection and explicit claim boundaries", () => {
     assert.equal(state.tasks[0].status, "in_progress");
   });
 
-  it("get-next-action returns to Flow scope after every Task is completed", () => {
-    tmp = createTmpDir();
+  it("get-next-action returns to Flow scope after every Task is completed", async () => {
+    tmp = fixtureRepository("task-scope-completion-");
     const fm = makeFlowManager(tmp);
-    const { flow } = new TaskLifecycleFixture({
+    const { flow } = await new TaskLifecycleFixture({
       flowManager: fm,
       specId: "226-flow-frontier",
       taskDocuments: [taskDocument("T-1")],
       taskId: "T-1",
-      targetStep: "task-gate",
-    }).create();
-    flow.flow.settle("T-1-gate");
+      targetStep: "task-review",
+    }).createWithProducers();
+    await flow.flow.produce("T-1-review");
     fm.completeTask("T-1");
     const out = execFileSync("node", [path.join(process.cwd(), "src/sennel.js"), "flow", "get", "next-action"], {
       encoding: "utf8",

@@ -457,10 +457,12 @@ test("Task Review refuses an original result after its active Attempt is legally
   });
   scenario.manager.retryCurrentAttempt({ specId: scenario.specId });
   const before = taskReviewCatalog(scenario);
+  const protectedState = scenario.snapshot();
   await assert.rejects(
     () => FLOW_COMMANDS.run.review.post(scenario.context(), result),
-    /Attempt|binding|publication/i,
+    { code: "FLOW_EXECUTION_CONTRACT_MISMATCH" },
   );
   assert.equal(scenario.state().current?.at(-1), "T-1-review");
   assert.deepEqual(taskReviewCatalog(scenario), before);
+  assert.equal(scenario.snapshot(), protectedState, "a stale result cannot change the replacement Attempt or publication");
 });

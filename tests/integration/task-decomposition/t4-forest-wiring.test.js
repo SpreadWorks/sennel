@@ -2,8 +2,8 @@
  * tests/integration/task-decomposition/t4-forest-wiring.test.js
  *
  * Spec 226 / T-4: forest 構造の運用配線。
- * sync-spec-tasks の parent 転写、get-next-action の forest traversal
- * (DFS pre-order, 配列順)、completeTask の親子 propagation を検証する。
+ * canonical Task admission、forest traversal、および正規 Review の完了から
+ * 保存される親子 propagation を検証する。
  *
  * REQ-6 / REQ-9 に対応。
  */
@@ -12,9 +12,9 @@ import { describe, it, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import { createTmpDir, removeTmpDir } from "../../support/builders/tmp-dir.js";
 import { CanonicalFlowFixture, makeFlowManager } from "../../support/infrastructure/flow-setup.js";
+import { fixtureRepository } from "../../support/infrastructure/flow-dispatch-scenario.js";
 import {
   findNextPendingTask,
-  promoteNextPending,
 } from "../../../src/lib/flow-helpers.js";
 import { checkSpecJson } from "../../../src/flow/lib/run-gate.js";
 
@@ -62,7 +62,7 @@ function mappedSpec(...taskIds) {
   return { requirements: [{ id: "R-forest", desc: "Exercise the canonical Task forest.", task_ids: taskIds }] };
 }
 
-describe("T-4: forest wiring (sync parent transcription + traversal + propagation)", () => {
+describe("T-4: canonical Task admission, traversal and durable completion propagation", () => {
   let tmp;
   afterEach(() => tmp && removeTmpDir(tmp));
 
@@ -203,16 +203,16 @@ describe("T-4: forest wiring (sync parent transcription + traversal + propagatio
 
   // ── completeTask: parent propagation ───────────────────────────────────────
 
-  it("completeTask propagates to parent when all children are done", () => {
-    tmp = createTmpDir();
+  it("registered Task completion propagates to parent when all children are done", async () => {
+    tmp = fixtureRepository("task-forest-completion-");
     const fm = makeFlowManager(tmp);
     const fixture = new CanonicalFlowFixture({ flowManager: fm, specId: "226-propagation", specRecord: mappedSpec("P", "C1", "C2") })
       .create().addTasks([taskDocument("P"), taskDocument("C1", "P"), taskDocument("C2", "P")]).registerActive();
-    fixture.activateTask("C1");
-    for (const step of ["C1-impl", "C1-review", "C1-triage", "C1-repair", "C1-gate"]) fixture.settle(step);
+    await fixture.activateWithProducers("C1-review");
+    await fixture.produce("C1-review");
     fm.completeTask("C1", { specId: "226-propagation" });
-    fixture.activateTask("C2", { settlePredecessors: false });
-    for (const step of ["C2-impl", "C2-review", "C2-triage", "C2-repair", "C2-gate"]) fixture.settle(step);
+    await fixture.activateWithProducers("C2-review");
+    await fixture.produce("C2-review");
     fm.completeTask("C2");
 
     const state = fm.load("226-propagation");
@@ -220,13 +220,13 @@ describe("T-4: forest wiring (sync parent transcription + traversal + propagatio
     assert.equal(parent.status, "done", "parent should be auto-completed");
   });
 
-  it("completeTask propagation is recursive up to root", () => {
-    tmp = createTmpDir();
+  it("registered Task completion propagates recursively up to root", async () => {
+    tmp = fixtureRepository("task-forest-completion-");
     const fm = makeFlowManager(tmp);
     const fixture = new CanonicalFlowFixture({ flowManager: fm, specId: "226-recursive", specRecord: mappedSpec("Root", "Mid", "Leaf") })
       .create().addTasks([taskDocument("Root"), taskDocument("Mid", "Root"), taskDocument("Leaf", "Mid")]).registerActive();
-    fixture.activateTask("Leaf");
-    for (const step of ["Leaf-impl", "Leaf-review", "Leaf-triage", "Leaf-repair", "Leaf-gate"]) fixture.settle(step);
+    await fixture.activateWithProducers("Leaf-review");
+    await fixture.produce("Leaf-review");
     fm.completeTask("Leaf");
 
     const state = fm.load("226-recursive");
@@ -235,13 +235,13 @@ describe("T-4: forest wiring (sync parent transcription + traversal + propagatio
     assert.equal(state.tasks.find((t) => t.id === "Root").status, "done");
   });
 
-  it("completeTask does NOT auto-promote (responsibility separation)", () => {
-    tmp = createTmpDir();
+  it("registered Task completion leaves the next pending Task unclaimed", async () => {
+    tmp = fixtureRepository("task-forest-completion-");
     const fm = makeFlowManager(tmp);
     const fixture = new CanonicalFlowFixture({ flowManager: fm, specId: "226-no-promote", specRecord: mappedSpec("T-1", "T-2") })
       .create().addTasks([taskDocument("T-1"), taskDocument("T-2")]).registerActive();
-    fixture.activateTask("T-1");
-    for (const step of ["T-1-impl", "T-1-review", "T-1-triage", "T-1-repair", "T-1-gate"]) fixture.settle(step);
+    await fixture.activateWithProducers("T-1-review");
+    await fixture.produce("T-1-review");
     fm.completeTask("T-1");
 
     const state = fm.load("226-no-promote");
@@ -251,16 +251,16 @@ describe("T-4: forest wiring (sync parent transcription + traversal + propagatio
     assert.equal(state.tasks.find((t) => t.id === "T-2").status, "pending");
   });
 
-  it("completeTask handles flat tasks (parent=null) without propagation", () => {
-    tmp = createTmpDir();
+  it("registered Task completion preserves independent flat Tasks", async () => {
+    tmp = fixtureRepository("task-forest-completion-");
     const fm = makeFlowManager(tmp);
     const fixture = new CanonicalFlowFixture({ flowManager: fm, specId: "226-flat-complete", specRecord: mappedSpec("A", "B", "C") })
       .create().addTasks([taskDocument("A"), taskDocument("B"), taskDocument("C")]).registerActive();
-    fixture.activateTask("A");
-    for (const step of ["A-impl", "A-review", "A-triage", "A-repair", "A-gate"]) fixture.settle(step);
+    await fixture.activateWithProducers("A-review");
+    await fixture.produce("A-review");
     fm.completeTask("A");
-    fixture.activateTask("B", { settlePredecessors: false });
-    for (const step of ["B-impl", "B-review", "B-triage", "B-repair", "B-gate"]) fixture.settle(step);
+    await fixture.activateWithProducers("B-review");
+    await fixture.produce("B-review");
     fm.completeTask("B");
 
     const state = fm.load("226-flat-complete");

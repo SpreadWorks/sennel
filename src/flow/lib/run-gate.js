@@ -3806,7 +3806,7 @@ export async function runGateFlow(args) {
     {
       ...guardrailPromptOptions,
       projectRoot: ctx?.repositoryRoot || ctx?.mainRoot || root,
-      invocationOptions: { executionWorkDir: root, temporaryRoot: ctx ? flowTemporaryRoot(ctx) : new TemporaryPaths(root).runtime("gate") },
+      invocationOptions: { executionWorkDir: root, temporaryRoot: ctx ? flowTemporaryRoot(ctx, root) : new TemporaryPaths(root).runtime("gate") },
       ...(ctx?.guardrailSnapshot ? { loadGuardrails: () => ctx.guardrailSnapshot.read() } : {}),
       executionBudget: ctx?.promptExecutionBudget ?? guardrailPromptOptions.executionBudget,
       providerCallGuard: ctx?.gateProviderCallGuard ?? null,

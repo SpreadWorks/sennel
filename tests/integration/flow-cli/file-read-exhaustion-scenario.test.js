@@ -1,9 +1,8 @@
+import { installReviewProcessFake } from "../../support/infrastructure/review-process-fake.js";
 import assert from "node:assert/strict";
-import childProcess from "node:child_process";
 import fs from "node:fs";
-import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
-import { it, mock } from "node:test";
+import { it } from "node:test";
 
 import { FlowManager } from "../../../src/lib/flow-manager.js";
 import { FlowTargetBinding } from "../../../src/lib/flow-target-guard.js";
@@ -17,7 +16,7 @@ import { CanonicalFlowFixture, canonicalDraftDocument } from "../../support/infr
 import { removeTmpDir } from "../../support/builders/tmp-dir.js";
 import { validWorkerHandoffTaskSpec, workerArtifactJson } from "../../support/infrastructure/worker-artifact.js";
 import { dispatchContainer, fixtureRepository, installGateProviderFake,
-  requestInput, requestPayloadPath } from "../../support/infrastructure/flow-dispatch-scenario.js";
+  requestInput, requestPayloadPath, withScenarioProviderAdmission } from "../../support/infrastructure/flow-dispatch-scenario.js";
 
 for (const phase of ["draft", "spec"]) {
 it(`stops ${phase} after four file-read failures and rejects dispatcher restart after reload`, async () => {
@@ -78,11 +77,7 @@ it(`stops ${phase} after four file-read failures and rejects dispatcher restart 
         finalArgs: [], inlineArgvByteCount: 0, schemaMode: "file", usesStdin: true,
       });
     } });
-    const originalSpawnSync = childProcess.spawnSync;
-    reviewProcess = mock.method(childProcess, "spawnSync", (command, args, options) => {
-      if (command !== "node" || !String(args[0]).endsWith("/flow/commands/review.js")) {
-        return originalSpawnSync(command, args, options);
-      }
+    reviewProcess = installReviewProcessFake((_command, _args, options) => {
       const reviewStep = manager.canonicalState(specId).current.at(-1);
       if (phase === "draft") {
         assert.ok(["draft-questions-review", "draft-coverage-review"].includes(reviewStep));
@@ -95,7 +90,7 @@ it(`stops ${phase} after four file-read failures and rejects dispatcher restart 
           summary: "No Draft review findings.", blockingFindings: [], advisoryFindings: [], repairTargets: [],
         }));
         work.seal();
-        return { status: 0, signal: null, stdout: "", stderr: "" };
+        return { ok: true, status: 0, signal: null, stdout: "", stderr: "" };
       }
       assert.equal(reviewStep, "spec-review");
       const work = ReviewWorkUnit.fromEnvironment(options.env);
@@ -107,9 +102,8 @@ it(`stops ${phase} after four file-read failures and rejects dispatcher restart 
       fs.writeFileSync(path.join(options.env.SENNEL_REVIEW_OUTPUT_DIR, "review.delta.json"),
         workerArtifactJson(delta.toJSON()));
       work.seal();
-      return { status: 0, signal: null, stdout: "", stderr: "" };
+      return { ok: true, status: 0, signal: null, stdout: "", stderr: "" };
     });
-    syncBuiltinESMExports();
     const worker = { async call(_prompt, options) {
       const requestPath = options.executionEnvironment.SENNEL_FLOW_HANDOFF_REQUEST;
       const invocationId = options.executionEnvironment.SENNEL_FLOW_DISPATCH_INVOCATION_ID;
@@ -134,6 +128,7 @@ it(`stops ${phase} after four file-read failures and rejects dispatcher restart 
       sealWorkerArtifactHandoff({ requestPath, invocationId });
       return JSON.stringify({ sealed: true, requestDigest: request.requestDigest });
     } };
+    withScenarioProviderAdmission(worker);
     const dispatcher = new RunDispatchCommand({ agent: worker, maxDispatches: 64 });
     dispatcher.container = dispatchContainer({ root, flowManager: manager, agent: worker });
     const result = await dispatcher.execute({
@@ -226,7 +221,6 @@ it(`stops ${phase} after four file-read failures and rejects dispatcher restart 
     assert.deepEqual(restored.activityLedger(specId), beforeActivities);
   } finally {
     reviewProcess?.mock.restore();
-    syncBuiltinESMExports();
     gateAgentLookup?.mock.restore();
     removeTmpDir(root);
   }

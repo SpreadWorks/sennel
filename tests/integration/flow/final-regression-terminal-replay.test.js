@@ -36,7 +36,12 @@ async function setupCanonical(root, script) {
     execution: { mode: "direct", baseBranch: "main", featureBranch: "main" },
     specRecord: { goal: "Verify terminal final-regression replay.", requirements: [{ id: "R-terminal", desc: "Preserve terminal regression evidence.", testable: false }] },
     targetStep: "final-regression",
-  }).createWithProducers();
+  }).createWithProducers({
+    implementationFiles: new Map([["R-terminal", [SCRIPT_PATH, "terminal-regression.js"]]]),
+    sourceMutations: new Map([["implement", () => {
+      writeFile(root, "terminal-regression.js", "export const terminalRegression = true;\n");
+    }]]),
+  });
   commitAll(root, "record canonical final-regression frontier");
   return {
     root,

@@ -11,7 +11,7 @@ import { DraftStepSettlementReceipt, settleDraftStepResult } from "../../../src/
 import { FlowActivity, CurrentFlowState } from "../../../src/flow/lib/current-flow-state.js";
 import { sealWorkerArtifactHandoff } from "../../../src/flow/lib/worker-artifact-handoff.js";
 import { CanonicalFlowFixture, canonicalDraftDocument } from "../../support/infrastructure/flow-setup.js";
-import { dispatchContainer, fixtureRepository, requestPayloadPath } from "../../support/infrastructure/flow-dispatch-scenario.js";
+import { dispatchContainer, fixtureRepository, requestPayloadPath, withScenarioProviderAdmission } from "../../support/infrastructure/flow-dispatch-scenario.js";
 import { workerArtifactJson } from "../../support/infrastructure/worker-artifact.js";
 import { removeTmpDir } from "../../support/builders/tmp-dir.js";
 import { draftStructureManifest } from "../../support/structure/phase-manifest.js";
@@ -42,6 +42,7 @@ test("publication observer authenticates a real Draft dispatcher save and exact 
       mainRoot: root, flowManager: manager });
     return JSON.stringify({ sealed: true, requestDigest: request.requestDigest });
   } };
+  withScenarioProviderAdmission(agent);
   const command = new RunDispatchCommand({ agent, maxDispatches: 1 });
   command.container = dispatchContainer({ root, flowManager: manager, agent });
   const outcome = await command.execute({ root, mainRoot: root, executionRoot: root, specId,

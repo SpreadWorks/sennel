@@ -5,15 +5,11 @@ import fs from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { initGitRepo, commitAll } from "../../support/infrastructure/git-repo.js";
+import { runGit } from "../../../src/lib/git-helpers.js";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 const roots = [];
-
-function git(root, args) {
-  const result = spawnSync("git", ["-C", root, ...args], { encoding: "utf8" });
-  assert.equal(result.status, 0, result.stderr);
-  return result.stdout.trim();
-}
 
 function createGitWorktree({ packageName, copySource = false }) {
   const root = createTestDirectory("sennel-worktree-cli-execution.test-");
@@ -30,13 +26,11 @@ function createGitWorktree({ packageName, copySource = false }) {
     type: "base",
     docs: { languages: ["en"], defaultLanguage: "en" },
   }, null, 2));
-  git(root, ["init", "-b", "main"]);
-  git(root, ["config", "user.email", "test@example.com"]);
-  git(root, ["config", "user.name", "Test User"]);
-  git(root, ["add", "."]);
-  git(root, ["commit", "-m", "fixture"]);
+  initGitRepo(root);
+  commitAll(root, "worktree CLI fixture");
   const worktreePath = path.join(root, "worktree");
-  git(root, ["worktree", "add", worktreePath, "-b", "feature"]);
+  const added = runGit(["worktree", "add", worktreePath, "-b", "feature"], { cwd: root });
+  assert.equal(added.ok, true, added.stderr);
   return { root, worktreePath };
 }
 
@@ -84,10 +78,18 @@ describe("global CLI execution from a managed worktree", () => {
 
     const result = invokeGlobalCli(root, worktreePath);
 
-    assert.notEqual(result.status, 0);
-    assert.match(result.stderr, new RegExp(`Execution target: ${path.join(root, "src", "sennel.js")}`));
-    assert.match(result.stderr, new RegExp(`Expected worktree source: ${worktreeCli}`));
-    assert.match(result.stderr, /Recovery: restore the worktree source, then run: node /);
+    assert.equal(result.error, undefined);
+    assert.equal(result.signal, null);
+    assert.equal(result.status, 1);
+    assert.equal(result.stderr, "");
+    assert.equal(result.stdout.trim().split("\n").length, 1);
+    const failure = JSON.parse(result.stdout);
+    assert.equal(failure.ok, false);
+    assert.deepEqual(failure.errors.map((error) => error.code), ["FLOW_BOOTSTRAP_FAILED"]);
+    assert.equal(failure.guidance.cause.kind, "bootstrap");
+    assert.equal(failure.guidance.cause.code, "FLOW_RUNTIME_HANDOFF_FAILED");
+    assert.equal(failure.guidance.nextAction.kind, "external_work");
+    assert.equal(Object.hasOwn(failure, "directive"), false);
   });
 
   it("preserves global package execution in an unrelated worktree", () => {

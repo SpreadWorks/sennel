@@ -36,6 +36,7 @@ import {
   SpecGatePostFailureFacts,
   resolveTaskExecutionOverrun,
   selectedNonGateUserAction,
+  nonGateNonblockingEligibilityForDecision,
 } from "../definition.js";
 import { loadRules, filterRules, renderRuleBlock } from "../../lib/skill-rules.js";
 import { PRODUCT } from "../../lib/product.js";
@@ -233,6 +234,7 @@ class FinalRegressionNextAction {
     this.decision = decision;
     this.userAction = userAction;
     this.directive = directive;
+    this.eligibility = decision === null ? null : nonGateNonblockingEligibilityForDecision(decision);
     Object.freeze(this);
   }
 }
@@ -859,8 +861,9 @@ function buildCanonicalNextActionResult(ctx, state, typedState, descriptor, bind
   const gateSelection = specPostFailure === null
     ? definitionOwnedGateSelection(ctx, state, target) : null;
   const gateDirective = definitionOwnedGateDirective(gateSelection, { state, binding });
-  const definitionEligibility = acceptanceProjection !== null ? acceptanceProjection.eligibility
-    : specPostFailure === null ? definitionNonblockingEligibilityForActiveFlow(ctx.root, state, ctx.flowManager) : null;
+  const definitionEligibility = selectedFinalRegressionAction !== null ? selectedFinalRegressionAction.eligibility
+    : acceptanceProjection !== null ? acceptanceProjection.eligibility
+      : specPostFailure === null ? definitionNonblockingEligibilityForActiveFlow(ctx.root, state, ctx.flowManager) : null;
   const activationOffer = nonblockingActivationOfferForStrictStop({
     state,
     eligibility: definitionEligibility,

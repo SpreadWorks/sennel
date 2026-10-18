@@ -11,9 +11,6 @@ import { ProcessExecutionControlFailure } from "../../lib/process-execution-runt
 import fs from "fs";
 import path from "path";
 import crypto from "crypto";
-import { PRODUCT } from "../../lib/product.js";
-import { FlowTargetIdentityAuthority } from "../../lib/flow-target-identity-authority.js";
-import { flowStateSpecLocation } from "../../lib/flow-workspace.js";
 import { FlowCommand } from "./base-command.js";
 import { acceptanceStepRegistration } from "../engine/composition/acceptance.js";
 import { prepareFinalRegressionExecution } from "../engine/composition/acceptance-finalization.js";
@@ -482,24 +479,6 @@ function currentChangedFilesWithFingerprints(root, changedFiles) {
   return withChangedFileFingerprints(root, changedFiles);
 }
 
-function finalRegressionGeneratedPath(filePath, state) {
-  const location = flowStateSpecLocation(state);
-  if (location === null) {
-    throw new Error("final-regression freshness requires a manager-bound Version location");
-  }
-  return filePath.startsWith(`${location.relativeDirectory}/`)
-    || filePath === PRODUCT.managedPath(".active-flow")
-    || FlowTargetIdentityAuthority.managesRepositoryPath(filePath)
-    || filePath.startsWith(".tmp/logs/");
-}
-
-function finalRegressionFreshnessFiles(changedFiles, state) {
-  return (changedFiles || []).filter((entry) => {
-    const filePath = changedFilePath(entry);
-    return filePath && !finalRegressionGeneratedPath(filePath.split(path.sep).join("/"), state);
-  });
-}
-
 function projectPolicySkipDecision({ err, changedFiles }) {
   if (err?.code !== NO_SUPPORTED_REGRESSION_COMMAND) return null;
   const reason = err.message || "no supported project-level regression command found";
@@ -885,10 +864,9 @@ async function executeCanonicalFinalRegression(ctx) {
   };
   const beforeRepository = FinalRegressionRepositoryBinding.capture(root, repositoryBindingOptions);
   const rawLines = [];
-  const changedFiles = finalRegressionFreshnessFiles(
-    expandChangedFileEntries(root, listRegressionChangedFiles({ root, state })),
-    state,
-  );
+  const changedFiles = expandChangedFileEntries(root, listRegressionChangedFiles({
+    root, state, pathspecExcludes: repositoryBindingOptions.pathspecExcludes,
+  }));
   const upgradeEvidence = validateCanonicalUpgradeEvidence({
     flowManager: ctx.flowManager,
     state,

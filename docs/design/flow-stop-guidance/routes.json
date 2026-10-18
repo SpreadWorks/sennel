@@ -656,8 +656,8 @@
       {
         "code": "CANONICAL_RECORD_UNREADABLE",
         "sources": [
-          "src/flow/query-contract.js",
-          "src/flow/query-details.js"
+          "src/flow/query-artifact-capture.js",
+          "src/flow/query-contract.js"
         ]
       },
       {
@@ -835,6 +835,12 @@
         "code": "EVALUATION_SCHEMA_ERROR",
         "sources": [
           "src/flow/lib/run-gate.js"
+        ]
+      },
+      {
+        "code": "EXECUTION_RECORD_INCONSISTENT",
+        "sources": [
+          "src/flow/query-contract.js"
         ]
       },
       {

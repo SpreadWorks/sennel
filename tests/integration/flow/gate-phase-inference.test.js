@@ -1,7 +1,8 @@
 import { describe, it, afterEach } from "node:test";
 import assert from "node:assert/strict";
-import { createTmpDir, removeTmpDir } from "../../support/builders/tmp-dir.js";
+import { createTmpDir, removeTmpDir, writeFile } from "../../support/builders/tmp-dir.js";
 import { CanonicalFlowFixture, makeFlowManager, setupFlowConfig } from "../../support/infrastructure/flow-setup.js";
+import { fixtureRepository } from "../../support/infrastructure/flow-dispatch-scenario.js";
 import {
   resolveGateStepId,
   resolveGatePhaseFromState,
@@ -231,25 +232,24 @@ describe("resolveGatePhaseFromState: task-level takes precedence (AC4/R3)", () =
   });
 
   it("passes explicit task scope to the task-gate lifecycle mutation", async () => {
-    const root = createTmpDir("gate-phase-task-scope-");
+    const root = fixtureRepository("gate-phase-task-scope-");
     try {
       const flowManager = makeFlowManager(root);
       const fixture = new CanonicalFlowFixture({
         flowManager,
         specId: "001-test",
         runId: "run-task-gate-pre",
+        execution: { mode: "direct", baseBranch: "main" },
         specRecord: { requirements: [{ id: "R-T1", desc: "Exercise Task Gate scope.", task_ids: ["T1"] }] },
       }).create().addTask({
         id: "T1", title: "task", goal: "task", parent: null,
         origin: "plan", added_round: 0, status: "pending",
       }).registerActive();
-      fixture.settleBefore("T1-impl").activateTask("T1", { settlePredecessors: false });
-      fixture
-        .settle("T1-impl")
-        .settle("T1-review")
-        .settle("T1-triage", "skipped")
-        .settle("T1-repair", "skipped")
-        .activate("T1-gate", { settlePredecessors: false });
+      await fixture.activateWithProducers("T1-gate", {
+        sourceMutations: new Map([["T1-impl", () => {
+          writeFile(root, "src/task-scope.js", "export const taskScope = true;\n");
+        }]]),
+      });
       const flowState = flowManager.loadReadOnly("001-test");
 
       assert.equal(FLOW_COMMANDS.run.gate.runtimeLog.stepId({ phase: "task-impl", flowState }), "T1-gate");
@@ -272,15 +272,16 @@ describe("resolveGatePhaseFromState: task-level takes precedence (AC4/R3)", () =
   });
 
   it("keeps the flow-level integration gate lifecycle identity at impl-gate", async () => {
-    const root = createTmpDir("gate-phase-flow-scope-");
+    const root = fixtureRepository("gate-phase-flow-scope-");
     try {
       const flowManager = makeFlowManager(root);
       const fixture = new CanonicalFlowFixture({
         flowManager,
         specId: "001-test",
         runId: "run-impl-gate-pre",
+        execution: { mode: "direct", baseBranch: "main" },
       }).create().registerActive();
-      fixture.settleBefore("impl-gate");
+      await fixture.activateWithProducers("impl-gate", { activateTarget: false });
       const flowState = flowManager.loadReadOnly("001-test");
 
       await FLOW_COMMANDS.run.gate.pre({

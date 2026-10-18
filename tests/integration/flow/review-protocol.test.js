@@ -96,6 +96,59 @@ describe("Task Review protocol", () => {
     }
   });
 
+  for (const changesSource of [false, true]) it(`ignored canonical observations ${changesSource ? "cannot hide an actual Task source edit" : "remain valid read-only Task source input"}`, async (t) => {
+    const scenario = new TaskReviewScenario(t);
+    fs.writeFileSync(path.join(scenario.root, ".gitignore"), "/specs/\n/.sennel/\n/.tmp/\n");
+    execFileSync("git", ["add", "--", ".gitignore"], { cwd: scenario.root, stdio: "ignore" });
+    execFileSync("git", ["commit", "-m", "test: normal ignored canonical input"], { cwd: scenario.root, stdio: "ignore" });
+    const outputVariable = PRODUCT.env("REVIEW_OUTPUT_DIR");
+    const previousOutput = process.env[outputVariable];
+    process.env[outputVariable] = path.join(scenario.root, ".tmp", "review-output");
+    try {
+      const identity = TaskReviewExecutionIdentity.fromCanonicalState({ state: scenario.state(), taskId: scenario.taskId, reviewAttempt: 1 });
+      const observer = new TaskReviewSourceEffectObserver({ root: scenario.root, flowManager: scenario.manager,
+        specId: scenario.specId, executionIdentity: identity });
+      const before = observer.capture({ number: 1 });
+      assert.equal(before.baseline.snapshot.mode, "git");
+      const session = scenario.manager.prepareExecutionObservationSession({ specId: scenario.specId });
+      session.append({ id: "ignored-review-source-input", kind: "agent-started", entityId: "logical-source", data: {} });
+      scenario.reload();
+      const observations = await scenario.manager.readExecutionObservations({ specId: scenario.specId });
+      assert.ok(observations.facts.some((fact) => fact.id === "ignored-review-source-input"));
+      const location = scenario.manager.specLocation(scenario.specId);
+      const sourcePath = `${location.relativeDirectory}/artifacts/execution-observations/sources/${session.sourceId}.json`;
+      assert.equal(before.baseline.snapshot.entries.some((entry) => entry.path === sourcePath), false);
+      if (changesSource) fs.appendFileSync(scenario.sourcePath, "actual additional source edit\n");
+      const after = observer.capture({ number: 1 });
+      assert.equal(after.baseline.snapshot.entries.some((entry) => entry.path === sourcePath), false);
+      assert.equal(observer.hasEffect(before, after), changesSource);
+      const manifest = scenario.manager.readCanonicalTransitionView({ specId: scenario.specId,
+        read: (view) => SourceMutationManifest.capture({ baseline: before.baseline,
+          executionObservations: new SourceExecutionObservationAppends(view, before.baseline.snapshot) }) });
+      assert.deepEqual(manifest.paths(), changesSource ? ["README.md"] : []);
+      assert.doesNotThrow(() => scenario.manager.readCanonicalTransitionView({ specId: scenario.specId,
+        read: (view) => manifest.assertMatchesCurrent(before.baseline,
+          { executionObservations: new SourceExecutionObservationAppends(view, before.baseline.snapshot) }) }));
+      if (!changesSource) {
+        const sourceFile = path.join(scenario.root, ...sourcePath.split("/"));
+        const sourceBytes = fs.readFileSync(sourceFile);
+        for (const corrupt of [() => fs.appendFileSync(sourceFile, "\n"), () => fs.unlinkSync(sourceFile)]) {
+          try {
+            corrupt();
+            assert.throws(() => scenario.manager.readCanonicalTransitionView({ specId: scenario.specId,
+              read: (view) => new SourceExecutionObservationAppends(view, before.baseline.snapshot) }),
+            /catalog|content|artifact|missing|exist|ENOENT/i, "Git omission cannot authenticate corrupted or missing observations");
+          } finally {
+            fs.writeFileSync(sourceFile, sourceBytes);
+          }
+        }
+      }
+    } finally {
+      if (previousOutput === undefined) delete process.env[outputVariable];
+      else process.env[outputVariable] = previousOutput;
+    }
+  });
+
   for (const changesSource of [false, true]) it(`real Agent observation appends ${changesSource ? "cannot hide a Task source edit" : "remain read-only Task Review input"}`, async (t) => {
     const scenario = new TaskReviewScenario(t);
     const outputVariable = PRODUCT.env("REVIEW_OUTPUT_DIR");

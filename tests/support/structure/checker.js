@@ -428,17 +428,10 @@ export class StructureChecker {
       flowStepExecutionRegistration(command.commandName)?.executionContract.selectorName === "selectFinalizationExecution"
         ? invocation.authorization : null,)`)) this.#diagnose("R04", file, normalCommand?.token, [file],
       "Definition-owned Step commands must use the shared boundary with registered finalization authorization");
-    const dispatchFile = "src/lib/dispatcher.js";
-    const dispatcher = this.#module(dispatchFile, [file, dispatchFile], "R04", true);
-    const lifecycle = dispatcher?.declaration("dispatch");
-    if (!lifecycle?.containsBodySequence("if (entry.pre) { try { await entry.pre(hookCtx); } catch (err) {")
-      || !lifecycle.containsBodySequence("if (entry.post && !skipPost) { try { const postResult = await entry.post(hookCtx, result);")
-      || !lifecycle.containsBodySequence(`await persistFinalizeCleanupPostReturnMetadata({ envelopeKey, hookCtx,
-        metadata: closedRuntimeLogMetadata, commandModule: mod, commitCompletion: true, });`)
-      || !lifecycle.containsBodySequence("await withFlowProcessRuntime(hookCtx, executeLifecycle,")) {
-      this.#diagnose("R04", dispatchFile, lifecycle?.token, [file, dispatchFile],
-        "shared dispatch must retain registered pre/post and completion receipt processing");
-    }
+    // Recovery architecture owns the registered boundary above. The shared
+    // dispatcher's pre/post ordering and conditional Completion publication are
+    // observable contracts owned by integration/lib/dispatcher*.test.js, rather
+    // than a required private function layout or a literal commit flag here.
     const recovery = readClassMember(module, "RunDispatchCommand", "runDispatcherOwnedRecovery");
     if (!recovery?.matchesDeclaration(`runDispatcherOwnedRecovery(ctx, target, action, invocation, receiptMutation = null) {
       if (!(action.directive instanceof ExecuteCommandDirective)) return null;
@@ -1417,8 +1410,8 @@ export class StructureChecker {
       }
       // A saved failure remains a stop; it grants no authority to reuse incomplete raw evidence.
       if (saved.result.type === "error") return saved;
-      assertCurrentTestSourceRevision(payload, view);
-      assertCurrentTestSourceRevision(source, view);
+      assertCurrentTestSourceRevision(payload, view, undefined, "test-chain artifact", (descriptor) => view.readCatalogedArtifact(descriptor));
+      assertCurrentTestSourceRevision(source, view, undefined, "test-chain artifact", (descriptor) => view.readCatalogedArtifact(descriptor));
       const raw = flowManager.readRuntimeArtifact({ specId, logicalKey: "test.execute.raw-log",
         consumerNodeId: stepId, optional: true });
       const retainedCompletion = saved.result.evidence?.observation?.executionCompletion ?? null;
@@ -1492,8 +1485,8 @@ try {
       }
       // A saved failure remains a stop; it grants no authority to reuse incomplete raw evidence.
       if (saved.result.type === "error") return saved;
-      assertCurrentTestSourceRevision(payload, view);
-      assertCurrentTestSourceRevision(source, view);
+      assertCurrentTestSourceRevision(payload, view, undefined, "test-chain artifact", (descriptor) => view.readCatalogedArtifact(descriptor));
+      assertCurrentTestSourceRevision(source, view, undefined, "test-chain artifact", (descriptor) => view.readCatalogedArtifact(descriptor));
       const raw = flowManager.readRuntimeArtifact({ specId, logicalKey: "test.execute.raw-log",
         consumerNodeId: stepId, optional: true });
       const retainedCompletion = saved.result.evidence?.observation?.executionCompletion ?? null;
@@ -1572,10 +1565,11 @@ return CanonicalTestSourceRevision.fromCatalog({
     state: snapshot.state,
     catalog: Array.isArray(catalog) ? { artifacts: catalog } : catalog,
     activities,
+    readCatalogedArtifact,
   }).digest;
     `)
       && module.declaration("assertCurrentTestSourceRevision")?.matchesBody(`
-const revision = testSourceRevision(snapshot, testSource);
+const revision = testSourceRevision(snapshot, testSource, readCatalogedArtifact);
   if (payload?.testSourceRevision !== revision) {
     throw new Error(\`\${field} test source revision does not match the finalized catalog\`);
   }

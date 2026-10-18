@@ -18,7 +18,9 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
-import { countReviewAttempts, resolveMaxAttempts } from "../definition.js";
+import { resolveMaxAttempts } from "../definition.js";
+import { readFlowReviewAccounting } from "./flow-review-accounting.js";
+import { ReviewDeferralEvidence } from "./review-transition-facts.js";
 import { ImplReviewResultEvidence, ImplReviewFrontier } from "./impl-review-values.js";
 import { NonGateTargetBinding, NonGateRetryMetrics, NonGateCatalogPublication } from "./non-gate-transition.js";
 import { ReviewToolingOutcome, ImplReviewToolingObservation } from "./review-observation-values.js";
@@ -1341,7 +1343,7 @@ function implementationReviewIdentity(state) {
 
 function implementationReviewRetry(flowManager, state) {
   const view = flowManager.loadReadOnly(state.specId);
-  return new NonGateRetryMetrics({ used: countReviewAttempts(view.metrics, "impl"),
+  return new NonGateRetryMetrics({ used: readFlowReviewAccounting({ flowManager, state }).attemptCount,
     maximum: resolveMaxAttempts({ scope: "flow", stepId: "impl-review", context: view }) });
 }
 
@@ -1358,7 +1360,7 @@ export function readImplReviewRequestEvidence({ flowManager, state, manifest }) 
 }
 
 /** Rebuild the publication's evidence from the owning sealed-output parser and exact preview bytes. */
-export function readProspectiveImplReviewEvidence({ flowManager, binding, commandResult, publication }) {
+export function readProspectiveImplReviewObservation({ flowManager, binding, commandResult, publication }) {
   const state = publication.state;
   const attached = attachedCanonicalCommandResultArtifact(commandResult);
   if (binding.stepId !== "impl-review" || attached?.logicalKey !== "impl.review") {
@@ -1410,13 +1412,28 @@ export function readProspectiveImplReviewEvidence({ flowManager, binding, comman
   } else {
     throw new TypeError("Implementation Review publication has no sealed observation or tooling outcome");
   }
-  return new ImplReviewResultEvidence({ identity: implementationReviewIdentity(state), manifest, seal, review,
+  const evidence = new ImplReviewResultEvidence({ identity: implementationReviewIdentity(state), manifest, seal, review,
     retry: implementationReviewRetry(flowManager, state), frontier: implementationReviewFrontier(state),
     tooling: payload.toolingOutcome == null ? null : new ReviewToolingOutcome(payload.toolingOutcome),
     toolingObservation: payload.toolingOutcome == null ? null : ImplReviewToolingObservation.fromArtifact(payload, manifest),
     publication: new NonGateCatalogPublication({ runId: state.runId, specId: state.specId, stepId: "impl-review",
       attemptId: binding.attempt.id, sequence: binding.attempt.sequence, producerActivityId: published.descriptor.activityId,
       artifactId: published.relativePath, fingerprint: published.descriptor.hash }) });
+  return new ImplReviewSourceObservation({ evidence, source: attached, sourceRelativePath: published.relativePath,
+    deferralEvidence: review === null ? null : ReviewDeferralEvidence.fromArtifact({ artifact: payload, phase: "impl" }) });
+}
+
+/** Acquired semantic and source facts; neither field can select or execute a route. */
+export class ImplReviewSourceObservation {
+  constructor({ evidence, source, sourceRelativePath, deferralEvidence }) {
+    if (!(evidence instanceof ImplReviewResultEvidence) || !(source instanceof CanonicalCommandResultArtifact)
+      || source.logicalKey !== "impl.review" || sourceRelativePath !== evidence.publication.artifactId
+      || (evidence.review === null ? deferralEvidence !== null : !(deferralEvidence instanceof ReviewDeferralEvidence))) {
+      throw new TypeError("Implementation Review observation requires its exact acquired source and semantic facts");
+    }
+    Object.assign(this, { evidence, source, sourceRelativePath, deferralEvidence });
+    Object.freeze(this);
+  }
 }
 
 /** The Store consumes this parent-issued binding under its catalog lock. */

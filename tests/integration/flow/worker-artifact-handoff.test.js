@@ -9,6 +9,9 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, it } from "node:test";
 
+import { PromptBatchExecutionIncompleteFailure } from "../../../src/lib/prompt-batching.js";
+import { readArtifactWorkerRequestSnapshotFromView } from "../../../src/flow/lib/artifact-worker-execution-recovery.js";
+import { CanonicalPersistenceSnapshot } from "../../support/assertions/canonical-persistence.js";
 import { Container, container as runtimeContainer } from "../../../src/lib/container.js";
 import { FLOW_COMMANDS } from "../../../src/flow/registry.js";
 import RunReviewCommand from "../../../src/flow/lib/run-review.js";
@@ -925,6 +928,19 @@ function specRepairTextEditPayload(request, {
   };
 }
 
+function assertClaimedHandoffRetained(value, request, before) {
+  const manager = new FlowManager({ root: value.executionRoot, mainRoot: value.mainRoot,
+    inWorktree: value.executionRoot !== value.mainRoot, specId: value.specId });
+  before.assertUnchanged(manager, value.specId, "cleanup-only recovery of claimed execution");
+  request.executionContract.assertMatches(manager.readStoredExecutionContract({
+    binding: request.executionBinding(), generation: request.executionContract.generation,
+  }));
+  const snapshot = manager.readCanonicalTransitionView({ specId: value.specId,
+    read: (view) => readArtifactWorkerRequestSnapshotFromView(view, { executionContract: request.executionContract }) });
+  assert.equal(snapshot.id, request.requestSnapshot().id);
+  assert.equal(fs.existsSync(request.directory), true);
+}
+
 function specRepairSnapshot(value) {
   const state = value.flowManager.load(value.specId);
   const spec = value.flowManager.readArtifact({
@@ -1227,16 +1243,21 @@ describe("worker artifact handoff", () => {
   });
 
   for (const tamperedFile of ["request", "action"]) {
-    it(`rejects a tampered ${tamperedFile} file before the dispatcher starts its worker`, async () => {
+    it(`rejects a tampered ${tamperedFile} file before the dispatcher starts its worker`, async (t) => {
       const value = fixture("draft");
       try {
         let calls = 0;
         const coordinator = new WorkerArtifactHandoffCoordinator();
         const createRequest = coordinator.createRequest.bind(coordinator);
+        let filePath = null;
+        const rename = fs.renameSync;
+        t.mock.method(fs, "renameSync", (source, destination) => {
+          rename(source, destination);
+          if (destination === filePath) fs.writeFileSync(filePath, JSON.stringify({ tampered: true }));
+        });
         coordinator.createRequest = (input) => {
           const request = createRequest(input);
-          const filePath = tamperedFile === "request" ? request.requestPath : request.actionRequestPath;
-          fs.writeFileSync(filePath, JSON.stringify({ tampered: true }));
+          filePath = tamperedFile === "request" ? request.requestPath : request.actionRequestPath;
           return request;
         };
         const dispatcher = new RunDispatchCommand({
@@ -2506,7 +2527,7 @@ describe("worker artifact handoff", () => {
     }
   });
 
-  it("discards a parent-validated artifact handoff after a pre-commit interruption", () => {
+  it("retains a parent-validated claimed artifact handoff after a pre-commit interruption", () => {
     const value = fixture("draft");
     try {
       const request = value.coordinator.createRequest({
@@ -2533,16 +2554,18 @@ describe("worker artifact handoff", () => {
           && error.code === "FLOW_ARTIFACT_HANDOFF_RECOVERY_REQUIRED",
       );
 
+      const beforeRecovery = new CanonicalPersistenceSnapshot(value.flowManager, value.specId,
+        [request.requestPath, request.actionRequestPath, request.submissionPath, request.payloadPath("draft.json")]);
       const recovered = value.coordinator.recoverPending({ ctx: value.ctx });
-      assert.equal(recovered.completed, true);
-      assert.equal(recovered.cleanedHandoffs, 1);
+      assert.equal(recovered, null, "cleanup cannot discard a durable claimed execution");
+      assertClaimedHandoffRetained(value, request, beforeRecovery);
       assert.equal(value.flowManager.readArtifact({
         specId: value.specId,
         logicalKey: "draft",
         consumerNodeId: "draft-questions-review",
         optional: true,
       }), null, "recovery must not publish an artifact without a committed parent confirmation");
-      assert.equal(fs.existsSync(request.directory), false);
+      assert.equal(fs.existsSync(request.submissionPath), true);
     } finally {
       removeTmpDir(value.mainRoot);
     }
@@ -3514,7 +3537,6 @@ describe("worker artifact handoff", () => {
         state: value.flowManager.load(),
         invocation: value.invocation,
       });
-      assert.equal(request.version, 5);
       fs.writeFileSync(path.join(value.executionRoot, "product.js"), "export const value = 2;\n");
       fs.writeFileSync(request.payloadPath("effects.json"), json(implementationEffect(request, ["product.js"]).toJSON()));
       seal(request);
@@ -7021,6 +7043,7 @@ describe("worker artifact handoff", () => {
     const originalAccumulate = value.flowManager.accumulateAgentMetrics;
     let stderr = "";
     let calls = 0;
+    let metricCalls = 0;
     try {
       const action = {
         taskId: null,
@@ -7038,7 +7061,7 @@ describe("worker artifact handoff", () => {
         agent: withScenarioProviderAdmission({
           async call() {
             calls += 1;
-            throw new Error("simulated provider failure");
+            return ""; // A completed external call deliberately omits its required handoff.
           },
         }),
         repositoryFingerprint: () => "stable-fixture",
@@ -7046,6 +7069,7 @@ describe("worker artifact handoff", () => {
       });
       dispatcher.container = {};
       value.flowManager.accumulateAgentMetrics = () => {
+        metricCalls += 1;
         throw new Error("simulated metric persistence failure");
       };
       process.stderr.write = (chunk) => { stderr += String(chunk); return true; };
@@ -7061,6 +7085,7 @@ describe("worker artifact handoff", () => {
 
       assert.equal(result.errors[0].code, "FLOW_ARTIFACT_HANDOFF_RETRY_EXHAUSTED");
       assert.equal(calls, 2);
+      assert.ok(metricCalls > 0, "the actual advisory metric save must reach the injected persistence failure");
       assert.match(stderr, /metric accumulation failed: simulated metric persistence failure/);
       assert.equal(findStepById(value.flowManager.load().steps, "draft").status, "in_progress");
     } finally {
@@ -8463,6 +8488,7 @@ describe("worker artifact handoff", () => {
     });
     try {
       let workerCalls = 0;
+      const providerFailure = new Error("unclassified provider failure");
       const nextAction = new GetNextActionCommand();
       const dispatcher = new RunDispatchCommand({
         nextAction: nextActionRunner(nextAction, () => ({
@@ -8470,23 +8496,31 @@ describe("worker artifact handoff", () => {
         })),
         agent: withScenarioProviderAdmission({ async call() {
           workerCalls += 1;
-          throw new Error("unclassified provider failure");
+          throw providerFailure;
         } }),
         repositoryFingerprint: () => "stable-fixture",
         leaseFactory: () => ({ acquire() {}, release() {} }),
       });
       dispatcher.container = {};
-      const result = await dispatcher.execute({
+      await assert.rejects(() => dispatcher.execute({
         ...value.ctx, flowState: value.flowManager.loadReadOnly(value.specId),
         expectRunId: value.flowManager.loadReadOnly(value.specId).runId,
         expectSpec: value.specId, _envelopeType: "run", _envelopeKey: "dispatch",
-      });
-      assert.equal(result.ok, false);
+      }), (error) => error instanceof PromptBatchExecutionIncompleteFailure
+        && error.code === "PROMPT_BATCH_EXECUTION_INCOMPLETE" && error.cause === providerFailure);
       assert.equal(workerCalls, 1);
       assert.equal(value.flowManager.canonicalState(value.specId).attempt.failure, null);
-      assert.equal((await nextAction.execute({
+      const beforeRecoveryQuery = new CanonicalPersistenceSnapshot(value.flowManager, value.specId);
+      const next = await nextAction.execute({
         ...value.ctx, flowState: value.flowManager.loadReadOnly(value.specId),
-      })).directive.kind, "execute_step");
+      });
+      assert.equal(next.directive.kind, "execute_command");
+      assert.equal(next.directive.actionId, "RECOVER_ARTIFACT_EXECUTION");
+      assert.equal(next.directive.command.subcommand, "recover-artifact-execution");
+      assert.deepEqual(next.directive.command.args, ["--expect-run-id", value.flowManager.loadReadOnly(value.specId).runId,
+        "--expect-spec", value.specId, "--expect-no-issue"]);
+      assert.equal(workerCalls, 1, "reading the selected recovery must not retry the unknown provider result");
+      beforeRecoveryQuery.assertUnchanged(value.flowManager, value.specId, "unclassified provider recovery query");
     } finally {
       removeTmpDir(value.mainRoot);
     }
@@ -8857,9 +8891,6 @@ describe("worker artifact handoff", () => {
         agent: withScenarioProviderAdmission({
           async call(_prompt, options) {
             workerCalls += 1;
-            // Provider entry follows the normal claim. Protect everything from
-            // this boundary through publication, including that retained claim.
-            before = specRepairSnapshot(value);
             const requestPath = options.executionEnvironment.SENNEL_FLOW_HANDOFF_REQUEST;
             const request = JSON.parse(fs.readFileSync(requestPath, "utf8"));
             fs.writeFileSync(
@@ -8876,7 +8907,12 @@ describe("worker artifact handoff", () => {
         leaseFactory: () => ({ acquire() {}, release() {} }),
         handoffCoordinator: new WorkerArtifactHandoffCoordinator({
           faultInjector({ phase }) {
-            if (phase === "before-worker-handoff-publication") throw new Error("simulated pre-commit crash");
+            if (phase === "before-worker-handoff-publication") {
+              // The completed Prompt response/accounting is already durable.
+              // Protect the exact semantic publication transaction from here.
+              before = specRepairSnapshot(value);
+              throw new Error("simulated pre-commit crash");
+            }
           },
         }),
       });
@@ -9016,7 +9052,7 @@ describe("worker artifact handoff", () => {
     }
   });
 
-  it("discards an unsealed work unit from the current Run during recovery", () => {
+  it("retains an unsealed claimed work unit from the current Run during cleanup-only recovery", () => {
     const value = fixture();
     try {
       const request = value.coordinator.createRequest({
@@ -9025,12 +9061,14 @@ describe("worker artifact handoff", () => {
         invocation: value.invocation,
       });
 
+      const beforeRecovery = new CanonicalPersistenceSnapshot(value.flowManager, value.specId,
+        [request.requestPath, request.actionRequestPath, request.submissionPath]);
       const recovered = value.coordinator.recoverPending({ ctx: value.ctx });
 
-      assert.equal(recovered.completed, true);
-      assert.equal(recovered.cleanedHandoffs, 1);
-      assert.equal(fs.existsSync(request.directory), false);
-      assert.equal(fs.existsSync(executionHandoffRoot(value)), false);
+      assert.equal(recovered, null, "cleanup cannot discard a durable claim merely because its response is missing");
+      assertClaimedHandoffRetained(value, request, beforeRecovery);
+      assert.equal(fs.existsSync(request.submissionPath), false);
+      assert.equal(fs.existsSync(executionHandoffRoot(value)), true);
       assert.equal(fs.existsSync(path.join(value.executionRoot, ".sennel", "handoffs")), true);
     } finally {
       removeTmpDir(value.mainRoot);

@@ -36,6 +36,8 @@ import {
   FlowVersionMigrationSourcePolicy,
 } from "../../../src/lib/flow-version.js";
 import { FlowSpecRevision } from "../../../src/lib/flow-spec-revision.js";
+import { FlowManager } from "../../../src/lib/flow-manager.js";
+import { CanonicalPersistenceSnapshot } from "../../support/assertions/canonical-persistence.js";
 import { buildCurrentFlowDefinition } from "../../../src/flow/definition.js";
 const REVIEW_DIGEST_A = "a".repeat(64);
 const REVIEW_DIGEST_B = "b".repeat(64);
@@ -1207,6 +1209,36 @@ describe("Flow Version migration classification", () => {
 });
 
 describe("Current Flow Version storage", () => {
+  it("reopens valid current canonical state after transient lock directory removal", () => {
+    const location = canonicalLocation();
+    const boundary = new CurrentFlowStateAdoptionBoundary({ definition: buildCurrentFlowDefinition() });
+    const store = boundary.openVersionStore({ location });
+    const expectedState = store.create(freshState(boundary, location), { specRecord: specRecord() });
+    const expectedSnapshot = store.loadSnapshot();
+    const expectedCatalog = store.catalog();
+    const manager = new FlowManager({
+      root: location.repositoryRoot, mainRoot: location.repositoryRoot,
+      inWorktree: false, specId: location.specId.toString(),
+    });
+    const persistence = new CanonicalPersistenceSnapshot(manager, location.specId.toString());
+    const runtimeLock = location.runtimeLock("runtime.lock.artifact-catalog");
+
+    fs.rmSync(runtimeLock.directory, { recursive: true });
+    assert.equal(fs.existsSync(runtimeLock.directory), false);
+
+    const reopened = boundary.openVersionStore({ location });
+    assert.deepEqual(reopened.load().toJSON(), expectedState.toJSON());
+    const snapshot = reopened.loadSnapshot();
+    assert.deepEqual(snapshot.state.toJSON(), expectedState.toJSON());
+    assert.deepEqual(snapshot.state.identity.toJSON(), expectedSnapshot.state.identity.toJSON());
+    assert.equal(snapshot.revision, expectedSnapshot.revision);
+    assert.deepEqual(snapshot.activities.map((activity) => activity.toJSON()),
+      expectedSnapshot.activities.map((activity) => activity.toJSON()));
+    assert.deepEqual(reopened.catalog().toJSON(), expectedCatalog.toJSON());
+    persistence.assertPhysicalUnchanged("fresh Store read after transient lock directory removal");
+    assert.equal(fs.statSync(runtimeLock.directory).isDirectory(), true);
+  });
+
   it("captures a lock-free catalog-bound snapshot without creating runtime state", async () => {
     const location = canonicalLocation();
     const boundary = new CurrentFlowStateAdoptionBoundary({ definition: buildCurrentFlowDefinition() });
@@ -1462,6 +1494,34 @@ describe("Current Flow Version storage", () => {
       write: () => new FlowArtifactCatalogStore({ location }).require(),
     }), /(?:nested Version catalog access|file lock is already held by this process)/);
     assert.equal(store.require().artifacts.some((entry) => entry.logicalKey === "report"), false);
+  });
+
+  it("preserves existing directory metadata when a rejected publication rolls back", () => {
+    const location = canonicalLocation();
+    const boundary = new CurrentFlowStateAdoptionBoundary({ definition: buildCurrentFlowDefinition() });
+    boundary.openVersionStore({ location }).create(freshState(boundary, location), { specRecord: specRecord() });
+    const directories = [location.directory, location.resolve("revisions"), location.resolve("revisions/001")];
+    for (const directory of directories) fs.chmodSync(directory, (fs.statSync(directory).mode & 0o777) | 0o020);
+    const modes = () => directories.map((directory) => fs.statSync(directory).mode & 0o777);
+    const beforeModes = modes();
+    const store = new FlowArtifactCatalogStore({ location });
+    const beforeCatalog = store.require().hash;
+    const beforeState = fs.readFileSync(location.flowStateFile);
+    const artifact = FLOW_ARTIFACT_CONTRACTS.resolve("report");
+    const failure = new Error("reject the prospective report before publication");
+    assert.throws(() => store.publish({
+      ...artifact.publication({ updater: "report", mediaType: "application/json" }),
+      publicationClaim: artifactPublicationClaimForStep("report"),
+      write: () => {
+        fs.mkdirSync(path.dirname(location.resolve(artifact.relativePath)), { recursive: true });
+        fs.writeFileSync(location.resolve(artifact.relativePath), "{}\n");
+        throw failure;
+      },
+    }), (error) => error === failure);
+    assert.equal(store.require().hash, beforeCatalog);
+    assert.deepEqual(fs.readFileSync(location.flowStateFile), beforeState);
+    assert.equal(fs.existsSync(location.resolve(artifact.relativePath)), false);
+    assert.deepEqual(modes(), beforeModes);
   });
 
   it("recovers publication and unpublication transactions after real process death at every catalog commit boundary", async () => {

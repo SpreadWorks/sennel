@@ -125,16 +125,17 @@ function rawEvidence(readRuntimeArtifact, logicalKey) {
   return readRuntimeArtifact({ logicalKey });
 }
 
-function testSourceRevision(snapshot, { catalog = snapshot.catalog, activities = snapshot.activities } = {}) {
+function testSourceRevision(snapshot, { catalog = snapshot.catalog, activities = snapshot.activities } = {}, readCatalogedArtifact) {
   return CanonicalTestSourceRevision.fromCatalog({
     state: snapshot.state,
     catalog: Array.isArray(catalog) ? { artifacts: catalog } : catalog,
     activities,
+    readCatalogedArtifact,
   }).digest;
 }
 
-function assertCurrentTestSourceRevision(payload, snapshot, testSource, field = "test-chain artifact") {
-  const revision = testSourceRevision(snapshot, testSource);
+function assertCurrentTestSourceRevision(payload, snapshot, testSource, field = "test-chain artifact", readCatalogedArtifact) {
+  const revision = testSourceRevision(snapshot, testSource, readCatalogedArtifact);
   if (payload?.testSourceRevision !== revision) {
     throw new Error(`${field} test source revision does not match the finalized catalog`);
   }
@@ -176,7 +177,7 @@ export function readAuthenticatedTestExecutionCompletion({ flowManager, specId }
     const descriptor = view.catalog.artifacts.find((entry) => entry.logicalKey === "test.execute");
     if (descriptor === undefined) return null;
     const payload = currentPayload(descriptor, (entry) => view.readCatalogedArtifact(entry));
-    assertCurrentTestSourceRevision(payload, view);
+    assertCurrentTestSourceRevision(payload, view, undefined, "test-chain artifact", (descriptor) => view.readCatalogedArtifact(descriptor));
     const completion = authenticatedExecutionCompletion(view, descriptor, payload);
     const raw = view.readRuntimeArtifact({ logicalKey: "test.execute.raw-log", consumerNodeId: "test-result-review", optional: true });
     if (raw !== null && canonicalRawEvidenceFingerprint(raw.bytes) !== payload.rawEvidenceFingerprint) {
@@ -268,7 +269,7 @@ export function readTestChainTransitionFactsFromSnapshot({
     sourcePayload = executionPayload;
     source = sourcePublication(snapshot, executionDescriptor);
     let revision;
-    try { revision = assertCurrentTestSourceRevision(executionPayload, snapshot, testSource, "test-execute artifact"); } catch (error) {
+    try { revision = assertCurrentTestSourceRevision(executionPayload, snapshot, testSource, "test-execute artifact", readCatalogedArtifact); } catch (error) {
       if (error.code === "CANONICAL_TEST_SOURCE_REVISION_UNAVAILABLE") throw error;
       observedIntegrityFailure ??= "stale_test_source_revision";
     }
@@ -302,7 +303,7 @@ export function readTestChainTransitionFactsFromSnapshot({
   }
   const current = new NonGateAttemptIdentity(snapshot.attempt);
   if (snapshot.stepId !== "test-result-review") {
-    try { assertCurrentTestSourceRevision(payload, snapshot, testSource, `${snapshot.stepId} artifact`); } catch (error) {
+    try { assertCurrentTestSourceRevision(payload, snapshot, testSource, `${snapshot.stepId} artifact`, readCatalogedArtifact); } catch (error) {
       if (error.code === "CANONICAL_TEST_SOURCE_REVISION_UNAVAILABLE") throw error;
       observedIntegrityFailure ??= "stale_test_source_revision";
     }
@@ -534,8 +535,8 @@ export function readCurrentTestChainSettlement({ flowManager, specId, stepId, co
       }
       // A saved failure remains a stop; it grants no authority to reuse incomplete raw evidence.
       if (saved.result.type === "error") return saved;
-      assertCurrentTestSourceRevision(payload, view);
-      assertCurrentTestSourceRevision(source, view);
+      assertCurrentTestSourceRevision(payload, view, undefined, "test-chain artifact", (descriptor) => view.readCatalogedArtifact(descriptor));
+      assertCurrentTestSourceRevision(source, view, undefined, "test-chain artifact", (descriptor) => view.readCatalogedArtifact(descriptor));
       const raw = flowManager.readRuntimeArtifact({ specId, logicalKey: "test.execute.raw-log",
         consumerNodeId: stepId, optional: true });
       const retainedCompletion = saved.result.evidence?.observation?.executionCompletion ?? null;

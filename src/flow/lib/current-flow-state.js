@@ -4404,11 +4404,12 @@ function assertNodeLifecycle(node, options = {}) {
 function assertExecutionFrontier(leaves, currentPath, nodes, allowsRetainedSource = () => false,
   allowsUnexecutedRouteTail = () => false) {
   const taskIdByLeafId = new Map();
-  const fullyPendingTaskIds = new Set();
+  const pendingSuffixTaskIds = new Set();
   for (const node of nodes) {
     if (!(node instanceof TaskNode)) continue;
     const taskLeaves = collectNodes(node).filter((candidate) => candidate.steps.length === 0);
-    if (taskLeaves.every((leaf) => leaf.status === "pending")) fullyPendingTaskIds.add(node.id);
+    if (taskLeaves.every((leaf) => TERMINAL_NODE_STATUSES.has(leaf.status)
+      || ["pending", "in_progress"].includes(leaf.status))) pendingSuffixTaskIds.add(node.id);
     for (const leaf of taskLeaves) taskIdByLeafId.set(leaf.id, node.id);
   }
   const finalizationDownstreamRoute = currentPath?.at(-1) === "finalize-merge";
@@ -4417,6 +4418,9 @@ function assertExecutionFrontier(leaves, currentPath, nodes, allowsRetainedSourc
   let taskGateRepairPendingSuffix = false;
   let unexecutedRouteTail = false;
   for (const [index, leaf] of leaves.entries()) {
+    const leafTaskId = taskIdByLeafId.get(leaf.id) ?? null;
+    const approvalRecoveryTask = leaf.status === "pending"
+      && leafTaskId !== null && pendingSuffixTaskIds.has(leafTaskId);
     if (TERMINAL_NODE_STATUSES.has(leaf.status)) {
       if (frontier !== null) {
         if (finalizationDownstreamRoute
@@ -4431,7 +4435,7 @@ function assertExecutionFrontier(leaves, currentPath, nodes, allowsRetainedSourc
     }
     if (frontier === null) {
       frontier = { index, status: leaf.status };
-      if (leaf.status !== "in_progress") suffixStatus = leaf.status;
+      if (leaf.status !== "in_progress" && !approvalRecoveryTask) suffixStatus = leaf.status;
       continue;
     }
     if (frontier.status === "in_progress" && index === frontier.index) continue;
@@ -4449,14 +4453,12 @@ function assertExecutionFrontier(leaves, currentPath, nodes, allowsRetainedSourc
     }
     // A dedicated add_approval_task Activity may insert pending dynamic Tasks
     // into an invalidated definition-owned suffix. Those Tasks remain valid
-    // after approval confirms and while the earlier invalidated leaves recover.
+    // after approval confirms, while earlier leaves recover, and throughout
+    // their own normal terminal/active/pending prefix. An invalidated Task
+    // still uses the strict repair-frontier rules below.
     // Generic add_task cannot create this shape because its guard is unchanged;
     // the Activity journal proves the dedicated admission route.
-    const leafTaskId = taskIdByLeafId.get(leaf.id) ?? null;
     const frontierTaskId = taskIdByLeafId.get(leaves[frontier.index].id) ?? null;
-    const approvalRecoveryTask = leaf.status === "pending"
-      && leafTaskId !== null
-      && fullyPendingTaskIds.has(leafTaskId);
     if (approvalRecoveryTask) continue;
     if (suffixStatus === null) suffixStatus = leaf.status;
     // A sealed Task Gate repair leaves the current Task's unfinished suffix
@@ -9345,6 +9347,18 @@ export class CurrentFlowStateStore {
     Object.freeze(this);
   }
 
+  /** Reject a non-current state before a Version creates its runtime branch.
+   * This grants no read authority: successful callers must still acquire the
+   * normal catalog/state locks and reload all canonical evidence. */
+  static assertInitialReadFormat({ directory, definition }) {
+    const bytes = CurrentFlowStateStore.#readStoredStateBytes(path.join(directory, "flow.json"));
+    if (bytes === null) return;
+    const serializer = new CurrentFlowStateSerializer({
+      validator: new CurrentFlowStateValidator({ definition }),
+    });
+    CurrentFlowStateStore.#parseStateBytes(bytes, serializer);
+  }
+
   create(state) {
     const next = this.serializer.deserialize(state);
     return this.#withLock(() => {
@@ -9539,7 +9553,11 @@ export class CurrentFlowStateStore {
   }
 
   #parse(bytes) {
-    try { return this.serializer.deserialize(JSON.parse(bytes.toString("utf8"))); } catch (error) {
+    return CurrentFlowStateStore.#parseStateBytes(bytes, this.serializer);
+  }
+
+  static #parseStateBytes(bytes, serializer) {
+    try { return serializer.deserialize(JSON.parse(bytes.toString("utf8"))); } catch (error) {
       if (error instanceof CurrentFlowStateInvariantError) throw error;
       throw new CurrentFlowStateInvariantError(`invalid flow.json: ${error.message}`);
     }
@@ -9708,14 +9726,18 @@ export class CurrentFlowStateStore {
   }
 
   #readStateBytes() {
-    const bytes = new AtomicFile(this.statePath, { phaseNamespace: "current-flow-state-read" }).read(null);
+    return CurrentFlowStateStore.#readStoredStateBytes(this.statePath);
+  }
+
+  static #readStoredStateBytes(statePath) {
+    const bytes = new AtomicFile(statePath, { phaseNamespace: "current-flow-state-read" }).read(null);
     if (bytes === null) return null;
-    const visible = fs.lstatSync(this.statePath);
+    const visible = fs.lstatSync(statePath);
     if (
       !visible.isFile()
       || visible.isSymbolicLink()
       || visible.nlink !== 1
-      || fs.realpathSync(this.statePath) !== this.statePath
+      || fs.realpathSync(statePath) !== statePath
     ) {
       throw new CurrentFlowStateInvariantError("flow state authority must be a single-link regular real file");
     }
@@ -9861,6 +9883,9 @@ export class CurrentFlowVersionStore {
     this.allowStaging = allowStaging === true;
     this.catalogStore = new FlowArtifactCatalogStore({
       location,
+      assertInitialReadFormat: () => CurrentFlowStateStore.assertInitialReadFormat({
+        directory: this.location.directory, definition: this.definition,
+      }),
       ...(faultInjector && { faultInjector }),
     });
     Object.freeze(this);

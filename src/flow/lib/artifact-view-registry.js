@@ -338,7 +338,7 @@ export const FLOW_ARTIFACT_VIEW_REGISTRY = new ArtifactViewRegistry([
   }),
   new ArtifactViewRegistryEntry({
     logicalKey: "acceptance.review",
-    rendererRevision: "1",
+    rendererRevision: "2",
     dependencies: [
       new ArtifactViewDependency({ logicalKey: "spec.record", required: true }),
       new ArtifactViewDependency({ logicalKey: "acceptance.decision", required: false }),

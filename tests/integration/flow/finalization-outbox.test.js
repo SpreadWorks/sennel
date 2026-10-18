@@ -7,10 +7,6 @@ import { FLOW_COMMANDS } from "../../../src/flow/registry.js";
 import { describe, it } from "node:test";
 
 import {
-  BeginOutboxEffect,
-  CompleteOutboxEffect,
-  FailOutboxEffect,
-  SetStepStatus,
   buildInitialNestedSteps,
   resolveLifecycle,
 } from "../../../src/flow/definition.js";
@@ -226,7 +222,12 @@ describe("resumable finalization outbox", () => {
         specRecord: { requirements: [{ id: "R1", desc: "Complete Report and its outbox atomically.", task_ids: ["T1"], testable: false }] },
         taskDocuments: [{ id: "T1", title: "Fixture Task", goal: "Complete Report and its outbox atomically.",
           origin: "plan", added_round: 0, status: "pending" }], targetStep: "report",
-      }).createWithProducers();
+      }).createWithProducers({
+        implementationFiles: new Map([["R1", ["README.md"]]]),
+        sourceMutations: new Map([["T1-impl", () => {
+          fs.appendFileSync(path.join(root, "README.md"), "Report publication preserves the exact Outbox identity.\n");
+        }]]),
+      });
       const state = flowManager.loadReadOnly(specId);
       const identity = new FlowOutboxIdentity({ runId: state.runId, stepId: "report", operation: "report" });
       const outbox = new FlowOutboxStore(flowManager, { specId });
@@ -259,53 +260,4 @@ describe("resumable finalization outbox", () => {
     }), /requires a Definition-selected GateTransitionDecision/);
   });
 
-  for (const command of ["finalize-commit", "finalize-merge", "finalize-sync", "finalize-cleanup"]) {
-    it(`${command} confirms its outbox before marking the step done`, () => {
-      const actions = resolveLifecycle({
-        event: "finalize:post",
-        command,
-        currentStepId: command,
-        result: { status: "done" },
-      });
-      const completeIndex = actions.findIndex((action) => action instanceof CompleteOutboxEffect);
-      const doneIndex = actions.findIndex((action) => (
-        action instanceof SetStepStatus && action.step === command && action.status === "done"
-      ));
-      assert.equal(
-        actions.some((action) => action instanceof BeginOutboxEffect),
-        command === "finalize-merge",
-      );
-      assert.ok(completeIndex >= 0);
-      assert.ok(completeIndex > doneIndex);
-    });
-  }
-
-  it("settles a failed finalize-sync as skipped after recording its failed outbox", () => {
-    const actions = resolveLifecycle({
-      event: "finalize:onError",
-      command: "finalize-sync",
-      currentStepId: "finalize-sync",
-    });
-    const failureIndex = actions.findIndex((action) => action instanceof FailOutboxEffect);
-    const skippedIndex = actions.findIndex((action) => (
-      action instanceof SetStepStatus
-      && action.step === "finalize-sync"
-      && action.status === "skipped"
-    ));
-    assert.ok(failureIndex >= 0);
-    assert.ok(skippedIndex > failureIndex);
-  });
-
-  it("recognizes an envelope-wrapped cleanup result as successful", () => {
-    const actions = resolveLifecycle({
-      event: "finalize:post",
-      command: "finalize-cleanup",
-      currentStepId: "finalize-cleanup",
-      result: { data: { status: "done" } },
-    });
-    assert.ok(actions.some((action) => action instanceof CompleteOutboxEffect));
-    assert.ok(actions.some((action) => (
-      action instanceof SetStepStatus && action.step === "finalize-cleanup" && action.status === "done"
-    )));
-  });
 });

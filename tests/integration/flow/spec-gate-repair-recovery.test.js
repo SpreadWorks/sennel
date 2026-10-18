@@ -2,12 +2,12 @@ import assert from "node:assert/strict";
 import childProcess from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
-import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { after, before, describe, it, mock } from "node:test";
+import { after, before, describe, it } from "node:test";
 
 import { FlowManager } from "../../../src/lib/flow-manager.js";
+import { FlowExecutionContract } from "../../../src/flow/lib/flow-execution-contract.js";
 import { FlowTargetBinding } from "../../../src/lib/flow-target-guard.js";
 import { FlowDispatchTarget } from "../../../src/flow/lib/dispatch-invocation.js";
 import RunDispatchCommand from "../../../src/flow/lib/run-dispatch.js";
@@ -28,6 +28,7 @@ import { readSpecJsonValidator } from "../../../src/lib/spec-json.js";
 import { LegacySpecGateRepairErrorSeed } from "../../support/infrastructure/spec-gate-repair-legacy-error.js";
 import { dispatchContainer } from "../../support/infrastructure/flow-dispatch-scenario.js";
 import { workerArtifactJson } from "../../support/infrastructure/worker-artifact.js";
+import { installReviewProcessFake } from "../../support/infrastructure/review-process-fake.js";
 import { removeTmpDir } from "../../support/builders/tmp-dir.js";
 
 function reload(value, options = {}) {
@@ -166,7 +167,17 @@ describe("Explicit recovery of a genuine legacy Spec Gate repair Error", { concu
     const settle = manager.settleSpecStepResult.bind(manager);
     let normalInput;
     manager.settleSpecStepResult = (settlement) => {
-      if (settlement.specGateRepairSelection) normalInput = settlement;
+      if (settlement.specGateRepairSelection) {
+        normalInput = settlement;
+        const changedContract = FlowExecutionContract.fromJSON({ ...settlement.executionContract.toJSON(),
+          promptDigest: "f".repeat(64) });
+        for (const executionContract of [null, changedContract]) {
+          assert.throws(() => settle({ ...settlement, executionContract }),
+            { code: "FLOW_EXECUTION_CONTRACT_MISMATCH" });
+          assert.deepEqual(snapshot(manager, value), checkpoint,
+            "recovery cannot authorize a missing or substituted producer contract");
+        }
+      }
       return settle(settlement);
     };
     const result = await dispatch(value, manager, agent);
@@ -208,11 +219,7 @@ describe("Explicit recovery of a genuine legacy Spec Gate repair Error", { concu
     }
 
     let reviewCalls = 0;
-    const originalSpawn = childProcess.spawnSync;
-    const reviewProcess = mock.method(childProcess, "spawnSync", (command, args, options) => {
-      if (command !== "node" || !String(args[0]).endsWith("/flow/commands/review.js")) {
-        return originalSpawn(command, args, options);
-      }
+    const reviewProcess = installReviewProcessFake((_command, _args, options) => {
       reviewCalls += 1;
       const source = JSON.parse(options.env.SENNEL_REVIEW_SPEC_REVIEW_SOURCE);
       const review = new CanonicalSpecReview(JSON.parse(fs.readFileSync(source.sourcePath, "utf8")));
@@ -225,9 +232,8 @@ describe("Explicit recovery of a genuine legacy Spec Gate repair Error", { concu
         baseReviewDigest: review.digest, findings: [], operations: [] });
       fs.writeFileSync(path.join(options.env.SENNEL_REVIEW_OUTPUT_DIR, "review.delta.json"), workerArtifactJson(delta.toJSON()));
       ReviewWorkUnit.fromEnvironment(options.env).seal();
-      return { status: 0, signal: null, stdout: "", stderr: "" };
+      return { ok: true, status: 0, signal: null, stdout: "", stderr: "" };
     });
-    syncBuiltinESMExports();
     try {
       const reviewed = await dispatch(value, manager, agent, 2);
       assert.equal(reviewCalls, 1, JSON.stringify(reviewed));
@@ -236,7 +242,7 @@ describe("Explicit recovery of a genuine legacy Spec Gate repair Error", { concu
       const restored = reload(value);
       assert.equal(restored.canonicalState(value.specId).nextAction().nodeId, "spec-triage");
       assert.equal(JSON.parse(snapshot(restored, value).spec).requirements[0].desc, value.replacement);
-    } finally { reviewProcess.mock.restore(); syncBuiltinESMExports(); }
+    } finally { reviewProcess.mock.restore(); }
   });
 
   for (const mode of ["unchanged", "invalid"]) {

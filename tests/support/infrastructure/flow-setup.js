@@ -23,7 +23,7 @@ import {
 import { SpecReviewDelta, mergeSpecReviewDelta } from "../../../src/flow/lib/spec-review-artifacts.js";
 import { attemptHistoryTargetForNode } from "../../../src/flow/lib/producer-artifact-readiness.js";
 import { FLOW_ARTIFACT_CONTRACTS } from "../../../src/lib/flow-artifact-contract.js";
-import { FlowArtifactCatalog } from "../../../src/lib/flow-version.js";
+import { FlowActivityId, FlowArtifactCatalog, FlowArtifactDescriptor } from "../../../src/lib/flow-version.js";
 import { CanonicalGatePromotion } from "../../../src/flow/lib/canonical-gate-artifacts.js";
 import {
   RequirementTestLifecycleFacts,
@@ -56,6 +56,10 @@ import { TaskStepBinding } from "../../../src/flow/engine/connectors/task/task-s
 function canonicalFixtureGatePhase(state, nodeId) {
   return state.tasks.some((task) => task.steps.at(-1)?.id === nodeId)
     ? "task-impl" : nodeId === "impl-gate" ? "integration" : null;
+}
+
+function canonicalFixtureReviewNode(state, nodeId) {
+  return nodeId === "impl-review" || state.tasks.some((task) => nodeId === `${task.id}-review`);
 }
 
 /** Execute a claimed fixture producer through its real registration and publication hooks. */
@@ -246,21 +250,23 @@ export function confirmCanonicalFixtureStep(flowManager, specId, nodeId, status 
     });
     return flowManager.loadReadOnly(resolvedSpecId);
   }
-  if (status === "done" && task !== null && nodeId === `${task.id}-impl`) {
+  const sourceStepId = task !== null && nodeId === `${task.id}-impl` ? "task-impl"
+    : nodeId === "implement" && mutate !== undefined ? "implement" : null;
+  if (status === "done" && sourceStepId !== null) {
     completeCanonicalSourceHandoff({
       root: flowManager.executionRoot(),
       mainRoot: flowManager.specLocation(resolvedSpecId).repositoryRoot,
       manager: flowManager,
       specId: resolvedSpecId,
-      stepId: "task-impl",
-      taskId: task.id,
+      stepId: sourceStepId,
+      taskId: task?.id ?? null,
       mutate,
       effect: {
         version: 1,
-        stepId: "task-impl",
+        stepId: sourceStepId,
         completionStatus: "done",
         issues: [],
-        overview: { modules: [], data_flow: [], decisions: [] },
+        overview: sourceStepId === "task-impl" ? { modules: [], data_flow: [], decisions: [] } : null,
         triage: null,
         repair: null,
         noChangeReason: mutate === undefined ? "The fixture Task requires no source mutation." : null,
@@ -464,25 +470,48 @@ export function removeCatalogedArtifactForCorruptionFixture(
   logicalKey,
   parameters = {},
 ) {
-  const location = flowManager.specLocation(specId);
-  const target = FLOW_ARTIFACT_CONTRACTS.resolve(logicalKey, parameters);
-  const stored = JSON.parse(fs.readFileSync(location.catalogFile, "utf8"));
-  const catalog = new FlowArtifactCatalog(stored);
-  const descriptor = catalog.artifacts.find((entry) => entry.relativePath === target.relativePath) ?? null;
-  if (descriptor === null || descriptor.logicalKey !== logicalKey) {
-    throw new Error(`corruption fixture requires cataloged ${logicalKey}`);
+  return new CatalogedArtifactCorruptionFixture({ flowManager, specId, logicalKey, parameters }).remove();
+}
+
+/** Change a real produced artifact only for a consumer's malformed-input check. */
+export function replaceCatalogedArtifactForCorruptionFixture(flowManager, specId, logicalKey, bytes, parameters = {}) {
+  return new CatalogedArtifactCorruptionFixture({ flowManager, specId, logicalKey, parameters }).replace(bytes);
+}
+
+class CatalogedArtifactCorruptionFixture {
+  constructor({ flowManager, specId, logicalKey, parameters }) {
+    this.location = flowManager.specLocation(specId);
+    const target = FLOW_ARTIFACT_CONTRACTS.resolve(logicalKey, parameters);
+    this.catalog = new FlowArtifactCatalog(JSON.parse(fs.readFileSync(this.location.catalogFile, "utf8")));
+    this.descriptor = this.catalog.artifacts.find(entry => entry.relativePath === target.relativePath) ?? null;
+    if (this.descriptor === null || this.descriptor.logicalKey !== logicalKey) {
+      throw new Error(`corruption fixture requires cataloged ${logicalKey}`);
+    }
+    this.artifactPath = this.location.resolve(this.descriptor.relativePath);
+    if (!fs.existsSync(this.artifactPath)) throw new Error(`corruption fixture requires ${logicalKey} bytes`);
   }
-  const artifactPath = location.resolve(descriptor.relativePath);
-  if (!fs.existsSync(artifactPath)) {
-    throw new Error(`corruption fixture requires ${logicalKey} bytes`);
+  remove() {
+    const descriptor = this.descriptor;
+    fs.unlinkSync(this.artifactPath);
+    this.#writeCatalog(this.catalog.artifacts.filter(entry => entry.relativePath !== descriptor.relativePath));
+    return descriptor;
   }
-  fs.unlinkSync(artifactPath);
-  const corrupted = new FlowArtifactCatalog({
-    schemaRevision: catalog.schemaRevision,
-    artifacts: catalog.artifacts.filter((entry) => entry.relativePath !== descriptor.relativePath),
-  });
-  fs.writeFileSync(location.catalogFile, `${JSON.stringify(corrupted.toJSON(), null, 2)}\n`, "utf8");
-  return descriptor;
+  replace(bytes) {
+    fs.writeFileSync(this.artifactPath, bytes);
+    const previous = this.descriptor;
+    const replacement = FlowArtifactDescriptor.fromFile({ location: this.location,
+      logicalKey: previous.logicalKey, authoritySlot: previous.slot, relativePath: previous.relativePath,
+      mediaType: previous.mediaType, retention: previous.retention,
+      activityId: previous.activityId === null ? null : new FlowActivityId(previous.activityId),
+      migrationMaterialization: previous.migrationMaterialization });
+    this.#writeCatalog(this.catalog.artifacts.map(entry => entry.relativePath === previous.relativePath ? replacement : entry));
+    this.descriptor = replacement;
+    return replacement;
+  }
+  #writeCatalog(artifacts) {
+    this.catalog = new FlowArtifactCatalog({ schemaRevision: this.catalog.schemaRevision, artifacts });
+    fs.writeFileSync(this.location.catalogFile, `${JSON.stringify(this.catalog.toJSON(), null, 2)}\n`, "utf8");
+  }
 }
 
 /**
@@ -643,19 +672,20 @@ export class CanonicalFlowFixture {
   }
 
   /** Run actual asynchronous producers when a fixture traverses their phase. */
-  async activateWithProducers(nodeId, { reviewResponses = new Map(), sourceMutations = new Map(), onActive = null, activateTarget = true, acceptanceResponse = null } = {}) {
+  async activateWithProducers(nodeId, { reviewResponses = new Map(), sourceMutations = new Map(), implementationFiles = new Map(), onActive = null, activateTarget = true, acceptanceResponse = null } = {}) {
     for (let iteration = 0; iteration < 500; iteration += 1) {
       const next = this.#nextPredecessor(nodeId);
       if (next === null) return activateTarget ? this.activate(nodeId, { settlePredecessors: false }) : this;
       this.activate(next, { settlePredecessors: false });
+      if (next === "implement") {
+        for (const [requirementId, paths] of implementationFiles) {
+          this.flowManager.updateFileMap({ specId: this.specId, requirementId, paths });
+        }
+      }
       onActive?.(next);
       const state = this.state();
-      const task = state.tasks.find((entry) => entry.steps.some((step) => step.id === next));
-      if (next === "impl-review" || task !== undefined && next === `${task.id}-review`) {
-        this.activate(next, { settlePredecessors: false });
-        const { ImplementationReviewProducer } = await import("./implementation-review-producer.js");
-        const result = await new ImplementationReviewProducer(reviewResponses.get(next)).publish(this.#producerContext());
-        if (result.ok === false) throw new Error(`canonical fixture Review failed: ${JSON.stringify(result)}`);
+      if (canonicalFixtureReviewNode(state, next)) {
+        await this.produce(next, { reviewResponse: reviewResponses.get(next) });
       } else if (canonicalFixtureGatePhase(state, next) !== null
         || ["test-execute", "test-result-review", "retro", "acceptance-review", "final-regression", "report"].includes(next)) {
         await this.produce(next, { acceptanceResponse });
@@ -672,7 +702,14 @@ export class CanonicalFlowFixture {
   /** Execute the registered producer and its normal publication hooks. */
   async produce(nodeId, options = {}) {
     this.activate(nodeId, { settlePredecessors: false });
-    await produceCanonicalFixtureStep(this.#producerContext(), nodeId, options);
+    const state = this.state();
+    if (canonicalFixtureReviewNode(state, nodeId)) {
+      const { ImplementationReviewProducer } = await import("./implementation-review-producer.js");
+      const result = await new ImplementationReviewProducer(options.reviewResponse).publish(this.#producerContext());
+      if (result.ok === false) throw new Error(`canonical fixture Review failed: ${JSON.stringify(result)}`);
+    } else {
+      await produceCanonicalFixtureStep(this.#producerContext(), nodeId, options);
+    }
     return this;
   }
 

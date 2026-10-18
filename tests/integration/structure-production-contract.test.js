@@ -3,7 +3,7 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { test } from "node:test";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { draftStepRegistrations } from "../../src/flow/engine/composition/draft.js";
 import { specStepRegistrations } from "../../src/flow/engine/composition/spec.js";
@@ -247,7 +247,8 @@ for (const [phase, opposite, registrations] of [
     const script = `import { ${phase}StepRegistrations } from './src/flow/engine/composition/${phase}.js';\n`
       + `process.stdout.write(JSON.stringify(${phase}StepRegistrations.map((item) => item.stepId)));`;
     const loaded = JSON.parse(execFileSync(process.execPath,
-      ["--input-type=module", "-e", script], { cwd: root, encoding: "utf8" }));
+      ["--import", pathToFileURL(path.join(root, "src/sennel.js")).href, "--input-type=module", "-e", script],
+      { cwd: root, encoding: "utf8" }));
     assert.deepEqual(loaded, registrations.map((registration) => registration.stepId));
   });
 }

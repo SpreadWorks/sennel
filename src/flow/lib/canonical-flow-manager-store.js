@@ -134,6 +134,7 @@ import { TestReviewRepairProgressEpisode } from "./test-review-repair.js";
 import {
   BranchPreparedResult,
   BranchNotRequiredResult,
+  ImplReviewDeferredResult,
   DraftCoverageReviewPassedResult,
   DraftRefineAwaitingAnswerResult,
   DraftGateCarryForwardResult,
@@ -232,7 +233,7 @@ import {
   attachCanonicalCommandResultArtifact, CanonicalCommandResultArtifact,
   attachedCanonicalCommandResultPublications,
 } from "./canonical-command-result.js";
-import { attachedTaskReviewPublicationBinding, readProspectiveImplReviewEvidence } from "./canonical-review-artifacts.js";
+import { attachedTaskReviewPublicationBinding, readProspectiveImplReviewObservation } from "./canonical-review-artifacts.js";
 import {
   canonicalPlanGateRepairForTarget,
   createProspectivePlanGateRepairRecord,
@@ -254,6 +255,7 @@ import { readCurrentGateTransitionFacts, readProspectiveImplementationGateEviden
 import { readTaskExecutionOverrunFacts, TaskExecutionOverrunAdmission } from "./task-execution-overrun.js";
 import { CanonicalImplementationRepairRecord } from "./review-recurrence.js";
 import { buildDeferredSemanticFindingsPublication, DeferredFlowFindingsPublication } from "./flow-findings.js";
+import { readFlowReviewSemanticHandoff } from "./flow-review-semantic-handoff.js";
 import { IssueLogDocument } from "./issue-log-store.js";
 import { finalizationOutboxIdentity } from "./flow-outbox.js";
 import { FinalizeSyncInterruptedError } from "./finalize-sync-diagnostics.js";
@@ -271,7 +273,10 @@ import {
   RequirementTestGateResult,
   RequirementTestPlanArtifact,
 } from "./requirement-test-artifacts.js";
-import { RequirementTestArtifactStore } from "./requirement-test-store.js";
+import {
+  RequirementTestCatalogReader,
+  RequirementTestArtifactStore,
+} from "./requirement-test-store.js";
 import {
   RequirementTestLifecycleDecision,
   sameRequirementTestLifecycleDecision,
@@ -496,11 +501,7 @@ function requirementSettlementRequestDigest({ binding, stepResult, settlement, a
         const removal = CanonicalFlowArtifactRemoval.from(value);
         return { logicalKey: removal.artifact.logicalKey, relativePath: removal.artifact.relativePath };
       }),
-      artifactBaselines: artifactBaselines.map((value) => {
-        const baseline = CanonicalFlowArtifactBaseline.from(value);
-        return { logicalKey: baseline.artifact.logicalKey, relativePath: baseline.artifact.relativePath,
-          digest: baseline.digest, byteLength: baseline.byteLength };
-      }),
+      artifactBaselines: artifactBaselines.map(canonicalArtifactBaselineIdentity),
       deferredReceipt: valueJSON(deferredReceipt),
       findingsPublication: findingsPublication === null ? null : {
         artifact: valueJSON(findingsPublication.artifact),
@@ -510,6 +511,12 @@ function requirementSettlementRequestDigest({ binding, stepResult, settlement, a
       },
     };
   return crypto.createHash("sha256").update(JSON.stringify(identity)).digest("hex");
+}
+
+function canonicalArtifactBaselineIdentity(value) {
+  const baseline = CanonicalFlowArtifactBaseline.from(value);
+  return { logicalKey: baseline.artifact.logicalKey, relativePath: baseline.artifact.relativePath,
+    digest: baseline.digest, byteLength: baseline.byteLength };
 }
 
 function timestampAfter(value) {
@@ -592,29 +599,6 @@ class RequirementTestPublicationIdentity {
   }
 }
 
-/** Requirement-only artifact reader whose coherent lifetime is the Store lock. */
-class LockedRequirementTestArtifactReader {
-  constructor(view) {
-    this.view = view;
-    Object.freeze(this);
-  }
-
-  readArtifact({ logicalKey, parameters = {}, optional = false } = {}) {
-    const artifact = FLOW_ARTIFACT_CONTRACTS.resolve(logicalKey, parameters);
-    const descriptor = this.view.catalog.artifacts
-      .find((entry) => entry.relativePath === artifact.relativePath) ?? null;
-    if (descriptor === null) {
-      if (optional) return null;
-      throw new CurrentFlowStateConflictError(`Requirement test artifact is no longer cataloged: ${artifact.relativePath}`);
-    }
-    if (descriptor.logicalKey !== artifact.logicalKey) {
-      throw new CurrentFlowStateConflictError("Requirement test catalog identity changed before settlement");
-    }
-    return Object.freeze({ descriptor, bytes: this.view.readCatalogedArtifact(descriptor) });
-  }
-
-  artifactCatalog() { return this.view.catalog; }
-}
 
 function catalogDescriptor(manager, specId, logicalKey, parameters = {}) {
   const artifact = FLOW_ARTIFACT_CONTRACTS.resolve(logicalKey, parameters);
@@ -871,7 +855,7 @@ class RequirementTestLifecycleAdmission {
     }
     this.planIdentity.assert(catalog);
     for (const identity of this.candidateIdentities) identity.assert(catalog);
-    const lockedManager = new LockedRequirementTestArtifactReader(view);
+    const lockedManager = new RequirementTestCatalogReader(view);
     const store = new RequirementTestArtifactStore({ flowManager: lockedManager, state });
     const planRead = store.readPlan(authority.leaf);
     if (!authority.planPublication.matches(planRead.descriptor)) {
@@ -1100,7 +1084,7 @@ class RequirementTestResultAdmission {
     this.planIdentity.assert(catalog);
     for (const identity of this.currentCandidateIdentities) identity.assert(catalog);
     for (const identity of this.candidateIdentities) identity.assert(catalog);
-    const reader = new LockedRequirementTestArtifactReader(view);
+    const reader = new RequirementTestCatalogReader(view);
     const specRecord = reader.readArtifact({ specId: state.specId,
       logicalKey: "spec.record", consumerNodeId: this.binding.leaf });
     if (specRecord === null
@@ -1468,8 +1452,8 @@ class DraftStepErrorRecoveryAdmission {
 }
 
 class SpecGateRepairRecoveryAdmission {
-  constructor({ store, evidence, executionRoot, selection, settlement, completion = false }) {
-    Object.assign(this, { store, evidence, executionRoot, selection, settlement, completion });
+  constructor({ store, evidence, executionRoot, selection, settlement, completion = false, executionContract = null }) {
+    Object.assign(this, { store, evidence, executionRoot, selection, settlement, completion, executionContract });
     Object.freeze(this);
   }
   assert(view) {
@@ -1485,6 +1469,13 @@ class SpecGateRepairRecoveryAdmission {
     if (this.completion && new SpecGateRepairRecoveryEvidence(
       current.decision.recovered.result.draftSettlementReceipt.specGateRepairRecovery).digest !== this.evidence.digest) {
       throw new CurrentFlowStateConflictError("Gate repair completion changed its recovery proof");
+    }
+    if (this.completion) {
+      const source = current.decision.publicationReceipt;
+      const stored = readStoredExecutionContractFromView(view, { binding: {
+        runId: view.state.runId, specId: view.state.specId, stepId: "spec-gate-repair", attempt: view.state.attempt,
+      }, generation: source.executionLifecycle.binding.executionGeneration });
+      this.executionContract.assertMatches(stored);
     }
   }
 }
@@ -2571,6 +2562,8 @@ class CanonicalCommandPublication {
   #baselineRevision;
   #baselineCatalog;
   #expectedEvidence;
+  #reviewObservation = null;
+  #reviewFindings = null;
   #issueReady;
   #taskSourceRoot;
   #taskSourceLineages = null;
@@ -2660,7 +2653,17 @@ class CanonicalCommandPublication {
         readRuntimeArtifact: (input) => this.readRuntimeArtifact(input),
       }));
     } else if (binding.stepId === "impl-review") {
-      this.#expectedEvidence = readProspectiveImplReviewEvidence({ flowManager, binding, commandResult, publication: this });
+      this.#reviewObservation = readProspectiveImplReviewObservation({ flowManager, binding, commandResult, publication: this });
+      this.#expectedEvidence = this.#reviewObservation.evidence;
+      const observed = this.#reviewObservation;
+      if (observed.deferralEvidence?.available) {
+        this.#reviewFindings = buildDeferredSemanticFindingsPublication({ flowManager,
+          flowState: flowManager.loadReadOnly(binding.specId), nodeId: "impl-review",
+          sourceStep: "impl-review", sourceArtifact: "impl.review",
+          sourcePayload: observed.source.payload, sourceRelativePath: observed.sourceRelativePath,
+          attempts: observed.evidence.retry.used + 1,
+          fingerprints: new Set(observed.deferralEvidence.sourceFingerprints) });
+      }
     } else {
       this.#expectedEvidence = readProspectiveImplementationGateEvidence({ flowManager, binding, commandResult,
         publication: this, root: flowManager.executionRoot() });
@@ -2685,6 +2688,17 @@ class CanonicalCommandPublication {
       throw new CurrentFlowStateConflictError("prospective publication descriptor changed");
     }
     return Buffer.from(this.#bytes.get(descriptor.relativePath));
+  }
+  get reviewObservation() { return this.#reviewObservation; }
+  selectedReviewFindings(application) {
+    if (!(application instanceof ImplReviewApplication) || application.operation !== "defer") return null;
+    application.resolution.assertEvidence(this.#expectedEvidence);
+    if (!(this.#reviewFindings instanceof DeferredFlowFindingsPublication)
+      || JSON.stringify(application.resolution.fingerprints)
+        !== JSON.stringify(this.#reviewObservation.deferralEvidence.sourceFingerprints)) {
+      throw new CurrentFlowStateConflictError("Implementation Review handoff differs from its acquired source findings");
+    }
+    return this.#reviewFindings;
   }
   readRuntimeArtifact({ logicalKey }) {
     const read = this.#runtime.get(logicalKey) ?? null;
@@ -6695,7 +6709,9 @@ export class CanonicalFlowManagerStore {
       resolved, binding, settlement, executionLifecycle,
     });
     const publishesExecutionContract = executionContract !== null && settlement.kind === "execution" && executionLifecycle?.phase === "claimed";
-    const executionAdmission = executionContract === null ? null : new ExecutionContractPublicationAdmission(executionContract, { allowAbsent: publishesExecutionContract });
+    const executionAdmission = executionContract === null
+      || specGateRepairAdmission instanceof SpecGateRepairRecoveryAdmission && specGateRepairAdmission.completion
+      ? null : new ExecutionContractPublicationAdmission(executionContract, { allowAbsent: publishesExecutionContract });
     if (executionContract !== null && selectedExecutionLifecycle?.binding !== undefined) {
       executionContract.assertExecutionBinding(binding, selectedExecutionLifecycle.binding);
     }
@@ -7202,10 +7218,14 @@ export class CanonicalFlowManagerStore {
         const recovered = this.readCurrentStepSettlement({ specId: binding.specId, stepId: binding.stepId })
           ?.receipt.specGateRepairRecovery;
         if (recovered != null) {
+          if (!(executionContract instanceof FlowExecutionContract)) {
+            throw new FlowExecutionContractRefusal("Recovered Gate repair completion requires its saved execution contract");
+          }
           const evidence = new SpecGateRepairRecoveryEvidence(recovered.toJSON?.() ?? recovered);
           evidence.assertSelection(specGateRepairSelection, settlement);
           recoveryAdmission = new SpecGateRepairRecoveryAdmission({ store: this, evidence,
-            executionRoot: specGateRepairExecutionRoot, selection: specGateRepairSelection, settlement, completion: true });
+            executionRoot: specGateRepairExecutionRoot, selection: specGateRepairSelection, settlement,
+            completion: true, executionContract });
         }
         const baseline = artifactBaselines.length === 1
           ? CanonicalFlowArtifactBaseline.from(artifactBaselines[0]) : null;
@@ -7686,8 +7706,13 @@ export class CanonicalFlowManagerStore {
         report: input.planGateRepairOutcome.report.toJSON() },
       upgradeResult: input.upgradeResult == null ? null : crypto.createHash("sha256").update(input.upgradeResult).digest("hex"),
     };
+    const reviewFindings = input.reviewPublication?.selectedReviewFindings(settlement.application) ?? null;
+    const reviewArtifacts = reviewFindings?.settlementArtifacts() ?? null;
     const publication = new DraftStepSettlementPublication({ source,
       candidate: candidate?.toJSON() ?? null, application: settlement.application?.toJSON() ?? null,
+      ...(reviewArtifacts === null ? {} : { reviewFindings: {
+        artifacts: reviewArtifacts.artifactWrites.map(canonicalArtifactWriteIdentity),
+        baselines: reviewArtifacts.artifactBaselines.map(canonicalArtifactBaselineIdentity) } }),
       command: commandPublicationIdentity(input.commandResult),
       manifest: input.manifest?.toJSON?.() ?? null });
     let selectedLifecycle = executionLifecycle ?? (executionBinding === null ? null : DraftStepExecutionLifecycle.checkpoint(executionBinding));
@@ -7736,7 +7761,10 @@ export class CanonicalFlowManagerStore {
     const publishesExecutionContract = executionContract !== null && settlement.kind === "execution" && input.executionLifecycle?.phase === "claimed";
     if (executionContract !== null && input.executionLifecycle?.binding !== undefined) executionContract.assertExecutionBinding(binding, input.executionLifecycle.binding);
     const executionAdmission = executionContract === null ? null : new ExecutionContractPublicationAdmission(executionContract, { allowAbsent: publishesExecutionContract });
-    const writes = [...(candidate?.artifactWrites ?? []), ...(publishesExecutionContract ? [executionContractArtifact(executionContract)] : [])];
+    const reviewFindings = input.reviewPublication?.selectedReviewFindings(settlement.application) ?? null;
+    const reviewArtifacts = reviewFindings?.settlementArtifacts() ?? null;
+    const writes = [...(candidate?.artifactWrites ?? []), ...(reviewArtifacts?.artifactWrites ?? []),
+      ...(publishesExecutionContract ? [executionContractArtifact(executionContract)] : [])];
     const nodeId = binding.nodeId ?? binding.stepId;
     const selectedActivityId = candidate?.selectedActivityId ?? activityId("implementation-step-settled");
     const application = settlement.application;
@@ -7817,6 +7845,7 @@ export class CanonicalFlowManagerStore {
     } else if (settlement instanceof StepRoute) {
       next = this.runtime.confirmAttempt({ specId: resolved, activityId: selectedActivityId,
         result: lifecycleResult, artifactWrites: writes, admission,
+        ...(reviewArtifacts === null ? {} : { artifactBaselines: reviewArtifacts.artifactBaselines }),
         metric: application instanceof GateResultApplication ? gateRetryMetric(application.decision.plan.retryMetric) : null,
         gateTaskLifecycle: application instanceof GateResultApplication ? application.decision.plan.taskLifecycle?.toJSON() ?? null : null,
         ...(settlement.requiresTargetActivation(state) ? {
@@ -9491,6 +9520,10 @@ export class CanonicalFlowManagerStore {
       throw new CurrentFlowStateConflictError("Impl Review replay differs from its sealed original publication and source");
     }
     evidence.seal.assertManifest(manifest);
+    if (result instanceof ImplReviewDeferredResult && readFlowReviewSemanticHandoff({
+      flowManager: this, state, consumerNodeId: "system" }) === null) {
+      throw new CurrentFlowStateConflictError("Impl Review replay lost its exact Acceptance handoff");
+    }
     return new ReviewPublicationReplay({ state, receipt });
   }
 

@@ -157,9 +157,6 @@ test("command projection cannot duplicate state guards", () => {
 });
 
 for (const [name, file, before, after] of [
-  ["pre hook", "src/lib/dispatcher.js", "await entry.pre(hookCtx);", "await Promise.resolve();"],
-  ["post hook", "src/lib/dispatcher.js", "const postResult = await entry.post(hookCtx, result);", "const postResult = result;"],
-  ["completion receipt", "src/lib/dispatcher.js", "commitCompletion: true,", "commitCompletion: false,"],
   ["finalization authorization", "src/flow/lib/run-dispatch.js", "? invocation.authorization : null,", "? null : null,"],
   ["registered hook context", "src/flow/lib/run-dispatch.js", "...buildFlowCommandHookContext(container, entry, input)", "...input"],
 ]) {

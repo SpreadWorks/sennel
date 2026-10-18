@@ -1,9 +1,12 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
-import childProcess from "node:child_process";
-import { syncBuiltinESMExports } from "node:module";
-import { afterEach, describe, it, mock } from "node:test";
+import { afterEach, describe, it } from "node:test";
+import { ProcessExecutionRuntime } from "../../../src/lib/process-execution-runtime.js";
+import { GitHubFailure } from "../../../src/lib/github/failure.js";
+import { WorkerArtifactRepositoryMutationSnapshot } from "../../../src/flow/lib/worker-artifact-handoff.js";
+import { CanonicalPersistenceSnapshot } from "../../support/assertions/canonical-persistence.js";
+import { offlineExternalGitHubScript } from "../../support/fakes/github.js";
 
 import RunReportCommand from "../../../src/flow/lib/run-report.js";
 import { initGitRepo, commitAll } from "../../support/infrastructure/git-repo.js";
@@ -30,6 +33,14 @@ import { createTmpDir, removeTmpDir } from "../../support/builders/tmp-dir.js";
 
 const SPEC_ID = "001-read-only";
 const RUN_ID = "run-read-only";
+function producerOptions(root) {
+  return {
+    implementationFiles: new Map([["R1", ["README.md"]]]),
+    sourceMutations: new Map([["T1-impl", () => {
+      fs.appendFileSync(path.join(root, "README.md"), "Finalization recovery preserves saved evidence.\n");
+    }]]),
+  };
+}
 
 function files(root) {
   const result = new Map();
@@ -74,7 +85,7 @@ function finalizationScenario(root, manager, { issue = null } = {}) {
 }
 
 async function setupInterruptedRecovery(root, manager) {
-  const scenario = await finalizationScenario(root, manager).atFlowStepWithProducers("finalize-sync");
+  const scenario = await finalizationScenario(root, manager).atFlowStepWithProducers("finalize-sync", producerOptions(root));
   const state = manager.loadReadOnly(SPEC_ID);
   const identity = finalizationOutboxIdentity(state, "finalize-sync");
   new FlowOutboxStore(manager, { specId: SPEC_ID }).begin(identity);
@@ -97,21 +108,28 @@ async function setupInterruptedRecovery(root, manager) {
 
 async function setupExactReportRecovery(manager) {
   const root = manager.executionRoot();
-  await finalizationScenario(root, manager, { issue: 123 }).atFlowStepWithProducers("report");
+  await finalizationScenario(root, manager, { issue: 123 }).atFlowStepWithProducers("report", producerOptions(root));
   const state = manager.loadReadOnly(SPEC_ID);
   const identity = finalizationOutboxIdentity(state, "report");
   const outbox = new FlowOutboxStore(manager, { specId: SPEC_ID });
   const entry = outbox.begin(identity);
-  const original = childProcess.spawnSync;
-  const external = mock.method(childProcess, "spawnSync", (command, args, options) => {
-    if (command === "gh") return { status: 1, signal: null, stdout: "", stderr: "injected delivery interruption" };
-    return original(command, args, options);
-  });
-  syncBuiltinESMExports();
-  try {
-    await assert.rejects(() => new RunReportCommand().execute({ ...context(root, manager), flowOutboxEntry: entry }),
-      /failed to post report/);
-  } finally { external.mock.restore(); syncBuiltinESMExports(); }
+  const script = path.join(root, ".tmp", "github-provider.mjs");
+  const control = path.join(root, ".tmp", "github-control.json");
+  fs.mkdirSync(path.dirname(script), { recursive: true });
+  fs.writeFileSync(script, offlineExternalGitHubScript({ controlPath: control }));
+  fs.writeFileSync(control, JSON.stringify({ loseResponse: true }));
+  const config = { github: { provider: "offline",
+    repository: { host: "github.com", name: "fixture/repository" },
+    providers: { offline: { command: process.execPath, args: [script], maxAttempts: 1 } },
+  } };
+  await assert.rejects(() => new RunReportCommand().execute({
+    ...context(root, manager), config, flowOutboxEntry: entry,
+  }), (error) => error instanceof GitHubFailure
+    && error.code === "GITHUB_WRITE_OUTCOME_UNKNOWN" && error.operation === "comment.create");
+  const remote = JSON.parse(fs.readFileSync(`${script}.remote.json`, "utf8"));
+  assert.equal(remote.calls[0].operation, "provider.preflight");
+  assert.equal(remote.calls.filter((call) => call.operation === "comment.create").length, 1);
+  assert.equal(remote.comments.length, 1);
   outbox.fail(identity, new Error("report post-hook interrupted"));
   return { identity, outbox };
 }
@@ -187,7 +205,7 @@ describe("finalization recovery next-action projection", () => {
   it("does not claim an ordinary pending action while projecting it", async () => {
     root = createTmpDir("fe70-next-action-ordinary-");
     const manager = makeFlowManager(root);
-    await finalizationScenario(root, manager).beforeFlowStepWithProducers("report");
+    await finalizationScenario(root, manager).beforeFlowStepWithProducers("report", producerOptions(root));
     const before = files(root);
     const result = await new GetNextActionCommand().execute(context(root, manager));
 
@@ -198,10 +216,24 @@ describe("finalization recovery next-action projection", () => {
     const claimed = await new RunClaimNextActionCommand().execute(context(root, manager));
     assert.equal(claimed.ok, true);
     assert.equal(manager.loadReadOnly(SPEC_ID).currentNodeId, "report");
-    const claimedFiles = files(root);
+    const claimedState = new CanonicalPersistenceSnapshot(manager, SPEC_ID);
+    const claimedSource = WorkerArtifactRepositoryMutationSnapshot.capture({ root, authorities: ["execution"] });
+    const claimedRuntime = ProcessExecutionRuntime.inspect({ mainRoot: root, executionRoot: root });
     const stale = await new RunClaimNextActionCommand().execute(context(root, manager));
     assert.equal(stale.ok, false);
-    assertSameFiles(claimedFiles, files(root));
+    claimedState.assertUnchanged(manager, SPEC_ID, "rejected stale claim");
+    assert.equal(WorkerArtifactRepositoryMutationSnapshot.capture({ root, authorities: ["execution"] }).digest,
+      claimedSource.digest);
+    const runtime = ProcessExecutionRuntime.inspect({ mainRoot: root, executionRoot: root });
+    assert.deepEqual(runtime.checkout, claimedRuntime.checkout);
+    assert.equal(runtime.ownerEpoch, claimedRuntime.ownerEpoch + 1);
+    assert.equal(runtime.slot, null);
+    assert.deepEqual(runtime.executions.slice(0, -1), claimedRuntime.executions);
+    const rejected = runtime.executions.at(-1);
+    assert.equal(rejected.status, "closed");
+    assert.equal(rejected.runId, RUN_ID);
+    assert.equal(rejected.specId, SPEC_ID);
+    assert.deepEqual(rejected.calls, []);
   });
 
   it("uses the same explicit claim boundary for a non-finalization worker", async () => {

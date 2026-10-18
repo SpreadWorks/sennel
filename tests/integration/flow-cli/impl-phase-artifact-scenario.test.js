@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { test } from "node:test";
+import { SENNEL_BOOTSTRAP } from "../../support/infrastructure/node-bootstrap.js";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { createHash, randomUUID } from "node:crypto";
@@ -453,7 +454,7 @@ for (const interruption of ["before-json-rename", "before-json-directory-fsync"]
         versionStoreFaultInjector: ({ phase, filePath }) => { if (phase === process.env.SCENARIO_PHASE && filePath === process.env.SCENARIO_CATALOG) process.kill(process.pid, 'SIGKILL'); } });
       new WorkerArtifactHandoffCoordinator().recoverPending({ ctx: { root, executionRoot: root, mainRoot: root, specId: process.env.SCENARIO_SPEC, flowManager: manager } });
     `;
-    const stopped = spawnSync(process.execPath, ["--input-type=module", "--eval", child], { encoding: "utf8", env: { ...process.env,
+    const stopped = spawnSync(process.execPath, ["--import", SENNEL_BOOTSTRAP, "--input-type=module", "--eval", child], { encoding: "utf8", env: { ...process.env,
       SCENARIO_ROOT: scenario.root, SCENARIO_SPEC: scenario.specId, SCENARIO_PHASE: interruption, SCENARIO_CATALOG: catalogFile,
       SCENARIO_CAPTURE: captureFile, SCENARIO_CAPTURE_NONCE: captureNonce } });
     assert.equal(stopped.signal, "SIGKILL", stopped.stderr);

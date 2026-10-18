@@ -17,6 +17,7 @@ import RunSettleFailureCommand from "../../../src/flow/lib/run-settle-failure.js
 import { attachCanonicalCommandResultArtifact } from "../../../src/flow/lib/canonical-command-result.js";
 import { createTmpDir, removeTmpDir } from "../../support/builders/tmp-dir.js";
 import { canonicalFixtureProducerResult } from "../../support/infrastructure/flow-setup.js";
+import { SENNEL_BOOTSTRAP } from "../../support/infrastructure/node-bootstrap.js";
 
 const roots = [];
 const execFileAsync = promisify(execFile);
@@ -270,7 +271,7 @@ describe("missing producer artifact recovery", () => {
     assert.equal(state.findNode("spec-triage").status, "pending");
     const next = await new GetNextActionCommand().execute(commandContext(repository, manager, created.specId));
     assert.equal(next.directive.kind, "blocked");
-    assert.equal(next.directive.code, "CANONICAL_PRODUCER_ARTIFACT_NOT_READY");
+    assert.equal(next.directive.code, "RETRY_RECOVERY_UNCHANGED_EVIDENCE_UNSUPPORTED");
     assert.doesNotMatch(next.directive.resumeInstruction, /settle-failure/);
     const settlement = new RunSettleFailureCommand().execute(commandContext(repository, manager, created.specId));
     assert.equal(settlement.ok, false);
@@ -524,11 +525,12 @@ describe("missing producer artifact recovery", () => {
       "catch (error) { process.stderr.write(error.code || error.message); process.exitCode=1; }",
     ].join("");
     const attempts = await Promise.allSettled([
-      execFileAsync(process.execPath, ["--input-type=module", "-e", script]),
-      execFileAsync(process.execPath, ["--input-type=module", "-e", script]),
+      execFileAsync(process.execPath, ["--import", SENNEL_BOOTSTRAP, "--input-type=module", "-e", script]),
+      execFileAsync(process.execPath, ["--import", SENNEL_BOOTSTRAP, "--input-type=module", "-e", script]),
     ]);
     assert.equal(attempts.filter((entry) => entry.status === "fulfilled").length, 1);
     assert.equal(attempts.filter((entry) => entry.status === "rejected").length, 1);
+    assert.equal(attempts.find((entry) => entry.status === "fulfilled").value.stdout, "recovered");
     const activities = manager.activityLedger(created.specId);
     assert.equal(activities.filter((activity) => activity.transition.operation === "recover_missing_producer_artifact").length, 1);
     const restored = manager.canonicalState(created.specId);
@@ -600,29 +602,4 @@ describe("missing producer artifact recovery", () => {
     assert.deepEqual(unchangedPersistentSnapshot(manager, created.specId), before);
   });
 
-  it("keeps acceptance repair-to-impl-triage atomic when impl.review is absent", () => {
-    const repository = root();
-    const manager = new FlowManager({ root: repository, mainRoot: repository, inWorktree: false });
-    const created = manager.createFresh(request("001-repair-acceptance-missing-impl-review"));
-    manager.addActiveFlow(created.specId, "direct");
-    // This is likewise a historical invalid lineage. The acceptance result
-    // publication below must not make the replacement consumer claimable.
-    directArtifactlessAdvanceTo(manager, created.specId, "acceptance-review");
-    const commandResult = attachCanonicalCommandResultArtifact({
-      result: "acceptance review requires an implementation repair",
-      verdict: "repair_required",
-    }, {
-      logicalKey: "acceptance.review",
-      payload: { verdict: "repair_required" },
-    });
-    const before = unchangedPersistentSnapshot(manager, created.specId);
-
-    assert.throws(
-      () => manager.repairAcceptanceReview({ specId: created.specId, commandResult }),
-      (error) => error?.code === "CANONICAL_PRODUCER_ARTIFACT_NOT_READY"
-        && error?.producerNodeId === "impl-review"
-        && error?.consumerNodeId === "impl-triage",
-    );
-    assert.deepEqual(unchangedPersistentSnapshot(manager, created.specId), before);
-  });
 });

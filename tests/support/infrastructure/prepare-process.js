@@ -12,6 +12,7 @@ export class PrepareProcess {
   }
 
   interruptAfterWorktreeAdd() {
+    const bootstrap = new URL("../../../src/sennel.js", import.meta.url).href;
     const managerModule = new URL("../../../src/lib/flow-manager.js", import.meta.url).href;
     const commandModule = new URL("../../../src/flow/lib/run-prepare-spec.js", import.meta.url).href;
     const script = [
@@ -29,7 +30,7 @@ export class PrepareProcess {
     ].join("\n");
     // spawnSync reaps the terminated owner; its timeout also bounds cleanup if
     // a regression prevents the requested production checkpoint from being reached.
-    const result = spawnSync(process.execPath, ["--input-type=module", "--eval", script], {
+    const result = spawnSync(process.execPath, ["--import", bootstrap, "--input-type=module", "--eval", script], {
       cwd: this.input.root, env: this.environment, encoding: "utf8", timeout: 30_000,
       stdio: ["ignore", "pipe", "pipe"],
     });

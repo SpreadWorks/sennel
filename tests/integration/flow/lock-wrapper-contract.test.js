@@ -6,6 +6,7 @@ import test from "node:test";
 
 import { FileLockWaitPolicy } from "../../../src/lib/file-lock.js";
 import { ProcessLock } from "../../../src/lib/process-lock.js";
+import { ProcessIdentityObservation, ProcessIdentitySource } from "../../../src/lib/process-identity.js";
 import { RealDirectoryAuthority } from "../../../src/lib/real-directory-authority.js";
 import { FlowArtifactCatalog, FlowArtifactCatalogStore, FlowVersionAuthorityScope, FlowVersionLocation } from "../../../src/lib/flow-version.js";
 import { FlowHandoffAuthorityLease } from "../../../src/lib/flow-handoff-authority-lease.js";
@@ -21,7 +22,7 @@ import { createTmpDir, removeTmpDir } from "../../support/builders/tmp-dir.js";
 
 // This suite owns domain mappings, not the primitive's wait/ownership matrix.
 // The child publishes through the shared physical lock API, while each parent
-// calls its real wrapper entrypoint. Only the clock and OS identity reader are
+// calls its real wrapper entrypoint. Only the clock and external identity observation are
 // controlled at their nondeterministic boundaries.
 async function withExternalOwner(core, body) {
   core.directoryAuthority.ensure();
@@ -110,10 +111,9 @@ for (const create of [currentState, catalog, handoff, review, dispatch]) {
       } finally { clock.mock.restore(); }
       assertUnchanged();
 
-      const read = fs.readFileSync;
-      const denied = t.mock.method(fs, "readFileSync", (target, ...args) => {
-        if (target === "/proc/sys/kernel/random/boot_id") throw Object.assign(new Error("identity unavailable"), { code: "EACCES" });
-        return read(target, ...args);
+      const denied = t.mock.method(ProcessIdentitySource.prototype, "observe", (owner) => {
+        assert.equal(owner.pid, pid, "the wrapper must assess the actual external owner");
+        return new ProcessIdentityObservation("unknown", "identity unavailable");
       });
       try {
         assert.throws(invoke, (error) => {

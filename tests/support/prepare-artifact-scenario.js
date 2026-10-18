@@ -17,10 +17,14 @@ const cliPath = fileURLToPath(new URL("../../src/sennel.js", import.meta.url));
 
 /** An owned Git repository; every Flow fact is produced by the public commands. */
 export class PrepareArtifactScenario {
-  static create(t, options = {}) {
-    const root = fixtureRepository("prepare-artifact-scenario-");
-    t.after(() => removeTmpDir(root));
-    return new PrepareArtifactScenario(root, options);
+  static create(t, { projectDirectory = null, ...options } = {}) {
+    const repositoryRoot = fixtureRepository("prepare-artifact-scenario-");
+    t.after(() => removeTmpDir(repositoryRoot));
+    const root = projectDirectory === null ? repositoryRoot : path.join(repositoryRoot, projectDirectory);
+    if (projectDirectory !== null) fs.mkdirSync(root, { recursive: true });
+    const scenario = new PrepareArtifactScenario(root, options);
+    scenario.repositoryRoot = repositoryRoot;
+    return scenario;
   }
 
   constructor(root, { mode = "no-branch", issue = null,

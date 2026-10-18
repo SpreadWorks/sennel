@@ -28,6 +28,17 @@ function project(t, specId = "2bfc-format-guidance") {
   return { root, specId, manager };
 }
 
+function indexedLegacyProject(t) {
+  const clone = new SeedWorkRoot(LEGACY_SEED, { prefix: "sennel-flow-guidance-" });
+  t.after(() => clone.cleanup());
+  const root = clone.root;
+  const raw = JSON.parse(fs.readFileSync(path.join(root, "specs", LEGACY_SPEC_ID, "001", "flow.json"), "utf8"));
+  new ActiveFlowRegistry({ mainRoot: root }).add(LEGACY_SPEC_ID, "direct");
+  new FlowTargetIdentityAuthority({ mainRoot: root }).addActive(raw, "direct");
+  const manager = new FlowManager({ root, mainRoot: root, inWorktree: false });
+  return { root, raw, manager };
+}
+
 function storedSnapshot(root) {
   return new StoredFlowPersistenceSnapshot(root, { ignoredDirectories: [".tmp"] });
 }
@@ -52,13 +63,7 @@ async function refusal(manager, root, group, name, argv = []) {
 
 describe("normal Flow persisted format refusal", () => {
   it("guides indexed legacy reads and mutations through ordered targeted migrations without changing data", async (t) => {
-    const clone = new SeedWorkRoot(LEGACY_SEED, { prefix: "sennel-flow-guidance-" });
-    t.after(() => clone.cleanup());
-    const root = clone.root;
-    const raw = JSON.parse(fs.readFileSync(path.join(root, "specs", LEGACY_SPEC_ID, "001", "flow.json"), "utf8"));
-    new ActiveFlowRegistry({ mainRoot: root }).add(LEGACY_SPEC_ID, "direct");
-    new FlowTargetIdentityAuthority({ mainRoot: root }).addActive(raw, "direct");
-    const manager = new FlowManager({ root, mainRoot: root, inWorktree: false });
+    const { root, raw, manager } = indexedLegacyProject(t);
     const before = storedSnapshot(root);
     const guard = ["--expect-spec", LEGACY_SPEC_ID, "--expect-run-id", raw.runId];
     for (const [group, name, argv] of [["get", "next-action", guard], ["get", "artifact", ["spec.record", "--mode", "full", ...guard]], ["set", "auto", ["on", ...guard]]]) {
@@ -90,6 +95,34 @@ describe("normal Flow persisted format refusal", () => {
     assert.equal(result.data.dryRunCommand, `sennel migrate specs --to 2 --spec ${LEGACY_SPEC_ID} --dry-run`);
     assertMigrationPreview(result);
     assert.equal(storedSnapshot(root).digest, before.digest);
+  });
+
+  it("preserves existing legacy runtime work units while refusing normal and strict Store reads", async (t) => {
+    const { root, raw, manager } = indexedLegacyProject(t);
+    const location = manager.canonicalVersionLocation(1, { specId: LEGACY_SPEC_ID });
+    const runtimeLock = location.runtimeLock("runtime.lock.artifact-catalog");
+    const workUnitDirectory = path.join(runtimeLock.runtimeDirectory, "retained-work-unit");
+    fs.mkdirSync(workUnitDirectory, { recursive: true });
+    fs.writeFileSync(path.join(workUnitDirectory, "progress.json"), '{"progress":"retained"}\n');
+    assert.equal(fs.existsSync(runtimeLock.directory), false);
+    const before = storedSnapshot(root);
+    const guard = ["--expect-spec", LEGACY_SPEC_ID, "--expect-run-id", raw.runId];
+
+    const result = await refusal(manager, root, "get", "next-action", guard);
+    assert.equal(result.ok, false);
+    assert.equal(result.errors[0].code, "FLOW_MIGRATION_REQUIRED");
+    assert.deepEqual(result.data.requiredRevisions, [2, 3]);
+    assert.equal(result.data.canonicalChanged, false);
+    assert.equal(result.data.continuationReady, false);
+    assertMigrationPreview(result);
+    assert.equal(storedSnapshot(root).digest, before.digest,
+      "normal refusal preserves the runtime work unit and absent lock directory");
+
+    assert.throws(() => new CurrentFlowVersionStore({
+      location, definition: buildCurrentFlowDefinition(),
+    }).load(), (error) => error.code !== "FLOW_MIGRATION_REQUIRED");
+    assert.equal(storedSnapshot(root).digest, before.digest,
+      "strict Store refusal preserves the same physical source");
   });
 
   it("reports pre-Version data as unsupported for both reads and mutations without accepting it", async (t) => {

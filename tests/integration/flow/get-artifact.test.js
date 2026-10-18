@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, describe, it } from "node:test";
+import { after, afterEach, describe, it, mock } from "node:test";
 
 import { Container } from "../../../src/lib/container.js";
 import { FlowTargetBinding } from "../../../src/lib/flow-target-guard.js";
@@ -9,7 +9,6 @@ import { AuthoritativeSpecRecord, FlowVersionMigrationClassifier } from "../../.
 import { buildCurrentFlowDefinition } from "../../../src/flow/definition.js";
 import { ArtifactViewService } from "../../../src/flow/lib/artifact-view-service.js";
 import { splitArtifactViewSummary } from "../../../src/flow/lib/artifact-view-summary.js";
-import { flattenSteps } from "../../../src/flow/lib/step-tree.js";
 import {
   CurrentFlowStateAdoptionBoundary,
   CurrentFlowVersionMigrationOutputBuilder,
@@ -19,18 +18,26 @@ import GetArtifactCommand, {
   ArtifactViewRequest,
 } from "../../../src/flow/lib/get-artifact.js";
 import {
-  canonicalImplReviewArtifact,
   CanonicalFlowFixture,
-  confirmCanonicalFixtureStep,
   FreshFlowFixture,
   makeFlowManager,
+  replaceCatalogedArtifactForCorruptionFixture,
 } from "../../support/infrastructure/flow-setup.js";
-import { createTmpDir, removeTmpDir } from "../../support/builders/tmp-dir.js";
+import { removeTmpDir } from "../../support/builders/tmp-dir.js";
+import { SeedCleanupScope } from "../../support/builders/seed-work-root.js";
+import { fixtureRepository } from "../../support/infrastructure/flow-dispatch-scenario.js";
+import { AcceptancePhaseScenario, acceptanceProviderResponse } from "../../support/acceptance-phase-scenario.js";
+import SetAcceptanceDecisionCommand from "../../../src/flow/lib/set-acceptance-decision.js";
+import { activateNonBlockingPolicy, decisionContextForActiveFlow } from "../../../src/flow/lib/nonblocking.js";
+import { recordNonBlockingDecision } from "../../../src/flow/lib/nonblocking-decision.js";
+import { CanonicalCommandAttemptArtifactHistory } from "../../../src/flow/lib/canonical-command-result.js";
 
 const roots = [];
+const acceptanceSeedScope = new SeedCleanupScope(after, mock);
+let acceptanceDynamicSeed;
 
 function root() {
-  const value = createTmpDir("get-artifact-");
+  const value = fixtureRepository("get-artifact-");
   roots.push(value);
   return value;
 }
@@ -60,7 +67,7 @@ function specRecord(goal) {
     constraints: ["Node built-ins only."],
     design_principles: [],
     overview: { modules: [], data_flow: [], decisions: [] },
-    requirements: [{ id: "R1", desc: "Show this requirement.", task_ids: ["T1"] }],
+    requirements: [{ id: "R1", desc: "Show this requirement.", testable: false, task_ids: ["T1"] }],
     acceptance_criteria: ["The display is deterministic."],
     clarifications: [],
     alternatives_considered: [],
@@ -69,31 +76,35 @@ function specRecord(goal) {
 }
 
 function fixture(directory, { specId, goal, active = false } = {}) {
-  const flowManager = makeFlowManager(directory);
+  const flowManager = makeFlowManager(directory, { specId });
   const created = new CanonicalFlowFixture({
     flowManager,
     specId,
     runId: `run-${specId}`,
+    execution: { mode: "direct", baseBranch: "main" },
     specRecord: specRecord(goal),
   }).create().addTask(taskRecord());
   if (active) created.registerActive();
   return { flowManager, created };
 }
 
-function finalizeFixture(flowManager, created) {
-  for (const step of created.leaves()) created.settle(step.id);
+async function finalizeFixture(flowManager, created) {
+  const source = "version-view.js";
+  created.registerActive();
+  await created.activateWithProducers("finalize-cleanup", {
+    implementationFiles: new Map([["R1", [source]]]),
+    sourceMutations: new Map([["implement", () => {
+      fs.writeFileSync(path.join(flowManager.executionRoot(), source), "export const exactVersionView = true;\n");
+    }]]),
+  });
+  created.settle("finalize-cleanup");
   flowManager.finalizeFlow(created.specId);
   return created;
 }
 
-function finalizeMigratedVersion(flowManager, specId) {
-  for (const step of flattenSteps(flowManager.loadReadOnly(specId).steps)) {
-    if (["done", "skipped"].includes(step.status)) continue;
-    confirmCanonicalFixtureStep(flowManager, specId, step.id);
-  }
-  flowManager.finalizeFlow(specId);
+async function finalizeMigratedVersion(flowManager, specId) {
+  return finalizeFixture(flowManager, CanonicalFlowFixture.fromExisting({ flowManager, specId }));
 }
-
 class CountingAgent {
   constructor() {
     this.resolveCalls = 0;
@@ -126,12 +137,6 @@ class QueuedSummaryAgent extends CountingAgent {
     if (this.responses.length === 0) throw new Error("unexpected artifact summary call");
     return this.responses.shift();
   }
-}
-
-function attemptHistory(logicalKey, payload) {
-  return Buffer.from(`${JSON.stringify({
-    attempts: [{ attempt: 1, artifact: { logicalKey, payload } }],
-  }, null, 2)}\n`, "utf8");
 }
 
 function exactAcceptanceChunkResponse(units) {
@@ -198,7 +203,7 @@ function specSummaryResponses(fullView) {
 }
 
 function migratedVersionFixture(directory, { specId, goal }) {
-  const flowManager = makeFlowManager(directory);
+  const flowManager = makeFlowManager(directory, { specId });
   const target = flowManager.canonicalVersionLocation(1, { specId });
   const source = path.join(directory, "legacy-flow-source");
   fs.mkdirSync(source, { recursive: true });
@@ -215,14 +220,14 @@ function migratedVersionFixture(directory, { specId, goal }) {
     runId: `run-${specId}`,
     specId,
     request: "Render a migrated canonical Version.",
-    execution: { mode: "direct" },
+    execution: { mode: "direct", baseBranch: "main" },
     policy: { autoApprove: false, nonblocking: null },
   });
   const spec = new AuthoritativeSpecRecord({
     ...specRecord(goal),
     id: specId,
-    requirements: [],
-    tasks: [],
+    requirements: [{ id: "R1", desc: "Show this requirement.", testable: false, task_ids: ["T1"] }],
+    tasks: [taskRecord()],
   });
   const migration = new FlowVersionMigrationClassifier({
     target,
@@ -232,126 +237,72 @@ function migratedVersionFixture(directory, { specId, goal }) {
   return { flowManager, migration };
 }
 
-function acceptanceFixture(directory, { specId, missingFingerprint = false } = {}) {
-  const flowManager = makeFlowManager(directory);
-  const created = new CanonicalFlowFixture({
-    flowManager,
-    specId,
-    runId: `run-${specId}`,
-    specRecord: specRecord("Render every cataloged acceptance source."),
-  }).create().addTask(taskRecord()).registerActive();
-  created.activate("impl-review");
-  const repairFingerprint = "a".repeat(64);
-  const implReview = canonicalImplReviewArtifact(created.state(), { blockingFindings: [{
-    findingKey: "source-F1",
-    title: "Cataloged acceptance source",
-    failureMode: "unresolved_acceptance_source",
-    file: null,
-    issue: "An original cataloged finding remains visible.",
-    detail: "This detail comes from the authoritative implementation-review attempt.",
-    suggestion: "Resolve the source finding before a later review.",
-    requirementId: "R1",
-    guardrailId: null,
-    disposition: "informational",
-    rationale: "The cataloged acceptance source remains unresolved.",
-  }] });
-  const sourceFinding = implReview.blockingFindings[0];
-  const deferred = {
-    findingId: "F1",
-    sourceStep: "impl-review",
-    sourceArtifact: "steps/impl/review/result.json",
-    sourceFindingId: sourceFinding.findingId,
-    finalDisposition: "still_open",
-    evidenceRefs: [`steps/impl/review/result.json#${sourceFinding.findingId}`],
-  };
-  const state = created.state();
-  flowManager.publishArtifacts({
-    specId: state.specId,
-    nodeId: "impl-review",
-    artifactWrites: [
-      {
-        logicalKey: "impl.review",
-        mediaType: "application/json",
-        bytes: attemptHistory("impl.review", implReview),
-      },
-      {
-        logicalKey: "flow.findings",
-        mediaType: "application/json",
-        bytes: Buffer.from(`${JSON.stringify({
-          version: 2,
-          entries: [{
-            findingId: deferred.findingId,
-            sourceStep: deferred.sourceStep,
-            sourceArtifact: deferred.sourceArtifact,
-            sourceFindingId: deferred.sourceFindingId,
-            runId: state.runId,
-            fingerprint: missingFingerprint ? "d".repeat(64) : sourceFinding.fingerprint,
-            disposition: "deferred",
-            rationale: "The finding remains visible for an explicit decision.",
-            retryExhausted: true,
-            attempts: 5,
-            round: 1,
-            completionKind: "deferred",
-            finalDisposition: deferred.finalDisposition,
-          }],
-        }, null, 2)}\n`, "utf8"),
-      },
-    ],
+async function acceptanceFixture(t, { specId: requestedSpecId, missingFingerprint = false } = {}) {
+  acceptanceDynamicSeed ??= AcceptancePhaseScenario.seed(acceptanceSeedScope, {
+    frontier: "acceptance-decision",
+    seedSpecId: requestedSpecId,
+    execution: { mode: "direct", baseBranch: "main", featureBranch: null },
+    gateResponse(_prompt, options, active) {
+      if (active.current() !== "spec-gate") return null;
+      const observation = options.jsonSchema?.properties?.observations?.items;
+      const requirementIds = observation?.properties?.requirementId?.enum ?? [];
+      const sourceRefs = observation?.properties?.sourceRef?.enum ?? [];
+      if (requirementIds.length && sourceRefs.length) return JSON.stringify({ observations:
+        requirementIds.flatMap((requirementId) => sourceRefs.map((sourceRef) => ({ requirementId, sourceRef,
+          support: [], contradictions: ["An original cataloged finding remains visible."], unresolved: [] }))) });
+      const references = observation?.properties?.requirementRef?.enum ?? [];
+      const target = { entity: "requirement", id: "R1", field: "desc" };
+      return JSON.stringify({ observations: references.includes("PHASE-SPEC") ? [{
+        failureMode: "guardrail-violation", requirementRef: "PHASE-SPEC",
+        where: { file: "spec.json", locator: "requirements.R1.desc" },
+        observed: "An original cataloged finding remains visible.", targets: [target],
+        allowedTargets: [{ target, operationKinds: ["edit-text-field"] }],
+      }] : [], ...(options.jsonSchema?.required?.includes("evaluationUnavailable") ? { evaluationUnavailable: null } : {}) });
+    },
+    acceptanceResponse: (_ordinal, active) => acceptanceProviderResponse(active,
+      { status: "notVerifiable", disposition: "still_open" }),
+    prepare: async (scenario) => {
+      await scenario.dispatch(64);
+      scenario.reload();
+      const stopped = scenario.manager.readCurrentStepSettlement({ specId: scenario.specId, stepId: "spec-gate" });
+      assert.equal(scenario.current(), "spec-gate");
+      assert.equal(stopped.result.kind, "spec-gate-blocked");
+      assert.equal(stopped.result.error.data.reason, "cycle-limit");
+      activateNonBlockingPolicy({ root: scenario.root, flowManager: scenario.manager,
+        reason: "Retain the unresolved Spec observation for Acceptance." });
+      const context = decisionContextForActiveFlow(scenario.root, scenario.manager.loadReadOnly(scenario.specId), scenario.manager);
+      recordNonBlockingDecision({ root: scenario.root, flowManager: scenario.manager, choice: "continue",
+        reason: "The finding remains visible for an explicit decision.",
+        remainingRisk: "Acceptance must decide the unresolved Spec Gate observation.",
+        expectEvidenceDigest: context.evidenceDigest });
+      await scenario.advanceTo("acceptance-decision");
+      scenario.reload();
+
+    },
   });
-  created.activate("acceptance-review");
-  flowManager.publishArtifacts({
-    specId: state.specId,
-    nodeId: "acceptance-review",
-    artifactWrites: [{
-      logicalKey: "acceptance.review",
-      mediaType: "application/json",
-      bytes: attemptHistory("acceptance.review", {
-        version: 2,
-        repairFingerprint,
-        mechanicalBlockers: [],
-        hardBlockers: [deferred],
-        requirementJudgments: [{
-          requirementId: "R1",
-          status: "notVerifiable",
-          requestRefs: ["flow.request"],
-          requirementRefs: ["spec.json#R1"],
-          diffRefs: [],
-          repairRefs: ["acceptance:no-repair"],
-          testRefs: [],
-          missingEvidence: ["An explicit risk decision is required."],
-        }],
-        deferredFindings: [deferred],
-        userDecision: null,
-        verdict: "user_decision_required",
-      }),
-    }],
-  });
-  return { flowManager, created, repairFingerprint };
+  const scenario = AcceptancePhaseScenario.fromSeed(t, await acceptanceDynamicSeed);
+  const specId = scenario.specId;
+  const flowManager = scenario.manager;
+  const created = CanonicalFlowFixture.fromExisting({ flowManager, specId });
+  const retained = flowManager.readArtifact({ specId, logicalKey: "flow.findings", consumerNodeId: "acceptance-review" });
+  const findings = JSON.parse(retained.bytes.toString("utf8"));
+  assert.equal(findings.entries.length, 1);
+  const finding = findings.entries[0];
+  assert.equal(finding.sourceStep, "spec-gate");
+  if (missingFingerprint) {
+    // Fault injection follows a real producer and its real Acceptance consumer.
+    // Keep the source intact, but point the retained identity at no source finding.
+    finding.fingerprint = "d".repeat(64);
+    replaceCatalogedArtifactForCorruptionFixture(flowManager, specId, "flow.findings",
+      Buffer.from(JSON.stringify(findings) + "\n"));
+  }
+  return { root: scenario.root, flowManager, created, scenario, finding };
 }
 
-function publishAcceptanceDecision({ flowManager, created, repairFingerprint }) {
-  created.activate("acceptance-decision");
-  const review = flowManager.readArtifact({
-    specId: created.specId,
-    logicalKey: "acceptance.review",
-    consumerNodeId: "acceptance-decision",
-  });
-  flowManager.publishArtifacts({
-    specId: created.specId,
-    nodeId: "acceptance-decision",
-    artifactWrites: [{
-      logicalKey: "acceptance.decision",
-      mediaType: "application/json",
-      bytes: attemptHistory("acceptance.decision", {
-        version: 1,
-        choice: "accept_risk_and_continue",
-        decidedAt: "2026-08-15T00:00:00.000Z",
-        acceptanceReviewAttempt: 1,
-        acceptanceReviewDigest: review.descriptor.hash,
-        repairFingerprint,
-      }),
-    }],
-  });
+async function publishAcceptanceDecision({ scenario, flowManager, created }) {
+  await new SetAcceptanceDecisionCommand().execute({ ...scenario.context(), choice: "accept_risk_and_continue" });
+  const decision = flowManager.readArtifact({ specId: created.specId, logicalKey: "acceptance.decision", consumerNodeId: "report" });
+  return CanonicalCommandAttemptArtifactHistory.fromBytes({ logicalKey: "acceptance.decision", bytes: decision.bytes }).current.payload;
 }
 
 function commandContainer(directory, flowManager, agent = new CountingAgent()) {
@@ -422,7 +373,7 @@ describe("flow get artifact", () => {
       specId: "002-completed",
       goal: "This exact completed Version is displayed.",
     });
-    finalizeFixture(completed.flowManager, completed.created);
+    await finalizeFixture(completed.flowManager, completed.created);
     const { container } = commandContainer(directory, active.flowManager);
     const originalLoad = active.flowManager.load;
     const originalResolveActive = active.flowManager.resolveActiveFlow;
@@ -448,7 +399,7 @@ describe("flow get artifact", () => {
       specId: "002-migrated",
       goal: "A migrated Version is rendered from its cataloged spec record.",
     });
-    finalizeMigratedVersion(flowManager, "002-migrated");
+    await finalizeMigratedVersion(flowManager, "002-migrated");
     const location = migration.location;
     assert.equal(fs.existsSync(path.join(location.directory, "spec.md")), false);
     const persistedSpec = JSON.parse(fs.readFileSync(location.specFile, "utf8"));
@@ -561,18 +512,17 @@ describe("flow get artifact", () => {
     assert.equal(agent.calls, 0);
   });
 
-  it("reads a real cataloged acceptance attempt and its declared dynamic source, decision, and structured summary", async () => {
-    const directory = root();
-    const acceptance = acceptanceFixture(directory, {
+  it("reads a real cataloged acceptance attempt and its declared dynamic source, decision, and structured summary", async (t) => {
+    const acceptance = await acceptanceFixture(t, {
       specId: "003-acceptance-with-decision",
     });
-    const { flowManager, created, repairFingerprint } = acceptance;
+    const { root: directory, flowManager, created, finding } = acceptance;
     const undecidedContainer = commandContainer(directory, flowManager).container;
     const undecided = await new GetArtifactCommand().run(undecidedContainer, input({ logicalKey: "acceptance.review" }));
     assert.equal(undecided.ok, true, JSON.stringify(undecided));
     assert.match(undecided.data.markdown, /Undecided/);
 
-    publishAcceptanceDecision({ flowManager, created, repairFingerprint });
+    const decision = await publishAcceptanceDecision(acceptance);
     const exactFull = new ArtifactViewService({ config: { lang: "en" }, flowManager })
       .full({ logicalKey: "acceptance.review", activeState: created.state() });
     const agent = new QueuedSummaryAgent(acceptanceSummaryResponses(exactFull.fullView));
@@ -585,12 +535,12 @@ describe("flow get artifact", () => {
     assert.equal(full.ok, true);
     assert.match(full.data.markdown, /Judgment R1/);
     assert.match(full.data.markdown, /An original cataloged finding remains visible\./);
-    assert.match(full.data.markdown, /The finding remains visible for an explicit decision\./);
+    assert.ok(full.data.markdown.includes(finding.rationale));
     assert.match(full.data.markdown, /Accept risk and continue/);
-    assert.match(full.data.markdown, /2026-08-15T00:00:00\.000Z/);
+    assert.ok(full.data.markdown.includes(decision.decidedAt));
     assert.equal(summary.ok, true);
     assert.match(summary.data.markdown, /Judgment R1/);
-    assert.match(summary.data.markdown, /Deferred finding F1/);
+    assert.ok(summary.data.markdown.includes("Deferred finding " + finding.findingId));
     assert.equal(agent.calls > 0, true);
 
     const cacheDirectory = path.join(created.location().directory, ".runtime", "views");
@@ -598,7 +548,7 @@ describe("flow get artifact", () => {
       name,
       fs.readFileSync(path.join(cacheDirectory, name), "utf8"),
     ]);
-    fs.appendFileSync(created.location().artifact("impl.review"), "corrupt source bytes");
+    fs.appendFileSync(created.location().artifact("spec.gate"), "corrupt source bytes");
     const noCallAgent = new QueuedSummaryAgent([]);
     const failedContainer = commandContainer(directory, flowManager, noCallAgent).container;
     const failed = await new GetArtifactCommand().run(failedContainer, input({
@@ -617,9 +567,8 @@ describe("flow get artifact", () => {
     assert.deepEqual(cacheAfterCorruption, cacheBeforeCorruption);
   });
 
-  it("rejects an artifact view reference whose authoritative fingerprint is absent from its source", async () => {
-    const directory = root();
-    const { flowManager } = acceptanceFixture(directory, {
+  it("rejects an artifact view reference whose authoritative fingerprint is absent from its source", async (t) => {
+    const { root: directory, flowManager } = await acceptanceFixture(t, {
       specId: "004-acceptance-missing-fingerprint",
       missingFingerprint: true,
     });

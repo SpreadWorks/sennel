@@ -5,7 +5,7 @@ import { acquirePendingExecutionContract, reviewStepExecutionContract } from "..
 import { ImplReviewInput } from "../../services/impl-review-input.js";
 import { ImplReviewGateSettlementWriter } from "../../services/impl-review-gate-settlement-writer.js";
 import { ImplStepBinding } from "../connectors/impl/impl-step-binding.js";
-import { readImplReviewRequestEvidence, readProspectiveImplReviewEvidence } from "../../lib/canonical-review-artifacts.js";
+import { readImplReviewRequestEvidence } from "../../lib/canonical-review-artifacts.js";
 import { prepareReviewExecutionClaim } from "../../lib/spec-review-operations.js";
 import { ReviewExecutionClaimPreparation } from "../../lib/spec-review-operations-values.js";
 import { ImplReviewExecutionRequiredResult } from "../step-result.js";
@@ -76,8 +76,7 @@ export function prepareImplReviewPublication({ flowManager, state, commandResult
   const binding = new ImplStepBinding({ flowManager, specId: state.specId, stepId: "impl-review" });
   acquirePendingExecutionContract({ flowManager, binding });
   const publication = flowManager.prepareImplCommandPublication({ binding, commandResult });
-  const evidence = readProspectiveImplReviewEvidence({ flowManager, binding, commandResult, publication });
-  return new ImplReviewPublicationPreparation({ binding, observed: new ImplReviewInput({ evidence }),
+  return new ImplReviewPublicationPreparation({ binding, observed: new ImplReviewInput(publication.reviewObservation),
     reviewPublication: publication, commandResult });
 }
 

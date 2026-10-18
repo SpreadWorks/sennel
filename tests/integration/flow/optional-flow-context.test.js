@@ -2,22 +2,23 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { Container } from "../../../src/lib/container.js";
 import { FlowCommand } from "../../../src/flow/lib/base-command.js";
+import { CanonicalFlowFixture, makeFlowManager } from "../../support/infrastructure/flow-setup.js";
+import { createTmpDir, removeTmpDir } from "../../support/builders/tmp-dir.js";
 
-function makeContainerWithAmbiguousActiveFlows() {
+function makeContainerWithAmbiguousActiveFlows(t) {
+  const root = createTmpDir("optional-flow-context-");
+  t.after(() => removeTmpDir(root));
   const container = new Container();
-  const selectedState = {
-    specId: "002-demo",
-    runId: "run-002",
-    steps: [],
-    tasks: [],
-    currentTaskId: null,
-  };
+  const manager = makeFlowManager(root);
+  new CanonicalFlowFixture({ flowManager: manager, specId: "002-demo", runId: "run-002" }).create();
+  const selectedState = manager.loadReadOnly("002-demo");
   const flowManager = {
     load: () => null,
+    loadReadOnly: (specId) => manager.loadReadOnly(specId),
     forRoot: () => flowManager,
     resolveExplicitFlowTarget: (expectation) => {
       if (expectation.runId === "run-002") {
-        return { state: selectedState, specId: "002-demo", authorityRoot: "/repo", preparing: false };
+        return { state: selectedState, specId: "002-demo", authorityRoot: root, preparing: false };
       }
       throw new Error("selected active Flow is absent");
     },
@@ -28,8 +29,8 @@ function makeContainerWithAmbiguousActiveFlows() {
       throw new Error("multiple active flows: 001-demo (worktree), 002-demo (worktree)");
     },
   };
-  container.register("paths", { root: "/repo" });
-  container.register("mainRoot", "/repo");
+  container.register("paths", { root });
+  container.register("mainRoot", root);
   container.register("config", {});
   container.register("flowManager", flowManager);
   container.register("inWorktree", false);
@@ -120,7 +121,7 @@ describe("optional flow context resolution", () => {
     assert.equal(loadCalled, false);
   });
 
-  it("requiresFlow:false commands continue when active flow discovery is ambiguous", async () => {
+  it("requiresFlow:false commands continue when active flow discovery is ambiguous", async (t) => {
     let captured;
     class OptionalCommand extends FlowCommand {
       constructor() {
@@ -134,7 +135,7 @@ describe("optional flow context resolution", () => {
     }
 
     const cmd = new OptionalCommand();
-    const result = await cmd.run(makeContainerWithAmbiguousActiveFlows(), { runId: "preparing-run" });
+    const result = await cmd.run(makeContainerWithAmbiguousActiveFlows(t), { runId: "preparing-run" });
 
     assert.deepEqual(result, { ok: true });
     assert.equal(captured.flowState, null);
@@ -142,7 +143,7 @@ describe("optional flow context resolution", () => {
     assert.equal(captured.runId, "preparing-run");
   });
 
-  it("requiresFlow:true commands select the target when --expect-run-id is provided", async () => {
+  it("requiresFlow:true commands select the target when --expect-run-id is provided", async (t) => {
     let captured;
     class RequiredCommand extends FlowCommand {
       execute(ctx) {
@@ -152,14 +153,19 @@ describe("optional flow context resolution", () => {
     }
 
     const cmd = new RequiredCommand();
-    const result = await cmd.run(makeContainerWithAmbiguousActiveFlows(), { expectRunId: "run-002" });
+    const commandContainer = makeContainerWithAmbiguousActiveFlows(t);
+    const manager = commandContainer.get("flowManager");
+    const before = manager.loadReadOnly("002-demo");
+    const result = await cmd.run(commandContainer, { expectRunId: "run-002" });
 
     assert.deepEqual(result, { ok: true });
     assert.equal(captured.flowState.runId, "run-002");
     assert.equal(captured.specId, "002-demo");
+    assert.deepEqual(captured.flowState, before, "execution uses the fresh canonical read under its real command lease");
+    assert.deepEqual(manager.loadReadOnly("002-demo"), before);
   });
 
-  it("requiresFlow:true commands still fail when no target disambiguates active flows", async () => {
+  it("requiresFlow:true commands still fail when no target disambiguates active flows", async (t) => {
     class RequiredCommand extends FlowCommand {
       execute() {
         return { ok: true };
@@ -168,7 +174,7 @@ describe("optional flow context resolution", () => {
 
     const cmd = new RequiredCommand();
     await assert.rejects(
-      () => cmd.run(makeContainerWithAmbiguousActiveFlows(), {}),
+      () => cmd.run(makeContainerWithAmbiguousActiveFlows(t), {}),
       /multiple active flows/,
     );
   });

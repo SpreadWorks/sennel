@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { SENNEL_BOOTSTRAP } from "../../support/infrastructure/node-bootstrap.js";
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -265,7 +266,7 @@ describe("active-flow registry transaction", () => {
     maintenance.acquire();
     try {
       for (const operation of ["add", "remove", "cleanStale"]) {
-        const child = spawnSync(process.execPath, ["--input-type=module", "-e", `
+        const child = spawnSync(process.execPath, ["--import", SENNEL_BOOTSTRAP, "--input-type=module", "-e", `
           import { ActiveFlowRegistry } from ${JSON.stringify(REGISTRY_MODULE)};
           const registry = new ActiveFlowRegistry({ mainRoot: process.env.REGISTRY_ROOT });
           try {

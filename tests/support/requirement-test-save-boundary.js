@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import { randomUUID } from "node:crypto";
+import { FlowExecutionContract, executionValueDigest } from "../../src/flow/lib/flow-execution-contract.js";
 import { CanonicalFlowRuntime } from "../../src/flow/lib/canonical-flow-runtime.js";
 import { CurrentFlowSpecRecord } from "../../src/flow/lib/current-flow-state.js";
 import { RequirementTestArtifactStore } from "../../src/flow/lib/requirement-test-store.js";
@@ -65,8 +66,113 @@ export function assertGatePublicationRollback(before, restored) {
     "Gate rollback must restore state, Activity/Result/receipt, plan, catalog, Gate evidence and every primary/support source");
 }
 
+/** Exact durable response observations belonging to an already claimed worker. */
+export class RequirementTestPromptBoundary {
+  #manager;
+  #snapshot;
+  #episode;
+  constructor(manager, request, snapshot) {
+    this.#manager = manager;
+    this.#snapshot = snapshot;
+    this.contract = FlowExecutionContract.fromJSON(request.executionContract);
+    this.#episode = manager.readStoredPromptExecutionEpisode({ executionContract: this.contract });
+  }
+
+  retainedSnapshot(actual) {
+    const after = this.#manager.readStoredPromptExecutionEpisode({ executionContract: this.contract });
+    this.contract.assertMatches(after.executionContract);
+    assert.equal(this.#episode.scopes.length, 1);
+    assert.equal(after.scopes.length, 1);
+    const beforeScope = this.#episode.scopes[0];
+    const afterScope = after.scopes[0];
+    assert.deepEqual(afterScope.scope.toJSON(), beforeScope.scope.toJSON());
+    assert.deepEqual(afterScope.plan.toJSON(), beforeScope.plan.toJSON());
+    assert.equal(beforeScope.batches.length, 1);
+    assert.equal(afterScope.batches.length, 1);
+    const beforeBatch = beforeScope.batches[0];
+    const afterBatch = afterScope.batches[0];
+    assert.notEqual(beforeBatch.claim, null, "the race occurs inside its already reserved worker");
+    assert.equal(beforeBatch.completion, null);
+    assert.equal(afterBatch.claim, null);
+    assert.notEqual(afterBatch.completion, null);
+    assert.equal(afterBatch.batchCalls, beforeBatch.batchCalls, "no extra provider call may be reserved");
+    assert.equal(afterBatch.transportOrdinal, beforeBatch.transportOrdinal);
+    assert.deepEqual(afterBatch.transportFailures, beforeBatch.transportFailures);
+    assert.deepEqual(afterBatch.responses.slice(0, beforeBatch.responses.length), beforeBatch.responses);
+    assert.equal(afterBatch.responses.length, beforeBatch.responses.length + 1);
+    const response = afterBatch.responses.at(-1);
+    for (const key of ["responseCallIndex", "requestDigest", "schemaDigest", "providerKey", "profileKey"]) {
+      assert.equal(response[key], beforeBatch.claim[key], "the returned response belongs to the original claim");
+    }
+    assert.equal(response.origin, "provider");
+    assert.equal(JSON.parse(response.raw).sealed, true, "the actual external worker returned its sealed handoff");
+    for (const key of ["providerCallCount", "synthesisCallCount"]) {
+      assert.equal(after.budget[key], this.#episode.budget[key]);
+    }
+    assert.equal(after.budget.aggregateCharacters,
+      this.#episode.budget.aggregateCharacters + afterBatch.completion.responseCharacters);
+    assert.equal(after.budget.aggregateItemCount,
+      this.#episode.budget.aggregateItemCount + afterBatch.completion.responseItemCount);
+
+    const baseline = new Map(this.#snapshot.catalog.artifacts.map((entry) => [entry.relativePath, entry]));
+    const scopeId = executionValueDigest(afterScope.scope.toJSON());
+    const prefix = `artifacts/executions/${this.contract.episodeId}/${this.contract.generation}/`;
+    const progressPath = `${prefix}progress/${scopeId}.json`;
+    const budgetPath = `artifacts/execution-budgets/${this.contract.budgetId}.json`;
+    const eventPrefix = `${prefix}events/${scopeId}/`;
+    const newEvents = actual.catalog.artifacts.filter((entry) =>
+      entry.logicalKey === "prompt.execution.event" && entry.relativePath.startsWith(eventPrefix)
+      && !baseline.has(entry.relativePath));
+    assert.equal(newEvents.length, 2, "only this response and its validated completion are appended");
+    const publicationIds = new Set(newEvents.map((entry) => entry.activityId));
+    assert.equal(publicationIds.size, 2);
+    const oldActivityIds = new Set(this.#snapshot.activities.map((entry) => entry.id));
+    const extras = actual.activities.filter((entry) => !oldActivityIds.has(entry.id));
+    assert.deepEqual(extras.map((entry) => entry.transition.operation),
+      ["publish_artifacts", "publish_artifacts", "record_metric"]);
+    const publications = extras.slice(0, 2);
+    assert.deepEqual(new Set(publications.map((entry) => entry.id)), publicationIds);
+    for (const entry of publications) {
+      assert.equal(entry.nodeId, this.contract.nodeId);
+      assert.equal(entry.type, "artifacts_published");
+      assert.equal(entry.result, null, "Prompt observations cannot manufacture a semantic Result or receipt");
+    }
+    const orderedEvents = newEvents.sort((left, right) =>
+      publications.findIndex((entry) => entry.id === left.activityId)
+      - publications.findIndex((entry) => entry.id === right.activityId));
+    const events = orderedEvents.map((descriptor) => {
+      const eventId = descriptor.relativePath.slice(eventPrefix.length, -".json".length);
+      const saved = this.#manager.readArtifact({ specId: this.contract.specId,
+        logicalKey: "prompt.execution.event", consumerNodeId: this.contract.nodeId,
+        parameters: { ...this.contract.parameters, scopeId, eventId } });
+      assert.equal(saved.descriptor.hash, descriptor.hash);
+      assert.equal(saved.descriptor.activityId, descriptor.activityId);
+      return JSON.parse(saved.bytes.toString("utf8")).record;
+    });
+    assert.deepEqual(events.map((entry) => entry.event), ["response", "validated"]);
+    assert.deepEqual(events.at(-1).snapshot, afterScope.toJSON());
+
+    const normalized = structuredClone(actual);
+    normalized.activities = normalized.activities.filter((entry) => !publicationIds.has(entry.id));
+    normalized.state.confirmationOrder -= 2;
+    normalized.catalog.artifacts = normalized.catalog.artifacts.flatMap((entry) => {
+      if (entry.relativePath === progressPath || entry.relativePath === budgetPath) {
+        assert.ok(baseline.has(entry.relativePath));
+        assert.ok(publicationIds.has(entry.activityId));
+        assert.equal(entry.logicalKey, entry.relativePath === progressPath
+          ? "prompt.execution.progress" : "prompt.execution.budget");
+        return [baseline.get(entry.relativePath)];
+      }
+      if (newEvents.some((event) => event.relativePath === entry.relativePath)) return [];
+      return [entry];
+    });
+    return normalized;
+  }
+}
+
 /** Compare an uncertain worker save with its durable frontier, allowing only that call's metric Activity. */
-export function assertSnapshotAfterMetricFlush(actual, expected, phase) {
+export function assertSnapshotAfterMetricFlush(actual, expected, phase, promptBoundary = null) {
+  if (promptBoundary !== null) actual = promptBoundary.retainedSnapshot(actual);
   const previousMetrics = expected.activities.filter((entry) => entry.transition.operation === "record_metric");
   const actualMetrics = actual.activities.filter((entry) => entry.transition.operation === "record_metric");
   assert.equal(actualMetrics.length, previousMetrics.length + 1, "one completed worker invocation records one metric Activity");

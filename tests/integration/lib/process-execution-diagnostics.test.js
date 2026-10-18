@@ -3,6 +3,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { spawn } from "node:child_process";
+import { SENNEL_BOOTSTRAP } from "../../support/infrastructure/node-bootstrap.js";
 import { once } from "node:events";
 import { test } from "node:test";
 import { pathToFileURL } from "node:url";
@@ -46,7 +47,7 @@ test("managed receipt failure preserves typed diagnostic through registry, fresh
   await runtime.close();
   const runtimeURL = pathToFileURL(path.resolve("src/lib/process-execution-runtime.js")).href;
   const envelopeURL = pathToFileURL(path.resolve("src/lib/flow-envelope.js")).href;
-  const child = spawn(process.execPath, ["--input-type=module", "-e", `
+  const child = spawn(process.execPath, ["--import", SENNEL_BOOTSTRAP, "--input-type=module", "-e", `
     import {ProcessExecutionRuntime,ProcessExecutionControlFailure} from ${JSON.stringify(runtimeURL)};
     import {Envelope} from ${JSON.stringify(envelopeURL)};
     const root=ProcessExecutionRuntime.inspect(${JSON.stringify(options)}).executions[0];

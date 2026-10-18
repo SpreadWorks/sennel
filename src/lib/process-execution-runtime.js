@@ -744,8 +744,9 @@ export class ProcessExecutionRuntime {
     const inventory = this.inspect();
     if (inventory === null) fail("record-missing", "Runtime inventory disappeared before stop receipt readback");
     const expected = binding === null ? null : new ProcessExecutionBinding(binding);
-    return inventory.executions.filter((execution) => execution.status === "closed")
-      .flatMap((execution) => execution.calls.map((call) => new ProcessExecutionStopReceipt(call.receipt)))
+    return inventory.executions
+      .flatMap((execution) => execution.calls.filter((call) => call.receipt !== null)
+        .map((call) => new ProcessExecutionStopReceipt(call.receipt)))
       .filter((receipt) => expected === null || receipt.binding.matches(expected));
   }
   static async acquire({ mainRoot, executionRoot = mainRoot, runId = null, specId = null,

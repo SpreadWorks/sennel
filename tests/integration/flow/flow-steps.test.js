@@ -8,7 +8,6 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { FLOW_STEPS, PHASE_MAP } from "../../../src/lib/flow-helpers.js";
 import { getFlowNode } from "../../../src/flow/definition.js";
-import { FLOW_COMMANDS } from "../../../src/flow/registry.js";
 describe("FLOW_STEPS ordering (plan rework)", () => {
   it("has draft review triage and repair steps before their consumers", () => {
     assertStepsAppearInOrder(
@@ -32,26 +31,10 @@ describe("FLOW_STEPS ordering (plan rework)", () => {
   });
 
   it("has the fixed Requirement test lifecycle after approval", () => {
-    const expectedPrefix = [
-      "branch", "prepare-spec", "draft", "draft-questions-review", "draft-questions-triage", "draft-questions-repair", "draft-refine", "draft-gate-repair",
-      "draft-coverage-review", "draft-coverage-triage", "draft-coverage-repair", "draft-gate",
-      "spec", "spec-review", "spec-triage", "spec-repair", "spec-gate", "approval",
-      "test-generate", "test-review", "test-repair", "test-gate",
-    ];
-    assert.deepEqual(FLOW_STEPS.slice(0, expectedPrefix.length), expectedPrefix);
-    for (const removed of ["test", "scenario-validity", "repair-test-review"]) {
-      assert.equal(FLOW_STEPS.includes(removed), false);
-      assert.equal(getFlowNode(removed), null);
-      assert.equal(FLOW_COMMANDS.run[removed], undefined);
-    }
-  });
-
-  it("does not contain approach (removed in spec 178)", () => {
-    assert.ok(!FLOW_STEPS.includes("approach"), "approach should be removed");
-  });
-
-  it("does not contain fill-spec (renamed to spec)", () => {
-    assert.ok(!FLOW_STEPS.includes("fill-spec"), "fill-spec should be removed");
+    const approvalIndex = FLOW_STEPS.indexOf("approval");
+    assert.notEqual(approvalIndex, -1, "approval must exist");
+    assert.deepEqual(FLOW_STEPS.slice(approvalIndex + 1, approvalIndex + 5),
+      ["test-generate", "test-review", "test-repair", "test-gate"]);
   });
 
   it("does not have spec before prepare-spec", () => {

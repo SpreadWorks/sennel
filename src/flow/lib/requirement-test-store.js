@@ -1,3 +1,5 @@
+import { FLOW_ARTIFACT_CONTRACTS } from "../../lib/flow-artifact-contract.js";
+import { CurrentFlowStateConflictError } from "./current-flow-state-conflict-error.js";
 import { CURRENT_FLOW_SCHEMA_REVISION } from "../../lib/flow-schema-revision.js";
 import crypto from "node:crypto";
 import { StepResult, TestGateCompatibleResult } from "../engine/step-result.js";
@@ -11,6 +13,7 @@ import {
 } from "./canonical-worker-artifacts.js";
 import {
   CanonicalTestArtifactStore,
+  readCanonicalTestSpec,
 } from "./canonical-test-artifacts.js";
 import { RequirementTestExecutionLifecycle } from "./requirement-test-lifecycle.js";
 import {
@@ -157,8 +160,7 @@ export class RequirementTestArtifactStore {
 
   /** Acquire and validate the complete Requirement disposition for execution. */
   readExecutionLifecycle(consumerNodeId) {
-    const spec = new CanonicalTestArtifactStore({ flowManager: this.flowManager, state: this.state })
-      .readSpec(consumerNodeId);
+    const spec = readCanonicalTestSpec({ flowManager: this.flowManager, specId: this.specId, consumerNodeId });
     return new RequirementTestExecutionLifecycle({
       plan: this.readPlan(consumerNodeId).artifact.plan,
       receipts: this.deferredReceipts(consumerNodeId),
@@ -537,4 +539,28 @@ export class RequirementTestArtifactStore {
       })
       .sort((left, right) => left.requirementId.localeCompare(right.requirementId)));
   }
+}
+
+/** Requirement-only artifact reader whose coherent lifetime is the Store lock. */
+export class RequirementTestCatalogReader {
+  constructor(view) {
+    this.view = view;
+    Object.freeze(this);
+  }
+
+  readArtifact({ logicalKey, parameters = {}, optional = false } = {}) {
+    const artifact = FLOW_ARTIFACT_CONTRACTS.resolve(logicalKey, parameters);
+    const descriptor = this.view.catalog.artifacts
+      .find((entry) => entry.relativePath === artifact.relativePath) ?? null;
+    if (descriptor === null) {
+      if (optional) return null;
+      throw new CurrentFlowStateConflictError(`Requirement test artifact is no longer cataloged: ${artifact.relativePath}`);
+    }
+    if (descriptor.logicalKey !== artifact.logicalKey) {
+      throw new CurrentFlowStateConflictError("Requirement test catalog identity changed before settlement");
+    }
+    return Object.freeze({ descriptor, bytes: this.view.readCatalogedArtifact(descriptor) });
+  }
+
+  artifactCatalog() { return this.view.catalog; }
 }

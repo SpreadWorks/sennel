@@ -49,7 +49,7 @@ import { createTmpDir, removeTmpDir } from "../../support/builders/tmp-dir.js";
 import { commitAll, initGitRepo } from "../../support/infrastructure/git-repo.js";
 import { DraftGateRepairScenario } from "../../support/infrastructure/draft-gate-repair-scenario.js";
 import { CanonicalFlowFixture, canonicalDraftDocument } from "../../support/infrastructure/flow-setup.js";
-import { dispatchContainer, requestInput, requestPayloadPath } from "../../support/infrastructure/flow-dispatch-scenario.js";
+import { dispatchContainer, requestInput, requestPayloadPath, withScenarioProviderAdmission } from "../../support/infrastructure/flow-dispatch-scenario.js";
 
 function digest(value) {
   return crypto.createHash("sha256").update(JSON.stringify(value)).digest("hex");
@@ -543,7 +543,7 @@ describe("dedicated draft Gate repair handoff", () => {
 
       const goal = "Retain the complete behavior after explicit Step Error recovery.";
       let workerRequest;
-      const agent = { async call(_prompt, options) {
+      const agent = withScenarioProviderAdmission({ async call(_prompt, options) {
         const requestPath = options.executionEnvironment.SENNEL_FLOW_HANDOFF_REQUEST;
         workerRequest = JSON.parse(fs.readFileSync(requestPath, "utf8"));
         assert.equal(workerRequest.stepId, "draft-gate-repair");
@@ -564,7 +564,7 @@ describe("dedicated draft Gate repair handoff", () => {
         }));
         sealWorkerArtifactHandoff({ requestPath, invocationId: workerRequest.dispatchInvocationId });
         return "sealed";
-      } };
+      } });
       const dispatcher = new RunDispatchCommand({ agent, maxDispatches: 1, repositoryFingerprint: () => "draft-repair-error-recovery" });
       dispatcher.container = dispatchContainer({ root: value.root, flowManager: reloaded, agent });
       const dispatchState = reloaded.loadReadOnly(value.scenario.specId);
@@ -768,7 +768,8 @@ describe("dedicated draft Gate repair handoff", () => {
       const before = { state: value.flowManager.canonicalState(specId).toJSON(),
         ledger: value.flowManager.activityLedger(specId), catalog: value.flowManager.artifactCatalog(specId).toJSON() };
       assert.throws(() => coordinator.prepareDraftWorker({ ctx, request, publicationRecovery: true }),
-        (error) => error.code === "FLOW_ARTIFACT_HANDOFF_INVALID" && /publication ownership/.test(error.message));
+        (error) => error.code === "FLOW_EXECUTION_INPUT_BASELINE_CHANGED"
+          && error.data.logicalKey === "draft" && error.data.relativePath === original.descriptor.relativePath);
       assert.deepEqual({ state: value.flowManager.canonicalState(specId).toJSON(),
         ledger: value.flowManager.activityLedger(specId), catalog: value.flowManager.artifactCatalog(specId).toJSON() }, before);
     } finally { removeTmpDir(value.root); }

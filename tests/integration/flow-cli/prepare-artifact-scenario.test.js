@@ -12,7 +12,7 @@ import GetNextActionCommand from "../../../src/flow/lib/get-next-action.js";
 import RunDispatchCommand from "../../../src/flow/lib/run-dispatch.js";
 import { sealWorkerArtifactHandoff } from "../../../src/flow/lib/worker-artifact-handoff.js";
 import { PrepareArtifactScenario } from "../../support/prepare-artifact-scenario.js";
-import { dispatchContainer, requestPayloadPath } from "../../support/infrastructure/flow-dispatch-scenario.js";
+import { dispatchContainer, requestPayloadPath, withScenarioProviderAdmission } from "../../support/infrastructure/flow-dispatch-scenario.js";
 import { canonicalDraftDocument } from "../../support/infrastructure/flow-setup.js";
 import { assertCanonicalStepResult } from "../../support/infrastructure/canonical-step-result.js";
 import { workerArtifactJson } from "../../support/infrastructure/worker-artifact.js";
@@ -33,6 +33,26 @@ function journalRecord(scenario) {
 
 function assertNoWorker(scenario) {
   assert.equal(fs.existsSync(path.join(scenario.root, ".tmp", "unexpected-agent-calls")), false);
+}
+
+function exposeProcessRuntime(scenario, { operationLock = false } = {}) {
+  fs.appendFileSync(path.join(scenario.root, ".gitignore"), [
+    "!/.sennel/process-runtime/",
+    "!/.sennel/process-runtime/**",
+    "!/.sennel/process-runtime-lookalike/",
+    "!/.sennel/process-runtime-lookalike/**",
+    ...(operationLock ? ["!/.sennel/.repository-flow-operation.lock"] : []),
+    "",
+  ].join("\n"));
+  scenario.git(["add", ".gitignore"]);
+  scenario.git(["commit", "-m", "Expose process runtime for preparation preflight"]);
+  scenario.baseOid = scenario.git(["rev-parse", "HEAD"]).trim();
+}
+
+function assertNestedProjectRoot(scenario) {
+  const gitRoot = fs.realpathSync(scenario.git(["rev-parse", "--show-toplevel"]).trim());
+  assert.equal(gitRoot, fs.realpathSync(scenario.repositoryRoot));
+  assert.notEqual(gitRoot, fs.realpathSync(scenario.root));
 }
 
 function canonicalBytes(scenario) {
@@ -179,7 +199,7 @@ function boundaryInputWithChangedField(value, field, replacement) {
 /** Observe the real Draft consumer at the sole external worker boundary. */
 async function startDraft(scenario) {
   const requests = [];
-  const agent = { async call(prompt, options) {
+  const agent = withScenarioProviderAdmission({ async call(prompt, options) {
     const requestPath = options.executionEnvironment.SENNEL_FLOW_HANDOFF_REQUEST;
     const request = JSON.parse(fs.readFileSync(requestPath, "utf8"));
     requests.push({ request,
@@ -189,7 +209,7 @@ async function startDraft(scenario) {
     sealWorkerArtifactHandoff({ requestPath,
       invocationId: options.executionEnvironment.SENNEL_FLOW_DISPATCH_INVOCATION_ID });
     return "sealed";
-  } };
+  } });
   const manager = scenario.reload();
   const ctx = scenario.context();
   ctx.expectBinding = FlowTargetBinding.capture({ flowState: ctx.flowState,
@@ -1277,3 +1297,130 @@ it("P27 required config preflight checks the selected base tree after its ref mo
   assert.equal(scenario.git(["worktree", "list", "--porcelain"]).match(/^worktree /gm).length, 1);
   assertNoWorker(scenario);
 });
+
+it("P28 CLI-owned process runtime permits branch preparation, durable replay and the actual Draft consumer", async (t) => {
+  const scenario = PrepareArtifactScenario.create(t, { mode: "branch" });
+  exposeProcessRuntime(scenario);
+  await scenario.initialize({ cli: true });
+  assert.match(scenario.git(["status", "--short"]), /\?\? \.sennel\/process-runtime\//,
+    "the normal CLI must produce the runtime artifact that branch preflight encounters");
+  assert.equal((await scenario.prepare({ cli: true })).result, "ok");
+  const state = scenario.reload().canonicalState(scenario.specId);
+  assert.equal(state.runId, scenario.runId);
+  assert.equal(state.execution.mode, "branch");
+  assert.equal(scenario.git(["branch", "--show-current"]).trim(), state.execution.featureBranch);
+  assert.equal(scenario.git(["rev-parse", "HEAD"]).trim(), scenario.baseOid);
+  savedPreparation(scenario, "branch", "branch-prepared", "prepare-spec");
+  const ready = savedPreparation(scenario, "prepare-spec", "prepare-spec-ready", "draft");
+  const before = canonicalBytes(scenario);
+  scenario.reload();
+  assert.equal((await scenario.prepare({ cli: true })).result, "ok");
+  assert.deepEqual(canonicalBytes(scenario), before,
+    "a fresh CLI retry must reuse the persisted preparation without another publication");
+  assertNoWorker(scenario);
+  const { requests } = await startDraft(scenario);
+  assertPreparedDraftInput(scenario, requests, ready);
+  assert.equal(scenario.reload().canonicalState(scenario.specId).findNode("draft").status, "done");
+});
+
+for (const userPath of [".sennel/config.json", ".sennel/process-runtime-lookalike/資料.txt"]) {
+  it(`P29 owned process runtime does not hide dirty user path ${userPath}`, async (t) => {
+    const scenario = PrepareArtifactScenario.create(t, { mode: "branch" });
+    exposeProcessRuntime(scenario);
+    await scenario.initialize({ cli: true });
+    const preparing = scenario.reload().loadPreparingFlow(scenario.runId);
+    const branches = scenario.git(["branch", "--format=%(refname)"]);
+    const file = path.join(scenario.root, userPath);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, userPath.endsWith("config.json")
+      ? JSON.stringify({ ...scenario.config, lang: "ja" }) : "uncommitted user content\n");
+    const result = scenario.cli(["prepare", "--title", "prepare-artifact", "--base", "main", "--run-id", scenario.runId]);
+    assert.equal(result.status, 1);
+    assert.equal(result.envelope?.ok, false);
+    assert.deepEqual(result.envelope.errors.map((entry) => entry.code), ["ERROR"]);
+    const messages = result.envelope.errors.flatMap((entry) => entry.messages).join("\n");
+    assert.match(messages, /dirty worktree/);
+    assert.ok(messages.includes(userPath.endsWith("config.json") ? userPath : ".sennel/process-runtime-lookalike/"));
+    assert.equal(scenario.git(["branch", "--format=%(refname)"]), branches);
+    assert.equal(fs.existsSync(path.join(scenario.root, "specs")), false);
+    assert.deepEqual(scenario.reload().loadPreparingFlow(scenario.runId), preparing);
+    assert.equal(journalRecord(scenario), null);
+    assertNoWorker(scenario);
+  });
+}
+
+it("P30 competing active branch refusal precedes user dirtiness when process runtime is visible", async (t) => {
+  const scenario = PrepareArtifactScenario.create(t, { mode: "branch" });
+  exposeProcessRuntime(scenario);
+  await scenario.initialize({ cli: true });
+  await scenario.prepare({ cli: true });
+  const firstSpecId = scenario.specId;
+  const before = canonicalBytes(scenario);
+  const branches = scenario.git(["branch", "--format=%(refname)"]);
+  await scenario.initialize({ cli: true });
+  const preparing = scenario.reload().loadPreparingFlow(scenario.runId);
+  fs.appendFileSync(path.join(scenario.root, "README.md"), "uncommitted user content\n");
+  const result = scenario.cli(["prepare", "--title", "competing-branch", "--base", "main", "--run-id", scenario.runId]);
+  assert.equal(result.status, 1);
+  assert.equal(result.envelope?.ok, false);
+  assert.ok(result.envelope.errors.flatMap((entry) => entry.messages).join("\n")
+    .includes(`active branch flow already exists: ${firstSpecId}`));
+  assert.equal(scenario.git(["branch", "--format=%(refname)"]), branches);
+  assert.deepEqual(canonicalBytes(scenario), before);
+  assert.deepEqual(scenario.reload().loadPreparingFlow(scenario.runId), preparing);
+  assert.equal(fs.readdirSync(path.join(scenario.root, "specs")).length, 1);
+  assertNoWorker(scenario);
+});
+
+it("P31 nested configured project prepares with its own visible runtime and operation lock and feeds Draft", async (t) => {
+  const scenario = PrepareArtifactScenario.create(t, { mode: "branch", projectDirectory: "packages/app" });
+  assertNestedProjectRoot(scenario);
+  exposeProcessRuntime(scenario, { operationLock: true });
+  assert.equal(scenario.git(["status", "--short"]), "");
+  await scenario.initialize({ cli: true });
+  assert.match(scenario.git(["status", "--short"]), /\?\? \.sennel\/process-runtime\//);
+  assert.equal((await scenario.prepare({ cli: true })).result, "ok");
+  const state = scenario.reload().canonicalState(scenario.specId);
+  assert.equal(state.runId, scenario.runId);
+  assert.equal(state.execution.mode, "branch");
+  assert.equal(scenario.git(["branch", "--show-current"]).trim(), state.execution.featureBranch);
+  assert.equal(scenario.git(["rev-parse", "HEAD"]).trim(), scenario.baseOid);
+  assert.equal(fs.existsSync(scenario.flowManager.specLocation(scenario.specId).specFile), true);
+  assert.equal(fs.existsSync(path.join(scenario.root, ".sennel", ".repository-flow-operation.lock")), false);
+  savedPreparation(scenario, "branch", "branch-prepared", "prepare-spec");
+  const ready = savedPreparation(scenario, "prepare-spec", "prepare-spec-ready", "draft");
+  assertNoWorker(scenario);
+  const { requests } = await startDraft(scenario);
+  assertPreparedDraftInput(scenario, requests, ready);
+  assert.equal(scenario.reload().canonicalState(scenario.specId).findNode("draft").status, "done");
+});
+
+for (const userPath of ["README.md", "packages/sibling/untracked.txt"]) {
+  it(`P31 nested configured project refuses outside user change ${userPath} without preparation effects`, async (t) => {
+    const scenario = PrepareArtifactScenario.create(t, { mode: "branch", projectDirectory: "packages/app" });
+    assertNestedProjectRoot(scenario);
+    exposeProcessRuntime(scenario, { operationLock: true });
+    await scenario.initialize({ cli: true });
+    const preparing = scenario.reload().loadPreparingFlow(scenario.runId);
+    const branches = scenario.git(["branch", "--format=%(refname)"]);
+    const file = path.join(scenario.repositoryRoot, userPath);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.appendFileSync(file, "uncommitted outside user content\n");
+    const result = scenario.cli(["prepare", "--title", "prepare-artifact", "--base", "main", "--run-id", scenario.runId]);
+    assert.equal(result.status, 1);
+    assert.equal(result.envelope?.ok, false);
+    assert.deepEqual(result.envelope.errors.map((entry) => entry.code), ["ERROR"]);
+    const messages = result.envelope.errors.flatMap((entry) => entry.messages).join("\n");
+    assert.match(messages, /dirty worktree/);
+    assert.ok(messages.includes(userPath === "README.md" ? "../../README.md" : "../sibling/"),
+      "the refusal must retain the user change outside the configured project");
+    assert.equal(scenario.git(["branch", "--format=%(refname)"]), branches);
+    assert.equal(scenario.git(["branch", "--show-current"]).trim(), "main");
+    assert.equal(fs.existsSync(path.join(scenario.root, "specs")), false);
+    assert.equal(fs.existsSync(path.join(scenario.repositoryRoot, "specs")), false);
+    assert.deepEqual(scenario.reload().loadPreparingFlow(scenario.runId), preparing);
+    assert.equal(journalRecord(scenario), null);
+    assert.equal(fs.existsSync(path.join(scenario.root, ".sennel", ".repository-flow-operation.lock")), false);
+    assertNoWorker(scenario);
+  });
+}

@@ -25,8 +25,10 @@ import { createSpecGateRepairScenario } from "../../support/infrastructure/spec-
 import { workerArtifactJson } from "../../support/infrastructure/worker-artifact.js";
 import { canonicalDraftDocument } from "../../support/infrastructure/flow-setup.js";
 import { removeTmpDir } from "../../support/builders/tmp-dir.js";
+import { SeedWorkRoot } from "../../support/builders/seed-work-root.js";
+import { CanonicalScenarioSeed } from "../../support/assertions/canonical-persistence.js";
 
-test("a published Spec Gate decision gap reopens Draft with durable worker input", async () => {
+test("a published Spec Gate decision gap reopens Draft with durable worker input", async (t) => {
   const answered = {
     state: "AnsweredQuestion", id: "q1", question: "Which existing behavior should remain?",
     category: "user-visible-behavior", revision: 1,
@@ -153,6 +155,8 @@ test("a published Spec Gate decision gap reopens Draft with durable worker input
     assert.deepEqual(resumed.readArtifact({ specId: value.specId, logicalKey: "issue.log", consumerNodeId: "draft" }), issueBeforeRecovery);
     assert.throws(() => draftRequest.assertCurrent(resumed.loadReadOnly(value.specId)), /stale|Attempt/i);
     const resumedCtx = { ...value.ctx, flowManager: resumed };
+    const replacementSeed = CanonicalScenarioSeed.freeze(t, { root: value.root, specId: value.specId,
+      manager: resumed, git: false, prefix: "sennel-draft-replacement-seed-" });
     const replacementRequest = handoffCoordinator.createRequest({ ctx: resumedCtx,
       state: resumed.loadReadOnly(value.specId), invocation: {
         id: "dispatch-draft-after-error-recovery", target: { digest: "c".repeat(64) },
@@ -167,24 +171,32 @@ test("a published Spec Gate decision gap reopens Draft with durable worker input
     const beforeInvalidProposal = resumed.canonicalState(value.specId).toJSON();
     const activitiesBeforeInvalidProposal = resumed.activityLedger(value.specId);
     const catalogBeforeInvalidProposal = resumed.artifactCatalog(value.specId).toJSON();
+    const invalidRoot = new SeedWorkRoot(replacementSeed.root, { prefix: "sennel-draft-invalid-answer-" });
+    t.after(() => invalidRoot.cleanup());
+    const invalidManager = new FlowManager({ root: invalidRoot.root, mainRoot: invalidRoot.root,
+      inWorktree: false, specId: value.specId });
+    replacementSeed.assertClone(invalidManager);
+    const invalidCtx = { ...resumedCtx, root: invalidRoot.root, executionRoot: invalidRoot.root,
+      mainRoot: invalidRoot.root, flowManager: invalidManager };
+    const invalidRequest = handoffCoordinator.createRequest({ ctx: invalidCtx,
+      state: invalidManager.loadReadOnly(value.specId), invocation: replacementRequest.invocation });
+    const invalidSnapshot = () => ({ state: invalidManager.canonicalState(value.specId).toJSON(),
+      activities: invalidManager.activityLedger(value.specId), catalog: invalidManager.artifactCatalog(value.specId).toJSON() });
+    const beforeInvalid = invalidSnapshot();
     const changedAnswer = canonicalDraftDocument({ questions: [{ ...answered, answer: "Replace the established behavior." }] });
-    fs.writeFileSync(replacementRequest.payloadPath("draft.json"), workerArtifactJson(changedAnswer));
-    sealWorkerArtifactHandoff({ requestPath: replacementRequest.requestPath, invocationId: replacementRequest.dispatchInvocationId });
-    assert.throws(() => handoffCoordinator.prepareDraftWorker({ ctx: resumedCtx, request: replacementRequest }),
+    fs.writeFileSync(invalidRequest.payloadPath("draft.json"), workerArtifactJson(changedAnswer));
+    sealWorkerArtifactHandoff({ requestPath: invalidRequest.requestPath, invocationId: invalidRequest.dispatchInvocationId });
+    assert.throws(() => handoffCoordinator.prepareDraftWorker({ ctx: invalidCtx, request: invalidRequest }),
       /changed a prior resolved question/);
+    assert.deepEqual(invalidSnapshot(), beforeInvalid);
     assert.deepEqual(resumed.canonicalState(value.specId).toJSON(), beforeInvalidProposal);
     assert.deepEqual(resumed.activityLedger(value.specId), activitiesBeforeInvalidProposal);
     assert.deepEqual(resumed.artifactCatalog(value.specId).toJSON(), catalogBeforeInvalidProposal);
-    const correctedRequest = handoffCoordinator.createRequest({ ctx: resumedCtx,
-      state: resumed.loadReadOnly(value.specId), invocation: {
-        id: "dispatch-draft-preserving-prior-answers", target: { digest: "c".repeat(64) },
-        action: { digest: "d".repeat(64), nextAction: { step: "draft" } },
-      } });
-    fs.writeFileSync(correctedRequest.payloadPath("draft.json"), workerArtifactJson(recoveredDraft));
-    sealWorkerArtifactHandoff({ requestPath: correctedRequest.requestPath, invocationId: correctedRequest.dispatchInvocationId });
-    const replacementPreparation = handoffCoordinator.prepareDraftWorker({ ctx: resumedCtx, request: correctedRequest });
+    fs.writeFileSync(replacementRequest.payloadPath("draft.json"), workerArtifactJson(recoveredDraft));
+    sealWorkerArtifactHandoff({ requestPath: replacementRequest.requestPath, invocationId: replacementRequest.dispatchInvocationId });
+    const replacementPreparation = handoffCoordinator.prepareDraftWorker({ ctx: resumedCtx, request: replacementRequest });
     const replacementStep = await draftWorkerStepRegistration("draft").create({
-      ctx: resumedCtx, request: correctedRequest, preparation: replacementPreparation, handoffCoordinator,
+      ctx: resumedCtx, request: replacementRequest, preparation: replacementPreparation, handoffCoordinator,
     });
     const replacementResult = await replacementStep.step.execute();
     assert.equal(replacementResult.kind, "draft-created");

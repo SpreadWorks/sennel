@@ -275,6 +275,51 @@ test("parallel call reservations use shared admission and individual receipts al
   await assert.rejects(runtime.reserveCall(), failure("PROCESS_EXECUTION_REGISTRATION_CLOSED"));
 });
 
+test("open runtime reads durable completed call receipts without publishing unfinished calls or granting quiescence", async (t) => {
+  const options = fixture(t);
+  const binding = { runId: options.runId, specId: options.specId,
+    executionContractId: "open-dispatch-contract", attemptId: "open-dispatch-attempt" };
+  const runtime = await ProcessExecutionRuntime.acquire({ ...options, binding });
+  const pending = await runtime.reserveCall({ invocation: { commandId: "unfinished-provider" } });
+  try {
+    await runtime.enter(async () => {
+      assert.deepEqual(runtime.stopReceipts(binding), []);
+      const result = await executeManagedProcess(process.execPath, ["-e", "process.stdout.write('completed-in-open-scope')"], {
+        timeoutMs: 10000, graceMs: 100, maxBuffer: 1024,
+      });
+      assert.equal(result.stdout, "completed-in-open-scope");
+      const produced = result.processExecutionStopReceipt;
+      assert.ok(produced instanceof ProcessExecutionStopReceipt);
+      const saved = ProcessExecutionRuntime.inspect(options).executions.find((entry) => entry.executionId === runtime.executionId);
+      assert.equal(saved.status, "active");
+      assert.equal(saved.accepting, true);
+      assert.equal(saved.closure, null);
+      const completed = saved.calls.find((call) => call.callId === produced.callId);
+      assert.equal(completed.status, "stopped");
+      assert.equal(completed.permit.callId, produced.callId);
+      assert.deepEqual(JSON.parse(JSON.stringify(completed.receipt)), JSON.parse(JSON.stringify(produced)));
+      assert.equal(saved.calls.find((call) => call.callId === pending.callId).receipt, null);
+      assert.throws(() => ProcessExecutionRuntime.assertQuiescent(options), failure("PROCESS_EXECUTION_STOP_UNCONFIRMED"));
+
+      const beforeRead = fs.readFileSync(registryPath(options.mainRoot));
+      const receipts = ProcessExecutionRuntime.current().stopReceipts(binding);
+      assert.equal(receipts.length, 1,
+        "a completed call's saved receipt must be observable before the enclosing dispatch runtime closes");
+      assert.ok(receipts[0] instanceof ProcessExecutionStopReceipt);
+      assert.deepEqual(receipts[0].toJSON(), produced.toJSON());
+      assert.deepEqual(runtime.stopReceipts().map((receipt) => receipt.callId), [produced.callId]);
+      assert.deepEqual(runtime.stopReceipts({ ...binding, attemptId: "another-attempt" }), []);
+      assert.deepEqual(runtime.stopReceipts(binding).map((receipt) => receipt.toJSON()), [produced.toJSON()]);
+      assert.deepEqual(fs.readFileSync(registryPath(options.mainRoot)), beforeRead,
+        "reading saved stop receipts must not close or mutate the active runtime");
+      assert.throws(() => ProcessExecutionRuntime.assertQuiescent(options), failure("PROCESS_EXECUTION_STOP_UNCONFIRMED"));
+    });
+  } finally {
+    await runtime.finishCall(pending, { notStarted: true, stopEvidence: AgentProcessStopEvidence.confirmed() });
+    await runtime.close();
+  }
+});
+
 test("managed provider termination receipt is read back by a new coordinator before checkout reuse", async (t) => {
   const options = fixture(t); const binding = { executionContractId: "managed-reservation", attemptId: "managed-attempt" };
   const runtime = await ProcessExecutionRuntime.acquire({ ...options, binding });

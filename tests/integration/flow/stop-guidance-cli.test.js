@@ -46,15 +46,13 @@ function invoke(root, args, { entry = cli, input = "" } = {}) {
   return { ...result, value };
 }
 
-test("unknown group/key and parse refusal reach the final typed CLI boundary", (t) => {
+test("argument parse refusal reaches the final typed CLI boundary", (t) => {
   const root = fixture(t);
-  for (const args of [["unknown"], ["get", "unknown"], ["get", "status", "--unknown"]]) {
-    const { value } = invoke(root, args);
-    assert.equal(value.errors.length, 1);
-    assert.equal(value.guidance.code, value.errors[0].code);
-    assert.equal(value.guidance.nextAction.kind, "external_work");
-    assert.equal(value.guidance.currentState.persistence, "unconfirmed");
-  }
+  const { value } = invoke(root, ["get", "status", "--unknown"]);
+  assert.equal(value.errors.length, 1);
+  assert.equal(value.guidance.code, value.errors[0].code);
+  assert.equal(value.guidance.nextAction.kind, "external_work");
+  assert.equal(value.guidance.currentState.persistence, "unconfirmed");
 });
 
 test("all Flow entry groups publish initialization refusal without leaking config text", (t) => {

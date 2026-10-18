@@ -3,7 +3,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { test } from "node:test";
 import { TaskReviewScenario } from "../../support/builders/task-review-scenario.js";
-import { container } from "../../../src/lib/container.js";
+import { container, initContainer } from "../../../src/lib/container.js";
+import { setupFlowConfig } from "../../support/infrastructure/flow-setup.js";
 import { TemporaryRateLimitFailure } from "../../../src/lib/agent-failure.js";
 import { PromptLogicalFootprint } from "../../../src/lib/prompt-batching.js";
 import { FLOW_COMMANDS } from "../../../src/flow/registry.js";
@@ -25,14 +26,25 @@ class ChunkReviewAgent {
   }
 }
 
+class ChunkReviewScenario extends TaskReviewScenario {
+  context() { return { ...super.context(), config: container.get("config") }; }
+}
+
 function scenarioFor(t, options = {}) {
-  const scenario = new TaskReviewScenario(t, options);
+  const savedRoot = process.env.SENNEL_WORK_ROOT;
+  const savedPluginAgent = globalThis.__sennelPluginAgent;
+  t.after(() => {
+    container.reset();
+    if (savedRoot === undefined) delete process.env.SENNEL_WORK_ROOT;
+    else process.env.SENNEL_WORK_ROOT = savedRoot;
+    globalThis.__sennelPluginAgent = savedPluginAgent;
+  });
+  const scenario = new ChunkReviewScenario(t, options);
+  setupFlowConfig(scenario.root, "en");
+  process.env.SENNEL_WORK_ROOT = scenario.root;
   container.reset();
-  container.register("root", scenario.root);
-  container.register("mainRoot", scenario.root);
+  initContainer();
   container.register("flowManager", scenario.manager);
-  container.register("config", { flow: { review: {} } });
-  t.after(() => container.reset());
   return scenario;
 }
 

@@ -14,9 +14,10 @@ try {
 const root = process.cwd();
 const specRoot = process.env.SENNEL_IMPL_SCENARIO_SPEC_ROOT;
 const inWorktree = isInsideWorktree(root);
-const flowManager = new FlowManager({ root, mainRoot: inWorktree ? getMainRepoPath(root) : root, inWorktree, specRoot });
-container.register("root", root);
 const work = ReviewWorkUnit.fromEnvironment(process.env);
+const flowManager = new FlowManager({ root, mainRoot: inWorktree ? getMainRepoPath(root) : root,
+  inWorktree, specRoot, specId: work.manifestDocument.specId });
+container.register("root", root);
 const spec = JSON.parse(fs.readFileSync(JSON.parse(process.env.SENNEL_REVIEW_SPEC_SOURCE).sourcePath, "utf8"));
 const requirementIds = new Set(spec.requirements.map((entry) => entry.id));
 let raw = process.env.SENNEL_IMPL_SCENARIO_RESPONSE;

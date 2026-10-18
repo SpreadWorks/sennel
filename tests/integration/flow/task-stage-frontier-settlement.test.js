@@ -47,6 +47,7 @@ class TaskFrontierScenario {
     TaskReviewScenario.prototype.confirmNoChangeImplementation.call(this);
   }
   reload() { this.manager = makeFlowManager(this.root); return this; }
+  claimReview() { return TaskReviewScenario.prototype.claimReview.call(this); }
   state() { return this.manager.canonicalState(this.specId); }
   context() { return TaskReviewScenario.prototype.context.call(this); }
   review(...args) { return TaskReviewScenario.prototype.review.call(this, ...args); }

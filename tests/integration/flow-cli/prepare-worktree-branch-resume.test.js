@@ -1,10 +1,11 @@
+import { SENNEL_BOOTSTRAP } from "../../support/infrastructure/node-bootstrap.js";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { it } from "node:test";
 import { PrepareArtifactScenario } from "../../support/prepare-artifact-scenario.js";
-import { dispatchContainer, requestPayloadPath } from "../../support/infrastructure/flow-dispatch-scenario.js";
+import { dispatchContainer, requestPayloadPath, withScenarioProviderAdmission } from "../../support/infrastructure/flow-dispatch-scenario.js";
 import { canonicalDraftDocument } from "../../support/infrastructure/flow-setup.js";
 import { workerArtifactJson } from "../../support/infrastructure/worker-artifact.js";
 import { CanonicalFlowArtifactWrite } from "../../../src/flow/lib/current-flow-state.js";
@@ -27,6 +28,7 @@ async function assertDraftConsumesPreparation(scenario, ready) {
     sealWorkerArtifactHandoff({ requestPath, invocationId: options.executionEnvironment.SENNEL_FLOW_DISPATCH_INVOCATION_ID });
     return "sealed";
   } };
+  withScenarioProviderAdmission(agent);
   const ctx = scenario.context();
   ctx.expectBinding = FlowTargetBinding.capture({ flowState: ctx.flowState,
     mainRoot: scenario.root, authorityRoot: scenario.executionRoot }).serialize();
@@ -70,7 +72,7 @@ it("worktree retry preserves a committed branch after response and receipt ackno
   const managerModule = new URL("../../../src/lib/flow-manager.js", import.meta.url).href;
   const commandModule = new URL("../../../src/flow/lib/run-prepare-spec.js", import.meta.url).href;
   const storeModule = new URL("../../../src/flow/lib/current-flow-state.js", import.meta.url).href;
-  const child = spawnSync(process.execPath, ["--input-type=module", "--eval", [
+  const child = spawnSync(process.execPath, ["--import", SENNEL_BOOTSTRAP, "--input-type=module", "--eval", [
     `import { FlowManager } from ${JSON.stringify(managerModule)};`,
     `import RunPrepareSpecCommand from ${JSON.stringify(commandModule)};`,
     `import { CurrentFlowVersionStore } from ${JSON.stringify(storeModule)};`,
@@ -148,7 +150,7 @@ for (const changed of [false, true]) {
     const managerModule = new URL("../../../src/lib/flow-manager.js", import.meta.url).href;
     const commandModule = new URL("../../../src/flow/lib/run-prepare-spec.js", import.meta.url).href;
     const storeModule = new URL("../../../src/flow/lib/current-flow-state.js", import.meta.url).href;
-    const child = spawnSync(process.execPath, ["--input-type=module", "--eval", [
+    const child = spawnSync(process.execPath, ["--import", SENNEL_BOOTSTRAP, "--input-type=module", "--eval", [
       `import { FlowManager } from ${JSON.stringify(managerModule)};`,
       `import RunPrepareSpecCommand from ${JSON.stringify(commandModule)};`,
       `import { CurrentFlowVersionStore } from ${JSON.stringify(storeModule)};`,

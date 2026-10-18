@@ -3,6 +3,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { spawn } from "node:child_process";
+import { SENNEL_BOOTSTRAP } from "../../support/infrastructure/node-bootstrap.js";
 import { once } from "node:events";
 import { test } from "node:test";
 import { setTimeout as delay, setImmediate as nextTurn } from "node:timers/promises";
@@ -36,7 +37,7 @@ async function refusingLauncher(t, call) {
   // a stop failure. The runtime, durable record writers and identity checks are real.
   let child;
   t.after(() => killOwned(child));
-  child = spawn(process.execPath, ["--input-type=module", "-e", `
+  child = spawn(process.execPath, ["--import", SENNEL_BOOTSTRAP, "--input-type=module", "-e", `
     import net from 'node:net';
     import {ProcessIdentitySource} from ${JSON.stringify(identityURL)};
     import {ManagedProcessMessage,ManagedRequestAcceptance,writeManagedRecord} from ${JSON.stringify(protocolURL)};
@@ -82,7 +83,7 @@ async function refusingLauncher(t, call) {
 async function freshEnvelope(t, options) {
   let child;
   t.after(() => killOwned(child));
-  child = spawn(process.execPath, ["--input-type=module", "-e", `
+  child = spawn(process.execPath, ["--import", SENNEL_BOOTSTRAP, "--input-type=module", "-e", `
     import {ProcessExecutionRuntime,ProcessExecutionControlFailure} from ${JSON.stringify(runtimeURL)};
     import {Envelope} from ${JSON.stringify(envelopeURL)};
     const inventory=ProcessExecutionRuntime.inspect(${JSON.stringify(options)});
@@ -157,7 +158,7 @@ test("close persists accepted stop refusal across fresh readback without renewin
 async function coordinator(t, options, { primary = false, graceMs = 1000, beginStop = true } = {}) {
   let child;
   t.after(() => killOwned(child));
-  child = spawn(process.execPath, ["--input-type=module", "-e", `
+  child = spawn(process.execPath, ["--import", SENNEL_BOOTSTRAP, "--input-type=module", "-e", `
     import {ProcessExecutionRuntime} from ${JSON.stringify(runtimeURL)};
     import {managedRequest,managedControlFailure} from ${JSON.stringify(protocolURL)};
     import {ManagedControlPolicy} from ${JSON.stringify(policyURL)};
@@ -253,7 +254,7 @@ async function holdManagedRecord(t, file) {
   const authorityURL = new URL("../../../src/lib/real-directory-authority.js", import.meta.url).href;
   let child;
   t.after(() => killOwned(child));
-  child = spawn(process.execPath, ["--input-type=module", "-e", `
+  child = spawn(process.execPath, ["--import", SENNEL_BOOTSTRAP, "--input-type=module", "-e", `
     import {FileLock} from ${JSON.stringify(lockURL)};
     import {RealDirectoryAuthority} from ${JSON.stringify(authorityURL)};
     const lock=new FileLock({directoryAuthority:new RealDirectoryAuthority(${JSON.stringify(path.dirname(file))}),

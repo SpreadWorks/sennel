@@ -76,13 +76,14 @@ export class FlowRepositoryRuntimeArtifactRegistry {
       || runtimeLocks.some((lock) => lock.matchesRepositoryPath(relativePath));
   }
 
-  gitPathspecExcludes() {
+  gitPathspecExcludes({ relativeToCwd = false } = {}) {
+    const anchor = relativeToCwd ? "" : ",top";
     return Object.freeze([
       ...[...this.#exact].flatMap((owned) => [
-        `:(exclude,top,literal)${owned}`,
-        `:(exclude,top,glob)${owned}.*.tmp`,
+        `:(exclude${anchor},literal)${owned}`,
+        `:(exclude${anchor},glob)${owned}.*.tmp`,
       ]),
-      ...this.#prefixes.map((prefix) => `:(exclude,top,glob)${prefix}**`),
+      ...this.#prefixes.map((prefix) => `:(exclude${anchor},glob)${prefix}**`),
     ]);
   }
 

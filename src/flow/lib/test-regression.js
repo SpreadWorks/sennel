@@ -868,11 +868,12 @@ function categoryFor(classes) {
   return unique.length === 1 ? unique[0] : "mixed-non-trigger";
 }
 
-export function listRegressionChangedFiles({ root, state }) {
+export function listRegressionChangedFiles({ root, state, pathspecExcludes = [] }) {
   return listChangedFilesDetailed({
     cwd: root,
     baseBranch: state.baseBranch || "main",
     untrackedFiles: "all",
+    pathspecExcludes,
   });
 }
 

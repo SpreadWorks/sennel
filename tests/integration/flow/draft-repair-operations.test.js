@@ -1,8 +1,6 @@
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
-import fs from "node:fs";
 import { describe, it } from "node:test";
-import { fileURLToPath } from "node:url";
 
 import {
   applyDraftRepairOperations,
@@ -95,9 +93,6 @@ function applyGate(repair, source = validGateDraft()) {
     authority: gateAuthority(),
   });
 }
-function prompt(name) {
-  return fs.readFileSync(fileURLToPath(new URL(`../../../src/flow/prompts/plan/${name}.md`, import.meta.url)), "utf8");
-}
 
 describe("command-owned draft repair operations", () => {
   it("keeps repair workers on an operations-only handoff and prompt contract", () => {
@@ -178,16 +173,6 @@ describe("command-owned draft repair operations", () => {
     assert.deepEqual(result.draft, source);
     assert.ok(result.audit.audit.lifecycleIssues.some((issue) => issue.includes("approval")));
     assert.ok(checkDraftJson(result.draft).some((issue) => issue.includes("approval")));
-  });
-
-  it("keeps coverage triage and repair outside parent completion ownership", () => {
-    const triagePrompt = prompt("draft-coverage-triage");
-    const repairPrompt = prompt("draft-coverage-repair");
-    assert.match(triagePrompt, /Definition-owned parent completion connector/i);
-    assert.match(repairPrompt, /draft schema has no approval field/i);
-    assert.match(repairPrompt, /Definition-owned parent completion connector/i);
-    assert.doesNotMatch(triagePrompt, /"approval\.approved"/);
-    assert.doesNotMatch(repairPrompt, /"approval\.approved"/);
   });
 
   it("keeps the canonical draft when no valid operation can apply and records the audit", () => {

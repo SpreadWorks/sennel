@@ -2,12 +2,14 @@ import { describe, it, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { TASK_STEPS_PLAN, buildInitialTaskSteps } from "../../../src/lib/flow-helpers.js";
 import { collectTaskLeafIds, getTaskNode } from "../../../src/flow/definition.js";
 import { createTmpDir, removeTmpDir } from "../../support/builders/tmp-dir.js";
 import { CanonicalFlowFixture, FreshFlowFixture, TaskLifecycleFixture, makeFlowManager } from "../../support/infrastructure/flow-setup.js";
+import { initGitRepo, commitAll } from "../../support/infrastructure/git-repo.js";
 
-const SRC_ROOT = path.resolve(new URL(import.meta.url).pathname, "../../../../src");
+const SRC_ROOT = fileURLToPath(new URL("../../../src/", import.meta.url));
 
 function taskDocument(id, parent = null) {
   return {
@@ -25,10 +27,19 @@ function mappedTaskSpec(...taskIds) {
   return { requirements: [{ id: "R-tasks", desc: "Exercise canonical Task control.", task_ids: taskIds }] };
 }
 
-function completedTaskFixture(tmp, taskDocuments, taskId) {
+function taskSourceMutations(tmp, taskDocuments) {
+  return new Map(taskDocuments.map(({ id }) => [`${id}-impl`, () => {
+    fs.writeFileSync(path.join(tmp, `task-${id}.js`), `export const completedTask = ${JSON.stringify(id)};\n`);
+  }]));
+}
+
+async function completedTaskFixture(tmp, taskDocuments, taskId) {
+  initGitRepo(tmp);
+  commitAll(tmp, "Task command fixture baseline");
   const fm = makeFlowManager(tmp);
-  const fixture = new TaskLifecycleFixture({ flowManager: fm, taskDocuments, taskId, targetStep: "task-gate" }).create();
-  fixture.flow.flow.settle(`${taskId}-gate`);
+  const fixture = await new TaskLifecycleFixture({ flowManager: fm, taskDocuments, taskId, targetStep: "task-gate" })
+    .createWithProducers({ sourceMutations: taskSourceMutations(tmp, taskDocuments) });
+  await fixture.flow.flow.produce(`${taskId}-gate`);
   return { fm, fixture };
 }
 
@@ -105,7 +116,7 @@ describe("T-6: task-scope step redesign and manual control CLI", () => {
 
   it("complete-task completes an explicitly selected Task after its typed child confirmations", async () => {
     tmp = createTmpDir("t6-complete-");
-    const { fm } = completedTaskFixture(tmp, [taskDocument("T-1")], "T-1");
+    const { fm } = await completedTaskFixture(tmp, [taskDocument("T-1")], "T-1");
     const { RunCompleteTaskCommand } = await import("../../../src/flow/lib/run-complete-task.js");
     const env = await new RunCompleteTaskCommand().execute({ root: tmp, flowManager: fm, flowState: fm.loadReadOnly(), taskId: "T-1" });
     assert.equal(env.ok, true, JSON.stringify(env));
@@ -116,7 +127,7 @@ describe("T-6: task-scope step redesign and manual control CLI", () => {
 
   it("complete-task resolves the selected current Task when no task id is supplied", async () => {
     tmp = createTmpDir("t6-complete-");
-    const { fm } = completedTaskFixture(tmp, [taskDocument("T-1")], "T-1");
+    const { fm } = await completedTaskFixture(tmp, [taskDocument("T-1")], "T-1");
     const { RunCompleteTaskCommand } = await import("../../../src/flow/lib/run-complete-task.js");
     const env = await new RunCompleteTaskCommand().execute({ root: tmp, flowManager: fm, flowState: fm.loadReadOnly() });
     assert.equal(env.ok, true, JSON.stringify(env));
@@ -143,7 +154,7 @@ describe("T-6: task-scope step redesign and manual control CLI", () => {
 
   it("complete-task leaves the next Task pending for an explicit next claim", async () => {
     tmp = createTmpDir("t6-complete-");
-    const { fm } = completedTaskFixture(tmp, [taskDocument("T-1"), taskDocument("T-2")], "T-1");
+    const { fm } = await completedTaskFixture(tmp, [taskDocument("T-1"), taskDocument("T-2")], "T-1");
     const { RunCompleteTaskCommand } = await import("../../../src/flow/lib/run-complete-task.js");
     const env = await new RunCompleteTaskCommand().execute({ root: tmp, flowManager: fm, flowState: fm.loadReadOnly(), taskId: "T-1" });
     assert.equal(env.ok, true, JSON.stringify(env));
@@ -156,10 +167,12 @@ describe("T-6: task-scope step redesign and manual control CLI", () => {
   it("complete-task propagates to a parent after the final child is completed", async () => {
     tmp = createTmpDir("t6-complete-");
     const tasks = [taskDocument("T-parent"), taskDocument("T-child-1", "T-parent"), taskDocument("T-child-2", "T-parent")];
-    const { fm, fixture } = completedTaskFixture(tmp, tasks, "T-child-1");
+    const { fm, fixture } = await completedTaskFixture(tmp, tasks, "T-child-1");
     fm.completeTask("T-child-1");
-    fixture.flow.flow.activateTask("T-child-2", { settlePredecessors: false });
-    for (const step of ["T-child-2-impl", "T-child-2-review", "T-child-2-triage", "T-child-2-repair", "T-child-2-gate"]) fixture.flow.flow.settle(step);
+    await fixture.flow.flow.activateWithProducers("T-child-2-gate", {
+      sourceMutations: taskSourceMutations(tmp, tasks),
+    });
+    await fixture.flow.flow.produce("T-child-2-gate");
     const { RunCompleteTaskCommand } = await import("../../../src/flow/lib/run-complete-task.js");
     const env = await new RunCompleteTaskCommand().execute({ root: tmp, flowManager: fm, flowState: fm.loadReadOnly(), taskId: "T-child-2" });
     assert.equal(env.ok, true);

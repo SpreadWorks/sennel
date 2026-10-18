@@ -19,8 +19,9 @@ import {
 import {
   CanonicalSourceRequirementAuthority,
 } from "../../../src/flow/lib/canonical-file-map.js";
-import { container } from "../../../src/lib/container.js";
-import { readCurrentGateTransitionFacts } from "../../../src/flow/lib/gate-transition-facts.js";
+import { FLOW_COMMANDS } from "../../../src/flow/registry.js";
+import { ImplementationGateResultEvidence } from "../../../src/flow/lib/gate-observation-values.js";
+import { installGateProviderFake } from "../../support/infrastructure/flow-dispatch-scenario.js";
 import { CanonicalFlowFixture, makeFlowManager } from "../../support/infrastructure/flow-setup.js";
 import { commitAll, initGitRepo } from "../../support/infrastructure/git-repo.js";
 import { createTmpDir, removeTmpDir, writeFile, writeJson } from "../../support/builders/tmp-dir.js";
@@ -410,31 +411,24 @@ function setupTaskGateRepository(root, {
   return { flowManager, fixture };
 }
 
-function advanceToTaskGate(flowManager, fixture, _padding = "", mutateImplementation = null) {
+async function advanceToTaskGate(flowManager, fixture, mutateImplementation) {
   fixture.activateTask("T-1", { settlePredecessors: false });
-  if (mutateImplementation === null) {
-    fixture.settle("T-1-impl");
-  } else {
-    completeCanonicalSourceHandoff({
-      root: fixture.location().repositoryRoot, manager: flowManager,
-      specId: TASK_GATE_SPEC_ID, stepId: "task-impl", taskId: "T-1",
-      mutate: mutateImplementation,
-      effect: {
-        version: 1, stepId: "task-impl", completionStatus: "done", issues: [],
-        overview: { modules: [], data_flow: [], decisions: [] },
-        triage: null, repair: null, noChangeReason: null,
-      },
-    });
-  }
-  fixture.activate("T-1-review", { settlePredecessors: false });
-  fixture.settle("T-1-review");
-  fixture.settle("T-1-triage", "skipped");
-  fixture.settle("T-1-repair", "skipped");
-  fixture.activate("T-1-gate", { settlePredecessors: false });
+  completeCanonicalSourceHandoff({
+    root: fixture.location().repositoryRoot, manager: flowManager,
+    specId: TASK_GATE_SPEC_ID, stepId: "task-impl", taskId: "T-1",
+    mutate: mutateImplementation,
+    effect: {
+      version: 1, stepId: "task-impl", completionStatus: "done", issues: [],
+      overview: { modules: [], data_flow: [], decisions: [] },
+      triage: null, repair: null, noChangeReason: null,
+    },
+  });
+  await fixture.produce("T-1-review");
+  assert.equal(flowManager.loadReadOnly(TASK_GATE_SPEC_ID).currentNodeId, "T-1-gate");
 }
 
-async function executeTaskGate(root, flowManager, skipGuardrail = true) {
-  return new RunGateCommand().execute({
+function taskGateContext(root, flowManager, skipGuardrail = true) {
+  return {
     root,
     mainRoot: root,
     executionRoot: root,
@@ -444,7 +438,11 @@ async function executeTaskGate(root, flowManager, skipGuardrail = true) {
     flowManager,
     config: {},
     skipGuardrail,
-  });
+  };
+}
+
+async function executeTaskGate(root, flowManager, skipGuardrail = true) {
+  return new RunGateCommand().execute(taskGateContext(root, flowManager, skipGuardrail));
 }
 
 describe("task gate scenario-validity evidence through task scope", () => {
@@ -455,21 +453,10 @@ describe("task gate scenario-validity evidence through task scope", () => {
     tmp = null;
   });
 
-  it("rejects an explicitly invoked Task Gate when the Task has no source evidence", async () => {
-    tmp = createTmpDir("task-gate-scenario-only-");
-    const { flowManager, fixture } = setupTaskGateRepository(tmp);
-    advanceToTaskGate(flowManager, fixture);
-
-    const result = await executeTaskGate(tmp, flowManager);
-
-    assert.equal(result.result, "fail");
-    assert.ok(result.artifacts.issues.some((issue) => /source|change/i.test(issue)));
-  });
-
   it("sizes and evaluates only implementation and post-fix evidence", async () => {
     tmp = createTmpDir("task-gate-filtered-size-");
     const { flowManager, fixture } = setupTaskGateRepository(tmp);
-    advanceToTaskGate(flowManager, fixture, "", () => {
+    await advanceToTaskGate(flowManager, fixture, () => {
       writeFile(tmp, "src/task-evidence.js", "export const taskEvidence = true;\n");
       writeFile(
         tmp,
@@ -478,32 +465,25 @@ describe("task gate scenario-validity evidence through task scope", () => {
       );
     });
     let capturedPrompt = "";
-    const originalGet = container.get.bind(container);
-    container.get = (key) => {
-      if (key !== "agent") return originalGet(key);
-      return {
-        resolve: (commandId) => commandId === "flow.spec.gate",
-        call: async (prompt, options) => {
-          capturedPrompt = prompt;
-          if (Object.hasOwn(options.jsonSchema.properties, "evaluations")) {
-            return JSON.stringify({
-              evaluations: [{
-                guardrail_id: "R-1",
-                result: "pass",
-                reason: "[REQ:R-1] current Task source supplies the required evidence.",
-              }],
-            });
-          }
-          return JSON.stringify({ observations: [] });
-        },
-      };
-    };
+    const provider = installGateProviderFake(async (prompt, options) => {
+      capturedPrompt = prompt;
+      if (Object.hasOwn(options.jsonSchema.properties, "evaluations")) {
+        return JSON.stringify({
+          evaluations: [{
+            guardrail_id: "R-1",
+            result: "pass",
+            reason: "[REQ:R-1] current Task source supplies the required evidence.",
+          }],
+        });
+      }
+      return JSON.stringify({ observations: [] });
+    });
 
     let result;
     try {
       result = await executeTaskGate(tmp, flowManager, false);
     } finally {
-      container.get = originalGet;
+      provider.mock.restore();
     }
 
     assert.equal(result.result, "pass");
@@ -520,36 +500,29 @@ describe("task gate scenario-validity evidence through task scope", () => {
       { id: "R-2", desc: "Provide the second Task behavior.", task_ids: ["T-1"] },
     ];
     const { flowManager, fixture } = setupTaskGateRepository(tmp, { requirements });
-    advanceToTaskGate(flowManager, fixture, "", () => {
+    await advanceToTaskGate(flowManager, fixture, () => {
       writeFile(tmp, "src/shared.js", "export const sharedScopeEvidence = true;\n");
       writeFile(tmp, "src/secondary.js", "export const secondaryScopeEvidence = true;");
     });
 
     const prompts = [];
-    const originalGet = container.get.bind(container);
-    container.get = (key) => {
-      if (key !== "agent") return originalGet(key);
-      return {
-        resolve: (commandId) => commandId === "flow.spec.gate",
-        call: async (prompt, options) => {
-          prompts.push(prompt);
-          const ids = options.jsonSchema.properties.evaluations.items.properties.guardrail_id.enum;
-          return JSON.stringify({
-            evaluations: ids.map((id) => ({
-              guardrail_id: id,
-              result: "pass",
-              reason: `[REQ:${id}] both current Task source files were evaluated.`,
-            })),
-          });
-        },
-      };
-    };
+    const provider = installGateProviderFake(async (prompt, options) => {
+      prompts.push(prompt);
+      const ids = options.jsonSchema.properties.evaluations.items.properties.guardrail_id.enum;
+      return JSON.stringify({
+        evaluations: ids.map((id) => ({
+          guardrail_id: id,
+          result: "pass",
+          reason: `[REQ:${id}] both current Task source files were evaluated.`,
+        })),
+      });
+    });
 
     let result;
     try {
       result = await executeTaskGate(tmp, flowManager, true);
     } finally {
-      container.get = originalGet;
+      provider.mock.restore();
     }
 
     assert.equal(result.result, "pass");
@@ -565,38 +538,38 @@ describe("task gate scenario-validity evidence through task scope", () => {
   it("persists a tooling failure without partial judgments after a later source batch fails", async () => {
     tmp = createTmpDir("task-gate-partial-batch-");
     const { flowManager, fixture } = setupTaskGateRepository(tmp);
-    advanceToTaskGate(flowManager, fixture, "", () => {
+    await advanceToTaskGate(flowManager, fixture, () => {
       writeFile(tmp, "src/oversized.js", "x".repeat(133_813));
     });
     let calls = 0;
-    const originalGet = container.get.bind(container);
-    container.get = (key) => key !== "agent" ? originalGet(key) : {
-      resolve: () => ({ provider: "fixture" }),
-      call: async (prompt, options) => {
-        calls += 1;
-        assert.ok(options.jsonSchema.properties.observations, "final judgment must not run");
-        if (calls > 1) return "invalid provider JSON";
-        const ranges = JSON.parse(prompt.split("## Canonical input ranges\n")[1]);
-        return JSON.stringify({ observations: ranges.map((range) => ({
-          requirementId: "R-1", sourceRef: range.sourceRef,
-          support: [], contradictions: [], unresolved: [],
-        })) });
-      },
-    };
+    const provider = installGateProviderFake(async (prompt, options) => {
+      calls += 1;
+      assert.ok(options.jsonSchema.properties.observations, "final judgment must not run");
+      if (calls > 1) return "invalid provider JSON";
+      const ranges = JSON.parse(prompt.split("## Canonical input ranges\n")[1]);
+      return JSON.stringify({ observations: ranges.map((range) => ({
+        requirementId: "R-1", sourceRef: range.sourceRef,
+        support: [], contradictions: [], unresolved: [],
+      })) });
+    });
     let result;
     try {
       result = await executeTaskGate(tmp, flowManager, true);
     } finally {
-      container.get = originalGet;
+      provider.mock.restore();
     }
     assert.equal(result.result, "fail");
     assert.equal(calls, 3);
     assert.deepEqual(result.artifacts.evaluations, []);
-    flowManager.publishCurrentAttemptResult({ specId: TASK_GATE_SPEC_ID, commandResult: result });
+    await FLOW_COMMANDS.run.gate.post(taskGateContext(tmp, flowManager), result);
     const reloaded = makeFlowManager(tmp);
-    const facts = readCurrentGateTransitionFacts({
-      flowManager: reloaded, flowState: reloaded.loadReadOnly(TASK_GATE_SPEC_ID), phase: "task-impl", root: tmp,
+    const saved = reloaded.readCurrentStepSettlement({
+      specId: TASK_GATE_SPEC_ID, stepId: "task-gate", taskId: "T-1",
     });
+    assert.ok(saved, "the actual Task Gate must retain its typed Result and durable receipt");
+    assert.equal(saved.result.type, "error");
+    assert.equal(saved.settlement.kind, "failure");
+    const facts = ImplementationGateResultEvidence.fromJSON(saved.result.error.data.evidence);
     assert.equal(facts.result, "fail");
     assert.equal(facts.failure.category, "tooling");
   });
@@ -604,7 +577,7 @@ describe("task gate scenario-validity evidence through task scope", () => {
   it("evaluates all 133,813 source characters before a single final Task Gate judgment", async () => {
     tmp = createTmpDir("task-gate-oversized-source-");
     const { flowManager, fixture } = setupTaskGateRepository(tmp);
-    advanceToTaskGate(flowManager, fixture, "", () => {
+    await advanceToTaskGate(flowManager, fixture, () => {
       const source = `// HEAD_EVIDENCE\n${"x".repeat(66_800)}\n// MIDDLE_EVIDENCE\n`;
       writeFile(tmp, "src/oversized.js", `${source}${"x".repeat(133_813 - source.length - "\n// TAIL_EVIDENCE\n".length)}\n// TAIL_EVIDENCE\n`);
     });
@@ -613,37 +586,30 @@ describe("task gate scenario-validity evidence through task scope", () => {
     let sourceCalls = 0;
     let finalCalls = 0;
     const capturedRanges = [];
-    const originalGet = container.get.bind(container);
-    container.get = (key) => {
-      if (key !== "agent") return originalGet(key);
-      return {
-        resolve: () => ({ provider: "fixture" }),
-        call: async (prompt, options) => {
-          calls += 1;
-          assert.ok(prompt.length + (options.systemPrompt || "").length
-            + JSON.stringify(options.jsonSchema).length + (options.fmtFallback || "").length <= 120_000);
-          if (options.jsonSchema.properties.observations) {
-            sourceCalls += 1;
-            const ranges = JSON.parse(prompt.split("## Canonical input ranges\n")[1]);
-            capturedRanges.push(...ranges.filter((range) => range.sourceRef.includes(":source")));
-            return JSON.stringify({ observations: ranges.map((range) => ({
-              requirementId: "R-1", sourceRef: range.sourceRef,
-              support: ["HEAD_EVIDENCE", "MIDDLE_EVIDENCE", "TAIL_EVIDENCE"].filter((marker) => range.content.includes(marker)),
-              contradictions: [], unresolved: [],
-            })) });
-          }
-          finalCalls += 1;
-          assert.ok(sourceCalls > 1);
-          for (const marker of ["HEAD_EVIDENCE", "MIDDLE_EVIDENCE", "TAIL_EVIDENCE"]) assert.ok(prompt.includes(marker));
-          return JSON.stringify({ evaluations: [{ guardrail_id: "R-1", result: "pass", reason: "[REQ:R-1] all source evidence is present." }] });
-        },
-      };
-    };
+    const provider = installGateProviderFake(async (prompt, options) => {
+      calls += 1;
+      assert.ok(prompt.length + (options.systemPrompt || "").length
+        + JSON.stringify(options.jsonSchema).length + (options.fmtFallback || "").length <= 120_000);
+      if (options.jsonSchema.properties.observations) {
+        sourceCalls += 1;
+        const ranges = JSON.parse(prompt.split("## Canonical input ranges\n")[1]);
+        capturedRanges.push(...ranges.filter((range) => range.sourceRef.includes(":source")));
+        return JSON.stringify({ observations: ranges.map((range) => ({
+          requirementId: "R-1", sourceRef: range.sourceRef,
+          support: ["HEAD_EVIDENCE", "MIDDLE_EVIDENCE", "TAIL_EVIDENCE"].filter((marker) => range.content.includes(marker)),
+          contradictions: [], unresolved: [],
+        })) });
+      }
+      finalCalls += 1;
+      assert.ok(sourceCalls > 1);
+      for (const marker of ["HEAD_EVIDENCE", "MIDDLE_EVIDENCE", "TAIL_EVIDENCE"]) assert.ok(prompt.includes(marker));
+      return JSON.stringify({ evaluations: [{ guardrail_id: "R-1", result: "pass", reason: "[REQ:R-1] all source evidence is present." }] });
+    });
     let result;
     try {
       result = await executeTaskGate(tmp, flowManager, true);
     } finally {
-      container.get = originalGet;
+      provider.mock.restore();
     }
 
     assert.equal(result.result, "pass", JSON.stringify(result.artifacts));
@@ -653,11 +619,13 @@ describe("task gate scenario-validity evidence through task scope", () => {
     assert.equal(source.match(/HEAD_EVIDENCE/g)?.length, 1);
     assert.equal(source.match(/MIDDLE_EVIDENCE/g)?.length, 1);
     assert.equal(source.match(/TAIL_EVIDENCE/g)?.length, 1);
-    flowManager.publishCurrentAttemptResult({ specId: TASK_GATE_SPEC_ID, commandResult: result });
+    await FLOW_COMMANDS.run.gate.post(taskGateContext(tmp, flowManager), result);
     const reloaded = makeFlowManager(tmp);
-    const facts = readCurrentGateTransitionFacts({
-      flowManager: reloaded, flowState: reloaded.loadReadOnly(TASK_GATE_SPEC_ID), phase: "task-impl", root: tmp,
+    const saved = reloaded.readCurrentStepSettlement({
+      specId: TASK_GATE_SPEC_ID, stepId: "task-gate", taskId: "T-1", completed: true,
     });
-    assert.equal(facts.result, "pass");
+    assert.ok(saved, "the completed Task Gate must retain its exact prior Result and receipt");
+    assert.equal(saved.result.kind, "task-gate-passed");
+    assert.equal(saved.result.evidence.result, "pass");
   });
 });

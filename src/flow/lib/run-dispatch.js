@@ -1068,7 +1068,7 @@ export class FlowDispatchWork {
     Object.freeze(this);
   }
 
-  /** Pure transport projection before a conditional Step persists its checkpoint. */
+  /** Pure transport projection before persisting new worker execution authority. */
   static forAdmission(invocation, request) {
     return new FlowDispatchWork(invocation, request, new WorkerArtifactHandoffReference(request));
   }
@@ -1091,6 +1091,13 @@ export class FlowDispatchWork {
       },
       ...agentOptions,
     };
+  }
+
+  async assertAgentAdmission(agent, options) {
+    const workerInvocation = this.workerInvocation();
+    const callOptions = this.callOptions(options, workerInvocation);
+    await assertWorkerAgentAdmission(agent, this.prompt(workerInvocation), callOptions, this.handoffRequest.stepId);
+    return callOptions;
   }
 
   workerInvocation() {
@@ -1920,9 +1927,7 @@ export default class RunDispatchCommand extends FlowCommand {
     }
     if (claimed === null && typeof agent?.projectInvocation === "function") {
       const plannedWork = FlowDispatchWork.forAdmission(workerInvocation, request);
-      const plannedInvocation = plannedWork.workerInvocation();
-      admittedCallOptions = plannedWork.callOptions({ ctx, agentOptions, deferredMetric, supervisorEvents }, plannedInvocation);
-      await assertWorkerAgentAdmission(agent, plannedWork.prompt(plannedInvocation), admittedCallOptions, stepId);
+      admittedCallOptions = await plannedWork.assertAgentAdmission(agent, { ctx, agentOptions, deferredMetric, supervisorEvents });
     }
     if (preparedStep !== null) {
       await preparedStep.step.execute();
@@ -2146,10 +2151,19 @@ export default class RunDispatchCommand extends FlowCommand {
                 resumeStoppedArtifactExecution = selectedExecution.artifactContinuation.usesSavedResponse;
                 if (!resumeStoppedArtifactExecution) handoffRequest.prepare();
             }
-            handoffRequest ??= this.handoffCoordinator.createRequest({
-              ctx, state, invocation, workerInstructions,
-              previousExecutionContract: retryFeedback?.previousExecutionContract ?? null,
-            });
+            if (handoffRequest === null) {
+              handoffRequest = this.handoffCoordinator.createRequest({
+                ctx, state, invocation, workerInstructions,
+                previousExecutionContract: retryFeedback?.previousExecutionContract ?? null,
+                deferPreparation: handoffPolicy.kind !== "source",
+              });
+              if (handoffRequest.policy.kind !== "source") {
+                const plannedWork = FlowDispatchWork.forAdmission(workerInvocation, handoffRequest);
+                admittedCallOptions = await plannedWork.assertAgentAdmission(agent,
+                  { ctx, agentOptions, deferredMetric, supervisorEvents });
+                handoffRequest.prepare();
+              }
+            }
           }
         }
         resumeSealedDraftExecution = (conditionalDraftExecution

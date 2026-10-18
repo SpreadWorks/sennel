@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { describe, it } from "node:test";
 
 import { TemporaryNetworkFailure } from "../../../src/lib/agent-failure.js";
+import { StepAdmissionRefusal } from "../../../src/flow/lib/step-admission-refusal.js";
 import { ProcessExecutionControlFailure } from "../../../src/lib/process-execution-runtime.js";
 import { candidateBundleParameters } from "../../../src/flow/lib/requirement-test-store.js";
 import {
@@ -16,7 +17,7 @@ import { RequirementTestRepairProgressIdentity, TestRepairProgressSavedResult } 
 import { RequirementTestSettlementReceipt } from "../../../src/flow/lib/requirement-test-settlement-receipt.js";
 import {
   assertSavedRequirementTestResult, LifecycleSaveFault, ArtifactPublicationRace,
-  readActiveRequirementTestSource, assertSnapshotAfterMetricFlush,
+  readActiveRequirementTestSource, assertSnapshotAfterMetricFlush, RequirementTestPromptBoundary,
 } from "../../support/requirement-test-save-boundary.js";
 
 const PUBLICATION_RACES = Object.freeze([
@@ -51,8 +52,13 @@ describe("RequirementTest producer publication admission and intermediate checkp
     it(`STALE ${leaf} refuses captured ${logicalKey} after same-byte replacement Activity`, async (t) => {
       const race = new ArtifactPublicationRace(leaf, logicalKey);
       const worker = ["test-generate", "test-repair"].includes(leaf);
+      let promptBoundary = null;
       const scenario = await enterRequirementTestLeaf(t, leaf, worker ? {
-        afterSeal(request, current) { if (request.stepId === leaf) race.publish(current); },
+        afterSeal(request, current) {
+          if (request.stepId !== leaf) return;
+          race.publish(current);
+          if (logicalKey === "spec.record") promptBoundary = new RequirementTestPromptBoundary(current.manager, request, race.snapshot);
+        },
       } : {});
       let control;
       if (!worker) {
@@ -70,6 +76,10 @@ describe("RequirementTest producer publication admission and intermediate checkp
         if (leaf === "approval") {
           await assert.rejects(() => scenario.approve(), /stale|changed|conflict|publication|baseline/i,
             "captured approval source must be revalidated by its real Store admission");
+        } else if (worker && logicalKey === "test.requirement.plan") {
+          await assert.rejects(() => scenario.dispatch(), (error) => (
+            error instanceof StepAdmissionRefusal && error.code === "FLOW_EXECUTION_INPUT_BASELINE_CHANGED"
+          ), "the actual stored execution must refuse its changed input producer before adopting the worker output");
         } else {
           const result = await scenario.dispatch();
           assert.ok(result.errors?.length > 0, "a stale producer cannot report a saved candidate/Review/Gate");
@@ -80,7 +90,7 @@ describe("RequirementTest producer publication admission and intermediate checkp
       assert.equal(race.hit, true, "the normal producer must reach the intended publication race");
       scenario.reload();
       const snapshot = scenario.snapshot();
-      if (worker) assertSnapshotAfterMetricFlush(snapshot, race.snapshot, leaf);
+      if (worker && logicalKey === "spec.record") assertSnapshotAfterMetricFlush(snapshot, race.snapshot, leaf, promptBoundary);
       else assert.deepEqual(snapshot, race.snapshot,
         "refused stale admission cannot add Result/receipt/Activity, change budgets, or activate another leaf");
       assert.equal(scenario.current(), leaf);

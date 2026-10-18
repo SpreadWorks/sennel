@@ -2484,7 +2484,7 @@ export class SourceMutationManifest {
     const before = new Map(baseline.snapshot.entries.map((entry) => [entry.path, entry]));
     const after = new Map(current.entries.map((entry) => [entry.path, entry]));
     if (executionObservations !== null) {
-      if (!executionObservations.matches(after)) throw authoritySnapshotError("Execution observation appends differ from their cataloged bytes");
+      if (!executionObservations.matches(current)) throw authoritySnapshotError("Execution observation appends differ from their cataloged bytes");
       changed = changed.filter((relativePath) => !executionObservations.allowsPath(relativePath));
     }
     const indexBudget = { bytes: 0 };
@@ -3218,7 +3218,7 @@ function assertCanonicalObservationAdvance({
   const unexplainedCanonicalChange = addedActivities.length === 0 && changedPaths.length > 0
     && (!executionObservations.explainsUnjournaled(changedPaths)
       || !executionObservations.preservesCatalogHash(observation.catalogHash));
-  if (invalidPublication || !executionObservations.matches(currentEntries) || unexpectedPaths.length > 0 || !exactJournalAppend || unexplainedCanonicalChange) {
+  if (invalidPublication || !executionObservations.matches(currentSnapshot) || unexpectedPaths.length > 0 || !exactJournalAppend || unexplainedCanonicalChange) {
     throw new WorkerArtifactHandoffError(
       "invalid",
       "FLOW_SOURCE_HANDOFF_CANONICAL_MUTATION_INVALID",

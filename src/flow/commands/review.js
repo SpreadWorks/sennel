@@ -385,7 +385,7 @@ export class TaskReviewSourceEffectObserver {
     if (before.executionObservations === null || after.executionObservations === null) return true;
     const appends = new SourceExecutionObservationAppends(after.executionObservations, before.baseline.snapshot);
     return !appends.preservesCatalog(before.executionObservations)
-      || !appends.matches(new Map(after.baseline.snapshot.entries.map((entry) => [entry.path, entry])))
+      || !appends.matches(after.baseline.snapshot)
       || !appends.explainsUnjournaled(changed);
   }
 

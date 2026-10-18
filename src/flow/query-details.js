@@ -37,7 +37,7 @@ import { RecordedRepairChange } from "./query-repair-change.js";
 import { PlanGateRepairRecord } from "./lib/plan-gate-repair.js";
 import { IssueLogDocument } from "./lib/issue-log-store.js";
 import { FlowExecutionContract } from "./lib/flow-execution-contract.js";
-import { readExecutionContractFromView } from "./lib/canonical-prompt-execution.js";
+import { readArtifactWorkerRequestSnapshotFromView } from "./lib/artifact-worker-execution-recovery.js";
 
 const GROUPS = Object.freeze(["evaluations", "findings", "repairs"]);
 const GATE_KEYS = new Set(["draft.gate", "spec.gate", "task.gate", "impl.gate"]);
@@ -667,23 +667,30 @@ export class QueryDetailIndex {
     if (activity.transition.operation !== "publish_artifacts") return null;
     const publications = this.catalog.artifacts.filter((descriptor) => descriptor.activityId === activity.id
       && !["flow.state", "flow.activities"].includes(descriptor.logicalKey));
-    if (publications.length !== 1 || publications[0].logicalKey !== "execution.contract") return null;
+    const contracts = publications.filter((descriptor) => descriptor.logicalKey === "execution.contract");
+    const request = publications.find((descriptor) => descriptor.logicalKey === "execution.request");
+    if (contracts.length !== 1 || publications.length !== (request === undefined ? 1 : 2)) return null;
     if (activity.result !== null
       || activity.reviewPublication !== null || GROUPS.some((group) => activity.references[group].length !== 0)) {
       unavailable("PRODUCER_NOT_SUPPORTED", activity.id, "An execution contract claim cannot own a detail observation");
     }
-    const document = this.read(publications[0]);
+    const document = this.read(contracts[0]);
     exactFields(document, ["id", "contract"], activity.id);
     const contract = FlowExecutionContract.fromJSON(document.contract);
     const task = TaskStepIdentity.fromStateNode(this.state, activity.nodeId);
     if (contract.runId !== this.state.runId || contract.specId !== this.state.specId
       || contract.stepId !== this.producerStepId(activity) || contract.taskId !== (task?.taskId ?? null)
-      || FLOW_ARTIFACT_CONTRACTS.resolve("execution.contract", contract.parameters).relativePath !== publications[0].relativePath) {
+      || FLOW_ARTIFACT_CONTRACTS.resolve("execution.contract", contract.parameters).relativePath !== contracts[0].relativePath) {
       unavailable("PRODUCER_NOT_SUPPORTED", activity.id, "The execution contract claim does not bind the selected Flow and Step");
     }
     // Historical claims use the captured catalog and bytes, without checking
     // today's runtime or the inputs that subsequent publications have advanced.
-    readExecutionContractFromView(this, contract, { current: false });
+    const snapshot = readArtifactWorkerRequestSnapshotFromView(this, { executionContract: contract, optional: true });
+    if ((snapshot === null) !== (request === undefined)
+      || request !== undefined && FLOW_ARTIFACT_CONTRACTS.resolve("execution.request", contract.parameters).relativePath !== request.relativePath) {
+      unavailable("PRODUCER_NOT_SUPPORTED", activity.id, "The execution request snapshot does not belong to this claim");
+    }
+    if (request !== undefined) exactFields(this.read(request), ["id", "snapshot"], activity.id);
     return projected;
   }
   projectTaskSourceNoChange(activity, projected) {

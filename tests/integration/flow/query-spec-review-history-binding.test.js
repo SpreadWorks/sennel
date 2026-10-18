@@ -9,7 +9,8 @@ import { ActivityReviewPublication } from "../../../src/flow/lib/current-flow-st
 import { CanonicalSpecReview } from "../../../src/flow/lib/spec-review-artifacts.js";
 import { DraftStepSettlementReceipt, DraftStepExecutionLifecycle, settleSpecStepResult } from "../../../src/flow/definition.js";
 import { SpecReviewPassedResult, SpecReviewAdvisoryResult } from "../../../src/flow/engine/step-result.js";
-import { QueryDetailIndex } from "../../../src/flow/query-details.js";
+import { QueryDetailIndex, QueryDetailArtifactRequired } from "../../../src/flow/query-details.js";
+import { ArtifactWorkerRequestSnapshot } from "../../../src/flow/lib/artifact-worker-recovery-values.js";
 import { FlowExecutionContract } from "../../../src/flow/lib/flow-execution-contract.js";
 
 const hash = (bytes) => crypto.createHash("sha256").update(bytes).digest("hex");
@@ -211,4 +212,112 @@ test("captured Spec Review archives bind the selected Flow and refuse unsupporte
   });
   scenario.reload();
   assert.deepEqual(scenario.protectedState(), before);
+
+  // The existing retained Review checks above leave their original frontier
+  // unchanged. Continue that same real producer through ordinary workers.
+  assert.equal((await scenario.specWorker("spec-triage", { findings: [{ findingId: finding.findingId,
+    disposition: "invalid", evidence: "The persisted goal already provides the required result." }] })).kind,
+  "spec-triage-completed");
+  assert.equal((await scenario.specWorker("spec-repair")).kind, "spec-repair-unchanged");
+  const workerState = scenario.protectedState();
+  const workerCapture = (await scenario.captureQuery({ resource: "activities", condition: { specId: scenario.specId },
+    page: { limit: 100, after: null } })).version;
+  assert.equal(workerCapture.projectionError, null,
+    "normal artifact-worker claims retain their contract and request snapshot without semantic detail");
+  const workerClaims = ["spec-triage", "spec-repair"].map((nodeId) => {
+    const descriptor = workerCapture.catalog.artifacts.find((entry) => entry.logicalKey === "execution.contract"
+      && workerCapture.activities.some((activity) => activity.id === entry.activityId && activity.nodeId === nodeId
+        && activity.transition.operation === "publish_artifacts"));
+    assert.ok(descriptor, `${nodeId} saved its normal execution claim`);
+    const activity = workerCapture.activities.find((entry) => entry.id === descriptor.activityId);
+    const owned = workerCapture.catalog.artifacts.filter((entry) => entry.activityId === activity.id
+      && !["flow.state", "flow.activities"].includes(entry.logicalKey));
+    assert.deepEqual(owned.map((entry) => entry.logicalKey).sort(), ["execution.contract", "execution.request"]);
+    const item = workerCapture.response.items.find((entry) => entry.activity.id === activity.id);
+    assert.ok(item);
+    assert.deepEqual(item.detailCoverage, claimItem.detailCoverage);
+    assert.deepEqual(item.detailRefs, claimItem.detailRefs);
+    return activity;
+  });
+  const workerClaim = workerClaims[0];
+  const workerRequestDescriptor = workerCapture.catalog.artifacts.find((entry) => entry.logicalKey === "execution.request"
+    && entry.activityId === workerClaim.id);
+  const workerContractDescriptor = workerCapture.catalog.artifacts.find((entry) => entry.logicalKey === "execution.contract"
+    && entry.activityId === workerClaim.id);
+  const workerRequestDocument = JSON.parse(workerCapture.artifactBytes.get(workerRequestDescriptor.relativePath));
+  const workerRequest = ArtifactWorkerRequestSnapshot.fromJSON(workerRequestDocument.snapshot);
+  const workerContract = workerRequest.executionContract;
+  const workerIndex = (artifacts = workerCapture.catalog.artifacts, artifactBytes = workerCapture.artifactBytes,
+    activities = workerCapture.activities) => new QueryDetailIndex({ state: workerCapture.state, activities,
+    catalog: new FlowArtifactCatalog({ artifacts }), artifactBytes, snapshotId: workerCapture.response.snapshot.id });
+  const requestWithContract = (executionContract) => {
+    const snapshot = new ArtifactWorkerRequestSnapshot({ executionContract, request: { ...workerRequest.request,
+      runId: executionContract.runId, specId: executionContract.specId, stepId: executionContract.stepId,
+      inputRevision: executionContract.inputRevision, executionContractId: executionContract.id,
+      executionContract: executionContract.toJSON() }, action: workerRequest.action,
+      dispatchIdentity: workerRequest.dispatchIdentity });
+    return { id: snapshot.id, snapshot: snapshot.toJSON() };
+  };
+  for (const [name, changedDocument] of [
+    ["unknown request document semantics", { ...workerRequestDocument, futureMeaning: true }],
+    ["unknown typed request snapshot semantics", { ...workerRequestDocument,
+      snapshot: { ...workerRequestDocument.snapshot, futureMeaning: true } }],
+    ["tampered request snapshot identity", { ...workerRequestDocument, id: "0".repeat(64) }],
+    ["an internally valid foreign request contract", requestWithContract(FlowExecutionContract.fromJSON({
+      ...workerContract.toJSON(), runId: "foreign-request-run" }))],
+    ["an internally valid different request generation", requestWithContract(FlowExecutionContract.fromJSON({
+      ...workerContract.toJSON(), generation: workerContract.generation + 1 }))],
+  ]) {
+    const bytes = Buffer.from(JSON.stringify(changedDocument));
+    const descriptor = new FlowArtifactDescriptor({ ...workerRequestDescriptor.toJSON(), hash: hash(bytes), size: bytes.length });
+    const artifactBytes = new Map(workerCapture.artifactBytes);
+    artifactBytes.set(descriptor.relativePath, bytes);
+    const artifacts = workerCapture.catalog.artifacts.map((entry) => entry.relativePath === descriptor.relativePath ? descriptor : entry);
+    assert.throws(() => workerIndex(artifacts, artifactBytes).forActivity(workerClaim),
+      { code: "DETAIL_UNAVAILABLE", reason: "PRODUCER_NOT_SUPPORTED" }, name);
+  }
+  const foreignContract = FlowExecutionContract.fromJSON({ ...workerContract.toJSON(), runId: "foreign-worker-run" });
+  const foreignContractBytes = Buffer.from(JSON.stringify({ id: foreignContract.id, contract: foreignContract.toJSON() }));
+  const foreignContractTarget = FLOW_ARTIFACT_CONTRACTS.resolve("execution.contract", foreignContract.parameters);
+  const foreignContractDescriptor = new FlowArtifactDescriptor({ ...foreignContractTarget.publication({ mediaType: "application/json",
+    updater: workerClaim.nodeId, activityId: workerClaim.id }), hash: hash(foreignContractBytes), size: foreignContractBytes.length });
+  const foreignContractArtifacts = workerCapture.catalog.artifacts.map((entry) => entry.relativePath === workerContractDescriptor.relativePath
+    ? foreignContractDescriptor : entry);
+  const foreignContractCapture = new Map(workerCapture.artifactBytes);
+  foreignContractCapture.delete(workerContractDescriptor.relativePath);
+  foreignContractCapture.set(foreignContractDescriptor.relativePath, foreignContractBytes);
+  assert.throws(() => workerIndex(foreignContractArtifacts, foreignContractCapture).forActivity(workerClaim),
+    { code: "DETAIL_UNAVAILABLE", reason: "PRODUCER_NOT_SUPPORTED" }, "a paired claim cannot borrow a foreign contract");
+
+  const otherWorkerActivity = workerCapture.activities.find((activity) => activity.id !== workerClaim.id
+    && activity.nodeId === workerClaim.nodeId && activity.attemptId === workerClaim.attemptId
+    && activity.sequence === workerClaim.sequence);
+  assert.ok(otherWorkerActivity, "the normal worker also saved its publication in that Attempt");
+  const movedRequest = new FlowArtifactDescriptor({ ...workerRequestDescriptor.toJSON(), activityId: otherWorkerActivity.id });
+  assert.throws(() => workerIndex(workerCapture.catalog.artifacts.map((entry) => entry.relativePath === movedRequest.relativePath
+    ? movedRequest : entry)).forActivity(workerClaim), { code: "DETAIL_UNAVAILABLE", reason: "PRODUCER_NOT_SUPPORTED" },
+  "an otherwise matching request cannot move to another Activity of the same Attempt");
+
+  const unrelated = workerCapture.catalog.artifacts.find((entry) => entry.logicalKey === "spec.record");
+  assert.ok(unrelated);
+  const extraPublication = new FlowArtifactDescriptor({ ...unrelated.toJSON(), activityId: workerClaim.id });
+  assert.throws(() => workerIndex(workerCapture.catalog.artifacts.map((entry) => entry.relativePath === unrelated.relativePath
+    ? extraPublication : entry)).forActivity(workerClaim), { code: "DETAIL_UNAVAILABLE", reason: "PRODUCER_NOT_SUPPORTED" },
+  "a request companion cannot hide another publication");
+  const semanticClaim = workerClaim.toJSON();
+  semanticClaim.references.findings = [{ id: finding.findingId, label: null }];
+  assert.throws(() => workerIndex(undefined, undefined, workerCapture.activities.map((activity) => activity.id === workerClaim.id
+    ? semanticClaim : activity)).forActivity(semanticClaim), { code: "DETAIL_UNAVAILABLE", reason: "PRODUCER_NOT_SUPPORTED" },
+  "a paired claim cannot own a semantic detail reference");
+  const missingRequestCapture = new Map(workerCapture.artifactBytes);
+  missingRequestCapture.delete(workerRequestDescriptor.relativePath);
+  assert.throws(() => workerIndex(undefined, missingRequestCapture).forActivity(workerClaim),
+    (error) => error instanceof QueryDetailArtifactRequired && error.descriptor.relativePath === workerRequestDescriptor.relativePath,
+    "an incomplete capture must acquire request bytes before classifying the claim");
+  const unreadableRequestCapture = new Map(workerCapture.artifactBytes);
+  unreadableRequestCapture.set(workerRequestDescriptor.relativePath, null);
+  assert.throws(() => workerIndex(undefined, unreadableRequestCapture).forActivity(workerClaim),
+    { code: "CANONICAL_RECORD_UNREADABLE" }, "an unreadable captured request cannot grant an execution-only exemption");
+  scenario.reload();
+  assert.deepEqual(scenario.protectedState(), workerState);
 });

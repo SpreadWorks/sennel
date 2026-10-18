@@ -52,7 +52,12 @@ async function setupProject(root, scriptBody) {
       requirements: [{ id: "R-1", desc: "A failed regression can be explicitly accepted with evidence." }],
     },
     targetStep: "final-regression",
-  }).createWithProducers();
+  }).createWithProducers({
+    implementationFiles: new Map([["R-1", [FIXTURE_PATH, "regression-behavior.js"]]]),
+    sourceMutations: new Map([["implement", () => {
+      writeFile(root, "regression-behavior.js", "export const regressionBehavior = true;\n");
+    }]]),
+  });
   commitAll(root, "record canonical final-regression frontier");
   return {
     root,

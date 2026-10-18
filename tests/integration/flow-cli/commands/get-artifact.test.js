@@ -5,7 +5,8 @@ import path from "node:path";
 import { afterEach, describe, it } from "node:test";
 
 import { FlowTargetBinding } from "../../../../src/lib/flow-target-guard.js";
-import { CanonicalFlowFixture, makeFlowManager } from "../../../support/infrastructure/flow-setup.js";
+import { CanonicalFlowFixture, FlowAtStepFixture, makeFlowManager } from "../../../support/infrastructure/flow-setup.js";
+import { fixtureRepository } from "../../../support/infrastructure/flow-dispatch-scenario.js";
 import { createTmpDir, removeTmpDir } from "../../../support/builders/tmp-dir.js";
 
 const SENNEL = path.resolve("src/sennel.js");
@@ -109,21 +110,33 @@ describe("flow get artifact CLI", () => {
     assertSameFiles(outsideViewCache(after), outsideViewCache(before));
   });
 
-  it("uses only the supplied completed Version even when the ambient active registry is corrupt", () => {
-    const directory = root();
+  it("uses only the supplied completed Version even when the ambient active registry is corrupt", async () => {
+    const directory = fixtureRepository("sennel-flow-get-artifact-");
+    roots.push(directory);
     const active = createFixture(directory, {
       specId: "514-cli-active",
       goal: "This ambient Flow must never be read.",
       active: true,
     });
-    const completed = new CanonicalFlowFixture({
-      flowManager: active.flowManager,
+    const completedManager = makeFlowManager(directory, { specId: "514-cli-completed" });
+    const completed = await new FlowAtStepFixture({
+      flowManager: completedManager,
       specId: "514-cli-completed",
       runId: "run-514-cli-completed",
-      specRecord: specRecord("The exact completed Version is rendered despite ambient corruption."),
-    }).create();
-    for (const step of completed.leaves()) completed.settle(step.id);
-    active.flowManager.finalizeFlow(completed.specId);
+      execution: { mode: "direct", baseBranch: "main" },
+      specRecord: {
+        ...specRecord("The exact completed Version is rendered despite ambient corruption."),
+        requirements: [{ id: "R-view", desc: "Render the exact saved Version.", testable: false }],
+      },
+      targetStep: "finalize-cleanup",
+    }).createWithProducers({
+      implementationFiles: new Map([["R-view", ["version-view.js"]]]),
+      sourceMutations: new Map([["implement", () => {
+        fs.writeFileSync(path.join(directory, "version-view.js"), "export const exactVersionView = true;\n");
+      }]]),
+    });
+    completed.flow.flow.settle("finalize-cleanup");
+    completedManager.finalizeFlow(completed.state().specId);
     fs.writeFileSync(path.join(directory, ".sennel", ".active-flow"), "{ corrupt ambient authority\n");
 
     const result = invoke(directory, [

@@ -1,3 +1,4 @@
+import { fixtureRepository } from "../../support/infrastructure/flow-dispatch-scenario.js";
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import fs from "node:fs";
@@ -8,23 +9,20 @@ import {
   FLOW_COMMANDS,
 } from "../../../src/flow/registry.js";
 import GetStatusCommand from "../../../src/flow/lib/get-status.js";
+import RunRequirementTestGateCommand from "../../../src/flow/lib/run-requirement-test-gate.js";
 import {
   RequirementTestLifecycleFacts,
   RequirementTestLifecycleDecision,
   RequirementTestStepObservation,
-  initializeRequirementTestLifecycle,
   resolveRequirementTestLifecycle,
 } from "../../../src/flow/definition.js";
 import {
   attachCanonicalCommandResultArtifact,
   attachedCanonicalCommandResultArtifact,
 } from "../../../src/flow/lib/canonical-command-result.js";
-import { CurrentAttempt } from "../../../src/flow/lib/current-flow-state.js";
 import {
   RequirementTestCandidateBundle,
   RequirementTestCandidateSource,
-  RequirementTestGateObservation,
-  RequirementTestGateResult,
   RequirementTestPlanArtifact,
 } from "../../../src/flow/lib/requirement-test-artifacts.js";
 import {
@@ -52,7 +50,7 @@ import {
   FlowAtStepFixture,
   makeFlowManager,
 } from "../../support/infrastructure/flow-setup.js";
-import { createTmpDir, removeTmpDir } from "../../support/builders/tmp-dir.js";
+import { removeTmpDir } from "../../support/builders/tmp-dir.js";
 import { requirementTestReviewResult } from "../../support/requirement-test-review-result.js";
 
 const roots = [];
@@ -75,7 +73,7 @@ function spec(requirementIds) {
 }
 
 function setup(requirementIds = ["R1"], execution = { mode: "direct" }) {
-  const root = createTmpDir("requirement-lifecycle-regression-");
+  const root = fixtureRepository("requirement-lifecycle-regression-");
   roots.push(root);
   const manager = makeFlowManager(root);
   const specId = `requirement-regression-${roots.length}`;
@@ -84,38 +82,10 @@ function setup(requirementIds = ["R1"], execution = { mode: "direct" }) {
     specId,
     runId: `run-${specId}`,
     execution,
-    targetStep: "approval",
+    targetStep: "test-generate",
     specRecord: spec(requirementIds),
     taskDocuments: [{ id: "T1", title: "Implement", goal: "Implement", origin: "plan", added_round: 0, status: "pending" }],
   }).create();
-  const state = manager.canonicalState(specId);
-  const approvedSpec = JSON.parse(manager.readArtifact({ specId, logicalKey: "spec.record", consumerNodeId: "approval" }).bytes);
-  const specRevision = manager.readCurrentSpecReview({ specId, consumerNodeId: "spec-gate" }).review.identity;
-  const initialization = initializeRequirementTestLifecycle({ spec: approvedSpec, specRevision });
-  const node = state.findNode(initialization.target);
-  const contract = state.definition.contractFor(initialization.target, state.root);
-  manager._store.runtime.initializeRequirementTestLifecycle({
-    specId,
-    activityId: `initialize-${specId}`,
-    result: { outcome: "passed", summary: "approved", confirmedAt: CONFIRMED_AT, artifactRefs: [] },
-    decision: initialization.effect,
-    targetAttempt: new CurrentAttempt({
-      id: `generate-${specId}`,
-      nodeId: initialization.target,
-      sequence: node.attemptSequence + 1,
-      startedAt: CONFIRMED_AT,
-      consumption: { semantic: 0, tooling: 0 },
-      failure: null,
-      blocker: null,
-      incomplete: [],
-      operationClaims: [{ operation: "execute", resources: [...contract.resourceContract.required] }],
-    }),
-    artifactWrites: [{
-      logicalKey: "test.requirement.plan",
-      mediaType: "application/json",
-      bytes: new RequirementTestPlanArtifact({ plan: initialization.plan }).toBytes(),
-    }],
-  });
   return { root, manager, specId };
 }
 
@@ -124,7 +94,7 @@ function candidateFor(manager, specId, requirementId, testPath = `tests/${requir
   const plan = new RequirementTestArtifactStore({ flowManager: manager, state })
     .readPlan(state.current.at(-1)).artifact.plan;
   const item = plan.workItem(requirementId);
-  const bytes = Buffer.from(`// spec: ${requirementId}\nimport test from 'node:test';\ntest('${requirementId}: behavior', () => {});\n`);
+  const bytes = Buffer.from(`// spec: ${requirementId}\nimport test from 'node:test';\nimport assert from 'node:assert/strict';\ntest('${requirementId}: behavior', () => { assert.fail('Required behavior is not implemented'); });\n`);
   const source = RequirementTestCandidateSource.fromBytes({ testPath, bytes });
   const revision = new RequirementTestBundleRevision({
     requirementId,
@@ -257,46 +227,24 @@ function reviewResult(manager, specId, { verdict = "PASS", tooling = false, perm
   });
 }
 
+function reviewContext(value) {
+  return { root: value.root, mainRoot: value.root, executionRoot: value.root,
+    flowManager: value.manager, flowState: value.manager.loadReadOnly(value.specId),
+    specId: value.specId, phase: "test", config: {} };
+}
+
 async function postReview(value, options) {
-  const result = reviewResult(value.manager, value.specId, options);
-  return FLOW_COMMANDS.run.review.post({
-    flowManager: value.manager,
-    flowState: value.manager.loadReadOnly(value.specId),
-    specId: value.specId,
-    phase: "test",
-  }, result);
+  const result = await reviewResult(value.manager, value.specId, options);
+  return FLOW_COMMANDS.run.review.post(reviewContext(value), result);
 }
 
-function gateResult(manager, specId) {
-  const state = manager.canonicalState(specId);
-  const store = new RequirementTestArtifactStore({ flowManager: manager, state });
-  const item = store.readPlan("test-gate").artifact.plan.activeWorkItem();
-  const candidate = store.readCandidate({ bundle: item.bundleRevision, consumerNodeId: "test-gate" }).candidate;
-  const payload = new RequirementTestGateResult({
-    observation: new RequirementTestGateObservation({
-      requirementId: item.requirementId,
-      specRevision: item.specRevision,
-      bundleRevision: item.bundleRevision.revision,
-      candidateDigest: candidate.digest,
-      testName: `${item.requirementId}: behavior`,
-      kind: "assertion_failed",
-      sourceAttempt: item.bundleRevision.lineage.sourceAttempt,
-    }),
-    command: null,
-    rawOutputPath: "steps/test-gate/output.log",
-    process: { started: true, exitCode: 1, signal: null, timedOut: false, spawnError: null },
-  }).toJSON();
-  const result = { result: "ok", artifacts: { phase: "test", requirementId: item.requirementId } };
-  attachCanonicalCommandResultArtifact(result, { logicalKey: "test.requirement.gate", payload });
-  return result;
+async function gateResult(value) {
+  return new RunRequirementTestGateCommand().execute(reviewContext(value));
 }
 
-async function postGate(value, result = gateResult(value.manager, value.specId)) {
-  return FLOW_COMMANDS.run["requirement-test-gate"].post({
-    flowManager: value.manager,
-    flowState: value.manager.loadReadOnly(value.specId),
-    specId: value.specId,
-  }, result);
+async function postGate(value, result = null) {
+  const observed = result ?? await gateResult(value);
+  return FLOW_COMMANDS.run["requirement-test-gate"].post(reviewContext(value), observed);
 }
 
 function setReviewBudget({ manager, specId }, budget) {
@@ -359,7 +307,11 @@ describe("Requirement test lifecycle regressions", () => {
     }).id, next.executionContract.id);
     const after = canonicalSnapshot(value);
     assert.equal(after.activities.length, before.activities.length + 1);
-    assert.equal(after.catalog.artifacts.length, before.catalog.artifacts.length + 1);
+    const priorPaths = new Set(before.catalog.artifacts.map((entry) => entry.relativePath));
+    const publications = after.catalog.artifacts.filter((entry) => !priorPaths.has(entry.relativePath));
+    assert.deepEqual(publications.map((entry) => entry.logicalKey).sort(), ["execution.contract", "execution.request"]);
+    assert.equal(publications.every((entry) => entry.activityId === after.activities.at(-1).id), true,
+      "the new generation publishes its immutable contract and recoverable request in the same Activity");
     assert.equal(after.state.attempt.id, before.state.attempt.id);
     assert.deepEqual(after.state.attempt.consumption, before.state.attempt.consumption);
     const repeated = requirementTestHandoff(value, "next-requirement-generation").request;
@@ -715,7 +667,7 @@ describe("Requirement test lifecycle regressions", () => {
     assert.deepEqual(canonicalSnapshot(value), before);
   });
 
-  it("rejects facts bound to a different candidate publication without side effects", () => {
+  it("rejects facts bound to a different candidate publication without side effects", async () => {
     const value = setup();
     const generated = candidateFor(value.manager, value.specId, "R1");
     publishGenerated({ manager: value.manager, specId: value.specId, ...generated });
@@ -744,7 +696,7 @@ describe("Requirement test lifecycle regressions", () => {
       observation,
       candidateBundle: forged,
     });
-    const result = reviewResult(value.manager, value.specId, { verdict: "PASS" });
+    const result = await reviewResult(value.manager, value.specId, { verdict: "PASS" });
     const attached = attachedCanonicalCommandResultArtifact(result);
     const forgedResult = { ...result };
     attachCanonicalCommandResultArtifact(forgedResult, {
@@ -785,8 +737,9 @@ describe("Requirement test lifecycle regressions", () => {
     it(`${verdict} review atomically skips repair and activates Gate`, async () => {
       const value = setup();
       publishGenerated({ manager: value.manager, specId: value.specId, ...candidateFor(value.manager, value.specId, "R1") });
+      const result = await reviewResult(value.manager, value.specId, { verdict });
       const before = value.manager.activityLedger(value.specId).length;
-      const decision = await postReview(value, { verdict });
+      const decision = await FLOW_COMMANDS.run.review.post(reviewContext(value), result);
       const state = value.manager.loadReadOnly(value.specId);
       assert.equal(decision.target, "test-gate");
       assert.equal(state.currentNodeId, "test-gate");
@@ -977,7 +930,7 @@ describe("Requirement test lifecycle regressions", () => {
     assert.equal(value.manager.canonicalState(value.specId).current.at(-1), "test-review");
 
     await postReview(value, { verdict: "PASS" });
-    const firstResult = gateResult(value.manager, value.specId);
+    const firstResult = await gateResult(value);
     const decision = await postGate(value, firstResult);
     assert.equal(decision.disposition, "promote");
     const after = canonicalSnapshot(value);
@@ -992,7 +945,7 @@ describe("Requirement test lifecycle regressions", () => {
 
     await postReview(value, { verdict: "PASS" });
     await assert.rejects(
-      () => postGate(value, gateResult(value.manager, value.specId)),
+      () => postGate(value),
       /collides with a promoted test source/,
     );
     assert.equal(value.manager.loadReadOnly(value.specId).currentNodeId, "test-gate");

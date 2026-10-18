@@ -92,7 +92,12 @@ export async function preparePublishedSpecGateRepairArguments({ ctx, state: requ
   const binding = new SpecWorkerStepBinding({ flowManager: ctx.flowManager,
     specId: state.specId, revision: source.baseRevision });
   const executionContract = ctx.flowManager.readStoredExecutionContract({ binding, generation: execution.lifecycle.executionGeneration });
-  ctx.flowManager.readExecutionContract({ executionContract });
+  // Explicit recovery authorizes only this saved candidate's completion. Its
+  // producer runtime is historical evidence, never permission for another call.
+  // The Store revalidates that recovery proof and contract under its lock.
+  if (completed?.receipt.specGateRepairRecovery == null) {
+    ctx.flowManager.readExecutionContract({ executionContract });
+  }
   const refreshed = readProgressBoundSpecGateRepairInput({ flowManager: ctx.flowManager,
     state, executionRoot: ctx.executionRoot || ctx.root, acceptedPublication: true });
   const { facts, continuation } = new SpecGateRepairPublishedDecision({ source, ledger, refreshed,

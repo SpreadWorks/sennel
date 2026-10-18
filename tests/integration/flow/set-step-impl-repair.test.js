@@ -1,45 +1,32 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, describe, it } from "node:test";
+import { after, describe, it, mock } from "node:test";
 
 import SetStepCommand from "../../../src/flow/lib/set-step.js";
 import { findStepById } from "../../../src/flow/lib/step-tree.js";
 import { createTmpDir, removeTmpDir } from "../../support/builders/tmp-dir.js";
 import { ImplPhaseScenario, implementationFinding } from "../../support/impl-phase-scenario.js";
-import { FlowAtStepFixture, makeFlowManager } from "../../support/infrastructure/flow-setup.js";
+import { SeedCleanupScope } from "../../support/builders/seed-work-root.js";
+
+const seedScope = new SeedCleanupScope(after, mock);
+let repairSeed;
+
+async function repairScenario(t) {
+  repairSeed ??= ImplPhaseScenario.seed(seedScope, {
+    frontier: "impl-triage",
+    implReviewResponse: (stage, ordinal) => ({
+      blockingFindings: stage === "impl-review" && ordinal === 1 ? [implementationFinding()] : [],
+      nonBlockingImprovements: [],
+    }),
+  });
+  return ImplPhaseScenario.fromSeed(t, await repairSeed);
+}
 
 describe("canonical set-step implementation repair", () => {
-  let root = null;
-
-  afterEach(() => {
-    if (root !== null) removeTmpDir(root);
-    root = null;
-  });
-
-  function contextAt(targetStep, runId) {
-    root = createTmpDir("set-step-canonical-impl-repair-");
-    const flowManager = makeFlowManager(root);
-    const specId = "001-test";
-    new FlowAtStepFixture({
-      flowManager,
-      specId,
-      runId,
-      request: "Exercise canonical implementation recovery.",
-      targetStep,
-      specRecord: { goal: "repair fixture", requirements: [] },
-    }).create();
-    return { root, flowManager, specId };
-  }
-
   it("confirms registered impl-triage and impl-repair without legacy repair sidecars", async (t) => {
-    const scenario = ImplPhaseScenario.create(t, {
-      implReviewResponse: (stage, ordinal) => ({
-        blockingFindings: stage === "impl-review" && ordinal === 1 ? [implementationFinding()] : [],
-        nonBlockingImprovements: [],
-      }),
-    });
-    await scenario.advanceTo("impl-triage");
+    const scenario = await repairScenario(t);
+    assert.equal(scenario.current(), "impl-triage");
     for (const [stepId, kind, target] of [
       ["impl-triage", "impl-triage-repair-required", "impl-repair"],
       ["impl-repair", "impl-repair-applied", "test-execute"],
@@ -92,8 +79,9 @@ describe("canonical set-step implementation repair", () => {
     assert.equal(scenario.phaseWorkers.length, workerCount, "unused repair stages cannot fabricate worker success");
   });
 
-  it("rejects completion of a non-current implementation leaf", async () => {
-    const ctx = contextAt("impl-triage", "run-wrong-impl-target");
+  it("rejects completion of a non-current implementation leaf", async (t) => {
+    const scenario = await repairScenario(t);
+    const ctx = scenario.context();
 
     const before = { state: ctx.flowManager.canonicalState(ctx.specId).toJSON(),
       activities: ctx.flowManager.activityLedger(ctx.specId), catalog: ctx.flowManager.artifactCatalog(ctx.specId).toJSON() };
@@ -109,14 +97,16 @@ describe("canonical set-step implementation repair", () => {
     assert.deepEqual({ state: ctx.flowManager.canonicalState(ctx.specId).toJSON(),
       activities: ctx.flowManager.activityLedger(ctx.specId), catalog: ctx.flowManager.artifactCatalog(ctx.specId).toJSON() }, before);
     for (const name of ["impl-triage.json", "impl-repair.json", "impl-repair-transaction.json"]) {
-      assert.equal(fs.existsSync(path.join(root, "specs", ctx.specId, name)), false);
+      assert.equal(fs.existsSync(path.join(scenario.root, "specs", ctx.specId, name)), false);
     }
     assert.equal(findStepById(ctx.flowManager.loadReadOnly(ctx.specId).steps, "impl-triage").status, "in_progress");
   });
 
-  it("rejects a noncanonical mutable state instead of replaying a repair transaction", async () => {
+  it("rejects a noncanonical mutable state instead of replaying a repair transaction", async (t) => {
+    const invalidRoot = createTmpDir("set-step-noncanonical-repair-");
+    t.after(() => removeTmpDir(invalidRoot));
     const result = await new SetStepCommand().execute({
-      root: process.cwd(),
+      root: invalidRoot,
       flowManager: { load: () => ({ specId: "legacy", steps: [] }) },
       id: "impl-repair",
       status: "done",

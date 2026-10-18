@@ -313,9 +313,9 @@ export function buildFlowCommandHookContext(container, entry, input = {}) {
 }
 
 /** Resolve temporary storage from the command's already selected authority. */
-export function flowTemporaryRoot(ctx) {
+export function flowTemporaryRoot(ctx, fallbackRoot) {
   if (ctx.temporaryRoot != null) return ctx.temporaryRoot;
-  const paths = new TemporaryPaths(ctx.repositoryRoot || ctx.mainRoot || ctx.root);
+  const paths = new TemporaryPaths(ctx.repositoryRoot || ctx.mainRoot || ctx.root || fallbackRoot);
   const specId = ctx.specId ?? ctx.flowState?.specId;
   ctx.temporaryRoot = ctx.flowState
     ? paths.flow(specId, ctx.flowState.runId)
