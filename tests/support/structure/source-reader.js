@@ -20,6 +20,34 @@ export class SourceToken {
   }
 }
 
+/** Literal text and expressions retain their original coordinates in one lexer. */
+export class SourceTemplateChunk extends SourceToken {
+  constructor(value, raw, offset, line, column) {
+    super(value, "template-chunk", offset, line, column);
+    this.raw = raw;
+  }
+}
+
+export class SourceTemplateInterpolation {
+  constructor(token, tokens, endToken) {
+    if (!(token instanceof SourceToken) || !Array.isArray(tokens) || !(endToken instanceof SourceToken)) {
+      throw new TypeError("invalid template interpolation");
+    }
+    this.token = token;
+    this.tokens = tokens;
+    this.endToken = endToken;
+  }
+}
+
+export class SourceTemplateToken extends SourceToken {
+  constructor(offset, line, column) {
+    super("<template>", "literal", offset, line, column);
+    this.chunks = [];
+    this.interpolations = [];
+    this.endToken = null;
+  }
+}
+
 export class SourceReference {
   constructor(specifier, token, kind, bindings = new Map()) {
     this.specifier = specifier;
@@ -110,10 +138,15 @@ export class SourceDeclaration {
     return initializer.length === 1 && initializer[0].kind === "identifier" ? initializer[0].value : null;
   }
   bodyTokens() {
-    const open = this.tokens.findIndex((token) => token.value === "(");
-    if (open < 0) return null;
-    const close = matching(this.tokens, open, "(", ")");
-    return this.tokens[close + 1]?.value === "{" ? this.tokens.slice(close + 2, -1) : null;
+    const arrow = topLevelArrow(this.tokens);
+    let open;
+    if (arrow >= 0) open = arrow + 1;
+    else {
+      const parameters = this.tokens.findIndex((token) => token.value === "(");
+      if (parameters < 0) return null;
+      open = matching(this.tokens, parameters, "(", ")") + 1;
+    }
+    return this.tokens[open]?.value === "{" ? this.tokens.slice(open + 1, matching(this.tokens, open)) : null;
   }
   topLevelInitializer(name) {
     const body = this.bodyTokens();
@@ -152,8 +185,7 @@ export class SourceDeclaration {
   }
   containsBodySequence(source) {
     const body = this.bodyTokens();
-    const expected = readTokens(source);
-    return body !== null && body.some((_, index) => sameTokens(body.slice(index, index + expected.length), expected));
+    return body !== null && sourceContainsSequence(body, source);
   }
   returns() {
     const body = this.bodyTokens();
@@ -195,6 +227,12 @@ function sameTokens(actual, expected) {
     && actual.every((token, index) => expected[index].kind === "identifier" && expected[index].value === "$STRING_LITERAL"
       ? token.kind === "string"
       : token.value === expected[index].value && token.kind === expected[index].kind);
+}
+
+/** Match source grammar using the shared lexer, never source-text substring rules. */
+export function sourceContainsSequence(tokens, source) {
+  const expected = readTokens(source);
+  return tokens.some((_, index) => sameTokens(tokens.slice(index, index + expected.length), expected));
 }
 
 const identifierStart = /[A-Za-z_$]/;
@@ -256,17 +294,44 @@ export function readTokens(source, file = "<source>") {
     error("unterminated regular expression");
   }
   function template() {
-    const offset = index; const startLine = line; const startColumn = column;
+    const opener = new SourceTemplateToken(index, line, column);
     advance();
-    add("<template>", "literal", offset, startLine, startColumn);
+    tokens.push(opener);
+    let offset = index; let startLine = line; let startColumn = column;
+    let value = "";
+    const chunk = () => opener.chunks.push(new SourceTemplateChunk(value, source.slice(offset, index), offset, startLine, startColumn));
     while (index < source.length) {
-      const char = advance();
-      if (char === "\\") { if (index >= source.length) error("unterminated template escape"); advance(); continue; }
-      if (char === "`") { add("<template-end>", "literal", index - 1, line, column - 1); return; }
-      if (char === "$" && source[index] === "{") {
+      const char = source[index];
+      if (char === "\\") {
         advance();
-        scan(true);
+        if (index >= source.length) error("unterminated template escape");
+        const escaped = advance();
+        if (escaped === "u" || escaped === "x") {
+          const count = escaped === "u" ? 4 : 2;
+          const digits = source.slice(index, index + count);
+          if (!new RegExp(`^[0-9a-fA-F]{${count}}$`).test(digits)) error("unsupported template escape");
+          for (let i = 0; i < count; i++) advance();
+          value += String.fromCodePoint(Number.parseInt(digits, 16));
+        } else value += ({ n: "\n", r: "\r", t: "\t", b: "\b", f: "\f", v: "\v", 0: "\0", "\n": "" })[escaped] ?? escaped;
+        continue;
       }
+      if (char === "`") {
+        chunk();
+        opener.endToken = new SourceToken("<template-end>", "literal", index, line, column);
+        advance(); tokens.push(opener.endToken); return;
+      }
+      if (char === "$" && source[index + 1] === "{") {
+        chunk();
+        const token = new SourceToken("${", "template-boundary", index, line, column);
+        advance(); advance();
+        const start = tokens.length;
+        scan(true);
+        opener.interpolations.push(new SourceTemplateInterpolation(token, tokens.slice(start),
+          new SourceToken("}", "template-boundary", index - 1, line, column - 1)));
+        offset = index; startLine = line; startColumn = column; value = "";
+        continue;
+      }
+      value += advance();
     }
     error("unterminated template");
   }
@@ -322,7 +387,7 @@ export function readTokens(source, file = "<source>") {
   return tokens;
 }
 
-function matching(tokens, open, left = "{", right = "}") {
+export function matching(tokens, open, left = "{", right = "}") {
   let depth = 0;
   for (let i = open; i < tokens.length; i++) {
     if (tokens[i].kind === "punctuation" && tokens[i].value === left) depth++;
@@ -422,7 +487,24 @@ export class SourceOriginUsage {
 }
 
 /** Read constructor/function parameters without executing a declaration. */
+function topLevelArrow(tokens) {
+  for (let index = 0; index < tokens.length; index++) {
+    if (tokens[index].value === "=>") return index;
+    if (tokens[index].kind === "punctuation" && ["(", "[", "{"].includes(tokens[index].value)) {
+      index = matching(tokens, index, tokens[index].value, { "(": ")", "[": "]", "{": "}" }[tokens[index].value]);
+    }
+  }
+  return -1;
+}
+
 export function readParameters(tokens) {
+  const arrow = topLevelArrow(tokens);
+  if (arrow >= 0) {
+    if (tokens[arrow - 1]?.kind === "identifier") return [[tokens[arrow - 1]]];
+    if (tokens[arrow - 1]?.value !== ")") return [];
+    const open = tokens.findIndex((token, index) => token.value === "(" && matching(tokens, index, "(", ")") === arrow - 1);
+    return open < 0 ? [] : readCommaSeparated(tokens, open + 1, arrow - 1);
+  }
   const open = tokens.findIndex((token) => token.value === "(");
   if (open < 0) return [];
   const close = matching(tokens, open, "(", ")");
@@ -566,10 +648,16 @@ export function readTypeInvariants(declaration) {
   return result.filter((invariant) => outerTypeOffsets.has(invariant.typeToken.offset));
 }
 
-function readCommaSeparated(tokens, start, end) {
+export function readCommaSeparated(tokens, start, end) {
   const parts = [];
   let depth = 0;
   for (let index = start; index < end; index++) {
+    if (tokens[index] instanceof SourceTemplateToken) {
+      const close = tokens.indexOf(tokens[index].endToken, index + 1);
+      if (close < 0 || close >= end) throw new SourceReadError("<source>", tokens[index].offset, "incomplete template literal");
+      index = close;
+      continue;
+    }
     if (tokens[index].kind !== "punctuation") continue;
     if (["(", "[", "{"].includes(tokens[index].value)) depth++;
     else if ([")", "]", "}"].includes(tokens[index].value)) depth--;
@@ -1206,6 +1294,7 @@ export class SourceModule {
     this.file = file;
     this.tokens = readTokens(source, file);
     this.references = [];
+    this.templates = this.tokens.filter((token) => token instanceof SourceTemplateToken);
     this.exports = [];
     this.classes = [];
     this.dynamic = [];
@@ -1268,6 +1357,12 @@ export class SourceModule {
     return this.lexicalBindings;
   }
 
+  bindingAt(token) { return this.#bindings().bindingAt(token); }
+  moduleBinding(name) { return this.#bindings().moduleBinding(name); }
+  bindingReferences(name) {
+    const binding = typeof name === "string" ? this.moduleBinding(name) : name;
+    return binding === null ? [] : this.tokens.filter((token) => this.#bindings().references.get(token.offset) === binding);
+  }
   bindingWrites(names) { return this.#bindings().bindingWrites(names); }
 
   originUsage(origins, { moduleBindings = false, ...options } = {}) {
@@ -1279,6 +1374,76 @@ export class SourceModule {
     const start = this.tokens.findIndex((token) => token.offset === reference.token.offset);
     const specifier = this.tokens.findIndex((token, index) => index > start && token.kind === "string" && token.value === reference.specifier);
     return start >= 0 && specifier > start ? this.tokens.slice(start, specifier + 1) : [];
+  }
+
+  #readCommonJs() {
+    const t = this.tokens;
+    const requirements = new Map();
+    for (let i = 0; i < t.length; i++) {
+      const token = t[i];
+      if (token.kind !== "identifier" || token.value !== "require" || !this.isUnbound("require", token)
+        || t[i + 1]?.value !== "(") continue;
+      const close = matching(t, i + 1, "(", ")");
+      if (close !== i + 3 || t[i + 2]?.kind !== "string") { this.dynamic.push(token); continue; }
+      const bindings = new Map();
+      let imported = "*";
+      if (t[close + 1]?.value === "." && t[close + 2]?.kind === "identifier") imported = t[close + 2].value;
+      if (t[i - 1]?.value === "=") {
+        if (t[i - 2]?.kind === "identifier" && ["const", "let"].includes(t[i - 3]?.value)) {
+          bindings.set(t[i - 2].value, imported);
+        } else if (t[i - 2]?.value === "}") {
+          let open = i - 3;
+          while (open >= 0 && t[open].value !== "{") open--;
+          if (["const", "let"].includes(t[open - 1]?.value)) {
+            for (const part of readCommaSeparated(t, open + 1, i - 2)) {
+              if (part.length === 1 && part[0].kind === "identifier") bindings.set(part[0].value, part[0].value);
+              else if (part.length === 3 && part[0].kind === "identifier" && part[1].value === ":"
+                && part[2].kind === "identifier") bindings.set(part[2].value, part[0].value);
+              else throw new SourceReadError(this.file, token.offset, "unsupported require binding");
+            }
+          }
+        }
+      }
+      const reference = new SourceReference(t[i + 2].value, token, "require", bindings);
+      this.references.push(reference);
+      requirements.set(i, reference);
+    }
+    const exportValue = (name, start, end, token) => {
+      const value = unwrapCondition(t.slice(start, end));
+      if (value.length === 1 && value[0].kind === "identifier") {
+        this.exports.push(new SourceExport(name, value[0].value, null, token));
+      } else if (value[0]?.value === "require" && requirements.has(t.indexOf(value[0]))
+        && value.length === 4) {
+        const reference = requirements.get(t.indexOf(value[0]));
+        this.exports.push(new SourceExport(name, "*", reference, token));
+        if (name === "default") this.exports.push(new SourceExport("*", "*", reference, token));
+      } else if (name === "default" && value[0]?.value === "{" && value.at(-1)?.value === "}") {
+        for (const part of readCommaSeparated(value, 1, value.length - 1)) {
+          if (part.length === 1 && part[0].kind === "identifier") this.exports.push(new SourceExport(part[0].value, part[0].value, null, part[0]));
+          else if (part.length === 3 && ["identifier", "string"].includes(part[0].kind)
+            && part[1].value === ":" && part[2].kind === "identifier") this.exports.push(new SourceExport(part[0].value, part[2].value, null, part[0]));
+          else throw new SourceReadError(this.file, token.offset, "unsupported CommonJS export property");
+        }
+      } else throw new SourceReadError(this.file, token.offset, "unsupported CommonJS export value");
+    };
+    for (let i = 0; i < t.length; i++) {
+      const token = t[i];
+      let cursor = i;
+      let name;
+      if (token.value === "module" && this.isUnbound("module", token) && t[i + 1]?.value === "." && t[i + 2]?.value === "exports") {
+        cursor = i + 3; name = "default";
+      } else if (token.value === "exports" && this.isUnbound("exports", token)) { cursor = i + 1; }
+      else continue;
+      if (t[cursor]?.value === "." && t[cursor + 1]?.kind === "identifier") { name = t[cursor + 1].value; cursor += 2; }
+      if (name === undefined || t[cursor]?.value !== "=" || t[cursor + 1]?.value === "=") continue;
+      let end = cursor + 1;
+      while (end < t.length && t[end].value !== ";") {
+        if (["(", "[", "{"].includes(t[end].value)) end = matching(t, end, t[end].value,
+          { "(": ")", "[": "]", "{": "}" }[t[end].value]);
+        end++;
+      }
+      exportValue(name, cursor + 1, end, token);
+    }
   }
 
   #read(lexicalOnly) {
@@ -1378,6 +1543,7 @@ export class SourceModule {
         this.classes.push(new SourceClass(name, parent, hasParent ? t[cursor + 1] : null, token, dependencies, argumentTypes, exported));
       }
     }
+    this.#readCommonJs();
     if (!lexicalOnly) this.globals = this.#bindings().unbound(watchedGlobals);
   }
 }

@@ -29,6 +29,7 @@
     "technical-docs"
   ],
   "scripts": {
+    "check:os-independence": "node scripts/check-os-independence.js",
     "release:preflight": "node scripts/release-preflight.js",
     "release:verify": "node scripts/verify-alpha-release.js",
     "release:pack": "node scripts/inspect-alpha-pack.js",
