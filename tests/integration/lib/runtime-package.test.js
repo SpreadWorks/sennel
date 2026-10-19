@@ -204,3 +204,24 @@ test("an inherited child reuses its completed bootstrap and can deliver the same
   assert.equal(child.status, 0, child.error);
   assert.equal(child.grandchild, result.parent);
 });
+
+test("runtime child delivery refuses an external scratch root and preserves its sentinel", (t) => {
+  const root = fixture(t);
+  const result = run(root, `
+    import fs from 'node:fs';
+    import path from 'node:path';
+    import { RuntimeChildExecution } from './src/lib/runtime-package.js';
+    const outside = path.resolve('external-scratch');
+    fs.mkdirSync(outside);
+    fs.writeFileSync(path.join(outside, 'sentinel'), 'external-owner');
+    let code = null;
+    let delivery;
+    try { delivery = new RuntimeChildExecution({ root: process.cwd(), temporaryRoot: outside }); }
+    catch (error) { code = error.code; }
+    finally { delivery?.close(); }
+    console.log(JSON.stringify({ code, entries: fs.readdirSync(outside), sentinel: fs.readFileSync(path.join(outside, 'sentinel'), 'utf8') }));
+  `);
+  assert.equal(result.code, "TEMPORARY_PATH_OUTSIDE_PROJECT");
+  assert.deepEqual(result.entries, ["sentinel"]);
+  assert.equal(result.sentinel, "external-owner");
+});

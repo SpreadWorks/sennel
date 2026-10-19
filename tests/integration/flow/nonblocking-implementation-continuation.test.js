@@ -85,7 +85,7 @@ it("continues an actual Task Gate tooling Error with a receipt-bound decision an
   let responseLost = false;
   const committedManager = new FlowManager({ root: scenario.root, mainRoot: scenario.root, inWorktree: false,
     versionStoreFaultInjector({ phase, filePath }) {
-      if (!responseLost && phase === "before-json-directory-fsync" && filePath === catalogFile) {
+      if (!responseLost && phase === "before-json-readback" && filePath === catalogFile) {
         responseLost = true;
         throw new Error("accepted decision committed response loss");
       }

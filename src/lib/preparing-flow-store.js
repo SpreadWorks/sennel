@@ -109,13 +109,13 @@ export class PreparingFlowStore {
     }
     const p = this.#path(id);
     return this.#withLock(id, () => {
-      if (fs.existsSync(p)) {
+      if (new AtomicFile(p).readSnapshot() !== null) {
         const error = new Error(`preparing flow already exists: ${id}`);
         error.code = "PREPARING_FLOW_ALREADY_EXISTS";
         throw error;
       }
       const validState = new PreparingFlowState(state).toJSON();
-      new AtomicJsonFile(p, { faultInjector: this._faultInjector }).write(validState);
+      new AtomicJsonFile(p, { faultInjector: this._faultInjector }).write(validState, { exclusive: true });
       return p;
     });
   }
@@ -127,10 +127,10 @@ export class PreparingFlowStore {
   load(runId) {
     const id = new PreparingFlowId(runId);
     const p = this.#path(id);
-    if (!fs.existsSync(p)) return null;
     try {
       return new PreparingFlowSnapshot(p).state;
     } catch (cause) {
+      if (cause.code === "PREPARING_FLOW_NOT_FOUND") return null;
       const error = new Error(`preparing flow is corrupt: ${runId}`, { cause });
       error.code = "PREPARING_FLOW_CORRUPT";
       throw error;
@@ -196,7 +196,7 @@ export class PreparingFlowStore {
   delete(runId) {
     const id = new PreparingFlowId(runId);
     const p = this.#path(id);
-    if (!fs.existsSync(managedDir(this._mainRoot))) return;
+    if (!new RealDirectoryAuthority(managedDir(this._mainRoot)).exists()) return;
     this.#withLock(id, () => {
       new AtomicFile(p, { faultInjector: this._faultInjector }).remove();
     });
@@ -205,8 +205,9 @@ export class PreparingFlowStore {
   /** @returns {string[]} runIds */
   list() {
     const dir = managedDir(this._mainRoot);
-    if (!fs.existsSync(dir)) return [];
-    return fs.readdirSync(dir)
+    const authority = new RealDirectoryAuthority(dir);
+    if (!authority.exists()) return [];
+    return authority.entries()
       .filter((f) => f.startsWith(PREPARING_PREFIX))
       .map((f) => f.slice(PREPARING_PREFIX.length))
       .slice(0, PREPARING_SCAN_LIMIT);

@@ -7,6 +7,9 @@ import { FLOW_ARTIFACT_CONTRACTS } from "../../lib/flow-artifact-contract.js";
 import { PRODUCT } from "../../lib/product.js";
 import { TemporaryPaths } from "../../lib/temporary-paths.js";
 import { FlowRepositoryRuntimeArtifactRegistry } from "./flow-repository-runtime-artifacts.js";
+import { captureRegularFile, visitRegularFileChunks, MAX_IN_MEMORY_FILE_BYTES } from "../../lib/regular-file-snapshot.js";
+import { sameFileIdentity } from "../../lib/real-directory-authority.js";
+import { AtomicFile } from "../../lib/atomic-file.js";
 import { compareText } from "./text-order.js";
 
 export const REPAIR_STATE_VERSION = 3;
@@ -16,6 +19,8 @@ export const REPAIR_TRANSACTION_FILE = "impl-repair-transaction.json";
 export const REPAIR_MIGRATION_FILE = "repair-state-migration.json";
 export const REPAIR_LOCK_DIR = ".impl-repair.lock";
 
+// Streaming hashes and Git records do not retain the complete file in memory.
+const MAX_REPAIR_STREAM_BYTES = Number.MAX_SAFE_INTEGER - 1;
 const MAX_PATH_LENGTH = 4096;
 const HASH_PATTERN = /^[a-f0-9]{64}$/i;
 const RUN_ID_PATTERN = /^[A-Za-z0-9._-]+$/;
@@ -394,7 +399,7 @@ function isGitRepository(root) {
 function readConfiguredBoundary(root) {
   const file = path.join(root, PRODUCT.managedDirName, "config.json");
   if (!fs.existsSync(file)) return { maxChangedPaths: DEFAULT_REPAIR_CHANGED_PATH_LIMIT, include: [] };
-  const config = JSON.parse(fs.readFileSync(file, "utf8"));
+  const config = JSON.parse(captureRegularFile(file, { label: "repair fingerprint configuration", maxBytes: MAX_IN_MEMORY_FILE_BYTES }).text());
   const input = config?.flow?.repairFingerprint || {};
   for (const key of Object.keys(input)) {
     if (!new Set(["maxChangedPaths", "include"]).has(key)) {
@@ -419,16 +424,11 @@ function forEachGitNulField(root, directory, args, label, visit) {
   try {
     const result = runGitToFile(args, { cwd: root, outputPath });
     if (!result.ok) throw new Error(`${label}: ${result.stderr}`.trim());
-    const descriptor = fs.openSync(outputPath, "r");
-    const buffer = Buffer.allocUnsafe(64 * 1024);
     let pending = Buffer.alloc(0);
-    try {
-      for (;;) {
-        const bytes = fs.readSync(descriptor, buffer, 0, buffer.length, null);
-        if (bytes === 0) break;
-        const chunk = pending.length === 0
-          ? Buffer.from(buffer.subarray(0, bytes))
-          : Buffer.concat([pending, buffer.subarray(0, bytes)]);
+    visitRegularFileChunks(outputPath, {
+      label, maxBytes: MAX_REPAIR_STREAM_BYTES,
+      visit(buffer) {
+        const chunk = pending.length === 0 ? Buffer.from(buffer) : Buffer.concat([pending, buffer]);
         let start = 0;
         for (let index = 0; index < chunk.length; index += 1) {
           if (chunk[index] !== 0) continue;
@@ -436,16 +436,12 @@ function forEachGitNulField(root, directory, args, label, visit) {
           start = index + 1;
         }
         pending = Buffer.from(chunk.subarray(start));
-        if (pending.length > (MAX_PATH_LENGTH * 4) + 128) {
-          throw new Error(`${label}: Git emitted an overlong field`);
-        }
-      }
-      if (pending.length !== 0) throw new Error(`${label}: Git output is not NUL terminated`);
-    } finally {
-      fs.closeSync(descriptor);
-    }
+        if (pending.length > (MAX_PATH_LENGTH * 4) + 128) throw new Error(`${label}: Git emitted an overlong field`);
+      },
+    });
+    if (pending.length !== 0) throw new Error(`${label}: Git output is not NUL terminated`);
   } finally {
-    fs.rmSync(outputPath, { force: true });
+    new AtomicFile(outputPath).remove();
   }
 }
 
@@ -590,47 +586,14 @@ function environmentHash(root, skipWorktreePaths) {
 function hashRegularFile(file) {
   const hash = crypto.createHash("sha256");
   hash.update("file\0");
-  const descriptor = fs.openSync(file, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0));
-  const buffer = Buffer.allocUnsafe(64 * 1024);
-  const before = fs.fstatSync(descriptor, { bigint: true });
-  if (!before.isFile()) {
-    fs.closeSync(descriptor);
-    throw new Error(`repair input changed type while opening: ${file}`);
-  }
-  try {
-    const openedPath = fs.lstatSync(file, { bigint: true, throwIfNoEntry: false });
-    if (!openedPath?.isFile() || openedPath.dev !== before.dev || openedPath.ino !== before.ino) {
-      throw new Error(`repair input changed while opening: ${file}`);
-    }
-    for (;;) {
-      const bytes = fs.readSync(descriptor, buffer, 0, buffer.length, null);
-      if (bytes === 0) break;
-      hash.update(buffer.subarray(0, bytes));
-    }
-    const after = fs.fstatSync(descriptor, { bigint: true });
-    const pathAfter = fs.lstatSync(file, { bigint: true, throwIfNoEntry: false });
-    if (
-      !pathAfter?.isFile()
-      || before.dev !== after.dev
-      || before.ino !== after.ino
-      || before.size !== after.size
-      || before.mtimeNs !== after.mtimeNs
-      || before.ctimeNs !== after.ctimeNs
-      || pathAfter.dev !== after.dev
-      || pathAfter.ino !== after.ino
-      || pathAfter.size !== after.size
-      || pathAfter.mtimeNs !== after.mtimeNs
-      || pathAfter.ctimeNs !== after.ctimeNs
-    ) {
-      throw new Error(`repair input changed while hashing: ${file}`);
-    }
-    return {
-      mode: (after.mode & 0o111n) === 0n ? "100644" : "100755",
-      contentHash: hash.digest("hex"),
-    };
-  } finally {
-    fs.closeSync(descriptor);
-  }
+  // Executable mode is Git/source payload, never file ownership evidence.
+  const stat = fs.lstatSync(file, { bigint: true });
+  visitRegularFileChunks(file, { label: "repair input", maxBytes: MAX_REPAIR_STREAM_BYTES,
+    expectedIdentity: stat, expectedLinkCount: Number(stat.nlink), visit(chunk) { hash.update(chunk); } });
+  return {
+    mode: (stat.mode & 0o111n) === 0n ? "100644" : "100755",
+    contentHash: hash.digest("hex"),
+  };
 }
 
 function hashSymbolicLink(file) {
@@ -640,8 +603,7 @@ function hashSymbolicLink(file) {
   const after = fs.lstatSync(file, { bigint: true, throwIfNoEntry: false });
   if (
     !after?.isSymbolicLink()
-    || before.dev !== after.dev
-    || before.ino !== after.ino
+    || !sameFileIdentity(before, after)
     || before.size !== after.size
     || before.mtimeNs !== after.mtimeNs
     || before.ctimeNs !== after.ctimeNs
@@ -833,6 +795,6 @@ export function buildRepairStateManifest({ root, artifactRoot = null, specPath, 
       entries,
     });
   } finally {
-    fs.rmSync(directory, { recursive: true, force: true });
+    temporaryPaths.cleanup(directory);
   }
 }

@@ -2,6 +2,7 @@ import fs from "node:fs";
 import crypto from "node:crypto";
 import path from "node:path";
 import { AtomicJsonFile } from "../../lib/atomic-json-file.js";
+import { RealDirectoryAuthority } from "../../lib/real-directory-authority.js";
 import { Envelope } from "../../lib/flow-envelope.js";
 import { getPorcelainV2Status, runGit } from "../../lib/git-helpers.js";
 import { RepositoryFlowOperationLock } from "../../lib/repository-maintenance-lock.js";
@@ -38,7 +39,7 @@ class FlowAbortJournal {
 
   constructor({ root, state, worktreePath, featureSha, reason, specLocation }) {
     const directory = path.join(root, PRODUCT.managedPath("recovery", "flow-abort"));
-    fs.mkdirSync(directory, { recursive: true });
+    RealDirectoryAuthority.resolve(directory, { create: true });
     this.file = new AtomicJsonFile(FlowAbortJournal.pathFor(root, state.specId));
     this.value = this.file.read(null) || {
       version: 2,
@@ -272,8 +273,9 @@ export class RunAbortCommand extends FlowCommand {
       }
 
       if (!journal.atLeast("spec-removed")) {
-        fs.rmSync(specLocation.directory, { recursive: true });
-        if (fs.readdirSync(rootLocation.directory).length === 0) fs.rmdirSync(rootLocation.directory);
+        new RealDirectoryAuthority(specLocation.directory).removeTree();
+        const rootAuthority = new RealDirectoryAuthority(rootLocation.directory);
+        if (rootAuthority.entries().length === 0) rootAuthority.removeEmpty();
         journal.advance("spec-removed");
       }
 

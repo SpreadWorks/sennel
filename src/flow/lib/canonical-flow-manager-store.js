@@ -1,3 +1,5 @@
+import { RealDirectoryAuthority } from "../../lib/real-directory-authority.js";
+import { captureRegularFile, MAX_IN_MEMORY_FILE_BYTES } from "../../lib/regular-file-snapshot.js";
 import { executionValueDigest as processExecutionValueDigest } from "../../lib/process-execution-values.js";
 import { CanonicalPromptResponseAdoption, CanonicalPromptResponseContributionSelection } from "./prompt-response-adoption.js";
 import { CombinedAdmission } from "./combined-admission.js";
@@ -2262,7 +2264,7 @@ class CanonicalStepRuntimeLog {
 function specRecordAt(location) {
   try {
     return new CurrentFlowSpecRecord(
-      JSON.parse(fs.readFileSync(location.specFile, "utf8")),
+      JSON.parse(captureRegularFile(location.specFile, { label: "managed Flow artifact", maxBytes: MAX_IN_MEMORY_FILE_BYTES, requireSingleLink: true }).text()),
       { specId: location.specId.toString() },
     );
   } catch (cause) {
@@ -9924,8 +9926,8 @@ export class CanonicalFlowManagerStore {
     const metadata = new CanonicalStepRuntimeLog({ ...runtimeLog, nodeId: node.id });
     const artifact = FLOW_ARTIFACT_CONTRACTS.resolve("runtime.step-metadata", { stepId: node.id });
     const target = location.resolve(artifact.relativePath);
-    fs.mkdirSync(path.dirname(target), { recursive: true, mode: 0o755 });
-    return new AtomicFile(target, { phaseNamespace: "canonical-step-runtime-metadata" })
+    const directoryAuthority = location.repositoryAuthority.descendant(path.dirname(target), { create: true, creationMode: 0o755 });
+    return new AtomicFile(target, { phaseNamespace: "canonical-step-runtime-metadata", directoryAuthority })
       .write(Buffer.from(`${JSON.stringify(metadata.toJSON(), null, 2)}\n`, "utf8"));
   }
 
@@ -10438,7 +10440,7 @@ export class CanonicalFlowManagerStore {
     return Object.freeze({
       descriptor: Object.freeze(descriptor.toJSON()),
       relativePath: artifact.relativePath,
-      bytes: Buffer.from(fs.readFileSync(location.resolve(artifact.relativePath))),
+      bytes: Buffer.from(captureRegularFile(location.resolve(artifact.relativePath), { label: "managed Flow artifact", maxBytes: MAX_IN_MEMORY_FILE_BYTES, requireSingleLink: true }).bytes),
     });
   }
 
@@ -10479,7 +10481,7 @@ export class CanonicalFlowManagerStore {
     return Object.freeze({
       descriptor: Object.freeze(descriptor.toJSON()),
       relativePath: requestedPath,
-      bytes: Buffer.from(fs.readFileSync(location.resolve(requestedPath))),
+      bytes: Buffer.from(captureRegularFile(location.resolve(requestedPath), { label: "managed Flow artifact", maxBytes: MAX_IN_MEMORY_FILE_BYTES, requireSingleLink: true }).bytes),
     });
   }
 
@@ -10787,7 +10789,7 @@ export class CanonicalFlowManagerStore {
     if (view !== null) return Buffer.from(view.readCatalogedArtifact(descriptor));
     const location = this.location(specId);
     location.assertAuthority(artifact.relativePath, { mustExist: true });
-    return Buffer.from(fs.readFileSync(location.resolve(artifact.relativePath)));
+    return Buffer.from(captureRegularFile(location.resolve(artifact.relativePath), { label: "managed Flow artifact", maxBytes: MAX_IN_MEMORY_FILE_BYTES, requireSingleLink: true }).bytes);
   }
 
   #commandPublicationWrites(commandResult) {

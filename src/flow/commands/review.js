@@ -19,6 +19,9 @@ import { readRuntimeResource } from "../../lib/runtime-package.js";
  */
 
 import fs from "fs";
+import { AtomicFile } from "../../lib/atomic-file.js";
+import { RealDirectoryAuthority } from "../../lib/real-directory-authority.js";
+import { captureRegularFile, DEFAULT_MAX_FILE_BYTES } from "../../lib/regular-file-snapshot.js";
 import path from "path";
 import crypto from "crypto";
 import { parseArgs, PKG_DIR } from "../../lib/cli.js";
@@ -526,14 +529,9 @@ function canonicalDraftReviewSource(outputDirectory) {
 }
 
 function canonicalDraftSnapshot(source, flow, phase) {
-  const stat = fs.lstatSync(source.sourcePath);
-  if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1) {
-    throw new Error("canonical draft review source must be a regular unlinked file");
-  }
-  const snapshot = new DraftArtifactSnapshot({
-    filePath: source.sourcePath,
-    bytes: fs.readFileSync(source.sourcePath),
-  });
+  const file = captureRegularFile(source.sourcePath, { label: "canonical draft review source", maxBytes: DEFAULT_MAX_FILE_BYTES,
+    requireSingleLink: true });
+  const snapshot = new DraftArtifactSnapshot({ filePath: source.sourcePath, bytes: file.bytes });
   source.revision.assertFlow(flow);
   source.revision.assertReviewSource(phase);
   if (!source.revision.matchesSnapshot(snapshot)) {
@@ -1200,7 +1198,7 @@ function writeReviewMd(root, flow, results) {
   const specDir = reviewOutputDirectory();
   const reviewPath = path.join(specDir, "review.md");
   if (reviewArtifactWritePolicy.enabled) {
-    fs.writeFileSync(reviewPath, formatReviewMd(results));
+    new AtomicFile(reviewPath).write(formatReviewMd(results));
   }
   return reviewPath;
 }
@@ -2405,7 +2403,7 @@ function resolveTaskReviewSpec(taskSpecPath) {
   if (!fs.existsSync(absPath)) {
     throw new Error(`task spec not found: ${relPath}`);
   }
-  const content = fs.readFileSync(absPath, "utf8");
+  const content = captureRegularFile(absPath, { label: "review source", maxBytes: DEFAULT_MAX_FILE_BYTES }).text();
   const inputs = canonicalTaskReviewInputs();
   const sourceScope = canonicalTaskReviewSourceScope(inputs);
   const fileMap = canonicalTaskReviewFileMap(inputs);
@@ -2465,8 +2463,8 @@ function proposalSuccessPayload(proposals) {
 function persistLoopFinalArtifacts({ specDir, proposals, requirementIds }) {
   if (!specDir || !reviewArtifactWritePolicy.enabled) return;
   const jsonText = loopProposalsToImplReviewJson(proposals, requirementIds);
-  fs.writeFileSync(path.join(specDir, "impl-review.json"), `${jsonText}\n`);
-  fs.writeFileSync(path.join(specDir, "review.md"), formatImplReviewMd(new ImplReviewArtifact(JSON.parse(jsonText))));
+  new AtomicFile(path.join(specDir, "impl-review.json")).write(`${jsonText}\n`);
+  new AtomicFile(path.join(specDir, "review.md")).write(formatImplReviewMd(new ImplReviewArtifact(JSON.parse(jsonText))));
 }
 
 function toolingFailureResult(failure) {
@@ -2748,9 +2746,9 @@ async function runSingleShotImplReviewWithDependencies({ specDir, reviewText }) 
   if (!reviewArtifactWritePolicy.enabled) {
     return { changed: ["review.md", "impl-review.json"] };
   }
-  fs.mkdirSync(specDir, { recursive: true });
-  fs.writeFileSync(path.join(specDir, "impl-review.json"), `${reviewText}\n`);
-  fs.writeFileSync(path.join(specDir, "review.md"), "# Code Review Results\n\n");
+  RealDirectoryAuthority.resolve(specDir, { create: true });
+  new AtomicFile(path.join(specDir, "impl-review.json")).write(`${reviewText}\n`);
+  new AtomicFile(path.join(specDir, "review.md")).write("# Code Review Results\n\n");
   return { changed: ["review.md", "impl-review.json"] };
 }
 
@@ -2758,9 +2756,9 @@ async function runNonImplReviewWithDependencies({ phase, specDir, reviewText }) 
   if (!reviewArtifactWritePolicy.enabled) {
     return { changed: [`${phase}-review.json`] };
   }
-  fs.mkdirSync(specDir, { recursive: true });
+  RealDirectoryAuthority.resolve(specDir, { create: true });
   const basename = `${phase}-review.json`;
-  fs.writeFileSync(path.join(specDir, basename), `${reviewText}\n`);
+  new AtomicFile(path.join(specDir, basename)).write(`${reviewText}\n`);
   return { changed: [basename] };
 }
 
@@ -3078,13 +3076,13 @@ function collectTestFiles(root, specDir, { sourceDirectory = null, sourceTopolog
  * Recursively collect test files from a directory.
  */
 function collectTestsRecursive(dir, baseDir, fileMap, topology) {
-  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+  for (const entry of new RealDirectoryAuthority(dir).entries({ withFileTypes: true })) {
     const full = path.join(dir, entry.name);
     if (entry.isDirectory()) {
       collectTestsRecursive(full, baseDir, fileMap, topology);
     } else if (/\.(test|spec)\.(js|ts|mjs)$/.test(entry.name)) {
       const relName = path.relative(baseDir, full);
-      const content = fs.readFileSync(full, "utf8");
+      const content = captureRegularFile(full, { label: "review test source", maxBytes: DEFAULT_MAX_FILE_BYTES }).text();
       fileMap.set(relName, { name: relName, content, source: topology.sourcePath(relName) });
     }
   }
@@ -3912,8 +3910,8 @@ function applyTestFixes(text, root, specDir) {
       throw new Error(`test review fix attempted to write outside ${path.relative(root, allowedRoot)}: ${filePath}`);
     }
     const dir = path.dirname(absPath);
-    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(absPath, codeMatch[1]);
+    if (!fs.existsSync(dir)) RealDirectoryAuthority.resolve(dir, { create: true });
+    new AtomicFile(absPath).write(codeMatch[1]);
     written.push(filePath);
   }
   return written;
@@ -3975,7 +3973,7 @@ function formatTestReviewMd(reviewArtifact) {
 
 function writeTestReviewArtifacts({ root, specDir, reviewArtifact, coverageArtifact }) {
   const reviewDir = path.resolve(root, specDir);
-  if (reviewArtifactWritePolicy.enabled) fs.mkdirSync(reviewDir, { recursive: true });
+  if (reviewArtifactWritePolicy.enabled) RealDirectoryAuthority.resolve(reviewDir, { create: true });
   const coveragePath = path.join(reviewDir, TEST_COVERAGE_JSON_FILE);
   const reviewJsonPath = path.join(reviewDir, TEST_REVIEW_JSON_FILE);
   const reviewMdPath = path.join(reviewDir, "test-review.md");
@@ -4014,7 +4012,7 @@ function writeTestReviewArtifacts({ root, specDir, reviewArtifact, coverageArtif
 
 function writeTestCoverageArtifact({ root, specDir, coverageArtifact }) {
   const reviewDir = path.resolve(root, specDir);
-  if (reviewArtifactWritePolicy.enabled) fs.mkdirSync(reviewDir, { recursive: true });
+  if (reviewArtifactWritePolicy.enabled) RealDirectoryAuthority.resolve(reviewDir, { create: true });
   const coveragePath = path.join(reviewDir, TEST_COVERAGE_JSON_FILE);
   writeJsonArtifact(coveragePath, coverageArtifact);
   return path.relative(root, coveragePath).split(path.sep).join("/");
@@ -5125,7 +5123,7 @@ export class DraftReviewCandidateReducer extends PromptBatchReducer {
 
 function writeJsonArtifact(filePath, artifact) {
   if (reviewArtifactWritePolicy.enabled) {
-    fs.writeFileSync(filePath, JSON.stringify(artifact, null, 2) + "\n");
+    new AtomicFile(filePath).write(JSON.stringify(artifact, null, 2) + "\n");
   }
 }
 
@@ -5134,7 +5132,7 @@ function reviewHistoryAttemptNumber(specDir, phase) {
   if (!fs.existsSync(historyDir)) return 1;
   let max = 0;
   const prefix = `${phase}-attempt-`;
-  for (const name of fs.readdirSync(historyDir)) {
+  for (const name of new RealDirectoryAuthority(historyDir).entries()) {
     if (!name.startsWith(prefix)) continue;
     const match = /^(.+)-attempt-(\d{3})\./.exec(name);
     if (!match) continue;
@@ -5213,7 +5211,7 @@ export function writeReviewAttemptHistory({ specDir, phase, latestBasename, arti
   const attempt = attemptNumber || reviewHistoryAttemptNumber(specDir, phase);
   const ext = latestBasename.endsWith(".md") ? "md" : "json";
   const historyDir = path.join(specDir, "review-history");
-  if (reviewArtifactWritePolicy.enabled) fs.mkdirSync(historyDir, { recursive: true });
+  if (reviewArtifactWritePolicy.enabled) RealDirectoryAuthority.resolve(historyDir, { create: true });
   const latestPath = path.join(specDir, latestBasename);
   const historyPath = path.join(historyDir, `${phase}-attempt-${String(attempt).padStart(3, "0")}.${ext}`);
   const normalizedHistoryPath = path.join(historyDir, `${phase}-attempt-${String(attempt).padStart(3, "0")}.json`);
@@ -5232,8 +5230,8 @@ export function writeReviewAttemptHistory({ specDir, phase, latestBasename, arti
   }
   const text = content == null ? "" : String(content);
   if (reviewArtifactWritePolicy.enabled) {
-    fs.writeFileSync(latestPath, text);
-    fs.writeFileSync(historyPath, text);
+    new AtomicFile(latestPath).write(text);
+    new AtomicFile(historyPath).write(text);
   }
   writeJsonArtifact(normalizedHistoryPath, {
     version: 1,

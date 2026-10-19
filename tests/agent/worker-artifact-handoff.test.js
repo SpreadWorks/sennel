@@ -25,6 +25,7 @@ import { Container } from "../../src/lib/container.js";
 import { FlowManager } from "../../src/lib/flow-manager.js";
 import { Logger } from "../../src/lib/log.js";
 import { ProviderRegistry } from "../../src/lib/provider.js";
+import { TemporaryPaths } from "../../src/lib/temporary-paths.js";
 import { FLOW_COMMANDS } from "../../src/flow/registry.js";
 import {
   FlowArtifactAttemptHistory,
@@ -208,6 +209,7 @@ function installSennelWrapper(executionRoot) {
 }
 
 function realCodexAgent({ mainRoot, executionRoot, flowManager, profileKey = "codex/gpt-5.6-sol-medium" }) {
+  const logDir = new TemporaryPaths(mainRoot).logs();
   return new Agent({
     config: {
       agent: {
@@ -216,9 +218,9 @@ function realCodexAgent({ mainRoot, executionRoot, flowManager, profileKey = "co
         retryCount: 0,
       },
     },
-    paths: { root: executionRoot, agentWorkDir: path.join(executionRoot, ".tmp") },
+    paths: { root: executionRoot, repositoryRoot: mainRoot, agentWorkDir: path.join(executionRoot, ".tmp"), logDir },
     registry: new ProviderRegistry(),
-    logger: new Logger({ logDir: path.join(executionRoot, ".tmp", "logs"), enabled: false }),
+    logger: new Logger({ logDir, enabled: false }),
     flowManager,
   });
 }
@@ -239,19 +241,20 @@ function realAgentTestConfig() {
   };
 }
 
-function configuredRealAgent({ executionRoot, flowManager, config }) {
+function configuredRealAgent({ mainRoot, executionRoot, flowManager, config }) {
+  const logDir = new TemporaryPaths(mainRoot).logs();
   return new Agent({
     config,
-    paths: { root: executionRoot, agentWorkDir: path.join(executionRoot, ".tmp") },
+    paths: { root: executionRoot, repositoryRoot: mainRoot, agentWorkDir: path.join(executionRoot, ".tmp"), logDir },
     registry: new ProviderRegistry(config.agent?.providers),
-    logger: new Logger({ logDir: path.join(executionRoot, ".tmp", "logs"), enabled: false }),
+    logger: new Logger({ logDir, enabled: false }),
     flowManager,
   });
 }
 
 function flowCommandContainer({ root, mainRoot = root, inWorktree = false, flowManager, config, agent }) {
   const value = new Container();
-  value.register("paths", { root, agentWorkDir: path.join(root, ".tmp") });
+  value.register("paths", { root, repositoryRoot: mainRoot, agentWorkDir: path.join(root, ".tmp"), logDir: new TemporaryPaths(mainRoot).logs() });
   value.register("mainRoot", mainRoot);
   value.register("config", config);
   value.register("inWorktree", inWorktree);
@@ -839,7 +842,7 @@ describe("real agent worker artifact handoff", { timeout: 480_000 }, () => {
       flowManager.updateStepStatus({ stepId: `${taskId}-review`, requestedStatus: "in_progress" }, { specId });
 
       const agent = recordAgentDiagnostics(
-        configuredRealAgent({ executionRoot: root, flowManager, config }),
+        configuredRealAgent({ mainRoot: root, executionRoot: root, flowManager, config }),
         diagnosticPath,
         "task-review-triage-repair",
         () => ({ source: fs.readFileSync(sourcePath, "utf8") }),

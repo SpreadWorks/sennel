@@ -174,6 +174,7 @@ class PriorSpecWorkerRuntime {
     // dispatcher. Both snapshots otherwise execute the same production code.
     fs.appendFileSync(path.join(this.root, "src/lib/runtime-package.js"), "\n// Prior Spec worker runtime fixture.\n");
     fs.cpSync(path.join(sourceRoot, "tests/support"), path.join(this.root, "tests/support"), { recursive: true });
+    fs.cpSync(path.join(sourceRoot, "tests/runner"), path.join(this.root, "tests/runner"), { recursive: true });
     for (const name of ["test-environment.js", "test-temporary-root.js"]) {
       fs.copyFileSync(path.join(sourceRoot, "tests", name), path.join(this.root, "tests", name));
     }
@@ -220,8 +221,8 @@ export class SpecPhaseScenario {
     largeSpecFile = false, overlongAcceptance = false, largeRepairValues = false, reopenPlanning = false,
     interruptTriage = false, migrateRuntime = false } = {},
     { seed = null, strictSeed = false } = {}) {
-    const root = seed ? new SeedWorkRoot(seed.root, { prefix: "sennel-spec-phase-case-" }).root
-      : fixtureRepository("spec-artifact-scenario-");
+    const seedClone = seed ? new SeedWorkRoot(seed.root, { prefix: "sennel-spec-phase-case-" }) : null;
+    const root = seedClone?.root ?? fixtureRepository("spec-artifact-scenario-");
     let retainRoot = false;
     let gateAgentLookup = null;
     let reviewProcess = null;
@@ -1219,7 +1220,10 @@ export class SpecPhaseScenario {
       reviewProcess?.mock.restore();
       gateAgentLookup?.mock.restore();
       priorRuntime?.remove();
-      if (!retainRoot) removeTmpDir(root);
+      if (!retainRoot) {
+        if (seedClone) seedClone.cleanup();
+        else removeTmpDir(root);
+      }
     }
   }
 }

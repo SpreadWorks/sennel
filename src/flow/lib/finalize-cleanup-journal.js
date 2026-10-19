@@ -3,6 +3,8 @@ import path from "node:path";
 import crypto from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { AtomicJsonFile } from "../../lib/atomic-json-file.js";
+import { RealDirectoryAuthority } from "../../lib/real-directory-authority.js";
+import { captureRegularFile } from "../../lib/regular-file-snapshot.js";
 import { PRODUCT } from "../../lib/product.js";
 import { TemporaryPaths } from "../../lib/temporary-paths.js";
 import { DEFAULT_FLOW_SPEC_DIR, FlowSpecRoot, flowStateSpecLocation } from "../../lib/flow-workspace.js";
@@ -176,16 +178,14 @@ export function pathExistsStrict(filePath) {
 
 export function assertPointerReality(reportRoot, specId) {
   const pointerPath = path.join(reportRoot, PRODUCT.managedPath("last-finalized-spec"));
-  let stat;
+  let snapshot;
   try {
-    stat = fs.lstatSync(pointerPath);
+    snapshot = captureRegularFile(pointerPath, { label: "finalize persisted pointer reality", maxBytes: 1024 * 1024,
+      requireSingleLink: true });
   } catch (error) {
     throw new Error(`finalize persisted pointer reality is unavailable: ${error.message}`, { cause: error });
   }
-  if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1) {
-    throw new Error("finalize persisted pointer reality is not one real file");
-  }
-  if (fs.readFileSync(pointerPath, "utf8").trim() !== specId) {
+  if (snapshot.text().trim() !== specId) {
     throw new Error("finalize persisted pointer reality targets a different spec");
   }
 }
@@ -228,7 +228,7 @@ export class SharedFinalizeCleanupJournal {
     if (readOnly && !pathExistsStrict(path.dirname(journalPath))) {
       return new SharedFinalizeCleanupJournal({ file: null, value: null });
     }
-    if (!readOnly) fs.mkdirSync(path.dirname(journalPath), { recursive: true, mode: 0o755 });
+    if (!readOnly) RealDirectoryAuthority.resolve(path.dirname(journalPath), { create: true });
     const file = new AtomicJsonFile(journalPath);
     const stored = file.read(null);
     if (stored) {
@@ -559,20 +559,6 @@ const AUTO_RESCUE_CLEANUP_PHASES = new Set([
   "cleanup-failed",
   "completed",
 ]);
-
-function ensureRealDirectory(directory) {
-  const parent = path.dirname(directory);
-  if (parent !== directory && !fs.existsSync(parent)) ensureRealDirectory(parent);
-  try {
-    fs.mkdirSync(directory);
-  } catch (error) {
-    if (error.code !== "EEXIST") throw error;
-  }
-  const stat = fs.lstatSync(directory);
-  if (!stat.isDirectory() || stat.isSymbolicLink() || fs.realpathSync(directory) !== path.resolve(directory)) {
-    throw new Error(`finalize teardown recovery authority must be a real directory: ${directory}`);
-  }
-}
 
 export class AutoRescueAbortFailure {
   constructor({
@@ -915,23 +901,14 @@ export class AutoRescueCleanupStore {
     this.identity = identity;
     const token = crypto.createHash("sha256").update(JSON.stringify(identity)).digest("hex");
     this.directory = path.join(identity.mainRepoPath, ".git", "sennel", "recovery", "auto-rescue");
-    if (!readOnly) ensureRealDirectory(this.directory);
+    if (!readOnly) RealDirectoryAuthority.resolve(this.directory, { create: true });
     this.path = path.join(this.directory, `${token}.json`);
     this.file = readOnly && !pathExistsStrict(this.directory) ? null : new AtomicJsonFile(this.path);
   }
 
   load() {
-    let stat;
-    try {
-      stat = fs.lstatSync(this.path);
-    } catch (error) {
-      if (error.code === "ENOENT") return null;
-      throw error;
-    }
-    if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1 || fs.realpathSync(this.path) !== this.path) {
-      throw new Error(`auto-rescue cleanup journal must be one real non-hardlinked file: ${this.path}`);
-    }
-    return AutoRescueCleanupJournal.fromStored(this.identity, this.file.read(null));
+    const stored = this.file?.read(null) ?? null;
+    return stored === null ? null : AutoRescueCleanupJournal.fromStored(this.identity, stored);
   }
 
   write(journal) {
@@ -939,28 +916,7 @@ export class AutoRescueCleanupStore {
   }
 
   remove() {
-    fs.unlinkSync(this.path);
-    const descriptor = fs.openSync(this.directory, "r");
-    let primaryError = null;
-    try {
-      fs.fsyncSync(descriptor);
-    } catch (error) {
-      primaryError = error;
-    } finally {
-      try {
-        fs.closeSync(descriptor);
-      } catch (cleanupError) {
-        if (primaryError) {
-          throw new AggregateError(
-            [primaryError, cleanupError],
-            "auto-rescue journal removal and descriptor cleanup both failed",
-            { cause: primaryError },
-          );
-        }
-        throw cleanupError;
-      }
-    }
-    if (primaryError) throw primaryError;
+    return this.file.remove();
   }
 }
 

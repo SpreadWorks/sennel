@@ -1,5 +1,6 @@
-import { cpSync, existsSync, rmSync } from "node:fs";
-import { createTmpDir } from "./tmp-dir.js";
+import { cpSync, existsSync } from "node:fs";
+import { join } from "node:path";
+import { createTmpDir, removeTmpDir } from "./tmp-dir.js";
 import { performance } from "node:perf_hooks";
 
 /** Optional test diagnostics, kept outside all canonical artifacts. */
@@ -30,11 +31,14 @@ export class SeedCleanupScope {
 }
 
 export class SeedWorkRoot {
+  #directory;
+
   constructor(seed, { prefix = "sennel-test-", parent, copy = cpSync } = {}) {
     if (!existsSync(seed)) throw new Error(`immutable seed does not exist: ${seed}`);
     if (!prefix.startsWith("sennel-")) throw new Error("test root prefix must be namespaced");
     this.seed = seed;
-    this.root = createTmpDir(prefix, { parent });
+    this.#directory = createTmpDir(prefix, { parent });
+    this.root = join(this.#directory, "work");
     const started = performance.now();
     try {
       copy(seed, this.root, { recursive: true, force: false, errorOnExist: true });
@@ -49,7 +53,7 @@ export class SeedWorkRoot {
 
   cleanup() {
     const started = performance.now();
-    rmSync(this.root, { recursive: true, force: true });
+    removeTmpDir(this.#directory);
     this.cleanupDurationMs = performance.now() - started;
     observeSeedTiming("root-cleanup", this.cleanupDurationMs);
   }

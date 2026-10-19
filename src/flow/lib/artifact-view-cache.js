@@ -7,9 +7,9 @@
  * warning after successful rendering rather than as a Flow failure.
  */
 
-import fs from "node:fs";
 import path from "node:path";
 import { AtomicFile } from "../../lib/atomic-file.js";
+import { RealDirectoryAuthority } from "../../lib/real-directory-authority.js";
 import { FLOW_ARTIFACT_VIEW_REGISTRY } from "./artifact-view-registry.js";
 import { ArtifactFullView } from "./artifact-view-renderer.js";
 import { ArtifactViewTarget, artifactViewRuntimeDirectory } from "./artifact-view-reader.js";
@@ -230,9 +230,9 @@ export class ArtifactViewCache {
   #ensureDirectory() {
     this.target.location.assertAuthority(null, { mustExist: true });
     const runtime = this.target.location.resolve(".runtime");
-    fs.mkdirSync(runtime, { recursive: true, mode: 0o755 });
+    RealDirectoryAuthority.resolve(runtime, { create: true });
     this.target.location.assertAuthority(".runtime", { mustExist: true });
-    fs.mkdirSync(this.directory, { recursive: true, mode: 0o755 });
+    RealDirectoryAuthority.resolve(this.directory, { create: true });
     this.target.location.assertAuthority(path.posix.join(".runtime", "views"), { mustExist: true });
   }
 }

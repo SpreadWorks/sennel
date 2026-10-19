@@ -29,6 +29,7 @@ import { WorkerArtifactHandoffCoordinator } from "../../../src/flow/lib/worker-a
 import { activateNonBlockingPolicy, decisionContextForActiveFlow } from "../../../src/flow/lib/nonblocking.js";
 import { recordNonBlockingDecision } from "../../../src/flow/lib/nonblocking-decision.js";
 import { ImplPhasePublicationObserver } from "../../support/infrastructure/impl-phase-publication-observer.js";
+import { interruptChildAtCheckpoint } from "../../support/infrastructure/interrupted-child.js";
 
 function task(id) { return { id, title: `Implement ${id}`, goal: "Implement R1", origin: "plan", added_round: 0, status: "pending" }; }
 function taskScenario(t, options) {
@@ -429,7 +430,7 @@ for (const kind of ["file-read-failed", "context-limit"]) {
   });
 }
 
-for (const interruption of ["before-json-rename", "before-json-directory-fsync"]) {
+for (const interruption of ["before-json-rename", "before-json-readback"]) {
   test(`I09 source settlement ${interruption} retains its exact commit frontier and never reapplies a repair`, async (t) => {
     const scenario = taskScenario(t);
     await scenario.publishReview([taskFinding()]);
@@ -442,22 +443,27 @@ for (const interruption of ["before-json-rename", "before-json-directory-fsync"]
     t.after(() => removeTmpDir(captureRoot));
     const captureFile = path.join(captureRoot, "original-source-save.json");
     const captureNonce = randomUUID();
+    const checkpoint = `catalog-interruption-${randomUUID()}`;
     const child = `
       import { FlowManager } from ${JSON.stringify(new URL("../../../src/lib/flow-manager.js", import.meta.url).href)};
       import { WorkerArtifactHandoffCoordinator } from ${JSON.stringify(new URL("../../../src/flow/lib/worker-artifact-handoff.js", import.meta.url).href)};
       import { ImplPhasePublicationObserver } from ${JSON.stringify(new URL("../../support/infrastructure/impl-phase-publication-observer.js", import.meta.url).href)};
       import { mock } from 'node:test';
+      import fs from 'node:fs';
       new ImplPhasePublicationObserver({ mock, after() {} }, { sourceCapture: {
         filePath: process.env.SCENARIO_CAPTURE, nonce: process.env.SCENARIO_CAPTURE_NONCE } });
       const root = process.env.SCENARIO_ROOT;
       const manager = new FlowManager({ root, mainRoot: root, inWorktree: false,
-        versionStoreFaultInjector: ({ phase, filePath }) => { if (phase === process.env.SCENARIO_PHASE && filePath === process.env.SCENARIO_CATALOG) process.kill(process.pid, 'SIGKILL'); } });
+        versionStoreFaultInjector: ({ phase, filePath }) => { if (phase === process.env.SCENARIO_PHASE && filePath === process.env.SCENARIO_CATALOG) {
+          fs.writeSync(1, process.env.SCENARIO_CHECKPOINT);
+          Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0);
+        } } });
       new WorkerArtifactHandoffCoordinator().recoverPending({ ctx: { root, executionRoot: root, mainRoot: root, specId: process.env.SCENARIO_SPEC, flowManager: manager } });
     `;
-    const stopped = spawnSync(process.execPath, ["--import", SENNEL_BOOTSTRAP, "--input-type=module", "--eval", child], { encoding: "utf8", env: { ...process.env,
+    const stopped = await interruptChildAtCheckpoint(process.execPath, ["--import", SENNEL_BOOTSTRAP, "--input-type=module", "--eval", child], { checkpoint, env: { ...process.env,
       SCENARIO_ROOT: scenario.root, SCENARIO_SPEC: scenario.specId, SCENARIO_PHASE: interruption, SCENARIO_CATALOG: catalogFile,
-      SCENARIO_CAPTURE: captureFile, SCENARIO_CAPTURE_NONCE: captureNonce } });
-    assert.equal(stopped.signal, "SIGKILL", stopped.stderr);
+      SCENARIO_CAPTURE: captureFile, SCENARIO_CAPTURE_NONCE: captureNonce, SCENARIO_CHECKPOINT: checkpoint } });
+    assert.equal(stopped.interrupted, true, stopped.stderr);
     const captureDigest = scenario.publicationObserver.importSourceCapture({ filePath: captureFile,
       nonce: captureNonce, processId: stopped.pid, executionRoot: scenario.root });
     assert.match(captureDigest, /^[a-f0-9]{64}$/);

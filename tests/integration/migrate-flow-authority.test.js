@@ -12,11 +12,12 @@ import { assertMigrationFlowAuthority, MigrationFlowAuthorityPreflight, Migratio
 import { OfflineMigrationDirectorySnapshot } from "../../src/lib/offline-migration-transaction.js";
 import { WorktreeFlowBindingStore, WorktreeFlowIdentity } from "../../src/lib/worktree-flow-binding.js";
 import { createTmpDir, removeTmpDir, writeJson } from "../support/builders/tmp-dir.js";
-import { SeedWorkRoot } from "../support/builders/seed-work-root.js";
+import { SeedCleanupScope, SeedWorkRoot } from "../support/builders/seed-work-root.js";
 import { StoredFlowPersistenceSnapshot } from "../support/assertions/canonical-persistence.js";
 import { SpecsMigrationRevisionOne, inspectFlowMigrationRequirements } from "../../src/lib/specs-migration.js";
 
 const roots = [];
+const seedCloneScope = new SeedCleanupScope(afterEach);
 const SPEC_ID = "001-selected";
 const definition = buildCurrentFlowDefinition();
 
@@ -49,7 +50,7 @@ function configuredHistoricalProject(claimRoot) {
   const copy = new SeedWorkRoot(path.resolve("tests/fixtures/legacy-activity-v1/project"), {
     prefix: "sennel-migration-authority-root-",
   });
-  roots.push(copy.root);
+  seedCloneScope.after(() => copy.cleanup());
   const specRoot = "plans/specs";
   const specId = "001-legacy-activity";
   fs.mkdirSync(path.join(copy.root, "plans"));

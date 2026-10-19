@@ -1,7 +1,7 @@
-import crypto from "crypto";
-import fs from "fs";
 import path from "path";
 import { DEFAULT_MAX_CHANGED_FILE_ENTRIES } from "../../lib/git-helpers.js";
+import { LogicalRelativePath, isNativePathWithin } from "../../lib/portable-path.js";
+import { visitRegularFileChunks } from "../../lib/regular-file-snapshot.js";
 import { compareText } from "./text-order.js";
 
 const REGRESSION_FILE_STATUSES = Object.freeze(new Set([
@@ -23,7 +23,6 @@ const CHANGED_FILE_KEYS = Object.freeze(new Set([
   "old_path",
 ]));
 const SHA256_FINGERPRINT_RE = /^[a-f0-9]{64}$/;
-const FILE_HASH_BUFFER_BYTES = 64 * 1024;
 
 function assertRecord(value, label) {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -57,10 +56,10 @@ function normalizeRepoRelativePath(value, label) {
   if (normalized === "." || normalized === ".." || normalized.startsWith("../")) {
     throw new Error(`${label} must be a non-empty relative path`);
   }
-  return normalized;
+  return new LogicalRelativePath(normalized, label).toString();
 }
 
-function normalizeSnapshotMetadata(input, allowedKeys, label) {
+function normalizeSnapshotMetadata(input, allowedKeys, label, { external = false } = {}) {
   assertRecord(input, label);
   assertKnownKeys(input, allowedKeys, label);
   if (!REGRESSION_FILE_STATUSES.has(input.status)) {
@@ -69,13 +68,15 @@ function normalizeSnapshotMetadata(input, allowedKeys, label) {
 
   const normalized = {
     status: input.status,
-    path: normalizeRepoRelativePath(input.path, `${label}.path`),
+    path: external ? normalizeRepoRelativePath(input.path, `${label}.path`)
+      : new LogicalRelativePath(input.path, `${label}.path`).toString(),
   };
   if (input.status === "renamed") {
     if (!Object.hasOwn(input, "old_path")) {
       throw new Error(`${label}.old_path is required for renamed entries`);
     }
-    normalized.old_path = normalizeRepoRelativePath(input.old_path, `${label}.old_path`);
+    normalized.old_path = external ? normalizeRepoRelativePath(input.old_path, `${label}.old_path`)
+      : new LogicalRelativePath(input.old_path, `${label}.old_path`).toString();
   } else if (Object.hasOwn(input, "old_path")) {
     throw new Error(`${label}.old_path is only valid for renamed entries`);
   }
@@ -104,8 +105,7 @@ function resolveSnapshotFile(root, relativePath) {
   }
   const absoluteRoot = path.resolve(root);
   const absolutePath = path.resolve(absoluteRoot, relativePath);
-  const relative = path.relative(absoluteRoot, absolutePath);
-  if (relative.startsWith("..") || path.isAbsolute(relative)) {
+  if (!isNativePathWithin(absoluteRoot, absolutePath) || absoluteRoot === absolutePath) {
     throw new Error(`regression snapshot path escapes repository root: ${relativePath}`);
   }
   return absolutePath;
@@ -113,23 +113,8 @@ function resolveSnapshotFile(root, relativePath) {
 
 function fingerprintFile(root, relativePath) {
   const absolutePath = resolveSnapshotFile(root, relativePath);
-  if (!fs.existsSync(absolutePath) || !fs.statSync(absolutePath).isFile()) {
-    throw new Error(`regression snapshot file is missing or not a file: ${relativePath}`);
-  }
-
-  const hash = crypto.createHash("sha256");
-  const buffer = Buffer.allocUnsafe(FILE_HASH_BUFFER_BYTES);
-  const fd = fs.openSync(absolutePath, "r");
-  try {
-    while (true) {
-      const bytesRead = fs.readSync(fd, buffer, 0, buffer.length, null);
-      if (bytesRead === 0) break;
-      hash.update(buffer.subarray(0, bytesRead));
-    }
-  } finally {
-    fs.closeSync(fd);
-  }
-  return hash.digest("hex");
+  return visitRegularFileChunks(absolutePath, { label: `regression snapshot file ${relativePath}`,
+    maxBytes: Number.MAX_SAFE_INTEGER - 1, visit() {} }).digest;
 }
 
 function compareSnapshots(left, right) {
@@ -156,7 +141,7 @@ export class RegressionFileSnapshot {
   }
 
   static fromChangedFile(root, input, label = "changed file") {
-    const metadata = normalizeSnapshotMetadata(input, CHANGED_FILE_KEYS, label);
+    const metadata = normalizeSnapshotMetadata(input, CHANGED_FILE_KEYS, label, { external: true });
     return new RegressionFileSnapshot({
       ...metadata,
       fingerprint: metadata.status === "deleted"

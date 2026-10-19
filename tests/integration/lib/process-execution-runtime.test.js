@@ -414,10 +414,10 @@ test("corrupt and symlink runtime records are rejected without writing replaceme
   }
 });
 
-test("uncertain fsync leaves durable transition marker and all later inspection refuses", async (t) => {
+test("unconfirmed publication leaves saved transition marker and all later inspection refuses", async (t) => {
   const options = fixture(t); let armed = false;
   const runtime = await ProcessExecutionRuntime.acquire({ ...options, faultInjector({ phase }) {
-    if (armed && phase === "before-runtime-directory-fsync") throw new Error("injected runtime fsync failure");
+    if (armed && phase === "before-runtime-readback") throw new Error("injected runtime readback failure");
   } });
   armed = true;
   await assert.rejects(runtime.reserveCall(), failure("PROCESS_EXECUTION_DURABILITY_UNCERTAIN"));

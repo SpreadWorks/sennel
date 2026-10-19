@@ -5,11 +5,21 @@ import path from "node:path";
 import { AtomicFile } from "./atomic-file.js";
 import { AtomicJsonFile } from "./atomic-json-file.js";
 import { PRODUCT } from "./product.js";
+import { RealDirectoryAuthority } from "./real-directory-authority.js";
+
+export class PluginConfigRevisionConflict extends Error {
+  constructor(filePath) {
+    super(`plugin config changed before commit or rollback: ${filePath}`);
+    this.name = "PluginConfigRevisionConflict";
+    this.code = "PLUGIN_CONFIG_REVISION_CONFLICT";
+  }
+}
 
 class PluginConfigUpdate {
   #originalBytes;
   #proposedBytes;
   #proposedValue;
+  #published = false;
 
   constructor(filePath, proposedValue) {
     if (typeof filePath !== "string" || filePath.trim() === "") {
@@ -21,7 +31,7 @@ class PluginConfigUpdate {
     this.filePath = path.resolve(filePath);
     this.#proposedValue = structuredClone(proposedValue);
     this.#proposedBytes = Buffer.from(`${JSON.stringify(this.#proposedValue, null, 2)}\n`);
-    this.#originalBytes = fs.existsSync(this.filePath) ? fs.readFileSync(this.filePath) : null;
+    this.#originalBytes = new AtomicFile(this.filePath).read(null);
   }
 
   get changed() {
@@ -29,29 +39,38 @@ class PluginConfigUpdate {
   }
 
   assertCurrent() {
-    const current = fs.existsSync(this.filePath) ? fs.readFileSync(this.filePath) : null;
+    this.#assertBytes(this.#originalBytes);
+  }
+
+  #assertBytes(expected) {
+    const current = new AtomicFile(this.filePath).read(null);
     const unchanged = current == null
-      ? this.#originalBytes == null
-      : this.#originalBytes != null && current.equals(this.#originalBytes);
-    if (!unchanged) {
-      const error = new Error(`plugin config changed before commit: ${this.filePath}`);
-      error.code = "PLUGIN_CONFIG_REVISION_CONFLICT";
-      throw error;
-    }
+      ? expected == null
+      : expected != null && current.equals(expected);
+    if (!unchanged) throw new PluginConfigRevisionConflict(this.filePath);
   }
 
   commit(faultInjector) {
     if (!this.changed) return;
     faultInjector({ phase: "config-commit", filePath: this.filePath });
-    new AtomicJsonFile(this.filePath, { faultInjector }).write(this.#proposedValue);
+    try {
+      new AtomicJsonFile(this.filePath, { faultInjector, commitGuard: () => this.assertCurrent() }).write(this.#proposedValue);
+      this.#published = true;
+    } catch (error) {
+      if (error.committedToVisibleName) this.#published = true;
+      throw error;
+    }
   }
 
   restore() {
+    if (!this.#published) return;
+    const writer = new AtomicFile(this.filePath, { commitGuard: () => this.#assertBytes(this.#proposedBytes) });
     if (this.#originalBytes == null) {
-      if (fs.existsSync(this.filePath)) new AtomicFile(this.filePath).remove();
-      return;
+      writer.remove();
+    } else {
+      writer.write(this.#originalBytes);
     }
-    new AtomicFile(this.filePath).write(this.#originalBytes);
+    this.#published = false;
   }
 }
 
@@ -119,7 +138,7 @@ export class PluginInstaller {
       throw new Error("PluginInstallation is required");
     }
     const pluginsRoot = path.join(installation.root, PRODUCT.managedPath("plugins"));
-    fs.mkdirSync(pluginsRoot, { recursive: true });
+    const pluginsAuthority = RealDirectoryAuthority.resolve(pluginsRoot, { create: true });
     const nonce = crypto.randomUUID();
     const destination = path.join(pluginsRoot, installation.pluginId);
     const staging = path.join(pluginsRoot, `.${installation.pluginId}.staging-${nonce}`);
@@ -130,6 +149,8 @@ export class PluginInstaller {
     try {
       installation.faultInjector({ phase: "copy", stagingPath: staging });
       installation.stagePackage(staging);
+      pluginsAuthority.assertStable();
+      new RealDirectoryAuthority(staging, { parentAuthority: pluginsAuthority }).assertStable();
 
       installation.faultInjector({ phase: "validation", stagingPath: staging });
       installation.validateStaging(staging);
@@ -145,6 +166,7 @@ export class PluginInstaller {
           destinationPath: destination,
           stagingPath: staging,
         });
+        pluginsAuthority.assertStable();
         fs.renameSync(destination, backup);
         backupCreated = true;
       }
@@ -154,6 +176,7 @@ export class PluginInstaller {
         destinationPath: destination,
         stagingPath: staging,
       });
+      pluginsAuthority.assertStable();
       fs.renameSync(staging, destination);
       swapped = true;
 

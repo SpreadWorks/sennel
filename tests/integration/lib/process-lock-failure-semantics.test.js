@@ -195,10 +195,10 @@ describe("ProcessLock", () => {
       if (target === holder.lockPath) ownerDescriptor = descriptor;
       return descriptor;
     };
-    fs.fstatSync = (descriptor) => {
-      const stat = originalFstat(descriptor);
+    fs.fstatSync = (descriptor, ...options) => {
+      const stat = originalFstat(descriptor, ...options);
       if (descriptor !== ownerDescriptor) return stat;
-      return { dev: stat.dev, ino: stat.ino + 1, size: stat.size, isFile: () => true };
+      return Object.assign(Object.create(Object.getPrototypeOf(stat)), stat, { ino: stat.ino + (typeof stat.ino === "bigint" ? 1n : 1) });
     };
     fs.closeSync = (descriptor) => {
       originalClose(descriptor);

@@ -9,11 +9,11 @@
  * @property {"worktree"|"branch"|"direct"} mode
  */
 
-import fs from "fs";
 import path from "path";
 import { managedDir } from "./config.js";
 import { runGit } from "./git-helpers.js";
 import { ACTIVE_FLOW_FILE } from "./flow-helpers.js";
+import { AtomicFile } from "./atomic-file.js";
 import { AtomicJsonFile } from "./atomic-json-file.js";
 import { FileLock } from "./file-lock.js";
 import { RealDirectoryAuthority } from "./real-directory-authority.js";
@@ -150,57 +150,18 @@ class ActiveFlowReadRaceError extends Error {
   }
 }
 
-function activeFlowPathStat(filePath) {
-  let stat;
-  try {
-    stat = fs.lstatSync(filePath);
-  } catch (error) {
-    if (error.code === "ENOENT") return null;
-    throw error;
-  }
-  if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1 || fs.realpathSync(filePath) !== path.resolve(filePath)) {
-    throw new Error(`active-flow authority must be one real non-hardlinked file: ${filePath}`);
-  }
-  return stat;
-}
-
 function readActiveFlowAuthorityOnce(filePath) {
-  const stat = activeFlowPathStat(filePath);
-  if (stat == null) return { revision: null, document: new ActiveFlowDocument() };
-  let descriptor;
-  try {
-    descriptor = fs.openSync(filePath, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0));
-  } catch (error) {
-    if (error.code === "ENOENT") return { revision: null, document: new ActiveFlowDocument() };
-    throw error;
+  let bytes;
+  try { bytes = new AtomicFile(filePath).read(null); }
+  catch (cause) {
+    if (cause.reason === "identity") throw new ActiveFlowReadRaceError(filePath);
+    throw cause;
   }
-  try {
-    const opened = fs.fstatSync(descriptor);
-    if (!opened.isFile() || opened.nlink > 1) {
-      throw new Error(`active-flow authority changed to a non-real file while reading: ${filePath}`);
-    }
-    if (opened.dev !== stat.dev || opened.ino !== stat.ino || opened.nlink === 0) {
-      throw new ActiveFlowReadRaceError(`active-flow authority identity changed while reading: ${filePath}`);
-    }
-    const bytes = fs.readFileSync(descriptor);
-    let value;
-    try {
-      value = JSON.parse(bytes.toString("utf8"));
-    } catch (error) {
-      throw new Error(`active-flow authority is malformed: ${error.message}`, { cause: error });
-    }
-    const document = ActiveFlowDocument.fromStored(value);
-    const visible = activeFlowPathStat(filePath);
-    if (visible == null || visible.dev !== opened.dev || visible.ino !== opened.ino) {
-      throw new ActiveFlowReadRaceError(filePath);
-    }
-    return {
-      revision: registryRevision(bytes),
-      document,
-    };
-  } finally {
-    fs.closeSync(descriptor);
-  }
+  if (bytes === null) return { revision: null, document: new ActiveFlowDocument() };
+  let value;
+  try { value = JSON.parse(bytes.toString("utf8")); }
+  catch (cause) { throw new Error(`active-flow authority is malformed: ${cause.message}`, { cause }); }
+  return { revision: registryRevision(bytes), document: ActiveFlowDocument.fromStored(value) };
 }
 
 function readActiveFlowAuthority(filePath) {
@@ -214,30 +175,6 @@ function readActiveFlowAuthority(filePath) {
   throw new ActiveFlowReadRaceError(filePath);
 }
 
-function removeDurably(filePath) {
-  fs.unlinkSync(filePath);
-  const descriptor = fs.openSync(path.dirname(filePath), "r");
-  let primaryError = null;
-  try {
-    fs.fsyncSync(descriptor);
-  } catch (error) {
-    primaryError = error;
-  } finally {
-    try {
-      fs.closeSync(descriptor);
-    } catch (cleanupError) {
-      if (primaryError) {
-        throw new AggregateError(
-          [primaryError, cleanupError],
-          `active-flow removal durability and descriptor cleanup both failed: ${filePath}`,
-          { cause: primaryError },
-        );
-      }
-      throw cleanupError;
-    }
-  }
-  if (primaryError) throw primaryError;
-}
 
 function runGitBoolean(args, predicate, contextLabel) {
   const res = runGit(args);
@@ -268,36 +205,7 @@ function branchExists(mainRoot, branch) {
 }
 
 function canonicalFlowExists(filePath) {
-  let stat;
-  try {
-    stat = fs.lstatSync(filePath);
-  } catch (error) {
-    if (error.code === "ENOENT") return false;
-    throw error;
-  }
-  if (
-    !stat.isFile()
-    || stat.isSymbolicLink()
-    || stat.nlink !== 1
-    || fs.realpathSync(filePath) !== path.resolve(filePath)
-  ) {
-    throw new Error(`active canonical flow authority must be one real non-hardlinked file: ${filePath}`);
-  }
-  const descriptor = fs.openSync(filePath, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0));
-  try {
-    const opened = fs.fstatSync(descriptor);
-    if (
-      !opened.isFile()
-      || opened.nlink !== 1
-      || opened.dev !== stat.dev
-      || opened.ino !== stat.ino
-    ) {
-      throw new Error(`active canonical flow authority changed while probing: ${filePath}`);
-    }
-  } finally {
-    fs.closeSync(descriptor);
-  }
-  return true;
+  return new AtomicFile(filePath).read(null) !== null;
 }
 
 function canonicalFlowStatePath(mainRoot, specRoot, specId) {
@@ -464,7 +372,7 @@ export class ActiveFlowRegistry {
       error.code = "ACTIVE_FLOW_REGISTRY_REVISION_CONFLICT";
       throw error;
     }
-    removeDurably(filePath);
+    new AtomicFile(filePath).remove();
   }
 
   #withMutationLock(body, { maintenanceOwnerToken = null, operationOwnerToken = null } = {}) {

@@ -60,6 +60,7 @@ const execFileAsync = promisify(execFile);
 const FLOW_MANAGER_MODULE = new URL("../../../src/lib/flow-manager.js", import.meta.url).href;
 const SET_RETRY_MODULE = new URL("../../../src/flow/lib/set-retry.js", import.meta.url).href;
 const retrySeedScope = new SeedCleanupScope(after);
+const seedCloneScope = new SeedCleanupScope(afterEach);
 const retrySeeds = new Map();
 
 afterEach(() => {
@@ -113,8 +114,9 @@ async function retryFixture({ nodeId = "impl-review", failureKind = "semantic" }
   const key = JSON.stringify([nodeId, failureKind]);
   if (!retrySeeds.has(key)) retrySeeds.set(key, produceRetryFixture({ nodeId, failureKind }));
   const seed = await retrySeeds.get(key);
-  const root = new SeedWorkRoot(seed.root, { prefix: "sennel-retry-case-" }).root;
-  roots.push(root);
+  const copy = new SeedWorkRoot(seed.root, { prefix: "sennel-retry-case-" });
+  seedCloneScope.after(() => copy.cleanup());
+  const root = copy.root;
   const manager = makeFlowManager(root);
   seed.assertClone(manager);
   const flow = CanonicalFlowFixture.fromExisting({ flowManager: manager, specId: seed.specId });

@@ -8,8 +8,9 @@
  * incompletion unambiguous.
  */
 
+import { LogicalRelativePath } from "./portable-path.js";
+
 const COMPONENT = /^[a-z][a-z0-9-]*$/;
-const SAFE_PATH = /^(?!\/)(?!.*(?:^|\/)\.\.?($|\/))(?:[^\\/]+\/)*[^\\/]+$/;
 const CLASSIFICATIONS = new Set(["converted", "preserved", "omitted", "relocatedTransient", "missingTransient", "generated"]);
 
 function requiredText(value, field) {
@@ -23,9 +24,7 @@ function positiveRevision(value, field = "migration revision") {
 }
 
 function safePath(value, field) {
-  const normalized = requiredText(value, field);
-  if (!SAFE_PATH.test(normalized)) throw new Error(`${field} must be a normalized relative path`);
-  return normalized;
+  return new LogicalRelativePath(value, field).toString();
 }
 
 /**

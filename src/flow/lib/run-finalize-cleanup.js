@@ -21,6 +21,9 @@ import fs from "fs";
 import { isDeepStrictEqual } from "node:util";
 import path from "path";
 import { TemporaryPaths } from "../../lib/temporary-paths.js";
+import { AtomicFile } from "../../lib/atomic-file.js";
+import { RealDirectoryAuthority, RealDirectoryOperationError } from "../../lib/real-directory-authority.js";
+import { captureRegularFile } from "../../lib/regular-file-snapshot.js";
 import { Envelope } from "../../lib/flow-envelope.js";
 import { getPorcelainV2Status, runGit, GitRefObservation, GitRefProbeError } from "../../lib/git-helpers.js";
 import { FlowCommand } from "./base-command.js";
@@ -1007,20 +1010,12 @@ class AutoRescueWorktreeAuthoritySource {
 
   capture(worktreePath, expectedHeadSha = null) {
     const resolvedWorktree = path.resolve(worktreePath);
-    const worktreeStat = fs.lstatSync(resolvedWorktree);
-    if (
-      !worktreeStat.isDirectory()
-      || worktreeStat.isSymbolicLink()
-      || fs.realpathSync(resolvedWorktree) !== resolvedWorktree
-    ) {
-      throw new Error("auto-rescue worktree generation is not a real directory");
-    }
+    const worktreeAuthority = new RealDirectoryAuthority(resolvedWorktree);
+    worktreeAuthority.assertStable();
     const dotGitPath = path.join(resolvedWorktree, ".git");
-    const dotGitStat = fs.lstatSync(dotGitPath);
-    if (!dotGitStat.isFile() || dotGitStat.isSymbolicLink() || dotGitStat.nlink !== 1) {
-      throw new Error("auto-rescue worktree Git pointer is not one real file");
-    }
-    const match = /^gitdir: (.+)\r?\n?$/.exec(fs.readFileSync(dotGitPath, "utf8"));
+    const dotGit = captureRegularFile(dotGitPath, { label: "auto-rescue worktree Git pointer", maxBytes: 1024 * 1024,
+      requireSingleLink: true, directoryAuthority: worktreeAuthority });
+    const match = /^gitdir: (.+)\r?\n?$/.exec(dotGit.text());
     if (!match) throw new Error("auto-rescue worktree Git pointer is malformed");
     const gitDirPath = path.resolve(path.dirname(dotGitPath), match[1]);
     const worktreesRoot = fs.realpathSync(path.join(this.mainRepoPath, ".git", "worktrees"));
@@ -1028,20 +1023,22 @@ class AutoRescueWorktreeAuthoritySource {
     if (path.dirname(realGitDirPath) !== worktreesRoot) {
       throw new Error("auto-rescue worktree Git directory is outside the repository authority");
     }
-    const gitDirStat = fs.lstatSync(realGitDirPath);
-    if (!gitDirStat.isDirectory() || gitDirStat.isSymbolicLink()) {
-      throw new Error("auto-rescue worktree Git directory is not a real directory");
-    }
-    const headSha = fs.readFileSync(path.join(realGitDirPath, "HEAD"), "utf8").trim();
+    const gitDirectoryAuthority = new RealDirectoryAuthority(realGitDirPath);
+    gitDirectoryAuthority.assertStable();
+    const headSha = captureRegularFile(path.join(realGitDirPath, "HEAD"),
+      { label: "auto-rescue worktree HEAD", maxBytes: 1024 * 1024, requireSingleLink: true,
+        directoryAuthority: gitDirectoryAuthority }).text().trim();
+    worktreeAuthority.assertStable();
+    gitDirectoryAuthority.assertStable();
     if (expectedHeadSha !== null && headSha !== expectedHeadSha) {
       throw new Error("auto-rescue worktree HEAD differs from the expected generation");
     }
     return new AutoRescueWorktreeAuthority({
-      worktreeDev: worktreeStat.dev,
-      worktreeIno: worktreeStat.ino,
+      worktreeDev: Number(worktreeAuthority.identity.dev),
+      worktreeIno: Number(worktreeAuthority.identity.ino),
       gitDirPath: realGitDirPath,
-      gitDirDev: gitDirStat.dev,
-      gitDirIno: gitDirStat.ino,
+      gitDirDev: Number(gitDirectoryAuthority.identity.dev),
+      gitDirIno: Number(gitDirectoryAuthority.identity.ino),
       headSha,
     });
   }
@@ -1253,7 +1250,7 @@ function completeAutoRescueCleanup(store, journal, outcome, runGitFn, worktreeAu
 
 function baseBranchIsCheckedOut(mainRepoPath, baseBranch) {
   try {
-    return fs.readFileSync(path.join(mainRepoPath, ".git", "HEAD"), "utf8").trim()
+    return new AtomicFile(path.join(mainRepoPath, ".git", "HEAD"), { maxBytes: 1024 * 1024 }).read(Buffer.alloc(0)).toString("utf8").trim()
       === `ref: refs/heads/${baseBranch}`;
   } catch (error) {
     if (error.code === "ENOENT") return false;
@@ -1432,8 +1429,9 @@ export function runDetachedAutoRescue({
   if (!addRes.ok) {
     if (tempWorktreePathFactory === null) {
       temporaryPaths.validate(tempWorktreePath);
-      try { fs.rmdirSync(tempWorktreePath); } catch (error) {
-        if (error.code !== "ENOENT" && error.code !== "ENOTEMPTY") throw error;
+      try { temporaryPaths.cleanup(tempWorktreePath, { recursive: false }); } catch (error) {
+        if (!(error instanceof RealDirectoryOperationError) || error.publicationUnknown
+          || !["ENOENT", "ENOTEMPTY"].includes(error.cause?.code)) throw error;
       }
     }
     const outcome = AutoRescueOutcome.failure("MAIN_REPO_LOCKED");

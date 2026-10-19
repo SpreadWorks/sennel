@@ -6,7 +6,9 @@ import { AtomicJsonFile } from "../../lib/atomic-json-file.js";
 import { createI18n } from "../../lib/i18n.js";
 import { AgentProviderAttemptObserver, AgentProviderAttemptAdmission, AgentProviderAttemptRecord } from "../../lib/agent-provider-attempt.js";
 import { DocumentationAgent } from "./documentation-agent.js";
-import { collectFiles, getFileStats } from "./scanner.js";
+import { collectFiles } from "./scanner.js";
+import { captureRegularFile, MAX_IN_MEMORY_FILE_BYTES } from "../../lib/regular-file-snapshot.js";
+import { RealDirectoryAuthority } from "../../lib/real-directory-authority.js";
 import { resolveDocumentationScanPatterns } from "./scan-patterns.js";
 import { resolveMultiChains } from "../../lib/presets.js";
 import { managedOutputDir } from "../../lib/config.js";
@@ -172,7 +174,7 @@ function askYesNo(prompt, { input, output, signal }) {
   });
 }
 
-function hashFile(file) { return getFileStats(file).hash; }
+function hashFile(file) { return captureRegularFile(file, { label: "documentation AI input", maxBytes: MAX_IN_MEMORY_FILE_BYTES }).digest; }
 
 class DocumentationAiSourceRevision {
   constructor(file) {
@@ -439,7 +441,7 @@ export class DocumentationAiExecutionSession extends AgentProviderAttemptObserve
     if (this.#externalCommands.size > 0) this.output.write(`${this.t("docsAi.externalUnobserved")}\n`);
     const reportPath = path.join(this.root, ".sennel", "output", "docs-ai-usage", `${this.runId}.json`);
     try {
-      fs.mkdirSync(path.dirname(reportPath), { recursive: true });
+      RealDirectoryAuthority.resolve(path.dirname(reportPath), { create: true });
       new AtomicJsonFile(reportPath).write(report);
       this.output.write(`${this.t("docsAi.reportPath", { path: reportPath })}\n`);
     } catch (failure) {

@@ -5,11 +5,13 @@ import { afterEach, describe, it } from "node:test";
 import { spawnSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
 
+import { interruptChildAtCheckpoint } from "../support/infrastructure/interrupted-child.js";
 import { createTmpDir, removeTmpDir, writeFile, writeJson } from "../support/builders/tmp-dir.js";
 import {
   ManagedOpenHandleInspector,
   LayoutMigrationRevisionOne,
 } from "../../src/lib/layout-migration.js";
+import { AtomicFile } from "../../src/lib/atomic-file.js";
 import { ProcessIdentitySource } from "../../src/lib/process-identity.js";
 
 const CLI = path.resolve("src/sennel.js");
@@ -150,51 +152,37 @@ function addMalformedPluginConfig(root, directory) {
   return malformedManifest;
 }
 
+function interruptMigration(root, script) {
+  const source = `
+    import fs from "node:fs";
+    function pauseMigration() { fs.writeSync(1, "migration-paused\\n"); Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0); }
+    ${script}
+  `;
+  return interruptChildAtCheckpoint(process.execPath, ["--import", pathToFileURL(CLI).href, "--input-type=module", "-e", source], {
+    cwd: root, checkpoint: "migration-paused\n",
+  });
+}
+
 function crashAfterJournalWrite(root, writeNumber) {
   const script = `
-    import fs from "node:fs";
     import path from "node:path";
     import { LayoutMigrationRevisionOne } from ${JSON.stringify(MIGRATION_MODULE)};
-    const originalRename = fs.renameSync;
-    const originalWrite = fs.writeFileSync;
-    const originalOpen = fs.openSync;
+    import { AtomicFile } from ${JSON.stringify(pathToFileURL(path.resolve("src/lib/atomic-file.js")).href)};
     const journalPath = path.join(${JSON.stringify(root)}, ".tmp", "sennel-migrate-layout.json");
-    const journalReservationDescriptors = new Set();
+    const originalPublish = AtomicFile.prototype.publishStage;
     let journalWrites = 0;
-    const crashAfterJournalWrite = () => {
-      journalWrites += 1;
-      if (journalWrites === ${writeNumber}) process.kill(process.pid, "SIGKILL");
-    };
-    fs.writeFileSync = (target, content, ...rest) => {
-      const result = originalWrite(target, content, ...rest);
-      if (journalReservationDescriptors.delete(target)) crashAfterJournalWrite();
-      return result;
-    };
-    fs.openSync = (target, flags, ...rest) => {
-      const descriptor = originalOpen(target, flags, ...rest);
-      if (path.resolve(String(target)) === journalPath && (flags & fs.constants.O_EXCL)) {
-        journalReservationDescriptors.add(descriptor);
-      }
-      return descriptor;
-    };
-    fs.renameSync = (from, to, ...rest) => {
-      const result = originalRename(from, to, ...rest);
-      if (String(to).endsWith(".tmp/sennel-migrate-layout.json")) {
-        crashAfterJournalWrite();
-      }
+    AtomicFile.prototype.publishStage = function (...args) {
+      const result = originalPublish.apply(this, args);
+      if (this.filePath === journalPath && ++journalWrites === ${writeNumber}) pauseMigration();
       return result;
     };
     new LayoutMigrationRevisionOne(${JSON.stringify(root)}, { logger: { log() {}, error() {} } }).run();
   `;
-  return spawnSync(process.execPath, ["--import", pathToFileURL(CLI).href, "--input-type=module", "-e", script], {
-    cwd: root,
-    encoding: "utf8",
-  });
+  return interruptMigration(root, script);
 }
 
 function crashAfterTemporaryManagedWrite(root) {
   const script = `
-    import fs from "node:fs";
     import path from "node:path";
     import { LayoutMigrationRevisionOne } from ${JSON.stringify(MIGRATION_MODULE)};
     const originalRename = fs.renameSync;
@@ -203,37 +191,30 @@ function crashAfterTemporaryManagedWrite(root) {
       if (path.resolve(String(to)) === path.join(${JSON.stringify(root)}, ".sennel")
         && String(from).includes("sennel-migrate-layout-")) {
         fs.writeFileSync(path.join(${JSON.stringify(root)}, ".sennel", "concurrent.txt"), "crash writer data\\n");
-        process.kill(process.pid, "SIGKILL");
+        pauseMigration();
       }
       return result;
     };
     new LayoutMigrationRevisionOne(${JSON.stringify(root)}, { logger: { log() {}, error() {} } }).run();
   `;
-  return spawnSync(process.execPath, ["--import", pathToFileURL(CLI).href, "--input-type=module", "-e", script], {
-    cwd: root,
-    encoding: "utf8",
-  });
+  return interruptMigration(root, script);
 }
 
 function crashAfterCanonicalRenameBeforeJournalAdvance(root) {
   const script = `
-    import fs from "node:fs";
     import path from "node:path";
     import { LayoutMigrationRevisionOne } from ${JSON.stringify(MIGRATION_MODULE)};
     const originalRename = fs.renameSync;
     fs.renameSync = (from, to, ...rest) => {
       const result = originalRename(from, to, ...rest);
       if (path.resolve(String(to)) === path.join(${JSON.stringify(root)}, ".sennel")) {
-        process.kill(process.pid, "SIGKILL");
+        pauseMigration();
       }
       return result;
     };
     new LayoutMigrationRevisionOne(${JSON.stringify(root)}, { logger: { log() {}, error() {} } }).run();
   `;
-  return spawnSync(process.execPath, ["--import", pathToFileURL(CLI).href, "--input-type=module", "-e", script], {
-    cwd: root,
-    encoding: "utf8",
-  });
+  return interruptMigration(root, script);
 }
 
 function oldV6MetadataPlan(name, original) {
@@ -255,9 +236,9 @@ function oldV6MetadataPlan(name, original) {
   return Buffer.from(`${body.join("\n")}\n`).toString("base64");
 }
 
-function createOldV6Journal(root, { sourceName, phase, canonical = false, partialCleanup = false }) {
-  const crashed = crashAfterJournalWrite(root, 1);
-  assert.equal(crashed.signal, "SIGKILL", crashed.stderr || crashed.stdout);
+async function createOldV6Journal(root, { sourceName, phase, canonical = false, partialCleanup = false }) {
+  const crashed = await crashAfterJournalWrite(root, 1);
+  assert.equal(crashed.interrupted, true, crashed.stderr || crashed.stdout);
   const temp = path.join(root, ".tmp");
   const newJournalPath = path.join(temp, "sennel-migrate-layout.json");
   const current = JSON.parse(fs.readFileSync(newJournalPath, "utf8"));
@@ -297,7 +278,6 @@ function createOldV6Journal(root, { sourceName, phase, canonical = false, partia
 
 function crashDuringLegacyBackupRemoval(root) {
   const script = `
-    import fs from "node:fs";
     import path from "node:path";
     import { LayoutMigrationRevisionOne } from ${JSON.stringify(MIGRATION_MODULE)};
     const originalRemove = fs.rmSync;
@@ -306,16 +286,13 @@ function crashDuringLegacyBackupRemoval(root) {
       if (!crashed && path.basename(path.resolve(String(target))) === "legacy-source-backup") {
         crashed = true;
         originalRemove(path.join(String(target), "config.local.json"), { force: true });
-        process.kill(process.pid, "SIGKILL");
+        pauseMigration();
       }
       return originalRemove(target, options);
     };
     new LayoutMigrationRevisionOne(${JSON.stringify(root)}, { logger: { log() {}, error() {} } }).run();
   `;
-  return spawnSync(process.execPath, ["--import", pathToFileURL(CLI).href, "--input-type=module", "-e", script], {
-    cwd: root,
-    encoding: "utf8",
-  });
+  return interruptMigration(root, script);
 }
 
 describe("migrate layout --to 1", () => {
@@ -678,11 +655,12 @@ describe("migrate layout --to 1", () => {
     roots.push(root);
     seedLegacyProject(root, ".senti");
     const configPath = path.join(root, ".senti", "config.json");
-    const originalCopy = fs.copyFileSync;
+    const originalWrite = AtomicFile.prototype.write;
     let changed = false;
-    fs.copyFileSync = (from, to, ...rest) => {
-      const result = originalCopy(from, to, ...rest);
-      if (!changed && path.resolve(from) === configPath) {
+    AtomicFile.prototype.write = function (content, ...rest) {
+      const result = originalWrite.call(this, content, ...rest);
+      const to = this.filePath;
+      if (!changed && path.basename(String(to)) === "config.json" && String(to).includes("sennel-migrate-layout-")) {
         changed = true;
         fs.writeFileSync(configPath, `${JSON.stringify({ ...validConfig(), concurrency: 2 })}\n`);
       }
@@ -694,7 +672,7 @@ describe("migrate layout --to 1", () => {
         /changed while migration staging was in progress/,
       );
     } finally {
-      fs.copyFileSync = originalCopy;
+      AtomicFile.prototype.write = originalWrite;
     }
 
     assert.equal(changed, true);
@@ -741,15 +719,15 @@ describe("migrate layout --to 1", () => {
     assert.equal(fs.readFileSync(preserved, "utf8"), "temporary writer data\n");
   });
 
-  it("preserves a staged canonical write across process-crash recovery", () => {
+  it("preserves a staged canonical write across process-crash recovery", async () => {
     const root = createTmpDir("sennel-migrate-layout-crash-writer-");
     roots.push(root);
     seedLegacyProject(root, ".senti");
     const originalConfig = fs.readFileSync(path.join(root, ".senti", "config.json"));
 
-    const crashed = crashAfterTemporaryManagedWrite(root);
+    const crashed = await crashAfterTemporaryManagedWrite(root);
 
-    assert.equal(crashed.signal, "SIGKILL", crashed.stderr || crashed.stdout);
+    assert.equal(crashed.interrupted, true, crashed.stderr || crashed.stdout);
     assert.throws(
       () => new LayoutMigrationRevisionOne(root, { logger: { log() {}, error() {} } }).run(),
       /concurrent managed write was preserved at/,
@@ -762,14 +740,14 @@ describe("migrate layout --to 1", () => {
     assert.equal(path.dirname(path.join(root, journal.stagingRelative)), path.join(root, ".tmp", "runtime", "migrate-layout"));
   });
 
-  it("completes cleanup after a crash following the canonical rename but before journal advancement", () => {
+  it("completes cleanup after a crash following the canonical rename but before journal advancement", async () => {
     const root = createTmpDir("sennel-migrate-layout-canonical-boundary-");
     roots.push(root);
     seedLegacyProject(root, ".senrail");
 
-    const crashed = crashAfterCanonicalRenameBeforeJournalAdvance(root);
+    const crashed = await crashAfterCanonicalRenameBeforeJournalAdvance(root);
 
-    assert.equal(crashed.signal, "SIGKILL", crashed.stderr || crashed.stdout);
+    assert.equal(crashed.interrupted, true, crashed.stderr || crashed.stdout);
     assert.ok(fs.existsSync(path.join(root, ".sennel")));
     assert.ok(fs.existsSync(path.join(root, ".tmp", "sennel-migrate-layout.json")));
     new LayoutMigrationRevisionOne(root, { logger: { log() {}, error() {} } }).run();
@@ -897,11 +875,12 @@ describe("migrate layout --to 1", () => {
     const originalConfig = fs.readFileSync(configPath);
     const originalIgnore = fs.readFileSync(path.join(root, ".gitignore"));
     const originalAttributes = fs.readFileSync(path.join(root, ".gitattributes"));
-    const originalCopy = fs.copyFileSync;
+    const originalWrite = AtomicFile.prototype.write;
     let tampered = false;
-    fs.copyFileSync = (from, to, ...rest) => {
-      const result = originalCopy(from, to, ...rest);
-      if (!tampered && path.resolve(from) === configPath) {
+    AtomicFile.prototype.write = function (content, ...rest) {
+      const result = originalWrite.call(this, content, ...rest);
+      const to = this.filePath;
+      if (!tampered && path.basename(String(to)) === "config.json" && String(to).includes("sennel-migrate-layout-")) {
         tampered = true;
         fs.writeFileSync(to, "{\"tampered\":true}\n");
       }
@@ -913,7 +892,7 @@ describe("migrate layout --to 1", () => {
         /staged tree does not match the source-derived transformation/,
       );
     } finally {
-      fs.copyFileSync = originalCopy;
+      AtomicFile.prototype.write = originalWrite;
     }
 
     assert.equal(tampered, true);
@@ -949,14 +928,14 @@ describe("migrate layout --to 1", () => {
     const beforeIgnore = fs.readFileSync(path.join(root, ".gitignore"));
     const beforeAttributes = fs.readFileSync(path.join(root, ".gitattributes"));
     const journalPath = path.join(root, ".tmp", "sennel-migrate-layout.json");
-    const originalOpen = fs.openSync;
+    const originalLink = fs.linkSync;
     let competing = false;
-    fs.openSync = (target, flags, ...rest) => {
+    fs.linkSync = (from, target, ...rest) => {
       if (!competing && path.resolve(String(target)) === journalPath) {
         competing = true;
         fs.writeFileSync(journalPath, "{\"competing\":true}\n", { encoding: "utf8", flag: "wx", mode: 0o600 });
       }
-      return originalOpen(target, flags, ...rest);
+      return originalLink(from, target, ...rest);
     };
     try {
       assert.throws(
@@ -964,7 +943,7 @@ describe("migrate layout --to 1", () => {
         /journal was created by another migration/,
       );
     } finally {
-      fs.openSync = originalOpen;
+      fs.linkSync = originalLink;
     }
 
     assert.equal(competing, true);
@@ -1093,13 +1072,13 @@ describe("migrate layout --to 1", () => {
     assert.equal(fs.existsSync(path.join(root, ".tmp")), false);
   });
 
-  it("recovers a stale journal when its owner PID has been reused", () => {
+  it("recovers a stale journal when its owner PID has been reused", async () => {
     const root = createTmpDir("sennel-migrate-layout-reused-owner-");
     roots.push(root);
     seedLegacyProject(root, ".sdd-forge");
     const beforeConfig = fs.readFileSync(path.join(root, ".sdd-forge", "config.json"));
-    const crashed = crashAfterJournalWrite(root, 1);
-    assert.equal(crashed.signal, "SIGKILL", crashed.stderr || crashed.stdout);
+    const crashed = await crashAfterJournalWrite(root, 1);
+    assert.equal(crashed.interrupted, true, crashed.stderr || crashed.stdout);
     const journal = JSON.parse(fs.readFileSync(path.join(root, ".tmp", "sennel-migrate-layout.json"), "utf8"));
     const reusedStartFingerprint = String(Number(journal.owner.startFingerprint) + 1);
     const processIdentitySource = new ProcessIdentitySource({
@@ -1154,16 +1133,16 @@ describe("migrate layout --to 1", () => {
     const beforeAttributes = fs.readFileSync(path.join(root, ".gitattributes"));
     const journalPath = path.join(root, ".tmp", "sennel-migrate-layout.json");
     const originalOpen = fs.openSync;
-    const originalWrite = fs.writeFileSync;
+    const originalWrite = fs.writeSync;
     let journalDescriptor = null;
     fs.openSync = (target, flags, ...rest) => {
       const descriptor = originalOpen(target, flags, ...rest);
-      if (path.resolve(String(target)) === journalPath && (flags & fs.constants.O_EXCL)) {
+      if (path.dirname(path.resolve(String(target))) === path.dirname(journalPath) && path.basename(String(target)).startsWith(".sennel-migrate-layout.json.")) {
         journalDescriptor = descriptor;
       }
       return descriptor;
     };
-    fs.writeFileSync = (target, content, ...rest) => {
+    fs.writeSync = (target, content, ...rest) => {
       if (target === journalDescriptor) throw new Error("injected journal authoritative write failure");
       return originalWrite(target, content, ...rest);
     };
@@ -1174,7 +1153,7 @@ describe("migrate layout --to 1", () => {
       );
     } finally {
       fs.openSync = originalOpen;
-      fs.writeFileSync = originalWrite;
+      fs.writeSync = originalWrite;
     }
 
     assert.notEqual(journalDescriptor, null);
@@ -1240,19 +1219,18 @@ describe("migrate layout --to 1", () => {
     seedLegacyProject(root, ".senti");
     const beforeConfig = fs.readFileSync(path.join(root, ".senti", "config.json"));
     const beforeIgnore = fs.readFileSync(path.join(root, ".gitignore"));
-    const originalOpen = fs.openSync;
+    const originalLink = fs.linkSync;
     let injected = false;
-    fs.openSync = (target, flags, ...rest) => {
+    fs.linkSync = (from, target, ...rest) => {
       if (!injected
-        && path.resolve(String(target)) === path.join(root, ".tmp", "sennel-migrate-layout.json")
-        && (flags & fs.constants.O_EXCL)) {
+        && path.resolve(String(target)) === path.join(root, ".tmp", "sennel-migrate-layout.json")) {
         injected = true;
         const stagingParent = path.join(root, ".tmp", "runtime", "migrate-layout");
         const stagingName = fs.readdirSync(stagingParent)
           .find((name) => name.startsWith("sennel-migrate-layout-"));
         fs.writeFileSync(path.join(stagingParent, stagingName, ".gitignore"), "tampered\n");
       }
-      return originalOpen(target, flags, ...rest);
+      return originalLink(from, target, ...rest);
     };
     try {
       assert.throws(
@@ -1260,7 +1238,7 @@ describe("migrate layout --to 1", () => {
         /staged root metadata changed before migration commit: \.gitignore/,
       );
     } finally {
-      fs.openSync = originalOpen;
+      fs.linkSync = originalLink;
     }
 
     assert.equal(injected, true);
@@ -1628,14 +1606,14 @@ describe("migrate layout --to 1", () => {
     assert.equal(fs.existsSync(path.join(root, ".tmp")), false);
   });
 
-  it("finishes cleanup after a crash interrupts recursive legacy-backup deletion", () => {
+  it("finishes cleanup after a crash interrupts recursive legacy-backup deletion", async () => {
     const root = createTmpDir("sennel-migrate-layout-partial-cleanup-");
     roots.push(root);
     seedLegacyProject(root, ".sdd-forge");
 
-    const crashed = crashDuringLegacyBackupRemoval(root);
+    const crashed = await crashDuringLegacyBackupRemoval(root);
 
-    assert.equal(crashed.signal, "SIGKILL", crashed.stderr || crashed.stdout);
+    assert.equal(crashed.interrupted, true, crashed.stderr || crashed.stdout);
     assert.ok(fs.existsSync(path.join(root, ".sennel")));
     const journalPath = path.join(root, ".tmp", "sennel-migrate-layout.json");
     const journal = JSON.parse(fs.readFileSync(journalPath, "utf8"));
@@ -1668,12 +1646,12 @@ describe("migrate layout --to 1", () => {
     assert.equal(fs.existsSync(path.join(root, ".tmp")), false);
   });
 
-  it("replays rollback recovery through normal preflight and reaches the target in one public invocation", () => {
+  it("replays rollback recovery through normal preflight and reaches the target in one public invocation", async () => {
     const root = createTmpDir("sennel-migrate-layout-public-rollback-replay-");
     roots.push(root);
     seedLegacyProject(root, ".senti");
-    const crashed = crashAfterJournalWrite(root, 1);
-    assert.equal(crashed.signal, "SIGKILL", crashed.stderr || crashed.stdout);
+    const crashed = await crashAfterJournalWrite(root, 1);
+    assert.equal(crashed.interrupted, true, crashed.stderr || crashed.stdout);
     assert.ok(fs.existsSync(path.join(root, ".tmp", "sennel-migrate-layout.json")));
 
     const resumed = runLayoutMigration(root, []);
@@ -1687,11 +1665,11 @@ describe("migrate layout --to 1", () => {
   });
 
   for (const [sourceName, phase] of [[".sdd-forge", "staged"], [".senti", "legacy-backed-up"], [".senti", "placed-senti"], [".senti", "metadata-updated"]]) {
-    it(`recovers old v6 ${sourceName} ${phase} by rollback without journal conversion`, () => {
+    it(`recovers old v6 ${sourceName} ${phase} by rollback without journal conversion`, async () => {
       const root = createTmpDir("sennel-old-v6-rollback-");
       roots.push(root);
       seedLegacyProject(root, sourceName);
-      const old = createOldV6Journal(root, { sourceName, phase });
+      const old = await createOldV6Journal(root, { sourceName, phase });
       const journalPath = path.join(root, ".tmp", "senrail-upgrade-migrate.json");
       const bytes = fs.readFileSync(journalPath);
 
@@ -1704,11 +1682,11 @@ describe("migrate layout --to 1", () => {
     });
   }
 
-  it("completes old v6 final Senrail cleanup before migrating the resulting legacy root", () => {
+  it("completes old v6 final Senrail cleanup before migrating the resulting legacy root", async () => {
     const root = createTmpDir("sennel-old-v6-final-");
     roots.push(root);
     seedLegacyProject(root, ".sdd-forge");
-    createOldV6Journal(root, { sourceName: ".sdd-forge", phase: "final-renamed", canonical: true });
+    await createOldV6Journal(root, { sourceName: ".sdd-forge", phase: "final-renamed", canonical: true });
 
     new LayoutMigrationRevisionOne(root, { logger: { log() {}, error() {} } }).run();
 
@@ -1717,11 +1695,11 @@ describe("migrate layout --to 1", () => {
     assert.equal(fs.existsSync(path.join(root, ".tmp", "senrail-upgrade-migrate.json")), false);
   });
 
-  it("continues old v6 cleanup-source-verified after partial backup deletion", () => {
+  it("continues old v6 cleanup-source-verified after partial backup deletion", async () => {
     const root = createTmpDir("sennel-old-v6-subset-");
     roots.push(root);
     seedLegacyProject(root, ".sdd-forge");
-    createOldV6Journal(root, { sourceName: ".sdd-forge", phase: "cleanup-source-verified", canonical: true, partialCleanup: true });
+    await createOldV6Journal(root, { sourceName: ".sdd-forge", phase: "cleanup-source-verified", canonical: true, partialCleanup: true });
 
     new LayoutMigrationRevisionOne(root, { logger: { log() {}, error() {} } }).run();
 
@@ -1742,11 +1720,11 @@ describe("migrate layout --to 1", () => {
     });
   }
 
-  it("keeps a valid old v6 journal and all project bytes unchanged in dry-run", () => {
+  it("keeps a valid old v6 journal and all project bytes unchanged in dry-run", async () => {
     const root = createTmpDir("sennel-old-v6-dry-");
     roots.push(root);
     seedLegacyProject(root, ".sdd-forge");
-    createOldV6Journal(root, { sourceName: ".sdd-forge", phase: "staged" });
+    await createOldV6Journal(root, { sourceName: ".sdd-forge", phase: "staged" });
     const before = new FixtureTreeSnapshot(root);
 
     const outcome = new LayoutMigrationRevisionOne(root, { dryRun: true, logger: { log() {}, error() {} } }).run();
@@ -1794,14 +1772,14 @@ describe("migrate layout --to 1", () => {
   ]) {
     for (const journalWrite of writes) {
       const phase = journalWrite === writes.at(-1) ? "final-renamed" : `pre-final-${journalWrite}`;
-      it(`recovers ${legacyDirectory} journal phase ${phase}`, () => {
+      it(`recovers ${legacyDirectory} journal phase ${phase}`, async () => {
         const root = createTmpDir("sennel-migrate-layout-phase-");
         roots.push(root);
         seedLegacyProject(root, legacyDirectory);
 
-        const crashed = crashAfterJournalWrite(root, journalWrite);
+        const crashed = await crashAfterJournalWrite(root, journalWrite);
 
-        assert.equal(crashed.signal, "SIGKILL", crashed.stderr || crashed.stdout);
+        assert.equal(crashed.interrupted, true, crashed.stderr || crashed.stdout);
         assert.ok(fs.existsSync(path.join(root, ".tmp", "sennel-migrate-layout.json")));
         new LayoutMigrationRevisionOne(root, { logger: { log() {}, error() {} } }).run();
 

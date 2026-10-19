@@ -10,7 +10,11 @@ import { AtomicFile } from "./atomic-file.js";
 import { FileLock, FileLockWaitPolicy } from "./file-lock.js";
 import { ProcessLock } from "./process-lock.js";
 import { RealDirectoryAuthority } from "./real-directory-authority.js";
-import { captureRegularFile } from "./regular-file-snapshot.js";
+import { captureRegularFile, MAX_IN_MEMORY_FILE_BYTES } from "./regular-file-snapshot.js";
+import { removeRegularFile } from "./regular-file-io.js";
+import { LogicalRelativePath } from "./portable-path.js";
+import { NativeAbsolutePath } from "./native-path.js";
+import { FileTreeImage, FileTreeEntry, DirectoryTreeEntry, FileTreeImageRevisionError } from "./file-tree-image.js";
 import { ArtifactAuthority, ArtifactAuthoritySlot, ArtifactCardinality } from "./artifact-authority.js";
 import {
   ArtifactPublicationClaim,
@@ -156,14 +160,7 @@ class TaskRetryRecoveryArtifactOwner {
 }
 
 function relativePath(value, field) {
-  const result = text(value, field);
-  if (result.includes("\\") || path.posix.isAbsolute(result) || path.posix.normalize(result) !== result) {
-    throw new Error(`${field} must be a normalized POSIX relative path`);
-  }
-  if (result.split("/").some((segment) => segment === "" || segment === "." || segment === "..")) {
-    throw new Error(`${field} must not contain empty, current, or parent segments`);
-  }
-  return result;
+  return new LogicalRelativePath(value, field).toString();
 }
 
 function isPlainObject(value) {
@@ -175,60 +172,18 @@ function isPlainObject(value) {
 function sha256(bytes) { return crypto.createHash("sha256").update(bytes).digest("hex"); }
 function codeUnitOrder(left, right) { return left < right ? -1 : left > right ? 1 : 0; }
 
-function fsyncDirectory(directory) {
-  const descriptor = fs.openSync(directory, "r");
-  try { fs.fsyncSync(descriptor); } finally { fs.closeSync(descriptor); }
-}
-
-function assertFilesystemAuthority(repositoryRoot, target, { mustExist = false } = {}) {
-  const root = path.resolve(repositoryRoot);
+function assertFilesystemAuthority(authority, target, { mustExist = false } = {}) {
+  const root = authority.directory;
   const resolved = path.resolve(target);
-  const relative = path.relative(root, resolved);
-  if (relative.startsWith("..") || path.isAbsolute(relative)) throw new Error("Version authority path escapes the repository root");
-  const rootStat = fs.lstatSync(root);
-  if (!rootStat.isDirectory() || rootStat.isSymbolicLink()) {
-    throw new Error("Version repository root must be a real directory");
-  }
-  let current = root;
-  const segments = relative === "" ? [] : relative.split(path.sep);
-  for (let index = 0; index < segments.length; index += 1) {
-    current = path.join(current, segments[index]);
-    let stat;
-    try { stat = fs.lstatSync(current); } catch (error) {
-      if (error.code === "ENOENT" && !mustExist) return;
-      if (error.code === "ENOENT") throw new Error(`Version authority path does not exist: ${relative}`);
-      throw error;
-    }
-    if (stat.isSymbolicLink()) throw new Error(`Version authority path contains a symbolic link: ${relative}`);
-    if (index < segments.length - 1 && !stat.isDirectory()) {
-      throw new Error(`Version authority ancestor is not a directory: ${relative}`);
+  if (resolved !== root) new NativeAbsolutePath(resolved).toLogical(authority);
+  else authority.assertStable();
+  if (mustExist) {
+    try { fs.lstatSync(resolved); }
+    catch (cause) {
+      if (cause.code === "ENOENT") throw new Error(`Version authority path does not exist: ${path.relative(root, resolved)}`, { cause });
+      throw cause;
     }
   }
-}
-
-function beforeImage(file) {
-  try {
-    const stat = fs.lstatSync(file);
-    if (!stat.isFile() || stat.isSymbolicLink()) throw new Error(`publication authority is not a real regular file: ${file}`);
-    return Object.freeze({ file, exists: true, bytes: fs.readFileSync(file), mode: stat.mode & 0o777 });
-  } catch (error) {
-    if (error.code === "ENOENT") return Object.freeze({ file, exists: false, bytes: null, mode: null });
-    throw error;
-  }
-}
-
-function restoreBeforeImage(image) {
-  const directory = path.dirname(image.file);
-  if (image.exists) {
-    fs.mkdirSync(directory, { recursive: true, mode: 0o755 });
-    fs.writeFileSync(image.file, image.bytes, { mode: image.mode });
-    fs.chmodSync(image.file, image.mode);
-    const descriptor = fs.openSync(image.file, "r");
-    try { fs.fsyncSync(descriptor); } finally { fs.closeSync(descriptor); }
-  } else {
-    try { fs.unlinkSync(image.file); } catch (error) { if (error.code !== "ENOENT") throw error; }
-  }
-  fsyncDirectory(directory);
 }
 
 function catalogManagedPath(value) {
@@ -241,16 +196,15 @@ function knownNoncatalogedPath(value) {
 }
 
 function managedFiles(location, {
-  current = location.directory,
+  authority = location.repositoryAuthority.descendant(location.directory),
   result = [],
   scan = { count: 0 },
   maxEntries = Infinity,
 } = {}) {
-  location.assertAuthority(null, { mustExist: true });
-  for (const entry of fs.readdirSync(current, { withFileTypes: true })) {
+  for (const entry of authority.entries({ withFileTypes: true })) {
     scan.count += 1;
     if (scan.count > maxEntries) throw new Error("Version storage entry count exceeds the managed artifact limit");
-    const absolute = path.join(current, entry.name);
+    const absolute = path.join(authority.directory, entry.name);
     const rel = path.relative(location.directory, absolute).split(path.sep).join("/");
     // `.runtime/` is the sole explicitly transient subtree. Its contents
     // include locks and untrusted worker handoff work units, so catalog
@@ -265,7 +219,7 @@ function managedFiles(location, {
     }
     if (entry.isSymbolicLink()) throw new Error(`Version storage must not contain symbolic links: ${rel}`);
     if (entry.isDirectory()) {
-      managedFiles(location, { current: absolute, result, scan, maxEntries });
+      managedFiles(location, { authority: authority.descendant(absolute), result, scan, maxEntries });
       continue;
     }
     if (!entry.isFile()) throw new Error(`Version storage contains an unsupported entry: ${rel}`);
@@ -275,6 +229,7 @@ function managedFiles(location, {
     if (!catalogManagedPath(rel)) throw new Error(`Version storage contains an unclassified artifact: ${rel}`);
     result.push(rel);
   }
+  authority.assertStable();
   return result.sort(codeUnitOrder);
 }
 
@@ -290,34 +245,29 @@ async function readBoundedRealFile(location, file, maxBytes) {
   const safePath = relativePath(file, "Version snapshot artifact path");
   const target = location.resolve(safePath);
   location.assertAuthority(safePath, { mustExist: true });
-  let handle;
-  try {
-    handle = await fs.promises.open(target, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0));
-    const stat = await handle.stat();
-    if (!stat.isFile() || stat.nlink !== 1 || await fs.promises.realpath(target) !== target) {
-      throw new Error(`Version snapshot artifact is not a single-link real regular file: ${safePath}`);
-    }
-    if (!Number.isSafeInteger(stat.size) || stat.size > maxBytes) {
-      throw new Error(`Version snapshot artifact exceeds the bounded size: ${safePath}`);
-    }
-    const bytes = await handle.readFile();
-    if (bytes.length > maxBytes) throw new Error(`Version snapshot artifact exceeds the bounded size: ${safePath}`);
-    return bytes;
-  } finally {
-    if (handle !== undefined) await handle.close();
-  }
+  return captureRegularFile(target, { label: `Version snapshot artifact ${safePath}`, maxBytes,
+    requireSingleLink: true }).bytes;
 }
 
-class VersionTreeSnapshot {
-  constructor(location, { directories = null, files = null } = {}) {
+export class VersionTreeSnapshot {
+  constructor(location, { image = null } = {}) {
     this.location = location;
-    if ((directories === null) !== (files === null)) throw new Error("Version tree snapshot image must be complete");
-    this.directories = directories === null ? new Set([""]) : new Set(directories);
-    this.files = files === null ? new Map() : new Map(files);
-    if (directories === null) this.#capture(location.directory);
+    this.authority = new RealDirectoryAuthority(location.directory);
+    if (image !== null && !(image instanceof FileTreeImage)) throw new TypeError("Version tree snapshot requires a FileTreeImage");
+    const entries = image === null ? [new DirectoryTreeEntry("")] : image.entries;
+    if (image === null) this.#capture(location.directory, entries);
+    this.image = image ?? new FileTreeImage(entries);
+    for (const entry of this.image.entries) {
+      if (entry.path === ".runtime" || entry.path.startsWith(".runtime/")) throw new Error("Version transaction image is runtime-owned");
+      if (entry instanceof FileTreeEntry && !catalogManagedPath(entry.path) && entry.path !== ARTIFACT_CATALOG_RELATIVE_PATH) {
+        throw new Error(`Version transaction image contains an unmanaged artifact: ${entry.path}`);
+      }
+    }
+    Object.freeze(this);
   }
-  #capture(directory) {
-    for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+  #capture(directory, entries) {
+    const authority = this.authority.descendant(directory);
+    for (const entry of authority.entries({ withFileTypes: true })) {
       const absolute = path.join(directory, entry.name);
       const relative = path.relative(this.location.directory, absolute).split(path.sep).join("/");
       if (relative === ".runtime") {
@@ -327,112 +277,138 @@ class VersionTreeSnapshot {
         continue;
       }
       if (entry.isSymbolicLink()) throw new Error(`Version storage must not contain symbolic links: ${relative}`);
-      if (VERSION_TRANSIENT_FILES.has(relative) || knownNoncatalogedPath(relative)) continue;
+      if (VERSION_TRANSIENT_FILES.has(relative) || (relative !== ARTIFACT_CATALOG_RELATIVE_PATH && knownNoncatalogedPath(relative))) continue;
       if (entry.isDirectory()) {
-        this.directories.add(relative);
-        this.#capture(absolute);
+        entries.push(new DirectoryTreeEntry(relative));
+        this.#capture(absolute, entries);
         continue;
       }
       if (!entry.isFile()) throw new Error(`Version storage contains an unsupported entry: ${relative}`);
-      const stat = fs.lstatSync(absolute);
-      if (stat.nlink !== 1) throw new Error(`Version storage artifact must not be hard linked: ${relative}`);
-      this.files.set(relative, Object.freeze({ bytes: fs.readFileSync(absolute), mode: stat.mode & 0o777 }));
+      const snapshot = captureRegularFile(absolute, { label: `Version storage artifact ${relative}`,
+        maxBytes: MAX_IN_MEMORY_FILE_BYTES, requireSingleLink: true, directoryAuthority: authority });
+      entries.push(new FileTreeEntry(relative, snapshot.bytes));
     }
+    authority.assertStable();
+    this.authority.assertStable();
   }
   assertOnlyDeclaredChanges(paths) {
     const current = new VersionTreeSnapshot(this.location);
-    const allPaths = new Set([...this.files.keys(), ...current.files.keys()]);
+    const beforeFiles = new Map(this.image.entries.filter((entry) => entry instanceof FileTreeEntry).map((entry) => [entry.path, entry]));
+    const afterFiles = new Map(current.image.entries.filter((entry) => entry instanceof FileTreeEntry).map((entry) => [entry.path, entry]));
+    const allPaths = new Set([...beforeFiles.keys(), ...afterFiles.keys()]);
     for (const file of allPaths) {
       if (paths.has(file)) continue;
-      const before = this.files.get(file);
-      const after = current.files.get(file);
-      if (!before || !after || before.mode !== after.mode || !before.bytes.equals(after.bytes)) {
+      const before = beforeFiles.get(file);
+      const after = afterFiles.get(file);
+      if (!before || !after || !before.equals(after)) {
         throw new Error(`catalog publication changed an undeclared Version artifact: ${file}`);
       }
     }
   }
   restore() {
+    this.authority.assertStable();
+    const retainedDirectories = new Set(this.image.entries.filter((entry) => entry instanceof DirectoryTreeEntry).map((entry) => entry.path));
+    const retainedFiles = new Set(this.image.entries.filter((entry) => entry instanceof FileTreeEntry).map((entry) => entry.path));
     const files = [];
     const directories = [];
-    const collect = (directory) => {
+    const authorities = new Map();
+    const collect = (authority) => {
+      const directory = authority.directory;
+      authorities.set(directory, authority);
       let containsTransientEntry = false;
-      for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+      for (const entry of authority.entries({ withFileTypes: true })) {
         const absolute = path.join(directory, entry.name);
         const relative = path.relative(this.location.directory, absolute).split(path.sep).join("/");
         if (
           relative === ".runtime"
           || VERSION_TRANSIENT_FILES.has(relative)
-          || knownNoncatalogedPath(relative)
+          || (relative !== ARTIFACT_CATALOG_RELATIVE_PATH && knownNoncatalogedPath(relative))
         ) {
           containsTransientEntry = true;
           continue;
         }
         if (entry.isDirectory() && !entry.isSymbolicLink()) {
-          if (collect(absolute)) containsTransientEntry = true;
+          const child = authority.descendant(absolute);
+          if (collect(child)) containsTransientEntry = true;
           // Existing directories are still their original authorities. Keep
           // their metadata when rolling back files; only remove directories
           // introduced by the rejected transaction.
-          else if (!this.directories.has(relative)) directories.push(absolute);
+          else if (!retainedDirectories.has(relative)) directories.push(child);
         } else {
+          if (!entry.isFile() || entry.isSymbolicLink()) throw new Error(`Version restore found an unsupported entry: ${relative}`);
           files.push(absolute);
         }
       }
       return containsTransientEntry;
     };
-    collect(this.location.directory);
-    for (const file of files) fs.unlinkSync(file);
-    for (const directory of directories.sort((left, right) => right.length - left.length)) fs.rmdirSync(directory);
-    for (const directory of [...this.directories].filter(Boolean).sort(codeUnitOrder)) {
-      fs.mkdirSync(this.location.resolve(directory), { recursive: true, mode: 0o755 });
+    collect(this.authority);
+    const capturedFiles = new Map();
+    // A rejected writer can introduce a hard link inside this managed tree.
+    // Recover only when every physical link is accounted for in this tree;
+    // an external link remains a refusal, with the journal preserved.
+    const linkGroups = new Map();
+    for (const file of files) {
+      const snapshot = captureRegularFile(file, { label: "Version rollback target", maxBytes: MAX_IN_MEMORY_FILE_BYTES,
+        directoryAuthority: authorities.get(path.dirname(file)) });
+      capturedFiles.set(file, snapshot);
+      const key = `${snapshot.identity.dev}:${snapshot.identity.ino}`;
+      const group = linkGroups.get(key) ?? [];
+      group.push(snapshot);
+      linkGroups.set(key, group);
     }
-    for (const [file, image] of this.files) {
-      const absolute = this.location.resolve(file);
-      fs.mkdirSync(path.dirname(absolute), { recursive: true, mode: 0o755 });
-      fs.writeFileSync(absolute, image.bytes, { mode: image.mode });
-      fs.chmodSync(absolute, image.mode);
-      const descriptor = fs.openSync(absolute, "r");
-      try { fs.fsyncSync(descriptor); } finally { fs.closeSync(descriptor); }
+    for (const group of linkGroups.values()) {
+      for (const snapshot of group) captureRegularFile(snapshot.filePath, { label: "Version rollback link ownership",
+        maxBytes: MAX_IN_MEMORY_FILE_BYTES, expectedIdentity: snapshot.identity, expectedLinkCount: group.length,
+        directoryAuthority: authorities.get(path.dirname(snapshot.filePath)) });
     }
-    fsyncDirectory(this.location.directory);
-  }
-  toJSON() {
-    return {
-      directories: [...this.directories].sort(codeUnitOrder),
-      files: [...this.files].sort(([left], [right]) => codeUnitOrder(left, right)).map(([file, image]) => ({
-        path: file, mode: image.mode, bytes: image.bytes.toString("base64"),
-      })),
+    const detached = new Set();
+    for (const group of linkGroups.values()) {
+      if (group.length === 1) continue;
+      // Keep a retained name visible while detaching the other links. In
+      // particular, recovery must still see the baseline catalog if a later
+      // artifact restore is interrupted.
+      const retained = group.find((snapshot) => snapshot.filePath === this.location.catalogFile)
+        ?? group.find((snapshot) => retainedFiles.has(path.relative(this.location.directory, snapshot.filePath).split(path.sep).join("/")))
+        ?? group[0];
+      for (const [index, snapshot] of group.filter((entry) => entry !== retained).entries()) {
+        removeRegularFile(snapshot.filePath, { expectedIdentity: snapshot.identity, expectedLinkCount: group.length - index,
+          maxBytes: MAX_IN_MEMORY_FILE_BYTES, directoryAuthority: authorities.get(path.dirname(snapshot.filePath)) });
+        detached.add(snapshot.filePath);
+      }
+    }
+    for (const file of files) {
+      const relative = path.relative(this.location.directory, file).split(path.sep).join("/");
+      if (!retainedFiles.has(relative) && !detached.has(file)) {
+        removeRegularFile(file, { expectedIdentity: capturedFiles.get(file).identity, maxBytes: MAX_IN_MEMORY_FILE_BYTES,
+          directoryAuthority: authorities.get(path.dirname(file)) });
+      }
+    }
+    for (const directory of directories.sort((left, right) => right.directory.length - left.directory.length)) directory.remove();
+    const ensureDirectory = (directory) => {
+      const parent = RealDirectoryAuthority.closestAncestor(directory, authorities.values());
+      const authority = parent.descendant(directory, { create: true });
+      authorities.set(directory, authority);
+      return authority;
     };
+    for (const directory of [...retainedDirectories].filter(Boolean).sort(codeUnitOrder)) {
+      ensureDirectory(this.location.resolve(directory));
+    }
+    // Keep the baseline catalog visible throughout an interrupted rollback;
+    // its last publication is the readback marker for all restored artifacts.
+    const restoreEntries = [...this.image.entries].sort((left, right) =>
+      Number(left.path === ARTIFACT_CATALOG_RELATIVE_PATH) - Number(right.path === ARTIFACT_CATALOG_RELATIVE_PATH));
+    for (const entry of restoreEntries) {
+      if (!(entry instanceof FileTreeEntry)) continue;
+      const absolute = this.location.resolve(entry.path);
+      const parent = ensureDirectory(path.dirname(absolute));
+      new AtomicFile(absolute, { directoryAuthority: parent }).write(entry.bytes);
+    }
+    const restored = new VersionTreeSnapshot(this.location);
+    if (restored.image.hash !== this.image.hash) throw new Error("Version rollback readback does not match its transaction image");
   }
+  toJSON() { return this.image.toJSON(); }
   static fromStored(location, value) {
-    if (value === null || typeof value !== "object" || !Array.isArray(value.directories) || !Array.isArray(value.files)) {
-      throw new Error("Version transaction snapshot is invalid");
-    }
-    if (Object.keys(value).sort().join(",") !== "directories,files") throw new Error("Version transaction snapshot fields are invalid");
-    const directories = new Set(value.directories.map((entry) => {
-      const directory = entry === "" ? "" : relativePath(entry, "Version transaction directory");
-      if (directory === ".runtime" || directory.startsWith(".runtime/")) throw new Error("Version transaction directory is runtime-owned");
-      return directory;
-    }));
-    const files = new Map(value.files.map((entry) => {
-      if (entry === null || typeof entry !== "object" || Object.keys(entry).sort().join(",") !== "bytes,mode,path") {
-        throw new Error("Version transaction file image fields are invalid");
-      }
-      const file = relativePath(entry?.path, "Version transaction file");
-      if (file === ".runtime" || file.startsWith(".runtime/")
-        || (!catalogManagedPath(file) && file !== ARTIFACT_CATALOG_RELATIVE_PATH)
-        || !Number.isInteger(entry.mode) || entry.mode < 0 || entry.mode > 0o777
-        || typeof entry.bytes !== "string" || Buffer.from(entry.bytes, "base64").toString("base64") !== entry.bytes) {
-        throw new Error("Version transaction file image is invalid");
-      }
-      return [file, Object.freeze({ mode: entry.mode, bytes: Buffer.from(entry.bytes, "base64") })];
-    }));
-    if (files.size !== value.files.length || directories.size !== value.directories.length || !directories.has("")) throw new Error("Version transaction snapshot contains duplicate paths or lacks its root");
-    for (const directory of directories) {
-      if (directory !== "" && !directories.has(path.posix.dirname(directory) === "." ? "" : path.posix.dirname(directory))) {
-        throw new Error("Version transaction snapshot directory ancestry is incomplete");
-      }
-    }
-    return new VersionTreeSnapshot(location, { directories, files });
+    return new VersionTreeSnapshot(location, { image: FileTreeImage.fromStored(value) });
   }
 }
 
@@ -452,7 +428,16 @@ class VersionCatalogTransactionJournal {
     this.file.remove();
     ACTIVE_VERSION_TRANSACTIONS.delete(this.file.filePath);
   }
-  abandon() { ACTIVE_VERSION_TRANSACTIONS.delete(this.file.filePath); }
+  abandon(failure = null) {
+    try {
+      if (RealDirectoryAuthority.isAuthorityFailure(failure)) {
+        this.document = { ...this.document, rollbackBlocked: true };
+        this.file.write({ ...this.document, digest: sha256(Buffer.from(JSON.stringify(this.document), "utf8")) });
+      }
+    } catch (journalError) {
+      throw new AggregateError([failure, journalError], "artifact catalog authority refusal could not be recorded", { cause: failure });
+    } finally { ACTIVE_VERSION_TRANSACTIONS.delete(this.file.filePath); }
+  }
 }
 
 export class FlowId extends IdentityValue {
@@ -718,13 +703,15 @@ export class FlowVersionConsumerPaths {
 }
 
 export class FlowVersionLocation {
-  constructor({ repositoryRoot, authorityScope, specRoot = "specs", specId, version, storageRelativeDirectory = null } = {}) {
+  #repositoryAuthority;
+
+  constructor({ repositoryRoot, authorityScope, specRoot = "specs", specId, version, storageRelativeDirectory = null, repositoryAuthority = null } = {}) {
     if (typeof repositoryRoot !== "string" || !path.isAbsolute(repositoryRoot)) throw new Error("repositoryRoot must be an absolute path");
     this.repositoryRoot = path.resolve(repositoryRoot);
-    const rootStat = fs.lstatSync(this.repositoryRoot);
-    if (!rootStat.isDirectory() || rootStat.isSymbolicLink() || fs.realpathSync(this.repositoryRoot) !== this.repositoryRoot) {
-      throw new Error("repositoryRoot must be a canonical real directory without symbolic-link ancestors");
-    }
+    this.#repositoryAuthority = repositoryAuthority ?? new RealDirectoryAuthority(this.repositoryRoot);
+    if (!(this.#repositoryAuthority instanceof RealDirectoryAuthority)
+      || this.#repositoryAuthority.directory !== this.repositoryRoot) throw new Error("Version repository authority must own its repository root");
+    if (repositoryAuthority !== null) repositoryAuthority.assertStable();
     this.authorityScope = FlowVersionAuthorityScope.from(authorityScope);
     const relativeLocation = new FlowVersionRelativeLocation({ specRoot, specId, version });
     this.specRoot = relativeLocation.specRoot;
@@ -748,6 +735,7 @@ export class FlowVersionLocation {
     this.consumers = new FlowVersionConsumerPaths(this);
     Object.freeze(this);
   }
+  get repositoryAuthority() { return this.#repositoryAuthority; }
   requireScope(value) {
     if (this.authorityScope.value !== value) throw new Error(`${value} Version authority is required`);
     return this;
@@ -756,6 +744,7 @@ export class FlowVersionLocation {
     const suffix = identifier(token, "Version staging token");
     return new FlowVersionLocation({
       repositoryRoot: this.repositoryRoot,
+      repositoryAuthority: this.#repositoryAuthority,
       authorityScope: this.authorityScope,
       specRoot: this.specRoot,
       specId: this.specId,
@@ -768,7 +757,7 @@ export class FlowVersionLocation {
   }
   assertAuthority(value = null, options = {}) {
     const target = value == null ? this.directory : this.resolve(value);
-    assertFilesystemAuthority(this.repositoryRoot, target, options);
+    assertFilesystemAuthority(this.#repositoryAuthority, target, options);
     return target;
   }
   relativePath(value) { return path.posix.join(this.relativeDirectory, relativePath(value, "version-relative path")); }
@@ -966,10 +955,7 @@ export class FlowArtifactDescriptor {
     const filePath = location.resolve(safePath);
     if (!catalogManagedPath(safePath)) throw new Error(`artifact is outside catalog-managed storage: ${safePath}`);
     location.assertAuthority(safePath, { mustExist: true });
-    const stat = fs.lstatSync(filePath);
-    if (!stat.isFile() || stat.isSymbolicLink()) throw new Error("artifact must be a regular non-symlink file");
-    if (stat.nlink !== 1) throw new Error("artifact must not be hard linked");
-    const bytes = fs.readFileSync(filePath);
+    const bytes = captureRegularFile(filePath, { label: "artifact", maxBytes: MAX_IN_MEMORY_FILE_BYTES, requireSingleLink: true }).bytes;
     const descriptor = new FlowArtifactDescriptor({ logicalKey, authoritySlot, relativePath: safePath, hash: sha256(bytes), size: bytes.length, mediaType, retention, activityId: activityId?.toString() ?? null, migrationMaterialization });
     if (descriptor.logicalKey !== null && !descriptor.logicalKey.startsWith("transition.")) {
       FLOW_ARTIFACT_CONTRACTS.require(descriptor.logicalKey).assertContentPublication(null, bytes);
@@ -1137,7 +1123,7 @@ export class FlowArtifactActivityIndex {
     Object.freeze(this);
   }
   static fromFile(file) {
-    return FlowArtifactActivityIndex.fromBytes(fs.readFileSync(file));
+    return FlowArtifactActivityIndex.fromBytes(captureRegularFile(file, { label: "managed Flow artifact", maxBytes: MAX_IN_MEMORY_FILE_BYTES, requireSingleLink: true }).bytes);
   }
   static fromBytes(bytes) {
     if (!Buffer.isBuffer(bytes)) throw new Error("artifact Activity index requires file bytes");
@@ -1174,7 +1160,7 @@ class FlowArtifactActivityIndexFile {
   }
 
   read() {
-    const bytes = fs.readFileSync(this.file);
+    const bytes = captureRegularFile(this.file, { label: "managed Flow artifact", maxBytes: MAX_IN_MEMORY_FILE_BYTES, requireSingleLink: true }).bytes;
     if (this.#bytes !== null && bytes.equals(this.#bytes)) return this.#index;
     const index = FlowArtifactActivityIndex.fromBytes(bytes);
     this.#bytes = Buffer.from(bytes);
@@ -1268,7 +1254,7 @@ export class FlowArtifactCatalog {
         if (artifact.logicalKey !== null) {
           const contract = FLOW_ARTIFACT_CONTRACTS.require(artifact.logicalKey);
           contract.contentContract?.assertCatalogAssociation({
-            bytes: fs.readFileSync(location.resolve(artifact.relativePath)),
+            bytes: captureRegularFile(location.resolve(artifact.relativePath), { label: "managed Flow artifact", maxBytes: MAX_IN_MEMORY_FILE_BYTES, requireSingleLink: true }).bytes,
             descriptor: artifact,
             activity,
           });
@@ -1501,7 +1487,7 @@ export class FlowArtifactCatalogStore {
   #catalogBytes = null;
   #catalog = null;
 
-  constructor({ location, faultInjector, assertInitialReadFormat = null } = {}) {
+  constructor({ location, faultInjector, assertInitialReadFormat = null, directoryAuthority = null } = {}) {
     if (!(location instanceof FlowVersionLocation)) throw new Error("FlowVersionLocation is required for artifact catalog storage");
     if (assertInitialReadFormat !== null && typeof assertInitialReadFormat !== "function") {
       throw new Error("initial catalog read format assertion must be a function or null");
@@ -1510,7 +1496,7 @@ export class FlowArtifactCatalogStore {
     location.assertAuthority();
     this.location = location;
     this.assertInitialReadFormat = assertInitialReadFormat;
-    this.file = new AtomicJsonFile(location.catalogFile, ...(faultInjector ? [{ faultInjector }] : []));
+    this.file = new AtomicJsonFile(location.catalogFile, { ...(faultInjector ? { faultInjector } : {}), directoryAuthority });
     this.#activityIndexFile = new FlowArtifactActivityIndexFile(location.activitiesFile);
     Object.freeze(this);
   }
@@ -1563,7 +1549,7 @@ export class FlowArtifactCatalogStore {
   #saveUnlocked(catalog) {
     if (!(catalog instanceof FlowArtifactCatalog)) throw new Error("FlowArtifactCatalog is required");
     this.location.assertAuthority();
-    fs.mkdirSync(this.location.directory, { recursive: true, mode: 0o755 });
+    this.file.directoryAuthority.assertStable();
     catalog.verify(this.location, this.#activityIndexFile);
     const value = catalog.toJSON();
     this.file.write(value);
@@ -1573,10 +1559,10 @@ export class FlowArtifactCatalogStore {
   }
   read({ relativePaths = [], read } = {}) {
     if (!Array.isArray(relativePaths) || typeof read !== "function") throw new Error("catalog read requires relativePaths and a read function");
-    return this.#withPublicationLock(() => {
+    return this.#withPublicationLock((runtimeAuthority) => {
       const catalog = this.#requireUnlocked();
       for (const file of relativePaths) catalog.resolve(file);
-      return read(catalog);
+      return read(catalog, runtimeAuthority);
     });
   }
   relatedActivity(file) {
@@ -1608,7 +1594,9 @@ export class FlowArtifactCatalogStore {
   writeIssueSnapshot(text, publicationContext = null) {
     if (typeof text !== "string") throw new Error("issue snapshot text must be a string");
     const artifact = FLOW_ARTIFACT_CONTRACTS.resolve("issue.snapshot");
-    const write = () => new AtomicFile(this.location.issueSnapshotFile, { phaseNamespace: "issue-snapshot" })
+    const write = () => new AtomicFile(this.location.issueSnapshotFile, {
+      phaseNamespace: "issue-snapshot", directoryAuthority: this.file.directoryAuthority,
+    })
       .write(Buffer.from(text.endsWith("\n") ? text : `${text}\n`, "utf8"));
     if (publicationContext !== null) {
       if (!(publicationContext instanceof FlowArtifactPublicationContext)) {
@@ -1629,7 +1617,7 @@ export class FlowArtifactCatalogStore {
     });
   }
   readIssueSnapshot() {
-    return this.read({ relativePaths: [FLOW_ARTIFACT_CONTRACTS.resolve("issue.snapshot").relativePath], read: () => fs.readFileSync(this.location.issueSnapshotFile, "utf8") });
+    return this.read({ relativePaths: [FLOW_ARTIFACT_CONTRACTS.resolve("issue.snapshot").relativePath], read: () => captureRegularFile(this.location.issueSnapshotFile, { label: "managed Flow artifact", maxBytes: MAX_IN_MEMORY_FILE_BYTES, requireSingleLink: true }).text() });
   }
   #publishMany({ artifacts, removals = [], publicationClaim = null, precondition = null, publicationLimits = null, write } = {}, system) {
     if (typeof write !== "function") throw new Error("catalog publication requires a write function");
@@ -1664,7 +1652,7 @@ export class FlowArtifactCatalogStore {
       }
     }
     if (precondition !== null && typeof precondition !== "function") throw new Error("catalog publication precondition must be a function");
-    return this.#withPublicationLock(() => {
+    return this.#withPublicationLock((runtimeAuthority) => {
       const paths = new Set([
         ...artifacts.map((artifact) => relativePath(artifact.relativePath, "artifact relativePath")),
         ...normalizedRemovals.map((removal) => removal.relativePath),
@@ -1675,6 +1663,7 @@ export class FlowArtifactCatalogStore {
       for (const file of paths) this.location.assertAuthority(file);
       this.location.assertAuthority(ARTIFACT_CATALOG_RELATIVE_PATH);
       const snapshot = new VersionTreeSnapshot(this.location);
+      snapshot.image.assertFileTargets([...paths]);
       const previous = this.#requireUnlocked();
       precondition?.(previous);
         for (const artifact of artifacts) {
@@ -1709,9 +1698,9 @@ export class FlowArtifactCatalogStore {
         const previousContent = new Map();
         for (const { artifact } of contentPublications) {
           const prior = previous.artifacts.find((entry) => entry.relativePath === artifact.relativePath);
-          previousContent.set(artifact.relativePath, prior === undefined ? null : fs.readFileSync(this.location.resolve(artifact.relativePath)));
+          previousContent.set(artifact.relativePath, prior === undefined ? null : captureRegularFile(this.location.resolve(artifact.relativePath), { label: "managed Flow artifact", maxBytes: MAX_IN_MEMORY_FILE_BYTES, requireSingleLink: true }).bytes);
         }
-      return this.#executeCatalogTransaction(snapshot, previous.hash, write, () => {
+      return this.#executeCatalogTransaction(runtimeAuthority, snapshot, previous.hash, write, () => {
         snapshot.assertOnlyDeclaredChanges(paths);
         for (const removal of normalizedRemovals) {
           if (fs.existsSync(this.location.resolve(removal.relativePath))) {
@@ -1721,7 +1710,7 @@ export class FlowArtifactCatalogStore {
         for (const { artifact, contract } of contentPublications) {
           contract.assertContentPublication(
             previousContent.get(artifact.relativePath) ?? null,
-            fs.readFileSync(this.location.resolve(artifact.relativePath)),
+            captureRegularFile(this.location.resolve(artifact.relativePath), { label: "managed Flow artifact", maxBytes: MAX_IN_MEMORY_FILE_BYTES, requireSingleLink: true }).bytes,
           );
         }
         const descriptors = artifacts.map((artifact) => {
@@ -1786,7 +1775,7 @@ export class FlowArtifactCatalogStore {
     if (!catalogManagedPath(safePath) || safePath === ARTIFACT_CATALOG_RELATIVE_PATH || VERSION_TRANSIENT_FILES.has(safePath)) {
       throw new Error(`catalog unpublication requires a managed artifact path: ${safePath}`);
     }
-    return this.#withPublicationLock(() => {
+    return this.#withPublicationLock((runtimeAuthority) => {
       this.location.assertAuthority(safePath, { mustExist: true });
       const snapshot = new VersionTreeSnapshot(this.location);
       const previous = this.#requireUnlocked();
@@ -1796,15 +1785,15 @@ export class FlowArtifactCatalogStore {
       }
       if (system) this.#assertSystemSlots([artifact.slot]);
       else publicationClaim.assertSlot(artifact.slot);
-      return this.#executeCatalogTransaction(snapshot, previous.hash, write, () => {
+      return this.#executeCatalogTransaction(runtimeAuthority, snapshot, previous.hash, write, () => {
         snapshot.assertOnlyDeclaredChanges(new Set([safePath]));
         if (fs.existsSync(this.location.resolve(safePath))) throw new Error(`unpublished artifact still exists: ${safePath}`);
         return new FlowArtifactCatalog({ artifacts: previous.artifacts.filter((artifact) => artifact.relativePath !== safePath) });
       });
     });
   }
-  #executeCatalogTransaction(snapshot, baselineCatalogHash, write, validateAndBuildCatalog) {
-    const transaction = this.#beginTransaction(snapshot, baselineCatalogHash);
+  #executeCatalogTransaction(runtimeAuthority, snapshot, baselineCatalogHash, write, validateAndBuildCatalog) {
+    const transaction = this.#beginTransaction(runtimeAuthority, snapshot, baselineCatalogHash);
     let catalogCommitted = false;
     try {
       const result = write();
@@ -1823,9 +1812,17 @@ export class FlowArtifactCatalogStore {
       return Object.freeze({ result, catalog });
     } catch (error) {
       if (catalogCommitted) { transaction.abandon(); throw error; }
+      if (RealDirectoryAuthority.isAuthorityFailure(error)) {
+        // A fresh traversal cannot authorize rollback over a directory that
+        // this operation already rejected. Persist that refusal so a fresh
+        // Store cannot adopt the replacement during journal recovery either.
+        transaction.abandon(error);
+        throw error;
+      }
       try { snapshot.restore(); } catch (rollbackError) {
-        transaction.abandon();
-        throw new AggregateError([error, rollbackError], "artifact catalog publication authority corrupted during rollback", { cause: error });
+        const failure = new AggregateError([error, rollbackError], "artifact catalog publication authority corrupted during rollback", { cause: error });
+        transaction.abandon(failure);
+        throw failure;
       }
       transaction.finish();
       throw error;
@@ -1841,35 +1838,41 @@ export class FlowArtifactCatalogStore {
       || STEP_OWNED_ARTIFACT_KINDS.has(slot.kind)
     ))) throw new Error("system publication is not authorized for one or more artifact kinds");
   }
-  #transactionFile() {
+  #transactionFile(runtimeAuthority) {
     const runtimeDirectory = this.location.runtimeLock("runtime.lock.artifact-catalog").runtimeDirectory;
-    fs.mkdirSync(runtimeDirectory, { recursive: true, mode: 0o755 });
-    return new AtomicJsonFile(path.join(runtimeDirectory, "catalog-transaction.json"));
+    return new AtomicJsonFile(path.join(runtimeDirectory, "catalog-transaction.json"), { directoryAuthority: runtimeAuthority });
   }
-  #beginTransaction(snapshot, baselineCatalogHash) {
-    const file = this.#transactionFile();
+  #beginTransaction(runtimeAuthority, snapshot, baselineCatalogHash) {
+    const file = this.#transactionFile(runtimeAuthority);
     if (ACTIVE_VERSION_TRANSACTIONS.has(file.filePath)) throw new Error("nested Version catalog transaction is not allowed");
     ACTIVE_VERSION_TRANSACTIONS.add(file.filePath);
     const document = {
-      version: 1,
+      version: 2,
       location: { specId: this.location.specId.toString(), version: this.location.version.toString(), relativeDirectory: this.location.relativeDirectory },
       baselineCatalogHash,
       targetCatalogHash: null,
+      rollbackBlocked: false,
       snapshot: snapshot.toJSON(),
     };
     try { file.write({ ...document, digest: sha256(Buffer.from(JSON.stringify(document), "utf8")) }); }
     catch (error) { ACTIVE_VERSION_TRANSACTIONS.delete(file.filePath); throw error; }
     return new VersionCatalogTransactionJournal({ file, document });
   }
-  #recoverTransaction() {
-    const file = this.#transactionFile();
+  #recoverTransaction(runtimeAuthority) {
+    const file = this.#transactionFile(runtimeAuthority);
     if (ACTIVE_VERSION_TRANSACTIONS.has(file.filePath)) throw new Error("nested Version catalog access during a transaction is not allowed");
-    const stored = file.read(null);
-    if (stored === null) return;
+    const captured = file.readSnapshot();
+    if (captured === null) return;
+    const stored = JSON.parse(captured.text());
+    if (stored === null || typeof stored !== "object" || Array.isArray(stored)) {
+      throw new Error("Version transaction journal integrity is invalid");
+    }
+    if (stored.version !== 2) throw new FileTreeImageRevisionError(stored.version);
     const { digest: storedDigest, ...document } = stored;
-    if (Object.keys(stored).sort().join(",") !== "baselineCatalogHash,digest,location,snapshot,targetCatalogHash,version"
+    if (Object.keys(stored).sort().join(",") !== "baselineCatalogHash,digest,location,rollbackBlocked,snapshot,targetCatalogHash,version"
       || storedDigest !== sha256(Buffer.from(JSON.stringify(document), "utf8"))
-      || document.version !== 1 || !/^[a-f0-9]{64}$/.test(document.baselineCatalogHash)
+      || typeof document.rollbackBlocked !== "boolean"
+      || !/^[a-f0-9]{64}$/.test(document.baselineCatalogHash)
       || (document.targetCatalogHash !== null && !/^[a-f0-9]{64}$/.test(document.targetCatalogHash))) {
       throw new Error("Version transaction journal integrity is invalid");
     }
@@ -1878,13 +1881,21 @@ export class FlowArtifactCatalogStore {
       || document.location?.relativeDirectory !== this.location.relativeDirectory) {
       throw new Error("Version transaction journal location binding is invalid");
     }
+    if (document.rollbackBlocked) throw new Error("Version transaction rollback is blocked by a rejected directory authority; preserve its journal and original directories for explicit recovery");
+    const snapshot = VersionTreeSnapshot.fromStored(this.location, document.snapshot);
     const storedCatalog = this.file.read(null);
     const parsedCatalog = storedCatalog === null ? null : new FlowArtifactCatalog(storedCatalog);
     if (parsedCatalog !== null && parsedCatalog.hash !== storedCatalog.hash) throw new Error("Version transaction visible catalog hash is invalid");
     const visibleHash = parsedCatalog?.hash ?? null;
     const committed = document.targetCatalogHash !== null && visibleHash === document.targetCatalogHash;
     if (committed) parsedCatalog.verify(this.location, this.#activityIndexFile);
-    else if (visibleHash === document.baselineCatalogHash) VersionTreeSnapshot.fromStored(this.location, document.snapshot).restore();
+    else if (visibleHash === document.baselineCatalogHash) {
+      try { snapshot.restore(); }
+      catch (failure) {
+        new VersionCatalogTransactionJournal({ file, document }).abandon(failure);
+        throw failure;
+      }
+    }
     else throw new Error("Version transaction visible catalog has an unknown commit identity");
     file.remove();
     this.#catalog = null;
@@ -1892,8 +1903,8 @@ export class FlowArtifactCatalogStore {
   }
   #withPublicationLock(operation) {
     this.location.assertAuthority(null, { mustExist: true });
-    if (!fs.lstatSync(this.location.directory).isDirectory()) throw new Error("Version root must be an existing real directory");
-    const directoryAuthority = new RealDirectoryAuthority(this.location.directory);
+    const directoryAuthority = this.file.directoryAuthority;
+    directoryAuthority.assertStable();
     const runtimeLock = this.location.runtimeLock("runtime.lock.artifact-catalog");
     const runtimeDirectory = runtimeLock.runtimeDirectory;
     const lockDirectory = runtimeLock.directory;
@@ -1909,9 +1920,8 @@ export class FlowArtifactCatalogStore {
     }
     // Establish the non-authoritative runtime branch before its identity is
     // captured.  Publication never treats these files as catalog entries.
-    fs.mkdirSync(lockDirectory, { recursive: true, mode: 0o755 });
-    const runtimeAuthority = new RealDirectoryAuthority(runtimeDirectory, { parentAuthority: directoryAuthority });
-    const lockDirectoryAuthority = new RealDirectoryAuthority(lockDirectory, { parentAuthority: runtimeAuthority });
+    const runtimeAuthority = directoryAuthority.descendant(runtimeDirectory, { create: true, creationMode: 0o755 });
+    const lockDirectoryAuthority = runtimeAuthority.descendant(lockDirectory, { create: true, creationMode: 0o755 });
     const lock = new FileLock({
       directoryAuthority: lockDirectoryAuthority, fileName: runtimeLock.fileName, kind: "artifact-catalog-publication",
       authority: { directory: this.location.directory, runtimeDirectory, catalog: this.location.catalogFile },
@@ -1922,8 +1932,8 @@ export class FlowArtifactCatalogStore {
       errorFactory: artifactCatalogLockError,
     });
     return lock.runExclusive(() => {
-      this.#recoverTransaction();
-      return operation();
+      this.#recoverTransaction(runtimeAuthority);
+      return operation(runtimeAuthority);
     });
   }
 }
@@ -2116,9 +2126,7 @@ export class FlowVersionMigrationArtifact {
   }
   verifySource(sourceRoot) {
     const file = path.join(sourceRoot, ...this.sourcePath.split("/"));
-    const stat = fs.lstatSync(file);
-    if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1) throw new Error(`migration source authority changed: ${this.sourcePath}`);
-    const bytes = fs.readFileSync(file);
+    const bytes = captureRegularFile(file, { label: `migration source ${this.sourcePath}`, maxBytes: MAX_IN_MEMORY_FILE_BYTES, requireSingleLink: true }).bytes;
     if (bytes.length !== this.size || sha256(bytes) !== this.sourceHash) throw new Error(`migration source drift detected: ${this.sourcePath}`);
     return bytes;
   }
@@ -2377,7 +2385,7 @@ export class FlowVersionMigrationClassifier {
       if (!fs.lstatSync(this.target.directory).isDirectory()) throw new Error("Version target is not a directory");
       const catalog = new FlowArtifactCatalogStore({ location: this.target }).require();
       for (const required of [FLOW_STATE_RELATIVE_PATH, FLOW_ACTIVITIES_RELATIVE_PATH, SPEC_RECORD_RELATIVE_PATH]) catalog.resolve(required);
-      const spec = new AuthoritativeSpecRecord(JSON.parse(fs.readFileSync(this.target.specFile, "utf8")));
+      const spec = new AuthoritativeSpecRecord(JSON.parse(captureRegularFile(this.target.specFile, { label: "managed Flow artifact", maxBytes: MAX_IN_MEMORY_FILE_BYTES, requireSingleLink: true }).text()));
       if (!spec.specId.equals(this.target.specId)) throw new Error("Version Spec identity does not match target");
       if (this.semanticValidator === null) throw new Error("Version target semantic validator is unavailable");
       this.semanticValidator.validateMaterialized({ location: this.target, spec });
@@ -2432,10 +2440,14 @@ export class FlowVersionMigrationClassifier {
           blockers.push(new FlowVersionMigrationBlocker({ code: "UNSUPPORTED_SOURCE_ENTRY", path: sourcePath, message: `unsupported migration source entry: ${sourcePath}` }));
           continue;
         }
-        if (fs.lstatSync(absolute).nlink !== 1) {
+        const visible = fs.lstatSync(absolute, { bigint: true });
+        if (visible.nlink !== 1n) {
           blockers.push(new FlowVersionMigrationBlocker({ code: "UNSAFE_SOURCE_HARDLINK", path: sourcePath, message: `unsafe hard-linked migration source artifact: ${sourcePath}` }));
         }
-        const bytes = fs.readFileSync(absolute);
+        // Inspection inventories rejected entries too; a blocker never grants
+        // permission to materialize this source as a migration artifact.
+        const bytes = captureRegularFile(absolute, { label: "migration source inventory", maxBytes: MAX_IN_MEMORY_FILE_BYTES,
+          expectedIdentity: visible, expectedLinkCount: Number(visible.nlink) }).bytes;
         inventoryEntries.push(new FlowVersionMigrationInventoryEntry({ sourcePath, entryType: "file", hash: sha256(bytes), size: bytes.length }));
         let classified;
         try { classified = classifyMigrationArtifact(sourcePath, this.sourcePolicy); } catch (error) {
@@ -2618,20 +2630,24 @@ export class FlowVersionMigrationFixture {
       });
       return new FlowVersionMigrationMaterialization({ location, catalog });
     }
-    let ownsVersionRoot = false;
+    let versionAuthority = null;
     try {
-      fs.mkdirSync(path.dirname(location.directory), { recursive: true, mode: 0o755 });
-      fs.mkdirSync(location.directory, { recursive: false, mode: 0o755 });
-      ownsVersionRoot = true;
+      const parentAuthority = location.repositoryAuthority.descendant(path.dirname(location.directory), { create: true, creationMode: 0o755 });
+      versionAuthority = RealDirectoryAuthority.createExclusive(location.directory, { parentAuthority, creationMode: 0o755 });
+      const outputAuthorities = [versionAuthority];
+      const writeOutput = (targetPath, bytes) => {
+        const target = location.resolve(targetPath);
+        const directory = path.dirname(target);
+        const anchor = RealDirectoryAuthority.closestAncestor(directory, outputAuthorities);
+        const directoryAuthority = anchor.descendant(directory, { create: true, creationMode: 0o755 });
+        outputAuthorities.push(directoryAuthority);
+        new AtomicFile(target, { directoryAuthority }).write(bytes, { exclusive: true });
+      };
       for (const artifact of this.plan.artifacts.filter((entry) => entry.operation.value === "copy")) {
-        const target = location.resolve(artifact.targetPath);
-        fs.mkdirSync(path.dirname(target), { recursive: true, mode: 0o755 });
-        fs.writeFileSync(target, sourceBytes.get(artifact), { flag: "wx", mode: 0o600 });
+        writeOutput(artifact.targetPath, sourceBytes.get(artifact));
       }
       for (const output of outputSet.values()) {
-        const target = location.resolve(output.targetPath);
-        fs.mkdirSync(path.dirname(target), { recursive: true, mode: 0o755 });
-        fs.writeFileSync(target, output.bytes, { flag: "wx", mode: 0o600 });
+        writeOutput(output.targetPath, output.bytes);
       }
       const descriptors = [];
       for (const artifact of this.plan.artifacts.filter((entry) => entry.operation.value === "copy")) {
@@ -2649,15 +2665,15 @@ export class FlowVersionMigrationFixture {
           mediaType: output.mediaType, retention: output.retention, activityId: output.activityId,
         }));
       }
-      const store = new FlowArtifactCatalogStore({ location });
+      const store = new FlowArtifactCatalogStore({ location, directoryAuthority: versionAuthority });
       store.initialize(new FlowArtifactCatalog({ artifacts: descriptors }), MIGRATION_CATALOG_INITIALIZATION);
       const catalog = store.require();
       store.read({ relativePaths: this.toJSON().catalogPaths, read: () => null });
       this.semanticValidator.validateMaterialized({ location, spec: this.spec });
       return new FlowVersionMigrationMaterialization({ location, catalog });
     } catch (error) {
-      if (!ownsVersionRoot) throw error;
-      try { fs.rmSync(location.directory, { recursive: true, force: true }); } catch (cleanupError) {
+      if (versionAuthority === null) throw error;
+      try { versionAuthority.remove({ recursive: true, force: true }); } catch (cleanupError) {
         throw new AggregateError([error, cleanupError], "migration fixture materialization cleanup failed", { cause: error });
       }
       throw error;

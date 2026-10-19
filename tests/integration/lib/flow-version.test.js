@@ -1,4 +1,6 @@
 import { createTmpDir as createTestDirectory } from "../../support/builders/tmp-dir.js";
+import { interruptChildAtCheckpoint } from "../../support/infrastructure/interrupted-child.js";
+import { AtomicFile } from "../../../src/lib/atomic-file.js";
 import assert from "node:assert/strict";
 import { once } from "node:events";
 import { spawn } from "node:child_process";
@@ -827,6 +829,64 @@ describe("Flow artifact catalog authority slots", () => {
     }
   });
 
+  it("refuses a present null transaction journal and preserves the visible catalog", () => {
+    const location = canonicalLocation();
+    fs.mkdirSync(path.dirname(location.artifactPath("a.json")), { recursive: true });
+    fs.writeFileSync(location.artifactPath("a.json"), "a-before");
+    saveCatalog(location, [FlowArtifactDescriptor.fromFile({ location, authoritySlot: singleton("a"),
+      relativePath: "artifacts/migration/a.json", mediaType: "application/json", retention: "permanent", migrationMaterialization: true })]);
+    const catalogBefore = fs.readFileSync(location.catalogFile);
+    const journal = path.join(location.runtimeLock("runtime.lock.artifact-catalog").runtimeDirectory, "catalog-transaction.json");
+    fs.mkdirSync(path.dirname(journal), { recursive: true });
+    fs.writeFileSync(journal, "null\n");
+    assert.throws(() => new FlowArtifactCatalogStore({ location }).require(), /transaction journal integrity/);
+    assert.equal(fs.readFileSync(journal, "utf8"), "null\n");
+    assert.deepEqual(fs.readFileSync(location.catalogFile), catalogBefore);
+    assert.equal(fs.readFileSync(location.artifactPath("a.json"), "utf8"), "a-before");
+  });
+
+  it("retains the baseline catalog when hardlink rollback is interrupted and a fresh manager recovers", () => {
+    const location = canonicalLocation();
+    const target = location.artifactPath("a.json");
+    const rogue = location.artifactPath("rogue.json");
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.writeFileSync(target, "a-before");
+    saveCatalog(location, [FlowArtifactDescriptor.fromFile({ location, authoritySlot: singleton("a"),
+      relativePath: "artifacts/migration/a.json", mediaType: "application/json", retention: "permanent", migrationMaterialization: true })]);
+    const catalogBefore = fs.readFileSync(location.catalogFile);
+    const originalWrite = AtomicFile.prototype.write;
+    const injected = new Error("interrupt rollback before restoring the first artifact");
+    try {
+      assert.throws(() => new FlowArtifactCatalogStore({ location }).publishSystem({
+        relativePath: "artifacts/migration/a.json", authoritySlot: singleton("a"),
+        mediaType: "application/json", retention: "permanent",
+        write: () => {
+          fs.writeFileSync(target, "a-after");
+          fs.linkSync(location.catalogFile, rogue);
+          AtomicFile.prototype.write = function (...args) {
+            if (this.filePath === target) throw injected;
+            return originalWrite.apply(this, args);
+          };
+        },
+      }), (error) => {
+        assert(error instanceof AggregateError);
+        assert(error.errors.includes(injected), error.errors.map((entry) => entry.stack).join("\n"));
+        return true;
+      });
+    } finally {
+      AtomicFile.prototype.write = originalWrite;
+    }
+    const journal = path.join(location.runtimeLock("runtime.lock.artifact-catalog").runtimeDirectory, "catalog-transaction.json");
+    assert.equal(fs.existsSync(journal), true);
+    assert.equal(fs.existsSync(location.catalogFile), true);
+    assert.deepEqual(fs.readFileSync(location.catalogFile), catalogBefore);
+    const recovered = new FlowArtifactCatalogStore({ location }).require();
+    assert.equal(recovered.hash, JSON.parse(catalogBefore).hash);
+    assert.equal(fs.readFileSync(target, "utf8"), "a-before");
+    assert.equal(fs.existsSync(rogue), false);
+    assert.equal(fs.existsSync(journal), false);
+  });
+
   it("removes never-created nested parents when a declared write fails", () => {
     const location = canonicalLocation();
     fs.mkdirSync(path.dirname(location.artifactPath("base.json")), { recursive: true });
@@ -1534,22 +1594,23 @@ describe("Current Flow Version storage", () => {
     const contractPath = fileURLToPath(new URL("../../../src/lib/flow-artifact-contract.js", import.meta.url));
     const runCrash = async (operation, phase) => {
       const mutation = operation === "publish"
-        ? `store.publish({ ...artifact.publication({ updater: "report", mediaType: "application/json" }), publicationClaim: artifactPublicationClaimForStep("report"), write: () => { fs.mkdirSync(path.dirname(location.resolve(artifact.relativePath)), { recursive: true }); fs.writeFileSync(location.resolve(artifact.relativePath), "{}\\n"); if (${JSON.stringify(phase)} === "uncommitted") process.kill(process.pid, "SIGKILL"); } });`
-        : `store.unpublish({ relativePath: artifact.relativePath, publicationClaim: artifactPublicationClaimForStep("report"), write: () => { fs.unlinkSync(location.resolve(artifact.relativePath)); if (${JSON.stringify(phase)} === "uncommitted") process.kill(process.pid, "SIGKILL"); } });`;
+        ? `store.publish({ ...artifact.publication({ updater: "report", mediaType: "application/json" }), publicationClaim: artifactPublicationClaimForStep("report"), write: () => { fs.mkdirSync(path.dirname(location.resolve(artifact.relativePath)), { recursive: true }); fs.writeFileSync(location.resolve(artifact.relativePath), "{}\\n"); if (${JSON.stringify(phase)} === "uncommitted") pause(); } });`
+        : `store.unpublish({ relativePath: artifact.relativePath, publicationClaim: artifactPublicationClaimForStep("report"), write: () => { fs.unlinkSync(location.resolve(artifact.relativePath)); if (${JSON.stringify(phase)} === "uncommitted") pause(); } });`;
       const source = `
         import fs from "node:fs"; import path from "node:path";
         import { FlowArtifactCatalogStore, FlowVersionLocation, FlowVersionAuthorityScope } from ${JSON.stringify(modulePath)};
         import { artifactPublicationClaimForStep } from ${JSON.stringify(authorityPath)};
         import { FLOW_ARTIFACT_CONTRACTS } from ${JSON.stringify(contractPath)};
+        function pause() { fs.writeSync(1, "paused\\n"); Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0); }
         const location = new FlowVersionLocation({ repositoryRoot: ${JSON.stringify(root)}, authorityScope: FlowVersionAuthorityScope.canonical(), specId: "508-flow-version", version: 1 });
-        const store = new FlowArtifactCatalogStore({ location, faultInjector: ({ phase: point }) => { if ((${JSON.stringify(phase)} === "prepared" && point === "before-json-rename") || (${JSON.stringify(phase)} === "committed" && point === "before-json-directory-fsync")) process.kill(process.pid, "SIGKILL"); } });
+        const store = new FlowArtifactCatalogStore({ location, faultInjector: ({ phase: point }) => { if ((${JSON.stringify(phase)} === "prepared" && point === "before-json-rename") || (${JSON.stringify(phase)} === "committed" && point === "before-json-readback")) pause(); } });
         const artifact = FLOW_ARTIFACT_CONTRACTS.resolve("report");
         ${mutation}
       `;
-      const child = spawn(process.execPath, ["--input-type=module", "--eval", source], { stdio: "ignore" });
-      const [code, signal] = await once(child, "exit");
-      assert.equal(code, null);
-      assert.equal(signal, "SIGKILL");
+      const result = await interruptChildAtCheckpoint(process.execPath,
+        ["--input-type=module", "--eval", source], { checkpoint: "paused\n" });
+      assert.equal(result.interrupted, true);
+      assert.notEqual(result.exitCode, 0);
     };
     await runCrash("publish", "uncommitted");
     let recovered = new FlowArtifactCatalogStore({ location });

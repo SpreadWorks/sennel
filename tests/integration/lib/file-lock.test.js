@@ -100,6 +100,19 @@ async function assertRejectedWithoutMutation(lock, method, status, errorType = n
   assertUnchanged(lock, before);
 }
 
+function failRemovalReadback(message) {
+  const unlink = fs.unlinkSync;
+  const lstat = fs.lstatSync;
+  let removed = null;
+  let failed = false;
+  fs.unlinkSync = (target) => { const result = unlink(target); removed = target; return result; };
+  fs.lstatSync = (target, ...args) => {
+    if (target === removed && !failed) { failed = true; throw new Error(message); }
+    return lstat(target, ...args);
+  };
+  return () => { fs.unlinkSync = unlink; fs.lstatSync = lstat; };
+}
+
 describe("FileLock", () => {
   afterEach(async () => {
     for (const holder of holders.splice(0)) await holder.release();
@@ -238,73 +251,54 @@ describe("FileLock", () => {
     const directory = root("file-lock-transition-");
     const lock = lockAt(directory);
     const originalOpen = fs.openSync;
-    const originalFsync = fs.fsyncSync;
+    const originalLink = fs.linkSync;
+    const originalLstat = fs.lstatSync;
     let ownerTempOpens = 0;
+    let visible = null;
+    let failed = false;
     fs.openSync = (target, ...args) => {
-      if (String(target).endsWith(".owner.tmp")) ownerTempOpens += 1;
+      if (String(target).endsWith(".owner.tmp") && String(args[0]).startsWith("wx")) ownerTempOpens += 1;
       return originalOpen(target, ...args);
     };
-    fs.fsyncSync = (descriptor) => {
-      if (fs.fstatSync(descriptor).isDirectory()) throw new Error("publication directory sync failed");
-      return originalFsync(descriptor);
+    fs.linkSync = (source, target) => { const result = originalLink(source, target); visible = target; return result; };
+    fs.lstatSync = (target, ...args) => {
+      if (target === visible && !failed) { failed = true; throw new Error("publication readback failed"); }
+      return originalLstat(target, ...args);
     };
     try {
-      assert.throws(
-        () => lock.acquire(),
-        (error) => error.name === "ProcessLockTransitionError"
-          && error.phase === "publish-directory-fsync"
-          && error.lockStatus === "durability-uncertain"
-          && error.publishedToVisibleName === true
-          && error.durabilityUnknown === true
-          && typeof error.owner?.processIdentity?.ownerToken === "string"
-          && error.cause instanceof AggregateError,
-      );
+      assert.throws(() => lock.acquire(), (error) => error.name === "ProcessLockTransitionError"
+        && error.phase === "before-owner-readback" && error.lockStatus === "publication-unconfirmed"
+        && error.publishedToVisibleName === true && error.publicationUnknown === true
+        && typeof error.owner?.processIdentity?.ownerToken === "string" && error.cause instanceof AggregateError);
       assert.equal(ownerTempOpens, 1);
-    } finally {
-      fs.openSync = originalOpen;
-      fs.fsyncSync = originalFsync;
-    }
+    } finally { fs.openSync = originalOpen; fs.linkSync = originalLink; fs.lstatSync = originalLstat; }
   });
 
   it("aggregates a failing body before a failing release", () => {
     const directory = root("file-lock-aggregate-");
     const lock = lockAt(directory);
-    const originalFsync = fs.fsyncSync;
+    let restore;
     try {
-      assert.throws(
-        () => lock.runExclusive(() => {
-          fs.fsyncSync = (descriptor) => {
-            if (fs.fstatSync(descriptor).isDirectory()) throw new Error("release sync failed");
-            return originalFsync(descriptor);
-          };
-          throw new Error("body failed");
-        }),
-        (error) => error instanceof AggregateError && error.cause === error.errors[0]
-          && error.errors[0].message === "body failed" && error.errors[1].name === "ProcessLockTransitionError",
-      );
-    } finally { fs.fsyncSync = originalFsync; }
+      assert.throws(() => lock.runExclusive(() => {
+        restore = failRemovalReadback("release readback failed");
+        throw new Error("body failed");
+      }), (error) => error instanceof AggregateError && error.cause === error.errors[0]
+        && error.errors[0].message === "body failed" && error.errors[1].name === "ProcessLockTransitionError");
+    } finally { restore?.(); }
   });
 
   it("preserves async body-and-release AggregateError order and diagnostics", async () => {
     const directory = root("file-lock-async-aggregate-");
     const lock = lockAt(directory);
-    const originalFsync = fs.fsyncSync;
+    let restore;
     try {
-      await assert.rejects(
-        lock.runExclusiveAsync(async () => {
-          fs.fsyncSync = (descriptor) => {
-            if (fs.fstatSync(descriptor).isDirectory()) throw new Error("async release sync failed");
-            return originalFsync(descriptor);
-          };
-          throw new Error("async body failed");
-        }),
-        (error) => error instanceof AggregateError && error.cause === error.errors[0]
-          && error.errors[0].message === "async body failed"
-          && error.errors[1].name === "ProcessLockTransitionError"
-          && error.errors[1].phase === "release-directory-fsync"
-          && error.errors[1].lockStatus === "durability-uncertain",
-      );
-    } finally { fs.fsyncSync = originalFsync; }
+      await assert.rejects(lock.runExclusiveAsync(async () => {
+        restore = failRemovalReadback("async release readback failed");
+        throw new Error("async body failed");
+      }), (error) => error instanceof AggregateError && error.cause === error.errors[0]
+        && error.errors[0].message === "async body failed" && error.errors[1].name === "ProcessLockTransitionError"
+        && error.errors[1].phase === "release-readback" && error.errors[1].lockStatus === "publication-unconfirmed");
+    } finally { restore?.(); }
   });
 
   it("rejects changed directory authority with complete diagnostics before acquisition", async () => {

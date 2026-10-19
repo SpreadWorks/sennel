@@ -27,14 +27,11 @@ function makeLock(root, source = identitySource()) {
   });
 }
 
-function isDirectoryDescriptor(descriptor) {
-  return fs.fstatSync(descriptor).isDirectory();
-}
 
 function assertTransition(error, {
   phase,
   publishedToVisibleName,
-  durabilityUnknown,
+  publicationUnknown,
   tempResidue,
   visibleResidue,
 }) {
@@ -42,7 +39,7 @@ function assertTransition(error, {
   assert.match(error.code, /^PROCESS_LOCK_/);
   assert.equal(error.phase, phase);
   assert.equal(error.publishedToVisibleName, publishedToVisibleName);
-  assert.equal(error.durabilityUnknown, durabilityUnknown);
+  assert.equal(error.publicationUnknown, publicationUnknown);
   assert.deepEqual(error.residue, { temp: tempResidue, visible: visibleResidue });
   assert.equal(typeof error.lockPath, "string");
   assert.equal(typeof error.owner?.processIdentity?.ownerToken, "string");
@@ -55,7 +52,7 @@ describe("ProcessLock transition failure semantics", () => {
     for (const root of roots.splice(0)) removeTmpDir(root);
   });
 
-  it("reports file-fsync primary failure with ordered close and temp-unlink cleanup failures", () => {
+  it("reports file-fsync and close failures while retaining the still-open owned stage", () => {
     const root = createTmpDir("process-lock-prepublish-failure-");
     roots.push(root);
     const lock = makeLock(root);
@@ -65,6 +62,7 @@ describe("ProcessLock transition failure semantics", () => {
     const originalUnlink = fs.unlinkSync;
     let tempDescriptor = null;
     let tempPath = null;
+    let tempUnlinkAttempts = 0;
     fs.openSync = (target, ...args) => {
       const descriptor = originalOpen(target, ...args);
       if (String(target).endsWith(".owner.tmp")) {
@@ -82,7 +80,7 @@ describe("ProcessLock transition failure semantics", () => {
       return originalClose(descriptor);
     };
     fs.unlinkSync = (target) => {
-      if (String(target) === tempPath) throw Object.assign(new Error("owner temp unlink failed"), { code: "EACCES" });
+      if (String(target) === tempPath) { tempUnlinkAttempts++; throw Object.assign(new Error("owner temp unlink failed"), { code: "EACCES" }); }
       return originalUnlink(target);
     };
     try {
@@ -90,9 +88,9 @@ describe("ProcessLock transition failure semantics", () => {
         () => lock.acquire(),
         (error) => {
           assertTransition(error, {
-            phase: "owner-file-fsync",
+            phase: "before-owner-fsync",
             publishedToVisibleName: false,
-            durabilityUnknown: false,
+            publicationUnknown: false,
             tempResidue: true,
             visibleResidue: false,
           });
@@ -100,11 +98,12 @@ describe("ProcessLock transition failure semantics", () => {
           assert.equal(error.cause.cause, error.cause.errors[0]);
           assert.deepEqual(
             error.cause.errors.map((item) => item.message),
-            ["owner file fsync failed", "owner descriptor close failed", "owner temp unlink failed"],
+            ["owner file fsync failed", "owner descriptor close failed"],
           );
           return true;
         },
       );
+      assert.equal(tempUnlinkAttempts, 0, "an unconfirmed descriptor close must prevent unlink of its owned stage");
       assert.equal(fs.existsSync(tempPath), true);
       assert.equal(fs.existsSync(lock.lockPath), false);
     } finally {
@@ -120,15 +119,19 @@ describe("ProcessLock transition failure semantics", () => {
     lock.release();
   });
 
-  it("reports visible lock residue when directory durability and cleanup both fail", () => {
+  it("reports visible lock residue when publication readback and cleanup both fail", () => {
     const root = createTmpDir("process-lock-postpublish-failure-");
     roots.push(root);
     const lock = makeLock(root);
-    const originalFsync = fs.fsyncSync;
+    const originalLstat = fs.lstatSync;
+    const originalLink = fs.linkSync;
     const originalUnlink = fs.unlinkSync;
-    fs.fsyncSync = (descriptor) => {
-      if (isDirectoryDescriptor(descriptor)) throw Object.assign(new Error("publish directory fsync failed"), { code: "EIO" });
-      return originalFsync(descriptor);
+    let published = false;
+    let failed = false;
+    fs.linkSync = (...args) => { const result = originalLink(...args); published = true; return result; };
+    fs.lstatSync = (target, ...args) => {
+      if (target === lock.lockPath && published && !failed) { failed = true; throw Object.assign(new Error("publish readback failed"), { code: "EIO" }); }
+      return originalLstat(target, ...args);
     };
     fs.unlinkSync = (target) => {
       if (path.resolve(String(target)) === lock.lockPath) {
@@ -141,9 +144,9 @@ describe("ProcessLock transition failure semantics", () => {
         () => lock.acquire(),
         (error) => {
           assertTransition(error, {
-            phase: "publish-directory-fsync",
+            phase: "before-owner-readback",
             publishedToVisibleName: true,
-            durabilityUnknown: true,
+            publicationUnknown: true,
             tempResidue: false,
             visibleResidue: true,
           });
@@ -151,7 +154,7 @@ describe("ProcessLock transition failure semantics", () => {
           assert.equal(error.cause.cause, error.cause.errors[0]);
           assert.deepEqual(
             error.cause.errors.map((item) => item.message),
-            ["publish directory fsync failed", "published lock cleanup failed"],
+            ["publish readback failed", "published lock cleanup failed"],
           );
           const bytes = JSON.parse(fs.readFileSync(lock.lockPath, "utf8"));
           assert.equal(bytes.processIdentity.ownerToken, error.owner.processIdentity.ownerToken);
@@ -160,7 +163,8 @@ describe("ProcessLock transition failure semantics", () => {
       );
       assert.equal(fs.existsSync(lock.lockPath), true);
     } finally {
-      fs.fsyncSync = originalFsync;
+      fs.lstatSync = originalLstat;
+      fs.linkSync = originalLink;
       fs.unlinkSync = originalUnlink;
     }
 
@@ -170,7 +174,7 @@ describe("ProcessLock transition failure semantics", () => {
     retry.release();
   });
 
-  it("reports stale-unlink durability uncertainty without implicitly publishing a replacement", () => {
+  it("reports stale-unlink readback uncertainty without implicitly publishing a replacement", () => {
     const root = createTmpDir("process-lock-stale-fsync-");
     roots.push(root);
     const currentSource = identitySource("current-boot");
@@ -184,56 +188,60 @@ describe("ProcessLock transition failure semantics", () => {
       scope: "failure-semantics",
       processIdentity: staleOwner,
     }, null, 2)}\n`, { mode: 0o600 });
-    const originalFsync = fs.fsyncSync;
-    fs.fsyncSync = (descriptor) => {
-      if (isDirectoryDescriptor(descriptor)) throw Object.assign(new Error("stale unlink directory fsync failed"), { code: "EIO" });
-      return originalFsync(descriptor);
+    const originalLstat = fs.lstatSync;
+    const originalUnlink = fs.unlinkSync;
+    let removed = false;
+    let failed = false;
+    fs.unlinkSync = (target) => { const result = originalUnlink(target); if (target === lock.lockPath) removed = true; return result; };
+    fs.lstatSync = (target, ...args) => {
+      if (target === lock.lockPath && removed && !failed) { failed = true; throw Object.assign(new Error("stale unlink readback failed"), { code: "EIO" }); }
+      return originalLstat(target, ...args);
     };
     try {
       assert.throws(
         () => lock.acquire(),
         (error) => {
           assertTransition(error, {
-            phase: "stale-remove-directory-fsync",
+            phase: "stale-remove-readback",
             publishedToVisibleName: false,
-            durabilityUnknown: true,
+            publicationUnknown: true,
             tempResidue: false,
             visibleResidue: false,
           });
           assert.equal(error.owner.processIdentity.ownerToken, staleOwner.ownerToken);
-          assert.equal(error.cause.message, "stale unlink directory fsync failed");
+          assert.equal(error.cause.message, "stale unlink readback failed");
           return true;
         },
       );
       assert.equal(fs.existsSync(lock.lockPath), false);
-    } finally {
-      fs.fsyncSync = originalFsync;
-    }
+    } finally { fs.lstatSync = originalLstat; fs.unlinkSync = originalUnlink; }
     const token = lock.acquire();
     assert.notEqual(token, staleOwner.ownerToken);
     lock.release();
   });
 
-  it("reports release durability failure without a retry-recovery sidecar transaction", () => {
+  it("reports release readback failure without a retry-recovery sidecar transaction", () => {
     const root = createTmpDir("lock-release-failure-");
     roots.push(root);
     const lock = makeLock(root);
     lock.acquire();
-    const originalFsync = fs.fsyncSync;
-    fs.fsyncSync = (descriptor) => {
-      if (isDirectoryDescriptor(descriptor)) {
-        throw Object.assign(new Error("release directory fsync failed"), { code: "EIO" });
-      }
-      return originalFsync(descriptor);
+    const originalLstat = fs.lstatSync;
+    const originalUnlink = fs.unlinkSync;
+    let removed = false;
+    let failed = false;
+    fs.unlinkSync = (target) => { const result = originalUnlink(target); if (target === lock.lockPath) removed = true; return result; };
+    fs.lstatSync = (target, ...args) => {
+      if (target === lock.lockPath && removed && !failed) { failed = true; throw Object.assign(new Error("release readback failed"), { code: "EIO" }); }
+      return originalLstat(target, ...args);
     };
     try {
       assert.throws(
         () => lock.release(),
         (error) => {
           assertTransition(error, {
-            phase: "release-directory-fsync",
+            phase: "release-readback",
             publishedToVisibleName: false,
-            durabilityUnknown: true,
+            publicationUnknown: true,
             tempResidue: false,
             visibleResidue: false,
           });
@@ -241,8 +249,6 @@ describe("ProcessLock transition failure semantics", () => {
         },
       );
       assert.equal(fs.existsSync(lock.lockPath), false);
-    } finally {
-      fs.fsyncSync = originalFsync;
-    }
+    } finally { fs.lstatSync = originalLstat; fs.unlinkSync = originalUnlink; }
   });
 });

@@ -32,6 +32,7 @@ import { EXIT_ERROR } from "../../lib/constants.js";
 import { loadSpecJson, specJsonToPromptText } from "../../lib/spec-json.js";
 import { AtomicFile } from "../../lib/atomic-file.js";
 import { TemporaryPaths } from "../../lib/temporary-paths.js";
+import { captureRegularFile, MAX_IN_MEMORY_FILE_BYTES } from "../../lib/regular-file-snapshot.js";
 import { ForgeInputReferencePromptElement } from "../lib/prompt-elements.js";
 import {
   summaryToText,
@@ -173,7 +174,7 @@ export function materializeForgeInputReference(root, config, input, { persist = 
   if (persist) temporaryPaths.ensureDirectory(inputDir);
   TemporaryPaths.assertRegularFile(inputPath);
   if (fs.existsSync(inputPath)) {
-    const current = fs.readFileSync(inputPath, "utf8");
+    const current = captureRegularFile(inputPath, { label: "forge input snapshot", maxBytes: MAX_IN_MEMORY_FILE_BYTES }).text();
     if (current !== serialized) throw new Error(`forge input digest collision: ${inputPath}`);
   } else if (persist) {
     new AtomicFile(inputPath).write(Buffer.from(serialized));

@@ -24,6 +24,12 @@ import {
 } from "./plugin-installer.js";
 import { runCmd, assertOk } from "./process.js";
 import { DEFAULT_FLOW_SPEC_DIR, FlowSpecLocation } from "./flow-workspace.js";
+import { NativeAbsolutePath } from "./native-path.js";
+import { AtomicFile } from "./atomic-file.js";
+import { AtomicJsonFile } from "./atomic-json-file.js";
+import { captureRegularFile, MAX_IN_MEMORY_FILE_BYTES } from "./regular-file-snapshot.js";
+import { RealDirectoryAuthority } from "./real-directory-authority.js";
+import { LogicalRelativePath, LogicalPathSet, isNativePathWithin } from "./portable-path.js";
 
 const ID_RE = /^[a-z0-9][a-z0-9._-]*$/;
 const SHA_RE = /^[0-9a-f]{40}$/;
@@ -49,25 +55,14 @@ const FLOW_COMMAND_HOOKS = new Set(["pre", "post", "onError", "finally"]);
 const CORE_COMMANDS = new Set(["docs", "flow", "check", "metrics", "spec", "hook", "setup", "upgrade", "presets", "plugin", "help"]);
 
 function readJson(file) {
-  return JSON.parse(fs.readFileSync(file, "utf8"));
+  return JSON.parse(captureRegularFile(file, { label: "plugin JSON", maxBytes: MAX_IN_MEMORY_FILE_BYTES }).text());
 }
 
 function readPluginJson(file, root) {
-  const lstat = fs.lstatSync(file);
-  if (lstat.isSymbolicLink()) throw new Error(`unsafe package metadata: symlink not allowed: ${file}`);
-  const stat = fs.statSync(file);
-  if (!stat.isFile()) throw new Error(`unsafe package metadata: not a file: ${file}`);
-  if (stat.size > MAX_PLUGIN_JSON_BYTES) {
-    throw new Error(`unsafe package metadata: JSON file exceeds ${MAX_PLUGIN_JSON_BYTES} bytes: ${file}`);
-  }
   if (root) {
-    const rootRealPath = fs.realpathSync(root);
-    const fileRealPath = fs.realpathSync(file);
-    if (!isUnderPath(fileRealPath, rootRealPath)) {
-      throw new Error(`unsafe package metadata: path escapes plugin root: ${file}`);
-    }
+    new NativeAbsolutePath(path.resolve(file)).toLogical(new RealDirectoryAuthority(root));
   }
-  return readJson(file);
+  return JSON.parse(captureRegularFile(file, { label: "unsafe package metadata: symlink or non-regular file not allowed", maxBytes: MAX_PLUGIN_JSON_BYTES }).text());
 }
 
 function pluginMetadataPath(root, rel, label = "plugin metadata") {
@@ -79,8 +74,8 @@ function pluginMetadataPath(root, rel, label = "plugin metadata") {
 }
 
 function writeJson(file, value) {
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, JSON.stringify(value, null, 2) + "\n", "utf8");
+  RealDirectoryAuthority.resolve(path.dirname(file), { create: true });
+  new AtomicJsonFile(file).write(value);
 }
 
 function ensurePluginConfig(config) {
@@ -191,21 +186,19 @@ function normalizeRel(rel, label = "path") {
   if (typeof rel !== "string" || rel.trim() === "") {
     throw new Error(`unsafe ${label}: must be a non-empty string`);
   }
-  const value = rel.replace(/\\/g, "/");
-  if (path.isAbsolute(value) || value === "." || value === ".." || value.startsWith("../") || value.includes("/../") || value.endsWith("/..")) {
-    throw new Error(`unsafe ${label}: parent traversal or absolute path is not allowed`);
-  }
+  const converted = rel.replaceAll("\\", "/");
+  const directoryMarker = converted.endsWith("/");
+  const value = new LogicalRelativePath(directoryMarker ? converted.slice(0, -1) : converted, `unsafe ${label}`).toString();
   const parts = value.split("/");
   if (parts.includes(".git")) throw new Error(`unsafe ${label}: .git content is not allowed`);
   if (parts.includes("node_modules")) throw new Error(`unsafe ${label}: node_modules content is not allowed`);
   if (parts.length > MAX_PLUGIN_PATH_DEPTH) throw new Error(`unsafe ${label}: path depth exceeds ${MAX_PLUGIN_PATH_DEPTH}`);
   if (Buffer.byteLength(value) > MAX_PLUGIN_RELATIVE_PATH_BYTES) throw new Error(`unsafe ${label}: relative path exceeds ${MAX_PLUGIN_RELATIVE_PATH_BYTES} bytes`);
-  return value;
+  return directoryMarker ? `${value}/` : value;
 }
 
 function isUnderPath(child, parent) {
-  const rel = path.relative(parent, child);
-  return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
+  return isNativePathWithin(path.resolve(parent), path.resolve(child));
 }
 
 function importSpecifiers(source) {
@@ -237,7 +230,7 @@ function resolveImportPath(specifier, moduleDir) {
 
 function assertNoCoreInternalImports(root, pluginId, pluginRoot, rel, label = "plugin hook") {
   const modulePath = path.join(pluginRoot, normalizeRel(rel, label));
-  const source = fs.readFileSync(modulePath, "utf8");
+  const source = captureRegularFile(modulePath, { label, maxBytes: MAX_IN_MEMORY_FILE_BYTES }).text();
   const moduleDir = path.dirname(modulePath);
   const coreRoots = [
     path.resolve(root, "src"),
@@ -266,22 +259,40 @@ function isUnderFileAllowlist(rel, files) {
   });
 }
 
-function walkFiles(root, rel = "") {
-  const current = path.join(root, rel);
+// The cache retains the caller's observed directory chain across enumeration
+// and copy. RealDirectoryAuthority owns every physical check and creation.
+function retainPluginDirectory(directory, authorities, { create = false } = {}) {
+  const ancestor = RealDirectoryAuthority.closestAncestor(directory, authorities.values());
+  const authority = ancestor.descendant(directory, { create });
+  for (let current = authority; !authorities.has(current.directory); current = current.parentAuthority) {
+    authorities.set(current.directory, current);
+  }
+  return authority;
+}
+
+function walkFiles(root, rel = "", directories = null, { packageRules = true, directoryAuthorities = null } = {}) {
+  rel = rel.replace(/\/$/, "");
+  const current = path.resolve(root, rel);
+  const parent = directoryAuthorities === null ? null : retainPluginDirectory(
+    rel === "" ? current : path.dirname(current), directoryAuthorities);
   const stat = fs.lstatSync(current);
   if (stat.isSymbolicLink()) throw new Error(`unsafe package: symlink not allowed: ${rel || "."}`);
   if (stat.isDirectory()) {
+    if (rel !== "") directories?.add(rel);
     const out = [];
-    for (const entry of fs.readdirSync(current)) {
+    const authority = parent === null ? null : retainPluginDirectory(current, directoryAuthorities);
+    for (const entry of authority === null ? fs.readdirSync(current) : authority.entries()) {
       const childRel = rel ? `${rel}/${entry}` : entry;
-      normalizeRel(childRel, "package path");
-      out.push(...walkFiles(root, childRel));
+      if (packageRules) normalizeRel(childRel, "package path");
+      else new LogicalRelativePath(childRel, "plugin runtime path");
+      out.push(...walkFiles(root, childRel, directories, { packageRules, directoryAuthorities }));
     }
     return out;
   }
   if (!stat.isFile()) return [];
-  normalizeRel(rel, "package path");
-  if (/\.json$/i.test(rel) && stat.size > MAX_PLUGIN_JSON_BYTES) {
+  if (packageRules) normalizeRel(rel, "package path");
+  else new LogicalRelativePath(rel, "plugin runtime path");
+  if (packageRules && /\.json$/i.test(rel) && stat.size > MAX_PLUGIN_JSON_BYTES) {
     throw new Error(`unsafe package metadata: JSON file exceeds ${MAX_PLUGIN_JSON_BYTES} bytes: ${rel}`);
   }
   return [rel];
@@ -818,23 +829,33 @@ export function findPluginCandidates(root) {
   return results;
 }
 
+class PluginPackageMaterialization {
+  #temporaryPaths;
+  #directory;
+  constructor(temporaryPaths, directory, packageRoot) {
+    this.#temporaryPaths = temporaryPaths;
+    this.#directory = directory;
+    this.packageRoot = packageRoot;
+    Object.freeze(this);
+  }
+  cleanup() { this.#temporaryPaths.cleanup(this.#directory); }
+}
+
 function materializeCommit(sourceRoot, commit, root) {
   const temporaryPaths = new TemporaryPaths(root);
   const tmp = temporaryPaths.create(temporaryPaths.runtime("plugin-materialization"), "tmp-plugin-");
-  const archivePath = path.join(tmp, "package.tar");
-  const archive = runCmd("git", ["archive", "--format=tar", "-o", archivePath, commit], { cwd: sourceRoot, maxBuffer: 50 * 1024 * 1024 });
-  if (!archive.ok) {
-    fs.rmSync(tmp, { recursive: true, force: true });
-    throw new Error(`failed to archive plugin package: ${archive.stderr || archive.stdout}`);
+  try {
+    const archivePath = path.join(tmp, "package.tar");
+    const archive = runCmd("git", ["archive", "--format=tar", "-o", archivePath, commit], { cwd: sourceRoot, maxBuffer: 50 * 1024 * 1024 });
+    if (!archive.ok) throw new Error(`failed to archive plugin package: ${archive.stderr || archive.stdout}`);
+    const packageRoot = temporaryPaths.ensureDirectory(path.join(tmp, "package"));
+    const tar = runCmd("tar", ["-xf", archivePath, "-C", packageRoot], { maxBuffer: 50 * 1024 * 1024 });
+    if (!tar.ok) throw new Error(`failed to extract plugin package: ${tar.stderr || tar.stdout}`);
+    return new PluginPackageMaterialization(temporaryPaths, tmp, packageRoot);
+  } catch (error) {
+    temporaryPaths.cleanup(tmp);
+    throw error;
   }
-  const packageRoot = path.join(tmp, "package");
-  fs.mkdirSync(packageRoot, { recursive: true });
-  const tar = runCmd("tar", ["-xf", archivePath, "-C", packageRoot], { maxBuffer: 50 * 1024 * 1024 });
-  if (!tar.ok) {
-    fs.rmSync(tmp, { recursive: true, force: true });
-    throw new Error(`failed to extract plugin package: ${tar.stderr || tar.stdout}`);
-  }
-  return { tmp, packageRoot };
 }
 
 function hashPackageTree(sourceRoot) {
@@ -843,7 +864,7 @@ function hashPackageTree(sourceRoot) {
     for (const file of walkFiles(sourceRoot, normalizeRel(entry, "files entry")).sort()) {
       hash.update(file);
       hash.update("\0");
-      hash.update(fs.readFileSync(path.join(sourceRoot, file)));
+      hash.update(captureRegularFile(path.join(sourceRoot, file), { label: "plugin package file", maxBytes: MAX_IN_MEMORY_FILE_BYTES }).bytes);
       hash.update("\0");
     }
   }
@@ -854,22 +875,70 @@ function existingKnownPluginPaths(sourceRoot) {
   return KNOWN_PLUGIN_PACKAGE_PATHS.filter((entry) => fs.existsSync(path.join(sourceRoot, entry.replace(/\/$/, ""))));
 }
 
+class PluginFileCopyPlan {
+  constructor(sourceRoot, files, directories, maxFiles, sourceAuthorities) {
+    this.sourceRoot = path.resolve(sourceRoot);
+    this.sourceAuthorities = sourceAuthorities;
+    this.files = new LogicalPathSet([...new Set(files)]);
+    this.directories = new LogicalPathSet([...new Set(directories)], { allowDirectoryPrefixes: true });
+    if (this.files.paths.length > maxFiles) throw new Error(`unsafe package: copied file count exceeds ${maxFiles}`);
+    new LogicalPathSet([...this.files.toStrings(), ...this.directories.toStrings()], { allowDirectoryPrefixes: true });
+    const fileNames = new Set(this.files.toStrings());
+    for (const directory of this.directories.toStrings()) {
+      let current = directory;
+      while (current !== ".") {
+        if (fileNames.has(current)) throw new Error(`plugin copy target directory is a file: ${current}`);
+        current = path.posix.dirname(current);
+      }
+    }
+    Object.freeze(this);
+  }
+
+  copyTo(destinationRoot) {
+    destinationRoot = path.resolve(destinationRoot);
+    const destinationParent = RealDirectoryAuthority.resolve(path.dirname(destinationRoot), { create: true });
+    destinationParent.assertStable();
+    fs.rmSync(destinationRoot, { recursive: true, force: true });
+    const destinationAuthority = destinationParent.descendant(destinationRoot, { create: true });
+    const destinationAuthorities = new Map([[destinationRoot, destinationAuthority]]);
+    for (const directory of this.directories.toStrings().sort()) {
+      retainPluginDirectory(path.join(destinationRoot, directory), destinationAuthorities, { create: true });
+    }
+    for (const file of this.files.toStrings()) {
+      const sourcePath = path.join(this.sourceRoot, file);
+      const sourceParent = retainPluginDirectory(path.dirname(sourcePath), this.sourceAuthorities);
+      const source = captureRegularFile(sourcePath, { label: "plugin package file", maxBytes: MAX_IN_MEMORY_FILE_BYTES,
+        directoryAuthority: sourceParent });
+      const dest = path.join(destinationRoot, file);
+      const directoryAuthority = retainPluginDirectory(path.dirname(dest), destinationAuthorities, { create: true });
+      new AtomicFile(dest, { permissionHint: source.permissionHint, directoryAuthority }).write(source.bytes);
+    }
+  }
+}
+
+/** Installed plugin runtime copy, preserving empty directories and exact bytes. */
+export function copyPluginRuntimeDirectory(sourceRoot, destinationRoot, { maxFiles = MAX_PLUGIN_COPY_FILES } = {}) {
+  const directories = new Set();
+  const sourceAuthority = RealDirectoryAuthority.resolve(sourceRoot);
+  const sourceAuthorities = new Map([[sourceAuthority.directory, sourceAuthority]]);
+  const files = walkFiles(sourceRoot, "", directories, { packageRules: false, directoryAuthorities: sourceAuthorities });
+  new PluginFileCopyPlan(sourceRoot, files, [...directories], maxFiles, sourceAuthorities).copyTo(destinationRoot);
+}
+
 function copyAllowlistedFiles(sourceRoot, destRoot, files) {
-  fs.rmSync(destRoot, { recursive: true, force: true });
-  fs.mkdirSync(destRoot, { recursive: true });
-  let copied = 0;
+  const selected = new Set();
+  const sourceAuthority = RealDirectoryAuthority.resolve(sourceRoot);
+  const sourceAuthorities = new Map([[sourceAuthority.directory, sourceAuthority]]);
   for (const entry of files) {
     const rel = normalizeRel(entry, "files entry");
     const src = path.join(sourceRoot, rel);
     if (!fs.existsSync(src)) throw new Error(`unsafe files entry missing: ${rel}`);
-    for (const file of walkFiles(sourceRoot, rel)) {
-      copied += 1;
-      if (copied > MAX_PLUGIN_COPY_FILES) throw new Error(`unsafe package: copied file count exceeds ${MAX_PLUGIN_COPY_FILES}`);
-      const dest = path.join(destRoot, file);
-      fs.mkdirSync(path.dirname(dest), { recursive: true });
-      fs.copyFileSync(path.join(sourceRoot, file), dest);
+    for (const file of walkFiles(sourceRoot, rel, null, { directoryAuthorities: sourceAuthorities })) {
+      selected.add(file);
+      if (selected.size > MAX_PLUGIN_COPY_FILES) throw new Error(`unsafe package: copied file count exceeds ${MAX_PLUGIN_COPY_FILES}`);
     }
   }
+  new PluginFileCopyPlan(sourceRoot, [...selected], [], MAX_PLUGIN_COPY_FILES, sourceAuthorities).copyTo(destRoot);
 }
 
 function validateSourceTree(sourceRoot) {
@@ -961,7 +1030,7 @@ function installFromSource(root, source, sourceRoot, commit, {
       faultInjector,
     }));
   } finally {
-    if (materialized) fs.rmSync(materialized.tmp, { recursive: true, force: true });
+    if (materialized) materialized.cleanup();
   }
 }
 
@@ -1196,7 +1265,7 @@ function validateHookClass(HookClass, label) {
 }
 
 function hookModuleCacheKey(modulePath) {
-  return crypto.createHash("sha256").update(fs.readFileSync(modulePath)).digest("hex");
+  return captureRegularFile(modulePath, { label: "plugin hook module", maxBytes: MAX_IN_MEMORY_FILE_BYTES }).digest;
 }
 
 export async function discoverFlowCommandHooks(root = repoRoot()) {
@@ -1338,8 +1407,8 @@ function artifactHelpers(root, pluginId, flow = {}, options = {}) {
     },
     async writeText(rel, value) {
       const file = path.join(dir, normalizeRel(rel, "artifact path"));
-      fs.mkdirSync(path.dirname(file), { recursive: true });
-      fs.writeFileSync(file, String(value), "utf8");
+      RealDirectoryAuthority.resolve(path.dirname(file), { create: true });
+      new AtomicFile(file).write(String(value));
     },
   };
 }

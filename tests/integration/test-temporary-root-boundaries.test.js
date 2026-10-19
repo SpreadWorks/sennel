@@ -4,7 +4,6 @@ import fs from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
-import { syncBuiltinESMExports } from "node:module";
 import { test } from "node:test";
 import { TestTemporaryRoot, TEST_CHECKOUT_ROOT } from "../test-temporary-root.js";
 import { createTmpDir, removeTmpDir } from "../support/builders/tmp-dir.js";
@@ -15,7 +14,6 @@ await import("../../src/sennel.js");
 const { resolveCurrentReviewTreeSha } = await import("../../src/flow/lib/review-evidence-store.js");
 
 const moduleUrl = (relative) => pathToFileURL(path.join(TEST_CHECKOUT_ROOT, relative)).href;
-const forceFallback = { statfs: () => ({ type: 0xef53n, bavail: 2n, bsize: 1024n ** 3n }) };
 
 function environmentWithoutTemporaryRoot() {
   const environment = { ...process.env };
@@ -28,10 +26,10 @@ function snapshot(file) {
   return fs.existsSync(file) ? fs.readFileSync(file) : null;
 }
 
-test("repository fallback creates distinct owned roots and borrowers preserve owner data", async (t) => {
-  const first = TestTemporaryRoot.select({ environment: {}, tmpfs: forceFallback });
+test("repository scratch creates distinct owned roots and borrowers preserve owner data", async (t) => {
+  const first = TestTemporaryRoot.select({ environment: {} });
   t.after(() => first.remove());
-  const second = TestTemporaryRoot.select({ environment: {}, tmpfs: forceFallback });
+  const second = TestTemporaryRoot.select({ environment: {} });
   t.after(() => second.remove());
   assert.equal(path.dirname(first.path), path.join(fs.realpathSync(TEST_CHECKOUT_ROOT), ".tmp", "tests"));
   assert.notEqual(first.path, second.path);
@@ -53,7 +51,7 @@ test("repository fallback creates distinct owned roots and borrowers preserve ow
 });
 
 test("invalid inherited shared roots fail before creation without switching storage", (t) => {
-  const root = TestTemporaryRoot.select({ environment: {}, tmpfs: forceFallback });
+  const root = TestTemporaryRoot.select({ environment: {} });
   t.after(() => root.remove());
   const outside = path.join(TEST_CHECKOUT_ROOT, "tests");
   assert.throws(() => TestTemporaryRoot.select({ environment: { SENNEL_TEST_TEMP_ROOT: outside } }), {
@@ -70,45 +68,15 @@ test("invalid inherited shared roots fail before creation without switching stor
   const sharedLogs = path.join(project, ".tmp", "logs");
   fs.mkdirSync(sharedLogs, { recursive: true });
   fs.writeFileSync(path.join(sharedLogs, "sentinel"), "unchanged");
-  const originalStatfs = fs.statfsSync;
-  t.mock.method(fs, "statfsSync", (directory, options) => ({ ...originalStatfs(directory, options), type: 0xef53n }));
-  syncBuiltinESMExports();
-  try {
-    assert.throws(() => TestTemporaryRoot.select({ repositoryRoot: project, environment: { SENNEL_TEST_TEMP_ROOT: sharedLogs } }), {
-      code: "TEST_TEMPORARY_ROOT_OUTSIDE_TESTS",
-    });
-    assert.deepEqual(fs.readdirSync(sharedLogs), ["sentinel"]);
-    assert.equal(fs.readFileSync(path.join(sharedLogs, "sentinel"), "utf8"), "unchanged");
-  } finally {
-    t.mock.restoreAll();
-    syncBuiltinESMExports();
-  }
+  assert.throws(() => TestTemporaryRoot.select({ repositoryRoot: project, environment: { SENNEL_TEST_TEMP_ROOT: sharedLogs } }), {
+    code: "TEST_TEMPORARY_ROOT_OUTSIDE_TESTS",
+  });
+  assert.deepEqual(fs.readdirSync(sharedLogs), ["sentinel"]);
+  assert.equal(fs.readFileSync(path.join(sharedLogs, "sentinel"), "utf8"), "unchanged");
 });
 
-test("an eligible tmpfs candidate symlink is rejected before creating fixtures or switching storage", (t) => {
-  const root = TestTemporaryRoot.createOnRepository();
-  t.after(() => root.remove());
-  const external = path.join(root.path, "external");
-  fs.mkdirSync(external);
-  const sentinel = path.join(external, "sentinel");
-  fs.writeFileSync(sentinel, "unchanged");
-  const link = path.join(root.path, "candidate");
-  fs.symlinkSync(external, link, "dir");
-  let creations = 0;
-  let selected;
-  t.after(() => selected?.remove());
-  assert.throws(() => { selected = TestTemporaryRoot.select({ environment: {}, tmpfs: {
-    directory: link,
-    statfs: () => ({ type: 0x01021994n, bavail: 2n, bsize: 1024n ** 3n }),
-    create: () => { creations += 1; return path.join(external, "should-not-exist"); },
-  } }); }, { code: "REAL_DIRECTORY_AUTHORITY_AUTHORITY_INVALID" });
-  assert.equal(creations, 0);
-  assert.deepEqual(fs.readdirSync(external), ["sentinel"]);
-  assert.equal(fs.readFileSync(sentinel, "utf8"), "unchanged");
-});
-
-test("fallback non-Git fixtures cannot discover the checkout or acquire its repository lock", async (t) => {
-  const temporary = TestTemporaryRoot.select({ environment: {}, tmpfs: forceFallback });
+test("repository non-Git fixtures cannot discover the checkout or acquire its repository lock", async (t) => {
+  const temporary = TestTemporaryRoot.select({ environment: {} });
   t.after(() => temporary.remove());
   const parentLocks = [".repository-maintenance.lock", ".repository-flow-operation.lock"]
     .map((name) => path.join(TEST_CHECKOUT_ROOT, ".sennel", name));
@@ -147,7 +115,7 @@ test("fallback non-Git fixtures cannot discover the checkout or acquire its repo
 });
 
 test("repository owner root itself rejects ancestor Git and restores its activated environment", (t) => {
-  const names = ["TMPDIR", "SENNEL_TEST_TEMP_ROOT", "GIT_CEILING_DIRECTORIES"];
+  const names = ["TMPDIR", "TMP", "TEMP", "SENNEL_TEST_TEMP_ROOT", "GIT_CEILING_DIRECTORIES"];
   const previous = names.map((name) => process.env[name]);
   const parentLocks = [".repository-maintenance.lock", ".repository-flow-operation.lock"]
     .map((name) => path.join(TEST_CHECKOUT_ROOT, ".sennel", name));
@@ -200,29 +168,25 @@ test("explicit sanitized Git boundaries retain real and linked repository lock s
   assert.equal(tree.stdout.trim(), linked);
 });
 
-test("direct Node tests and the runner share selection and only the owner cleans fallback roots", (t) => {
+test("direct Node tests and the runner share selection and only the owner cleans repository roots", (t) => {
   const storage = TestTemporaryRoot.createOnRepository();
   t.after(() => storage.remove());
   const fixture = createTmpDir("sennel-temporary-bootstrap-probe-", { parent: storage.path });
   t.after(() => removeTmpDir(fixture));
   const testFile = path.join(fixture, "probe.test.js");
-  const bootstrapFile = path.join(fixture, "force-repository-fallback.mjs");
   fs.writeFileSync(path.join(fixture, "package.json"), JSON.stringify({ type: "module" }));
   fs.writeFileSync(testFile, [
     `import { test } from "node:test";`,
+    `import os from "node:os";`,
     `import { createTmpDir, removeTmpDir } from ${JSON.stringify(moduleUrl("tests/support/builders/tmp-dir.js"))};`,
     `import { testTemporaryRoot } from ${JSON.stringify(moduleUrl("tests/test-environment.js"))};`,
-    `test("temporary bootstrap", () => { const fixture = createTmpDir("sennel-child-"); console.log("TEMPORARY_PROBE=" + JSON.stringify({ path: testTemporaryRoot().path, owned: testTemporaryRoot().owned, fixture, tmpdir: process.env.TMPDIR })); removeTmpDir(fixture); });`,
-  ].join("\n"));
-  fs.writeFileSync(bootstrapFile, [
-    `import { TestTemporaryRoot } from ${JSON.stringify(moduleUrl("tests/test-temporary-root.js"))};`,
-    `TestTemporaryRoot.createOnTmpfs = () => null;`,
+    `test("temporary bootstrap", () => { const fixture = createTmpDir("sennel-child-"); console.log("TEMPORARY_PROBE=" + JSON.stringify({ path: testTemporaryRoot().path, owned: testTemporaryRoot().owned, fixture, tmpdir: os.tmpdir() })); removeTmpDir(fixture); });`,
   ].join("\n"));
   for (const runner of [false, true]) {
     const script = `const { main } = await import(${JSON.stringify(moduleUrl("tests/run.js"))}); process.exitCode = await main(["--file", ${JSON.stringify(testFile)}, "--jobs", "1"]);`;
     const args = runner
-      ? ["--import", pathToFileURL(bootstrapFile).href, "--input-type=module", "--eval", script]
-      : ["--test", "--import", pathToFileURL(bootstrapFile).href, testFile];
+      ? ["--input-type=module", "--eval", script]
+      : ["--test", testFile];
     const result = spawnSync(process.execPath, args, {
       cwd: fixture, env: environmentWithoutTemporaryRoot(), encoding: "utf8", timeout: 30_000,
     });

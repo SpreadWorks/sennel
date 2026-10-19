@@ -35,21 +35,21 @@ describe("active-flow registry transaction", () => {
     root = createTmpDir("active-flow-invalid-document-");
     const registryPath = path.join(root, ".sennel", ".active-flow");
     fs.mkdirSync(path.dirname(registryPath), { recursive: true });
-    const originalLstat = fs.lstatSync;
+    const originalOpen = fs.openSync;
     for (const bytes of [
       "{malformed\n",
       `${JSON.stringify([{ specId: "441-unknown", mode: "local", extra: true }])}\n`,
     ]) {
       fs.writeFileSync(registryPath, bytes);
       let reads = 0;
-      fs.lstatSync = (target, ...args) => {
+      fs.openSync = (target, ...args) => {
         if (path.resolve(String(target)) === registryPath) reads += 1;
-        return originalLstat(target, ...args);
+        return originalOpen(target, ...args);
       };
       try {
         assert.throws(() => new ActiveFlowRegistry({ mainRoot: root }).load());
       } finally {
-        fs.lstatSync = originalLstat;
+        fs.openSync = originalOpen;
       }
       assert.equal(reads, 1);
       assert.equal(fs.readFileSync(registryPath, "utf8"), bytes);
@@ -149,11 +149,11 @@ describe("active-flow registry transaction", () => {
     const replacementPath = path.join(root, ".sennel", ".active-flow.replacement");
     const expected = [{ specId: "442-new", mode: "branch" }];
     fs.writeFileSync(replacementPath, `${JSON.stringify(expected, null, 2)}\n`);
-    const originalRead = fs.readFileSync;
+    const originalRead = fs.readSync;
     let replaced = false;
-    fs.readFileSync = (target, ...args) => {
+    fs.readSync = (target, ...args) => {
       const bytes = originalRead(target, ...args);
-      if (!replaced && typeof target === "number") {
+      if (!replaced && typeof target === "number" && bytes === 0) {
         replaced = true;
         fs.renameSync(replacementPath, registryPath);
       }
@@ -162,7 +162,7 @@ describe("active-flow registry transaction", () => {
     try {
       assert.deepEqual(registry.load(), expected);
     } finally {
-      fs.readFileSync = originalRead;
+      fs.readSync = originalRead;
     }
     assert.equal(replaced, true);
   });
@@ -182,7 +182,7 @@ describe("active-flow registry transaction", () => {
       if (targetStats % 2 === 1) return stat;
       return {
         ...stat,
-        ino: stat.ino + 1,
+        ino: stat.ino + (typeof stat.ino === "bigint" ? 1n : 1),
         isFile: () => stat.isFile(),
         isSymbolicLink: () => stat.isSymbolicLink(),
       };

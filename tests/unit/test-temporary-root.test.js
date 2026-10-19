@@ -1,101 +1,40 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import { test } from "node:test";
-import {
-  MINIMUM_TEST_TMPFS_BYTES,
-  TestTemporaryRoot,
-} from "../test-temporary-root.js";
+import path from "node:path";
+import { TestTemporaryRoot } from "../test-temporary-root.js";
 
-const TMPFS_MAGIC = 0x01021994n;
-
-test("test temporary root selects writable tmpfs with sufficient available space", () => {
-  let createdPrefix = null;
-  const root = TestTemporaryRoot.createOnTmpfs({
-    access: () => {},
-    statfs: () => ({ type: TMPFS_MAGIC, bavail: 2n, bsize: MINIMUM_TEST_TMPFS_BYTES }),
-    validate: () => {},
-    create: (prefix) => {
-      createdPrefix = prefix;
-      return "/dev/shm/sennel-test-example";
-    },
-    remove: () => {},
-  });
-
-  assert.ok(root instanceof TestTemporaryRoot);
-  assert.equal(root.path, "/dev/shm/sennel-test-example");
-  assert.equal(createdPrefix, "/dev/shm/sennel-test-");
-});
-
-test("test temporary root rejects non-tmpfs and insufficient available space", () => {
-  let createCount = 0;
-  const create = () => {
-    createCount += 1;
-    return "/dev/shm/should-not-exist";
-  };
-  const nonTmpfs = TestTemporaryRoot.createOnTmpfs({
-    access: () => {},
-    statfs: () => ({ type: 0xef53n, bavail: 2n, bsize: MINIMUM_TEST_TMPFS_BYTES }),
-    create,
-  });
-  const tooSmall = TestTemporaryRoot.createOnTmpfs({
-    access: () => {},
-    statfs: () => ({ type: TMPFS_MAGIC, bavail: MINIMUM_TEST_TMPFS_BYTES - 1n, bsize: 1n }),
-    create,
-  });
-
-  assert.equal(nonTmpfs, null);
-  assert.equal(tooSmall, null);
-  assert.equal(createCount, 0);
-});
-
-test("test temporary root falls back when the candidate cannot be inspected", () => {
-  const root = TestTemporaryRoot.createOnTmpfs({
-    access: () => { throw new Error("not writable"); },
-    statfs: () => { throw new Error("must not run"); },
-    create: () => { throw new Error("must not run"); },
-  });
-
-  assert.equal(root, null);
-});
-
-test("test temporary root leaves a candidate unselected when its root cannot be allocated", () => {
-  const failure = Object.assign(new Error("candidate storage is full"), { code: "ENOSPC" });
-  const selected = TestTemporaryRoot.createOnTmpfs({
-    access: () => {},
-    statfs: () => ({ type: TMPFS_MAGIC, bavail: 2n, bsize: MINIMUM_TEST_TMPFS_BYTES }),
-    validate: () => {},
-    create: () => { throw failure; },
-  });
-  assert.equal(selected, null);
-});
+const ROOT = path.resolve(".tmp", "unit-selected");
 
 test("an allocated test root propagates storage failure without trying another root", async () => {
   const failure = Object.assign(new Error("selected storage is full"), { code: "ENOSPC" });
   const removals = [];
-  const root = new TestTemporaryRoot("/dev/shm/sennel-test-selected", { remove: (directory) => removals.push(directory) });
+  const root = new TestTemporaryRoot(ROOT, { remove: (directory) => removals.push(directory) });
   const environment = { TMPDIR: "previous" };
   let writes = 0;
   await assert.rejects(root.use(() => {
     writes += 1;
     assert.equal(environment.TMPDIR, root.path);
+    assert.equal(environment.TMP, root.path);
+    assert.equal(environment.TEMP, root.path);
     throw failure;
   }, { environment, processEvents: new EventEmitter() }), (error) => error === failure);
   assert.equal(writes, 1);
-  assert.equal(root.path, "/dev/shm/sennel-test-selected");
+  assert.equal(root.path, ROOT);
   assert.deepEqual(removals, [root.path]);
   assert.deepEqual(environment, { TMPDIR: "previous" });
 });
 
 test("borrowed test temporary roots never remove the owner's files", async () => {
   const removals = [];
-  const root = new TestTemporaryRoot("/dev/shm/sennel-test-example", {
+  const root = new TestTemporaryRoot(ROOT, {
     owned: false,
     remove: (...args) => removals.push(args),
   });
   const environment = { TMPDIR: "previous", SENNEL_TEST_TEMP_ROOT: "shared", GIT_CEILING_DIRECTORIES: "ceiling" };
   await root.use(() => {
     assert.equal(environment.SENNEL_TEST_TEMP_ROOT, root.path);
-    assert.equal(environment.GIT_CEILING_DIRECTORIES, "/dev/shm:ceiling");
+    assert.equal(environment.GIT_CEILING_DIRECTORIES, `${path.dirname(ROOT)}${path.delimiter}ceiling`);
   }, { environment, processEvents: new EventEmitter() });
   root.remove();
   assert.deepEqual(removals, []);
@@ -107,12 +46,12 @@ test("test temporary root restores TMPDIR and removes its complete tree after su
     const removals = [];
     const environment = { TMPDIR: "/disk/tmp" };
     const processEvents = new EventEmitter();
-    const root = new TestTemporaryRoot("/dev/shm/sennel-test-example", {
+    const root = new TestTemporaryRoot(ROOT, {
       remove: (...args) => removals.push(args),
     });
 
     const result = root.use(async () => {
-      assert.equal(environment.TMPDIR, "/dev/shm/sennel-test-example");
+      assert.equal(environment.TMPDIR, ROOT);
       if (shouldFail) throw new Error("test failure");
       return "passed";
     }, { environment, processEvents });
@@ -121,7 +60,7 @@ test("test temporary root restores TMPDIR and removes its complete tree after su
     else assert.equal(await result, "passed");
     assert.equal(environment.TMPDIR, "/disk/tmp");
     assert.deepEqual(removals, [[
-      "/dev/shm/sennel-test-example",
+      ROOT,
       { recursive: true, force: true },
     ]]);
     assert.equal(processEvents.listenerCount("exit"), 0);
@@ -134,7 +73,7 @@ test("test temporary root exit cleanup is idempotent", async () => {
   const removals = [];
   const environment = {};
   const processEvents = new EventEmitter();
-  const root = new TestTemporaryRoot("/dev/shm/sennel-test-example", {
+  const root = new TestTemporaryRoot(ROOT, {
     remove: (...args) => removals.push(args),
   });
 
@@ -149,7 +88,7 @@ test("test temporary root exit cleanup is idempotent", async () => {
 test("test temporary root removes itself before preserving an interrupt signal", async () => {
   const events = [];
   const processEvents = new EventEmitter();
-  const root = new TestTemporaryRoot("/dev/shm/sennel-test-example", {
+  const root = new TestTemporaryRoot(ROOT, {
     remove: () => events.push("removed"),
   });
 

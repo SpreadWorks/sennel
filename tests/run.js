@@ -18,10 +18,8 @@ const { TestSuiteManifest } = await import("./runner/manifest.js");
 const { TestSuiteExecutionPolicy } = await import("./runner/suite-execution-policy.js");
 const { TEST_SUITE_NAMES } = await import("./runner/suite-definitions.js");
 const {
-  MINIMUM_TEST_TMPFS_BYTES,
   TestTemporaryRoot,
 } = await import("./test-temporary-root.js");
-const { isTmpfsDirectory } = await import("../src/lib/filesystem-type.js");
 const { standaloneTestEnvironment } = await import("../src/lib/process.js");
 const {
   ChildProcessExecutionRecordCodec,
@@ -160,15 +158,7 @@ export async function main(args = process.argv.slice(2)) {
     resolveFiles,
     executeFiles: async (files, selection) => {
       const temporaryRoot = TestTemporaryRoot.select({ repositoryRoot: ROOT });
-      const storage = isTmpfsDirectory(temporaryRoot.path) ? "tmpfs" : "repository fallback";
-      if (storage === "repository fallback") {
-        writeSync(
-          2,
-          `[sennel] test temporary storage: ${storage} ${temporaryRoot.path} (/dev/shm unavailable or below ${MINIMUM_TEST_TMPFS_BYTES / (1024n * 1024n)} MiB free; removed after run)\n`,
-        );
-      } else {
-        writeSync(2, `[sennel] test temporary storage: ${storage} ${temporaryRoot.path} (removed after run)\n`);
-      }
+      writeSync(2, `[sennel] test temporary storage: repository ${temporaryRoot.path} (removed after run)\n`);
       return temporaryRoot.use(() => executeFiles(files, { jobs: selection.jobs }));
     },
   });

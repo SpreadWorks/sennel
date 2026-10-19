@@ -42,7 +42,7 @@ it("rejects missing files, directory, escape, symlinks, read errors and opening 
   finally { unreadable.mock.restore(); }
   const originalStat = fs.fstatSync;
   const changed = mock.method(fs, "fstatSync", (...args) => {
-    const stat = originalStat(...args); stat.ino += 1; return stat;
+    const stat = originalStat(...args); stat.ino += typeof stat.ino === "bigint" ? 1n : 1; return stat;
   });
   try { assert.throws(() => AgentFileReference.resolve({ ...input, projectRoot: input.root }), /identity changed/); }
   finally { changed.mock.restore(); }

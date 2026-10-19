@@ -16,8 +16,14 @@ const seedScope = new SeedCleanupScope(after);
 
 describe("metrics token command", () => {
   let tmp;
+  let seedClone;
   let defaultProjectSeed;
-  afterEach(() => tmp && removeTmpDir(tmp));
+  afterEach(() => {
+    if (seedClone) seedClone.cleanup();
+    else if (tmp) removeTmpDir(tmp);
+    seedClone = null;
+    tmp = null;
+  });
 
   async function setupProject() {
     defaultProjectSeed ??= (async () => {
@@ -30,7 +36,8 @@ describe("metrics token command", () => {
       } finally { removeTmpDir(producerRoot); }
     })();
     const seed = await defaultProjectSeed;
-    tmp = new SeedWorkRoot(seed.root, { prefix: "sennel-metrics-token-case-" }).root;
+    seedClone = new SeedWorkRoot(seed.root, { prefix: "sennel-metrics-token-case-" });
+    tmp = seedClone.root;
     const manager = makeFlowManager(tmp);
     seed.assertClone(manager);
     return manager;

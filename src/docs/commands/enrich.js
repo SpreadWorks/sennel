@@ -9,7 +9,6 @@
  * レジューム: 各バッチ完了後に analysis.json を保存。既に enriched なエントリーはスキップ。
  */
 
-import fs from "fs";
 import path from "path";
 import { parseArgs } from "../../lib/cli.js";
 import { managedOutputDir, resolveConcurrency, resolvePromptCharacterLimit } from "../../lib/config.js";
@@ -28,6 +27,8 @@ import { resolveDocsContext } from "../lib/docs-context.js";
 import { Command } from "../../lib/command.js";
 import { runDocumentationAiCommand } from "../lib/documentation-ai-execution.js";
 import { AtomicJsonFile } from "../../lib/atomic-json-file.js";
+import { captureRegularFile, MAX_IN_MEMORY_FILE_BYTES } from "../../lib/regular-file-snapshot.js";
+import { RealDirectoryAuthority } from "../../lib/real-directory-authority.js";
 import { PromptBuilder } from "../../lib/prompt-builder.js";
 import { DocumentationAgent } from "../lib/documentation-agent.js";
 import {
@@ -366,9 +367,7 @@ export class EnrichmentCheckpointCoordinator {
  */
 function saveAnalysis(root, analysis) {
   const outputDir = managedOutputDir(root);
-  if (!fs.existsSync(outputDir)) {
-    fs.mkdirSync(outputDir, { recursive: true });
-  }
+  RealDirectoryAuthority.resolve(outputDir, { create: true });
   const outputPath = path.join(outputDir, "analysis.json");
   new AtomicJsonFile(outputPath).write(analysis);
   return outputPath;
@@ -572,7 +571,7 @@ export function prepareDocumentationEnrichment(ctx) {
   for (const entry of pending) {
     try {
       const filePath = path.resolve(sourceRoot || root, entry.file);
-      const code = fs.readFileSync(filePath, "utf8");
+      const code = captureRegularFile(filePath, { label: "enrichment source", maxBytes: MAX_IN_MEMORY_FILE_BYTES }).text();
       entry.essential = minify(code, entry.file, { mode: "essential" });
     } catch (_) {
       entry.essential = "";

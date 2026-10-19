@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import { spawnSync } from "node:child_process";
-import fs from "node:fs";
 import path from "node:path";
+import { AtomicJsonFile } from "../src/lib/atomic-json-file.js";
 
 const ALPHA_VERSION_PATTERN = /^0\.1\.0-alpha\.(0|[1-9]\d*)$/;
 const ALPHA_RELEASE_PACKAGE_NAME = "sennel";
@@ -194,7 +194,7 @@ class PackageManifest {
   read() {
     let value;
     try {
-      value = JSON.parse(fs.readFileSync(this.filePath, "utf8"));
+      value = new AtomicJsonFile(this.filePath).read();
     } catch (cause) {
       throw new Error(`failed to read package.json: ${cause.message}`, { cause });
     }
@@ -212,43 +212,7 @@ class PackageManifest {
     if (!(version instanceof AlphaVersion)) throw new Error("package version update requires an AlphaVersion");
     const value = this.read();
     value.version = version.toString();
-    const temporaryPath = path.join(
-      this.root,
-      `.package.json.${process.pid}.${crypto.randomUUID()}.tmp`,
-    );
-    let descriptor = null;
-    let renamed = false;
-    try {
-      descriptor = fs.openSync(temporaryPath, "wx", 0o644);
-      fs.writeFileSync(descriptor, `${JSON.stringify(value, null, 2)}\n`);
-      fs.fsyncSync(descriptor);
-      fs.closeSync(descriptor);
-      descriptor = null;
-      fs.renameSync(temporaryPath, this.filePath);
-      renamed = true;
-      descriptor = fs.openSync(this.root, "r");
-      fs.fsyncSync(descriptor);
-      fs.closeSync(descriptor);
-      descriptor = null;
-    } catch (error) {
-      const cleanupErrors = [];
-      if (descriptor !== null) {
-        try { fs.closeSync(descriptor); } catch (cleanupError) { cleanupErrors.push(cleanupError); }
-      }
-      if (!renamed) {
-        try { fs.unlinkSync(temporaryPath); } catch (cleanupError) {
-          if (cleanupError.code !== "ENOENT") cleanupErrors.push(cleanupError);
-        }
-      }
-      if (cleanupErrors.length > 0) {
-        throw new AggregateError(
-          [error, ...cleanupErrors],
-          "package version update and temporary-file cleanup both failed",
-          { cause: error },
-        );
-      }
-      throw error;
-    }
+    new AtomicJsonFile(this.filePath).write(value);
   }
 }
 

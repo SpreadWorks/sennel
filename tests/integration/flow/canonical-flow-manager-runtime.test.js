@@ -307,6 +307,7 @@ import {
 
 const roots = [];
 const testExecutionSeedScope = new SeedCleanupScope(after);
+const seedCloneScope = new SeedCleanupScope(afterEach);
 let testExecutionSeed;
 
 class CanonicalTestExecutionFixture {
@@ -334,7 +335,7 @@ async function testExecutionFixture() {
   testExecutionSeed ??= createTestExecutionSeed();
   const seed = await testExecutionSeed;
   const copy = new SeedWorkRoot(seed.root, { prefix: "sennel-canonical-test-clone-" });
-  roots.push(copy.root);
+  seedCloneScope.after(() => copy.cleanup());
   const readbackStarted = performance.now();
   const manager = new FlowManager({ root: copy.root, mainRoot: copy.root, inWorktree: false });
   CanonicalFlowFixture.fromExisting({ flowManager: manager, specId: seed.specId });
@@ -7123,7 +7124,7 @@ describe("FlowManager canonical Version-1 runtime", () => {
   });
 
   it("keeps Task Gate reset atomic across save rollback and committed acknowledgement recovery", async () => {
-    for (const boundary of ["activity-appended", "before-json-rename", "before-json-directory-fsync"]) {
+    for (const boundary of ["activity-appended", "before-json-rename", "before-json-readback"]) {
       const repository = root();
       const specId = `001-task-gate-reset-${boundary}`;
       let armed = false;
@@ -7150,7 +7151,7 @@ describe("FlowManager canonical Version-1 runtime", () => {
       }).promote({ result: "pass", artifacts: { sourceFingerprint: currentTaskSourceFingerprint(manager, specId) } });
       const preparation = prepareTaskGateScenario({ repository, manager, specId, commandResult });
       const before = gateSettlementSnapshot(manager, specId);
-      const committed = boundary === "before-json-directory-fsync";
+      const committed = boundary === "before-json-readback";
       armed = true;
       let saved;
       if (committed) {

@@ -4,44 +4,14 @@ import { RealDirectoryAuthority } from "./real-directory-authority.js";
 import { AtomicFile } from "./atomic-file.js";
 import { FlowSpecId } from "./flow-spec-id.js";
 import { FlowRunId } from "./flow-run-id.js";
-import { isTmpfsDirectory } from "./filesystem-type.js";
-
-function isWithin(root, target) {
-  const relative = path.relative(root, target);
-  return relative === "" || (relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative));
-}
-
-function directoryAuthority(directory, create, authorities = new Map()) {
-  const resolved = path.resolve(directory);
-  const anchor = path.parse(resolved).root;
-  let current = authorities.get(anchor);
-  if (!current) {
-    current = new RealDirectoryAuthority(anchor);
-    authorities.set(anchor, current);
-  }
-  current.assertStable();
-  for (const segment of path.relative(anchor, resolved).split(path.sep).filter(Boolean)) {
-    const child = path.join(current.directory, segment);
-    let next = authorities.get(child);
-    if (!next || next.identity === null) {
-      next = new RealDirectoryAuthority(child, { create, parentAuthority: current });
-      authorities.set(child, next);
-    }
-    if (create) {
-      next.create = true;
-      next.ensure();
-    } else {
-      if (next.identity === null) return current;
-      next.assertStable();
-    }
-    current = next;
-  }
-  return current;
-}
+import { appendRegularFile } from "./regular-file-io.js";
+import { LogicalRelativePath, isNativePathWithin } from "./portable-path.js";
+import { OwnedTemporaryDirectory } from "./owned-temporary-directory.js";
 
 /** Project-owned scratch paths. Execution checkout and durable stores stay caller-owned. */
 export class TemporaryPaths {
   #authorities = new Map();
+  #ownedDirectories = new Map();
 
   constructor(root) {
     this.root = fs.realpathSync(path.resolve(root));
@@ -53,7 +23,10 @@ export class TemporaryPaths {
     return this.validate(path.join(this.temporaryRoot, "flows", FlowSpecId.from(specId).toString(), FlowRunId.from(runId).toString()));
   }
 
-  static runtimePath(root, purpose) { return path.resolve(root, ".tmp", "runtime", purpose); }
+  static runtimePath(root, purpose) {
+    const logical = LogicalRelativePath.from(purpose, "temporary runtime purpose");
+    return path.resolve(root, ".tmp", "runtime", ...logical.segments);
+  }
   runtime(purpose) { return this.validate(TemporaryPaths.runtimePath(this.root, purpose)); }
   logs(directory = null) { return this.validate(directory ?? path.join(this.temporaryRoot, "logs")); }
   tests() { return this.validate(path.join(this.temporaryRoot, "tests")); }
@@ -61,32 +34,65 @@ export class TemporaryPaths {
 
   validate(directory) {
     const resolved = path.resolve(this.root, directory);
-    const existing = directoryAuthority(resolved, false, this.#authorities);
-    if (!isWithin(this.temporaryRoot, resolved) && !isTmpfsDirectory(existing.directory)) {
-      const error = new Error(`Temporary directory must stay inside ${this.temporaryRoot} or a verified tmpfs: ${resolved}`);
+    if (!isNativePathWithin(this.temporaryRoot, resolved)) {
+      const error = new Error(`Temporary directory must stay inside ${this.temporaryRoot}: ${resolved}`);
       error.code = "TEMPORARY_PATH_OUTSIDE_PROJECT";
       throw error;
     }
+    for (const authority of this.#authorities.values()) {
+      if (isNativePathWithin(authority.directory, resolved)) authority.assertStable();
+    }
+    const authority = RealDirectoryAuthority.closestAncestor(resolved, this.#authorities.values()).descendant(resolved, { allowMissing: true });
+    this.#authorities.set(authority.directory, authority);
     return resolved;
   }
 
   ensureDirectory(directory) {
     const resolved = this.validate(directory);
-    directoryAuthority(resolved, true, this.#authorities).assertStable();
+    const authority = RealDirectoryAuthority.closestAncestor(resolved, this.#authorities.values()).descendant(resolved, { create: true });
+    this.#authorities.set(resolved, authority);
+    authority.assertStable();
     return resolved;
   }
 
   create(directory, prefix) {
-    return fs.mkdtempSync(path.join(this.ensureDirectory(directory), prefix));
+    return this.createOwnedDirectory(directory, prefix).path;
+  }
+
+  createOwnedDirectory(directory, prefix) {
+    OwnedTemporaryDirectory.validatePrefix(prefix);
+    const parent = this.ensureDirectory(directory);
+    const owned = OwnedTemporaryDirectory.create(this.#authorities.get(parent), prefix);
+    this.#authorities.set(owned.path, owned.authority);
+    this.#ownedDirectories.set(owned.path, owned);
+    return owned;
+  }
+
+  cleanup(directory, { recursive = true } = {}) {
+    const resolved = this.validate(directory);
+    const owned = this.#ownedDirectories.get(resolved);
+    if (!owned) {
+      const error = new Error("temporary cleanup requires a directory created by this owner");
+      error.code = "TEMPORARY_DIRECTORY_NOT_OWNED";
+      throw error;
+    }
+    for (const [target, authority] of this.#authorities) {
+      if (isNativePathWithin(resolved, target)) authority.assertStable();
+    }
+    owned.cleanup({ recursive });
+    for (const target of this.#authorities.keys()) {
+      if (isNativePathWithin(resolved, target)) this.#authorities.delete(target);
+    }
+    this.#ownedDirectories.delete(resolved);
   }
 
   /** For already selected internal write paths; callers own containment validation. */
   static ensureRealDirectory(directory) {
-    return directoryAuthority(directory, true);
+    return RealDirectoryAuthority.resolve(directory, { create: true });
   }
 
   static validateRealDirectory(directory) {
-    return directoryAuthority(directory, false);
+    return RealDirectoryAuthority.resolve(directory, { allowMissing: true });
   }
 
   static assertRegularFile(file) {
@@ -107,28 +113,17 @@ export class TemporaryPaths {
       || (error.code?.startsWith("REAL_DIRECTORY_AUTHORITY_") && error.cause?.syscall !== "mkdir");
   }
 
-  static appendFile(file, content) {
+  static appendFile(file, content, { maxBytes } = {}) {
     const authority = TemporaryPaths.ensureRealDirectory(path.dirname(file));
     TemporaryPaths.assertRegularFile(file);
     authority.assertStable();
-    const descriptor = fs.openSync(file, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_APPEND | (fs.constants.O_NOFOLLOW || 0), 0o644);
-    try {
-      const stat = fs.fstatSync(descriptor);
-      if (!stat.isFile() || stat.nlink !== 1) {
-        const error = new Error(`Temporary append target must have one regular file link: ${file}`);
-        error.code = "TEMPORARY_FILE_INVALID";
-        throw error;
-      }
-      authority.assertStable();
-      fs.writeFileSync(descriptor, content);
-    } finally {
-      fs.closeSync(descriptor);
-    }
+    return appendRegularFile(file, content, { directoryAuthority: authority, maxBytes });
   }
 
-  static writeFile(file, content) {
-    TemporaryPaths.ensureRealDirectory(path.dirname(file)).assertStable();
+  static writeFile(file, content, { maxBytes } = {}) {
+    const directoryAuthority = TemporaryPaths.ensureRealDirectory(path.dirname(file));
+    directoryAuthority.assertStable();
     TemporaryPaths.assertRegularFile(file);
-    new AtomicFile(file).write(content);
+    return new AtomicFile(file, { maxBytes, directoryAuthority }).write(content);
   }
 }

@@ -33,7 +33,7 @@ describe("AtomicFile", () => {
     }
   });
 
-  it("publishes complete bytes and reports durability uncertainty after rename", () => {
+  it("publishes complete bytes and reports unconfirmed publication after rename", () => {
     const root = createTmpDir("atomic-file-durability-");
     try {
       const file = path.join(root, "state.bin");
@@ -42,12 +42,12 @@ describe("AtomicFile", () => {
       assert.throws(
         () => new AtomicFile(file, {
           faultInjector(event) {
-            if (event.phase === "before-file-directory-fsync") {
-              throw new Error("directory sync fault");
+            if (event.phase === "before-file-readback") {
+              throw new Error("readback fault");
             }
           },
         }).write(Buffer.from("new-complete")),
-        (error) => error.code === "ATOMIC_FILE_DURABILITY_UNCERTAIN" && error.committed === true,
+        (error) => error.code === "ATOMIC_FILE_PUBLICATION_UNCERTAIN" && error.committed === true,
       );
 
       assert.equal(fs.readFileSync(file, "utf8"), "new-complete");
@@ -86,11 +86,11 @@ describe("AtomicFile", () => {
     }
   });
 
-  it("leaves either the old or new complete visible bytes across process kill boundaries", () => {
+  it("leaves either the old or new complete visible bytes across interrupted process boundaries", () => {
     const moduleUrl = pathToFileURL(path.resolve("src/lib/atomic-file.js")).href;
     for (const [phase, expected] of [
       ["before-file-rename", "old-complete"],
-      ["before-file-directory-fsync", "new-complete"],
+      ["before-file-readback", "new-complete"],
     ]) {
       const root = createTmpDir(`atomic-file-kill-${phase}-`);
       try {
@@ -100,12 +100,12 @@ describe("AtomicFile", () => {
           import { AtomicFile } from ${JSON.stringify(moduleUrl)};
           new AtomicFile(${JSON.stringify(file)}, {
             faultInjector(event) {
-              if (event.phase === ${JSON.stringify(phase)}) process.kill(process.pid, "SIGKILL");
+              if (event.phase === ${JSON.stringify(phase)}) process.exit(71);
             },
           }).write(Buffer.from("new-complete"));
         `], { encoding: "utf8" });
 
-        assert.equal(child.signal, "SIGKILL", child.stderr);
+        assert.equal(child.status, 71, child.stderr);
         assert.equal(fs.readFileSync(file, "utf8"), expected, phase);
       } finally {
         removeTmpDir(root);

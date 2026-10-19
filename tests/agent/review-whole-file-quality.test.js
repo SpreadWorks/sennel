@@ -22,7 +22,11 @@ const source = [
 test("real reviewer reads complete Unicode authority and detects a head/tail contradiction", { timeout: 600_000 }, async (t) => {
   const owner = TestTemporaryRoot.createOnRepository();
   const release = owner.activate();
-  t.after(release);
+  let plan;
+  t.after(() => {
+    try { plan?.dispose(); }
+    finally { release(); }
+  });
   const root = owner.path;
   const profile = "review-quality";
   const model = process.env.SENNEL_REVIEW_QUALITY_MODEL || "gpt-6-luna";
@@ -31,8 +35,7 @@ test("real reviewer reads complete Unicode authority and detects a head/tail con
       jsonOutputFlag: "--json", jsonSchemaFlag: "--output-schema", jsonSchemaMode: "file" } } } };
   const agent = new Agent({ config, paths: { root, agentWorkDir: root }, registry: new ProviderRegistry(config.agent.providers),
     logger: new Logger({ logDir: path.join(root, "logs"), enabled: false }) });
-  const plan = ReviewTextPromptPlan.create({ request: { userPrompt: source, jsonSchema: responseSchema }, maxChars: 6_000, projectRoot: root });
-  t.after(() => plan.dispose());
+  plan = ReviewTextPromptPlan.create({ request: { userPrompt: source, jsonSchema: responseSchema }, maxChars: 6_000, projectRoot: root });
   const parse = (raw) => {
     const value = JSON.parse(raw);
     assert.deepEqual(Object.keys(value), ["findingIds"]);

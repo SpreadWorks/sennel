@@ -6,6 +6,9 @@ import path from "node:path";
 
 import { runCmdAsync, standaloneTestEnvironment } from "../../lib/process.js";
 import { TemporaryPaths } from "../../lib/temporary-paths.js";
+import { AtomicFile } from "../../lib/atomic-file.js";
+import { RealDirectoryAuthority } from "../../lib/real-directory-authority.js";
+import { captureRegularFile, DEFAULT_MAX_FILE_BYTES } from "../../lib/regular-file-snapshot.js";
 import { flowTemporaryRoot } from "./flow-context.js";
 import { FLOW_ARTIFACT_CONTRACTS, FlowArtifactAttemptHistory } from "../../lib/flow-artifact-contract.js";
 import { FlowCommand } from "./base-command.js";
@@ -130,14 +133,14 @@ export async function runRequirementTestGate({
     for (const source of sources.bundle.sources) {
       if (!TEST_FILE_RE.test(source.testPath)) continue;
       const target = path.join(materialized, source.testPath);
-      fs.mkdirSync(path.dirname(target), { recursive: true });
-      fs.writeFileSync(target, sources.bytesByPath.get(source.testPath), { mode: 0o644 });
+      RealDirectoryAuthority.resolve(path.dirname(target), { create: true });
+      new AtomicFile(target).write(sources.bytesByPath.get(source.testPath));
       testFiles.push(target);
     }
     for (const support of sources.bundle.support) {
       const target = path.join(materialized, support.supportPath);
-      fs.mkdirSync(path.dirname(target), { recursive: true });
-      fs.writeFileSync(target, sources.bytesByPath.get(support.supportPath), { mode: 0o644 });
+      RealDirectoryAuthority.resolve(path.dirname(target), { create: true });
+      new AtomicFile(target).write(sources.bytesByPath.get(support.supportPath));
     }
     const bootstrap = new SpecTestBootstrapValidator({
       payloadSpecDir: materialized,
@@ -163,7 +166,7 @@ export async function runRequirementTestGate({
     const assigned = [];
     const skipped = [];
     for (const file of testFiles) {
-      const source = fs.readFileSync(file, "utf8");
+      const source = captureRegularFile(file, { label: "requirement test source", maxBytes: DEFAULT_MAX_FILE_BYTES }).text();
       const header = scanFileHeader(file);
       if (header.kind === "valid" && header.ids.includes(requirementId)) {
         assigned.push(...assignedNames(file, source, requirementId).map((testName) => ({ file, testName })));
@@ -230,7 +233,7 @@ export async function runRequirementTestGate({
       process: observedProcess,
     };
   } finally {
-    fs.rmSync(materialized, { recursive: true, force: true });
+    temporaryPaths.cleanup(materialized);
   }
 }
 

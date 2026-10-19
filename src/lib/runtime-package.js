@@ -1,3 +1,6 @@
+import { AtomicFile } from "./atomic-file.js";
+import { captureRegularFile, DEFAULT_MAX_FILE_BYTES } from "./regular-file-snapshot.js";
+import { RegularFileReadHandle } from "./regular-file-io.js";
 import fs from "node:fs";
 import path from "node:path";
 import { TemporaryPaths } from "./temporary-paths.js";
@@ -43,7 +46,10 @@ export function runtimeResourceExists(input) {
 
 /** Only package-owned resources are pinned; target project inputs stay live. */
 export function readRuntimeResource(input, encoding = "utf8") {
-  if (!isRuntimeResource(input)) return fs.readFileSync(input, encoding);
+  if (!isRuntimeResource(input)) {
+    const bytes = captureRegularFile(input, { label: "runtime resource", maxBytes: DEFAULT_MAX_FILE_BYTES }).bytes;
+    return encoding === null ? bytes : bytes.toString(encoding);
+  }
   currentRuntimePackage();
   const key = location.key(input);
   const encoded = resources.get(key);
@@ -80,20 +86,24 @@ export function listRuntimeResources(input, { withFileTypes = false } = {}) {
   return [...entries.values()].map((entry) => withFileTypes ? entry : entry.name);
 }
 
-/** One direct child inherits the active runtime through an unlinked file descriptor. */
+/** One direct child inherits the active runtime through a closed-after-use delivery descriptor. */
 export class RuntimeChildExecution {
-  #descriptor;
+  #handle = null;
+  #directory = null;
   constructor({ root = process.cwd(), temporaryRoot = null, environment = process.env } = {}) {
     const runtime = currentRuntimePackage();
     const temporaryPaths = new TemporaryPaths(root);
-    const directory = temporaryPaths.create(temporaryRoot ?? temporaryPaths.runtime("runtime-delivery"), "child-");
-    const file = path.join(directory, "delivery.json");
+    this.#directory = temporaryPaths.createOwnedDirectory(temporaryRoot ?? temporaryPaths.runtime("runtime-delivery"), "child-");
+    const file = path.join(this.#directory.path, "delivery.json");
     try {
       childDelivery ??= JSON.stringify({ root: location.root, identity: runtime.toJSON(), resources: [...resources] });
-      fs.writeFileSync(file, childDelivery, { flag: "wx", mode: 0o600 });
-      this.#descriptor = fs.openSync(file, "r");
-    } finally {
-      fs.rmSync(directory, { recursive: true, force: true });
+      new AtomicFile(file, { directoryAuthority: this.#directory.authority }).write(childDelivery, { exclusive: true });
+      this.#handle = new RegularFileReadHandle(file, { directoryAuthority: this.#directory.authority });
+    } catch (cause) {
+      if (cause.cleanupFailed) throw cause;
+      try { this.#directory.cleanup(); }
+      catch (cleanupError) { throw new AggregateError([cause, cleanupError], "runtime delivery creation and cleanup both failed", { cause }); }
+      throw cause;
     }
     const bootstrap = resources.get("src/lib/runtime-child-bootstrap.js");
     this.environment = Object.freeze({ ...environment,
@@ -116,11 +126,13 @@ export class RuntimeChildExecution {
     finally { child.close(); }
   }
   options(options = {}) {
-    if (this.#descriptor === null) throw new Error("Runtime child delivery is closed");
-    return { ...options, env: this.environment, stdio: ["pipe", "pipe", "pipe", this.#descriptor] };
+    if (this.#handle === null) throw new Error("Runtime child delivery is closed");
+    return { ...options, env: this.environment, stdio: ["pipe", "pipe", "pipe", this.#handle.descriptor] };
   }
   close() {
-    if (this.#descriptor !== null) fs.closeSync(this.#descriptor);
-    this.#descriptor = null;
+    this.#handle?.close();
+    this.#handle = null;
+    this.#directory?.cleanup();
+    this.#directory = null;
   }
 }

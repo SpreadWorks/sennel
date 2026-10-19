@@ -14,7 +14,7 @@ export class LegacySpecGateRepairErrorSeed {
     this.root = createTmpDir("spec-gate-repair-legacy-code-");
     try {
       const repository = fileURLToPath(new URL("../../../", import.meta.url));
-      for (const relative of ["src", "tests/support", "tests/test-environment.js", "tests/test-temporary-root.js", "package.json"]) {
+      for (const relative of ["src", "tests/support", "tests/runner", "tests/test-environment.js", "tests/test-temporary-root.js", "package.json"]) {
         const destination = path.join(this.root, relative);
         fs.mkdirSync(path.dirname(destination), { recursive: true });
         fs.cpSync(path.join(repository, relative), destination, { recursive: true });

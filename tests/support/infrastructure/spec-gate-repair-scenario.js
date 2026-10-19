@@ -103,8 +103,9 @@ export async function createSpecGateRepairScenario({
   admitMappedTasks = true,
   versionStoreFaultInjector = null, coordinatorFaultInjector = () => {},
 } = {}) {
-  const root = seed ? new SeedWorkRoot(seed.root, { prefix: "sennel-spec-repair-case-" }).root
-    : createTmpDir("spec-gate-repair-scenario-");
+  const seedClone = seed ? new SeedWorkRoot(seed.root, { prefix: "sennel-spec-repair-case-" }) : null;
+  const root = seedClone?.root ?? createTmpDir("spec-gate-repair-scenario-");
+  const cleanup = () => seedClone ? seedClone.cleanup() : removeTmpDir(root);
   try {
     specRecord = { ...specRecord, requirements: specRecord.requirements.map((requirement) =>
       specRecord.requirements.length > 3 && requirement.priority == null
@@ -137,9 +138,9 @@ export async function createSpecGateRepairScenario({
     const coordinator = new WorkerArtifactHandoffCoordinator({
       now: () => new Date("2026-08-04T00:00:00.000Z"), faultInjector: coordinatorFaultInjector,
     });
-    return { root, specId, flowManager, flow, ctx, invocation, coordinator };
+    return { root, specId, flowManager, flow, ctx, invocation, coordinator, cleanup };
   } catch (error) {
-    removeTmpDir(root);
+    cleanup();
     throw error;
   }
 }

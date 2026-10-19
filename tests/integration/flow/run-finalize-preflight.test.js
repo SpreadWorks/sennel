@@ -15,21 +15,27 @@ describe("run-finalize preflight", () => {
     }
   });
 
-  it("assertGitWriteAccess throws help message when git dir is not writable", async () => {
+  it("assertGitWriteAccess preserves the refusal diagnostic when the filesystem denies its preflight stage", async (t) => {
     const tmp = createTmpDir("finalize-preflight-ro-");
     try {
-      fs.chmodSync(tmp, 0o555);
+      const denied = Object.assign(new Error("preflight write denied"), { code: "EACCES" });
+      const open = fs.openSync;
+      t.mock.method(fs, "openSync", (file, flags, ...args) => {
+        if (path.dirname(file) === tmp && path.basename(file).includes("finalize-preflight")) throw denied;
+        return open(file, flags, ...args);
+      });
       await assert.rejects(
         assertGitWriteAccess(tmp),
         (err) => {
           assert.equal(err.code, "FINALIZE_PREFLIGHT_FAILED");
+          assert.match(err.message, /preflight write denied/);
           assert.match(err.message, /Help:/);
           assert.match(err.message, /flow run finalize-commit --help/);
           return true;
         },
       );
+      assert.deepEqual(fs.readdirSync(tmp), []);
     } finally {
-      fs.chmodSync(tmp, 0o755);
       removeTmpDir(tmp);
     }
   });

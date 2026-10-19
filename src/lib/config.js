@@ -6,6 +6,7 @@
 
 import fs from "fs";
 import path from "path";
+import { captureRegularFile, MAX_IN_MEMORY_FILE_BYTES } from "./regular-file-snapshot.js";
 import { ProviderRegistry } from "./provider.js";
 import { validateSchema } from "./schema-validate.js";
 import { defaultAgentProfiles } from "./agent-defaults.js";
@@ -54,7 +55,7 @@ export function loadJsonFile(filePath) {
     err.code = "ERR_MISSING_FILE";
     throw err;
   }
-  return JSON.parse(fs.readFileSync(filePath, "utf8"));
+  return JSON.parse(captureRegularFile(filePath, { label: "configuration JSON", maxBytes: MAX_IN_MEMORY_FILE_BYTES }).text());
 }
 
 /**
@@ -69,7 +70,7 @@ export function loadPackageField(root, field) {
   const pkgPath = path.join(root, "package.json");
   if (!fs.existsSync(pkgPath)) return undefined;
   try {
-    const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf8"));
+    const pkg = loadJsonFile(pkgPath);
     return pkg[field];
   } catch (_) {
     return undefined;
@@ -622,7 +623,7 @@ function loadEnabledPluginConfig(managedDirectory, raw) {
     const manifestPath = path.join(pluginRoot, "plugin.json");
     if (!fs.existsSync(manifestPath)) continue;
     try {
-      const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+      const manifest = loadJsonFile(manifestPath);
       const config = manifest.contributions?.config;
       if (config?.schema) schemas.push(loadJsonFile(path.join(pluginRoot, config.schema)));
       if (config?.defaults) defaults.push(migratePluginDefaultNamespaces(loadJsonFile(path.join(pluginRoot, config.defaults))));

@@ -1,5 +1,5 @@
 import { getAcceptanceFixtureDir } from "./lib/targets.js";
-import { copyFixture, removeTmpDir, runPipeline } from "./lib/pipeline.js";
+import { copyFixture, runPipeline } from "./lib/pipeline.js";
 import { createSchemaAwareStubProvider, createStubAgent } from "../support/fakes/stub-agent.js";
 
 export async function runStubAcceptance({
@@ -11,15 +11,16 @@ export async function runStubAcceptance({
   verifyQuality = (provider) => provider.quality(),
 } = {}) {
   const fixture = fixtureFor(fixtureName);
-  const tmp = copy(fixture, { type: "base" });
-  const provider = createProvider();
+  const workRoot = copy(fixture, { type: "base" });
+  const tmp = workRoot.root;
   try {
+    const provider = createProvider();
     const result = pipeline === runPipeline
       ? await pipeline(tmp, { agent: createStubAgent(provider) })
       : await pipeline(tmp, provider);
     return { ...result, quality: verifyQuality(provider) };
   } finally {
-    if (copy === copyFixture) removeTmpDir(tmp);
+    workRoot.cleanup();
   }
 }
 

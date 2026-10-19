@@ -3,7 +3,7 @@ import { spawn } from "node:child_process";
 import { once } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
-import { test } from "node:test";
+import { after, before, describe, test } from "node:test";
 
 import { ProcessIdentitySource } from "../../../src/lib/process-identity.js";
 import { container } from "../../../src/lib/container.js";
@@ -12,6 +12,7 @@ import { WorkerArtifactHandoffCoordinator } from "../../../src/flow/lib/worker-a
 import { CanonicalNextActionScenario, makeFlowManager } from "../../support/infrastructure/flow-setup.js";
 import { TaskReviewScenario } from "../../support/builders/task-review-scenario.js";
 import { createTmpDir, removeTmpDir } from "../../support/builders/tmp-dir.js";
+import { SeedCleanupScope, observeSeedTiming } from "../../support/builders/seed-work-root.js";
 
 // Causal boundary: the external owner publishes a real lock, the reader's real
 // identity assessment observes it live, then it releases between the next
@@ -121,38 +122,55 @@ test("get-next-action preserves its selected action after external current-state
   assert.deepEqual(canonicalBytes(manager, specId), before);
 });
 
-test("sealed handoff recovery survives external current-state contention and settles once after restart", { timeout: 30000 }, async (t) => {
-  const scenario = new TaskReviewScenario(t);
-  container.reset();
-  container.register("root", scenario.root);
-  t.after(() => container.reset());
-  const reviewed = await scenario.publishReview([{
-    findingKey: "missing-behavior", title: "Required behavior is missing", failureMode: "spec_behavior_contradiction",
-    file: "README.md", requirementId: "R-1", issue: "The implementation omits required behavior.",
-    suggestion: "Implement the required behavior.", disposition: "must-fix", rationale: "The mapped requirement requires this behavior.",
-  }]);
-  assert.notEqual(reviewed.ok, false, JSON.stringify(reviewed));
-  assert.notEqual((await scenario.filter([])).ok, false);
-  scenario.reload();
-  const work = scenario.stageHandoff("repair");
-  fs.appendFileSync(scenario.sourcePath, "repaired behavior\n");
-  scenario.sealHandoff(work, {
-    version: 1, stepId: "task-repair", completionStatus: "done", issues: [], overview: null,
-    triage: null,
-    repair: { version: 1, findings: [{ findingKey: "missing-behavior", paths: ["README.md"] }], summary: "Implemented the required behavior.", recurrenceResolutions: [] },
-    noChangeReason: null,
+describe("sealed handoff recovery under contention", { concurrency: false }, () => {
+  const cleanupScope = new SeedCleanupScope(after);
+  let scenario;
+  let sourceBefore;
+
+  // Producer assertions remain setup failures; the timed consumer reloads sealed bytes.
+  before(async () => {
+    const started = performance.now();
+    try {
+      scenario = new TaskReviewScenario(cleanupScope);
+      container.reset();
+      container.register("root", scenario.root);
+      cleanupScope.after(() => container.reset());
+      const reviewed = await scenario.publishReview([{
+        findingKey: "missing-behavior", title: "Required behavior is missing", failureMode: "spec_behavior_contradiction",
+        file: "README.md", requirementId: "R-1", issue: "The implementation omits required behavior.",
+        suggestion: "Implement the required behavior.", disposition: "must-fix", rationale: "The mapped requirement requires this behavior.",
+      }]);
+      assert.notEqual(reviewed.ok, false, JSON.stringify(reviewed));
+      assert.notEqual((await scenario.filter([])).ok, false);
+      scenario.reload();
+      const work = scenario.stageHandoff("repair");
+      cleanupScope.after(() => work.release());
+      fs.appendFileSync(scenario.sourcePath, "repaired behavior\n");
+      scenario.sealHandoff(work, {
+        version: 1, stepId: "task-repair", completionStatus: "done", issues: [], overview: null,
+        triage: null,
+        repair: { version: 1, findings: [{ findingKey: "missing-behavior", paths: ["README.md"] }], summary: "Implemented the required behavior.", recurrenceResolutions: [] },
+        noChangeReason: null,
+      });
+      scenario.reload();
+      sourceBefore = fs.readFileSync(scenario.sourcePath);
+    } finally {
+      observeSeedTiming("current-state-contention-sealed-producer", performance.now() - started);
+    }
   });
-  scenario.reload();
-  const ctx = scenario.context();
-  const sourceBefore = fs.readFileSync(scenario.sourcePath);
-  const recovery = new WorkerArtifactHandoffCoordinator();
-  const result = await withContendingWriter(t, scenario.manager.specLocation(scenario.specId).directory, () => recovery.recoverPending({ ctx }));
-  assert.equal(result.completed, true);
-  scenario.reload();
-  assert.equal(scenario.state().current.at(-1), "T-1-review");
-  const settled = scenario.snapshot();
-  assert.equal(new WorkerArtifactHandoffCoordinator().recoverPending({ ctx: scenario.context() }), null);
-  scenario.reload();
-  assert.equal(scenario.snapshot(), settled);
-  assert.deepEqual(fs.readFileSync(scenario.sourcePath), sourceBefore);
+
+  test("sealed handoff recovery survives external current-state contention and settles once after restart", { timeout: 30000 }, async (t) => {
+    scenario.reload();
+    const ctx = scenario.context();
+    const recovery = new WorkerArtifactHandoffCoordinator();
+    const result = await withContendingWriter(t, scenario.manager.specLocation(scenario.specId).directory, () => recovery.recoverPending({ ctx }));
+    assert.equal(result.completed, true);
+    scenario.reload();
+    assert.equal(scenario.state().current.at(-1), "T-1-review");
+    const settled = scenario.snapshot();
+    assert.equal(new WorkerArtifactHandoffCoordinator().recoverPending({ ctx: scenario.context() }), null);
+    scenario.reload();
+    assert.equal(scenario.snapshot(), settled);
+    assert.deepEqual(fs.readFileSync(scenario.sourcePath), sourceBefore);
+  });
 });

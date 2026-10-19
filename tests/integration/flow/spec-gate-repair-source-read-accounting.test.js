@@ -22,32 +22,41 @@ function ruleFixture(t) {
 
 function observeFileReads(root, operation, { beforeRead = null } = {}) {
   const open = fs.openSync;
-  const read = fs.readFileSync;
+  const read = fs.readSync;
   const close = fs.closeSync;
   const files = new Map();
   const events = [];
   fs.openSync = function (file, ...args) {
     const descriptor = open.call(this, file, ...args);
     if (typeof file === "string" && path.relative(root, file) !== ".." && !path.relative(root, file).startsWith(`..${path.sep}`)) {
-      files.set(descriptor, file);
+      files.set(descriptor, { file, chunks: [], started: false, finished: false });
     }
     return descriptor;
   };
-  fs.readFileSync = function (descriptor, ...args) {
-    const file = files.get(descriptor);
-    if (file !== undefined) beforeRead?.(file);
-    const bytes = read.call(this, descriptor, ...args);
-    if (file !== undefined) {
-      events.push({ origin: path.relative(root, file), byteLength: bytes.length });
-      operation(file, bytes);
+  function record(entry, invoke) {
+    if (entry.finished) return;
+    entry.finished = true;
+    const bytes = Buffer.concat(entry.chunks);
+    events.push({ origin: path.relative(root, entry.file), byteLength: bytes.length });
+    if (invoke) operation(entry.file, bytes);
+  }
+  fs.readSync = function (descriptor, buffer, offset, length, position) {
+    const entry = files.get(descriptor);
+    if (entry && !entry.started) { entry.started = true; beforeRead?.(entry.file); }
+    const count = read.call(this, descriptor, buffer, offset, length, position);
+    if (entry) {
+      if (count > 0) entry.chunks.push(Buffer.from(buffer.subarray(offset, offset + count)));
+      else record(entry, true);
     }
-    return bytes;
+    return count;
   };
   fs.closeSync = function (descriptor) {
+    const entry = files.get(descriptor);
+    if (entry && entry.started) record(entry, false);
     files.delete(descriptor);
     return close.call(this, descriptor);
   };
-  return { events, restore() { fs.openSync = open; fs.readFileSync = read; fs.closeSync = close; } };
+  return { events, restore() { fs.openSync = open; fs.readSync = read; fs.closeSync = close; } };
 }
 
 for (const unmeasurable of [false, true]) {

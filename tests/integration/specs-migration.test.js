@@ -6,7 +6,7 @@ import { spawnSync } from "node:child_process";
 import { afterEach, describe, it } from "node:test";
 
 import { createTmpDir, removeTmpDir, writeFile, writeJson } from "../support/builders/tmp-dir.js";
-import { SeedWorkRoot } from "../support/builders/seed-work-root.js";
+import { SeedCleanupScope, SeedWorkRoot } from "../support/builders/seed-work-root.js";
 import { CanonicalPersistenceSnapshot, StoredFlowPersistenceSnapshot } from "../support/assertions/canonical-persistence.js";
 import { buildCurrentFlowDefinition } from "../../src/flow/definition.js";
 import { FlowArtifactCatalog, FlowVersionAuthorityScope, FlowVersionLocation } from "../../src/lib/flow-version.js";
@@ -35,6 +35,7 @@ import { resolveMigrationSpecRoot } from "../../src/lib/migration-spec-root.js";
 
 const CLI = path.resolve("src/sennel.js");
 const roots = [];
+const seedCloneScope = new SeedCleanupScope(afterEach);
 
 function project() {
   const root = createTmpDir("sennel-specs-migration-");
@@ -2624,7 +2625,7 @@ describe("migrate specs --to 2", () => {
 
 function frozenV1Project() {
   const work = new SeedWorkRoot(path.resolve("tests/fixtures/legacy-activity-v1/project"), { prefix: "sennel-legacy-activity-" });
-  roots.push(work.root);
+  seedCloneScope.after(() => work.cleanup());
   return { root: work.root, id: "001-legacy-activity" };
 }
 

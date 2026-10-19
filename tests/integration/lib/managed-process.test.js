@@ -369,7 +369,7 @@ test("visible but durability-uncertain launcher record is rejected across a fres
   const record = { executionId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
     callId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", state: "finished" };
   assert.throws(() => writeManagedRecord(file, record, { faultInjector({ phase }) {
-    if (phase === "before-file-directory-fsync") throw new Error("injected directory fsync failure");
+    if (phase === "before-file-readback") throw new Error("injected publication readback failure");
   } }), { code: "PROCESS_EXECUTION_RECORD_SAVE_FAILED" });
   assert.deepEqual(JSON.parse(fs.readFileSync(file, "utf8")), record);
   assert.throws(() => readManagedRecord(file), { code: "PROCESS_EXECUTION_DURABILITY_UNCERTAIN" });

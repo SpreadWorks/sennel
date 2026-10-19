@@ -61,7 +61,7 @@ test("a forged physical call capability cannot record a failure or change its au
 test("uncertain control-failure persistence preserves its transition marker and refuses all subsequent admission", async (t) => {
   const options = fixture(t); let armed = false;
   const runtime = await ProcessExecutionRuntime.acquire({ ...options, faultInjector({ phase }) {
-    if (armed && phase === "before-runtime-directory-fsync") throw new Error("control failure fsync unavailable");
+    if (armed && phase === "before-runtime-readback") throw new Error("control failure publication readback unavailable");
   } });
   const call = await runtime.reserveCall(); armed = true;
   await assert.rejects(runtime.recordCallControlFailure(call, control()), { code: "PROCESS_EXECUTION_DURABILITY_UNCERTAIN" });

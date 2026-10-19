@@ -22,6 +22,8 @@ import { resolveDocsContext } from "../lib/docs-context.js";
 import { Command } from "../../lib/command.js";
 import { runDocumentationAiCommand, rethrowDocumentationAiStop } from "../lib/documentation-ai-execution.js";
 import { AtomicFile } from "../../lib/atomic-file.js";
+import { captureRegularFile, MAX_IN_MEMORY_FILE_BYTES } from "../../lib/regular-file-snapshot.js";
+import { RealDirectoryAuthority } from "../../lib/real-directory-authority.js";
 
 const logger = createLogger("translate");
 
@@ -160,7 +162,7 @@ async function executeTranslate(ctx) {
   // Ensure all target language directories exist
   const langDirs = [...new Set(tasks.map((t) => t.lang))];
   for (const lang of ctx.dryRun ? [] : langDirs) {
-    fs.mkdirSync(path.join(docsDir, lang), { recursive: true });
+    RealDirectoryAuthority.resolve(path.join(docsDir, lang), { create: true });
   }
 
   const concurrency = resolveConcurrency(cfg);
@@ -169,7 +171,7 @@ async function executeTranslate(ctx) {
 
   const results = await mapWithConcurrency(tasks, concurrency, async (task) => {
     logger.verbose(`Translating: ${task.label}`);
-    const content = fs.readFileSync(task.sourcePath, "utf8");
+    const content = captureRegularFile(task.sourcePath, { label: "translation source", maxBytes: MAX_IN_MEMORY_FILE_BYTES }).text();
     const translated = await translateDocument(content, defaultLang, task.lang, agent, root, cfg.docs?.style, {
       documentId: task.label,
       maxCharacters,

@@ -506,7 +506,7 @@ test("stop preparation committed snapshot refuses uncertain registry before wait
   let runtime, armed = false;
   t.after(() => { runtime?.store.ownerLock.release(); removeTmpDir(mainRoot); });
   runtime = await ProcessExecutionRuntime.acquire({ mainRoot, faultInjector({ phase }) {
-    if (armed && phase === "before-runtime-directory-fsync") throw new Error("Fixture registry directory fsync unavailable");
+    if (armed && phase === "before-runtime-readback") throw new Error("Fixture registry publication readback unavailable");
   } });
   const call = await runtime.reserveCall();
   new ManagedStopOperationStore(call).claim({ reason: "abort", graceMs: 100 });

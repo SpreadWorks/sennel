@@ -53,9 +53,8 @@ export class FlowHandoffAuthorityLease {
   } = {}) {
     this.mainRoot = fs.realpathSync(path.resolve(requiredText(mainRoot, "Flow handoff authority mainRoot")));
     this.executionRoot = fs.realpathSync(path.resolve(requiredText(executionRoot, "Flow handoff authority executionRoot")));
-    if (!fs.statSync(this.mainRoot).isDirectory() || !fs.statSync(this.executionRoot).isDirectory()) {
-      throw new Error("Flow handoff authority roots must be real directories");
-    }
+    new RealDirectoryAuthority(this.mainRoot).assertStable();
+    new RealDirectoryAuthority(this.executionRoot).assertStable();
     this.scope = this.executionRoot === this.mainRoot ? "repository" : "worktree";
     this.scopeId = this.scope === "repository" ? "repository" : this.executionRoot;
     const root = new RealDirectoryAuthority(this.mainRoot, { errorFactory: lockError });

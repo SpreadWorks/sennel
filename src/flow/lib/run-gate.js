@@ -20,6 +20,7 @@ import { CURRENT_FLOW_SCHEMA_REVISION } from "../../lib/flow-schema-revision.js"
 import { flowTemporaryRoot } from "./flow-context.js";
 import { TemporaryPaths } from "../../lib/temporary-paths.js";
 import fs from "fs";
+import { captureRegularFile, DEFAULT_MAX_FILE_BYTES } from "../../lib/regular-file-snapshot.js";
 import path from "path";
 import crypto from "crypto";
 import { TemporaryAgentFileInput } from "../../lib/agent-file-reference.js";
@@ -4195,7 +4196,7 @@ export class RunGateCommand extends FlowCommand {
       const targetPath = ctx.spec || specPath;
       const absoluteTarget = path.resolve(executionRoot, targetPath);
       if (!fs.existsSync(absoluteTarget)) throw new Error(`spec not found: ${absoluteTarget}`);
-      const text = fs.readFileSync(absoluteTarget, "utf8");
+      const text = captureRegularFile(absoluteTarget, { label: "gate spec", maxBytes: DEFAULT_MAX_FILE_BYTES }).text();
       result = await runGateFlow({
         root: executionRoot,
         artifactRoot: executionRoot,

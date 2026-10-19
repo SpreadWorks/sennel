@@ -107,14 +107,14 @@ export class IssueLogStore {
     });
     versionAuthority.ensure();
     const runtimeDirectory = location.resolve(".runtime");
-    fs.mkdirSync(runtimeDirectory, { recursive: true, mode: 0o755 });
+    RealDirectoryAuthority.resolve(runtimeDirectory, { create: true, creationMode: 0o755 });
     const runtimeAuthority = new RealDirectoryAuthority(runtimeDirectory, {
       parentAuthority: versionAuthority,
       errorFactory: (status, message, data) => issueLogError(status, message, data),
     });
     runtimeAuthority.ensure();
     const lockDirectory = location.resolve(".runtime/locks");
-    fs.mkdirSync(lockDirectory, { recursive: true, mode: 0o755 });
+    RealDirectoryAuthority.resolve(lockDirectory, { create: true, creationMode: 0o755 });
     const lockAuthority = new RealDirectoryAuthority(lockDirectory, {
       parentAuthority: runtimeAuthority,
       errorFactory: (status, message, data) => issueLogError(status, message, data),

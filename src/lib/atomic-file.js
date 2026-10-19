@@ -1,220 +1,317 @@
+import { closeFileDescriptor } from "./file-descriptor.js";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { RealDirectoryAuthority } from "./real-directory-authority.js";
+import { FileIdentity, RealDirectoryAuthority, sameFileIdentity } from "./real-directory-authority.js";
+import { captureRegularFile, FilePermissionHint, MAX_IN_MEMORY_FILE_BYTES, RegularFileReadReceipt, RegularFileSnapshot, visitRegularFileChunks } from "./regular-file-snapshot.js";
 
-export function fsyncDirectory(directory) {
-  const descriptor = fs.openSync(directory, "r");
-  let primaryError = null;
-  try {
-    fs.fsyncSync(descriptor);
-  } catch (cause) {
-    primaryError = cause;
-  } finally {
-    try {
-      fs.closeSync(descriptor);
-    } catch (cleanupError) {
-      if (primaryError) {
-        throw new AggregateError(
-          [primaryError, cleanupError],
-          "Directory durability sync and descriptor cleanup both failed",
-          { cause: primaryError },
-        );
-      }
-      throw cleanupError;
+const stages = new WeakMap();
+const stageToken = Symbol("owned atomic stage");
+
+export class AtomicFilePublication {
+  #snapshot;
+  #receipt;
+  constructor({ committed, path: filePath, snapshot = null, receipt = null }) {
+    if (typeof committed !== "boolean" || !path.isAbsolute(filePath)
+      || (snapshot !== null && !(snapshot instanceof RegularFileSnapshot))
+      || (receipt !== null && !(receipt instanceof RegularFileReadReceipt))
+      || (snapshot !== null && receipt !== null)) {
+      throw new TypeError("atomic file publication requires a commit flag, absolute path and optional captured snapshot");
     }
+    this.committed = committed;
+    this.path = filePath;
+    this.#snapshot = snapshot;
+    this.#receipt = receipt;
+    Object.freeze(this);
   }
-  if (primaryError) throw primaryError;
+  get snapshot() { return this.#snapshot; }
+  get receipt() { return this.#receipt; }
+  toJSON() { return { committed: this.committed, path: this.path }; }
 }
 
-function sameFile(left, right) {
-  return left.dev === right.dev && left.ino === right.ino;
-}
-
-export class AtomicFileWriteError extends Error {
-  constructor(message, { cause, phase, committedToVisibleName, durabilityUnknown }) {
-    super(message, { cause });
+export class AtomicFileWriteError extends AggregateError {
+  constructor(message, { cause, phase, committedToVisibleName = false, publicationUnknown = false, cleanupErrors = [] }) {
+    super([cause, ...cleanupErrors], message, { cause });
     this.name = "AtomicFileWriteError";
-    this.code = durabilityUnknown
-      ? "ATOMIC_FILE_DURABILITY_UNCERTAIN"
-      : "ATOMIC_FILE_WRITE_FAILED";
+    this.code = publicationUnknown ? "ATOMIC_FILE_PUBLICATION_UNCERTAIN" : "ATOMIC_FILE_WRITE_FAILED";
     this.phase = phase;
     this.committedToVisibleName = committedToVisibleName;
-    this.durabilityUnknown = durabilityUnknown;
+    this.publicationUnknown = publicationUnknown;
+    this.cleanupFailed = cleanupErrors.length > 0 || cause?.cleanupFailed === true;
+    this.cleanupErrors = cleanupErrors;
     this.committed = committedToVisibleName;
   }
 }
 
+/** A closed same-directory file whose ownership cannot be reconstructed from a path. */
+export class OwnedAtomicFileStage {
+  constructor(token, writer, stagePath, identity, baseline) {
+    if (token !== stageToken) throw new Error("atomic stages must be created by AtomicFile");
+    this.path = stagePath;
+    stages.set(this, { writer, identity, baseline, snapshot: null, adopted: false, consumed: false });
+    Object.freeze(this);
+  }
+  dispose() { return stages.get(this).writer.disposeStage(this); }
+  get identity() { return stages.get(this).identity; }
+  get active() { return !stages.get(this).consumed; }
+}
+
 export class AtomicFile {
   constructor(filePath, {
-    faultInjector = () => {},
-    phaseNamespace = "file",
-    commitGuard = () => {},
+    faultInjector = () => {}, phaseNamespace = "file", commitGuard = () => {},
+    maxBytes = MAX_IN_MEMORY_FILE_BYTES, directoryAuthority = null, permissionHint = null,
   } = {}) {
-    if (typeof phaseNamespace !== "string" || phaseNamespace.trim() === "") {
-      throw new Error("atomic file phase namespace must be a non-empty string");
-    }
-    if (typeof commitGuard !== "function") {
-      throw new TypeError("atomic file commitGuard must be a function");
-    }
+    if (typeof phaseNamespace !== "string" || phaseNamespace.trim() === "") throw new Error("atomic file phase namespace must be a non-empty string");
+    if (typeof commitGuard !== "function") throw new TypeError("atomic file commitGuard must be a function");
+    if (!Number.isSafeInteger(maxBytes) || maxBytes < 0 || maxBytes >= Number.MAX_SAFE_INTEGER) throw new TypeError("atomic file maxBytes must be a non-negative safe integer");
+    if (permissionHint !== null && !(permissionHint instanceof FilePermissionHint)) throw new TypeError("atomic file permissionHint must be native permission metadata");
+    this.permissionHint = permissionHint;
     this.filePath = path.resolve(filePath);
     this.directory = path.dirname(this.filePath);
-    this.directoryAuthority = new RealDirectoryAuthority(this.directory);
+    this.directoryAuthority = directoryAuthority ?? new RealDirectoryAuthority(this.directory);
+    if (!(this.directoryAuthority instanceof RealDirectoryAuthority) || this.directoryAuthority.directory !== this.directory) {
+      throw new Error("atomic file authority must own its direct parent");
+    }
     this.faultInjector = faultInjector;
     this.phaseNamespace = phaseNamespace;
     this.commitGuard = commitGuard;
+    this.maxBytes = maxBytes;
+  }
+
+  #capture(filePath = this.filePath, maxBytes = this.maxBytes, allowMissing = false, streaming = false) {
+    const options = { label: "file authority", maxBytes,
+      requireSingleLink: true, directoryAuthority: this.directoryAuthority, allowMissing };
+    return streaming ? visitRegularFileChunks(filePath, { ...options, visit() {} }) : captureRegularFile(filePath, options);
+  }
+
+  #baseline(streaming = false) {
+    if (!this.directoryAuthority.exists()) return null;
+    return this.#capture(this.filePath, this.maxBytes, true, streaming);
+  }
+
+  #assertBaseline(expected, streaming = expected instanceof RegularFileReadReceipt) {
+    const actual = this.#baseline(streaming);
+    if ((expected === null) !== (actual === null)
+      || (expected !== null && (!sameFileIdentity(expected.identity, actual.identity) || expected.digest !== actual.digest))) {
+      throw new Error(`visible file changed before commit: ${this.filePath}`);
+    }
+  }
+
+  #event(suffix, stage = null) {
+    const event = { phase: `before-${this.phaseNamespace}-${suffix}`, filePath: this.filePath };
+    if (stage !== null) event.tempPath = stage.path;
+    this.faultInjector(event);
+    return event;
   }
 
   read(fallback = null) {
-    this.directoryAuthority.assertStable();
-    let descriptor = null;
-    let stat;
-    try {
-      stat = fs.lstatSync(this.filePath);
-    } catch (cause) {
-      if (cause.code === "ENOENT") {
-        return Buffer.isBuffer(fallback) ? Buffer.from(fallback) : fallback;
-      }
-      throw cause;
-    }
-    if (!stat.isFile() || stat.isSymbolicLink() || fs.realpathSync(this.filePath) !== this.filePath) {
-      throw new Error(`file authority must be a regular real file: ${this.filePath}`);
-    }
-    try {
-      descriptor = fs.openSync(
-        this.filePath,
-        fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0),
-      );
-      const openedStat = fs.fstatSync(descriptor);
-      if (!sameFile(stat, openedStat) || !openedStat.isFile()) {
-        throw new Error(`file authority changed while reading: ${this.filePath}`);
-      }
-      return fs.readFileSync(descriptor);
-    } finally {
-      if (descriptor != null) fs.closeSync(descriptor);
-    }
+    const snapshot = this.readSnapshot();
+    return snapshot === null ? (Buffer.isBuffer(fallback) ? Buffer.from(fallback) : fallback) : snapshot.bytes;
   }
 
-  write(content) {
-    const bytes = Buffer.isBuffer(content)
-      ? Buffer.from(content)
-      : typeof content === "string"
-        ? Buffer.from(content)
-        : null;
-    if (!bytes) throw new TypeError("atomic file content must be a Buffer or string");
+  readSnapshot() { return this.#baseline(); }
 
-    this.directoryAuthority.assertStable();
-    const tempPath = path.join(this.directory, `.${path.basename(this.filePath)}.${crypto.randomUUID()}.tmp`);
+  createStage(content = Buffer.alloc(0), { stageName = null, exclusive = false } = {}) {
+    const bytes = Buffer.isBuffer(content) ? Buffer.from(content) : typeof content === "string" ? Buffer.from(content) : null;
+    if (bytes === null) throw new TypeError("atomic file content must be a Buffer or string");
+    if (bytes.length > this.maxBytes) throw new Error(`atomic file content exceeds ${this.maxBytes} bytes`);
+    return this.#createStage({ bytes, stageName, exclusive });
+  }
+
+  /** A synchronous child producer borrows the owned descriptor until it returns. */
+  createOutputStage(producer, { stageName = null, exclusive = false } = {}) {
+    if (typeof producer !== "function") throw new TypeError("atomic output producer must be a synchronous function");
+    return this.#createStage({ producer, stageName, exclusive });
+  }
+
+  #createStage({ bytes = null, producer = null, stageName, exclusive }) {
+    const streaming = producer !== null;
     let descriptor = null;
-    let mode = 0o644;
+    let stage = null;
     let phase = "inspect-visible-file";
-    let committedToVisibleName = false;
+    if (stageName !== null && (typeof stageName !== "string" || path.basename(stageName) !== stageName || stageName === "." || stageName === ".." || stageName === "" || stageName === path.basename(this.filePath))) throw new Error("atomic stage name must be a distinct basename");
+    const tempPath = path.join(this.directory, stageName ?? `.${path.basename(this.filePath)}.${crypto.randomUUID()}.tmp`);
     try {
-      try {
-        const current = fs.lstatSync(this.filePath);
-        if (!current.isFile() || current.isSymbolicLink() || fs.realpathSync(this.filePath) !== this.filePath) {
-          throw new Error(`file authority must be a regular real file: ${this.filePath}`);
-        }
-        mode = current.mode & 0o777;
-      } catch (cause) {
-        if (cause.code !== "ENOENT") throw cause;
-      }
+      this.directoryAuthority.assertStable();
+      const baseline = exclusive ? null : this.#baseline(streaming);
+      if (exclusive && streaming) this.#assertAbsent();
       phase = `before-${this.phaseNamespace}-temp-open`;
       this.faultInjector({ phase, filePath: this.filePath, tempPath });
-      descriptor = fs.openSync(tempPath, "wx", mode);
-      phase = `before-${this.phaseNamespace}-temp-write`;
-      this.faultInjector({ phase, filePath: this.filePath, tempPath });
-      fs.writeFileSync(descriptor, bytes);
-      fs.fchmodSync(descriptor, mode);
-      phase = `before-${this.phaseNamespace}-fsync`;
-      this.faultInjector({ phase, filePath: this.filePath, tempPath });
-      fs.fsyncSync(descriptor);
-      phase = `before-${this.phaseNamespace}-temp-close`;
-      this.faultInjector({ phase, filePath: this.filePath, tempPath });
-      fs.closeSync(descriptor);
-      descriptor = null;
       this.directoryAuthority.assertStable();
-      phase = `before-${this.phaseNamespace}-rename`;
-      this.faultInjector({ phase, filePath: this.filePath, tempPath });
-      this.commitGuard({ phase, filePath: this.filePath, tempPath });
-      fs.renameSync(tempPath, this.filePath);
-      committedToVisibleName = true;
-      phase = `before-${this.phaseNamespace}-directory-fsync`;
-      this.faultInjector({ phase, filePath: this.filePath });
-      fsyncDirectory(this.directory);
-      return { committed: true, path: this.filePath };
-    } catch (cause) {
-      const cleanupErrors = [];
-      if (descriptor != null) {
-        try { fs.closeSync(descriptor); } catch (cleanupError) { cleanupErrors.push(cleanupError); }
+      descriptor = fs.openSync(tempPath, "wx+", 0o600);
+      stage = new OwnedAtomicFileStage(stageToken, this, tempPath, new FileIdentity(fs.fstatSync(descriptor, { bigint: true })), baseline);
+      phase = `before-${this.phaseNamespace}-temp-write`;
+      this.#event("temp-write", stage);
+      if (this.permissionHint !== null) {
+        phase = `before-${this.phaseNamespace}-permissions`;
+        this.#event("permissions", stage);
+        this.permissionHint.applyToDescriptor(descriptor);
       }
-      if (!committedToVisibleName) {
-        try { fs.unlinkSync(tempPath); } catch (cleanupError) {
-          if (cleanupError.code !== "ENOENT") cleanupErrors.push(cleanupError);
+      phase = `before-${this.phaseNamespace}-temp-write`;
+      if (streaming) {
+        const produced = producer(descriptor);
+        if (produced?.then instanceof Function) throw new TypeError("atomic output producer must complete synchronously");
+      } else {
+        let offset = 0;
+        const partialLength = Math.max(1, Math.floor(bytes.length / 2));
+        let partialReported = false;
+        while (offset < bytes.length) {
+          const length = partialReported ? bytes.length - offset : Math.min(bytes.length - offset, partialLength - offset);
+          const written = fs.writeSync(descriptor, bytes, offset, length, offset);
+          if (written === 0) throw new Error("atomic file stage write made no progress");
+          offset += written;
+          if (!partialReported && offset === partialLength) {
+            partialReported = true;
+            phase = `after-${this.phaseNamespace}-temp-partial-write`;
+            this.faultInjector({ phase, filePath: this.filePath, tempPath });
+          }
         }
       }
-      if (committedToVisibleName) {
-        throw this.createWriteError(
-          `file write reached the visible name but durability is uncertain: ${this.filePath}`,
-          {
-            cause: cleanupErrors.length > 0
-              ? new AggregateError([cause, ...cleanupErrors], "file durability and cleanup failed", { cause })
-              : cause,
-            phase,
-            committedToVisibleName: true,
-            durabilityUnknown: true,
-          },
-        );
+      phase = `before-${this.phaseNamespace}-fsync`;
+      this.#event("fsync", stage);
+      fs.fsyncSync(descriptor);
+      phase = `before-${this.phaseNamespace}-temp-close`;
+      this.#event("temp-close", stage);
+      fs.closeSync(descriptor);
+      descriptor = null;
+      const snapshot = this.#capture(tempPath, this.maxBytes, false, streaming);
+      if (!sameFileIdentity(stages.get(stage).identity, snapshot.identity) || (!streaming && !snapshot.bytes.equals(bytes))
+        || (this.permissionHint !== null && !this.permissionHint.matchesAfterWrite(snapshot.permissionHint))) {
+        throw new Error("atomic file stage changed while writing");
       }
-      if (cleanupErrors.length > 0) {
-        throw new AggregateError(
-          [cause, ...cleanupErrors],
-          `file write failed before commit and cleanup also failed: ${this.filePath}`,
-          { cause },
-        );
+      stages.get(stage).snapshot = snapshot;
+      stages.get(stage).adopted = streaming;
+      return stage;
+    } catch (cause) {
+      const cleanupErrors = [];
+      if (descriptor !== null) {
+        try { fs.closeSync(descriptor); descriptor = null; } catch (error) { cleanupErrors.push(error); }
       }
-      throw cause;
+      if (stage !== null && descriptor === null && !cause.cleanupFailed) {
+        try { this.disposeStage(stage); } catch (error) { cleanupErrors.push(error); }
+      }
+      throw this.createWriteError(cause.message, { cause, phase, cleanupErrors });
     }
   }
 
-  remove() {
+  #state(stage) {
+    const state = stages.get(stage);
+    if (!state || state.writer !== this || state.consumed) throw new Error("atomic file stage must be owned, unpublished and in the target directory");
     this.directoryAuthority.assertStable();
+    return state;
+  }
+
+  adoptStage(stage, { maxBytes = this.maxBytes } = {}) {
+    const state = this.#state(stage);
+    if (state.adopted) throw new Error("atomic file stage output is already sealed");
+    if (maxBytes > this.maxBytes) throw new Error("atomic stage adoption cannot exceed the target byte limit");
+    const snapshot = this.#capture(stage.path, maxBytes);
+    if (!sameFileIdentity(state.identity, snapshot.identity)) throw new Error("atomic file stage identity changed");
+    let descriptor = null;
+    let failure = null;
+    try {
+      descriptor = fs.openSync(stage.path, "r+");
+      if (!sameFileIdentity(state.identity, fs.fstatSync(descriptor, { bigint: true }))) throw new Error("atomic file stage identity changed while opening");
+      fs.fsyncSync(descriptor);
+    } catch (cause) { failure = cause; throw cause; }
+    finally { if (descriptor !== null) closeFileDescriptor(descriptor, failure); }
+    const flushed = this.#capture(stage.path, maxBytes);
+    if (!sameFileIdentity(snapshot.identity, flushed.identity) || snapshot.digest !== flushed.digest
+      || (this.permissionHint !== null && !this.permissionHint.matchesAfterWrite(flushed.permissionHint))) throw new Error("atomic file stage changed while flushing");
+    state.snapshot = flushed;
+    state.adopted = true;
+    return stage;
+  }
+
+  disposeStage(stage) {
+    const state = this.#state(stage);
     let stat;
-    try {
-      stat = fs.lstatSync(this.filePath);
-    } catch (cause) {
-      if (cause.code === "ENOENT") return { committed: false, path: this.filePath };
-      throw cause;
+    try { stat = fs.lstatSync(stage.path, { bigint: true }); }
+    catch (cause) { if (cause.code === "ENOENT") { state.consumed = true; return; } throw cause; }
+    if (!stat.isFile() || stat.isSymbolicLink() || !sameFileIdentity(stat, state.identity)) {
+      throw new Error("atomic file stage cleanup refused a replacement");
     }
-    if (!stat.isFile() || stat.isSymbolicLink() || fs.realpathSync(this.filePath) !== this.filePath) {
-      throw new Error(`file authority must be a regular real file: ${this.filePath}`);
-    }
-    let phase = `before-${this.phaseNamespace}-unlink`;
+    fs.unlinkSync(stage.path);
+    state.consumed = true;
+  }
+
+  // Exclusive publication uses a same-volume hard link and then removes the
+  // owned stage. Unlike replacing rename, EEXIST never replaces another actor.
+  #assertAbsent() {
+    let exists = true;
+    try { fs.lstatSync(this.filePath); }
+    catch (cause) { if (cause.code !== "ENOENT") throw cause; exists = false; }
+    this.directoryAuthority.assertStable();
+    if (exists) throw Object.assign(new Error(`exclusive publication target already exists: ${this.filePath}`), { code: "EEXIST" });
+  }
+
+  publishStage(stage, { exclusive = false } = {}) {
+    let phase = "inspect-stage";
     let committedToVisibleName = false;
+    const cleanupErrors = [];
     try {
-      this.faultInjector({ phase, filePath: this.filePath });
-      this.commitGuard({ phase, filePath: this.filePath });
+      const state = this.#state(stage);
+      const expected = state.snapshot;
+      const streaming = expected instanceof RegularFileReadReceipt;
+      phase = `before-${this.phaseNamespace}-rename`;
+      const event = this.#event("rename", stage);
+      this.commitGuard(event);
+      this.directoryAuthority.assertStable();
+      if (exclusive) this.#assertAbsent();
+      else this.#assertBaseline(state.baseline, streaming);
+      const current = this.#capture(stage.path, this.maxBytes, false, streaming);
+      if (!sameFileIdentity(state.identity, current.identity) || expected.byteLength !== current.byteLength || expected.digest !== current.digest
+        || !expected.permissionHint.matches(current.permissionHint)) throw new Error("atomic file stage changed before publication");
+      if (exclusive) fs.linkSync(stage.path, this.filePath);
+      else fs.renameSync(stage.path, this.filePath);
+      committedToVisibleName = true;
+      if (exclusive) {
+        phase = `after-${this.phaseNamespace}-exclusive-publication-cleanup`;
+        try { this.#event("temp-unlink", stage); this.disposeStage(stage); }
+        catch (error) { cleanupErrors.push(error); throw error; }
+      }
+      state.consumed = true;
+      phase = `before-${this.phaseNamespace}-readback`;
+      this.#event("readback");
+      const published = this.#capture(this.filePath, this.maxBytes, false, streaming);
+      if (!sameFileIdentity(expected.identity, published.identity) || published.byteLength !== expected.byteLength || published.digest !== expected.digest
+        || !expected.permissionHint.matches(published.permissionHint)) {
+        throw new Error("atomic file publication readback does not match staged bytes");
+      }
+      return new AtomicFilePublication({ committed: true, path: this.filePath,
+        ...(streaming ? { receipt: published } : { snapshot: published }) });
+    } catch (cause) {
+      if (!committedToVisibleName && !cause.cleanupFailed && stages.get(stage)?.writer === this && !stages.get(stage).consumed) {
+        try { this.disposeStage(stage); } catch (error) { cleanupErrors.push(error); }
+      }
+      throw this.createWriteError(cause.message, { cause, phase, committedToVisibleName,
+        publicationUnknown: committedToVisibleName, cleanupErrors });
+    }
+  }
+
+  write(content, options = {}) { return this.publishStage(this.createStage(content, { exclusive: options.exclusive === true }), options); }
+
+  remove({ streaming = false } = {}) {
+    let committedToVisibleName = false;
+    let phase = "inspect-visible-file";
+    try {
+      const baseline = this.#baseline(streaming);
+      if (baseline === null) return new AtomicFilePublication({ committed: false, path: this.filePath });
+      phase = `before-${this.phaseNamespace}-unlink`;
+      this.commitGuard(this.#event("unlink"));
+      this.directoryAuthority.assertStable();
+      this.#assertBaseline(baseline);
       fs.unlinkSync(this.filePath);
       committedToVisibleName = true;
-      phase = `before-${this.phaseNamespace}-directory-fsync`;
-      this.faultInjector({ phase, filePath: this.filePath });
-      fsyncDirectory(this.directory);
-      return { committed: true, path: this.filePath };
+      phase = `before-${this.phaseNamespace}-readback`;
+      this.#event("readback");
+      if (this.#baseline(streaming) !== null) throw new Error("atomic file removal readback found a visible replacement");
+      return new AtomicFilePublication({ committed: true, path: this.filePath,
+        ...(streaming ? { receipt: baseline } : { snapshot: baseline }) });
     } catch (cause) {
-      if (!committedToVisibleName) throw cause;
-      throw this.createWriteError(
-        `file removal reached the visible name but durability is uncertain: ${this.filePath}`,
-        {
-          cause,
-          phase,
-          committedToVisibleName: true,
-          durabilityUnknown: true,
-        },
-      );
+      throw this.createWriteError(cause.message, { cause, phase, committedToVisibleName, publicationUnknown: committedToVisibleName });
     }
   }
 
-  createWriteError(message, details) {
-    return new AtomicFileWriteError(message, details);
-  }
+  createWriteError(message, details) { return new AtomicFileWriteError(message, details); }
 }

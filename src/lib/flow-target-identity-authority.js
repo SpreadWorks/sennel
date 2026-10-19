@@ -1,5 +1,4 @@
 import crypto from "node:crypto";
-import fs from "node:fs";
 import path from "node:path";
 import { AtomicFile } from "./atomic-file.js";
 import { AtomicJsonFile } from "./atomic-json-file.js";
@@ -378,14 +377,6 @@ export class FlowTargetIdentitySnapshot {
 }
 
 function readAuthority(filePath) {
-  try {
-    fs.lstatSync(path.dirname(filePath));
-  } catch (cause) {
-    if (cause.code === "ENOENT") {
-      return { document: new FlowTargetIdentityDocument(), revision: null };
-    }
-    throw new FlowTargetAuthorityError(`flow target identity authority is unreadable: ${filePath}`, { cause });
-  }
   let bytes;
   try {
     bytes = new AtomicFile(filePath).read(null);

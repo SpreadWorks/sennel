@@ -112,9 +112,9 @@ export function completeTaskStageHandoff(work, effect) {
 /** Local canonical fixture; never dispatches a Flow or starts a worker. */
 export class TaskReviewScenario {
   constructor(t, { noChange = false, implementationContent = "implemented source\n", additionalRequirements = [], claimReview = true, seed = null } = {}) {
-    this.root = seed ? new SeedWorkRoot(seed.root, { prefix: "sennel-task-review-case-" }).root
-      : createTmpDir("task-review-scenario-");
-    t.after(() => removeTmpDir(this.root));
+    this.seedClone = seed ? new SeedWorkRoot(seed.root, { prefix: "sennel-task-review-case-" }) : null;
+    this.root = this.seedClone?.root ?? createTmpDir("task-review-scenario-");
+    t.after(() => this.seedClone ? this.seedClone.cleanup() : removeTmpDir(this.root));
     this.specId = "001-review-scenario";
     this.taskId = "T-1";
     this.sourcePath = path.join(this.root, "README.md");

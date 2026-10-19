@@ -9,6 +9,7 @@ import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { runCmd, assertOk } from "./process.js";
 import { container } from "./container.js";
+import { AtomicFile } from "./atomic-file.js";
 import { GIT_OBJECT_ID, GitSnapshot, isGitObjectId, isGitSnapshot } from "./git-snapshot.js";
 export { GIT_OBJECT_ID, GitSnapshot, isGitObjectId, isGitSnapshot } from "./git-snapshot.js";
 
@@ -429,9 +430,9 @@ export function getPorcelainV2Status(cwd, { pathspecs = [], forceFileMode = true
  * Set log to false when recording Git execution would mutate the input being read.
  */
 export function runGitToFile(args, { cwd, outputPath, timeout, log = true } = {}) {
-  const descriptor = fs.openSync(outputPath, "wx", 0o600);
+  const writer = new AtomicFile(outputPath, { maxBytes: Number.MAX_SAFE_INTEGER - 1 });
   let result;
-  try {
+  const stage = writer.createOutputStage((descriptor) => {
     const processResult = spawnSync("git", args, {
       cwd,
       timeout,
@@ -447,9 +448,8 @@ export function runGitToFile(args, { cwd, outputPath, timeout, log = true } = {}
       signal: processResult.signal ?? null,
       killed: Boolean(processResult.error && processResult.error.code === "ETIMEDOUT"),
     };
-  } finally {
-    fs.closeSync(descriptor);
-  }
+  }, { exclusive: true });
+  writer.publishStage(stage, { exclusive: true });
   if (log === true && container.has("logger")) {
     container.get("logger").git({ cmd: ["git", ...args], exitCode: result.status, stderr: result.stderr });
   }

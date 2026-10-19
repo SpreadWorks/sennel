@@ -1,10 +1,12 @@
+import { captureRegularFile } from "./regular-file-snapshot.js";
+import { removeRegularFile } from "./regular-file-io.js";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { AtomicFile } from "./atomic-file.js";
 import { FlowSpecId } from "./flow-spec-id.js";
 import { FileLock } from "./file-lock.js";
-import { RealDirectoryAuthority } from "./real-directory-authority.js";
+import { RealDirectoryAuthority, sameFileIdentity as sameFile } from "./real-directory-authority.js";
 import { PRODUCT } from "./product.js";
 
 export const WORKTREE_FLOW_BINDING_FILE = PRODUCT.managedPath("flow-identity.json");
@@ -91,86 +93,14 @@ function assertExactObjectKeys(value, expectedKeys, label) {
   }
 }
 
-function sameFile(left, right) {
-  return left.dev === right.dev && left.ino === right.ino;
-}
 
 function bindingRevision(bytes) {
   return crypto.createHash("sha256").update(bytes).digest("hex");
 }
 
-function fsyncDirectory(directory) {
-  const descriptor = fs.openSync(directory, "r");
-  let primary = null;
-  try {
-    fs.fsyncSync(descriptor);
-  } catch (error) {
-    primary = error;
-  }
-  try {
-    fs.closeSync(descriptor);
-  } catch (cleanupError) {
-    if (primary) {
-      throw new AggregateError(
-        [primary, cleanupError],
-        `worktree flow binding directory sync and close both failed: ${directory}`,
-        { cause: primary },
-      );
-    }
-    throw cleanupError;
-  }
-  if (primary) throw primary;
-}
-
-function unlinkSameFile({
-  filePath,
-  expectedStat,
-  expectedLinkCount = 1,
-  faultInjector = () => {},
-  phase,
-}) {
-  let descriptor = null;
-  try {
-    const visible = fs.lstatSync(filePath);
-    if (
-      !visible.isFile()
-      || visible.isSymbolicLink()
-      || visible.nlink !== expectedLinkCount
-      || !sameFile(visible, expectedStat)
-      || fs.realpathSync(filePath) !== filePath
-    ) {
-      throw new Error(`publication cleanup authority changed before open: ${filePath}`);
-    }
-    descriptor = fs.openSync(filePath, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0));
-    const opened = fs.fstatSync(descriptor);
-    if (!sameFile(visible, opened) || opened.nlink !== expectedLinkCount) {
-      throw new Error(`publication cleanup authority changed while opening: ${filePath}`);
-    }
-    faultInjector({ phase, filePath });
-    const current = fs.lstatSync(filePath);
-    if (!sameFile(opened, current) || current.nlink !== expectedLinkCount) {
-      throw new Error(`publication cleanup inode CAS failed: ${filePath}`);
-    }
-    fs.unlinkSync(filePath);
-  } finally {
-    if (descriptor != null) fs.closeSync(descriptor);
-  }
-}
-
-function readBoundedDescriptor(descriptor, filePath) {
-  const chunks = [];
-  let total = 0;
-  while (total <= MAX_BINDING_BYTES) {
-    const chunk = Buffer.allocUnsafe(Math.min(8192, MAX_BINDING_BYTES + 1 - total));
-    const count = fs.readSync(descriptor, chunk, 0, chunk.length, null);
-    if (count === 0) break;
-    chunks.push(chunk.subarray(0, count));
-    total += count;
-  }
-  if (total > MAX_BINDING_BYTES) {
-    throw new Error(`worktree flow binding exceeds ${MAX_BINDING_BYTES} bytes: ${filePath}`);
-  }
-  return Buffer.concat(chunks, total);
+function unlinkSameFile({ filePath, expectedStat, expectedLinkCount = 1, faultInjector = () => {}, phase }) {
+  return removeRegularFile(filePath, { expectedIdentity: expectedStat, expectedLinkCount, maxBytes: MAX_BINDING_BYTES,
+    commitGuard: () => faultInjector({ phase, filePath }) });
 }
 
 export class WorktreeFlowIdentity {
@@ -380,113 +310,35 @@ class WorktreeFlowBindingPublicationJournal {
   publish(receipt) {
     const bytes = Buffer.from(`${JSON.stringify(receipt.toJSON(), null, 2)}\n`);
     this.directoryAuthority.assertStable();
-    let descriptor = null;
-    let mutated = false;
-    let intentOwned = false;
-    let receiptTempOwned = false;
-    let receiptVisibleOwned = false;
-    let receiptTempStat = null;
+    let intent = null;
+    let stage = null;
     let receiptVisibleStat = null;
+    const writer = new AtomicFile(this.receiptPath, { directoryAuthority: this.directoryAuthority,
+      maxBytes: MAX_BINDING_BYTES, phaseNamespace: "binding-publication-receipt", faultInjector: this.faultInjector });
     try {
       this.faultInjector({ phase: "before-binding-publication-receipt-intent-mkdir", filePath: this.intentPath });
-      fs.mkdirSync(this.intentPath, { mode: 0o700 });
-      intentOwned = true;
-      mutated = true;
-      this.faultInjector({ phase: "before-binding-publication-receipt-intent-directory-fsync", filePath: this.intentPath });
-      fsyncDirectory(this.directory);
-      this.faultInjector({
-        phase: "before-binding-publication-receipt-temp-open",
-        filePath: this.receiptPath,
-        tempPath: this.receiptTempPath,
-      });
-      descriptor = fs.openSync(this.receiptTempPath, "wx", 0o600);
-      receiptTempOwned = true;
-      receiptTempStat = fs.fstatSync(descriptor);
-      this.faultInjector({
-        phase: "before-binding-publication-receipt-temp-write",
-        filePath: this.receiptPath,
-        tempPath: this.receiptTempPath,
-      });
-      fs.writeFileSync(descriptor, bytes);
-      fs.fchmodSync(descriptor, 0o600);
-      this.faultInjector({
-        phase: "before-binding-publication-receipt-fsync",
-        filePath: this.receiptPath,
-        tempPath: this.receiptTempPath,
-      });
-      fs.fsyncSync(descriptor);
-      this.faultInjector({
-        phase: "before-binding-publication-receipt-temp-close",
-        filePath: this.receiptPath,
-        tempPath: this.receiptTempPath,
-      });
-      fs.closeSync(descriptor);
-      descriptor = null;
-      this.directoryAuthority.assertStable();
-      this.faultInjector({
-        phase: "before-binding-publication-receipt-rename",
-        filePath: this.receiptPath,
-        tempPath: this.receiptTempPath,
-      });
-      fs.renameSync(this.receiptTempPath, this.receiptPath);
-      receiptTempOwned = false;
-      receiptVisibleOwned = true;
-      receiptVisibleStat = fs.lstatSync(this.receiptPath);
-      this.faultInjector({
-        phase: "before-binding-publication-receipt-directory-fsync",
-        filePath: this.receiptPath,
-      });
-      fsyncDirectory(this.directory);
-      fs.rmdirSync(this.intentPath);
-      intentOwned = false;
-      fsyncDirectory(this.directory);
+      intent = this.directoryAuthority.createExclusiveChild(path.basename(this.intentPath), { creationMode: 0o700 });
+      this.faultInjector({ phase: "before-binding-publication-receipt-intent-readback", filePath: this.intentPath });
+      intent.assertStable();
+      stage = writer.createStage(bytes, { stageName: path.basename(this.receiptTempPath) });
+      writer.publishStage(stage);
+      receiptVisibleStat = stage.identity;
+      intent.removeEmpty();
       return receiptVisibleStat;
     } catch (cause) {
       const cleanupErrors = [];
-      if (descriptor != null) {
-        try { fs.closeSync(descriptor); } catch (error) { cleanupErrors.push(error); }
+      if (stage !== null && stage.active && !cause.committedToVisibleName) {
+        try { stage.dispose(); } catch (error) { cleanupErrors.push(error); }
       }
-      for (const [target, owned, expectedStat, phase] of [
-        [
-          this.receiptTempPath,
-          receiptTempOwned,
-          receiptTempStat,
-          "before-binding-publication-receipt-temp-cleanup-cas",
-        ],
-        [
-          this.receiptPath,
-          receiptVisibleOwned,
-          receiptVisibleStat,
-          "before-binding-publication-receipt-cleanup-cas",
-        ],
-      ]) {
-        if (!owned) continue;
-        try {
-          unlinkSameFile({
-            filePath: target,
-            expectedStat,
-            faultInjector: this.faultInjector,
-            phase,
-          });
-        } catch (error) {
-          if (error.code !== "ENOENT") cleanupErrors.push(error);
-        }
+      if (receiptVisibleStat !== null) {
+        try { unlinkSameFile({ filePath: this.receiptPath, expectedStat: receiptVisibleStat,
+          faultInjector: this.faultInjector, phase: "before-binding-publication-receipt-cleanup-cas" }); }
+        catch (error) { cleanupErrors.push(error); }
       }
-      if (intentOwned) {
-        try { fs.rmdirSync(this.intentPath); } catch (error) {
-          if (error.code !== "ENOENT") cleanupErrors.push(error);
-        }
+      if (intent !== null && !cause.publicationUnknown) {
+        try { intent.removeEmpty(); } catch (error) { if (error.cause?.code !== "ENOENT") cleanupErrors.push(error); }
       }
-      if (mutated) {
-        try { fsyncDirectory(this.directory); } catch (error) { cleanupErrors.push(error); }
-      }
-      if (cleanupErrors.length > 0) {
-        throw new AggregateError(
-          [cause, ...cleanupErrors],
-          "worktree flow binding receipt publication and cleanup both failed",
-          { cause },
-        );
-      }
+      if (cleanupErrors.length > 0) throw new AggregateError([cause, ...cleanupErrors], "worktree flow binding receipt publication and cleanup both failed", { cause });
       throw cause;
     }
   }
@@ -514,7 +366,7 @@ class WorktreeFlowBindingPublicationJournal {
         throw new Error("worktree flow binding receipt has both temp and visible authority");
       }
       validateReceipt();
-      fsyncDirectory(this.directory);
+      this.directoryAuthority.assertStable();
     } else if (receiptTemp) {
       if (
         !receiptTemp.isFile()
@@ -534,8 +386,8 @@ class WorktreeFlowBindingPublicationJournal {
     if (!receipt && this.#lstat(this.bindingTempPath)) {
       throw new Error("binding temp exists before durable publication receipt");
     }
-    fs.rmdirSync(this.intentPath);
-    fsyncDirectory(this.directory);
+    new RealDirectoryAuthority(this.intentPath, { parentAuthority: this.directoryAuthority }).removeEmpty();
+    this.directoryAuthority.assertStable();
   }
 
   removeReceipt(expectedStat) {
@@ -546,7 +398,7 @@ class WorktreeFlowBindingPublicationJournal {
       faultInjector: this.faultInjector,
       phase: "before-binding-publication-receipt-unlink",
     });
-    fsyncDirectory(this.directory);
+    this.directoryAuthority.assertStable();
   }
 
   #lstat(target) {
@@ -570,93 +422,32 @@ class WorktreeFlowBindingPublisher {
   }
 
   create(bytes) {
-    if (this.journal == null) {
-      throw new Error("worktree flow binding creation requires a publication receipt");
-    }
-    this.directoryAuthority.assertStable();
+    if (this.journal === null) throw new Error("worktree flow binding creation requires a publication receipt");
     const publicationId = crypto.randomUUID();
-    const tempPath = this.journal.bindingTempPath;
     const receipt = WorktreeFlowBindingPublicationReceipt.create(bytes, publicationId);
-    let descriptor = null;
-    let published = false;
-    let receiptPublished = false;
+    const writer = new AtomicFile(this.filePath, { directoryAuthority: this.directoryAuthority,
+      maxBytes: MAX_BINDING_BYTES, phaseNamespace: this.phaseNamespace,
+      faultInjector: (event) => this.faultInjector(event.phase === `before-${this.phaseNamespace}-rename`
+        ? { ...event, phase: `before-${this.phaseNamespace}-publish` } : event) });
     let receiptStat = null;
-    let tempOwned = false;
-    let tempStat = null;
+    let stage = null;
+    let published = false;
     try {
       receiptStat = this.journal.publish(receipt);
-      receiptPublished = true;
-      this.faultInjector({ phase: `before-${this.phaseNamespace}-temp-open`, filePath: this.filePath, tempPath });
-      descriptor = fs.openSync(tempPath, "wx", 0o600);
-      tempOwned = true;
-      tempStat = fs.fstatSync(descriptor);
-      this.faultInjector({ phase: `before-${this.phaseNamespace}-temp-write`, filePath: this.filePath, tempPath });
-      const partialLength = Math.max(1, Math.floor(bytes.length / 2));
-      fs.writeSync(descriptor, bytes, 0, partialLength, null);
-      this.faultInjector({
-        phase: `after-${this.phaseNamespace}-temp-partial-write`,
-        filePath: this.filePath,
-        tempPath,
-      });
-      fs.writeSync(descriptor, bytes, partialLength, bytes.length - partialLength, null);
-      fs.fchmodSync(descriptor, 0o600);
-      this.faultInjector({ phase: `before-${this.phaseNamespace}-fsync`, filePath: this.filePath, tempPath });
-      fs.fsyncSync(descriptor);
-      fs.closeSync(descriptor);
-      descriptor = null;
-      this.directoryAuthority.assertStable();
-      this.faultInjector({ phase: `before-${this.phaseNamespace}-publish`, filePath: this.filePath, tempPath });
-      fs.linkSync(tempPath, this.filePath);
+      stage = writer.createStage(bytes, { stageName: path.basename(this.journal.bindingTempPath), exclusive: true });
+      writer.publishStage(stage, { exclusive: true });
       published = true;
-      unlinkSameFile({
-        filePath: tempPath,
-        expectedStat: tempStat,
-        expectedLinkCount: 2,
-        faultInjector: this.faultInjector,
-        phase: `before-${this.phaseNamespace}-temp-unlink`,
-      });
-      tempOwned = false;
-      this.faultInjector({ phase: `before-${this.phaseNamespace}-directory-fsync`, filePath: this.filePath });
-      fsyncDirectory(this.directory);
       this.journal.removeReceipt(receiptStat);
-      receiptPublished = false;
     } catch (cause) {
+      published ||= stage !== null && cause.committedToVisibleName === true;
       const cleanupErrors = [];
-      if (descriptor != null) {
-        try { fs.closeSync(descriptor); } catch (error) { cleanupErrors.push(error); }
+      const tempRemains = fs.existsSync(this.journal.bindingTempPath);
+      // A receipt survives unconfirmed publication and any incomplete stage
+      // cleanup so restart can classify the exact saved generation.
+      if (receiptStat !== null && !tempRemains && !cause.publicationUnknown) {
+        try { this.journal.removeReceipt(receiptStat); } catch (error) { cleanupErrors.push(error); }
       }
-      let tempSettled = !tempOwned;
-      if (tempOwned) {
-        try {
-          unlinkSameFile({
-            filePath: tempPath,
-            expectedStat: tempStat,
-            expectedLinkCount: published ? 2 : 1,
-            faultInjector: this.faultInjector,
-            phase: "before-binding-publication-temp-cleanup-cas",
-          });
-          tempSettled = true;
-        } catch (error) {
-          if (error.code === "ENOENT") tempSettled = true;
-          if (error.code !== "ENOENT") cleanupErrors.push(error);
-        }
-      }
-      if (receiptPublished && tempSettled) {
-        try {
-          fsyncDirectory(this.directory);
-          this.journal.removeReceipt(receiptStat);
-          receiptPublished = false;
-        } catch (error) {
-          cleanupErrors.push(error);
-        }
-      }
-      if (cleanupErrors.length > 0) {
-        throw new AggregateError(
-          [cause, ...cleanupErrors],
-          `worktree flow binding publication and cleanup failed: ${this.filePath}`,
-          { cause },
-        );
-      }
+      if (cleanupErrors.length > 0) throw new AggregateError([cause, ...cleanupErrors], `worktree flow binding publication and cleanup failed: ${this.filePath}`, { cause });
       cause.committed = published;
       throw cause;
     }
@@ -849,11 +640,11 @@ export class WorktreeFlowBindingStore {
         faultInjector: this.faultInjector,
         phase: "before-binding-publication-temp-cleanup-cas",
       });
-      fsyncDirectory(path.dirname(this.path));
+      this.directoryAuthority.assertStable();
       this.#readPublicationDocument(this.path, receipt);
     } else if (visible) {
       this.#readPublicationDocument(this.path, receipt);
-      fsyncDirectory(path.dirname(this.path));
+      this.directoryAuthority.assertStable();
     } else if (temp) {
       const document = this.#readIncompletePublicationDocument(tempPath, receipt);
       unlinkSameFile({
@@ -862,9 +653,9 @@ export class WorktreeFlowBindingStore {
         faultInjector: this.faultInjector,
         phase: "before-binding-publication-temp-cleanup-cas",
       });
-      fsyncDirectory(path.dirname(this.path));
+      this.directoryAuthority.assertStable();
     } else {
-      fsyncDirectory(path.dirname(this.path));
+      this.directoryAuthority.assertStable();
     }
     this.publicationJournal.removeReceipt(receiptSnapshot.stat);
   }
@@ -886,44 +677,11 @@ export class WorktreeFlowBindingStore {
 
   #readIncompletePublicationDocument(filePath, receipt) {
     const expected = this.#serialize(receipt.binding.identity);
-    if (expected.length !== receipt.size || bindingRevision(expected) !== receipt.revision) {
-      throw new Error("worktree flow binding receipt byte authority is invalid");
-    }
-    this.directoryAuthority.assertStable();
-    const visible = fs.lstatSync(filePath);
-    if (
-      !visible.isFile()
-      || visible.isSymbolicLink()
-      || visible.nlink !== 1
-      || visible.size > receipt.size
-      || fs.realpathSync(filePath) !== filePath
-    ) {
-      throw new Error("worktree flow binding incomplete temp authority is invalid");
-    }
-    let descriptor = null;
-    try {
-      descriptor = fs.openSync(filePath, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0));
-      const opened = fs.fstatSync(descriptor);
-      if (!sameFile(visible, opened) || opened.nlink !== 1 || opened.size > receipt.size) {
-        throw new Error("worktree flow binding incomplete temp changed while opening");
-      }
-      const bytes = readBoundedDescriptor(descriptor, filePath);
-      const after = fs.fstatSync(descriptor);
-      const current = fs.lstatSync(filePath);
-      if (
-        !sameFile(opened, after)
-        || !sameFile(opened, current)
-        || after.nlink !== 1
-        || current.nlink !== 1
-        || after.size !== bytes.length
-        || !bytes.equals(expected.subarray(0, bytes.length))
-      ) {
-        throw new Error("worktree flow binding incomplete temp size/hash authority changed");
-      }
-      return { bytes, stat: opened };
-    } finally {
-      if (descriptor != null) fs.closeSync(descriptor);
-    }
+    if (expected.length !== receipt.size || bindingRevision(expected) !== receipt.revision) throw new Error("worktree flow binding receipt byte authority is invalid");
+    const snapshot = captureRegularFile(filePath, { label: "worktree flow binding incomplete temp", maxBytes: receipt.size,
+      requireSingleLink: true, directoryAuthority: this.directoryAuthority });
+    if (!snapshot.bytes.equals(expected.subarray(0, snapshot.byteLength))) throw new Error("worktree flow binding incomplete temp size/hash authority changed");
+    return { bytes: snapshot.bytes, stat: snapshot.identity };
   }
 
   #readPublicationDocument(filePath, receipt, expectedLinkCount = 1) {
@@ -949,55 +707,20 @@ export class WorktreeFlowBindingStore {
   }
 
   #readDocument(filePath, label, phaseNamespace, expectedLinkCount = 1) {
-    this.directoryAuthority.assertStable();
-    let visible;
+    let value;
+    let snapshot;
     try {
-      visible = fs.lstatSync(filePath);
+      snapshot = captureRegularFile(filePath, { label, maxBytes: MAX_BINDING_BYTES, expectedLinkCount,
+        directoryAuthority: this.directoryAuthority, faultInjector: this.faultInjector, phaseNamespace,
+        validateSnapshot(candidate) {
+          try { value = JSON.parse(candidate.text()); }
+          catch (cause) { throw new Error(`${label} is invalid JSON: ${filePath}: ${cause.message}`, { cause }); }
+        } });
     } catch (cause) {
       if (cause.code === "ENOENT") throw new Error(`${label} not found: ${filePath}`, { cause });
       throw cause;
     }
-    if (
-      !visible.isFile()
-      || visible.isSymbolicLink()
-      || visible.nlink !== expectedLinkCount
-      || visible.size > MAX_BINDING_BYTES
-      || fs.realpathSync(filePath) !== filePath
-    ) {
-      throw new Error(`${label} must be one bounded regular file with real non-hardlinked authority: ${filePath}`);
-    }
-    let descriptor = null;
-    try {
-      this.faultInjector({ phase: `before-${phaseNamespace}-read-open`, filePath });
-      descriptor = fs.openSync(filePath, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0));
-      const opened = fs.fstatSync(descriptor);
-      if (
-        !opened.isFile()
-        || opened.nlink !== expectedLinkCount
-        || opened.size > MAX_BINDING_BYTES
-        || !sameFile(visible, opened)
-      ) {
-        throw new Error(`${label} changed while opening: ${filePath}`);
-      }
-      this.faultInjector({ phase: `before-${phaseNamespace}-read`, filePath });
-      const bytes = readBoundedDescriptor(descriptor, filePath);
-      const afterRead = fs.fstatSync(descriptor);
-      if (!sameFile(opened, afterRead) || afterRead.nlink !== expectedLinkCount || afterRead.size !== bytes.length) {
-        throw new Error(`${label} changed while reading: ${filePath}`);
-      }
-      const afterVisible = fs.lstatSync(filePath);
-      if (!sameFile(opened, afterVisible) || afterVisible.nlink !== expectedLinkCount) {
-        throw new Error(`${label} visible authority changed while reading: ${filePath}`);
-      }
-      let value;
-      try {
-        value = JSON.parse(bytes.toString("utf8"));
-      } catch (cause) {
-        throw new Error(`${label} is invalid JSON: ${filePath}: ${cause.message}`, { cause });
-      }
-      return { bytes, value, stat: opened };
-    } finally {
-      if (descriptor != null) fs.closeSync(descriptor);
-    }
+    return { bytes: snapshot.bytes, value, stat: snapshot.identity };
   }
+
 }

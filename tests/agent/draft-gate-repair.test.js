@@ -68,14 +68,23 @@ function completedAction() {
 async function measureWorker(evidence, route, operation) {
   const startedAt = new Date().toISOString();
   const started = Date.now();
-  const response = await operation();
-  evidence.calls.push({
-    route, startedAt, durationMs: Date.now() - started,
-    responseChars: typeof response === "string" ? response.length : null,
-    response: typeof response === "string" ? response : null,
-    commandResult: response !== null && typeof response === "object" ? response : null,
-  });
-  return response;
+  const call = { route, startedAt };
+  evidence.calls.push(call);
+  try {
+    const response = await operation();
+    Object.assign(call, {
+      responseChars: typeof response === "string" ? response.length : null,
+      response: typeof response === "string" ? response : null,
+      commandResult: response !== null && typeof response === "object" ? response : null,
+    });
+    return response;
+  } catch (error) {
+    call.failure = { name: error.name, code: error.code, message: error.message, stack: error.stack,
+      causeCode: error.cause?.code, causeMessage: error.cause?.message };
+    throw error;
+  } finally {
+    call.durationMs = Date.now() - started;
+  }
 }
 
 it("real agent completes a synthetic bounded draft Gate repair through canonical spec publication", { timeout: 720_000 }, async () => {

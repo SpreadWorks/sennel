@@ -6,11 +6,12 @@
  */
 
 import fs from "fs";
-import crypto from "node:crypto";
 import path from "path";
 import { FlowTargetIdentityAuthority } from "../../lib/flow-target-identity-authority.js";
 import { PRODUCT } from "../../lib/product.js";
 import { TemporaryPaths } from "../../lib/temporary-paths.js";
+import { AtomicFile } from "../../lib/atomic-file.js";
+import { RealDirectoryAuthority } from "../../lib/real-directory-authority.js";
 import { runManagedCmdAsync, assertOk } from "../../lib/process.js";
 import { findStepById } from "./step-tree.js";
 import {
@@ -72,42 +73,9 @@ export function writeLastFinalizedPointer(targetRoot, specId) {
   if (!targetRoot || !specId) return;
   const literalSpecId = FlowSpecId.from(specId).toString();
   const pointerAbs = path.join(targetRoot, LAST_FINALIZED_SPEC_POINTER_REL_PATH);
-  const directory = path.dirname(pointerAbs);
-  const tempPath = path.join(directory, `.last-finalized-spec.${crypto.randomUUID()}.tmp`);
-  fs.mkdirSync(directory, { recursive: true });
-  let descriptor = null;
-  let renamed = false;
-  try {
-    descriptor = fs.openSync(tempPath, "wx", 0o644);
-    fs.writeFileSync(descriptor, literalSpecId + "\n");
-    fs.fsyncSync(descriptor);
-    fs.closeSync(descriptor);
-    descriptor = null;
-    fs.renameSync(tempPath, pointerAbs);
-    renamed = true;
-    descriptor = fs.openSync(directory, "r");
-    fs.fsyncSync(descriptor);
-    fs.closeSync(descriptor);
-    descriptor = null;
-  } catch (error) {
-    const cleanupErrors = [];
-    if (descriptor != null) {
-      try { fs.closeSync(descriptor); } catch (cleanupError) { cleanupErrors.push(cleanupError); }
-    }
-    if (!renamed) {
-      try { fs.unlinkSync(tempPath); } catch (cleanupError) {
-        if (cleanupError.code !== "ENOENT") cleanupErrors.push(cleanupError);
-      }
-    }
-    if (cleanupErrors.length > 0) {
-      throw new AggregateError(
-        [error, ...cleanupErrors],
-        `last-finalized pointer publication and cleanup both failed: ${pointerAbs}`,
-        { cause: error },
-      );
-    }
-    throw error;
-  }
+  const authority = RealDirectoryAuthority.resolve(path.dirname(pointerAbs), { create: true });
+  return new AtomicFile(pointerAbs, { directoryAuthority: authority, phaseNamespace: "last-finalized-pointer" })
+    .write(literalSpecId + "\n");
 }
 
 export function commitOrSkip(args, opts) {
@@ -415,12 +383,7 @@ class FinalizeCompletionCommit {
     }
 
     const cleanupErrors = [];
-    for (const target of [temporaryIndex, `${temporaryIndex}.lock`]) {
-      try { fs.unlinkSync(target); } catch (error) {
-        if (error.code !== "ENOENT") cleanupErrors.push(error);
-      }
-    }
-    try { fs.rmdirSync(temporaryDirectory); } catch (error) { cleanupErrors.push(error); }
+    try { this.temporaryPaths.cleanup(temporaryDirectory); } catch (error) { cleanupErrors.push(error); }
     if (primaryError && cleanupErrors.length > 0) {
       throw new AggregateError(
         [primaryError, ...cleanupErrors],
@@ -494,8 +457,9 @@ function buildFinalizePreflightError(err) {
 export async function assertGitWriteAccess(gitDir) {
   const lockPath = path.join(gitDir, `.finalize-preflight-${process.pid}-${Date.now()}.lock`);
   try {
-    await fs.promises.writeFile(lockPath, "preflight");
-    await fs.promises.unlink(lockPath);
+    const probe = new AtomicFile(lockPath, { phaseNamespace: "finalize-preflight" });
+    probe.write("preflight");
+    probe.remove();
   } catch (err) {
     throw buildFinalizePreflightError(err);
   }

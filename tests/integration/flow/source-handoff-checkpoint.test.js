@@ -31,6 +31,7 @@ import {
   withSourceHandoffLease,
 } from "../../support/builders/source-handoff-scenario.js";
 import { ImplPhaseScenario, implementationFinding } from "../../support/impl-phase-scenario.js";
+import { interruptChildAtCheckpoint } from "../../support/infrastructure/interrupted-child.js";
 
 const NOW = "2026-09-09T00:00:00.000Z";
 const SOURCE_POLICIES = Object.freeze([
@@ -393,13 +394,15 @@ describe("durable source handoff checkpoints", () => {
   });
 
   it("recovers source acceptance across the canonical catalog commit point", async (t) => {
-    for (const boundary of ["before-json-rename", "before-json-directory-fsync"]) {
-      await t.test(boundary, () => {
+    for (const boundary of ["before-json-rename", "before-json-readback"]) {
+      await t.test(boundary, async () => {
         const scenario = new SourceCheckpointScenario(t, "implement");
         const request = scenario.stageSealed("implement");
+        const checkpoint = `catalog-interruption-${crypto.randomUUID()}`;
         const child = `
           import { FlowManager } from ${JSON.stringify(moduleUrlFor("src/lib/flow-manager.js"))};
           import { WorkerArtifactHandoffCoordinator } from ${JSON.stringify(moduleUrlFor("src/flow/lib/worker-artifact-handoff.js"))};
+          import fs from "node:fs";
           const root = process.env.FFCA_EXECUTION_ROOT;
           const mainRoot = process.env.FFCA_MAIN_ROOT;
           const specId = process.env.FFCA_SPEC_ID;
@@ -407,24 +410,28 @@ describe("durable source handoff checkpoints", () => {
           const manager = new FlowManager({
             root, mainRoot, inWorktree: false,
             versionStoreFaultInjector: ({ phase, filePath }) => {
-              if (phase === ${JSON.stringify(boundary)} && filePath === catalogFile) process.kill(process.pid, "SIGKILL");
+              if (phase === ${JSON.stringify(boundary)} && filePath === catalogFile) {
+                fs.writeSync(1, process.env.FFCA_CHECKPOINT);
+                Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0);
+              }
             },
           });
           new WorkerArtifactHandoffCoordinator().recoverPending({
             ctx: { root, executionRoot: root, mainRoot, specId, flowManager: manager },
           });
         `;
-        const stopped = spawnSync(process.execPath, ["--import", SENNEL_BOOTSTRAP, "--input-type=module", "--eval", child], {
-          cwd: process.cwd(), encoding: "utf8",
+        const stopped = await interruptChildAtCheckpoint(process.execPath, ["--import", SENNEL_BOOTSTRAP, "--input-type=module", "--eval", child], {
+          cwd: process.cwd(), checkpoint,
           env: {
             ...process.env,
             FFCA_EXECUTION_ROOT: scenario.executionRoot,
             FFCA_MAIN_ROOT: scenario.mainRoot,
             FFCA_SPEC_ID: scenario.specId,
             FFCA_CATALOG_FILE: scenario.manager.specLocation(scenario.specId).catalogFile,
+            FFCA_CHECKPOINT: checkpoint,
           },
         });
-        assert.equal(stopped.signal, "SIGKILL", stopped.stderr || stopped.stdout);
+        assert.equal(stopped.interrupted, true, stopped.stderr || stopped.stdout);
         scenario.reload();
         const authority = scenario.manager.readSourceHandoffAuthority({
           specId: scenario.specId, identity: request.sourceHandoffIdentity,

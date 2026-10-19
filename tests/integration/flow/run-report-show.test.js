@@ -73,12 +73,17 @@ class CanonicalReportSeed {
 
   async createScenario(report) {
     const workRoot = new SeedWorkRoot(this.root, { prefix: "sennel-report-show-" });
-    const flowManager = makeFlowManager(workRoot.root);
-    if (report !== null) {
-      await produceCanonicalFixtureStep({ root: workRoot.root, mainRoot: workRoot.root, executionRoot: workRoot.root,
-        specId: SPEC_ID, flowManager, flowState: flowManager.loadReadOnly(SPEC_ID), config: {} }, "report");
+    try {
+      const flowManager = makeFlowManager(workRoot.root);
+      if (report !== null) {
+        await produceCanonicalFixtureStep({ root: workRoot.root, mainRoot: workRoot.root, executionRoot: workRoot.root,
+          specId: SPEC_ID, flowManager, flowState: flowManager.loadReadOnly(SPEC_ID), config: {} }, "report");
+      }
+      return new CanonicalReportScenario(workRoot, flowManager, report);
+    } catch (error) {
+      workRoot.cleanup();
+      throw error;
     }
-    return new CanonicalReportScenario(workRoot, flowManager, report);
   }
 
   cleanup() { removeTmpDir(this.root); }

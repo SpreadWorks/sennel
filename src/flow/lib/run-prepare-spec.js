@@ -23,7 +23,7 @@ import {
   IssueSnapshot,
   IssueSnapshotSource,
 } from "./issue-snapshot-source.js";
-import { discoverFlowCommandHooks, readProjectConfig, runFlowCommandWithPluginLifecycle } from "../../lib/plugin-registry.js";
+import { copyPluginRuntimeDirectory, discoverFlowCommandHooks, readProjectConfig, runFlowCommandWithPluginLifecycle } from "../../lib/plugin-registry.js";
 import { Envelope } from "../../lib/flow-envelope.js";
 import { FlowManager } from "../../lib/flow-manager.js";
 import { FlowSpecId } from "../../lib/flow-spec-id.js";
@@ -31,6 +31,8 @@ import { bindFlowStateLocation } from "../../lib/flow-workspace.js";
 import { CanonicalFlowCreateRequest } from "./canonical-flow-manager-store.js";
 import { CanonicalFlowArtifactWrite, CurrentFlowSpecRecord } from "./current-flow-state.js";
 import { AtomicFile } from "../../lib/atomic-file.js";
+import { RealDirectoryAuthority, sameFileIdentity } from "../../lib/real-directory-authority.js";
+import { RegularFileSnapshot, captureRegularFile, DEFAULT_MAX_FILE_BYTES } from "../../lib/regular-file-snapshot.js";
 import { RepositoryFlowOperationLock } from "../../lib/repository-maintenance-lock.js";
 import { FlowRepositoryRuntimeArtifactRegistry } from "./flow-repository-runtime-artifacts.js";
 import { ProcessIdentity, ProcessIdentitySource } from "../../lib/process-identity.js";
@@ -43,7 +45,6 @@ import {
   WorktreeFlowIdentity,
 } from "../../lib/worktree-flow-binding.js";
 
-const MAX_PLUGIN_RUNTIME_SYNC_FILES = 2000;
 const REQUIRED_WORKTREE_BRANCH_FILES = Object.freeze([PRODUCT.managedPath("config.json")]);
 const MAX_REQUIRED_WORKTREE_BRANCH_FILES = 16;
 const WORKTREE_FLOW_INTERNAL_IGNORES = Object.freeze([
@@ -108,22 +109,13 @@ function specTagSource(runId) {
   return crypto.createHash("sha256").update(runId).digest("hex");
 }
 
-function isSpecDirectory(directory) {
-  try {
-    return fs.statSync(directory).isDirectory();
-  } catch (error) {
-    if (error.code === "ENOENT") return false;
-    throw error;
-  }
-}
-
 function generateSpecIdentity(runId, slug, specsDir, flowManager) {
   const source = specTagSource(runId);
   let available = null;
   for (let offset = 0; offset + SPEC_TAG_LENGTH <= source.length; offset += SPEC_TAG_LENGTH) {
     const tag = source.slice(offset, offset + SPEC_TAG_LENGTH);
     const specId = FlowSpecId.from(`${tag}-${slug}`).toString();
-    if (isSpecDirectory(path.join(specsDir, specId))) {
+    if (new RealDirectoryAuthority(path.join(specsDir, specId)).exists()) {
       const state = flowManager.canonicalState(specId);
       if (state?.runId === runId) return { specId,
         branchName: state.execution.featureBranch ?? `feature/${specId}`, state };
@@ -196,7 +188,7 @@ function runDocsScanAndValidate(root) {
   if (!fs.existsSync(analysisPath)) throw new Error(`analysis.json not found after docs scan: ${analysisPath}`);
   let analysis;
   try {
-    analysis = JSON.parse(fs.readFileSync(analysisPath, "utf8"));
+    analysis = JSON.parse(captureRegularFile(analysisPath, { label: "prepare analysis", maxBytes: DEFAULT_MAX_FILE_BYTES }).text());
     [...iterateAnalysisCategories(analysis, { strict: true })];
   } catch (err) {
     throw new Error(`analysis.json is unreadable or invalid after docs scan: ${err.message}`);
@@ -243,40 +235,21 @@ function acquiredPreparationEvidence({ flowManager, specId, baseOid, worktreePat
   ) });
 }
 
-function copyPluginRuntimeDirectory(src, dest, counter = { files: 0 }) {
-  const stat = fs.lstatSync(src);
-  if (stat.isSymbolicLink()) throw new Error(`plugin runtime sync rejected symlink: ${src}`);
-  if (stat.isDirectory()) {
-    fs.mkdirSync(dest, { recursive: true });
-    for (const entry of fs.readdirSync(src)) {
-      copyPluginRuntimeDirectory(path.join(src, entry), path.join(dest, entry), counter);
-    }
-    return;
-  }
-  if (!stat.isFile()) return;
-  counter.files += 1;
-  if (counter.files > MAX_PLUGIN_RUNTIME_SYNC_FILES) {
-    throw new Error(`plugin runtime sync exceeds ${MAX_PLUGIN_RUNTIME_SYNC_FILES} files`);
-  }
-  fs.mkdirSync(path.dirname(dest), { recursive: true });
-  fs.copyFileSync(src, dest);
-}
-
 function syncPluginRuntimeToWorktree(root, worktreePath) {
   const config = readProjectConfig(root);
   const sourceManagedDir = managedDir(root);
   const targetManagedDir = managedDir(worktreePath);
   const localConfigPath = path.join(sourceManagedDir, "config.local.json");
   if (fs.existsSync(localConfigPath)) {
-    fs.mkdirSync(targetManagedDir, { recursive: true });
-    fs.copyFileSync(localConfigPath, path.join(targetManagedDir, "config.local.json"));
+    RealDirectoryAuthority.resolve(targetManagedDir, { create: true });
+    new AtomicFile(path.join(targetManagedDir, "config.local.json")).write(
+      captureRegularFile(localConfigPath, { label: "local worktree configuration", maxBytes: DEFAULT_MAX_FILE_BYTES }).bytes);
   }
   for (const pkg of config.plugin?.packages || []) {
     if (pkg.enabled === false) continue;
     const sourcePluginRoot = path.join(sourceManagedDir, "plugins", pkg.id);
     if (!fs.existsSync(sourcePluginRoot)) continue;
     const targetPluginRoot = path.join(targetManagedDir, "plugins", pkg.id);
-    fs.rmSync(targetPluginRoot, { recursive: true, force: true });
     copyPluginRuntimeDirectory(sourcePluginRoot, targetPluginRoot);
   }
 }
@@ -396,30 +369,16 @@ function exactKeys(value, keys, label) {
   }
 }
 
-function fsyncDirectory(directory) {
-  const descriptor = fs.openSync(directory, "r");
-  try {
-    fs.fsyncSync(descriptor);
-  } finally {
-    fs.closeSync(descriptor);
-  }
-}
-
 function optionalBytes(filePath) {
-  try {
-    return fs.readFileSync(filePath);
-  } catch (error) {
-    if (error.code === "ENOENT") return null;
-    throw error;
-  }
+  return new AtomicFile(filePath).read(null);
 }
 
 function rollbackRequiredPrepareHookFailure(specDir, createdSourceFiles) {
   // Fresh V1 publication is one atomic directory rename.  Required-hook
   // rollback therefore owns the entire Version root rather than attempting
   // to reconstruct a partially written root-file list.
-  fs.rmSync(specDir, { recursive: true, force: true });
-  fsyncDirectory(path.dirname(specDir));
+  const authority = new RealDirectoryAuthority(specDir);
+  if (authority.exists()) authority.removeTree();
 }
 
 function encodedBytes(bytes) {
@@ -567,6 +526,18 @@ class WorktreePrepareAttemptRecord {
   }
 }
 
+class WorktreePrepareAttemptSnapshot {
+  constructor(record, snapshot) {
+    if (!(record instanceof WorktreePrepareAttemptRecord) || !(snapshot instanceof RegularFileSnapshot)) {
+      throw new TypeError("prepare attempt snapshot requires its typed record and exact file snapshot");
+    }
+    this.record = record;
+    this.stat = snapshot.identity;
+    this.snapshot = snapshot;
+    Object.freeze(this);
+  }
+}
+
 class WorktreePrepareAttemptJournal {
   constructor({ mainRoot, processIdentitySource = new ProcessIdentitySource() }) {
     this.mainRoot = fs.realpathSync(mainRoot);
@@ -575,49 +546,11 @@ class WorktreePrepareAttemptJournal {
   }
 
   load() {
-    let stat;
-    try {
-      stat = fs.lstatSync(this.path);
-    } catch (error) {
-      if (error.code === "ENOENT") return null;
-      throw error;
-    }
-    if (
-      !stat.isFile()
-      || stat.isSymbolicLink()
-      || stat.nlink !== 1
-      || stat.size > MAX_PREPARE_ATTEMPT_BYTES
-      || fs.realpathSync(this.path) !== this.path
-    ) {
-      throw new Error("worktree prepare attempt journal authority is invalid");
-    }
-    let descriptor = null;
-    try {
-      descriptor = fs.openSync(this.path, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0));
-      const opened = fs.fstatSync(descriptor);
-      if (opened.dev !== stat.dev || opened.ino !== stat.ino || opened.nlink !== 1) {
-        throw new Error("worktree prepare attempt journal changed while opening");
-      }
-      const bytes = fs.readFileSync(descriptor);
-      const after = fs.fstatSync(descriptor);
-      const visible = fs.lstatSync(this.path);
-      if (
-        after.dev !== opened.dev
-        || after.ino !== opened.ino
-        || visible.dev !== opened.dev
-        || visible.ino !== opened.ino
-        || after.nlink !== 1
-        || visible.nlink !== 1
-        || after.size !== bytes.length
-      ) {
-        throw new Error("worktree prepare attempt journal changed while reading");
-      }
-      const record = new WorktreePrepareAttemptRecord(JSON.parse(bytes.toString("utf8")));
-      if (record.mainRoot !== this.mainRoot) throw new Error("worktree prepare attempt root mismatch");
-      return { record, stat: opened };
-    } finally {
-      if (descriptor != null) fs.closeSync(descriptor);
-    }
+    const snapshot = new AtomicFile(this.path, { maxBytes: MAX_PREPARE_ATTEMPT_BYTES }).readSnapshot();
+    if (snapshot === null) return null;
+    const record = new WorktreePrepareAttemptRecord(JSON.parse(snapshot.text()));
+    if (record.mainRoot !== this.mainRoot) throw new Error("worktree prepare attempt root mismatch");
+    return new WorktreePrepareAttemptSnapshot(record, snapshot);
   }
 
   begin(record, flowManager) {
@@ -637,8 +570,10 @@ class WorktreePrepareAttemptJournal {
     if (flowManager.loadActiveFlows().some((entry) => entry.specId === record.specId)) {
       throw new Error("worktree prepare active-flow entry exists before journal publication");
     }
-    fs.mkdirSync(path.dirname(this.path), { recursive: true });
-    new AtomicFile(this.path).write(`${JSON.stringify(record.toJSON(), null, 2)}\n`);
+    RealDirectoryAuthority.resolve(path.dirname(this.path), { create: true });
+    new AtomicFile(this.path, { commitGuard: () => {
+      if (this.load() !== null) throw new Error("worktree prepare attempt appeared before journal publication");
+    } }).write(`${JSON.stringify(record.toJSON(), null, 2)}\n`);
     const published = this.load();
     if (published.record.attemptId !== record.attemptId) {
       throw new Error("worktree prepare attempt journal readback mismatch");
@@ -685,7 +620,7 @@ class WorktreePrepareAttemptJournal {
       new AtomicFile(this.path, { commitGuard: () => {
         operationLock.assertOwned();
         const current = this.load();
-        if (current === null || current.stat.dev !== snapshot.stat.dev || current.stat.ino !== snapshot.stat.ino
+        if (current === null || !sameFileIdentity(current.stat, snapshot.stat)
           || JSON.stringify(current.record.toJSON()) !== JSON.stringify(record.toJSON())) {
           throw new Error("worktree prepare journal owner changed before branch recovery");
         }
@@ -721,7 +656,9 @@ class WorktreePrepareAttemptJournal {
       throw new Error("shared worktree exclude changed before attempt publication");
     }
     if (this.#sameBytes(current, record.excludeAfter)) return;
-    new AtomicFile(excludePath).write(record.excludeAfter);
+    new AtomicFile(excludePath, { commitGuard: () => {
+      if (!this.#sameBytes(optionalBytes(excludePath), record.excludeBefore)) throw new Error("shared worktree exclude changed before attempt publication");
+    } }).write(record.excludeAfter);
   }
 
   rollback(record, flowManager, operationOwnerToken) {
@@ -730,19 +667,23 @@ class WorktreePrepareAttemptJournal {
       flowManager.removeActiveFlow(record.specId, { operationOwnerToken });
     }
     if (authority.preparingMissing && record.preparingBefore != null) {
-      new AtomicFile(record.preparingPath).write(record.preparingBefore);
+      new AtomicFile(record.preparingPath, { commitGuard: () => {
+        if (optionalBytes(record.preparingPath) !== null) throw new Error("preparing flow appeared before rollback");
+      } }).write(record.preparingBefore);
     }
     if (authority.excludePublished) {
       if (record.excludeBefore == null) {
-        fs.unlinkSync(record.excludePath);
-        fsyncDirectory(path.dirname(record.excludePath));
+        new AtomicFile(record.excludePath, { commitGuard: () => {
+          if (!this.#sameBytes(optionalBytes(record.excludePath), record.excludeAfter)) throw new Error("worktree exclude changed before rollback");
+        } }).remove();
       } else {
-        new AtomicFile(record.excludePath).write(record.excludeBefore);
+        new AtomicFile(record.excludePath, { commitGuard: () => {
+          if (!this.#sameBytes(optionalBytes(record.excludePath), record.excludeAfter)) throw new Error("worktree exclude changed before rollback");
+        } }).write(record.excludeBefore);
       }
     }
     if (authority.specDirectoryOwned) {
-      fs.rmSync(authority.specDirectory, { recursive: true });
-      fsyncDirectory(path.dirname(authority.specDirectory));
+      new RealDirectoryAuthority(authority.specDirectory).removeTree();
     }
     if (authority.worktree) {
       const removed = runGit(["-C", this.mainRoot, "worktree", "remove", "--force", record.worktreePath]);
@@ -845,12 +786,13 @@ class WorktreePrepareAttemptJournal {
     if (!snapshot || snapshot.record.attemptId !== record.attemptId) {
       throw new Error("worktree prepare attempt journal changed before removal");
     }
-    const current = fs.lstatSync(this.path);
-    if (current.dev !== snapshot.stat.dev || current.ino !== snapshot.stat.ino || current.nlink !== 1) {
-      throw new Error("worktree prepare attempt journal inode CAS failed");
-    }
-    fs.unlinkSync(this.path);
-    fsyncDirectory(path.dirname(this.path));
+    new AtomicFile(this.path, { commitGuard: () => {
+      const current = this.load();
+      if (current === null || !sameFileIdentity(current.stat, snapshot.stat)
+        || current.snapshot.digest !== snapshot.snapshot.digest) {
+        throw new Error("worktree prepare attempt journal inode CAS failed");
+      }
+    } }).remove();
   }
 
   #sameBytes(left, right) {
@@ -862,13 +804,17 @@ function ensureWorktreeFlowIdentityIgnored(worktreePath, journal, record) {
   if (journal && record) return journal.publishExclude(record, worktreePath);
   const rawPath = runGitTrim(worktreePath, ["rev-parse", "--git-path", "info/exclude"]);
   const excludePath = path.isAbsolute(rawPath) ? rawPath : path.resolve(worktreePath, rawPath);
-  fs.mkdirSync(path.dirname(excludePath), { recursive: true });
-  const current = fs.existsSync(excludePath) ? fs.readFileSync(excludePath, "utf8") : "";
+  RealDirectoryAuthority.resolve(path.dirname(excludePath), { create: true });
+  const current = new AtomicFile(excludePath).read(Buffer.alloc(0)).toString("utf8");
   const existing = new Set(current.split(/\r?\n/));
   const missing = WORKTREE_FLOW_INTERNAL_IGNORES.filter((entry) => !existing.has(entry));
   if (missing.length === 0) return;
   const separator = current.length > 0 && !current.endsWith("\n") ? "\n" : "";
-  new AtomicFile(excludePath).write(`${current}${separator}${missing.join("\n")}\n`);
+  new AtomicFile(excludePath, { commitGuard: () => {
+    if (new AtomicFile(excludePath).read(Buffer.alloc(0)).toString("utf8") !== current) {
+      throw new Error("worktree exclude changed before identity exclusion publication");
+    }
+  } }).write(`${current}${separator}${missing.join("\n")}\n`);
 }
 
 export class RunPrepareSpecCommand extends FlowCommand {
@@ -1174,7 +1120,8 @@ export class RunPrepareSpecCommand extends FlowCommand {
     }
 
     async function completePreparation(bindingIdentity = null) {
-      const bytes = fs.readFileSync(path.join(managedOutputDir(executionRoot), "analysis.json"));
+      const bytes = captureRegularFile(path.join(managedOutputDir(executionRoot), "analysis.json"),
+        { label: "prepared analysis", maxBytes: DEFAULT_MAX_FILE_BYTES }).bytes;
       await adoptPreparation("prepare-spec", {
         hash: crypto.createHash("sha256").update(bytes).digest("hex"), size: bytes.length,
       }, bindingIdentity);

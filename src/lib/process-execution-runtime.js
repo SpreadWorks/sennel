@@ -3,7 +3,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
-import { AtomicFile, fsyncDirectory } from "./atomic-file.js";
+import { AtomicFile } from "./atomic-file.js";
 import { FileLock, FileLockWaitPolicy } from "./file-lock.js";
 import { ProcessLock } from "./process-lock.js";
 import { ProcessIdentity, ProcessIdentitySource } from "./process-identity.js";
@@ -27,8 +27,8 @@ export {
 function captureCheckoutAuthorities(main, checkout) {
   main.assertStable(); checkout.assertStable();
   return new ProcessExecutionCheckoutIdentity({ mainRoot: main.directory, executionRoot: checkout.directory,
-    mainDevice: main.identity.dev, mainInode: main.identity.ino,
-    checkoutDevice: checkout.identity.dev, checkoutInode: checkout.identity.ino });
+    mainDevice: Number(main.identity.dev), mainInode: Number(main.identity.ino),
+    checkoutDevice: Number(checkout.identity.dev), checkoutInode: Number(checkout.identity.ino) });
 }
 
 /** Acquire checkout authority outside pure execution values and semantic consumers. */
@@ -214,24 +214,24 @@ class ProcessRuntimeStore {
     this.faultInjector = faultInjector;
     const state = new RealDirectoryAuthority(path.join(this.mainAuthority.directory, ".sennel"), { create, parentAuthority: this.mainAuthority });
     if (create) state.ensure();
-    const prefix = new RealDirectoryAuthority(path.join(state.directory, "process-runtime"), { create, parentAuthority: state });
-    if (create) { prefix.ensure(); fs.chmodSync(prefix.directory, 0o700); }
-    this.authority = new RealDirectoryAuthority(path.join(prefix.directory, digest(this.checkout?.executionRoot ?? this.retainedExecutionRoot)), { create, parentAuthority: prefix });
-    if (create) { this.authority.ensure(); fs.chmodSync(this.authority.directory, 0o700); }
+    const prefix = new RealDirectoryAuthority(path.join(state.directory, "process-runtime"), { create, parentAuthority: state, creationMode: 0o700 });
+    if (create) prefix.ensure();
+    this.authority = new RealDirectoryAuthority(path.join(prefix.directory, digest(this.checkout?.executionRoot ?? this.retainedExecutionRoot)), { create, parentAuthority: prefix, creationMode: 0o700 });
+    if (create) this.authority.ensure();
     this.callsAuthority = new RealDirectoryAuthority(path.join(this.authority.directory, "calls"), { create, parentAuthority: this.authority });
     if (create) this.callsAuthority.ensure();
     this.archivesAuthority = new RealDirectoryAuthority(path.join(this.authority.directory, "archives"), { create, parentAuthority: this.authority });
     if (create) this.archivesAuthority.ensure();
-    if (create) { fsyncDirectory(state.directory); fsyncDirectory(prefix.directory); fsyncDirectory(this.authority.directory); }
-    this.file = new AtomicFile(path.join(this.authority.directory, "registry.json"), { faultInjector, phaseNamespace: "runtime", commitGuard: () => this.assertStable() });
+    if (create) { this.callsAuthority.assertStable(); this.archivesAuthority.assertStable(); }
+    this.file = new AtomicFile(path.join(this.authority.directory, "registry.json"), { maxBytes: MAX_REGISTRY_BYTES, faultInjector, phaseNamespace: "runtime", commitGuard: () => this.assertStable() });
     this.anchor = new AtomicFile(path.join(this.authority.directory, "authority.json"));
     if (this.checkout === null) {
       const anchor = readJson(this.anchor);
       this.checkout = exact(anchor, new ProcessExecutionCheckoutIdentity(anchor));
       if (this.checkout.executionRoot !== this.retainedExecutionRoot
         || this.checkout.mainRoot !== this.mainAuthority.directory
-        || this.checkout.mainDevice !== this.mainAuthority.identity.dev
-        || this.checkout.mainInode !== this.mainAuthority.identity.ino) {
+        || this.checkout.mainDevice !== Number(this.mainAuthority.identity.dev)
+        || this.checkout.mainInode !== Number(this.mainAuthority.identity.ino)) {
         fail("authority-mismatch", "Retained checkout anchor disagrees with its original namespace or actual main authority");
       }
     }
@@ -259,7 +259,7 @@ class ProcessRuntimeStore {
   }
   #rejectRegistryFailure(cause) {
     if (cause instanceof ProcessExecutionControlFailure) throw cause;
-    fail(cause.durabilityUnknown ? "durability-uncertain" : "registry-failed", `Process runtime registry operation failed: ${cause.message}`, { cause });
+    fail(cause.publicationUnknown ? "durability-uncertain" : "registry-failed", `Process runtime registry operation failed: ${cause.message}`, { cause });
   }
   async exclusive(body, { deadline = Infinity } = {}) {
     const previous = this.tail;
@@ -384,7 +384,7 @@ class ProcessRuntimeStore {
   }
   callDirectory(callId) {
     const directory = new RealDirectoryAuthority(path.join(this.callsAuthority.directory, uuid(callId, "callId")), { create: true, parentAuthority: this.callsAuthority });
-    directory.ensure(); fsyncDirectory(this.callsAuthority.directory);
+    directory.ensure(); this.callsAuthority.assertStable();
     return directory.directory;
   }
 }

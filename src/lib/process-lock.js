@@ -2,7 +2,10 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { ProcessIdentity, ProcessIdentitySource } from "./process-identity.js";
-import { RealDirectoryAuthority } from "./real-directory-authority.js";
+import { AtomicFile } from "./atomic-file.js";
+import { captureRegularFile } from "./regular-file-snapshot.js";
+import { removeRegularFile } from "./regular-file-io.js";
+import { FileIdentity, RealDirectoryAuthority, sameFileIdentity as sameFile } from "./real-directory-authority.js";
 
 const LOCK_VERSION = 1;
 const MAX_LOCK_BYTES = 64 * 1024;
@@ -10,9 +13,6 @@ const MAX_ACQUIRE_ATTEMPTS = 4;
 const MAX_OWNER_OBSERVATION_ATTEMPTS = 4;
 const OWNER_TOKEN_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
-function sameFile(left, right) {
-  return left.dev === right.dev && left.ino === right.ino;
-}
 
 function defaultErrorFactory(status, message, { lockPath, cause } = {}) {
   const error = new Error(message, { cause });
@@ -26,29 +26,6 @@ function stableAuthority(value) {
   return JSON.stringify(value, Object.keys(value).sort());
 }
 
-function fsyncDirectory(directory) {
-  const descriptor = fs.openSync(directory, "r");
-  let primaryError = null;
-  try {
-    fs.fsyncSync(descriptor);
-  } catch (error) {
-    primaryError = error;
-  } finally {
-    try {
-      fs.closeSync(descriptor);
-    } catch (cleanupError) {
-      if (primaryError) {
-        throw new AggregateError(
-          [primaryError, cleanupError],
-          `directory fsync and descriptor cleanup both failed: ${directory}`,
-          { cause: primaryError },
-        );
-      }
-      throw cleanupError;
-    }
-  }
-  if (primaryError) throw primaryError;
-}
 
 function orderedFailure(primary, cleanupErrors, message) {
   if (cleanupErrors.length === 0) return primary;
@@ -87,7 +64,7 @@ export class ProcessLockTransitionError extends Error {
     lockPath,
     owner,
     publishedToVisibleName,
-    durabilityUnknown,
+    publicationUnknown,
     residue,
   }) {
     super(message, { cause });
@@ -98,7 +75,7 @@ export class ProcessLockTransitionError extends Error {
     this.lockPath = lockPath;
     this.owner = ownerSnapshot(owner);
     this.publishedToVisibleName = publishedToVisibleName;
-    this.durabilityUnknown = durabilityUnknown;
+    this.publicationUnknown = publicationUnknown;
     this.residue = Object.freeze({ temp: residue.temp === true, visible: residue.visible === true });
   }
 }
@@ -210,13 +187,13 @@ export class ProcessLock {
       this.directoryAuthority.assertStable();
       let stat;
       try {
-        stat = fs.lstatSync(this.lockPath);
+        stat = fs.lstatSync(this.lockPath, { bigint: true });
       } catch (cause) {
         if (cause.code === "ENOENT") return null;
         throw this.#error("corrupt", `process-owned lock is unreadable: ${cause.message}`, cause);
       }
       try {
-        return { owner: this.#readOwner(stat), stat: { dev: stat.dev, ino: stat.ino } };
+        return { owner: this.#readOwner(stat), stat: new FileIdentity(stat) };
       } catch (cause) {
         if (!(cause instanceof ProcessLockOwnerObservationChanged)) throw cause;
         observationChanged = cause;
@@ -245,12 +222,12 @@ export class ProcessLock {
       throw this.#error("ownership-changed", "process-owned lock ownership changed");
     }
     try {
-      fs.unlinkSync(this.lockPath);
+      removeRegularFile(this.lockPath, { expectedIdentity: current.stat, maxBytes: MAX_LOCK_BYTES, directoryAuthority: this.directoryAuthority });
     } catch (cause) {
       const cleanupErrors = [];
       const visibleResidue = residueAt(this.lockPath, cleanupErrors);
       throw this.#transitionError({
-        phase: "release-unlink",
+        phase: cause.publicationUnknown ? "release-readback" : "release-unlink",
         cause: orderedFailure(
           cause,
           cleanupErrors,
@@ -258,139 +235,56 @@ export class ProcessLock {
         ),
         owner: current.owner,
         publishedToVisibleName: false,
-        durabilityUnknown: false,
+        publicationUnknown: cause.publicationUnknown === true,
         residue: { temp: false, visible: visibleResidue },
       });
     }
     this.processIdentity = null;
     this.lockIdentity = null;
-    try {
-      fsyncDirectory(this.directory);
-    } catch (cause) {
-      const cleanupErrors = [];
-      const visibleResidue = residueAt(this.lockPath, cleanupErrors);
-      throw this.#transitionError({
-        phase: "release-directory-fsync",
-        cause: orderedFailure(
-          cause,
-          cleanupErrors,
-          `process-owned lock release durability and residue inspection both failed: ${this.lockPath}`,
-        ),
-        owner: current.owner,
-        publishedToVisibleName: false,
-        durabilityUnknown: true,
-        residue: { temp: false, visible: visibleResidue },
-      });
-    }
+    this.directoryAuthority.assertStable();
   }
 
   #publish() {
     const token = crypto.randomUUID();
-    const tempPath = path.join(
-      this.directory,
-      ProcessLock.ownerTemporaryFileName(path.basename(this.lockPath), token),
-    );
-    let descriptor = null;
-    let published = false;
+    const tempPath = path.join(this.directory, ProcessLock.ownerTemporaryFileName(path.basename(this.lockPath), token));
     let owner = null;
-    let phase = "owner-temp-open";
+    let stage = null;
+    let published = false;
+    let phase = "owner-create";
+    const writer = new AtomicFile(this.lockPath, { maxBytes: MAX_LOCK_BYTES,
+      directoryAuthority: this.directoryAuthority, phaseNamespace: "owner" });
     try {
       this.processIdentity = this.processIdentitySource.createOwner(token);
-      owner = new ProcessLockOwner({
-        kind: this.kind,
-        authority: this.authority,
-        processIdentity: this.processIdentity,
-      });
-      descriptor = fs.openSync(tempPath, "wx", 0o600);
+      owner = new ProcessLockOwner({ kind: this.kind, authority: this.authority, processIdentity: this.processIdentity });
       phase = "owner-file-write";
-      fs.writeFileSync(descriptor, `${JSON.stringify(owner.toJSON(), null, 2)}\n`);
-      phase = "owner-file-mode";
-      fs.fchmodSync(descriptor, 0o600);
-      phase = "owner-file-fsync";
-      fs.fsyncSync(descriptor);
-      phase = "owner-file-stat";
-      const tempStat = fs.fstatSync(descriptor);
-      this.lockIdentity = { dev: tempStat.dev, ino: tempStat.ino };
-      phase = "owner-file-close";
-      fs.closeSync(descriptor);
-      descriptor = null;
-      this.directoryAuthority.assertStable();
+      stage = writer.createStage(`${JSON.stringify(owner.toJSON(), null, 2)}\n`, {
+        stageName: ProcessLock.ownerTemporaryFileName(path.basename(this.lockPath), token),
+        exclusive: true,
+      });
+      this.lockIdentity = stage.identity;
       phase = "publish-link";
-      fs.linkSync(tempPath, this.lockPath);
+      writer.publishStage(stage, { exclusive: true });
       published = true;
-      phase = "publish-identity-validate";
-      if (!sameFile(fs.lstatSync(this.lockPath), this.lockIdentity)) {
-        throw this.#error("ownership-changed", "published process-owned lock identity changed");
-      }
-      phase = "publish-temp-unlink";
-      fs.unlinkSync(tempPath);
-      phase = "publish-directory-fsync";
-      fsyncDirectory(this.directory);
       return this.processIdentity.ownerToken;
     } catch (primaryError) {
+      published ||= primaryError.committedToVisibleName === true;
       const cleanupErrors = [];
-      let cleanupUnlinked = false;
-      if (descriptor != null) {
-        try { fs.closeSync(descriptor); } catch (error) { cleanupErrors.push(error); }
-      }
-      try {
-        fs.unlinkSync(tempPath);
-        cleanupUnlinked = true;
-      } catch (error) {
-        if (error.code !== "ENOENT") cleanupErrors.push(error);
-      }
-      if (published) {
+      if (published && stage !== null) {
         try {
-          const stat = fs.lstatSync(this.lockPath);
-          if (sameFile(stat, this.lockIdentity)) {
-            fs.unlinkSync(this.lockPath);
-            cleanupUnlinked = true;
-          } else {
-            cleanupErrors.push(new Error(`published process-owned lock identity changed during cleanup: ${this.lockPath}`));
-          }
-        } catch (error) {
-          if (error.code !== "ENOENT") cleanupErrors.push(error);
-        }
+          removeRegularFile(this.lockPath, { expectedIdentity: stage.identity,
+            expectedLinkCount: primaryError.cleanupFailed ? 2 : 1, maxBytes: MAX_LOCK_BYTES,
+            directoryAuthority: this.directoryAuthority });
+        } catch (error) { cleanupErrors.push(error); }
       }
-      if (cleanupUnlinked) {
-        try { fsyncDirectory(this.directory); } catch (error) { cleanupErrors.push(error); }
-      }
-      const residue = {
-        temp: residueAt(tempPath, cleanupErrors),
-        visible: residueAt(this.lockPath, cleanupErrors),
-      };
-      const cause = orderedFailure(
-        primaryError,
-        cleanupErrors,
-        `process-owned lock publish and cleanup both failed: ${this.lockPath}`,
-      );
-      if (
-        primaryError.code === "PROCESS_IDENTITY_UNAVAILABLE"
-        && cleanupErrors.length === 0
-        && residue.temp === false
-        && residue.visible === false
-        && published === false
-      ) {
-        this.processIdentity = null;
-        this.lockIdentity = null;
-        throw primaryError;
-      }
-      if (primaryError.code === "EEXIST" && cleanupErrors.length === 0 && residue.temp === false && published === false) {
-        this.processIdentity = null;
-        this.lockIdentity = null;
-        throw primaryError;
-      }
-      const transitionError = this.#transitionError({
-        phase,
-        cause,
-        owner,
-        publishedToVisibleName: published,
-        durabilityUnknown: phase === "publish-directory-fsync",
-        residue,
-      });
+      const residue = { temp: residueAt(tempPath, cleanupErrors), visible: residueAt(this.lockPath, cleanupErrors) };
+      const primary = primaryError.cause?.code === "EEXIST" && !primaryError.cleanupFailed ? primaryError.cause : primaryError;
+      const cause = orderedFailure(primary, cleanupErrors, `process-owned lock publication and cleanup failed: ${this.lockPath}`);
       this.processIdentity = null;
       this.lockIdentity = null;
-      throw transitionError;
+      if ((primary.code === "PROCESS_IDENTITY_UNAVAILABLE" || primary.code === "EEXIST")
+        && cleanupErrors.length === 0 && !residue.temp && !published) throw primary;
+      throw this.#transitionError({ phase: primaryError.phase ?? phase, cause, owner,
+        publishedToVisibleName: published, publicationUnknown: primaryError.publicationUnknown === true, residue });
     }
   }
 
@@ -410,12 +304,12 @@ export class ProcessLock {
     const assessment = this.processIdentitySource.assess(current.owner.processIdentity);
     if (assessment.status !== "stale") throw this.conflict(current.owner, assessment);
     try {
-      fs.unlinkSync(this.lockPath);
+      removeRegularFile(this.lockPath, { expectedIdentity: current.stat, maxBytes: MAX_LOCK_BYTES, directoryAuthority: this.directoryAuthority });
     } catch (cause) {
       const cleanupErrors = [];
       const visibleResidue = residueAt(this.lockPath, cleanupErrors);
       throw this.#transitionError({
-        phase: "stale-remove-unlink",
+        phase: cause.publicationUnknown ? "stale-remove-readback" : "stale-remove-unlink",
         cause: orderedFailure(
           cause,
           cleanupErrors,
@@ -423,100 +317,37 @@ export class ProcessLock {
         ),
         owner: current.owner,
         publishedToVisibleName: false,
-        durabilityUnknown: false,
+        publicationUnknown: cause.publicationUnknown === true,
         residue: { temp: false, visible: visibleResidue },
       });
     }
-    try {
-      fsyncDirectory(this.directory);
-    } catch (cause) {
-      const cleanupErrors = [];
-      const visibleResidue = residueAt(this.lockPath, cleanupErrors);
-      throw this.#transitionError({
-        phase: "stale-remove-directory-fsync",
-        cause: orderedFailure(
-          cause,
-          cleanupErrors,
-          `stale process-owned lock durability and residue inspection both failed: ${this.lockPath}`,
-        ),
-        owner: current.owner,
-        publishedToVisibleName: false,
-        durabilityUnknown: true,
-        residue: { temp: false, visible: visibleResidue },
-      });
-    }
+    this.directoryAuthority.assertStable();
     return true;
   }
 
   #readOwner(stat) {
-    let descriptor = null;
     let owner = null;
-    let failure = null;
     try {
-      if (!stat.isFile() || stat.isSymbolicLink() || stat.size > MAX_LOCK_BYTES) {
-        throw new Error("process-owned lock must be a bounded regular file");
-      }
-      try {
-        descriptor = fs.openSync(
-          this.lockPath,
-          fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0),
-        );
-      } catch (cause) {
-        if (cause.code === "ENOENT") {
-          throw new ProcessLockOwnerObservationChanged("process-owned lock disappeared while opening its owner record", { cause });
-        }
-        throw cause;
-      }
-      const openedStat = fs.fstatSync(descriptor);
-      if (!sameFile(stat, openedStat)) {
-        throw new ProcessLockOwnerObservationChanged("process-owned lock identity changed while opening its owner record");
-      }
-      if (!openedStat.isFile() || openedStat.size > MAX_LOCK_BYTES) {
-        throw new Error("process-owned lock must be a bounded regular file");
-      }
-      const value = JSON.parse(fs.readFileSync(descriptor, "utf8"));
-      const actualAuthority = Object.fromEntries(
-        Object.keys(this.authority).map((key) => [key, value[key]]),
-      );
-      if (
-        value.version !== LOCK_VERSION
-        || value.kind !== this.kind
-        || stableAuthority(actualAuthority) !== this.serializedAuthority
-      ) {
+      let value;
+      captureRegularFile(this.lockPath, { label: "process-owned lock", maxBytes: MAX_LOCK_BYTES,
+        expectedIdentity: stat, directoryAuthority: this.directoryAuthority,
+        validateSnapshot(snapshot) { value = JSON.parse(snapshot.text()); } });
+      const actualAuthority = Object.fromEntries(Object.keys(this.authority).map((key) => [key, value[key]]));
+      if (value.version !== LOCK_VERSION || value.kind !== this.kind || stableAuthority(actualAuthority) !== this.serializedAuthority) {
         throw new Error("process-owned lock authority is invalid");
       }
-      owner = new ProcessLockOwner({
-        kind: value.kind,
-        authority: actualAuthority,
-        processIdentity: value.processIdentity,
-      });
+      owner = new ProcessLockOwner({ kind: value.kind, authority: actualAuthority, processIdentity: value.processIdentity });
+      return owner;
     } catch (cause) {
-      failure = cause;
-    }
-    if (descriptor != null) {
-      try {
-        fs.closeSync(descriptor);
-      } catch (cleanupError) {
-        failure = failure
-          ? orderedFailure(failure, [cleanupError], "process lock owner read and descriptor cleanup both failed")
-          : cleanupError;
+      if (cause instanceof AggregateError && cause.errors[0]?.reason === "identity") {
+        const observation = new ProcessLockOwnerObservationChanged("process-owned lock changed while reading its owner record", { cause: cause.errors[0] });
+        cause = new AggregateError([observation, ...cause.errors.slice(1)], cause.message, { cause: observation });
       }
-    }
-    if (failure instanceof ProcessLockOwnerObservationChanged) throw failure;
-    if (failure) throw this.#error("corrupt", `process-owned lock is corrupt: ${failure.message}`, failure, owner);
-    let currentStat;
-    try {
-      currentStat = fs.lstatSync(this.lockPath);
-    } catch (cause) {
-      if (cause.code === "ENOENT") {
-        throw new ProcessLockOwnerObservationChanged("process-owned lock disappeared while reading its owner record", { cause });
+      if (cause.code === "ENOENT" || /identity changed|changed while reading/.test(cause.message)) {
+        throw new ProcessLockOwnerObservationChanged("process-owned lock changed while reading its owner record", { cause });
       }
-      throw this.#error("corrupt", `process-owned lock is unreadable: ${cause.message}`, cause, owner);
+      throw this.#error("corrupt", `process-owned lock is corrupt: ${cause.message}`, cause, owner);
     }
-    if (!sameFile(stat, currentStat)) {
-      throw new ProcessLockOwnerObservationChanged("process-owned lock identity changed while reading its owner record");
-    }
-    return owner;
   }
 
   #error(status, message, cause, owner = null) {
@@ -533,12 +364,12 @@ export class ProcessLock {
     cause,
     owner,
     publishedToVisibleName,
-    durabilityUnknown,
+    publicationUnknown,
     residue,
   }) {
-    const status = durabilityUnknown ? "durability-uncertain" : "transition-failed";
-    const message = durabilityUnknown
-      ? `process-owned lock durability is uncertain during ${phase}: ${this.lockPath}`
+    const status = publicationUnknown ? "publication-unconfirmed" : "transition-failed";
+    const message = publicationUnknown
+      ? `process-owned lock publication is unconfirmed during ${phase}: ${this.lockPath}`
       : `process-owned lock transition failed during ${phase}: ${this.lockPath}`;
     const mapped = this.errorFactory(status, message, { lockPath: this.lockPath, cause });
     return new ProcessLockTransitionError(message, {
@@ -549,7 +380,7 @@ export class ProcessLock {
       lockPath: this.lockPath,
       owner,
       publishedToVisibleName,
-      durabilityUnknown,
+      publicationUnknown,
       residue,
     });
   }

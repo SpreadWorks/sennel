@@ -1,6 +1,9 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { captureRegularFile } from "../lib/regular-file-snapshot.js";
+import { RealDirectoryAuthority } from "../lib/real-directory-authority.js";
+import { LogicalRelativePath } from "../lib/portable-path.js";
 import { buildFlowStopGuidance } from "../lib/flow-stop-guidance.js";
 import { createI18n } from "../lib/i18n.js";
 import { ProcessExecutionCheckoutIdentity } from "../lib/process-execution-values.js";
@@ -356,33 +359,17 @@ async function readBoundedFile(file, maxBytes, {
   jsonPath = "/canonical",
   message = "canonical record could not be read",
 } = {}) {
-  let handle;
   try {
-    handle = await fs.promises.open(file, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0));
-    const stat = await handle.stat();
-    if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1 || await fs.promises.realpath(file) !== file) {
-      throw new QueryError(identityCode, jsonPath, "canonical record is not a regular real file");
-    }
-    if (!Number.isSafeInteger(stat.size) || stat.size > maxBytes) {
-      throw new QueryError(limitCode, jsonPath, "canonical record exceeds its bounded size");
-    }
-    const bytes = await handle.readFile();
-    if (bytes.length > maxBytes) throw new QueryError(limitCode, jsonPath, "canonical record exceeds its bounded size");
-    return bytes;
+    return captureRegularFile(file, { label: "canonical record", maxBytes, requireSingleLink: true }).bytes;
   } catch (error) {
     if (error instanceof QueryError) throw error;
-    if (error?.code === "ELOOP") {
+    if (error?.reason === "limit") {
+      throw new QueryError(limitCode, jsonPath, "canonical record exceeds its bounded size", { cause: error });
+    }
+    if (error?.reason === "identity" || error?.code?.startsWith("REAL_DIRECTORY_AUTHORITY_") || error?.code === "ELOOP") {
       throw new QueryError(identityCode, jsonPath, "canonical record is not a regular real file", { cause: error });
     }
     throw new QueryError(code, jsonPath, message, { cause: error });
-  } finally {
-    if (handle !== undefined) {
-      try {
-        await handle.close();
-      } catch (closeError) {
-        throw new QueryError(code, jsonPath, message, { cause: closeError });
-      }
-    }
   }
 }
 
@@ -743,35 +730,23 @@ async function requireRealDirectory(directory, {
   message = "canonical directory could not be read",
   inconsistentMessage = "canonical directory is not a real directory",
 } = {}) {
-  let handle;
   try {
-    handle = await fs.promises.open(
-      directory,
-      fs.constants.O_RDONLY | (fs.constants.O_DIRECTORY || 0) | (fs.constants.O_NOFOLLOW || 0),
-    );
-    const stat = await handle.stat();
-    if (!stat.isDirectory() || stat.isSymbolicLink() || await fs.promises.realpath(directory) !== directory) {
-      throw new QueryError(ERROR_CODES.CANONICAL_RECORD_INCONSISTENT, jsonPath, inconsistentMessage);
-    }
+    const authority = new RealDirectoryAuthority(directory);
+    authority.assertStable();
+    return authority;
   } catch (error) {
     if (error instanceof QueryError) throw error;
-    if (error?.code === "ELOOP") {
+    if (error?.code === "ELOOP" || (error?.code?.startsWith("REAL_DIRECTORY_AUTHORITY_") && error.cause?.code !== "ENOENT")) {
       throw new QueryError(ERROR_CODES.CANONICAL_RECORD_INCONSISTENT, jsonPath, inconsistentMessage, { cause: error });
     }
     throw new QueryError(code, jsonPath, message, { cause: error });
-  } finally {
-    if (handle !== undefined) await handle.close();
   }
 }
 
 class CanonicalFlowVersionReader {
   constructor({ repositoryRoot, specRoot = "specs" } = {}) {
     if (typeof repositoryRoot !== "string" || !path.isAbsolute(repositoryRoot)) throw new Error("repositoryRoot must be absolute");
-    if (typeof specRoot !== "string" || specRoot === "" || path.posix.isAbsolute(specRoot)
-      || specRoot.includes("\\") || path.posix.normalize(specRoot) !== specRoot
-      || specRoot.split("/").some((part) => part === "" || part === "." || part === "..")) {
-      throw new Error("specRoot must be a normalized POSIX-relative path");
-    }
+    new LogicalRelativePath(specRoot, "specRoot");
     this.repositoryRoot = path.resolve(repositoryRoot);
     this.specRoot = specRoot;
     this.definition = buildCurrentFlowDefinition();
@@ -789,33 +764,31 @@ class CanonicalFlowVersionReader {
     const entries = [];
     let enumeratedEntries = 0;
     try {
-      await requireRealDirectory(directory, {
+      const authority = await requireRealDirectory(directory, {
         code: ERROR_CODES.SPEC_NOT_FOUND,
         jsonPath: "/condition/specId",
         message: "requested Spec was not found",
         inconsistentMessage: "canonical Spec directory is not a real directory",
       });
-      const directoryEntries = await fs.promises.opendir(directory);
-      for await (const entry of directoryEntries) {
+      authority.forEachEntry((entry) => {
         enumeratedEntries += 1;
         if (enumeratedEntries > FLOW_QUERY_LIMITS.MAX_AVAILABLE_FLOW_VERSIONS) {
           throw new QueryError(ERROR_CODES.CANONICAL_RECORD_INCONSISTENT, "/canonical", "available Version directory entries exceed the limit");
         }
-        if (!/^\d+$/.test(entry.name)) continue;
+        if (!/^\d+$/.test(entry.name)) return;
         if (!entry.isDirectory() || entry.isSymbolicLink()) {
           throw new QueryError(ERROR_CODES.CANONICAL_RECORD_INCONSISTENT, "/canonical", "canonical Version identity is not a directory");
         }
-        await requireRealDirectory(path.join(directory, entry.name), {
-          code: ERROR_CODES.CANONICAL_RECORD_INCONSISTENT,
-          message: "canonical Version directory could not be read",
-          inconsistentMessage: "canonical Version identity is not a real directory",
-        });
+        try { authority.descendant(path.join(directory, entry.name)); }
+        catch (cause) {
+          throw new QueryError(ERROR_CODES.CANONICAL_RECORD_INCONSISTENT, "/canonical", "canonical Version identity is not a real directory", { cause });
+        }
         try {
           entries.push(new CanonicalVersionDirectoryEntry(entry.name));
         } catch (error) {
           throw new QueryError(ERROR_CODES.CANONICAL_RECORD_INCONSISTENT, "/canonical", "canonical Version identity is invalid", { cause: error });
         }
-      }
+      });
     } catch (error) {
       if (error instanceof QueryError) throw error;
       throw new QueryError(ERROR_CODES.CANONICAL_RECORD_UNREADABLE, "/canonical", "canonical Version directory could not be read", { cause: error });

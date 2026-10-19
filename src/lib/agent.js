@@ -37,6 +37,7 @@ import { AgentTimeout, DEFAULT_AGENT_PROCESS_TREE_GRACE_MS } from "./agent-timeo
 import { AgentTimeoutError, ChildProcessSupervisor, executeSupervisedProcess, DEFAULT_DIRECT_CHILD_EXIT_DRAIN_MS } from "./process-supervisor.js";
 import { PRODUCT } from "./product.js";
 import { AtomicFile } from "./atomic-file.js";
+import { captureRegularFile, MAX_IN_MEMORY_FILE_BYTES } from "./regular-file-snapshot.js";
 import { FileLock, FileLockWaitPolicy } from "./file-lock.js";
 import { RealDirectoryAuthority } from "./real-directory-authority.js";
 import { FlowAttributionPolicy } from "./flow-attribution.js";
@@ -1110,7 +1111,8 @@ class AgentPromptCache {
   read() {
     if (!fs.existsSync(this.filePath)) return this.emptyStore();
     try {
-      const data = JSON.parse(fs.readFileSync(this.filePath, "utf8"));
+      const data = JSON.parse(captureRegularFile(this.filePath, { label: "agent prompt cache", maxBytes: MAX_IN_MEMORY_FILE_BYTES,
+        requireSingleLink: true }).text());
       if (!data || typeof data !== "object" || data.version !== 1 || !data.entries || typeof data.entries !== "object") {
         return this.emptyStore();
       }
@@ -1411,7 +1413,7 @@ function injectWorkDirFlag(flag, workDir, args) {
 
 function ensureWorkDir(workDir) {
   if (!workDir) return;
-  fs.mkdirSync(workDir, { recursive: true });
+  RealDirectoryAuthority.resolve(workDir, { create: true });
 }
 
 const STREAMING_EVENT_PATTERN = /^\s*\{[^}]*"type"\s*:\s*"(message_start|message_delta|message_stop|content_block_start|content_block_delta|content_block_stop)"/;

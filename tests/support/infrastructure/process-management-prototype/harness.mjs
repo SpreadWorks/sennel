@@ -7,6 +7,7 @@ import { once } from 'node:events';
 import { fileURLToPath } from 'node:url';
 import { Worker } from 'node:worker_threads';
 import { CONTEXT_ENV, request, execute, ProtocolFailure } from './client.mjs';
+import { createTmpDir, removeTmpDir } from '../../builders/tmp-dir.js';
 
 export const directory = path.dirname(fileURLToPath(import.meta.url));
 export const bootstrap = path.join(directory, 'bootstrap.mjs');
@@ -15,7 +16,7 @@ export const fixture = path.join(directory, 'fixture.mjs');
 export class PrototypeRuntime {
   static async create({ root, binding, clientPath, drainMs = 100, launchAtCaller = true, trace = false } = {}) {
     const value = new this();
-    value.root = root ?? fs.mkdtempSync(path.join(os.tmpdir(), 'sennel-process-prototype-'));
+    value.root = root ?? createTmpDir('sennel-process-prototype-');
     value.ownsRoot = !root;
     value.binding = binding ?? { runId: crypto.randomUUID(), specId: 'prototype', attemptId: 'attempt-1', contractId: 'contract-1', generation: 1 };
     if (trace) { value.traceDirectory = path.join(value.root, 'trace'); fs.mkdirSync(value.traceDirectory); }
@@ -40,7 +41,7 @@ export class PrototypeRuntime {
       return value;
     } catch (error) {
       value.child.kill('SIGKILL'); await value.exited;
-      if (value.ownsRoot) fs.rmSync(value.root, { recursive: true, force: true });
+      if (value.ownsRoot) removeTmpDir(value.root);
       throw error;
     } finally { clearTimeout(timer); }
   }
@@ -87,7 +88,7 @@ export class PrototypeRuntime {
       }
       await this.exited;
     }
-    if (this.ownsRoot) fs.rmSync(this.root, { recursive: true, force: true });
+    if (this.ownsRoot) removeTmpDir(this.root);
   }
 }
 

@@ -99,7 +99,7 @@ test("I09 a real publication-only Review remains unfinished and cannot replace t
   scenario.assertResults([`${scenario.taskId}-review`]);
 });
 
-for (const [phase, committed] of [["before-json-rename", false], ["before-json-directory-fsync", true]]) {
+for (const [phase, committed] of [["before-json-rename", false], ["before-json-readback", true]]) {
   test(`I09 ${phase}: canonical exception ${committed ? "after commit response loss" : "before commit"} resumes without duplicated source, lineage, metrics or Task frontier`, async (t) => {
     const scenario = await new ImplPhaseRecoveryScenario(t).prepareRepair();
     const work = scenario.sealRepair(t);

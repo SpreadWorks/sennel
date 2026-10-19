@@ -1,6 +1,7 @@
-import fs from "fs";
 import path from "path";
 import { TemporaryPaths } from "./temporary-paths.js";
+import { AtomicFile } from "./atomic-file.js";
+import { MAX_IN_MEMORY_FILE_BYTES } from "./regular-file-snapshot.js";
 
 const DEFAULT_MAX_BYTES = 5 * 1024 * 1024;
 const TRUNCATED_MARKER = "[runtime-log] truncated: size limit reached\n";
@@ -196,8 +197,7 @@ export class RuntimeLogFile {
   read() {
     this.temporaryPaths.validate(path.dirname(this.filePath));
     TemporaryPaths.assertRegularFile(this.filePath);
-    if (!fs.existsSync(this.filePath)) return "";
-    return fs.readFileSync(this.filePath, "utf8");
+    return new AtomicFile(this.filePath, { maxBytes: MAX_IN_MEMORY_FILE_BYTES }).read(Buffer.alloc(0)).toString("utf8");
   }
 
   nextSequence() {
@@ -206,7 +206,7 @@ export class RuntimeLogFile {
 
   append(text) {
     this.temporaryPaths.ensureDirectory(path.dirname(this.filePath));
-    TemporaryPaths.appendFile(this.filePath, text);
+    TemporaryPaths.appendFile(this.filePath, text, { maxBytes: MAX_IN_MEMORY_FILE_BYTES });
   }
 
   blocks() {

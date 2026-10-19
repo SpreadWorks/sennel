@@ -19,7 +19,6 @@ import { attachCanonicalCommandResultPublications } from "../../../src/flow/lib/
 import { WorkerArtifactHandoffCoordinator, sealWorkerArtifactHandoff } from "../../../src/flow/lib/worker-artifact-handoff.js";
 import { seedSpecGateRepairScenario, createSpecGateRepairScenario, prepareSpecGateRepairHandoff,
   completeSpecGateRepairHandoff } from "../../support/infrastructure/spec-gate-repair-scenario.js";
-import { removeTmpDir } from "../../support/builders/tmp-dir.js";
 import { workerArtifactJson } from "../../support/infrastructure/worker-artifact.js";
 
 const replacement = "Publish a precisely validated artifact.";
@@ -157,7 +156,7 @@ describe("Spec Gate repair terminal durability", () => {
       const after = durableSnapshot(reloaded, value.specId);
       assert.equal(artifactCount(after, "spec.snapshot"), artifactCount(before, "spec.snapshot") + 1);
       assert.equal(artifactCount(after, "spec.gate.repair.audit"), artifactCount(before, "spec.gate.repair.audit") + 1);
-    } finally { removeTmpDir(value.root); }
+    } finally { value.cleanup(); }
   });
 
   it("recovers a lost response after atomic canonical publication and replays one exact terminal receipt", async () => {
@@ -202,7 +201,7 @@ describe("Spec Gate repair terminal durability", () => {
       assert.equal(JSON.parse(beforeReplay.spec).requirements[0].desc, replacement);
       assert.equal(settle(selectedInput).receipt.id, service.workerOutcome.receipt.id);
       assert.deepEqual(durableSnapshot(restored, value.specId), beforeReplay);
-    } finally { removeTmpDir(value.root); }
+    } finally { value.cleanup(); }
   });
 
   it("routes directly back to Gate only when repair restores a genuinely reviewed snapshot", async () => {
@@ -226,6 +225,6 @@ describe("Spec Gate repair terminal durability", () => {
       assert.equal(audit.reviewFacts.requiresReview, false);
       assert.equal(audit.reviewFacts.sourceReviewIdentity.digest, prior.review.identity.digest);
       assert.equal(terminalActivities(restored, value.specId).length, 1);
-    } finally { removeTmpDir(value.root); }
+    } finally { value.cleanup(); }
   });
 });

@@ -34,6 +34,9 @@ import { getStepInstructions } from "./get-step-instructions.js";
 
 import { DraftGateRepairSelection } from "../steps/draft/draft-gate-repair-selection.js";
 import { AtomicFile } from "../../lib/atomic-file.js";
+import { RealDirectoryAuthority } from "../../lib/real-directory-authority.js";
+import { appendRegularFile } from "../../lib/regular-file-io.js";
+import { isNativePathWithin } from "../../lib/portable-path.js";
 import { SpecGateRepairInputDescriptor, SpecGateRepairInputSnapshotLocator,
   SPEC_GATE_REPAIR_INPUT_NAME, specGateRepairInputFormatUnavailable } from "./spec-gate-repair-input-descriptor.js";
 import { SpecGateRepairSelectedInputIdentity } from "./spec-gate-repair-input-unavailable.js";
@@ -55,7 +58,7 @@ import {
 } from "./current-flow-state.js";
 import {
   captureRegularFile,
-  sameFileIdentity,
+  visitRegularFileChunks,
 } from "../../lib/regular-file-snapshot.js";
 import { FlowVersionRuntimeLockLocation } from "../../lib/flow-version.js";
 import { draftReviewRouteForStepId } from "./draft-review-routes.js";
@@ -318,11 +321,9 @@ function readRegularFile(filePath, label, maxBytes = MAX_PAYLOAD_BYTES, { transp
 }
 
 function isWithin(root, candidate) {
-  const relative = path.relative(path.resolve(root), path.resolve(candidate));
-  return relative !== ""
-    && relative !== ".."
-    && !relative.startsWith(`..${path.sep}`)
-    && !path.isAbsolute(relative);
+  const resolvedRoot = path.resolve(root);
+  const resolvedCandidate = path.resolve(candidate);
+  return resolvedRoot !== resolvedCandidate && isNativePathWithin(resolvedRoot, resolvedCandidate);
 }
 
 function ensureRealDirectory(directory, boundary) {
@@ -333,33 +334,7 @@ function ensureRealDirectory(directory, boundary) {
       throw new Error(`directory escapes its authority boundary: ${resolved}`);
     }
 
-    const missing = [];
-    let current = resolved;
-    while (true) {
-      let stat;
-      try {
-        stat = fs.lstatSync(current);
-      } catch (error) {
-        if (error.code !== "ENOENT") throw error;
-        if (current === stop) throw new Error(`directory authority boundary is missing: ${stop}`);
-        missing.push(current);
-        current = path.dirname(current);
-        continue;
-      }
-      if (!stat.isDirectory() || stat.isSymbolicLink() || fs.realpathSync(current) !== current) {
-        throw new Error(`directory authority must be a real directory: ${current}`);
-      }
-      if (current === stop) break;
-      current = path.dirname(current);
-    }
-
-    for (const missingDirectory of missing.reverse()) {
-      fs.mkdirSync(missingDirectory);
-      const stat = fs.lstatSync(missingDirectory);
-      if (!stat.isDirectory() || stat.isSymbolicLink() || fs.realpathSync(missingDirectory) !== missingDirectory) {
-        throw new Error(`directory authority must be a real directory: ${missingDirectory}`);
-      }
-    }
+    new RealDirectoryAuthority(stop).descendant(resolved, { create: true });
     return resolved;
   } catch (cause) {
     if (cause instanceof WorkerArtifactHandoffError) throw cause;
@@ -1247,20 +1222,24 @@ function scanTree(directory, {
       { retryable: true },
     );
   }
-  const rootStat = fs.lstatSync(root);
-  if (!rootStat.isDirectory() || rootStat.isSymbolicLink() || fs.realpathSync(root) !== root) {
-    throw new WorkerArtifactHandoffError(
+  const rootAuthority = new RealDirectoryAuthority(root, { errorFactory: (_status, _message, { cause } = {}) => (
+    new WorkerArtifactHandoffError(
       "invalid",
       "FLOW_ARTIFACT_HANDOFF_INVALID",
       `${label} must be a regular real directory: ${root}`,
-    );
-  }
+      { cause },
+    )
+  ) });
+  rootAuthority.assertStable();
   const files = [];
-  function walk(directoryPath) {
-    for (const entry of fs.readdirSync(directoryPath, { withFileTypes: true })) {
+  const invalidDirectory = (filePath, cause) => new WorkerArtifactHandoffError(
+    "invalid", "FLOW_ARTIFACT_HANDOFF_INVALID", `${label} directory is not real: ${filePath}`, { cause },
+  );
+  function walk(authority) {
+    const directoryPath = authority.directory;
+    for (const entry of authority.entries({ withFileTypes: true })) {
       const filePath = path.join(directoryPath, entry.name);
-      const stat = fs.lstatSync(filePath);
-      if (entry.isSymbolicLink() || stat.isSymbolicLink()) {
+      if (entry.isSymbolicLink()) {
         throw new WorkerArtifactHandoffError(
           "invalid",
           "FLOW_ARTIFACT_HANDOFF_INVALID",
@@ -1268,8 +1247,10 @@ function scanTree(directory, {
         );
       }
       if (entry.isDirectory()) {
-        if (fs.realpathSync(filePath) !== filePath) {
-          throw new WorkerArtifactHandoffError("invalid", "FLOW_ARTIFACT_HANDOFF_INVALID", `${label} directory is not real: ${filePath}`);
+        let childAuthority;
+        try { childAuthority = authority.descendant(filePath); }
+        catch (cause) {
+          throw invalidDirectory(filePath, cause);
         }
         const relativeDirectory = path.relative(root, filePath).split(path.sep).join("/");
         if (relativeDirectory === COMMAND_OWNED_SPEC_TEST_DIRECTORY) {
@@ -1283,8 +1264,16 @@ function scanTree(directory, {
         if (directories) {
           directories.push(relativeDirectory);
         }
-        walk(filePath);
+        try { walk(childAuthority); }
+        catch (cause) {
+          if (cause.name !== "RealDirectoryAuthorityError") throw cause;
+          throw invalidDirectory(filePath, cause);
+        }
         continue;
+      }
+      const stat = fs.lstatSync(filePath);
+      if (stat.isSymbolicLink()) {
+        throw new WorkerArtifactHandoffError("invalid", "FLOW_ARTIFACT_HANDOFF_INVALID", `${label} contains a symlink: ${filePath}`);
       }
       if (!entry.isFile() || !stat.isFile()) {
         throw new WorkerArtifactHandoffError("invalid", "FLOW_ARTIFACT_HANDOFF_INVALID", `${label} contains a non-file entry: ${filePath}`);
@@ -1303,8 +1292,10 @@ function scanTree(directory, {
         throw new WorkerArtifactHandoffError("invalid", "FLOW_ARTIFACT_HANDOFF_INVALID", `${label} exceeds ${MAX_PAYLOAD_FILES} files`);
       }
     }
+    authority.assertStable();
   }
-  walk(root);
+  walk(rootAuthority);
+  rootAuthority.assertStable();
   return files.sort((left, right) => left.relativePath.localeCompare(right.relativePath));
 }
 
@@ -2036,45 +2027,18 @@ function gitVisibleAuthorityEntry(entry, workingTreeMode = null) {
 }
 
 function digestAuthorityFile(filePath, visible, relativePath, budget) {
-  let descriptor = null;
   try {
-    descriptor = fs.openSync(filePath, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0));
-    const opened = fs.fstatSync(descriptor);
-    if (!opened.isFile() || !sameFileIdentity(visible, opened)) {
-      throw new Error("file identity changed while opening");
-    }
-    if (opened.size > MAX_AUTHORITY_FILE_BYTES) {
-      throw new Error(`file exceeds ${MAX_AUTHORITY_FILE_BYTES} bytes`);
-    }
-    const hash = crypto.createHash("sha256");
-    const chunk = Buffer.allocUnsafe(64 * 1024);
-    let fileBytes = 0;
-    while (true) {
-      const bytesRead = fs.readSync(descriptor, chunk, 0, chunk.length, null);
-      if (bytesRead === 0) break;
-      fileBytes += bytesRead;
-      if (fileBytes > MAX_AUTHORITY_FILE_BYTES) {
-        throw new Error(`file exceeds ${MAX_AUTHORITY_FILE_BYTES} bytes while reading`);
-      }
-      budget.bytes += bytesRead;
-      if (budget.bytes > MAX_AUTHORITY_TOTAL_FILE_BYTES) {
-        throw new Error(`dirty content exceeds ${MAX_AUTHORITY_TOTAL_FILE_BYTES} bytes`);
-      }
-      hash.update(chunk.subarray(0, bytesRead));
-    }
-    const completed = fs.fstatSync(descriptor);
-    if (!sameFileIdentity(opened, completed) || completed.size !== fileBytes) {
-      throw new Error("file identity changed while reading");
-    }
-    return hash.digest("hex");
+    return visitRegularFileChunks(filePath, { label: `source authority ${relativePath}`, maxBytes: MAX_AUTHORITY_FILE_BYTES,
+      expectedIdentity: visible, visit(chunk) {
+        budget.bytes += chunk.length;
+        if (budget.bytes > MAX_AUTHORITY_TOTAL_FILE_BYTES) throw new Error(`dirty content exceeds ${MAX_AUTHORITY_TOTAL_FILE_BYTES} bytes`);
+      } }).digest;
   } catch (cause) {
     throw authoritySnapshotError(
       `worker artifact authority could not fingerprint ${relativePath}: ${cause.message}`,
       cause,
       { path: relativePath },
     );
-  } finally {
-    if (descriptor != null) fs.closeSync(descriptor);
   }
 }
 
@@ -2094,7 +2058,7 @@ function authorityFileEntry(root, relativePath, budget) {
   }
   let stat;
   try {
-    stat = fs.lstatSync(filePath);
+    stat = fs.lstatSync(filePath, { bigint: true });
   } catch (cause) {
     if (cause.code === "ENOENT") {
       return new WorkerArtifactRepositoryEntry({
@@ -2109,7 +2073,7 @@ function authorityFileEntry(root, relativePath, budget) {
       cause,
     );
   }
-  const mode = stat.mode & 0o7777;
+  const mode = Number(stat.mode & 0o7777n);
   if (stat.isSymbolicLink()) {
     return new WorkerArtifactRepositoryEntry({
       path: normalized,
@@ -2204,30 +2168,25 @@ function gitAuthoritySnapshot(root, { ignoredDirectories = [], runtimeLocks = []
 
 function filesystemAuthoritySnapshot(root, { ignoredDirectories = [], runtimeLocks = [] } = {}) {
   const relativePaths = [];
-  const directories = [path.resolve(root)];
+  const rootAuthority = new RealDirectoryAuthority(root);
+  const directories = [rootAuthority];
   while (directories.length > 0) {
-    const directoryPath = directories.pop();
-    const handle = fs.opendirSync(directoryPath);
-    try {
-      let entry;
-      while ((entry = handle.readSync()) != null) {
-        const absolutePath = path.join(directoryPath, entry.name);
-        const relativePath = path.relative(root, absolutePath).split(path.sep).join("/");
-        if (isIgnoredAuthorityPath(root, relativePath, ignoredDirectories, runtimeLocks)) continue;
-        relativePaths.push(relativePath);
-        if (relativePaths.length > MAX_AUTHORITY_DIRTY_PATHS) {
-          throw authoritySnapshotError(
-            `non-Git worker artifact authority exceeds ${MAX_AUTHORITY_DIRTY_PATHS} paths`,
-          );
-        }
-        if (entry.isDirectory()) directories.push(absolutePath);
+    const directory = directories.pop();
+    directory.forEachEntry((entry) => {
+      const absolutePath = path.join(directory.directory, entry.name);
+      const relativePath = path.relative(root, absolutePath).split(path.sep).join("/");
+      if (isIgnoredAuthorityPath(root, relativePath, ignoredDirectories, runtimeLocks)) return;
+      relativePaths.push(relativePath);
+      if (relativePaths.length > MAX_AUTHORITY_DIRTY_PATHS) {
+        throw authoritySnapshotError(
+          `non-Git worker artifact authority exceeds ${MAX_AUTHORITY_DIRTY_PATHS} paths`,
+        );
       }
-    } finally {
-      handle.closeSync();
-    }
+      if (entry.isDirectory()) directories.push(directory.descendant(absolutePath));
+    });
   }
   const budget = { bytes: 0 };
-  return {
+  const result = {
     mode: "filesystem",
     head: null,
     indexDigest: null,
@@ -2235,6 +2194,8 @@ function filesystemAuthoritySnapshot(root, { ignoredDirectories = [], runtimeLoc
       .sort((left, right) => left.localeCompare(right))
       .map((relativePath) => authorityFileEntry(root, relativePath, budget)),
   };
+  rootAuthority.assertStable();
+  return result;
 }
 
 export class WorkerArtifactRepositoryMutationSnapshot {
@@ -2727,7 +2688,7 @@ export class SourceWorkerCanonicalObservationAdvance {
     return new SourceWorkerCanonicalObservationAdvance({
       activityPrefix,
       catalogHash: view.catalog.hash,
-      activityBytes: fs.readFileSync(location.activitiesFile),
+      activityBytes: captureRegularFile(location.activitiesFile, { label: "worker Activity journal", maxBytes: MAX_AUTHORITY_TOTAL_FILE_BYTES, requireSingleLink: true }).bytes,
       mutablePaths: [
         path.relative(location.directory, location.flowStateFile),
         path.relative(location.directory, location.activitiesFile),
@@ -3121,7 +3082,7 @@ export class SourceWorkerCanonicalObservationAdvance {
       ignoredDirectories: canonicalSnapshot.ignoredDirectories,
       runtimeLocks,
     });
-    const activityBytes = fs.readFileSync(view.location.activitiesFile);
+    const activityBytes = captureRegularFile(view.location.activitiesFile, { label: "worker Activity journal", maxBytes: MAX_AUTHORITY_TOTAL_FILE_BYTES, requireSingleLink: true }).bytes;
     const addedActivities = assertCanonicalObservationAdvance({
       observation: this,
       current,
@@ -3782,7 +3743,7 @@ class WorkerArtifactSourceRollbackOperation {
       fs.symlinkSync(this.target, this.absolute);
       return;
     }
-    fs.writeFileSync(this.absolute, this.#bytes, { mode: this.mode });
+    new AtomicFile(this.absolute).write(this.#bytes, { exclusive: true });
     fs.chmodSync(this.absolute, this.mode);
   }
 }
@@ -3798,7 +3759,8 @@ function removeSourceRollbackPath(absolute) {
   if (stat.isDirectory() && !stat.isSymbolicLink()) {
     throw new Error(`source rollback refuses to replace directory ${absolute}`);
   }
-  fs.unlinkSync(absolute);
+  if (stat.isFile()) new AtomicFile(absolute).remove();
+  else fs.unlinkSync(absolute); // Source symlink/special-entry semantics belong to its domain codec.
 }
 
 function removeEmptySourceRollbackDirectory(absolute) {
@@ -3812,7 +3774,7 @@ function removeEmptySourceRollbackDirectory(absolute) {
   if (!stat.isDirectory() || stat.isSymbolicLink()) {
     throw new Error(`source rollback expected a directory at ${absolute}`);
   }
-  fs.rmdirSync(absolute);
+  new RealDirectoryAuthority(absolute).remove();
 }
 
 function indexedSourceRollbackEntry(root, relativePath) {
@@ -6495,31 +6457,7 @@ function appendGeneratedAcceptanceTruncationLog(request, truncations) {
 
 function appendPrivateJsonLines(filePath, boundary, content) {
   ensureRealDirectory(path.dirname(filePath), boundary);
-  let visible = null;
-  try {
-    visible = fs.lstatSync(filePath);
-  } catch (cause) {
-    if (cause.code !== "ENOENT") throw cause;
-  }
-  if (visible && (!visible.isFile() || visible.isSymbolicLink() || fs.realpathSync(filePath) !== filePath)) {
-    throw new Error(`acceptance truncation log must be a regular real file: ${filePath}`);
-  }
-  const flags = fs.constants.O_WRONLY
-    | fs.constants.O_APPEND
-    | fs.constants.O_CREAT
-    | (fs.constants.O_NOFOLLOW || 0);
-  const descriptor = fs.openSync(filePath, flags, 0o600);
-  try {
-    const opened = fs.fstatSync(descriptor);
-    if (!opened.isFile() || (visible && !sameFileIdentity(visible, opened)) || fs.realpathSync(filePath) !== filePath) {
-      throw new Error(`acceptance truncation log identity changed while opening: ${filePath}`);
-    }
-    fs.fchmodSync(descriptor, 0o600);
-    fs.writeFileSync(descriptor, content, "utf8");
-    fs.fsyncSync(descriptor);
-  } finally {
-    fs.closeSync(descriptor);
-  }
+  appendRegularFile(filePath, content, { creationMode: 0o600, permissionMode: 0o600 });
 }
 
 function generatedAcceptanceTruncationLogPath(request) {
@@ -6756,18 +6694,20 @@ function requestFromStored(filePath, { mainRoot: trustedMainRoot = null, flowMan
         runId, specId, stepId: document.stepId, attempt: state.attempt,
       } });
       if (execution.lifecycle === null) {
-        const entries = fs.readdirSync(actionDirectory, { withFileTypes: true });
+        const actionAuthority = new RealDirectoryAuthority(actionDirectory);
+        const entries = actionAuthority.entries({ withFileTypes: true });
         if (entries.length === 4 && entries.every((entry) => (
           (["request.json", "action.json"].includes(entry.name) && entry.isFile())
           || (["input", "payload"].includes(entry.name) && entry.isDirectory())
-        )) && fs.readdirSync(payloadDirectory).length === 0
-          && fs.readdirSync(path.join(actionDirectory, "input")).every((name) => name === SPEC_GATE_REPAIR_INPUT_NAME)) {
+        )) && actionAuthority.descendant(payloadDirectory).entries().length === 0
+          && actionAuthority.descendant(path.join(actionDirectory, "input")).entries().every((name) => name === SPEC_GATE_REPAIR_INPUT_NAME)) {
           // A failed first checkpoint publication leaves no canonical execution
           // or provider claim. Decode its exact delivery with the same boundary
           // checks, solely to discard the unused capability and let the producer
           // regenerate it. Any saved lifecycle or output keeps canonical decoding.
           inputFlowManager = null;
         }
+        actionAuthority.assertStable();
       }
     }
   }
@@ -8555,19 +8495,13 @@ function pruneEmptyHandoffAncestors(handoffRoot, startDirectory) {
     if (!isWithin(sharedHandoffRoot, current)) {
       throw new Error(`handoff cleanup ancestor escapes its authority: ${current}`);
     }
-    let stat;
-    try {
-      stat = fs.lstatSync(current);
-    } catch (cause) {
-      if (cause.code !== "ENOENT") throw cause;
+    const authority = new RealDirectoryAuthority(current);
+    if (!authority.exists()) {
       current = path.dirname(current);
       continue;
     }
-    if (!stat.isDirectory() || stat.isSymbolicLink() || fs.realpathSync(current) !== current) {
-      throw new Error(`handoff cleanup ancestor is not a real directory: ${current}`);
-    }
-    if (fs.readdirSync(current).length > 0) break;
-    fs.rmdirSync(current);
+    if (authority.entries().length > 0) break;
+    authority.remove();
     current = path.dirname(current);
   }
 }
@@ -8591,26 +8525,19 @@ function cleanupCompletedHandoff(handoffRoot, receiptValue, faultInjector = () =
     dispatchInvocationId: receipt.dispatchInvocationId,
   };
   function realDirectory(candidate) {
-    let stat;
-    try {
-      stat = fs.lstatSync(candidate);
-    } catch (cause) {
-      if (cause.code === "ENOENT") return false;
-      throw cause;
-    }
-    if (!stat.isDirectory() || stat.isSymbolicLink() || fs.realpathSync(candidate) !== candidate) {
-      throw new Error(`completed handoff cleanup target is not a real directory: ${candidate}`);
-    }
-    return true;
+    const authority = new RealDirectoryAuthority(candidate);
+    return authority.exists() ? authority : null;
   }
   try {
     let cleaned = false;
-    if (realDirectory(consumedDirectory)) {
-      fs.rmSync(consumedDirectory, { recursive: true });
+    const consumedAuthority = realDirectory(consumedDirectory);
+    if (consumedAuthority !== null) {
+      consumedAuthority.remove({ recursive: true });
       pruneEmptyHandoffAncestors(handoffRoot, path.dirname(consumedDirectory));
       cleaned = true;
     }
-    if (!realDirectory(directory)) {
+    const handoffAuthority = realDirectory(directory);
+    if (handoffAuthority === null) {
       pruneEmptyHandoffAncestors(handoffRoot, path.dirname(directory));
       return cleaned;
     }
@@ -8631,9 +8558,9 @@ function cleanupCompletedHandoff(handoffRoot, receiptValue, faultInjector = () =
       || stored.requestDigest !== receipt.requestDigest
     )) throw new Error("completed handoff directory does not match its canonical receipt");
     faultInjector({ phase: "before-worker-handoff-cleanup-rename", stepId: receipt.stepId });
-    fs.renameSync(directory, consumedDirectory);
+    const movedAuthority = handoffAuthority.moveTo(consumedDirectory);
     faultInjector({ phase: "after-worker-handoff-cleanup-rename", stepId: receipt.stepId });
-    fs.rmSync(consumedDirectory, { recursive: true });
+    movedAuthority.remove({ recursive: true });
     pruneEmptyHandoffAncestors(handoffRoot, path.dirname(consumedDirectory));
     faultInjector({ phase: "after-worker-handoff-cleanup", stepId: receipt.stepId });
     return true;
@@ -9149,37 +9076,40 @@ function executionHandoffRuntimeEntries(handoffRoot) {
     });
   }
   const root = path.resolve(handoffRoot);
-  const rootStat = fs.lstatSync(root);
-  if (!rootStat.isDirectory() || rootStat.isSymbolicLink() || fs.realpathSync(root) !== root) {
-    throw new WorkerArtifactHandoffError(
+  const rootAuthority = new RealDirectoryAuthority(root, { errorFactory: (_status, _message, { cause } = {}) => (
+    new WorkerArtifactHandoffError(
       "recovery-required",
       "FLOW_ARTIFACT_HANDOFF_RECOVERY_REQUIRED",
       "execution worker handoff runtime authority is invalid",
-      { data: { handoffRoot: root } },
-    );
-  }
+      { cause, data: { handoffRoot: root } },
+    )
+  ) });
+  rootAuthority.assertStable();
   const requestPaths = [];
   const consumedDirectories = [];
   const orphanedDirectories = [];
-  const descend = (directory, remaining) => {
-    const stat = fs.lstatSync(directory);
-    if (!stat.isDirectory() || stat.isSymbolicLink() || fs.realpathSync(directory) !== directory) {
-      throw new WorkerArtifactHandoffError(
-        "recovery-required",
-        "FLOW_ARTIFACT_HANDOFF_RECOVERY_REQUIRED",
-        "execution worker handoff runtime contains an invalid directory",
-        { data: { handoffDirectory: directory } },
-      );
-    }
+  const invalidDirectory = (directory, cause) => new WorkerArtifactHandoffError(
+    "recovery-required", "FLOW_ARTIFACT_HANDOFF_RECOVERY_REQUIRED",
+    "execution worker handoff runtime contains an invalid directory",
+    { cause, data: { handoffDirectory: directory } },
+  );
+  const descend = (authority, remaining) => {
+    const directory = authority.directory;
     if (remaining === 0) {
       const requestPath = path.join(directory, "request.json");
       if (fs.existsSync(requestPath)) requestPaths.push(requestPath);
       else if (/^[a-f0-9]{64}$/.test(path.basename(directory))) orphanedDirectories.push(directory);
+      authority.assertStable();
       return;
     }
-    for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+    for (const entry of authority.entries({ withFileTypes: true })) {
       if (!entry.isDirectory()) continue;
       const candidate = path.join(directory, entry.name);
+      let childAuthority;
+      try { childAuthority = authority.descendant(candidate); }
+      catch (cause) {
+        throw invalidDirectory(candidate, cause);
+      }
       // A committed handoff is renamed before its transient runtime work unit
       // is removed.  It has no request path at its canonical identity any
       // longer, so attempting to restore it as a pending request would turn a
@@ -9190,11 +9120,17 @@ function executionHandoffRuntimeEntries(handoffRoot) {
         consumedDirectories.push(candidate);
         continue;
       }
-      descend(candidate, remaining - 1);
+      try { descend(childAuthority, remaining - 1); }
+      catch (cause) {
+        if (cause.name !== "RealDirectoryAuthorityError") throw cause;
+        throw invalidDirectory(candidate, cause);
+      }
     }
+    authority.assertStable();
   };
   // <spec>/<run>/<invocation>/<action>/request.json
-  descend(root, 3);
+  descend(rootAuthority, 3);
+  rootAuthority.assertStable();
   return Object.freeze({
     requestPaths: Object.freeze(requestPaths.sort()),
     consumedDirectories: Object.freeze(consumedDirectories.sort()),
@@ -9206,17 +9142,9 @@ function cleanupTransientExecutionHandoffDirectory(handoffRoot, directory) {
   if (!isWithin(handoffRoot, directory)) {
     throw new Error(`execution worker handoff cleanup target escapes its Spec authority: ${directory}`);
   }
-  let stat;
-  try {
-    stat = fs.lstatSync(directory);
-  } catch (cause) {
-    if (cause.code === "ENOENT") return false;
-    throw cause;
-  }
-  if (!stat.isDirectory() || stat.isSymbolicLink() || fs.realpathSync(directory) !== directory) {
-    throw new Error(`execution worker handoff cleanup target is not a real directory: ${directory}`);
-  }
-  fs.rmSync(directory, { recursive: true });
+  const authority = new RealDirectoryAuthority(directory);
+  if (!authority.exists()) return false;
+  authority.remove({ recursive: true });
   pruneEmptyHandoffAncestors(handoffRoot, path.dirname(directory));
   return true;
 }

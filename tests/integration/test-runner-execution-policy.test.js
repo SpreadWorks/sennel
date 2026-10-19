@@ -104,6 +104,8 @@ test("runner child execution strips inherited Node test context and preserves te
     assert.equal(await executeFiles(["tests/unit/a.test.js"], { spawnProcess, write: () => {}, root: "/repo" }), 0);
     assert.equal(childEnvironment.NODE_TEST_CONTEXT, undefined);
     assert.equal(childEnvironment.TMPDIR, process.env.TMPDIR);
+    assert.equal(childEnvironment.TMP, process.env.TMP);
+    assert.equal(childEnvironment.TEMP, process.env.TEMP);
     assert.equal(childEnvironment.SENNEL_TEST_TEMP_ROOT, process.env.SENNEL_TEST_TEMP_ROOT);
     assert.equal(process.env.NODE_TEST_CONTEXT, "child-v8");
   } finally {

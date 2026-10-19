@@ -1,6 +1,7 @@
 import path from "node:path";
 import crypto from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
+import { LogicalRelativePath } from "./portable-path.js";
 import { ArtifactAuthority, ArtifactAuthoritySlot, ArtifactCardinality } from "./artifact-authority.js";
 import { FLOW_ARTIFACT_AUTHORITY_MATRIX } from "../flow/lib/flow-artifact-authority.js";
 import { CanonicalSpecReview } from "../flow/lib/spec-review-artifacts.js";
@@ -35,13 +36,15 @@ function identifier(value, field) {
 }
 
 function safeRelativePath(value, field) {
-  const result = requiredText(value, field);
-  if (result.includes("\\") || path.posix.isAbsolute(result) || path.posix.normalize(result) !== result) {
-    throw new Error(`${field} must be a normalized POSIX relative path`);
-  }
-  if (result.split("/").some((segment) => segment === "" || segment === "." || segment === "..")) {
-    throw new Error(`${field} must not contain empty, current, or parent segments`);
-  }
+  return new LogicalRelativePath(value, field).toString();
+}
+
+function safePathTemplate(value, field) {
+  const result = value;
+  // Parameters belong to the artifact format, never to native file names.
+  // Validate literal structure here and the actual name after substitution.
+  if (typeof result !== "string") throw new Error(`${field} must be a string`);
+  new LogicalRelativePath(result.replace(/:\{[A-Za-z0-9][A-Za-z0-9._-]*\}/g, "parameter"), field);
   return result;
 }
 
@@ -447,7 +450,7 @@ export class FlowArtifactCanonicalPath {
   #matchExpression;
 
   constructor(value) {
-    this.value = safeRelativePath(value, "artifact canonical path");
+    this.value = safePathTemplate(value, "artifact canonical path");
     this.parameters = Object.freeze([...this.value.matchAll(/:\{([A-Za-z0-9][A-Za-z0-9._-]*)\}/g)].map((match) => match[1]));
     if (new Set(this.parameters).size !== this.parameters.length) throw new Error("artifact canonical path must not repeat a parameter");
     this.#matchExpression = new RegExp(`^${this.#matchSource()}$`);
@@ -768,7 +771,7 @@ export class FlowArtifactStepOwner {
   constructor({ publicationStep, directoryPath } = {}, mint = null) {
     if (mint !== STEP_OWNER_MINT) throw new Error("Flow artifact step owners must be created by a typed owner factory");
     this.publicationStep = publicationStep === null ? null : authorityActor(publicationStep, "artifact owner publication step");
-    this.directoryPath = new FlowArtifactCanonicalPath(safeRelativePath(directoryPath, "artifact step owner directory"));
+    this.directoryPath = new FlowArtifactCanonicalPath(safePathTemplate(directoryPath, "artifact step owner directory"));
     Object.freeze(this);
   }
   assertOwns(canonicalPath) {
@@ -1170,7 +1173,7 @@ export class FlowArtifactActivityEvidenceOwner {
     }
     this.nodeId = requiredText(nodeId, "activity evidence nodeId");
     this.publicationStep = authorityActor(publicationStep, "activity evidence publication step");
-    this.directoryPath = new FlowArtifactCanonicalPath(safeRelativePath(directoryPath, "activity evidence owner directory"));
+    this.directoryPath = new FlowArtifactCanonicalPath(safePathTemplate(directoryPath, "activity evidence owner directory"));
     if (typeof historical !== "boolean") throw new Error("activity evidence owner historical flag is invalid");
     this.historical = historical;
     if (this.historical) {

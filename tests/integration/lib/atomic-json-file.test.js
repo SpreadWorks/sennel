@@ -7,30 +7,20 @@ import { createTmpDir, removeTmpDir } from "../../support/builders/tmp-dir.js";
 import { AtomicJsonFile } from "../../../src/lib/atomic-json-file.js";
 
 describe("AtomicJsonFile", () => {
-  it("reports a committed durability failure after rename without deleting the committed file", () => {
+  it("reports an unconfirmed publication after rename without deleting the committed file", () => {
     const root = createTmpDir("atomic-json-durability-");
     const file = path.join(root, "state.json");
     fs.writeFileSync(file, '{"value":"before"}\n');
-    const originalFsync = fs.fsyncSync;
-    let calls = 0;
-    fs.fsyncSync = (descriptor) => {
-      calls += 1;
-      if (calls === 2) {
-        const error = new Error("directory fsync failed");
-        error.code = "EIO";
-        throw error;
-      }
-      return originalFsync(descriptor);
-    };
     try {
       assert.throws(
-        () => new AtomicJsonFile(file).write({ value: "after" }),
-        (error) => error.code === "ATOMIC_JSON_DURABILITY_UNCERTAIN" && error.committed === true,
+        () => new AtomicJsonFile(file, { faultInjector({ phase }) {
+          if (phase === "before-json-readback") throw new Error("readback failed");
+        } }).write({ value: "after" }),
+        (error) => error.code === "ATOMIC_JSON_PUBLICATION_UNCERTAIN" && error.committed === true,
       );
       assert.deepEqual(JSON.parse(fs.readFileSync(file, "utf8")), { value: "after" });
       assert.deepEqual(fs.readdirSync(root), ["state.json"]);
     } finally {
-      fs.fsyncSync = originalFsync;
       removeTmpDir(root);
     }
   });

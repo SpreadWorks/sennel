@@ -1,0 +1,10 @@
+{
+  "producerCommit": "04f5fa481504aa45fd235534ffb80bbd6ee69d96",
+  "producerPath": "src/lib/flow-version.js",
+  "producerSha256": "9f10cc35d3323be94f542be47cc23c2c43699acc6ed80fb660775078afb34638",
+  "producer": "FlowArtifactCatalogStore.publish / #beginTransaction",
+  "journalRevision": 1,
+  "imageRevision": 1,
+  "fixtureSha256": "49bdd70fc3210357984e40c6fc81eb575f8f04c1ff4e609a4e4ef26222fc4e1e",
+  "method": "Copied the persisted journal inside the production publish callback after #beginTransaction, before mutating artifacts; the owning Store rolled back and closed normally."
+}

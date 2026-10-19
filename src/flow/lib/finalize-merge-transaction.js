@@ -435,7 +435,7 @@ export class FinalizeMergeTransaction {
             process.stderr.write(`[sennel] warning: unable to remove isolated merge worktree ${temporaryRoot}: ${gitFailureText(removed)}\n`);
           }
         } else {
-          fs.rmSync(temporaryRoot, { recursive: true, force: true });
+          this.temporaryPaths.cleanup(temporaryRoot);
         }
       }
     } finally {

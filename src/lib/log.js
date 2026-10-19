@@ -25,13 +25,15 @@
 import crypto from "crypto";
 import { TemporaryPaths } from "./temporary-paths.js";
 import path from "path";
+import { fileURLToPath } from "node:url";
 
 import { maskSensitive } from "./log-masking.js";
 import { FlowAttributionPolicy } from "./flow-attribution.js";
 import { PRODUCT } from "./product.js";
+import { MAX_IN_MEMORY_FILE_BYTES } from "./regular-file-snapshot.js";
 
 /** Absolute path of this module file, used to exclude own frames in extractCaller. */
-const SELF_FILE = new URL(import.meta.url).pathname;
+const SELF_FILE = fileURLToPath(import.meta.url);
 
 // ─── Internal helpers ──────────────────────────────────────────────────────
 
@@ -74,7 +76,7 @@ function extractCaller() {
     let file = m[1];
     if (file.startsWith("file://")) {
       try {
-        file = new URL(file).pathname;
+        file = fileURLToPath(file);
       } catch (err) {
         process.stderr.write(`[sennel] extractCaller: URL parse failed for ${file}: ${err.message}\n`);
       }
@@ -89,7 +91,7 @@ function extractCaller() {
 async function appendJsonlMasked(file, obj, trustedRoots) {
   try {
     const masked = maskSensitive(obj, { trustedRoots });
-    TemporaryPaths.appendFile(file, JSON.stringify(masked) + "\n");
+    TemporaryPaths.appendFile(file, JSON.stringify(masked) + "\n", { maxBytes: MAX_IN_MEMORY_FILE_BYTES });
   } catch (err) {
     if (TemporaryPaths.isBoundaryError(err)) throw err;
     process.stderr.write(`[sennel] log write failed: ${err.message}\n`);
@@ -101,7 +103,7 @@ async function writePromptFileMasked(promptDir, requestId, payload, trustedRoots
   const file = path.join(promptDir, `${requestId}.json`);
   try {
     const masked = maskSensitive(payload, { trustedRoots });
-    TemporaryPaths.writeFile(file, JSON.stringify(masked, null, 2) + "\n");
+    TemporaryPaths.writeFile(file, JSON.stringify(masked, null, 2) + "\n", { maxBytes: MAX_IN_MEMORY_FILE_BYTES });
     return file;
   } catch (err) {
     if (TemporaryPaths.isBoundaryError(err)) throw err;

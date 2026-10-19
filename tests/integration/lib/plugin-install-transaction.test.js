@@ -108,13 +108,13 @@ describe("plugin install transaction", () => {
     assert.throws(
       () => installPlugin(root, "sample-plugin", {
         faultInjector(event) {
-          if (event.phase === "before-json-directory-fsync") {
-            throw new Error("config durability fault");
+          if (event.phase === "before-json-readback") {
+            throw new Error("config publication readback fault");
           }
         },
       }),
-      (error) => error.code === "ATOMIC_JSON_DURABILITY_UNCERTAIN"
-        && /config durability fault/.test(error.cause?.message),
+      (error) => error.code === "ATOMIC_JSON_PUBLICATION_UNCERTAIN"
+        && /config publication readback fault/.test(error.cause?.message),
     );
 
     assert.deepEqual(fs.readFileSync(fixture.publicConfig), publicBefore);

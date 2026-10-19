@@ -10,7 +10,7 @@
 import fs from "fs";
 import path from "path";
 import { parseArgs } from "../../lib/cli.js";
-import { managedOutputDir, resolveConcurrency, resolvePromptCharacterLimit } from "../../lib/config.js";
+import { managedOutputDir, resolveConcurrency, resolvePromptCharacterLimit, loadJsonFile } from "../../lib/config.js";
 import { container } from "../../lib/container.js";
 import { translate } from "../../lib/i18n.js";
 import { createResolver } from "../lib/resolver-factory.js";
@@ -23,6 +23,7 @@ import { Command } from "../../lib/command.js";
 import { runDocumentationAiCommand, rethrowDocumentationAiStop } from "../lib/documentation-ai-execution.js";
 import { synthesizeProjectInstructions } from "../lib/documentation-agents-batching.js";
 import { AtomicFile } from "../../lib/atomic-file.js";
+import { captureRegularFile, MAX_IN_MEMORY_FILE_BYTES } from "../../lib/regular-file-snapshot.js";
 
 const logger = createLogger("agents");
 
@@ -146,7 +147,7 @@ async function executeAgents(ctx) {
   const resolver = await createResolver(resolvedType, root, { configChapters: config.chapters });
   const resolveFn = (preset, source, method, a, labels, params) => resolver.resolve(preset, source, method, analysis, labels, params);
 
-  let content = newFileTemplate ?? fs.readFileSync(agentsPath, "utf8");
+  let content = newFileTemplate ?? captureRegularFile(agentsPath, { label: "agent instructions", maxBytes: MAX_IN_MEMORY_FILE_BYTES }).text();
   const { text: resolved, specDrivenDevelopmentContent, projectContent } = resolveAgentsDirectives(content, resolveFn);
   content = resolved;
 
@@ -165,7 +166,7 @@ async function executeAgents(ctx) {
       let scripts = "";
       const pkgPath = path.join(srcRoot, "package.json");
       if (fs.existsSync(pkgPath)) {
-        try { scripts = JSON.stringify(JSON.parse(fs.readFileSync(pkgPath, "utf8")).scripts || {}, null, 2); } catch (_) { /* skip */ }
+        try { scripts = JSON.stringify(loadJsonFile(pkgPath).scripts || {}, null, 2); } catch (_) { /* skip */ }
       }
       const outputRules = t.raw("prompts:agents.outputRules") || [];
       const refined = await synthesizeProjectInstructions({

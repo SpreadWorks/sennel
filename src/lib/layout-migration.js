@@ -11,7 +11,9 @@ import { isUtf8 } from "node:buffer";
 import fs from "node:fs";
 import path from "node:path";
 
-import { AtomicFile, fsyncDirectory } from "./atomic-file.js";
+import { captureRegularFile, MAX_IN_MEMORY_FILE_BYTES } from "./regular-file-snapshot.js";
+import { AtomicFile } from "./atomic-file.js";
+import { RealDirectoryAuthority, sameFileIdentity } from "./real-directory-authority.js";
 import { loadConfigFromManagedDirectory } from "./config.js";
 import { LEGACY_MANAGED_DIRECTORY_NAMES } from "./legacy-managed-directory-migration.js";
 import { migrateLegacyManagedGitattributes, migrateLegacyManagedGitignore } from "./legacy-managed-metadata-migration.js";
@@ -19,6 +21,9 @@ import { validatePresetChainFromManagedDirectory } from "./presets.js";
 import { ProcessIdentity, ProcessIdentitySource } from "./process-identity.js";
 import { PRODUCT } from "./product.js";
 import { TemporaryPaths } from "./temporary-paths.js";
+import { LogicalPathSet, isNativePathWithin } from "./portable-path.js";
+
+const MIGRATION_READ_OPTIONS = Object.freeze({ label: "migration regular file", maxBytes: MAX_IN_MEMORY_FILE_BYTES });
 
 // This is intentionally the complete boundary for retired managed roots.
 // Nothing outside the explicit layout revision may interpret these names.
@@ -45,7 +50,7 @@ const MANAGED_TEMPLATE_FIELD_REPLACEMENTS = Object.freeze(new Map([
 
 function relativePath(root, filePath) {
   const relative = path.relative(root, filePath);
-  if (relative === "" || relative.startsWith("..") || path.isAbsolute(relative)) {
+  if (relative === "" || !isNativePathWithin(path.resolve(root), path.resolve(filePath))) {
     throw new Error(`migration path escapes the project root: ${filePath}`);
   }
   return relative.split(path.sep).join("/");
@@ -61,8 +66,10 @@ function lstatOrNull(filePath) {
 }
 
 function assertRealDirectory(directory, label) {
+  try { new RealDirectoryAuthority(directory).assertStable(); }
+  catch (cause) { throw new Error(`${label} must be a real directory: ${directory}`, { cause }); }
   const stat = lstatOrNull(directory);
-  if (!stat || !stat.isDirectory() || stat.isSymbolicLink() || fs.realpathSync(directory) !== path.resolve(directory)) {
+  if (!stat) {
     throw new Error(`${label} must be a real directory: ${directory}`);
   }
   return stat;
@@ -83,12 +90,11 @@ function directoryIdentity(directory, label) {
 
 function sameDirectoryIdentity(directory, identity, label) {
   const stat = assertRealDirectory(directory, label);
-  return stat.dev === identity.dev && stat.ino === identity.ino;
+  return sameFileIdentity(stat, identity);
 }
 
 function isWithinDirectory(directory, candidate) {
-  const relative = path.relative(directory, candidate);
-  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+  return isNativePathWithin(path.resolve(directory), path.resolve(candidate));
 }
 
 class ManagedOpenHandle {
@@ -441,6 +447,17 @@ class SourceTreeSnapshot {
   #targetPaths;
 
   constructor({ rootIdentity, rootMode, entries }) {
+    new LogicalPathSet(entries.map((entry) => entry.targetPath), { allowDirectoryPrefixes: true });
+    const targetKinds = new Map(entries.map((entry) => [entry.targetPath, entry.kind]));
+    for (const entry of entries) {
+      let parent = path.posix.dirname(entry.targetPath);
+      while (parent !== ".") {
+        if (targetKinds.has(parent) && targetKinds.get(parent) !== "directory") {
+          throw new Error(`migration target parent is not a directory: ${parent}`);
+        }
+        parent = path.posix.dirname(parent);
+      }
+    }
     this.rootIdentity = Object.freeze({ ...rootIdentity });
     this.rootMode = rootMode;
     this.entries = Object.freeze(entries.map((entry) => Object.freeze({ ...entry })));
@@ -477,7 +494,7 @@ class SourceTreeSnapshot {
           });
           visit(source, childRelative);
         } else if (stat.isFile()) {
-          const bytes = fs.readFileSync(source);
+          const bytes = captureRegularFile(source, MIGRATION_READ_OPTIONS).bytes;
           const transformed = transformedFileBytes(childRelative, bytes);
           entries.push({
             path: childRelative,
@@ -609,7 +626,7 @@ class SourceTreeSnapshot {
             path: childRelative,
             kind: "file",
             mode: stat.mode & 0o777,
-            hash: hashBytes(fs.readFileSync(target)),
+            hash: hashBytes(captureRegularFile(target, MIGRATION_READ_OPTIONS).bytes),
           });
         } else if (stat.isSymbolicLink()) {
           actual.push({ path: childRelative, kind: "symlink", target: fs.readlinkSync(target) });
@@ -706,7 +723,7 @@ class RootMetadataFile {
     if (stat && (!stat.isFile() || stat.isSymbolicLink())) {
       throw new Error(`root metadata file must be a regular file: ${name}`);
     }
-    const original = stat ? fs.readFileSync(filePath) : Buffer.alloc(0);
+    const original = stat ? captureRegularFile(filePath, MIGRATION_READ_OPTIONS).bytes : Buffer.alloc(0);
     const planned = Buffer.from(transform(original.toString("utf8")), "utf8");
     return new RootMetadataFile({ root, name, existed: Boolean(stat), original, planned });
   }
@@ -737,13 +754,13 @@ class RootMetadataFile {
   }
 
   stage(stagingRoot) {
-    fs.writeFileSync(path.join(stagingRoot, this.name), this.planned, "utf8");
+    new AtomicFile(path.join(stagingRoot, this.name)).write(this.planned);
   }
 
   stagedContent(stagingRoot) {
     const stagedPath = path.join(stagingRoot, this.name);
     assertRegularFile(stagedPath, `staged root metadata ${this.name}`);
-    const content = fs.readFileSync(stagedPath);
+    const content = captureRegularFile(stagedPath, MIGRATION_READ_OPTIONS).bytes;
     if (!content.equals(this.planned)) {
       throw new Error(`staged root metadata changed before migration commit: ${this.name}`);
     }
@@ -759,7 +776,7 @@ class RootMetadataFile {
     if (!stat || !stat.isFile() || stat.isSymbolicLink()) {
       throw new Error(`root metadata changed before migration: ${this.name}`);
     }
-    if (!fs.readFileSync(this.filePath).equals(expected)) {
+    if (!captureRegularFile(this.filePath, MIGRATION_READ_OPTIONS).bytes.equals(expected)) {
       throw new Error(`root metadata content changed before migration: ${this.name}`);
     }
     return true;
@@ -779,14 +796,14 @@ class RootMetadataFile {
       if (!stat || !stat.isFile() || stat.isSymbolicLink()) {
         throw new Error(`cannot restore root metadata with changed authority: ${this.name}`);
       }
-      const current = fs.readFileSync(this.filePath);
+      const current = captureRegularFile(this.filePath, MIGRATION_READ_OPTIONS).bytes;
       if (!current.equals(this.planned) && !current.equals(this.original)) {
         throw new Error(`cannot restore root metadata changed by another process: ${this.name}`);
       }
       return true;
     }
     if (!stat) return false;
-    if (!stat.isFile() || stat.isSymbolicLink() || !fs.readFileSync(this.filePath).equals(this.planned)) {
+    if (!stat.isFile() || stat.isSymbolicLink() || !captureRegularFile(this.filePath, MIGRATION_READ_OPTIONS).bytes.equals(this.planned)) {
       throw new Error(`cannot remove root metadata changed by another process: ${this.name}`);
     }
     return true;
@@ -942,8 +959,8 @@ class LayoutMigrationJournal {
       throw new Error("cannot preserve a changed staged managed directory with different authority");
     }
     fs.renameSync(directory, this.concurrentWritePath);
-    fsyncDirectory(path.dirname(directory));
-    fsyncDirectory(this.stagingRoot);
+    new RealDirectoryAuthority(path.dirname(directory)).assertStable();
+    new RealDirectoryAuthority(this.stagingRoot).assertStable();
   }
 
   toJSON() {
@@ -967,54 +984,30 @@ class LayoutMigrationJournal {
 
   write() {
     const payload = `${JSON.stringify(this.toJSON(), null, 2)}\n`;
-    new AtomicFile(this.journalPath, {
+    const publication = new AtomicFile(this.journalPath, {
       phaseNamespace: "migration-journal",
       commitGuard: () => this.#assertJournalAuthority(),
     }).write(payload);
-    const stat = assertRegularFile(this.journalPath, "migration journal");
-    this.journalIdentity = { dev: stat.dev, ino: stat.ino };
+    this.journalIdentity = { dev: Number(publication.snapshot.identity.dev), ino: Number(publication.snapshot.identity.ino) };
     this.journalHash = hashBytes(payload);
   }
 
   publish() {
     const payload = `${JSON.stringify(this.toJSON(), null, 2)}\n`;
-    let descriptor = null;
-    let primaryError = null;
+    const writer = new AtomicFile(this.journalPath, { phaseNamespace: "migration-journal" });
+    const stage = writer.createStage(payload, { exclusive: true });
+    const identity = { dev: Number(stage.identity.dev), ino: Number(stage.identity.ino) };
     try {
-      // `wx` makes the initial publication a reservation: a second migration
-      // cannot replace an in-progress journal between preflight and commit.
-      descriptor = fs.openSync(
-        this.journalPath,
-        fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | (fs.constants.O_NOFOLLOW || 0),
-        0o600,
-      );
+      writer.publishStage(stage, { exclusive: true });
     } catch (error) {
-      if (error.code === "EEXIST") {
+      if (error.committedToVisibleName) this.reservationIdentity = identity;
+      if (error.cause?.code === "EEXIST") {
         throw new Error("migration journal was created by another migration; source was not changed", { cause: error });
       }
       throw error;
     }
-    try {
-      const stat = fs.fstatSync(descriptor);
-      if (!stat.isFile()) throw new Error("migration journal authority changed during publication");
-      this.reservationIdentity = { dev: stat.dev, ino: stat.ino };
-      fs.writeFileSync(descriptor, payload);
-      fs.fsyncSync(descriptor);
-    } catch (error) {
-      primaryError = error;
-      throw error;
-    } finally {
-      try {
-        fs.closeSync(descriptor);
-      } catch (closeError) {
-        if (primaryError) {
-          throw new AggregateError([primaryError, closeError], "migration journal publication and descriptor cleanup both failed", { cause: primaryError });
-        }
-        throw closeError;
-      }
-    }
-    fsyncDirectory(path.dirname(this.journalPath));
-    this.journalIdentity = { ...this.reservationIdentity };
+    this.reservationIdentity = identity;
+    this.journalIdentity = { ...identity };
     this.journalHash = hashBytes(payload);
   }
 
@@ -1023,8 +1016,8 @@ class LayoutMigrationJournal {
       throw new Error("migration journal authority is unavailable");
     }
     const stat = assertRegularFile(this.journalPath, "migration journal");
-    if (stat.dev !== this.journalIdentity.dev || stat.ino !== this.journalIdentity.ino
-      || hashBytes(fs.readFileSync(this.journalPath)) !== this.journalHash) {
+    if (!sameFileIdentity(stat, this.journalIdentity)
+      || hashBytes(captureRegularFile(this.journalPath, MIGRATION_READ_OPTIONS).bytes) !== this.journalHash) {
       throw new Error("migration journal changed while the migration was active");
     }
   }
@@ -1035,7 +1028,7 @@ class LayoutMigrationJournal {
       phaseNamespace: "migration-journal-reservation",
       commitGuard: () => {
         const stat = assertRegularFile(this.journalPath, "migration journal reservation");
-        if (stat.dev !== this.reservationIdentity.dev || stat.ino !== this.reservationIdentity.ino) {
+        if (!sameFileIdentity(stat, this.reservationIdentity)) {
           throw new Error("migration journal reservation changed before cleanup");
         }
       },
@@ -1069,13 +1062,13 @@ class LayoutMigrationJournal {
     let raw;
     let journalBytes;
     try {
-      journalBytes = fs.readFileSync(journalPath);
+      journalBytes = captureRegularFile(journalPath, MIGRATION_READ_OPTIONS).bytes;
       raw = JSON.parse(journalBytes.toString("utf8"));
     } catch (error) {
       throw new Error(`migration journal is invalid: ${error.message}`);
     }
     const readStat = assertRegularFile(journalPath, "migration journal");
-    if (readStat.dev !== stat.dev || readStat.ino !== stat.ino) {
+    if (!sameFileIdentity(readStat, stat)) {
       throw new Error("migration journal changed while it was being read");
     }
     const keys = raw && typeof raw === "object" ? Object.keys(raw).sort() : [];
@@ -1166,13 +1159,13 @@ class LegacySenrailMigrationJournal {
     const stat = lstatOrNull(journalPath);
     if (!stat) return null;
     assertRegularFile(journalPath, "old migration journal");
-    const bytes = fs.readFileSync(journalPath);
+    const bytes = captureRegularFile(journalPath, MIGRATION_READ_OPTIONS).bytes;
     let raw;
     try { raw = JSON.parse(bytes.toString("utf8")); } catch (error) {
       throw new Error(`old migration journal is invalid: ${error.message}`);
     }
     const readStat = assertRegularFile(journalPath, "old migration journal");
-    if (readStat.dev !== stat.dev || readStat.ino !== stat.ino) throw new Error("old migration journal changed while it was being read");
+    if (!sameFileIdentity(readStat, stat)) throw new Error("old migration journal changed while it was being read");
     const expectedKeys = ["metadata", "owner", "phase", "root", "sourceIdentity", "sourceName", "sourceSnapshot", "sourceSnapshotFingerprint", "stagedSentiIdentity", "stagedSnapshotFingerprint", "stagingRelative", "tempRootCreated", "tempRootIdentity", "version"];
     if (JSON.stringify(Object.keys(raw || {}).sort()) !== JSON.stringify(expectedKeys)
       || raw.version !== 6 || path.resolve(raw.root || "") !== path.resolve(root)
@@ -1203,7 +1196,7 @@ class LegacySenrailMigrationJournal {
 
   assertJournalAuthority() {
     const stat = assertRegularFile(this.journalPath, "old migration journal");
-    if (stat.dev !== this.identity.dev || stat.ino !== this.identity.ino || !fs.readFileSync(this.journalPath).equals(this.bytes)) {
+    if (!sameFileIdentity(stat, this.identity) || !captureRegularFile(this.journalPath, MIGRATION_READ_OPTIONS).bytes.equals(this.bytes)) {
       throw new Error("old migration journal changed during recovery");
     }
   }
@@ -1223,18 +1216,17 @@ function copyTree(sourceRoot, destinationRoot, relative = "") {
     const stat = fs.lstatSync(source);
     if (stat.isDirectory()) {
       if (stat.isSymbolicLink()) throw new Error(`managed directory contains a symbolic-link directory: ${sourceRelative}`);
-      fs.mkdirSync(destination, { recursive: true, mode: stat.mode & 0o777 });
+      RealDirectoryAuthority.resolve(destination, { create: true, creationMode: stat.mode & 0o777 });
       fs.chmodSync(destination, stat.mode & 0o777);
       copyTree(source, destinationRoot, sourceRelative);
     } else if (stat.isSymbolicLink()) {
-      fs.mkdirSync(path.dirname(destination), { recursive: true });
+      RealDirectoryAuthority.resolve(path.dirname(destination), { create: true });
       fs.symlinkSync(transformedLinkTarget(fs.readlinkSync(source)), destination);
     } else if (stat.isFile()) {
-      fs.mkdirSync(path.dirname(destination), { recursive: true });
-      const bytes = fs.readFileSync(source);
+      RealDirectoryAuthority.resolve(path.dirname(destination), { create: true });
+      const bytes = captureRegularFile(source, MIGRATION_READ_OPTIONS).bytes;
       const transformed = transformedFileBytes(sourceRelative, bytes);
-      if (transformed === bytes) fs.copyFileSync(source, destination);
-      else fs.writeFileSync(destination, transformed);
+      new AtomicFile(destination).write(transformed, { exclusive: true });
       fs.chmodSync(destination, stat.mode & 0o777);
     } else {
       throw new Error(`managed directory contains an unsupported entry: ${sourceRelative}`);
@@ -1251,7 +1243,7 @@ function activeFlowPresent(sourceRoot) {
   if (!lstatOrNull(activePath)) return false;
   assertRegularFile(activePath, "legacy active-flow registry");
   try {
-    const value = JSON.parse(fs.readFileSync(activePath, "utf8"));
+    const value = JSON.parse(captureRegularFile(activePath, MIGRATION_READ_OPTIONS).text());
     return !Array.isArray(value) || value.length > 0;
   } catch (error) {
     throw new Error(`legacy active-flow registry is invalid: ${error.message}`);
@@ -1279,7 +1271,7 @@ function ensureTempRoot(root) {
   temporaryPaths.validate(temp);
   const stat = lstatOrNull(temp);
   const created = !stat;
-  if (!stat) fs.mkdirSync(temp, { recursive: true, mode: 0o700 });
+  if (!stat) RealDirectoryAuthority.resolve(temp, { create: true, creationMode: 0o700 });
   const verified = assertRealDirectory(temp, "migration temporary directory");
   return { temp, created, identity: created ? { dev: verified.dev, ino: verified.ino } : null };
 }
@@ -1419,7 +1411,7 @@ export class LayoutMigrationRevisionOne {
       stagingRoot = temporaryPaths.create(temporaryPaths.runtime("migrate-layout"), STAGING_PREFIX);
       stagingCreated = true;
       const stagedManaged = path.join(stagingRoot, "managed-directory");
-      fs.mkdirSync(stagedManaged, { mode: 0o700 });
+      RealDirectoryAuthority.resolve(path.dirname(stagedManaged)).createExclusiveChild(path.basename(stagedManaged), { creationMode: 0o700 });
       fs.chmodSync(stagedManaged, snapshot.rootMode);
       copyTree(sourceRoot, stagedManaged);
       snapshot.assertStaged(stagedManaged);
