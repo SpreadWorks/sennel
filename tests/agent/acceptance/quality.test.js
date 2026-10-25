@@ -19,11 +19,23 @@ describe("agent acceptance quality", { timeout: 600000 }, () => {
   const workRoot = copyFixture(getAcceptanceFixtureDir("base"), configOverrides);
   after(() => workRoot.cleanup());
   const root = workRoot.root;
+  const priorWorkRoot = process.env.SENNEL_WORK_ROOT;
+  const priorSourceRoot = process.env.SENNEL_SOURCE_ROOT;
+  process.env.SENNEL_WORK_ROOT = root;
+  process.env.SENNEL_SOURCE_ROOT = root;
+  after(() => {
+    if (priorWorkRoot === undefined) delete process.env.SENNEL_WORK_ROOT;
+    else process.env.SENNEL_WORK_ROOT = priorWorkRoot;
+    if (priorSourceRoot === undefined) delete process.env.SENNEL_SOURCE_ROOT;
+    else process.env.SENNEL_SOURCE_ROOT = priorSourceRoot;
+  });
   initGitRepo(root);
   commitAll(root, "agent acceptance fixture");
 
   it("evaluates generated base documentation with the configured real provider", async () => {
-    const { ctx } = await runPipeline(root);
-    await verifyWithAI(root, ctx.config, "base");
+    await workRoot.use(async () => {
+      const { ctx } = await runPipeline(root);
+      await verifyWithAI(root, ctx.config, "base");
+    });
   });
 });

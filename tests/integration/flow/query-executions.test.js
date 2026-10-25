@@ -9,7 +9,7 @@ import { removeTmpDir } from "../../support/builders/tmp-dir.js";
 import { setupFlowConfig } from "../../support/infrastructure/flow-setup.js";
 import { CanonicalFlowVersionReader, QueryRequest, serializeQueryResponse } from "../../../src/flow/query.js";
 import { validateFlowQueryResponse } from "../../../src/flow/query-contract.js";
-import { AgentProcessStopEvidence } from "../../../src/lib/agent-failure.js";
+import { executeManagedProcess } from "../../../src/lib/managed-process.js";
 import { ProcessExecutionRuntime } from "../../../src/lib/process-execution-runtime.js";
 import { RuntimeChildExecution } from "../../../src/lib/runtime-package.js";
 import { FlowProcessExecutionBinding } from "../../../src/flow/lib/flow-process-execution-binding.js";
@@ -144,7 +144,6 @@ test("query exposes an ongoing launcher start without promoting it to a stopped 
   let running;
   try {
     await Promise.race([started, invocation.then(() => { throw new Error("provider completed before its output barrier"); })]);
-    const before = snapshotFlowQueryTree(scenario.root);
     const response = await read(scenario);
     running = response.items.find((item) => item.kind === "process-call");
     const provider = response.items.find((item) => item.kind === "provider-attempt");
@@ -161,8 +160,16 @@ test("query exposes an ongoing launcher start without promoting it to a stopped 
     assert.equal(agent.response.readyAt, null);
     assert.equal(agent.response.receivedAt, null);
     assert.equal(response.relations.some((relation) => relation.kind === "responds-to" || relation.kind === "accepted-by"), false);
-    assert.equal((await read(scenario)).snapshot.id, response.snapshot.id);
-    assert.deepEqual(snapshotFlowQueryTree(scenario.root), before);
+    // The authenticated executor continues polling its control mailbox while
+    // this child is alive. Its separate transport is not a query data source.
+    const durableEntries = () => snapshotFlowQueryTree(scenario.root).entries
+      .filter((entry) => !entry.path.startsWith(".sennel/process-runtime/control/"));
+    const before = durableEntries();
+    const repeated = await read(scenario);
+    assert.equal(repeated.snapshot.id, response.snapshot.id, JSON.stringify({
+      beforeProjection: response.snapshot.projectionHash, afterProjection: repeated.snapshot.projectionHash,
+    }));
+    assert.deepEqual(durableEntries(), before);
   } finally {
     fs.writeFileSync(releaseFile, "release");
     await invocation;
@@ -283,7 +290,21 @@ test("runtime-only reservation changes the shared snapshot while unrelated runti
   await scenario.run({ cacheMode: "bypass" });
   const first = await read(scenario, "executions", { page: { limit: 1, after: null } });
   const fixed = { ...scenario.contract, flowVersionId: scenario.flowManager.canonicalState(scenario.specId).flowVersionId };
-  const call = await scenario.runtime.reserveCall({ binding: fixed, invocation: { kind: "command", commandId: "reserved-only" } });
+  let admitLaunch, observeReservation;
+  const launch = new Promise((resolve) => { admitLaunch = resolve; });
+  const reservation = new Promise((resolve) => { observeReservation = resolve; });
+  const reserve = scenario.runtime.reserveCall;
+  const pausedAdmission = t.mock.method(scenario.runtime, "reserveCall", async function(...args) {
+    const call = await reserve.apply(this, args);
+    observeReservation(call);
+    await launch;
+    return call;
+  });
+  const execution = scenario.runtime.enter(() => executeManagedProcess(process.execPath, ["-e", "process.stdout.write('reserved')"], {
+    runtime: scenario.runtime, processExecutionBinding: fixed, timeoutMs: 5000,
+  }));
+  const call = await reservation;
+  try {
   const changed = await read(scenario, "metadata");
   assert.notEqual(changed.snapshot.id, first.snapshot.id);
   await assert.rejects(read(scenario, "executions", { page: { limit: 1, after: first.pageInfo.endCursor } }), { code: "SNAPSHOT_CHANGED" });
@@ -292,15 +313,37 @@ test("runtime-only reservation changes the shared snapshot while unrelated runti
   assert.equal(reserved.physicalStatus, "intent");
   assert.equal(reserved.timing.startedAt, null);
   assert.equal(reserved.processResult, null);
-  await scenario.runtime.finishCall(call, { notStarted: true, stopEvidence: AgentProcessStopEvidence.confirmed() });
+  } finally {
+    admitLaunch();
+    await execution;
+    pausedAdmission.mock.restore();
+  }
   await scenario.shutdown();
   const stable = await read(scenario);
   const successor = await ProcessExecutionRuntime.acquire({ mainRoot: scenario.root, runId: "unrelated-run", specId: "unrelated-spec" });
   t.after(async () => { if (!successor.closed) await successor.close(); });
-  const unrelated = await successor.reserveCall({ invocation: { kind: "command", commandId: "unrelated" } });
-  await successor.finishCall(unrelated, { notStarted: true, stopEvidence: AgentProcessStopEvidence.confirmed() });
+  await successor.enter(() => executeManagedProcess(process.execPath, ["-e", "process.stdout.write('unrelated')"], { runtime: successor, timeoutMs: 5000 }));
   await successor.close();
   assert.equal((await read(scenario)).snapshot.id, stable.snapshot.id);
+});
+
+test("a revoked reservation remains distinguishable from a completed child in saved query history", async (t) => {
+  const scenario = await createExecutionQueryScenario(t);
+  const binding = FlowProcessExecutionBinding.forContract(scenario.contract);
+  const session = scenario.runtime.enter(() => scenario.flowManager.prepareExecutionObservationSession({ executionContract: scenario.contract }));
+  assert.ok(session, "the runtime source must be published before its reservation");
+  const call = await scenario.runtime.reserveCall({ binding, invocation: { commandId: "never-launched" } });
+  await scenario.runtime.revokeCall(call);
+  await scenario.shutdown();
+  const before = snapshotFlowQueryTree(scenario.root);
+  const response = await read(scenario);
+  const revoked = response.items.find((item) => item.callId === call.callId);
+  assert.equal(revoked.physicalStatus, "revoked");
+  assert.equal(revoked.stopVerification, "unverified");
+  assert.equal(revoked.processResult, null);
+  assert.equal(revoked.timing.startedAt, null);
+  assert.equal(revoked.timing.finishedAt, null);
+  assert.deepEqual(snapshotFlowQueryTree(scenario.root), before);
 });
 
 test("unobserved versions retain actual Attempt start and reject foreign targets without creating records", async (t) => {
@@ -344,16 +387,11 @@ test("public CLI supports stdin and request files and refuses a damaged referenc
   assert.equal(fromFile.status, 0, fromFile.stderr + fromFile.stdout);
   assert.equal(JSON.parse(fromFile.stdout).snapshot.id, response.snapshot.id);
   const manifest = (await scenario.reload().readExecutionObservations({ specId: scenario.specId })).manifests.find((entry) => entry.runtimeSourceId !== null);
-  const source = path.join(scenario.root, ".sennel/process-runtime");
   assert.ok(manifest);
-  const namespaces = fs.readdirSync(source);
-  assert.equal(namespaces.length, 1);
-  const registry = path.join(source, namespaces[0], "inventory.json");
+  assert.equal(manifest.runtimeSourceId, scenario.runtime.sourceId);
+  const registry = path.join(scenario.runtime.store.authority.directory, "registry.json");
   // Deliberately corrupt only an external persisted input to prove strict failure.
-  const files = fs.readdirSync(path.dirname(registry));
-  const inventory = files.find((file) => file === "inventory.json" || file === "registry.json");
-  assert.ok(inventory, `inventory file absent: ${files}`);
-  fs.writeFileSync(path.join(path.dirname(registry), inventory), "{}");
+  fs.writeFileSync(registry, "{}");
   const damaged = invoke([], JSON.stringify(request));
   assert.equal(damaged.status, 1);
   const failure = JSON.parse(damaged.stdout);
@@ -387,10 +425,11 @@ test("a runtime record cannot borrow a valid Attempt ID with a different node or
   const scenario = await createExecutionQueryScenario(t);
   await scenario.run({ cacheMode: "bypass" });
   const state = scenario.flowManager.canonicalState(scenario.specId);
-  const call = await scenario.runtime.reserveCall({ binding: { flowVersionId: state.flowVersionId, runId: state.runId,
-    specId: state.specId, nodeId: "branch", taskId: null, attemptId: state.attempt.id, attemptSequence: state.attempt.sequence },
-  invocation: { kind: "command", commandId: "invalid-attempt-owner" } });
-  await scenario.runtime.finishCall(call, { notStarted: true, stopEvidence: AgentProcessStopEvidence.confirmed() });
+  await scenario.runtime.enter(() => executeManagedProcess(process.execPath, ["-e", "process.exit(0)"], {
+    runtime: scenario.runtime, timeoutMs: 5000, processExecutionBinding: { flowVersionId: state.flowVersionId, runId: state.runId,
+      specId: state.specId, nodeId: "branch", taskId: null, attemptId: state.attempt.id, attemptSequence: state.attempt.sequence },
+  }));
+  await scenario.shutdown();
   const before = snapshotFlowQueryTree(scenario.root);
   await assert.rejects(read(scenario), { code: "EXECUTION_RECORD_INCONSISTENT" });
   assert.deepEqual(snapshotFlowQueryTree(scenario.root), before);

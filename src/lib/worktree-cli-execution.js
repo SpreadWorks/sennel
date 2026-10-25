@@ -1,5 +1,5 @@
 /**
- * Resolve and execute the CLI source owned by the current worktree.
+ * Select the CLI source owned by the current worktree before runtime capture.
  *
  * A globally linked development CLI may point at the main checkout even when
  * it is invoked from a worktree. This module makes the worktree source the
@@ -8,8 +8,8 @@
 
 import fs from "fs";
 import path from "path";
-import { spawnSync } from "child_process";
-import { fileURLToPath } from "url";
+import { runBootstrapGitProbe } from "./bootstrap-process.js";
+import { captureRegularFile } from "./regular-file-snapshot.js";
 import { PRODUCT } from "./product.js";
 
 class WorktreeCliTarget {
@@ -45,8 +45,8 @@ class WorktreeCliInvocation {
 }
 
 function gitWorktreeRoot(cwd) {
-  const result = spawnSync("git", ["-C", cwd, "rev-parse", "--show-toplevel"], { encoding: "utf8" });
-  if (result.status !== 0) return null;
+  const result = runBootstrapGitProbe("repository-root", { cwd });
+  if (!result.ok) return null;
   const root = String(result.stdout || "").trim();
   if (root === "") return null;
   const gitFile = path.join(root, ".git");
@@ -59,7 +59,7 @@ function gitWorktreeRoot(cwd) {
 
 function packageName(packagePath) {
   try {
-    const parsed = JSON.parse(fs.readFileSync(packagePath, "utf8"));
+    const parsed = JSON.parse(captureRegularFile(packagePath, { label: "worktree package identity", maxBytes: 16 * 1024 * 1024 }).text());
     return typeof parsed.name === "string" && parsed.name.trim() !== "" ? parsed.name : null;
   } catch (_) {
     return null;
@@ -68,7 +68,8 @@ function packageName(packagePath) {
 
 function isFile(filePath) {
   try {
-    return fs.statSync(filePath).isFile();
+    const stat = fs.lstatSync(filePath);
+    return stat.isFile() && !stat.isSymbolicLink();
   } catch (_) {
     return false;
   }
@@ -91,47 +92,18 @@ function resolveWorktreeCli(executionPath, cwd) {
   });
 }
 
-function failClosed(target, argv, writeError) {
-  writeError(
-    "sennel: worktree-local CLI source is unavailable; refusing to execute a different checkout.\n"
+/** Resolve only: selected source is captured and evaluated by the existing loader. */
+export function resolveWorktreeLocalCli({ executionPath, argv = [], cwd = process.cwd() } = {}) {
+  new WorktreeCliInvocation(argv);
+  const target = resolveWorktreeCli(executionPath, cwd);
+  return target === null || target.usesLocalSource ? null : target;
+}
+
+export function worktreeCliFailure(target, argv) {
+  return "sennel: worktree-local CLI source is unavailable; refusing to execute a different checkout.\n"
     + `Execution target: ${target.executionPath}\n`
     + `Expected worktree source: ${target.localCliPath}\n`
-    + `Recovery: restore the worktree source, then run: ${target.recoveryCommand(argv)}\n`,
-  );
-  return 1;
+    + `Recovery: restore the worktree source, then run: ${target.recoveryCommand(argv)}\n`;
 }
 
-/**
- * Re-execute using the current worktree's CLI if this process was launched
- * from a different checkout. Returns null when normal dispatch should proceed.
- */
-export function executeWorktreeLocalCli({ argv, cwd = process.cwd(), writeError = (message) => process.stderr.write(message) } = {}) {
-  new WorktreeCliInvocation(argv || []);
-  const executionPath = fs.realpathSync(path.resolve(
-    path.dirname(fileURLToPath(import.meta.url)),
-    "../..",
-    PRODUCT.entrypoint,
-  ));
-  const target = resolveWorktreeCli(executionPath, cwd);
-  if (
-    target == null
-    || target.usesLocalSource
-  ) return null;
-  if (!isFile(target.localCliPath)) return failClosed(target, argv, writeError);
-
-  const result = spawnSync(process.execPath, [target.localCliPath, ...argv], {
-    cwd,
-    env: {
-      ...process.env,
-      [PRODUCT.env("WORK_ROOT")]: target.worktreeRoot,
-      [PRODUCT.env("SOURCE_ROOT")]: target.worktreeRoot,
-    },
-    stdio: "inherit",
-  });
-  if (result.error) {
-    writeError(`sennel: failed to execute worktree-local CLI ${target.localCliPath}: ${result.error.message}\n`);
-    writeError(`Recovery: ${target.recoveryCommand(argv)}\n`);
-    return 1;
-  }
-  return result.status ?? 1;
-}
+export function worktreeCliSourceAvailable(target) { return isFile(target.localCliPath); }

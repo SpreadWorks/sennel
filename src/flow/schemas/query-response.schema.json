@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "Flow Query revision 3 response",
-  "description": "The public Flow Query revision 3 response. Inline JSON Schema is checked with the shared schema validator; validateFlowQueryResponse owns response-local semantic constraints. Source bytes, publication identity and producer meaning are checked by their canonical owners before projection.",
+  "title": "Flow Query revision 4 response",
+  "description": "The public Flow Query revision 4 response. Inline JSON Schema is checked with the shared schema validator; validateFlowQueryResponse owns response-local semantic constraints. Source bytes, publication identity and producer meaning are checked by their canonical owners before projection.",
   "oneOf": [
     {
       "type": "object",
@@ -19,7 +19,7 @@
         "schemaRevision": {
           "type": "integer",
           "enum": [
-            3
+            4
           ]
         },
         "ok": {
@@ -1829,7 +1829,7 @@
         "schemaRevision": {
           "type": "integer",
           "enum": [
-            3
+            4
           ]
         },
         "ok": {
@@ -3260,6 +3260,183 @@
                   "additionalProperties": false
                 },
                 "maxItems": 10000
+              },
+              "processEvent": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "eventId",
+                  "executionId",
+                  "callId",
+                  "parentCallId",
+                  "rootCallId",
+                  "sequence",
+                  "type",
+                  "binding",
+                  "occurredAt"
+                ],
+                "properties": {
+                  "eventId": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 4096
+                  },
+                  "executionId": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 4096
+                  },
+                  "callId": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 4096
+                  },
+                  "rootCallId": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 4096
+                  },
+                  "occurredAt": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 4096
+                  },
+                  "parentCallId": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "maxLength": 4096
+                  },
+                  "sequence": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 9007199254740991
+                  },
+                  "type": {
+                    "type": "string",
+                    "enum": [
+                      "reserved",
+                      "started",
+                      "spawn-failed",
+                      "exited",
+                      "stop-requested",
+                      "stop-unconfirmed",
+                      "result-finalized"
+                    ]
+                  },
+                  "binding": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "runId",
+                      "specId",
+                      "flowVersionId"
+                    ],
+                    "properties": {
+                      "runId": {
+                        "type": [
+                          "string",
+                          "null"
+                        ],
+                        "maxLength": 4096
+                      },
+                      "specId": {
+                        "type": [
+                          "string",
+                          "null"
+                        ],
+                        "maxLength": 4096
+                      },
+                      "flowVersionId": {
+                        "type": [
+                          "string",
+                          "null"
+                        ],
+                        "maxLength": 4096
+                      },
+                      "nodeId": {
+                        "type": [
+                          "string",
+                          "null"
+                        ],
+                        "maxLength": 4096
+                      },
+                      "attemptId": {
+                        "type": [
+                          "string",
+                          "null"
+                        ],
+                        "maxLength": 4096
+                      },
+                      "taskId": {
+                        "type": [
+                          "string",
+                          "null"
+                        ],
+                        "maxLength": 4096
+                      },
+                      "executionContractId": {
+                        "type": [
+                          "string",
+                          "null"
+                        ],
+                        "maxLength": 4096
+                      },
+                      "attemptSequence": {
+                        "type": [
+                          "integer",
+                          "null"
+                        ],
+                        "minimum": 0,
+                        "maximum": 9007199254740991
+                      },
+                      "executionGeneration": {
+                        "type": [
+                          "integer",
+                          "null"
+                        ],
+                        "minimum": 0,
+                        "maximum": 9007199254740991
+                      },
+                      "dispatchInvocationId": {
+                        "type": [
+                          "string",
+                          "null"
+                        ],
+                        "maxLength": 4096
+                      },
+                      "workUnitId": {
+                        "type": [
+                          "string",
+                          "null"
+                        ],
+                        "maxLength": 4096
+                      },
+                      "requestDigest": {
+                        "type": [
+                          "string",
+                          "null"
+                        ],
+                        "maxLength": 4096
+                      },
+                      "commandId": {
+                        "type": [
+                          "string",
+                          "null"
+                        ],
+                        "maxLength": 4096
+                      },
+                      "outboxAttemptId": {
+                        "type": [
+                          "string",
+                          "null"
+                        ],
+                        "maxLength": 4096
+                      }
+                    }
+                  }
+                }
               }
             },
             "additionalProperties": false
@@ -7208,7 +7385,7 @@
         "schemaRevision": {
           "type": "integer",
           "enum": [
-            3
+            4
           ]
         },
         "ok": {
@@ -7628,7 +7805,7 @@
         "schemaRevision": {
           "type": "integer",
           "enum": [
-            3
+            4
           ]
         },
         "ok": {
@@ -11885,7 +12062,7 @@
         "schemaRevision": {
           "type": "integer",
           "enum": [
-            3
+            4
           ]
         },
         "ok": {
@@ -12266,7 +12443,7 @@
         "schemaRevision": {
           "type": "integer",
           "enum": [
-            3
+            4
           ]
         },
         "ok": {
@@ -14478,9 +14655,11 @@
                     "type": "string",
                     "enum": [
                       "intent",
-                      "registered",
+                      "claimed",
                       "running",
-                      "stopped"
+                      "exited",
+                      "stopped",
+                      "revoked"
                     ]
                   },
                   "processResult": {
@@ -16148,7 +16327,7 @@
         "schemaRevision": {
           "type": "integer",
           "enum": [
-            3
+            4
           ]
         },
         "ok": {
@@ -18418,9 +18597,11 @@
                     "type": "string",
                     "enum": [
                       "intent",
-                      "registered",
+                      "claimed",
                       "running",
-                      "stopped"
+                      "exited",
+                      "stopped",
+                      "revoked"
                     ]
                   },
                   "processResult": {

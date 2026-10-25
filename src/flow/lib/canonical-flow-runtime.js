@@ -1,3 +1,6 @@
+import { FlowProcessEvent, FlowProcessEventWriter, PROCESS_EVENT_OPERATION } from "./flow-process-event.js";
+import { ProcessExecutionRuntime } from "../../lib/process-execution-runtime.js";
+import { ProcessExecutionBindingSelection } from "../../lib/process-execution-finalization.js";
 import { CombinedAdmission } from "./combined-admission.js";
 import { PromptResponseAdoptionPublicationAdmission } from "./prompt-response-adoption-publication.js";
 import { FlowExecutionObservationStartingAdmission } from "./flow-execution-observation-admission.js";
@@ -1105,6 +1108,24 @@ export class CanonicalFlowRuntime {
     }));
   }
 
+  recordProcessEvent(event) {
+    const fact = new FlowProcessEvent(event);
+    const specId = fact.event.binding.value.specId;
+    const view = this.loadTransitionSnapshot(specId);
+    const existing = view.activities.find((activity) => activity.id === fact.activityId);
+    if (existing) {
+      if (existing.processEvent?.digest !== fact.event.digest) throw new CurrentFlowStateInvariantError("Process event identity was already saved with different facts");
+      return fact.event.eventId;
+    }
+    fact.assertFor(view.state, view.activities);
+    const recordedAt = fact.event.occurredAt;
+    this.apply(specId, this.#activity(view.state, { id: fact.activityId, nodeId: fact.nodeId,
+      processEvent: fact.event, timing: { startedAt: recordedAt, finishedAt: recordedAt, durationMs: 0 },
+      transition: { operation: PROCESS_EVENT_OPERATION, nodeId: fact.nodeId, task: null,
+        attempt: null, status: null, nonblocking: null } }));
+    return fact.event.eventId;
+  }
+
   /** Persist a non-state-changing observation in the authoritative ledger. */
   recordMetric({ specId, activityId, nodeId = null, metric, timing = null, admission = undefined } = {}) {
     return this.#recordObservation(specId, activityId, "record_metric", { nodeId, metric, timing, admission });
@@ -1268,7 +1289,15 @@ export class CanonicalFlowRuntime {
   }
 
   #applyLifecycle(specId, activityId, operation) {
-    const state = this.#state(specId);
+    let state = this.#state(specId);
+    if (operation === "finalize_flow") {
+      // With a runtime, the fenced drain publishes any pending terminal facts.
+      // Pure storage callers can only rely on the history already persisted.
+      if (ProcessExecutionRuntime.current() === null) FlowProcessEvent.assertFinalizable(this.activities(specId));
+      state.finalize();
+    }
+    const processFinalizationBarrier = operation === "finalize_flow" ? this.#finalizationBarrier(state) : null;
+    if (processFinalizationBarrier !== null) state = this.#state(specId);
     // Lifecycle facts need an ordered durable timestamp.  In particular,
     // completed-Flow consumers must derive their date axis from the
     // flow_finalized Activity rather than from a mutable flow.json field or
@@ -1278,6 +1307,7 @@ export class CanonicalFlowRuntime {
       id: activityId,
       nodeId: state.root.id,
       timing: { startedAt: now, finishedAt: now, durationMs: 0 },
+      processFinalizationBarrier,
       transition: {
         operation,
         nodeId: state.root.id,
@@ -1404,7 +1434,7 @@ export class CanonicalFlowRuntime {
     if (activityAttempt === null) {
       throw new CurrentFlowStateInvariantError(`${operation} requires a current Attempt`);
     }
-    const activity = this.#activity(state, {
+    let activity = this.#activity(state, {
       id,
       nodeId: target,
       result,
@@ -1438,9 +1468,20 @@ export class CanonicalFlowRuntime {
     const resolvedArtifactWrites = retryRecoveryPublication == null
       ? artifactWrites
       : retryRecoveryPublication.artifactWrites;
-    const completionActivity = activity.result?.draftSettlementReceipt?.settlementKind === "completion"
+    const completesFlow = activity.result?.draftSettlementReceipt?.settlementKind === "completion";
+    const processFinalizationBarrier = completesFlow ? this.#finalizationBarrier(state) : null;
+    if (processFinalizationBarrier !== null) {
+      const refreshed = this.#state(specId);
+      if (JSON.stringify(refreshed.withConfirmationOrder(state.confirmationOrder).toJSON()) !== JSON.stringify(state.toJSON())) {
+        throw new CurrentFlowStateInvariantError("Canonical Flow changed while its process finalization barrier was published");
+      }
+      state = refreshed;
+      activity = this.#activity(state, activity.toJSON());
+    }
+    const completionActivity = completesFlow
       ? this.#activity(state.withConfirmationOrder(activity.confirmationOrder), {
         id: `${activity.id}-finalized`, nodeId: state.root.id, timing: activity.timing.toJSON(),
+        processFinalizationBarrier,
         transition: { operation: "finalize_flow", nodeId: state.root.id, task: null, attempt: null, status: null },
       }) : null;
     return this.apply(specId, activity, {
@@ -1471,6 +1512,8 @@ export class CanonicalFlowRuntime {
     usage = null,
     metric = null,
     note = null,
+    processEvent = null,
+    processFinalizationBarrier = null,
     policy = null,
     outbox = null,
     approval = null,
@@ -1496,7 +1539,7 @@ export class CanonicalFlowRuntime {
       attemptId,
       sequence,
       confirmationOrder: state.confirmationOrder + 1,
-      type: TYPE_FOR_OPERATION[parsedTransition.operation],
+      type: processEvent === null ? TYPE_FOR_OPERATION[parsedTransition.operation] : new FlowProcessEvent(processEvent).activityType,
       transition: parsedTransition,
       result,
       timing,
@@ -1509,6 +1552,8 @@ export class CanonicalFlowRuntime {
       metric,
       note,
       reviewPublication: null,
+      ...(processEvent === null ? {} : { processEvent: processEvent.toJSON() }),
+      ...(processFinalizationBarrier === null ? {} : { processFinalizationBarrier: processFinalizationBarrier.toJSON() }),
     });
   }
 
@@ -1518,6 +1563,15 @@ export class CanonicalFlowRuntime {
       throw new CurrentFlowStateInvariantError("canonical Flow Version state is missing");
     }
     return state;
+  }
+
+  #finalizationBarrier(state) {
+    const runtime = ProcessExecutionRuntime.current();
+    if (runtime === null) return null;
+    const writer = new FlowProcessEventWriter(this);
+    return runtime.finalizeBindingSync(new ProcessExecutionBindingSelection({
+      runId: state.runId, specId: state.specId, flowVersionId: state.flowVersionId,
+    }), (event) => writer.write(event));
   }
 
   #currentNodeId(state) {

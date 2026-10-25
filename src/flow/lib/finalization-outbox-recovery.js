@@ -246,7 +246,7 @@ export class FinalizationOutboxRecovery {
       "--is-ancestor",
       baseHead,
       "HEAD",
-    ]);
+    ], { cwd: featureRoot });
     if (ancestry.ok) return { state: "rebased" };
     if (ancestry.status === 1) {
       return {

@@ -417,7 +417,7 @@ function definitionOwnedGateDirective(selection, { state, binding }) {
       actionId: "REPAIR_PLAN_GATE_EVIDENCE",
       evidenceKind: "gate",
       phase,
-      nextAction: guardedCommand("sennel flow run repair-plan-gate", state, binding),
+      command: guardedExecutionCommand(new FlowExecutionCommand({ group: "run", subcommand: "repair-plan-gate" }), state, binding),
       instruction: "Apply the current Definition-selected, evidence-bound Gate repair.",
       reason: "The current repair receipt is bound to this Gate Attempt.",
     });

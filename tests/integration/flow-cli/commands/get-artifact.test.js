@@ -5,9 +5,13 @@ import path from "node:path";
 import { afterEach, describe, it } from "node:test";
 
 import { FlowTargetBinding } from "../../../../src/lib/flow-target-guard.js";
+import { ProcessExecutionFinalizationBarrier } from "../../../../src/lib/process-execution-finalization.js";
+import { withFlowProcessRuntime } from "../../../../src/flow/lib/process-runtime-admission.js";
 import { CanonicalFlowFixture, FlowAtStepFixture, makeFlowManager } from "../../../support/infrastructure/flow-setup.js";
 import { fixtureRepository } from "../../../support/infrastructure/flow-dispatch-scenario.js";
-import { createTmpDir, removeTmpDir } from "../../../support/builders/tmp-dir.js";
+import { createTmpDir } from "../../../support/builders/tmp-dir.js";
+import { StoredFlowPersistenceSnapshot } from "../../../support/assertions/canonical-persistence.js";
+import { removeQuiescentRuntimeFixture } from "../../../support/infrastructure/runtime-fixture-cleanup.js";
 
 const SENNEL = path.resolve("src/sennel.js");
 const roots = [];
@@ -19,7 +23,7 @@ function root() {
 }
 
 afterEach(() => {
-  while (roots.length > 0) removeTmpDir(roots.pop());
+  while (roots.length > 0) removeQuiescentRuntimeFixture({ mainRoot: roots.pop() });
 });
 
 function specRecord(goal) {
@@ -62,52 +66,29 @@ function invoke(directory, args) {
   return { ...result, envelope };
 }
 
-function snapshotFiles(directory, current = directory, snapshot = new Map()) {
-  for (const entry of fs.readdirSync(current, { withFileTypes: true })) {
-    const absolute = path.join(current, entry.name);
-    const relative = path.relative(directory, absolute).split(path.sep).join("/");
-    if (entry.isDirectory()) snapshotFiles(directory, absolute, snapshot);
-    else if (entry.isFile()) snapshot.set(relative, fs.readFileSync(absolute));
-  }
-  return snapshot;
-}
-
-function outsideViewCache(snapshot) {
-  return new Map([...snapshot].filter(([relative]) => !relative.includes("/.runtime/views/")));
-}
-
-function assertSameFiles(actual, expected) {
-  assert.deepEqual([...actual.keys()].sort(), [...expected.keys()].sort());
-  for (const [relative, bytes] of expected) {
-    assert.equal(actual.get(relative).equals(bytes), true, `unexpected mutation: ${relative}`);
-  }
-}
-
 describe("flow get artifact CLI", () => {
-  it("parses the registered command, hides cache metadata, and changes no durable file outside the Version view cache", () => {
+  it("parses the registered command, hides cache metadata, and leaves the whole project unchanged", () => {
     const directory = root();
     const { fixture } = createFixture(directory, {
       specId: "514-cli-active",
       goal: "The active CLI target is rendered exactly once.",
       active: true,
     });
-    const before = snapshotFiles(directory);
+    const before = new StoredFlowPersistenceSnapshot(directory);
     const result = invoke(directory, ["spec.record", "--mode", "full"]);
-    const after = snapshotFiles(directory);
-    const cacheRelative = path.relative(directory, path.join(
+    const cachePath = path.join(
       fixture.location().directory,
       ".runtime",
       "views",
       "spec.record.full.md",
-    )).split(path.sep).join("/");
+    );
 
     assert.equal(result.status, 0, result.stderr);
     assert.equal(result.envelope.ok, true);
     assert.match(result.envelope.data.markdown, /active CLI target is rendered exactly once/i);
     assert.equal(result.envelope.data.markdown.startsWith("<!--"), false);
-    assert.equal(after.has(cacheRelative), true);
-    assert.match(after.get(cacheRelative).toString("utf8"), /^<!-- sennel-flow-artifact-view /);
-    assertSameFiles(outsideViewCache(after), outsideViewCache(before));
+    assert.equal(fs.existsSync(cachePath), false);
+    before.assertUnchanged();
   });
 
   it("uses only the supplied completed Version even when the ambient active registry is corrupt", async () => {
@@ -136,8 +117,29 @@ describe("flow get artifact CLI", () => {
       }]]),
     });
     completed.flow.flow.settle("finalize-cleanup");
-    completedManager.finalizeFlow(completed.state().specId);
+    const completedSpecId = completed.state().specId;
+    // This fixture settles canonical cleanup directly; its real producer
+    // history still requires the normal runtime fence before finalization.
+    await withFlowProcessRuntime({
+      root: directory,
+      mainRoot: directory,
+      executionRoot: directory,
+      specId: completedSpecId,
+      flowManager: completedManager,
+      flowState: completedManager.loadReadOnly(completedSpecId),
+    }, () => completedManager.finalizeFlow(completedSpecId), { commandId: "finalize-cleanup" });
+    const finalized = completedManager.canonicalState(completedSpecId);
+    assert.equal(finalized.lifecycle.state, "finalized");
+    const finalization = completedManager.activityLedger(completedSpecId)
+      .findLast((activity) => activity.transition.operation === "finalize_flow");
+    const barrier = ProcessExecutionFinalizationBarrier.fromStored(finalization.processFinalizationBarrier);
+    assert.deepEqual(barrier.selection.toJSON(), {
+      runId: finalized.runId,
+      specId: finalized.specId,
+      flowVersionId: finalized.flowVersionId,
+    });
     fs.writeFileSync(path.join(directory, ".sennel", ".active-flow"), "{ corrupt ambient authority\n");
+    const before = new StoredFlowPersistenceSnapshot(directory);
 
     const result = invoke(directory, [
       "spec.record",
@@ -149,7 +151,8 @@ describe("flow get artifact CLI", () => {
     assert.equal(result.status, 0, result.stderr);
     assert.equal(result.envelope.ok, true);
     assert.match(result.envelope.data.markdown, /exact completed Version is rendered despite ambient corruption/i);
-    assert.equal(fs.existsSync(path.join(completed.location().directory, ".runtime", "views", "spec.record.full.md")), true);
+    assert.equal(fs.existsSync(path.join(completed.location().directory, ".runtime", "views", "spec.record.full.md")), false);
+    before.assertUnchanged();
   });
 
   it("rejects unsupported, extra, partial, and stale active targets before a cache or summary agent can run", () => {
@@ -193,7 +196,7 @@ describe("flow get artifact CLI", () => {
     assert.equal(fs.existsSync(path.join(fixture.location().directory, ".runtime", "views")), false);
   });
 
-  it("reports source and summary failures as closed envelopes and keeps a cache write failure non-fatal", () => {
+  it("reports source and summary failures as closed envelopes and leaves an unusable project cache untouched", () => {
     const directory = root();
     const { fixture } = createFixture(directory, {
       specId: "514-cli-failures",
@@ -212,8 +215,8 @@ describe("flow get artifact CLI", () => {
     assert.notEqual(readFailure.status, 0, readFailure.stderr);
     assert.equal(readFailure.envelope.errors[0].code, "ARTIFACT_VIEW_READ_FAILED");
 
-    // Restore canonical source bytes by creating a separate clean target: the
-    // cache boundary alone must not turn a successful full render into error.
+    // A separate clean target retains an unusable project cache: the public
+    // invocation uses its own workspace and must neither read nor repair it.
     const warningDirectory = root();
     const warning = createFixture(warningDirectory, {
       specId: "514-cli-warning",
@@ -222,11 +225,12 @@ describe("flow get artifact CLI", () => {
     });
     fs.mkdirSync(path.join(warning.fixture.location().directory, ".runtime"), { recursive: true });
     fs.writeFileSync(path.join(warning.fixture.location().directory, ".runtime", "views"), "not a directory");
+    const before = new StoredFlowPersistenceSnapshot(warningDirectory);
     const warningResult = invoke(warningDirectory, ["spec.record", "--mode", "full"]);
     assert.equal(warningResult.status, 0, warningResult.stderr);
     assert.equal(warningResult.envelope.ok, true);
-    assert.equal(warningResult.envelope.errors[0].code, "ARTIFACT_VIEW_CACHE_NOT_SAVED");
-    assert.equal(warningResult.envelope.errors[0].level, "warn");
+    assert.equal(warningResult.envelope.errors.some((error) => error.code === "ARTIFACT_VIEW_CACHE_NOT_SAVED"), false);
     assert.match(warningResult.envelope.data.markdown, /Render despite a non-authoritative cache failure/);
+    before.assertUnchanged();
   });
 });

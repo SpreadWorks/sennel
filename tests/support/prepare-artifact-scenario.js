@@ -6,11 +6,14 @@ import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 import { FlowManager } from "../../src/lib/flow-manager.js";
+import { ProcessExecutionControlFailure } from "../../src/lib/process-execution-values.js";
+import { testTemporaryRoot } from "../test-environment.js";
 import SetInitCommand from "../../src/flow/lib/set-init.js";
 import RunPrepareSpecCommand from "../../src/flow/lib/run-prepare-spec.js";
 import { fixtureRepository } from "./infrastructure/flow-dispatch-scenario.js";
 import { commitAll } from "./infrastructure/git-repo.js";
 import { removeTmpDir } from "./builders/tmp-dir.js";
+import { removeQuiescentRuntimeFixture } from "./infrastructure/runtime-fixture-cleanup.js";
 import { PrepareProcess } from "./infrastructure/prepare-process.js";
 
 const cliPath = fileURLToPath(new URL("../../src/sennel.js", import.meta.url));
@@ -19,10 +22,16 @@ const cliPath = fileURLToPath(new URL("../../src/sennel.js", import.meta.url));
 export class PrepareArtifactScenario {
   static create(t, { projectDirectory = null, ...options } = {}) {
     const repositoryRoot = fixtureRepository("prepare-artifact-scenario-");
-    t.after(() => removeTmpDir(repositoryRoot));
     const root = projectDirectory === null ? repositoryRoot : path.join(repositoryRoot, projectDirectory);
+    let scenario;
+    t.after(() => {
+      if (scenario?.unconfirmedExecution) return;
+      removeQuiescentRuntimeFixture({ mainRoot: root, executionRoot: scenario?.executionRoot ?? root,
+        runId: scenario?.runId ?? null, specId: scenario?.specId ?? null,
+        cleanup: () => removeTmpDir(repositoryRoot) });
+    });
     if (projectDirectory !== null) fs.mkdirSync(root, { recursive: true });
-    const scenario = new PrepareArtifactScenario(root, options);
+    scenario = new PrepareArtifactScenario(root, options);
     scenario.repositoryRoot = repositoryRoot;
     return scenario;
   }
@@ -113,6 +122,10 @@ export class PrepareArtifactScenario {
     for (const key of Object.keys(process.env)) if (!(key in scoped)) delete process.env[key];
     Object.assign(process.env, scoped);
     try { return await action(); }
+    catch (error) {
+      if (error instanceof ProcessExecutionControlFailure) this.retainUnconfirmedExecution();
+      throw error;
+    }
     finally {
       for (const key of Object.keys(process.env)) if (!(key in prior)) delete process.env[key];
       Object.assign(process.env, prior);
@@ -171,9 +184,19 @@ export class PrepareArtifactScenario {
       noBranch: this.mode === "no-branch", worktree: this.mode === "worktree", ...overrides };
   }
 
+  retainUnconfirmedExecution() {
+    this.unconfirmedExecution = true;
+    testTemporaryRoot().retainOnUnconfirmedExecution();
+  }
+
   interruptAfterWorktreeAdd() {
-    return new PrepareProcess({ input: this.prepareInput(),
-      environment: this.environment(this.root) }).interruptAfterWorktreeAdd();
+    try {
+      return new PrepareProcess({ input: this.prepareInput(),
+        environment: this.environment(this.root) }).interruptAfterWorktreeAdd();
+    } catch (error) {
+      this.retainUnconfirmedExecution();
+      throw error;
+    }
   }
 
   reload() {

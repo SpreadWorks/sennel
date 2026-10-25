@@ -10,6 +10,7 @@
  *   node sennel/engine/tfill.js --agent claude [--dry-run] [--timeout 60000] [--id <id>]
  */
 
+import { docsCommands } from "../../lib/command-registry.js";
 import fs from "fs";
 import path from "path";
 import crypto from "crypto";
@@ -484,8 +485,7 @@ async function runText(ctx, rawArgs = [], commandContainer = container) {
   // CLI モード
   if (!ctx) {
     const cli = parseArgs(rawArgs, {
-      flags: ["--yes", "--dry-run", "--per-directive", "--force"],
-      options: ["--id", "--lang", "--docs-dir", "--files"],
+      ...docsCommands.text.args,
       defaults: { dryRun: false, perDirective: false, force: false, id: "", lang: "", docsDir: "", files: "" },
     });
     if (cli.help) {

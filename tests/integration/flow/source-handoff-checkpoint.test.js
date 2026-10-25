@@ -21,12 +21,16 @@ import {
 import { FlowManager } from "../../../src/lib/flow-manager.js";
 import { ProcessExecutionRuntime, ProcessExecutionControlFailure } from "../../../src/lib/process-execution-runtime.js";
 import { withFlowProcessRuntime } from "../../../src/flow/lib/process-runtime-admission.js";
+import { FlowProcessEventWriter } from "../../../src/flow/lib/flow-process-event.js";
+import { ProcessExecutionEvent } from "../../../src/lib/process-execution-values.js";
+import { CommandInvocation, NativeExecutableInvocation } from "../../../src/lib/command-invocation.js";
 import { FlowArtifactCatalog } from "../../../src/lib/flow-version.js";
 import { container } from "../../../src/lib/container.js";
 import { CanonicalFlowFixture } from "../../support/infrastructure/flow-setup.js";
 import { TaskReviewScenario } from "../../support/builders/task-review-scenario.js";
 import { initGitRepo, commitAll } from "../../support/infrastructure/git-repo.js";
 import { createTmpDir, removeTmpDir } from "../../support/builders/tmp-dir.js";
+import { removeQuiescentRuntimeFixture } from "../../support/infrastructure/runtime-fixture-cleanup.js";
 import {
   withSourceHandoffLease,
 } from "../../support/builders/source-handoff-scenario.js";
@@ -97,7 +101,8 @@ class SourceCheckpointScenario {
       return;
     }
     this.temporaryRoot = createTmpDir(`source-checkpoint-${stepId}-`);
-    t.after(() => removeTmpDir(this.temporaryRoot));
+    t.after(() => removeQuiescentRuntimeFixture({ mainRoot: this.mainRoot, executionRoot: this.executionRoot,
+      cleanup: () => removeTmpDir(this.temporaryRoot) }));
     this.executionRoot = worktree ? path.join(this.temporaryRoot, "execution") : this.temporaryRoot;
     this.mainRoot = worktree ? path.join(this.temporaryRoot, "main") : this.temporaryRoot;
     fs.mkdirSync(this.executionRoot, { recursive: true });
@@ -238,6 +243,116 @@ async function taskReviewPolicyScenario(t, stepId) {
   })();
   return { scenario, request: work.request };
 }
+
+it("publishes and reloads a source checkpoint while its real Git observations remain bound to the Attempt", async (t) => {
+  const scenario = new SourceCheckpointScenario(t, "implement");
+  const ctx = scenario.context();
+  await withFlowProcessRuntime(ctx, () => withSourceHandoffLease({ root: scenario.executionRoot,
+    mainRoot: scenario.mainRoot }, () => {
+    const coordinator = new WorkerArtifactHandoffCoordinator({ now: () => new Date(NOW) });
+    const invocation = scenario.invocation("implement");
+    const request = coordinator.createRequest({ ctx, state: scenario.manager.loadReadOnly(scenario.specId), invocation });
+    assert.ok(request.sourceHandoffCheckpoint);
+    const saved = scenario.manager.readSourceHandoffAuthority({ specId: scenario.specId,
+      identity: request.sourceHandoffIdentity });
+    assert.equal(saved.checkpoint.digest, request.sourceHandoffCheckpoint.digest);
+    assert.equal(saved.event.kind, "prepared");
+    assert.equal(saved.settlement, null);
+    scenario.reload();
+    const restored = scenario.manager.readSourceHandoffAuthority({ specId: scenario.specId,
+      identity: request.sourceHandoffIdentity });
+    assert.equal(restored.checkpoint.digest, saved.checkpoint.digest);
+    assert.equal(restored.event.digest, saved.event.digest);
+    const facts = scenario.manager.activityLedger(scenario.specId).filter((activity) => activity.processEvent);
+    assert.ok(facts.length > 0, "real Git observations must be persisted with their source Attempt");
+    assert.ok(facts.every((activity) => activity.processEvent.binding.attemptId === request.sourceHandoffIdentity.attempt.id));
+  }), { required: true });
+});
+
+it("recovers a committed source checkpoint after its canonical process acknowledgement is lost", async (t) => {
+  const scenario = new SourceCheckpointScenario(t, "implement");
+  const ctx = scenario.context();
+  const sourceBefore = fs.readFileSync(path.join(scenario.executionRoot, "product.js"));
+  const interruption = new Error("source checkpoint process event saved before acknowledgement");
+  let identity, checkpointDigest, savedBytes, failedEvent, executionId;
+  await withFlowProcessRuntime(ctx, async () => {
+    const runtime = ProcessExecutionRuntime.current();
+    executionId = runtime.executionId;
+    const writer = new FlowProcessEventWriter(scenario.manager);
+    const coordinator = new WorkerArtifactHandoffCoordinator({ now: () => new Date(NOW) });
+    await assert.rejects(runtime.withBinding(runtime.binding, () => withSourceHandoffLease({
+      root: scenario.executionRoot, mainRoot: scenario.mainRoot,
+    }, () => coordinator.createRequest({ ctx, state: scenario.manager.loadReadOnly(scenario.specId),
+      invocation: scenario.invocation("implement") })), {
+      eventWriter: (event) => {
+        const acknowledgement = writer.write(event);
+        if (failedEvent === undefined) {
+          failedEvent = event;
+          throw interruption;
+        }
+        return acknowledgement;
+      },
+    }), (error) => error === interruption);
+    scenario.reload();
+    const authorities = scenario.manager.sourceHandoffAuthorities({ specId: scenario.specId });
+    assert.equal(authorities.length, 1, "the checkpoint committed before publication reported failure");
+    const authority = authorities[0];
+    identity = authority.identity;
+    checkpointDigest = authority.checkpoint.digest;
+    assert.equal(authority.event.kind, "prepared");
+    assert.equal(authority.settlement, null);
+    const descriptors = authority.descriptors.filter((entry) => ["source.handoff.checkpoint", "execution.contract"].includes(entry.logicalKey));
+    assert.ok(descriptors.some((entry) => entry.logicalKey === "execution.contract"));
+    const location = scenario.manager.specLocation(scenario.specId);
+    savedBytes = new Map(descriptors.map((entry) => [location.resolve(entry.relativePath), fs.readFileSync(location.resolve(entry.relativePath))]));
+    const pending = runtime.inspect().executions.find((entry) => entry.executionId === executionId);
+    assert.ok(pending.events.length > 0);
+    assert.ok(pending.calls.every((call) => {
+      const invocation = CommandInvocation.fromStored(call.invocation.actualCommand);
+      return call.receipt !== null && invocation instanceof NativeExecutableInvocation
+        && ["git", "git.exe"].includes(path.basename(invocation.executable).toLowerCase())
+        && call.invocation.kind === "command" && call.invocation.providerAttemptId === null;
+    }),
+      "preparation completed only registered Git calls and launched no provider");
+    assert.deepEqual(pending.eventAcknowledgements, []);
+    assert.deepEqual(pending.runtimeOnlyDispositions, []);
+    const first = scenario.manager.activityLedger(scenario.specId).filter((entry) => entry.processEvent?.executionId === executionId);
+    assert.equal(first.length, 1);
+    assert.equal(first[0].processEvent.eventId, failedEvent.eventId);
+    assert.equal(ProcessExecutionEvent.fromStored(first[0].processEvent).digest, failedEvent.digest);
+    const restoredWriter = new FlowProcessEventWriter(scenario.manager);
+    runtime.drainEventsSync((event) => restoredWriter.write(event));
+    const published = runtime.inspect().executions.find((entry) => entry.executionId === executionId);
+    assert.deepEqual(published.events, pending.events);
+    assert.deepEqual(published.calls, pending.calls, "event replay cannot reserve or execute a duplicate call");
+    assert.deepEqual(published.eventAcknowledgements, pending.events.map((stored) => {
+      const event = ProcessExecutionEvent.fromStored(stored);
+      return { eventId: event.eventId, eventDigest: event.digest };
+    }));
+    const facts = scenario.manager.activityLedger(scenario.specId).filter((entry) => entry.processEvent?.executionId === executionId);
+    assert.deepEqual(facts.map((entry) => entry.processEvent), pending.events);
+    assert.equal(new Set(facts.map((entry) => entry.id)).size, pending.events.length);
+    for (const [file, bytes] of savedBytes) assert.deepEqual(fs.readFileSync(file), bytes,
+      "event replay preserves checkpoint identity and execution contract budget bytes");
+    assert.deepEqual(runtime.drainEventsSync((event) => restoredWriter.write(event)), []);
+  }, { required: true });
+  const closed = ProcessExecutionRuntime.inspect({ mainRoot: scenario.mainRoot, executionRoot: scenario.executionRoot })
+    .executions.find((entry) => entry.executionId === executionId);
+  assert.equal(closed.status, "closed");
+  scenario.reload();
+  const recovery = new WorkerArtifactHandoffCoordinator();
+  assert.equal(recovery.recoverPending({ ctx: scenario.context() })?.completed, true);
+  const recovered = scenario.manager.readSourceHandoffAuthority({ specId: scenario.specId, identity });
+  assert.equal(recovered.checkpoint.digest, checkpointDigest);
+  assert.equal(recovered.settlement.kind, "aborted-before-start");
+  const once = protocolCounts(scenario.manager, scenario.specId);
+  assert.equal(once.checkpoint, 1);
+  assert.equal(once.settlement, 1);
+  assert.equal(recovery.recoverPending({ ctx: scenario.context() }), null);
+  assert.deepEqual(protocolCounts(scenario.manager, scenario.specId), once);
+  assert.deepEqual(fs.readFileSync(path.join(scenario.executionRoot, "product.js")), sourceBefore);
+  for (const [file, bytes] of savedBytes) assert.deepEqual(fs.readFileSync(file), bytes);
+});
 
 it("survives a real parent process stop after source sealing and recovers from disk", async (t) => {
   const scenario = new SourceCheckpointScenario(t, "implement");

@@ -1,14 +1,21 @@
+import { PRODUCT } from "../../lib/product.js";
+import { RepositoryLockAuthority } from "../../lib/repository-control-lock.js";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { AtomicJsonFile } from "../../lib/atomic-json-file.js";
 import { ProcessLock } from "../../lib/process-lock.js";
-import { RealDirectoryAuthority } from "../../lib/real-directory-authority.js";
 import { RepositoryFlowOperationLock } from "../../lib/repository-maintenance-lock.js";
-import { PRODUCT } from "../../lib/product.js";
 
-const DIRECTORY = PRODUCT.managedPath("flow-execution-locks");
+const DIRECTORY = path.dirname(RepositoryLockAuthority.relativePathFor({ namespace: "flow-command-execution", identity: "leases", fileName: "index.lock" }));
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+
+function lockLocation(mainRoot, fileName) {
+  return new RepositoryLockAuthority(mainRoot).location({
+    namespace: "flow-command-execution", identity: "leases", fileName,
+    legacyDirectories: [path.join(mainRoot, PRODUCT.managedPath("flow-execution-locks"))],
+  });
+}
 
 /** A running command owns its marker; abort never reclaims another actor's marker. */
 export class FlowCommandExecutionLease {
@@ -17,12 +24,11 @@ export class FlowCommandExecutionLease {
     if (typeof runId !== "string" || !runId.trim() || typeof specId !== "string" || !specId.trim()) {
       throw new TypeError("command execution lease requires a run and Spec identity");
     }
-    const directoryAuthority = new RealDirectoryAuthority(path.join(mainRoot, DIRECTORY), { create: true });
-    this.lock = new ProcessLock({ directoryAuthority, fileName: `${id}.lock`,
+    this.lock = new ProcessLock({ location: lockLocation(mainRoot, `${id}.lock`),
       kind: "flow-command-execution", authority: { runId, specId } });
   }
 
-  static get repositoryPrefix() { return `${DIRECTORY}/`; }
+  static get repositoryPrefix() { return `${DIRECTORY.split(path.sep).join("/")}/`; }
 
   static ownsRepositoryPath(filePath) { return filePath.startsWith(this.repositoryPrefix); }
 
@@ -42,7 +48,9 @@ export class FlowCommandExecutionLease {
   }
 
   static forRun({ mainRoot, runId }) {
-    const directory = path.join(mainRoot, DIRECTORY);
+    const location = lockLocation(mainRoot, "index.lock");
+    location.resolve();
+    const directory = location.directory;
     let names;
     try { names = fs.readdirSync(directory); }
     catch (error) { if (error.code === "ENOENT") return []; throw error; }

@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { test } from "node:test";
 import { Agent } from "../../src/lib/agent.js";
+import { readOnlyCodexProfile, withReadOnlyAgentControlScope } from "../support/infrastructure/readonly-agent-profile.js";
 import { ProviderRegistry } from "../../src/lib/provider.js";
 import { Logger } from "../../src/lib/log.js";
 import { ReviewTextPromptPlan } from "../../src/flow/lib/review-text-prompt-plan.js";
@@ -24,36 +25,38 @@ test("real reviewer reads complete Unicode authority and detects a head/tail con
   const release = owner.activate();
   let plan;
   t.after(() => {
-    try { plan?.dispose(); }
+    try { if (!owner.retained) plan?.dispose(); }
     finally { release(); }
   });
   const root = owner.path;
-  const profile = "review-quality";
-  const model = process.env.SENNEL_REVIEW_QUALITY_MODEL || "gpt-6-luna";
-  const config = { agent: { default: profile, timeout: 240, retryCount: 0, promptCharacterLimit: 18_000,
-    providers: { [profile]: { command: "codex", args: ["exec", "--json", "--skip-git-repo-check", "--sandbox", "read-only", "-m", model, "{{PROMPT}}"],
-      jsonOutputFlag: "--json", jsonSchemaFlag: "--output-schema", jsonSchemaMode: "file" } } } };
-  const agent = new Agent({ config, paths: { root, agentWorkDir: root }, registry: new ProviderRegistry(config.agent.providers),
-    logger: new Logger({ logDir: path.join(root, "logs"), enabled: false }) });
-  plan = ReviewTextPromptPlan.create({ request: { userPrompt: source, jsonSchema: responseSchema }, maxChars: 6_000, projectRoot: root });
-  const parse = (raw) => {
-    const value = JSON.parse(raw);
-    assert.deepEqual(Object.keys(value), ["findingIds"]);
-    assert.ok(Array.isArray(value.findingIds));
-    return value.findingIds;
-  };
-  let calls = 0;
-  const completions = await new PromptBatchExecutor().executeCompletions({ plan: plan.corePlan,
-    protocolPolicy: plan.protocolPolicy(parse), responseContract: { parse, itemCount: (value) => value.length },
-    projectInvocation: (request) => agent.projectInvocation(request.userPrompt, { ...request, executionWorkDir: root }),
-    callAgent: async (request, _batch, _retry, attempt, providerCallAdmission) => {
-      calls += 1;
-      assert.equal(fs.readFileSync(plan.fileInput.filePath, "utf8"), source);
-      let cacheDecision;
-      const text = await agent.call(request.userPrompt, { ...request, ...attempt, providerCallAdmission, executionWorkDir: root,
-        onCacheDecision: (decision) => { cacheDecision = decision; } });
-      return { text, ...cacheDecision, fresh: cacheDecision?.fresh ?? attempt.cacheMode === "bypass" };
-    } });
-  assert.equal(calls, 1);
-  assert.deepEqual(completions[0].response, ["same-operation-timeout-conflict"]);
+  await withReadOnlyAgentControlScope(root, async () => {
+    const profile = "review-quality";
+    const model = process.env.SENNEL_REVIEW_QUALITY_MODEL || "gpt-6-luna";
+    const config = { agent: { default: profile, timeout: 240, retryCount: 0, promptCharacterLimit: 18_000,
+      providers: { [profile]: readOnlyCodexProfile({ command: "codex", args: ["exec", "--json", "--skip-git-repo-check", "--sandbox", "read-only", "-m", model, "{{PROMPT}}"],
+        jsonOutputFlag: "--json", jsonSchemaFlag: "--output-schema", jsonSchemaMode: "file" }) } } };
+    const agent = new Agent({ config, paths: { root, agentWorkDir: root }, registry: new ProviderRegistry(config.agent.providers),
+      logger: new Logger({ logDir: path.join(root, "logs"), enabled: false }) });
+    plan = ReviewTextPromptPlan.create({ request: { userPrompt: source, jsonSchema: responseSchema }, maxChars: 6_000, projectRoot: root });
+    const parse = (raw) => {
+      const value = JSON.parse(raw);
+      assert.deepEqual(Object.keys(value), ["findingIds"]);
+      assert.ok(Array.isArray(value.findingIds));
+      return value.findingIds;
+    };
+    let calls = 0;
+    const completions = await new PromptBatchExecutor().executeCompletions({ plan: plan.corePlan,
+      protocolPolicy: plan.protocolPolicy(parse), responseContract: { parse, itemCount: (value) => value.length },
+      projectInvocation: (request) => agent.projectInvocation(request.userPrompt, { ...request, executionWorkDir: root }),
+      callAgent: async (request, _batch, _retry, attempt, providerCallAdmission) => {
+        calls += 1;
+        assert.equal(fs.readFileSync(plan.fileInput.filePath, "utf8"), source);
+        let cacheDecision;
+        const text = await agent.call(request.userPrompt, { ...request, ...attempt, providerCallAdmission, executionWorkDir: root,
+          onCacheDecision: (decision) => { cacheDecision = decision; } });
+        return { text, ...cacheDecision, fresh: cacheDecision?.fresh ?? attempt.cacheMode === "bypass" };
+      } }).catch((error) => { owner.retainOnUnconfirmedExecution(error); throw error; });
+    assert.equal(calls, 1);
+    assert.deepEqual(completions[0].response, ["same-operation-timeout-conflict"]);
+  }, owner);
 });

@@ -1,7 +1,7 @@
+import { RepositoryLockAuthority } from "../../lib/repository-control-lock.js";
+import { ProcessLock } from "../../lib/process-lock.js";
 import path from "node:path";
 import { PRODUCT } from "../../lib/product.js";
-import { ProcessLock } from "../../lib/process-lock.js";
-import { RealDirectoryAuthority } from "../../lib/real-directory-authority.js";
 import { FlowDispatchSession, flowDispatchDigest } from "./dispatch-invocation.js";
 
 const DISPATCH_LOCK_KIND = "flow-dispatch";
@@ -9,7 +9,7 @@ const DISPATCH_LOCK_KIND = "flow-dispatch";
 function dispatchLockError(status, message, { lockPath, owner = null, cause } = {}) {
   const error = new Error(message, { cause });
   error.name = "FlowDispatchLockError";
-  error.code = status === "live"
+  error.code = status === "busy"
     ? "FLOW_DISPATCH_BUSY"
     : `FLOW_DISPATCH_LOCK_${status.replace(/-/g, "_").toUpperCase()}`;
   error.lockStatus = status;
@@ -20,7 +20,7 @@ function dispatchLockError(status, message, { lockPath, owner = null, cause } = 
 
 export class FlowDispatchLease {
   static pathFor(mainRoot, runId) {
-    return path.join(mainRoot, PRODUCT.managedPath(`.flow-dispatch-${flowDispatchDigest(runId).slice(0, 24)}.lock`));
+    return RepositoryLockAuthority.pathFor(mainRoot, { namespace: "flow-dispatch", identity: runId, fileName: "dispatch.lock" });
   }
 
   constructor(session) {
@@ -34,17 +34,11 @@ export class FlowDispatchLease {
       throw new Error("FlowDispatchLease target requires captured authority");
     }
     const { runId } = target;
-    const root = new RealDirectoryAuthority(mainRoot, {
-      errorFactory: dispatchLockError,
-    });
-    const directory = new RealDirectoryAuthority(path.join(mainRoot, PRODUCT.managedDirName), {
-      create: true,
-      parentAuthority: root,
-      errorFactory: dispatchLockError,
-    });
     this.lock = new ProcessLock({
-      directoryAuthority: directory,
-      fileName: path.basename(FlowDispatchLease.pathFor(mainRoot, runId)),
+      location: new RepositoryLockAuthority(mainRoot, { errorFactory: dispatchLockError }).location({
+        namespace: "flow-dispatch", identity: runId, fileName: "dispatch.lock",
+        legacyPaths: [path.join(mainRoot, PRODUCT.managedPath(`.flow-dispatch-${flowDispatchDigest(runId).slice(0, 24)}.lock`))],
+      }),
       kind: DISPATCH_LOCK_KIND,
       authority: {
         runId,

@@ -6,6 +6,7 @@ import { performance } from "node:perf_hooks";
 import { TaskLifecycleFixture, makeFlowManager } from "../infrastructure/flow-setup.js";
 import { initGitRepo, commitAll } from "../infrastructure/git-repo.js";
 import { createTmpDir, removeTmpDir } from "./tmp-dir.js";
+import { removeQuiescentRuntimeFixture } from "../infrastructure/runtime-fixture-cleanup.js";
 import { SeedWorkRoot, observeSeedTiming } from "./seed-work-root.js";
 import { CanonicalScenarioSeed } from "../assertions/canonical-persistence.js";
 import {
@@ -114,7 +115,9 @@ export class TaskReviewScenario {
   constructor(t, { noChange = false, implementationContent = "implemented source\n", additionalRequirements = [], claimReview = true, seed = null } = {}) {
     this.seedClone = seed ? new SeedWorkRoot(seed.root, { prefix: "sennel-task-review-case-" }) : null;
     this.root = this.seedClone?.root ?? createTmpDir("task-review-scenario-");
-    t.after(() => this.seedClone ? this.seedClone.cleanup() : removeTmpDir(this.root));
+    t.after(() => removeQuiescentRuntimeFixture({ mainRoot: this.root,
+      runId: "review-scenario", specId: this.specId,
+      cleanup: () => this.seedClone ? this.seedClone.cleanup() : removeTmpDir(this.root) }));
     this.specId = "001-review-scenario";
     this.taskId = "T-1";
     this.sourcePath = path.join(this.root, "README.md");

@@ -12,7 +12,8 @@ import path from "path";
 import { isInsideWorktree, PKG_DIR } from "../../lib/cli.js";
 import { managedDir, managedOutputDir } from "../../lib/config.js";
 import { PRODUCT } from "../../lib/product.js";
-import { assertOk, runCmd } from "../../lib/process.js";
+import { assertOk } from "../../lib/process.js";
+import { RuntimeChildExecution } from "../../lib/runtime-package.js";
 import { iterateAnalysisCategories } from "../../docs/lib/analysis-entry.js";
 import { GIT_OBJECT_ID, captureGitSnapshot, getWorktreeStatus, runGit } from "../../lib/git-helpers.js";
 import { emptySpecStub } from "../../lib/spec-json.js";
@@ -35,7 +36,9 @@ import { RealDirectoryAuthority, sameFileIdentity } from "../../lib/real-directo
 import { RegularFileSnapshot, captureRegularFile, DEFAULT_MAX_FILE_BYTES } from "../../lib/regular-file-snapshot.js";
 import { RepositoryFlowOperationLock } from "../../lib/repository-maintenance-lock.js";
 import { FlowRepositoryRuntimeArtifactRegistry } from "./flow-repository-runtime-artifacts.js";
-import { ProcessIdentity, ProcessIdentitySource } from "../../lib/process-identity.js";
+import { LockOwnerSession } from "../../lib/process-lock.js";
+import { ProcessExecutionCheckoutIdentity, ProcessExecutionControlFailure } from "../../lib/process-execution-values.js";
+import { ProcessExecutionRuntime, captureProcessExecutionCheckoutIdentity } from "../../lib/process-execution-runtime.js";
 import { PrepareStepBinding, prepareStepRegistration } from "../engine/composition/prepare.js";
 import { PreparationEvidence } from "./preparation-evidence.js";
 import { isStepPersistenceFailure } from "./definition-lifecycle-failure.js";
@@ -55,7 +58,7 @@ const WORKTREE_FLOW_INTERNAL_IGNORES = Object.freeze([
   ".flow-identity.publication.binding.tmp",
 ].map((file) => `/${PRODUCT.managedPath(file)}`));
 const WORKTREE_PREPARE_ATTEMPT_FILE = ".worktree-prepare-attempt.json";
-const WORKTREE_PREPARE_ATTEMPT_VERSION = 2;
+const WORKTREE_PREPARE_ATTEMPT_VERSION = 3;
 const WORKTREE_PREPARE_ATTEMPT_KEYS = Object.freeze([
   "version",
   "attemptId",
@@ -72,7 +75,8 @@ const WORKTREE_PREPARE_ATTEMPT_KEYS = Object.freeze([
   "excludePath",
   "excludeBefore",
   "excludeAfter",
-  "processIdentity",
+  "owner",
+  "checkoutIdentity",
 ]);
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const SAFE_RUN_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,199}$/;
@@ -88,7 +92,7 @@ function reportWorktreePrepareCheckpoint(ctx, phase, attempt) {
 }
 
 function runGitTrim(root, args) {
-  const res = runGit(["-C", root, ...args]);
+  const res = runGit(["-C", root, ...args], { cwd: root });
   if (res.ok) return res.stdout.trim();
   assertOk(res, `git ${args.join(" ")} failed`);
 }
@@ -178,7 +182,7 @@ export function buildDraftTemplate() {
 }
 
 function runDocsScanAndValidate(root) {
-  const res = runCmd(process.execPath, [path.join(PKG_DIR, PRODUCT.entrypointBasename), "docs", "scan"], {
+  const res = RuntimeChildExecution.runSync(path.join(PKG_DIR, PRODUCT.entrypointBasename), ["docs", "scan"], {
     cwd: root,
     timeout: 600000,
     env: { ...process.env, [PRODUCT.env("WORK_ROOT")]: root },
@@ -255,18 +259,18 @@ function syncPluginRuntimeToWorktree(root, worktreePath) {
 }
 
 function gitPathspecStatus(root, relPath) {
-  const res = runGit(["-C", root, "status", "--porcelain", "--untracked-files=all", "--", relPath]);
+  const res = runGit(["-C", root, "status", "--porcelain", "--untracked-files=all", "--", relPath], { cwd: root });
   assertOk(res, `git status failed for ${relPath}`);
   return res.stdout.split(/\r?\n/).filter(Boolean);
 }
 
 function branchHasPath(root, ref, relPath) {
-  const res = runGit(["-C", root, "cat-file", "-e", `${ref}:${relPath}`]);
+  const res = runGit(["-C", root, "cat-file", "-e", `${ref}:${relPath}`], { cwd: root });
   return res.ok;
 }
 
 function gitBlobId(root, ref, relPath) {
-  const res = runGit(["-C", root, "rev-parse", `${ref}:${relPath}`]);
+  const res = runGit(["-C", root, "rev-parse", `${ref}:${relPath}`], { cwd: root });
   return res.ok ? res.stdout.trim() : null;
 }
 
@@ -340,7 +344,7 @@ function requiredWorktreeFilesEnvelope(issues) {
 }
 
 function gitWorktreeRecord(root, worktreePath) {
-  const listed = runGit(["-C", root, "worktree", "list", "--porcelain"]);
+  const listed = runGit(["-C", root, "worktree", "list", "--porcelain"], { cwd: root });
   assertOk(listed, "git worktree list failed during prepare rollback");
   const expectedPath = path.resolve(worktreePath);
   for (const block of listed.stdout.trim().split(/\n\n+/)) {
@@ -354,7 +358,7 @@ function gitWorktreeRecord(root, worktreePath) {
 }
 
 function gitRefOid(root, branchName) {
-  const result = runGit(["-C", root, "rev-parse", "--verify", `refs/heads/${branchName}`]);
+  const result = runGit(["-C", root, "rev-parse", "--verify", `refs/heads/${branchName}`], { cwd: root });
   return result.ok ? result.stdout.trim() : null;
 }
 
@@ -406,6 +410,9 @@ function worktreeIgnoreBytes(before) {
 
 class WorktreePrepareAttemptRecord {
   constructor(value) {
+    if (value?.version === 2 || Object.hasOwn(value ?? {}, "processIdentity")) {
+      throw new ProcessExecutionControlFailure("legacy-owner-format", "Prepare journal requires revision 3 token/session ownership; PID-based recovery is unavailable and the journal remains unchanged");
+    }
     exactKeys(value, WORKTREE_PREPARE_ATTEMPT_KEYS, "worktree prepare attempt");
     if (value.version !== WORKTREE_PREPARE_ATTEMPT_VERSION || !UUID.test(value.attemptId)) {
       throw new Error("worktree prepare attempt version or ID is invalid");
@@ -470,14 +477,15 @@ class WorktreePrepareAttemptRecord {
     this.excludePath = value.excludePath;
     this.excludeBefore = decodedBytes(value.excludeBefore, "exclude before-image");
     this.excludeAfter = decodedBytes(value.excludeAfter, "exclude after-image");
-    this.processIdentity = new ProcessIdentity(value.processIdentity);
-    if (this.processIdentity.ownerToken !== this.attemptId) {
-      throw new Error("worktree prepare attempt process owner token is invalid");
-    }
+    exactKeys(value.owner, ["ownerToken", "ownerSession"], "worktree prepare owner");
+    this.owner = new LockOwnerSession(value.owner);
+    this.checkoutIdentity = new ProcessExecutionCheckoutIdentity(value.checkoutIdentity);
+    if (this.checkoutIdentity.mainRoot !== this.mainRoot) throw new Error("prepare journal checkout belongs to another repository");
     Object.freeze(this);
   }
 
-  static create({ mainRoot, runId, issue, request, branchName, worktreePath, specId, expectedOid, processIdentitySource }) {
+  static create({ mainRoot, executionRoot, runId, issue, request, branchName, worktreePath, specId, expectedOid, owner }) {
+    if (!(owner instanceof LockOwnerSession)) throw new TypeError("Prepare journal requires the acquired repository operation owner");
     const attemptId = crypto.randomUUID();
     const preparingPath = path.join(managedDir(mainRoot), `.active-flow.${runId}`);
     const rawExclude = runGitTrim(mainRoot, ["rev-parse", "--git-path", "info/exclude"]);
@@ -500,7 +508,8 @@ class WorktreePrepareAttemptRecord {
       excludePath,
       excludeBefore: encodedBytes(excludeBefore),
       excludeAfter: encodedBytes(worktreeIgnoreBytes(excludeBefore)),
-      processIdentity: processIdentitySource.createOwner(attemptId),
+      owner: owner.toJSON(),
+      checkoutIdentity: captureProcessExecutionCheckoutIdentity({ mainRoot, executionRoot }).toJSON(),
     });
   }
 
@@ -521,7 +530,8 @@ class WorktreePrepareAttemptRecord {
       excludePath: this.excludePath,
       excludeBefore: encodedBytes(this.excludeBefore),
       excludeAfter: encodedBytes(this.excludeAfter),
-      processIdentity: this.processIdentity,
+      owner: this.owner.toJSON(),
+      checkoutIdentity: this.checkoutIdentity.toJSON(),
     };
   }
 }
@@ -539,10 +549,9 @@ class WorktreePrepareAttemptSnapshot {
 }
 
 class WorktreePrepareAttemptJournal {
-  constructor({ mainRoot, processIdentitySource = new ProcessIdentitySource() }) {
+  constructor({ mainRoot }) {
     this.mainRoot = fs.realpathSync(mainRoot);
     this.path = path.join(managedDir(this.mainRoot), WORKTREE_PREPARE_ATTEMPT_FILE);
-    this.processIdentitySource = processIdentitySource;
   }
 
   load() {
@@ -553,9 +562,13 @@ class WorktreePrepareAttemptJournal {
     return new WorktreePrepareAttemptSnapshot(record, snapshot);
   }
 
-  begin(record, flowManager) {
+  begin(record, flowManager, operationLock) {
     if (!(record instanceof WorktreePrepareAttemptRecord)) {
       throw new Error("worktree prepare attempt record is required");
+    }
+    const owner = operationLock.owner;
+    if (owner.ownerToken !== record.owner.ownerToken || owner.ownerSession !== record.owner.ownerSession) {
+      throw new ProcessExecutionControlFailure("owner-mismatch", "Prepare journal owner differs from the acquired repository operation lock");
     }
     if (this.load()) throw new Error("worktree prepare attempt already exists");
     if (gitWorktreeRecord(this.mainRoot, record.worktreePath) || fs.existsSync(record.worktreePath)) {
@@ -581,14 +594,24 @@ class WorktreePrepareAttemptJournal {
     return record;
   }
 
-  recoverStale(flowManager, operationLock, confirmedReceipt = null, branchReceipt = null) {
+  recoverReleased(flowManager, operationLock, confirmedReceipt = null, branchReceipt = null) {
     const snapshot = this.load();
     if (!snapshot) return null;
     const operationOwnerToken = operationLock.assertOwned();
-    const assessment = this.processIdentitySource.assess(snapshot.record.processIdentity);
-    if (assessment.status !== "stale") {
-      throw new Error(`worktree prepare attempt owner is ${assessment.status}: ${assessment.reason}`);
+    const owner = operationLock.owner;
+    if (owner.ownerToken === snapshot.record.owner.ownerToken) {
+      throw new ProcessExecutionControlFailure("owner-busy", "Prepare journal still belongs to this active repository operation");
     }
+    const origin = snapshot.record.checkoutIdentity;
+    const inventory = ProcessExecutionRuntime.inspect({ mainRoot: origin.mainRoot, executionRoot: origin.executionRoot });
+    if (inventory !== null && !origin.matches(new ProcessExecutionCheckoutIdentity(inventory.checkout))) {
+      throw new ProcessExecutionControlFailure("authority-mismatch", "Prepare recovery checkout no longer matches its saved physical origin");
+    }
+    ProcessExecutionRuntime.assertQuiescent({ mainRoot: origin.mainRoot, executionRoot: origin.executionRoot });
+    // Acquiring the same canonical exclusion authority proves the prior writer
+    // relinquished it. A crashed holder leaves the lock busy and never reaches
+    // this boundary. This says nothing about effects: validate their receipts
+    // and exact before/after images below before adoption or rollback.
     if (confirmedReceipt !== null) {
       const record = snapshot.record;
       if (confirmedReceipt.binding.runId !== record.runId
@@ -615,7 +638,7 @@ class WorktreePrepareAttemptJournal {
       this.#validateRollback(record, flowManager);
       this.assertGitCreated(record);
       const adopted = new WorktreePrepareAttemptRecord({
-        ...record.toJSON(), processIdentity: this.processIdentitySource.createOwner(record.attemptId),
+        ...record.toJSON(), owner: owner.toJSON(),
       });
       new AtomicFile(this.path, { commitGuard: () => {
         operationLock.assertOwned();
@@ -686,14 +709,14 @@ class WorktreePrepareAttemptJournal {
       new RealDirectoryAuthority(authority.specDirectory).removeTree();
     }
     if (authority.worktree) {
-      const removed = runGit(["-C", this.mainRoot, "worktree", "remove", "--force", record.worktreePath]);
+      const removed = runGit(["-C", this.mainRoot, "worktree", "remove", "--force", record.worktreePath], { cwd: this.mainRoot });
       if (!removed.ok) throw new Error(`git worktree remove failed: ${removed.stderr.trim()}`);
     }
     const branchOid = gitRefOid(this.mainRoot, record.branchName);
     if (branchOid === record.expectedOid) {
       const removed = runGit([
         "-C", this.mainRoot, "update-ref", "-d", `refs/heads/${record.branchName}`, record.expectedOid,
-      ]);
+      ], { cwd: this.mainRoot });
       if (!removed.ok) throw new Error(`git branch CAS delete failed: ${removed.stderr.trim()}`);
     }
     this.#remove(record);
@@ -844,7 +867,6 @@ export class RunPrepareSpecCommand extends FlowCommand {
     const retryJournal = !dryRun && runIdArg && useWorktreeFlag
       ? new WorktreePrepareAttemptJournal({
           mainRoot,
-          processIdentitySource: ctx.worktreePrepareProcessIdentitySource,
         })
       : null;
     const retryAttempt = retryJournal?.load()?.record ?? null;
@@ -955,7 +977,7 @@ export class RunPrepareSpecCommand extends FlowCommand {
 
     const slug = slugify(title) || "feature";
     const attemptJournal = !dryRun && useWorktree
-      ? retryJournal ?? new WorktreePrepareAttemptJournal({ mainRoot, processIdentitySource: ctx.worktreePrepareProcessIdentitySource })
+      ? retryJournal ?? new WorktreePrepareAttemptJournal({ mainRoot })
       : null;
     const pendingAttempt = retryAttempt ?? attemptJournal?.load()?.record ?? null;
     if (pendingAttempt && (
@@ -1018,9 +1040,6 @@ export class RunPrepareSpecCommand extends FlowCommand {
 
     const operationLock = new RepositoryFlowOperationLock({
       mainRoot,
-      ...(ctx.worktreePrepareProcessIdentitySource && {
-        processIdentitySource: ctx.worktreePrepareProcessIdentitySource,
-      }),
     });
     const operationOwnerToken = operationLock.acquire();
     try {
@@ -1032,6 +1051,7 @@ export class RunPrepareSpecCommand extends FlowCommand {
       flowManager.cleanStaleFlows({ operationOwnerToken });
       flowManager.assertCanAddActiveFlow(specId, "branch", { operationOwnerToken });
       const { dirty, dirtyFiles } = getWorktreeStatus(currentExecutionRoot, {
+        repositoryRoot: currentExecutionRoot,
         pathspecExcludes: new FlowRepositoryRuntimeArtifactRegistry().gitPathspecExcludes({ relativeToCwd: true }),
       });
       if (dirty) {
@@ -1044,7 +1064,7 @@ export class RunPrepareSpecCommand extends FlowCommand {
     const completedBranch = priorState === null ? null : flowManager.readCurrentStepSettlement({
       specId, stepId: "branch", completed: true,
     });
-    const resumedWorktreeAttempt = attemptJournal?.recoverStale(flowManager, operationLock,
+    const resumedWorktreeAttempt = attemptJournal?.recoverReleased(flowManager, operationLock,
       completedPreparation?.receipt ?? null, completedBranch?.receipt ?? null) ?? null;
 
     // The Version Store atomically creates spec.json, flow.json, the ledger,
@@ -1161,6 +1181,7 @@ export class RunPrepareSpecCommand extends FlowCommand {
         if (worktreeAttempt === null) {
           worktreeAttempt = WorktreePrepareAttemptRecord.create({
             mainRoot,
+            executionRoot: currentExecutionRoot,
             runId: flowRunId,
             issue: issue ? Number(issue) : null,
             request,
@@ -1168,9 +1189,9 @@ export class RunPrepareSpecCommand extends FlowCommand {
             worktreePath,
             specId,
             expectedOid: baseOid,
-            processIdentitySource: attemptJournal.processIdentitySource,
+            owner: operationLock.owner,
           });
-          attemptJournal.begin(worktreeAttempt, flowManager);
+          attemptJournal.begin(worktreeAttempt, flowManager, operationLock);
           attemptPublished = true;
           reportWorktreePrepareCheckpoint(ctx, "after-journal-publication", worktreeAttempt);
           runGitTrim(mainRoot, ["worktree", "add", worktreePath, "-b", branchName, baseOid]);
@@ -1213,7 +1234,7 @@ export class RunPrepareSpecCommand extends FlowCommand {
         reportWorktreePrepareCheckpoint(ctx, "after-journal-completion", worktreeAttempt);
         attemptPublished = false;
       } catch (publicationError) {
-        let preservePublication = preparationConfirmed
+        let preservePublication = publicationError instanceof ProcessExecutionControlFailure || preparationConfirmed
           || (resumedWorktreeAttempt !== null && isStepAdmissionRefusal(publicationError));
         if (!preservePublication && isStepPersistenceFailure(publicationError)) {
           try {

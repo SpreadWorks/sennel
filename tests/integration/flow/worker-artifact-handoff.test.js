@@ -47,6 +47,7 @@ import { draftWorkerStepRegistration } from "../../../src/flow/engine/compositio
 import { specWorkerStepRegistration } from "../../../src/flow/engine/composition/spec.js";
 import { PreparedStep } from "../../../src/flow/engine/composition/step-registration.js";
 import {
+  FLOW_DISPATCH_INVOCATION_ID_ENV,
   FlowDispatchInvocation,
   FlowDispatchSession,
   FlowDispatchTarget,
@@ -108,6 +109,7 @@ import { loadSpecJsonSchema } from "../../../src/lib/spec-json.js";
 import { validateSchema } from "../../../src/lib/schema-validate.js";
 import { adaptJsonSchemaForProvider } from "../../../src/lib/provider-schema.js";
 import {
+  WORKER_ARTIFACT_HANDOFF_REQUEST_ENV,
   WorkerArtifactHandoffCoordinator,
   WorkerArtifactHandoffError,
   WorkerArtifactMutationAuthoritySnapshot,
@@ -1352,8 +1354,8 @@ describe("worker artifact handoff", () => {
       request.payloadPath("draft.json"),
       json(draftDocument("sealed without ambient Flow context")),
     );
-    const previousRequestPath = process.env.SENNEL_FLOW_HANDOFF_REQUEST;
-    const previousInvocationId = process.env.SENNEL_FLOW_DISPATCH_INVOCATION_ID;
+    const previousRequestPath = process.env[WORKER_ARTIFACT_HANDOFF_REQUEST_ENV];
+    const previousInvocationId = process.env[FLOW_DISPATCH_INVOCATION_ID_ENV];
     const output = [];
     let contextBuilds = 0;
     let exitCode = null;
@@ -1367,9 +1369,9 @@ describe("worker artifact handoff", () => {
       loadReadOnly() { throw new Error("seal-handoff must not read Flow state"); },
       artifactCatalog() { throw new Error("seal-handoff must not read the artifact catalog"); },
     });
-    process.env.SENNEL_FLOW_HANDOFF_REQUEST = request.requestPath;
-    process.env.SENNEL_FLOW_DISPATCH_INVOCATION_ID = request.dispatchInvocationId;
-    try {
+    const sealThroughDispatcher = async () => {
+      output.length = 0;
+      exitCode = null;
       await dispatch({
         container,
         entry: flowCommands.run["seal-handoff"],
@@ -1384,8 +1386,38 @@ describe("worker artifact handoff", () => {
           throw new Error("seal-handoff must not build ambient Flow context");
         },
       });
+      return JSON.parse(output.join(""));
+    };
+    try {
+      const beforeSeal = new CanonicalPersistenceSnapshot(value.flowManager, value.specId,
+        [request.requestPath, request.actionRequestPath, request.submissionPath, request.payloadPath("draft.json")]);
+      for (const refusal of [
+        { name: "missing request path", requestPath: null, invocationId: request.dispatchInvocationId,
+          code: "FLOW_ARTIFACT_HANDOFF_INVALID", classification: "invalid" },
+        { name: "missing invocation id", requestPath: request.requestPath, invocationId: null,
+          code: "FLOW_ARTIFACT_HANDOFF_INVALID", classification: "invalid" },
+        { name: "another invocation id", requestPath: request.requestPath, invocationId: `${request.dispatchInvocationId}-other`,
+          code: "FLOW_ARTIFACT_HANDOFF_STALE", classification: "stale" },
+      ]) {
+        if (refusal.requestPath === null) delete process.env[WORKER_ARTIFACT_HANDOFF_REQUEST_ENV];
+        else process.env[WORKER_ARTIFACT_HANDOFF_REQUEST_ENV] = refusal.requestPath;
+        if (refusal.invocationId === null) delete process.env[FLOW_DISPATCH_INVOCATION_ID_ENV];
+        else process.env[FLOW_DISPATCH_INVOCATION_ID_ENV] = refusal.invocationId;
 
-      const envelope = JSON.parse(output.join(""));
+        const envelope = await sealThroughDispatcher();
+        assert.equal(envelope.ok, false, refusal.name);
+        assert.equal(exitCode, 1, refusal.name);
+        assert.deepEqual(envelope.errors.map(({ code }) => code), [refusal.code], refusal.name);
+        assert.equal(envelope.data.classification, refusal.classification, refusal.name);
+        assert.equal(envelope.data.retryBudgetConsumed, false, refusal.name);
+        assert.equal(contextBuilds, 0, refusal.name);
+        assert.equal(fs.existsSync(request.submissionPath), false, refusal.name);
+        beforeSeal.assertUnchanged(value.flowManager, value.specId, refusal.name);
+      }
+
+      process.env[WORKER_ARTIFACT_HANDOFF_REQUEST_ENV] = request.requestPath;
+      process.env[FLOW_DISPATCH_INVOCATION_ID_ENV] = request.dispatchInvocationId;
+      const envelope = await sealThroughDispatcher();
       assert.equal(envelope.ok, true);
       assert.equal(exitCode, 0);
       assert.equal(contextBuilds, 0);
@@ -1393,10 +1425,10 @@ describe("worker artifact handoff", () => {
       assert.equal(envelope.data.handoffPath, request.submissionPath);
       assert.equal(fs.existsSync(path.join(value.executionRoot, ".tmp")), false);
     } finally {
-      if (previousRequestPath === undefined) delete process.env.SENNEL_FLOW_HANDOFF_REQUEST;
-      else process.env.SENNEL_FLOW_HANDOFF_REQUEST = previousRequestPath;
-      if (previousInvocationId === undefined) delete process.env.SENNEL_FLOW_DISPATCH_INVOCATION_ID;
-      else process.env.SENNEL_FLOW_DISPATCH_INVOCATION_ID = previousInvocationId;
+      if (previousRequestPath === undefined) delete process.env[WORKER_ARTIFACT_HANDOFF_REQUEST_ENV];
+      else process.env[WORKER_ARTIFACT_HANDOFF_REQUEST_ENV] = previousRequestPath;
+      if (previousInvocationId === undefined) delete process.env[FLOW_DISPATCH_INVOCATION_ID_ENV];
+      else process.env[FLOW_DISPATCH_INVOCATION_ID_ENV] = previousInvocationId;
       removeTmpDir(value.mainRoot);
     }
   });

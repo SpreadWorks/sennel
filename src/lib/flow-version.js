@@ -1,3 +1,4 @@
+import { RepositoryLockAuthority } from "./repository-control-lock.js";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -8,7 +9,7 @@ export { FlowRunId } from "./flow-run-id.js";
 import { AtomicJsonFile, AtomicJsonWriteError } from "./atomic-json-file.js";
 import { AtomicFile } from "./atomic-file.js";
 import { FileLock, FileLockWaitPolicy } from "./file-lock.js";
-import { ProcessLock } from "./process-lock.js";
+import { ProcessExecutionRuntime } from "./process-execution-runtime.js";
 import { RealDirectoryAuthority } from "./real-directory-authority.js";
 import { captureRegularFile, MAX_IN_MEMORY_FILE_BYTES } from "./regular-file-snapshot.js";
 import { removeRegularFile } from "./regular-file-io.js";
@@ -120,7 +121,7 @@ const DEFAULT_CATALOG_SNAPSHOT_LIMITS = Object.freeze({
 
 function artifactCatalogLockError(status, message, { lockPath, cause } = {}) {
   const error = new Error(message, { cause });
-  if (status === "live" || status === "timeout") {
+  if (status === "busy" || status === "timeout") {
     error.name = "FlowArtifactCatalogBusyError";
     error.code = "FLOW_ARTIFACT_CATALOG_BUSY";
   } else {
@@ -817,19 +818,21 @@ export class FlowVersionRuntimeLockLocation {
     this.location = location;
     this.logicalKey = key;
     this.repositoryRoot = location.repositoryRoot;
-    this.relativeRepositoryPath = location.relativeArtifact(key);
-    this.path = location.artifact(key);
+    this.controlLocation = new RepositoryLockAuthority(location.repositoryRoot, { rootAuthority: location.repositoryAuthority }).location({
+      namespace: "flow-version", identity: location.directory, fileName: path.basename(location.artifact(key)),
+      legacyPaths: [location.artifact(key)],
+    });
+    this.path = this.controlLocation.path;
+    this.relativeRepositoryPath = path.relative(this.repositoryRoot, this.path).split(path.sep).join("/");
     this.directory = path.dirname(this.path);
     this.fileName = path.basename(this.path);
-    this.runtimeDirectory = path.dirname(this.directory);
+    this.runtimeDirectory = location.resolve(".runtime");
     Object.freeze(this);
   }
 
   matchesRepositoryPath(value) {
     const candidate = relativePath(value, "runtime lock repository path");
-    if (candidate === this.relativeRepositoryPath) return true;
-    return path.posix.dirname(candidate) === path.posix.dirname(this.relativeRepositoryPath)
-      && ProcessLock.isOwnerTemporaryFileName(this.fileName, path.posix.basename(candidate));
+    return candidate === this.relativeRepositoryPath;
   }
 }
 
@@ -1047,9 +1050,9 @@ export class FlowArtifactActivityAssociation {
       if (sourceCompletion || externalUpgrade) return this;
       throw new Error("system upgrade.result may be associated only with a source completion or publish_upgrade_result Activity");
     }
-    // Metric and note Activities can name their fixed producing Step while
+    // Observation Activities can name their fixed producing Step while
     // the Store publishes the shared state/ledger with system authority.
-    if (["record_metric", "record_note"].includes(this.operation)
+    if (["record_metric", "record_note", "record_process_event"].includes(this.operation)
       && ["flow.state", "flow.activities"].includes(artifact.logicalKey)
       && artifact.slot.publicationStep === "system") return this;
     let updaterStep;
@@ -1921,9 +1924,8 @@ export class FlowArtifactCatalogStore {
     // Establish the non-authoritative runtime branch before its identity is
     // captured.  Publication never treats these files as catalog entries.
     const runtimeAuthority = directoryAuthority.descendant(runtimeDirectory, { create: true, creationMode: 0o755 });
-    const lockDirectoryAuthority = runtimeAuthority.descendant(lockDirectory, { create: true, creationMode: 0o755 });
     const lock = new FileLock({
-      directoryAuthority: lockDirectoryAuthority, fileName: runtimeLock.fileName, kind: "artifact-catalog-publication",
+      location: runtimeLock.controlLocation, kind: "artifact-catalog-publication",
       authority: { directory: this.location.directory, runtimeDirectory, catalog: this.location.catalogFile },
       waitPolicy: new FileLockWaitPolicy({
         timeoutMs: CATALOG_LOCK_WAIT_TIMEOUT_MS,
@@ -1931,10 +1933,15 @@ export class FlowArtifactCatalogStore {
       }),
       errorFactory: artifactCatalogLockError,
     });
-    return lock.runExclusive(() => {
+    const run = () => lock.runExclusive(() => {
       this.#recoverTransaction(runtimeAuthority);
       return operation(runtimeAuthority);
     });
+    // Registered validation commands retain their durable outbox facts while
+    // this lock protects the coherent read or publication. Their canonical
+    // writer may enter the catalog only after this exact lock is released.
+    const runtime = ProcessExecutionRuntime.current();
+    return runtime === null ? run() : runtime.withDeferredEventPublicationSync(run);
   }
 }
 

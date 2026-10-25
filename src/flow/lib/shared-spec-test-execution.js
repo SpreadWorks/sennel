@@ -25,7 +25,7 @@ export class SharedSpecTestExecution {
       throw new Error("shared spec test arguments must be non-empty strings");
     }
     return [
-      "node",
+      process.execPath,
       ...(this.usesModuleRedirect ? ["--experimental-loader", LOADER_PATH] : []),
       ...args,
     ];

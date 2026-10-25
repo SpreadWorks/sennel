@@ -749,6 +749,16 @@ function recordAndProceedFailure(code, message, data = {}) {
   return Envelope.fail("run", "final-regression", code, message, data);
 }
 
+function assertRecordAndProceedAction(decision) {
+  try {
+    return selectedNonGateUserAction(decision, FINAL_REGRESSION_RECORD_AND_PROCEED_ACTION_ID);
+  } catch {
+    throw new Error(
+      `final-regression record-and-proceed admission rejected: Definition selected ${decision.disposition.operation}`,
+    );
+  }
+}
+
 /**
  * Run the normal project regression against V1 state. Inputs and output are
  * resolved through the Version Store, and raw bytes live only in the typed
@@ -767,6 +777,13 @@ async function executeCanonicalFinalRegression(ctx) {
     if (canonical.attempt.failure === null) {
       throw new Error("canonical final-regression record-and-proceed requires a prior failed Attempt");
     }
+    // Refuse an unselected Action from its authenticated saved settlement
+    // before changed-file freshness checks can launch managed Git observations.
+    // Missing/unfinished settlement evidence keeps the resolver's original
+    // refusal; a selected Action still needs the full fresh-source check below.
+    const saved = ctx.flowManager.readCurrentStepSettlement({ specId: state.specId, stepId: "final-regression" });
+    const savedDecision = saved?.settlement.application?.decision;
+    if (savedDecision !== undefined) assertRecordAndProceedAction(savedDecision);
     const admission = resolveCanonicalFinalRegressionTransition({
       flowManager: ctx.flowManager,
       specId: state.specId,
@@ -780,13 +797,7 @@ async function executeCanonicalFinalRegression(ctx) {
     // The command name is never an admission capability.  Only the exact
     // user Action sealed by the fresh canonical Definition decision may
     // create the accepted replacement Attempt.
-    try {
-      selectedNonGateUserAction(admission, FINAL_REGRESSION_RECORD_AND_PROCEED_ACTION_ID);
-    } catch {
-      throw new Error(
-        `final-regression record-and-proceed admission rejected: Definition selected ${admission.disposition.operation}`,
-      );
-    }
+    assertRecordAndProceedAction(admission);
     const prior = store.readCurrentAttempt({
       logicalKey: "final.regression",
       consumerNodeId: "final-regression",

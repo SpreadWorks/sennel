@@ -64,7 +64,7 @@ describe("loadConfig", () => {
     assert.equal(cfg.docs.defaultLanguage, "ja");
   });
 
-  it("validates flow.hooks as a string map", () => {
+  it("validates flow.hooks as a structured invocation map", () => {
     tmp = createTmpDir();
     writeJson(tmp, ".sennel/config.json", {
       lang: "ja",
@@ -72,14 +72,14 @@ describe("loadConfig", () => {
       docs: { languages: ["ja"], defaultLanguage: "ja" },
       flow: {
         hooks: {
-          PostWorktree: "printf ok",
-          CustomHook: "printf custom",
+          PostWorktree: { kind: "native", executable: "printf", args: ["ok"] },
+          CustomHook: { kind: "native", executable: "printf", args: ["custom"] },
         },
       },
     });
     const cfg = loadConfig(tmp);
-    assert.equal(cfg.flow.hooks.PostWorktree, "printf ok");
-    assert.equal(cfg.flow.hooks.CustomHook, "printf custom");
+    assert.deepEqual(cfg.flow.hooks.PostWorktree, { kind: "native", executable: "printf", args: ["ok"] });
+    assert.deepEqual(cfg.flow.hooks.CustomHook, { kind: "native", executable: "printf", args: ["custom"] });
 
     writeJson(tmp, ".sennel/config.json", {
       lang: "ja",
@@ -91,7 +91,7 @@ describe("loadConfig", () => {
         },
       },
     });
-    assert.throws(() => loadConfig(tmp), /flow\.hooks\.CustomHook: must be string/);
+    assert.throws(() => loadConfig(tmp), /flow\.hooks\.CustomHook/);
   });
 
   it("accepts only repository-relative normalized flow.specDir values", () => {

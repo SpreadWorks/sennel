@@ -7,8 +7,8 @@ const call = Object.freeze({ executionId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
   ownerToken: "private-owner", capability: "private-capability", endpoint: "unused" });
 const unavailable = () => managedControlFailure("PROCESS_EXECUTION_ENDPOINT_UNAVAILABLE", "Managed endpoint unavailable");
 
-function clock() {
-  let current = 0;
+function clock(origin = 0) {
+  let current = origin;
   return { now: () => current, advance: (ms) => { current += ms; }, wait: async (ms) => { current += ms; } };
 }
 
@@ -17,6 +17,8 @@ test("managed communication policy owns the three cumulative response slots", ()
   assert.equal(policy.attemptCount, 3);
   assert.equal(policy.budgetMs, 14000);
   assert.deepEqual([1, 2, 3].map((number) => policy.responseDeadlineMs(number)), [2000, 6000, 14000]);
+  assert.deepEqual(policy.responseDeadlinesMs, [2000, 6000, 14000]);
+  assert.equal(Object.isFrozen(policy.responseDeadlinesMs), true);
   assert.throws(() => new ManagedControlPolicy({ attemptCount: 4 }), TypeError);
   assert.throws(() => new ManagedControlPolicy({ initialMs: 3000 }), TypeError);
 });
@@ -44,6 +46,17 @@ test("early disconnects retain one physical request and consume the remaining re
   assert.deepEqual(starts, [0, 2000, 6000]);
   assert.equal(new Set(messages).size, 1);
   assert.equal(time.now(), 14000);
+});
+
+test("relative response slots retain their exact policy values with a fractional clock origin", async () => {
+  const time = clock(1234.5678);
+  await assert.rejects(managedRequest(call, "read-control", {}, { ...time,
+    request: async () => { throw unavailable(); },
+  }), (error) => {
+    assert.deepEqual(error.communication.attempts.map((attempt) => attempt.responseDeadlineMs), [2000, 6000, 14000]);
+    assert.equal(error.communication.cutoff, "budget-exhausted");
+    return true;
+  });
 });
 
 test("full response timeouts do not add a second delay after each consumed slot", async () => {
@@ -302,3 +315,33 @@ test("acceptance inspection after a verified refusal uses the current response d
   assert.deepEqual(deadlines, [2000]);
   assert.equal(time.now(), 0);
 });
+
+
+for (const returned of [false, true]) {
+  test(`physical target provenance survives ${returned ? "an explicit returned refusal" : "exhausted delivery"} without replacing client grant routing`, async () => {
+    const target = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
+    const specific = "dddddddd-dddd-4ddd-8ddd-dddddddddddd";
+    const payload = { data: { call: { callId: target } } };
+    const time = clock();
+    const observed = [];
+    await assert.rejects(managedRequest(call, "read-control", payload, { ...time,
+      request: async (route, message) => {
+        assert.equal(route, call);
+        assert.equal(message.callId, call.callId);
+        observed.push(message.payload.data.call.callId);
+        payload.data.call.callId = specific;
+        if (returned) throw managedControlFailure("PROCESS_EXECUTION_RECORD_SAVE_FAILED", "Physical write failed")
+          .withContext({ executionId: call.executionId, callId: specific });
+        throw unavailable();
+      },
+    }), (error) => {
+      assert.equal(error.callId, returned ? specific : target);
+      assert.equal(error.primaryCause.callId, returned ? specific : target);
+      assert.equal(error.executionId, call.executionId);
+      assert.equal(error.communication.cutoff, returned ? "refused" : "budget-exhausted");
+      assert.deepEqual(error.communication.attempts.map((attempt) => attempt.responseDeadlineMs), returned ? [2000] : [2000, 6000, 14000]);
+      return true;
+    });
+    assert.ok(observed.every((value) => value === target));
+  });
+}

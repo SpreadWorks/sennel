@@ -1,3 +1,4 @@
+import { RepositoryLockAuthority } from "../../../src/lib/repository-control-lock.js";
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -712,8 +713,9 @@ describe("Task Review protocol", () => {
         fs.writeFileSync(path.join(outputDirectory, "provider-output.json"), "{}\n");
         fs.mkdirSync(path.join(root, ".sennel", "agent-cache"), { recursive: true });
         fs.writeFileSync(path.join(root, ".sennel", "agent-cache", "task.json"), "{}\n");
-        fs.mkdirSync(path.join(root, ".sennel", "review-execution-locks"), { recursive: true });
-        fs.writeFileSync(path.join(root, ".sennel", "review-execution-locks", "task.lock"), "runtime\n");
+        const control = new RepositoryLockAuthority(root).location({ namespace: "review-execution", identity: "leases", fileName: "task.lock" });
+        control.resolve({ create: true });
+        fs.writeFileSync(control.path, "runtime\n");
         fs.mkdirSync(agentWorkDirectory, { recursive: true });
         fs.writeFileSync(path.join(agentWorkDirectory, "schema.json"), "{}\n");
         fs.mkdirSync(agentLogDirectory, { recursive: true });

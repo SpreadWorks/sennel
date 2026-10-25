@@ -1,3 +1,4 @@
+import { runGit as runGitCommand } from "./git-helpers.js";
 import fs from "fs";
 import path from "path";
 import crypto from "crypto";
@@ -52,7 +53,7 @@ const MAX_PLUGIN_JSON_BYTES = 1024 * 1024;
 const MAX_PLUGIN_RELATIVE_PATH_BYTES = 300;
 const FLOW_COMMANDS = new Set(["prepare", "gate", "review", "test-execute", "test-result-review", "retro", "acceptance-review", "final-regression", "report", "finalize-commit", "finalize-merge", "finalize-sync", "finalize-cleanup"]);
 const FLOW_COMMAND_HOOKS = new Set(["pre", "post", "onError", "finally"]);
-const CORE_COMMANDS = new Set(["docs", "flow", "check", "metrics", "spec", "hook", "setup", "upgrade", "presets", "plugin", "help"]);
+const CORE_COMMANDS = new Set(["docs", "flow", "check", "metrics", "spec", "hook", "setup", "upgrade", "presets", "plugin", "help", "command"]);
 
 function readJson(file) {
   return JSON.parse(captureRegularFile(file, { label: "plugin JSON", maxBytes: MAX_IN_MEMORY_FILE_BYTES }).text());
@@ -591,7 +592,7 @@ export function isGitUrl(source) {
 }
 
 function runGit(cwd, args, context) {
-  const result = runCmd("git", args, { cwd, maxBuffer: 10 * 1024 * 1024 });
+  const result = runGitCommand(args, { cwd, maxBuffer: 10 * 1024 * 1024 });
   assertOk(result, context);
   return result.stdout.trim();
 }
@@ -663,7 +664,7 @@ function hasConfinedGitMetadata(dest) {
   if (!isUnderPath(realGit, realDest)) {
     throw new Error(`unsafe plugin source cache path: .git escapes cache root: ${dest}`);
   }
-  const result = runCmd("git", ["rev-parse", "--show-toplevel"], { cwd: dest, maxBuffer: 10 * 1024 * 1024 });
+  const result = runGitCommand(["rev-parse", "--show-toplevel"], { cwd: dest, maxBuffer: 10 * 1024 * 1024 });
   if (!result.ok) return false;
   let realTopLevel;
   try {
@@ -680,17 +681,17 @@ function hasConfinedGitMetadata(dest) {
 
 function cloneGitUrlSource(dest, source) {
   fs.rmSync(dest, { recursive: true, force: true });
-  const result = runCmd("git", ["clone", sourceLocation(source), dest], { maxBuffer: 10 * 1024 * 1024 });
+  const result = runGitCommand(["clone", sourceLocation(source), dest], { maxBuffer: 10 * 1024 * 1024 });
   if (!result.ok) throw new Error(`failed to clone ${maskPluginSource(sourceLocation(source))}: ${maskPluginSource(result.stderr || result.stdout)}`);
 }
 
 function fetchGitUrlSource(dest, source) {
-  const result = runCmd("git", ["fetch", "--all", "--tags", "--force", "--prune"], { cwd: dest, maxBuffer: 10 * 1024 * 1024 });
+  const result = runGitCommand(["fetch", "--all", "--tags", "--force", "--prune"], { cwd: dest, maxBuffer: 10 * 1024 * 1024 });
   if (!result.ok) throw new Error(`failed to update ${maskPluginSource(sourceLocation(source))}: ${maskPluginSource(result.stderr || result.stdout)}`);
 }
 
 function hasGitUrlSourceRemote(dest, source) {
-  const result = runCmd("git", ["remote", "get-url", "origin"], { cwd: dest, maxBuffer: 10 * 1024 * 1024 });
+  const result = runGitCommand(["remote", "get-url", "origin"], { cwd: dest, maxBuffer: 10 * 1024 * 1024 });
   return result.ok && result.stdout.trim() === sourceLocation(source);
 }
 
@@ -711,7 +712,7 @@ function assertSafeGitRef(ref) {
 }
 
 function tryResolveGitCommit(cwd, ref) {
-  const result = runCmd("git", ["rev-parse", "--verify", "--end-of-options", `${ref}^{commit}`], { cwd, maxBuffer: 10 * 1024 * 1024 });
+  const result = runGitCommand(["rev-parse", "--verify", "--end-of-options", `${ref}^{commit}`], { cwd, maxBuffer: 10 * 1024 * 1024 });
   return result.ok ? result.stdout.trim() : null;
 }
 
@@ -846,10 +847,10 @@ function materializeCommit(sourceRoot, commit, root) {
   const tmp = temporaryPaths.create(temporaryPaths.runtime("plugin-materialization"), "tmp-plugin-");
   try {
     const archivePath = path.join(tmp, "package.tar");
-    const archive = runCmd("git", ["archive", "--format=tar", "-o", archivePath, commit], { cwd: sourceRoot, maxBuffer: 50 * 1024 * 1024 });
+    const archive = runGitCommand(["archive", "--format=tar", "-o", archivePath, commit], { cwd: sourceRoot, maxBuffer: 50 * 1024 * 1024 });
     if (!archive.ok) throw new Error(`failed to archive plugin package: ${archive.stderr || archive.stdout}`);
     const packageRoot = temporaryPaths.ensureDirectory(path.join(tmp, "package"));
-    const tar = runCmd("tar", ["-xf", archivePath, "-C", packageRoot], { maxBuffer: 50 * 1024 * 1024 });
+    const tar = runCmd("tar", ["-xf", archivePath, "-C", packageRoot], { cwd: root, maxBuffer: 50 * 1024 * 1024 });
     if (!tar.ok) throw new Error(`failed to extract plugin package: ${tar.stderr || tar.stdout}`);
     return new PluginPackageMaterialization(temporaryPaths, tmp, packageRoot);
   } catch (error) {

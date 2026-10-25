@@ -29,6 +29,9 @@
       "empty_response": "The provider returned no response ({{code}})."
     },
     "codes": {
+      "PROCESS_EXECUTION_FINALIZATION_PENDING": "Flow finalization is waiting for exact exit receipts from its registered processes ({{code}}). New process admission for this Flow is closed; completion remains unconfirmed.",
+      "PROCESS_EXECUTION_ACTIVITY_PENDING": "Flow finalization is waiting for durable acknowledgement of its process facts ({{code}}). The saved cutoff remains closed; completion remains unconfirmed.",
+      "PROCESS_EXECUTION_OBSERVATION_SAVE_FAILED": "Process facts could not be durably recorded ({{code}}). Flow finalization requires every reserved process result to be recorded; finalized history cannot accept new facts.",
       "NO_FLOW": "The operation requires an active Flow, but none was available ({{code}}).",
       "FLOW_AWAITING_USER_ACTION": "The Flow is waiting for the selected user action ({{code}}).",
       "FLOW_HOST_ACTION_REQUIRED": "The Flow returned the selected host action ({{code}}). Complete that action during the same turn using its existing directive.",

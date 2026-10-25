@@ -145,7 +145,7 @@ export class FlowCommand extends Command {
         return mismatch;
       }
     }
-    const lease = ctx.flowState && (input._envelopeType ?? "run") === "run" && !this.recoveryTargetResolution
+    const lease = ctx.flowState && (input._envelopeType ?? "run") === "run" && !this.recoveryTargetResolution && input.dryRun !== true
       ? FlowCommandExecutionLease.open(ctx) : null;
     try { return await this.execute(ctx); }
     finally { lease?.release(); }

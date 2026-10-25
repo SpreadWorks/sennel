@@ -1,123 +1,30 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import net from "node:net";
+import fs from "node:fs";
+import path from "node:path";
+import { performance } from "node:perf_hooks";
 import { randomUUID } from "node:crypto";
-import { spawn } from "node:child_process";
-import { once, EventEmitter } from "node:events";
-import { setTimeout as delay } from "node:timers/promises";
-import { ManagedProcessMessage, managedRequest, readManagedRecord, managedControlFailure } from "../../../src/lib/managed-process-protocol.js";
+import { AtomicFile } from "../../../src/lib/atomic-file.js";
+import { ManagedProcessMessage, managedRequest } from "../../../src/lib/managed-process-protocol.js";
 import { ManagedControlPolicy } from "../../../src/lib/managed-control-policy.js";
-import { ManagedStopOperation } from "../../../src/lib/managed-stop-operation.js";
-import { ManagedStopOperationStore } from "../../../src/lib/managed-stop-store.js";
-import { ManagedLauncher } from "../../../src/lib/managed-process-launcher.js";
+import { createTmpDir, removeTmpDir } from "../../support/builders/tmp-dir.js";
 
-class LauncherSocket extends EventEmitter {
-  setTimeout() {}
-  end(response) { this.response = ManagedProcessMessage.from(JSON.parse(response.trim())); }
+function callIn() {
+  return { executionId: randomUUID(), callId: randomUUID(), ownerToken: randomUUID(), capability: randomUUID() };
 }
 
-async function until(read, message) {
-  const deadline = Date.now() + 10000;
-  while (Date.now() < deadline) {
-    const result = read();
-    if (result) return result;
-    await delay(10);
-  }
-  assert.fail(message);
-}
-
-function callIn(root) {
-  return { executionId: randomUUID(), callId: randomUUID(), ownerToken: randomUUID(), capability: randomUUID(),
-    ownerEpoch: 1, bindingDigest: "test-binding", endpoint: path.join(root, "control.sock"),
-    helloPath: path.join(root, "hello.json"), outcomePath: path.join(root, "outcome.json") };
-}
-
-async function exchange(endpoint, request, { loseResponse = false } = {}) {
-  const socket = net.createConnection(endpoint);
-  socket.on("error", () => {});
-  await once(socket, "connect");
-  socket.write(`${JSON.stringify(request)}\n`);
-  if (loseResponse) { socket.destroy(); return null; }
-  let input = "";
-  for await (const bytes of socket) {
-    input += bytes;
-    const end = input.indexOf("\n");
-    if (end !== -1) { socket.destroy(); return ManagedProcessMessage.from(JSON.parse(input.slice(0, end))); }
-  }
-  assert.fail("Authenticated launcher response was missing");
-}
-
-async function launcherFixture(t) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "managed-control-"));
-  const call = callIn(root);
-  const config = { call, command: process.execPath, args: ["-e", [
-    "const fs=require('fs');",
-    "fs.appendFileSync('starts','started\\n');",
-    "process.on('SIGTERM',()=>{});",
-    "setInterval(()=>{if(fs.existsSync('release'))process.exit(0)},10);",
-  ].join("")], cwd: root, env: process.env, deadline: Date.now() + 30000,
-  graceMs: 2000, maxBuffer: 1024, input: null, extraDescriptors: [] };
-  let child;
-  t.after(async () => {
-    if (child && child.exitCode === null && child.signalCode === null) {
-      const exited = once(child, "exit");
-      try { process.kill(-child.pid, "SIGKILL"); }
-      catch (error) { if (error.code !== "ESRCH") throw error; }
-      await exited;
-    }
-    fs.rmSync(root, { recursive: true, force: true });
+async function listen(server, call) {
+  await new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.listen({ host: "127.0.0.1", port: 0 }, resolve);
   });
-  child = spawn(process.execPath, [new URL("../../../src/lib/managed-process-launcher.js", import.meta.url).pathname],
-    { detached: true, stdio: ["pipe", "ignore", "ignore"] });
-  child.stdin.end(JSON.stringify(config));
-  await until(() => readManagedRecord(call.helloPath), "launcher did not publish its identity");
-  return { root, call, child };
+  call.endpoint = { host: "127.0.0.1", port: server.address().port };
 }
-
-test("lost start and stop replies preserve one spawn and the first durable stop deadline", async (t) => {
-  const { root, call, child } = await launcherFixture(t);
-  const start = new ManagedProcessMessage(call, "start", { permit: { ...call }, environment: {} });
-  await exchange(call.endpoint, start, { loseResponse: true });
-  await until(() => fs.existsSync(path.join(root, "starts")), "provider did not start");
-  const admitted = readManagedRecord(call.outcomePath);
-  assert.equal(admitted.startRequest.requestId, start.requestId);
-  assert.equal(admitted.startRequest.payloadDigest, start.payloadDigest);
-  const replay = await exchange(call.endpoint, start);
-  assert.equal(replay.respondsTo(start), true);
-  assert.equal(replay.payload.providerIdentity.pid, admitted.providerIdentity.pid);
-  assert.equal(fs.readFileSync(path.join(root, "starts"), "utf8"), "started\n");
-
-  const differentStart = new ManagedProcessMessage(call, "start", start.payload);
-  const refused = await exchange(call.endpoint, differentStart);
-  assert.equal(refused.payload.error.code, "PROCESS_EXECUTION_REQUEST_MISMATCH");
-  assert.equal(readManagedRecord(call.outcomePath).state, "running");
-
-  const operation = ManagedStopOperation.begin({ reason: "abort", graceMs: 2000 });
-  const stop = new ManagedProcessMessage(call, "stop", operation.toPayload(), { requestId: operation.requestId });
-  await exchange(call.endpoint, stop, { loseResponse: true });
-  const stopping = await until(() => {
-    const record = readManagedRecord(call.outcomePath);
-    return record?.state === "stopping" ? record : null;
-  }, "launcher did not persist stopping");
-  const duplicateStop = await exchange(call.endpoint, stop);
-  assert.equal(duplicateStop.respondsTo(stop), true);
-  assert.deepEqual(duplicateStop.payload.stopOperation, operation.toJSON());
-  assert.deepEqual(duplicateStop.payload.stopOperation, stopping.stopOperation);
-  assert.equal(duplicateStop.payload.outcome.aborted, true);
-  assert.equal(duplicateStop.payload.outcome.timedOut, false);
-  const exited = once(child, "exit");
-  fs.writeFileSync(path.join(root, "release"), "release");
-  await exited;
-  assert.equal(readManagedRecord(call.outcomePath).state, "finished");
-  assert.equal(fs.readFileSync(path.join(root, "starts"), "utf8"), "started\n");
-});
 
 test("unknown socket disconnection retries the identical request and recovers", async (t) => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "managed-reconnect-"));
-  const call = callIn(root);
+  const root = createTmpDir("managed-reconnect-");
+  const call = callIn();
   const received = [];
   const server = net.createServer((socket) => {
     socket.on("error", () => {});
@@ -128,8 +35,8 @@ test("unknown socket disconnection retries the identical request and recovers", 
       else socket.end(`${JSON.stringify(request.respond({ state: "running" }))}\n`);
     });
   });
-  t.after(async () => { await new Promise((resolve) => server.close(resolve)); fs.rmSync(root, { recursive: true, force: true }); });
-  await new Promise((resolve) => server.listen(call.endpoint, resolve));
+  t.after(async () => { await new Promise((resolve) => server.close(resolve)); removeTmpDir(root); });
+  await listen(server, call);
   const result = await managedRequest(call, "status", {}, { policy: new ManagedControlPolicy({ initialMs: 20 }) });
   assert.equal(result.state, "running");
   assert.equal(received.length, 2);
@@ -137,8 +44,8 @@ test("unknown socket disconnection retries the identical request and recovers", 
 });
 
 test("response request correlation is verified before returning its payload", async (t) => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "managed-correlation-"));
-  const call = callIn(root);
+  const root = createTmpDir("managed-correlation-");
+  const call = callIn();
   const server = net.createServer((socket) => {
     socket.once("data", (bytes) => {
       const request = ManagedProcessMessage.from(JSON.parse(bytes.toString().trim()));
@@ -147,8 +54,8 @@ test("response request correlation is verified before returning its payload", as
       socket.end(`${JSON.stringify(wrong)}\n`);
     });
   });
-  t.after(async () => { await new Promise((resolve) => server.close(resolve)); fs.rmSync(root, { recursive: true, force: true }); });
-  await new Promise((resolve) => server.listen(call.endpoint, resolve));
+  t.after(async () => { await new Promise((resolve) => server.close(resolve)); removeTmpDir(root); });
+  await listen(server, call);
   await assert.rejects(managedRequest(call, "status"), (error) => {
     assert.equal(error.code, "PROCESS_EXECUTION_AUTHORITY_MISMATCH");
     assert.equal(error.communication.cutoff, "refused");
@@ -157,135 +64,135 @@ test("response request correlation is verified before returning its payload", as
   });
 });
 
-test("the receiver permits an authenticated request after more than two seconds of input inactivity", async (t) => {
-  const { call } = await launcherFixture(t);
-  const socket = net.createConnection(call.endpoint);
-  socket.on("error", () => {});
-  t.after(() => socket.destroy());
-  await once(socket, "connect");
-  // This is the protocol's inactivity boundary under test, not coordination.
-  await delay(2100);
-  assert.equal(socket.destroyed, false);
-  const request = new ManagedProcessMessage(call, "status");
-  socket.write(`${JSON.stringify(request)}\n`);
-  const [bytes] = await once(socket, "data");
-  const response = ManagedProcessMessage.from(JSON.parse(bytes.toString().trim()));
-  assert.equal(response.respondsTo(request), true);
-  assert.equal(response.payload.state, "waiting");
+test("a completed response to the same published mailbox request is observed while a later TCP attempt waits", { timeout: 20000 }, async (t) => {
+  const root = createTmpDir("managed-completed-mailbox-");
+  t.after(() => removeTmpDir(root));
+  const requests = path.join(root, "requests"), responses = path.join(root, "responses");
+  fs.mkdirSync(requests); fs.mkdirSync(responses);
+  const call = { ...callIn(), endpoint: { host: "127.0.0.1", port: 1, mailbox: { requests, responses } } };
+  const requestId = randomUUID();
+  const payload = { literal: "same operation 日本語 $HOME&value" };
+  const expected = new ManagedProcessMessage(call, "read-control", payload, { requestId });
+  const requestFile = new AtomicFile(path.join(requests, `${requestId}.json`));
+  const responseFile = new AtomicFile(path.join(responses, `${requestId}.json`));
+  const policy = new ManagedControlPolicy();
+  let connections = 0, published = false, savedRequest = null, firstSlotDeadline = null;
+  const sockets = [];
+  t.mock.method(net, "createConnection", () => {
+    const socket = new net.Socket();
+    sockets.push(socket);
+    if (++connections === 1) queueMicrotask(() => socket.destroy(Object.assign(new Error("Fixture connection disconnected"), { code: "ECONNRESET" })));
+    return socket;
+  });
+  t.after(() => { for (const socket of sockets) socket.destroy(); });
+  const started = performance.now();
+  const result = await managedRequest(call, "read-control", payload, { requestId, policy, onWait(deadline) {
+    // The initial settlement check receives the whole operation deadline.
+    firstSlotDeadline ??= deadline - policy.budgetMs + policy.responseDeadlineMs(1);
+    if (published || connections < 2 || performance.now() < firstSlotDeadline) return;
+    savedRequest = requestFile.read();
+    assert.ok(savedRequest, "the original fallback must publish its request before a response exists");
+    const request = ManagedProcessMessage.from(JSON.parse(savedRequest));
+    request.assertPayload();
+    assert.equal(request.matches(call), true);
+    assert.deepEqual(request, expected);
+    responseFile.write(JSON.stringify(request.respond({ state: "running" })), { exclusive: true });
+    published = true;
+  } });
+  const elapsedMs = performance.now() - started;
+  assert.ok(connections >= 2, "the response must become available during a later real transport attempt");
+  assert.equal(published, true);
+  assert.deepEqual(result, { state: "running" });
+  assert.ok(elapsedMs < policy.responseDeadlineMs(2), `completed mailbox acknowledgement must be observed before the second response deadline: ${elapsedMs}ms`);
+  assert.deepEqual(requestFile.read(), savedRequest);
+  assert.equal(ManagedProcessMessage.from(JSON.parse(responseFile.read())).respondsTo(expected), true);
 });
 
-for (const first of ["coordinator", "launcher"]) {
-  test(`the ${first}'s stop decision is shared and later receiver admission is persisted`, (t) => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "managed-stop-race-"));
-    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
-    t.mock.timers.enable({ apis: ["setTimeout"] });
-    const signals = [];
-    t.mock.method(process, "kill", (pid, signal) => { signals.push({ pid, signal }); });
-    const call = callIn(root);
-    const launcher = new ManagedLauncher({ call, maxBuffer: 64, graceMs: 2000 });
-    launcher.child = {};
-    launcher.capture = () => null;
-    const coordinator = new ManagedStopOperationStore(call);
-    let shared;
-    if (first === "coordinator") {
-      shared = coordinator.claim({ reason: "abort", graceMs: 2000 });
-      launcher.stop("timeout");
-    } else {
-      launcher.stop("timeout");
-      shared = coordinator.claim({ reason: "abort", graceMs: 2000 });
-    }
-    assert.deepEqual(launcher.stopOperation.toJSON(), shared.toJSON());
-    assert.equal(launcher.outcome.aborted, first === "coordinator");
-    assert.equal(launcher.outcome.timedOut, first === "launcher");
-    assert.equal(readManagedRecord(call.outcomePath).stopRequest, null);
-    const request = new ManagedProcessMessage(call, "stop", shared.toPayload(), { requestId: shared.requestId });
-    const socket = new LauncherSocket();
-    launcher.connect(socket);
-    socket.emit("data", Buffer.from(`${JSON.stringify(request)}\n`));
-    assert.equal(socket.response.respondsTo(request), true);
-    assert.equal(socket.response.payload.state, "stopping");
-    const saved = readManagedRecord(call.outcomePath);
-    assert.deepEqual(saved.stopOperation, shared.toJSON());
-    assert.deepEqual(saved.stopRequest, { requestId: request.requestId, payloadDigest: request.payloadDigest });
-    assert.deepEqual(signals, [{ pid: -process.pid, signal: "SIGTERM" }]);
+test("an authenticated mailbox response without a published request cannot satisfy TCP settlement", async (t) => {
+  const root = createTmpDir("managed-unsent-mailbox-");
+  const requests = path.join(root, "requests"), responses = path.join(root, "responses");
+  fs.mkdirSync(requests); fs.mkdirSync(responses);
+  const call = callIn();
+  const requestId = randomUUID();
+  const payload = { literal: "unsent mailbox 日本語" };
+  let received = null, connected = null, scheduled = false;
+  const server = net.createServer((socket) => {
+    connected = socket;
+    socket.once("data", (bytes) => { received = ManagedProcessMessage.from(JSON.parse(bytes.toString().trim())); });
   });
+  t.after(async () => {
+    connected?.destroy();
+    await new Promise((resolve) => server.close(resolve));
+    removeTmpDir(root);
+  });
+  await listen(server, call);
+  call.endpoint.mailbox = { requests, responses };
+  const expected = new ManagedProcessMessage(call, "read-control", payload, { requestId });
+  const requestFile = new AtomicFile(path.join(requests, `${requestId}.json`));
+  const responseFile = new AtomicFile(path.join(responses, `${requestId}.json`));
+  const unsentResponse = Buffer.from(JSON.stringify(expected.respond({ state: "mailbox-without-request" })));
+  responseFile.write(unsentResponse, { exclusive: true });
+  const result = await managedRequest(call, "read-control", payload, { requestId, onWait() {
+    if (received === null || scheduled) return;
+    scheduled = true;
+    // Let this settlement poll inspect the existing mailbox before TCP replies.
+    setImmediate(() => connected.end(`${JSON.stringify(received.respond({ state: "tcp" }))}\n`));
+  } });
+  assert.equal(scheduled, true);
+  assert.deepEqual(received, expected);
+  assert.deepEqual(result, { state: "tcp" });
+  assert.equal(requestFile.read(), null);
+  assert.deepEqual(responseFile.read(), unsentResponse);
+});
+
+async function assertHealthyTcpWithUnavailableMailbox(t, code, boundary) {
+    const root = createTmpDir("managed-inaccessible-mailbox-");
+    const requests = path.join(root, "requests"), responses = path.join(root, "responses");
+    fs.mkdirSync(requests); fs.mkdirSync(responses);
+    const call = callIn();
+    const requestId = randomUUID();
+    const requestPath = path.join(requests, `${requestId}.json`);
+    let received = null, connected = null, scheduled = false, writes = 0;
+    const server = net.createServer((socket) => {
+      connected = socket;
+      socket.once("data", (bytes) => { received = ManagedProcessMessage.from(JSON.parse(bytes.toString().trim())); });
+    });
+    t.after(async () => {
+      connected?.destroy();
+      await new Promise((resolve) => server.close(resolve));
+      removeTmpDir(root);
+    });
+    await listen(server, call);
+    call.endpoint.mailbox = { requests, responses };
+    const read = AtomicFile.prototype.read, write = AtomicFile.prototype.write;
+    t.mock.method(AtomicFile.prototype, "read", function (...args) {
+      if (boundary === "request-read" && this.filePath === requestPath) throw Object.assign(new Error("Owned optional mailbox permission boundary"), { code });
+      return read.apply(this, args);
+    });
+    const lstat = fs.lstatSync;
+    t.mock.method(fs, "lstatSync", function (file, ...args) {
+      if (boundary === "directory-stat" && file === requests) throw Object.assign(new Error("Owned optional mailbox directory permission boundary"), { code });
+      return lstat.call(this, file, ...args);
+    });
+    t.mock.method(AtomicFile.prototype, "write", function (...args) {
+      if (this.filePath === requestPath) writes++;
+      return write.apply(this, args);
+    });
+    const result = await managedRequest(call, "read-control", { literal: "healthy TCP" }, { requestId, onWait() {
+      if (received === null || scheduled) return;
+      scheduled = true;
+      setImmediate(() => connected.end(`${JSON.stringify(received.respond({ state: "tcp" }))}\n`));
+    } });
+    assert.equal(scheduled, true);
+    assert.deepEqual(result, { state: "tcp" });
+    assert.equal(writes, 0);
+    assert.equal(fs.existsSync(requestPath), false);
 }
 
-test("a queued stop received after its deadline persists refusal without sending TERM or KILL", (t) => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "managed-expired-stop-"));
-  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
-  t.mock.timers.enable({ apis: ["setTimeout"] });
-  t.mock.method(process.hrtime, "bigint", () => 3000n * 1000000n);
-  const signals = [];
-  t.mock.method(process, "kill", (pid, signal) => { signals.push({ pid, signal }); });
-  const call = callIn(root);
-  const launcher = new ManagedLauncher({ call, maxBuffer: 64, graceMs: 20 });
-  launcher.child = {};
-  launcher.capture = () => ({ isStopped: () => false,
-    stopFailure: () => managedControlFailure("PROCESS_EXECUTION_STOP_UNPROVEN", "Provider is still alive at the stop deadline") });
-  const operation = new ManagedStopOperationStore(call).claim(ManagedStopOperation.begin({ reason: "abort", graceMs: 20, now: 100 }));
-  const request = new ManagedProcessMessage(call, "stop", operation.toPayload(), { requestId: operation.requestId });
-  const socket = new LauncherSocket();
-  launcher.connect(socket);
-  socket.emit("data", Buffer.from(`${JSON.stringify(request)}\n`));
-  t.mock.timers.tick(10000);
-  assert.deepEqual(signals, []);
-  const saved = readManagedRecord(call.outcomePath);
-  assert.equal(saved.state, "control-failed");
-  assert.equal(saved.controlFailure.code, "PROCESS_EXECUTION_STOP_UNPROVEN");
-  assert.equal(saved.outcome.finalAction, null);
-  assert.deepEqual(saved.stopOperation, operation.toJSON());
-  assert.deepEqual(saved.stopRequest, { requestId: request.requestId, payloadDigest: request.payloadDigest });
+test("a healthy TCP response does not require permission to inspect its optional mailbox", async (t) => {
+  for (const code of ["EACCES", "EPERM"]) await t.test(code, (t) => assertHealthyTcpWithUnavailableMailbox(t, code, "request-read"));
 });
 
-test("a KILL timer delayed beyond the stop deadline records refusal without another signal", (t) => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "managed-late-kill-"));
-  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
-  t.mock.timers.enable({ apis: ["setTimeout"] });
-  let currentMs = 1000;
-  t.mock.method(process.hrtime, "bigint", () => BigInt(currentMs) * 1000000n);
-  const signals = [];
-  t.mock.method(process, "kill", (pid, signal) => { signals.push({ pid, signal }); });
-  const call = callIn(root);
-  const launcher = new ManagedLauncher({ call, maxBuffer: 64, graceMs: 20 });
-  launcher.child = {};
-  launcher.capture = () => ({ isStopped: () => false,
-    stopFailure: () => managedControlFailure("PROCESS_EXECUTION_STOP_UNPROVEN", "Provider remained alive past the delayed KILL timer") });
-  launcher.stop("timeout");
-  const operation = readManagedRecord(call.outcomePath).stopOperation;
-  currentMs = operation.deadline + 1;
-  t.mock.timers.tick(20);
-  assert.deepEqual(signals, [{ pid: -process.pid, signal: "SIGTERM" }]);
-  const saved = readManagedRecord(call.outcomePath);
-  assert.equal(saved.state, "control-failed");
-  assert.equal(saved.controlFailure.code, "PROCESS_EXECUTION_STOP_UNPROVEN");
-  assert.equal(saved.outcome.finalAction, "SIGTERM");
-  assert.deepEqual(saved.stopOperation, operation);
+test("a healthy TCP response does not require permission to inspect its optional mailbox directory", async (t) => {
+  for (const code of ["EACCES", "EPERM"]) await t.test(code, (t) => assertHealthyTcpWithUnavailableMailbox(t, code, "directory-stat"));
 });
-
-for (const overdueSignal of ["SIGTERM", "SIGKILL"]) {
-  test(`stop observation crossing the deadline does not send ${overdueSignal}`, (t) => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "managed-stop-observation-overrun-"));
-    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
-    t.mock.timers.enable({ apis: ["setTimeout"] });
-    let currentMs = 1000;
-    t.mock.method(process.hrtime, "bigint", () => BigInt(currentMs) * 1000000n);
-    const signals = [];
-    t.mock.method(process, "kill", (pid, signal) => { signals.push({ pid, signal }); });
-    const call = callIn(root);
-    const launcher = new ManagedLauncher({ call, maxBuffer: 64, graceMs: 20 });
-    launcher.child = {};
-    let captures = 0;
-    launcher.capture = () => {
-      if (++captures === (overdueSignal === "SIGTERM" ? 1 : 2)) currentMs = launcher.stopOperation.deadline + 1;
-      return { isStopped: () => false,
-        stopFailure: () => managedControlFailure("PROCESS_EXECUTION_STOP_UNPROVEN", "Stop observation crossed the deadline") };
-    };
-    launcher.stop("timeout");
-    t.mock.timers.tick(20);
-    assert.deepEqual(signals, overdueSignal === "SIGTERM" ? [] : [{ pid: -process.pid, signal: "SIGTERM" }]);
-    const saved = readManagedRecord(call.outcomePath);
-    assert.equal(saved.controlFailure.code, "PROCESS_EXECUTION_STOP_UNPROVEN");
-    assert.equal(saved.outcome.finalAction, overdueSignal === "SIGTERM" ? null : "SIGTERM");
-  });
-}

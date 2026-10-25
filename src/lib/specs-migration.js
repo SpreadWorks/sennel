@@ -2863,7 +2863,8 @@ class LegacyCanonicalVersionPreflight {
           originalActivities: [...ledger.records.values()].map((entry) => entry.toJSON()), definition: this.definition })
       : new CurrentFlowState(rawState, { definition: this.definition });
     if (rawState.schemaRevision === CURRENT_FLOW_SCHEMA_REVISION) {
-      new CurrentFlowStateStore({ directory: this.location.directory, definition: this.definition })
+      new CurrentFlowStateStore({ directory: this.location.directory, definition: this.definition,
+        runtimeLockLocation: this.location.runtimeLock("runtime.lock.current-flow-state") })
         .validateActivities(state, [...ledger.records.values()]);
     }
     if (!spec.specId.equals(this.location.specId) || state.identity.specId.toString() !== this.location.specId.toString()) {

@@ -7,7 +7,7 @@ import { ProcessExecutionControlFailure } from "../../lib/process-execution-runt
  * regression execution and composes test-execute-result.json version "2".
  *
  * Root regression discovery is delegated to test-regression.js and follows:
- * test.command argv parsing with KEY=value env support and shell pipe /
+ * structured test.command invocation with explicit environment values and shell pipe /
  * semicolon / redirection / subshell / glob rejection, then package.json
  * scripts.test via npm test --, composer.json scripts.test via composer
  * run-script test --, and Makefile test via make test. Unknown analysis,
@@ -35,6 +35,7 @@ import {
   validateTestExecuteResultV2,
 } from "./test-artifacts.js";
 import {
+  ParsedCommand,
   classifyRegression,
   commandIdentityFor,
   discoverRegressionCommand,
@@ -67,7 +68,7 @@ const NO_TESTS_DECLARED_REASON = "no_tests_declared";
 function prerequisiteIssueEntry(executionRoot, state, err) {
   let changedFileCount = null;
   try {
-    changedFileCount = listChangedFilesDetailed({ cwd: executionRoot, baseBranch: state.baseBranch || "main" }).length;
+    changedFileCount = listChangedFilesDetailed({ cwd: executionRoot, repositoryRoot: executionRoot, baseBranch: state.baseBranch || "main" }).length;
   } catch (_) {
     changedFileCount = null;
   }
@@ -136,7 +137,7 @@ export async function runSpecLocalTests({ repositoryRoot, executionRoot, specDir
     ...selected.map((file) => path.relative(executionRoot, file)),
   ]);
   const result = await runProcessDetailed(
-    { argv, env: execution.environment, source: "spec-local-tests" },
+    new ParsedCommand({ argv, env: execution.environment, source: "spec-local-tests" }),
     { cwd: executionRoot, timeoutMs },
   );
   return { command: argv.join(" "), noTestsDeclared: false, result };

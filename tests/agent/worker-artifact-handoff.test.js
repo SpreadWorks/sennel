@@ -1,3 +1,4 @@
+import { installSennelTestLauncher } from "../support/infrastructure/sennel-test-launcher.js";
 import { completeCanonicalSourceHandoff } from "../support/builders/source-handoff-scenario.js";
 import assert from "node:assert/strict";
 import { CanonicalDraftReviewSource } from "../../src/flow/lib/canonical-review-artifacts.js";
@@ -5,6 +6,7 @@ import { execFileSync } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { performance } from "node:perf_hooks";
 import { describe, it } from "node:test";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -70,29 +72,105 @@ function agentDiagnostic(tracePath, event, details) {
   }
 }
 
-function recordAgentDiagnostics(agent, tracePath, label, captureExtra = () => null) {
-  if (tracePath === null) return agent;
+class AgentStageTiming {
+  constructor(tracePath) {
+    this.fd = null;
+    this.failureCode = null;
+    this.warningEmitted = false;
+    this.started = new Map();
+    this.sequence = 0;
+    if (tracePath === null) return;
+    try { this.fd = fs.openSync(tracePath, "wx", 0o600); }
+    catch (error) { this.failureCode = this.safeCode(error?.code); }
+  }
+
+  safeCode(value) {
+    return ["EEXIST", "EACCES", "EPERM", "ENOENT", "EROFS", "ENOSPC"].includes(value) ? value : "TIMING_WRITE_FAILED";
+  }
+
+  start(stage) {
+    const startedAt = performance.now();
+    this.started.set(stage, startedAt);
+    this.write(stage, "start");
+  }
+
+  end(stage, outcome = "completed") {
+    const startedAt = this.started.get(stage);
+    if (startedAt === undefined) return;
+    this.write(stage, "end", outcome, startedAt);
+    this.started.delete(stage);
+  }
+
+  closeOpen() {
+    for (const [stage, startedAt] of this.started) this.write(stage, "end", "interrupted-before-cleanup", startedAt);
+    this.started.clear();
+  }
+
+  close() {
+    if (this.fd !== null) {
+      try { fs.closeSync(this.fd); }
+      catch (error) { this.failureCode ??= this.safeCode(error?.code); }
+      this.fd = null;
+    }
+    if (this.failureCode !== null && !this.warningEmitted) {
+      this.warningEmitted = true;
+      try { process.stderr.write(`[agent-stage-timing] output unavailable (${this.failureCode})\n`); } catch {}
+    }
+  }
+
+  write(stage, boundary, outcome = null, start = null) {
+    if (this.fd === null || this.failureCode !== null) return;
+    const now = performance.now();
+    const record = {
+      sequence: ++this.sequence,
+      stage,
+      boundary,
+      outcome,
+      wallTime: new Date().toISOString(),
+      monotonicMs: now,
+      durationMs: start === null ? null : now - start,
+    };
+    try {
+      fs.writeSync(this.fd, `${JSON.stringify(record)}\n`);
+      fs.fsyncSync(this.fd);
+    } catch (error) {
+      this.failureCode = this.safeCode(error?.code);
+      try { fs.closeSync(this.fd); } catch {}
+      this.fd = null;
+    }
+  }
+}
+
+function recordAgentDiagnostics(agent, tracePath, label, captureExtra = () => null, stageTiming = null) {
+  if (tracePath === null && stageTiming === null) return agent;
   const originalCall = agent.call.bind(agent);
+  let callSequence = 0;
   agent.call = async (prompt, options = {}) => {
+    const callStage = `provider-call-${++callSequence}`;
+    stageTiming?.start(callStage);
     const requestPath = options.executionEnvironment?.SENNEL_FLOW_HANDOFF_REQUEST ?? null;
     let request = null;
-    try {
-      if (requestPath !== null) request = JSON.parse(fs.readFileSync(requestPath, "utf8"));
-    } catch (error) {
-      agentDiagnostic(tracePath, "request-read-error", { label, requestPath, message: error.message });
+    if (tracePath !== null) {
+      try {
+        if (requestPath !== null) request = JSON.parse(fs.readFileSync(requestPath, "utf8"));
+      } catch (error) {
+        agentDiagnostic(tracePath, "request-read-error", { label, requestPath, message: error.message });
+      }
     }
-    agentDiagnostic(tracePath, "provider-call", {
-      label,
-      requestPath,
-      request: request === null ? null : {
-        stepId: request.stepId,
-        actionDigest: request.actionDigest,
-        inputRevision: request.inputRevision,
-        attempt: request.sourceMutationBaseline?.attempt ?? null,
-        payloads: request.payloads?.map(({ logicalName, payloadPath }) => ({ logicalName, payloadPath })) ?? [],
-      },
-      prompt: String(prompt),
-    });
+    if (tracePath !== null) {
+      agentDiagnostic(tracePath, "provider-call", {
+        label,
+        requestPath,
+        request: request === null ? null : {
+          stepId: request.stepId,
+          actionDigest: request.actionDigest,
+          inputRevision: request.inputRevision,
+          attempt: request.sourceMutationBaseline?.attempt ?? null,
+          payloads: request.payloads?.map(({ logicalName, payloadPath }) => ({ logicalName, payloadPath })) ?? [],
+        },
+        prompt: String(prompt),
+      });
+    }
     const captureArtifacts = () => {
       const payloads = request === null ? [] : (request.payloads ?? []).map(({ logicalName, payloadPath }) => ({
         logicalName,
@@ -114,20 +192,26 @@ function recordAgentDiagnostics(agent, tracePath, label, captureExtra = () => nu
     };
     try {
       const response = await originalCall(prompt, options);
-      agentDiagnostic(tracePath, "provider-return", {
-        label,
-        response: typeof response === "string" ? response : JSON.stringify(response),
-        artifacts: captureArtifacts(),
-      });
+      stageTiming?.end(callStage);
+      if (tracePath !== null) {
+        agentDiagnostic(tracePath, "provider-return", {
+          label,
+          response: typeof response === "string" ? response : JSON.stringify(response),
+          artifacts: captureArtifacts(),
+        });
+      }
       return response;
     } catch (error) {
-      agentDiagnostic(tracePath, "provider-throw", {
-        label,
-        message: error.message,
-        code: error.code ?? null,
-        stack: error.stack,
-        artifacts: captureArtifacts(),
-      });
+      stageTiming?.end(callStage, "threw");
+      if (tracePath !== null) {
+        agentDiagnostic(tracePath, "provider-throw", {
+          label,
+          message: error.message,
+          code: error.code ?? null,
+          stack: error.stack,
+          artifacts: captureArtifacts(),
+        });
+      }
       throw error;
     }
   };
@@ -197,16 +281,6 @@ function publishAttemptArtifact(flowManager, specId, nodeId, logicalKey, payload
   });
 }
 
-function installSennelWrapper(executionRoot) {
-  const binDir = path.join(executionRoot, ".test-bin");
-  fs.mkdirSync(binDir, { recursive: true });
-  fs.writeFileSync(path.join(binDir, "sennel"), [
-    "#!/bin/sh",
-    `exec ${JSON.stringify(process.execPath)} ${JSON.stringify(SENNEL)} "$@"`,
-    "",
-  ].join("\n"), { mode: 0o755 });
-  return binDir;
-}
 
 function realCodexAgent({ mainRoot, executionRoot, flowManager, profileKey = "codex/gpt-5.6-sol-medium" }) {
   const logDir = new TemporaryPaths(mainRoot).logs();
@@ -435,9 +509,14 @@ function action(stepId) {
 
 describe("real agent worker artifact handoff", { timeout: 480_000 }, () => {
   it("keeps a source handoff valid when a real worker reads context and checks its source", async () => {
-    const temporaryRoot = createTmpDir("worker-handoff-agent-source-");
+    const stageTimingPath = process.env.SENNEL_AGENT_STAGE_TIMING_PATH
+      ? path.resolve(process.env.SENNEL_AGENT_STAGE_TIMING_PATH) : null;
+    const stageTiming = new AgentStageTiming(stageTimingPath);
     const originalPath = process.env.PATH;
+    let temporaryRoot;
     try {
+      stageTiming.start("fixture-setup");
+      temporaryRoot = createTmpDir("worker-handoff-agent-source-");
       const mainRoot = path.join(temporaryRoot, "main");
       const executionRoot = path.join(temporaryRoot, "execution");
       fs.mkdirSync(mainRoot, { recursive: true });
@@ -455,8 +534,10 @@ describe("real agent worker artifact handoff", { timeout: 480_000 }, () => {
         ["-C", mainRoot, "worktree", "add", "-q", "-b", "feature/worker-handoff-agent-source", executionRoot],
         { stdio: ["ignore", "pipe", "pipe"] },
       );
-      process.env.PATH = `${installSennelWrapper(executionRoot)}${path.delimiter}${originalPath}`;
+      process.env.PATH = `${installSennelTestLauncher(executionRoot, { entryPath: SENNEL })}${path.delimiter}${originalPath}`;
 
+      stageTiming.end("fixture-setup");
+      stageTiming.start("fixture-activation");
       const specId = "507-worker-handoff-agent-source";
       const flowManager = new FlowManager({ root: executionRoot, mainRoot, inWorktree: true, specId });
       const fixture = new CanonicalFlowFixture({
@@ -489,6 +570,8 @@ describe("real agent worker artifact handoff", { timeout: 480_000 }, () => {
         added_round: 0,
         status: "pending",
       }).registerActive().activate("implement");
+      stageTiming.end("fixture-activation");
+      stageTiming.start("fixture-setup");
       const dispatcher = new RunDispatchCommand({
         nextAction: {
           async run() {
@@ -497,25 +580,41 @@ describe("real agent worker artifact handoff", { timeout: 480_000 }, () => {
               : sourceWorkerAction();
           },
         },
-        agent: realCodexAgent({ mainRoot, executionRoot, flowManager }),
+        agent: recordAgentDiagnostics(
+          realCodexAgent({ mainRoot, executionRoot, flowManager }),
+          null,
+          "source-worker-handoff",
+          undefined,
+          stageTimingPath === null ? null : stageTiming,
+        ),
         repositoryFingerprint: () => "real-agent-source-handoff",
         leaseFactory: () => ({ acquire() {}, release() {} }),
       });
       dispatcher.container = {};
+      stageTiming.end("fixture-setup");
 
-      const result = await dispatcher.execute({
-        root: executionRoot,
-        executionRoot,
-        mainRoot,
-        specId,
-        flowManager,
-        flowState: flowManager.load(),
-        expectRunId: flowManager.load().runId,
-        expectSpec: specId,
-        _envelopeType: "run",
-        _envelopeKey: "dispatch",
-      });
+      stageTiming.start("source-worker-dispatch");
+      let result;
+      try {
+        result = await dispatcher.execute({
+          root: executionRoot,
+          executionRoot,
+          mainRoot,
+          specId,
+          flowManager,
+          flowState: flowManager.load(),
+          expectRunId: flowManager.load().runId,
+          expectSpec: specId,
+          _envelopeType: "run",
+          _envelopeKey: "dispatch",
+        });
+      } catch (error) {
+        stageTiming.end("source-worker-dispatch", "threw");
+        throw error;
+      }
+      stageTiming.end("source-worker-dispatch");
 
+      stageTiming.start("scenario-assertions");
       assert.equal(result.dispatch?.boundary, "completed", JSON.stringify(result, null, 2));
       assert.equal(result.dispatch.dispatchCount, 1);
       const completed = flowManager.load();
@@ -534,9 +633,21 @@ describe("real agent worker artifact handoff", { timeout: 480_000 }, () => {
         entry.transition.operation === "record_metric"
         && entry.metric?.counter === "docsRead"
       )), true);
+      stageTiming.end("scenario-assertions");
     } finally {
+      stageTiming.closeOpen();
+      stageTiming.start("cleanup");
       process.env.PATH = originalPath;
-      removeTmpDir(temporaryRoot);
+      let cleanupOutcome = "completed";
+      try {
+        if (temporaryRoot !== undefined) removeTmpDir(temporaryRoot);
+      } catch (error) {
+        cleanupOutcome = "threw";
+        throw error;
+      } finally {
+        stageTiming.end("cleanup", cleanupOutcome);
+        stageTiming.close();
+      }
     }
   });
 
@@ -555,7 +666,7 @@ describe("real agent worker artifact handoff", { timeout: 480_000 }, () => {
       initGitRepo(executionRoot);
       fs.writeFileSync(path.join(executionRoot, "README.md"), "worker handoff fixture\n");
       commitAll(executionRoot, "worker handoff fixture");
-      const binDir = installSennelWrapper(executionRoot);
+      const binDir = installSennelTestLauncher(executionRoot, { entryPath: SENNEL });
       process.env.PATH = `${binDir}${path.delimiter}${originalPath}`;
 
       const specId = "500-worker-handoff-agent";
@@ -794,7 +905,7 @@ describe("real agent worker artifact handoff", { timeout: 480_000 }, () => {
       ].join("\n"));
       initGitRepo(root);
       commitAll(root, "Task review fixture baseline");
-      process.env.PATH = `${installSennelWrapper(root)}${path.delimiter}${originalPath}`;
+      process.env.PATH = `${installSennelTestLauncher(root, { entryPath: SENNEL })}${path.delimiter}${originalPath}`;
 
       const flowManager = new FlowManager({ root, mainRoot: root, inWorktree: false, specId });
       const fixture = new CanonicalFlowFixture({
@@ -1056,7 +1167,7 @@ describe("real agent worker artifact handoff", { timeout: 480_000 }, () => {
       initGitRepo(executionRoot);
       fs.writeFileSync(path.join(executionRoot, "README.md"), "spec worker handoff fixture\n");
       commitAll(executionRoot, "spec worker handoff fixture");
-      const binDir = installSennelWrapper(executionRoot);
+      const binDir = installSennelTestLauncher(executionRoot, { entryPath: SENNEL });
       process.env.PATH = `${binDir}${path.delimiter}${originalPath}`;
 
       const specId = "505-worker-handoff-agent-spec";

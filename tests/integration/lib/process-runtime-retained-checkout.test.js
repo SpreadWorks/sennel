@@ -5,9 +5,10 @@ import { spawn } from "node:child_process";
 import { once } from "node:events";
 import { test } from "node:test";
 import { pathToFileURL } from "node:url";
-import { ProcessExecutionRuntime, ProcessExecutionControlFailure } from "../../../src/lib/process-execution-runtime.js";
+import { ProcessExecutionRuntime, ProcessExecutionControlFailure, ProcessExecutionStopReceipt } from "../../../src/lib/process-execution-runtime.js";
 import { executeManagedProcess } from "../../../src/lib/managed-process.js";
-import { createTmpDir, removeTmpDir } from "../../support/builders/tmp-dir.js";
+import { createTmpDir } from "../../support/builders/tmp-dir.js";
+import { removeQuiescentRuntimeFixture } from "../../support/infrastructure/runtime-fixture-cleanup.js";
 
 const runtimeURL = pathToFileURL(path.resolve("src/lib/process-execution-runtime.js")).href;
 const bootstrapURL = pathToFileURL(path.resolve("src/sennel.js")).href;
@@ -15,8 +16,9 @@ const managedURL = pathToFileURL(path.resolve("src/lib/managed-process.js")).hre
 function fixture(t) {
   const mainRoot = createTmpDir("runtime-retained-", { parent: path.resolve(".tmp/c2f6/runtime-retained-fixtures") });
   const executionRoot = path.join(mainRoot, "original-checkout"); fs.mkdirSync(executionRoot);
-  t.after(() => removeTmpDir(mainRoot));
-  return { mainRoot, executionRoot, runId: "retained-run", specId: "retained-spec" };
+  const options = { mainRoot, executionRoot, runId: "retained-run", specId: "retained-spec" };
+  t.after(() => removeQuiescentRuntimeFixture(options));
+  return options;
 }
 async function provider(runtime, executionRoot) {
   return runtime.enter(() => executeManagedProcess(process.execPath, ["-e", "process.stdout.write('retained-proof')"],
@@ -55,7 +57,7 @@ test("a fresh coordinator reads exact closed receipts after checkout removal and
     const result=await runtime.enter(()=>executeManagedProcess(process.execPath,['-e',"process.stdout.write('actual-before-removal')"],
       {cwd:options.executionRoot,timeoutMs:30000,graceMs:100,maxBuffer:1024}));
     const reservation=await runtime.sealForCheckoutHandoff();
-    process.send({executionId:runtime.executionId,receipt:result.processExecutionStopReceipt.toJSON()});
+    process.send({executionId:runtime.executionId,receipt:result.processExecutionStopReceipt.toJSON(),ownerLock:runtime.store.ownerLock.lockPath});
     setInterval(()=>{},1000);
   `], { stdio: ["ignore", "ignore", "pipe", "ipc"] });
   let stderr = ""; child.stderr.on("data", (bytes) => { stderr += bytes; });
@@ -66,11 +68,28 @@ test("a fresh coordinator reads exact closed receipts after checkout removal and
     child.once("message", resolve);
     child.once("exit", (code, signal) => reject(new Error(`Coordinator exited before sealed readback: ${code}/${signal}: ${stderr}`)));
   });
-  assert.equal(saved.receipt.stopEvidence.status, "confirmed", stderr);
+  assert.equal(new ProcessExecutionStopReceipt(saved.receipt).stopEvidence.status, "confirmed", stderr);
   fs.rmSync(options.executionRoot, { recursive: true });
   assert.throws(() => ProcessExecutionRuntime.inspect(options), ProcessExecutionControlFailure);
   assert.throws(() => ProcessExecutionRuntime.inspectRetainedClosedCheckout(options), { code: "PROCESS_EXECUTION_BUSY" });
+  let watcher;
+  let timer;
+  const closed = new Promise((resolve, reject) => {
+    const check = () => {
+      try {
+        if (fs.existsSync(saved.ownerLock)) return;
+        resolve(ProcessExecutionRuntime.inspectRetainedClosedCheckout(options));
+      } catch (cause) { reject(cause); }
+    };
+    watcher = fs.watch(path.dirname(saved.ownerLock), check);
+    timer = setTimeout(() => reject(new Error(`Complete retained receipts did not release their actual owner after host loss: ${stderr}`)), 10000);
+    check();
+  });
   const stopped = once(child, "exit"); child.kill("SIGKILL"); await stopped;
+  let completed;
+  try { completed = await closed; }
+  finally { watcher.close(); clearTimeout(timer); }
+  assert.equal(completed.executions[0].closure.recovery, true);
   const before = files(path.join(options.mainRoot, ".sennel", "process-runtime"));
   const readback = await freshRead(options);
   assert.equal(readback.slot, null); assert.equal(readback.executions.length, 1);
@@ -91,8 +110,49 @@ test("released ownership permits retained closed readback but a recreated checko
   assert.throws(() => ProcessExecutionRuntime.inspectRetainedClosedCheckout(options), { code: "PROCESS_EXECUTION_AUTHORITY_MISMATCH" });
 });
 
+test("a recreated checkout cannot release the actual sealed owner's reservation", async (t) => {
+  const options = fixture(t);
+  const runtime = await ProcessExecutionRuntime.acquire(options);
+  const retired = path.join(options.mainRoot, "retired-inode");
+  let reservation;
+  let moved = false;
+  let replacement = false;
+  const restore = () => {
+    if (replacement) { fs.rmdirSync(options.executionRoot); replacement = false; }
+    if (moved) { fs.renameSync(retired, options.executionRoot); moved = false; }
+  };
+  t.after(async () => {
+    restore();
+    if (reservation && !reservation.released) reservation.release();
+    await runtime.close();
+  });
+  await provider(runtime, options.executionRoot);
+  reservation = await runtime.sealForCheckoutHandoff();
+  const before = fs.readFileSync(runtime.store.file.filePath);
+  fs.renameSync(options.executionRoot, retired); moved = true;
+  fs.mkdirSync(options.executionRoot); replacement = true;
+  assert.throws(() => reservation.release(), { code: "PROCESS_EXECUTION_AUTHORITY_MISMATCH" });
+  assert.equal(reservation.released, false);
+  assert.equal(fs.existsSync(runtime.store.ownerLock.lockPath), true);
+  assert.equal(fs.readFileSync(runtime.store.file.filePath).equals(before), true,
+    "a replacement cannot alter the sealed owner's committed registry");
+  restore();
+  reservation.release();
+  await runtime.close();
+  assert.equal(fs.existsSync(runtime.store.ownerLock.lockPath), false);
+});
+
 test("a removed checkout with an unfinished physical intent cannot be treated as retained closed ownership", async (t) => {
   const options = fixture(t), runtime = await ProcessExecutionRuntime.acquire(options);
+  t.after(async () => {
+    const child = runtime.control.child;
+    if (child.exitCode === null && child.signalCode === null) {
+      const stopped = once(child, "exit");
+      child.ref(); child.kill(); await stopped;
+    }
+    // This exact control handle is fixture-owned; its exit supplies no missing
+    // business receipt and the uncertain namespace remains retained.
+  });
   await provider(runtime, options.executionRoot); const call = await runtime.reserveCall();
   const registry = fs.readFileSync(runtime.store.file.filePath);
   fs.rmSync(options.executionRoot, { recursive: true });
@@ -104,7 +164,12 @@ test("a removed checkout with an unfinished physical intent cannot be treated as
 for (const artifact of ["anchor", "archive"]) {
   test(`retained checkout inspection refuses a missing ${artifact} instead of authorizing cleanup`, async (t) => {
     const options = fixture(t), value = await sealed(t, options); value.reservation.release();
+    await value.runtime.close();
+    const successor = await ProcessExecutionRuntime.acquire(options);
+    t.after(async () => { if (!successor.closed) await successor.close(); });
+    await successor.close();
     const archive = path.join(value.runtime.store.archivesAuthority.directory, `${value.runtime.executionId}.json`);
+    assert.equal(fs.existsSync(archive), true, "the actual successor must archive its complete predecessor");
     fs.rmSync(options.executionRoot, { recursive: true });
     fs.unlinkSync(artifact === "anchor" ? value.runtime.store.anchor.filePath : archive);
     const before = files(path.join(options.mainRoot, ".sennel", "process-runtime"));

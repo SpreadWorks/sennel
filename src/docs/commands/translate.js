@@ -9,6 +9,7 @@
  *   sennel docs translate [--dry-run] [--force] [--lang <lang>]
  */
 
+import { docsCommands } from "../../lib/command-registry.js";
 import fs from "fs";
 import path from "path";
 import { parseArgs } from "../../lib/cli.js";
@@ -97,8 +98,7 @@ function buildTranslationTasks({ sourceFiles, targetLangs, docsDir, readmePath, 
 async function runTranslate(ctx, rawArgs = [], commandContainer = container) {
   if (!ctx) {
     const cli = parseArgs(rawArgs, {
-      flags: ["--yes", "--dry-run", "--force"],
-      options: ["--lang"],
+      ...docsCommands.translate.args,
       defaults: { dryRun: false, force: false, lang: "" },
     });
 

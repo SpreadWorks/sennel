@@ -1,3 +1,4 @@
+import { ProcessExecutionStopReceipt } from "../../../src/lib/process-execution-values.js";
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import path from "node:path";
@@ -6,7 +7,8 @@ import { test } from "node:test";
 import { FlowManager } from "../../../src/lib/flow-manager.js";
 import { initGitRepo } from "../../support/infrastructure/git-repo.js";
 import { FlowAtStepFixture } from "../../support/infrastructure/flow-setup.js";
-import { createTmpDir, removeTmpDir } from "../../support/builders/tmp-dir.js";
+import { createTmpDir } from "../../support/builders/tmp-dir.js";
+import { removeQuiescentRuntimeFixture } from "../../support/infrastructure/runtime-fixture-cleanup.js";
 import { DraftRefineWorkerRequiredResult } from "../../../src/flow/engine/step-result.js";
 import { settleDraftStepResult, DraftWorkerExecutionClaim } from "../../../src/flow/definition.js";
 import { FlowExecutionContract } from "../../../src/flow/lib/flow-execution-contract.js";
@@ -24,9 +26,9 @@ class Envelope extends PromptRequestEnvelope {
   build(elements) { return { userPrompt: elements.map((entry) => entry.toPromptText()).join(""), systemPrompt: null, jsonSchema: null, fmtFallback: null }; }
 }
 function fixture(t) {
-  const root = createTmpDir("prompt-stop-", { parent: path.resolve(".tmp/c2f6/prompt-receipt-fixtures") });
+  const root = createTmpDir("prompt-stop-");
   const owned = { runtime: null };
-  t.after(async () => { try { await owned.runtime?.close(); } finally { removeTmpDir(root); } });
+  t.after(async () => { try { await owned.runtime?.close(); } finally { removeQuiescentRuntimeFixture({ mainRoot: root }); } });
   initGitRepo(root);
   const manager = new FlowManager({ root, mainRoot: root, inWorktree: false });
   const specId = "001-stop-contract";
@@ -166,6 +168,6 @@ test("stop observation Store save failure preserves the claim and physical recei
   assert.equal(saved.batches[0].claim.transportOrdinal, 1);
   assert.equal(saved.batches[0].processStops, undefined);
   assert.equal(saved.batches[0].responses.length, 0);
-  assert.equal(runtime.inspect().executions[0].calls[0].receipt.stopEvidence.status, "confirmed");
+  assert.equal(new ProcessExecutionStopReceipt(runtime.inspect().executions[0].calls[0].receipt).stopEvidence.status, "confirmed");
   await assert.rejects(execute(value, value.journal(value.reload(), saved), () => assert.fail("save failure started another provider")), { code: "PROMPT_EXECUTION_UNCERTAIN" });
 });

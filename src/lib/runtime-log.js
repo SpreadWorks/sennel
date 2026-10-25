@@ -2,6 +2,7 @@ import path from "path";
 import { TemporaryPaths } from "./temporary-paths.js";
 import { AtomicFile } from "./atomic-file.js";
 import { MAX_IN_MEMORY_FILE_BYTES } from "./regular-file-snapshot.js";
+import { ReadOnlyInvocationWorkspace } from "./readonly-invocation-workspace.js";
 
 const DEFAULT_MAX_BYTES = 5 * 1024 * 1024;
 const TRUNCATED_MARKER = "[runtime-log] truncated: size limit reached\n";
@@ -186,10 +187,10 @@ export class RuntimeLogSelection {
 }
 
 export class RuntimeLogFile {
-  constructor(root, flowId) {
+  constructor(root, flowId, { temporaryPaths = new TemporaryPaths(root) } = {}) {
     this.root = root;
     this.flowId = sanitizeFlowId(flowId);
-    this.temporaryPaths = new TemporaryPaths(root);
+    this.temporaryPaths = temporaryPaths;
     this.filePath = path.join(this.temporaryPaths.logs(), `${this.flowId}.log`);
     TemporaryPaths.assertRegularFile(this.filePath);
   }
@@ -197,6 +198,9 @@ export class RuntimeLogFile {
   read() {
     this.temporaryPaths.validate(path.dirname(this.filePath));
     TemporaryPaths.assertRegularFile(this.filePath);
+    if (this.temporaryPaths instanceof ReadOnlyInvocationWorkspace) {
+      return this.temporaryPaths.readFile(this.filePath, Buffer.alloc(0)).toString("utf8");
+    }
     return new AtomicFile(this.filePath, { maxBytes: MAX_IN_MEMORY_FILE_BYTES }).read(Buffer.alloc(0)).toString("utf8");
   }
 
@@ -206,6 +210,9 @@ export class RuntimeLogFile {
 
   append(text) {
     this.temporaryPaths.ensureDirectory(path.dirname(this.filePath));
+    if (this.temporaryPaths instanceof ReadOnlyInvocationWorkspace) {
+      return this.temporaryPaths.appendFile(this.filePath, text);
+    }
     TemporaryPaths.appendFile(this.filePath, text, { maxBytes: MAX_IN_MEMORY_FILE_BYTES });
   }
 
@@ -219,8 +226,8 @@ export class RuntimeLogFile {
 }
 
 export class RuntimeLogBlockWriter {
-  constructor({ root, flowId, runId, command, maxBytes = DEFAULT_MAX_BYTES }) {
-    this.file = new RuntimeLogFile(root, flowId);
+  constructor({ root, flowId, runId, command, maxBytes = DEFAULT_MAX_BYTES, temporaryPaths }) {
+    this.file = new RuntimeLogFile(root, flowId, { temporaryPaths });
     this.bytesWritten = 0;
     this.maxBytes = maxBytes;
     this.truncated = false;
@@ -235,11 +242,12 @@ export class RuntimeLogBlockWriter {
     this.file.append(this.startLine());
   }
 
-  static forDispatch({ root, flowId, runId, envelopeType, envelopeKey }) {
+  static forDispatch({ root, flowId, runId, envelopeType, envelopeKey, temporaryPaths }) {
     return new RuntimeLogBlockWriter({
       root,
       flowId,
       runId,
+      temporaryPaths,
       command: shellCommand({ envelopeType, envelopeKey }),
     });
   }

@@ -3,7 +3,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { performance } from "node:perf_hooks";
-import { runCmd } from "../../src/lib/process.js";
+import { runManagedCmdAsync } from "../../src/lib/process.js";
+import { NodeScriptInvocation } from "../../src/lib/command-invocation.js";
+import { ProcessExecutionControlFailure } from "../../src/lib/process-execution-values.js";
+import { testTemporaryRoot } from "../test-environment.js";
 import { installReviewProcessFake } from "./infrastructure/review-process-fake.js";
 import { FlowManager } from "../../src/lib/flow-manager.js";
 import { container as runtimeContainer } from "../../src/lib/container.js";
@@ -23,6 +26,7 @@ import { parseTestReviewFindings } from "../../src/flow/commands/review.js";
 import { CanonicalFlowFixture, canonicalDraftDocument } from "./infrastructure/flow-setup.js";
 import { PrepareArtifactScenario } from "./prepare-artifact-scenario.js";
 import { removeTmpDir } from "./builders/tmp-dir.js";
+import { removeQuiescentRuntimeFixture } from "./infrastructure/runtime-fixture-cleanup.js";
 import { SeedWorkRoot, SeedCleanupScope, observeSeedTiming } from "./builders/seed-work-root.js";
 import { CanonicalScenarioSeed } from "./assertions/canonical-persistence.js";
 import { validWorkerHandoffTaskSpec, workerArtifactJson } from "./infrastructure/worker-artifact.js";
@@ -124,17 +128,21 @@ export class RequirementTestPhaseScenario {
       return passingGateProviderResponse(prompt, options);
     }, { ...this.options.providerOptions,
       ...(this.options.realProviderTransport ? {
-        transportContext: () => ({ root: this.root, flowManager: this.manager }),
+        transportContext: () => ({ root: this.root, mainRoot: this.mainRoot ?? this.root, flowManager: this.manager }),
       } : {}),
     });
     this.agent = runtimeContainer.get("agent");
     this.reviewProcess = installReviewProcessFake((command, args, options) => this.runReviewProcess(command, args, options));
   }
 
-  runReviewProcess(_command, _args, options) {
+  async runReviewProcess(_command, _args, options) {
     if (this.options.continueImplementation && (options.env.SENNEL_REVIEW_TASK_EXECUTION_IDENTITY || this.current() === "impl-review")) {
       this.downstreamReviews.push(this.current());
-      return runCmd(process.execPath, [fileURLToPath(new URL("./requirement-phase-review-worker.js", import.meta.url))], options);
+      const { cwd, env, stdio, ...executionOptions } = options;
+      return await runManagedCmdAsync(new NodeScriptInvocation({
+        script: fileURLToPath(new URL("./requirement-phase-review-worker.js", import.meta.url)),
+        cwd, env, stdio,
+      }), executionOptions);
     }
     const work = ReviewWorkUnit.fromEnvironment(options.env);
     const nodeId = this.current();
@@ -281,14 +289,27 @@ export class RequirementTestPhaseScenario {
       confirmedAt: "2026-10-05T00:00:00.000Z", notes: "Requirement tests approved in phase scenario." });
   }
   async dispatch(limit = 1) {
+    const started = performance.now();
     const context = this.context();
+    const nodeId = context.flowState.currentNodeId ?? "none";
     const command = new RunDispatchCommand({ agent: this.agent, maxDispatches: limit, ...(this.options.handoffCoordinator ? { handoffCoordinator: this.options.handoffCoordinator } : {}) });
     command.container = dispatchContainer({ root: context.root, mainRoot: context.mainRoot,
       inWorktree: context.root !== context.mainRoot, config: this.options.config ?? {},
       flowManager: this.manager, agent: this.agent });
-    const result = await command.execute({ ...context,
-      expectBinding: FlowTargetBinding.capture({ flowState: this.manager.loadReadOnly(this.specId),
-        mainRoot: context.mainRoot, authorityRoot: context.root }).serialize(), _envelopeType: "run", _envelopeKey: "dispatch" });
+    let result;
+    try {
+      result = await command.execute({ ...context,
+        expectBinding: FlowTargetBinding.capture({ flowState: this.manager.loadReadOnly(this.specId),
+          mainRoot: context.mainRoot, authorityRoot: context.root }).serialize(), _envelopeType: "run", _envelopeKey: "dispatch" });
+    } catch (error) {
+      if (error instanceof ProcessExecutionControlFailure) {
+        this.unconfirmedExecution = true;
+        testTemporaryRoot().retainOnUnconfirmedExecution();
+      }
+      throw error;
+    } finally {
+      observeSeedTiming(`phase-dispatch:${nodeId}`, performance.now() - started);
+    }
     this.dispatches.push(result);
     // Fault scenarios restore their intentionally unavailable read boundary before
     // evidenceFor() performs its audit. Do not let observation mask that command error.
@@ -370,9 +391,12 @@ export class RequirementTestPhaseScenario {
   close({ retainRoot = false } = {}) {
     this.reviewProcess?.mock.restore();
     this.gateProvider?.mock.restore();
-    if (retainRoot) return;
-    if (this.seedClone) this.seedClone.cleanup();
-    else if (!this.options.prepared) removeTmpDir(this.root);
+    if (retainRoot || this.unconfirmedExecution) return;
+    if (!this.seedClone && this.options.prepared) return;
+    removeQuiescentRuntimeFixture({ mainRoot: this.root, cleanup: () => {
+      if (this.seedClone) this.seedClone.cleanup();
+      else removeTmpDir(this.root);
+    } });
   }
 }
 

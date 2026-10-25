@@ -1,3 +1,4 @@
+import { devNull } from "node:os";
 import { ExecutionProtocolSnapshot } from "./execution-protocol-snapshot.js";
 import { executionValueDigest, FlowExecutionContractRefusal } from "./flow-execution-contract.js";
 import { CURRENT_FLOW_SCHEMA_REVISION } from "../../lib/flow-schema-revision.js";
@@ -28,16 +29,15 @@ import { AgentFileInputFailure } from "../../lib/agent-file-input-failure.js";
 import { AgentResponseAttemptEvidence, AgentResponseProtocolEvidence,
   AgentResponseProtocolFailure, EvaluationUnavailable, executeAgentResponseProtocol,
 } from "../../lib/agent-response-protocol.js";
-import { execFile, execFileSync } from "child_process";
-import { promisify } from "util";
 import { assertOk } from "../../lib/process.js";
 import { PKG_DIR } from "../../lib/cli.js";
 import { loadConfig } from "../../lib/config.js";
 import { PRODUCT } from "../../lib/product.js";
-import { runGit } from "../../lib/git-helpers.js";
+import { runGit, runGitAsync } from "../../lib/git-helpers.js";
 import { computeGitState } from "../../lib/git-state.js";
+import { withManagedProcessScope } from "../../lib/managed-process.js";
 
-const execFileAsync = promisify(execFile);
+
 import { container } from "../../lib/container.js";
 import { PromptBuilder } from "../../lib/prompt-builder.js";
 import { GLOBAL_PROMPT_ELEMENT_HARD_MAX, PromptRequestLimit, PromptBatchingError, PromptBatchPlan, PromptExecutionBudget, PromptExecutionLimit, PromptLogicalFootprint, PromptProtocolRetryLimit, PromptProviderAttemptLimit } from "../../lib/prompt-batching.js";
@@ -266,23 +266,18 @@ const GATE_RESULT_ARTIFACT_BY_PHASE = Object.freeze({
  * @param {{maxFiles?: number, maxFileSize?: number, excludeFile?: Function}} [options]
  * @returns {Promise<string>} concatenated unified diff text, or "" if none
  */
-export async function collectUntrackedDiff(root, options = {}) {
+export function collectUntrackedDiff(root, options = {}) {
+  return withManagedProcessScope({ standaloneRoot: root, executionRoot: root, readOnly: true },
+    () => collectUntrackedDiffInScope(root, options));
+}
+
+async function collectUntrackedDiffInScope(root, options = {}) {
   const maxFiles = options.maxFiles ?? UNTRACKED_DEFAULT_MAX_FILES;
   const maxFileSize = options.maxFileSize ?? UNTRACKED_DEFAULT_MAX_FILE_SIZE;
 
-  // Single async git invocation — not in any loop, so no bulk-path concern.
-  let listStdout;
-  try {
-    ({ stdout: listStdout } = await execFileAsync(
-      "git",
-      ["ls-files", "--others", "--exclude-standard", "-z"],
-      { cwd: root },
-    ));
-  } catch (err) {
-    const wrapped = new Error(`failed to list untracked files: ${err.message}`);
-    wrapped.cause = err;
-    throw wrapped;
-  }
+  const listed = await runGitAsync(["ls-files", "--others", "--exclude-standard", "-z"], { cwd: root });
+  assertOk(listed, "failed to list untracked files");
+  const listStdout = listed.stdout;
   // -z output: NUL-separated, no trailing entry
   const excludeFile = typeof options.excludeFile === "function" ? options.excludeFile : () => false;
   const files = listStdout
@@ -314,30 +309,15 @@ export async function collectUntrackedDiff(root, options = {}) {
     }
   }
 
-  // Run every per-file `git diff --no-index` in parallel. Async execFile
-  // avoids blocking on per-file synchronous I/O when the untracked set
-  // grows. `git diff --no-index` exits 1 when differences exist (the
-  // expected outcome here); execFileAsync rejects on non-zero, so we
-  // resolve that rejection only for the well-defined exit-1 case and
-  // re-throw anything else as a real git failure.
-  const parts = await Promise.all(files.map(async (rel) => {
-    try {
-      const { stdout } = await execFileAsync(
-        "git",
-        ["diff", "--no-index", "--no-color", "--", "/dev/null", rel],
-        { cwd: root, maxBuffer: maxFileSize * 4 },
-      );
-      return stdout;
-    } catch (err) {
-      // Differences-present is signalled as exit code 1 — accept it.
-      if (err && err.code === 1 && typeof err.stdout === "string") return err.stdout;
-      const wrapped = new Error(
-        `failed to synthesize untracked diff for ${rel}: ${err.message}`,
-      );
-      wrapped.cause = err;
-      throw wrapped;
+  const parts = [];
+  for (const rel of files) {
+    const result = await runGitAsync(["diff", "--no-index", "--no-color", "--", devNull, rel],
+      { cwd: root, maxBuffer: maxFileSize * 4 });
+    if (result.status !== 1 || result.signal !== null || result.killed) {
+      assertOk(result, `failed to synthesize untracked diff for ${rel}`);
     }
-  }));
+    parts.push(result.stdout);
+  }
   return parts.join("");
 }
 

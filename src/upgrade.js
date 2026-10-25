@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { coreCommandRegistry } from "./lib/command-registry.js";
 import { CURRENT_FLOW_SCHEMA_REVISION } from "./lib/flow-schema-revision.js";
 /**
  * sennel/upgrade.js
@@ -52,8 +53,7 @@ import {
 
 export function parseUpgradeArgs(argv) {
   return parseArgs(argv, {
-    flags: ["--dry-run"],
-    options: [],
+    ...coreCommandRegistry.find("upgrade").args,
     defaults: { dryRun: false },
   });
 }

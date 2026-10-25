@@ -1,3 +1,4 @@
+import { installSennelTestLauncher } from "../support/infrastructure/sennel-test-launcher.js";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
@@ -39,9 +40,7 @@ it("a real producer corrects a retained structural rejection through the guarded
     } };
     fs.mkdirSync(path.join(root, ".sennel"), { recursive: true });
     fs.writeFileSync(path.join(root, ".sennel", "config.json"), workerArtifactJson(config));
-    const bin = path.join(root, ".test-bin");
-    fs.mkdirSync(bin);
-    fs.writeFileSync(path.join(bin, "sennel"), `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(CLI)} "$@"\n`, { mode: 0o755 });
+    const bin = installSennelTestLauncher(root, { entryPath: CLI });
     process.env.PATH = `${bin}${path.delimiter}${originalPath}`;
     const specId = "draft-correction-agent";
     const manager = new FlowManager({ root, mainRoot: root, inWorktree: false, specId });

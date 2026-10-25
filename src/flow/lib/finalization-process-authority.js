@@ -8,6 +8,7 @@ import { CurrentAttemptIdentity } from "./current-flow-state.js";
 import { StepAdmissionRefusal } from "./step-admission-refusal.js";
 
 import { FinalizeCleanupEffectPreparation } from "./finalize-cleanup-journal.js";
+import { FinalizeCleanupCompletionPublication } from "./finalize-cleanup-publication.js";
 
 /** Project the registered typed selection without executing a Step or its effects. */
 export function projectFinalizationProcessAuthorityInput(input) {
@@ -39,7 +40,8 @@ export function captureFinalizationProcessAuthority(ctx, stepId) {
         selected.receipt.assertCurrent();
         sourceRemoval = new FlowProcessCheckoutRemoval({ sourceRoot, cleanupReceiptId: receipt.id });
       } else {
-        const preparation = FinalizeCleanupEffectPreparation.acquire(ctx);
+        const preparation = FinalizeCleanupCompletionPublication.acquire(ctx)
+          ?? FinalizeCleanupEffectPreparation.acquire(ctx);
         if (preparation?.journal.atLeast("worktree-removed")) {
           sourceRemoval = new FlowProcessCheckoutRemoval({ sourceRoot,
             cleanupReceiptId: preparation.journal.value.executionReceiptId });

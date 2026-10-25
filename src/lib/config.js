@@ -1,3 +1,4 @@
+import { CommandInvocation, COMMAND_INVOCATION_SCHEMA } from "./command-invocation.js";
 /**
  * sennel/lib/config.js
  *
@@ -322,7 +323,7 @@ const CONFIG_SCHEMA = {
         },
         hooks: {
           type: "object",
-          additionalProperties: { type: "string" },
+          additionalProperties: COMMAND_INVOCATION_SCHEMA,
         },
       },
     },
@@ -369,7 +370,7 @@ const CONFIG_SCHEMA = {
     test: {
       type: "object",
       properties: {
-        command: { type: "string", minLength: 1 },
+        command: COMMAND_INVOCATION_SCHEMA,
         projectPaths: { type: "array", items: { type: "string", minLength: 1 } },
         timeout: { type: "number", minimum: 1 },
         finalRegressionTimeout: { type: "number", minimum: 1 },
@@ -464,9 +465,7 @@ export function validate(raw, options = {}) {
   }
 
   if (raw.test) {
-    if (typeof raw.test.command === "string") {
-      validateTestCommand(raw.test.command, errors);
-    }
+    if (raw.test.command !== undefined) validateConfiguredInvocation(raw.test.command, "test.command", raw.lang, errors);
     if (Array.isArray(raw.test.projectPaths)) {
       raw.test.projectPaths.forEach((entry, index) => validateProjectTestPath(entry, index, errors));
     }
@@ -484,6 +483,7 @@ export function validate(raw, options = {}) {
     errors.push(error.message);
   }
 
+  for (const [name, command] of Object.entries(raw.flow?.hooks ?? {})) validateConfiguredInvocation(command, `flow.hooks.${name}`, raw.lang, errors);
   if (raw.plugin) validatePluginConfig(raw.plugin, errors);
   if (errors.length > 0) {
     throw new Error(`Config validation failed:\n  - ${errors.join("\n  - ")}`);
@@ -522,12 +522,9 @@ function validatePluginConfig(plugin, errors) {
   }
 }
 
-const TEST_COMMAND_FORBIDDEN = /(\|\||&&|[|&;<>`$()]|\*|\?|\[|\]|\{|\})/;
-
-function validateTestCommand(command, errors) {
-  if (TEST_COMMAND_FORBIDDEN.test(command)) {
-    errors.push("'test.command' contains unsupported shell control or expansion syntax");
-  }
+function validateConfiguredInvocation(command, source, language, errors) {
+  try { CommandInvocation.fromStored(command, { source, language }); }
+  catch (error) { errors.push(error.message); }
 }
 
 function validateProjectTestPath(entry, index, errors) {

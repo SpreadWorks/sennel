@@ -10,6 +10,7 @@ import { ProcessExecutionRuntime, ProcessExecutionControlFailure, ProcessExecuti
 import { FlowManager } from "../../../src/lib/flow-manager.js";
 import { CanonicalFlowFixture } from "../../support/infrastructure/flow-setup.js";
 import { captureFlowProcessExecutionBinding } from "../../../src/flow/lib/process-runtime-admission.js";
+import { CanonicalPersistenceSnapshot, StoredFlowPersistenceSnapshot } from "../../support/assertions/canonical-persistence.js";
 
 const chapter = ["# Runtime documentation", "", "## Description", "Generated child documentation.", "", "## Details",
   ...Array.from({ length: 15 }, (_, index) => `Verified detail ${index}.`), ""].join("\n");
@@ -56,32 +57,54 @@ function flowContext(mainRoot, { worktree = false } = {}) {
     specId: flowState.specId, flowState, flowManager };
 }
 
-for (const dryRun of [false, true]) {
-  test(`sync genuinely builds and reviews generated artifacts before ${dryRun ? "dry-run return" : "Git commit"}`, async (t) => {
-    const root = fixture(t);
-    const calls = [];
-    const command = new RunSyncCommand({
-      runCommand(command, args, options) {
-        calls.push(args.at(-1));
-        const result = runCmd(command, args, options);
-        assert.equal(result.ok, true, result.stderr + result.stdout);
-        return result;
-      },
-      git(args, options) {
-        assert.equal(options.cwd, root);
-        assertArtifacts(root);
-        calls.push(args[0]);
-        return { ok: true, stdout: args[0] === "diff" ? "docs/overview.md\nREADME.md\n" : "", stderr: "" };
-      },
-    });
-    const result = await command.execute({ root, dryRun });
-    assert.equal(result.result, dryRun ? "dry-run" : "ok");
-    assert.deepEqual(result.changed, dryRun ? [] : ["docs/overview.md", "README.md"]);
-    assert.match(result.artifacts.reviewResult, /PASSED/);
-    assert.deepEqual(calls, dryRun ? ["build", "review"] : ["build", "review", "add", "diff", "commit"]);
-    assertArtifacts(root);
+test("sync genuinely builds and reviews generated artifacts before Git commit", async (t) => {
+  const root = fixture(t);
+  const calls = [];
+  const command = new RunSyncCommand({
+    runCommand(command, args, options) {
+      calls.push(args.at(-1));
+      const result = runCmd(command, args, options);
+      assert.equal(result.ok, true, result.stderr + result.stdout);
+      return result;
+    },
+    git(args, options) {
+      assert.equal(options.cwd, root);
+      assertArtifacts(root);
+      calls.push(args[0]);
+      return { ok: true, stdout: args[0] === "diff" ? "docs/overview.md\nREADME.md\n" : "", stderr: "" };
+    },
   });
-}
+  const result = await command.execute({ root });
+  assert.equal(result.result, "ok");
+  assert.deepEqual(result.changed, ["docs/overview.md", "README.md"]);
+  assert.match(result.artifacts.reviewResult, /PASSED/);
+  assert.deepEqual(calls, ["build", "review", "add", "diff", "commit"]);
+  assertArtifacts(root);
+});
+
+test("sync dry-run renders the full plan without execution or project and canonical mutation even while normal admission is busy", async (t) => {
+  const root = fixture(t);
+  const ctx = flowContext(root);
+  const command = new RunSyncCommand({
+    runCommand() { assert.fail("sync preview must not invoke a documentation process"); },
+    git() { assert.fail("sync preview must not invoke Git"); },
+  });
+  for (const busy of [false, true]) {
+    let owner;
+    if (busy) owner = await ProcessExecutionRuntime.acquire({ mainRoot: root });
+    try {
+      const canonical = new CanonicalPersistenceSnapshot(ctx.flowManager, ctx.specId);
+      const tree = new StoredFlowPersistenceSnapshot(root);
+      const result = await command.execute({ ...ctx, dryRun: true });
+      tree.assertUnchanged();
+      canonical.assertUnchanged(ctx.flowManager, ctx.specId, "sync dry-run");
+      assert.equal(result.result, "dry-run");
+      assert.deepEqual(result.changed, []);
+      assert.deepEqual(Object.keys(result.artifacts), ["plan"]);
+      assert.match(result.artifacts.plan, /build[\s\S]*review[\s\S]*add[\s\S]*commit/);
+    } finally { await owner?.close(); }
+  }
+});
 
 test("sync stops before Git and reports the actual review's invalid generated chapter", async (t) => {
   const root = fixture(t);
@@ -141,7 +164,7 @@ test("finalize sync builds at resolved main root and preserves real child failur
 for (const finalizing of [false, true]) {
   test(`${finalizing ? "finalize sync" : "sync"} awaits real managed documentation children before returning`, async (t) => {
     const root = fixture(t);
-    const ctx = { ...flowContext(root), dryRun: true };
+    const ctx = flowContext(root);
     const runtime = await ProcessExecutionRuntime.acquire({ mainRoot: root, executionRoot: root,
       runId: ctx.flowState.runId, specId: ctx.specId,
       binding: captureFlowProcessExecutionBinding(ctx, { commandId: finalizing ? "finalize-sync" : "sync" }) });
@@ -149,9 +172,13 @@ for (const finalizing of [false, true]) {
     const command = finalizing
       ? new RunFinalizeSyncCommand({ hasCommit: () => false,
         git: () => ({ ok: true, status: 0, stdout: "docs/overview.md\n", stderr: "" }) })
-      : new RunSyncCommand({ git() { assert.fail("dry run must not call Git"); } });
+      : new RunSyncCommand({ git(args, options) {
+        assert.equal(options.cwd, root);
+        assertArtifacts(root);
+        return { ok: true, stdout: args[0] === "diff" ? "docs/overview.md\n" : "", stderr: "" };
+      } });
     const result = await runtime.enter(() => finalizing ? command.executeEffect(ctx) : command.execute(ctx));
-    assert.equal(finalizing ? result.status : result.result, finalizing ? "done" : "dry-run");
+    assert.equal(finalizing ? result.status : result.result, finalizing ? "done" : "ok");
     assertArtifacts(root);
     const execution = runtime.inspect().executions.find((entry) => entry.executionId === runtime.executionId);
     assert.equal(execution.calls.length, finalizing ? 1 : 2);
@@ -188,15 +215,20 @@ test("direct sync creates its own runtime and preserves the preparing Flow while
   const before = flowManager.loadPreparingFlow(runId);
   assert.equal(ProcessExecutionRuntime.current(), null);
   const owner = await ProcessExecutionRuntime.acquire({ mainRoot: root, runId });
+  const command = new RunSyncCommand({ git(args, options) {
+    assert.equal(options.cwd, root);
+    assertArtifacts(root);
+    return { ok: true, stdout: args[0] === "diff" ? "docs/overview.md\n" : "", stderr: "" };
+  } });
   try {
-    await assert.rejects(new RunSyncCommand().execute({ root, mainRoot: root, executionRoot: root,
-      flowManager, preparingFlowState: before, dryRun: true }), { code: "PROCESS_EXECUTION_BUSY" });
+    await assert.rejects(command.execute({ root, mainRoot: root, executionRoot: root,
+      flowManager, preparingFlowState: before }), { code: "PROCESS_EXECUTION_BUSY" });
     assert.equal(fs.existsSync(path.join(root, "docs")), false);
     assert.deepEqual(flowManager.loadPreparingFlow(runId), before);
   } finally { await owner.close(); }
-  const result = await new RunSyncCommand().execute({ root, mainRoot: root, executionRoot: root,
-    flowManager, preparingFlowState: before, dryRun: true });
-  assert.equal(result.result, "dry-run");
+  const result = await command.execute({ root, mainRoot: root, executionRoot: root,
+    flowManager, preparingFlowState: before });
+  assert.equal(result.result, "ok");
   assertArtifacts(root);
   assert.equal(ProcessExecutionRuntime.current(), null);
   assert.deepEqual(flowManager.loadPreparingFlow(runId), before);

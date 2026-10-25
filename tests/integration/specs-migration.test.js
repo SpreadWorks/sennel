@@ -2780,3 +2780,29 @@ describe("historical Activity source contract", () => {
     assert.equal(physicalSnapshot(source), before);
   });
 });
+
+
+it("detaches a migrated replay baseline across confirmation-only state copies", () => {
+  const root = project();
+  const { id, version } = seedFrozenThreeCycleV3(root);
+  const originals = ["flow.json", "activities.jsonl", "artifact-catalog.json"]
+    .map(name => fs.readFileSync(path.join(version, name)));
+  const migrated = runTo(root, 3);
+  assert.equal(migrated.status, 0, migrated.stderr);
+  const source = versionStore(root, id).load();
+  const sourceBytes = JSON.stringify(source.toJSON());
+  const updated = source.withConfirmationOrder(source.confirmationOrder + 1);
+  const expected = new CurrentFlowState({ ...source.toJSON(), confirmationOrder: source.confirmationOrder + 1 },
+    { definition: source.definition });
+  assert.equal(JSON.stringify(updated.toJSON()), JSON.stringify(expected.toJSON()));
+  // The migration baseline owns detached JSON; changing this copy must not
+  // mutate the other state or the authoritative archived producer evidence.
+  const originalId = source.migration.baseline.steps[0].id;
+  updated.migration.baseline.steps[0].id = "detached-copy-only";
+  assert.equal(source.migration.baseline.steps[0].id, originalId);
+  assert.equal(JSON.stringify(source.toJSON()), sourceBytes);
+  assert.equal(JSON.stringify(versionStore(root, id).load().toJSON()), sourceBytes);
+  for (const [index, name] of ["flow.json", "activities.jsonl", "artifact-catalog.json"].entries()) {
+    assert.deepEqual(fs.readFileSync(path.join(version, "artifacts/migration/spec-gate-repair-v3", name)), originals[index]);
+  }
+});

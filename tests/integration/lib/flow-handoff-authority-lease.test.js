@@ -34,7 +34,7 @@ function spawnLeaseWaiter(root) {
       `import { FlowHandoffAuthorityLease } from ${JSON.stringify(LEASE_MODULE_PATH)};`,
       `const lease = new FlowHandoffAuthorityLease({ mainRoot: ${JSON.stringify(root)}, executionRoot: ${JSON.stringify(root)} });`,
       "process.send('waiting');",
-      "lease.acquire();",
+      "try { lease.acquire(); } catch (error) { process.send({ code: error.code, lockStatus: error.lockStatus, waitedMs: error.waitedMs, retryable: error.retryable }); process.exit(1); }",
       "process.send('acquired');",
       "lease.release();",
       "process.exit(0);",
@@ -95,7 +95,7 @@ describe("FlowHandoffAuthorityLease", () => {
     }
   });
 
-  it("waits for an already-held Flow lease and then acquires it without a timeout", async (t) => {
+  it("waits for a cooperative owner to release within the common finite policy", async (t) => {
     const root = createTmpDir("flow-handoff-authority-wait-");
     try {
       fs.mkdirSync(`${root}/.sennel`);
@@ -147,21 +147,51 @@ describe("FlowHandoffAuthorityLease", () => {
     }
   });
 
-  it("reclaims a stale checkout lease owner", async () => {
-    const root = createTmpDir("flow-handoff-authority-stale-");
+  it("uses the common finite default while another process keeps its ownership", { timeout: 15000 }, async () => {
+    const root = createTmpDir("flow-handoff-authority-default-timeout-");
+    let owner, waiting;
     try {
-      fs.mkdirSync(`${root}/.sennel`);
+      owner = spawnLeaseOwner(root, "process.stdin.once('data', () => { lease.release(); process.exit(0); });");
+      assert.equal((await once(owner, "message", { signal: AbortSignal.timeout(10000) }))[0], "locked");
+      const lockPath = FlowHandoffAuthorityLease.pathFor({ mainRoot: root, executionRoot: root });
+      const before = fs.readFileSync(lockPath);
+      waiting = spawnLeaseWaiter(root);
+      const waitingExit = once(waiting, "exit");
+      assert.equal((await once(waiting, "message", { signal: AbortSignal.timeout(10000) }))[0], "waiting");
+      const [failure] = await once(waiting, "message", { signal: AbortSignal.timeout(10000) });
+      assert.equal(failure.code, "FLOW_HANDOFF_AUTHORITY_WAIT_TIMEOUT");
+      assert.equal(failure.lockStatus, "timeout");
+      assert.equal(failure.retryable, true);
+      assert.ok(failure.waitedMs >= new FileLockWaitPolicy().timeoutMs);
+      assert.equal((await waitingExit)[0], 1);
+      assert.deepEqual(fs.readFileSync(lockPath), before);
+      const ownerExit = once(owner, "exit");
+      owner.stdin.write("release\n");
+      assert.equal((await ownerExit)[0], 0);
+      const successor = new FlowHandoffAuthorityLease({ mainRoot: root, executionRoot: root });
+      successor.acquire(); successor.release();
+      assert.equal(fs.existsSync(lockPath), false);
+    } finally {
+      for (const child of [waiting, owner]) if (child && child.exitCode === null && child.signalCode === null) {
+        const exited = once(child, "exit"); child.kill(); await exited;
+      }
+      removeTmpDir(root);
+    }
+  });
+
+  it("refuses an abandoned token lease without changing its owner bytes", async () => {
+    const root = createTmpDir("flow-handoff-authority-abandoned-");
+    try {
       const child = spawnLeaseOwner(root, "process.exit(0);");
       const exited = once(child, "exit");
       assert.equal((await once(child, "message"))[0], "locked");
-      const [code] = await exited;
-      assert.equal(code, 0);
-
-      const lease = new FlowHandoffAuthorityLease({ mainRoot: root, executionRoot: root });
-      lease.acquire();
-      lease.release();
-    } finally {
-      removeTmpDir(root);
-    }
+      assert.equal((await exited)[0], 0);
+      const lockPath = FlowHandoffAuthorityLease.pathFor({ mainRoot: root, executionRoot: root });
+      const before = fs.readFileSync(lockPath);
+      const lease = new FlowHandoffAuthorityLease({ mainRoot: root, executionRoot: root,
+        waitPolicy: new FileLockWaitPolicy({ timeoutMs: 0 }) });
+      assert.throws(() => lease.acquire(), { code: "FLOW_HANDOFF_AUTHORITY_WAIT_TIMEOUT" });
+      assert.deepEqual(fs.readFileSync(lockPath), before);
+    } finally { removeTmpDir(root); }
   });
 });

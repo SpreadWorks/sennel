@@ -12,6 +12,7 @@ const UNKNOWN = "unconfirmed";
 const CODE = /^[A-Z][A-Z0-9_]{0,199}$/;
 const FALLBACK = Object.freeze({
   explanation: "The Flow operation stopped ({{code}}). Inspect the returned diagnostic details for the original cause.",
+  processControl: "Process execution control stopped ({{code}}); the original cause is {{causeCode}}. Completion, persistence, and stop proof are shown only when confirmed.",
   repair: "Provide error code {{code}} and the returned diagnostic details to the maintainer and request a fix before continuing.",
   automatic: "Continue using the selected directive and its existing execution authorization.",
   decision: "Answer the selected user decision before continuing.",
@@ -334,9 +335,9 @@ export function buildFlowStopGuidance({ code, error = null, data = null, directi
   code: failure?.primaryCause?.code ?? failure?.code
     ?? stableCode(error?.code, containsSyntaxFailure(error) ? "SYNTAX_ERROR" : publicCode),
   recoveryHint: failure instanceof AgentFailure ? failure.recoveryHint : UNKNOWN });
-  const explanationKey = failure instanceof ProcessExecutionControlFailure ? "processControl"
+  const explanationKey = failure instanceof ProcessExecutionControlFailure ? `codes.${publicCode}`
     : failure instanceof AgentFailure ? `causes.${failure.kind}` : `codes.${publicCode}`;
-  const explanation = text(explanationKey, { code: publicCode, causeCode: cause.code });
+  const explanation = text(explanationKey, { code: publicCode, causeCode: cause.code }, failure instanceof ProcessExecutionControlFailure ? "processControl" : "explanation");
   return new FlowStopGuidance({ code: publicCode, cause, explanation,
     facts: observedFacts(failure, facts, operation, recordedAttempt(data)), directive: chosen, text });
 }

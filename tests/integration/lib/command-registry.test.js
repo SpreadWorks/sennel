@@ -2,6 +2,21 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 
 describe("unified command registry (R3)", () => {
+  it("shares the inherited command entrypoint while retaining help in ordinary CLI routing", async () => {
+    const { coreCommandRegistry, CommandEntrypoint } = await import("../../../src/lib/command-registry.js");
+    const { publicCommandEntrypoint } = await import("../../../src/lib/command-entrypoint.js");
+    assert.equal(coreCommandRegistry.find("command").entrypoint, publicCommandEntrypoint);
+    assert.ok(publicCommandEntrypoint instanceof CommandEntrypoint);
+    for (const argv of [["command", "--", "tool", "--help"], ["command", "--", "tool", "", "two words"], ["command"]]) {
+      const before = [...argv];
+      assert.equal(publicCommandEntrypoint.accepts(argv), true);
+      assert.deepEqual(argv, before, "route selection preserves literal arguments");
+    }
+    for (const argv of [["command", "--help"], ["command", "-h"], ["help", "command"], ["flow", "query"]]) {
+      assert.equal(publicCommandEntrypoint.accepts(argv), false);
+    }
+  });
+
   for (const [name, english, japanese] of [
     ["docs", "Documentation commands", "ドキュメント生成・管理コマンド"],
     ["flow", "Spec-Driven Development flow commands", "Spec-Driven Development フローコマンド"],

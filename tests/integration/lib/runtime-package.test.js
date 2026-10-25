@@ -10,6 +10,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
+import * as nodeModule from "node:module";
 
 const repository = fileURLToPath(new URL("../../../", import.meta.url));
 
@@ -167,20 +168,29 @@ test("direct child rejects corrupted delivered bytes and consumes no ambient run
     import { RuntimeChildExecution } from './src/lib/runtime-package.js';
     const child = new RuntimeChildExecution();
     const options = child.options({encoding:'utf8'});
-    const payload = JSON.parse(fs.readFileSync(options.stdio[3], 'utf8'));
-    payload.resources.find(entry => entry[0] === 'src/runtime-probe.js')[1] = Buffer.from('export const value = "corrupted";').toString('base64');
-    fs.writeFileSync('./corrupt-delivery.json', JSON.stringify(payload));
-    const fd = fs.openSync('./corrupt-delivery.json', 'r');
-    const rejected = spawnSync(process.execPath, ['--input-type=module','-e','console.log("semantic execution")'],
-      {...options, stdio:['pipe','pipe','pipe',fd]});
-    fs.closeSync(fd); child.close();
+    const configuration = JSON.parse(Buffer.from(options.env.NODE_OPTIONS.split('#').at(-1), 'base64url'));
+    const original = fs.readFileSync(configuration.file, 'utf8');
+    const payload = JSON.parse(original);
+    const entry = payload.resources.find(entry => entry[0] === 'src/runtime-probe.js');
+    entry[1] = (entry[1][0] === 'A' ? 'B' : 'A') + entry[1].slice(1);
+    fs.writeFileSync(configuration.file, JSON.stringify(payload));
+    const rejected = await new Promise((resolve, reject) => {
+      const process = child.spawnNode('--input-type=module', ['-e', 'console.log("semantic execution")'], options);
+      let stdout = '', stderr = '';
+      process.stdout.on('data', bytes => { stdout += bytes; });
+      process.stderr.on('data', bytes => { stderr += bytes; });
+      process.once('error', reject);
+      process.once('close', status => resolve({status, stdout, stderr}));
+    });
+    fs.writeFileSync(configuration.file, original);
+    child.closeAfterExecution();
     let closed;
     try { child.options(); } catch(error) { closed = error.message; }
     console.log(JSON.stringify({status:rejected.status, stdout:rejected.stdout, stderr:rejected.stderr, closed}));
   `);
   assert.notEqual(result.status, 0);
   assert.equal(result.stdout, "");
-  assert.match(result.stderr, /RUNTIME_REVISION_MISMATCH/);
+  assert.match(result.stderr, /RUNTIME_DELIVERY_DIGEST_MISMATCH/);
   assert.match(result.closed, /closed/);
 });
 
@@ -225,3 +235,51 @@ test("runtime child delivery refuses an external scratch root and preserves its 
   assert.deepEqual(result.entries, ["sentinel"]);
   assert.equal(result.sentinel, "external-owner");
 });
+
+
+test("runtime child canonicalizes inherited Node options and rejects duplicate aliases before writing delivery", (t) => {
+  const root = fixture(t);
+  const result = run(root, `
+    import fs from 'node:fs';
+    import { RuntimeChildExecution } from './src/lib/runtime-package.js';
+    const inherited = Object.fromEntries(Object.entries(process.env).filter(([key]) => key.toUpperCase() !== 'NODE_OPTIONS'));
+    let duplicate;
+    try { new RuntimeChildExecution({ environment: { ...inherited, NODE_OPTIONS: '', Node_Options: '--no-warnings' } }); }
+    catch (error) { duplicate = error.code; }
+    const wroteBeforeRejection = fs.existsSync('.tmp');
+    const delivery = new RuntimeChildExecution({ environment: { ...inherited, Node_Options: '--no-warnings' } });
+    const env = delivery.options().env;
+    const keys = Object.keys(env).filter(key => key.toUpperCase() === 'NODE_OPTIONS');
+    const workerOptions = delivery.workerOptions();
+    const child = delivery.spawnNode('-e', ['process.stdout.write(process.env.NODE_OPTIONS)']);
+    let stdout = '', stderr = '';
+    child.stdout.on('data', bytes => { stdout += bytes; });
+    child.stderr.on('data', bytes => { stderr += bytes; });
+    const code = await new Promise((resolve, reject) => { child.once('error', reject); child.once('close', resolve); });
+    delivery.closeAfterExecution();
+    console.log(JSON.stringify({ duplicate, wroteBeforeRejection, keys, workerOptions: workerOptions.env.NODE_OPTIONS, code, stdout, stderr }));
+  `);
+  assert.equal(result.duplicate, "COMMAND_INVOCATION_INVALID");
+  assert.equal(result.wroteBeforeRejection, false);
+  assert.deepEqual(result.keys, ["NODE_OPTIONS"]);
+  assert.equal(result.workerOptions, "--no-warnings");
+  assert.equal(result.code, 0, result.stderr);
+  assert.equal(result.stdout, "--no-warnings");
+});
+
+
+for (const acknowledged of [false, true]) {
+  test(`isolated capture refuses ${acknowledged ? "an acknowledged worker that never exits" : "a worker that never acknowledges"} within its finite startup window`,
+    { skip: typeof nodeModule.registerHooks !== "function", timeout: 45000 }, (t) => {
+      const root = fixture(t);
+      const worker = path.join(root, "src/lib/runtime-capture-worker.js");
+      fs.writeFileSync(worker, (acknowledged ? fs.readFileSync(worker, "utf8") : "") + "\nsetInterval(() => {}, 1000);\n");
+      const result = spawnSync(process.execPath, ["--import", path.join(root, "src/sennel.js"), "-e", "console.log('semantic code must not run')"], {
+        cwd: root, encoding: "utf8", timeout: 40000,
+      });
+      assert.equal(result.error, undefined, "bootstrap must return before the outer test deadline");
+      assert.equal(result.status, 1);
+      assert.equal(result.stdout, "");
+      assert.match(result.stderr, /RUNTIME_CAPTURE_EXIT_UNCONFIRMED/);
+    });
+}

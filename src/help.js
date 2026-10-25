@@ -377,7 +377,7 @@ export function resolveExecutionOwner(args = []) {
   if (head === "flow" && second === "review") return { owner: "plugin-hook-dispatch" };
   if (head === "flow") return { owner: "flow-lifecycle-registry" };
   if (["docs", "check", "metrics", "spec", "hook"].includes(head)) return { owner: "core-dispatcher" };
-  if (["setup", "upgrade", "plugin", "presets"].includes(head)) return { owner: "independent-entrypoint" };
+  if (["setup", "upgrade", "plugin", "presets", "command"].includes(head)) return { owner: "independent-entrypoint" };
   return { owner: "unknown" };
 }
 

@@ -4,13 +4,12 @@ import path from "node:path";
 import test from "node:test";
 
 import { IssueLogStore } from "../../../src/flow/lib/issue-log-store.js";
-import { ProcessIdentitySource } from "../../../src/lib/process-identity.js";
 import { RepositoryFlowOperationLock } from "../../../src/lib/repository-maintenance-lock.js";
 import { ExternalProcessLockOwner } from "../../support/infrastructure/external-lock-owner.js";
 import { CanonicalFlowFixture, makeFlowManager } from "../../support/infrastructure/flow-setup.js";
 import { createTmpDir, removeTmpDir } from "../../support/builders/tmp-dir.js";
 
-function makeStore(t, { processIdentitySource, operationOwnerToken } = {}) {
+function makeStore(t, { operationOwnerToken } = {}) {
   const root = createTmpDir("sennel-issue-log-store-v1-");
   t.after(() => removeTmpDir(root));
   const manager = makeFlowManager(root);
@@ -20,7 +19,7 @@ function makeStore(t, { processIdentitySource, operationOwnerToken } = {}) {
     runId: "run-100-issue-log",
   }).create().activate("branch");
   const location = fixture.location();
-  const store = IssueLogStore.forVersion({ location, processIdentitySource, operationOwnerToken });
+  const store = IssueLogStore.forVersion({ location, operationOwnerToken });
   return { root, manager, fixture, location, store };
 }
 
@@ -39,21 +38,14 @@ test("IssueLogStore serializes idempotent Version publications through the Activ
   assert.equal(manager.artifactCatalog(fixture.specId).resolve("issue-log.json").logicalKey, "issue.log");
 });
 
-test("IssueLogStore claims an abandoned Version writer lock and releases it after append", (t) => {
-  const abandonedIdentity = new ProcessIdentitySource({
-    platform: "linux",
-    pid: 999999999,
-    readBootIdentity() { return "test-boot"; },
-    readProcessStartFingerprint() { return "1"; },
-  });
-  const { location, store: abandoned } = makeStore(t, { processIdentitySource: abandonedIdentity });
-  const lockPath = path.join(location.directory, ".runtime", "locks", "issue-log.lock");
-  abandoned.lock.acquire();
-  assert.equal(fs.existsSync(lockPath), true);
-
-  const store = IssueLogStore.forVersion({ location });
-  assert.equal(store.append({ step: "gate", reason: "after crash" }, "event-after-crash").appended.length, 1);
-  assert.equal(fs.existsSync(lockPath), false);
+test("IssueLogStore refuses incomplete ownership without publishing an Activity", (t) => {
+  const { store, manager, fixture } = makeStore(t);
+  const before = manager.activityLedger(fixture.specId);
+  fs.writeFileSync(store.lock.lockPath, "{");
+  assert.throws(() => store.append({ step: "gate", reason: "uncertain writer" }, "unknown-event"),
+    (error) => error.lockStatus === "corrupt");
+  assert.equal(fs.readFileSync(store.lock.lockPath, "utf8"), "{");
+  assert.deepEqual(manager.activityLedger(fixture.specId), before);
 });
 
 test("IssueLogStore nests under an explicitly supplied repository operation owner", (t) => {
@@ -77,7 +69,7 @@ test("IssueLogStore rejects a busy repository operation without waiting for its 
     assert.throws(
       () => store.append({ step: "gate", reason: "must stay blocked" }, "blocked-event"),
       (error) => error.code === "REPOSITORY_FLOW_OPERATION_BUSY"
-        && error.lockStatus === "live"
+        && error.lockStatus === "busy"
         && error.retryable !== true,
     );
   } finally {
@@ -87,9 +79,10 @@ test("IssueLogStore rejects a busy repository operation without waiting for its 
 
 test("IssueLogStore preserves timeout diagnostics and recovers after an external writer releases", { timeout: 15_000 }, async (t) => {
   const { root, location, manager, fixture, store } = makeStore(t);
-  const lockDirectory = location.resolve(".runtime/locks");
+  const lockDirectory = store.lock.directory;
+  store.lock.processLock.location.resolve({ create: true });
   const writerLockPath = path.join(lockDirectory, "issue-log.lock");
-  const repositoryLockPath = path.join(root, ".sennel", ".repository-flow-operation.lock");
+  const repositoryLockPath = path.join(root, ".tmp", "runtime", "repository-control", ".repository-flow-operation.lock");
   const holder = ExternalProcessLockOwner.forFileLock({
     directory: lockDirectory,
     fileName: "issue-log.lock",
@@ -111,14 +104,14 @@ test("IssueLogStore preserves timeout diagnostics and recovers after an external
       (error) => error.code === "ISSUE_LOG_BUSY"
         && error.lockStatus === "timeout"
         && error.lockPath === writerLockPath
-        && typeof error.owner?.processIdentity?.ownerToken === "string"
+        && typeof error.owner?.ownerToken === "string"
         && error.retryable === true
         && error.waitedMs >= 5_000
         && error.cause?.code === "ISSUE_LOG_BUSY"
         && error.cause?.lockStatus === "timeout"
         && error.cause?.lockPath === writerLockPath
-        && error.cause?.owner?.processIdentity?.ownerToken === error.owner.processIdentity.ownerToken
-        && error.cause?.cause?.lockStatus === "live"
+        && error.cause?.owner?.ownerToken === error.owner.ownerToken
+        && error.cause?.cause?.lockStatus === "busy"
         && error.cause?.cause?.lockPath === writerLockPath,
     );
     assert.equal(fs.existsSync(repositoryLockPath), false, "writer timeout releases the repository operation lock");

@@ -1,5 +1,10 @@
+import { RepositoryLockAuthority } from "../../lib/repository-control-lock.js";
+import { ProcessExecutionEvent } from "../../lib/process-execution-values.js";
+import { FlowProcessEvent, PROCESS_EVENT_OPERATION, PROCESS_EVENT_ACTIVITY_TYPES } from "./flow-process-event.js";
+import { ProcessExecutionFinalizationBarrier } from "../../lib/process-execution-finalization.js";
 import { CanonicalPromptResponseAdoption, PromptResponseAdoptionAdmissionValue } from "./prompt-response-adoption.js";
 import { FlowExecutionObservationStore } from "./flow-execution-observation-store.js";
+import { SourceExecutionObservationAppends } from "./source-execution-observation-appends.js";
 import { FlowExecutionObservationBinding, FlowExecutionMeasurementReference } from "../../lib/flow-execution-observation.js";
 import { CanonicalFlowArtifactBaseline } from "./canonical-flow-artifact-baseline.js";
 import { CurrentFlowStateInvariantError } from "./current-flow-state-invariant-error.js";
@@ -102,6 +107,7 @@ const RETRY_KINDS = new Set(["semantic", "tooling"]);
 const FAILURE_POLICIES = new Set(["retry", "retry-block", "record", "amend-spec", "block", "step-definition", "test-chain-retry", "test-chain-repair"]);
 const RECORDING_FAILURE_POLICIES = new Set(["retry", "record", "step-definition"]);
 const ATTEMPT_TYPES = new Set([
+  ...PROCESS_EVENT_ACTIVITY_TYPES,
   "flow_created",
   "task_added",
   "attempt_started",
@@ -229,7 +235,7 @@ const FLOW_SUFFIX_INVALIDATION_OPERATIONS = new Set([
 // Metrics and notes are durable observations, not fields on flow.json.  Their
 // append-only home is the same Activity ledger that records every state
 // transition, which preserves a single recovery and ordering mechanism.
-const OBSERVATION_TRANSITION_OPERATIONS = new Set(["record_metric", "record_note"]);
+const OBSERVATION_TRANSITION_OPERATIONS = new Set(["record_metric", "record_note", PROCESS_EVENT_OPERATION]);
 // Advisory policy evidence is a first-class ledger fact.  It deliberately
 // stays out of flow.json so a resumed Flow replays the same immutable
 // observation/decision history rather than a mutable side-channel.
@@ -892,12 +898,16 @@ function freshStateLike(state, definition) {
   });
 }
 
-function applyCanonicalActivity(state, activity, priorActivities = []) {
+function applyCanonicalTransition(state, activity, priorActivities) {
   const node = state.findNode(activity.nodeId);
   if (!node || node.key !== activity.nodeKey) {
     throw new CurrentFlowStateInvariantError("Activity must reference a current-state node by stable id and semantic key");
   }
-  return activity.transition.apply(state, activity, { priorActivities }).withConfirmationOrder(activity.confirmationOrder);
+  return activity.transition.apply(state, activity, { priorActivities });
+}
+
+function applyCanonicalActivity(state, activity, priorActivities = []) {
+  return applyCanonicalTransition(state, activity, priorActivities).withConfirmationOrder(activity.confirmationOrder);
 }
 
 function jsonEqual(left, right) {
@@ -4526,6 +4536,21 @@ export class CurrentFlowMigrationCheckpoint {
   }
 }
 
+/** A counter update whose graph is owned solely by one synchronous journal replay. */
+class CurrentFlowReplayConfirmation {
+  constructor(source, confirmationOrder) {
+    if (!(source instanceof CurrentFlowState)) {
+      throw new CurrentFlowStateInvariantError("journal replay confirmation requires a typed state");
+    }
+    this.source = source;
+    this.confirmationOrder = requirePositiveInteger(confirmationOrder, "confirmationOrder", { allowZero: true });
+    if (this.confirmationOrder !== source.confirmationOrder + 1) {
+      throw new CurrentFlowStateInvariantError("journal replay confirmation must immediately follow its state");
+    }
+    Object.freeze(this);
+  }
+}
+
 export class CurrentFlowState {
   #nodes;
   #leaves;
@@ -4533,6 +4558,19 @@ export class CurrentFlowState {
   constructor(value, { definition }) {
     if (!(definition instanceof CurrentFlowDefinition)) {
       throw new CurrentFlowStateInvariantError("CurrentFlowState requires a CurrentFlowDefinition");
+    }
+    if (value instanceof CurrentFlowReplayConfirmation) {
+      const source = value.source;
+      if (definition !== source.definition) {
+        throw new CurrentFlowStateInvariantError("journal replay confirmation must retain its Definition");
+      }
+      Object.assign(this, source);
+      this.confirmationOrder = value.confirmationOrder;
+      this.#nodes = source.#nodes;
+      this.#leaves = source.#leaves;
+      this.#assertCurrent();
+      Object.freeze(this);
+      return;
     }
     if (!isPlainObject(value)) throw new CurrentFlowStateInvariantError("flow state must be an object");
     for (const field of FORBIDDEN_TOP_LEVEL_FIELDS) {
@@ -7778,6 +7816,7 @@ export class ActivityTransition {
       }
       if (this.operation === "park_flow") return state.park();
       if (this.operation === "resume_flow") return state.resume();
+      FlowProcessEvent.assertFinalization(state, priorActivities, activity.processFinalizationBarrier);
       return state.finalize();
     }
     if (POLICY_TRANSITION_OPERATIONS.has(this.operation)) {
@@ -7808,6 +7847,7 @@ export class ActivityTransition {
         confirmedAt: activity.timing?.finishedAt ?? null,
       });
     }
+    if (this.operation === PROCESS_EVENT_OPERATION) new FlowProcessEvent(activity.processEvent).assertFor(state, priorActivities);
     if (OBSERVATION_TRANSITION_OPERATIONS.has(this.operation)
       || this.operation === "record_nonblocking"
       || ARTIFACT_PUBLICATION_TRANSITION_OPERATIONS.has(this.operation)
@@ -8197,6 +8237,8 @@ export class FlowActivity {
       "id", "nodeId", "nodeKey", "attemptId", "sequence", "confirmationOrder", "type", "transition",
       "result", "timing", "failure", "provider", "model", "effort", "usage", "references", "metric", "note",
       "reviewPublication",
+      ...(PROCESS_EVENT_ACTIVITY_TYPES.includes(value.type) ? ["processEvent"] : []),
+      ...(value.type === "flow_finalized" && Object.hasOwn(value, "processFinalizationBarrier") ? ["processFinalizationBarrier"] : []),
     ]), "activity");
     const {
       id, nodeId, nodeKey, attemptId, sequence, confirmationOrder, type, transition,
@@ -8212,6 +8254,19 @@ export class FlowActivity {
     this.confirmationOrder = requirePositiveInteger(confirmationOrder, "activity.confirmationOrder");
     if (!ATTEMPT_TYPES.has(type)) throw new CurrentFlowStateInvariantError(`activity.type is invalid: ${type}`);
     this.type = type;
+    this.processFinalizationBarrier = Object.hasOwn(value, "processFinalizationBarrier")
+      ? value.processFinalizationBarrier instanceof ProcessExecutionFinalizationBarrier ? value.processFinalizationBarrier
+        : ProcessExecutionFinalizationBarrier.fromStored(value.processFinalizationBarrier)
+      : null;
+    this.processEvent = PROCESS_EVENT_ACTIVITY_TYPES.includes(type)
+      ? value.processEvent instanceof ProcessExecutionEvent ? value.processEvent : ProcessExecutionEvent.fromStored(value.processEvent)
+      : null;
+    if (this.processEvent !== null) {
+      const fact = new FlowProcessEvent(this.processEvent);
+      if (this.id !== fact.activityId || this.nodeId !== fact.nodeId || this.type !== fact.activityType) {
+        throw new CurrentFlowStateInvariantError("Process Activity must preserve its exact event identity, type and origin node");
+      }
+    }
     this.transition = transition instanceof ActivityTransition ? transition : new ActivityTransition(transition);
     const typeForOperation = {
       [FLOW_CREATION_TRANSITION_OPERATION]: FLOW_CREATION_ACTIVITY_TYPE,
@@ -8267,6 +8322,7 @@ export class FlowActivity {
       record_dispatch_approval: "dispatch_approval_recorded",
       record_metric: "metric_recorded",
       record_note: "note_recorded",
+      [PROCESS_EVENT_OPERATION]: value.processEvent == null ? null : new FlowProcessEvent(value.processEvent).activityType,
       record_nonblocking: "nonblocking_recorded",
       continue_nonblocking: "nonblocking_recorded",
       accept_final_regression_failure: "failure_accepted",
@@ -8530,6 +8586,8 @@ export class FlowActivity {
       metric: this.metric?.toJSON() ?? null,
       note: this.note?.toJSON() ?? null,
       reviewPublication: this.reviewPublication?.toJSON() ?? null,
+      ...(this.processEvent === null ? {} : { processEvent: this.processEvent.toJSON() }),
+      ...(this.processFinalizationBarrier === null ? {} : { processFinalizationBarrier: this.processFinalizationBarrier.toJSON() }),
     };
   }
 }
@@ -9187,6 +9245,45 @@ class CurrentFlowStateValidationCache {
   }
 }
 
+/** Cold replay owns its transient graph; validated prefixes retain ordinary copies. */
+class CurrentFlowJournalReplay {
+  #state;
+  #priorActivities;
+  #reuseValidatedBase;
+
+  constructor(state, priorActivities, { reuseValidatedBase }) {
+    this.#reuseValidatedBase = reuseValidatedBase;
+    // A validated prefix already belongs to the existing warm replay path.
+    // Only cold replay privately shares a fully detached graph across observations.
+    this.#state = reuseValidatedBase ? state : this.#detach(state);
+    this.#priorActivities = [...priorActivities];
+  }
+
+  apply(activity) {
+    if (!this.#reuseValidatedBase && activity.transition.operation === PROCESS_EVENT_OPERATION) {
+      const unchanged = applyCanonicalTransition(this.#state, activity, this.#priorActivities);
+      if (unchanged !== this.#state) {
+        throw new CurrentFlowStateInvariantError("process observation cannot change the journal replay graph");
+      }
+      this.#state = new CurrentFlowState(
+        new CurrentFlowReplayConfirmation(unchanged, activity.confirmationOrder),
+        { definition: unchanged.definition },
+      );
+    } else {
+      this.#state = applyCanonicalActivity(this.materialize(), activity, this.#priorActivities);
+    }
+    this.#priorActivities.push(activity);
+  }
+
+  materialize() {
+    return this.#reuseValidatedBase ? this.#state : this.#detach(this.#state);
+  }
+
+  #detach(state) {
+    return new CurrentFlowState(structuredClone(state.toJSON()), { definition: state.definition });
+  }
+}
+
 /**
  * The only persistence API for the new flow.json contract.  The journal is
  * appended before the state CAS.  A crash in that window is resolved by
@@ -9195,7 +9292,7 @@ class CurrentFlowStateValidationCache {
 export class CurrentFlowStateStore {
   #validatedState = null;
 
-  constructor({ directory, definition, faultInjector = () => {}, processIdentitySource, runtimeLockLocation = null } = {}) {
+  constructor({ directory, definition, faultInjector = () => {}, runtimeLockLocation = null, repositoryRoot = null } = {}) {
     this.directory = path.resolve(requireString(directory, "store.directory"));
     if (!(definition instanceof CurrentFlowDefinition)) throw new CurrentFlowStateInvariantError("store requires a CurrentFlowDefinition");
     if (typeof faultInjector !== "function") throw new CurrentFlowStateInvariantError("store.faultInjector must be a function");
@@ -9208,9 +9305,12 @@ export class CurrentFlowStateStore {
     )) {
       throw new CurrentFlowStateInvariantError("current flow state runtime lock must belong to this Version directory");
     }
+    if (runtimeLockLocation === null && repositoryRoot === null) {
+      throw new CurrentFlowStateInvariantError("current flow state store requires an explicit repository root or minted Version lock location");
+    }
     const lockErrorFactory = (status, message, { lockPath, cause } = {}) => {
       const error = new CurrentFlowStateConflictError(message);
-      error.code = status === "live" || status === "timeout"
+      error.code = status === "busy" || status === "timeout"
         ? "FLOW_STATE_ATOMIC_BUSY"
         : `CURRENT_FLOW_STATE_LOCK_${status.replace(/-/g, "_").toUpperCase()}`;
       error.lockPath = lockPath;
@@ -9230,20 +9330,14 @@ export class CurrentFlowStateStore {
     this.journal = new FlowActivityJournal(path.join(this.directory, "activities.jsonl"), {
       directoryAuthority: this.directoryAuthority,
     });
-    // Runtime state remains a real, non-authoritative subtree rooted in the
-    // same retained Version directory as state and Activity publication.
     const runtimeDirectory = runtimeLockLocation?.runtimeDirectory ?? path.join(this.directory, ".runtime");
-    const lockDirectory = runtimeLockLocation?.directory ?? path.join(runtimeDirectory, "locks");
-    const lockFileName = runtimeLockLocation?.fileName ?? "current-flow-state.lock";
-    this.runtimeAuthority = this.directoryAuthority.descendant(runtimeDirectory, {
-      create: true, creationMode: 0o755, errorFactory: lockErrorFactory,
-    });
-    this.lockDirectoryAuthority = this.runtimeAuthority.descendant(lockDirectory, {
-      create: true, creationMode: 0o755, errorFactory: lockErrorFactory,
-    });
+    const controlLocation = runtimeLockLocation?.controlLocation
+      ?? new RepositoryLockAuthority(repositoryRoot, { errorFactory: lockErrorFactory }).location({
+        namespace: "flow-version", identity: this.directory, fileName: "current-flow-state.lock",
+        legacyPaths: [path.join(runtimeDirectory, "locks", "current-flow-state.lock")],
+      });
     this.lock = new FileLock({
-      directoryAuthority: this.lockDirectoryAuthority,
-      fileName: lockFileName,
+      location: controlLocation,
       kind: "current-flow-state",
       authority: {
         directory: this.directory,
@@ -9251,7 +9345,6 @@ export class CurrentFlowStateStore {
         statePath: this.statePath,
         activityPath: this.journal.filePath,
       },
-      ...(processIdentitySource && { processIdentitySource }),
       errorFactory: lockErrorFactory,
     });
     Object.freeze(this);
@@ -9395,7 +9488,7 @@ export class CurrentFlowStateStore {
     try {
       this.#withLock(() => undefined);
     } catch (error) {
-      if (error?.lockStatus === "live" || error?.lockStatus === "timeout") {
+      if (error?.lockStatus === "busy" || error?.lockStatus === "timeout") {
         const busy = new Error(error.message, { cause: error });
         busy.name = "FlowStateAtomicSaveError";
         busy.code = "FLOW_STATE_ATOMIC_BUSY";
@@ -9573,14 +9666,17 @@ export class CurrentFlowStateStore {
     const cachedBase = cacheEligible
       ? this.#validatedState?.replayBaseFor(state, journalSnapshot) ?? null
       : null;
-    let replayed = cachedBase ?? freshStateLike(state, this.definition);
-    const replayStart = replayed.confirmationOrder;
+    let replayed;
     try {
-      const priorActivities = entries.slice(0, replayStart);
+      const base = cachedBase ?? freshStateLike(state, this.definition);
+      const replayStart = base.confirmationOrder;
+      const replay = new CurrentFlowJournalReplay(base, entries.slice(0, replayStart), {
+        reuseValidatedBase: cachedBase !== null,
+      });
       for (let index = replayStart; index < state.confirmationOrder; index += 1) {
-        replayed = this.#applyActivity(replayed, entries[index], priorActivities);
-        priorActivities.push(entries[index]);
+        replay.apply(entries[index]);
       }
+      replayed = replay.materialize();
     } catch (error) {
       throw new CurrentFlowStateConflictError(`Activity journal cannot reproduce flow state: ${error.message}`);
     }
@@ -9668,18 +9764,17 @@ export class CurrentFlowStateAdoptionBoundary {
     return CurrentFlowState.create({ definition: this.definition, ...options });
   }
 
-  openStore({ directory, faultInjector, processIdentitySource } = {}) {
+  openStore({ directory, repositoryRoot, runtimeLockLocation, faultInjector } = {}) {
     return new CurrentFlowStateStore({
-      directory,
+      directory, repositoryRoot, runtimeLockLocation,
       definition: this.definition,
       ...(faultInjector && { faultInjector }),
-      ...(processIdentitySource && { processIdentitySource }),
     });
   }
 
-  openVersionStore({ location, faultInjector, processIdentitySource } = {}) {
+  openVersionStore({ location, faultInjector } = {}) {
     if (!(location instanceof FlowVersionLocation)) throw new CurrentFlowStateInvariantError("FlowVersionLocation is required for Version storage");
-    return new CurrentFlowVersionStore({ location, definition: this.definition, ...(faultInjector && { faultInjector }), ...(processIdentitySource && { processIdentitySource }) });
+    return new CurrentFlowVersionStore({ location, definition: this.definition, ...(faultInjector && { faultInjector }) });
   }
 
 }
@@ -9719,21 +9814,37 @@ export class CanonicalTransitionView {
 
   /**
    * Dispatch approval observes an action; its own receipt cannot invalidate
-   * that action on restart. Only trailing typed approval observations and
-   * their confirmation counter are excluded. Every other state field,
+   * that action on restart. Trailing typed approval and process observations
+   * and their confirmation counter are excluded. Every other state field,
    * Activity and cataloged input remains part of execution admission.
    */
   dispatchExecutionRevision() {
+    return this.#executionRevision({ excludeDispatchApprovals: true });
+  }
+
+  /** Process bookkeeping cannot invalidate the evidence its Git calls read. */
+  sourceEvidenceRevision({ executionObservations = null } = {}) {
+    if (executionObservations !== null && !(executionObservations instanceof SourceExecutionObservationAppends)) {
+      throw new TypeError("Source evidence revision requires authenticated execution observation appends");
+    }
+    return this.#executionRevision({ excludeDispatchApprovals: false,
+      catalog: executionObservations === null ? this.catalog : executionObservations.retainedCatalog(this.catalog) });
+  }
+
+  #executionRevision({ excludeDispatchApprovals, catalog = this.catalog }) {
     let retainedCount = this.activities.length;
     while (retainedCount > 0) {
       const activity = this.activities[retainedCount - 1];
-      if (!DISPATCH_APPROVAL_TRANSITION_OPERATIONS.has(activity.transition.operation)
-        || !(activity.transition.approval instanceof ActivityDispatchApproval)) break;
+      const approval = excludeDispatchApprovals && DISPATCH_APPROVAL_TRANSITION_OPERATIONS.has(activity.transition.operation)
+        && activity.transition.approval instanceof ActivityDispatchApproval;
+      const processObservation = activity.transition.operation === PROCESS_EVENT_OPERATION
+        && activity.processEvent instanceof ProcessExecutionEvent;
+      if (!approval && !processObservation) break;
       retainedCount -= 1;
     }
-    const approvalCount = this.activities.length - retainedCount;
-    const state = this.state.withConfirmationOrder(this.state.confirmationOrder - approvalCount);
-    const artifacts = this.catalog.artifacts
+    const observationCount = this.activities.length - retainedCount;
+    const state = this.state.withConfirmationOrder(this.state.confirmationOrder - observationCount);
+    const artifacts = catalog.artifacts
       .filter((artifact) => !["flow.state", "flow.activities"].includes(artifact.logicalKey))
       .map((artifact) => artifact.toJSON())
       .sort((left, right) => left.relativePath.localeCompare(right.relativePath));
@@ -9769,7 +9880,7 @@ export class CanonicalTransitionView {
 /** Version-1-only persistence facade. It has no legacy-layout lookup. */
 export class CurrentFlowVersionStore {
   #stateStore = null;
-  constructor({ location, definition, faultInjector, processIdentitySource, allowStaging = false } = {}) {
+  constructor({ location, definition, faultInjector, allowStaging = false } = {}) {
     if (!(location instanceof FlowVersionLocation)) throw new CurrentFlowStateInvariantError("Current Flow Version store requires a FlowVersionLocation");
     location.requireScope("canonical");
     if (location.isStaging && allowStaging !== true) {
@@ -9782,7 +9893,6 @@ export class CurrentFlowVersionStore {
     this.location = location;
     this.definition = definition;
     this.faultInjector = faultInjector;
-    this.processIdentitySource = processIdentitySource;
     this.allowStaging = allowStaging === true;
     this.catalogStore = new FlowArtifactCatalogStore({
       location,
@@ -9853,7 +9963,6 @@ export class CurrentFlowVersionStore {
         location: staging,
         definition: this.definition,
         ...(this.faultInjector && { faultInjector: this.faultInjector }),
-        ...(this.processIdentitySource && { processIdentitySource: this.processIdentitySource }),
         allowStaging: true,
       });
       stagingAuthority = stagingStore.#createMaterialized(canonical, canonicalSpec, issueSnapshot);
@@ -10831,7 +10940,6 @@ export class CurrentFlowVersionStore {
         definition: this.definition,
         runtimeLockLocation: this.location.runtimeLock("runtime.lock.current-flow-state"),
         ...(this.faultInjector && { faultInjector: this.faultInjector }),
-        ...(this.processIdentitySource && { processIdentitySource: this.processIdentitySource }),
       });
     }
     return this.#stateStore;

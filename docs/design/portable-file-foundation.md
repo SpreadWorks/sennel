@@ -38,9 +38,16 @@ Atomic writers create an exclusive stage beside the destination, write and
 flush all bytes, close it, and bind its identity and digest. Publication checks
 the old destination and pinned directory again after the commit guard, then
 renames and reads back the result. A tool may explicitly adopt and seal a stage
-once; publication never silently reseals modified bytes. Existing exclusive
-owner publication uses the same stage with a non-overwriting link operation.
-This preserves the lock owner's existing protocol.
+once; publication never silently reseals modified bytes. Process exclusion uses
+the same closed-stage API with exclusive publication: a same-volume hard link
+cannot replace another owner, and removing the owned stage precedes exact
+single-link readback. Partial owner JSON is never written at the visible name.
+A two-link observation remains unreadable publication-pending evidence with no
+owner authority. `FileLock` waits through it using its existing wait policy;
+persistent or foreign links remain untouched and reach that policy's timeout.
+Malformed single-link records and other invalid file shapes remain immediate
+refusals. No incomplete publication grants permission to remove or replace a
+lock.
 
 The default stage remains 0600. Copying may explicitly supply a
 `FilePermissionHint` captured with the source descriptor's completed stat. The
@@ -76,6 +83,23 @@ Normal scratch belongs to the selected project/shared repository's canonical
 create directories. An `OwnedTemporaryDirectory` retains the authority minted
 at creation; a path alone cannot reconstruct that capability.
 
+`RepositoryLockAuthority` takes the explicit repository root and retained
+physical authority. It mints immutable `RepositoryLockLocation` values under
+`.tmp/runtime/repository-control`, with separate namespaces and hashed logical
+identities. Repository runtime, managed records, Flow stores and leases, and
+Agent cache exclusion share this locator. Version transaction journals and
+canonical data keep their own storage locations. Resolving or inspecting an
+absent lock does not create its namespace; acquisition creates it beneath the
+same captured ancestor authority.
+
+Known former lock paths remain exclusion boundaries during migration. Their
+visible files and old owner-publication staging names cause an explicit unknown
+owner refusal without parsing, converting, deleting, or reclaiming the bytes.
+Known lock-only directories permit empty directories but refuse any residual
+entry. These checks do not recursively search arbitrary repository contents.
+Moving a lock to the shared namespace therefore cannot bypass a still-published
+old owner. Cooperative release permits subsequent acquisition at the new path.
+
 `ReadOnlyInvocationWorkspace.create()` mints a unique child of Node's canonical
 temporary directory. Its generation and pinned authorities cannot be restored
 from a caller-supplied path. Resource-tracking tokens grant no execution
@@ -83,6 +107,31 @@ authority. Pending execution evidence survives until the caller confirms normal
 exit and released resources for that generation. Released nested directories
 are retired through the workspace's cleanup API; missing or replaced paths are
 not adopted. The workspace is never canonical state or a resume registry.
+A minted `ReadOnlyProcessRuntimeStorage` supplies the corresponding shared lock
+namespace outside the checkout. The locator validates that workspace grant and
+retains the original repository identity; a caller-provided temporary path is
+not an alternative storage grant.
+
+Each coordinator also mints a separate workspace for its control endpoint.
+Version 3 execution grants carry this authority as `endpoint.storage`; the
+top-level `storage` authority still controls inventory, calls, archives and
+locks. Mailbox requests and responses live beneath the endpoint authority and
+the execution checkout's digest. Live admission checks its physical identities
+and marker; historical records decode its structure without reopening those
+directories. Responses remain available after coordinator exit so a lost
+terminating reply can be replayed. These retained protocol directories are not
+pending executions and are not reclaimed by a timer or an exit observation.
+
+Provider profiles can explicitly include `{{CONTROL_DIRECTORY}}` or
+`{{CONTROL_DIRECTORY_JSON}}` in an argument. Agent resolves them from the active
+runtime's validated endpoint authority; the latter inserts a JSON string
+literal for configuration values requiring quoting. Prompt content is never
+interpreted as an argument template. Projection does not allocate a workspace,
+and each actual attempt validates the current generation. Profiles remain
+responsible for declaring their provider's permission flags; Sennel does not
+inject them or change global provider configuration. A read-only research
+profile can grant writes only to this exact control directory while keeping
+project writes and command network access denied.
 
 `LogicalRelativePath` and `LogicalPathSet` enforce the same stored-name grammar
 on every host, including reserved names, case/Unicode aliases and file-prefix

@@ -8,20 +8,19 @@ const callId = "22222222-2222-4222-8222-222222222222";
 const parentCallId = "33333333-3333-4333-8333-333333333333";
 const foreignExecutionId = "44444444-4444-4444-8444-444444444444";
 function diagnostic() {
-  return new ProcessExecutionFailureDiagnostic({ executionId, callId, operation: "capture-members", role: "descendant",
-    birth: { pid: 345, bootIdentity: "boot-instance", startFingerprint: "678" }, originalPgid: 123,
-    observedPgid: 345, observedSid: 345,
-    primaryCause: { code: "PROCESS_EXECUTION_OBSERVATION_UNKNOWN", message: "Member birth observation is unavailable" } });
+  return new ProcessExecutionFailureDiagnostic({ executionId, callId, operation: "observe-exit", role: "descendant", phase: "unknown",
+    executor: { executorId: "55555555-5555-4555-8555-555555555555", executorSession: "66666666-6666-4666-8666-666666666666" },
+    primaryCause: { code: "PROCESS_EXECUTION_OBSERVATION_UNKNOWN", message: "Registered child exit observation is unavailable" } });
 }
 function failure() {
-  return new ProcessExecutionControlFailure("observation-unknown", "Member birth observation is unavailable",
+  return new ProcessExecutionControlFailure("observation-unknown", "Registered child exit observation is unavailable",
     { executionId, callId, diagnostic: diagnostic() });
 }
 
 test("public process failure evidence is immutable, bounded and excludes arbitrary error authority", () => {
   const value = diagnostic();
-  for (const part of [value, value.birth, value.primaryCause]) assert.equal(Object.isFrozen(part), true);
-  assert.throws(() => { value.birth.pid = 999; }, TypeError);
+  for (const part of [value, value.executor, value.primaryCause]) assert.equal(Object.isFrozen(part), true);
+  assert.throws(() => { value.executor.executorId = "invalid"; }, TypeError);
   const unsafe = new Error("internal failure"); unsafe.ownerToken = "secret-owner"; unsafe.capability = "secret-capability"; unsafe.cause = unsafe;
   const original = failure(), wrapped = new ProcessExecutionControlFailure("stop-unconfirmed", "Stop could not be confirmed",
     { cause: unsafe, executionId, callId, diagnostic: original.diagnostic, primaryCause: original.primaryCause });
@@ -47,17 +46,17 @@ test("parent failure envelopes retain the original process, operation and primar
 test("versioned diagnostic boundaries reject unknown, recursive, excessive and inconsistent evidence", () => {
   const cases = [
     (value) => { value.diagnostic.ownerToken = "secret"; },
-    (value) => { value.diagnostic.birth.ownerToken = "secret"; },
+    (value) => { value.diagnostic.executor.ownerToken = "secret"; },
     (value) => { value.diagnostic.primaryCause.stack = "trace"; },
     (value) => { value.primaryCause.cause = value; },
-    (value) => { value.diagnostic.birth.bootIdentity = "x".repeat(257); },
-    (value) => { value.diagnostic.birth.startFingerprint = "1".repeat(33); },
+    (value) => { value.diagnostic.executor.executorId = "x".repeat(257); },
+    (value) => { value.diagnostic.executor.executorSession = "1".repeat(33); },
     (value) => { value.diagnostic.role = "unrestricted-process"; },
     (value) => { value.diagnostic.operation = "x".repeat(81); },
-    (value) => { value.diagnostic.schemaVersion = 2; },
+    (value) => { value.diagnostic.schemaVersion = 1; },
     (value) => { delete value.diagnostic.schemaVersion; },
-    (value) => { value.diagnostic.observedSid = null; },
-    (value) => { value.diagnostic.birth.pid = 0; },
+    (value) => { value.diagnostic.phase = "unregistered-tree"; },
+    (value) => { value.diagnostic.executor = null; },
     (value) => { value.diagnostic.role = "launcher"; },
     (value) => { value.diagnostic.callId = parentCallId; },
     (value) => { value.primaryCause.code = "PROCESS_EXECUTION_REPLACED_CAUSE"; },
@@ -139,7 +138,7 @@ test("communication evidence refuses unknown fields, invalid times, unordered or
     (value) => { delete value.communication.schemaVersion; },
     (value) => { value.communication.ownerToken = "secret"; },
     (value) => { value.communication.attempts[0].stack = "trace"; },
-    (value) => { value.communication.operation = "arbitrary-command"; },
+    (value) => { value.communication.operation = "invalid operation"; },
     (value) => { value.communication.cutoff = "success"; },
     (value) => { value.communication.acceptance = "success"; },
     (value) => { value.communication.stopConfirmation = "assumed"; },

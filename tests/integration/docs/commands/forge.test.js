@@ -4,6 +4,7 @@ import fs from "fs";
 import os from "os";
 import path from "path";
 const { join } = path;
+import { standaloneTestEnvironment } from "../../../../src/lib/process.js";
 import { execFileSync } from "child_process";
 import { createTmpDir, removeTmpDir, writeJson, writeFile } from "../../../support/builders/tmp-dir.js";
 const CMD = join(process.cwd(), "src/sennel.js");
@@ -14,7 +15,7 @@ describe("forge CLI validation", () => {
   afterEach(() => tmp && removeTmpDir(tmp));
 
   function makeEnv(t) {
-    return { ...process.env, SENNEL_WORK_ROOT: t, SENNEL_SOURCE_ROOT: t };
+    return { ...standaloneTestEnvironment(), SENNEL_WORK_ROOT: t, SENNEL_SOURCE_ROOT: t };
   }
 
   it("rejects invalid --max-runs", () => {
@@ -52,7 +53,7 @@ describe("forge CLI validation", () => {
     try {
       execFileSync("node", [CMD, ...CMD_ARGS_PREFIX], {
         encoding: "utf8",
-        env: { ...process.env, SENNEL_WORK_ROOT: tmp, SENNEL_SOURCE_ROOT: tmp },
+        env: { ...standaloneTestEnvironment(), SENNEL_WORK_ROOT: tmp, SENNEL_SOURCE_ROOT: tmp },
       });
       assert.fail("should exit non-zero");
     } catch (err) {
@@ -66,7 +67,7 @@ describe("forge CLI validation", () => {
 
     const result = execFileSync("node", [CMD, ...CMD_ARGS_PREFIX, "--help"], {
       encoding: "utf8",
-      env: { ...process.env, SENNEL_WORK_ROOT: tmp, SENNEL_SOURCE_ROOT: tmp },
+      env: { ...standaloneTestEnvironment(), SENNEL_WORK_ROOT: tmp, SENNEL_SOURCE_ROOT: tmp },
     });
     assert.match(result, /--prompt/);
   });
@@ -82,7 +83,7 @@ describe("forge CLI validation", () => {
       "--dry-run",
     ], {
       encoding: "utf8",
-      env: { ...process.env, SENNEL_WORK_ROOT: tmp, SENNEL_SOURCE_ROOT: tmp },
+      env: { ...standaloneTestEnvironment(), SENNEL_WORK_ROOT: tmp, SENNEL_SOURCE_ROOT: tmp },
     });
     assert.match(result, /DRY-RUN/);
     assert.match(result, /DONE \(dry-run\)/);
@@ -102,11 +103,11 @@ describe("forge CLI validation", () => {
     const result = execFileSync("node", [
       CMD, ...CMD_ARGS_PREFIX,
       "--prompt", "test",
-      "--review-cmd", "echo review-passed",
+      "--review-cmd", JSON.stringify({ kind: "native", executable: process.execPath, args: ["-e", "process.stdout.write('review-passed\\n')"] }),
       "--max-runs", "1",
     ], {
       encoding: "utf8",
-      env: { ...process.env, SENNEL_WORK_ROOT: tmp, SENNEL_SOURCE_ROOT: tmp },
+      env: { ...standaloneTestEnvironment(), SENNEL_WORK_ROOT: tmp, SENNEL_SOURCE_ROOT: tmp },
     });
     assert.match(result, /DONE/);
   });
@@ -136,11 +137,11 @@ describe("forge CLI validation", () => {
       CMD, ...CMD_ARGS_PREFIX,
       "--prompt", "improve",
       "--mode", "agent",
-      "--review-cmd", "echo review-passed",
+      "--review-cmd", JSON.stringify({ kind: "native", executable: process.execPath, args: ["-e", "process.stdout.write('review-passed\\n')"] }),
       "--max-runs", "1",
     ], {
       encoding: "utf8",
-      env: { ...process.env, SENNEL_WORK_ROOT: tmp, SENNEL_SOURCE_ROOT: tmp },
+      env: { ...standaloneTestEnvironment(), SENNEL_WORK_ROOT: tmp, SENNEL_SOURCE_ROOT: tmp },
     });
     assert.match(result, /per-file mode/);
     assert.match(result, /2 files/);
@@ -170,11 +171,11 @@ describe("forge CLI validation", () => {
       CMD, ...CMD_ARGS_PREFIX,
       "--prompt", "improve",
       "--mode", "agent",
-      "--review-cmd", "echo review-passed",
+      "--review-cmd", JSON.stringify({ kind: "native", executable: process.execPath, args: ["-e", "process.stdout.write('review-passed\\n')"] }),
       "--max-runs", "1",
     ], {
       encoding: "utf8",
-      env: { ...process.env, SENNEL_WORK_ROOT: tmp, SENNEL_SOURCE_ROOT: tmp },
+      env: { ...standaloneTestEnvironment(), SENNEL_WORK_ROOT: tmp, SENNEL_SOURCE_ROOT: tmp },
     });
     // Should NOT show per-file mode
     assert.ok(!result.includes("per-file mode"), "should not use per-file mode");

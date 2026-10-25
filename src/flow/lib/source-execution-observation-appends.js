@@ -82,7 +82,8 @@ export class SourceExecutionObservationAppends {
   }
   allowsPath(relativePath) { return this.#paths.has(relativePath); }
   allowsFilePath(relativePath) { return this.appended.some((append) => append.relativePath === relativePath); }
-  retainedCatalog() {
+  retainedCatalog(expectedCatalog = this.#catalog) {
+    if (expectedCatalog !== this.#catalog) throw new TypeError("Execution observation appends belong to another catalog view");
     const added = new Set(this.appended.map((append) => append.catalogRelativePath));
     return FlowArtifactCatalog.regenerate(this.#catalog.artifacts.filter((descriptor) => !added.has(descriptor.relativePath)));
   }

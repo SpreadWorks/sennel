@@ -71,6 +71,24 @@ describe("global CLI execution from a managed worktree", () => {
     assert.equal(JSON.parse(result.stdout).ok, true);
   });
 
+  it("executes captured local entry bytes after that entry deletes itself and replaces its disk loader", () => {
+    const { root, worktreePath } = createFixture();
+    const localEntry = path.join(worktreePath, "src", "sennel.js");
+    const source = fs.readFileSync(localEntry, "utf8");
+    fs.writeFileSync(localEntry, source.replace("const rawArgs = process.argv.slice(2);", `
+      process.stderr.write('[captured-local-entry]\\n');
+      unlinkSync(new URL(import.meta.url));
+      writeFileSync(new URL('./lib/runtime-loader.js', import.meta.url), 'throw new Error("mutable local loader executed");');
+      const rawArgs = process.argv.slice(2);
+    `));
+    const result = invokeGlobalCli(root, worktreePath);
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+    assert.match(result.stderr, /\[captured-local-entry\]/);
+    assert.equal(JSON.parse(result.stdout).ok, true);
+    assert.equal(fs.existsSync(localEntry), false);
+    assert.match(fs.readFileSync(path.join(worktreePath, "src", "lib", "runtime-loader.js"), "utf8"), /mutable local loader executed/);
+  });
+
   it("fails closed when the worktree-local CLI source is absent", () => {
     const { root, worktreePath } = createFixture();
     const worktreeCli = path.join(worktreePath, "src", "sennel.js");

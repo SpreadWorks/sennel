@@ -386,6 +386,13 @@ export class FinalizeCleanupEffectPreparation {
   }
 
   static acquire(ctx, { failed = false } = {}) {
+    const preparation = this.acquireSource(ctx, { failed });
+    return preparation === null ? null
+      : preparation.assertGitReality(preparation.owner, preparation.owner.loadReadOnly());
+  }
+
+  /** Authenticate journal provenance without treating it as fresh Git reality. */
+  static acquireSource(ctx, { failed = false } = {}) {
     const owner = FinalizeFlowStateOwner.forMainContext(ctx);
     const state = owner.loadReadOnly();
     const journal = SharedFinalizeCleanupJournal.open(state, { readOnly: true });
@@ -399,7 +406,7 @@ export class FinalizeCleanupEffectPreparation {
     const identity = new NonGateTargetBinding({ runId: source.runId, specId: source.specId,
       stepId: "finalize-cleanup", attempt: source.attempt });
     const preparation = new FinalizeCleanupEffectPreparation({ owner, journal, receiptId: saved?.receipt.id ?? null, origin, identity });
-    preparation.assertCurrent(ctx);
+    preparation.assertSourceCurrent(ctx);
     return preparation;
   }
 
@@ -415,6 +422,14 @@ export class FinalizeCleanupEffectPreparation {
   }
 
   assertCurrent(ctx) {
+    this.assertSourceCurrent(ctx);
+    const owner = FinalizeFlowStateOwner.forMainContext(ctx);
+    const state = owner.loadReadOnly();
+    this.assertGitReality(owner, state);
+    return this;
+  }
+
+  assertSourceCurrent(ctx) {
     const owner = FinalizeFlowStateOwner.forMainContext(ctx);
     const state = owner.loadReadOnly();
     const currentJournal = SharedFinalizeCleanupJournal.open(state, { readOnly: true });
@@ -504,9 +519,24 @@ export class FinalizeCleanupEffectPreparation {
         throw new StepAdmissionRefusal("Cleanup journal base change has no exact completed auto-rescue journal");
       }
     }
-    const main = runGit(["-C", owner.mainRepoPath, "rev-parse", `refs/heads/${state.baseBranch}`]);
-    const head = runGit(["-C", owner.mainRepoPath, "symbolic-ref", "-q", "HEAD"]);
-    const headOid = runGit(["-C", owner.mainRepoPath, "rev-parse", "HEAD"]);
+    if (this.journal.atLeast("pointer-written")) assertPointerReality(owner.mainRepoPath, state.specId);
+    if (this.journal.value.authorization.route === "forced" && this.journal.atLeast("worktree-removed")) {
+      const audit = owner.flowManager.readArtifact({ specId: state.specId, logicalKey: "issue.log", consumerNodeId: "finalize-cleanup" });
+      const entries = JSON.parse(audit.bytes).entries.filter((item) => item.issueLogId === this.journal.value.authorization.auditId);
+      if (entries.length !== 1 || !entries[0].reason.startsWith("FORCED_ORPHAN_DROP")
+        || !isDeepStrictEqual(entries[0].droppedCommits, this.journal.value.authorization.droppedCommits)
+        || entries[0].droppedCount !== this.journal.value.authorization.droppedCount
+        || entries[0].droppedTruncated !== this.journal.value.authorization.droppedTruncated) {
+        throw new StepAdmissionRefusal("Cleanup journal lost its required exact forced audit");
+      }
+    }
+    return this;
+  }
+
+  assertGitReality(owner, state) {
+    const main = runGit(["-C", owner.mainRepoPath, "rev-parse", `refs/heads/${state.baseBranch}`], { cwd: owner.mainRepoPath });
+    const head = runGit(["-C", owner.mainRepoPath, "symbolic-ref", "-q", "HEAD"], { cwd: owner.mainRepoPath });
+    const headOid = runGit(["-C", owner.mainRepoPath, "rev-parse", "HEAD"], { cwd: owner.mainRepoPath });
     const featureRef = `refs/heads/${state.featureBranch}`;
     let feature = null;
     if (state.execution.mode !== "direct") {
@@ -532,17 +562,6 @@ export class FinalizeCleanupEffectPreparation {
         // The exact feature ref observation above already validates this checkpoint.
         checkBranch: false });
       if (!reality.ok) throw new StepAdmissionRefusal(`Cleanup journal teardown reality changed: ${reality.reasons.join("; ")}`);
-    }
-    if (this.journal.atLeast("pointer-written")) assertPointerReality(owner.mainRepoPath, state.specId);
-    if (this.journal.value.authorization.route === "forced" && this.journal.atLeast("worktree-removed")) {
-      const audit = owner.flowManager.readArtifact({ specId: state.specId, logicalKey: "issue.log", consumerNodeId: "finalize-cleanup" });
-      const entries = JSON.parse(audit.bytes).entries.filter((item) => item.issueLogId === this.journal.value.authorization.auditId);
-      if (entries.length !== 1 || !entries[0].reason.startsWith("FORCED_ORPHAN_DROP")
-        || !isDeepStrictEqual(entries[0].droppedCommits, this.journal.value.authorization.droppedCommits)
-        || entries[0].droppedCount !== this.journal.value.authorization.droppedCount
-        || entries[0].droppedTruncated !== this.journal.value.authorization.droppedTruncated) {
-        throw new StepAdmissionRefusal("Cleanup journal lost its required exact forced audit");
-      }
     }
     return this;
   }

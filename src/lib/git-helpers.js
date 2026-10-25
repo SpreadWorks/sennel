@@ -1,3 +1,5 @@
+import { GitRepositoryPolicy } from "./git-repository-environment.js";
+import { GitCommandExecution } from "./git-command-execution.js";
 /**
  * src/lib/git-helpers.js
  *
@@ -5,16 +7,15 @@
  */
 
 import fs from "node:fs";
-import { spawnSync } from "node:child_process";
 import path from "node:path";
-import { runCmd, assertOk } from "./process.js";
+import { assertOk } from "./process.js";
 import { container } from "./container.js";
 import { AtomicFile } from "./atomic-file.js";
 import { GIT_OBJECT_ID, GitSnapshot, isGitObjectId, isGitSnapshot } from "./git-snapshot.js";
 export { GIT_OBJECT_ID, GitSnapshot, isGitObjectId, isGitSnapshot } from "./git-snapshot.js";
 
 export function captureGitSnapshot(root) {
-  const result = runGit(["-C", root, "rev-parse", "HEAD"]);
+  const result = runGit(["-C", root, "rev-parse", "HEAD"], { cwd: root });
   assertOk(result, "git rev-parse HEAD failed while capturing Git snapshot");
   const commit = result.stdout.trim();
   if (commit === "") return new GitSnapshot({ available: false, commit: null });
@@ -30,23 +31,19 @@ export function captureGitSnapshot(root) {
  * so they are uniformly logged.
  *
  * Exception: git invocations that the Logger itself depends on (repo top-level /
- * git-common-dir resolution in `cli.js`) MUST stay on `runCmd` to avoid recursion.
+ * git-common-dir resolution in `cli.js`) use the fixed bootstrap Git probes.
  *
  * @param {string[]} args - git argument array (without the leading "git")
  * @param {Object}   [opts] - same shape as runCmd opts
  * @returns {{ ok: boolean, status: number, stdout: string|Buffer, stderr: string|Buffer, signal: string|null, killed: boolean }}
  */
-export function runGit(args, opts = {}) {
-  const result = runCmd("git", args, opts);
-  if (container.has("logger")) {
-    container.get("logger").git({
-      cmd: ["git", ...args],
-      exitCode: result.status,
-      stderr: Buffer.isBuffer(result.stderr) ? result.stderr.toString("utf8") : result.stderr,
-    });
-  }
+function recordGitResult(args, result) {
+  if (container.has("logger")) container.get("logger").git({ cmd: ["git", ...args], exitCode: result.status,
+    stderr: Buffer.isBuffer(result.stderr) ? result.stderr.toString("utf8") : result.stderr });
   return result;
 }
+export function runGit(args, opts = {}) { return recordGitResult(args, new GitCommandExecution(args, opts).run()); }
+export async function runGitAsync(args, opts = {}) { return recordGitResult(args, await new GitCommandExecution(args, opts).runAsync()); }
 
 export class GitRefProbeError extends Error {
   constructor(ref, result, reason = null) {
@@ -70,7 +67,7 @@ export class GitRefObservation {
   }
 
   static resolve({ root, ref, runGit: runGitFn = runGit }) {
-    const result = runGitFn(["-C", root, "for-each-ref", "--format=%(refname) %(objectname)", ref]);
+    const result = runGitFn(["-C", root, "for-each-ref", "--format=%(refname) %(objectname)", ref], { cwd: root });
     return GitRefObservation.fromResult(ref, result);
   }
 
@@ -102,23 +99,18 @@ export class GitCommitPathProbeError extends Error {
 }
 
 export class GitCommitPathSet {
-  constructor(paths) {
-    if (
-      !Array.isArray(paths)
-      || paths.some((entry) => (
-        typeof entry !== "string"
-        || entry === ""
-        || entry.includes("\0")
-        || path.isAbsolute(entry)
-        || path.normalize(entry) !== entry
-        || entry === ".."
-        || entry.startsWith(`..${path.sep}`)
-      ))
-      || new Set(paths).size !== paths.length
-    ) {
+  constructor(paths, { pathApi = path } = {}) {
+    if (!Array.isArray(paths) || paths.some((entry) => typeof entry !== "string")) {
       throw new Error("git commit path set is invalid");
     }
-    this.paths = Object.freeze([...paths]);
+    const canonical = paths.map((entry) => pathApi.sep === "\\" ? entry.replaceAll("\\", "/") : entry);
+    if (canonical.some((entry, index) => entry === "" || entry.includes("\0")
+      || pathApi.parse(paths[index]).root !== "" || path.posix.isAbsolute(entry)
+      || path.posix.normalize(entry) !== entry || entry === ".." || entry.startsWith("../"))
+      || new Set(canonical).size !== canonical.length) {
+      throw new Error("git commit path set is invalid");
+    }
+    this.paths = Object.freeze(canonical);
     Object.freeze(this);
   }
 
@@ -131,24 +123,61 @@ export class GitCommitPathSet {
     }
     const candidateSet = new GitCommitPathSet(candidates);
     if (candidateSet.size === 0) return candidateSet;
-    const tracked = runGit([
-      "-C",
-      root,
-      "ls-tree",
-      "-r",
-      "-z",
-      "--full-tree",
-      "--name-only",
-      treeish,
-      "--",
-      ...candidateSet.paths.map((relativePath) => `:(literal)${relativePath}`),
-    ]);
-    if (!tracked.ok) throw new GitCommitPathProbeError(tracked);
-    const treePaths = new Set(tracked.stdout.split("\0").filter(Boolean));
+    const treePaths = new Set();
+    const args = ["ls-tree", "-r", "-z", "--full-tree", "--name-only", treeish];
+    for (const batch of candidateSet.commandBatches({ root, args })) {
+      const tracked = runGit(["-C", root, ...args, "--", ...batch.literalArguments], { cwd: root });
+      if (!tracked.ok) throw new GitCommitPathProbeError(tracked);
+      for (const entry of tracked.stdout.split("\0").filter(Boolean)) treePaths.add(entry);
+    }
     return new GitCommitPathSet(candidateSet.paths.filter((relativePath) => (
       treePaths.has(relativePath)
       || fs.existsSync(path.join(root, relativePath))
     )));
+  }
+
+  /** Bounded literal path argv groups; no shell, response-file or Git-version dependency. */
+  commandBatches({ root, args }) {
+    const argumentCost = (argument) => Math.max(Buffer.byteLength(argument, "utf8") + 1, argument.length * 2 + 3);
+    const prefixCost = ["git", "-C", root, ...args, "--"].reduce((total, argument) => total + argumentCost(argument), 0);
+    const groups = [];
+    let paths = [], cost = prefixCost;
+    for (const entry of this.paths) {
+      const entryCost = argumentCost(`:(literal)${entry}`);
+      if (paths.length > 0 && (paths.length === 256 || cost + entryCost > 8192)) {
+        groups.push(new GitCommitPathSet(paths));
+        paths = []; cost = prefixCost;
+      }
+      // An individual long path retains the old one-path command boundary;
+      // batching never combines it with another path or imposes a new path limit.
+      paths.push(entry); cost += entryCost;
+    }
+    if (paths.length > 0) groups.push(new GitCommitPathSet(paths));
+    return groups;
+  }
+
+  get literalArguments() { return this.paths.map((entry) => `:(literal)${entry}`); }
+
+  /** Exact file candidates only; documentation directory predicates stay with their owner. */
+  static committableFiles({ root, candidates }) {
+    const selected = new GitCommitPathSet(candidates);
+    const tracked = new Set();
+    for (const batch of selected.commandBatches({ root, args: ["ls-files", "--cached", "-z"] })) {
+      const result = runGit(["-C", root, "ls-files", "--cached", "-z", "--", ...batch.literalArguments], { cwd: root });
+      assertOk(result, "failed to inspect finalize completion tracked files");
+      for (const entry of result.stdout.split("\0").filter(Boolean)) tracked.add(entry);
+    }
+    const untracked = selected.paths.filter((entry) => !tracked.has(entry));
+    const ignored = new Set();
+    for (const batch of new GitCommitPathSet(untracked).commandBatches({ root, args: ["check-ignore", "--stdin", "-z"] })) {
+      const result = runGit(["-C", root, "check-ignore", "--stdin", "-z"], {
+        cwd: root, input: batch.paths.join("\0") + "\0",
+      });
+      if (!result.ok && result.status !== 1) assertOk(result, "failed to inspect finalize completion ignored files");
+      for (const entry of result.stdout.split("\0").filter(Boolean)) ignored.add(entry);
+    }
+    return new GitCommitPathSet(selected.paths.filter((entry) => tracked.has(entry)
+      || !ignored.has(entry) && fs.existsSync(path.join(root, entry))));
   }
 
   get size() {
@@ -401,8 +430,10 @@ export class GitPorcelainV2Status {
 /** Read typed repository differences without refreshing the index.
  * The default preserves executable-bit observation. Set forceFileMode=false
  * to respect Git's repository/filesystem configuration instead.
+ * cwd may be a repository subdirectory; repositoryRoot selects an explicit
+ * discovery boundary when the caller already owns a particular repository.
  */
-export function getPorcelainV2Status(cwd, { pathspecs = [], forceFileMode = true } = {}) {
+export function getPorcelainV2Status(cwd, { pathspecs = [], forceFileMode = true, repositoryRoot = null } = {}) {
   const args = [
     "--no-optional-locks",
     ...(forceFileMode ? ["-c", "core.fileMode=true"] : []),
@@ -413,7 +444,8 @@ export function getPorcelainV2Status(cwd, { pathspecs = [], forceFileMode = true
     "--no-renames",
   ];
   if (pathspecs.length > 0) args.push("--", ...pathspecs);
-  const result = runGit(args, { cwd, encoding: "buffer", maxBuffer: 64 * 1024 * 1024 });
+  const gitPolicy = new GitRepositoryPolicy({ repositoryRoot, readOnly: true });
+  const result = runGit(args, { cwd, gitPolicy, encoding: "buffer", maxBuffer: 64 * 1024 * 1024 });
   if (!result.ok) {
     const error = new Error(`git porcelain v2 status failed: ${result.stderr || result.stdout || "unknown git error"}`);
     error.code = "GIT_STATUS_PORCELAIN_V2_FAILED";
@@ -433,21 +465,9 @@ export function runGitToFile(args, { cwd, outputPath, timeout, log = true } = {}
   const writer = new AtomicFile(outputPath, { maxBytes: Number.MAX_SAFE_INTEGER - 1 });
   let result;
   const stage = writer.createOutputStage((descriptor) => {
-    const processResult = spawnSync("git", args, {
-      cwd,
-      timeout,
-      encoding: "utf8",
-      stdio: ["ignore", descriptor, "pipe"],
-      maxBuffer: 1024 * 1024,
-    });
-    result = {
-      ok: processResult.status === 0 && !processResult.signal,
-      status: processResult.status ?? 1,
-      stdout: "",
-      stderr: String(processResult.stderr || processResult.error?.message || ""),
-      signal: processResult.signal ?? null,
-      killed: Boolean(processResult.error && processResult.error.code === "ETIMEDOUT"),
-    };
+    const policy = new GitRepositoryPolicy({ repositoryRoot: cwd, readOnly: true });
+    result = new GitCommandExecution(args, { cwd, gitPolicy: policy, stdio: ["ignore", descriptor, "pipe"],
+      timeout, encoding: "utf8", maxBuffer: 1024 * 1024 }).run();
   }, { exclusive: true });
   writer.publishStage(stage, { exclusive: true });
   if (log === true && container.has("logger")) {
@@ -457,10 +477,11 @@ export function runGitToFile(args, { cwd, outputPath, timeout, log = true } = {}
 }
 
 /** @returns {{ dirty: boolean, dirtyFiles: string[] }} */
-export function getWorktreeStatus(cwd, { pathspecExcludes = [] } = {}) {
+export function getWorktreeStatus(cwd, { pathspecExcludes = [], repositoryRoot = null } = {}) {
   const args = ["status", "--short"];
   if (pathspecExcludes.length > 0) args.push("--", ...pathspecExcludes);
-  const res = runGit(args, { cwd });
+  const gitPolicy = new GitRepositoryPolicy({ repositoryRoot, readOnly: true });
+  const res = runGit(args, { cwd, gitPolicy });
   if (!res.ok) return { dirty: false, dirtyFiles: [] };
   const files = res.stdout.trim().split("\n").filter(Boolean);
   return { dirty: files.length > 0, dirtyFiles: files };
@@ -636,11 +657,12 @@ export const DEFAULT_MAX_CHANGED_FILE_ENTRIES = 2000;
  * path/status. Optional Git pathspec exclusions apply before entry bounds and
  * preserve the user side of renames across an excluded boundary.
  *
- * @param {{cwd?: string, baseBranch?: string, untrackedFiles?: "normal"|"all", maxChangedFileEntries?: number, pathspecExcludes?: string[]}} [opts]
+ * @param {{cwd?: string, repositoryRoot?: string|null, baseBranch?: string, untrackedFiles?: "normal"|"all", maxChangedFileEntries?: number, pathspecExcludes?: string[]}} [opts]
  * @returns {Array<{status:string,path:string,old_path?:string}>}
  */
 export function listChangedFilesDetailed(opts = {}) {
   const cwd = opts.cwd;
+  const gitPolicy = new GitRepositoryPolicy({ repositoryRoot: opts.repositoryRoot ?? null, readOnly: true });
   const maxChangedFileEntries = normalizeChangedFilesLimit(opts.maxChangedFileEntries);
   const untrackedFiles = normalizeUntrackedFilesMode(opts.untrackedFiles);
   const pathspec = opts.pathspecExcludes?.length ? ["--", ...opts.pathspecExcludes] : [];
@@ -655,7 +677,7 @@ export function listChangedFilesDetailed(opts = {}) {
   };
 
   if (opts.baseBranch) {
-    const committed = runGit(["diff", "--name-status", `${opts.baseBranch}...HEAD`, ...pathspec], { cwd });
+    const committed = runGit(["diff", "--name-status", `${opts.baseBranch}...HEAD`, ...pathspec], { cwd, gitPolicy });
     assertOk(committed, "listChangedFilesDetailed committed diff failed");
     for (const line of splitBoundedGitOutput(committed.stdout, maxChangedFileEntries, "committed diff")) {
       const parts = line.split("\t");
@@ -667,7 +689,7 @@ export function listChangedFilesDetailed(opts = {}) {
   }
 
   const statusArgs = ["status", "--porcelain", `--untracked-files=${untrackedFiles}`, ...pathspec];
-  const porcelain = runGit(statusArgs, { cwd });
+  const porcelain = runGit(statusArgs, { cwd, gitPolicy });
   assertOk(porcelain, "listChangedFilesDetailed status failed");
   for (const line of splitBoundedGitOutput(porcelain.stdout, maxChangedFileEntries, "status")) {
     add(parsePorcelainLine(line));

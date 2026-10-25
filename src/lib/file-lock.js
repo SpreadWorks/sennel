@@ -1,7 +1,5 @@
 import { performance } from "node:perf_hooks";
-import crypto from "node:crypto";
-import { ProcessIdentity } from "./process-identity.js";
-import { ProcessLock } from "./process-lock.js";
+import { ProcessLock, ProcessLockPublicationPendingError } from "./process-lock.js";
 
 const DEFAULT_TIMEOUT_MS = 5_000;
 const DEFAULT_INTERVAL_MS = 50;
@@ -75,7 +73,8 @@ export class FileLock {
   get directoryAuthority() { return this.processLock.directoryAuthority; }
   get directory() { return this.processLock.directory; }
   get lockPath() { return this.processLock.lockPath; }
-  get processIdentity() { return this.processLock.processIdentity; }
+  get ownerToken() { return this.processLock.ownerToken; }
+  get ownerSession() { return this.processLock.ownerSession; }
   get lockIdentity() { return this.processLock.lockIdentity; }
 
   acquire() {
@@ -104,8 +103,8 @@ export class FileLock {
     return this.processLock.inspect();
   }
 
-  conflict(owner, assessment) {
-    return this.processLock.conflict(owner, assessment);
+  conflict(owner) {
+    return this.processLock.conflict(owner);
   }
 
   runExclusive(body) {
@@ -142,8 +141,8 @@ export class FileLock {
     try {
       return this.processLock.acquire();
     } catch (error) {
-      if (error?.lockStatus !== "live") throw error;
-      if (this.#isHeldByCurrentProcess(error)) throw this.#reentrancy(error);
+      if (error?.lockStatus !== "busy" && !(error instanceof ProcessLockPublicationPendingError)) throw error;
+      if (!(error instanceof ProcessLockPublicationPendingError) && this.#isHeldByCurrentProcess(error)) throw this.#reentrancy(error);
       const waitedMs = elapsedSince(startedAt);
       if (waitedMs >= this.waitPolicy.timeoutMs) throw this.#timeout(error, waitedMs);
       return new FileLockRetry(Math.min(this.waitPolicy.intervalMs, this.waitPolicy.timeoutMs - waitedMs));
@@ -151,9 +150,7 @@ export class FileLock {
   }
 
   #isHeldByCurrentProcess(conflict) {
-    const owner = new ProcessIdentity(conflict.owner?.processIdentity ?? {});
-    const requester = this.processLock.processIdentitySource.createOwner(crypto.randomUUID());
-    return requester.sameBirth(owner);
+    return this.processLock.isOwnerCurrent(conflict.owner);
   }
 
   #reentrancy(conflict) {

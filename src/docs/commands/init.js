@@ -8,6 +8,7 @@
  *   node sennel/engine/init.js [--type php-mvc] [--force]
  */
 
+import { docsCommands } from "../../lib/command-registry.js";
 import fs from "fs";
 import path from "path";
 import { parseArgs } from "../../lib/cli.js";
@@ -105,8 +106,7 @@ async function runInit(ctx, rawArgs = [], commandContainer = container) {
   // CLI モード: 引数をパースしてコンテキストを構築
   if (!ctx) {
     const cli = parseArgs(rawArgs, {
-      flags: ["--yes", "--force", "--dry-run"],
-      options: ["--type", "--lang", "--docs-dir"],
+      ...docsCommands.init.args,
       defaults: { type: "", force: false, dryRun: false, lang: "", docsDir: "" },
     });
     if (cli.help) {

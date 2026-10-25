@@ -6,9 +6,9 @@ import path from "path";
 import crypto from "crypto";
 import { StringDecoder } from "node:string_decoder";
 import { fileURLToPath } from "node:url";
-import { execFileSync } from "child_process";
 import { globToRegex } from "../../lib/glob.js";
 import { listChangedFilesDetailed, runGitToFile } from "../../lib/git-helpers.js";
+import { runGit } from "../../lib/git-command-execution.js";
 import { PRODUCT } from "../../lib/product.js";
 import { TemporaryPaths } from "../../lib/temporary-paths.js";
 import { AtomicFile } from "../../lib/atomic-file.js";
@@ -135,7 +135,7 @@ export function matchUpgradeRequiredSourcePaths(filePaths = []) {
 
 export function listUpgradeRequiredChangedPaths({ root, baseBranch }) {
   if (!baseBranch) return [];
-  const files = listChangedFilesDetailed({ cwd: root, baseBranch })
+  const files = listChangedFilesDetailed({ cwd: root, repositoryRoot: root, baseBranch })
     .flatMap((entry) => [entry.path, entry.old_path].filter(Boolean));
   return matchUpgradeRequiredSourcePaths(files);
 }
@@ -889,9 +889,13 @@ export class FinalRegressionRepositoryBinding {
   }
 
   static capture(root, options = {}) {
+    const head = runGit(["rev-parse", "HEAD"], { cwd: root });
+    assertOk(head, "final-regression HEAD read failed");
+    const tree = runGit(["write-tree"], { cwd: root });
+    assertOk(tree, "final-regression tree capture failed");
     return new FinalRegressionRepositoryBinding({
-      headSha: execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim(),
-      treeSha: execFileSync("git", ["write-tree"], { cwd: root, encoding: "utf8" }).trim(),
+      headSha: head.stdout.trim(),
+      treeSha: tree.stdout.trim(),
       worktreeSha256: finalRegressionWorktreeFingerprint(root, options),
     });
   }

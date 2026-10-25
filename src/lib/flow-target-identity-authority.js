@@ -1,3 +1,4 @@
+import { RepositoryLockAuthority } from "./repository-control-lock.js";
 import crypto from "node:crypto";
 import path from "node:path";
 import { AtomicFile } from "./atomic-file.js";
@@ -15,7 +16,6 @@ const AUTHORITY_FILE = ".flow-target-identities";
 const AUTHORITY_LOCK_FILE = ".flow-target-identities.lock";
 const AUTHORITY_REPOSITORY_PATHS = Object.freeze([
   PRODUCT.managedPath(AUTHORITY_FILE),
-  PRODUCT.managedPath(AUTHORITY_LOCK_FILE),
 ]);
 const PREPARING_PREFIX = ".active-flow.";
 const ACTIVE_MODES = new Set(["worktree", "branch", "direct"]);
@@ -397,25 +397,19 @@ function readAuthority(filePath) {
 }
 
 export class FlowTargetIdentityAuthority {
-  constructor({ mainRoot, specRoot = DEFAULT_FLOW_SPEC_DIR, processIdentitySource, faultInjector = () => {} } = {}) {
+  constructor({ mainRoot, specRoot = DEFAULT_FLOW_SPEC_DIR, faultInjector = () => {} } = {}) {
     this._mainRoot = resolveRepositoryLockRoot(mainRoot);
     this._specRoot = FlowSpecRoot.from(specRoot);
-    this._processIdentitySource = processIdentitySource;
     this._faultInjector = faultInjector;
-    const rootAuthority = new RealDirectoryAuthority(this._mainRoot);
-    const directoryAuthority = new RealDirectoryAuthority(managedDir(this._mainRoot), {
-      create: true,
-      parentAuthority: rootAuthority,
-    });
+    this._managedAuthority = new RealDirectoryAuthority(managedDir(this._mainRoot), { create: true,
+      parentAuthority: new RealDirectoryAuthority(this._mainRoot) });
     this._lock = new FileLock({
-      directoryAuthority,
-      fileName: AUTHORITY_LOCK_FILE,
+      location: new RepositoryLockAuthority(this._mainRoot).location({ namespace: "flow-target-identity-authority", identity: this._mainRoot, fileName: AUTHORITY_LOCK_FILE, legacyPaths: [path.join(managedDir(this._mainRoot), AUTHORITY_LOCK_FILE)] }),
       kind: "flow-target-identity-authority",
       authority: { mainRoot: this._mainRoot, path: authorityPath(this._mainRoot) },
-      ...(processIdentitySource && { processIdentitySource }),
       errorFactory: (status, message, { lockPath, cause } = {}) => {
         const error = new FlowTargetAuthorityError(message, { cause });
-        error.code = status === "live" || status === "timeout"
+        error.code = status === "busy" || status === "timeout"
           ? "FLOW_TARGET_AUTHORITY_BUSY"
           : `FLOW_TARGET_AUTHORITY_LOCK_${status.replace(/-/g, "_").toUpperCase()}`;
         error.lockPath = lockPath;
@@ -498,13 +492,13 @@ export class FlowTargetIdentityAuthority {
       mainRoot: this._mainRoot,
       maintenanceOwnerToken: options.maintenanceOwnerToken ?? null,
       operationOwnerToken: options.operationOwnerToken ?? null,
-      ...(this._processIdentitySource && { processIdentitySource: this._processIdentitySource }),
     });
     operationLock.acquire();
     let result;
     let primary = null;
     try {
       result = this._lock.runExclusive(() => {
+        this._managedAuthority.ensure();
         const current = readAuthority(authorityPath(this._mainRoot));
         const mutationResult = mutation(current.document);
         const fresh = readAuthority(authorityPath(this._mainRoot));

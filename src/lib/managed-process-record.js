@@ -1,5 +1,5 @@
 import { AtomicFile } from "./atomic-file.js";
-import { ProcessExecutionControlFailure, executionProcessIdentity } from "./process-execution-values.js";
+import { ProcessExecutionControlFailure, ProcessExecutorIdentity } from "./process-execution-values.js";
 
 /** Atomic saved observations only: no lock acquisition or live process assessment. */
 export function readManagedBinarySnapshot(file, { maximum = 16 * 1024 * 1024 } = {}) {
@@ -29,12 +29,12 @@ export function readManagedRecordSnapshot(file, options) {
   return decodeManagedRecord(readManagedBinarySnapshot(file, options), file);
 }
 
-/** Compare saved capabilities and, once registered, the saved launcher birth. */
+/** Compare saved capabilities and, once claimed, the exact handle owner. */
 export function assertManagedRecordIdentity(record, expected, { code = "PROCESS_EXECUTION_AUTHORITY_MISMATCH" } = {}) {
   if (!record || record.executionId !== expected.executionId || record.callId !== expected.callId
     || record.capability !== expected.capability || record.ownerToken !== expected.ownerToken
-    || expected.launcherIdentity !== undefined && (record.pgid !== expected.pgid
-      || !executionProcessIdentity(record.launcherIdentity).sameBirth(executionProcessIdentity(expected.launcherIdentity)))) {
+    || expected.executor != null && !ProcessExecutorIdentity.fromStored(record.executor)
+      .matches(expected.executor instanceof ProcessExecutorIdentity ? expected.executor : ProcessExecutorIdentity.fromStored(expected.executor))) {
     throw new ProcessExecutionControlFailure(code, "Managed record belongs to another physical call");
   }
   return record;

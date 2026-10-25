@@ -7,6 +7,7 @@
  */
 
 import { FLOW_ARTIFACT_VIEW_REGISTRY } from "./artifact-view-registry.js";
+import { ReadOnlyInvocationWorkspace } from "../../lib/readonly-invocation-workspace.js";
 import {
   ArtifactViewReader,
   ArtifactViewTarget,
@@ -80,6 +81,7 @@ export class ArtifactViewService {
     registry = FLOW_ARTIFACT_VIEW_REGISTRY,
     cacheFaultInjector = null,
     renderer = null,
+    workspace = null,
   } = {}) {
     object(config, "artifact view config");
     if (!flowManager || typeof flowManager.specLocation !== "function" || typeof flowManager.canonicalVersionLocation !== "function") {
@@ -90,10 +92,12 @@ export class ArtifactViewService {
     if (cacheFaultInjector !== null && typeof cacheFaultInjector !== "function") {
       throw new Error("artifact view cacheFaultInjector must be a function or null");
     }
+    if (workspace !== null && !(workspace instanceof ReadOnlyInvocationWorkspace)) throw new TypeError("artifact view workspace must be a ReadOnlyInvocationWorkspace");
     this.config = Object.freeze({ ...config });
     this.flowManager = flowManager;
     this.registry = registry;
     this.cacheFaultInjector = cacheFaultInjector;
+    this.workspace = workspace;
     if (renderer !== null && !(renderer instanceof ArtifactFullViewRenderer)) {
       throw new Error("artifact view renderer must be an ArtifactFullViewRenderer or null");
     }
@@ -127,6 +131,7 @@ export class ArtifactViewService {
     return new ArtifactViewCache({
       target,
       registry: this.registry,
+      workspace: this.workspace,
       ...(this.cacheFaultInjector ? { faultInjector: this.cacheFaultInjector } : {}),
     });
   }

@@ -124,7 +124,7 @@ export class AgentProviderCompletionEvidence {
     stderr = "",
     attemptCount = 1,
     maxAttempts = 1,
-    processTreeQuiescence = "unavailable",
+    registeredExecutionQuiescence = "unavailable",
   } = {}) {
     this.provider = requireString(provider, "agent provider completion provider");
     this.profile = requireString(profile, "agent provider completion profile");
@@ -152,12 +152,12 @@ export class AgentProviderCompletionEvidence {
     if (this.attemptCount > this.maxAttempts) {
       throw new Error("agent provider completion attemptCount must not exceed maxAttempts");
     }
-    this.processTreeQuiescence = requireString(
-      processTreeQuiescence,
-      "agent provider completion processTreeQuiescence",
+    this.registeredExecutionQuiescence = requireString(
+      registeredExecutionQuiescence,
+      "agent provider completion registeredExecutionQuiescence",
     );
-    if (!PROVIDER_QUIESCENCE_STATUSES.has(this.processTreeQuiescence)) {
-      throw new Error("agent provider completion processTreeQuiescence must be confirmed or unavailable");
+    if (!PROVIDER_QUIESCENCE_STATUSES.has(this.registeredExecutionQuiescence)) {
+      throw new Error("agent provider completion registeredExecutionQuiescence must be confirmed or unavailable");
     }
     Object.freeze(this);
   }
@@ -172,6 +172,9 @@ export class AgentProviderCompletionEvidence {
     if (!value || typeof value !== "object" || Array.isArray(value)) {
       throw new Error("agent provider completion evidence must be an object");
     }
+    if (Object.hasOwn(value, "processTreeQuiescence")) {
+      throw new Error("agent provider completion requires registeredExecutionQuiescence; process-tree evidence cannot authorize registered execution completion");
+    }
     return new AgentProviderCompletionEvidence({
       ...value,
       stdout: BoundedStreamEvidence.fromJSON(value.stdout),
@@ -179,7 +182,7 @@ export class AgentProviderCompletionEvidence {
     });
   }
 
-  get confirmedQuiescence() { return this.processTreeQuiescence === "confirmed"; }
+  get confirmedQuiescence() { return this.registeredExecutionQuiescence === "confirmed"; }
 
   withAttempts(attemptCount, maxAttempts) {
     return new AgentProviderCompletionEvidence({
@@ -199,7 +202,7 @@ export class AgentProviderCompletionEvidence {
       stderr: this.stderr.toJSON(),
       attemptCount: this.attemptCount,
       maxAttempts: this.maxAttempts,
-      processTreeQuiescence: this.processTreeQuiescence,
+      registeredExecutionQuiescence: this.registeredExecutionQuiescence,
     };
   }
 }
@@ -235,7 +238,7 @@ export class AgentProviderStartupFailureEvidence {
 }
 
 /**
- * Provider-process termination evidence produced by the process supervisor.
+ * Provider termination status derived from a registered execution receipt.
  * An empty member list is diagnostic data only; it is never termination proof.
  */
 export class AgentProcessStopEvidence {
@@ -265,10 +268,10 @@ export class AgentProcessStopEvidence {
   }
 
   static confirmed() {
-    return new AgentProcessStopEvidence({ status: "confirmed", reason: "process-tree-death-observed" });
+    return new AgentProcessStopEvidence({ status: "confirmed", reason: "registered-child-exit-observed" });
   }
 
-  static uncertain(reason = "process-tree-death-not-observed", unterminatedMembers = []) {
+  static uncertain(reason = "registered-child-exit-not-observed", unterminatedMembers = []) {
     return new AgentProcessStopEvidence({ status: "uncertain", reason, unterminatedMembers });
   }
 
@@ -563,7 +566,7 @@ export class AgentTimeoutFailure extends AgentFailure {
       retryable: stopEvidence.confirmed,
       recoveryHint: stopEvidence.confirmed
         ? "Retry the same input after the timed-out provider process has terminated."
-        : "Verify that the timed-out provider process tree has terminated before retrying.",
+        : "Inspect the registered execution receipts; retry only after exact closure is confirmed.",
     });
     this.stopEvidence = stopEvidence;
   }

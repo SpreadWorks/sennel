@@ -132,7 +132,7 @@ export class PromptProviderProcessIdentity {
   }
 }
 
-/** Durable OS observation; never a response, failure, or claim settlement. */
+/** Durable registered-child exit observation; never a response or claim settlement. */
 export class PromptProcessStopObservation {
   constructor({ identity, receipt }) {
     this.identity = identity instanceof PromptProviderProcessIdentity ? identity : PromptProviderProcessIdentity.fromJSON(identity);
@@ -140,8 +140,7 @@ export class PromptProcessStopObservation {
     const invocation = this.receipt.invocation;
     const context = invocation?.providerAttemptContext;
     const binding = this.receipt.binding.toJSON();
-    if (this.receipt.launcherIdentity === null || this.receipt.pgid === null
-      || !isDeepStrictEqual(invocation?.promptProcessIdentity, this.identity.toJSON())
+    if (!isDeepStrictEqual(invocation?.promptProcessIdentity?.toJSON(), this.identity.toJSON())
       || invocation.providerAttemptId !== this.identity.providerAttemptId || invocation.logicalInvocationId !== this.identity.logicalInvocationId
       || context?.attemptId !== this.identity.providerAttemptId || context?.logicalInvocationId !== this.identity.logicalInvocationId
       || context?.attempt !== this.identity.attempt || context?.maxAttempts !== this.identity.maxAttempts

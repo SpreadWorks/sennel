@@ -48,7 +48,7 @@ async function setupCanonical(root, script) {
     mainRoot: root,
     executionRoot: root,
     specId: SPEC_ID,
-    config: { test: { command: `sh ${SCRIPT_PATH}`, timeout: 5 } },
+    config: { test: { command: { kind: "native", executable: "sh", args: [SCRIPT_PATH] }, timeout: 5 } },
     flowManager,
     flowState: fixture.state(),
   };

@@ -1,41 +1,78 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { runCmd, runCmdAsync, formatError } from "../../../src/lib/process.js";
+import fs from "node:fs";
+import path from "node:path";
+import { createTmpDir } from "../../support/builders/tmp-dir.js";
+import { testTemporaryRoot } from "../../test-environment.js";
+
+class ProcessFixture {
+  constructor(t) {
+    this.root = createTmpDir("process-api-");
+    this.retained = false;
+    t.after(() => { if (!this.retained) fs.rmSync(this.root, { recursive: true, force: true }); });
+  }
+
+  runCmd(command, args, options = {}) {
+    try { return runCmd(command, args, { cwd: this.root, ...options }); }
+    catch (error) {
+      this.retained = testTemporaryRoot().retainOnUnconfirmedExecution(error) || this.retained;
+      throw error;
+    }
+  }
+
+  async runCmdAsync(command, args, options = {}) {
+    try { return await runCmdAsync(command, args, { cwd: this.root, ...options }); }
+    catch (error) {
+      this.retained = testTemporaryRoot().retainOnUnconfirmedExecution(error) || this.retained;
+      throw error;
+    }
+  }
+}
+
 
 describe("runCmd", () => {
-  it("returns ok=true for successful command", () => {
-    const result = runCmd("echo", ["hello"]);
+  it("returns ok=true for successful command", (t) => {
+    const fixture = new ProcessFixture(t);
+    const result = fixture.runCmd(process.execPath, ["-e", "console.log('hello')"]);
     assert.equal(result.ok, true);
     assert.equal(result.status, 0);
     assert.match(result.stdout, /hello/);
   });
 
-  it("returns ok=false for failing command", () => {
-    const result = runCmd("node", ["-e", "process.exit(1)"]);
+  it("returns ok=false for failing command", (t) => {
+    const fixture = new ProcessFixture(t);
+    const result = fixture.runCmd(process.execPath, ["-e", "process.exit(1)"]);
     assert.equal(result.ok, false);
     assert.equal(result.status, 1);
   });
 
-  it("captures stderr on failure", () => {
-    const result = runCmd("node", ["-e", "console.error('err'); process.exit(1)"]);
+  it("captures stderr on failure", (t) => {
+    const fixture = new ProcessFixture(t);
+    const result = fixture.runCmd(process.execPath, ["-e", "console.error('err'); process.exit(1)"]);
     assert.equal(result.ok, false);
     assert.match(result.stderr, /err/);
   });
 
-  it("respects cwd option", () => {
-    const result = runCmd("pwd", [], { cwd: "/tmp" });
+  it("respects cwd option", (t) => {
+    const fixture = new ProcessFixture(t);
+    const selected = path.join(fixture.root, "selected-cwd");
+    fs.mkdirSync(selected);
+    const result = fixture.runCmd(process.execPath, ["-e", "console.log(process.cwd())"], { cwd: selected });
     assert.equal(result.ok, true);
-    assert.match(result.stdout, /tmp/);
+    assert.equal(result.stdout.trim(), fs.realpathSync(selected));
   });
 
-  it("returns string for stdout and stderr", () => {
-    const result = runCmd("echo", ["test"]);
+  it("returns string for stdout and stderr", (t) => {
+    const fixture = new ProcessFixture(t);
+    const result = fixture.runCmd(process.execPath, ["-e", "console.log('test')"]);
     assert.equal(typeof result.stdout, "string");
     assert.equal(typeof result.stderr, "string");
   });
 
-  it("preserves stdout and stderr bytes when buffer encoding is requested", () => {
-    const result = runCmd("node", ["-e", "process.stdout.write(Buffer.from([0xff])); process.stderr.write(Buffer.from([0xfe]))"], {
+  it("preserves stdout and stderr bytes when buffer encoding is requested", (t) => {
+    const fixture = new ProcessFixture(t);
+    const result = fixture.runCmd(process.execPath, ["-e", "process.stdout.write(Buffer.from([0xff])); process.stderr.write(Buffer.from([0xfe]))"], {
       encoding: "buffer",
     });
     assert.equal(result.ok, true);
@@ -43,33 +80,38 @@ describe("runCmd", () => {
     assert.deepEqual(result.stderr, Buffer.from([0xfe]));
   });
 
-  it("handles non-existent command gracefully", () => {
-    const result = runCmd("nonexistent_command_xyz_12345", []);
+  it("handles non-existent command gracefully", (t) => {
+    const fixture = new ProcessFixture(t);
+    const result = fixture.runCmd("nonexistent_command_xyz_12345", []);
     assert.equal(result.ok, false);
     assert.notEqual(result.status, 0);
   });
 
-  it("returns status code other than 0 or 1", () => {
-    const result = runCmd("node", ["-e", "process.exit(42)"]);
+  it("returns status code other than 0 or 1", (t) => {
+    const fixture = new ProcessFixture(t);
+    const result = fixture.runCmd(process.execPath, ["-e", "process.exit(42)"]);
     assert.equal(result.ok, false);
     assert.equal(result.status, 42);
   });
 
-  it("respects timeout option", () => {
-    const result = runCmd("node", ["-e", "setTimeout(()=>{},10000)"], {
+  it("respects timeout option", (t) => {
+    const fixture = new ProcessFixture(t);
+    const result = fixture.runCmd(process.execPath, ["-e", "setTimeout(()=>{},10000)"], {
       timeout: 100,
     });
     assert.equal(result.ok, false);
   });
 
-  it("handles empty args", () => {
-    const result = runCmd("echo", []);
+  it("handles empty args", (t) => {
+    const fixture = new ProcessFixture(t);
+    const result = fixture.runCmd(process.execPath, []);
     assert.equal(result.ok, true);
     assert.equal(typeof result.stdout, "string");
   });
 
-  it("handles large output", () => {
-    const result = runCmd("node", [
+  it("handles large output", (t) => {
+    const fixture = new ProcessFixture(t);
+    const result = fixture.runCmd(process.execPath, [
       "-e",
       "for(let i=0;i<1000;i++)console.log('line'+i)",
     ]);
@@ -77,34 +119,39 @@ describe("runCmd", () => {
     assert.ok(result.stdout.includes("line999"));
   });
 
-  it("defaults to utf8 encoding", () => {
-    const result = runCmd("echo", ["café"]);
+  it("defaults to utf8 encoding", (t) => {
+    const fixture = new ProcessFixture(t);
+    const result = fixture.runCmd(process.execPath, ["-e", "console.log('café')"]);
     assert.equal(result.ok, true);
     assert.ok(result.stdout.includes("café"));
   });
 
-  it("captures stderr on success", () => {
-    const result = runCmd("node", ["-e", "console.error('ERR')"]);
+  it("captures stderr on success", (t) => {
+    const fixture = new ProcessFixture(t);
+    const result = fixture.runCmd(process.execPath, ["-e", "console.error('ERR')"]);
     assert.equal(result.ok, true);
     assert.equal(result.status, 0);
     assert.match(result.stderr, /ERR/);
   });
 
-  it("returns signal=null and killed=false on success", () => {
-    const result = runCmd("echo", ["hello"]);
+  it("returns signal=null and killed=false on success", (t) => {
+    const fixture = new ProcessFixture(t);
+    const result = fixture.runCmd(process.execPath, ["-e", "console.log('hello')"]);
     assert.equal(result.signal, null);
     assert.equal(result.killed, false);
   });
 
-  it("returns signal=null and killed=false on non-signal failure", () => {
-    const result = runCmd("node", ["-e", "process.exit(1)"]);
+  it("returns signal=null and killed=false on non-signal failure", (t) => {
+    const fixture = new ProcessFixture(t);
+    const result = fixture.runCmd(process.execPath, ["-e", "process.exit(1)"]);
     assert.equal(result.ok, false);
     assert.equal(result.signal, null);
     assert.equal(result.killed, false);
   });
 
-  it("returns signal name on timeout (killed may be false for ETIMEDOUT)", () => {
-    const result = runCmd("node", ["-e", "setTimeout(()=>{},10000)"], {
+  it("returns signal name on timeout (killed may be false for ETIMEDOUT)", (t) => {
+    const fixture = new ProcessFixture(t);
+    const result = fixture.runCmd(process.execPath, ["-e", "setTimeout(()=>{},10000)"], {
       timeout: 100,
     });
     assert.equal(result.ok, false);
@@ -114,38 +161,44 @@ describe("runCmd", () => {
 });
 
 describe("runCmdAsync", () => {
-  it("returns ok=true for successful command", async () => {
-    const result = await runCmdAsync("echo", ["hello"]);
+  it("returns ok=true for successful command", async (t) => {
+    const fixture = new ProcessFixture(t);
+    const result = await fixture.runCmdAsync(process.execPath, ["-e", "console.log('hello')"]);
     assert.equal(result.ok, true);
     assert.equal(result.status, 0);
     assert.match(result.stdout, /hello/);
   });
 
-  it("returns ok=false for failing command", async () => {
-    const result = await runCmdAsync("node", ["-e", "process.exit(1)"]);
+  it("returns ok=false for failing command", async (t) => {
+    const fixture = new ProcessFixture(t);
+    const result = await fixture.runCmdAsync(process.execPath, ["-e", "process.exit(1)"]);
     assert.equal(result.ok, false);
   });
 
-  it("handles non-existent command gracefully", async () => {
-    const result = await runCmdAsync("nonexistent_command_xyz_12345", []);
+  it("handles non-existent command gracefully", async (t) => {
+    const fixture = new ProcessFixture(t);
+    const result = await fixture.runCmdAsync("nonexistent_command_xyz_12345", []);
     assert.equal(result.ok, false);
   });
 
-  it("returns signal=null and killed=false on success", async () => {
-    const result = await runCmdAsync("echo", ["hello"]);
+  it("returns signal=null and killed=false on success", async (t) => {
+    const fixture = new ProcessFixture(t);
+    const result = await fixture.runCmdAsync(process.execPath, ["-e", "console.log('hello')"]);
     assert.equal(result.signal, null);
     assert.equal(result.killed, false);
   });
 
-  it("returns signal=null and killed=false on non-signal failure", async () => {
-    const result = await runCmdAsync("node", ["-e", "process.exit(1)"]);
+  it("returns signal=null and killed=false on non-signal failure", async (t) => {
+    const fixture = new ProcessFixture(t);
+    const result = await fixture.runCmdAsync(process.execPath, ["-e", "process.exit(1)"]);
     assert.equal(result.ok, false);
     assert.equal(result.signal, null);
     assert.equal(result.killed, false);
   });
 
-  it("returns numeric status for ENOENT error", async () => {
-    const result = await runCmdAsync("nonexistent_command_xyz_12345", []);
+  it("returns numeric status for ENOENT error", async (t) => {
+    const fixture = new ProcessFixture(t);
+    const result = await fixture.runCmdAsync("nonexistent_command_xyz_12345", []);
     assert.equal(result.ok, false);
     assert.equal(typeof result.status, "number");
     assert.equal(result.status, 1);

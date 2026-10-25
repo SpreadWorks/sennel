@@ -1,0 +1,7 @@
+{
+  "sourceCommit": "f2b17cd6c4c2bbb1696dd14620d20f29469c944e",
+  "producer": "src/lib/layout-migration.js: LayoutMigrationRevisionOne.run",
+  "scenario": "Canonical rename completed; cleanup of the owned legacy backup raises an injected filesystem error. Exact producer bytes are retained.",
+  "sha256": "8dc15608ad2871bcdefe56f56cd9a10d2ef3c4431c5e45eeb9af5f1d7b4f1ec1",
+  "contractRevision": 7
+}

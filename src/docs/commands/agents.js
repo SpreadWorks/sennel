@@ -7,6 +7,7 @@
  * PROJECT セクションは AI で精査する。
  */
 
+import { docsCommands } from "../../lib/command-registry.js";
 import fs from "fs";
 import path from "path";
 import { parseArgs } from "../../lib/cli.js";
@@ -79,8 +80,7 @@ function replaceProjectContent(text, refined) {
 async function runAgents(ctx, rawArgs = [], commandContainer = container) {
   if (!ctx) {
     const cli = parseArgs(rawArgs, {
-      flags: ["--yes", "--dry-run"],
-      options: [],
+      ...docsCommands.agents.args,
       defaults: { dryRun: false },
     });
 

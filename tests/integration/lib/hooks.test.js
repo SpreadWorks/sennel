@@ -1,6 +1,5 @@
 import { describe, it, afterEach } from "node:test";
 import assert from "node:assert/strict";
-import childProcess from "node:child_process";
 import { createTmpDir, removeTmpDir, writeJson } from "../../support/builders/tmp-dir.js";
 import { onHook } from "../../../src/lib/hooks.js";
 
@@ -46,34 +45,18 @@ describe("flow hooks", () => {
     assert.deepEqual(result, { ok: true, output: "", stderr: "", status: 0 });
   });
 
-  it("executes configured hook commands with placeholders, cwd, shell, and timeout", async () => {
+  it("executes configured hook commands with literal placeholders and cwd", async () => {
     tmp = createTmpDir("sennel-hooks-unit-exec-");
-    writeConfig(tmp, "printf '{{CWD}}'");
-    const originalSpawnSync = childProcess.spawnSync;
-    let captured;
-    childProcess.spawnSync = (command, args, options) => {
-      captured = { command, args, options };
-      return { status: 0, stdout: tmp, stderr: "" };
-    };
-
-    try {
-      const result = await onHook("PostWorktree", { CWD: tmp });
-
-      assert.equal(result.ok, true);
-      assert.equal(result.output, tmp);
-      assert.equal(captured.command, `printf '${tmp}'`);
-      assert.deepEqual(captured.args, []);
-      assert.equal(captured.options.cwd, tmp);
-      assert.equal(captured.options.shell, true);
-      assert.equal(captured.options.timeout, 600000);
-    } finally {
-      childProcess.spawnSync = originalSpawnSync;
-    }
+    writeConfig(tmp, { kind: "native", executable: process.execPath,
+      args: ["-e", "process.stdout.write(JSON.stringify([process.cwd(), ...process.argv.slice(1)]))", "{{CWD}}", "$HOME&literal"] });
+    const result = await onHook("PostWorktree", { CWD: tmp });
+    assert.equal(result.ok, true, result.stderr);
+    assert.deepEqual(JSON.parse(result.output), [tmp, tmp, "$HOME&literal"]);
   });
 
   it("leaves missing placeholders unchanged and warns", async () => {
     tmp = createTmpDir("sennel-hooks-unit-missing-");
-    writeConfig(tmp, "printf '{{MISSING}}'");
+    writeConfig(tmp, { kind: "native", executable: process.execPath, args: ["-e", "process.stdout.write(process.argv[1])", "{{MISSING}}"] });
 
     const { result, warnings } = await captureWarnings(() => onHook("PostWorktree", { CWD: tmp }));
 
@@ -82,9 +65,9 @@ describe("flow hooks", () => {
     assert.match(warnings, /MISSING/);
   });
 
-  it("returns ok:false without throwing when the shell command fails", async () => {
+  it("returns ok:false without throwing when the command fails", async () => {
     tmp = createTmpDir("sennel-hooks-unit-failure-");
-    writeConfig(tmp, "node -e \"process.stderr.write('hook failed'); process.exit(7)\"");
+    writeConfig(tmp, { kind: "native", executable: process.execPath, args: ["-e", "process.stderr.write('hook failed'); process.exit(7)"] });
 
     const { result, warnings } = await captureWarnings(() => onHook("PostWorktree", { CWD: tmp }));
 

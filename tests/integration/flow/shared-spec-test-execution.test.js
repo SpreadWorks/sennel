@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, test } from "node:test";
 import { runSpecLocalTests } from "../../../src/flow/lib/run-test-execute.js";
+import { SharedSpecTestExecution } from "../../../src/flow/lib/shared-spec-test-execution.js";
 import { createTmpDir, removeTmpDir } from "../../support/builders/tmp-dir.js";
 
 let root;
@@ -16,6 +17,13 @@ function write(file, content) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, content);
 }
+
+test("shared spec runner selects the current Node executable and preserves literal test arguments", () => {
+  const directory = path.resolve("fixture");
+  const execution = new SharedSpecTestExecution({ repositoryRoot: directory, executionRoot: directory, specRoot: directory });
+  const args = ["--test", "--test-name-pattern=literal value", "tests/with spaces.test.js"];
+  assert.deepEqual(execution.nodeArgv(args), [process.execPath, ...args]);
+});
 
 test("shared spec tests import repository modules from the execution worktree", async () => {
   root = createTmpDir("shared-spec-test-execution-");

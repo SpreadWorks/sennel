@@ -5,7 +5,11 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, it } from "node:test";
 
-import { ProcessIdentitySource } from "../../../src/lib/process-identity.js";
+import { ProcessExecutionEvent, ProcessExecutionCanonicalAcknowledgement } from "../../../src/lib/process-execution-values.js";
+import { ProcessExecutionRuntime } from "../../../src/lib/process-execution-runtime.js";
+import { ProcessExecutionBindingSelection } from "../../../src/lib/process-execution-finalization.js";
+import { executeManagedProcess } from "../../../src/lib/managed-process.js";
+import { FlowProcessEvent } from "../../../src/flow/lib/flow-process-event.js";
 import { FileLockReentrancyError } from "../../../src/lib/file-lock.js";
 import GetNextActionCommand from "../../../src/flow/lib/get-next-action.js";
 import { FlowDispatchAction } from "../../../src/flow/lib/run-dispatch.js";
@@ -264,25 +268,26 @@ function advanceUntil(state, targetId, prefix = "advance") {
   return state;
 }
 
-it("applies only Definition-selected Draft route effects", () => {
-  const routed = (state, stepResult, summary) => {
-    const settlement = settleDraftStepResult(stepResult.stepId, stepResult);
-    return {
-      ...passedResult(summary),
-      stepResult,
-      draftSettlementReceipt: new DraftStepSettlementReceipt({
-        binding: {
-          runId: state.runId,
-          specId: state.specId,
-          stepId: stepResult.stepId,
-          attempt: state.attempt,
-        },
-        result: stepResult,
-        settlement,
-        publication: new DraftStepSettlementPublication(),
-      }).toJSON(),
-    };
+function routed(state, stepResult, summary) {
+  const settlement = settleDraftStepResult(stepResult.stepId, stepResult);
+  return {
+    ...passedResult(summary),
+    stepResult,
+    draftSettlementReceipt: new DraftStepSettlementReceipt({
+      binding: {
+        runId: state.runId,
+        specId: state.specId,
+        stepId: stepResult.stepId,
+        attempt: state.attempt,
+      },
+      result: stepResult,
+      settlement,
+      publication: new DraftStepSettlementPublication(),
+    }).toJSON(),
   };
+}
+
+it("applies only Definition-selected Draft route effects", () => {
   let state = advanceUntil(CurrentFlowState.create({ definition: definition() }), "draft-questions-review", "draft-route");
   let active = startDescriptor(state, "draft-review-branch");
   state = active.confirmCurrentAttempt({
@@ -320,12 +325,16 @@ function flowActivity({
   status = null,
   result = null,
   failure = null,
+  processEvent = null,
+  processFinalizationBarrier = null,
 }) {
   const node = state.findNode(currentPath.at(-1));
-  const activityAttempt = ["add_task", "add_approval_task"].includes(operation)
+  const activityAttempt = ["add_task", "add_approval_task", "record_process_event"].includes(operation)
     ? null
     : operation === "retry_attempt" ? state.attempt : attempt ?? state.attempt;
   const type = {
+    finalize_flow: "flow_finalized",
+    record_process_event: processEvent === null ? null : new FlowProcessEvent(processEvent).activityType,
     add_task: "task_added",
     add_approval_task: "task_added",
     start_attempt: "attempt_started",
@@ -346,6 +355,8 @@ function flowActivity({
     sequence: activityAttempt?.sequence ?? null,
     confirmationOrder,
     type,
+    ...(processEvent === null ? {} : { processEvent: processEvent.toJSON() }),
+    ...(processFinalizationBarrier === null ? {} : { processFinalizationBarrier: processFinalizationBarrier.toJSON() }),
     transition: new ActivityTransition({ operation, nodeId: node.id, task, attempt, status, policy: null, outbox: null, approval: null, nonblocking: null }),
     result,
     timing: { startedAt: NOW, finishedAt: LATER, durationMs: 60000 },
@@ -363,15 +374,6 @@ function flowActivity({
     metric: null,
     note: null,
     reviewPublication: null,
-  });
-}
-
-function identitySource(bootIdentity) {
-  return new ProcessIdentitySource({
-    platform: "linux",
-    pid: process.pid,
-    readBootIdentity: () => bootIdentity,
-    readProcessStartFingerprint: () => "100",
   });
 }
 
@@ -587,7 +589,7 @@ describe("Current Flow state foundation", () => {
     tmp = createTmpDir("current-flow-historical-journal-recovery-");
     const fixedDefinition = definition();
     const directory = path.join(tmp, "state");
-    const createdStore = new CurrentFlowStateStore({ directory, definition: fixedDefinition });
+    const createdStore = new CurrentFlowStateStore({ repositoryRoot: tmp, directory, definition: fixedDefinition });
     const created = createdStore.create(CurrentFlowState.create({ definition: fixedDefinition }));
     const dormant = historicalStateWithCreationAuthority(created, createdStore.journal.read()[0]);
     fs.writeFileSync(createdStore.statePath, `${JSON.stringify(dormant.toJSON())}\n`);
@@ -601,7 +603,7 @@ describe("Current Flow state foundation", () => {
       operation: "start_attempt",
       attempt: attemptFor(dormant, branchPath, "historical-branch"),
     });
-    const interruptedAdmission = new CurrentFlowStateStore({
+    const interruptedAdmission = new CurrentFlowStateStore({ repositoryRoot: tmp,
       directory,
       definition: fixedDefinition,
       faultInjector({ phase }) {
@@ -613,12 +615,12 @@ describe("Current Flow state foundation", () => {
       /crash after historical admission append/,
     );
     const dormantBytes = fs.readFileSync(interruptedAdmission.statePath, "utf8");
-    const readonly = new CurrentFlowStateStore({ directory, definition: fixedDefinition });
+    const readonly = new CurrentFlowStateStore({ repositoryRoot: tmp, directory, definition: fixedDefinition });
     assert.equal(readonly.load().history.execution, "dormant");
     assert.equal(fs.readFileSync(readonly.statePath, "utf8"), dormantBytes, "readback must not materialize a pending admission");
     assert.equal(readonly.journal.read().length, 2);
 
-    const recoveredStore = new CurrentFlowStateStore({ directory, definition: fixedDefinition });
+    const recoveredStore = new CurrentFlowStateStore({ repositoryRoot: tmp, directory, definition: fixedDefinition });
     const resumed = recoveredStore.apply({ activity: admission });
     assert.equal(resumed.history.execution, "resumed");
     assert.equal(resumed.history.continuation.confirmationOrder, 2);
@@ -640,7 +642,7 @@ describe("Current Flow state foundation", () => {
         retryKind: null,
       },
     });
-    const interruptedResumed = new CurrentFlowStateStore({
+    const interruptedResumed = new CurrentFlowStateStore({ repositoryRoot: tmp,
       directory,
       definition: fixedDefinition,
       faultInjector({ phase }) {
@@ -649,18 +651,18 @@ describe("Current Flow state foundation", () => {
     });
     assert.throws(() => interruptedResumed.apply({ activity: failure }), /crash after resumed Activity append/);
     const resumedBytes = fs.readFileSync(interruptedResumed.statePath, "utf8");
-    assert.equal(new CurrentFlowStateStore({ directory, definition: fixedDefinition }).load().confirmationOrder, 2);
+    assert.equal(new CurrentFlowStateStore({ repositoryRoot: tmp, directory, definition: fixedDefinition }).load().confirmationOrder, 2);
     assert.equal(fs.readFileSync(interruptedResumed.statePath, "utf8"), resumedBytes, "readback must leave a pending resumed Activity alone");
-    const settled = new CurrentFlowStateStore({ directory, definition: fixedDefinition }).apply({ activity: failure });
+    const settled = new CurrentFlowStateStore({ repositoryRoot: tmp, directory, definition: fixedDefinition }).apply({ activity: failure });
     assert.equal(settled.confirmationOrder, 3);
     assert.equal(settled.history.execution, "resumed");
-    assert.deepEqual(new CurrentFlowStateStore({ directory, definition: fixedDefinition }).apply({ activity: failure }).toJSON(), settled.toJSON());
+    assert.deepEqual(new CurrentFlowStateStore({ repositoryRoot: tmp, directory, definition: fixedDefinition }).apply({ activity: failure }).toJSON(), settled.toJSON());
 
     const forgedBoundary = settled.toJSON();
     forgedBoundary.history.continuation.confirmationOrder = 3;
     fs.writeFileSync(recoveredStore.statePath, `${JSON.stringify(forgedBoundary)}\n`);
     assert.throws(
-      () => new CurrentFlowStateStore({ directory, definition: fixedDefinition }).load(),
+      () => new CurrentFlowStateStore({ repositoryRoot: tmp, directory, definition: fixedDefinition }).load(),
       /continuation boundary does not match its admitted Attempt/,
       "a matching order without an Attempt introduction cannot grant continuation authority",
     );
@@ -1589,7 +1591,7 @@ describe("Current Flow state foundation", () => {
       ["issue", "branch"],
     ]);
     tmp = createTmpDir("current-flow-read-api-");
-    const store = new CurrentFlowStateStore({ directory: tmp, definition: definition() });
+    const store = new CurrentFlowStateStore({ repositoryRoot: tmp, directory: tmp, definition: definition() });
     // State queries remain journal-independent, while the Store boundary must
     // reject a state/journal pair that cannot be reproduced by replay.
     const descriptorBeforePersistence = state.nextAction().toJSON();
@@ -1676,7 +1678,7 @@ describe("Current Flow state foundation", () => {
   it("uses typed update Activity with JSONL as the only persisted activity authority", () => {
     tmp = createTmpDir("current-flow-activity-view-");
     const initial = CurrentFlowState.create({ definition: definition() });
-    const store = new CurrentFlowStateStore({ directory: tmp, definition: definition() });
+    const store = new CurrentFlowStateStore({ repositoryRoot: tmp, directory: tmp, definition: definition() });
     const created = store.create(initial);
     const branchPath = ["flow", "plan", "branch"];
     const startAttempt = attemptFor(created, branchPath, "branch-1", 1, {
@@ -1828,7 +1830,7 @@ describe("Current Flow state foundation", () => {
     const runFailure = ({ name, outcome, failure, incomplete = [] }) => {
       const directory = path.join(tmp, name);
       let initial = CurrentFlowState.create({ definition: definition() });
-      const store = new CurrentFlowStateStore({ directory, definition: definition() });
+      const store = new CurrentFlowStateStore({ repositoryRoot: tmp, directory, definition: definition() });
       initial = store.create(initial);
       const currentPath = initial.nextAction().path;
       const started = store.apply({ activity: flowActivity({
@@ -1917,7 +1919,7 @@ describe("Current Flow state foundation", () => {
 
     const invalidDirectory = path.join(tmp, "untyped-incomplete");
     let invalidInitial = CurrentFlowState.create({ definition: definition() });
-    const invalidStore = new CurrentFlowStateStore({ directory: invalidDirectory, definition: definition() });
+    const invalidStore = new CurrentFlowStateStore({ repositoryRoot: tmp, directory: invalidDirectory, definition: definition() });
     invalidInitial = invalidStore.create(invalidInitial);
     const invalidPath = invalidInitial.nextAction().path;
     const invalidStarted = invalidStore.apply({ activity: flowActivity({
@@ -1972,7 +1974,7 @@ describe("Current Flow state foundation", () => {
     tmp = createTmpDir("current-flow-crash-");
     const boundary = new CurrentFlowStateAdoptionBoundary({ definition: definition() });
     let initial = boundary.createFresh();
-    const store = boundary.openStore({ directory: tmp });
+    const store = boundary.openStore({ repositoryRoot: tmp, directory: tmp });
     initial = store.create(initial);
     const branchPath = ["flow", "plan", "branch"];
     const entry = flowActivity({
@@ -1983,7 +1985,7 @@ describe("Current Flow state foundation", () => {
       operation: "start_attempt",
       attempt: attemptFor(initial, branchPath, "branch-1"),
     });
-    const crashing = boundary.openStore({
+    const crashing = boundary.openStore({ repositoryRoot: tmp,
       directory: tmp,
       faultInjector({ phase }) { if (phase === "activity-appended") throw new Error("crash after durable journal append"); },
     });
@@ -2006,7 +2008,7 @@ describe("Current Flow state foundation", () => {
       status: "done",
       result: passedResult("branch confirmed"),
     });
-    const afterStateWrite = boundary.openStore({
+    const afterStateWrite = boundary.openStore({ repositoryRoot: tmp,
       directory: tmp,
       faultInjector({ phase }) { if (phase === "state-written") throw new Error("crash after state CAS"); },
     });
@@ -2019,7 +2021,7 @@ describe("Current Flow state foundation", () => {
   it("revalidates external state and journal-prefix changes after a cached confirmed snapshot", () => {
     tmp = createTmpDir("current-flow-validation-cache-");
     const boundary = new CurrentFlowStateAdoptionBoundary({ definition: definition() });
-    const store = boundary.openStore({ directory: tmp });
+    const store = boundary.openStore({ repositoryRoot: tmp, directory: tmp });
     store.create(boundary.createFresh());
     const initial = store.loadSnapshot();
     const journalPath = store.journal.filePath;
@@ -2040,7 +2042,7 @@ describe("Current Flow state foundation", () => {
   it("rejects same-process Store writer lock reentry for reads", () => {
     tmp = createTmpDir("current-flow-direct-read-lock-");
     const boundary = new CurrentFlowStateAdoptionBoundary({ definition: definition() });
-    const store = boundary.openStore({ directory: tmp });
+    const store = boundary.openStore({ repositoryRoot: tmp, directory: tmp });
     store.create(boundary.createFresh());
     store.lock.acquire();
     try {
@@ -2072,7 +2074,7 @@ describe("Current Flow state foundation", () => {
     assert.equal(directlyBound.definition, fixedDefinition);
     assert.equal(directlyBound.nextAction().action.action, fixedAction);
 
-    const typedStore = new CurrentFlowStateStore({
+    const typedStore = new CurrentFlowStateStore({ repositoryRoot: tmp,
       directory: path.join(tmp, "typed"),
       definition: fixedDefinition,
     });
@@ -2081,7 +2083,7 @@ describe("Current Flow state foundation", () => {
     assert.equal(created.nextAction().action.action, fixedAction);
     assert.equal(typedStore.load().nextAction().action.action, fixedAction);
 
-    const rawStore = new CurrentFlowStateStore({
+    const rawStore = new CurrentFlowStateStore({ repositoryRoot: tmp,
       directory: path.join(tmp, "raw"),
       definition: fixedDefinition,
     });
@@ -2119,7 +2121,7 @@ describe("Current Flow state foundation", () => {
     assert.equal(normalized.constructor, FlowActivity);
     assert.equal(normalized.nodeId, "branch");
 
-    const store = new CurrentFlowStateStore({ directory: tmp, definition: fixedDefinition });
+    const store = new CurrentFlowStateStore({ repositoryRoot: tmp, directory: tmp, definition: fixedDefinition });
     initial = store.create(initial);
     const applied = store.apply({ activity: divergent });
     assert.equal(applied.current.at(-1), "branch");
@@ -2149,7 +2151,7 @@ describe("Current Flow state foundation", () => {
   it("fails closed when persisted state reuses an Attempt identity that its Activity journal assigns elsewhere", () => {
     tmp = createTmpDir("current-flow-semantic-conflict-");
     const fixedDefinition = definition();
-    const store = new CurrentFlowStateStore({ directory: tmp, definition: fixedDefinition });
+    const store = new CurrentFlowStateStore({ repositoryRoot: tmp, directory: tmp, definition: fixedDefinition });
     let state = CurrentFlowState.create({ definition: fixedDefinition });
     state = store.create(state);
     const branchPath = state.nextAction().path;
@@ -2193,7 +2195,7 @@ describe("Current Flow state foundation", () => {
   it("exposes a typed revision and rejects stale CAS without appending an Activity", () => {
     tmp = createTmpDir("current-flow-stale-revision-");
     const fixedDefinition = definition();
-    const store = new CurrentFlowStateStore({ directory: tmp, definition: fixedDefinition });
+    const store = new CurrentFlowStateStore({ repositoryRoot: tmp, directory: tmp, definition: fixedDefinition });
     let initial = CurrentFlowState.create({ definition: fixedDefinition });
     initial = store.create(initial);
     const stale = store.loadSnapshot();
@@ -2235,7 +2237,7 @@ describe("Current Flow state foundation", () => {
   it("rejects a caller assertion before appending its Activity", () => {
     tmp = createTmpDir("current-flow-assert-before-append-");
     const fixedDefinition = definition();
-    const store = new CurrentFlowStateStore({ directory: tmp, definition: fixedDefinition });
+    const store = new CurrentFlowStateStore({ repositoryRoot: tmp, directory: tmp, definition: fixedDefinition });
     const initial = store.create(CurrentFlowState.create({ definition: fixedDefinition }));
     const currentPath = initial.nextAction().path;
     assert.throws(
@@ -2260,7 +2262,7 @@ describe("Current Flow state foundation", () => {
     tmp = createTmpDir("current-flow-journal-revision-");
     const fixedDefinition = definition();
     let journalPath = null;
-    const store = new CurrentFlowStateStore({
+    const store = new CurrentFlowStateStore({ repositoryRoot: tmp,
       directory: tmp,
       definition: fixedDefinition,
       faultInjector({ phase }) {
@@ -2290,7 +2292,7 @@ describe("Current Flow state foundation", () => {
     tmp = createTmpDir("current-flow-journal-recovery-revision-");
     const fixedDefinition = definition();
     const initial = CurrentFlowState.create({ definition: fixedDefinition });
-    const crashingStore = new CurrentFlowStateStore({
+    const crashingStore = new CurrentFlowStateStore({ repositoryRoot: tmp,
       directory: tmp,
       definition: fixedDefinition,
       faultInjector({ phase }) {
@@ -2298,7 +2300,7 @@ describe("Current Flow state foundation", () => {
       },
     });
     assert.throws(() => crashingStore.create(initial), /crash after flow_created append/);
-    const recoveringStore = new CurrentFlowStateStore({
+    const recoveringStore = new CurrentFlowStateStore({ repositoryRoot: tmp,
       directory: tmp,
       definition: fixedDefinition,
       faultInjector({ phase }) {
@@ -2317,14 +2319,14 @@ describe("Current Flow state foundation", () => {
     const journalPath = path.join(tmp, "activities.jsonl");
     fs.writeFileSync(journalPath, "{\"id\":\"partial\"");
     assert.throws(() => new FlowActivityJournal(journalPath).read(), /partial line/);
-    const store = new CurrentFlowStateStore({ directory: tmp, definition: definition() });
+    const store = new CurrentFlowStateStore({ repositoryRoot: tmp, directory: tmp, definition: definition() });
     assert.throws(() => store.load(), /partial line/);
   });
 
   it("fails closed when an Activity journal survives without its coordinated flow state", () => {
     tmp = createTmpDir("current-flow-orphan-journal-");
     let initial = CurrentFlowState.create({ definition: definition() });
-    const store = new CurrentFlowStateStore({ directory: tmp, definition: definition() });
+    const store = new CurrentFlowStateStore({ repositoryRoot: tmp, directory: tmp, definition: definition() });
     initial = store.create(initial);
     const branchPath = initial.nextAction().path;
     store.apply({
@@ -2350,7 +2352,7 @@ describe("Current Flow state foundation", () => {
     const fixedDefinition = definition();
     const initial = CurrentFlowState.create({ definition: fixedDefinition });
 
-    const stateStore = new CurrentFlowStateStore({
+    const stateStore = new CurrentFlowStateStore({ repositoryRoot: tmp,
       directory: path.join(tmp, "state-store"),
       definition: fixedDefinition,
     });
@@ -2363,7 +2365,7 @@ describe("Current Flow state foundation", () => {
       /file authority must be a regular real file/,
     );
 
-    const journalStore = new CurrentFlowStateStore({
+    const journalStore = new CurrentFlowStateStore({ repositoryRoot: tmp,
       directory: path.join(tmp, "journal-store"),
       definition: fixedDefinition,
     });
@@ -2375,7 +2377,7 @@ describe("Current Flow state foundation", () => {
       /Activity journal authority must be a regular real file/,
     );
 
-    const linkedStateStore = new CurrentFlowStateStore({
+    const linkedStateStore = new CurrentFlowStateStore({ repositoryRoot: tmp,
       directory: path.join(tmp, "linked-state-store"),
       definition: fixedDefinition,
     });
@@ -2386,7 +2388,7 @@ describe("Current Flow state foundation", () => {
       /flow state authority must be a single-link regular real file/,
     );
 
-    const linkedJournalStore = new CurrentFlowStateStore({
+    const linkedJournalStore = new CurrentFlowStateStore({ repositoryRoot: tmp,
       directory: path.join(tmp, "linked-journal-store"),
       definition: fixedDefinition,
     });
@@ -2402,7 +2404,7 @@ describe("Current Flow state foundation", () => {
   it("fails closed when flow state confirmation order is ahead of the durable Activity journal", () => {
     tmp = createTmpDir("current-flow-order-conflict-");
     const initial = CurrentFlowState.create({ definition: definition() });
-    const store = new CurrentFlowStateStore({ directory: tmp, definition: definition() });
+    const store = new CurrentFlowStateStore({ repositoryRoot: tmp, directory: tmp, definition: definition() });
     store.create(initial);
     fs.writeFileSync(store.statePath, `${JSON.stringify(initial.withConfirmationOrder(2).toJSON())}\n`);
     assert.throws(
@@ -2415,7 +2417,7 @@ describe("Current Flow state foundation", () => {
     tmp = createTmpDir("current-flow-journal-order-");
     let initial = CurrentFlowState.create({ definition: definition() });
     const branchPath = ["flow", "plan", "branch"];
-    const store = new CurrentFlowStateStore({ directory: tmp, definition: definition() });
+    const store = new CurrentFlowStateStore({ repositoryRoot: tmp, directory: tmp, definition: definition() });
     initial = store.create(initial);
     const first = flowActivity({
       id: "first",
@@ -2462,7 +2464,7 @@ describe("Current Flow state foundation", () => {
 
   it("rejects an unsupported Attempt ordinal gap before append and during journal replay", () => {
     tmp = createTmpDir("current-flow-unsupported-ordinal-");
-    const store = new CurrentFlowStateStore({ directory: tmp, definition: definition() });
+    const store = new CurrentFlowStateStore({ repositoryRoot: tmp, directory: tmp, definition: definition() });
     let state = store.create(CurrentFlowState.create({ definition: definition() }));
     const currentPath = ["flow", "plan", "branch"];
     state = store.apply({ activity: flowActivity({ id: "first-attempt", state, currentPath,
@@ -2487,7 +2489,7 @@ describe("Current Flow state foundation", () => {
     // cannot authorize replay without its Definition-selected lifecycle slot.
     fs.appendFileSync(store.journal.filePath, `${JSON.stringify(unsupported.toJSON())}\n`);
     const corruptedJournal = fs.readFileSync(store.journal.filePath);
-    const reloaded = new CurrentFlowStateStore({ directory: tmp, definition: definition() });
+    const reloaded = new CurrentFlowStateStore({ repositoryRoot: tmp, directory: tmp, definition: definition() });
     assert.throws(() => reloaded.load(), (error) => error instanceof CurrentFlowStateInvariantError
       || error instanceof CurrentFlowStateConflictError);
     assert.deepEqual(fs.readFileSync(store.statePath), beforeState);
@@ -2496,7 +2498,7 @@ describe("Current Flow state foundation", () => {
 
   it("rejects non-increasing Attempt identities in the journal independently of state replay", () => {
     tmp = createTmpDir("current-flow-nonincreasing-ordinal-");
-    const store = new CurrentFlowStateStore({ directory: tmp, definition: definition() });
+    const store = new CurrentFlowStateStore({ repositoryRoot: tmp, directory: tmp, definition: definition() });
     let state = store.create(CurrentFlowState.create({ definition: definition() }));
     const currentPath = ["flow", "plan", "branch"];
     for (const sequence of [1, 2]) {
@@ -2524,7 +2526,7 @@ describe("Current Flow state foundation", () => {
 
   it("rejects reversed and duplicate Attempt ordinals before append without changing canonical bytes", () => {
     tmp = createTmpDir("current-flow-nonincreasing-append-");
-    const store = new CurrentFlowStateStore({ directory: tmp, definition: definition() });
+    const store = new CurrentFlowStateStore({ repositoryRoot: tmp, directory: tmp, definition: definition() });
     let state = store.create(CurrentFlowState.create({ definition: definition() }));
     const currentPath = ["flow", "plan", "branch"];
     for (const sequence of [1, 2]) {
@@ -2548,13 +2550,13 @@ describe("Current Flow state foundation", () => {
       assert.deepEqual(fs.readFileSync(store.statePath), beforeState);
       assert.deepEqual(fs.readFileSync(store.journal.filePath), beforeJournal);
     }
-    assert.deepEqual(new CurrentFlowStateStore({ directory: tmp, definition: definition() }).load().toJSON(), state.toJSON());
+    assert.deepEqual(new CurrentFlowStateStore({ repositoryRoot: tmp, directory: tmp, definition: definition() }).load().toJSON(), state.toJSON());
   });
 
   it("rejects an unsupported confirmed Attempt ordinal gap after historical continuation without changing bytes", () => {
     tmp = createTmpDir("current-flow-historical-ordinal-");
     const fixedDefinition = definition();
-    const store = new CurrentFlowStateStore({ directory: tmp, definition: fixedDefinition });
+    const store = new CurrentFlowStateStore({ repositoryRoot: tmp, directory: tmp, definition: fixedDefinition });
     let state = store.create(CurrentFlowState.create({ definition: fixedDefinition }));
     state = historicalStateWithCreationAuthority(state, store.journal.read()[0]);
     fs.writeFileSync(store.statePath, `${JSON.stringify(state.toJSON())}\n`);
@@ -2572,7 +2574,7 @@ describe("Current Flow state foundation", () => {
     assert.equal(state.history.execution, "resumed");
     assert.equal(state.history.continuation.attemptSequence, 1);
     assert.equal(state.findNode("branch").attemptSequence, 2);
-    assert.deepEqual(new CurrentFlowStateStore({ directory: tmp, definition: fixedDefinition }).load().toJSON(), state.toJSON());
+    assert.deepEqual(new CurrentFlowStateStore({ repositoryRoot: tmp, directory: tmp, definition: fixedDefinition }).load().toJSON(), state.toJSON());
     const entries = store.journal.read().map((entry) => entry.toJSON());
     assert.deepEqual(entries.filter((entry) => entry.transition.attempt !== null)
       .map((entry) => entry.transition.attempt.sequence), [1, 2]);
@@ -2585,7 +2587,7 @@ describe("Current Flow state foundation", () => {
     fs.writeFileSync(store.journal.filePath, entries.map((entry) => `${JSON.stringify(entry)}\n`).join(""));
     const stateBytes = fs.readFileSync(store.statePath);
     const journalBytes = fs.readFileSync(store.journal.filePath);
-    assert.throws(() => new CurrentFlowStateStore({ directory: tmp, definition: fixedDefinition }).load(),
+    assert.throws(() => new CurrentFlowStateStore({ repositoryRoot: tmp, directory: tmp, definition: fixedDefinition }).load(),
       (error) => error instanceof CurrentFlowStateInvariantError || error instanceof CurrentFlowStateConflictError);
     assert.deepEqual(fs.readFileSync(store.statePath), stateBytes);
     assert.deepEqual(fs.readFileSync(store.journal.filePath), journalBytes);
@@ -2594,7 +2596,7 @@ describe("Current Flow state foundation", () => {
   it("rejects an unproved historical Attempt gap before append even when the persisted cursor permits it", () => {
     tmp = createTmpDir("current-flow-historical-ordinal-append-");
     const fixedDefinition = definition();
-    const store = new CurrentFlowStateStore({ directory: tmp, definition: fixedDefinition });
+    const store = new CurrentFlowStateStore({ repositoryRoot: tmp, directory: tmp, definition: fixedDefinition });
     let state = store.create(CurrentFlowState.create({ definition: fixedDefinition }));
     state = historicalStateWithCreationAuthority(state, store.journal.read()[0]);
     fs.writeFileSync(store.statePath, `${JSON.stringify(state.toJSON())}\n`);
@@ -2634,15 +2636,15 @@ describe("Current Flow state foundation", () => {
       path: branchPath,
       attempt: attemptFor(initial, branchPath, "branch-1"),
     });
-    const activeStore = new CurrentFlowStateStore({ directory: path.join(tmp, "active"), definition: definition() });
+    const activeStore = new CurrentFlowStateStore({ repositoryRoot: tmp, directory: path.join(tmp, "active"), definition: definition() });
     assert.throws(() => activeStore.create(active), /requires a fresh state/);
     const completed = completeNext(initial, "branch-done");
-    const completedStore = new CurrentFlowStateStore({ directory: path.join(tmp, "completed"), definition: definition() });
+    const completedStore = new CurrentFlowStateStore({ repositoryRoot: tmp, directory: path.join(tmp, "completed"), definition: definition() });
     assert.throws(() => completedStore.create(completed), /fresh materialized state/);
     const withTask = initial.addTask({ id: "task-1", key: "first" });
-    const taskStore = new CurrentFlowStateStore({ directory: path.join(tmp, "task"), definition: definition() });
+    const taskStore = new CurrentFlowStateStore({ repositoryRoot: tmp, directory: path.join(tmp, "task"), definition: definition() });
     assert.throws(() => taskStore.create(withTask), /fresh materialized state/);
-    const journalStore = new CurrentFlowStateStore({ directory: path.join(tmp, "journal"), definition: definition() });
+    const journalStore = new CurrentFlowStateStore({ repositoryRoot: tmp, directory: path.join(tmp, "journal"), definition: definition() });
     const historical = flowActivity({
       id: "existing-activity",
       state: initial,
@@ -2655,7 +2657,7 @@ describe("Current Flow state foundation", () => {
     assert.throws(() => journalStore.create(initial), /requires an empty or sole flow_created Activity journal/);
 
     const recoveryDirectory = path.join(tmp, "creation-recovery");
-    const crashingStore = new CurrentFlowStateStore({
+    const crashingStore = new CurrentFlowStateStore({ repositoryRoot: tmp,
       directory: recoveryDirectory,
       definition: definition(),
       faultInjector({ phase }) {
@@ -2664,39 +2666,88 @@ describe("Current Flow state foundation", () => {
     });
     assert.throws(() => crashingStore.create(initial), /crash after flow_created append/);
     const durableCreation = crashingStore.journal.read()[0].toJSON();
-    const recoveredStore = new CurrentFlowStateStore({ directory: recoveryDirectory, definition: definition() });
+    const recoveredStore = new CurrentFlowStateStore({ repositoryRoot: tmp, directory: recoveryDirectory, definition: definition() });
     const recovered = recoveredStore.create(initial);
     assert.equal(recovered.confirmationOrder, 1);
     assert.equal(recoveredStore.journal.read().length, 1);
     assert.deepEqual(recoveredStore.journal.read()[0].toJSON(), durableCreation);
   });
 
-  it("reclaims a process-identified stale lock before replaying the same typed Activity", () => {
-    tmp = createTmpDir("current-flow-stale-lock-");
-    let initial = CurrentFlowState.create({ definition: definition() });
-    const store = new CurrentFlowStateStore({ directory: tmp, definition: definition() });
-    initial = store.create(initial);
+  it("refuses a held token lock and replays only after its actual owner releases", () => {
+    tmp = createTmpDir("current-flow-owner-lock-");
+    const store = new CurrentFlowStateStore({ repositoryRoot: tmp, directory: tmp, definition: definition() });
+    const initial = store.create(CurrentFlowState.create({ definition: definition() }));
     const branchPath = ["flow", "plan", "branch"];
-    const entry = flowActivity({
-      id: "stale-lock-start",
-      state: initial,
-      currentPath: branchPath,
-      confirmationOrder: 2,
-      operation: "start_attempt",
-      attempt: attemptFor(initial, branchPath, "branch-1"),
-    });
-    const stranded = new CurrentFlowStateStore({
-      directory: tmp,
-      definition: definition(),
-      processIdentitySource: identitySource("owner-boot"),
-    });
-    stranded.lock.acquire();
-    const recovering = new CurrentFlowStateStore({
-      directory: tmp,
-      definition: definition(),
-      processIdentitySource: identitySource("recovery-boot"),
-    });
-    assert.equal(recovering.apply({ activity: entry }).confirmationOrder, 2);
+    const entry = flowActivity({ id: "owner-lock-start", state: initial, currentPath: branchPath,
+      confirmationOrder: 2, operation: "start_attempt", attempt: attemptFor(initial, branchPath, "branch-1") });
+    store.lock.acquire();
+    const observer = new CurrentFlowStateStore({ repositoryRoot: tmp, directory: tmp, definition: definition() });
+    try {
+      assert.throws(() => observer.apply({ activity: entry }), FileLockReentrancyError);
+      assert.equal(store.journal.read().length, 1);
+    } finally { store.lock.release(); }
+    assert.equal(observer.apply({ activity: entry }).confirmationOrder, 2);
+  });
+
+  it("persists the fenced finalization barrier across lost acknowledgement and permits only exact replay", async () => {
+    tmp = createTmpDir("current-flow-process-cutoff-");
+    const definition = tinyDefinition();
+    let store = new CurrentFlowStateStore({ repositoryRoot: tmp, directory: tmp, definition });
+    let state = store.create(CurrentFlowState.create({ definition }));
+    const binding = { runId: state.runId, specId: state.specId, flowVersionId: state.flowVersionId };
+    const runtime = await ProcessExecutionRuntime.acquire({ mainRoot: tmp, executionRoot: tmp, binding });
+    const published = new Map();
+    const publish = (fact) => {
+      const entry = published.get(fact.eventId) ?? flowActivity({ id: `process-event-${fact.eventId}`, state, currentPath: ["flow"],
+        confirmationOrder: state.confirmationOrder + 1, operation: "record_process_event", processEvent: fact });
+      state = store.apply({ activity: entry });
+      published.set(fact.eventId, entry);
+      return ProcessExecutionCanonicalAcknowledgement.fromEvent(fact);
+    };
+    try {
+      const unlaunched = await runtime.reserveCall({ invocation: { commandId: "revoked-before-cutoff" } });
+      await runtime.revokeCall(unlaunched);
+      await runtime.enter(() => executeManagedProcess(process.execPath, ["-e", "process.stdout.write('cutoff')"], { timeoutMs: 5000 }));
+      while (state.nextAction() !== null) {
+        const next = state.nextAction();
+        const attempt = attemptFor(state, next.path, `attempt-${next.nodeId}`);
+        state = store.apply({ activity: flowActivity({ id: `start-${next.nodeId}`, state, currentPath: next.path,
+          confirmationOrder: state.confirmationOrder + 1, operation: "start_attempt", attempt }) });
+        state = store.apply({ activity: flowActivity({ id: `complete-${next.nodeId}`, state, currentPath: next.path,
+          confirmationOrder: state.confirmationOrder + 1, operation: "confirm_attempt", status: "done", result: passedResult(next.nodeId) }) });
+      }
+      const selection = new ProcessExecutionBindingSelection(binding);
+      const lostAck = new Error("canonical event saved before acknowledgement");
+      await assert.rejects(runtime.finalizeBinding(selection, (fact) => { publish(fact); throw lostAck; }), (error) => error === lostAck);
+      const reserved = [...published.values()][0];
+      const before = fs.readFileSync(store.journal.filePath);
+      const finalization = (barrier = null) => flowActivity({ id: "finalized", state, currentPath: ["flow"],
+        confirmationOrder: state.confirmationOrder + 1, operation: "finalize_flow", processFinalizationBarrier: barrier });
+      assert.throws(() => store.apply({ activity: finalization() }), (error) => error.reason === "observation-save-failed");
+      assert.deepEqual(fs.readFileSync(store.journal.filePath), before);
+      await assert.rejects(runtime.enter(() => executeManagedProcess(process.execPath, ["-e", "process.exit(0)"], { timeoutMs: 5000 })),
+        (error) => error.code === "PROCESS_EXECUTION_REGISTRATION_CLOSED");
+      store = new CurrentFlowStateStore({ repositoryRoot: tmp, directory: tmp, definition });
+      state = store.load();
+      const barrier = await runtime.finalizeBinding(selection, publish);
+      assert.deepEqual(barrier.callClosures.map((entry) => entry.closureKind).sort(), ["child-exit", "reservation-revoked"]);
+      assert.equal(barrier.matches(await runtime.finalizeBinding(selection, publish)), true);
+      const completedFacts = fs.readFileSync(store.journal.filePath);
+      assert.throws(() => store.apply({ activity: finalization() }), (error) => error.reason === "observation-save-failed");
+      const foreign = await runtime.finalizeBinding(new ProcessExecutionBindingSelection({ ...binding, runId: "foreign-run" }), publish);
+      assert.throws(() => store.apply({ activity: finalization(foreign) }), (error) => error.reason === "observation-save-failed");
+      assert.deepEqual(fs.readFileSync(store.journal.filePath), completedFacts);
+      state = store.apply({ activity: finalization(barrier) });
+      assert.equal(state.lifecycle.state, "finalized");
+      const finalizedBytes = fs.readFileSync(store.journal.filePath);
+      const restored = new CurrentFlowStateStore({ repositoryRoot: tmp, directory: tmp, definition });
+      assert.equal(restored.load().lifecycle.state, "finalized");
+      assert.equal(restored.apply({ activity: reserved }).lifecycle.state, "finalized");
+      const last = [...published.values()].at(-1).processEvent;
+      assert.throws(() => publish(new ProcessExecutionEvent({ ...last.toJSON(), eventId: crypto.randomUUID(), type: "exited", sequence: last.sequence + 1 })),
+        /finalized Flow rejects subsequent Activities/);
+      assert.deepEqual(fs.readFileSync(store.journal.filePath), finalizedBytes);
+    } finally { await runtime.close(); }
   });
 
   it("rejects forbidden legacy fields and malformed typed incomplete claims at the deserialization boundary", () => {
@@ -2787,4 +2838,112 @@ describe("Current Flow state foundation", () => {
       }), CurrentFlowStateInvariantError);
     }
   });
+});
+
+
+function confirmationReceiptState(initial) {
+  const ready = advanceUntil(initial, "draft-questions-review", "confirmation-receipt");
+  const active = startDescriptor(ready, "confirmation-receipt-review");
+  return active.confirmCurrentAttempt({
+    result: routed(active, new DraftQuestionsReviewFindingsResult(), "Questions need repair"),
+  });
+}
+
+it("preserves confirmation-only state bytes and Definition decisions across scalar updates", () => {
+  const fixedDefinition = definition();
+  const fresh = CurrentFlowState.create({ definition: fixedDefinition,
+    context: { operation: "resume", resumeToken: "counter-copy-context" } });
+  const active = startDescriptor(fresh, "counter-copy-active");
+  const settled = completeNext(fresh, "counter-copy-settled");
+  const serializer = new CurrentFlowStateSerializer({ validator: new CurrentFlowStateValidator({ definition: fixedDefinition }) });
+  const complex = confirmationReceiptState(fresh);
+  assert.equal(complex.nextAction().nodeId, "draft-questions-triage");
+  for (const initial of [fresh, active, settled, complex]) {
+    const source = initial.withConfirmationOrder(7);
+    const before = JSON.stringify(source.toJSON());
+    for (const confirmationOrder of [0, 7, 8, 3]) {
+      const expected = new CurrentFlowState({ ...source.toJSON(), confirmationOrder }, { definition: fixedDefinition });
+      const actual = source.withConfirmationOrder(confirmationOrder);
+      assert.equal(JSON.stringify(actual.toJSON()), JSON.stringify(expected.toJSON()));
+      assert.deepEqual(serializer.bytes(actual), serializer.bytes(expected));
+      const restored = serializer.deserialize(JSON.parse(serializer.bytes(actual).toString("utf8")));
+      assert.deepEqual(restored.toJSON(), expected.toJSON());
+      assert.deepEqual(restored.nextAction(), expected.nextAction());
+      assert.deepEqual(actual.findNode("branch").toJSON(), expected.findNode("branch").toJSON());
+      assert.equal(JSON.stringify(source.toJSON()), before);
+    }
+    for (const confirmationOrder of [-1, NaN, Infinity, 1.5, "1", null, undefined, Number.MAX_SAFE_INTEGER + 1]) {
+      const capture = operation => {
+        try { operation(); } catch (error) { return { name: error.name, message: error.message }; }
+        assert.fail("invalid counter was accepted");
+      };
+      assert.deepEqual(capture(() => source.withConfirmationOrder(confirmationOrder)),
+        capture(() => new CurrentFlowState({ ...source.toJSON(), confirmationOrder }, { definition: fixedDefinition })));
+      assert.equal(JSON.stringify(source.toJSON()), before);
+    }
+    const forged = source.toJSON(); forged.steps[0].id = "foreign-definition-node";
+    assert.throws(() => new CurrentFlowState(forged, { definition: fixedDefinition }), CurrentFlowStateInvariantError);
+  }
+});
+
+it("keeps confirmation-only copies immutable through public graph and serialization boundaries", () => {
+  const initial = CurrentFlowState.create({ definition: definition(),
+    context: { operation: "resume", resumeToken: "copy-context" },
+    artifacts: [{ kind: "artifact", id: "copy-artifact" }],
+    outbox: [{ id: "copy-outbox", operation: "publish" }] });
+  for (const source of [startDescriptor(initial, "copy-immutable"), confirmationReceiptState(initial)]) {
+    const updated = source.withConfirmationOrder(2);
+    const before = JSON.stringify(source.toJSON()), after = JSON.stringify(updated.toJSON());
+    for (const state of [source, updated]) {
+      assert.throws(() => { state.root.status = "done"; }, TypeError);
+      assert.throws(() => state.root.steps.push(state.root), TypeError);
+      assert.throws(() => { state.findNode("branch").status = "failed"; }, TypeError);
+      if (state.attempt !== null) assert.throws(() => { state.attempt.id = "changed"; }, TypeError);
+      assert.throws(() => { state.context.value.resumeToken = "changed"; }, TypeError);
+      assert.throws(() => { state.artifacts.values[0].id = "changed"; }, TypeError);
+      assert.throws(() => { state.outbox.values[0].operation = "changed"; }, TypeError);
+      const receipt = state.findNode("draft-questions-review").result?.draftSettlementReceipt ?? null;
+      if (receipt !== null) {
+        assert.throws(() => { receipt.binding.stepId = "changed"; }, TypeError);
+        assert.throws(() => { state.findNode("draft-questions-review").result.summary = "changed"; }, TypeError);
+      }
+      const json = state.toJSON();
+      json.steps[0].id = "changed"; json.context.resumeToken = "changed";
+      json.artifacts[0].id = "changed"; json.outbox[0].operation = "changed";
+    }
+    assert.equal(JSON.stringify(source.toJSON()), before);
+    assert.equal(JSON.stringify(updated.toJSON()), after);
+    assert.equal(updated.nextAction().nodeId, source.nextAction().nodeId);
+  }
+});
+
+it("retains historical creation and continuation counter refusals on confirmation-only copies", (t) => {
+  const root = createTmpDir("confirmation-copy-history-");
+  t.after(() => removeTmpDir(root));
+  const fixedDefinition = definition();
+  const store = new CurrentFlowStateStore({ repositoryRoot: root, directory: root, definition: fixedDefinition });
+  const created = store.create(CurrentFlowState.create({ definition: fixedDefinition }));
+  const dormant = historicalStateWithCreationAuthority(created, store.journal.read()[0]);
+  const dormantBefore = JSON.stringify(dormant.toJSON());
+  assert.throws(() => dormant.withConfirmationOrder(0), /historical Flow with creation authority requires its first confirmed Activity order/);
+  assert.equal(JSON.stringify(dormant.toJSON()), dormantBefore);
+  const retryingDefinition = tinyDefinition({ firstFailurePolicy: "retry" });
+  let state = CurrentFlowState.create({ definition: retryingDefinition }).withConfirmationOrder(3);
+  const firstPath = state.nextAction().path;
+  state = state.startAttempt({ path: firstPath, attempt: attemptFor(state, firstPath, "copy-history-first") });
+  state = importedState(state).failCurrentAttempt({ result: failedResult("Imported retry required."),
+    failure: { category: "review", code: "IMPORTED_RETRY", message: "Imported retry required.", retryable: true, retryKind: "semantic" } });
+  const resumed = state.retryCurrentAttempt({ attempt: attemptFor(state, firstPath, "copy-history-retry", 2), kind: "semantic" });
+  const boundary = resumed.history.continuation.confirmationOrder;
+  const before = JSON.stringify(resumed.toJSON());
+  assert.ok(boundary > 1);
+  assert.throws(() => resumed.withConfirmationOrder(boundary - 2), /historical continuation boundary is ahead of its admitted Activity order/);
+  for (const confirmationOrder of [boundary - 1, boundary, boundary + 1]) {
+    const actual = resumed.withConfirmationOrder(confirmationOrder);
+    const expected = new CurrentFlowState({ ...resumed.toJSON(), confirmationOrder }, { definition: retryingDefinition });
+    assert.equal(JSON.stringify(actual.toJSON()), JSON.stringify(expected.toJSON()));
+    assert.deepEqual(actual.nextAction(), expected.nextAction());
+    assert.throws(() => { actual.history.continuation.confirmationOrder = 0; }, TypeError);
+    assert.equal(JSON.stringify(resumed.toJSON()), before);
+  }
 });

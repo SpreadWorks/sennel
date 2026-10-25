@@ -4,7 +4,8 @@
  * may have import-time side effects.
  */
 
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { CommandEntrypoint, publicCommandEntrypoint } from "./command-entrypoint.js";
+export { CommandEntrypoint } from "./command-entrypoint.js";
 import { FLOW_COMMANDS } from "../flow/registry.js";
 
 const COMMAND_NAME_RE = /^[a-z0-9][a-z0-9-]*$/;
@@ -86,30 +87,6 @@ export class CoreCommandMetadataRegistry {
   }
 }
 
-export class CommandEntrypoint {
-  constructor({ modulePath, invocation }) {
-    if (typeof modulePath !== "string" || modulePath.trim() === "") {
-      throw new Error("command entrypoint modulePath is required");
-    }
-    if (!new Set(["main", "script"]).has(invocation)) {
-      throw new Error(`invalid command entrypoint invocation: ${invocation}`);
-    }
-    this.moduleUrl = new URL(modulePath, import.meta.url);
-    this.modulePath = fileURLToPath(this.moduleUrl);
-    this.invocation = invocation;
-    Object.freeze(this);
-  }
-
-  async execute(args) {
-    process.argv = [process.argv[0], this.modulePath, ...args];
-    const mod = await import(pathToFileURL(this.modulePath).href);
-    if (this.invocation === "script") return;
-    if (typeof mod.main !== "function") {
-      throw new Error(`command module does not export main(): ${this.modulePath}`);
-    }
-    await mod.main();
-  }
-}
 
 function helpText({ usage, summary, options = [] }) {
   const lines = [usage, "", summary];
@@ -132,6 +109,7 @@ export class CommandDefinition {
     dispatch = {},
     allowInvalidConfig = false,
     routed = false,
+    readOnly = false,
   }) {
     if (typeof name !== "string" || !COMMAND_NAME_RE.test(name)) {
       throw new Error(`invalid command name: ${name}`);
@@ -164,6 +142,7 @@ export class CommandDefinition {
         : null;
     this.allowInvalidConfig = Boolean(allowInvalidConfig);
     this.routed = Boolean(routed);
+    this.readOnly = readOnly === true;
     Object.assign(this, dispatch);
 
     this.subcommands = new Map();
@@ -285,9 +264,17 @@ const docsDefinitionData = [
 ];
 
 const docsArgs = {
-  init: { flags: ["--force", "--dry-run", "--yes"], options: ["--type"] },
+  build: { flags: ["--verbose", "--dry-run", "--force", "--regenerate", "--yes"] },
+  enrich: { flags: ["--yes", "--stdout", "--dry-run"] },
+  data: { flags: ["--dry-run", "--stdout"], options: ["--docs-dir"] },
+  readme: { flags: ["--yes", "--dry-run"], options: ["--lang", "--output"] },
+  translate: { flags: ["--yes", "--dry-run", "--force"], options: ["--lang"] },
+  agents: { flags: ["--yes", "--dry-run"], options: [] },
+  changelog: { flags: ["--dry-run"], options: [] },
+  init: { flags: ["--force", "--dry-run", "--yes"], options: ["--type", "--lang", "--docs-dir"] },
   scan: { flags: ["--stdout", "--dry-run"], optionalOptions: ["--reset"] },
-  text: { flags: ["--dry-run", "--per-directive", "--yes"], options: ["--agent", "--id", "--timeout"] },
+  forge: { aliases: { "-v": "--verbose" }, flags: ["--yes", "--verbose", "--dry-run"], options: ["--prompt", "--prompt-file", "--spec", "--max-runs", "--review-cmd", "--mode"] },
+  text: { flags: ["--dry-run", "--per-directive", "--yes", "--force"], options: ["--id", "--lang", "--docs-dir", "--files"] },
 };
 
 const docsOptions = {
@@ -330,13 +317,14 @@ const flowGroupHelp = {
   run: ["Execute flow actions (prepare-spec, gate, finalize, ...)", "Usage: sennel flow run <action> [options]"],
 };
 
-function flowDefinition(name, entry) {
+function flowDefinition(name, entry, group = null) {
   if (typeof entry?.command === "function") {
     const { command, help, args, ...dispatch } = entry;
     return new CommandDefinition({
       name,
       command,
       outputMode: "envelope",
+      readOnly: group === "get" || ["query", "resume"].includes(name),
       args: args || {},
       help: {
         section: "Flow",
@@ -359,7 +347,7 @@ function flowDefinition(name, entry) {
       options: ["-h, --help", "--agent-work-dir <path>"],
       localeKey: `ui:help.commands.flow ${name}`,
     },
-    subcommands: Object.entries(entry || {}).map(([childName, child]) => flowDefinition(childName, child)),
+    subcommands: Object.entries(entry || {}).map(([childName, child]) => flowDefinition(childName, child, name)),
   });
 }
 
@@ -394,6 +382,13 @@ const pluginSubcommands = [
 
 const definitions = [
   new CommandDefinition({
+    name: publicCommandEntrypoint.commandName,
+    entrypoint: publicCommandEntrypoint,
+    help: { section: "Project", summary: "Run literal arguments in the inherited execution context",
+      usage: "Usage: sennel command -- <executable> [argument ...]", options: ["-- (required argument separator)", "-h, --help"],
+      localeKey: "ui:help.commands.command" },
+  }),
+  new CommandDefinition({
     name: "help",
     entrypoint: { modulePath: "../help.js", invocation: "main" },
     allowInvalidConfig: true,
@@ -406,12 +401,14 @@ const definitions = [
   }),
   new CommandDefinition({
     name: "upgrade",
+    args: { flags: ["--dry-run"], options: [] },
     entrypoint: { modulePath: "../upgrade.js", invocation: "main" },
     allowInvalidConfig: true,
     help: { section: "Project", summary: "Update template-derived files to latest version", usage: "Usage: sennel upgrade [--dry-run]", options: ["--dry-run", "-h, --help"], localeKey: "ui:help.cmdHelp.upgrade" },
   }),
   new CommandDefinition({
     name: "migrate",
+    args: { flags: ["--dry-run"], options: ["--to", "--spec"] },
     entrypoint: { modulePath: "../migrate.js", invocation: "main" },
     allowInvalidConfig: true,
     help: {
@@ -487,6 +484,11 @@ const definitions = [
 ];
 
 export const coreCommandRegistry = new CommandRegistry(definitions);
+// These exact core routes are inspection contracts. Plugin commands and
+// undeclared flags never acquire inspection storage merely from their spelling.
+for (const route of ["help", "docs review", "check config", "check freshness", "check scan", "metrics token", "metrics review", "hook list", "presets list", "plugin source list", "plugin list"]) {
+  coreCommandRegistry.find(route).readOnly = true;
+}
 export const coreCommandMetadataRegistry = coreCommandRegistry.metadataRegistry();
 
 function namespaceCommands(name) {

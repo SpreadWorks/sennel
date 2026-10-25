@@ -1,5 +1,7 @@
 import { withFlowProcessRuntime } from "./process-runtime-admission.js";
 import { captureFinalizationProcessAuthority } from "./finalization-process-authority.js";
+import { ProcessExecutionRuntime } from "../../lib/process-execution-runtime.js";
+import { AcceptanceReceiptReplay } from "./acceptance-receipt-replay.js";
 /**
  * src/flow/lib/run-finalize-cleanup.js
  *
@@ -28,6 +30,7 @@ import { Envelope } from "../../lib/flow-envelope.js";
 import { getPorcelainV2Status, runGit, GitRefObservation, GitRefProbeError } from "../../lib/git-helpers.js";
 import { FlowCommand } from "./base-command.js";
 import { StepAdmissionRefusal } from "./step-admission-refusal.js";
+import { FinalizeCleanupCompletionPublication } from "./finalize-cleanup-publication.js";
 import { StepPersistenceFailure, rethrowOriginalStepPersistenceFailure } from "./definition-lifecycle-failure.js";
 import {
   finalizationStepRegistration,
@@ -110,7 +113,7 @@ function canonicalFlowLocation(repositoryRoot, specRoot, specId) {
 }
 
 function gitValue(root, args, label) {
-  const result = runGit(["-C", root, ...args]);
+  const result = runGit(["-C", root, ...args], { cwd: root });
   if (!result.ok) {
     throw new Error(`${label} could not be resolved: ${result.stderr || result.stdout || "unknown git error"}`);
   }
@@ -141,7 +144,7 @@ function assertInitialFinalizeGitAuthority({ targetRoot, state, worktreePath = n
 }
 
 function assertObservableFinalizeGitStatus(root) {
-  try { getPorcelainV2Status(root); }
+  try { getPorcelainV2Status(root, { repositoryRoot: root }); }
   catch (error) {
     const refusal = new StepAdmissionRefusal(error.message, error);
     refusal.code = error.code;
@@ -199,12 +202,12 @@ class AutoRescueIssueLogAllowance {
 
     const exists = runGit([
       "-C", this.mainRepoPath, "ls-tree", "--name-only", "--full-tree", "HEAD", "--", this.relativePath,
-    ]);
+    ], { cwd: this.mainRepoPath });
     let committed;
     if (!exists.ok) return false;
     const committedPath = exists.stdout.trim();
     if (committedPath === this.relativePath) {
-      const show = runGit(["-C", this.mainRepoPath, "show", `HEAD:${this.relativePath}`]);
+      const show = runGit(["-C", this.mainRepoPath, "show", `HEAD:${this.relativePath}`], { cwd: this.mainRepoPath });
       if (!show.ok) return false;
       try {
         committed = new IssueLogDocument(JSON.parse(show.stdout));
@@ -308,7 +311,7 @@ class FinalizeFlowMetadataAllowance {
   }
 
   committedText(relativePath) {
-    const result = runGit(["-C", this.mainRepoPath, "show", `HEAD:${relativePath}`]);
+    const result = runGit(["-C", this.mainRepoPath, "show", `HEAD:${relativePath}`], { cwd: this.mainRepoPath });
     if (!result.ok) throw new Error(`Committed finalize metadata is unavailable: ${relativePath}`);
     return result.stdout;
   }
@@ -337,6 +340,7 @@ function listMainRepoDirtyFiles(
   let status;
   try {
     status = getPorcelainV2Status(mainRepoPath, {
+      repositoryRoot: mainRepoPath,
       forceFileMode: false,
       pathspecs: [".", ...new FlowRepositoryRuntimeArtifactRegistry().gitPathspecExcludes()],
     });
@@ -379,7 +383,7 @@ function listOtherDirtyFlowJsonPaths(mainRepoPath, specRoot, specId) {
     "--untracked-files=all",
     "--",
     `:(glob)${normalizedSpecRoot}/*/${version.pathSegment}/${stateArtifact}`,
-  ]);
+  ], { cwd: mainRepoPath });
   if (!res.ok) {
     throw new Error(res.stderr || res.stdout || "git status failed");
   }
@@ -936,7 +940,7 @@ function readOrphanCommits(repoPath, baseline, featureBranch) {
     "--reverse",
     "--pretty=format:%H%x09%s",
     `${baseline}..${featureBranch}`,
-  ]);
+  ], { cwd: repoPath });
   if (!res.ok) {
     return { ok: false, reason: res.stderr || res.stdout || "git log failed" };
   }
@@ -1723,6 +1727,9 @@ class FinalizeCleanupEffectAdmission {
     Object.freeze(this);
   }
   executionForBinding(binding) { return this.journalPreparation.executionForBinding(binding); }
+  get completionPublication() {
+    return this.journalPreparation instanceof FinalizeCleanupCompletionPublication ? this.journalPreparation : null;
+  }
   assertCurrent(ctx) {
     this.journalPreparation?.assertCurrent(ctx);
     if (this.worktreeBinding !== null) {
@@ -1766,6 +1773,12 @@ export class RunFinalizeCleanupCommand extends FlowCommand {
     }
     const resolution = FinalizeCleanupStateResolution.resolve(ctx);
     if (resolution instanceof Envelope) throw cleanupAdmissionRefusal(resolution);
+    const publication = FinalizeCleanupCompletionPublication.acquire(ctx);
+    if (publication !== null) {
+      return new FinalizeCleanupEffectAdmission({ journalPreparation: publication,
+        worktreeBinding: null, worktreePath: null, featureBranch: resolution.state.featureBranch,
+        authorizedDirtyRootFiles: [], force: ctx.force === true });
+    }
     assertObservableFinalizeGitStatus(resolution.stateOwner.mainRepoPath);
     let worktreeBinding = null;
     let authorizedDirtyRootFiles = [];
@@ -1857,6 +1870,8 @@ export class RunFinalizeCleanupCommand extends FlowCommand {
       flowState: resolution.state,
       finalizeCleanupStateResolution: resolution,
     });
+    const publication = ctx.finalizationEffectPreparation?.completionPublication ?? null;
+    if (publication !== null) return resumeCleanupCompletionPublication(ctx, publication);
     const { root, autoRescue, force } = ctx;
     const state = resolution.state;
     const { worktreePath, mainRepoPath } = resolution;
@@ -2000,7 +2015,7 @@ export class RunFinalizeCleanupCommand extends FlowCommand {
       mainRepoPath || root,
       "rev-parse",
       featureBranch,
-    ]);
+    ], { cwd: mainRepoPath || root });
     if (!currentRes.ok) {
       return Envelope.fail("run", "finalize-cleanup", "BRANCH_REF_RESOLUTION_FAILED", [
         `Failed to resolve ref for ${featureBranch}: ${currentRes.stderr || currentRes.stdout}`,
@@ -2020,7 +2035,7 @@ export class RunFinalizeCleanupCommand extends FlowCommand {
       "--is-ancestor",
       baseline,
       featureBranch,
-    ]);
+    ], { cwd: mainRepoPath || root });
     if (!ancestryRes.ok) {
       // Non-zero exit means baseline is NOT an ancestor of featureBranch
       // (history rewrite — rebase / amend / force-update).
@@ -2226,13 +2241,25 @@ export class RunFinalizeCleanupCommand extends FlowCommand {
   }
 }
 
+/** Resume only the authenticated publication after external cleanup already finished. */
+async function resumeCleanupCompletionPublication(ctx, publication) {
+  const preparation = publication.prepare(ctx, prepareFinalizationExecution);
+  const registration = flowStepExecutionRegistration("finalize-cleanup");
+  const selection = registration.executionContract.select({ ctx, stepId: "finalize-cleanup", preparation, registration });
+  const outcome = await consumeFinalizationExecution({ flowManager: ctx.flowManager, ctx,
+    stepId: "finalize-cleanup", preparation, selection, commandResult: preparation.commandResult });
+  publication.completeJournal(ctx);
+  return projectFinalizeCleanupCompletedReceipt({ stateOwner: FinalizeFlowStateOwner.forMainContext(ctx),
+    settlementReceipt: outcome.receipt });
+}
+
 /**
  * Stage (D) — the original transactional teardown.
  * Extracted into a function so route routing and the no-op orphan path can
  * fall through to the same authoritative cleanup transaction.
  */
 function resolveFeatureSha(root, featureBranch) {
-  const result = runGit(["-C", root, "rev-parse", `refs/heads/${featureBranch}`]);
+  const result = runGit(["-C", root, "rev-parse", `refs/heads/${featureBranch}`], { cwd: root });
   if (!result.ok || !GIT_OBJECT_ID.test(result.stdout.trim())) {
     throw new Error(`finalize feature branch could not be resolved: ${featureBranch}`);
   }
@@ -2278,9 +2305,6 @@ function projectFinalizeCleanupCompletedReceipt({ stateOwner, settlementReceipt 
     specRoot,
     stateOwner.specId,
   );
-  if (completedState.worktree) {
-    attachOtherFlowMetadataWarning(env, stateOwner.mainRepoPath, specRoot, completedState.specId);
-  }
   return env;
 }
 
@@ -2369,7 +2393,7 @@ async function runSharedSpecTeardown(ctx, { worktreePath, mainRepoPath, reportRo
 
   if (!journal.atLeast("worktree-removed")) {
     if (state.worktree && worktreePath && pathExistsStrict(worktreePath)) {
-      const worktreeHead = runGit(["-C", worktreePath, "rev-parse", "HEAD"]);
+      const worktreeHead = runGit(["-C", worktreePath, "rev-parse", "HEAD"], { cwd: worktreePath });
       if (!worktreeHead.ok || worktreeHead.stdout.trim() !== journal.value.featureSha) {
         return Envelope.fail(
           "run",
@@ -2513,6 +2537,10 @@ async function runSharedSpecTeardown(ctx, { worktreePath, mainRepoPath, reportRo
     if (syncWarning) commandResult.addWarning("FINALIZE_SYNC_FAILED",
       `Documentation sync did not complete: ${syncWarning.message}. Run 'sennel flow run sync' after inspecting the recorded diagnostics.`);
     if (authorization !== null) attachForcedFinalizeContext(commandResult, authorization);
+    // This Git-backed diagnostic belongs to the completed external effects.
+    // Completion projection and publication replay must start no new child.
+    if (state.worktree) attachOtherFlowMetadataWarning(commandResult, gitRoot,
+      requiredSpecLocation(state).relativeRoot, specId);
     const completionContext = stateOwner.bindContext({
       ...ctx,
       flowState: stateOwner.loadReadOnly(),
@@ -2546,36 +2574,58 @@ async function runPersistedTeardownIfPresent(ctx, options) {
   return fs.existsSync(journalPath) ? runSharedSpecTeardown(ctx, options) : null;
 }
 
-export function commitFinalizeCleanupPostCommandMetadata({ flowManager, specId, writtenPaths = [] } = {}) {
+export async function commitFinalizeCleanupPostCommandMetadata({ flowManager, specId, writtenPaths = [] } = {}) {
   if (!flowManager) throw new Error("flowManager is required");
   if (!Array.isArray(writtenPaths)) throw new Error("writtenPaths must be an array");
   const specLocation = flowManager.specLocation(specId);
   const repositoryFlowManager = flowManager.forRoot(specLocation.repositoryRoot, { specId });
   const state = repositoryFlowManager.loadReadOnly(specId);
   if (!state) throw new Error(`flow state not found: ${specId}`);
+  const completion = repositoryFlowManager.readCurrentStepSettlement({
+    specId, stepId: "finalize-cleanup", completed: true,
+  });
+  if (state.lifecycle !== "finalized" || completion?.settlement.kind !== "completion") {
+    throw new Error("Finalize completion commit requires its canonical Cleanup Completion");
+  }
+  const replay = new AcceptanceReceiptReplay({ flowManager: repositoryFlowManager,
+    specId, stepId: "finalize-cleanup", receipt: completion.receipt });
   const root = specLocation.repositoryRoot;
   const identity = finalizationOutboxIdentity(state, "finalize-cleanup");
   const additionalPaths = writtenPaths.map((filePath) => path
     .relative(root, filePath)
     .split(path.sep)
     .join("/"));
-  const operation = new RepositoryFlowOperationLock({ mainRoot: root });
-  const operationOwnerToken = operation.acquire();
-  try {
-    const result = commitFinalizeCompletion({
-      root,
-      repositoryRoot: specLocation.repositoryRoot,
-      specRoot: specLocation.relativeRoot,
-      specId,
-      runId: state.runId,
-      idempotencyKey: identity.idempotencyKey,
-      additionalPaths,
-    });
-    repositoryFlowManager.removeActiveFlow(specId, { operationOwnerToken });
-    return result;
-  } finally {
-    operation.release();
-  }
+  const commit = () => {
+    const operation = new RepositoryFlowOperationLock({ mainRoot: root });
+    const operationOwnerToken = operation.acquire();
+    try {
+      replay.assertCurrent();
+      const current = repositoryFlowManager.loadReadOnly(specId);
+      if (current.lifecycle !== "finalized" || current.runId !== state.runId
+        || current.specId !== state.specId || current.flowVersionId !== state.flowVersionId) {
+        throw new StepAdmissionRefusal("Finalize completion commit source changed before repository maintenance");
+      }
+      const result = commitFinalizeCompletion({
+        root,
+        repositoryRoot: specLocation.repositoryRoot,
+        specRoot: specLocation.relativeRoot,
+        specId,
+        runId: state.runId,
+        idempotencyKey: identity.idempotencyKey,
+        additionalPaths,
+      });
+      repositoryFlowManager.removeActiveFlow(specId, { operationOwnerToken });
+      return result;
+    } finally {
+      operation.release();
+    }
+  };
+  // Repository maintenance follows the authenticated Completion. It owns no
+  // Flow binding or canonical process events; the selected Flow stays fenced.
+  const runtime = ProcessExecutionRuntime.current();
+  return runtime === null ? commit() : runtime.withBinding(null, commit, {
+    callAdmission: null, eventWriter: null,
+  });
 }
 
 /** Validate that teardown removed only the selected managed worktree state. */

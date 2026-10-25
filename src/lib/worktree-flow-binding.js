@@ -1,3 +1,4 @@
+import { RepositoryLockAuthority } from "./repository-control-lock.js";
 import { captureRegularFile } from "./regular-file-snapshot.js";
 import { removeRegularFile } from "./regular-file-io.js";
 import crypto from "node:crypto";
@@ -469,7 +470,7 @@ class WorktreeFlowBindingPublisher {
 }
 
 export class WorktreeFlowBindingStore {
-  constructor({ worktreePath, faultInjector = () => {}, processIdentitySource } = {}) {
+  constructor({ worktreePath, faultInjector = () => {} } = {}) {
     this.worktreePath = canonicalDirectory(worktreePath);
     this.path = path.join(this.worktreePath, WORKTREE_FLOW_BINDING_FILE);
     this.publicationReceiptPath = path.join(
@@ -495,11 +496,12 @@ export class WorktreeFlowBindingStore {
       this.publicationJournal,
     );
     this.lock = new FileLock({
-      directoryAuthority: this.directoryAuthority,
-      fileName: BINDING_LOCK_FILE,
+      location: new RepositoryLockAuthority(this.worktreePath, { rootAuthority }).location({
+        namespace: "worktree-flow-binding", identity: this.path, fileName: BINDING_LOCK_FILE,
+        legacyPaths: [path.join(path.dirname(this.path), BINDING_LOCK_FILE)],
+      }),
       kind: "worktree-flow-binding",
       authority: { worktreePath: this.worktreePath, bindingPath: this.path },
-      ...(processIdentitySource && { processIdentitySource }),
     });
   }
 
@@ -517,7 +519,7 @@ export class WorktreeFlowBindingStore {
     return this.lock.runExclusive(() => {
       this.publicationJournal.recoverIntent(() => this.#readPublicationReceipt());
       this.#recoverInitialPublication();
-      return body(this.lock.processIdentity.ownerToken);
+      return body(this.lock.ownerToken);
     });
   }
 
@@ -587,7 +589,7 @@ export class WorktreeFlowBindingStore {
   }
 
   #assertOwner(ownerToken, operation) {
-    if (ownerToken !== this.lock.processIdentity?.ownerToken) {
+    if (ownerToken !== this.lock.ownerToken) {
       throw new Error(`worktree flow binding ${operation} requires transaction ownership`);
     }
   }

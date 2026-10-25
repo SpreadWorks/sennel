@@ -1,3 +1,4 @@
+import { GitOwnedStagePolicy } from "../../lib/git-repository-environment.js";
 /**
  * src/flow/lib/run-finalize.js
  *
@@ -13,9 +14,11 @@ import { TemporaryPaths } from "../../lib/temporary-paths.js";
 import { AtomicFile } from "../../lib/atomic-file.js";
 import { RealDirectoryAuthority } from "../../lib/real-directory-authority.js";
 import { runManagedCmdAsync, assertOk } from "../../lib/process.js";
+import { NodeScriptInvocation } from "../../lib/command-invocation.js";
 import { findStepById } from "./step-tree.js";
 import {
   runGit,
+  GitCommitPathSet,
   countCommitsBetween,
   listUncommittedFiles,
 } from "../../lib/git-helpers.js";
@@ -32,9 +35,9 @@ import { FINALIZE_DOCUMENTATION_PATHS, FINALIZE_PRE_MERGE_DEFERRED_PATHS } from 
 const GIT_OBJECT_ID = /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/;
 
 function isCommittablePath(root, relativePath) {
-  const tracked = runGit(["-C", root, "ls-files", "--", relativePath]);
+  const tracked = runGit(["-C", root, "ls-files", "--", relativePath], { cwd: root });
   if (tracked.ok && tracked.stdout.trim() !== "") return true;
-  const ignored = runGit(["-C", root, "check-ignore", "-q", "--", relativePath]);
+  const ignored = runGit(["-C", root, "check-ignore", "-q", "--", relativePath], { cwd: root });
   return !ignored.ok && fs.existsSync(path.join(root, relativePath));
 }
 
@@ -105,7 +108,7 @@ export function findOutboxCommit({ root, ref, idempotencyKey }) {
   const result = runGit([
     "-C", root,
     "log", "-1", "--format=%H%x00%B", "--fixed-strings", `--grep=${marker}`, ref,
-  ]);
+  ], { cwd: root });
   if (!result.ok || !result.stdout.includes(marker)) return null;
   const commit = result.stdout.split("\0", 1)[0].trim();
   return GIT_OBJECT_ID.test(commit) ? commit : null;
@@ -325,17 +328,17 @@ class FinalizeCompletionCommit {
     // Catalog retention is the finalize boundary.  Never stage `.runtime`,
     // transaction files, or a parent Spec directory merely because it happens
     // to contain them.
-    this.commitPaths = [...new Set([
-      ...durableFlowPaths,
-      this.location.relativeCatalogFile,
-      ...FINALIZE_DOCUMENTATION_PATHS,
-    ])];
+    this.commitFilePaths = [...new Set([...durableFlowPaths, this.location.relativeCatalogFile])];
+    this.documentationPaths = FINALIZE_DOCUMENTATION_PATHS.filter((entry) => !this.commitFilePaths.includes(entry));
+    this.commitPaths = [...this.commitFilePaths, ...this.documentationPaths];
     this.idempotencyKey = idempotencyKey;
     this.marker = outboxCommitMarker(idempotencyKey);
   }
 
   execute() {
-    this.commitPaths = this.commitPaths.filter((commitPath) => isCommittablePath(this.root, commitPath));
+    this.commitFilePaths = GitCommitPathSet.committableFiles({ root: this.root, candidates: this.commitFilePaths }).toArray();
+    this.documentationPaths = this.documentationPaths.filter((entry) => isCommittablePath(this.root, entry));
+    this.commitPaths = [...this.commitFilePaths, ...this.documentationPaths];
     if (this.commitPaths.length === 0) {
       return { status: "skipped", reason: "ignored-flow-artifacts" };
     }
@@ -352,24 +355,24 @@ class FinalizeCompletionCommit {
     const parent = this.#gitValue(["rev-parse", "HEAD"], "finalize completion parent");
     const temporaryDirectory = this.temporaryPaths.create(this.temporaryDirectory, PRODUCT.temporaryPrefix("finalize-index"));
     const temporaryIndex = path.join(temporaryDirectory, "index");
-    const env = { ...process.env, GIT_INDEX_FILE: temporaryIndex };
+    const gitPolicy = new GitOwnedStagePolicy({ repositoryRoot: this.root, indexFile: temporaryIndex });
     let primaryError = null;
     let result = null;
     try {
       assertOk(
-        runGit(["-C", this.root, "read-tree", parent], { env }),
+        runGit(["-C", this.root, "read-tree", parent], { cwd: this.root, gitPolicy }),
         "failed to initialize finalize completion index",
       );
-      for (const commitPath of this.commitPaths) {
+      for (const batch of new GitCommitPathSet(this.commitPaths).commandBatches({ root: this.root, args: ["add"] })) {
         assertOk(
-          runGit(["-C", this.root, "add", "--", commitPath], { env }),
-          `failed to stage completed finalize path: ${commitPath}`,
+          runGit(["-C", this.root, "add", "--", ...batch.literalArguments], { cwd: this.root, gitPolicy }),
+          "failed to stage completed finalize paths",
         );
       }
       result = runGit([
         "-C", this.root,
         "commit", "-m", "chore: complete finalize cleanup", "-m", this.marker,
-      ], { env });
+      ], { cwd: this.root, gitPolicy });
       if (!result.ok) {
         const durable = findOutboxCommit({
           root: this.root,
@@ -410,22 +413,55 @@ class FinalizeCompletionCommit {
 
   #reconcileCallerIndex(commit) {
     const parent = this.#gitValue(["rev-parse", `${commit}^`], "finalize completion commit parent");
-    for (const commitPath of this.commitPaths) {
-      const callerMatchesParent = runGit([
-        "-C", this.root, "diff", "--cached", "--quiet", parent, "--", commitPath,
-      ]);
-      if (!callerMatchesParent.ok) continue;
-      const callerMatchesCommit = runGit([
-        "-C", this.root, "diff", "--cached", "--quiet", commit, "--", commitPath,
-      ]);
-      if (callerMatchesCommit.ok) continue;
-      const result = runGit(["-C", this.root, "reset", "--quiet", commit, "--", commitPath]);
-      assertOk(result, `failed to reconcile finalize completion index entry: ${commitPath}`);
+    for (const batch of new GitCommitPathSet(this.commitFilePaths).commandBatches({
+      root: this.root, args: ["diff", "--cached", "--no-renames", "--name-only", "-z", parent],
+    })) this.#reconcileCallerFileBatch(commit, parent, batch);
+    // These are directory-capable predicates. Keep their original quiet checks
+    // after all exact-file reconciliation, including documentation overlaps.
+    for (const commitPath of this.documentationPaths) this.#reconcileCallerPath(commit, parent, commitPath);
+  }
+
+  #reconcileCallerPath(commit, parent, commitPath, { literal = false } = {}) {
+    const argument = literal ? `:(literal)${commitPath}` : commitPath;
+    const callerMatchesParent = runGit([
+      "-C", this.root, "diff", "--cached", "--quiet", parent, "--", argument,
+    ], { cwd: this.root });
+    if (!callerMatchesParent.ok) return;
+    const callerMatchesCommit = runGit([
+      "-C", this.root, "diff", "--cached", "--quiet", commit, "--", argument,
+    ], { cwd: this.root });
+    if (callerMatchesCommit.ok) return;
+    const result = runGit(["-C", this.root, "reset", "--quiet", commit, "--", argument], { cwd: this.root });
+    assertOk(result, `failed to reconcile finalize completion index entry: ${commitPath}`);
+  }
+
+  #reconcileCallerFileBatch(commit, parent, batch) {
+    const changed = (tree) => runGit([
+      "-C", this.root, "diff", "--cached", "--no-renames", "--name-only", "-z", tree,
+      "--", ...batch.literalArguments,
+    ], { cwd: this.root });
+    const fromParent = changed(parent);
+    if (!fromParent.ok) {
+      for (const entry of batch.paths) this.#reconcileCallerPath(commit, parent, entry, { literal: true });
+      return;
     }
+    const parentChanges = new Set(fromParent.stdout.split("\0").filter(Boolean));
+    const eligible = batch.paths.filter((entry) => !parentChanges.has(entry));
+    if (eligible.length === 0) return;
+    const fromCommit = changed(commit);
+    if (!fromCommit.ok) {
+      for (const entry of batch.paths) this.#reconcileCallerPath(commit, parent, entry, { literal: true });
+      return;
+    }
+    const commitChanges = new Set(fromCommit.stdout.split("\0").filter(Boolean));
+    const reset = new GitCommitPathSet(eligible.filter((entry) => commitChanges.has(entry)));
+    if (reset.size === 0) return;
+    assertOk(runGit(["-C", this.root, "reset", "--quiet", commit, "--", ...reset.literalArguments], { cwd: this.root }),
+      "failed to reconcile finalize completion index entries");
   }
 
   #gitValue(args, label) {
-    const result = runGit(["-C", this.root, ...args]);
+    const result = runGit(["-C", this.root, ...args], { cwd: this.root });
     assertOk(result, `${label} could not be resolved`);
     return result.stdout.trim();
   }
@@ -436,7 +472,7 @@ export function commitFinalizeCompletion({ root, repositoryRoot = root, specRoot
 }
 
 export function resolveGitCommonDir(root) {
-  const res = runGit(["-C", root, "rev-parse", "--git-common-dir"]);
+  const res = runGit(["-C", root, "rev-parse", "--git-common-dir"], { cwd: root });
   assertOk(res, "finalize preflight failed: unable to resolve git common dir");
   return path.resolve(root, res.stdout.trim());
 }
@@ -516,6 +552,6 @@ export async function runMigrationHook(root, specRelPath, executionRoot = root) 
   const specDir = path.dirname(specRelPath);
   const scriptPath = path.join(root, specDir, "scripts", "finalize-migration.js");
   if (!fs.existsSync(scriptPath)) return;
-  const res = await runManagedCmdAsync("node", [scriptPath], { cwd: executionRoot });
+  const res = await runManagedCmdAsync(new NodeScriptInvocation({ script: scriptPath, args: [], cwd: executionRoot }));
   assertOk(res, `finalize migration script failed: ${scriptPath}`);
 }

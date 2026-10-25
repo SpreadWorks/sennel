@@ -79,7 +79,7 @@
     "gh": "enable"
   },
   "test": {
-    "command": "node tests/run.js",
+    "command": { "kind": "node-script", "script": "tests/run.js", "args": [] },
     "projectPaths": [
       "tests/unit/"
     ],

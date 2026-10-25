@@ -4,7 +4,6 @@ import path from "node:path";
 import { afterEach, describe, it } from "node:test";
 
 import { FileLock, FileLockTimeoutError, FileLockWaitPolicy } from "../../../src/lib/file-lock.js";
-import { ProcessIdentitySource } from "../../../src/lib/process-identity.js";
 import { RealDirectoryAuthority } from "../../../src/lib/real-directory-authority.js";
 import { createTmpDir, removeTmpDir } from "../../support/builders/tmp-dir.js";
 import { ExternalProcessLockOwner } from "../../support/infrastructure/external-lock-owner.js";
@@ -18,13 +17,12 @@ function root(name) {
   return value;
 }
 
-function lockAt(directory, { processIdentitySource, waitPolicy = new FileLockWaitPolicy({ timeoutMs: 25, intervalMs: 1 }) } = {}) {
+function lockAt(directory, { waitPolicy = new FileLockWaitPolicy({ timeoutMs: 25, intervalMs: 1 }) } = {}) {
   return new FileLock({
     directoryAuthority: new RealDirectoryAuthority(directory),
     fileName: ".file-lock.test.lock",
     kind: "file-lock-test",
     authority: { root: fs.realpathSync(directory) },
-    ...(processIdentitySource && { processIdentitySource }),
     waitPolicy,
   });
 }
@@ -38,12 +36,6 @@ function externalHolder(directory) {
   });
   holders.push(holder);
   return holder;
-}
-
-function identitySource(bootIdentity) {
-  return new ProcessIdentitySource({
-    platform: "linux", pid: process.pid, readBootIdentity: () => bootIdentity, readProcessStartFingerprint: () => "441",
-  });
 }
 
 async function assertScheduledWaitDelays(method, lock) {
@@ -67,7 +59,7 @@ async function assertScheduledWaitDelays(method, lock) {
   };
   try {
     const assertTimeout = (error) => error instanceof FileLockTimeoutError
-      && error.waitedMs === 10 && error.cause.cause.lockStatus === "live";
+      && error.waitedMs === 10 && error.cause.cause.lockStatus === "busy";
     if (method === "sync") assert.throws(() => lock.acquire(), assertTimeout);
     else await assert.rejects(lock.acquireAsync(), assertTimeout);
   } finally {
@@ -119,7 +111,7 @@ describe("FileLock", () => {
     for (const directory of roots.splice(0)) removeTmpDir(directory);
   });
 
-  it("times out without changing a live external owner in sync and async acquisition", async () => {
+  it("times out without changing a published external owner in sync and async acquisition", async () => {
     for (const method of ["sync", "async"]) {
       const directory = root(`file-lock-timeout-${method}-`);
       const holder = externalHolder(directory);
@@ -144,7 +136,7 @@ describe("FileLock", () => {
         assert.equal(error.retryable, true);
         assert.equal(error.waitedMs >= waitPolicy.timeoutMs, true);
         assert.equal(error.cause.lockStatus, "timeout");
-        assert.equal(error.cause.cause.lockStatus, "live");
+        assert.equal(error.cause.cause.lockStatus, "busy");
         return true;
       };
       if (method === "sync") assert.throws(() => waiter.acquire(), assertion);
@@ -180,16 +172,112 @@ describe("FileLock", () => {
     );
   });
 
+  it("waits through a normal exclusive publication without accepting linked owner bytes", async () => {
+    const directory = root("file-lock-stage-publication-");
+    const publisher = lockAt(directory);
+    const contender = lockAt(directory, { waitPolicy: new FileLockWaitPolicy({ timeoutMs: 1000, intervalMs: 1 }) });
+    const link = fs.linkSync;
+    let acquisition = null;
+    let pending = null;
+    let linkedToken = null;
+    fs.linkSync = (source, target) => {
+      const result = link(source, target);
+      if (target === publisher.lockPath && acquisition === null) {
+        assert.equal(fs.lstatSync(target).nlink, 2);
+        try { contender.inspect(); } catch (error) { pending = error; }
+        linkedToken = contender.ownerToken;
+        acquisition = contender.acquireAsync();
+      }
+      return result;
+    };
+    let publisherToken;
+    try { publisherToken = publisher.acquire(); } finally { fs.linkSync = link; }
+    try {
+      assert.equal(pending.name, "ProcessLockPublicationPendingError");
+      assert.equal(pending.lockStatus, "publication-pending");
+      assert.equal(pending.owner, null);
+      assert.equal(linkedToken, null);
+      assert.equal(publisher.inspect().owner.ownerToken, publisherToken);
+      assert.equal(fs.lstatSync(publisher.lockPath).nlink, 1);
+    } finally { publisher.release(); }
+    const token = await acquisition;
+    try {
+      assert.equal(typeof token, "string");
+      assert.notEqual(token, publisherToken);
+      assert.equal(contender.inspect().owner.ownerToken, token);
+    } finally { contender.release(); }
+    assert.deepEqual(fs.readdirSync(directory), []);
+  });
+
+  it("preserves persistent foreign hard links through sync and async finite waits", async () => {
+    for (const method of ["sync", "async"]) {
+      const directory = root(`file-lock-persistent-link-${method}-`);
+      const owner = lockAt(directory);
+      owner.acquire();
+      const alias = path.join(directory, "foreign-owner-link");
+      fs.linkSync(owner.lockPath, alias);
+      const before = snapshot(owner);
+      const waiter = lockAt(directory, { waitPolicy: new FileLockWaitPolicy({ timeoutMs: 10, intervalMs: 1 }) });
+      const check = (error) => {
+        assert.ok(error instanceof FileLockTimeoutError);
+        assert.equal(error.cause.cause.name, "ProcessLockPublicationPendingError");
+        assert.equal(error.cause.cause.owner, null);
+        assert.equal(error.owner, null);
+        assert.equal(error.waitedMs >= 10, true);
+        return true;
+      };
+      try {
+        if (method === "sync") assert.throws(() => waiter.acquire(), check);
+        else await assert.rejects(waiter.acquireAsync(), check);
+        assert.equal(waiter.ownerToken, null);
+        assertUnchanged(owner, before);
+        assert.deepEqual(fs.readFileSync(alias), before.bytes);
+        assert.equal(fs.lstatSync(alias).nlink, 2);
+        assert.throws(() => owner.release(), (error) => error.name === "ProcessLockPublicationPendingError");
+        assertUnchanged(owner, before);
+      } finally {
+        // Only this test-created alias is removed, after preservation is proved.
+        fs.unlinkSync(alias);
+        owner.release();
+      }
+    }
+  });
+
+  it("immediately refuses more than two links without reading or adopting an owner", async () => {
+    for (const method of ["sync", "async"]) {
+      const directory = root(`file-lock-extra-links-${method}-`);
+      const owner = lockAt(directory);
+      owner.acquire();
+      const aliases = [path.join(directory, "foreign-one"), path.join(directory, "foreign-two")];
+      for (const alias of aliases) fs.linkSync(owner.lockPath, alias);
+      const before = snapshot(owner);
+      const waiter = lockAt(directory);
+      const check = (error) => {
+        assert.equal(error.lockStatus, "corrupt");
+        assert.equal(error.owner, null);
+        assert.equal(error.waitedMs, undefined);
+        return true;
+      };
+      try {
+        if (method === "sync") assert.throws(() => waiter.acquire(), check);
+        else await assert.rejects(waiter.acquireAsync(), check);
+        assert.equal(waiter.ownerToken, null);
+        assertUnchanged(owner, before);
+        assert.equal(fs.lstatSync(owner.lockPath).nlink, 3);
+        for (const alias of aliases) assert.deepEqual(fs.readFileSync(alias), before.bytes);
+      } finally {
+        for (const alias of aliases) fs.unlinkSync(alias);
+        owner.release();
+      }
+    }
+  });
+
   it("fails closed for unknown and corrupt locks in sync and async acquisition", async () => {
     for (const method of ["sync", "async"]) {
       const unknownDirectory = root(`file-lock-unknown-${method}-`);
-      const holder = lockAt(unknownDirectory);
-      holder.acquire();
-      const unknown = lockAt(unknownDirectory, { processIdentitySource: new ProcessIdentitySource({
-        platform: "linux", pid: process.pid, readBootIdentity: () => { throw new Error("boot identity unavailable"); }, readProcessStartFingerprint: () => "441",
-      }) });
+      const unknown = lockAt(unknownDirectory);
+      fs.writeFileSync(unknown.lockPath, JSON.stringify({ version: 1, processIdentity: { pid: process.pid } }));
       await assertRejectedWithoutMutation(unknown, method, "unknown");
-      holder.release();
 
       const corruptDirectory = root(`file-lock-corrupt-${method}-`);
       const corrupt = lockAt(corruptDirectory);
@@ -226,7 +314,7 @@ describe("FileLock", () => {
     holder.release();
   });
 
-  it("rejects same-instance and distinct-instance same-birth reentrancy", async () => {
+  it("rejects same-instance and distinct-instance same-session reentrancy", async () => {
     for (const relation of ["same-instance", "different-instance"]) {
       for (const method of ["sync", "async"]) {
         const directory = root(`file-lock-${relation}-${method}-`);
@@ -238,40 +326,18 @@ describe("FileLock", () => {
     }
   });
 
-  it("reclaims a proven stale owner without consuming the waiting policy", () => {
-    const directory = root("file-lock-stale-");
-    const stale = lockAt(directory, { processIdentitySource: identitySource("stale"), waitPolicy: new FileLockWaitPolicy({ timeoutMs: 0, intervalMs: 1 }) });
-    stale.acquire();
-    const current = lockAt(directory, { processIdentitySource: identitySource("current"), waitPolicy: new FileLockWaitPolicy({ timeoutMs: 0, intervalMs: 1 }) });
-    assert.equal(typeof current.acquire(), "string");
-    current.release();
-  });
-
-  it("does not retry a publication transition failure or discard its diagnostics", () => {
-    const directory = root("file-lock-transition-");
-    const lock = lockAt(directory);
-    const originalOpen = fs.openSync;
-    const originalLink = fs.linkSync;
-    const originalLstat = fs.lstatSync;
-    let ownerTempOpens = 0;
-    let visible = null;
-    let failed = false;
-    fs.openSync = (target, ...args) => {
-      if (String(target).endsWith(".owner.tmp") && String(args[0]).startsWith("wx")) ownerTempOpens += 1;
-      return originalOpen(target, ...args);
-    };
-    fs.linkSync = (source, target) => { const result = originalLink(source, target); visible = target; return result; };
-    fs.lstatSync = (target, ...args) => {
-      if (target === visible && !failed) { failed = true; throw new Error("publication readback failed"); }
-      return originalLstat(target, ...args);
-    };
-    try {
-      assert.throws(() => lock.acquire(), (error) => error.name === "ProcessLockTransitionError"
-        && error.phase === "before-owner-readback" && error.lockStatus === "publication-unconfirmed"
-        && error.publishedToVisibleName === true && error.publicationUnknown === true
-        && typeof error.owner?.processIdentity?.ownerToken === "string" && error.cause instanceof AggregateError);
-      assert.equal(ownerTempOpens, 1);
-    } finally { fs.openSync = originalOpen; fs.linkSync = originalLink; fs.lstatSync = originalLstat; }
+  it("retains a complete foreign-session record and exhausts the finite wait", () => {
+    const directory = root("file-lock-retained-owner-");
+    const owner = lockAt(directory);
+    owner.acquire();
+    const record = JSON.parse(fs.readFileSync(owner.lockPath, "utf8"));
+    owner.release();
+    record.ownerSession = "11111111-1111-4111-8111-111111111111";
+    fs.writeFileSync(owner.lockPath, JSON.stringify(record));
+    const current = lockAt(directory, { waitPolicy: new FileLockWaitPolicy({ timeoutMs: 0, intervalMs: 1 }) });
+    const before = snapshot(current);
+    assert.throws(() => current.acquire(), (error) => error instanceof FileLockTimeoutError);
+    assertUnchanged(current, before);
   });
 
   it("aggregates a failing body before a failing release", () => {

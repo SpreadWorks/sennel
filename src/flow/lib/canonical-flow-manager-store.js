@@ -16,6 +16,7 @@ import { executionContractArtifact, ExecutionContractPublicationAdmission,
   PromptExecutionProgressPublication, LegacyArtifactPromptConsumptionPublication,
   CanonicalPromptReservationReconciliationPublication, readStoredPromptExecutionEpisodeFromView } from "./canonical-prompt-execution.js";
 import { canonicalStepSettlementPublicationIdentity, canonicalArtifactWriteIdentity, commandResultPayload } from "./canonical-step-settlement-publication.js";
+import { FinalizeCleanupCompletionPublication } from "./finalize-cleanup-publication.js";
 import { SpecGateRepairRecoveryPreview, SpecGateRepairRecoveryInput } from "../engine/composition/spec-gate-repair-recovery.js";
 import { SpecGateRepairRecoveryEvidence } from "./spec-gate-repair-recovery.js";
 import { FinalizationSettlementReceiptEvidence } from "./finalization-execution-identity.js";
@@ -2554,6 +2555,7 @@ class InterruptedFinalizeSyncPublication {
 
 class CanonicalCommandPublication {
   #finalization = null;
+  #completionPublication = null;
   #acceptance = false;
   #acceptanceExecutionRoot;
   #acceptanceArtifactRoot;
@@ -2600,8 +2602,11 @@ class CanonicalCommandPublication {
       id: selectedActivityId, binding: settlementAttempt === null ? binding : { ...binding, attempt: settlementAttempt }, confirmationOrder: view.state.confirmationOrder + 1 })]);
     this.#runtime = runtime;
   }
-  static finalization(token, candidate, evidence, commandResult, interruptedSync = null) {
+  static finalization(token, candidate, evidence, commandResult, interruptedSync = null, completionPublication = null) {
     if (token !== COMMAND_PUBLICATION_TOKEN) throw new TypeError("Finalization publication belongs to its Store");
+    if (completionPublication !== null && !(completionPublication instanceof FinalizeCleanupCompletionPublication)) {
+      throw new TypeError("Finalization completion requires its typed completed-effect publication");
+    }
     candidate.interruptedSync = interruptedSync;
     candidate.#finalization = new FinalizationSettlementReceiptEvidence({ evidence, commandResult }).assertBinding(candidate.binding);
     const reportReceipt = evidence.execution.publication;
@@ -2614,7 +2619,22 @@ class CanonicalCommandPublication {
     const claimed = candidate.activities.findLast((entry) => entry.transition?.outbox?.id === candidate.outbox?.id)?.transition.outbox;
     candidate.outboxAttempt = claimed?.attempt ?? null;
     candidate.outboxRecoveryReceipt = claimed?.exactRecoveryReceipt ?? null;
+    if (completionPublication !== null) this.completion(COMMAND_PUBLICATION_TOKEN, candidate, completionPublication);
     return Object.freeze(candidate);
+  }
+  static completion(token, candidate, completionPublication) {
+    if (token !== COMMAND_PUBLICATION_TOKEN || candidate.#finalization === null
+      || !(completionPublication instanceof FinalizeCleanupCompletionPublication)) {
+      throw new TypeError("Cleanup completion publication belongs to its Store");
+    }
+    completionPublication.assertPublication(completionPublication.stepResult, { finalization: {
+      ...candidate.#finalization.toJSON(), candidate: candidate.toJSON() } });
+    candidate.#completionPublication = completionPublication;
+    // Preserve the selected receipt identity across checkpoint publication,
+    // process acknowledgements, reload and uncertain-response recovery.
+    candidate.#baselineRevision = completionPublication.publication.revision;
+    candidate.#baselineCatalog = completionPublication.publication.catalogFingerprint;
+    return candidate;
   }
   static acceptance(token, candidate, commandResult, flowManager) {
     if (token !== COMMAND_PUBLICATION_TOKEN) throw new TypeError("Acceptance publication belongs to its Store");
@@ -2707,7 +2727,8 @@ class CanonicalCommandPublication {
     return read === null ? null : { ...read, bytes: Buffer.from(read.bytes) };
   }
   assert(view) {
-    if (view.revision !== this.#baselineRevision || view.catalog.hash !== this.#baselineCatalog
+    if (this.#completionPublication !== null) this.#completionPublication.assertView(view);
+    if ((this.#completionPublication === null && (view.revision !== this.#baselineRevision || view.catalog.hash !== this.#baselineCatalog))
       || !(this.binding.attempt.matches(view.state) || this.settlementAttempt !== null && this.binding.attempt.matchesFailed(view.state))) {
       throw new CurrentFlowStateConflictError("implementation command publication changed before settlement");
     }
@@ -2827,7 +2848,7 @@ class CanonicalCommandPublication {
     return true;
   }
   toJSON() {
-    return { selectedActivityId: this.selectedActivityId, revision: this.revision,
+    return { selectedActivityId: this.selectedActivityId, revision: this.#baselineRevision,
       ...(this.settlementAttempt === null ? {} : { settlementAttempt: this.settlementAttempt.toJSON?.() ?? this.settlementAttempt }),
       ...(this.#finalization === null ? {} : { outbox: this.outbox === null ? null : { ...this.outbox.toJSON(), attempt: this.outboxAttempt,
         exactRecoveryReceipt: this.outboxRecoveryReceipt?.toJSON() ?? null },
@@ -7913,11 +7934,12 @@ export class CanonicalFlowManagerStore {
 
   /** Acquire command publication and authority together before the save-only Service. */
   prepareFinalizationCommandPublication({ binding, evidence, commandResult = null, sourceCatalogHash = null,
-    selectedActivityId = activityId("finalization-step-settled") } = {}) {
+    selectedActivityId = activityId("finalization-step-settled"), completionPublication = null } = {}) {
     if (!hasFinalizationStepContract(binding?.stepId)) throw new CurrentFlowStateInvariantError("Finalization publication requires its source binding");
     const resolved = this.#resolveSpecId(binding.specId);
     binding.assertCurrent();
     return this.runtime.readCanonicalTransitionView(resolved, (view) => {
+      completionPublication?.assertView(view);
       if (sourceCatalogHash !== null && sourceCatalogHash !== view.catalog.hash) {
         throw new StepAdmissionRefusal("Finalization source catalog changed before publication acquisition");
       }
@@ -7929,7 +7951,7 @@ export class CanonicalFlowManagerStore {
       return CanonicalCommandPublication.finalization(COMMAND_PUBLICATION_TOKEN,
         new CanonicalCommandPublication(COMMAND_PUBLICATION_TOKEN, { binding, view, selectedActivityId,
           artifactWrites, descriptors: stepResultPublicationDescriptors(artifactWrites, selectedActivityId),
-          runtime: new Map(), commandResult }), evidence, commandResult, interruptedSync);
+          runtime: new Map(), commandResult }), evidence, commandResult, interruptedSync, completionPublication);
     });
   }
 
@@ -7967,6 +7989,10 @@ export class CanonicalFlowManagerStore {
       || evidence.execution.mainAuthority?.mainRoot !== this.mainRoot
       || evidence.execution.mainAuthority?.authorityRoot !== this.root)) {
       throw new CurrentFlowStateConflictError("Final cleanup completion requires the acquired main repository authority");
+    }
+    if (settlement.kind === "completion") {
+      const completionPublication = FinalizeCleanupCompletionPublication.ensure({ versionStore: this.runtime.store(resolved), stepResult, receipt, candidate });
+      CanonicalCommandPublication.completion(COMMAND_PUBLICATION_TOKEN, candidate, completionPublication);
     }
     const warningFailure = stepResult.kind === "finalize-sync-skipped-with-warning" ? commandResult?.failure ?? null : null;
     const failed = stepResult.type === "error" ? stepResult.error : warningFailure;
@@ -10016,6 +10042,8 @@ export class CanonicalFlowManagerStore {
     }, options);
   }
 
+  recordProcessEvent(event) { return this.runtime.recordProcessEvent(event); }
+
   addNote(text, opts = {}) {
     const specId = this.#resolveSpecId(opts.specId);
     if (specId === null) throw new CurrentFlowStateInvariantError("no canonical active Flow");
@@ -10305,7 +10333,9 @@ export class CanonicalFlowManagerStore {
 
   park(specId) { return this.runtime.park({ specId: canonicalSpecId(specId), activityId: activityId("flow-parked") }); }
   resume(specId) { return this.runtime.resume({ specId: canonicalSpecId(specId), activityId: activityId("flow-resumed") }); }
-  finalize(specId) { return this.runtime.finalize({ specId: canonicalSpecId(specId), activityId: activityId("flow-finalized") }); }
+  finalize(specId) {
+    return this.runtime.finalize({ specId: canonicalSpecId(specId), activityId: activityId("flow-finalized") });
+  }
 
   catalog(specId) { return this.runtime.catalog(canonicalSpecId(specId)); }
   restart(specId) { return this.runtime.restart(canonicalSpecId(specId)); }

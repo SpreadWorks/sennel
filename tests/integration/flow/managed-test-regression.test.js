@@ -2,16 +2,11 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { test } from "node:test";
-import { spawn } from "node:child_process";
-import { once } from "node:events";
-import { setTimeout as delay } from "node:timers/promises";
 import { runProcessDetailed, parseArgvCommand, ParsedCommand, ChildProcessExecutionResult } from "../../../src/flow/lib/test-regression.js";
 import { validate as validateConfig } from "../../../src/lib/config.js";
 import RunTestExecuteCommand, { runSpecLocalTests } from "../../../src/flow/lib/run-test-execute.js";
 import RunFinalRegressionCommand from "../../../src/flow/lib/run-final-regression.js";
 import { ProcessExecutionRuntime, ProcessExecutionControlFailure, ProcessExecutionStopReceipt } from "../../../src/lib/process-execution-runtime.js";
-import { ProcessIdentitySource } from "../../../src/lib/process-identity.js";
-import { RuntimeChildExecution } from "../../../src/lib/runtime-package.js";
 import { CanonicalFlowFixture, makeFlowManager } from "../../support/infrastructure/flow-setup.js";
 import { createTmpDir, removeTmpDir } from "../../support/builders/tmp-dir.js";
 import { AcceptancePhaseScenario } from "../../support/acceptance-phase-scenario.js";
@@ -26,13 +21,7 @@ async function runtimeFixture(t) {
 function nodeCommand(source) {
   return new ParsedCommand({ argv: [process.execPath, "-e", source], source: "test.command" });
 }
-async function waitForFile(file) {
-  const deadline = Date.now() + 20000;
-  while (!fs.existsSync(file)) {
-    assert.ok(Date.now() < deadline, `missing process barrier ${file}`);
-    await delay(20);
-  }
-}
+
 
 test("spec-local Node tests and project regression save independent managed receipts with unchanged output classification", async (t) => {
   const { root, runtime } = await runtimeFixture(t);
@@ -97,7 +86,7 @@ test("direct test-execute and final-regression reject a live owner before canoni
 });
 
 test("final-regression preserves typed control refusal before raw log, failure result, or budget publication", async (t) => {
-  const command = "node project-tests/smoke.test.js";
+  const command = { kind: "native", executable: "node", args: ["project-tests/smoke.test.js"] };
   const defaultConfig = { lang: "en", type: "base", docs: { languages: ["en"], defaultLanguage: "en" } };
   validateConfig({ ...defaultConfig, test: { command, timeout: 20 } });
   assert.deepEqual(parseArgvCommand(command).argv, ["node", "project-tests/smoke.test.js"]);
@@ -148,56 +137,18 @@ test("final-regression preserves typed control refusal before raw log, failure r
   completed = true;
 });
 
-test("killed regression coordinator is stopped through its durable call before successor admission", async (t) => {
-  const root = createTmpDir("managed-test-regression-");
-  let child;
-  let successor;
-  t.after(async () => {
-    if (child?.exitCode === null && child?.signalCode === null) { child.kill("SIGKILL"); await once(child, "exit"); }
-    successor ??= await ProcessExecutionRuntime.acquire({ mainRoot: root });
-    await successor.close();
-    removeTmpDir(root);
-  });
-  const provider = "const fs=require('fs');process.on('SIGTERM',()=>{fs.writeFileSync('stopped','yes');process.exit(0)});fs.writeFileSync('ready',String(process.pid));setInterval(()=>{},1000);";
-  const script = path.join(root, "coordinator.mjs");
-  fs.writeFileSync(script, `
-    import {ProcessExecutionRuntime} from ${JSON.stringify(new URL("../../../src/lib/process-execution-runtime.js", import.meta.url).href)};
-    import {runProcessDetailed} from ${JSON.stringify(new URL("../../../src/flow/lib/test-regression.js", import.meta.url).href)};
-    const runtime=await ProcessExecutionRuntime.acquire({mainRoot:process.cwd()});
-    await runtime.enter(()=>runProcessDetailed({argv:[process.execPath,'-e',${JSON.stringify(provider)}],source:'test.command'}, {cwd:process.cwd(),timeoutMs:40000}));
-    await runtime.close();
-  `);
-  const delivery = new RuntimeChildExecution();
-  try { child = spawn(process.execPath, [script], delivery.options({ cwd: root })); }
-  finally { delivery.close(); }
-  child.stdout.resume(); child.stderr.resume();
-  await waitForFile(path.join(root, "ready"));
-  const identity = new ProcessIdentitySource({ pid: Number(fs.readFileSync(path.join(root, "ready"), "utf8")) })
-    .createOwner("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa");
-  child.kill("SIGKILL"); await once(child, "exit");
-  assert.equal(new ProcessIdentitySource().assess(identity).status, "live");
-  successor = await ProcessExecutionRuntime.acquire({ mainRoot: root });
-  assert.equal(fs.readFileSync(path.join(root, "stopped"), "utf8"), "yes");
-  assert.equal(new ProcessIdentitySource().assess(identity).status, "stale");
-  const prior = ProcessExecutionRuntime.inspect({ mainRoot: root }).executions.at(-2);
-  assert.equal(prior.calls[0].invocation.commandId, "test.command");
-  assert.equal(new ProcessExecutionStopReceipt(prior.calls[0].receipt).stopEvidence.confirmed, true);
-  const result = await successor.enter(() => runProcessDetailed(nodeCommand("process.stdout.write('successor')"), { cwd: root, timeoutMs: 20000 }));
-  assert.equal(result.kind, "passed");
-  assert.equal(result.stdout, "successor");
-});
-
 test("managed regression output overflow remains a typed control refusal instead of a classifier result", async (t) => {
   const root = createTmpDir("managed-test-overflow-");
   const runtime = await ProcessExecutionRuntime.acquire({ mainRoot: root });
-  t.after(async () => {
-    try { await assert.rejects(runtime.close(), ProcessExecutionControlFailure); }
-    finally { removeTmpDir(root); }
-  });
+  t.after(async () => { await runtime.close(); removeTmpDir(root); });
   let delivered = false;
   await assert.rejects(runtime.enter(() => runProcessDetailed(nodeCommand("process.stdout.write('x'.repeat(4096));"), {
     cwd: root, timeoutMs: 20000, maxBuffer: 1024, onProcessExecutionStop() { delivered = true; },
   })), (error) => error instanceof ProcessExecutionControlFailure && error.code === "PROCESS_EXECUTION_OUTPUT_LIMIT");
-  assert.equal(delivered, false);
-  assert.equal(runtime.store.read().executions.at(-1).calls[0].receipt, null);
+  assert.equal(delivered, true, "exit proof is independent of whether captured output is complete");
+  const call = runtime.store.read().executions.at(-1).calls[0];
+  assert.equal(call.receipt.scope, "registered-executions");
+  assert.equal(call.receipt.output.completion, "truncated");
+  assert.equal(call.receipt.observation.kind, "exited");
+  assert.equal(call.controlFailure.code, "PROCESS_EXECUTION_OUTPUT_LIMIT");
 });

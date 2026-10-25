@@ -41,6 +41,7 @@ import { AcceptanceRepairFindingSet } from "./acceptance-review-artifacts.js";
 import { AcceptanceReviewResultEvidence, AcceptanceDecisionResultEvidence, AcceptanceDecisionRequest } from "../steps/acceptance/acceptance-review-values.js";
 import { StepAdmissionRefusal } from "./step-admission-refusal.js";
 import { FlowExecutionInputBaseline } from "./flow-execution-contract.js";
+import { SourceExecutionObservationAppends, SourceExecutionObservationCatalogBaseline } from "./source-execution-observation-appends.js";
 import { FlowRepositoryRuntimeArtifactRegistry } from "./flow-repository-runtime-artifacts.js";
 import { findStepById } from "./step-tree.js";
 
@@ -216,6 +217,23 @@ function appendIssueLog(document, entry) {
   return Object.freeze({ entries, appended: true });
 }
 
+/** Acquired source boundary permits only authenticated immutable observation additions. */
+class AcceptanceSourceEvidenceBaseline {
+  constructor(view) {
+    this.revision = view.sourceEvidenceRevision();
+    this.observations = new SourceExecutionObservationCatalogBaseline({
+      catalog: view.catalog, root: view.location.repositoryRoot });
+    Object.freeze(this);
+  }
+  assert(view) {
+    const executionObservations = new SourceExecutionObservationAppends(view, this.observations);
+    if (view.sourceEvidenceRevision({ executionObservations }) !== this.revision) {
+      throw new StepAdmissionRefusal("Acceptance source catalog changed while acquiring evidence");
+    }
+    return view.catalog.hash;
+  }
+}
+
 /** Catalog-only durable inputs for the acceptance worker and decision command. */
 export class CanonicalAcceptanceArtifactStore {
   constructor({ flowManager, state, nodeId = REVIEW_NODE_ID } = {}) {
@@ -356,7 +374,7 @@ export class CanonicalAcceptanceArtifactStore {
 
   async buildContext({ executionRoot }) {
     const root = requiredText(executionRoot, "canonical acceptance executionRoot");
-    const sourceCatalogHash = this.flowManager.readCanonicalTransitionView({ specId: this.specId,
+    const sourceBaseline = this.flowManager.readCanonicalTransitionView({ specId: this.specId,
       read: (view) => {
         const current = view.state;
         if (["flowId", "flowVersionId", "runId", "specId", "request"].some((field) => this.state[field] !== current[field])
@@ -365,7 +383,7 @@ export class CanonicalAcceptanceArtifactStore {
           || current.attempt !== null && findStepById(this.state.steps, this.state.currentNodeId)?.attemptSequence !== current.attempt.sequence) {
           throw new StepAdmissionRefusal("Acceptance context requires its current canonical source state");
         }
-        return view.catalog.hash;
+        return new AcceptanceSourceEvidenceBaseline(view);
       } });
     const spec = this.spec();
     const requirements = Array.isArray(spec.requirements) ? structuredClone(spec.requirements) : [];
@@ -450,9 +468,8 @@ export class CanonicalAcceptanceArtifactStore {
     });
     const executionInputs = this.executionInputDescriptors();
     const fingerprint = Object.freeze({ hash: this.fingerprint({ diff, evidence, descriptors: executionInputs }) });
-    if (this.flowManager.artifactCatalog(this.specId).hash !== sourceCatalogHash) {
-      throw new StepAdmissionRefusal("Acceptance source catalog changed while acquiring evidence");
-    }
+    const sourceCatalogHash = this.flowManager.readCanonicalTransitionView({ specId: this.specId,
+      read: (view) => sourceBaseline.assert(view) });
     return Object.freeze({
       fingerprint,
       sourceCatalogHash,

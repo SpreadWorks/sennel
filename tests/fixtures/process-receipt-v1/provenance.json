@@ -1,0 +1,21 @@
+{
+  "sourceCommit": "f2b17cd6c4c2bbb1696dd14620d20f29469c944e",
+  "producer": "producer.mjs",
+  "producerSha256": "c717178c1fd31dfc6767ddcf81366d063c2b9ecade1e3bafa8ae31b1af0ae5a9",
+  "command": "node --import ./src/sennel.js .tmp/produce-receipt.mjs",
+  "platform": "linux",
+  "node": "v22.22.0",
+  "scope": "Immutable actual baseline-managed process-group outcome and schema 1 receipt; used only for explicit rejection, never replayed as authority.",
+  "files": [
+    {
+      "name": "outcome.json",
+      "bytes": 2407,
+      "sha256": "33809484f3fea56678b969f6b8a2e89a951d4ee03d21a8a820148bed4884aeee"
+    },
+    {
+      "name": "receipt.json",
+      "bytes": 2250,
+      "sha256": "2a339a3b9b88feef001e48f3646fc5170a686eadee95e34d09e1e460ac88f34a"
+    }
+  ]
+}

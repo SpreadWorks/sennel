@@ -2,6 +2,11 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import { afterEach, describe, it } from "node:test";
 
+import { ProcessExecutionRuntime } from "../../../src/lib/process-execution-runtime.js";
+import { executeManagedProcess } from "../../../src/lib/managed-process.js";
+import { NativeExecutableInvocation } from "../../../src/lib/command-invocation.js";
+import { FlowProcessEventWriter } from "../../../src/flow/lib/flow-process-event.js";
+import { removeQuiescentRuntimeFixture } from "../../support/infrastructure/runtime-fixture-cleanup.js";
 import { FlowManager } from "../../../src/lib/flow-manager.js";
 import { DraftWorkerExecutionStepBinding } from "../../../src/flow/engine/connectors/draft/draft-step-binding.js";
 import { prepareDraftService } from "../../support/infrastructure/draft-service.js";
@@ -20,9 +25,11 @@ import {
   DraftStepExecutionState,
   DraftWorkerExecutionClaim,
   settleDraftStepResult,
+  buildCurrentFlowDefinition,
 } from "../../../src/flow/definition.js";
 import { StepAdmissionRefusal } from "../../../src/flow/lib/step-admission-refusal.js";
 import { AwaitingUserAnswer, CandidateQuestion } from "../../../src/flow/lib/draft-question-ledger.js";
+import { CurrentFlowStateStore } from "../../../src/flow/lib/current-flow-state.js";
 import { CurrentFlowStateConflictError } from "../../../src/flow/lib/current-flow-state-conflict-error.js";
 import { CanonicalFlowFixture, canonicalDraftDocument, FlowAtStepFixture } from "../../support/infrastructure/flow-setup.js";
 import { createTmpDir, removeTmpDir } from "../../support/builders/tmp-dir.js";
@@ -686,8 +693,11 @@ describe("Draft Step Result settlement", () => {
     assert.equal(reloaded.canonicalState(specId).nextAction().nodeId, "draft-questions-review");
   });
 
-  it("includes the complete Error payload and persisted lifecycle result in replay identity", () => {
+  it("includes the complete Error payload and persisted lifecycle result in replay identity", async (t) => {
     const root = createRoot();
+    // This case now owns an actual child; retain unknown execution evidence.
+    roots.splice(roots.indexOf(root), 1);
+    t.after(() => removeQuiescentRuntimeFixture({ mainRoot: root }));
     const specId = "001-draft-error-replay";
     const manager = new FlowManager({ root, mainRoot: root, inWorktree: false });
     new FlowAtStepFixture({
@@ -749,5 +759,70 @@ describe("Draft Step Result settlement", () => {
       settlement: settleDraftStepResult(changed.stepId, changed),
     }), /already has a different Result, Settlement, or Publication/);
     assert.equal(manager.activityLedger(specId).length, activityCount);
+
+    // Exercise process-only replay after the genuine Error/receipt settlement.
+    // This is an infrastructure child, not a retry of the failed Draft provider.
+    const failedState = manager.canonicalState(specId);
+    const eventBinding = {
+      runId: failedState.runId, specId, flowVersionId: failedState.flowVersionId,
+      nodeId: binding.attempt.nodeId, attemptId: binding.attempt.id,
+      attemptSequence: binding.attempt.sequence,
+    };
+    const location = manager.specLocation(specId);
+    const warmStore = new CurrentFlowStateStore({
+      directory: location.directory,
+      definition: buildCurrentFlowDefinition(),
+      runtimeLockLocation: location.runtimeLock("runtime.lock.current-flow-state"),
+    });
+    const validatedPrefix = warmStore.loadSnapshot();
+    assert.equal(validatedPrefix.activities.length, activityCount);
+    assert.deepEqual(validatedPrefix.state.toJSON(), failedState.toJSON());
+    const writer = new FlowProcessEventWriter(manager);
+    const runtime = await ProcessExecutionRuntime.acquire({
+      mainRoot: root, executionRoot: root, runId: failedState.runId, specId, binding: eventBinding,
+    });
+    try {
+      const child = await runtime.enter(() => runtime.withBinding(eventBinding,
+        () => executeManagedProcess(new NativeExecutableInvocation({
+          executable: process.execPath, args: ["-e", "process.stdout.write('rich-replay')"], cwd: root,
+        }), [], { timeoutMs: 10000 }), { eventWriter: (event) => writer.write(event) }));
+      assert.equal(child.stdout, "rich-replay");
+      assert.equal(child.code, 0);
+      const published = manager.activityLedger(specId).slice(activityCount);
+      assert.deepEqual(published.map((entry) => entry.processEvent.type),
+        ["reserved", "started", "exited", "result-finalized"]);
+      assert.deepEqual(await runtime.drainEvents((event) => writer.write(event)), []);
+      assert.deepEqual(manager.canonicalState(specId).attempt.toJSON(), failedState.attempt.toJSON());
+    } finally { await runtime.close(); }
+
+    // A new Store must reproduce the rich producer history, including the exact
+    // Error/receipt pair, without publishing or changing any canonical bytes.
+    const stateBytes = fs.readFileSync(location.flowStateFile);
+    const journalBytes = fs.readFileSync(location.activitiesFile);
+    const expected = manager.canonicalState(specId);
+    const cold = new CurrentFlowStateStore({
+      directory: location.directory,
+      definition: buildCurrentFlowDefinition(),
+      runtimeLockLocation: location.runtimeLock("runtime.lock.current-flow-state"),
+    }).loadSnapshot();
+    const warm = warmStore.loadSnapshot();
+    assert.equal(warm.activities.length, validatedPrefix.activities.length + 4);
+    assert.deepEqual(warm.state.toJSON(), cold.state.toJSON());
+    assert.deepEqual(warm.activities.map((activity) => activity.toJSON()),
+      cold.activities.map((activity) => activity.toJSON()));
+    assert.deepEqual(warm.state.nextAction(), cold.state.nextAction());
+    assert.deepEqual(cold.state.toJSON(), expected.toJSON());
+    assert.deepEqual(cold.state.nextAction(), expected.nextAction());
+    assert.deepEqual(cold.activities.map((activity) => activity.toJSON()), manager.activityLedger(specId));
+    const recorded = cold.activities.find((activity) => activity.result?.draftSettlementReceipt?.id === first.receipt.id);
+    assert.equal(recorded.result.stepResult.error.code, "PROVIDER_UNAVAILABLE");
+    assert.deepEqual(recorded.result.stepResult.error.data, { retryAfter: 5 });
+    const publicCopy = cold.state.withConfirmationOrder(cold.state.confirmationOrder);
+    assert.deepEqual(publicCopy.toJSON(), expected.toJSON());
+    const serialized = recorded.result.toJSON();
+    serialized.stepResult.error.data.retryAfter = 99;
+    assert.deepEqual(recorded.result.stepResult.error.data, { retryAfter: 5 });
+    assert.deepEqual(fs.readFileSync(location.flowStateFile), stateBytes);
+    assert.deepEqual(fs.readFileSync(location.activitiesFile), journalBytes);
   });
 });

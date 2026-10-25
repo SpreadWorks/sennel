@@ -1,3 +1,4 @@
+import { RepositoryLockAuthority } from "../../lib/repository-control-lock.js";
 import crypto from "node:crypto";
 import fs from "node:fs";
 
@@ -5,9 +6,7 @@ import { AtomicJsonFile } from "../../lib/atomic-json-file.js";
 import { FlowArtifactCatalogStore, FlowVersionLocation } from "../../lib/flow-version.js";
 import { buildCurrentFlowDefinition } from "../definition.js";
 import { CanonicalFlowRuntime } from "./canonical-flow-runtime.js";
-import { ProcessIdentitySource } from "../../lib/process-identity.js";
 import { FileLock, FileLockWaitPolicy } from "../../lib/file-lock.js";
-import { RealDirectoryAuthority } from "../../lib/real-directory-authority.js";
 import { RepositoryFlowOperationLock } from "../../lib/repository-maintenance-lock.js";
 
 function requireAuthorityString(value, name) {
@@ -82,7 +81,6 @@ export class IssueLogStore {
 
   constructor({
     location,
-    processIdentitySource = new ProcessIdentitySource(),
     faultInjector,
     maintenanceOwnerToken = null,
     operationOwnerToken = null,
@@ -96,40 +94,24 @@ export class IssueLogStore {
     this.mainRoot = location.repositoryRoot;
     this.maintenanceOwnerToken = maintenanceOwnerToken;
     this.operationOwnerToken = operationOwnerToken;
-    this.processIdentitySource = processIdentitySource;
     this.filePath = location.issueLogFile;
     this.relativeFilePath = location.relativeArtifact("issue.log");
     this.file = new AtomicJsonFile(this.filePath, { faultInjector });
     this.catalogStore = new FlowArtifactCatalogStore({ location });
 
-    const versionAuthority = new RealDirectoryAuthority(location.directory, {
-      errorFactory: (status, message, data) => issueLogError(status, message, data),
-    });
-    versionAuthority.ensure();
     const runtimeDirectory = location.resolve(".runtime");
-    RealDirectoryAuthority.resolve(runtimeDirectory, { create: true, creationMode: 0o755 });
-    const runtimeAuthority = new RealDirectoryAuthority(runtimeDirectory, {
-      parentAuthority: versionAuthority,
-      errorFactory: (status, message, data) => issueLogError(status, message, data),
-    });
-    runtimeAuthority.ensure();
-    const lockDirectory = location.resolve(".runtime/locks");
-    RealDirectoryAuthority.resolve(lockDirectory, { create: true, creationMode: 0o755 });
-    const lockAuthority = new RealDirectoryAuthority(lockDirectory, {
-      parentAuthority: runtimeAuthority,
-      errorFactory: (status, message, data) => issueLogError(status, message, data),
-    });
-    lockAuthority.ensure();
     this.lock = new FileLock({
-      directoryAuthority: lockAuthority,
-      fileName: "issue-log.lock",
+      location: new RepositoryLockAuthority(location.repositoryRoot, { rootAuthority: location.repositoryAuthority,
+        errorFactory: (status, message, data) => issueLogError(status, message, data) }).location({
+        namespace: "flow-version", identity: location.directory, fileName: "issue-log.lock",
+        legacyPaths: [location.resolve(".runtime/locks/issue-log.lock")],
+      }),
       kind: "issue-log-writer",
       authority: {
         versionRoot: location.directory,
         filePath: this.filePath,
         runtimeDirectory,
       },
-      processIdentitySource,
       errorFactory: (status, message, data) => issueLogError(status, message, data),
       waitPolicy: new FileLockWaitPolicy({ timeoutMs: 5_000, intervalMs: 10 }),
     });
@@ -194,7 +176,6 @@ export class IssueLogStore {
       mainRoot: this.mainRoot,
       maintenanceOwnerToken: this.maintenanceOwnerToken,
       operationOwnerToken: this.operationOwnerToken,
-      processIdentitySource: this.processIdentitySource,
     });
     repositoryOperation.acquire();
     let result;

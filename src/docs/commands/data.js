@@ -10,6 +10,7 @@
  *   node sennel/engine/populate.js [--dry-run] [--stdout]
  */
 
+import { docsCommands } from "../../lib/command-registry.js";
 import fs from "fs";
 import path from "path";
 import { resolveDataDirectives } from "../lib/directive-parser.js";
@@ -135,8 +136,7 @@ async function runData(ctx, rawArgs) {
   // CLI モード: 引数をパースしてコンテキストを構築
   if (!ctx) {
     const cli = parseArgs(rawArgs, {
-      flags: ["--dry-run", "--stdout"],
-      options: ["--docs-dir"],
+      ...docsCommands.data.args,
       defaults: { dryRun: false, stdout: false, docsDir: "" },
     });
     if (cli.help) {

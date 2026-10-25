@@ -6,7 +6,6 @@ import test from "node:test";
 
 import { FileLockWaitPolicy } from "../../../src/lib/file-lock.js";
 import { ProcessLock } from "../../../src/lib/process-lock.js";
-import { ProcessIdentityObservation, ProcessIdentitySource } from "../../../src/lib/process-identity.js";
 import { RealDirectoryAuthority } from "../../../src/lib/real-directory-authority.js";
 import { FlowArtifactCatalog, FlowArtifactCatalogStore, FlowVersionAuthorityScope, FlowVersionLocation } from "../../../src/lib/flow-version.js";
 import { FlowHandoffAuthorityLease } from "../../../src/lib/flow-handoff-authority-lease.js";
@@ -25,7 +24,7 @@ import { createTmpDir, removeTmpDir } from "../../support/builders/tmp-dir.js";
 // calls its real wrapper entrypoint. Only the clock and external identity observation are
 // controlled at their nondeterministic boundaries.
 async function withExternalOwner(core, body) {
-  core.directoryAuthority.ensure();
+  core.location.resolve({ create: true });
   const owner = ExternalProcessLockOwner.forFileLock({
     directory: core.directory,
     fileName: path.basename(core.lockPath),
@@ -41,7 +40,7 @@ async function withExternalOwner(core, body) {
 }
 
 function currentState(root) {
-  const store = new CurrentFlowStateStore({ directory: root, definition: buildCurrentFlowDefinition() });
+  const store = new CurrentFlowStateStore({ repositoryRoot: root, directory: root, definition: buildCurrentFlowDefinition() });
   return { core: store.lock.processLock, invoke: () => store.assertWritable(), busy: "FLOW_STATE_ATOMIC_BUSY", name: "FlowStateAtomicSaveError", prefix: "CURRENT_FLOW_STATE_LOCK", timeout: 5_000 };
 }
 
@@ -51,7 +50,7 @@ function catalog(root) {
   const store = new FlowArtifactCatalogStore({ location });
   store.initialize(new FlowArtifactCatalog({ artifacts: [] }));
   const runtime = location.runtimeLock("runtime.lock.artifact-catalog");
-  const core = new ProcessLock({ directoryAuthority: new RealDirectoryAuthority(runtime.directory), fileName: runtime.fileName, kind: "artifact-catalog-publication", authority: { directory: location.directory, runtimeDirectory: runtime.runtimeDirectory, catalog: location.catalogFile } });
+  const core = new ProcessLock({ location: runtime.controlLocation, kind: "artifact-catalog-publication", authority: { directory: location.directory, runtimeDirectory: runtime.runtimeDirectory, catalog: location.catalogFile } });
   return { core, invoke: () => store.load(), busy: "FLOW_ARTIFACT_CATALOG_BUSY", name: "FlowArtifactCatalogBusyError", prefix: "PROCESS_LOCK", timeout: 10_000 };
 }
 
@@ -62,7 +61,6 @@ function handoff(root) {
 
 function review(root) {
   const lease = new ReviewExecutionLease({ mainRoot: root, runId: "review-mapping", nodeId: "spec-review", attemptId: "review-attempt" });
-  lease.managedDirectory.ensure();
   return { core: lease.lock, invoke: () => lease.acquire(), busy: "REVIEW_EXECUTION_BUSY", name: "ReviewExecutionLeaseError", prefix: "REVIEW_EXECUTION_LOCK", timeout: null };
 }
 
@@ -97,9 +95,9 @@ for (const create of [currentState, catalog, handoff, review, dispatch]) {
         assert.throws(invoke, (error) => {
           assert.equal(error.code, wrapper.busy);
           assert.equal(error.name, wrapper.name);
-          assert.equal(error.lockStatus, wrapper.timeout === null ? "live" : "timeout");
+          assert.equal(error.lockStatus, wrapper.timeout === null ? "busy" : "timeout");
           assert.equal(error.lockPath, core.lockPath);
-          assert.equal(error.owner.processIdentity.pid, pid);
+          assert.equal(error.owner.ownerToken, JSON.parse(bytes).ownerToken);
           assert.ok(Object.hasOwn(error, "cause"));
           if (wrapper.timeout !== null) {
             assert.equal(error.waitedMs, wrapper.timeout);
@@ -111,23 +109,8 @@ for (const create of [currentState, catalog, handoff, review, dispatch]) {
       } finally { clock.mock.restore(); }
       assertUnchanged();
 
-      const denied = t.mock.method(ProcessIdentitySource.prototype, "observe", (owner) => {
-        assert.equal(owner.pid, pid, "the wrapper must assess the actual external owner");
-        return new ProcessIdentityObservation("unknown", "identity unavailable");
-      });
-      try {
-        assert.throws(invoke, (error) => {
-          assert.equal(error.code, `${wrapper.prefix}_UNKNOWN`);
-          assert.equal(error.lockStatus, "unknown");
-          assert.equal(error.owner.processIdentity.pid, pid);
-          assert.equal(error.lockPath, core.lockPath);
-          assert.notEqual(error.retryable, true);
-          assert.equal(error.waitedMs, undefined);
-          assert.ok(Object.hasOwn(error, "cause"));
-          return true;
-        });
-      } finally { denied.mock.restore(); }
-      assertUnchanged();
+      // The independent owner remains exclusion; no OS liveness observation is consulted.
+
     });
     assert.equal(fs.existsSync(core.lockPath), false);
 

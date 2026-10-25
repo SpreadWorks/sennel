@@ -4,6 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { it } from "node:test";
 
+import { testTemporaryRoot } from "../../test-environment.js";
 import { FlowManager } from "../../../src/lib/flow-manager.js";
 import { managedOutputDir } from "../../../src/lib/config.js";
 import { FlowTargetExpectation, FlowTargetBinding } from "../../../src/lib/flow-target-guard.js";
@@ -18,7 +19,7 @@ import { CanonicalAcceptanceArtifactStore } from "../../../src/flow/lib/canonica
 import { ReviewWorkUnit } from "../../../src/flow/lib/review-work-unit.js";
 import { DispatchExecutionRepositoryBinding, sealWorkerArtifactHandoff } from "../../../src/flow/lib/worker-artifact-handoff.js";
 import { CanonicalFlowFixture, canonicalDraftDocument } from "../../support/infrastructure/flow-setup.js";
-import { removeTmpDir } from "../../support/builders/tmp-dir.js";
+import { removeQuiescentRuntimeFixture } from "../../support/infrastructure/runtime-fixture-cleanup.js";
 import { installReviewProcessFake } from "../../support/infrastructure/review-process-fake.js";
 import { workerArtifactJson } from "../../support/infrastructure/worker-artifact.js";
 import { createScenarioProviderFake, dispatchContainer, dispatchFlowCommand, fixtureRepository, installGateProviderFake, requestInput, requestPayloadPath, WorkerRequestIdentityObserver } from "../../support/infrastructure/flow-dispatch-scenario.js";
@@ -290,10 +291,13 @@ it("reopens Draft and preserves repair Attempt ordinals across an intervening De
     assert.notEqual(repairs[0].id, repairs[1].id);
     const introduced = manager.activityLedger(specId).filter((entry) => entry.transition.attempt?.nodeId === "draft-gate-repair");
     assert.deepEqual(introduced.map((entry) => entry.transition.attempt.sequence), [2, 4], "Skipped lifecycle slots have no fabricated worker Attempt");
+  } catch (error) {
+    testTemporaryRoot().retainOnUnconfirmedExecution(error);
+    throw error;
   } finally {
     gateProvider?.mock.restore();
     reviewProcess?.mock.restore();
-    removeTmpDir(root);
+    removeQuiescentRuntimeFixture({ mainRoot: root });
   }
 });
 
@@ -350,7 +354,12 @@ for (const phase of ["questions", "coverage"]) {
           const ctx = { root, mainRoot: root, executionRoot: root, specId, flowManager,
             phase: "draft", config, flowState: flowManager.loadReadOnly(specId) };
           const result = await new RunReviewCommand().execute(ctx);
-          assert.equal(result.result, "ok", JSON.stringify(result));
+          const failure = flowManager.canonicalState(specId).attempt?.failure;
+          if (result.ok === false && result.guidance?.currentState?.stop === "unconfirmed") {
+            testTemporaryRoot().retainOnUnconfirmedExecution();
+            fs.writeFileSync(path.join(root, ".tmp", "review-failure.json"), JSON.stringify({ result, failure }, null, 2));
+          }
+          assert.equal(result.result, "ok", JSON.stringify({ root, result, failure }));
           await FLOW_COMMANDS.run.review.post(ctx, result);
           return result;
         };
@@ -433,8 +442,11 @@ for (const phase of ["questions", "coverage"]) {
         assert.equal(result.stepResult.kind, `draft-${phase}-triage-completed`);
         const reloaded = new FlowManager({ root, mainRoot: root, inWorktree: false, specId });
         assert.equal(reloaded.canonicalState(specId).nextAction().nodeId, `draft-${phase}-repair`);
+      } catch (error) {
+        testTemporaryRoot().retainOnUnconfirmedExecution(error);
+        throw error;
       } finally {
-        removeTmpDir(root);
+        removeQuiescentRuntimeFixture({ mainRoot: root });
       }
     });
   }
@@ -733,9 +745,12 @@ it("produces Draft through registered Review/Gate commands and reloads its exact
     assert.deepEqual(specAfterRefusal.bytes, specRefusalSnapshots[0].bytes);
     assert.equal(reloaded.activityLedger(specId).some((entry) => entry.result?.stepResult?.kind === "spec-created"), false);
 
+  } catch (error) {
+    testTemporaryRoot().retainOnUnconfirmedExecution(error);
+    throw error;
   } finally {
     reviewProcess?.mock.restore();
     gateAgentLookup?.mock.restore();
-    removeTmpDir(root);
+    removeQuiescentRuntimeFixture({ mainRoot: root });
   }
 });

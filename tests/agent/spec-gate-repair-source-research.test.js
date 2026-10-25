@@ -1,3 +1,4 @@
+import { installSennelTestLauncher } from "../support/infrastructure/sennel-test-launcher.js";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
@@ -59,11 +60,7 @@ test("real Gate repair worker follows imports and scoped rules in the active che
   const originalPath = process.env.PATH;
   t.after(() => { process.env.PATH = originalPath; });
   fs.writeFileSync(path.join(value.root, ".sennel/config.json"), workerArtifactJson(config));
-  const bin = path.join(value.root, ".test-bin");
-  fs.mkdirSync(bin);
-  // Point the ordinary seal command at this checkout's CLI, without depending
-  // on an installed package's revision or changing any runtime contract.
-  fs.writeFileSync(path.join(bin, "sennel"), `#!/usr/bin/env node\nconst { spawnSync } = require("node:child_process");\nconst result = spawnSync(${JSON.stringify(process.execPath)}, [${JSON.stringify(CLI)}, ...process.argv.slice(2)], { stdio: "inherit" });\nprocess.exit(result.status ?? 1);\n`, { mode: 0o755 });
+  const bin = installSennelTestLauncher(value.root, { entryPath: CLI });
   process.env.PATH = `${bin}${path.delimiter}${originalPath}`;
   const beforeCode = new Map(["AGENTS.md", scopedRuleOrigin, entryOrigin, ownerOrigin]
     .map((origin) => [origin, fs.readFileSync(path.join(value.root, origin))]));

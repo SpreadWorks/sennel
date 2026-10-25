@@ -50,6 +50,7 @@ const SPEC_REVIEW_TERMINAL_RESULTS = Object.freeze([SpecReviewPassedResult, Spec
 // These ledger operations record lifecycle/administrative facts and cannot
 // produce review, evaluation, or repair observations.
 const NON_DETAIL_OPERATIONS = new Set([
+  "record_process_event",
   DRAFT_STEP_ERROR_RECOVERY_OPERATION,
   "create_flow", "add_task", "add_approval_task", "start_attempt", "retry_attempt", "retry_gate_attempt",
   "retry_recovery_attempt", "update_attempt", "fail_attempt", "record_failure", "rewind", "recover_attempt",

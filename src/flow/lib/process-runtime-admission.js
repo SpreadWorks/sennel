@@ -1,3 +1,5 @@
+import { FlowProcessEventWriter } from "./flow-process-event.js";
+import { ProcessExecutionBindingSelection } from "../../lib/process-execution-finalization.js";
 import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs";
 import { FlowProcessStopEvidence } from "./process-runtime-evidence.js";
@@ -143,7 +145,13 @@ class FlowProcessRuntimeAdmission {
           "Managed execution requires its exact saved observation source");
       }
     } });
-    return admissions.run(this, () => this.runtime.enter(() => this.runtime.withBinding(binding, callback, { callAdmission })));
+    const writer = new FlowProcessEventWriter(ctx.flowManager);
+    if (binding.value?.flowVersionId != null) {
+      this.runtime.drainEventsSync(writer, new ProcessExecutionBindingSelection({
+        runId: binding.value.runId, specId: binding.value.specId, flowVersionId: binding.value.flowVersionId,
+      }));
+    }
+    return admissions.run(this, () => this.runtime.enter(() => this.runtime.withBinding(binding, callback, { callAdmission, eventWriter: writer })));
   }
 
   assertAuthority(authority) {
@@ -156,11 +164,23 @@ class FlowProcessRuntimeAdmission {
 
   async close() {
     let failure = null;
-    try { if (this.ownsRuntime) await this.runtime.close(); }
-    catch (error) { failure = error; }
-    for (const reservation of [...this.reservations].reverse()) {
+    const reservations = [...this.reservations].reverse();
+    const attempted = new Set();
+    const release = (reservation) => {
+      attempted.add(reservation);
       try { reservation.release(); }
       catch (error) { failure ??= error; }
+    };
+    if (this.ownsRuntime && this.runtime.closed) {
+      for (const reservation of reservations) {
+        if (reservation.executionId === this.runtime.executionId
+          && reservation.ownerEpoch === this.runtime.ownerEpoch && !reservation.released) release(reservation);
+      }
+    }
+    try { if (this.ownsRuntime) await this.runtime.close(); }
+    catch (error) { failure ??= error; }
+    for (const reservation of reservations) {
+      if (!attempted.has(reservation)) release(reservation);
     }
     if (failure !== null) throw failure;
   }
@@ -182,6 +202,8 @@ export async function withFlowProcessRuntime(ctx, callback, {
   if (authority !== null && !(authority instanceof FlowProcessPhysicalAuthority)) throw new TypeError("Physical authority supplier must return FlowProcessPhysicalAuthority");
   let dispatchLease = null;
   let runtime = null;
+  let result;
+  const failures = [];
   try {
     if (commandId === "dispatch") {
       let target;
@@ -212,14 +234,28 @@ export async function withFlowProcessRuntime(ctx, callback, {
     let admission = null;
     try {
       admission = new FlowProcessRuntimeAdmission({ runtime, contextRoots, dispatchLease, authority, ownsRuntime: !borrowed });
-      return await admission.enter(ctx, callback, { ...bindingOptions, commandId }, physicalAuthority, authority);
+      result = await admission.enter(ctx, callback, { ...bindingOptions, commandId }, physicalAuthority, authority);
+    } catch (error) {
+      failures.push(error);
     } finally {
-      if (admission !== null) await admission.close();
-      else if (!borrowed) await runtime.close();
+      try {
+        if (admission !== null) await admission.close();
+        else if (!borrowed) await runtime.close();
+      } catch (error) { failures.push(error); }
     }
+  } catch (error) {
+    failures.push(error);
   } finally {
-    dispatchLease?.release();
+    try { dispatchLease?.release(); }
+    catch (error) { failures.push(error); }
   }
+  if (failures.length === 1) throw failures[0];
+  if (failures.length > 1) {
+    const cause = new AggregateError(failures, "Flow execution boundary has multiple failures", { cause: failures[0] });
+    const refusal = failures.slice().reverse().find((error) => error instanceof ProcessExecutionControlFailure);
+    throw refusal ? refusal.withCause(cause) : cause;
+  }
+  return result;
 }
 
 /** The dispatch command borrows its lease prepared before registry pre. */
@@ -240,5 +276,5 @@ export function readFlowProcessStops({ mainRoot, executionRoot }) {
   if (current !== null) return current.stopReceipts().map((receipt) => new FlowProcessStopEvidence(receipt));
   const registry = ProcessExecutionRuntime.inspect({ mainRoot, executionRoot });
   return (registry?.executions ?? []).filter((execution) => execution.status === "closed")
-    .flatMap((execution) => execution.calls.map((call) => FlowProcessStopEvidence.fromStored(call.receipt)));
+    .flatMap((execution) => execution.calls.filter((call) => call.receipt !== null).map((call) => FlowProcessStopEvidence.fromStored(call.receipt)));
 }

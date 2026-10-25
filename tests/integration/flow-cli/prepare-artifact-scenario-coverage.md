@@ -197,3 +197,21 @@ scenarios are not duplicated here. They were rerun in the correction's exact
 board command; the Draft case additionally exercises the shared canonical
 Result assertions. The old decoder call fails in an isolated copy of that real
 producer/reload case (`fix-result-before.log`); the final copy passes it.
+
+## Registered execution ownership revision (b900)
+
+The historical measurements above describe the former PID owner contract. The
+current journal revision 3 stores a lock token/session and exact checkout identity.
+P21 now preserves its actual abrupt child exit and verifies that the published
+owner remains BUSY: retry leaves the journal, exclusion record, preparing state,
+and Git worktree publication unchanged, and starts no worker. Automatic recovery
+from PID death is intentionally retired.
+
+P26 retains the real base-ref race, durable branch receipt, reload, and downstream
+Draft consumption. Its command unwinds through the operation lock's normal
+release; a new manager acquires fresh authority and validates the saved receipt.
+The separate branch/plugin acknowledgement-loss scenarios likewise throw from
+the publication boundary and let the production finally release authority before
+the child exits. They preserve exact replay, changed-publication refusal, and
+mandatory-hook rerun assertions. These updated cases require current verification;
+prior pass counts are not evidence for the revised contract.

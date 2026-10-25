@@ -1,4 +1,5 @@
 import { testTemporaryRoot } from "../../test-environment.js";
+import { hasUnconfirmedExecution } from "../../support/builders/test-temporary-root.js";
 /**
  * tests/acceptance/lib/pipeline.js
  *
@@ -158,6 +159,7 @@ export async function runPipeline(tmp, { agent = null } = {}) {
       }));
     } catch (e) {
       steps.push(e.stepResult);
+      if (hasUnconfirmedExecution(e)) throw e;
       console.error(`[acceptance] enrich warning: continuing without enrichment`);
     }
   } else {
@@ -176,6 +178,7 @@ export async function runPipeline(tmp, { agent = null } = {}) {
       }));
     } catch (e) {
       steps.push(e.stepResult);
+      if (hasUnconfirmedExecution(e)) throw e;
       if (e.stepResult.status !== "agent-error") throw e;
       console.error(`[acceptance] text warning: agent-infra error, continuing`);
     }

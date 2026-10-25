@@ -1,20 +1,23 @@
-import path from "node:path";
 import { FileLock, FileLockWaitPolicy, FileLockTimeoutError } from "./file-lock.js";
-import { RealDirectoryAuthority } from "./real-directory-authority.js";
+import { RepositoryLockAuthority } from "./repository-control-lock.js";
 import { ManagedStopOperation } from "./managed-stop-operation.js";
+import { ManagedStopOperationValue } from "./managed-stop-operation-value.js";
 import { ProcessExecutionControlFailure } from "./process-execution-values.js";
 import { managedControlFailure, readManagedRecord, writeManagedRecord } from "./managed-process-protocol.js";
 
-/** Coordinator, launcher and recovery share the first durable stop decision. */
+/** The exact live coordinator owns the first durable stop decision. */
 export class ManagedStopOperationStore {
   constructor(call) {
     this.call = call;
     this.file = `${call.outcomePath}.stop`;
-    this.directoryAuthority = new RealDirectoryAuthority(path.dirname(this.file));
+    if (!(call.recordLocks instanceof RepositoryLockAuthority)) throw new TypeError("Stop operation requires explicit repository lock authority");
+    this.lockAuthority = call.recordLocks;
+    this.location = this.lockAuthority.location({ namespace: "managed-stop-operation", identity: this.file,
+      fileName: "authority.lock", legacyPaths: [`${this.file}.authority.lock`] });
   }
   read(options = {}) {
     try {
-      const saved = readManagedRecord(this.file, options);
+      const saved = readManagedRecord(this.file, { ...options, lockAuthority: this.lockAuthority });
       if (saved === null) return null;
       if (saved.executionId !== this.call.executionId || saved.callId !== this.call.callId
         || saved.ownerToken !== this.call.ownerToken || saved.capability !== (this.call.capability ?? null)) {
@@ -27,19 +30,19 @@ export class ManagedStopOperationStore {
     }
   }
   claim(options = {}) {
-    let proposed = options instanceof ManagedStopOperation ? options : ManagedStopOperation.begin(options);
+    let proposed = options instanceof ManagedStopOperationValue
+      ? ManagedStopOperation.fromStored(options.toJSON()) : ManagedStopOperation.begin(options);
     const remainingWait = () => new FileLockWaitPolicy({ timeoutMs: Math.floor(proposed.remainingMs()) });
     try {
-      // An earlier launcher-owned stop also clips waiting for claim authority.
+      // The first durable decision also clips waiting for claim authority.
       proposed = this.read({ deadline: proposed.deadline }) ?? proposed;
-      const lock = new FileLock({ directoryAuthority: this.directoryAuthority,
-        fileName: `${path.basename(this.file)}.authority.lock`, kind: "managed-stop-operation",
+      const lock = new FileLock({ location: this.location, kind: "managed-stop-operation",
         authority: { executionId: this.call.executionId, callId: this.call.callId }, waitPolicy: remainingWait() });
       return lock.runExclusive(() => {
         const saved = this.read({ waitPolicy: remainingWait(), deadline: proposed.deadline });
         if (saved !== null) return saved;
         writeManagedRecord(this.file, { executionId: this.call.executionId, callId: this.call.callId,
-          ownerToken: this.call.ownerToken, capability: this.call.capability ?? null, operation: proposed.toJSON() }, { waitPolicy: remainingWait(), deadline: proposed.deadline });
+          ownerToken: this.call.ownerToken, capability: this.call.capability ?? null, operation: proposed.toJSON() }, { waitPolicy: remainingWait(), deadline: proposed.deadline, lockAuthority: this.lockAuthority });
         return proposed;
       });
     } catch (cause) {

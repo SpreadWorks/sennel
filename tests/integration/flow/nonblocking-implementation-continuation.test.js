@@ -15,6 +15,8 @@ import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { settleImplStepResult } from "../../../src/flow/definition.js";
 import { RuntimeChildExecution } from "../../../src/lib/runtime-package.js";
+import { NodeScriptInvocation } from "../../../src/lib/command-invocation.js";
+import { runManagedCmdAsync } from "../../../src/lib/process.js";
 import fs from "node:fs";
 import path from "node:path";
 import { createHash } from "node:crypto";
@@ -209,15 +211,17 @@ it("admits only the reacquired nominal quality selection and preserves an unpare
 
 it("publishes a genuine bounded Flow Review tooling stop and accepts its unchanged child frontier", async (t) => {
   let childFailure = null;
-  const scenario = ImplPhaseScenario.create(t, { config: phaseConfig(), reviewProcessResult(stage, _ordinal, options) {
-    const child = RuntimeChildExecution.runSync(
-      stage === "impl-review"
+  const scenario = ImplPhaseScenario.create(t, { config: phaseConfig(), async reviewProcessResult(stage, _ordinal, options) {
+    const { cwd, env, stdio, ...executionOptions } = options;
+    const child = await runManagedCmdAsync(new NodeScriptInvocation({
+      script: stage === "impl-review"
         ? fileURLToPath(new URL("../../support/infrastructure/impl-tooling-review-worker.js", import.meta.url))
-        : fileURLToPath(new URL("../../support/impl-phase-review-worker.js", import.meta.url)), [],
-      stage === "impl-review" ? options : { ...options, env: { ...options.env,
-        SENNEL_IMPL_SCENARIO_RESPONSE: JSON.stringify({ blockingFindings: [], nonBlockingImprovements: [] }) } }, spawnSync);
+        : fileURLToPath(new URL("../../support/impl-phase-review-worker.js", import.meta.url)),
+      cwd, stdio, env: stage === "impl-review" ? env : { ...env,
+        SENNEL_IMPL_SCENARIO_RESPONSE: JSON.stringify({ blockingFindings: [], nonBlockingImprovements: [] }) },
+    }), executionOptions);
     if (stage === "impl-review") childFailure = child.stderr?.toString();
-    return { ...child, ok: child.status === 0 };
+    return child;
   } });
   await scenario.advanceTo("impl-review");
   const outcome = await scenario.executeCurrent();

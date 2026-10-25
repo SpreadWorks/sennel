@@ -1,3 +1,5 @@
+import { fileURLToPath } from "node:url";
+import { NodeScriptInvocation } from "../../lib/command-invocation.js";
 /** One immutable command value for Definition execution and recovery directives. */
 export class FlowExecutionCommand {
   constructor({ group, subcommand, args = [] } = {}) {
@@ -18,6 +20,10 @@ export class FlowExecutionCommand {
     const displayToken = (token) => /^[a-zA-Z0-9_./:=+-]+$/.test(token)
       ? token : `'${token.replaceAll("'", "'\"'\"'")}'`;
     return ["sennel", "flow", this.group, this.subcommand, ...this.args].map(displayToken).join(" ");
+  }
+
+  toInvocation(options = {}) {
+    return new NodeScriptInvocation({ ...options, script: fileURLToPath(new URL("../../sennel.js", import.meta.url)), args: ["flow", this.group, this.subcommand, ...this.args] });
   }
 
   runArguments() { return [this.subcommand, ...this.args]; }

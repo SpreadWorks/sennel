@@ -10,6 +10,7 @@ import { createTmpDir, removeTmpDir } from "../support/builders/tmp-dir.js";
 import { repoRoot } from "../../src/lib/cli.js";
 import { sanitizeGitRepositoryEnvironment } from "../../src/lib/git-repository-environment.js";
 import { resolveRepositoryLockRoot, RepositoryFlowOperationLock } from "../../src/lib/repository-maintenance-lock.js";
+import { RepositoryLockAuthority } from "../../src/lib/repository-control-lock.js";
 await import("../../src/sennel.js");
 const { resolveCurrentReviewTreeSha } = await import("../../src/flow/lib/review-evidence-store.js");
 
@@ -24,6 +25,13 @@ function environmentWithoutTemporaryRoot() {
 
 function snapshot(file) {
   return fs.existsSync(file) ? fs.readFileSync(file) : null;
+}
+
+function repositoryLockPaths(root) {
+  return [".repository-maintenance.lock", ".repository-flow-operation.lock"].flatMap((fileName) => [
+    RepositoryLockAuthority.pathFor(root, { fileName }),
+    path.join(root, ".sennel", fileName),
+  ]);
 }
 
 test("repository scratch creates distinct owned roots and borrowers preserve owner data", async (t) => {
@@ -78,8 +86,7 @@ test("invalid inherited shared roots fail before creation without switching stor
 test("repository non-Git fixtures cannot discover the checkout or acquire its repository lock", async (t) => {
   const temporary = TestTemporaryRoot.select({ environment: {} });
   t.after(() => temporary.remove());
-  const parentLocks = [".repository-maintenance.lock", ".repository-flow-operation.lock"]
-    .map((name) => path.join(TEST_CHECKOUT_ROOT, ".sennel", name));
+  const parentLocks = repositoryLockPaths(TEST_CHECKOUT_ROOT);
   const before = parentLocks.map(snapshot);
   const originalDirectory = process.cwd();
   const previousWorkRoot = process.env.SENNEL_WORK_ROOT;
@@ -104,7 +111,9 @@ test("repository non-Git fixtures cannot discover the checkout or acquire its re
     const lock = new RepositoryFlowOperationLock({ mainRoot: resolveRepositoryLockRoot(fixture) });
     try {
       lock.acquire();
-      assert.equal(fs.existsSync(path.join(fixture, ".sennel", ".repository-flow-operation.lock")), true);
+      assert.equal(lock.lockPath, RepositoryLockAuthority.pathFor(fixture, { fileName: ".repository-flow-operation.lock" }));
+      assert.equal(fs.existsSync(lock.lockPath), true);
+      assert.equal(fs.existsSync(path.join(fixture, ".sennel", ".repository-flow-operation.lock")), false);
       assert.deepEqual(parentLocks.map(snapshot), before);
     } finally {
       lock.release();
@@ -117,8 +126,7 @@ test("repository non-Git fixtures cannot discover the checkout or acquire its re
 test("repository owner root itself rejects ancestor Git and restores its activated environment", (t) => {
   const names = ["TMPDIR", "TMP", "TEMP", "SENNEL_TEST_TEMP_ROOT", "GIT_CEILING_DIRECTORIES"];
   const previous = names.map((name) => process.env[name]);
-  const parentLocks = [".repository-maintenance.lock", ".repository-flow-operation.lock"]
-    .map((name) => path.join(TEST_CHECKOUT_ROOT, ".sennel", name));
+  const parentLocks = repositoryLockPaths(TEST_CHECKOUT_ROOT);
   const locksBefore = parentLocks.map(snapshot);
   const gitStatus = () => {
     const result = spawnSync("git", ["status", "--porcelain"], { cwd: TEST_CHECKOUT_ROOT, encoding: "utf8" });
@@ -201,4 +209,54 @@ test("direct Node tests and the runner share selection and only the owner cleans
     assert.equal(fs.existsSync(probe.fixture), false);
     assert.equal(fs.existsSync(probe.path), false);
   }
+});
+
+test("a retained control failure keeps its fixture after exact receipt closure and process exit", (t) => {
+  const script = [
+    `import assert from "node:assert/strict";`,
+    `import fs from "node:fs";`,
+    `import path from "node:path";`,
+    `await import(${JSON.stringify(moduleUrl("src/sennel.js"))});`,
+    `const { testTemporaryRoot } = await import(${JSON.stringify(moduleUrl("tests/test-environment.js"))});`,
+    `const { createTmpDir } = await import(${JSON.stringify(moduleUrl("tests/support/builders/tmp-dir.js"))});`,
+    `const { removeQuiescentRuntimeFixture } = await import(${JSON.stringify(moduleUrl("tests/support/infrastructure/runtime-fixture-cleanup.js"))});`,
+    `const { ProcessExecutionRuntime, ProcessExecutionControlFailure } = await import(${JSON.stringify(moduleUrl("src/lib/process-execution-runtime.js"))});`,
+    `const { runCmdAsync } = await import(${JSON.stringify(moduleUrl("src/lib/process.js"))});`,
+    `const outer = testTemporaryRoot();`,
+    `outer.beginExecution();`,
+    `const fixture = createTmpDir("retained-runtime-receipt-");`,
+    `const evidence = path.join(fixture, "diagnostic-evidence.txt");`,
+    `fs.writeFileSync(evidence, "preserve the first control failure");`,
+    `const runtime = await ProcessExecutionRuntime.acquire({ mainRoot: fixture });`,
+    `const result = await runtime.enter(() => runCmdAsync(process.execPath, ["-e", ""], { cwd: fixture }));`,
+    `assert.equal(result.status, 0);`,
+    `assert.equal(result.ok, true);`,
+    `await runtime.close();`,
+    `const inventory = ProcessExecutionRuntime.inspect({ mainRoot: fixture });`,
+    `assert.equal(inventory.slot, null);`,
+    `const calls = inventory.executions.flatMap(execution => execution.calls);`,
+    `assert.equal(calls.length, 1);`,
+    `assert.ok(calls.every(call => call.receipt !== null));`,
+    `outer.completeExecution();`,
+    `outer.retainOnUnconfirmedExecution(new ProcessExecutionControlFailure("stop-unconfirmed", "Earlier cutoff remains a diagnostic failure"));`,
+    `const removed = removeQuiescentRuntimeFixture({ mainRoot: fixture, cleanup: () => fs.rmSync(fixture, { recursive: true, force: true }) });`,
+    `console.log("RETAINED_RUNTIME_PROBE=" + JSON.stringify({ outer: outer.path, fixture, removed, exactReceipts: calls.length }));`,
+  ].join("\n");
+  const result = spawnSync(process.execPath, ["--input-type=module", "--eval", script], {
+    cwd: TEST_CHECKOUT_ROOT,
+    env: environmentWithoutTemporaryRoot(),
+    encoding: "utf8",
+    timeout: 60_000,
+  });
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  const match = /RETAINED_RUNTIME_PROBE=(\{[^\n]+\})/.exec(result.stdout);
+  assert.ok(match, result.stdout + result.stderr);
+  const probe = JSON.parse(match[1]);
+  assert.equal(probe.exactReceipts, 1);
+  // This probe created one child and confirmed its exact receipt before exiting.
+  t.after(() => removeTmpDir(probe.outer));
+  assert.equal(probe.removed, false);
+  assert.equal(fs.existsSync(path.join(probe.outer, ".unconfirmed-execution")), true);
+  assert.equal(fs.readFileSync(path.join(probe.fixture, "diagnostic-evidence.txt"), "utf8"),
+    "preserve the first control failure");
 });

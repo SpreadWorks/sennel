@@ -184,18 +184,12 @@ function spawnCatalogLockOwner(location, holdMs) {
     [
       `import fs from "node:fs";`,
       `import { ProcessLock } from ${JSON.stringify(PROCESS_LOCK_MODULE_PATH)};`,
-      `import { RealDirectoryAuthority } from ${JSON.stringify(DIRECTORY_AUTHORITY_MODULE_PATH)};`,
+      `import { RepositoryLockAuthority } from ${JSON.stringify(new URL("../../../src/lib/repository-control-lock.js", import.meta.url).href)};`,
       `const directory = ${JSON.stringify(location.directory)};`,
       `const runtimeDirectory = ${JSON.stringify(runtimeLock.runtimeDirectory)};`,
-      `const lockDirectory = ${JSON.stringify(runtimeLock.directory)};`,
-      `const lockFileName = ${JSON.stringify(runtimeLock.fileName)};`,
-      `fs.mkdirSync(lockDirectory, { recursive: true, mode: 0o755 });`,
-      "const directoryAuthority = new RealDirectoryAuthority(directory);",
-      "const runtimeAuthority = new RealDirectoryAuthority(runtimeDirectory, { parentAuthority: directoryAuthority });",
-      "const lockDirectoryAuthority = new RealDirectoryAuthority(lockDirectory, { parentAuthority: runtimeAuthority });",
+      `const controlLocation = new RepositoryLockAuthority(${JSON.stringify(location.repositoryRoot)}).location({namespace:"flow-version",identity:${JSON.stringify(location.directory)},fileName:${JSON.stringify(runtimeLock.fileName)}});`,
       "const lock = new ProcessLock({",
-      "  directoryAuthority: lockDirectoryAuthority,",
-      "  fileName: lockFileName,",
+      "  location: controlLocation,",
       "  kind: \"artifact-catalog-publication\",",
       "  authority: { directory, runtimeDirectory, catalog: `${directory}/artifact-catalog.json` },",
       "});",
@@ -738,8 +732,9 @@ describe("Flow artifact catalog authority slots", () => {
       location, authoritySlot: singleton("a"), relativePath: "artifacts/migration/a.json",
       mediaType: "application/json", retention: "permanent", migrationMaterialization: true,
     })]);
-    fs.mkdirSync(location.resolve(".runtime/locks"), { recursive: true });
-    fs.writeFileSync(location.resolve(".runtime/locks/artifact-catalog.lock"), "corrupt");
+    const control = location.runtimeLock("runtime.lock.artifact-catalog").controlLocation;
+    control.resolve({ create: true });
+    fs.writeFileSync(control.path, "corrupt");
     assert.throws(() => new FlowArtifactCatalogStore({ location }).load(), (error) => (
       error.code === "PROCESS_LOCK_CORRUPT" && error.code !== "FLOW_ARTIFACT_CATALOG_BUSY"
     ));

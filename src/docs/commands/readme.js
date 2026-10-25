@@ -9,6 +9,7 @@
  *   node sennel/engine/readme.js [--dry-run] [--help]
  */
 
+import { docsCommands } from "../../lib/command-registry.js";
 import fs from "fs";
 import path from "path";
 import { parseArgs } from "../../lib/cli.js";
@@ -46,8 +47,7 @@ async function runReadme(ctx, rawArgs = [], commandContainer = container) {
   // CLI モード: 引数をパースしてコンテキストを構築
   if (!ctx) {
     const cli = parseArgs(rawArgs, {
-      flags: ["--yes", "--dry-run"],
-      options: ["--lang", "--output"],
+      ...docsCommands.readme.args,
       defaults: { lang: "", output: "" },
     });
 

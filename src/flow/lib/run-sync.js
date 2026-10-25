@@ -12,6 +12,7 @@ import { RuntimeChildExecution } from "../../lib/runtime-package.js";
 import { runGit } from "../../lib/git-helpers.js";
 import { FlowCommand } from "./base-command.js";
 import { withFlowProcessRuntime } from "./process-runtime-admission.js";
+import { ExecutionMode, WritePlan } from "../../lib/execution-plan.js";
 import path from "path";
 import { PRODUCT } from "../../lib/product.js";
 
@@ -23,12 +24,19 @@ export class RunSyncCommand extends FlowCommand {
   }
 
   async execute(ctx) {
-    return withFlowProcessRuntime(ctx, () => this.#executeAdmitted(ctx), { commandId: "sync" });
+    const mode = ExecutionMode.fromDryRun(ctx.dryRun);
+    const plan = new WritePlan("Sync documentation")
+      .add("build documentation -> review generated files -> add changes -> commit if changed",
+        () => withFlowProcessRuntime(ctx, () => this.#executeAdmitted(ctx), { commandId: "sync" }));
+    let renderedPlan;
+    const results = await mode.execute(plan, { write: (text) => { renderedPlan = text; } });
+    return mode.isDryRun
+      ? { result: "dry-run", changed: [], artifacts: { plan: renderedPlan } }
+      : results[0];
   }
 
   async #executeAdmitted(ctx) {
     const { root } = ctx;
-    const dryRun = ctx.dryRun || false;
 
     const docsScript = path.join(PKG_DIR, "docs.js");
     const childOptions = { cwd: root, repositoryRoot: ctx.repositoryRoot || ctx.mainRoot || root, temporaryRoot: flowTemporaryRoot(ctx) };
@@ -57,14 +65,6 @@ export class RunSyncCommand extends FlowCommand {
           ...(reviewOutput ? [reviewOutput] : []),
         ].join("\n"),
       );
-    }
-
-    if (dryRun) {
-      return {
-        result: "dry-run",
-        changed: [],
-        artifacts: { buildOutput, reviewResult: reviewOutput },
-      };
     }
 
     // Step 3: git add (ignore errors for missing files)

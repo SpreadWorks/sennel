@@ -104,16 +104,18 @@ function buildPaths(root, config, opts = {}) {
   const agentWorkDir = durableRoot
     ? path.join(durableRoot, FINALIZE_CLEANUP_DURABLE_AGENT_WORK_DIR)
     : resolveWorkDir(root, config, opts);
-  const temporaryPaths = new TemporaryPaths(durableRoot || opts.repositoryRoot || root);
-  const logDir = temporaryPaths.logs(config?.logs?.dir);
+  const temporaryPaths = opts.workspace ?? new TemporaryPaths(durableRoot || opts.repositoryRoot || root);
+  const logDir = opts.workspace ? opts.workspace.logs() : temporaryPaths.logs(config?.logs?.dir);
   return Object.freeze({
     root,
     repositoryRoot: opts.repositoryRoot || root,
     srcRoot: sourceRoot(),
     managedDir: managedDir(root),
-    outputDir: managedOutputDir(root),
-    agentWorkDir,
+    outputDir: opts.workspace ? opts.workspace.runtime("output") : managedOutputDir(root),
+    agentWorkDir: opts.workspace ? opts.workspace.runtime("agent-work") : agentWorkDir,
     temporaryRoot: temporaryPaths.runtime("agent"),
+    temporaryPaths,
+    processRuntimeStorage: opts.workspace?.processRuntimeStorage() ?? null,
     logDir,
     configPath: managedConfigPath(root),
   });
@@ -186,6 +188,7 @@ export function initContainer(opts = {}) {
     agentWorkDirOverride: opts.agentWorkDirOverride,
     durableRoot: durableFinalizeRoot,
     repositoryRoot: mainRoot,
+    workspace: opts.workspace,
   });
 
   container.register("root", root);
@@ -204,7 +207,7 @@ export function initContainer(opts = {}) {
     enabled: configLoaded && config?.logs?.enabled === true,
     entryCommand: opts.entryCommand ?? null,
     flowManager: loggerFlowManager,
-    flowAttribution: opts.flowAttribution ?? "ambient",
+    flowAttribution: opts.workspace ? "none" : opts.flowAttribution ?? "ambient",
     cwd: durableFinalizeRoot || root,
   });
   container.register("logger", logger);
@@ -219,40 +222,46 @@ export function initContainer(opts = {}) {
   container.register("i18n", translate());
   container.register("lang", config?.lang);
 
+  registerPresetBaseDependencies();
+}
+
+/** Register the package-owned preset API without loading project services or configuration. */
+export function registerPresetBaseDependencies(target = container) {
+  if (target.has("base.DataSource")) return;
   // Base classes and utilities exposed to presets. Presets access these via
   // container.get("base.DataSource") etc. so they never need to import from
   // sennel internal paths directly.
-  container.register("base.DataSource", DataSource);
-  container.register("base.Scannable", Scannable);
-  container.register("base.AnalysisEntry", AnalysisEntry);
-  container.register("base.ANALYSIS_META_KEYS", ANALYSIS_META_KEYS);
-  container.register("base.iterateAnalysisCategories", iterateAnalysisCategories);
-  container.register("base.Renderable", Renderable);
-  container.register("base.Table", Table);
-  container.register("base.BulletList", BulletList);
-  container.register("base.OrderedList", OrderedList);
-  container.register("base.Paragraph", Paragraph);
-  container.register("base.CodeBlock", CodeBlock);
-  container.register("base.Blockquote", Blockquote);
-  container.register("base.Heading", Heading);
-  container.register("base.Fragment", Fragment);
-  container.register("scanner.findFiles", findFiles);
-  container.register("scanner.collectFiles", collectFiles);
-  container.register("scanner.patternToRegex", patternToRegex);
-  container.register("scanner.parseFile", parseFile);
-  container.register("scanner.parsePHPFile", parsePHPFile);
-  container.register("scanner.parseJSFile", parseJSFile);
-  container.register("scanner.camelToSnake", camelToSnake);
-  container.register("scanner.pluralize", pluralize);
-  container.register("scanner.getFileStats", getFileStats);
-  container.register("phpParser.stripBlockComments", stripBlockComments);
-  container.register("phpParser.extractArrayBody", extractArrayBody);
-  container.register("phpParser.extractTopLevelKeys", extractTopLevelKeys);
-  container.register("phpParser.extractQuotedStrings", extractQuotedStrings);
-  container.register("lang.getHandler", getLangHandler);
-  container.register("pathMatch.hasPathPrefix", hasPathPrefix);
-  container.register("pathMatch.hasSegmentPath", hasSegmentPath);
-  container.register("pathMatch.hasAnyPathPrefix", hasAnyPathPrefix);
-  container.register("toml.parse", parseTOML);
-  container.register("config.loadJsonFile", loadJsonFile);
+  target.register("base.DataSource", DataSource);
+  target.register("base.Scannable", Scannable);
+  target.register("base.AnalysisEntry", AnalysisEntry);
+  target.register("base.ANALYSIS_META_KEYS", ANALYSIS_META_KEYS);
+  target.register("base.iterateAnalysisCategories", iterateAnalysisCategories);
+  target.register("base.Renderable", Renderable);
+  target.register("base.Table", Table);
+  target.register("base.BulletList", BulletList);
+  target.register("base.OrderedList", OrderedList);
+  target.register("base.Paragraph", Paragraph);
+  target.register("base.CodeBlock", CodeBlock);
+  target.register("base.Blockquote", Blockquote);
+  target.register("base.Heading", Heading);
+  target.register("base.Fragment", Fragment);
+  target.register("scanner.findFiles", findFiles);
+  target.register("scanner.collectFiles", collectFiles);
+  target.register("scanner.patternToRegex", patternToRegex);
+  target.register("scanner.parseFile", parseFile);
+  target.register("scanner.parsePHPFile", parsePHPFile);
+  target.register("scanner.parseJSFile", parseJSFile);
+  target.register("scanner.camelToSnake", camelToSnake);
+  target.register("scanner.pluralize", pluralize);
+  target.register("scanner.getFileStats", getFileStats);
+  target.register("phpParser.stripBlockComments", stripBlockComments);
+  target.register("phpParser.extractArrayBody", extractArrayBody);
+  target.register("phpParser.extractTopLevelKeys", extractTopLevelKeys);
+  target.register("phpParser.extractQuotedStrings", extractQuotedStrings);
+  target.register("lang.getHandler", getLangHandler);
+  target.register("pathMatch.hasPathPrefix", hasPathPrefix);
+  target.register("pathMatch.hasSegmentPath", hasSegmentPath);
+  target.register("pathMatch.hasAnyPathPrefix", hasAnyPathPrefix);
+  target.register("toml.parse", parseTOML);
+  target.register("config.loadJsonFile", loadJsonFile);
 }

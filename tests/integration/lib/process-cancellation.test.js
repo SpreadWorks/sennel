@@ -4,12 +4,21 @@ import fs from "node:fs";
 import path from "node:path";
 import { it } from "node:test";
 import { runCmd, runCmdAsync } from "../../../src/lib/process.js";
-import { LinuxProcessStat } from "../../../src/lib/process-identity.js";
+import { ProcessExecutionRuntime } from "../../../src/lib/process-execution-runtime.js";
+import { testTemporaryRoot } from "../../test-environment.js";
 
-function rootFixture(t) {
+async function rootFixture(t) {
   const root = createTestDirectory("process-cancellation-");
-  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
-  return root;
+  const runtime = await ProcessExecutionRuntime.acquire({ mainRoot: root, environment: {} });
+  t.after(async () => {
+    try { await runtime.close(); }
+    catch (error) { testTemporaryRoot().retainOnUnconfirmedExecution(); throw error; }
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+  return { root, runtime,
+    runCmd: (command, args, options = {}) => runtime.enter(() => runCmd(command, args, { cwd: root, ...options })),
+    runCmdAsync: (command, args, options = {}) => runtime.enter(() => runCmdAsync(command, args, { cwd: root, ...options })),
+  };
 }
 
 function waitForFile(t, file) {
@@ -31,8 +40,8 @@ function waitForFile(t, file) {
   });
 }
 
-it("synchronous runner delivers stdin, fd3, cwd and task environment to the child", (t) => {
-  const root = rootFixture(t);
+it("synchronous runner delivers stdin, fd3, cwd and task environment to the child", async (t) => {
+  const { root, runCmd } = await rootFixture(t);
   const deliveryFile = path.join(root, "delivery");
   fs.writeFileSync(deliveryFile, "parent descriptor data");
   const descriptor = fs.openSync(deliveryFile, "r");
@@ -63,7 +72,7 @@ it("synchronous runner delivers stdin, fd3, cwd and task environment to the chil
 });
 
 it("pre-aborted asynchronous command returns a failed result without dispatch", async (t) => {
-  const root = rootFixture(t);
+  const { root, runtime, runCmdAsync } = await rootFixture(t);
   const marker = path.join(root, "started");
   const controller = new AbortController();
   controller.abort(new Error("run stopped"));
@@ -77,25 +86,16 @@ it("pre-aborted asynchronous command returns a failed result without dispatch", 
 });
 
 it("native AbortSignal cancels an awaited command and preserves its result contract", async (t) => {
-  const root = rootFixture(t);
+  const { root, runCmdAsync } = await rootFixture(t);
   const started = path.join(root, "started");
-  const stopped = path.join(root, "stopped");
   const controller = new AbortController();
-  let pid = null;
-  t.after(() => {
-    if (pid === null) return;
-    try { process.kill(pid, "SIGKILL"); } catch (error) { if (error.code !== "ESRCH") throw error; }
-  });
   const ready = waitForFile(t, started);
-  const stoppedEvidence = waitForFile(t, stopped);
   const execution = runCmdAsync(process.execPath, ["-e", [
     "const fs = require('node:fs');",
-    "process.on('SIGTERM', () => { fs.writeFileSync(process.argv[2], 'SIGTERM'); process.exit(0); });",
-    "fs.writeFileSync(process.argv[1], String(process.pid));",
+    "fs.writeFileSync(process.argv[1], 'ready');",
     "setInterval(() => {}, 1000);",
-  ].join(""), started, stopped], { signal: controller.signal, timeout: 10_000 });
-  pid = Number(await ready);
-  assert.ok(Number.isSafeInteger(pid) && pid > 0);
+  ].join(""), started], { signal: controller.signal, timeout: 10_000 });
+  assert.equal(await ready, "ready");
   controller.abort(new Error("run stopped"));
   const result = await execution;
   assert.equal(result.ok, false);
@@ -103,7 +103,9 @@ it("native AbortSignal cancels an awaited command and preserves its result contr
   assert.equal(result.errorCode, "ABORT_ERR");
   assert.equal(typeof result.stdout, "string");
   assert.equal(typeof result.stderr, "string");
-  assert.equal(await stoppedEvidence, "SIGTERM");
+  assert.equal(result.processExecutionStopReceipt.observation.kind, "exited");
+  assert.equal(result.processExecutionStopReceipt.stopOperation.reason, "abort");
+  assert.equal(result.stopEvidence.confirmed, true);
 });
 
 it("synchronous command setup failures settle as failed results", async () => {
@@ -113,50 +115,16 @@ it("synchronous command setup failures settle as failed results", async () => {
   assert.equal(result.errorCode, "ERR_INVALID_ARG_TYPE");
 });
 
-it("supervised cancellation stops a review subprocess and its descendant before returning", async (t) => {
-  if (process.platform !== "linux") return t.skip("Linux process identity readback proves descendant termination");
-  const root = rootFixture(t);
-  const parentMarker = path.join(root, "parent");
-  const childMarker = path.join(root, "child");
-  const owned = [];
-  t.after(() => {
-    for (const pid of owned) {
-      try { process.kill(pid, "SIGKILL"); } catch (error) { if (error.code !== "ESRCH") throw error; }
-    }
-  });
-  const controller = new AbortController();
-  const ready = waitForFile(t, childMarker);
-  const execution = runCmdAsync(process.execPath, ["-e", [
-    "const fs=require('node:fs'); const {spawn}=require('node:child_process');",
-    "fs.writeFileSync(process.argv[1],String(process.pid));",
-    "spawn(process.execPath,['-e',",
-    "\"require('node:fs').writeFileSync(process.argv[1],String(process.pid));setInterval(()=>{},1000);\",",
-    "process.argv[2]],{stdio:'ignore'});setInterval(()=>{},1000);",
-  ].join(""), parentMarker, childMarker], { signal: controller.signal, timeout: 10_000 });
-  const childPid = Number(await ready);
-  const parentPid = Number(fs.readFileSync(parentMarker, "utf8"));
-  owned.push(parentPid, childPid);
-  controller.abort(new Error("review interrupted"));
-  const result = await execution;
-  assert.equal(result.ok, false);
-  assert.equal(result.errorCode, "ABORT_ERR");
-  assert.equal(result.stopEvidence.confirmed, true);
-  for (const pid of owned) {
-    try {
-      const identity = LinuxProcessStat.parse(fs.readFileSync(`/proc/${pid}/stat`, "utf8"));
-      assert.equal(identity.state, "Z", `owned process ${pid} is still executing`);
-    } catch (error) {
-      if (error.code !== "ENOENT") throw error;
-    }
-  }
-});
-
-it("a signal-capable command keeps ordinary output and failure status contracts", async () => {
+it("a signal-capable command keeps ordinary output and failure status contracts", async (t) => {
+  const { runCmdAsync } = await rootFixture(t);
   const controller = new AbortController();
   const success = await runCmdAsync(process.execPath, ["-e", "process.stdout.write('output');process.stderr.write('diagnostic');"], {
     signal: controller.signal,
   });
-  assert.deepEqual(success, { ok: true, status: 0, stdout: "output", stderr: "diagnostic", signal: null, killed: false });
+  const { processExecutionStopReceipt, stopEvidence, ...result } = success;
+  assert.deepEqual(result, { ok: true, status: 0, stdout: "output", stderr: "diagnostic", signal: null, killed: false, errorCode: null });
+  assert.equal(processExecutionStopReceipt.observation.code, 0);
+  assert.equal(stopEvidence.confirmed, true);
   const failure = await runCmdAsync(process.execPath, ["-e", "process.stderr.write('failure');process.exit(42);"], {
     signal: controller.signal,
   });
@@ -166,7 +134,8 @@ it("a signal-capable command keeps ordinary output and failure status contracts"
   assert.equal(failure.errorCode, null);
 });
 
-it("a supervised output limit terminates the command without unbounded capture", async () => {
+it("a supervised output limit terminates the command without unbounded capture", async (t) => {
+  const { runCmdAsync } = await rootFixture(t);
   const controller = new AbortController();
   const result = await runCmdAsync(process.execPath, ["-e", "process.stdout.write('oversized output');setInterval(()=>{},1000);"], {
     signal: controller.signal, maxBuffer: 4, timeout: 10_000,

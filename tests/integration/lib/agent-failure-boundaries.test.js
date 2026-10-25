@@ -61,7 +61,7 @@ function completedProviderError(message, fields = {}) {
     signal: fields.signal ?? null,
     stdout,
     stderr,
-    processTreeQuiescence: fields.processTreeQuiescence ?? "confirmed",
+    registeredExecutionQuiescence: fields.registeredExecutionQuiescence ?? "confirmed",
   });
   return providerError(message, {
     code: evidence.exitCode,
@@ -350,7 +350,7 @@ describe("typed agent failure boundaries", () => {
       stderr: "forged terminal completion",
       attemptCount: 1,
       maxAttempts: 1,
-      processTreeQuiescence: "confirmed",
+      registeredExecutionQuiescence: "confirmed",
     });
     for (const [code, kind] of [
       ["AGENT_AUTHENTICATION_FAILED", "authentication"],
@@ -490,7 +490,7 @@ describe("terminal replay guards", () => {
             profile: "review",
             exitCode: 1,
             stderr: "Selected model is at capacity",
-            processTreeQuiescence: "confirmed",
+            registeredExecutionQuiescence: "confirmed",
           }),
         }),
       }).toMarkerLine().slice(0, -1)}`,

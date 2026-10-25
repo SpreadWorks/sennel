@@ -2,6 +2,7 @@ import { cpSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { createTmpDir, removeTmpDir } from "./tmp-dir.js";
 import { performance } from "node:perf_hooks";
+import { testTemporaryRoot } from "../../test-environment.js";
 
 /** Optional test diagnostics, kept outside all canonical artifacts. */
 export function observeSeedTiming(event, elapsedMs) {
@@ -32,11 +33,14 @@ export class SeedCleanupScope {
 
 export class SeedWorkRoot {
   #directory;
+  #temporaryRoot;
+  #retained = false;
 
-  constructor(seed, { prefix = "sennel-test-", parent, copy = cpSync } = {}) {
+  constructor(seed, { prefix = "sennel-test-", temporaryRoot = testTemporaryRoot(), parent = temporaryRoot.path, copy = cpSync } = {}) {
     if (!existsSync(seed)) throw new Error(`immutable seed does not exist: ${seed}`);
     if (!prefix.startsWith("sennel-")) throw new Error("test root prefix must be namespaced");
     this.seed = seed;
+    this.#temporaryRoot = temporaryRoot;
     this.#directory = createTmpDir(prefix, { parent });
     this.root = join(this.#directory, "work");
     const started = performance.now();
@@ -51,7 +55,19 @@ export class SeedWorkRoot {
     if (this.root === this.seed) throw new Error("work root must differ from immutable seed");
   }
 
+  async use(operation) {
+    try {
+      return await operation(this.root);
+    } catch (error) {
+      this.#retained = this.#temporaryRoot.retainOnUnconfirmedExecution(error) || this.#retained;
+      throw error;
+    } finally {
+      this.cleanup();
+    }
+  }
+
   cleanup() {
+    if (this.#retained) return;
     const started = performance.now();
     removeTmpDir(this.#directory);
     this.cleanupDurationMs = performance.now() - started;

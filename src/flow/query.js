@@ -1,7 +1,9 @@
+import { FlowProcessEvent, PROCESS_EVENT_ACTIVITY_TYPES } from "./lib/flow-process-event.js";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { captureRegularFile } from "../lib/regular-file-snapshot.js";
+import { currentRuntimePackage } from "../lib/runtime-package.js";
 import { RealDirectoryAuthority } from "../lib/real-directory-authority.js";
 import { LogicalRelativePath } from "../lib/portable-path.js";
 import { buildFlowStopGuidance } from "../lib/flow-stop-guidance.js";
@@ -97,24 +99,19 @@ class QueryProjectionSignature {
   }
 
   static async read() {
-    const root = new URL("../", import.meta.url);
+    // Projection code belongs to the captured runtime. A source edit can affect
+    // the next bootstrap, but cannot invalidate cursors of this active runtime.
     const entries = [];
     let totalBytes = 0;
-    const visit = async (directory, prefix) => {
-      for (const entry of await fs.promises.readdir(directory, { withFileTypes: true })) {
-        if (entry.name === "tests") continue;
-        const relative = `${prefix}${entry.name}`;
-        if (entry.isDirectory()) await visit(new URL(`${entry.name}/`, directory), `${relative}/`);
-        else if (entry.isFile() && /\.(?:js|json)$/.test(entry.name)) {
-          if (entries.length >= FLOW_QUERY_LIMITS.MAX_MANAGED_ARTIFACT_ENTRIES) throw new Error("projection source count exceeds the limit");
-          const bytes = await fs.promises.readFile(new URL(entry.name, directory));
-          totalBytes += bytes.length;
-          if (totalBytes > FLOW_QUERY_LIMITS.MAX_TOTAL_ARTIFACT_BYTES) throw new Error("projection source bytes exceed the limit");
-          entries.push({ path: relative, hash: crypto.createHash("sha256").update(bytes).digest("hex") });
-        }
-      }
-    };
-    await visit(root, "");
+    for (const file of currentRuntimePackage().files) {
+      if (!file.key.startsWith("src/") || !/\.(?:js|json)$/.test(file.key)) continue;
+      const relative = file.key.slice("src/".length);
+      if (relative.split("/").includes("tests")) continue;
+      if (entries.length >= FLOW_QUERY_LIMITS.MAX_MANAGED_ARTIFACT_ENTRIES) throw new Error("projection source count exceeds the limit");
+      totalBytes += file.bytes;
+      if (totalBytes > FLOW_QUERY_LIMITS.MAX_TOTAL_ARTIFACT_BYTES) throw new Error("projection source bytes exceed the limit");
+      entries.push({ path: relative, hash: file.digest });
+    }
     entries.sort((left, right) => left.path < right.path ? -1 : left.path > right.path ? 1 : 0);
     return new QueryProjectionSignature(canonicalDigest(entries, { maxBytes: FLOW_QUERY_LIMITS.MAX_RESPONSE_BYTES }));
   }
@@ -663,7 +660,7 @@ class MetadataItem {
 
 class ActivityItem {
   constructor(value) {
-    const fields = ["activity", "node", "task", "attempt", "sequence", "confirmationOrder", "transition", "timing", "usage", "outcome", "failure", "blocker", "incomplete", "metric", "note", "evaluationIds", "findingIds", "repairIds", "artifactIds", "detailRefs", "referenceBindings", "detailCoverage", "resultConfirmedAt", "provider", "model", "effort", "outbox", "executionRefs"];
+    const fields = ["activity", "node", "task", "attempt", "sequence", "confirmationOrder", "transition", "timing", "usage", "outcome", "failure", "blocker", "incomplete", "metric", "note", "evaluationIds", "findingIds", "repairIds", "artifactIds", "detailRefs", "referenceBindings", "detailCoverage", "resultConfirmedAt", "provider", "model", "effort", "outbox", "executionRefs", ...(PROCESS_EVENT_ACTIVITY_TYPES.includes(value.activity?.type) ? ["processEvent"] : [])];
     requireExactObject(value, fields, "ActivityItem");
     requireExactObject(value.activity, ["id", "type"], "ActivityItem.activity");
     requirePublicString(value.activity.id, "ActivityItem.activity.id");
@@ -1357,6 +1354,7 @@ class QueryProjector {
     if (incomplete.length > 1) throw new QueryError(ERROR_CODES.CANONICAL_RECORD_INCONSISTENT, "/canonical", "Activity Attempt contains multiple incomplete claims");
     return new ActivityItem({
       activity: { id: activity.id, type: activity.type },
+      ...(activity.processEvent == null ? {} : { processEvent: new FlowProcessEvent(activity.processEvent).publicJSON() }),
       node: { id: activity.nodeId, key: activity.nodeKey },
       task: task === null ? null : { id: task.id, key: task.key },
       attempt: activity.attemptId === null ? null : { id: activity.attemptId, sequence: activity.sequence,

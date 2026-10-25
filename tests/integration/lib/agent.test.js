@@ -1,13 +1,15 @@
 import { testTemporaryRoot } from "../../test-environment.js";
-import { createTmpDir as createTestDirectory } from "../../support/builders/tmp-dir.js";
+import { createTmpDir as createTestDirectory, removeTmpDir } from "../../support/builders/tmp-dir.js";
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import path from "path";
 import fs from "fs";
-import { EventEmitter } from "events";
-import { spawn } from "child_process";
+import { runCmdAsync } from "../../../src/lib/process.js";
+import { NativeExecutableInvocation } from "../../../src/lib/command-invocation.js";
+import { ProcessExecutionStopReceipt } from "../../../src/lib/process-execution-values.js";
+import { ProcessExecutionRuntime } from "../../../src/lib/process-execution-runtime.js";
 import { fileURLToPath, pathToFileURL } from "url";
-import { Agent, ChildProcessSupervisor } from "../../../src/lib/agent.js";
+import { Agent, AGENT_EXTERNAL_EXECUTION_INSTRUCTION } from "../../../src/lib/agent.js";
 import {
   AgentAuthenticationFailure,
   EmptyAgentResponseFailure,
@@ -18,7 +20,6 @@ import {
 } from "../../../src/lib/agent-failure.js";
 import { ProviderRegistry } from "../../../src/lib/provider.js";
 import { Logger } from "../../../src/lib/log.js";
-import { ReviewExecutionLease } from "../../../src/flow/lib/review-execution-lease.js";
 import { AgentTimeoutDiagnostic } from "../../../src/lib/agent-timeout.js";
 import { MAX_DURABLE_STREAM_EVIDENCE_BYTES } from "../../../src/lib/bounded-stream-evidence.js";
 
@@ -31,7 +32,19 @@ const WORKER_ARTIFACT_HANDOFF_SCHEMA_PATH = path.resolve(
   "../../../src/flow/schemas/next-action/worker-artifact-handoff.schema.json",
 );
 
-function makeAgent(profile, { config, paths, flowManager, logger, supervision } = {}) {
+// Keep production admission, execution and receipt handling intact; the fixture
+// only preserves its owner when the existing policy reports unknown completion.
+class FixtureAgent extends Agent {
+  async call(...args) {
+    try { return await super.call(...args); }
+    catch (error) {
+      testTemporaryRoot().retainOnUnconfirmedExecution(error);
+      throw error;
+    }
+  }
+}
+
+function makeAgent(profile, { config, paths, flowManager, logger } = {}) {
   const root = paths?.root || tmpDir();
   const agentWorkDir = paths?.agentWorkDir || path.join(root, ".tmp");
   const userProviders = profile ? { "test/exec": profile } : {};
@@ -43,39 +56,16 @@ function makeAgent(profile, { config, paths, flowManager, logger, supervision } 
     },
   };
   const registry = new ProviderRegistry(cfg.agent?.providers || {});
-  return new Agent({
+  return new FixtureAgent({
     config: cfg,
     paths: { root, agentWorkDir, ...(paths || {}) },
     registry,
     logger: logger || new Logger({ logDir: testTemporaryRoot().path, enabled: false }),
     flowManager,
-    supervision,
   });
 }
 
-async function waitForFile(file, timeoutMs = 1_000) {
-  const deadline = Date.now() + timeoutMs;
-  while (!fs.existsSync(file)) {
-    if (Date.now() >= deadline) throw new Error(`timed out waiting for ${file}`);
-    await new Promise((resolve) => setTimeout(resolve, 10));
-  }
-}
-
-async function waitForProcessExit(pid, timeoutMs = 1_000) {
-  const deadline = Date.now() + timeoutMs;
-  while (true) {
-    try {
-      process.kill(pid, 0);
-    } catch (error) {
-      if (error.code === "ESRCH") return;
-      throw error;
-    }
-    if (Date.now() >= deadline) throw new Error(`provider descendant ${pid} remained alive after timeout cleanup`);
-    await new Promise((resolve) => setTimeout(resolve, 10));
-  }
-}
-
-async function waitForLineCount(filePath, count, timeoutMs = 5_000) {
+async function waitForLineCount(filePath, count, timeoutMs = 120_000) {
   const deadline = Date.now() + timeoutMs;
   while (true) {
     const lines = fs.existsSync(filePath)
@@ -87,42 +77,24 @@ async function waitForLineCount(filePath, count, timeoutMs = 5_000) {
   }
 }
 
-function runModuleProcess(source, args) {
-  return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, ["--input-type=module", "-e", source, ...args], {
-      stdio: ["ignore", "ignore", "pipe"],
-    });
-    let stderr = "";
-    child.stderr.on("data", (chunk) => { stderr += String(chunk); });
-    child.once("error", reject);
-    child.once("close", (code) => {
-      if (code === 0) resolve();
-      else reject(new Error(`concurrent cache writer exited ${code}: ${stderr}`));
-    });
-  });
+async function runModuleProcess(source, args) {
+  try {
+    const result = await runCmdAsync(new NativeExecutableInvocation({ executable: process.execPath,
+      args: ["--import", pathToFileURL(path.resolve("src/sennel.js")).href, "--input-type=module", "-e", source, ...args], cwd: args[0],
+      stdio: ["ignore", "ignore", "pipe"] }), [], { timeout: 120000 });
+    assert.equal(result.status, 0, `concurrent cache writer failed: ${result.stderr}`);
+  } catch (error) {
+    testTemporaryRoot().retainOnUnconfirmedExecution(error);
+    throw error;
+  }
 }
 
-function successfulSpawnRecorder(record) {
-  return (command, args, options) => {
-    record.command = command;
-    record.args = args;
-    record.options = options;
-    const child = new EventEmitter();
-    child.pid = null;
-    child.stdout = new EventEmitter();
-    child.stderr = new EventEmitter();
-    queueMicrotask(() => {
-      child.stdout.emit("data", "ok");
-      child.emit("close", 0, null);
-    });
-    return child;
-  };
-}
+function effectivePrompt(prompt) { return `${AGENT_EXTERNAL_EXECUTION_INSTRUCTION}\n\n${prompt}`; }
 
 describe("Agent.call() — basic invocation", () => {
   it("reports both stdout and stderr activity to a supplied worker monitor", async (t) => {
     const root = tmpDir();
-    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    t.after(() => removeTmpDir(root));
     const events = [];
     const monitor = {
       start(callback) { events.push("start"); this.callback = callback; },
@@ -130,22 +102,8 @@ describe("Agent.call() — basic invocation", () => {
       stop() { events.push("stop"); },
     };
     const agent = makeAgent(
-      { command: "worker", args: ["{{PROMPT}}"] },
-      {
-        paths: { root, agentWorkDir: path.join(root, ".tmp") },
-        supervision: { spawn() {
-          const child = new EventEmitter();
-          child.pid = null;
-          child.stdout = new EventEmitter();
-          child.stderr = new EventEmitter();
-          queueMicrotask(() => {
-            child.stdout.emit("data", "stdout activity");
-            child.stderr.emit("data", "stderr activity");
-            child.emit("close", 0, null);
-          });
-          return child;
-        } },
-      },
+      { command: process.execPath, args: ["-e", "process.stdout.write('stdout activity');process.stderr.write('stderr activity')", "{{PROMPT}}"] },
+      { paths: { root, agentWorkDir: path.join(root, ".tmp") } },
     );
 
     assert.equal(await agent.call("work", { commandId: "test", retryCount: 0, activityMonitor: monitor }), "stdout activity");
@@ -153,25 +111,25 @@ describe("Agent.call() — basic invocation", () => {
   });
 
   it("calls a command and returns trimmed output", async () => {
-    const agent = makeAgent({ command: "echo", args: ["{{PROMPT}}"] });
+    const agent = makeAgent({ command: process.execPath, args: ["-e", "process.stdout.write(process.argv[1])", "{{PROMPT}}"] });
     const result = await agent.call("hello world", { commandId: "test" });
-    assert.equal(result, "hello world");
+    assert.equal(result, effectivePrompt("hello world"));
   });
 
   it("substitutes {{PROMPT}} token in args", async () => {
-    const agent = makeAgent({ command: "echo", args: ["{{PROMPT}}"] });
+    const agent = makeAgent({ command: process.execPath, args: ["-e", "process.stdout.write(process.argv[1])", "{{PROMPT}}"] });
     const result = await agent.call("test-prompt", { commandId: "test" });
-    assert.equal(result, "test-prompt");
+    assert.equal(result, effectivePrompt("test-prompt"));
   });
 
   it("preserves replacement syntax as literal prompt content", async () => {
-    const agent = makeAgent({ command: "echo", args: ["{{PROMPT}}"] });
+    const agent = makeAgent({ command: process.execPath, args: ["-e", "process.stdout.write(process.argv[1])", "{{PROMPT}}"] });
     const result = await agent.call("literal $& and $1 content", { commandId: "test" });
-    assert.equal(result, "literal $& and $1 content");
+    assert.equal(result, effectivePrompt("literal $& and $1 content"));
   });
 
   it("appends prompt when no {{PROMPT}} token", async () => {
-    const agent = makeAgent({ command: "echo", args: ["-n"] });
+    const agent = makeAgent({ command: process.execPath, args: ["-e", "process.stdout.write(process.argv[1])"] });
     const result = await agent.call("appended", { commandId: "test" });
     assert.match(result, /appended/);
   });
@@ -194,76 +152,37 @@ describe("Agent.call() — basic invocation", () => {
       executionWorkDir,
     });
 
-    assert.deepEqual(invocation.finalArgs, ["exec", "--cwd", executionWorkDir, "work"]);
-    fs.rmSync(root, { recursive: true, force: true });
+    assert.deepEqual(invocation.finalArgs, ["exec", "--cwd", executionWorkDir, effectivePrompt("work")]);
+    removeTmpDir(root);
   });
 
-  it("starts a flagless provider inside the execution work directory", async (t) => {
+  for (const scenario of [
+    { name: "starts a flagless provider inside the execution work directory", flagged: false, override: true },
+    { name: "starts a flagged provider inside the same execution work directory", flagged: true, override: true },
+    { name: "keeps the repository root as the default child working directory", flagged: false, override: false },
+  ]) it(scenario.name, async (t) => {
     const root = tmpDir();
-    const executionWorkDir = path.join(root, "review-snapshot");
-    fs.mkdirSync(executionWorkDir);
-    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
-    const spawned = {};
-    const agent = makeAgent(
-      { command: "worker", args: ["exec", "{{PROMPT}}"] },
-      {
-        paths: { root, agentWorkDir: path.join(root, ".tmp") },
-        supervision: { spawn: successfulSpawnRecorder(spawned) },
-      },
-    );
-
-    assert.equal(await agent.call("review", {
-      commandId: "test",
-      executionWorkDir,
-      retryCount: 0,
-    }), "ok");
-    assert.equal(spawned.options.cwd, executionWorkDir);
-    assert.deepEqual(spawned.args, ["exec", "review"]);
-  });
-
-  it("starts a flagged provider inside the same execution work directory", async (t) => {
-    const root = tmpDir();
-    const executionWorkDir = path.join(root, "review-snapshot");
-    fs.mkdirSync(executionWorkDir);
-    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
-    const spawned = {};
-    const agent = makeAgent(
-      { command: "worker", args: ["exec", "{{PROMPT}}"], workDirFlag: "--cwd" },
-      {
-        paths: { root, agentWorkDir: path.join(root, ".tmp") },
-        supervision: { spawn: successfulSpawnRecorder(spawned) },
-      },
-    );
-
-    assert.equal(await agent.call("review", {
-      commandId: "test",
-      executionWorkDir,
-      retryCount: 0,
-    }), "ok");
-    assert.equal(spawned.options.cwd, executionWorkDir);
-    assert.deepEqual(spawned.args, ["exec", "--cwd", executionWorkDir, "review"]);
-  });
-
-  it("keeps the repository root as the default child working directory", async (t) => {
-    const root = tmpDir();
-    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
-    const spawned = {};
-    const agent = makeAgent(
-      { command: "worker", args: ["exec", "{{PROMPT}}"] },
-      {
-        paths: { root, agentWorkDir: path.join(root, ".tmp") },
-        supervision: { spawn: successfulSpawnRecorder(spawned) },
-      },
-    );
-
-    assert.equal(await agent.call("review", { commandId: "test", retryCount: 0 }), "ok");
-    assert.equal(spawned.options.cwd, root);
+    t.after(() => removeTmpDir(root));
+    const executionWorkDir = scenario.override ? path.join(root, "review-snapshot") : root;
+    fs.mkdirSync(executionWorkDir, { recursive: true });
+    const record = path.join(root, "received.json");
+    const script = path.join(root, "provider.cjs");
+    fs.writeFileSync(script, `require('node:fs').writeFileSync(${JSON.stringify(record)},JSON.stringify({command:process.execPath,args:process.argv.slice(2),cwd:process.cwd()}));process.stdout.write('ok');`);
+    const profile = { command: process.execPath, args: [script, "exec", ...(scenario.flagged ? ["--cwd", "configured-placeholder"] : []), "{{PROMPT}}"],
+      ...(scenario.flagged ? { workDirFlag: "--cwd" } : {}) };
+    const agent = makeAgent(profile, { paths: { root, agentWorkDir: path.join(root, ".tmp") } });
+    assert.equal(await agent.call("review", { commandId: "test", retryCount: 0,
+      ...(scenario.override ? { executionWorkDir } : {}) }), "ok");
+    const received = JSON.parse(fs.readFileSync(record, "utf8"));
+    assert.equal(received.command, process.execPath);
+    assert.equal(received.cwd, executionWorkDir);
+    assert.deepEqual(received.args, ["exec", ...(scenario.flagged ? ["--cwd", executionWorkDir] : []), effectivePrompt("review")]);
   });
 
   it("passes the spec schema through a schema-capable provider profile", (t) => {
     const root = tmpDir();
     const agentWorkDir = path.join(root, ".tmp");
-    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    t.after(() => removeTmpDir(root));
     const agent = makeAgent(null, {
       config: { agent: { default: "codex/gpt-5.6-terra-medium" } },
       paths: { root, agentWorkDir },
@@ -289,7 +208,7 @@ describe("Agent.call() — basic invocation", () => {
   it("writes a Codex-compatible sealed handoff response schema", (t) => {
     const root = tmpDir();
     const agentWorkDir = path.join(root, ".tmp");
-    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    t.after(() => removeTmpDir(root));
     const agent = makeAgent(null, {
       config: { agent: { default: "codex/gpt-5.6-terra-medium" } },
       paths: { root, agentWorkDir },
@@ -312,7 +231,7 @@ describe("Agent.call() — basic invocation", () => {
 
   it("uses the equivalent prompt fallback for a provider without schema support", (t) => {
     const root = tmpDir();
-    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    t.after(() => removeTmpDir(root));
     const agent = makeAgent({
       command: "worker",
       args: ["{{PROMPT}}"],
@@ -328,14 +247,14 @@ describe("Agent.call() — basic invocation", () => {
 
     assert.equal(invocation.pendingSchemaWrite, null);
     assert.equal(invocation.finalArgs.includes("--schema"), false);
-    assert.match(invocation.finalArgs[0], /^FALLBACK SPEC INSTRUCTIONS\n\nwrite spec$/);
+    assert.equal(invocation.finalArgs[0], `FALLBACK SPEC INSTRUCTIONS\n\n${effectivePrompt("write spec")}`);
   });
 
   it("rejects an execution directory outside the repository before spawning", async (t) => {
     const root = tmpDir();
-    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    t.after(() => removeTmpDir(root));
     const agent = makeAgent(
-      { command: "echo", args: ["{{PROMPT}}"] },
+      { command: process.execPath, args: ["-e", "process.stdout.write(process.argv[1])", "{{PROMPT}}"] },
       { paths: { root, agentWorkDir: path.join(root, ".tmp") } },
     );
 
@@ -355,11 +274,11 @@ describe("Agent.call() — basic invocation", () => {
 
   it("types work-directory setup failures before spawning", async (t) => {
     const root = tmpDir();
-    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    t.after(() => removeTmpDir(root));
     const agentWorkDir = path.join(root, "agent-work-file");
     fs.writeFileSync(agentWorkDir, "not a directory\n");
     const agent = makeAgent(
-      { command: "echo", args: ["{{PROMPT}}"] },
+      { command: process.execPath, args: ["-e", "process.stdout.write(process.argv[1])", "{{PROMPT}}"] },
       { paths: { root, agentWorkDir } },
     );
 
@@ -375,95 +294,10 @@ describe("Agent.call() — basic invocation", () => {
     );
   });
 
-  it("waits for a provider process group before returning when requested", async (t) => {
+  it("stops its registered direct provider when the activity monitor expires", async (t) => {
     const root = tmpDir();
-    const marker = path.join(root, "descendant-finished.txt");
-    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
-    const descendant = [
-      "const fs=require('node:fs');",
-      `setTimeout(()=>{fs.writeFileSync(${JSON.stringify(marker)},'done');},150);`,
-    ].join("");
-    const provider = [
-      "const {spawn}=require('node:child_process');",
-      `const child=spawn(process.execPath,['-e',${JSON.stringify(descendant)}],{stdio:'ignore'});`,
-      "child.unref();",
-      "process.stdout.write('provider returned');",
-    ].join("");
-    const agent = makeAgent(
-      { command: process.execPath, args: ["-e", provider] },
-      { paths: { root, agentWorkDir: path.join(root, ".tmp") } },
-    );
-
-    const result = await agent.call("", {
-      commandId: "test",
-      retryCount: 0,
-      waitForProcessTree: true,
-    });
-
-    assert.equal(result, "provider returned");
-    assert.equal(fs.readFileSync(marker, "utf8"), "done");
-  });
-
-  it("kills a forked timed-out provider tree before releasing its review execution lease", async (t) => {
-    if (process.platform === "win32") t.skip("POSIX process-group containment is covered by the Windows supervisor separately");
-    const root = tmpDir();
-    const marker = path.join(root, "forked-provider-child.pid");
-    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
-    const descendant = [
-      "const fs=require('node:fs');",
-      `fs.writeFileSync(${JSON.stringify(marker)},String(process.pid));`,
-      "setInterval(()=>{},1_000);",
-    ].join("");
-    const provider = [
-      "const {spawn}=require('node:child_process');",
-      `spawn(process.execPath,['-e',${JSON.stringify(descendant)}],{stdio:'ignore'});`,
-      "setInterval(()=>{},1_000);",
-    ].join("");
-    const agent = makeAgent(
-      { command: process.execPath, args: ["-e", provider] },
-      {
-        paths: { root, agentWorkDir: path.join(root, ".tmp") },
-        config: {
-          agent: {
-            default: "test/exec",
-            providers: { "test/exec": { command: process.execPath, args: ["-e", provider] } },
-            timeout: 0.2,
-          },
-        },
-      },
-    );
-    const identity = { mainRoot: root, runId: "timeout-run", nodeId: "spec-review", attemptId: "timeout-attempt" };
-    const lease = new ReviewExecutionLease(identity);
-    lease.acquire();
-    try {
-      await assert.rejects(agent.call("", {
-        commandId: "test",
-        retryCount: 0,
-        waitForProcessTree: true,
-      }), /timed out/i);
-    } finally {
-      lease.release();
-    }
-    await waitForFile(marker);
-    await waitForProcessExit(Number.parseInt(fs.readFileSync(marker, "utf8"), 10));
-    const afterTimeout = new ReviewExecutionLease(identity);
-    afterTimeout.acquire();
-    afterTimeout.release();
-  });
-
-  it("kills the inherited-output process tree when the activity monitor expires", async (t) => {
-    if (process.platform === "win32") t.skip("POSIX process-group containment is covered by the Windows supervisor separately");
-    const root = tmpDir();
-    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
-    const descendant = [
-      "process.stdout.write('descendant:' + process.pid);",
-      "setInterval(()=>{},1_000);",
-    ].join("");
-    const provider = [
-      "const {spawn}=require('node:child_process');",
-      `spawn(process.execPath,['-e',${JSON.stringify(descendant)}],{stdio:['ignore',1,2]});`,
-      "setInterval(()=>{},1_000);",
-    ].join("");
+    t.after(() => removeTmpDir(root));
+    const provider = "process.stdout.write('provider started');setInterval(()=>{},1000);";
     let timeout = null;
     let expired = false;
     const activityMonitor = {
@@ -477,6 +311,7 @@ describe("Agent.call() — basic invocation", () => {
       stop() {},
     };
     const supervisorEvents = [];
+    let stopReceipt;
     const agent = makeAgent(
       { command: process.execPath, args: ["-e", provider] },
       { paths: { root, agentWorkDir: path.join(root, ".tmp") } },
@@ -487,8 +322,8 @@ describe("Agent.call() — basic invocation", () => {
       await agent.call("", {
         commandId: "test",
         retryCount: 0,
-        waitForProcessTree: true,
         activityMonitor,
+        onProcessExecutionStop(receipt) { stopReceipt = receipt; },
         onSupervisorEvent(event) { supervisorEvents.push(event); },
       });
     } catch (error) {
@@ -502,16 +337,22 @@ describe("Agent.call() — basic invocation", () => {
     assert.deepEqual(
       supervisorEvents.filter((event) => event.type === "timeout").map((event) => event.reason),
       ["inactivity"],
-      "the first timeout owns one process-tree shutdown",
+      "the first timeout owns one registered execution stop",
     );
-    const descendantPid = Number.parseInt(/descendant:(\d+)/.exec(failure.stdout)?.[1] ?? "", 10);
-    assert.ok(Number.isSafeInteger(descendantPid));
-    await waitForProcessExit(descendantPid);
+    assert.equal(failure.stdout, "provider started");
+    assert.ok(stopReceipt instanceof ProcessExecutionStopReceipt);
+    const reloaded = new ProcessExecutionStopReceipt(JSON.parse(JSON.stringify(stopReceipt)));
+    assert.equal(reloaded.scope, "registered-executions");
+    assert.equal(reloaded.stopEvidence.confirmed, true);
+    assert.equal(reloaded.observation.kind, "exited");
+    assert.equal(reloaded.executor.matches(reloaded.observation.executor), true);
+    assert.equal(reloaded.stopOperation.reason, "timeout");
+    assert.deepEqual(reloaded.descendants, []);
   });
 
-  it("retains lexical stdout and stderr on supervisor-owned timeout rejection", async (t) => {
+  it("retains lexical stdout and stderr on registered executor timeout rejection", async (t) => {
     const root = tmpDir();
-    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    t.after(() => removeTmpDir(root));
     const provider = "process.stdout.write('timeout stdout'); process.stderr.write('timeout stderr'); setInterval(()=>{},1000);";
     const agent = makeAgent(
       { command: process.execPath, args: ["-e", provider] },
@@ -519,7 +360,7 @@ describe("Agent.call() — basic invocation", () => {
         agent: { default: "test/exec", providers: { "test/exec": { command: process.execPath, args: ["-e", provider] } }, timeout: 0.2 },
       } },
     );
-    await assert.rejects(agent.call("", { commandId: "test", retryCount: 0, waitForProcessTree: true }), (error) => {
+    await assert.rejects(agent.call("", { commandId: "test", retryCount: 0 }), (error) => {
       assert.equal(error.code, "AGENT_TIMEOUT");
       assert.equal(error.retryable, true);
       assert.equal(error.stopEvidence.status, "confirmed");
@@ -529,38 +370,53 @@ describe("Agent.call() — basic invocation", () => {
     });
   });
 
-  it("keeps ordinary timeout diagnostics byte-for-byte compatible", async (t) => {
+  it("reports the actual recorded stop signal in ordinary timeout diagnostics", async (t) => {
     const root = tmpDir();
-    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    t.after(() => removeTmpDir(root));
     const agent = makeAgent(
       { command: process.execPath, args: ["-e", "setInterval(()=>{},1000)"] },
       { paths: { root, agentWorkDir: path.join(root, ".tmp") }, config: {
         agent: { default: "test/exec", providers: { "test/exec": { command: process.execPath, args: ["-e", "setInterval(()=>{},1000)"] } }, timeout: 0.05 },
       } },
     );
-    await assert.rejects(agent.call("", { commandId: "test", retryCount: 0 }), (error) => {
-      assert.equal(error.message, "Agent timed out after 50ms; final action=SIGTERM");
+    let receipt;
+    let failure;
+    await assert.rejects(agent.call("", { commandId: "test", retryCount: 0,
+      onProcessExecutionStop(value) { receipt = value; },
+    }), (error) => {
+      failure = error;
+      assert.ok(["SIGTERM", "SIGKILL"].includes(error.finalAction));
+      assert.equal(error.message, `Agent timed out after 50ms; final action=${error.finalAction}`);
       assert.equal(Object.hasOwn(error, "timeoutReason"), false);
       assert.equal(Object.hasOwn(error.toJSON(), "timeoutReason"), false);
       assert.equal(error.toJSON().timeoutMs, 50);
       return true;
     });
+    assert.ok(receipt instanceof ProcessExecutionStopReceipt);
+    const readback = new ProcessExecutionStopReceipt(JSON.parse(JSON.stringify(receipt)));
+    assert.equal(readback.observation.signal, failure.finalAction);
+    const history = ProcessExecutionRuntime.readHistoricalInventory({ mainRoot: root, executionRoot: root }).inventory;
+    const call = history.executions.flatMap((execution) => execution.calls).find((entry) => entry.callId === receipt.callId);
+    assert.equal(call.outcome.finalAction, failure.finalAction);
+    const saved = new ProcessExecutionStopReceipt(call.receipt);
+    assert.deepEqual(saved.toJSON(), readback.toJSON());
+    assert.equal(saved.observation.signal, failure.finalAction);
   });
 
   it("throws on failing command", async () => {
-    const agent = makeAgent({ command: "node", args: ["-e", "process.exit(1)"] });
+    const agent = makeAgent({ command: process.execPath, args: ["-e", "process.exit(1)"] });
     await assert.rejects(agent.call("test", { commandId: "test" }));
   });
 
   it("keeps complete failed subprocess output in diagnostics while durable completion evidence is bounded", async (t) => {
     const root = tmpDir();
-    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    t.after(() => removeTmpDir(root));
     const stdout = "stdout-head-" + "界".repeat(4_000) + "-stdout-tail";
     const stderr = "Selected model is at capacity\n" + "🦊".repeat(4_000) + "\nstderr-tail";
     const script = `process.stdout.write(${JSON.stringify(stdout)}); process.stderr.write(${JSON.stringify(stderr)}); process.exit(1);`;
     const logger = new Logger({ logDir: path.join(root, ".tmp", "logs"), enabled: true, cwd: root });
     const agent = makeAgent(
-      { command: "node", args: ["-e", script] },
+      { command: process.execPath, args: ["-e", script] },
       { paths: { root, agentWorkDir: path.join(root, ".tmp") }, logger },
     );
 
@@ -590,16 +446,16 @@ describe("Agent.call() — basic invocation", () => {
 
   it("falls back to stdin when args exceed threshold", async () => {
     const agent = makeAgent(
-      { command: "cat", args: [] },
-      { config: { agent: { default: "test/exec", providers: { "test/exec": { command: "cat", args: [] } }, stdinFallbackThreshold: 1000 } } },
+      { command: process.execPath, args: ["-e", "process.stdin.pipe(process.stdout)"] },
+      { config: { agent: { default: "test/exec", providers: { "test/exec": { command: process.execPath, args: ["-e", "process.stdin.pipe(process.stdout)"] } }, stdinFallbackThreshold: 1000 } } },
     );
     const largePrompt = "X".repeat(2000);
     const result = await agent.call(largePrompt, { commandId: "test" });
-    assert.equal(result, largePrompt);
+    assert.equal(result, effectivePrompt(largePrompt));
   });
 
   it("rejects too many execution environment variables before spawning", () => {
-    const agent = makeAgent({ command: "echo", args: ["{{PROMPT}}"] });
+    const agent = makeAgent({ command: process.execPath, args: ["-e", "process.stdout.write(process.argv[1])", "{{PROMPT}}"] });
     const executionEnvironment = Object.fromEntries(
       Array.from({ length: 65 }, (_, index) => [`SENNEL_TEST_${index}`, "value"]),
     );
@@ -611,7 +467,7 @@ describe("Agent.call() — basic invocation", () => {
   });
 
   it("rejects an oversized execution environment before spawning", () => {
-    const agent = makeAgent({ command: "echo", args: ["{{PROMPT}}"] });
+    const agent = makeAgent({ command: process.execPath, args: ["-e", "process.stdout.write(process.argv[1])", "{{PROMPT}}"] });
 
     assert.throws(
       () => agent._buildInvocationForTest("work", {
@@ -620,113 +476,6 @@ describe("Agent.call() — basic invocation", () => {
       }),
       /must not exceed 65536 bytes/,
     );
-  });
-});
-
-describe("ChildProcessSupervisor", () => {
-  it("settles after a bounded drain when the direct child exits without close", async () => {
-    const child = new EventEmitter();
-    const supervisor = new ChildProcessSupervisor({
-      child,
-      timeoutMs: 1_000,
-      graceMs: 10,
-      exitDrainMs: 1,
-    });
-
-    const completion = supervisor.wait();
-    child.emit("exit", 0, null);
-
-    assert.deepEqual(await completion, {
-      code: 0,
-      signal: null,
-      processTreeQuiescence: "unavailable",
-    });
-    assert.equal(child.listenerCount("close"), 0);
-    assert.equal(child.listenerCount("exit"), 0);
-  });
-
-  it("reports uncertain termination when process-tree membership cannot be observed", async () => {
-    const child = new EventEmitter();
-    child.kill = () => true;
-    const supervisor = new ChildProcessSupervisor({
-      child,
-      timeoutMs: 1,
-      graceMs: 1,
-      platform: "linux",
-    });
-
-    await assert.rejects(supervisor.wait(), (error) => {
-      assert.equal(error.code, "AGENT_TIMEOUT");
-      assert.equal(error.retryable, false);
-      assert.equal(error.stopEvidence.status, "uncertain");
-      assert.equal(error.stopEvidence.reason, "process-tree-members-unavailable");
-      assert.deepEqual(error.stopEvidence.unterminatedMembers, []);
-      return true;
-    });
-  });
-
-  it("reports an uncertain timeout when Windows taskkill cannot confirm tree termination", async () => {
-    const child = new EventEmitter();
-    child.pid = 12345;
-    child.kill = () => true;
-    const failure = Object.assign(new Error("taskkill failed"), { code: "EPERM" });
-    const supervisor = new ChildProcessSupervisor({
-      child,
-      timeoutMs: 1,
-      graceMs: 1,
-      platform: "win32",
-      runTaskkill: async () => { throw failure; },
-    });
-
-    await assert.rejects(supervisor.wait(), (error) => {
-      assert.equal(error.code, "AGENT_TIMEOUT");
-      assert.equal(error.retryable, false);
-      assert.equal(error.stopEvidence.status, "uncertain");
-      assert.equal(error.stopEvidence.reason, "process-tree-members-unavailable");
-      return true;
-    });
-  });
-
-  it("bounds an incomplete Windows taskkill observation as an uncertain timeout", async () => {
-    const child = new EventEmitter();
-    child.pid = 12345;
-    child.kill = () => true;
-    const supervisor = new ChildProcessSupervisor({
-      child,
-      timeoutMs: 1,
-      graceMs: 1,
-      platform: "win32",
-      runTaskkill: async () => ({ completed: false }),
-    });
-
-    await assert.rejects(supervisor.wait(), (error) => {
-      assert.equal(error.code, "AGENT_TIMEOUT");
-      assert.equal(error.retryable, false);
-      assert.equal(error.stopEvidence.status, "uncertain");
-      assert.equal(error.stopEvidence.reason, "process-tree-death-deadline-reached");
-      return true;
-    });
-  });
-
-  it("records a completed Windows taskkill tree observation as confirmed timeout evidence", async () => {
-    const child = new EventEmitter();
-    child.pid = 12345;
-    child.kill = () => true;
-    const supervisor = new ChildProcessSupervisor({
-      child,
-      timeoutMs: 1,
-      graceMs: 1,
-      platform: "win32",
-      runTaskkill: async () => ({ completed: true }),
-    });
-
-    await assert.rejects(supervisor.wait(), (error) => {
-      assert.equal(error.code, "AGENT_TIMEOUT");
-      assert.equal(error.retryable, true);
-      assert.equal(error.stopEvidence.status, "confirmed");
-      assert.deepEqual(error.stopEvidence.unterminatedMembers, []);
-      return true;
-    });
   });
 });
 
@@ -743,14 +492,14 @@ describe("Agent.call() — retry behavior", () => {
       if (n === 1) process.stdout.write("");
       else process.stdout.write("ok");
     `;
-    const agent = makeAgent({ command: "node", args: ["-e", script, tmp] });
+    const agent = makeAgent({ command: process.execPath, args: ["-e", script, tmp] });
     const result = await agent.call("", { commandId: "test", retryCount: 2, retryDelayMs: 10 });
     assert.equal(result, "ok");
     try { fs.unlinkSync(tmp); } catch {}
   });
 
   it("types an empty response without retry when retryCount is 0", async () => {
-    const agent = makeAgent({ command: "node", args: ["-e", ""] });
+    const agent = makeAgent({ command: process.execPath, args: ["-e", ""] });
     await assert.rejects(
       agent.call("", { commandId: "test", retryCount: 0 }),
       (error) => (
@@ -767,7 +516,7 @@ describe("Agent.call() — retry behavior", () => {
 
   it("retries a typed unexplained non-zero provider exit within the existing bound", async (t) => {
     const tmp = path.join(testTemporaryRoot().path, `agent-retry-exit-${Date.now()}`);
-    t.after(() => fs.rmSync(tmp, { force: true }));
+    t.after(() => removeTmpDir(tmp));
     const script = `
       const fs = require("fs");
       const f = process.argv[1];
@@ -778,16 +527,16 @@ describe("Agent.call() — retry behavior", () => {
       if (n < 3) process.exit(1);
       process.stdout.write("recovered");
     `;
-    const agent = makeAgent({ command: "node", args: ["-e", script, tmp] });
+    const agent = makeAgent({ command: process.execPath, args: ["-e", script, tmp] });
     const result = await agent.call("", { commandId: "test", retryCount: 2, retryDelayMs: 10 });
     assert.equal(result, "recovered");
     assert.equal(fs.readFileSync(tmp, "utf8"), "3");
   });
 
   it("preserves typed completion evidence after exhausting unclassified exits", async () => {
-    const agent = makeAgent({ command: "node", args: ["-e", "process.exit(7)"] });
+    const agent = makeAgent({ command: process.execPath, args: ["-e", "process.exit(7)"] });
     await assert.rejects(
-      agent.call("", { commandId: "test", retryCount: 1, retryDelayMs: 10, waitForProcessTree: true }),
+      agent.call("", { commandId: "test", retryCount: 1, retryDelayMs: 10 }),
       (error) => (
         error instanceof UnclassifiedProviderExitFailure
         && error.attemptCount === 2
@@ -801,7 +550,7 @@ describe("Agent.call() — retry behavior", () => {
 
   it("retries temporary provider capacity through the existing provider loop", async (t) => {
     const tmp = path.join(testTemporaryRoot().path, `agent-retry-capacity-${Date.now()}`);
-    t.after(() => fs.rmSync(tmp, { force: true }));
+    t.after(() => removeTmpDir(tmp));
     const script = `
       const fs = require("fs");
       const f = process.argv[1];
@@ -815,7 +564,7 @@ describe("Agent.call() — retry behavior", () => {
       }
       process.stdout.write("recovered");
     `;
-    const agent = makeAgent({ command: "node", args: ["-e", script, tmp] });
+    const agent = makeAgent({ command: process.execPath, args: ["-e", script, tmp] });
     const result = await agent.call("", { commandId: "test", retryCount: 2, retryDelayMs: 10 });
     assert.equal(result, "recovered");
     assert.equal(fs.readFileSync(tmp, "utf8"), "2");
@@ -823,7 +572,7 @@ describe("Agent.call() — retry behavior", () => {
 
   it("retries a rate limit and succeeds", async (t) => {
     const tmp = path.join(testTemporaryRoot().path, `agent-retry-rate-limit-${Date.now()}`);
-    t.after(() => fs.rmSync(tmp, { force: true }));
+    t.after(() => removeTmpDir(tmp));
     const script = `
       const fs = require("fs");
       const f = process.argv[1];
@@ -837,7 +586,7 @@ describe("Agent.call() — retry behavior", () => {
       }
       process.stdout.write("recovered");
     `;
-    const agent = makeAgent({ command: "node", args: ["-e", script, tmp] });
+    const agent = makeAgent({ command: process.execPath, args: ["-e", script, tmp] });
     const result = await agent.call("", { commandId: "test", retryCount: 2, retryDelayMs: 10 });
     assert.equal(result, "recovered");
     assert.equal(fs.readFileSync(tmp, "utf8"), "2");
@@ -845,7 +594,7 @@ describe("Agent.call() — retry behavior", () => {
 
   it("does not retry an authentication failure", async (t) => {
     const tmp = path.join(testTemporaryRoot().path, `agent-no-retry-auth-${Date.now()}`);
-    t.after(() => fs.rmSync(tmp, { force: true }));
+    t.after(() => removeTmpDir(tmp));
     const script = `
       const fs = require("fs");
       const f = process.argv[1];
@@ -855,7 +604,7 @@ describe("Agent.call() — retry behavior", () => {
       process.stderr.write("HTTP 401 Unauthorized");
       process.exit(1);
     `;
-    const agent = makeAgent({ command: "node", args: ["-e", script, tmp] });
+    const agent = makeAgent({ command: process.execPath, args: ["-e", script, tmp] });
     await assert.rejects(
       agent.call("", { commandId: "test", retryCount: 2, retryDelayMs: 10 }),
       (error) => (
@@ -870,7 +619,7 @@ describe("Agent.call() — retry behavior", () => {
 
   it("preserves bounded attempt metadata after retry exhaustion", async () => {
     const agent = makeAgent({
-      command: "node",
+      command: process.execPath,
       args: ["-e", "process.stderr.write('HTTP 429 rate limited'); process.exit(1)"],
     });
     await assert.rejects(
@@ -888,7 +637,7 @@ describe("Agent.call() — retry behavior", () => {
 describe("Agent.call() — prompt cache policy", () => {
   it("bypasses cache reads and writes only for cacheMode=bypass", async (t) => {
     const root = tmpDir();
-    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    t.after(() => removeTmpDir(root));
     const countFile = path.join(root, "count.txt");
     const script = [
       "const fs=require('fs');",
@@ -909,7 +658,7 @@ describe("Agent.call() — prompt cache policy", () => {
       accumulateAgentMetrics() {},
     };
     const agent = makeAgent(
-      { command: "node", args: ["-e", script, countFile, "{{PROMPT}}"] },
+      { command: process.execPath, args: ["-e", script, countFile, "{{PROMPT}}"] },
       {
         paths: { root, agentWorkDir: path.join(root, ".tmp") },
         flowManager,
@@ -949,7 +698,7 @@ describe("Agent.call() — prompt cache policy", () => {
 
   it("refreshes without reading and stores only an accepted replacement", async (t) => {
     const root = tmpDir();
-    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    t.after(() => removeTmpDir(root));
     const countFile = path.join(root, "count.txt");
     const script = [
       "const fs=require('fs');",
@@ -965,7 +714,7 @@ describe("Agent.call() — prompt cache policy", () => {
       accumulateAgentMetrics() {},
     };
     const agent = makeAgent(
-      { command: "node", args: ["-e", script, countFile, "{{PROMPT}}"] },
+      { command: process.execPath, args: ["-e", script, countFile, "{{PROMPT}}"] },
       { paths: { root, agentWorkDir: path.join(root, ".tmp") }, flowManager },
     );
     const first = await agent.call("same", { commandId: "test" });
@@ -989,7 +738,7 @@ describe("Agent.call() — prompt cache policy", () => {
 
   it("treats an invalid cached response as a miss and replaces it only with a valid response", async (t) => {
     const root = tmpDir();
-    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    t.after(() => removeTmpDir(root));
     const countFile = path.join(root, "count.txt");
     const script = [
       "const fs=require('fs');",
@@ -1006,7 +755,7 @@ describe("Agent.call() — prompt cache policy", () => {
       accumulateAgentMetrics() {},
     };
     const agent = makeAgent(
-      { command: "node", args: ["-e", script, countFile, "{{PROMPT}}"] },
+      { command: process.execPath, args: ["-e", script, countFile, "{{PROMPT}}"] },
       { paths: { root, agentWorkDir: path.join(root, ".tmp") }, flowManager },
     );
     await agent.call("same", { commandId: "test" });
@@ -1035,7 +784,7 @@ describe("Agent.call() — prompt cache policy", () => {
 
   it("does not cache a fresh response rejected by the caller contract", async (t) => {
     const root = tmpDir();
-    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    t.after(() => removeTmpDir(root));
     const countFile = path.join(root, "count.txt");
     const script = [
       "const fs=require('fs');",
@@ -1052,7 +801,7 @@ describe("Agent.call() — prompt cache policy", () => {
       accumulateAgentMetrics() {},
     };
     const agent = makeAgent(
-      { command: "node", args: ["-e", script, countFile, "{{PROMPT}}"] },
+      { command: process.execPath, args: ["-e", script, countFile, "{{PROMPT}}"] },
       { paths: { root, agentWorkDir: path.join(root, ".tmp") }, flowManager },
     );
     const options = { commandId: "test", validateResponseForCache: () => false };
@@ -1063,7 +812,7 @@ describe("Agent.call() — prompt cache policy", () => {
 
   it("serializes concurrent writers for one spec cache without losing accepted entries", async (t) => {
     const root = tmpDir();
-    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    t.after(() => removeTmpDir(root));
     const specId = "concurrent";
     const cacheDirectory = path.join(root, ".sennel", "agent-cache");
     fs.mkdirSync(cacheDirectory, { recursive: true });
@@ -1082,9 +831,9 @@ describe("Agent.call() — prompt cache policy", () => {
       `import { Logger } from ${JSON.stringify(pathToFileURL(path.resolve("src/lib/log.js")).href)};`,
       "import path from 'node:path';",
       "const [root, ready, release, prompt] = process.argv.slice(1);",
-      "const provider = `const fs=require('fs');const [ready,release,text]=process.argv.slice(1);fs.appendFileSync(ready,text+'\\\\n');const wait=()=>fs.existsSync(release)?process.stdout.write(text):setTimeout(wait,5);wait();`;",
+      "const provider = `const fs=require('fs');const [ready,release,text]=process.argv.slice(1);fs.appendFileSync(ready,process.pid+'\\\\n');const wait=()=>fs.existsSync(release)?process.stdout.write(text):setTimeout(wait,5);wait();`;",
       "const profile = { command: process.execPath, args: ['-e', provider, ready, release, '{{PROMPT}}'] };",
-      "const config = { agent: { default: 'test/exec', providers: { 'test/exec': profile }, timeout: 10 } };",
+      "const config = { agent: { default: 'test/exec', providers: { 'test/exec': profile }, timeout: 120 } };",
       "const flowManager = { resolveCurrentContext() { return { specId: 'concurrent', taskId: null, flowPhase: 'impl' }; }, loadActiveFlows() { return [{ specId: 'concurrent' }]; }, appendMetric() {}, accumulateAgentMetrics() {} };",
       "const agent = new Agent({ config, paths: { root, agentWorkDir: path.join(root, '.tmp') }, registry: new ProviderRegistry(config.agent.providers), logger: new Logger({ logDir: root, enabled: false }), flowManager });",
       "await agent.call(prompt, { commandId: 'test', retryCount: 0 });",
@@ -1097,7 +846,7 @@ describe("Agent.call() — prompt cache policy", () => {
 
     const stored = JSON.parse(fs.readFileSync(path.join(cacheDirectory, `${specId}.json`), "utf8"));
     const responses = Object.values(stored.entries).map((entry) => entry.text);
-    for (const prompt of prompts) assert.ok(responses.includes(prompt), `cache lost concurrent response ${prompt}`);
+    for (const prompt of prompts) assert.ok(responses.includes(effectivePrompt(prompt)), `cache lost concurrent response ${prompt}`);
   });
 });
 

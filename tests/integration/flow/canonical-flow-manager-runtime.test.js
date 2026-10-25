@@ -2699,7 +2699,7 @@ describe("FlowManager canonical Version-1 runtime", () => {
     await advanceTo(manager, created.specId, "final-regression", materialImplementationOptions(manager, created.specId));
     const ctx = { root: repository, mainRoot: repository, executionRoot: repository,
       specId: created.specId, flowManager: manager, flowState: manager.loadReadOnly(created.specId),
-      config: { test: { command: "node -e \"process.kill(process.pid,'SIGTERM')\"" } } };
+      config: { test: { command: { kind: "native", executable: "node", args: ["-e", "process.kill(process.pid,'SIGTERM')"] } } } };
     const commandResult = await new RunFinalRegressionCommand().execute(ctx);
     assert.equal(commandResult.artifacts.failureKind, "infra_failure");
     await FLOW_COMMANDS.run["final-regression"].post(ctx, commandResult);
@@ -2745,7 +2745,7 @@ describe("FlowManager canonical Version-1 runtime", () => {
       executionRoot: repository,
       specId: created.specId,
       phase: "final-regression",
-      config: { test: { command: "node --test final-regression.test.js", timeout: 5 } },
+      config: { test: { command: { kind: "native", executable: "node", args: ["--test", "final-regression.test.js"] }, timeout: 5 } },
       flowManager: manager,
       flowState: manager.load(created.specId),
     };
@@ -2826,7 +2826,7 @@ describe("FlowManager canonical Version-1 runtime", () => {
         executionRoot: repository,
         specId: created.specId,
         phase: "final-regression",
-        config: { test: { command: "node --test final-regression.test.js", timeout: 5 } },
+        config: { test: { command: { kind: "native", executable: "node", args: ["--test", "final-regression.test.js"] }, timeout: 5 } },
         flowManager: manager,
         flowState: manager.load(created.specId),
       };

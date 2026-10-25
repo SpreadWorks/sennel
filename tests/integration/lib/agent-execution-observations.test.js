@@ -1,57 +1,54 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import { once } from "node:events";
 import path from "node:path";
-import { EventEmitter } from "node:events";
 import { test } from "node:test";
 import { Agent } from "../../../src/lib/agent.js";
-import { ProviderRegistry } from "../../../src/lib/provider.js";
 import { Logger } from "../../../src/lib/log.js";
 import { FlowManager } from "../../../src/lib/flow-manager.js";
 import { FlowAtStepFixture } from "../../support/infrastructure/flow-setup.js";
-import { createTmpDir, removeTmpDir } from "../../support/builders/tmp-dir.js";
+import { createTmpDir } from "../../support/builders/tmp-dir.js";
 import { createExecutionQueryScenario } from "../../support/infrastructure/execution-query-scenario.js";
 import { capturePromptExecutionReceiversFromView } from "../../../src/flow/lib/canonical-prompt-execution.js";
 import { ProcessExecutionRuntime } from "../../../src/lib/process-execution-runtime.js";
-import { ProcessExecutionControlFailure } from "../../../src/lib/process-execution-values.js";
+import { NodeAgentProviderSequence } from "../../support/infrastructure/node-agent-provider-sequence.js";
+import { ManagedResponsePublicationGate } from "../../support/infrastructure/managed-response-publication-gate.js";
+import { removeQuiescentRuntimeFixture } from "../../support/infrastructure/runtime-fixture-cleanup.js";
+import { testTemporaryRoot } from "../../test-environment.js";
 
 // Outcomes traced through the real producers and durable Store:
 // retry measurements/cache absence -> Agent.call -> observation catalog -> reload;
 // pre-call refusal -> failed filesystem commit -> no provider dispatch;
 // post-call refusal -> original response retained -> no retry or false completion;
 // nested calls -> captured logical caller -> independent immutable identities.
-function fixture(t, outputs, { onSpawn = null, loggerEnabled = false, runId = "observation-run" } = {}) {
+function fixture(t, outputs, { onOutput = null, loggerEnabled = false, runId = "observation-run" } = {}) {
   const root = createTmpDir("agent-execution-observation-");
-  t.after(() => removeTmpDir(root));
   const specId = "001-observation";
   const manager = new FlowManager({ root, mainRoot: root, inWorktree: false });
   new FlowAtStepFixture({ flowManager: manager, specId, runId, request: "Observe calls", targetStep: "draft-refine" }).create();
-  const config = { agent: { default: "fixture/test", providers: { "fixture/test": {
-    command: "claude-fixture", args: ["--model", "requested-model", "--effort", "high", "{{PROMPT}}"], jsonOutputFlag: "--json",
-  } } } };
-  let starts = 0;
-  const agent = new Agent({ config, paths: { root, agentWorkDir: path.join(root, ".tmp") },
-    registry: new ProviderRegistry(config.agent.providers), flowManager: manager,
+  const provider = new NodeAgentProviderSequence(root, outputs, { profile: {
+    args: ["--model", "requested-model", "--effort", "high", "{{PROMPT}}"], jsonOutputFlag: "--json",
+  } });
+  t.after(() => { provider.releaseAll(); removeQuiescentRuntimeFixture({ mainRoot: root }); });
+  const config = { agent: { default: "fixture/test", providers: { "fixture/test": provider.profile } } };
+  class ObservedAgent extends Agent {
+    call(prompt, options = {}) {
+      let observed = false;
+      return super.call(prompt, { ...options, onStdout(chunk) {
+        if (!observed) { observed = true; onOutput?.(provider.starts()); }
+        options.onStdout?.(chunk);
+      } });
+    }
+  }
+  const agent = new ObservedAgent({ config, paths: { root, agentWorkDir: path.join(root, ".tmp") },
+    registry: provider.registry("fixture/test"), flowManager: manager,
     logger: new Logger({ logDir: path.join(root, "logs"), enabled: loggerEnabled, flowManager: manager, cwd: root }),
-    supervision: { spawn() {
-      const output = outputs[starts++];
-      onSpawn?.(starts);
-      if (output.error) throw output.error;
-      const child = new EventEmitter();
-      child.pid = 999999;
-      child.stdout = new EventEmitter();
-      child.stderr = new EventEmitter();
-      queueMicrotask(() => {
-        child.stdout.emit("data", JSON.stringify(output.response));
-        child.emit("close", output.code ?? 0, null);
-      });
-      return child;
-    } },
   });
   const reload = async () => {
     const restarted = new FlowManager({ root, mainRoot: root, inWorktree: false });
     return (await restarted.readExecutionObservations({ specId })).facts;
   };
-  return { root, agent, manager, specId, starts: () => starts, reload };
+  return { root, agent, manager, specId, starts: () => provider.starts(), release: (index) => provider.release(index), reload };
 }
 
 function refuseObservationWrite(t, root, kind) {
@@ -136,19 +133,56 @@ test("post-provider save failure retains its actual response and durable reserva
 });
 
 test("unknown transport start is retained as unknown and never retried as a normal provider failure", async (t) => {
-  const value = fixture(t, [{ error: new ProcessExecutionControlFailure("communication-failed", "fixture connection lost") }]);
-  await assert.rejects(value.agent.call("input", { retryCount: 2, retryDelayMs: 1 }), { code: "PROCESS_EXECUTION_COMMUNICATION_FAILED" });
-  assert.equal(value.starts(), 1);
-  const provider = (await value.reload()).find((entry) => entry.kind === "provider-settled");
-  assert.equal(provider.data.providerStarted, null);
-  assert.equal(provider.data.usage, null);
-  assert.deepEqual(provider.data.reported, { model: null, effort: null });
+  const value = fixture(t, []);
+  class MailboxRuntime extends ProcessExecutionRuntime {
+    remoteGrant() { return { ...super.remoteGrant(), transport: "mailbox" }; }
+  }
+  const gate = new ManagedResponsePublicationGate(value.root, { operation: "reserve" });
+  const runtime = await ProcessExecutionRuntime.acquire({ mainRoot: value.root, executionRoot: value.root,
+    environment: gate.coordinatorEnvironment() });
+  try {
+    const remote = await MailboxRuntime.fromRemoteGrant(runtime.remoteGrant());
+    await assert.rejects(remote.enter(() => value.agent.call("input", { retryCount: 2, retryDelayMs: 1 })),
+      { code: "PROCESS_EXECUTION_ENDPOINT_UNAVAILABLE" });
+    assert.equal(gate.observedLinks(), 2);
+    assert.equal(value.starts(), 0);
+    const inventory = ProcessExecutionRuntime.inspect({ mainRoot: value.root, executionRoot: value.root });
+    const calls = inventory.executions.flatMap((entry) => entry.calls);
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].status, "intent");
+    assert.equal(calls[0].permit, null);
+    assert.equal(calls[0].executor, null);
+    assert.equal(calls[0].observation, null);
+    assert.equal(calls[0].receipt, null);
+    const providers = (await value.reload()).filter((entry) => entry.kind === "provider-settled");
+    assert.equal(providers.length, 1);
+    assert.equal(providers[0].data.providerStarted, null);
+    assert.equal(providers[0].data.usage, null);
+    assert.deepEqual(providers[0].data.reported, { model: null, effort: null });
+  } finally {
+    gate.release();
+    // The reserve reply supplied no call capability. Preserve the unclaimed
+    // intent, and stop only this fixture's actual owned coordinator handle.
+    testTemporaryRoot().retainOnUnconfirmedExecution();
+    const child = runtime.control.child;
+    if (child.exitCode === null && child.signalCode === null) {
+      const exited = once(child, "exit");
+      child.ref();
+      child.kill();
+      await exited;
+    }
+  }
 });
 
 test("nested common Agent calls persist their actual logical caller", async (t) => {
   let inner;
-  const value = fixture(t, [{ response: response("outer") }, { response: response("inner") }], {
-    onSpawn(index) { if (index === 1) inner = value.agent.call("inner", { commandId: "nested", cacheMode: "bypass" }); },
+  const value = fixture(t, [{ response: response("outer"), hold: true }, { response: response("inner") }], {
+    onOutput(index) {
+      if (index === 1) {
+        inner = value.agent.call("inner", { commandId: "nested", cacheMode: "bypass" });
+        inner.then(() => value.release(0), () => value.release(0));
+      }
+    },
   });
   assert.equal(await value.agent.call("outer", { commandId: "outer", cacheMode: "bypass" }), "outer");
   assert.equal(await inner, "inner");
@@ -209,8 +243,11 @@ test("failed provider observation retains the real managed receipt and never rer
 test("a nested call into another Flow Version retains the original caller namespace", async (t) => {
   const nested = fixture(t, [{ response: response("inner") }], { runId: "nested-observation-run" });
   let inner;
-  const outer = fixture(t, [{ response: response("outer") }], {
-    onSpawn() { inner = nested.agent.call("inner", { commandId: "nested", cacheMode: "bypass" }); },
+  const outer = fixture(t, [{ response: response("outer"), hold: true }], {
+    onOutput() {
+      inner = nested.agent.call("inner", { commandId: "nested", cacheMode: "bypass" });
+      inner.then(() => outer.release(0), () => outer.release(0));
+    },
   });
   assert.equal(await outer.agent.call("outer", { commandId: "outer", cacheMode: "bypass" }), "outer");
   assert.equal(await inner, "inner");

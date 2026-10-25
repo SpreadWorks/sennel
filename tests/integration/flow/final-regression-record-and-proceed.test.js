@@ -6,6 +6,8 @@ import path from "node:path";
 import RunFinalRegressionCommand from "../../../src/flow/lib/run-final-regression.js";
 import RunClaimNextActionCommand from "../../../src/flow/lib/run-claim-next-action.js";
 import GetNextActionCommand from "../../../src/flow/lib/get-next-action.js";
+import { ProcessExecutionRuntime } from "../../../src/lib/process-execution-runtime.js";
+import { CanonicalPersistenceSnapshot } from "../../support/assertions/canonical-persistence.js";
 import {
   validateFinalRegressionEvidence,
   validateFinalRegressionResult,
@@ -64,7 +66,7 @@ async function setupProject(root, scriptBody) {
     mainRoot: root,
     executionRoot: root,
     specId: SPEC_ID,
-    config: { test: { command: `sh ${FIXTURE_PATH}`, timeout: 5 } },
+    config: { test: { command: { kind: "native", executable: "sh", args: [FIXTURE_PATH] }, timeout: 5 } },
     flowManager,
     flowState: fixture.state(),
   };
@@ -206,6 +208,9 @@ describe("canonical final-regression record-and-proceed", () => {
     assert.equal(failed.failureKind, "caused_by_current_change");
     assert.equal(failed.recordAndProceed.eligible, false);
 
+    const beforeRefusal = new CanonicalPersistenceSnapshot(ctx.flowManager, SPEC_ID);
+    const beforeCallIds = ProcessExecutionRuntime.readHistoricalInventory({ mainRoot: tmp }).inventory.executions
+      .flatMap(execution => execution.calls.map(call => call.callId));
     await assert.rejects(() => new RunFinalRegressionCommand().execute({
       ...ctx,
       flowState: ctx.flowManager.loadReadOnly(SPEC_ID),
@@ -214,6 +219,10 @@ describe("canonical final-regression record-and-proceed", () => {
       recordEvidence: "User approved recording this unrelated regression failure.",
       remainingRisk: "The full regression remains red for the recorded unrelated failure.",
     }), /Definition selected repair/);
+    beforeRefusal.assertUnchanged(ctx.flowManager, SPEC_ID, "unselected final-regression acceptance");
+    assert.deepEqual(ProcessExecutionRuntime.readHistoricalInventory({ mainRoot: tmp }).inventory.executions
+      .flatMap(execution => execution.calls.map(call => call.callId)), beforeCallIds,
+    "an unselected acceptance must not launch fingerprint Git or another registered process");
     assert.equal(ctx.flowManager.canonicalState(SPEC_ID).attempt.sequence, 1);
 
     const repair = await new RunClaimNextActionCommand().execute({

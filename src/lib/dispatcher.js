@@ -19,6 +19,7 @@ import { Command } from "./command.js";
 import { isFlowFormatError } from "./flow-format-error.js";
 import { Envelope } from "./flow-envelope.js";
 import { RuntimeLogBlockWriter } from "./runtime-log.js";
+import { ReadOnlyInvocationWorkspace } from "./readonly-invocation-workspace.js";
 import { targetMismatchEnvelopeForInput } from "./flow-target-guard.js";
 import { findActiveNode, taskIdForResolvedStep } from "../flow/definition.js";
 import {
@@ -228,7 +229,7 @@ async function persistFinalizeCleanupPostReturnMetadata({
   if (typeof commitFinalizeCleanupPostCommandMetadata !== "function") {
     throw new Error("finalize-cleanup command module has no post-command completion committer");
   }
-  commitFinalizeCleanupPostCommandMetadata({
+  await commitFinalizeCleanupPostCommandMetadata({
     flowManager: hookCtx.flowManager,
     specId: hookCtx.specId,
     writtenPaths: retainedMetadata?.writtenPaths || [],
@@ -380,6 +381,8 @@ async function executeDispatch({
     ) return;
     runtimeLog = RuntimeLogBlockWriter.forDispatch({
       root: runtimeLogRoot({ entry, hookCtx, container }),
+      temporaryPaths: container.get("paths").temporaryPaths instanceof ReadOnlyInvocationWorkspace
+        ? container.get("paths").temporaryPaths : undefined,
       flowId: runtimeLogFlowId(hookCtx),
       runId: runtimeLogRunId(hookCtx),
       envelopeType,
@@ -476,6 +479,9 @@ async function executeDispatch({
     return;
   }
 
+  const readonlyInvocation = input.dryRun === true || container.has("paths")
+    && container.get("paths").temporaryPaths instanceof ReadOnlyInvocationWorkspace;
+
   // 2. help shortcut
   if (input.help && entry.help) {
     writeOut(`${entry.help}\n`);
@@ -571,6 +577,7 @@ async function executeDispatch({
     setExit(1);
   };
   const persistRuntimeLogMetadata = (result) => {
+    if (readonlyInvocation) return;
     if (isStepAdmissionRefusal(canonicalMetadataError) || isStepPersistenceFailure(canonicalMetadataError)
       || canonicalMetadataError instanceof ProcessExecutionControlFailure) return;
     const metadata = closedRuntimeLogMetadata;
@@ -619,7 +626,7 @@ async function executeDispatch({
     // Bind the exact active Attempt before any registry lifecycle hook can
     // confirm, fail, or replace it.  Error handling below can therefore record
     // a tooling failure only for this command's original Attempt.
-    const lifecycleAttemptBinding = DefinitionLifecycleAttemptBinding.capture({
+    const lifecycleAttemptBinding = readonlyInvocation ? null : DefinitionLifecycleAttemptBinding.capture({
       hookCtx,
       envelopeType,
       envelopeKey,
@@ -627,7 +634,7 @@ async function executeDispatch({
     });
 
     // 6. pre
-    if (entry.pre) {
+    if (!readonlyInvocation && entry.pre) {
       try {
         await entry.pre(hookCtx);
       } catch (err) {
@@ -636,7 +643,7 @@ async function executeDispatch({
         publication.accept(createFailureEnvelope({ err, envelopeType, envelopeKey,
           runtimeLogMetadata: runtimeLog?.metadata, flowContext: hookCtx }));
         publication.error = err;
-        if (hookCtx.flowOutboxEntry && entry.onError) {
+        if (!readonlyInvocation && hookCtx.flowOutboxEntry && entry.onError) {
           try { await entry.onError(hookCtx, err); } catch (onErrorErr) {
             if (onErrorErr instanceof ProcessExecutionControlFailure) throw onErrorErr;
             publication.appendFailure(onErrorErr, "ON_ERROR_HOOK_FAILED");
@@ -747,7 +754,7 @@ async function executeDispatch({
           || "COMMAND_ENVELOPE_FAILED";
         failure.data = result.data;
         canonicalMetadataError = failure;
-        if (!(failure instanceof ProcessExecutionControlFailure) && hookCtx.flowOutboxEntry && entry.onError) {
+        if (!readonlyInvocation && !(failure instanceof ProcessExecutionControlFailure) && hookCtx.flowOutboxEntry && entry.onError) {
           try {
             await entry.onError(hookCtx, failure);
           } catch (onErrorErr) {
@@ -764,7 +771,7 @@ async function executeDispatch({
           writeErr,
         );
       }
-      if (entry.post && !skipPost) {
+      if (!readonlyInvocation && entry.post && !skipPost) {
         try {
           const postResult = await entry.post(hookCtx, result);
           if (postResult instanceof Envelope && useEnvelope()) {
@@ -798,7 +805,7 @@ async function executeDispatch({
       // Record it after the ordinary hook has durably recorded the check
       // attempt.  Failed Envelopes still reach this hook, but a stale artifact
       // alone is never accepted as a newly completed attempt.
-      if (entry.nonblockingPost && !hookCtx.flowOutboxResumed
+      if (!readonlyInvocation && entry.nonblockingPost && !hookCtx.flowOutboxResumed
         && !(canonicalMetadataError instanceof ProcessExecutionControlFailure)) {
         try {
           await entry.nonblockingPost(hookCtx, result);
@@ -844,7 +851,7 @@ async function executeDispatch({
     publication.accept(createFailureEnvelope({ err: caught, envelopeType, envelopeKey,
       runtimeLogMetadata: runtimeLog?.metadata, flowContext: hookCtx }));
     publication.error = caught;
-    if (entry.onError && !(caught instanceof ProcessExecutionControlFailure)) {
+    if (!readonlyInvocation && entry.onError && !(caught instanceof ProcessExecutionControlFailure)) {
       try {
         await entry.onError(hookCtx, caught);
       } catch (onErrorErr) {

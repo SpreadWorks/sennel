@@ -31,14 +31,13 @@ import { Logger } from "../../../src/lib/log.js";
 import { container } from "../../../src/lib/container.js";
 import { todayLocal, readJsonl } from "../../support/infrastructure/log-fixtures.js";
 import { FlowRepositoryRuntimeArtifactRegistry } from "../../../src/flow/lib/flow-repository-runtime-artifacts.js";
+import { initGitRepo, commitAll } from "../../support/infrastructure/git-repo.js";
+import { RepositoryFlowOperationLock } from "../../../src/lib/repository-maintenance-lock.js";
 
 function initRepo(dir) {
-  runCmd("git", ["init", "-q", "-b", "main", dir]);
-  runCmd("git", ["-C", dir, "config", "user.email", "test@example.com"]);
-  runCmd("git", ["-C", dir, "config", "user.name", "Test"]);
+  initGitRepo(dir);
   fs.writeFileSync(path.join(dir, "README.md"), "init\n");
-  runCmd("git", ["-C", dir, "add", "."]);
-  runCmd("git", ["-C", dir, "commit", "-q", "-m", "init"]);
+  commitAll(dir, "init");
 }
 
 function registerLogger(logDir) {
@@ -123,6 +122,52 @@ describe("runGit — basic logging", () => {
     });
 
     assert.deepEqual(resolved.toArray(), [trackedDeletion, untracked]);
+  });
+
+  it("selects exact tracked-deleted and allowed additions without admitting ignored or neighboring files", () => {
+    fs.writeFileSync(path.join(tmpDir, ".gitignore"), "ignored*.txt\n");
+    fs.writeFileSync(path.join(tmpDir, "tracked.txt"), "tracked\n");
+    fs.writeFileSync(path.join(tmpDir, "ignored-tracked.txt"), "tracked despite ignore\n");
+    assert.equal(runCmd("git", ["-C", tmpDir, "add", "--", ".gitignore", "tracked.txt"]).ok, true);
+    assert.equal(runCmd("git", ["-C", tmpDir, "add", "-f", "--", "ignored-tracked.txt"]).ok, true);
+    assert.equal(runCmd("git", ["-C", tmpDir, "commit", "-q", "-m", "seed exact file selection"]).ok, true);
+    fs.unlinkSync(path.join(tmpDir, "tracked.txt"));
+    fs.writeFileSync(path.join(tmpDir, "ignored-new.txt"), "ignored\n");
+    fs.writeFileSync(path.join(tmpDir, "allowed [literal].txt"), "allowed\n");
+    fs.writeFileSync(path.join(tmpDir, "neighbor.txt"), "not a candidate\n");
+    const selected = GitCommitPathSet.committableFiles({ root: tmpDir,
+      candidates: ["tracked.txt", "ignored-tracked.txt", "ignored-new.txt", "allowed [literal].txt", "missing.txt"] });
+    assert.deepEqual(selected.toArray(), ["tracked.txt", "ignored-tracked.txt", "allowed [literal].txt"]);
+  });
+
+  it("canonicalizes Windows native paths before traversal, drive and duplicate checks", () => {
+    assert.deepEqual(new GitCommitPathSet(["dir\\valid.json"], { pathApi: path.win32 }).toArray(), ["dir/valid.json"]);
+    for (const entry of ["../escape", "..\\escape", "dir\\..\\escape", "C:\\escape", "C:escape", "\\\\host\\share\\file"]) {
+      assert.throws(() => new GitCommitPathSet([entry], { pathApi: path.win32 }), /path set is invalid/);
+    }
+    assert.throws(() => new GitCommitPathSet(["dir\\same.json", "dir/same.json"], { pathApi: path.win32 }), /path set is invalid/);
+    assert.deepEqual(new GitCommitPathSet(["dir/name\\literal.json"], { pathApi: path.posix }).toArray(), ["dir/name\\literal.json"]);
+  });
+
+  it("bounds literal multi-path argv groups and preserves every candidate in order", () => {
+    const paths = Array.from({ length: 600 }, (_, index) => `scope/${index}-${"long path ".repeat(12)}[literal].json`);
+    const set = new GitCommitPathSet(paths);
+    const args = ["add"], root = tmpDir;
+    const batches = set.commandBatches({ root, args });
+    assert.ok(batches.length > 1);
+    assert.deepEqual(batches.flatMap((batch) => batch.toArray()), paths);
+    for (const batch of batches) {
+      assert.ok(batch.size <= 256);
+      const argv = ["git", "-C", root, ...args, "--", ...batch.literalArguments];
+      assert.ok(Buffer.byteLength(argv.join("\0"), "utf8") + 1 < 32768);
+      assert.ok(argv.reduce((length, entry) => length + 2 * entry.length + 3, 0) < 32767,
+        "even worst-case Windows argument quoting must fit CreateProcessW");
+      assert.deepEqual(batch.literalArguments, batch.paths.map((entry) => `:(literal)${entry}`));
+    }
+    const long = "scope/" + "x".repeat(9000);
+    const isolated = new GitCommitPathSet([paths[0], long, paths[1]]).commandBatches({ root, args });
+    assert.equal(isolated.find((batch) => batch.paths.includes(long)).size, 1);
+    assert.deepEqual(isolated.flatMap((batch) => batch.toArray()), [paths[0], long, paths[1]]);
   });
 
   it("treats Git pathspec metacharacters as literal repository paths", () => {
@@ -216,9 +261,9 @@ describe("getWorktreeStatus pathspec exclusions", () => {
     container.reset();
     fs.mkdirSync(path.join(tmpDir, ".sennel"));
     fs.writeFileSync(path.join(tmpDir, ".sennel", "config.json"), "{}\n");
-    const added = runGit(["add", ".sennel/config.json"], { cwd: tmpDir });
+    const added = runGit(["add", ".sennel/config.json"], { cwd: tmpDir, repositoryRoot: testTemporaryRoot().path });
     assert.equal(added.ok, true, added.stderr);
-    const committed = runGit(["commit", "-q", "-m", "Track project config"], { cwd: tmpDir });
+    const committed = runGit(["commit", "-q", "-m", "Track project config"], { cwd: tmpDir, repositoryRoot: testTemporaryRoot().path });
     assert.equal(committed.ok, true, committed.stderr);
   });
 
@@ -280,7 +325,7 @@ describe("getWorktreeStatus pathspec exclusions", () => {
     assert.equal(configured.ok, true, configured.stderr);
 
     const runtime = path.join(tmpDir, ".sennel", "process-runtime");
-    fs.mkdirSync(runtime);
+    fs.mkdirSync(runtime, { recursive: true });
     fs.writeFileSync(path.join(runtime, "runtime.json"), "{}\n");
     const options = { pathspecExcludes: new FlowRepositoryRuntimeArtifactRegistry().gitPathspecExcludes() };
     assert.equal(getWorktreeStatus(cwd).dirty, true);
@@ -312,43 +357,49 @@ describe("getWorktreeStatus pathspec exclusions", () => {
     fs.mkdirSync(sibling);
     fs.writeFileSync(path.join(cwd, ".sennel", "config.json"), "{}\n");
     fs.writeFileSync(path.join(sibling, "README.md"), "sibling seed\n");
-    const added = runGit(["add", "packages"], { cwd: tmpDir });
+    const added = runGit(["add", "packages"], { cwd: tmpDir, repositoryRoot: testTemporaryRoot().path });
     assert.equal(added.ok, true, added.stderr);
-    const committed = runGit(["commit", "-q", "-m", "Track configured nested project"], { cwd: tmpDir });
+    const committed = runGit(["commit", "-q", "-m", "Track configured nested project"], { cwd: tmpDir, repositoryRoot: testTemporaryRoot().path });
     assert.equal(committed.ok, true, committed.stderr);
-    const configured = runGit(["config", "status.relativePaths", "true"], { cwd: tmpDir });
+    const configured = runGit(["config", "status.relativePaths", "true"], { cwd: tmpDir, repositoryRoot: testTemporaryRoot().path });
     assert.equal(configured.ok, true, configured.stderr);
 
-    fs.mkdirSync(path.join(cwd, ".sennel", "process-runtime"));
+    fs.mkdirSync(path.join(cwd, ".sennel", "process-runtime"), { recursive: true });
     fs.writeFileSync(path.join(cwd, ".sennel", "process-runtime", "runtime.json"), "{}\n");
-    fs.writeFileSync(path.join(cwd, ".sennel", ".repository-flow-operation.lock"), "owned lock fixture\n");
-    const registry = new FlowRepositoryRuntimeArtifactRegistry();
-    const projectOptions = { pathspecExcludes: registry.gitPathspecExcludes({ relativeToCwd: true }) };
-    const repositoryOptions = { pathspecExcludes: registry.gitPathspecExcludes() };
-    assert.equal(getWorktreeStatus(cwd, repositoryOptions).dirty, true,
-      "the default Git-root authority must not own a nested project's runtime");
-    assert.deepEqual(getWorktreeStatus(cwd, projectOptions), { dirty: false, dirtyFiles: [] },
-      "the configured project's runtime and operation lock must be excluded from its cwd");
+    const operationLock = new RepositoryFlowOperationLock({ mainRoot: cwd });
+    const operationOwner = operationLock.acquire();
+    try {
+      assert.equal(operationLock.assertOwned(), operationOwner);
+      const registry = new FlowRepositoryRuntimeArtifactRegistry();
+      const projectOptions = { pathspecExcludes: registry.gitPathspecExcludes({ relativeToCwd: true }) };
+      const repositoryOptions = { pathspecExcludes: registry.gitPathspecExcludes() };
+      assert.equal(getWorktreeStatus(cwd, repositoryOptions).dirty, true,
+        "the default Git-root authority must not own a nested project's runtime");
+      assert.deepEqual(getWorktreeStatus(cwd, projectOptions), { dirty: false, dirtyFiles: [] },
+        "the configured project's runtime and operation lock must be excluded from its cwd");
 
-    fs.mkdirSync(path.join(tmpDir, ".sennel", "process-runtime"));
-    fs.writeFileSync(path.join(tmpDir, ".sennel", "process-runtime", "runtime.json"), "{}\n");
-    const projectRuntimeOnly = getWorktreeStatus(cwd, projectOptions);
-    assert.equal(projectRuntimeOnly.dirty, true);
-    assert.deepEqual(projectRuntimeOnly.dirtyFiles, ["?? ../../.sennel/process-runtime/"],
-      "cwd-relative ownership must leave another project's Git-root runtime visible");
-    const repositoryRuntimeOnly = getWorktreeStatus(cwd, repositoryOptions);
-    assert.equal(repositoryRuntimeOnly.dirty, true);
-    assert.equal(repositoryRuntimeOnly.dirtyFiles.length, 2);
-    assert.ok(repositoryRuntimeOnly.dirtyFiles.includes("?? .sennel/process-runtime/"));
-    assert.ok(repositoryRuntimeOnly.dirtyFiles.includes("?? .sennel/.repository-flow-operation.lock"));
+      fs.mkdirSync(path.join(tmpDir, ".sennel", "process-runtime"), { recursive: true });
+      fs.writeFileSync(path.join(tmpDir, ".sennel", "process-runtime", "runtime.json"), "{}\n");
+      const projectRuntimeOnly = getWorktreeStatus(cwd, projectOptions);
+      assert.equal(projectRuntimeOnly.dirty, true);
+      assert.deepEqual(projectRuntimeOnly.dirtyFiles, ["?? ../../.sennel/process-runtime/"],
+        "cwd-relative ownership must leave another project's Git-root runtime visible");
+      const repositoryRuntimeOnly = getWorktreeStatus(cwd, repositoryOptions);
+      assert.equal(repositoryRuntimeOnly.dirty, true);
+      assert.equal(repositoryRuntimeOnly.dirtyFiles.length, 2);
+      assert.ok(repositoryRuntimeOnly.dirtyFiles.includes("?? .sennel/process-runtime/"));
+      assert.ok(repositoryRuntimeOnly.dirtyFiles.includes("?? .tmp/"));
 
-    fs.appendFileSync(path.join(tmpDir, "README.md"), "parent edit\n");
-    fs.writeFileSync(path.join(sibling, "untracked.txt"), "sibling content\n");
-    for (const options of [projectOptions, repositoryOptions]) {
-      const status = getWorktreeStatus(cwd, options);
-      assert.equal(status.dirty, true);
-      assert.ok(status.dirtyFiles.some((line) => line.endsWith(" ../../README.md")));
-      assert.ok(status.dirtyFiles.includes("?? ../sibling/untracked.txt"));
+      fs.appendFileSync(path.join(tmpDir, "README.md"), "parent edit\n");
+      fs.writeFileSync(path.join(sibling, "untracked.txt"), "sibling content\n");
+      for (const options of [projectOptions, repositoryOptions]) {
+        const status = getWorktreeStatus(cwd, options);
+        assert.equal(status.dirty, true);
+        assert.ok(status.dirtyFiles.some((line) => line.endsWith(" ../../README.md")));
+        assert.ok(status.dirtyFiles.includes("?? ../sibling/untracked.txt"));
+      }
+    } finally {
+      operationLock.release();
     }
   });
 });
@@ -469,6 +520,29 @@ describe("Git porcelain v2 difference authority", () => {
     container.reset();
   });
 
+  it("discovers a parent repository only when the observation boundary permits it", () => {
+    const nested = path.join(tmpDir, "packages", "app");
+    fs.mkdirSync(nested, { recursive: true });
+    fs.appendFileSync(path.join(tmpDir, "README.md"), "parent user edit\n");
+
+    const discovered = getPorcelainV2Status(nested);
+    assert.ok(discovered instanceof GitPorcelainV2Status);
+    assert.deepEqual(discovered.pathSet.toArray(), ["README.md"]);
+
+    const bounded = getPorcelainV2Status(nested, { repositoryRoot: tmpDir });
+    assert.ok(bounded instanceof GitPorcelainV2Status);
+    assert.deepEqual(bounded.pathSet.toArray(), ["README.md"]);
+
+    assert.throws(
+      () => getPorcelainV2Status(nested, { repositoryRoot: nested }),
+      (error) => {
+        assert.equal(error.code, "GIT_STATUS_PORCELAIN_V2_FAILED");
+        assert.equal(error.result.status, 128);
+        return true;
+      },
+    );
+  });
+
   it("parses ordinary, deleted, untracked, type-changed, and special-character paths", () => {
     const ordinary = "ordinary file.txt";
     const deleted = "deleted.txt";
@@ -582,7 +656,7 @@ describe("Git porcelain v2 difference authority", () => {
     const nonRepository = createTestDirectory("git-status-v2-nonrepo-");
     try {
       assert.throws(
-        () => getPorcelainV2Status(nonRepository),
+        () => getPorcelainV2Status(nonRepository, { repositoryRoot: nonRepository }),
         (error) => error.code === "GIT_STATUS_PORCELAIN_V2_FAILED",
       );
     } finally {

@@ -29,6 +29,9 @@
       "empty_response": "プロバイダーから応答がありませんでした（{{code}}）。"
     },
     "codes": {
+      "PROCESS_EXECUTION_FINALIZATION_PENDING": "Flow の最終化は登録済みプロセスの正確な終了証跡を待っています（{{code}}）。この Flow の新規プロセス受付は停止済みです。完了は未確認です。",
+      "PROCESS_EXECUTION_ACTIVITY_PENDING": "Flow の最終化はプロセスの事実の永続化確認を待っています（{{code}}）。保存済みの受付停止境界は維持されます。完了は未確認です。",
+      "PROCESS_EXECUTION_OBSERVATION_SAVE_FAILED": "プロセスの事実を永続化できませんでした（{{code}}）。Flow の最終化には予約済みの全プロセス結果の記録が必要です。最終化済みの履歴に新しい事実は追加できません。",
       "NO_FLOW": "操作に必要な実行中のFlowがありませんでした（{{code}}）。",
       "FLOW_AWAITING_USER_ACTION": "Flowは選択済みのユーザー操作を待っています（{{code}}）。",
       "FLOW_HOST_ACTION_REQUIRED": "Flowが選択済みのホスト操作を返しました（{{code}}）。既存のdirectiveに従い、同じターンでその操作を完了してください。",

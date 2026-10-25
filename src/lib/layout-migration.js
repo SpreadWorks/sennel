@@ -18,7 +18,8 @@ import { loadConfigFromManagedDirectory } from "./config.js";
 import { LEGACY_MANAGED_DIRECTORY_NAMES } from "./legacy-managed-directory-migration.js";
 import { migrateLegacyManagedGitattributes, migrateLegacyManagedGitignore } from "./legacy-managed-metadata-migration.js";
 import { validatePresetChainFromManagedDirectory } from "./presets.js";
-import { ProcessIdentity, ProcessIdentitySource } from "./process-identity.js";
+import { LockOwnerSession } from "./process-lock.js";
+import { ProcessExecutionControlFailure } from "./process-execution-values.js";
 import { PRODUCT } from "./product.js";
 import { TemporaryPaths } from "./temporary-paths.js";
 import { LogicalPathSet, isNativePathWithin } from "./portable-path.js";
@@ -30,7 +31,7 @@ const MIGRATION_READ_OPTIONS = Object.freeze({ label: "migration regular file", 
 const LEGACY_DIRECTORY_NAMES = LEGACY_MANAGED_DIRECTORY_NAMES;
 const STAGING_PREFIX = "sennel-migrate-layout-";
 const JOURNAL_FILE_NAME = "sennel-migrate-layout.json";
-const JOURNAL_VERSION = 7;
+const JOURNAL_VERSION = 8;
 const JOURNAL_PHASES = new Set([
   "staged",
   "legacy-backed-up",
@@ -42,6 +43,7 @@ const JOURNAL_PHASES = new Set([
 const RAW_COPY_ROOTS = new Set(["plugins", "plugin-sources"]);
 const OPEN_ACCESS_MODE_MASK = 0o3;
 const ACTIVE_MIGRATION_OWNER_TOKENS = new Set();
+const MIGRATION_OWNER_SESSION = LockOwnerSession.current().ownerSession;
 const MANAGED_TEMPLATE_FIELD_REPLACEMENTS = Object.freeze(new Map([
   // These were public names in generated template guidance. They are not
   // arbitrary camel-case words: each maps to the current container path key.
@@ -226,127 +228,42 @@ export class ManagedOpenHandleInspector {
   }
 }
 
-class MigrationOwnerAssessment {
-  constructor(status, reason) {
-    if (!new Set(["live", "stale", "unknown"]).has(status) || typeof reason !== "string" || reason === "") {
-      throw new Error("migration process owner assessment is invalid");
-    }
-    this.status = status;
-    this.reason = reason;
+class MigrationProcessOwner extends LockOwnerSession {
+  constructor({ ownerToken, ownerSession, released = false }) {
+    super({ ownerToken, ownerSession });
+    if (typeof released !== "boolean") throw new TypeError("migration journal owner release must be boolean");
+    this.released = released;
     Object.freeze(this);
   }
-}
-
-class MigrationProcessIdentitySource {
-  constructor(source = new ProcessIdentitySource()) {
-    if (!(source instanceof ProcessIdentitySource)) throw new Error("migration process identity source is invalid");
-    this.source = source;
+  static current() {
+    return new MigrationProcessOwner({ ownerToken: crypto.randomUUID(), ownerSession: MIGRATION_OWNER_SESSION });
   }
-
-  get pid() {
-    return this.source.pid;
-  }
-
-  createOwner(ownerToken) {
-    if (this.source.platform === "linux") return this.source.createOwner(ownerToken);
-    return new ProcessIdentity({
-      pid: this.source.pid,
-      bootIdentity: `platform:${this.source.platform}`,
-      startFingerprint: "0",
-      ownerToken,
-    });
-  }
-
-  assess(owner) {
-    if (this.source.platform === "linux") return this.source.assess(owner);
-    if (owner.bootIdentity !== `platform:${this.source.platform}`) {
-      return new MigrationOwnerAssessment("stale", "migration owner belongs to another platform identity");
-    }
-    try {
-      process.kill(owner.pid, 0);
-      return new MigrationOwnerAssessment("live", `migration owner pid ${owner.pid} is active`);
-    } catch (error) {
-      if (error.code === "ESRCH") {
-        return new MigrationOwnerAssessment("stale", `migration owner pid ${owner.pid} no longer exists`);
-      }
-      if (error.code === "EPERM") {
-        return new MigrationOwnerAssessment("live", `migration owner pid ${owner.pid} is active`);
-      }
-      return new MigrationOwnerAssessment("unknown", `migration owner state is unavailable: ${error.message}`);
-    }
-  }
-}
-
-class MigrationProcessOwner {
-  constructor({ processIdentity, identitySource }) {
-    this.processIdentity = processIdentity instanceof ProcessIdentity
-      ? processIdentity
-      : new ProcessIdentity(processIdentity ?? {});
-    if (!(identitySource instanceof MigrationProcessIdentitySource)) {
-      throw new Error("migration journal process identity source is invalid");
-    }
-    this.identitySource = identitySource;
-    Object.freeze(this);
-  }
-
-  get pid() {
-    return this.processIdentity.pid;
-  }
-
-  get token() {
-    return this.processIdentity.ownerToken;
-  }
-
-  static current(identitySource) {
-    return new MigrationProcessOwner({
-      processIdentity: identitySource.createOwner(crypto.randomUUID()),
-      identitySource,
-    });
-  }
-
-  static fromJSON(value, identitySource) {
+  static fromJSON(value) {
     const keys = value && typeof value === "object" ? Object.keys(value).sort() : [];
-    if (JSON.stringify(keys) !== JSON.stringify(["bootIdentity", "ownerToken", "pid", "startFingerprint"])) {
-      throw new Error("migration journal process owner is invalid");
+    if (JSON.stringify(keys) !== JSON.stringify(["ownerSession", "ownerToken", "released"])) {
+      throw new ProcessExecutionControlFailure("legacy-owner-format", "Migration journal requires a token/session owner and explicit writer release; PID owners cannot authorize recovery");
     }
-    return new MigrationProcessOwner({ processIdentity: value, identitySource });
+    return new MigrationProcessOwner(value);
   }
-
   activate() {
-    if (this.pid !== this.identitySource.pid || ACTIVE_MIGRATION_OWNER_TOKENS.has(this.token)) {
+    if (this.ownerSession !== MIGRATION_OWNER_SESSION || this.released || ACTIVE_MIGRATION_OWNER_TOKENS.has(this.ownerToken)) {
       throw new Error("migration journal process owner cannot be activated");
     }
-    ACTIVE_MIGRATION_OWNER_TOKENS.add(this.token);
+    ACTIVE_MIGRATION_OWNER_TOKENS.add(this.ownerToken);
   }
-
   release() {
-    if (this.pid === this.identitySource.pid) ACTIVE_MIGRATION_OWNER_TOKENS.delete(this.token);
+    if (this.ownerSession !== MIGRATION_OWNER_SESSION) throw new Error("cannot release a foreign migration writer");
+    ACTIVE_MIGRATION_OWNER_TOKENS.delete(this.ownerToken);
+    return new MigrationProcessOwner({ ...super.toJSON(), released: true });
   }
-
   assertInactive() {
-    if (this.pid === this.identitySource.pid) {
-      if (ACTIVE_MIGRATION_OWNER_TOKENS.has(this.token)) {
-        throw new Error(`migration journal belongs to an active migration process: pid=${this.pid}`);
-      }
-      return;
+    if (this.ownerSession === MIGRATION_OWNER_SESSION && ACTIVE_MIGRATION_OWNER_TOKENS.has(this.ownerToken)) {
+      throw new ProcessExecutionControlFailure("owner-busy", "Migration journal belongs to an active writer session");
     }
-    const assessment = this.identitySource.assess(this.processIdentity);
-    if (assessment.status === "live") {
-      throw new Error(`migration journal belongs to an active migration process: pid=${this.pid}`);
-    }
-    if (assessment.status === "unknown") {
-      throw new Error(`cannot determine migration journal owner state: ${assessment.reason}`);
-    }
+    if (this.released) return;
+    throw new ProcessExecutionControlFailure("owner-unknown", "Migration journal has no explicit writer release; process disappearance cannot authorize recovery");
   }
-
-  toJSON() {
-    return {
-      pid: this.processIdentity.pid,
-      bootIdentity: this.processIdentity.bootIdentity,
-      startFingerprint: this.processIdentity.startFingerprint,
-      ownerToken: this.processIdentity.ownerToken,
-    };
-  }
+  toJSON() { return { ...super.toJSON(), released: this.released }; }
 }
 
 function removeTree(directory, label) {
@@ -1050,7 +967,7 @@ class LayoutMigrationJournal {
     }).remove();
   }
 
-  static read(root, identitySource) {
+  static read(root) {
     const temporaryRoot = path.join(root, ".tmp");
     const temporaryStat = lstatOrNull(temporaryRoot);
     if (!temporaryStat) return null;
@@ -1075,7 +992,7 @@ class LayoutMigrationJournal {
     const expectedKeys = ["metadata", "owner", "phase", "root", "sourceIdentity", "sourceName", "sourceSnapshot", "sourceSnapshotFingerprint", "stagedManagedIdentity", "stagedSnapshotFingerprint", "stagingRelative", "tempRootCreated", "tempRootIdentity", "version"];
     if (JSON.stringify(keys) !== JSON.stringify(expectedKeys) || raw.version !== JOURNAL_VERSION || path.resolve(raw.root || "") !== path.resolve(root)
       || !Array.isArray(raw.metadata) || !raw.sourceIdentity || !raw.stagedManagedIdentity) {
-      throw new Error("migration journal has an unsupported schema");
+      throw new ProcessExecutionControlFailure("legacy-owner-format", "Migration journal requires revision 8 token/session ownership; older owner records remain unchanged");
     }
     const journal = new LayoutMigrationJournal({
       root,
@@ -1087,7 +1004,7 @@ class LayoutMigrationJournal {
       stagedManagedIdentity: raw.stagedManagedIdentity,
       stagedSnapshotFingerprint: raw.stagedSnapshotFingerprint,
       metadata: raw.metadata.map((entry) => RootMetadataFile.fromJSON(root, entry)),
-      owner: MigrationProcessOwner.fromJSON(raw.owner, identitySource),
+      owner: MigrationProcessOwner.fromJSON(raw.owner),
       tempRootCreated: raw.tempRootCreated,
       tempRootIdentity: raw.tempRootIdentity,
       phase: raw.phase,
@@ -1104,105 +1021,13 @@ class LayoutMigrationJournal {
   }
 }
 
-// The previous Senrail migration journal has a deliberately separate reader.
-// It is never converted to the Sennel format: a malformed or unsupported old
-// journal is an authority boundary and must remain byte-for-byte untouched.
-const OLD_JOURNAL_FILE_NAME = "senrail-upgrade-migrate.json";
-const OLD_STAGING_PREFIX = "senrail-upgrade-migrate-";
-const OLD_JOURNAL_PHASES = new Set([
-  "staged", "legacy-backed-up", "placed-senti", "metadata-updated", "final-renamed", "cleanup-source-verified",
-]);
-
-function oldMetadataPlan(name, original) {
-  const lines = original.toString("utf8").split("\n");
-  const legacyRoots = [".sdd-forge", ".senti"];
-  if (name === ".gitattributes") {
-    const kept = lines.filter((line) => !legacyRoots.some((root) => line.trim() === `${root}/output/analysis.json merge=ours`));
-    const body = kept.at(-1) === "" ? kept.slice(0, -1) : kept;
-    body.push(".senrail/output/analysis.json merge=ours");
-    return Buffer.from(`${body.join("\n")}\n`, "utf8");
-  }
-  const oldLines = new Set(legacyRoots.flatMap((root) => [
-    `${root}/*`, `!${root}/config.json`, `!${root}/templates/`, `!${root}/output/`, `!${root}/presets/`,
-    `${root}/output/acceptance-report-*.json`, `${root}/`,
-  ]));
-  const kept = lines.filter((line) => !oldLines.has(line.trim()));
-  const body = kept.at(-1) === "" ? kept.slice(0, -1) : kept;
-  body.push(
-    ".senrail/*", "!.senrail/config.json", "!.senrail/templates/", "!.senrail/output/", "!.senrail/presets/",
-    ".senrail/output/acceptance-report-*.json",
-  );
-  return Buffer.from(`${body.join("\n")}\n`, "utf8");
-}
-
-class LegacySenrailMigrationJournal {
-  constructor({ root, raw, bytes, identity, owner, sourceSnapshot, metadata }) {
-    this.root = path.resolve(root);
-    this.raw = raw;
-    this.bytes = bytes;
-    this.identity = identity;
-    this.owner = owner;
-    this.sourceSnapshot = sourceSnapshot;
-    this.metadata = metadata;
-    Object.freeze(this);
-  }
-
-  get sourcePath() { return path.join(this.root, this.raw.sourceName); }
-  get stagingRoot() { return path.join(this.root, this.raw.stagingRelative); }
-  get stagedPath() { return path.join(this.stagingRoot, ".senti"); }
-  get backupPath() { return path.join(this.stagingRoot, "legacy-source-backup"); }
-  get canonicalPath() { return path.join(this.root, ".senrail"); }
-  get journalPath() { return path.join(this.root, ".tmp", OLD_JOURNAL_FILE_NAME); }
-
-  static read(root, identitySource) {
-    const journalPath = path.join(root, ".tmp", OLD_JOURNAL_FILE_NAME);
-    const stat = lstatOrNull(journalPath);
-    if (!stat) return null;
-    assertRegularFile(journalPath, "old migration journal");
-    const bytes = captureRegularFile(journalPath, MIGRATION_READ_OPTIONS).bytes;
-    let raw;
-    try { raw = JSON.parse(bytes.toString("utf8")); } catch (error) {
-      throw new Error(`old migration journal is invalid: ${error.message}`);
-    }
-    const readStat = assertRegularFile(journalPath, "old migration journal");
-    if (!sameFileIdentity(readStat, stat)) throw new Error("old migration journal changed while it was being read");
-    const expectedKeys = ["metadata", "owner", "phase", "root", "sourceIdentity", "sourceName", "sourceSnapshot", "sourceSnapshotFingerprint", "stagedSentiIdentity", "stagedSnapshotFingerprint", "stagingRelative", "tempRootCreated", "tempRootIdentity", "version"];
-    if (JSON.stringify(Object.keys(raw || {}).sort()) !== JSON.stringify(expectedKeys)
-      || raw.version !== 6 || path.resolve(raw.root || "") !== path.resolve(root)
-      || ![".sdd-forge", ".senti"].includes(raw.sourceName) || !OLD_JOURNAL_PHASES.has(raw.phase)
-      || !new RegExp(`^\\.tmp/${OLD_STAGING_PREFIX}[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`).test(raw.stagingRelative)
-      || !Array.isArray(raw.metadata)) throw new Error("old migration journal has an unsupported schema");
-    const sourceSnapshot = SourceTreeSnapshot.fromJSON(raw.sourceSnapshot);
-    if (JSON.stringify(sourceSnapshot.rootIdentity) !== JSON.stringify(raw.sourceIdentity)
-      || sourceSnapshot.fingerprint !== raw.sourceSnapshotFingerprint) throw new Error("old migration journal source snapshot authority is invalid");
-    const metadata = raw.metadata.map((entry) => RootMetadataFile.fromJSON(root, entry));
-    if (JSON.stringify(metadata.map((entry) => entry.name).sort()) !== JSON.stringify([".gitattributes", ".gitignore"])) {
-      throw new Error("old migration journal metadata authority is invalid");
-    }
-    for (const entry of metadata) {
-      if (!oldMetadataPlan(entry.name, entry.original).equals(entry.planned)) {
-        throw new Error("old migration journal metadata plan is invalid");
-      }
-    }
-    const stagedIdentity = raw.stagedSentiIdentity;
-    if (!stagedIdentity || !Number.isSafeInteger(stagedIdentity.dev) || !Number.isSafeInteger(stagedIdentity.ino)) {
-      throw new Error("old migration journal staged identity is invalid");
-    }
-    return new LegacySenrailMigrationJournal({
-      root, raw, bytes, identity: { dev: readStat.dev, ino: readStat.ino },
-      owner: MigrationProcessOwner.fromJSON(raw.owner, identitySource), sourceSnapshot, metadata,
-    });
-  }
-
-  assertJournalAuthority() {
-    const stat = assertRegularFile(this.journalPath, "old migration journal");
-    if (!sameFileIdentity(stat, this.identity) || !captureRegularFile(this.journalPath, MIGRATION_READ_OPTIONS).bytes.equals(this.bytes)) {
-      throw new Error("old migration journal changed during recovery");
-    }
-  }
-
-  removeJournal() {
-    new AtomicFile(this.journalPath, { phaseNamespace: "old-migration-journal", commitGuard: () => this.assertJournalAuthority() }).remove();
+// Historical journals have no token/session release authority. Detect them
+// before selecting a new migration and leave their contents and effects intact.
+function refuseLegacyMigrationJournal(root) {
+  const journalPath = path.join(root, ".tmp", "senrail-upgrade-migrate.json");
+  if (lstatOrNull(journalPath)) {
+    throw new ProcessExecutionControlFailure("legacy-owner-format",
+      "Legacy migration journal has no transferable token/session owner; revision 8 writer authority is required and all existing evidence remains unchanged");
   }
 }
 
@@ -1308,13 +1133,11 @@ export class LayoutMigrationRevisionOne {
   constructor(root, {
     dryRun = false,
     logger = console,
-    processIdentitySource = new ProcessIdentitySource(),
     openHandleInspector = new ManagedOpenHandleInspector(),
   } = {}) {
     this.root = path.resolve(root);
     this.dryRun = dryRun;
     this.logger = logger;
-    this.processIdentitySource = new MigrationProcessIdentitySource(processIdentitySource);
     if (!(openHandleInspector instanceof ManagedOpenHandleInspector)) {
       throw new Error("migration managed open-handle inspector is invalid");
     }
@@ -1322,25 +1145,8 @@ export class LayoutMigrationRevisionOne {
   }
 
   run() {
-    const oldRecovery = LegacySenrailMigrationJournal.read(this.root, this.processIdentitySource);
-    if (oldRecovery) {
-      oldRecovery.owner.assertInactive();
-      if (this.dryRun) {
-        this.logger.log("[migrate] DRY-RUN: a valid old Senrail migration journal would be recovered; no files were changed.");
-        // A dry-run never mutates the journal, so it cannot prove the
-        // post-recovery preflight (a rollback could expose another legacy
-        // directory or a collision).  Surface recovery as an explicit
-        // incomplete plan rather than claiming the target was reached.
-        return { migrated: false, recovered: true, noop: false, complete: false, requiresRecovery: true };
-      }
-      this.#recoverOldSenrailJournal(oldRecovery);
-      this.logger.log("[migrate] recovered an old Senrail migration journal without converting it.");
-      // Recovery can leave a completed old `.senrail` migration.  Re-enter
-      // through the normal preflight so it receives the same collision and
-      // writer checks as every other legacy source.
-      return { ...this.run(), recovered: true };
-    }
-    const recovery = LayoutMigrationJournal.read(this.root, this.processIdentitySource);
+    refuseLegacyMigrationJournal(this.root);
+    const recovery = LayoutMigrationJournal.read(this.root);
     if (recovery) {
       recovery.owner.assertInactive();
       if (this.dryRun) {
@@ -1407,6 +1213,7 @@ export class LayoutMigrationRevisionOne {
     let journal = null;
     let stagingCreated = false;
     let retainStagingForRecovery = false;
+    let primaryFailure = null;
     try {
       stagingRoot = temporaryPaths.create(temporaryPaths.runtime("migrate-layout"), STAGING_PREFIX);
       stagingCreated = true;
@@ -1431,7 +1238,7 @@ export class LayoutMigrationRevisionOne {
         stagedManagedIdentity: directoryIdentity(stagedManaged, "migration staged directory"),
         stagedSnapshotFingerprint: stagedSnapshot.fingerprint,
         metadata,
-        owner: MigrationProcessOwner.current(this.processIdentitySource),
+        owner: MigrationProcessOwner.current(),
         tempRootCreated: tempState.created,
         tempRootIdentity: tempState.identity,
       });
@@ -1458,6 +1265,7 @@ export class LayoutMigrationRevisionOne {
       this.logger.log(`[migrate] migrated ${sourceName} to ${PRODUCT.managedDirName}.`);
       return { migrated: true, recovered: false, noop: false, complete: true };
     } catch (error) {
+      primaryFailure = error;
       if (journal) {
         const canonicalVisible = lstatOrNull(path.join(this.root, PRODUCT.managedDirName));
         if (this.#finalRenameVisible(journal)
@@ -1469,7 +1277,8 @@ export class LayoutMigrationRevisionOne {
         try {
           this.#rollback(journal);
         } catch (rollbackError) {
-          throw new AggregateError([error, rollbackError], "migration and rollback both failed", { cause: error });
+          primaryFailure = new AggregateError([error, rollbackError], "migration and rollback both failed", { cause: error });
+          throw primaryFailure;
         }
       } else if (!retainStagingForRecovery) {
         if (stagingCreated) removeTree(stagingRoot, "migration staging directory");
@@ -1477,7 +1286,17 @@ export class LayoutMigrationRevisionOne {
       }
       throw error;
     } finally {
-      journal?.owner.release();
+      if (journal) {
+        try {
+          journal.owner = journal.owner.release();
+          // This releases only the synchronous journal writer. Snapshot and
+          // effect validation remain mandatory in the existing recovery path.
+          if (lstatOrNull(journal.journalPath)) journal.write();
+        } catch (releaseFailure) {
+          if (primaryFailure === null) throw releaseFailure;
+          throw new AggregateError([primaryFailure, releaseFailure], "migration and writer release both failed", { cause: primaryFailure });
+        }
+      }
     }
   }
 
@@ -1618,80 +1437,4 @@ export class LayoutMigrationRevisionOne {
     return "rollback";
   }
 
-  #recoverOldSenrailJournal(journal) {
-    const canonical = journal.canonicalPath;
-    // v6 staged the converted directory under stagingRoot until it placed it
-    // at the root as `.senti`.  The latter location is authoritative for the
-    // placed-senti and metadata-updated phases; treating it as stagingRoot
-    // would leave it in place and make the backup restore collide.
-    const temporary = ["placed-senti", "metadata-updated"].includes(journal.raw.phase)
-      ? path.join(this.root, ".senti")
-      : journal.stagedPath;
-    const backup = journal.backupPath;
-    const source = journal.sourcePath;
-    const stagedIdentity = journal.raw.stagedSentiIdentity;
-    const assertOldStaged = (directory) => {
-      if (!sameDirectoryIdentity(directory, stagedIdentity, "old staged managed directory")) {
-        throw new Error("old migration staged directory identity changed");
-      }
-      if (SourceTreeSnapshot.capture(directory).fingerprint !== journal.raw.stagedSnapshotFingerprint) {
-        throw new Error("old migration staged directory changed");
-      }
-    };
-    const assertOldSource = (directory) => {
-      if (!sameDirectoryIdentity(directory, journal.raw.sourceIdentity, "old legacy managed directory")) {
-        throw new Error("old migration legacy directory identity changed");
-      }
-      if (SourceTreeSnapshot.capture(directory).fingerprint !== journal.raw.sourceSnapshotFingerprint) {
-        throw new Error("old migration legacy directory changed");
-      }
-    };
-    if (lstatOrNull(canonical)) {
-      assertRealDirectory(canonical, "old migration canonical directory");
-      assertOldStaged(canonical);
-      if (lstatOrNull(source) && lstatOrNull(backup)) throw new Error("old migration has both source and backup during cleanup");
-      if (lstatOrNull(source)) {
-        this.openHandleInspector.assertEmpty(source, "the old legacy managed directory");
-        assertOldSource(source);
-        fs.renameSync(source, backup);
-      }
-      if (lstatOrNull(backup)) {
-        this.openHandleInspector.assertEmpty(backup, "the old legacy managed directory backup");
-        if (journal.raw.phase === "cleanup-source-verified") {
-          journal.sourceSnapshot.assertRemainingSubset(backup);
-        } else {
-          assertOldSource(backup);
-        }
-        removeTree(backup, "old migration legacy backup");
-      }
-      if (lstatOrNull(source)) throw new Error("old migration source reappeared during cleanup");
-      removeTree(journal.stagingRoot, "old migration staging directory");
-      journal.removeJournal();
-      return;
-    }
-    if (journal.raw.phase === "final-renamed") {
-      throw new Error("old migration journal says final rename completed, but .senrail is not safely present");
-    }
-    if (lstatOrNull(temporary)) {
-      // For a `.senti` source in the earliest phase this is the original
-      // source, not a staged tree, and therefore must not be removed.
-      const originalStillInPlace = journal.raw.phase === "staged" && journal.raw.sourceName === ".senti"
-        && sameDirectoryIdentity(temporary, journal.raw.sourceIdentity, "old legacy .senti directory");
-      if (!originalStillInPlace) {
-        assertOldStaged(temporary);
-        this.openHandleInspector.assertEmpty(temporary, "the old staged managed directory");
-        removeTree(temporary, "old staged managed directory");
-      }
-    }
-    for (const entry of journal.metadata) entry.restore();
-    if (lstatOrNull(backup)) {
-      if (lstatOrNull(source)) throw new Error("cannot restore old legacy directory because its path is occupied");
-      assertOldSource(backup);
-      fs.renameSync(backup, source);
-    } else if (!lstatOrNull(source)) {
-      throw new Error("old migration legacy source disappeared before rollback");
-    }
-    removeTree(journal.stagingRoot, "old migration staging directory");
-    journal.removeJournal();
-  }
 }

@@ -3,7 +3,7 @@ import { validateSchema } from "../lib/schema-validate.js";
 export { FLOW_QUERY_GATE_FINDING_SPECIFIC_SCHEMA } from "./query-gate-details.js";
 export { FLOW_QUERY_REPAIR_CHANGE_SCHEMA } from "./query-repair-change.js";
 
-export const FLOW_QUERY_SCHEMA_REVISION = 3;
+export const FLOW_QUERY_SCHEMA_REVISION = 4;
 export const FLOW_QUERY_HELP = [
   "Usage: sennel flow query [--request-file <path>]",
   "",
@@ -400,6 +400,12 @@ class FlowQueryResponseValidation {
     const roots = [];
     for (const item of items) {
       const path = `activity(${item.activity.id})`;
+      const processType = item.activity.type.startsWith("outbox_process_");
+      this.check(processType === Object.hasOwn(item, "processEvent"), `${path}.processEvent`, "process Activities require their exact event identity");
+      if (processType) {
+        this.check(item.activity.id === `process-event-${item.processEvent.eventId}`, `${path}.activity.id`, "must bind the process event ID");
+        this.check(item.activity.type === `outbox_process_${item.processEvent.type.replaceAll("-", "_")}`, `${path}.activity.type`, "must bind the process event type");
+      }
       if (item.timing !== null) for (const field of ["startedAt", "finishedAt"]) this.check(isFlowQueryDatetime(item.timing[field]), `${path}.timing.${field}`, "must be a recorded datetime");
       if (item.outcome !== null) this.check(isFlowQueryDatetime(item.outcome.confirmedAt), `${path}.outcome.confirmedAt`, "must be a recorded datetime");
       this.unique(item.artifactIds, `${path}.artifactIds`);

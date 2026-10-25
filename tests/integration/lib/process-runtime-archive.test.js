@@ -5,15 +5,19 @@ import path from "node:path";
 import { test } from "node:test";
 import { ProcessExecutionRuntime, ProcessExecutionBinding, captureProcessExecutionCheckoutIdentity, ProcessExecutionControlFailure } from "../../../src/lib/process-execution-runtime.js";
 import { executeManagedProcess } from "../../../src/lib/managed-process.js";
-import { AgentProcessStopEvidence } from "../../../src/lib/agent-failure.js";
+import { ManagedProcessMessage, managedRequest } from "../../../src/lib/managed-process-protocol.js";
+import { ProcessExecutionCanonicalAcknowledgement, executionValueDigest } from "../../../src/lib/process-execution-values.js";
+import { DEFAULT_REGISTERED_CHILD_GRACE_MS } from "../../../src/lib/agent-timeout.js";
+import { testTemporaryRoot } from "../../test-environment.js";
 import { createTmpDir, removeTmpDir } from "../../support/builders/tmp-dir.js";
 
 function fixture(t) {
-  const root = createTmpDir("runtime-archive-", { parent: path.resolve(".tmp/c2f6/archive-fixtures") });
+  const root = createTmpDir("runtime-archive-");
   const owned = [];
   t.after(async () => {
     try { for (const runtime of owned) if (!runtime.closed) await runtime.close(); }
-    finally { removeTmpDir(root); }
+    catch (error) { testTemporaryRoot().retainOnUnconfirmedExecution(); throw error; }
+    removeTmpDir(root);
   });
   const options = { mainRoot: root, executionRoot: root, runId: "archive-run", specId: "archive-spec" };
   const acquire = async (extra = {}) => { const runtime = await ProcessExecutionRuntime.acquire({ ...options, ...extra }); owned.push(runtime); return runtime; };
@@ -29,12 +33,18 @@ test("closed runtime executions leave bounded active metadata and archived recei
   const callBinding = new ProcessExecutionBinding({ runId: "archive-run", specId: "archive-spec", attemptId: "exact-attempt" });
   let firstReceipt;
   for (let index = 0; index < 3; index++) {
-    const runtime = await acquire({ binding: { runId: "archive-run", specId: "archive-spec", metadata: "x".repeat(6 * 1024 * 1024) } });
+    const published = [];
+    const runtime = await acquire({ binding: { runId: "archive-run", specId: "archive-spec", metadata: "x".repeat(6 * 1024 * 1024) },
+      eventWriter(event) { published.push(event.toJSON()); return ProcessExecutionCanonicalAcknowledgement.fromEvent(event); } });
     if (index === 0) {
       const result = await runtime.enter(() => executeManagedProcess(process.execPath, ["-e", "process.stdout.write('archived-output')"], {
         timeoutMs: 60000, graceMs: 100, maxBuffer: 1024, processExecutionBinding: callBinding,
       }));
       assert.equal(result.stdout, "archived-output"); firstReceipt = result.processExecutionStopReceipt.toJSON();
+      const saved = runtime.inspect().executions.find((entry) => entry.executionId === runtime.executionId);
+      assert.deepEqual(published.map((event) => event.type), ["reserved", "started", "exited", "result-finalized"]);
+      assert.deepEqual(published, saved.events);
+      assert.deepEqual(saved.eventAcknowledgements, published.map((event) => ({ eventId: event.eventId, eventDigest: executionValueDigest(event) })));
     }
     await runtime.close();
     const activeBytes = fs.readFileSync(path.join(directory, "registry.json"));
@@ -53,12 +63,43 @@ test("closed runtime executions leave bounded active metadata and archived recei
 test("pre-publication capacity refusal keeps the visible registry complete and the same owner usable", async (t) => {
   const { acquire, directory } = fixture(t); const runtime = await acquire();
   const file = path.join(directory, "registry.json"), before = fs.readFileSync(file);
-  await assert.rejects(runtime.reserveCall({ invocation: { content: "x".repeat(17 * 1024 * 1024) } }),
+  const invocation = { content: "x".repeat(17 * 1024 * 1024) }, grant = runtime.remoteGrant();
+  await assert.rejects(runtime.reserveCall({ invocation }),
     (error) => error instanceof ProcessExecutionControlFailure && error.code === "PROCESS_EXECUTION_RECORD_CAPACITY");
-  assert.deepEqual(fs.readFileSync(file), before);
+  const committed = JSON.parse(fs.readFileSync(file));
+  const root = committed.payload.executions.find((entry) => entry.executionId === runtime.executionId);
+  const accepted = root.requests.at(-1);
+  assert.equal(accepted.operation, "reserve");
+  assert.equal(accepted.response.ok, false);
+  const failure = ProcessExecutionControlFailure.fromStored(accepted.response.error);
+  assert.equal(failure.code, "PROCESS_EXECUTION_RECORD_CAPACITY");
+  assert.deepEqual(accepted.response, { ok: false, error: failure.toJSON() });
+  const request = new ManagedProcessMessage(grant, "reserve", { grant, data: { binding: runtime.binding.toJSON(),
+    invocation, timeoutMs: null, graceMs: DEFAULT_REGISTERED_CHILD_GRACE_MS } }, { requestId: accepted.requestId });
+  assert.equal(accepted.payloadDigest, request.payloadDigest);
+  const expected = JSON.parse(before);
+  expected.payload.executions.find((entry) => entry.executionId === runtime.executionId).requests.push(accepted);
+  expected.digest = executionValueDigest(expected.payload);
+  assert.equal(fs.readFileSync(file).equals(Buffer.from(JSON.stringify(expected))), true,
+    "only the exact reserve acceptance and completed refusal may be added for an oversized intent");
+  assert.deepEqual(root.calls, []); assert.deepEqual(root.events, []);
+  assert.deepEqual(fs.readdirSync(runtime.store.callsAuthority.directory), []);
+  assert.equal(runtime.stopReceipts().length, 0);
   assert.equal(fs.existsSync(path.join(directory, "transition.json")), false);
-  const call = await runtime.reserveCall();
-  await runtime.finishCall(call, { notStarted: true, stopEvidence: AgentProcessStopEvidence.confirmed() });
+  const refused = fs.readFileSync(file);
+  await assert.rejects(managedRequest(grant, "reserve", request.payload, { requestId: request.requestId }),
+    (error) => {
+      assert.ok(error instanceof ProcessExecutionControlFailure);
+      assert.equal(error.code, "PROCESS_EXECUTION_RECORD_CAPACITY");
+      assert.ok(error.cause instanceof ProcessExecutionControlFailure);
+      assert.deepEqual(error.cause.toJSON(), failure.toJSON());
+      return true;
+    });
+  assert.equal(fs.readFileSync(file).equals(refused), true, "the same request must replay its exact completed refusal");
+  const result = await runtime.enter(() => executeManagedProcess(process.execPath,
+    ["-e", "process.stdout.write('same owner remains usable')"], { timeoutMs: 10000 }));
+  assert.equal(result.stdout, "same owner remains usable");
+  assert.equal(result.processExecutionStopReceipt.observation.kind, "exited");
   await runtime.close();
 });
 
@@ -76,4 +117,113 @@ test("repository identity comparison shares main authority and keeps full checko
   const checkout = captureProcessExecutionCheckoutIdentity({ mainRoot: root, executionRoot: other });
   assert.equal(main.matchesRepository(checkout), true);
   assert.equal(main.matches(checkout), false);
+});
+
+
+test("a changed second archive observation validates new bytes even with the same file identity", async (t) => {
+  const { root, acquire, directory } = fixture(t);
+  const runtime = await acquire();
+  const result = await runtime.enter(() => executeManagedProcess(process.execPath,
+    ["-e", "process.stdout.write('archive-observation')"], { timeoutMs: 10000 }));
+  assert.equal(result.stdout, "archive-observation");
+  const expectedReceipt = result.processExecutionStopReceipt.toJSON();
+  await runtime.close();
+  const successor = await acquire();
+  await successor.close();
+  const archives = path.join(directory, "archives");
+  const archivePath = path.join(archives, `${runtime.executionId}.json`);
+  const original = fs.readFileSync(archivePath);
+  const identity = fs.statSync(archivePath, { bigint: true });
+  const changed = JSON.parse(original);
+  changed.payload.unexpectedObservationField = true;
+  changed.digest = crypto.createHash("sha256").update(JSON.stringify(changed.payload)).digest("hex");
+  const replacement = Buffer.from(JSON.stringify(changed));
+  const readDirectory = fs.readdirSync;
+  let observations = 0;
+  let mutated = false;
+  fs.readdirSync = function (directoryPath, ...args) {
+    if (path.resolve(directoryPath) === archives) {
+      observations++;
+      if (observations === 2) {
+        fs.writeFileSync(archivePath, replacement);
+        const after = fs.statSync(archivePath, { bigint: true });
+        assert.equal(after.dev, identity.dev);
+        assert.equal(after.ino, identity.ino);
+        assert.deepEqual(fs.readFileSync(archivePath), replacement);
+        mutated = true;
+      }
+    }
+    return readDirectory.call(this, directoryPath, ...args);
+  };
+  try {
+    assert.throws(() => ProcessExecutionRuntime.inspect({ mainRoot: root }), (error) => {
+      assert.ok(error instanceof ProcessExecutionControlFailure);
+      assert.equal(error.code, "PROCESS_EXECUTION_REGISTRY_FAILED");
+      assert.ok(error.cause instanceof TypeError);
+      assert.equal(error.cause.message, "Runtime record has missing or unknown fields");
+      return true;
+    });
+    assert.equal(mutated, true);
+    assert.ok(observations >= 2);
+  } finally {
+    fs.readdirSync = readDirectory;
+    fs.writeFileSync(archivePath, original);
+  }
+  const fresh = ProcessExecutionRuntime.inspect({ mainRoot: root });
+  const restored = fresh.executions.find((entry) => entry.executionId === runtime.executionId);
+  assert.deepEqual(restored.calls[0].receipt, expectedReceipt);
+  assert.equal(restored.status, "closed");
+  assert.equal(fresh.slot, null);
+  assert.deepEqual(fs.readFileSync(archivePath), original);
+});
+
+
+test("warmed cross-request archive reads reject changed bytes and missing history without accepting a new request", { timeout: 60000 }, async (t) => {
+  const { root, acquire, directory } = fixture(t);
+  const first = await acquire();
+  const result = await first.enter(() => executeManagedProcess(process.execPath,
+    ["-e", "process.stdout.write('warm-archive')"], { timeoutMs: 10000 }));
+  assert.equal(result.stdout, "warm-archive");
+  const receipt = result.processExecutionStopReceipt.toJSON();
+  await first.close();
+  const next = await acquire();
+  const grant = next.remoteGrant();
+  const events = () => managedRequest(grant, "events", { grant, data: {} });
+  assert.deepEqual(await events(), { ok: true, value: [] });
+  assert.deepEqual(await events(), { ok: true, value: [] });
+  const archive = path.join(directory, "archives", `${first.executionId}.json`);
+  const original = fs.readFileSync(archive);
+  const beforeIdentity = fs.statSync(archive, { bigint: true });
+  const registry = path.join(directory, "registry.json");
+  const beforeRegistry = fs.readFileSync(registry);
+  const changed = JSON.parse(original);
+  changed.payload.unexpectedArchiveField = true;
+  changed.digest = executionValueDigest(changed.payload);
+  try {
+    fs.writeFileSync(archive, JSON.stringify(changed));
+    const afterIdentity = fs.statSync(archive, { bigint: true });
+    assert.equal(afterIdentity.dev, beforeIdentity.dev);
+    assert.equal(afterIdentity.ino, beforeIdentity.ino);
+    await assert.rejects(events(), (error) => error instanceof ProcessExecutionControlFailure
+      && error.code === "PROCESS_EXECUTION_REGISTRY_FAILED");
+    assert.deepEqual(fs.readFileSync(registry), beforeRegistry);
+    fs.writeFileSync(archive, original);
+    assert.deepEqual(await events(), { ok: true, value: [] });
+    fs.unlinkSync(archive);
+    await assert.rejects(events(), (error) => error instanceof ProcessExecutionControlFailure
+      && error.code === "PROCESS_EXECUTION_RECORD_MISSING");
+    assert.deepEqual(fs.readFileSync(registry), beforeRegistry);
+  } finally {
+    fs.writeFileSync(archive, original);
+  }
+  assert.deepEqual(await events(), { ok: true, value: [] });
+  const restored = next.inspect().executions.find((execution) => execution.executionId === first.executionId);
+  assert.equal(restored.status, "closed");
+  assert.deepEqual(restored.calls[0].receipt, receipt);
+  assert.deepEqual(fs.readFileSync(archive), original);
+  await next.close();
+  const fresh = ProcessExecutionRuntime.inspect({ mainRoot: root });
+  assert.equal(fresh.slot, null);
+  assert.ok(fresh.executions.every((execution) => execution.status === "closed"));
+  assert.deepEqual(fresh.executions.find((execution) => execution.executionId === first.executionId).calls[0].receipt, receipt);
 });

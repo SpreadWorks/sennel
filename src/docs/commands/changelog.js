@@ -6,6 +6,7 @@
  * 既存ファイルの MANUAL ブロックを保持する。
  */
 
+import { docsCommands } from "../../lib/command-registry.js";
 import fsp from "fs/promises";
 import path from "path";
 import { parseArgs, formatUTCTimestamp } from "../../lib/cli.js";
@@ -74,7 +75,7 @@ function parseDirName(dirName) {
 async function runChangelog(rawArgs, container) {
   const args = rawArgs;
   const optionArgs = args.filter((arg) => arg.startsWith("-"));
-  const opts = parseArgs(optionArgs, { flags: ["--dry-run"], options: [], defaults: { dryRun: false } });
+  const opts = parseArgs(optionArgs, { ...docsCommands.changelog.args, defaults: { dryRun: false } });
 
   if (opts.help) {
     const tu = translate();

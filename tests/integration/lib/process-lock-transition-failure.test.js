@@ -6,24 +6,13 @@ import { afterEach, describe, it } from "node:test";
 import { createTmpDir, removeTmpDir } from "../../support/builders/tmp-dir.js";
 import { ProcessLock } from "../../../src/lib/process-lock.js";
 import { RealDirectoryAuthority } from "../../../src/lib/real-directory-authority.js";
-import { ProcessIdentitySource } from "../../../src/lib/process-identity.js";
 
-function identitySource(bootIdentity = "candidate8-boot") {
-  return new ProcessIdentitySource({
-    platform: "linux",
-    pid: process.pid,
-    readBootIdentity: () => bootIdentity,
-    readProcessStartFingerprint: () => "441",
-  });
-}
-
-function makeLock(root, source = identitySource()) {
+function makeLock(root) {
   return new ProcessLock({
     directoryAuthority: new RealDirectoryAuthority(root),
     fileName: ".candidate8.lock",
     kind: "candidate8-lock",
     authority: { root: fs.realpathSync(root), scope: "failure-semantics" },
-    processIdentitySource: source,
   });
 }
 
@@ -42,7 +31,7 @@ function assertTransition(error, {
   assert.equal(error.publicationUnknown, publicationUnknown);
   assert.deepEqual(error.residue, { temp: tempResidue, visible: visibleResidue });
   assert.equal(typeof error.lockPath, "string");
-  assert.equal(typeof error.owner?.processIdentity?.ownerToken, "string");
+  assert.equal(typeof error.owner?.ownerToken, "string");
   return true;
 }
 
@@ -52,172 +41,141 @@ describe("ProcessLock transition failure semantics", () => {
     for (const root of roots.splice(0)) removeTmpDir(root);
   });
 
-  it("reports file-fsync and close failures while retaining the still-open owned stage", () => {
-    const root = createTmpDir("process-lock-prepublish-failure-");
+  it("never publishes an owner when its closed stage cannot be completely written", () => {
+    const root = createTmpDir("process-lock-partial-owner-");
     roots.push(root);
     const lock = makeLock(root);
-    const originalOpen = fs.openSync;
-    const originalFsync = fs.fsyncSync;
-    const originalClose = fs.closeSync;
-    const originalUnlink = fs.unlinkSync;
-    let tempDescriptor = null;
-    let tempPath = null;
-    let tempUnlinkAttempts = 0;
-    fs.openSync = (target, ...args) => {
-      const descriptor = originalOpen(target, ...args);
-      if (String(target).endsWith(".owner.tmp")) {
-        tempDescriptor = descriptor;
-        tempPath = String(target);
-      }
-      return descriptor;
-    };
-    fs.fsyncSync = (descriptor) => {
-      if (descriptor === tempDescriptor) throw Object.assign(new Error("owner file fsync failed"), { code: "EIO" });
-      return originalFsync(descriptor);
-    };
-    fs.closeSync = (descriptor) => {
-      if (descriptor === tempDescriptor) throw Object.assign(new Error("owner descriptor close failed"), { code: "EIO" });
-      return originalClose(descriptor);
-    };
-    fs.unlinkSync = (target) => {
-      if (String(target) === tempPath) { tempUnlinkAttempts++; throw Object.assign(new Error("owner temp unlink failed"), { code: "EACCES" }); }
-      return originalUnlink(target);
+    const write = fs.writeSync;
+    const failure = Object.assign(new Error("owner write failed"), { code: "EIO" });
+    let partial = false;
+    fs.writeSync = (descriptor, bytes, offset, length, position) => {
+      if (partial) throw failure;
+      partial = true;
+      return write(descriptor, bytes, offset, 1, position);
     };
     try {
-      assert.throws(
-        () => lock.acquire(),
-        (error) => {
-          assertTransition(error, {
-            phase: "before-owner-fsync",
-            publishedToVisibleName: false,
-            publicationUnknown: false,
-            tempResidue: true,
-            visibleResidue: false,
-          });
-          assert.ok(error.cause instanceof AggregateError);
-          assert.equal(error.cause.cause, error.cause.errors[0]);
-          assert.deepEqual(
-            error.cause.errors.map((item) => item.message),
-            ["owner file fsync failed", "owner descriptor close failed"],
-          );
-          return true;
-        },
-      );
-      assert.equal(tempUnlinkAttempts, 0, "an unconfirmed descriptor close must prevent unlink of its owned stage");
-      assert.equal(fs.existsSync(tempPath), true);
-      assert.equal(fs.existsSync(lock.lockPath), false);
-    } finally {
-      fs.openSync = originalOpen;
-      fs.fsyncSync = originalFsync;
-      fs.closeSync = originalClose;
-      fs.unlinkSync = originalUnlink;
-      if (tempDescriptor != null) originalClose(tempDescriptor);
-      if (tempPath && fs.existsSync(tempPath)) originalUnlink(tempPath);
-    }
-    const token = lock.acquire();
-    assert.equal(typeof token, "string");
-    lock.release();
+      assert.throws(() => lock.acquire(), (error) => {
+        assertTransition(error, { phase: "owner-create", publishedToVisibleName: false,
+          publicationUnknown: false, tempResidue: false, visibleResidue: false });
+        assert.equal(error.cause.name, "AtomicFileWriteError");
+        assert.equal(error.cause.cause, failure);
+        return true;
+      });
+    } finally { fs.writeSync = write; }
+    assert.equal(lock.ownerToken, null);
+    assert.equal(lock.inspect(), null);
+    assert.deepEqual(fs.readdirSync(root), []);
+    const successor = makeLock(root);
+    successor.acquire();
+    successor.release();
   });
 
-  it("reports visible lock residue when publication readback and cleanup both fail", () => {
-    const root = createTmpDir("process-lock-postpublish-failure-");
+  it("reports owner write and close failures in causal order without removing residue", () => {
+    const root = createTmpDir("process-lock-write-close-");
     roots.push(root);
     const lock = makeLock(root);
-    const originalLstat = fs.lstatSync;
-    const originalLink = fs.linkSync;
-    const originalUnlink = fs.unlinkSync;
-    let published = false;
-    let failed = false;
-    fs.linkSync = (...args) => { const result = originalLink(...args); published = true; return result; };
-    fs.lstatSync = (target, ...args) => {
-      if (target === lock.lockPath && published && !failed) { failed = true; throw Object.assign(new Error("publish readback failed"), { code: "EIO" }); }
-      return originalLstat(target, ...args);
-    };
-    fs.unlinkSync = (target) => {
-      if (path.resolve(String(target)) === lock.lockPath) {
-        throw Object.assign(new Error("published lock cleanup failed"), { code: "EACCES" });
+    const open = fs.openSync;
+    const close = fs.closeSync;
+    const write = fs.writeSync;
+    let descriptor = null;
+    let stagePath = null;
+    fs.openSync = (target, flags, ...args) => {
+      const fd = open(target, flags, ...args);
+      if (typeof target === "string" && path.dirname(target) === root && target !== lock.lockPath) {
+        descriptor = fd;
+        stagePath = target;
       }
-      return originalUnlink(target);
+      return fd;
     };
+    fs.writeSync = (fd, ...args) => { if (fd === descriptor) throw new Error("owner write failed"); return write(fd, ...args); };
+    fs.closeSync = (fd) => { if (fd === descriptor) throw new Error("owner close failed"); return close(fd); };
     try {
-      assert.throws(
-        () => lock.acquire(),
-        (error) => {
-          assertTransition(error, {
-            phase: "before-owner-readback",
-            publishedToVisibleName: true,
-            publicationUnknown: true,
-            tempResidue: false,
-            visibleResidue: true,
-          });
-          assert.ok(error.cause instanceof AggregateError);
-          assert.equal(error.cause.cause, error.cause.errors[0]);
-          assert.deepEqual(
-            error.cause.errors.map((item) => item.message),
-            ["publish readback failed", "published lock cleanup failed"],
-          );
-          const bytes = JSON.parse(fs.readFileSync(lock.lockPath, "utf8"));
-          assert.equal(bytes.processIdentity.ownerToken, error.owner.processIdentity.ownerToken);
-          return true;
-        },
-      );
-      assert.equal(fs.existsSync(lock.lockPath), true);
-    } finally {
-      fs.lstatSync = originalLstat;
-      fs.linkSync = originalLink;
-      fs.unlinkSync = originalUnlink;
-    }
-
-    originalUnlink(lock.lockPath);
-    const retry = makeLock(root);
-    retry.acquire();
-    retry.release();
+      assert.throws(() => lock.acquire(), (error) => {
+        assertTransition(error, { phase: "owner-create", publishedToVisibleName: false,
+          publicationUnknown: false, tempResidue: true, visibleResidue: false });
+        assert.deepEqual(error.cause.errors.map((entry) => entry.message), ["owner write failed", "owner close failed"]);
+        assert.equal(error.cause.cause, error.cause.errors[0]);
+        return true;
+      });
+    } finally { fs.openSync = open; fs.closeSync = close; fs.writeSync = write; if (descriptor !== null) close(descriptor); }
+    assert.equal(typeof stagePath, "string");
+    assert.equal(fs.readFileSync(stagePath, "utf8"), "");
+    assert.equal(fs.existsSync(lock.lockPath), false);
+    assert.equal(lock.inspect(), null);
+    assert.equal(lock.ownerToken, null);
   });
 
-  it("reports stale-unlink readback uncertainty without implicitly publishing a replacement", () => {
-    const root = createTmpDir("process-lock-stale-fsync-");
+  it("retains both names and the cleanup cause when exclusive publication cannot remove its stage", () => {
+    const root = createTmpDir("process-lock-published-stage-");
     roots.push(root);
-    const currentSource = identitySource("current-boot");
-    const staleSource = identitySource("stale-boot");
-    const lock = makeLock(root, currentSource);
-    const staleOwner = staleSource.createOwner("11111111-1111-4111-8111-111111111111");
-    fs.writeFileSync(lock.lockPath, `${JSON.stringify({
-      version: 1,
-      kind: "candidate8-lock",
-      root: fs.realpathSync(root),
-      scope: "failure-semantics",
-      processIdentity: staleOwner,
-    }, null, 2)}\n`, { mode: 0o600 });
-    const originalLstat = fs.lstatSync;
-    const originalUnlink = fs.unlinkSync;
-    let removed = false;
-    let failed = false;
-    fs.unlinkSync = (target) => { const result = originalUnlink(target); if (target === lock.lockPath) removed = true; return result; };
-    fs.lstatSync = (target, ...args) => {
-      if (target === lock.lockPath && removed && !failed) { failed = true; throw Object.assign(new Error("stale unlink readback failed"), { code: "EIO" }); }
-      return originalLstat(target, ...args);
+    const lock = makeLock(root);
+    const unlink = fs.unlinkSync;
+    const failure = Object.assign(new Error("published stage cleanup failed"), { code: "EIO" });
+    let stagePath = null;
+    fs.unlinkSync = (target) => {
+      if (target !== lock.lockPath && fs.existsSync(lock.lockPath)) {
+        stagePath = target;
+        throw failure;
+      }
+      return unlink(target);
     };
     try {
-      assert.throws(
-        () => lock.acquire(),
-        (error) => {
-          assertTransition(error, {
-            phase: "stale-remove-readback",
-            publishedToVisibleName: false,
-            publicationUnknown: true,
-            tempResidue: false,
-            visibleResidue: false,
-          });
-          assert.equal(error.owner.processIdentity.ownerToken, staleOwner.ownerToken);
-          assert.equal(error.cause.message, "stale unlink readback failed");
-          return true;
-        },
-      );
-      assert.equal(fs.existsSync(lock.lockPath), false);
-    } finally { fs.lstatSync = originalLstat; fs.unlinkSync = originalUnlink; }
-    const token = lock.acquire();
-    assert.notEqual(token, staleOwner.ownerToken);
+      assert.throws(() => lock.acquire(), (error) => {
+        assertTransition(error, { phase: "owner-create", publishedToVisibleName: true,
+          publicationUnknown: true, tempResidue: true, visibleResidue: true });
+        assert.equal(error.cause.cause, failure);
+        assert.equal(error.cause.cleanupErrors[0], failure);
+        return true;
+      });
+    } finally { fs.unlinkSync = unlink; }
+    assert.equal(lock.ownerToken, null);
+    const visible = fs.lstatSync(lock.lockPath);
+    const staged = fs.lstatSync(stagePath);
+    assert.equal(visible.ino, staged.ino);
+    assert.equal(visible.dev, staged.dev);
+    assert.equal(visible.nlink, 2);
+    const before = fs.readFileSync(lock.lockPath);
+    assert.throws(() => makeLock(root).acquire(), (error) => {
+      assert.equal(error.name, "ProcessLockPublicationPendingError");
+      assert.equal(error.lockStatus, "publication-pending");
+      assert.equal(error.owner, null);
+      return true;
+    });
     lock.release();
+    assert.deepEqual(fs.readFileSync(lock.lockPath), before);
+    assert.equal(fs.existsSync(stagePath), true);
+  });
+
+  it("does not clobber an owner that wins after the contender closes its stage", () => {
+    const root = createTmpDir("process-lock-publication-race-");
+    roots.push(root);
+    const contender = makeLock(root);
+    const winner = makeLock(root);
+    const link = fs.linkSync;
+    let won = false;
+    let winnerToken;
+    fs.linkSync = (source, target) => {
+      if (target === contender.lockPath && !won) {
+        won = true;
+        winnerToken = winner.acquire();
+      }
+      return link(source, target);
+    };
+    try {
+      assert.throws(() => contender.acquire(), (error) => {
+        assert.equal(error.lockStatus, "busy");
+        assert.equal(error.owner.ownerToken, winnerToken);
+        return true;
+      });
+    } finally { fs.linkSync = link; }
+    try {
+      assert.equal(won, true);
+      assert.equal(contender.ownerToken, null);
+      assert.equal(winner.inspect().owner.ownerToken, winnerToken);
+      assert.equal(winner.isOwnerCurrent(winner.inspect().owner), true);
+      assert.deepEqual(fs.readdirSync(root), [path.basename(winner.lockPath)]);
+    } finally { winner.release(); }
+    assert.deepEqual(fs.readdirSync(root), []);
   });
 
   it("reports release readback failure without a retry-recovery sidecar transaction", () => {

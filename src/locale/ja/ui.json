@@ -30,8 +30,14 @@
         "ja": "ja (日本語)"
       },
       "outputLang": [
-        { "key": "ja", "label": "日本語" },
-        { "key": "en", "label": "English" }
+        {
+          "key": "ja",
+          "label": "日本語"
+        },
+        {
+          "key": "en",
+          "label": "English"
+        }
       ],
       "outputDefault": {
         "en": "English",
@@ -97,6 +103,10 @@
     "usage": "Usage: sennel <command> [options]",
     "runHelp": "Run \u001b[1msennel <command> --help\u001b[0m for details.",
     "commands": {
+      "command": {
+        "usage": "Usage: sennel command -- <executable> [argument ...]",
+        "desc": "継承した実行コンテキストで引数をそのまま実行"
+      },
       "help": "このヘルプを表示",
       "setup": "プロジェクト登録 + 設定生成（対話式）",
       "upgrade": "テンプレート由来ファイルを最新版に更新",
@@ -185,7 +195,7 @@
           "promptFile": "--prompt-file <path>   開始プロンプトファイル",
           "spec": "--spec <path>          入力仕様書（ディレクトリ / spec.json / 旧 spec.md）",
           "maxRuns": "--max-runs <n>         反復回数 (default: 3)",
-          "reviewCmd": "--review-cmd <cmd>     docs レビューコマンド (default: sennel docs review)",
+          "reviewCmd": "--review-cmd <json>    kind・executable/script・args を含む実行 JSON (default: sennel docs review)",
           "agent": "--agent <name>         AIエージェント: codex|claude (default: config.json の defaultAgent)",
           "mode": "--mode <mode>          実行モード: local|assist|agent (default: local)",
           "dryRun": "--dry-run              ファイル書き込み・review・agent 呼び出しをスキップ（1 ラウンドで終了）",

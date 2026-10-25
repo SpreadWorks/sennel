@@ -2,12 +2,14 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { test } from "node:test";
+import { testTemporaryRoot } from "../../test-environment.js";
 import { FinalizationWorktreeScenario } from "../../support/infrastructure/finalization-worktree-scenario.js";
 import { installCommandProcessFake } from "../../support/infrastructure/command-process-fake.js";
 import RunFinalizeCleanupCommand from "../../../src/flow/lib/run-finalize-cleanup.js";
 import { captureFinalizationProcessAuthority } from "../../../src/flow/lib/finalization-process-authority.js";
 import RunFinalizeSyncCommand from "../../../src/flow/lib/run-finalize-sync.js";
 import { ProcessExecutionRuntime, ProcessExecutionControlFailure } from "../../../src/lib/process-execution-runtime.js";
+import { ProcessExecutionStopReceipt } from "../../../src/lib/process-execution-values.js";
 import { runManagedCmdAsync } from "../../../src/lib/process.js";
 import { RepositoryFlowOperationLock } from "../../../src/lib/repository-maintenance-lock.js";
 import { FlowManager } from "../../../src/lib/flow-manager.js";
@@ -57,7 +59,7 @@ test("one continuing dispatch transfers physical worktree ownership to main for 
     assert.equal(old.slot, null);
     assert.ok(old.executions.length > 0);
     assert.ok(old.executions.every((execution) => execution.status === "closed"
-      && execution.calls.every((call) => call.receipt?.stopEvidence.status === "confirmed")));
+      && execution.calls.every((call) => call.receipt !== null && new ProcessExecutionStopReceipt(call.receipt).stopEvidence.status === "confirmed")));
     const busy = (error) => error instanceof ProcessExecutionControlFailure && error.code === "PROCESS_EXECUTION_BUSY";
     await assert.rejects(ProcessExecutionRuntime.acquire({ mainRoot: flow.mainRoot, executionRoot: originalRoot }), busy);
     await assert.rejects(ProcessExecutionRuntime.acquire({ mainRoot: flow.mainRoot }), busy);
@@ -86,7 +88,7 @@ test("one continuing dispatch transfers physical worktree ownership to main for 
   assert.equal(main.slot, null);
   const calls = main.executions.flatMap((execution) => execution.calls);
   assert.ok(calls.some((call) => call.parentCallId !== null));
-  assert.ok(calls.every((call) => call.receipt?.stopEvidence.status === "confirmed"));
+  assert.ok(calls.every((call) => call.receipt !== null && new ProcessExecutionStopReceipt(call.receipt).stopEvidence.status === "confirmed"));
   const old = ProcessExecutionRuntime.inspectRetainedClosedCheckout({ mainRoot: flow.mainRoot,
     executionRoot: originalRoot, runId, specId });
   assert.equal(old.slot, null);
@@ -103,9 +105,13 @@ test("one continuing dispatch transfers physical worktree ownership to main for 
   assert.deepEqual(manager.activityLedger(specId), activities);
   assert.equal(fs.existsSync(originalRoot), false);
   } catch (error) {
+    if (error instanceof ProcessExecutionControlFailure || flow) {
+      retained = true;
+      testTemporaryRoot().retainOnUnconfirmedExecution();
+    }
     if (flow) {
       retained = true;
-      fs.writeFileSync(".tmp/c2f6/finalization-checkout-whole-dispatch-failure.json", JSON.stringify({
+      fs.writeFileSync(path.join(testTemporaryRoot().path, "finalization-checkout-whole-dispatch-failure.json"), JSON.stringify({
         root: flow.root, mainRoot: flow.mainRoot, worktreePath: flow.worktreePath, specId: flow.specId,
         state: flow.state().toJSON(), operations, error: { message: error.message, stack: error.stack },
       }, null, 2));

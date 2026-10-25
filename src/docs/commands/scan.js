@@ -16,6 +16,7 @@
  *   7. Save analysis.json
  */
 
+import { docsCommands } from "../../lib/command-registry.js";
 import fs from "fs";
 import path from "path";
 import crypto from "crypto";
@@ -169,7 +170,7 @@ function parseScanArgs(rawArgs) {
   }
 
   const cli = parseArgs(filtered, {
-    flags: ["--stdout", "--dry-run"],
+    ...docsCommands.scan.args,
     defaults: { stdout: false, dryRun: false },
   });
   return { cli, reset, hasReset };

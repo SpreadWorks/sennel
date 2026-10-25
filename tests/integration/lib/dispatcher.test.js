@@ -841,6 +841,8 @@ describe("dispatcher (unified runner)", () => {
       ["command-failure", ["pre", "execute", "stdout"], 1],
       ["returned-failure", ["pre", "execute", "stdout"], 1],
       ["commit-failure", ["pre", "execute", "post", "commit", "stdout"], 1],
+      ["async-success", ["pre", "execute", "post", "commit", "commit-settled", "stdout"], 0],
+      ["async-commit-failure", ["pre", "execute", "post", "commit", "commit-settled", "stdout"], 1],
     ]) {
       it(`cleanup Completion publication: ${outcome} settles before its sole public response`, async (t) => {
         const root = createTestDirectory("dispatcher-completion-");
@@ -863,6 +865,10 @@ describe("dispatcher (unified runner)", () => {
             commitFinalizeCleanupPostCommandMetadata() {
               calls.push("commit");
               if (outcome === "commit-failure") throw new Error("Completion could not be committed.");
+              if (outcome.startsWith("async-")) return Promise.resolve().then(() => {
+                calls.push("commit-settled");
+                if (outcome === "async-commit-failure") throw new Error("Completion could not be committed.");
+              });
             },
           }),
           args: { options: [] },
@@ -888,7 +894,9 @@ describe("dispatcher (unified runner)", () => {
         const envelope = JSON.parse(output[0]);
         assert.equal(envelope.ok, expectedExit === 0);
         if (outcome === "returned-failure") assert.equal(envelope.errors[0].code, "FIXTURE_REFUSED");
-        if (outcome === "commit-failure") assert.ok(envelope.errors.some((error) => error.code === "FINALIZE_COMPLETION_COMMIT_FAILED"));
+        if (["commit-failure", "async-commit-failure"].includes(outcome)) {
+          assert.ok(envelope.errors.some((error) => error.code === "FINALIZE_COMPLETION_COMMIT_FAILED"));
+        }
       });
     }
 

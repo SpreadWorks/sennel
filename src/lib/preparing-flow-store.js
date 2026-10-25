@@ -1,3 +1,4 @@
+import { RepositoryLockAuthority } from "./repository-control-lock.js";
 /**
  * src/lib/preparing-flow-store.js
  *
@@ -79,10 +80,9 @@ export class PreparingFlowStore {
    * @param {Object} opts
    * @param {string} opts.mainRoot
    */
-  constructor({ mainRoot, faultInjector = () => {}, processIdentitySource } = {}) {
+  constructor({ mainRoot, faultInjector = () => {} } = {}) {
     this._mainRoot = path.resolve(mainRoot);
     this._faultInjector = faultInjector;
-    this._processIdentitySource = processIdentitySource;
   }
 
   /** @returns {string} new runId */
@@ -218,28 +218,29 @@ export class PreparingFlowStore {
   }
 
   #withLock(id, body) {
-    const rootAuthority = new RealDirectoryAuthority(this._mainRoot);
-    const directoryAuthority = new RealDirectoryAuthority(managedDir(this._mainRoot), {
-      create: true,
-      parentAuthority: rootAuthority,
-    });
     const errorFactory = (status, message, { lockPath, cause } = {}) => {
       const error = new Error(message, { cause });
-      error.code = status === "live" || status === "timeout"
+      error.code = status === "busy" || status === "timeout"
         ? "PREPARING_FLOW_BUSY"
         : `PREPARING_FLOW_LOCK_${status.replace(/-/g, "_").toUpperCase()}`;
       error.lockPath = lockPath;
       return error;
     };
+    const repositoryAuthority = new RepositoryLockAuthority(this._mainRoot, { errorFactory });
     const lock = new FileLock({
-      directoryAuthority,
-      fileName: id.lockName(),
+      location: repositoryAuthority.location({
+        namespace: "preparing-flow", identity: id.toString(), fileName: id.lockName(),
+        legacyPaths: [path.join(managedDir(this._mainRoot), id.lockName())],
+      }),
       kind: "preparing-flow",
       authority: { mainRoot: this._mainRoot, runId: id.toString(), path: this.#path(id) },
-      ...(this._processIdentitySource && { processIdentitySource: this._processIdentitySource }),
       errorFactory,
     });
-    return lock.runExclusive(body);
+    return lock.runExclusive(() => {
+      new RealDirectoryAuthority(managedDir(this._mainRoot), { create: true,
+        parentAuthority: repositoryAuthority.root }).ensure();
+      return body();
+    });
   }
 
 }

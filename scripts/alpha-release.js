@@ -1,7 +1,10 @@
 import crypto from "node:crypto";
-import { spawnSync } from "node:child_process";
+await import("../src/sennel.js");
+const { runCmd } = await import("../src/lib/process.js");
+const { runGit } = await import("../src/lib/git-helpers.js");
+const { NativeExecutableInvocation } = await import("../src/lib/command-invocation.js");
 import path from "node:path";
-import { AtomicJsonFile } from "../src/lib/atomic-json-file.js";
+const { AtomicJsonFile } = await import("../src/lib/atomic-json-file.js");
 
 const ALPHA_VERSION_PATTERN = /^0\.1\.0-alpha\.(0|[1-9]\d*)$/;
 const ALPHA_RELEASE_PACKAGE_NAME = "sennel";
@@ -176,7 +179,7 @@ class GitRepository {
   }
 
   #run(args, operation) {
-    const result = spawnSync("git", args, { cwd: this.root, encoding: "utf8" });
+    const result = runGit(args, { cwd: this.root, encoding: "utf8" });
     if (result.error) throw new Error(`failed to ${operation}: ${result.error.message}`, { cause: result.error });
     if (result.status !== 0) {
       throw new Error(`failed to ${operation}: ${(result.stderr || result.stdout || "git failed").trim()}`);
@@ -217,13 +220,14 @@ class PackageManifest {
 }
 
 class NpmCommand {
-  constructor(root, spawn = spawnSync) {
+  constructor(root, spawn = runCmd) {
     this.root = requireRoot(root);
     this.spawn = spawn;
   }
 
   run(args, operation) {
-    const result = this.spawn("npm", args, { cwd: this.root, encoding: "utf8" });
+    const invocation = new NativeExecutableInvocation({ executable: "npm", args, cwd: this.root });
+    const result = this.spawn(invocation, [], { encoding: "utf8" });
     if (result.error) throw new Error(`failed to ${operation}: ${result.error.message}`, { cause: result.error });
     if (result.status !== 0) {
       throw new Error(`failed to ${operation}: ${(result.stderr || result.stdout || "npm failed").trim()}`);

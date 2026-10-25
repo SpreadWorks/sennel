@@ -2059,8 +2059,9 @@ export class RunReviewCommand extends FlowCommand {
       try {
         res = await runCmdWithRetry(
           async () => {
-            const child = new RuntimeChildExecution({ root: ctx.repositoryRoot || ctx.mainRoot || ctx.root, environment: env, temporaryRoot: flowTemporaryRoot(ctx) });
-            try { return await this.runCommand("node", [scriptPath, ...args], child.options({
+            return await RuntimeChildExecution.runAsync(scriptPath, args, {
+              repositoryRoot: ctx.repositoryRoot || ctx.mainRoot || ctx.root,
+              env, temporaryRoot: flowTemporaryRoot(ctx),
               cwd: executionRoot,
               onProcessExecutionStop(receipt) {
                 processStop = new FlowProcessStopEvidence(receipt)
@@ -2072,8 +2073,7 @@ export class RunReviewCommand extends FlowCommand {
                 workUnitId: surface.manifestPath,
                 commandId: "flow.review",
               }),
-            })); }
-            finally { child.close(); }
+            }, this.runCommand);
           },
           {
             phase: persistedPhase,
@@ -2533,6 +2533,7 @@ export class RunReviewCommand extends FlowCommand {
     }
     const admissionFailure = reviewExecutionAdmission(ctx, { persistedPhase, executionRoot });
     if (admissionFailure !== null) return admissionFailure;
+    if (dryRun) return this.#executeCanonical(ctx, { phase, dryRun, executionRoot });
     const lease = new ReviewExecutionLease({
       mainRoot: ctx.mainRoot || executionRoot,
       runId: state.runId,

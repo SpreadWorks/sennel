@@ -5,6 +5,7 @@ import path from "node:path";
 import { AtomicFile } from "./atomic-file.js";
 import { RealDirectoryAuthority } from "./real-directory-authority.js";
 import { appendRegularFile } from "./regular-file-io.js";
+import { captureRegularFile } from "./regular-file-snapshot.js";
 import { LogicalRelativePath, isNativePathWithin } from "./portable-path.js";
 import { OwnedTemporaryDirectory } from "./owned-temporary-directory.js";
 
@@ -27,7 +28,80 @@ class WorkspaceExecution {
   }
 }
 
-/** Ephemeral invocation scratch; never a registry, canonical state or resume proof. */
+/** Physical control storage minted only by one owned read-only workspace. */
+export class ReadOnlyProcessRuntimeStorage {
+  #workspace;
+  #authority;
+  #workspaceAuthority;
+  #value;
+  #marker;
+  constructor(factory, { workspace = null, authority, workspaceAuthority, value = null }) {
+    if (factory !== FACTORY) throw new TypeError("runtime storage must be minted by a read-only workspace");
+    this.#workspace = workspace;
+    this.#authority = authority;
+    this.#workspaceAuthority = workspaceAuthority;
+    this.#value = value ?? { schemaVersion: 1, kind: "readonly-invocation", workspaceRoot: workspace.path,
+      workspaceGeneration: workspace.generation, directory: authority.directory, token: crypto.randomUUID(),
+      workspaceIdentity: { dev: String(workspaceAuthority.identity.dev), ino: String(workspaceAuthority.identity.ino) },
+      directoryIdentity: { dev: String(authority.identity.dev), ino: String(authority.identity.ino) } };
+    const file = path.join(authority.directory, "storage-authority.json");
+    if (value === null) this.#marker = new AtomicFile(file, { directoryAuthority: authority }).write(JSON.stringify(this.#value), { exclusive: true }).snapshot;
+    else {
+      this.#marker = captureRegularFile(file, { label: "read-only runtime storage authority", maxBytes: 64 * 1024,
+        requireSingleLink: true, directoryAuthority: authority });
+      if (this.#marker.text() !== JSON.stringify(value)) throw new ReadOnlyInvocationWorkspaceError("STORAGE_AUTHORITY_INVALID", "runtime storage grant differs from its minted authority");
+    }
+    Object.freeze(this);
+  }
+  /** Structural decoding is also used for retained endpoint history, without filesystem I/O. */
+  static validateGrant(value) {
+    const fields = ["schemaVersion", "kind", "workspaceRoot", "workspaceGeneration", "directory", "token", "workspaceIdentity", "directoryIdentity"];
+    if (!value || typeof value !== "object" || Object.keys(value).length !== fields.length
+      || fields.some((field) => !Object.hasOwn(value, field)) || value.schemaVersion !== 1 || value.kind !== "readonly-invocation"
+      || !/^[0-9a-f-]{36}$/.test(value.workspaceGeneration) || !/^[0-9a-f-]{36}$/.test(value.token)
+      || !path.isAbsolute(value.workspaceRoot) || value.directory !== path.join(value.workspaceRoot, "control", "process-runtime")) throw new ReadOnlyInvocationWorkspaceError("STORAGE_AUTHORITY_INVALID", "runtime storage grant is unsupported");
+    for (const identity of [value.workspaceIdentity, value.directoryIdentity]) {
+      if (!identity || typeof identity !== "object" || Object.keys(identity).length !== 2
+        || ["dev", "ino"].some((field) => !Object.hasOwn(identity, field) || typeof identity[field] !== "string" || identity[field].length === 0)) {
+        throw new ReadOnlyInvocationWorkspaceError("STORAGE_AUTHORITY_INVALID", "runtime storage identity is malformed");
+      }
+    }
+    return value;
+  }
+  static fromGrant(value) {
+    if (value instanceof ReadOnlyProcessRuntimeStorage) return value;
+    this.validateGrant(value);
+    const workspaceAuthority = new RealDirectoryAuthority(value.workspaceRoot);
+    const authority = workspaceAuthority.descendant(value.directory);
+    for (const [actual, expected] of [[workspaceAuthority.identity, value.workspaceIdentity], [authority.identity, value.directoryIdentity]]) {
+      if (String(actual.dev) !== expected?.dev || String(actual.ino) !== expected?.ino) throw new ReadOnlyInvocationWorkspaceError("STORAGE_AUTHORITY_INVALID", "runtime storage identity changed");
+    }
+    return new ReadOnlyProcessRuntimeStorage(FACTORY, { authority, workspaceAuthority, value });
+  }
+  get directory() { return this.#authority.directory; }
+  get authority() { this.assertStable(); return this.#authority; }
+  assertStable() {
+    this.#workspace?.validate(this.#workspace.path);
+    this.#workspaceAuthority.assertStable(); this.#authority.assertStable();
+    const current = captureRegularFile(this.#marker.filePath, { label: "read-only runtime storage authority", maxBytes: 64 * 1024,
+      requireSingleLink: true, directoryAuthority: this.#authority, expectedIdentity: this.#marker.identity });
+    if (current.digest !== this.#marker.digest) throw new ReadOnlyInvocationWorkspaceError("STORAGE_AUTHORITY_INVALID", "runtime storage authority bytes changed");
+  }
+  runtime(purpose) {
+    this.assertStable();
+    return path.join(this.directory, "runtime", ...LogicalRelativePath.from(purpose, "read-only runtime purpose").segments);
+  }
+  createOwnedDirectory(directory, prefix) {
+    this.assertStable();
+    const selected = path.resolve(directory);
+    if (!isNativePathWithin(this.directory, selected)) throw new ReadOnlyInvocationWorkspaceError("OUTSIDE_ROOT", "runtime delivery leaves its owned storage");
+    const parent = this.#authority.descendant(selected, { create: true });
+    return OwnedTemporaryDirectory.create(parent, prefix);
+  }
+  toJSON() { return JSON.parse(JSON.stringify(this.#value)); }
+}
+
+/** Ephemeral invocation scratch; never canonical state or cross-invocation resume proof. */
 export class ReadOnlyInvocationWorkspace {
   #authority;
   #owned;
@@ -38,6 +112,7 @@ export class ReadOnlyInvocationWorkspace {
   #removed = false;
   #directories = new Map();
   #ownedDirectories = new Map();
+  #processRuntimeStorage = null;
 
   constructor(factory, owned, parent) {
     if (factory !== FACTORY) throw new TypeError("use ReadOnlyInvocationWorkspace.create()");
@@ -130,10 +205,12 @@ export class ReadOnlyInvocationWorkspace {
     }
   }
 
-  writeFile(file, content) {
+  writeFile(file, content, { phaseNamespace, faultInjector } = {}) {
     const resolved = this.#validatePath(file);
     const parent = this.ensureDirectory(path.dirname(resolved));
     return new AtomicFile(resolved, {
+      phaseNamespace,
+      faultInjector,
       directoryAuthority: this.#directories.get(parent),
       commitGuard: () => this.#validatePath(resolved),
     }).write(content);
@@ -150,6 +227,17 @@ export class ReadOnlyInvocationWorkspace {
     const authority = this.#directories.get(path.dirname(resolved));
     if (!authority) return fallback;
     return new AtomicFile(resolved, { directoryAuthority: authority }).read(fallback);
+  }
+
+  processRuntimeStorage() {
+    this.#assertOpen();
+    if (this.#processRuntimeStorage === null) {
+      const directory = this.ensureDirectory(path.join(this.control(), "process-runtime"));
+      this.#processRuntimeStorage = new ReadOnlyProcessRuntimeStorage(FACTORY, { workspace: this,
+        authority: this.#directories.get(directory), workspaceAuthority: this.#authority });
+    }
+    this.#processRuntimeStorage.assertStable();
+    return this.#processRuntimeStorage;
   }
 
   beginExecution() {

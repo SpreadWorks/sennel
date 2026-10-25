@@ -11,7 +11,6 @@ import { flowCommands } from "../../../src/lib/command-registry.js";
 import { CanonicalPersistenceSnapshot } from "../../support/assertions/canonical-persistence.js";
 import RunFinalizeSyncCommand from "../../../src/flow/lib/run-finalize-sync.js";
 import { persistPromptCacheHitMetric } from "../../../src/lib/agent-invocation-metric.js";
-import { ProcessIdentitySource } from "../../../src/lib/process-identity.js";
 import { ProcessLock } from "../../../src/lib/process-lock.js";
 import { RealDirectoryAuthority } from "../../../src/lib/real-directory-authority.js";
 import { runTeardown } from "../../../src/flow/lib/run-finalize-cleanup.js";
@@ -257,13 +256,10 @@ export function registerFinalizationWorktreeContracts() {
     await FLOW_COMMANDS.run["finalize-cleanup"].pre(flow.context());
     flow.reload();
     const location = flow.manager.specLocation(flow.specId);
-    const directory = new RealDirectoryAuthority(location.directory);
-    const runtime = new RealDirectoryAuthority(location.resolve(".runtime"), { parentAuthority: directory });
-    const locks = new RealDirectoryAuthority(location.resolve(".runtime/locks"), { parentAuthority: runtime });
-    const lock = new ProcessLock({ directoryAuthority: locks, fileName: "current-flow-state.lock",
+    const lock = new ProcessLock({ location: location.runtimeLock("runtime.lock.current-flow-state").controlLocation,
       kind: "current-flow-state", authority: { directory: location.directory,
         runtimeDirectory: location.resolve(".runtime"), statePath: location.flowStateFile,
-        activityPath: location.activitiesFile }, processIdentitySource: new ProcessIdentitySource() });
+        activityPath: location.activitiesFile } });
     t.after(() => lock.release());
     // Snapshot/context reads own the same canonical lock. Capture them before
     // the independent live writer; while held inspect physical bytes only.

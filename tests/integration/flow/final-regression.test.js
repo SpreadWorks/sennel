@@ -14,11 +14,20 @@ import {
 } from "../../../src/flow/lib/final-regression-transition-facts.js";
 import { validateFinalRegressionResult } from "../../../src/flow/lib/test-artifacts.js";
 import { FLOW_COMMANDS } from "../../../src/flow/registry.js";
+import { removeQuiescentRuntimeFixture } from "../../support/infrastructure/runtime-fixture-cleanup.js";
 import { FlowDispatchAction } from "../../../src/flow/lib/run-dispatch.js";
 import { createTmpDir, removeTmpDir, writeFile } from "../../support/builders/tmp-dir.js";
 import { FlowAtStepFixture, makeFlowManager } from "../../support/infrastructure/flow-setup.js";
 import { initGitRepo, commitAll } from "../../support/infrastructure/git-repo.js";
 import { shellPrintChildProcessRecord } from "../../support/infrastructure/child-process-record.js";
+
+import {
+  configureAdmittedFinalRegressionProject, readFinalRegressionArtifact,
+  assertAdmittedFinalRegressionPublication,
+  assertChangedSourcePublicationRefusal,
+  assertChangedJournalPublicationRefusal,
+  assertStaleAttemptPublicationRefusal
+} from "./final-regression-publication.contract.js";
 
 const SPEC_ID = "001-test";
 const FIXTURE_PATH = "final-regression-fixture.sh";
@@ -56,7 +65,7 @@ async function setupProject(tmp, scriptBody, { targetStep = "final-regression" }
     mainRoot: tmp,
     executionRoot: tmp,
     specId: SPEC_ID,
-    config: { test: { command: `sh ${FIXTURE_PATH}`, timeout: 5 } },
+    config: { test: { command: { kind: "native", executable: "sh", args: [FIXTURE_PATH] }, timeout: 5 } },
     flowManager,
     flowState: fixture.state(),
   };
@@ -73,14 +82,6 @@ function writeChangedFileReferencingFailureFixture(tmp, message) {
   ].join("\n"));
 }
 
-function readFinalRegressionArtifact(ctx) {
-  const history = JSON.parse(ctx.flowManager.readArtifact({
-    specId: SPEC_ID,
-    logicalKey: "final.regression",
-    consumerNodeId: "report",
-  }).bytes.toString("utf8"));
-  return validateFinalRegressionResult(history.attempts.at(-1).artifact.payload);
-}
 
 function assertFinalRegressionCommandFailure(result, { failureKind }) {
   assert.equal(result.result, "fail");
@@ -172,7 +173,7 @@ describe("flow run final-regression", () => {
       type: "node-cli",
       docs: { languages: ["en"], defaultLanguage: "en" },
       test: {
-        command: `sh ${FIXTURE_PATH}`,
+        command: { kind: "native", executable: "sh", args: [FIXTURE_PATH] },
         timeout: 1,
         finalRegressionTimeout: 5,
       },
@@ -540,4 +541,32 @@ describe("flow run final-regression", () => {
     assert.doesNotMatch(raw, /PROJECT_TEST_RAN/);
     assert.match(raw, /authority pass/);
   });
+});
+
+
+describe("final-regression publication with canonical process observations", () => {
+  async function setupAdmittedProject(t) {
+    const root = createTmpDir("final-regression-publication-observations-");
+    t.after(() => removeQuiescentRuntimeFixture({ mainRoot: root }));
+    const ctx = await setupProject(root, PASSING_FIXTURE_BODY);
+    return configureAdmittedFinalRegressionProject(ctx, { lang: "en", type: "node-cli",
+      docs: { languages: ["en"], defaultLanguage: "en" } });
+  }
+
+  it("settles a genuine admitted regression after its managed Git observations and preserves receipts and ACKs", async (t) => {
+    await assertAdmittedFinalRegressionPublication(t, await setupAdmittedProject(t));
+  });
+
+  it("refuses changed project source before publication after a genuine admitted regression", async (t) => {
+    await assertChangedSourcePublicationRefusal(t, await setupAdmittedProject(t));
+  });
+
+  it("refuses canonical journal drift after immutable publication acquisition without publishing its candidate", async (t) => {
+    await assertChangedJournalPublicationRefusal(t, await setupAdmittedProject(t));
+  });
+
+  it("refuses a supplied stale Attempt before starting any fingerprint Git call", async (t) => {
+    await assertStaleAttemptPublicationRefusal(t, await setupAdmittedProject(t));
+  });
+
 });

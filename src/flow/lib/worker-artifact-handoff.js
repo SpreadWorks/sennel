@@ -1,3 +1,4 @@
+import { PROCESS_EVENT_OPERATION } from "./flow-process-event.js";
 import { SourceExecutionObservationAppends } from "./source-execution-observation-appends.js";
 import { capturePromptResponseAdoptionsFromView } from "./prompt-response-adoption-publication.js";
 import { isFlowExecutionObservationArtifact } from "../../lib/flow-execution-observation.js";
@@ -18,7 +19,7 @@ import { ArtifactWorkerRecoveryWriter } from "../services/artifact-worker-recove
 import { FlowProcessExecutionBinding } from "./flow-process-execution-binding.js";
 import { isStepAdmissionRefusal } from "./step-admission-refusal.js";
 import { assertFlowProcessRuntimeQuiescent } from "./process-runtime-admission.js";
-import { FlowProcessStopEvidence, workerProcessStopIdentity } from "./process-runtime-evidence.js";
+import { FlowProcessStopEvidence, FlowProcessRecoveryEvidence, workerProcessStopIdentity } from "./process-runtime-evidence.js";
 import { normalizedRelativePath } from "./source-effect-fields.js";
 import { ImplementationSourceEvidence, SourceStepFacts } from "./source-effect-values.js";
 import { GateRepairWorkerReport, SourceWorkerEffect, SourceWorkerEffectReport } from "./source-effect-values.js";
@@ -27,7 +28,9 @@ import { CURRENT_FLOW_SCHEMA_REVISION } from "../../lib/flow-schema-revision.js"
 import { MAX_WORKER_ARTIFACT_INPUT_BYTES as MAX_INPUT_BYTES,
   workerArtifactStableStringify as stableStringify } from "./worker-artifact-input-format.js";
 import crypto from "node:crypto";
-import { execFileSync } from "node:child_process";
+import { runGit } from "../../lib/git-command-execution.js";
+import { ProcessExecutionControlFailure } from "../../lib/process-execution-values.js";
+import { assertOk } from "../../lib/process.js";
 import fs from "node:fs";
 import path from "node:path";
 import { getStepInstructions } from "./get-step-instructions.js";
@@ -1927,7 +1930,8 @@ function authorityRuntimeLocks(runtimeLocks = []) {
 /** A main-repository lock namespace must never rebase a nested worktree's source paths. */
 function authorityRuntimeLocksForRoot(root, runtimeLocks = []) {
   const resolvedRoot = path.resolve(root);
-  return authorityRuntimeLocks(runtimeLocks).filter((lock) => isWithin(resolvedRoot, lock.directory));
+  return authorityRuntimeLocks(runtimeLocks).filter((lock) => lock.location.directory === resolvedRoot
+    || isWithin(resolvedRoot, lock.location.directory));
 }
 
 function isIgnoredAuthorityPath(root, relativePath, ignoredDirectories, runtimeLocks = []) {
@@ -1945,13 +1949,16 @@ function isIgnoredAuthorityPath(root, relativePath, ignoredDirectories, runtimeL
 
 function boundedGitOutput(root, args, label) {
   try {
-    return execFileSync("git", args, {
+    const result = runGit(args, {
       cwd: root,
       encoding: "buffer",
       maxBuffer: MAX_AUTHORITY_GIT_OUTPUT_BYTES,
       stdio: ["ignore", "pipe", "pipe"],
     });
+    assertOk(result, `failed to read ${label}`);
+    return result.stdout;
   } catch (cause) {
+    if (cause instanceof ProcessExecutionControlFailure) throw cause;
     throw authoritySnapshotError(
       `worker artifact authority could not read ${label}: ${cause.message}`,
       cause,
@@ -1960,16 +1967,20 @@ function boundedGitOutput(root, args, label) {
   }
 }
 
-function exactGitRoot(root) {
+function exactGitRoot(root, repositoryRoot = root) {
   try {
-    const output = execFileSync("git", ["rev-parse", "--show-toplevel"], {
+    const result = runGit(["rev-parse", "--show-toplevel"], {
       cwd: root,
+      repositoryRoot,
       encoding: "utf8",
       maxBuffer: 1024 * 1024,
       stdio: ["ignore", "pipe", "ignore"],
-    }).trim();
+    });
+    assertOk(result, "failed to read Git root");
+    const output = result.stdout.trim();
     return fs.realpathSync(output) === fs.realpathSync(root);
   } catch (cause) {
+    if (cause instanceof ProcessExecutionControlFailure) throw cause;
     if (fs.existsSync(path.join(path.resolve(root), ".git"))) {
       throw authoritySnapshotError(
         `worker artifact authority could not resolve its Git root: ${cause.message}`,
@@ -2130,7 +2141,7 @@ function gitAuthoritySnapshot(root, { ignoredDirectories = [], runtimeLocks = []
   );
   let status;
   try {
-    status = getPorcelainV2Status(root);
+    status = getPorcelainV2Status(root, { repositoryRoot: root });
   } catch (cause) {
     throw authoritySnapshotError(
       `worker artifact authority could not read Git status: ${cause.message}`,
@@ -2234,7 +2245,7 @@ export class WorkerArtifactRepositoryMutationSnapshot {
     try {
       const ignored = authorityIgnoredDirectories(ignoredDirectories);
       const locks = authorityRuntimeLocksForRoot(root, runtimeLocks);
-      const snapshot = exactGitRoot(root)
+      const snapshot = exactGitRoot(root, locks[0]?.repositoryRoot ?? root)
         ? gitAuthoritySnapshot(root, { ignoredDirectories: ignored, runtimeLocks: locks })
         : filesystemAuthoritySnapshot(root, { ignoredDirectories: ignored, runtimeLocks: locks });
       return new WorkerArtifactRepositoryMutationSnapshot({
@@ -3143,7 +3154,7 @@ function assertCanonicalObservationAdvance({
   }
   const addedActivities = current.slice(prefix.activityCount);
   if (addedActivities.some((activity) => (
-    activity.transition?.operation !== "record_metric"
+    !["record_metric", PROCESS_EVENT_OPERATION].includes(activity.transition?.operation)
       && !allowedPublications.some((publication) => publication.activityId === activity.id)
       && !allowedActivityIds.includes(activity.id)
       && !allowedTaskReviewClaims.some((entry) => entry.activityId === activity.id
@@ -3152,7 +3163,7 @@ function assertCanonicalObservationAdvance({
     throw new WorkerArtifactHandoffError(
       "invalid",
       "FLOW_SOURCE_HANDOFF_CANONICAL_MUTATION_INVALID",
-      "canonical source handoff permits only appended record_metric Activities",
+      "canonical source handoff permits only appended metric and process observation Activities",
       { retryable: false },
     );
   }
@@ -3183,7 +3194,7 @@ function assertCanonicalObservationAdvance({
     throw new WorkerArtifactHandoffError(
       "invalid",
       "FLOW_SOURCE_HANDOFF_CANONICAL_MUTATION_INVALID",
-      "canonical source handoff contains a direct Version mutation outside record_metric publication",
+      "canonical source handoff contains a direct Version mutation outside allowed observation publication",
       {
         retryable: false,
         data: {
@@ -3610,9 +3621,10 @@ export class WorkerArtifactMutationAuthoritySnapshot {
   rollbackRejectedSourceMutation() {
     if (!this.sourceMode || this.sourceRollbackCheckpoint === null) return;
     // This uses the same single-writer attribution as assertSourceDiff(): the
-    // dispatcher holds FlowHandoffAuthorityLease until the worker process tree
-    // exits and this restore completes. The checkpoint rechecks repository
-    // state before applying any operation so an unstable handoff fails closed.
+    // dispatcher holds FlowHandoffAuthorityLease until its registered executions
+    // exit and this restore completes. This receipt does not prove that unrelated
+    // external writers stopped. The checkpoint rechecks repository state before
+    // applying any operation so an unstable handoff fails closed.
     this.sourceRollbackCheckpoint.restore();
   }
 }
@@ -9240,9 +9252,9 @@ export class WorkerArtifactHandoffCoordinator {
       const calls = (registry?.executions ?? []).flatMap((execution) => execution.calls)
         .filter((call) => call.binding?.executionContractId === contract.id);
       const stops = readFlowProcessStops({ mainRoot: ctx.mainRoot || ctx.root,
-        executionRoot: ctx.executionRoot || ctx.root }).filter((evidence) => evidence.receipt.binding.value.executionContractId === contract.id);
+        executionRoot: ctx.executionRoot || ctx.root }).filter((evidence) => evidence.receipt.binding.value?.executionContractId === contract.id);
       for (const evidence of stops) evidence.assertContract(contract, workerProcessStopIdentity(request)).assertCheckout(checkoutIdentity);
-      const physical = calls.some((call) => call.receipt === null || call.receipt === undefined) ? "running"
+      const physical = calls.some((call) => call.receipt == null && call.revocation == null) ? "running"
         : calls.length > 0 && calls.every((call) => call.permit === null) ? "unstarted"
         : stops.length > 0 ? "stopped" : registry !== null && calls.length === 0 ? "unstarted" : "unknown";
       const episode = ctx.flowManager.readStoredPromptExecutionEpisode({ executionContract: contract, checkoutIdentity });
@@ -9345,7 +9357,7 @@ export class WorkerArtifactHandoffCoordinator {
       if (calls.length === 0 && sourcePhysical.nonExecution === null) {
         throw new FlowExecutionContractRefusal("Interrupted artifact execution has no stop or non-execution proof");
       }
-      for (const call of calls) new FlowProcessStopEvidence(call.receipt)
+      for (const call of calls) new FlowProcessRecoveryEvidence(call)
         .assertContract(sourceContract, workerProcessStopIdentity(sourceRequest)).assertCheckout(physicalEvidence.checkoutIdentity);
       const invocationId = `artifact-recovery-${digest(stableStringify([sourceContract.id, physicalEvidence.digest]))}`;
       const recoveryInvocation = sourceRequest.dispatchIdentity === null
@@ -9431,7 +9443,17 @@ export class WorkerArtifactHandoffCoordinator {
       handoffActionDirectory(root, saved.binding.runId, claim.dispatchInvocationId, claim.actionDigest));
   }
 
-  createRequest({
+  createRequest(input) {
+    const runtime = requiresWorkerSourceHandoff(input.invocation?.action?.nextAction?.step)
+      ? ProcessExecutionRuntime.current() : null;
+    const prepare = () => this.#createRequest(input);
+    // Source preparation captures a full canonical generation and checks it
+    // again when publishing its checkpoint. Publish its own Git observations
+    // only after that synchronous preparation and readback have completed.
+    return runtime === null ? prepare() : runtime.withDeferredEventPublicationSync(prepare);
+  }
+
+  #createRequest({
     ctx,
     state,
     invocation,

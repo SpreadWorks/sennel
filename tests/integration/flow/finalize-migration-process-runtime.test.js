@@ -1,14 +1,16 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
+import { once } from "node:events";
 import { test } from "node:test";
 import { runMigrationHook } from "../../../src/flow/lib/run-finalize.js";
 import RunFinalizeCommitCommand, { executeFinalizeCommitInput } from "../../../src/flow/lib/run-finalize-commit.js";
-import { ProcessExecutionRuntime, ProcessExecutionControlFailure } from "../../../src/lib/process-execution-runtime.js";
+import { ProcessExecutionRuntime, ProcessExecutionControlFailure, ProcessExecutionStopReceipt } from "../../../src/lib/process-execution-runtime.js";
 import { StepAdmissionRefusal } from "../../../src/flow/lib/step-admission-refusal.js";
 import { CanonicalFlowFixture, makeFlowManager } from "../../support/infrastructure/flow-setup.js";
 import { initGitRepo, commitAll } from "../../support/infrastructure/git-repo.js";
-import { createTmpDir, removeTmpDir } from "../../support/builders/tmp-dir.js";
+import { createTmpDir } from "../../support/builders/tmp-dir.js";
+import { removeQuiescentRuntimeFixture } from "../../support/infrastructure/runtime-fixture-cleanup.js";
 
 function hook(root, specFile, source) {
   const script = path.join(root, path.dirname(specFile), "scripts", "finalize-migration.js");
@@ -17,12 +19,38 @@ function hook(root, specFile, source) {
   return script;
 }
 
+function intentPublicationFailure(root) {
+  const witness = path.join(root, "intent-before-publication.json");
+  const source = `import fs from 'node:fs'; import path from 'node:path';
+    const open = fs.openSync, close = fs.closeSync, fsync = fs.fsyncSync, read = fs.readFileSync;
+    const stages = new Map();
+    fs.openSync = function(file, ...args) {
+      const descriptor = open.call(this, file, ...args);
+      if (path.basename(String(file)).startsWith('.registry.json.') && String(file).endsWith('.tmp')) stages.set(descriptor, String(file));
+      return descriptor;
+    };
+    fs.closeSync = function(descriptor) { stages.delete(descriptor); return close.call(this, descriptor); };
+    fs.fsyncSync = function(descriptor) {
+      const stage = stages.get(descriptor);
+      if (stage !== undefined) {
+        const record = JSON.parse(read(stage));
+        if (record.payload.executions.at(-1)?.calls.some(call => call.status === 'intent')) {
+          fs.writeFileSync(${JSON.stringify(witness)}, read(path.join(path.dirname(stage), 'registry.json')), {flag:'wx'});
+          throw Object.assign(new Error('Fixture migration intent fsync unavailable'), {code:'EIO'});
+        }
+      }
+      return fsync.call(this, descriptor);
+    };`;
+  return { witness, environment: { ...process.env,
+    NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ""} --import=data:text/javascript;base64,${Buffer.from(source).toString("base64")}`.trim() } };
+}
+
 function canonicalFixture(t) {
   const root = createTmpDir("finalize-migration-canonical-");
   const cleanups = [];
   t.after(async () => {
     try { for (const cleanup of cleanups.reverse()) await cleanup(); }
-    finally { removeTmpDir(root); }
+    finally { removeQuiescentRuntimeFixture({ mainRoot: root }); }
   });
   initGitRepo(root);
   fs.writeFileSync(path.join(root, ".gitignore"), "/.sennel/\n/specs/\n");
@@ -45,11 +73,11 @@ test("migration hook produces one managed receipt and finishes its real output a
   let runtime;
   t.after(async () => {
     try { if (runtime && !runtime.closed) await runtime.close(); }
-    finally { removeTmpDir(root); }
+    finally { removeQuiescentRuntimeFixture({ mainRoot: root, executionRoot }); }
   });
   const specFile = "specs/current/spec.json";
   const script = hook(root, specFile,
-    'require("node:fs").writeFileSync("migration-output.json", JSON.stringify({ cwd: process.cwd(), script: __filename }));');
+    'import fs from "node:fs"; import { fileURLToPath } from "node:url"; fs.writeFileSync("migration-output.json", JSON.stringify({ cwd: process.cwd(), script: fileURLToPath(import.meta.url) }));');
   const output = path.join(executionRoot, "migration-output.json");
   assert.equal(fs.existsSync(output), false);
   runtime = await ProcessExecutionRuntime.acquire({ mainRoot: root, executionRoot,
@@ -60,7 +88,7 @@ test("migration hook produces one managed receipt and finishes its real output a
   assert.equal(execution.calls.length, 1, "the user migration is a recorded physical command");
   const call = execution.calls[0];
   assert.equal(call.invocation.kind, "command");
-  assert.equal(call.receipt.stopEvidence.status, "confirmed");
+  assert.equal(new ProcessExecutionStopReceipt(call.receipt).stopEvidence.status, "confirmed");
   assert.equal(call.receipt.checkoutIdentity.executionRoot, executionRoot);
   assert.equal(call.outcome.code, 0);
   await runtime.close();
@@ -72,7 +100,7 @@ test("optional absent migration performs no physical invocation and nonzero exit
   let runtime;
   t.after(async () => {
     try { if (runtime && !runtime.closed) await runtime.close(); }
-    finally { removeTmpDir(root); }
+    finally { removeQuiescentRuntimeFixture({ mainRoot: root }); }
   });
   runtime = await ProcessExecutionRuntime.acquire({ mainRoot: root });
   await runtime.enter(async () => {
@@ -89,7 +117,7 @@ test("optional absent migration performs no physical invocation and nonzero exit
     assert.match(error.message, /migration fixture failure/);
     return true;
   });
-  assert.equal(runtime.inspect().executions.at(-1).calls[0].receipt.stopEvidence.status, "confirmed");
+  assert.equal(new ProcessExecutionStopReceipt(runtime.inspect().executions.at(-1).calls[0].receipt).stopEvidence.status, "confirmed");
 });
 
 test("direct commit BUSY refuses before effect preparation or canonical mutation and the existing selection rejects an unselected Step", async (t) => {
@@ -120,27 +148,39 @@ test("migration helper preserves typed intent refusal without running user code 
   const root = createTmpDir("finalize-migration-control-");
   const specFile = "specs/current/spec.json";
   const output = path.join(root, "forbidden-migration-output");
-  const script = hook(root, specFile, `require("node:fs").writeFileSync(${JSON.stringify(output)}, "forbidden");`);
+  const script = hook(root, specFile, `import fs from "node:fs"; fs.writeFileSync(${JSON.stringify(output)}, "forbidden");`);
   const scriptBytes = fs.readFileSync(script);
-  let armed = false;
+  const fault = intentPublicationFailure(root);
   let runtime;
   t.after(async () => {
-    try { if (runtime && !runtime.closed) await assert.rejects(runtime.close(), ProcessExecutionControlFailure); }
-    finally { removeTmpDir(root); }
+    try {
+      if (runtime && !runtime.closed) await assert.rejects(runtime.close(), ProcessExecutionControlFailure);
+    }
+    finally {
+      // Stop only the actual owned coordinator handle; its uncertain durable
+      // exclusion and records remain retained, never reclaimed as a receipt.
+      if (runtime?.control.child.exitCode === null && runtime.control.child.signalCode === null) {
+        const stopped = once(runtime.control.child, "exit");
+        runtime.control.child.ref(); runtime.control.child.kill(); await stopped;
+      }
+      removeQuiescentRuntimeFixture({ mainRoot: root });
+    }
   });
   runtime = await ProcessExecutionRuntime.acquire({ mainRoot: root, runId: "migration-control", specId: "current",
-    faultInjector({ phase }) {
-      if (armed && phase === "before-runtime-fsync") throw new Error("migration intent fsync unavailable");
-    } });
-  const registry = runtime.store.file.read();
-  armed = true;
+    environment: fault.environment });
   await assert.rejects(runtime.enter(() => runMigrationHook(root, specFile)),
     (error) => error instanceof ProcessExecutionControlFailure && error.code === "PROCESS_EXECUTION_REGISTRY_FAILED");
+  const registry = fs.readFileSync(fault.witness);
+  const committed = JSON.parse(registry).payload.executions.at(-1);
+  assert.equal(committed.calls.length, 0, "the physical fsync fault must precede intent publication");
+  assert.equal(committed.requests.at(-1).operation, "reserve");
+  assert.equal(committed.requests.at(-1).response, null, "request acceptance is durable before its effect");
   assert.equal(fs.existsSync(output), false);
   assert.deepEqual(fs.readFileSync(script), scriptBytes);
-  assert.deepEqual(runtime.store.file.read(), registry, "an unpersisted intent cannot manufacture a physical stop receipt");
+  assert.equal(fs.readFileSync(runtime.store.file.filePath).equals(registry), true,
+    "an unpersisted intent cannot manufacture a physical call or stop receipt");
   assert.throws(() => ProcessExecutionRuntime.inspect({ mainRoot: root }), { code: "PROCESS_EXECUTION_DURABILITY_UNCERTAIN" });
   await assert.rejects(ProcessExecutionRuntime.acquire({ mainRoot: root }),
     (error) => error instanceof ProcessExecutionControlFailure && error.code === "PROCESS_EXECUTION_BUSY");
-  assert.deepEqual(runtime.store.file.read(), registry);
+  assert.equal(fs.readFileSync(runtime.store.file.filePath).equals(registry), true);
 });

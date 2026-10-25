@@ -22,7 +22,7 @@ import * as Definition from "../../../src/flow/definition.js";
 import { CurrentFlowVersionStore } from "../../../src/flow/lib/current-flow-state.js";
 import { WorktreeFlowBindingStore } from "../../../src/lib/worktree-flow-binding.js";
 import { CurrentFlowStateConflictError } from "../../../src/flow/lib/current-flow-state-conflict-error.js";
-import { ProcessIdentitySource } from "../../../src/lib/process-identity.js";
+import { LockOwnerSession } from "../../../src/lib/process-lock.js";
 import { RepositoryFlowOperationLock } from "../../../src/lib/repository-maintenance-lock.js";
 import { PrepareExecutionObserver } from "../../support/infrastructure/prepare-execution-observer.js";
 
@@ -774,7 +774,7 @@ for (const { stepId, fault, mode } of persistenceCases) {
         const retainedJournal = journalRecord(scenario);
         assert.notEqual(retainedJournal, null, "unacknowledged committed work must retain its owned recovery journal");
         assert.equal(retainedJournal.attemptId, ownedJournal.attemptId);
-        assert.deepEqual(retainedJournal.processIdentity, ownedJournal.processIdentity);
+        assert.deepEqual(retainedJournal.owner, ownedJournal.owner);
         savedPreparation(scenario, stepId, kind, "draft");
       }
     } else {
@@ -965,7 +965,7 @@ it("P20 required plugin success publishes real evidence that survives reload and
   assertPreparedDraftInput(scenario, requests, receipt);
 });
 
-it("P21 a terminated worktree owner reloads through journal recovery into one preparation and actual Draft", async (t) => {
+it("P21 a terminated worktree owner preserves unknown exclusion and refuses recovery without mutation", async (t) => {
   const scenario = PrepareArtifactScenario.create(t, { mode: "worktree", issue: 472 });
   await scenario.initialize();
   const preparing = scenario.flowManager.loadPreparingFlow(scenario.runId);
@@ -975,53 +975,30 @@ it("P21 a terminated worktree owner reloads through journal recovery into one pr
   assert.equal(abandoned.runId, scenario.runId);
   assert.equal(abandoned.specId, stopped.specId);
   assert.equal(abandoned.expectedOid, scenario.baseOid);
-  assert.equal(fs.existsSync(abandoned.worktreePath), true,
-    "abrupt process exit must leave the production Git publication instead of synchronous rollback");
+  assert.equal(fs.existsSync(abandoned.worktreePath), true);
   assert.equal(scenario.git(["rev-parse", abandoned.branchName]).trim(), scenario.baseOid);
   assert.equal(fs.existsSync(path.join(scenario.root, "specs", abandoned.specId)), false);
   const operationLock = new RepositoryFlowOperationLock({ mainRoot: scenario.root });
   const abandonedOperation = operationLock.lock.inspect();
-  assert.notEqual(abandonedOperation, null, "the exiting command must leave its real operation owner");
-  const identities = new ProcessIdentitySource();
-  assert.equal(identities.assess(abandoned.processIdentity).status, "stale");
-  assert.equal(identities.assess(abandonedOperation.processIdentity).status, "stale");
-  assert.equal(abandoned.processIdentity.pid, abandonedOperation.processIdentity.pid);
+  assert.notEqual(abandonedOperation, null);
+  assert.deepEqual(new LockOwnerSession(abandonedOperation).toJSON(), abandoned.owner);
+  const journalPath = path.join(scenario.root, ".sennel", ".worktree-prepare-attempt.json");
+  const journalBefore = fs.readFileSync(journalPath);
+  const lockBefore = fs.readFileSync(operationLock.lockPath);
+  const gitBefore = scenario.git(["worktree", "list", "--porcelain"]);
   assertNoWorker(scenario);
   assert.deepEqual(scenario.reload().loadPreparingFlow(scenario.runId), preparing);
-
-  const observer = new PrepareExecutionObserver(t);
-  let replacement = null;
-  await scenario.prepare({ worktreePrepareFaultInjector(event) {
-    if (event.phase === "after-journal-publication") replacement = journalRecord(scenario);
-  } });
-  await t.test("P21 existing stale journal and operation-owner recovery preserves identity and one Git publication", () => {
-    assert.notEqual(replacement, null, "stale journal recovery must publish a fresh owned attempt");
-    assert.notEqual(replacement.attemptId, abandoned.attemptId);
-    assert.equal(replacement.runId, abandoned.runId);
-    assert.equal(replacement.specId, abandoned.specId);
-    assert.equal(scenario.specId, abandoned.specId);
-    assert.equal(scenario.executionRoot, abandoned.worktreePath);
-    assert.equal(scenario.reload().loadReadOnly(scenario.specId).runId, scenario.runId);
-    assert.equal(journalRecord(scenario), null);
-    assert.equal(operationLock.lock.inspect(), null);
-    assert.equal(scenario.git(["worktree", "list", "--porcelain"]).match(/^worktree /gm).length, 2);
-    assert.equal(scenario.git(["for-each-ref", "--format=%(refname:short)", `refs/heads/${abandoned.branchName}`]).trim(),
-      abandoned.branchName);
-    assert.equal(scenario.git(["rev-parse", "HEAD"], scenario.executionRoot).trim(), scenario.baseOid);
-    assertNoWorker(scenario);
-  });
-  savedPreparation(scenario, "branch", "branch-prepared", "prepare-spec");
-  const receipt = savedPreparation(scenario, "prepare-spec", "prepare-spec-ready", "draft");
-  observer.assertExecuted(["branch", "prepare-spec"]);
-  observer.restore();
+  await assert.rejects(() => scenario.prepare(), (error) => error.code === "REPOSITORY_FLOW_OPERATION_BUSY");
+  assert.deepEqual(fs.readFileSync(journalPath), journalBefore);
+  assert.deepEqual(fs.readFileSync(operationLock.lockPath), lockBefore);
+  assert.equal(scenario.git(["worktree", "list", "--porcelain"]), gitBefore);
+  assert.deepEqual(scenario.reload().loadPreparingFlow(scenario.runId), preparing);
   assertNoWorker(scenario);
-  const { requests } = await startDraft(scenario);
-  assertPreparedDraftInput(scenario, requests, receipt);
 });
 
 it("P22 branch publication stops before mandatory work and resumes without another branch Activity", async (t) => {
   // no-branch is the representative branch leaf publication; Git restart is
-  // separately covered by P21. This checkpoint is a local persistence fault,
+  // covered by prepare-worktree-branch-resume. This is a local persistence fault,
   // since production has no public fault callback immediately after branch save.
   const scenario = PrepareArtifactScenario.create(t);
   scenario.installPreparePlugin({ observeInvocation: true });
@@ -1205,16 +1182,11 @@ it("P26 journal-bound worktree creation survives a base ref advance and resumes 
   const scenario = PrepareArtifactScenario.create(t, { mode: "worktree" });
   const advancedOid = advancedBaseRevision(scenario);
   await scenario.initialize();
-  let startFingerprint = "100";
-  const identities = new ProcessIdentitySource({ platform: "linux",
-    readBootIdentity: () => "prepare-race-fixture-boot", readProcessStartFingerprint: () => startFingerprint });
-  scenario.flowManager = new FlowManager({ root: scenario.root, mainRoot: scenario.root,
-    inWorktree: false, processIdentitySource: identities });
   const failure = new Error("Stop after journal-bound branch publication");
   const fault = new PreparePublicationFault(t, { scenario, stepId: "branch", kind: "branch-prepared",
     fault: "receipt-read-failure", failure });
   let publishedJournal = null;
-  const stopped = await scenario.prepare({ worktreePrepareProcessIdentitySource: identities,
+  const stopped = await scenario.prepare({
     worktreePrepareFaultInjector(event) {
       if (event.phase !== "after-journal-publication") return;
       publishedJournal = journalRecord(scenario);
@@ -1222,7 +1194,7 @@ it("P26 journal-bound worktree creation survives a base ref advance and resumes 
     },
   }).then((value) => ({ value, error: null }), (error) => ({ value: null, error }));
   fault.restore();
-  assert.notEqual(publishedJournal, null);
+  assert.notEqual(publishedJournal, null, stopped.error?.stack ?? JSON.stringify(stopped.value));
   assert.equal(publishedJournal.expectedOid, scenario.baseOid);
   assert.equal(scenario.git(["rev-parse", publishedJournal.branchName]).trim(), scenario.baseOid,
     "Git publication after journal creation must retain the journal's selected seed");
@@ -1239,13 +1211,13 @@ it("P26 journal-bound worktree creation survives a base ref advance and resumes 
   assertNoWorker(scenario);
   scenario.git(["update-ref", "refs/heads/main", scenario.baseOid, advancedOid]);
   const gitPublication = scenario.git(["worktree", "list", "--porcelain"]);
-  // Only the external process-start fingerprint changes. This proves persisted
-  // recovery composition; actual process-exit recovery is owned by P21.
-  startFingerprint = "101";
-  assert.equal(identities.assess(journal.processIdentity).status, "stale");
+  // The failed command released the actual operation lock in finally; a fresh
+  // manager can acquire a new token and validate the saved branch receipt.
+  assert.deepEqual(new LockOwnerSession(journal.owner).toJSON(), journal.owner);
+  assert.equal(new RepositoryFlowOperationLock({ mainRoot: scenario.root }).lock.inspect(), null);
   scenario.flowManager = new FlowManager({ root: scenario.root, mainRoot: scenario.root,
-    inWorktree: false, processIdentitySource: identities });
-  assert.equal((await scenario.prepare({ worktreePrepareProcessIdentitySource: identities })).result, "ok");
+    inWorktree: false });
+  assert.equal((await scenario.prepare()).result, "ok");
   assert.equal(scenario.git(["worktree", "list", "--porcelain"]), gitPublication);
   assert.equal(journalRecord(scenario), null);
   assert.deepEqual(savedPreparation(scenario, "branch", "branch-prepared", "prepare-spec"), branch);

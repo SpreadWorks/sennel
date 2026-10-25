@@ -52,6 +52,7 @@ import { GateIssueLogEntry } from "../../../src/flow/lib/run-gate.js";
 import { implementationGateStepRegistration, prepareImplementationGatePublication } from "../../../src/flow/engine/composition/implementation-gate.js";
 import { ImplStepBinding } from "../../../src/flow/engine/connectors/impl/impl-step-binding.js";
 import { TaskStepBinding } from "../../../src/flow/engine/connectors/task/task-step-binding.js";
+import { withManagedProcessScope } from "../../../src/lib/managed-process.js";
 
 function canonicalFixtureGatePhase(state, nodeId) {
   return state.tasks.some((task) => task.steps.at(-1)?.id === nodeId)
@@ -75,14 +76,14 @@ export async function produceCanonicalFixtureStep(ctx, nodeId, { acceptanceRespo
     await new DocsScanCommand().execute({ docsCtx: { root: ctx.root, srcRoot: ctx.root, config: {}, type: [] } });
   }
   let provider = phase === null ? null : installGateProviderFake(passingGateProviderResponse,
-    { transportContext: () => ({ root: ctx.root, flowManager: ctx.flowManager }) });
+    { transportContext: () => ({ root: ctx.root, mainRoot: ctx.mainRoot ?? ctx.root, flowManager: ctx.flowManager }) });
   if (nodeId === "acceptance-review") {
     const { acceptanceProviderResponse } = await import("../acceptance-phase-scenario.js");
     provider = installGateProviderFake((prompt) => {
       const evidence = JSON.parse(String(prompt).slice("## Acceptance Evidence\n".length));
       return JSON.stringify(acceptanceProviderResponse({ acceptanceContexts: [{ evidence,
         requirementIds: evidence.requirements.map((entry) => entry.id), deferredFindings: evidence.deferredFindings }] }, acceptanceResponse ?? undefined));
-    }, { transportContext: () => ({ root: ctx.root, flowManager: ctx.flowManager }) });
+    }, { transportContext: () => ({ root: ctx.root, mainRoot: ctx.mainRoot ?? ctx.root, flowManager: ctx.flowManager }) });
   }
   try {
     if (entry.pre) await entry.pre(ctx);
@@ -693,7 +694,8 @@ export class CanonicalFlowFixture {
           throw new Error(`canonical fixture cannot advance past incomplete producer ${next}`);
         }
       } else {
-        this.settle(next, "done", { mutate: sourceMutations.get(next) });
+        await withManagedProcessScope({ executionRoot: this.flowManager.executionRoot() },
+          () => this.settle(next, "done", { mutate: sourceMutations.get(next) }));
       }
     }
     throw new Error(`canonical fixture exceeded its producer bound before ${nodeId}`);

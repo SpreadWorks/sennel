@@ -86,7 +86,8 @@ class FinalizationProjectionPreparation {
 }
 
 /** Acquire external state before constructing a Step or its private Service. */
-export function prepareFinalizationExecution({ ctx, stepId, commandResult = null, failure = null, execution = null, recovery = null }) {
+export function prepareFinalizationExecution({ ctx, stepId, commandResult = null, failure = null, execution = null, recovery = null,
+  selectedActivityId = undefined, completionPublication = null }) {
   const flowManager = ctx.flowManager;
   const state = flowManager.canonicalState(ctx.specId ?? ctx.flowState.specId);
   const outboxIdentity = finalizationOutboxIdentity(state, stepId);
@@ -148,7 +149,8 @@ export function prepareFinalizationExecution({ ctx, stepId, commandResult = null
     evidence = new FinalizeCleanupResultEvidence(observation);
     observed = new FinalizeCleanupInput({ evidence: failure === null ? evidence : null, failure });
   } else throw new TypeError("Finalization preparation requires a registered leaf");
-  const finalizationPublication = flowManager.prepareFinalizationCommandPublication({ binding, evidence, commandResult });
+  const finalizationPublication = flowManager.prepareFinalizationCommandPublication({ binding, evidence, commandResult,
+    ...(selectedActivityId === undefined ? {} : { selectedActivityId }), completionPublication });
   return new FinalizationPreparation({ binding, observed, evidence, commandResult, finalizationPublication,
     operationOwnerToken: ctx.repositoryOperationOwnerToken ?? null });
 }

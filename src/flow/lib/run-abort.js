@@ -161,7 +161,7 @@ class AbortExecutionGuard {
 }
 
 function branchSha(root, branch) {
-  const result = runGit(["-C", root, "rev-parse", `refs/heads/${branch}`]);
+  const result = runGit(["-C", root, "rev-parse", `refs/heads/${branch}`], { cwd: root });
   if (!result.ok || !GIT_OBJECT_ID.test(result.stdout.trim())) {
     throw new Error(`flow abort feature branch could not be resolved: ${branch}`);
   }
@@ -231,7 +231,7 @@ export class RunAbortCommand extends FlowCommand {
           if (!removed.ok) return removed.env;
         } else if (!state.worktree && ownsFeatureBranch) {
           const runtimeArtifacts = new FlowRepositoryRuntimeArtifactRegistry();
-          const unrelatedDirty = getPorcelainV2Status(repositoryRoot).pathSet.toArray()
+          const unrelatedDirty = getPorcelainV2Status(repositoryRoot, { repositoryRoot }).pathSet.toArray()
             .filter((filePath) => outsideTargetSpec(filePath, specLocation.relativeDirectory)
               && !runtimeArtifacts.owns(filePath)
               && filePath !== path.relative(repositoryRoot, history.file).split(path.sep).join("/"));
@@ -244,7 +244,7 @@ export class RunAbortCommand extends FlowCommand {
               { dirtyFiles: unrelatedDirty },
             );
           }
-          const switched = runGit(["-C", repositoryRoot, "switch", state.baseBranch]);
+          const switched = runGit(["-C", repositoryRoot, "switch", state.baseBranch], { cwd: repositoryRoot });
           if (!switched.ok) {
             return Envelope.fail("run", "abort", "ABORT_BASE_SWITCH_FAILED", switched.stderr || switched.stdout);
           }
@@ -254,7 +254,7 @@ export class RunAbortCommand extends FlowCommand {
 
       if (!journal.atLeast("branch-deleted")) {
         if (ownsFeatureBranch) {
-          const branch = runGit(["-C", repositoryRoot, "rev-parse", "--verify", `refs/heads/${state.featureBranch}`]);
+          const branch = runGit(["-C", repositoryRoot, "rev-parse", "--verify", `refs/heads/${state.featureBranch}`], { cwd: repositoryRoot });
           if (branch.ok) {
             const deleted = deleteFeatureBranchForCleanup({
               mainRepoPath: repositoryRoot,

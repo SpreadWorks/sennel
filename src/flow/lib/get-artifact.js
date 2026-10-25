@@ -1,5 +1,6 @@
 import { flowTemporaryRoot } from "./flow-context.js";
 import { TemporaryPaths } from "../../lib/temporary-paths.js";
+import { ReadOnlyInvocationWorkspace } from "../../lib/readonly-invocation-workspace.js";
 import { CURRENT_FLOW_SCHEMA_REVISION } from "../../lib/flow-schema-revision.js";
 /** Explicit human display for one closed canonical Flow artifact view. */
 
@@ -212,7 +213,9 @@ export default class GetArtifactCommand extends FlowCommand {
         ? this.container.get("mainRoot")
         : ctx.root;
       const config = this.container.get("config") || {};
-      const viewService = new ArtifactViewService({ config, root, flowManager });
+      const paths = this.container.has("paths") ? this.container.get("paths") : null;
+      const workspace = paths?.temporaryPaths instanceof ReadOnlyInvocationWorkspace ? paths.temporaryPaths : null;
+      const viewService = new ArtifactViewService({ config, root, flowManager, workspace });
       const full = viewService.full({
         logicalKey: request.logicalKey,
         ...(request.historical
@@ -226,7 +229,7 @@ export default class GetArtifactCommand extends FlowCommand {
         const localizer = viewService.renderer.localizer;
         const summary = await new ArtifactViewSummaryService({
           agent: this.container.get("agent"),
-          temporaryRoot: request.historical
+          temporaryRoot: workspace !== null ? paths.temporaryRoot : request.historical
             ? new TemporaryPaths(root).runtime("artifact-summary") : flowTemporaryRoot(ctx),
           cache: full.cacheStore,
           lang: full.fullView.language,

@@ -9,6 +9,7 @@
  * レジューム: 各バッチ完了後に analysis.json を保存。既に enriched なエントリーはスキップ。
  */
 
+import { docsCommands } from "../../lib/command-registry.js";
 import path from "path";
 import { parseArgs } from "../../lib/cli.js";
 import { managedOutputDir, resolveConcurrency, resolvePromptCharacterLimit } from "../../lib/config.js";
@@ -380,7 +381,7 @@ function saveAnalysis(root, analysis) {
 async function runEnrich(ctx, rawArgs = [], commandContainer = container) {
   if (!ctx) {
     const cli = parseArgs(rawArgs, {
-      flags: ["--yes", "--stdout", "--dry-run"],
+      ...docsCommands.enrich.args,
       defaults: { stdout: false, dryRun: false },
     });
     if (cli.help) {

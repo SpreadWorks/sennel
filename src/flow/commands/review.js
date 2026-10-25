@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { RepositoryLockAuthority } from "../../lib/repository-control-lock.js";
 import { TemporaryPaths } from "../../lib/temporary-paths.js";
 import { flowTemporaryRoot, resolveFlowContext } from "../lib/flow-context.js";
 import { ExecutionProtocolSnapshot } from "../lib/execution-protocol-snapshot.js";
@@ -187,10 +188,6 @@ const reviewAgentInvocationOptions = (prompt, commandId, systemPrompt, protocolO
     // canonical target-state digest before promoting any review evidence.
     executionWorkDir: container.get("root"),
     temporaryRoot: reviewTemporaryRoot(),
-    // The parent keeps the provider admission lease until descendants have
-    // ended; otherwise a direct and dispatched review can overlap after the
-    // provider's immediate process exits.
-  waitForProcessTree: true,
 });
 
 const callReviewAgent = async (agent, prompt, commandId, systemPrompt, protocolOptions = {}) => {
@@ -409,7 +406,7 @@ function taskReviewProtocolIgnoredDirectories({ root, agent }) {
   const candidates = [
     reviewOutputDirectory(),
     path.join(root, PRODUCT.managedDirName, "agent-cache"),
-    path.join(root, PRODUCT.managedDirName, "review-execution-locks"),
+    new RepositoryLockAuthority(root).path,
     ...taskReviewAgentRuntimeDirectories({ root, agent }),
   ];
   const directories = candidates.map((candidate) => {
@@ -954,7 +951,7 @@ function buildReviewPathspec(filePath, exclusions = REVIEW_EXCLUDE_PATHS) {
  * @returns {string} trimmed stdout (may be empty)
  */
 function runDiffOrThrow(root, diffArgs, pathspec, label) {
-  const res = runGit(["-C", root, "diff", ...diffArgs, ...pathspec]);
+  const res = runGit(["-C", root, "diff", ...diffArgs, ...pathspec], { cwd: root });
   if (!res.ok) throw new Error(`${label} failed: ${res.stderr}`);
   return res.stdout.trim();
 }
@@ -1128,7 +1125,7 @@ function collectTouchedFiles(root, baseRef, options = {}) {
   const matcher = options.excludeMatcher || null;
   const excludeFile = options.excludeFile || null;
   forEachReviewDiffSource(baseRef, ({ args, label }) => {
-    const res = runGit(["-C", root, "diff", "--name-only", ...args]);
+    const res = runGit(["-C", root, "diff", "--name-only", ...args], { cwd: root });
     if (!res.ok) throw new Error(`git diff --name-only (${label}) failed: ${res.stderr}`);
     for (const line of res.stdout.split("\n")) {
       const p = line.trim();

@@ -8,14 +8,17 @@ import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { execFileSync, spawnSync } from "node:child_process";
+await import("../src/sennel.js");
+const { runCmd, assertOk } = await import("../src/lib/process.js");
+const { runGit } = await import("../src/lib/git-helpers.js");
+const { NativeExecutableInvocation, NodeScriptInvocation } = await import("../src/lib/command-invocation.js");
 import { fileURLToPath } from "node:url";
-import { TestTemporaryRoot } from "../tests/test-temporary-root.js";
-import { TemporaryPaths } from "../src/lib/temporary-paths.js";
-import { AtomicFile } from "../src/lib/atomic-file.js";
-import { AtomicJsonFile } from "../src/lib/atomic-json-file.js";
-import { RealDirectoryAuthority } from "../src/lib/real-directory-authority.js";
-import { captureRegularFile, visitRegularFileChunks, MAX_IN_MEMORY_FILE_BYTES } from "../src/lib/regular-file-snapshot.js";
+const { TestTemporaryRoot } = await import("../tests/test-temporary-root.js");
+const { TemporaryPaths } = await import("../src/lib/temporary-paths.js");
+const { AtomicFile } = await import("../src/lib/atomic-file.js");
+const { AtomicJsonFile } = await import("../src/lib/atomic-json-file.js");
+const { RealDirectoryAuthority } = await import("../src/lib/real-directory-authority.js");
+const { captureRegularFile, visitRegularFileChunks, MAX_IN_MEMORY_FILE_BYTES } = await import("../src/lib/regular-file-snapshot.js");
 
 const authorRoot = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const revisions = ["5cf1d97e0", "39148ea56", "9e839d1dc", "4dab68ee2", "857c2a64c"];
@@ -23,7 +26,9 @@ const testFile = "tests/integration/flow/task-review-causal-scenarios.test.js";
 const supportFile = "tests/support/builders/task-review-scenario.js";
 
 function git(root, args, options = {}) {
-  return execFileSync("git", ["-C", root, ...args], { encoding: "utf8", maxBuffer: 64 * 1024 * 1024, ...options });
+  const result = runGit(["-C", root, ...args], { cwd: root, encoding: "utf8", maxBuffer: 64 * 1024 * 1024, ...options });
+  assertOk(result, "measurement Git command failed");
+  return result.stdout;
 }
 
 function digestTree(root) {
@@ -115,8 +120,8 @@ class ReviewRegressionMeasurement {
     // Apply product deltas only. The same new tests are frozen for every run.
     for (const revision of removed) {
       const patch = git(this.worktree, ["diff", `${revision}^`, revision, "--", "src/"]);
-      execFileSync("git", ["apply", "--reverse", "--check", "-"], { cwd: root, input: patch });
-      execFileSync("git", ["apply", "--reverse", "-"], { cwd: root, input: patch });
+      git(root, ["apply", "--reverse", "--check", "-"], { input: patch });
+      git(root, ["apply", "--reverse", "-"], { input: patch });
     }
     const environment = { ...process.env };
     for (const key of Object.keys(environment)) {
@@ -131,25 +136,23 @@ class ReviewRegressionMeasurement {
     let result;
     try {
       const stage = logFile.createOutputStage((fd) => {
-        result = spawnSync(process.execPath, ["--test", "--test-reporter=tap", testFile], {
-          cwd: root, env: environment, stdio: ["ignore", fd, fd], timeout: 600_000,
-        });
+        result = runCmd(new NativeExecutableInvocation({ executable: process.execPath, args: ["--test", "--test-reporter=tap", testFile],
+          cwd: root, env: environment, stdio: ["ignore", fd, fd] }), [], { timeout: 600_000 });
       });
       logFile.publishStage(stage);
     } finally {
       release();
     }
-    if (result.error) throw result.error;
+    if (result.errorCode) throw new Error(`measurement command failed: ${result.errorCode}: ${result.stderr}`);
     const log = captureRegularFile(logPath, {
       label: "measurement TAP output", maxBytes: MAX_IN_MEMORY_FILE_BYTES, directoryAuthority: this.outputAuthority,
     }).text();
-    const snapshot = spawnSync(process.execPath, ["scripts/task-review-snapshot-probe.js", root, this.specId], {
-      cwd: root, env: environment, encoding: "utf8", timeout: 30_000,
-    });
+    const snapshot = runCmd(new NodeScriptInvocation({ script: "scripts/task-review-snapshot-probe.js", args: [root, this.specId],
+      cwd: root, env: environment }), [], { encoding: "utf8", timeout: 30_000 });
     new AtomicFile(path.join(this.output, `${name}-snapshot.log`), {
       directoryAuthority: this.outputAuthority,
     }).write(snapshot.stdout + snapshot.stderr);
-    if (snapshot.error) throw snapshot.error;
+    if (snapshot.errorCode) throw new Error(`measurement snapshot failed: ${snapshot.errorCode}: ${snapshot.stderr}`);
     const row = {
       name, removed, exitCode: result.status, signal: result.signal,
       passed: [...log.matchAll(/^ok \d+ - (.+)$/gm)].map((entry) => entry[1]),

@@ -14,16 +14,16 @@ import { runPreSync } from "../../../../src/flow/commands/merge.js";
 import { runCmd } from "../../../../src/lib/process.js";
 
 function init(dir) {
-  runCmd("git", ["init", "-q", "-b", "main", dir]);
-  runCmd("git", ["-C", dir, "config", "user.email", "t@example.com"]);
-  runCmd("git", ["-C", dir, "config", "user.name", "T"]);
-  runCmd("git", ["-C", dir, "config", "commit.gpgsign", "false"]);
+  runCmd("git", ["init", "-q", "-b", "main", dir], { cwd: dir });
+  runCmd("git", ["-C", dir, "config", "user.email", "t@example.com"], { cwd: dir });
+  runCmd("git", ["-C", dir, "config", "user.name", "T"], { cwd: dir });
+  runCmd("git", ["-C", dir, "config", "commit.gpgsign", "false"], { cwd: dir });
 }
 
 function commitIn(dir, file, content, msg) {
   fs.writeFileSync(path.join(dir, file), content);
-  runCmd("git", ["-C", dir, "add", file]);
-  runCmd("git", ["-C", dir, "commit", "-q", "-m", msg]);
+  runCmd("git", ["-C", dir, "add", file], { cwd: dir });
+  runCmd("git", ["-C", dir, "commit", "-q", "-m", msg], { cwd: dir });
 }
 
 describe("runPreSync — success path (R1)", () => {
@@ -33,11 +33,11 @@ describe("runPreSync — success path (R1)", () => {
     init(upstream);
     commitIn(upstream, "a.txt", "a", "base");
     worktree = createTestDirectory("ps-wt-");
-    runCmd("git", ["clone", "-q", upstream, worktree]);
-    runCmd("git", ["-C", worktree, "config", "user.email", "t@example.com"]);
-    runCmd("git", ["-C", worktree, "config", "user.name", "T"]);
-    runCmd("git", ["-C", worktree, "config", "commit.gpgsign", "false"]);
-    runCmd("git", ["-C", worktree, "checkout", "-b", "feature"]);
+    runCmd("git", ["clone", "-q", upstream, worktree], { cwd: upstream });
+    runCmd("git", ["-C", worktree, "config", "user.email", "t@example.com"], { cwd: worktree });
+    runCmd("git", ["-C", worktree, "config", "user.name", "T"], { cwd: worktree });
+    runCmd("git", ["-C", worktree, "config", "commit.gpgsign", "false"], { cwd: worktree });
+    runCmd("git", ["-C", worktree, "checkout", "-b", "feature"], { cwd: worktree });
     commitIn(worktree, "b.txt", "b", "feat change");
     // advance base
     commitIn(upstream, "c.txt", "c", "base advance");
@@ -51,7 +51,7 @@ describe("runPreSync — success path (R1)", () => {
     const result = runPreSync({ worktreePath: worktree, baseBranch: "main", remote: "origin" });
     assert.equal(result.ok, true);
     // After rebase, the commit containing c.txt should be reachable in the worktree.
-    const log = runCmd("git", ["-C", worktree, "log", "--oneline"]).stdout;
+    const log = runCmd("git", ["-C", worktree, "log", "--oneline"], { cwd: worktree }).stdout;
     assert.ok(log.includes("base advance"), "expected base advance commit to be present");
     assert.ok(log.includes("feat change"), "expected feature commit to be preserved");
   });
@@ -64,17 +64,17 @@ describe("runPreSync — conflict path (R3)", () => {
     init(upstream);
     commitIn(upstream, "a.txt", "a", "base");
     worktree = createTestDirectory("ps-cw-");
-    runCmd("git", ["clone", "-q", upstream, worktree]);
-    runCmd("git", ["-C", worktree, "config", "user.email", "t@example.com"]);
-    runCmd("git", ["-C", worktree, "config", "user.name", "T"]);
-    runCmd("git", ["-C", worktree, "config", "commit.gpgsign", "false"]);
-    runCmd("git", ["-C", worktree, "checkout", "-b", "feature"]);
+    runCmd("git", ["clone", "-q", upstream, worktree], { cwd: upstream });
+    runCmd("git", ["-C", worktree, "config", "user.email", "t@example.com"], { cwd: worktree });
+    runCmd("git", ["-C", worktree, "config", "user.name", "T"], { cwd: worktree });
+    runCmd("git", ["-C", worktree, "config", "commit.gpgsign", "false"], { cwd: worktree });
+    runCmd("git", ["-C", worktree, "checkout", "-b", "feature"], { cwd: worktree });
     fs.writeFileSync(path.join(worktree, "a.txt"), "feature-change");
-    runCmd("git", ["-C", worktree, "add", "a.txt"]);
-    runCmd("git", ["-C", worktree, "commit", "-q", "-m", "feat"]);
+    runCmd("git", ["-C", worktree, "add", "a.txt"], { cwd: worktree });
+    runCmd("git", ["-C", worktree, "commit", "-q", "-m", "feat"], { cwd: worktree });
     fs.writeFileSync(path.join(upstream, "a.txt"), "upstream-change");
-    runCmd("git", ["-C", upstream, "add", "a.txt"]);
-    runCmd("git", ["-C", upstream, "commit", "-q", "-m", "up"]);
+    runCmd("git", ["-C", upstream, "add", "a.txt"], { cwd: upstream });
+    runCmd("git", ["-C", upstream, "commit", "-q", "-m", "up"], { cwd: upstream });
   });
   afterEach(() => {
     fs.rmSync(upstream, { recursive: true, force: true });
@@ -88,7 +88,7 @@ describe("runPreSync — conflict path (R3)", () => {
     assert.ok(result.conflictFiles.includes("a.txt"));
     assert.ok(typeof result.recoveryHint === "string" && result.recoveryHint.length > 0);
     // worktree should be clean after abort
-    const status = runCmd("git", ["-C", worktree, "status", "--short"]).stdout.trim();
+    const status = runCmd("git", ["-C", worktree, "status", "--short"], { cwd: worktree }).stdout.trim();
     assert.equal(status, "");
   });
 });

@@ -1,17 +1,28 @@
-import { rmSync } from "node:fs";
-import { delimiter } from "node:path";
+import { existsSync, rmSync, writeFileSync } from "node:fs";
+import { delimiter, join } from "node:path";
 import { TemporaryPaths } from "../../../src/lib/temporary-paths.js";
 import { sanitizeGitRepositoryEnvironment } from "../../../src/lib/git-repository-environment.js";
 import { TEST_CHECKOUT_ROOT, TestTemporaryRootPolicy } from "../../runner/test-temporary-root-policy.js";
+import { ProcessExecutionControlFailure } from "../../../src/lib/process-execution-values.js";
 
 const CLEANUP_SIGNALS = Object.freeze(["SIGHUP", "SIGINT", "SIGTERM"]);
 const TEMPORARY_ROOT_ENV = "SENNEL_TEST_TEMP_ROOT";
+
+/** Prompt and concurrent batch errors preserve the underlying control failure. */
+export function hasUnconfirmedExecution(error, visited = new Set()) {
+  if (!(error instanceof Error) || visited.has(error)) return false;
+  if (error instanceof ProcessExecutionControlFailure) return true;
+  visited.add(error);
+  return hasUnconfirmedExecution(error.cause, visited)
+    || (error instanceof AggregateError && error.errors.some((cause) => hasUnconfirmedExecution(cause, visited)));
+}
 
 export class TestTemporaryRoot {
   #path;
   #remove;
   #removed = false;
   #owned;
+  #pendingExecutions = 0;
 
   constructor(path, { remove = rmSync, owned = true } = {}) {
     if (typeof path !== "string" || path.length === 0) {
@@ -44,6 +55,25 @@ export class TestTemporaryRoot {
 
   get owned() {
     return this.#owned;
+  }
+
+  get retained() {
+    return existsSync(join(this.#path, ".unconfirmed-execution"));
+  }
+
+  beginExecution() { this.#pendingExecutions += 1; }
+
+  completeExecution() {
+    if (this.#pendingExecutions === 0) throw new Error("No pending test execution to complete");
+    this.#pendingExecutions -= 1;
+  }
+
+  retainOnUnconfirmedExecution(error) {
+    if (arguments.length > 0 && !hasUnconfirmedExecution(error)) return false;
+    // Borrowers publish this marker to the owning runner. Unknown child exit
+    // must preserve both the fixture evidence and its coordinator authority.
+    writeFileSync(join(this.#path, ".unconfirmed-execution"), "Execution completion is unconfirmed. Preserve this root for diagnosis.\n", { flag: "a" });
+    return true;
   }
 
   activate({
@@ -107,7 +137,11 @@ export class TestTemporaryRoot {
   }
 
   remove() {
-    if (this.#removed || !this.#owned) return;
+    if (this.#removed || !this.#owned || this.retained) return;
+    if (this.#pendingExecutions > 0) {
+      this.retainOnUnconfirmedExecution();
+      return;
+    }
     this.#remove(this.#path, { recursive: true, force: true });
     this.#removed = true;
   }

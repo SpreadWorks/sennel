@@ -6,6 +6,8 @@ import { afterEach, describe, it } from "node:test";
 
 import { removeTmpDir, createTmpDir } from "../../support/builders/tmp-dir.js";
 import { FreshFlowFixture, makeFlowManager } from "../../support/infrastructure/flow-setup.js";
+import { CanonicalPersistenceSnapshot, StoredFlowPersistenceSnapshot } from "../../support/assertions/canonical-persistence.js";
+import { ReadOnlyInvocationWorkspace } from "../../../src/lib/readonly-invocation-workspace.js";
 import {
   ArtifactViewRegistry,
   ArtifactViewRegistryEntry,
@@ -408,6 +410,40 @@ describe("artifact human views", () => {
         && error.code === "ARTIFACT_VIEW_READ_FAILED"
         && /catalog|hash|content changed/i.test(error.message),
     );
+  });
+
+  it("keeps a real read-only workspace cache fault non-fatal without changing project or canonical evidence", (t) => {
+    const { directory, flowManager, fixture } = activeFixture();
+    const workspace = ReadOnlyInvocationWorkspace.create();
+    t.after(() => {
+      assert.equal(workspace.pendingExecutionCount, 0);
+      workspace.complete({ generation: workspace.generation, normalExit: true, resourcesReleased: true });
+      workspace.cleanup({ generation: workspace.generation });
+    });
+    const state = fixture.state();
+    const canonical = new CanonicalPersistenceSnapshot(flowManager, state.specId);
+    const project = new StoredFlowPersistenceSnapshot(directory);
+    const faultPaths = [];
+    const result = new ArtifactViewService({
+      config: { lang: "ja" },
+      flowManager,
+      workspace,
+      cacheFaultInjector: ({ filePath }) => {
+        faultPaths.push(filePath);
+        throw new Error("simulated workspace cache failure");
+      },
+    }).full({ logicalKey: "spec.record", activeState: state });
+
+    assert.ok(faultPaths.length > 0, "the actual workspace cache write must reach the fault boundary");
+    for (const file of faultPaths) assert.equal(workspace.validate(file), file);
+    assert.equal(result.cache.hit, false);
+    assert.match(result.markdown, /^# 仕様/m);
+    assert.match(result.markdown, /Keep the canonical view deterministic\./);
+    assert.equal(result.markdown.startsWith("<!--"), false);
+    assert.equal(result.cacheWarning?.code, "ARTIFACT_VIEW_CACHE_NOT_SAVED");
+    assert.equal(result.cacheWarning?.message, "アーティファクトビューは生成されましたが、キャッシュを保存できませんでした。");
+    canonical.assertUnchanged(flowManager, state.specId, "workspace cache write failure");
+    project.assertUnchanged();
   });
 
   it("classifies source and deterministic renderer failures separately", () => {

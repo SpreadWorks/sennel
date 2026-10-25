@@ -15,7 +15,7 @@ import { OriginalArtifactWorkerAuthorization } from "./original-artifact-worker-
 import { assertArtifactWorkerRequestUnsealed, readArtifactWorkerRequestSnapshotFromView } from "./artifact-worker-execution-recovery.js";
 import { WorkerArtifactHandoffRequest } from "./worker-artifact-handoff.js";
 import { FlowProcessExecutionBinding } from "./flow-process-execution-binding.js";
-import { FlowProcessStopEvidence } from "./process-runtime-evidence.js";
+import { FlowProcessStopEvidence, FlowProcessRecoveryEvidence } from "./process-runtime-evidence.js";
 import { CanonicalSpecReview } from "./spec-review-artifacts.js";
 import { DraftLifecycle } from "./draft-lifecycle.js";
 
@@ -81,6 +81,38 @@ class HistoricalPromptCheckoutAuthority {
   }
 }
 
+/** Complete episode closure evidence, with only canonical Prompt calls owning provider usage. */
+class PhysicalPromptConsumptionCalls {
+  constructor({ calls, contracts, contract, checkout }) {
+    const episode = FlowProcessExecutionBinding.forEpisode(contract);
+    const seen = new Set();
+    const providerCalls = [];
+    for (const call of calls) {
+      const key = `${call.executionId}/${call.callId}`;
+      if (seen.has(key)) refuse("Physical Prompt consumption repeats a call reservation");
+      seen.add(key);
+      const evidence = new FlowProcessRecoveryEvidence(call).assertIdentity(episode.toJSON()).assertCheckout(checkout);
+      const owner = contracts.find((entry) => entry.id === call.binding.value.executionContractId);
+      if (owner !== undefined) {
+        evidence.assertContract(owner);
+        providerCalls.push(call);
+        continue;
+      }
+      // Ordinary managed commands share their admitted Attempt, not a Prompt
+      // contract. Keep their exact closure in the inventory without charging a
+      // provider call. Provider or Prompt metadata never receives this exception.
+      if (call.binding.value.executionContractId !== null || call.binding.value.executionGeneration !== null
+        || call.invocation?.kind !== "command"
+        || ["providerAttemptId", "logicalInvocationId", "providerAttemptContext", "promptProcessIdentity"]
+          .some((field) => call.invocation[field] !== null)) {
+        refuse("Physical Prompt call has no canonical execution contract in this episode");
+      }
+    }
+    this.providerCalls = Object.freeze(providerCalls);
+    Object.freeze(this);
+  }
+}
+
 function physicalConsumptionRecord(view, document, contract, checkoutIdentity) {
   const record = document.record;
   if (record.event !== "physical-accounted" || document.contractId !== contract.id
@@ -104,24 +136,17 @@ function physicalConsumptionRecord(view, document, contract, checkoutIdentity) {
       || absence.inventoryDigest !== summary.inventoryDigest) refuse("Physical Prompt non-execution proof differs from its inventory");
   } else if (summary.nonExecution !== null) refuse("Physical Prompt inventory contradicts its non-execution proof");
   const contracts = savedEpisodeContracts(view, contract);
-  const seen = new Set();
-  for (const call of calls) {
-    const key = `${call.executionId}/${call.callId}`;
-    if (seen.has(key)) refuse("Physical Prompt consumption repeats a call reservation");
-    seen.add(key);
-    const owner = contracts.find((entry) => entry.id === call.binding.value.executionContractId);
-    if (owner === undefined) refuse("Physical Prompt call has no canonical execution contract in this episode");
-    new FlowProcessStopEvidence(call.receipt).assertContract(owner).assertCheckout(checkout);
-  }
+  const physical = new PhysicalPromptConsumptionCalls({ calls, contracts, contract, checkout });
+  const providerCallIds = new Set(physical.providerCalls.map((call) => `${call.executionId}/${call.callId}`));
   if (!Array.isArray(record.accountedCallIds) || new Set(record.accountedCallIds).size !== record.accountedCallIds.length
-    || record.accountedCallIds.some((key) => !seen.has(key))) refuse("Physical Prompt accounting has an invalid call frontier");
-  const unobserved = calls.filter((call) => call.startPermitted && !record.accountedCallIds.includes(`${call.executionId}/${call.callId}`))
+    || record.accountedCallIds.some((key) => !providerCallIds.has(key))) refuse("Physical Prompt accounting has an invalid call frontier");
+  const unobserved = physical.providerCalls.filter((call) => call.startPermitted && !record.accountedCallIds.includes(`${call.executionId}/${call.callId}`))
     .map((call) => `${call.executionId}/${call.callId}`);
   if (record.aggregateAccounting !== "validated-responses-only" || !same(record.unobservedProviderUsageCallIds, unobserved)) {
     refuse("Physical Prompt accounting omitted its unobserved provider usage");
   }
   const previous = PromptExecutionBudget.fromSnapshot(new PromptExecutionLimit(contract.executionLimit ?? {}), record.previousBudget);
-  for (const call of calls) if (call.startPermitted && !record.accountedCallIds.includes(`${call.executionId}/${call.callId}`)) previous.consumeProviderCall();
+  for (const call of physical.providerCalls) if (call.startPermitted && !record.accountedCallIds.includes(`${call.executionId}/${call.callId}`)) previous.consumeProviderCall();
   if (!same(previous.snapshot(), record.budget)) refuse("Physical Prompt accounting changed an unrelated budget counter");
   for (const kind of ["semantic", "tooling"]) if (!Number.isSafeInteger(record.attemptConsumption[kind])
     || record.attemptConsumption[kind] < 0) refuse("Physical Prompt accounting has invalid Attempt consumption");
@@ -286,7 +311,9 @@ function assertPromptStopContract(snapshot, contract, checkoutIdentity) {
       refuse("Prompt reservation continuation changed its checkout identity");
     }
     for (const call of continuation.calls) {
-      assertStoredPromptStop(call.receipt, contract, checkoutIdentity);
+      const evidence = new FlowProcessRecoveryEvidence(new ProcessExecutionRecoveryCall(call)).assertContract(contract);
+      if (checkoutIdentity instanceof HistoricalPromptCheckoutAuthority) checkoutIdentity.assertIdentity(evidence.proof.checkoutIdentity);
+      else evidence.assertCheckout(checkoutIdentity);
     }
   }
 }
@@ -523,7 +550,9 @@ export class LegacyArtifactPromptConsumptionPublication {
       for (const call of record.calls) accounted.add(`${call.executionId}/${call.callId}`);
     }
     const calls = this.physicalEvidence.calls;
-    for (const call of calls) if (claims.some(({ contractId, identity }) => contractId === call.binding.value.executionContractId
+    const providerCalls = new PhysicalPromptConsumptionCalls({ calls, contracts, contract: this.contract,
+      checkout: this.expectedCheckoutIdentity }).providerCalls;
+    for (const call of providerCalls) if (claims.some(({ contractId, identity }) => contractId === call.binding.value.executionContractId
       && identity.providerAttemptId === call.invocation?.providerAttemptId
       && identity.logicalInvocationId === call.invocation?.logicalInvocationId)) accounted.add(`${call.executionId}/${call.callId}`);
     const scopeId = executionValueDigest(["physical-accounted", this.contract.id]);
@@ -536,15 +565,13 @@ export class LegacyArtifactPromptConsumptionPublication {
       return this.#prepared({ writes: [], episode: source, document: saved.document });
     }
     const budget = PromptExecutionBudget.fromSnapshot(new PromptExecutionLimit(this.contract.executionLimit ?? {}), source.budget);
-    for (const call of calls) if (call.startPermitted && !accounted.has(`${call.executionId}/${call.callId}`)) budget.consumeProviderCall();
+    for (const call of providerCalls) if (call.startPermitted && !accounted.has(`${call.executionId}/${call.callId}`)) budget.consumeProviderCall();
     const record = { event: "physical-accounted", budgetId: this.contract.budgetId,
-      physicalEvidence: this.physicalEvidence.toJSON(), calls: calls.map((call) => ({ executionId: call.executionId,
-        callId: call.callId, ownerEpoch: call.ownerEpoch, binding: call.binding.toJSON(), invocation: call.invocation,
-        startPermitted: call.startPermitted, receipt: call.receipt.toJSON() })),
-      accountedCallIds: calls.map((call) => `${call.executionId}/${call.callId}`).filter((key) => accounted.has(key)),
+      physicalEvidence: this.physicalEvidence.toJSON(), calls: calls.map((call) => call.toStored()),
+      accountedCallIds: providerCalls.map((call) => `${call.executionId}/${call.callId}`).filter((key) => accounted.has(key)),
       previousBudget: source.budget, budget: budget.snapshot(),
       aggregateAccounting: "validated-responses-only",
-      unobservedProviderUsageCallIds: calls.filter((call) => call.startPermitted && !accounted.has(`${call.executionId}/${call.callId}`))
+      unobservedProviderUsageCallIds: providerCalls.filter((call) => call.startPermitted && !accounted.has(`${call.executionId}/${call.callId}`))
         .map((call) => `${call.executionId}/${call.callId}`),
       attemptConsumption: { semantic: view.state.attempt.consumption.semantic, tooling: view.state.attempt.consumption.tooling } };
     const document = { contractId: this.contract.id, sequence: 1, previousDigest: null,
@@ -617,9 +644,7 @@ export class CanonicalPromptReservationReconciliationPublication {
       .forInvocation({ providerAttemptId: identity.providerAttemptId, logicalInvocationId: identity.logicalInvocationId });
     physical.assertCurrent();
     if (physical.calls.some((call) => call.startPermitted)) refuse("Prompt reservation already received physical start permission");
-    const proof = { physicalEvidence: physical.toJSON(), calls: physical.calls.map((call) => ({ executionId: call.executionId,
-      callId: call.callId, ownerEpoch: call.ownerEpoch, binding: call.binding.toJSON(), invocation: call.invocation,
-      startPermitted: call.startPermitted, receipt: call.receipt.toJSON() })) };
+    const proof = { physicalEvidence: physical.toJSON(), calls: physical.calls.map((call) => call.toStored()) };
     const previous = batch.reservationContinuation === undefined ? null
       : PromptExecutionReservationContinuation.fromJSON(batch.reservationContinuation);
     if (previous !== null && previous.authorizationId !== this.authorizationId) refuse("Prompt reservation changed its original execution authorization");

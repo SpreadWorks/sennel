@@ -54,6 +54,8 @@ const ALLOWLIST = new Map([
   ["src/locale/ja/ui.json", "explicit migration CLI input help"],
   ["tests/integration/upgrade-agent-files.test.js", "legacy managed instruction-block fixture"],
   ["tests/integration/layout-migration.test.js", "legacy migration input fixtures"],
+  ["tests/fixtures/process-owner-v7/layout-journal.json", "immutable baseline-produced legacy journal for explicit owner-format refusal"],
+  ["tests/integration/process-owner-contract.test.js", "migration-only legacy managed-root and owner-format fixture"],
   ["tests/integration/lib/gitignore.test.js", "normalizer boundary fixture for retired managed metadata"],
   ["tests/integration/lib/gitattributes.test.js", "normalizer boundary fixture for retired managed metadata"],
   ["tests/integration/lib/cleanup-obsolete-skills.test.js", "retired product skill cleanup fixture"],
