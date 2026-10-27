@@ -1,11 +1,10 @@
 import crypto from "node:crypto";
-import fs from "node:fs";
 import path from "node:path";
 
 import { AtomicFile } from "./atomic-file.js";
 import { AtomicJsonFile } from "./atomic-json-file.js";
 import { PRODUCT } from "./product.js";
-import { RealDirectoryAuthority } from "./real-directory-authority.js";
+import { RealDirectoryAuthority, RealDirectoryOperationError } from "./real-directory-authority.js";
 
 export class PluginConfigRevisionConflict extends Error {
   constructor(filePath) {
@@ -143,73 +142,89 @@ export class PluginInstaller {
     const destination = path.join(pluginsRoot, installation.pluginId);
     const staging = path.join(pluginsRoot, `.${installation.pluginId}.staging-${nonce}`);
     const backup = path.join(pluginsRoot, `.${installation.pluginId}.backup-${nonce}`);
-    let backupCreated = false;
-    let swapped = false;
+    let stagingAuthority = null;
+    let backupAuthority = null;
+    let installedAuthority = null;
+    let stagingMoved = false;
+    let backupCleanupStarted = false;
+
+    const moveDirectory = (authority, target, operation) => authority.moveTo(target, {
+      commitGuard() {
+        installation.faultInjector({
+          phase: "rename", operation, destinationPath: destination,
+          stagingPath: staging, backupPath: backup,
+        });
+      },
+    });
+    const removeDirectory = (authority, operation) => {
+      installation.faultInjector({ phase: "cleanup", operation, directoryPath: authority.directory });
+      authority.removeTree();
+    };
 
     try {
       installation.faultInjector({ phase: "copy", stagingPath: staging });
       installation.stagePackage(staging);
-      pluginsAuthority.assertStable();
-      new RealDirectoryAuthority(staging, { parentAuthority: pluginsAuthority }).assertStable();
+      stagingAuthority = new RealDirectoryAuthority(staging, { parentAuthority: pluginsAuthority });
+      stagingAuthority.assertStable();
 
       installation.faultInjector({ phase: "validation", stagingPath: staging });
       installation.validateStaging(staging);
 
-      if (fs.existsSync(destination)) {
-        const stat = fs.lstatSync(destination);
-        if (!stat.isDirectory() || stat.isSymbolicLink()) {
-          throw new Error(`installed plugin destination must be a real directory: ${destination}`);
-        }
-        installation.faultInjector({
-          phase: "rename",
-          operation: "backup",
-          destinationPath: destination,
-          stagingPath: staging,
-        });
-        pluginsAuthority.assertStable();
-        fs.renameSync(destination, backup);
-        backupCreated = true;
+      const originalAuthority = new RealDirectoryAuthority(destination, { parentAuthority: pluginsAuthority });
+      if (originalAuthority.exists()) {
+        backupAuthority = moveDirectory(originalAuthority, backup, "backup");
       }
-      installation.faultInjector({
-        phase: "rename",
-        operation: "swap",
-        destinationPath: destination,
-        stagingPath: staging,
-      });
-      pluginsAuthority.assertStable();
-      fs.renameSync(staging, destination);
-      swapped = true;
+      installedAuthority = moveDirectory(stagingAuthority, destination, "swap");
+      stagingMoved = true;
 
       installation.configTransaction.commit(installation.faultInjector);
       const installed = installation.readInstalled(destination);
-      if (backupCreated) fs.rmSync(backup, { recursive: true, force: true });
+      installedAuthority.assertStable();
+      if (backupAuthority !== null) {
+        installation.faultInjector({ phase: "cleanup", operation: "backup", directoryPath: backup });
+        installedAuthority.assertStable();
+        // Recursive removal can delete only part of the original tree before
+        // failing. Once it starts, neither tree may be discarded for rollback.
+        backupCleanupStarted = true;
+        backupAuthority.removeTree();
+        backupAuthority = null;
+      }
+      installedAuthority.assertStable();
       return installed;
     } catch (primaryError) {
       const rollbackErrors = installation.configTransaction.rollback();
-      if (swapped && fs.existsSync(destination)) {
+      const packageRecoveryUnknown = backupCleanupStarted
+        || RealDirectoryAuthority.isAuthorityFailure(primaryError)
+        || (primaryError instanceof RealDirectoryOperationError && primaryError.committedToVisibleName);
+      if (packageRecoveryUnknown) {
+        rollbackErrors.push(new Error(`plugin rollback could not verify package restoration; recovery paths: ${destination}, ${backup}, ${staging}`));
+      } else {
+        if (installedAuthority !== null) {
+          try {
+            removeDirectory(installedAuthority, "installed");
+          } catch (error) {
+            rollbackErrors.push(error);
+          }
+        }
+        if (backupAuthority !== null) {
+          try {
+            moveDirectory(backupAuthority, destination, "restore");
+            backupAuthority = null;
+          } catch (error) {
+            rollbackErrors.push(error);
+          }
+        }
         try {
-          fs.rmSync(destination, { recursive: true, force: true });
+          if (!stagingMoved) {
+            stagingAuthority ??= new RealDirectoryAuthority(staging, { parentAuthority: pluginsAuthority });
+            if (stagingAuthority.exists()) removeDirectory(stagingAuthority, "staging");
+          }
         } catch (error) {
           rollbackErrors.push(error);
         }
-      }
-      if (backupCreated && fs.existsSync(backup) && !fs.existsSync(destination)) {
-        try {
-          fs.renameSync(backup, destination);
-          backupCreated = false;
-        } catch (error) {
-          rollbackErrors.push(error);
+        if (backupAuthority !== null) {
+          rollbackErrors.push(new Error(`plugin rollback retained recovery backup: ${backup}`));
         }
-      }
-      if (fs.existsSync(staging)) {
-        try {
-          fs.rmSync(staging, { recursive: true, force: true });
-        } catch (error) {
-          rollbackErrors.push(error);
-        }
-      }
-      if (backupCreated && fs.existsSync(backup) && fs.existsSync(destination)) {
-        rollbackErrors.push(new Error(`plugin rollback retained recovery backup: ${backup}`));
       }
       if (rollbackErrors.length > 0) {
         throw new AggregateError(
@@ -219,8 +234,6 @@ export class PluginInstaller {
         );
       }
       throw primaryError;
-    } finally {
-      if (fs.existsSync(staging)) fs.rmSync(staging, { recursive: true, force: true });
     }
   }
 }

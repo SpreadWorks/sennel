@@ -1,4 +1,7 @@
-import { runGit as runGitCommand } from "./git-helpers.js";
+import { runGit as runGitCommand, runGitToFile } from "./git-helpers.js";
+import { GitPluginArchive } from "./git-plugin-archive.js";
+import { retainPluginDirectory } from "./plugin-directory-authority.js";
+import { GitRepositoryPolicy } from "./git-repository-environment.js";
 import fs from "fs";
 import path from "path";
 import crypto from "crypto";
@@ -23,7 +26,7 @@ import {
   PluginInstallation,
   PluginInstaller,
 } from "./plugin-installer.js";
-import { runCmd, assertOk } from "./process.js";
+import { assertOk } from "./process.js";
 import { DEFAULT_FLOW_SPEC_DIR, FlowSpecLocation } from "./flow-workspace.js";
 import { NativeAbsolutePath } from "./native-path.js";
 import { AtomicFile } from "./atomic-file.js";
@@ -258,17 +261,6 @@ function isUnderFileAllowlist(rel, files) {
     if (file.endsWith("/")) return normalized === file.slice(0, -1) || normalized.startsWith(file);
     return normalized === file || normalized.startsWith(`${file}/`);
   });
-}
-
-// The cache retains the caller's observed directory chain across enumeration
-// and copy. RealDirectoryAuthority owns every physical check and creation.
-function retainPluginDirectory(directory, authorities, { create = false } = {}) {
-  const ancestor = RealDirectoryAuthority.closestAncestor(directory, authorities.values());
-  const authority = ancestor.descendant(directory, { create });
-  for (let current = authority; !authorities.has(current.directory); current = current.parentAuthority) {
-    authorities.set(current.directory, current);
-  }
-  return authority;
 }
 
 function walkFiles(root, rel = "", directories = null, { packageRules = true, directoryAuthorities = null } = {}) {
@@ -591,8 +583,9 @@ export function isGitUrl(source) {
   return /^(https?:\/\/|git@|ssh:\/\/|file:\/\/)/.test(source);
 }
 
-function runGit(cwd, args, context) {
-  const result = runGitCommand(args, { cwd, maxBuffer: 10 * 1024 * 1024 });
+function runGit(cwd, args, context, { readOnly = false, repositoryRoot = cwd } = {}) {
+  const result = runGitCommand(args, { cwd, repositoryRoot, maxBuffer: 10 * 1024 * 1024,
+    gitPolicy: new GitRepositoryPolicy({ repositoryRoot: cwd, readOnly }) });
   assertOk(result, context);
   return result.stdout.trim();
 }
@@ -605,10 +598,10 @@ function localRepoHead(source) {
     validateSourceTree(root);
     return { root, commit: hashPackageTree(root), materialized: true };
   }
-  runGit(root, ["rev-parse", "--is-inside-work-tree"], "plugin source must be a Git worktree");
-  const status = runGit(root, ["status", "--porcelain"], "failed to inspect plugin source status");
+  runGit(root, ["rev-parse", "--is-inside-work-tree"], "plugin source must be a Git worktree", { readOnly: true });
+  const status = runGit(root, ["status", "--porcelain"], "failed to inspect plugin source status", { readOnly: true });
   if (status.trim() !== "") throw new Error("dirty local plugin source rejected: commit or clean uncommitted changes first");
-  const commit = runGit(root, ["rev-parse", "HEAD"], "plugin source must have HEAD");
+  const commit = runGit(root, ["rev-parse", "HEAD"], "plugin source must have HEAD", { readOnly: true });
   return { root, commit, materialized: false };
 }
 
@@ -664,7 +657,8 @@ function hasConfinedGitMetadata(dest) {
   if (!isUnderPath(realGit, realDest)) {
     throw new Error(`unsafe plugin source cache path: .git escapes cache root: ${dest}`);
   }
-  const result = runGitCommand(["rev-parse", "--show-toplevel"], { cwd: dest, maxBuffer: 10 * 1024 * 1024 });
+  const result = runGitCommand(["rev-parse", "--show-toplevel"], { cwd: dest, maxBuffer: 10 * 1024 * 1024,
+    gitPolicy: new GitRepositoryPolicy({ repositoryRoot: dest, readOnly: true }) });
   if (!result.ok) return false;
   let realTopLevel;
   try {
@@ -679,29 +673,30 @@ function hasConfinedGitMetadata(dest) {
   return true;
 }
 
-function cloneGitUrlSource(dest, source) {
+function cloneGitUrlSource(dest, source, root) {
   fs.rmSync(dest, { recursive: true, force: true });
-  const result = runGitCommand(["clone", sourceLocation(source), dest], { maxBuffer: 10 * 1024 * 1024 });
+  const result = runGitCommand(["clone", "--no-checkout", sourceLocation(source), dest], { cwd: root, repositoryRoot: root, maxBuffer: 10 * 1024 * 1024 });
   if (!result.ok) throw new Error(`failed to clone ${maskPluginSource(sourceLocation(source))}: ${maskPluginSource(result.stderr || result.stdout)}`);
 }
 
-function fetchGitUrlSource(dest, source) {
-  const result = runGitCommand(["fetch", "--all", "--tags", "--force", "--prune"], { cwd: dest, maxBuffer: 10 * 1024 * 1024 });
+function fetchGitUrlSource(dest, source, root) {
+  const result = runGitCommand(["fetch", "--all", "--tags", "--force", "--prune"], { cwd: dest, repositoryRoot: root, maxBuffer: 10 * 1024 * 1024 });
   if (!result.ok) throw new Error(`failed to update ${maskPluginSource(sourceLocation(source))}: ${maskPluginSource(result.stderr || result.stdout)}`);
 }
 
 function hasGitUrlSourceRemote(dest, source) {
-  const result = runGitCommand(["remote", "get-url", "origin"], { cwd: dest, maxBuffer: 10 * 1024 * 1024 });
+  const result = runGitCommand(["remote", "get-url", "origin"], { cwd: dest, maxBuffer: 10 * 1024 * 1024,
+    gitPolicy: new GitRepositoryPolicy({ repositoryRoot: dest, readOnly: true }) });
   return result.ok && result.stdout.trim() === sourceLocation(source);
 }
 
 function resolveGitCommit(cwd, ref, context) {
-  return runGit(cwd, ["rev-parse", "--verify", "--end-of-options", `${ref}^{commit}`], context);
+  return runGit(cwd, ["rev-parse", "--verify", "--end-of-options", `${ref}^{commit}`], context, { readOnly: true });
 }
 
-function resolveRemoteDefaultCommit(dest) {
-  runGit(dest, ["remote", "set-head", "origin", "--auto"], "failed to resolve plugin remote default branch");
-  const remoteHead = runGit(dest, ["symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"], "failed to read plugin remote default branch");
+function resolveRemoteDefaultCommit(dest, root) {
+  runGit(dest, ["remote", "set-head", "origin", "--auto"], "failed to resolve plugin remote default branch", { repositoryRoot: root });
+  const remoteHead = runGit(dest, ["symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"], "failed to read plugin remote default branch", { readOnly: true });
   return resolveGitCommit(dest, remoteHead, "failed to resolve plugin remote default branch commit");
 }
 
@@ -712,7 +707,8 @@ function assertSafeGitRef(ref) {
 }
 
 function tryResolveGitCommit(cwd, ref) {
-  const result = runGitCommand(["rev-parse", "--verify", "--end-of-options", `${ref}^{commit}`], { cwd, maxBuffer: 10 * 1024 * 1024 });
+  const result = runGitCommand(["rev-parse", "--verify", "--end-of-options", `${ref}^{commit}`], { cwd, maxBuffer: 10 * 1024 * 1024,
+    gitPolicy: new GitRepositoryPolicy({ repositoryRoot: cwd, readOnly: true }) });
   return result.ok ? result.stdout.trim() : null;
 }
 
@@ -731,16 +727,17 @@ function resolveGitRefCommit(dest, ref) {
   throw new Error(`failed to resolve plugin source ref: ${ref}`);
 }
 
-function resolveGitUrlSourceCommit(dest, source) {
-  return source.ref ? resolveGitRefCommit(dest, source.ref) : resolveRemoteDefaultCommit(dest);
+function resolveGitUrlSourceCommit(dest, source, root) {
+  return source.ref ? resolveGitRefCommit(dest, source.ref) : resolveRemoteDefaultCommit(dest, root);
 }
 
-function cleanGitUrlSourceTree(dest, commit) {
-  runGit(dest, ["reset", "--hard"], "failed to reset plugin source cache");
-  runGit(dest, ["clean", "-fdx"], "failed to clean plugin source cache");
-  runGit(dest, ["checkout", "--detach", commit], "failed to checkout plugin source commit");
-  runGit(dest, ["reset", "--hard", commit], "failed to reset plugin source commit");
-  runGit(dest, ["clean", "-fdx"], "failed to clean plugin source cache");
+function cleanGitUrlSourceTree(dest, commit, root) {
+  const control = { repositoryRoot: root };
+  runGit(dest, ["reset", "--hard"], "failed to reset plugin source cache", control);
+  runGit(dest, ["clean", "-fdx"], "failed to clean plugin source cache", control);
+  runGit(dest, ["checkout", "--detach", commit], "failed to checkout plugin source commit", control);
+  runGit(dest, ["reset", "--hard", commit], "failed to reset plugin source commit", control);
+  runGit(dest, ["clean", "-fdx"], "failed to clean plugin source cache", control);
 }
 
 function syncGitUrlSource(root, source) {
@@ -749,22 +746,17 @@ function syncGitUrlSource(root, source) {
   fs.mkdirSync(path.dirname(dest), { recursive: true });
   assertManagedGitCachePath(root, dest, source);
   if (!hasConfinedGitMetadata(dest)) {
-    cloneGitUrlSource(dest, source);
+    cloneGitUrlSource(dest, source, root);
   } else if (!hasGitUrlSourceRemote(dest, source)) {
-    cloneGitUrlSource(dest, source);
+    cloneGitUrlSource(dest, source, root);
   }
-  fetchGitUrlSource(dest, source);
-  const commit = resolveGitUrlSourceCommit(dest, source);
-  try {
-    cleanGitUrlSourceTree(dest, commit);
-    return { root: dest, commit, materialized: false };
-  } catch (_) {
-    cloneGitUrlSource(dest, source);
-    fetchGitUrlSource(dest, source);
-    const reclonedCommit = resolveGitUrlSourceCommit(dest, source);
-    cleanGitUrlSourceTree(dest, reclonedCommit);
-    return { root: dest, commit: reclonedCommit, materialized: false };
-  }
+  // Configure only this owned cache before its first checkout. Git for Windows
+  // otherwise rejects valid long plugin paths beneath the managed cache root.
+  runGit(dest, ["config", "core.longpaths", "true"], "failed to configure plugin source cache paths", { repositoryRoot: root });
+  fetchGitUrlSource(dest, source, root);
+  const commit = resolveGitUrlSourceCommit(dest, source, root);
+  cleanGitUrlSourceTree(dest, commit, root);
+  return { root: dest, commit, materialized: false };
 }
 
 export class PluginSourceStore {
@@ -833,28 +825,52 @@ export function findPluginCandidates(root) {
 class PluginPackageMaterialization {
   #temporaryPaths;
   #directory;
-  constructor(temporaryPaths, directory, packageRoot) {
+  #faultInjector;
+  #package;
+  #cleanupAttempted = false;
+  constructor(temporaryPaths, directory, faultInjector) {
     this.#temporaryPaths = temporaryPaths;
     this.#directory = directory;
-    this.packageRoot = packageRoot;
+    this.#faultInjector = faultInjector;
     Object.freeze(this);
   }
-  cleanup() { this.#temporaryPaths.cleanup(this.#directory); }
+  get packageRoot() { return this.#package.path; }
+  extract(archive) {
+    this.#package = this.#temporaryPaths.createOwnedDirectory(this.#directory, "package-");
+    archive.extractTo(this.#package.path, { directoryAuthority: this.#package.authority });
+  }
+  cleanup(primaryError = null) {
+    if (this.#cleanupAttempted) return;
+    this.#cleanupAttempted = true;
+    // Retaining the package root cannot authorize deleting a descendant whose
+    // identity was rejected during extraction or copying.
+    if (RealDirectoryAuthority.isAuthorityFailure(primaryError)) return;
+    try {
+      this.#faultInjector({ phase: "materialization-cleanup", directory: this.#directory, packageRoot: this.#package?.path ?? null });
+      this.#temporaryPaths.cleanup(this.#directory);
+    } catch (cleanupError) {
+      if (primaryError !== null) {
+        throw new AggregateError([primaryError, cleanupError], "plugin materialization failed and cleanup was incomplete", { cause: primaryError });
+      }
+      throw cleanupError;
+    }
+  }
 }
 
-function materializeCommit(sourceRoot, commit, root) {
+function materializeCommit(sourceRoot, commit, root, faultInjector) {
   const temporaryPaths = new TemporaryPaths(root);
-  const tmp = temporaryPaths.create(temporaryPaths.runtime("plugin-materialization"), "tmp-plugin-");
+  const owned = temporaryPaths.createOwnedDirectory(temporaryPaths.runtime("plugin-materialization"), "tmp-plugin-");
+  const tmp = owned.path;
+  const materialized = new PluginPackageMaterialization(temporaryPaths, tmp, faultInjector);
   try {
     const archivePath = path.join(tmp, "package.tar");
-    const archive = runGitCommand(["archive", "--format=tar", "-o", archivePath, commit], { cwd: sourceRoot, maxBuffer: 50 * 1024 * 1024 });
+    const archive = runGitToFile(["archive", "--format=tar", commit], { cwd: sourceRoot, outputPath: archivePath });
     if (!archive.ok) throw new Error(`failed to archive plugin package: ${archive.stderr || archive.stdout}`);
-    const packageRoot = temporaryPaths.ensureDirectory(path.join(tmp, "package"));
-    const tar = runCmd("tar", ["-xf", archivePath, "-C", packageRoot], { cwd: root, maxBuffer: 50 * 1024 * 1024 });
-    if (!tar.ok) throw new Error(`failed to extract plugin package: ${tar.stderr || tar.stdout}`);
-    return new PluginPackageMaterialization(temporaryPaths, tmp, packageRoot);
+    const contents = GitPluginArchive.fromFile(archivePath, { directoryAuthority: owned.authority });
+    materialized.extract(contents);
+    return materialized;
   } catch (error) {
-    temporaryPaths.cleanup(tmp);
+    materialized.cleanup(error);
     throw error;
   }
 }
@@ -999,7 +1015,8 @@ function installFromSource(root, source, sourceRoot, commit, {
   faultInjector = () => {},
 } = {}) {
   validateSourceTree(sourceRoot);
-  const materialized = sourceMaterialized ? null : materializeCommit(sourceRoot, commit, root);
+  const materialized = sourceMaterialized ? null : materializeCommit(sourceRoot, commit, root, faultInjector);
+  let primaryError = null;
   try {
     const packageRoot = materialized?.packageRoot || sourceRoot;
     const manifest = PluginManifest.fromRoot(packageRoot);
@@ -1016,6 +1033,9 @@ function installFromSource(root, source, sourceRoot, commit, {
       pluginId: manifest.name,
       stagePackage(staging) {
         copyAllowlistedFiles(packageRoot, staging, existingKnownPluginPaths(packageRoot));
+        // The copied stage owns all remaining input. Dispose before publication
+        // so a materialization cleanup failure stays inside the install transaction.
+        materialized?.cleanup();
       },
       validateStaging(staging) {
         validateSourceTree(staging);
@@ -1030,8 +1050,11 @@ function installFromSource(root, source, sourceRoot, commit, {
       configTransaction,
       faultInjector,
     }));
+  } catch (error) {
+    primaryError = error;
+    throw error;
   } finally {
-    if (materialized) materialized.cleanup();
+    materialized?.cleanup(primaryError);
   }
 }
 
