@@ -1,0 +1,48 @@
+{
+  "goal": "Exercise durable source handoff recovery.",
+  "scope": {
+    "in": [
+      "source handoff"
+    ],
+    "out": []
+  },
+  "constraints": [],
+  "design_principles": [],
+  "overview": {
+    "modules": [],
+    "data_flow": [],
+    "decisions": []
+  },
+  "background": "A parent process may stop after the worker seals its result.",
+  "requirements": [
+    {
+      "id": "R1",
+      "desc": "Persist source handoff authority.",
+      "task_ids": [
+        "T1"
+      ],
+      "testable": false
+    }
+  ],
+  "acceptance_criteria": [
+    "A fresh manager can settle the sealed result."
+  ],
+  "clarifications": [],
+  "alternatives_considered": [],
+  "open_questions": [],
+  "tasks": [
+    {
+      "id": "T1",
+      "title": "Persist source authority",
+      "goal": "Recover one Task source worker.",
+      "parent": null,
+      "origin": "plan",
+      "added_round": 0,
+      "status": "pending"
+    }
+  ],
+  "user_approval": {
+    "approved": true,
+    "confirmed_at": "2026-01-02T03:04:05.000Z"
+  }
+}

@@ -440,6 +440,7 @@ export class FlowManager {
     });
   }
   recordProcessEvent(event) { return this._store.recordProcessEvent(event); }
+  recordProcessEvents(group) { return this._store.recordProcessEvents(group); }
 
   activityLedger(specId = this._boundSpecId) {
     return this._store.activityLedger(specId);

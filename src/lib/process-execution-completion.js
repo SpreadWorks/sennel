@@ -12,6 +12,14 @@ export function retainExecutionCompletion(target, source) {
   target.stopEvidence = receipt.stopEvidence;
 }
 
+/** Retain a selected control cause and its wrapper's complete diagnostics. */
+export function processExecutionControlFailureFromCause(wrapper, primary = wrapper.cause) {
+  if (!(primary instanceof ProcessExecutionControlFailure)) return null;
+  const failure = primary.withCause(wrapper);
+  retainExecutionCompletion(failure, primary);
+  return failure;
+}
+
 /** Publication failure never replaces an observed child result with an exit status. */
 export function processExecutionPublicationFailure(error, completion, { executionId = null, callId = null, role = "executor" } = {}) {
   executionId ??= completion?.processExecutionStopReceipt?.executionId ?? completion?.executionId ?? null;
@@ -58,10 +66,11 @@ export function combineProcessExecutionFailures(primary, completion) {
   if (primary === undefined) return completion;
   if (completion === undefined) return primary;
 
-  const causes = new AggregateError([primary, completion], "Operation and managed-process completion both failed", { cause: primary });
-  if (primary instanceof ProcessExecutionControlFailure) return primary.withCause(causes);
-  if (completion instanceof ProcessExecutionControlFailure) return completion.withCause(causes);
-  return causes;
+  const messages = [primary, completion].map(failure => failure instanceof Error ? failure.message : String(failure));
+  const causes = new AggregateError([primary, completion],
+    `Operation and managed-process completion both failed: ${messages.join("; ")}`, { cause: primary });
+  return processExecutionControlFailureFromCause(causes)
+    ?? processExecutionControlFailureFromCause(causes, completion) ?? causes;
 }
 
 /** Run mandatory completion after an operation and preserve the operation's failure first. */
@@ -80,5 +89,26 @@ export async function completeManagedOperation(operation, completion) {
   if (operationFailed || completionFailed) {
     throw combineProcessExecutionFailures(primary, completionFailure);
   }
+  return result;
+}
+
+/** A synchronous boundary cannot retain work after its owner releases authority. */
+export function synchronousManagedResult(value, message = "Synchronous managed operations cannot return a thenable") {
+  if (value !== null && value !== undefined && typeof value.then === "function") throw new TypeError(message);
+  return value;
+}
+
+/** Blocking counterparts must finish on this stack, including mandatory disposal. */
+export function completeManagedOperationSync(operation, completion) {
+  let result;
+  let operationFailed = false;
+  let primary;
+  try { result = synchronousManagedResult(operation()); }
+  catch (error) { operationFailed = true; primary = error; }
+  let completionFailed = false;
+  let completionFailure;
+  try { synchronousManagedResult(completion(!operationFailed)); }
+  catch (error) { completionFailed = true; completionFailure = error; }
+  if (operationFailed || completionFailed) throw combineProcessExecutionFailures(primary, completionFailure);
   return result;
 }

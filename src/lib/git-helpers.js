@@ -10,7 +10,9 @@ import fs from "node:fs";
 import path from "node:path";
 import { assertOk } from "./process.js";
 import { container } from "./container.js";
-import { AtomicFile } from "./atomic-file.js";
+import { AtomicFile, AtomicFileWriteError, RetainedAtomicFileOutput } from "./atomic-file.js";
+import { ProcessExecutionControlFailure, ProcessExecutionStopReceipt } from "./process-execution-values.js";
+import { processExecutionControlFailureFromCause, completeManagedOperationSync } from "./process-execution-completion.js";
 import { GIT_OBJECT_ID, GitSnapshot, isGitObjectId, isGitSnapshot } from "./git-snapshot.js";
 export { GIT_OBJECT_ID, GitSnapshot, isGitObjectId, isGitSnapshot } from "./git-snapshot.js";
 
@@ -42,8 +44,17 @@ function recordGitResult(args, result) {
     stderr: Buffer.isBuffer(result.stderr) ? result.stderr.toString("utf8") : result.stderr });
   return result;
 }
-export function runGit(args, opts = {}) { return recordGitResult(args, new GitCommandExecution(args, opts).run()); }
-export async function runGitAsync(args, opts = {}) { return recordGitResult(args, await new GitCommandExecution(args, opts).runAsync()); }
+/** The same Git logger for scalar, async and independent execution groups. */
+export class LoggedGitCommandExecution extends GitCommandExecution {
+  #args;
+  constructor(args, opts = {}) {
+    super(args, opts); this.#args = Object.freeze([...args]);
+  }
+  acceptResult(result) { return recordGitResult(this.#args, super.acceptResult(result)); }
+}
+
+export function runGit(args, opts = {}) { return new LoggedGitCommandExecution(args, opts).run(); }
+export async function runGitAsync(args, opts = {}) { return new LoggedGitCommandExecution(args, opts).runAsync(); }
 
 export class GitRefProbeError extends Error {
   constructor(ref, result, reason = null) {
@@ -433,26 +444,71 @@ export class GitPorcelainV2Status {
  * cwd may be a repository subdirectory; repositoryRoot selects an explicit
  * discovery boundary when the caller already owns a particular repository.
  */
-export function getPorcelainV2Status(cwd, { pathspecs = [], forceFileMode = true, repositoryRoot = null } = {}) {
-  const args = [
-    "--no-optional-locks",
-    ...(forceFileMode ? ["-c", "core.fileMode=true"] : []),
-    "status",
-    "--porcelain=v2",
-    "-z",
-    "--untracked-files=all",
-    "--no-renames",
-  ];
-  if (pathspecs.length > 0) args.push("--", ...pathspecs);
-  const gitPolicy = new GitRepositoryPolicy({ repositoryRoot, readOnly: true });
-  const result = runGit(args, { cwd, gitPolicy, encoding: "buffer", maxBuffer: 64 * 1024 * 1024 });
-  if (!result.ok) {
-    const error = new Error(`git porcelain v2 status failed: ${result.stderr || result.stdout || "unknown git error"}`);
-    error.code = "GIT_STATUS_PORCELAIN_V2_FAILED";
-    error.result = result;
-    throw error;
+export class GitPorcelainV2StatusExecution extends LoggedGitCommandExecution {
+  constructor(cwd, { pathspecs = [], forceFileMode = true, repositoryRoot = null } = {}) {
+    const args = [
+      "--no-optional-locks",
+      ...(forceFileMode ? ["-c", "core.fileMode=true"] : []),
+      "status",
+      "--porcelain=v2",
+      "-z",
+      "--untracked-files=all",
+      "--no-renames",
+    ];
+    if (pathspecs.length > 0) args.push("--", ...pathspecs);
+    const gitPolicy = new GitRepositoryPolicy({ repositoryRoot, readOnly: true });
+    super(args, { cwd, gitPolicy, encoding: "buffer", maxBuffer: 64 * 1024 * 1024 });
   }
-  return GitPorcelainV2Status.from(result.stdout);
+  parseResult(result) {
+    if (!result.ok) {
+      const error = new Error(`git porcelain v2 status failed: ${result.stderr || result.stdout || "unknown git error"}`);
+      error.code = "GIT_STATUS_PORCELAIN_V2_FAILED";
+      error.result = result;
+      throw error;
+    }
+    return GitPorcelainV2Status.from(result.stdout);
+  }
+  read() { return this.parseResult(this.run()); }
+}
+
+export function getPorcelainV2Status(cwd, options = {}) {
+  return new GitPorcelainV2StatusExecution(cwd, options).read();
+}
+
+/** Keep process-control provenance alongside atomic output diagnostics. */
+class GitOutputFile extends AtomicFile {
+  retainOutputOnFailure(error) {
+    return error instanceof ProcessExecutionControlFailure
+      && !(error.processExecutionStopReceipt instanceof ProcessExecutionStopReceipt);
+  }
+  createWriteError(message, details) {
+    const fileFailure = super.createWriteError(message, details);
+    return processExecutionControlFailureFromCause(fileFailure) ?? fileFailure;
+  }
+}
+
+function retainsGitOutput(failure) {
+  const pending = [failure];
+  const seen = new Set();
+  while (pending.length > 0) {
+    const current = pending.pop();
+    if (!(current instanceof Error) || seen.has(current)) continue;
+    seen.add(current);
+    if (current instanceof AtomicFileWriteError
+      && (current.retainedOutput instanceof RetainedAtomicFileOutput || current.cleanupFailed)) return true;
+    pending.push(current.cause);
+    if (current instanceof AggregateError) pending.push(...current.errors);
+  }
+  return false;
+}
+
+/** Keep owned output parents while their producer is unconfirmed; preserve both failures otherwise. */
+export function withGitOutputCleanup(operation, cleanup) {
+  let failure = null;
+  return completeManagedOperationSync(() => {
+    try { return operation(); }
+    catch (error) { failure = error; throw error; }
+  }, () => { if (!retainsGitOutput(failure)) return cleanup(); });
 }
 
 /**
@@ -462,7 +518,7 @@ export function getPorcelainV2Status(cwd, { pathspecs = [], forceFileMode = true
  * Set log to false when recording Git execution would mutate the input being read.
  */
 export function runGitToFile(args, { cwd, outputPath, timeout, log = true } = {}) {
-  const writer = new AtomicFile(outputPath, { maxBytes: Number.MAX_SAFE_INTEGER - 1 });
+  const writer = new GitOutputFile(outputPath, { maxBytes: Number.MAX_SAFE_INTEGER - 1 });
   let result;
   const stage = writer.createOutputStage((descriptor) => {
     const policy = new GitRepositoryPolicy({ repositoryRoot: cwd, readOnly: true });
@@ -470,9 +526,7 @@ export function runGitToFile(args, { cwd, outputPath, timeout, log = true } = {}
       timeout, encoding: "utf8", maxBuffer: 1024 * 1024 }).run();
   }, { exclusive: true });
   writer.publishStage(stage, { exclusive: true });
-  if (log === true && container.has("logger")) {
-    container.get("logger").git({ cmd: ["git", ...args], exitCode: result.status, stderr: result.stderr });
-  }
+  if (log === true) recordGitResult(args, result);
   return result;
 }
 

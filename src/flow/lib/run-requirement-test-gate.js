@@ -5,6 +5,7 @@ import crypto from "node:crypto";
 import path from "node:path";
 
 import { runCmdAsync, standaloneTestEnvironment } from "../../lib/process.js";
+import { ProcessExecutionControlFailure } from "../../lib/process-execution-values.js";
 import { TemporaryPaths } from "../../lib/temporary-paths.js";
 import { AtomicFile } from "../../lib/atomic-file.js";
 import { RealDirectoryAuthority } from "../../lib/real-directory-authority.js";
@@ -128,6 +129,7 @@ export async function runRequirementTestGate({
   const materialized = temporaryPaths.create(
     temporaryRoot ?? temporaryPaths.runtime("requirement-test-gate"), "candidate-",
   );
+  let preserveCandidate = false;
   try {
     const testFiles = [];
     for (const source of sources.bundle.sources) {
@@ -206,10 +208,13 @@ export async function runRequirementTestGate({
       canonicalSpecRoot: versionLocation.resolve("artifacts"),
     });
     const relative = path.relative(repositoryRoot, target.file).split(path.sep).join("/");
-    const argv = execution.nodeArgv(["--test", `--test-name-pattern=^${target.testName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, relative]);
+    // Named-test observations consume TAP, independent of Node's default reporter.
+    const argv = execution.nodeArgv(["--test", "--test-reporter=tap", `--test-name-pattern=^${target.testName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, relative]);
     const environment = standaloneTestEnvironment();
     const processResult = await runCmdAsync(argv[0], argv.slice(1), {
       cwd: repositoryRoot,
+      repositoryRoot: temporaryRepositoryRoot,
+      readOnly: true,
       timeout: timeoutMs,
       maxBuffer: 20 * 1024 * 1024,
       env: { ...environment, ...execution.environment },
@@ -232,8 +237,11 @@ export async function runRequirementTestGate({
       command: argv.join(" "),
       process: observedProcess,
     };
+  } catch (error) {
+    preserveCandidate = error instanceof ProcessExecutionControlFailure;
+    throw error;
   } finally {
-    temporaryPaths.cleanup(materialized);
+    if (!preserveCandidate) temporaryPaths.cleanup(materialized);
   }
 }
 

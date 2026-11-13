@@ -44,7 +44,7 @@ function removeGitConfigInjections(environment, names) {
   return environment;
 }
 
-export function sanitizeGitRepositoryEnvironment(environment = process.env, { repositoryRoot = null, isolateConfiguration = true } = {}) {
+export function sanitizeGitRepositoryEnvironment(environment = process.env, { repositoryRoot = null, isolateConfiguration = true, discoveryCeiling = null } = {}) {
   if (environment === null || typeof environment !== "object" || Array.isArray(environment)) {
     throw new TypeError("Git repository environment must be an object");
   }
@@ -60,21 +60,32 @@ export function sanitizeGitRepositoryEnvironment(environment = process.env, { re
     // The selected project may be nested inside another repository. Discovery
     // must never substitute that ancestor for an explicit repository boundary.
     sanitized.GIT_CEILING_DIRECTORIES = path.dirname(path.resolve(repositoryRoot));
+  } else if (discoveryCeiling !== null) {
+    // A bootstrap discovery ceiling can only restrict ancestor discovery. It
+    // never replaces the explicit boundary of an ordinary repository command.
+    sanitized.GIT_CEILING_DIRECTORIES = discoveryCeiling;
   }
   return sanitized;
 }
 
 /** A normal repository command cannot inherit alternate index/object/worktree authority. */
 export class GitRepositoryPolicy {
-  constructor({ repositoryRoot = null, readOnly = false, isolateConfiguration = false } = {}) {
+  constructor({ repositoryRoot = null, readOnly = false, isolateConfiguration = false, discoveryCeiling = null } = {}) {
+    if (discoveryCeiling !== null && typeof discoveryCeiling !== "string") throw new TypeError("Git discovery ceiling must be a string or null");
     this.repositoryRoot = repositoryRoot;
+    this.discoveryCeiling = discoveryCeiling;
     this.readOnly = readOnly;
     this.isolateConfiguration = isolateConfiguration;
     if (new.target === GitRepositoryPolicy) Object.freeze(this);
   }
   environment(environment = process.env) {
-    const sanitized = sanitizeGitRepositoryEnvironment(environment, { repositoryRoot: this.repositoryRoot, isolateConfiguration: this.isolateConfiguration });
-    if (this.readOnly) sanitized.GIT_OPTIONAL_LOCKS = '0';
+    const sanitized = sanitizeGitRepositoryEnvironment(environment, { repositoryRoot: this.repositoryRoot, isolateConfiguration: this.isolateConfiguration, discoveryCeiling: this.discoveryCeiling });
+    if (this.readOnly) {
+      sanitized.GIT_OPTIONAL_LOCKS = '0';
+      // Git diff's stat refresh is independent of optional locks. This fixed
+      // parameter uses Git's own environment quoting, not a platform shell.
+      sanitized.GIT_CONFIG_PARAMETERS = "'diff.autoRefreshIndex=false'";
+    }
     return Object.freeze(sanitized);
   }
   arguments(args) { return [...args]; }
@@ -97,6 +108,7 @@ export class GitOwnedStagePolicy extends GitRepositoryPolicy {
   }
   environment(environment = process.env) {
     const result = { ...super.environment(environment) };
+    if (this.restore) result.GIT_ATTR_NOSYSTEM = "1";
     for (const [key, value] of [['GIT_DIR', this.gitDir], ['GIT_WORK_TREE', this.workTree], ['GIT_INDEX_FILE', this.indexFile], ['GIT_OBJECT_DIRECTORY', this.objectDirectory], ['GIT_TEMPLATE_DIR', this.templateDirectory]]) {
       if (value !== null) result[key] = value;
     }
@@ -104,6 +116,7 @@ export class GitOwnedStagePolicy extends GitRepositoryPolicy {
   }
   arguments(args) {
     return [...(this.attributesFile === null ? [] : ['-c', `core.attributesFile=${this.attributesFile}`]),
-      ...(this.restore ? ['-c', 'core.autocrlf=false', '-c', 'core.eol=lf'] : []), ...args];
+      // Owned restore paths may exceed the source checkout's native path length.
+      ...(this.restore ? ['-c', 'core.longpaths=true', '-c', 'core.autocrlf=false', '-c', 'core.eol=lf'] : []), ...args];
   }
 }

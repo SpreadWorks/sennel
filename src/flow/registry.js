@@ -1370,6 +1370,7 @@ export const FLOW_COMMANDS = {
     },
     context: {
       helpKey: "flow.get.context",
+      readOnly: false,
       command: () => import("./lib/get-context.js"),
       args: { positional: ["path"], flags: withTargetGuardFlags(["--raw"]), options: withTargetGuardOptions(["--search"]) },
       help: [

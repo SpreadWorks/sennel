@@ -560,6 +560,14 @@ export function loadConfig(root, options = {}) {
  */
 export function loadConfigFromManagedDirectory(directory, options = {}) {
   const raw = loadRawConfigFromManagedDirectory(directory);
+  // Validate identifiers before they select plugin files. Contributed schemas
+  // and defaults participate only after this existing config boundary accepts
+  // the paths used to locate them.
+  if (raw?.plugin) {
+    const errors = [];
+    validatePluginConfig(raw.plugin, errors);
+    if (errors.length > 0) throw new Error(`Config validation failed:\n  - ${errors.join("\n  - ")}`);
+  }
   const pluginConfig = loadEnabledPluginConfig(directory, raw);
   const merged = mergeDefaults(raw, pluginConfig.defaults);
   return validate(merged, { ...options, schema: mergeConfigSchemas(CONFIG_SCHEMA, pluginConfig.schemas) });

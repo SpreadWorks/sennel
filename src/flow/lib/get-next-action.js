@@ -1,3 +1,4 @@
+import { withReadOnlyManagedProcessScope } from "../../lib/managed-process.js";
 import { FlowExecutionCommand } from "./flow-execution-command.js";
 import { readRuntimeResource } from "../../lib/runtime-package.js";
 import { acceptanceStepRegistration } from "../engine/composition/acceptance.js";
@@ -1038,7 +1039,9 @@ export default class GetNextActionCommand extends FlowCommand {
       );
     }
     ctx.flowState = ctx.flowManager.loadReadOnly(ctx.specId ?? ctx.flowState.specId);
-    return this.executeCanonical(ctx);
+    return withReadOnlyManagedProcessScope({
+      mainRoot: ctx.mainRoot || ctx.root, executionRoot: ctx.executionRoot || ctx.root,
+    }, () => this.executeCanonical(ctx));
   }
 
   executeCanonical(ctx) {

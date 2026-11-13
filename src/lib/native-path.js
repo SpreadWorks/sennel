@@ -17,6 +17,20 @@ function assertAuthority(authority, target) {
     if (error.code !== "ENOENT") throw error;
   }
   parent.assertStable();
+  return parent;
+}
+
+/** A portable name and the already observed direct parent, when it exists. */
+export class NativePathResolution {
+  constructor(logicalPath, directoryAuthority) {
+    if (!(logicalPath instanceof LogicalRelativePath)
+      || (directoryAuthority !== null && !(directoryAuthority instanceof RealDirectoryAuthority))) {
+      throw new TypeError("native path resolution requires a logical path and an optional directory authority");
+    }
+    this.logicalPath = logicalPath;
+    this.directoryAuthority = directoryAuthority;
+    Object.freeze(this);
+  }
 }
 
 /** Host absolute names, distinct from serialized logical names. */
@@ -36,9 +50,11 @@ export class NativeAbsolutePath {
     assertAuthority(authority, native.value);
     return native;
   }
-  toLogical(authority) {
-    assertAuthority(authority, this.value);
-    return new LogicalRelativePath(path.relative(authority.directory, this.value).split(path.sep).join("/"));
+  resolveAuthority(authority) {
+    const parent = assertAuthority(authority, this.value);
+    const logicalPath = new LogicalRelativePath(path.relative(authority.directory, this.value).split(path.sep).join("/"));
+    return new NativePathResolution(logicalPath, parent.directory === path.dirname(this.value) ? parent : null);
   }
+  toLogical(authority) { return this.resolveAuthority(authority).logicalPath; }
   toString() { return this.value; }
 }

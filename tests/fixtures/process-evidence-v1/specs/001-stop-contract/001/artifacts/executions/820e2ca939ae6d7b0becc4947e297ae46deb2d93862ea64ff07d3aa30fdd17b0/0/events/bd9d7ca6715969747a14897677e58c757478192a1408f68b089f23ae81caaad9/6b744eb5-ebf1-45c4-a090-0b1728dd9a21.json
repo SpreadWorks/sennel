@@ -1,0 +1,239 @@
+{
+  "contractId": "b32da0d46a6eebc64b92cff0db7141752d6e893bca1ec6d2527e70f67e40d656",
+  "sequence": 3,
+  "previousDigest": "727bc622c839a8c58a0540cd9235676a2d32bfa50d22be0b9addf7813d75191e",
+  "eventId": "6b744eb5-ebf1-45c4-a090-0b1728dd9a21",
+  "digest": "3293933c4c40dc3cdb355a317d00ca0ca6c135a7dc36cd9dad6778418fccb3de",
+  "record": {
+    "scope": {
+      "stage": "map",
+      "round": 0
+    },
+    "event": "process-stopped",
+    "snapshot": {
+      "scope": {
+        "stage": "map",
+        "round": 0
+      },
+      "plan": {
+        "digest": "67edd2b101b0727553b96f7d8eeefe6f3f4ca26c72d3ff85a12c684df7ee2a63",
+        "collectionDigest": "c2702064a8423715847a00c2180dc904f0d48f6c83cba2d3f69c5d7f1fea2479",
+        "batches": [
+          {
+            "digest": "1beb8af368778bb850e7454937b643fc3d3440277ccb2d941d1c14f3333b960f",
+            "groupId": "linear",
+            "index": 0,
+            "coverage": [
+              {
+                "elementId": "input",
+                "sourceRevision": "revision",
+                "start": 0,
+                "end": 7,
+                "sourceLength": 7,
+                "status": "present"
+              }
+            ]
+          }
+        ],
+        "synthesisCallCount": 0
+      },
+      "budget": {
+        "providerCallCount": 1,
+        "synthesisCallCount": 0,
+        "aggregateCharacters": 0,
+        "aggregateItemCount": 0
+      },
+      "groups": [
+        {
+          "groupId": "linear",
+          "budget": {
+            "providerCallCount": 1,
+            "synthesisCallCount": 0,
+            "aggregateCharacters": 0,
+            "aggregateItemCount": 0
+          },
+          "responseCallCount": 1
+        }
+      ],
+      "batches": [
+        {
+          "batchDigest": "1beb8af368778bb850e7454937b643fc3d3440277ccb2d941d1c14f3333b960f",
+          "batchCalls": 1,
+          "transportOrdinal": 1,
+          "claim": {
+            "responseCallIndex": 0,
+            "transportOrdinal": 1,
+            "attempt": 1,
+            "maxAttempts": 1,
+            "requestDigest": "7239a4fac1b46ae43410820fd4330d1688fcdc3b360e40521cd3047b95f8b277",
+            "schemaDigest": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+            "providerKey": "node",
+            "profileKey": "local",
+            "processIdentity": {
+              "scope": {
+                "stage": "map",
+                "round": 0
+              },
+              "batchDigest": "1beb8af368778bb850e7454937b643fc3d3440277ccb2d941d1c14f3333b960f",
+              "responseCallIndex": 0,
+              "transportOrdinal": 1,
+              "attempt": 1,
+              "maxAttempts": 1,
+              "requestDigest": "7239a4fac1b46ae43410820fd4330d1688fcdc3b360e40521cd3047b95f8b277",
+              "schemaDigest": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+              "providerKey": "node",
+              "profileKey": "local",
+              "logicalInvocationId": "a16c2b72-4ef7-4568-838c-fdfae00612c4",
+              "providerAttemptId": "41e45019-d934-40fe-8f26-13b9f4139c39"
+            }
+          },
+          "responses": [],
+          "transportFailures": [],
+          "completion": null,
+          "processStops": [
+            {
+              "identity": {
+                "scope": {
+                  "stage": "map",
+                  "round": 0
+                },
+                "batchDigest": "1beb8af368778bb850e7454937b643fc3d3440277ccb2d941d1c14f3333b960f",
+                "responseCallIndex": 0,
+                "transportOrdinal": 1,
+                "attempt": 1,
+                "maxAttempts": 1,
+                "requestDigest": "7239a4fac1b46ae43410820fd4330d1688fcdc3b360e40521cd3047b95f8b277",
+                "schemaDigest": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+                "providerKey": "node",
+                "profileKey": "local",
+                "logicalInvocationId": "a16c2b72-4ef7-4568-838c-fdfae00612c4",
+                "providerAttemptId": "41e45019-d934-40fe-8f26-13b9f4139c39"
+              },
+              "receipt": {
+                "schemaVersion": 3,
+                "scope": "registered-executions",
+                "executionId": "fd59132b-2a5d-448f-8c74-8ece24d05705",
+                "callId": "5f06937d-b9a6-46af-a555-da6c9068c2c3",
+                "ownerEpoch": 1,
+                "checkoutIdentity": {
+                  "mainRoot": "/home/nakano/workspace/sennel/.sennel/worktree/e799-portable-state-performance/.tmp/e799-boundary-repair-20261103/previous-v9/package/.tmp/tests/canonical-prompt-source-26/checkout",
+                  "executionRoot": "/home/nakano/workspace/sennel/.sennel/worktree/e799-portable-state-performance/.tmp/e799-boundary-repair-20261103/previous-v9/package/.tmp/tests/canonical-prompt-source-26/checkout",
+                  "mainDevice": 2049,
+                  "mainInode": 17471663,
+                  "checkoutDevice": 2049,
+                  "checkoutInode": 17471663
+                },
+                "binding": {
+                  "runId": "stop-run",
+                  "specId": "001-stop-contract",
+                  "nodeId": "draft-refine",
+                  "taskId": null,
+                  "attemptId": "attempt-draft-refine-7eaa85b8-7626-46d2-a9f2-8a41f4de653c",
+                  "attemptSequence": 1,
+                  "executionContractId": "b32da0d46a6eebc64b92cff0db7141752d6e893bca1ec6d2527e70f67e40d656",
+                  "executionGeneration": 0
+                },
+                "invocation": {
+                  "kind": "provider",
+                  "commandId": "prompt.stop.test",
+                  "providerAttemptId": "41e45019-d934-40fe-8f26-13b9f4139c39",
+                  "logicalInvocationId": "a16c2b72-4ef7-4568-838c-fdfae00612c4",
+                  "measurementId": null,
+                  "reservedAt": "2026-11-03T11:40:44.039Z",
+                  "observationBinding": null,
+                  "providerAttemptContext": {
+                    "attemptId": "41e45019-d934-40fe-8f26-13b9f4139c39",
+                    "logicalInvocationId": "a16c2b72-4ef7-4568-838c-fdfae00612c4",
+                    "commandId": "prompt.stop.test",
+                    "provider": "node",
+                    "providerKey": "node",
+                    "profileKey": "local",
+                    "attemptIndex": 0,
+                    "index": 0,
+                    "attempt": 1,
+                    "maxAttempts": 1,
+                    "inputCharacters": 7,
+                    "measurementId": null,
+                    "observationBinding": null
+                  },
+                  "promptProcessIdentity": {
+                    "batchDigest": "1beb8af368778bb850e7454937b643fc3d3440277ccb2d941d1c14f3333b960f",
+                    "responseCallIndex": 0,
+                    "transportOrdinal": 1,
+                    "attempt": 1,
+                    "maxAttempts": 1,
+                    "requestDigest": "7239a4fac1b46ae43410820fd4330d1688fcdc3b360e40521cd3047b95f8b277",
+                    "schemaDigest": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+                    "providerKey": "node",
+                    "profileKey": "local",
+                    "logicalInvocationId": "a16c2b72-4ef7-4568-838c-fdfae00612c4",
+                    "providerAttemptId": "41e45019-d934-40fe-8f26-13b9f4139c39",
+                    "scope": {
+                      "stage": "map",
+                      "round": 0
+                    }
+                  },
+                  "command": {
+                    "program": {
+                      "value": null,
+                      "reason": "absolute-path"
+                    },
+                    "argv": [
+                      {
+                        "position": 0,
+                        "value": null,
+                        "reason": "not-public"
+                      },
+                      {
+                        "position": 1,
+                        "value": null,
+                        "reason": "not-public"
+                      }
+                    ],
+                    "cwd": {
+                      "value": "inherited",
+                      "reason": null
+                    },
+                    "complete": false
+                  },
+                  "executionIdentity": {
+                    "executableDigest": "4e0bbedf42502e560557d3f4717bc138eb7731abb5e9f0db30b08381435c63bb",
+                    "nodeImportDigests": []
+                  }
+                },
+                "invocationDigest": "f7fad50d4778b3b6b04f3bd61ea127fd1063fbcfd823123b1093a3c4451db4fe",
+                "executor": {
+                  "executorId": "809e1a36-9fd9-422c-8f13-f841810ddf8e",
+                  "executorSession": "84f367e7-6485-4d72-a199-5f7b7a6b0161",
+                  "launchClaim": "a684603f-b315-41dc-bf90-503c51a7dba6"
+                },
+                "observation": {
+                  "executor": {
+                    "executorId": "809e1a36-9fd9-422c-8f13-f841810ddf8e",
+                    "executorSession": "84f367e7-6485-4d72-a199-5f7b7a6b0161",
+                    "launchClaim": "a684603f-b315-41dc-bf90-503c51a7dba6"
+                  },
+                  "kind": "exited",
+                  "code": 0,
+                  "signal": null,
+                  "errorCode": null,
+                  "observedAt": "2026-11-03T11:40:44.545Z"
+                },
+                "output": {
+                  "stdoutBytes": 6,
+                  "stderrBytes": 0,
+                  "completion": "complete",
+                  "cutoffAt": "2026-11-03T11:40:44.917Z"
+                },
+                "closureRevision": 4,
+                "descendants": [],
+                "stopOperation": null,
+                "outcomeDigest": "5f490997e51f95e61483773e7a9f24839a323763129b9daae11a2942636b095c"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

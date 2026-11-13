@@ -3,8 +3,8 @@ import { AgentTimeout } from "./agent-timeout.js";
 import { CommandInvocation, normalizeCommandInvocation } from "./command-invocation.js";
 import { ProcessExecutionRuntime, ProcessExecutionGrant, ProcessExecutionControlFailure, PROCESS_EXECUTION_SCOPE_ENV } from "./process-execution-runtime.js";
 import { ProcessExecutionStopReceipt } from "./process-execution-values.js";
-import { runCommandInSynchronousBridge } from "./process-execution-sync.js";
-import { processExecutionPublicationFailure } from "./process-execution-completion.js";
+import { runCommandInSynchronousBridge, runCommandsInSynchronousBridge } from "./process-execution-sync.js";
+import { processExecutionPublicationFailure, retainExecutionCompletion, processExecutionControlFailureFromCause } from "./process-execution-completion.js";
 
 const DEFAULT_PROCESS_MAX_BUFFER = 1024 * 1024;
 
@@ -62,36 +62,141 @@ function rejectedSignal(signal, options) {
   return null;
 }
 
+function currentCommandGrant(runtime) {
+  let grant = runtime?.remoteGrant() ?? null;
+  if (grant === null && process.env[PROCESS_EXECUTION_SCOPE_ENV] !== undefined) {
+    try { grant = new ProcessExecutionGrant(JSON.parse(process.env[PROCESS_EXECUTION_SCOPE_ENV])).toJSON(); }
+    catch (cause) { throw new ProcessExecutionControlFailure("delegation-refused", "Inherited execution context is malformed", { cause }); }
+  }
+  return grant;
+}
+
+class SynchronousCommandCompletion {
+  constructor(value, failure, failed) {
+    if (typeof failed !== "boolean" || !failed && failure !== undefined) throw new TypeError("Synchronous completion requires its exact operation outcome");
+    this.value = value; this.failure = failure; this.failed = failed; Object.freeze(this);
+  }
+  unwrap() { if (this.failed) throw this.failure; return this.value; }
+  toResult(options) { return this.failed ? commandFailureResult(this.failure, options) : commandResult(this.value, options); }
+}
+
+function withSynchronousCommandPublication(runtime, invoke, normalizeCompletion = () => {}, grant = currentCommandGrant(runtime)) {
+  let result, bodyFailure;
+  let failed = false;
+  try { result = invoke(grant); }
+  catch (error) { failed = true; bodyFailure = error; }
+  try { runtime?.drainEventsSync(); }
+  catch (error) {
+    const completion = failed ? bodyFailure : result;
+    normalizeCompletion(completion);
+    throw processExecutionPublicationFailure(error, completion, {
+      executionId: runtime?.executionId ?? null, role: runtime?.parentCallId == null ? "executor" : "descendant",
+    });
+  }
+  return new SynchronousCommandCompletion(result, bodyFailure, failed);
+}
+
+/** One normalized command, reusable by scoped execution groups. */
+export class CommandExecution {
+  constructor(command, args = [], opts = {}) {
+    const { invocation, options } = invocationInput(command, args, opts);
+    // Invocation owns captured cwd/environment/stdio. Reapplying mutable
+    // producer options at run time would change that normalized provenance.
+    const { cwd: _cwd, env: _env, stdio: _stdio, ...executionOptions } = options;
+    this.invocation = invocation; this.options = Object.freeze(executionOptions); Object.freeze(this);
+  }
+  acceptResult(result) { return result; }
+  run() { return this.acceptResult(runCmd(this.invocation, [], this.options)); }
+  async runAsync() { return this.acceptResult(await runCmdAsync(this.invocation, [], this.options)); }
+  static runTogether(executions) {
+    executions = [...executions];
+    return runCmdBatch(executions).map((result, index) => executions[index].acceptResult(result));
+  }
+}
+
+/** Failure retains every settled member without inventing one group receipt. */
+export class CommandExecutionBatchFailure extends AggregateError {
+  constructor(errors, outcomes, results, indices = []) {
+    if (errors.length === 0) throw new TypeError("Command group failure requires an actual failed operation");
+    super(errors, "Independent command group could not complete every registered operation", { cause: errors[0] });
+    this.name = "CommandExecutionBatchFailure";
+    this.outcomes = Object.freeze([...outcomes]); this.results = Object.freeze([...results]);
+    this.outcomeIndices = Object.freeze(indices.slice(0, outcomes.length));
+  }
+  /** Preserve the first exact control provenance and every sibling cause.
+   * Its receipt, when present, belongs only to that named call, not the group.
+   */
+  controlFailure() {
+    return processExecutionControlFailureFromCause(this);
+  }
+}
+
 /** A persistent worker owns execution while this thread waits synchronously. */
 export function runCmd(command, args, opts = {}) {
   const { invocation, options } = invocationInput(command, args, opts);
   const rejected = rejectedSignal(options.signal, options);
   if (rejected !== null) return rejected;
   const runtime = ProcessExecutionRuntime.current();
-  let grant = runtime?.remoteGrant() ?? null;
-  if (grant === null && process.env[PROCESS_EXECUTION_SCOPE_ENV] !== undefined) {
-    try { grant = new ProcessExecutionGrant(JSON.parse(process.env[PROCESS_EXECUTION_SCOPE_ENV])).toJSON(); }
-    catch (cause) { throw new ProcessExecutionControlFailure("delegation-refused", "Inherited execution context is malformed", { cause }); }
-  }
-  let result, bodyFailure;
-  let failed = false;
-  try {
-    result = runCommandInSynchronousBridge(invocation, { ...options,
-      timeout: options.timeout || new AgentTimeout().toMilliseconds(), maxBuffer: options.maxBuffer ?? DEFAULT_PROCESS_MAX_BUFFER,
-    }, grant);
-  } catch (error) { failed = true; bodyFailure = error; }
-  try { runtime?.drainEventsSync(); }
-  catch (error) {
-    const completion = failed ? bodyFailure : result;
+  const completed = withSynchronousCommandPublication(runtime, (grant) => runCommandInSynchronousBridge(invocation, { ...options,
+    timeout: options.timeout || new AgentTimeout().toMilliseconds(), maxBuffer: options.maxBuffer ?? DEFAULT_PROCESS_MAX_BUFFER,
+  }, grant), (completion) => {
     if (completion?.processExecutionStopReceipt != null) {
       completion.stdout = output(completion.stdout, options.encoding);
       completion.stderr = output(completion.stderr, options.encoding);
     }
-    throw processExecutionPublicationFailure(error, completion, {
-      executionId: runtime?.executionId ?? null, role: runtime?.parentCallId == null ? "executor" : "descendant",
-    });
+  });
+  return completed.toResult(options);
+}
+
+/** Execute all independent members and retain each original result contract. */
+export function runCmdBatch(executions) {
+  executions = [...executions];
+  if (executions.some((execution) => !(execution instanceof CommandExecution))) throw new TypeError("Command group requires normalized CommandExecution entries");
+  const results = executions.map((execution) => rejectedSignal(execution.options.signal, execution.options));
+  const indices = executions.flatMap((_execution, index) => results[index] === null ? [index] : []);
+  if (indices.length === 0) return results;
+  const runtime = ProcessExecutionRuntime.current();
+  const grant = currentCommandGrant(runtime);
+  if (grant === null) {
+    // Without shared scoped authority, preserve each original owning lifetime
+    // and communication deadline. A control refusal stops later unscheduled
+    // members, exactly as ordinary sequential use of the existing API.
+    for (const index of indices) {
+      const execution = executions[index];
+      try { results[index] = runCmd(execution.invocation, [], execution.options); }
+      catch (error) { throw new CommandExecutionBatchFailure([error], [], results); }
+    }
+    return results;
   }
-  return failed ? commandFailureResult(bodyFailure, options) : commandResult(result, options);
+  const selected = indices.map((index) => new CommandExecution(executions[index].invocation, [], {
+    ...executions[index].options, timeout: executions[index].options.timeout || new AgentTimeout().toMilliseconds(),
+    maxBuffer: executions[index].options.maxBuffer ?? DEFAULT_PROCESS_MAX_BUFFER,
+  }));
+  let outcomes = [];
+  let completed;
+  try {
+    completed = withSynchronousCommandPublication(runtime, () => {
+      outcomes = runCommandsInSynchronousBridge(selected, grant); return outcomes;
+    }, undefined, grant);
+  } catch (publication) {
+    const errors = [publication];
+    for (const outcome of outcomes) { try { outcome.unwrap(); } catch (error) { errors.push(error); } }
+    throw new CommandExecutionBatchFailure(errors, outcomes, results, indices);
+  }
+  try { completed.unwrap(); }
+  catch (error) { throw new CommandExecutionBatchFailure([error], outcomes, results, indices); }
+  const errors = [];
+  outcomes.forEach((outcome, offset) => {
+    const index = indices[offset], options = executions[index].options;
+    let value, bodyFailure;
+    let failed = false;
+    try { value = outcome.unwrap(); }
+    catch (error) { failed = true; bodyFailure = error; }
+    try { results[index] = failed ? commandFailureResult(bodyFailure, options) : commandResult(value, options); }
+    catch (failure) { errors.push(failure); }
+  });
+  if (errors.length !== 0) throw new CommandExecutionBatchFailure(errors, outcomes, results, indices);
+  return results;
 }
 
 export async function runCmdAsync(command, args, opts = {}) {

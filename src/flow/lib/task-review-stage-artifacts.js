@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import { SourceExecutionObservationAppends } from "./source-execution-observation-appends.js";
 import { TaskRepairRecurrence } from "./review-recurrence.js";
+import { SourceMutationManifestValue } from "./source-mutation-manifest.js";
 import { CanonicalCommandAttemptArtifactHistory } from "./canonical-command-result.js";
 import { TaskReviewAccounting, canonicalTaskReviewHistory } from "./task-review-accounting.js";
 import { TaskStepIdentity } from "./task-step-identity.js";
@@ -59,7 +60,7 @@ function canonicalSpecFromView(view) {
  * metric-only canonical observation that may occur while that child runs.
  */
 export class TaskReviewPublicationBinding {
-  constructor({ executionIdentity, source, context, specDigest, baseline, manifest, canonicalObservation } = {}) {
+  constructor({ executionIdentity, source, context, specDigest, baseline, manifest, canonicalObservation, executionObservations = null } = {}) {
     if (!(executionIdentity instanceof TaskReviewExecutionIdentity)) throw new Error("Task Review publication requires its execution identity");
     if (!(source instanceof CurrentTaskSourceSnapshot)) throw new Error("Task Review publication requires its source snapshot");
     if (!(context instanceof CanonicalTaskContext)) throw new Error("Task Review publication requires its canonical context");
@@ -82,7 +83,7 @@ export class TaskReviewPublicationBinding {
       || baseline.attempt.sequence !== executionIdentity.attempt.sequence || baseline.attempt.nodeId !== executionIdentity.attempt.nodeId) {
       throw new Error("Task Review publication binding is internally inconsistent");
     }
-    manifest.assertBinding(baseline);
+    manifest.assertBinding(baseline, { executionObservations });
     if (manifest.mutations.length !== 0) throw new Error("Task Review publication cannot bind source mutations");
     Object.freeze(this);
   }
@@ -211,6 +212,16 @@ export class TaskStageArtifact {
     }
     const bytes = flowManager.readArtifact({ specId: state.specId, logicalKey: this.logicalKey, parameters: { taskId }, consumerNodeId: "system" }).bytes;
     const history = CanonicalCommandAttemptArtifactHistory.fromBytes({ logicalKey: this.logicalKey, bytes });
+    if (role === "repair") {
+      for (const record of history.attempts) {
+        const manifest = SourceMutationManifestValue.fromStored(record.payload.sourceMutationManifest);
+        if (manifest.attempt.nodeId !== new TaskStepIdentity({ taskId, role }).nodeId
+          || manifest.attempt.sequence !== record.attempt
+          || JSON.stringify(manifest.attempt.toJSON()) !== JSON.stringify(record.payload.attempt)) {
+          throw new Error("canonical Task repair source manifest does not bind its exact producing Attempt");
+        }
+      }
+    }
     const activity = flowManager.activityLedger(state.specId).find((entry) => entry.id === descriptor.activityId);
     if (activity?.nodeId !== new TaskStepIdentity({ taskId, role }).nodeId || activity.sequence !== history.current.attempt) throw new Error(`canonical Task ${role} producer does not match its history`);
     this.history = role === "review" ? canonicalTaskReviewHistory({ flowManager, state, taskId, history, descriptor, bytes }) : history;

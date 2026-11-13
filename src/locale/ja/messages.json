@@ -9,6 +9,8 @@
     "privateText": "返却されたエラーコードを保守担当者へ提示し、継続前に診断内容の確認を依頼してください。",
     "privateDiagnostic": "機密情報を含む診断テキストを非公開にしました。",
     "unconfirmed": "未確認",
+    "runtimeRecordPreview": "永続データを変更せず、runtime 記録の移行をプレビューしてください。{{cwd}} から {{executable}} に次の引数をそれぞれそのまま渡して実行してください: {{args}}。",
+    "runtimeRecordUnconfirmed": "実行の終了と移行可能性は未確認です。プレビューは、安全性を確認できない証拠や不完全な証拠を拒否することがあります。",
     "processControl": "プロセス実行制御が停止しました（{{code}}）。最初の原因は {{causeCode}} です。完了・保存・停止証明は確認済みの事実だけを表示します。",
     "actions": {
       "authentication": "新しい試行を開始する前に、プロバイダーの認証を修復または更新してください。",
@@ -29,6 +31,7 @@
       "empty_response": "プロバイダーから応答がありませんでした（{{code}}）。"
     },
     "codes": {
+      "PROCESS_EXECUTION_RUNTIME_RECORD_MIGRATION_REQUIRED": "runtime 実行記録は旧形式です。実行と Flow 継続を拒否しました。移行の安全性を判断する前に、選択済みの読取り専用プレビューを実行してください。",
       "PROCESS_EXECUTION_FINALIZATION_PENDING": "Flow の最終化は登録済みプロセスの正確な終了証跡を待っています（{{code}}）。この Flow の新規プロセス受付は停止済みです。完了は未確認です。",
       "PROCESS_EXECUTION_ACTIVITY_PENDING": "Flow の最終化はプロセスの事実の永続化確認を待っています（{{code}}）。保存済みの受付停止境界は維持されます。完了は未確認です。",
       "PROCESS_EXECUTION_OBSERVATION_SAVE_FAILED": "プロセスの事実を永続化できませんでした（{{code}}）。Flow の最終化には予約済みの全プロセス結果の記録が必要です。最終化済みの履歴に新しい事実は追加できません。",

@@ -11,7 +11,16 @@ import { AtomicFile } from "./atomic-file.js";
 import { FileLock, FileLockWaitPolicy } from "./file-lock.js";
 import { ProcessExecutionRuntime } from "./process-execution-runtime.js";
 import { RealDirectoryAuthority } from "./real-directory-authority.js";
-import { captureRegularFile, MAX_IN_MEMORY_FILE_BYTES } from "./regular-file-snapshot.js";
+import {
+  captureRegularFile,
+  RegularFileCaptureRequest,
+  RegularFileReadError,
+  RegularFileSnapshot,
+  RegularFileSnapshotGroup,
+  MAX_IN_MEMORY_FILE_BYTES,
+} from "./regular-file-snapshot.js";
+import { ProcessStopArtifactEncoding } from "./process-execution-values.js";
+import { HASH_BOUND_PROCESS_EVIDENCE_KEYS, ProcessStopArtifactProof } from "./process-evidence-artifact-encoding.js";
 import { removeRegularFile } from "./regular-file-io.js";
 import { LogicalRelativePath } from "./portable-path.js";
 import { NativeAbsolutePath } from "./native-path.js";
@@ -98,6 +107,7 @@ const SOURCE_HANDOFF_TASK_ARTIFACTS = new Set([
 const MIGRATION_CATALOG_INITIALIZATION = Symbol("migration-catalog-initialization");
 const CATALOG_LOCK_RETRY_INTERVAL_MS = 250;
 const CATALOG_LOCK_WAIT_TIMEOUT_MS = 10_000;
+const CATALOG_CAPTURE_BATCH_BYTES = 8 * 1024 * 1024;
 const ACTIVE_VERSION_TRANSACTIONS = new Set();
 const FLOW_STATE_RELATIVE_PATH = FLOW_ARTIFACT_CONTRACTS.resolve("flow.state").relativePath;
 const FLOW_ACTIVITIES_RELATIVE_PATH = FLOW_ARTIFACT_CONTRACTS.resolve("flow.activities").relativePath;
@@ -176,8 +186,8 @@ function codeUnitOrder(left, right) { return left < right ? -1 : left > right ? 
 function assertFilesystemAuthority(authority, target, { mustExist = false } = {}) {
   const root = authority.directory;
   const resolved = path.resolve(target);
-  if (resolved !== root) new NativeAbsolutePath(resolved).toLogical(authority);
-  else authority.assertStable();
+  const directoryAuthority = resolved !== root ? new NativeAbsolutePath(resolved).resolveAuthority(authority).directoryAuthority : null;
+  if (resolved === root) authority.assertStable();
   if (mustExist) {
     try { fs.lstatSync(resolved); }
     catch (cause) {
@@ -185,6 +195,7 @@ function assertFilesystemAuthority(authority, target, { mustExist = false } = {}
       throw cause;
     }
   }
+  return directoryAuthority;
 }
 
 function catalogManagedPath(value) {
@@ -402,7 +413,12 @@ export class VersionTreeSnapshot {
       if (!(entry instanceof FileTreeEntry)) continue;
       const absolute = this.location.resolve(entry.path);
       const parent = ensureDirectory(path.dirname(absolute));
-      new AtomicFile(absolute, { directoryAuthority: parent }).write(entry.bytes);
+      const file = new AtomicFile(absolute, { directoryAuthority: parent });
+      // Restoring identical bytes must not replace an untouched artifact's
+      // physical generation: a retained Source checkpoint still owns it.
+      const visible = file.readSnapshot();
+      if (visible !== null && visible.bytes.equals(entry.bytes)) continue;
+      file.write(entry.bytes);
     }
     const restored = new VersionTreeSnapshot(this.location);
     if (restored.image.hash !== this.image.hash) throw new Error("Version rollback readback does not match its transaction image");
@@ -761,6 +777,9 @@ export class FlowVersionLocation {
     assertFilesystemAuthority(this.#repositoryAuthority, target, options);
     return target;
   }
+  fileDirectoryAuthority(value, options = {}) {
+    return assertFilesystemAuthority(this.#repositoryAuthority, this.resolve(value), options);
+  }
   relativePath(value) { return path.posix.join(this.relativeDirectory, relativePath(value, "version-relative path")); }
   resolve(value) { return path.join(this.directory, ...relativePath(value, "version-relative path").split("/")); }
   /** Migration-only preservation location; normal callers use artifact(logicalKey). */
@@ -905,6 +924,13 @@ export class FlowTaskArtifactLocation {
   }
 }
 
+function captureCatalogArtifactFile(location, relativePath, { maxBytes, onRead, label }) {
+  const directoryAuthority = location.fileDirectoryAuthority(relativePath, { mustExist: true });
+  return captureRegularFile(location.resolve(relativePath), {
+    label, maxBytes, requireSingleLink: true, onRead, directoryAuthority,
+  });
+}
+
 export class FlowArtifactDescriptor {
   constructor({ logicalKey = null, kind, relativePath: file, hash, size, mediaType, authoritySlot = null, authority, cardinality, memberId = null, publicationStep, retention, activityId = null, migrationMaterialization = false } = {}) {
     this.slot = authoritySlot instanceof ArtifactAuthoritySlot
@@ -950,26 +976,32 @@ export class FlowArtifactDescriptor {
     }
     Object.freeze(this);
   }
-  static fromFile({ location, logicalKey = null, authoritySlot, relativePath: file, mediaType, retention, activityId = null, migrationMaterialization = false } = {}) {
+  static fromFile({ location, logicalKey = null, authoritySlot, relativePath: file, mediaType, retention, activityId = null, migrationMaterialization = false, processEvidence = null, processEvidenceCatalog = null } = {}) {
     if (!(location instanceof FlowVersionLocation)) throw new Error("FlowVersionLocation is required to capture an artifact");
     if (!(authoritySlot instanceof ArtifactAuthoritySlot)) throw new Error("ArtifactAuthoritySlot is required to capture an artifact");
     if (activityId !== null && !(activityId instanceof FlowActivityId)) throw new Error("FlowActivityId is required for an artifact activity association");
     const safePath = relativePath(file, "artifact relativePath");
-    const filePath = location.resolve(safePath);
     if (!catalogManagedPath(safePath)) throw new Error(`artifact is outside catalog-managed storage: ${safePath}`);
-    location.assertAuthority(safePath, { mustExist: true });
-    const bytes = captureRegularFile(filePath, { label: "artifact", maxBytes: MAX_IN_MEMORY_FILE_BYTES, requireSingleLink: true }).bytes;
-    const descriptor = new FlowArtifactDescriptor({ logicalKey, authoritySlot, relativePath: safePath, hash: sha256(bytes), size: bytes.length, mediaType, retention, activityId: activityId?.toString() ?? null, migrationMaterialization });
-    if (descriptor.logicalKey !== null && !descriptor.logicalKey.startsWith("transition.")) {
-      FLOW_ARTIFACT_CONTRACTS.require(descriptor.logicalKey).assertContentPublication(null, bytes);
-    }
+    const snapshot = captureCatalogArtifactFile(location, safePath, { label: "artifact", maxBytes: MAX_IN_MEMORY_FILE_BYTES });
+    const descriptor = new FlowArtifactDescriptor({ logicalKey, authoritySlot, relativePath: safePath, hash: snapshot.digest, size: snapshot.byteLength, mediaType, retention, activityId: activityId?.toString() ?? null, migrationMaterialization });
+    descriptor.#assertCapturedContent(location, snapshot, { processEvidence, processEvidenceCatalog });
     return descriptor;
   }
-  verify(location) {
+  #assertCapturedContent(location, snapshot, { processEvidence = null, processEvidenceCatalog = null } = {}) {
+    if (processEvidenceCatalog !== null && !(processEvidenceCatalog instanceof FlowArtifactCatalog)) {
+      throw new TypeError("Artifact content encoding requires its owning catalog");
+    }
+    if (this.logicalKey !== null && !this.logicalKey.startsWith("transition.")) {
+      const bytes = snapshot.bytes;
+      const encoding = processEvidence ?? processEvidenceCatalog?.processStopEncoding(location, this.logicalKey, [bytes]) ?? null;
+      FLOW_ARTIFACT_CONTRACTS.require(this.logicalKey).assertContentPublication(null, bytes, { processEvidence: encoding });
+    }
+  }
+  verify(location, { processEvidence = null, processEvidenceCatalog = null } = {}) {
     const actual = FlowArtifactDescriptor.fromFile({
       location, logicalKey: this.logicalKey, authoritySlot: this.slot, relativePath: this.relativePath,
       mediaType: this.mediaType, retention: this.retention, migrationMaterialization: this.migrationMaterialization,
-      activityId: this.activityId == null ? null : new FlowActivityId(this.activityId),
+      activityId: this.activityId == null ? null : new FlowActivityId(this.activityId), processEvidence, processEvidenceCatalog,
     });
     if (actual.hash !== this.hash || actual.size !== this.size) throw new Error(`artifact content does not match the catalog: ${this.relativePath}`);
     return actual;
@@ -981,15 +1013,30 @@ export class FlowArtifactDescriptor {
     }
     return this;
   }
-  readBytes(location, { maxBytes = this.size, onRead = undefined } = {}) {
+  /** Physical bytes are untrusted content until their owning codec validates them. */
+  readPhysicalSnapshot(location, { maxBytes = this.size, onRead = undefined } = {}) {
     requireBoundedLimit(maxBytes, "canonical artifact maxBytes", { allowInfinity: false });
     if (this.size > maxBytes) throw new Error(`canonical artifact bytes exceed the read limit: ${this.relativePath}`);
-    location.assertAuthority(this.relativePath, { mustExist: true });
-    const bytes = captureRegularFile(location.resolve(this.relativePath), {
-      label: `canonical artifact ${this.relativePath}`, maxBytes, requireSingleLink: true, onRead,
-    }).bytes;
-    this.verifyBytes(bytes);
-    if (this.logicalKey !== null) FLOW_ARTIFACT_CONTRACTS.require(this.logicalKey).assertContentPublication(null, bytes);
+    const snapshot = captureCatalogArtifactFile(location, this.relativePath, {
+      label: `canonical artifact ${this.relativePath}`, maxBytes, onRead,
+    });
+    this.verifySnapshot(snapshot);
+    return snapshot;
+  }
+  verifySnapshot(snapshot) {
+    if (!(snapshot instanceof RegularFileSnapshot) || snapshot.byteLength !== this.size || snapshot.digest !== this.hash) {
+      throw new Error(`artifact content does not match the catalog: ${this.relativePath}`);
+    }
+    return this;
+  }
+  verifyCapturedSnapshot(location, snapshot, options = {}) {
+    this.verifySnapshot(snapshot);
+    this.#assertCapturedContent(location, snapshot, options);
+    return this;
+  }
+  readBytes(location, { maxBytes = this.size, onRead = undefined, processEvidence = null } = {}) {
+    const bytes = this.readPhysicalSnapshot(location, { maxBytes, onRead }).bytes;
+    if (this.logicalKey !== null) FLOW_ARTIFACT_CONTRACTS.require(this.logicalKey).assertContentPublication(null, bytes, { processEvidence });
     return bytes;
   }
   authorityKey() { return this.slot.claimKey(); }
@@ -1000,6 +1047,110 @@ export class FlowArtifactDescriptor {
       migrationMaterialization: this.migrationMaterialization,
     };
   }
+}
+
+/** Bound an exact catalog image and preserve its content-mismatch refusal. */
+class FlowArtifactCaptureRequest extends RegularFileCaptureRequest {
+  #artifact;
+
+  constructor(location, artifact, directoryAuthority) {
+    super(location.resolve(artifact.relativePath), {
+      label: "artifact", maxBytes: Math.min(artifact.size, MAX_IN_MEMORY_FILE_BYTES),
+      requireSingleLink: true, directoryAuthority,
+    });
+    this.#artifact = artifact;
+  }
+
+  capture(observation = null) {
+    try { return super.capture(observation); }
+    catch (cause) {
+      if (cause instanceof RegularFileReadError && cause.reason === "limit"
+        && this.#artifact.size < MAX_IN_MEMORY_FILE_BYTES) {
+        throw new Error(`artifact content does not match the catalog: ${this.#artifact.relativePath}`, { cause });
+      }
+      throw cause;
+    }
+  }
+}
+
+/** A bounded physical read with fresh directory identities for this batch. */
+class FlowArtifactCaptureBatch {
+  #location;
+  #snapshots;
+
+  constructor(location, artifacts) {
+    if (!(location instanceof FlowVersionLocation) || artifacts.length === 0
+      || artifacts.some((artifact) => !(artifact instanceof FlowArtifactDescriptor))) {
+      throw new TypeError("Catalog capture requires a Version location and artifact descriptors");
+    }
+    this.#location = location;
+    this.artifacts = Object.freeze([...artifacts]);
+    const directories = new Map();
+    const requests = this.artifacts.map((artifact) => {
+      const filePath = location.resolve(artifact.relativePath);
+      const parent = path.dirname(filePath);
+      if (!directories.has(parent)) {
+        directories.set(parent, location.fileDirectoryAuthority(artifact.relativePath, { mustExist: true }));
+      }
+      return new FlowArtifactCaptureRequest(location, artifact, directories.get(parent));
+    });
+    this.#snapshots = RegularFileSnapshotGroup.capture(requests);
+    Object.freeze(this);
+  }
+
+  static *capture(location, artifacts) {
+    let pending = [];
+    let bytes = 0;
+    for (const artifact of artifacts) {
+      if (pending.length > 0 && bytes + artifact.size > CATALOG_CAPTURE_BATCH_BYTES) {
+        yield new FlowArtifactCaptureBatch(location, pending);
+        pending = [];
+        bytes = 0;
+      }
+      pending.push(artifact);
+      bytes += artifact.size;
+    }
+    if (pending.length > 0) yield new FlowArtifactCaptureBatch(location, pending);
+  }
+
+  snapshotFor(artifact) { return this.#snapshots.get(this.#location.resolve(artifact.relativePath)); }
+}
+
+/** Hash-verified C0 bytes have no filesystem identity or liveness authority. */
+class CapturedCatalogArtifactBytes {
+  #bytes;
+  constructor(descriptor, bytes) {
+    descriptor.verifyBytes(bytes);
+    this.#bytes = Buffer.from(bytes);
+    Object.freeze(this);
+  }
+  get bytes() { return Buffer.from(this.#bytes); }
+  text() { return this.#bytes.toString("utf8"); }
+}
+
+/** One verified catalog observation and its already acquired pure encoding. */
+export class FlowArtifactReadSnapshot {
+  #snapshot;
+  #processEvidence;
+  constructor({ descriptor, snapshot, processEvidence = null }) {
+    if (!(descriptor instanceof FlowArtifactDescriptor)
+      || !(snapshot instanceof RegularFileSnapshot || snapshot instanceof CapturedCatalogArtifactBytes)
+      || processEvidence !== null && !(processEvidence instanceof ProcessStopArtifactEncoding)) {
+      throw new TypeError("Catalog artifact read requires typed captured values");
+    }
+    if (snapshot instanceof RegularFileSnapshot) descriptor.verifySnapshot(snapshot);
+    this.descriptor = Object.freeze(descriptor.toJSON());
+    this.relativePath = descriptor.relativePath;
+    this.#snapshot = snapshot;
+    this.#processEvidence = processEvidence;
+    Object.defineProperty(this, "bytes", { enumerable: true, get: () => this.#snapshot.bytes });
+    Object.freeze(this);
+  }
+  static fromCapturedBytes({ descriptor, bytes, processEvidence = null }) {
+    return new this({ descriptor, snapshot: new CapturedCatalogArtifactBytes(descriptor, bytes), processEvidence });
+  }
+  get processEvidence() { return this.#processEvidence; }
+  jsonDocument() { return JSON.parse(this.#snapshot.text()); }
 }
 
 /** Catalog-side view of the Activity fields that establish artifact updater provenance. */
@@ -1163,7 +1314,15 @@ class FlowArtifactActivityIndexFile {
   }
 
   read() {
-    const bytes = captureRegularFile(this.file, { label: "managed Flow artifact", maxBytes: MAX_IN_MEMORY_FILE_BYTES, requireSingleLink: true }).bytes;
+    const snapshot = captureRegularFile(this.file, { label: "managed Flow artifact", maxBytes: MAX_IN_MEMORY_FILE_BYTES, requireSingleLink: true });
+    return this.readCaptured(snapshot);
+  }
+
+  readCaptured(snapshot) {
+    if (!(snapshot instanceof RegularFileSnapshot) || snapshot.filePath !== this.file) {
+      throw new TypeError("Activity index requires its captured ledger snapshot");
+    }
+    const bytes = snapshot.bytes;
     if (this.#bytes !== null && bytes.equals(this.#bytes)) return this.#index;
     const index = FlowArtifactActivityIndex.fromBytes(bytes);
     this.#bytes = Buffer.from(bytes);
@@ -1191,6 +1350,9 @@ export class FlowArtifactCatalog {
     }
     this.schemaRevision = schemaRevision;
     this.artifacts = Object.freeze(sorted);
+    let hasProcessStopProofs = false;
+    for (const artifact of sorted) if (ProcessStopArtifactProof.assertDescriptor(artifact)) hasProcessStopProofs = true;
+    this.hasProcessStopProofs = hasProcessStopProofs;
     this.hash = sha256(Buffer.from(JSON.stringify(this.content()), "utf8"));
     Object.freeze(this);
   }
@@ -1225,6 +1387,55 @@ export class FlowArtifactCatalog {
     if (!result) throw new Error(`artifact is not cataloged: ${file}`);
     return result;
   }
+  #stopProofDescriptors(logicalKey, bodies) {
+    if (!this.hasProcessStopProofs) return [];
+    const digests = new Set(bodies.filter(bytes => bytes !== null)
+      .flatMap(bytes => ProcessStopArtifactProof.requiredDigests(logicalKey, bytes)));
+    return [...digests].map(digest => {
+      const descriptor = this.resolve(ProcessStopArtifactProof.pathFor(digest));
+      ProcessStopArtifactProof.assertDescriptor(descriptor);
+      return descriptor;
+    });
+  }
+  #stopProofReceipt(descriptor, bytes) {
+    descriptor.verifyBytes(bytes);
+    return ProcessStopArtifactProof.fromBytes(bytes, descriptor.relativePath).receipt;
+  }
+  processStopEncodingFromCaptured(logicalKey, bodies, readArtifact) {
+    const descriptors = this.#stopProofDescriptors(logicalKey, bodies);
+    if (descriptors.length === 0) return null;
+    return new ProcessStopArtifactEncoding(descriptors.map(descriptor =>
+      this.#stopProofReceipt(descriptor, readArtifact(descriptor))));
+  }
+  processStopEncoding(location, logicalKey, bodies) {
+    return this.processStopEncodingFromCaptured(logicalKey, bodies,
+      descriptor => descriptor.readBytes(location, { maxBytes: MAX_IN_MEMORY_FILE_BYTES }));
+  }
+  async processStopEncodingSnapshot(logicalKey, bodies, readArtifact) {
+    const descriptors = this.#stopProofDescriptors(logicalKey, bodies);
+    if (descriptors.length === 0) return null;
+    const receipts = [];
+    for (const descriptor of descriptors) {
+      receipts.push(this.#stopProofReceipt(descriptor, await readArtifact(descriptor)));
+    }
+    return new ProcessStopArtifactEncoding(receipts);
+  }
+  #captureArtifact(location, descriptor, { maxBytes, onRead, processEvidence = null } = {}) {
+    const snapshot = descriptor.readPhysicalSnapshot(location, { maxBytes, onRead });
+    const contract = descriptor.logicalKey === null ? null : FLOW_ARTIFACT_CONTRACTS.require(descriptor.logicalKey);
+    let encoding = processEvidence;
+    if (encoding === null && this.hasProcessStopProofs && HASH_BOUND_PROCESS_EVIDENCE_KEYS.includes(descriptor.logicalKey)) {
+      encoding = this.processStopEncoding(location, descriptor.logicalKey, [snapshot.bytes]);
+    }
+    if (ProcessStopArtifactProof.isProofPath(descriptor.relativePath)) {
+      ProcessStopArtifactProof.fromBytes(snapshot.bytes, descriptor.relativePath);
+    }
+    if (contract?.contentContract != null) contract.assertContentPublication(null, snapshot.bytes, { processEvidence: encoding });
+    return new FlowArtifactReadSnapshot({ descriptor, snapshot, processEvidence: encoding });
+  }
+  readArtifact(location, relativePath, options = {}) {
+    return this.#captureArtifact(location, this.resolve(relativePath), options);
+  }
   relatedActivity(file, location, activityIndexFile = null) {
     if (!(location instanceof FlowVersionLocation)) throw new Error("FlowVersionLocation is required to resolve an artifact Activity");
     if (activityIndexFile !== null && !(activityIndexFile instanceof FlowArtifactActivityIndexFile)) {
@@ -1237,7 +1448,7 @@ export class FlowArtifactCatalog {
     const activityIndex = activityIndexFile?.read() ?? FlowArtifactActivityIndex.fromFile(location.activitiesFile);
     return activityIndex.require(artifact.activityId).assertRelatedArtifact(artifact);
   }
-  verify(location, activityIndexFile = null) {
+  verify(location, activityIndexFile = null, { processEvidence = null } = {}) {
     if (!(location instanceof FlowVersionLocation)) throw new Error("FlowVersionLocation is required to verify an artifact catalog");
     if (activityIndexFile !== null && !(activityIndexFile instanceof FlowArtifactActivityIndexFile)) {
       throw new Error("FlowArtifactActivityIndexFile is required to verify an artifact catalog");
@@ -1246,21 +1457,33 @@ export class FlowArtifactCatalog {
     const actual = new Set(FlowArtifactCatalog.managedFiles(location));
     const cataloged = new Set(this.artifacts.map((artifact) => artifact.relativePath));
     for (const file of actual) if (!cataloged.has(file)) throw new Error(`catalog-managed artifact is missing from the catalog: ${file}`);
-    for (const artifact of this.artifacts) artifact.verify(location);
     const ledger = this.artifacts.find((artifact) => artifact.relativePath === FLOW_ACTIVITIES_RELATIVE_PATH);
     const associated = this.artifacts.filter((artifact) => artifact.activityId !== null);
+    let activityIndex = null;
     if (ledger || associated.length > 0) {
       if (!ledger) throw new Error(`cataloged Activity associations require ${FLOW_ACTIVITIES_RELATIVE_PATH}`);
-      const activityIndex = activityIndexFile?.read() ?? FlowArtifactActivityIndex.fromFile(location.activitiesFile);
-      for (const artifact of associated) {
-        const activity = activityIndex.require(artifact.activityId).assertRelatedArtifact(artifact);
-        if (artifact.logicalKey !== null) {
-          const contract = FLOW_ARTIFACT_CONTRACTS.require(artifact.logicalKey);
-          contract.contentContract?.assertCatalogAssociation({
-            bytes: captureRegularFile(location.resolve(artifact.relativePath), { label: "managed Flow artifact", maxBytes: MAX_IN_MEMORY_FILE_BYTES, requireSingleLink: true }).bytes,
-            descriptor: artifact,
-            activity,
-          });
+      const snapshot = ledger.readPhysicalSnapshot(location, { maxBytes: MAX_IN_MEMORY_FILE_BYTES });
+      activityIndex = activityIndexFile?.readCaptured(snapshot) ?? FlowArtifactActivityIndex.fromBytes(snapshot.bytes);
+    }
+    for (const batch of FlowArtifactCaptureBatch.capture(location, this.artifacts)) {
+      for (const artifact of batch.artifacts) {
+        const snapshot = batch.snapshotFor(artifact);
+        artifact.verifyCapturedSnapshot(location, snapshot, {
+          processEvidence, processEvidenceCatalog: this.hasProcessStopProofs ? this : null,
+        });
+        if (ProcessStopArtifactProof.isProofPath(artifact.relativePath)) {
+          ProcessStopArtifactProof.fromBytes(snapshot.bytes, artifact.relativePath);
+        }
+        if (artifact.activityId !== null) {
+          const activity = activityIndex.require(artifact.activityId).assertRelatedArtifact(artifact);
+          if (artifact.logicalKey !== null) {
+            const contract = FLOW_ARTIFACT_CONTRACTS.require(artifact.logicalKey);
+            const bytes = snapshot.bytes;
+            const encoding = processEvidence ?? this.processStopEncoding(location, artifact.logicalKey, [bytes]);
+            contract.contentContract?.assertCatalogAssociation({
+              bytes, descriptor: artifact, activity, processEvidence: encoding,
+            });
+          }
         }
       }
     }
@@ -1291,11 +1514,15 @@ export class FlowArtifactCatalog {
     for (const artifact of this.artifacts) {
       const bytes = artifact === ledger ? confirmedLedgerBytes : await readArtifact(artifact);
       artifact.verifyBytes(bytes);
+      if (ProcessStopArtifactProof.isProofPath(artifact.relativePath)) {
+        ProcessStopArtifactProof.fromBytes(bytes, artifact.relativePath);
+      }
       if (artifact.activityId !== null) {
         const activity = activityIndex.require(artifact.activityId).assertRelatedArtifact(artifact);
         if (artifact.logicalKey !== null) {
           const contract = FLOW_ARTIFACT_CONTRACTS.require(artifact.logicalKey);
-          contract.contentContract?.assertCatalogAssociation({ bytes, descriptor: artifact, activity });
+          const processEvidence = await this.processStopEncodingSnapshot(artifact.logicalKey, [bytes], readArtifact);
+          contract.contentContract?.assertCatalogAssociation({ bytes, descriptor: artifact, activity, processEvidence });
         }
       }
     }
@@ -1711,10 +1938,11 @@ export class FlowArtifactCatalogStore {
           }
         }
         for (const { artifact, contract } of contentPublications) {
-          contract.assertContentPublication(
-            previousContent.get(artifact.relativePath) ?? null,
-            captureRegularFile(this.location.resolve(artifact.relativePath), { label: "managed Flow artifact", maxBytes: MAX_IN_MEMORY_FILE_BYTES, requireSingleLink: true }).bytes,
-          );
+          const previousBytes = previousContent.get(artifact.relativePath) ?? null;
+          const nextBytes = captureRegularFile(this.location.resolve(artifact.relativePath), {
+            label: "managed Flow artifact", maxBytes: MAX_IN_MEMORY_FILE_BYTES, requireSingleLink: true }).bytes;
+          const processEvidence = previous.processStopEncoding(this.location, artifact.logicalKey, [previousBytes, nextBytes]);
+          contract.assertContentPublication(previousBytes, nextBytes, { processEvidence });
         }
         const descriptors = artifacts.map((artifact) => {
           const prior = previous.artifacts.find((entry) => entry.relativePath === artifact.relativePath);
@@ -1726,6 +1954,7 @@ export class FlowArtifactCatalogStore {
             ...artifact,
             activityId,
             migrationMaterialization: prior?.migrationMaterialization === true,
+            processEvidenceCatalog: previous,
           });
           const contract = descriptor.logicalKey === null ? null : FLOW_ARTIFACT_CONTRACTS.require(descriptor.logicalKey);
           contract?.mutationPolicy.assertPublication(prior, descriptor);

@@ -62,12 +62,12 @@ test("closed runtime executions leave bounded active metadata and archived recei
 
 test("pre-publication capacity refusal keeps the visible registry complete and the same owner usable", async (t) => {
   const { acquire, directory } = fixture(t); const runtime = await acquire();
-  const file = path.join(directory, "registry.json"), before = fs.readFileSync(file);
+  const file = path.join(directory, "registry.json"), before = runtime.inspect();
   const invocation = { content: "x".repeat(17 * 1024 * 1024) }, grant = runtime.remoteGrant();
   await assert.rejects(runtime.reserveCall({ invocation }),
     (error) => error instanceof ProcessExecutionControlFailure && error.code === "PROCESS_EXECUTION_RECORD_CAPACITY");
-  const committed = JSON.parse(fs.readFileSync(file));
-  const root = committed.payload.executions.find((entry) => entry.executionId === runtime.executionId);
+  const committed = runtime.inspect();
+  const root = committed.executions.find((entry) => entry.executionId === runtime.executionId);
   const accepted = root.requests.at(-1);
   assert.equal(accepted.operation, "reserve");
   assert.equal(accepted.response.ok, false);
@@ -77,10 +77,9 @@ test("pre-publication capacity refusal keeps the visible registry complete and t
   const request = new ManagedProcessMessage(grant, "reserve", { grant, data: { binding: runtime.binding.toJSON(),
     invocation, timeoutMs: null, graceMs: DEFAULT_REGISTERED_CHILD_GRACE_MS } }, { requestId: accepted.requestId });
   assert.equal(accepted.payloadDigest, request.payloadDigest);
-  const expected = JSON.parse(before);
-  expected.payload.executions.find((entry) => entry.executionId === runtime.executionId).requests.push(accepted);
-  expected.digest = executionValueDigest(expected.payload);
-  assert.equal(fs.readFileSync(file).equals(Buffer.from(JSON.stringify(expected))), true,
+  const expected = JSON.parse(JSON.stringify(before));
+  expected.executions.find((entry) => entry.executionId === runtime.executionId).requests.push(accepted);
+  assert.equal(executionValueDigest(committed), executionValueDigest(expected),
     "only the exact reserve acceptance and completed refusal may be added for an oversized intent");
   assert.deepEqual(root.calls, []); assert.deepEqual(root.events, []);
   assert.deepEqual(fs.readdirSync(runtime.store.callsAuthority.directory), []);
@@ -96,8 +95,38 @@ test("pre-publication capacity refusal keeps the visible registry complete and t
       return true;
     });
   assert.equal(fs.readFileSync(file).equals(refused), true, "the same request must replay its exact completed refusal");
-  const result = await runtime.enter(() => executeManagedProcess(process.execPath,
-    ["-e", "process.stdout.write('same owner remains usable')"], { timeoutMs: 10000 }));
+  const reserve = runtime.reserveCall;
+  runtime.reserveCall = function (options) {
+    console.error(JSON.stringify({ capacityFollowupInputSizes: {
+      invocationBytes: Buffer.byteLength(JSON.stringify(options)),
+      launchBytes: Buffer.byteLength(JSON.stringify(options.launch ?? null)),
+      environmentBytes: Buffer.byteLength(JSON.stringify(options.launch?.env ?? null)),
+    } }));
+    return Reflect.apply(reserve, this, [options]);
+  };
+  let result;
+  try {
+    result = await runtime.enter(() => executeManagedProcess(process.execPath,
+      ["-e", "process.stdout.write('same owner remains usable')"], { timeoutMs: 10000 }));
+  } catch (error) {
+    const pending = [{ error, path: [] }], seen = new Set();
+    for (let index = 0; index < pending.length && index < 12; index++) {
+      const { error: failure, path: causePath } = pending[index];
+      if (failure == null || seen.has(failure)) continue;
+      seen.add(failure);
+      console.error(JSON.stringify({ capacityFollowupFailure: {
+        causePath, name: failure.name ?? null, code: failure.code ?? null,
+        messageHead: String(failure.message ?? "").slice(0, 512),
+        primaryCause: failure instanceof ProcessExecutionControlFailure ? failure.primaryCause.toJSON() : null,
+        communication: failure instanceof ProcessExecutionControlFailure ? failure.communication?.toJSON() ?? null : null,
+        diagnostic: failure instanceof ProcessExecutionControlFailure ? failure.diagnostic?.toJSON() ?? null : null,
+        hasStopReceipt: failure.processExecutionStopReceipt !== undefined,
+      } }));
+      if (failure instanceof AggregateError) for (const [ordinal, member] of failure.errors.entries()) pending.push({ error: member, path: [...causePath, "errors", ordinal] });
+      if (failure.cause != null) pending.push({ error: failure.cause, path: [...causePath, "cause"] });
+    }
+    throw error;
+  } finally { runtime.reserveCall = reserve; }
   assert.equal(result.stdout, "same owner remains usable");
   assert.equal(result.processExecutionStopReceipt.observation.kind, "exited");
   await runtime.close();

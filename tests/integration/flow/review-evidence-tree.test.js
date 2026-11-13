@@ -3,6 +3,7 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, it } from "node:test";
+import { FileIdentity } from "../../../src/lib/file-identity.js";
 import { resolveCurrentReviewTreeSha } from "../../../src/flow/lib/review-evidence-store.js";
 import { createTmpDir, removeTmpDir } from "../../support/builders/tmp-dir.js";
 
@@ -61,4 +62,32 @@ describe("resolveCurrentReviewTreeSha", () => {
     fs.writeFileSync(path.join(tmp, "subject.js"), "export const value = 2;\n");
     assert.notEqual(resolveCurrentReviewTreeSha(tmp, specPath), baseline);
   });
+
+  it("preserves index bytes and generation after a same-byte source replacement", () => {
+    tmp = createTmpDir("review-evidence-tree-");
+    git("init", "-q", "-b", "main");
+    git("config", "user.email", "test@example.com");
+    git("config", "user.name", "Test User");
+    git("config", "diff.autoRefreshIndex", "true");
+    const subject = path.join(tmp, "subject.js");
+    const bytes = Buffer.from("export const value = 1;\n");
+    fs.writeFileSync(subject, bytes);
+    git("add", "subject.js");
+    git("commit", "-q", "-m", "baseline");
+    const expectedTree = git("rev-parse", "HEAD^{tree}");
+
+    const replacement = path.join(tmp, "replacement.js");
+    fs.writeFileSync(replacement, bytes);
+    fs.renameSync(replacement, subject);
+    fs.utimesSync(subject, 1_000_000_000, 1_000_000_000);
+    const index = path.join(tmp, ".git", "index");
+    const indexBytes = fs.readFileSync(index);
+    const indexGeneration = FileIdentity.capture(fs.statSync(index, { bigint: true }));
+
+    assert.equal(resolveCurrentReviewTreeSha(tmp), expectedTree);
+    assert.deepEqual(fs.readFileSync(subject), bytes);
+    assert.deepEqual(fs.readFileSync(index), indexBytes);
+    assert.deepEqual(FileIdentity.capture(fs.statSync(index, { bigint: true })), indexGeneration);
+  });
+
 });

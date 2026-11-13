@@ -1,0 +1,38 @@
+{
+  "version": 1,
+  "identity": {
+    "flowIdentity": {
+      "flowId": "flow-run-source-checkpoint-implement-direct",
+      "flowVersionId": "flow-v1-run-source-checkpoint-implement-direct",
+      "runId": "run-source-checkpoint-implement-direct",
+      "specId": "source-checkpoint-implement-direct",
+      "issue": null
+    },
+    "runId": "run-source-checkpoint-implement-direct",
+    "specId": "source-checkpoint-implement-direct",
+    "issue": null,
+    "stepId": "implement",
+    "taskId": null,
+    "attempt": {
+      "id": "attempt-implement-0c9ccd9e-59aa-4390-8139-e82aba89c1c3",
+      "nodeId": "implement",
+      "sequence": 1
+    },
+    "nodeId": "implement",
+    "dispatchInvocationId": "dispatch-implement-attempt-implement-0c9ccd9e-59aa-4390-8139-e82aba89c1c3",
+    "actionDigest": "580fd54c2a4881159ce9d2963c587da0be4f80ac0270080dcb8befe19eca47c0",
+    "inputDigest": "555af255678f61891af809592b9a1e2515710ca98c5b6e5e3519e06c0b8c11a7",
+    "policyRevision": "56cc23f5ffe6559498e8a5c5c91ab5ccc47f1e50f0786c841859df5c56ffb5d3",
+    "canonicalGeneration": "48cf717c451d242461f88af01444469c9745edc1ef899763c7f6d54efb3cd677"
+  },
+  "checkpointDigest": "7ef7e481ad2b9335690665a3c43a3f8ff6723ffce8937278befb2fc723603792",
+  "sequence": 1,
+  "previousDigest": null,
+  "kind": "prepared",
+  "requestDigest": null,
+  "rollbackPlanDigest": null,
+  "sourceManifest": null,
+  "workerStopped": null,
+  "failureFacts": null,
+  "digest": "968e21c8877e1c0735a2602228d72e788f988eb5a17b09e6ee476f12805269ae"
+}

@@ -39,6 +39,7 @@ import { FlowRepositoryRuntimeArtifactRegistry } from "./flow-repository-runtime
 import { LockOwnerSession } from "../../lib/process-lock.js";
 import { ProcessExecutionCheckoutIdentity, ProcessExecutionControlFailure } from "../../lib/process-execution-values.js";
 import { ProcessExecutionRuntime, captureProcessExecutionCheckoutIdentity } from "../../lib/process-execution-runtime.js";
+import { withRuntimeRecordMigrationPreview } from "../../lib/process-runtime-migration-guidance.js";
 import { PrepareStepBinding, prepareStepRegistration } from "../engine/composition/prepare.js";
 import { PreparationEvidence } from "./preparation-evidence.js";
 import { isStepPersistenceFailure } from "./definition-lifecycle-failure.js";
@@ -603,11 +604,12 @@ class WorktreePrepareAttemptJournal {
       throw new ProcessExecutionControlFailure("owner-busy", "Prepare journal still belongs to this active repository operation");
     }
     const origin = snapshot.record.checkoutIdentity;
-    const inventory = ProcessExecutionRuntime.inspect({ mainRoot: origin.mainRoot, executionRoot: origin.executionRoot });
+    const runtimeRoots = { mainRoot: origin.mainRoot, executionRoot: origin.executionRoot };
+    const inventory = withRuntimeRecordMigrationPreview(runtimeRoots, () => ProcessExecutionRuntime.inspect(runtimeRoots));
     if (inventory !== null && !origin.matches(new ProcessExecutionCheckoutIdentity(inventory.checkout))) {
       throw new ProcessExecutionControlFailure("authority-mismatch", "Prepare recovery checkout no longer matches its saved physical origin");
     }
-    ProcessExecutionRuntime.assertQuiescent({ mainRoot: origin.mainRoot, executionRoot: origin.executionRoot });
+    withRuntimeRecordMigrationPreview(runtimeRoots, () => ProcessExecutionRuntime.assertQuiescent(runtimeRoots));
     // Acquiring the same canonical exclusion authority proves the prior writer
     // relinquished it. A crashed holder leaves the lock busy and never reaches
     // this boundary. This says nothing about effects: validate their receipts

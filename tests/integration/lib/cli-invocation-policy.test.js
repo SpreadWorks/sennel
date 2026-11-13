@@ -24,6 +24,24 @@ test('inspection storage requires trusted route metadata and a declared option p
   }
 });
 
+test('only trusted core migration metadata bypasses ordinary runtime initialization', () => {
+  for (const argv of [['migrate', 'layout', '--to', '1'], ['migrate', 'specs', '--to', '5', '--dry-run']]) {
+    assert.equal(new CliInvocationPolicy(coreCommandRegistry, argv).migration, true);
+  }
+  for (const argv of [['unknown-plugin', 'migrate'], ['docs', 'build', '--dry-run'], ['command', '--', 'migrate']]) {
+    assert.equal(new CliInvocationPolicy(coreCommandRegistry, argv).migration, false);
+  }
+});
+
+test('context metric writes use normal storage while pure Flow queries and context help use inspection storage', () => {
+  for (const argv of [['flow', 'get', 'context'], ['flow', 'get', 'context', 'docs/context.md', '--raw']]) {
+    assert.equal(new CliInvocationPolicy(coreCommandRegistry, argv).readOnly, false, JSON.stringify(argv));
+  }
+  for (const argv of [['flow', 'get', 'status'], ['flow', 'get', 'next-action'], ['flow', 'get', 'context', '--help']]) {
+    assert.equal(new CliInvocationPolicy(coreCommandRegistry, argv).readOnly, true, JSON.stringify(argv));
+  }
+});
+
 function tree(root) {
   const files = [];
   const visit = (directory) => {

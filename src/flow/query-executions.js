@@ -1,4 +1,5 @@
 import { ProcessExecutionRuntime } from "../lib/process-execution-runtime.js";
+import { withRuntimeRecordMigrationPreview } from "../lib/process-runtime-migration-guidance.js";
 import { validateSchema } from "../lib/schema-validate.js";
 import { captureExecutionObservations, executionProducerCoverage } from "../lib/flow-execution-observation.js";
 import { FLOW_ARTIFACT_CONTRACTS } from "../lib/flow-artifact-contract.js";
@@ -165,24 +166,26 @@ export class QueryExecutionInputs {
   }
 
   static async capture({ mainRoot, state, activities, catalog, readArtifact, artifactCapture }) {
-    let observations;
+    let capturedObservations;
     try {
-      observations = (await captureExecutionObservations({ catalog, readArtifact,
-        expectedBinding: { flowVersionId: state.flowVersionId, runId: state.runId, specId: state.specId } })).toJSON();
+      capturedObservations = await captureExecutionObservations({ catalog, readArtifact,
+        expectedBinding: { flowVersionId: state.flowVersionId, runId: state.runId, specId: state.specId } });
     } catch (cause) {
       if (cause instanceof QueryError) throw cause;
       inconsistent("Canonical execution observations are inconsistent", cause);
     }
+    const observations = capturedObservations.toJSON();
     const attempts = new Set(activities.flatMap((activity) => [activity.attemptId, activity.transition.attempt?.id]).filter(Boolean));
     if (state.attempt) attempts.add(state.attempt.id);
     const runtimeSources = [];
     const seen = new Set();
-    for (const manifest of observations.manifests) {
+    for (const manifest of capturedObservations.manifests) {
       if (manifest.runtimeSourceId === null || seen.has(manifest.runtimeSourceId)) continue;
       seen.add(manifest.runtimeSourceId);
       try {
-        const captured = ProcessExecutionRuntime.readHistoricalInventory({ mainRoot, executionRoot: manifest.checkoutIdentity.executionRoot,
-          checkoutIdentity: manifest.checkoutIdentity, runId: state.runId, specId: state.specId });
+        const runtimeRoots = { mainRoot, executionRoot: manifest.checkoutIdentity.executionRoot };
+        const captured = withRuntimeRecordMigrationPreview(runtimeRoots, () => ProcessExecutionRuntime.readHistoricalInventory({ ...runtimeRoots,
+          checkoutIdentity: manifest.checkoutIdentity, runId: state.runId, specId: state.specId }));
         const executions = captured.executions.map(serialize).map((execution) => ({ executionId: execution.executionId,
           status: execution.status, calls: execution.calls.map(serialize).filter((call) => {
             const binding = call.binding;

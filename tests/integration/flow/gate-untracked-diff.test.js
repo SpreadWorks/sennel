@@ -20,8 +20,11 @@ import { describe, it, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import fs from "fs";
 import path from "path";
-import { execFileSync } from "child_process";
+import { execFileSync, spawnSync } from "child_process";
+import { devNull } from "node:os";
 import { createTmpDir, removeTmpDir } from "../../support/builders/tmp-dir.js";
+import { testTemporaryRoot } from "../../test-environment.js";
+import { FlowRepositoryRuntimeArtifactRegistry } from "../../../src/flow/lib/flow-repository-runtime-artifacts.js";
 import {
   collectUntrackedDiff,
 } from "../../../src/flow/lib/run-gate.js";
@@ -208,5 +211,50 @@ describe("collectUntrackedDiff — bounded resource usage (REQ-6)", () => {
     await assert.doesNotReject(() =>
       collectUntrackedDiff(root, { maxFiles: 5, maxFileSize: 100 }),
     );
+  });
+});
+
+describe("collectUntrackedDiff — retained runtime artifacts", () => {
+  it("excludes retained CLI runtime files before bounded Git capture and keeps every selected source diff", async () => {
+    const root = newRepo();
+    try {
+      fs.writeFileSync(path.join(root, ".gitignore"), "!/.tmp/\n!/.tmp/**\n!/.sennel/\n!/.sennel/**\n");
+      execFileSync("git", ["-C", root, "add", ".gitignore"], { encoding: "utf8" });
+      execFileSync("git", ["-C", root, "-c", "user.email=t@t", "-c", "user.name=t",
+        "commit", "--quiet", "-m", "Include retained diagnostics in the Git fixture"], { encoding: "utf8" });
+      const noisePrefix = ".tmp/logs/archive/";
+      const filename = (index) => "entry-" + String(index).padStart(5, "0") + "-history.log";
+      const pathnameBytes = Buffer.byteLength(noisePrefix + filename(0) + "\0");
+      const retainedDiagnosticCount = Math.floor((1024 * 1024) / pathnameBytes) + 1;
+      assert.ok(retainedDiagnosticCount * pathnameBytes > 1024 * 1024,
+        "the excluded pathname listing alone exceeds the original 1MiB capture cap");
+      fs.mkdirSync(path.join(root, noisePrefix), { recursive: true });
+      for (let index = 0; index < retainedDiagnosticCount; index += 1) {
+        fs.writeFileSync(path.join(root, noisePrefix, filename(index)), "");
+      }
+      const sources = [
+        ["src/retained file.js", "export const retained = true;\n"],
+        [".sennel/process-runtime-notes.txt", "Ordinary source beside a runtime prefix remains visible.\n"],
+        [".sennel/specs/802-scope/artifacts/tests/source/kept.test.js", "export const keepTestSource = true;\n"],
+      ].sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0);
+      const runtimeArtifacts = new FlowRepositoryRuntimeArtifactRegistry();
+      assert.equal(runtimeArtifacts.owns(noisePrefix + filename(0)), true);
+      const expected = sources.map(([relative, body]) => {
+        assert.equal(runtimeArtifacts.owns(relative), false);
+        fs.mkdirSync(path.dirname(path.join(root, relative)), { recursive: true });
+        fs.writeFileSync(path.join(root, relative), body);
+        const result = spawnSync("git", ["diff", "--no-index", "--no-color", "--", devNull, relative], {
+          cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"],
+        });
+        assert.equal(result.status, 1);
+        assert.equal(result.signal, null);
+        return result.stdout;
+      }).join("");
+      const diff = await collectUntrackedDiff(root, { excludeFile: (relative) => runtimeArtifacts.owns(relative) });
+      assert.equal(diff, expected);
+    } catch (error) {
+      testTemporaryRoot().retainOnUnconfirmedExecution();
+      throw error;
+    }
   });
 });

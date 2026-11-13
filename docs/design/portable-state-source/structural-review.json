@@ -1,0 +1,535 @@
+{
+  "scope": "Concrete source reviews for the archived feature-snapshot report. Raw NOT_PASS is unchanged. Temporary runtime namespaces and working logs are retired after verified main merge.",
+  "productionLocations": [
+    {
+      "rule": "OS03",
+      "file": "src/lib/regular-file-snapshot.js",
+      "line": 23,
+      "disposition": "NATIVE_PERMISSION_HINT_PLATFORM_CONTRACT_PRESENT",
+      "evidence": [
+        "FilePermissionHint.fromStat captures native metadata",
+        "FilePermissionHint.matches checks Windows writability explicitly",
+        "FilePermissionHint.matchesAfterWrite models native write results",
+        "SourceWorkingFileCapture.observeGitMode delegates the Windows Git mode observation to native Git"
+      ],
+      "sourceReferences": [
+        "src/lib/regular-file-snapshot.js:15",
+        "src/lib/regular-file-snapshot.js:27",
+        "src/flow/lib/source-working-file-capture.js:24",
+        "src/lib/atomic-file.js:183"
+      ],
+      "primaryApi": "https://nodejs.org/download/release/v18.19.0/docs/api/fs.html#fsfchmodsyncfd-mode",
+      "apiObservation": "The supported Node API exposes native file permissions. Its Windows chmod contract changes write permission and omits POSIX owner/group distinctions. The implementation compares its captured hint with that native contract.",
+      "nativeWindowsStatus": "AGREED_SKIP",
+      "currentRawDiagnostic": {
+        "rule": "OS03",
+        "file": "src/lib/regular-file-snapshot.js",
+        "line": 23,
+        "column": 35,
+        "trace": [
+          "src/lib/regular-file-snapshot.js"
+        ],
+        "message": "UID/mode mutation requires a corresponding Windows authority implementation; required without an implementation on win32",
+        "classification": "violation"
+      },
+      "reuseBasis": "Exact production source bytes and complete raw diagnostic match the reviewed prior report."
+    },
+    {
+      "rule": "OS02",
+      "file": "src/lib/bootstrap-process.js",
+      "line": 18,
+      "disposition": "SHARED_TYPED_GIT_INVOCATION_PRESENT_AT_FIXED_BOOTSTRAP_LEAF",
+      "evidence": [
+        "Only repository-root and common-directory probes are accepted",
+        "GitRepositoryPolicy.invocation returns NativeExecutableInvocation",
+        "The physical spawn uses that invocation executable, argv and processOptions, shellfalse and fixed read-only probe bounds"
+      ],
+      "sourceReferences": [
+        "src/lib/bootstrap-process.js:4",
+        "src/lib/bootstrap-process.js:17",
+        "src/lib/git-repository-environment.js:92"
+      ],
+      "currentRawDiagnostic": {
+        "rule": "OS02",
+        "file": "src/lib/bootstrap-process.js",
+        "line": 18,
+        "column": 18,
+        "trace": [
+          "src/lib/repository-maintenance-lock.js",
+          "src/lib/bootstrap-process.js"
+        ],
+        "message": "direct child_process launch bypasses the shared typed invocation boundary",
+        "classification": "violation"
+      },
+      "reuseBasis": "Exact production source bytes and complete raw diagnostic match the reviewed prior report."
+    },
+    {
+      "rule": "OS02",
+      "file": "src/lib/runtime-package.js",
+      "line": 180,
+      "disposition": "EXISTING_OWNED_RUNTIME_CONTROL_CHILD_BOOTSTRAP_BOUNDARY",
+      "evidence": [
+        "The fixed Node executable uses its captured runtime delivery",
+        "RuntimeChildExecution retains the actual ChildProcess handle and exit/launch-failure callbacks",
+        "CoordinatorChildControl.launch is the sole production spawnNode caller",
+        "Delivery cleanup consumes exact acknowledgement or owned physical exit evidence"
+      ],
+      "sourceReferences": [
+        "src/lib/runtime-package.js:177",
+        "src/lib/runtime-package.js:183",
+        "src/lib/runtime-package.js:234",
+        "src/lib/process-execution-runtime.js:5052"
+      ],
+      "currentRawDiagnostic": {
+        "rule": "OS02",
+        "file": "src/lib/runtime-package.js",
+        "line": 180,
+        "column": 19,
+        "trace": [
+          "src/lib/runtime-package.js"
+        ],
+        "message": "direct child_process launch bypasses the shared typed invocation boundary",
+        "classification": "violation"
+      },
+      "reuseBasis": "Exact production source bytes and complete raw diagnostic match the reviewed prior report."
+    },
+    {
+      "rule": "OS02",
+      "file": "src/lib/runtime-package.js",
+      "line": 160,
+      "disposition": "DEFAULT_SHARED_RUNNER_AND_EXPLICIT_TEST_PRODUCER_TRACE",
+      "evidence": [
+        "RuntimeChildExecution.runSync defaults to shared runCmd",
+        "The reported trace originates in tests/support/builders/metrics-token.js",
+        "The injectable runner receives the captured runtime delivery"
+      ],
+      "sourceReferences": [
+        "src/lib/runtime-package.js:157",
+        "src/lib/runtime-package.js:163"
+      ],
+      "currentRawDiagnostic": {
+        "rule": "OS02",
+        "file": "src/lib/runtime-package.js",
+        "line": 160,
+        "column": 27,
+        "trace": [
+          "tests/support/builders/metrics-token.js",
+          "src/lib/runtime-package.js"
+        ],
+        "message": "direct child_process launch bypasses the shared typed invocation boundary",
+        "classification": "violation"
+      },
+      "reuseBasis": "Exact production source bytes and complete raw diagnostic match the reviewed prior report."
+    }
+  ],
+  "testInfrastructureLocations": [
+    {
+      "diagnostic": {
+        "rule": "OS02",
+        "file": "tests/support/infrastructure/git-repo.js",
+        "line": 4,
+        "column": 10,
+        "trace": [
+          "tests/support/builders/metrics-token.js",
+          "tests/support/infrastructure/git-repo.js"
+        ],
+        "message": "direct child_process launch bypasses the shared typed invocation boundary",
+        "classification": "violation"
+      },
+      "sourceSha256": "ba9afdf2b282dbbf6e4bb935a3b5aae94b64e523032480dc6a0bf3d4a50f582e",
+      "reviewClassification": "TEST_HARNESS_EXTERNAL_NATIVE_OBSERVATION_OR_FIXTURE",
+      "reason": "Test-only infrastructure creates controlled Git/CLI/process/legacy/prototype fixtures or observes native handles. No src domain execution path calls this site. Original diagnostics remain visible; not a whole-auditor PASS or an actual product bypass exemption.",
+      "basis": "Exact current file bytes and complete raw diagnostic equal the individually reviewed v29 site."
+    },
+    {
+      "diagnostic": {
+        "rule": "OS02",
+        "file": "tests/support/infrastructure/prepare-process.js",
+        "line": 33,
+        "column": 20,
+        "trace": [
+          "tests/support/infrastructure/prepare-process.js"
+        ],
+        "message": "direct child_process launch bypasses the shared typed invocation boundary",
+        "classification": "violation"
+      },
+      "sourceSha256": "ce9413c9c5cc6782d28103fa8b82163c15e2fcd2a734a5e59c3b705ec088d216",
+      "reviewClassification": "TEST_HARNESS_EXTERNAL_NATIVE_OBSERVATION_OR_FIXTURE",
+      "reason": "Test-only infrastructure creates controlled Git/CLI/process/legacy/prototype fixtures or observes native handles. No src domain execution path calls this site. Original diagnostics remain visible; not a whole-auditor PASS or an actual product bypass exemption.",
+      "basis": "Exact current file bytes and complete raw diagnostic equal the individually reviewed v29 site."
+    },
+    {
+      "diagnostic": {
+        "rule": "OS02",
+        "file": "tests/support/prepare-artifact-scenario.js",
+        "line": 72,
+        "column": 20,
+        "trace": [
+          "tests/support/prepare-artifact-scenario.js"
+        ],
+        "message": "direct child_process launch bypasses the shared typed invocation boundary",
+        "classification": "violation"
+      },
+      "sourceSha256": "bc365efd4b7599c1f00c033967bbdaa9159359503fe3801b9e4a1862caeeca7a",
+      "reviewClassification": "TEST_HARNESS_EXTERNAL_NATIVE_OBSERVATION_OR_FIXTURE",
+      "reason": "Test-only infrastructure creates controlled Git/CLI/process/legacy/prototype fixtures or observes native handles. No src domain execution path calls this site. Original diagnostics remain visible; not a whole-auditor PASS or an actual product bypass exemption.",
+      "basis": "Exact current file bytes and complete raw diagnostic equal the individually reviewed v29 site."
+    },
+    {
+      "diagnostic": {
+        "rule": "OS02",
+        "file": "tests/support/prepare-artifact-scenario.js",
+        "line": 136,
+        "column": 20,
+        "trace": [
+          "tests/support/prepare-artifact-scenario.js"
+        ],
+        "message": "direct child_process launch bypasses the shared typed invocation boundary",
+        "classification": "violation"
+      },
+      "sourceSha256": "bc365efd4b7599c1f00c033967bbdaa9159359503fe3801b9e4a1862caeeca7a",
+      "reviewClassification": "TEST_HARNESS_EXTERNAL_NATIVE_OBSERVATION_OR_FIXTURE",
+      "reason": "Test-only infrastructure creates controlled Git/CLI/process/legacy/prototype fixtures or observes native handles. No src domain execution path calls this site. Original diagnostics remain visible; not a whole-auditor PASS or an actual product bypass exemption.",
+      "basis": "Exact current file bytes and complete raw diagnostic equal the individually reviewed v29 site."
+    },
+    {
+      "diagnostic": {
+        "rule": "OS02",
+        "file": "tests/support/acceptance-phase-scenario.js",
+        "line": 167,
+        "column": 22,
+        "trace": [
+          "tests/support/acceptance-phase-scenario.js"
+        ],
+        "message": "direct child_process launch bypasses the shared typed invocation boundary",
+        "classification": "violation"
+      },
+      "sourceSha256": "ef5ac23d68ca28cdad1ed7e92ee5f4c77b5be0d10fe170130f03f4c67a4a4e14",
+      "reviewClassification": "TEST_HARNESS_EXTERNAL_NATIVE_OBSERVATION_OR_FIXTURE",
+      "reason": "Test-only infrastructure creates controlled Git/CLI/process/legacy/prototype fixtures or observes native handles. No src domain execution path calls this site. Original diagnostics remain visible; not a whole-auditor PASS or an actual product bypass exemption.",
+      "basis": "Exact current file bytes and complete raw diagnostic equal the individually reviewed v29 site."
+    },
+    {
+      "diagnostic": {
+        "rule": "OS02",
+        "file": "tests/support/builders/flow-query-fixture.js",
+        "line": 89,
+        "column": 18,
+        "trace": [
+          "tests/support/builders/flow-query-fixture.js"
+        ],
+        "message": "direct child_process launch bypasses the shared typed invocation boundary",
+        "classification": "violation"
+      },
+      "sourceSha256": "9030a65a3f81ec3ea11b3fba500a9eec173c800bc36b83ac569f2ede8f3bcc1c",
+      "reviewClassification": "TEST_HARNESS_EXTERNAL_NATIVE_OBSERVATION_OR_FIXTURE",
+      "reason": "Test-only infrastructure creates controlled Git/CLI/process/legacy/prototype fixtures or observes native handles. No src domain execution path calls this site. Original diagnostics remain visible; not a whole-auditor PASS or an actual product bypass exemption.",
+      "basis": "Exact current file bytes and complete raw diagnostic equal the individually reviewed v29 site."
+    },
+    {
+      "diagnostic": {
+        "rule": "OS02",
+        "file": "tests/support/builders/flow-query-fixture.js",
+        "line": 147,
+        "column": 12,
+        "trace": [
+          "tests/support/builders/flow-query-fixture.js"
+        ],
+        "message": "direct child_process launch bypasses the shared typed invocation boundary",
+        "classification": "violation"
+      },
+      "sourceSha256": "9030a65a3f81ec3ea11b3fba500a9eec173c800bc36b83ac569f2ede8f3bcc1c",
+      "reviewClassification": "TEST_HARNESS_EXTERNAL_NATIVE_OBSERVATION_OR_FIXTURE",
+      "reason": "Test-only infrastructure creates controlled Git/CLI/process/legacy/prototype fixtures or observes native handles. No src domain execution path calls this site. Original diagnostics remain visible; not a whole-auditor PASS or an actual product bypass exemption.",
+      "basis": "Exact current file bytes and complete raw diagnostic equal the individually reviewed v29 site."
+    },
+    {
+      "diagnostic": {
+        "rule": "OS02",
+        "file": "tests/support/finalization-phase-scenario.js",
+        "line": 94,
+        "column": 14,
+        "trace": [
+          "tests/support/finalization-phase-scenario.js"
+        ],
+        "message": "direct child_process launch bypasses the shared typed invocation boundary",
+        "classification": "violation"
+      },
+      "sourceSha256": "f48fb8e13618fb66da11d327d8a11bfd34203a698ad56fad4f1268472ec805e6",
+      "reviewClassification": "TEST_HARNESS_EXTERNAL_NATIVE_OBSERVATION_OR_FIXTURE",
+      "reason": "Test-only infrastructure creates controlled Git/CLI/process/legacy/prototype fixtures or observes native handles. No src domain execution path calls this site. Original diagnostics remain visible; not a whole-auditor PASS or an actual product bypass exemption.",
+      "basis": "Exact current file bytes and complete raw diagnostic equal the individually reviewed v29 site."
+    },
+    {
+      "diagnostic": {
+        "rule": "OS02",
+        "file": "tests/support/infrastructure/external-lock-owner.js",
+        "line": 58,
+        "column": 18,
+        "trace": [
+          "tests/support/infrastructure/external-lock-owner.js"
+        ],
+        "message": "direct child_process launch bypasses the shared typed invocation boundary",
+        "classification": "violation"
+      },
+      "sourceSha256": "7aecfeaf88ca6aee92fedbe97aa42924885d7824ae8e1413ed195213e9ac2703",
+      "reviewClassification": "TEST_HARNESS_EXTERNAL_NATIVE_OBSERVATION_OR_FIXTURE",
+      "reason": "Test-only infrastructure creates controlled Git/CLI/process/legacy/prototype fixtures or observes native handles. No src domain execution path calls this site. Original diagnostics remain visible; not a whole-auditor PASS or an actual product bypass exemption.",
+      "basis": "Exact current file bytes and complete raw diagnostic equal the individually reviewed v29 site."
+    },
+    {
+      "diagnostic": {
+        "rule": "OS02",
+        "file": "tests/support/infrastructure/impl-phase-recovery.js",
+        "line": 96,
+        "column": 21,
+        "trace": [
+          "tests/support/infrastructure/impl-phase-recovery.js"
+        ],
+        "message": "direct child_process launch bypasses the shared typed invocation boundary",
+        "classification": "violation"
+      },
+      "sourceSha256": "8504914f1537cf27962cf526ba72e8a1f65897af71c2ebc2c04273f52e8a446d",
+      "reviewClassification": "TEST_HARNESS_EXTERNAL_NATIVE_OBSERVATION_OR_FIXTURE",
+      "reason": "Test-only infrastructure creates controlled Git/CLI/process/legacy/prototype fixtures or observes native handles. No src domain execution path calls this site. Original diagnostics remain visible; not a whole-auditor PASS or an actual product bypass exemption.",
+      "basis": "Exact current file bytes and complete raw diagnostic equal the individually reviewed v29 site."
+    },
+    {
+      "diagnostic": {
+        "rule": "OS02",
+        "file": "tests/support/infrastructure/interrupted-child.js",
+        "line": 40,
+        "column": 17,
+        "trace": [
+          "tests/support/infrastructure/interrupted-child.js"
+        ],
+        "message": "direct child_process launch bypasses the shared typed invocation boundary",
+        "classification": "violation"
+      },
+      "sourceSha256": "049a87484b7b266f9530f6c87f63f7b7410f67a6ed411caa0567711c019d2a5a",
+      "reviewClassification": "TEST_OWNED_CHECKPOINT_FAULT_INJECTION_AND_ACTUAL_CLOSE",
+      "reason": [
+        "Test-only caller explicitly supplies its new child command, cwd, environment and checkpoint; spawn uses shell:false and returns the concrete owned ChildProcess.",
+        "The fault-injection branch kills only this newly created ChildProcess after observing its requested fixture checkpoint; no PID lookup, namespace recovery, foreign-owner selection or signal to an existing runtime.",
+        "A close promise is installed immediately, all results use the actual close tuple/PID, and finally clears the timer, terminates only its still-running own child if needed and awaits actual close.",
+        "New ExitedChildResult/FailedChildResult constructors require a normal numeric exit with null signal; interrupted outcome rejects an unexpected successful completion. These additions shift the original unchanged spawn call from line19 to40.",
+        "Literal imports/references are in tests; src has no import/reference to this fixture helper. Current raw diagnostic and trace must still be matched before reuse."
+      ],
+      "basis": "Fresh current source/constructor/caller review; exact native call and actual-v67 diagnostic retained."
+    },
+    {
+      "diagnostic": {
+        "rule": "OS02",
+        "file": "tests/support/infrastructure/process-management-prototype/client.mjs",
+        "line": 155,
+        "column": 13,
+        "trace": [
+          "tests/support/infrastructure/process-management-prototype/fixture.mjs",
+          "tests/support/infrastructure/process-management-prototype/client.mjs"
+        ],
+        "message": "direct child_process launch bypasses the shared typed invocation boundary",
+        "classification": "violation"
+      },
+      "sourceSha256": "b2a69e91b7f3dd788b313572063749b773c394e120906826477774616380ff32",
+      "reviewClassification": "TEST_HARNESS_EXTERNAL_NATIVE_OBSERVATION_OR_FIXTURE",
+      "reason": "Test-only infrastructure creates controlled Git/CLI/process/legacy/prototype fixtures or observes native handles. No src domain execution path calls this site. Original diagnostics remain visible; not a whole-auditor PASS or an actual product bypass exemption.",
+      "basis": "Exact current file bytes and complete raw diagnostic equal the individually reviewed v29 site."
+    },
+    {
+      "diagnostic": {
+        "rule": "OS02",
+        "file": "tests/support/infrastructure/process-management-prototype/coordinator.mjs",
+        "line": 149,
+        "column": 18,
+        "trace": [
+          "tests/support/infrastructure/process-management-prototype/coordinator.mjs"
+        ],
+        "message": "direct child_process launch bypasses the shared typed invocation boundary",
+        "classification": "violation"
+      },
+      "sourceSha256": "af8544ce311b9b750c4af86c792fce9cb48dc31d8581e56b9ced8c3e63618c1b",
+      "reviewClassification": "TEST_HARNESS_EXTERNAL_NATIVE_OBSERVATION_OR_FIXTURE",
+      "reason": "Test-only infrastructure creates controlled Git/CLI/process/legacy/prototype fixtures or observes native handles. No src domain execution path calls this site. Original diagnostics remain visible; not a whole-auditor PASS or an actual product bypass exemption.",
+      "basis": "Exact current file bytes and complete raw diagnostic equal the individually reviewed v29 site."
+    },
+    {
+      "diagnostic": {
+        "rule": "OS02",
+        "file": "tests/support/infrastructure/process-management-prototype/fixture.mjs",
+        "line": 32,
+        "column": 3,
+        "trace": [
+          "tests/support/infrastructure/process-management-prototype/fixture.mjs"
+        ],
+        "message": "direct child_process launch bypasses the shared typed invocation boundary",
+        "classification": "violation"
+      },
+      "sourceSha256": "60cf1b520a08e92a20d124eb3afb71a9dc24d8eb86d2d53e5f777f246a70aca2",
+      "reviewClassification": "TEST_HARNESS_EXTERNAL_NATIVE_OBSERVATION_OR_FIXTURE",
+      "reason": "Test-only infrastructure creates controlled Git/CLI/process/legacy/prototype fixtures or observes native handles. No src domain execution path calls this site. Original diagnostics remain visible; not a whole-auditor PASS or an actual product bypass exemption.",
+      "basis": "Exact current file bytes and complete raw diagnostic equal the individually reviewed v29 site."
+    },
+    {
+      "diagnostic": {
+        "rule": "OS02",
+        "file": "tests/support/infrastructure/process-management-prototype/fixture.mjs",
+        "line": 41,
+        "column": 3,
+        "trace": [
+          "tests/support/infrastructure/process-management-prototype/fixture.mjs"
+        ],
+        "message": "direct child_process launch bypasses the shared typed invocation boundary",
+        "classification": "violation"
+      },
+      "sourceSha256": "60cf1b520a08e92a20d124eb3afb71a9dc24d8eb86d2d53e5f777f246a70aca2",
+      "reviewClassification": "TEST_HARNESS_EXTERNAL_NATIVE_OBSERVATION_OR_FIXTURE",
+      "reason": "Test-only infrastructure creates controlled Git/CLI/process/legacy/prototype fixtures or observes native handles. No src domain execution path calls this site. Original diagnostics remain visible; not a whole-auditor PASS or an actual product bypass exemption.",
+      "basis": "Exact current file bytes and complete raw diagnostic equal the individually reviewed v29 site."
+    },
+    {
+      "diagnostic": {
+        "rule": "OS02",
+        "file": "tests/support/infrastructure/process-management-prototype/harness.mjs",
+        "line": 24,
+        "column": 19,
+        "trace": [
+          "tests/support/infrastructure/process-management-prototype/measure.mjs",
+          "tests/support/infrastructure/process-management-prototype/harness.mjs"
+        ],
+        "message": "direct child_process launch bypasses the shared typed invocation boundary",
+        "classification": "violation"
+      },
+      "sourceSha256": "bd6f5db0c88386f89d2b3b4afc98020b4fcc4128e137ae34a2fce1c0b06194ec",
+      "reviewClassification": "TEST_HARNESS_EXTERNAL_NATIVE_OBSERVATION_OR_FIXTURE",
+      "reason": "Test-only infrastructure creates controlled Git/CLI/process/legacy/prototype fixtures or observes native handles. No src domain execution path calls this site. Original diagnostics remain visible; not a whole-auditor PASS or an actual product bypass exemption.",
+      "basis": "Exact current file bytes and complete raw diagnostic equal the individually reviewed v29 site."
+    },
+    {
+      "diagnostic": {
+        "rule": "OS02",
+        "file": "tests/support/infrastructure/process-management-prototype/harness.mjs",
+        "line": 61,
+        "column": 20,
+        "trace": [
+          "tests/support/infrastructure/process-management-prototype/harness.mjs"
+        ],
+        "message": "direct child_process launch bypasses the shared typed invocation boundary",
+        "classification": "violation"
+      },
+      "sourceSha256": "bd6f5db0c88386f89d2b3b4afc98020b4fcc4128e137ae34a2fce1c0b06194ec",
+      "reviewClassification": "TEST_HARNESS_EXTERNAL_NATIVE_OBSERVATION_OR_FIXTURE",
+      "reason": "Test-only infrastructure creates controlled Git/CLI/process/legacy/prototype fixtures or observes native handles. No src domain execution path calls this site. Original diagnostics remain visible; not a whole-auditor PASS or an actual product bypass exemption.",
+      "basis": "Exact current file bytes and complete raw diagnostic equal the individually reviewed v29 site."
+    },
+    {
+      "diagnostic": {
+        "rule": "OS02",
+        "file": "tests/support/infrastructure/process-management-prototype/measure.mjs",
+        "line": 12,
+        "column": 46,
+        "trace": [
+          "tests/support/infrastructure/process-management-prototype/measure.mjs"
+        ],
+        "message": "direct child_process launch bypasses the shared typed invocation boundary",
+        "classification": "violation"
+      },
+      "sourceSha256": "05b361ac203171067b394d1fc9941325eb7138d8180283051ad5018e58d63bc2",
+      "reviewClassification": "TEST_HARNESS_EXTERNAL_NATIVE_OBSERVATION_OR_FIXTURE",
+      "reason": "Test-only infrastructure creates controlled Git/CLI/process/legacy/prototype fixtures or observes native handles. No src domain execution path calls this site. Original diagnostics remain visible; not a whole-auditor PASS or an actual product bypass exemption.",
+      "basis": "Exact current file bytes and complete raw diagnostic equal the individually reviewed v29 site."
+    },
+    {
+      "diagnostic": {
+        "rule": "OS02",
+        "file": "tests/support/infrastructure/process-runtime-flow-scenario.js",
+        "line": 48,
+        "column": 25,
+        "trace": [
+          "tests/support/infrastructure/process-runtime-flow-scenario.js"
+        ],
+        "message": "direct child_process launch bypasses the shared typed invocation boundary",
+        "classification": "violation"
+      },
+      "sourceSha256": "17d95ba8abe7c0a3531cee7e71cc40fcc5ee7a42abf9fc8441405f065835d8e3",
+      "reviewClassification": "TEST_HARNESS_EXTERNAL_NATIVE_OBSERVATION_OR_FIXTURE",
+      "reason": "Test-only infrastructure creates controlled Git/CLI/process/legacy/prototype fixtures or observes native handles. No src domain execution path calls this site. Original diagnostics remain visible; not a whole-auditor PASS or an actual product bypass exemption.",
+      "basis": "Exact current file bytes and complete raw diagnostic equal the individually reviewed v29 site."
+    },
+    {
+      "diagnostic": {
+        "rule": "OS02",
+        "file": "tests/support/infrastructure/process-runtime-flow-scenario.js",
+        "line": 96,
+        "column": 20,
+        "trace": [
+          "tests/support/infrastructure/process-runtime-flow-scenario.js"
+        ],
+        "message": "direct child_process launch bypasses the shared typed invocation boundary",
+        "classification": "violation"
+      },
+      "sourceSha256": "17d95ba8abe7c0a3531cee7e71cc40fcc5ee7a42abf9fc8441405f065835d8e3",
+      "reviewClassification": "TEST_HARNESS_EXTERNAL_NATIVE_OBSERVATION_OR_FIXTURE",
+      "reason": "Test-only infrastructure creates controlled Git/CLI/process/legacy/prototype fixtures or observes native handles. No src domain execution path calls this site. Original diagnostics remain visible; not a whole-auditor PASS or an actual product bypass exemption.",
+      "basis": "Exact current file bytes and complete raw diagnostic equal the individually reviewed v29 site."
+    },
+    {
+      "diagnostic": {
+        "rule": "OS02",
+        "file": "tests/support/infrastructure/process-runtime-flow-scenario.js",
+        "line": 322,
+        "column": 5,
+        "trace": [
+          "tests/support/infrastructure/process-runtime-flow-scenario.js"
+        ],
+        "message": "direct child_process launch bypasses the shared typed invocation boundary",
+        "classification": "violation"
+      },
+      "sourceSha256": "17d95ba8abe7c0a3531cee7e71cc40fcc5ee7a42abf9fc8441405f065835d8e3",
+      "reviewClassification": "TEST_HARNESS_EXTERNAL_NATIVE_OBSERVATION_OR_FIXTURE",
+      "reason": "Test-only infrastructure creates controlled Git/CLI/process/legacy/prototype fixtures or observes native handles. No src domain execution path calls this site. Original diagnostics remain visible; not a whole-auditor PASS or an actual product bypass exemption.",
+      "basis": "Exact current file bytes and complete raw diagnostic equal the individually reviewed v29 site."
+    },
+    {
+      "diagnostic": {
+        "rule": "OS02",
+        "file": "tests/support/infrastructure/registered-child-observation.js",
+        "line": 18,
+        "column": 22,
+        "trace": [
+          "tests/support/infrastructure/registered-child-observation.js"
+        ],
+        "message": "direct child_process launch bypasses the shared typed invocation boundary",
+        "classification": "violation"
+      },
+      "sourceSha256": "81cdc8435bd8dfa0d51f49fc6960086092753590c15dc9f2c23e5987b9254437",
+      "reviewClassification": "TEST_HARNESS_EXTERNAL_NATIVE_OBSERVATION_OR_FIXTURE",
+      "reason": "Test-only infrastructure creates controlled Git/CLI/process/legacy/prototype fixtures or observes native handles. No src domain execution path calls this site. Original diagnostics remain visible; not a whole-auditor PASS or an actual product bypass exemption.",
+      "basis": "Exact current file bytes and complete raw diagnostic equal the individually reviewed v29 site."
+    },
+    {
+      "diagnostic": {
+        "rule": "OS02",
+        "file": "tests/support/infrastructure/spec-gate-repair-legacy-error.js",
+        "line": 47,
+        "column": 22,
+        "trace": [
+          "tests/support/infrastructure/spec-gate-repair-legacy-error.js"
+        ],
+        "message": "direct child_process launch bypasses the shared typed invocation boundary",
+        "classification": "violation"
+      },
+      "sourceSha256": "0491b42564970a15c161a723a77751fd5791f735d5479fc8567d5ec59109612f",
+      "reviewClassification": "TEST_HARNESS_EXTERNAL_NATIVE_OBSERVATION_OR_FIXTURE",
+      "reason": "Test-only infrastructure creates controlled Git/CLI/process/legacy/prototype fixtures or observes native handles. No src domain execution path calls this site. Original diagnostics remain visible; not a whole-auditor PASS or an actual product bypass exemption.",
+      "basis": "Exact current file bytes and complete raw diagnostic equal the individually reviewed v29 site."
+    }
+  ],
+  "genericFollowup": {
+    "capabilityProvenance": "Propagate bound NativeExecutableInvocation and default runner provenance through wrapper and injected test-producer calls.",
+    "bootstrapOwnership": "Model the existing fixed control-child bootstrap and actual ChildProcess ownership/acknowledgement contracts.",
+    "permissionMetadata": "Represent native permission hints with their existing Windows writability and native Git-mode observer contracts.",
+    "evaluationCoverage": "Resolve finite evaluation exhaustion, computed capability access, unresolved callees and unsupported syntax with focused existing-rule regressions.",
+    "testOriginContexts": "Preserve producer/test-origin context while following source imports and callbacks."
+  },
+  "wholeStructuralPassClaim": false
+}

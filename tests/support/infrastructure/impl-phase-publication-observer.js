@@ -146,17 +146,25 @@ export class ImplPhasePublicationObserver {
         if (!saveOperation.test(name) || typeof descriptor.value !== "function") continue;
         const original = descriptor.value;
         const observer = this;
-        this.#mocks.push(t.mock.method(Type.prototype, name, function (...args) {
-          try { observer.#capture(this, `${Type.name}.${name}`, args); }
-          catch (error) {
-            if (observer.#sourceCapture !== null) throw error;
-            observer.#captureErrors.push({ operation: `${Type.name}.${name}`, error });
+        const mocked = t.mock.method(Type.prototype, name, function (...args) {
+          try {
+            try { observer.#capture(this, `${Type.name}.${name}`, args); }
+            catch (error) {
+              if (observer.#sourceCapture !== null) throw error;
+              observer.#captureErrors.push({ operation: `${Type.name}.${name}`, error });
+            }
+            // Preserve the receiver, argument identities, return/Promise identity,
+            // and thrown error. Typed recording precedes the call, including
+            // postcommit response loss.
+            return original.apply(this, args);
+          } finally {
+            // The typed observations own authentication. Node's independent
+            // recorder would also retain every unrelated input and old Store.
+            // It appends this call after return, so keep at most the latest one.
+            mocked.mock.resetCalls();
           }
-          // Preserve the receiver, argument identities, return/Promise identity,
-          // and thrown error. Recording precedes the call, including postcommit
-          // response loss; no finally/readback or async continuation is injected.
-          return original.apply(this, args);
-        }));
+        });
+        this.#mocks.push(mocked);
       }
     }
   }

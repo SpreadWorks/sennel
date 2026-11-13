@@ -10,11 +10,17 @@ import { removeQuiescentRuntimeFixture } from "../infrastructure/runtime-fixture
 import { SeedWorkRoot, observeSeedTiming } from "./seed-work-root.js";
 import { CanonicalScenarioSeed } from "../assertions/canonical-persistence.js";
 import {
-  WorkerArtifactHandoffCoordinator,
+  WorkerArtifactHandoffCoordinator, SourceMutationBaseline,
   materializeSourceWorkerEffect, sealParentMaterializedSourceWorkerEffect,
 } from "../../../src/flow/lib/worker-artifact-handoff.js";
 import SetRetryCommand from "../../../src/flow/lib/set-retry.js";
-import RunReviewCommand from "../../../src/flow/lib/run-review.js";
+import RunReviewCommand, {
+  TaskReviewCanonicalObservationBoundary, taskReviewRecoveryIgnoredDirectories,
+  taskReviewPublicationRuntimeLocks, newTaskReviewCanonicalObservationInput,
+} from "../../../src/flow/lib/run-review.js";
+import { CurrentAttemptIdentity } from "../../../src/flow/lib/current-flow-state.js";
+import { captureCurrentTaskSource } from "../../../src/flow/lib/task-mutation-lineage.js";
+import { ReviewWorkUnitOutput } from "../../../src/flow/lib/review-work-unit-values.js";
 import { FLOW_COMMANDS } from "../../../src/flow/registry.js";
 import { TaskReviewExecutionIdentity } from "../../../src/flow/lib/task-review-execution-identity.js";
 import { runTaskReviewProtocol, parseImplReviewFindings, formatImplReviewJson } from "../../../src/flow/commands/review.js";
@@ -108,6 +114,57 @@ export function completeTaskStageHandoff(work, effect) {
     throw error;
   }
   return reconcileTaskStageHandoff(work);
+}
+
+/** Historical worker inputs use the same source scope and canonical proof as the parent producer. */
+export class RetainedTaskReviewWorkUnit {
+  constructor({ root, flowManager, specId, taskId, attempt } = {}) {
+    this.root = root;
+    this.flowManager = flowManager;
+    this.state = flowManager.loadReadOnly(specId);
+    this.taskId = taskId;
+    this.attempt = CurrentAttemptIdentity.from(attempt);
+    this.workUnit = new ReviewWorkUnit({
+      executionRoot: root, runId: this.state.runId, specId, phase: "impl", taskId,
+      nodeId: this.attempt.nodeId, attemptId: this.attempt.id,
+      target: { treeSha: "a".repeat(40), targetStateDigest: "b".repeat(64) },
+      output: ReviewWorkUnitOutput.forReview({ phase: "impl", taskId }),
+    });
+  }
+
+  create({ invalidTaskSource = false, includeCanonicalObservation = true, mutateCanonicalObservation = null } = {}) {
+    const taskSource = captureCurrentTaskSource({
+      root: this.root, flowManager: this.flowManager, state: this.state, taskId: this.taskId,
+    });
+    const baseline = SourceMutationBaseline.capture({
+      root: this.root, attempt: this.attempt,
+      ignoredDirectories: taskReviewRecoveryIgnoredDirectories(this.root, this),
+      runtimeLocks: taskReviewPublicationRuntimeLocks(this.flowManager, this.state.specId, this.root),
+    });
+    const boundary = TaskReviewCanonicalObservationBoundary.capture({
+      flowManager: this.flowManager, specId: this.state.specId,
+    });
+    this.workUnit.writeInput({
+      logicalKey: "task.source", logicalPath: "task-source.json",
+      bytes: Buffer.from(invalidTaskSource ? "{}\n" : `${JSON.stringify(taskSource.toJSON(), null, 2)}\n`),
+      mediaType: "application/json",
+    });
+    this.workUnit.writeInput({
+      logicalKey: "task.source-effect-baseline", logicalPath: "task-source-effect-baseline.json",
+      bytes: Buffer.from(`${JSON.stringify(baseline.toJSON(), null, 2)}\n`), mediaType: "application/json",
+    });
+    if (includeCanonicalObservation) {
+      const input = newTaskReviewCanonicalObservationInput(boundary.observationAdvance);
+      if (mutateCanonicalObservation !== null) {
+        const document = JSON.parse(input.bytes.toString("utf8"));
+        mutateCanonicalObservation(document);
+        input.bytes = Buffer.from(`${JSON.stringify(document, null, 2)}\n`);
+      }
+      this.workUnit.writeInput(input);
+    }
+    this.workUnit.finalize();
+    return this.workUnit;
+  }
 }
 
 /** Local canonical fixture; never dispatches a Flow or starts a worker. */

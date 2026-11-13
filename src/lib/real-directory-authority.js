@@ -2,24 +2,31 @@ import fs from "node:fs";
 import path from "node:path";
 import { closeDirectoryHandle } from "./file-descriptor.js";
 import { isNativePathWithin } from "./portable-path.js";
+import { isCanonicalRealPath } from "./canonical-real-path.js";
+import { FileIdentity, sameFileIdentity } from "./file-identity.js";
+export { FileIdentity, sameFileIdentity } from "./file-identity.js";
 
 const CHAIN_CAPTURE = Symbol("directory authority chain capture");
 const AUTHORITY_FAILURES = new WeakSet();
+const directoryObservationToken = Symbol("owned directory forest observation");
 
-export function sameFileIdentity(left, right) {
-  return BigInt(left.dev) === BigInt(right.dev) && BigInt(left.ino) === BigInt(right.ino);
-}
-
-export class FileIdentity {
-  constructor(stat) {
-    if (typeof stat.dev !== "bigint" || typeof stat.ino !== "bigint") {
-      throw new TypeError("file identity requires exact bigint device and inode values");
-    }
-    this.dev = stat.dev;
-    this.ino = stat.ino;
+/** A read interval only; it cannot authorize filesystem mutations. */
+export class RealDirectoryForestObservation {
+  #complete;
+  #active = true;
+  constructor(token, complete) {
+    if (token !== directoryObservationToken) throw new TypeError("Directory observations require a captured authority forest");
+    this.#complete = complete;
     Object.freeze(this);
   }
+  complete() {
+    if (!this.#active) throw new Error("Directory observation is no longer active");
+    this.#active = false;
+    this.#complete();
+  }
+  discard() { this.#active = false; }
 }
+
 
 function defaultErrorFactory(status, message, { lockPath, cause } = {}) {
   const error = new Error(message, { cause });
@@ -130,6 +137,15 @@ export class RealDirectoryAuthority {
     const exists = this.#assertChain(true);
     if (exists) this.#assertCanonical();
     return exists;
+  }
+
+  /** Capture fresh direct children in one complete, effect-free observation. */
+  observeChildren(names) {
+    const children = names.map((name) => new RealDirectoryAuthority(path.join(this.directory, name), {
+      parentAuthority: this, errorFactory: this.errorFactory, [CHAIN_CAPTURE]: true,
+    }));
+    RealDirectoryAuthority.assertAllStable([this, ...children]);
+    return children;
   }
 
   removeTree() { return this.remove({ recursive: true }); }
@@ -254,6 +270,45 @@ export class RealDirectoryAuthority {
     return this.directory;
   }
 
+  /** Observe a complete authority forest twice, without effects or callbacks.
+   * Shared ancestry is read once per pass; every retained identity is checked.
+   * Nothing survives this synchronous observation or authorizes a later effect.
+   */
+  static assertAllStable(authorities) {
+    RealDirectoryAuthority.beginObservation(authorities).complete();
+  }
+
+  /** The caller may perform only synchronous, read-only captures before
+   * completing the reverse pass. This value grants no write authority.
+   */
+  static beginObservation(authorities) {
+    authorities = [...authorities];
+    const ordered = new Set();
+    const include = (authority) => {
+      if (ordered.has(authority)) return;
+      if (!(authority instanceof RealDirectoryAuthority)) throw new TypeError("Directory observation requires retained authorities");
+      if (authority.parentAuthority !== null) include(authority.parentAuthority);
+      ordered.add(authority);
+    };
+    for (const authority of authorities) include(authority);
+    const observe = (sequence) => {
+      const identities = new Map();
+      for (const authority of sequence) {
+        let identity = identities.get(authority.directory);
+        if (identity === undefined) {
+          identity = authority.#validatedIdentity();
+          identities.set(authority.directory, identity);
+        }
+        authority.#observeIdentity(identity);
+      }
+    };
+    observe(ordered);
+    for (const authority of authorities) authority.#assertCanonical();
+    // Revisit shared ancestors after all descendants, detecting changes during
+    // the observation as well as changes since each authority was captured.
+    return new RealDirectoryForestObservation(directoryObservationToken, () => observe([...ordered].reverse()));
+  }
+
   #assertChain(allowMissing) {
     if (this.parentAuthority !== null && !this.parentAuthority.#assertChain(allowMissing)) {
       if (this.identity !== null) this.#fail("authority-invalid", `directory ancestor disappeared: ${this.directory}`);
@@ -268,7 +323,7 @@ export class RealDirectoryAuthority {
   #assertCanonical() {
     if (this.#canonical) return;
     try {
-      if (fs.realpathSync(this.directory) !== this.directory) throw new Error("directory authority path must be canonical");
+      if (!isCanonicalRealPath(this.directory)) throw new Error("directory authority path must be canonical");
     } catch (cause) { this.#fail("authority-invalid", `invalid directory authority: ${this.directory}`, cause); }
     this.#canonical = true;
   }

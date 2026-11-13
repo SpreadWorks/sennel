@@ -16,6 +16,8 @@ import {
 } from "../../../src/flow/lib/requirement-test-lifecycle.js";
 import { runRequirementTestGate } from "../../../src/flow/lib/run-requirement-test-gate.js";
 import { flowTemporaryRoot } from "../../../src/flow/lib/flow-context.js";
+import { DirectChildExecutor } from "../../../src/lib/direct-child-executor.js";
+import { ProcessExecutionControlFailure } from "../../../src/lib/process-execution-values.js";
 import { createTmpDir, removeTmpDir } from "../../support/builders/tmp-dir.js";
 
 let root;
@@ -92,6 +94,26 @@ test("returns an assertion_passed observation for a passing candidate", async ()
   const value = candidate("// spec: R1\nimport test from 'node:test';\ntest('R1: behavior', () => {});\n");
   const result = await runRequirementTestGate({ ...context, specRevision: revision, requirementId: "R1", ...value });
   assert.equal(result.observation.kind, "assertion_passed");
+});
+
+test("retains exact candidate bytes when the executor cannot confirm completion", async (t) => {
+  const context = setup();
+  const value = candidate("// spec: R1\nimport test from 'node:test';\ntest('R1: behavior', () => {});\n");
+  const failure = new ProcessExecutionControlFailure("stop-unconfirmed", "Executor completion is unknown");
+  let candidatePath;
+  const executor = t.mock.method(DirectChildExecutor, "execute", async (invocation) => {
+    candidatePath = path.resolve(root, invocation.args.at(-1));
+    assert.deepEqual(fs.readFileSync(candidatePath), value.sourceBytes.get("tests/r1.test.js"));
+    throw failure;
+  });
+  await assert.rejects(
+    runRequirementTestGate({ ...context, specRevision: revision, requirementId: "R1", ...value }),
+    (error) => error === failure,
+  );
+  assert.equal(executor.mock.callCount(), 1);
+  assert.equal(fs.existsSync(candidatePath), true, "the unconfirmed executor may still use its candidate");
+  assert.deepEqual(fs.readFileSync(candidatePath), value.sourceBytes.get("tests/r1.test.js"));
+  assert.deepEqual(fs.readdirSync(context.versionLocation.resolve("")), []);
 });
 
 test("reports missing and multiple assigned named tests without running them", async () => {

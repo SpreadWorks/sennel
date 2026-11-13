@@ -2,9 +2,10 @@ import net from "node:net";
 import { randomUUID } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
 import path from "node:path";
-import { FileLock, FileLockWaitPolicy } from "./file-lock.js";
+import { FileLock, FileLockAcquisition, FileLockWaitPolicy } from "./file-lock.js";
 import { RepositoryLockAuthority } from "./repository-control-lock.js";
 import { AtomicFile } from "./atomic-file.js";
+import { sameFileIdentity } from "./file-identity.js";
 import { RegularFileLinkCountError } from "./regular-file-snapshot.js";
 import { readManagedBinarySnapshot, decodeManagedRecord } from "./managed-process-record.js";
 import { ProcessExecutionControlFailure,
@@ -13,7 +14,48 @@ import { ProcessExecutionControlFailure,
 import { ManagedControlPolicy } from "./managed-control-policy.js";
 import { managedMonotonicNow } from "./managed-stop-operation.js";
 
+export const MANAGED_PROCESS_MESSAGE_MAX_BYTES = 32 * 1024 * 1024;
+
+/** Bounded UTF-8 lines shared by both sides of the managed TCP protocol.
+ * Scan each incoming byte once; retain owned bytes until a complete frame can
+ * be decoded. A socket chunk boundary is never a character boundary.
+ */
+export class ManagedProcessFrameReader {
+  #chunks = [];
+  #length = 0;
+  #maxBytes;
+  constructor(maxBytes = MANAGED_PROCESS_MESSAGE_MAX_BYTES) {
+    if (!Number.isSafeInteger(maxBytes) || maxBytes < 0 || maxBytes > MANAGED_PROCESS_MESSAGE_MAX_BYTES) {
+      throw new RangeError("Managed frame bound is invalid");
+    }
+    this.#maxBytes = maxBytes;
+  }
+  *read(bytes) {
+    let offset = 0;
+    while (offset < bytes.length) {
+      const newline = bytes.indexOf(10, offset);
+      const end = newline < 0 ? bytes.length : newline;
+      const length = this.#length + end - offset;
+      if (length > this.#maxBytes) {
+        throw managedControlFailure("PROCESS_EXECUTION_OUTPUT_LIMIT", "Managed frame exceeds its bound");
+      }
+      const part = bytes.subarray(offset, end);
+      if (newline < 0) {
+        if (part.length > 0) this.#chunks.push(Buffer.from(part));
+        this.#length = length;
+        return;
+      }
+      const frame = this.#chunks.length === 0 ? part
+        : Buffer.concat([...this.#chunks, part], length);
+      this.#chunks = []; this.#length = 0;
+      offset = newline + 1;
+      yield frame.toString("utf8");
+    }
+  }
+}
+
 export class ManagedProcessMessage {
+  static reservesCall(operation) { return ["reserve", "reserve-and-claim"].includes(operation); }
   constructor(call, operation, payload = {}, { requestId = randomUUID(), payloadDigest = executionValueDigest(payload) } = {}) {
     const acceptance = new ManagedRequestAcceptance({ requestId, payloadDigest });
     this.executionId = call.executionId;
@@ -77,6 +119,45 @@ function managedRecordLock(file, waitPolicy, deadline, lockAuthority) {
     identity: path.resolve(file), fileName: "record.lock", legacyPaths: [`${path.resolve(file)}.lock`] }), kind: "managed-process-record", authority: { file: path.resolve(file) } });
 }
 
+/** The same per-record exclusion is shared by standalone and grouped writers. */
+export function withManagedRecordWriters(writes, body, { preparedTransitions = null } = {}) {
+  const ordered = [...writes].sort((left, right) => left.file.localeCompare(right.file));
+  if (new Set(ordered.map((write) => write.file)).size !== ordered.length) throw new TypeError("Managed publication contains duplicate targets");
+  const acquisitions = ordered.map((write) => new FileLockAcquisition(() => {
+    if (!(write instanceof ManagedRecordWrite)) throw new TypeError("Managed publication requires typed writes");
+    return managedRecordLock(write.file, write.waitPolicy, write.deadline, write.lockAuthority);
+  }, () => {
+    const current = write.transitionFile.readSnapshot();
+    if (preparedTransitions === null) {
+      if (current !== null) throw new Error("Managed record has an incomplete durable write");
+    } else {
+      if (!preparedTransitions.has(write.file)) throw new TypeError("Prepared managed publication lacks its transition observation");
+      const expected = preparedTransitions.get(write.file);
+      if ((expected === null) !== (current === null) || expected !== null
+        && (!sameFileIdentity(expected.identity, current.identity) || expected.digest !== current.digest || !expected.bytes.equals(current.bytes))) throw new Error("Prepared managed transition changed its exact generation");
+    }
+  }));
+  return FileLock.runExclusiveGroup(acquisitions, body);
+}
+
+/** Validated bytes prepared without making any visible record changes. */
+export class ManagedRecordWrite {
+  #bytes;
+  constructor(file, bytes, identity, { faultInjector, waitPolicy, deadline, lockAuthority = identity.recordLocks, maximum = 16 * 1024 * 1024 } = {}) {
+    if (!path.isAbsolute(file) || !(lockAuthority instanceof RepositoryLockAuthority)
+      || !Number.isSafeInteger(maximum) || maximum < 0) throw new TypeError("Managed record write requires a bounded file and repository authority");
+    this.file = path.resolve(file); this.identity = identity; this.maximum = maximum;
+    this.faultInjector = faultInjector; this.waitPolicy = waitPolicy; this.deadline = deadline; this.lockAuthority = lockAuthority;
+    this.#bytes = Buffer.from(bytes);
+    if (this.#bytes.length > maximum) throw new TypeError("Managed record write exceeds its byte bound");
+    Object.freeze(this);
+  }
+  get bytes() { return Buffer.from(this.#bytes); }
+  get transitionFile() { return new AtomicFile(`${this.file}.transition`); }
+  get transitionBytes() { return Buffer.from(JSON.stringify({ executionId: this.identity.executionId, callId: this.identity.callId })); }
+  publish() { return writeManagedBinary(this.file, this.#bytes, this.identity, this); }
+}
+
 export function readManagedBinary(file, { maximum = 16 * 1024 * 1024, waitPolicy, deadline, lockAuthority } = {}) {
   try {
     return managedRecordLock(file, waitPolicy, deadline, lockAuthority).runExclusive(() => readManagedBinarySnapshot(file, { maximum }));
@@ -92,12 +173,12 @@ export function readManagedRecord(file, options = {}) {
 
 export function writeManagedBinary(file, bytes, identity, { faultInjector, waitPolicy, deadline, lockAuthority = identity.recordLocks, maximum = 16 * 1024 * 1024 } = {}) {
   try {
-    managedRecordLock(file, waitPolicy, deadline, lockAuthority).runExclusive(() => {
+    const prepared = new ManagedRecordWrite(path.resolve(file), bytes, identity, { faultInjector, waitPolicy, deadline, lockAuthority, maximum });
+    withManagedRecordWriters([prepared], () => {
       const store = new AtomicFile(file, { faultInjector, maxBytes: maximum });
-      const content = Buffer.from(bytes);
-      const transition = new AtomicFile(`${file}.transition`);
-      if (transition.read() !== null) throw new Error("Managed record has an incomplete durable write");
-      transition.write(JSON.stringify({ executionId: identity.executionId, callId: identity.callId }));
+      const content = prepared.bytes;
+      const transition = prepared.transitionFile;
+      transition.write(prepared.transitionBytes);
       store.write(content);
       if (!store.read()?.equals(content)) throw new Error("Record readback differs");
       transition.remove();
@@ -120,8 +201,8 @@ class ManagedMailboxExchange {
       throw managedControlFailure("PROCESS_EXECUTION_ENDPOINT_UNAVAILABLE", "Authenticated mailbox endpoint is unavailable");
     }
     this.message = message;
-    this.requestFile = new AtomicFile(path.join(endpoint.requests, message.requestId + ".json"), { maxBytes: 32 * 1024 * 1024 });
-    this.responseFile = new AtomicFile(path.join(endpoint.responses, message.requestId + ".json"), { maxBytes: 32 * 1024 * 1024 });
+    this.requestFile = new AtomicFile(path.join(endpoint.requests, message.requestId + ".json"), { maxBytes: MANAGED_PROCESS_MESSAGE_MAX_BYTES });
+    this.responseFile = new AtomicFile(path.join(endpoint.responses, message.requestId + ".json"), { maxBytes: MANAGED_PROCESS_MESSAGE_MAX_BYTES });
   }
   get bytes() { return this.#bytes ??= Buffer.from(JSON.stringify(this.message)); }
   readRequest() {
@@ -155,8 +236,11 @@ class ManagedMailboxExchange {
   unavailable(message, cause) {
     return managedControlFailure("PROCESS_EXECUTION_ENDPOINT_UNAVAILABLE", message, this.#publicationFailure ?? cause);
   }
-  async wait({ timeoutMs, abortSignal, onWait, readSettlement }) {
+  publishRequest() {
     if (this.readRequest() === null) this.requestFile.write(this.bytes);
+  }
+  async wait({ timeoutMs, abortSignal, onWait, readSettlement }) {
+    this.publishRequest();
     const until = managedMonotonicNow() + timeoutMs;
     while (managedMonotonicNow() < until) {
       if (abortSignal?.aborted) throw managedControlFailure("PROCESS_EXECUTION_COMMUNICATION_ABORTED", "Managed mailbox request was aborted");
@@ -171,7 +255,7 @@ class ManagedMailboxExchange {
   }
 }
 
-function createManagedTransportRequest() {
+function createManagedTransportRequest({ socketRequest = managedSocketRequest } = {}) {
   // Progress belongs to this one immutable operation, across its existing slots.
   // Healthy TCP never needs to construct or inspect an unused mailbox authority.
   let mailbox = null;
@@ -180,69 +264,206 @@ function createManagedTransportRequest() {
       mailbox ??= new ManagedMailboxExchange(call, message);
       return mailbox.wait(options);
     }
-    try { return await managedSocketRequest(call, message, mailbox === null ? options : { ...options, readSettlement() {
+    // A previous TCP slot may have expired without any time left to publish
+    // fallback. This new authorized slot can publish the exact same request;
+    // the operation owner already checked its unchanged total deadline.
+    mailbox?.publishRequest();
+    try { return await socketRequest(call, message, mailbox === null ? options : { ...options, readSettlement() {
       const settled = options.readSettlement();
       return settled !== null ? settled : mailbox.readPublishedResponse();
     } }); }
     catch (cause) {
       if (cause.code !== "PROCESS_EXECUTION_ENDPOINT_UNAVAILABLE" || !call.endpoint?.mailbox) throw cause;
       // Same immutable request, same response slot; transport failure never grants another spawn.
-      const remaining = options.timeoutMs - Math.max(0, managedMonotonicNow() - options.startedAt);
-      if (remaining <= 0) throw mailbox === null ? cause : mailbox.unavailable(cause.message, cause);
       mailbox ??= new ManagedMailboxExchange(call, message);
+      const remaining = options.timeoutMs - Math.max(0, managedMonotonicNow() - options.startedAt);
+      if (remaining <= 0) throw mailbox.unavailable(cause.message, cause);
       return mailbox.wait({ ...options, timeoutMs: remaining });
     }
   };
 }
 
-function managedSocketRequest(call, message, { timeoutMs, abortSignal, onWait, readSettlement }) {
-  return new Promise((resolve, reject) => {
-    const socket = net.createConnection(typeof call.endpoint === "object" ? { host: call.endpoint.host, port: call.endpoint.port } : call.endpoint);
-    let text = "";
-    let done = false;
-    let timer;
-    let poll;
-    const finish = (error, result) => {
-      if (done) return;
-      done = true;
-      clearTimeout(timer);
-      clearInterval(poll);
-      abortSignal?.removeEventListener("abort", aborted);
-      socket.destroy();
-      if (error) reject(error); else resolve(result);
-    };
-    const aborted = () => finish(managedControlFailure("PROCESS_EXECUTION_COMMUNICATION_ABORTED", "Managed communication was aborted"));
-    timer = setTimeout(() => finish(managedControlFailure("PROCESS_EXECUTION_ENDPOINT_UNAVAILABLE", "Managed launcher did not respond")), Math.max(1, timeoutMs));
-    poll = setInterval(() => {
-      try {
-        onWait();
-        const settled = readSettlement();
-        if (settled !== null) finish(null, settled);
-      } catch (error) { finish(error); }
-    }, 20);
-    abortSignal?.addEventListener("abort", aborted, { once: true });
-    if (abortSignal?.aborted) aborted();
-    socket.on("error", (cause) => finish(managedControlFailure("PROCESS_EXECUTION_ENDPOINT_UNAVAILABLE", "Managed coordinator connection failed", cause)));
-    socket.on("end", () => { if (!done) finish(managedControlFailure("PROCESS_EXECUTION_ENDPOINT_UNAVAILABLE", "Managed coordinator disconnected before its response")); });
-    socket.on("close", () => { if (!done) finish(managedControlFailure("PROCESS_EXECUTION_ENDPOINT_UNAVAILABLE", "Managed coordinator disconnected before its response")); });
-    socket.on("connect", () => socket.write(`${JSON.stringify(message)}\n`));
-    socket.on("data", (bytes) => {
-      text += bytes;
-      if (text.length > 32 * 1024 * 1024) return finish(managedControlFailure("PROCESS_EXECUTION_OUTPUT_LIMIT", "Managed response exceeds its bound"));
-      const newline = text.indexOf("\n");
-      if (newline === -1) return;
-      try {
-        const response = JSON.parse(text.slice(0, newline));
-        if (!ManagedProcessMessage.from(response).respondsTo(message)) throw managedControlFailure("PROCESS_EXECUTION_AUTHORITY_MISMATCH", "Managed response does not match its request");
-        if (response.payload.error) throw ProcessExecutionControlFailure.fromStored(response.payload.error);
-        finish(null, response.payload);
-      } catch (error) {
-        finish(error instanceof ProcessExecutionControlFailure ? error
-          : managedControlFailure("PROCESS_EXECUTION_RESPONSE_INVALID", "Managed coordinator returned an invalid response", error));
-      }
-    });
-  });
+/** A bounded wire carrier; each member retains its original request identity. */
+export class ManagedProcessRequestBatch {
+  static get maximumWidth() { return 8; }
+  static cohortKey(message) {
+    if (ManagedProcessMessage.reservesCall(message.operation) || ["claim-launch", "finish"].includes(message.operation)) return message.operation;
+    return message.operation === "observe" && ["started", "exit"].includes(message.payload.data?.type)
+      ? `observe-${message.payload.data.type}` : null;
+  }
+  #bytes;
+  constructor(messages) {
+    if (!Array.isArray(messages) || messages.length < 2 || messages.length > ManagedProcessRequestBatch.maximumWidth
+      || messages.some((message) => !(message instanceof ManagedProcessMessage))) {
+      throw new TypeError("Managed request batch requires bounded nominal messages");
+    }
+    const first = messages[0], key = ManagedProcessRequestBatch.cohortKey(first);
+    if (key === null || new Set(messages.map((message) => message.requestId)).size !== messages.length
+      || messages.some((message) => !message.matches(first) || ManagedProcessRequestBatch.cohortKey(message) !== key)) {
+      throw new TypeError("Managed request batch requires distinct homogeneous requests from one authenticated client");
+    }
+    this.#bytes = Buffer.from(JSON.stringify({ messages }) + "\n");
+    if (this.#bytes.length > MANAGED_PROCESS_MESSAGE_MAX_BYTES) throw new RangeError("Managed request batch exceeds the original message bound");
+    Object.freeze(this);
+  }
+  static fromEnvelope(value) {
+    if (!Array.isArray(value?.messages)) throw new TypeError("Managed request batch requires its complete message array");
+    return new this(value.messages.map((message) => ManagedProcessMessage.from(message)));
+  }
+  get messages() {
+    return JSON.parse(this.#bytes.toString("utf8")).messages.map((message) => ManagedProcessMessage.from(message));
+  }
+  wireBytes() { return Buffer.from(this.#bytes); }
 }
+
+/** One response slot, including time spent waiting for the next dispatch turn. */
+class ManagedSocketRequestMember {
+  constructor(call, message, options) {
+    this.call = call; this.message = message; this.options = options;
+    this.done = false; this.onSettled = null;
+    this.response = new Promise((resolve, reject) => { this.resolve = resolve; this.reject = reject; });
+    this.aborted = () => this.finish(managedControlFailure("PROCESS_EXECUTION_COMMUNICATION_ABORTED", "Managed communication was aborted"));
+    this.timer = setTimeout(() => this.finish(managedControlFailure("PROCESS_EXECUTION_ENDPOINT_UNAVAILABLE", "Managed launcher did not respond")), Math.max(1, options.timeoutMs));
+    this.poll = setInterval(() => {
+      if (this.done) return;
+      try {
+        options.onWait();
+        const settled = options.readSettlement();
+        if (settled !== null) this.finish(null, settled);
+      } catch (cause) { this.finish(cause); }
+    }, 20);
+    options.abortSignal?.addEventListener("abort", this.aborted, { once: true });
+    if (options.abortSignal?.aborted) this.aborted();
+  }
+  finish(error, value) {
+    if (this.done) return;
+    this.done = true;
+    clearTimeout(this.timer); clearInterval(this.poll);
+    this.options.abortSignal?.removeEventListener("abort", this.aborted);
+    if (error) this.reject(error); else this.resolve(value);
+    this.onSettled?.();
+  }
+  receive(value) {
+    if (this.done) return;
+    try {
+      const response = ManagedProcessMessage.from(value);
+      if (!response.respondsTo(this.message)) throw managedControlFailure("PROCESS_EXECUTION_AUTHORITY_MISMATCH", "Managed response does not match its request");
+      if (response.payload.error) throw ProcessExecutionControlFailure.fromStored(response.payload.error);
+      this.finish(null, response.payload);
+    } catch (cause) {
+      this.finish(cause instanceof ProcessExecutionControlFailure ? cause
+        : managedControlFailure("PROCESS_EXECUTION_RESPONSE_INVALID", "Managed coordinator returned an invalid response", cause));
+    }
+  }
+}
+
+/** Scalar and grouped TCP use the same parser, watcher, deadline and cleanup. */
+class ManagedSocketExchange {
+  static send(members) {
+    const active = members.filter((member) => !member.done);
+    if (active.length === 0) return;
+    try { new this(active); }
+    catch (cause) { for (const member of active) member.finish(cause); }
+  }
+  constructor(members) {
+    this.members = new Map(members.map((member) => [member.message.requestId, member]));
+    this.frames = new ManagedProcessFrameReader();
+    const endpoint = members[0].call.endpoint;
+    this.socket = net.createConnection(typeof endpoint === "object" ? { host: endpoint.host, port: endpoint.port } : endpoint);
+    for (const member of members) member.onSettled = () => {
+      if (members.every((entry) => entry.done)) this.socket.destroy();
+    };
+    this.socket.on("error", (cause) => this.fail(managedControlFailure("PROCESS_EXECUTION_ENDPOINT_UNAVAILABLE", "Managed coordinator connection failed", cause)));
+    this.socket.on("end", () => this.fail(managedControlFailure("PROCESS_EXECUTION_ENDPOINT_UNAVAILABLE", "Managed coordinator disconnected before its response")));
+    this.socket.on("close", () => this.fail(managedControlFailure("PROCESS_EXECUTION_ENDPOINT_UNAVAILABLE", "Managed coordinator disconnected before its response")));
+    this.socket.on("connect", () => {
+      try {
+        const pending = members.filter((member) => !member.done);
+        if (pending.length === 0) { this.socket.destroy(); return; }
+        const messages = pending.map((member) => member.message);
+        const bytes = messages.length === 1 ? Buffer.from(JSON.stringify(messages[0]) + "\n")
+          : new ManagedProcessRequestBatch(messages).wireBytes();
+        this.socket.write(bytes);
+      } catch (cause) { this.fail(cause); }
+    });
+    this.socket.on("data", (bytes) => this.receive(bytes));
+  }
+  fail(cause) {
+    for (const member of this.members.values()) member.finish(cause);
+    this.socket.destroy();
+  }
+  receive(bytes) {
+    // Keep the original per-response byte bound even when several frames share
+    // one TCP chunk. Completed/expired identities remain known for late replies.
+    try {
+      for (const frame of this.frames.read(bytes)) {
+        const response = JSON.parse(frame);
+        const member = this.members.get(response.requestId);
+        if (member === undefined) throw managedControlFailure("PROCESS_EXECUTION_AUTHORITY_MISMATCH", "Managed response does not match its request");
+        member.receive(response);
+        if ([...this.members.values()].every((member) => member.done)) return;
+      }
+    } catch (cause) {
+      this.fail(cause instanceof ProcessExecutionControlFailure ? cause
+        : managedControlFailure("PROCESS_EXECUTION_RESPONSE_INVALID", "Managed coordinator returned an invalid response", cause));
+    }
+  }
+}
+
+function managedSocketRequest(call, message, options) {
+  const member = new ManagedSocketRequestMember(call, message, options);
+  ManagedSocketExchange.send([member]);
+  return member.response;
+}
+
+/** Collect only already-ready homogeneous messages, without waiting for peers.
+ * Each logical operation gets its own original mailbox/retransmission state.
+ * Native lifecycle ordering, aborts and individual response slots stay intact.
+ */
+export class ManagedRequestTransportCohort {
+  #pending = [];
+  #scheduled = false;
+  createRequest() {
+    return createManagedTransportRequest({ socketRequest: (call, message, options) => this.#request(call, message, options) });
+  }
+  #request(call, message, options) {
+    if (ManagedProcessRequestBatch.cohortKey(message) === null) return managedSocketRequest(call, message, options);
+    const member = new ManagedSocketRequestMember(call, message, options);
+    this.#pending.push(member);
+    if (!this.#scheduled) {
+      this.#scheduled = true;
+      setImmediate(() => this.#flush());
+    }
+    return member.response;
+  }
+  #flush() {
+    const pending = this.#pending.filter((member) => !member.done);
+    this.#pending = []; this.#scheduled = false;
+    let members = [];
+    const flush = () => { ManagedSocketExchange.send(members); members = []; };
+    for (const member of pending) {
+      if (members.length > 0) {
+        const first = members[0];
+        let fits = member.message.matches(first.message)
+          && JSON.stringify(member.call.endpoint) === JSON.stringify(first.call.endpoint)
+          && ManagedProcessRequestBatch.cohortKey(member.message) === ManagedProcessRequestBatch.cohortKey(first.message)
+          && !members.some((entry) => entry.message.requestId === member.message.requestId)
+          && members.length < ManagedProcessRequestBatch.maximumWidth;
+        if (fits) {
+          try { new ManagedProcessRequestBatch([...members, member].map((entry) => entry.message)); }
+          catch (cause) {
+            if (!(cause instanceof RangeError)) { member.finish(cause); continue; }
+            fits = false;
+          }
+        }
+        if (!fits) flush();
+      }
+      members.push(member);
+    }
+    flush();
+  }
+}
+
 
 /** One communication operation, including retransmission of its exact request. */
 export async function managedRequest(call, operation, payload = {}, {

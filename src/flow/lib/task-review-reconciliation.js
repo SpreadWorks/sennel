@@ -3,11 +3,12 @@ import { FlowRepositoryRuntimeArtifactRegistry } from "./flow-repository-runtime
 import { assertFlowProcessRuntimeQuiescent } from "./process-runtime-admission.js";
 import path from "node:path";
 import crypto from "node:crypto";
+import { isNativePathWithin } from "../../lib/portable-path.js";
 import { resolveTaskReviewReconciliation } from "../definition.js";
 import { CurrentAttemptIdentity } from "./current-flow-state.js";
 import { TaskReviewUnsealedWorkUnitSet, assertReviewWorkUnitInputSnapshot } from "./review-work-unit.js";
 import { captureCurrentTaskSource } from "./task-mutation-lineage.js";
-import { SourceMutationBaseline, WorkerArtifactRepositoryMutationSnapshot } from "./worker-artifact-handoff.js";
+import { SourceMutationBaseline, SourceMutationManifest, WorkerArtifactRepositoryMutationSnapshot } from "./worker-artifact-handoff.js";
 import { ReviewExecutionLease } from "./review-execution-lease.js";
 import { captureRetryRecoveryBaseline, readRetryBaseline, retryEvidenceRouteForNode } from "./retry-recovery.js";
 import { TaskReviewReconciliationProposal, TaskReviewReconciliationRecord, TASK_REVIEW_RECONCILIATION_KEY, reconciliationDigest } from "./task-review-reconciliation-record.js";
@@ -24,8 +25,12 @@ function currentBaseline({ flowManager, state, root, attempt = state.attempt }) 
 }
 
 function currentSnapshot(root, attempt, location) {
+  // The proposal and retry baseline bind canonical state separately. The
+  // reconciliation transaction replaces this exact Version's own records.
+  const canonical = path.relative(root, location.directory).split(path.sep).join("/");
+  const canonicalDirectories = canonical !== "" && isNativePathWithin(root, location.directory) ? [canonical] : [];
   return new SourceMutationBaseline({ attempt, snapshot: WorkerArtifactRepositoryMutationSnapshot.capture({ root, authorities: ["execution"],
-    ignoredDirectories: [...new FlowRepositoryRuntimeArtifactRegistry().directoryRoots(), ".sennel/review-work-units"],
+    ignoredDirectories: [...new FlowRepositoryRuntimeArtifactRegistry().directoryRoots(), ".sennel/review-work-units", ...canonicalDirectories],
     runtimeLocks: [location.runtimeLock("runtime.lock.artifact-catalog"), location.runtimeLock("runtime.lock.current-flow-state")],
   }) });
 }
@@ -129,9 +134,12 @@ export function assertReconciledTaskReviewInput({ flowManager, state, taskId, ro
   if (!record) return;
   const saved = readRetryBaseline(flowManager, state, retryEvidenceRouteForNode(state, state.attempt.nodeId));
   const fresh = currentBaseline({ flowManager, state, root });
-  const snapshot = currentSnapshot(root, state.attempt, flowManager.specLocation(state.specId)).snapshot;
+  const location = flowManager.specLocation(state.specId);
+  const adopted = SourceMutationBaseline.fromStored(record.proposal.snapshot, { root,
+    runtimeLocks: [location.runtimeLock("runtime.lock.artifact-catalog"), location.runtimeLock("runtime.lock.current-flow-state")] });
+  const observed = SourceMutationManifest.capture({ baseline: adopted, beforeWorker: true });
   if (!saved || ["projectDigest", "runtimeDigest", "targetDigest"].some(k => saved[k] !== fresh[k])
-    || ["mode", "head", "indexDigest"].some(k => snapshot[k] !== record.proposal.snapshot.snapshot[k])
+    || observed.mutations.length !== 0
     || captureCurrentTaskSource({ root, flowManager, state, taskId }).fingerprint !== record.proposal.sourceFingerprint) {
     throw new Error("reconciled Task Review input changed; a new explicit review decision is required");
   }

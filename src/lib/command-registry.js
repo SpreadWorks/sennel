@@ -110,6 +110,7 @@ export class CommandDefinition {
     allowInvalidConfig = false,
     routed = false,
     readOnly = false,
+    migration = false,
   }) {
     if (typeof name !== "string" || !COMMAND_NAME_RE.test(name)) {
       throw new Error(`invalid command name: ${name}`);
@@ -143,6 +144,7 @@ export class CommandDefinition {
     this.allowInvalidConfig = Boolean(allowInvalidConfig);
     this.routed = Boolean(routed);
     this.readOnly = readOnly === true;
+    this.migration = migration === true;
     Object.assign(this, dispatch);
 
     this.subcommands = new Map();
@@ -324,7 +326,7 @@ function flowDefinition(name, entry, group = null) {
       name,
       command,
       outputMode: "envelope",
-      readOnly: group === "get" || ["query", "resume"].includes(name),
+      readOnly: entry.readOnly ?? (group === "get" || ["query", "resume"].includes(name)),
       args: args || {},
       help: {
         section: "Flow",
@@ -408,14 +410,15 @@ const definitions = [
   }),
   new CommandDefinition({
     name: "migrate",
-    args: { flags: ["--dry-run"], options: ["--to", "--spec"] },
+    migration: true,
+    args: { flags: ["--dry-run", "--recover"], options: ["--to", "--spec", "--execution-root"] },
     entrypoint: { modulePath: "../migrate.js", invocation: "main" },
     allowInvalidConfig: true,
     help: {
       section: "Project",
-      summary: "Migrate project layout or Flow specifications to a revision",
-      usage: "Usage: sennel migrate <layout|specs> --to <revision> [--spec <specId>] [--dry-run]",
-      options: ["--to <revision>", "--spec <specId> (specs only; omit for all specs)", "--dry-run", "-h, --help"],
+      summary: "Migrate project layout, Flow specifications or runtime records to a revision",
+      usage: "Usage: sennel migrate <layout|specs|runtime> --to <revision> [--spec <specId>] [--execution-root <path>] [--dry-run] [--recover]",
+      options: ["--to <revision>", "--spec <specId> (specs only; omit for all specs)", "--execution-root <path> (runtime only; current checkout by default)", "--recover (runtime only)", "--dry-run", "-h, --help"],
       localeKey: "ui:help.commands.migrate",
     },
   }),

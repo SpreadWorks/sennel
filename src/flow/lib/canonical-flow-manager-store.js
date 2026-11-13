@@ -327,6 +327,7 @@ import {
 } from "./worker-artifact-handoff.js";
 import {
   assertSourceHandoffEventTransition,
+  assertSourceHandoffSettlementTransition,
   readSourceHandoffAuthorityFromView,
   SourceHandoffPersistenceAdmission,
   sourceHandoffArtifactWrites,
@@ -946,9 +947,10 @@ class ApprovalResultAdmission {
     const snapshot = descriptors.find((entry) => entry.relativePath === snapshotPath) ?? null;
     const review = descriptors.find((entry) => entry.relativePath === reviewPath) ?? null;
     this.reviewIdentity.assert(catalog);
+    const reviewRead = review === null ? null : view.readArtifactSnapshot(review);
     if (snapshot === null || snapshot.hash !== reviewRevision.digest || snapshot.size !== reviewRevision.byteLength
-      || review === null || !new CanonicalSpecReview(JSON.parse(view.readCatalogedArtifact(review).toString("utf8")))
-        .identity.equals(reviewRevision)) {
+      || reviewRead === null || !CanonicalSpecReview.fromBytes(reviewRead.bytes,
+        { processEvidence: reviewRead.processEvidence }).identity.equals(reviewRevision)) {
       throw new CurrentFlowStateConflictError("canonical Spec Review revision changed after Approval selection");
     }
     view.readCatalogedArtifact(snapshot);
@@ -4392,7 +4394,7 @@ export class CanonicalFlowManagerStore {
         executionContract === null ? null : new ExecutionContractPublicationAdmission(executionContract),
         identity.stepId === "task-impl" ? new TaskSourceHandoffPreparationAdmission(identity) : null,
         new SourceHandoffPersistenceAdmission({
-          identity, checkpoint, expectedPreviousEventDigest: null, validateCapture: true,
+          identity, checkpoint, event: preparedEvent, expectedPreviousEventDigest: null, validateCapture: true,
         }),
       ),
     });
@@ -4425,7 +4427,7 @@ export class CanonicalFlowManagerStore {
       artifactWrites: [...sourceHandoffArtifactWrites({ event }),
         ...(executionContract === null ? [] : [executionContractArtifact(executionContract)])],
       admission: new CombinedAdmission(executionContract === null ? null : new ExecutionContractPublicationAdmission(executionContract, { allowAbsent: false }), new SourceHandoffPersistenceAdmission({
-        identity: event.identity, checkpoint: authority.checkpoint,
+        identity: event.identity, checkpoint: authority.checkpoint, event,
         expectedCheckpointDigest: authority.checkpoint.digest,
         expectedPreviousEventDigest: authority.event.digest,
         processStopEvidence: event.processStopEvidence, executionContract,
@@ -8621,6 +8623,10 @@ export class CanonicalFlowManagerStore {
       || sourceHandoffSettlement.eventDigest !== sourceHandoffAuthority.event.digest) {
       throw new CurrentFlowStateConflictError("source worker settlement does not bind the unsettled canonical handoff");
     }
+    assertSourceHandoffSettlementTransition(sourceHandoffAuthority.event, sourceHandoffSettlement);
+    if (sourceHandoffAuthority.event.sourceManifest.digest !== mutationManifest.digest) {
+      throw new CurrentFlowStateConflictError("source worker acceptance manifest differs from its durable stopped-worker observation");
+    }
     const settlementWrites = sourceHandoffArtifactWrites({ settlement: sourceHandoffSettlement });
     const settlementAdmission = new SourceHandoffPersistenceAdmission({
       identity: sourceHandoffSettlement.identity,
@@ -10043,6 +10049,7 @@ export class CanonicalFlowManagerStore {
   }
 
   recordProcessEvent(event) { return this.runtime.recordProcessEvent(event); }
+  recordProcessEvents(group) { return this.runtime.recordProcessEvents(group); }
 
   addNote(text, opts = {}) {
     const specId = this.#resolveSpecId(opts.specId);
@@ -10375,13 +10382,9 @@ export class CanonicalFlowManagerStore {
       throw new CurrentFlowStateInvariantError("canonical artifact catalog logical key conflicts with its resolved contract");
     }
     const location = view?.location ?? this.location(resolved);
-    return Object.freeze({
-      descriptor: Object.freeze(descriptor.toJSON()),
-      relativePath: artifact.relativePath,
-      bytes: view === null
-        ? descriptor.readBytes(location, { maxBytes, onRead })
-        : view.readCatalogedArtifact(descriptor, { maxBytes, onRead }),
-    });
+    return view === null
+      ? catalog.readArtifact(location, descriptor.relativePath, { maxBytes, onRead })
+      : view.readArtifactSnapshot(descriptor, { maxBytes, onRead });
   }
 
   /** Read one active producer-owned attempt artifact for an advisory observation. */

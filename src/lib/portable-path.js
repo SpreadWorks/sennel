@@ -34,6 +34,8 @@ function portableSegmentKey(segment) { return segment.normalize("NFC").toUpperCa
 
 /** Validates a complete write set, including aliases in implicit directories. */
 export class LogicalPathSet {
+  #spellings;
+
   constructor(values, { allowDirectoryPrefixes = false } = {}) {
     if (!Array.isArray(values)) throw new PortablePathError("logical path set requires an array");
     this.paths = Object.freeze(values.map((value) => LogicalRelativePath.from(value)));
@@ -64,9 +66,20 @@ export class LogicalPathSet {
         }
       }
     }
+    this.#spellings = spellings;
     Object.freeze(this);
   }
+  spellingFor(value) {
+    const logical = LogicalRelativePath.from(value);
+    return this.#spellings.get(logical.segments.map(portableSegmentKey).join("/")) ?? null;
+  }
   toStrings() { return this.paths.map(String); }
+}
+
+/** Classification of a relative native spelling; no filesystem authority. */
+export function isContainedNativeRelativePath(relative, nativePath = path) {
+  return relative === "" || (relative !== ".." && !relative.startsWith(`..${nativePath.sep}`)
+    && !nativePath.isAbsolute(relative));
 }
 
 /** Lexical native containment; callers retain authority over filesystem state. */
@@ -74,7 +87,7 @@ export function isNativePathWithin(root, target) {
   if (typeof root !== "string" || typeof target !== "string" || root.includes("\0") || target.includes("\0")
     || !path.isAbsolute(root) || !path.isAbsolute(target)) return false;
   const relative = path.relative(root, target);
-  return relative === "" || (relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative));
+  return isContainedNativeRelativePath(relative);
 }
 
 /**
@@ -90,5 +103,5 @@ export function isNativePathSpellingWithin(root, target) {
   const normalizedRoot = windows ? api.normalize(root).toUpperCase() : api.normalize(root);
   const normalizedTarget = windows ? api.normalize(target).toUpperCase() : api.normalize(target);
   const relative = api.relative(normalizedRoot, normalizedTarget);
-  return relative === "" || (relative !== ".." && !relative.startsWith(`..${api.sep}`) && !api.isAbsolute(relative));
+  return isContainedNativeRelativePath(relative, api);
 }

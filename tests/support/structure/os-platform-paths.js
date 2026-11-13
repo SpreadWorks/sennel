@@ -1,4 +1,4 @@
-import { matching, SourceTemplateToken } from "./source-reader.js";
+import { matching, SourceClassMembers, SourceDeclaration, SourceTemplateToken } from "./source-reader.js";
 import { supportedPlatforms } from "./os-command-policy.js";
 
 /** Values are source-derived, never the analyzer host's OS. null means unknown. */
@@ -26,6 +26,7 @@ class SwitchCase {
   constructor(label, body) { Object.assign(this, { label, body }); }
 }
 class UnsupportedControl extends Statement {}
+class DeferredDeclaration extends Statement {}
 
 function punctuation(token, ...values) { return token?.kind === "punctuation" && values.includes(token.value); }
 function keyword(token, ...values) { return token?.kind === "identifier" && values.includes(token.value); }
@@ -82,6 +83,23 @@ class Statements {
       }
       this.cursor = close + 1;
       return new SwitchBranch(token, selector, cases);
+    }
+    if (keyword(token, "function", "class")) {
+      let open = this.cursor;
+      while (open < t.length && !punctuation(t[open], "{")) open = skip(t, open) + 1;
+      if (open < t.length) {
+        const close = matching(t, open);
+        this.cursor = close + 1;
+        const tokens = t.slice(start, this.cursor);
+        if (keyword(token, "function")) return new DeferredDeclaration(tokens);
+        // A plain class's method bodies are deferred. Computed keys, static
+        // initialization and inheritance can execute now and remain unmodeled.
+        if (open === start + 2) {
+          const members = new SourceClassMembers(new SourceDeclaration(t[start + 1].value, tokens));
+          if (members.moduleInitializers.length === 0) return new DeferredDeclaration(tokens);
+        }
+        return new UnsupportedControl(tokens);
+      }
     }
     while (this.cursor < t.length && !punctuation(t[this.cursor], ";")) this.cursor = skip(t, this.cursor) + 1;
     if (punctuation(t[this.cursor], ";")) this.cursor++;
@@ -161,6 +179,7 @@ export class PlatformImplementationBoundary {
   }
   walk(node, route) {
     if (route.terminal) return;
+    if (node instanceof DeferredDeclaration) return;
     if (node instanceof Block) {
       for (const child of node.statements) this.walk(child, route);
     } else if (node instanceof Branch) {

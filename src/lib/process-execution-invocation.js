@@ -1,5 +1,9 @@
 import { isDeepStrictEqual } from "node:util";
-import { executionValueDigest, executionValueSnapshot, ProcessExecutionCommandDescriptor } from "./process-execution-values.js";
+import { executionValueDigest, executionValueSnapshot, freezeExecutionValue, ProcessExecutionValueEncoding, ProcessExecutionCommandDescriptor } from "./process-execution-values.js";
+
+const capturedMetadataAuthority = Symbol("captured invocation metadata");
+const capturedInvocations = new WeakMap();
+const ownedPublicMetadata = new WeakSet();
 
 function scalar(value, name) {
   if (value !== null && typeof value !== "string" && typeof value !== "boolean"
@@ -75,22 +79,58 @@ class InvocationPublicMetadata {
     if (privateInput && value.launch !== undefined) this.executionIdentity = InvocationExecutionIdentity.capture(value.launch);
     else if (!privateInput && Object.hasOwn(value, "executionIdentity")) this.executionIdentity = InvocationExecutionIdentity.fromStored(value.executionIdentity);
     Object.freeze(this);
+    if (new.target === InvocationPublicMetadata) ownedPublicMetadata.add(this);
   }
   toJSON() { return Object.fromEntries(Object.entries(this).map(([name, value]) => [name, value?.toJSON?.() ?? value])); }
   static fromStored(value) { return exact(value, new InvocationPublicMetadata(value), "Public invocation metadata"); }
 }
 
+/** One owned private snapshot and its lazily derived public disclosure. */
+export class ProcessExecutionCapturedInvocation {
+  #value;
+  #encoding;
+  #disclosure;
+  constructor(value) {
+    this.#value = freezeExecutionValue(executionValueSnapshot(value));
+    this.#encoding = new ProcessExecutionValueEncoding(this.#value);
+    if (this.#value !== null && typeof this.#value === "object") capturedInvocations.set(this.#value, this);
+    Object.freeze(this);
+  }
+  static capture(value) {
+    const captured = value !== null && typeof value === "object" ? capturedInvocations.get(value) : undefined;
+    return captured ?? new ProcessExecutionCapturedInvocation(value);
+  }
+  get value() { return this.#value; }
+  get digest() { return this.#encoding.digest; }
+  text() { return this.#encoding.text(); }
+  matches(value) {
+    if (value === this.#value) return true;
+    const captured = value !== null && typeof value === "object" ? capturedInvocations.get(value) : undefined;
+    return this.#encoding.matches(captured?.#encoding ?? new ProcessExecutionValueEncoding(value));
+  }
+  get disclosure() {
+    if (this.#disclosure === undefined) {
+      this.#disclosure = new ProcessExecutionInvocationDisclosure({ invocation: this.#value === null ? null : new InvocationPublicMetadata(this.#value, { privateInput: true }),
+        invocationDigest: this.#encoding.digest }, capturedMetadataAuthority);
+    }
+    return this.#disclosure;
+  }
+}
+
 /** Public semantic projection bound to the exact full private invocation bytes. */
 export class ProcessExecutionInvocationDisclosure {
-  constructor({ invocation, invocationDigest }) {
+  constructor({ invocation, invocationDigest }, authority = null) {
     if (typeof invocationDigest !== "string" || !/^[a-f0-9]{64}$/.test(invocationDigest)) throw new TypeError("Invocation digest is invalid");
-    this.invocation = invocation === null ? null : InvocationPublicMetadata.fromStored(executionValueSnapshot(invocation));
+    this.invocation = invocation === null ? null : authority === capturedMetadataAuthority || ownedPublicMetadata.has(invocation)
+      ? invocation : InvocationPublicMetadata.fromStored(executionValueSnapshot(invocation));
     this.invocationDigest = invocationDigest;
     Object.freeze(this);
   }
   static capture(privateInvocation) {
+    const captured = privateInvocation !== null && typeof privateInvocation === "object" ? capturedInvocations.get(privateInvocation) : undefined;
+    if (captured !== undefined) return captured.disclosure;
     const full = executionValueSnapshot(privateInvocation);
-    return new ProcessExecutionInvocationDisclosure({ invocation: full === null ? null : new InvocationPublicMetadata(full, { privateInput: true }).toJSON(), invocationDigest: executionValueDigest(full) });
+    return new ProcessExecutionInvocationDisclosure({ invocation: full === null ? null : new InvocationPublicMetadata(full, { privateInput: true }), invocationDigest: executionValueDigest(full) }, capturedMetadataAuthority);
   }
   static fromStored(value) { return exact(value, new ProcessExecutionInvocationDisclosure(value), "Invocation disclosure"); }
   matchesPrivate(value) { return isDeepStrictEqual(this.toJSON(), ProcessExecutionInvocationDisclosure.capture(value).toJSON()); }

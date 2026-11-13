@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import fs from "node:fs";
+import net from "node:net";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
 import { test } from "node:test";
@@ -15,7 +16,32 @@ import { ManagedStopOperationStore } from "../../../src/lib/managed-stop-store.j
 import { testTemporaryRoot } from "../../test-environment.js";
 import { SENNEL_BOOTSTRAP } from "../../support/infrastructure/node-bootstrap.js";
 import { createTmpDir, removeTmpDir } from "../../support/builders/tmp-dir.js";
-import { RuntimeRegistryPublicationFailure } from "../../support/infrastructure/runtime-registry-publication-failure.js";
+import { RuntimeRegistryPublicationFailure, readPhysicalRuntimeCompletion } from "../../support/infrastructure/runtime-registry-publication-failure.js";
+
+for (const fragment of ["", "{"]) test(`coordinator release observes actual exit with ${fragment ? "an incomplete request" : "an idle peer"} retaining its write half`, async (t) => {
+  const root = createTmpDir("coordinator-half-open-peer-");
+  let peer, complete = false, observedExit = null;
+  const errors = [];
+  t.after(() => {
+    if (!complete) { testTemporaryRoot().retainOnUnconfirmedExecution(); peer?.unref(); return; }
+    peer.destroy();
+    removeTmpDir(root);
+  });
+  const runtime = await ProcessExecutionRuntime.acquire({ mainRoot: root });
+  const grant = runtime.remoteGrant();
+  assert.ok(Number.isInteger(grant.endpoint.port), "the native TCP endpoint must be available");
+  runtime.control.child.once("exit", (code, signal) => { observedExit = { code, signal }; });
+  peer = net.createConnection({ host: grant.endpoint.host, port: grant.endpoint.port, allowHalfOpen: true });
+  peer.on("error", error => errors.push(error.code));
+  await once(peer, "connect");
+  if (fragment) peer.write(fragment);
+  peer.unref();
+  await runtime.close();
+  assert.deepEqual(observedExit, { code: 0, signal: null });
+  assert.equal(runtime.store.ownerLock.inspect(), null);
+  assert.deepEqual(errors, []);
+  complete = true;
+});
 
 async function fixture(t) {
   const root = createTmpDir("managed-control-");
@@ -127,14 +153,24 @@ test("a typed child-publication failure remains primary when scope closure also 
   assert.equal(witness.boundary, "after-publication");
   assert.equal(witness.callFact, "receipt");
   const persisted = JSON.parse(fs.readFileSync(runtime.store.file.filePath, "utf8"));
-  const call = persisted.payload.executions.at(-1).calls.find((entry) => entry.callId === witness.callId);
-  const receipt = new ProcessExecutionStopReceipt(call?.receipt);
+  const execution = persisted.payload.executions.at(-1);
+  const call = execution.calls.find((entry) => entry.callId === witness.callId);
+  assert.notEqual(call, undefined);
+  // Physical v9 facts are selected through their exact accepted completion.
+  // This is a diagnostic read, never confirmation of the interrupted root.
+  const section = readPhysicalRuntimeCompletion(runtime.store, execution.executionId, call.terminalRequest);
+  assert.equal(section.acceptance.operation, "finish");
+  assert.equal(section.settlement.callId, call.callId);
+  const receipt = section.settlementReceipt;
+  assert.ok(receipt instanceof ProcessExecutionStopReceipt);
   assert.equal(receipt.callId, call.callId);
   assert.equal(receipt.executionId, persisted.payload.executions.at(-1).executionId);
   assert.equal(receipt.observation.kind, "exited");
   assert.equal(receipt.observation.code, 0);
   assert.equal(receipt.observation.signal, null);
   assert.equal(receipt.stopEvidence.confirmed, true);
+  assert.equal(fs.existsSync(runtime.store.transition.filePath), true);
+  assert.throws(() => runtime.inspect(), { code: "PROCESS_EXECUTION_DURABILITY_UNCERTAIN" });
 });
 
 test("expired runtime admission cannot run later or release its waiting predecessor", async (t) => {

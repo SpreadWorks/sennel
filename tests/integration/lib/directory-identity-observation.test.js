@@ -85,14 +85,27 @@ test("unsafe native high-bit identity retains Node's signed bigint token", (t) =
   const { directory, parentAuthority } = fixture(t);
   const unsigned = (1n << 63n) + 5n;
   const exact = BigInt.asIntN(64, unsigned);
+  let observed = exact;
   observe(t, directory, (stat, bigint) => {
-    stat.ino = bigint ? exact : Number(unsigned);
+    stat.ino = bigint ? observed : Number(unsigned);
     return stat;
   });
   const authority = new RealDirectoryAuthority(directory, { parentAuthority });
   assert.equal(authority.assertStable(), directory);
   assert.equal(authority.identity.ino, exact);
   assert.ok(authority.identity.ino < 0n);
+  const stored = path.join(directory, "identity.json");
+  fs.writeFileSync(stored, JSON.stringify(authority.identity), { mode: 0o600 });
+  const restored = FileIdentity.fromStored(JSON.parse(fs.readFileSync(stored, "utf8")));
+  assert.equal(restored.ino, exact);
+  assert.equal(authority.identity.equals(restored), true);
+  assert.equal(restored.equals(new FileIdentity({ dev: restored.dev, ino: unsigned })), false);
+  observed = exact - 1n;
+  assert.equal(Number(observed), Number(exact));
+  assert.throws(() => authority.assertStable(), invalid);
+  assert.equal(authority.identity.ino, exact);
+  assert.equal(restored.equals(authority.identity), true);
+  assert.equal(fs.readFileSync(path.join(directory, "sentinel"), "utf8"), "retained");
 });
 
 for (const numeric of [-1, 0.5, NaN, Infinity]) {

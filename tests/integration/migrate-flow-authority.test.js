@@ -9,7 +9,7 @@ import { ActiveFlowRegistry } from "../../src/lib/active-flow-registry.js";
 import { FlowTargetIdentity, FlowTargetIdentityAuthority } from "../../src/lib/flow-target-identity-authority.js";
 import { FlowManager } from "../../src/lib/flow-manager.js";
 import { assertMigrationFlowAuthority, MigrationFlowAuthorityPreflight, MigrationFlowAuthoritySnapshot } from "../../src/lib/migration-flow-authority.js";
-import { OfflineMigrationDirectorySnapshot } from "../../src/lib/offline-migration-transaction.js";
+import { OfflineMigrationDirectorySnapshot } from "../support/assertions/migration-directory-snapshot.js";
 import { WorktreeFlowBindingStore, WorktreeFlowIdentity } from "../../src/lib/worktree-flow-binding.js";
 import { createTmpDir, removeTmpDir, writeJson } from "../support/builders/tmp-dir.js";
 import { SeedCleanupScope, SeedWorkRoot } from "../support/builders/seed-work-root.js";

@@ -5,7 +5,7 @@ import { pathToFileURL } from "node:url";
 /** Observe actual coordinator TCP frames and hold its second real query write. */
 export class ManagedAdmissionPublicationGate {
   #watcher = null;
-  constructor(root, firstRequestId, secondRequestId) {
+  constructor(root, firstRequestId, secondRequestId, { operation = "authenticate" } = {}) {
     this.root = root;
     this.firstRequestId = firstRequestId;
     this.secondRequestId = secondRequestId;
@@ -24,7 +24,10 @@ export class ManagedAdmissionPublicationGate {
           socket.prependListener('data',bytes=>{
             if(observed)return;input+=bytes.toString('utf8');const newline=input.indexOf('\\n');
             if(newline<0)return;observed=true;const message=JSON.parse(input.slice(0,newline));
-            if(ids.has(message.requestId))fs.writeFileSync(path.join(${JSON.stringify(root)},'frame-'+message.requestId),'received');
+            const messages=Array.isArray(message.messages)?message.messages:[message];
+            for(const entry of messages)if(ids.has(entry.requestId))fs.writeFileSync(path.join(${JSON.stringify(root)},'frame-'+entry.requestId),'received');
+            if(messages.length>1&&[...ids].every(id=>messages.some(entry=>entry.requestId===id)))
+              fs.writeFileSync(path.join(${JSON.stringify(root)},'shared-coordinator-frame'),JSON.stringify(messages.map(entry=>entry.requestId)));
           });
           return listener(socket);
         };
@@ -36,8 +39,8 @@ export class ManagedAdmissionPublicationGate {
         if(!blocked&&path.basename(name).startsWith(${JSON.stringify(`.${secondRequestId}.json.`)})&&name.endsWith('.tmp')
           &&name.includes(path.sep+'requests'+path.sep)){
           const record=JSON.parse(fs.readFileSync(file,'utf8'));
-          if(record.payload?.requestId===${JSON.stringify(secondRequestId)}&&record.payload.response===null){
-            blocked=true;fs.writeFileSync(${JSON.stringify(this.blockedPath)},JSON.stringify({requestId:record.payload.requestId,links:fs.lstatSync(file).nlink}));
+          if(record.payload?.version===9&&record.payload.operation===${JSON.stringify(operation)}&&record.payload.response===null){
+            blocked=true;fs.writeFileSync(${JSON.stringify(this.blockedPath)},JSON.stringify({requestId:${JSON.stringify(secondRequestId)},links:fs.lstatSync(file).nlink}));
             const heldUntil=performance.now()+30000;
             while(!fs.existsSync(${JSON.stringify(this.releasePath)})){
               if(performance.now()>=heldUntil)throw new Error('Owned admission publication fixture gate exceeded its finite hold');
@@ -69,5 +72,6 @@ export class ManagedAdmissionPublicationGate {
   get blocked() { return fs.existsSync(this.blockedPath); }
   release() { fs.writeFileSync(this.releasePath, "release"); }
   close() { this.release(); this.#watcher?.close(); }
+  sharedFrameRequestIds() { return JSON.parse(fs.readFileSync(path.join(this.root, "shared-coordinator-frame"), "utf8")); }
   observation() { return JSON.parse(fs.readFileSync(this.blockedPath, "utf8")); }
 }

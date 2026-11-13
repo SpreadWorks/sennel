@@ -9,9 +9,44 @@
  */
 
 import { LogicalRelativePath } from "./portable-path.js";
+import { RepositoryMaintenanceLock } from "./repository-maintenance-lock.js";
+import { ProcessExecutionRuntime, ProcessRuntimeRecordMigrationStorage } from "./process-execution-runtime.js";
 
 const COMPONENT = /^[a-z][a-z0-9-]*$/;
 const CLASSIFICATIONS = new Set(["converted", "preserved", "omitted", "relocatedTransient", "missingTransient", "generated"]);
+
+/** Run a captured offline migration under the existing repository exclusion.
+ * Callers resolve no-op and read-only plans before entering this boundary. */
+export function withRepositoryMigrationExclusion(root, { revalidate, quiescence = null }, execute) {
+  if (typeof revalidate !== "function" || typeof execute !== "function") {
+    throw new TypeError("migration exclusion requires capture revalidation and execution");
+  }
+  if (quiescence !== null && (!(quiescence instanceof ProcessRuntimeRecordMigrationStorage)
+    || quiescence.checkout.mainRoot !== root)) throw new TypeError("migration quiescence requires matching explicit runtime storage authority");
+  const validate = () => {
+    if (quiescence === null) ProcessExecutionRuntime.assertQuiescent({ mainRoot: root });
+    else quiescence.assertQuiescent();
+    revalidate();
+  };
+  validate();
+  const lock = new RepositoryMaintenanceLock({ mainRoot: root });
+  lock.acquire();
+  let failure = null;
+  try {
+    validate();
+    return execute();
+  } catch (error) {
+    failure = error;
+    throw error;
+  } finally {
+    try { lock.release(); }
+    catch (cleanupError) {
+      if (failure !== null) throw new AggregateError([failure, cleanupError],
+        `migration execution and exclusion release failed: ${failure.message}; ${cleanupError.message}`, { cause: failure });
+      throw cleanupError;
+    }
+  }
+}
 
 function requiredText(value, field) {
   if (typeof value !== "string" || value.trim() === "") throw new Error(`${field} must be a non-empty string`);
@@ -200,8 +235,8 @@ export class MigrationPlan {
 
 /** Immutable report material suitable for one canonical migration report. */
 export class MigrationReport {
-  constructor({ schemaRevision = 1, migration, sourceFiles = [], target, mappings = [] } = {}) {
-    if (schemaRevision !== 1) throw new Error("migration report schema revision is unsupported");
+  constructor({ schemaRevision = 2, migration, sourceFiles = [], target, mappings = [] } = {}) {
+    if (schemaRevision !== 2) throw new Error("migration report schema revision is unsupported");
     if (!migration || typeof migration !== "object" || Array.isArray(migration)) throw new Error("migration report requires migration metadata");
     if (!target || typeof target !== "object" || Array.isArray(target)) throw new Error("migration report requires target metadata");
     if (!Array.isArray(sourceFiles) || sourceFiles.some((entry) => !entry || typeof entry !== "object" || Array.isArray(entry))) {

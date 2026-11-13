@@ -34,8 +34,11 @@ import {
   FlowArtifactAttemptRecord,
 } from "../../src/lib/flow-artifact-contract.js";
 import { CanonicalFlowFixture } from "../support/infrastructure/flow-setup.js";
+import { withReadOnlyManagedProcessScope } from "../../src/lib/managed-process.js";
 import { commitAll, initGitRepo } from "../support/infrastructure/git-repo.js";
 import { createTmpDir, removeTmpDir } from "../support/builders/tmp-dir.js";
+import { removeQuiescentRuntimeFixture } from "../support/infrastructure/runtime-fixture-cleanup.js";
+import { testTemporaryRoot } from "../test-environment.js";
 import {
   validWorkerHandoffTaskSpec,
   workerArtifactJson,
@@ -104,6 +107,14 @@ class AgentStageTiming {
   closeOpen() {
     for (const [stage, startedAt] of this.started) this.write(stage, "end", "interrupted-before-cleanup", startedAt);
     this.started.clear();
+  }
+
+  observeFailure(error) {
+    this.write("scenario", "failure", {
+      name: error.name, code: error.code ?? null, operator: error.operator ?? null,
+      actualType: typeof error.actual, actual: error.actual,
+      expectedType: typeof error.expected, expected: error.expected, message: error.message,
+    });
   }
 
   close() {
@@ -507,24 +518,32 @@ function action(stepId) {
   };
 }
 
-describe("real agent worker artifact handoff", { timeout: 480_000 }, () => {
-  it("keeps a source handoff valid when a real worker reads context and checks its source", async () => {
+const WORKER_HANDOFF_CASE_TIMEOUT_MS = 480_000;
+const TASK_REVIEW_REPAIR_CASE_TIMEOUT_MS = 3 * 2 * 240_000 + WORKER_HANDOFF_CASE_TIMEOUT_MS;
+
+describe("real agent worker artifact handoff", { timeout: 3 * WORKER_HANDOFF_CASE_TIMEOUT_MS + TASK_REVIEW_REPAIR_CASE_TIMEOUT_MS }, () => {
+  it("keeps a source handoff valid when a real worker reads context and checks its source", { timeout: WORKER_HANDOFF_CASE_TIMEOUT_MS }, async () => {
     const stageTimingPath = process.env.SENNEL_AGENT_STAGE_TIMING_PATH
       ? path.resolve(process.env.SENNEL_AGENT_STAGE_TIMING_PATH) : null;
     const stageTiming = new AgentStageTiming(stageTimingPath);
     const originalPath = process.env.PATH;
     let temporaryRoot;
+    let mainRoot;
+    let executionRoot;
+    const specId = "507-worker-handoff-agent-source";
+    const runId = "run-worker-handoff-agent-source";
     try {
       stageTiming.start("fixture-setup");
       temporaryRoot = createTmpDir("worker-handoff-agent-source-");
-      const mainRoot = path.join(temporaryRoot, "main");
-      const executionRoot = path.join(temporaryRoot, "execution");
+      mainRoot = path.join(temporaryRoot, "main");
+      executionRoot = path.join(temporaryRoot, "execution");
       fs.mkdirSync(mainRoot, { recursive: true });
       initGitRepo(mainRoot);
       fs.mkdirSync(path.join(mainRoot, "docs"), { recursive: true });
       fs.writeFileSync(path.join(mainRoot, ".gitignore"), ".sennel/\n.test-bin/\n.tmp/\n");
       fs.writeFileSync(path.join(mainRoot, "docs", "context.md"), "# Context\n\nRead by the source worker.\n");
       fs.writeFileSync(path.join(mainRoot, "package.json"), `${JSON.stringify({
+        type: "module",
         scripts: { lint: "node --check product.js" },
       }, null, 2)}\n`);
       fs.writeFileSync(path.join(mainRoot, "product.js"), "export const value = 1;\n");
@@ -538,12 +557,11 @@ describe("real agent worker artifact handoff", { timeout: 480_000 }, () => {
 
       stageTiming.end("fixture-setup");
       stageTiming.start("fixture-activation");
-      const specId = "507-worker-handoff-agent-source";
       const flowManager = new FlowManager({ root: executionRoot, mainRoot, inWorktree: true, specId });
-      const fixture = new CanonicalFlowFixture({
+      const fixture = await withReadOnlyManagedProcessScope({ mainRoot, executionRoot }, () => new CanonicalFlowFixture({
         flowManager,
         specId,
-        runId: "run-worker-handoff-agent-source",
+        runId,
         request: "Read canonical context and complete a source worker handoff.",
         execution: {
           mode: "worktree",
@@ -569,7 +587,7 @@ describe("real agent worker artifact handoff", { timeout: 480_000 }, () => {
         origin: "plan",
         added_round: 0,
         status: "pending",
-      }).registerActive().activate("implement");
+      }).registerActive().activate("implement"));
       stageTiming.end("fixture-activation");
       stageTiming.start("fixture-setup");
       const dispatcher = new RunDispatchCommand({
@@ -610,6 +628,7 @@ describe("real agent worker artifact handoff", { timeout: 480_000 }, () => {
         });
       } catch (error) {
         stageTiming.end("source-worker-dispatch", "threw");
+        testTemporaryRoot().retainOnUnconfirmedExecution(error);
         throw error;
       }
       stageTiming.end("source-worker-dispatch");
@@ -634,13 +653,17 @@ describe("real agent worker artifact handoff", { timeout: 480_000 }, () => {
         && entry.metric?.counter === "docsRead"
       )), true);
       stageTiming.end("scenario-assertions");
+    } catch (error) {
+      stageTiming.observeFailure(error);
+      throw error;
     } finally {
       stageTiming.closeOpen();
       stageTiming.start("cleanup");
       process.env.PATH = originalPath;
       let cleanupOutcome = "completed";
       try {
-        if (temporaryRoot !== undefined) removeTmpDir(temporaryRoot);
+        if (temporaryRoot !== undefined && !removeQuiescentRuntimeFixture({ mainRoot, executionRoot,
+          runId, specId, cleanup: () => removeTmpDir(temporaryRoot) })) cleanupOutcome = "retained-unconfirmed";
       } catch (error) {
         cleanupOutcome = "threw";
         throw error;
@@ -651,7 +674,7 @@ describe("real agent worker artifact handoff", { timeout: 480_000 }, () => {
     }
   });
 
-  it("has a real Codex CLI worker hand off triage and repair to a downstream command", async () => {
+  it("has a real Codex CLI worker hand off triage and repair to a downstream command", { timeout: WORKER_HANDOFF_CASE_TIMEOUT_MS }, async () => {
     const mainRoot = createTmpDir("worker-handoff-agent-main-");
     const diagnosticPath = process.env.SENNEL_AGENT_DIAGNOSTIC_DIR
       ? path.join(process.env.SENNEL_AGENT_DIAGNOSTIC_DIR, "worker-handoff-triage-repair.jsonl") : null;
@@ -873,13 +896,16 @@ describe("real agent worker artifact handoff", { timeout: 480_000 }, () => {
       const source = new CanonicalDraftReviewSource({ flowManager, state: refined, phase: "draft-coverage" });
       assert.equal(source.sourceNodeId, "draft-questions-repair");
       assert.deepEqual(JSON.parse(source.bytes), draftHandoffPayload("Parent publication is canonical."));
+    } catch (error) {
+      testTemporaryRoot().retainOnUnconfirmedExecution(error);
+      throw error;
     } finally {
       process.env.PATH = originalPath;
-      removeTmpDir(mainRoot);
+      removeQuiescentRuntimeFixture({ mainRoot, executionRoot: path.join(mainRoot, "execution") });
     }
   });
 
-  it("keeps Task review and host filtering read-only before a real repair and re-review", async () => {
+  it("keeps Task review and host filtering read-only before a real repair and re-review", { timeout: TASK_REVIEW_REPAIR_CASE_TIMEOUT_MS }, async () => {
     const root = createTmpDir("task-review-triage-repair-agent-");
     const diagnosticPath = process.env.SENNEL_AGENT_DIAGNOSTIC_DIR
       ? path.join(process.env.SENNEL_AGENT_DIAGNOSTIC_DIR, "task-review-repair.jsonl") : null;
@@ -1152,13 +1178,16 @@ describe("real agent worker artifact handoff", { timeout: 480_000 }, () => {
         reloadedManager.taskMutationLineages({ specId, taskId }).map((lineage) => lineage.role),
         ["implementation", "repair"],
       );
+    } catch (error) {
+      testTemporaryRoot().retainOnUnconfirmedExecution(error);
+      throw error;
     } finally {
       process.env.PATH = originalPath;
-      removeTmpDir(root);
+      removeQuiescentRuntimeFixture({ mainRoot: root });
     }
   });
 
-  it("has a real Codex spec worker seal and publish a canonical spec", async () => {
+  it("has a real Codex spec worker seal and publish a canonical spec", { timeout: WORKER_HANDOFF_CASE_TIMEOUT_MS }, async () => {
     const mainRoot = createTmpDir("worker-handoff-agent-spec-main-");
     const originalPath = process.env.PATH;
     try {
@@ -1239,9 +1268,12 @@ describe("real agent worker artifact handoff", { timeout: 480_000 }, () => {
         flowManager.artifactCatalog(specId).artifacts.some((entry) => entry.logicalKey === "spec.record"),
         true,
       );
+    } catch (error) {
+      testTemporaryRoot().retainOnUnconfirmedExecution(error);
+      throw error;
     } finally {
       process.env.PATH = originalPath;
-      removeTmpDir(mainRoot);
+      removeQuiescentRuntimeFixture({ mainRoot, executionRoot: path.join(mainRoot, "execution") });
     }
   });
 });

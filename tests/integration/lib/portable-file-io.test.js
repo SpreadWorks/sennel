@@ -4,7 +4,8 @@ import path from "node:path";
 import { test } from "node:test";
 import { AtomicFile, AtomicFileWriteError } from "../../../src/lib/atomic-file.js";
 import { RealDirectoryAuthority } from "../../../src/lib/real-directory-authority.js";
-import { captureRegularFile } from "../../../src/lib/regular-file-snapshot.js";
+import { captureRegularFile, RegularFileSnapshot, visitRegularFileChunks } from "../../../src/lib/regular-file-snapshot.js";
+import crypto from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { appendRegularFile, RegularFileAppendError } from "../../../src/lib/regular-file-io.js";
 import { createTmpDir, removeTmpDir } from "../../support/builders/tmp-dir.js";
@@ -80,6 +81,8 @@ test("an authority first observed after absence cannot reuse an ancestor's canon
     }
     return realpath(target, ...args);
   });
+  // Fail both resolvers so this remains a failed canonical lookup.
+  t.mock.method(fs.realpathSync, "native", () => { throw failure; });
   assert.throws(() => authority.assertStable(), (error) => error.cause === failure);
   assert.throws(() => authority.assertStable(), /invalid directory authority/);
   assert.equal(authority.assertStable(), directory);
@@ -584,4 +587,113 @@ test("authority failure classification follows wrapped and cyclic error graphs w
   assert.equal(RealDirectoryAuthority.isAuthorityFailure(fake), false);
   const wrapped = new AggregateError([cycle, new Error("writer", { cause: refusal })], "wrapped refusal");
   assert.equal(RealDirectoryAuthority.isAuthorityFailure(wrapped), true);
+});
+
+
+test("public file snapshots own their Buffer bytes and never trust caller digest or receipt hints", (t) => {
+  const { file } = fixture(t);
+  const original = Buffer.from([0, 255, 128, 10, 13, 0]);
+  fs.writeFileSync(file, original);
+  const supplied = Buffer.from(original);
+  const expectedDigest = crypto.createHash("sha256").update(original).digest("hex");
+  const snapshot = new RegularFileSnapshot({ filePath: file, bytes: supplied, digest: "0".repeat(64) });
+  supplied.fill(42);
+  const exposed = snapshot.bytes; exposed.fill(43);
+  assert.deepEqual(snapshot.bytes, original);
+  assert.equal(snapshot.text(), original.toString("utf8"));
+  assert.equal(snapshot.digest, expectedDigest);
+  assert.equal(snapshot.byteLength, original.length);
+  assert.equal(Object.isFrozen(snapshot), true);
+  const receipt = visitRegularFileChunks(file, { label: "public snapshot receipt", maxBytes: original.length, visit() {} });
+  assert.throws(() => new RegularFileSnapshot({ filePath: file, bytes: receipt }), /Buffer bytes/);
+  assert.throws(() => new RegularFileSnapshot({ filePath: file, bytes: { bytes: original, receipt } }), /Buffer bytes/);
+});
+
+test("captured snapshots retain exact empty and multi-chunk binary bytes through detached validation copies", (t) => {
+  const { file } = fixture(t);
+  const binary = Buffer.alloc(2 * 1024 * 1024 + 19);
+  for (let index = 0; index < binary.length; index++) binary[index] = index % 251;
+  for (const original of [Buffer.alloc(0), binary]) {
+    fs.writeFileSync(file, original);
+    const charges = [];
+    let validated = null;
+    const snapshot = captureRegularFile(file, { label: "captured exact binary", maxBytes: original.length,
+      onRead(length) { charges.push(length); }, validateSnapshot(value) {
+        validated = value;
+        assert.equal(Object.isFrozen(value), true);
+        const exposed = value.bytes; exposed.fill(254);
+      } });
+    assert.equal(snapshot, validated);
+    assert.deepEqual(snapshot.bytes, original);
+    assert.equal(snapshot.digest, crypto.createHash("sha256").update(original).digest("hex"));
+    assert.equal(snapshot.byteLength, original.length);
+    assert.equal(snapshot.text(), original.toString("utf8"));
+    assert.deepEqual(charges, [original.length]);
+    const secondCopy = snapshot.bytes; secondCopy.fill(253);
+    assert.deepEqual(snapshot.bytes, original);
+    fs.writeFileSync(file, "later physical bytes");
+    assert.deepEqual(snapshot.bytes, original);
+  }
+});
+
+test("snapshot validation refusal closes the descriptor and preserves any later close failure", (t) => {
+  const { file } = fixture(t);
+  const original = Buffer.from("complete validated content");
+  fs.writeFileSync(file, original);
+  for (const failClose of [false, true]) {
+    const primary = new Error("snapshot consumer refusal"), cleanup = new Error("descriptor close refusal");
+    const open = fs.openSync, close = fs.closeSync;
+    let descriptor = null, closed = 0, validated = null;
+    const charges = [];
+    fs.openSync = (target, ...args) => { const result = open(target, ...args); if (target === file) descriptor = result; return result; };
+    fs.closeSync = value => { const result = close(value); if (value === descriptor) { closed++; if (failClose) throw cleanup; } return result; };
+    try {
+      assert.throws(() => captureRegularFile(file, { label: "consumer refusal", maxBytes: original.length,
+        onRead(length) { charges.push(length); }, validateSnapshot(snapshot) { validated = snapshot; throw primary; } }),
+      error => failClose ? error instanceof AggregateError && error.cause === primary
+        && error.errors[0] === primary && error.errors[1] === cleanup && error.cleanupFailed === true : error === primary);
+    } finally { fs.openSync = open; fs.closeSync = close; }
+    assert.equal(closed, 1);
+    assert.throws(() => fs.fstatSync(descriptor), { code: "EBADF" });
+    assert.deepEqual(charges, [original.length]);
+    assert.deepEqual(validated.bytes, original);
+    assert.equal(validated.digest, crypto.createHash("sha256").update(original).digest("hex"));
+    assert.deepEqual(fs.readFileSync(file), original);
+  }
+});
+
+
+test("captured snapshots assemble short native reads and refuse growth after their initial size", (t) => {
+  const { file } = fixture(t);
+  const bytes = Buffer.alloc(2 * 1024 * 1024 + 19);
+  for (let index = 0; index < bytes.length; index++) bytes[index] = index % 251;
+  const read = fs.readSync;
+  for (const grows of [false, true]) {
+    fs.writeFileSync(file, bytes);
+    let calls = 0, grew = false;
+    const charges = [];
+    fs.readSync = (descriptor, buffer, offset, length, position) => {
+      calls++;
+      if (grows && !grew && position >= bytes.length) {
+        fs.appendFileSync(file, Buffer.from([252, 253])); grew = true;
+      }
+      return read(descriptor, buffer, offset, Math.min(length, 131071), position);
+    };
+    try {
+      const capture = () => captureRegularFile(file, { label: "short native reads", maxBytes: bytes.length,
+        onRead(length) { charges.push(length); } });
+      if (grows) {
+        assert.throws(capture, { code: "REGULAR_FILE_READ_LIMIT" });
+        assert.equal(grew, true);
+        assert.deepEqual(charges, [bytes.length + 1]);
+      } else {
+        const snapshot = capture();
+        assert.deepEqual(snapshot.bytes, bytes);
+        assert.equal(snapshot.digest, crypto.createHash("sha256").update(bytes).digest("hex"));
+        assert.deepEqual(charges, [bytes.length]);
+      }
+      assert.ok(calls > 2, "the real reader must assemble partial native results through EOF or its bound");
+    } finally { fs.readSync = read; }
+    assert.deepEqual(fs.readFileSync(file), grows ? Buffer.concat([bytes, Buffer.from([252, 253])]) : bytes);
+  }
 });

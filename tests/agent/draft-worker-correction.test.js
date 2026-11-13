@@ -14,7 +14,8 @@ import { sealWorkerArtifactHandoff } from "../../src/flow/lib/worker-artifact-ha
 import { CanonicalFlowFixture, canonicalDraftDocument } from "../support/infrastructure/flow-setup.js";
 import { DraftGateRepairScenario } from "../support/infrastructure/draft-gate-repair-scenario.js";
 import { createScenarioProviderFake, dispatchContainer, fixtureRepository, requestInput, requestPayloadPath } from "../support/infrastructure/flow-dispatch-scenario.js";
-import { removeTmpDir } from "../support/builders/tmp-dir.js";
+import { removeQuiescentRuntimeFixture } from "../support/infrastructure/runtime-fixture-cleanup.js";
+import { testTemporaryRoot } from "../test-environment.js";
 import { workerArtifactJson } from "../support/infrastructure/worker-artifact.js";
 
 const CLI = fileURLToPath(new URL("../../src/sennel.js", import.meta.url));
@@ -101,9 +102,12 @@ it("a real producer corrects a retained structural rejection through the guarded
     evidence.draft = draft;
     evidence.observations = observations.length;
     evidence.result = "passed";
+  } catch (error) {
+    testTemporaryRoot().retainOnUnconfirmedExecution(error);
+    throw error;
   } finally {
     if (process.env.SENNEL_DRAFT_CORRECTION_EVIDENCE) fs.writeFileSync(process.env.SENNEL_DRAFT_CORRECTION_EVIDENCE, workerArtifactJson(evidence));
     process.env.PATH = originalPath;
-    removeTmpDir(root);
+    removeQuiescentRuntimeFixture({ mainRoot: root });
   }
 });

@@ -134,7 +134,8 @@ test("communication failure survives context, later stop proof, storage and enve
 
 test("communication evidence refuses unknown fields, invalid times, unordered or excessive history and retired failure revisions", () => {
   for (const mutate of [
-    (value) => { value.communication.schemaVersion = 2; },
+    (value) => { value.communication.schemaVersion = 1; },
+    (value) => { value.communication.schemaVersion = 3; },
     (value) => { delete value.communication.schemaVersion; },
     (value) => { value.communication.ownerToken = "secret"; },
     (value) => { value.communication.attempts[0].stack = "trace"; },
@@ -142,6 +143,7 @@ test("communication evidence refuses unknown fields, invalid times, unordered or
     (value) => { value.communication.cutoff = "success"; },
     (value) => { value.communication.acceptance = "success"; },
     (value) => { value.communication.stopConfirmation = "assumed"; },
+    (value) => { value.communication.stopConfirmed = "assumed"; },
     (value) => { value.communication.elapsedMs = null; },
     (value) => { value.communication.budgetMs = Infinity; },
     (value) => { value.communication.attempts[0].elapsedMs = -1; },
@@ -156,8 +158,10 @@ test("communication evidence refuses unknown fields, invalid times, unordered or
     mutate(stored);
     assert.throws(() => ProcessExecutionControlFailure.fromStored(stored), TypeError, mutate.toString());
   }
-  const retired = failure().toJSON(); retired.schemaVersion = 1;
-  assert.throws(() => ProcessExecutionControlFailure.fromStored(retired), { code: "PROCESS_EXECUTION_FAILURE_EVIDENCE_UNSUPPORTED" });
+  for (const schemaVersion of [1, 2]) {
+    const retired = { ...failure().toJSON(), schemaVersion };
+    assert.throws(() => ProcessExecutionControlFailure.fromStored(retired), { code: "PROCESS_EXECUTION_FAILURE_EVIDENCE_UNSUPPORTED" });
+  }
 });
 
 test("pre-attempt interruption records measured elapsed time with no fabricated attempt", () => {

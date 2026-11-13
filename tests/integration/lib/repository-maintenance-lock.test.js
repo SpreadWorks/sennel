@@ -29,6 +29,25 @@ describe("repository maintenance lock", () => {
   let tmp;
   afterEach(() => tmp && removeTmpDir(tmp));
 
+  it("releases only its owned lock after the migration destination changes while preserving newly observed legacy evidence", () => {
+    tmp = createTmpDir("repository-maintenance-migration-generation-");
+    const canonical = path.join(tmp, ".sennel");
+    fs.mkdirSync(canonical);
+    const maintenance = new RepositoryMaintenanceLock({ mainRoot: tmp });
+    maintenance.acquire();
+    fs.renameSync(canonical, path.join(tmp, "retained-canonical"));
+    fs.mkdirSync(canonical);
+    const foreign = path.join(canonical, ".repository-maintenance.lock");
+    fs.writeFileSync(foreign, "unverified legacy owner\n");
+    const before = lockSnapshot(foreign);
+    maintenance.release();
+    assert.equal(fs.existsSync(RepositoryMaintenanceLock.pathFor(tmp)), false);
+    assertLockUnchanged(foreign, before, "releasing current authority");
+    assert.throws(() => new RepositoryMaintenanceLock({ mainRoot: tmp }).acquire(),
+      { code: "REPOSITORY_MAINTENANCE_LOCK_UNKNOWN" });
+    assertLockUnchanged(foreign, before, "refusing subsequent admission");
+  });
+
   it("all scoped repository locks inspect without creating storage and acquire outside the migration destination", () => {
     tmp = createTmpDir("repository-control-scope-");
     const authority = new RepositoryLockAuthority(tmp);

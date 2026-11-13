@@ -5,7 +5,7 @@ import { ProcessExecutionFinalizationBarrier } from "../../lib/process-execution
 import { CanonicalPromptResponseAdoption, PromptResponseAdoptionAdmissionValue } from "./prompt-response-adoption.js";
 import { FlowExecutionObservationStore } from "./flow-execution-observation-store.js";
 import { SourceExecutionObservationAppends } from "./source-execution-observation-appends.js";
-import { FlowExecutionObservationBinding, FlowExecutionMeasurementReference } from "../../lib/flow-execution-observation.js";
+import { FlowExecutionObservationBinding, FlowExecutionMeasurementReference, parseFlowExecutionObservationArtifact } from "../../lib/flow-execution-observation.js";
 import { CanonicalFlowArtifactBaseline } from "./canonical-flow-artifact-baseline.js";
 import { CurrentFlowStateInvariantError } from "./current-flow-state-invariant-error.js";
 import { isPlainObject, requireString } from "./current-flow-value-validation.js";
@@ -52,7 +52,7 @@ import { AuthoritativeSpecRecord, FlowActivityId, FlowArtifactCatalog, FlowArtif
 import { FlowSpecRevision } from "../../lib/flow-spec-revision.js";
 import { FLOW_ARTIFACT_CONTRACTS, FlowArtifactActivityEvidence, FlowArtifactUpdater,
   FlowArtifactSpecReviewActivityEvidenceDocument } from "../../lib/flow-artifact-contract.js";
-import { CanonicalSpecReview, initialCanonicalSpecReview } from "./spec-review-artifacts.js";
+import { CanonicalSpecReview, SpecRevisionIdentity, initialCanonicalSpecReview } from "./spec-review-artifacts.js";
 import { GateObservationCycleReader } from "./gate-observation-convergence.js";
 import { isConditionalDraftWorkerStep } from "./draft-conditional-worker.js";
 import { DRAFT_WORKER_RECOVERY_OPERATION, DRAFT_STEP_ERROR_RECOVERY_OPERATION, DraftWorkerRecoveryDecision, DraftStepErrorRecoveryReceipt } from "./draft-worker-recovery.js";
@@ -617,7 +617,7 @@ export class CanonicalFlowReviewEvidenceWrite {
  * checked again by the catalog when the ledger is read.
  */
 export class CanonicalFlowActivityEvidenceWrite {
-  constructor({ artifact, mediaType, bytes } = {}) {
+  constructor({ artifact, mediaType, bytes, processEvidence = null } = {}) {
     if (!(artifact instanceof FlowArtifactActivityEvidence)) {
       throw new CurrentFlowStateInvariantError("canonical activity evidence requires a typed Activity evidence artifact");
     }
@@ -628,7 +628,7 @@ export class CanonicalFlowActivityEvidenceWrite {
     else throw new CurrentFlowStateInvariantError("canonical activity evidence bytes must be a string or Buffer");
     // Parse at the public boundary so malformed evidence never reaches a
     // state journal or a partially published catalog tree.
-    this.document = this.artifact.contract.contentContract.parse(this.bytes);
+    this.document = this.artifact.contract.contentContract.parse(this.bytes, { processEvidence });
     Object.freeze(this);
   }
 
@@ -8715,7 +8715,7 @@ class CanonicalSpecReviewActivityPublication {
     const bytes = Buffer.from(`${JSON.stringify(document.toJSON(), null, 2)}\n`, "utf8");
     return new CanonicalFlowActivityEvidenceWrite({
       artifact: FLOW_ARTIFACT_CONTRACTS.activityEvidence({ nodeId: activity.nodeId, digest: sha256Bytes(bytes) }),
-      mediaType: "application/json", bytes,
+      mediaType: "application/json", bytes, processEvidence: this.review.processEvidence,
     });
   }
 }
@@ -9808,6 +9808,7 @@ export class CanonicalTransitionView {
     // from the view. Keep that capability bound to this lock-scoped catalog
     // instead of requiring every admission to know the concrete view type.
     this.readCatalogedArtifact = this.readCatalogedArtifact.bind(this);
+    this.readArtifactSnapshot = this.readArtifactSnapshot.bind(this);
     this.readRuntimeArtifact = this.readRuntimeArtifact.bind(this);
     Object.freeze(this);
   }
@@ -9852,7 +9853,7 @@ export class CanonicalTransitionView {
       activities: this.activities.slice(0, retainedCount).map((activity) => activity.toJSON()), artifacts })));
   }
 
-  readCatalogedArtifact(descriptor, { maxBytes = undefined, onRead = undefined } = {}) {
+  readArtifactSnapshot(descriptor, { maxBytes = undefined, onRead = undefined } = {}) {
     if (descriptor === null || typeof descriptor !== "object" || typeof descriptor.relativePath !== "string") {
       throw new CurrentFlowStateInvariantError("canonical transition view requires an artifact descriptor");
     }
@@ -9860,7 +9861,12 @@ export class CanonicalTransitionView {
     if (current.hash !== descriptor.hash || current.activityId !== descriptor.activityId) {
       throw new CurrentFlowStateInvariantError("canonical transition view artifact descriptor changed");
     }
-    return current.readBytes(this.location, { maxBytes, onRead });
+    return this.catalog.readArtifact(this.location, current.relativePath, { maxBytes, onRead });
+  }
+
+
+  readCatalogedArtifact(descriptor, options = {}) {
+    return this.readArtifactSnapshot(descriptor, options).bytes;
   }
 
   readRuntimeArtifact({ logicalKey } = {}) {
@@ -9896,9 +9902,7 @@ export class CurrentFlowVersionStore {
     this.allowStaging = allowStaging === true;
     this.catalogStore = new FlowArtifactCatalogStore({
       location,
-      assertInitialReadFormat: () => CurrentFlowStateStore.assertInitialReadFormat({
-        directory: this.location.directory, definition: this.definition,
-      }),
+      assertInitialReadFormat: () => this.#assertInitialReadFormat(),
       ...(faultInjector && { faultInjector }),
     });
     Object.freeze(this);
@@ -10036,6 +10040,7 @@ export class CurrentFlowVersionStore {
       relativePaths: [resolvedArtifact("flow.state").relativePath],
       read: (catalog) => {
         this.#assertSpecRevisionAuthority(catalog);
+        this.#assertExecutionSourceContracts(catalog);
         return this.#assertPersistedIdentity(this.#store().load());
       },
     });
@@ -10045,6 +10050,7 @@ export class CurrentFlowVersionStore {
       relativePaths: [resolvedArtifact("flow.state").relativePath],
       read: (catalog) => {
         this.#assertSpecRevisionAuthority(catalog);
+        this.#assertExecutionSourceContracts(catalog);
         const snapshot = this.#store().loadSnapshot();
         if (snapshot === null) return null;
         this.#assertPersistedIdentity(snapshot.state);
@@ -10133,6 +10139,10 @@ export class CurrentFlowVersionStore {
       read: (catalog) => read(catalog, this.#store().loadSnapshot()),
     });
   }
+  #readSpecReviewBytes(catalog, bytes, identity = null) {
+    const processEvidence = catalog.processStopEncoding(this.location, "spec.review", [bytes]);
+    return CanonicalSpecReview.fromBytes(bytes, { processEvidence, identity });
+  }
   #readSpecReviewRevision(catalog, revision) {
     const parameters = { revision: new FlowSpecRevision(revision).pathSegment };
     const reviewPath = resolvedArtifact("spec.review", parameters).relativePath;
@@ -10145,7 +10155,7 @@ export class CurrentFlowVersionStore {
     }
     const bytes = captureRegularFile(this.location.resolve(reviewPath), { label: "managed Flow artifact", maxBytes: MAX_IN_MEMORY_FILE_BYTES, requireSingleLink: true }).bytes;
     const snapshotBytes = captureRegularFile(this.location.resolve(snapshotPath), { label: "managed Flow artifact", maxBytes: MAX_IN_MEMORY_FILE_BYTES, requireSingleLink: true }).bytes;
-    const review = new CanonicalSpecReview(JSON.parse(bytes.toString("utf8")));
+    const review = this.#readSpecReviewBytes(catalog, bytes);
     if (descriptor.hash !== sha256Bytes(bytes) || descriptor.size !== bytes.length
       || review.digest !== descriptor.hash
       || snapshotDescriptor.hash !== sha256Bytes(snapshotBytes) || snapshotDescriptor.size !== snapshotBytes.length
@@ -10168,7 +10178,7 @@ export class CurrentFlowVersionStore {
             revision: authority.revision,
             descriptor: authority.reviewDescriptor,
             bytes,
-            review: new CanonicalSpecReview(JSON.parse(bytes.toString("utf8"))),
+            review: this.#readSpecReviewBytes(catalog, bytes),
             persisted: true,
           });
         }
@@ -10269,6 +10279,14 @@ export class CurrentFlowVersionStore {
       throw new CurrentFlowStateInvariantError("review publication Activity facts are derived only by the canonical Version Store");
     }
     const completionActivity = input?.completionActivity == null ? null : FlowActivity.canonical(input.completionActivity);
+    const followingProcessActivities = (input?.followingProcessActivities ?? []).map((entry) => FlowActivity.canonical(entry));
+    if (followingProcessActivities.length > 0 && (completionActivity !== null
+      || [activity, ...followingProcessActivities].some((entry, index) => entry.transition.operation !== PROCESS_EVENT_OPERATION
+        || entry.confirmationOrder !== activity.confirmationOrder + index
+        || entry.processEvent.executionId !== activity.processEvent.executionId
+        || !entry.processEvent.binding.matches(activity.processEvent.binding)))) {
+      throw new CurrentFlowStateInvariantError("Process event transaction requires ordered Activities for one execution and binding");
+    }
     const completesFlow = activity.result?.draftSettlementReceipt?.settlementKind === "completion";
     if (completesFlow !== (completionActivity !== null)
       || (completionActivity !== null && (activity.transition.operation !== "confirm_attempt"
@@ -10329,7 +10347,7 @@ export class CurrentFlowVersionStore {
     const reviewRecord = this.#reviewPublicationRecord(activity, artifactWrites, specRevisionPlan);
     const reviewPublication = reviewRecord?.fact ?? null;
     if (reviewPublication !== null) activity = activity.withReviewPublication(reviewPublication);
-    const activityId = FlowActivityId.from(completionActivity?.id ?? activity.id);
+    const activityId = FlowActivityId.from(completionActivity?.id ?? followingProcessActivities.at(-1)?.id ?? activity.id);
     const allArtifactWrites = Object.freeze([...artifactWrites, ...specRevisionWrites,
       ...(reviewRecord === null ? [] : [reviewRecord.evidenceWrite(activity,
         activity.timing?.finishedAt ?? activity.result?.confirmedAt ?? new Date().toISOString())])]);
@@ -10434,6 +10452,10 @@ export class CurrentFlowVersionStore {
           activity,
           assertCurrentState: (state) => this.#assertPersistedIdentity(state),
         });
+        for (const next of followingProcessActivities) {
+          result = this.#store().apply({ activity: next,
+            assertCurrentState: (state) => this.#assertPersistedIdentity(state) });
+        }
         if (completionActivity !== null) {
           result = this.#store().apply({ activity: completionActivity,
             assertCurrentState: (state) => this.#assertPersistedIdentity(state) });
@@ -10479,10 +10501,23 @@ export class CurrentFlowVersionStore {
     return state;
   }
   #canonicalTransitionView(catalog) {
+    this.#assertExecutionSourceContracts(catalog);
     const snapshot = this.#store().loadSnapshot();
     if (snapshot === null) throw new CurrentFlowStateConflictError("current Flow state does not exist");
     this.#assertPersistedIdentity(snapshot.state);
     return new CanonicalTransitionView({ location: this.location, snapshot, catalog });
+  }
+  /** A genuine saved Prompt producer has a registered immutable source. Reject
+   * an earlier source contract before a read or transaction can append facts. */
+  #assertExecutionSourceContracts(catalog) {
+    for (const descriptor of catalog.artifacts) if (descriptor.logicalKey === "execution.source.manifest") {
+      parseFlowExecutionObservationArtifact(descriptor, descriptor.readBytes(this.location));
+    }
+  }
+  #assertInitialReadFormat() {
+    CurrentFlowStateStore.assertInitialReadFormat({ directory: this.location.directory, definition: this.definition });
+    const bytes = this.catalogStore.file.readBytes(null);
+    if (bytes !== null) this.#assertExecutionSourceContracts(FlowArtifactCatalog.fromSerialized(JSON.parse(bytes.toString("utf8"))));
   }
   #nextTaskSpec(activity, supplied) {
     const task = activity.transition.task;
@@ -10613,32 +10648,34 @@ export class CurrentFlowVersionStore {
       || !(activity.transition.operation === "confirm_attempt" || isSpecReviewExecutionPublication(activity))) {
       throw new CurrentFlowStateInvariantError("spec.review artifacts require one confirmed canonical Spec review stage");
     }
-    const authority = this.catalogStore.read({
+    return this.catalogStore.read({
       relativePaths: [resolvedArtifact("spec.record").relativePath],
-      read: (catalog) => this.#assertSpecRevisionAuthority(catalog),
+      read: (catalog) => {
+        const authority = this.#assertSpecRevisionAuthority(catalog);
+        const write = reviews[0];
+        const expectedPath = resolvedArtifact("spec.review", authority.parameters).relativePath;
+        if (write.artifact.relativePath !== expectedPath) {
+          throw new CurrentFlowStateInvariantError("spec.review artifacts must target the verified current Spec revision");
+        }
+        let review;
+        try {
+          review = this.#readSpecReviewBytes(catalog, write.bytes);
+        } catch (cause) {
+          throw new CurrentFlowStateInvariantError(`canonical review publication bytes are invalid: ${cause.message}`);
+        }
+        if (review.digest !== sha256Bytes(write.bytes)
+          || review.identity.specId !== this.location.specId.toString()
+          || review.identity.revision.value !== authority.revision
+          || review.identity.digest !== sha256Bytes(authority.snapshotBytes)
+          || review.identity.byteLength !== authority.snapshotBytes.length) {
+          throw new CurrentFlowStateInvariantError("spec.review artifact does not bind the verified current Spec revision");
+        }
+        const audit = review.audit.at(-1) ?? null;
+        if (audit === null || audit.stage !== expectedStage) {
+          throw new CurrentFlowStateInvariantError("spec.review artifact must append the owning canonical review stage audit");
+        }
+      },
     });
-    const write = reviews[0];
-    const expectedPath = resolvedArtifact("spec.review", authority.parameters).relativePath;
-    if (write.artifact.relativePath !== expectedPath) {
-      throw new CurrentFlowStateInvariantError("spec.review artifacts must target the verified current Spec revision");
-    }
-    let review;
-    try {
-      review = new CanonicalSpecReview(JSON.parse(write.bytes.toString("utf8")));
-    } catch (cause) {
-      throw new CurrentFlowStateInvariantError(`canonical review publication bytes are invalid: ${cause.message}`);
-    }
-    if (review.digest !== sha256Bytes(write.bytes)
-      || review.identity.specId !== this.location.specId.toString()
-      || review.identity.revision.value !== authority.revision
-      || review.identity.digest !== sha256Bytes(authority.snapshotBytes)
-      || review.identity.byteLength !== authority.snapshotBytes.length) {
-      throw new CurrentFlowStateInvariantError("spec.review artifact does not bind the verified current Spec revision");
-    }
-    const audit = review.audit.at(-1) ?? null;
-    if (audit === null || audit.stage !== expectedStage) {
-      throw new CurrentFlowStateInvariantError("spec.review artifact must append the owning canonical review stage audit");
-    }
   }
   #artifactBaselines(value) {
     if (value === undefined) return Object.freeze([]);
@@ -10705,40 +10742,45 @@ export class CurrentFlowVersionStore {
     if (reviewWrites.length !== 1) {
       throw new CurrentFlowStateInvariantError("canonical review publication requires exactly one requested spec.review artifact");
     }
-    const expectedStage = REVIEW_PUBLICATION_STAGE_BY_NODE.get(activity.nodeId) ?? null;
-    if (expectedStage === null
-      || !(activity.transition.operation === "confirm_attempt" || isSpecReviewExecutionPublication(activity))) {
-      throw new CurrentFlowStateInvariantError("spec.review artifacts may be published only by confirmed canonical Spec review stages");
-    }
-    const reviewWrite = specRevisionPlan?.writes.find((write) => write.artifact.logicalKey === "spec.review")
-      ?? reviewWrites[0];
-    if (reviewWrite === null) {
-      throw new CurrentFlowStateInvariantError("canonical review publication has no destination revision artifact");
-    }
-    let review;
-    try {
-      review = new CanonicalSpecReview(JSON.parse(reviewWrite.bytes.toString("utf8")));
-    } catch (cause) {
-      throw new CurrentFlowStateInvariantError(`canonical review publication bytes are invalid: ${cause.message}`);
-    }
-    const audit = review.audit.at(-1) ?? null;
-    if (audit === null || audit.stage !== expectedStage) {
-      throw new CurrentFlowStateInvariantError("canonical review publication must append an audit entry for its confirmed stage");
-    }
-    const fact = new ActivityReviewPublication({
-      generation: review.generation,
-      identity: review.identity.toJSON(),
-      reviewDigest: review.digest,
-      relation: audit.relation,
-      stage: audit.stage,
-      outcome: audit.outcome,
+    return this.catalogStore.read({
+      relativePaths: [resolvedArtifact("spec.record").relativePath],
+      read: (catalog) => {
+        const expectedStage = REVIEW_PUBLICATION_STAGE_BY_NODE.get(activity.nodeId) ?? null;
+        if (expectedStage === null
+          || !(activity.transition.operation === "confirm_attempt" || isSpecReviewExecutionPublication(activity))) {
+          throw new CurrentFlowStateInvariantError("spec.review artifacts may be published only by confirmed canonical Spec review stages");
+        }
+        const reviewWrite = specRevisionPlan?.writes.find((write) => write.artifact.logicalKey === "spec.review")
+          ?? reviewWrites[0];
+        if (reviewWrite === null) {
+          throw new CurrentFlowStateInvariantError("canonical review publication has no destination revision artifact");
+        }
+        let review;
+        try {
+          review = this.#readSpecReviewBytes(catalog, reviewWrite.bytes);
+        } catch (cause) {
+          throw new CurrentFlowStateInvariantError(`canonical review publication bytes are invalid: ${cause.message}`);
+        }
+        const audit = review.audit.at(-1) ?? null;
+        if (audit === null || audit.stage !== expectedStage) {
+          throw new CurrentFlowStateInvariantError("canonical review publication must append an audit entry for its confirmed stage");
+        }
+        const fact = new ActivityReviewPublication({
+          generation: review.generation,
+          identity: review.identity.toJSON(),
+          reviewDigest: review.digest,
+          relation: audit.relation,
+          stage: audit.stage,
+          outcome: audit.outcome,
+        });
+        fact.assertReview(review, {
+          specId: this.location.specId.toString(),
+          revision: review.identity.revision.value,
+          bytes: reviewWrite.bytes,
+        });
+        return new CanonicalSpecReviewActivityPublication({ write: reviewWrite, review, fact });
+      },
     });
-    fact.assertReview(review, {
-      specId: this.location.specId.toString(),
-      revision: review.identity.revision.value,
-      bytes: reviewWrite.bytes,
-    });
-    return new CanonicalSpecReviewActivityPublication({ write: reviewWrite, review, fact });
   }
   #assertReviewPublicationFact({ activity, reviewRecord, artifactWrites, catalog }) {
     if (!(activity instanceof FlowActivity) || !(reviewRecord instanceof CanonicalSpecReviewActivityPublication)) {
@@ -10760,7 +10802,7 @@ export class CurrentFlowVersionStore {
     }
     let review;
     try {
-      review = new CanonicalSpecReview(JSON.parse(destination.bytes.toString("utf8")));
+      review = this.#readSpecReviewBytes(catalog, destination.bytes);
     } catch (cause) {
       throw new CurrentFlowStateInvariantError(`canonical review destination bytes are invalid: ${cause.message}`);
     }
@@ -10854,7 +10896,8 @@ export class CurrentFlowVersionStore {
     if (reviewDescriptor !== null) {
       const review = this.location.resolve(reviewDescriptor.relativePath);
       let document;
-      try { document = new CanonicalSpecReview(JSON.parse(captureRegularFile(review, { label: "managed Flow artifact", maxBytes: MAX_IN_MEMORY_FILE_BYTES, requireSingleLink: true }).text())); } catch (cause) {
+      try { document = this.#readSpecReviewBytes(catalog, captureRegularFile(review, {
+        label: "managed Flow artifact", maxBytes: MAX_IN_MEMORY_FILE_BYTES, requireSingleLink: true }).bytes); } catch (cause) {
         throw new CurrentFlowStateInvariantError(`current canonical review is invalid: ${cause.message}`);
       }
       const reviewBytes = captureRegularFile(review, { label: "managed Flow artifact", maxBytes: MAX_IN_MEMORY_FILE_BYTES, requireSingleLink: true }).bytes;
@@ -10874,41 +10917,38 @@ export class CurrentFlowVersionStore {
   #specRevisionWrites(next, activity, requestedArtifactWrites = []) {
     const currentBytes = captureRegularFile(this.location.specFile, { label: "managed Flow artifact", maxBytes: MAX_IN_MEMORY_FILE_BYTES, requireSingleLink: true }).bytes;
     const nextBytes = Buffer.from(next.canonicalText, "utf8");
-    const current = this.catalogStore.read({
+    return this.catalogStore.read({
       relativePaths: [resolvedArtifact("spec.record").relativePath],
       read: (catalog) => {
         // Identity is the outer authority boundary.  Check it before reading
         // revision members so a foreign, internally coherent Version cannot
         // be reported as a local revision defect.
         this.#assertPersistedIdentity(this.#store().load());
-        return this.#assertSpecRevisionAuthority(catalog);
+        const current = this.#assertSpecRevisionAuthority(catalog);
+        if (currentBytes.equals(nextBytes)) return Object.freeze({ authority: current, writes: Object.freeze([]) });
+        const revision = current.revision + 1;
+        const parameters = { revision: new FlowSpecRevision(revision).pathSegment };
+        if (!current.snapshotBytes.equals(currentBytes)) {
+          throw new CurrentFlowStateInvariantError("root canonical spec.json does not match its current immutable revision snapshot");
+        }
+        const sourceReviewWrite = requestedArtifactWrites.find((write) => (
+          write.artifact.logicalKey === "spec.review"
+          && write.artifact.relativePath === resolvedArtifact("spec.review", current.parameters).relativePath
+        )) ?? null;
+        const review = sourceReviewWrite === null ? null
+          : this.#readSpecReviewBytes(catalog, sourceReviewWrite.bytes).withIdentity(SpecRevisionIdentity.fromBytes({
+            specId: this.location.specId.toString(), revision, bytes: nextBytes,
+          }));
+        const writes = [new CanonicalFlowArtifactWrite({ logicalKey: "spec.snapshot", parameters, mediaType: "application/json", bytes: nextBytes })];
+        if (review !== null) {
+          writes.push(new CanonicalFlowArtifactWrite({
+            logicalKey: "spec.review", parameters, mediaType: "application/json",
+            bytes: Buffer.from(`${JSON.stringify(review.toJSON(), null, 2)}\n`, "utf8"),
+          }));
+        }
+        return Object.freeze({ authority: current, writes: Object.freeze(writes) });
       },
     });
-    if (currentBytes.equals(nextBytes)) return Object.freeze({ authority: current, writes: Object.freeze([]) });
-    const revision = current.revision + 1;
-    const parameters = { revision: new FlowSpecRevision(revision).pathSegment };
-    if (!current.snapshotBytes.equals(currentBytes)) {
-      throw new CurrentFlowStateInvariantError("root canonical spec.json does not match its current immutable revision snapshot");
-    }
-    const sourceReviewWrite = requestedArtifactWrites.find((write) => (
-      write.artifact.logicalKey === "spec.review"
-      && write.artifact.relativePath === resolvedArtifact("spec.review", current.parameters).relativePath
-    )) ?? null;
-    const review = sourceReviewWrite === null ? null : new CanonicalSpecReview({
-          ...new CanonicalSpecReview(JSON.parse(sourceReviewWrite.bytes.toString("utf8"))).toJSON(),
-          identity: {
-            specId: this.location.specId.toString(), revision,
-            digest: sha256Bytes(nextBytes), byteLength: nextBytes.length,
-          },
-        });
-    const writes = [new CanonicalFlowArtifactWrite({ logicalKey: "spec.snapshot", parameters, mediaType: "application/json", bytes: nextBytes })];
-    if (review !== null) {
-      writes.push(new CanonicalFlowArtifactWrite({
-        logicalKey: "spec.review", parameters, mediaType: "application/json",
-        bytes: Buffer.from(`${JSON.stringify(review.toJSON(), null, 2)}\n`, "utf8"),
-      }));
-    }
-    return Object.freeze({ authority: current, writes: Object.freeze(writes) });
   }
   #writeSpecRecord(specRecord) {
     if (!(specRecord instanceof CurrentFlowSpecRecord)) {

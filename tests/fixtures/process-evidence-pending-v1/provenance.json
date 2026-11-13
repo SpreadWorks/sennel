@@ -1,0 +1,466 @@
+{
+  "fixtureKind": "authentic-previous-pending-reservation-canonical-data",
+  "specId": "artifact-worker-recovery",
+  "producerNode": "v26.12.1",
+  "sourceRuntimeRecordVersion": 9,
+  "sourceFlowSchemaRevision": 5,
+  "executionContract": {
+    "runId": "artifact-worker-recovery-run",
+    "specId": "artifact-worker-recovery",
+    "stepId": "draft-gate-repair",
+    "nodeId": "draft-gate-repair",
+    "taskId": null,
+    "attemptId": "attempt-draft-gate-repair-24d6b4ed-4404-4f04-947a-64547ddb2ede",
+    "attemptSequence": 2,
+    "generation": 0,
+    "inputRevision": "0a4c2ceea8bed92ff2389a400e3dd92e53eb464b09b84157983ec98ed2f342ad",
+    "runtimeRevision": "7d58bd1b4cd78f8e80129b6b7ccf8d56329123a5245bab7d275ae90ac764e833",
+    "promptDigest": "997022a8bc27c2a42d5c5a0cda6904d6f81c3aefdd9f4b50a055ca8f92f829ff",
+    "schemaDigest": "43d462faa958d28f0981e84ac272665f2a19a7129fada9644c3e085b9640f8e1",
+    "budgetOwner": "39d4578782a04acbb9804eb8aabfdfd91a10323e8bae22e8e0bc2fc6d99af872",
+    "executionLimit": null,
+    "executionMode": null,
+    "inputBaselines": [
+      {
+        "logicalKey": "draft",
+        "relativePath": "steps/draft/result.json",
+        "hash": "a0e9fdcbdc19c2a6e0bfbc336ffdbdc349760310b223dcf5d219b7ebc3a0fa85",
+        "size": 645,
+        "activityId": "attempt-confirmed-764e99d5-a08f-4b16-9bf0-831339ab0043"
+      }
+    ]
+  },
+  "savedBudget": {
+    "providerCallCount": 1,
+    "synthesisCallCount": 0,
+    "aggregateCharacters": 0,
+    "aggregateItemCount": 0
+  },
+  "savedScopes": [
+    {
+      "scope": {
+        "stage": "artifact-worker",
+        "round": 0
+      },
+      "plan": {
+        "digest": "b0f66b9d1df7b7404d3810dea422b9ba3b58f9536aa6261b92a3a2012e347c71",
+        "collectionDigest": "8d23c3a55bd3902bec6cbc84befffadaeb79bd011a3b79b719e5d2380651e46c",
+        "batches": [
+          {
+            "digest": "ffb745051d0b4f1a99c5a01d0c824144b98eb544c62d29e56ca59a69335eb697",
+            "groupId": "linear",
+            "index": 0,
+            "coverage": [
+              {
+                "elementId": "artifact-worker",
+                "sourceRevision": "0a4c2ceea8bed92ff2389a400e3dd92e53eb464b09b84157983ec98ed2f342ad",
+                "start": 0,
+                "end": 35,
+                "sourceLength": 35,
+                "status": "atomic"
+              }
+            ]
+          }
+        ],
+        "synthesisCallCount": 0
+      },
+      "budget": {
+        "providerCallCount": 1,
+        "synthesisCallCount": 0,
+        "aggregateCharacters": 0,
+        "aggregateItemCount": 0
+      },
+      "groups": [
+        {
+          "groupId": "linear",
+          "budget": {
+            "providerCallCount": 1,
+            "synthesisCallCount": 0,
+            "aggregateCharacters": 0,
+            "aggregateItemCount": 0
+          },
+          "responseCallCount": 1
+        }
+      ],
+      "batches": [
+        {
+          "batchDigest": "ffb745051d0b4f1a99c5a01d0c824144b98eb544c62d29e56ca59a69335eb697",
+          "batchCalls": 1,
+          "transportOrdinal": 1,
+          "claim": {
+            "responseCallIndex": 0,
+            "transportOrdinal": 1,
+            "attempt": 1,
+            "maxAttempts": 1,
+            "requestDigest": "5207ff114029d7676053bc9c541f8ed3e2f9d7995451a721978b0f69ff7d2a74",
+            "schemaDigest": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+            "providerKey": "test",
+            "profileKey": "original",
+            "processIdentity": {
+              "scope": {
+                "stage": "artifact-worker",
+                "round": 0
+              },
+              "batchDigest": "ffb745051d0b4f1a99c5a01d0c824144b98eb544c62d29e56ca59a69335eb697",
+              "responseCallIndex": 0,
+              "transportOrdinal": 1,
+              "attempt": 1,
+              "maxAttempts": 1,
+              "requestDigest": "5207ff114029d7676053bc9c541f8ed3e2f9d7995451a721978b0f69ff7d2a74",
+              "schemaDigest": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+              "providerKey": "test",
+              "profileKey": "original",
+              "logicalInvocationId": "original-logical-first",
+              "providerAttemptId": "original-provider-first"
+            }
+          },
+          "responses": [],
+          "transportFailures": [],
+          "completion": null,
+          "reservationContinuation": {
+            "authorizationId": "0f0ed967e79843b4ef8aff8ccebb733c7c76c9299e90ebb5878c4fc9de2cae06",
+            "executionContractId": "d36caa1cfe7c62c6c1a1069589f71a83fe8b5d6939834ae59c1b4ccb390624a5",
+            "previousClaim": {
+              "responseCallIndex": 0,
+              "transportOrdinal": 1,
+              "attempt": 1,
+              "maxAttempts": 1,
+              "requestDigest": "5207ff114029d7676053bc9c541f8ed3e2f9d7995451a721978b0f69ff7d2a74",
+              "schemaDigest": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+              "providerKey": "test",
+              "profileKey": "original",
+              "processIdentity": {
+                "scope": {
+                  "stage": "artifact-worker",
+                  "round": 0
+                },
+                "batchDigest": "ffb745051d0b4f1a99c5a01d0c824144b98eb544c62d29e56ca59a69335eb697",
+                "responseCallIndex": 0,
+                "transportOrdinal": 1,
+                "attempt": 1,
+                "maxAttempts": 1,
+                "requestDigest": "5207ff114029d7676053bc9c541f8ed3e2f9d7995451a721978b0f69ff7d2a74",
+                "schemaDigest": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+                "providerKey": "test",
+                "profileKey": "original",
+                "logicalInvocationId": "original-logical-first",
+                "providerAttemptId": "original-provider-first"
+              }
+            },
+            "physicalEvidence": {
+              "schemaVersion": 3,
+              "checkoutIdentity": {
+                "mainRoot": "/home/nakano/workspace/sennel/.sennel/worktree/e799-portable-state-performance/.tmp/e799-resume-20261031/r184-previous-pending-producer/package/.tmp/tests/r184-previous-pending-producer/26.12.1/artifact-worker-recovery-WoiSfe",
+                "executionRoot": "/home/nakano/workspace/sennel/.sennel/worktree/e799-portable-state-performance/.tmp/e799-resume-20261031/r184-previous-pending-producer/package/.tmp/tests/r184-previous-pending-producer/26.12.1/artifact-worker-recovery-WoiSfe",
+                "mainDevice": 2049,
+                "mainInode": 18457558,
+                "checkoutDevice": 2049,
+                "checkoutInode": 18457558
+              },
+              "binding": {
+                "runId": "artifact-worker-recovery-run",
+                "specId": "artifact-worker-recovery",
+                "nodeId": "draft-gate-repair",
+                "taskId": null,
+                "attemptId": "attempt-draft-gate-repair-24d6b4ed-4404-4f04-947a-64547ddb2ede",
+                "attemptSequence": 2,
+                "executionContractId": "d36caa1cfe7c62c6c1a1069589f71a83fe8b5d6939834ae59c1b4ccb390624a5",
+                "executionGeneration": 0
+              },
+              "invocation": {
+                "providerAttemptId": "original-provider-first",
+                "logicalInvocationId": "original-logical-first"
+              },
+              "inventoryDigest": "908ffeace5e82cada6a7631e5639bae3dadd640f2e96ef20e24732a3bc82e4ca",
+              "ownerEpoch": 3,
+              "calls": [],
+              "nonExecution": {
+                "schemaVersion": 1,
+                "checkoutIdentity": {
+                  "mainRoot": "/home/nakano/workspace/sennel/.sennel/worktree/e799-portable-state-performance/.tmp/e799-resume-20261031/r184-previous-pending-producer/package/.tmp/tests/r184-previous-pending-producer/26.12.1/artifact-worker-recovery-WoiSfe",
+                  "executionRoot": "/home/nakano/workspace/sennel/.sennel/worktree/e799-portable-state-performance/.tmp/e799-resume-20261031/r184-previous-pending-producer/package/.tmp/tests/r184-previous-pending-producer/26.12.1/artifact-worker-recovery-WoiSfe",
+                  "mainDevice": 2049,
+                  "mainInode": 18457558,
+                  "checkoutDevice": 2049,
+                  "checkoutInode": 18457558
+                },
+                "binding": {
+                  "runId": "artifact-worker-recovery-run",
+                  "specId": "artifact-worker-recovery",
+                  "nodeId": "draft-gate-repair",
+                  "taskId": null,
+                  "attemptId": "attempt-draft-gate-repair-24d6b4ed-4404-4f04-947a-64547ddb2ede",
+                  "attemptSequence": 2,
+                  "executionContractId": "d36caa1cfe7c62c6c1a1069589f71a83fe8b5d6939834ae59c1b4ccb390624a5",
+                  "executionGeneration": 0
+                },
+                "invocation": {
+                  "providerAttemptId": "original-provider-first",
+                  "logicalInvocationId": "original-logical-first"
+                },
+                "inventoryDigest": "908ffeace5e82cada6a7631e5639bae3dadd640f2e96ef20e24732a3bc82e4ca",
+                "ownerEpoch": 3,
+                "executions": [
+                  {
+                    "executionId": "4e0545ba-883a-4110-bc4b-614ecf251086",
+                    "ownerEpoch": 1,
+                    "authorityState": "closed"
+                  },
+                  {
+                    "executionId": "432c9a50-191e-4e55-9d79-f7d34a198b33",
+                    "ownerEpoch": 2,
+                    "authorityState": "closed"
+                  },
+                  {
+                    "executionId": "e5cd301c-8cf7-4d94-a1c7-e76cab314067",
+                    "ownerEpoch": 3,
+                    "authorityState": "exclusive"
+                  }
+                ],
+                "reservationBeforeSpawn": true
+              },
+              "id": "3497d0634fd3daffd6fefe25586eb7dd7a018f2b2cb5f39ba62012e799e228a7",
+              "digest": "3497d0634fd3daffd6fefe25586eb7dd7a018f2b2cb5f39ba62012e799e228a7"
+            },
+            "calls": [],
+            "consumedClaim": null,
+            "history": []
+          }
+        }
+      ]
+    }
+  ],
+  "continuation": {
+    "authorizationId": "0f0ed967e79843b4ef8aff8ccebb733c7c76c9299e90ebb5878c4fc9de2cae06",
+    "executionContractId": "d36caa1cfe7c62c6c1a1069589f71a83fe8b5d6939834ae59c1b4ccb390624a5",
+    "previousClaim": {
+      "responseCallIndex": 0,
+      "transportOrdinal": 1,
+      "attempt": 1,
+      "maxAttempts": 1,
+      "requestDigest": "5207ff114029d7676053bc9c541f8ed3e2f9d7995451a721978b0f69ff7d2a74",
+      "schemaDigest": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+      "providerKey": "test",
+      "profileKey": "original",
+      "processIdentity": {
+        "scope": {
+          "stage": "artifact-worker",
+          "round": 0
+        },
+        "batchDigest": "ffb745051d0b4f1a99c5a01d0c824144b98eb544c62d29e56ca59a69335eb697",
+        "responseCallIndex": 0,
+        "transportOrdinal": 1,
+        "attempt": 1,
+        "maxAttempts": 1,
+        "requestDigest": "5207ff114029d7676053bc9c541f8ed3e2f9d7995451a721978b0f69ff7d2a74",
+        "schemaDigest": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+        "providerKey": "test",
+        "profileKey": "original",
+        "logicalInvocationId": "original-logical-first",
+        "providerAttemptId": "original-provider-first"
+      }
+    },
+    "physicalEvidence": {
+      "schemaVersion": 3,
+      "checkoutIdentity": {
+        "mainRoot": "/home/nakano/workspace/sennel/.sennel/worktree/e799-portable-state-performance/.tmp/e799-resume-20261031/r184-previous-pending-producer/package/.tmp/tests/r184-previous-pending-producer/26.12.1/artifact-worker-recovery-WoiSfe",
+        "executionRoot": "/home/nakano/workspace/sennel/.sennel/worktree/e799-portable-state-performance/.tmp/e799-resume-20261031/r184-previous-pending-producer/package/.tmp/tests/r184-previous-pending-producer/26.12.1/artifact-worker-recovery-WoiSfe",
+        "mainDevice": 2049,
+        "mainInode": 18457558,
+        "checkoutDevice": 2049,
+        "checkoutInode": 18457558
+      },
+      "binding": {
+        "runId": "artifact-worker-recovery-run",
+        "specId": "artifact-worker-recovery",
+        "nodeId": "draft-gate-repair",
+        "taskId": null,
+        "attemptId": "attempt-draft-gate-repair-24d6b4ed-4404-4f04-947a-64547ddb2ede",
+        "attemptSequence": 2,
+        "executionContractId": "d36caa1cfe7c62c6c1a1069589f71a83fe8b5d6939834ae59c1b4ccb390624a5",
+        "executionGeneration": 0
+      },
+      "invocation": {
+        "providerAttemptId": "original-provider-first",
+        "logicalInvocationId": "original-logical-first"
+      },
+      "inventoryDigest": "908ffeace5e82cada6a7631e5639bae3dadd640f2e96ef20e24732a3bc82e4ca",
+      "ownerEpoch": 3,
+      "calls": [],
+      "nonExecution": {
+        "schemaVersion": 1,
+        "checkoutIdentity": {
+          "mainRoot": "/home/nakano/workspace/sennel/.sennel/worktree/e799-portable-state-performance/.tmp/e799-resume-20261031/r184-previous-pending-producer/package/.tmp/tests/r184-previous-pending-producer/26.12.1/artifact-worker-recovery-WoiSfe",
+          "executionRoot": "/home/nakano/workspace/sennel/.sennel/worktree/e799-portable-state-performance/.tmp/e799-resume-20261031/r184-previous-pending-producer/package/.tmp/tests/r184-previous-pending-producer/26.12.1/artifact-worker-recovery-WoiSfe",
+          "mainDevice": 2049,
+          "mainInode": 18457558,
+          "checkoutDevice": 2049,
+          "checkoutInode": 18457558
+        },
+        "binding": {
+          "runId": "artifact-worker-recovery-run",
+          "specId": "artifact-worker-recovery",
+          "nodeId": "draft-gate-repair",
+          "taskId": null,
+          "attemptId": "attempt-draft-gate-repair-24d6b4ed-4404-4f04-947a-64547ddb2ede",
+          "attemptSequence": 2,
+          "executionContractId": "d36caa1cfe7c62c6c1a1069589f71a83fe8b5d6939834ae59c1b4ccb390624a5",
+          "executionGeneration": 0
+        },
+        "invocation": {
+          "providerAttemptId": "original-provider-first",
+          "logicalInvocationId": "original-logical-first"
+        },
+        "inventoryDigest": "908ffeace5e82cada6a7631e5639bae3dadd640f2e96ef20e24732a3bc82e4ca",
+        "ownerEpoch": 3,
+        "executions": [
+          {
+            "executionId": "4e0545ba-883a-4110-bc4b-614ecf251086",
+            "ownerEpoch": 1,
+            "authorityState": "closed"
+          },
+          {
+            "executionId": "432c9a50-191e-4e55-9d79-f7d34a198b33",
+            "ownerEpoch": 2,
+            "authorityState": "closed"
+          },
+          {
+            "executionId": "e5cd301c-8cf7-4d94-a1c7-e76cab314067",
+            "ownerEpoch": 3,
+            "authorityState": "exclusive"
+          }
+        ],
+        "reservationBeforeSpawn": true
+      },
+      "id": "3497d0634fd3daffd6fefe25586eb7dd7a018f2b2cb5f39ba62012e799e228a7",
+      "digest": "3497d0634fd3daffd6fefe25586eb7dd7a018f2b2cb5f39ba62012e799e228a7"
+    },
+    "calls": [],
+    "consumedClaim": null,
+    "history": []
+  },
+  "continuationId": "ad2f3f0b63b95dc2d2df3b423a3a36d88f0e8e64d119c6eef502c2a32457f5d5",
+  "originalOwnerReleased": true,
+  "normalCoordinatorClosed": true,
+  "notPhysicalRuntimeOwnershipFixture": true,
+  "artifactLogicalKeys": [
+    "draft",
+    "draft.coverage.review",
+    "draft.gate",
+    "draft.gate.source",
+    "draft.questions.review",
+    "execution.contract",
+    "execution.request",
+    "flow.activities",
+    "flow.state",
+    "issue.log",
+    "prompt.execution.budget",
+    "prompt.execution.event",
+    "prompt.execution.progress",
+    "retry.recovery.baseline",
+    "spec.record",
+    "spec.snapshot"
+  ],
+  "records": [
+    {
+      "relativePath": "specs/artifact-worker-recovery/001/activities.jsonl",
+      "bytes": 35241,
+      "sha256": "1331ccd32636b29051eca7d67c723d05eb5219eef2aa5e09899ebf4d625e9e4f"
+    },
+    {
+      "relativePath": "specs/artifact-worker-recovery/001/artifact-catalog.json",
+      "bytes": 12997,
+      "sha256": "0a60fc115fe6bbc8e96023ceb0b6df54b9bc5d9b4d437160871322d68f85f22f"
+    },
+    {
+      "relativePath": "specs/artifact-worker-recovery/001/artifacts/execution-budgets/807a6f5640394f31df8fc4d4987c07759393ea552c7d9e5f7cf9ac5de76baca2.json",
+      "bytes": 384,
+      "sha256": "8533725d4d8982e6b41f0d884ee64cafa9ba2fd055468b8cc65ea0b34d53eb7d"
+    },
+    {
+      "relativePath": "specs/artifact-worker-recovery/001/artifacts/executions/39d4578782a04acbb9804eb8aabfdfd91a10323e8bae22e8e0bc2fc6d99af872/0/contract.json",
+      "bytes": 1217,
+      "sha256": "35c144d30f1a5d5b62ea32e08a1c4bd861dd1536b0d687149799262f2c466afa"
+    },
+    {
+      "relativePath": "specs/artifact-worker-recovery/001/artifacts/executions/39d4578782a04acbb9804eb8aabfdfd91a10323e8bae22e8e0bc2fc6d99af872/0/events/8a916e1cad8681b9db1e10ce333236fab4f2260c133663d999d8b2de08990738/c210f480-464f-4a6c-8f62-f0ef21cedea5.json",
+      "bytes": 2041,
+      "sha256": "eca35fb2a00ecb9f10dd92a8ddfb8a636e485df052c625ce30deac959d5b8ef9"
+    },
+    {
+      "relativePath": "specs/artifact-worker-recovery/001/artifacts/executions/39d4578782a04acbb9804eb8aabfdfd91a10323e8bae22e8e0bc2fc6d99af872/0/events/8a916e1cad8681b9db1e10ce333236fab4f2260c133663d999d8b2de08990738/cdb394db4146e12ce97909ec44bca1b57dc64465c6038390c663804c2d1e39cc.json",
+      "bytes": 9181,
+      "sha256": "2f0da64be2a8188bad4cdd9765b70ce9f5c5857c285014300568b38cea9c166a"
+    },
+    {
+      "relativePath": "specs/artifact-worker-recovery/001/artifacts/executions/39d4578782a04acbb9804eb8aabfdfd91a10323e8bae22e8e0bc2fc6d99af872/0/events/8a916e1cad8681b9db1e10ce333236fab4f2260c133663d999d8b2de08990738/e0362171-d83d-4af1-87c1-2dc84e9a167a.json",
+      "bytes": 3295,
+      "sha256": "c532d0911365ab488ce43a0cb083edeb18a9803aeec1ab5327655a227f89efe2"
+    },
+    {
+      "relativePath": "specs/artifact-worker-recovery/001/artifacts/executions/39d4578782a04acbb9804eb8aabfdfd91a10323e8bae22e8e0bc2fc6d99af872/0/progress/8a916e1cad8681b9db1e10ce333236fab4f2260c133663d999d8b2de08990738.json",
+      "bytes": 9181,
+      "sha256": "2f0da64be2a8188bad4cdd9765b70ce9f5c5857c285014300568b38cea9c166a"
+    },
+    {
+      "relativePath": "specs/artifact-worker-recovery/001/artifacts/executions/39d4578782a04acbb9804eb8aabfdfd91a10323e8bae22e8e0bc2fc6d99af872/0/request.json",
+      "bytes": 41938,
+      "sha256": "2bf264c5b176dc1ebdc575312b2022a15872de1c14e4db8fe36b499af9c041c8"
+    },
+    {
+      "relativePath": "specs/artifact-worker-recovery/001/artifacts/retry-recovery/baselines/review-draft-coverage/attempt-draft-coverage-review-6e4a1367-77ff-44f1-bc8c-0d1ab1bce67e.json",
+      "bytes": 554,
+      "sha256": "5b393e99367a7f3b49a7ed3aa554859a150c6419425d2e3bf0a921d841fb29f7"
+    },
+    {
+      "relativePath": "specs/artifact-worker-recovery/001/artifacts/retry-recovery/baselines/review-draft-questions/attempt-draft-questions-review-65c98928-2262-4641-a0e6-cb02455b118f.json",
+      "bytes": 556,
+      "sha256": "383bca60ec588fc1557bfc53b66d0895c8b4936a5658bb9edde29da938a2b602"
+    },
+    {
+      "relativePath": "specs/artifact-worker-recovery/001/flow.json",
+      "bytes": 13931,
+      "sha256": "764d053a27d68cd46e8cee73b19d51f389db4a318c14eeda83fc69abfb7bb7bf"
+    },
+    {
+      "relativePath": "specs/artifact-worker-recovery/001/issue-log.json",
+      "bytes": 5209,
+      "sha256": "29d09c094299bfdd8784dd126d32cb3bc5de06c654982b4c24a94a1f89098784"
+    },
+    {
+      "relativePath": "specs/artifact-worker-recovery/001/revisions/001/spec.json",
+      "bytes": 359,
+      "sha256": "a1c0b1f8c5ccc67b71de5a9a1d0e7e5c0347ffcb873a20cc76fd06d2383fc0a9"
+    },
+    {
+      "relativePath": "specs/artifact-worker-recovery/001/spec.json",
+      "bytes": 359,
+      "sha256": "a1c0b1f8c5ccc67b71de5a9a1d0e7e5c0347ffcb873a20cc76fd06d2383fc0a9"
+    },
+    {
+      "relativePath": "specs/artifact-worker-recovery/001/steps/draft-coverage-review/result.json",
+      "bytes": 398,
+      "sha256": "5b5e87f55e90d8837f7287140073bf6f34087bb419746bd09cbbceec40f9663c"
+    },
+    {
+      "relativePath": "specs/artifact-worker-recovery/001/steps/draft-gate/result.json",
+      "bytes": 2640,
+      "sha256": "a5d85ab82def313b652348f37d476e7c6d47620a3d4f4fe233b4f660baf9f570"
+    },
+    {
+      "relativePath": "specs/artifact-worker-recovery/001/steps/draft-gate/source.json",
+      "bytes": 743,
+      "sha256": "59da5dcea20d92d1d06f1a530c0c8a51f6ad51ab39859d51aea2c7c9fe9b4e54"
+    },
+    {
+      "relativePath": "specs/artifact-worker-recovery/001/steps/draft-questions-review/result.json",
+      "bytes": 401,
+      "sha256": "e9e4f461586450e846b4b089129af2b8a123516edf1d8e9e508dfa0859a01088"
+    },
+    {
+      "relativePath": "specs/artifact-worker-recovery/001/steps/draft/result.json",
+      "bytes": 645,
+      "sha256": "a0e9fdcbdc19c2a6e0bfbc336ffdbdc349760310b223dcf5d219b7ebc3a0fa85"
+    }
+  ]
+}

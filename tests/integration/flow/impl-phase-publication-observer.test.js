@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import { createHash } from "node:crypto";
+import { spawnSync } from "node:child_process";
 import { test } from "node:test";
 
 import { FlowManager } from "../../../src/lib/flow-manager.js";
@@ -16,6 +17,56 @@ import { workerArtifactJson } from "../../support/infrastructure/worker-artifact
 import { removeTmpDir } from "../../support/builders/tmp-dir.js";
 import { draftStructureManifest } from "../../support/structure/phase-manifest.js";
 import { ImplPhasePublicationObserver, PublicationAuthentication } from "../../support/infrastructure/impl-phase-publication-observer.js";
+import { SENNEL_BOOTSTRAP } from "../../support/infrastructure/node-bootstrap.js";
+
+test("publication observer releases unrelated prior call inputs and preserves original call behavior", () => {
+  const child = `
+    import assert from "node:assert/strict";
+    import { mock } from "node:test";
+    import { FlowManager } from ${JSON.stringify(new URL("../../../src/lib/flow-manager.js", import.meta.url).href)};
+    import { ImplPhasePublicationObserver } from ${JSON.stringify(new URL("../../support/infrastructure/impl-phase-publication-observer.js", import.meta.url).href)};
+    const original = FlowManager.prototype.savePromptExecutionProgress;
+    const observer = new ImplPhasePublicationObserver({ mock, after() {} });
+    const receiver = Object.create(FlowManager.prototype);
+    receiver._store = { savePromptExecutionProgress(input) { return input.ordinal; } };
+    const references = [];
+    function invoke() {
+      for (let ordinal = 0; ordinal < 160; ordinal++) {
+        const input = { ordinal, payload: Array(16384).fill(ordinal) };
+        references.push(new WeakRef(input));
+        assert.equal(receiver.savePromptExecutionProgress(input), ordinal);
+      }
+    }
+    try {
+      invoke();
+      for (let round = 0; round < 3; round++) {
+        await new Promise(resolve => setImmediate(resolve));
+        global.gc();
+      }
+      const retained = references.filter(reference => reference.deref() !== undefined).length;
+      assert.ok(retained <= 1, "publication observation must release unrelated previous inputs");
+      const pending = Promise.resolve({ receipt: "original" });
+      receiver._store.savePromptExecutionProgress = function () {
+        assert.equal(this, receiver._store);
+        return pending;
+      };
+      assert.equal(receiver.savePromptExecutionProgress({}), pending);
+      const failure = new Error("original publication failure");
+      receiver._store.savePromptExecutionProgress = () => { throw failure; };
+      assert.throws(() => receiver.savePromptExecutionProgress({}), error => error === failure);
+      console.log(JSON.stringify({ retained, checkedInputs: references.length }));
+    } finally {
+      observer.restore();
+      assert.equal(FlowManager.prototype.savePromptExecutionProgress, original);
+    }
+  `;
+  const observed = spawnSync(process.execPath, ["--expose-gc", "--import", SENNEL_BOOTSTRAP,
+    "--input-type=module", "--eval", child], { encoding: "utf8" });
+  assert.equal(observed.status, 0, observed.stderr);
+  const result = JSON.parse(observed.stdout);
+  assert.equal(result.checkedInputs, 160);
+  assert.ok(result.retained <= 1);
+});
 
 test("publication observer authenticates a real Draft dispatcher save and exact one-Activity replay, then rejects a self-signed foreign publication digest", async (t) => {
   const root = fixtureRepository("impl-publication-observer-control-");

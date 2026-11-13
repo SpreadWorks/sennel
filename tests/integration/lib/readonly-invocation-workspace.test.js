@@ -236,3 +236,23 @@ for (const replaced of ["root", "nested"]) {
     assert.equal(fs.readFileSync(original, "utf8"), "original");
   });
 }
+
+test("readonly temporary allocation stays outside both selected checkouts", (t) => {
+  const root = createTmpDir("workspace-excluded-checkouts-");
+  t.after(() => removeTmpDir(root));
+  const executionRoot = path.join(root, "checkout");
+  const temporaryParent = path.join(executionRoot, "local-tmp");
+  fs.mkdirSync(temporaryParent, { recursive: true });
+  const value = ReadOnlyInvocationWorkspace.create({ temporaryParent,
+    outsideRoots: [executionRoot, root] });
+  t.after(() => {
+    if (fs.existsSync(value.path)) fs.rmSync(value.path, { recursive: true });
+  });
+  assert.equal(path.dirname(value.path), path.dirname(fs.realpathSync(root)));
+  assert.deepEqual(fs.readdirSync(temporaryParent), []);
+  assert.deepEqual(fs.readdirSync(executionRoot), ["local-tmp"]);
+  assert.equal(fs.existsSync(path.join(root, ".tmp")), false);
+  value.complete(confirmation(value));
+  value.cleanup({ generation: value.generation });
+  assert.equal(fs.existsSync(value.path), false);
+});

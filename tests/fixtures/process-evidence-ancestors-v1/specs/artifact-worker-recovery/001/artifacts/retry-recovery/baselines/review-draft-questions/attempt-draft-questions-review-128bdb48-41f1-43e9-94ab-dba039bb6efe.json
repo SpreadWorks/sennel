@@ -1,0 +1,15 @@
+{
+  "route": {
+    "kind": "review",
+    "phase": "draft-questions",
+    "taskId": null
+  },
+  "attemptId": "attempt-draft-questions-review-128bdb48-41f1-43e9-94ab-dba039bb6efe",
+  "attempt": 1,
+  "runId": "artifact-worker-recovery-run",
+  "specId": "artifact-worker-recovery",
+  "issue": null,
+  "projectDigest": "a0e9fdcbdc19c2a6e0bfbc336ffdbdc349760310b223dcf5d219b7ebc3a0fa85",
+  "runtimeDigest": "62c00d872a2e39cfdd4fbc91dee21af468aa31c435135ae4bb23f0077d84c44f",
+  "targetDigest": "a0e9fdcbdc19c2a6e0bfbc336ffdbdc349760310b223dcf5d219b7ebc3a0fa85"
+}

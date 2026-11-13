@@ -9,6 +9,8 @@
     "privateText": "Provide the returned error code to the maintainer and request a diagnostic review before continuing.",
     "privateDiagnostic": "Private diagnostic text was withheld.",
     "unconfirmed": "unconfirmed",
+    "runtimeRecordPreview": "Preview runtime record migration without changing persisted data. From {{cwd}}, run {{executable}} with these literal arguments: {{args}}.",
+    "runtimeRecordUnconfirmed": "Execution closure and migration eligibility remain unconfirmed; the preview may refuse unsafe or incomplete evidence.",
     "processControl": "Process execution control stopped ({{code}}); the original cause is {{causeCode}}. Completion, persistence, and stop proof are shown only when confirmed.",
     "actions": {
       "authentication": "Repair or refresh provider authentication before starting a new attempt.",
@@ -29,6 +31,7 @@
       "empty_response": "The provider returned no response ({{code}})."
     },
     "codes": {
+      "PROCESS_EXECUTION_RUNTIME_RECORD_MIGRATION_REQUIRED": "Runtime execution records use an older format. Execution and Flow continuation are refused; use the selected read-only migration preview before deciding whether migration is safe.",
       "PROCESS_EXECUTION_FINALIZATION_PENDING": "Flow finalization is waiting for exact exit receipts from its registered processes ({{code}}). New process admission for this Flow is closed; completion remains unconfirmed.",
       "PROCESS_EXECUTION_ACTIVITY_PENDING": "Flow finalization is waiting for durable acknowledgement of its process facts ({{code}}). The saved cutoff remains closed; completion remains unconfirmed.",
       "PROCESS_EXECUTION_OBSERVATION_SAVE_FAILED": "Process facts could not be durably recorded ({{code}}). Flow finalization requires every reserved process result to be recorded; finalized history cannot accept new facts.",

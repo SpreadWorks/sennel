@@ -39,7 +39,8 @@ function externalHolder(directory) {
 }
 
 async function assertScheduledWaitDelays(method, lock) {
-  const performancePrototype = Object.getPrototypeOf(performance);
+  let performancePrototype = performance;
+  while (!Object.hasOwn(performancePrototype, "now")) performancePrototype = Object.getPrototypeOf(performancePrototype);
   const nowDescriptor = Object.getOwnPropertyDescriptor(performancePrototype, "now");
   const originalWait = Atomics.wait;
   const originalSetTimeout = globalThis.setTimeout;

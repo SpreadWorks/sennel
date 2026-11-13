@@ -1,0 +1,191 @@
+{
+  "fixtureKind": "authentic-previous-physical-accounting-canonical-data",
+  "specId": "001-physical-accounting",
+  "producerNode": "v26.12.1",
+  "sourceRuntimeRecordVersion": 9,
+  "sourceFlowSchemaRevision": 5,
+  "sourceManifestRevision": 1,
+  "executionContract": {
+    "runId": "previous-physical-accounting",
+    "specId": "001-physical-accounting",
+    "stepId": "draft-refine",
+    "nodeId": "draft-refine",
+    "taskId": null,
+    "attemptId": "attempt-draft-refine-d7304491-0cf4-4e61-8ffd-47b42aecaf75",
+    "attemptSequence": 1,
+    "generation": 0,
+    "inputRevision": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "runtimeRevision": "7d58bd1b4cd78f8e80129b6b7ccf8d56329123a5245bab7d275ae90ac764e833",
+    "promptDigest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "schemaDigest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    "budgetOwner": "a74ee006951a965bc4e4fd2734db8be1771565f30beb99837498d548205915e8",
+    "executionLimit": null,
+    "executionMode": null,
+    "inputBaselines": []
+  },
+  "savedBudget": {
+    "providerCallCount": 0,
+    "synthesisCallCount": 0,
+    "aggregateCharacters": 0,
+    "aggregateItemCount": 0
+  },
+  "originalOwnerReleased": true,
+  "normalCoordinatorClosed": true,
+  "notPhysicalRuntimeOwnershipFixture": true,
+  "physicalDocumentPath": "specs/001-physical-accounting/001/artifacts/executions/a74ee006951a965bc4e4fd2734db8be1771565f30beb99837498d548205915e8/0/events/f43f4d203303baa486598bf767d1c5b4b64210f2fe9e364702461001d9c03861/genuine-previous-physical-accounting.json",
+  "physicalDocumentDigest": "2b99fd9152e3dafcdbc38dad15d75e3245968201b3a81f3740e4b0a9a9422250",
+  "originalChildReceipt": {
+    "schemaVersion": 3,
+    "scope": "registered-executions",
+    "executionId": "c8666496-c410-43f4-969f-8eb0048af189",
+    "callId": "6f1b6a01-33e6-4feb-82f6-80edeb84a131",
+    "ownerEpoch": 1,
+    "checkoutIdentity": {
+      "mainRoot": "/home/nakano/workspace/sennel/.sennel/worktree/e799-portable-state-performance/.tmp/e799-resume-20261031/r177-previous-physical-producer/package/.tmp/tests/r177-previous-physical-producer/26.12.1/previous-physical-accounting-qJHVEm",
+      "executionRoot": "/home/nakano/workspace/sennel/.sennel/worktree/e799-portable-state-performance/.tmp/e799-resume-20261031/r177-previous-physical-producer/package/.tmp/tests/r177-previous-physical-producer/26.12.1/previous-physical-accounting-qJHVEm",
+      "mainDevice": 2049,
+      "mainInode": 18428648,
+      "checkoutDevice": 2049,
+      "checkoutInode": 18428648
+    },
+    "binding": {
+      "runId": "previous-physical-accounting",
+      "specId": "001-physical-accounting",
+      "flowVersionId": "flow-v1-previous-physical-accounting",
+      "nodeId": "draft-refine",
+      "taskId": null,
+      "attemptId": "attempt-draft-refine-d7304491-0cf4-4e61-8ffd-47b42aecaf75",
+      "attemptSequence": 1,
+      "executionContractId": null,
+      "executionGeneration": null,
+      "dispatchInvocationId": null,
+      "workUnitId": null,
+      "requestDigest": null,
+      "commandId": null,
+      "outboxAttemptId": null
+    },
+    "invocation": {
+      "kind": "command",
+      "commandId": null,
+      "providerAttemptId": null,
+      "logicalInvocationId": null,
+      "measurementId": null,
+      "reservedAt": "2026-11-04T03:05:47.225Z",
+      "observationBinding": null,
+      "providerAttemptContext": null,
+      "promptProcessIdentity": null,
+      "command": {
+        "program": {
+          "value": null,
+          "reason": "absolute-path"
+        },
+        "argv": [
+          {
+            "position": 0,
+            "value": null,
+            "reason": "not-public"
+          },
+          {
+            "position": 1,
+            "value": null,
+            "reason": "not-public"
+          }
+        ],
+        "cwd": {
+          "value": "execution-root",
+          "reason": null
+        },
+        "complete": false
+      },
+      "executionIdentity": {
+        "executableDigest": "4e0bbedf42502e560557d3f4717bc138eb7731abb5e9f0db30b08381435c63bb",
+        "nodeImportDigests": []
+      }
+    },
+    "invocationDigest": "fbc4befd1711daf9e7368430e664406e84364fbfdf3e06237d65c748d396409c",
+    "executor": {
+      "executorId": "74c957fa-3996-407c-a31e-3899389cd547",
+      "executorSession": "679bfc6a-c4a3-4340-9773-7c14d67360b4",
+      "launchClaim": "8e7dad9c-0c41-4b75-bb96-d3639e0fcf4b"
+    },
+    "observation": {
+      "executor": {
+        "executorId": "74c957fa-3996-407c-a31e-3899389cd547",
+        "executorSession": "679bfc6a-c4a3-4340-9773-7c14d67360b4",
+        "launchClaim": "8e7dad9c-0c41-4b75-bb96-d3639e0fcf4b"
+      },
+      "kind": "exited",
+      "code": 0,
+      "signal": null,
+      "errorCode": null,
+      "observedAt": "2026-11-04T03:05:47.611Z"
+    },
+    "output": {
+      "stdoutBytes": 14,
+      "stderrBytes": 0,
+      "completion": "complete",
+      "cutoffAt": "2026-11-04T03:05:47.977Z"
+    },
+    "closureRevision": 4,
+    "descendants": [],
+    "stopOperation": null,
+    "outcomeDigest": "84c804551710b9a21205d039d18f26d2d8b79576ac71dae0c8e4e29b8cc4b39b"
+  },
+  "records": [
+    {
+      "relativePath": "specs/001-physical-accounting/001/activities.jsonl",
+      "bytes": 29755,
+      "sha256": "4225cb84b6d26f451bb9f99b376b3ad174c98edb3419ca062ca0fcd17d473d95"
+    },
+    {
+      "relativePath": "specs/001-physical-accounting/001/artifact-catalog.json",
+      "bytes": 6558,
+      "sha256": "d04ab57fbdc4e2bc320ccb82b7b3c85eeb6fc57108b32089f2699f56b4b7c455"
+    },
+    {
+      "relativePath": "specs/001-physical-accounting/001/artifacts/execution-budgets/e5b21657469c826bce9852550a8394b1985e5c49ec4efc405b58032bdc0f9559.json",
+      "bytes": 356,
+      "sha256": "0ab9350ffd2f7dfdb0bd15c88a0474b8a9a08cadfa93046ad1b7bfb4d51c1163"
+    },
+    {
+      "relativePath": "specs/001-physical-accounting/001/artifacts/execution-observations/sources/7e7d09b9a57af3d343cf759e07128c21954e77dbe3e5bffb3a94065907d996ab.json",
+      "bytes": 2457,
+      "sha256": "20c450075b1f4e7b717ab696b6c8971d88426cec85ec886d5bef15e10d3a9d70"
+    },
+    {
+      "relativePath": "specs/001-physical-accounting/001/artifacts/executions/a74ee006951a965bc4e4fd2734db8be1771565f30beb99837498d548205915e8/0/contract.json",
+      "bytes": 914,
+      "sha256": "fe31831c2f9418fb9b5b8f4cd85ca86d018f61840c1af356ea8ff4bb04d62f58"
+    },
+    {
+      "relativePath": "specs/001-physical-accounting/001/artifacts/executions/a74ee006951a965bc4e4fd2734db8be1771565f30beb99837498d548205915e8/0/events/f43f4d203303baa486598bf767d1c5b4b64210f2fe9e364702461001d9c03861/genuine-previous-physical-accounting.json",
+      "bytes": 10688,
+      "sha256": "136882039672c3f380b21f1a85afd4c23518476670c189af9b5ca1ed3b0cf389"
+    },
+    {
+      "relativePath": "specs/001-physical-accounting/001/flow.json",
+      "bytes": 12255,
+      "sha256": "d16c5f817d2a857e24df6e5fb1f10c88bbfae6afd913046add1779f3e0135403"
+    },
+    {
+      "relativePath": "specs/001-physical-accounting/001/revisions/001/spec.json",
+      "bytes": 359,
+      "sha256": "a1c0b1f8c5ccc67b71de5a9a1d0e7e5c0347ffcb873a20cc76fd06d2383fc0a9"
+    },
+    {
+      "relativePath": "specs/001-physical-accounting/001/spec.json",
+      "bytes": 359,
+      "sha256": "a1c0b1f8c5ccc67b71de5a9a1d0e7e5c0347ffcb873a20cc76fd06d2383fc0a9"
+    },
+    {
+      "relativePath": "specs/001-physical-accounting/001/steps/draft-questions-review/result.json",
+      "bytes": 401,
+      "sha256": "e9e4f461586450e846b4b089129af2b8a123516edf1d8e9e508dfa0859a01088"
+    },
+    {
+      "relativePath": "specs/001-physical-accounting/001/steps/draft/result.json",
+      "bytes": 653,
+      "sha256": "519e8429759c7dadf6ad93ca43587a8cc4a1b8f7ababe059b6c8732c54a445f1"
+    }
+  ]
+}

@@ -41,6 +41,35 @@ function exactSizedSource(targetChars) {
   return { buildPrompt, content, fullPrompt };
 }
 
+for (const large of [false, true]) {
+  it(`preserves directory and deletion source evidence in a ${large ? "partitioned" : "single-shot"} Task Review prompt`, () => {
+    const content = large ? "line of source\n".repeat(12000) : "export const ready = true;";
+    const sourceEntries = [
+      { path: "src", status: "directory" },
+      { path: "src/empty", status: "directory" },
+      { path: "src/task.js", status: "present", content },
+      { path: "src/deleted.js", status: "deleted" },
+    ];
+    const plan = TaskReviewPromptPlan.create({ sourceEntries, buildPrompt: promptFactory(), maxChars: TASK_REVIEW_PROMPT_CHAR_LIMIT });
+    assert.equal(plan.chunks.length > 1, large);
+    const segments = plan.chunks.flatMap((chunk) => chunk.segments);
+    assert.deepEqual([...new Set(segments.map((segment) => segment.path))], sourceEntries.map((entry) => entry.path));
+    for (const directory of ["src", "src/empty"]) {
+      const selected = segments.filter((segment) => segment.path === directory);
+      assert.equal(selected.length, 1);
+      assert.equal(selected[0].status, "directory");
+      assert.equal(selected[0].sourceLength, 0);
+      assert.ok(plan.chunks.some((chunk) => chunk.prompt.userPrompt.includes(`## ${directory}\n(directory)`)));
+      if (large) assert.ok(plan.chunks.some((chunk) => chunk.prompt.userPrompt.includes(`- ${directory}: directory`)));
+    }
+    assert.equal(segments.filter((segment) => segment.path === "src/deleted.js").length, 1);
+    assert.ok(plan.chunks.some((chunk) => chunk.prompt.userPrompt.includes("## src/deleted.js\n(deleted)")));
+    assert.equal(segments.filter((segment) => segment.path === "src/task.js").map((segment) => segment.content).join(""), content);
+    assert.ok(plan.chunks.every((chunk) => chunk.size.total <= TASK_REVIEW_PROMPT_CHAR_LIMIT));
+    assert.ok(plan.chunks.every((chunk) => !chunk.prompt.userPrompt.includes("undefined")));
+  });
+}
+
 describe("TaskReviewPromptPlan", () => {
   it("splits the 174488-character T-9 regression input with complete single-file coverage", () => {
     const { buildPrompt, content, fullPrompt } = exactSizedSource(174488);

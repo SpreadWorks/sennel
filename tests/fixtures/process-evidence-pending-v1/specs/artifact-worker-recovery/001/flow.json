@@ -1,0 +1,508 @@
+{
+  "schemaRevision": 5,
+  "flowId": "flow-artifact-worker-recovery-run",
+  "flowVersionId": "flow-v1-artifact-worker-recovery-run",
+  "runId": "artifact-worker-recovery-run",
+  "specId": "artifact-worker-recovery",
+  "issue": null,
+  "request": "Retain one conditional worker authorization through a restart.",
+  "version": 1,
+  "lifecycle": {
+    "state": "active"
+  },
+  "execution": {
+    "mode": "direct",
+    "baseBranch": "main",
+    "featureBranch": null
+  },
+  "policy": {
+    "autoApprove": false,
+    "nonblocking": null
+  },
+  "kind": "flow",
+  "id": "flow",
+  "key": "flow",
+  "status": "in_progress",
+  "result": null,
+  "attemptSequence": 0,
+  "steps": [
+    {
+      "kind": "step",
+      "id": "plan",
+      "key": "plan",
+      "status": "in_progress",
+      "result": null,
+      "attemptSequence": 0,
+      "steps": [
+        {
+          "kind": "step",
+          "id": "branch",
+          "key": "plan.branch",
+          "status": "done",
+          "result": {
+            "outcome": "passed",
+            "summary": "canonical runtime transition for branch",
+            "confirmedAt": "2026-11-04T03:31:22.989Z",
+            "artifactRefs": []
+          },
+          "attemptSequence": 1,
+          "steps": []
+        },
+        {
+          "kind": "step",
+          "id": "prepare-spec",
+          "key": "plan.prepare-spec",
+          "status": "done",
+          "result": {
+            "outcome": "passed",
+            "summary": "canonical runtime transition for prepare-spec",
+            "confirmedAt": "2026-11-04T03:31:23.494Z",
+            "artifactRefs": []
+          },
+          "attemptSequence": 1,
+          "steps": []
+        },
+        {
+          "kind": "step",
+          "id": "draft",
+          "key": "plan.draft",
+          "status": "done",
+          "result": {
+            "outcome": "passed",
+            "summary": "canonical runtime transition for draft",
+            "confirmedAt": "2026-11-04T03:31:23.915Z",
+            "artifactRefs": []
+          },
+          "attemptSequence": 1,
+          "steps": []
+        },
+        {
+          "kind": "step",
+          "id": "draft-questions-review",
+          "key": "plan.draft-questions-review",
+          "status": "done",
+          "result": {
+            "outcome": "passed",
+            "summary": "canonical runtime transition for draft-questions-review",
+            "confirmedAt": "2026-11-04T03:31:24.644Z",
+            "artifactRefs": []
+          },
+          "attemptSequence": 1,
+          "steps": []
+        },
+        {
+          "kind": "step",
+          "id": "draft-questions-triage",
+          "key": "plan.draft-questions-triage",
+          "status": "done",
+          "result": {
+            "outcome": "passed",
+            "summary": "canonical runtime transition for draft-questions-triage",
+            "confirmedAt": "2026-11-04T03:31:25.209Z",
+            "artifactRefs": []
+          },
+          "attemptSequence": 1,
+          "steps": []
+        },
+        {
+          "kind": "step",
+          "id": "draft-questions-repair",
+          "key": "plan.draft-questions-repair",
+          "status": "done",
+          "result": {
+            "outcome": "passed",
+            "summary": "canonical runtime transition for draft-questions-repair",
+            "confirmedAt": "2026-11-04T03:31:25.799Z",
+            "artifactRefs": []
+          },
+          "attemptSequence": 1,
+          "steps": []
+        },
+        {
+          "kind": "step",
+          "id": "draft-refine",
+          "key": "plan.draft-refine",
+          "status": "done",
+          "result": {
+            "outcome": "passed",
+            "summary": "canonical runtime transition for draft-refine",
+            "confirmedAt": "2026-11-04T03:31:26.608Z",
+            "artifactRefs": [],
+            "stepResult": {
+              "kind": "draft-refine-completed",
+              "type": "completed"
+            },
+            "draftSettlementReceipt": {
+              "id": "b3b528599876fb54337c45dfd065625e143b436513cfbd1d82dcc46165dabcfb",
+              "binding": {
+                "runId": "artifact-worker-recovery-run",
+                "specId": "artifact-worker-recovery",
+                "stepId": "draft-refine",
+                "attemptId": "attempt-draft-refine-4594ee8f-b1a8-464a-af1a-9b14b8040d65",
+                "attemptSequence": 1
+              },
+              "resultKind": "draft-refine-completed",
+              "resultType": "completed",
+              "resultDigest": "6c62801ab762b9c6405aed836c7a917a3f8c7b62acf8617208e5089812c1378d",
+              "settlementKind": "target-connection",
+              "targetStepId": "draft-coverage-review",
+              "effects": {
+                "skipStepIds": [
+                  "draft-gate-repair"
+                ],
+                "resetStepIds": []
+              },
+              "connector": {
+                "name": "DraftReviewConnector"
+              },
+              "publicationDigest": "432100699005035c4ce541d79fb4301f0f95e488d2149fa719623c5613a2d342",
+              "executionLifecycle": null,
+              "awaitQuestion": null
+            }
+          },
+          "attemptSequence": 1,
+          "steps": []
+        },
+        {
+          "kind": "step",
+          "id": "draft-gate-repair",
+          "key": "plan.draft-gate-repair",
+          "status": "in_progress",
+          "result": null,
+          "attemptSequence": 2,
+          "steps": []
+        },
+        {
+          "kind": "step",
+          "id": "draft-coverage-review",
+          "key": "plan.draft-coverage-review",
+          "status": "invalidated",
+          "result": null,
+          "attemptSequence": 1,
+          "steps": []
+        },
+        {
+          "kind": "step",
+          "id": "draft-coverage-triage",
+          "key": "plan.draft-coverage-triage",
+          "status": "invalidated",
+          "result": null,
+          "attemptSequence": 1,
+          "steps": []
+        },
+        {
+          "kind": "step",
+          "id": "draft-coverage-repair",
+          "key": "plan.draft-coverage-repair",
+          "status": "invalidated",
+          "result": null,
+          "attemptSequence": 1,
+          "steps": []
+        },
+        {
+          "kind": "step",
+          "id": "draft-gate",
+          "key": "plan.draft-gate",
+          "status": "invalidated",
+          "result": null,
+          "attemptSequence": 1,
+          "steps": []
+        },
+        {
+          "kind": "step",
+          "id": "spec",
+          "key": "plan.spec",
+          "status": "invalidated",
+          "result": null,
+          "attemptSequence": 0,
+          "steps": []
+        },
+        {
+          "kind": "step",
+          "id": "spec-review",
+          "key": "plan.spec-review",
+          "status": "invalidated",
+          "result": null,
+          "attemptSequence": 0,
+          "steps": []
+        },
+        {
+          "kind": "step",
+          "id": "spec-triage",
+          "key": "plan.spec-triage",
+          "status": "invalidated",
+          "result": null,
+          "attemptSequence": 0,
+          "steps": []
+        },
+        {
+          "kind": "step",
+          "id": "spec-repair",
+          "key": "plan.spec-repair",
+          "status": "invalidated",
+          "result": null,
+          "attemptSequence": 0,
+          "steps": []
+        },
+        {
+          "kind": "step",
+          "id": "spec-gate",
+          "key": "plan.spec-gate",
+          "status": "invalidated",
+          "result": null,
+          "attemptSequence": 0,
+          "steps": []
+        },
+        {
+          "kind": "step",
+          "id": "spec-gate-repair",
+          "key": "plan.spec-gate-repair",
+          "status": "invalidated",
+          "result": null,
+          "attemptSequence": 0,
+          "steps": []
+        },
+        {
+          "kind": "step",
+          "id": "approval",
+          "key": "plan.approval",
+          "status": "invalidated",
+          "result": null,
+          "attemptSequence": 0,
+          "steps": []
+        },
+        {
+          "kind": "step",
+          "id": "test-generate",
+          "key": "plan.test",
+          "status": "invalidated",
+          "result": null,
+          "attemptSequence": 0,
+          "steps": []
+        },
+        {
+          "kind": "step",
+          "id": "test-review",
+          "key": "plan.test-review",
+          "status": "invalidated",
+          "result": null,
+          "attemptSequence": 0,
+          "steps": []
+        },
+        {
+          "kind": "step",
+          "id": "test-repair",
+          "key": "plan.test-repair",
+          "status": "invalidated",
+          "result": null,
+          "attemptSequence": 0,
+          "steps": []
+        },
+        {
+          "kind": "step",
+          "id": "test-gate",
+          "key": "plan.test-gate",
+          "status": "invalidated",
+          "result": null,
+          "attemptSequence": 0,
+          "steps": []
+        }
+      ]
+    },
+    {
+      "kind": "step",
+      "id": "impl",
+      "key": "impl",
+      "status": "invalidated",
+      "result": null,
+      "attemptSequence": 0,
+      "steps": [
+        {
+          "kind": "step",
+          "id": "implement",
+          "key": "impl.implement",
+          "status": "invalidated",
+          "result": null,
+          "attemptSequence": 0,
+          "steps": []
+        },
+        {
+          "kind": "step",
+          "id": "test-execute",
+          "key": "impl.test-execute",
+          "status": "invalidated",
+          "result": null,
+          "attemptSequence": 0,
+          "steps": []
+        },
+        {
+          "kind": "step",
+          "id": "test-result-review",
+          "key": "impl.test-result-review",
+          "status": "invalidated",
+          "result": null,
+          "attemptSequence": 0,
+          "steps": []
+        },
+        {
+          "kind": "step",
+          "id": "impl-review",
+          "key": "impl.impl-review",
+          "status": "invalidated",
+          "result": null,
+          "attemptSequence": 0,
+          "steps": []
+        },
+        {
+          "kind": "step",
+          "id": "impl-triage",
+          "key": "impl.impl-triage",
+          "status": "invalidated",
+          "result": null,
+          "attemptSequence": 0,
+          "steps": []
+        },
+        {
+          "kind": "step",
+          "id": "impl-repair",
+          "key": "impl.impl-repair",
+          "status": "invalidated",
+          "result": null,
+          "attemptSequence": 0,
+          "steps": []
+        },
+        {
+          "kind": "step",
+          "id": "impl-gate",
+          "key": "impl.impl-gate",
+          "status": "invalidated",
+          "result": null,
+          "attemptSequence": 0,
+          "steps": []
+        },
+        {
+          "kind": "step",
+          "id": "retro",
+          "key": "impl.retro",
+          "status": "invalidated",
+          "result": null,
+          "attemptSequence": 0,
+          "steps": []
+        },
+        {
+          "kind": "step",
+          "id": "acceptance-review",
+          "key": "impl.acceptance-review",
+          "status": "invalidated",
+          "result": null,
+          "attemptSequence": 0,
+          "steps": []
+        },
+        {
+          "kind": "step",
+          "id": "acceptance-decision",
+          "key": "impl.acceptance-decision",
+          "status": "invalidated",
+          "result": null,
+          "attemptSequence": 0,
+          "steps": []
+        },
+        {
+          "kind": "step",
+          "id": "final-regression",
+          "key": "impl.final-regression",
+          "status": "invalidated",
+          "result": null,
+          "attemptSequence": 0,
+          "steps": []
+        },
+        {
+          "kind": "step",
+          "id": "report",
+          "key": "impl.report",
+          "status": "invalidated",
+          "result": null,
+          "attemptSequence": 0,
+          "steps": []
+        },
+        {
+          "kind": "step",
+          "id": "finalize",
+          "key": "finalize",
+          "status": "invalidated",
+          "result": null,
+          "attemptSequence": 0,
+          "steps": [
+            {
+              "kind": "step",
+              "id": "finalize-commit",
+              "key": "impl.finalize-commit",
+              "status": "invalidated",
+              "result": null,
+              "attemptSequence": 0,
+              "steps": []
+            },
+            {
+              "kind": "step",
+              "id": "finalize-merge",
+              "key": "impl.finalize-merge",
+              "status": "invalidated",
+              "result": null,
+              "attemptSequence": 0,
+              "steps": []
+            },
+            {
+              "kind": "step",
+              "id": "finalize-sync",
+              "key": "impl.finalize-sync",
+              "status": "invalidated",
+              "result": null,
+              "attemptSequence": 0,
+              "steps": []
+            },
+            {
+              "kind": "step",
+              "id": "finalize-cleanup",
+              "key": "impl.finalize-cleanup",
+              "status": "invalidated",
+              "result": null,
+              "attemptSequence": 0,
+              "steps": []
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "current": "draft-gate-repair",
+  "attempt": {
+    "id": "attempt-draft-gate-repair-24d6b4ed-4404-4f04-947a-64547ddb2ede",
+    "nodeId": "draft-gate-repair",
+    "sequence": 2,
+    "startedAt": "2026-11-04T03:31:56.966Z",
+    "consumption": {
+      "semantic": 0,
+      "tooling": 0
+    },
+    "failure": null,
+    "blocker": null,
+    "incomplete": [],
+    "operationClaims": [
+      {
+        "operation": "resolve-command-context",
+        "resources": [
+          "draft",
+          "issue",
+          "guardrail",
+          "project_overview"
+        ]
+      }
+    ]
+  },
+  "confirmationOrder": 28,
+  "artifacts": [],
+  "outbox": [],
+  "context": null,
+  "history": null,
+  "migration": null
+}

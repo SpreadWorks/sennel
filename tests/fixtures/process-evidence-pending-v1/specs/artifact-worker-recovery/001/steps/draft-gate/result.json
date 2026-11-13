@@ -1,0 +1,82 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "nodeId": "draft-gate",
+      "outcome": "completed",
+      "result": {
+        "result": "fail",
+        "artifacts": {
+          "phase": "draft",
+          "failureKind": "ai_semantic_fail",
+          "failureCode": "GATE_REJECTED",
+          "nextAction": {
+            "diagnosis": {
+              "observations": [
+                {
+                  "kind": "violation",
+                  "failureMode": "guardrail-violation",
+                  "requirementRef": "R-1",
+                  "where": {
+                    "file": "draft.json",
+                    "locator": "goal"
+                  },
+                  "observed": "State the selected behavior precisely.",
+                  "severity": "blocking",
+                  "refs": [
+                    "R-1"
+                  ]
+                }
+              ]
+            }
+          },
+          "gateTransitionFailureCategory": {
+            "category": "semantic",
+            "code": "GATE_REJECTED"
+          },
+          "gateTransitionLineage": "67746892ed3c887045afe8fd1607dea0ae5240a0e0e26740927e9a2daa313524",
+          "gateTransitionAttemptId": "attempt-draft-gate-6312c199-1f48-4a36-ad89-854a8cdd791f",
+          "gateTransitionAttemptSequence": 1
+        }
+      },
+      "artifact": {
+        "logicalKey": "draft.gate",
+        "payload": {
+          "result": "fail",
+          "artifacts": {
+            "phase": "draft",
+            "failureKind": "ai_semantic_fail",
+            "failureCode": "GATE_REJECTED",
+            "nextAction": {
+              "diagnosis": {
+                "observations": [
+                  {
+                    "kind": "violation",
+                    "failureMode": "guardrail-violation",
+                    "requirementRef": "R-1",
+                    "where": {
+                      "file": "draft.json",
+                      "locator": "goal"
+                    },
+                    "observed": "State the selected behavior precisely.",
+                    "severity": "blocking",
+                    "refs": [
+                      "R-1"
+                    ]
+                  }
+                ]
+              }
+            },
+            "gateTransitionFailureCategory": {
+              "category": "semantic",
+              "code": "GATE_REJECTED"
+            },
+            "gateTransitionLineage": "67746892ed3c887045afe8fd1607dea0ae5240a0e0e26740927e9a2daa313524",
+            "gateTransitionAttemptId": "attempt-draft-gate-6312c199-1f48-4a36-ad89-854a8cdd791f",
+            "gateTransitionAttemptSequence": 1
+          }
+        }
+      }
+    }
+  ]
+}

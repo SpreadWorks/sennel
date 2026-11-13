@@ -167,6 +167,16 @@ describe("prompt element partitioning and coverage", () => {
     ]);
   });
 
+  it("preserves one zero-width directory and refuses invented directory text", () => {
+    const directory = new RangedTextPromptElement({ id: "directory", sourceRevision: "directory-revision", sequence: 0, text: "", status: "directory" });
+    const plan = buildPlan({ elements: [directory], maxCharacters: 32 });
+    const leaves = plan.batches.flatMap((batch) => batch.payloadElements);
+    assert.deepEqual(leaves.map((leaf) => [leaf.id, leaf.status, leaf.start, leaf.end]), [["directory", "directory", 0, 0]]);
+    assert.deepEqual(leaves[0].coverageEntries().map((entry) => [entry.status, entry.width]), [["directory", 0]]);
+    assert.throws(() => new RangedTextPromptElement({ id: "directory", sourceRevision: "directory-revision", sequence: 0,
+      text: "invented content", status: "directory" }), PromptCoverageInvalidFailure);
+  });
+
   it("rejects gap, overlap, foreign, and no-progress partitions", () => {
     const parent = element("source", 0, "abcdef");
     const first = parent.createRange({ start: 0, end: 2 });

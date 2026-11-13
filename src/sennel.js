@@ -307,7 +307,11 @@ async function inheritedCommandDelivery() {
 
 
 async function initializeRuntime(delivery) {
-  const input = { entryPath, argv: rawArgs, cwd: process.cwd(), isCli };
+  // Capture project selection on the invoking thread. A Windows Worker has
+  // case-sensitive environment lookup even when its parent does not.
+  const input = { entryPath, argv: rawArgs, cwd: process.cwd(), isCli,
+    repositoryRoot: process.env.SENNEL_WORK_ROOT || null,
+    discoveryCeiling: process.env.GIT_CEILING_DIRECTORIES || null };
   if (typeof nodeModule.registerHooks === "function") {
     let capturedEntryPath = null;
     if (delivery === null) {

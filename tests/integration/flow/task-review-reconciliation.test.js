@@ -138,13 +138,23 @@ test("normal exhausted Review with durable baseline is not an orphan", t => {
   assert.equal(s.snapshot(), before);
 });
 
-for (const changed of ["source", "archived-input"]) {
+for (const changed of ["source", "same-byte-source", "unrelated-spec-generation", "archived-input"]) {
   test(`post-recovery ${changed} change is blocked before worker launch`, async t => {
     const s = orphan(t);
+    const unrelated = path.join(s.root, "specs", "unrelated-review", "001", "notes.bin");
+    if (changed === "unrelated-spec-generation") {
+      fs.mkdirSync(path.dirname(unrelated), { recursive: true });
+      fs.writeFileSync(unrelated, "unrelated evidence\n");
+    }
     apply(s);
     s.reload();
     if (changed === "source") fs.appendFileSync(s.sourcePath, "later edit\n");
-    else fs.appendFileSync(path.join(s.unit.directory, s.unit.manifestDocument.inputs[0].relativePath), "tampered\n");
+    else if (changed === "same-byte-source" || changed === "unrelated-spec-generation") {
+      const target = changed === "same-byte-source" ? s.sourcePath : unrelated;
+      const replacement = `${target}.replacement`;
+      fs.writeFileSync(replacement, fs.readFileSync(target));
+      fs.renameSync(replacement, target);
+    } else fs.appendFileSync(path.join(s.unit.directory, s.unit.manifestDocument.inputs[0].relativePath), "tampered\n");
     const before = s.snapshot();
     let calls = 0;
     const action = await new GetNextActionCommand().execute(s.context());

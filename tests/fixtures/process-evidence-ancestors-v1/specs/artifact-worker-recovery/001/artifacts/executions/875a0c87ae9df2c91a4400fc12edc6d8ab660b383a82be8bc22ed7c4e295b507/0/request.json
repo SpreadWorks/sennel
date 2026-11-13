@@ -1,0 +1,989 @@
+{
+  "id": "fda58cb4bb49b60220ae764a29128c9446fc48950d0b39b312b6910f7e1fee62",
+  "snapshot": {
+    "executionContract": {
+      "runId": "artifact-worker-recovery-run",
+      "specId": "artifact-worker-recovery",
+      "stepId": "draft-gate-repair",
+      "nodeId": "draft-gate-repair",
+      "taskId": null,
+      "attemptId": "attempt-draft-gate-repair-ce8c8aac-e444-4367-a62f-b93f823a7135",
+      "attemptSequence": 2,
+      "generation": 0,
+      "inputRevision": "05301ead63c1344f47bf13ae5ee1959d9c02cdc70e3967c9d26e83bb3e3ea071",
+      "runtimeRevision": "7d58bd1b4cd78f8e80129b6b7ccf8d56329123a5245bab7d275ae90ac764e833",
+      "promptDigest": "997022a8bc27c2a42d5c5a0cda6904d6f81c3aefdd9f4b50a055ca8f92f829ff",
+      "schemaDigest": "43d462faa958d28f0981e84ac272665f2a19a7129fada9644c3e085b9640f8e1",
+      "budgetOwner": "875a0c87ae9df2c91a4400fc12edc6d8ab660b383a82be8bc22ed7c4e295b507",
+      "executionLimit": null,
+      "executionMode": null,
+      "inputBaselines": [
+        {
+          "logicalKey": "draft",
+          "relativePath": "steps/draft/result.json",
+          "hash": "a0e9fdcbdc19c2a6e0bfbc336ffdbdc349760310b223dcf5d219b7ebc3a0fa85",
+          "size": 645,
+          "activityId": "attempt-confirmed-eab7fdef-6cce-4dec-9773-461592aefcf8"
+        }
+      ]
+    },
+    "request": {
+      "version": 6,
+      "runId": "artifact-worker-recovery-run",
+      "specId": "artifact-worker-recovery",
+      "issue": null,
+      "stepId": "draft-gate-repair",
+      "taskId": null,
+      "actionDigest": "c171710695f2c798dfeda37db71623da49c87585e40edc60182957dd3526a69d",
+      "dispatchInvocationId": "draft-gate-repair-attempt-draft-gate-repair-ce8c8aac-e444-4367-a62f-b93f823a7135",
+      "targetAuthority": "canonical-flow-artifacts",
+      "inputDigest": "aea1414c4c5813289cd7e5b58472f2e54ee54c1dce672d1f755cdec0de680d25",
+      "inputRevision": "05301ead63c1344f47bf13ae5ee1959d9c02cdc70e3967c9d26e83bb3e3ea071",
+      "executionContract": {
+        "runId": "artifact-worker-recovery-run",
+        "specId": "artifact-worker-recovery",
+        "stepId": "draft-gate-repair",
+        "nodeId": "draft-gate-repair",
+        "taskId": null,
+        "attemptId": "attempt-draft-gate-repair-ce8c8aac-e444-4367-a62f-b93f823a7135",
+        "attemptSequence": 2,
+        "generation": 0,
+        "inputRevision": "05301ead63c1344f47bf13ae5ee1959d9c02cdc70e3967c9d26e83bb3e3ea071",
+        "runtimeRevision": "7d58bd1b4cd78f8e80129b6b7ccf8d56329123a5245bab7d275ae90ac764e833",
+        "promptDigest": "997022a8bc27c2a42d5c5a0cda6904d6f81c3aefdd9f4b50a055ca8f92f829ff",
+        "schemaDigest": "43d462faa958d28f0981e84ac272665f2a19a7129fada9644c3e085b9640f8e1",
+        "budgetOwner": "875a0c87ae9df2c91a4400fc12edc6d8ab660b383a82be8bc22ed7c4e295b507",
+        "executionLimit": null,
+        "executionMode": null,
+        "inputBaselines": [
+          {
+            "logicalKey": "draft",
+            "relativePath": "steps/draft/result.json",
+            "hash": "a0e9fdcbdc19c2a6e0bfbc336ffdbdc349760310b223dcf5d219b7ebc3a0fa85",
+            "size": 645,
+            "activityId": "attempt-confirmed-eab7fdef-6cce-4dec-9773-461592aefcf8"
+          }
+        ]
+      },
+      "executionContractId": "f19e26f179d2a674b0d94f8a4720b1df9e14f2b09968f9406bb2ae64e3f0616f",
+      "dispatchRepositoryBinding": {
+        "repositoryFingerprint": "a5a387e27a9217a0da4d5bc0f7da1fe8760c692ecb37e4854d8c0faceab17155",
+        "executionSnapshot": {
+          "version": 2,
+          "mode": "git",
+          "head": "cde9d203cfd1a999e3c97ea7dc4f5834b41dcc99",
+          "indexDigest": "72649fc16c387ad1667802e835ef97ec575a580a32639d0819399aae02bfb88b",
+          "gitState": {
+            "filemode": true,
+            "symlinks": true,
+            "configDigest": "b84c74c7a291e2986ae482a5e94f9aa08dbe99081f93e8323189eb4779ba9d08",
+            "refsDigest": "6e17bc36c4174d5eb9864ff8239fe1d6b072a21c2ff4cd4819b6a98bad266f01",
+            "flagsDigest": "9b1abc4b0d9ec6367fd2248bb5721665db7f0187f276a40ac4b409f37274fe3c",
+            "attributesDigest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "workingAttributesDigest": "83c293b198262cd8d7236a9413b6f228e22430f499f24e4cda4e2047bd53cfef",
+            "directories": {
+              "git": {
+                "dev": "2049",
+                "ino": "18504342"
+              },
+              "common": {
+                "dev": "2049",
+                "ino": "18504342"
+              }
+            },
+            "controlFiles": {
+              "head": {
+                "kind": "file",
+                "digest": "28d25bf82af4c0e2b72f50959b2beb859e3e60b9630a5e8c603dad4ddb2b6e80",
+                "generation": {
+                  "dev": "2049",
+                  "ino": "18504366"
+                }
+              },
+              "index": {
+                "kind": "file",
+                "digest": "f84aed88bdd8e1b3791bfc81a86c8a3a175eca8cda0249e19cbf697c30738988",
+                "generation": {
+                  "dev": "2049",
+                  "ino": "18504375"
+                }
+              },
+              "commonConfig": {
+                "kind": "file",
+                "digest": "a4cb93e05516d68552977aea657d93cb9eb90f40b9e84cb4ea764669a3eee4f7",
+                "generation": {
+                  "dev": "2049",
+                  "ino": "18504371"
+                }
+              },
+              "worktreeConfig": {
+                "kind": "missing",
+                "digest": null,
+                "generation": null
+              }
+            }
+          },
+          "generation": {
+            "dev": "2049",
+            "ino": "18504322"
+          },
+          "entries": [
+            {
+              "path": ".sennel",
+              "workingPath": ".sennel",
+              "working": {
+                "kind": "directory",
+                "digest": null,
+                "generation": {
+                  "dev": "2049",
+                  "ino": "18504409"
+                }
+              },
+              "git": null
+            },
+            {
+              "path": "README.md",
+              "workingPath": "README.md",
+              "working": {
+                "kind": "file",
+                "digest": "790bb8968e99e740c62f278b8b65ff88a372d1e20ac7d684d904105209a5e049",
+                "generation": {
+                  "dev": "2049",
+                  "ino": "18504368"
+                }
+              },
+              "git": {
+                "logicalMode": "100644",
+                "indexOid": "664c813bfdb864542a0859515df6cb52cf4b9e91",
+                "assumeUnchanged": false,
+                "skipWorktree": false,
+                "worktreeMode": "100644"
+              }
+            },
+            {
+              "path": "specs",
+              "workingPath": "specs",
+              "working": {
+                "kind": "directory",
+                "digest": null,
+                "generation": {
+                  "dev": "2049",
+                  "ino": "18504380"
+                }
+              },
+              "git": null
+            },
+            {
+              "path": "specs/artifact-worker-recovery",
+              "workingPath": "specs/artifact-worker-recovery",
+              "working": {
+                "kind": "directory",
+                "digest": null,
+                "generation": {
+                  "dev": "2049",
+                  "ino": "18504387"
+                }
+              },
+              "git": null
+            }
+          ],
+          "ignoredDirectories": [
+            ".sennel/handoffs/391ba91e9e7f06de547e8892/e77385ecc5006f68c649b00e/329fe532c45e522c4857e304/c171710695f2c798dfeda37db71623da49c87585e40edc60182957dd3526a69d",
+            "specs/artifact-worker-recovery/001"
+          ]
+        },
+        "canonicalRepositorySnapshot": null,
+        "canonicalObservation": {
+          "prefixIdentity": {
+            "activityCount": 23,
+            "activityDigest": "e7d2e1d5e8a249c21eee5bfaf90192324ca3215d6a441c25048229bad68b65ec",
+            "journalByteLength": 27926,
+            "journalDigest": "a8c8b32260d36975e742c87b0e30eea0ea9a388fad0e79b2062d6007ea172c00"
+          },
+          "mutablePaths": [
+            "flow.json",
+            "activities.jsonl",
+            "artifact-catalog.json"
+          ],
+          "canonicalSnapshot": {
+            "version": 2,
+            "mode": "filesystem",
+            "head": null,
+            "indexDigest": null,
+            "gitState": null,
+            "generation": {
+              "dev": "2049",
+              "ino": "18504388"
+            },
+            "entries": [
+              {
+                "path": ".runtime",
+                "workingPath": ".runtime",
+                "working": {
+                  "kind": "directory",
+                  "digest": null,
+                  "generation": {
+                    "dev": "2049",
+                    "ino": "18504402"
+                  }
+                },
+                "git": null
+              },
+              {
+                "path": "activities.jsonl",
+                "workingPath": "activities.jsonl",
+                "working": {
+                  "kind": "file",
+                  "digest": "a8c8b32260d36975e742c87b0e30eea0ea9a388fad0e79b2062d6007ea172c00",
+                  "generation": {
+                    "dev": "2049",
+                    "ino": "18504396"
+                  }
+                },
+                "git": null
+              },
+              {
+                "path": "artifact-catalog.json",
+                "workingPath": "artifact-catalog.json",
+                "working": {
+                  "kind": "file",
+                  "digest": "0c09383943f44acbb91aa411605673eb0a7bae0133e8924daaee2f45f66d5dd3",
+                  "generation": {
+                    "dev": "2049",
+                    "ino": "18502695"
+                  }
+                },
+                "git": null
+              },
+              {
+                "path": "artifacts",
+                "workingPath": "artifacts",
+                "working": {
+                  "kind": "directory",
+                  "digest": null,
+                  "generation": {
+                    "dev": "2049",
+                    "ino": "18504390"
+                  }
+                },
+                "git": null
+              },
+              {
+                "path": "artifacts/retry-recovery",
+                "workingPath": "artifacts/retry-recovery",
+                "working": {
+                  "kind": "directory",
+                  "digest": null,
+                  "generation": {
+                    "dev": "2049",
+                    "ino": "18504428"
+                  }
+                },
+                "git": null
+              },
+              {
+                "path": "artifacts/retry-recovery/baselines",
+                "workingPath": "artifacts/retry-recovery/baselines",
+                "working": {
+                  "kind": "directory",
+                  "digest": null,
+                  "generation": {
+                    "dev": "2049",
+                    "ino": "18504435"
+                  }
+                },
+                "git": null
+              },
+              {
+                "path": "artifacts/retry-recovery/baselines/review-draft-coverage",
+                "workingPath": "artifacts/retry-recovery/baselines/review-draft-coverage",
+                "working": {
+                  "kind": "directory",
+                  "digest": null,
+                  "generation": {
+                    "dev": "2049",
+                    "ino": "18504495"
+                  }
+                },
+                "git": null
+              },
+              {
+                "path": "artifacts/retry-recovery/baselines/review-draft-coverage/attempt-draft-coverage-review-c7d92c20-0326-4f45-8ad5-1c6231830578.json",
+                "workingPath": "artifacts/retry-recovery/baselines/review-draft-coverage/attempt-draft-coverage-review-c7d92c20-0326-4f45-8ad5-1c6231830578.json",
+                "working": {
+                  "kind": "file",
+                  "digest": "0dbcb21d081f651c8ba7362809d502c7fdb0974cb71720c71f586610aae3ce0e",
+                  "generation": {
+                    "dev": "2049",
+                    "ino": "18504513"
+                  }
+                },
+                "git": null
+              },
+              {
+                "path": "artifacts/retry-recovery/baselines/review-draft-questions",
+                "workingPath": "artifacts/retry-recovery/baselines/review-draft-questions",
+                "working": {
+                  "kind": "directory",
+                  "digest": null,
+                  "generation": {
+                    "dev": "2049",
+                    "ino": "18504437"
+                  }
+                },
+                "git": null
+              },
+              {
+                "path": "artifacts/retry-recovery/baselines/review-draft-questions/attempt-draft-questions-review-128bdb48-41f1-43e9-94ab-dba039bb6efe.json",
+                "workingPath": "artifacts/retry-recovery/baselines/review-draft-questions/attempt-draft-questions-review-128bdb48-41f1-43e9-94ab-dba039bb6efe.json",
+                "working": {
+                  "kind": "file",
+                  "digest": "56a8520783fd505df07fb48115f6510b1403a75f45c0a10c13431576f484f158",
+                  "generation": {
+                    "dev": "2049",
+                    "ino": "18504438"
+                  }
+                },
+                "git": null
+              },
+              {
+                "path": "artifacts/tests",
+                "workingPath": "artifacts/tests",
+                "working": {
+                  "kind": "directory",
+                  "digest": null,
+                  "generation": {
+                    "dev": "2049",
+                    "ino": "18504391"
+                  }
+                },
+                "git": null
+              },
+              {
+                "path": "flow.json",
+                "workingPath": "flow.json",
+                "working": {
+                  "kind": "file",
+                  "digest": "ec3253c8d9c478bccc9030716015a4b779e3658564707d5480fdc34d516babec",
+                  "generation": {
+                    "dev": "2049",
+                    "ino": "18504485"
+                  }
+                },
+                "git": null
+              },
+              {
+                "path": "issue-log.json",
+                "workingPath": "issue-log.json",
+                "working": {
+                  "kind": "file",
+                  "digest": "f67bc1b9c3fc5f686757c8b30e6b0281c3cb06e4f2fe77b499c02523525518f0",
+                  "generation": {
+                    "dev": "2049",
+                    "ino": "18504487"
+                  }
+                },
+                "git": null
+              },
+              {
+                "path": "revisions",
+                "workingPath": "revisions",
+                "working": {
+                  "kind": "directory",
+                  "digest": null,
+                  "generation": {
+                    "dev": "2049",
+                    "ino": "18504393"
+                  }
+                },
+                "git": null
+              },
+              {
+                "path": "revisions/001",
+                "workingPath": "revisions/001",
+                "working": {
+                  "kind": "directory",
+                  "digest": null,
+                  "generation": {
+                    "dev": "2049",
+                    "ino": "18504394"
+                  }
+                },
+                "git": null
+              },
+              {
+                "path": "revisions/001/spec.json",
+                "workingPath": "revisions/001/spec.json",
+                "working": {
+                  "kind": "file",
+                  "digest": "a1c0b1f8c5ccc67b71de5a9a1d0e7e5c0347ffcb873a20cc76fd06d2383fc0a9",
+                  "generation": {
+                    "dev": "2049",
+                    "ino": "18504395"
+                  }
+                },
+                "git": null
+              },
+              {
+                "path": "spec.json",
+                "workingPath": "spec.json",
+                "working": {
+                  "kind": "file",
+                  "digest": "a1c0b1f8c5ccc67b71de5a9a1d0e7e5c0347ffcb873a20cc76fd06d2383fc0a9",
+                  "generation": {
+                    "dev": "2049",
+                    "ino": "18504392"
+                  }
+                },
+                "git": null
+              },
+              {
+                "path": "steps",
+                "workingPath": "steps",
+                "working": {
+                  "kind": "directory",
+                  "digest": null,
+                  "generation": {
+                    "dev": "2049",
+                    "ino": "18504389"
+                  }
+                },
+                "git": null
+              },
+              {
+                "path": "steps/draft",
+                "workingPath": "steps/draft",
+                "working": {
+                  "kind": "directory",
+                  "digest": null,
+                  "generation": {
+                    "dev": "2049",
+                    "ino": "18504424"
+                  }
+                },
+                "git": null
+              },
+              {
+                "path": "steps/draft-coverage-review",
+                "workingPath": "steps/draft-coverage-review",
+                "working": {
+                  "kind": "directory",
+                  "digest": null,
+                  "generation": {
+                    "dev": "2049",
+                    "ino": "18504511"
+                  }
+                },
+                "git": null
+              },
+              {
+                "path": "steps/draft-coverage-review/result.json",
+                "workingPath": "steps/draft-coverage-review/result.json",
+                "working": {
+                  "kind": "file",
+                  "digest": "5b5e87f55e90d8837f7287140073bf6f34087bb419746bd09cbbceec40f9663c",
+                  "generation": {
+                    "dev": "2049",
+                    "ino": "18504514"
+                  }
+                },
+                "git": null
+              },
+              {
+                "path": "steps/draft-gate",
+                "workingPath": "steps/draft-gate",
+                "working": {
+                  "kind": "directory",
+                  "digest": null,
+                  "generation": {
+                    "dev": "2049",
+                    "ino": "18504162"
+                  }
+                },
+                "git": null
+              },
+              {
+                "path": "steps/draft-gate/result.json",
+                "workingPath": "steps/draft-gate/result.json",
+                "working": {
+                  "kind": "file",
+                  "digest": "5cfa79653e390d1ca9d84bfc752eaabbea3861d3b85d62798ea223f551e7d3d2",
+                  "generation": {
+                    "dev": "2049",
+                    "ino": "18504184"
+                  }
+                },
+                "git": null
+              },
+              {
+                "path": "steps/draft-gate/source.json",
+                "workingPath": "steps/draft-gate/source.json",
+                "working": {
+                  "kind": "file",
+                  "digest": "7a94e1d6b487d759d433d95d7c0bf7973be1a8675b58901ec4c34779677a75be",
+                  "generation": {
+                    "dev": "2049",
+                    "ino": "18504486"
+                  }
+                },
+                "git": null
+              },
+              {
+                "path": "steps/draft-questions-review",
+                "workingPath": "steps/draft-questions-review",
+                "working": {
+                  "kind": "directory",
+                  "digest": null,
+                  "generation": {
+                    "dev": "2049",
+                    "ino": "18504436"
+                  }
+                },
+                "git": null
+              },
+              {
+                "path": "steps/draft-questions-review/result.json",
+                "workingPath": "steps/draft-questions-review/result.json",
+                "working": {
+                  "kind": "file",
+                  "digest": "e9e4f461586450e846b4b089129af2b8a123516edf1d8e9e508dfa0859a01088",
+                  "generation": {
+                    "dev": "2049",
+                    "ino": "18504442"
+                  }
+                },
+                "git": null
+              },
+              {
+                "path": "steps/draft/result.json",
+                "workingPath": "steps/draft/result.json",
+                "working": {
+                  "kind": "file",
+                  "digest": "a0e9fdcbdc19c2a6e0bfbc336ffdbdc349760310b223dcf5d219b7ebc3a0fa85",
+                  "generation": {
+                    "dev": "2049",
+                    "ino": "18504427"
+                  }
+                },
+                "git": null
+              }
+            ],
+            "ignoredDirectories": [
+              ".runtime/views"
+            ]
+          },
+          "catalogHash": "4773efe7982902801cb8009fbb34d9a52ead5069c7a0ee976245a72daac95bf1"
+        }
+      },
+      "requirementTestBinding": null,
+      "inputs": [
+        {
+          "name": "draft.json",
+          "targetRelativePath": "draft.json",
+          "digest": "a0e9fdcbdc19c2a6e0bfbc336ffdbdc349760310b223dcf5d219b7ebc3a0fa85",
+          "byteLength": 645,
+          "document": {
+            "devType": "feature",
+            "goal": "Retain the selected behavior",
+            "analysis": {
+              "problem": "A non-interactive worker cannot collect a user decision.",
+              "proposedApproach": "The CLI must yield before starting that worker.",
+              "validation": "The answer is stored before the worker action is returned."
+            },
+            "decisionMap": {
+              "knownFacts": [],
+              "decisionPoints": [],
+              "resolvedByProjectRules": [],
+              "requiresUserJudgment": [],
+              "deferredToSpec": []
+            },
+            "scopeVerification": {
+              "in": [],
+              "out": []
+            },
+            "impactOnExisting": [],
+            "questionLedger": {
+              "revision": 0,
+              "publication": "fixture",
+              "evidenceDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "questions": []
+            },
+            "openQuestions": []
+          }
+        },
+        {
+          "name": "plan-gate-repair.json",
+          "targetRelativePath": "plan-gate-repair.json",
+          "digest": "093445fd3981868cdcb40b70b03d46d4abf439cbc5c4f919af6eb26df068cb5d",
+          "byteLength": 2485,
+          "document": {
+            "version": 2,
+            "phase": "draft",
+            "targetStepId": "draft-gate-repair",
+            "connector": {
+              "phase": "draft",
+              "sourceGateStepId": "draft-gate",
+              "sourceAttempt": {
+                "id": "attempt-draft-gate-4e992e0b-bc56-470f-a9a6-b7b403760c1f",
+                "sequence": 1
+              },
+              "resultLogicalKey": "draft.gate",
+              "resultArtifactId": "steps/draft-gate/result.json",
+              "catalogFingerprint": "5cfa79653e390d1ca9d84bfc752eaabbea3861d3b85d62798ea223f551e7d3d2",
+              "targetStepId": "draft-gate-repair",
+              "resetStepIds": [
+                "draft-gate-repair",
+                "draft-coverage-review",
+                "draft-coverage-triage",
+                "draft-coverage-repair",
+                "draft-gate"
+              ],
+              "taskLifecycle": null
+            },
+            "evidenceIdentity": {
+              "sourceAttempt": {
+                "id": "attempt-draft-gate-4e992e0b-bc56-470f-a9a6-b7b403760c1f",
+                "sequence": 1
+              },
+              "resultLogicalKey": "draft.gate",
+              "publicationActivityId": "plan-gate-repaired-cfbcb589-bc2a-46e5-a1bc-f9f9ad0ba202",
+              "catalogFingerprint": "5cfa79653e390d1ca9d84bfc752eaabbea3861d3b85d62798ea223f551e7d3d2",
+              "transitionLineage": {
+                "sourceAttempt": {
+                  "id": "attempt-draft-gate-4e992e0b-bc56-470f-a9a6-b7b403760c1f",
+                  "sequence": 1
+                },
+                "canonicalAttempt": {
+                  "id": "attempt-draft-gate-4e992e0b-bc56-470f-a9a6-b7b403760c1f",
+                  "sequence": 1
+                },
+                "sourceFingerprint": "7a94e1d6b487d759d433d95d7c0bf7973be1a8675b58901ec4c34779677a75be",
+                "canonicalFingerprint": "5cfa79653e390d1ca9d84bfc752eaabbea3861d3b85d62798ea223f551e7d3d2",
+                "sourceRevisionFingerprint": "177f1e5a19a5cc02951c0a17ba8668b2da1cb1c623869964ecfcdf126d28e940",
+                "canonicalRevisionFingerprint": "177f1e5a19a5cc02951c0a17ba8668b2da1cb1c623869964ecfcdf126d28e940"
+              }
+            },
+            "sourceIssueLogId": "draft-gate-result-89aa1c4b07ce8157bc1e963db941e5870a2b1c6facfeef6a800eada562fb8173",
+            "sourceEntryDigest": "6844defbc58c76c956baf4bc43d41ec8df4232f704543540345c681bd2165fc7",
+            "observations": [
+              {
+                "kind": "violation",
+                "failureMode": "guardrail-violation",
+                "requirementRef": "R-1",
+                "where": {
+                  "file": "draft.json",
+                  "locator": "goal"
+                },
+                "observed": "State the selected behavior precisely.",
+                "severity": "blocking",
+                "refs": [
+                  "R-1"
+                ],
+                "authority": {
+                  "kind": "requirement",
+                  "id": "R-1"
+                },
+                "rootCause": null,
+                "fingerprint": "b35eaa1170519a87314c6ded9e1edd90dec1e98f6fc4f36c2613ea5068653bea"
+              }
+            ],
+            "observationFingerprints": [
+              "b35eaa1170519a87314c6ded9e1edd90dec1e98f6fc4f36c2613ea5068653bea"
+            ],
+            "observationRequests": [
+              {
+                "fingerprint": "b35eaa1170519a87314c6ded9e1edd90dec1e98f6fc4f36c2613ea5068653bea",
+                "recurrenceCount": 0,
+                "priorStrategy": null
+              }
+            ],
+            "authoringPaths": [
+              "devType",
+              "goal",
+              "analysis",
+              "decisionMap.knownFacts",
+              "decisionMap.decisionPoints",
+              "decisionMap.resolvedByProjectRules",
+              "decisionMap.deferredToSpec",
+              "scopeVerification",
+              "impactOnExisting"
+            ]
+          }
+        },
+        {
+          "name": "gate-observation-recurrence.json",
+          "targetRelativePath": "gate-observation-recurrence.json",
+          "digest": "82dab9195ab06fd1a1d87944c5e6d204be0595770d3bcba54be5b57a1340cf16",
+          "byteLength": 1155,
+          "document": {
+            "version": 1,
+            "phase": "draft",
+            "targetStepId": "draft-gate-repair",
+            "sourceEvidence": {
+              "sourceAttempt": {
+                "id": "attempt-draft-gate-4e992e0b-bc56-470f-a9a6-b7b403760c1f",
+                "sequence": 1
+              },
+              "resultLogicalKey": "draft.gate",
+              "publicationActivityId": "plan-gate-repaired-cfbcb589-bc2a-46e5-a1bc-f9f9ad0ba202",
+              "catalogFingerprint": "5cfa79653e390d1ca9d84bfc752eaabbea3861d3b85d62798ea223f551e7d3d2",
+              "transitionLineage": {
+                "sourceAttempt": {
+                  "id": "attempt-draft-gate-4e992e0b-bc56-470f-a9a6-b7b403760c1f",
+                  "sequence": 1
+                },
+                "canonicalAttempt": {
+                  "id": "attempt-draft-gate-4e992e0b-bc56-470f-a9a6-b7b403760c1f",
+                  "sequence": 1
+                },
+                "sourceFingerprint": "7a94e1d6b487d759d433d95d7c0bf7973be1a8675b58901ec4c34779677a75be",
+                "canonicalFingerprint": "5cfa79653e390d1ca9d84bfc752eaabbea3861d3b85d62798ea223f551e7d3d2",
+                "sourceRevisionFingerprint": "177f1e5a19a5cc02951c0a17ba8668b2da1cb1c623869964ecfcdf126d28e940",
+                "canonicalRevisionFingerprint": "177f1e5a19a5cc02951c0a17ba8668b2da1cb1c623869964ecfcdf126d28e940"
+              }
+            },
+            "entries": [
+              {
+                "fingerprint": "b35eaa1170519a87314c6ded9e1edd90dec1e98f6fc4f36c2613ea5068653bea",
+                "occurrenceCount": 1,
+                "repairCount": 0,
+                "recurrenceCount": 0,
+                "priorStrategy": null,
+                "previousCycle": null
+              }
+            ]
+          }
+        }
+      ],
+      "testReviewRepair": null,
+      "contextSnapshot": {
+        "version": 1,
+        "kind": "draft",
+        "binding": {
+          "runId": "artifact-worker-recovery-run",
+          "specId": "artifact-worker-recovery",
+          "issue": null,
+          "dispatchInvocationId": "draft-gate-repair-attempt-draft-gate-repair-ce8c8aac-e444-4367-a62f-b93f823a7135",
+          "actionDigest": "c171710695f2c798dfeda37db71623da49c87585e40edc60182957dd3526a69d",
+          "targetDigest": "677bd77a3e2c8ec1f1e7ecbeb68a4dc5fb2ef561ca0b616b2cbfc9e06e75bec3"
+        },
+        "inputAuthority": {
+          "kind": "request",
+          "digest": "3ea0e2f61a129422186d842bc9c38c8db5af9a9d8a970f4dd41f82248f87f403"
+        },
+        "entries": [
+          {
+            "kind": "issue",
+            "status": "omitted",
+            "reason": "no-linked-issue"
+          },
+          {
+            "kind": "request",
+            "status": "available",
+            "digest": "3ea0e2f61a129422186d842bc9c38c8db5af9a9d8a970f4dd41f82248f87f403",
+            "document": "Retain one conditional worker authorization through a restart."
+          },
+          {
+            "kind": "guardrail",
+            "status": "available",
+            "digest": "de6e3026b83da8abad3630dd58a2d21f6fca3a7d290f05f5b7438f3af0347628",
+            "document": {
+              "phase": "draft",
+              "guardrails": [
+                {
+                  "id": "single-responsibility",
+                  "title": "Single Responsibility",
+                  "body": "Each spec shall address one concern. Do not bundle unrelated changes into a single specification. When a user creates an Issue or request, it defines the scope boundary for a single spec. The AI shall not propose splitting a user-defined Issue into multiple specs. Whether an Issue constitutes one concern is the user's judgment.",
+                  "meta": {
+                    "phase": [
+                      "draft",
+                      "spec"
+                    ],
+                    "category": "process"
+                  }
+                },
+                {
+                  "id": "unambiguous-requirements",
+                  "title": "Unambiguous Requirements",
+                  "body": "Requirements shall avoid vague adjectives (e.g. \"appropriate\", \"fast\", \"easy\") and instead state verifiable conditions.",
+                  "meta": {
+                    "phase": [
+                      "draft",
+                      "spec"
+                    ],
+                    "category": "code-quality"
+                  }
+                },
+                {
+                  "id": "complete-context",
+                  "title": "Complete Context",
+                  "body": "Each requirement shall be specific enough that two independent reviewers would agree on whether an implementation satisfies it. Requirements using subjective terms (e.g. 'improve', 'clean up', 'optimize') without measurable criteria shall be rewritten.",
+                  "meta": {
+                    "phase": [
+                      "draft",
+                      "spec"
+                    ],
+                    "category": "process"
+                  }
+                },
+                {
+                  "id": "no-hardcoded-secrets",
+                  "title": "No Hardcoded Secrets",
+                  "body": "Source code shall not contain API keys, passwords, tokens, or other secrets directly. Externalize them via environment variables or configuration files.",
+                  "meta": {
+                    "phase": [
+                      "draft",
+                      "spec",
+                      "task-impl"
+                    ],
+                    "category": "security"
+                  }
+                },
+                {
+                  "id": "prioritize-requirements",
+                  "title": "Prioritize Requirements",
+                  "body": "When requirements number more than three items, assign each requirement one priority: must, should, or nice-to-have.",
+                  "meta": {
+                    "phase": [
+                      "draft",
+                      "spec"
+                    ],
+                    "category": "process"
+                  }
+                },
+                {
+                  "id": "impact-on-existing-features",
+                  "title": "Impact on Existing Features",
+                  "body": "Changes shall list their impact on existing features. If no existing features are affected, state so explicitly.",
+                  "meta": {
+                    "phase": [
+                      "draft",
+                      "spec"
+                    ],
+                    "category": "code-quality"
+                  }
+                },
+                {
+                  "id": "migration-parity",
+                  "title": "Migration Parity",
+                  "body": "When a change moves, splits, extracts, replaces, or externalizes existing behavior, the draft/spec shall define migration parity before implementation. It shall inventory the existing public behavior being moved or replaced; list affected user-facing commands, APIs, hooks, config entries, generated artifacts, and side effects; map each retained behavior to its new owner or an explicit decision to remove it; define acceptance criteria proving retained behavior still works through the new path; and include at least one behavior-level verification for each retained public surface. Registration, discovery, help output, or mock routing alone are not sufficient evidence of migration parity. Intentional behavior removal shall state the user-visible impact and compatibility expectation.\n\nViolation: missing migration parity definition\nDiff-verification conditions:\n- The diff moves, splits, extracts, replaces, or externalizes existing behavior.\n- The draft/spec lacks an inventory of the existing public behavior being moved or replaced.\n- The draft/spec lacks a mapping from each retained behavior to its new owner or an explicit removal decision.\n- The draft/spec relies only on registration, discovery, help output, or mock routing checks for parity evidence.\nBlocking when: retained public behavior lacks behavior-level verification through the new path, or an intentional removal lacks user-visible impact and compatibility expectations.\nAdvisory when: the migration inventory and mapping exist, but an additional retained surface would benefit from clearer acceptance wording without changing the implementation target.",
+                  "meta": {
+                    "phase": [
+                      "draft",
+                      "spec"
+                    ],
+                    "category": "process"
+                  }
+                },
+                {
+                  "id": "draft-recommend-with-reasoning",
+                  "title": "Present Recommendations with Reasoning",
+                  "body": "For each question, present a recommended answer. State the basis: (1) project docs/, (2) guardrail principles, or (3) existing code patterns. Lead with the recommendation and keep it concise.",
+                  "meta": {
+                    "phase": [
+                      "draft"
+                    ],
+                    "category": "code-quality"
+                  }
+                },
+                {
+                  "id": "draft-explore-before-asking",
+                  "title": "Explore Before Asking",
+                  "body": "If a question can be answered by reading docs/ or exploring the codebase, do so before asking the user.",
+                  "meta": {
+                    "phase": [
+                      "draft"
+                    ],
+                    "category": "process"
+                  }
+                },
+                {
+                  "id": "draft-raise-implications",
+                  "title": "Proactively Raise Related Implications",
+                  "body": "When a decision has obvious related implications, raise them proactively. Do not wait for the user to notice the gap.",
+                  "meta": {
+                    "phase": [
+                      "draft"
+                    ],
+                    "category": "process"
+                  }
+                },
+                {
+                  "id": "draft-confirm-brainstorm-vs-decide",
+                  "title": "Confirm Brainstorm vs. Decision Before Critiquing",
+                  "body": "Before critiquing a decision, confirm whether the user is brainstorming or deciding. Do not evaluate brainstorming ideas as final decisions.",
+                  "meta": {
+                    "phase": [
+                      "draft"
+                    ],
+                    "category": "process"
+                  }
+                },
+                {
+                  "id": "draft-capture-digressions",
+                  "title": "Capture Digressions in draft.md",
+                  "body": "When a discussion digresses, capture key insights and decisions in draft.md before returning to the main thread.",
+                  "meta": {
+                    "phase": [
+                      "draft"
+                    ],
+                    "category": "code-quality"
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "kind": "project_overview",
+            "status": "omitted",
+            "reason": "docs-overview-unavailable"
+          },
+          {
+            "kind": "reopen",
+            "status": "omitted",
+            "reason": "no-draft-reopen"
+          }
+        ],
+        "digest": "dce8b0670b397cba03cb9b9f1391c6fffb481060aa54a822c93b3f606ed03be9"
+      },
+      "sourceMutationBaselineDigest": null,
+      "sourceHandoffIdentity": null,
+      "sourceHandoffCheckpointDigest": null,
+      "payloads": [
+        {
+          "logicalName": "draft-gate-repair.json",
+          "kind": "file",
+          "payloadPath": "/home/nakano/workspace/sennel/.sennel/worktree/e799-portable-state-performance/.tmp/e799-resume-20261031/r194-previous-ancestor-producer/package/.tmp/tests/r194-previous-ancestor-producer/26.12.1/artifact-worker-recovery-wOeKdY/.sennel/handoffs/391ba91e9e7f06de547e8892/e77385ecc5006f68c649b00e/329fe532c45e522c4857e304/c171710695f2c798dfeda37db71623da49c87585e40edc60182957dd3526a69d/payload/draft-gate-repair.json",
+          "targetRelativePath": "draft-gate-repair.json",
+          "targetAuthority": "canonical-flow-artifacts",
+          "required": true,
+          "maxBytes": 2097152,
+          "baselineDigest": null,
+          "baselineByteLength": 0
+        }
+      ],
+      "workerInstructions": {
+        "retryFeedback": null,
+        "schemaGuidance": "Populate the report field in the declared draft-gate-repair.json payload.\nThe payload must have exactly version, baseRevision, operations, and report. Each operation must have exactly kind, path, replacement, and reason; kind must be replace-value. Do not include a target digest; the parent records the observed value digest from the immutable draft.\nUse the request inputRevision as baseRevision with the sha256: prefix. Do not hash draft.json to invent a revision. Do not emit draft.json or a separate report file.\nEach decisionMap.deferredToSpec entry has exactly boundary, relevance, owner. boundary and relevance are non-empty strings; owner is spec. Put inventory, retained behavior, and verification details in those existing text values; never add entry fields.\nseal-handoff validates the replacement Draft before sealing. If it rejects the payload, correct only the declared payload using its diagnostics, then seal again. Never change the request, immutable inputs, or canonical artifacts.\nThe fixed authoring paths are [\"devType\",\"goal\",\"analysis\",\"decisionMap.knownFacts\",\"decisionMap.decisionPoints\",\"decisionMap.resolvedByProjectRules\",\"decisionMap.deferredToSpec\",\"scopeVerification\",\"impactOnExisting\"]. A replacement path must equal or descend from one of them.\nUse version 1 with summary and exactly one results entry for every fingerprint below.\n[{\"fingerprint\":\"b35eaa1170519a87314c6ded9e1edd90dec1e98f6fc4f36c2613ea5068653bea\",\"recurrenceCount\":0,\"priorStrategy\":null}]\nEach result must contain fingerprint, strategy, summary, and priorRepairInsufficiency.\nFor a recurring observation, explain why the prior strategy was insufficient and use a different strategy."
+      },
+      "sourceResponseContract": null,
+      "specTestTopology": null,
+      "sealCommand": "sennel flow run seal-handoff",
+      "completionOwner": "parent-dispatcher",
+      "generatedAt": "2026-11-04T04:03:32.128Z"
+    },
+    "action": {
+      "step": "draft-gate-repair",
+      "directive": {
+        "kind": "execute_step",
+        "terminal": false,
+        "requiresUserAction": false,
+        "action": "write-draft"
+      }
+    },
+    "dispatchIdentity": {
+      "repositoryFingerprint": "a5a387e27a9217a0da4d5bc0f7da1fe8760c692ecb37e4854d8c0faceab17155",
+      "canonicalRevision": null
+    }
+  }
+}

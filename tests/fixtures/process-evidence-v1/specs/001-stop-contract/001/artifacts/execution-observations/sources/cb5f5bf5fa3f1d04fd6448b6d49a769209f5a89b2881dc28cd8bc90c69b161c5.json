@@ -1,0 +1,70 @@
+{
+  "schemaRevision": 1,
+  "id": "cb5f5bf5fa3f1d04fd6448b6d49a769209f5a89b2881dc28cd8bc90c69b161c5",
+  "flowVersionId": "flow-v1-stop-run",
+  "runId": "stop-run",
+  "specId": "001-stop-contract",
+  "recordingStartedAt": "2026-11-03T11:40:43.077Z",
+  "runtimeSourceId": "7120ce5958b91d91f9dd8b2370da69f3e43e37bb7cafed804f40387b61a2bc0c",
+  "checkoutIdentity": {
+    "mainRoot": "/home/nakano/workspace/sennel/.sennel/worktree/e799-portable-state-performance/.tmp/e799-boundary-repair-20261103/previous-v9/package/.tmp/tests/canonical-prompt-source-26/checkout",
+    "executionRoot": "/home/nakano/workspace/sennel/.sennel/worktree/e799-portable-state-performance/.tmp/e799-boundary-repair-20261103/previous-v9/package/.tmp/tests/canonical-prompt-source-26/checkout",
+    "mainDevice": 2049,
+    "mainInode": 17471663,
+    "checkoutDevice": 2049,
+    "checkoutInode": 17471663
+  },
+  "checkoutNamespace": "7120ce5958b91d91f9dd8b2370da69f3e43e37bb7cafed804f40387b61a2bc0c",
+  "retention": "permanent",
+  "producerCoverage": [
+    {
+      "producer": "agent-invocation",
+      "status": "available",
+      "boundary": "after-source-registration"
+    },
+    {
+      "producer": "provider-attempt",
+      "status": "available",
+      "boundary": "after-source-registration"
+    },
+    {
+      "producer": "outbox-attempt",
+      "status": "available",
+      "boundary": "after-source-registration"
+    },
+    {
+      "producer": "process-call",
+      "status": "available",
+      "boundary": "managed-launcher-after-source-registration"
+    },
+    {
+      "producer": "synchronous-command",
+      "status": "outside-managed-scope",
+      "boundary": "outside-managed-launcher"
+    },
+    {
+      "producer": "unmanaged-async-command",
+      "status": "outside-managed-scope",
+      "boundary": "outside-managed-launcher"
+    },
+    {
+      "producer": "direct-spawn",
+      "status": "outside-managed-scope",
+      "boundary": "outside-managed-launcher"
+    },
+    {
+      "producer": "provider-internal-tool",
+      "status": "outside-managed-scope",
+      "boundary": "outside-managed-launcher"
+    },
+    {
+      "producer": "outer-agent",
+      "status": "outside-managed-scope",
+      "boundary": "outside-managed-launcher"
+    }
+  ],
+  "boundary": {
+    "confirmationOrder": 17,
+    "activityCount": 17
+  }
+}

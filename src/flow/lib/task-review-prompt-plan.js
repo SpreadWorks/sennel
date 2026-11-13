@@ -27,7 +27,7 @@ export class TaskReviewSourceElement extends PartitionedPromptPayloadElement {
   constructor(entry, range = {}) {
     const path = requiredText(entry?.path, "Task Review source path");
     const status = entry?.status;
-    if (!new Set(["present", "deleted"]).has(status)) throw new Error(`Task Review source status is invalid: ${path}`);
+    if (!new Set(["present", "directory", "deleted"]).has(status)) throw new Error(`Task Review source status is invalid: ${path}`);
     if (status === "present" && typeof entry.content !== "string") {
       throw new Error(`Task Review source content must be text: ${path}`);
     }
@@ -65,7 +65,7 @@ export class TaskReviewSourceElement extends PartitionedPromptPayloadElement {
   }
 
   toPromptText() {
-    if (this.status === "deleted") return renderCanonicalTaskSource([this]);
+    if (this.status !== "present") return renderCanonicalTaskSource([this]);
     return [
       `## ${this.path}`,
       `[canonical source characters ${this.start}-${this.end} of ${this.sourceLength}]`,
@@ -113,6 +113,7 @@ export class TaskReviewPromptChunkContext {
       ...this.segments.map((segment) => (
         segment.status === "deleted"
           ? `- ${segment.path}: deleted`
+          : segment.status === "directory" ? `- ${segment.path}: directory`
           : `- ${segment.path}: characters ${segment.start}-${segment.end} of ${segment.sourceLength}`
       )),
     ].join("\n");
@@ -234,8 +235,8 @@ export class TaskReviewPromptPlan {
       if (expectedStart !== element.content.length || reconstructed !== element.content) {
         throw new Error(`Task Review prompt plan source coverage is incomplete: ${element.path}`);
       }
-      if (element.status === "deleted" && elementSegments.length !== 1) {
-        throw new Error(`Task Review prompt plan duplicates deleted source: ${element.path}`);
+      if (element.status !== "present" && elementSegments.length !== 1) {
+        throw new Error(`Task Review prompt plan duplicates ${element.status} source: ${element.path}`);
       }
     }
     if (segmentIndex !== flattened.length) throw new Error(`Task Review prompt plan contains foreign source segment: ${flattened[segmentIndex].path}`);

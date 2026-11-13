@@ -116,6 +116,7 @@ import {
   WorkerArtifactWorkerInstructions,
   WorkerArtifactHandoffRequest,
   SourceMutationManifest,
+  SourceMutationBaseline,
   SourceHandoffSettlement,
   SourceRepairEffect,
   SourceTriageEffect,
@@ -175,6 +176,15 @@ import {
 
 const ACTION_DIGEST = "a".repeat(64);
 const SOURCE_REQUEST_LIFECYCLES = new WeakMap();
+
+function capturedMutationManifest(t, attempt, paths) {
+  const root = createTmpDir("source-mutation-binding-");
+  t.after(() => removeTmpDir(root));
+  for (const relativePath of paths) fs.writeFileSync(path.join(root, relativePath), "before");
+  const baseline = SourceMutationBaseline.capture({ root, attempt });
+  for (const relativePath of paths) fs.writeFileSync(path.join(root, relativePath), "after");
+  return SourceMutationManifest.capture({ baseline });
+}
 
 function handoffAgentOptions({ executionRoot }) {
   return {
@@ -1003,6 +1013,24 @@ describe("worker artifact handoff", () => {
     }
   });
 
+  it("projects readonly Git metadata policy into source and artifact worker environments", () => {
+    for (const stepId of ["draft", "implement"]) {
+      const value = fixture(stepId, { worktree: false, specRecord: validSpec() });
+      try {
+        const request = WorkerArtifactHandoffRequest.create({ mainRoot: value.mainRoot, executionRoot: value.executionRoot,
+          state: value.flowManager.loadReadOnly(value.specId), invocation: value.invocation, flowManager: value.flowManager });
+        const environment = request.executionEnvironment();
+        assert.equal(request.policy.kind, stepId === "implement" ? "source" : "artifact");
+        assert.equal(environment.GIT_OPTIONAL_LOCKS, "0");
+        assert.equal(environment.GIT_CEILING_DIRECTORIES, path.dirname(value.executionRoot));
+        assert.equal(environment.SENNEL_FLOW_HANDOFF_REQUEST, request.requestPath);
+        assert.equal(environment.GIT_CONFIG_PARAMETERS, "'diff.autoRefreshIndex=false'");
+        assert.deepEqual(Object.keys(environment).sort(), ["GIT_CEILING_DIRECTORIES", "GIT_CONFIG_PARAMETERS", "GIT_OPTIONAL_LOCKS", "SENNEL_FLOW_HANDOFF_REQUEST"],
+          "the worker receives a small metadata policy overlay");
+      } finally { removeTmpDir(value.mainRoot); }
+    }
+  });
+
   it("rejects a Gate correction with no Spec change without publishing a new revision", async () => {
     const value = await createSpecGateRepairScenario();
     try {
@@ -1543,7 +1571,7 @@ describe("worker artifact handoff", () => {
     }
   });
 
-  it("recovers clean tracked before state from Git index and rejects source changes after manifest generation", () => {
+  it("captures clean tracked raw before-state and rejects source changes after manifest generation", () => {
     const value = fixture("implement", { worktree: false, specRecord: validSpec() });
     try {
       initializeGitRepository(value);
@@ -1565,7 +1593,7 @@ describe("worker artifact handoff", () => {
     }
   });
 
-  it("classifies a clean tracked content edit and chmod from normalized Git index modes", () => {
+  it("classifies tracked content and respects the effective Git filemode policy", () => {
     const contentValue = fixture("implement", { worktree: false, specRecord: validSpec() });
     try {
       initializeGitRepository(contentValue);
@@ -1592,7 +1620,7 @@ describe("worker artifact handoff", () => {
       });
       fs.chmodSync(product, 0o755);
       const manifest = captureManifest(request);
-      assert.equal(manifest.mutations[0].changeKind, "mode");
+      assert.deepEqual(manifest.mutations, []);
     } finally {
       removeTmpDir(modeValue.mainRoot);
     }
@@ -1663,7 +1691,7 @@ describe("worker artifact handoff", () => {
     }
   });
 
-  it("preserves Git-invisible permission bits while rolling back tracked content", () => {
+  it("publishes Git-produced metadata while rolling back tracked content", () => {
     const value = fixture("implement", { worktree: false, specRecord: validSpec() });
     try {
       initializeGitRepository(value);
@@ -1681,13 +1709,13 @@ describe("worker artifact handoff", () => {
       authority.rollbackRejectedSourceMutation();
 
       assert.equal(fs.readFileSync(product, "utf8"), "export const value = 1;\n");
-      assert.equal(fs.statSync(product).mode & 0o777, 0o600);
+      assert.equal(execFileSync("git", ["diff", "--raw", "--", "product.js"], { cwd: value.mainRoot, encoding: "utf8" }), "");
     } finally {
       removeTmpDir(value.mainRoot);
     }
   });
 
-  it("preserves 0755 to 0700 permission narrowing while rolling back tracked content", () => {
+  it("publishes the Git-produced executable representation while rolling back content", () => {
     const value = fixture("implement", { worktree: false, specRecord: validSpec() });
     try {
       initializeGitRepository(value);
@@ -1707,13 +1735,13 @@ describe("worker artifact handoff", () => {
       authority.rollbackRejectedSourceMutation();
 
       assert.equal(fs.readFileSync(product, "utf8"), "export const value = 1;\n");
-      assert.equal(fs.statSync(product).mode & 0o777, 0o700);
+      assert.equal(execFileSync("git", ["diff", "--raw", "--", "product.js"], { cwd: value.mainRoot, encoding: "utf8" }), "");
     } finally {
       removeTmpDir(value.mainRoot);
     }
   });
 
-  it("keeps a large clean tracked tree out of the source request authority", () => {
+  it("captures a bounded clean tracked tree without embedding its raw before-images in the worker request", () => {
     const value = fixture("implement", { worktree: false, specRecord: validSpec() });
     try {
       initializeGitRepository(value);
@@ -1732,17 +1760,19 @@ describe("worker artifact handoff", () => {
       });
       const stored = JSON.parse(fs.readFileSync(request.requestPath, "utf8"));
 
-      assert.equal(request.sourceMutationBaseline.snapshot.entries.length, 2);
-      assert.deepEqual(request.sourceMutationBaseline.snapshot.entries.map((entry) => entry.path), [
-        "product.js", "untracked.txt",
-      ]);
+      const capturedPaths = new Set(request.sourceMutationBaseline.snapshot.entries.map((entry) => entry.path));
+      assert.equal(capturedPaths.has("tracked-fixture/00000.txt"), true);
+      assert.equal(capturedPaths.has("tracked-fixture/18762.txt"), true);
+      assert.equal(capturedPaths.has("product.js"), true);
+      assert.equal(capturedPaths.has("untracked.txt"), true);
+      assert.ok(capturedPaths.size >= 18_765);
       assert.equal(Object.hasOwn(request.sourceMutationBaseline.snapshot.toJSON(), "modeEntries"), false);
       assert.equal(Object.hasOwn(stored, "sourceMutationBaseline"), false);
       assert.equal(Object.hasOwn(stored, "sourceHandoffCheckpoint"), false);
       assert.equal(stored.sourceMutationBaselineDigest, request.sourceMutationBaseline.digest);
       assert.equal(stored.sourceHandoffCheckpointDigest, request.sourceHandoffCheckpoint.digest);
       const requestBytes = fs.statSync(request.requestPath).size;
-      assert.ok(Buffer.byteLength(JSON.stringify(request.sourceMutationBaseline.toJSON())) < 10_000);
+      assert.ok(Buffer.byteLength(JSON.stringify(request.sourceMutationBaseline.toJSON())) < 16 * 1024 * 1024);
       assert.ok(requestBytes < 512 * 1024);
       assert.ok(requestBytes < 8 * 1024 * 1024);
       assert.equal(value.flowManager.readSourceHandoffAuthority({
@@ -1754,41 +1784,21 @@ describe("worker artifact handoff", () => {
     }
   });
 
-  it("classifies clean tracked symlink target and type changes", () => {
-    const linkValue = fixture("implement", { worktree: false, specRecord: validSpec() });
-    try {
-      initializeGitRepository(linkValue);
-      const link = path.join(linkValue.mainRoot, "link.js");
-      fs.symlinkSync("product.js", link);
-      execFileSync("git", ["add", "link.js"], { cwd: linkValue.mainRoot });
-      execFileSync("git", ["commit", "-q", "-m", "tracked link"], { cwd: linkValue.mainRoot });
-      const request = linkValue.coordinator.createRequest({
-        ctx: linkValue.ctx, state: linkValue.flowManager.load(), invocation: linkValue.invocation,
-      });
-      fs.unlinkSync(link);
-      fs.symlinkSync("other.js", link);
-      const manifest = captureManifest(request);
-      assert.equal(manifest.mutations[0].changeKind, "content");
-    } finally {
-      removeTmpDir(linkValue.mainRoot);
-    }
-
-    const typeValue = fixture("implement", { worktree: false, specRecord: validSpec() });
-    try {
-      initializeGitRepository(typeValue);
-      const link = path.join(typeValue.mainRoot, "link.js");
-      fs.symlinkSync("product.js", link);
-      execFileSync("git", ["add", "link.js"], { cwd: typeValue.mainRoot });
-      execFileSync("git", ["commit", "-q", "-m", "tracked link"], { cwd: typeValue.mainRoot });
-      const request = typeValue.coordinator.createRequest({
-        ctx: typeValue.ctx, state: typeValue.flowManager.load(), invocation: typeValue.invocation,
-      });
-      fs.unlinkSync(link);
-      fs.writeFileSync(link, "export const replacement = true;\n");
-      const manifest = captureManifest(request);
-      assert.equal(manifest.mutations[0].changeKind, "type");
-    } finally {
-      removeTmpDir(typeValue.mainRoot);
+  it("rejects native links and logical-link host type mismatches before a worker starts", () => {
+    for (const hostRegular of [false, true]) {
+      const value = fixture("implement", { worktree: false, specRecord: validSpec() });
+      try {
+        initializeGitRepository(value);
+        const link = path.join(value.mainRoot, "link.js");
+        fs.symlinkSync("product.js", link);
+        execFileSync("git", ["add", "link.js"], { cwd: value.mainRoot });
+        execFileSync("git", ["commit", "-q", "-m", "tracked link"], { cwd: value.mainRoot });
+        if (hostRegular) { fs.unlinkSync(link); fs.writeFileSync(link, "product.js"); }
+        assert.throws(() => value.coordinator.createRequest({ ctx: value.ctx,
+          state: value.flowManager.load(), invocation: value.invocation }),
+        /unsupported native type|inconsistent regular host/);
+        assert.equal(fs.lstatSync(link).isFile(), hostRegular);
+      } finally { removeTmpDir(value.mainRoot); }
     }
   });
 
@@ -2066,15 +2076,16 @@ describe("worker artifact handoff", () => {
       const untracked = path.join(value.mainRoot, "preexisting.txt");
       fs.writeFileSync(clean, "export const clean = 1;\n");
       fs.writeFileSync(deleted, "export const deleted = 1;\n");
+      execFileSync("git", ["config", "core.symlinks", "false"], { cwd: value.mainRoot });
       fs.writeFileSync(link, "clean.js");
-      fs.unlinkSync(link);
-      fs.symlinkSync("clean.js", link);
+      const linkOid = execFileSync("git", ["hash-object", "-w", "link.js"], { cwd: value.mainRoot, encoding: "utf8" }).trim();
+      execFileSync("git", ["update-index", "--add", "--cacheinfo", "120000", linkOid, "link.js"], { cwd: value.mainRoot });
       fs.writeFileSync(dirtyDeleted, "export const removed = 1;\n");
       execFileSync("git", ["add", "clean.js", "deleted.js", "link.js", "dirty-deleted.js"], { cwd: value.mainRoot });
       execFileSync("git", ["commit", "-q", "-m", "rollback baseline"], { cwd: value.mainRoot });
       fs.writeFileSync(path.join(value.mainRoot, "product.js"), "export const value = 0;\n");
       fs.unlinkSync(link);
-      fs.symlinkSync("product.js", link);
+      fs.writeFileSync(link, "product.js");
       fs.unlinkSync(dirtyDeleted);
       fs.writeFileSync(untracked, "before\n");
 
@@ -2087,9 +2098,9 @@ describe("worker artifact handoff", () => {
       fs.writeFileSync(clean, "export const clean = 2;\n");
       fs.unlinkSync(deleted);
       fs.unlinkSync(link);
-      fs.symlinkSync("clean.js", link);
+      fs.writeFileSync(link, "clean.js");
       fs.writeFileSync(path.join(value.mainRoot, "new-untracked.js"), "export const created = true;\n");
-      fs.symlinkSync("clean.js", path.join(value.mainRoot, "new-link.js"));
+      fs.writeFileSync(path.join(value.mainRoot, "new-link.js"), "clean.js");
       fs.writeFileSync(path.join(value.mainRoot, "product.js"), "export const value = 1;\n");
       fs.writeFileSync(untracked, "after\n");
       fs.writeFileSync(dirtyDeleted, "export const removed = 1;\n");
@@ -2098,7 +2109,7 @@ describe("worker artifact handoff", () => {
 
       assert.equal(fs.readFileSync(clean, "utf8"), "export const clean = 1;\n");
       assert.equal(fs.readFileSync(deleted, "utf8"), "export const deleted = 1;\n");
-      assert.equal(fs.readlinkSync(link), "product.js");
+      assert.equal(fs.readFileSync(link, "utf8"), "product.js");
       assert.equal(fs.readFileSync(path.join(value.mainRoot, "product.js"), "utf8"), "export const value = 0;\n");
       assert.equal(fs.readFileSync(untracked, "utf8"), "before\n");
       assert.equal(fs.existsSync(dirtyDeleted), false);
@@ -2856,23 +2867,9 @@ describe("worker artifact handoff", () => {
     );
   });
 
-  it("binds finding repairs to parent-observed mutations across many-to-many path claims", () => {
+  it("binds finding repairs to parent-observed mutations across many-to-many path claims", (t) => {
     const attempt = { id: "impl-repair-attempt", nodeId: "impl-repair", sequence: 1 };
-    const manifest = new SourceMutationManifest({
-      attempt,
-      baselineDigest: "b".repeat(64),
-      mutations: ["one.js", "two.js"].map((relativePath, index) => ({
-        mutationId: SourceMutationManifest.mutationId(attempt, relativePath),
-        path: relativePath,
-        changeKind: "content",
-        beforeKind: "file",
-        beforeMode: 0o644,
-        beforeDigest: String(index + 1).repeat(64),
-        afterKind: "file",
-        afterMode: 0o644,
-        afterDigest: String(index + 3).repeat(64),
-      })),
-    });
+    const manifest = capturedMutationManifest(t, attempt, ["one.js", "two.js"]);
     const report = (findings) => SourceWorkerEffectReport.fromDocument({
       version: 1,
       stepId: "impl-repair",
@@ -2917,23 +2914,9 @@ describe("worker artifact handoff", () => {
     );
   });
 
-  it("binds each parsed source Gate repair observation to its exact parent-observed mutation", () => {
+  it("binds each parsed source Gate repair observation to its exact parent-observed mutation", (t) => {
     const attempt = { id: "task-gate-repair-attempt", nodeId: "task-impl", sequence: 2 };
-    const manifest = new SourceMutationManifest({
-      attempt,
-      baselineDigest: "b".repeat(64),
-      mutations: ["one.js", "two.js"].map((relativePath, index) => ({
-        mutationId: SourceMutationManifest.mutationId(attempt, relativePath),
-        path: relativePath,
-        changeKind: "content",
-        beforeKind: "file",
-        beforeMode: 0o644,
-        beforeDigest: String(index + 1).repeat(64),
-        afterKind: "file",
-        afterMode: 0o644,
-        afterDigest: String(index + 3).repeat(64),
-      })),
-    });
+    const manifest = capturedMutationManifest(t, attempt, ["one.js", "two.js"]);
     const fingerprints = ["a".repeat(64), "c".repeat(64)];
     const document = {
       version: 1,
@@ -2995,11 +2978,7 @@ describe("worker artifact handoff", () => {
         && error.data.missing.includes("two.js") && error.data.unknown.includes("unknown.js"),
       "the parent rejects unknown and unclaimed observed mutations",
     );
-    const unchangedManifest = new SourceMutationManifest({
-      attempt,
-      baselineDigest: "b".repeat(64),
-      mutations: [],
-    });
+    const unchangedManifest = capturedMutationManifest(t, attempt, []);
     const unchangedEffect = SourceWorkerEffectReport.fromDocument(invalidDocument([{
       ...document.gateRepair.results[0], paths: [],
     }]), "task-impl").bind(
@@ -3029,24 +3008,10 @@ describe("worker artifact handoff", () => {
     );
   });
 
-  it("rejects incomplete, unknown, and finding-mismatched repair mutation claims", () => {
+  it("rejects incomplete, unknown, and finding-mismatched repair mutation claims", (t) => {
     const attempt = { id: "impl-repair-attempt", nodeId: "impl-repair", sequence: 1 };
     const mutationId = SourceMutationManifest.mutationId(attempt, "one.js");
-    const manifest = new SourceMutationManifest({
-      attempt,
-      baselineDigest: "b".repeat(64),
-      mutations: [{
-        mutationId,
-        path: "one.js",
-        changeKind: "content",
-        beforeKind: "file",
-        beforeMode: 0o644,
-        beforeDigest: "1".repeat(64),
-        afterKind: "file",
-        afterMode: 0o644,
-        afterDigest: "2".repeat(64),
-      }],
-    });
+    const manifest = capturedMutationManifest(t, attempt, ["one.js"]);
     const effect = new SourceRepairEffect({
       version: 1,
       appliedFindingKeys: ["F1"],

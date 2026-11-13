@@ -1,0 +1,20 @@
+{
+  "actualProducerResult": {
+    "file": "r182-previous-continuation-producer/result.json",
+    "sha256": "c2900e0bccfef315160bd261cfbb233d3daf692caeaf5ac7500dd56907053336"
+  },
+  "actualProducerSourceManifestSha256": "cc347a13dc231274f8cb48f2858de6ffbd9ba5bd7fbcbea1d793f3bb02ed51aa",
+  "sourceOriginalManifest": {
+    "file": "r168-historical-r152-source-rebinding.json",
+    "sha256": "ae594d5898f74ec5ac6fb344d0f36a934fc47f4b6e40af9f6c857b5fd975170c"
+  },
+  "producerDriverSha256": "9f6f1ec6b48dbcda48013932a3d325876a427e00ab13c185beccf09366a6c730",
+  "producerQualification": {
+    "file": "r182-previous-continuation-producer-qualification.json",
+    "sha256": "58db52f89ffa55f76a09c9a5d05d6d7b3343663c967f0f74b560ff744dcbce95"
+  },
+  "canonicalExportProvenanceSha256": "766c9b32c8540f919b63b90ac1a4854885507bf0fef6c6f90117788ec5d83819",
+  "normalPreviousProducerPassedBothPinnedNodes": true,
+  "noRuntimeOwnershipOrStateCopied": true,
+  "notOriginalFlowOrAgentAcceptance": true
+}

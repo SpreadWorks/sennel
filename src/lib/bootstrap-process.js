@@ -2,13 +2,15 @@ import { spawnSync } from "node:child_process";
 import { GitRepositoryPolicy } from "./git-repository-environment.js";
 
 /** Fixed read-only probes needed before normal runtime/root admission exists. */
-export function runBootstrapGitProbe(probe, { cwd = process.cwd() } = {}) {
+export function runBootstrapGitProbe(probe, { cwd = process.cwd(), repositoryRoot = null,
+  discoveryCeiling = null } = {}) {
   if (!["repository-root", "common-directory"].includes(probe)) throw new TypeError("Unknown bootstrap Git probe");
   const args = probe === "repository-root" ? ["rev-parse", "--show-toplevel"] : ["rev-parse", "--git-common-dir"];
   const gitPolicy = new GitRepositoryPolicy({
-    // Root discovery must be able to walk to a containing repository. The
-    // common-directory probe is different: cwd is already a selected boundary.
-    repositoryRoot: probe === "common-directory" ? cwd : null,
+    // Discovery honors only the caller-selected project and explicit ceiling.
+    // The common-directory probe already receives its selected boundary as cwd.
+    repositoryRoot: probe === "common-directory" ? cwd : repositoryRoot,
+    discoveryCeiling,
     readOnly: true,
     isolateConfiguration: true,
   });

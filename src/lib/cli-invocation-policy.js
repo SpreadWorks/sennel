@@ -33,6 +33,7 @@ export class CliInvocationPolicy {
     this.help = help;
     this.inherited = head === 'command' && !help;
     this.flow = head === 'flow';
+    this.migration = definition?.migration === true;
     Object.freeze(this);
   }
 }

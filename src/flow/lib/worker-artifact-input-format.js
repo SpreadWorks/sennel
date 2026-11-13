@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 /** The immutable worker input format shared by planning and handoff storage. */
 import { WorkerArtifactHandoffError } from "./worker-artifact-handoff-error.js";
 
@@ -16,4 +17,17 @@ export function workerArtifactStableStringify(value) {
     )).join(",")}}`;
   }
   return JSON.stringify(value);
+}
+
+/** The raw-byte digest shared by handoff codecs and their immutable source blobs. */
+export function workerArtifactDigest(value) {
+  const bytes = Buffer.isBuffer(value) ? value : Buffer.from(String(value));
+  return crypto.createHash("sha256").update(bytes).digest("hex");
+}
+
+/** Reject stored fields that a typed constructor would otherwise normalize or omit. */
+export function assertWorkerArtifactStoredValue(value, canonical, label) {
+  if (workerArtifactStableStringify(value) !== workerArtifactStableStringify(canonical)) {
+    throw new TypeError(`${label} contains unknown, missing or noncanonical fields`);
+  }
 }

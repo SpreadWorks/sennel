@@ -1,9 +1,9 @@
-import { createTmpDir as createTestDirectory } from "../../support/builders/tmp-dir.js";
-import { interruptChildAtCheckpoint } from "../../support/infrastructure/interrupted-child.js";
+import { createTmpDir as createTestDirectory, removeTmpDir } from "../../support/builders/tmp-dir.js";
+import { failedChildAtCheckpoint, interruptChildAtCheckpoint } from "../../support/infrastructure/interrupted-child.js";
 import { AtomicFile } from "../../../src/lib/atomic-file.js";
 import assert from "node:assert/strict";
 import { once } from "node:events";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -349,7 +349,7 @@ function updateAttemptActivity(state) {
 }
 
 afterEach(() => {
-  while (roots.length > 0) fs.rmSync(roots.pop(), { recursive: true, force: true });
+  while (roots.length > 0) removeTmpDir(roots.pop());
 });
 describe("Flow Version identity, schema, and consumer paths", () => {
   it("projects Spec schema content away from immutable Version identity", () => {
@@ -786,6 +786,42 @@ describe("Flow artifact catalog authority slots", () => {
       assert.equal(status, 0);
     } finally {
       if (child.exitCode === null) child.kill();
+    }
+  });
+
+  it("preserves unchanged artifact generations when a catalog publication rolls back", () => {
+    for (const phase of ["writer", "before-json-rename"]) {
+      const location = canonicalLocation();
+      const target = location.artifactPath("a.json");
+      const retained = location.artifactPath("b.json");
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      fs.writeFileSync(target, "a-before");
+      fs.writeFileSync(retained, "b-before");
+      saveCatalog(location, ["a", "b"].map((kind) => FlowArtifactDescriptor.fromFile({
+        location, authoritySlot: singleton(kind), relativePath: `artifacts/migration/${kind}.json`,
+        mediaType: "application/json", retention: "permanent", migrationMaterialization: true,
+      })));
+      const before = fs.statSync(retained, { bigint: true });
+      const catalogBefore = fs.readFileSync(location.catalogFile);
+      const failure = Object.assign(new Error("controlled catalog rollback"), { code: "EIO" });
+      const store = new FlowArtifactCatalogStore({ location, faultInjector: ({ phase: point }) => {
+        if (phase === point) throw failure;
+      } });
+      assert.throws(() => store.publishSystem({
+        relativePath: "artifacts/migration/a.json", authoritySlot: singleton("a"),
+        mediaType: "application/json", retention: "permanent",
+        write: () => {
+          fs.writeFileSync(target, "a-after");
+          if (phase === "writer") throw failure;
+        },
+      }), (error) => error === failure || error.cause === failure);
+      assert.equal(fs.readFileSync(target, "utf8"), "a-before");
+      assert.equal(fs.readFileSync(retained, "utf8"), "b-before");
+      const after = fs.statSync(retained, { bigint: true });
+      assert.deepEqual({ dev: after.dev, ino: after.ino }, { dev: before.dev, ino: before.ino },
+        "rollback must preserve the physical generation of untouched artifacts");
+      assert.deepEqual(fs.readFileSync(location.catalogFile), catalogBefore);
+      assert.equal(new FlowArtifactCatalogStore({ location }).require().hash, JSON.parse(catalogBefore).hash);
     }
   });
 
@@ -1579,53 +1615,91 @@ describe("Current Flow Version storage", () => {
     assert.deepEqual(modes(), beforeModes);
   });
 
-  it("recovers publication and unpublication transactions after real process death at every catalog commit boundary", async () => {
+  it("preserves publication and unpublication atomicity after released-owner failures at every catalog commit boundary", async () => {
     const root = temporaryRoot();
     const location = canonicalLocation({ root });
     const boundary = new CurrentFlowStateAdoptionBoundary({ definition: buildCurrentFlowDefinition() });
     boundary.openVersionStore({ location }).create(freshState(boundary, location), { specRecord: specRecord() });
-    const modulePath = fileURLToPath(new URL("../../../src/lib/flow-version.js", import.meta.url));
-    const authorityPath = fileURLToPath(new URL("../../../src/flow/lib/flow-artifact-authority.js", import.meta.url));
-    const contractPath = fileURLToPath(new URL("../../../src/lib/flow-artifact-contract.js", import.meta.url));
-    const runCrash = async (operation, phase) => {
+    const modulePath = new URL("../../../src/lib/flow-version.js", import.meta.url).href;
+    const authorityPath = new URL("../../../src/flow/lib/flow-artifact-authority.js", import.meta.url).href;
+    const contractPath = new URL("../../../src/lib/flow-artifact-contract.js", import.meta.url).href;
+    const runFailure = async (operation, phase) => {
       const mutation = operation === "publish"
-        ? `store.publish({ ...artifact.publication({ updater: "report", mediaType: "application/json" }), publicationClaim: artifactPublicationClaimForStep("report"), write: () => { fs.mkdirSync(path.dirname(location.resolve(artifact.relativePath)), { recursive: true }); fs.writeFileSync(location.resolve(artifact.relativePath), "{}\\n"); if (${JSON.stringify(phase)} === "uncommitted") pause(); } });`
-        : `store.unpublish({ relativePath: artifact.relativePath, publicationClaim: artifactPublicationClaimForStep("report"), write: () => { fs.unlinkSync(location.resolve(artifact.relativePath)); if (${JSON.stringify(phase)} === "uncommitted") pause(); } });`;
+        ? `store.publish({ ...artifact.publication({ updater: "report", mediaType: "application/json" }), publicationClaim: artifactPublicationClaimForStep("report"), write: () => { fs.mkdirSync(path.dirname(location.resolve(artifact.relativePath)), { recursive: true }); fs.writeFileSync(location.resolve(artifact.relativePath), "{}\\n"); if (${JSON.stringify(phase)} === "uncommitted") fail(); } });`
+        : `store.unpublish({ relativePath: artifact.relativePath, publicationClaim: artifactPublicationClaimForStep("report"), write: () => { fs.unlinkSync(location.resolve(artifact.relativePath)); if (${JSON.stringify(phase)} === "uncommitted") fail(); } });`;
       const source = `
         import fs from "node:fs"; import path from "node:path";
         import { FlowArtifactCatalogStore, FlowVersionLocation, FlowVersionAuthorityScope } from ${JSON.stringify(modulePath)};
         import { artifactPublicationClaimForStep } from ${JSON.stringify(authorityPath)};
         import { FLOW_ARTIFACT_CONTRACTS } from ${JSON.stringify(contractPath)};
-        function pause() { fs.writeSync(1, "paused\\n"); Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0); }
+        function fail() {
+          fs.writeSync(1, "failed-publication" + String.fromCharCode(10));
+          throw Object.assign(new Error("controlled catalog publication failure"), { code: "EIO" });
+        }
         const location = new FlowVersionLocation({ repositoryRoot: ${JSON.stringify(root)}, authorityScope: FlowVersionAuthorityScope.canonical(), specId: "508-flow-version", version: 1 });
-        const store = new FlowArtifactCatalogStore({ location, faultInjector: ({ phase: point }) => { if ((${JSON.stringify(phase)} === "prepared" && point === "before-json-rename") || (${JSON.stringify(phase)} === "committed" && point === "before-json-readback")) pause(); } });
+        const store = new FlowArtifactCatalogStore({ location, faultInjector: ({ phase: point }) => { if ((${JSON.stringify(phase)} === "prepared" && point === "before-json-rename") || (${JSON.stringify(phase)} === "committed" && point === "before-json-readback")) fail(); } });
         const artifact = FLOW_ARTIFACT_CONTRACTS.resolve("report");
         ${mutation}
       `;
-      const result = await interruptChildAtCheckpoint(process.execPath,
-        ["--input-type=module", "--eval", source], { checkpoint: "paused\n" });
-      assert.equal(result.interrupted, true);
-      assert.notEqual(result.exitCode, 0);
+      const result = await failedChildAtCheckpoint(process.execPath,
+        ["--input-type=module", "--eval", source], { checkpoint: "failed-publication\n" });
+      assert.equal(result.failed, true);
+      assert.equal(result.exitCode, 1);
+      assert.equal(result.signal, null);
+      const journal = path.join(location.runtimeLock("runtime.lock.artifact-catalog").runtimeDirectory, "catalog-transaction.json");
+      assert.equal(fs.existsSync(journal), phase === "committed", "committed publication retains its journal for cold cleanup; precommit failure rolls back while owned");
     };
-    await runCrash("publish", "uncommitted");
+    await runFailure("publish", "uncommitted");
     let recovered = new FlowArtifactCatalogStore({ location });
     assert.equal(recovered.require().artifacts.some((entry) => entry.logicalKey === "report"), false);
     assert.equal(fs.existsSync(location.artifact("report")), false);
-    await runCrash("publish", "prepared");
+    await runFailure("publish", "prepared");
     recovered = new FlowArtifactCatalogStore({ location });
     assert.equal(recovered.require().artifacts.some((entry) => entry.logicalKey === "report"), false);
     assert.equal(fs.existsSync(location.artifact("report")), false);
-    await runCrash("publish", "committed");
+    await runFailure("publish", "committed");
     recovered = new FlowArtifactCatalogStore({ location });
     assert.equal(recovered.require().artifacts.some((entry) => entry.logicalKey === "report"), true);
     assert.equal(fs.readFileSync(location.artifact("report"), "utf8"), "{}\n");
     for (const phase of ["uncommitted", "prepared", "committed"]) {
-      await runCrash("unpublish", phase);
+      await runFailure("unpublish", phase);
       recovered = new FlowArtifactCatalogStore({ location });
       const published = recovered.require().artifacts.some((entry) => entry.logicalKey === "report");
       assert.equal(published, phase !== "committed");
       assert.equal(fs.existsSync(location.artifact("report")), phase !== "committed");
     }
+  });
+
+  it("refuses an exited catalog owner's unreleased token without changing stored authority", () => {
+    const root = temporaryRoot();
+    const location = canonicalLocation({ root });
+    const boundary = new CurrentFlowStateAdoptionBoundary({ definition: buildCurrentFlowDefinition() });
+    boundary.openVersionStore({ location }).create(freshState(boundary, location), { specRecord: specRecord() });
+    const source = `
+      import { FlowVersionLocation, FlowVersionAuthorityScope } from ${JSON.stringify(new URL("../../../src/lib/flow-version.js", import.meta.url).href)};
+      import { FileLock } from ${JSON.stringify(new URL("../../../src/lib/file-lock.js", import.meta.url).href)};
+      const location = new FlowVersionLocation({ repositoryRoot: ${JSON.stringify(root)}, authorityScope: FlowVersionAuthorityScope.canonical(), specId: "508-flow-version", version: 1 });
+      const runtimeLock = location.runtimeLock("runtime.lock.artifact-catalog");
+      new FileLock({ location: runtimeLock.controlLocation, kind: "artifact-catalog-publication",
+        authority: { directory: location.directory, runtimeDirectory: runtimeLock.runtimeDirectory, catalog: location.catalogFile } }).acquire();
+    `;
+    const child = spawnSync(process.execPath, ["--input-type=module", "--eval", source], { encoding: "utf8" });
+    assert.equal(child.status, 0, child.stderr);
+    assert.equal(child.signal, null);
+    const runtimeLock = location.runtimeLock("runtime.lock.artifact-catalog");
+    const lockPath = path.join(runtimeLock.directory, runtimeLock.controlLocation.fileName);
+    const lockBytes = fs.readFileSync(lockPath);
+    const lockIdentity = fs.lstatSync(lockPath, { bigint: true });
+    const catalogBytes = fs.readFileSync(location.catalogFile);
+    const flowBytes = fs.readFileSync(location.flowStateFile);
+    assert.throws(() => new FlowArtifactCatalogStore({ location }).require(), (error) => error.code === "FLOW_ARTIFACT_CATALOG_BUSY");
+    assert.deepEqual(fs.readFileSync(lockPath), lockBytes);
+    const after = fs.lstatSync(lockPath, { bigint: true });
+    assert.equal(after.dev, lockIdentity.dev);
+    assert.equal(after.ino, lockIdentity.ino);
+    assert.equal(after.mtimeNs, lockIdentity.mtimeNs);
+    assert.deepEqual(fs.readFileSync(location.catalogFile), catalogBytes);
+    assert.deepEqual(fs.readFileSync(location.flowStateFile), flowBytes);
   });
 
   it("requires a typed canonical Spec record and catalogs every root authority", () => {

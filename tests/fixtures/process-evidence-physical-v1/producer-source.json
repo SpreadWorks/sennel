@@ -1,0 +1,21 @@
+{
+  "sourceRuntimeRecordVersion": 9,
+  "sourcePackageRevision": "7d58bd1b4cd78f8e80129b6b7ccf8d56329123a5245bab7d275ae90ac764e833",
+  "immutableSourceManifest": {
+    "file": "r168-historical-r152-source-rebinding.json",
+    "sha256": "ae594d5898f74ec5ac6fb344d0f36a934fc47f4b6e40af9f6c857b5fd975170c"
+  },
+  "actualProducerResult": {
+    "file": "r177-previous-physical-producer/result.json",
+    "sha256": "4c8829bd5adeb75528b358f023eb6591b2d9fb5decf40f610f97c2614109274b"
+  },
+  "actualProducerSourceManifestSha256": "9d5b44a952af9b3b4e64c24e380df571c4af8fedafdf28ee5cf760d81b3411c0",
+  "producerDriverSha256": "49f87994277c5688210d5e941323d9ae8018f00489429254afe9833d5a467eaa",
+  "sourceBundle": "tests/fixtures/process-runtime-record-v9/producer-package-v9.json.gz",
+  "sourceBundleSha256": "ea0d4f025dd94a8f13007abfca00e48221ccd00e02775ec82402a75f5c96c2fc",
+  "bundleResourcesComparedToOriginalDeclaredSource": 977,
+  "allBundleResourcesExactlyMatched": true,
+  "canonicalExportProvenanceSha256": "8bde795721d7b1d98ba43c5d56cb913caadfb6e217cb2c111cde380930956921",
+  "noRuntimeOwnershipOrStateCopied": true,
+  "notOriginalFlowOrAgentAcceptance": true
+}

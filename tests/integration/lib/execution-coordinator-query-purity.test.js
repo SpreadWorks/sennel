@@ -7,6 +7,7 @@ import { test } from "node:test";
 import { ProcessExecutionRuntime } from "../../../src/lib/process-execution-runtime.js";
 import { ProcessExecutorIdentity, ChildExitObservation, ProcessOutputState, ProcessExecutionStopReceipt, executionValueDigest } from "../../../src/lib/process-execution-values.js";
 import { managedRequest } from "../../../src/lib/managed-process-protocol.js";
+import { RuntimeStandaloneRequestDocument } from "../../../src/lib/process-execution-request-block.js";
 import { currentRuntimePackage } from "../../../src/lib/runtime-package.js";
 import { createTmpDir } from "../../support/builders/tmp-dir.js";
 import { removeQuiescentRuntimeFixture } from "../../support/infrastructure/runtime-fixture-cleanup.js";
@@ -47,7 +48,7 @@ test("nonmutating coordinator queries preserve registry bytes, durable replay an
   await runtime.observeCall(call, { type: "started", executor: executor.toJSON(), startedAt: new Date().toISOString() });
   const registryBytes = () => runtime.store.admission.runExclusiveAsync(() => fs.readFileSync(runtime.store.file.filePath));
   const before = await registryBytes();
-  const originalRoot = JSON.parse(before).payload.executions.find(e => e.executionId === runtime.executionId);
+  const originalRoot = runtime.inspect().executions.find(e => e.executionId === runtime.executionId);
   assert.equal(originalRoot.calls[0].status, "running");
   assert.equal(originalRoot.calls[0].receipt, null);
   assert.equal(originalRoot.calls[0].timeoutMs, null);
@@ -79,12 +80,13 @@ test("nonmutating coordinator queries preserve registry bytes, durable replay an
     const completedBytes = ledger.read();
     const envelope = JSON.parse(completedBytes);
     assert.deepEqual(Object.keys(envelope), ["payload", "digest"]);
-    assert.equal(envelope.digest, executionValueDigest(envelope.payload));
-    assert.equal(envelope.payload.requestId, requestId);
-    assert.equal(envelope.payload.operation, operation);
-    assert.equal(envelope.payload.payloadDigest, executionValueDigest(payload));
-    assert.match(envelope.payload.authorizationDigest, /^[a-f0-9]{64}$/);
-    assert.deepEqual(envelope.payload.response, expected);
+    const stored = RuntimeStandaloneRequestDocument.fromEnvelope(runtime.executionId, requestId, envelope).requestRecord();
+    assert.equal(envelope.payload.version, 9);
+    assert.equal(stored.requestId, requestId);
+    assert.equal(stored.operation, operation);
+    assert.equal(stored.payloadDigest, executionValueDigest(payload));
+    assert.match(stored.authorizationDigest, /^[a-f0-9]{64}$/);
+    assert.deepEqual(stored.response, expected);
     // Mutate nested returned data, not the immutable request or a stored record.
     if (operation === "authenticate") response.value.record.binding.contract = "caller mutation";
     else if (operation === "events") response.value[0].binding.contract = "caller mutation";

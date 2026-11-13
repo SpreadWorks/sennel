@@ -7,6 +7,7 @@ import { currentRuntimePackage } from "../lib/runtime-package.js";
 import { RealDirectoryAuthority } from "../lib/real-directory-authority.js";
 import { LogicalRelativePath } from "../lib/portable-path.js";
 import { buildFlowStopGuidance } from "../lib/flow-stop-guidance.js";
+import { selectedRuntimeRecordMigrationPreview } from "../lib/process-runtime-migration-guidance.js";
 import { createI18n } from "../lib/i18n.js";
 import { ProcessExecutionCheckoutIdentity } from "../lib/process-execution-values.js";
 import { FlowExecutionMeasurementReference } from "../lib/flow-execution-observation.js";
@@ -943,7 +944,8 @@ class CanonicalFlowVersionReader {
       }
       const bytes = descriptor === ledgerDescriptor ? confirmedLedgerBytes : await inspectArtifact(descriptor);
       try {
-        const value = contract.contentContract.parse(bytes);
+        const processEvidence = await catalog.processStopEncodingSnapshot(descriptor.logicalKey, [bytes], inspectArtifact);
+        const value = contract.contentContract.parse(bytes, { processEvidence });
         revisions.set(descriptor.relativePath, Number.isSafeInteger(value?.schemaRevision) && value.schemaRevision > 0 ? value.schemaRevision : null);
       } catch (error) {
         throw new QueryError(ERROR_CODES.CANONICAL_RECORD_INCONSISTENT, "/canonical", "Artifact content contract validation failed", { cause: error });
@@ -1408,6 +1410,7 @@ function serializeQueryResponse(response, { error = null, t = null } = {}) {
     const guidance = buildFlowStopGuidance({
       code: response.error.code,
       error,
+      directive: selectedRuntimeRecordMigrationPreview(error)?.data.directive ?? null,
       operation: "flow query",
       t,
     });

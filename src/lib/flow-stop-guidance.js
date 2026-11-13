@@ -21,6 +21,8 @@ const FALLBACK = Object.freeze({
   privateText: "Provide the returned error code to the maintainer and request a diagnostic review before continuing.",
   privateDiagnostic: "Private diagnostic text was withheld.",
   unconfirmed: "unconfirmed",
+  runtimeRecordPreview: "Preview runtime record migration without changing persisted data. From {{cwd}}, run {{executable}} with these literal arguments: {{args}}.",
+  runtimeRecordUnconfirmed: "Execution closure and migration eligibility remain unconfirmed; the preview may refuse unsafe or incomplete evidence.",
 });
 
 function stableCode(value, fallback = "FLOW_OPERATION_STOPPED") {
@@ -113,6 +115,7 @@ function translator(injected) {
     return template.replace(/\{\{(\w+)\}\}/g, (_, name) => params[name] ?? UNKNOWN);
   };
 }
+export { translator as flowStopTranslator };
 
 /** Acquired execution facts only; never reads state or selects a recovery route. */
 export class FlowStopFacts {

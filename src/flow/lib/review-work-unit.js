@@ -348,12 +348,11 @@ function confirmedReviewReceipt(flowManager, specId, workUnit, sealed, { catalog
     let publishedReview;
     let delta;
     try {
-      inputReview = new CanonicalSpecReview(JSON.parse(
-        assertReviewWorkUnitInputSnapshot(reviewInput[0], workUnit.directory).bytes.toString("utf8"),
-      ));
-      publishedReview = new CanonicalSpecReview(JSON.parse(
-        descriptorSnapshot(flowManager, specId, outputDescriptor).bytes.toString("utf8"),
-      ));
+      const inputBytes = assertReviewWorkUnitInputSnapshot(reviewInput[0], workUnit.directory).bytes;
+      const publishedBytes = descriptorSnapshot(flowManager, specId, outputDescriptor).bytes;
+      const processEvidence = catalog.processStopEncoding(flowManager.specLocation(specId), "spec.review", [inputBytes, publishedBytes]);
+      inputReview = CanonicalSpecReview.fromBytes(inputBytes, { processEvidence });
+      publishedReview = CanonicalSpecReview.fromBytes(publishedBytes, { processEvidence });
       delta = new SpecReviewDelta(JSON.parse(sealed.bytes.toString("utf8")));
       delta.assertCurrent(inputReview);
       if (delta.stage !== "spec-review") return false;
@@ -373,7 +372,7 @@ function confirmedReviewReceipt(flowManager, specId, workUnit, sealed, { catalog
         .assertCheckout(captureProcessExecutionCheckoutIdentity({
           mainRoot: flowManager.specLocation(specId).repositoryRoot, executionRoot,
         }));
-      return new CanonicalSpecReview({ ...merged.toJSON(), processStop: evidence.toJSON() }).digest === publishedReview.digest;
+      return new CanonicalSpecReview({ ...merged.toJSON(), processStop: evidence.receipt }).digest === publishedReview.digest;
     } catch (error) {
       if (error instanceof ProcessExecutionControlFailure) throw error;
       return false;

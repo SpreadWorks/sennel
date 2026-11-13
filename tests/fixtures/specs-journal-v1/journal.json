@@ -1,0 +1,19 @@
+{
+  "schemaRevision": 1,
+  "component": "specs",
+  "revision": 1,
+  "specRoot": "specs",
+  "specId": "portable-specs-journal",
+  "stageName": ".001.migrate-9f358294-3c40-4b41-b49b-828b162c89ce.tmp",
+  "backupName": ".portable-specs-journal.sennel-migrate-specs-backup-9f358294-3c40-4b41-b49b-828b162c89ce",
+  "sourceHash": "fb00114c8172ad580c56af5664bb39385741beb412701cbc50830c45b7f4ea68",
+  "stageHash": "61f57cd6337c03de1ae9c91b81a78ee289decea2a95c28a1eb4d0a48e4224ee0",
+  "sourceDirectoryIdentity": {
+    "dev": 2049,
+    "ino": 13372540
+  },
+  "stageDirectoryIdentity": {
+    "dev": 2049,
+    "ino": 14911207
+  }
+}

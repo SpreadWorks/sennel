@@ -1,5 +1,5 @@
 import path from "node:path";
-import { SourceModule, SourceInvocation, SourceDeclaration, SourceDeclarationHeader, SourceInitializer, SourceReadError, SourceOriginUsage, readParameters, readTypeInvariants, readClassMember, readInvocations, readMemberAccess, readTokens, readObjectProperty } from "./source-reader.js";
+import { SourceModule, SourceInvocation, SourceDeclaration, SourceDeclarationHeader, SourceInitializer, SourceReadError, SourceOriginUsage, matching, readParameters, readTypeInvariants, readClassMember, readInvocations, readMemberAccess, readTokens, readObjectProperty } from "./source-reader.js";
 import { FlowStructureRules } from "./flow-rules.js";
 import { SourceRepository } from "./source-repository.js";
 import { SourceGraph, StructureDiagnostic } from "./source-graph.js";
@@ -78,12 +78,14 @@ class ResolvedSourceClass {
 }
 
 class ServiceClassReceiver {
-  constructor(value, isStatic) {
-    if (!(value instanceof ResolvedSourceClass) || typeof isStatic !== "boolean") throw new TypeError("class receiver required");
+  constructor(value, isStatic, bound = false) {
+    if (!(value instanceof ResolvedSourceClass) || typeof isStatic !== "boolean" || typeof bound !== "boolean") throw new TypeError("class receiver required");
     this.value = value;
     this.isStatic = isStatic;
+    this.bound = isStatic && bound;
   }
-  get key() { return `${this.value.key}:${this.isStatic ? "static" : "instance"}`; }
+  get key() { return `${this.value.key}:${this.isStatic ? "static" : "instance"}:${this.bound ? "bound" : "unbound"}`; }
+  forAccess(access) { return new ServiceClassReceiver(this.value, this.isStatic, this.bound && access?.called === true); }
 }
 
 class ResolvedSourceBinding {
@@ -437,14 +439,28 @@ export class SourceStructureChecker {
       && body[index - 1]?.value === "." && body[index + 1]?.value === "(");
     const worker = memberCall("runWorkerAttempt");
     const normal = memberCall("runDispatcherOwnedCommand");
-    const terminal = continuation?.containsBodySequence(`
+    const branchOpen = branch < 0 ? -1 : matching(body, branch + 1, "(", ")") + 1;
+    const branchClose = branchOpen < 0 || body[branchOpen]?.value !== "{" ? -1 : matching(body, branchOpen);
+    const terminalSource = `
       if (progressed.failure) return progressed.failure;
       stalledDispatches = progressed.stalledDispatches;
       current = progressed.current;
-      continue;
-    } let dispatcherOwnedCommand;`);
+      return continueDispatch();
+    `;
+    const terminalLength = readTokens(terminalSource).length;
+    const terminal = branchClose >= 0 && new SourceInitializer(body[branch], branch,
+      body.slice(branchClose - terminalLength, branchClose)).matches(terminalSource)
+      && new SourceInitializer(body[branch], branch, body.slice(branchClose + 1, branchClose + 4)).matches("let dispatcherOwnedCommand;");
+    const continuationInitializer = continuation?.topLevelInitializer("continueDispatch");
+    const continuationPrefix = readTokens("() => withFlowProcessRuntime(ctx, async () => {");
+    const admittedContinuation = terminal && continuationInitializer
+      && new SourceInitializer(continuationInitializer.token, continuationInitializer.index,
+        continuationInitializer.tokens.slice(0, continuationPrefix.length)).matches("() => withFlowProcessRuntime(ctx, async () => {")
+      && continuation.bodyEndsWith("return continueDispatch();")
+      && module.bindingAt(body[branchClose - 4]) === module.bindingAt(body[continuationInitializer.index + 1])
+      && this.#recoveryBinding(module, "withFlowProcessRuntime", "src/flow/lib/process-runtime-admission.js", "withFlowProcessRuntime", continuationInitializer.tokens[3]);
     if (branch < 0 || !worker || !normal || body[branch].offset >= normal.offset
-      || normal.offset >= worker.offset || !terminal
+      || normal.offset >= worker.offset || !terminal || !admittedContinuation
       || !continuation.containsBodySequence("this.runDispatcherOwnedRecovery(ctx, target, action, invocation, receiptMutation)")) {
       this.#diagnose("R03", file, continuation?.token, [file],
         "ExecuteCommandDirective must terminate its branch before normal Step command and worker execution");
@@ -3397,6 +3413,15 @@ const revision = testSourceRevision(snapshot, testSource, readCatalogedArtifact)
       for (let index = 0; index < declaration.tokens.length; index++) {
         const token = declaration.tokens[index];
         if (!["this", "super"].includes(token.value)) continue;
+        if (token.value === "this" && receiver.bound
+          && declaration.tokens[index - 1]?.value === "new" && declaration.tokens[index + 1]?.value === "("
+          && declaration.ownsBodyToken(token)) {
+          // Construction changes the receiver to an instance of the actual
+          // calling class, including inherited static factories. Reuse the
+          // ordinary constructor, initializer, postfix and alias inspection.
+          this.#inspectReferencedClass(receiver.value, "this", declaration, file, trace, seen);
+          continue;
+        }
         const constructor = token.value === "super" && declaration.tokens[index + 1]?.value === "(";
         const access = constructor ? null : readMemberAccess(declaration.tokens, index);
         if (access?.name === null) {
@@ -3409,11 +3434,11 @@ const revision = testSourceRevision(snapshot, testSource, readCatalogedArtifact)
           const owner = this.#resolveLocal(file, module, name, new Set(), "A08");
           const parent = owner && this.#serviceParent(owner, trace, new Set([owner.key]));
           if (parent) this.#inspectService(parent.file, parent.classEntry.name,
-            parent.file === file ? trace : [...trace, parent.file], seen, next, false, receiver);
+            parent.file === file ? trace : [...trace, parent.file], seen, next, false, receiver.forAccess(access));
         } else if (next !== member) {
           const targetFile = next.startsWith("#") ? file : receiver.value.file;
           const targetName = next.startsWith("#") ? name : receiver.value.classEntry.name;
-          this.#inspectService(targetFile, targetName, trace, seen, next, false, receiver);
+          this.#inspectService(targetFile, targetName, trace, seen, next, false, receiver.forAccess(access));
         }
       }
     }
@@ -3461,28 +3486,34 @@ const revision = testSourceRevision(snapshot, testSource, readCatalogedArtifact)
     this.#trackServiceBinding(value.file, value.module, value.classEntry.name, trace);
     const tokens = caller.tokens;
     const classUsage = new SourceOriginUsage(caller, [local], { mutableAliases: true });
+    // A nested callable has no proved class receiver here. Keep its `new this`
+    // unresolved instead of borrowing the enclosing static method's identity.
+    const classOrigin = (token) => classUsage.isOrigin(token) && (local !== "this" || caller.ownsBodyToken(token));
     const instances = new Set();
     const indexes = new Map(tokens.map((token, index) => [token.offset, index]));
     const inspect = (access, isStatic) => {
       if (!access) return;
       if (access.name === null) this.#diagnose("A08", callerFile, access.token, trace,
         "Service helper uses unresolved computed member or invocation");
-      else this.#inspectService(value.file, value.classEntry.name, trace, seen, access.name, false, new ServiceClassReceiver(value, isStatic));
+      else this.#inspectService(value.file, value.classEntry.name, trace, seen, access.name, false, new ServiceClassReceiver(value, isStatic, access.called));
     };
     for (const invocation of readInvocations(caller)) {
-      if (!invocation.constructed || !classUsage.isOrigin(invocation.token)) continue;
+      if (!invocation.constructed || !classOrigin(invocation.token)) continue;
       this.#inspectService(value.file, value.classEntry.name, trace, seen, "constructor");
       const start = indexes.get(invocation.token.offset) - 1;
       inspect(readMemberAccess(tokens, indexes.get(invocation.endToken.offset), start), false);
-      if (tokens[start - 1]?.value === "=" && tokens[start - 2]?.kind === "identifier") instances.add(tokens[start - 2].value);
+      if (tokens[start - 1]?.value === "=" && tokens[start - 2]?.kind === "identifier") instances.add(tokens[start - 2]);
     }
-    const instanceUsage = new SourceOriginUsage(caller, instances, { mutableAliases: true });
+    const instanceUsage = new SourceOriginUsage(caller, local === "this" ? [] : [...instances].map((token) => token.value), {
+      mutableAliases: true,
+      ...(local === "this" ? { bindings: this.#module(callerFile, trace, "A08"), originTokens: [...instances] } : {}),
+    });
     for (let index = 0; index < tokens.length; index++) {
-      if (!classUsage.isOrigin(tokens[index]) && !instanceUsage.isOrigin(tokens[index])) continue;
+      if (!classOrigin(tokens[index]) && !instanceUsage.isOrigin(tokens[index])) continue;
       // Construction was inspected above; its argument list is not a member.
       if (tokens[index - 1]?.value === "new") continue;
       const access = readMemberAccess(tokens, index);
-      if (classUsage.isOrigin(tokens[index])) inspect(access, true);
+      if (classOrigin(tokens[index])) inspect(access, true);
       if (instanceUsage.isOrigin(tokens[index])) inspect(access, false);
     }
   }
@@ -4329,6 +4360,22 @@ const revision = testSourceRevision(snapshot, testSource, readCatalogedArtifact)
     const canonical = readClassMember(module, "GetNextActionCommand", "executeCanonical");
     const entryReturns = execute?.returns() ?? [];
     const canonicalReturns = canonical?.returns() ?? [];
+    const entryReturn = entryReturns.at(-1);
+    const wrapperName = entryReturn?.tokens[0]?.value;
+    const wrapperBinding = wrapperName && wrapperName !== "this"
+      ? this.#resolveLocalBinding(file, module, wrapperName, new Set(), "A10") : null;
+    const readOnlyInvocation = `${wrapperName}({
+      mainRoot: ctx.mainRoot || ctx.root, executionRoot: ctx.executionRoot || ctx.root,
+    }, () => this.executeCanonical(ctx))`;
+    const parameters = readParameters(execute?.tokens ?? []);
+    // Follow the existing read-only scope only when its imported identity,
+    // roots and complete callback preserve the same canonical projection.
+    const readOnlyEntry = wrapperBinding?.file === "src/lib/managed-process.js"
+      && wrapperBinding.name === "withReadOnlyManagedProcessScope"
+      && parameters.length === 1 && parameters[0].length === 1 && parameters[0][0].value === "ctx"
+      && entryReturn?.matches(readOnlyInvocation);
+    const entryInvocation = entryReturn?.matches("this.executeCanonical(ctx)")
+      ? "this.executeCanonical(ctx)" : readOnlyEntry ? readOnlyInvocation : null;
     const canonicalEntry = `
       if (!ctx.flowState) {
         return { taskId: null, step: null, action: null, instructions: null,
@@ -4339,11 +4386,11 @@ const revision = testSourceRevision(snapshot, testSource, readCatalogedArtifact)
         throw new NextActionPlanError("NEXT_ACTION_TARGET_MISMATCH", "active Flow must be backed by the canonical Version Store",);
       }
       ctx.flowState = ctx.flowManager.loadReadOnly(ctx.specId ?? ctx.flowState.specId);
-      return this.executeCanonical(ctx);
+      return ${entryInvocation};
     `;
     const entryComplete = entryReturns.length >= 1 && entryReturns.length <= 2
-      && entryReturns.at(-1).matches("this.executeCanonical(ctx)")
-      && (execute?.matchesBody(canonicalEntry) || execute?.matchesBody("return this.executeCanonical(ctx);"));
+      && entryInvocation !== null
+      && (execute?.matchesBody(canonicalEntry) || execute?.matchesBody(`return ${entryInvocation};`));
     if (!entryComplete) this.#diagnose("A10", file, execute?.token, [file],
       "next-action public entry can bypass canonical registered routing");
     const finalReturn = canonicalReturns.at(-1);

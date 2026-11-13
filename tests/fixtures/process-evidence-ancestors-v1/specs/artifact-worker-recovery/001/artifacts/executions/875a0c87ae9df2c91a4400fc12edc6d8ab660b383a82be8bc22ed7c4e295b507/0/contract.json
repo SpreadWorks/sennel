@@ -1,0 +1,29 @@
+{
+  "id": "f19e26f179d2a674b0d94f8a4720b1df9e14f2b09968f9406bb2ae64e3f0616f",
+  "contract": {
+    "runId": "artifact-worker-recovery-run",
+    "specId": "artifact-worker-recovery",
+    "stepId": "draft-gate-repair",
+    "nodeId": "draft-gate-repair",
+    "taskId": null,
+    "attemptId": "attempt-draft-gate-repair-ce8c8aac-e444-4367-a62f-b93f823a7135",
+    "attemptSequence": 2,
+    "generation": 0,
+    "inputRevision": "05301ead63c1344f47bf13ae5ee1959d9c02cdc70e3967c9d26e83bb3e3ea071",
+    "runtimeRevision": "7d58bd1b4cd78f8e80129b6b7ccf8d56329123a5245bab7d275ae90ac764e833",
+    "promptDigest": "997022a8bc27c2a42d5c5a0cda6904d6f81c3aefdd9f4b50a055ca8f92f829ff",
+    "schemaDigest": "43d462faa958d28f0981e84ac272665f2a19a7129fada9644c3e085b9640f8e1",
+    "budgetOwner": "875a0c87ae9df2c91a4400fc12edc6d8ab660b383a82be8bc22ed7c4e295b507",
+    "executionLimit": null,
+    "executionMode": null,
+    "inputBaselines": [
+      {
+        "logicalKey": "draft",
+        "relativePath": "steps/draft/result.json",
+        "hash": "a0e9fdcbdc19c2a6e0bfbc336ffdbdc349760310b223dcf5d219b7ebc3a0fa85",
+        "size": 645,
+        "activityId": "attempt-confirmed-eab7fdef-6cce-4dec-9773-461592aefcf8"
+      }
+    ]
+  }
+}

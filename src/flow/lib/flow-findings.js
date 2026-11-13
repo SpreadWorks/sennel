@@ -287,7 +287,7 @@ export class CanonicalFlowFindingSourceArtifact {
       || identity.sourceArtifact !== this.relativePath) {
       throw new Error("finding source resolution requires its exact source artifact identity");
     }
-    for (const payload of this.payloads.toReversed()) {
+    for (const payload of this.payloads.slice().reverse()) {
       const finding = findSourceFinding(payload, identity);
       if (finding !== null) return finding;
     }

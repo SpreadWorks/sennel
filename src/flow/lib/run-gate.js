@@ -36,6 +36,7 @@ import { PRODUCT } from "../../lib/product.js";
 import { runGit, runGitAsync } from "../../lib/git-helpers.js";
 import { computeGitState } from "../../lib/git-state.js";
 import { withManagedProcessScope } from "../../lib/managed-process.js";
+import { FlowRepositoryRuntimeArtifactRegistry } from "./flow-repository-runtime-artifacts.js";
 
 
 import { container } from "../../lib/container.js";
@@ -134,6 +135,7 @@ import { StepAdmissionRefusal, isStepAdmissionRefusal } from "./step-admission-r
 import { checkSpecGateReadiness } from "./spec-gate-readiness.js";
 import { CanonicalTaskContext } from "./task-canonical-context.js";
 import { captureCurrentTaskSource } from "./task-mutation-lineage.js";
+import { TaskSourcePresentation } from "./task-source-presentation.js";
 import { TaskGateSettlementAdmission } from "./canonical-flow-manager-store.js";
 import { GateTransitionFacts } from "./gate-transition.js";
 import { TaskStepIdentity } from "./task-step-identity.js";
@@ -243,11 +245,13 @@ const GATE_RESULT_ARTIFACT_BY_PHASE = Object.freeze({
 });
 
 /**
- * Synthesize a unified diff for every untracked file in `root` and return the
+ * Synthesize a unified diff for every untracked source file in `root` and return the
  * concatenated diff text. Untracked-file omission in `git diff` is the root
  * cause of spec 221 — a test-first new test file becomes invisible to
  * impl-gate unless we splice it back in here.
  *
+ * CLI-owned runtime artifacts are excluded through the repository registry
+ * before the bounded listing is captured, including retained earlier state.
  * Read-only: uses `git ls-files --others --exclude-standard` for enumeration
  * and `git diff --no-index /dev/null <path>` for synthesis. Neither mutates
  * the index or working tree (REQ-4 / REQ-5).
@@ -275,7 +279,11 @@ async function collectUntrackedDiffInScope(root, options = {}) {
   const maxFiles = options.maxFiles ?? UNTRACKED_DEFAULT_MAX_FILES;
   const maxFileSize = options.maxFileSize ?? UNTRACKED_DEFAULT_MAX_FILE_SIZE;
 
-  const listed = await runGitAsync(["ls-files", "--others", "--exclude-standard", "-z"], { cwd: root });
+  const runtimeArtifacts = new FlowRepositoryRuntimeArtifactRegistry();
+  const listed = await runGitAsync([
+    "ls-files", "--others", "--exclude-standard", "-z", "--", ".",
+    ...runtimeArtifacts.gitPathspecExcludes(),
+  ], { cwd: root });
   assertOk(listed, "failed to list untracked files");
   const listStdout = listed.stdout;
   // -z output: NUL-separated, no trailing entry
@@ -3549,20 +3557,14 @@ function buildPerRequirementDiffs(fileMap, perFileDiffs, reqIds, fullDiff) {
   return result;
 }
 
-function renderCanonicalTaskSourceEntry(entry) {
-  return entry.status === "deleted"
-    ? `## ${entry.path}\n(deleted)`
-    : `## ${entry.path}\n${entry.content}`;
-}
-
 function renderCanonicalTaskSource(entries) {
-  return entries.map(renderCanonicalTaskSourceEntry).join("\n\n");
+  return entries.map((entry) => TaskSourcePresentation.from(entry).toMarkdown()).join("\n\n");
 }
 
 function canonicalTaskSourceEntriesByPath(entries) {
   return new Map(entries.map((entry) => [
     entry.path,
-    `${renderCanonicalTaskSourceEntry(entry)}\n\n`,
+    `${TaskSourcePresentation.from(entry).toMarkdown()}\n\n`,
   ]));
 }
 

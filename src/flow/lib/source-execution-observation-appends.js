@@ -28,11 +28,11 @@ class SourceExecutionObservationAppend {
     this.digest = descriptor.hash;
     Object.freeze(this);
   }
-  matches(entries, mode) {
+  matches(entries, snapshot, { retained = false } = {}) {
     const entry = entries.get(this.relativePath);
-    // A Git difference snapshot omits ignored and clean tracked files. This
-    // append already has exact bytes authenticated by its current catalog view.
-    if (entry === undefined) return mode === "git";
+    // Earlier captured observations can predate a newly cataloged immutable append.
+    // A current inventory may omit it only when its explicit selector does so.
+    if (entry === undefined) return retained || snapshot.excludesPath(this.relativePath);
     return entry.kind === "file" && entry.digest === this.digest;
   }
 }
@@ -52,10 +52,12 @@ export class SourceExecutionObservationCatalogBaseline {
 export class SourceExecutionObservationAppends {
   #paths = new Set();
   #catalog;
+  #selector;
   constructor(view, baseline) {
     const observation = view instanceof SourceExecutionObservationCatalog ? view : new SourceExecutionObservationCatalog(view);
     this.#catalog = observation.catalog;
     this.root = baseline.root;
+    this.#selector = baseline instanceof SourceExecutionObservationCatalogBaseline ? null : baseline;
     const before = new Set(baseline instanceof SourceExecutionObservationCatalogBaseline
       ? baseline.catalog.artifacts.map((descriptor) => observation.relativePath(descriptor.relativePath, baseline.root))
         .filter((relativePath) => relativePath !== null)
@@ -75,11 +77,19 @@ export class SourceExecutionObservationAppends {
     this.catalogPath = observation.relativePath(FLOW_ARTIFACT_CONTRACTS.resolve("artifact.catalog").relativePath, baseline.root);
     Object.freeze(this);
   }
-  matches(snapshot) {
+  #matches(snapshot, values, retained) {
     if (snapshot.root !== this.root) return false;
-    const entries = new Map(snapshot.entries.map((entry) => [entry.path, entry]));
-    return this.appended.every((append) => append.matches(entries, snapshot.mode));
+    const entries = new Map(values.map((entry) => [entry.path, entry]));
+    const files = new Set(this.appended.map((append) => append.relativePath));
+    for (const relativePath of this.#paths) {
+      if (!files.has(relativePath) && entries.has(relativePath) && entries.get(relativePath).kind !== "directory") return false;
+    }
+    return this.appended.every((append) => (this.#selector === null
+      || this.#selector.excludesPath(append.relativePath) === snapshot.excludesPath(append.relativePath))
+      && append.matches(entries, snapshot, { retained }));
   }
+  matches(snapshot, entries = snapshot.entries) { return this.#matches(snapshot, entries, false); }
+  matchesRetainedEntries(snapshot, entries) { return this.#matches(snapshot, entries, true); }
   allowsPath(relativePath) { return this.#paths.has(relativePath); }
   allowsFilePath(relativePath) { return this.appended.some((append) => append.relativePath === relativePath); }
   retainedCatalog(expectedCatalog = this.#catalog) {

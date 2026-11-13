@@ -11,6 +11,7 @@ import { executeManagedProcess } from "../../../src/lib/managed-process.js";
 import { managedRequest } from "../../../src/lib/managed-process-protocol.js";
 import { FlowProcessEvent, FlowProcessEventWriter } from "../../../src/flow/lib/flow-process-event.js";
 import { FlowActivity } from "../../../src/flow/lib/current-flow-state.js";
+import { RuntimeStandaloneRequestDocument } from "../../../src/lib/process-execution-request-block.js";
 import { FreshFlowFixture, makeFlowManager, setupFlowConfig } from "../../support/infrastructure/flow-setup.js";
 import { RuntimeEventPublicationFailure } from "../../support/infrastructure/runtime-registry-publication-failure.js";
 import { createTmpDir, removeTmpDir } from "../../support/builders/tmp-dir.js";
@@ -72,17 +73,29 @@ class EventRequestScenario {
     return runtime.decodeResponse(await managedRequest(grant, operation, { grant, data: { publications: publications.map((entry) => entry.toJSON()) } }, { requestId }));
   }
   requestFile(runtime, requestId) { return runtime.store.requestFile(runtime.executionId, requestId); }
+  requestRecord(runtime, requestId, bytes) {
+    return RuntimeStandaloneRequestDocument.fromEnvelope(runtime.executionId, requestId, JSON.parse(bytes)).requestRecord();
+  }
   publicationRequests(runtime = this.runtime) {
     const directory = path.dirname(this.requestFile(runtime, randomUUID()).filePath);
-    return fs.readdirSync(directory).map((name) => {
-      const file = this.requestFile(runtime, name.slice(0, -5));
+    return fs.readdirSync(directory, { withFileTypes: true }).filter((entry) => {
+      if (entry.name === "blocks") { assert.equal(entry.isDirectory(), true); return false; }
+      assert.equal(entry.isFile(), true);
+      return true;
+    }).map(({ name }) => {
+      const requestId = name.slice(0, -5);
+      const file = this.requestFile(runtime, requestId);
       const bytes = file.read();
-      return { file, bytes, record: JSON.parse(bytes).payload };
+      return { file, bytes, record: this.requestRecord(runtime, requestId, bytes) };
     }).filter(({ record }) => ["ack-events", "dispose-runtime-events"].includes(record.operation));
   }
   async drain(writer, mode = "async") {
     return mode === "sync" ? this.runtime.drainEventsSync(writer, this.selection)
       : this.runtime.drainEvents(writer, this.selection);
+  }
+  async finalize(writer, mode = "async") {
+    return mode === "sync" ? this.runtime.finalizeBindingSync(this.selection, writer)
+      : this.runtime.finalizeBinding(this.selection, writer);
   }
 }
 
@@ -121,9 +134,9 @@ test("canonical event ACK replays exactly, reaches a closed unarchived execution
   assert.equal(await scenario.send(successor, "ack-events", data, requestId, grant), null);
   const registryAfterFirstAck = successor.store.file.read();
   const requestBytes = requestFile.read();
-  const requestRecord = JSON.parse(requestBytes);
-  assert.equal(requestRecord.payload.operation, "ack-events");
-  assert.deepEqual(requestRecord.payload.response, { ok: true, value: null });
+  const requestRecord = scenario.requestRecord(successor, requestId, requestBytes);
+  assert.equal(requestRecord.operation, "ack-events");
+  assert.deepEqual(requestRecord.response, { ok: true, value: null });
   assert.deepEqual(successor.inspect().executions.find((entry) => entry.executionId === original.executionId)
     .eventAcknowledgements, [firstPublication.toJSON()]);
 
@@ -183,9 +196,9 @@ test("mixed valid and invalid ACK publication is atomic and its UUID cannot be r
   assert.deepEqual(scenario.runtime.store.file.read(), registryBefore);
   assert.deepEqual(scenario.runtime.inspect().executions[0].eventAcknowledgements, []);
   const failedRequestBytes = requestFile.read();
-  const failedRequest = JSON.parse(failedRequestBytes);
-  assert.equal(failedRequest.payload.response.ok, false);
-  assert.equal(failedRequest.payload.response.error.code, "PROCESS_EXECUTION_EVENT_MISMATCH");
+  const failedRequest = scenario.requestRecord(scenario.runtime, requestId, failedRequestBytes);
+  assert.equal(failedRequest.response.ok, false);
+  assert.equal(failedRequest.response.error.code, "PROCESS_EXECUTION_EVENT_MISMATCH");
   await assert.rejects(scenario.send(scenario.runtime, "ack-events", publications, requestId, grant),
     { code: "PROCESS_EXECUTION_EVENT_MISMATCH" });
   assert.deepEqual(requestFile.read(), failedRequestBytes, "exact UUID replay returns the stored refusal without rewriting its ledger");
@@ -226,7 +239,7 @@ test("runtime-only dispositions use exact replay identity, archive as noncanonic
   await successor.close();
 });
 
-test("committed canonical ACK remains pending when registry readback fails before request completion", { timeout: 120000 }, async (t) => {
+test("prepared canonical ACK remains unconfirmed when registry readback fails after response staging", { timeout: 120000 }, async (t) => {
   const scenario = await EventRequestScenario.create(t, { injectPublicationFailure: true });
   await scenario.runActualChild();
   const event = ProcessExecutionEvent.fromStored(scenario.events()[0]);
@@ -243,15 +256,17 @@ test("committed canonical ACK remains pending when registry readback fails befor
   assert.equal(faultError.code, "PROCESS_EXECUTION_DURABILITY_UNCERTAIN");
   const witness = JSON.parse(fs.readFileSync(scenario.fault.witness, "utf8"));
   assert.deepEqual(witness, { requestId, eventId: event.eventId, operation: "ack-events",
-    phase: "global-fact-published-before-request-ledger-completion", errorCode: "EIO" });
+    phase: "global-fact-published-before-transaction-readback", errorCode: "EIO" });
   assert.equal(fs.existsSync(scenario.runtime.store.transition.filePath), true);
   const committed = JSON.parse(fs.readFileSync(scenario.runtime.store.file.filePath, "utf8")).payload;
   const fact = committed.executions.find((entry) => entry.events.some((candidate) => candidate.eventId === event.eventId));
   assert.deepEqual(fact.eventAcknowledgements, [publication.toJSON()]);
-  const pendingBytes = requestFile.read(), pending = JSON.parse(pendingBytes);
-  assert.equal(pending.payload.operation, "ack-events");
-  assert.equal(pending.payload.requestId, requestId);
-  assert.equal(pending.payload.response, null);
+  const pendingBytes = requestFile.read(), pending = scenario.requestRecord(scenario.runtime, requestId, pendingBytes);
+  assert.equal(pending.operation, "ack-events");
+  assert.equal(pending.requestId, requestId);
+  // Revision9 selects completed dependency bytes before publishing the root.
+  // The retained transaction fence makes this visible response unconfirmed.
+  assert.deepEqual(pending.response, { ok: true, value: null });
   const beforeReplay = fs.readFileSync(scenario.runtime.store.file.filePath);
   await assert.rejects(scenario.send(replayClient, "ack-events", [publication], requestId, replayClient.remoteGrant()),
     (error) => error instanceof ProcessExecutionControlFailure && error.code === "PROCESS_EXECUTION_DURABILITY_UNCERTAIN");
@@ -403,19 +418,90 @@ test("typed writer failure and uncertain prefix ACK retain both causes and the a
   assert.equal(failure.cause.errors[1].code, "PROCESS_EXECUTION_DURABILITY_UNCERTAIN");
   const witness = JSON.parse(fs.readFileSync(scenario.fault.witness, "utf8"));
   assert.deepEqual(witness, { eventId: events[0].eventId, operation: "ack-events",
-    phase: "global-fact-published-before-request-ledger-completion", errorCode: "EIO" });
+    phase: "global-fact-published-before-transaction-readback", errorCode: "EIO" });
   assert.equal(fs.existsSync(scenario.runtime.store.transition.filePath), true);
   const registry = scenario.runtime.store.file.read();
-  const committed = JSON.parse(registry).payload.executions.find((execution) => execution.executionId === scenario.runtime.executionId);
+  const committed = scenario.runtime.store.expandExecution(JSON.parse(registry).payload.executions.find((execution) => execution.executionId === scenario.runtime.executionId));
   assert.deepEqual(committed.eventAcknowledgements, [firstPublication.toJSON()]);
   assert.deepEqual(committed.calls[0].receipt, result.processExecutionStopReceipt.toJSON());
   assert.deepEqual(scenario.activities(scenario.runtime.executionId).map((activity) => activity.processEvent), events.slice(0, 2));
   const [pending, ...otherRequests] = scenario.publicationRequests();
   assert.deepEqual(otherRequests, []);
-  assert.equal(pending.record.response, null);
+  assert.deepEqual(pending.record.response, { ok: true, value: null });
+  assert.equal(fs.existsSync(scenario.runtime.store.transition.filePath), true);
   await assert.rejects(scenario.send(replayClient, "ack-events", [firstPublication], pending.record.requestId, grant),
     { code: "PROCESS_EXECUTION_DURABILITY_UNCERTAIN" });
   assert.deepEqual(scenario.runtime.store.file.read(), registry);
   assert.deepEqual(pending.file.read(), pending.bytes);
   assert.equal(writer.count, 2, "uncertain acknowledgement must not invoke a writer again");
+});
+
+function containsPublicationCause(error, expected) {
+  return error === expected || (error?.cause && containsPublicationCause(error.cause, expected))
+    || (error instanceof AggregateError && error.errors.some((entry) => containsPublicationCause(entry, expected)));
+}
+
+for (const mode of ["async", "sync"]) {
+  test(`${mode} canonical group rolls back every event when its second Activity fails before catalog commit`, { timeout: 120000 }, async (t) => {
+    const scenario = await EventRequestScenario.create(t);
+    const result = await scenario.runActualChild();
+    const events = scenario.events();
+    const before = makeFlowManager(scenario.root).readCanonicalTransitionSnapshot(scenario.specId);
+    const original = new Error("injected second process Activity failure");
+    let appended = 0;
+    const manager = makeFlowManager(scenario.root, { versionStoreFaultInjector(boundary) {
+      if (boundary.phase === "activity-appended" && boundary.activity.processEvent
+        && ++appended === 2) throw original;
+    } });
+    await assert.rejects(scenario.finalize(new FlowProcessEventWriter(manager), mode), (error) => containsPublicationCause(error, original));
+    assert.equal(appended, 2, "the real second Activity append must be reached");
+    const fresh = makeFlowManager(scenario.root);
+    const after = fresh.readCanonicalTransitionSnapshot(scenario.specId);
+    assert.deepEqual(after.state.toJSON(), before.state.toJSON());
+    assert.deepEqual(after.activities, before.activities);
+    const pending = scenario.runtime.inspect().executions.find((entry) => entry.executionId === scenario.runtime.executionId);
+    assert.deepEqual(pending.eventAcknowledgements, []);
+    const fence = pending.finalizationFences[0];
+    assert.equal(fence.barrier, null);
+    assert.deepEqual(fence.cutoff.events.map((event) => event.eventId), events.map((event) => event.eventId));
+    const barrier = await scenario.finalize(new FlowProcessEventWriter(fresh), mode);
+    assert.equal(barrier.fenceId, fence.fenceId);
+    assert.deepEqual(barrier.events.map((event) => event.eventId), events.map((event) => event.eventId));
+    const reloaded = makeFlowManager(scenario.root).activityLedger(scenario.specId)
+      .filter((activity) => activity.processEvent?.executionId === scenario.runtime.executionId);
+    assert.deepEqual(reloaded.map((activity) => activity.processEvent), events);
+    await scenario.runtime.close();
+    const archived = ProcessExecutionRuntime.readHistoricalInventory({ mainRoot: scenario.root }).executions
+      .find((entry) => entry.executionId === scenario.runtime.executionId);
+    assert.deepEqual(archived.calls[0].receipt, result.processExecutionStopReceipt.toJSON());
+    assert.deepEqual(archived.eventAcknowledgements.map((entry) => entry.eventId), events.map((event) => event.eventId));
+    assert.deepEqual(archived.finalizationFences[0].barrier, barrier.toJSON());
+  });
+}
+
+test("a lost atomic writer response retains every canonical event and replays the exact group without duplicate Activities", { timeout: 120000 }, async (t) => {
+  const scenario = await EventRequestScenario.create(t);
+  const result = await scenario.runActualChild();
+  const events = scenario.events();
+  const original = new Error("canonical group committed before response loss");
+  const publish = scenario.writer.writeGroup;
+  const lost = t.mock.method(scenario.writer, "writeGroup", function (group) {
+    publish.call(this, group);
+    throw original;
+  });
+  try { await assert.rejects(scenario.drain(scenario.writer), (error) => error === original); }
+  finally { lost.mock.restore(); }
+  const pending = scenario.runtime.inspect().executions.find((entry) => entry.executionId === scenario.runtime.executionId);
+  assert.deepEqual(pending.eventAcknowledgements, []);
+  assert.deepEqual(pending.calls[0].receipt, result.processExecutionStopReceipt.toJSON());
+  const restart = makeFlowManager(scenario.root);
+  const canonical = restart.activityLedger(scenario.specId).filter((activity) => activity.processEvent?.executionId === scenario.runtime.executionId);
+  assert.deepEqual(canonical.map((activity) => activity.processEvent), events);
+  const before = restart.readCanonicalTransitionSnapshot(scenario.specId);
+  assert.deepEqual(await scenario.drain(new FlowProcessEventWriter(restart)), events.map((event) => event.eventId));
+  const after = makeFlowManager(scenario.root).readCanonicalTransitionSnapshot(scenario.specId);
+  assert.deepEqual(after.state.toJSON(), before.state.toJSON());
+  assert.deepEqual(after.activities, before.activities);
+  const barrier = await scenario.runtime.finalizeBinding(scenario.selection, new FlowProcessEventWriter(restart));
+  assert.deepEqual(barrier.events.map((event) => event.eventId), events.map((event) => event.eventId));
 });

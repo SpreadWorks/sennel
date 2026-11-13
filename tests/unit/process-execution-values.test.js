@@ -40,8 +40,8 @@ test("a process control refusal without its typed payload is rejected before ord
 
 test("saved absence evidence rejects retired stale-owner authority without an explicit closed or exclusive fact", () => {
   const root = path.resolve("evidence-checkout");
-  const stored = { schemaVersion: 1, checkoutIdentity: { mainRoot: root, executionRoot: root,
-    mainDevice: 1, mainInode: 2, checkoutDevice: 1, checkoutInode: 2 }, binding: { contract: "unclaimed" },
+  const stored = { schemaVersion: 2, checkoutIdentity: { mainRoot: root, executionRoot: root,
+    mainDevice: "1", mainInode: "2", checkoutDevice: "1", checkoutInode: "2" }, binding: { contract: "unclaimed" },
     invocation: null, inventoryDigest: "a".repeat(64), ownerEpoch: 1, reservationBeforeSpawn: true,
     executions: [{ executionId: "b1894b74-e91e-43fa-a967-52d7f9f34a6f", ownerEpoch: 1, authorityState: "stale" }] };
   assert.throws(() => ProcessExecutionNonExecutionEvidence.fromStored(stored), /Non-execution owner authority/);

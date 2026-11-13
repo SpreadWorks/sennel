@@ -1,0 +1,11 @@
+{
+  "budgetId": "e5b21657469c826bce9852550a8394b1985e5c49ec4efc405b58032bdc0f9559",
+  "contractId": "ace25cababc0a2da92b23f4c7d27ec7464156b9ad5fe291a4891b551dd171327",
+  "eventId": "genuine-previous-physical-accounting",
+  "budget": {
+    "providerCallCount": 0,
+    "synthesisCallCount": 0,
+    "aggregateCharacters": 0,
+    "aggregateItemCount": 0
+  }
+}

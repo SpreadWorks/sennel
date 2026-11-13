@@ -1,4 +1,5 @@
 import { FlowProcessEvent, FlowProcessEventWriter, PROCESS_EVENT_OPERATION } from "./flow-process-event.js";
+import { ProcessExecutionEventGroup } from "../../lib/process-execution-values.js";
 import { ProcessExecutionRuntime } from "../../lib/process-execution-runtime.js";
 import { ProcessExecutionBindingSelection } from "../../lib/process-execution-finalization.js";
 import { CombinedAdmission } from "./combined-admission.js";
@@ -256,6 +257,7 @@ export class CanonicalFlowRuntime {
     publicationLimits,
     retryRecoveryPublication = undefined,
     completionActivity = null,
+    followingProcessActivities = [],
   } = {}) {
     const canonicalActivity = FlowActivity.canonical(activity);
     const retryPublication = retryRecoveryPublication === undefined
@@ -282,6 +284,7 @@ export class CanonicalFlowRuntime {
     return this.store(specId).apply({
       activity: canonicalActivity,
       completionActivity,
+      followingProcessActivities,
       ...(taskSpec !== undefined && { taskSpec }),
       ...(specRecord !== undefined && { specRecord }),
       ...(artifactWrites !== undefined && { artifactWrites }),
@@ -1109,21 +1112,33 @@ export class CanonicalFlowRuntime {
   }
 
   recordProcessEvent(event) {
-    const fact = new FlowProcessEvent(event);
-    const specId = fact.event.binding.value.specId;
+    return this.recordProcessEvents(new ProcessExecutionEventGroup([new FlowProcessEvent(event).event]))[0];
+  }
+
+  recordProcessEvents(group) {
+    if (!(group instanceof ProcessExecutionEventGroup)) throw new TypeError("Canonical process publication requires a typed event group");
+    const specId = group.events[0].binding.value.specId;
     const view = this.loadTransitionSnapshot(specId);
-    const existing = view.activities.find((activity) => activity.id === fact.activityId);
-    if (existing) {
-      if (existing.processEvent?.digest !== fact.event.digest) throw new CurrentFlowStateInvariantError("Process event identity was already saved with different facts");
-      return fact.event.eventId;
+    let state = view.state;
+    const prior = [...view.activities], additions = [];
+    for (const event of group.events) {
+      const fact = new FlowProcessEvent(event);
+      const existing = prior.find((activity) => activity.id === fact.activityId);
+      if (existing) {
+        if (existing.processEvent?.digest !== event.digest) throw new CurrentFlowStateInvariantError("Process event identity was already saved with different facts");
+        continue;
+      }
+      fact.assertFor(state, prior);
+      const recordedAt = event.occurredAt;
+      const activity = this.#activity(state, { id: fact.activityId, nodeId: fact.nodeId,
+        processEvent: event, timing: { startedAt: recordedAt, finishedAt: recordedAt, durationMs: 0 },
+        transition: { operation: PROCESS_EVENT_OPERATION, nodeId: fact.nodeId, task: null,
+          attempt: null, status: null, nonblocking: null } });
+      additions.push(activity); prior.push(activity);
+      state = state.withConfirmationOrder(activity.confirmationOrder);
     }
-    fact.assertFor(view.state, view.activities);
-    const recordedAt = fact.event.occurredAt;
-    this.apply(specId, this.#activity(view.state, { id: fact.activityId, nodeId: fact.nodeId,
-      processEvent: fact.event, timing: { startedAt: recordedAt, finishedAt: recordedAt, durationMs: 0 },
-      transition: { operation: PROCESS_EVENT_OPERATION, nodeId: fact.nodeId, task: null,
-        attempt: null, status: null, nonblocking: null } }));
-    return fact.event.eventId;
+    if (additions.length > 0) this.apply(specId, additions[0], { followingProcessActivities: additions.slice(1) });
+    return group.events.map((event) => event.eventId);
   }
 
   /** Persist a non-state-changing observation in the authoritative ledger. */
@@ -1571,7 +1586,7 @@ export class CanonicalFlowRuntime {
     const writer = new FlowProcessEventWriter(this);
     return runtime.finalizeBindingSync(new ProcessExecutionBindingSelection({
       runId: state.runId, specId: state.specId, flowVersionId: state.flowVersionId,
-    }), (event) => writer.write(event));
+    }), writer);
   }
 
   #currentNodeId(state) {

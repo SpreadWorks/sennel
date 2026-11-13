@@ -37,6 +37,7 @@ export class OsAuditScope {
     try {
       return this.repository.inventory(name, {
         ...options,
+        allowResourceAliases: true,
         onError: (error) => this.#incomplete(error.file || name, `source discovery failed: ${error.message}`, [name, error.file || name]),
       });
     }

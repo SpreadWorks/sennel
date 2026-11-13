@@ -1,0 +1,4904 @@
+{
+  "fixtureKind": "immutable-test-only-source-producer",
+  "sourceRuntimeRecordVersion": 9,
+  "sourcePackageRevision": "7d58bd1b4cd78f8e80129b6b7ccf8d56329123a5245bab7d275ae90ac764e833",
+  "sourceResourceCount": 977,
+  "method": "Unchanged declared revision9 package captured before repair by its original RuntimePackageSnapshot and RuntimePackageWireDelivery; source only, no runtime records or checkout authority.",
+  "asset": "producer-package-v9.json.gz",
+  "bytes": 3961641,
+  "sha256": "ea0d4f025dd94a8f13007abfca00e48221ccd00e02775ec82402a75f5c96c2fc",
+  "delivery": {
+    "schemaVersion": 1,
+    "encoding": "gzip-base64",
+    "revision": "7d58bd1b4cd78f8e80129b6b7ccf8d56329123a5245bab7d275ae90ac764e833",
+    "decodedByteLength": 16223420,
+    "digest": "99a697deb128f3b08928e9c8c2cc45c31db0ab4df818be42b659572e24149b50"
+  },
+  "files": [
+    {
+      "key": "package.json",
+      "digest": "dc31c2be925a0b3c1cd1fb75ae26d4b42fc6edb250b674f6c4a5e0d11154af8d",
+      "bytes": 1927
+    },
+    {
+      "key": "src/check.js",
+      "digest": "5117aa0d44a10cbada9e56fcc1a41b67ce0a52c6e23d7b79a6af49b5d4995009",
+      "bytes": 366
+    },
+    {
+      "key": "src/check/commands/config.js",
+      "digest": "54158b80e3e748dfe8e8ccc9c820beb7d198bd90a4e3a0d8596b6b0055a0b33c",
+      "bytes": 3941
+    },
+    {
+      "key": "src/check/commands/freshness.js",
+      "digest": "3c40ede8e5d8bc3e3acc8a473092e93f77ee9d4dd2e2759a7c7313e37cba2243",
+      "bytes": 16033
+    },
+    {
+      "key": "src/check/commands/scan.js",
+      "digest": "088986b603956fb6ea908e9030647d7284edc7c6ac68ff8ff8ee23847bb44ae0",
+      "bytes": 9493
+    },
+    {
+      "key": "src/check/lib/documentation-build-input-selection.js",
+      "digest": "f0bf66f8320b9cc3ab1c2190f0de9426b9f2a2295e58fae3083a7b2ec7bf91f5",
+      "bytes": 4736
+    },
+    {
+      "key": "src/cli-main.js",
+      "digest": "9ee1b60a215773bc0757dbe736d6deeffbb2047dbb951203362e5e7c50415a66",
+      "bytes": 8120
+    },
+    {
+      "key": "src/command.js",
+      "digest": "06bf75666c47a805ad6704b2da1684eb7cb548012bb170c6a97388180b72aacc",
+      "bytes": 3375
+    },
+    {
+      "key": "src/data/agents.js",
+      "digest": "8e7b450745193d3e5cd05731f889e2010046a246308e348c1b827affa30a5170",
+      "bytes": 4601
+    },
+    {
+      "key": "src/data/docs.js",
+      "digest": "e608c0821a9b8c372ab25f0d2bf78714a01e3dad306e45606e0fede086b2f361",
+      "bytes": 10629
+    },
+    {
+      "key": "src/data/lang.js",
+      "digest": "32f16a06b643f1c78641f51e757330f7de47d68472bffc315d32e4c071aafa64",
+      "bytes": 3450
+    },
+    {
+      "key": "src/data/project.js",
+      "digest": "c8d57e8c05167648dfabbda39a1434c62508cd8df041503b0580d464abd4fc64",
+      "bytes": 1771
+    },
+    {
+      "key": "src/data/skills.js",
+      "digest": "0271e0ca7c1755a599db704f62f2ad81235cb0db10385737bc2e3e2264c03953",
+      "bytes": 1061
+    },
+    {
+      "key": "src/data/text.js",
+      "digest": "3b16d5db2255160626041faf22b1dff8ccb6a86e300e2c4fbb2b229e211b4664",
+      "bytes": 733
+    },
+    {
+      "key": "src/docs.js",
+      "digest": "22b61e11bef232304d7763ec74f7538a1f626f65951eaad73ff7c0bf54cbdd5d",
+      "bytes": 467
+    },
+    {
+      "key": "src/docs/commands/agents.js",
+      "digest": "a4c8e6abcd07b9393687d95ec9d335c50a2afda55ffce35da435ec6db4cbb8f1",
+      "bytes": 8492
+    },
+    {
+      "key": "src/docs/commands/build.js",
+      "digest": "6fbb8ccfdbcc37078bce2ca4ce4f9e36acf13af11ba181c0bac48091f75dde16",
+      "bytes": 11056
+    },
+    {
+      "key": "src/docs/commands/changelog.js",
+      "digest": "dab6a9543927f3d278d2b1098c7a93d2f3497b558230e7dd1efdbe5c7cd9535c",
+      "bytes": 7154
+    },
+    {
+      "key": "src/docs/commands/data.js",
+      "digest": "68736f78a1aa34f155de93e903d3753e27f37f93cefd959a3a8d169ec5b66e03",
+      "bytes": 9492
+    },
+    {
+      "key": "src/docs/commands/enrich.js",
+      "digest": "74ab2a9fd4d8247419cf7f2592c62f32589454f67ea88a6304320f0d7d61ad41",
+      "bytes": 23818
+    },
+    {
+      "key": "src/docs/commands/forge.js",
+      "digest": "1188bd6287503271f8bb474a282965c43ea47b4b35f8bb2084f5f81f877b783c",
+      "bytes": 20852
+    },
+    {
+      "key": "src/docs/commands/init.js",
+      "digest": "3d5a347771bd96b5b59ebefae1a963253594351d0094ee848bff7e66a5c217e2",
+      "bytes": 9946
+    },
+    {
+      "key": "src/docs/commands/readme.js",
+      "digest": "a65b5e4b187a06e9ffac31cf94e36dbb6560a5cd1bdba2f4d38852b80210f86a",
+      "bytes": 8286
+    },
+    {
+      "key": "src/docs/commands/review.js",
+      "digest": "061ce19694b99b3bc953a647cc4b29f9e08cc114dadabede24b859ab57eae3c5",
+      "bytes": 10686
+    },
+    {
+      "key": "src/docs/commands/scan.js",
+      "digest": "2c05f963ce702e89caa7a191881fb106f0cfbcd5e7908e22678cfd0fec7d2498",
+      "bytes": 16305
+    },
+    {
+      "key": "src/docs/commands/text.js",
+      "digest": "159964aca44fb2412d5a544e30690d5616173af0438d0c84756da4f1f63b1e22",
+      "bytes": 26692
+    },
+    {
+      "key": "src/docs/commands/translate.js",
+      "digest": "578d487f9e426adee3233fd35afd3c0999430a031002e4e02eacd18909052be4",
+      "bytes": 8189
+    },
+    {
+      "key": "src/docs/lib/analysis-entry.js",
+      "digest": "b8814f8bd4394fc3929229c55b742dfa28d64a0aa6a341eb4093a183ffd7bf52",
+      "bytes": 3682
+    },
+    {
+      "key": "src/docs/lib/analysis-filter.js",
+      "digest": "71e6a932adb490a7ede06e2a14fa07b3ed75c1aea1d5d2a3e274c156a421e818",
+      "bytes": 2034
+    },
+    {
+      "key": "src/docs/lib/canonical-changelog-spec.js",
+      "digest": "00fae08c9e0213932f84286d5c8faf177aaf7b3f5fca4bb9e757eac36fd98c10",
+      "bytes": 3848
+    },
+    {
+      "key": "src/docs/lib/chapter-resolver.js",
+      "digest": "824dada40c48ff30b26353d0cc81ffe8420041e08e8031ad5437b5d9e9243775",
+      "bytes": 4815
+    },
+    {
+      "key": "src/docs/lib/command-context.js",
+      "digest": "936da623ff9b9cb1ea624fa684788116b32059d27a3bff3a87d001fa0210f925",
+      "bytes": 3820
+    },
+    {
+      "key": "src/docs/lib/concurrency.js",
+      "digest": "384df7f72b447f4390c96c7ea367db026eb963cc7ab336239da47526a81d5be5",
+      "bytes": 2278
+    },
+    {
+      "key": "src/docs/lib/data-source-loader.js",
+      "digest": "dde2f837bab8c6dd894d6ae14f13a5f00b2eafe04296344a2bc5b95762604309",
+      "bytes": 3388
+    },
+    {
+      "key": "src/docs/lib/data-source.js",
+      "digest": "66e1e373d2986a044b9d99dc57902f019aa36603df0d65ee1a5fc07b05cccf79",
+      "bytes": 2880
+    },
+    {
+      "key": "src/docs/lib/directive-parser.js",
+      "digest": "b623603c1c2c78f10323670cde6fcf08fc32d02c8611f2d58615cb305c948157",
+      "bytes": 20491
+    },
+    {
+      "key": "src/docs/lib/docs-context.js",
+      "digest": "4c8980700c37f48106b0e4cecc10ca30512bdb566d8ed3ca13a19c5ac28fb891",
+      "bytes": 1341
+    },
+    {
+      "key": "src/docs/lib/document-update-plan.js",
+      "digest": "51e1f9b3dfed522d9161f3b73acb86e1b15f34310a8751084eea8b71cad65fae",
+      "bytes": 4511
+    },
+    {
+      "key": "src/docs/lib/documentation-agent.js",
+      "digest": "cb8be61ecf60fd4babf4e5c02f9222497a2958ab74c0750beea93f914f1a7516",
+      "bytes": 3694
+    },
+    {
+      "key": "src/docs/lib/documentation-agents-batching.js",
+      "digest": "6eff029c8f18e82383d87265acd8c7004e75e80204ec7722dc10f1d7346f852d",
+      "bytes": 7345
+    },
+    {
+      "key": "src/docs/lib/documentation-ai-execution.js",
+      "digest": "497e86068085181fc49eebff512060ea03413d94d7853eb36ffabfe82164a100",
+      "bytes": 21207
+    },
+    {
+      "key": "src/docs/lib/documentation-enrich-batching.js",
+      "digest": "1bb06018daefff29b26937a1af59f849b38093e0702dc899f5f018182adb020d",
+      "bytes": 18012
+    },
+    {
+      "key": "src/docs/lib/documentation-forge-batching.js",
+      "digest": "44003fbdbf91762cc15a9a0ec62595a55ec8e65de73da4b702d1263b05c315d5",
+      "bytes": 2701
+    },
+    {
+      "key": "src/docs/lib/documentation-init-batching.js",
+      "digest": "3252998142bcac5852956f0be6acecc92306647b751820d8faa4ec146245c71d",
+      "bytes": 5354
+    },
+    {
+      "key": "src/docs/lib/documentation-text-batching.js",
+      "digest": "1f3467bb20e5aab22d00a51d87de9acd74be6c95777d2ee82a7b8b9daa6447c3",
+      "bytes": 16342
+    },
+    {
+      "key": "src/docs/lib/forge-prompts.js",
+      "digest": "2b9c1352d03f7294360b7cb9a55f8f39f4a221af719ffd5442b6f7e6e0774bc9",
+      "bytes": 4898
+    },
+    {
+      "key": "src/docs/lib/lang-factory.js",
+      "digest": "fa0f53c6be1ad0f10e7438a7992dc51e7fc0654b682dc69a9b8a7794bb5f8b97",
+      "bytes": 951
+    },
+    {
+      "key": "src/docs/lib/lang/comments.js",
+      "digest": "770f48c026d7a654f9cca0c3d031c03c4da54e8eb67a354358ea9a7d00ae803b",
+      "bytes": 1085
+    },
+    {
+      "key": "src/docs/lib/lang/js.js",
+      "digest": "ae68e363c48a16fe2d302f2276d87d211beeb969269de87d9dc7be51a00517f0",
+      "bytes": 14732
+    },
+    {
+      "key": "src/docs/lib/lang/md.js",
+      "digest": "a2ab1162988a26f5967bf0df6df2d06005562abf0cf18c9b835f1870d27d1fbf",
+      "bytes": 1207
+    },
+    {
+      "key": "src/docs/lib/lang/php.js",
+      "digest": "78bd88abfb440580ef2bc4fb544e47354d518b3abb0e116ebf5e6b3dd5d47ca8",
+      "bytes": 5675
+    },
+    {
+      "key": "src/docs/lib/lang/py.js",
+      "digest": "26edc1dd62ed4a0a6ce5ab7d5f88793f4f5e6387cee850917030a68bf36c91ea",
+      "bytes": 1059
+    },
+    {
+      "key": "src/docs/lib/lang/yaml.js",
+      "digest": "4cf21611a325d2391e032a5edbacf97c7b2e564ca65d1bab25fa3b3868dcd82b",
+      "bytes": 476
+    },
+    {
+      "key": "src/docs/lib/markdown-prompt-document.js",
+      "digest": "68ea4e1098c4c0f57491795f2388acb32dd6beb7f37be889fb22b9654ed6ddf8",
+      "bytes": 27876
+    },
+    {
+      "key": "src/docs/lib/minify.js",
+      "digest": "7c9ac3d50a6dba73c8faae7af51819271ed36c3c2cc743a52be264bee72918d6",
+      "bytes": 1354
+    },
+    {
+      "key": "src/docs/lib/php-array-parser.js",
+      "digest": "d04737c06d3707aca5900d657a3375dddc881d1906023354bc4c19ea1f3c16b6",
+      "bytes": 3528
+    },
+    {
+      "key": "src/docs/lib/prompt-elements.js",
+      "digest": "7dab82a0127811f6e4b44ac698826e31e5e1a8e3f632774606103e172cc77772",
+      "bytes": 5297
+    },
+    {
+      "key": "src/docs/lib/renderable.js",
+      "digest": "a442483f17805e7e08a185382576787e6a5be98c63725991b1504a6874dee022",
+      "bytes": 5750
+    },
+    {
+      "key": "src/docs/lib/resolver-factory.js",
+      "digest": "e0eb9bd6ba12810083f34b90f789691158aba92ca4fa73014d4dcc92180d15f8",
+      "bytes": 6611
+    },
+    {
+      "key": "src/docs/lib/review-parser.js",
+      "digest": "544a3cc9311e5b480378be2cb164d1083ab663c4868fb1804ed7bb1015b0ec6b",
+      "bytes": 2774
+    },
+    {
+      "key": "src/docs/lib/scan-patterns.js",
+      "digest": "26c1b1b0ec7ce477fde0df82b10f4d3c1e2862eee0dd37f346c0e1da0f2af5ce",
+      "bytes": 897
+    },
+    {
+      "key": "src/docs/lib/scan-source.js",
+      "digest": "0985b049f749350615be591a7e3f8b1ddba3c382b178cd05f6e84ab9033105f3",
+      "bytes": 2616
+    },
+    {
+      "key": "src/docs/lib/scanner.js",
+      "digest": "d923e63cf518118c1393ccc88d15d8fbcc6015f4d9817e2d61966b5c5ca57807",
+      "bytes": 8703
+    },
+    {
+      "key": "src/docs/lib/source-selection.js",
+      "digest": "afc04dd68ec50f7817bd25bdc7335d67cf64eda6d3a4c41d031d193ab8a66da4",
+      "bytes": 2252
+    },
+    {
+      "key": "src/docs/lib/template-merger.js",
+      "digest": "deaa8f18aae2b74e0f266a872f613e8f0b613fcde79c2353be925d2ca65e0ce0",
+      "bytes": 21948
+    },
+    {
+      "key": "src/docs/lib/test-env-detection.js",
+      "digest": "e0d355c599be7ab5974c1531157e14f540fe306a064259941d0850dc0426f727",
+      "bytes": 3158
+    },
+    {
+      "key": "src/docs/lib/text-prompts.js",
+      "digest": "ad77f5866c216b46a75c4e8cb874bea865ec5f9e9c18f018e8f940b4f460f2da",
+      "bytes": 10330
+    },
+    {
+      "key": "src/docs/lib/toml-parser.js",
+      "digest": "149700263928d81b58327739cfd8c13bc211ef3e003d4b295d8681117fed988d",
+      "bytes": 3485
+    },
+    {
+      "key": "src/flow-main.js",
+      "digest": "5322d89137c8ed636b9f051aa8c60bfaf010c7bf1e5aeb91f6858645efeb6dd9",
+      "bytes": 4900
+    },
+    {
+      "key": "src/flow.js",
+      "digest": "59a711615d13abac874e3b8ff89b17890a9dacf66756fa4a6275bc88fc301cbd",
+      "bytes": 612
+    },
+    {
+      "key": "src/flow/commands/merge.js",
+      "digest": "2c68f1c1e3554334b7a70f2133ae712fc860be2746187e31bdf2c55295729847",
+      "bytes": 20625
+    },
+    {
+      "key": "src/flow/commands/report.js",
+      "digest": "2606802fd5d8298303d877403514cbb4c85498c9c519b7258c43cf42f220aa1a",
+      "bytes": 445
+    },
+    {
+      "key": "src/flow/commands/review.js",
+      "digest": "de7156115af499f5b8001729892ac4c822c5b06871c3e407e80ba769d0a565a0",
+      "bytes": 243320
+    },
+    {
+      "key": "src/flow/definition.js",
+      "digest": "e53945dc5a8064a2edd2d0845773e1debd1a30d559d91cfae261a4b8645d2412",
+      "bytes": 334322
+    },
+    {
+      "key": "src/flow/engine/composition/acceptance-finalization.js",
+      "digest": "e37ca298864dda8c98516adad42b37c22d7d563f8dc0910a107976c678d4d894",
+      "bytes": 7799
+    },
+    {
+      "key": "src/flow/engine/composition/acceptance-review-decision.js",
+      "digest": "f600eb6baa913d0b2b03a359b906f5080a6105c3b4ea2c85ca29bdc2016e035b",
+      "bytes": 5467
+    },
+    {
+      "key": "src/flow/engine/composition/acceptance.js",
+      "digest": "e1deef320176a3d5564ec12c39ccb26268aef36f1039ef5a166ddfa2cb3a10b4",
+      "bytes": 17220
+    },
+    {
+      "key": "src/flow/engine/composition/artifact-worker-recovery.js",
+      "digest": "aed425b03d540ddb53ff419d9dc818393394b9c1a65f25d73b8216fc22e63344",
+      "bytes": 2520
+    },
+    {
+      "key": "src/flow/engine/composition/draft.js",
+      "digest": "07843081a8d92f2869a8c883b082bca0a7a3c5ce781e13049a1096f581931ba4",
+      "bytes": 11746
+    },
+    {
+      "key": "src/flow/engine/composition/finalization.js",
+      "digest": "7c10e635cc75c019260ed777c2b3591531cf2b0cb0fb11a5b7fd2b6eafd701bc",
+      "bytes": 20197
+    },
+    {
+      "key": "src/flow/engine/composition/gate-deferral.js",
+      "digest": "2610a90a570b98c5f87ac16bf453df6d6d49261e719248237c95387eb70f4384",
+      "bytes": 2363
+    },
+    {
+      "key": "src/flow/engine/composition/impl-review-gate.js",
+      "digest": "d05c24cafdba12f4965846aedcbb343e7814a7c0e5b4104af3cc607ffa8355db",
+      "bytes": 5431
+    },
+    {
+      "key": "src/flow/engine/composition/impl.js",
+      "digest": "bd5357acf9f743e6a20b535e3c8ec025464171a996ca9eb358ce523789bb9904",
+      "bytes": 3286
+    },
+    {
+      "key": "src/flow/engine/composition/implementation-gate.js",
+      "digest": "66274341aa38575bd58a3d0f6efd0aff9b397c2c2588ddbb349bdbcf92b39be4",
+      "bytes": 9540
+    },
+    {
+      "key": "src/flow/engine/composition/nonblocking-implementation.js",
+      "digest": "04822763649f508eb9aab2034e9af273c402f90164dc99b7147abfb84309a69a",
+      "bytes": 3252
+    },
+    {
+      "key": "src/flow/engine/composition/prepare.js",
+      "digest": "730b017730b17fd520e228dee0556d56b7346edc3a1647a20b4d6a6d778a9bf3",
+      "bytes": 2389
+    },
+    {
+      "key": "src/flow/engine/composition/registered-step-execution.js",
+      "digest": "63de3b506253c8fdcf36877e077bbb3ddcf5dd0c614048723a1368d4b84dc0a4",
+      "bytes": 3123
+    },
+    {
+      "key": "src/flow/engine/composition/source-step.js",
+      "digest": "e647fa2728dfd7dd1daf0804fbeff1456633060d325fabdd568aba39975b02b7",
+      "bytes": 3531
+    },
+    {
+      "key": "src/flow/engine/composition/spec-gate-repair-recovery.js",
+      "digest": "98e2980cce35b8e9913ee8f0d13bc58e0384f204e5c9b6698118939b22aff5d2",
+      "bytes": 5063
+    },
+    {
+      "key": "src/flow/engine/composition/spec-gate-repair.js",
+      "digest": "4f6826cc4a2f5089f0d8f5e18c9a999e63e9636040e0b34bfd32f56d278c54b6",
+      "bytes": 21821
+    },
+    {
+      "key": "src/flow/engine/composition/spec.js",
+      "digest": "9a4762a9691bbd69e2f22fd1e2f9cc9740b7a5477356456ac30dae36b0372b4c",
+      "bytes": 9813
+    },
+    {
+      "key": "src/flow/engine/composition/step-execution-contract.js",
+      "digest": "169113f237de3258a0bb9f57ab926bb112d276838824bdc40a60845b599b6901",
+      "bytes": 991
+    },
+    {
+      "key": "src/flow/engine/composition/step-registration.js",
+      "digest": "5e55066e9c7e152c9f56dbe03d77691ac60d23de954e1be90575853a40536b7c",
+      "bytes": 3101
+    },
+    {
+      "key": "src/flow/engine/composition/task.js",
+      "digest": "3ed38ed332d8c8c42a32ddad50244e7b96b4d3c45071437abea8c33c501c2b1c",
+      "bytes": 7307
+    },
+    {
+      "key": "src/flow/engine/composition/test-chain.js",
+      "digest": "c46dd4124c33ebedf5e6c89ff369b2d2b2fa2e97935df2e8620bf80db25885d9",
+      "bytes": 5450
+    },
+    {
+      "key": "src/flow/engine/composition/test.js",
+      "digest": "d58d0131c1544c53d1f359b57ab33d2d55ad8240bc34d5ca52d65a93c2d6282b",
+      "bytes": 13570
+    },
+    {
+      "key": "src/flow/engine/connectors/acceptance/acceptance-target-connectors.js",
+      "digest": "1c847562787a6dcecf41e4b333b51fbc4ee8485d0e0436da7cf34220c56990a6",
+      "bytes": 449
+    },
+    {
+      "key": "src/flow/engine/connectors/acceptance/accepted-final-regression-binding.js",
+      "digest": "2644800dbfb1f5bf928da865aa30e526ee38b11a3ce48c37c8d0f33dff19cf46",
+      "bytes": 1520
+    },
+    {
+      "key": "src/flow/engine/connectors/acceptance/finalization-target-connectors.js",
+      "digest": "80414a6920fcb81b87fdb6bf2027cceeb5c7ebe9479b11cb7c18f00dc746cd86",
+      "bytes": 496
+    },
+    {
+      "key": "src/flow/engine/connectors/acceptance/retro-connector.js",
+      "digest": "f5414b30362290a5a4f7d080f7f138beac7171f76633e4fe3f927f44ae28bd43",
+      "bytes": 238
+    },
+    {
+      "key": "src/flow/engine/connectors/draft/draft-entry-connector.js",
+      "digest": "7681439e340eb02a6b160b2b1cede8d294263203abcc80a9e26be7e3b99eebcb",
+      "bytes": 585
+    },
+    {
+      "key": "src/flow/engine/connectors/draft/draft-refine-connector.js",
+      "digest": "e889a09043dcbd50d7a989e658c08f91b842d1059de5365535cef61922c71ab0",
+      "bytes": 660
+    },
+    {
+      "key": "src/flow/engine/connectors/draft/draft-repair-connector.js",
+      "digest": "b8b2b52b2211e686ec9449b4f7e46e0d3fbc62bf86c47b6b8262f6a6dc76f79a",
+      "bytes": 812
+    },
+    {
+      "key": "src/flow/engine/connectors/draft/draft-review-connector.js",
+      "digest": "66159880fefd8818e5a5ebb7ff5cc2e70ab9772faecd4f5e91eedf3426826b67",
+      "bytes": 488
+    },
+    {
+      "key": "src/flow/engine/connectors/draft/draft-spec-connector.js",
+      "digest": "a9981e7a8dfb067ae47bc743405b6a45615b23ffa2277e6b472bbcf5c353c1f5",
+      "bytes": 555
+    },
+    {
+      "key": "src/flow/engine/connectors/draft/draft-step-binding.js",
+      "digest": "eeb7522e82103d2eebd583da7c4ac5c4b018d010c5c3323c50c4216c4e474f4d",
+      "bytes": 6807
+    },
+    {
+      "key": "src/flow/engine/connectors/draft/draft-triage-connector.js",
+      "digest": "aa715ec364e8da9145932bf10b771f8c4a6fa6e4d14c8fab99b9f0c53cf077ad",
+      "bytes": 813
+    },
+    {
+      "key": "src/flow/engine/connectors/finalize/finalize-cleanup-connector.js",
+      "digest": "fb56a86653856d2bb90e3a25690884a963998654ad4897ce249c325d5a1a9f3d",
+      "bytes": 247
+    },
+    {
+      "key": "src/flow/engine/connectors/finalize/finalize-merge-connector.js",
+      "digest": "6effeda2dae4ef58b18f664e47caafe111017345fb76c18d0f6c269e3e981641",
+      "bytes": 245
+    },
+    {
+      "key": "src/flow/engine/connectors/finalize/finalize-sync-connector.js",
+      "digest": "7dd69e3ab31f430bbff54b3ad5152de5789a9d95ecc8fde1a464ec64bb31aafc",
+      "bytes": 213
+    },
+    {
+      "key": "src/flow/engine/connectors/impl/accepted-gate-deferral-binding.js",
+      "digest": "5bb704dfefafdc87e7d617c79fea49603239becf77f4e32618c89f6a93c24b94",
+      "bytes": 1848
+    },
+    {
+      "key": "src/flow/engine/connectors/impl/accepted-nonblocking-binding.js",
+      "digest": "78e40617522416a95970e2559f022f34fcd43c4ce412d98c0be4ff9082253ae0",
+      "bytes": 1714
+    },
+    {
+      "key": "src/flow/engine/connectors/impl/impl-step-binding.js",
+      "digest": "272ff3564f9b12baa51c99224a2ff13e69f3e2207df2ceb0b3a9a70bba94f079",
+      "bytes": 502
+    },
+    {
+      "key": "src/flow/engine/connectors/impl/impl-target-connectors.js",
+      "digest": "448596010ea2a26d3b5405cc6a8c99e4fe9c09d8ef3d44e9479580f2f5e155f1",
+      "bytes": 698
+    },
+    {
+      "key": "src/flow/engine/connectors/impl/source-entry-connector.js",
+      "digest": "da0be1d39cd172bee93ff9491a7bd61aa9f3bcaa445d353f637b9b8019f75510",
+      "bytes": 812
+    },
+    {
+      "key": "src/flow/engine/connectors/prepare/plan-preparation-connector.js",
+      "digest": "944a55e6c7875c3241fb00cc15bf83c087b02adfb700974491781799370c90a3",
+      "bytes": 567
+    },
+    {
+      "key": "src/flow/engine/connectors/prepare/prepare-draft-connector.js",
+      "digest": "508fce6faa002c7ea492efaf9b6c7c12391481df6d6e452a60a96576fed806bd",
+      "bytes": 532
+    },
+    {
+      "key": "src/flow/engine/connectors/spec/spec-entry-connector.js",
+      "digest": "9041794becd38c583600626aae6fc7656dd3b0cd934189eef95647ba4a2bd7ad",
+      "bytes": 464
+    },
+    {
+      "key": "src/flow/engine/connectors/spec/spec-gate-connector.js",
+      "digest": "7d76af006b4cffc600aa262642a1cd0762d8460e0ebbd6e1062e7442087d7e40",
+      "bytes": 208
+    },
+    {
+      "key": "src/flow/engine/connectors/spec/spec-gate-target-connectors.js",
+      "digest": "55df66b2c3179719806a3d5fdd5ff55ec4053926997e3b22ddb8189cd6241b47",
+      "bytes": 673
+    },
+    {
+      "key": "src/flow/engine/connectors/spec/spec-repair-connector.js",
+      "digest": "0c1d60b82d929a2b06fbb2050fe283dc4c0b2bf6228369637cca5afed33bba4a",
+      "bytes": 219
+    },
+    {
+      "key": "src/flow/engine/connectors/spec/spec-review-connector.js",
+      "digest": "e6a067354667954300962f07b2c0eedfde88dbacc9ba2a899bdecea5dc558405",
+      "bytes": 960
+    },
+    {
+      "key": "src/flow/engine/connectors/spec/spec-step-binding.js",
+      "digest": "2dce3101bc3b99bd46fc8bdb190fce55f0b364278fd67a04ae47af1b4b17bf0f",
+      "bytes": 4067
+    },
+    {
+      "key": "src/flow/engine/connectors/spec/spec-triage-connector.js",
+      "digest": "18b7e6bb7a057ef5ec07d3b07273cca9d2784c3b58b447e9373b92f5daa5a73a",
+      "bytes": 233
+    },
+    {
+      "key": "src/flow/engine/connectors/task/task-step-binding.js",
+      "digest": "4ad5f6bf4ee692a7b01ccc71e5b3346b66b5289e97f606a9eaaa2543cbafd132",
+      "bytes": 1155
+    },
+    {
+      "key": "src/flow/engine/connectors/test/requirement-test-connector.js",
+      "digest": "aa7b83da2254ed5f8095a79e348ca8c1b3bf7c34b299b06d49d60263c0a3de2f",
+      "bytes": 863
+    },
+    {
+      "key": "src/flow/engine/flow-execution-error.js",
+      "digest": "8cc4a7cad326d019bfc05d6c24aaa22fb865b642c1900b125eefc4150f5753ba",
+      "bytes": 1854
+    },
+    {
+      "key": "src/flow/engine/step-binding.js",
+      "digest": "3e354cd7300bf088a6eb4a7901420dd61169ccdcb5e1b2999daa9cb85a2cd002",
+      "bytes": 3741
+    },
+    {
+      "key": "src/flow/engine/step-connector.js",
+      "digest": "e975d218a0135da335a7d775b7ab17e4a87f1b4e7395012cfed011344cf4d93d",
+      "bytes": 428
+    },
+    {
+      "key": "src/flow/engine/step-factory.js",
+      "digest": "3db2f658696db8d6750f61c8a644ca0d6c2dec4a3f4e809ec6f3ca33b92d14e2",
+      "bytes": 1729
+    },
+    {
+      "key": "src/flow/engine/step-result.js",
+      "digest": "8da89770c031691e31d087f73f0d405952ce0c89b9a541abf0d9ef25bc77dc7e",
+      "bytes": 85935
+    },
+    {
+      "key": "src/flow/engine/step.js",
+      "digest": "f972491a2369291f60f4b0a66c6bb2110dc728a96bb78b0a3157c5ff92b48615",
+      "bytes": 1030
+    },
+    {
+      "key": "src/flow/lib/abort-history.js",
+      "digest": "9dac283f6055c3560126c90e7b1d69289424838d2c58ba3faa3f16db053b1384",
+      "bytes": 3710
+    },
+    {
+      "key": "src/flow/lib/acceptance-execution-session.js",
+      "digest": "5fcf79b03fbc897e7cbf24c8103bb27e0caa5ef4b80879f266fff5202f7f41b8",
+      "bytes": 8409
+    },
+    {
+      "key": "src/flow/lib/acceptance-receipt-replay.js",
+      "digest": "d490d8d59c8c32db8ee309acce6914585584d1c0fa7eee8ff12ff9116c847f11",
+      "bytes": 1294
+    },
+    {
+      "key": "src/flow/lib/acceptance-review-artifacts.js",
+      "digest": "195d1c3787119c896355767009a38626fd715c89cfb6636f8c54b968825d2c75",
+      "bytes": 9901
+    },
+    {
+      "key": "src/flow/lib/accepted-gate-deferral.js",
+      "digest": "e68114c1fae073d541527917ece2f9180505932c197ba2b6b289beef4dbb08e3",
+      "bytes": 4054
+    },
+    {
+      "key": "src/flow/lib/accepted-nonblocking-decision.js",
+      "digest": "60a374630241b261c7bda8acad25f57239cd3c20095de2a1d44f2b62c943471f",
+      "bytes": 6990
+    },
+    {
+      "key": "src/flow/lib/acknowledged-rationale.js",
+      "digest": "732ff3ced15b6644576c9f4f9cae248a09b7eb787a96b9e5857dc0e9390a1c07",
+      "bytes": 7149
+    },
+    {
+      "key": "src/flow/lib/advisory-summary.js",
+      "digest": "83e50cdea12c32391444b1ad5de928a0edef5cca3c3d2c8863c80dd595a2d339",
+      "bytes": 1848
+    },
+    {
+      "key": "src/flow/lib/artifact-completion.js",
+      "digest": "951c846af5b0441116519007f8fdfe29c87295d4be185e5c5aa30448dbb8beb8",
+      "bytes": 5285
+    },
+    {
+      "key": "src/flow/lib/artifact-view-cache.js",
+      "digest": "060823d8079425acd320453c5b7ae7ecf4d7c9c6a2a0fb08610042d5c377a2b7",
+      "bytes": 11270
+    },
+    {
+      "key": "src/flow/lib/artifact-view-fingerprint.js",
+      "digest": "bfe39817216e20ef28582db0bf459b1267c0435554bae3812e134c25df5e4d22",
+      "bytes": 1600
+    },
+    {
+      "key": "src/flow/lib/artifact-view-reader.js",
+      "digest": "b5d44ac11a90b65e00198742a5857da5535197950a7b07edf3a019fcc96b6942",
+      "bytes": 34176
+    },
+    {
+      "key": "src/flow/lib/artifact-view-registry.js",
+      "digest": "6ec50e0abeb9fc7cf23ba3fc05dad13c1ea6c94558ea6e88a31794238bfb4e07",
+      "bytes": 14452
+    },
+    {
+      "key": "src/flow/lib/artifact-view-renderer.js",
+      "digest": "33b73f4e899787044fc60634d76ce3a08be691765e6c69690e7198f62640c3b0",
+      "bytes": 38009
+    },
+    {
+      "key": "src/flow/lib/artifact-view-service.js",
+      "digest": "28a40c8ad79f33a0f4c35b6772eeaf4a926dacd8ffec59f85f604fa74acae52a",
+      "bytes": 9053
+    },
+    {
+      "key": "src/flow/lib/artifact-view-summary.js",
+      "digest": "d47acfcbb365c65f7e4f15c52886b41330ba7abd472bcff2b32c3de0526da68e",
+      "bytes": 40977
+    },
+    {
+      "key": "src/flow/lib/artifact-worker-execution-continuation.js",
+      "digest": "6051716b24b66b51fdfd82d4ec2cd9118c07b13d1007ab732e3e28f9da41a569",
+      "bytes": 7508
+    },
+    {
+      "key": "src/flow/lib/artifact-worker-execution-frontier.js",
+      "digest": "c6c60eaf2727cdb0528c94051efd9cee1760e2a8aa09e55433f339a18d94e56b",
+      "bytes": 1651
+    },
+    {
+      "key": "src/flow/lib/artifact-worker-execution-recovery.js",
+      "digest": "628e394c8896f29e3efe129045413ee5f1823723d23be67483b02e880b9760bb",
+      "bytes": 13856
+    },
+    {
+      "key": "src/flow/lib/artifact-worker-input-continuation.js",
+      "digest": "57e7ee61b96dc743a323df02e27b7e861f0e21edfd7e666e451ce0d17bf3a54f",
+      "bytes": 2091
+    },
+    {
+      "key": "src/flow/lib/artifact-worker-owner-execution.js",
+      "digest": "a331c28714871bb194db5e41d3f7f47b22251a1dd7702febcb148625781ffbfc",
+      "bytes": 1453
+    },
+    {
+      "key": "src/flow/lib/artifact-worker-prompt-execution.js",
+      "digest": "48941ab33fc6359583a8db98094d46004e4d4a75f9d5d4f0f42b82e5bd47afe7",
+      "bytes": 4656
+    },
+    {
+      "key": "src/flow/lib/artifact-worker-recovery-selection.js",
+      "digest": "d239fca058c7225880e8847faafbf70ab4fff05436814b569430893fe2c133d2",
+      "bytes": 1798
+    },
+    {
+      "key": "src/flow/lib/artifact-worker-recovery-values.js",
+      "digest": "fa626d6d721059e9f90058d387396b184c79cf1f08c5ef8f362e9d4557ea8625",
+      "bytes": 10217
+    },
+    {
+      "key": "src/flow/lib/auto-check-static.js",
+      "digest": "da1bc4b240be0ec5975c9eafda002d6d6d58d8ee1fccab6b8ab9cb696b79ab04",
+      "bytes": 1768
+    },
+    {
+      "key": "src/flow/lib/base-command.js",
+      "digest": "33238460bd5517bfef5553cfd3dd0dc9d17d1c127da9466d99faa171425b3d81",
+      "bytes": 6425
+    },
+    {
+      "key": "src/flow/lib/broad-mode-history.js",
+      "digest": "80d1554813249fff67359424d4af8b7c77da66f68b17c266c9ae8780247cd855",
+      "bytes": 2127
+    },
+    {
+      "key": "src/flow/lib/canonical-acceptance-artifacts.js",
+      "digest": "fd584c70c3a139117c9f495f9495270147d5a50f8d5bd8953fa057e5102c1570",
+      "bytes": 31784
+    },
+    {
+      "key": "src/flow/lib/canonical-acceptance-publication-consistency.js",
+      "digest": "641ecd50a4504fca356eea180d48c44020253cf6989d0e79162f1c532a5e22ea",
+      "bytes": 6419
+    },
+    {
+      "key": "src/flow/lib/canonical-command-result.js",
+      "digest": "2ea90412a56164105c38ed2a598736db5c94d7b8cb2ccddc5b4d5f742bc51d2d",
+      "bytes": 11420
+    },
+    {
+      "key": "src/flow/lib/canonical-file-map.js",
+      "digest": "baf5c3fcd550397243d48a2152917e2ee6ba04d7bcbc036f31a4625ba310c9ce",
+      "bytes": 10336
+    },
+    {
+      "key": "src/flow/lib/canonical-finding-identity.js",
+      "digest": "d016d21206c192223319106391f9a2c78afc5a5d86320fab1e1b0a8a6024ea3e",
+      "bytes": 5643
+    },
+    {
+      "key": "src/flow/lib/canonical-flow-artifact-baseline.js",
+      "digest": "e222ae21eba70803025e2daee66217a362f4a475d3e2724bb5f4eace3568bf44",
+      "bytes": 3055
+    },
+    {
+      "key": "src/flow/lib/canonical-flow-manager-store.js",
+      "digest": "b7032ac8b983c49777c31cb20cb1346e9dcba500e003c66c4595f7b7bc9c9191",
+      "bytes": 587884
+    },
+    {
+      "key": "src/flow/lib/canonical-flow-runtime.js",
+      "digest": "bf0c0d02db493f9beb6e3f78415f820a217a09245796db6d0e72bc54c237b832",
+      "bytes": 63129
+    },
+    {
+      "key": "src/flow/lib/canonical-gate-artifacts.js",
+      "digest": "7a935b3945dfd64b4b7a9962d972c83b603fe6f7f233648c75116bf152265e57",
+      "bytes": 16116
+    },
+    {
+      "key": "src/flow/lib/canonical-gate-observation-cycle.js",
+      "digest": "63c5c14ff8f39790770d47119bc1cf7377652432030b5bd8eb03b4f2d50fdb04",
+      "bytes": 45936
+    },
+    {
+      "key": "src/flow/lib/canonical-node-status.js",
+      "digest": "2295cba9abfced10df1a9e5ab0ab7ed71b00759f45053759df0e869c71c42d16",
+      "bytes": 201
+    },
+    {
+      "key": "src/flow/lib/canonical-overview-update.js",
+      "digest": "c476e690085961980256a7566c59a31cce4dae870ecd76c2fb26f20119d8fc7f",
+      "bytes": 3839
+    },
+    {
+      "key": "src/flow/lib/canonical-prompt-execution-writer.js",
+      "digest": "0b4319e422f7de8854ec195093b2c1df4ed337c25088dca53a1a033ce439eac9",
+      "bytes": 2022
+    },
+    {
+      "key": "src/flow/lib/canonical-prompt-execution.js",
+      "digest": "8544411320d0172a804288d6c1c79632a6f7c2844cd982c7f945c653e70d9b01",
+      "bytes": 64402
+    },
+    {
+      "key": "src/flow/lib/canonical-report-artifacts.js",
+      "digest": "80def3675d317b08e18fe435a9078b727cce836c41aad70026fa0eed0909880b",
+      "bytes": 7612
+    },
+    {
+      "key": "src/flow/lib/canonical-requirement-definitions.js",
+      "digest": "c313ff9d548e2f1fde1c7459889638fda1fd5f71ad90909b94e181a0cc8c1ead",
+      "bytes": 1318
+    },
+    {
+      "key": "src/flow/lib/canonical-review-artifacts.js",
+      "digest": "c2ee75a8d5435ecc5917fcf0ec333cd381d33a46f1ea040d23f34000afd4a0c1",
+      "bytes": 67907
+    },
+    {
+      "key": "src/flow/lib/canonical-review-execution-ledger.js",
+      "digest": "5238cbf1cae6b2189c4dac676ec0a9a8f151da077608d48c6c8441da0066f2ac",
+      "bytes": 1862
+    },
+    {
+      "key": "src/flow/lib/canonical-spec-approval.js",
+      "digest": "d3aa987ae18474a3b5f2497ee9b07170d036b6ee7f3bace7c0e201e710f5a430",
+      "bytes": 1436
+    },
+    {
+      "key": "src/flow/lib/canonical-spec-record.js",
+      "digest": "d385993e0a720d6f773d86531dab4a308d2817cbc6defc44e16dd9650ced8b76",
+      "bytes": 1789
+    },
+    {
+      "key": "src/flow/lib/canonical-step-settlement-publication.js",
+      "digest": "4a7af2a22173631331ac56089b52636a9b07a3ef3f892bf2303aa0fd250014a5",
+      "bytes": 6048
+    },
+    {
+      "key": "src/flow/lib/canonical-test-artifacts.js",
+      "digest": "8caca64a2ca6b28229d3cd767b3b99b300d26221fb38e5f7406ce5a90ec41edb",
+      "bytes": 20648
+    },
+    {
+      "key": "src/flow/lib/canonical-worker-artifacts.js",
+      "digest": "4bece32877942a5350ddc61867dbd001a54e618dc61a90cc3ff515a480083d17",
+      "bytes": 22363
+    },
+    {
+      "key": "src/flow/lib/check-tasks-monotonic.js",
+      "digest": "72e238d9b8150e975a7fb600bfb20c04d8d171e66bd16cfc6016c66498608b0f",
+      "bytes": 2046
+    },
+    {
+      "key": "src/flow/lib/combined-admission.js",
+      "digest": "7d5bac65ad988cb4f9319f7a9f986c1239290aac5c16c94296dba312e9fd323f",
+      "bytes": 571
+    },
+    {
+      "key": "src/flow/lib/current-flow-state-conflict-error.js",
+      "digest": "482f7850e2ad60c1ff3dd79dba2993b63fa0469dd58f6c24c8af72e171882a77",
+      "bytes": 284
+    },
+    {
+      "key": "src/flow/lib/current-flow-state-invariant-error.js",
+      "digest": "eac7df3ddbc52e0d1395b06f74a9259a6192105f9d9a1f9d41d7aaeaac8b2c58",
+      "bytes": 235
+    },
+    {
+      "key": "src/flow/lib/current-flow-state.js",
+      "digest": "e1de18249e62c5ee2e0a2d15eddd551e37e250dc20bd379dd01533fdd9212ba1",
+      "bytes": 559137
+    },
+    {
+      "key": "src/flow/lib/current-flow-value-validation.js",
+      "digest": "cb45a54362bc53d4a1964f7297c021f715a29a481a61041e1b9c2a7b8b946b70",
+      "bytes": 488
+    },
+    {
+      "key": "src/flow/lib/definition-failure-ownership.js",
+      "digest": "7248debc98130ab23bbc41024bee3539a43cdfcb4c175a9c09e0daa0248aaa27",
+      "bytes": 2291
+    },
+    {
+      "key": "src/flow/lib/definition-lifecycle-failure.js",
+      "digest": "9d1436141eed54caf2d7b5ead58142e250837e8ba678d82b52d6b48e64d3a449",
+      "bytes": 8464
+    },
+    {
+      "key": "src/flow/lib/definition-route-facts.js",
+      "digest": "ac32804bc83feba8bf4cd403c73bd7614da10c669f72fe194d6aed782a3b7574",
+      "bytes": 2075
+    },
+    {
+      "key": "src/flow/lib/dispatch-invocation.js",
+      "digest": "60404ef5612193487ba7d16b2a04297cba6fbc41544cc5e2a7fdade73630cf7a",
+      "bytes": 20545
+    },
+    {
+      "key": "src/flow/lib/draft-artifact-promotion.js",
+      "digest": "5cd5d2686221b09b34f980b8b9dd513e52ee605e5a3f340e2bfaf1692fd39fe7",
+      "bytes": 6834
+    },
+    {
+      "key": "src/flow/lib/draft-completion-connector.js",
+      "digest": "45ca557825c1066fea1a1fb9e957232ccd44e13deab2fb4a404e031d1a0da6f8",
+      "bytes": 31749
+    },
+    {
+      "key": "src/flow/lib/draft-conditional-worker.js",
+      "digest": "eb3771ae8384155b38c4ae002fb9cdedbf9b2bd165fcd3798f274bca8c16c01d",
+      "bytes": 321
+    },
+    {
+      "key": "src/flow/lib/draft-gate-prospective.js",
+      "digest": "403dfbe2227e8ec0719f418500daafd7f5de9844a1d8a37547d6e22baad377dc",
+      "bytes": 3644
+    },
+    {
+      "key": "src/flow/lib/draft-gate-repair-binding.js",
+      "digest": "05bd4fb87b61471486fb13213b62a2e5552a7963f2d13b99a1e7c320f05e040f",
+      "bytes": 416
+    },
+    {
+      "key": "src/flow/lib/draft-lifecycle.js",
+      "digest": "8cfe06009b285bd0badeacf466f4db6f710d1531265d966a7389ce28df4df3cc",
+      "bytes": 8459
+    },
+    {
+      "key": "src/flow/lib/draft-question-ledger.js",
+      "digest": "0c67dbb6515d8dc5a8682ec3039f46e500f0b8ac5554b1f8e9f7ff6eda799397",
+      "bytes": 14128
+    },
+    {
+      "key": "src/flow/lib/draft-question-resume-receipt.js",
+      "digest": "4807e09e02141567c0b624c37b18bfc4bc90661788548cbbfa33e5b0d5965c24",
+      "bytes": 6829
+    },
+    {
+      "key": "src/flow/lib/draft-reopen-context.js",
+      "digest": "384c3eb144562e37299ac9f6ff8c3988da525deb6f3ccc69620a89872919747c",
+      "bytes": 3704
+    },
+    {
+      "key": "src/flow/lib/draft-repair-operations.js",
+      "digest": "6a6a5daa98d60f16c139d98ade4775adcc8ce2e83d28aee487d744f1182f86fb",
+      "bytes": 16671
+    },
+    {
+      "key": "src/flow/lib/draft-review-artifacts.js",
+      "digest": "8ab44d98173e48edf8622d4a8fe7efbc79d3bb52d0288cb3a151603f8a4e7396",
+      "bytes": 22833
+    },
+    {
+      "key": "src/flow/lib/draft-review-execution-claim.js",
+      "digest": "a4dc41272a9d36f81a9dedc68f868aefe5bf07275c7e2db7b60a9b99ab5b34a1",
+      "bytes": 939
+    },
+    {
+      "key": "src/flow/lib/draft-review-revision.js",
+      "digest": "68d92dc5c925dd3ba5f0699cae56816033723243229da12b9a94eead99f0923a",
+      "bytes": 2648
+    },
+    {
+      "key": "src/flow/lib/draft-review-routes.js",
+      "digest": "8c1bb12e315c6bdcdf5696c6f4fdda4c334b2979d4362cd6af5b3ecf12ba65d9",
+      "bytes": 4264
+    },
+    {
+      "key": "src/flow/lib/draft-step-settlement-receipt.js",
+      "digest": "72e7534de13b2d62763bc66af3ce01d741e1155a6d49ff7623ee10de2b244240",
+      "bytes": 303
+    },
+    {
+      "key": "src/flow/lib/draft-transition-facts-reader.js",
+      "digest": "4c868eb815d11cb7f1e1f5661977a6c06ec9f3b8868ed7eb3c0cf6678628d2c0",
+      "bytes": 1416
+    },
+    {
+      "key": "src/flow/lib/draft-transition-facts.js",
+      "digest": "206529d872503f1fcd95510a660929c1069adea9bfac06ecfc0140466b344718",
+      "bytes": 3328
+    },
+    {
+      "key": "src/flow/lib/draft-worker-execution-continuation.js",
+      "digest": "f181b8eb620715d02a1ca17fd5cdf80849732e988695054c0b90adda636fbcee",
+      "bytes": 4297
+    },
+    {
+      "key": "src/flow/lib/draft-worker-recovery-checkpoint.js",
+      "digest": "43419cad354e99cbb22b7b74eefb166e94f119e47edc166c3267d7acb7b1d00d",
+      "bytes": 3330
+    },
+    {
+      "key": "src/flow/lib/draft-worker-recovery.js",
+      "digest": "27800cf7e7f01a6afd72ff9924c18100e1997f5c2929d47cf36955de8efb9cd5",
+      "bytes": 11844
+    },
+    {
+      "key": "src/flow/lib/draft-worker-rejection.js",
+      "digest": "61434917937d2b9e7fb02757ee6ec0415777d5b2e5ee9bd544a8824a145b9b03",
+      "bytes": 3878
+    },
+    {
+      "key": "src/flow/lib/execution-admission.js",
+      "digest": "aaa277ae14baaa287721450184cda5db566ea625f9271fb2e7dc79153dd05ff9",
+      "bytes": 21158
+    },
+    {
+      "key": "src/flow/lib/execution-protocol-snapshot.js",
+      "digest": "620cf8b448e56af49527f8fc0c2ae81c47a03e86ba941dd48ec2c028b538f302",
+      "bytes": 1238
+    },
+    {
+      "key": "src/flow/lib/execution-root-module-loader.js",
+      "digest": "ec4b16557edd075583fdb8dc9ec9bacf15cecf9eb1ca6597c4b6a0b98b6bfce7",
+      "bytes": 3123
+    },
+    {
+      "key": "src/flow/lib/fetch-issue.js",
+      "digest": "5895ca759397d3f1a19e034f8bdf8eae052744dfe2c7c8096054d49f5d1d6367",
+      "bytes": 1109
+    },
+    {
+      "key": "src/flow/lib/final-regression-transition-application.js",
+      "digest": "86df1887ac084fe77ccd4516ea22cf71a9e2b5e2313d394ffc2cd4c31c7bf3cb",
+      "bytes": 2847
+    },
+    {
+      "key": "src/flow/lib/final-regression-transition-facts.js",
+      "digest": "748f451eca5d4b9ec84696af034287858030afbaa2c3170df42a5409ec00afec",
+      "bytes": 8326
+    },
+    {
+      "key": "src/flow/lib/final-regression-transition.js",
+      "digest": "4fe4cf003129cfcc7aabb9aa4ee85af082b0a313d135b9e52ac7df0ebd28f022",
+      "bytes": 9196
+    },
+    {
+      "key": "src/flow/lib/finalization-execution-identity.js",
+      "digest": "1f44997e3f73bd4e36ce79fab9b1219f162b59cc0b4cf42f1bcd474d2e73ed25",
+      "bytes": 4297
+    },
+    {
+      "key": "src/flow/lib/finalization-outbox-recovery.js",
+      "digest": "a394a431741e92dd694f9a8b5cf03329035ff53e25fb9c3a230946c6761b4138",
+      "bytes": 13839
+    },
+    {
+      "key": "src/flow/lib/finalization-process-authority.js",
+      "digest": "0123cfe47929b039df5fef8f056c8efe63af99f292ba8c156da077919cad0402",
+      "bytes": 3519
+    },
+    {
+      "key": "src/flow/lib/finalize-cleanup-journal.js",
+      "digest": "9059a340f26ef5b3ff19e49ff8d1259c1676f5134402ee1f3a9dc9b9092c3867",
+      "bytes": 41145
+    },
+    {
+      "key": "src/flow/lib/finalize-cleanup-metadata.js",
+      "digest": "44b0333ac25e964c951b3359bf028ad667b9f05f95e25160fa929e6b53f97aab",
+      "bytes": 3858
+    },
+    {
+      "key": "src/flow/lib/finalize-cleanup-publication.js",
+      "digest": "103bdf428ba1565452c4a4d13abbc34b7878211659eb1208838eb46c767e1388",
+      "bytes": 10895
+    },
+    {
+      "key": "src/flow/lib/finalize-cleanup-state.js",
+      "digest": "5cd85824cbc658cce3ffcda9badded3d60d515aa7c5ca387caf53fedd690b950",
+      "bytes": 4564
+    },
+    {
+      "key": "src/flow/lib/finalize-commit-paths.js",
+      "digest": "7d79091e9db7365909833819daf2e754bc44973cf69fb5c320087f4f1c9371cf",
+      "bytes": 2259
+    },
+    {
+      "key": "src/flow/lib/finalize-flow-state-owner.js",
+      "digest": "e34ab1d843bc036cc8614cae2b70b5e1c81e95c11e7a4f7d0d6470bbfd138989",
+      "bytes": 4885
+    },
+    {
+      "key": "src/flow/lib/finalize-merge-transaction.js",
+      "digest": "b3408bccfc41acddef1e56ab08ab860894d20dd735c18c6080d1433ff7077286",
+      "bytes": 20823
+    },
+    {
+      "key": "src/flow/lib/finalize-sync-diagnostics.js",
+      "digest": "13b565311f9566d4054b19362ec5c2d986ed4712134e291c790b8e55b2e7d8f0",
+      "bytes": 2592
+    },
+    {
+      "key": "src/flow/lib/finding-disposition-policy.js",
+      "digest": "60699ce30903b90f70883eafbe86ae75da5f4b5acfe8ce0c4db70a98a6dd3ffd",
+      "bytes": 34622
+    },
+    {
+      "key": "src/flow/lib/flow-artifact-authority.js",
+      "digest": "487e606835bb7deae544de5bb5679bf51b086dddfdc4535feae655e9e627787d",
+      "bytes": 16163
+    },
+    {
+      "key": "src/flow/lib/flow-command-execution-lease.js",
+      "digest": "12b3c56935bf9a1ac2654709835230a9783485394394b0b904b3fa96e7be8808",
+      "bytes": 3298
+    },
+    {
+      "key": "src/flow/lib/flow-completion.js",
+      "digest": "c83e3a27a60ffe42f97e61f92352596b4a7c5f0cc540d9326941577701e904ae",
+      "bytes": 1466
+    },
+    {
+      "key": "src/flow/lib/flow-context-limit.js",
+      "digest": "0e45b70a136c659a2b5c2d238a1c1633c61a509f552fe2d1976e081ed5315cf7",
+      "bytes": 326
+    },
+    {
+      "key": "src/flow/lib/flow-context.js",
+      "digest": "e9ec707d6248205575c2528ae876dc9eea867a8c937a565bfe9d3f7016be528b",
+      "bytes": 11890
+    },
+    {
+      "key": "src/flow/lib/flow-decision-prompt.js",
+      "digest": "ff5560cc2762f9862313586d90c1a27ea2a8238f944dd2bfcc7834751cafebc9",
+      "bytes": 4189
+    },
+    {
+      "key": "src/flow/lib/flow-dispatch-lease.js",
+      "digest": "fed4fa5e3c53a7d5cde0dd12819f789d17f8eaf82a596a2c0f6d53335b6c408a",
+      "bytes": 1970
+    },
+    {
+      "key": "src/flow/lib/flow-execution-command.js",
+      "digest": "9fa4d39511866dcabfec9d1ec226806a90e4f77275fef2ba78ecb56542e8cd9f",
+      "bytes": 2102
+    },
+    {
+      "key": "src/flow/lib/flow-execution-contract-value.js",
+      "digest": "e09e6cecd8874519cca40d6373de1c46741aa7255e031d30764c9129239b20de",
+      "bytes": 556
+    },
+    {
+      "key": "src/flow/lib/flow-execution-contract.js",
+      "digest": "1e590f231904a4d2f43e05954d2d88b20858afbd5c2b648e8b96a8ad2a20bb0c",
+      "bytes": 7164
+    },
+    {
+      "key": "src/flow/lib/flow-execution-input-baseline.js",
+      "digest": "9829cd6d1d8af6b35acca32f7bee3843a2529793763cc2ed5dbb9a1271769659",
+      "bytes": 2228
+    },
+    {
+      "key": "src/flow/lib/flow-execution-observation-admission.js",
+      "digest": "3c047fcd50b9e68762c37c4d158ab588201c448e24ae23fbaf3eb3e3d5873470",
+      "bytes": 948
+    },
+    {
+      "key": "src/flow/lib/flow-execution-observation-store.js",
+      "digest": "833ce479c690ca3f431a8ad1ecba5606b2353de8c6a7dcb6a231d1b9d9d629f4",
+      "bytes": 3465
+    },
+    {
+      "key": "src/flow/lib/flow-finding-source.js",
+      "digest": "1441cc45e81b7b48c072e15e2be01a1c345dc1a8cfbb7293d057bc3e235abfdf",
+      "bytes": 10430
+    },
+    {
+      "key": "src/flow/lib/flow-findings.js",
+      "digest": "098fc4064a587ca37f78e1787ac60bdd1c190266edd6a6712acdf426180a92f9",
+      "bytes": 26054
+    },
+    {
+      "key": "src/flow/lib/flow-judgment-contract.js",
+      "digest": "c03db0ce10023ce5df33053e433c642f2f76faf62a2cfbc44b6068d9e10d6cc2",
+      "bytes": 16858
+    },
+    {
+      "key": "src/flow/lib/flow-outbox-attempt-history.js",
+      "digest": "035aaeec82add2789493407c36719dfeb340b956e768149f46faab492dbd6da5",
+      "bytes": 5382
+    },
+    {
+      "key": "src/flow/lib/flow-outbox-identity.js",
+      "digest": "7095eba7b251da79d9908d839c95b1153a68a893071a5e5a63e6726126a98ad7",
+      "bytes": 1393
+    },
+    {
+      "key": "src/flow/lib/flow-outbox.js",
+      "digest": "082acc1493065fec70392171e4aa613825466a2fd6af77cdd32b5e0e3a2d67b5",
+      "bytes": 21849
+    },
+    {
+      "key": "src/flow/lib/flow-process-event.js",
+      "digest": "1fa3ce6e37ca3eea97bf710e5f192b205d324db7321f32ffd6d2cf09aa705036",
+      "bytes": 7471
+    },
+    {
+      "key": "src/flow/lib/flow-process-execution-binding.js",
+      "digest": "297e81d6c62a48bbb462c43ea405b741e46bc787b74f82091185318530c26d21",
+      "bytes": 1928
+    },
+    {
+      "key": "src/flow/lib/flow-process-physical-authority.js",
+      "digest": "1b78646235a26c2b42445c4d8f10acdefd5df81a1e43eb54e6cdaa7d5b26dee0",
+      "bytes": 1892
+    },
+    {
+      "key": "src/flow/lib/flow-repository-runtime-artifacts.js",
+      "digest": "aa7c705d2a0673f79c9bbd1dd5ee97ac43b22b2d1278e18948fb8c9ec4e186c2",
+      "bytes": 3518
+    },
+    {
+      "key": "src/flow/lib/flow-review-accounting.js",
+      "digest": "ac36b69f470c085f69bf22ed5c1347f0891f984b421d95917d048597d2bf2f9b",
+      "bytes": 7663
+    },
+    {
+      "key": "src/flow/lib/flow-review-semantic-handoff.js",
+      "digest": "bc6809011ed71a8fc431c730d93d843265fe51bfd2a009c6105afb87cfb2c2ce",
+      "bytes": 3085
+    },
+    {
+      "key": "src/flow/lib/flow-value-assertions.js",
+      "digest": "2f83f7a7d61134637c7f24b54d1423bc8db3d2ffa2abf6c1e4def749b042460b",
+      "bytes": 442
+    },
+    {
+      "key": "src/flow/lib/gate-issue-publication.js",
+      "digest": "ba5848303f6028e7f3f2a8eb171ac4250604c760246c9ad1f70ef3e529bd24ec",
+      "bytes": 6275
+    },
+    {
+      "key": "src/flow/lib/gate-observation-convergence.js",
+      "digest": "4c7225d7a481be762223e065808336661ea8ea03a51bbc23305afc900cf3aecf",
+      "bytes": 50231
+    },
+    {
+      "key": "src/flow/lib/gate-observation-values.js",
+      "digest": "1a075668dceb761dd8f25f58180d7c880ae33328f33db6189964fefd4b5ac597",
+      "bytes": 11011
+    },
+    {
+      "key": "src/flow/lib/gate-prompt-plan.js",
+      "digest": "3216261ea2c3b0d18c60db37d35c361f614071c9d2c7a2e5e572d7fbdaeda5ea",
+      "bytes": 20709
+    },
+    {
+      "key": "src/flow/lib/gate-recovery-display.js",
+      "digest": "5a1a381b459d1f55196a8b748e0e319544adef0c26f5638fd54337f8f0ace3cd",
+      "bytes": 1663
+    },
+    {
+      "key": "src/flow/lib/gate-settlement-publication.js",
+      "digest": "6950bab0a735017f7d73d9b705ddcde1c5a555e88b7d1f45be1951f07ece5e52",
+      "bytes": 3086
+    },
+    {
+      "key": "src/flow/lib/gate-step.js",
+      "digest": "fa2c218484d86a779d570e5fb95bc2873878235d9cc90ccb389f6a8219cfad61",
+      "bytes": 3513
+    },
+    {
+      "key": "src/flow/lib/gate-transition-application.js",
+      "digest": "3b468d1eb38399a7fea3f0c114681ffac06a7ecac277647adeb56ca1ad04aca2",
+      "bytes": 10481
+    },
+    {
+      "key": "src/flow/lib/gate-transition-facts.js",
+      "digest": "b70c976f1455b325d5fdb3e97578cedef7ebaab46a062544cf601fd7628f51ea",
+      "bytes": 57358
+    },
+    {
+      "key": "src/flow/lib/gate-transition.js",
+      "digest": "7eab3ad98c4def9c7072f39f9cdecfe56e7a1b9b9d658e4c5b81e3b467a5f57a",
+      "bytes": 37237
+    },
+    {
+      "key": "src/flow/lib/get-artifact.js",
+      "digest": "6830db948f850a0eb62f7878f46828a611929b7ef7c497512e1c09077174a593",
+      "bytes": 10629
+    },
+    {
+      "key": "src/flow/lib/get-check.js",
+      "digest": "745debf35566c96985869a40fe694d698b4c1a7ac48039383f9936ae9e6551c6",
+      "bytes": 2981
+    },
+    {
+      "key": "src/flow/lib/get-context.js",
+      "digest": "32d8ee5656ae9c49b787213d886aa79106b82e408228c3b705900bded7b82bb6",
+      "bytes": 17961
+    },
+    {
+      "key": "src/flow/lib/get-guardrail.js",
+      "digest": "7a6205b395e362b6954acc9ae02eb765e938e61b0ee561d95ba7f2b8f90e8b3e",
+      "bytes": 1883
+    },
+    {
+      "key": "src/flow/lib/get-issue.js",
+      "digest": "567a86df4ec4ae12ac1e6665f6a178fccea525b69f9b9f73620099d872f2489b",
+      "bytes": 782
+    },
+    {
+      "key": "src/flow/lib/get-next-action.js",
+      "digest": "7dfb24db86826761eaf0b1cbb99aba3981bd8caabe90d96dc33b19806d8b3c90",
+      "bytes": 50533
+    },
+    {
+      "key": "src/flow/lib/get-prompt.js",
+      "digest": "b7969bcdd71328bfef9215a524be8b33f3172fcac4fedc140226875dff9418db",
+      "bytes": 13053
+    },
+    {
+      "key": "src/flow/lib/get-qa-count.js",
+      "digest": "c39a0301764ddb488e42e5dff7db9f23eaf80d717152a4e9df54e769ba7f75ba",
+      "bytes": 785
+    },
+    {
+      "key": "src/flow/lib/get-resolve-context.js",
+      "digest": "87809c66cddc973dd263a26d75d0ebccbe55c587b3fe8771e3ebbb69a2453c25",
+      "bytes": 397
+    },
+    {
+      "key": "src/flow/lib/get-runtime-log.js",
+      "digest": "eba1c4cbabb41cfca3be27c9741898f015565af02372c2981578b3c382eaa36d",
+      "bytes": 3758
+    },
+    {
+      "key": "src/flow/lib/get-status.js",
+      "digest": "548fc325c8332f0e28807bb5811c37d5d30c2d205951541c0533af14266bd8af",
+      "bytes": 18398
+    },
+    {
+      "key": "src/flow/lib/get-step-instructions.js",
+      "digest": "9f5d7ddc1da397755c88dc105592722028f881c50defea9178f704b0df746b47",
+      "bytes": 2787
+    },
+    {
+      "key": "src/flow/lib/guarded-command.js",
+      "digest": "72036e806f7db79098ddd008c4cb301f40a04b32394b09398686a1b979023f2a",
+      "bytes": 1509
+    },
+    {
+      "key": "src/flow/lib/impl-review-proposal.js",
+      "digest": "ef302e0ed6941660f9d91344fa822f61966001131bd81919a46d4843c1984f9f",
+      "bytes": 6614
+    },
+    {
+      "key": "src/flow/lib/impl-review-values.js",
+      "digest": "857a953eaae9338a07ec704b94f159d7b6bffd34f90d80fc350d507eb77291ec",
+      "bytes": 10609
+    },
+    {
+      "key": "src/flow/lib/issue-body-cache.js",
+      "digest": "2d8fbd99fdef59b38c953e6f16024d930ccbc507d9af3c986cc8191219562358",
+      "bytes": 1143
+    },
+    {
+      "key": "src/flow/lib/issue-log-store.js",
+      "digest": "6e93ee52e3ddb61fac4121f124644b4e0f683dbe70e1998611709d370819a7e3",
+      "bytes": 7424
+    },
+    {
+      "key": "src/flow/lib/issue-snapshot-source.js",
+      "digest": "2adbcaa5b8cc90b6e2cd2c54db89ce36122359165c0b36bd4a1a81aab750d65f",
+      "bytes": 1996
+    },
+    {
+      "key": "src/flow/lib/lifecycle-step-transition.js",
+      "digest": "57444d8b647a4fab5f0d9c8b42969b1b40b8ebdf5bcbd6bef1417553eda7ae90",
+      "bytes": 1413
+    },
+    {
+      "key": "src/flow/lib/metrics-summary.js",
+      "digest": "94239236a543b6c194082fb47aaeb03b487a9381136ac94c0267910ab33f4e4a",
+      "bytes": 4870
+    },
+    {
+      "key": "src/flow/lib/next-action-directive.js",
+      "digest": "d20f3192f2ad43c338d67c80e3f26ea36cbbe55f44a87c9f106f8583e0d87331",
+      "bytes": 28145
+    },
+    {
+      "key": "src/flow/lib/next-action-plan-error.js",
+      "digest": "68b1878458cea2f0c53e0f3aba5834576914ddfbccbc78b7ddfa992292e49d62",
+      "bytes": 167
+    },
+    {
+      "key": "src/flow/lib/non-gate-transition-application.js",
+      "digest": "103fc25a2fb3db966e8cde914c337024d5cc9145e011452644eacf2af5bac838",
+      "bytes": 6768
+    },
+    {
+      "key": "src/flow/lib/non-gate-transition-facts.js",
+      "digest": "1def57f28f8cfd5ae7483e7c0f2383db685d1e75151e2bed2bc21ded9afa54aa",
+      "bytes": 3605
+    },
+    {
+      "key": "src/flow/lib/non-gate-transition.js",
+      "digest": "722904979ddcf23abe7440745c13db56e86c56ebe3232daf731d5e57053d157b",
+      "bytes": 18332
+    },
+    {
+      "key": "src/flow/lib/nonblocking-command-failure.js",
+      "digest": "19af70bf354c8e447490e0ab8af33e9e9f914a78fb96b7d1168ec0d25d2c6a22",
+      "bytes": 1575
+    },
+    {
+      "key": "src/flow/lib/nonblocking-decision.js",
+      "digest": "fddc522632401d75aec670f15d5aaf7ae4b27ef02a55b118f5dc13d7a6d6b852",
+      "bytes": 9042
+    },
+    {
+      "key": "src/flow/lib/nonblocking-evidence.js",
+      "digest": "b0cd77adfa27b9b4ab52d3c40d1b4f1f27f5389a6c2b1f25c645306f6dcb93f4",
+      "bytes": 6116
+    },
+    {
+      "key": "src/flow/lib/nonblocking-handoff.js",
+      "digest": "d6dc6e9a75fbf02da9b0738775c84587350c589fa437f8315639c5eec5b462a1",
+      "bytes": 8071
+    },
+    {
+      "key": "src/flow/lib/nonblocking-route.js",
+      "digest": "884797b64dc04d629f921063ecfb203b196c852aa198d7b329eeeea77cd68031",
+      "bytes": 4010
+    },
+    {
+      "key": "src/flow/lib/nonblocking.js",
+      "digest": "14c81445b3b198e6476b1195a792ec7fc7677f9605f8f832649a6682808fa76d",
+      "bytes": 25979
+    },
+    {
+      "key": "src/flow/lib/observation.js",
+      "digest": "731fae451602fb7979bbef4fe929247af7ff7c8e624c5959fd65fbb56f476beb",
+      "bytes": 10204
+    },
+    {
+      "key": "src/flow/lib/original-artifact-worker-authorization.js",
+      "digest": "c3706343dead933ef54791eeece8593d929190e76795d09a89d8d1b78edc349a",
+      "bytes": 1237
+    },
+    {
+      "key": "src/flow/lib/overview-merge.js",
+      "digest": "21c2fe4fbf9b09f9887d0e0beb959de0678d7b5f5c2a2a8c5f3b35199961ae6a",
+      "bytes": 3324
+    },
+    {
+      "key": "src/flow/lib/plan-gate-repair.js",
+      "digest": "dc9942b25a9773fa79c3c0f922261d2b0384c8959027263d39fdbf5b6b3dd603",
+      "bytes": 43572
+    },
+    {
+      "key": "src/flow/lib/plan-rewind.js",
+      "digest": "a025d168fdf98c884b199c8bc92a7a0538b6a29516502bc4990fd7550d9088f7",
+      "bytes": 5186
+    },
+    {
+      "key": "src/flow/lib/preparation-evidence.js",
+      "digest": "0bae2acd4c2ee290e009a9f04c434ebd63589875444152f0eb1e3ed1faed07a2",
+      "bytes": 3054
+    },
+    {
+      "key": "src/flow/lib/process-runtime-admission.js",
+      "digest": "0670e0d35319aa762d6cdb9c614a2b530012c0531d65f9dc42b7707c737277cd",
+      "bytes": 14737
+    },
+    {
+      "key": "src/flow/lib/process-runtime-evidence.js",
+      "digest": "6ea32d54f4249d222ee783e5313f743835d202d5302482a3f09950b811c063d0",
+      "bytes": 3539
+    },
+    {
+      "key": "src/flow/lib/producer-artifact-readiness.js",
+      "digest": "d27730f49c91aec1d94d18632d54cd51e093cb86496459e0d4f3264f5a8a20e5",
+      "bytes": 37309
+    },
+    {
+      "key": "src/flow/lib/prompt-response-adoption-publication.js",
+      "digest": "60ca475d411911931b3e4dfe94be6043693fba2c0cfb0cc7db684050ececd4fd",
+      "bytes": 3340
+    },
+    {
+      "key": "src/flow/lib/prompt-response-adoption.js",
+      "digest": "53b71a33b112aae3e9b1944b3d20b533392053afe84d34121a33436973cd0f0e",
+      "bytes": 11339
+    },
+    {
+      "key": "src/flow/lib/prospective-command-artifact.js",
+      "digest": "20f655cc3aec18368ce1ae70f4a33999d4784873313dfd4b3df7ee1b11a44407",
+      "bytes": 857
+    },
+    {
+      "key": "src/flow/lib/recover-interrupted-finalize-sync.js",
+      "digest": "ece78ff57d3195f384f85ffc610f95d3085bf22bc517907e04a27979d87b9ed7",
+      "bytes": 6620
+    },
+    {
+      "key": "src/flow/lib/regression-file-snapshot.js",
+      "digest": "d62ac21920d960f1cc40d53094ac44c8b8f73f44a9d40d2a48379e8fa60d2c56",
+      "bytes": 7542
+    },
+    {
+      "key": "src/flow/lib/repair-attempt-lineage.js",
+      "digest": "d5b8dc2480fcde97a00d09cf7c55eeb73aa9141be76ad8e024b7aa6830f8bfc7",
+      "bytes": 5070
+    },
+    {
+      "key": "src/flow/lib/repair-fingerprint.js",
+      "digest": "7e8b044b4673a67e5e938bdc036e063d3cb60cac20ddf39c60d4306127aa72c3",
+      "bytes": 1458
+    },
+    {
+      "key": "src/flow/lib/repair-mutation-contract.js",
+      "digest": "8cd99df734f2a10502cb62b854ddd549e09bd275ffa0be4ed43b56de37a1c19f",
+      "bytes": 6997
+    },
+    {
+      "key": "src/flow/lib/repair-state-identity.js",
+      "digest": "a3c10b99c55f6a3965f406ffca415ba9dc679c3d12ca078b4973135945a83f1d",
+      "bytes": 36389
+    },
+    {
+      "key": "src/flow/lib/report-binding.js",
+      "digest": "70bdb237327fef77628a5c644bda5b0c237f83298918b2d5c5ecc2a29f983a9c",
+      "bytes": 4339
+    },
+    {
+      "key": "src/flow/lib/report-final-evidence.js",
+      "digest": "3915507301ba92141dff6cf58952d5cda48134ad1660144dae5abebc8da06422",
+      "bytes": 2172
+    },
+    {
+      "key": "src/flow/lib/report-format.js",
+      "digest": "cd39cddec50f8ab13e86784a63d14a09b387f61e3ce793964def90b617cb7f56",
+      "bytes": 18871
+    },
+    {
+      "key": "src/flow/lib/req-map.js",
+      "digest": "5489f8ce39079cbe52ed1129dd49c2dfbe8385eb992957c4eb5f5804da27be11",
+      "bytes": 762
+    },
+    {
+      "key": "src/flow/lib/requirement-test-artifacts.js",
+      "digest": "8c10f26475b9bbcbac4d08eecc80cb482f604d21f354753501bdbe19b86a0422",
+      "bytes": 24726
+    },
+    {
+      "key": "src/flow/lib/requirement-test-check.js",
+      "digest": "7a93da3a22dd8391f013372d7ee7bfb60daaf3a3e66f3e1e2bc25c897a905941",
+      "bytes": 4040
+    },
+    {
+      "key": "src/flow/lib/requirement-test-lifecycle.js",
+      "digest": "11d72f5d1d0ba44913feda844e079e3eff294152368265fa80b4934d7ef7bb31",
+      "bytes": 24209
+    },
+    {
+      "key": "src/flow/lib/requirement-test-settlement-receipt.js",
+      "digest": "1bcd74294f0da7aa298e0a3796c761cd7e624f1d27b26f1496f347ce0f6e51fd",
+      "bytes": 10437
+    },
+    {
+      "key": "src/flow/lib/requirement-test-store.js",
+      "digest": "807c5e28af64f21fa86d8df4b66f140d47768c31a494cf50e5f303a4acc46e48",
+      "bytes": 24132
+    },
+    {
+      "key": "src/flow/lib/requirement-test-transition.js",
+      "digest": "265efea1db31218881cbda1380fb377f6a9c490fba224bd8423b8ba06e146db2",
+      "bytes": 10176
+    },
+    {
+      "key": "src/flow/lib/resolve-auto-check-input.js",
+      "digest": "ecbed6201e1f338c2650762772ab4ff07d877e1bafdbdda6bf166e7f60110854",
+      "bytes": 8141
+    },
+    {
+      "key": "src/flow/lib/resolve-context-envelope.js",
+      "digest": "a8bd4fe829168cde151c6db5519ffe2b8e33c844d293e533033d0cec4bd1d9d7",
+      "bytes": 3823
+    },
+    {
+      "key": "src/flow/lib/resolve-preparing-run-id.js",
+      "digest": "c8d718231d29830f60e8c0eabad76fe06e861e186fe0fd1d97c41b0ab760b21d",
+      "bytes": 1971
+    },
+    {
+      "key": "src/flow/lib/retro-stale-evidence-transition-facts.js",
+      "digest": "7ad2eb80a04bbbd1c0c26d6aa1e374e2193b1bce43f6cb5ad31ef7afb5eb6d47",
+      "bytes": 3246
+    },
+    {
+      "key": "src/flow/lib/retro-stale-evidence-values.js",
+      "digest": "d080743e695faa11c28bc8ac6fce9ed68f60e62f5dbfbc0199cffd3bec5f0de7",
+      "bytes": 4021
+    },
+    {
+      "key": "src/flow/lib/retro-values.js",
+      "digest": "0a97af2064b64492414ef06ad9ba16c4a6c4f902722eb256e1b59a22e9ceac13",
+      "bytes": 5448
+    },
+    {
+      "key": "src/flow/lib/retry-accounting.js",
+      "digest": "2d20a974db1a87e425ff383d394ff1b610cfc371d7023f28f3be88dd6ccfbaf8",
+      "bytes": 1969
+    },
+    {
+      "key": "src/flow/lib/retry-recovery.js",
+      "digest": "bc81f7f763c35da13914e1adbe3b67fdf6b5d8484a2cbc02ee1b0c0a64b18b2d",
+      "bytes": 59347
+    },
+    {
+      "key": "src/flow/lib/retry-target-route.js",
+      "digest": "8344fea78368b8b9135705782657604d8ef670785e45f576f92ea5e1f1046bea",
+      "bytes": 2719
+    },
+    {
+      "key": "src/flow/lib/review-convergence.js",
+      "digest": "892312083d56b09d63e36ba6c1ab463afe5dc21918d56dd7c146130aa3bffbbf",
+      "bytes": 17988
+    },
+    {
+      "key": "src/flow/lib/review-evidence-store.js",
+      "digest": "357cb51b6aa2fb4a5b2bba0dcd16912569b2341a0c581161f307f36f2b4ab9c2",
+      "bytes": 6178
+    },
+    {
+      "key": "src/flow/lib/review-evidence-values.js",
+      "digest": "51c9cfd1b4f6324ecf608873691ace46a5ed4f327df1b6b949875bfbcc11cbec",
+      "bytes": 2811
+    },
+    {
+      "key": "src/flow/lib/review-execution-lease.js",
+      "digest": "a38ad3f5db16d10d706b14e9718cb87ce1c5e540fb8ccfa06b6f4d2b8c98cc3b",
+      "bytes": 3084
+    },
+    {
+      "key": "src/flow/lib/review-failure.js",
+      "digest": "e69fdc20d409cd82e930d79418f0501370818161809646f6a8b1dae7c0a38f7b",
+      "bytes": 18932
+    },
+    {
+      "key": "src/flow/lib/review-finding-gate-readiness.js",
+      "digest": "a04ef25cb90063045a40f22dcac64423b3eb74ae1c9a9efc8f98b3332847a64d",
+      "bytes": 6521
+    },
+    {
+      "key": "src/flow/lib/review-finding-synthesis.js",
+      "digest": "859769004969627f5c09c11ae0b9f8f808aa8948f342978b1a2a5469ee24f3e0",
+      "bytes": 6218
+    },
+    {
+      "key": "src/flow/lib/review-observation-values.js",
+      "digest": "00d26373cc7033b07dc5b9f4f5725dbeb91421609ddf8fc68998fa21441031e8",
+      "bytes": 13381
+    },
+    {
+      "key": "src/flow/lib/review-protocol.js",
+      "digest": "709424d2c7f2a555f0f3af79ed34006838a96340f3026244d56b4c250e7aa34b",
+      "bytes": 15516
+    },
+    {
+      "key": "src/flow/lib/review-recovery-authority.js",
+      "digest": "9429861a91238f35d78d4e35a89bafbe1c92b4e84c40011b246d7128923aaa47",
+      "bytes": 392
+    },
+    {
+      "key": "src/flow/lib/review-recurrence.js",
+      "digest": "048a08c41339ddeb354ba5583d580579636c00d77d164c618373aee10d6658c0",
+      "bytes": 59617
+    },
+    {
+      "key": "src/flow/lib/review-route.js",
+      "digest": "478db730fd992abf6545210029159b6af40c8aca47c2c76ddd90e8607e446e78",
+      "bytes": 2191
+    },
+    {
+      "key": "src/flow/lib/review-step-failure-values.js",
+      "digest": "ef67f495c7459a73f63a50d997980749c10fbda993505926fc70d720c673db0f",
+      "bytes": 4916
+    },
+    {
+      "key": "src/flow/lib/review-target-authority.js",
+      "digest": "2eb6b569d32c452f65d12f76617a77f19090f3061ef9b235baab9da30851b4d0",
+      "bytes": 2571
+    },
+    {
+      "key": "src/flow/lib/review-text-prompt-plan.js",
+      "digest": "9ca8b37c90103844061bb745791a58eb0ee590855527a29a2116f2b158887c72",
+      "bytes": 8162
+    },
+    {
+      "key": "src/flow/lib/review-transition-facts.js",
+      "digest": "03d956f50b86b2bd2f93ed6b98fc1f7edb11cf196fd5282e94c60092e0e28d6f",
+      "bytes": 14093
+    },
+    {
+      "key": "src/flow/lib/review-transition-persistence.js",
+      "digest": "e7b38b0a333d0e2a3fcbd14271c3f95b4196f619365238f2c01446c3d18c5472",
+      "bytes": 4812
+    },
+    {
+      "key": "src/flow/lib/review-work-unit-input.js",
+      "digest": "743f68a0364b8df5147be3696ad74e87585dc2613c78c4fdeb0969618e58f2dd",
+      "bytes": 4812
+    },
+    {
+      "key": "src/flow/lib/review-work-unit-values.js",
+      "digest": "149305c9f91006ecadec6c2b85ecc2533c8d8afd158fca6495806d15ed001f27",
+      "bytes": 12447
+    },
+    {
+      "key": "src/flow/lib/review-work-unit.js",
+      "digest": "463a86557f6646efb55236637be7897a3e5b38fa7a88c18c24a9cef2bdc2b9e2",
+      "bytes": 32140
+    },
+    {
+      "key": "src/flow/lib/run-abort.js",
+      "digest": "9cefed78cc281dda4839af890d3d0719e555ff78f201ee0847cbbb1ffaaef4cc",
+      "bytes": 13256
+    },
+    {
+      "key": "src/flow/lib/run-acceptance-review.js",
+      "digest": "a8cf2147afdb2d2bd7e56de28243760b722a059f14852014b065ace57bf54137",
+      "bytes": 53906
+    },
+    {
+      "key": "src/flow/lib/run-auto-check.js",
+      "digest": "27c999e57fe704fb1a201f74fb9ed06e6196570b8a778181562526a4acef7765",
+      "bytes": 15354
+    },
+    {
+      "key": "src/flow/lib/run-claim-next-action.js",
+      "digest": "c35c1c0b83dcc2644875d8347676a7f861be50dac8caa30d83b5d8fdc2573613",
+      "bytes": 4937
+    },
+    {
+      "key": "src/flow/lib/run-complete-task.js",
+      "digest": "5c8acc51c8b6066cf56ff730568b3f6344a6786e0381c6c0fe6adc6ed0544638",
+      "bytes": 3316
+    },
+    {
+      "key": "src/flow/lib/run-dispatch.js",
+      "digest": "7ef5176fe4a7ea31b24ef8f578be9d4bfb633f7bff965097cb4fdac2883f564e",
+      "bytes": 146878
+    },
+    {
+      "key": "src/flow/lib/run-filter-task-review.js",
+      "digest": "8e3dcab4346387db7a7486987bced7e2fc1ff0593ac9fb7b65ed7cc3609836c5",
+      "bytes": 1595
+    },
+    {
+      "key": "src/flow/lib/run-final-regression.js",
+      "digest": "151057fa1da4691225f2d3a745bfbeb9daab04db5352191f2272fa67d61faff4",
+      "bytes": 42132
+    },
+    {
+      "key": "src/flow/lib/run-finalize-cleanup.js",
+      "digest": "71c9c311d96c6479164f73875ae30ad1c14f78825f4b85249d88145b62a05c28",
+      "bytes": 106559
+    },
+    {
+      "key": "src/flow/lib/run-finalize-commit.js",
+      "digest": "e8d8dda14991c2309bd591a3862a7864c472c889bf767c86fd63d49942abf206",
+      "bytes": 5776
+    },
+    {
+      "key": "src/flow/lib/run-finalize-merge.js",
+      "digest": "1d7ed6a56ea7a2c7cacdbb52f3cd7065cbe6250ce6cdccab54d4976928d60825",
+      "bytes": 2982
+    },
+    {
+      "key": "src/flow/lib/run-finalize-sync.js",
+      "digest": "57b272da4089764e3db3274ca72575500335de8be256615f877b47d9ab9cb245",
+      "bytes": 4324
+    },
+    {
+      "key": "src/flow/lib/run-finalize.js",
+      "digest": "b370dd989b3da241e6e98399d379d74f782746705ecb67d41c89525d67a663e0",
+      "bytes": 22628
+    },
+    {
+      "key": "src/flow/lib/run-gate.js",
+      "digest": "58ce987312f9608fc23fabb84ee0b8fab83496dd926e8196a6298a427263ab90",
+      "bytes": 198065
+    },
+    {
+      "key": "src/flow/lib/run-lint.js",
+      "digest": "b8c944eb1c9f7a9583a737c67b1aa7f33863c321a66567912f8ddf4bd0a36d82",
+      "bytes": 1562
+    },
+    {
+      "key": "src/flow/lib/run-prepare-spec.js",
+      "digest": "8f47a3b3b9e9cf196569647a1e3f1b7cce7f5f14d3921aa4bc0ab1caf5837f12",
+      "bytes": 59933
+    },
+    {
+      "key": "src/flow/lib/run-reconcile-task-review.js",
+      "digest": "7dc288c8aff08386e5023d8dba973fa8ff72c48677c23674e0f4b38d8ec2b9ce",
+      "bytes": 1778
+    },
+    {
+      "key": "src/flow/lib/run-recover-artifact-execution.js",
+      "digest": "66f0d1a3f92e1337e7a3e442093d01058d623fe445396335c7418d86c5a71fe0",
+      "bytes": 3742
+    },
+    {
+      "key": "src/flow/lib/run-recover-draft-execution.js",
+      "digest": "7ca4cbd1dc26c787bc8f25934a6a4db0b83fbef8835dcf4b3ae9042eba748843",
+      "bytes": 2263
+    },
+    {
+      "key": "src/flow/lib/run-recover-finalization.js",
+      "digest": "0f1a2b6fedefb8acf41bbf7b69149b4f65caeeb8593e4e83dd12d51758806bc1",
+      "bytes": 6995
+    },
+    {
+      "key": "src/flow/lib/run-recover-missing-producer-artifact.js",
+      "digest": "1744fc50dfdb69d9505815738394d0fc39682ccf222cec2c63cccb02b78a96ae",
+      "bytes": 1366
+    },
+    {
+      "key": "src/flow/lib/run-recover-review-pass.js",
+      "digest": "830bea549cf6e1389277126cee25d1791170cfdd7e40ce90701b354176aa5423",
+      "bytes": 1528
+    },
+    {
+      "key": "src/flow/lib/run-recover-spec-gate-repair.js",
+      "digest": "17bc1ca0d8c48b3710948ec63d5b8e6787b9cfb41afac5f805d074fee4d6f1cf",
+      "bytes": 1999
+    },
+    {
+      "key": "src/flow/lib/run-recover-task-execution-overrun.js",
+      "digest": "2b22bde3fd96c0be7ceafcb59b8cc45146a5d071723c8da2bedd4d42f569794a",
+      "bytes": 2794
+    },
+    {
+      "key": "src/flow/lib/run-reopen-draft.js",
+      "digest": "f3e9e31e5877af30b5c09c4556538e2020ed72e3a494c1690b832f1bcb99eab9",
+      "bytes": 6486
+    },
+    {
+      "key": "src/flow/lib/run-repair-plan-gate.js",
+      "digest": "c74c2d58153de29e6df7137cfb864fefbb4b47fe428a0616123ee9cb725a1582",
+      "bytes": 4312
+    },
+    {
+      "key": "src/flow/lib/run-report-show.js",
+      "digest": "73cbdf8c87a2f30dab56275a94432f9fef109e740f054abda5c3e7ba063a4255",
+      "bytes": 5087
+    },
+    {
+      "key": "src/flow/lib/run-report.js",
+      "digest": "f674317b37f0e12a1e3813be7c485d893b48ec921d1109c9e7065a05ba3d5ba4",
+      "bytes": 15717
+    },
+    {
+      "key": "src/flow/lib/run-requirement-test-gate.js",
+      "digest": "d7c1b754625ecd3d1b6c0481b69b32494add7f64f9779810d07c281d9b27e5bc",
+      "bytes": 17802
+    },
+    {
+      "key": "src/flow/lib/run-resume.js",
+      "digest": "8ae5aadfbb5263bd061f48aab6ccceef8bc8c47cfcb53faf0934515cd5c2f4e7",
+      "bytes": 931
+    },
+    {
+      "key": "src/flow/lib/run-retro.js",
+      "digest": "c298d789b21cbd9a41a61f3bf02b74c604d96ac01d30eebcc567275764475b75",
+      "bytes": 6685
+    },
+    {
+      "key": "src/flow/lib/run-review.js",
+      "digest": "9b9c1932f373ccd53a9db42029dbf39328ad3429dd3a31c8b81bd64cadd827b9",
+      "bytes": 116276
+    },
+    {
+      "key": "src/flow/lib/run-seal-handoff.js",
+      "digest": "ca9140ddba96fc6930ef2d773ea239292d684c22b42ad50626c218583fff4136",
+      "bytes": 1553
+    },
+    {
+      "key": "src/flow/lib/run-settle-failure.js",
+      "digest": "6d9bbf8046f3add01898911faf904b2ac68c026c13ef4fd1862bc3bce6db933e",
+      "bytes": 3087
+    },
+    {
+      "key": "src/flow/lib/run-settle-gate-transition.js",
+      "digest": "bcfac38df91b29569cdc2926c00118e7cd9ff46eeff8e906c44231cc9e8176df",
+      "bytes": 1857
+    },
+    {
+      "key": "src/flow/lib/run-settle-review-transition.js",
+      "digest": "b1e419caa8ee829ef1215599ff8b7e17325271e128d4135eafbc0808ae4157a4",
+      "bytes": 1542
+    },
+    {
+      "key": "src/flow/lib/run-start-task.js",
+      "digest": "5a871f609c1f7a6525c4f83bc266b1f65f347ab1c3837082d79ede8aac6d12dd",
+      "bytes": 2005
+    },
+    {
+      "key": "src/flow/lib/run-sync.js",
+      "digest": "04df60d7dcdf1b6e781810f6b2e6b973d3fd7d0cd42c388d63fdbe27e8c0557c",
+      "bytes": 3584
+    },
+    {
+      "key": "src/flow/lib/run-test-execute.js",
+      "digest": "3427c5ccdc3df535452112194048c705e8f30253996bacf25b52826fcc2abb6d",
+      "bytes": 20406
+    },
+    {
+      "key": "src/flow/lib/run-test-result-review.js",
+      "digest": "03aea5e93f71dd118156cb8ef6bc13c3af98fd1f693936eb3e846c63629c367f",
+      "bytes": 8476
+    },
+    {
+      "key": "src/flow/lib/run-update-overview.js",
+      "digest": "091da8f2ddf3b5df69e91829c0406b9333a1043bfed4a3180925417f21f56362",
+      "bytes": 3233
+    },
+    {
+      "key": "src/flow/lib/runtime-module-identity.js",
+      "digest": "eaa9faaa0bd41ea9386000ff5a024ce6f271e860153b45e49bcf276996af60b5",
+      "bytes": 2092
+    },
+    {
+      "key": "src/flow/lib/set-acceptance-decision.js",
+      "digest": "894d2b9990de511d693f25e5935cbfbcd28269ba137391c5233bbd364b1b6b1d",
+      "bytes": 1834
+    },
+    {
+      "key": "src/flow/lib/set-approval.js",
+      "digest": "94efe95a88d2d3ee9e5c2eee1313b47d29305dd90188dd356b6fb4da3cc6a9de",
+      "bytes": 3809
+    },
+    {
+      "key": "src/flow/lib/set-auto.js",
+      "digest": "6a50ead65506528edd267b5436fa0097fbfdd6861a4ac33d7c0657d687e9ec59",
+      "bytes": 5620
+    },
+    {
+      "key": "src/flow/lib/set-broad.js",
+      "digest": "8e9c8c67835d84c3cbb7040653cfbad73600304713917c078411b3b7d8436789",
+      "bytes": 1089
+    },
+    {
+      "key": "src/flow/lib/set-draft-answer.js",
+      "digest": "0f7d333070e450a216783b6956ad61b1717ec8a83b43627f8d75899590ab5a56",
+      "bytes": 5192
+    },
+    {
+      "key": "src/flow/lib/set-files.js",
+      "digest": "78faf240a03e4d1b3f55a4725ba372218eebf9ea77aeb918516c2e064f66979a",
+      "bytes": 1269
+    },
+    {
+      "key": "src/flow/lib/set-init.js",
+      "digest": "fc9137a0eed254ee45a78736b6755df34602f6274377a6cb56c6ff9d282f1864",
+      "bytes": 2680
+    },
+    {
+      "key": "src/flow/lib/set-issue-log.js",
+      "digest": "8aae0d3d6380326c7e9e2cbc6ed32521299a2ca0d07d74c2dd69873f30633888",
+      "bytes": 8131
+    },
+    {
+      "key": "src/flow/lib/set-issue.js",
+      "digest": "e0137b0307fa920b4349c1bffd4960d00f83712c4ee275b529c0f8ce01449609",
+      "bytes": 1209
+    },
+    {
+      "key": "src/flow/lib/set-metric.js",
+      "digest": "88103f43b91778a4ecbcc2202b7f9844b2b772247e0e196b29e93277934b8ab6",
+      "bytes": 1461
+    },
+    {
+      "key": "src/flow/lib/set-nonblocking-decision.js",
+      "digest": "dfa4f7dd6f036d094e5e50da93578d681ca451c691b693ea840f1684208aa976",
+      "bytes": 912
+    },
+    {
+      "key": "src/flow/lib/set-note.js",
+      "digest": "f7aae5b9281cd0a554ad9f725a83696f2aed8af523b79cc4b7a59076a6c2e266",
+      "bytes": 1866
+    },
+    {
+      "key": "src/flow/lib/set-policy.js",
+      "digest": "e21044fe94807536357d4acb101c0eb140d3f5fd4160c7d6e0db21f9e4effdae",
+      "bytes": 829
+    },
+    {
+      "key": "src/flow/lib/set-request.js",
+      "digest": "a3f8b993f72ca32fcd03efc0966459e8001bae3dfb1a2e3a4bed3fb46c64e70b",
+      "bytes": 1461
+    },
+    {
+      "key": "src/flow/lib/set-retry.js",
+      "digest": "ff2b9fe4513fb4782a7090f428c55d419ad07f4e957f4d63eec7b59206d7ebf4",
+      "bytes": 3569
+    },
+    {
+      "key": "src/flow/lib/set-review-evidence.js",
+      "digest": "f08394c4e4d744e6c05eade88d31b62529c32236a3d4382cc6f4883164db7e15",
+      "bytes": 6299
+    },
+    {
+      "key": "src/flow/lib/set-step.js",
+      "digest": "b5ada374c07c040c9908a4a846d57e2d5c6137b08974992d630dce65f645edb2",
+      "bytes": 4202
+    },
+    {
+      "key": "src/flow/lib/shared-spec-test-execution.js",
+      "digest": "54b609e206bfa00383b0a0c1456cbead7b85edc070bba7ccedb36799d986f5ab",
+      "bytes": 1720
+    },
+    {
+      "key": "src/flow/lib/source-effect-fields.js",
+      "digest": "72ede96012d6c333b032438956d45a24751bf5dd59b829204f5f95010d6e02c4",
+      "bytes": 1170
+    },
+    {
+      "key": "src/flow/lib/source-effect-values.js",
+      "digest": "1cf8ca98a340b66d2de6d6964c8035573e5fbfe9a01c9d5c8aa11de0d31faf49",
+      "bytes": 42954
+    },
+    {
+      "key": "src/flow/lib/source-execution-observation-appends.js",
+      "digest": "cd43e49a319e50a4286bba770119d24a55e9f9415203cf198decaac616e6faf3",
+      "bytes": 5997
+    },
+    {
+      "key": "src/flow/lib/source-git-restore-stage.js",
+      "digest": "c47a1ce108975ddee864dc78145a1f48e8b3682d0b105ccfc7f7a2944b628e82",
+      "bytes": 7189
+    },
+    {
+      "key": "src/flow/lib/source-handoff-failure.js",
+      "digest": "c4944af53c761ec974ff7159c292688fdaa3076b0495a9ffcf701c59e4301b9a",
+      "bytes": 4814
+    },
+    {
+      "key": "src/flow/lib/source-handoff-persistence.js",
+      "digest": "b6f5202424247b3d0aede3afd5836f16f18a65f08711e3b9bc8bcb19840ea31e",
+      "bytes": 27408
+    },
+    {
+      "key": "src/flow/lib/source-mutation-manifest.js",
+      "digest": "6b3764f0a6cd8bd635074c5fcd6019d01518b3b514cfe78a0e5b62790d735111",
+      "bytes": 13436
+    },
+    {
+      "key": "src/flow/lib/source-mutation-publication-admission.js",
+      "digest": "4f27ec1be57162f9064d08848fe5e2f3d170cd73f5e722132475cfec0aba573e",
+      "bytes": 793
+    },
+    {
+      "key": "src/flow/lib/source-triage-contract.js",
+      "digest": "6abd9dafe3fdcb24dd3bf4efeae505ab01e004d622609b5b343efe0f87ac065e",
+      "bytes": 4487
+    },
+    {
+      "key": "src/flow/lib/source-worker-effect-schema.js",
+      "digest": "af73c90b88c06b32cd1c2307ac75c32af25aff20f5ab8c528371015d9d55d225",
+      "bytes": 1680
+    },
+    {
+      "key": "src/flow/lib/source-working-file-capture.js",
+      "digest": "8f7665d802f1349f1a723b9d24620e647494f1fc745b0faf96d6f23ef2260655",
+      "bytes": 9455
+    },
+    {
+      "key": "src/flow/lib/source-working-file.js",
+      "digest": "76128ff8c14292ab52fcf1b0c69a51cde45c7ad151b53ac61e6828ae80750905",
+      "bytes": 9185
+    },
+    {
+      "key": "src/flow/lib/spec-gate-policy.js",
+      "digest": "066623440192f3e04118eec4504d0e983a8a37314395833ba3c40a400951a559",
+      "bytes": 107
+    },
+    {
+      "key": "src/flow/lib/spec-gate-prospective-facts.js",
+      "digest": "4672d385419f48a7e44a52681ca99b536564306aa96031daab39482a7fe1eecd",
+      "bytes": 1822
+    },
+    {
+      "key": "src/flow/lib/spec-gate-prospective.js",
+      "digest": "a2014720f398cd4c49fc56d25d4831161bc192cb280cced6079bbda6b3171f29",
+      "bytes": 5113
+    },
+    {
+      "key": "src/flow/lib/spec-gate-readiness.js",
+      "digest": "4209f064ee8c7f1b01a055cffee7f784dc7410d2868e38a5ab8135ef6d8a8c37",
+      "bytes": 4722
+    },
+    {
+      "key": "src/flow/lib/spec-gate-repair-bundle.js",
+      "digest": "dc42c478a7518c6817a521305d5b365760cf2a7ca3f15e59c9b208f8c3789d68",
+      "bytes": 14447
+    },
+    {
+      "key": "src/flow/lib/spec-gate-repair-call-plan.js",
+      "digest": "67c2ee4c24fc4e5692b9b186645e67ba86a70e166435ec309a59d8313fea2cff",
+      "bytes": 9275
+    },
+    {
+      "key": "src/flow/lib/spec-gate-repair-context-expansion.js",
+      "digest": "b21383233605cbd7537877d1b141e7926a05f82ce89a4d3d1426c3678e76de32",
+      "bytes": 5578
+    },
+    {
+      "key": "src/flow/lib/spec-gate-repair-context.js",
+      "digest": "a30cec0cbea983690a7876a5e0787053fe80147b2640a815c15eb1bf850f1bf9",
+      "bytes": 29029
+    },
+    {
+      "key": "src/flow/lib/spec-gate-repair-execution-contract.js",
+      "digest": "b4e81807d18dd83a9194faeb7e45d589dc5fe212b4c1d4733e06f84ef9a9ca5c",
+      "bytes": 1750
+    },
+    {
+      "key": "src/flow/lib/spec-gate-repair-execution-decision.js",
+      "digest": "820b209899e58cc140ced004e84ab97c9469e491f5abf7f31fce28094dc88206",
+      "bytes": 2469
+    },
+    {
+      "key": "src/flow/lib/spec-gate-repair-execution.js",
+      "digest": "478ff6b27accd428dce728f98187e908d7b74a31ac1d06fcd11919968b877839",
+      "bytes": 5690
+    },
+    {
+      "key": "src/flow/lib/spec-gate-repair-input-descriptor.js",
+      "digest": "2234b8cae3d34ae3442d33c568ba641a3f8c98161aead670c96054bc59e1f58f",
+      "bytes": 8638
+    },
+    {
+      "key": "src/flow/lib/spec-gate-repair-input-unavailable.js",
+      "digest": "17dd77299af2945b77d8ac4b0bc2024c7a328c07d146aab309bd0d89d146a45f",
+      "bytes": 7868
+    },
+    {
+      "key": "src/flow/lib/spec-gate-repair-input.js",
+      "digest": "f678a009c83fece4b2427171b540459e8c866f068b0214b9999957819579e558",
+      "bytes": 6277
+    },
+    {
+      "key": "src/flow/lib/spec-gate-repair-progress-reader.js",
+      "digest": "1e0f739ab23099a49afdb78e1114d5c0e497242dd34bbf1186517f3d6064da57",
+      "bytes": 12203
+    },
+    {
+      "key": "src/flow/lib/spec-gate-repair-progress.js",
+      "digest": "4e810ea0a48f00edc8fc73ba520d2a78a48b0f131f79617f6e64011e82f40448",
+      "bytes": 18995
+    },
+    {
+      "key": "src/flow/lib/spec-gate-repair-recovery.js",
+      "digest": "71a8855d85fc29160e336c4ab26d88399049fa334b40aa473a1d856c28f14ea7",
+      "bytes": 6762
+    },
+    {
+      "key": "src/flow/lib/spec-gate-repair-review.js",
+      "digest": "8073bf25854a290eebeb3fb63f3edb9f52f92cd7e856fff65d04d85ff74981ea",
+      "bytes": 6445
+    },
+    {
+      "key": "src/flow/lib/spec-gate-repair-selection.js",
+      "digest": "8e3093ad845c03dc6fe3dc92605f1522eb9a9d038715842467be7022b2d7b4a3",
+      "bytes": 15373
+    },
+    {
+      "key": "src/flow/lib/spec-gate-repair-source-storage.js",
+      "digest": "167eaf5310df708a35acbf3fffa254add21c2c9c681ecbffef01f7c0b7263951",
+      "bytes": 5469
+    },
+    {
+      "key": "src/flow/lib/spec-gate-repair-sources.js",
+      "digest": "8f05c598c0a6d1b8e8e04ae1ecd1e540624c0ca85d85a5f3caf168607bb7a2f6",
+      "bytes": 7829
+    },
+    {
+      "key": "src/flow/lib/spec-gate-repair-values.js",
+      "digest": "b2ce1190fa152053b7af979a298d86c4998af1b69730a6862e66d5af1e38584f",
+      "bytes": 29921
+    },
+    {
+      "key": "src/flow/lib/spec-gate-repair-worker-facts.js",
+      "digest": "0b4ed843729aecbdee8205dfedf56e7de8e64c014871e82af361395d30276d50",
+      "bytes": 3645
+    },
+    {
+      "key": "src/flow/lib/spec-gate-result-selection.js",
+      "digest": "9e0ac1b283b3fe266db06b3a01f4599dba5b0256a643fa77cadef25ac2b2b303",
+      "bytes": 1082
+    },
+    {
+      "key": "src/flow/lib/spec-gate-targets.js",
+      "digest": "d12907a83f5e27c362477487768ebe32fe274929a17f7a65e5d6fa2b38c64b7d",
+      "bytes": 7375
+    },
+    {
+      "key": "src/flow/lib/spec-repair-operations.js",
+      "digest": "ed067ded3b2e2bedfb17ee432be952f0b8303d6d3965c36941cc1027b18e3e98",
+      "bytes": 65414
+    },
+    {
+      "key": "src/flow/lib/spec-review-artifacts.js",
+      "digest": "e031aa75a5e97694b112c037c3bad8a237bde44adac9a70c3da4bef333fdd6b7",
+      "bytes": 26235
+    },
+    {
+      "key": "src/flow/lib/spec-review-operations-values.js",
+      "digest": "bc90a133ca6a3871b57c20ee1c34dff3579209f8667d577d0fd93a304b86da6e",
+      "bytes": 3205
+    },
+    {
+      "key": "src/flow/lib/spec-review-operations.js",
+      "digest": "98255160b337ca98fb5e30123d211d3552e5ac894aaa3ea989c3ebb7ac9e608e",
+      "bytes": 12491
+    },
+    {
+      "key": "src/flow/lib/spec-review-worker-facts.js",
+      "digest": "43f78847189714b424fc2ab6e20050c96a5a1287049ceabeb675f63775aa660d",
+      "bytes": 2638
+    },
+    {
+      "key": "src/flow/lib/spec-revision-identity.js",
+      "digest": "503fb1648e5bb009797d1fe3ed014fb6bb1f8e8d00eeced8247341ef18bb7fa5",
+      "bytes": 2357
+    },
+    {
+      "key": "src/flow/lib/spec-step-connection.js",
+      "digest": "f4397cd8c5880e74ccc6fa9315e798d8381d2867821325493a0603640b74dff2",
+      "bytes": 888
+    },
+    {
+      "key": "src/flow/lib/spec-test-bootstrap-validator.js",
+      "digest": "5e048f5c2ef0d46f5fdaeeb4a40080b7dd6a8904a62bbb7eadd5cf5122b4f653",
+      "bytes": 11137
+    },
+    {
+      "key": "src/flow/lib/spec-test-coverage.js",
+      "digest": "45c64de08d6fc00c6393e43859a8d98afffff001175f483c16b2a1b5d09fe78c",
+      "bytes": 1238
+    },
+    {
+      "key": "src/flow/lib/spec-worker-completion-facts.js",
+      "digest": "930132a5c602cc9782180c845fedf23a47981777e73fce28ecf17f459f18c0c2",
+      "bytes": 449
+    },
+    {
+      "key": "src/flow/lib/spec-worker-result-selection.js",
+      "digest": "e78de9861af86ce5950a6b5a132ec3142ac585573a63ad7f331339f3a56e006b",
+      "bytes": 1655
+    },
+    {
+      "key": "src/flow/lib/stale-test-evidence-refresh.js",
+      "digest": "499f13d1a8500189e4be8e019cfe638eb52b2488c94d3d410f8352536261bce9",
+      "bytes": 2542
+    },
+    {
+      "key": "src/flow/lib/step-admission-refusal.js",
+      "digest": "82cbfbce64066f46795cd4ab677b8feea0491553012f7c2662d5f18eb0d46369",
+      "bytes": 615
+    },
+    {
+      "key": "src/flow/lib/step-outcome.js",
+      "digest": "dad1c0ddf47ecf1f8f5dd53eb4ced926e88f9864eb8074e7d260e06c5b338812",
+      "bytes": 15130
+    },
+    {
+      "key": "src/flow/lib/step-persistence-failure.js",
+      "digest": "efcb9d674f2406300e7dca311df31898ce27811182c02b3ad063c633532d1f2a",
+      "bytes": 3065
+    },
+    {
+      "key": "src/flow/lib/step-transition-policy.js",
+      "digest": "0617cce8d58ab80ca8c38d803aa2aa5669f0461dd89959e537e4b16b9ae53646",
+      "bytes": 10950
+    },
+    {
+      "key": "src/flow/lib/step-tree.js",
+      "digest": "f9105026f4c6e37c6ed6ee25c2b46c567f3f1a795cdb2a72f9539f23d45b0b83",
+      "bytes": 2667
+    },
+    {
+      "key": "src/flow/lib/sync-spec-tasks.js",
+      "digest": "f5d6f2f576dd62dcbac89f6aa9b6cbe3d9334a0df86041bb9381a99aefd16d91",
+      "bytes": 2665
+    },
+    {
+      "key": "src/flow/lib/task-canonical-context.js",
+      "digest": "a710f2ac6e35ff1202ede81e2151e88b9d1321e7a98e4436d5d5dd23460cab53",
+      "bytes": 10209
+    },
+    {
+      "key": "src/flow/lib/task-context-kinds.js",
+      "digest": "026b50f9c80d80df7bc8a2b356f7aff178e1d5ba147bb4bb34006e70e4fd188a",
+      "bytes": 863
+    },
+    {
+      "key": "src/flow/lib/task-execution-overrun.js",
+      "digest": "0bc024e580847528d483f7e31f6346a264ebb942e36c852e8e771c601d361df9",
+      "bytes": 11054
+    },
+    {
+      "key": "src/flow/lib/task-execution-policy.js",
+      "digest": "721a3fb861047670f47596ae2af93db5e3b59fed7346ec75540b17352b276f3c",
+      "bytes": 8854
+    },
+    {
+      "key": "src/flow/lib/task-gate-classification-recovery.js",
+      "digest": "74b61daf182f446f2d7377e98ecf2c292c7d7b41840417a38de37d22577abceb",
+      "bytes": 1700
+    },
+    {
+      "key": "src/flow/lib/task-mutation-lineage.js",
+      "digest": "77714af67238f4a362cfe69185d26a117fdc8710cfe51d83ddeffa7b132c3913",
+      "bytes": 14020
+    },
+    {
+      "key": "src/flow/lib/task-review-aborted-work-unit.js",
+      "digest": "4d850f18db05e5428238771d5e585804aea1da68abac20051e0ebc5384746d49",
+      "bytes": 20000
+    },
+    {
+      "key": "src/flow/lib/task-review-accounting.js",
+      "digest": "284d82b7c9b6f823b5bd6b9137d86021427b50d0ce692f7644b824a018f77a15",
+      "bytes": 10954
+    },
+    {
+      "key": "src/flow/lib/task-review-execution-identity.js",
+      "digest": "166a10151131c404ae81fa0049d8664a408ece973f5046fa7ce766345842650d",
+      "bytes": 2802
+    },
+    {
+      "key": "src/flow/lib/task-review-host-filter-values.js",
+      "digest": "ce728c12ad6b9ca168ddd91b473bdc8af23f91e5b413e21fd05a54cb86a82c14",
+      "bytes": 7548
+    },
+    {
+      "key": "src/flow/lib/task-review-host-filter.js",
+      "digest": "29fc429e1916086aaf0021629fec0c1b4485719a3ee38b7bad792365dcbc0f1d",
+      "bytes": 1892
+    },
+    {
+      "key": "src/flow/lib/task-review-operations.js",
+      "digest": "f470def0434e194c539fecba5de278bce066fc5042d8144b319e0b74627efd11",
+      "bytes": 2936
+    },
+    {
+      "key": "src/flow/lib/task-review-prompt-plan.js",
+      "digest": "7b678275eaf73247678538d69813b335ed1347729a37f43e262ad7f1a9ca6971",
+      "bytes": 13373
+    },
+    {
+      "key": "src/flow/lib/task-review-reconciliation-record.js",
+      "digest": "2bb985711cb8822777eb6628901a513d88d0eec2bdd95f7ea92278ceb69b9660",
+      "bytes": 7567
+    },
+    {
+      "key": "src/flow/lib/task-review-reconciliation.js",
+      "digest": "b966cf0876e3245977e56655620e4b9005f1a1c4ca511490743c59026c22bcd8",
+      "bytes": 11453
+    },
+    {
+      "key": "src/flow/lib/task-review-recovery-checkpoint.js",
+      "digest": "98f62ef8127c7f29024bd12c4b4efa5e10bcd96161f5de715cfde93d84b05880",
+      "bytes": 16482
+    },
+    {
+      "key": "src/flow/lib/task-review-stage-artifacts.js",
+      "digest": "6d41d1d044eab11b20775239e6941baabbe15904fd377b80a642a33710fe0bc6",
+      "bytes": 20833
+    },
+    {
+      "key": "src/flow/lib/task-review-stage-binding.js",
+      "digest": "9be2d736c8168181b2d402894999c0245b25bf56bbc46d47a8804a31107ac763",
+      "bytes": 3379
+    },
+    {
+      "key": "src/flow/lib/task-review-stage-transition.js",
+      "digest": "e92fc2862fd5e2ba958cbabf7fc2b8f227f5b7fa623e30b47424e7889ea72a05",
+      "bytes": 31680
+    },
+    {
+      "key": "src/flow/lib/task-scope.js",
+      "digest": "d715ef4c72d5726150f25c387127fa15ed300f3436dfaaea41f4734f4310644d",
+      "bytes": 6803
+    },
+    {
+      "key": "src/flow/lib/task-source-failure.js",
+      "digest": "ff1de5c45baa9de4c1b7113aacfa92a2118d36a3e3355890b508ee775a7337b2",
+      "bytes": 2312
+    },
+    {
+      "key": "src/flow/lib/task-source-presentation.js",
+      "digest": "5919f080a359830f88b1803cf3751a4cea56ce75b90736b20b037027e5847f25",
+      "bytes": 1958
+    },
+    {
+      "key": "src/flow/lib/task-stage-result-values.js",
+      "digest": "d09691a34f8e35a42f47bb682ac088e9db3abdef81bf15d9d07557d504a06666",
+      "bytes": 1688
+    },
+    {
+      "key": "src/flow/lib/task-step-identity.js",
+      "digest": "d77f6f08a4ab9dbc3c789d318c11c0455c9a19c837520780765c08d540ef5823",
+      "bytes": 3496
+    },
+    {
+      "key": "src/flow/lib/test-artifact-paths.js",
+      "digest": "9bc747f4a3fb45e61621a01e750e3cd71dac9135086b16a05396b49de2308da9",
+      "bytes": 275
+    },
+    {
+      "key": "src/flow/lib/test-artifacts.js",
+      "digest": "8db027ed65fdb4552c5f1e2f67ba137f1557bda195f5c8f05542b2d4c2fb7514",
+      "bytes": 54736
+    },
+    {
+      "key": "src/flow/lib/test-chain-observation-values.js",
+      "digest": "fd886de8101410c64b8f299078b979a237aa3004fd38419eb63c3f80347c8e77",
+      "bytes": 7407
+    },
+    {
+      "key": "src/flow/lib/test-chain-transition-facts.js",
+      "digest": "318feadb23ab7db5a5b9f4adbe37e16556a6db7175e7a787a1321de8dfdff790",
+      "bytes": 37126
+    },
+    {
+      "key": "src/flow/lib/test-chain-values.js",
+      "digest": "d2f6d9492a081a33608fbbd8dfceddca86819755cd107ba355d607d35a2e17c3",
+      "bytes": 10158
+    },
+    {
+      "key": "src/flow/lib/test-headers.js",
+      "digest": "eae1d649f7f57087a9da695087fe19c0e0a276b03edf7c452e0cb83b0ac4638b",
+      "bytes": 19030
+    },
+    {
+      "key": "src/flow/lib/test-regression.js",
+      "digest": "3433d7a348f4fa668073e99a43f57da3584733467a66755f5356653e46a08540",
+      "bytes": 38875
+    },
+    {
+      "key": "src/flow/lib/test-review-prompt-plan.js",
+      "digest": "282a99b7fdcdb6e5b9ba2a37738c46829f5accae99d2af996b58831d9da78560",
+      "bytes": 9371
+    },
+    {
+      "key": "src/flow/lib/test-review-repair-values.js",
+      "digest": "610008eac2d93c26852eaab36cbbe5a6b9cb1e7e01e731a143c781c49e7d5e68",
+      "bytes": 6126
+    },
+    {
+      "key": "src/flow/lib/test-review-repair.js",
+      "digest": "0c82db01f9f4b3fbc52053c4273bcc6bddc0b0a7fb9abe98d08a59df9ac76c2b",
+      "bytes": 48263
+    },
+    {
+      "key": "src/flow/lib/text-order.js",
+      "digest": "01d9f9c46c2567aca6977f991ec08917f12a623f2a4b50e4a05259d0ab964711",
+      "bytes": 192
+    },
+    {
+      "key": "src/flow/lib/unexecuted-step-completion.js",
+      "digest": "59bcbdb689f710bd61a70802bad452c1352003e2c7897eec9703cd4e9c61255e",
+      "bytes": 5623
+    },
+    {
+      "key": "src/flow/lib/upgrade-evidence-paths.js",
+      "digest": "65eda365fb5b73e97e1e0a6bedee0958ad69125218166bfbe05a2775e1f7a65d",
+      "bytes": 58
+    },
+    {
+      "key": "src/flow/lib/upgrade-result-artifact.js",
+      "digest": "16006d4413eac23d250dd1c0c47c157396e9a9737a0ccc4f8619f7711967edfc",
+      "bytes": 3617
+    },
+    {
+      "key": "src/flow/lib/user-action-prompt.js",
+      "digest": "6ccc45bb982a588085660a881172c0196cfaa686961a38f83091087fe2fc6201",
+      "bytes": 7994
+    },
+    {
+      "key": "src/flow/lib/work-unit.js",
+      "digest": "e5a56e0c9f48f5d182fc9d7632d2c2781c0b8bd031ca1fab8400b6bb91651ce5",
+      "bytes": 17579
+    },
+    {
+      "key": "src/flow/lib/worker-artifact-handoff-error.js",
+      "digest": "19ab7eb1704385057c06a7d3d882aaeec03dda77a3a169932e4bdfe1407a0d24",
+      "bytes": 1971
+    },
+    {
+      "key": "src/flow/lib/worker-artifact-handoff.js",
+      "digest": "f2fb006f2e8c40c288999c75bdcfc5b4e5a69fb88d352cc3f59314cc34fe306e",
+      "bytes": 595258
+    },
+    {
+      "key": "src/flow/lib/worker-artifact-input-format.js",
+      "digest": "d52f9e563c26847d011049a51b834d12352874c2d905cceffdd47b8c80344535",
+      "bytes": 1621
+    },
+    {
+      "key": "src/flow/lib/worker-artifact-revision.js",
+      "digest": "851ab7d7159503f64e5006723bfce1366e14e45edf78a82f7f825c0b4eec7c5d",
+      "bytes": 1882
+    },
+    {
+      "key": "src/flow/lib/worker-context-snapshot.js",
+      "digest": "815782b7e21ebee063bcf9f6af137229806bddc9cad94dc24bf27dce2c530053",
+      "bytes": 15264
+    },
+    {
+      "key": "src/flow/lib/worker-execution-admission.js",
+      "digest": "9012dd7dbd4c367641ec6c8ff0f0b720a3658441f7fdefe5346e03c30e123f64",
+      "bytes": 16369
+    },
+    {
+      "key": "src/flow/lib/worker-step-execution-contract.js",
+      "digest": "fba976af0c81ac474b265cf7303e1d0145a1e766cd2a094e22abad14698863e8",
+      "bytes": 534
+    },
+    {
+      "key": "src/flow/prompts/impl/acceptance-decision.md",
+      "digest": "0c1c6322a5017ac48fc856d4b21582f394e182a3f7d324dab10b56c985ec1cca",
+      "bytes": 364
+    },
+    {
+      "key": "src/flow/prompts/impl/acceptance-review.md",
+      "digest": "a72061c71d12551a35beb224357d6c0361fe6ff52ed6d17f28905f7906708367",
+      "bytes": 2261
+    },
+    {
+      "key": "src/flow/prompts/impl/final-regression.md",
+      "digest": "dbad9b4928479b6365e4422ab4eb75cf82cf795dc6bf4f34395f0364ef8490f3",
+      "bytes": 3348
+    },
+    {
+      "key": "src/flow/prompts/impl/finalize-cleanup.md",
+      "digest": "c0a75903bf8b0e2c1ea96352cc90169e6d5c783b6a302f7872b3da86d55a4f0c",
+      "bytes": 4085
+    },
+    {
+      "key": "src/flow/prompts/impl/finalize-commit.md",
+      "digest": "1201c6f6f5bcdc43bc88d5a8f6b2a9999ea8f8c62cb6a396455ae357ccd3f544",
+      "bytes": 1101
+    },
+    {
+      "key": "src/flow/prompts/impl/finalize-merge.md",
+      "digest": "ccdba7c55e7e6dd59df59306e598d904716f7c5e42c805386516450c4feba966",
+      "bytes": 992
+    },
+    {
+      "key": "src/flow/prompts/impl/finalize-sync.md",
+      "digest": "101ccd621db4965c7aee919b699a1641620a033ed43920cb4da9b76b2d215b74",
+      "bytes": 483
+    },
+    {
+      "key": "src/flow/prompts/impl/impl-gate.md",
+      "digest": "2abc020eb168eb966152d58b06f7941f10ca357a2d036ae1ea3abf20f31b2d57",
+      "bytes": 3536
+    },
+    {
+      "key": "src/flow/prompts/impl/impl-repair.md",
+      "digest": "62fe2b3c453dd6cafaec6689e319280f41be8ab8638f77d7b3d181133b5875e8",
+      "bytes": 1550
+    },
+    {
+      "key": "src/flow/prompts/impl/impl-review.md",
+      "digest": "23dc9c69958540b19e4dccae99e45b1e8f276f8fa61ed307f453697d4365de3a",
+      "bytes": 4133
+    },
+    {
+      "key": "src/flow/prompts/impl/impl-triage.md",
+      "digest": "0435c4971a68264270b7236ef520095bb51e74da96b26aa019f88f8999b391de",
+      "bytes": 1014
+    },
+    {
+      "key": "src/flow/prompts/impl/implement.md",
+      "digest": "f018b310203b1b13770724f1bd8c6a4c1933e6989fab153f437cb4b0a24a70c4",
+      "bytes": 5317
+    },
+    {
+      "key": "src/flow/prompts/impl/report.md",
+      "digest": "5fc65f6d30e8d893eb5ae86121331f5ac281c083716ab73ca3f8afd988da1037",
+      "bytes": 436
+    },
+    {
+      "key": "src/flow/prompts/impl/retro.md",
+      "digest": "5cbf42251900906aaf852d280cb78b1d6eb07531ff8b9cb11a04d4a2eabdcf28",
+      "bytes": 1924
+    },
+    {
+      "key": "src/flow/prompts/impl/test-execute.md",
+      "digest": "b2b0a4cb60c15430b976421d313df22ed51628e9a845c830d0d5f8313a414d0d",
+      "bytes": 5121
+    },
+    {
+      "key": "src/flow/prompts/impl/test-result-review.md",
+      "digest": "ff737bb4cc9c716ffc6fb3fa14324713df51b2a5b322eb25a40c20ac9448a34f",
+      "bytes": 3622
+    },
+    {
+      "key": "src/flow/prompts/partials/draft-qa-rules.md",
+      "digest": "a0e758e766f35fb518654b1aa15379edec91c2a8c026f117acbee1b32fc53eb3",
+      "bytes": 6536
+    },
+    {
+      "key": "src/flow/prompts/partials/spec-writing.md",
+      "digest": "902b58b1606eb7327ddcff990e222c1cf7ae7d37f5ff3e5ffeb8f27a7d0bfe22",
+      "bytes": 1407
+    },
+    {
+      "key": "src/flow/prompts/partials/worker-artifact-handoff.md",
+      "digest": "9ffd693ede3929603880654f9309068d70d14153b0a7e3d6efa2cd794d101ced",
+      "bytes": 2112
+    },
+    {
+      "key": "src/flow/prompts/plan/approval.md",
+      "digest": "443b91bc4773b8058239844224f2f556650419df45c5eb73f0bf102eeecb2b78",
+      "bytes": 953
+    },
+    {
+      "key": "src/flow/prompts/plan/draft-coverage-repair.md",
+      "digest": "26a8482a6846a3349579752930f3e80603db563fc031a750ca3f78b730f77b3f",
+      "bytes": 3116
+    },
+    {
+      "key": "src/flow/prompts/plan/draft-coverage-review.md",
+      "digest": "413c049ad00167aa6f4e8a93445358372bf545b31b5ec5262836c14e4d8621b4",
+      "bytes": 2446
+    },
+    {
+      "key": "src/flow/prompts/plan/draft-coverage-triage.md",
+      "digest": "444e9a7ac8d55e6ffc59977f62ad9f3a1b7375d2dd5b241f88aae681d02fcfde",
+      "bytes": 2623
+    },
+    {
+      "key": "src/flow/prompts/plan/draft-gate-repair.md",
+      "digest": "8c03be3eae423ec272009b84328d87b85f2f81ad4bc849f92d3da02097c202f1",
+      "bytes": 2103
+    },
+    {
+      "key": "src/flow/prompts/plan/draft-gate.md",
+      "digest": "ec3d914130d6bb6113e1821c1f014827d072975dda47d0af6b7aec1594372f44",
+      "bytes": 1399
+    },
+    {
+      "key": "src/flow/prompts/plan/draft-questions-repair.md",
+      "digest": "4d632e424e1d127ac9c700f3cd1b4bc2281b6d45838f716f5dfba26328d96ba6",
+      "bytes": 3611
+    },
+    {
+      "key": "src/flow/prompts/plan/draft-questions-review.md",
+      "digest": "9e7a99e58de618fb9b78e4b41124fe01c22a408c2ef5dd5f08f6efccc0ae0e8c",
+      "bytes": 2400
+    },
+    {
+      "key": "src/flow/prompts/plan/draft-questions-triage.md",
+      "digest": "da0b0ef86eb29d04505481f4175a54d3d4f3a989017dd2b250db52b28a1c9111",
+      "bytes": 2650
+    },
+    {
+      "key": "src/flow/prompts/plan/draft-refine.md",
+      "digest": "d5205896cf16c0ad2ddf3e4dc4ecec2b5a8dee443c4f6841c7ba332b81fc8e74",
+      "bytes": 2943
+    },
+    {
+      "key": "src/flow/prompts/plan/draft.md",
+      "digest": "cf79096ecf134b1728440ab7b4b3514e331001fc2e3b88cb72e824a33aa26ec6",
+      "bytes": 5597
+    },
+    {
+      "key": "src/flow/prompts/plan/spec-gate-repair.md",
+      "digest": "97c033e05669c9e60aa1ca5a43ee24cdea5bc0fba41b74e11def24f2334e239f",
+      "bytes": 5273
+    },
+    {
+      "key": "src/flow/prompts/plan/spec-gate.md",
+      "digest": "cf14400b7d8eae711e3742d4af59e35d2b6276f3cc8359b97615c6d80ac992e5",
+      "bytes": 1907
+    },
+    {
+      "key": "src/flow/prompts/plan/spec-repair.md",
+      "digest": "412a65ccc444d768d50c2c319467a6f20235d9e2aa5c54f37871614aacfa44e4",
+      "bytes": 3366
+    },
+    {
+      "key": "src/flow/prompts/plan/spec-review.md",
+      "digest": "9affbdc698318d130aaea36f99d839410735efb56e291d358fd67c12a041bf47",
+      "bytes": 2147
+    },
+    {
+      "key": "src/flow/prompts/plan/spec-triage.md",
+      "digest": "3da210f68bf3ecae5d914d072e29cd6b43cdd6c9e41498c2c84e63b3ec83e111",
+      "bytes": 1922
+    },
+    {
+      "key": "src/flow/prompts/plan/spec.md",
+      "digest": "60d344d167cfcea5bb00854545ce4625042d5fc05f89518f558a64d83f9d2d28",
+      "bytes": 9851
+    },
+    {
+      "key": "src/flow/prompts/plan/test-gate.md",
+      "digest": "bd8d8d94866a3b5aef041ee62c62a84e6e2f8b96b8a5b76957bf193239460749",
+      "bytes": 791
+    },
+    {
+      "key": "src/flow/prompts/plan/test-repair.md",
+      "digest": "7dec2bfdfdfcc915c7891cfe9cba440da996928cc25a6e21696ac5f351cbd871",
+      "bytes": 1087
+    },
+    {
+      "key": "src/flow/prompts/plan/test-review.md",
+      "digest": "a0860ea9d464cbd605c6e078cbcf2a9722f6ad36b6fe7af8d6f8dfa7b930c013",
+      "bytes": 1313
+    },
+    {
+      "key": "src/flow/prompts/plan/test.md",
+      "digest": "b4834cab97d02f7d2bac197ce684dbf5aa41fb439284fac4896864292ed77828",
+      "bytes": 1517
+    },
+    {
+      "key": "src/flow/prompts/task/task-impl.md",
+      "digest": "4c602fca78936fef57bb0a749fb7be465372b2dfc71fa7d9a7cc3126e4320e19",
+      "bytes": 1401
+    },
+    {
+      "key": "src/flow/prompts/task/task-repair.md",
+      "digest": "2732d28b929db71593f5146d4f8257f80837a875c8535358e6fbfc1fd3e4b596",
+      "bytes": 1806
+    },
+    {
+      "key": "src/flow/prompts/task/task-review-filter.md",
+      "digest": "dc136418ae561240f3e2a790c997a8dd02ad137c0fa46b7fd4d1adb489b86c8f",
+      "bytes": 863
+    },
+    {
+      "key": "src/flow/prompts/task/task-review.md",
+      "digest": "de0f922bb2928abece7c6c22803225edda54e1549f8efc9cd9a2cebea0b244ab",
+      "bytes": 3678
+    },
+    {
+      "key": "src/flow/query-artifact-capture.js",
+      "digest": "e1251aed90af56a2b994dae86511325770f862c3fee303cefbf3a760911c6318",
+      "bytes": 1600
+    },
+    {
+      "key": "src/flow/query-contract.js",
+      "digest": "1181b5ae83b84e675de7187c39c0cf009c8ac56aff0261321119a80d37f25fe2",
+      "bytes": 26258
+    },
+    {
+      "key": "src/flow/query-details.js",
+      "digest": "b4e8fed015faa529d6187ad4ebf343a11c3cd962daea1d7cf5db47f34e12dfd2",
+      "bytes": 79258
+    },
+    {
+      "key": "src/flow/query-executions.js",
+      "digest": "65185f5b58cab3895e3aa0a5a7418aa28ed96f8b4652222f2b7337244e8127a5",
+      "bytes": 55043
+    },
+    {
+      "key": "src/flow/query-gate-details.js",
+      "digest": "a5432f0b840da5cd32e2c81b38d32d38451e8eed370146b7aa5e36adae8b702e",
+      "bytes": 6461
+    },
+    {
+      "key": "src/flow/query-repair-change.js",
+      "digest": "8b3cdd165e9c5d36b03ff8bbd9db9fef95d49c7ba4b9daa36ac311218ba9e2dd",
+      "bytes": 1524
+    },
+    {
+      "key": "src/flow/query-spec-gate-repair-details.js",
+      "digest": "18a80edad74ab897c7c4e70cf87b8ad10c3daca2bc7b49fc1c7b3d00ac4be2d2",
+      "bytes": 15920
+    },
+    {
+      "key": "src/flow/query-values.js",
+      "digest": "f22b3af3f4464ad5e8f9c04184c006e90de81a1d4c0013e17f559f38e9621371",
+      "bytes": 13722
+    },
+    {
+      "key": "src/flow/query.js",
+      "digest": "62b6f3509f192c234dd7f1a844d7beb9903539b9c0b2125e588dabf27aeeeca3",
+      "bytes": 88846
+    },
+    {
+      "key": "src/flow/registry.js",
+      "digest": "7687d0649506ce72d0772e7442a25bc682e8e0573100c80f43e1a5e89f0f0e8e",
+      "bytes": 143384
+    },
+    {
+      "key": "src/flow/schemas/acceptance-review.schema.json",
+      "digest": "b4bc95bc0919e015c9cfa4caab96fc6335833f3340c0bdaa37c87e36da4c52a1",
+      "bytes": 3662
+    },
+    {
+      "key": "src/flow/schemas/next-action/acceptance-review.schema.json",
+      "digest": "2ffef6e6dbac38f7d5d6139b1edbdf60c717039f7b3502b142eea5eb4874a977",
+      "bytes": 571
+    },
+    {
+      "key": "src/flow/schemas/next-action/approval.schema.json",
+      "digest": "4bc2d00e45bf65e99b0b1220bb0421b20abdae90da1dc1dba5b2c2aa070416dc",
+      "bytes": 147
+    },
+    {
+      "key": "src/flow/schemas/next-action/final-regression.schema.json",
+      "digest": "0749fd4ded9c7b643aa3e206ee45c8ff6247f31a2c9abe360f07d2b47b8ecf2b",
+      "bytes": 2016
+    },
+    {
+      "key": "src/flow/schemas/next-action/finalize.schema.json",
+      "digest": "45bbf9e07e995c92081b01dc0d2281c870d5d3f3440778a4ffd119dfa9788ed6",
+      "bytes": 190
+    },
+    {
+      "key": "src/flow/schemas/next-action/gate.schema.json",
+      "digest": "3f2a843b9e7655408d7589685bb31b415a572bef1e36a3c8527a3da47604e942",
+      "bytes": 1276
+    },
+    {
+      "key": "src/flow/schemas/next-action/report.schema.json",
+      "digest": "9934c5d811604e0659c5c829243965fc4ce2cbcaa3e6ff844b45ff2cc378d1ed",
+      "bytes": 481
+    },
+    {
+      "key": "src/flow/schemas/next-action/requirement-test-gate.schema.json",
+      "digest": "4ea8aa5c93bd828d07e4a374c38b9a57d5ebd5078fe3024b5013275a658d58a7",
+      "bytes": 596
+    },
+    {
+      "key": "src/flow/schemas/next-action/retro.schema.json",
+      "digest": "e5c405682fe9bc8a1ef09a705d6e1378887f63855348eab3e461aef60ba845dd",
+      "bytes": 154
+    },
+    {
+      "key": "src/flow/schemas/next-action/review.schema.json",
+      "digest": "778cb914d0adf0436cd8c4cf0971a572537f68d4b17d9337330809c84b7a1709",
+      "bytes": 203
+    },
+    {
+      "key": "src/flow/schemas/next-action/scenario-validity.schema.json",
+      "digest": "561a63d83f71adf6bc735a5e7057712f1b20c590d59d187197846e46f671d964",
+      "bytes": 388
+    },
+    {
+      "key": "src/flow/schemas/next-action/source-worker-effect-impl-repair.schema.json",
+      "digest": "70f5f9660f8929e01a7c1f1a63237e924d4384b83fc4e090bdda34224476779b",
+      "bytes": 2186
+    },
+    {
+      "key": "src/flow/schemas/next-action/source-worker-effect-impl-triage.schema.json",
+      "digest": "e01c8adfb1e4f6f5728de9c180e67e95d559723df2ccb13f333503e24340d91d",
+      "bytes": 1520
+    },
+    {
+      "key": "src/flow/schemas/next-action/source-worker-effect-implement.schema.json",
+      "digest": "3ea941fd9e67c9f93d0387c5e6d976f997a0001eec44118db5d7c695a1f1bac5",
+      "bytes": 883
+    },
+    {
+      "key": "src/flow/schemas/next-action/source-worker-effect-task-impl.schema.json",
+      "digest": "44bfb6c55bcfe4bd310f233b2ff5313e5a4d2a1916c16bb2275ac0815d6cafe6",
+      "bytes": 2496
+    },
+    {
+      "key": "src/flow/schemas/next-action/source-worker-effect-task-repair.schema.json",
+      "digest": "12767471bb477fce378b737fe78669c6febbb8c4f28a88ca75c64a4cfd057fd9",
+      "bytes": 2404
+    },
+    {
+      "key": "src/flow/schemas/next-action/spec.schema.json",
+      "digest": "d3748c286756879afb5273fb80974c38afbd027cd13f955f722a5023df1c58fb",
+      "bytes": 154
+    },
+    {
+      "key": "src/flow/schemas/next-action/test-execute.schema.json",
+      "digest": "0ca323b8d6eab905bedbc27521c09f8f5763d6952498bd117bc23282bb7c7eaf",
+      "bytes": 406
+    },
+    {
+      "key": "src/flow/schemas/next-action/test-result-review.schema.json",
+      "digest": "9809e7d77c2a3111a023adbec5f2be3382205ee537de9d1130a982a16a68ef86",
+      "bytes": 191
+    },
+    {
+      "key": "src/flow/schemas/next-action/update-overview.schema.json",
+      "digest": "a7503b3e29abb56d0767e8342b96619ad40c2ebc83b54b22c66d7d0454d6acec",
+      "bytes": 648
+    },
+    {
+      "key": "src/flow/schemas/next-action/worker-artifact-handoff.schema.json",
+      "digest": "f8a6b3266f6fbd838edb894eb5dc0b5c96f4068e7ca2ccee01f3de12ecd7580d",
+      "bytes": 662
+    },
+    {
+      "key": "src/flow/schemas/query-response.schema.json",
+      "digest": "14a03d30d4b0230f036946d632ef5fee3e506ee0c1c32b56d30f4bb4da7072ec",
+      "bytes": 730754
+    },
+    {
+      "key": "src/flow/schemas/retro.schema.json",
+      "digest": "4fe8efc0666c8e457920059709ba0c991e0bfc2db1d6e9078de8d9ccc034cac4",
+      "bytes": 1001
+    },
+    {
+      "key": "src/flow/schemas/scenario-validity-result.schema.json",
+      "digest": "be86f93fd816180aa91f3bb5ad26114641d190581cc8dbb3fd03cfd8185d27ef",
+      "bytes": 2194
+    },
+    {
+      "key": "src/flow/schemas/spec.schema.json",
+      "digest": "3680d010f254845369f9be980a883d4ea826797fefe9ce65fb841b9a81e14ee9",
+      "bytes": 6421
+    },
+    {
+      "key": "src/flow/schemas/test-execute-result.schema.json",
+      "digest": "b8a866b473e6dd39adda4c04c22aab927aff1bb55620c8cb14d8a81f747b54e7",
+      "bytes": 6750
+    },
+    {
+      "key": "src/flow/schemas/test-result-review.schema.json",
+      "digest": "17db1d16d1794b90b3868ef21ef0333a6ca25a2ea64ffa4bf92d953fd0f77564",
+      "bytes": 1596
+    },
+    {
+      "key": "src/flow/services/acceptance-decision-input.js",
+      "digest": "851e9fb082319869419cf7d8f218521a512347177abf15fad646935e88e50c7d",
+      "bytes": 548
+    },
+    {
+      "key": "src/flow/services/acceptance-decision-service.js",
+      "digest": "182aa4fe080c27a4ec264076bd5124e1a814900e5d11b86092ee4408519a78b3",
+      "bytes": 1139
+    },
+    {
+      "key": "src/flow/services/acceptance-review-input.js",
+      "digest": "d562983e38b1bcdd56efdd16e67097a0cf36e4462240390aaf9be175efdb956f",
+      "bytes": 925
+    },
+    {
+      "key": "src/flow/services/acceptance-review-service.js",
+      "digest": "fc0d3b6c76e7e0191a5dadb75a9befb54d0d466abc5839453b28a1ee944b065f",
+      "bytes": 1129
+    },
+    {
+      "key": "src/flow/services/acceptance-settlement-writer.js",
+      "digest": "d9b9f37c9e99e45b04e5bc569f8ababbc856926e0b6e802e1d7ff6016a3cbdb9",
+      "bytes": 1229
+    },
+    {
+      "key": "src/flow/services/approval-input.js",
+      "digest": "37da0d44d4696edb6ccd51a020856a326b8938da6288b97dbcef4e8f7bf85a97",
+      "bytes": 1367
+    },
+    {
+      "key": "src/flow/services/approval-service.js",
+      "digest": "366501d6f999332327049c9030fe05f3ad1353b1cd2d50dd6c36f2bf880e77d4",
+      "bytes": 1247
+    },
+    {
+      "key": "src/flow/services/approval-settlement-writer.js",
+      "digest": "279190b05386abc169f78e622eb83a13acbb36f1760c2862b4ae9ff0611559e0",
+      "bytes": 1251
+    },
+    {
+      "key": "src/flow/services/artifact-worker-recovery-input.js",
+      "digest": "4113b8cd13499240cc86f9502153a5c7c31bd40db00d4eeaecf48dde32273aec",
+      "bytes": 374
+    },
+    {
+      "key": "src/flow/services/artifact-worker-recovery-service.js",
+      "digest": "8bb3b59cba0852a602c617bc5cb547ec3d8e37129e29520aa500b34eb8577f05",
+      "bytes": 1253
+    },
+    {
+      "key": "src/flow/services/artifact-worker-recovery-settlement-writer.js",
+      "digest": "8ad56cc1d4542e887219c88f18ae96d05c6b9d72cbebf3aec46530f79d33d11a",
+      "bytes": 1790
+    },
+    {
+      "key": "src/flow/services/draft-gate-input.js",
+      "digest": "b74902916a76698ca046bae64e298a87239b73f8edd202f1f449ec258a7a00f5",
+      "bytes": 695
+    },
+    {
+      "key": "src/flow/services/draft-gate-settlement-writer.js",
+      "digest": "cc13e0f6cfc5ad758bbb26dc5d3b8d77fd1689a3bfa0cae634030f26a191169d",
+      "bytes": 742
+    },
+    {
+      "key": "src/flow/services/draft-review-input.js",
+      "digest": "b557cc481d51706a2b5f943e8da3d9b7b0374841e9f2b5cfea525b72d75847fe",
+      "bytes": 1405
+    },
+    {
+      "key": "src/flow/services/draft-review-settlement-writer.js",
+      "digest": "eed2b39ab7be49addf1663393d9761124dfbb7ee0c16c4a60eac1fd168639297",
+      "bytes": 1656
+    },
+    {
+      "key": "src/flow/services/draft-service.js",
+      "digest": "7c77dc8fd4679d18201b91c762febd49e868c3c060236963a574b44a9ca29c2d",
+      "bytes": 5550
+    },
+    {
+      "key": "src/flow/services/draft-settlement-writer.js",
+      "digest": "75a13a41979d19d5cc2e8d5b0b3eeff095cc3e589f173a45c8c44f00a9e8774b",
+      "bytes": 2853
+    },
+    {
+      "key": "src/flow/services/draft-worker-input.js",
+      "digest": "81646baf43d844c690efcd39591aa74416955341c9288921e55b3f6ffb212de6",
+      "bytes": 2002
+    },
+    {
+      "key": "src/flow/services/final-regression-input.js",
+      "digest": "46fe50704ee4aab73217588201e5ec02325ccb72e4e3d024b114545f123f2579",
+      "bytes": 407
+    },
+    {
+      "key": "src/flow/services/final-regression-service.js",
+      "digest": "374f10ed3b8d401079ef61556399719c0726dcaba7c9359d192794f83b837272",
+      "bytes": 1158
+    },
+    {
+      "key": "src/flow/services/finalization-settlement-writer.js",
+      "digest": "210e431fce71fe38dd4c1de6800b7bcab3587c4c7619c49a33d7f9b91f50c3be",
+      "bytes": 1193
+    },
+    {
+      "key": "src/flow/services/finalization-step-service.js",
+      "digest": "77f7dd0c6dc6d7b30159125cb5fd84d86f31085cf80f9ce3b541af13f64e0bb9",
+      "bytes": 1122
+    },
+    {
+      "key": "src/flow/services/finalize-cleanup-input.js",
+      "digest": "2fe59b1c4fae7cd55c506eccaab6bb6a1d7531769cbfac16baaf801987c95452",
+      "bytes": 572
+    },
+    {
+      "key": "src/flow/services/finalize-cleanup-service.js",
+      "digest": "9e4d187dd9651692e4cf582b5f8e48d7a14fca7e8ef53aa9aa0dc045e7c20b6b",
+      "bytes": 709
+    },
+    {
+      "key": "src/flow/services/finalize-commit-input.js",
+      "digest": "5ff16b3d0536c03132dd9f12cc29c15f2d7a0b638e6ef038d68d7daef1b67986",
+      "bytes": 567
+    },
+    {
+      "key": "src/flow/services/finalize-commit-service.js",
+      "digest": "dd01a44fdbc4716733bf07a18735e9fff4d36153de595848112e2d3820feea8c",
+      "bytes": 703
+    },
+    {
+      "key": "src/flow/services/finalize-merge-input.js",
+      "digest": "c3ad829a5e568cea64aef48355f04a9fff66c424d94edad55cb9cc1fc5b13d35",
+      "bytes": 562
+    },
+    {
+      "key": "src/flow/services/finalize-merge-service.js",
+      "digest": "66eea5b09039464ffdb85054a3d172915929a738045f301e3e71bfbd5e3e69a5",
+      "bytes": 697
+    },
+    {
+      "key": "src/flow/services/finalize-sync-input.js",
+      "digest": "e68630966e2d620cb1da283af65ddceeaf2a8dda16eee9c4b7301616047fcf46",
+      "bytes": 557
+    },
+    {
+      "key": "src/flow/services/finalize-sync-service.js",
+      "digest": "55d14fbf5a65e8b50f31375fb16bf9e42c98193a46177ae66d610f1f7bf0bef1",
+      "bytes": 691
+    },
+    {
+      "key": "src/flow/services/impl-gate-input.js",
+      "digest": "9c1c32771de9d5aec00cdc762493d2aaaa17027854d2cd0e6be29b1232ef9d52",
+      "bytes": 420
+    },
+    {
+      "key": "src/flow/services/impl-gate-service.js",
+      "digest": "a70ff1c2b9d4d5bc0a988d1c1a0b4a1775cf4dadaabeb4fbf4bf8ae23bb0aa3d",
+      "bytes": 1220
+    },
+    {
+      "key": "src/flow/services/impl-review-gate-settlement-writer.js",
+      "digest": "7db1e9b3ed772839d59d70983ef7bcc052d77d34faf0103c4f594439234789c8",
+      "bytes": 1702
+    },
+    {
+      "key": "src/flow/services/impl-review-input.js",
+      "digest": "fcb65d5a14aa03d72dea9012480c79d56bddedfd54210e2bdd9044f03886f646",
+      "bytes": 988
+    },
+    {
+      "key": "src/flow/services/impl-review-service.js",
+      "digest": "5f86cb83fd09c02faeb4bf72579404f4049407ccbfc12e153ed57ff5d07f702b",
+      "bytes": 1115
+    },
+    {
+      "key": "src/flow/services/plan-preparation-input.js",
+      "digest": "a8cc0e172b75adb0f3950e0dd0e9a20cfadf3f9eb4b37585d193c21e13379cf2",
+      "bytes": 499
+    },
+    {
+      "key": "src/flow/services/plan-preparation-service.js",
+      "digest": "03c6605381fc94b0ce7b2b009f46a66f8be23395fb0107eda082a41a462417b5",
+      "bytes": 1392
+    },
+    {
+      "key": "src/flow/services/plan-preparation-settlement-writer.js",
+      "digest": "5f8e220dd92eb7646fc29f696eb9b14b2364aa784b73c35adfeb16370973cbb4",
+      "bytes": 756
+    },
+    {
+      "key": "src/flow/services/report-input.js",
+      "digest": "fe4b4e9aa18b281eda5f9398a80f7a50b1f0b976f9b44cc7ade8e7781824781e",
+      "bytes": 352
+    },
+    {
+      "key": "src/flow/services/report-service.js",
+      "digest": "c53a0883cfe4c22ac4dcb569aac3a13ab154e8bcceab57cda083d3784b090637",
+      "bytes": 1094
+    },
+    {
+      "key": "src/flow/services/requirement-test-failure-settlement.js",
+      "digest": "8b7c9b11a039d1f7ecaeb93ea07fcc8649b976767b238ad0c0a4a531c53de4ac",
+      "bytes": 8275
+    },
+    {
+      "key": "src/flow/services/requirement-test-input.js",
+      "digest": "30aaf692f176977775813a497ed9a5b77d1921ab3f0b81765a2ba92cfa4843fb",
+      "bytes": 3438
+    },
+    {
+      "key": "src/flow/services/requirement-test-service.js",
+      "digest": "8563f03576f87c02e6a73f9979ef6df1b04d9a059c8f0d1c4224376d88197d3e",
+      "bytes": 2441
+    },
+    {
+      "key": "src/flow/services/requirement-test-settlement-writer.js",
+      "digest": "8f01750b79efe17272f247bd90bf7022bef7fd0b6b4456702fb1359e29a0330b",
+      "bytes": 3770
+    },
+    {
+      "key": "src/flow/services/retro-input.js",
+      "digest": "ab6d11d46be4410f433fe2bb762d2fadaaf01a3b94310cc32be798c6055923ed",
+      "bytes": 331
+    },
+    {
+      "key": "src/flow/services/retro-service.js",
+      "digest": "94c05afdf9e91ce25f5fe8bd3735e73bfd1b3df9f03c76edc53706791fd362ef",
+      "bytes": 856
+    },
+    {
+      "key": "src/flow/services/review-service.js",
+      "digest": "924c8239dbc3cc7c4b724ee7a463dc591ec5044d9b3d2ebd41011149ebb87ce8",
+      "bytes": 3427
+    },
+    {
+      "key": "src/flow/services/source-step-input.js",
+      "digest": "57e5217f801d875af7ac7cdee4a04102ca871e0247ba7171ff8354d77f706c1b",
+      "bytes": 357
+    },
+    {
+      "key": "src/flow/services/source-step-service.js",
+      "digest": "6ed533ea3e7d5cc9b130f2da3f9b0d280ff8590b7a183e46a9bc04dfa1c94017",
+      "bytes": 1955
+    },
+    {
+      "key": "src/flow/services/source-step-settlement-writer.js",
+      "digest": "60b2787852c26b0bb1b3d9abe6434d5ea710b78079c92d818fdd1d7931d6804e",
+      "bytes": 2701
+    },
+    {
+      "key": "src/flow/services/spec-gate-input.js",
+      "digest": "92a8d40502145d5775042340c9a66b6e36a21f74a8442f0e1f1742885f9a8472",
+      "bytes": 429
+    },
+    {
+      "key": "src/flow/services/spec-gate-repair-service.js",
+      "digest": "b18d0d7e6fa159f9c124f73744b1b43a5d2215f365acec4d3fbc8f8475aaeb4b",
+      "bytes": 7044
+    },
+    {
+      "key": "src/flow/services/spec-gate-repair-settlement-writer.js",
+      "digest": "7a880116a04bcaac6955ab9362cc783ae103709ef1be0ae648c1a59bf44d2fc0",
+      "bytes": 2763
+    },
+    {
+      "key": "src/flow/services/spec-gate-service.js",
+      "digest": "b785918678ecad34f7817bfa3ca12dbdaa31e3e9dad0dfba7b4c88b188923406",
+      "bytes": 1839
+    },
+    {
+      "key": "src/flow/services/spec-gate-settlement-writer.js",
+      "digest": "f8bd4aebe729ef0bef2b81241d5fc0a4422040d3e11a03aa39967f91b31915b4",
+      "bytes": 1182
+    },
+    {
+      "key": "src/flow/services/spec-review-input.js",
+      "digest": "84451130c59cce2395bf10b4aa36ddd42a01848560fed491528b8bf8b65f5b53",
+      "bytes": 1035
+    },
+    {
+      "key": "src/flow/services/spec-review-service.js",
+      "digest": "20443aa42eb98db0d156920b46e0aaa9a5f6ce46688bb5fad43f464ad5cd8a62",
+      "bytes": 1425
+    },
+    {
+      "key": "src/flow/services/spec-review-settlement-writer.js",
+      "digest": "081514788fc1e53e34c1b0a2ac9e1752a71b434a66ce382872a9e587d9f73566",
+      "bytes": 1122
+    },
+    {
+      "key": "src/flow/services/spec-service.js",
+      "digest": "d96c4115d248c62caff8c6c84bfde63e319ebdda6a05656060a3095690ad5935",
+      "bytes": 2345
+    },
+    {
+      "key": "src/flow/services/spec-settlement-writer.js",
+      "digest": "ad5981881ae363137004c7ba0e6b6ce829706c20e6604aed0ad4bce9f3f4b87c",
+      "bytes": 4429
+    },
+    {
+      "key": "src/flow/services/spec-worker-input.js",
+      "digest": "05914b577b0718f43affc267d6ce352d423b8d449595369f1a67ad2fc3b012dd",
+      "bytes": 640
+    },
+    {
+      "key": "src/flow/services/spec-worker-review-service.js",
+      "digest": "23f09594a2e39d3a1779bc6b9f9a07371279b089aa33a8b85c96a01cc0fc9940",
+      "bytes": 2260
+    },
+    {
+      "key": "src/flow/services/task-gate-input.js",
+      "digest": "b4456e51732c9f3bc89e35cb30f5e71876cc75046596fc38eb96b45d005c2297",
+      "bytes": 505
+    },
+    {
+      "key": "src/flow/services/task-gate-service.js",
+      "digest": "3ce50a2f2c7ec7be6b4e66a6bb21dd851ceabf2cf0780d365f81de98d37a7da8",
+      "bytes": 1339
+    },
+    {
+      "key": "src/flow/services/task-gate-settlement-writer.js",
+      "digest": "6e3684862cca513afb136472563deb6506e8fb9de8bef4088344a49dfd8f783a",
+      "bytes": 1381
+    },
+    {
+      "key": "src/flow/services/task-host-filter-input.js",
+      "digest": "5e9a89a733e9026b6402953c6604b8be32b6c49bc211abfaa7b12585d83d23f3",
+      "bytes": 1701
+    },
+    {
+      "key": "src/flow/services/task-host-filter-service.js",
+      "digest": "0c2c4a796d933a895844c8655ce5c45cad0c2a7a935dbbb18efadf25afdbd145",
+      "bytes": 1351
+    },
+    {
+      "key": "src/flow/services/task-host-filter-settlement-writer.js",
+      "digest": "ea15b882ec1094de5934440931c401235daa0cb5342119b2851f68f7440bb979",
+      "bytes": 783
+    },
+    {
+      "key": "src/flow/services/task-review-input.js",
+      "digest": "1c767a0997e2f441477bfc04f28c672ff7aae5afe216896234f18b00e0d43353",
+      "bytes": 1885
+    },
+    {
+      "key": "src/flow/services/task-review-service.js",
+      "digest": "937878fbf3f3b5499cc2ab0282015024683923079bc7e56e1b3bb8bdcf1ab84e",
+      "bytes": 1339
+    },
+    {
+      "key": "src/flow/services/task-review-settlement-writer.js",
+      "digest": "abbd03cea99091e9fad1317624f42819d6813a15aa0226675a3b8fac6e989d6d",
+      "bytes": 1373
+    },
+    {
+      "key": "src/flow/services/test-chain-input.js",
+      "digest": "072e1a21da0da0a0d49acbd567f79861b8e50c118254968082ba3b03917475bc",
+      "bytes": 362
+    },
+    {
+      "key": "src/flow/services/test-chain-service.js",
+      "digest": "a071cc11552424a7c5125721a0b1f7d72d46f80ad302c9bce42084613fb22137",
+      "bytes": 1610
+    },
+    {
+      "key": "src/flow/services/test-chain-settlement-writer.js",
+      "digest": "c09e8918916796f6e9eee367536e3c82337d61f805b29864244d1af1646c1147",
+      "bytes": 840
+    },
+    {
+      "key": "src/flow/steps/acceptance/acceptance-decision.js",
+      "digest": "84c549e748878e3c0a857b983356b4abb1de12d03f6285d062e313c17f09b62a",
+      "bytes": 1558
+    },
+    {
+      "key": "src/flow/steps/acceptance/acceptance-review-values.js",
+      "digest": "beb0fbdaad5211e292da05c6baabfd716a1bb859501feb022af3915641f43c86",
+      "bytes": 9794
+    },
+    {
+      "key": "src/flow/steps/acceptance/acceptance-review.js",
+      "digest": "227135a75adfdf8dabd1fc27de71273bee24ef0d491a2ccc3d02174e47836e68",
+      "bytes": 2255
+    },
+    {
+      "key": "src/flow/steps/acceptance/final-regression-result-evidence.js",
+      "digest": "c2ca8511e191b791feacf44e05ff452af392961e62630ba7eab3ebe00b02b294",
+      "bytes": 4876
+    },
+    {
+      "key": "src/flow/steps/acceptance/final-regression.js",
+      "digest": "0c641f0aa8706a61173cd47e8e7b1a998baef8fcbba59426edf84ad34b1a7ab7",
+      "bytes": 1784
+    },
+    {
+      "key": "src/flow/steps/acceptance/report-values.js",
+      "digest": "04f60792bb1ec87bd82f16b76888727beff477d260036f184c43e1311e0d70e8",
+      "bytes": 2479
+    },
+    {
+      "key": "src/flow/steps/acceptance/report.js",
+      "digest": "23c3f1f30c03209f617ebf9d91a12e87c7ccd9506ace4e5defb32c636a097f9e",
+      "bytes": 966
+    },
+    {
+      "key": "src/flow/steps/acceptance/retro.js",
+      "digest": "8db86b072ff13313a2a539a58e47644f9be366e6499c808c81a3a995f7714c87",
+      "bytes": 836
+    },
+    {
+      "key": "src/flow/steps/draft/draft-coverage-repair.js",
+      "digest": "86d0220c4aaf8271fa43aefe03d0cbe8e2797f9ef11211d78acf8a5a1b6a428f",
+      "bytes": 1208
+    },
+    {
+      "key": "src/flow/steps/draft/draft-coverage-review.js",
+      "digest": "5ef3e2e636af5dd1c0ab18c22299c607a5d712cf9d517412943fb92123928b3a",
+      "bytes": 1231
+    },
+    {
+      "key": "src/flow/steps/draft/draft-coverage-triage.js",
+      "digest": "ffe3d88c1ebfd9acd1a51757581c552d96cdb134fe555ab57004166383bb2b12",
+      "bytes": 1261
+    },
+    {
+      "key": "src/flow/steps/draft/draft-gate-repair-selection.js",
+      "digest": "d31455d1ed0230545faf4d65939f35220bbf194222af336b7c89635592966a43",
+      "bytes": 3063
+    },
+    {
+      "key": "src/flow/steps/draft/draft-gate-repair.js",
+      "digest": "83993879bbe438d8d424005f8310f04822248902f01de8bf137c2ae014e7f69a",
+      "bytes": 1816
+    },
+    {
+      "key": "src/flow/steps/draft/draft-gate.js",
+      "digest": "2b6fd2fb59e7dd3e7ef495cd472985a8204240908cda2b783f22cc58845ee8ff",
+      "bytes": 2173
+    },
+    {
+      "key": "src/flow/steps/draft/draft-questions-repair.js",
+      "digest": "fb34faa5a75cd8f8c8a3c9170b974245edaed0c2634c6443615bd8d8bf4b2f07",
+      "bytes": 1211
+    },
+    {
+      "key": "src/flow/steps/draft/draft-questions-review.js",
+      "digest": "ec74d1661a206fac4ad376e4b99cb0df768297b276bc70edbe8af7513ac4cb09",
+      "bytes": 1242
+    },
+    {
+      "key": "src/flow/steps/draft/draft-questions-triage.js",
+      "digest": "a2c8af1b4ecefe9c1fdde571422dfbab190c30767d8920e13eb4ef14ad6d7363",
+      "bytes": 1268
+    },
+    {
+      "key": "src/flow/steps/draft/draft-refine.js",
+      "digest": "4f57d00af1d7fba9db7e096e7a144c03fa2bda15b81d45423c85f23a994ea4df",
+      "bytes": 2170
+    },
+    {
+      "key": "src/flow/steps/draft/draft-repair-candidate.js",
+      "digest": "c7db3b0caa637924f23c1e74315cece1dd0a054ef9529af6df684c1f106efe41",
+      "bytes": 3826
+    },
+    {
+      "key": "src/flow/steps/draft/draft-repair-result.js",
+      "digest": "2e92e0130e3f655c10d5f1634a3964e0f10c4f7640cce8a669d8c3e5f61b8885",
+      "bytes": 2720
+    },
+    {
+      "key": "src/flow/steps/draft/draft-review-result.js",
+      "digest": "d29655feb516029e36bacd17f01775ec3e99d27d87118682a024817a6d49b347",
+      "bytes": 1363
+    },
+    {
+      "key": "src/flow/steps/draft/draft.js",
+      "digest": "31fe5cf6bc7a6ef31cdac871fc35ad8101540f7beed1d6b590416af5b3783133",
+      "bytes": 1085
+    },
+    {
+      "key": "src/flow/steps/execution/artifact-worker-recovery.js",
+      "digest": "dcb8c642dde3e2d6fa8f46f6257f178758071618e110bcfbd9eed5d9e4b214bf",
+      "bytes": 890
+    },
+    {
+      "key": "src/flow/steps/finalize/finalization-result-factory.js",
+      "digest": "7dfbe37bd819735c250d1b440a7e2b31cc196cefa59dc38a7b0bc4e832e3d0b9",
+      "bytes": 4164
+    },
+    {
+      "key": "src/flow/steps/finalize/finalization-values.js",
+      "digest": "d4b75d5af6b4247a7d9f0f9bb5aac555938b096fb2ffaa5e8be5d8beb975efde",
+      "bytes": 4132
+    },
+    {
+      "key": "src/flow/steps/finalize/finalize-cleanup.js",
+      "digest": "274a5092431d438fcbb4374dc41ede131df67b6b188f413e49b4f91d0af277d8",
+      "bytes": 1141
+    },
+    {
+      "key": "src/flow/steps/finalize/finalize-commit.js",
+      "digest": "37cf4883cbc5ee7406aba5f48250197dca7e0d45d4189734f2ab5f46122c38dc",
+      "bytes": 1129
+    },
+    {
+      "key": "src/flow/steps/finalize/finalize-merge.js",
+      "digest": "499baee4bccca9d1d7da4215389cedf508eb37035acdca7a63ed8b72db6133e3",
+      "bytes": 1117
+    },
+    {
+      "key": "src/flow/steps/finalize/finalize-sync.js",
+      "digest": "e95feca8552d35edd85bf2a4ee671e1a6e3f3e9aa3e050f7f8a469c5398cda94",
+      "bytes": 1105
+    },
+    {
+      "key": "src/flow/steps/impl/impl-gate.js",
+      "digest": "1b9c47ce20cc524ad8aae3bbbd1e754b62113f95fde2c3eb7bc7745d853458d3",
+      "bytes": 1677
+    },
+    {
+      "key": "src/flow/steps/impl/impl-repair.js",
+      "digest": "bdefa36abcfa75ea1386dafee64b2312b7cab950dcd829380b44e77ba4001ed6",
+      "bytes": 1592
+    },
+    {
+      "key": "src/flow/steps/impl/impl-review.js",
+      "digest": "e859ff01de85e073e6a3771b01507446910df8e3c439a3e2d5688469d65c0062",
+      "bytes": 2838
+    },
+    {
+      "key": "src/flow/steps/impl/impl-triage.js",
+      "digest": "4f533a57487a9c76b9766e290ed2c30dee1a2f7cd8c437d2fb62bec4735b198b",
+      "bytes": 1614
+    },
+    {
+      "key": "src/flow/steps/impl/implement.js",
+      "digest": "0c2fb5e19abab1cc88c8c9c1557af057a5dd8a38835d17efc25fc3d85e3426c3",
+      "bytes": 1677
+    },
+    {
+      "key": "src/flow/steps/impl/test-execute.js",
+      "digest": "c6ee146278f6bed2163d302322598dffd252374ef5c269e50c9f3865e6e5ee9d",
+      "bytes": 1406
+    },
+    {
+      "key": "src/flow/steps/impl/test-result-review.js",
+      "digest": "f7d92671ed6ccc3b9a13bdd7f3d059de5e808439d1d6092a4453fd2ad8bd5ea7",
+      "bytes": 1833
+    },
+    {
+      "key": "src/flow/steps/prepare/branch.js",
+      "digest": "eac76c4cb1b1ea7d9cc3a359d42332fb181b423b4ccef176cae8df7cfe59e584",
+      "bytes": 855
+    },
+    {
+      "key": "src/flow/steps/prepare/prepare-spec.js",
+      "digest": "a8611f8be5dd6f6d84ce55bdcb95b88d16e2f8a0b49d41d45a319fcd0a92d7a7",
+      "bytes": 702
+    },
+    {
+      "key": "src/flow/steps/spec/spec-gate-repair.js",
+      "digest": "0e802047d767f0bb4abebbf2a4bb4e428d9cec599f0044153553d5e1096e0623",
+      "bytes": 5104
+    },
+    {
+      "key": "src/flow/steps/spec/spec-gate-result.js",
+      "digest": "e9a8d5e427173dd3cf8f320f8d9a56bfa5a55929701925ff25da6102ac83569e",
+      "bytes": 3140
+    },
+    {
+      "key": "src/flow/steps/spec/spec-gate.js",
+      "digest": "5bceeb5e3b66afcf32b17d2b0afef415af67f906b2f46a80e968d56b74568711",
+      "bytes": 1008
+    },
+    {
+      "key": "src/flow/steps/spec/spec-repair.js",
+      "digest": "f247c1e0cfe92b3e41c92ac1fca89ab95eac1f0afb149784115293ebdc161323",
+      "bytes": 2766
+    },
+    {
+      "key": "src/flow/steps/spec/spec-result.js",
+      "digest": "d1651cc159bc374157b56e1b223d72ee93a9870cb686eceb45ff5fc4a06b69d3",
+      "bytes": 521
+    },
+    {
+      "key": "src/flow/steps/spec/spec-review-result.js",
+      "digest": "36b241d2518664d170c9cbbd0b5df2f31dbaef542feb31c5519645dc19b0745d",
+      "bytes": 1764
+    },
+    {
+      "key": "src/flow/steps/spec/spec-review.js",
+      "digest": "7a1a5e8f91b54038c90174da4ff2bb2d3f22350bcba92d5782c61537a6d0fdff",
+      "bytes": 1006
+    },
+    {
+      "key": "src/flow/steps/spec/spec-triage.js",
+      "digest": "7f43b5d351797317af44151e1c4ae6f333e92f79eb76554d1bc879b1fd7194a8",
+      "bytes": 2183
+    },
+    {
+      "key": "src/flow/steps/spec/spec.js",
+      "digest": "b2cd391c4adc50e030f839d550bab9b7e0197a4015f1928ae2f4d8c4a2d2c43e",
+      "bytes": 898
+    },
+    {
+      "key": "src/flow/steps/task/task-gate.js",
+      "digest": "22549bf9713e0de147dcd7dad8e2635b0969de4c9e5e3c238e38f08fa4af0909",
+      "bytes": 1871
+    },
+    {
+      "key": "src/flow/steps/task/task-impl.js",
+      "digest": "2cea3f4dcf7483c194034b921009fb2d26c2355125ea0f39409821fc0315a94f",
+      "bytes": 1861
+    },
+    {
+      "key": "src/flow/steps/task/task-repair.js",
+      "digest": "3ec8bfa463da7f1fd4c6683ec51105661d4829ccbb0b6d468d7f2e3a4a4efa63",
+      "bytes": 1620
+    },
+    {
+      "key": "src/flow/steps/task/task-review.js",
+      "digest": "73fc35c1c7a259d5c8594a0592a00d97de06685856efc4c41f685e62cb156862",
+      "bytes": 2414
+    },
+    {
+      "key": "src/flow/steps/task/task-triage.js",
+      "digest": "cb19dfcdf960edea2c951e320c6cd612a34a08a9dd53f88459a1693fc86aae93",
+      "bytes": 2313
+    },
+    {
+      "key": "src/flow/steps/test/approval.js",
+      "digest": "443cea4f8e40fd1d4c6aea7046e904c2c57e0e4ceaaf4235f8456484fff04647",
+      "bytes": 1192
+    },
+    {
+      "key": "src/flow/steps/test/requirement-test-result.js",
+      "digest": "dd38439b8648dd8577cc13146abbc667da8e78904049f289ed12920df6c35c99",
+      "bytes": 885
+    },
+    {
+      "key": "src/flow/steps/test/test-gate.js",
+      "digest": "b487265081cda42d9a4d9720f9c21208033903df4ff6954ff4246ca78db4ba88",
+      "bytes": 1875
+    },
+    {
+      "key": "src/flow/steps/test/test-generate.js",
+      "digest": "aa045ea74a7ea9bb1581996897464214fe4afcc3c1561d7ac8a3fa86146dc852",
+      "bytes": 1629
+    },
+    {
+      "key": "src/flow/steps/test/test-repair.js",
+      "digest": "e19f71379cb81cb821cc538664663ada7b85037f34bdaa2b6ae652b2506d36d4",
+      "bytes": 1844
+    },
+    {
+      "key": "src/flow/steps/test/test-review.js",
+      "digest": "56a6f67e2b6cd592bd803c11c9de97da65f0548b2976f21168abdecc4c4544f0",
+      "bytes": 2077
+    },
+    {
+      "key": "src/help.js",
+      "digest": "0ab10e22dd5ea0f345a172238b8a4c2f16fbf25598a7df35c51377df56fbb6a5",
+      "bytes": 16817
+    },
+    {
+      "key": "src/hook.js",
+      "digest": "81b0736c41a76ee16f7840f1734c2c560b084a99156b5e735f319ae0101387b4",
+      "bytes": 395
+    },
+    {
+      "key": "src/hook/commands/list.js",
+      "digest": "01fdbd6ba37c897745d1f60c1a1e14853f2c064f4f4dcf3f18042f7d62d48cd4",
+      "bytes": 937
+    },
+    {
+      "key": "src/lib/NOTICE",
+      "digest": "b88532025dd51354d3cee34ee9f5b3219c1e9df7344b9ebec4225354c697885e",
+      "bytes": 399
+    },
+    {
+      "key": "src/lib/active-flow-registry.js",
+      "digest": "baa646fb904a80a4623e25b9d75ba01b2923e0d15f499db2437dea2d2a7e1000",
+      "bytes": 14989
+    },
+    {
+      "key": "src/lib/agent-config-files.js",
+      "digest": "77f46b4172e9875d7b4d07c5a3f33b73eb5e079e9d4b16325e5a6ecd518a0147",
+      "bytes": 1883
+    },
+    {
+      "key": "src/lib/agent-defaults.js",
+      "digest": "f40e06116733560c78d91511606c5227fa143516b6797998b50abaee97e1163f",
+      "bytes": 9216
+    },
+    {
+      "key": "src/lib/agent-execution-observation.js",
+      "digest": "423a617b45b5b7859aa639eeb7e1f4c9f4cad873b02d2d9f5d7d783ef6f89718",
+      "bytes": 5869
+    },
+    {
+      "key": "src/lib/agent-failure.js",
+      "digest": "6fe34063672c3c9163994376872076ada174fee4b6e6a0e76b27065431b4b7b2",
+      "bytes": 26961
+    },
+    {
+      "key": "src/lib/agent-file-input-failure.js",
+      "digest": "da3584f412fee3a55db48142fa0a4142340641513ea03236899f062f6980c394",
+      "bytes": 488
+    },
+    {
+      "key": "src/lib/agent-file-reference.js",
+      "digest": "9b710bd90f1c22c4a5563d1820b94f03dee5d47958fef8f9f415feefb66ff3c9",
+      "bytes": 5859
+    },
+    {
+      "key": "src/lib/agent-invocation-metric.js",
+      "digest": "6759b67593cc95d0528be8b025d2f06759894354b29a0b715c7a7ccee491abc8",
+      "bytes": 8203
+    },
+    {
+      "key": "src/lib/agent-metrics.js",
+      "digest": "b4558ddda29aa2969c1bc85ef1875fbae1160308d37b86a5886c22e03c51dca2",
+      "bytes": 220
+    },
+    {
+      "key": "src/lib/agent-provider-attempt.js",
+      "digest": "833665ad9b87345abb61be4f0da0945bf845b4d4a747d109b033cbbc8059a08d",
+      "bytes": 3789
+    },
+    {
+      "key": "src/lib/agent-response-protocol.js",
+      "digest": "8a955b342628f71e8533e58361e4377795e7f2cadb2916ea6eac15a1c8ad459e",
+      "bytes": 12960
+    },
+    {
+      "key": "src/lib/agent-timeout.js",
+      "digest": "47a1abf81f9b7e6a019341494a68010ce66acb05bdfc706428b52b88be69f953",
+      "bytes": 1324
+    },
+    {
+      "key": "src/lib/agent-transport-failure-observation.js",
+      "digest": "a859d395159606a95abfc22ebcb9100f4d891c57413d413abb4c7743e58aab3a",
+      "bytes": 4097
+    },
+    {
+      "key": "src/lib/agent.js",
+      "digest": "84d0fd85b231dd649664ad057e7e808a85301d7231af86ffea507e9be3df6f50",
+      "bytes": 67644
+    },
+    {
+      "key": "src/lib/agents-md.js",
+      "digest": "fdaf967ecec32dbb008059fb2215f909ae1577ad6c8f00c25369e162e3c54ece",
+      "bytes": 1572
+    },
+    {
+      "key": "src/lib/artifact-authority.js",
+      "digest": "38496284a80d94a908539ead793c7af47ea8c7fd2dc30b86522fc4a33b1db1ed",
+      "bytes": 3259
+    },
+    {
+      "key": "src/lib/atomic-file.js",
+      "digest": "d709096c08ae99b50e649512e2aacdb0bc919e575c73c12987d04be723815623",
+      "bytes": 16740
+    },
+    {
+      "key": "src/lib/atomic-json-file.js",
+      "digest": "12abf90246f9d646ca0319eed0e80e0103b9ce879b71689e0d4dbd1619d327a6",
+      "bytes": 932
+    },
+    {
+      "key": "src/lib/bootstrap-process.js",
+      "digest": "f8d4820a9a1c7d1942899e2991805a9b4b9aa746337e01854d20cd28da2e480b",
+      "bytes": 1726
+    },
+    {
+      "key": "src/lib/bounded-stream-evidence.js",
+      "digest": "5052033b0b03060e0c2f9e71f48da65a179af91f35f1fec927587599f229f3e8",
+      "bytes": 6847
+    },
+    {
+      "key": "src/lib/canonical-real-path.js",
+      "digest": "d7280d67c3d67901602fdcd0c6ec8a7c19dfa916d5d13a65e898457dbc68f674",
+      "bytes": 453
+    },
+    {
+      "key": "src/lib/canonical-task-requirement-map.js",
+      "digest": "f113e75f8ac1a7f19bd0ad73f0fbf3bb2b0af0f4f94329d5c3d8f497b0b0a6e6",
+      "bytes": 2892
+    },
+    {
+      "key": "src/lib/cli-invocation-policy.js",
+      "digest": "a8f8096e7b9df30cc297b0c075362a211ef1dcd47a9cd22643ab8f064d2d4cd8",
+      "bytes": 1953
+    },
+    {
+      "key": "src/lib/cli.js",
+      "digest": "4a69b06b7247ffc3d3b38dc4b94640ceb4a738cc99c179b622d927db24e66c9d",
+      "bytes": 6124
+    },
+    {
+      "key": "src/lib/command-entrypoint.js",
+      "digest": "cea661ae47c05f3ea8604010501e9e7d01fbb417fe6d443a6df0365f811e753e",
+      "bytes": 1409
+    },
+    {
+      "key": "src/lib/command-invocation.js",
+      "digest": "479d0365717eab1b96fe03211cf4a21b8e1a786cff45e9b86816ad5d2222f372",
+      "bytes": 8750
+    },
+    {
+      "key": "src/lib/command-registry.js",
+      "digest": "95ce8347c4033d67dbfcbcf158d235d0e89b91ae9a2eb22bf23b1d9369ea3980",
+      "bytes": 24535
+    },
+    {
+      "key": "src/lib/command.js",
+      "digest": "a3a2d2f0e5f60407758d3d5089fd261bbd8f5efcee0de61953ecdd3eda00de82",
+      "bytes": 2319
+    },
+    {
+      "key": "src/lib/config.js",
+      "digest": "c3e79fb520a994a8d839bb5103bd2ac204ab468c6bb742aeb36adf7409c6fd5f",
+      "bytes": 24690
+    },
+    {
+      "key": "src/lib/constants.js",
+      "digest": "46e4e8d879d1befe0843ececd23371f96265c6ab8d310b4b2fa89c00c33d70ac",
+      "bytes": 4032
+    },
+    {
+      "key": "src/lib/container.js",
+      "digest": "0cbb684f183abfb14b92c32ade88ebca23c4d356614ab81a224e0248d7c836a0",
+      "bytes": 10849
+    },
+    {
+      "key": "src/lib/direct-child-executor.js",
+      "digest": "92fe201caa3a7a45379401f17619ce87e8f32fc921189e3202ff8e5645b86b33",
+      "bytes": 24388
+    },
+    {
+      "key": "src/lib/dispatcher.js",
+      "digest": "fbecac4f2b90ffea631569532f4e1da6f16d5cc9d8cc0996b2ffd89688b24947",
+      "bytes": 44913
+    },
+    {
+      "key": "src/lib/error-preview.js",
+      "digest": "f5b185418617763efca12d6d01ceb834fb5383955f7094a55c3a1f824a48fab6",
+      "bytes": 281
+    },
+    {
+      "key": "src/lib/esm-module.js",
+      "digest": "0dfd3d455b1a9e199f1dc331a57c92eafc4669f1d783711d9dfdf07c19908d49",
+      "bytes": 1891
+    },
+    {
+      "key": "src/lib/executable-resolution.js",
+      "digest": "0049d58178de2b08e6fb16b66c56202f517fe5c2838afb730b24ce0e8ae1c176",
+      "bytes": 4844
+    },
+    {
+      "key": "src/lib/execution-coordinator.js",
+      "digest": "903f4bb58dc116510c51198d17c759634ebcb98b632f54f83e9a011caea7d1e2",
+      "bytes": 9853
+    },
+    {
+      "key": "src/lib/execution-plan.js",
+      "digest": "ea7c04ffcd3a28d2038afb700e3bd5dc90ea333576bb4ba75fadb56eb46f48be",
+      "bytes": 2097
+    },
+    {
+      "key": "src/lib/exponential-backoff.js",
+      "digest": "acafa65d9b634462c1c00ae6e7254ec00e69f31f17e3f8af4f7a7cfb455b00b4",
+      "bytes": 1359
+    },
+    {
+      "key": "src/lib/file-descriptor.js",
+      "digest": "f9e08f3505e414f20fb78505bcc06f8f1f6f7444a03d7e9c950f7e1c5170fa01",
+      "bytes": 771
+    },
+    {
+      "key": "src/lib/file-identity.js",
+      "digest": "1b66fd8c4e7dfa5e66dc81c08ab69322fa0a7bbe97ad047428da3097b5316a14",
+      "bytes": 1263
+    },
+    {
+      "key": "src/lib/file-lock.js",
+      "digest": "f7fa11015cd580da0bb13a7af6b6cf84dda917431e395126e4dbcac402288a49",
+      "bytes": 7484
+    },
+    {
+      "key": "src/lib/file-tree-image.js",
+      "digest": "a270a406eab234bcee45cf8e47c5b2e2fb9ef9de5b1b3433c148ff9b3c10ee3a",
+      "bytes": 5465
+    },
+    {
+      "key": "src/lib/file-tree-walker.js",
+      "digest": "39dc46bc9fae57cf2dd05833deccfef1d37187539e593c00e4ea9052a95b754f",
+      "bytes": 4103
+    },
+    {
+      "key": "src/lib/finalize-cleanup-paths.js",
+      "digest": "4b282b5eeb90631c6b6363662605ae090c39219a150c39a6df1d3ea06dcaa47c",
+      "bytes": 1078
+    },
+    {
+      "key": "src/lib/flow-artifact-contract.js",
+      "digest": "fa18646ab1bd8cfd3622e78f8eb6492851cb34e663ec517918e5e2828f0f7cde",
+      "bytes": 160726
+    },
+    {
+      "key": "src/lib/flow-attribution.js",
+      "digest": "5f458b85bb1fa308bfd6acbe1b5a3f512d201759182e13e3ec9b4b0bad7b23ca",
+      "bytes": 526
+    },
+    {
+      "key": "src/lib/flow-cli-failure.js",
+      "digest": "ee11a0f5936365a81ecdf736c7cda46fd292516dd39334e57004f6d9af3e3436",
+      "bytes": 815
+    },
+    {
+      "key": "src/lib/flow-envelope.js",
+      "digest": "417c19506f68853ed6ec99a0ef5f07c98d506850c43db11a3bb3174acec582da",
+      "bytes": 5237
+    },
+    {
+      "key": "src/lib/flow-execution-observation.js",
+      "digest": "c1ff03bb068536e6eaacf368b3d8b36af609d7ec00b41215097082975e36379b",
+      "bytes": 13538
+    },
+    {
+      "key": "src/lib/flow-format-error.js",
+      "digest": "378d120ccbd3269ab83c541c95ed64f20eafc7d05c264e9c062c4591c7ad4e25",
+      "bytes": 3821
+    },
+    {
+      "key": "src/lib/flow-handoff-authority-lease.js",
+      "digest": "58ab1edcb2ca10fffa179abc2d7998230f59e374857848ca4e0205455095c224",
+      "bytes": 2993
+    },
+    {
+      "key": "src/lib/flow-helpers.js",
+      "digest": "b2f258d92692ad2e1360f2ab6daec7da572f47e0364886c42e7d4d6be958e952",
+      "bytes": 9383
+    },
+    {
+      "key": "src/lib/flow-identity-value.js",
+      "digest": "611267d27f9b751dc48d35323338690c719fa18c20d6f07dfe266880e1ccb662",
+      "bytes": 663
+    },
+    {
+      "key": "src/lib/flow-manager.js",
+      "digest": "b858592c96f3e1c46235103bb97afd3b08f2966009212f62fb9e5e5a0b2e073b",
+      "bytes": 66064
+    },
+    {
+      "key": "src/lib/flow-options.js",
+      "digest": "f2a6743e9893dfe66d3b137291b68aa48034fa25526d0b0468fe2abf0ed97d64",
+      "bytes": 1355
+    },
+    {
+      "key": "src/lib/flow-recovery-target.js",
+      "digest": "ec9c087bee83de3b094cab62701a895b8c69f4e894f49f3d7709bdf8095d1ba8",
+      "bytes": 6196
+    },
+    {
+      "key": "src/lib/flow-run-id.js",
+      "digest": "719ba22c38e3c0357194f2ce1029d616099b60aaae3df67886d62ba652b9280f",
+      "bytes": 247
+    },
+    {
+      "key": "src/lib/flow-schema-migration.js",
+      "digest": "29a4b6575deac1a6bf5f0b2728f7f06b0570d284b050bf01f31c2d8b5dc61c5f",
+      "bytes": 858
+    },
+    {
+      "key": "src/lib/flow-schema-revision.js",
+      "digest": "329781e0e0b813a3749f9cf7a0fc63d0061cb0a92616151cd896c745289abae2",
+      "bytes": 130
+    },
+    {
+      "key": "src/lib/flow-spec-id.js",
+      "digest": "29b5b9df2f220a5c3ee755f20c1d689a7c81c5782764a8d1130b24f389e7a475",
+      "bytes": 567
+    },
+    {
+      "key": "src/lib/flow-spec-revision.js",
+      "digest": "134a0ce62f8932f42518d5ca4d432c54ca571b94671b954367c66d00ca8bcfd1",
+      "bytes": 569
+    },
+    {
+      "key": "src/lib/flow-stop-guidance.js",
+      "digest": "991977e3e7907b015bf3a2cbbd246f5f1669ad5a43e7238c8bb1b086216a41cd",
+      "bytes": 23475
+    },
+    {
+      "key": "src/lib/flow-target-guard.js",
+      "digest": "6cbc19e32b88cd71830242dd1adf0ca1954f298cc5b4ae1c1acadc6a76ce1325",
+      "bytes": 19147
+    },
+    {
+      "key": "src/lib/flow-target-identity-authority.js",
+      "digest": "d1b8f80b13740be4077c4475ed7db3e8e3cf12c9fa19f3cd9ee74f59d5af84fc",
+      "bytes": 19709
+    },
+    {
+      "key": "src/lib/flow-version.js",
+      "digest": "dfaa299afb8992290ff84afb9e99d5609ca2cf734e8080faa7f38566a258ae6c",
+      "bytes": 147017
+    },
+    {
+      "key": "src/lib/flow-workspace.js",
+      "digest": "92b7c04becc4c620ca8f483078f75fcdeed577e710caddd91648297f51f0a187",
+      "bytes": 6194
+    },
+    {
+      "key": "src/lib/formatter.js",
+      "digest": "b5eaeee6334cc6a63b8340d9575d0cdb7282bd60860e85e9246f78f1ecb3e80f",
+      "bytes": 1106
+    },
+    {
+      "key": "src/lib/git-command-execution.js",
+      "digest": "5cbd21a304668d8185504e623ff2182f677ea91e06afa8d3c10b81dfe70229e7",
+      "bytes": 912
+    },
+    {
+      "key": "src/lib/git-helpers.js",
+      "digest": "5ebd620d2c33c2dd6fdf7051b1a79d08c38df2ae71036a66c59b88c2cbd4403b",
+      "bytes": 30770
+    },
+    {
+      "key": "src/lib/git-repository-environment.js",
+      "digest": "9f9631d28f3c0c819033d6b12d2620a1b7616cb43abdd81867ffa253c369b66c",
+      "bytes": 5276
+    },
+    {
+      "key": "src/lib/git-snapshot.js",
+      "digest": "1354b7c152a4746bcdd36bc0a2f3ae52270fa8a87347fa6bbfc61ac6273bd0ac",
+      "bytes": 1138
+    },
+    {
+      "key": "src/lib/git-source-observation.js",
+      "digest": "119db2239b81cfabd821acbd5f42f1e0301fb64ed38f27bf9016986d07b60b9c",
+      "bytes": 10145
+    },
+    {
+      "key": "src/lib/git-state.js",
+      "digest": "2ef65e6e9ed9e4858bb869f9ce837ccdad9b146a39a7ddc64696e0a94b0d3765",
+      "bytes": 778
+    },
+    {
+      "key": "src/lib/gitattributes.js",
+      "digest": "cac68a73ca33bd2c5cb57721049d8e4ac83da6d11dcb3c42c4cc0a1705cfd69f",
+      "bytes": 1134
+    },
+    {
+      "key": "src/lib/github/command-adapter.js",
+      "digest": "9c1540e35943760d4e34a017330b25e1becccefb349945ea7457cdf49cae5481",
+      "bytes": 758
+    },
+    {
+      "key": "src/lib/github/config.js",
+      "digest": "d94508489417520adaaba13a16ecb13152cdef9889160587e38c7de661577724",
+      "bytes": 6233
+    },
+    {
+      "key": "src/lib/github/failure.js",
+      "digest": "a113887776fb2c297ef4f26ef13f1b9ac2be22068fe654ae922d07c5ba319502",
+      "bytes": 2240
+    },
+    {
+      "key": "src/lib/github/gh-adapter.js",
+      "digest": "a7d9f134aa970da6e0f0e1074d7f33b3b5847f235f974a351d2a2474fcab242f",
+      "bytes": 11132
+    },
+    {
+      "key": "src/lib/github/gh-api.js",
+      "digest": "60d26ddeb91d49e4c7c136fcf501268c8b4a2070136b4e4840ec5bc2ead73d28",
+      "bytes": 6167
+    },
+    {
+      "key": "src/lib/github/gh-sources.js",
+      "digest": "d89e75845ed1871ed5b41574c869c13c79d7b4cb84fc8d7268175ff3688dc4b3",
+      "bytes": 9501
+    },
+    {
+      "key": "src/lib/github/protocol.js",
+      "digest": "9fd9f9f652c6922ef638aaaef6606e5a2bd4532c26a356176aca59a3738fafba",
+      "bytes": 3946
+    },
+    {
+      "key": "src/lib/github/provider.js",
+      "digest": "2208011d147dc15be777dff7af2e3c68c131ef6bdcdd2381e4281b893f2c6420",
+      "bytes": 8397
+    },
+    {
+      "key": "src/lib/github/requests.js",
+      "digest": "044fcbe2485eaf57cea3e7f9c168d040bc8d8d50619d4a90cc279ad2c45fa559",
+      "bytes": 5530
+    },
+    {
+      "key": "src/lib/github/values.js",
+      "digest": "a95308b06bb1279b2ed842c4af6914196694281a4913d425b328eaa79d5b3852",
+      "bytes": 20140
+    },
+    {
+      "key": "src/lib/gitignore.js",
+      "digest": "819844451d37da0138cbc315176e7d239a26e1ffa749fb36fd6e91e9c7b0b3dc",
+      "bytes": 1689
+    },
+    {
+      "key": "src/lib/glob.js",
+      "digest": "639b8ea42dcd368288f18dc5b463c0e6ba1c9d9f9c0e16ff185fb5fde36bcbfe",
+      "bytes": 1021
+    },
+    {
+      "key": "src/lib/guardrail-values.js",
+      "digest": "7b4766d23984d2b6c6c1fa28c570f94753065ffa11aeb570c39f6d8544a51a1c",
+      "bytes": 315
+    },
+    {
+      "key": "src/lib/guardrail.js",
+      "digest": "f00b312ebed3bc3f01230c1f20aeadd15e55fb3cbb071341cd08a4f7f2a75371",
+      "bytes": 8377
+    },
+    {
+      "key": "src/lib/hooks.js",
+      "digest": "94db2302712f179abf7799bf3b68f69f74e9a809096b46c7837a046198fc27bf",
+      "bytes": 3127
+    },
+    {
+      "key": "src/lib/i18n.js",
+      "digest": "9bffe850ac9e580fe0495508becd7bca31729f0bf4c71dbf4223e6557eda8160",
+      "bytes": 8779
+    },
+    {
+      "key": "src/lib/include.js",
+      "digest": "6644722cb1c102ea44bf8c34090abcbd3d3af3c686e795ca77ed55cf11063e2f",
+      "bytes": 6257
+    },
+    {
+      "key": "src/lib/json-parse.js",
+      "digest": "33779e0e7a1e83afe30f4e270896dad1d244ce7a361c4fb0b0462dce3b85830b",
+      "bytes": 7891
+    },
+    {
+      "key": "src/lib/layout-migration.js",
+      "digest": "b848ba53250d7b88bb6f901760ac8ce71789e2a47d93833f347738cff74b76d2",
+      "bytes": 63337
+    },
+    {
+      "key": "src/lib/legacy-agent-artifact-cleanup.js",
+      "digest": "9bd96ff4d5410cf21390cc9e1467feec7d8bccb592533257c65527ad425ac14e",
+      "bytes": 3643
+    },
+    {
+      "key": "src/lib/legacy-flow-activity.js",
+      "digest": "24e8ef6188e84facdd47534e3b3e9f4fc4f99fe01b98e5c784c3631b6594fa34",
+      "bytes": 3303
+    },
+    {
+      "key": "src/lib/legacy-managed-directory-migration.js",
+      "digest": "18643214d79ebeee554b654b36c210d9b0b9777513698b041bd607d1ae252204",
+      "bytes": 245
+    },
+    {
+      "key": "src/lib/legacy-managed-metadata-migration.js",
+      "digest": "152fd79f243dc4b811ebb68313f51bb0f0b86379bf4dbde4694db31b6e13537b",
+      "bytes": 1567
+    },
+    {
+      "key": "src/lib/lint.js",
+      "digest": "15f8f37ff52f356797f2e9471dba93ddf47781830c5994df9ede585c5bb410a6",
+      "bytes": 3730
+    },
+    {
+      "key": "src/lib/log-masking.js",
+      "digest": "457e4e06218e2205ca734d17c75e502e8f5379ce820463c8ebc1f4a48e566398",
+      "bytes": 8114
+    },
+    {
+      "key": "src/lib/log.js",
+      "digest": "a74e44c07240e7534214bded132c0aa124784199d80c4014f004c34a867f073a",
+      "bytes": 14280
+    },
+    {
+      "key": "src/lib/makefile.js",
+      "digest": "0a097677415347cf3bc400b5f5badff4b92c365f32fbaa1c96fad409a503b3a7",
+      "bytes": 1197
+    },
+    {
+      "key": "src/lib/managed-control-policy.js",
+      "digest": "06c267bf648184bb410041e079b8021374f9f3c9f0ebcd8087e61771dc2866aa",
+      "bytes": 1308
+    },
+    {
+      "key": "src/lib/managed-process-output.js",
+      "digest": "8428c3b5dd5cf67314f21e6e5cc8e87c752de817d8cde4b8b7ef5147896dc035",
+      "bytes": 8454
+    },
+    {
+      "key": "src/lib/managed-process-protocol.js",
+      "digest": "f3a1e071ca95cf58330a0238847becbd56be3f803c1a38641f694612a7353a04",
+      "bytes": 30531
+    },
+    {
+      "key": "src/lib/managed-process-record.js",
+      "digest": "6c2d7ad4ba309e175887bf226b7689d769676f6981424655ba6599482d9d49c4",
+      "bytes": 2327
+    },
+    {
+      "key": "src/lib/managed-process.js",
+      "digest": "2baa340c7b7b5dcbe8069fa7125452bbb4157263fdd018e459011e157546da99",
+      "bytes": 9370
+    },
+    {
+      "key": "src/lib/managed-stop-operation-value.js",
+      "digest": "57b798e5ad3a58c1dd714a34471e54dcf7bb69efd268ee609f39b2eb969a870b",
+      "bytes": 2736
+    },
+    {
+      "key": "src/lib/managed-stop-operation.js",
+      "digest": "e226c046539e7e2c841ad7a984b8c3804f6867fb4ad867701f4eb24f09014946",
+      "bytes": 1754
+    },
+    {
+      "key": "src/lib/managed-stop-store.js",
+      "digest": "f9b5a87d32daad01cc7aa869d78c31dc2dad0ac906292baee8aef0b7c3cee0e2",
+      "bytes": 6025
+    },
+    {
+      "key": "src/lib/migration-flow-authority.js",
+      "digest": "f055b0818f5fec4d1631f889fa390a9a3a11df6927e818dfef6a200e39e698b6",
+      "bytes": 12209
+    },
+    {
+      "key": "src/lib/migration-process-owner.js",
+      "digest": "971c096f9f249b91c0fa10a4d861a92fffc0d922bc96be24aa9d068239058850",
+      "bytes": 2598
+    },
+    {
+      "key": "src/lib/migration-spec-root.js",
+      "digest": "50ee910edbe7982789b19d4c967dbb150d32a0a5ac0b17fc5c3a3b7833bfd4fa",
+      "bytes": 8099
+    },
+    {
+      "key": "src/lib/migration.js",
+      "digest": "c84296df09df3731cce2d60042f7562d2ccd52d5d97586b8defe27232e8bb5c1",
+      "bytes": 16267
+    },
+    {
+      "key": "src/lib/multi-select.js",
+      "digest": "36b230e76d7cc413e1a5cc047cc393cff5bee5ce8026eb9ec44b34d01cae653e",
+      "bytes": 8394
+    },
+    {
+      "key": "src/lib/namespace-dispatcher.js",
+      "digest": "cab04c25b008c3671ceb3c889f1caab3890542002df813c1f6917c19de101fd7",
+      "bytes": 1310
+    },
+    {
+      "key": "src/lib/native-path.js",
+      "digest": "f1cdec5d833d1632523d51f31c6d7c98b05d7a83858defac1b913933640181f1",
+      "bytes": 2931
+    },
+    {
+      "key": "src/lib/official-plugins.js",
+      "digest": "19632db47f22e47630ba193de19e5ef9c6324a16555e8e796dd07ffbfb21f58e",
+      "bytes": 236
+    },
+    {
+      "key": "src/lib/owned-temporary-directory.js",
+      "digest": "862c826534943be178322c6fc771658b811ba669bb141e4bf1f8509f928a0220",
+      "bytes": 1799
+    },
+    {
+      "key": "src/lib/path-match.js",
+      "digest": "bacf133d74cb1f5cfa20dc61f8fe4d63a3f6cedcaf7c1fcceed5d45f1e5c303c",
+      "bytes": 999
+    },
+    {
+      "key": "src/lib/plugin-installer.js",
+      "digest": "c1700c63c30ec14ffe601016d8cb2907ea456b167102e14d50e853e4e6f261f1",
+      "bytes": 7899
+    },
+    {
+      "key": "src/lib/plugin-registry.js",
+      "digest": "daca1ea5485d3809937cf94fc19d66a9ce0c648602daaa6171711d48f085b59c",
+      "bytes": 74405
+    },
+    {
+      "key": "src/lib/portable-path.js",
+      "digest": "4e17d708fd193f696b1802fd2aafcd1fd5b53c81804dcc23796e61e4908ce76d",
+      "bytes": 4790
+    },
+    {
+      "key": "src/lib/post-hook-error.js",
+      "digest": "1adc9adf79f1e1c65558fec03faa8269827cda32261b9e85a2102816f9ff4c0e",
+      "bytes": 781
+    },
+    {
+      "key": "src/lib/preparing-flow-state.js",
+      "digest": "6b05f74473483ab6a6e14af7501dc554491b6f8cfbf20f440168f29c1b015914",
+      "bytes": 4439
+    },
+    {
+      "key": "src/lib/preparing-flow-store.js",
+      "digest": "ed0133380e76b353989924156b8049269e52addbd680890cc74224d5fb96237f",
+      "bytes": 8127
+    },
+    {
+      "key": "src/lib/preset-deploy.js",
+      "digest": "75ebc776fe4cead60f1f338d3a44b0bb433031e9eb842b48e6b4d64196fa2957",
+      "bytes": 1176
+    },
+    {
+      "key": "src/lib/presets.js",
+      "digest": "23de780987770db53cb4b4e37d7a55137550502ef6af5d6b0a93920be1493e36",
+      "bytes": 20116
+    },
+    {
+      "key": "src/lib/process-execution-completion.js",
+      "digest": "7d9627ae4da40e576ad3ff86412f431721c7a871c0f5f675c1919759f4dbb107",
+      "bytes": 5970
+    },
+    {
+      "key": "src/lib/process-execution-endpoint.js",
+      "digest": "27596282719e39c35c617eb93adbcda07e8c734842a401e392f1704c2951ab58",
+      "bytes": 3274
+    },
+    {
+      "key": "src/lib/process-execution-finalization.js",
+      "digest": "073c557b35dcd26c0180723d6d55b127d08c9b4a84480e98bb4f04e8a4abb685",
+      "bytes": 5640
+    },
+    {
+      "key": "src/lib/process-execution-invocation.js",
+      "digest": "1be4132d4aa0f6a6e737b93c380a2c4028f89cf1418b0e37ace0a86cc516b8ce",
+      "bytes": 8779
+    },
+    {
+      "key": "src/lib/process-execution-publication-metadata.js",
+      "digest": "cf9204d94ffe73dc57550a2a87371811662a954d778822e48cbf168bf34e3cc7",
+      "bytes": 20510
+    },
+    {
+      "key": "src/lib/process-execution-request-block.js",
+      "digest": "b99070cfb10023348bf037ab458adf26a2c3e134061ccc106582e18379b20d25",
+      "bytes": 42683
+    },
+    {
+      "key": "src/lib/process-execution-reservation-revocation.js",
+      "digest": "f018c58f0525982f86c37c7f1abd3ef1928ed6cb5790e53e45d4e485910a8c94",
+      "bytes": 4056
+    },
+    {
+      "key": "src/lib/process-execution-runtime.js",
+      "digest": "18f142b222c33e39599beee64582708545c8387ddaaa0c1b5c8d0329dd869f10",
+      "bytes": 348483
+    },
+    {
+      "key": "src/lib/process-execution-sync-worker.js",
+      "digest": "cb510b1dd538d674be122f817a00d89b532628c592a7a234833c435aa8e95b53",
+      "bytes": 6955
+    },
+    {
+      "key": "src/lib/process-execution-sync.js",
+      "digest": "d142f0e6d0acc1b3bd286c6d802400780e5b0c93fd65ef3054cf6f19919e2cd8",
+      "bytes": 10912
+    },
+    {
+      "key": "src/lib/process-execution-values.js",
+      "digest": "7d8f33b4a2de3f3c82b414f0774474c94ba059e41862c1c3cf56faa15f6cc440",
+      "bytes": 47678
+    },
+    {
+      "key": "src/lib/process-lock.js",
+      "digest": "8b2f163115fbfa07e2f4c460281f44b8debd12c20083fedfd2902d6ae54e3331",
+      "bytes": 16017
+    },
+    {
+      "key": "src/lib/process-runtime-migration-guidance.js",
+      "digest": "2c81b965fd4e35a2177b34b4cbb467bacaa67a1e6db570bc113faa5e092f1e03",
+      "bytes": 3928
+    },
+    {
+      "key": "src/lib/process-runtime-record-migration.js",
+      "digest": "a3af1cce6900f30a8d9632e9efb671f30ff374a38b9eff134b51a3d5697ff25b",
+      "bytes": 5992
+    },
+    {
+      "key": "src/lib/process-supervisor.js",
+      "digest": "b72aff81516d19d8242f3030ca4bddf569ab98f98e62adc81f2dcc5ca53c0729",
+      "bytes": 2279
+    },
+    {
+      "key": "src/lib/process.js",
+      "digest": "4f7255e19e8e2ea169f1a4a488b366df27bbac9dad6fdb653d224e398af4edf7",
+      "bytes": 12178
+    },
+    {
+      "key": "src/lib/product.js",
+      "digest": "1297f970d053905ed3d1a34a88e93db64506ad982d64d04908af7d1091cf0920",
+      "bytes": 3034
+    },
+    {
+      "key": "src/lib/progress.js",
+      "digest": "696a655118201a0fbe5c6503e480b6c91e9c426af725482cc2478a13371cfa54",
+      "bytes": 5954
+    },
+    {
+      "key": "src/lib/prompt-batching.js",
+      "digest": "11761fbcca1ae04eb7e190d729031be3c4ba291b52d24323bb94f1ed797fde99",
+      "bytes": 120344
+    },
+    {
+      "key": "src/lib/prompt-builder.js",
+      "digest": "bdc6dfacabfcc829b8b4737fefc20cd60c8ec9815450277943d38e1817fac4a5",
+      "bytes": 1626
+    },
+    {
+      "key": "src/lib/prompt-execution-journal.js",
+      "digest": "5a0ca6ce843aef3a52f2daf91b63ee6bb39d8b6e3b134696e3e519e0ae476840",
+      "bytes": 31080
+    },
+    {
+      "key": "src/lib/prompt-input-delivery.js",
+      "digest": "d420251abd96d308573a21cf2865bed8cdb9cb5adb9fedb5a7a4eaf44b1d3935",
+      "bytes": 1622
+    },
+    {
+      "key": "src/lib/provider-schema.js",
+      "digest": "4d5d7dea10de1f9fcf32f8b40b07cf14022446cbd4d28c3e36a8954bac67e9c3",
+      "bytes": 11810
+    },
+    {
+      "key": "src/lib/provider.js",
+      "digest": "24fc2a699e61d14cbad695dcfde877b9157ab5d2f9e30ff7b5a036b6485cf093",
+      "bytes": 8278
+    },
+    {
+      "key": "src/lib/readonly-invocation-workspace.js",
+      "digest": "4fd9bcbfa4c85aacad7670648f41ffb279115739981010f26102c147492c9ac7",
+      "bytes": 14632
+    },
+    {
+      "key": "src/lib/real-directory-authority.js",
+      "digest": "9871f353e9d714db73e4bde16faadf722932f04acbe8a4d3b89b9b351a05a191",
+      "bytes": 14818
+    },
+    {
+      "key": "src/lib/regular-file-io.js",
+      "digest": "2bf32a402bdcad791d63013c541de40141d3427c9d5806be3e2c333b13c0e92f",
+      "bytes": 9336
+    },
+    {
+      "key": "src/lib/regular-file-snapshot.js",
+      "digest": "292dbc5693e82b2fb03451df663049a593b3dad6aefbbef069248d6c252312fe",
+      "bytes": 11730
+    },
+    {
+      "key": "src/lib/repository-control-lock.js",
+      "digest": "02271f825d4f3eb2ea11e6b7b409c14dc68cb2c8f6b94648b0a10e792b5132e6",
+      "bytes": 6669
+    },
+    {
+      "key": "src/lib/repository-maintenance-lock.js",
+      "digest": "cf60d06e83dd1e9e92b66f97703091bd6598fd7dfb2c69ddeeaecb40166c3c09",
+      "bytes": 10301
+    },
+    {
+      "key": "src/lib/runtime-bootstrap-loader.js",
+      "digest": "bfcfbeb9c2195c66edf2516c51719f75047833db6f58e0843903731743243a18",
+      "bytes": 2425
+    },
+    {
+      "key": "src/lib/runtime-capture-worker.js",
+      "digest": "6d58e953b1d0a0ccf6b35b9b7ad31b8962f90708247d41d5df3bcc3f05ebd2e4",
+      "bytes": 342
+    },
+    {
+      "key": "src/lib/runtime-child-bootstrap.js",
+      "digest": "42b2c51d6dd1329c2d28be8189343c0f90686a56da6786c4ec40f4fd7bae1f55",
+      "bytes": 5866
+    },
+    {
+      "key": "src/lib/runtime-loader.js",
+      "digest": "48330a7b45963067d38d4aafb115ae9506684ac087f1b481da6f5769cb4d8793",
+      "bytes": 5517
+    },
+    {
+      "key": "src/lib/runtime-log.js",
+      "digest": "b6f1669980cd8082b6d43180e8f48e827d30b86aa8ca4248a01510aa0809a6f7",
+      "bytes": 10951
+    },
+    {
+      "key": "src/lib/runtime-package-identity.js",
+      "digest": "447d8e82a8c840e55f00a763698de6c4280ef8899d9ee2f625ac569f47fc6954",
+      "bytes": 1115
+    },
+    {
+      "key": "src/lib/runtime-package-location.js",
+      "digest": "34ce44a314816d9047ac626266d493abc3cf7aea4e809b6ecc0a821b690d8f50",
+      "bytes": 587
+    },
+    {
+      "key": "src/lib/runtime-package-snapshot.js",
+      "digest": "56f375f81d54517229ffbdfbb40a10154b6612382e360d2acb457056d6f31a42",
+      "bytes": 3499
+    },
+    {
+      "key": "src/lib/runtime-package-wire-delivery.js",
+      "digest": "c6b67b5fc8c345a62d28f33140ad1fdbd3a9a47d396753625516188ed17ffe96",
+      "bytes": 1696
+    },
+    {
+      "key": "src/lib/runtime-package.js",
+      "digest": "86c28aa332af2bb06fcc66b705ca184b6228d34987d0026a5847b64ebdd8f9cb",
+      "bytes": 13028
+    },
+    {
+      "key": "src/lib/schema-validate.js",
+      "digest": "76776a819393f4083673995758b7bd94ef1114ee602df1c7c1471717d7341bf0",
+      "bytes": 6271
+    },
+    {
+      "key": "src/lib/skill-manifest.js",
+      "digest": "3f45bb645972a456172f794f1a3b3568c3838c0e914a397e92a33774f8a32bee",
+      "bytes": 4506
+    },
+    {
+      "key": "src/lib/skill-rules.js",
+      "digest": "c9d1488e7621b0cbd2f8332f125ddb66e51127df6440d3405152b2d6a67aa2d9",
+      "bytes": 7781
+    },
+    {
+      "key": "src/lib/skills.js",
+      "digest": "0e3627887a2d0b2afb355f7db2938f2120f1c5979d0bff05599162de1020d251",
+      "bytes": 8056
+    },
+    {
+      "key": "src/lib/spec-gate-decision-migration.js",
+      "digest": "9ef91baa86cee6ca162caa73d37b7e207cac7b3a093b1361b50fb83791b7a746",
+      "bytes": 11988
+    },
+    {
+      "key": "src/lib/spec-gate-repair-migration.js",
+      "digest": "3d3d8c736242b6774e35d1162c999c31b967e77c777aa1511257f10612341b54",
+      "bytes": 24335
+    },
+    {
+      "key": "src/lib/spec-json-validator.js",
+      "digest": "928eff5ff3bd5720a8c2afd215dae2e6172a07c57bd206e133ca3906e4372943",
+      "bytes": 2015
+    },
+    {
+      "key": "src/lib/spec-json.js",
+      "digest": "8c33d4c6950f0e700e9f9753b4c9e223b2bdda64e64399e5256aa2e606d69a1d",
+      "bytes": 9795
+    },
+    {
+      "key": "src/lib/specs-migration.js",
+      "digest": "21e4f6aaf5af52774d8dd0942a216c511482a4765cfe4a1ab06e31f2cff3f3c3",
+      "bytes": 260787
+    },
+    {
+      "key": "src/lib/temporary-paths.js",
+      "digest": "4469b54446f14c68ebe8613e8f376fda613f24490181c61d191e6e57cc906360",
+      "bytes": 5312
+    },
+    {
+      "key": "src/lib/test-command-sources.js",
+      "digest": "89823bac3e3a2320aa9a9eea1572f527d12026b99311e93e6f0bcc21657893d0",
+      "bytes": 2681
+    },
+    {
+      "key": "src/lib/types.js",
+      "digest": "70b382e7b625516d9c957daf3a1cdd42514f6ffb36e2b4e2079b37d594aba363",
+      "bytes": 5155
+    },
+    {
+      "key": "src/lib/worktree-cli-execution.js",
+      "digest": "2c967af8f31bbf8df882e7253784624e636638e8561e073c422211b18015b7e7",
+      "bytes": 3844
+    },
+    {
+      "key": "src/lib/worktree-flow-binding.js",
+      "digest": "ab92d67c9489a2588299fbf3db3796b3d4ac48c89d47a01cc970dc01464c428c",
+      "bytes": 27065
+    },
+    {
+      "key": "src/locale/en/messages.json",
+      "digest": "2818fe4aafc7a29fd34f5ec514ca7b821e49786e3fee622b2cf4e4bb9e110c46",
+      "bytes": 17239
+    },
+    {
+      "key": "src/locale/en/prompts.json",
+      "digest": "ca6587984bdb8745d78aeed6000eef813a2c57189d9e19029d6794c51e71208c",
+      "bytes": 5550
+    },
+    {
+      "key": "src/locale/en/ui.json",
+      "digest": "e066e8f33a3c9d37882238e931c459205577e579da700faad6bee8bec16ed8a4",
+      "bytes": 16158
+    },
+    {
+      "key": "src/locale/ja/messages.json",
+      "digest": "2dba4fac67b3ccc58608cd67dace896b56c3bd7f9251d02c714ba011d416a415",
+      "bytes": 20503
+    },
+    {
+      "key": "src/locale/ja/prompts.json",
+      "digest": "791697eac0f7cb2d7066ddd048748011c050e78df7ffb2ae26ff7b847e671af8",
+      "bytes": 7059
+    },
+    {
+      "key": "src/locale/ja/ui.json",
+      "digest": "95102a3c2f159edaf71b4140be100dcf12b6b24f5a85c102b9176a39124bdaab",
+      "bytes": 18582
+    },
+    {
+      "key": "src/metrics.js",
+      "digest": "ab7d56c03863f3f33f124b73a24c5e8ef0fbedaf10e8f4794f6e52836402364a",
+      "bytes": 374
+    },
+    {
+      "key": "src/metrics/commands/review.js",
+      "digest": "b6d8efd65b3ed71e87c602c2763159cd71959741b373f8b585e029686f7975ef",
+      "bytes": 21740
+    },
+    {
+      "key": "src/metrics/commands/token.js",
+      "digest": "4377c070e381267b74380614aa48aabc944c19d379cb20a940531a354301fe8d",
+      "bytes": 26012
+    },
+    {
+      "key": "src/metrics/lib/canonical-flow-metrics.js",
+      "digest": "9df32d54bff6c2a047776a4bce0857830a46f3541a0c8c2b7b88258c10c02fc6",
+      "bytes": 12882
+    },
+    {
+      "key": "src/migrate.js",
+      "digest": "05cef4613eccd7b163eca10a066dc053a91cfbef5a782ba4a8ec3cdfda494505",
+      "bytes": 10598
+    },
+    {
+      "key": "src/plugin.js",
+      "digest": "1b6774311a410b79c018fd7f2250dd42c74a426b7bc2aa9b0090ae1cafd27b26",
+      "bytes": 9136
+    },
+    {
+      "key": "src/presets-cmd.js",
+      "digest": "ff7681240748b6778124b71a81f40834c3402c89d86747525e12291c4e801202",
+      "bytes": 3455
+    },
+    {
+      "key": "src/presets/base/data/package.js",
+      "digest": "431d9765e6b40b178f4899f53c5afd6775f386d8c7c869aaf46e833bf193b592",
+      "bytes": 2245
+    },
+    {
+      "key": "src/presets/base/data/structure.js",
+      "digest": "22e57897b905da51021374a963a0520709db31558778954c51e93bc5528c57ef",
+      "bytes": 3331
+    },
+    {
+      "key": "src/presets/base/guardrail-rewrite-rubric.md",
+      "digest": "b8718130f39591e8b54741052d685689cad18402baea350d8d7768d8fc40e661",
+      "bytes": 478
+    },
+    {
+      "key": "src/presets/base/guardrail.json",
+      "digest": "e221d68bbc12fd615bbe2db989ec1c3aa04f0e92d99aa6251bc9fcb2b760324e",
+      "bytes": 17259
+    },
+    {
+      "key": "src/presets/base/preset.json",
+      "digest": "f459e9ff248ce3c5708fbb366dc97af1227ebbafed3f34b8798c2ef4c7b9d7f3",
+      "bytes": 543
+    },
+    {
+      "key": "src/presets/base/templates/en/development.md",
+      "digest": "d2d8e2ea680bcc335f3f02eb144d02d345c87c0d7f1bb45d870a398a3a5a83ac",
+      "bytes": 1204
+    },
+    {
+      "key": "src/presets/base/templates/en/flow-agent-instructions.md",
+      "digest": "4e6aa9018177c219a21e766a9e144743063fdb3d1cadf30cca5936ea92c28677",
+      "bytes": 3233
+    },
+    {
+      "key": "src/presets/base/templates/en/layout.md",
+      "digest": "5891185438f30c327603494a1569a22e702945a81956cde320b5bf30c8718fc0",
+      "bytes": 195
+    },
+    {
+      "key": "src/presets/base/templates/en/overview.md",
+      "digest": "3455c34be1bb8eaf3caccbc6641b6f79aee410e20346df1b67d339c05bf9654b",
+      "bytes": 1664
+    },
+    {
+      "key": "src/presets/base/templates/en/project_structure.md",
+      "digest": "f5ec907808d53f0231a2d34bde94f8b3e058214b601a28327cb0f03662f42eab",
+      "bytes": 1024
+    },
+    {
+      "key": "src/presets/base/templates/en/stack_and_ops.md",
+      "digest": "3071a28a43f803b5157a0fd0f6a40080f1fddbd0b74734a69fb2c884634ed106",
+      "bytes": 1183
+    },
+    {
+      "key": "src/presets/base/templates/ja/development.md",
+      "digest": "57d6cfc7d6e07e4ad6199df87a523a11247e84fdc6511c5b1dcdbfb0246f4317",
+      "bytes": 1346
+    },
+    {
+      "key": "src/presets/base/templates/ja/flow-agent-instructions.md",
+      "digest": "16b205356f251199fd7f55baea2e70a71b3cda2c857b6f43b49eac98323cee31",
+      "bytes": 3802
+    },
+    {
+      "key": "src/presets/base/templates/ja/layout.md",
+      "digest": "5891185438f30c327603494a1569a22e702945a81956cde320b5bf30c8718fc0",
+      "bytes": 195
+    },
+    {
+      "key": "src/presets/base/templates/ja/overview.md",
+      "digest": "090e8c50591487829542e5617101ae655e0eeebaac4a58e0cce34c1a61cf7a2f",
+      "bytes": 1808
+    },
+    {
+      "key": "src/presets/base/templates/ja/project_structure.md",
+      "digest": "b52db171651d1579e2f42f05022eabb289adeb71831d7e06733ec787d5cbe6a0",
+      "bytes": 1110
+    },
+    {
+      "key": "src/presets/base/templates/ja/stack_and_ops.md",
+      "digest": "f024aa31908ff55900ecd33e3279f10665dcd03e8c4a340ae12187b36f758479",
+      "bytes": 1303
+    },
+    {
+      "key": "src/presets/base/tests/acceptance/base.acceptance.test.js",
+      "digest": "0ab5d58ad9360a5dd6cf206610ea566b9a0a6c79a56feaf325353eceee81ad59",
+      "bytes": 383
+    },
+    {
+      "key": "src/presets/base/tests/acceptance/fixtures/.sennel/config.json",
+      "digest": "164eb40d18f412fd9f982429394389db2158587d62b624ffd2417d7671f0feda",
+      "bytes": 203
+    },
+    {
+      "key": "src/presets/base/tests/acceptance/fixtures/package.json",
+      "digest": "a56538b76a0cba78969e9dc911aa1007dde11c4041958ed4f97755ce68b9c491",
+      "bytes": 171
+    },
+    {
+      "key": "src/presets/base/tests/acceptance/fixtures/src/config.js",
+      "digest": "83fe08015c57c37dfb87e80b8ee66a095a49554633c60c580037c5155e315adb",
+      "bytes": 1562
+    },
+    {
+      "key": "src/presets/base/tests/acceptance/fixtures/src/http-client.js",
+      "digest": "ecc527347038e1bd0d719af450fcf6e38c5aad308350b10c4429d370a48bc112",
+      "bytes": 2666
+    },
+    {
+      "key": "src/presets/base/tests/acceptance/fixtures/src/index.js",
+      "digest": "4303a182ca106b90d3c879224f021280058f0f4d068f970de738216c8fe3e205",
+      "bytes": 1399
+    },
+    {
+      "key": "src/presets/base/tests/acceptance/fixtures/src/logger.js",
+      "digest": "a28ddbd982a873267d53dd0ae660ab2cf986ccd098a182b2630ddbf0925f46e0",
+      "bytes": 1367
+    },
+    {
+      "key": "src/sennel.js",
+      "digest": "0f7b10ade21b15a85c9427f376b1e1d07362b911c11148bdc614c5c3c299af92",
+      "bytes": 25972
+    },
+    {
+      "key": "src/setup.js",
+      "digest": "c3483cfeb53605680d1f0b012be222afe441a2c7c831dfad9f95d9ef726431c2",
+      "bytes": 31237
+    },
+    {
+      "key": "src/skills/partials/ai-question-style.md",
+      "digest": "a3697b99a92f345bc6ede73e0a781fdea4be94170cbe0ea3038dc9e32736d992",
+      "bytes": 5886
+    },
+    {
+      "key": "src/skills/partials/choice-format.md",
+      "digest": "6231ec0c06086b1620915baf33c0515286730c3daa0097dc60a2dbc8c82f7467",
+      "bytes": 984
+    },
+    {
+      "key": "src/skills/partials/context-recording.md",
+      "digest": "592dfd212e05fdfe51c2e3a8cc1c3ea28424abf2fcaf889ea38f6d63095f3c27",
+      "bytes": 141
+    },
+    {
+      "key": "src/skills/partials/core-principle.md",
+      "digest": "e76dad3198c2f5f868fd2c91f08a5c7d7b9fa37f0f859569678e7cb050bb6de7",
+      "bytes": 5893
+    },
+    {
+      "key": "src/skills/partials/flow-tracking.md",
+      "digest": "dcf3c7a6d4e81157b9b9b0e6c6a4ee789d100f53970f0529dc11794cf778a101",
+      "bytes": 1794
+    },
+    {
+      "key": "src/skills/partials/issue-log-recording.md",
+      "digest": "ec0d6ffd9536a02d76935a22aecbd0f99bbf46e7c6a109153320f37b93bc6222",
+      "bytes": 3611
+    },
+    {
+      "key": "src/skills/partials/placeholder-artifact-permission.md",
+      "digest": "9ebe8ff7e28f3f4f33beb432ba6982f972eb981a05b5387043a1e57404738b63",
+      "bytes": 490
+    },
+    {
+      "key": "src/skills/partials/stop-guidance.md",
+      "digest": "346f8be0e9c64101ca9613062af68bbbbebad1fa29b482b81dcedda5a09c8ea1",
+      "bytes": 2987
+    },
+    {
+      "key": "src/skills/partials/worktree-mode.md",
+      "digest": "64bc1a82c8bf48e8093b94df155ac0372d45480e1ad921a0a9b1386a083d181d",
+      "bytes": 4077
+    },
+    {
+      "key": "src/skills/rules.json",
+      "digest": "a5f938a2fdbfc67cf632b51f15da027a6ae656b141e994844c93947b7fb2822b",
+      "bytes": 11382
+    },
+    {
+      "key": "src/skills/sennel.flow-auto/SKILL.md",
+      "digest": "cf10cc18806b4e56b6da33df8eb38a7043b625f555bb1c6576451e669a94e32a",
+      "bytes": 1994
+    },
+    {
+      "key": "src/skills/sennel.flow-nonblocking/SKILL.md",
+      "digest": "eb2d146ce83bcc2c9363e0e60202c90e4b7e29f53feb9dd28d391b82fe7c3ac2",
+      "bytes": 2617
+    },
+    {
+      "key": "src/skills/sennel.flow-resume/SKILL.md",
+      "digest": "7ef8434dafe3eede668147078fd2c0fe35cc090fe2f2a80832280f492d3f5c12",
+      "bytes": 1529
+    },
+    {
+      "key": "src/skills/sennel.flow-status/SKILL.md",
+      "digest": "eb72ba084415883e8afb1a7a91a5fd5ec24f830f33a2da8075193a5bc2bb7fe9",
+      "bytes": 3943
+    },
+    {
+      "key": "src/skills/sennel.flow-sync/SKILL.md",
+      "digest": "ca885a4e3fecbb9c4497e065d290c0805f09ac68e85edc17b61b323b08fb03fd",
+      "bytes": 1095
+    },
+    {
+      "key": "src/skills/sennel.flow/SKILL.md",
+      "digest": "899e0b94ebb43aff28cfae525cb4ac75d3335c3ea745d1f264edfa9d7f49d6b4",
+      "bytes": 36047
+    },
+    {
+      "key": "src/spec.js",
+      "digest": "f4325abf8cf05b4de788268ce0c8c1fb6f4098cccc40968d961cec1b7d9d159c",
+      "bytes": 430
+    },
+    {
+      "key": "src/spec/commands/render.js",
+      "digest": "ab947b868d7099245a6d7eefde750670b11e2fb1633aa2304340eee6f3e3e1a4",
+      "bytes": 13216
+    },
+    {
+      "key": "src/spec/lib/render-contract.js",
+      "digest": "6b5569a0fd4669fec032cebf7f6328c7a11c2d2fab08687bf4ce9db0f1f2a122",
+      "bytes": 4057
+    },
+    {
+      "key": "src/spec/lib/task-values.js",
+      "digest": "e68479f90da5f3eb540d165943f21554078f7d0e404737029c582934c7d0aa98",
+      "bytes": 2534
+    },
+    {
+      "key": "src/upgrade.js",
+      "digest": "1d7739f809ed93983af4d1a1e8cecc27982aa500e9b17bfc15224f7a7cbaf916",
+      "bytes": 19843
+    }
+  ]
+}

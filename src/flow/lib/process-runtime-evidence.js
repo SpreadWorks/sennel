@@ -56,7 +56,10 @@ export class FlowProcessStopEvidence extends FlowProcessExecutionEvidence {
     Object.freeze(this);
   }
 
-  static fromStored(value) { return new this(value); }
+  static fromStored(value, { processEvidence = null } = {}) {
+    return new this(ProcessExecutionStopReceipt.fromArtifact(value, processEvidence));
+  }
+  toArtifactJSON() { return this.receipt.toArtifactJSON(); }
 }
 
 /** Recovery accepts only the closure already validated by the physical inventory. */

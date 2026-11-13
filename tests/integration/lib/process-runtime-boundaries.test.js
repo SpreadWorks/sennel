@@ -10,44 +10,9 @@ import { executeManagedProcess, readManagedSettlement } from "../../../src/lib/m
 import { testTemporaryRoot } from "../../test-environment.js";
 import { createTmpDir, removeTmpDir } from "../../support/builders/tmp-dir.js";
 import { removeQuiescentRuntimeFixture } from "../../support/infrastructure/runtime-fixture-cleanup.js";
-import { RuntimeRegistryPublicationFailure } from "../../support/infrastructure/runtime-registry-publication-failure.js";
+import { RuntimeRegistryPublicationFailure, readPhysicalRuntimeCompletion, readPhysicalRuntimeHistory } from "../../support/infrastructure/runtime-registry-publication-failure.js";
 
 
-function archiveAcceptanceMutation(root, archivePath) {
-  const witness = path.join(root, "archive-acceptance-mutation.json");
-  const source = `import fs from 'node:fs'; import path from 'node:path'; import crypto from 'node:crypto';
-    const open = fs.openSync, close = fs.closeSync, fsync = fs.fsyncSync, read = fs.readFileSync;
-    const stages = new Map(); let changed = false;
-    fs.openSync = function(file, ...args) {
-      const descriptor = open.call(this, file, ...args);
-      if (path.basename(String(file)).startsWith('.registry.json.') && String(file).endsWith('.tmp')) stages.set(descriptor, String(file));
-      return descriptor;
-    };
-    fs.closeSync = function(descriptor) { stages.delete(descriptor); return close.call(this, descriptor); };
-    fs.fsyncSync = function(descriptor) {
-      const result = fsync.call(this, descriptor);
-      const stage = stages.get(descriptor);
-      if (!changed && stage !== undefined) {
-        const record = JSON.parse(read(stage));
-        const current = record.payload.executions.at(-1), request = current?.requests.at(-1);
-        if (current?.calls.length === 0 && request?.operation === 'reserve' && request.response === null) {
-          changed = true;
-          const archivePath = ${JSON.stringify(archivePath)};
-          const before = fs.statSync(archivePath, {bigint:true});
-          const archive = JSON.parse(read(archivePath));
-          archive.payload.unexpectedAcceptanceField = true;
-          archive.digest = crypto.createHash('sha256').update(JSON.stringify(archive.payload)).digest('hex');
-          fs.writeFileSync(archivePath, JSON.stringify(archive));
-          const after = fs.statSync(archivePath, {bigint:true});
-          fs.writeFileSync(${JSON.stringify(witness)}, JSON.stringify({requestId:request.requestId,
-            sameIdentity:before.dev===after.dev && before.ino===after.ino}), {flag:'wx'});
-        }
-      }
-      return result;
-    };`;
-  return { witness, environment: { ...process.env,
-    NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ""} --import=data:text/javascript;base64,${Buffer.from(source).toString("base64")}`.trim() } };
-}
 
 test("archive bytes changed after reserve read are revalidated before acceptance can permit a child effect", { timeout: 60000 }, async (t) => {
   const root = createTmpDir("runtime-archive-acceptance-");
@@ -65,7 +30,9 @@ test("archive bytes changed after reserve read are revalidated before acceptance
   original = await ProcessExecutionRuntime.acquire({ mainRoot: root });
   await original.close();
   const archivePath = path.join(original.store.archivesAuthority.directory, `${original.executionId}.json`);
-  const fault = archiveAcceptanceMutation(root, archivePath);
+  const fault = new RuntimeRegistryPublicationFailure(root, {
+    boundary: "after-readback", mutation: "changed-archive", archivePath, pendingOperation: "reserve-and-claim",
+  });
   runtime = await ProcessExecutionRuntime.acquire({ mainRoot: root, environment: fault.environment });
   // The completed predecessor's eligible history survives into this successor.
   const originalBytes = fs.readFileSync(archivePath);
@@ -74,23 +41,32 @@ test("archive bytes changed after reserve read are revalidated before acceptance
   await assert.rejects(executeManagedProcess(process.execPath, ["-e",
     `require('node:fs').writeFileSync(${JSON.stringify(effect)},'forbidden')`], { runtime, timeoutMs: 10000 }),
   (error) => error instanceof ProcessExecutionControlFailure
-    && error.code === "PROCESS_EXECUTION_REGISTRY_FAILED" && error.processExecutionStopReceipt === undefined);
+    && error.code === "PROCESS_EXECUTION_AUTHORITY_MISMATCH" && error.processExecutionStopReceipt === undefined);
   const witness = JSON.parse(fs.readFileSync(fault.witness));
-  assert.equal(witness.sameIdentity, true);
+  assert.equal(witness.sameArchiveIdentity, true);
+  assert.equal(witness.mutationPath, archivePath);
+  assert.equal(witness.phase, "after-readback-before-store-read");
+  assert.equal(witness.publicationReadbackCompleted, true);
   const after = fs.statSync(archivePath, { bigint: true });
   assert.equal(after.dev, identity.dev); assert.equal(after.ino, identity.ino);
   assert.equal(fs.readFileSync(archivePath).equals(originalBytes), false);
   const archive = JSON.parse(fs.readFileSync(archivePath));
-  assert.equal(archive.payload.unexpectedAcceptanceField, true);
+  assert.equal(archive.payload.unexpectedReadbackField, true);
   assert.equal(archive.digest, crypto.createHash("sha256").update(JSON.stringify(archive.payload)).digest("hex"));
   const registry = fs.readFileSync(runtime.store.file.filePath);
   const committed = JSON.parse(registry).payload;
   assert.equal(committed.slot, runtime.executionId);
   const active = committed.executions.find((entry) => entry.executionId === runtime.executionId);
   assert.deepEqual(active.calls, []);
-  assert.equal(active.requests.at(-1).requestId, witness.requestId);
-  assert.equal(active.requests.at(-1).operation, "reserve");
-  assert.equal(active.requests.at(-1).response, null);
+  const accepted = readPhysicalRuntimeHistory(runtime.store, active.executionId, active.requestHistoryHead);
+  assert.equal(accepted.acceptance.requestId, witness.requestId);
+  assert.equal(accepted.acceptance.operation, "reserve-and-claim");
+  // The complete current completion chain must not acknowledge this acceptance.
+  for (let reference = active.requestCompletionHead ?? null; reference !== null;) {
+    const completion = readPhysicalRuntimeCompletion(runtime.store, active.executionId, reference);
+    assert.notEqual(completion.acceptance.requestId, witness.requestId);
+    reference = completion.previous?.toJSON() ?? null;
+  }
   assert.deepEqual(fs.readdirSync(runtime.store.callsAuthority.directory), []);
   assert.equal(fs.existsSync(effect), false);
   assert.equal(fs.existsSync(runtime.store.transition.filePath), true);
@@ -130,11 +106,21 @@ for (const boundary of ["before-publication", "after-publication"]) {
     assert.equal(fs.readFileSync(effect, "utf8"), "effect\n");
     assert.equal(JSON.parse(fs.readFileSync(path.join(root, "fault-observed.json"))).boundary, boundary);
     const registry = JSON.parse(fs.readFileSync(runtime.store.file.filePath)).payload;
-    const call = registry.executions[0].calls[0];
+    const execution = registry.executions[0], call = execution.calls[0];
+    // Read only the exact linked physical fact for this diagnostic. An interrupted
+    // publication may leave an unreferenced staged section, so a full inventory
+    // expansion must not be used as confirmation of this uncertain execution.
+    // Normal inspect, settlement consumption and recovery still refuse below.
+    const section = readPhysicalRuntimeCompletion(runtime.store, execution.executionId,
+      boundary === "before-publication" ? call.exitObservation : call.terminalRequest);
+    assert.equal(section.executionId, runtime.executionId);
+    assert.equal(section.acceptance.operation, boundary === "before-publication" ? "observe" : "finish");
+    assert.equal(boundary === "before-publication" ? section.observation.callId : section.settlement.callId, call.callId);
+    const observation = boundary === "before-publication" ? section.observation.observation : section.settlementReceipt.observation;
     assert.equal(registry.slot, runtime.executionId);
-    assert.equal(call.observation.kind, "exited");
-    assert.equal(call.observation.code, 0);
-    assert.equal(call.receipt !== null, boundary === "after-publication");
+    assert.equal(observation.kind, "exited");
+    assert.equal(observation.code, 0);
+    assert.equal(section.settlementReceipt !== null, boundary === "after-publication");
     assert.equal(fs.existsSync(runtime.store.transition.filePath), true);
     assert.equal(fs.existsSync(runtime.store.ownerLock.lockPath), true);
     assert.throws(() => ProcessExecutionRuntime.inspect({ mainRoot: root }), { code: "PROCESS_EXECUTION_DURABILITY_UNCERTAIN" });
